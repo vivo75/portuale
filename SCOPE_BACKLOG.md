@@ -328,7 +328,16 @@ dev/test context — see also the `chown` note below).
   order carries no semantics portage relies on, and test determinism is
   worth more than bug-compatible arbitrariness. See `ebuild_merge.rs`'s
   module doc comment.
-- `profiles/updates/` package moves (`sys-libs/foo` → `sys-libs/bar`).
+- ~~`profiles/updates/` package moves (`sys-libs/foo` → `sys-libs/bar`).~~
+  **Done** — real `portage.update` / `_do_global_updates`: `move` +
+  `slotmove` directives from every repo's `profiles/updates/<quarter>`,
+  applied at read time (this pilot never syncs) to command-line /
+  `@world` / `@<set>` atoms, `*DEPEND` strings, and an installed
+  package's identity (with a backward `move` map so a vdb query for the
+  new name still finds the pre-rename dir). Chained moves resolve. See
+  README "`profiles/updates/` package moves". Cuts (all no-ops without a
+  real write): on-disk vdb/world/binpkg/config rewriting, `grab_updates`'
+  scandir order, and `emerge -C` bare-name resolution.
 - ~~`color.map` / `PORTAGE_COLORMAP`.~~ **Done** — real
   `output.py::_parse_color_map` reads
   `<config_root>/etc/portage/color.map` and overrides the ANSI code for

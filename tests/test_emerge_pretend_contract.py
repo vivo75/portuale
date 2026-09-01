@@ -9328,6 +9328,50 @@ def test_quiet_drops_the_mask_column_and_the_use_line(emerge_binary, fixture_env
     assert "[ebuild  N     ] dev-libs/useflagpkg-1.0 " in p.stdout
 
 
+@pytest.mark.parametrize(
+    "args",
+    [
+        # A `move dev-libs/oldmovepkg dev-libs/newmovepkg` in the fixture
+        # repo's profiles/updates/2Q-2024, with the vdb still holding
+        # dev-libs/oldmovepkg-1.0 under its pre-move dir.
+        ["-pv", "dev-libs/newmovepkg"],
+        ["-pv", "dev-libs/oldmovepkg"],
+        ["-pv", "--deep", "dev-libs/movedepconsumer"],
+        ["-pv", "dev-libs/slotmovepkg"],
+        ["-p", "--tree", "--deep", "dev-libs/movedepconsumer"],
+    ],
+)
+def test_profiles_updates_package_moves_match_rust_and_python(
+    emerge_binary, emerge_pretend_python, fixture_env, args
+):
+    """Real profiles/updates/ package moves (portage.update /
+    _do_global_updates): `move`/`slotmove` directives, applied at read
+    time (this pilot never syncs), rewrite command-line atoms, `*DEPEND`
+    strings and an installed package's identity. Rust == Python."""
+    rust = _run([str(emerge_binary)], args, fixture_env)
+    py = _run(emerge_pretend_python, args, fixture_env)
+    assert rust.stdout == py.stdout, args
+    assert rust.returncode == py.returncode
+
+
+def test_profiles_updates_move_makes_the_renamed_package_already_installed(
+    emerge_binary, fixture_env
+):
+    """`move dev-libs/oldmovepkg dev-libs/newmovepkg` + vdb
+    dev-libs/oldmovepkg-1.0 => `emerge -p dev-libs/newmovepkg` resolves
+    the *installed* package (a bare `R`), not a fresh `N`. The
+    command-line atom `dev-libs/oldmovepkg` is itself rewritten too.
+    `slotmove dev-libs/slotmovepkg 0 1` makes the SLOT-0 vdb entry read
+    as slot 1, matching the ebuild's SLOT=1."""
+    for atom in ("dev-libs/newmovepkg", "dev-libs/oldmovepkg"):
+        r = _run([str(emerge_binary)], ["-p", atom], fixture_env)
+        assert "[ebuild   R    ] dev-libs/newmovepkg-1.0" in r.stdout, atom
+        assert "dev-libs/oldmovepkg" not in r.stdout, atom
+
+    sm = _run([str(emerge_binary)], ["-pv", "dev-libs/slotmovepkg"], fixture_env)
+    assert "[ebuild   R    ] dev-libs/slotmovepkg-1.0:1::testrepo" in sm.stdout
+
+
 def test_info_prints_the_deterministic_config_block(
     emerge_binary, emerge_pretend_python, fixture_env
 ):

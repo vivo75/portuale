@@ -1,0 +1,8 @@
+DEFINED_PHASES=-
+DESCRIPTION=fixture: RDEPEND references the pre-move name dev-libs/oldmovepkg
+EAPI=8
+IUSE=
+KEYWORDS=amd64
+RDEPEND=dev-libs/oldmovepkg
+SLOT=0
+_md5_=0000000000000000000000000000000

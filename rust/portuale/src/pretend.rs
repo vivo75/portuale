@@ -6564,6 +6564,17 @@ pub fn run(args: &[String]) -> ExitCode {
         }
     }
 
+    // Real `profiles/updates/` package moves (SCOPE_BACKLOG Part 2 Section
+    // H item 2): a `move sys-libs/foo sys-libs/bar` / `slotmove` directive
+    // rewrites a command-line, `@world`/`@system` or `@<set>`-expanded
+    // atom before it's resolved *or* used as a display "requested" key
+    // (real global-updates rewrites the world file and the vdb; this pilot
+    // applies the moves in memory on read -- see
+    // `portage_repo::apply_updates_to_atom`).
+    for atom in &mut expanded_atoms {
+        *atom = portage_repo::apply_updates_to_atom(atom);
+    }
+
     if expanded_atoms.is_empty() {
         eprintln!(
             "emerge (pilot v1): no package atoms to resolve (the target list, after \
@@ -6853,7 +6864,11 @@ pub fn run(args: &[String]) -> ExitCode {
     // resolved above): `@system` = the profile's own package set
     // (`config.system_packages`); world = `var/lib/portage/world` (a
     // missing file is a valid empty world, same as everywhere else).
-    let world_atoms = read_world_atoms(&root).unwrap_or_default();
+    let world_atoms: Vec<String> = read_world_atoms(&root)
+        .unwrap_or_default()
+        .iter()
+        .map(|a| portage_repo::apply_updates_to_atom(a))
+        .collect();
     let system_atoms = &config.system_packages;
     // Real `Display.blockers`: blocker lines are collected while walking
     // the entries and printed as one group after every package line (see

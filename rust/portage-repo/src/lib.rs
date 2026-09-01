@@ -59,11 +59,362 @@ use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 
 pub fn config_root_from_env() -> PathBuf {
     std::env::var_os("PORTAGE_CONFIGROOT")
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("/"))
+}
+
+// ===========================================================================
+// profiles/updates/ package moves  (SCOPE_BACKLOG Part 2 Section H item 2)
+// ===========================================================================
+//
+// Real `portage.update` + `portage._global_updates._do_global_updates`: each
+// repo's `profiles/updates/<quarter>` files hold `move cat/old cat/new` and
+// `slotmove cat/pkg <oldslot> <newslot>` directives that a sync applies, once
+// and permanently, to the vdb, world file, binary packages and config files,
+// and that ebuild metadata regeneration bakes into `metadata/md5-cache`.
+//
+// This pilot never syncs and never mutates the vdb, so it applies the
+// directives at *read* time instead: `apply_updates_to_atom` (command-line and
+// world atoms), `apply_updates_to_dep_string` (each `*DEPEND` string read from
+// md5-cache -- real `update_dbentry`), and `apply_updates_to_cp` /
+// `apply_updates_to_slot` (an installed package's identity as the resolver
+// sees it). `installed_cp_sources` runs the `move` map *backwards* so a query
+// for the new name still finds the not-yet-renamed vdb directory.
+//
+// DELIBERATE CUTS (all no-ops for a `--pretend` that never writes):
+//   - the actual on-disk vdb category rename / `*DEPEND` rewrite, the world /
+//     world_sets file rewrite, binary-package (`%`/`S`) updates, and the
+//     `/etc/portage/package.*` (`p`) rewrite -- `--pretend` mutates none of
+//     these, so applying the moves in memory on read is equivalent.
+//   - real `grab_updates`' `os.scandir` file order (+ `prev_mtimes`
+//     incremental logic): this pilot sorts the quarter files by `(year,
+//     quarter)` parsed from the `NQ-YYYY` name (non-matching names last, by
+//     name) and re-reads them every run. Deterministic, and strictly better
+//     than real portage's arbitrary order for a chained move that spans two
+//     quarter files.
+//   - a `slotmove` whose atom carries a version/operator: real
+//     `update_dbentry` acts only on the unversioned case
+//     (`orig_atom.version is None`), so this pilot just drops the qualified
+//     form at parse time (same net effect).
+
+/// One validated `profiles/updates/` directive (real
+/// `portage.update.parse_updates`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum UpdateCmd {
+    /// `move <old cat/pkg> <new cat/pkg>` -- both bare `cat/pkg` (real
+    /// `parse_updates` rejects a blocker or any `atom != atom.cp`).
+    Move {
+        old: (String, String),
+        new: (String, String),
+    },
+    /// `slotmove <cat/pkg> <origslot> <newslot>` -- only the unversioned
+    /// `cat/pkg` form is kept (see the module cut note).
+    SlotMove {
+        cp: (String, String),
+        old_slot: String,
+        new_slot: String,
+    },
+}
+
+/// A bare `cat/pkg` (no version/slot/operator/blocker/use/repo), else `None`
+/// -- real `parse_updates`' `Atom(x)` + `atom.blocker or atom != atom.cp`
+/// rejection.
+fn bare_cp(s: &str) -> Option<(String, String)> {
+    let a = portage_dep::parse_atom(s)?;
+    if a.blocker != portage_dep::Blocker::None
+        || a.operator != portage_dep::Operator::None
+        || a.version.is_some()
+        || a.slot.is_some()
+        || a.slot_operator.is_some()
+        || a.use_deps.is_some()
+        || a.repo.is_some()
+    {
+        return None;
+    }
+    Some((a.category, a.package))
+}
+
+/// Real `_get_slot_re`: a slot name is `[A-Za-z0-9_][A-Za-z0-9+_.-]*`.
+fn valid_slot_name(s: &str) -> bool {
+    let mut chars = s.chars();
+    match chars.next() {
+        Some(c) if c.is_ascii_alphanumeric() || c == '_' => {}
+        _ => return false,
+    }
+    chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '_' | '.' | '-'))
+}
+
+/// Real `portage.update.parse_updates`: one directive per non-blank line,
+/// `move`/`slotmove` only, wrong arity or a malformed atom/slot skips that
+/// line (real appends to `errors` -- never fatal).
+pub fn parse_updates_content(text: &str) -> Vec<UpdateCmd> {
+    let mut out = Vec::new();
+    for line in text.lines() {
+        let toks: Vec<&str> = line.split_whitespace().collect();
+        match toks.as_slice() {
+            ["move", a, b] => {
+                if let (Some(old), Some(new)) = (bare_cp(a), bare_cp(b)) {
+                    out.push(UpdateCmd::Move { old, new });
+                }
+            }
+            // A version/operator-qualified slotmove atom is a no-op in real
+            // `update_dbentry`; `bare_cp` already drops it.
+            ["slotmove", pkg, os, ns]
+                if valid_slot_name(os) && valid_slot_name(ns) && bare_cp(pkg).is_some() =>
+            {
+                out.push(UpdateCmd::SlotMove {
+                    cp: bare_cp(pkg).unwrap(),
+                    old_slot: os.to_string(),
+                    new_slot: ns.to_string(),
+                });
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
+/// `(year, quarter)` from a `NQ-YYYY` updates-file name, for the quarter
+/// sort. A name that doesn't match sorts last (`year = i32::MAX`), by name.
+fn quarter_sort_key(name: &str) -> (i32, i32, String) {
+    if let Some((q, y)) = name.split_once("Q-") {
+        if let (Ok(q), Ok(y)) = (q.parse::<i32>(), y.parse::<i32>()) {
+            if (1..=4).contains(&q) {
+                return (y, q, name.to_string());
+            }
+        }
+    }
+    (i32::MAX, 0, name.to_string())
+}
+
+/// Every directive from one repo's `profiles/updates/`, quarter files in
+/// `(year, quarter)` order (real `grab_updates` + `parse_updates`, minus the
+/// scandir order / `prev_mtimes` logic -- see the module cut note).
+fn grab_updates_for_repo(repo_location: &Path) -> Vec<UpdateCmd> {
+    let updpath = repo_location.join("profiles").join("updates");
+    let Ok(rd) = fs::read_dir(&updpath) else {
+        return Vec::new();
+    };
+    let mut files: Vec<(PathBuf, (i32, i32, String))> = rd
+        .filter_map(|e| e.ok())
+        .filter(|e| e.file_type().map(|t| t.is_file()).unwrap_or(false))
+        .filter_map(|e| {
+            let name = e.file_name().to_string_lossy().to_string();
+            if name.starts_with('.') {
+                return None;
+            }
+            Some((e.path(), quarter_sort_key(&name)))
+        })
+        .collect();
+    files.sort_by(|a, b| a.1.cmp(&b.1));
+    let mut cmds = Vec::new();
+    for (path, _) in files {
+        if let Ok(text) = fs::read_to_string(&path) {
+            cmds.extend(parse_updates_content(&text));
+        }
+    }
+    cmds
+}
+
+/// Every configured repo's `profiles/updates/` directives, concatenated in
+/// `find_repos` (real `portdbapi.getRepositories`) order, parsed once and
+/// memoised. Reads `$PORTAGE_CONFIGROOT` directly -- the same
+/// process-global, env-driven pattern `portuale::color`'s `color.map`
+/// override table uses, so no threading through the resolver's ~35-arg
+/// signature. An unreadable `repos.conf` yields no updates.
+pub fn global_package_updates() -> &'static [UpdateCmd] {
+    static CACHE: OnceLock<Vec<UpdateCmd>> = OnceLock::new();
+    CACHE.get_or_init(|| {
+        let config_root = config_root_from_env();
+        let Ok(repos) = find_repos(&config_root) else {
+            return Vec::new();
+        };
+        let mut cmds = Vec::new();
+        let mut seen: HashSet<PathBuf> = HashSet::new();
+        for repo in &repos {
+            if seen.insert(repo.location.clone()) {
+                cmds.extend(grab_updates_for_repo(&repo.location));
+            }
+        }
+        cmds
+    })
+}
+
+/// Real `update_dbentry` for a single `move`, applied to one atom token:
+/// if the token parses as an atom whose `cp` is `old`, rewrite just the
+/// `cat/pkg` part (first occurrence, real `token.replace(old, new, 1)`),
+/// preserving every version/slot/use/blocker part. Chained moves are
+/// handled by the caller applying every command in order.
+fn apply_move_to_token(token: &str, old: &(String, String), new: &(String, String)) -> String {
+    let old_cp = format!("{}/{}", old.0, old.1);
+    if !token.contains(&old_cp) {
+        return token.to_string();
+    }
+    let Some(atom) = portage_dep::parse_atom(token.trim_start_matches('!')) else {
+        return token.to_string();
+    };
+    if (atom.category.as_str(), atom.package.as_str()) != (old.0.as_str(), old.1.as_str()) {
+        return token.to_string();
+    }
+    let new_cp = format!("{}/{}", new.0, new.1);
+    token.replacen(&old_cp, &new_cp, 1)
+}
+
+/// Real `update_dbentry` for a single `slotmove` (`orig_atom.version is
+/// None` branch), applied to one atom token: an atom on `cp` whose
+/// `:slot` (ignoring sub-slot / operator) is `old_slot` gets it rewritten
+/// to `new_slot`. Versioned atoms are left alone (real's own
+/// restriction).
+fn apply_slotmove_to_token(
+    token: &str,
+    cp: &(String, String),
+    old_slot: &str,
+    new_slot: &str,
+) -> String {
+    let base = token.trim_start_matches('!');
+    let Some(atom) = portage_dep::parse_atom(base) else {
+        return token.to_string();
+    };
+    if (atom.category.as_str(), atom.package.as_str()) != (cp.0.as_str(), cp.1.as_str()) {
+        return token.to_string();
+    }
+    if atom.version.is_some() {
+        return token.to_string();
+    }
+    // Documented micro-cut: a slotmove target token that also carries a
+    // `::repo` or `[usedeps]` part is left alone rather than risk a
+    // corrupt splice (real `Atom.with_slot` rebuilds every part -- no
+    // fixture exercises this combination).
+    if atom.repo.is_some() || atom.use_deps.is_some() {
+        return token.to_string();
+    }
+    match &atom.slot {
+        Some(s) if s == old_slot => {}
+        _ => return token.to_string(),
+    }
+    // Rebuild the `:slot` part. Real `with_slot` keeps a differing
+    // sub-slot but rewrites a sub-slot that equalled the old slot.
+    let sub = match &atom.sub_slot {
+        Some(ss) if ss == old_slot => new_slot.to_string(),
+        Some(ss) => ss.clone(),
+        None => String::new(),
+    };
+    let op = match atom.slot_operator {
+        Some(portage_dep::SlotOperator::Equals) => "=",
+        Some(portage_dep::SlotOperator::Star) => "*",
+        None => "",
+    };
+    let new_slotpart = if sub.is_empty() {
+        format!("{new_slot}{op}")
+    } else {
+        format!("{new_slot}/{sub}{op}")
+    };
+    // Splice the new slot expression in place of the old `:...` run.
+    let prefix = token.split(':').next().unwrap_or(token);
+    format!("{prefix}:{new_slotpart}")
+}
+
+/// Apply every `move`/`slotmove` (in order, so chains resolve) to one atom
+/// string -- for a command-line or world atom.
+pub fn apply_updates_to_atom(atom: &str) -> String {
+    let mut cur = atom.to_string();
+    for cmd in global_package_updates() {
+        cur = match cmd {
+            UpdateCmd::Move { old, new } => apply_move_to_token(&cur, old, new),
+            UpdateCmd::SlotMove {
+                cp,
+                old_slot,
+                new_slot,
+            } => apply_slotmove_to_token(&cur, cp, old_slot, new_slot),
+        };
+    }
+    cur
+}
+
+/// Real `update_dbentry`'s whitespace-preserving `re.split(r"(\s+)")` pass
+/// over a `*DEPEND` string: rewrite every atom token, leave separators and
+/// non-atom tokens (`||`, `(`, `)`, `use?`) untouched.
+pub fn apply_updates_to_dep_string(dep: &str) -> String {
+    if global_package_updates().is_empty() || dep.trim().is_empty() {
+        return dep.to_string();
+    }
+    dep.split_inclusive(char::is_whitespace)
+        .map(|chunk| {
+            let trimmed_len = chunk.trim_end_matches(char::is_whitespace).len();
+            let (tok, ws) = chunk.split_at(trimmed_len);
+            if tok.is_empty() || tok.ends_with('?') || matches!(tok, "||" | "(" | ")") {
+                return chunk.to_string();
+            }
+            format!("{}{ws}", apply_updates_to_atom(tok))
+        })
+        .collect()
+}
+
+/// The forward `move` destination for a `cat/pkg` (chains applied), for an
+/// installed package's identity as the resolver should see it.
+pub fn apply_updates_to_cp(category: &str, package: &str) -> (String, String) {
+    let mut cur = (category.to_string(), package.to_string());
+    for cmd in global_package_updates() {
+        if let UpdateCmd::Move { old, new } = cmd {
+            if (cur.0.as_str(), cur.1.as_str()) == (old.0.as_str(), old.1.as_str()) {
+                cur = new.clone();
+            }
+        }
+    }
+    cur
+}
+
+/// Every `cat/pkg` whose forward-`move` chain lands on `(category,
+/// package)` -- including `(category, package)` itself. Lets a vdb query
+/// for the *new* name also scan the *old*, not-yet-renamed directory
+/// (real global-updates renames it on disk; this pilot doesn't).
+pub fn installed_cp_sources(category: &str, package: &str) -> Vec<(String, String)> {
+    let target = (category.to_string(), package.to_string());
+    let mut out = vec![target.clone()];
+    for cmd in global_package_updates() {
+        if let UpdateCmd::Move { old, new } = cmd {
+            // If `old` currently maps (via the chain so far) to the
+            // target, its source dir is also a place to look.
+            let mapped = apply_updates_to_cp(&old.0, &old.1);
+            if mapped == target && !out.contains(old) {
+                out.push(old.clone());
+            }
+            let _ = new;
+        }
+    }
+    out
+}
+
+/// Apply `slotmove` to an installed package's `(slot, sub_slot)` given its
+/// (already forward-moved) `cat/pkg`.
+pub fn apply_updates_to_slot(
+    category: &str,
+    package: &str,
+    slot: &str,
+    sub_slot: &str,
+) -> (String, String) {
+    let mut s = slot.to_string();
+    let mut ss = sub_slot.to_string();
+    for cmd in global_package_updates() {
+        if let UpdateCmd::SlotMove {
+            cp,
+            old_slot,
+            new_slot,
+        } = cmd
+        {
+            if (category, package) == (cp.0.as_str(), cp.1.as_str()) && s == *old_slot {
+                if ss == *old_slot {
+                    ss = new_slot.clone();
+                }
+                s = new_slot.clone();
+            }
+        }
+    }
+    (s, ss)
 }
 
 pub fn root_from_env() -> PathBuf {
@@ -445,6 +796,19 @@ pub fn read_md5_cache(
     for line in text.lines() {
         if let Some(eq) = line.find('=') {
             map.insert(line[..eq].to_string(), line[eq + 1..].to_string());
+        }
+    }
+    // Real `profiles/updates/` package moves (SCOPE_BACKLOG Part 2 Section
+    // H item 2): a sync bakes the `move`/`slotmove` directives into
+    // `metadata/md5-cache` when it regenerates ebuild metadata. This pilot
+    // reads a static fixture cache, so it applies them here on read
+    // instead -- real `update_dbentry` over each `*DEPEND` string.
+    for key in ["DEPEND", "RDEPEND", "PDEPEND", "BDEPEND", "IDEPEND"] {
+        if let Some(dep) = map.get(key) {
+            let updated = apply_updates_to_dep_string(dep);
+            if updated != *dep {
+                map.insert(key.to_string(), updated);
+            }
         }
     }
     Ok(map)
@@ -3242,21 +3606,30 @@ pub fn installed_candidates(
     category: &str,
     package: &str,
 ) -> Vec<(String, String, String)> {
-    let cat_dir = root.join("var/db/pkg").join(category);
-    let Ok(entries) = fs::read_dir(&cat_dir) else {
-        return Vec::new();
-    };
-    entries
-        .filter_map(|e| e.ok())
-        .filter(|e| e.path().is_dir())
-        .filter_map(|e| {
+    // Real `profiles/updates/` package moves: `<category>/<package>` may
+    // be the *post*-`move` name while the vdb still holds the package
+    // under its pre-`move` `cat/pkg` dir. Scan every source name that
+    // maps onto this one (`installed_cp_sources`); `slotmove` then
+    // rewrites each hit's `(slot, sub_slot)`.
+    let pkgdir = root.join("var/db/pkg");
+    let mut out = Vec::new();
+    for (src_cat, src_pkg) in installed_cp_sources(category, package) {
+        let Ok(entries) = fs::read_dir(pkgdir.join(&src_cat)) else {
+            continue;
+        };
+        for e in entries.filter_map(|e| e.ok()).filter(|e| e.path().is_dir()) {
             let name = e.file_name().to_string_lossy().to_string();
-            let version = strip_version_prefix(&name, package)?.to_string();
+            let Some(version) = strip_version_prefix(&name, &src_pkg) else {
+                continue;
+            };
+            let version = version.to_string();
             let raw_slot = fs::read_to_string(e.path().join("SLOT")).unwrap_or_default();
             let (slot, sub_slot) = split_slot(raw_slot.trim());
-            Some((version, slot, sub_slot))
-        })
-        .collect()
+            let (slot, sub_slot) = apply_updates_to_slot(category, package, &slot, &sub_slot);
+            out.push((version, slot, sub_slot));
+        }
+    }
+    out
 }
 
 /// The repo an installed `category/package-version` was merged from --
@@ -3420,16 +3793,32 @@ fn read_vdb_flag_set(
     version: &str,
     filename: &str,
 ) -> HashSet<String> {
-    let path = root
-        .join("var/db/pkg")
-        .join(category)
-        .join(format!("{package}-{version}"))
-        .join(filename);
-    fs::read_to_string(path)
+    fs::read_to_string(vdb_pkg_dir(root, category, package, version).join(filename))
         .unwrap_or_default()
         .split_whitespace()
         .map(|tok| tok.trim_start_matches(['+', '-']).to_string())
         .collect()
+}
+
+/// The on-disk vdb directory for `<category>/<package>-<version>`. Real
+/// global-updates renames a moved package's vdb dir; this pilot never
+/// writes, so when the direct path is absent it falls back to every
+/// `installed_cp_sources` name (the pre-`move` locations that map onto
+/// this `cat/pkg`). Returns the direct path unchanged when nothing
+/// matches, so a genuinely-missing entry still reads as empty/absent.
+fn vdb_pkg_dir(root: &Path, category: &str, package: &str, version: &str) -> PathBuf {
+    let pkgdir = root.join("var/db/pkg");
+    let direct = pkgdir.join(category).join(format!("{package}-{version}"));
+    if direct.is_dir() || global_package_updates().is_empty() {
+        return direct;
+    }
+    for (c, p) in installed_cp_sources(category, package) {
+        let cand = pkgdir.join(&c).join(format!("{p}-{version}"));
+        if cand.is_dir() {
+            return cand;
+        }
+    }
+    direct
 }
 
 /// Reads `<root>/var/db/pkg/<category>/<package>-<version>/<filename>`
@@ -3449,12 +3838,8 @@ fn read_vdb_string(
     version: &str,
     filename: &str,
 ) -> String {
-    let path = root
-        .join("var/db/pkg")
-        .join(category)
-        .join(format!("{package}-{version}"))
-        .join(filename);
-    fs::read_to_string(path).unwrap_or_default()
+    fs::read_to_string(vdb_pkg_dir(root, category, package, version).join(filename))
+        .unwrap_or_default()
 }
 
 /// Flattens `depstr` (one or more concatenated dependency-string keys)
@@ -3544,11 +3929,17 @@ pub fn all_installed_packages(root: &Path) -> Vec<InstalledPackage> {
             let Some((name, version)) = split_installed_dir(&dirname) else {
                 continue;
             };
-            let (slot, _sub) = split_slot(
+            let (slot, sub) = split_slot(
                 fs::read_to_string(pkg.path().join("SLOT"))
                     .unwrap_or_default()
                     .trim(),
             );
+            // Real `profiles/updates/` package moves: present each vdb
+            // entry under its post-`move`/`slotmove` identity, the way
+            // real global-updates rewrites the vdb on sync (this pilot
+            // never writes -- see `vdb_pkg_dir` for the read-back side).
+            let (category, name) = apply_updates_to_cp(&category, &name);
+            let (slot, _sub) = apply_updates_to_slot(&category, &name, &slot, &sub);
             out.push(InstalledPackage {
                 category: category.clone(),
                 package: name,
@@ -18726,5 +19117,75 @@ mod tests {
             &entries,
         );
         assert!(conflicts.is_empty());
+    }
+
+    #[test]
+    fn parse_updates_content_keeps_move_and_slotmove_drops_the_rest() {
+        let cmds = parse_updates_content(
+            "move dev-libs/foo dev-libs/bar\n\
+             # a comment line, not a directive\n\
+             slotmove dev-libs/baz 0 1\n\
+             move dev-libs/foo dev-libs/foo-1.0\n\
+             frobnicate dev-libs/x dev-libs/y\n\
+             move only-two-tokens\n\
+             slotmove dev-libs/qux 0\n",
+        );
+        assert_eq!(
+            cmds,
+            vec![
+                UpdateCmd::Move {
+                    old: ("dev-libs".into(), "foo".into()),
+                    new: ("dev-libs".into(), "bar".into()),
+                },
+                UpdateCmd::SlotMove {
+                    cp: ("dev-libs".into(), "baz".into()),
+                    old_slot: "0".into(),
+                    new_slot: "1".into(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn apply_move_and_slotmove_to_a_token_preserve_the_other_atom_parts() {
+        let old = ("dev-libs".to_string(), "foo".to_string());
+        let new = ("sys-libs".to_string(), "bar".to_string());
+        assert_eq!(
+            apply_move_to_token("dev-libs/foo", &old, &new),
+            "sys-libs/bar"
+        );
+        assert_eq!(
+            apply_move_to_token(">=dev-libs/foo-1.2:3=", &old, &new),
+            ">=sys-libs/bar-1.2:3="
+        );
+        assert_eq!(
+            apply_move_to_token("!dev-libs/foo", &old, &new),
+            "!sys-libs/bar"
+        );
+        // A different cp is untouched.
+        assert_eq!(
+            apply_move_to_token("dev-libs/other", &old, &new),
+            "dev-libs/other"
+        );
+
+        let cp = ("dev-libs".to_string(), "baz".to_string());
+        assert_eq!(
+            apply_slotmove_to_token("dev-libs/baz:0", &cp, "0", "1"),
+            "dev-libs/baz:1"
+        );
+        assert_eq!(
+            apply_slotmove_to_token("dev-libs/baz:0/0=", &cp, "0", "1"),
+            "dev-libs/baz:1/1="
+        );
+        // A versioned atom or a non-matching slot is left alone (real
+        // update_dbentry's own restriction).
+        assert_eq!(
+            apply_slotmove_to_token("=dev-libs/baz-1.0:0", &cp, "0", "1"),
+            "=dev-libs/baz-1.0:0"
+        );
+        assert_eq!(
+            apply_slotmove_to_token("dev-libs/baz:2", &cp, "0", "1"),
+            "dev-libs/baz:2"
+        );
     }
 }

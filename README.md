@@ -10683,6 +10683,56 @@ rewrite (dropping the `[ebuild …]` bracket entirely for a bare
 `N cat/pkg [ver]` line) is real only under `--columns`, which the pilot
 doesn't render, so it's not reproduced.
 
+### `profiles/updates/` package moves (`move` / `slotmove`)
+
+SCOPE_BACKLOG Part 2 Section H item 2. Real `portage.update` +
+`portage._global_updates._do_global_updates`: each repo's
+`profiles/updates/<quarter>` files hold `move cat/old cat/new` and
+`slotmove cat/pkg <oldslot> <newslot>` directives that a sync applies
+*once and permanently* to the vdb, the world file, binary packages and
+config files, and that ebuild-metadata regeneration bakes into
+`metadata/md5-cache`.
+
+This pilot never syncs and never mutates the vdb, so it applies the
+directives **at read time** instead (`portage_repo`'s
+`global_package_updates` — a memoised, `$PORTAGE_CONFIGROOT`-driven scan
+of every configured repo's `profiles/updates/`, quarter files sorted by
+`(year, quarter)` from the `NQ-YYYY` name):
+
+- **`apply_updates_to_atom`** rewrites a command-line, `@world`/`@system`
+  or `@<set>`-expanded atom (and the display's world-colour atoms) before
+  it is resolved or used as a "requested" key — real
+  `update_dbentry`'s `move`/`slotmove` token rewrite, chained so
+  `a → b → c` across two quarter files resolves to `c`.
+- **`apply_updates_to_dep_string`** runs the same rewrite over every
+  `*DEPEND` string read from `md5-cache` (real `update_dbentry`'s
+  whitespace-preserving `re.split(r"(\s+)")` pass — `||`, `(`, `)` and
+  `use?` tokens untouched).
+- **`apply_updates_to_cp` / `apply_updates_to_slot`** give an installed
+  package the post-`move`/`slotmove` identity the resolver should see
+  (`all_installed_packages`, `installed_candidates`), and
+  **`installed_cp_sources`** runs the `move` map *backwards* so a vdb
+  query for the new name still finds the not-yet-renamed directory
+  (`vdb_pkg_dir`).
+
+So with `move dev-libs/oldmovepkg dev-libs/newmovepkg` in
+`profiles/updates/2Q-2024` and `dev-libs/oldmovepkg-1.0` in the vdb,
+`emerge -p dev-libs/newmovepkg` (or `… dev-libs/oldmovepkg`) resolves the
+*installed* package — a bare `[ebuild R]`, not a fresh `[ebuild N]` — and
+a package whose `RDEPEND` still names `dev-libs/oldmovepkg` depends on
+`dev-libs/newmovepkg` instead. `slotmove dev-libs/slotmovepkg 0 1` makes
+the `SLOT=0` vdb entry read as slot 1.
+
+Deliberate cuts (all no-ops for a `--pretend` that never writes): the
+on-disk vdb category rename / `*DEPEND` rewrite, the world /
+`world_sets` file rewrite, binary-package (`%` / `S`) updates, the
+`/etc/portage/package.*` (`p`) rewrite; real `grab_updates`' `os.scandir`
+order + `prev_mtimes` incremental logic (this pilot sorts and re-reads
+every run — strictly better for a chained cross-file move); a `slotmove`
+whose atom carries a version/operator (a no-op in real `update_dbentry`
+too); and `emerge -C` / `--unmerge` bare-name resolution, which keeps
+operating on the physical vdb identity.
+
 ## Running it
 
 Build both Rust binaries:

@@ -287,6 +287,202 @@ def find_repos(config_root):
     return repos
 
 
+# ===========================================================================
+# profiles/updates/ package moves  (SCOPE_BACKLOG Part 2 Section H item 2)
+# ===========================================================================
+#
+# Real portage.update + portage._global_updates: each repo's
+# profiles/updates/<quarter> files hold `move cat/old cat/new` and
+# `slotmove cat/pkg <oldslot> <newslot>` directives a sync applies once and
+# permanently. This pilot never syncs, so it applies them at read time --
+# see portage-repo/src/lib.rs's matching section for the full grounding and
+# the deliberate cuts (all no-ops for a --pretend that never writes).
+
+_global_updates_cache = None
+
+
+def _bare_cp(s):
+    """A bare cat/pkg (no version/slot/operator/blocker/use/repo), else
+    None -- real parse_updates' `atom.blocker or atom != atom.cp`."""
+    try:
+        atom = Atom(s)
+    except InvalidAtom:
+        return None
+    if atom.blocker or str(atom) != atom.cp:
+        return None
+    cat, _, pkg = atom.cp.partition("/")
+    return (cat, pkg)
+
+
+def _valid_slot_name(s):
+    return re.match(r"^[A-Za-z0-9_][A-Za-z0-9+_.-]*$", s) is not None
+
+
+def parse_updates_content(text):
+    """Real portage.update.parse_updates: one directive per non-blank
+    line, move/slotmove only, a wrong arity or malformed atom/slot skips
+    that line (never fatal). Mirrors portage-repo's parse_updates_content."""
+    out = []
+    for line in text.splitlines():
+        toks = line.split()
+        if len(toks) == 3 and toks[0] == "move":
+            old, new = _bare_cp(toks[1]), _bare_cp(toks[2])
+            if old and new:
+                out.append(("move", old, new))
+        elif (
+            len(toks) == 4
+            and toks[0] == "slotmove"
+            and _valid_slot_name(toks[2])
+            and _valid_slot_name(toks[3])
+        ):
+            cp = _bare_cp(toks[1])
+            if cp:
+                out.append(("slotmove", cp, toks[2], toks[3]))
+    return out
+
+
+def _quarter_sort_key(name):
+    m = re.match(r"^([1-4])Q-(\d+)$", name)
+    if m:
+        return (int(m.group(2)), int(m.group(1)), name)
+    return (2**31 - 1, 0, name)
+
+
+def _grab_updates_for_repo(repo_location):
+    updpath = os.path.join(repo_location, "profiles", "updates")
+    try:
+        names = [n for n in os.listdir(updpath) if not n.startswith(".")]
+    except OSError:
+        return []
+    names = [n for n in names if os.path.isfile(os.path.join(updpath, n))]
+    names.sort(key=_quarter_sort_key)
+    cmds = []
+    for name in names:
+        try:
+            with open(os.path.join(updpath, name), encoding="utf-8", errors="replace") as f:
+                cmds.extend(parse_updates_content(f.read()))
+        except OSError:
+            continue
+    return cmds
+
+
+def _global_package_updates():
+    """Every configured repo's profiles/updates/ directives, concatenated
+    in find_repos order, parsed once and memoised. Reads
+    $PORTAGE_CONFIGROOT directly (same pattern as _color_map_overrides).
+    Mirrors portage-repo's global_package_updates."""
+    global _global_updates_cache
+    if _global_updates_cache is not None:
+        return _global_updates_cache
+    _global_updates_cache = []
+    config_root = os.environ.get("PORTAGE_CONFIGROOT", "/")
+    try:
+        repos = find_repos(config_root)
+    except ResolutionError:
+        return _global_updates_cache
+    seen = set()
+    for repo in repos:
+        loc = repo["location"]
+        if loc not in seen:
+            seen.add(loc)
+            _global_updates_cache.extend(_grab_updates_for_repo(loc))
+    return _global_updates_cache
+
+
+def _apply_move_to_token(token, old, new):
+    old_cp = f"{old[0]}/{old[1]}"
+    if old_cp not in token:
+        return token
+    atom = _parse_atom(token.lstrip("!"))
+    if atom is None:
+        return token
+    cat, _, pkg = atom.cp.partition("/")
+    if (cat, pkg) != old:
+        return token
+    return token.replace(old_cp, f"{new[0]}/{new[1]}", 1)
+
+
+def _apply_slotmove_to_token(token, cp, old_slot, new_slot):
+    base = token.lstrip("!")
+    atom = _parse_atom(base)
+    if atom is None:
+        return token
+    cat, _, pkg = atom.cp.partition("/")
+    if (cat, pkg) != cp or atom.version is not None:
+        return token
+    # Documented micro-cut: a slotmove target token that also carries a
+    # ::repo or [usedeps] part is left alone (no fixture exercises it).
+    if atom.repo is not None or atom.use is not None:
+        return token
+    if atom.slot is None or atom.slot != old_slot:
+        return token
+    sub = atom.sub_slot
+    if sub == old_slot:
+        sub = new_slot
+    op = atom.slot_operator or ""
+    if sub:
+        new_slotpart = f"{new_slot}/{sub}{op}"
+    else:
+        new_slotpart = f"{new_slot}{op}"
+    prefix = token.split(":", 1)[0]
+    return f"{prefix}:{new_slotpart}"
+
+
+def apply_updates_to_atom(atom):
+    """Apply every move/slotmove (in order, so chains resolve) to one
+    atom string. Mirrors portage-repo's apply_updates_to_atom."""
+    cur = atom
+    for cmd in _global_package_updates():
+        if cmd[0] == "move":
+            cur = _apply_move_to_token(cur, cmd[1], cmd[2])
+        else:
+            cur = _apply_slotmove_to_token(cur, cmd[1], cmd[2], cmd[3])
+    return cur
+
+
+def apply_updates_to_dep_string(dep):
+    """Real update_dbentry's whitespace-preserving re.split(r"(\\s+)") pass
+    over a *DEPEND string. Mirrors portage-repo's apply_updates_to_dep_string."""
+    if not _global_package_updates() or not dep.strip():
+        return dep
+    parts = re.split(r"(\s+)", dep)
+    for i, tok in enumerate(parts):
+        if not tok or tok.isspace() or tok.endswith("?") or tok in ("||", "(", ")"):
+            continue
+        parts[i] = apply_updates_to_atom(tok)
+    return "".join(parts)
+
+
+def _apply_updates_to_cp(category, package):
+    cur = (category, package)
+    for cmd in _global_package_updates():
+        if cmd[0] == "move" and cur == cmd[1]:
+            cur = cmd[2]
+    return cur
+
+
+def _installed_cp_sources(category, package):
+    """Every cat/pkg whose forward-move chain lands on (category, package),
+    itself included. Mirrors portage-repo's installed_cp_sources."""
+    target = (category, package)
+    out = [target]
+    for cmd in _global_package_updates():
+        if cmd[0] == "move":
+            if _apply_updates_to_cp(*cmd[1]) == target and cmd[1] not in out:
+                out.append(cmd[1])
+    return out
+
+
+def _apply_updates_to_slot(category, package, slot, sub_slot):
+    s, ss = slot, sub_slot
+    for cmd in _global_package_updates():
+        if cmd[0] == "slotmove" and (category, package) == cmd[1] and s == cmd[2]:
+            if ss == cmd[2]:
+                ss = cmd[3]
+            s = cmd[3]
+    return (s, ss)
+
+
 def _read_config_lines(path):
     """Reads every non-comment, non-blank, trimmed line from `path`, which
     may be a single file or a directory of files merged in sorted-filename
@@ -572,6 +768,13 @@ def read_md5_cache(repo_location, category, pf):
             key, sep, value = line.rstrip("\n").partition("=")
             if sep:
                 result[key] = value
+    # Real profiles/updates/ package moves (SCOPE_BACKLOG Part 2 Section H
+    # item 2): a sync bakes move/slotmove into md5-cache; this pilot reads
+    # a static fixture cache, so it applies them here on read instead --
+    # real update_dbentry over each *DEPEND string.
+    for key in ("DEPEND", "RDEPEND", "PDEPEND", "BDEPEND", "IDEPEND"):
+        if key in result:
+            result[key] = apply_updates_to_dep_string(result[key])
     return result
 
 
@@ -2470,13 +2673,29 @@ def _read_vdb_flag_set(root, category, package, version, filename):
     separated token, with any "+"/"-" IUSE default-marker prefix
     stripped. A missing file is an empty set, not an error. Mirrors
     portage-repo/src/lib.rs's read_vdb_flag_set exactly."""
-    path = os.path.join(root, "var", "db", "pkg", category, f"{package}-{version}", filename)
+    path = os.path.join(_vdb_pkg_dir(root, category, package, version), filename)
     try:
         with open(path) as f:
             text = f.read()
     except OSError:
         text = ""
     return {tok.lstrip("+-") for tok in text.split()}
+
+
+def _vdb_pkg_dir(root, category, package, version):
+    """The on-disk vdb directory for <category>/<package>-<version>. Real
+    global-updates renames a moved package's vdb dir; this pilot never
+    writes, so when the direct path is absent it falls back to every
+    _installed_cp_sources name. Mirrors portage-repo's vdb_pkg_dir."""
+    pkgdir = os.path.join(root, "var", "db", "pkg")
+    direct = os.path.join(pkgdir, category, f"{package}-{version}")
+    if os.path.isdir(direct) or not _global_package_updates():
+        return direct
+    for c, p in _installed_cp_sources(category, package):
+        cand = os.path.join(pkgdir, c, f"{p}-{version}")
+        if os.path.isdir(cand):
+            return cand
+    return direct
 
 
 def _reinstall_flags_for_use_change(root, category, package, candidate, config, newuse):
@@ -2552,7 +2771,7 @@ def _read_vdb_string(root, category, package, version, filename):
     stay intact for use_reduce to parse (||/USE-conditional groups, not
     just bare tokens). A missing file is an empty string, not an error.
     Mirrors portage-repo/src/lib.rs's read_vdb_string exactly."""
-    path = os.path.join(root, "var", "db", "pkg", category, f"{package}-{version}", filename)
+    path = os.path.join(_vdb_pkg_dir(root, category, package, version), filename)
     try:
         with open(path) as f:
             return f.read()
@@ -3136,24 +3355,32 @@ def installed_candidates(root, category, package):
     includes sub-slot either), so adding sub_slot here doesn't change its
     behavior at all. Mirrors portage-repo/src/lib.rs's
     installed_candidates."""
-    cat_dir = os.path.join(root, "var", "db", "pkg", category)
-    if not os.path.isdir(cat_dir):
-        return []
+    # Real profiles/updates/ package moves: <category>/<package> may be
+    # the post-move name while the vdb still holds the package under its
+    # pre-move cat/pkg dir. Scan every source name that maps onto this one
+    # (_installed_cp_sources); slotmove then rewrites each hit's
+    # (slot, sub_slot). Mirrors portage-repo's installed_candidates.
+    pkgdir = os.path.join(root, "var", "db", "pkg")
     candidates = []
-    for name in os.listdir(cat_dir):
-        entry_dir = os.path.join(cat_dir, name)
-        if not os.path.isdir(entry_dir):
+    for src_cat, src_pkg in _installed_cp_sources(category, package):
+        cat_dir = os.path.join(pkgdir, src_cat)
+        if not os.path.isdir(cat_dir):
             continue
-        version = _strip_version_prefix(name, package)
-        if version is None:
-            continue
-        try:
-            with open(os.path.join(entry_dir, "SLOT")) as f:
-                raw_slot = f.read().strip()
-        except OSError:
-            raw_slot = ""
-        slot, sub_slot = _split_slot(raw_slot)
-        candidates.append((version, slot, sub_slot))
+        for name in os.listdir(cat_dir):
+            entry_dir = os.path.join(cat_dir, name)
+            if not os.path.isdir(entry_dir):
+                continue
+            version = _strip_version_prefix(name, src_pkg)
+            if version is None:
+                continue
+            try:
+                with open(os.path.join(entry_dir, "SLOT")) as f:
+                    raw_slot = f.read().strip()
+            except OSError:
+                raw_slot = ""
+            slot, sub_slot = _split_slot(raw_slot)
+            slot, sub_slot = _apply_updates_to_slot(category, package, slot, sub_slot)
+            candidates.append((version, slot, sub_slot))
     return candidates
 
 
@@ -8883,10 +9110,18 @@ def _all_installed_packages(root):
             name, version = split
             try:
                 with open(os.path.join(catdir, dirname, "SLOT")) as fh:
-                    slot = fh.read().strip().split("/", 1)[0] or "0"
+                    raw = fh.read().strip()
             except OSError:
-                slot = "0"
-            out.append((category, name, version, slot))
+                raw = ""
+            slot = raw.split("/", 1)[0] or "0"
+            sub = (raw.split("/", 1)[1] if "/" in raw else slot) or "0"
+            # Real profiles/updates/ package moves: present each vdb entry
+            # under its post-move/slotmove identity (real global-updates
+            # rewrites the vdb on sync; this pilot never writes -- see
+            # _vdb_pkg_dir for the read-back side).
+            category_m, name = _apply_updates_to_cp(category, name)
+            slot, _sub = _apply_updates_to_slot(category_m, name, slot, sub)
+            out.append((category_m, name, version, slot))
     return out
 
 
@@ -11975,7 +12210,11 @@ def run(args):
     except ResolutionError as e:
         print(f"emerge: {e}", file=sys.stderr)
         return 1
-    atom_args = expanded_atoms
+    # Real profiles/updates/ package moves (SCOPE_BACKLOG Part 2 Section H
+    # item 2): rewrite a command-line / @world / @<set>-expanded atom
+    # before it is resolved or used as a display "requested" key. Mirrors
+    # pretend.rs.
+    atom_args = [apply_updates_to_atom(a) for a in expanded_atoms]
 
     if not atom_args:
         print(
@@ -12002,7 +12241,7 @@ def run(args):
     # Display.pkgprint's @system/world inputs (`color` already resolved
     # above). Mirrors pretend.rs.
     color_system_atoms = config["system_packages"]
-    color_world_atoms = _read_world_atoms(_root())
+    color_world_atoms = [apply_updates_to_atom(a) for a in _read_world_atoms(_root())]
 
     # Real create_depgraph_params.py's own precedence: an explicit
     # --with-bdeps always wins; only when it's absent does

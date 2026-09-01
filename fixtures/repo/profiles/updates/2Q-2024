@@ -1,0 +1,3 @@
+# Quarter 2 2024 package moves (fixture)
+move dev-libs/oldmovepkg dev-libs/newmovepkg
+slotmove dev-libs/slotmovepkg 0 1
