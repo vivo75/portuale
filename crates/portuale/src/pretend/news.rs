@@ -272,6 +272,41 @@ pub(crate) struct OfferNewsReadingArgs<'a> {
     pub(crate) color: &'a Colorizer,
 }
 
+/// When the pre-resolution notice printed and `--ask` + `--read-news` are
+/// given, ask "Would you like to read the news items while calculating
+/// dependencies?" and spawn `eselect news read` on "Yes" (return code
+/// ignored). A "No" answer skips the spawn and continues into the resolve.
+/// Missing `eselect` prints `Please install eselect to use this feature.`
+/// Portage: _emerge/actions.py, run_action
+pub(crate) fn offer_news_reading(args: OfferNewsReadingArgs<'_>) -> bool {
+    let OfferNewsReadingArgs {
+        ask,
+        read_news,
+        notice_printed,
+        color,
+    } = args;
+    if !(ask && read_news && notice_printed) {
+        return false;
+    }
+    match ask_yes_no(
+        color,
+        "Would you like to read the news items while calculating dependencies?",
+    ) {
+        Some(true) => {
+            match std::process::Command::new("eselect")
+                .args(["news", "read"])
+                .status()
+            {
+                Ok(_) => {}
+                Err(_) => eprintln!("Please install eselect to use this feature."),
+            }
+            false
+        }
+        Some(false) => false,
+        None => true,
+    }
+}
+
 /// On a `--pretend` run, still print the count notice at the end, even when
 /// resolution failed. `--json` stays machine-readable: no notice there.
 /// Portage: post_emerge.py, post_emerge
