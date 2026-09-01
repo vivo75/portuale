@@ -422,13 +422,39 @@ fn scheduler_needs_build(entry: &GraphEntry) -> bool {
         )
 }
 
+/// Real portage's `PORTAGE_LOG_FILE` (`PORTAGE_LOGDIR` unset →
+/// `${T}/build.log`, i.e. `${PORTAGE_BUILDDIR}/temp/build.log`).
+fn build_log_path(portage_tmpdir: &Path, category: &str, package: &str, version: &str) -> PathBuf {
+    portage_tmpdir
+        .join("portage")
+        .join(category)
+        .join(format!("{package}-{version}"))
+        .join("temp")
+        .join("build.log")
+}
+
+/// Last `n` lines of `path`, or a short "(build log unavailable)" note.
+fn tail_of(path: &Path, n: usize) -> String {
+    match std::fs::read_to_string(path) {
+        Ok(s) => {
+            let lines: Vec<&str> = s.lines().collect();
+            let start = lines.len().saturating_sub(n);
+            lines[start..].join("\n")
+        }
+        Err(_) => "(build log unavailable)".to_string(),
+    }
+}
+
 /// Real `_emerge/EbuildBuild` (+ `EbuildBinpkg`): the `install` phase
 /// chain and any `--buildpkg` binpkg for one source entry, WITHOUT the
 /// vdb merge. Returns the located ebuild path for `merge_one_built_entry`
 /// to reuse. Safe to run from a scheduler worker thread -- every build
 /// gets its own `${PORTAGE_BUILDDIR}` (`<tmpdir>/portage/<cat>/<pkg>-<ver>`)
 /// and `run_commands` passes the environment explicitly (no
-/// `std::env::set_var`).
+/// `std::env::set_var`). When `capture_log` is set, the `install` phase's
+/// stdout+stderr go to `${T}/build.log` instead of the terminal (real
+/// `PORTAGE_LOG_FILE`); on a build failure the tail of that log is folded
+/// into the returned error so the scheduler can show it.
 fn build_one_source_entry(
     entry: &GraphEntry,
     repos: &[RepoConfig],
@@ -436,6 +462,7 @@ fn build_one_source_entry(
     portage_tmpdir: &Path,
     options: &ebuild_merge::MergeOptions,
     buildpkg: Option<&ebuild_package::PackageOptions>,
+    capture_log: bool,
 ) -> Result<PathBuf, String> {
     let (cp, version) = scheduler_cp_version(entry)?;
     let Some(candidate) = locate_candidate(repos, &entry.category, &entry.package, &version) else {
@@ -446,7 +473,23 @@ fn build_one_source_entry(
     };
     let path = ebuild_path(&candidate, &entry.category, &entry.package, &version);
     println!(">>> Emerging ({cp}-{version})...");
-    let status = ebuild_phases::run_commands(
+
+    let log_path = capture_log
+        .then(|| build_log_path(portage_tmpdir, &entry.category, &entry.package, &version));
+    if let Some(lp) = &log_path {
+        // Real `prepare_build_dirs` truncates a stale build.log.
+        let _ = std::fs::remove_file(lp);
+    }
+    // A captured parallel build runs through real `bash` (not the
+    // embedded `brush`), whose stdout+stderr redirect to `build.log`
+    // cleanly at the OS level -- real portage uses real bash for builds
+    // regardless of the pilot's default backend.
+    let shell = if log_path.is_some() {
+        ebuild_phases::ShellBackend::Bash
+    } else {
+        options.shell
+    };
+    let status = ebuild_phases::run_commands_logged(
         &path,
         &["install"],
         root,
@@ -454,10 +497,19 @@ fn build_one_source_entry(
         &options.distdir,
         options.debug,
         &options.config_root,
-        options.shell,
+        shell,
+        log_path.as_deref(),
     )?;
     if status != 0 {
-        return Err(format!("{cp}-{version}: build failed ({status})"));
+        let mut msg = format!("{cp}-{version}: build failed ({status})");
+        if let Some(lp) = &log_path {
+            msg.push_str(&format!(
+                "\n----- last lines of {} -----\n{}\n----------",
+                lp.display(),
+                tail_of(lp, 40)
+            ));
+        }
+        return Err(msg);
     }
     if let Some(package_options) = buildpkg {
         println!(">>> Building package for {cp}-{version}...");
@@ -581,6 +633,10 @@ fn run_build_scheduler(
         }
     }
 
+    let total_builds = (0..n)
+        .filter(|&i| scheduler_needs_build(&entries[i]))
+        .count();
+
     // Entries that need no build (AlreadyInstalled / Binary) count as
     // already merged, so their dependents become dispatchable immediately.
     let mut merged: HashSet<usize> = (0..n)
@@ -621,7 +677,19 @@ fn run_build_scheduler(
                 let bp = buildpkg.filter(|_| !entry_matches_any(&entries[idx], buildpkg_exclude));
                 let entry = &entries[idx];
                 scope.spawn(move || {
-                    let r = build_one_source_entry(entry, repos, root, portage_tmpdir, options, bp);
+                    let r = build_one_source_entry(
+                        entry,
+                        repos,
+                        root,
+                        portage_tmpdir,
+                        options,
+                        bp,
+                        // Capture each build's phase output to its own
+                        // `${T}/build.log` so parallel builds don't
+                        // interleave on the terminal (real portage's
+                        // `--quiet-build`, on by default under `--jobs`).
+                        true,
+                    );
                     let _ = tx.send((idx, r));
                 });
             }
@@ -645,6 +713,11 @@ fn run_build_scheduler(
             match failure {
                 None => {
                     merged.insert(idx);
+                    // Real `_emerge/Scheduler.py`'s `JobStatusDisplay`.
+                    let done = (0..n)
+                        .filter(|&i| scheduler_needs_build(&entries[i]) && merged.contains(&i))
+                        .count();
+                    println!(">>> Jobs: {done} of {total_builds} complete");
                 }
                 Some(e) => {
                     if !keep_going {

@@ -732,6 +732,20 @@ def test_emerge_jobs_builds_independent_packages_in_parallel(emerge_binary, tmp_
         out.index(">>> dev-libs/schedleaf-b-1.0 merged."),
     )
 
+    # Real `Scheduler.JobStatusDisplay`: a running "X of Y complete" line.
+    assert ">>> Jobs: 1 of 3 complete" in out
+    assert ">>> Jobs: 3 of 3 complete" in out
+
+    # Real `--quiet-build` (on by default under `--jobs`): each build's
+    # own phase output is captured to `${T}/build.log`, NOT interleaved on
+    # the parsable stdout. Every stdout line is a pilot-emitted `>>>` /
+    # `[ebuild` line, never a stray phase / shell diagnostic.
+    for line in out.splitlines():
+        assert line.startswith((">>>", "[ebuild", "[blocks", "[nomerge")), repr(line)
+    assert (
+        tmp_path / "portage-tmpdir/portage/dev-libs/schedleaf-a-1.0/temp/build.log"
+    ).is_file()
+
 
 def test_emerge_jobs_with_load_average_still_builds_everything(emerge_binary, tmp_path):
     """`emerge -j4 --load-average <LA>` (real `main.py` `type=float`): the
@@ -791,6 +805,11 @@ def test_emerge_jobs_keep_going_skips_a_failed_builds_dependents(emerge_binary, 
     assert not (root / "var/db/pkg/dev-libs/schedbaddep-1.0").exists()
     assert "dev-libs/schedbad-1.0" in result.stderr
     assert "dev-libs/schedbaddep" in result.stderr
+    # The failed build's captured log tail is folded into the report so
+    # the user can see why it failed without hunting for build.log.
+    assert "last lines of" in result.stderr
+    assert "build.log" in result.stderr
+    assert "deliberate fixture build failure" in result.stderr
 
 
 def test_emerge_atom_upgrade_replaces_the_installed_version(emerge_binary, tmp_path):

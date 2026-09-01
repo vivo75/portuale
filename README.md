@@ -10217,15 +10217,35 @@ allows the first, so it can never deadlock) while the system 1-minute
 load average (`system_loadavg_1min`, Linux `/proc/loadavg`; `0.0` = no
 throttle anywhere it can't be read) is above `LA`.
 
-KNOWN CUTS (documented in `emerge_build.rs`): each build's own phase
-output is inherited straight to the terminal, so it interleaves under
-`-j >1` (real portage captures per-package build logs); each
-`run_commands` still spins up its own tokio runtime; a non-`--keep-going`
-failure returns immediately but waits for already-running builds
-(`thread::scope` join) rather than killing them. New `dev-libs/sched*`
-fixtures; three black-box `test_portuale.py` tests (parallel dispatch
-order, `--load-average`, `--keep-going` skip) and four `portuale` unit
-tests.
+**Build-log capture + the job-status line.** Each parallel build's phase
+output goes to `${T}/build.log` (real `PORTAGE_LOG_FILE`;
+`PORTAGE_LOGDIR` unset → `${PORTAGE_BUILDDIR}/temp/build.log`) instead of
+the terminal — real portage's `--quiet-build`, on by default under
+`--jobs`. `run_commands` grew a `run_commands_logged` sibling that
+threads an `Option<&Path>` through the whole phase chain
+(`run_one_phase{,_bash,_brush}`, `run_misc_functions{,_bash,_brush}`);
+the `bash` backend redirects at the OS level (`Command::stdout/stderr`),
+the `brush` backend via the shell's persistent open files. A *captured*
+scheduler build is forced onto the real `bash` backend (real portage
+builds with real bash regardless), where the redirect is complete.
+After each merge the scheduler prints `>>> Jobs: X of Y complete` (real
+`Scheduler.JobStatusDisplay`); on a build failure the last 40 lines of
+that package's `build.log` are folded into the error report. The
+parsable **stdout** is now clean under `-j >1` — every line is a
+pilot-emitted `>>>` / `[ebuild …]` line.
+
+KNOWN CUTS (documented in `emerge_build.rs`): the serialized *merge*
+step's `pkg_pre/postinst` hooks still run through `brush` uncaptured, so
+some pre-existing phase-execution noise (`chgrp: … Operation not
+permitted`, etc.) stays on stderr (not interleaved, present in serial
+builds too); `--quiet-build[=y|n]` isn't a real flag yet (capture is
+`-j >1`-only, serial `-j1` is unchanged); each `run_commands` still spins
+up its own tokio runtime; a non-`--keep-going` failure returns
+immediately but waits for already-running builds (`thread::scope` join)
+rather than killing them. New `dev-libs/sched*` fixtures; three black-box
+`test_portuale.py` tests (parallel dispatch order + clean stdout + Jobs
+line + build.log, `--load-average`, `--keep-going` skip + failure-log
+tail) and four `portuale` unit tests.
 
 ## Running it
 

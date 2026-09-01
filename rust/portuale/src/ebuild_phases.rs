@@ -990,6 +990,7 @@ async fn run_one_phase(
     extra_env: &[(String, String)],
     config_root: &Path,
     shell: ShellBackend,
+    log_file: Option<&Path>,
 ) -> Result<i32, String> {
     let bin_dir = repo_root().join("bin");
     let helpers_dir = bin_dir.join("ebuild-helpers");
@@ -1005,6 +1006,7 @@ async fn run_one_phase(
                 &bin_dir,
                 &helpers_dir,
                 config_root,
+                log_file,
             )
             .await
         }
@@ -1017,6 +1019,7 @@ async fn run_one_phase(
             &bin_dir,
             &helpers_dir,
             config_root,
+            log_file,
         ),
     }
 }
@@ -1031,13 +1034,14 @@ async fn run_one_phase_brush(
     bin_dir: &Path,
     helpers_dir: &Path,
     config_root: &Path,
+    log_file: Option<&Path>,
 ) -> Result<i32, String> {
     let mut shell = brush_core::Shell::builder()
         .default_builtins(brush_builtins::BuiltinSet::BashMode)
         .build()
         .await
         .map_err(|e| format!("brush shell failed to start: {e}"))?;
-    let params = shell.default_exec_params();
+    let params = brush_phase_params(&mut shell, log_file)?;
 
     let setup = phase_setup_script(
         env,
@@ -1106,6 +1110,7 @@ fn run_one_phase_bash(
     bin_dir: &Path,
     helpers_dir: &Path,
     config_root: &Path,
+    log_file: Option<&Path>,
 ) -> Result<i32, String> {
     let vars = phase_env_vars(
         env,
@@ -1117,10 +1122,13 @@ fn run_one_phase_bash(
         config_root,
         extra_env,
     );
-    let status = std::process::Command::new("bash")
-        .arg(bin_dir.join("ebuild.sh"))
-        .arg(phase)
-        .envs(vars)
+    let mut cmd = std::process::Command::new("bash");
+    cmd.arg(bin_dir.join("ebuild.sh")).arg(phase).envs(vars);
+    if let Some(path) = log_file {
+        let (out, err) = open_log_file(path)?;
+        cmd.stdout(out).stderr(err);
+    }
+    let status = cmd
         .status()
         .map_err(|e| format!("spawning real bash for phase {phase} failed: {e}"))?;
     Ok(status.code().unwrap_or(1))
@@ -1153,6 +1161,7 @@ async fn run_misc_functions(
     debug: bool,
     config_root: &Path,
     shell: ShellBackend,
+    log_file: Option<&Path>,
 ) -> Result<i32, String> {
     let bin_dir = repo_root().join("bin");
     let helpers_dir = bin_dir.join("ebuild-helpers");
@@ -1169,6 +1178,7 @@ async fn run_misc_functions(
                 &bin_dir,
                 &helpers_dir,
                 config_root,
+                log_file,
             )
             .await
         }
@@ -1182,6 +1192,7 @@ async fn run_misc_functions(
             &bin_dir,
             &helpers_dir,
             config_root,
+            log_file,
         ),
     }
 }
@@ -1197,13 +1208,14 @@ async fn run_misc_functions_brush(
     bin_dir: &Path,
     helpers_dir: &Path,
     config_root: &Path,
+    log_file: Option<&Path>,
 ) -> Result<i32, String> {
     let mut shell = brush_core::Shell::builder()
         .default_builtins(brush_builtins::BuiltinSet::BashMode)
         .build()
         .await
         .map_err(|e| format!("brush shell failed to start: {e}"))?;
-    let params = shell.default_exec_params();
+    let params = brush_phase_params(&mut shell, log_file)?;
 
     let setup = phase_setup_script(
         env,
@@ -1247,6 +1259,7 @@ fn run_misc_functions_bash(
     bin_dir: &Path,
     helpers_dir: &Path,
     config_root: &Path,
+    log_file: Option<&Path>,
 ) -> Result<i32, String> {
     let vars = phase_env_vars(
         env,
@@ -1258,10 +1271,15 @@ fn run_misc_functions_bash(
         config_root,
         extra_env,
     );
-    let status = std::process::Command::new("bash")
-        .arg(bin_dir.join("misc-functions.sh"))
+    let mut cmd = std::process::Command::new("bash");
+    cmd.arg(bin_dir.join("misc-functions.sh"))
         .arg(dyn_command)
-        .envs(vars)
+        .envs(vars);
+    if let Some(path) = log_file {
+        let (out, err) = open_log_file(path)?;
+        cmd.stdout(out).stderr(err);
+    }
+    let status = cmd
         .status()
         .map_err(|e| format!("spawning real bash for {dyn_command} failed: {e}"))?;
     Ok(status.code().unwrap_or(1))
@@ -1297,6 +1315,7 @@ pub(crate) fn run_misc_function(
             debug,
             config_root,
             shell,
+            None,
         )
         .await
     })
@@ -1340,6 +1359,7 @@ async fn run_commands_async(
     debug: bool,
     config_root: &Path,
     shell: ShellBackend,
+    log_file: Option<&Path>,
 ) -> Result<i32, String> {
     let env = compute_environment(ebuild_path, portage_tmpdir)?;
     create_directories(&env)?;
@@ -1357,8 +1377,17 @@ async fn run_commands_async(
 
     for &command in commands {
         for phase in phase_prerequisites(command) {
-            let status =
-                run_one_phase(&env, root, phase, debug, &extra_env, config_root, shell).await?;
+            let status = run_one_phase(
+                &env,
+                root,
+                phase,
+                debug,
+                &extra_env,
+                config_root,
+                shell,
+                log_file,
+            )
+            .await?;
             if status != 0 {
                 return Ok(status);
             }
@@ -1390,6 +1419,7 @@ async fn run_commands_async(
                     debug,
                     config_root,
                     shell,
+                    log_file,
                 )
                 .await?;
                 if qa_status != 0 {
@@ -1438,6 +1468,37 @@ pub fn run_commands(
     config_root: &Path,
     shell: ShellBackend,
 ) -> Result<i32, String> {
+    run_commands_logged(
+        ebuild_path,
+        commands,
+        root,
+        portage_tmpdir,
+        distdir,
+        debug,
+        config_root,
+        shell,
+        None,
+    )
+}
+
+/// Like `run_commands`, but when `log_file` is `Some`, every phase (and
+/// its post-phase `misc-functions.sh`) has its stdout+stderr captured to
+/// that file (append) instead of the terminal -- real portage's
+/// `PORTAGE_LOG_FILE` (default `${T}/build.log`). `run_build_scheduler`
+/// passes it so a parallel `--jobs` build's output doesn't interleave;
+/// the scheduler dumps the file on a build failure.
+#[allow(clippy::too_many_arguments)]
+pub fn run_commands_logged(
+    ebuild_path: &Path,
+    commands: &[&str],
+    root: &Path,
+    portage_tmpdir: &Path,
+    distdir: &Path,
+    debug: bool,
+    config_root: &Path,
+    shell: ShellBackend,
+    log_file: Option<&Path>,
+) -> Result<i32, String> {
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
@@ -1451,7 +1512,49 @@ pub fn run_commands(
         debug,
         config_root,
         shell,
+        log_file,
     ))
+}
+
+/// Opens `log_file` for append (creating it and its parent dir), returning
+/// two independent handles -- one for a subprocess's stdout, one for its
+/// stderr. See `run_commands_logged`.
+fn open_log_file(log_file: &Path) -> Result<(std::fs::File, std::fs::File), String> {
+    if let Some(parent) = log_file.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
+    }
+    let f = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(log_file)
+        .map_err(|e| format!("{}: {e}", log_file.display()))?;
+    let g = f
+        .try_clone()
+        .map_err(|e| format!("{}: {e}", log_file.display()))?;
+    Ok((f, g))
+}
+
+/// Builds the `ExecutionParameters` for a brush phase shell, redirecting
+/// its stdout+stderr to `log_file` when given (set on the shell's
+/// persistent open files so brush's own diagnostics are captured too).
+/// The scheduler's *captured* parallel builds run through real `bash`
+/// instead (`emerge_build::build_one_source_entry`), where the OS-level
+/// fd redirect is complete; this brush path is only reached for a
+/// captured build explicitly forced onto the brush backend.
+fn brush_phase_params(
+    shell: &mut brush_core::Shell,
+    log_file: Option<&Path>,
+) -> Result<brush_core::ExecutionParameters, String> {
+    if let Some(path) = log_file {
+        let (out, err) = open_log_file(path)?;
+        shell
+            .open_files_mut()
+            .set_fd(brush_core::openfiles::OpenFiles::STDOUT_FD, out.into());
+        shell
+            .open_files_mut()
+            .set_fd(brush_core::openfiles::OpenFiles::STDERR_FD, err.into());
+    }
+    Ok(shell.default_exec_params())
 }
 
 /// Runs exactly `phase`, with no `actionmap_deps` prerequisite chain --
@@ -1492,7 +1595,7 @@ pub(crate) fn run_single_phase(
         // `doebuild()`'s own fetch-then-phases sequence at all -- see
         // this function's own doc comment), so there's nothing to
         // re-fetch or re-export here.
-        run_one_phase(&env, root, phase, debug, &[], config_root, shell).await
+        run_one_phase(&env, root, phase, debug, &[], config_root, shell, None).await
     })
 }
 
@@ -1567,7 +1670,17 @@ pub(crate) fn run_phase_from_saved_env(
             .map_err(|e| format!("{}: {e}", env.t().join("environment.raw").display()))?;
 
         let extra_env = [("EMERGE_FROM".to_string(), "binary".to_string())];
-        run_one_phase(&env, root, phase, debug, &extra_env, config_root, shell).await
+        run_one_phase(
+            &env,
+            root,
+            phase,
+            debug,
+            &extra_env,
+            config_root,
+            shell,
+            None,
+        )
+        .await
     })
 }
 
