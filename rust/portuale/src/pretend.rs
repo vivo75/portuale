@@ -1880,6 +1880,10 @@ fn print_help() {
         "       --json      dump the whole resolved graph as one line of JSON instead \
          of the lines above (pilot-specific, not a real emerge option)"
     );
+    println!(
+        "       --shell bash|brush  which real shell runs a real merge's phase chain \
+         (not under --pretend); default bash, pilot-specific, not a real emerge option"
+    );
     println!();
     println!(
         "Every other real emerge option/action is recognized by name (see \
@@ -3178,6 +3182,7 @@ fn run_resume(
     skipfirst: bool,
     jobs: usize,
     load_average: Option<f64>,
+    shell: ebuild_phases::ShellBackend,
 ) -> ExitCode {
     let Some((favorites, mut mergelist)) = crate::mtimedb::read_resume_list(root) else {
         eprintln!("emerge: could not find a valid resume list");
@@ -3205,8 +3210,7 @@ fn run_resume(
         .collect();
 
     println!(">>> Resuming merge of {} package(s)...", entries.len());
-    let merge_options =
-        ebuild_merge::MergeOptions::from_env(ebuild_phases::ShellBackend::default(), false);
+    let merge_options = ebuild_merge::MergeOptions::from_env(shell, false);
     if let Err(e) = emerge_build::run_source_merge(
         &entries,
         &repos,
@@ -5088,6 +5092,18 @@ pub fn run(args: &[String]) -> ExitCode {
     // None)`, checked after every other trigger. See `selective`'s own
     // computation just before the `resolve_pretend_graph` call below.
     let mut selective_flag: Option<bool> = None;
+    // `--shell bash|brush` (default `bash`): which real shell backend
+    // executes the phase chain of a real (non-`--pretend`) `emerge <atom>`
+    // / `--getbinpkg` / `--buildpkgonly` / `--resume` merge -- see
+    // `ebuild_phases::ShellBackend`'s doc comment (including why bash is
+    // the default). A pilot-only flag (real `emerge` has no `--shell`),
+    // so it's special-cased in the parse loop rather than routed through
+    // `emerge_options.rs`, the same treatment `--json` gets. Inert under
+    // `--pretend` (nothing executes). Does not reach the removal-hook
+    // (`prerm`/`postrm` under `-C`/`--depclean`) or `pkg_config` paths --
+    // those always use the default, matching how they already hardcode
+    // `debug = false` to `MergeOptions::from_env`.
+    let mut shell = ebuild_phases::ShellBackend::default();
 
     let mut i = 0;
     while i < args.len() {
@@ -5327,6 +5343,28 @@ pub fn run(args: &[String]) -> ExitCode {
         } else if let Some(value) = arg.strip_prefix("--buildpkg-exclude=") {
             buildpkg_exclude.extend(value.split_whitespace().map(String::from));
             i += 1;
+        } else if arg == "--shell" || arg.starts_with("--shell=") {
+            // Pilot-only (real emerge has no `--shell`), same
+            // "special-cased, not in emerge_options.rs" treatment `--json`
+            // gets -- see `shell`'s own declaration above.
+            let value = if let Some(v) = arg.strip_prefix("--shell=") {
+                i += 1;
+                v.to_string()
+            } else if let Some(v) = args.get(i + 1) {
+                i += 2;
+                v.clone()
+            } else {
+                eprintln!("emerge: option '--shell' requires a value (bash or brush)");
+                return ExitCode::from(2);
+            };
+            shell = match value.as_str() {
+                "bash" => ebuild_phases::ShellBackend::Bash,
+                "brush" => ebuild_phases::ShellBackend::Brush,
+                other => {
+                    eprintln!("emerge: --shell: {other:?} is not \"bash\" or \"brush\"");
+                    return ExitCode::from(1);
+                }
+            };
         } else if arg == "--json" {
             // NOT a real emerge option at all -- real portage has no
             // structured-output mode for --pretend. Pilot-specific, so
@@ -6414,6 +6452,7 @@ pub fn run(args: &[String]) -> ExitCode {
             skipfirst,
             jobs,
             load_average,
+            shell,
         );
     }
 
@@ -7137,8 +7176,7 @@ pub fn run(args: &[String]) -> ExitCode {
         let portage_tmpdir = std::env::var_os("PORTAGE_TMPDIR")
             .map(std::path::PathBuf::from)
             .unwrap_or_else(|| std::path::PathBuf::from("/var/tmp/portage"));
-        let merge_options =
-            ebuild_merge::MergeOptions::from_env(ebuild_phases::ShellBackend::default(), false);
+        let merge_options = ebuild_merge::MergeOptions::from_env(shell, false);
         // Real `FEATURES=buildpkg` / `--buildpkg`/`-b` (real
         // `_emerge/EbuildBinpkg`): a binpkg of each source entry is
         // written into `$PKGDIR` as a side effect of the merge.

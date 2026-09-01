@@ -324,8 +324,18 @@ dev/test context — see also the `chown` note below).
   to real `reubeno/brush` `main` (`a04b09dc`, at/after the #1274 merge
   `18851e7`); the `vivo75/brush` fork is gone. Whole workspace + pytest
   green; `install_does_not_deadlock…` completes in ~1s (no #1276 patch
-  needed at all now). Only remaining Section G item: periodic re-pin to
-  keep up with upstream `main` — see `brush-pin.md`'s checklist.
+  needed at all now).
+- ~~**Default phase-execution backend**~~ **Flipped to `bash` 2026-09-01**
+  — real-world testing found brush's `declare -f` corrupts functions with
+  redirected here-docs (`toolchain-funcs.eclass`'s `_tc-has-openmp`),
+  breaking `emerge <atom>` for compiled packages. `ShellBackend`'s
+  default is now `Bash` (real `bash` subprocess); `brush` stays available
+  via `--shell brush` on both `emerge` and `ebuild`. See `brush-pin.md`,
+  "`declare -f` mangles a function with a redirected here-document".
+- **Still open:** minimize + report the `declare -f` heredoc bug
+  upstream; periodic re-pin to keep up with upstream `main` (see
+  `brush-pin.md`'s checklist); `emerge --shell` does not yet reach the
+  `prerm`/`postrm` or `pkg_config` paths (they use the `bash` default).
 
 ### H. Misc / cosmetic
 

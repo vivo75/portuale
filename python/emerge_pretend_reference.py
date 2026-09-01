@@ -8091,6 +8091,10 @@ def _print_help():
         "       --json      dump the whole resolved graph as one line of JSON instead "
         "of the lines above (pilot-specific, not a real emerge option)"
     )
+    print(
+        "       --shell bash|brush  which real shell runs a real merge's phase chain "
+        "(not under --pretend); default bash, pilot-specific, not a real emerge option"
+    )
     print()
     print(
         "Every other real emerge option/action is recognized by name (see "
@@ -11244,6 +11248,31 @@ def run(args):
             # given no short alias (nothing to bundle).
             json_output = True
             i += 1
+        elif arg == "--shell" or arg.startswith("--shell="):
+            # Pilot-only (real emerge has no --shell): selects the real
+            # shell backend for a real merge's phase chain. This reference
+            # only models --pretend, where it's entirely inert -- parsed
+            # and validated so the CLI surface matches the Rust side, then
+            # discarded. Same "special-cased, not in _lookup_option"
+            # treatment --json gets.
+            if arg.startswith("--shell="):
+                value = arg[len("--shell=") :]
+                i += 1
+            elif i + 1 < len(args):
+                value = args[i + 1]
+                i += 2
+            else:
+                print(
+                    "emerge: option '--shell' requires a value (bash or brush)",
+                    file=sys.stderr,
+                )
+                return 2
+            if value not in ("bash", "brush"):
+                print(
+                    f'emerge: --shell: "{value}" is not "bash" or "brush"',
+                    file=sys.stderr,
+                )
+                return 1
         elif arg in ("--verbose", "-v"):
             # Peeks at the next token, consuming it only if it's exactly
             # "y"/"n" -- see pretend.rs's module doc comment on why (real

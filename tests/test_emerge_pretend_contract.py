@@ -767,6 +767,26 @@ CASES = [
     ("--help wins over any other flag present, valid or not", ["--accept-properties", "--help"], 0),
     ("-h bundled with other short flags still wins", ["-ph"], 0),
     ("--help wins even without --pretend at all", ["--help", "dev-libs/newpkg"], 0),
+    (
+        "--shell (pilot-only) is accepted and inert under --pretend",
+        ["--pretend", "--shell", "brush", "dev-libs/newpkg"],
+        0,
+    ),
+    (
+        "--shell=brush inline form, also inert under --pretend",
+        ["--pretend", "--shell=bash", "dev-libs/newpkg"],
+        0,
+    ),
+    (
+        "--shell rejects a value that isn't bash or brush",
+        ["--pretend", "--shell", "zsh", "dev-libs/newpkg"],
+        1,
+    ),
+    (
+        "--shell with no value is a usage error",
+        ["--pretend", "dev-libs/newpkg", "--shell"],
+        2,
+    ),
     ("@world expands to the fixture world file's own atoms", ["--pretend", "@world"], 0),
     ("@world combined with an explicit atom too", ["--pretend", "dev-libs/samepkg", "@world"], 0),
     ("@system expands to the fixture profile chain's own packages files", ["--pretend", "@system"], 0),
@@ -6082,6 +6102,8 @@ def test_help_prints_a_pilot_specific_summary_not_real_emerges_own(
         "   -h, --help      show this message and exit\n"
         "       --json      dump the whole resolved graph as one line of JSON instead "
         "of the lines above (pilot-specific, not a real emerge option)\n"
+        "       --shell bash|brush  which real shell runs a real merge's phase chain "
+        "(not under --pretend); default bash, pilot-specific, not a real emerge option\n"
         "\n"
         "Every other real emerge option/action is recognized by name (see "
         "lib/_emerge/main.py) but not implemented -- using one reports which "

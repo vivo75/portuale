@@ -1736,14 +1736,14 @@ cat "${PORTAGE_TMPDIR}"/portage/dev-libs/bigeclasspkg-1.0/temp/bigfixture-marker
 ```
 
 `--shell bash|brush` (see "What this proves" above for the full
-writeup): the same `dev-libs/phasepkg` fixture task #54's own example
-already uses, run via a real `bash` subprocess instead of the default
-embedded brush shell:
+writeup): the default is now a real `bash` subprocess; `--shell brush`
+opts into the embedded brush shell instead. `emerge` has the same flag
+for a real (non-`--pretend`) merge.
 
 ```sh
 cd rust && cargo build --release && cd ../..
 export PORTAGE_TMPDIR="$(mktemp -d)"
-rust/target/release/portuale ebuild --shell bash \
+rust/target/release/portuale ebuild --shell brush \
     fixtures/repo/dev-libs/phasepkg/phasepkg-1.0.ebuild install
 # (real phase output, then exit 0)
 cat "${PORTAGE_TMPDIR}"/portage/dev-libs/phasepkg-1.0/image/usr/share/phasepkg/hello.txt

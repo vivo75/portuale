@@ -101,6 +101,40 @@ strategy-#2 rewrite). Strategy #2 closed the portage-tree side only.
    fixed. Only re-introduce a fork if upstream won't take the fix and
    it's genuinely blocking.
 
+## Open brush bugs found in real-world testing
+
+### `declare -f` mangles a function with a redirected here-document
+
+**Found 2026-09-01** running `emerge -v app-portage/eix` against a real
+Gentoo tree. brush's `declare -f` (function serializer) corrupts any
+function body containing `cmd <<-EOF > file`:
+
+```bash
+f() { cat <<-EOF > "${base}.c"
+	#include <omp.h>
+	EOF
+}
+```
+
+bash's `declare -f f` round-trips this exactly. brush emits the redirect
+**after** the heredoc body as `> base "${}.c"` — the `${base}` parameter
+name dropped entirely — and re-indents the `<<-` body/terminator with
+spaces, so `EOF` no longer terminates the heredoc.
+
+**Impact:** `__save_ebuild_env` runs `declare -f` on every in-scope
+function between phases. `toolchain-funcs.eclass`'s `_tc-has-openmp`
+(and others) trips this → the written `${T}/environment` is unparseable
+→ the next phase's `source "${T}/environment" || die` aborts. Breaks a
+real `emerge <atom>` for essentially every compiled package.
+
+**Response:** the phase-execution default flipped from the embedded
+`brush` backend to a real `bash` subprocess (`ShellBackend::Bash`;
+`brush` stays available via `--shell brush` / `--shell=brush`). See
+[`what-this-proves.md`](what-this-proves.md), "`--shell` default is now
+`bash`".
+
+**Still to do:** minimize and report upstream; pin a fix when one lands.
+
 ## What is *not* tracked here
 
 This was targeted spike-and-fix work, not an exhaustive brush ↔ bash

@@ -5,9 +5,12 @@
 // separately-scoped, much bigger piece: `dblink.merge()`/`treewalk()`/
 // `mergeme()` in `lib/portage/dbapi/vartree.py`, ~6500 lines).
 //
-// Bash-execution backend: an embedded `brush_core::Shell` (see
-// `portuale/Cargo.toml`'s own doc comment for the pinned fork/commit and
-// why), driving the REAL, unmodified `bin/ebuild.sh` and the phase
+// Bash-execution backend: by default a genuine `bash` subprocess (real
+// portage's own `_doebuild_spawn()` shape); optionally an embedded
+// `brush_core::Shell` via `--shell brush` (see `portuale/Cargo.toml`'s
+// own doc comment for the pinned commit, and `ShellBackend`'s doc
+// comment for why bash is the default). Either way it drives the REAL,
+// unmodified `bin/ebuild.sh` and the phase
 // functions it sources (`bin/phase-functions.sh`/`bin/phase-helpers.sh`/
 // `bin/isolated-functions.sh`/`bin/bashrc-functions.sh`/
 // `bin/save-ebuild-env.sh`) -- none of that bash is reimplemented in Rust;
@@ -917,32 +920,46 @@ fn write_post_install_metadata(env: &Environment, root: &Path) -> Result<(), Str
 }
 
 /// Which real shell executes a phase, and every real `bin/*.sh` this
-/// pilot sources unmodified along with it: `Brush` (the default -- an
-/// embedded `brush_core::Shell`, see this module's own doc comment for
-/// why) or `Bash`, a genuine `bash <bin_dir>/ebuild.sh <phase>`
-/// subprocess -- matching real portage's own `_doebuild_spawn()`
+/// pilot sources unmodified along with it.
+///
+/// `Bash` (**the default**) is a genuine `bash <bin_dir>/ebuild.sh
+/// <phase>` subprocess -- matching real portage's own `_doebuild_spawn()`
 /// invocation shape almost exactly (`lib/portage/package/ebuild/
 /// doebuild.py`'s own `cmd = "{ebuild.sh} {phase}"`, spawned via
 /// `portage.process.spawn()`; real `bin/ebuild.sh:153`'s own
 /// `EBUILD_SH_ARGS="$*"` picks up `<phase>` from the subprocess's own
 /// positional args, which its own tail, `bin/ebuild.sh:830-843`, then
-/// really uses to call `__ebuild_main ${EBUILD_SH_ARGS}` and `exit` --
-/// the brush backend deliberately never sets `EBUILD_SH_ARGS` at all,
+/// really uses to call `__ebuild_main ${EBUILD_SH_ARGS}` and `exit`).
+///
+/// `Brush` is an embedded `brush_core::Shell` (see this module's own doc
+/// comment, and `portuale/Cargo.toml`'s, for the pinned commit and how
+/// the embedding works). It deliberately never sets `EBUILD_SH_ARGS`,
 /// since a bare `exit` inside an *embedded* shell would kill the whole
-/// hosting Rust process rather than just return control, see this
-/// module's own doc comment; a real subprocess has no such problem, so
-/// `Bash` uses that real mechanism directly instead of brush's own
-/// "source, then separately `invoke_function`" two-step). Selectable
-/// via `ebuild --shell bash|brush` (see `ebuild.rs`'s own CLI wiring)
-/// -- a pilot-only flag, not a real `bin/ebuild` option, so it's
-/// deliberately NOT in `ebuild_options::OPTIONS` (that table is
-/// specifically a transcription of real bin/ebuild's own argparse
-/// setup).
+/// hosting Rust process rather than just return control -- so it uses
+/// brush's own "source, then separately `invoke_function`" two-step
+/// instead of `__ebuild_main`.
+///
+/// **Why `Bash` is the default** (it was `Brush` originally, for the
+/// zero-dependency / minimal-Linux fit -- hard goal 3): brush's `declare
+/// -f` function serializer corrupts any function body containing a
+/// redirected here-document (the redirect is torn off the `cat` line and
+/// re-emitted after the body with its `"${var}"` target mangled; a `<<-`
+/// body is re-indented with spaces so its terminator no longer matches).
+/// `__save_ebuild_env` runs `declare -f` on every in-scope function
+/// between phases, and `toolchain-funcs.eclass`'s `_tc-has-openmp` (plus
+/// others) trips this -- the written `${T}/environment` then fails to
+/// parse and the next phase's `source "${T}/environment" || die` aborts
+/// the build. That breaks a real `emerge <atom>` for essentially every
+/// compiled package. `Bash` has no such problem; `Brush` stays available
+/// via `--shell brush` / `--shell=brush` (a pilot-only flag on both
+/// `emerge` and `ebuild`, deliberately NOT in `ebuild_options::OPTIONS`
+/// -- that table transcribes real `bin/ebuild`'s argparse only). The
+/// brush `declare -f` bug is tracked in `docs/brush-pin.md`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ShellBackend {
     #[default]
-    Brush,
     Bash,
+    Brush,
 }
 
 /// The real `src_*` phases the pilot puts inside a sandbox -- both the

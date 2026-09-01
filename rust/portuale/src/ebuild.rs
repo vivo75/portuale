@@ -130,9 +130,10 @@ pub fn run(args: &[String]) -> ExitCode {
     // this module's own long-documented v1 scope; `--debug` is the first
     // one wired to something real.
     let mut debug = false;
-    // `--shell bash|brush` (default `brush`): selects which real shell
+    // `--shell bash|brush` (default `bash`): selects which real shell
     // backend executes every phase/hook/misc-function below -- see
-    // `ebuild_phases::ShellBackend`'s own doc comment. A pilot-only flag,
+    // `ebuild_phases::ShellBackend`'s own doc comment (including why the
+    // default is `bash`, not the embedded `brush`). A pilot-only flag,
     // not a real `bin/ebuild` option at all, so it's checked here
     // directly rather than through `ebuild_options::lookup_option`
     // (deliberately NOT added to `ebuild_options::OPTIONS`, which is

@@ -1624,16 +1624,17 @@ def test_ebuild_install_does_not_deadlock_on_a_large_eclass_scope(
     assert marker.read_text() == "hello from bigfixture.eclass\n"
 
 
-def test_ebuild_shell_bash_produces_the_same_real_result_as_the_brush_default(
+def test_ebuild_shell_bash_and_brush_produce_the_same_real_result(
     ebuild_binary, tmp_path
 ):
-    """`--shell bash|brush` (default `brush`) selects which real shell
-    backend executes every phase: the default embedded `brush_core::
-    Shell`, or a genuine `bash <bin_dir>/ebuild.sh <phase>` subprocess
-    (matching real portage's own `_doebuild_spawn()` invocation shape --
-    see `ebuild_phases::ShellBackend`'s own doc comment and
-    docs/what-this-proves.md's eclass section for the full writeup). Both backends run the same
-    real `dev-libs/phasepkg` fixture's own `src_install`, so this
+    """`--shell bash|brush` (default `bash`) selects which real shell
+    backend executes every phase: a genuine `bash <bin_dir>/ebuild.sh
+    <phase>` subprocess (the default -- matching real portage's own
+    `_doebuild_spawn()` invocation shape), or the embedded
+    `brush_core::Shell` (see `ebuild_phases::ShellBackend`'s own doc
+    comment and docs/what-this-proves.md's eclass section for the full
+    writeup, including why the default is `bash`). Both backends run the
+    same real `dev-libs/phasepkg` fixture's own `src_install`, so this
     asserts they produce an identical real file, not just a zero exit
     code each."""
     ebuild_path = str(Path(FIXTURES_ROOT) / "repo/dev-libs/phasepkg/phasepkg-1.0.ebuild")

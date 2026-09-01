@@ -8,6 +8,12 @@ SLOT="0"
 KEYWORDS="amd64"
 IUSE="test"
 
+# The distfiles are digest-verified stand-ins, not real archives -- this
+# fixture exercises the SRC_URI grammar and the verified-skip-fetch path,
+# not unpacking. Skip the EAPI-8 default src_unpack (which would `tar` the
+# stand-in and fail).
+src_unpack() { :; }
+
 src_install() {
 	echo "A=${A}" > "${T}/fetch-vars.txt" || die
 	echo "AA=${AA}" >> "${T}/fetch-vars.txt" || die

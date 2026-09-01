@@ -238,8 +238,12 @@ state-change trace; full CLI-surface recognition for both `emerge` and
 `ebuild`.
 
 **Real execution (filesystem-mutating)**: `ebuild <file> install` runs the
-real 8-phase chain via an embedded `brush` (Rust-native bash) driving
-unmodified `bin/*.sh`; `ebuild <file> merge` really copies `${D}` into
+real 8-phase chain driving unmodified `bin/*.sh` — by default via a real
+`bash` subprocess, optionally via the embedded `brush` (`--shell brush`;
+the default flipped from `brush` to `bash` on 2026-09-01 after brush's
+`declare -f` was found to corrupt real eclass functions — see
+`what-this-proves.md`, "`--shell` default is now `bash`", and
+`brush-pin.md`); `ebuild <file> merge` really copies `${D}` into
 `${ROOT}` and writes a real vdb entry, with real `CONFIG_PROTECT`
 (`obj`/`sym` entries, `NOCONFMEM`, `new_protect_filename` file reuse),
 `FEATURES=collision-protect`/`protect-owned`, preserve-libs collision
@@ -269,8 +273,8 @@ merges a mix of binary and source entries per the resolver's plan
 (`emerge_getbinpkg::run_merge_plan`); real `SRC_URI`
 fetch (including `mirror://`/`custommirrors` resolution and real
 `FEATURES=distlocks` file locking) via real `wget`; real eclass
-`inherit()` support; `ebuild --shell bash|brush` picks the execution
-backend explicitly.
+`inherit()` support; `ebuild --shell bash|brush` and `emerge --shell
+bash|brush` (pilot-only flags) pick the execution backend explicitly.
 
 **Backtracking (resolver retry loop)** — the `--autounmask*` family is
 fully shipped, and as of 2026-09-01 **slice 1 of real backtracking**:
@@ -1205,11 +1209,16 @@ work, not an exhaustive compatibility sweep. **Full fork-tracking record:
 ### Candidate strategies (complementary, not mutually exclusive)
 
 1. **Default to brush, fall back to system bash** on a parse failure —
-   not implemented as automatic fallback. What *did* ship instead:
-   `ebuild --shell bash|brush` (default `brush`), an explicit, real
-   second backend (`_doebuild_spawn()`-shaped `bash <bin_dir>/ebuild.sh
-   <phase>` subprocess) a caller can pick directly. See README's own
-   "`ebuild --shell bash|brush`" section.
+   not implemented as automatic fallback. What shipped instead:
+   `ebuild --shell bash|brush` / `emerge --shell bash|brush`, explicit
+   backend selection (`_doebuild_spawn()`-shaped `bash <bin_dir>/
+   ebuild.sh <phase>` subprocess vs the embedded brush). **The default
+   flipped from `brush` to `bash` on 2026-09-01** — brush's `declare -f`
+   corrupts real eclass functions with redirected here-docs
+   (`toolchain-funcs`'s `_tc-has-openmp`), breaking `emerge <atom>` for
+   compiled packages. So in practice this pilot now does the *reverse*:
+   default to bash, opt into brush. See `what-this-proves.md`'s
+   "`--shell` default is now `bash`" and `brush-pin.md`.
 2. **Fix our own `bin/*.sh` to avoid brush-hostile constructs** — still
    open (see "Open backlog" above). Low-risk, immediately effective for
    this repo's own tree, doesn't preempt real-world ebuilds/eclasses.

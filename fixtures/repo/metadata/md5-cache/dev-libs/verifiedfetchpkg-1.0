@@ -1,4 +1,4 @@
-DEFINED_PHASES=install
+DEFINED_PHASES=install unpack
 DESCRIPTION=fixture package: real SRC_URI grammar (arrow-rename + USE-conditional group), verified-in-place so no live network is needed
 EAPI=8
 IUSE=test

@@ -5740,10 +5740,62 @@ install_lands_a_real_file_under_a_real_d_via_real_bash`) runs the same
 `dev-libs/phasepkg` fixture `install_lands_a_real_file_under_a_real_d`
 already covers via brush, asserting the exact same real file lands
 with the exact same content; a black-box pytest test
-(`test_ebuild_shell_bash_produces_the_same_real_result_as_the_brush_
-default`) does the same via the compiled binary, running both `--shell
-brush` and `--shell bash` against the identical fixture and comparing
-results directly.
+(`test_ebuild_shell_bash_and_brush_produce_the_same_real_result`) does
+the same via the compiled binary, running both `--shell brush` and
+`--shell bash` against the identical fixture and comparing results
+directly.
+
+> **Update (2026-09-01):** the default flipped from `brush` to `bash`,
+> and `emerge` gained its own `--shell bash|brush` flag -- see
+> "`--shell` default is now `bash`" below. The paragraph above documents
+> the slice that first added the `bash` backend; only the "default
+> `brush`" / "`emerge` doesn't expose `--shell` yet" details are now
+> superseded.
+
+### `--shell` default is now `bash`; `emerge --shell bash|brush`
+
+Real-world testing (`emerge -v app-portage/eix` against an actual Gentoo
+tree) surfaced a hard blocker in the embedded `brush` backend:
+brush's `declare -f` function serializer corrupts any function body
+containing a **redirected here-document**. Given
+`toolchain-funcs.eclass`'s `_tc-has-openmp` --
+
+```bash
+_tc-has-openmp() {
+	cat <<-EOF > "${base}.c"
+	#include <omp.h>
+	EOF
+}
+```
+
+-- bash's `declare -f` round-trips it exactly; brush emits the redirect
+*after* the heredoc body as `> base "${}.c"` (the `${base}` parameter
+name dropped entirely) and re-indents the `<<-` body with spaces so its
+`EOF` terminator no longer matches. `__save_ebuild_env` runs `declare
+-f` on every in-scope function between phases, so the written
+`${T}/environment` becomes unparseable and the next phase's `source
+"${T}/environment" || die` aborts the build -- for essentially every
+package that compiles C/C++.
+
+So `ShellBackend`'s `#[default]` moved from `Brush` to `Bash` (the real
+`bash <ebuild.sh> <phase>` subprocess), which has no such problem. This
+trades the zero-dependency embedded-shell fit (hard goal 3) for a `bash`
+runtime dependency during real phase execution -- an accepted change
+(the phase runtime already shells out to real helper binaries anyway).
+`brush` stays fully available: `ebuild --shell brush` (existing flag,
+default just flipped) and a **new pilot-only `emerge --shell bash|brush`**
+flag (special-cased in `pretend.rs`'s parse loop like `--json`, mirrored
+in `emerge_pretend_reference.py` for CLI-surface parity, inert under
+`--pretend`). `emerge`'s flag threads into the real build/merge path
+(`emerge <atom>` / `--getbinpkg` / `--buildpkgonly` / `--resume`); the
+removal-hook (`prerm`/`postrm`) and `pkg_config` paths stay on the
+default, matching how they already hardcode `debug = false`. The brush
+`declare -f` bug is tracked in [`brush-pin.md`](brush-pin.md) for an
+upstream report. With `bash`, `emerge -v app-portage/eix` now runs the
+full `pretend → setup → unpack → prepare` chain (it currently fails
+later, in `prepare`, on an unrelated `PORTAGE_PYM_PATH`-unset issue that
+breaks the `portageq`/`chmod-lite` helper shims -- its own separate
+slice).
 
 ### Real `mirror://` resolution: `profiles/thirdpartymirrors` + `GENTOO_MIRRORS`
 

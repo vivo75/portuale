@@ -10,6 +10,12 @@ pkg_nofetch() {
 	elog "and place it in ${DISTDIR}"
 }
 
+# The distfile is a digest-verified stand-in, not a real archive -- this
+# fixture exercises RESTRICT=fetch + the verified-skip-fetch path, not
+# unpacking. Skip the EAPI-8 default src_unpack (which would `tar` the
+# stand-in and fail).
+src_unpack() { :; }
+
 src_install() {
 	echo "A=${A}" > "${T}/fetch-vars.txt" || die
 }
