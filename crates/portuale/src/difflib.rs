@@ -38,6 +38,28 @@ pub fn ratio(a: &str, b: &str) -> f64 {
     2.0 * matches as f64 / total as f64
 }
 
+/// `get_close_matches(word, possibilities, n, cutoff)`: the up-to-`n`
+/// entries reaching `cutoff`, best first. Score ties break toward the
+/// lexicographically larger string.
+pub fn get_close_matches(
+    word: &str,
+    possibilities: &[String],
+    n: usize,
+    cutoff: f64,
+) -> Vec<String> {
+    let mut scored: Vec<(f64, &str)> = possibilities
+        .iter()
+        .map(|p| (ratio(p, word), p.as_str()))
+        .filter(|(r, _)| *r >= cutoff)
+        .collect();
+    scored.sort_by(|a, b| b.0.total_cmp(&a.0).then_with(|| b.1.cmp(a.1)));
+    scored
+        .into_iter()
+        .take(n)
+        .map(|(_, s)| s.to_string())
+        .collect()
+}
+
 /// Arguments of [`matching_char_count`].
 struct MatchingCharCountArgs<'a> {
     a: &'a [char],

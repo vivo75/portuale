@@ -107,6 +107,14 @@ pub(crate) fn config_features_list(config: &portage_profile::Config) -> Vec<Stri
     config_features_opt(config).unwrap_or_default()
 }
 
+/// Whether the `$PKGDIR` scan trusts the `Packages` index; `None` (nothing
+/// configured) stays trusted. Same resolved chain as every other read.
+/// Portage: bintree.py, populate
+pub(crate) fn pkgdir_index_trusted(config: &portage_profile::Config) -> bool {
+    config_features_opt(config)
+        .is_none_or(|features| features.iter().any(|t| t == "pkgdir-index-trusted"))
+}
+
 /// Resolved merge-time `FEATURES`, space-joined; shared with the remote server.
 pub(crate) fn config_features_string(config: &portage_profile::Config) -> String {
     config_features_list(config).join(" ")

@@ -2,6 +2,139 @@
 
 use crate::*;
 
+/// One row of `emerge --info`'s `info_pkgs` version table: a resolved `cat/pkg` and its
+/// installed versions, each `<ver>::<repo>` (` (virtual/foo)` suffix when virtual-expanded).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InfoPkgRow {
+    pub cp: String,
+    pub versions: Vec<String>,
+}
+
+/// One level of `expand_new_virt`: a non-`virtual/*` yields itself; a `virtual/*` yields the
+/// installed `(cat, pkg)` of every atom in its highest installed version's vdb `RDEPEND`,
+/// tagged with the originating `virtual/foo`. Uninstalled/empty yields itself; no recursion.
+// Portage: portage.dbapi._expand_new_virt
+pub(crate) fn expand_new_virt(
+    root: &Path,
+    category: &str,
+    package: &str,
+) -> Vec<(String, String, Option<String>)> {
+    if category != "virtual" {
+        return vec![(category.to_string(), package.to_string(), None)];
+    }
+    let orig = format!("{category}/{package}");
+    let Some(version) = installed_candidates(root, category, package)
+        .into_iter()
+        .map(|(v, _, _)| v)
+        .max_by(|a, b| vercmp_ordering(a, b))
+    else {
+        return vec![(category.to_string(), package.to_string(), None)];
+    };
+    let use_flags = read_vdb_flag_set(root, category, package, &version, "USE");
+    let rdepend = read_vdb_string(root, category, package, &version, "RDEPEND");
+    let mut out: Vec<(String, String, Option<String>)> = Vec::new();
+    if let Some(atoms) = flat_dep_atoms(&rdepend, &use_flags) {
+        let mut sorted: Vec<String> = atoms.into_iter().collect();
+        sorted.sort();
+        for atom_str in sorted {
+            if let Some(atom) = portage_dep::parse_atom(&atom_str)
+                && atom.category != "virtual"
+                && !installed_candidates(root, &atom.category, &atom.package).is_empty()
+            {
+                out.push((atom.category, atom.package, Some(orig.clone())));
+            }
+        }
+    }
+    if out.is_empty() {
+        vec![(category.to_string(), package.to_string(), None)]
+    } else {
+        out
+    }
+}
+
+/// The `info_pkgs` version table `emerge --info` prints: the six hardcoded atoms
+/// plus `<main_repo>/profiles/info_pkgs`, each `expand_new_virt`'d, then one
+/// `cat/pkg`-sorted row per resolved `cat/pkg` with an installed version --
+/// versions `vercmp`-sorted, `<ver>::<repo>`. The caller pads `cp` to the widest.
+// Portage: action_info, actions.py
+pub fn info_pkgs_table(root: &Path, main_repo_location: &Path) -> Vec<InfoPkgRow> {
+    let mut atoms: Vec<String> = [
+        "dev-build/autoconf",
+        "dev-build/automake",
+        "virtual/os-headers",
+        "sys-devel/binutils",
+        "dev-build/libtool",
+        "dev-lang/python",
+    ]
+    .map(String::from)
+    .to_vec();
+    let extra =
+        fs::read_to_string(main_repo_location.join("profiles/info_pkgs")).unwrap_or_default();
+    for line in extra.lines() {
+        let l = line.trim();
+        if !l.is_empty() && !l.starts_with('#') {
+            atoms.push(l.to_string());
+        }
+    }
+
+    // (orig cp string, resolved cat, resolved pkg, provide_suffix)
+    let mut resolved: Vec<(String, String, String, Option<String>)> = Vec::new();
+    for a in &atoms {
+        // Only `atom.cp` is used, so strip any operator/version/slot/use-dep first.
+        let Some(atom) = portage_dep::parse_atom(a) else {
+            continue;
+        };
+        let orig_cp = format!("{}/{}", atom.category, atom.package);
+        for (cat, pkg, provide) in expand_new_virt(root, &atom.category, &atom.package) {
+            resolved.push((orig_cp.clone(), cat, pkg, provide));
+        }
+    }
+    resolved.sort();
+    resolved.dedup();
+
+    use std::collections::BTreeMap;
+    // matched_cp -> ver -> "ver::repo (suffix)"
+    let mut cp_map: BTreeMap<String, BTreeMap<String, String>> = BTreeMap::new();
+    for (orig_cp, cat, pkg, _provide) in &resolved {
+        let matched_cp = format!("{cat}/{pkg}");
+        for r in installed_refs(root, cat, pkg) {
+            let repo = if r.repo == "__unknown__" {
+                "<unknown repository>".to_string()
+            } else {
+                r.repo.clone()
+            };
+            let provide_suffix = if &matched_cp != orig_cp {
+                format!(" ({orig_cp})")
+            } else {
+                String::new()
+            };
+            let entry = cp_map.entry(matched_cp.clone()).or_default();
+            // Prefer a duplicate match carrying provider info.
+            if let Some(existing) = entry.get(&r.version)
+                && existing.contains(" (")
+            {
+                continue;
+            }
+            entry.insert(
+                r.version.clone(),
+                format!("{}::{}{}", r.version, repo, provide_suffix),
+            );
+        }
+    }
+
+    cp_map
+        .into_iter()
+        .map(|(cp, ver_map)| {
+            let mut versions: Vec<(String, String)> = ver_map.into_iter().collect();
+            versions.sort_by(|a, b| vercmp_ordering(&a.0, &b.0));
+            InfoPkgRow {
+                cp,
+                versions: versions.into_iter().map(|(_, s)| s).collect(),
+            }
+        })
+        .collect()
+}
+
 /// The best visible candidate for `atom_str` plus its `-pv`-style USE display. `None`
 /// when the atom resolves to no visible ebuild candidate (the caller renders "no matches").
 /// Deliberately narrow: ebuild candidates only (no installed `was built with` diff, no
@@ -280,6 +413,91 @@ pub fn resolve_info_binary_candidate(
         }));
     }
     Ok(None)
+}
+
+/// The `environment.bz2` assignment scanner: `declare`/`export`-prefixed or plain `KEY=value`
+/// lines, with `"`/`'` quoting and multi-line quoted values (later assignments win). Only
+/// `wanted` keys are returned, but continuation lines are consumed regardless.
+// Portage: vartree.py, _aux_env_search (borrowed from filter-bash-environment.py)
+pub(crate) fn parse_env_assignments(text: &str, wanted: &[&str]) -> HashMap<String, String> {
+    fn strip_prefix(line: &str) -> &str {
+        // Longest-first: `declare -FLAGS<ws>`, `declare<ws>`, `export<ws>`, plain.
+        for word in ["declare", "export"] {
+            if let Some(rest) = line.strip_prefix(word)
+                && rest.starts_with(|c: char| c.is_whitespace())
+            {
+                let after_ws = rest.trim_start();
+                if word == "declare"
+                    && let Some(flags) = after_ws.strip_prefix('-')
+                {
+                    // `-\S+\s+`: dash, non-empty non-whitespace token,
+                    // then whitespace.
+                    let token_len = flags
+                        .bytes()
+                        .take_while(|b| !b.is_ascii_whitespace())
+                        .count();
+                    if token_len > 0 && flags[token_len..].starts_with(|c: char| c.is_whitespace())
+                    {
+                        return after_ws[1 + token_len..].trim_start();
+                    }
+                }
+                return after_ws;
+            }
+        }
+        line
+    }
+    fn closer_at_end(s: &str, quote: char) -> bool {
+        // A bare trailing quote closes; an escaped `\"` at the very end does not.
+        let t = s.trim_end();
+        let mut chars = t.chars().rev();
+        if chars.next() != Some(quote) {
+            return false;
+        }
+        chars.next() != Some('\\')
+    }
+    let mut out = HashMap::new();
+    let mut lines = text.lines();
+    while let Some(line) = lines.next() {
+        // Key: non-empty run of non-`=`/non-whitespace, immediately followed by `=`.
+        let body = strip_prefix(line);
+        let eq = body
+            .bytes()
+            .take_while(|b| *b != b'=' && !b.is_ascii_whitespace())
+            .count();
+        if eq == 0 || body.as_bytes().get(eq) != Some(&b'=') {
+            continue;
+        }
+        let (key, after_eq) = (&body[..eq], &body[eq + 1..]);
+        let (quote, rest) = match after_eq.chars().next() {
+            Some(q @ ('"' | '\'')) => (Some(q), &after_eq[q.len_utf8()..]),
+            _ => (None, after_eq),
+        };
+        let value = match quote {
+            None => after_eq.trim_end().to_string(),
+            Some(q) => {
+                if closer_at_end(rest, q) {
+                    let t = rest.trim_end();
+                    t[..t.len() - 1].to_string()
+                } else {
+                    // `lines()` stripped newlines; restore the non-closing ones.
+                    let mut joined = rest.to_string();
+                    for next in lines.by_ref() {
+                        joined.push_str(next);
+                        if closer_at_end(next, q) {
+                            break;
+                        }
+                        joined.push('\n');
+                    }
+                    let t = joined.trim_end();
+                    t[..t.len().saturating_sub(1)].to_string()
+                }
+            }
+        };
+        if wanted.contains(&key) {
+            out.insert(key.to_string(), value);
+        }
+    }
+    out
 }
 
 /// One `emerge --info <atom>` result for an installed package -- see

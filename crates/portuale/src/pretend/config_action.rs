@@ -160,3 +160,45 @@ pub(crate) fn run_config_action(args: RunConfigActionArgs<'_>) -> ExitCode {
         ExitCode::from(rc.clamp(0, 255) as u8)
     }
 }
+
+/// `--misspell-suggestions` (default on): when `resolve_pretend_graph`
+/// aborts a top-level atom whose `cat/pkg` genuinely doesn't exist in any
+/// repo, print close `cat/pkg` matches. Returns the block to append to the
+/// already-printed `emerge: <message>`, or `None` when it doesn't apply.
+/// Portage: depgraph.py, _similar_name_search
+pub(crate) fn misspell_suggestion_block(
+    message: &str,
+    repos: &[portage_repo::RepoConfig],
+    enabled: bool,
+) -> Option<String> {
+    if !enabled {
+        return None;
+    }
+    // The message's first line quotes the atom; pull it back out.
+    let first = message.lines().next()?;
+    let rest = first.strip_prefix("there are no ebuilds to satisfy \"")?;
+    let atom_str = rest.strip_suffix("\".")?;
+    let atom = parse_atom(atom_str)?;
+    // Only when the `cat/pkg` directory has no ebuilds anywhere.
+    if !portage_repo::list_candidates(repos, &atom.category, &atom.package)
+        .map(|c| c.is_empty())
+        .unwrap_or(true)
+    {
+        return None;
+    }
+    let target = format!("{}/{}", atom.category, atom.package);
+    let all_cp: Vec<String> = portage_repo::all_cp(repos)
+        .into_iter()
+        .filter(|cp| *cp != target)
+        .collect();
+    let matches = difflib::get_close_matches(&target, &all_cp, 3, 0.6);
+    let tail = match matches.len() {
+        0 => " nothing similar found.".to_string(),
+        1 => format!("\nemerge: Maybe you meant {}?", matches[0]),
+        _ => format!(
+            "\nemerge: Maybe you meant any of these: {}?",
+            matches.join(", ")
+        ),
+    };
+    Some(format!("\n\nemerge: searching for similar names...{tail}"))
+}
