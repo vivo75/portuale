@@ -81,50 +81,51 @@
 //     for real, but only internally, as part of `merge` -- see
 //     `is_real_standalone_phase_command`'s own doc comment for why they,
 //     unlike `prerm`/`postrm`, stay internal-only).
-//   - `FEATURES=sandbox` / `FEATURES=network-sandbox` **are** modelled
-//     (SCOPE_BACKLOG Part 2.D). Both apply to the same six real `src_*`
-//     phases (`unpack`/`prepare`/`configure`/`compile`/`test`/`install`
-//     -- real `_doebuild_spawn` sandboxes every phase not in
-//     `_unsandboxed_phases` and network-unshares every phase not in
-//     `_ipc_phases`; for the phases this pilot runs as real bash both
-//     come out to this set, see `SANDBOXED_SRC_PHASES`). Both force the
-//     `Bash` backend for those phases: neither an `unshare(2)` network
-//     namespace nor an LD_PRELOAD `libsandbox.so` can confine the
-//     in-process `Brush` interpreter (the same constraint the
-//     scheduler's own captured builds already accept). See
-//     `run_one_phase` / `run_one_phase_bash`.
-//     * `FEATURES=sandbox` (or `usersandbox`): the phase command is run
-//       as `sandbox bash bin/ebuild.sh <phase>` (real
-//       `portage.process.spawn_sandbox`) when `/usr/bin/sandbox` exists
-//       (real `sandbox_capable`). `phase_env_vars` sets
+//   - The `FEATURES` build-isolation set **is** modelled (SCOPE_BACKLOG
+//     Part 2.D): `sandbox`/`usersandbox`, `network-sandbox`,
+//     `ipc-sandbox`, `mount-sandbox`, `pid-sandbox`. All apply to the
+//     same six real `src_*` phases (`unpack`/`prepare`/`configure`/
+//     `compile`/`test`/`install` -- real `_doebuild_spawn` sandboxes
+//     every phase not in `_unsandboxed_phases` and unshares every phase
+//     not in `_ipc_phases`; for the phases this pilot runs as real bash
+//     both come out to this set, `SANDBOXED_SRC_PHASES`). Any one of
+//     them forces the `Bash` backend for those phases: neither an
+//     `unshare(2)` namespace nor an LD_PRELOAD `libsandbox.so` can
+//     confine the in-process `Brush` interpreter (the same constraint
+//     the scheduler's captured builds accept). The wrappers compose --
+//     `unshare <flags> --map-root-user -- sh -c '<config>; exec "$@"' _
+//     [sandbox] bash bin/ebuild.sh <phase>` -- see `Isolation` /
+//     `phase_isolation` / `sandbox_wrapped_command`.
+//     * `FEATURES=sandbox` (or `usersandbox`): `sandbox bash …` (real
+//       `spawn_sandbox`) when `/usr/bin/sandbox` exists (real
+//       `sandbox_capable`). `phase_env_vars` sets
 //       `SANDBOX_LOG=${T}/sandbox.log` (real `doebuild.py:526`) and
 //       `SANDBOX_DISABLED=0` for the wrapped phase, so `bin/ebuild.sh`
 //       does its own real `SANDBOX_ON=1` + `addread /` + `addwrite
-//       "${PORTAGE_TMPDIR}/portage"` setup; the `sandbox` binary then
-//       logs any write outside the build tree and exits non-zero,
-//       failing the phase. A missing binary degrades to an unsandboxed
-//       run with a one-shot warning (real `_spawn`'s own silent
-//       `free = True` fallback). Cuts: the `install_qa_check` /
-//       `package` / `unmerge` `bin/misc-functions.sh` calls aren't
-//       `sandbox`-wrapped (real portage wraps them with a separate
-//       `sandbox-misc.log`); `SELinux` / `ipc`/`mount`/`pid`-sandbox;
-//       `userpriv` / `fakeroot`.
-//     * `FEATURES=network-sandbox`: the phase runs inside a fresh
-//       network namespace via `unshare --net --map-root-user` (with `lo`
-//       brought up inside), so a build that reaches the internet during
-//       `src_compile` fails the same way real portage's
-//       `unshare(CLONE_NEWNET)` makes it. Cuts: `RESTRICT=network-sandbox`
-//       / `PROPERTIES=live` (unpack) / `PROPERTIES=test_network` (test)
-//       exemptions aren't honoured (the phase env carries no USE-reduced
-//       `RESTRICT`/`PROPERTIES`); the `10.0.0.1/8` + `fd::1/8` loopback
-//       addresses real `_configure_loopback_interface` adds for the
-//       glibc `AI_ADDRCONFIG` workaround (bug #690758) are not added; and
-//       unlike real portage (which only unshares when `uid == 0`) this
-//       pilot uses `--map-root-user` so it works from its normal non-root
-//       context -- an unavailable user namespace degrades with a warning
-//       (real portage's own non-fatal "Unable to unshare" degrade).
-//     When both are on the wrappers compose:
-//     `unshare --net … -- sandbox bash bin/ebuild.sh <phase>`.
+//       "${PORTAGE_TMPDIR}/portage"` setup; the `sandbox` binary logs
+//       any write outside the build tree and exits non-zero, failing
+//       the phase. The `bin/misc-functions.sh` calls (`install_qa_check`
+//       post-`install`, `__dyn_package`) are `sandbox`-wrapped too, with
+//       a separate `SANDBOX_LOG=${T}/sandbox-misc.log` (real
+//       `MiscFunctionsProcess._spawn`). A missing binary degrades to an
+//       unsandboxed run with a one-shot warning (real `_spawn`'s own
+//       silent `free = True` fallback).
+//     * `FEATURES=network-sandbox` -> `unshare --net` + `ip link set lo
+//       up` inside (real `_configure_loopback_interface`, minus its
+//       `10.0.0.1/8` + `fd::1/8` `AI_ADDRCONFIG`-workaround addresses,
+//       bug #690758). `FEATURES=ipc-sandbox` -> `unshare --ipc`.
+//       `FEATURES=mount-sandbox` -> `unshare --mount` + `mount
+//       --make-rslave /` inside (real `_exec2`). `FEATURES=pid-sandbox`
+//       -> `unshare --pid --fork --mount-proc` (real `CLONE_NEWPID` +
+//       `pid-ns-init`; `--fork` stands in for the full init).
+//     * Cuts: `RESTRICT=network-sandbox` / `PROPERTIES=live` (unpack) /
+//       `PROPERTIES=test_network` (test) exemptions (the phase env
+//       carries no USE-reduced `RESTRICT`/`PROPERTIES`); SELinux
+//       sandbox; `userpriv` / `fakeroot` (single-user dev/test
+//       context); and, unlike real portage (which only unshares when
+//       `uid == 0`), this pilot always uses `--map-root-user` so it
+//       works non-root -- an unavailable user namespace degrades with a
+//       warning (real "Unable to unshare").
 //   - `PORTAGE_PYM_PATH` (real portage's own Python-package import path)
 //     is left unset -- `create_directories` pre-creates
 //     `${PORTAGE_BUILDDIR}/empty` specifically so that real
@@ -950,50 +951,177 @@ fn fs_sandbox_for_phase(phase: &str) -> bool {
     false
 }
 
-/// Whether `unshare --net --map-root-user -- true` actually succeeds in
-/// this environment (cached). Real portage validates the `unshare(2)`
+/// Every namespace/confinement wrapper to apply to one phase's real bash
+/// subprocess -- real `_doebuild_spawn`'s `unshare_{net,ipc,mount,pid}`
+/// + `spawn_sandbox`, collapsed to what this pilot models.
+#[derive(Clone, Copy, Default)]
+struct Isolation {
+    /// `FEATURES=network-sandbox` -> `unshare --net` (real `CLONE_NEWNET`).
+    net: bool,
+    /// `FEATURES=ipc-sandbox` -> `unshare --ipc` (real `CLONE_NEWIPC`).
+    ipc: bool,
+    /// `FEATURES=mount-sandbox` -> `unshare --mount` + `mount --make-rslave /`
+    /// (real `CLONE_NEWNS` + real `_exec2`'s own `mount --make-rslave /`).
+    mount: bool,
+    /// `FEATURES=pid-sandbox` -> `unshare --pid --fork --mount-proc`
+    /// (real `CLONE_NEWPID` + `pid-ns-init`; `unshare --fork` stands in
+    /// for the full init, `--mount-proc` for real `_exec2`'s own new
+    /// `/proc` mount).
+    pid: bool,
+    /// `FEATURES=sandbox`/`usersandbox` -> `sandbox <cmd>` (real
+    /// `spawn_sandbox`).
+    fs_sandbox: bool,
+}
+
+impl Isolation {
+    fn any_unshare(&self) -> bool {
+        self.net || self.ipc || self.mount || self.pid
+    }
+    fn any(&self) -> bool {
+        self.any_unshare() || self.fs_sandbox
+    }
+    /// The `unshare(1)` flags for this combination (always with
+    /// `--map-root-user` first, so it works from the pilot's non-root
+    /// context -- real portage only unshares when `uid == 0`).
+    fn unshare_flags(&self) -> Vec<&'static str> {
+        let mut f = vec!["--map-root-user"];
+        if self.net {
+            f.push("--net");
+        }
+        if self.ipc {
+            f.push("--ipc");
+        }
+        if self.mount {
+            f.push("--mount");
+        }
+        if self.pid {
+            f.extend(["--pid", "--fork", "--mount-proc"]);
+        }
+        f
+    }
+}
+
+/// Whether `unshare <flags> -- true` actually succeeds here (cached per
+/// distinct flag combination). Real portage validates the `unshare(2)`
 /// call in a short-lived subprocess before relying on it
 /// (`_unshare_validator`); this is the same idea via the `unshare(1)`
 /// CLI, which the pilot already assumes is present the way it assumes
 /// `tar`/`wget`/`bash`. A `false` result (unprivileged user namespaces
-/// disabled, or no `unshare` binary) means the wrapper is skipped with a
-/// warning -- real portage's own non-fatal "Unable to unshare" degrade.
-fn unshare_net_usable() -> bool {
-    use std::sync::OnceLock;
-    static USABLE: OnceLock<bool> = OnceLock::new();
-    *USABLE.get_or_init(|| {
-        std::process::Command::new("unshare")
-            .args(["--net", "--map-root-user", "--", "true"])
-            .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .status()
-            .map(|s| s.success())
-            .unwrap_or(false)
-    })
+/// disabled, or no `unshare` binary) drops the wrappers with a warning
+/// -- real portage's own non-fatal "Unable to unshare" degrade.
+fn unshare_combo_usable(flags: &[&str]) -> bool {
+    use std::collections::HashMap;
+    use std::sync::{Mutex, OnceLock};
+    static CACHE: OnceLock<Mutex<HashMap<String, bool>>> = OnceLock::new();
+    let key = flags.join(" ");
+    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    if let Some(&v) = cache.lock().unwrap().get(&key) {
+        return v;
+    }
+    let ok = std::process::Command::new("unshare")
+        .args(flags)
+        .args(["--", "true"])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false);
+    cache.lock().unwrap().insert(key, ok);
+    ok
 }
 
-/// Real `FEATURES=network-sandbox` for one phase: `true` when the
-/// feature is requested, the phase is one of the isolated `src_*`
-/// phases, and the `unshare` mechanism actually works here. A single
-/// warning is printed (matching real portage's own one-shot "Unable to
-/// unshare" message) when the feature is on but unusable.
-fn network_sandbox_for_phase(phase: &str) -> bool {
+/// The isolation wrappers to apply to one phase, from `FEATURES` -- real
+/// `_doebuild_spawn`. Only the `src_*` phases (`SANDBOXED_SRC_PHASES`)
+/// are wrapped; a requested-but-unusable `unshare` combination degrades
+/// to no unshare with one warning (real "Unable to unshare").
+fn phase_isolation(phase: &str) -> Isolation {
     use std::sync::OnceLock;
-    if !network_sandbox_requested() || !SANDBOXED_SRC_PHASES.contains(&phase) {
-        return false;
+    if !SANDBOXED_SRC_PHASES.contains(&phase) {
+        return Isolation::default();
     }
-    if unshare_net_usable() {
-        return true;
+    let mut iso = Isolation {
+        net: network_sandbox_requested(),
+        ipc: feature_token_present("ipc-sandbox"),
+        mount: feature_token_present("mount-sandbox"),
+        pid: feature_token_present("pid-sandbox"),
+        fs_sandbox: fs_sandbox_for_phase(phase),
+    };
+    if iso.any_unshare() && !unshare_combo_usable(&iso.unshare_flags()) {
+        static WARNED: OnceLock<()> = OnceLock::new();
+        WARNED.get_or_init(|| {
+            eprintln!(
+                "!!! Unable to unshare (for FEATURES=\"network-sandbox / ipc-sandbox / \
+                 mount-sandbox / pid-sandbox\"); src_* phases run without namespace isolation"
+            );
+        });
+        iso.net = false;
+        iso.ipc = false;
+        iso.mount = false;
+        iso.pid = false;
     }
-    static WARNED: OnceLock<()> = OnceLock::new();
-    WARNED.get_or_init(|| {
-        eprintln!(
-            "!!! Unable to unshare network namespace (for FEATURES=\"network-sandbox\"); \
-             src_* phases run unsandboxed"
-        );
-    });
-    false
+    iso
+}
+
+/// Build a blocking `Command` that runs `bash <script> <arg>` (real
+/// `_doebuild_spawn`'s own `EBUILD_SH_BINARY <arg>` shape) wrapped per
+/// `iso`:
+///
+///   `unshare <flags> -- sh -c '<config>; exec "$@"' _ [sandbox] bash <script> <arg>`
+///
+/// - `FEATURES=sandbox` prepends the `sys-apps/sandbox` binary (real
+///   `spawn_sandbox`: `args = [SANDBOX_BINARY, mycommand]`). `bin/*.sh`
+///   itself does the `SANDBOX_ON=1` / `addread /` / `addwrite
+///   "${PORTAGE_TMPDIR}/portage"` setup (given `SANDBOX_LOG` /
+///   `SANDBOX_DISABLED=0` from `phase_env_vars`); `sandbox` exits
+///   non-zero once its log gains a violation.
+/// - `FEATURES={network,ipc,mount,pid}-sandbox` wrap the command in the
+///   matching `unshare(1)` namespaces (real `_exec`'s
+///   `unshare(CLONE_NEW*)`). The `sh -c` shim configures what real
+///   `_exec2` configures inside each namespace -- `ip link set lo up`
+///   for `--net` (real `_configure_loopback_interface`, minus the
+///   `AI_ADDRCONFIG` addresses), `mount --make-rslave /` for `--mount`
+///   (real `_exec2`'s own call) -- then `exec "$@"` runs the real
+///   (possibly `sandbox`-prefixed) command.
+fn sandbox_wrapped_command(script: &Path, arg: &str, iso: Isolation) -> std::process::Command {
+    use std::ffi::OsString;
+
+    let mut argv: Vec<OsString> = Vec::new();
+    if iso.fs_sandbox {
+        // Presence was already confirmed by `fs_sandbox_for_phase` /
+        // the misc-functions caller before `iso.fs_sandbox` was set.
+        if let Some(bin) = sandbox_binary() {
+            argv.push(bin.into());
+        }
+    }
+    argv.push("bash".into());
+    argv.push(script.into());
+    argv.push(arg.into());
+
+    if !iso.any_unshare() {
+        let mut c = std::process::Command::new(&argv[0]);
+        c.args(&argv[1..]);
+        return c;
+    }
+
+    let mut shim = String::new();
+    if iso.net {
+        shim.push_str("ip link set lo up 2>/dev/null; ");
+    }
+    if iso.mount {
+        shim.push_str("mount --make-rslave / 2>/dev/null; ");
+    }
+    shim.push_str("exec \"$@\"");
+
+    let mut c = std::process::Command::new("unshare");
+    c.args(iso.unshare_flags())
+        .arg("--")
+        .arg("sh")
+        .arg("-c")
+        .arg(shim)
+        .arg("portuale-sandbox")
+        .args(&argv);
+    c
 }
 
 /// The real environment-variable block every real phase and every real
@@ -1231,20 +1359,15 @@ async fn run_one_phase(
     let bin_dir = repo_root().join("bin");
     let helpers_dir = bin_dir.join("ebuild-helpers");
 
-    // `FEATURES=network-sandbox` / `FEATURES=sandbox`: the isolated
-    // `src_*` phases run as a real subprocess -- wrapped in
-    // `unshare --net` and/or the `sandbox` binary -- regardless of the
-    // requested backend. Neither an `unshare(2)` network namespace nor
-    // an LD_PRELOAD `libsandbox.so` can confine the in-process `Brush`
+    // `FEATURES={network,ipc,mount,pid}-sandbox` / `FEATURES=sandbox`:
+    // the isolated `src_*` phases run as a real subprocess -- wrapped in
+    // `unshare` and/or the `sandbox` binary -- regardless of the
+    // requested backend. Neither an `unshare(2)` namespace nor an
+    // LD_PRELOAD `libsandbox.so` can confine the in-process `Brush`
     // interpreter without taking the whole `portuale` process with it.
     // See this module's own doc comment.
-    let net_sandbox = network_sandbox_for_phase(phase);
-    let fs_sandbox = fs_sandbox_for_phase(phase);
-    let effective_shell = if net_sandbox || fs_sandbox {
-        ShellBackend::Bash
-    } else {
-        shell
-    };
+    let iso = phase_isolation(phase);
+    let effective_shell = if iso.any() { ShellBackend::Bash } else { shell };
 
     match effective_shell {
         ShellBackend::Brush => {
@@ -1271,8 +1394,7 @@ async fn run_one_phase(
             &helpers_dir,
             config_root,
             log_file,
-            net_sandbox,
-            fs_sandbox,
+            iso,
         ),
     }
 }
@@ -1364,11 +1486,8 @@ fn run_one_phase_bash(
     helpers_dir: &Path,
     config_root: &Path,
     log_file: Option<&Path>,
-    net_sandbox: bool,
-    fs_sandbox: bool,
+    iso: Isolation,
 ) -> Result<i32, String> {
-    use std::ffi::OsString;
-
     let vars = phase_env_vars(
         env,
         root,
@@ -1379,47 +1498,7 @@ fn run_one_phase_bash(
         config_root,
         extra_env,
     );
-    let ebuild_sh = bin_dir.join("ebuild.sh");
-
-    // The real phase command: `bash bin/ebuild.sh <phase>` (real
-    // `_doebuild_spawn`'s own `EBUILD_SH_BINARY <arg>`).
-    let mut argv: Vec<OsString> = vec!["bash".into(), ebuild_sh.into(), phase.into()];
-
-    // `FEATURES=sandbox`: real `portage.process.spawn_sandbox` -- prepend
-    // the `sys-apps/sandbox` binary (`args = [SANDBOX_BINARY, mycommand]`).
-    // `bin/ebuild.sh` itself does the `SANDBOX_ON=1` + `addread /` +
-    // `addwrite "${PORTAGE_TMPDIR}/portage"` setup (given `SANDBOX_LOG` /
-    // `SANDBOX_DISABLED=0` from `phase_env_vars`); `sandbox` returns
-    // non-zero when its log gained a violation, so a scribble outside
-    // `${D}`/`${T}` fails the phase.
-    if fs_sandbox {
-        if let Some(bin) = sandbox_binary() {
-            argv.insert(0, bin.into());
-        }
-    }
-
-    // `FEATURES=network-sandbox`: real `unshare(CLONE_NEWNET | CLONE_NEWUTS)`
-    // (real `portage.process._exec`). `--map-root-user` first creates a
-    // user namespace so this works from a non-root context (real portage
-    // only unshares when `uid == 0`); `ip link set lo up` inside brings
-    // the fresh namespace's loopback interface up, the way real
-    // `_configure_loopback_interface` does (minus the extra
-    // `AI_ADDRCONFIG`-workaround addresses -- see the module doc
-    // comment). The `sh -c` shim is needed because `unshare` has no
-    // built-in "configure the interface" step; `exec "$@"` then runs the
-    // (possibly `sandbox`-prefixed) real phase command.
-    let mut cmd = if net_sandbox {
-        let mut c = std::process::Command::new("unshare");
-        c.args(["--net", "--map-root-user", "--", "sh", "-c"])
-            .arg("ip link set lo up 2>/dev/null; exec \"$@\"")
-            .arg("portuale-sandbox")
-            .args(&argv);
-        c
-    } else {
-        let mut c = std::process::Command::new(&argv[0]);
-        c.args(&argv[1..]);
-        c
-    };
+    let mut cmd = sandbox_wrapped_command(&bin_dir.join("ebuild.sh"), phase, iso);
     cmd.envs(vars);
     if let Some(path) = log_file {
         let (out, err) = open_log_file(path)?;
@@ -1463,7 +1542,22 @@ async fn run_misc_functions(
     let bin_dir = repo_root().join("bin");
     let helpers_dir = bin_dir.join("ebuild-helpers");
 
-    match shell {
+    // Real `_emerge.MiscFunctionsProcess`: `bin/misc-functions.sh` runs
+    // `sandbox`-wrapped by default (`free = False` unless
+    // `ld_preload_sandbox` says otherwise) -- but with its *own*
+    // `SANDBOX_LOG` (`sandbox-misc.log`) so a QA-check violation doesn't
+    // clobber the real phase's log. No `unshare` (real
+    // `_PostPhaseCommands` passes only `ld_preload_sandbox`, never
+    // `networked`). This forces the `Bash` backend, same as a
+    // `sandbox`-wrapped phase.
+    let fs_sandbox = fs_sandbox_requested() && sandbox_binary().is_some();
+    let effective_shell = if fs_sandbox {
+        ShellBackend::Bash
+    } else {
+        shell
+    };
+
+    match effective_shell {
         ShellBackend::Brush => {
             run_misc_functions_brush(
                 env,
@@ -1490,6 +1584,7 @@ async fn run_misc_functions(
             &helpers_dir,
             config_root,
             log_file,
+            fs_sandbox,
         ),
     }
 }
@@ -1557,8 +1652,9 @@ fn run_misc_functions_bash(
     helpers_dir: &Path,
     config_root: &Path,
     log_file: Option<&Path>,
+    fs_sandbox: bool,
 ) -> Result<i32, String> {
-    let vars = phase_env_vars(
+    let mut vars = phase_env_vars(
         env,
         root,
         ebuild_phase_value,
@@ -1568,10 +1664,25 @@ fn run_misc_functions_bash(
         config_root,
         extra_env,
     );
-    let mut cmd = std::process::Command::new("bash");
-    cmd.arg(bin_dir.join("misc-functions.sh"))
-        .arg(dyn_command)
-        .envs(vars);
+    if fs_sandbox {
+        // Real `MiscFunctionsProcess._spawn`: swap in a separate log so
+        // a misc-functions violation doesn't clobber the phase's own
+        // `sandbox.log`; enable the sandbox (`bin/misc-functions.sh`
+        // reads `SANDBOX_DISABLED` the same way `bin/ebuild.sh` does).
+        for (k, v) in vars.iter_mut() {
+            match k.as_str() {
+                "SANDBOX_LOG" => *v = env.t().join("sandbox-misc.log").display().to_string(),
+                "SANDBOX_DISABLED" => *v = "0".to_string(),
+                _ => {}
+            }
+        }
+    }
+    let iso = Isolation {
+        fs_sandbox,
+        ..Isolation::default()
+    };
+    let mut cmd = sandbox_wrapped_command(&bin_dir.join("misc-functions.sh"), dyn_command, iso);
+    cmd.envs(vars);
     if let Some(path) = log_file {
         let (out, err) = open_log_file(path)?;
         cmd.stdout(out).stderr(err);

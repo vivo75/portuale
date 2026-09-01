@@ -21,6 +21,8 @@ import subprocess
 import tarfile
 from pathlib import Path
 
+import pytest
+
 FIXTURES_ROOT = str(Path(__file__).resolve().parents[1] / "fixtures")
 
 
@@ -1696,19 +1698,23 @@ def test_ebuild_shell_requires_a_value(ebuild_binary):
     assert result.stderr.strip() == "ebuild: option '--shell' requires a value"
 
 
-def _unshare_net_usable() -> bool:
-    """Whether `unshare --net --map-root-user` works in this environment
-    (the same check `ebuild_phases::unshare_net_usable` caches)."""
+def _unshare_usable(*flags: str) -> bool:
+    """Whether `unshare <flags> --map-root-user` works here (the same
+    check `ebuild_phases::unshare_combo_usable` caches)."""
     try:
         return (
             subprocess.run(
-                ["unshare", "--net", "--map-root-user", "--", "true"],
+                ["unshare", *flags, "--map-root-user", "--", "true"],
                 capture_output=True,
             ).returncode
             == 0
         )
     except FileNotFoundError:
         return False
+
+
+def _unshare_net_usable() -> bool:
+    return _unshare_usable("--net")
 
 
 def _netsandbox_probe(portage_tmpdir: Path) -> dict[str, str]:
@@ -1801,6 +1807,49 @@ def test_ebuild_without_network_sandbox_shares_the_host_network_namespace(
     assert result.returncode == 0, result.stderr
     probe = _netsandbox_probe(tmp_path / "pt")
     assert probe["netns"] == os.readlink("/proc/self/ns/net")
+
+
+@pytest.mark.parametrize(
+    "feature, unshare_flag, probe_key",
+    [
+        ("ipc-sandbox", "--ipc", "ipcns"),
+        ("mount-sandbox", "--mount", "mntns"),
+        ("pid-sandbox", "--pid", "pidns"),
+    ],
+)
+def test_ebuild_sandbox_features_each_unshare_their_own_namespace(
+    ebuild_binary, tmp_path, feature, unshare_flag, probe_key
+):
+    """FEATURES=ipc-sandbox / mount-sandbox / pid-sandbox (SCOPE_BACKLOG
+    Part 2.D): each puts the src_* phases in its own namespace via the
+    matching `unshare(1)` flag (real _doebuild_spawn's
+    unshare_{ipc,mount,pid}). `dev-libs/netsandboxpkg` records
+    `readlink /proc/self/ns/{ipc,mnt,pid}`; with the feature on that id
+    must differ from the portuale process's own."""
+    if not _unshare_usable(unshare_flag):
+        pytest.skip(f"unshare {unshare_flag} unavailable here")
+
+    ebuild_path = str(
+        Path(FIXTURES_ROOT) / "repo/dev-libs/netsandboxpkg/netsandboxpkg-1.0.ebuild"
+    )
+    env = dict(os.environ)
+    env["FEATURES"] = feature
+    env["ROOT"] = str(tmp_path / "root")
+    env["PORTAGE_TMPDIR"] = str(tmp_path / "pt")
+    result = subprocess.run(
+        [str(ebuild_binary), ebuild_path, "install"],
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+    assert result.returncode == 0, result.stderr
+    probe = _netsandbox_probe(tmp_path / "pt")
+
+    host_ns = os.readlink(f"/proc/self/ns/{probe_key[:-2]}")
+    assert probe[probe_key] != host_ns, probe
+    if feature == "pid-sandbox":
+        # A fresh PID namespace hides every host process.
+        assert int(probe["procs"]) < 20, probe
 
 
 _FSSANDBOX_EBUILD = "repo/dev-libs/fssandboxpkg/fssandboxpkg-1.0.ebuild"

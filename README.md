@@ -10509,16 +10509,38 @@ can't confine the in-process `Brush` interpreter); when both sandbox
 features are on the wrappers compose:
 `unshare --net … -- sandbox bash <bin_dir>/ebuild.sh <phase>`.
 
-Documented cuts: the `install_qa_check` / `package` / `unmerge`
-`bin/misc-functions.sh` calls aren't `sandbox`-wrapped (real portage
-wraps them with a separate `sandbox-misc.log`); SELinux sandbox;
-`ipc-sandbox` / `mount-sandbox` / `pid-sandbox`; `userpriv` / `fakeroot`.
+The `bin/misc-functions.sh` calls (`install_qa_check` after `install`,
+`__dyn_package`) are `sandbox`-wrapped too, with a separate
+`${T}/sandbox-misc.log` — real `MiscFunctionsProcess._spawn`. Documented
+cuts: SELinux sandbox; `userpriv` / `fakeroot` (single-user dev/test
+context).
 
 `dev-libs/fssandboxpkg`'s `src_install` writes a legit file into `${D}`
 and also tries to write `/var/lib/portage-pilot-sandbox-probe`; with
 `FEATURES=sandbox` the stray write is denied, recorded in
 `${T}/sandbox.log`, and `ebuild <file> install` fails — without the
 feature the same run just installs the legit file and exits 0.
+
+### `FEATURES=ipc-sandbox` / `mount-sandbox` / `pid-sandbox`
+
+The remaining namespace-isolation features round out Part 2.D. Each puts
+the six `src_*` phases in the matching `unshare(1)` namespace (real
+`_doebuild_spawn`'s `unshare_ipc` / `unshare_mount` / `unshare_pid`,
+`CLONE_NEWIPC` / `CLONE_NEWNS` / `CLONE_NEWPID`):
+
+- `ipc-sandbox` → `unshare --ipc`
+- `mount-sandbox` → `unshare --mount`, plus `mount --make-rslave /`
+  inside the shim (real `_exec2`) so mounts can't leak
+- `pid-sandbox` → `unshare --pid --fork --mount-proc` — the phase becomes
+  PID 1 and every host process disappears from `/proc` (real
+  `CLONE_NEWPID` + `pid-ns-init`; `--fork` stands in for the full init)
+
+They compose freely with each other and with `sandbox` /
+`network-sandbox`; the `unshare` flag combination is validated once and
+cached, degrading with a single warning if unprivileged user namespaces
+are unavailable. `dev-libs/netsandboxpkg`'s `src_compile` records
+`readlink /proc/self/ns/{net,ipc,mnt,pid}` and the visible process count
+so a test can prove each namespace was actually unshared.
 
 ## Running it
 

@@ -225,28 +225,40 @@ single-pass BFS can't grow into these incrementally:
   level with that level's `make.defaults` (the pilot applies it as one
   group).
 
-### D. Sandbox / build isolation
+### D. Sandbox / build isolation — **substantially complete (2026-09-01)**
 
-- **`FEATURES=network-sandbox`** *(shipped 2026-09-01)*: the six real
-  `src_*` phases run inside a fresh network namespace
-  (`unshare --net --map-root-user`, `lo` up) so a build can't reach the
-  internet. Cuts: `RESTRICT=network-sandbox` / `PROPERTIES=live`/
-  `test_network` exemptions, the `AI_ADDRCONFIG` loopback addresses.
-- **`FEATURES=sandbox` / `usersandbox`** *(shipped 2026-09-01)*: the six
-  real `src_*` phases run as `sandbox bash bin/ebuild.sh <phase>` (real
-  `spawn_sandbox`, `/usr/bin/sandbox`); `SANDBOX_LOG=${T}/sandbox.log`
-  + `SANDBOX_DISABLED=0` so `bin/ebuild.sh` does its own `SANDBOX_ON=1` /
+The whole `FEATURES` isolation set is modelled: for the six real `src_*`
+phases (`SANDBOXED_SRC_PHASES`), `run_one_phase` builds a wrapped bash
+subprocess — `unshare <flags> --map-root-user -- sh -c '<config>; exec
+"$@"' _ [sandbox] bash bin/ebuild.sh <phase>` (`Isolation` /
+`phase_isolation` / `sandbox_wrapped_command`), forcing the `Bash`
+backend. All wrappers compose; the `unshare` combo is validated once,
+degrading with one warning if unprivileged userns is unavailable.
+
+- **`FEATURES=sandbox` / `usersandbox`**: `sandbox bash …` (real
+  `spawn_sandbox`, `/usr/bin/sandbox`); `SANDBOX_LOG=${T}/sandbox.log` +
+  `SANDBOX_DISABLED=0` so `bin/ebuild.sh` does its own `SANDBOX_ON=1` /
   `addwrite` setup; the binary logs + non-zero-exits on a write outside
-  the build tree, failing the phase. Missing binary → unsandboxed +
-  warning (real `free = True`). Both features force the `Bash` backend
-  and compose. Cuts: the `misc-functions.sh` (`install_qa_check` /
-  `package` / `unmerge`) calls aren't wrapped; SELinux;
-  `ipc-sandbox` / `mount-sandbox` / `pid-sandbox`.
-- **No `userpriv` / `FEATURES=userpriv usersandbox`** privilege drop
-  (single-user dev/test context — see also the `chown` note below).
-- Various `FEATURES` unmodelled: `ccache`, `distcc`, `splitdebug`,
+  the build tree. The `bin/misc-functions.sh` calls (`install_qa_check`
+  post-`install`, `__dyn_package`) are wrapped too, with a separate
+  `${T}/sandbox-misc.log` (real `MiscFunctionsProcess._spawn`). Missing
+  binary → unsandboxed + warning (real `free = True`).
+- **`FEATURES=network-sandbox`**: `unshare --net` + `ip link set lo up`.
+- **`FEATURES=ipc-sandbox`**: `unshare --ipc`.
+- **`FEATURES=mount-sandbox`**: `unshare --mount` + `mount --make-rslave /`.
+- **`FEATURES=pid-sandbox`**: `unshare --pid --fork --mount-proc`.
+
+Remaining (deliberate cuts): `RESTRICT=network-sandbox` /
+`PROPERTIES=live`/`test_network` exemptions (no USE-reduced
+`RESTRICT`/`PROPERTIES` in the phase env); the `AI_ADDRCONFIG` loopback
+addresses; SELinux sandbox; `userpriv` / `fakeroot` (single-user
+dev/test context — see also the `chown` note below).
+
+- Various *non-isolation* `FEATURES` unmodelled (the pilot forces
+  `FEATURES=""` into the phase env): `ccache`, `distcc`, `splitdebug`,
   `installsources`, `nostrip`/`strip`, `compressdebug`, `test` gating
-  beyond `src_test` running, `preserve-libs` live-`scanelf` orphan branch.
+  beyond `src_test` running, `preserve-libs` live-`scanelf` orphan
+  branch. A scoped real-`FEATURES` passthrough is a separate slice.
 
 ### E. Binary packages / fetch
 
@@ -368,11 +380,12 @@ by a few large items rather than a long tail of small ones:
    (`$USE` / `package.env`), `features`, and `env.d` layers — a config
    that leans on those still diverges.
 
-4. **Sandbox enforcement (Part 2.D).** *`FEATURES=network-sandbox` and
-   `FEATURES=sandbox` both shipped 2026-09-01 — `src_*` phases run in a
-   fresh net namespace and/or wrapped in the `sys-apps/sandbox` binary.*
-   Remaining: `userpriv`, `fakeroot`, SELinux, `ipc`/`mount`/`pid`-sandbox,
-   `sandbox`-wrapping the `misc-functions.sh` calls.
+4. **Sandbox enforcement (Part 2.D).** *Substantially complete
+   2026-09-01: `sandbox`/`usersandbox` + `network`/`ipc`/`mount`/`pid`-
+   sandbox all wrap the `src_*` phases (and the `misc-functions.sh`
+   calls for `sandbox`). Remaining are deliberate cuts: `userpriv` /
+   `fakeroot` (single-user dev context), SELinux, the
+   `RESTRICT`/`PROPERTIES` exemptions.*
 
 5. **Breadth of actions and flags (Parts 2.E/F).** `--info`, `--search`,
    `--sync`, news, GLSA, dozens of modifier flags — individually small,
