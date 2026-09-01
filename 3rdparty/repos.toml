@@ -1,0 +1,48 @@
+# Third-party repositories this fork tracks or vendors, and the exact
+# ref/commit each is currently pinned to.
+#
+# One [table] per repository. Required keys on every entry: url, kind,
+# ref (the exact tag/branch/commit currently in use), pinned_at (the
+# date, YYYY-MM-DD, this ref was last set or verified). `commit` gives
+# the ref's resolved SHA where that's not already what `ref` itself is.
+#
+# TOML: parse with any TOML library (Python's stdlib `tomllib`, `toml`
+# crate, `yq -p toml`, ...), or by eye/grep -- every value sits on its
+# own `key = "value"` line.
+#
+# Update this file in the same commit that changes a pin. See each
+# entry's own `tracking_doc` (if any) for the fuller writeup/checklist.
+
+[portage]
+description = "Upstream Gentoo Portage. This repository IS a fork of it -- PORTING/ (the Python-to-Rust port) is layered on top by rebase, never merge; bin/*.sh, lib/portage, lib/_emerge etc. are upstream's own tree, only touched where PORTING/ needs a real behavioral fix (e.g. brush strategy #2)."
+url = "https://github.com/gentoo/portage"
+remote = "gentoo"
+kind = "upstream-fork-base"
+ref = "refs/tags/portage-3.0.82.1"
+commit = "574643a856be48a9e20e0e396e7f1e3be3d78a99"
+pinned_at = "2026-08-24"
+# A newer upstream tag exists but the `rust` branch has not been rebased
+# onto it yet -- `git describe --tags --match 'portage-*'` on `rust`
+# currently resolves to `portage-3.0.82.1-<N>-g<sha>`, and NEWS/
+# meson.build in the working tree still read "3.0.82.1", not "3.0.82.2".
+# Keep `ref`/`commit`/`pinned_at` as the actual current base; update
+# `next_upstream_ref` as newer tags land, and move it into `ref` only
+# once the rebase actually happens (a new upstream tag is always
+# imported by rebasing PORTING/'s commits on top of it, never a merge).
+next_upstream_ref = "refs/tags/portage-3.0.82.2"
+next_upstream_commit = "bc5b19cf17b83e2f5f6069cea8d060d7932f1f95"
+
+[brush]
+description = "Rust-native bash interpreter (brush-core + brush-builtins), embedded in portuale as the real ebuild phase execution backend (bin/*.sh phases run through it, not a shelled-out system bash)."
+url = "https://github.com/reubeno/brush"
+kind = "cargo-git-dependency"
+ref = "main"
+commit = "a04b09dc4a3f5beaa78899c4100734cf0f8f4472"
+pinned_in = "PORTING/rust/portuale/Cargo.toml"
+pinned_at = "2026-09-01"
+tracking_doc = "PORTING/BRUSH_PIN.md"
+# No fork: plain upstream `main`, exact-commit pinned (no released
+# crates.io version yet carries reubeno/brush#1274, which this pilot's
+# use of bin/eapi.sh needs). Re-pin periodically -- see
+# PORTING/BRUSH_PIN.md's checklist.
+notes = "Was vivo75/brush (a fork) until 2026-09-01; dropped once both fixes the fork carried were resolved (see tracking_doc)."

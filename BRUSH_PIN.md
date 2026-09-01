@@ -11,7 +11,10 @@ commit to real upstream `reubeno/brush` `main`** (not a fork, not a
 crates.io release — the published `brush-core 0.5.0` predates
 [#1274](https://github.com/reubeno/brush/pull/1274), which the eapi.sh
 parser needs). This file records the pin and the periodic re-pin
-checklist. **Keep it current whenever the pin changes.**
+checklist. **Keep it current whenever the pin changes** — and keep its
+`[brush]` entry in **`PORTING/3rdparty/repos.toml`** (the flat,
+machine-parseable registry of every third-party ref this fork tracks,
+portage's own upstream base included) in sync too.
 
 ## Current pin
 
