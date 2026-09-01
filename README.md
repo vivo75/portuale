@@ -5771,12 +5771,13 @@ hang under the suite's own 15s per-test timeout.
 
 **Update (2026-09-01):** the pin no longer carries this brush-side fix
 at all — `brush strategy #2` (see the "brush strategy #2" section near
-the end) rewrote the three `bin/phase-functions.sh` sites so
-`__save_ebuild_env` is never a pipeline stage, and the pin moved to real
-upstream `reubeno/brush` `main` (`a04b09dc`), no fork. The
-`bigeclasspkg` regression fixture below is the guard; it hangs the
-deadline (confirmed against an unpatched-for-#1276 brush) only when
-`bin/phase-functions.sh` is reverted to the pipe form.
+the end) rewrote the three sites so `__save_ebuild_env` is never a
+pipeline stage, in a vendored `PORTING/bin/phase-functions.sh` (the
+upstream file stays pristine), and the pin moved to real upstream
+`reubeno/brush` `main` (`a04b09dc`), no fork. The `bigeclasspkg`
+regression fixture below is the guard; it hangs the deadline (confirmed
+against an unpatched-for-#1276 brush) only when
+`PORTING/bin/phase-functions.sh` is reverted to the pipe form.
 
 Proven via a new `dev-libs/eclasspkg` fixture with a real (if fixture-
 only) `eclass/pilotcheck.eclass` defining one real function,
@@ -10767,6 +10768,13 @@ already forks there). The `bzip2` case (`environment.bz2` for
 `PORTAGE_UPDATE_ENV`) reads the filtered scratch file as a plain
 `bzip2 -c < scratch > out`.
 
+The change lives in a **vendored** copy, `PORTING/bin/phase-functions.sh`
+(tracked — `portuale` must ship the phase runtime so `emerge` works with
+no Portage installed; see `PORTING/3rdparty/repos.toml`'s
+`vendored_paths`). `ebuild_phases::bin_dir()` overlays `PORTING/bin/`
+over the surrounding checkout's `bin/`, the vendored file winning; the
+upstream `bin/phase-functions.sh` stays pristine.
+
 With that, the fork-only patch (`c78ea429`, which carried #1276) is no
 longer needed at all. **Proof it's real**: the whole `portuale` suite is
 green against `879d963` (the fork's pre-merge copy of upstream #1274,
@@ -10774,7 +10782,8 @@ green against `879d963` (the fork's pre-merge copy of upstream #1274,
 `install_does_not_deadlock_on_an_eclass_scope_larger_than_the_pipe_buffer`
 (the `bigeclasspkg` fixture defines ~400 functions specifically to blow
 past the pipe buffer), which *hangs the 120 s deadline* against
-`879d963` when `bin/phase-functions.sh` is reverted to the pipe form.
+`879d963` when `PORTING/bin/phase-functions.sh` is reverted to the pipe
+form.
 
 That let the pin **drop the fork entirely** and move to real upstream
 `reubeno/brush` `main` (`a04b09dc`, at/after the `18851e7` #1274 merge)

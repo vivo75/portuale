@@ -31,6 +31,17 @@ pinned_at = "2026-09-01"
 # new tag is always imported by rebasing PORTING/'s commits on top of
 # it, never a merge -- see `git log --grep prepare.for.portage` for the
 # upstream "prepare for release" commits that mark each tag).
+#
+# `vendored_paths`: files copied from this ref into PORTING/ so `portuale`
+# can run them with no Portage installed (the rest is still read from the
+# surrounding checkout / a future gitignored 3rdparty/portage). Re-sync
+# on each `commit` bump: copy the upstream file over PORTING/<path>, then
+# re-apply the local change noted in that file's own header. portuale's
+# `ebuild_phases::bin_dir()` overlays PORTING/bin/ on top of the
+# checkout's bin/, vendored file wins.
+vendored_paths = [
+    "PORTING/bin/phase-functions.sh",  # local: brush strategy #2 (__save_and_filter_ebuild_env)
+]
 
 [brush]
 description = "Rust-native bash interpreter (brush-core + brush-builtins), embedded in portuale as the real ebuild phase execution backend (bin/*.sh phases run through it, not a shelled-out system bash)."

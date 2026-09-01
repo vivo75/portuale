@@ -525,6 +525,67 @@ pub(crate) fn repo_root() -> PathBuf {
         .expect("repo root resolves (portuale is always built from within the real checkout)")
 }
 
+/// The directory `PORTAGE_BIN_PATH` points at for real phase execution.
+///
+/// Files vendored into `PORTING/bin/` (tracked, so `emerge` works on a
+/// host with no Portage installed and no Portage checkout -- the whole
+/// point of `portuale`) take precedence; anything not vendored yet falls
+/// back to the surrounding Portage checkout's own `bin/`. Once the full
+/// `bin/ebuild.sh` runtime closure is vendored, the fallback is unused
+/// and this is just `PORTING/bin`.
+///
+/// Resolved once per process. When a fallback is actually needed it's a
+/// symlink overlay in a temp dir (`bin/ebuild.sh` only ever uses
+/// `${PORTAGE_BIN_PATH}` as a literal string prefix for `source`, never
+/// `realpath`s it, so a symlinked entry resolves to the vendored file).
+pub(crate) fn bin_dir() -> &'static Path {
+    use std::sync::OnceLock;
+    static DIR: OnceLock<PathBuf> = OnceLock::new();
+    DIR.get_or_init(|| {
+        let root = repo_root();
+        let vendored = root.join("PORTING/bin");
+        let checkout = root.join("bin");
+        // Nothing to fall back to, or the whole closure is vendored
+        // (`ebuild.sh` is the last file that would land): use it directly.
+        if !checkout.is_dir() || vendored.join("ebuild.sh").is_file() {
+            return vendored;
+        }
+        let overlay = std::env::temp_dir().join(format!("portuale-bin.{}", std::process::id()));
+        match build_bin_overlay(&overlay, &checkout, &vendored) {
+            Ok(()) => overlay,
+            Err(e) => {
+                eprintln!(
+                    "portuale: PORTING/bin overlay setup failed ({e}); \
+                     falling back to {} (local bin/ changes not applied)",
+                    checkout.display()
+                );
+                checkout
+            }
+        }
+    })
+    .as_path()
+}
+
+/// Populates `overlay` with a symlink to every entry of `checkout`, then
+/// symlinks every entry of `vendored` over the top (dropping the
+/// checkout link first). Rebuilt from scratch each call.
+fn build_bin_overlay(overlay: &Path, checkout: &Path, vendored: &Path) -> std::io::Result<()> {
+    use std::os::unix::fs::symlink;
+    let _ = std::fs::remove_dir_all(overlay);
+    std::fs::create_dir_all(overlay)?;
+    for entry in std::fs::read_dir(checkout)? {
+        let entry = entry?;
+        symlink(entry.path(), overlay.join(entry.file_name()))?;
+    }
+    for entry in std::fs::read_dir(vendored)? {
+        let entry = entry?;
+        let dest = overlay.join(entry.file_name());
+        let _ = std::fs::remove_file(&dest);
+        symlink(entry.path(), dest)?;
+    }
+    Ok(())
+}
+
 /// Real portage's own mechanism for locating a repo from one of its own
 /// ebuild files: walks up from `pkg_dir` looking for a `profiles/
 /// repo_name` file, returning the *ancestor directory itself* (the real
@@ -1363,7 +1424,7 @@ async fn run_one_phase(
     shell: ShellBackend,
     log_file: Option<&Path>,
 ) -> Result<i32, String> {
-    let bin_dir = repo_root().join("bin");
+    let bin_dir = bin_dir().to_path_buf();
     let helpers_dir = bin_dir.join("ebuild-helpers");
 
     // `FEATURES={network,ipc,mount,pid}-sandbox` / `FEATURES=sandbox`:
@@ -1546,7 +1607,7 @@ async fn run_misc_functions(
     shell: ShellBackend,
     log_file: Option<&Path>,
 ) -> Result<i32, String> {
-    let bin_dir = repo_root().join("bin");
+    let bin_dir = bin_dir().to_path_buf();
     let helpers_dir = bin_dir.join("ebuild-helpers");
 
     // Real `_emerge.MiscFunctionsProcess`: `bin/misc-functions.sh` runs

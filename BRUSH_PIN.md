@@ -60,17 +60,21 @@ Still **OPEN upstream** as
 review yet) — a real brush bug regardless. **Not load-bearing here**:
 `brush strategy #2` (2026-09-01) rewrote the three places portage's own
 `bin/*.sh` hit the construct — `__save_ebuild_env |
-__filter_readonly_variables [| bzip2]` in `bin/phase-functions.sh` — so
-the new `__save_and_filter_ebuild_env` helper stages the two functions
-through a `${T}` temp file and neither is ever a pipeline stage. See
-`README.md`'s "brush strategy #2" section.
+__filter_readonly_variables [| bzip2]` in `phase-functions.sh` — so the
+new `__save_and_filter_ebuild_env` helper stages the two functions
+through a `${T}` temp file and neither is ever a pipeline stage. The
+change lives in the **vendored** `PORTING/bin/phase-functions.sh`
+(`ebuild_phases::bin_dir()` overlays `PORTING/bin/` over the checkout's
+`bin/`; the upstream file stays pristine — see
+`PORTING/3rdparty/repos.toml`'s `vendored_paths`). See `README.md`'s
+"brush strategy #2" section.
 
 **Guard**: `ebuild_phases::tests::install_does_not_deadlock_on_an_eclass_
 scope_larger_than_the_pipe_buffer` (`portuale`), driven by the
 `bigeclasspkg` fixture (~400 functions, ~80 KB saved environment). It
 completes in ~1 s against a brush without the #1276 patch; it *hangs the
-120 s deadline* if `bin/phase-functions.sh` is reverted to the pipe
-form.
+120 s deadline* if `PORTING/bin/phase-functions.sh` is reverted to the
+pipe form.
 
 A real ebuild/eclass in the wild could still pipe a `pkg_*` function into
 something — that path would still want #1276 upstream (or its own
