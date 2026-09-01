@@ -42,6 +42,14 @@ fn make_xpak_binpkg(prefix: &[u8], entries: &[(&str, &[u8])]) -> Vec<u8> {
     out
 }
 
+fn blake2b_hex(bytes: &[u8]) -> String {
+    use blake2::Digest as _;
+    blake2::Blake2b512::digest(bytes)
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
+}
+
 // The in-process inner metadata.tar reader.
 
 /// One inner-tar member for the unit tests, written through `tar::Builder`.

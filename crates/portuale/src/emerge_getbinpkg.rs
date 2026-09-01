@@ -1001,6 +1001,63 @@ mod tests {
     }
 
     #[test]
+    fn merge_binpkg_gpkg_strips_the_image_prefix_and_records_binpkgmd5_and_metadata() {
+        // Regression: a gpkg merge used to write `/image`-prefixed CONTENTS, no
+        // `BINPKGMD5`, no consolidated `metadata` -- all blocking `emerge -C`.
+        let tmp = tempdir();
+        let root = tmp.join("root");
+        std::fs::create_dir_all(&root).unwrap();
+        let binpkg = fixtures_root().join("pkgdir/dev-libs/gpkgreadpkg-1.0.gpkg.tar");
+
+        let status = ebuild_merge::merge_binpkg(
+            &binpkg,
+            &root,
+            &tmp.join("portage_tmpdir"),
+            &MergeOptions::default(),
+        )
+        .expect("gpkg merge succeeds");
+        assert_eq!(status, 0);
+
+        let vdb = root.join("var/db/pkg/dev-libs/gpkgreadpkg-1.0");
+        let contents = std::fs::read_to_string(vdb.join("CONTENTS")).unwrap();
+        assert!(
+            !contents.contains("/image"),
+            "CONTENTS must not carry the gpkg `image/` prefix: {contents}"
+        );
+        assert!(contents.contains(" /hello.txt "), "{contents}");
+        assert!(
+            root.join("hello.txt").is_file(),
+            "the image file merged at the real path, not under /image"
+        );
+
+        // BINPKGMD5 is the md5 of the whole binpkg file.
+        let want_md5 = {
+            use md5::Digest as _;
+            let mut h = md5::Md5::new();
+            h.update(std::fs::read(&binpkg).unwrap());
+            h.finalize()
+                .iter()
+                .map(|b| format!("{b:02x}"))
+                .collect::<String>()
+        };
+        assert_eq!(
+            std::fs::read_to_string(vdb.join("BINPKGMD5"))
+                .unwrap()
+                .trim(),
+            want_md5
+        );
+
+        // Consolidated metadata file present and stamped.
+        let metadata = std::fs::read_to_string(vdb.join("metadata")).expect("metadata file");
+        assert!(metadata.starts_with("#format=1\n"), "{metadata}");
+        assert!(
+            metadata.lines().last().unwrap().starts_with("#dir_mtime="),
+            "{metadata}"
+        );
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
     fn merge_binpkg_collision_protect_aborts_when_another_package_owns_the_file() {
         // `_collision_protect` (shared with the source merge): a pre-existing vdb
         // entry owning the same path aborts the binpkg merge rather than
