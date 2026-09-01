@@ -291,6 +291,193 @@ pub struct BuildBundleArgs<'a> {
     pub install_mask_prunes_usr_share: bool,
 }
 
+/// Stage one binpkg file (`.gpkg.tar` or `.tbz2`) into a wire bundle
+/// under `staging_tmp` (a fresh temp dir per call; caller removes it).
+/// `repo_override` fills the manifest only when the binpkg's own metadata
+/// carries no `repository`/`REPO` key. `install_mask` /
+/// `install_mask_prunes_usr_share` prune the staged image before
+/// `collect_filemeta`, like the local merge. `gpg` is the same
+/// merge-time signature policy the local merge runs.
+pub fn build_bundle(args: BuildBundleArgs<'_>) -> Result<StagedBundle, String> {
+    let BuildBundleArgs {
+        binpkg_path,
+        staging_tmp,
+        repo_override,
+        gpg,
+        install_mask,
+        install_mask_prunes_usr_share,
+    } = args;
+    let name = binpkg_path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or_default();
+    let is_gpkg = name.ends_with(".gpkg.tar");
+    if !is_gpkg && !name.ends_with(".tbz2") {
+        return Err(format!(
+            "{}: not a binary package (need .gpkg.tar or .tbz2)",
+            binpkg_path.display()
+        ));
+    }
+    let meta = if is_gpkg {
+        crate::binpkg::read_gpkg_metadata(binpkg_path)?
+    } else {
+        crate::binpkg::read_xpak_metadata(binpkg_path)?
+    };
+    let meta_get = |key: &str| -> Option<String> {
+        meta.get(key)
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+    };
+    let category = meta_get("CATEGORY")
+        .ok_or_else(|| format!("{}: binpkg has no CATEGORY", binpkg_path.display()))?;
+    let pf =
+        meta_get("PF").ok_or_else(|| format!("{}: binpkg has no PF", binpkg_path.display()))?;
+    let slot = meta_get("SLOT").unwrap_or_else(|| "0".to_string());
+    let repo = meta_get("repository")
+        .or_else(|| meta_get("REPO"))
+        .or_else(|| {
+            repo_override
+                .map(str::to_string)
+                .filter(|s| !s.is_empty() && s != "__unknown__")
+        })
+        .unwrap_or_else(|| "__unknown__".to_string());
+
+    // Same extraction the local merge runs: image/ + build-info/ land
+    // staged exactly as merge_binpkg would see them.
+    let unit = staging_tmp.join(&pf);
+    let image = unit.join("image");
+    let build_info = unit.join("build-info");
+    // The xattr restore covers the local merge only.
+    crate::binpkg::extract_binpkg(
+        binpkg_path,
+        &image,
+        &build_info,
+        gpg,
+        &crate::ebuild_merge::XattrPolicy::default(),
+    )?;
+
+    // The same BINPKGMD5 digest the local merge records (whole binpkg
+    // file), written into the staged `build-info/` so the client's
+    // verbatim vdb copy lands it.
+    // Portage: _emerge/Binpkg.py, _start_task
+    let binpkg_md5 = crate::ebuild_merge::md5_hex(binpkg_path)?;
+    std::fs::write(build_info.join("BINPKGMD5"), format!("{binpkg_md5}\n"))
+        .map_err(|e| format!("{}: {e}", build_info.join("BINPKGMD5").display()))?;
+
+    // The same `apply_install_mask` the local merge runs prunes the staged
+    // image here, before `collect_filemeta` below.
+    // Portage: vartree.py, treewalk (mask before collision-protect)
+    let mask_options = crate::ebuild_merge::MergeOptions {
+        install_mask: install_mask.to_string(),
+        install_mask_prunes_usr_share,
+        ..crate::ebuild_merge::MergeOptions::default()
+    };
+    crate::ebuild_merge::apply_install_mask(&image, &build_info, &mask_options)?;
+
+    // Server-side `bzip2 -dc`: the client never needs bzip2.
+    let saved_env = build_info.join("environment.bz2");
+    let has_environment = if saved_env.is_file() {
+        let dest_env = unit.join("environment");
+        let out =
+            std::fs::File::create(&dest_env).map_err(|e| format!("{}: {e}", dest_env.display()))?;
+        let status = std::process::Command::new("bzip2")
+            .args(["-d", "-c", "--"])
+            .arg(&saved_env)
+            .stdout(std::process::Stdio::from(out))
+            .status()
+            .map_err(|e| format!("failed to spawn bzip2: {e}"))?;
+        if !status.success() {
+            return Err(format!(
+                "bzip2 failed to decompress {} ({status})",
+                saved_env.display()
+            ));
+        }
+        true
+    } else {
+        false
+    };
+
+    let manifest = BundleManifest {
+        format: 1,
+        cpv: format!("{category}/{pf}"),
+        slot,
+        repo,
+        has_environment,
+    };
+    let manifest_text = manifest.render();
+    // Prove the manifest parses back before it ever ships.
+    if BundleManifest::parse(&manifest_text).is_none() {
+        return Err("remote-manifest does not parse back".to_string());
+    }
+    std::fs::write(unit.join("remote-manifest"), manifest_text)
+        .map_err(|e| format!("remote-manifest: {e}"))?;
+
+    // The ebuild runtime the client phases run under (same files the
+    // local merge drives).
+    let bin_dir = crate::ebuild_phases::bin_dir()?;
+    copy_bin_runtime(bin_dir, &unit.join("bin"))?;
+    // The `PORTAGE_BZIP2_COMMAND` pass-through rides the shipped runtime
+    // `bin` dir (see `BZIP2_PASSTHROUGH`).
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        let passthrough = unit.join("bin").join("bzip2-passthrough");
+        std::fs::write(&passthrough, BZIP2_PASSTHROUGH)
+            .map_err(|e| format!("bzip2-passthrough: {e}"))?;
+        std::fs::set_permissions(&passthrough, std::fs::Permissions::from_mode(0o755))
+            .map_err(|e| format!("bzip2-passthrough: {e}"))?;
+    }
+
+    let ebuild_file = build_info.join(format!("{pf}.ebuild"));
+    let defined = std::fs::read_to_string(build_info.join("DEFINED_PHASES")).unwrap_or_default();
+    let phases = select_phases(&defined, ebuild_file.is_file(), has_environment);
+    let postinst_defined = has_environment
+        && ebuild_file.is_file()
+        && defined.split_whitespace().any(|word| word == "postinst");
+
+    // Per-file type/hash/mtime for the client's merge.
+    let filemeta = render_filemeta(&collect_filemeta(&image)?)?;
+    std::fs::write(unit.join("filemeta"), &filemeta).map_err(|e| format!("filemeta: {e}"))?;
+
+    // Uncompressed tar of `<pf>/`.
+    let tarball = staging_tmp.join("bundle.tar");
+    let status = std::process::Command::new("tar")
+        .args(["-cf"])
+        .arg(&tarball)
+        .args(["-C"])
+        .arg(staging_tmp)
+        .arg(&pf)
+        .status()
+        .map_err(|e| format!("failed to spawn tar: {e}"))?;
+    if !status.success() {
+        return Err(format!("tar -cf {} failed ({status})", tarball.display()));
+    }
+    let byte_count = std::fs::metadata(&tarball)
+        .map_err(|e| format!("{}: {e}", tarball.display()))?
+        .len();
+    let (pn, pvr) = portage_repo::split_pf(&pf)
+        .ok_or_else(|| format!("{}: cannot split package name from version", pf))?;
+    let (pv, pr) = split_pvr(&pvr);
+    let p = format!("{pn}-{pv}");
+    let ebuild_file = build_info.join(format!("{pf}.ebuild"));
+    let eapi = read_eapi(&build_info, &ebuild_file)
+        .ok_or_else(|| format!("{}: no EAPI in build-info nor ebuild", pf))?;
+    Ok(StagedBundle {
+        tarball,
+        byte_count,
+        manifest,
+        postinst_defined,
+        eapi,
+        category,
+        pn,
+        pv,
+        pr,
+        pvr,
+        p,
+        pf,
+        phases,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

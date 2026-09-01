@@ -1149,3 +1149,108 @@ pub fn echo_summary(packages: &[ElogPackage], color: &Colorizer) {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use portage_util::TempDir;
+
+    fn tmpdir() -> std::path::PathBuf {
+        let d = TempDir::new("elog_test").keep();
+        std::fs::create_dir_all(d.join("logging")).unwrap();
+        d
+    }
+
+    #[test]
+    fn collect_reads_phase_files_in_order_and_filters_by_class() {
+        let t = tmpdir();
+        std::fs::write(
+            t.join("logging/postinst"),
+            "WARN later warning\nINFO postinst info\n",
+        )
+        .unwrap();
+        std::fs::write(
+            t.join("logging/install"),
+            "LOG first message\nQA a qa note\nERROR an error\n",
+        )
+        .unwrap();
+
+        let msgs = collect(&t, None);
+        let got: Vec<(&str, &str)> = msgs
+            .iter()
+            .map(|m| (m.level.as_str(), m.text.as_str()))
+            .collect();
+        assert_eq!(
+            got,
+            vec![
+                ("LOG", "first message"),
+                ("ERROR", "an error"),
+                ("WARN", "later warning"),
+            ]
+        );
+        let _ = std::fs::remove_dir_all(&t);
+    }
+
+    #[test]
+    fn collect_is_empty_when_there_are_no_message_files() {
+        let t = tmpdir();
+        assert!(collect(&t, None).is_empty());
+        let _ = std::fs::remove_dir_all(&t);
+    }
+
+    #[test]
+    fn echo_summary_renders_the_portage_message_block_shape() {
+        let color = Colorizer::new(false);
+        let pkg = ElogPackage {
+            cpv: "dev-libs/foo-1.0".to_string(),
+            root: "/".to_string(),
+            messages: vec![
+                ElogMessage {
+                    phase: "postinst".to_string(),
+                    level: "LOG".to_string(),
+                    text: "read the docs".to_string(),
+                },
+                ElogMessage {
+                    phase: "postinst".to_string(),
+                    level: "WARN".to_string(),
+                    text: "watch out".to_string(),
+                },
+            ],
+        };
+        // No colour -> plain " * " prefixes; capture is covered by a run in
+        // test_portuale.py, this just exercises the non-panicking path.
+        echo_summary(std::slice::from_ref(&pkg), &color);
+    }
+
+    #[test]
+    fn combine_logentries_matches_portage_combine_shape() {
+        let msgs = [
+            ElogMessage {
+                phase: "install".to_string(),
+                level: "LOG".to_string(),
+                text: "a".to_string(),
+            },
+            ElogMessage {
+                phase: "install".to_string(),
+                level: "LOG".to_string(),
+                text: "b".to_string(),
+            },
+            ElogMessage {
+                phase: "install".to_string(),
+                level: "WARN".to_string(),
+                text: "c".to_string(),
+            },
+            ElogMessage {
+                phase: "postinst".to_string(),
+                level: "WARN".to_string(),
+                text: "d".to_string(),
+            },
+        ];
+        let refs: Vec<&ElogMessage> = msgs.iter().collect();
+        assert_eq!(
+            combine_logentries(&refs),
+            "LOG: install\na\nb\nWARN: install\nc\nWARN: postinst\nd\n"
+        );
+        assert_eq!(combine_logentries(&[]), "");
+    }
+}
