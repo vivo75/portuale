@@ -9204,6 +9204,31 @@ def test_check_news_counts_unread_relevant_items(
     assert "eselect news read" in rust.stdout
 
 
+@pytest.mark.parametrize(
+    "args",
+    [
+        ["-p", "--clean", "dev-libs/unmergepkg"],
+        ["-p", "--clean", "dev-libs/dualslotpkg"],
+        ["-p", "--clean"],
+        ["-p", "--rage-clean", "dev-libs/unmergepkg"],
+        ["-p", "--rage-clean", "dev-libs/nope"],
+        ["-p", "--rage-clean"],
+    ],
+)
+def test_clean_and_rage_clean_pretend_match_rust_and_python(
+    emerge_binary, emerge_pretend_python, fixture_env, args
+):
+    """emerge -p --clean / -p --rage-clean (real action_uninstall ->
+    unmerge). --clean keeps only the newest version per slot
+    (dev-libs/unmergepkg 1.0+2.0 in slot 0 -> remove 1.0;
+    dev-libs/dualslotpkg 1.0/slot1 + 2.0/slot2 -> nothing). --rage-clean
+    removes every matched version (a fast --unmerge). Rust == Python."""
+    rust = _run([str(emerge_binary)], args, fixture_env)
+    py = _run(emerge_pretend_python, args, fixture_env)
+    assert rust.stdout == py.stdout
+    assert rust.returncode == py.returncode
+
+
 def test_check_news_reports_none_when_all_items_are_read(
     emerge_binary, emerge_pretend_python, fixture_env, tmp_path
 ):

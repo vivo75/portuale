@@ -290,9 +290,11 @@ dev/test context — see also the `chown` note below).
   (real `actions.py:3839`); `--search` / `-s` / `--searchdesc` / `-S`
   (real `action_search` → `search.py` output shape); `--check-news`
   (real `count_unread_news` / `display_news_notifications` — v1 cuts:
-  no `.unread`/`.skip` persistence, `Display-If-Installed` only).*
+  no `.unread`/`.skip` persistence, `Display-If-Installed` only);
+  `--clean` (real `unmerge` `unmerge_action="clean"` — keep newest per
+  slot) and `--rage-clean` (fast `--unmerge`).*
   Remaining: `--info` (`action_info` — the big config/env dump),
-  `--regen` (metadata cache), `--metadata`, `--clean`, `--rage-clean`.
+  `--regen` (metadata cache), `--metadata`.
   `--read-news` stays a recognized-unimplemented option (it's a
   post-merge display toggle, not an action). `--sync` (repo network
   syncing) stays a non-goal.

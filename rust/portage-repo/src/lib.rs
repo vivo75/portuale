@@ -4512,6 +4512,79 @@ pub fn prune_nodeps_selection(root: &Path, args: &[String]) -> Vec<PruneNodepsCp
     out
 }
 
+/// Real `emerge --clean`'s own selection (`unmerge.py:274-293`, the
+/// `unmerge_action == "clean"` branch): like `--prune --nodeps` but
+/// **per slot** -- for every `(cp, slot)`, keep only the highest
+/// version, select every older one for removal. `args` given: the
+/// best/rest split is over the union of the matched sets, grouped by
+/// `(cp, slot)`; `args` empty (`emerge --clean` alone): every installed
+/// `(cp, slot)` (real `vardb.cp_all()` -> `cp_list`).
+///
+/// Same `COUNTER`-tiebreak narrowing as [`prune_nodeps_selection`] (the
+/// pilot's single-instance-per-slot fixtures never hit it), and no
+/// `sys-apps/portage` self-skip (real `unmerge.py:368`: the self-skip is
+/// explicitly *not* applied for `--clean`).
+pub fn clean_selection(root: &Path, args: &[String]) -> Vec<PruneNodepsCp> {
+    let installed = all_installed_packages(root);
+    let matched: Vec<&InstalledPackage> = if args.is_empty() {
+        installed.iter().collect()
+    } else {
+        installed
+            .iter()
+            .filter(|p| {
+                let cs = format!("{}/{}-{}:{}", p.category, p.package, p.version, p.slot);
+                args.iter().any(|a| {
+                    portage_dep::parse_atom(a)
+                        .is_some_and(|pa| pa.category == p.category && pa.package == p.package)
+                        && portage_dep::match_from_list(a, &[cs.as_str()])
+                            .is_some_and(|m| !m.is_empty())
+                })
+            })
+            .collect()
+    };
+
+    let mut by_cp_slot: HashMap<(String, String, String), Vec<String>> = HashMap::new();
+    for p in matched {
+        by_cp_slot
+            .entry((p.category.clone(), p.package.clone(), p.slot.clone()))
+            .or_default()
+            .push(p.version.clone());
+    }
+    // Collapse back to one entry per cp (real `_unmerge_display` regroups
+    // the `pkgmap` by `mykey` = cp), unioning the per-slot removal sets.
+    let mut by_cp: HashMap<(String, String), (String, Vec<String>)> = HashMap::new();
+    for ((category, package, _slot), mut versions) in by_cp_slot {
+        versions.sort_by(|a, b| vercmp_ordering(a, b));
+        versions.dedup();
+        if versions.len() < 2 {
+            continue;
+        }
+        let best = versions.pop().unwrap();
+        let entry = by_cp
+            .entry((category, package))
+            .or_insert_with(|| (best.clone(), Vec::new()));
+        entry.1.extend(versions);
+        if vercmp_ordering(&best, &entry.0) == std::cmp::Ordering::Greater {
+            entry.0 = best;
+        }
+    }
+    let mut out: Vec<PruneNodepsCp> = by_cp
+        .into_iter()
+        .map(|((category, package), (best_version, mut other))| {
+            other.sort_by(|a, b| vercmp_ordering(a, b));
+            other.dedup();
+            PruneNodepsCp {
+                category,
+                package,
+                best_version,
+                other_versions: other,
+            }
+        })
+        .collect();
+    out.sort_by(|a, b| a.category.cmp(&b.category).then(a.package.cmp(&b.package)));
+    out
+}
+
 /// Real `strip_slots` (`lib/portage/dep/_slot_operator.py:11`), for one
 /// atom string: rewrites a "built" slot-operator atom (`cat/pkg:2=` -- the
 /// concrete slot portage records in the vdb when a `cat/pkg:=` dependency

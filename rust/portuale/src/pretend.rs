@@ -2600,6 +2600,13 @@ fn still_listed_parents<'a>(
 #[allow(clippy::too_many_arguments)]
 fn run_unmerge_pretend(
     targets: &[&str],
+    // Real `unmerge_action` -- `"unmerge"`, `"rage-clean"` (both remove
+    // exactly the given atoms; `--rage-clean` only differs by skipping
+    // `CLEAN_DELAY` + prerm/postrm, invisible at `--pretend`),
+    // `"depclean"`, `"prune"`. Threaded into the `Couldn't find ... to
+    // <action>` / `removal by <action>` / `Portage to <action> itself`
+    // messages (real `f"... {unmerge_action}"`).
+    action: &str,
     root: &Path,
     config_root: &Path,
     config: &portage_profile::Config,
@@ -2621,7 +2628,7 @@ fn run_unmerge_pretend(
     color: &Colorizer,
 ) -> ExitCode {
     if targets.is_empty() {
-        eprintln!("emerge: no package atoms given to --unmerge");
+        eprintln!("emerge: no package atoms given to --{action}");
         return ExitCode::from(1);
     }
 
@@ -2744,7 +2751,7 @@ fn run_unmerge_pretend(
         };
 
         if matches.is_empty() {
-            println!("\n--- Couldn't find '{atom_str}' to unmerge.");
+            println!("\n--- Couldn't find '{atom_str}' to {action}.");
             continue;
         }
 
@@ -2762,7 +2769,7 @@ fn run_unmerge_pretend(
     }
 
     if all_selected.is_empty() {
-        println!("\n>>> No packages selected for removal by unmerge");
+        println!("\n>>> No packages selected for removal by {action}");
         return ExitCode::from(1);
     }
 
@@ -2773,7 +2780,7 @@ fn run_unmerge_pretend(
             for v in selected.drain(..) {
                 eprintln!(
                     "!!! Not unmerging package sys-apps/portage-{v} since there is no valid \
-                     reason for Portage to unmerge itself."
+                     reason for Portage to {action} itself."
                 );
                 all_selected.remove(&(portage_self.0.clone(), portage_self.1.clone(), v.clone()));
                 protected.push(v);
@@ -2782,7 +2789,7 @@ fn run_unmerge_pretend(
     }
     // Recheck: the self-skip may have emptied the only selection.
     if all_selected.is_empty() {
-        println!("\n>>> No packages selected for removal by unmerge");
+        println!("\n>>> No packages selected for removal by {action}");
         return ExitCode::from(1);
     }
 
@@ -3517,6 +3524,7 @@ fn run_prune_pretend(
     // `run_unmerge_pretend` removes them.
     run_unmerge_pretend(
         &cpv_refs,
+        "unmerge",
         root,
         config_root,
         config,
@@ -3554,12 +3562,49 @@ fn run_prune_nodeps_pretend(
     ask: bool,
     color: &Colorizer,
 ) -> ExitCode {
-    let args = match resolve_cleanup_args(targets, root, "prune") {
+    run_prune_nodeps_or_clean(targets, root, config_root, pretend, ask, color, false)
+}
+
+/// Real `emerge --clean` (`action_uninstall` -> `unmerge` with
+/// `unmerge_action == "clean"`): identical to `--prune --nodeps` except
+/// the best/rest split is **per slot** (see
+/// `portage_repo::clean_selection`), there is no `sys-apps/portage`
+/// self-skip (real `unmerge.py:368`), and the empty-selection message
+/// names `clean`. Individual ebuild-path args are rejected (real
+/// `unmerge.py:131`); `resolve_cleanup_args` already only produces
+/// `cat/pkg` atoms here.
+fn run_clean_pretend(
+    targets: &[&str],
+    root: &Path,
+    config_root: &Path,
+    pretend: bool,
+    ask: bool,
+    color: &Colorizer,
+) -> ExitCode {
+    run_prune_nodeps_or_clean(targets, root, config_root, pretend, ask, color, true)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_prune_nodeps_or_clean(
+    targets: &[&str],
+    root: &Path,
+    config_root: &Path,
+    pretend: bool,
+    ask: bool,
+    color: &Colorizer,
+    is_clean: bool,
+) -> ExitCode {
+    let action = if is_clean { "clean" } else { "prune" };
+    let args = match resolve_cleanup_args(targets, root, action) {
         Ok(a) => a,
         Err(code) => return code,
     };
 
-    let mut selection = portage_repo::prune_nodeps_selection(root, &args);
+    let mut selection = if is_clean {
+        portage_repo::clean_selection(root, &args)
+    } else {
+        portage_repo::prune_nodeps_selection(root, &args)
+    };
 
     // Real `_unmerge_display` (`unmerge.py:195`): the header is
     // `--pretend`/`--ask`-only.
@@ -3576,14 +3621,18 @@ fn run_prune_nodeps_pretend(
     // Real `sys-apps/portage` self-skip (`unmerge.py:368-391`): move any
     // selected `sys-apps/portage` version into `protected` with the
     // eerror. Realistically dead code -- `sys-apps/portage` is never
-    // installed at more than one version -- kept for fidelity.
-    for cp in &mut selection {
-        if (cp.category.as_str(), cp.package.as_str()) == ("sys-apps", "portage") {
-            for v in std::mem::take(&mut cp.other_versions) {
-                eprintln!(
-                    "!!! Not unmerging package sys-apps/portage-{v} since there is no valid \
-                     reason for Portage to prune itself."
-                );
+    // installed at more than one version -- kept for fidelity. Real
+    // `unmerge.py:368`: `if unmerge_action != "clean"` -- `--clean` does
+    // NOT self-skip.
+    if !is_clean {
+        for cp in &mut selection {
+            if (cp.category.as_str(), cp.package.as_str()) == ("sys-apps", "portage") {
+                for v in std::mem::take(&mut cp.other_versions) {
+                    eprintln!(
+                        "!!! Not unmerging package sys-apps/portage-{v} since there is no valid \
+                         reason for Portage to prune itself."
+                    );
+                }
             }
         }
     }
@@ -3593,7 +3642,7 @@ fn run_prune_nodeps_pretend(
         if args.is_empty() {
             println!("\n>>> No outdated packages were found on your system.");
         } else {
-            println!("\n>>> No packages selected for removal by prune");
+            println!("\n>>> No packages selected for removal by {action}");
         }
         return ExitCode::from(1);
     }
@@ -4109,6 +4158,7 @@ fn run_depclean_pretend(
     // uses. Without `--pretend`, `run_unmerge_pretend` removes them.
     let unmerge_rc = run_unmerge_pretend(
         &cpv_refs,
+        "unmerge",
         root,
         config_root,
         config,
@@ -4713,6 +4763,12 @@ pub fn run(args: &[String]) -> ExitCode {
     let mut search_action = false;
     let mut searchdesc = false;
     let mut check_news = false;
+    // --clean / --rage-clean: standalone removal actions. --rage-clean
+    // is a fast --unmerge (same selection, skips CLEAN_DELAY + prerm/
+    // postrm -- invisible at --pretend); --clean keeps only the newest
+    // version per slot. See run_clean_pretend / run_unmerge_pretend.
+    let mut clean_action = false;
+    let mut rage_clean = false;
     let mut with_bdeps = true;
     let mut with_bdeps_given = false;
     let mut with_bdeps_auto = true;
@@ -5473,6 +5529,18 @@ pub fn run(args: &[String]) -> ExitCode {
             // items per repo.
             check_news = true;
             i += 1;
+        } else if arg == "--clean" {
+            // Real `main.py`: `--clean` is a standalone ACTION
+            // (`action_uninstall` -> `unmerge` `unmerge_action="clean"`)
+            // -- per slot, remove every version older than the newest.
+            clean_action = true;
+            i += 1;
+        } else if arg == "--rage-clean" {
+            // Real `main.py`: `--rage-clean` is a standalone ACTION -- a
+            // fast `--unmerge` (same selection; skips `CLEAN_DELAY` +
+            // prerm/postrm).
+            rage_clean = true;
+            i += 1;
         } else if arg == "--skipfirst" || arg == "--skip-first" {
             skipfirst = true;
             i += 1;
@@ -6020,6 +6088,8 @@ pub fn run(args: &[String]) -> ExitCode {
         && !resume
         && !search_action
         && !check_news
+        && !clean_action
+        && !rage_clean
     {
         eprintln!("emerge (pilot v1): expected a package atom, e.g. `emerge --pretend cat/pkg`");
         return ExitCode::from(2);
@@ -6144,6 +6214,26 @@ pub fn run(args: &[String]) -> ExitCode {
         return run_check_news(&repos, &root, false, &color);
     }
 
+    // `--clean`: a standalone removal action -- keep only the newest
+    // version per slot.
+    if clean_action {
+        return run_clean_pretend(&atom_args, &root, &config_root, pretend, ask, &color);
+    }
+    // `--rage-clean`: a fast `--unmerge` (identical `--pretend` display).
+    if rage_clean {
+        return run_unmerge_pretend(
+            &atom_args,
+            "rage-clean",
+            &root,
+            &config_root,
+            &config,
+            false,
+            pretend,
+            ask,
+            &color,
+        );
+    }
+
     // `--unmerge`/`-C`: a standalone action -- resolved config in hand
     // (its `@system` target support and system-profile check both need
     // it), dispatch before the ordinary resolve-graph path below.
@@ -6152,6 +6242,7 @@ pub fn run(args: &[String]) -> ExitCode {
         // removes the selected packages after the display.
         return run_unmerge_pretend(
             &atom_args,
+            "unmerge",
             &root,
             &config_root,
             &config,

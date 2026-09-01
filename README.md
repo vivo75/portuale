@@ -10580,6 +10580,19 @@ Python reference and contract-tested.
   `.unread` / `.skip` bookkeeping (the pilot recomputes each run, writing
   nothing); `Display-If-Keyword` / `Display-If-Profile` (always
   satisfied); non-bare `Display-If-Installed` atoms.
+- **`--clean`** (real `action_uninstall` → `unmerge` with
+  `unmerge_action == "clean"`): like `--prune --nodeps` but *per slot* —
+  for each `(cp, slot)`, keep only the newest version, remove the rest
+  (`portage_repo::clean_selection`). No `sys-apps/portage` self-skip
+  (real `unmerge.py:368`). `dev-libs/unmergepkg` (`1.0` + `2.0`, both
+  slot `0`) → removes `1.0`; `dev-libs/dualslotpkg` (`1.0`/slot 1 +
+  `2.0`/slot 2) → nothing.
+- **`--rage-clean`** (real): a fast `--unmerge` — same selection (every
+  matched version), skips the `CLEAN_DELAY` countdown and the
+  `pkg_prerm`/`pkg_postrm` phases (invisible at `--pretend`, so the
+  preview is byte-identical to `--unmerge`'s). `run_unmerge_pretend`
+  gained an `action` label so the `Couldn't find … to <action>` /
+  `removal by <action>` messages name the right one.
 
 ## Running it
 

@@ -8553,7 +8553,7 @@ def _resolve_vdb_path_arg(arg, root):
     return atom
 
 
-def _run_unmerge_pretend(targets, root, config_root, config, preserve_order=False, color=None):
+def _run_unmerge_pretend(targets, root, config_root, config, preserve_order=False, color=None, action="unmerge"):
     """emerge --pretend --unmerge / -pC <atoms>: real
     _emerge/unmerge.py::_unmerge_display for unmerge_action == "unmerge",
     narrowed to a preview. Mirrors pretend.rs's run_unmerge_pretend --
@@ -8566,7 +8566,7 @@ def _run_unmerge_pretend(targets, root, config_root, config, preserve_order=Fals
     order and are not regrouped/re-sorted by cat/pn -- only --depclean's
     topologically-sorted cleanlist sets it."""
     if not targets:
-        print("emerge: no package atoms given to --unmerge", file=sys.stderr)
+        print(f"emerge: no package atoms given to --{action}", file=sys.stderr)
         return 1
 
     expanded = []
@@ -8639,7 +8639,7 @@ def _run_unmerge_pretend(targets, root, config_root, config, preserve_order=Fals
                     matches.append((cat, pkg, version, slot))
 
         if not matches:
-            print(f"\n--- Couldn't find '{atom_str}' to unmerge.")
+            print(f"\n--- Couldn't find '{atom_str}' to {action}.")
             continue
 
         for cat, pkg, version, _slot in matches:
@@ -8653,14 +8653,14 @@ def _run_unmerge_pretend(targets, root, config_root, config, preserve_order=Fals
                 per_cp[cp][0].append(version)
 
     if not all_selected:
-        print("\n>>> No packages selected for removal by unmerge")
+        print(f"\n>>> No packages selected for removal by {action}")
         return 1
 
     if portage_self in per_cp and per_cp[portage_self][0]:
         for v in per_cp[portage_self][0]:
             print(
                 f"!!! Not unmerging package sys-apps/portage-{v} since there is no "
-                "valid reason for Portage to unmerge itself.",
+                f"valid reason for Portage to {action} itself.",
                 file=sys.stderr,
             )
             all_selected.discard((portage_self[0], portage_self[1], v))
@@ -8668,7 +8668,7 @@ def _run_unmerge_pretend(targets, root, config_root, config, preserve_order=Fals
         per_cp[portage_self][0] = []
 
     if not all_selected:
-        print("\n>>> No packages selected for removal by unmerge")
+        print(f"\n>>> No packages selected for removal by {action}")
         return 1
 
     # Real syslist = root_config.sets["system"].getAtoms() -> the
@@ -9705,41 +9705,101 @@ def _prune_nodeps_selection(root, args):
     return out
 
 
+def _clean_selection(root, args):
+    """Real emerge --clean's own selection (unmerge.py:274-293): like
+    --prune --nodeps but PER SLOT. Mirrors portage-repo's clean_selection."""
+    import functools
+
+    vk = functools.cmp_to_key(lambda a, b: (vercmp(a, b) or (a > b) - (a < b)))
+    installed = _all_installed_packages(root)
+    if args:
+        matched = [
+            (c, p, v, s)
+            for (c, p, v, s) in installed
+            if any(
+                (parsed := _parse_atom(a)) is not None
+                and tuple(parsed.cp.split("/", 1)) == (c, p)
+                and match_from_list(a, [f"{c}/{p}-{v}:{s}"])
+                for a in args
+            )
+        ]
+    else:
+        matched = installed
+
+    by_cp_slot = {}
+    for (c, p, v, s) in matched:
+        by_cp_slot.setdefault((c, p, s), [])
+        if v not in by_cp_slot[(c, p, s)]:
+            by_cp_slot[(c, p, s)].append(v)
+
+    by_cp = {}
+    for (c, p, _s), versions in by_cp_slot.items():
+        versions = sorted(versions, key=vk)
+        if len(versions) < 2:
+            continue
+        best, others = versions[-1], versions[:-1]
+        cur = by_cp.get((c, p))
+        if cur is None:
+            by_cp[(c, p)] = [best, list(others)]
+        else:
+            cur[1].extend(others)
+            if (vercmp(best, cur[0]) or 0) > 0:
+                cur[0] = best
+
+    out = [
+        (c, p, best, sorted(set(others), key=vk))
+        for (c, p), (best, others) in by_cp.items()
+    ]
+    out.sort(key=lambda t: (t[0], t[1]))
+    return out
+
+
 def _run_prune_nodeps_pretend(targets, root, config_root, color):
-    """emerge --pretend --prune --nodeps (actions.py:2684-2697): --nodeps
-    routes prune to unmerge()'s _unmerge_display prune branch instead of
-    _calc_depclean -- no dependency check, no '>>> Calculating removal
-    order...', no show_parents. Mirrors pretend.rs's
-    run_prune_nodeps_pretend -- see its docstring."""
+    return _run_prune_nodeps_or_clean(targets, root, config_root, color, False)
+
+
+def _run_clean_pretend(targets, root, config_root, color):
+    return _run_prune_nodeps_or_clean(targets, root, config_root, color, True)
+
+
+def _run_prune_nodeps_or_clean(targets, root, config_root, color, is_clean):
+    """emerge --pretend --prune --nodeps / emerge --pretend --clean
+    (actions.py:2684-2697). --clean uses a per-slot selection, has no
+    sys-apps/portage self-skip, and names 'clean' in the empty message.
+    Mirrors pretend.rs's run_prune_nodeps_or_clean."""
+    action = "clean" if is_clean else "prune"
     try:
-        args = _resolve_cleanup_args(targets, root, "prune")
+        args = _resolve_cleanup_args(targets, root, action)
     except _CleanupArgsExit as e:
         return e.code
 
-    selection = _prune_nodeps_selection(root, args)
+    selection = (
+        _clean_selection(root, args) if is_clean else _prune_nodeps_selection(root, args)
+    )
 
     print(color.c("darkgreen", ">>> These are the packages that would be unmerged:"))
 
-    # sys-apps/portage self-skip (realistically dead code).
-    fixed = []
-    for (c, p, best, others) in selection:
-        if (c, p) == ("sys-apps", "portage"):
-            for v in others:
-                print(
-                    f"!!! Not unmerging package sys-apps/portage-{v} since there is no "
-                    "valid reason for Portage to prune itself.",
-                    file=sys.stderr,
-                )
-            others = []
-        fixed.append((c, p, best, others))
-    selection = fixed
+    # sys-apps/portage self-skip (realistically dead code; NOT for --clean).
+    if not is_clean:
+        fixed = []
+        for (c, p, best, others) in selection:
+            if (c, p) == ("sys-apps", "portage"):
+                for v in others:
+                    print(
+                        f"!!! Not unmerging package sys-apps/portage-{v} since there is no "
+                        "valid reason for Portage to prune itself.",
+                        file=sys.stderr,
+                    )
+                others = []
+            fixed.append((c, p, best, others))
+        selection = fixed
 
     total_selected = sum(len(others) for (_c, _p, _b, others) in selection)
     if total_selected == 0:
         if not args:
             print("\n>>> No outdated packages were found on your system.")
         else:
-            print("\n>>> No packages selected for removal by prune")
+            print(f"\n>>> No packages selected for removal by {action}")
         return 1
 
     try:
@@ -10503,6 +10563,8 @@ def run(args):
     search_action = False
     searchdesc = False
     check_news = False
+    clean_action = False
+    rage_clean = False
     with_bdeps = True
     with_bdeps_given = False
     with_bdeps_auto = True
@@ -10829,6 +10891,12 @@ def run(args):
             i += 1
         elif arg == "--check-news":
             check_news = True
+            i += 1
+        elif arg == "--clean":
+            clean_action = True
+            i += 1
+        elif arg == "--rage-clean":
+            rage_clean = True
             i += 1
         elif arg == "--with-bdeps":
             # Real "argument_options" with "choices": ("y", "n") --
@@ -11552,7 +11620,14 @@ def run(args):
     if not pretend:
         return 0
 
-    if not atom_args and not unmerge and not depclean and not prune:
+    if (
+        not atom_args
+        and not unmerge
+        and not depclean
+        and not prune
+        and not clean_action
+        and not rage_clean
+    ):
         print(
             "emerge (pilot v1): expected a package atom, e.g. "
             "`emerge --pretend cat/pkg`",
@@ -11614,6 +11689,12 @@ def run(args):
     # dispatch before the ordinary resolve-graph path.
     if unmerge:
         return _run_unmerge_pretend(atom_args, _root(), _config_root(), config, color=color)
+    if clean_action:
+        return _run_clean_pretend(atom_args, _root(), _config_root(), color)
+    if rage_clean:
+        return _run_unmerge_pretend(
+            atom_args, _root(), _config_root(), config, color=color, action="rage-clean"
+        )
     if depclean:
         return _run_depclean_pretend(
             atom_args,
