@@ -919,6 +919,79 @@ def test_emerge_unmerge_without_pretend_really_removes_and_deselects(
     assert (root / "var/lib/portage/world").read_text() == "dev-libs/keepme\n"
 
 
+def test_emerge_ask_prompts_before_a_real_merge_and_honours_the_answer(
+    emerge_binary, tmp_path
+):
+    """`emerge --ask <atom>` (real `_emerge/actions.py:525`): after the
+    merge list, prompt `Would you like to merge these packages? [Yes/No]`.
+    A `No` prints `Quitting.` and exits 130 without building; a `Yes` (or
+    bare Enter) proceeds. Ignored under `--pretend`."""
+    import shutil
+
+    counter = [0]
+
+    def _run(answer, extra):
+        counter[0] += 1
+        root = tmp_path / f"root{counter[0]}"
+        shutil.copytree(Path(FIXTURES_ROOT) / "var", root / "var")
+        env = dict(os.environ)
+        env["PORTAGE_CONFIGROOT"] = FIXTURES_ROOT
+        env["ROOT"] = str(root)
+        env["DISTDIR"] = str(Path(FIXTURES_ROOT) / "distfiles")
+        env["PORTAGE_TMPDIR"] = str(root / "pt")
+        r = subprocess.run(
+            [str(emerge_binary), *extra, "--ask", "dev-libs/schedok"],
+            input=answer,
+            capture_output=True,
+            text=True,
+            check=False,
+            env=env,
+        )
+        return root, r
+
+    root, r = _run("n\n", [])
+    assert r.returncode == 130
+    assert "Would you like to merge these packages? [Yes/No]" in r.stdout
+    assert "Quitting." in r.stdout
+    assert not (root / "var/db/pkg/dev-libs/schedok-1.0").exists()
+
+    root, r = _run("\n", [])  # bare Enter == Yes
+    assert r.returncode == 0
+    assert (root / "var/db/pkg/dev-libs/schedok-1.0/CONTENTS").is_file()
+
+    # Under --pretend the prompt never appears (nothing executes anyway).
+    root, r = _run("", ["--pretend"])
+    assert r.returncode == 0
+    assert "Would you like to merge" not in r.stdout
+
+
+def test_emerge_ask_prompts_before_a_real_unmerge(emerge_binary, tmp_path):
+    """`emerge -C --ask <atom>`: prompt `Would you like to unmerge these
+    packages?`; `No` -> exit 130, package left installed."""
+    import shutil
+
+    root = tmp_path / "root"
+    shutil.copytree(Path(FIXTURES_ROOT) / "var", root / "var")
+    env = dict(os.environ)
+    env["PORTAGE_CONFIGROOT"] = FIXTURES_ROOT
+    env["ROOT"] = str(root)
+    env["DISTDIR"] = str(Path(FIXTURES_ROOT) / "distfiles")
+    env["PORTAGE_TMPDIR"] = str(root / "pt")
+    subprocess.run(
+        [str(emerge_binary), "dev-libs/schedok"],
+        input="", capture_output=True, text=True, check=False, env=env,
+    )
+    assert (root / "var/db/pkg/dev-libs/schedok-1.0/CONTENTS").is_file()
+
+    r = subprocess.run(
+        [str(emerge_binary), "-C", "--ask", "dev-libs/schedok"],
+        input="n\n", capture_output=True, text=True, check=False, env=env,
+    )
+    assert r.returncode == 130
+    assert "Would you like to unmerge these packages? [Yes/No]" in r.stdout
+    assert (root / "var/db/pkg/dev-libs/schedok-1.0/CONTENTS").is_file()
+
+
 def test_emerge_unmerge_with_pretend_still_only_previews(emerge_binary, tmp_path):
     """`emerge -pC <atom>` keeps the old preview-only behaviour: the
     `>>> These are the packages that would be unmerged:` header prints and

@@ -10247,6 +10247,34 @@ rather than killing them. New `dev-libs/sched*` fixtures; three black-box
 line + build.log, `--load-average`, `--keep-going` skip + failure-log
 tail) and four `portuale` unit tests.
 
+### `emerge --ask` / `-a` and the `CLEAN_DELAY` countdown
+
+`--ask` / `-a` (real `true_y_or_n`) prompts once, after the merge/removal
+list is displayed and before anything is built/merged/removed:
+
+- **merge** (`emerge <atom>`, no `--pretend`): `Would you like to merge
+  these packages? [Yes/No]` (real `_emerge/actions.py:525`).
+- **removal** (`emerge -C` / `--depclean` / `--prune`, no `--pretend`):
+  `Would you like to unmerge these packages? [Yes/No]` (real
+  `_emerge/unmerge.py:621`), followed by the `CLEAN_DELAY` countdown.
+
+`ask_confirm` is the pilot's `UserQuery.query`: a bare Enter matches the
+first response ("Yes"); a `No` prints `\nQuitting.\n` and EOF prints
+`Interrupted.`, both exiting `130` (real `128 + SIGINT`). `--ask` is
+ignored under `--pretend` (nothing executes anyway).
+
+`clean_delay_countdown` is real `_emerge/unmerge.py:639`'s `countdown(
+int(settings["CLEAN_DELAY"]), ">>> Unmerging")` — before every real
+`emerge -C` / `--depclean` / `--prune` it prints `>>> Waiting N seconds
+before starting...` / `>>> (Control-C to abort)...` and sleeps `N`
+seconds (`CLEAN_DELAY` env, default 5; `0` skips). The test suite pins
+`CLEAN_DELAY=0` (autouse conftest fixture).
+
+v1 cuts: not gated on stdin being a TTY (so it's testable by piping the
+answer); no colour on the prompt (real `bold()` + green/red); no
+`--ask-enter-invalid`; an unrecognized answer quits rather than
+re-prompting; `--ask` for `--deselect` / `--config` is not wired yet.
+
 ## Running it
 
 Build both Rust binaries:

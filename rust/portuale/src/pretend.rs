@@ -2597,6 +2597,7 @@ fn still_listed_parents<'a>(
     parents
 }
 
+#[allow(clippy::too_many_arguments)]
 fn run_unmerge_pretend(
     targets: &[&str],
     root: &Path,
@@ -2613,6 +2614,10 @@ fn run_unmerge_pretend(
     // suppressed and `execute_unmerge` runs after the display. `true`
     // for `-pC` and for the `--depclean`/`--prune` preview reuse.
     pretend: bool,
+    // `--ask`/`-a`: prompt `Would you like to unmerge these packages?`
+    // before the removal (real `unmerge.py:621`), then run the
+    // `CLEAN_DELAY` countdown. Always `false` when `pretend` is `true`.
+    ask: bool,
     color: &Colorizer,
 ) -> ExitCode {
     if targets.is_empty() {
@@ -2911,6 +2916,10 @@ fn run_unmerge_pretend(
     // returns EX_OK and we're not in `--pretend`, the packages are
     // actually removed.
     if !pretend {
+        if ask && !ask_confirm("Would you like to unmerge these packages?") {
+            return ExitCode::from(130);
+        }
+        clean_delay_countdown();
         return execute_unmerge(&removal_list, root, color);
     }
     ExitCode::SUCCESS
@@ -2966,6 +2975,63 @@ fn package_options_from_env() -> ebuild_package::PackageOptions {
         binpkg_format: std::env::var("BINPKG_FORMAT").unwrap_or(d.binpkg_format),
         config_root: portage_repo::config_root_from_env(),
     }
+}
+
+/// Real `_emerge/UserQuery.query` (`portage.output.userquery`'s wrapper):
+/// prints `<question> [Yes/No] `, reads a line from stdin, and matches it
+/// case-insensitively as a prefix of one of the responses -- a bare Enter
+/// matches the first ("Yes"). Returns `true` to proceed. On "No" prints
+/// `\nQuitting.\n`; on EOF prints `Interrupted.` -- both cases the caller
+/// exits `130` (real `128 + signal.SIGINT`).
+///
+/// v1 cuts: not gated on stdin being a TTY (so it's testable by piping
+/// the answer); no colour on the prompt (real `bold()` + green/red); no
+/// `--ask-enter-invalid` (bare Enter always accepted); an unrecognized
+/// answer quits rather than re-prompting (real loops until it gets a
+/// valid response).
+fn ask_confirm(question: &str) -> bool {
+    use std::io::Write;
+    print!("\n{question} [Yes/No] ");
+    let _ = std::io::stdout().flush();
+    let mut line = String::new();
+    match std::io::stdin().read_line(&mut line) {
+        Ok(0) => {
+            println!("Interrupted.");
+            false
+        }
+        Ok(_) => {
+            let a = line.trim().to_ascii_lowercase();
+            if a.is_empty() || "yes".starts_with(a.as_str()) {
+                true
+            } else {
+                println!("\nQuitting.\n");
+                false
+            }
+        }
+        Err(_) => {
+            println!("Interrupted.");
+            false
+        }
+    }
+}
+
+/// Real `_emerge/unmerge.py:639`: `countdown(int(settings["CLEAN_DELAY"]),
+/// ">>> Unmerging")` -- a short pause (default `CLEAN_DELAY=5`) before a
+/// real unmerge starts, so a `Ctrl-C` can still abort. `CLEAN_DELAY=0`
+/// skips it. The pilot honours the `CLEAN_DELAY` env var directly (same
+/// "read the var at the CLI boundary" shortcut as `PORTAGE_TMPDIR` etc.).
+fn clean_delay_countdown() {
+    let secs: u64 = std::env::var("CLEAN_DELAY")
+        .ok()
+        .and_then(|v| v.trim().parse().ok())
+        .unwrap_or(5);
+    if secs == 0 {
+        return;
+    }
+    print!(">>> Waiting {secs} seconds before starting...\n>>> (Control-C to abort)...\n");
+    use std::io::Write;
+    let _ = std::io::stdout().flush();
+    std::thread::sleep(std::time::Duration::from_secs(secs));
 }
 
 /// Real `"unmerge-backup" in self.settings.features` -- not a
@@ -3236,6 +3302,7 @@ fn run_prune_pretend(
     verbose: bool,
     lib_check: bool,
     pretend: bool,
+    ask: bool,
     color: &Colorizer,
 ) -> ExitCode {
     let args = match resolve_cleanup_args(targets, root, "prune") {
@@ -3296,6 +3363,7 @@ fn run_prune_pretend(
         config,
         result.ordered,
         pretend,
+        ask,
         color,
     )
 }
@@ -3324,6 +3392,7 @@ fn run_prune_nodeps_pretend(
     root: &Path,
     config_root: &Path,
     pretend: bool,
+    ask: bool,
     color: &Colorizer,
 ) -> ExitCode {
     let args = match resolve_cleanup_args(targets, root, "prune") {
@@ -3439,6 +3508,10 @@ fn run_prune_nodeps_pretend(
     );
 
     if !pretend {
+        if ask && !ask_confirm("Would you like to unmerge these packages?") {
+            return ExitCode::from(130);
+        }
+        clean_delay_countdown();
         return execute_unmerge(&removal_list, root, color);
     }
     ExitCode::SUCCESS
@@ -3684,6 +3757,7 @@ fn run_depclean_pretend(
     // block reads `Number removed:` instead of `Number to remove:`
     // (real `action_depclean:908-911`).
     pretend: bool,
+    ask: bool,
     color: &Colorizer,
 ) -> ExitCode {
     // Bare-name targets get their category from the vdb, then each atom
@@ -3881,6 +3955,7 @@ fn run_depclean_pretend(
         config,
         result.ordered,
         pretend,
+        ask,
         color,
     );
     // Real `action_depclean` prints the stats block after `unmerge()`
@@ -4031,6 +4106,14 @@ pub fn run(args: &[String]) -> ExitCode {
 
     let mut atom_args: Vec<&str> = Vec::new();
     let mut pretend = false;
+    // --ask/-a (real `true_y_or_n`): after the merge/removal list is
+    // displayed and before anything is actually built/merged/removed,
+    // prompt `Would you like to ...? [Yes/No]` (real `UserQuery.query`,
+    // `_emerge/actions.py:525` / `unmerge.py:621`). Bare Enter = Yes. "No"
+    // (or EOF) prints `Quitting.` / `Interrupted.` and exits 130
+    // (`128 + SIGINT`). Ignored under `--pretend` (nothing executes
+    // anyway).
+    let mut ask = false;
     let mut verbose = false;
     let mut newuse = false;
     let mut changed_use = false;
@@ -4229,6 +4312,28 @@ pub fn run(args: &[String]) -> ExitCode {
         let arg = args[i].as_str();
         if arg == "--pretend" || arg == "-p" {
             pretend = true;
+            i += 1;
+        } else if arg == "--ask" || arg == "-a" {
+            // Real `true_y_or_n`: a bare flag, or `--ask=y`/`--ask=n`.
+            match args.get(i + 1).map(String::as_str) {
+                Some("y") => {
+                    ask = true;
+                    i += 2;
+                }
+                Some("n") => {
+                    ask = false;
+                    i += 2;
+                }
+                _ => {
+                    ask = true;
+                    i += 1;
+                }
+            }
+        } else if arg == "--ask=y" {
+            ask = true;
+            i += 1;
+        } else if arg == "--ask=n" {
+            ask = false;
             i += 1;
         } else if arg == "--newuse" || arg == "-N" {
             newuse = true;
@@ -5430,6 +5535,7 @@ pub fn run(args: &[String]) -> ExitCode {
             &config,
             false,
             pretend,
+            ask,
             &color,
         );
     }
@@ -5443,12 +5549,13 @@ pub fn run(args: &[String]) -> ExitCode {
             lib_check,
             !deselect_n,
             pretend,
+            ask,
             &color,
         );
     }
     if prune {
         if nodeps {
-            return run_prune_nodeps_pretend(&atom_args, &root, &config_root, pretend, &color);
+            return run_prune_nodeps_pretend(&atom_args, &root, &config_root, pretend, ask, &color);
         }
         return run_prune_pretend(
             &atom_args,
@@ -5458,6 +5565,7 @@ pub fn run(args: &[String]) -> ExitCode {
             verbose,
             lib_check,
             pretend,
+            ask,
             &color,
         );
     }
@@ -6052,6 +6160,11 @@ pub fn run(args: &[String]) -> ExitCode {
     // is also `true` -- see `emerge_build.rs`'s own module doc comment
     // for what this actually does (and doesn't) build.
     if !pretend {
+        // Real `_emerge/actions.py:525-536`: `--ask` prompts once, after
+        // the whole merge list is displayed, before anything is built.
+        if ask && !ask_confirm("Would you like to merge these packages?") {
+            return ExitCode::from(130);
+        }
         // Real BINPKG_COMPRESS/BINPKG_COMPRESS_FLAGS[_<NAME>]/
         // PORTAGE_BZIP2_COMMAND/PKGDIR/... resolution -- see
         // `package_options_from_env`.

@@ -107,6 +107,15 @@ def emerge_pretend_python() -> list[str]:
     return [sys.executable, str(EMERGE_PRETEND_PYTHON_REFERENCE)]
 
 
+@pytest.fixture(autouse=True)
+def _no_clean_delay(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Real `emerge -C`/`--depclean`/`--prune` run a `CLEAN_DELAY`-second
+    countdown (default 5) before removing anything. Pin it to 0 for the
+    whole suite so removal tests don't each sleep -- real portage's own
+    test infra does the same."""
+    monkeypatch.setenv("CLEAN_DELAY", "0")
+
+
 @pytest.fixture
 def fixtures_root() -> Path:
     """PORTING/fixtures/, for tests that copy a committed fixture file

@@ -189,9 +189,12 @@ single-pass BFS can't grow into these incrementally:
 - **`--resume` / `--skipfirst`.** No `/var/cache/edb/mtimedb` resume state.
   `--keep-going` works within a single invocation but nothing persists a
   partial mergelist for a later `emerge --resume`.
-- **`--ask` / interactive prompts.** `-C`/`--depclean`/`--prune`/`--config`/
-  `--deselect` all cut the `--ask` yes/no prompt; `CLEAN_DELAY` countdown
-  before a real unmerge is not printed.
+- **`--ask` / interactive prompts.** *Shipped 2026-09-01:* `--ask`/`-a`
+  prompts before a real `emerge <atom>` merge and before `-C` /
+  `--depclean` / `--prune` removal (`ask_confirm`, exit 130 on No), and
+  the `CLEAN_DELAY` countdown runs before every real removal
+  (`clean_delay_countdown`). Remaining: `--ask` for `--config` /
+  `--deselect`; TTY gating; prompt colour; re-prompt on a bad answer.
 - **`elog` / `PORTAGE_ELOG_*`.** Build-log post-processing (save / mail /
   echo summary) is not modelled.
 - **`PORTAGE_NICENESS` / `PORTAGE_IONICE_COMMAND` / scheduling policy.**
@@ -314,9 +317,9 @@ by a few large items rather than a long tail of small ones:
    portage to juggle all of those together still exceeds the pilot.
 
 2. **The Scheduler (Part 2.B).** *`emerge -jN` parallel builds +
-   `--load-average` + build-log capture + the `>>> Jobs:` status line
-   shipped 2026-09-01.* Still missing: `--resume`/`--skipfirst` (mtimedb
-   state), `--ask` / `CLEAN_DELAY`, `elog` / `PORTAGE_ELOG_*`,
+   `--load-average` + build-log capture + the `>>> Jobs:` line + `--ask`
+   / `CLEAN_DELAY` shipped 2026-09-01.* Still missing:
+   `--resume`/`--skipfirst` (mtimedb state), `elog` / `PORTAGE_ELOG_*`,
    `PORTAGE_NICENESS` / `PORTAGE_IONICE_COMMAND`.
 
 3. **Config-resolution depth (Part 2.C).** The `USE_ORDER` layering is
