@@ -34,6 +34,19 @@ pub struct BundleManifest {
 }
 
 impl BundleManifest {
+    /// Render `KEY=VALUE` lines (the client greps these; no spaces in
+    /// keys, values are single-line metadata).
+    pub fn render(&self) -> String {
+        format!(
+            "FORMAT={}\nCPV={}\nSLOT={}\nREPO={}\nHAS_ENVIRONMENT={}\n",
+            self.format,
+            self.cpv,
+            self.slot,
+            self.repo,
+            if self.has_environment { "yes" } else { "no" },
+        )
+    }
+
     /// Parse back; `None` on missing keys, bad `FORMAT`, or multiline
     /// values (fail-closed: a forged manifest never parses half-way).
     pub fn parse(text: &str) -> Option<Self> {
@@ -64,6 +77,68 @@ impl BundleManifest {
             },
         })
     }
+}
+
+/// A staged bundle: the tarball path plus its parsed manifest and the
+/// `category/package-version` the client unpacks as.
+pub struct StagedBundle {
+    /// `bundle.tar` bytes, ready for stdin streaming.
+    pub tarball: PathBuf,
+    /// Server-side `_pkgsplit` values, re-exported by the phase driver
+    /// (they travel outside the saved environment file).
+    pub eapi: String,
+    pub category: String,
+    pub pn: String,
+    pub pv: String,
+    pub pr: String,
+    pub pvr: String,
+    pub p: String,
+    pub pf: String,
+    /// Byte count the client must observe.
+    pub byte_count: u64,
+    /// The manifest shipped inside.
+    pub manifest: BundleManifest,
+    /// Phases the client may run, in order: `pretend`/`setup`/`preinst`
+    /// intersected with the binpkg's own `DEFINED_PHASES`, and only when
+    /// both the ebuild file and the hook environment shipped.
+    pub phases: Vec<String>,
+    /// Whether the client may run `postinst` after the merge (same gate
+    /// as `phases`, checked against the `postinst` word).
+    pub postinst_defined: bool,
+}
+
+/// The client's `${PORTAGE_BZIP2_COMMAND}` stand-in for the merge-time
+/// environment-regeneration postinst run: ignores its arguments and copies
+/// stdin to stdout. Shipped in the runtime `bin` dir; only ever invoked
+/// through Portage's `PORTAGE_UPDATE_ENV` block.
+pub const BZIP2_PASSTHROUGH: &str = "#!/bin/sh\n# Backlog #171: PORTAGE_BZIP2_COMMAND stand-in -- ignore flags, pass stdin through.\nexec cat\n";
+
+/// Copy the ebuild runtime into the bundle: always the files, never
+/// an overlay's symlinks (`cp -aL` dereferences them).
+pub(crate) fn copy_bin_runtime(bin_dir: &Path, dest: &Path) -> Result<(), String> {
+    let status = std::process::Command::new("cp")
+        .args(["-aL"])
+        .arg(bin_dir)
+        .arg(dest)
+        .status()
+        .map_err(|e| format!("failed to spawn cp: {e}"))?;
+    if !status.success() {
+        return Err(format!("cp -aL {} failed ({status})", bin_dir.display()));
+    }
+    Ok(())
+}
+/// Split `PVR` into `(PV, PR)`: trailing `-r<digits>` is the revision,
+/// else `PR` is `"r0"`.
+pub fn split_pvr(pvr: &str) -> (String, String) {
+    if let Some((stem, rev)) = pvr.rsplit_once('-')
+        && rev.starts_with('r')
+        && rev[1..].chars().all(|c| c.is_ascii_digit())
+        && !rev[1..].is_empty()
+        && !stem.is_empty()
+    {
+        return (stem.to_string(), rev.to_string());
+    }
+    (pvr.to_string(), "r0".to_string())
 }
 
 /// EAPI for the driver exports: `build-info/EAPI` first, else the
@@ -101,6 +176,29 @@ pub struct FileMeta {
     pub rel: String,
     /// Symlink target (`sym` only).
     pub target: Option<String>,
+}
+
+/// Render `filemeta` lines: `<kind> <md5|-> <mtime> <relpath>[ <target>]`.
+/// Paths with whitespace or newlines are rejected at build time.
+pub fn render_filemeta(entries: &[FileMeta]) -> Result<String, String> {
+    let mut out = String::new();
+    for entry in entries {
+        if entry.rel.chars().any(|c| c.is_whitespace()) {
+            return Err(format!("image path {:?} has whitespace", entry.rel));
+        }
+        out.push_str(&format!(
+            "{} {} {} {}",
+            entry.kind, entry.md5, entry.mtime, entry.rel
+        ));
+        if let Some(target) = &entry.target {
+            if target.chars().any(|c| c.is_whitespace()) {
+                return Err(format!("symlink target {:?} has whitespace", target));
+            }
+            out.push_str(&format!(" {target}"));
+        }
+        out.push('\n');
+    }
+    Ok(out)
 }
 
 /// Walk `image/` (sorted, like the local `merge_tree`) recording type, MD5
@@ -181,6 +279,16 @@ pub fn select_phases(defined_phases: &str, has_ebuild: bool, has_environment: bo
         .filter(|phase| defined_phases.split_whitespace().any(|word| word == *phase))
         .map(String::from)
         .collect()
+}
+
+/// Arguments of [`build_bundle`].
+pub struct BuildBundleArgs<'a> {
+    pub binpkg_path: &'a Path,
+    pub staging_tmp: &'a Path,
+    pub repo_override: Option<&'a str>,
+    pub gpg: &'a crate::binpkg::GpgVerify,
+    pub install_mask: &'a str,
+    pub install_mask_prunes_usr_share: bool,
 }
 
 #[cfg(test)]
