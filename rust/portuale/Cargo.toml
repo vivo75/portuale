@@ -19,23 +19,26 @@ portage-versions = { path = "../portage-versions" }
 # dependency (this pilot's own "near-zero dependencies" discipline is
 # explicitly waived here, see that doc's own "bash-execution-backend
 # question" writeup) -- pinned to an exact commit on a fork
-# (vivo75/brush, branch fix/pipeline-function-stage-deadlock). See
-# PORTING/BRUSH_FORK.md for the full tracking record. In short:
+# (vivo75/brush). See PORTING/BRUSH_FORK.md for the full tracking record.
+# In short:
 #   - brace-less function bodies (`name() [[ ... ]]`, used 60 times by
 #     bin/eapi.sh): MERGED upstream as reubeno/brush#1274 (18851e7,
-#     2026-08-20); the fork carries a now-redundant pre-merge copy as an
-#     ancestor of this pin.
+#     2026-08-20). This pin (`879d963`) is the fork's own pre-merge copy
+#     of exactly that change on top of upstream `main` -- functionally
+#     identical to post-#1274 upstream.
 #   - pipeline function-stage deadlock (a function used as a non-last
 #     pipeline stage ran inline, deadlocking once it wrote > ~64KiB to
-#     stdout before returning -- found via real app-arch/xz-utils/
-#     sys-fs/fuse hangs, fixed in brush-core/src/commands.rs by mirroring
-#     execute_via_builtin_in_owned_shell's spawn_blocking pattern; see
-#     README.md's eclass section): OPEN upstream as reubeno/brush#1276,
-#     no review yet -- this is the one fork-only fix, the reason the pin
-#     exists. When #1276 merges, re-pin to upstream (BRUSH_FORK.md's
-#     "Rebase / bump checklist").
-brush-core = { git = "https://github.com/vivo75/brush", rev = "c78ea42965023fe0c1b2b708939c44228f262f03" }
-brush-builtins = { git = "https://github.com/vivo75/brush", rev = "c78ea42965023fe0c1b2b708939c44228f262f03" }
+#     stdout before returning): OPEN upstream as reubeno/brush#1276. **No
+#     longer load-bearing for this tree** -- `bin/phase-functions.sh` was
+#     rewritten (brush strategy #2, 2026-09-01) so `__save_ebuild_env`
+#     and `__filter_readonly_variables` stage through a temp file instead
+#     of a pipe, and are never a pipeline stage. The full `portuale`
+#     suite (incl. the `install_does_not_deadlock...` regression) is
+#     green against this pin, which does *not* carry the #1276 patch.
+#   Remaining cleanup (SCOPE_BACKLOG §G): bump to real upstream
+#   `reubeno/brush` `main` after a compat sweep, and drop the fork.
+brush-core = { git = "https://github.com/vivo75/brush", rev = "879d963458a3ee84124d839f922e19552881ae2c" }
+brush-builtins = { git = "https://github.com/vivo75/brush", rev = "879d963458a3ee84124d839f922e19552881ae2c" }
 # "rt-multi-thread", not just "rt": a single-threaded runtime deadlocks
 # partway through a real multi-phase run (confirmed empirically -- see
 # ebuild_phases::run_commands's own doc comment) -- brush-core's own

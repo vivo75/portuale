@@ -4640,16 +4640,19 @@ via `ebuild <file> install` (`portuale/src/ebuild.rs`, previously a pure
 dry-run stub).
 
 **Bash-execution backend**: an embedded [`brush`](https://github.com/reubeno/brush)
-shell (`brush_core::Shell`), pinned by exact commit to the fork
-`vivo75/brush` (branch `fix/pipeline-function-stage-deadlock`). Two real
-fixes: the brace-less function-definition form `name() [[ ... ]]` (used
-60 times by `bin/eapi.sh`) **merged upstream** as
+shell (`brush_core::Shell`), pinned by exact commit (`879d963`) to the
+fork `vivo75/brush`. Its one real fix — the brace-less
+function-definition form `name() [[ ... ]]` (used 60 times by
+`bin/eapi.sh`) — is **merged upstream** as
 [reubeno/brush#1274](https://github.com/reubeno/brush/pull/1274)
-(`18851e7`, 2026-08-20); the pipeline function-stage deadlock fix is
-**fork-only**, open upstream as
-[reubeno/brush#1276](https://github.com/reubeno/brush/pull/1276) — the
-one reason the pin isn't just upstream `main`. Full tracking record and
-the re-pin checklist live in **`PORTING/BRUSH_FORK.md`**. A deliberate,
+(`18851e7`, 2026-08-20); the pin is the fork's own pre-merge copy of
+exactly that, so it's functionally plain upstream. The separate pipeline
+function-stage deadlock (open upstream as
+[reubeno/brush#1276](https://github.com/reubeno/brush/pull/1276)) used to
+force the pin one commit higher, onto a fork-only patch — no longer,
+since **brush strategy #2** (below) rewrote the offending
+`bin/phase-functions.sh` construct instead. Full tracking record and the
+re-pin checklist live in **`PORTING/BRUSH_FORK.md`**. A deliberate,
 accepted departure from this pilot's own near-zero-dependencies
 discipline elsewhere -- the alternative (shelling out to the system's
 real bash) was rejected earlier for tension with the "runs on even the
@@ -5748,8 +5751,7 @@ triggered this; the multilib family (dozens of functions,
 Fixed in the pinned `vivo75/brush` fork (`brush-core/src/commands.rs`),
 and submitted upstream as
 [reubeno/brush#1276](https://github.com/reubeno/brush/pull/1276) (open,
-no review yet -- this is the one fork-only fix keeping the pin off
-upstream `main`; see `PORTING/BRUSH_FORK.md`). The fix splits
+no review yet; see `PORTING/BRUSH_FORK.md`). The fix splits
 `execute_via_function` the same way `execute_via_builtin`
 already was: an owned-shell path that spawns the function's body as a
 background task (`tokio::task::spawn_blocking` + `rt.block_on`,
@@ -5767,6 +5769,14 @@ cached binary. A new regression case (`brush-shell/tests/cases/
 compat/pipeline.yaml`'s own "Function stage writing more than a pipe
 buffer before the next stage is spawned") reproduces the original
 hang under the suite's own 15s per-test timeout.
+
+**Update (2026-09-01):** the pin no longer carries this brush-side fix
+— `brush strategy #2` (see the "brush strategy #2" section near the end)
+rewrote the three `bin/phase-functions.sh` sites so `__save_ebuild_env`
+is never a pipeline stage, and the pin dropped to `879d963` (upstream
+#1274 only). The `bigeclasspkg` regression fixture below is the guard;
+it hangs against `879d963` only when `bin/phase-functions.sh` is
+reverted to the pipe form.
 
 Proven via a new `dev-libs/eclasspkg` fixture with a real (if fixture-
 only) `eclass/pilotcheck.eclass` defining one real function,
@@ -10732,6 +10742,54 @@ every run — strictly better for a chained cross-file move); a `slotmove`
 whose atom carries a version/operator (a no-op in real `update_dbentry`
 too); and `emerge -C` / `--unmerge` bare-name resolution, which keeps
 operating on the physical vdb identity.
+
+### brush strategy #2: `bin/phase-functions.sh` off the fork-only patch
+
+The `brush` backend (see "Bash-execution backend" above) needed one
+fork-only patch — [reubeno/brush#1276](https://github.com/reubeno/brush/pull/1276),
+for a real deadlock when a shell function runs as a *non-last* pipeline
+stage and writes more than the OS pipe buffer (~64 KiB) before
+returning: brush ran it inline, so the next stage that would drain the
+pipe was never spawned. The three places *portage's own* `bin/*.sh` hit
+this were all in `bin/phase-functions.sh` — `__save_ebuild_env |
+__filter_readonly_variables [| bzip2] > file`, where both `__save_ebuild_env`
+(a `declare -f` / `declare -p` dump of everything in scope) and
+`__filter_readonly_variables` are shell functions, and the combined
+output tops 64 KiB once a handful of eclasses are inherited.
+
+`brush strategy #2` = rewrite the offending `bin/*.sh` rather than patch
+brush. A new helper `__save_and_filter_ebuild_env <outfile> [--exclude-init-phases]
+[filter opts]` runs `__save_ebuild_env` to a `${T}` scratch file, then
+`__filter_readonly_variables < scratch > outfile` — a regular file
+always accepts the write, so neither function is ever a pipeline stage.
+`bash -n` clean; behaviourally identical for bash (every pipeline stage
+already forks there). The `bzip2` case (`environment.bz2` for
+`PORTAGE_UPDATE_ENV`) reads the filtered scratch file as a plain
+`bzip2 -c < scratch > out`.
+
+With that, the pin drops from `c78ea429` (which carried #1276) to
+`879d963` (only the upstream-merged #1274). **Proof it's real**: the
+whole `portuale` suite is green against `879d963` — including
+`install_does_not_deadlock_on_an_eclass_scope_larger_than_the_pipe_buffer`
+(the `bigeclasspkg` fixture defines ~400 functions specifically to blow
+past the pipe buffer), which *hangs the 120 s deadline* against
+`879d963` when `bin/phase-functions.sh` is reverted to the pipe form.
+
+```sh
+cd PORTING/rust && cargo build --release && cd ../..
+export PORTAGE_TMPDIR="$(mktemp -d)"
+PORTING/rust/target/release/portuale ebuild \
+    PORTING/fixtures/repo/dev-libs/bigeclasspkg/bigeclasspkg-1.0.ebuild install
+# real phase output, then exit 0 -- promptly, not after a hang
+wc -l < "${PORTAGE_TMPDIR}"/portage/dev-libs/bigeclasspkg-1.0/temp/environment
+# a few thousand lines -- the filtered saved environment
+# __save_and_filter_ebuild_env staged through a temp file, > 64 KiB,
+# which is exactly what used to deadlock the pipe form under brush
+```
+
+Real ebuilds/eclasses in the wild could still pipe a `pkg_*` function
+into something — that would still want #1276 upstream (or its own
+strategy-#2 rewrite). This closed the portage-tree side only.
 
 ## Running it
 

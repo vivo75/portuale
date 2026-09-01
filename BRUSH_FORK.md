@@ -16,14 +16,21 @@ in `portuale/Cargo.toml` changes or an upstream PR moves.**
 
 ## Current pin
 
+> Re-pinned **2026-09-01** from `c78ea429` (which also carried the
+> fork-only pipeline deadlock fix, `reubeno/brush#1276`) down to
+> `879d963` — the deadlock fix is no longer load-bearing for this tree
+> after **brush strategy #2** rewrote `bin/phase-functions.sh` to keep
+> `__save_ebuild_env`/`__filter_readonly_variables` out of any pipeline
+> (see "Fix 2" below).
+
 | | |
 |---|---|
 | Repo | `https://github.com/vivo75/brush` |
-| Rev | `c78ea42965023fe0c1b2b708939c44228f262f03` |
-| Fork branch it lives on | `fix/pipeline-function-stage-deadlock` |
-| Ancestry | `c78ea429` (deadlock fix) → `879d963` (brace-less function bodies, fork copy of #1274) → `ec6fcb2` (upstream `main` at fork time) |
+| Rev | `879d963458a3ee84124d839f922e19552881ae2c` |
+| Fork branch it lives on | `fix/function-body-extended-test` (also an ancestor of `fix/pipeline-function-stage-deadlock`) |
+| Ancestry | `879d963` (brace-less function bodies, fork copy of #1274) → `ec6fcb2` (upstream `main` at fork time) |
 
-The pin is also frozen in `Cargo.lock` (three `git+https://github.com/vivo75/brush?rev=c78ea429…` source lines: `brush-core`, `brush-builtins`, `brush-parser`).
+The pin is also frozen in `Cargo.lock` (three `git+https://github.com/vivo75/brush?rev=879d963…` source lines: `brush-core`, `brush-builtins`, `brush-parser`).
 
 ## Fixes carried, and their upstream status
 
@@ -42,53 +49,59 @@ The pin is also frozen in `Cargo.lock` (three `git+https://github.com/vivo75/bru
   [reubeno/brush#1274](https://github.com/reubeno/brush/pull/1274),
   merge commit **`18851e7`**, 2026-08-20, on `reubeno:main`.
 - **Fork status**: the fork carries its own pre-merge copy of this change
-  (`879d963`, on branch `fix/function-body-extended-test`) as an ancestor
-  of the pin. It is **functionally redundant with upstream `main`** now —
-  a rebase of the pin onto post-`18851e7` upstream would drop `879d963`
-  entirely and keep only fix #2. Not yet done (see "Rebase / bump
+  (`879d963`, on branch `fix/function-body-extended-test`) — this is now
+  **the pin itself**. It is **functionally identical to post-`18851e7`
+  upstream `main`**; a rebase of the pin onto that upstream would drop
+  `879d963` and leave a plain upstream tracking pin (see "Rebase / bump
   checklist").
 
-### 2. Pipeline function-stage deadlock
+### 2. Pipeline function-stage deadlock — *no longer carried*
 
-- **What**: a shell function used as a *non-last* pipeline stage ran
-  inline in brush instead of as a concurrent task, so if it wrote more
-  than the OS pipe buffer (~64 KiB on Linux) to stdout before returning,
-  it deadlocked on that write forever — the next stage had not been
-  spawned to drain the pipe. Hit live-testing real
+- **What it was**: a shell function used as a *non-last* pipeline stage
+  ran inline in brush instead of as a concurrent task, so if it wrote
+  more than the OS pipe buffer (~64 KiB on Linux) to stdout before
+  returning, it deadlocked on that write forever — the next stage had
+  not been spawned to drain the pipe. Hit live-testing real
   `app-arch/xz-utils` / `sys-fs/fuse` once the `multilib` eclass family
-  was in scope (after the eclass `inherit()` support landed). Fix
-  (`brush-core/src/commands.rs`, +72): the owned-shell path spawns the
-  function via `tokio::task::spawn_blocking`, mirroring
-  `execute_via_builtin_in_owned_shell`; the parent-shell path (only the
-  pipeline's final stage) keeps running inline. Regression case in
-  `brush-shell/tests/cases/compat/pipeline.yaml`.
-  See `README.md`'s own "Root-caused down to a real bug in the pinned
-  `brush` fork" writeup for the full grounding.
-- **Upstream**: **OPEN** as
+  was in scope.
+- **Upstream**: still **OPEN** as
   [reubeno/brush#1276](https://github.com/reubeno/brush/pull/1276)
   ("fix(interp): run function pipeline stages as background tasks, not
-  inline"), opened 2026-08-18, 1 commit (`8e8be9a2`), **no review yet**.
-  The PR commit is a separately-authored version of the same fix, not
-  literally the pinned `c78ea429`.
-- **Fork status**: **fork-only** — this is the reason the pin exists.
-  The fork also has a `fix/pipeline-function-stage-deadlock2` branch
-  (an alternative take on the same fix); the pin is on the non-`2` one.
+  inline"), **no review yet**. brush's own bug regardless.
+- **Why the pin no longer needs it (brush strategy #2, 2026-09-01)**:
+  the only place *this repo's own* `bin/*.sh` hit the construct was
+  three `__save_ebuild_env | __filter_readonly_variables [| bzip2]`
+  pipes in `bin/phase-functions.sh` (both stages shell functions whose
+  combined output routinely tops 64 KiB once a few eclasses are in
+  scope). A new helper `__save_and_filter_ebuild_env` stages the two
+  through a regular file in `${T}` — neither is a pipeline stage any
+  more, so the construct is gone. `bash -n` clean, behaviourally
+  identical for bash. **Verified**: the whole `portuale` test suite —
+  including `install_does_not_deadlock_on_an_eclass_scope_larger_than_
+  the_pipe_buffer` (the `bigeclasspkg` fixture, ~400 functions) — is
+  green against `879d963`, which does **not** carry the #1276 patch
+  (it hangs the 120 s deadline without the script rewrite).
+- Real ebuilds/eclasses in the wild could still exercise the construct
+  (a `pkg_*` function piped into something in an eclass, say) — that
+  would want #1276 (or its own strategy-#2 rewrite). This closed only
+  the portage-tree side.
 
 ## Rebase / bump checklist
 
-Do this when #1276 merges, or periodically (upstream `main` moves fast —
-e.g. it was at `#1298` by 2026-08-24, four days after #1274 merged).
+The pin no longer carries a fork-only *behaviour* fix (see Fix 2) — it
+carries only `879d963`, the fork's own copy of the upstream-merged
+#1274. So the remaining move is a plain "track upstream" bump, do it
+periodically (upstream `main` moves fast — it was at `#1298` by
+2026-08-24, four days after #1274 merged).
 
-1. **If #1276 merged** and no other fork-only fix is needed: switch the
-   `portuale/Cargo.toml` pin to **upstream** `reubeno/brush` at a commit
-   at/after both `18851e7` and the #1276 merge, delete this section's
-   "fork-only" note, and consider dropping this file (or reducing it to
-   "we track upstream `main` at rev X").
-2. **If #1276 is still open** but you want newer upstream: on the fork,
-   rebase `fix/pipeline-function-stage-deadlock` onto current upstream
-   `main` (this drops the now-merged `879d963`), force-push, re-pin
-   `portuale/Cargo.toml` + `Cargo.lock` to the new fork head, update
-   the "Current pin" table above.
+1. **Preferred**: switch the `portuale/Cargo.toml` pin to **upstream**
+   `reubeno/brush` at a commit at/after `18851e7` (the #1274 merge),
+   drop `879d963` and the fork, and reduce this file to "we track
+   upstream `main` at rev X" (or delete it).
+2. If newer upstream turns out to have its own regressions, carry a
+   fresh fork branch rebased onto current upstream `main` with only the
+   needed fix, re-pin `portuale/Cargo.toml` + `Cargo.lock`, and record
+   it here.
 3. **Either way**, after re-pinning:
    - `cargo test -p portuale -- --test-threads=6` green;
    - a real end-to-end phase run still works — the pipeline-deadlock
@@ -100,9 +113,12 @@ e.g. it was at `#1298` by 2026-08-24, four days after #1274 merged).
 
 ## What is *not* a fork concern
 
-Only these two constructs have been proven fixed against brush. Real
-ebuilds/eclasses in the wild almost certainly exercise other bash
-constructs not yet tried — this was targeted spike-and-fix work, not an
-exhaustive compat sweep. New brush incompatibilities found later are
-their own slices (fix upstream first, carry on the fork only if
-blocking), tracked here as they arise.
+Only two brush constructs were ever proven to matter here: brace-less
+function bodies (Fix 1, upstream-merged, this pin's sole content) and
+the pipeline function-stage deadlock (Fix 2, worked around in
+`bin/phase-functions.sh` rather than in brush). Real ebuilds/eclasses
+in the wild almost certainly exercise other bash constructs not yet
+tried — this was targeted spike-and-fix work, not an exhaustive compat
+sweep. New brush incompatibilities found later are their own slices
+(fix upstream first, or rewrite the offending `bin/*.sh` — brush
+strategy #2 — if it's portage-tree code), tracked here as they arise.

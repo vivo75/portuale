@@ -309,11 +309,20 @@ dev/test context — see also the `chown` note below).
 
 ### G. Shell backend
 
-- **brush strategy #2** — rewrite this repo's own `bin/*.sh` to avoid
-  brush-hostile constructs (low-risk, immediately effective for this tree).
-- The actual bump to upstream `brush` (blocked on
-  [reubeno/brush#1276](https://github.com/reubeno/brush/pull/1276)) +
-  periodic rebase. See `BRUSH_FORK.md`.
+- ~~**brush strategy #2** — rewrite this repo's own `bin/*.sh` to avoid
+  brush-hostile constructs.~~ **Done 2026-09-01** — the only
+  function-as-non-last-pipeline-stage in `bin/*.sh` was the three
+  `__save_ebuild_env | __filter_readonly_variables [| bzip2]` pipes in
+  `bin/phase-functions.sh`; a new `__save_and_filter_ebuild_env` helper
+  stages both functions through a `${T}` temp file instead. The brush
+  pin dropped from `c78ea429` (fork-only deadlock fix `reubeno/brush#1276`)
+  to `879d963` (just the upstream-merged #1274), full `portuale` suite
+  green — incl. the `install_does_not_deadlock…` regression, which hangs
+  the deadline against `879d963` *without* the script rewrite. See
+  `BRUSH_FORK.md` and README's "brush strategy #2".
+- The actual bump to upstream `brush` — now a plain "track upstream"
+  move (#1276 no longer load-bearing): pin to `reubeno/brush` `main`
+  at/after `18851e7` and drop the fork. See `BRUSH_FORK.md`'s checklist.
 
 ### H. Misc / cosmetic
 
