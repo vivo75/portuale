@@ -399,6 +399,13 @@ fn split_cpv(cpv: &str) -> Option<(&str, &str)> {
     None
 }
 
+/// Clears `mtimedb["resume"]` after a successful `--resume` run. Only ever
+/// removes `resume` itself, leaving `resume_backup` (if any) untouched.
+pub fn clear_resume_list(root: &Path) {
+    let backup = read_section(root, "resume_backup");
+    let _ = write_sections(root, None, backup.as_ref(), Some(&read_info_mtimes(root)));
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -406,5 +413,124 @@ mod tests {
 
     fn tmproot() -> std::path::PathBuf {
         TempDir::new("mtimedb_test").keep()
+    }
+
+    #[test]
+    fn info_mtimes_accepts_a_foreign_float_and_reads_empty_as_empty() {
+        let root = tmproot();
+        // Absent file -> empty memo: nothing recorded yet.
+        assert!(read_info_mtimes(&root).is_empty());
+
+        std::fs::create_dir_all(mtimedb_path(&root).parent().unwrap()).unwrap();
+        std::fs::write(
+            mtimedb_path(&root),
+            "{\n\t\"info\": {\n\t\t\"/usr/share/info\": 1700000000.0\n\t}\n}\n",
+        )
+        .unwrap();
+        let mtimes = read_info_mtimes(&root);
+        assert_eq!(mtimes.get("/usr/share/info"), Some(&1_700_000_000));
+
+        // Clearing the memo stores nothing for `info` (no resume
+        // sections either, so the file goes away entirely).
+        write_info_mtimes(&root, &BTreeMap::new()).unwrap();
+        assert!(!mtimedb_path(&root).exists());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn write_then_read_round_trips_the_resume_list() {
+        let root = tmproot();
+        write_resume_list(
+            &root,
+            &["dev-libs/foo", "dev-libs/bar"],
+            &[
+                (
+                    ResumeEntryKind::Ebuild,
+                    "dev-libs".to_string(),
+                    "leaf-a".to_string(),
+                    "1.0".to_string(),
+                ),
+                (
+                    ResumeEntryKind::Ebuild,
+                    "dev-libs".to_string(),
+                    "leaf-b".to_string(),
+                    "2.3-r1".to_string(),
+                ),
+            ],
+            &ResumeOpts {
+                oneshot: true,
+                onlydeps: false,
+            },
+        )
+        .unwrap();
+
+        let (favs, merges, opts) = read_resume_list(&root).expect("a resume list");
+        assert_eq!(favs, vec!["dev-libs/foo", "dev-libs/bar"]);
+        assert_eq!(
+            merges,
+            vec![
+                (
+                    ResumeEntryKind::Ebuild,
+                    "dev-libs".to_string(),
+                    "leaf-a".to_string(),
+                    "1.0".to_string()
+                ),
+                (
+                    ResumeEntryKind::Ebuild,
+                    "dev-libs".to_string(),
+                    "leaf-b".to_string(),
+                    "2.3-r1".to_string()
+                ),
+            ]
+        );
+        assert_eq!(
+            opts,
+            ResumeOpts {
+                oneshot: true,
+                onlydeps: false
+            }
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_mixed_ebuild_and_binary_mergelist_round_trips_its_own_kind_tags() {
+        // A resume mergelist can hold both entry types together.
+        let root = tmproot();
+        let mergelist = vec![
+            (
+                ResumeEntryKind::Ebuild,
+                "dev-libs".to_string(),
+                "src-pkg".to_string(),
+                "1.0".to_string(),
+            ),
+            (
+                ResumeEntryKind::Binary,
+                "dev-libs".to_string(),
+                "bin-pkg".to_string(),
+                "2.0".to_string(),
+            ),
+        ];
+        write_resume_list(&root, &[], &mergelist, &ResumeOpts::default()).unwrap();
+
+        let (_, merges, _) = read_resume_list(&root).expect("a resume list");
+        assert_eq!(merges, mergelist);
+        assert_eq!(merges[0].0, ResumeEntryKind::Ebuild);
+        assert_eq!(merges[1].0, ResumeEntryKind::Binary);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn remove_merged_entry_without_any_resume_file_is_a_noop() {
+        let root = tmproot();
+        let ghost = (
+            ResumeEntryKind::Ebuild,
+            "dev-libs".to_string(),
+            "ghost".to_string(),
+            "1".to_string(),
+        );
+        remove_merged_entry(&root, &ghost);
+        assert!(!mtimedb_path(&root).exists());
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

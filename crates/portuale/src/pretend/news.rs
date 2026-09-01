@@ -264,6 +264,14 @@ pub(crate) fn display_news_notice_if_any(
     print_news_notifications(&per_repo, color)
 }
 
+/// Arguments of [`offer_news_reading`].
+pub(crate) struct OfferNewsReadingArgs<'a> {
+    pub(crate) ask: bool,
+    pub(crate) read_news: bool,
+    pub(crate) notice_printed: bool,
+    pub(crate) color: &'a Colorizer,
+}
+
 /// On a `--pretend` run, still print the count notice at the end, even when
 /// resolution failed. `--json` stays machine-readable: no notice there.
 /// Portage: post_emerge.py, post_emerge

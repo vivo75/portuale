@@ -10206,4 +10206,37 @@ files or send mail — deferred); binpkg-merge and `-C`/unmerge `pkg_*`
 elog output isn't collected yet; `PORTAGE_ELOG_CLASSES` is env-only (no
 `make.conf`).
 
+### `emerge --resume` / `--skipfirst`
+
+Real `_emerge/Scheduler.py::_save_resume_list` + the `--resume` handling
+in `_emerge/actions.py`. When a source `emerge <atoms>` merge fails,
+`mtimedb::write_resume_list` writes `${ROOT}/var/cache/edb/mtimedb`'s
+`resume` key — `favorites` (the atom args) + `mergelist` (`["ebuild",
+<root>, "<cat/pkg-ver>", "merge"]` per package still without a `CONTENTS`
+under the vdb) — and prints the `Use \`emerge --resume\`` hint.
+
+`emerge --resume` (a standalone action, no atoms) reads that list back
+(`read_resume_list` — regex-extracted, not a full JSON parse) and
+rebuilds+merges each `cat/pkg-ver` in order via minimal
+`emerge_build::resume_entry` `GraphEntry`s; `--skipfirst` drops the first
+(the one that failed). On success the resume list is cleared and the
+saved `favorites` go into the world file; on another failure the still-
+unmerged tail is re-saved.
+
+`mtimedb["resume"]["myopts"]` records the two flags that change how the
+mergelist replays — **`--oneshot`** and **`--onlydeps`** (`ResumeOpts`):
+`--resume` honours whichever was set, so a failed `emerge --oneshot`
+then `emerge --resume` no longer wrongly adds the recovered packages to
+`world`. `test_emerge_resume_carries_the_oneshot_flag` pins it
+(`myopts == {"--oneshot": true}`, `world` stays empty after the resume).
+
+The file is real portage's JSON `mtimedb`, written real-compatibly
+(tab-indented) — but portuale does **not** preserve any other top-level
+keys an existing one had (`info` / `ldpath` / `updates` are `--sync` /
+`env-update` state it never manages). v1 cuts: no `resume_backup`
+rotation; `--resume --pretend` doesn't print the saved list; a saved
+binary entry is replayed as source; the build-time `myopts`
+(`--usepkg` etc.) aren't carried (bundled with the binary-entry-replay
+cut).
+
 # # required by dev-libs/useflagpkg[-foo] (argument)

@@ -1490,6 +1490,120 @@ fn parse_build_opts<'a>(
     }
 }
 
+/// Standalone query and removal actions. Returns whether the token was consumed.
+fn parse_query_opts<'a>(
+    opts: &mut EmergeOpts<'a>,
+    args: &'a [String],
+    idx: &mut usize,
+    arg: &'a str,
+) -> Result<bool, ExitCode> {
+    if arg == "--list-sets" {
+        opts.list_sets = true;
+        *idx += 1;
+        Ok(true)
+    } else if arg == "--search" || arg == "-s" {
+        // The search terms are the remaining positional args.
+        opts.search_action = true;
+        *idx += 1;
+        Ok(true)
+    } else if arg == "--searchdesc" || arg == "-S" {
+        // Implies `--search`, and also matches DESCRIPTION.
+        opts.search_action = true;
+        opts.searchdesc = true;
+        *idx += 1;
+        Ok(true)
+    } else if arg == "--fuzzy-search" || arg.starts_with("--fuzzy-search=") {
+        let val = if let Some(v) = arg.strip_prefix("--fuzzy-search=") {
+            *idx += 1;
+            v.to_string()
+        } else if matches!(
+            args.get(*idx + 1).map(String::as_str),
+            Some("y" | "n" | "True")
+        ) {
+            *idx += 2;
+            args[*idx - 1].clone()
+        } else {
+            *idx += 1;
+            "y".to_string()
+        };
+        opts.fuzzy_search = !matches!(val.as_str(), "n" | "N");
+        Ok(true)
+    } else if arg == "--regex-search-auto" || arg.starts_with("--regex-search-auto=") {
+        let val = if let Some(v) = arg.strip_prefix("--regex-search-auto=") {
+            *idx += 1;
+            v.to_string()
+        } else if matches!(args.get(*idx + 1).map(String::as_str), Some("y" | "n")) {
+            *idx += 2;
+            args[*idx - 1].clone()
+        } else {
+            *idx += 1;
+            "y".to_string()
+        };
+        opts.regex_search_auto = !matches!(val.as_str(), "n" | "N");
+        Ok(true)
+    } else if arg == "--search-similarity" || arg.starts_with("--search-similarity=") {
+        let val = if let Some(v) = arg.strip_prefix("--search-similarity=") {
+            *idx += 1;
+            v.to_string()
+        } else if let Some(v) = args.get(*idx + 1) {
+            *idx += 2;
+            v.clone()
+        } else {
+            eprintln!("emerge: option '--search-similarity' requires a value");
+            return Err(ExitCode::from(2));
+        };
+        // Must parse as a float in [0, 100].
+        match val.parse::<f64>() {
+            Ok(n) if (0.0..=100.0).contains(&n) => opts.search_similarity = n,
+            Ok(_) => {
+                eprintln!(
+                    "emerge: Invalid --search-similarity parameter (not between 0 and 100): '{val}'"
+                );
+                return Err(ExitCode::from(2));
+            }
+            Err(_) => {
+                eprintln!("emerge: Invalid --search-similarity parameter (not a number): '{val}'");
+                return Err(ExitCode::from(2));
+            }
+        }
+        Ok(true)
+    } else if arg == "--check-news" {
+        opts.check_news = true;
+        *idx += 1;
+        Ok(true)
+    } else if arg == "--regen" {
+        opts.regen_action = true;
+        *idx += 1;
+        Ok(true)
+    } else if arg == "--metadata" {
+        opts.metadata_action = true;
+        *idx += 1;
+        Ok(true)
+    } else if arg == "--sync" {
+        opts.sync_action = true;
+        *idx += 1;
+        Ok(true)
+    } else if arg == "--clean" {
+        opts.clean_action = true;
+        *idx += 1;
+        Ok(true)
+    } else if arg == "--rage-clean" {
+        opts.rage_clean = true;
+        *idx += 1;
+        Ok(true)
+    } else if arg == "--info" {
+        opts.info_action = true;
+        *idx += 1;
+        Ok(true)
+    } else if arg == "--skipfirst" || arg == "--skip-first" {
+        opts.skipfirst = true;
+        *idx += 1;
+        Ok(true)
+    } else {
+        Ok(false)
+    }
+}
+
 /// Parallelism and test-dep flags. Returns whether the token was consumed.
 fn parse_jobs_opts<'a>(
     opts: &mut EmergeOpts<'a>,
