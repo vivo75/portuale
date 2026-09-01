@@ -195,6 +195,45 @@ pub struct MergeUnit {
     pub progress: MergeProgress,
 }
 
+/// The execution context a merge engine runs under: Portage
+/// `_emerge/Scheduler.py`'s two knobs (`--jobs`, `--keep-going`) plus the
+/// paths the merge writes to. Deliberately coarse.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MergeContext {
+    /// The `${ROOT}` the engine merges into.
+    pub root: PathBuf,
+    /// `PORTAGE_TMPDIR`-adjacent build root (`${PORTAGE_BUILDDIR}` base).
+    pub builddir: PathBuf,
+    /// Max concurrent builds (`--jobs=N`; 1 = serial).
+    pub jobs: usize,
+    /// On a unit failure, drop its transitive dependents and merge the
+    /// rest instead of aborting (Portage `Scheduler._calc_resume_list`).
+    pub keep_going: bool,
+}
+
+/// The coarse three-valued outcome Portage reports in the `>>>`/`!!!`
+/// merge lines. An engine returns one per [`MergeUnit`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MergeOutcome {
+    /// The unit merged (vdb entry written).
+    Merged,
+    /// The unit failed; carries the `!!!` line's explanation.
+    Failed(String),
+    /// The unit was skipped (a `--keep-going` dependent of a failure, or
+    /// a fetch-only dry pass); carries the reason.
+    Skipped(String),
+}
+
+/// An **ebuild merge method**: whatever turns merge units into an
+/// installed system. One call per unit; the director owns ordering and
+/// failure policy, the engine owns the copy/install.
+/// Portage: `_emerge/PackageMerge.py` + `vartree.py::dblink.merge()`.
+pub trait MergeEngine {
+    /// Execute `unit` under `ctx`. Safe to call concurrently up to
+    /// `ctx.jobs` for the *build* half; the vdb-write half is serialized.
+    fn execute(&self, unit: &MergeUnit, ctx: &MergeContext) -> MergeOutcome;
+}
+
 // ---------------------------------------------------------------------------
 // BinpkgIndex
 // ---------------------------------------------------------------------------
@@ -263,6 +302,24 @@ pub trait NewsSelector {
     /// The repo whose `metadata/news` this selector reads, for the
     /// `… news items need reading for repository '<repo>'.` line.
     fn repo_name(&self) -> String;
+}
+
+// ---------------------------------------------------------------------------
+// SchedulerPolicy
+// ---------------------------------------------------------------------------
+
+/// A **build-scheduler dispatch policy**: when the `-jN` merge DAG may
+/// start another build. A different scheduler shape changes only this
+/// method, never the DAG walk that calls it.
+/// Portage: `_emerge/Scheduler.py::Scheduler._run` (bounded by `--jobs`
+/// and `--load-average`; the first build is always allowed).
+pub trait SchedulerPolicy {
+    /// Whether to dispatch another build now (`running` in flight,
+    /// `loadavg_1min` from `/proc/loadavg`); `running == 0` is unconditional.
+    fn should_start(&self, running: usize, loadavg_1min: f64) -> bool;
+
+    /// The hard concurrency ceiling (`--jobs=N`; 1 = serial merge).
+    fn max_jobs(&self) -> usize;
 }
 
 // ---------------------------------------------------------------------------
@@ -444,6 +501,120 @@ impl BinpkgIndex for PkgdirBinIndex<'_> {
     }
     fn source_name(&self) -> String {
         self.pkgdir.to_string_lossy().into_owned()
+    }
+}
+
+/// The remote `PORTAGE_BINHOST` `BinpkgIndex`: the synced-`Packages`
+/// source behind `--getbinpkg`. The "second implementation per slot"
+/// (see notes for the shadowing and remote-only rules).
+pub struct RemoteBinhostIndex<'a> {
+    /// The resolved binhost configuration, Portage `BinRepoConfig` values.
+    pub config: &'a portage_profile::Config,
+    /// The `root` whose `$PKGDIR` the sync lands in.
+    pub root: &'a Path,
+    /// The local `$PKGDIR` index (locally-provided remotes are shadowed
+    /// out, Portage `bintree.isremote`).
+    pub local: &'a portage_repo::BinaryIndex,
+}
+impl BinpkgIndex for RemoteBinhostIndex<'_> {
+    fn candidates(&self, category: &str, package: &str) -> Vec<portage_repo::Candidate> {
+        portage_repo::list_remote_binary_candidates(
+            &self.config.binrepos,
+            self.root,
+            self.local,
+            category,
+            package,
+        )
+    }
+    fn metadata(
+        &self,
+        category: &str,
+        package: &str,
+        version: &str,
+    ) -> Option<std::collections::HashMap<String, String>> {
+        portage_repo::read_binary_metadata_any(portage_repo::ReadBinaryMetadataAnyArgs {
+            config: self.config,
+            root: self.root,
+            local: self.local,
+            category,
+            package,
+            version,
+        })
+    }
+    fn metadata_with_source(
+        &self,
+        category: &str,
+        package: &str,
+        version: &str,
+    ) -> Option<(String, std::collections::HashMap<String, String>)> {
+        // Remote-only, binrepos in order, first CPV hit wins, carrying
+        // the owning binrepo's name for its `sync-uri`.
+        self.metadata_with_source_instance(category, package, version, None)
+    }
+    fn metadata_with_source_instance(
+        &self,
+        category: &str,
+        package: &str,
+        version: &str,
+        build_id: Option<&str>,
+    ) -> Option<(String, std::collections::HashMap<String, String>)> {
+        portage_repo::find_remote_binpkg_instance(portage_repo::FindRemoteBinpkgInstanceArgs {
+            binrepos: &self.config.binrepos,
+            root: self.root,
+            category,
+            package,
+            version,
+            build_id,
+        })
+        .map(|(binrepo, m)| (binrepo.name.clone(), m))
+    }
+    fn source_name(&self) -> String {
+        self.config
+            .binrepos
+            .iter()
+            .map(|b| b.name.clone())
+            .collect::<Vec<_>>()
+            .join(",")
+    }
+}
+
+/// The capped-jobs `SchedulerPolicy`: start another build while
+/// `running < jobs` and under the `--load-average` ceiling (never gating
+/// the first build). One of two implementations (the other is
+/// [`UnlimitedPolicy`]); `run_build_scheduler` runs under one of them.
+#[derive(Debug, Clone, Copy)]
+pub struct LoadAwarePolicy {
+    /// `--jobs` ceiling (`max_jobs`).
+    jobs: usize,
+    /// `--load-average` ceiling; `None` disables load gating.
+    load_average: Option<f64>,
+}
+impl LoadAwarePolicy {
+    /// A policy for `--jobs=jobs` with an optional `--load-average`
+    /// ceiling -- the scheduler shape `run_build_scheduler` runs under.
+    pub fn new(jobs: usize, load_average: Option<f64>) -> Self {
+        Self { jobs, load_average }
+    }
+}
+impl Default for LoadAwarePolicy {
+    fn default() -> Self {
+        // Portage's default scheduler is unbounded (bare `-j`); the
+        // portable default here is serial and ungated.
+        Self {
+            jobs: 1,
+            load_average: None,
+        }
+    }
+}
+impl SchedulerPolicy for LoadAwarePolicy {
+    fn should_start(&self, running: usize, loadavg_1min: f64) -> bool {
+        // The first build is always allowed; additional ones only under
+        // the ceilings.
+        running == 0
+            || (running < self.jobs && self.load_average.is_none_or(|la| loadavg_1min <= la))
+    }
+    fn max_jobs(&self) -> usize {
+        self.jobs
     }
 }
 

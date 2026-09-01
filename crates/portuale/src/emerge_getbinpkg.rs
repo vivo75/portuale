@@ -12,6 +12,7 @@
 
 use crate::ebuild_merge::{self, MergeOptions};
 use mrg_director::BinpkgIndex;
+use mrg_director::MergeEngine;
 use portage_profile::{BinRepo, Config};
 use portage_repo::{GraphEntry, PretendOutcome, RepoConfig};
 use std::path::Path;

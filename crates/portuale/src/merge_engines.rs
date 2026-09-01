@@ -5,7 +5,7 @@
 //! per-unit execution, not DAG scheduling.
 // Portage: MergeListItem.py, _start
 
-use mrg_director::{MergeKind, MergeUnit};
+use mrg_director::{MergeContext, MergeEngine, MergeKind, MergeOutcome, MergeUnit};
 use portage_repo::{CandidateSource, GraphEntry, PretendOutcome, RepoConfig};
 use std::path::Path;
 
