@@ -698,6 +698,86 @@ fn parse_depth_opts<'a>(
     }
 }
 
+/// Repeatable atom-list flags. Returns whether the token was consumed.
+fn parse_atom_list_opts<'a>(
+    opts: &mut EmergeOpts<'a>,
+    args: &'a [String],
+    idx: &mut usize,
+    arg: &'a str,
+) -> Result<bool, ExitCode> {
+    if arg == "--exclude" || arg == "-X" {
+        // Repeatable; each value is itself a space-separated atom list.
+        // A missing value is a usage error.
+        let Some(value) = args.get(*idx + 1) else {
+            eprintln!("emerge: option \"--exclude\" requires an argument");
+            return Err(ExitCode::from(2));
+        };
+        opts.excluded
+            .extend(value.split_whitespace().map(String::from));
+        *idx += 2;
+        Ok(true)
+    } else if let Some(value) = arg.strip_prefix("--exclude=") {
+        opts.excluded
+            .extend(value.split_whitespace().map(String::from));
+        *idx += 1;
+        Ok(true)
+    } else if arg == "--reinstall-atoms" {
+        let Some(value) = args.get(*idx + 1) else {
+            eprintln!("emerge: option \"--reinstall-atoms\" requires an argument");
+            return Err(ExitCode::from(2));
+        };
+        opts.reinstall_atoms
+            .extend(value.split_whitespace().map(String::from));
+        *idx += 2;
+        Ok(true)
+    } else if let Some(value) = arg.strip_prefix("--reinstall-atoms=") {
+        opts.reinstall_atoms
+            .extend(value.split_whitespace().map(String::from));
+        *idx += 1;
+        Ok(true)
+    } else if arg == "--useoldpkg-atoms" {
+        let Some(value) = args.get(*idx + 1) else {
+            eprintln!("emerge: option \"--useoldpkg-atoms\" requires an argument");
+            return Err(ExitCode::from(2));
+        };
+        opts.useoldpkg_atoms
+            .extend(value.split_whitespace().map(String::from));
+        *idx += 2;
+        Ok(true)
+    } else if let Some(value) = arg.strip_prefix("--useoldpkg-atoms=") {
+        opts.useoldpkg_atoms
+            .extend(value.split_whitespace().map(String::from));
+        *idx += 1;
+        Ok(true)
+    } else if arg == "--rebuild-exclude" || arg == "--rebuild-ignore" {
+        let is_exclude = arg == "--rebuild-exclude";
+        let Some(value) = args.get(*idx + 1) else {
+            eprintln!("emerge: option \"{arg}\" requires an argument");
+            return Err(ExitCode::from(2));
+        };
+        let dst = if is_exclude {
+            &mut opts.rebuild_exclude
+        } else {
+            &mut opts.rebuild_ignore
+        };
+        dst.extend(value.split_whitespace().map(String::from));
+        *idx += 2;
+        Ok(true)
+    } else if let Some(value) = arg.strip_prefix("--rebuild-exclude=") {
+        opts.rebuild_exclude
+            .extend(value.split_whitespace().map(String::from));
+        *idx += 1;
+        Ok(true)
+    } else if let Some(value) = arg.strip_prefix("--rebuild-ignore=") {
+        opts.rebuild_ignore
+            .extend(value.split_whitespace().map(String::from));
+        *idx += 1;
+        Ok(true)
+    } else {
+        Ok(false)
+    }
+}
+
 /// Rebuild-trigger flags. Returns whether the token was consumed.
 fn parse_rebuild_opts<'a>(
     opts: &mut EmergeOpts<'a>,
@@ -2274,4 +2354,33 @@ fn parse_tail_opts<'a>(
     } else {
         Err(report_option(arg))
     }
+}
+
+/// Parses `args` into [`EmergeOpts`]. `Err` carries the exit code of an
+/// option error, already reported.
+pub(crate) fn parse_emerge_args(args: &[String]) -> Result<EmergeOpts<'_>, ExitCode> {
+    let mut opts = EmergeOpts::default();
+    let mut i = 0;
+    while i < args.len() {
+        let arg = args[i].as_str();
+        let _consumed = parse_prompt_opts(&mut opts, args, &mut i, arg)?
+            || parse_mode_opts(&mut opts, args, &mut i, arg)?
+            || parse_display_opts(&mut opts, args, &mut i, arg)?
+            || parse_depth_opts(&mut opts, args, &mut i, arg)?
+            || parse_atom_list_opts(&mut opts, args, &mut i, arg)?
+            || parse_rebuild_opts(&mut opts, args, &mut i, arg)?
+            || parse_graph_opts(&mut opts, args, &mut i, arg)?
+            || parse_output_opts(&mut opts, args, &mut i, arg)?
+            || parse_action_opts(&mut opts, args, &mut i, arg)?
+            || parse_toggle_opts(&mut opts, args, &mut i, arg)?
+            || parse_build_opts(&mut opts, args, &mut i, arg)?
+            || parse_query_opts(&mut opts, args, &mut i, arg)?
+            || parse_jobs_opts(&mut opts, args, &mut i, arg)?
+            || parse_autounmask_opts(&mut opts, args, &mut i, arg)?
+            || parse_autounmask_scope_opts(&mut opts, args, &mut i, arg)?
+            || parse_binpkg_opts(&mut opts, args, &mut i, arg)?
+            || parse_quickpkg_opts(&mut opts, args, &mut i, arg)?
+            || parse_tail_opts(&mut opts, &mut i, arg)?;
+    }
+    Ok(opts)
 }
