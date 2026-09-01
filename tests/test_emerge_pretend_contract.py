@@ -9132,15 +9132,14 @@ def test_real_option_inline_equals_form_is_still_recognized(emerge_binary, fixtu
 
 
 def test_real_action_not_implemented_message_says_action_not_option(emerge_binary, fixture_env):
-    """--search is a real emerge action (see main.py's actions
-    frozenset), not an option -- the error must say "action", and its
-    short alias -s (see shortmapping) must report the same canonical
-    "--search" name. (--depclean/-c and --unmerge/-C used to be the
-    example here; both are implemented now.)"""
-    result = _run([str(emerge_binary)], ["--search"], fixture_env)
+    """--sync is a real emerge action (see main.py's actions frozenset),
+    not an option -- the error must say "action". (--search/--depclean/
+    --unmerge used to be the example here; all implemented now. --sync
+    stays a documented non-goal -- repo network syncing.)"""
+    result = _run([str(emerge_binary)], ["--sync"], fixture_env)
     assert result.returncode == 2
     expected = (
-        'emerge (pilot v1): action "--search" is a real emerge action, but is not '
+        'emerge (pilot v1): action "--sync" is a real emerge action, but is not '
         "implemented in this pilot (only --pretend/-p, --verbose/-v, --newuse/-N, --changed-use/-U, --nodeps/-O, "
         "--onlydeps/-o, --update/-u, --deep/-D, --exclude/-X, --deselect/-W, --unmerge/-C, --depclean/-c, --prune/-P, --config, "
         "--with-bdeps, --with-bdeps-auto, --changed-deps, --changed-deps-report, --changed-slot, --verbose-slot-rebuilds, --ignore-built-slot-operator-deps, --buildpkg/-b, --buildpkg-exclude, --with-test-deps, "
@@ -9148,9 +9147,45 @@ def test_real_action_not_implemented_message_says_action_not_option(emerge_binar
     )
     assert result.stderr.strip() == expected
 
-    short_result = _run([str(emerge_binary)], ["-s"], fixture_env)
-    assert short_result.returncode == 2
-    assert short_result.stderr.strip() == expected
+
+def test_list_sets_prints_the_defined_set_names(emerge_binary, emerge_pretend_python, fixture_env):
+    """emerge --list-sets (real _emerge/actions.py:3839): every defined
+    package-set name, sorted, one per line -- the cnf/sets/portage.conf
+    built-ins plus the fixture's own user set files. Rust == Python."""
+    rust = _run([str(emerge_binary)], ["--list-sets"], fixture_env)
+    py = _run(emerge_pretend_python, ["--list-sets"], fixture_env)
+    assert rust.returncode == 0
+    assert rust.stdout == py.stdout
+    lines = rust.stdout.splitlines()
+    assert lines == sorted(lines)
+    assert "world" in lines and "system" in lines and "selected" in lines
+    # user sets from PORTING/fixtures/etc/portage/sets/
+    assert "dualslotset" in lines
+    # the [usersets] multiset generator section is NOT a set name
+    assert "usersets" not in lines
+
+
+@pytest.mark.parametrize(
+    "args",
+    [
+        ["--search", "newpkg"],
+        ["-s", "useflagpkg"],
+        ["-s", "nomatchanywhere"],
+        ["-sv", "useflagpkg"],
+        ["--searchdesc", "fixture"],
+        ["-S", "overlay"],
+        ["-s", "dev-libs/newpkg"],
+    ],
+)
+def test_search_matches_rust_and_python(emerge_binary, emerge_pretend_python, fixture_env, args):
+    """emerge --search/-s (--searchdesc/-S also matches DESCRIPTION):
+    real action_search / search.output() shape. Rust == Python."""
+    rust = _run([str(emerge_binary)], args, fixture_env)
+    py = _run(emerge_pretend_python, args, fixture_env)
+    assert rust.returncode == 0
+    assert rust.stdout == py.stdout
+    assert "[ Results for search key :" in rust.stdout
+    assert "[ Applications found :" in rust.stdout
 
 
 def test_genuinely_unrecognized_option_gets_a_distinct_message(emerge_binary, fixture_env):

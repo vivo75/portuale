@@ -4126,6 +4126,236 @@ fn run_depclean_pretend(
     unmerge_rc
 }
 
+/// Real `emerge --list-sets` (`_emerge/actions.py:3839` --
+/// `writemsg_stdout("".join(f"{s}\n" for s in sorted(...sets)))`): every
+/// defined package-set name, sorted, one per line. The built-in names
+/// are `cnf/sets/portage.conf`'s own `[section]` headers (real
+/// `SetConfig._parse` over the bundled default config), skipping the
+/// `multiset = true` `[usersets]` generator (its members are the user
+/// set *files*, added below), plus every file under
+/// `<config_root>/etc/portage/sets/` (real `usersets.multiBuilder`).
+fn run_list_sets(config_root: &Path) -> ExitCode {
+    let mut names = defined_set_names(config_root);
+    names.sort();
+    names.dedup();
+    for name in names {
+        println!("{name}");
+    }
+    ExitCode::SUCCESS
+}
+
+/// The defined package-set names -- see `run_list_sets`. Also used by
+/// `run_search`'s own set-name matching.
+fn defined_set_names(config_root: &Path) -> Vec<String> {
+    let mut names: Vec<String> = Vec::new();
+    let conf = crate::ebuild_phases::repo_root().join("cnf/sets/portage.conf");
+    if let Ok(text) = std::fs::read_to_string(&conf) {
+        let mut section: Option<String> = None;
+        let mut multiset = false;
+        for line in text.lines() {
+            let line = line.trim();
+            if let Some(name) = line.strip_prefix('[').and_then(|s| s.strip_suffix(']')) {
+                if let Some(prev) = section.take() {
+                    if !multiset {
+                        names.push(prev);
+                    }
+                }
+                section = Some(name.to_string());
+                multiset = false;
+            } else if line
+                .split_whitespace()
+                .collect::<String>()
+                .eq_ignore_ascii_case("multiset=true")
+            {
+                multiset = true;
+            }
+        }
+        if let Some(prev) = section {
+            if !multiset {
+                names.push(prev);
+            }
+        }
+    }
+    if let Ok(entries) = std::fs::read_dir(config_root.join("etc/portage/sets")) {
+        for e in entries.flatten() {
+            if e.path().is_file() {
+                if let Some(n) = e.file_name().to_str() {
+                    names.push(n.to_string());
+                }
+            }
+        }
+    }
+    names
+}
+
+/// Real `emerge --search`/`-s` (`_emerge/actions.py::action_search` ->
+/// `_emerge/search.py`): a case-insensitive substring search of every
+/// `category/package` in the configured repos (the package-name half
+/// only, unless the key contains `/`), plus defined set names. `-S` /
+/// `--searchdesc` also matches each package's `DESCRIPTION`.
+///
+/// Output shape is real `search.output()`: `Searching...\n\n`, the
+/// `[ Results for search key : KEY ]` header (with real's own `\b\b  \n`
+/// spinner-erase prefix), one `*  cat/pkg` line per hit (with the
+/// verbose `Latest version` / installed-status / `Homepage` /
+/// `Description` / `License` block under `-v`), and the
+/// `[ Applications found : N ]` footer.
+///
+/// **v1 cuts:** real portage's default fuzzy matching
+/// (`--fuzzy-search`, `difflib.SequenceMatcher`); regex search
+/// (`--regex-search-auto` / a `%`-prefixed key); the search index
+/// (`--search-index`); `--usepkg` binary-package results; the
+/// `bestmatch-visible` mask/keyword filter (the highest version is used,
+/// flagged `[ Masked ]` only when its `KEYWORDS` carry no stable/testing
+/// token for the profile arch); `Size of files`.
+fn run_search(
+    terms: &[&str],
+    repos: &[portage_repo::RepoConfig],
+    root: &Path,
+    searchdesc: bool,
+    verbose: bool,
+    color: &Colorizer,
+) -> ExitCode {
+    if terms.is_empty() {
+        println!("emerge: no search terms provided.");
+        return ExitCode::SUCCESS;
+    }
+
+    let all_cp = portage_repo::all_cp(repos);
+    let set_names = defined_set_names(&config_root_from_env());
+
+    for term in terms {
+        let key = term.trim_start_matches('%');
+        let match_category = key.contains('/');
+        let needle = key.to_lowercase();
+
+        let mut hits: Vec<(String, bool)> = Vec::new(); // (cp, masked)
+        for cp in &all_cp {
+            let hay = if match_category {
+                cp.to_lowercase()
+            } else {
+                cp.rsplit('/').next().unwrap_or(cp).to_lowercase()
+            };
+            let name_match = hay.contains(&needle);
+            let (cat, pkg) = cp.split_once('/').unwrap_or((cp.as_str(), ""));
+            let cands = portage_repo::list_candidates(repos, cat, pkg).unwrap_or_default();
+            let best = search_best_candidate(&cands);
+            let desc_match = !name_match
+                && searchdesc
+                && best.as_ref().is_some_and(|c| {
+                    portage_repo::read_md5_cache(
+                        &c.repo_location,
+                        cat,
+                        &format!("{pkg}-{}", c.version),
+                    )
+                    .ok()
+                    .and_then(|m| m.get("DESCRIPTION").cloned())
+                    .is_some_and(|d| d.to_lowercase().contains(&needle))
+                });
+            if name_match || desc_match {
+                let masked = !best.as_ref().is_some_and(search_candidate_visible);
+                hits.push((cp.clone(), masked));
+            }
+        }
+        let mut set_hits: Vec<String> = set_names
+            .iter()
+            .filter(|s| s.to_lowercase().contains(&needle))
+            .cloned()
+            .collect();
+        set_hits.sort();
+
+        let star = color.c("GOOD", "*");
+        print!("Searching...\n\n");
+        print!(
+            "\x08\x08  \n[ Results for search key : {} ]\n",
+            color.c("bold", key)
+        );
+        let total = hits.len() + set_hits.len();
+        for name in &set_hits {
+            println!("{star}  {}", color.c("bold", name));
+        }
+        for (cp, masked) in &hits {
+            let (cat, pkg) = cp.split_once('/').unwrap_or((cp.as_str(), ""));
+            let cands = portage_repo::list_candidates(repos, cat, pkg).unwrap_or_default();
+            let best = search_best_candidate(&cands);
+            if *masked {
+                println!(
+                    "{star}  {} {}",
+                    color.c("bold", cp),
+                    color.c("BAD", "[ Masked ]")
+                );
+            } else {
+                println!("{star}  {}", color.c("bold", cp));
+            }
+            if verbose {
+                if let Some(c) = &best {
+                    let meta = portage_repo::read_md5_cache(
+                        &c.repo_location,
+                        cat,
+                        &format!("{pkg}-{}", c.version),
+                    )
+                    .unwrap_or_default();
+                    let g = |k: &str| color.c("darkgreen", k);
+                    let installed = portage_repo::installed_versions(root, cat, pkg);
+                    let inst = if installed.is_empty() {
+                        "[ Not Installed ]".to_string()
+                    } else {
+                        installed.join(" ")
+                    };
+                    println!("      {} {}", g("Latest version available:"), c.version);
+                    println!("      {} {inst}", g("Latest version installed:"));
+                    println!(
+                        "      {}      {}",
+                        g("Homepage:"),
+                        meta.get("HOMEPAGE").map(String::as_str).unwrap_or("")
+                    );
+                    println!(
+                        "      {}   {}",
+                        g("Description:"),
+                        meta.get("DESCRIPTION").map(String::as_str).unwrap_or("")
+                    );
+                    println!(
+                        "      {}       {}\n",
+                        g("License:"),
+                        meta.get("LICENSE").map(String::as_str).unwrap_or("")
+                    );
+                }
+            }
+        }
+        println!(
+            "[ Applications found : {} ]\n",
+            color.c("bold", &total.to_string())
+        );
+    }
+    ExitCode::SUCCESS
+}
+
+/// The highest-version candidate (real `bestmatch` before the visibility
+/// filter), a version tie broken toward the higher-priority repo (real
+/// `portdbapi.xmatch`'s own repo ordering) -- `run_search`'s "Latest
+/// version" pick.
+fn search_best_candidate(cands: &[portage_repo::Candidate]) -> Option<portage_repo::Candidate> {
+    cands
+        .iter()
+        .max_by(|a, b| {
+            portage_versions::vercmp(&a.version, &b.version)
+                .unwrap_or(0)
+                .cmp(&0)
+                .then_with(|| a.repo_priority.cmp(&b.repo_priority))
+        })
+        .cloned()
+}
+
+/// A rough `bestmatch-visible` stand-in: the candidate carries a
+/// non-`-`-prefixed `KEYWORDS` token for `amd64` (stable or `~`) -- the
+/// pilot's fixtures are all `amd64`. Real portage runs the full
+/// mask/keyword visibility check.
+fn search_candidate_visible(c: &portage_repo::Candidate) -> bool {
+    c.keywords
+        .iter()
+        .any(|k| matches!(k.as_str(), "amd64" | "~amd64" | "*" | "~*" | "**"))
+}
+
 /// Real `_emerge/actions.py::action_config` (`emerge --config <atom>`):
 /// run `pkg_config` for a single installed package. Exactly one atom
 /// (real `if len(myfiles) != 1`), matched against the vdb the same way
@@ -4343,6 +4573,11 @@ pub fn run(args: &[String]) -> ExitCode {
     // --config: a standalone action (see run_config_action). Ignores
     // --pretend entirely -- real `action_config` never checks it.
     let mut config_action = false;
+    // --list-sets / --search / --searchdesc: standalone read-only query
+    // actions (see run_list_sets / run_search).
+    let mut list_sets = false;
+    let mut search_action = false;
+    let mut searchdesc = false;
     let mut with_bdeps = true;
     let mut with_bdeps_given = false;
     let mut with_bdeps_auto = true;
@@ -5079,6 +5314,24 @@ pub fn run(args: &[String]) -> ExitCode {
         } else if arg == "--resume" || arg == "-r" {
             resume = true;
             i += 1;
+        } else if arg == "--list-sets" {
+            // Real `main.py`: `--list-sets` is a standalone ACTION
+            // (`myaction = "list-sets"`) -- print every defined package
+            // set name, sorted, one per line (`actions.py:3839`).
+            list_sets = true;
+            i += 1;
+        } else if arg == "--search" || arg == "-s" {
+            // Real `main.py`: `--search`/`-s` is a standalone ACTION
+            // (`action_search`). The search terms are the remaining
+            // positional args.
+            search_action = true;
+            i += 1;
+        } else if arg == "--searchdesc" || arg == "-S" {
+            // Real `main.py`: `--searchdesc`/`-S` implies `--search` and
+            // also matches DESCRIPTION (`action_search`, `searchdesc`).
+            search_action = true;
+            searchdesc = true;
+            i += 1;
         } else if arg == "--skipfirst" || arg == "--skip-first" {
             skipfirst = true;
             i += 1;
@@ -5540,6 +5793,11 @@ pub fn run(args: &[String]) -> ExitCode {
                     'C' => unmerge = true,
                     'c' => depclean = true,
                     'P' => prune = true,
+                    's' => search_action = true,
+                    'S' => {
+                        search_action = true;
+                        searchdesc = true;
+                    }
                     'B' => buildpkgonly = true,
                     'b' => buildpkg_opt = Some(true),
                     'X' => {
@@ -5606,7 +5864,21 @@ pub fn run(args: &[String]) -> ExitCode {
         return run_deselect(&atom_args, &root_from_env(), pretend);
     }
 
-    if atom_args.is_empty() && !unmerge && !depclean && !prune && !config_action && !resume {
+    // `--list-sets`: a standalone action needing nothing from the
+    // resolved config -- dispatch before the "expected a package atom"
+    // guard and all the repos.conf/profile machinery.
+    if list_sets {
+        return run_list_sets(&config_root_from_env());
+    }
+
+    if atom_args.is_empty()
+        && !unmerge
+        && !depclean
+        && !prune
+        && !config_action
+        && !resume
+        && !search_action
+    {
         eprintln!("emerge (pilot v1): expected a package atom, e.g. `emerge --pretend cat/pkg`");
         return ExitCode::from(2);
     }
@@ -5716,6 +5988,12 @@ pub fn run(args: &[String]) -> ExitCode {
     // resolved `config`; ignores `--pretend`.
     if config_action {
         return run_config_action(&atom_args, &root, &color);
+    }
+
+    // `--search`/`-s` (`--searchdesc`/`-S` also matches DESCRIPTION): a
+    // standalone read-only query action (real `action_search`).
+    if search_action {
+        return run_search(&atom_args, &repos, &root, searchdesc, verbose, &color);
     }
 
     // `--unmerge`/`-C`: a standalone action -- resolved config in hand

@@ -10542,6 +10542,32 @@ are unavailable. `dev-libs/netsandboxpkg`'s `src_compile` records
 `readlink /proc/self/ns/{net,ipc,mnt,pid}` and the visible process count
 so a test can prove each namespace was actually unshared.
 
+### `emerge --list-sets` and `emerge --search` / `-s`
+
+The first slice of SCOPE_BACKLOG Part 2.F (the standalone `emerge`
+actions). Both are read-only queries, mirrored byte-for-byte in the
+Python reference and contract-tested.
+
+- **`--list-sets`** (real `_emerge/actions.py:3839`): every defined
+  package-set name, sorted, one per line — the `cnf/sets/portage.conf`
+  `[section]` headers (real `SetConfig._parse` over the bundled default
+  config, skipping the `multiset = true` `[usersets]` generator) plus
+  every file under `<config_root>/etc/portage/sets/`.
+- **`--search` / `-s`** (real `action_search` → `search.py`): a
+  case-insensitive substring search of every `category/package` in the
+  configured repos (the package-name half only, unless the key contains
+  `/`) plus set names; **`-S` / `--searchdesc`** also matches
+  `DESCRIPTION`. The output is real `search.output()`'s shape —
+  `Searching...`, the `[ Results for search key : … ]` header, a
+  `*  cat/pkg` line per hit (with the `Latest version` / installed-status
+  / `Homepage` / `Description` / `License` block under `-v`), the
+  `[ Applications found : N ]` footer. A version tie between repos is
+  broken toward the higher-priority repo. Documented cuts: real
+  portage's default fuzzy matching (`--fuzzy-search`), regex search, the
+  search index, `--usepkg` binary results, the full `bestmatch-visible`
+  mask/keyword filter (`[ Masked ]` is flagged only on a rough
+  `amd64`-keyword check), and `Size of files`.
+
 ## Running it
 
 Build both Rust binaries:

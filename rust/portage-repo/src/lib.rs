@@ -3560,6 +3560,52 @@ pub fn all_installed_packages(root: &Path) -> Vec<InstalledPackage> {
     out
 }
 
+/// Every `category/package` present in any of `repos` -- real
+/// `portdbapi.cp_all()` (`porttree.py`), used by `emerge --search`.
+/// Sorted, deduplicated; a directory is a `cp` when it has at least one
+/// `<package>-<version>.ebuild`.
+pub fn all_cp(repos: &[RepoConfig]) -> Vec<String> {
+    let mut out: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    for repo in repos {
+        let Ok(cats) = fs::read_dir(&repo.location) else {
+            continue;
+        };
+        for cat in cats.filter_map(Result::ok).filter(|e| e.path().is_dir()) {
+            let category = cat.file_name().to_string_lossy().to_string();
+            // Skip the non-category top-level dirs of a repo checkout.
+            if matches!(
+                category.as_str(),
+                "eclass" | "profiles" | "metadata" | "licenses" | "scripts" | "distfiles" | ".git"
+            ) {
+                continue;
+            }
+            let Ok(pkgs) = fs::read_dir(cat.path()) else {
+                continue;
+            };
+            for pkg in pkgs.filter_map(Result::ok).filter(|e| e.path().is_dir()) {
+                let package = pkg.file_name().to_string_lossy().to_string();
+                let has_ebuild = fs::read_dir(pkg.path())
+                    .map(|mut d| {
+                        d.any(|e| {
+                            e.ok()
+                                .and_then(|e| e.file_name().to_str().map(str::to_owned))
+                                .is_some_and(|n| {
+                                    n.strip_suffix(".ebuild")
+                                        .and_then(|s| strip_version_prefix(s, &package))
+                                        .is_some()
+                                })
+                        })
+                    })
+                    .unwrap_or(false);
+                if has_ebuild {
+                    out.insert(format!("{category}/{package}"));
+                }
+            }
+        }
+    }
+    out.into_iter().collect()
+}
+
 fn split_installed_dir(dirname: &str) -> Option<(String, String)> {
     let parts: Vec<&str> = dirname.split('-').collect();
     for i in 1..parts.len() {

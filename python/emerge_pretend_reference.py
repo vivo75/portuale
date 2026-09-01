@@ -8052,6 +8052,198 @@ def _still_listed_parents(root, installed_sets, cat, pkg, version):
     return parents
 
 
+def _defined_set_names(config_root):
+    """Every defined package-set name -- see _run_list_sets. Built-ins
+    from cnf/sets/portage.conf section headers (skipping the multiset
+    [usersets] generator), plus user set files. Mirrors pretend.rs's
+    defined_set_names."""
+    names = []
+    conf = os.path.join(
+        os.path.dirname(__file__), "..", "..", "cnf", "sets", "portage.conf"
+    )
+    try:
+        with open(conf) as f:
+            text = f.read()
+    except OSError:
+        text = ""
+    section = None
+    multiset = False
+    for line in text.splitlines():
+        line = line.strip()
+        if line.startswith("[") and line.endswith("]"):
+            if section is not None and not multiset:
+                names.append(section)
+            section = line[1:-1]
+            multiset = False
+        elif "".join(line.split()).lower() == "multiset=true":
+            multiset = True
+    if section is not None and not multiset:
+        names.append(section)
+    sets_dir = os.path.join(config_root, "etc", "portage", "sets")
+    try:
+        for name in os.listdir(sets_dir):
+            if os.path.isfile(os.path.join(sets_dir, name)):
+                names.append(name)
+    except OSError:
+        pass
+    return names
+
+
+def _run_list_sets(config_root):
+    """Real `emerge --list-sets` (_emerge/actions.py:3839): every defined
+    package-set name, sorted, one per line. Mirrors pretend.rs's
+    run_list_sets."""
+    for name in sorted(set(_defined_set_names(config_root))):
+        print(name)
+    return 0
+
+
+def _all_cp(repos):
+    """Every category/package with an ebuild in any of `repos` -- real
+    portdbapi.cp_all(). Mirrors portage-repo's all_cp."""
+    _skip = {
+        "eclass",
+        "profiles",
+        "metadata",
+        "licenses",
+        "scripts",
+        "distfiles",
+        ".git",
+    }
+    out = set()
+    for repo in repos:
+        try:
+            cats = os.listdir(repo["location"])
+        except OSError:
+            continue
+        for category in cats:
+            if category in _skip:
+                continue
+            cat_dir = os.path.join(repo["location"], category)
+            if not os.path.isdir(cat_dir):
+                continue
+            try:
+                pkgs = os.listdir(cat_dir)
+            except OSError:
+                continue
+            for package in pkgs:
+                pkg_dir = os.path.join(cat_dir, package)
+                if not os.path.isdir(pkg_dir):
+                    continue
+                try:
+                    entries = os.listdir(pkg_dir)
+                except OSError:
+                    continue
+                if any(
+                    e.endswith(".ebuild")
+                    and _strip_version_prefix(e[: -len(".ebuild")], package) is not None
+                    for e in entries
+                ):
+                    out.add(f"{category}/{package}")
+    return sorted(out)
+
+
+def _search_best_candidate(cands):
+    best = None
+    for c in cands:
+        if best is None:
+            best = c
+            continue
+        cmp = vercmp(c["version"], best["version"]) or 0
+        if cmp > 0 or (cmp == 0 and c["repo_priority"] > best["repo_priority"]):
+            best = c
+    return best
+
+
+def _search_candidate_visible(c):
+    return any(
+        k in ("amd64", "~amd64", "*", "~*", "**") for k in c["keywords"]
+    )
+
+
+def _run_search(terms, config_root, root, searchdesc, verbose, color):
+    """Real `emerge --search`/`-s` (action_search -> search.py): a
+    case-insensitive substring search of every category/package in the
+    configured repos (the package-name half only, unless the key
+    contains "/"), plus defined set names; `-S`/`--searchdesc` also
+    matches DESCRIPTION. Output shape is real search.output(). Mirrors
+    pretend.rs's run_search, including its v1 cuts (no fuzzy/regex/index
+    matching, no --usepkg results, no Size of files)."""
+    if not terms:
+        print("emerge: no search terms provided.")
+        return 0
+
+    repos = find_repos(config_root)
+    all_cp = _all_cp(repos)
+    set_names = _defined_set_names(config_root)
+
+    for term in terms:
+        key = term.lstrip("%")
+        match_category = "/" in key
+        needle = key.lower()
+
+        hits = []
+        for cp in all_cp:
+            hay = cp.lower() if match_category else cp.split("/")[-1].lower()
+            name_match = needle in hay
+            cat, _, pkg = cp.partition("/")
+            cands = list_candidates(repos, cat, pkg)
+            best = _search_best_candidate(cands)
+            desc_match = False
+            if not name_match and searchdesc and best is not None:
+                try:
+                    meta = read_md5_cache(
+                        best["repo_location"], cat, f"{pkg}-{best['version']}"
+                    )
+                    desc_match = needle in meta.get("DESCRIPTION", "").lower()
+                except OSError:
+                    pass
+            if name_match or desc_match:
+                masked = best is None or not _search_candidate_visible(best)
+                hits.append((cp, masked))
+
+        set_hits = sorted(s for s in set_names if needle in s.lower())
+
+        star = color.c("GOOD", "*")
+        sys.stdout.write("Searching...\n\n")
+        sys.stdout.write(
+            "\b\b  \n[ Results for search key : %s ]\n" % color.c("bold", key)
+        )
+        total = len(hits) + len(set_hits)
+        for name in set_hits:
+            print(f"{star}  {color.c('bold', name)}")
+        for cp, masked in hits:
+            cat, _, pkg = cp.partition("/")
+            cands = list_candidates(repos, cat, pkg)
+            best = _search_best_candidate(cands)
+            if masked:
+                print(
+                    f"{star}  {color.c('bold', cp)} {color.c('BAD', '[ Masked ]')}"
+                )
+            else:
+                print(f"{star}  {color.c('bold', cp)}")
+            if verbose and best is not None:
+                try:
+                    meta = read_md5_cache(
+                        best["repo_location"], cat, f"{pkg}-{best['version']}"
+                    )
+                except OSError:
+                    meta = {}
+
+                def _g(k):
+                    return color.c("darkgreen", k)
+
+                installed = installed_versions(root, cat, pkg)
+                inst = " ".join(installed) if installed else "[ Not Installed ]"
+                print(f"      {_g('Latest version available:')} {best['version']}")
+                print(f"      {_g('Latest version installed:')} {inst}")
+                print(f"      {_g('Homepage:')}      {meta.get('HOMEPAGE', '')}")
+                print(f"      {_g('Description:')}   {meta.get('DESCRIPTION', '')}")
+                print(f"      {_g('License:')}       {meta.get('LICENSE', '')}\n")
+        print(f"[ Applications found : {color.c('bold', str(total))} ]\n")
+    return 0
+
+
 def _run_deselect(targets, root, pretend):
     """Ports real action_deselect (lib/_emerge/actions.py, lines
     1740-1835) exactly: needs no repo/config resolution at all, only the
@@ -10216,6 +10408,11 @@ def run(args):
     depclean = False
     prune = False
     config_action = False
+    # --list-sets / --search / --searchdesc: standalone read-only query
+    # actions (see _run_list_sets / _run_search). Mirrors pretend.rs.
+    list_sets = False
+    search_action = False
+    searchdesc = False
     with_bdeps = True
     with_bdeps_given = False
     with_bdeps_auto = True
@@ -10529,6 +10726,16 @@ def run(args):
             # --pretend. This reference has no ebuild-execution machinery,
             # so run() returns 0 for it (see below). Mirrors pretend.rs.
             config_action = True
+            i += 1
+        elif arg == "--list-sets":
+            list_sets = True
+            i += 1
+        elif arg in ("--search", "-s"):
+            search_action = True
+            i += 1
+        elif arg in ("--searchdesc", "-S"):
+            search_action = True
+            searchdesc = True
             i += 1
         elif arg == "--with-bdeps":
             # Real "argument_options" with "choices": ("y", "n") --
@@ -11148,6 +11355,11 @@ def run(args):
                     depclean = True
                 elif c == "P":
                     prune = True
+                elif c == "s":
+                    search_action = True
+                elif c == "S":
+                    search_action = True
+                    searchdesc = True
                 elif c == "B":
                     buildpkgonly = True
                 elif c == "b":
@@ -11205,6 +11417,21 @@ def run(args):
     # action_depclean's `deselect`).
     if deselect and not depclean and not prune and not unmerge:
         return _run_deselect(atom_args, _root(), pretend)
+
+    # --list-sets / --search: standalone read-only query actions, ignore
+    # --pretend entirely (dispatched before the `not pretend` return
+    # below). Mirrors pretend.rs.
+    if list_sets:
+        return _run_list_sets(_config_root())
+    if search_action:
+        return _run_search(
+            atom_args,
+            _config_root(),
+            _root(),
+            searchdesc,
+            verbose,
+            _Colorizer(_resolve_havecolor(color_opt)),
+        )
 
     # --config <atom>: a real action (real action_config runs pkg_config
     # from the vdb). Ignores --pretend entirely. No ebuild-execution
