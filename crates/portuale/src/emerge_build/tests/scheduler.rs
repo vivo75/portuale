@@ -61,3 +61,12 @@ fn run_build_scheduler_single_failure_counts_failed_exactly_once() {
     let _ = fs::remove_dir_all(&root);
     let _ = fs::remove_dir_all(&portage_tmpdir);
 }
+
+#[test]
+fn system_loadavg_1min_reads_a_plausible_value() {
+    // Linux CI: /proc/loadavg exists and its first field is a
+    // non-negative float. Anywhere it can't be read, the throttle is
+    // simply disabled (0.0), never a stall.
+    let la = system_loadavg_1min();
+    assert!(la >= 0.0 && la.is_finite(), "{la}");
+}

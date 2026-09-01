@@ -93,6 +93,86 @@ struct RunParallelArgs<'a> {
     jobs: usize,
     load_average: Option<f64>,
 }
+
+/// Dispatch one pass's items onto up to `jobs` threads in work-list order,
+/// holding back additional workers above the load average and never sharing a
+/// builddir key. Results return indexed for deterministic folding.
+/// Portage: MetadataRegen.py (AsyncScheduler).
+fn run_parallel(args: RunParallelArgs<'_>) -> Vec<(usize, Result<(), RegenFailure>)> {
+    let RunParallelArgs {
+        work,
+        pass_indices,
+        root,
+        config_root,
+        portage_tmpdir,
+        debug,
+        jobs,
+        load_average,
+    } = args;
+    use std::collections::VecDeque;
+    use std::sync::mpsc;
+
+    let mut results: Vec<Option<(usize, Result<(), RegenFailure>)>> =
+        (0..pass_indices.len()).map(|_| None).collect();
+    if pass_indices.is_empty() {
+        return Vec::new();
+    }
+    std::thread::scope(|scope| {
+        let (tx, rx) = mpsc::channel::<(usize, (usize, Result<(), RegenFailure>))>();
+        let mut pending: VecDeque<usize> = (0..pass_indices.len()).collect();
+        let mut in_flight = 0usize;
+        let mut in_flight_keys: HashSet<(String, String)> = HashSet::new();
+        let mut done = 0usize;
+        while done < pass_indices.len() {
+            // First pending item whose key isn't running goes next.
+            while in_flight < jobs {
+                if in_flight >= 1
+                    && let Some(la) = load_average
+                    && crate::emerge_build::system_loadavg_1min() > la
+                {
+                    break;
+                }
+                let pos = next_dispatchable_in(&pending, &in_flight_keys, work, pass_indices);
+                let Some(pos) = pos else { break };
+                let slot = pending.remove(pos).expect("position came from pending");
+                let idx = pass_indices[slot];
+                in_flight_keys.insert((work[idx].category.clone(), work[idx].pf.clone()));
+                in_flight += 1;
+                let tx = tx.clone();
+                let item = &work[idx];
+                scope.spawn(move || {
+                    let r = run_work_item(item, root, config_root, portage_tmpdir, debug);
+                    let _ = tx.send((slot, (idx, r)));
+                });
+            }
+            // Progress is guaranteed: the first dispatch is never load-gated.
+            let (slot, r) = rx.recv().expect("a worker result is always pending");
+            in_flight -= 1;
+            let idx = pass_indices[slot];
+            in_flight_keys.remove(&(work[idx].category.clone(), work[idx].pf.clone()));
+            results[slot] = Some(r);
+            done += 1;
+        }
+    });
+    results
+        .into_iter()
+        .map(|r| r.expect("every work item reported exactly once"))
+        .collect()
+}
+
+/// First pending slot whose builddir key isn't running. Split out so the
+/// ordering rule is unit-testable without running a `depend` phase.
+fn next_dispatchable_in(
+    pending: &std::collections::VecDeque<usize>,
+    in_flight_keys: &HashSet<(String, String)>,
+    work: &[RegenWorkItem],
+    pass_indices: &[usize],
+) -> Option<usize> {
+    pending.iter().position(|&slot| {
+        let idx = pass_indices[slot];
+        !in_flight_keys.contains(&(work[idx].category.clone(), work[idx].pf.clone()))
+    })
+}
 /// Arguments of [`regen_one`].
 struct RegenOneArgs<'a> {
     ebuild_path: &'a Path,

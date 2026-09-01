@@ -309,6 +309,29 @@ pub fn write_info_mtimes(root: &Path, info: &BTreeMap<String, i64>) -> Result<()
     write_sections(root, resume.as_ref(), backup.as_ref(), Some(info))
 }
 
+/// Writes `mtimedb["resume"]` from the atom args, one merge item per package
+/// (tagged `"ebuild"` or `"binary"` with its `<root>` and `"<cat/pkg-ver>"`)
+/// and the `--oneshot` / `--onlydeps` flags. Used for the up-front save of
+/// the full resolved plan and for re-saving the still-unmerged tail on a
+/// clean failure. The assignment is unconditional: an empty `mergelist`
+/// still overwrites any stale list. An existing `resume_backup` is preserved
+/// untouched.
+pub fn write_resume_list(
+    root: &Path,
+    favorites: &[&str],
+    mergelist: &[ResumeCpv],
+    opts: &ResumeOpts,
+) -> Result<(), String> {
+    let resume = Section {
+        favorites: favorites.iter().map(|s| s.to_string()).collect(),
+        mergelist: mergelist.to_vec(),
+        opts: *opts,
+    };
+    let backup = read_section(root, "resume_backup");
+    let info = read_info_mtimes(root);
+    write_sections(root, Some(&resume), backup.as_ref(), Some(&info))
+}
+
 /// After each successful merge the merged package leaves
 /// `mtimedb["resume"]["mergelist"]`; once the list empties, the `resume` key
 /// is deleted. Removes the first entry equal to `entry`; a no-op when there
