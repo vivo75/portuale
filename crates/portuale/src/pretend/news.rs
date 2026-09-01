@@ -337,6 +337,38 @@ pub(crate) fn merge_failure_news_notice(
         display_news_notice_if_any(repos, root, config, color);
     }
 }
+/// Arguments of [`run_check_news`].
+pub(crate) struct RunCheckNewsArgs<'a> {
+    pub(crate) repos: &'a [portage_repo::RepoConfig],
+    pub(crate) root: &'a Path,
+    pub(crate) config_root: &'a Path,
+    pub(crate) config: &'a portage_profile::Config,
+    pub(crate) quiet: bool,
+    pub(crate) color: &'a Colorizer,
+}
+
+pub(crate) fn run_check_news(args: RunCheckNewsArgs<'_>) -> ExitCode {
+    let RunCheckNewsArgs {
+        repos,
+        root,
+        config_root,
+        config,
+        quiet,
+        color,
+    } = args;
+    let context = news_context(repos, config_root, config);
+    let per_repo = unread_news_counts(repos, root, &context);
+    let any = per_repo.iter().any(|(_, count)| *count > 0);
+
+    if any {
+        // Real `display_news_notifications`.
+        print_news_notifications(&per_repo, color);
+    } else if !quiet {
+        // Real `print("", colorize("GOOD", "*"), "No news items were found.")`.
+        println!(" {} No news items were found.", color.c("GOOD", "*"));
+    }
+    ExitCode::SUCCESS
+}
 
 /// Read one news state file: each line split on whitespace, cut at the
 /// first `#`-led token, re-joined; empty results dropped. A missing file
