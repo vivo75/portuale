@@ -754,13 +754,29 @@ not just read this list. What's actually left, grouped by area:
   start**: real signature verification is a `gpkg`/repo-sync concept,
   not `SRC_URI`/distfile-fetch at all — zero hits grepping `fetch.py`
   directly for either term.)
-- No remaining gaps in this area. `--keep-going` is real for all three
-  non-`--pretend` merge paths: `--buildpkgonly` (see `README.md`'s own
-  "`emerge --buildpkgonly --keep-going`" — its depgraph gate guarantees
-  no entry depends on another) and, as of 2026-08-31, `emerge <atom>` /
-  `emerge --getbinpkg` (`emerge_build::run_merge_loop` — the general
-  version: BFS-drop the failed entry's transitive dependents via
-  `GraphEntry.required_by`, real `Scheduler._calc_resume_list`).
+- `--keep-going` is real for all three non-`--pretend` merge paths:
+  `--buildpkgonly` (see `README.md`'s own "`emerge --buildpkgonly
+  --keep-going`" — its depgraph gate guarantees no entry depends on
+  another) and, as of 2026-08-31, `emerge <atom>` / `emerge --getbinpkg`
+  (`emerge_build::run_merge_loop` — the general version: BFS-drop the
+  failed entry's transitive dependents via `GraphEntry.required_by`, real
+  `Scheduler._calc_resume_list`).
+- **Scheduler Part 2.B shipped 2026-09-01**: `emerge -jN` parallel build
+  scheduler + `--load-average` + build-log capture + `>>> Jobs:` line +
+  `--ask`/`-a` (prompt before a real merge / `-C`/`--depclean`/`--prune`
+  removal, `ask_confirm`, exit 130 on No) + `CLEAN_DELAY` countdown
+  (`clean_delay_countdown`, tests pin it to 0 via an autouse conftest
+  fixture). `PORTAGE_NICENESS`/`PORTAGE_IONICE_COMMAND` also shipped
+  (`apply_portage_scheduling_policy`, real `actions.py::apply_priorities`
+  -- renice/ionice this process once at startup). The elog `echo` module also shipped (`elog.rs` /
+  `elog::echo_summary` — real `mod_echo`, default-on, `* Messages for
+  package <cpv>:`; `create_directories` now makes `${T}/logging`).
+  `--resume`/`--skipfirst` also shipped (`mtimedb.rs` -- a failed source
+  `emerge` writes `mtimedb["resume"]`, `emerge --resume [--skipfirst]`
+  replays it). **Part 2.B is now substantially complete.** Remaining
+  odds and ends: `resume_backup` rotation, the elog `save`/`mail`
+  modules, `--ask` for `--config`/`--deselect`,
+  `PORTAGE_SCHEDULING_POLICY`, killing in-flight builds on a hard fail.
 
 **Depgraph / dry-run**:
 - **`--root-deps` fuller fidelity, remaining half.**
@@ -939,6 +955,32 @@ the failed entry's transitive dependents via `GraphEntry.required_by`,
 merge the rest, exit non-zero with a combined failed+skipped report —
 real `Scheduler._calc_resume_list`). v1 cut left: no preserve-libs on
 the replace.
+
+**`emerge -jN` / `--jobs=N` parallel build scheduler shipped 2026-09-01**
+(real `_emerge/Scheduler.py`): for a plain source `emerge <atom>`,
+`run_source_merge` routes `jobs > 1` to `run_build_scheduler`.
+`merge_one_source_entry` is split into `build_one_source_entry` (real
+`EbuildBuild`+`EbuildBinpkg` — `install` phase + `--buildpkg` binpkg,
+no vdb write) and `merge_one_built_entry` (real `EbuildMerge` — reuses
+`run_qmerge`). The scheduler builds the forward-dep DAG from
+`GraphEntry.required_by`, dispatches a build (`std::thread::scope`
+worker) only when all its deps are merged, runs up to `jobs` concurrently
+(bare `--jobs`/`-j` = `usize::MAX`, capped), and **serializes the vdb
+merge on the main thread** (real portage merges one at a time).
+`--keep-going` preserved (`scheduler_skip_dependents`). `--jobs[=N]` /
+`-j[N]` parses like `--deep`; `--load-average=LA` / `-l LA` (real
+`type=float`) holds off *additional* jobs while the 1-min system load
+(`system_loadavg_1min`, `/proc/loadavg`) exceeds LA, never the first.
+Rust-only — no contract-suite mirror (never executes builds). Each
+parallel build's phase output is captured to `${T}/build.log`
+(`run_commands_logged`, real `PORTAGE_LOG_FILE`; captured builds forced
+onto the `bash` backend for a complete OS-level redirect) instead of
+interleaving on stdout; the scheduler prints `>>> Jobs: X of Y complete`
+after each merge and folds the failed build's log tail into a
+`--keep-going` report. Cuts: the serialized merge step's `pkg_*` hooks
+still run uncaptured through brush (residual stderr noise, pre-existing);
+`--quiet-build` isn't a flag yet; one tokio runtime per `run_commands`;
+in-flight builds finish (not killed) on a hard fail.
 `unmerge_replaced_same_slot` (factored out of `merge_binpkg`) is also
 wired into `merge_after_install`, so `ebuild <file> merge` of v2 over v1
 no longer orphans v1's files.
