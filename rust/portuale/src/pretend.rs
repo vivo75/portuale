@@ -351,8 +351,9 @@ fn columns_line(
 ///    it in only `if self.include_mask_str()` (`verbosity > 1`), and real
 ///    default `emerge -p` verbosity is *2* (`_DisplayConfig.__init__`:
 ///    `--quiet and 1 or --verbose and 3 or 2`) -- so the column is
-///    present at plain `-p` *and* `-pv`, and absent only under `--quiet`
-///    (verbosity 1), which this pilot doesn't model. Always rendered.
+///    present at plain `-p` *and* `-pv`, and absent (the field is 6 chars,
+///    not 7) only under `--quiet` (verbosity 1). `include_mask` carries
+///    that gate.
 ///
 /// Each present letter is ANSI-coloured per real `PkgAttrDisplay.__str__`
 /// (`green("N")`, `yellow("R")`, `turquoise("U")`, `blue("D")`,
@@ -374,6 +375,7 @@ fn attr_display_field(
     new_version: bool,
     downgrade: bool,
     mask: Option<char>,
+    include_mask: bool,
     color: &Colorizer,
 ) -> String {
     let col = |key: &str, ch: char| color.c(key, &ch.to_string());
@@ -419,14 +421,16 @@ fn attr_display_field(
     // Real `__str__` appends `self.mask` only `if self.mask is not None`,
     // and `set_pkg_info` sets it only `if self.include_mask_str()`
     // (`verbosity > 1`) -- true at real portage's default `emerge -p`
-    // verbosity of 2, so the column is always present here (this pilot
-    // has no `--quiet`/verbosity-1 mode). Real `gen_mask_str`: `#`/`*` ->
-    // `BAD` (red), `~` -> `WARN` (yellow), no mark -> a space.
-    f.push_str(&match mask {
-        Some(c @ ('#' | '*')) => col("BAD", c),
-        Some('~') => col("WARN", '~'),
-        _ => " ".to_string(),
-    });
+    // verbosity of 2, absent under `--quiet` (verbosity 1). Real
+    // `gen_mask_str`: `#`/`*` -> `BAD` (red), `~` -> `WARN` (yellow), no
+    // mark -> a space.
+    if include_mask {
+        f.push_str(&match mask {
+            Some(c @ ('#' | '*')) => col("BAD", c),
+            Some('~') => col("WARN", '~'),
+            _ => " ".to_string(),
+        });
+    }
     f
 }
 
@@ -504,19 +508,32 @@ fn decorate_version(
 
 /// Renders the ` USE="…"` (and `VAR="…"` per USE_EXPAND group) suffix.
 ///
-/// Real `_DisplayConfig`: `print_use_string = verbosity != 1`, and real
-/// default `emerge -p` verbosity is 2 -- so the USE line is *not*
-/// `-v`-gated. What `-v` (verbosity 3) actually changes is `all_flags`,
-/// i.e. *which* flags render: `emerge -pv` uses
-/// `GraphEntry::use_expand_display` (every flag, unchanged ones plain,
-/// plus the `(-flag%)` removed-from-IUSE list); plain `emerge -p` uses
-/// `use_expand_display_p`, where `_create_use_string` leaves an
+/// Real `_DisplayConfig`: `print_use_string = verbosity != 1 or
+/// "--verbose"`, and real default `emerge -p` verbosity is 2 -- so the
+/// USE line is *not* `-v`-gated, but `--quiet` (verbosity 1) *does*
+/// suppress it entirely unless `-v` is also given (`-pvq`). What `-v`
+/// (verbosity 3) *or* `--quiet` changes is `all_flags` (`= verbosity ==
+/// 3 or quiet`), i.e. *which* flags render: `emerge -pv` / `-pq` / `-pvq`
+/// use `GraphEntry::use_expand_display` (every flag, unchanged ones
+/// plain, plus the `(-flag%)` removed-from-IUSE list); plain `emerge -p`
+/// uses `use_expand_display_p`, where `_create_use_string` leaves an
 /// *unchanged* flag omitted -- so for a `New` package (`is_new` renders
 /// everything) the `-p` list equals the `-pv` list, and for a
 /// `Reinstall`/`Upgrade`/`Downgrade` only the changed flags
 /// (`flag%*`/`flag*`/`-flag%`/`-flag*`) show, often none.
-fn use_suffix(entry: &GraphEntry, verbose: bool, alphabetical: bool, color: &Colorizer) -> String {
-    let display = if verbose {
+fn use_suffix(
+    entry: &GraphEntry,
+    verbose: bool,
+    quiet: bool,
+    alphabetical: bool,
+    color: &Colorizer,
+) -> String {
+    // Real `print_use_string = verbosity != 1 or "--verbose"`.
+    if quiet && !verbose {
+        return String::new();
+    }
+    // Real `all_flags = verbosity == 3 or quiet`.
+    let display = if verbose || quiet {
         &entry.use_expand_display
     } else {
         &entry.use_expand_display_p
@@ -765,11 +782,16 @@ fn package_counters_summary(
 /// it. Real `_blockers` appends `empty_space_in_brackets()` after the
 /// five-space `B     ` pad, and that adds the mask column's own space
 /// whenever `verbosity > 1` -- true at real portage's default `emerge
-/// -p` verbosity of 2, so it's always present here (this pilot has no
-/// `--quiet`).
-fn format_blocker_lines(entry: &GraphEntry, owner_version: &str, color: &Colorizer) -> Vec<String> {
+/// -p` verbosity of 2, dropped only under `--quiet` (verbosity 1), which
+/// `include_mask` carries.
+fn format_blocker_lines(
+    entry: &GraphEntry,
+    owner_version: &str,
+    include_mask: bool,
+    color: &Colorizer,
+) -> Vec<String> {
     let style = "PKG_BLOCKER";
-    let pad = "      ";
+    let pad = if include_mask { "      " } else { "     " };
     entry
         .blockers
         .iter()
@@ -816,6 +838,7 @@ fn print_entry_line(
     onlydeps: bool,
     oneshot: bool,
     verbose: bool,
+    quiet: bool,
     alphabetical: bool,
     columns: bool,
     columnwidth: i64,
@@ -825,6 +848,11 @@ fn print_entry_line(
     world_atoms: &[String],
     blocker_lines: &mut Vec<String>,
 ) {
+    // Real `_DisplayConfig` verbosity: `--quiet and 1 or --verbose and 3
+    // or 2`. `--quiet` wins over `-v`. `v3` is "verbosity == 3" -- the
+    // gate on `::repo`/`:slot` cpv decoration, the `Total:` line, and the
+    // fetch-size suffix.
+    let v3 = verbose && !quiet;
     let onlydeps_suppressed =
         onlydeps && top_level_pkgs.contains(&(entry.category.clone(), entry.package.clone()));
     // Real `Display.check_system_world` (`output.py`): `world` when this
@@ -889,6 +917,7 @@ fn print_entry_line(
             new_version,
             downgrade,
             entry.keyword_mask,
+            !quiet,
             color,
         )
     };
@@ -906,7 +935,7 @@ fn print_entry_line(
     // The version as displayed in the bracket line: bare at `-p`,
     // `:slot::repo`-decorated at `-pv`.
     let disp_version = |v: &str| -> String {
-        if verbose {
+        if v3 {
             decorate_version(v, entry_slot, entry_sub, entry_repo, show_slot)
         } else {
             v.to_string()
@@ -925,7 +954,7 @@ fn print_entry_line(
             .iter()
             .map(|r| {
                 let v = r.version.strip_suffix("-r0").unwrap_or(&r.version);
-                if verbose {
+                if v3 {
                     decorate_version(v, &r.slot, &r.sub_slot, &r.repo, show_slot)
                 } else {
                     v.to_string()
@@ -948,7 +977,7 @@ fn print_entry_line(
         let (system, world) = classify(version);
         let disp_ver = disp_version(version);
         let oldbest = oldbest_str();
-        let use_str = use_suffix(entry, verbose, alphabetical, color);
+        let use_str = use_suffix(entry, verbose, quiet, alphabetical, color);
         // Real `output.py::verbose_size` (`conf.verbosity == 3` only):
         // `verboseadd += localized_size(mysize)` -- the bytes still to
         // fetch, appended after the USE string. This pilot renders it
@@ -957,7 +986,7 @@ fn print_entry_line(
         // binary are already present, so real would show a bare ` 0 KiB`
         // that this pilot's `-pv` lines have always omitted; closing that
         // wider gap would re-pin every `-pv` assertion and is left out).
-        let size_suffix = if verbose && entry.remote_binary {
+        let size_suffix = if v3 && entry.remote_binary {
             let bytes: u64 = entry.download_files.iter().map(|(_, s)| s).sum();
             format!(" {}", localized_size(bytes))
         } else {
@@ -1031,7 +1060,7 @@ fn print_entry_line(
             // (this pilot doesn't carry the other-slot versions on the
             // entry yet).
             emit(&field(true, entry.new_slot, false, false, false), version);
-            blocker_lines.extend(format_blocker_lines(entry, version, color));
+            blocker_lines.extend(format_blocker_lines(entry, version, !quiet, color));
         }
         PretendOutcome::Upgrade { from: _, to } => {
             // Real: an in-slot version bump -> `attr.new_version` only
@@ -1039,13 +1068,13 @@ fn print_entry_line(
             // stays clear -> `U`, no `R`). oldbest = the in-slot
             // installed version(s) (`myinslotlist`), from `entry.oldbest`.
             emit(&field(false, false, false, true, false), to);
-            blocker_lines.extend(format_blocker_lines(entry, to, color));
+            blocker_lines.extend(format_blocker_lines(entry, to, !quiet, color));
         }
         PretendOutcome::Downgrade { from: _, to } => {
             // Real: in-slot downgrade -> `attr.new_version` *and*
             // `attr.downgrade` (`U` and `D`). oldbest as for `Upgrade`.
             emit(&field(false, false, false, true, true), to);
-            blocker_lines.extend(format_blocker_lines(entry, to, color));
+            blocker_lines.extend(format_blocker_lines(entry, to, !quiet, color));
         }
         PretendOutcome::Reinstall {
             version,
@@ -1066,7 +1095,7 @@ fn print_entry_line(
             // `--changed-use`; `--changed-deps`/`--changed-slot` reasons
             // are genuinely invisible in real `-pv` too).
             emit(&field(false, false, true, false, false), version);
-            blocker_lines.extend(format_blocker_lines(entry, version, color));
+            blocker_lines.extend(format_blocker_lines(entry, version, !quiet, color));
         }
         PretendOutcome::AlreadyInstalled { version } => {
             // Already-satisfied dependencies aren't shown, matching
@@ -1213,6 +1242,7 @@ fn print_tree(
     oneshot: bool,
     unordered_display: bool,
     verbose: bool,
+    quiet: bool,
     alphabetical: bool,
     running_root: Option<&Path>,
     color: &Colorizer,
@@ -1247,6 +1277,7 @@ fn print_tree(
         onlydeps: bool,
         oneshot: bool,
         verbose: bool,
+        quiet: bool,
         alphabetical: bool,
         running_root: Option<&'a Path>,
         color: &'a Colorizer,
@@ -1276,6 +1307,7 @@ fn print_tree(
             ctx.onlydeps,
             ctx.oneshot,
             ctx.verbose,
+            ctx.quiet,
             ctx.alphabetical,
             false,
             130,
@@ -1303,6 +1335,7 @@ fn print_tree(
         onlydeps,
         oneshot,
         verbose,
+        quiet,
         alphabetical,
         running_root,
         color,
@@ -1328,6 +1361,7 @@ fn print_tree(
                 onlydeps,
                 oneshot,
                 verbose,
+                quiet,
                 alphabetical,
                 false,
                 130,
@@ -1760,7 +1794,7 @@ fn report_option(token: &str) -> ExitCode {
         eprintln!(
             "emerge (pilot v1): {kind} {:?} is a real emerge {kind}, but is not \
              implemented in this pilot (only --pretend/-p, --verbose/-v, \
-             --newuse/-N, --changed-use/-U, --nodeps/-O, --onlydeps/-o, \
+             --quiet/-q, --newuse/-N, --changed-use/-U, --nodeps/-O, --onlydeps/-o, \
              --update/-u, --deep/-D, --exclude/-X, --deselect/-W, \
              --unmerge/-C, --depclean/-c, --prune/-P, --config, \
              --with-bdeps, --with-bdeps-auto, --changed-deps, \
@@ -1798,6 +1832,7 @@ fn print_help() {
     println!("Options:");
     println!("   -p, --pretend   required: the only real merge calculation this pilot implements");
     println!("   -v, --verbose   show USE=\"...\" on each [ebuild ...] line (optionally: -v y|n)");
+    println!("   -q, --quiet     verbosity level 1: drop the mask column and the USE=\"...\" line (optionally: -q y|n)");
     println!("   -N, --newuse    reinstall an already-installed package if its USE has changed");
     println!("   -U, --changed-use  like -N, but ignores newly added/removed IUSE flags entirely");
     println!("   -O, --nodeps    do not resolve or show any dependency, only the given atoms");
@@ -4846,6 +4881,7 @@ pub fn run(args: &[String]) -> ExitCode {
     let mut resume = false;
     let mut skipfirst = false;
     let mut verbose = false;
+    let mut quiet = false;
     let mut newuse = false;
     let mut changed_use = false;
     let mut nodeps = false;
@@ -5323,6 +5359,32 @@ pub fn run(args: &[String]) -> ExitCode {
             i += 1;
         } else if arg == "--verbose=n" {
             verbose = false;
+            i += 1;
+        } else if arg == "--quiet" || arg == "-q" {
+            // Real `--quiet`/`-q`: `true_y_or_n` (`argument_options`), the
+            // same optional-value shape `--verbose`/`-v` has -- a bare
+            // occurrence enables it, `y`/`n` set it explicitly. Sets real
+            // `_DisplayConfig` verbosity to 1 (see `render` / `use_suffix`
+            // / `attr_display_field` for what that changes).
+            match args.get(i + 1).map(String::as_str) {
+                Some("y") => {
+                    quiet = true;
+                    i += 2;
+                }
+                Some("n") => {
+                    quiet = false;
+                    i += 2;
+                }
+                _ => {
+                    quiet = true;
+                    i += 1;
+                }
+            }
+        } else if arg == "--quiet=y" {
+            quiet = true;
+            i += 1;
+        } else if arg == "--quiet=n" {
+            quiet = false;
             i += 1;
         } else if arg == "--deselect" || arg == "-W" {
             // Real "--deselect": y_or_n (argument_options), the same
@@ -6142,6 +6204,7 @@ pub fn run(args: &[String]) -> ExitCode {
                 match c {
                     'p' => pretend = true,
                     'v' => verbose = true,
+                    'q' => quiet = true,
                     'N' => newuse = true,
                     'U' => changed_use = true,
                     'O' => nodeps = true,
@@ -6362,15 +6425,20 @@ pub fn run(args: &[String]) -> ExitCode {
     }
 
     // `--search`/`-s` (`--searchdesc`/`-S` also matches DESCRIPTION): a
-    // standalone read-only query action (real `action_search`).
+    // standalone read-only query action (real `action_search`). Real
+    // `action_search` passes `search`'s `verbose` as `"--quiet" not in
+    // myopts` -- so the full `Latest version` / `Homepage` /
+    // `Description` block shows by default and `-q` makes it terse; `-v`
+    // is irrelevant to search.
     if search_action {
-        return run_search(&atom_args, &repos, &root, searchdesc, verbose, &color);
+        return run_search(&atom_args, &repos, &root, searchdesc, !quiet, &color);
     }
 
     // `--check-news`: a standalone read-only query action (real
-    // `actions.py`'s `count_unread_news` block).
+    // `actions.py`'s `count_unread_news` block). Real gates its output on
+    // `"--quiet" not in myopts`.
     if check_news {
-        return run_check_news(&repos, &root, false, &color);
+        return run_check_news(&repos, &root, quiet, &color);
     }
 
     // `--info`: a standalone read-only query action (real
@@ -6799,6 +6867,7 @@ pub fn run(args: &[String]) -> ExitCode {
             oneshot,
             unordered_display,
             verbose,
+            quiet,
             alphabetical,
             root_deps_running_root.as_deref(),
             &color,
@@ -6815,6 +6884,7 @@ pub fn run(args: &[String]) -> ExitCode {
                 onlydeps,
                 oneshot,
                 verbose,
+                quiet,
                 alphabetical,
                 columns,
                 columnwidth,
@@ -6838,8 +6908,9 @@ pub fn run(args: &[String]) -> ExitCode {
     // self.print_verbose(...)` -- the `Total: …` counters line, printed
     // after every entry (and blocker) line, only under `-v`, for the
     // tree/columns/flat layouts alike. Real emits `f"\n{self.counters}\n"`
-    // (a leading blank line).
-    if verbose {
+    // (a leading blank line). `--quiet` forces verbosity to 1, so `-pvq`
+    // suppresses the line that `-pv` would show.
+    if verbose && !quiet {
         println!();
         println!(
             "{}",
@@ -7461,19 +7532,26 @@ mod tests {
     }
 
     #[test]
-    fn attr_display_field_always_carries_the_seventh_mask_column() {
+    fn attr_display_field_carries_the_seventh_mask_column_unless_quiet() {
         // Real `set_pkg_info` fills the mask column `if
         // self.include_mask_str()` (`verbosity > 1`), and real default
         // `emerge -p` verbosity is 2 -- so the field is 7 columns even
-        // without `-v`; this pilot has no `--quiet`/verbosity-1 mode
-        // that would drop it. A plain reinstall with no keyword/hard
+        // without `-v`, dropping to 6 only under `--quiet` (verbosity 1,
+        // `include_mask` false). A plain reinstall with no keyword/hard
         // mask -> `I N S f U D` = `  R   ` then a bare space.
         let nc = Colorizer::new(false);
         let plain = attr_display_field(
-            false, false, false, false, true, false, false, false, false, false, None, &nc,
+            false, false, false, false, true, false, false, false, false, false, None, true, &nc,
         );
         assert_eq!(plain, "  R    ");
         assert_eq!(plain.chars().count(), 7);
+
+        // Same entry under `--quiet`: 6 columns, no mask slot.
+        let quiet = attr_display_field(
+            false, false, false, false, true, false, false, false, false, false, None, false, &nc,
+        );
+        assert_eq!(quiet, "  R   ");
+        assert_eq!(quiet.chars().count(), 6);
 
         // A `~arch`-only-visible New -> the 7th column is `~`
         // (`gen_mask_str` "unstable"), not a space.
@@ -7489,6 +7567,7 @@ mod tests {
             false,
             false,
             Some('~'),
+            true,
             &nc,
         );
         assert_eq!(masked, " N    ~");
@@ -7545,8 +7624,22 @@ mod tests {
             "bar -baz",
             "bar -baz",
         );
-        assert_eq!(use_suffix(&new, false, false, &nc), " USE=\"bar -baz\"");
-        assert_eq!(use_suffix(&new, true, false, &nc), " USE=\"bar -baz\"");
+        assert_eq!(
+            use_suffix(&new, false, false, false, &nc),
+            " USE=\"bar -baz\""
+        );
+        assert_eq!(
+            use_suffix(&new, true, false, false, &nc),
+            " USE=\"bar -baz\""
+        );
+        // `--quiet` (verbosity 1): no USE line at all unless `-v` too.
+        assert_eq!(use_suffix(&new, false, true, false, &nc), "");
+        // `-pvq`: `print_use_string` true again, `all_flags` true -> the
+        // full list (like `-pv`).
+        assert_eq!(
+            use_suffix(&new, true, true, false, &nc),
+            " USE=\"bar -baz\""
+        );
 
         // A `Reinstall` with one flipped flag: `-pv` shows the full list,
         // plain `-p` shows only the change.
@@ -7563,9 +7656,17 @@ mod tests {
             "bar* -baz",
             "bar*",
         );
-        assert_eq!(use_suffix(&reinstall, false, false, &nc), " USE=\"bar*\"");
         assert_eq!(
-            use_suffix(&reinstall, true, false, &nc),
+            use_suffix(&reinstall, false, false, false, &nc),
+            " USE=\"bar*\""
+        );
+        assert_eq!(
+            use_suffix(&reinstall, true, false, false, &nc),
+            " USE=\"bar* -baz\""
+        );
+        // `-pvq`: full list, same as `-pv`.
+        assert_eq!(
+            use_suffix(&reinstall, true, true, false, &nc),
             " USE=\"bar* -baz\""
         );
 
@@ -7583,9 +7684,15 @@ mod tests {
             "bar -baz",
             "",
         );
-        assert_eq!(use_suffix(&unchanged, false, false, &nc), "");
+        assert_eq!(use_suffix(&unchanged, false, false, false, &nc), "");
         assert_eq!(
-            use_suffix(&unchanged, true, false, &nc),
+            use_suffix(&unchanged, true, false, false, &nc),
+            " USE=\"bar -baz\""
+        );
+        // `-pvq`: `all_flags` true -> the full list shows even though
+        // nothing changed.
+        assert_eq!(
+            use_suffix(&unchanged, true, true, false, &nc),
             " USE=\"bar -baz\""
         );
     }

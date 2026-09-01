@@ -317,8 +317,17 @@ dev/test context — see also the `chown` note below).
 
 ### H. Misc / cosmetic
 
-- `chown` / privilege-preserving `chmod` not reproduced; directory merge
-  order sorted for determinism, not real `os.listdir()` order (cosmetic).
+- ~~`chown` / privilege-preserving `chmod` not reproduced; directory
+  merge order sorted for determinism, not real `os.listdir()` order
+  (cosmetic).~~ **Assessed — largely a deliberate design choice, one
+  real touch-up applied.** `merge_tree`'s regular-file copy now mirrors
+  real `movefile()`'s explicit `os.chmod(dest, sstat.st_mode)` with a
+  `std::fs::set_permissions` after the copy. `os.lchown` stays out (needs
+  root, which the pilot's single-user context never has — it would only
+  no-op). Sorted traversal order is kept on purpose: `CONTENTS` line
+  order carries no semantics portage relies on, and test determinism is
+  worth more than bug-compatible arbitrariness. See `ebuild_merge.rs`'s
+  module doc comment.
 - `profiles/updates/` package moves (`sys-libs/foo` → `sys-libs/bar`).
 - ~~`color.map` / `PORTAGE_COLORMAP`.~~ **Done** — real
   `output.py::_parse_color_map` reads
@@ -326,8 +335,15 @@ dev/test context — see also the `chown` note below).
   any `_styles` key / `codes` colour-name; `PORTAGE_COLORMAP` exported
   into every build phase's env. See README "`color.map` /
   `PORTAGE_COLORMAP`".
-- `--quiet` verbosity level (1) — the pilot models plain `-p` (2) and
-  `-pv` (3) only.
+- ~~`--quiet` verbosity level (1) — the pilot models plain `-p` (2) and
+  `-pv` (3) only.~~ **Done** — `-q`/`--quiet` (real `true_y_or_n`,
+  bundle-compatible) drops the mask column (`include_mask_str()` =
+  `verbosity > 1`), suppresses the `USE="…"` line (`print_use_string =
+  verbosity != 1 or --verbose`) and the `:slot::repo` / `Total:`
+  verbosity-3 output, takes `--search` terse and gates `--check-news`'s
+  "no news" line. See README "`emerge --quiet` / `-q`". The
+  `--columns`-only quiet line-format rewrite stays out (the pilot
+  doesn't render `--columns`).
 
 ---
 

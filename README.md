@@ -10560,7 +10560,10 @@ Python reference and contract-tested.
   `DESCRIPTION`. The output is real `search.output()`'s shape —
   `Searching...`, the `[ Results for search key : … ]` header, a
   `*  cat/pkg` line per hit (with the `Latest version` / installed-status
-  / `Homepage` / `Description` / `License` block under `-v`), the
+  / `Homepage` / `Description` / `License` block, which real
+  `action_search` shows by default and `--quiet` suppresses —
+  `search`'s `verbose` is `"--quiet" not in myopts`, `-v` doesn't
+  affect it), the
   `[ Applications found : N ]` footer. A version tie between repos is
   broken toward the higher-priority repo. Documented cuts: real
   portage's default fuzzy matching (`--fuzzy-search`), regex search, the
@@ -10640,6 +10643,45 @@ escape for any `_styles` key (`GOOD`, `BAD`, `WARN`, `BRACKET`, the
 - Documented cut: real portage's `codes`/`_styles` tables are larger
   (256-colour and RGB entries, `0x……` hex names); the pilot ports the
   16-colour ANSI set it already used.
+
+### `emerge --quiet` / `-q`: verbosity level 1
+
+SCOPE_BACKLOG Part 2 Section H item 4 — the pilot previously modelled
+only plain `-p` (verbosity 2) and `-pv` (verbosity 3). Real
+`_DisplayConfig.__init__` computes `verbosity = "--quiet" and 1 or
+"--verbose" and 3 or 2` — `--quiet` wins over `-v`. `-q` takes an
+optional `y|n` (real `true_y_or_n`), and bundles (`-pq`, `-pvq`).
+
+What verbosity 1 changes, for the non-`--columns` display the pilot
+renders:
+
+- **The mask column disappears.** Real `include_mask_str()` is
+  `verbosity > 1`, so the fixed-width `PkgAttrDisplay` field is 6
+  columns, not 7 (`[ebuild  N    ]`, not `[ebuild  N     ]`), and the
+  blocker bracket loses its `empty_space_in_brackets()` space
+  (`[blocks B    ]`). `attr_display_field` / `format_blocker_lines` take
+  an `include_mask` flag.
+- **The `USE="…"` line is suppressed** — real `print_use_string =
+  verbosity != 1 or "--verbose"` — unless `-v` is also given (`-pvq`),
+  in which case it shows with `all_flags` on (`= verbosity == 3 or
+  quiet`), i.e. the full `-pv`-style flag list.
+- **No `:slot::repo` cpv decoration and no `Total:` counters line** —
+  both are `verbosity == 3` only, and `--quiet` forces verbosity to 1
+  even alongside `-v`, so `-pvq` drops the `Total:` line that `-pv`
+  shows.
+- **`emerge --search` goes terse** — real `action_search` passes
+  `search`'s `verbose` as `"--quiet" not in myopts`, so `-sq` prints
+  just the `*  cat/pkg` lines (and this fixes the pilot's earlier
+  `-s`-was-terse-by-default divergence: it now shows the full block by
+  default, like real portage).
+- **`emerge --check-news -q`** suppresses only the ` * No news items
+  were found.` line (real `actions.py:3851` `elif "--quiet" not in
+  …`); a non-zero count still prints the `IMPORTANT:` block.
+
+The `_set_root_columns` / `_set_non_root_columns` quiet *line-format*
+rewrite (dropping the `[ebuild …]` bracket entirely for a bare
+`N cat/pkg [ver]` line) is real only under `--columns`, which the pilot
+doesn't render, so it's not reproduced.
 
 ## Running it
 

@@ -314,7 +314,9 @@ pub const VALUE_OPTIONS: &[(&str, Option<&str>)] = &[
     ("--pkg-format", None),
     ("--quickpkg-direct", None),
     ("--quickpkg-direct-root", None),
-    ("--quiet", Some("-q")),
+    // `--quiet`/`-q` (real `true_y_or_n`, verbosity level 1) IS
+    // implemented now -- deliberately excluded here for the same reason
+    // `--verbose`/`-v` is: the caller parses it directly. See pretend.rs.
     ("--quiet-build", None),
     ("--quiet-fail", None),
     ("--read-news", None),

@@ -6014,7 +6014,7 @@ def test_short_flag_bundle_reports_the_first_out_of_scope_character(
     assert (
         unimplemented.stderr.strip()
         == 'emerge (pilot v1): option "--debug" is a real emerge option, but is not '
-        "implemented in this pilot (only --pretend/-p, --verbose/-v, --newuse/-N, --changed-use/-U, --nodeps/-O, "
+        "implemented in this pilot (only --pretend/-p, --verbose/-v, --quiet/-q, --newuse/-N, --changed-use/-U, --nodeps/-O, "
         "--onlydeps/-o, --update/-u, --deep/-D, --exclude/-X, --deselect/-W, --unmerge/-C, --depclean/-c, --prune/-P, --config, --with-bdeps, --with-bdeps-auto, --changed-deps, --changed-deps-report, --changed-slot, --verbose-slot-rebuilds, --ignore-built-slot-operator-deps, --buildpkg/-b, --buildpkg-exclude, --with-test-deps, --noreplace/-n, --selective, and --help/-h are implemented so far; see PROMPT.md)"
     )
 
@@ -6062,6 +6062,7 @@ def test_help_prints_a_pilot_specific_summary_not_real_emerges_own(
         "Options:\n"
         "   -p, --pretend   required: the only real merge calculation this pilot implements\n"
         '   -v, --verbose   show USE="..." on each [ebuild ...] line (optionally: -v y|n)\n'
+        '   -q, --quiet     verbosity level 1: drop the mask column and the USE="..." line (optionally: -q y|n)\n'
         "   -N, --newuse    reinstall an already-installed package if its USE has changed\n"
         "   -U, --changed-use  like -N, but ignores newly added/removed IUSE flags entirely\n"
         "   -O, --nodeps    do not resolve or show any dependency, only the given atoms\n"
@@ -9110,7 +9111,7 @@ def test_real_option_not_implemented_message_names_the_option(emerge_binary, fix
     assert (
         result.stderr.strip()
         == 'emerge (pilot v1): option "--accept-properties" is a real emerge option, but is not '
-        "implemented in this pilot (only --pretend/-p, --verbose/-v, --newuse/-N, --changed-use/-U, --nodeps/-O, "
+        "implemented in this pilot (only --pretend/-p, --verbose/-v, --quiet/-q, --newuse/-N, --changed-use/-U, --nodeps/-O, "
         "--onlydeps/-o, --update/-u, --deep/-D, --exclude/-X, --deselect/-W, --unmerge/-C, --depclean/-c, --prune/-P, --config, --with-bdeps, --with-bdeps-auto, --changed-deps, --changed-deps-report, --changed-slot, --verbose-slot-rebuilds, --ignore-built-slot-operator-deps, --buildpkg/-b, --buildpkg-exclude, --with-test-deps, --noreplace/-n, --selective, and --help/-h are implemented so far; see PROMPT.md)"
     )
 
@@ -9126,7 +9127,7 @@ def test_real_option_inline_equals_form_is_still_recognized(emerge_binary, fixtu
     assert (
         result.stderr.strip()
         == 'emerge (pilot v1): option "--accept-properties" is a real emerge option, but is not '
-        "implemented in this pilot (only --pretend/-p, --verbose/-v, --newuse/-N, --changed-use/-U, --nodeps/-O, "
+        "implemented in this pilot (only --pretend/-p, --verbose/-v, --quiet/-q, --newuse/-N, --changed-use/-U, --nodeps/-O, "
         "--onlydeps/-o, --update/-u, --deep/-D, --exclude/-X, --deselect/-W, --unmerge/-C, --depclean/-c, --prune/-P, --config, --with-bdeps, --with-bdeps-auto, --changed-deps, --changed-deps-report, --changed-slot, --verbose-slot-rebuilds, --ignore-built-slot-operator-deps, --buildpkg/-b, --buildpkg-exclude, --with-test-deps, --noreplace/-n, --selective, and --help/-h are implemented so far; see PROMPT.md)"
     )
 
@@ -9140,7 +9141,7 @@ def test_real_action_not_implemented_message_says_action_not_option(emerge_binar
     assert result.returncode == 2
     expected = (
         'emerge (pilot v1): action "--sync" is a real emerge action, but is not '
-        "implemented in this pilot (only --pretend/-p, --verbose/-v, --newuse/-N, --changed-use/-U, --nodeps/-O, "
+        "implemented in this pilot (only --pretend/-p, --verbose/-v, --quiet/-q, --newuse/-N, --changed-use/-U, --nodeps/-O, "
         "--onlydeps/-o, --update/-u, --deep/-D, --exclude/-X, --deselect/-W, --unmerge/-C, --depclean/-c, --prune/-P, --config, "
         "--with-bdeps, --with-bdeps-auto, --changed-deps, --changed-deps-report, --changed-slot, --verbose-slot-rebuilds, --ignore-built-slot-operator-deps, --buildpkg/-b, --buildpkg-exclude, --with-test-deps, "
         "--noreplace/-n, --selective, and --help/-h are implemented so far; see PROMPT.md)"
@@ -9280,6 +9281,51 @@ def test_color_map_overrides_the_ansi_codes(
     # and without the color.map it is green.
     plain = _run([str(emerge_binary)], ["--color=y", "-s", "newpkg"], fixture_env)
     assert "\x1b[32;01m*\x1b[39;49;00m" in plain.stdout
+
+
+@pytest.mark.parametrize(
+    "args",
+    [
+        ["-pq", "dev-libs/useflagpkg"],
+        ["-pvq", "dev-libs/useflagpkg"],
+        ["-pq", "--tree", "dev-libs/useflagpkg"],
+        ["-q", "-s", "useflagpkg"],
+        ["-q", "--check-news"],
+    ],
+)
+def test_quiet_verbosity_level_1_matches_rust_and_python(
+    emerge_binary, emerge_pretend_python, fixture_env, args
+):
+    """emerge --quiet/-q (real _DisplayConfig verbosity 1): the mask
+    column disappears from the [ebuild ...] bracket, the USE="..." line
+    is suppressed (unless -v is also given), the ::repo cpv decoration
+    and the Total: line never show, and --search drops its verbose
+    block. Rust == Python."""
+    rust = _run([str(emerge_binary)], args, fixture_env)
+    py = _run(emerge_pretend_python, args, fixture_env)
+    assert rust.stdout == py.stdout, args
+    assert rust.returncode == py.returncode
+
+
+def test_quiet_drops_the_mask_column_and_the_use_line(emerge_binary, fixture_env):
+    """The concrete -pq shape: a merge line's fixed-width attr field is
+    6 columns (not the default 7 -- real include_mask_str() is
+    verbosity > 1), and no USE="..." suffix. -pvq keeps the USE line
+    (print_use_string = verbosity != 1 or --verbose) but still drops the
+    mask column and the Total: line."""
+    pq = _run([str(emerge_binary)], ["-pq", "dev-libs/useflagpkg"], fixture_env)
+    assert "[ebuild  N    ] dev-libs/useflagpkg-1.0 \n" in pq.stdout
+    assert "USE=" not in pq.stdout
+    assert "Total:" not in pq.stdout
+
+    pvq = _run([str(emerge_binary)], ["-pvq", "dev-libs/useflagpkg"], fixture_env)
+    assert '[ebuild  N    ] dev-libs/useflagpkg-1.0  USE="foo -missingflag"\n' in pvq.stdout
+    assert "::testrepo" not in pvq.stdout
+    assert "Total:" not in pvq.stdout
+
+    # plain -p keeps the 7-column field.
+    p = _run([str(emerge_binary)], ["-p", "dev-libs/useflagpkg"], fixture_env)
+    assert "[ebuild  N     ] dev-libs/useflagpkg-1.0 " in p.stdout
 
 
 def test_info_prints_the_deterministic_config_block(

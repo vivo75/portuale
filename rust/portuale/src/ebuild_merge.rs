@@ -155,16 +155,21 @@
 //     module) and unmerge (`preserve_libs_on_unmerge`, this module) are
 //     real now -- see `README.md`'s own "`preserve-libs`" sections for
 //     the full grounding of each slice.
-//   - Real `os.chown`/permission-preserving `os.chmod` per merged file
-//     are not reproduced explicitly -- `std::fs::copy` already preserves
-//     a regular file's permission bits on Unix, which covers the common
-//     case; ownership is left as whatever the copying process's own
-//     default is (this pilot's own single-user dev/test context has no
-//     privilege-dropping concept anywhere else either).
+//   - `merge_tree`'s regular-file copy now mirrors real `movefile()`'s
+//     explicit `os.chmod(dest, sstat.st_mode)` with a
+//     `std::fs::set_permissions` after the copy (on top of the mode bits
+//     `std::fs::copy` already carries over on Unix). Real `movefile()`'s
+//     `os.lchown` is still not reproduced -- it needs root, which this
+//     pilot's single-user dev/test context never has, so it would only
+//     ever no-op; there's no privilege-dropping concept anywhere else in
+//     the pilot either.
 //   - Directory-entry merge order is sorted by filename for determinism
 //     (this pilot's own test-reproducibility need) rather than real
-//     `os.listdir()`'s own arbitrary/OS-dependent order -- `CONTENTS`
-//     line order has no real semantic meaning portage itself relies on.
+//     `os.listdir()`'s own arbitrary/OS-dependent order -- a deliberate
+//     choice, not a gap: `CONTENTS` line order has no semantic meaning
+//     portage itself relies on (unmerge re-sorts, `qmerge`/`qlist` sort
+//     on read), and determinism is worth more here than bug-compatible
+//     arbitrariness.
 //   - `SLOT` is read directly from the ebuild's own text via a simple
 //     `SLOT=...` assignment regex (see `parse_slot`), the same
 //     "real-file, direct-text-parsing" shortcut `ebuild_phases::
@@ -1346,6 +1351,28 @@ fn merge_tree(
                     }
                     std::fs::copy(&src, &write_dest)
                         .map_err(|e| format!("{}: {e}", src.display()))?;
+                    // Real `movefile()` explicitly `os.chmod(dest,
+                    // sstat.st_mode)`s after the copy/rename (and
+                    // `os.lchown`s -- omitted here: it needs root, which
+                    // this pilot's single-user dev/test context never
+                    // has, and would only ever no-op). `std::fs::copy`
+                    // already carries a regular file's permission bits
+                    // over on Unix, so this is belt-and-suspenders that
+                    // makes the mode explicit and also fixes up a
+                    // pre-existing `._cfgNNNN_` sibling should the umask
+                    // have masked a bit.
+                    {
+                        use std::os::unix::fs::PermissionsExt;
+                        let mode = std::fs::metadata(&src)
+                            .map_err(|e| format!("{}: {e}", src.display()))?
+                            .permissions()
+                            .mode();
+                        std::fs::set_permissions(
+                            &write_dest,
+                            std::fs::Permissions::from_mode(mode),
+                        )
+                        .map_err(|e| format!("{}: {e}", write_dest.display()))?;
+                    }
                     // Real movefile() preserves the source's own mtime onto
                     // the destination -- std::fs::copy doesn't (the copy
                     // gets a fresh "now" mtime), which would otherwise never

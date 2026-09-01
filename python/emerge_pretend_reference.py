@@ -7371,7 +7371,9 @@ _VALUE_OPTIONS = [
     ("--pkg-format", None),
     ("--quickpkg-direct", None),
     ("--quickpkg-direct-root", None),
-    ("--quiet", "-q"),
+    # --quiet/-q (real true_y_or_n, verbosity level 1) IS implemented now
+    # -- deliberately excluded here for the same reason --verbose/-v is:
+    # the caller parses it directly.
     ("--quiet-build", None),
     ("--quiet-fail", None),
     ("--read-news", None),
@@ -7754,7 +7756,7 @@ def _report_option(token):
         print(
             f'emerge (pilot v1): {kind} "{canonical}" is a real emerge {kind}, '
             "but is not implemented in this pilot (only --pretend/-p, "
-            "--verbose/-v, --newuse/-N, --changed-use/-U, --nodeps/-O, "
+            "--verbose/-v, --quiet/-q, --newuse/-N, --changed-use/-U, --nodeps/-O, "
             "--onlydeps/-o, --update/-u, --deep/-D, --exclude/-X, "
             "--deselect/-W, --unmerge/-C, --depclean/-c, --prune/-P, --config, --with-bdeps, --with-bdeps-auto, --changed-deps, "
             "--changed-deps-report, --changed-slot, --verbose-slot-rebuilds, --ignore-built-slot-operator-deps, --buildpkg/-b, --buildpkg-exclude, --with-test-deps, "
@@ -7794,6 +7796,9 @@ def _print_help():
     print("Options:")
     print("   -p, --pretend   required: the only real merge calculation this pilot implements")
     print('   -v, --verbose   show USE="..." on each [ebuild ...] line (optionally: -v y|n)')
+    print(
+        '   -q, --quiet     verbosity level 1: drop the mask column and the USE="..." line (optionally: -q y|n)'
+    )
     print("   -N, --newuse    reinstall an already-installed package if its USE has changed")
     print("   -U, --changed-use  like -N, but ignores newly added/removed IUSE flags entirely")
     print("   -O, --nodeps    do not resolve or show any dependency, only the given atoms")
@@ -10216,6 +10221,7 @@ def _attr_display_field(
     new_version,
     downgrade,
     mask,
+    include_mask,
     color,
 ):
     """Real PkgAttrDisplay.__str__ (_emerge/resolver/output_helpers.py):
@@ -10238,9 +10244,9 @@ def _attr_display_field(
          Real set_pkg_info fills it in only `if self.include_mask_str()`
          (verbosity > 1), and real default `emerge -p` verbosity is 2
          (_DisplayConfig.__init__: `--quiet and 1 or --verbose and 3 or
-         2`) -- so the column is present at plain -p and -pv, absent only
-         under --quiet (verbosity 1), which this pilot doesn't model.
-         Always rendered.
+         2`) -- so the column is present at plain -p and -pv, absent
+         (the field is 6 chars, not 7) only under --quiet (verbosity 1).
+         include_mask carries that gate.
 
     Each present letter is ANSI-coloured per real PkgAttrDisplay.__str__
     (green("N"), yellow("R"), turquoise("U"), blue("D"),
@@ -10270,16 +10276,18 @@ def _attr_display_field(
     f.append(col("blue", "D") if downgrade else " ")
     # Real __str__ appends self.mask only `if self.mask is not None`, and
     # set_pkg_info sets it only `if self.include_mask_str()` (verbosity >
-    # 1) -- true at real portage's default `emerge -p` verbosity of 2, so
-    # the column is always present here (this pilot has no --quiet).
+    # 1) -- true at real portage's default `emerge -p` verbosity of 2,
+    # absent (the field is 6 chars, not 7) only under --quiet
+    # (verbosity 1), which include_mask carries.
     # Real gen_mask_str: #/* -> BAD (red), ~ -> WARN (yellow), no mark ->
     # a space.
-    if mask in ("#", "*"):
-        f.append(col("BAD", mask))
-    elif mask == "~":
-        f.append(col("WARN", "~"))
-    else:
-        f.append(" ")
+    if include_mask:
+        if mask in ("#", "*"):
+            f.append(col("BAD", mask))
+        elif mask == "~":
+            f.append(col("WARN", "~"))
+        else:
+            f.append(" ")
     return "".join(f)
 
 
@@ -10690,6 +10698,7 @@ def run(args):
     atom_args = []
     pretend = False
     verbose = False
+    quiet = False
     newuse = False
     changed_use = False
     nodeps = False
@@ -11002,6 +11011,27 @@ def run(args):
             i += 1
         elif arg == "--verbose=n":
             verbose = False
+            i += 1
+        elif arg in ("--quiet", "-q"):
+            # Real "--quiet"/"-q": true_y_or_n (argument_options), the
+            # same optional-value shape "--verbose"/"-v" has. Sets real
+            # _DisplayConfig verbosity to 1 (see print_entry_line /
+            # use_suffix / _attr_display_field for what that changes).
+            nxt = args[i + 1] if i + 1 < len(args) else None
+            if nxt == "y":
+                quiet = True
+                i += 2
+            elif nxt == "n":
+                quiet = False
+                i += 2
+            else:
+                quiet = True
+                i += 1
+        elif arg == "--quiet=y":
+            quiet = True
+            i += 1
+        elif arg == "--quiet=n":
+            quiet = False
             i += 1
         elif arg in ("--deselect", "-W"):
             # Real "--deselect": y_or_n, the same optional-value shape
@@ -11657,6 +11687,8 @@ def run(args):
                     pretend = True
                 elif c == "v":
                     verbose = True
+                elif c == "q":
+                    quiet = True
                 elif c == "N":
                     newuse = True
                 elif c == "U":
@@ -11762,19 +11794,24 @@ def run(args):
     if list_sets:
         return _run_list_sets(_config_root())
     if search_action:
+        # Real action_search passes search's `verbose` as `"--quiet" not
+        # in myopts` -- so the full block shows by default and -q makes it
+        # terse; -v is irrelevant to search.
         return _run_search(
             atom_args,
             _config_root(),
             _root(),
             searchdesc,
-            verbose,
+            not quiet,
             _Colorizer(_resolve_havecolor(color_opt)),
         )
     if check_news:
+        # Real count_unread_news block gates its output on `"--quiet" not
+        # in myopts`.
         return _run_check_news(
             find_repos(_config_root()),
             _root(),
-            False,
+            quiet,
             _Colorizer(_resolve_havecolor(color_opt)),
         )
     if info_action:
@@ -12179,10 +12216,9 @@ def run(args):
         # appends `empty_space_in_brackets()` after the five-space `B    `
         # pad, and that adds the mask column's own space whenever
         # `verbosity > 1` -- true at real portage's default `emerge -p`
-        # verbosity of 2, so it's always present here (this pilot has no
-        # --quiet).
+        # verbosity of 2, dropped only under --quiet (verbosity 1).
         style = "PKG_BLOCKER"
-        pad = "      "
+        pad = "      " if not quiet else "     "
         for b in blockers:
             resolved = b["atom_str"].lstrip("!")
             desc = "hard blocking" if b["strong"] else "soft blocking"
@@ -12262,14 +12298,16 @@ def run(args):
         # Mirrors portage-repo/src/lib.rs's build_use_expand_display +
         # pretend.rs's use_suffix.
         #
-        # Real _DisplayConfig: print_use_string = verbosity != 1, and
-        # real default `emerge -p` verbosity is 2 -- so the USE line is
-        # NOT -v-gated. What -v (verbosity 3) changes is all_flags, i.e.
-        # WHICH flags render: -pv shows every flag (unchanged ones plain,
-        # plus the (-flag%) removed list), plain -p omits an unchanged
-        # flag -- so a New package's list is the same at -p and -pv
-        # (is_new renders everything), and a Reinstall/Upgrade shows only
-        # the changed flags at -p (often none).
+        # Real _DisplayConfig: print_use_string = verbosity != 1 or
+        # "--verbose", and real default `emerge -p` verbosity is 2 -- so
+        # the USE line is NOT -v-gated, but --quiet (verbosity 1)
+        # suppresses it entirely unless -v is also given (-pvq). What -v
+        # (verbosity 3) OR --quiet changes is all_flags (= verbosity == 3
+        # or quiet), i.e. WHICH flags render: -pv / -pq / -pvq show every
+        # flag (unchanged ones plain, plus the (-flag%) removed list),
+        # plain -p omits an unchanged flag.
+        if quiet and not verbose:
+            return ""
         if not use_display:
             return ""
         groups = _build_use_expand_display(
@@ -12278,7 +12316,7 @@ def run(args):
             config["use_expand_hidden"],
             installed,
             forced,
-            verbose,
+            verbose or quiet,
             reinst_flags,
         )
         if not groups:
@@ -12419,6 +12457,11 @@ def run(args):
         remote_binary = bool(prov.get("remote_binary"))
         new_slot_flag = bool(prov.get("new_slot"))
 
+        # Real _DisplayConfig verbosity: `--quiet and 1 or --verbose and
+        # 3 or 2` -- --quiet wins over -v. v3 is "verbosity == 3", the
+        # gate on ::repo/:slot cpv decoration, the Total: line, and the
+        # fetch-size suffix. Mirrors pretend.rs.
+        v3 = verbose and not quiet
         # Real _append_slot / _append_repository / convert_myoldbest
         # (verbosity 3 -- emerge -pv). Mirrors pretend.rs.
         entry_slot = _slot or "0"
@@ -12432,7 +12475,7 @@ def run(args):
         )
 
         def disp_version(v):
-            if not verbose:
+            if not v3:
                 return v
             return _decorate_version(v, entry_slot, entry_sub, entry_repo, show_slot)
 
@@ -12444,7 +12487,7 @@ def run(args):
                 v = r["version"][:-3] if r["version"].endswith("-r0") else r["version"]
                 parts.append(
                     _decorate_version(v, r["slot"], r["sub_slot"], r["repo"], show_slot)
-                    if verbose
+                    if v3
                     else v
                 )
             return "[" + ", ".join(parts) + "]"
@@ -12469,6 +12512,7 @@ def run(args):
                 new_version,
                 downgrade,
                 km,
+                not quiet,
                 color,
             )
 
@@ -12491,7 +12535,7 @@ def run(args):
             # only for a --getbinpkg remote binary (see pretend.rs's
             # emit -- the one non-zero case; the wider bare " 0 KiB" that
             # real shows on every -pv line is a pre-existing omission).
-            if verbose and remote_binary:
+            if v3 and remote_binary:
                 _bytes = sum(s for _n, s in (prov.get("download_files") or []))
                 size_suffix = " " + _localized_size(_bytes)
             else:
@@ -12698,8 +12742,9 @@ def run(args):
     # self.print_verbose(...)` -- the `Total: ...` counters line, printed
     # after every entry (and blocker) line, only under -v, for the
     # tree/columns/flat layouts alike. Real emits f"\n{self.counters}\n"
-    # (a leading blank line). Mirrors pretend.rs.
-    if verbose:
+    # (a leading blank line). --quiet forces verbosity to 1, so -pvq
+    # suppresses the line that -pv would show. Mirrors pretend.rs.
+    if verbose and not quiet:
         print()
         print(_package_counters_summary(entries, top_level_pkgs, onlydeps, color))
 
