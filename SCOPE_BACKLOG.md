@@ -197,7 +197,11 @@ single-pass BFS can't grow into these incrementally:
   `--deselect`; TTY gating; prompt colour; re-prompt on a bad answer.
 - **`elog` / `PORTAGE_ELOG_*`.** Build-log post-processing (save / mail /
   echo summary) is not modelled.
-- **`PORTAGE_NICENESS` / `PORTAGE_IONICE_COMMAND` / scheduling policy.**
+- **`PORTAGE_NICENESS` / `PORTAGE_IONICE_COMMAND`.** *Shipped
+  2026-09-01:* `apply_portage_scheduling_policy` (real
+  `actions.py::apply_priorities`) renices/ionices this process at startup.
+  Remaining: `PORTAGE_SCHEDULING_POLICY` (`chrt`); `shlex` quoting for
+  the ionice command.
 
 ### C. Config resolution depth
 
@@ -318,9 +322,9 @@ by a few large items rather than a long tail of small ones:
 
 2. **The Scheduler (Part 2.B).** *`emerge -jN` parallel builds +
    `--load-average` + build-log capture + the `>>> Jobs:` line + `--ask`
-   / `CLEAN_DELAY` shipped 2026-09-01.* Still missing:
-   `--resume`/`--skipfirst` (mtimedb state), `elog` / `PORTAGE_ELOG_*`,
-   `PORTAGE_NICENESS` / `PORTAGE_IONICE_COMMAND`.
+   / `CLEAN_DELAY` + `PORTAGE_NICENESS` / `PORTAGE_IONICE_COMMAND` shipped
+   2026-09-01.* Still missing: `--resume`/`--skipfirst` (mtimedb state),
+   `elog` / `PORTAGE_ELOG_*`.
 
 3. **Config-resolution depth (Part 2.C).** The `USE_ORDER` layering is
    partial. Most real profiles resolve identically, but a config that

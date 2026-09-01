@@ -10275,6 +10275,19 @@ answer); no colour on the prompt (real `bold()` + green/red); no
 `--ask-enter-invalid`; an unrecognized answer quits rather than
 re-prompting; `--ask` for `--deselect` / `--config` is not wired yet.
 
+### `PORTAGE_NICENESS` / `PORTAGE_IONICE_COMMAND`
+
+Real `_emerge/actions.py::apply_priorities` (run from `run_action` before
+any action): `apply_portage_scheduling_policy` renices this process
+(`renice -n <PORTAGE_NICENESS> <pid>`) and runs `PORTAGE_IONICE_COMMAND`
+(whitespace-split, `${PID}` / `$PID` expanded) once at startup, so every
+build/merge subprocess inherits the policy. A missing `renice` prints the
+real `PORTAGE_NICENESS not applied because the renice command was not
+found`; a non-zero renice/ionice exit prints an eerror-style line and the
+run continues; an absent ionice tool is silent. v1 cuts:
+`PORTAGE_SCHEDULING_POLICY` (`chrt`) is not applied; `PORTAGE_IONICE_COMMAND`
+has no shell quoting (real `shlex.split`).
+
 ## Running it
 
 Build both Rust binaries:

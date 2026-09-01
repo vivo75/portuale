@@ -2977,6 +2977,66 @@ fn package_options_from_env() -> ebuild_package::PackageOptions {
     }
 }
 
+/// Real `_emerge/actions.py::apply_priorities` (via `run_action`, before
+/// any action): applies `PORTAGE_NICENESS` (`renice -n <n> <pid>`) and
+/// `PORTAGE_IONICE_COMMAND` (`${PID}`-expanded, spawned) to this process,
+/// so every build/merge subprocess it later spawns inherits them. A
+/// missing `renice` prints the real "renice command was not found" line
+/// and gives up; a non-zero exit prints an eerror-style line and
+/// continues. `PORTAGE_IONICE_COMMAND` failing because the tool is absent
+/// is silent (real: "kernel probably doesn't support ionice"). Called
+/// once, unconditionally -- harmless under `--pretend`.
+///
+/// v1 cuts: `PORTAGE_SCHEDULING_POLICY` (real `set_scheduling_policy` --
+/// `chrt`) is not applied; `PORTAGE_IONICE_COMMAND` is whitespace-split,
+/// no shell quoting (real `shlex.split`).
+fn apply_portage_scheduling_policy() {
+    let pid = std::process::id().to_string();
+    if let Ok(niceness) = std::env::var("PORTAGE_NICENESS") {
+        let niceness = niceness.trim();
+        if !niceness.is_empty() {
+            match std::process::Command::new("renice")
+                .args(["-n", niceness, &pid])
+                .stdout(std::process::Stdio::null())
+                .status()
+            {
+                Err(_) => eprintln!(
+                    " * PORTAGE_NICENESS not applied because the renice command was not found"
+                ),
+                Ok(s) if !s.success() => {
+                    eprintln!(
+                        " * renice command returned {} for main pid {pid}",
+                        s.code().unwrap_or(-1)
+                    );
+                }
+                Ok(_) => {}
+            }
+        }
+    }
+    if let Ok(cmd) = std::env::var("PORTAGE_IONICE_COMMAND") {
+        let parts: Vec<String> = cmd
+            .split_whitespace()
+            .map(|p| p.replace("${PID}", &pid).replace("$PID", &pid))
+            .collect();
+        if let Some((prog, args)) = parts.split_first() {
+            match std::process::Command::new(prog).args(args).status() {
+                Err(_) => {} // the kernel probably doesn't support ionice
+                Ok(s) if !s.success() => {
+                    eprintln!(
+                        " * PORTAGE_IONICE_COMMAND returned {} for main pid {pid}",
+                        s.code().unwrap_or(-1)
+                    );
+                    eprintln!(
+                        " * See the make.conf(5) man page for PORTAGE_IONICE_COMMAND usage \
+                         instructions."
+                    );
+                }
+                Ok(_) => {}
+            }
+        }
+    }
+}
+
 /// Real `_emerge/UserQuery.query` (`portage.output.userquery`'s wrapper):
 /// prints `<question> [Yes/No] `, reads a line from stdin, and matches it
 /// case-insensitively as a prefix of one of the responses -- a bare Enter
@@ -5514,6 +5574,11 @@ pub fn run(args: &[String]) -> ExitCode {
     // so every action path (the standalone cleanup actions below and the
     // ordinary resolve-graph path) shares one `Colorizer`.
     let color = Colorizer::new(color::resolve_havecolor(color_opt));
+
+    // Real `_emerge/actions.py::apply_priorities` (called from
+    // `run_action`, before any action): renice / ionice this process so
+    // every build subprocess it spawns inherits the policy.
+    apply_portage_scheduling_policy();
 
     // `--config <atom>`: a standalone action -- run `pkg_config` for one
     // installed package (real `action_config`). Needs nothing from the

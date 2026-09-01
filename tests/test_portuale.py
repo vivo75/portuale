@@ -919,6 +919,38 @@ def test_emerge_unmerge_without_pretend_really_removes_and_deselects(
     assert (root / "var/lib/portage/world").read_text() == "dev-libs/keepme\n"
 
 
+def test_emerge_applies_portage_niceness_and_ionice(emerge_binary, fixture_env):
+    """Real `_emerge/actions.py::apply_priorities` (via `run_action`):
+    `PORTAGE_NICENESS` -> `renice -n <n> <pid>`, `PORTAGE_IONICE_COMMAND`
+    -> spawned with `${PID}` expanded. A failing renice / ionice prints
+    an eerror-style line and the run continues; unset -> nothing."""
+    base = [str(emerge_binary), "--pretend", "dev-libs/newpkg"]
+
+    # Baseline: neither var -> no scheduling-policy output at all.
+    clean = dict(fixture_env)
+    clean.pop("PORTAGE_NICENESS", None)
+    clean.pop("PORTAGE_IONICE_COMMAND", None)
+    r = subprocess.run(base, capture_output=True, text=True, check=False, env=clean)
+    assert r.returncode == 0
+    assert "renice" not in r.stderr
+    assert "PORTAGE_IONICE_COMMAND" not in r.stderr
+
+    # A non-integer PORTAGE_NICENESS makes `renice` fail -> eerror line,
+    # run still proceeds.
+    env = dict(clean, PORTAGE_NICENESS="notanumber")
+    r = subprocess.run(base, capture_output=True, text=True, check=False, env=env)
+    assert r.returncode == 0
+    assert "renice command returned" in r.stderr
+    assert r.stdout.startswith("[ebuild")
+
+    # A failing PORTAGE_IONICE_COMMAND -> its own eerror lines.
+    env = dict(clean, PORTAGE_IONICE_COMMAND="false ${PID}")
+    r = subprocess.run(base, capture_output=True, text=True, check=False, env=env)
+    assert r.returncode == 0
+    assert "PORTAGE_IONICE_COMMAND returned" in r.stderr
+    assert "make.conf(5)" in r.stderr
+
+
 def test_emerge_ask_prompts_before_a_real_merge_and_honours_the_answer(
     emerge_binary, tmp_path
 ):
