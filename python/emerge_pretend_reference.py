@@ -5895,6 +5895,7 @@ def resolve_pretend_graph(
     getbinpkg=False,
     ignore_built_slot_operator_deps=False,
     backtrack_max=10,
+    reinstall_atoms=(),
 ):
     """Recursively resolves every atom in `atoms` and -- for packages that
     would newly merge or upgrade -- its DEPEND+RDEPEND+BDEPEND+PDEPEND+
@@ -6214,6 +6215,27 @@ def resolve_pretend_graph(
                 autounmask_suggest_masks,
                 extra_constraints,
             )
+
+            # --reinstall-atoms: a matching already-installed package is
+            # forced to re-merge (real depgraph.py drops it from every
+            # inst_pkgs list) -- the --emptytree rewrite, scoped to the
+            # matched atom. Mirrors portage-repo/src/lib.rs.
+            if outcome[0] == "already_installed" and reinstall_atoms:
+                cpv = f"{key[0]}/{key[1]}-{outcome[1]}"
+                if any(
+                    _matches_config_entry(a, cpv, key[0], key[1])
+                    for a in reinstall_atoms
+                ):
+                    outcome = (
+                        "reinstall",
+                        outcome[1],
+                        [],
+                        False,
+                        False,
+                        False,
+                        False,
+                        False,
+                    )
 
             # Real --autounmask-use PART B *resolution*
             # (_apply_parent_use_changes -> _show_unsatisfied_dep(
@@ -7603,7 +7625,8 @@ _VALUE_OPTIONS = [
     ("--load-average", "-l"),
     ("--misspell-suggestions", None),
     ("--reinstall", None),
-    ("--reinstall-atoms", None),
+    # --reinstall-atoms ATOMS IS implemented (force-reinstall a matching
+    # already-installed package).
     ("--binpkg-respect-use", None),
     ("--getbinpkg", "-g"),
     ("--getbinpkgonly", "-G"),
@@ -11043,6 +11066,7 @@ def run(args):
     update = False
     deep = 0
     excluded = []
+    reinstall_atoms = []
     usepkg_exclude = []
     usepkg_include = []
     json_output = False
@@ -11286,6 +11310,20 @@ def run(args):
             i += 2
         elif arg.startswith("--exclude="):
             excluded.extend(arg[len("--exclude=") :].split())
+            i += 1
+        elif arg == "--reinstall-atoms":
+            # Real "action": "append" -> WildcardPackageSet -- same
+            # repeatable/space-separated shape as --exclude.
+            if i + 1 >= len(args):
+                print(
+                    'emerge: option "--reinstall-atoms" requires an argument',
+                    file=sys.stderr,
+                )
+                return 2
+            reinstall_atoms.extend(args[i + 1].split())
+            i += 2
+        elif arg.startswith("--reinstall-atoms="):
+            reinstall_atoms.extend(arg[len("--reinstall-atoms=") :].split())
             i += 1
         elif arg == "--usepkg-exclude":
             # Same "action": "append", space-separated-per-occurrence
@@ -12592,6 +12630,7 @@ def run(args):
             getbinpkg,
             ignore_built_slot_operator_deps,
             backtrack_max,
+            reinstall_atoms,
         )
     except ResolutionError as e:
         print(f"emerge: {e}", file=sys.stderr)

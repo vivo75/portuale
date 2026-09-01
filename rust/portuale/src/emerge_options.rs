@@ -306,7 +306,9 @@ pub const VALUE_OPTIONS: &[(&str, Option<&str>)] = &[
     ("--load-average", Some("-l")),
     ("--misspell-suggestions", None),
     ("--reinstall", None),
-    ("--reinstall-atoms", None),
+    // `--reinstall-atoms ATOMS` IS implemented -- a matching
+    // already-installed package is forced to re-merge (see pretend.rs's
+    // parse loop + `resolve_pretend_graph`'s `reinstall_atoms`).
     ("--binpkg-respect-use", None),
     ("--getbinpkg", Some("-g")),
     ("--getbinpkgonly", Some("-G")),

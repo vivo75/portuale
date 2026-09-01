@@ -5042,6 +5042,12 @@ pub fn run(args: &[String]) -> ExitCode {
     let mut update = false;
     let mut deep = portage_repo::Deep::NotRequested;
     let mut excluded: Vec<String> = Vec::new();
+    // --reinstall-atoms ATOMS (real `main.py`, `action: "append"` ->
+    // `depgraph.py:363-365` `WildcardPackageSet`): same repeatable,
+    // space-separated-per-occurrence shape as --exclude. A matching
+    // already-installed package is forced to re-merge (see
+    // `resolve_pretend_graph`'s own `reinstall_atoms` doc comment).
+    let mut reinstall_atoms: Vec<String> = Vec::new();
     // --usepkg-exclude/--usepkg-include: same "action": "append",
     // space-separated-per-occurrence shape as --exclude/-X above (real
     // main.py: "A space separated list of package names or slot atoms"),
@@ -5447,6 +5453,16 @@ pub fn run(args: &[String]) -> ExitCode {
             i += 2;
         } else if let Some(value) = arg.strip_prefix("--exclude=") {
             excluded.extend(value.split_whitespace().map(String::from));
+            i += 1;
+        } else if arg == "--reinstall-atoms" {
+            let Some(value) = args.get(i + 1) else {
+                eprintln!("emerge: option \"--reinstall-atoms\" requires an argument");
+                return ExitCode::from(2);
+            };
+            reinstall_atoms.extend(value.split_whitespace().map(String::from));
+            i += 2;
+        } else if let Some(value) = arg.strip_prefix("--reinstall-atoms=") {
+            reinstall_atoms.extend(value.split_whitespace().map(String::from));
             i += 1;
         } else if arg == "--usepkg-exclude" {
             // Same "action": "append", space-separated-per-occurrence
@@ -7072,6 +7088,7 @@ pub fn run(args: &[String]) -> ExitCode {
         getbinpkg,
         ignore_built_slot_operator_deps,
         backtrack_max,
+        &reinstall_atoms,
     ) {
         Ok(result) => result,
         Err(e) => {

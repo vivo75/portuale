@@ -8626,6 +8626,18 @@ pub fn resolve_pretend_graph(
     // pass, so a slot conflict is reported without any retry, exactly the
     // pre-backtracking behavior.
     backtrack_max: u32,
+    // `--reinstall-atoms ATOMS` (real `main.py`, `action: "append"` ->
+    // `depgraph.py:363-365`: `WildcardPackageSet(atoms)`). An
+    // already-installed package whose `cat/pkg-version` matches one of
+    // these atoms is treated as if not installed -- real `depgraph.py:
+    // 4547`/`4643`/`8331` drop it from every `inst_pkgs` satisfaction
+    // list, forcing a re-merge. In this pilot's model that is exactly a
+    // scoped `--emptytree`: `resolve_pretend`'s own
+    // `AlreadyInstalled` -> `Reinstall` rewrite (see `empty`), applied
+    // per matching atom right after resolution. Same two-tier
+    // `matches_config_entry` matcher `excluded` uses. Empty (`&[]`) at
+    // every call site that doesn't pass `--reinstall-atoms`.
+    reinstall_atoms: &[String],
 ) -> Result<GraphResult, String> {
     let repos = find_repos(config_root)?;
     // Real `create_depgraph_params.py:178`: `--emptytree` sets
@@ -8875,6 +8887,28 @@ pub fn resolve_pretend_graph(
                 autounmask_suggest_masks,
                 extra_constraints,
             )?;
+
+            // `--reinstall-atoms`: a matching already-installed package
+            // is forced to re-merge (real `depgraph.py` drops it from
+            // every `inst_pkgs` list). In this pilot's model that is the
+            // `--emptytree` rewrite, scoped to the matched atom.
+            if let PretendOutcome::AlreadyInstalled { version } = &outcome {
+                let cpv = format!("{}/{}-{version}", key.0, key.1);
+                if reinstall_atoms
+                    .iter()
+                    .any(|a| matches_config_entry(a, &cpv, &key.0, &key.1))
+                {
+                    outcome = PretendOutcome::Reinstall {
+                        version: version.clone(),
+                        changed_flags: Vec::new(),
+                        deps_changed: false,
+                        slot_changed: false,
+                        rebuilt_binary: false,
+                        new_repo: false,
+                        slot_operator_rebuild: false,
+                    };
+                }
+            }
 
             // Real `--autounmask-use` PART B *resolution* (`_apply_parent_use_changes`
             // -> `_show_unsatisfied_dep(collect_use_changes=True)`,
@@ -11832,6 +11866,7 @@ mod tests {
             false,
             false,
             10,
+            &[],
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
     }
@@ -13683,6 +13718,7 @@ mod tests {
             false,
             false,
             10,
+            &[],
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -13730,6 +13766,7 @@ mod tests {
             false,
             false,
             10,
+            &[],
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -13779,6 +13816,7 @@ mod tests {
             false,
             false,
             10,
+            &[],
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -13832,6 +13870,7 @@ mod tests {
             false,
             false,
             10,
+            &[],
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph failed: {e}"))
         .entries
@@ -13902,12 +13941,121 @@ mod tests {
             false,
             false,
             10,
+            &[],
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
         .into_iter()
         .map(|e| (format!("{}/{}", e.category, e.package), e.outcome))
         .collect()
+    }
+
+    /// Like `graph_deep(atom, Deep::Unlimited)`, but with a
+    /// `--reinstall-atoms` set applied.
+    fn graph_deep_reinstall_atoms(
+        atom_str: &str,
+        reinstall_atoms: &[&str],
+    ) -> Vec<(String, PretendOutcome)> {
+        let root = fixtures_root();
+        let ra: Vec<String> = reinstall_atoms.iter().map(|s| s.to_string()).collect();
+        resolve_pretend_graph(
+            &root,
+            &root,
+            &[atom_str.to_string()],
+            &test_config(),
+            false,
+            false,
+            false,
+            false,
+            Deep::Unlimited,
+            &[],
+            true,
+            false,
+            false,
+            false,
+            false,
+            true,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            &[],
+            &[],
+            false,
+            None,
+            false,
+            false,
+            None,
+            &fixtures_root().join("distfiles"),
+            false,
+            false,
+            false,
+            10,
+            &ra,
+        )
+        .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
+        .entries
+        .into_iter()
+        .map(|e| (format!("{}/{}", e.category, e.package), e.outcome))
+        .collect()
+    }
+
+    #[test]
+    fn reinstall_atoms_forces_an_otherwise_already_installed_deep_dep_to_reinstall() {
+        // deeppkg (installed) RDEPENDs deeppkg2 (installed) RDEPENDs
+        // newpkg (New). Under `--deep` alone deeppkg2 resolves to
+        // AlreadyInstalled (the CLI filters it from the merge list).
+        // `--reinstall-atoms dev-libs/deeppkg2` rewrites just that one to
+        // a bare Reinstall, exactly like a scoped --emptytree; deeppkg
+        // stays AlreadyInstalled and newpkg stays New.
+        let bare = PretendOutcome::Reinstall {
+            version: "1.0".to_string(),
+            changed_flags: Vec::new(),
+            deps_changed: false,
+            slot_changed: false,
+            rebuilt_binary: false,
+            new_repo: false,
+            slot_operator_rebuild: false,
+        };
+        let plain = graph_deep("dev-libs/deeppkg", Deep::Unlimited);
+        assert_eq!(
+            plain
+                .iter()
+                .find(|(n, _)| n == "dev-libs/deeppkg2")
+                .map(|(_, o)| o.clone()),
+            Some(PretendOutcome::AlreadyInstalled {
+                version: "1.0".to_string()
+            })
+        );
+
+        let forced = graph_deep_reinstall_atoms("dev-libs/deeppkg", &["dev-libs/deeppkg2"]);
+        assert_eq!(
+            forced,
+            vec![
+                (
+                    "dev-libs/newpkg".to_string(),
+                    PretendOutcome::New {
+                        version: "1.0".to_string()
+                    }
+                ),
+                ("dev-libs/deeppkg2".to_string(), bare),
+                (
+                    "dev-libs/deeppkg".to_string(),
+                    PretendOutcome::AlreadyInstalled {
+                        version: "1.0".to_string()
+                    }
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn reinstall_atoms_accepts_a_wildcard_atom() {
+        let forced = graph_deep_reinstall_atoms("dev-libs/deeppkg", &["dev-libs/*"]);
+        assert!(forced.iter().any(|(n, _)| n == "dev-libs/deeppkg2"));
     }
 
     /// Like `graph_deep`, but driven by `--emptytree`/`-e` instead
@@ -13950,6 +14098,7 @@ mod tests {
             false,
             false,
             10,
+            &[],
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -14101,6 +14250,7 @@ mod tests {
             false,
             false,
             10,
+            &[],
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -14246,6 +14396,7 @@ mod tests {
             false,
             false,
             10,
+            &[],
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -14407,6 +14558,7 @@ mod tests {
             false,
             false,
             10,
+            &[],
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph failed: {e}"))
         .entries;
@@ -14490,6 +14642,7 @@ mod tests {
             false,
             false,
             10,
+            &[],
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph failed: {e}"))
         .entries;
@@ -14577,6 +14730,7 @@ mod tests {
             false,
             false,
             10,
+            &[],
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph failed: {e}"))
         .entries
@@ -14644,6 +14798,7 @@ mod tests {
                 false,
                 false,
                 10,
+                &[],
             )
             .unwrap_or_else(|e| panic!("resolve_pretend_graph failed: {e}"))
             .entries
@@ -14715,6 +14870,7 @@ mod tests {
             false,
             false,
             10,
+            &[],
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph failed: {e}"))
         .entries
@@ -14775,6 +14931,7 @@ mod tests {
             false,
             false,
             10,
+            &[],
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph failed: {e}"))
         .entries
@@ -14831,6 +14988,7 @@ mod tests {
             false,
             false,
             10,
+            &[],
         )
         .expect("resolve_pretend_graph must succeed")
         .entries
@@ -15136,6 +15294,7 @@ mod tests {
             false,
             false,
             10,
+            &[],
         )
         .expect("resolve_pretend_graph must succeed")
         .entries;
@@ -15467,6 +15626,7 @@ mod tests {
             false,
             false,
             10,
+            &[],
         )
         .expect("resolve_pretend_graph must succeed")
         .entries
@@ -15596,6 +15756,7 @@ mod tests {
             false,
             false,
             10,
+            &[],
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -15783,6 +15944,7 @@ mod tests {
             false,
             false,
             10,
+            &[],
         )
         .expect("resolve_pretend_graph must succeed")
         .entries;
@@ -15987,6 +16149,7 @@ mod tests {
             false,
             false,
             10,
+            &[],
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -16043,6 +16206,7 @@ mod tests {
             false,
             false,
             10,
+            &[],
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -16158,6 +16322,7 @@ mod tests {
             false,
             false,
             10,
+            &[],
         )
         .expect_err(&format!(
             "resolve_pretend_graph({atom_str}) should have failed"
@@ -16212,6 +16377,7 @@ mod tests {
             false,
             false,
             10,
+            &[],
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -16268,6 +16434,7 @@ mod tests {
             false,
             false,
             10,
+            &[],
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -16324,6 +16491,7 @@ mod tests {
             false,
             false,
             10,
+            &[],
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -16598,6 +16766,7 @@ mod tests {
             false,
             false,
             10,
+            &[],
         )
         .expect_err("both atoms should fail their own REQUIRED_USE");
         assert_eq!(
@@ -16666,6 +16835,7 @@ mod tests {
             false,
             false,
             10,
+            &[],
         )
         .expect_err("no visible candidate at all");
         assert_eq!(
@@ -16757,6 +16927,7 @@ mod tests {
             false,
             false,
             10,
+            &[],
         )
         .expect("dependency's own NoVisibleCandidate is never fatal");
         let dep = result
@@ -16837,6 +17008,7 @@ mod tests {
             false,
             false,
             10,
+            &[],
         )
         .expect_err("no visible candidate at all");
         assert_eq!(
@@ -17061,6 +17233,7 @@ mod tests {
             false,
             false,
             backtrack_max,
+            &[],
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
     }
@@ -17118,6 +17291,7 @@ mod tests {
             false,
             false,
             10,
+            &[],
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
     }
@@ -17171,6 +17345,7 @@ mod tests {
             false,
             false,
             10,
+            &[],
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
     }
@@ -17473,6 +17648,7 @@ mod tests {
                 false,
                 ignore,
                 10,
+                &[],
             )
             .expect("resolves")
         };
@@ -17566,6 +17742,7 @@ mod tests {
             false,
             false,
             10,
+            &[],
         )
         .expect("resolves");
 
@@ -17661,6 +17838,7 @@ mod tests {
             false,
             false,
             10,
+            &[],
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
     }

@@ -9080,6 +9080,43 @@ autounmask blocks. Mirrored in `emerge_pretend_reference.py`; 4 `CASES` +
 1 pinned contract test asserting stdout is empty while the changes block
 still lands on stderr.
 
+### `emerge --reinstall-atoms ATOMS` (2026-09-02)
+
+Real `main.py` (`action: "append"`) → `depgraph.py:363-365`
+(`WildcardPackageSet(atoms)`), consulted at `depgraph.py:4547`/`4643`/
+`8331`: an already-installed package whose `cat/pkg-version` matches one
+of the atoms is dropped from every `inst_pkgs` satisfaction list, so the
+dependency it would otherwise satisfy is re-merged instead. In this
+pilot's model that is exactly a **scoped `--emptytree`** — the same
+`AlreadyInstalled` → bare `Reinstall` rewrite `empty` already does,
+applied per matching atom right after `resolve_pretend` returns, in
+`resolve_pretend_graph`'s main loop (a new `reinstall_atoms: &[String]`
+parameter; the same repeatable / space-separated-per-occurrence
+`--exclude` shape, and the same two-tier `matches_config_entry`
+plain-atom-or-`*`-wildcard matcher). So a normally-invisible
+already-installed deep dependency (`deeppkg` RDEPENDs `deeppkg2` RDEPENDs
+`newpkg`, all installed / `deeppkg2` hidden as `AlreadyInstalled` under a
+plain `--deep`) shows up as `[ebuild R]` under
+`--reinstall-atoms dev-libs/deeppkg2`, while everything else keeps its
+ordinary outcome.
+
+```sh
+FX="$(realpath fixtures)"
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" PORTAGE_RUNNING_ROOT="$FX" \
+    rust/target/release/portuale emerge --pretend --deep \
+    --reinstall-atoms dev-libs/deeppkg2 dev-libs/deeppkg
+# [ebuild  N     ] dev-libs/newpkg-1.0
+# [ebuild   R    ] dev-libs/deeppkg2-1.0   <- forced by --reinstall-atoms
+# [ebuild   R    ] dev-libs/deeppkg-1.0    <- directly-named installed atom
+```
+
+Scope cut: not applied to `--root-deps` running-root build entries (a
+target-`ROOT` concern; `resolve_root_deps_build_entries` is untouched).
+Mirrored in `emerge_pretend_reference.py`; 2 `portage-repo` unit tests +
+6 `CASES` + 1 pinned contract test. `--useoldpkg-atoms` (its
+binary-package sibling) stays recognized-unimplemented — it needs the
+binpkg-ranking path, its own slice.
+
 ### `emerge -pc <atoms> --deselect=n`
 
 Real `action_depclean`: `deselect = myopts.get("--deselect") != "n"`

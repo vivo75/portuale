@@ -114,6 +114,37 @@ CASES = [
     ("--emptytree -v: reinstall counters", ["--pretend", "-v", "--emptytree", "dev-libs/deeppkg"], 0),
     ("--emptytree --update: still upgrades", ["--pretend", "--emptytree", "--update", "dev-libs/withdeps"], 0),
     ("--emptytree --json", ["--pretend", "--emptytree", "--json", "dev-libs/deeppkg"], 0),
+    (
+        "--reinstall-atoms forces one deep dep to reinstall",
+        ["--pretend", "--deep", "--reinstall-atoms", "dev-libs/deeppkg2", "dev-libs/deeppkg"],
+        0,
+    ),
+    (
+        "--reinstall-atoms= inline form",
+        ["--pretend", "--deep", "--reinstall-atoms=dev-libs/deeppkg2", "dev-libs/deeppkg"],
+        0,
+    ),
+    (
+        "--reinstall-atoms wildcard atom",
+        ["--pretend", "--deep", "--reinstall-atoms", "dev-libs/*", "dev-libs/deeppkg"],
+        0,
+    ),
+    (
+        "--reinstall-atoms repeated + multi-atom value",
+        [
+            "--pretend", "--deep",
+            "--reinstall-atoms", "dev-libs/deeppkg2 dev-libs/nothingmatches",
+            "--reinstall-atoms", "=dev-libs/newpkg-1.0",
+            "dev-libs/deeppkg",
+        ],
+        0,
+    ),
+    (
+        "--reinstall-atoms with no value is a usage error",
+        ["--pretend", "dev-libs/deeppkg", "--reinstall-atoms"],
+        2,
+    ),
+    ("--reinstall-atoms also reflected in --json", ["--pretend", "--deep", "--json", "--reinstall-atoms", "dev-libs/deeppkg2", "dev-libs/deeppkg"], 0),
     ("-pv: cpv decorated with ::repo", ["--pretend", "-v", "dev-libs/newpkg"], 0),
     ("-pv: :slot/sub_slot decoration on a sub-slotted dep", ["--pretend", "-v", "dev-libs/subslotconsumer"], 0),
     ("-pv: [old-ver] decorated for an Upgrade", ["--pretend", "-v", "--update", "dev-libs/upgradepkg"], 0),
@@ -8758,6 +8789,53 @@ def test_emptytree_reinstalls_the_whole_deep_dependency_tree(
 
     # -e without -p is still refused (this pilot never really merges).
     assert _run([str(emerge_binary)], ["-e", "dev-libs/deeppkg"], fixture_env).returncode != 0
+
+
+def test_reinstall_atoms_forces_one_deep_dependency_to_reinstall(
+    emerge_binary, emerge_pretend_python, fixture_env
+):
+    """--reinstall-atoms ATOMS (real main.py `action: "append"` ->
+    depgraph.py:363 WildcardPackageSet): an already-installed package
+    matching one of the atoms is treated as if not installed, forcing a
+    re-merge (real depgraph.py drops it from every inst_pkgs list). It is
+    a scoped --emptytree: only the matched atom flips to `[ebuild R]`,
+    everything else keeps its ordinary outcome. deeppkg RDEPENDs deeppkg2
+    (both installed) RDEPENDs newpkg (New)."""
+    plain = _run([str(emerge_binary)], ["--pretend", "--deep", "dev-libs/deeppkg"], fixture_env)
+    # Without the flag, deeppkg2 is AlreadyInstalled -> not in the list.
+    assert "deeppkg2" not in plain.stdout
+
+    args = ["--pretend", "--deep", "--reinstall-atoms", "dev-libs/deeppkg2", "dev-libs/deeppkg"]
+    rust = _run([str(emerge_binary)], args, fixture_env)
+    python = _run(emerge_pretend_python, args, fixture_env)
+    assert rust.returncode == 0
+    assert rust.stdout == python.stdout
+    assert rust.stderr == python.stderr
+    assert rust.stdout.splitlines() == [
+        "[ebuild  N     ] dev-libs/newpkg-1.0 ",
+        "[ebuild   R    ] dev-libs/deeppkg2-1.0 ",
+        # deeppkg itself is a directly-named installed atom -> real
+        # portage re-merges it by default (only --noreplace keeps it).
+        "[ebuild   R    ] dev-libs/deeppkg-1.0 ",
+    ]
+
+    # A wildcard atom is accepted (WildcardPackageSet); a repeated flag
+    # and a multi-atom value both accumulate, same as --exclude.
+    multi = ["--pretend", "--deep",
+             "--reinstall-atoms", "dev-libs/deeppkg2 dev-libs/none",
+             "--reinstall-atoms=dev-libs/deeppkg",
+             "dev-libs/deeppkg"]
+    r = _run([str(emerge_binary)], multi, fixture_env)
+    assert r.stdout == _run(emerge_pretend_python, multi, fixture_env).stdout
+    assert "[ebuild   R    ] dev-libs/deeppkg-1.0 " in r.stdout
+    assert "[ebuild   R    ] dev-libs/deeppkg2-1.0 " in r.stdout
+
+    # No value -> usage error, exit 2, matching --exclude.
+    err = _run([str(emerge_binary)], ["--pretend", "dev-libs/deeppkg", "--reinstall-atoms"], fixture_env)
+    assert err.returncode == 2
+    assert err.stderr == _run(
+        emerge_pretend_python, ["--pretend", "dev-libs/deeppkg", "--reinstall-atoms"], fixture_env
+    ).stderr
 
 
 def test_deep_equals_zero_matches_not_passing_deep_at_all(emerge_binary, fixture_env):
