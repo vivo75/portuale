@@ -683,6 +683,86 @@ def test_emerge_custom_set_is_recorded_in_world_sets(emerge_binary, tmp_path):
     assert (root / "var/lib/portage/world_sets").read_bytes() == ws_before
 
 
+def test_emerge_jobs_builds_independent_packages_in_parallel(emerge_binary, tmp_path):
+    """`emerge -jN <atom>` (real `_emerge/Scheduler.py`'s `_max_jobs`):
+    run up to N `install` phases concurrently, dispatching a build only
+    once every dependency it has is merged, and serializing the vdb merge.
+    `dev-libs/schedparent` RDEPENDs the two independent leaves
+    `schedleaf-a`/`schedleaf-b`; under `-j2` both leaves start building
+    before either merges, then schedparent builds last. All three end up
+    installed."""
+    import shutil
+
+    root = tmp_path / "root"
+    shutil.copytree(Path(FIXTURES_ROOT) / "var", root / "var")
+    env = dict(os.environ)
+    env["PORTAGE_CONFIGROOT"] = FIXTURES_ROOT
+    env["ROOT"] = str(root)
+    env["DISTDIR"] = str(Path(FIXTURES_ROOT) / "distfiles")
+    env["PORTAGE_TMPDIR"] = str(tmp_path / "portage-tmpdir")
+
+    result = subprocess.run(
+        [str(emerge_binary), "-j2", "dev-libs/schedparent"],
+        capture_output=True,
+        text=True,
+        check=False,
+        env=env,
+    )
+    assert result.returncode == 0, result.stderr
+    out = result.stdout
+
+    for pkg in ("schedleaf-a-1.0", "schedleaf-b-1.0", "schedparent-1.0"):
+        assert f">>> dev-libs/{pkg} merged." in out
+        assert (root / f"var/db/pkg/dev-libs/{pkg}/CONTENTS").is_file()
+
+    # Both leaves' builds start before either one merges -- the mark of
+    # real parallel dispatch, not a serial build+merge per package.
+    emerge_a = out.index(">>> Emerging (dev-libs/schedleaf-a-1.0)")
+    emerge_b = out.index(">>> Emerging (dev-libs/schedleaf-b-1.0)")
+    first_leaf_merge = min(
+        out.index(">>> dev-libs/schedleaf-a-1.0 merged."),
+        out.index(">>> dev-libs/schedleaf-b-1.0 merged."),
+    )
+    assert max(emerge_a, emerge_b) < first_leaf_merge
+
+    # schedparent (the dependent) only starts building after both leaves
+    # have merged.
+    assert out.index(">>> Emerging (dev-libs/schedparent-1.0)") > max(
+        out.index(">>> dev-libs/schedleaf-a-1.0 merged."),
+        out.index(">>> dev-libs/schedleaf-b-1.0 merged."),
+    )
+
+
+def test_emerge_jobs_keep_going_skips_a_failed_builds_dependents(emerge_binary, tmp_path):
+    """`emerge -j2 --keep-going`: a failed build (`schedbad`'s src_install
+    dies) drops its transitive dependents (`schedbaddep`) from the merge
+    set (real `Scheduler._calc_resume_list`), the independent `schedok`
+    still merges, and the run exits non-zero listing what failed and what
+    was skipped."""
+    import shutil
+
+    root = tmp_path / "root"
+    shutil.copytree(Path(FIXTURES_ROOT) / "var", root / "var")
+    env = dict(os.environ)
+    env["PORTAGE_CONFIGROOT"] = FIXTURES_ROOT
+    env["ROOT"] = str(root)
+    env["DISTDIR"] = str(Path(FIXTURES_ROOT) / "distfiles")
+    env["PORTAGE_TMPDIR"] = str(tmp_path / "portage-tmpdir")
+
+    result = subprocess.run(
+        [str(emerge_binary), "-j2", "--keep-going", "dev-libs/schedbaddep", "dev-libs/schedok"],
+        capture_output=True,
+        text=True,
+        check=False,
+        env=env,
+    )
+    assert result.returncode == 1
+    assert (root / "var/db/pkg/dev-libs/schedok-1.0/CONTENTS").is_file()
+    assert not (root / "var/db/pkg/dev-libs/schedbaddep-1.0").exists()
+    assert "dev-libs/schedbad-1.0" in result.stderr
+    assert "dev-libs/schedbaddep" in result.stderr
+
+
 def test_emerge_atom_upgrade_replaces_the_installed_version(emerge_binary, tmp_path):
     """`emerge <atom>` handles an Upgrade too now: merge the new version,
     then unmerge the replaced same-slot version (real

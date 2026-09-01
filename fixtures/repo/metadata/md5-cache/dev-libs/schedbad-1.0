@@ -1,0 +1,7 @@
+DEFINED_PHASES=install
+DESCRIPTION=fixture package: Scheduler / parallel-build test (schedbad)
+EAPI=8
+IUSE=
+KEYWORDS=amd64
+SLOT=0
+_md5_=0000000000000000000000000000000

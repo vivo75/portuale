@@ -10177,6 +10177,50 @@ via a `_assert_slot_collision_block` helper (rather than pinning the
 whole paragraph in every test) + `--backtrack=30`/`=0` hint-gate CASES;
 a new `portage-repo` unit test asserts the per-instance parent data.
 
+### `emerge -jN` / `--jobs=N`: a real parallel build scheduler
+
+`emerge <atom>` (source, no `--pretend`) gained real `_emerge/Scheduler.py`
+job scheduling. `run_source_merge` now takes a `jobs` count; `jobs > 1`
+routes to `run_build_scheduler` instead of the strictly-serial
+`run_merge_loop`:
+
+- `merge_one_source_entry` (build **and** merge, atomic) is split into
+  `build_one_source_entry` (real `EbuildBuild` + `EbuildBinpkg` — the
+  `install` phase chain + any `--buildpkg` binpkg, no vdb write) and
+  `merge_one_built_entry` (real `EbuildMerge` — reuses `run_qmerge`, which
+  checks the same `${PORTAGE_BUILDDIR}/.installed` marker the `install`
+  phase leaves and runs `merge_after_install`, same-slot replace
+  included).
+- The scheduler builds the forward-dependency DAG from each
+  `GraphEntry.required_by`, keeps `AlreadyInstalled` / `Binary` entries as
+  "already merged", and dispatches a package's build (in a
+  `std::thread::scope` worker) only once every dependency it has is
+  merged. Up to `jobs` builds run concurrently (`usize::MAX` for a bare
+  `--jobs`/`-j`, capped to the build-set size); **the vdb merge step is
+  always serialized** — done on the main thread as each build's result
+  arrives over an `mpsc` channel — matching real portage, which merges one
+  package at a time to avoid `collision-protect` / `CONTENTS` races.
+- `--keep-going` is preserved: a failed build (or merge) records the
+  failure and drops every transitive dependent via
+  `scheduler_skip_dependents` (real `Scheduler._calc_resume_list`); the
+  run still exits non-zero listing what failed and what was skipped.
+
+`--jobs[=N]` / `-j[N]` parses like `--deep` (optional integer next token,
+`=`/attached-`-jN` forms, bare = unlimited). Only the plain source
+`emerge <atom>` path uses it — `--buildpkgonly` and the binary-merge
+paths stay serial (nothing to build in parallel). No Python-reference
+change: the contract suite never executes builds.
+
+KNOWN CUTS (documented in `emerge_build.rs`): no `--load-average` throttle
+yet; each build's own phase output is inherited straight to the terminal,
+so it interleaves under `-j >1` (real portage captures per-package build
+logs); each `run_commands` still spins up its own tokio runtime; a
+non-`--keep-going` failure returns immediately but waits for
+already-running builds (`thread::scope` join) rather than killing them.
+New `dev-libs/sched*` fixtures; two black-box `test_portuale.py` tests
+(parallel dispatch order + `--keep-going` skip) and two `portuale` unit
+tests.
+
 ## Running it
 
 Build both Rust binaries:

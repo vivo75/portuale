@@ -46,6 +46,7 @@
 
 use crate::ebuild_merge;
 use crate::ebuild_package::{self, PackageOptions};
+use crate::ebuild_phases;
 use portage_repo::{Candidate, CandidateSource, GraphEntry, PretendOutcome, RepoConfig};
 use std::path::{Path, PathBuf};
 
@@ -209,7 +210,21 @@ pub fn run_source_merge(
     keep_going: bool,
     buildpkg: Option<&ebuild_package::PackageOptions>,
     buildpkg_exclude: &[String],
+    jobs: usize,
 ) -> Result<(), String> {
+    if jobs > 1 {
+        return run_build_scheduler(
+            entries,
+            repos,
+            root,
+            portage_tmpdir,
+            options,
+            keep_going,
+            buildpkg,
+            buildpkg_exclude,
+            jobs,
+        );
+    }
     run_merge_loop(entries, keep_going, |entry| {
         let bp = buildpkg.filter(|_| !entry_matches_any(entry, buildpkg_exclude));
         merge_one_source_entry(entry, repos, root, portage_tmpdir, options, bp)
@@ -373,6 +388,273 @@ pub(crate) fn merge_one_source_entry(
     }
     println!(">>> {cp}-{version} merged.");
     Ok(())
+}
+
+/// `(cat/pkg, version)` for an entry the scheduler will build -- the
+/// same outcome→version mapping `merge_one_source_entry` does inline.
+fn scheduler_cp_version(entry: &GraphEntry) -> Result<(String, String), String> {
+    let cp = format!("{}/{}", entry.category, entry.package);
+    let version = match &entry.outcome {
+        PretendOutcome::New { version } | PretendOutcome::Reinstall { version, .. } => {
+            version.clone()
+        }
+        PretendOutcome::Upgrade { to, .. } | PretendOutcome::Downgrade { to, .. } => to.clone(),
+        PretendOutcome::AlreadyInstalled { .. } | PretendOutcome::NoVisibleCandidate => {
+            return Err(format!("{cp}: not a buildable entry"));
+        }
+    };
+    Ok((cp, version))
+}
+
+/// Whether the scheduler must actually run a build for this entry (a
+/// `New`/`Upgrade`/`Downgrade`/`Reinstall` from source). `AlreadyInstalled`
+/// and `Binary` entries are treated as already satisfied.
+fn scheduler_needs_build(entry: &GraphEntry) -> bool {
+    entry.source != CandidateSource::Binary
+        && matches!(
+            entry.outcome,
+            PretendOutcome::New { .. }
+                | PretendOutcome::Upgrade { .. }
+                | PretendOutcome::Downgrade { .. }
+                | PretendOutcome::Reinstall { .. }
+        )
+}
+
+/// Real `_emerge/EbuildBuild` (+ `EbuildBinpkg`): the `install` phase
+/// chain and any `--buildpkg` binpkg for one source entry, WITHOUT the
+/// vdb merge. Returns the located ebuild path for `merge_one_built_entry`
+/// to reuse. Safe to run from a scheduler worker thread -- every build
+/// gets its own `${PORTAGE_BUILDDIR}` (`<tmpdir>/portage/<cat>/<pkg>-<ver>`)
+/// and `run_commands` passes the environment explicitly (no
+/// `std::env::set_var`).
+fn build_one_source_entry(
+    entry: &GraphEntry,
+    repos: &[RepoConfig],
+    root: &Path,
+    portage_tmpdir: &Path,
+    options: &ebuild_merge::MergeOptions,
+    buildpkg: Option<&ebuild_package::PackageOptions>,
+) -> Result<PathBuf, String> {
+    let (cp, version) = scheduler_cp_version(entry)?;
+    let Some(candidate) = locate_candidate(repos, &entry.category, &entry.package, &version) else {
+        return Err(format!(
+            "{cp}-{version}: could not locate its own ebuild file \
+             (repo layout changed since resolution?)"
+        ));
+    };
+    let path = ebuild_path(&candidate, &entry.category, &entry.package, &version);
+    println!(">>> Emerging ({cp}-{version})...");
+    let status = ebuild_phases::run_commands(
+        &path,
+        &["install"],
+        root,
+        portage_tmpdir,
+        &options.distdir,
+        options.debug,
+        &options.config_root,
+        options.shell,
+    )?;
+    if status != 0 {
+        return Err(format!("{cp}-{version}: build failed ({status})"));
+    }
+    if let Some(package_options) = buildpkg {
+        println!(">>> Building package for {cp}-{version}...");
+        let status =
+            ebuild_package::package_after_install(&path, root, portage_tmpdir, package_options)?;
+        if status != 0 {
+            return Err(format!("{cp}-{version}: binpkg build failed ({status})"));
+        }
+    }
+    Ok(path)
+}
+
+/// Real `_emerge/EbuildMerge` (always serialized -- only the build above
+/// runs in parallel): the vdb merge for a source entry whose `install`
+/// phase already ran. Reuses `run_qmerge` (which checks the same real
+/// `${PORTAGE_BUILDDIR}/.installed` marker `install` leaves behind and
+/// runs `merge_after_install`, including the same-slot replace of an
+/// upgraded/reinstalled version).
+fn merge_one_built_entry(
+    entry: &GraphEntry,
+    ebuild_path: &Path,
+    root: &Path,
+    portage_tmpdir: &Path,
+    options: &ebuild_merge::MergeOptions,
+) -> Result<(), String> {
+    let (cp, version) = scheduler_cp_version(entry)?;
+    let status = ebuild_merge::run_qmerge(ebuild_path, root, portage_tmpdir, options)?;
+    if status != 0 {
+        return Err(format!("{cp}-{version}: merge failed ({status})"));
+    }
+    println!(">>> {cp}-{version} merged.");
+    Ok(())
+}
+
+/// Marks every (transitive) dependent of `idx` as skipped -- real
+/// `Scheduler._calc_resume_list` after a failed build under
+/// `--keep-going`.
+fn scheduler_skip_dependents(
+    idx: usize,
+    entries: &[GraphEntry],
+    cp_to_idx: &std::collections::HashMap<(String, String), usize>,
+    skip: &mut std::collections::HashSet<usize>,
+    skipped: &mut Vec<String>,
+) {
+    let mut queue = vec![idx];
+    while let Some(x) = queue.pop() {
+        for r_cp in &entries[x].required_by {
+            if let Some(&r_idx) = cp_to_idx.get(r_cp) {
+                if skip.insert(r_idx) {
+                    skipped.push(format!(
+                        "{}/{}",
+                        entries[r_idx].category, entries[r_idx].package
+                    ));
+                    queue.push(r_idx);
+                }
+            }
+        }
+    }
+}
+
+/// Real `_emerge/Scheduler.py`'s core: run up to `jobs` package *builds*
+/// (`install` phase) concurrently, dispatching a build only once every
+/// dependency it has in the merge set is already merged, and serializing
+/// the vdb merge step (real portage merges one package at a time to avoid
+/// `collision-protect` / `CONTENTS` races). `jobs == usize::MAX` (a bare
+/// `--jobs`/`-j`) means "as many as the graph allows".
+///
+/// KNOWN, DOCUMENTED CUTS (same "narrow v1" pattern as the rest of this
+/// module): no `--load-average` throttle (slice 2); each build's own
+/// phase output is inherited straight to the terminal and so interleaves
+/// under `-j` >1 (real portage captures per-package build logs -- a later
+/// slice); each `run_commands` call still spins up its own tokio runtime;
+/// a non-`--keep-going` failure returns immediately but still waits for
+/// already-running builds to finish (`thread::scope` join), it does not
+/// kill them.
+#[allow(clippy::too_many_arguments)]
+fn run_build_scheduler(
+    entries: &[GraphEntry],
+    repos: &[RepoConfig],
+    root: &Path,
+    portage_tmpdir: &Path,
+    options: &ebuild_merge::MergeOptions,
+    keep_going: bool,
+    buildpkg: Option<&ebuild_package::PackageOptions>,
+    buildpkg_exclude: &[String],
+    jobs: usize,
+) -> Result<(), String> {
+    use std::collections::{HashMap, HashSet};
+    use std::sync::mpsc;
+
+    let n = entries.len();
+    let cp_to_idx: HashMap<(String, String), usize> = entries
+        .iter()
+        .enumerate()
+        .map(|(i, e)| ((e.category.clone(), e.package.clone()), i))
+        .collect();
+
+    // idx -> the indices (present in this graph) it depends on. `d`'s
+    // `required_by` lists the cps that depend on `d`, so the edge is
+    // `d -> r` for every `r` in `d.required_by`.
+    let mut deps: Vec<HashSet<usize>> = vec![HashSet::new(); n];
+    for (d_idx, d) in entries.iter().enumerate() {
+        for r_cp in &d.required_by {
+            if let Some(&r_idx) = cp_to_idx.get(r_cp) {
+                deps[r_idx].insert(d_idx);
+            }
+        }
+    }
+
+    // Entries that need no build (AlreadyInstalled / Binary) count as
+    // already merged, so their dependents become dispatchable immediately.
+    let mut merged: HashSet<usize> = (0..n)
+        .filter(|&i| !scheduler_needs_build(&entries[i]))
+        .collect();
+    let mut started: HashSet<usize> = HashSet::new();
+    let mut skip: HashSet<usize> = HashSet::new();
+    let mut failures: Vec<String> = Vec::new();
+    let mut skipped: Vec<String> = Vec::new();
+
+    std::thread::scope(|scope| -> Result<(), String> {
+        let (tx, rx) = mpsc::channel::<(usize, Result<PathBuf, String>)>();
+        let mut in_flight = 0usize;
+        loop {
+            while in_flight < jobs {
+                let next = (0..n).find(|&i| {
+                    scheduler_needs_build(&entries[i])
+                        && !started.contains(&i)
+                        && !skip.contains(&i)
+                        && !merged.contains(&i)
+                        && deps[i].iter().all(|d| merged.contains(d))
+                });
+                let Some(idx) = next else { break };
+                started.insert(idx);
+                in_flight += 1;
+                let tx = tx.clone();
+                let bp = buildpkg.filter(|_| !entry_matches_any(&entries[idx], buildpkg_exclude));
+                let entry = &entries[idx];
+                scope.spawn(move || {
+                    let r = build_one_source_entry(entry, repos, root, portage_tmpdir, options, bp);
+                    let _ = tx.send((idx, r));
+                });
+            }
+
+            if in_flight == 0 {
+                break;
+            }
+
+            let (idx, build_result) = rx
+                .recv()
+                .map_err(|e| format!("scheduler channel closed unexpectedly: {e}"))?;
+            in_flight -= 1;
+
+            let failure = match build_result {
+                Ok(path) => {
+                    merge_one_built_entry(&entries[idx], &path, root, portage_tmpdir, options).err()
+                }
+                Err(e) => Some(e),
+            };
+
+            match failure {
+                None => {
+                    merged.insert(idx);
+                }
+                Some(e) => {
+                    if !keep_going {
+                        return Err(e);
+                    }
+                    failures.push(e);
+                    scheduler_skip_dependents(idx, entries, &cp_to_idx, &mut skip, &mut skipped);
+                }
+            }
+        }
+        Ok(())
+    })?;
+
+    if failures.is_empty() {
+        return Ok(());
+    }
+    let mut msg = format!(
+        "{} package(s) failed to merge (--keep-going):\n{}",
+        failures.len(),
+        failures
+            .iter()
+            .map(|f| format!("  {f}"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    );
+    if !skipped.is_empty() {
+        msg.push_str(&format!(
+            "\n{} dependent package(s) not merged:\n{}",
+            skipped.len(),
+            skipped
+                .iter()
+                .map(|s| format!("  {s}"))
+                .collect::<Vec<_>>()
+                .join("\n")
+        ));
+    }
+    Err(msg)
 }
 
 #[cfg(test)]
@@ -644,6 +926,7 @@ mod tests {
             false,
             None,
             &[],
+            1,
         )
         .expect("source merge succeeds");
 
@@ -658,6 +941,132 @@ mod tests {
         assert_eq!(
             fs::read_to_string(vdb.join("RDEPEND")).unwrap().trim(),
             "dev-libs/samepkg"
+        );
+        let _ = fs::remove_dir_all(&root);
+        let _ = fs::remove_dir_all(&portage_tmpdir);
+    }
+
+    #[test]
+    fn run_build_scheduler_builds_two_leaves_in_parallel_then_the_parent() {
+        let config_root = fixtures_root();
+        let repos = find_repos(&config_root).unwrap();
+        let root = tempdir();
+        let portage_tmpdir = tempdir();
+
+        // schedparent RDEPENDs schedleaf-a + schedleaf-b (both leaves,
+        // buildable, not installed). required_by wires the DAG so the
+        // scheduler builds the leaves first (concurrently under jobs=2)
+        // and schedparent only after both have merged.
+        let leaf_a = source_entry(
+            "schedleaf-a",
+            PretendOutcome::New {
+                version: "1.0".into(),
+            },
+        );
+        let mut leaf_a = leaf_a;
+        leaf_a.required_by = vec![("dev-libs".into(), "schedparent".into())];
+        let mut leaf_b = source_entry(
+            "schedleaf-b",
+            PretendOutcome::New {
+                version: "1.0".into(),
+            },
+        );
+        leaf_b.required_by = vec![("dev-libs".into(), "schedparent".into())];
+        let parent = source_entry(
+            "schedparent",
+            PretendOutcome::New {
+                version: "1.0".into(),
+            },
+        );
+        let entries = vec![leaf_a, leaf_b, parent];
+
+        let options = ebuild_merge::MergeOptions {
+            distdir: tempdir(),
+            config_root: config_root.clone(),
+            ..ebuild_merge::MergeOptions::default()
+        };
+        run_source_merge(
+            &entries,
+            &repos,
+            &root,
+            &portage_tmpdir,
+            &options,
+            false,
+            None,
+            &[],
+            2,
+        )
+        .expect("parallel source merge succeeds");
+
+        for pkg in ["schedleaf-a-1.0", "schedleaf-b-1.0", "schedparent-1.0"] {
+            assert!(
+                root.join(format!("var/db/pkg/dev-libs/{pkg}/CONTENTS"))
+                    .is_file(),
+                "{pkg} should be merged"
+            );
+        }
+        let _ = fs::remove_dir_all(&root);
+        let _ = fs::remove_dir_all(&portage_tmpdir);
+    }
+
+    #[test]
+    fn run_build_scheduler_keep_going_skips_a_failed_builds_dependents() {
+        let config_root = fixtures_root();
+        let repos = find_repos(&config_root).unwrap();
+        let root = tempdir();
+        let portage_tmpdir = tempdir();
+
+        // schedbad's src_install dies; schedbaddep RDEPENDs it (so it must
+        // be skipped); schedok is independent and must still merge.
+        let mut bad = source_entry(
+            "schedbad",
+            PretendOutcome::New {
+                version: "1.0".into(),
+            },
+        );
+        bad.required_by = vec![("dev-libs".into(), "schedbaddep".into())];
+        let baddep = source_entry(
+            "schedbaddep",
+            PretendOutcome::New {
+                version: "1.0".into(),
+            },
+        );
+        let ok = source_entry(
+            "schedok",
+            PretendOutcome::New {
+                version: "1.0".into(),
+            },
+        );
+        let entries = vec![bad, baddep, ok];
+
+        let options = ebuild_merge::MergeOptions {
+            distdir: tempdir(),
+            config_root: config_root.clone(),
+            ..ebuild_merge::MergeOptions::default()
+        };
+        let err = run_source_merge(
+            &entries,
+            &repos,
+            &root,
+            &portage_tmpdir,
+            &options,
+            true,
+            None,
+            &[],
+            2,
+        )
+        .expect_err("a failed build must make the whole run fail under --keep-going");
+        assert!(err.contains("schedbad-1.0"), "{err}");
+        assert!(err.contains("schedbaddep"), "{err}");
+
+        assert!(
+            root.join("var/db/pkg/dev-libs/schedok-1.0/CONTENTS")
+                .is_file(),
+            "the independent schedok must still merge"
+        );
+        assert!(
+            !root.join("var/db/pkg/dev-libs/schedbaddep-1.0").exists(),
+            "schedbaddep depends on the failed schedbad and must be skipped"
         );
         let _ = fs::remove_dir_all(&root);
         let _ = fs::remove_dir_all(&portage_tmpdir);
@@ -722,8 +1131,18 @@ mod tests {
             },
         );
         binary.source = CandidateSource::Binary;
-        let err = run_source_merge(&[binary], &[], &bogus, &bogus, &options, false, None, &[])
-            .unwrap_err();
+        let err = run_source_merge(
+            &[binary],
+            &[],
+            &bogus,
+            &bogus,
+            &options,
+            false,
+            None,
+            &[],
+            1,
+        )
+        .unwrap_err();
         assert!(err.contains("binary package"), "{err}");
     }
 
@@ -834,6 +1253,7 @@ mod tests {
             false,
             None,
             &[],
+            1,
         )
         .expect("1.0 merges");
         run_source_merge(
@@ -851,6 +1271,7 @@ mod tests {
             false,
             None,
             &[],
+            1,
         )
         .expect("2.0 upgrade merges");
 

@@ -4128,6 +4128,17 @@ pub fn run(args: &[String]) -> ExitCode {
     // semantics much narrower than real portage's own general
     // mergelist-recalculation/resume-state machinery.
     let mut keep_going = false;
+    // --jobs[=N] / -j[N] (real `main.py`, `valid_integers`): the maximum
+    // number of package *builds* to run concurrently (real
+    // `_emerge/Scheduler.py`'s `_max_jobs`). Default 1 = the pilot's
+    // long-standing strictly-serial build+merge loop; a bare `--jobs`/`-j`
+    // means "as many as the dependency graph allows" (`usize::MAX`, capped
+    // to the build-set size by the scheduler). The vdb merge step is
+    // always serialized regardless -- only the `install` phase runs in
+    // parallel, matching real portage. Only consulted for a plain source
+    // `emerge <atom>`; `--buildpkgonly` and the binary-merge paths stay
+    // serial (nothing to build in parallel).
+    let mut jobs: usize = 1;
     // --root-deps: real main.py's own `choices: ("True", "rdeps")`, plus
     // a bare form (no `=value` at all). This pilot doesn't distinguish
     // "True" (fold DEPEND/BDEPEND/IDEPEND into RDEPEND) from "rdeps" --
@@ -4785,6 +4796,44 @@ pub fn run(args: &[String]) -> ExitCode {
         } else if arg == "--keep-going" {
             keep_going = true;
             i += 1;
+        } else if arg == "--jobs" || arg == "-j" {
+            // Optional integer next token (real `valid_integers` /
+            // `insert_optional_args`), exactly like `--deep`: a bare
+            // `--jobs`/`-j`, or one followed by a non-integer, means
+            // unlimited.
+            match args.get(i + 1).map(|s| s.parse::<usize>()) {
+                Some(Ok(n)) => {
+                    jobs = n.max(1);
+                    i += 2;
+                }
+                _ => {
+                    jobs = usize::MAX;
+                    i += 1;
+                }
+            }
+        } else if let Some(value) = arg.strip_prefix("--jobs=") {
+            match value.parse::<usize>() {
+                Ok(n) => {
+                    jobs = n.max(1);
+                    i += 1;
+                }
+                Err(_) => {
+                    eprintln!("emerge: invalid --jobs parameter: {value:?}");
+                    return ExitCode::from(2);
+                }
+            }
+        } else if let Some(value) = arg.strip_prefix("-j") {
+            // argparse's attached short-option form (`-j4`).
+            match value.parse::<usize>() {
+                Ok(n) => {
+                    jobs = n.max(1);
+                    i += 1;
+                }
+                Err(_) => {
+                    eprintln!("emerge: invalid -j parameter: {value:?}");
+                    return ExitCode::from(2);
+                }
+            }
         } else if arg == "--root-deps" || arg == "--root-deps=True" || arg == "--root-deps=rdeps" {
             root_deps = true;
             i += 1;
@@ -6025,6 +6074,7 @@ pub fn run(args: &[String]) -> ExitCode {
                 keep_going,
                 buildpkg,
                 &buildpkg_exclude,
+                jobs,
             ) {
                 eprintln!("emerge: {e}");
                 return ExitCode::from(1);
