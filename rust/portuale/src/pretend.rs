@@ -1881,8 +1881,9 @@ fn print_help() {
          of the lines above (pilot-specific, not a real emerge option)"
     );
     println!(
-        "       --shell bash|brush  which real shell runs a real merge's phase chain \
-         (not under --pretend); default bash, pilot-specific, not a real emerge option"
+        "       --shell bash|brush  which real shell runs a real merge / unmerge \
+         (prerm/postrm) / --config (pkg_config) phase chain (not under --pretend); \
+         default bash, pilot-specific, not a real emerge option"
     );
     println!();
     println!(
@@ -2664,6 +2665,10 @@ fn run_unmerge_pretend(
     // before the removal (real `unmerge.py:621`), then run the
     // `CLEAN_DELAY` countdown. Always `false` when `pretend` is `true`.
     ask: bool,
+    // `--shell bash|brush`: which real shell backend runs each removed
+    // package's `pkg_prerm`/`pkg_postrm` (and the `FEATURES=unmerge-backup`
+    // `quickpkg`). Inert when `pretend` is `true`.
+    shell: ebuild_phases::ShellBackend,
     color: &Colorizer,
 ) -> ExitCode {
     if targets.is_empty() {
@@ -2966,7 +2971,7 @@ fn run_unmerge_pretend(
             return ExitCode::from(130);
         }
         clean_delay_countdown();
-        return execute_unmerge(&removal_list, root, color);
+        return execute_unmerge(&removal_list, root, shell, color);
     }
     ExitCode::SUCCESS
 }
@@ -2997,7 +3002,7 @@ fn run_unmerge_pretend(
 /// `merge`/`qmerge`/`package` construction uses. Shared by the
 /// non-`--pretend` build/merge dispatch and `execute_unmerge`'s own
 /// `FEATURES=unmerge-backup` `quickpkg`.
-fn package_options_from_env() -> ebuild_package::PackageOptions {
+fn package_options_from_env(shell: ebuild_phases::ShellBackend) -> ebuild_package::PackageOptions {
     let d = ebuild_package::PackageOptions::default();
     let binpkg_compress =
         std::env::var("BINPKG_COMPRESS").unwrap_or_else(|_| d.binpkg_compress.clone());
@@ -3013,7 +3018,7 @@ fn package_options_from_env() -> ebuild_package::PackageOptions {
         distdir: std::env::var_os("DISTDIR")
             .map(std::path::PathBuf::from)
             .unwrap_or_else(|| d.distdir.clone()),
-        shell: d.shell,
+        shell,
         binpkg_compress,
         binpkg_compress_flags,
         portage_bzip2_command: std::env::var("PORTAGE_BZIP2_COMMAND")
@@ -3250,16 +3255,16 @@ fn feature_enabled(token: &str) -> bool {
 fn execute_unmerge(
     removal_list: &[(String, String, String)],
     root: &Path,
+    shell: ebuild_phases::ShellBackend,
     color: &Colorizer,
 ) -> ExitCode {
     let portage_tmpdir = std::env::var_os("PORTAGE_TMPDIR")
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|| std::path::PathBuf::from("/var/tmp/portage"));
-    let options =
-        ebuild_merge::MergeOptions::from_env(ebuild_phases::ShellBackend::default(), false);
+    let options = ebuild_merge::MergeOptions::from_env(shell, false);
     // Real `dblink._pre_unmerge_backup`: `FEATURES=unmerge-backup` -> a
     // `quickpkg` of each package before it's removed.
-    let backup = feature_enabled("unmerge-backup").then(package_options_from_env);
+    let backup = feature_enabled("unmerge-backup").then(|| package_options_from_env(shell));
     let scratch = portage_tmpdir.join("portage").join("_unmerge_src");
     let total = removal_list.len();
     for (idx, (category, package, version)) in removal_list.iter().enumerate() {
@@ -3508,6 +3513,7 @@ fn run_prune_pretend(
     lib_check: bool,
     pretend: bool,
     ask: bool,
+    shell: ebuild_phases::ShellBackend,
     color: &Colorizer,
 ) -> ExitCode {
     let args = match resolve_cleanup_args(targets, root, "prune") {
@@ -3570,6 +3576,7 @@ fn run_prune_pretend(
         result.ordered,
         pretend,
         ask,
+        shell,
         color,
     )
 }
@@ -3599,9 +3606,19 @@ fn run_prune_nodeps_pretend(
     config_root: &Path,
     pretend: bool,
     ask: bool,
+    shell: ebuild_phases::ShellBackend,
     color: &Colorizer,
 ) -> ExitCode {
-    run_prune_nodeps_or_clean(targets, root, config_root, pretend, ask, color, false)
+    run_prune_nodeps_or_clean(
+        targets,
+        root,
+        config_root,
+        pretend,
+        ask,
+        shell,
+        color,
+        false,
+    )
 }
 
 /// Real `emerge --clean` (`action_uninstall` -> `unmerge` with
@@ -3618,9 +3635,10 @@ fn run_clean_pretend(
     config_root: &Path,
     pretend: bool,
     ask: bool,
+    shell: ebuild_phases::ShellBackend,
     color: &Colorizer,
 ) -> ExitCode {
-    run_prune_nodeps_or_clean(targets, root, config_root, pretend, ask, color, true)
+    run_prune_nodeps_or_clean(targets, root, config_root, pretend, ask, shell, color, true)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -3630,6 +3648,7 @@ fn run_prune_nodeps_or_clean(
     config_root: &Path,
     pretend: bool,
     ask: bool,
+    shell: ebuild_phases::ShellBackend,
     color: &Colorizer,
     is_clean: bool,
 ) -> ExitCode {
@@ -3759,7 +3778,7 @@ fn run_prune_nodeps_or_clean(
             return ExitCode::from(130);
         }
         clean_delay_countdown();
-        return execute_unmerge(&removal_list, root, color);
+        return execute_unmerge(&removal_list, root, shell, color);
     }
     ExitCode::SUCCESS
 }
@@ -4005,6 +4024,7 @@ fn run_depclean_pretend(
     // (real `action_depclean:908-911`).
     pretend: bool,
     ask: bool,
+    shell: ebuild_phases::ShellBackend,
     color: &Colorizer,
 ) -> ExitCode {
     // Bare-name targets get their category from the vdb, then each atom
@@ -4204,6 +4224,7 @@ fn run_depclean_pretend(
         result.ordered,
         pretend,
         ask,
+        shell,
         color,
     );
     // Real `action_depclean` prints the stats block after `unmerge()`
@@ -4745,7 +4766,12 @@ fn run_info(config: &portage_profile::Config, repos: &[portage_repo::RepoConfig]
 /// **v1 cuts:** `--ask` (the interactive package picker / "Ready to
 /// configure?" prompt) -- the pilot is non-interactive, matching real
 /// portage's own non-`--ask` branch; `elog` processing.
-fn run_config_action(atom_args: &[&str], root: &Path, color: &Colorizer) -> ExitCode {
+fn run_config_action(
+    atom_args: &[&str],
+    root: &Path,
+    shell: ebuild_phases::ShellBackend,
+    color: &Colorizer,
+) -> ExitCode {
     if atom_args.len() != 1 {
         // Real `action_config`: `print(red("!!! ...\n"))` -- stdout, with
         // the string's own trailing newline plus `print`'s.
@@ -4828,8 +4854,7 @@ fn run_config_action(atom_args: &[&str], root: &Path, color: &Colorizer) -> Exit
     let portage_tmpdir = std::env::var_os("PORTAGE_TMPDIR")
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|| std::path::PathBuf::from("/var/tmp/portage"));
-    let options =
-        ebuild_merge::MergeOptions::from_env(ebuild_phases::ShellBackend::default(), false);
+    let options = ebuild_merge::MergeOptions::from_env(shell, false);
     let scratch = portage_tmpdir.join("portage").join("_config_src");
     let rc = match ebuild_merge::run_vdb_saved_env_phase(
         root,
@@ -5099,10 +5124,12 @@ pub fn run(args: &[String]) -> ExitCode {
     // the default). A pilot-only flag (real `emerge` has no `--shell`),
     // so it's special-cased in the parse loop rather than routed through
     // `emerge_options.rs`, the same treatment `--json` gets. Inert under
-    // `--pretend` (nothing executes). Does not reach the removal-hook
-    // (`prerm`/`postrm` under `-C`/`--depclean`) or `pkg_config` paths --
-    // those always use the default, matching how they already hardcode
-    // `debug = false` to `MergeOptions::from_env`.
+    // `--pretend` (nothing executes). Also threaded into the removal-hook
+    // (`pkg_prerm`/`pkg_postrm` under `-C`/`--unmerge`/`--depclean`/
+    // `--prune`/`--clean`/`--rage-clean`, plus the `FEATURES=unmerge-backup`
+    // `quickpkg`) and `--config` (`pkg_config`) paths -- every real
+    // (non-`--pretend`) phase chain `emerge` can drive picks up the same
+    // backend.
     let mut shell = ebuild_phases::ShellBackend::default();
 
     let mut i = 0;
@@ -6460,7 +6487,7 @@ pub fn run(args: &[String]) -> ExitCode {
     // installed package (real `action_config`). Needs nothing from the
     // resolved `config`; ignores `--pretend`.
     if config_action {
-        return run_config_action(&atom_args, &root, &color);
+        return run_config_action(&atom_args, &root, shell, &color);
     }
 
     // `--search`/`-s` (`--searchdesc`/`-S` also matches DESCRIPTION): a
@@ -6490,7 +6517,7 @@ pub fn run(args: &[String]) -> ExitCode {
     // `--clean`: a standalone removal action -- keep only the newest
     // version per slot.
     if clean_action {
-        return run_clean_pretend(&atom_args, &root, &config_root, pretend, ask, &color);
+        return run_clean_pretend(&atom_args, &root, &config_root, pretend, ask, shell, &color);
     }
     // `--rage-clean`: a fast `--unmerge` (identical `--pretend` display).
     if rage_clean {
@@ -6503,6 +6530,7 @@ pub fn run(args: &[String]) -> ExitCode {
             false,
             pretend,
             ask,
+            shell,
             &color,
         );
     }
@@ -6522,6 +6550,7 @@ pub fn run(args: &[String]) -> ExitCode {
             false,
             pretend,
             ask,
+            shell,
             &color,
         );
     }
@@ -6536,12 +6565,21 @@ pub fn run(args: &[String]) -> ExitCode {
             !deselect_n,
             pretend,
             ask,
+            shell,
             &color,
         );
     }
     if prune {
         if nodeps {
-            return run_prune_nodeps_pretend(&atom_args, &root, &config_root, pretend, ask, &color);
+            return run_prune_nodeps_pretend(
+                &atom_args,
+                &root,
+                &config_root,
+                pretend,
+                ask,
+                shell,
+                &color,
+            );
         }
         return run_prune_pretend(
             &atom_args,
@@ -6552,6 +6590,7 @@ pub fn run(args: &[String]) -> ExitCode {
             lib_check,
             pretend,
             ask,
+            shell,
             &color,
         );
     }
@@ -7172,7 +7211,7 @@ pub fn run(args: &[String]) -> ExitCode {
         // Real BINPKG_COMPRESS/BINPKG_COMPRESS_FLAGS[_<NAME>]/
         // PORTAGE_BZIP2_COMMAND/PKGDIR/... resolution -- see
         // `package_options_from_env`.
-        let package_options = package_options_from_env();
+        let package_options = package_options_from_env(shell);
         let portage_tmpdir = std::env::var_os("PORTAGE_TMPDIR")
             .map(std::path::PathBuf::from)
             .unwrap_or_else(|| std::path::PathBuf::from("/var/tmp/portage"));

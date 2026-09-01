@@ -1348,6 +1348,88 @@ def test_emerge_config_rejects_multiple_atoms_and_reports_missing(emerge_binary,
     assert "No packages found." in missing.stdout
 
 
+def test_emerge_config_shell_flag_selects_the_pkg_config_backend(
+    emerge_binary, tmp_path
+):
+    """`emerge --config --shell bash|brush <atom>`: the pilot-only
+    `--shell` flag now reaches the `pkg_config` phase too (real
+    `action_config` -> `doebuild(ebuildpath, "config", ...)`), not just a
+    real merge. Both backends run `dev-libs/emergeconfigpkg`'s own
+    `pkg_config` and must produce the identical real marker file."""
+    ebuild = str(
+        Path(FIXTURES_ROOT)
+        / "repo/dev-libs/emergeconfigpkg/emergeconfigpkg-1.0.ebuild"
+    )
+    for shell in ("brush", "bash"):
+        root = tmp_path / f"root-{shell}"
+        (root / "var/lib").mkdir(parents=True)
+        env = dict(os.environ)
+        env["PORTAGE_CONFIGROOT"] = FIXTURES_ROOT
+        env["ROOT"] = str(root)
+        env["PORTAGE_TMPDIR"] = str(tmp_path / f"portage-tmpdir-{shell}")
+
+        bindir = tmp_path / f"bin-{shell}"
+        bindir.mkdir()
+        link = bindir / "ebuild"
+        link.symlink_to(Path(emerge_binary).resolve())
+        merged = subprocess.run(
+            [str(link), "--shell", shell, ebuild, "merge"],
+            capture_output=True, text=True, check=False, env=env,
+        )
+        assert merged.returncode == 0, (shell, merged.stderr)
+
+        result = subprocess.run(
+            [str(emerge_binary), "--config", "--shell", shell, "dev-libs/emergeconfigpkg"],
+            capture_output=True, text=True, check=False, env=env,
+        )
+        assert result.returncode == 0, (shell, result.stderr)
+        assert "Configuring pkg..." in result.stdout
+        assert (
+            root / "var/lib/emergeconfigpkg.configured"
+        ).read_text() == "configured 1.0\n"
+
+
+def test_emerge_unmerge_shell_flag_reaches_prerm_postrm(emerge_binary, tmp_path):
+    """`emerge -C --shell bash|brush <atom>`: `--shell` now threads into
+    the removal-hook path too (`ebuild_merge::unmerge_one_installed`'s own
+    `pkg_prerm`/`pkg_postrm` via `MergeOptions::from_env(shell, ...)`), not
+    just a real merge. Both backends run `dev-libs/binpkgrmpkg`'s hooks
+    and append the identical `<phase>-<PVR>` lines to the `${ROOT}` log."""
+    import shutil
+
+    v1 = str(
+        Path(FIXTURES_ROOT) / "repo/dev-libs/binpkgrmpkg/binpkgrmpkg-1.0.ebuild"
+    )
+    for shell in ("brush", "bash"):
+        root = tmp_path / f"root-{shell}"
+        shutil.copytree(Path(FIXTURES_ROOT) / "var", root / "var")
+        env = dict(os.environ)
+        env["PORTAGE_CONFIGROOT"] = FIXTURES_ROOT
+        env["ROOT"] = str(root)
+        env["PORTAGE_TMPDIR"] = str(tmp_path / f"portage-tmpdir-{shell}")
+
+        bindir = tmp_path / f"bin-{shell}"
+        bindir.mkdir()
+        ebuild_link = bindir / "ebuild"
+        ebuild_link.symlink_to(Path(emerge_binary).resolve())
+        r1 = subprocess.run(
+            [str(ebuild_link), "--shell", shell, v1, "merge"],
+            capture_output=True, text=True, check=False, env=env,
+        )
+        assert r1.returncode == 0, (shell, r1.stderr)
+        (root / "var/lib/binpkgrmpkg.log").write_text("")
+
+        result = subprocess.run(
+            [str(emerge_binary), "-C", "--shell", shell, "dev-libs/binpkgrmpkg"],
+            capture_output=True, text=True, check=False, env=env,
+        )
+        assert result.returncode == 0, (shell, result.stderr)
+        assert not (root / "var/db/pkg/dev-libs/binpkgrmpkg-1.0").exists()
+        assert (
+            root / "var/lib/binpkgrmpkg.log"
+        ).read_text() == "prerm-1.0\npostrm-1.0\n"
+
+
 def test_emerge_unmerge_backup_quickpkgs_before_removing(emerge_binary, tmp_path):
     """`FEATURES=unmerge-backup` (real `dblink._pre_unmerge_backup` ->
     quickpkg): `emerge -C` builds a binpkg of the *installed* package into

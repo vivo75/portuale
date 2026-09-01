@@ -8092,8 +8092,9 @@ def _print_help():
         "of the lines above (pilot-specific, not a real emerge option)"
     )
     print(
-        "       --shell bash|brush  which real shell runs a real merge's phase chain "
-        "(not under --pretend); default bash, pilot-specific, not a real emerge option"
+        "       --shell bash|brush  which real shell runs a real merge / unmerge "
+        "(prerm/postrm) / --config (pkg_config) phase chain (not under --pretend); "
+        "default bash, pilot-specific, not a real emerge option"
     )
     print()
     print(
@@ -11250,7 +11251,8 @@ def run(args):
             i += 1
         elif arg == "--shell" or arg.startswith("--shell="):
             # Pilot-only (real emerge has no --shell): selects the real
-            # shell backend for a real merge's phase chain. This reference
+            # shell backend for a real merge / unmerge (prerm/postrm) /
+            # --config (pkg_config) phase chain. This reference
             # only models --pretend, where it's entirely inert -- parsed
             # and validated so the CLI surface matches the Rust side, then
             # discarded. Same "special-cased, not in _lookup_option"

@@ -274,7 +274,11 @@ merges a mix of binary and source entries per the resolver's plan
 fetch (including `mirror://`/`custommirrors` resolution and real
 `FEATURES=distlocks` file locking) via real `wget`; real eclass
 `inherit()` support; `ebuild --shell bash|brush` and `emerge --shell
-bash|brush` (pilot-only flags) pick the execution backend explicitly.
+bash|brush` (pilot-only flags) pick the execution backend explicitly —
+`emerge`'s covers every real phase chain it can drive as of 2026-09-02
+(source/binpkg merge, the `pkg_prerm`/`pkg_postrm` removal hooks under
+`-C`/`--unmerge`/`--depclean`/`--prune`/`--clean`/`--rage-clean`, and
+`emerge --config`'s `pkg_config`).
 As of 2026-09-01 `emerge -v app-portage/eix` completes a full real merge
 against a live `~amd64` tree (real `eautoreconf`/`./configure`/`make`/
 `make install` → vdb entry; `qlist -I` agrees) — see `what-this-proves.md`,

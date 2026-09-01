@@ -1737,8 +1737,11 @@ cat "${PORTAGE_TMPDIR}"/portage/dev-libs/bigeclasspkg-1.0/temp/bigfixture-marker
 
 `--shell bash|brush` (see "What this proves" above for the full
 writeup): the default is now a real `bash` subprocess; `--shell brush`
-opts into the embedded brush shell instead. `emerge` has the same flag
-for a real (non-`--pretend`) merge.
+opts into the embedded brush shell instead. `emerge` has the same flag,
+and it now covers every real (non-`--pretend`) phase chain `emerge` can
+drive — a source merge, a binpkg merge, the `pkg_prerm`/`pkg_postrm`
+hooks under `-C`/`--unmerge`/`--depclean`/`--prune`/`--clean`/
+`--rage-clean`, and `emerge --config`'s `pkg_config`.
 
 ```sh
 cd rust && cargo build --release && cd ../..
@@ -1748,6 +1751,15 @@ rust/target/release/portuale ebuild --shell brush \
 # (real phase output, then exit 0)
 cat "${PORTAGE_TMPDIR}"/portage/dev-libs/phasepkg-1.0/image/usr/share/phasepkg/hello.txt
 # hello from phasepkg
+
+# --shell also selects the backend for emerge --config's pkg_config:
+export PORTAGE_CONFIGROOT="$PWD/fixtures" ROOT="$(mktemp -d)"
+mkdir -p "$ROOT/var/lib"
+mkdir -p /tmp/pbin && ln -sf "$(realpath rust/target/release/portuale)" /tmp/pbin/ebuild
+/tmp/pbin/ebuild --shell brush \
+    fixtures/repo/dev-libs/emergeconfigpkg/emergeconfigpkg-1.0.ebuild merge
+rust/target/release/portuale emerge --config --shell brush dev-libs/emergeconfigpkg
+cat "$ROOT/var/lib/emergeconfigpkg.configured"   # configured 1.0
 ```
 
 Full real merge against a live Gentoo tree (needs root, a

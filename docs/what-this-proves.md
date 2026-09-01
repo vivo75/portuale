@@ -5787,11 +5787,11 @@ default just flipped) and a **new pilot-only `emerge --shell bash|brush`**
 flag (special-cased in `pretend.rs`'s parse loop like `--json`, mirrored
 in `emerge_pretend_reference.py` for CLI-surface parity, inert under
 `--pretend`). `emerge`'s flag threads into the real build/merge path
-(`emerge <atom>` / `--getbinpkg` / `--buildpkgonly` / `--resume`); the
-removal-hook (`prerm`/`postrm`) and `pkg_config` paths stay on the
-default, matching how they already hardcode `debug = false`. The brush
-`declare -f` bug is tracked in [`brush-pin.md`](brush-pin.md) for an
-upstream report.
+(`emerge <atom>` / `--getbinpkg` / `--buildpkgonly` / `--resume`); when
+this landed the removal-hook (`prerm`/`postrm`) and `pkg_config` paths
+still stayed on the default (that gap closed in "`emerge --shell` reaches
+the removal-hook and `--config` paths" below). The brush `declare -f` bug
+is tracked in [`brush-pin.md`](brush-pin.md) for an upstream report.
 
 ### `PORTAGE_PYM_PATH` is now set, so eclass `has_version` works
 
@@ -10805,3 +10805,55 @@ wc -l < "${PORTAGE_TMPDIR}"/portage/dev-libs/bigeclasspkg-1.0/temp/environment
 Real ebuilds/eclasses in the wild could still pipe a `pkg_*` function
 into something — that would still want #1276 upstream (or its own
 strategy-#2 rewrite). This closed the portage-tree side only.
+
+### `emerge --shell` reaches the removal-hook and `--config` paths
+
+When `emerge --shell bash|brush` first shipped (see "`--shell` default is
+now `bash`" above) it only threaded into the real build/merge path
+(`emerge <atom>` / `--getbinpkg` / `--buildpkgonly` / `--resume`). Every
+*other* real (non-`--pretend`) phase chain `emerge` can drive still
+hardcoded `ShellBackend::default()` into `MergeOptions::from_env(...)`:
+
+- the **removal hooks** — `pkg_prerm`/`pkg_postrm` run by
+  `ebuild_merge::unmerge_one_installed` for each package removed by
+  `emerge -C`/`--unmerge`, `--depclean`/`-c`, `--prune`/`-P`, `--clean`,
+  and `--rage-clean` (via `execute_unmerge` → `run_unmerge_pretend` and
+  the shared `run_prune_nodeps_or_clean`), plus the
+  `FEATURES=unmerge-backup` `quickpkg` (`bin/misc-functions.sh
+  __dyn_package`);
+- `emerge --config <atom>` — the real `pkg_config` phase
+  (`action_config` → `doebuild(ebuildpath, "config", ...)`), run by
+  `run_config_action` → `ebuild_merge::run_vdb_saved_env_phase`.
+
+The pilot-only `--shell` value parsed in `pretend.rs`'s loop is now
+threaded down every one of those call chains — `run_unmerge_pretend`,
+`run_depclean_pretend`, `run_prune_pretend`, `run_prune_nodeps_pretend`,
+`run_clean_pretend`, `run_prune_nodeps_or_clean`, `execute_unmerge`,
+`package_options_from_env`, and `run_config_action` each gained a
+`shell: ebuild_phases::ShellBackend` parameter — so a single
+`--shell brush` (or `--shell bash`) selects the backend for the whole
+invocation, not just its build half. Nothing about `--pretend` changes
+(still nothing executes), and `emerge_pretend_reference.py` needs no
+functional change (it only models `--pretend`, where `--shell` stays
+parsed-and-discarded) — the reference's comment + help text were updated
+for accuracy only.
+
+`test_emerge_unmerge_shell_flag_reaches_prerm_postrm` and
+`test_emerge_config_shell_flag_selects_the_pkg_config_backend`
+(`tests/test_portuale.py`) run `dev-libs/binpkgrmpkg`'s
+`pkg_prerm`/`pkg_postrm` and `dev-libs/emergeconfigpkg`'s `pkg_config`
+under **both** backends via the compiled binary, asserting an identical
+real result each way (the removal log's `prerm-1.0\npostrm-1.0`; the
+`emergeconfigpkg.configured` marker). Live-verified:
+
+```sh
+cd rust && cargo build --release && cd ..
+export PORTAGE_CONFIGROOT="$PWD/fixtures"
+export ROOT="$(mktemp -d)" PORTAGE_TMPDIR="$(mktemp -d)"
+mkdir -p "$ROOT/var/lib"
+ln -s "$PWD/rust/target/release/portuale" /tmp/pbin/ebuild  # multicall by argv[0]
+/tmp/pbin/ebuild --shell brush \
+    fixtures/repo/dev-libs/emergeconfigpkg/emergeconfigpkg-1.0.ebuild merge
+rust/target/release/portuale emerge --config --shell brush dev-libs/emergeconfigpkg
+cat "$ROOT/var/lib/emergeconfigpkg.configured"   # -> configured 1.0
+```

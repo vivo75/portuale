@@ -346,9 +346,16 @@ dev/test context — see also the `chown` note below).
   re-source, exactly as real portage does.
 - **Still open (shell backend):** minimize + report the `declare -f`
   heredoc bug upstream; periodic re-pin to keep up with upstream `main`
-  (see `brush-pin.md`'s checklist); `emerge --shell` does not yet reach
-  the `prerm`/`postrm` or `pkg_config` paths (they use the `bash`
-  default).
+  (see `brush-pin.md`'s checklist).
+  ~~`emerge --shell` does not yet reach the `prerm`/`postrm` or
+  `pkg_config` paths~~ **Done 2026-09-02** — `--shell` now threads
+  through `run_unmerge_pretend`/`run_depclean_pretend`/`run_prune_*`/
+  `run_clean_pretend`/`execute_unmerge`/`package_options_from_env` and
+  `run_config_action`, so it selects the backend for the removal hooks
+  (all of `-C`/`--unmerge`/`--depclean`/`--prune`/`--clean`/
+  `--rage-clean`, plus `FEATURES=unmerge-backup` `quickpkg`) and
+  `emerge --config`'s `pkg_config`. See `what-this-proves.md`, "`emerge
+  --shell` reaches the removal-hook and `--config` paths".
 
 ### H. Misc / cosmetic
 
