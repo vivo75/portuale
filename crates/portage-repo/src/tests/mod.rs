@@ -295,12 +295,56 @@ fn s2_conflict(rows: Vec<S2Row<'_>>) -> SlotConflict {
     }
 }
 
+/// Arguments of [`s2_input`].
+struct S2InputArgs<'a> {
+    conflicts: &'a [SlotConflict],
+    entries: &'a [GraphEntry],
+    top_level: &'a HashSet<(String, String)>,
+    replace_cps: &'a BTreeSet<(String, String)>,
+    root: &'a Path,
+    repos: &'a [RepoConfig],
+    config: &'a portage_profile::Config,
+}
+
+fn s2_input<'a>(args: S2InputArgs<'a>) -> DirectSolveInput<'a> {
+    let S2InputArgs {
+        conflicts,
+        entries,
+        top_level,
+        replace_cps,
+        root,
+        repos,
+        config,
+    } = args;
+    DirectSolveInput {
+        conflicts,
+        entries,
+        top_level,
+        excluded: &[],
+        selective: false,
+        replace_cps,
+        root,
+        repos,
+        config,
+    }
+}
+
 fn mk_at(root: &std::path::Path, name: &str, key: &str, dep: &str) {
     let d = root.join("var/db/pkg/dev-libs").join(format!("{name}-1.0"));
     std::fs::create_dir_all(&d).unwrap();
     std::fs::write(d.join("CATEGORY"), "dev-libs\n").unwrap();
     std::fs::write(d.join("SLOT"), "0\n").unwrap();
     std::fs::write(d.join(key), format!("{dep}\n")).unwrap();
+}
+
+/// Arguments of [`assert_one_conflict`].
+struct AssertOneConflictArgs<'a> {
+    result: &'a GraphResult,
+    category: &'a str,
+    package: &'a str,
+    slot: &'a str,
+    resolved_version: &'a str,
+    conflicting_atom: &'a str,
 }
 
 /// ABI probe harness: installed `abicons-1` recording `app-misc/abiprov:0/1=`,
