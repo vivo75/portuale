@@ -1,9 +1,9 @@
-# portuale manual pages. Adapted from Portage's man/ tree: the tool
-# pages for actions portuale does not implement (dispatch-conf,
+# Portuale manual pages. Adapted from Portage's man/ tree: the tool
+# pages for actions Portuale does not implement (dispatch-conf,
 # egencache, emaint, emirrordist, env-update, etc-update, fixpackages,
 # glsa-check, quickpkg) were dropped, and the translated pages under
 # ru/ were not carried over. What remains is the emerge/ebuild pair
-# portuale's multicall binary provides plus the file-format references
+# Portuale's multicall binary provides plus the file-format references
 # it reads (make.conf, portage, ebuild, color.map, xpak).
 
 conf_data = get_variable('conf_data', configuration_data())

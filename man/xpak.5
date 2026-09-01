@@ -1,13 +1,13 @@
-.TH XPAK 5 "Sep 2026" "portuale @VERSION@" "portuale"
+.TH XPAK 5 "Sep 2026" "Portuale @VERSION@" "Portuale"
 .SH NAME
-xpak \- The XPAK Data Format used with portuale binary packages
+xpak \- The XPAK Data Format used with Portuale binary packages
 .SH DESCRIPTION
 Gentoo binary packages built in the \fIxpak\fR format have an xpak attached to
 it which contains build time information like the USE flags it was built with,
 the ebuild it was built from, the environmental variables, CFLAGS, CXXFLAGS, etc.
 Note that the \fIgpkg\fR format is different and described in GLEP 78.
 .LP
-\fBportuale\fR is a friendly fork of Gentoo's Portage, reimplemented in
+\fBPortuale\fR is a friendly fork of Gentoo's Portage, reimplemented in
 Rust; it reads and writes this format compatibly.  This page is adapted
 from Portage's own \fBxpak\fR(5).
 .SH NOTES
@@ -149,7 +149,7 @@ len of 8 (since data2 has 8 bytes: "jjJjjJjj").
 .SH "REPORTING BUGS"
 Please report bugs via https://github.com/vivo75/portuale/issues
 .SH AUTHORS
-portuale is maintained by Francesco Riosa and contributors.  This manual
+Portuale is maintained by Francesco Riosa and contributors.  This manual
 page is adapted from Portage's \fBxpak\fR(5), written by:
 .nf
 Lars Hartmann <lars@chaotika.org>

@@ -1,6 +1,6 @@
-.TH "EMERGE" "1" "Sep 2026" "portuale @VERSION@" "portuale"
+.TH "EMERGE" "1" "Sep 2026" "Portuale @VERSION@" "Portuale"
 .SH "NAME"
-emerge \- Command\-line interface to the portuale package manager
+emerge \- Command\-line interface to the Portuale package manager
 .SH "SYNOPSIS"
 .TP
 .BR emerge
@@ -19,7 +19,7 @@ emerge \- Command\-line interface to the portuale package manager
 .BR emerge
 \fB\-\-help\fR | \fB\-\-version\fR
 .SH "DESCRIPTION"
-\fBemerge\fR is the definitive command\-line interface to the portuale
+\fBemerge\fR is the definitive command\-line interface to the Portuale
 system.  It is primarily used for installing packages, and \fBemerge\fR
 can automatically handle any dependencies that the desired package has.
 \fBemerge\fR can also update the \fBebuild repository\fR, making new and
@@ -28,7 +28,7 @@ installed packages to newer releases as well.  It handles both source
 and binary packages, and it can be used to create binary packages for
 distribution.
 .LP
-\fBportuale\fR is a friendly fork of Gentoo's Portage, reimplemented in
+\fBPortuale\fR is a friendly fork of Gentoo's Portage, reimplemented in
 Rust.  It aims for behavioural parity with Portage, so this page
 documents the intended behaviour and largely tracks Portage's own
 \fBemerge\fR(1).  Not every option or action described here is
@@ -1545,14 +1545,14 @@ to child processes of the ebuild.  Since EAPI 9, Portage will never
 export PMS variables.  This setting allows testing EAPI < 9 ebuilds
 with the new behavior.
 .SH "REPORTING BUGS"
-Please report any bugs you encounter through the portuale issue tracker:
+Please report any bugs you encounter through the Portuale issue tracker:
 .LP
 \fBhttps://github.com/vivo75/portuale/issues\fR
 .LP
 Please include the output of \fBemerge \-\-info\fR when you submit your
 bug report.
 .SH "AUTHORS"
-portuale is maintained by Francesco Riosa and contributors.  This manual
+Portuale is maintained by Francesco Riosa and contributors.  This manual
 page is adapted from Portage's \fBemerge\fR(1), written by:
 .nf
 Daniel Robbins <drobbins@gentoo.org>
