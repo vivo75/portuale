@@ -10634,4 +10634,66 @@ whose atom carries a version/operator (a no-op in real `update_dbentry`
 too); and `emerge -C` / `--unmerge` bare-name resolution, which keeps
 operating on the physical vdb identity.
 
+### brush strategy #2: `bin/phase-functions.sh` off the fork-only patch
+
+The `brush` backend (see "Bash-execution backend" above) needed one
+fork-only patch — [reubeno/brush#1276](https://github.com/reubeno/brush/pull/1276),
+for a real deadlock when a shell function runs as a *non-last* pipeline
+stage and writes more than the OS pipe buffer (~64 KiB) before
+returning: brush ran it inline, so the next stage that would drain the
+pipe was never spawned. The three places *portage's own* `bin/*.sh` hit
+this were all in `bin/phase-functions.sh` — `__save_ebuild_env |
+__filter_readonly_variables [| bzip2] > file`, where both `__save_ebuild_env`
+(a `declare -f` / `declare -p` dump of everything in scope) and
+`__filter_readonly_variables` are shell functions, and the combined
+output tops 64 KiB once a handful of eclasses are inherited.
+
+`brush strategy #2` = rewrite the offending `bin/*.sh` rather than patch
+brush. A new helper `__save_and_filter_ebuild_env <outfile> [--exclude-init-phases]
+[filter opts]` runs `__save_ebuild_env` to a `${T}` scratch file, then
+`__filter_readonly_variables < scratch > outfile` — a regular file
+always accepts the write, so neither function is ever a pipeline stage.
+`bash -n` clean; behaviourally identical for bash (every pipeline stage
+already forks there). The `bzip2` case (`environment.bz2` for
+`PORTAGE_UPDATE_ENV`) reads the filtered scratch file as a plain
+`bzip2 -c < scratch > out`.
+
+The change lives in a **vendored** copy, `bin/phase-functions.sh`
+(tracked — `portuale` must ship the phase runtime so `emerge` works with
+no Portage installed; see `3rdparty/repos.toml`'s
+`vendored_paths`). `ebuild_phases::bin_dir()` overlays `bin/`
+over the surrounding checkout's `bin/`, the vendored file winning; the
+upstream `bin/phase-functions.sh` stays pristine.
+
+With that, the fork-only patch (`c78ea429`, which carried #1276) is no
+longer needed at all. **Proof it's real**: the whole `portuale` suite is
+green against `879d963` (the fork's pre-merge copy of upstream #1274,
+*without* #1276) — including
+`install_does_not_deadlock_on_an_eclass_scope_larger_than_the_pipe_buffer`
+(the `bigeclasspkg` fixture defines ~400 functions specifically to blow
+past the pipe buffer), which *hangs the 120 s deadline* against
+`879d963` when `bin/phase-functions.sh` is reverted to the pipe
+form.
+
+That let the pin **drop the fork entirely** and move to real upstream
+`reubeno/brush` `main` (`a04b09dc`, at/after the `18851e7` #1274 merge)
+— see `brush-pin.md`. Same suite, same guard test, green against
+real upstream: `install_does_not_deadlock…` completes in ~1 s.
+
+```sh
+cd rust && cargo build --release && cd ../..
+export PORTAGE_TMPDIR="$(mktemp -d)"
+rust/target/release/portuale ebuild \
+    fixtures/repo/dev-libs/bigeclasspkg/bigeclasspkg-1.0.ebuild install
+# real phase output, then exit 0 -- promptly, not after a hang
+wc -l < "${PORTAGE_TMPDIR}"/portage/dev-libs/bigeclasspkg-1.0/temp/environment
+# a few thousand lines -- the filtered saved environment
+# __save_and_filter_ebuild_env staged through a temp file, > 64 KiB,
+# which is exactly what used to deadlock the pipe form under brush
+```
+
+Real ebuilds/eclasses in the wild could still pipe a `pkg_*` function
+into something — that would still want #1276 upstream (or its own
+strategy-#2 rewrite). This closed the portage-tree side only.
+
 # # required by dev-libs/useflagpkg[-foo] (argument)
