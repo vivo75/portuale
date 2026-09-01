@@ -79,6 +79,157 @@ pub(crate) enum InstalledSide {
     Current,
 }
 
+/// Arguments of [`build_slot_conflict`].
+pub(crate) struct BuildSlotConflictArgs<'a> {
+    pub(crate) repos: &'a [RepoConfig],
+    pub(crate) config: &'a portage_profile::Config,
+    pub(crate) root: &'a Path,
+    pub(crate) category: &'a str,
+    pub(crate) package: &'a str,
+    pub(crate) slot: &'a str,
+    pub(crate) existing_version: &'a str,
+    pub(crate) current_atom: &'a str,
+    pub(crate) current_version: &'a str,
+    pub(crate) slot_pullers: &'a SlotPullers,
+    pub(crate) installed_side: Option<InstalledSide>,
+}
+
+/// Assembles a `SlotConflict`: instance A is `existing_version` (already in the
+/// graph), instance B is `current_version`. Each puller files under whichever
+/// instance its atom fully satisfies (version+slot+USE; under A when both).
+/// `installed_side` names an installed-nomerge party, whose metadata comes
+/// from the vdb instead of the repo; `None` for merge-vs-merge.
+// Portage: depgraph.py, slot_collision_handler
+pub(crate) fn build_slot_conflict(args: BuildSlotConflictArgs<'_>) -> SlotConflict {
+    let BuildSlotConflictArgs {
+        repos,
+        config,
+        root,
+        category,
+        package,
+        slot,
+        existing_version,
+        current_atom,
+        current_version,
+        slot_pullers,
+        installed_side,
+    } = args;
+    let a_installed = installed_side == Some(InstalledSide::Existing);
+    let b_installed = installed_side == Some(InstalledSide::Current);
+    // An installed instance's vdb `(sub_slot, repo)` may differ from the tree's.
+    let vdb_meta = |version: &str| -> (String, String) {
+        installed_refs(root, category, package)
+            .into_iter()
+            .find(|r| r.version == version)
+            .map(|r| (r.sub_slot, r.repo))
+            .unwrap_or_default()
+    };
+    let (a_sub, a_repo) = if a_installed {
+        vdb_meta(existing_version)
+    } else {
+        let (s, r, _) = slot_conflict_meta(repos, category, package, existing_version);
+        (s, r)
+    };
+    let (b_sub, b_repo) = if b_installed {
+        vdb_meta(current_version)
+    } else {
+        let (s, r, _) = slot_conflict_meta(repos, category, package, current_version);
+        (s, r)
+    };
+    // Match strings carry the sub-slot, or built slot-operator pullers vanish.
+    let with_sub = |v: &str, sub: &str| {
+        if sub.is_empty() {
+            format!("{category}/{package}-{v}:{slot}")
+        } else {
+            format!("{category}/{package}-{v}:{slot}/{sub}")
+        }
+    };
+    let a_match = with_sub(existing_version, &a_sub);
+    let b_match = with_sub(current_version, &b_sub);
+    // A puller files under the instance its atom *fully* satisfies.
+    let (a_iuse, a_use) = if a_installed {
+        installed_pkg_iuse_and_use(root, category, package, existing_version)
+    } else {
+        slot_conflict_flag_sets(repos, config, category, package, existing_version)
+    };
+    let (b_iuse, b_use) = if b_installed {
+        installed_pkg_iuse_and_use(root, category, package, current_version)
+    } else {
+        slot_conflict_flag_sets(repos, config, category, package, current_version)
+    };
+    let mut parents_a: Vec<SlotConflictParent> = Vec::new();
+    let mut parents_b: Vec<SlotConflictParent> = Vec::new();
+    if let Some(pullers) = slot_pullers.get(&(category.to_string(), package.to_string())) {
+        for (pc, pp, pv, atom) in pullers {
+            let parsed = portage_dep::parse_atom(atom);
+            let use_ok = |iuse: &HashSet<String>, use_: &HashSet<String>| match &parsed {
+                Some(a) => match &a.use_deps {
+                    Some(ud) => portage_dep::use_deps_satisfied(ud, iuse, use_),
+                    None => true,
+                },
+                // Unparseable atoms file by string match.
+                None => true,
+            };
+            let hits_a = portage_dep::match_from_list(atom, &[a_match.as_str()])
+                .is_some_and(|m| !m.is_empty())
+                && use_ok(&a_iuse, &a_use);
+            let hits_b = portage_dep::match_from_list(atom, &[b_match.as_str()])
+                .is_some_and(|m| !m.is_empty())
+                && use_ok(&b_iuse, &b_use);
+            let entry = SlotConflictParent {
+                parent_cpv: slot_conflict_puller_cpv(repos, pc, pp, pv),
+                atom: atom.clone(),
+                use_display: if pc.is_empty() {
+                    Vec::new()
+                } else {
+                    pkg_use_display_for(repos, config, pc, pp, pv)
+                },
+                installed: false,
+            };
+            if hits_a {
+                if !parents_a.contains(&entry) {
+                    parents_a.push(entry);
+                }
+            } else if hits_b && !parents_b.contains(&entry) {
+                parents_b.push(entry);
+            }
+        }
+    }
+    SlotConflict {
+        category: category.to_string(),
+        package: package.to_string(),
+        slot: slot.to_string(),
+        resolved_version: existing_version.to_string(),
+        conflicting_atom: current_atom.to_string(),
+        instances: vec![
+            SlotConflictInstance {
+                version: existing_version.to_string(),
+                sub_slot: a_sub,
+                repo_name: a_repo,
+                use_display: if a_installed {
+                    installed_use_display_for(root, config, category, package, existing_version)
+                } else {
+                    pkg_use_display_for(repos, config, category, package, existing_version)
+                },
+                parents: parents_a,
+                installed: a_installed,
+            },
+            SlotConflictInstance {
+                version: current_version.to_string(),
+                sub_slot: b_sub,
+                repo_name: b_repo,
+                use_display: if b_installed {
+                    installed_use_display_for(root, config, category, package, current_version)
+                } else {
+                    pkg_use_display_for(repos, config, category, package, current_version)
+                },
+                parents: parents_b,
+                installed: b_installed,
+            },
+        ],
+    }
+}
+
 /// `` `cat/pkg-ver:slot/sub_slot::repo` `` for a conflicting parent; empty for
 /// a top-level parent. Shared by both conflict report builders.
 pub(crate) fn slot_conflict_puller_cpv(

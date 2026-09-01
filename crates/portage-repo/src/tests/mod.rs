@@ -347,6 +347,34 @@ struct AssertOneConflictArgs<'a> {
     conflicting_atom: &'a str,
 }
 
+#[track_caller]
+fn assert_one_conflict(args: AssertOneConflictArgs<'_>) {
+    let AssertOneConflictArgs {
+        result,
+        category,
+        package,
+        slot,
+        resolved_version,
+        conflicting_atom,
+    } = args;
+    assert_eq!(
+        result.slot_conflicts.len(),
+        1,
+        "expected exactly one slot conflict"
+    );
+    let c = &result.slot_conflicts[0];
+    assert_eq!(
+        (
+            c.category.as_str(),
+            c.package.as_str(),
+            c.slot.as_str(),
+            c.resolved_version.as_str(),
+            c.conflicting_atom.as_str()
+        ),
+        (category, package, slot, resolved_version, conflicting_atom)
+    );
+}
+
 /// ABI probe harness: installed `abicons-1` recording `app-misc/abiprov:0/1=`,
 /// tree `abiprov-1`/`abiprov-2` + consumer (live `:=`) + forcer. `with_consumer`
 /// controls whether the consumer's same-version ebuild is visible in the tree.

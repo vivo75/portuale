@@ -21,3 +21,15 @@ fn inst_184(version: &str, installed: bool) -> SlotConflictInstance {
         installed,
     }
 }
+
+/// One conflict with a single merge-bound (non-installed) instance.
+fn conflict_184() -> SlotConflict {
+    SlotConflict {
+        category: "dev-libs".to_string(),
+        package: "iupkg".to_string(),
+        slot: "0".to_string(),
+        resolved_version: "1.0".to_string(),
+        conflicting_atom: "dev-libs/iupkg".to_string(),
+        instances: vec![inst_184("1.0", false)],
+    }
+}

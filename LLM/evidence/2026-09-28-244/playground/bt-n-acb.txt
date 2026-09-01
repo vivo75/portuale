@@ -1,0 +1,29 @@
+
+!!! Multiple package instances within a single package slot have been pulled
+!!! into the dependency graph, resulting in a slot conflict:
+
+app-misc/D:0
+
+  (app-misc/D-0:0/0::test_repo, ebuild scheduled for merge) USE="-foo" pulled in by
+    app-misc/D[-foo] required by (app-misc/A-0:0/0::test_repo, ebuild scheduled for merge) USE=""
+               ^^^^                                                                                                                  
+    app-misc/D[foo] required by (app-misc/B-0:0/0::test_repo, ebuild scheduled for merge) USE=""
+               ^^^                                                                                                                  
+
+  (app-misc/D-1:0/0::test_repo, ebuild scheduled for merge) USE="-bar" pulled in by
+    >=app-misc/D-1 required by (app-misc/C-0:0/0::test_repo, ebuild scheduled for merge) USE=""
+    ^^           ^                                                                                                                                    
+
+
+It may be possible to solve this problem by using package.mask to
+prevent one of those packages from being selected. However, it is also
+possible that conflicting dependencies exist such that they are
+impossible to satisfy simultaneously.  If such a conflict exists in
+the dependencies of two different packages, then those packages can
+not be installed simultaneously.
+
+For more information, see MASKED PACKAGES section in the emerge man
+page or refer to the Gentoo Handbook.
+
+### ORDER A/C/B {'--pretend': True, '--autounmask-backtrack': 'n'} success False mergelist ['app-misc/D-0', 'app-misc/D-1', 'app-misc/A-0', 'app-misc/C-0', 'app-misc/B-0'] use_changes {'app-misc/D-0': {'foo': False}}
+backtrack {'config': {'needed_use_config_changes': [(<Package ('ebuild', '/tmp/tmp2wktddiu/', 'app-misc/D-0', 'merge', 'test_repo')>, (frozenset(), {'foo': False}))]}, 'slot conflict': [[((<Package ('ebuild', '/tmp/tmp2wktddiu/', 'app-misc/D-0', 'merge', 'test_repo')>, {(<Package ('ebuild', '/tmp/tmp2wktddiu/', 'app-misc/C-0', 'merge', 'test_repo')>, Atom('>=app-misc/D-1'))}),), ((<Package ('ebuild', '/tmp/tmp2wktddiu/', 'app-misc/D-1', 'merge', 'test_repo')>, {(<Package ('ebuild', '/tmp/tmp2wktddiu/', 'app-misc/A-0', 'merge', 'test_repo')>, Atom('app-misc/D[-foo]')), (<Package ('ebuild', '/tmp/tmp2wktddiu/', 'app-misc/B-0', 'merge', 'test_repo')>, Atom('app-misc/D[foo]'))}),)]]}

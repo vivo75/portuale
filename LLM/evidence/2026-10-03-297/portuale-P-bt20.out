@@ -1,0 +1,26 @@
+[ebuild  N     ] dev-libs/bttarget-1.0::testrepo to /tmp/root-P-bt20
+[ebuild  r  U  ] app-misc/pprov-2:0/2::testrepo [1:0/1::testrepo] to /tmp/root-P-bt20
+[ebuild  N     ] dev-libs/btconsumer-1.0::testrepo to /tmp/root-P-bt20
+[ebuild  N     ] dev-libs/btpin-1.0::testrepo to /tmp/root-P-bt20
+[ebuild  rR    ] app-misc/pcons-1::testrepo to /tmp/root-P-bt20
+[ebuild  N     ] dev-libs/btparent-1.0::testrepo to /tmp/root-P-bt20
+
+Total: 6 packages (1 upgrade, 4 new, 1 reinstall), Size of downloads: 0 KiB
+WARNING: One or more updates/rebuilds have been skipped due to a dependency conflict:
+
+dev-libs/bttarget:0
+
+  (dev-libs/bttarget-2.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/root-P-bt20') USE="" ELIBC="glibc" conflicts with
+    <dev-libs/bttarget-2.0 required by (dev-libs/btpin-1.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/root-P-bt20') USE="" ELIBC="glibc"
+    ^                  ^^^
+
+
+!!! The following update(s) have been skipped due to unsatisfied dependencies
+!!! triggered by backtracking:
+
+dev-libs/btconsumer:0
+
+The following packages are causing rebuilds:
+
+  (app-misc/pprov-2:0/2::testrepo, ebuild scheduled for merge to '/tmp/root-P-bt20') causes rebuilds for:
+    (app-misc/pcons-1:0/0::testrepo, ebuild scheduled for merge to '/tmp/root-P-bt20')

@@ -1,0 +1,30 @@
+[ebuild  N     ] dev-libs/btgc-1 to /tmp/root-G-bt3
+[ebuild  N     ] dev-libs/btgc-2 to /tmp/root-G-bt3
+[ebuild  N     ] dev-libs/btgb-2 to /tmp/root-G-bt3
+[ebuild  N     ] dev-libs/btgp-1 to /tmp/root-G-bt3
+
+!!! Multiple package instances within a single package slot have been pulled
+!!! into the dependency graph, resulting in a slot conflict:
+
+dev-libs/btgc:0
+
+  (dev-libs/btgc-1:0/0::testrepo, ebuild scheduled for merge) USE="" ELIBC="glibc" pulled in by
+    =dev-libs/btgc-1 required by (dev-libs/btgp-1:0/0::testrepo, ebuild scheduled for merge) USE="" ELIBC="glibc"
+    ^              ^                                                                                              
+
+  (dev-libs/btgc-2:0/0::testrepo, ebuild scheduled for merge) USE="" ELIBC="glibc" pulled in by
+    =dev-libs/btgc-2 required by (dev-libs/btgb-2:0/0::testrepo, ebuild scheduled for merge) USE="" ELIBC="glibc"
+    ^              ^                                                                                              
+
+It may be possible to solve this problem by using package.mask to
+prevent one of those packages from being selected. However, it is also
+possible that conflicting dependencies exist such that they are
+impossible to satisfy simultaneously.  If such a conflict exists in
+the dependencies of two different packages, then those packages can
+not be installed simultaneously. You may want to try a larger value of
+the --backtrack option, such as --backtrack=30, in order to see if
+that will solve this conflict automatically.
+
+For more information, see MASKED PACKAGES section in the emerge man
+page or refer to the Gentoo Handbook.
+
