@@ -733,6 +733,36 @@ def test_emerge_jobs_builds_independent_packages_in_parallel(emerge_binary, tmp_
     )
 
 
+def test_emerge_jobs_with_load_average_still_builds_everything(emerge_binary, tmp_path):
+    """`emerge -j4 --load-average <LA>` (real `main.py` `type=float`): the
+    scheduler holds off on an *additional* build while the 1-minute system
+    load exceeds LA, but never blocks the first -- so with a huge LA the
+    throttle is a no-op and all three sched packages still build+merge,
+    and with a tiny LA the run still completes (serialized, not stalled).
+    Also proves `--load-average` / `-l` is now parsed, not reported as an
+    unimplemented real option."""
+    import shutil
+
+    for la in ("999", "0.01"):
+        root = tmp_path / f"root_{la}"
+        shutil.copytree(Path(FIXTURES_ROOT) / "var", root / "var")
+        env = dict(os.environ)
+        env["PORTAGE_CONFIGROOT"] = FIXTURES_ROOT
+        env["ROOT"] = str(root)
+        env["DISTDIR"] = str(Path(FIXTURES_ROOT) / "distfiles")
+        env["PORTAGE_TMPDIR"] = str(tmp_path / f"ptmp_{la}")
+        result = subprocess.run(
+            [str(emerge_binary), "-j4", "--load-average", la, "dev-libs/schedparent"],
+            capture_output=True,
+            text=True,
+            check=False,
+            env=env,
+        )
+        assert result.returncode == 0, result.stderr
+        for pkg in ("schedleaf-a-1.0", "schedleaf-b-1.0", "schedparent-1.0"):
+            assert (root / f"var/db/pkg/dev-libs/{pkg}/CONTENTS").is_file()
+
+
 def test_emerge_jobs_keep_going_skips_a_failed_builds_dependents(emerge_binary, tmp_path):
     """`emerge -j2 --keep-going`: a failed build (`schedbad`'s src_install
     dies) drops its transitive dependents (`schedbaddep`) from the merge

@@ -189,9 +189,9 @@ CASES = [
     # (A plain `emerge <atom>` with no --pretend is now a real source
     #  build + merge -- a non-dry-run path, Rust-black-box-tested in
     #  test_portuale.py, not exercised via these shared CASES.)
-    ("real emerge option, value-taking, not implemented", ["--load-average", "dev-libs/newpkg"], 2),
+    ("real emerge option, value-taking, not implemented", ["--accept-properties", "dev-libs/newpkg"], 2),
     ("real emerge option, boolean, not implemented", ["--debug", "--pretend", "dev-libs/newpkg"], 2),
-    ("real emerge option, inline =value form, not implemented", ["--load-average=4", "--pretend", "dev-libs/newpkg"], 2),
+    ("real emerge option, inline =value form, not implemented", ["--accept-properties=*", "--pretend", "dev-libs/newpkg"], 2),
     # (`emerge --depclean` / `-c` / `--prune` / `-P` / `-C` with no
     #  --pretend are all real removals now -- non-dry-run paths,
     #  Rust-black-box-tested in test_portuale.py, deliberately not run
@@ -750,7 +750,7 @@ CASES = [
     ("-v short alias is now implemented, not rejected", ["--pretend", "-v", "dev-libs/newpkg"], 0),
     ("without --verbose, USE= is never shown even for a package with IUSE", ["--pretend", "dev-libs/useflagpkg"], 0),
     ("-v on a package with no IUSE at all: no USE= line", ["--pretend", "-v", "dev-libs/newpkg"], 0),
-    ("-v combined with a real-but-unimplemented option: still rejected", ["--pretend", "-v", "--load-average", "dev-libs/newpkg"], 2),
+    ("-v combined with a real-but-unimplemented option: still rejected", ["--pretend", "-v", "--accept-properties", "dev-libs/newpkg"], 2),
     ("-v explicit disable via a following \"n\" token", ["--pretend", "-v", "n", "dev-libs/useflagpkg"], 0),
     ("-v explicit enable via a following \"y\" token", ["--pretend", "-v", "y", "dev-libs/useflagpkg"], 0),
     ("--verbose=n inline form disables", ["--pretend", "--verbose=n", "dev-libs/useflagpkg"], 0),
@@ -762,7 +762,7 @@ CASES = [
     ("bundled -v never consumes a following token as its value", ["-pv", "n"], 1),
     ("--help is now implemented, not rejected", ["--help"], 0),
     ("-h short alias is now implemented, not rejected", ["-h"], 0),
-    ("--help wins over any other flag present, valid or not", ["--load-average", "--help"], 0),
+    ("--help wins over any other flag present, valid or not", ["--accept-properties", "--help"], 0),
     ("-h bundled with other short flags still wins", ["-ph"], 0),
     ("--help wins even without --pretend at all", ["--help", "dev-libs/newpkg"], 0),
     ("@world expands to the fixture world file's own atoms", ["--pretend", "@world"], 0),
@@ -6058,7 +6058,7 @@ def test_help_wins_unconditionally_regardless_of_other_flags_or_position(
     with another short flag must win the same way a standalone "-h"
     does, and --help must win even with no --pretend/atom at all."""
     for args in (
-        ["--load-average", "--help"],
+        ["--accept-properties", "--help"],
         ["-ph"],
         ["--help", "dev-libs/newpkg"],
     ):
@@ -9058,32 +9058,32 @@ def test_virtual_is_resolved_as_a_dependency(emerge_binary, fixture_env):
 
 
 def test_real_option_not_implemented_message_names_the_option(emerge_binary, fixture_env):
-    """--load-average is a real emerge option (see lib/_emerge/main.py's
+    """--accept-properties is a real emerge option (see lib/_emerge/main.py's
     argument_options) this pilot doesn't implement -- the error must
     name it specifically and say "option", distinct from both a
     genuinely unrecognized flag and an unimplemented action."""
-    result = _run([str(emerge_binary)], ["--load-average", "dev-libs/newpkg"], fixture_env)
+    result = _run([str(emerge_binary)], ["--accept-properties", "dev-libs/newpkg"], fixture_env)
     assert result.returncode == 2
     assert result.stdout == ""
     assert (
         result.stderr.strip()
-        == 'emerge (pilot v1): option "--load-average" is a real emerge option, but is not '
+        == 'emerge (pilot v1): option "--accept-properties" is a real emerge option, but is not '
         "implemented in this pilot (only --pretend/-p, --verbose/-v, --newuse/-N, --changed-use/-U, --nodeps/-O, "
         "--onlydeps/-o, --update/-u, --deep/-D, --exclude/-X, --deselect/-W, --unmerge/-C, --depclean/-c, --prune/-P, --config, --with-bdeps, --with-bdeps-auto, --changed-deps, --changed-deps-report, --changed-slot, --verbose-slot-rebuilds, --ignore-built-slot-operator-deps, --buildpkg/-b, --buildpkg-exclude, --with-test-deps, --noreplace/-n, --selective, and --help/-h are implemented so far; see PROMPT.md)"
     )
 
 
 def test_real_option_inline_equals_form_is_still_recognized(emerge_binary, fixture_env):
-    """--load-average=4 (the "--opt=value" form argparse also accepts)
-    must resolve to the same canonical "--load-average" option as
-    "--load-average 4" would, not be treated as one unrecognized token."""
+    """--accept-properties=* (the "--opt=value" form argparse also accepts)
+    must resolve to the same canonical "--accept-properties" option as
+    "--accept-properties *" would, not be treated as one unrecognized token."""
     result = _run(
-        [str(emerge_binary)], ["--load-average=4", "--pretend", "dev-libs/newpkg"], fixture_env
+        [str(emerge_binary)], ["--accept-properties=*", "--pretend", "dev-libs/newpkg"], fixture_env
     )
     assert result.returncode == 2
     assert (
         result.stderr.strip()
-        == 'emerge (pilot v1): option "--load-average" is a real emerge option, but is not '
+        == 'emerge (pilot v1): option "--accept-properties" is a real emerge option, but is not '
         "implemented in this pilot (only --pretend/-p, --verbose/-v, --newuse/-N, --changed-use/-U, --nodeps/-O, "
         "--onlydeps/-o, --update/-u, --deep/-D, --exclude/-X, --deselect/-W, --unmerge/-C, --depclean/-c, --prune/-P, --config, --with-bdeps, --with-bdeps-auto, --changed-deps, --changed-deps-report, --changed-slot, --verbose-slot-rebuilds, --ignore-built-slot-operator-deps, --buildpkg/-b, --buildpkg-exclude, --with-test-deps, --noreplace/-n, --selective, and --help/-h are implemented so far; see PROMPT.md)"
     )

@@ -174,13 +174,14 @@ single-pass BFS can't grow into these incrementally:
 
 ### B. Scheduler / build orchestration
 
-- **Parallel builds.** *Shipped 2026-09-01 (slice 1):* `emerge -jN` /
-  `--jobs=N` — `run_build_scheduler` builds up to N `install` phases
-  concurrently (DAG-aware dispatch off `GraphEntry.required_by`,
-  `std::thread::scope` workers), serializes the vdb merge, preserves
-  `--keep-going`. Remaining: `--load-average`/`-l` throttle; per-package
-  build-log capture (so `-j >1` output doesn't interleave); a single
-  shared async runtime instead of one per `run_commands`; killing
+- **Parallel builds.** *Shipped 2026-09-01:* `emerge -jN` / `--jobs=N`
+  (`run_build_scheduler` builds up to N `install` phases concurrently,
+  DAG-aware dispatch off `GraphEntry.required_by`, `std::thread::scope`
+  workers, serialized vdb merge, `--keep-going` preserved) + real
+  `--load-average`/`-l` throttle (`system_loadavg_1min`, holds off
+  additional jobs). Remaining: per-package build-log capture (so `-j >1`
+  output doesn't interleave) + the `>>> Jobs: X of Y` status line; a
+  single shared async runtime instead of one per `run_commands`; killing
   in-flight builds on a hard failure.
 - **`--resume` / `--skipfirst`.** No `/var/cache/edb/mtimedb` resume state.
   `--keep-going` works within a single invocation but nothing persists a
@@ -309,10 +310,11 @@ by a few large items rather than a long tail of small ones:
    slot-operator-rebuild feedback driving a retry. An upgrade that needs
    portage to juggle all of those together still exceeds the pilot.
 
-2. **The Scheduler (Part 2.B).** *`emerge -jN` parallel builds shipped
-   2026-09-01* (DAG-aware dispatch, serialized merge, `--keep-going`).
-   Still missing: `--load-average`, `--resume`/`--skipfirst` (mtimedb
-   state), `--ask`, `elog`, per-package build-log capture.
+2. **The Scheduler (Part 2.B).** *`emerge -jN` parallel builds +
+   `--load-average` shipped 2026-09-01* (DAG-aware dispatch, serialized
+   merge, `--keep-going`, load throttle). Still missing:
+   `--resume`/`--skipfirst` (mtimedb state), `--ask`, `elog`, per-package
+   build-log capture + the `>>> Jobs:` status line.
 
 3. **Config-resolution depth (Part 2.C).** The `USE_ORDER` layering is
    partial. Most real profiles resolve identically, but a config that

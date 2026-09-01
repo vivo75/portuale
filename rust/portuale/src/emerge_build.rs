@@ -211,6 +211,7 @@ pub fn run_source_merge(
     buildpkg: Option<&ebuild_package::PackageOptions>,
     buildpkg_exclude: &[String],
     jobs: usize,
+    load_average: Option<f64>,
 ) -> Result<(), String> {
     if jobs > 1 {
         return run_build_scheduler(
@@ -223,6 +224,7 @@ pub fn run_source_merge(
             buildpkg,
             buildpkg_exclude,
             jobs,
+            load_average,
         );
     }
     run_merge_loop(entries, keep_going, |entry| {
@@ -523,14 +525,24 @@ fn scheduler_skip_dependents(
 /// `collision-protect` / `CONTENTS` races). `jobs == usize::MAX` (a bare
 /// `--jobs`/`-j`) means "as many as the graph allows".
 ///
+/// Real portage's `--load-average` gate: the current system 1-minute load
+/// average (Linux `/proc/loadavg`), or `0.0` if it can't be read (a
+/// non-Linux host, or a sandboxed `/proc`) -- which disables the throttle
+/// rather than stalling.
+fn system_loadavg_1min() -> f64 {
+    std::fs::read_to_string("/proc/loadavg")
+        .ok()
+        .and_then(|s| s.split_whitespace().next().and_then(|v| v.parse().ok()))
+        .unwrap_or(0.0)
+}
+
 /// KNOWN, DOCUMENTED CUTS (same "narrow v1" pattern as the rest of this
-/// module): no `--load-average` throttle (slice 2); each build's own
-/// phase output is inherited straight to the terminal and so interleaves
-/// under `-j` >1 (real portage captures per-package build logs -- a later
-/// slice); each `run_commands` call still spins up its own tokio runtime;
-/// a non-`--keep-going` failure returns immediately but still waits for
-/// already-running builds to finish (`thread::scope` join), it does not
-/// kill them.
+/// module): each build's own phase output is inherited straight to the
+/// terminal and so interleaves under `-j` >1 (real portage captures
+/// per-package build logs -- a later slice); each `run_commands` call
+/// still spins up its own tokio runtime; a non-`--keep-going` failure
+/// returns immediately but still waits for already-running builds to
+/// finish (`thread::scope` join), it does not kill them.
 #[allow(clippy::too_many_arguments)]
 fn run_build_scheduler(
     entries: &[GraphEntry],
@@ -542,6 +554,10 @@ fn run_build_scheduler(
     buildpkg: Option<&ebuild_package::PackageOptions>,
     buildpkg_exclude: &[String],
     jobs: usize,
+    // Real `--load-average`: don't start an *additional* build (beyond
+    // the one always allowed, so the scheduler can't deadlock) while the
+    // system 1-minute load average is above this.
+    load_average: Option<f64>,
 ) -> Result<(), String> {
     use std::collections::{HashMap, HashSet};
     use std::sync::mpsc;
@@ -580,6 +596,17 @@ fn run_build_scheduler(
         let mut in_flight = 0usize;
         loop {
             while in_flight < jobs {
+                // Real `--load-average`: hold off on an *additional* build
+                // while the system is already loaded. Never blocks the
+                // first build (`in_flight >= 1`), so the scheduler always
+                // makes progress.
+                if in_flight >= 1 {
+                    if let Some(la) = load_average {
+                        if system_loadavg_1min() > la {
+                            break;
+                        }
+                    }
+                }
                 let next = (0..n).find(|&i| {
                     scheduler_needs_build(&entries[i])
                         && !started.contains(&i)
@@ -927,6 +954,7 @@ mod tests {
             None,
             &[],
             1,
+            None,
         )
         .expect("source merge succeeds");
 
@@ -995,6 +1023,7 @@ mod tests {
             None,
             &[],
             2,
+            None,
         )
         .expect("parallel source merge succeeds");
 
@@ -1004,6 +1033,73 @@ mod tests {
                     .is_file(),
                 "{pkg} should be merged"
             );
+        }
+        let _ = fs::remove_dir_all(&root);
+        let _ = fs::remove_dir_all(&portage_tmpdir);
+    }
+
+    #[test]
+    fn system_loadavg_1min_reads_a_plausible_value() {
+        // Linux CI: /proc/loadavg exists and its first field is a
+        // non-negative float. Anywhere it can't be read, the throttle is
+        // simply disabled (0.0), never a stall.
+        let la = system_loadavg_1min();
+        assert!(la >= 0.0 && la.is_finite(), "{la}");
+    }
+
+    #[test]
+    fn run_build_scheduler_with_a_high_load_average_never_throttles() {
+        let config_root = fixtures_root();
+        let repos = find_repos(&config_root).unwrap();
+        let root = tempdir();
+        let portage_tmpdir = tempdir();
+
+        let mut leaf_a = source_entry(
+            "schedleaf-a",
+            PretendOutcome::New {
+                version: "1.0".into(),
+            },
+        );
+        leaf_a.required_by = vec![("dev-libs".into(), "schedparent".into())];
+        let mut leaf_b = source_entry(
+            "schedleaf-b",
+            PretendOutcome::New {
+                version: "1.0".into(),
+            },
+        );
+        leaf_b.required_by = vec![("dev-libs".into(), "schedparent".into())];
+        let parent = source_entry(
+            "schedparent",
+            PretendOutcome::New {
+                version: "1.0".into(),
+            },
+        );
+        let entries = vec![leaf_a, leaf_b, parent];
+
+        let options = ebuild_merge::MergeOptions {
+            distdir: tempdir(),
+            config_root: config_root.clone(),
+            ..ebuild_merge::MergeOptions::default()
+        };
+        // A load average of 1e9 can never be exceeded -> the throttle is
+        // a no-op and every package still builds and merges.
+        run_source_merge(
+            &entries,
+            &repos,
+            &root,
+            &portage_tmpdir,
+            &options,
+            false,
+            None,
+            &[],
+            2,
+            Some(1e9),
+        )
+        .expect("high --load-average must not stall the scheduler");
+        for pkg in ["schedleaf-a-1.0", "schedleaf-b-1.0", "schedparent-1.0"] {
+            assert!(root
+                .join(format!("var/db/pkg/dev-libs/{pkg}/CONTENTS"))
+                .is_file());
         }
         let _ = fs::remove_dir_all(&root);
         let _ = fs::remove_dir_all(&portage_tmpdir);
@@ -1054,6 +1150,7 @@ mod tests {
             None,
             &[],
             2,
+            None,
         )
         .expect_err("a failed build must make the whole run fail under --keep-going");
         assert!(err.contains("schedbad-1.0"), "{err}");
@@ -1141,6 +1238,7 @@ mod tests {
             None,
             &[],
             1,
+            None,
         )
         .unwrap_err();
         assert!(err.contains("binary package"), "{err}");
@@ -1254,6 +1352,7 @@ mod tests {
             None,
             &[],
             1,
+            None,
         )
         .expect("1.0 merges");
         run_source_merge(
@@ -1272,6 +1371,7 @@ mod tests {
             None,
             &[],
             1,
+            None,
         )
         .expect("2.0 upgrade merges");
 

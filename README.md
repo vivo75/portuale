@@ -10177,7 +10177,7 @@ via a `_assert_slot_collision_block` helper (rather than pinning the
 whole paragraph in every test) + `--backtrack=30`/`=0` hint-gate CASES;
 a new `portage-repo` unit test asserts the per-instance parent data.
 
-### `emerge -jN` / `--jobs=N`: a real parallel build scheduler
+### `emerge -jN` / `--jobs=N` / `--load-average`: a real parallel build scheduler
 
 `emerge <atom>` (source, no `--pretend`) gained real `_emerge/Scheduler.py`
 job scheduling. `run_source_merge` now takes a `jobs` count; `jobs > 1`
@@ -10211,14 +10211,20 @@ routes to `run_build_scheduler` instead of the strictly-serial
 paths stay serial (nothing to build in parallel). No Python-reference
 change: the contract suite never executes builds.
 
-KNOWN CUTS (documented in `emerge_build.rs`): no `--load-average` throttle
-yet; each build's own phase output is inherited straight to the terminal,
-so it interleaves under `-j >1` (real portage captures per-package build
-logs); each `run_commands` still spins up its own tokio runtime; a
-non-`--keep-going` failure returns immediately but waits for
-already-running builds (`thread::scope` join) rather than killing them.
-New `dev-libs/sched*` fixtures; two black-box `test_portuale.py` tests
-(parallel dispatch order + `--keep-going` skip) and two `portuale` unit
+`--load-average=LA` / `-l LA` (real `main.py` `type=float`) is honoured
+too: `run_build_scheduler` will not start an *additional* build (it always
+allows the first, so it can never deadlock) while the system 1-minute
+load average (`system_loadavg_1min`, Linux `/proc/loadavg`; `0.0` = no
+throttle anywhere it can't be read) is above `LA`.
+
+KNOWN CUTS (documented in `emerge_build.rs`): each build's own phase
+output is inherited straight to the terminal, so it interleaves under
+`-j >1` (real portage captures per-package build logs); each
+`run_commands` still spins up its own tokio runtime; a non-`--keep-going`
+failure returns immediately but waits for already-running builds
+(`thread::scope` join) rather than killing them. New `dev-libs/sched*`
+fixtures; three black-box `test_portuale.py` tests (parallel dispatch
+order, `--load-average`, `--keep-going` skip) and four `portuale` unit
 tests.
 
 ## Running it

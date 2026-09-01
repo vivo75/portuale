@@ -4139,6 +4139,14 @@ pub fn run(args: &[String]) -> ExitCode {
     // `emerge <atom>`; `--buildpkgonly` and the binary-merge paths stay
     // serial (nothing to build in parallel).
     let mut jobs: usize = 1;
+    // --load-average[=LA] / -l[LA] (real `main.py`, `type=float`): the
+    // scheduler will not start an *additional* build (beyond the one it
+    // always allows, so it can never deadlock) while the system's 1-minute
+    // load average is above `LA`. Real `_emerge/Scheduler.py`'s
+    // `_is_work_scheduled` / `JobStatusDisplay` load gate. `None` = no
+    // throttle (the pilot's default). Only meaningful together with
+    // `--jobs` > 1.
+    let mut load_average: Option<f64> = None;
     // --root-deps: real main.py's own `choices: ("True", "rdeps")`, plus
     // a bare form (no `=value` at all). This pilot doesn't distinguish
     // "True" (fold DEPEND/BDEPEND/IDEPEND into RDEPEND) from "rdeps" --
@@ -4831,6 +4839,34 @@ pub fn run(args: &[String]) -> ExitCode {
                 }
                 Err(_) => {
                     eprintln!("emerge: invalid -j parameter: {value:?}");
+                    return ExitCode::from(2);
+                }
+            }
+        } else if arg == "--load-average" || arg == "-l" {
+            // Real `main.py` `--load-average`: `type=float`. A required
+            // value (unlike `--jobs`' optional one) -- a missing or
+            // non-numeric value is an immediate usage error.
+            match args.get(i + 1).map(|s| s.parse::<f64>()) {
+                Some(Ok(la)) if la > 0.0 => {
+                    load_average = Some(la);
+                    i += 2;
+                }
+                _ => {
+                    eprintln!("emerge: option \"--load-average\" requires a positive number");
+                    return ExitCode::from(2);
+                }
+            }
+        } else if let Some(value) = arg
+            .strip_prefix("--load-average=")
+            .or_else(|| arg.strip_prefix("-l"))
+        {
+            match value.parse::<f64>() {
+                Ok(la) if la > 0.0 => {
+                    load_average = Some(la);
+                    i += 1;
+                }
+                _ => {
+                    eprintln!("emerge: invalid --load-average parameter: {value:?}");
                     return ExitCode::from(2);
                 }
             }
@@ -6075,6 +6111,7 @@ pub fn run(args: &[String]) -> ExitCode {
                 buildpkg,
                 &buildpkg_exclude,
                 jobs,
+                load_average,
             ) {
                 eprintln!("emerge: {e}");
                 return ExitCode::from(1);
