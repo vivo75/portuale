@@ -132,7 +132,9 @@ paragraph for long, since it decays fast.
 
 **Dry-run (`emerge --pretend`)**: full recursive DEPEND/RDEPEND/BDEPEND/
 PDEPEND/IDEPEND resolution; profile/make.conf-derived USE/ACCEPT_KEYWORDS
-with the full real `USE_ORDER` precedence; every `package.*` file
+with the real `USE_ORDER` precedence for the `repo`/`pkginternal`/
+`defaults`/`conf`/`pkg` layers (`env`/`features`/`env.d` still cut — see
+SCOPE_BACKLOG Part 2.C); every `package.*` file
 (`.mask`/`.unmask`/`.accept_keywords`/`.use`/`.use.mask`/`.use.force`/
 `.use.stable.mask`/`.use.stable.force`), repo-scoped across main **and**
 overlay repos; `package.provided` (a listed CPV satisfies a dependency
@@ -321,11 +323,21 @@ not just read this list. What's actually left, grouped by area:
 
 > See also `PORTING/SCOPE_BACKLOG.md` — a wider inventory of real portage
 > behavior not yet ported to *either* side (config-resolution `USE_ORDER`
-> depth, the actual remote-binpkg *download*/`gpkg`, fetch resume/
-> `RESTRICT=primaryuri`, brush strategy #2 (rewrite brush-hostile
-> `bin/*.sh`), …).
+> `env`/`features`/`env.d` layers, `RESTRICT=primaryuri`, brush strategy
+> #2 (rewrite brush-hostile `bin/*.sh`), …).
 > Re-derived 2026-08-27; keep it in sync alongside this file when a
 > slice closes one of its entries. Recently closed from it:
+> **`package.use` per-level `USE_ORDER` layering (Config depth, Part
+> 2.C, 2026-09-01)**: the three `package.use` sources split into
+> `Config::{package_use_repo, package_use, package_use_user}` at their
+> own real positions, `use_tokens` split into profile `make.defaults` +
+> `conf_use_tokens`; `effective_use_flags` does the real reversed-
+> `USE_ORDER` walk `repo → pkginternal → defaults → conf → pkg`. Repo
+> `package.use` was wrongly the *strongest* layer before; now it's the
+> weakest. New fixtures `dev-libs/repouseweakpkg` / `profileuseweakpkg`.
+> Remaining Part 2.C: `env`/`features`/`env.d` layers, repo
+> `make.defaults` USE, per-profile-level `package.use` interleaving.
+> Also recently closed:
 > the **remote binpkg download + merge** (2026-08-31): `emerge
 > --getbinpkgonly <atom>` non-`--pretend` — live `Packages` refresh
 > (`bintree._populate_remote`, `wget`), binary-only resolve, download
@@ -674,8 +686,15 @@ not just read this list. What's actually left, grouped by area:
   (`Config::scanned_binpkgs`, only when `Packages` absent, never written
   back). `portage_repo::BinaryIndex` refactor
   (`from_pkgdir`/`from_entries` through every binary-candidate fn). Both
-  sides; contract-tested. Remaining: `Manifest`/`.sig` verification (cut
-  — no crypto), bare `.xpak` multi-instance, mtime-staleness index
+  sides; contract-tested. **gpkg internal `Manifest` digest verification
+  shipped 2026-09-01**: `binpkg::verify_gpkg_manifest` (real
+  `gpkg._verify_binpkg`'s checksum layer — size + BLAKE2B/SHA512 per
+  container member via `portage_fetch::verify_digests`, member↔record
+  set match) runs first in `extract_binpkg` for any `.gpkg.tar` (the
+  merge path only; the pool-populate reader still trusts the container).
+  `gpkgreadpkg-1.0.gpkg.tar` rebuilt with a real Manifest; `blake2`/
+  `sha2` added as dev-deps. Remaining: `.sig` / inline-PGP verification
+  (cut — no crypto), bare `.xpak` multi-instance, mtime-staleness index
   revalidation. See [[porting_pkgdir_scan_gpkg_buildout]].
 - **`build-info` metadata generation** (found during the binpkg-scan
   buildout) **shipped 2026-08-30**: `ebuild_phases::write_post_install_
