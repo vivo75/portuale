@@ -108,3 +108,10 @@ useful orientation even though both are now shipped):
    `FILESDIR`, `EBUILD_PHASE`, `PORTAGE_BUILDDIR`, etc.) happens in
    `doebuild_environment()` (`:381`).
 
+## How portuale actually runs, session to session
+
+The session-to-session operating rhythm — the "next slice" workflow, the
+oracle/fixture/test rules, the full verification pass, and the
+commit/push rules — lives in **[`../AGENTS.md`](../AGENTS.md)**. Read it
+before scoping or implementing a slice.
+
