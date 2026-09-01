@@ -356,6 +356,18 @@ impl<'a> Default for EmergeOpts<'a> {
     }
 }
 
+/// An explicit `--jobs=0` means the CPU count. Shared by every `--jobs`
+/// spelling below.
+fn jobs_count(n: usize) -> usize {
+    if n == 0 {
+        std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(1)
+    } else {
+        n
+    }
+}
+
 /// Prompt and process-wide flags. Returns whether the token was consumed.
 fn parse_prompt_opts<'a>(
     opts: &mut EmergeOpts<'a>,

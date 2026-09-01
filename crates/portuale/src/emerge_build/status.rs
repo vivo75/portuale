@@ -202,6 +202,41 @@ impl StatusDisplay {
         }
     }
 
+    /// Task start: print the `>>> Jobs:` line *before* the worker prints its
+    /// `>>> Emerging` line, matching Portage's event order.
+    pub(crate) fn job_started(&self) {
+        self.state.lock().unwrap().running += 1;
+        if self.mode.show_jobs {
+            self.print_jobs();
+        }
+    }
+
+    /// Build done: the build slot is free, the merge is pending.
+    pub(crate) fn build_finished(&self) {
+        let mut state = self.state.lock().unwrap();
+        state.running = state.running.saturating_sub(1);
+        drop(state);
+        if self.mode.show_jobs {
+            self.print_jobs();
+        }
+    }
+
+    /// Merge landed: `curval += 1`.
+    pub(crate) fn merge_finished(&self) {
+        self.state.lock().unwrap().curval += 1;
+        if self.mode.show_jobs {
+            self.print_jobs();
+        }
+    }
+
+    /// Failure: record it for the display.
+    pub(crate) fn job_failed(&self) {
+        self.state.lock().unwrap().failed += 1;
+        if self.mode.show_jobs {
+            self.print_jobs();
+        }
+    }
+
     pub(crate) fn print_jobs(&self) {
         println!("{}", self.jobs_line());
         self.state.lock().unwrap().displayed = true;

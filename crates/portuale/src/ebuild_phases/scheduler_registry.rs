@@ -51,6 +51,32 @@ impl Drop for SchedulerRegistryGuard {
     }
 }
 
+pub(crate) fn scope_scheduler_registry(
+    registry: std::sync::Arc<std::sync::Mutex<SchedulerRegistry>>,
+) -> SchedulerRegistryGuard {
+    let previous = SCHEDULER_REGISTRY.with(|cell| cell.borrow_mut().replace(registry));
+    SchedulerRegistryGuard(previous)
+}
+
+/// Marks the registry terminated and `SIGTERM`s every registered process
+/// group. Best-effort: an already-exited group yields `ESRCH`, ignored —
+/// Portage's non-blocking "return without waiting" semantics
+/// (PollScheduler.py, _terminate_tasks; AsynchronousTask.py, cancel).
+pub(crate) fn kill_registered_children(registry: &std::sync::Mutex<SchedulerRegistry>) {
+    let pgids: Vec<i32> = {
+        let mut registry = registry.lock().unwrap();
+        registry.terminated = true;
+        registry.pgids.iter().copied().collect()
+    };
+    for pgid in pgids {
+        // SAFETY: `pgid` is recorded by this process, so negating it cannot
+        // overflow and names a group we own (`kill` takes plain ints).
+        unsafe {
+            libc::kill(-pgid, libc::SIGTERM);
+        }
+    }
+}
+
 /// `cmd.status()` registered in this thread's registry for its duration. Every
 /// top-level subprocess a scheduled build spawns goes through this. A spawn
 /// that lands after the run was terminated (the worker was between phases

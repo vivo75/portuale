@@ -43,6 +43,48 @@ pub struct RunMergePlanArgs<'a> {
     pub mode: crate::emerge_build::StatusMode,
 }
 
+/// `>>> Failed to emerge <cpv>[ for <root>][, Log file:]` plus, when the
+/// non-empty build log is found, `>>>  '<log>'`. Each message writes its own
+/// leading blank line first; the log line's extra space is Portage's own
+/// `f" '{log}'"`. The ` for <root>` suffix appears when `ROOT != "/"`.
+// Portage: lib/_emerge/Scheduler.py, _failed_pkg_msg
+pub(crate) fn failed_pkg_msg(cpv: &str, root: &Path, log_path: Option<&Path>) -> String {
+    let for_root = if root == Path::new("/") {
+        String::new()
+    } else {
+        format!(" for {}", root.display())
+    };
+    match log_path {
+        Some(log) => format!(
+            "\n>>> Failed to emerge {cpv}{for_root}, Log file:\n\n>>>  '{}'\n",
+            log.display()
+        ),
+        None => format!("\n>>> Failed to emerge {cpv}{for_root}\n"),
+    }
+}
+
+/// The error for a merge-time binpkg digest failure whose output is already
+/// printed: the CLI boundary exits 1 with no resume notice and no `emerge:` line.
+pub(crate) fn binpkg_digest_failure(cpv: &str) -> String {
+    format!("{cpv}: binpkg digest verification failed")
+}
+
+/// The missing-file block as one unit (each line `\n`-terminated, no
+/// surrounding blanks): the stale-index arm when the cpv is still in the
+/// `<pkgdir>/Packages` index, else the `!!! Fetching Binary failed` arm.
+/// Pure shaper, for tests and the `build.log` write alike.
+// Portage: _emerge/BinpkgVerifier.py, _start
+pub(crate) fn missing_binpkg_block(cpv: &str, index_lists_cpv: bool) -> String {
+    if index_lists_cpv {
+        format!(
+            "!!! Tried to use non-existent binary for '{cpv}'\n\
+             !!! Likely caused by an outdated index. Run 'emaint binhost -f'.\n"
+        )
+    } else {
+        format!("!!! Fetching Binary failed for '{cpv}'\n")
+    }
+}
+
 /// Whether the local `<pkgdir>/Packages` index still lists this cpv. Like
 /// [`local_index_record`] minus the basename tie-break (no file to name it
 /// after): with several same-`CPV` stanzas the entry's `BUILD_ID` picks.
@@ -74,6 +116,13 @@ fn local_index_lists_cpv(
         }
     }
     true
+}
+
+/// The error for a merge-time missing binpkg whose output is already printed:
+/// exit 1 with no resume notice and no `emerge:` line (a merge failure exits
+/// via `FAILURE`, exactly like the digest arm).
+pub(crate) fn binpkg_missing_failure(cpv: &str) -> String {
+    format!("{cpv}: non-existent binary package")
 }
 
 /// Whether `e` is exactly one `binpkg_missing_failure` (same lone-

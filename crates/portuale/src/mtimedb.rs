@@ -309,6 +309,32 @@ pub fn write_info_mtimes(root: &Path, info: &BTreeMap<String, i64>) -> Result<()
     write_sections(root, resume.as_ref(), backup.as_ref(), Some(info))
 }
 
+/// After each successful merge the merged package leaves
+/// `mtimedb["resume"]["mergelist"]`; once the list empties, the `resume` key
+/// is deleted. Removes the first entry equal to `entry`; a no-op when there
+/// is no `resume` section or the entry isn't listed.
+pub fn remove_merged_entry(root: &Path, entry: &ResumeCpv) {
+    let Some(mut resume) = read_section(root, "resume") else {
+        return;
+    };
+    let Some(pos) = resume.mergelist.iter().position(|e| e == entry) else {
+        return;
+    };
+    resume.mergelist.remove(pos);
+    let backup = read_section(root, "resume_backup");
+    let resume_opt = if resume.mergelist.is_empty() {
+        None
+    } else {
+        Some(&resume)
+    };
+    let _ = write_sections(
+        root,
+        resume_opt,
+        backup.as_ref(),
+        Some(&read_info_mtimes(root)),
+    );
+}
+
 /// Right before a fresh, non-`--resume` merge starts, an existing `resume`
 /// entry with more than one item is preserved as `resume_backup` (replacing
 /// whatever backup existed) and `resume` itself is cleared. A single-item

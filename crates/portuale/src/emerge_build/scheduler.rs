@@ -243,3 +243,17 @@ pub(crate) fn merge_one_built_entry(args: MergeOneBuiltEntryArgs<'_>) -> Result<
     display.status(&completed_line(entry, &version, progress, root, &color));
     Ok(())
 }
+
+/// Runs up to `jobs` package *builds* concurrently, dispatching a build
+/// only once every dependency in the merge set is already merged, and
+/// serializing the vdb merge step. `jobs == usize::MAX` (a bare `--jobs`)
+/// means "as many as the graph allows".
+///
+/// The `--load-average` gate reads the 1-minute load average, or `0.0` when
+/// unreadable (which disables the throttle rather than stalling).
+pub(crate) fn system_loadavg_1min() -> f64 {
+    std::fs::read_to_string("/proc/loadavg")
+        .ok()
+        .and_then(|s| s.split_whitespace().next().and_then(|v| v.parse().ok()))
+        .unwrap_or(0.0)
+}
