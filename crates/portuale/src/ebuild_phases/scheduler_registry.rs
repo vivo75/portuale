@@ -30,6 +30,27 @@ pub(crate) struct SchedulerRegistry {
     pgids: std::collections::HashSet<i32>,
 }
 
+/// A fresh, empty registry for one `run_build_scheduler` call.
+pub(crate) fn new_scheduler_registry() -> std::sync::Arc<std::sync::Mutex<SchedulerRegistry>> {
+    std::sync::Arc::new(std::sync::Mutex::new(SchedulerRegistry {
+        terminated: false,
+        pgids: std::collections::HashSet::new(),
+    }))
+}
+
+/// RAII guard: while alive, `spawn_trackable` on this thread registers into
+/// `registry`. Restores the previous value on drop. Scoped per-thread, never
+/// process-wide (a global registry could kill an unrelated test's subprocess).
+pub(crate) struct SchedulerRegistryGuard(
+    Option<std::sync::Arc<std::sync::Mutex<SchedulerRegistry>>>,
+);
+
+impl Drop for SchedulerRegistryGuard {
+    fn drop(&mut self) {
+        SCHEDULER_REGISTRY.with(|cell| *cell.borrow_mut() = self.0.take());
+    }
+}
+
 /// `cmd.status()` registered in this thread's registry for its duration. Every
 /// top-level subprocess a scheduled build spawns goes through this. A spawn
 /// that lands after the run was terminated (the worker was between phases

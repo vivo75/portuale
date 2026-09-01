@@ -80,6 +80,37 @@ impl GpgVerify {
                 .unwrap_or_else(|_| DEFAULT_GPG_VERIFY_GPG_HOME.to_string()),
         }
     }
+
+    /// The per-binrepo policy with `verify-signature` **set**: an explicit
+    /// `false` in a `binrepos.conf` section is the meaningful case (the
+    /// default is already `true`), and carries "explicitly true" semantics
+    /// when set. `FEATURES` then overrides in one direction if stronger,
+    /// so a `--getbinpkg` download from a repo that opted out merges
+    /// unsigned packages.
+    // Portage: `gpkg.__init__`.
+    pub fn from_binrepo(verify_signature: bool, features: &str) -> Self {
+        let has = |tok: &str| features.split_whitespace().any(|t| t == tok);
+        let (mut verify, mut request) = if verify_signature {
+            (true, true)
+        } else {
+            (false, false)
+        };
+        if has("binpkg-request-signature") {
+            verify = true;
+            request = true;
+        } else if has("binpkg-ignore-signature") {
+            verify = false;
+            request = false;
+        }
+        Self {
+            verify_signature: verify,
+            request_signature: request,
+            base_command: std::env::var("BINPKG_GPG_VERIFY_BASE_COMMAND")
+                .unwrap_or_else(|_| DEFAULT_GPG_VERIFY_BASE_COMMAND.to_string()),
+            gpg_home: std::env::var("BINPKG_GPG_VERIFY_GPG_HOME")
+                .unwrap_or_else(|_| DEFAULT_GPG_VERIFY_GPG_HOME.to_string()),
+        }
+    }
 }
 
 /// The `request_signature` / `verify_signature` derivation as a pure

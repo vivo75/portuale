@@ -44,6 +44,13 @@ pub fn read_dir_entries(dir: &Path) -> io::Result<Vec<DirEntry>> {
     Ok(entries)
 }
 
+pub fn read_dir_paths(dir: &Path) -> io::Result<Vec<PathBuf>> {
+    Ok(read_dir_entries(dir)?
+        .into_iter()
+        .map(|entry| entry.path())
+        .collect())
+}
+
 /// The `"-MERGING-"` prefix of a not-yet-finalized vdb entry directory.
 // Portage: lib/portage/const.py, MERGING_IDENTIFIER
 pub const MERGING_IDENTIFIER: &str = "-MERGING-";

@@ -618,6 +618,31 @@ impl SchedulerPolicy for LoadAwarePolicy {
     }
 }
 
+/// The unlimited-jobs `SchedulerPolicy` (Portage's `max_jobs is True`,
+/// a bare `-j`): no concurrency ceiling; `--load-average` still gates
+/// *additional* builds. The scheduler slot's second implementation.
+#[derive(Debug, Clone, Copy)]
+pub struct UnlimitedPolicy {
+    /// `--load-average` ceiling; `None` disables load gating.
+    load_average: Option<f64>,
+}
+impl UnlimitedPolicy {
+    /// An uncapped policy with an optional `--load-average` ceiling.
+    pub fn new(load_average: Option<f64>) -> Self {
+        Self { load_average }
+    }
+}
+impl SchedulerPolicy for UnlimitedPolicy {
+    fn should_start(&self, running: usize, loadavg_1min: f64) -> bool {
+        // Like `LoadAwarePolicy` minus the ceiling: the first build is
+        // always allowed, further ones only while under the load gate.
+        running == 0 || self.load_average.is_none_or(|la| loadavg_1min <= la)
+    }
+    fn max_jobs(&self) -> usize {
+        usize::MAX
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
