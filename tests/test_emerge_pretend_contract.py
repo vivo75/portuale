@@ -9229,6 +9229,59 @@ def test_clean_and_rage_clean_pretend_match_rust_and_python(
     assert rust.returncode == py.returncode
 
 
+def test_color_map_overrides_the_ansi_codes(
+    emerge_binary, emerge_pretend_python, fixture_env, fixtures_root, tmp_path
+):
+    """Real /etc/portage/color.map (output.py::_parse_color_map): a
+    `KEY = VALUE` line overrides the ANSI code for a `_styles` key or a
+    `codes` colour-name (VALUE = a raw code like `31m`, or a
+    space-separated list of colour-names). Here `GOOD = darkred` recolours
+    `emerge --search`'s `*` marker from green to darkred, and
+    `PKG_MERGE = 34;01m` recolours a `[ebuild N ]` cpv. Rust == Python."""
+    cfg = tmp_path / "cfg"
+    shutil.copytree(fixtures_root / "etc", cfg / "etc", symlinks=True)
+    # The fixture make.profile is a relative symlink into ../../repo; make
+    # it absolute so it still resolves from the tmp config root.
+    prof = cfg / "etc" / "portage" / "make.profile"
+    prof.unlink()
+    prof.symlink_to(fixtures_root / "repo" / "profiles" / "default")
+    # repos.conf uses locations relative to the config root; rewrite them
+    # to absolute paths so the repos still resolve from the tmp tree.
+    rc = cfg / "etc" / "portage" / "repos.conf" / "repos.conf"
+    rc.write_text(
+        "\n".join(
+            (
+                line
+                if not line.strip().startswith("location")
+                else "location = %s" % (fixtures_root / line.split("=", 1)[1].strip())
+            )
+            for line in rc.read_text().splitlines()
+        )
+        + "\n"
+    )
+    (cfg / "etc" / "portage" / "color.map").write_text(
+        "GOOD = darkred\n"
+        "# a comment\n"
+        "PKG_MERGE = 34;01m\n"
+        'BAD = "red bold"\n'
+    )
+    env = dict(fixture_env)
+    env["PORTAGE_CONFIGROOT"] = str(cfg)
+
+    for args in (["--color=y", "-s", "newpkg"], ["-pv", "--color=y", "dev-libs/newpkg"]):
+        rust = _run([str(emerge_binary)], args, env)
+        py = _run(emerge_pretend_python, args, env)
+        assert rust.stdout == py.stdout, args
+        assert rust.returncode == py.returncode
+
+    # `*` is GOOD -> darkred (\x1b[31m), not the default green (\x1b[32;01m).
+    search = _run([str(emerge_binary)], ["--color=y", "-s", "newpkg"], env)
+    assert "\x1b[31m*\x1b[39;49;00m" in search.stdout
+    # and without the color.map it is green.
+    plain = _run([str(emerge_binary)], ["--color=y", "-s", "newpkg"], fixture_env)
+    assert "\x1b[32;01m*\x1b[39;49;00m" in plain.stdout
+
+
 def test_info_prints_the_deterministic_config_block(
     emerge_binary, emerge_pretend_python, fixture_env
 ):

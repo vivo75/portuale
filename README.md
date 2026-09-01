@@ -10608,6 +10608,39 @@ Python reference and contract-tested.
   version table, repository timestamps. None of that is reproduced;
   `FEATURES` reflects only `make.conf` (no `make.globals` defaults).
 
+### `color.map` / `PORTAGE_COLORMAP`: user-overridable ANSI codes
+
+SCOPE_BACKLOG Part 2 Section H item 3. Real `output.py::_parse_color_map`
+reads `<config_root>/etc/portage/color.map` (`COLOR_MAP_FILE =
+"etc/portage/color.map"`) once at startup and lets it override the ANSI
+escape for any `_styles` key (`GOOD`, `BAD`, `WARN`, `BRACKET`, the
+`PKG_MERGE*` family, …) or any `codes` colour-name (`red`, `teal`, …).
+
+- **File format**: `KEY = VALUE` per line, `#` starts a comment. `KEY`
+  must be a known style key or colour-name (anything else is skipped with
+  a warning to stderr — never fatal, matching real portage's `onerror`
+  callback). `VALUE` is either a raw ANSI code matching `^[0-9;]*m` (used
+  verbatim after the `\e[` prefix) or a space-separated list of
+  colour-names whose codes are concatenated. Surrounding quotes on the
+  value are stripped.
+- **Resolution** (`resolved_code`): a colour-name lookup hits its
+  override, then its built-in code; a style key hits its own override,
+  then the override / built-in code of the colour-name it maps to. Every
+  `Colorizer::c()` call and the `-s` / `-pv` / `-pc` renderers now route
+  their escapes through this, so e.g. `GOOD = darkred` recolours
+  `emerge --search`'s `*` marker from green (`\e[32;01m`) to darkred
+  (`\e[31m`).
+- **`PORTAGE_COLORMAP`** is *not* an input — real `doebuild.py:543`
+  **exports** it (`= colormap()`) as bash that `isolated-functions.sh`
+  `eval`s so an ebuild's `elog`/`einfo` share the same palette. The
+  pilot now emits the same 10 `PORTAGE_COLOR_<KEY>=$'…'` lines (`BAD
+  BRACKET ERR GOOD HILITE INFO LOG NORMAL QAWARN WARN`, `\e` written
+  `\E`) into every build phase's environment
+  (`color::phase_colormap_export`).
+- Documented cut: real portage's `codes`/`_styles` tables are larger
+  (256-colour and RGB entries, `0x……` hex names); the pilot ports the
+  16-colour ANSI set it already used.
+
 ## Running it
 
 Build both Rust binaries:

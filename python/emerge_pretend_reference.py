@@ -10414,8 +10414,13 @@ def _columnwidth_from_env():
 # "optional config not modelled" cut as elsewhere. Mirrors
 # portuale/src/color.rs exactly.
 _COLOR_CODES = {
+    "normal": "\x1b[0m",
     "reset": "\x1b[39;49;00m",
     "bold": "\x1b[01m",
+    "black": "\x1b[30m",
+    "darkgray": "\x1b[30;01m",
+    "darkred": "\x1b[31m",
+    "red": "\x1b[31;01m",
     "darkgreen": "\x1b[32m",
     "green": "\x1b[32;01m",
     "brown": "\x1b[33m",
@@ -10426,12 +10431,16 @@ _COLOR_CODES = {
     "fuchsia": "\x1b[35;01m",
     "teal": "\x1b[36m",
     "turquoise": "\x1b[36;01m",
-    "red": "\x1b[31;01m",
+    "lightgray": "\x1b[37m",
+    "white": "\x1b[37;01m",
 }
 _COLOR_STYLES = {
     "BAD": "red",
     "WARN": "yellow",
     "GOOD": "green",
+    "NORMAL": "normal",
+    "HILITE": "teal",
+    "BRACKET": "blue",
     "PKG_MERGE": "darkgreen",
     "PKG_MERGE_SYSTEM": "darkgreen",
     "PKG_MERGE_WORLD": "green",
@@ -10472,6 +10481,78 @@ def _resolve_havecolor(color_opt):
     return havecolor
 
 
+_color_map_overrides_cache = None
+
+
+def _color_map_overrides():
+    """Real output.py::_parse_color_map (output.py:158-230): parse
+    $PORTAGE_CONFIGROOT/etc/portage/color.map into {key: final escape
+    sequence}. Mirrors color.rs's color_map_overrides -- see its
+    docstring."""
+    global _color_map_overrides_cache
+    if _color_map_overrides_cache is not None:
+        return _color_map_overrides_cache
+    out = {}
+    _color_map_overrides_cache = out
+    config_root = os.environ.get("PORTAGE_CONFIGROOT", "/")
+    path = os.path.join(config_root, "etc", "portage", "color.map")
+    try:
+        with open(path, encoding="utf-8", errors="replace") as f:
+            text = f.read()
+    except OSError:
+        return out
+    ansi_re = re.compile(r"^[0-9;]*m$")
+
+    def strip_quotes(t):
+        if len(t) >= 2 and t[0] in "'\"" and t[0] == t[-1]:
+            return t[1:-1]
+        return t
+
+    for lineno, raw in enumerate(text.splitlines()):
+        line = raw.split("#", 1)[0].strip()
+        if not line:
+            continue
+        parts = line.split("=")
+        if len(parts) != 2:
+            sys.stderr.write(
+                f"'{path}', line {lineno}: expected exactly one occurrence "
+                "of '=' operator\n"
+            )
+            continue
+        k = strip_quotes(parts[0].strip())
+        v = strip_quotes(parts[1].strip())
+        if k not in _COLOR_STYLES and k not in _COLOR_CODES:
+            sys.stderr.write(f"'{path}', line {lineno}: Unknown variable: '{k}'\n")
+            continue
+        if ansi_re.match(v):
+            out[k] = "\x1b[" + v
+        else:
+            seq = ""
+            bad = False
+            for name in v.split():
+                if name not in _COLOR_CODES:
+                    bad = True
+                    break
+                seq += _COLOR_CODES[name]
+            if bad:
+                sys.stderr.write(f"'{path}', line {lineno}: Undefined: '{v}'\n")
+                continue
+            out[k] = seq
+    return out
+
+
+def _resolved_code(name):
+    ov = _color_map_overrides()
+    if name in ov:
+        return ov[name]
+    if name in _COLOR_CODES:
+        return _COLOR_CODES[name]
+    s = _COLOR_STYLES.get(name, "")
+    if not s:
+        return ""
+    return ov.get(s, _COLOR_CODES.get(s, ""))
+
+
 class _Colorizer:
     """Real portage's module-global `havecolor` + `colorize()`, together.
     When disabled, every method returns its input unchanged."""
@@ -10482,11 +10563,10 @@ class _Colorizer:
     def c(self, key, text):
         if not self.enabled:
             return text
-        name = key if key in _COLOR_CODES else _COLOR_STYLES.get(key, "")
-        seq = _COLOR_CODES.get(name, "")
+        seq = _resolved_code(key)
         if not seq:
             return text
-        return seq + text + _COLOR_CODES["reset"]
+        return seq + text + _resolved_code("reset")
 
     def pkgprint(self, text, binary, system, world):
         """Real Display.pkgprint (output.py:265-292), merge-list case

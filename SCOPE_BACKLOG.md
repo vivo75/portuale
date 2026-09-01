@@ -320,7 +320,12 @@ dev/test context — see also the `chown` note below).
 - `chown` / privilege-preserving `chmod` not reproduced; directory merge
   order sorted for determinism, not real `os.listdir()` order (cosmetic).
 - `profiles/updates/` package moves (`sys-libs/foo` → `sys-libs/bar`).
-- `color.map` / `PORTAGE_COLORMAP`.
+- ~~`color.map` / `PORTAGE_COLORMAP`.~~ **Done** — real
+  `output.py::_parse_color_map` reads
+  `<config_root>/etc/portage/color.map` and overrides the ANSI code for
+  any `_styles` key / `codes` colour-name; `PORTAGE_COLORMAP` exported
+  into every build phase's env. See README "`color.map` /
+  `PORTAGE_COLORMAP`".
 - `--quiet` verbosity level (1) — the pilot models plain `-p` (2) and
   `-pv` (3) only.
 

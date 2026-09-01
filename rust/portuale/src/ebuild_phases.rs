@@ -1251,6 +1251,13 @@ fn phase_env_vars(
             eclass_locations_value(&env.pkg_dir, config_root),
         ),
         ("PORTAGE_PYTHON".to_string(), "/usr/bin/python".to_string()),
+        // Real `doebuild.py:543`: `PORTAGE_COLORMAP = colormap()` -- bash
+        // source `bin/isolated-functions.sh` `eval`s so an ebuild's
+        // `elog`/`einfo` use the same (`color.map`-aware) colours.
+        (
+            "PORTAGE_COLORMAP".to_string(),
+            crate::color::phase_colormap_export(),
+        ),
         ("PATH".to_string(), path),
         (
             "PORTAGE_TMPDIR".to_string(),
