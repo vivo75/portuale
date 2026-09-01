@@ -27,16 +27,21 @@
 //     produces a non-`Binary` entry.
 //
 // v1 cuts specific to this module:
-//   - `Packages.gz` / `Packages.zst` (a compressed remote index) is not
-//     tried -- only the plain `Packages` (real portage's own preference
-//     order; the plain file is always served alongside).
+//   - `Packages.gz` / `Packages.zst` (a compressed remote index) ARE
+//     tried now (`refresh_binhost_indexes` fetches `Packages.<ext>` and
+//     pipes it through `gzip -dc` / `zstd -dc` into the plain `Packages`
+//     cache file), with the plain `Packages` as the fallback. Not
+//     modelled: `Packages.bz2`/`.lz4` and real portage's exact
+//     preference ordering.
 //   - live `layout.conf` negotiation (`binpkg-multi-instance`, path
 //     layout) is not done -- the index `PATH` field (or the default
 //     `<cat>/<pf>.tbz2`) is trusted outright, same "trust the index"
 //     stance the `--pretend` half already takes.
-//   - digest verification is `SIZE`-only (the pilot has no crypto; the
-//     `SHA*`/`MD5` fields are read but not checked -- see
-//     `binpkg::read_gpkg_metadata`'s own identical `Manifest`/`.sig` cut).
+//   - digest verification checks `SIZE` and the `Packages` record's
+//     `MD5` (the md5 of the whole `.tbz2`, real `bintree`'s own field).
+//     Real portage also checks `SHA1` -- the pilot has no sha1 crate, and
+//     `MD5` is always present in a real `Packages`. The gpkg-internal
+//     `Manifest`/`.sig` are still a cut (see `binpkg::read_gpkg_metadata`).
 
 use crate::ebuild_merge::{self, MergeOptions};
 use portage_profile::{BinRepo, Config};
@@ -57,8 +62,36 @@ pub fn refresh_binhost_indexes(binrepos: &[BinRepo], root: &Path) -> Result<(), 
         let cache_dir = binrepo.packages_dir(root);
         std::fs::create_dir_all(&cache_dir).map_err(|e| format!("{}: {e}", cache_dir.display()))?;
         let dest = cache_dir.join("Packages");
-        crate::fetch::wget_fetch(&format!("{uri}/Packages"), &dest)
-            .map_err(|e| format!("binhost {uri}: {e}"))?;
+
+        // Real `bintree._populate_remote` prefers a compressed index when
+        // the binhost serves one (`Packages.gz` / `Packages.zst`),
+        // decompressing it into the same plain `Packages` cache file
+        // `list_remote_binary_candidates` reads. Fall back to the plain
+        // `Packages` if neither compressed form is there.
+        let mut got = false;
+        for (ext, tool) in [("gz", "gzip"), ("zst", "zstd")] {
+            let compressed = cache_dir.join(format!("Packages.{ext}"));
+            if crate::fetch::wget_fetch(&format!("{uri}/Packages.{ext}"), &compressed).is_ok() {
+                let out =
+                    std::fs::File::create(&dest).map_err(|e| format!("{}: {e}", dest.display()))?;
+                let status = std::process::Command::new(tool)
+                    .arg("-dc")
+                    .arg(&compressed)
+                    .stdout(std::process::Stdio::from(out))
+                    .status()
+                    .map_err(|e| format!("binhost {uri}: spawning {tool}: {e}"))?;
+                let _ = std::fs::remove_file(&compressed);
+                if !status.success() {
+                    return Err(format!("binhost {uri}: {tool} -dc Packages.{ext} failed"));
+                }
+                got = true;
+                break;
+            }
+        }
+        if !got {
+            crate::fetch::wget_fetch(&format!("{uri}/Packages"), &dest)
+                .map_err(|e| format!("binhost {uri}: {e}"))?;
+        }
     }
     Ok(())
 }
@@ -186,7 +219,8 @@ fn resolve_local_binpkg(
 }
 
 /// Fetch `<sync_uri>/<PATH>` (or the default `<cat>/<pf>.tbz2`) into
-/// `$PKGDIR`, then check its byte size against the index `SIZE`.
+/// `$PKGDIR`, then verify it against the index `SIZE` and, if present,
+/// the `MD5` field. A mismatch removes the file and fails.
 fn download_and_verify(
     sync_uri: &str,
     record: &std::collections::HashMap<String, String>,
@@ -220,6 +254,26 @@ fn download_and_verify(
             let _ = std::fs::remove_file(&dest);
             return Err(format!(
                 "{}: downloaded size {actual} != index SIZE {expected}",
+                dest.display()
+            ));
+        }
+    }
+
+    // Real `bintree.gettbz2` / `_verify_dist_hashes`: the `Packages`
+    // record's `MD5` field is the md5 of the whole `.tbz2`. (Real portage
+    // also checks `SHA1`; the pilot has no sha1 crate, and `MD5` is
+    // always present in a real `Packages`.)
+    if let Some(expected_md5) = record.get("MD5").filter(|s| !s.is_empty()) {
+        use md5::Digest as _;
+        let bytes = std::fs::read(&dest).map_err(|e| format!("{}: {e}", dest.display()))?;
+        let actual: String = md5::Md5::digest(&bytes)
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect();
+        if !actual.eq_ignore_ascii_case(expected_md5) {
+            let _ = std::fs::remove_file(&dest);
+            return Err(format!(
+                "{}: MD5 mismatch (index {expected_md5}, got {actual})",
                 dest.display()
             ));
         }
@@ -581,35 +635,86 @@ mod tests {
     }
 
     #[test]
-    fn download_and_verify_fetches_then_size_checks() {
+    fn download_and_verify_fetches_then_size_and_md5_checks() {
+        // Real md5 of the committed fixture .tbz2 (`md5sum`, not invented).
+        const FIXTURE_MD5: &str = "54cab52a68eda02d7d41561b8f7d318a";
         let tmp = tempdir();
         let pkgdir = tmp.join("pkgdir");
         let body =
             std::fs::read(fixtures_root().join("pkgdir/dev-libs/packagepkg-1.0.tbz2")).unwrap();
         let mut routes = HashMap::new();
         routes.insert("/dev-libs/packagepkg-1.0.tbz2".to_string(), body.clone());
-        routes.insert("/dev-libs/packagepkg-1.0.tbz2".to_string(), body.clone());
-        let (base, _h) = serve(routes, 2);
+        let (base, _h) = serve(routes, 3);
 
-        let ok_record: HashMap<String, String> =
-            [("SIZE", "4618"), ("PATH", "dev-libs/packagepkg-1.0.tbz2")]
+        let record = |pairs: &[(&str, &str)]| -> HashMap<String, String> {
+            pairs
                 .iter()
                 .map(|(k, v)| (k.to_string(), v.to_string()))
-                .collect();
-        let got = download_and_verify(&base, &ok_record, "dev-libs", "packagepkg", "1.0", &pkgdir)
-            .unwrap();
+                .collect()
+        };
+
+        // SIZE + a matching MD5 -> ok.
+        let ok = record(&[
+            ("SIZE", "4618"),
+            ("MD5", FIXTURE_MD5),
+            ("PATH", "dev-libs/packagepkg-1.0.tbz2"),
+        ]);
+        let got =
+            download_and_verify(&base, &ok, "dev-libs", "packagepkg", "1.0", &pkgdir).unwrap();
         assert_eq!(got, pkgdir.join("dev-libs/packagepkg-1.0.tbz2"));
         assert_eq!(std::fs::metadata(&got).unwrap().len(), 4618);
 
-        let bad_record: HashMap<String, String> =
-            [("SIZE", "9999"), ("PATH", "dev-libs/packagepkg-1.0.tbz2")]
-                .iter()
-                .map(|(k, v)| (k.to_string(), v.to_string()))
-                .collect();
-        let err = download_and_verify(&base, &bad_record, "dev-libs", "packagepkg", "1.0", &pkgdir)
+        // Wrong SIZE -> rejected, file removed.
+        let bad_size = record(&[("SIZE", "9999"), ("PATH", "dev-libs/packagepkg-1.0.tbz2")]);
+        let err = download_and_verify(&base, &bad_size, "dev-libs", "packagepkg", "1.0", &pkgdir)
             .unwrap_err();
         assert!(err.contains("!= index SIZE 9999"), "{err}");
         assert!(!pkgdir.join("dev-libs/packagepkg-1.0.tbz2").is_file());
+
+        // Right SIZE, wrong MD5 -> rejected, file removed.
+        let bad_md5 = record(&[
+            ("SIZE", "4618"),
+            ("MD5", "00000000000000000000000000000000"),
+            ("PATH", "dev-libs/packagepkg-1.0.tbz2"),
+        ]);
+        let err = download_and_verify(&base, &bad_md5, "dev-libs", "packagepkg", "1.0", &pkgdir)
+            .unwrap_err();
+        assert!(err.contains("MD5 mismatch"), "{err}");
+        assert!(!pkgdir.join("dev-libs/packagepkg-1.0.tbz2").is_file());
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn refresh_binhost_indexes_decompresses_a_packages_gz() {
+        let tmp = tempdir();
+        let root = tmp.join("root");
+        let plain = b"TIMESTAMP: 0\nPACKAGES: 1\n\nCPV: dev-libs/foo-1.0\n\n".to_vec();
+        // Real `gzip` output of `plain`.
+        let mut gz_child = std::process::Command::new("gzip")
+            .arg("-c")
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        {
+            use std::io::Write;
+            gz_child.stdin.take().unwrap().write_all(&plain).unwrap();
+        }
+        let gz = gz_child.wait_with_output().unwrap().stdout;
+
+        let mut routes = HashMap::new();
+        routes.insert("/Packages.gz".to_string(), gz);
+        let (base, _h) = serve(routes, 1);
+
+        let binrepo = BinRepo {
+            name: "test".to_string(),
+            sync_uri: base.clone(),
+            priority: 1,
+        };
+        refresh_binhost_indexes(std::slice::from_ref(&binrepo), &root).unwrap();
+        let cached = binrepo.packages_dir(&root).join("Packages");
+        assert_eq!(std::fs::read(&cached).unwrap(), plain);
+        assert!(!binrepo.packages_dir(&root).join("Packages.gz").exists());
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
@@ -630,7 +735,9 @@ mod tests {
         let mut routes = HashMap::new();
         routes.insert("/Packages".to_string(), index);
         routes.insert("/dev-libs/packagepkg-1.0.tbz2".to_string(), tbz2);
-        let (base, _h) = serve(routes, 2);
+        // refresh tries Packages.gz + Packages.zst (both 404 here) before
+        // the plain Packages, then the binpkg download = 4 connections.
+        let (base, _h) = serve(routes, 4);
 
         let binrepos = vec![BinRepo {
             name: "test".into(),
@@ -740,7 +847,9 @@ mod tests {
         let mut routes = HashMap::new();
         routes.insert("/Packages".to_string(), index);
         routes.insert("/dev-libs/packagepkg-1.0.tbz2".to_string(), tbz2);
-        let (base, _h) = serve(routes, 2);
+        // refresh tries Packages.gz + Packages.zst (both 404 here) before
+        // the plain Packages, then the binpkg download = 4 connections.
+        let (base, _h) = serve(routes, 4);
 
         let binrepos = vec![BinRepo {
             name: "test".into(),

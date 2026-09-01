@@ -10334,6 +10334,20 @@ rotation; `--resume --pretend` doesn't print the saved list; a saved
 binary entry is replayed as source; `myopts` is written empty (resume
 doesn't carry the original flags).
 
+### Remote binhost: compressed `Packages` index + binpkg `MD5` verification
+
+`refresh_binhost_indexes` (real `bintree._populate_remote`) now prefers a
+compressed remote index: it tries `<uri>/Packages.gz`, then
+`<uri>/Packages.zst`, piping whichever it gets through `gzip -dc` /
+`zstd -dc` into the same plain `Packages` cache file
+`list_remote_binary_candidates` reads, and falls back to the plain
+`Packages` if neither is served.
+
+`download_and_verify` now checks the `Packages` record's `MD5` field (the
+md5 of the whole `.tbz2`, real `bintree`'s own hash) after the existing
+`SIZE` check — a mismatch removes the file and fails. (Real portage also
+checks `SHA1`; the pilot has no sha1 crate and `MD5` is always present.)
+
 ### Fetch: real `RESUMECOMMAND` resume + the `pkg_nofetch` phase
 
 `wget_resume` is real `make.globals`'s own default `RESUMECOMMAND`

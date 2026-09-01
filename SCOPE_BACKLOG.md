@@ -231,10 +231,12 @@ single-pass BFS can't grow into these incrementally:
 
 ### E. Binary packages / fetch
 
-- **Remote binhost**: live `layout.conf` negotiation, `Packages.gz`,
-  `RESTRICT=primaryuri` interleave. *(Fetch **resume** — `RESUMECOMMAND`
-  `-c` — shipped 2026-09-01; SRC_URI `SHA512`/`BLAKE2B` digest
-  verification was already real.)*
+- **Remote binhost**: live `layout.conf` negotiation,
+  `RESTRICT=primaryuri` interleave, `Packages.bz2`/`.lz4`, binpkg `SHA1`
+  (no sha1 crate). *(Shipped 2026-09-01: `Packages.gz`/`.zst` compressed
+  index; binpkg `MD5` verification; SRC_URI fetch **resume**
+  (`RESUMECOMMAND` `-c`). SRC_URI `SHA512`/`BLAKE2B` verification was
+  already real.)*
 - **gpkg**: `Manifest` / `.sig` verification + signing
   (`FEATURES=binpkg-signing` — cut, the pilot has no crypto), bare `.xpak`
   multi-instance, `binpkg-multi-instance`, mtime-staleness index
