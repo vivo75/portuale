@@ -338,13 +338,17 @@ dev/test context — see also the `chown` note below).
   `ebuild-pyhelper`, `save-ebuild-env.sh`) no longer abort on their
   `cd "${PORTAGE_PYM_PATH}" || exit 1`. `emerge -v app-portage/eix` now
   completes a full real merge against a live `~amd64` tree.
+- ~~**Spurious `QA Notice: Eclass '…' inherited illegally in … <phase>`**~~
+  **Fixed 2026-09-01** — `compute_environment` reads the eclass list from
+  the ebuild's `metadata/md5-cache` `_eclasses_` and `phase_env_vars`
+  exports `INHERITED` (real `porttree.py:872`), so `bin/ebuild.sh`'s
+  `__INHERITED_QA_CACHE` snapshot suppresses the notice on a phase
+  re-source, exactly as real portage does.
 - **Still open (shell backend):** minimize + report the `declare -f`
   heredoc bug upstream; periodic re-pin to keep up with upstream `main`
   (see `brush-pin.md`'s checklist); `emerge --shell` does not yet reach
   the `prerm`/`postrm` or `pkg_config` paths (they use the `bash`
-  default); the cosmetic `* QA Notice: Eclass '…' inherited illegally in
-  … <phase>` noise from `misc-functions.sh`'s `inherit()` check firing
-  on the re-sourced env across the fresh-shell-per-phase boundary.
+  default).
 
 ### H. Misc / cosmetic
 

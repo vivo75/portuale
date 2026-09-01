@@ -5821,11 +5821,31 @@ setup → unpack → prepare → configure → compile → test → install` (re
 `eautoreconf`, `./configure`, `make`, `make install`) → vdb merge. The
 46 MB `/usr/bin/eix` lands, the `eix-diff` symlink with it, a real vdb
 entry (`CONTENTS`/`COUNTER`/`DEFINED_PHASES`/`BDEPEND`/…) is written, and
-real portage's own `qlist -I` / `equery` agree it is installed. Residual
-noise (`* QA Notice: Eclass '…' inherited illegally in … <phase>` from
-`misc-functions.sh`'s `inherit()` check firing on the re-sourced
-environment across the fresh-shell-per-phase boundary) is cosmetic and
-does not affect the merge.
+real portage's own `qlist -I` / `equery` agree it is installed.
+
+### `INHERITED` is exported, killing the spurious "inherited illegally" QA notice
+
+The eix merge above still printed `* QA Notice: Eclass '…' inherited
+illegally in … <phase>` for each of its seven eclasses, on both the
+`pretend` and `setup` phases. Real portage never emits this here.
+
+`bin/ebuild.sh`'s own `inherit()` (line 268) warns when an `inherit`
+runs outside `depend` for an eclass not in `${INHERITED}
+${__INHERITED_QA_CACHE}`. Real portage sets `INHERITED` in the phase env
+(`porttree.py:872`: `" ".join(_eclasses_)`), and `bin/ebuild.sh`
+snapshots it into `__INHERITED_QA_CACHE` right before it `unset`s
+`INHERITED` and re-`source`s the ebuild for a non-`depend` phase -- so
+the re-run `inherit` calls find every eclass already known. This pilot
+never set `INHERITED`, so every re-source warned.
+
+`compute_environment` now reads the eclass list from the ebuild's own
+repo `metadata/md5-cache` entry (`_eclasses_=<name>\t<md5>…`, or the
+plain `INHERITED=` older/fixture form) and `phase_env_vars` exports
+`INHERITED` into every phase -- matching real portage exactly. `emerge
+-v app-portage/eix` and `ebuild <file> <phase>` now run clean on both
+the `bash` and `brush` backends. Absent for a standalone ebuild outside
+any repo (no md5-cache), the same tolerance the `EAPI`/`SRC_URI` reads
+already take.
 
 ### Real `mirror://` resolution: `profiles/thirdpartymirrors` + `GENTOO_MIRRORS`
 

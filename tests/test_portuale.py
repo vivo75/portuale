@@ -1582,6 +1582,13 @@ def test_ebuild_install_really_inherits_a_real_eclass(ebuild_binary, tmp_path):
         env=env,
     )
     assert result.returncode == 0, result.stderr
+    # No spurious "inherited illegally" QA notice: `phase_env_vars`
+    # exports `INHERITED` (from the ebuild's md5-cache) so `bin/ebuild.sh`
+    # snapshots it into `__INHERITED_QA_CACHE` before a non-`depend`
+    # phase re-sources the ebuild -- exactly as real portage does.
+    assert "inherited illegally" not in (result.stdout + result.stderr), (
+        result.stdout + result.stderr
+    )
 
 
 def test_ebuild_install_does_not_deadlock_on_a_large_eclass_scope(

@@ -361,6 +361,15 @@ pub(crate) struct Environment {
     eapi: String,
     portage_tmpdir: PathBuf,
     portage_builddir: PathBuf,
+    /// Space-joined eclass names for `INHERITED` (real
+    /// `porttree.py:872`'s `" ".join(mydata["_eclasses_"])`), from the
+    /// ebuild's own repo `metadata/md5-cache` entry. `None` for a
+    /// standalone ebuild outside any repo, or one that inherits nothing.
+    /// Exported into every phase env so `bin/ebuild.sh`'s own
+    /// `__INHERITED_QA_CACHE=${INHERITED}` snapshot suppresses the
+    /// spurious `Eclass '…' inherited illegally` QA notice when a
+    /// non-`depend` phase re-sources the ebuild -- see `phase_env_vars`.
+    inherited: Option<String>,
 }
 
 pub(crate) fn compute_environment(
@@ -404,6 +413,24 @@ pub(crate) fn compute_environment(
         .join(&category)
         .join(&split.pf);
 
+    // Real `porttree.py:872`: `INHERITED = " ".join(_eclasses_)` -- the
+    // eclass names from this ebuild's own repo `metadata/md5-cache`
+    // entry, in order. Modern md5-cache stores `_eclasses_=<name>\t<md5>
+    // \t<name>\t<md5>…`; older/fixture caches store a plain `INHERITED=
+    // <space list>`. Absent for a standalone ebuild outside any repo.
+    let inherited = repo_root_for(&pkg_dir)
+        .and_then(|repo_root| portage_repo::read_md5_cache(&repo_root, &category, &split.pf).ok())
+        .and_then(|md| {
+            if let Some(eclasses) = md.get("_eclasses_") {
+                let names: Vec<&str> = eclasses.split('\t').step_by(2).collect();
+                (!names.is_empty()).then(|| names.join(" "))
+            } else {
+                md.get("INHERITED")
+                    .map(|s| s.split_whitespace().collect::<Vec<_>>().join(" "))
+                    .filter(|s| !s.is_empty())
+            }
+        });
+
     Ok(Environment {
         ebuild_abs,
         pkg_dir,
@@ -412,6 +439,7 @@ pub(crate) fn compute_environment(
         eapi,
         portage_tmpdir: portage_tmpdir.to_path_buf(),
         portage_builddir,
+        inherited,
     })
 }
 
@@ -1393,6 +1421,17 @@ fn phase_env_vars(
         ),
         ("EBUILD_PHASE".to_string(), ebuild_phase_value.to_string()),
     ];
+
+    // Real `INHERITED` (`porttree.py:872`): exported into every phase so
+    // that when a non-`depend` phase re-sources the ebuild,
+    // `bin/ebuild.sh`'s `__INHERITED_QA_CACHE=${INHERITED}` snapshot (then
+    // `unset INHERITED`, then `source "${EBUILD}"`) lets the re-run
+    // `inherit` calls find every eclass already known -- suppressing the
+    // spurious `QA Notice: Eclass '…' inherited illegally in … <phase>`
+    // real portage never emits here. See `Environment::inherited`.
+    if let Some(inherited) = &env.inherited {
+        vars.push(("INHERITED".to_string(), inherited.clone()));
+    }
 
     // Real portage's `PORTAGE_PYM_PATH`: the `lib/` dir of the portage
     // checkout, where the `portage` python package lives. The vendored
@@ -2862,6 +2901,33 @@ mod tests {
         // expects single-quoted tokens -- confirmed by round-tripping
         // through the exact same real, unmodified bash line here.
         assert_eq!(value, format!("'{}'", repo_root.display()));
+    }
+
+    /// `compute_environment` reads `INHERITED` from the ebuild's own
+    /// `metadata/md5-cache` entry (real `porttree.py:872`) so
+    /// `phase_env_vars` can export it and `bin/ebuild.sh` can snapshot it
+    /// into `__INHERITED_QA_CACHE` -- suppressing the spurious
+    /// `Eclass '…' inherited illegally` QA notice on a phase re-source.
+    /// `dev-libs/eclasspkg`'s fixture cache carries `INHERITED=pilotcheck`.
+    #[test]
+    fn compute_environment_reads_inherited_from_the_md5_cache() {
+        let ebuild_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../fixtures/repo/dev-libs/eclasspkg/eclasspkg-1.0.ebuild");
+        let env = compute_environment(&ebuild_path, Path::new("/var/tmp/portage")).unwrap();
+        assert_eq!(env.inherited.as_deref(), Some("pilotcheck"));
+
+        // A standalone ebuild outside any repo -> no md5-cache -> None.
+        let tmp = std::env::temp_dir().join(format!(
+            "ebuild-phases-test-{}-inherited-none",
+            std::process::id()
+        ));
+        let pkg_dir = tmp.join("dev-libs/standalone");
+        std::fs::create_dir_all(&pkg_dir).unwrap();
+        let solo = pkg_dir.join("standalone-1.0.ebuild");
+        std::fs::write(&solo, "EAPI=8\nSLOT=0\n").unwrap();
+        let env = compute_environment(&solo, Path::new("/var/tmp/portage")).unwrap();
+        assert_eq!(env.inherited, None);
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 
     #[test]
