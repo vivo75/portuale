@@ -10405,4 +10405,183 @@ The first slice of scope-backlog.md Part 2.F (the standalone `emerge`
 actions). Both are read-only queries, mirrored byte-for-byte in the
 Python reference and contract-tested.
 
+- **`--list-sets`** (real `_emerge/actions.py:3839`): every defined
+  package-set name, sorted, one per line — the `cnf/sets/portage.conf`
+  `[section]` headers (real `SetConfig._parse` over the bundled default
+  config, skipping the `multiset = true` `[usersets]` generator) plus
+  every file under `<config_root>/etc/portage/sets/`.
+- **`--search` / `-s`** (real `action_search` → `search.py`): a
+  case-insensitive substring search of every `category/package` in the
+  configured repos (the package-name half only, unless the key contains
+  `/`) plus set names; **`-S` / `--searchdesc`** also matches
+  `DESCRIPTION`. The output is real `search.output()`'s shape —
+  `Searching...`, the `[ Results for search key : … ]` header, a
+  `*  cat/pkg` line per hit (with the `Latest version` / installed-status
+  / `Homepage` / `Description` / `License` block, which real
+  `action_search` shows by default and `--quiet` suppresses —
+  `search`'s `verbose` is `"--quiet" not in myopts`, `-v` doesn't
+  affect it), the
+  `[ Applications found : N ]` footer. A version tie between repos is
+  broken toward the higher-priority repo. Documented cuts: the
+  search index, `--usepkg` binary results, the full `bestmatch-visible`
+  mask/keyword filter (`[ Masked ]` is flagged only on a rough
+  `amd64`-keyword check), and `Size of files`.
+  - **`--fuzzy-search` / `--regex-search-auto` / `--search-similarity`**
+    (2026-09-02): `--search` now matches the way real `search.py` does by
+    default. `--fuzzy-search` (real `true_y_or_n`, ON unless `=n`) also
+    lands a hit when a faithful `difflib.SequenceMatcher.ratio()` port
+    (new `portuale/src/difflib.rs` — the `find_longest_match` `j2len` DP,
+    the recursive block split, `2M/T`; `isjunk=None` / `autojunk` for
+    `len(b) < 200` both drop out) reaches `--search-similarity`% (real:
+    a float 0–100, default 80). For a `cat/pkg` key each half is scored
+    independently and both must pass (real `part_matchers`).
+    `--regex-search-auto` (real `y_or_n`, default `y`) treats a key
+    holding a regex metacharacter (`^ $ * [ ] { } | ?` or `.+`) that
+    compiles as a case-insensitive `regex` pattern instead of a literal
+    substring, disabling fuzzy for that key (real `search.py:265-284`); a
+    leading `%` forces it. Set names use the same matcher (never fuzzy).
+    Mirrored in `emerge_pretend_reference.py` (its own `difflib` +
+    `re`); ~20 contract cases assert Rust == Python on stdout, stderr,
+    and exit code, plus a non-parity check that a misspelled key still
+    resolves and `--fuzzy-search=n` / `--search-similarity=100` drop it.
+- **`--check-news`** (real `actions.py:3844` → `portage.news`): count the
+  GLEP 42 news items (`<repo>/metadata/news/<id>/<id>.en.txt`) that are
+  *valid* (`News-Item-Format:` matches `[12].*`), *relevant* (no
+  `Display-If-*` header, or a `Display-If-Installed:` `cat/pkg` that's in
+  the vdb), and not listed in
+  `<eroot>/var/lib/gentoo/news/news-<repo>.read` **or `.skip`** (real
+  `NewsManager.updateItems`' permanent per-item skip list). Prints the
+  real `IMPORTANT: N news items need reading for repository '<repo>'` /
+  `Use eselect news read to view new items` block, or ` * No news items
+  were found.`. `dev-libs/samepkg` (in the fixture vdb) gates one of the
+  three `testrepo` news items. Documented cuts: the *write* side of the
+  `.unread` / `.skip` bookkeeping (real `updateItems` rewrites both each
+  run; portuale only reads them and recomputes, writing nothing);
+  `Display-If-Keyword` / `Display-If-Profile` (always satisfied); non-bare
+  `Display-If-Installed` atoms.
+- **`--clean`** (real `action_uninstall` → `unmerge` with
+  `unmerge_action == "clean"`): like `--prune --nodeps` but *per slot* —
+  for each `(cp, slot)`, keep only the newest version, remove the rest
+  (`portage_repo::clean_selection`). No `sys-apps/portage` self-skip
+  (real `unmerge.py:368`). `dev-libs/unmergepkg` (`1.0` + `2.0`, both
+  slot `0`) → removes `1.0`; `dev-libs/dualslotpkg` (`1.0`/slot 1 +
+  `2.0`/slot 2) → nothing.
+- **`--rage-clean`** (real): a fast `--unmerge` — same selection (every
+  matched version), skips the `CLEAN_DELAY` countdown and the
+  `pkg_prerm`/`pkg_postrm` phases (invisible at `--pretend`, so the
+  preview is byte-identical to `--unmerge`'s). `run_unmerge_pretend`
+  gained an `action` label so the `Couldn't find … to <action>` /
+  `removal by <action>` messages name the right one.
+- **`--info`** (real `action_info`), **narrowed to its deterministic
+  config/repository block**: the `Repositories:` list
+  (`repo.info_string()` — name, location, masters, priority, aliases),
+  `Binary Repositories:`, `Installed sets:`, then the sorted
+  `VAR="value"` dump (`ACCEPT_KEYWORDS`, `ACCEPT_LICENSE`, `CFLAGS`,
+  `CHOST`, `USE` + `USE_EXPAND` vars, …) and the `Unset:` line. `Config`
+  gained an `other_vars` field (the final make.conf/profile scalar map)
+  for the non-USE variables. **Large, deliberate cut:** real `--info`'s
+  output is dominated by *host state* a fixture-driven test can't
+  verify — the `Portage <ver> (python …, <profile>, <chost>, <gcc>,
+  <libc>, <kernel>)` header, `System uname`, `KiB Mem`, the
+  `sh:`/`gcc:`/`ld:`/`ccache`/`distcc` version probes, the `info_pkgs`
+  version table, repository timestamps. None of that is reproduced;
+  `FEATURES` reflects only `make.conf` (no `make.globals` defaults).
+
+  *(Shipped 2026-09-02: `emerge --info <atom>` — the `myfiles`-loop
+  handling. An atom whose `cat/pkg` has no ebuild anywhere aborts with
+  the real `emerge: there are no ebuilds to satisfy "<atom>".` +
+  `--misspell-suggestions` block, exit 1, before the config block.
+  Otherwise, after it, a real `Package Settings` section
+  (`header_width = 65`, real `mypkgs`): per atom, every **installed** vdb
+  match wins — `<cpv>::<repo> was built with the following:` + its vdb
+  `USE="…"` line + the `CHOST`/`CFLAGS`/`CXXFLAGS`/`FEATURES`/`LDFLAGS`
+  whose stored value differs from the current config + an `Unset: …`
+  line (real `mydesiredvars`); otherwise the best visible ebuild
+  candidate, but only if its ebuild defines `pkg_info()` — real
+  portage's gate (EAPI 4+ + `info` in `DEFINED_PHASES`), so an ordinary
+  *uninstalled* package still shows only the config block. New
+  `portage_repo::resolve_info_candidate` / `resolve_installed_info`,
+  reusing the same `build_use_expand_display` the merge list uses; new
+  `dev-libs/pkginfopkg` + `dev-libs/infoinstpkg` (a rich vdb entry —
+  `IUSE`/`USE`/`CFLAGS`/`CHOST`) fixtures. Cuts: the installed block's
+  `CHOST`/`CFLAGS`/… come only from the individual vdb `build-info`
+  files (real `_aux_env_search` falls back to `environment.bz2`) and
+  skip the `( )` force/mask wrapping; `(non-installed binary)`; the
+  `pkg_info()` phase run itself; ANSI colour on the USE line. Mirrored
+  in `emerge_pretend_reference.py`
+  (`_resolve_info_candidate`/`_resolve_installed_info`); 4 contract
+  tests + 2 `portage-repo` unit tests.)*
+
+### `color.map` / `PORTAGE_COLORMAP`: user-overridable ANSI codes
+
+scope-backlog.md Part 2 Section H item 3. Real `output.py::_parse_color_map`
+reads `<config_root>/etc/portage/color.map` (`COLOR_MAP_FILE =
+"etc/portage/color.map"`) once at startup and lets it override the ANSI
+escape for any `_styles` key (`GOOD`, `BAD`, `WARN`, `BRACKET`, the
+`PKG_MERGE*` family, …) or any `codes` colour-name (`red`, `teal`, …).
+
+- **File format**: `KEY = VALUE` per line, `#` starts a comment. `KEY`
+  must be a known style key or colour-name (anything else is skipped with
+  a warning to stderr — never fatal, matching real portage's `onerror`
+  callback). `VALUE` is either a raw ANSI code matching `^[0-9;]*m` (used
+  verbatim after the `\e[` prefix) or a space-separated list of
+  colour-names whose codes are concatenated. Surrounding quotes on the
+  value are stripped.
+- **Resolution** (`resolved_code`): a colour-name lookup hits its
+  override, then its built-in code; a style key hits its own override,
+  then the override / built-in code of the colour-name it maps to. Every
+  `Colorizer::c()` call and the `-s` / `-pv` / `-pc` renderers now route
+  their escapes through this, so e.g. `GOOD = darkred` recolours
+  `emerge --search`'s `*` marker from green (`\e[32;01m`) to darkred
+  (`\e[31m`).
+- **`PORTAGE_COLORMAP`** is *not* an input — real `doebuild.py:543`
+  **exports** it (`= colormap()`) as bash that `isolated-functions.sh`
+  `eval`s so an ebuild's `elog`/`einfo` share the same palette. The
+  portuale now emits the same 10 `PORTAGE_COLOR_<KEY>=$'…'` lines (`BAD
+  BRACKET ERR GOOD HILITE INFO LOG NORMAL QAWARN WARN`, `\e` written
+  `\E`) into every build phase's environment
+  (`color::phase_colormap_export`).
+- Documented cut: real portage's `codes`/`_styles` tables are larger
+  (256-colour and RGB entries, `0x……` hex names); portuale ports the
+  16-colour ANSI set it already used.
+
+### `emerge --quiet` / `-q`: verbosity level 1
+
+scope-backlog.md Part 2 Section H item 4 — portuale previously modelled
+only plain `-p` (verbosity 2) and `-pv` (verbosity 3). Real
+`_DisplayConfig.__init__` computes `verbosity = "--quiet" and 1 or
+"--verbose" and 3 or 2` — `--quiet` wins over `-v`. `-q` takes an
+optional `y|n` (real `true_y_or_n`), and bundles (`-pq`, `-pvq`).
+
+What verbosity 1 changes, for the non-`--columns` display portuale
+renders:
+
+- **The mask column disappears.** Real `include_mask_str()` is
+  `verbosity > 1`, so the fixed-width `PkgAttrDisplay` field is 6
+  columns, not 7 (`[ebuild  N    ]`, not `[ebuild  N     ]`), and the
+  blocker bracket loses its `empty_space_in_brackets()` space
+  (`[blocks B    ]`). `attr_display_field` / `format_blocker_lines` take
+  an `include_mask` flag.
+- **The `USE="…"` line is suppressed** — real `print_use_string =
+  verbosity != 1 or "--verbose"` — unless `-v` is also given (`-pvq`),
+  in which case it shows with `all_flags` on (`= verbosity == 3 or
+  quiet`), i.e. the full `-pv`-style flag list.
+- **No `:slot::repo` cpv decoration and no `Total:` counters line** —
+  both are `verbosity == 3` only, and `--quiet` forces verbosity to 1
+  even alongside `-v`, so `-pvq` drops the `Total:` line that `-pv`
+  shows.
+- **`emerge --search` goes terse** — real `action_search` passes
+  `search`'s `verbose` as `"--quiet" not in myopts`, so `-sq` prints
+  just the `*  cat/pkg` lines (and this fixes portuale's earlier
+  `-s`-was-terse-by-default divergence: it now shows the full block by
+  default, like real portage).
+- **`emerge --check-news -q`** suppresses only the ` * No news items
+  were found.` line (real `actions.py:3851` `elif "--quiet" not in
+  …`); a non-zero count still prints the `IMPORTANT:` block.
+
+The `_set_root_columns` / `_set_non_root_columns` quiet *line-format*
+rewrite (dropping the `[ebuild …]` bracket entirely for a bare
+`N cat/pkg [ver]` line) is real only under `--columns`, which portuale
+doesn't render, so it's not reproduced.
+
 # # required by dev-libs/useflagpkg[-foo] (argument)
