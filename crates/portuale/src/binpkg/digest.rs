@@ -216,3 +216,7 @@ pub(crate) fn run_tar(args: &[&str]) -> Result<(), String> {
 pub(crate) fn lossy(p: &Path) -> String {
     p.to_string_lossy().into_owned()
 }
+
+pub(crate) fn read_dir_sorted(dir: &Path) -> Result<Vec<PathBuf>, String> {
+    portage_util::read_dir_paths(dir).map_err(|e| format!("{}: {e}", dir.display()))
+}

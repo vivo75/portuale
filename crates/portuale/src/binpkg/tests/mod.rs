@@ -42,12 +42,72 @@ fn make_xpak_binpkg(prefix: &[u8], entries: &[(&str, &[u8])]) -> Vec<u8> {
     out
 }
 
+/// One member of a crafted test container.
+enum GpkgEntry<'a> {
+    File(&'a [u8]),
+    Symlink(&'a str),
+    Fifo,
+    /// `fs::hard_link` to an earlier member: GNU `tar` records it as
+    /// `LNKTYPE`.
+    Hardlink(&'a str),
+    CharDevice {
+        major: u32,
+        minor: u32,
+    },
+}
+
 fn blake2b_hex(bytes: &[u8]) -> String {
     use blake2::Digest as _;
     blake2::Blake2b512::digest(bytes)
         .iter()
         .map(|b| format!("{b:02x}"))
         .collect()
+}
+
+const GPG_PASSPHRASE: &str = "GentooTest";
+
+/// Clear-sign `data` for the `Manifest`; detached-sign it for a member.
+// Portage: gpkg.py, checksum_helper
+fn gpg_sign(home: &Path, key: &str, data: &[u8], clearsign: bool) -> Vec<u8> {
+    use std::io::Write;
+    let mut cmd = Command::new("/usr/bin/gpg");
+    cmd.args(["--homedir"])
+        .arg(home)
+        .args([
+            "--batch",
+            "--no-tty",
+            "--yes",
+            "--pinentry-mode",
+            "loopback",
+            "--passphrase",
+            GPG_PASSPHRASE,
+            "--digest-algo",
+            "SHA512",
+            "--local-user",
+            key,
+        ])
+        .args(if clearsign {
+            &["--clearsign"][..]
+        } else {
+            &["--armor", "--detach-sig"][..]
+        })
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+    let mut child = cmd.spawn().expect("gpg signs");
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(data)
+        .expect("gpg stdin");
+    let output = child.wait_with_output().expect("gpg runs");
+    assert!(
+        output.status.success(),
+        "gpg sign failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    output.stdout
 }
 
 // The in-process inner metadata.tar reader.
