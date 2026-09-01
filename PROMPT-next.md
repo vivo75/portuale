@@ -268,6 +268,35 @@ fetch (including `mirror://`/`custommirrors` resolution and real
 `inherit()` support; `ebuild --shell bash|brush` picks the execution
 backend explicitly.
 
+**Backtracking (resolver retry loop)** — the `--autounmask*` family is
+fully shipped, and as of 2026-09-01 **slice 1 of real backtracking**:
+`resolve_pretend_graph` is now a `'backtrack` retry loop (real
+`_emerge/resolver/backtracking.py` shape) — each pass rebuilds the graph
+from scratch, and a **solvable slot conflict** (one version of the
+conflicted `cat/pkg` satisfies every parent atom that landed on the slot)
+folds those atoms into `slot_constraints`, fed to `resolve_pretend`'s new
+`extra_constraints` param, and the whole walk re-runs (up to
+`MAX_BACKTRACK = 10`). Unsolvable conflicts, and anything still
+conflicting after 10 passes, fall through and are reported as before.
+**Slice 2 (2026-09-01)** added the real `--backtrack=COUNT` flag
+(`backtrack_max` param, default 10, `--backtrack=0` disables). **Slice 3
+(2026-09-01)** added the real `runtime_pkg_mask`: `extra_constraints`
+gained a `!`-negation form, `resolve_pretend_graph` tracks `slot_pullers`
+and runs a trial-and-revert state machine — on an unsolvable slot
+conflict it masks the conflicted `cpv` + every puller-parent version with
+a lower alternative, re-runs, and keeps the masks only if every conflict
+clears with no new `NoVisibleCandidate`. **Slice 4 (2026-09-01)** replaced the compact `[slot conflict]` line with
+a simplified transcription of real `_show_slot_collision_notice` →
+`slot_conflict_handler.get_conflict()`: the `!!! Multiple package
+instances …` block (`SlotConflict.instances` = every conflicting version
++ its `(parent_cpv, atom)` pullers, via `build_slot_conflict`) + the
+advisory paragraph with the `--backtrack=30` hint gated the real way.
+Deferred (see `PORTING/SCOPE_BACKLOG.md` Part 2.A): "backtracking
+exhausted" / "circular dependencies" diagnostics, autounmask levels tried
+in sequence inside the loop, the `resolve_graph_once` helper extraction
+(drop slice 1's `loop {}` reindent), and real `get_conflict()`'s
+`collision_reasons` grouping / `--verbose-conflicts` markers / stderr.
+
 `PORTING/README.md`'s "What this proves" section is the incrementally-
 updated record of every shipped slice, each grounded in cited real Python
 source — read that, not this list, for current detail, and `git log` for
