@@ -42,6 +42,34 @@ fn make_xpak_binpkg(prefix: &[u8], entries: &[(&str, &[u8])]) -> Vec<u8> {
     out
 }
 
+/// Assemble a plain-outer-tar gpkg container from `<prefix>/<name>`
+/// members plus a `Manifest` body, in gpkg member order.
+fn build_gpkg(prefix: &str, members: &[(&str, &[u8])], manifest: Option<&str>) -> PathBuf {
+    let scratch = ScratchDir::new("gpkg-build").unwrap();
+    // leak the scratch dir for the caller's test lifetime
+    let root = scratch.path().to_path_buf();
+    std::mem::forget(scratch);
+    let pkgdir = root.join(prefix);
+    fs::create_dir_all(&pkgdir).unwrap();
+    let mut argv: Vec<String> = vec![
+        "-cf".into(),
+        lossy(&root.join("out.gpkg.tar")),
+        "-C".into(),
+        lossy(&root),
+    ];
+    for (name, bytes) in members {
+        fs::write(pkgdir.join(name), bytes).unwrap();
+        argv.push(format!("{prefix}/{name}"));
+    }
+    if let Some(body) = manifest {
+        fs::write(pkgdir.join("Manifest"), body).unwrap();
+        argv.push(format!("{prefix}/Manifest"));
+    }
+    let refs: Vec<&str> = argv.iter().map(String::as_str).collect();
+    run_tar(&refs).unwrap();
+    root.join("out.gpkg.tar")
+}
+
 /// One member of a crafted test container.
 enum GpkgEntry<'a> {
     File(&'a [u8]),
@@ -56,12 +84,78 @@ enum GpkgEntry<'a> {
     },
 }
 
+/// `build_gpkg`'s typed sibling: stage one filesystem object per entry
+/// and let GNU `tar` write the headers.
+fn build_gpkg_entries(entries: &[(&str, GpkgEntry)]) -> PathBuf {
+    let scratch = ScratchDir::new("gpkg-build-typed").unwrap();
+    // leak the scratch dir for the caller's test lifetime
+    let root = scratch.path().to_path_buf();
+    std::mem::forget(scratch);
+    let mut argv: Vec<String> = vec![
+        "-cf".into(),
+        lossy(&root.join("out.gpkg.tar")),
+        "-C".into(),
+        lossy(&root),
+    ];
+    for (name, entry) in entries {
+        let path = root.join(name);
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).unwrap();
+        }
+        match entry {
+            GpkgEntry::File(bytes) => fs::write(&path, bytes).unwrap(),
+            GpkgEntry::Symlink(target) => std::os::unix::fs::symlink(target, &path).unwrap(),
+            GpkgEntry::Fifo => {
+                let cstr = std::ffi::CString::new(path.as_os_str().as_encoded_bytes())
+                    .expect("test path has no NUL");
+                // SAFETY: `mkfifo` takes a valid NUL-terminated path
+                // and a mode, and returns a plain int.
+                assert_eq!(unsafe { libc::mkfifo(cstr.as_ptr(), 0o644) }, 0);
+            }
+            GpkgEntry::Hardlink(target) => fs::hard_link(root.join(target), &path).unwrap(),
+            GpkgEntry::CharDevice { major, minor } => {
+                let cstr = std::ffi::CString::new(path.as_os_str().as_encoded_bytes())
+                    .expect("test path has no NUL");
+                let dev = libc::makedev(*major, *minor);
+                // SAFETY: `mknod` takes a valid NUL-terminated path, a
+                // mode/type and a device number, and returns a plain
+                // int. Root-only, like cell e itself.
+                assert_eq!(
+                    unsafe { libc::mknod(cstr.as_ptr(), libc::S_IFCHR | 0o666, dev) },
+                    0
+                );
+            }
+        }
+        argv.push(name.to_string());
+    }
+    let refs: Vec<&str> = argv.iter().map(String::as_str).collect();
+    run_tar(&refs).unwrap();
+    root.join("out.gpkg.tar")
+}
+
 fn blake2b_hex(bytes: &[u8]) -> String {
     use blake2::Digest as _;
     blake2::Blake2b512::digest(bytes)
         .iter()
         .map(|b| format!("{b:02x}"))
         .collect()
+}
+
+fn sha512_hex(bytes: &[u8]) -> String {
+    use sha2::Digest as _;
+    sha2::Sha512::digest(bytes)
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
+}
+
+fn data_line(name: &str, bytes: &[u8]) -> String {
+    format!(
+        "DATA {name} {} BLAKE2B {} SHA512 {}\n",
+        bytes.len(),
+        blake2b_hex(bytes),
+        sha512_hex(bytes)
+    )
 }
 
 const GPG_PASSPHRASE: &str = "GentooTest";
@@ -110,6 +204,92 @@ fn gpg_sign(home: &Path, key: &str, data: &[u8], clearsign: bool) -> Vec<u8> {
     output.stdout
 }
 
+/// Copy a `.gpkg.tar` fixture to a tempdir, unpack its outer tar, let
+/// `mutate` alter the unpacked tree, and repack. Packed-byte flips
+/// would only corrupt the tar framing.
+fn repack_gpkg_with_mutation(src: &Path, tag: &str, mutate: impl Fn(&Path)) -> PathBuf {
+    let root = TempDir::new(&format!("portuale-gpg-{tag}")).keep();
+    let outer = root.join("outer");
+    fs::create_dir_all(&outer).unwrap();
+    run_tar(&["-xf", &lossy(src), "-C", &lossy(&outer)]).unwrap();
+    mutate(&outer);
+    let mut argv: Vec<String> = vec![
+        "-cf".into(),
+        lossy(&root.join("out.gpkg.tar")),
+        "-C".into(),
+        lossy(&outer),
+    ];
+    // List the prefix's files, not the prefix directory itself: GNU
+    // tar would also write a `<prefix>/` directory member, which the
+    // one-level structure check rejects. The signed fixture is flat.
+    for prefix_dir in read_dir_sorted(&outer).unwrap() {
+        let prefix = prefix_dir
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        for file in read_dir_sorted(&prefix_dir).unwrap() {
+            argv.push(format!(
+                "{prefix}/{}",
+                file.file_name().unwrap().to_string_lossy()
+            ));
+        }
+    }
+    let refs: Vec<&str> = argv.iter().map(String::as_str).collect();
+    run_tar(&refs).unwrap();
+    root.join("out.gpkg.tar")
+}
+
+/// Build a signed container around a fixed payload whose Manifest
+/// is clear-signed with `manifest_key`, and whose payload `.sig`
+/// sidecar is present only when `with_sidecar` (signed with
+/// `member_key`, defaulting to the manifest key).
+fn build_signed_gpkg(
+    home: &Path,
+    manifest_key: &str,
+    with_sidecar: bool,
+    member_key: Option<&str>,
+) -> PathBuf {
+    let payload: &[u8] = b"signed payload bytes";
+    let manifest = format!(
+        "{}{}",
+        data_line("gpkg-1", b""),
+        data_line("payload.bin", payload)
+    );
+    let signed_manifest = gpg_sign(home, manifest_key, manifest.as_bytes(), true);
+    let mut members: Vec<(&str, Vec<u8>)> =
+        vec![("gpkg-1", b"".to_vec()), ("payload.bin", payload.to_vec())];
+    if with_sidecar {
+        let sig = gpg_sign(home, member_key.unwrap_or(manifest_key), payload, false);
+        members.push(("payload.bin.sig", sig));
+    }
+    let scratch = ScratchDir::new("gpkg-signed-build").unwrap();
+    let root = scratch.path().to_path_buf();
+    std::mem::forget(scratch);
+    let prefix = "sigtest-1.0";
+    let pkgdir = root.join(prefix);
+    fs::create_dir_all(&pkgdir).unwrap();
+    let mut argv: Vec<String> = vec![
+        "-cf".into(),
+        lossy(&root.join("out.gpkg.tar")),
+        "-C".into(),
+        lossy(&root),
+    ];
+    let member_refs: Vec<(String, Vec<u8>)> = members
+        .into_iter()
+        .map(|(n, b)| (format!("{prefix}/{n}"), b))
+        .collect();
+    for (name, bytes) in &member_refs {
+        fs::write(root.join(name), bytes).unwrap();
+        argv.push(name.clone());
+    }
+    fs::write(pkgdir.join("Manifest"), &signed_manifest).unwrap();
+    argv.push(format!("{prefix}/Manifest"));
+    let refs: Vec<&str> = argv.iter().map(String::as_str).collect();
+    run_tar(&refs).unwrap();
+    root.join("out.gpkg.tar")
+}
+
 // The in-process inner metadata.tar reader.
 
 /// One inner-tar member for the unit tests, written through `tar::Builder`.
@@ -128,6 +308,9 @@ fn inner_entry<'a>(name: &'a str, data: &'a [u8]) -> InnerTestEntry<'a> {
         data,
     }
 }
+
+mod digest;
 mod extract;
 mod inner;
+mod manifest;
 mod metadata;

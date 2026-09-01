@@ -66,3 +66,29 @@ fn extract_binpkg_unpacks_a_real_gpkg_image_and_build_info() {
     assert_eq!(bi.join("DESCRIPTION").metadata().unwrap().len(), 78);
     let _ = fs::remove_dir_all(&tmp);
 }
+
+#[test]
+fn extract_binpkg_rejects_a_gpkg_with_a_bad_manifest() {
+    let img: &[u8] = b"pretend image tar bytes";
+    let manifest = format!(
+        "{}{}",
+        data_line("gpkg-1", b""),
+        "DATA image.tar 3 BLAKE2B x SHA512 y\n",
+    );
+    let g = build_gpkg(
+        "foo-1.0",
+        &[("gpkg-1", b""), ("image.tar", img)],
+        Some(&manifest),
+    );
+    let tmp = TempDir::new("binpkg-gpkg-bad").keep();
+    let err = extract_binpkg(
+        &g,
+        &tmp.join("image"),
+        &tmp.join("build-info"),
+        &GpgVerify::default(),
+        &crate::ebuild_merge::XattrPolicy::default(),
+    )
+    .unwrap_err();
+    assert!(err.contains("size mismatch"), "{err}");
+    let _ = fs::remove_dir_all(&tmp);
+}

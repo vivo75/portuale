@@ -51,4 +51,13 @@ fn fixture(name: &str) -> std::path::PathBuf {
 fn s8_fixtures() -> std::path::PathBuf {
     std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures")
 }
+
+/// Full SHA-256 hex of a file.
+fn s8_sha256(path: &std::path::Path) -> String {
+    use sha2::Digest as _;
+    format!(
+        "{:x}",
+        sha2::Sha256::digest(std::fs::read(path).expect("test file reads"))
+    )
+}
 mod ssh;
