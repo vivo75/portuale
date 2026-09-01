@@ -397,9 +397,12 @@ by a few large items rather than a long tail of small ones:
    `fakeroot` (single-user dev context), SELinux, the
    `RESTRICT`/`PROPERTIES` exemptions.*
 
-5. **Breadth of actions and flags (Parts 2.E/F).** `--info`, `--search`,
-   `--sync`, news, GLSA, dozens of modifier flags — individually small,
-   collectively "not feature-complete."
+5. **Breadth of actions and flags (Parts 2.E/F).** *`--list-sets`,
+   `--search`/`-s`/`-S`, `--check-news`, `--clean`, `--rage-clean`,
+   `--info` shipped 2026-09-01.* Remaining: `--regen` / `--metadata`
+   (needs a new depend-phase md5-cache-generation capability, Rust-only),
+   `--sync` (non-goal), GLSA/`@security`, and the ~dozen
+   recognized-but-unimplemented modifier flags.
 
 Everything else in Part 2 is genuinely incremental — one focused slice
 each, the rhythm this pilot already runs at. Items 1–4 above are the
