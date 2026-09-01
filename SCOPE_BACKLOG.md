@@ -227,18 +227,21 @@ single-pass BFS can't grow into these incrementally:
 
 ### D. Sandbox / build isolation
 
-- **`FEATURES=network-sandbox`** *(shipped 2026-09-01, first increment)*:
-  the six real `src_*` phases run inside a fresh network namespace
+- **`FEATURES=network-sandbox`** *(shipped 2026-09-01)*: the six real
+  `src_*` phases run inside a fresh network namespace
   (`unshare --net --map-root-user`, `lo` up) so a build can't reach the
-  internet — `run_one_phase`/`run_one_phase_bash`, forces the `Bash`
-  backend for those phases. Cuts: `RESTRICT=network-sandbox` /
-  `PROPERTIES=live`/`test_network` exemptions, the `AI_ADDRCONFIG`
-  loopback addresses.
-- **No `FEATURES=sandbox` (LD_PRELOAD filesystem confinement) /
-  `usersandbox` / `ipc-sandbox` / `mount-sandbox` / `pid-sandbox`.**
-  `brush` runs the real `bin/*.sh`, but a misbehaving ebuild that writes
-  outside `${D}` is not stopped (the `sys-apps/sandbox` binary + the
-  `SANDBOX_LOG` violation check are a separate increment).
+  internet. Cuts: `RESTRICT=network-sandbox` / `PROPERTIES=live`/
+  `test_network` exemptions, the `AI_ADDRCONFIG` loopback addresses.
+- **`FEATURES=sandbox` / `usersandbox`** *(shipped 2026-09-01)*: the six
+  real `src_*` phases run as `sandbox bash bin/ebuild.sh <phase>` (real
+  `spawn_sandbox`, `/usr/bin/sandbox`); `SANDBOX_LOG=${T}/sandbox.log`
+  + `SANDBOX_DISABLED=0` so `bin/ebuild.sh` does its own `SANDBOX_ON=1` /
+  `addwrite` setup; the binary logs + non-zero-exits on a write outside
+  the build tree, failing the phase. Missing binary → unsandboxed +
+  warning (real `free = True`). Both features force the `Bash` backend
+  and compose. Cuts: the `misc-functions.sh` (`install_qa_check` /
+  `package` / `unmerge`) calls aren't wrapped; SELinux;
+  `ipc-sandbox` / `mount-sandbox` / `pid-sandbox`.
 - **No `userpriv` / `FEATURES=userpriv usersandbox`** privilege drop
   (single-user dev/test context — see also the `chown` note below).
 - Various `FEATURES` unmodelled: `ccache`, `distcc`, `splitdebug`,
@@ -365,12 +368,11 @@ by a few large items rather than a long tail of small ones:
    (`$USE` / `package.env`), `features`, and `env.d` layers — a config
    that leans on those still diverges.
 
-4. **Sandbox enforcement (Part 2.D).** *`FEATURES=network-sandbox`
-   shipped 2026-09-01 (`src_*` phases in a fresh net namespace).*
-   Remaining: `FEATURES=sandbox` (the `sys-apps/sandbox` LD_PRELOAD
-   filesystem confinement + `SANDBOX_LOG` check), `userpriv`, `fakeroot`,
-   `ipc`/`mount`/`pid`-sandbox. The pilot still trusts an ebuild not to
-   write outside `${D}`.
+4. **Sandbox enforcement (Part 2.D).** *`FEATURES=network-sandbox` and
+   `FEATURES=sandbox` both shipped 2026-09-01 — `src_*` phases run in a
+   fresh net namespace and/or wrapped in the `sys-apps/sandbox` binary.*
+   Remaining: `userpriv`, `fakeroot`, SELinux, `ipc`/`mount`/`pid`-sandbox,
+   `sandbox`-wrapping the `misc-functions.sh` calls.
 
 5. **Breadth of actions and flags (Parts 2.E/F).** `--info`, `--search`,
    `--sync`, news, GLSA, dozens of modifier flags — individually small,

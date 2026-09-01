@@ -1801,3 +1801,67 @@ def test_ebuild_without_network_sandbox_shares_the_host_network_namespace(
     assert result.returncode == 0, result.stderr
     probe = _netsandbox_probe(tmp_path / "pt")
     assert probe["netns"] == os.readlink("/proc/self/ns/net")
+
+
+_FSSANDBOX_EBUILD = "repo/dev-libs/fssandboxpkg/fssandboxpkg-1.0.ebuild"
+_FSSANDBOX_SANDBOX_LOG = (
+    "portage/dev-libs/fssandboxpkg-1.0/temp/sandbox.log"
+)
+_FSSANDBOX_IMAGE_FILE = (
+    "portage/dev-libs/fssandboxpkg-1.0/image/usr/share/fssandboxpkg/hello.txt"
+)
+
+
+def test_ebuild_sandbox_denies_and_fails_on_a_write_outside_the_build_tree(
+    ebuild_binary, tmp_path
+):
+    """FEATURES=sandbox (SCOPE_BACKLOG Part 2.D): the six real src_* phases
+    run wrapped in the sys-apps/sandbox binary (real portage's own
+    spawn_sandbox). `dev-libs/fssandboxpkg`'s src_install writes a legit
+    file into ${D} and also tries to write /var/lib/portage-pilot-sandbox-
+    probe; with the feature on, `sandbox` denies the stray write, records
+    it in ${T}/sandbox.log, and exits non-zero -- so `ebuild install`
+    fails."""
+    if not os.access("/usr/bin/sandbox", os.X_OK):
+        pytest.skip("/usr/bin/sandbox not installed")
+
+    env = dict(os.environ)
+    env["FEATURES"] = "sandbox"
+    env["ROOT"] = str(tmp_path / "root")
+    env["PORTAGE_TMPDIR"] = str(tmp_path / "pt")
+    result = subprocess.run(
+        [str(ebuild_binary), str(Path(FIXTURES_ROOT) / _FSSANDBOX_EBUILD), "install"],
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+    assert result.returncode != 0
+    assert "ACCESS DENIED" in result.stderr
+    log = tmp_path / "pt" / _FSSANDBOX_SANDBOX_LOG
+    assert log.is_file() and log.stat().st_size > 0
+    assert "/var/lib/portage-pilot-sandbox-probe" in log.read_text()
+
+
+def test_ebuild_without_sandbox_tolerates_the_same_stray_write(
+    ebuild_binary, tmp_path
+):
+    """Regression guard: with no FEATURES=sandbox, the stray
+    /var/lib write just fails with EACCES (it is not fatal on its own),
+    the legit file still lands in ${D}, and `ebuild install` exits 0 --
+    exactly as before this slice. No sandbox.log is written."""
+    env = dict(os.environ)
+    env["FEATURES"] = ""
+    env["ROOT"] = str(tmp_path / "root")
+    env["PORTAGE_TMPDIR"] = str(tmp_path / "pt")
+    result = subprocess.run(
+        [str(ebuild_binary), str(Path(FIXTURES_ROOT) / _FSSANDBOX_EBUILD), "install"],
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+    assert result.returncode == 0, result.stderr
+    assert (tmp_path / "pt" / _FSSANDBOX_IMAGE_FILE).read_text().strip() == (
+        "hello from fssandboxpkg"
+    )
+    log = tmp_path / "pt" / _FSSANDBOX_SANDBOX_LOG
+    assert not log.exists() or log.stat().st_size == 0

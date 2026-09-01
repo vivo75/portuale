@@ -10487,6 +10487,39 @@ result; running `ebuild <file> install` twice (with and without the
 feature) shows a different netns, `lo` only, and "Network is
 unreachable" when the feature is on.
 
+### `FEATURES=sandbox`: `src_*` phases can't write outside the build tree
+
+Real portage's `FEATURES=sandbox` wraps a build's `src_*` phases in the
+`sys-apps/sandbox` binary (an `LD_PRELOAD` `libsandbox.so` that
+intercepts file syscalls) — the classic guard against an ebuild
+scribbling outside `${D}`. The pilot now models it: when `sandbox` (or
+`usersandbox`) is in `FEATURES` and `/usr/bin/sandbox` exists (real
+`sandbox_capable`), the six `src_*` phases run as
+`sandbox bash <bin_dir>/ebuild.sh <phase>` (real
+`portage.process.spawn_sandbox`). `phase_env_vars` sets
+`SANDBOX_LOG=${T}/sandbox.log` (real `doebuild.py:526`) and, for a
+wrapped phase, `SANDBOX_DISABLED=0` — so the real, unmodified
+`bin/ebuild.sh` does its own `SANDBOX_ON=1` + `addread /` +
+`addwrite "${PORTAGE_TMPDIR}/portage"` setup. The `sandbox` binary then
+logs any denied access and exits non-zero, which fails the phase (and
+the whole build). A missing `/usr/bin/sandbox` degrades to an
+unsandboxed run with a one-shot warning — real `_spawn`'s own silent
+`free = True` fallback. This too forces the `Bash` backend (`LD_PRELOAD`
+can't confine the in-process `Brush` interpreter); when both sandbox
+features are on the wrappers compose:
+`unshare --net … -- sandbox bash <bin_dir>/ebuild.sh <phase>`.
+
+Documented cuts: the `install_qa_check` / `package` / `unmerge`
+`bin/misc-functions.sh` calls aren't `sandbox`-wrapped (real portage
+wraps them with a separate `sandbox-misc.log`); SELinux sandbox;
+`ipc-sandbox` / `mount-sandbox` / `pid-sandbox`; `userpriv` / `fakeroot`.
+
+`dev-libs/fssandboxpkg`'s `src_install` writes a legit file into `${D}`
+and also tries to write `/var/lib/portage-pilot-sandbox-probe`; with
+`FEATURES=sandbox` the stray write is denied, recorded in
+`${T}/sandbox.log`, and `ebuild <file> install` fails — without the
+feature the same run just installs the legit file and exits 0.
+
 ## Running it
 
 Build both Rust binaries:
