@@ -429,7 +429,7 @@ fn invoke_dyn_package(
     binpkg_path: &Path,
 ) -> Result<i32, String> {
     let binpkg_format = options.binpkg_format.as_str();
-    let repo_lib_path = ebuild_phases::repo_root().join("lib");
+    let repo_lib_path = ebuild_phases::portage_checkout().join("lib");
     let mut extra_env = vec![
         ("PKGDIR".to_string(), options.pkgdir.display().to_string()),
         (

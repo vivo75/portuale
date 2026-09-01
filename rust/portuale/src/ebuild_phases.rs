@@ -518,30 +518,47 @@ fn create_directories(env: &Environment) -> Result<(), String> {
 }
 
 pub(crate) fn repo_root() -> PathBuf {
-    // portuale/src/ebuild_phases.rs -> portuale -> rust -> PORTING -> repo root
+    // portuale/src/ebuild_phases.rs -> portuale -> rust -> repo root
     Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../../")
+        .join("../../")
         .canonicalize()
-        .expect("repo root resolves (portuale is always built from within the real checkout)")
+        .expect("repo root resolves (portuale is always built from within the checkout)")
+}
+
+/// The gitignored working checkout of upstream Portage (`3rdparty/portage/`
+/// by default, overridable with `$PORTUALE_PORTAGE_CHECKOUT`).
+///
+/// `portuale` vendors the whole *bash* phase runtime into `bin/`, but a
+/// handful of pieces still come from here: the `.py` helpers that
+/// `import portage` (`doins.py`, `xpak-helper.py`, …) and their
+/// `lib/portage` import path, and `cnf/sets/portage.conf` (real
+/// `--list-sets`). Absent when nobody cloned it -- callers degrade the
+/// same way a missing binary already does. See `3rdparty/repos.toml` for
+/// the pinned ref.
+pub(crate) fn portage_checkout() -> PathBuf {
+    if let Some(p) = std::env::var_os("PORTUALE_PORTAGE_CHECKOUT") {
+        return PathBuf::from(p);
+    }
+    repo_root().join("3rdparty/portage")
 }
 
 /// The directory `PORTAGE_BIN_PATH` points at for real phase execution.
 ///
-/// `PORTING/bin/` is a tracked, vendored copy of upstream Portage's own
-/// `bin/` runtime -- all the `.sh` (`ebuild.sh` and its whole source
+/// `bin/` (repo root) is a tracked, vendored copy of upstream Portage's
+/// own `bin/` runtime -- all the `.sh` (`ebuild.sh` and its whole source
 /// closure), every `ebuild-helpers/` script, `estrip`/`ecompress`, the
 /// `*-qa-check.d/` sets and the stdlib-only `filter-bash-environment.py`
 /// -- so `emerge` runs on a host with no Portage installed. Only the
 /// `.py` helpers that `import portage` (`doins.py`, `xpak-helper.py`,
 /// `gpkg-helper.py`, `dohtml.py`, `chmod-lite`, `xattr-helper.py`) are
-/// not vendored; they need `lib/portage` and are still read from a
-/// surrounding Portage checkout when one exists.
+/// not vendored; they need `lib/portage` and are still read from the
+/// `portage_checkout()` tree when it exists.
 ///
-/// So: when there IS a checkout, `PORTAGE_BIN_PATH` is a symlink overlay
-/// -- vendored `PORTING/bin/` entries win, the not-yet-vendored `.py`
-/// helpers fall through to `<checkout>/bin/`. With NO checkout it's
-/// `PORTING/bin/` directly (the `.py`-helper phases then degrade the
-/// same way a missing binary already does).
+/// So: when the checkout exists, `PORTAGE_BIN_PATH` is a symlink overlay
+/// -- vendored `bin/` entries win, the not-vendored `.py` helpers fall
+/// through to `<checkout>/bin/`. With no checkout it's the vendored
+/// `bin/` directly (the `.py`-helper phases then degrade the same way a
+/// missing binary already does).
 ///
 /// Resolved once per process. `bin/ebuild.sh` only ever uses
 /// `${PORTAGE_BIN_PATH}` as a literal string prefix for `source`, never
@@ -550,9 +567,8 @@ pub(crate) fn bin_dir() -> &'static Path {
     use std::sync::OnceLock;
     static DIR: OnceLock<PathBuf> = OnceLock::new();
     DIR.get_or_init(|| {
-        let root = repo_root();
-        let vendored = root.join("PORTING/bin");
-        let checkout = root.join("bin");
+        let vendored = repo_root().join("bin");
+        let checkout = portage_checkout().join("bin");
         if !checkout.is_dir() {
             return vendored;
         }
@@ -561,7 +577,7 @@ pub(crate) fn bin_dir() -> &'static Path {
             Ok(()) => overlay,
             Err(e) => {
                 eprintln!(
-                    "portuale: PORTING/bin overlay setup failed ({e}); \
+                    "portuale: bin/ overlay setup failed ({e}); \
                      falling back to {} (vendored bin/ changes not applied)",
                     checkout.display()
                 );

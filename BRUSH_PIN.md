@@ -12,7 +12,7 @@ crates.io release — the published `brush-core 0.5.0` predates
 [#1274](https://github.com/reubeno/brush/pull/1274), which the eapi.sh
 parser needs). This file records the pin and the periodic re-pin
 checklist. **Keep it current whenever the pin changes** — and keep its
-`[brush]` entry in **`PORTING/3rdparty/repos.toml`** (the flat,
+`[brush]` entry in **`3rdparty/repos.toml`** (the flat,
 machine-parseable registry of every third-party ref this fork tracks,
 portage's own upstream base included) in sync too.
 
@@ -63,17 +63,17 @@ review yet) — a real brush bug regardless. **Not load-bearing here**:
 __filter_readonly_variables [| bzip2]` in `phase-functions.sh` — so the
 new `__save_and_filter_ebuild_env` helper stages the two functions
 through a `${T}` temp file and neither is ever a pipeline stage. The
-change lives in the **vendored** `PORTING/bin/phase-functions.sh`
-(`ebuild_phases::bin_dir()` overlays `PORTING/bin/` over the checkout's
+change lives in the **vendored** `bin/phase-functions.sh`
+(`ebuild_phases::bin_dir()` overlays `bin/` over the checkout's
 `bin/`; the upstream file stays pristine — see
-`PORTING/3rdparty/repos.toml`'s `vendored_paths`). See `README.md`'s
+`3rdparty/repos.toml`'s `vendored_paths`). See `README.md`'s
 "brush strategy #2" section.
 
 **Guard**: `ebuild_phases::tests::install_does_not_deadlock_on_an_eclass_
 scope_larger_than_the_pipe_buffer` (`portuale`), driven by the
 `bigeclasspkg` fixture (~400 functions, ~80 KB saved environment). It
 completes in ~1 s against a brush without the #1276 patch; it *hangs the
-120 s deadline* if `PORTING/bin/phase-functions.sh` is reverted to the
+120 s deadline* if `bin/phase-functions.sh` is reverted to the
 pipe form.
 
 A real ebuild/eclass in the wild could still pipe a `pkg_*` function into

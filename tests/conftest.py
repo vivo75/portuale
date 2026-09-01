@@ -6,16 +6,14 @@ from pathlib import Path
 
 import pytest
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
-RUST_DIR = REPO_ROOT / "PORTING" / "rust"
-VERSIONS_PYTHON_HARNESS = REPO_ROOT / "PORTING" / "python" / "versions_harness.py"
-ATOM_PYTHON_HARNESS = REPO_ROOT / "PORTING" / "python" / "atom_harness.py"
-USE_REDUCE_PYTHON_HARNESS = REPO_ROOT / "PORTING" / "python" / "use_reduce_harness.py"
-REQUIRED_USE_PYTHON_HARNESS = REPO_ROOT / "PORTING" / "python" / "required_use_harness.py"
-EMERGE_PRETEND_PYTHON_REFERENCE = (
-    REPO_ROOT / "PORTING" / "python" / "emerge_pretend_reference.py"
-)
-FIXTURES_ROOT = REPO_ROOT / "PORTING" / "fixtures"
+REPO_ROOT = Path(__file__).resolve().parents[1]
+RUST_DIR = REPO_ROOT / "rust"
+VERSIONS_PYTHON_HARNESS = REPO_ROOT / "python" / "versions_harness.py"
+ATOM_PYTHON_HARNESS = REPO_ROOT / "python" / "atom_harness.py"
+USE_REDUCE_PYTHON_HARNESS = REPO_ROOT / "python" / "use_reduce_harness.py"
+REQUIRED_USE_PYTHON_HARNESS = REPO_ROOT / "python" / "required_use_harness.py"
+EMERGE_PRETEND_PYTHON_REFERENCE = REPO_ROOT / "python" / "emerge_pretend_reference.py"
+FIXTURES_ROOT = REPO_ROOT / "fixtures"
 
 
 def _cargo_build(package: str) -> Path:

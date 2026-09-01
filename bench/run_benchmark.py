@@ -25,12 +25,12 @@ import sys
 import time
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
-RUST_DIR = REPO_ROOT / "PORTING" / "rust"
+REPO_ROOT = Path(__file__).resolve().parents[1]
+RUST_DIR = REPO_ROOT / "rust"
 RUST_BIN = RUST_DIR / "target" / "release" / "versions-harness"
 PYTHON_HARNESS = [
     sys.executable,
-    str(REPO_ROOT / "PORTING" / "python" / "versions_harness.py"),
+    str(REPO_ROOT / "python" / "versions_harness.py"),
 ]
 BASELINE_PATH = Path(__file__).resolve().parent / "baseline.json"
 

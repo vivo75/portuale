@@ -22,10 +22,10 @@ import json
 import sys
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
+REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_OUT = Path(__file__).resolve().parent / "gentoo_snapshot.json"
 
-sys.path.insert(0, str(REPO_ROOT / "lib"))
+sys.path.insert(0, str(REPO_ROOT / "3rdparty" / "portage" / "lib"))
 from portage.versions import pkgsplit
 
 

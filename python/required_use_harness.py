@@ -25,7 +25,11 @@ Usage:
 import os
 import sys
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "lib"))
+sys.path.insert(0, os.path.join(
+    os.environ.get("PORTUALE_PORTAGE_CHECKOUT")
+    or os.path.join(os.path.dirname(__file__), "..", "3rdparty", "portage"),
+    "lib",
+))
 
 from portage.dep import check_required_use
 from portage.exception import InvalidDependString

@@ -26,7 +26,7 @@ authoritative record of what has shipped.**
 
 The core `emerge` / `ebuild` loop is **real and live**, verified against an
 actual Gentoo tree (`app-arch/unzip`, `sys-fs/fuse`, `app-arch/xz-utils`
-built and merged end to end inside `PORTING/TEST/`'s container):
+built and merged end to end inside `TEST/`'s container):
 
 - **Dependency resolution / `--pretend`**: full atom + slot + sub-slot +
   USE-dep grammar; `||` groups; `DEPEND`/`RDEPEND`/`BDEPEND`/`PDEPEND`/

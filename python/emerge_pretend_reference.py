@@ -92,7 +92,15 @@ import re
 import sys
 from collections import deque
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "lib"))
+# The gitignored working checkout of upstream Portage -- the reference
+# `portage.*` modules this file mirrors, plus data files like
+# cnf/sets/portage.conf. $PORTUALE_PORTAGE_CHECKOUT overrides the default
+# 3rdparty/portage/ (see 3rdparty/repos.toml for the pinned ref).
+PORTAGE_CHECKOUT = os.environ.get("PORTUALE_PORTAGE_CHECKOUT") or os.path.join(
+    os.path.dirname(__file__), "..", "3rdparty", "portage"
+)
+
+sys.path.insert(0, os.path.join(PORTAGE_CHECKOUT, "lib"))
 
 from portage.dep import Atom, check_required_use, match_from_list, paren_enclose, use_reduce
 from portage.dep._slot_operator import strip_slots
@@ -8294,9 +8302,7 @@ def _defined_set_names(config_root):
     [usersets] generator), plus user set files. Mirrors pretend.rs's
     defined_set_names."""
     names = []
-    conf = os.path.join(
-        os.path.dirname(__file__), "..", "..", "cnf", "sets", "portage.conf"
-    )
+    conf = os.path.join(PORTAGE_CHECKOUT, "cnf", "sets", "portage.conf")
     try:
         with open(conf) as f:
             text = f.read()

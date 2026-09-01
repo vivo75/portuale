@@ -1,11 +1,11 @@
-# `PORTING/bin/` — vendored Portage phase runtime
+# `bin/` — vendored Portage phase runtime
 
 This directory is a **vendored copy of upstream Portage's `bin/`** — the
 bash that `portuale` sources and executes for real ebuild phase
 execution. It ships with the pilot so `emerge` runs on a host with **no
 Portage installed and no Portage checkout**.
 
-Copied verbatim from the ref recorded in `PORTING/3rdparty/repos.toml`'s
+Copied verbatim from the ref recorded in `3rdparty/repos.toml`'s
 `[portage]` entry, *except* `phase-functions.sh`, which carries one local
 change (see its own header comment — brush strategy #2).
 
@@ -31,8 +31,8 @@ those helpers fail the way a missing binary already does.
 
 ## Re-syncing from upstream
 
-When `PORTING/3rdparty/repos.toml`'s `[portage] commit` is bumped: copy
+When `3rdparty/repos.toml`'s `[portage] commit` is bumped: copy
 each file here over from the new upstream tree, then re-apply the local
 change noted in `phase-functions.sh`'s header. A plain
-`diff -r <checkout>/bin PORTING/bin` (ignoring `phase-functions.sh` and
+`diff -r 3rdparty/portage/bin bin` (ignoring `phase-functions.sh` and
 this README) should otherwise be empty.

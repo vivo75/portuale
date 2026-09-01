@@ -1,68 +1,54 @@
-# Third-party repositories this fork tracks or vendors, and the exact
-# ref/commit each is currently pinned to.
+# Third-party repositories portuale checks out (into 3rdparty/, gitignored)
+# or vendors (into the tree), and the exact ref/commit each is pinned to.
 #
-# One [table] per repository. Required keys on every entry: url, kind,
-# ref (the exact tag/branch/commit currently in use), pinned_at (the
-# date, YYYY-MM-DD, this ref was last set or verified). `commit` gives
-# the ref's resolved SHA where that's not already what `ref` itself is.
+# One [table] per repository. Keys: url, kind, ref (branch/tag/commit in
+# use), commit (the ref's resolved SHA -- for an annotated tag this is
+# `git rev-parse <ref>^{commit}`, not the tag object), pinned_at
+# (YYYY-MM-DD this was last set/verified). `checkout_path` is where the
+# working tree lives (relative to repo root); `$PORTUALE_PORTAGE_CHECKOUT`
+# overrides the portage one at runtime.
 #
-# TOML: parse with any TOML library (Python's stdlib `tomllib`, `toml`
-# crate, `yq -p toml`, ...), or by eye/grep -- every value sits on its
-# own `key = "value"` line.
+# TOML: parse with any TOML library (Python stdlib `tomllib`, the `toml`
+# crate, `yq -p toml`, ...), or by eye -- every value is on its own line.
 #
-# Update this file in the same commit that changes a pin. See each
-# entry's own `tracking_doc` (if any) for the fuller writeup/checklist.
+# Update this file in the same commit that changes a pin.
 
 [portage]
-description = "Upstream Gentoo Portage. This repository IS a fork of it -- PORTING/ (the Python-to-Rust port) is layered on top by rebase, never merge; bin/*.sh, lib/portage, lib/_emerge etc. are upstream's own tree, only touched where PORTING/ needs a real behavioral fix (e.g. brush strategy #2)."
+description = "Upstream Gentoo Portage. portuale vendors the whole bash phase runtime into ./bin/ (see bin/README.md), but the .py helpers that `import portage` (doins.py, xpak-helper.py, ...), their lib/portage import path, and cnf/sets/portage.conf still come from this checkout. The Python reference (python/emerge_pretend_reference.py) also imports the real portage.dep etc. from here."
 url = "https://github.com/gentoo/portage"
-remote = "gentoo"
-kind = "upstream-fork-base"
-ref = "refs/tags/portage-3.0.82.2"
-# `commit` is the tag's *underlying commit*, not the annotated tag
-# object -- `git rev-parse refs/tags/<ref>` returns the tag object;
-# `git rev-parse refs/tags/<ref>^{commit}` (or `git log -1 <ref>`)
-# returns this. `git merge-base --is-ancestor <this commit> rust` and
-# `git describe --tags --match 'portage-*'` on `rust` (reads
-# `portage-3.0.82.2-<n>-g<sha>`) are how to re-verify this entry.
-commit = "1d95fc2c552a2c7d347e54093fa0e5b172a57004"
+kind = "reference-checkout"
+checkout_path = "3rdparty/portage"
+# CURRENT CHECKOUT: `master` (a rolling branch), at the commit below.
+# RECOMMENDED: pin a release tag instead for reproducibility --
+# `git -C 3rdparty/portage checkout portage-3.0.82.2` (commit
+# 1d95fc2c552a2c7d347e54093fa0e5b172a57004) and update `ref`/`commit`
+# here. The full test suite is green against both.
+ref = "master"
+commit = "b675df82993be903dd45c5f46db0e800856ba65c"
 pinned_at = "2026-09-01"
-# Update this whenever `rust` is rebased onto a newer upstream tag (a
-# new tag is always imported by rebasing PORTING/'s commits on top of
-# it, never a merge -- see `git log --grep prepare.for.portage` for the
-# upstream "prepare for release" commits that mark each tag).
-#
-# `vendored_paths`: files/trees copied from this ref into PORTING/ so
-# `portuale` can run them with no Portage installed. `portuale`'s
-# `ebuild_phases::bin_dir()` overlays PORTING/bin/ on top of the
-# checkout's bin/ (vendored file wins); with no checkout it's PORTING/bin/
-# alone. Re-sync on each `commit` bump: copy the upstream files over, then
-# re-apply the one local change (brush strategy #2 in phase-functions.sh's
-# header) -- `diff -r <checkout>/bin PORTING/bin` should then be empty bar
-# phase-functions.sh + PORTING/bin/README.md. See PORTING/bin/README.md.
-#
-# The full bash phase runtime is vendored: ebuild.sh + its whole source
-# closure, every ebuild-helpers/ script, estrip/ecompress, the
-# *-qa-check.d/ sets, and the stdlib-only filter-bash-environment.py.
-# NOT vendored: the .py helpers that `import portage` (doins.py,
-# dohtml.py, install.py, xpak-helper.py, gpkg-helper.py, chmod-lite.py,
-# xattr-helper.py) -- they need lib/portage and still come from a
-# checkout. A phase that calls one (e.g. `doins`) fails without a checkout.
-vendored_paths = [
-    "PORTING/bin/",  # tree; phase-functions.sh carries brush strategy #2
-]
+# Vendored into the tree (so `emerge` runs with no Portage installed):
+#   bin/  -- ebuild.sh + its whole source closure, every ebuild-helpers/
+#            script, estrip/ecompress, the *-qa-check.d/ sets, and the
+#            stdlib-only filter-bash-environment.py. Only bin/phase-functions.sh
+#            diverges (brush strategy #2 -- see its header). Re-sync on a
+#            `commit` bump by copying the upstream files over + re-applying
+#            that one change; `diff -r 3rdparty/portage/bin bin` should
+#            then be empty bar phase-functions.sh + bin/README.md.
+vendored_paths = ["bin/"]
 
 [brush]
 description = "Rust-native bash interpreter (brush-core + brush-builtins), embedded in portuale as the real ebuild phase execution backend (bin/*.sh phases run through it, not a shelled-out system bash)."
 url = "https://github.com/reubeno/brush"
 kind = "cargo-git-dependency"
+checkout_path = "3rdparty/brush"
 ref = "main"
 commit = "a04b09dc4a3f5beaa78899c4100734cf0f8f4472"
-pinned_in = "PORTING/rust/portuale/Cargo.toml"
+pinned_in = "rust/portuale/Cargo.toml"
 pinned_at = "2026-09-01"
-tracking_doc = "PORTING/BRUSH_PIN.md"
+tracking_doc = "BRUSH_PIN.md"
 # No fork: plain upstream `main`, exact-commit pinned (no released
-# crates.io version yet carries reubeno/brush#1274, which this pilot's
-# use of bin/eapi.sh needs). Re-pin periodically -- see
-# PORTING/BRUSH_PIN.md's checklist.
+# crates.io version yet carries reubeno/brush#1274, which portuale's use
+# of bin/eapi.sh needs). Cargo.toml still fetches this via git; the
+# 3rdparty/brush checkout is for hacking/reference. Re-pin periodically --
+# see BRUSH_PIN.md's checklist.
 notes = "Was vivo75/brush (a fork) until 2026-09-01; dropped once both fixes the fork carried were resolved (see tracking_doc)."
