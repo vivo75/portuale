@@ -1502,9 +1502,9 @@ def test_ebuild_install_restrict_fetch_never_downloads_the_plain_uri(
     `https://example.invalid/...` SRC_URI. Real `fetch.py:1167`: a plain
     URI is barred from the fetchable-candidate list under RESTRICT=fetch,
     and the public mirrors too -- so with the distfile ABSENT from
-    DISTDIR the install fails (this pilot doesn't run the ebuild's own
-    pkg_nofetch phase, a documented cut -- it fails with a "place it in
-    DISTDIR by hand" pointer), and crucially never tries to reach
+    DISTDIR the install fails, first running the ebuild's own pkg_nofetch
+    phase (its `elog` "download it from ..." lines print above the error,
+    real fetch.py's spawn_nofetch), and crucially never tries to reach
     example.invalid. With the distfile PRESENT (user-placed) and
     Manifest-verified, the install succeeds via the already-verified
     skip path."""
@@ -1530,6 +1530,10 @@ def test_ebuild_install_restrict_fetch_never_downloads_the_plain_uri(
     assert absent.returncode == 1
     assert "RESTRICT=fetch" in absent.stderr
     assert "example.invalid" not in absent.stderr or "bars downloading" in absent.stderr
+    # The ebuild's own pkg_nofetch phase ran and printed its instructions.
+    assert "Please download fetchrestrictpkg-1.0.tar.gz from https://example.org/" in (
+        absent.stdout + absent.stderr
+    )
 
     # PRESENT + verified -> installs.
     (distdir / "fetchrestrictpkg-1.0.tar.gz").write_bytes(

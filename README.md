@@ -10334,6 +10334,29 @@ rotation; `--resume --pretend` doesn't print the saved list; a saved
 binary entry is replayed as source; `myopts` is written empty (resume
 doesn't carry the original flags).
 
+### Fetch: real `RESUMECOMMAND` resume + the `pkg_nofetch` phase
+
+`wget_resume` is real `make.globals`'s own default `RESUMECOMMAND`
+(`FETCHCOMMAND` + a leading `-c`). `fetch_src_uri`'s candidate loop now
+switches to it the moment a non-empty partial file is on disk — a dropped
+connection or a mirror that closed mid-transfer is *continued* rather
+than restarted, matching real `fetch.py`. A complete-but-corrupt file
+(digest mismatch after a full download) is still dropped; only a genuine
+partial is resumed. Not modelled: real portage's
+`PORTAGE_FETCH_RESUME_MIN_SIZE` (it only resumes past 350000 bytes) — the
+pilot resumes any non-empty partial. Tested end-to-end against a real
+`wget -c` subprocess and a loopback HTTP server that drops connection 1
+mid-body and serves a `206 Partial Content` on connection 2.
+
+When a distfile can't be fetched (all candidates failed, or a
+`RESTRICT=fetch` file is absent), `ebuild_phases::fetch_sources` now runs
+the ebuild's own **`pkg_nofetch` phase** (`run_one_phase(env,
+"nofetch")`) before the fetch error propagates — real `fetch.py`'s
+`spawn_nofetch`. The ebuild's custom `elog "download it from … and place
+it in DISTDIR"` instructions print above the error. Best-effort: an
+undefined `pkg_nofetch`, or its own failure, never masks the real fetch
+error. `dev-libs/fetchrestrictpkg` grew a `pkg_nofetch`.
+
 ## Running it
 
 Build both Rust binaries:

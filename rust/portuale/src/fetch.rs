@@ -27,9 +27,15 @@
 //
 // KNOWN, DOCUMENTED GAPS (v1 scope, matching this whole pilot's own
 // "narrow v1, document the cut" pattern):
-//   - No resume support (real `RESUMECOMMAND`'s own retry-with-`-c`
-//     behavior) -- a failed download is simply removed and retried from
-//     scratch next time, never resumed.
+//   - Resume IS modelled now (`wget_resume` = real `make.globals`'s own
+//     default `RESUMECOMMAND`, `FETCHCOMMAND` + `-c`): once a non-empty
+//     partial file is on disk (a dropped connection, a mirror that closed
+//     mid-transfer), the candidate loop switches to `wget -c` to continue
+//     it rather than restarting, matching real `fetch.py`. A complete-
+//     but-corrupt file (digest mismatch after a full download) is still
+//     dropped -- it can't be resumed. Not modelled: real portage's
+//     `PORTAGE_FETCH_RESUME_MIN_SIZE` threshold (it only resumes a
+//     partial past 350000 bytes) -- the pilot resumes any non-empty one.
 //   - `mirror://` resolution is real now (`portage_fetch::
 //     resolve_mirror_candidates`/`gentoo_mirror_fallback`, see that
 //     crate's own module doc comment for the exact real mechanics
@@ -50,9 +56,11 @@
 //     barred from the candidate list, and the public mirrors too, so a
 //     `RESTRICT=fetch` package fetches OK only from an already-verified
 //     `DISTDIR` copy (or `custommirrors`/a `mirror://`-named mirror).
-//     The one real thing still cut here: running the ebuild's own
-//     `pkg_nofetch` phase for a missing file -- `fetch_src_uri` fails
-//     with a generic "place it in DISTDIR by hand" pointer instead.
+//     Running the ebuild's own `pkg_nofetch` phase for a missing file IS
+//     modelled now -- `fetch_src_uri` fails, and its caller
+//     `ebuild_phases::fetch_sources` then runs `run_one_phase(env,
+//     "nofetch")` so the ebuild's custom "download it from … and place it
+//     in DISTDIR" instructions print, before the fetch error propagates.
 //   - No `FEATURES=verify-sig` GPG check -- this backlog item was
 //     mis-scoped when first written: real `verify-sig`/signature
 //     verification is a `gpkg` (the newer GPG-signed binary package
@@ -217,7 +225,26 @@ impl Default for FetchOptions {
 /// same "don't leave broken state around" reasoning `emerge_build.rs`'s
 /// own build-failure handling already applies elsewhere.
 pub(crate) fn wget_fetch(uri: &str, dest: &Path) -> Result<(), String> {
-    let status = Command::new("wget")
+    wget_run(uri, dest, false)
+}
+
+/// Real `make.globals`'s own default `RESUMECOMMAND` -- byte-for-byte
+/// `FETCHCOMMAND` plus a leading `-c`, so `wget` appends to whatever
+/// partial `dest` a previous, interrupted fetch left behind (a dropped
+/// connection, a mirror that closed mid-transfer) instead of restarting
+/// from zero. Real `fetch.py` switches from `FETCHCOMMAND` to
+/// `RESUMECOMMAND` once a partial file is on disk; `fetch_src_uri`'s
+/// candidate loop does the same.
+pub(crate) fn wget_resume(uri: &str, dest: &Path) -> Result<(), String> {
+    wget_run(uri, dest, true)
+}
+
+fn wget_run(uri: &str, dest: &Path, resume: bool) -> Result<(), String> {
+    let mut cmd = Command::new("wget");
+    if resume {
+        cmd.arg("-c");
+    }
+    let status = cmd
         .args(["-t", "3", "-T", "60", "--passive-ftp"])
         .args([
             "-U",
@@ -229,7 +256,13 @@ pub(crate) fn wget_fetch(uri: &str, dest: &Path) -> Result<(), String> {
         .status()
         .map_err(|e| format!("failed to spawn wget: {e}"))?;
     if !status.success() {
-        let _ = std::fs::remove_file(dest);
+        // A `resume` attempt keeps the partial for the *next* candidate
+        // to continue; a fresh `-O` fetch that failed can only have left
+        // junk, so remove it (the caller resumes only a partial it knows
+        // is legitimate).
+        if !resume {
+            let _ = std::fs::remove_file(dest);
+        }
         return Err(format!("wget failed to fetch {uri:?} ({status})"));
     }
     Ok(())
@@ -376,16 +409,14 @@ pub fn fetch_src_uri(
             }
             if candidates.is_empty() {
                 // Real `fetch.py`: a `RESTRICT=fetch` file that isn't
-                // already in `DISTDIR` runs the ebuild's own
-                // `pkg_nofetch` phase (custom "download it from … and
-                // place it in DISTDIR" instructions) and fails. This
-                // pilot doesn't run `pkg_nofetch` (a documented cut) --
-                // it fails with a generic pointer instead.
+                // already in `DISTDIR` fails here; the caller
+                // (`ebuild_phases::fetch_sources`) then runs the ebuild's
+                // own `pkg_nofetch` phase, which prints custom "download
+                // it from … and place it in DISTDIR" instructions.
                 let why = if plain_uri_barred_by_restrict_fetch {
                     format!(
                         "RESTRICT=fetch bars downloading it -- place a verified copy in {} \
-                         by hand (the ebuild's own pkg_nofetch phase would print specific \
-                         instructions)",
+                         by hand (see the pkg_nofetch output above)",
                         options.distdir.display()
                     )
                 } else if public_mirrors_barred {
@@ -403,21 +434,39 @@ pub fn fetch_src_uri(
             let mut errors = Vec::new();
             let mut fetched = false;
             for candidate in &candidates {
-                match wget_fetch(candidate, &dest) {
+                // Real `fetch.py`: once a non-empty partial is on disk
+                // (from an earlier candidate that dropped mid-transfer, or
+                // a previous interrupted run), switch from `FETCHCOMMAND`
+                // to `RESUMECOMMAND` -- `wget -c` continues it rather than
+                // restarting.
+                let has_partial = std::fs::metadata(&dest)
+                    .map(|m| m.len() > 0)
+                    .unwrap_or(false);
+                let attempt = if has_partial {
+                    wget_resume(candidate, &dest)
+                } else {
+                    wget_fetch(candidate, &dest)
+                };
+                match attempt {
                     Ok(()) => match verify_digests(&dest, digests) {
                         Ok(()) => {
                             fetched = true;
                             break;
                         }
                         Err(e) => {
+                            // A complete-but-corrupt file can't be
+                            // resumed -- drop it before the next candidate.
                             let _ = std::fs::remove_file(&dest);
                             errors.push(format!("{candidate}: digest verification failed: {e}"));
                         }
                     },
+                    // A transport failure may have left a resumable
+                    // partial -- keep it for the next candidate.
                     Err(e) => errors.push(e),
                 }
             }
             if !fetched {
+                let _ = std::fs::remove_file(&dest);
                 return Err(format!(
                     "{}: every candidate failed:\n{}",
                     entry.filename,
@@ -636,6 +685,85 @@ mod tests {
             },
         )
         .unwrap();
+        assert_eq!(result, vec!["hello-1.0.tar.gz".to_string()]);
+        assert_eq!(
+            fs::read(distdir.join("hello-1.0.tar.gz")).unwrap(),
+            b"hello world"
+        );
+        handle.join().unwrap();
+    }
+
+    /// Serves `body` in two halves: connection 1 gets the real
+    /// `Content-Length` header but only the first `split` bytes before the
+    /// socket closes (a dropped transfer); connection 2, which `wget -c`
+    /// makes with a `Range: bytes=<split>-` header, gets a real `206
+    /// Partial Content` with the rest.
+    fn serve_dropped_then_resumed(
+        body: Vec<u8>,
+        split: usize,
+    ) -> (String, std::thread::JoinHandle<()>) {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let total = body.len();
+        let handle = std::thread::spawn(move || {
+            // Connection 1: header promises `total`, but only `split`
+            // bytes are written before the connection drops.
+            if let Ok((mut stream, _)) = listener.accept() {
+                let mut buf = [0u8; 4096];
+                let _ = stream.read(&mut buf);
+                let header = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Length: {total}\r\nAccept-Ranges: bytes\r\n\
+                     Connection: close\r\n\r\n"
+                );
+                let _ = stream.write_all(header.as_bytes());
+                let _ = stream.write_all(&body[..split]);
+                let _ = stream.flush();
+            }
+            // Connection 2: `wget -c` asks for `bytes=split-`.
+            if let Ok((mut stream, _)) = listener.accept() {
+                let mut buf = [0u8; 4096];
+                let n = stream.read(&mut buf).unwrap_or(0);
+                let req = String::from_utf8_lossy(&buf[..n]);
+                assert!(
+                    req.contains(&format!("Range: bytes={split}-")),
+                    "wget -c must send a Range header, got:\n{req}"
+                );
+                let header = format!(
+                    "HTTP/1.1 206 Partial Content\r\nContent-Length: {}\r\n\
+                     Content-Range: bytes {split}-{}/{total}\r\nConnection: close\r\n\r\n",
+                    total - split,
+                    total - 1
+                );
+                let _ = stream.write_all(header.as_bytes());
+                let _ = stream.write_all(&body[split..]);
+                let _ = stream.flush();
+            }
+        });
+        (format!("http://127.0.0.1:{port}/file"), handle)
+    }
+
+    #[test]
+    fn fetch_src_uri_resumes_a_dropped_download_with_wget_c() {
+        let (uri_base, handle) = serve_dropped_then_resumed(b"hello world".to_vec(), 5);
+        let uri = format!("{uri_base} -> hello-1.0.tar.gz");
+
+        let pkg_dir = tempdir();
+        let distdir = tempdir();
+        write_manifest(&pkg_dir, "hello-1.0.tar.gz", 11);
+
+        let result = fetch_src_uri(
+            &pkg_dir,
+            &uri,
+            &FetchOptions {
+                distdir: distdir.clone(),
+                gentoo_mirrors: vec![],
+                ..FetchOptions::default()
+            },
+        )
+        .expect("the dropped download must be resumed and verified");
         assert_eq!(result, vec!["hello-1.0.tar.gz".to_string()]);
         assert_eq!(
             fs::read(distdir.join("hello-1.0.tar.gz")).unwrap(),

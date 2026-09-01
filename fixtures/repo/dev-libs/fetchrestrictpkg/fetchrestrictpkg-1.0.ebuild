@@ -5,6 +5,11 @@ SLOT="0"
 KEYWORDS="amd64"
 RESTRICT="fetch"
 
+pkg_nofetch() {
+	elog "Please download fetchrestrictpkg-1.0.tar.gz from https://example.org/downloads/"
+	elog "and place it in ${DISTDIR}"
+}
+
 src_install() {
 	echo "A=${A}" > "${T}/fetch-vars.txt" || die
 }

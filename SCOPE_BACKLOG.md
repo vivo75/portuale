@@ -231,9 +231,10 @@ single-pass BFS can't grow into these incrementally:
 
 ### E. Binary packages / fetch
 
-- **Remote binhost**: live `layout.conf` negotiation, `Packages.gz`, fetch
-  **resume** (`RESUMECOMMAND` retry-with-`-c`), real `SHA*` digest
-  verification (only `SIZE` is checked), `RESTRICT=primaryuri` interleave.
+- **Remote binhost**: live `layout.conf` negotiation, `Packages.gz`,
+  `RESTRICT=primaryuri` interleave. *(Fetch **resume** — `RESUMECOMMAND`
+  `-c` — shipped 2026-09-01; SRC_URI `SHA512`/`BLAKE2B` digest
+  verification was already real.)*
 - **gpkg**: `Manifest` / `.sig` verification + signing
   (`FEATURES=binpkg-signing` — cut, the pilot has no crypto), bare `.xpak`
   multi-instance, `binpkg-multi-instance`, mtime-staleness index
@@ -241,8 +242,10 @@ single-pass BFS can't grow into these incrementally:
 - **`BUILD_ID` / `splitdebug` / `packdebug` / RPM**, PKGDIR-index locking,
   `FEATURES=buildpkg-live`, real `EbuildBinpkg` failure semantics under
   `--keep-going`.
-- Fetch: real candidate ordering / shuffling, running the ebuild's own
-  `pkg_nofetch` phase for a missing `RESTRICT=fetch` distfile.
+- Fetch: real candidate ordering / shuffling. *(Running the ebuild's own
+  `pkg_nofetch` phase for a missing distfile shipped 2026-09-01 —
+  `ebuild_phases::fetch_sources` runs `run_one_phase(env, "nofetch")` on
+  any fetch failure.)*
 
 ### F. Whole `emerge` actions not implemented
 

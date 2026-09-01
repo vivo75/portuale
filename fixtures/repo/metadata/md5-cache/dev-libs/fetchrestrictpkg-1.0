@@ -1,4 +1,4 @@
-DEFINED_PHASES=install
+DEFINED_PHASES=install nofetch
 DESCRIPTION=fixture package: RESTRICT=fetch -- the plain SRC_URI is never fetched; only a pre-placed, verified DISTDIR copy works
 EAPI=8
 IUSE=

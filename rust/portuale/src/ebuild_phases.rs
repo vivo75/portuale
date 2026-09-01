@@ -541,7 +541,15 @@ fn restrict_has_token(restrict: &str, wanted: &[&str]) -> bool {
     .unwrap_or(false)
 }
 
-fn fetch_sources(env: &Environment, distdir: &Path) -> Result<(Vec<String>, Vec<String>), String> {
+#[allow(clippy::too_many_arguments)]
+async fn fetch_sources(
+    env: &Environment,
+    root: &Path,
+    distdir: &Path,
+    debug: bool,
+    config_root: &Path,
+    shell: ShellBackend,
+) -> Result<(Vec<String>, Vec<String>), String> {
     let Some(repo_root) = repo_root_for(&env.pkg_dir) else {
         return Ok((Vec::new(), Vec::new()));
     };
@@ -586,7 +594,23 @@ fn fetch_sources(env: &Environment, distdir: &Path) -> Result<(Vec<String>, Vec<
             restrict_mirror,
             restrict_fetch,
         },
-    )?;
+    );
+    let a = match a {
+        Ok(a) => a,
+        Err(e) => {
+            // Real `fetch.py`: when a distfile can't be fetched, run the
+            // ebuild's own `pkg_nofetch` phase -- it prints custom "get it
+            // from <URL> and drop it in <DISTDIR>" instructions -- then
+            // fail. Best-effort: the phase not being defined (or its own
+            // failure) never masks the real fetch error.
+            let ebuild = env.pkg_dir.join(format!("{}.ebuild", env.split.pf));
+            if ebuild.is_file() {
+                let _ =
+                    run_one_phase(env, root, "nofetch", debug, &[], config_root, shell, None).await;
+            }
+            return Err(e);
+        }
+    };
     Ok((a, aa))
 }
 
@@ -1374,7 +1398,7 @@ async fn run_commands_async(
         .collect();
     let mut extra_env = vec![("DISTDIR".to_string(), distdir.display().to_string())];
     if chain.contains(&"unpack") {
-        let (a, aa) = fetch_sources(&env, distdir)?;
+        let (a, aa) = fetch_sources(&env, root, distdir, debug, config_root, shell).await?;
         extra_env.push(("A".to_string(), a.join(" ")));
         extra_env.push(("AA".to_string(), aa.join(" ")));
     }
