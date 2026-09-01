@@ -23,6 +23,135 @@ pub struct RunSourceMergeArgs<'a> {
     pub mode: StatusMode,
 }
 
+/// Portage's `emerge <atom>` with no `--pretend` and no `--buildpkgonly` /
+/// `--getbinpkgonly`: for each `New` **source** entry runs the full `install`
+/// phase chain plus the vdb merge. Entries are already in dependency-first
+/// merge order. `AlreadyInstalled` entries are skipped; `Upgrade` /
+/// `Downgrade` / `Reinstall` merge the new version and unmerge the replaced
+/// same-slot version.
+///
+/// A `Binary` entry is a hard error here (the mixed dispatcher routes those
+/// to `merge_binpkg`). Failure handling is `run_merge_loop`'s.
+pub fn run_source_merge(args: RunSourceMergeArgs<'_>) -> Result<(), String> {
+    let RunSourceMergeArgs {
+        entries,
+        repos,
+        root,
+        portage_tmpdir,
+        options,
+        keep_going,
+        buildpkg,
+        buildpkg_exclude,
+        jobs,
+        load_average,
+        capture_log,
+        mode,
+    } = args;
+    // One `JobStatusDisplay` per merge run; `maxval` is the build-bound
+    // count here.
+    let total_builds = entries.iter().filter(|e| scheduler_needs_build(e)).count();
+    let display = StatusDisplay::new(mode, total_builds, progress_color());
+    if jobs > 1 {
+        // A bare `-j` (mapped to `usize::MAX` by the CLI layer) runs
+        // uncapped; a numbered `--jobs=N` runs capped. Both keep the
+        // `--load-average` gate.
+        if jobs == usize::MAX {
+            let policy = mrg_director::UnlimitedPolicy::new(load_average);
+            return run_build_scheduler(RunBuildSchedulerArgs {
+                entries,
+                repos,
+                root,
+                portage_tmpdir,
+                options,
+                keep_going,
+                buildpkg,
+                buildpkg_exclude,
+                policy: &policy,
+                display: &display,
+            });
+        }
+        let policy = mrg_director::LoadAwarePolicy::new(jobs, load_average);
+        return run_build_scheduler(RunBuildSchedulerArgs {
+            entries,
+            repos,
+            root,
+            portage_tmpdir,
+            options,
+            keep_going,
+            buildpkg,
+            buildpkg_exclude,
+            policy: &policy,
+            display: &display,
+        });
+    }
+    // The serial loop merges through the director's source engine rather
+    // than calling `merge_one_source_entry` directly, so the merge-engine
+    // slot carries the production source-merge traffic. The captured-build
+    // split stays inline: scheduler machinery, not per-unit execution.
+    let engine = crate::merge_engines::SourceEngine {
+        repos,
+        root,
+        portage_tmpdir,
+        options,
+        buildpkg,
+        buildpkg_exclude,
+        display: &display,
+    };
+    // Every entry below prints its own positional snapshot of these
+    // counters.
+    let progress = merge_progress_map(entries);
+    run_merge_loop(entries, keep_going, root, |idx, entry| {
+        let entry_progress = progress[idx];
+        let bp = buildpkg.filter(|opts| {
+            entry_buildpkg_wanted(entry, repos, buildpkg_exclude, opts.buildpkg_live)
+        });
+        if capture_log && scheduler_needs_build(entry) {
+            // The captured serial split is background by construction, so
+            // these are the serial-background `>>> Jobs:` events around
+            // the same halves the `-jN` scheduler runs.
+            display.job_started();
+            let path = match build_one_source_entry(BuildOneSourceEntryArgs {
+                entry,
+                repos,
+                root,
+                portage_tmpdir,
+                options,
+                buildpkg: bp,
+                capture_log: true,
+                progress: entry_progress,
+                display: &display,
+            }) {
+                Ok(path) => {
+                    display.build_finished();
+                    path
+                }
+                Err(e) => {
+                    display.job_failed();
+                    display.build_finished();
+                    return Err(e);
+                }
+            };
+            if let Err(e) = merge_one_built_entry(MergeOneBuiltEntryArgs {
+                entry,
+                repos,
+                ebuild_path: &path,
+                root,
+                portage_tmpdir,
+                options,
+                progress: entry_progress,
+                display: &display,
+            }) {
+                display.job_failed();
+                return Err(e);
+            }
+            display.merge_finished();
+            Ok(())
+        } else {
+            engine.merge_entry(entry, entry_progress)
+        }
+    })
+}
+
 /// The shared per-entry loop for `run_source_merge` /
 /// `emerge_getbinpkg::run_merge_plan`. Without `keep_going` stops at the
 /// first failure. With `--keep-going` records the failure, drops every
