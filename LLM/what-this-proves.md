@@ -9167,6 +9167,23 @@ Both sides; 1 contract test + 5 `CASES` + 1 `portage-repo` unit test.
 Every `--autounmask*` member is now shipped; only `--autounmask-write`
 (file-writing) remains, a standing `agent-context.md` non-goal.
 
+### `emerge --autounmask-only` (2026-09-02)
+
+Real `main.py:813` (`true_y_or_n` → `True`/`None`) + `actions.py:456`:
+once the graph is resolved, `mydepgraph.display_problems(); return 0` —
+the whole `_show_merge_list()` step is skipped, so only the
+`display_problems()` output shows (portuale's equivalent: the
+slot-conflict notice + the autounmask suggestion blocks, plus the
+unsatisfied-dep stderr notes already printed during resolution), and the
+exit code stays 0. It also forces the dry-run path — a plain
+`emerge --autounmask-only <atom>` never builds. `pretend.rs` gates the
+merge-list display (entry lines, blockers, `-v` counters) and the trailing
+abi-rebuild / changed-deps-report / build steps on a new
+`show_merge_list = !autounmask_only`, returning `SUCCESS` right after the
+autounmask blocks. Mirrored in `emerge_pretend_reference.py`; 4 `CASES` +
+1 pinned contract test asserting stdout is empty while the changes block
+still lands on stderr.
+
 ### `emerge -pc <atoms> --deselect=n`
 
 Real `action_depclean`: `deselect = myopts.get("--deselect") != "n"`

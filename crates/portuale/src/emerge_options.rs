@@ -312,6 +312,23 @@ mod tests {
     }
 
     #[test]
+    fn does_not_recognize_the_2026_09_02_batch_flags() {
+        for flag in [
+            "--ask",
+            "-a",
+            "--autounmask-only",
+            "--fuzzy-search",
+            "--regex-search-auto",
+            "--search-similarity",
+        ] {
+            assert!(
+                lookup(flag).is_none(),
+                "{flag} should not be recognized here"
+            );
+        }
+    }
+
+    #[test]
     fn does_not_recognize_a_bundled_short_flag() {
         assert!(lookup("-pv").is_none());
     }

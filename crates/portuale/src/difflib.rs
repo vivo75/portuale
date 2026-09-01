@@ -188,3 +188,33 @@ fn find_longest_match(args: FindLongestMatchArgs<'_>) -> (usize, usize, usize) {
     }
     (besti, bestj, bestsize)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{get_close_matches, ratio};
+
+    // Values below were produced by CPython's own
+    // `SequenceMatcher(None, a, b).ratio()`.
+    fn approx(x: f64, y: f64) {
+        assert!((x - y).abs() < 1e-9, "{x} != {y}");
+    }
+
+    #[test]
+    fn matches_cpython_reference_values() {
+        approx(ratio("newpkg", "newpkg"), 1.0);
+        approx(ratio("", ""), 1.0);
+        approx(ratio("abcd", "bcde"), 0.75);
+        approx(ratio("useflagpkg", "useflag"), 0.8235294117647058);
+        approx(ratio("dev-libs/newpkg", "newpkg"), 0.5714285714285714);
+        approx(ratio("kitten", "sitting"), 0.6153846153846154);
+        approx(ratio("newpkg", "nomatchanywhere"), 0.19047619047619047);
+        approx(ratio("a", "b"), 0.0);
+    }
+
+    #[test]
+    fn is_symmetric_in_length_but_order_sensitive_like_cpython() {
+        // `ratio()` is NOT symmetric in general; these pairs happen to
+        // be, and match CPython.
+        approx(ratio("abc", "cba"), ratio("cba", "abc"));
+    }
+}
