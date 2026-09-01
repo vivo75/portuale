@@ -9188,6 +9188,47 @@ def test_search_matches_rust_and_python(emerge_binary, emerge_pretend_python, fi
     assert "[ Applications found :" in rust.stdout
 
 
+def test_check_news_counts_unread_relevant_items(
+    emerge_binary, emerge_pretend_python, fixture_env
+):
+    """emerge --check-news (real actions.py:3844 -> count_unread_news):
+    the fixture testrepo has three GLEP 42 news items -- one unrestricted,
+    one Display-If-Installed: dev-libs/samepkg (in the vdb), one
+    Display-If-Installed on an uninstalled package. Only the first two are
+    relevant, so the count is 2. Rust == Python."""
+    rust = _run([str(emerge_binary)], ["--check-news"], fixture_env)
+    py = _run(emerge_pretend_python, ["--check-news"], fixture_env)
+    assert rust.returncode == 0
+    assert rust.stdout == py.stdout
+    assert "2 news items need reading for repository 'testrepo'." in rust.stdout
+    assert "eselect news read" in rust.stdout
+
+
+def test_check_news_reports_none_when_all_items_are_read(
+    emerge_binary, emerge_pretend_python, fixture_env, tmp_path
+):
+    """A news item id listed in
+    <eroot>/var/lib/gentoo/news/news-<repo>.read (what `eselect news
+    read` writes) is not counted. With all three fixture items marked
+    read, `--check-news` prints ` * No news items were found.`"""
+    read_dir = tmp_path / "var" / "lib" / "gentoo" / "news"
+    read_dir.mkdir(parents=True)
+    (read_dir / "news-testrepo.read").write_text(
+        "2026-09-01-pilot-general\n"
+        "2026-09-02-pilot-samepkg\n"
+        "2026-09-03-pilot-irrelevant\n"
+    )
+    # ROOT at tmp (for the .read file + an empty vdb) but CONFIGROOT still
+    # the fixtures (for repos.conf / the news items themselves).
+    env = dict(fixture_env)
+    env["ROOT"] = str(tmp_path)
+    rust = _run([str(emerge_binary)], ["--check-news"], env)
+    py = _run(emerge_pretend_python, ["--check-news"], env)
+    assert rust.returncode == 0
+    assert rust.stdout == py.stdout
+    assert rust.stdout.strip() == "* No news items were found."
+
+
 def test_genuinely_unrecognized_option_gets_a_distinct_message(emerge_binary, fixture_env):
     """A flag that isn't in real emerge's own option surface at all must
     be reported differently from a real-but-unimplemented one, so users

@@ -1,0 +1,10 @@
+Title: Pilot news: relevant only if dev-libs/samepkg is installed
+Author: Pilot Test <pilot@example.org>
+Content-Type: text/plain
+Posted: 2026-09-02
+Revision: 1
+News-Item-Format: 2.0
+Display-If-Installed: dev-libs/samepkg
+
+dev-libs/samepkg is in the fixture vdb, so this item is relevant and
+`emerge --check-news` counts it.

@@ -10567,6 +10567,19 @@ Python reference and contract-tested.
   search index, `--usepkg` binary results, the full `bestmatch-visible`
   mask/keyword filter (`[ Masked ]` is flagged only on a rough
   `amd64`-keyword check), and `Size of files`.
+- **`--check-news`** (real `actions.py:3844` → `portage.news`): count the
+  GLEP 42 news items (`<repo>/metadata/news/<id>/<id>.en.txt`) that are
+  *valid* (`News-Item-Format:` matches `[12].*`), *relevant* (no
+  `Display-If-*` header, or a `Display-If-Installed:` `cat/pkg` that's in
+  the vdb), and not listed in
+  `<eroot>/var/lib/gentoo/news/news-<repo>.read`. Prints the real
+  `IMPORTANT: N news items need reading for repository '<repo>'` /
+  `Use eselect news read to view new items` block, or ` * No news items
+  were found.`. `dev-libs/samepkg` (in the fixture vdb) gates one of the
+  three `testrepo` news items. Documented cuts: the incremental
+  `.unread` / `.skip` bookkeeping (the pilot recomputes each run, writing
+  nothing); `Display-If-Keyword` / `Display-If-Profile` (always
+  satisfied); non-bare `Display-If-Installed` atoms.
 
 ## Running it
 

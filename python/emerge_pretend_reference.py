@@ -8244,6 +8244,95 @@ def _run_search(terms, config_root, root, searchdesc, verbose, color):
     return 0
 
 
+def _news_item_valid(text):
+    for line in text.splitlines():
+        if line.startswith("News-Item-Format:"):
+            v = line[len("News-Item-Format:") :].strip()
+            if v.startswith(("1.", "2.")) or v in ("1", "2"):
+                return True
+    return False
+
+
+def _news_item_relevant(text, root):
+    installed_atoms = [
+        line[len("Display-If-Installed:") :].strip()
+        for line in text.splitlines()
+        if line.startswith("Display-If-Installed:")
+    ]
+    if not installed_atoms:
+        return True
+    for atom in installed_atoms:
+        if "/" in atom:
+            cat, _, pkg = atom.partition("/")
+            if installed_versions(root, cat, pkg):
+                return True
+    return False
+
+
+def _run_check_news(repos, root, quiet, color):
+    """Real `emerge --check-news` (actions.py:3844 -> portage.news
+    count_unread_news / display_news_notifications). Mirrors pretend.rs's
+    run_check_news, including its v1 cuts (no .unread/.skip persistence;
+    only bare cat/pkg Display-If-Installed atoms)."""
+    per_repo = []
+    any_unread = False
+    for repo in repos:
+        news_dir = os.path.join(repo["location"], "metadata", "news")
+        try:
+            ids = sorted(
+                d
+                for d in os.listdir(news_dir)
+                if os.path.isdir(os.path.join(news_dir, d))
+            )
+        except OSError:
+            per_repo.append((repo["name"], 0))
+            continue
+        read_file = os.path.join(
+            root, "var", "lib", "gentoo", "news", f"news-{repo['name']}.read"
+        )
+        try:
+            with open(read_file) as f:
+                read = {ln.strip() for ln in f if ln.strip()}
+        except OSError:
+            read = set()
+        count = 0
+        for itemid in ids:
+            if itemid in read:
+                continue
+            path = os.path.join(news_dir, itemid, f"{itemid}.en.txt")
+            try:
+                with open(path, encoding="utf-8", errors="replace") as f:
+                    text = f.read()
+            except OSError:
+                continue
+            if not _news_item_valid(text):
+                continue
+            if _news_item_relevant(text, root):
+                count += 1
+        per_repo.append((repo["name"], count))
+        if count > 0:
+            any_unread = True
+
+    if any_unread:
+        first = True
+        for name, count in per_repo:
+            if count > 0:
+                if first:
+                    print()
+                    first = False
+                print(
+                    "%s %d news items need reading for repository '%s'."
+                    % (color.c("WARN", " * IMPORTANT:"), count, name)
+                )
+        print(
+            "%s Use %s to view new items.\n"
+            % (color.c("WARN", " *"), color.c("GOOD", "eselect news read"))
+        )
+    elif not quiet:
+        print(f" {color.c('GOOD', '*')} No news items were found.")
+    return 0
+
+
 def _run_deselect(targets, root, pretend):
     """Ports real action_deselect (lib/_emerge/actions.py, lines
     1740-1835) exactly: needs no repo/config resolution at all, only the
@@ -10413,6 +10502,7 @@ def run(args):
     list_sets = False
     search_action = False
     searchdesc = False
+    check_news = False
     with_bdeps = True
     with_bdeps_given = False
     with_bdeps_auto = True
@@ -10736,6 +10826,9 @@ def run(args):
         elif arg in ("--searchdesc", "-S"):
             search_action = True
             searchdesc = True
+            i += 1
+        elif arg == "--check-news":
+            check_news = True
             i += 1
         elif arg == "--with-bdeps":
             # Real "argument_options" with "choices": ("y", "n") --
@@ -11430,6 +11523,13 @@ def run(args):
             _root(),
             searchdesc,
             verbose,
+            _Colorizer(_resolve_havecolor(color_opt)),
+        )
+    if check_news:
+        return _run_check_news(
+            find_repos(_config_root()),
+            _root(),
+            False,
             _Colorizer(_resolve_havecolor(color_opt)),
         )
 

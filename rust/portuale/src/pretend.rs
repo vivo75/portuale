@@ -4356,6 +4356,139 @@ fn search_candidate_visible(c: &portage_repo::Candidate) -> bool {
         .any(|k| matches!(k.as_str(), "amd64" | "~amd64" | "*" | "~*" | "**"))
 }
 
+/// Real `emerge --check-news` (`_emerge/actions.py:3844` ->
+/// `portage.news.count_unread_news` / `NewsManager`): count the GLEP 42
+/// news items that are **valid**, **relevant** to this system, and not
+/// yet read, per repo; print the `IMPORTANT: N news items need reading`
+/// block if any, else ` * No news items were found.` (unless `--quiet`).
+///
+/// A news item lives at `<repo>/metadata/news/<id>/<id>.<lang>.txt`
+/// (`<lang>` = `en` here -- `L10N`/`PORTAGE_L10N` not modelled). It is
+/// **valid** iff its `News-Item-Format:` header matches `[12].*` (real
+/// `NewsItem.isValid`). It is **relevant** iff it has no `Display-If-*`
+/// restriction, or its `Display-If-Installed:` atom matches the vdb
+/// (real `DisplayInstalledRestriction`; `Display-If-Keyword` /
+/// `Display-If-Profile` are treated as always-satisfied here -- the
+/// pilot's fixtures are all one `amd64` profile). A `<id>` listed in
+/// `<eroot>/var/lib/gentoo/news/news-<repo>.read` (what `eselect news
+/// read` writes) is considered read.
+///
+/// **v1 cut:** the incremental `.unread` / `.skip` bookkeeping real
+/// `NewsManager.updateItems` persists -- this pilot recomputes the
+/// relevant-unread set every run (writing nothing), the same
+/// "recompute, don't cache" stance it takes for `Packages` indexes and
+/// md5-cache elsewhere. Only bare `cat/pkg` `Display-If-Installed` atoms
+/// are matched (not `>=cat/pkg-1` etc.).
+fn run_check_news(
+    repos: &[portage_repo::RepoConfig],
+    root: &Path,
+    quiet: bool,
+    color: &Colorizer,
+) -> ExitCode {
+    let mut any = false;
+    let mut first = true;
+    let mut per_repo: Vec<(String, usize)> = Vec::new();
+    for repo in repos {
+        let news_dir = repo.location.join("metadata/news");
+        let Ok(entries) = std::fs::read_dir(&news_dir) else {
+            per_repo.push((repo.name.clone(), 0));
+            continue;
+        };
+        let read: std::collections::HashSet<String> = std::fs::read_to_string(
+            root.join("var/lib/gentoo/news")
+                .join(format!("news-{}.read", repo.name)),
+        )
+        .unwrap_or_default()
+        .lines()
+        .map(|l| l.trim().to_string())
+        .filter(|l| !l.is_empty())
+        .collect();
+
+        let mut ids: Vec<String> = entries
+            .filter_map(|e| e.ok())
+            .filter(|e| e.path().is_dir())
+            .filter_map(|e| e.file_name().to_str().map(String::from))
+            .collect();
+        ids.sort();
+
+        let mut count = 0usize;
+        for id in ids {
+            if read.contains(&id) {
+                continue;
+            }
+            let item = news_dir.join(&id).join(format!("{id}.en.txt"));
+            let Ok(text) = std::fs::read_to_string(&item) else {
+                continue;
+            };
+            if !news_item_valid(&text) {
+                continue;
+            }
+            if news_item_relevant(&text, root) {
+                count += 1;
+            }
+        }
+        per_repo.push((repo.name.clone(), count));
+        if count > 0 {
+            any = true;
+        }
+    }
+
+    if any {
+        // Real `display_news_notifications`.
+        for (repo, count) in &per_repo {
+            if *count > 0 {
+                if first {
+                    println!();
+                    first = false;
+                }
+                println!(
+                    "{} {count} news items need reading for repository '{repo}'.",
+                    color.c("WARN", " * IMPORTANT:")
+                );
+            }
+        }
+        println!(
+            "{} Use {} to view new items.\n",
+            color.c("WARN", " *"),
+            color.c("GOOD", "eselect news read")
+        );
+    } else if !quiet {
+        // Real `print("", colorize("GOOD", "*"), "No news items were found.")`.
+        println!(" {} No news items were found.", color.c("GOOD", "*"));
+    }
+    ExitCode::SUCCESS
+}
+
+/// Real `NewsItem.isValid`: a `News-Item-Format:` header whose value
+/// `fnmatch`es `[12].*` (i.e. starts `1.` or `2.`).
+fn news_item_valid(text: &str) -> bool {
+    text.lines().any(|l| {
+        l.strip_prefix("News-Item-Format:")
+            .map(str::trim)
+            .is_some_and(|v| v.starts_with("1.") || v.starts_with("2.") || v == "1" || v == "2")
+    })
+}
+
+/// Real `NewsItem.isRelevant`: no restriction → relevant; otherwise each
+/// `Display-If-*` type is OR'd within and AND'd across. Only
+/// `Display-If-Installed` (bare `cat/pkg`, matched against the vdb) is
+/// modelled -- see `run_check_news`.
+fn news_item_relevant(text: &str, root: &Path) -> bool {
+    let mut installed_atoms: Vec<&str> = Vec::new();
+    for line in text.lines() {
+        if let Some(v) = line.strip_prefix("Display-If-Installed:") {
+            installed_atoms.push(v.trim());
+        }
+    }
+    if installed_atoms.is_empty() {
+        return true;
+    }
+    installed_atoms.iter().any(|atom| {
+        atom.split_once('/')
+            .is_some_and(|(cat, pkg)| !portage_repo::installed_versions(root, cat, pkg).is_empty())
+    })
+}
+
 /// Real `_emerge/actions.py::action_config` (`emerge --config <atom>`):
 /// run `pkg_config` for a single installed package. Exactly one atom
 /// (real `if len(myfiles) != 1`), matched against the vdb the same way
@@ -4573,11 +4706,13 @@ pub fn run(args: &[String]) -> ExitCode {
     // --config: a standalone action (see run_config_action). Ignores
     // --pretend entirely -- real `action_config` never checks it.
     let mut config_action = false;
-    // --list-sets / --search / --searchdesc: standalone read-only query
-    // actions (see run_list_sets / run_search).
+    // --list-sets / --search / --searchdesc / --check-news: standalone
+    // read-only query actions (see run_list_sets / run_search /
+    // run_check_news).
     let mut list_sets = false;
     let mut search_action = false;
     let mut searchdesc = false;
+    let mut check_news = false;
     let mut with_bdeps = true;
     let mut with_bdeps_given = false;
     let mut with_bdeps_auto = true;
@@ -5332,6 +5467,12 @@ pub fn run(args: &[String]) -> ExitCode {
             search_action = true;
             searchdesc = true;
             i += 1;
+        } else if arg == "--check-news" {
+            // Real `main.py`: `--check-news` is a standalone ACTION
+            // (`actions.py:3844`) -- count unread relevant GLEP 42 news
+            // items per repo.
+            check_news = true;
+            i += 1;
         } else if arg == "--skipfirst" || arg == "--skip-first" {
             skipfirst = true;
             i += 1;
@@ -5878,6 +6019,7 @@ pub fn run(args: &[String]) -> ExitCode {
         && !config_action
         && !resume
         && !search_action
+        && !check_news
     {
         eprintln!("emerge (pilot v1): expected a package atom, e.g. `emerge --pretend cat/pkg`");
         return ExitCode::from(2);
@@ -5994,6 +6136,12 @@ pub fn run(args: &[String]) -> ExitCode {
     // standalone read-only query action (real `action_search`).
     if search_action {
         return run_search(&atom_args, &repos, &root, searchdesc, verbose, &color);
+    }
+
+    // `--check-news`: a standalone read-only query action (real
+    // `actions.py`'s `count_unread_news` block).
+    if check_news {
+        return run_check_news(&repos, &root, false, &color);
     }
 
     // `--unmerge`/`-C`: a standalone action -- resolved config in hand

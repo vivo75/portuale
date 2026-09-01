@@ -288,11 +288,13 @@ dev/test context — see also the `chown` note below).
 
 - Standalone actions buildout (2026-09-01). *Shipped: `--list-sets`
   (real `actions.py:3839`); `--search` / `-s` / `--searchdesc` / `-S`
-  (real `action_search` → `search.py` output shape — v1 cuts: fuzzy /
-  regex / index matching, `--usepkg` results, full mask filter, Size of
-  files).* Remaining: `--info` (`action_info` — the big config/env
-  dump), `--regen` (metadata cache), `--metadata`, `--check-news` /
-  `--read-news`, `--clean`, `--rage-clean`. `--sync` (repo network
+  (real `action_search` → `search.py` output shape); `--check-news`
+  (real `count_unread_news` / `display_news_notifications` — v1 cuts:
+  no `.unread`/`.skip` persistence, `Display-If-Installed` only).*
+  Remaining: `--info` (`action_info` — the big config/env dump),
+  `--regen` (metadata cache), `--metadata`, `--clean`, `--rage-clean`.
+  `--read-news` stays a recognized-unimplemented option (it's a
+  post-merge display toggle, not an action). `--sync` (repo network
   syncing) stays a non-goal.
 - Recognized-but-unimplemented modifier flags: `--complete-graph[-if-*]`,
   `--rebuild-if-new-{slot,rev,ver}` / `--rebuild-if-unbuilt`,

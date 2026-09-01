@@ -1,0 +1,10 @@
+Title: Pilot news: relevant only if an uninstalled package is present
+Author: Pilot Test <pilot@example.org>
+Content-Type: text/plain
+Posted: 2026-09-03
+Revision: 1
+News-Item-Format: 2.0
+Display-If-Installed: dev-libs/definitely-not-installed-nope
+
+Nothing matches Display-If-Installed here, so `emerge --check-news`
+never counts this item.
