@@ -68,3 +68,8 @@ pub(crate) static RESOLVER_DEBUG: AtomicBool = AtomicBool::new(false);
 pub fn set_resolver_debug(enabled: bool) {
     RESOLVER_DEBUG.store(enabled, AtomicOrdering::Relaxed);
 }
+
+/// Whether the `emerge --pretend --debug` resolver trace is active.
+pub fn resolver_debug() -> bool {
+    RESOLVER_DEBUG.load(AtomicOrdering::Relaxed)
+}
