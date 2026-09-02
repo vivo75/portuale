@@ -9657,9 +9657,11 @@ run -p dev-libs/penvpkg
 # [ebuild  N     ] dev-libs/penvpkg-1.0  USE="penvflag -penvother"
 ```
 
-**Cuts:** the non-USE half of a `package.env` file (`FEATURES`,
-`CFLAGS`, `MAKEOPTS`, … — the build-phase env and `emerge --info
-<atom>`) is a follow-up; a referenced file that doesn't exist
+**Cuts:** the non-USE scalar half of a `package.env` file
+(`CFLAGS`/`MAKEOPTS`/… into the build-phase env) shipped separately —
+see "`package.env` overrides the build flags per package" below;
+`FEATURES` and other incrementals stay a cut. A referenced file that
+doesn't exist
 contributes nothing *silently* (real portage warns from `setcpv`; this
 pilot follows its standing "no warnings from deep in config resolution"
 precedent); no per-file `${VAR}` expand map (real portage seeds one
@@ -11168,10 +11170,11 @@ does the real walk:
 - `Config::package_use_user` — the user-level `/etc/portage/package.use`.
   Strongest layer before the final `use.force`/`use.mask` step.
 
-Still documented cuts: the `env` layer's `$USE` env var and
-`package.env`'s non-USE vars, the `features` (`FEATURES`-implied USE)
-and `env.d` layers, and an overlay's own `profiles/make.defaults` USE.
-(`package.env`'s `USE=` shipped 2026-09-02.)
+Still documented cuts: the `env` layer's `$USE` env var, the `features`
+(`FEATURES`-implied USE) and `env.d` layers, and an overlay's own
+`profiles/make.defaults` USE. (`package.env`'s `USE=` shipped
+2026-09-02; its non-`USE` build vars — a build-phase concern, not a USE
+layer — shipped the same day.)
 
 `dev-libs/interleavepkg` proves the per-level walk: `profiles/base/
 package.use` (weakest chain level) enables `interleaveflag`, the leaf
@@ -11678,3 +11681,36 @@ flags (no graph, no resolved config). `emerge --resume` builds with an
 empty `build_env` (`resume_entry` carries no resolved USE). The
 `Packages` *index* `USE` field for an `emerge -b` binpkg isn't
 back-filled from build-info yet.
+
+### `package.env` overrides the build flags per package (2026-09-02)
+
+The non-`USE` half of `/etc/portage/package.env` — real `_grab_pkg_env`
+folding a matching entry's `/etc/portage/env/<name>` file into
+`configdict["pkg"]`, so a package can build with its own
+`CFLAGS`/`MAKEOPTS`/`CHOST`/… distinct from the run-wide make.conf/env
+values. `Config` gained `package_env_vars` (per atom, every referenced
+env file's non-`USE` `KEY=value` pairs in file order — `env_file_build_vars`,
+sharing `read_env_file_kv` with the `USE=` half). `MergeOptions` gained
+`package_env_vars` (set from the config in `pretend.rs`);
+`emerge_build::entry_package_env_vars` matches a build-bound entry's
+`cat/pkg-ver:slot/sub` against each atom and layers the matching
+`BUILD_VARS` subset over `build_config_env`'s run-wide set in
+`entry_build_env` (last-wins, so `package.env` beats make.conf/env).
+`BUILD_VARS` moved to a shared `pretend` module const.
+
+`dev-libs/penvbuildpkg` proves it:
+`fixtures/etc/portage/package.env` maps it to `penv-buildflags`
+(`CFLAGS="-Os -march=fixturepkgenv"`, `MAKEOPTS="-j7"`), its
+`src_install` records `${CFLAGS}`/`${MAKEOPTS}`, and
+`test_emerge_atom_source_build_package_env_overrides_the_build_flags`
+(`test_portuale.py`) sets the env-layer `CFLAGS=-O2 -pipe` / `MAKEOPTS=-j3`
+and asserts the merged file carries the `package.env` values instead. 1
+`portage-profile` unit test (`package_env_vars` = `debug`'s `CFLAGS`
+only, `USE`/no-scalar files excluded).
+
+**Cuts:** a build-phase concern only — `--pretend` and `emerge --info
+<atom>` show no per-package compiler flags, so (unlike the `USE=` half)
+there is no Python-reference mirror. `FEATURES` and other incrementals
+stay out (the pilot models `FEATURES` via `feature_enabled`); no
+per-file `${VAR}` expand map. Standalone `ebuild`/`emerge --resume`
+carry an empty `package_env_vars`.

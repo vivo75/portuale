@@ -595,6 +595,43 @@ def test_emerge_atom_source_build_sees_the_resolved_use_and_build_flags(
     )
 
 
+def test_emerge_atom_source_build_package_env_overrides_the_build_flags(
+    emerge_binary, tmp_path
+):
+    """The non-`USE` half of `package.env` (real `_grab_pkg_env` into
+    `configdict["pkg"]`): `fixtures/etc/portage/package.env` maps
+    `dev-libs/penvbuildpkg` to the env file `penv-buildflags`, which sets
+    `CFLAGS`/`MAKEOPTS`. Those override the run-wide (env-layer)
+    `CFLAGS`/`MAKEOPTS` in that package's build phase env only --
+    `MergeOptions::package_env_vars` ← `Config::package_env_vars`, layered
+    by `emerge_build::entry_package_env_vars` after `build_config_env`."""
+    root = tmp_path / "root"
+    import shutil
+
+    shutil.copytree(Path(FIXTURES_ROOT) / "var", root / "var")
+    env = dict(os.environ)
+    env["PORTAGE_CONFIGROOT"] = FIXTURES_ROOT
+    env["ROOT"] = str(root)
+    env["DISTDIR"] = str(Path(FIXTURES_ROOT) / "distfiles")
+    env["PORTAGE_TMPDIR"] = str(tmp_path / "portage-tmpdir")
+    # The run-wide values -- package.env must win over these for this pkg.
+    env["CFLAGS"] = "-O2 -pipe"
+    env["MAKEOPTS"] = "-j3"
+
+    result = subprocess.run(
+        [str(emerge_binary), "dev-libs/penvbuildpkg"],
+        capture_output=True,
+        text=True,
+        check=False,
+        env=env,
+    )
+    assert result.returncode == 0, result.stderr
+    assert ">>> dev-libs/penvbuildpkg-1.0 merged." in result.stdout
+    assert (root / "usr/share/penvbuildpkg/flags").read_text() == (
+        "CFLAGS=-Os -march=fixturepkgenv\nMAKEOPTS=-j7\n"
+    )
+
+
 def test_emerge_atom_with_buildpkg_writes_a_binpkg_and_still_merges(
     emerge_binary, tmp_path
 ):

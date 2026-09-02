@@ -290,6 +290,13 @@ pub struct MergeOptions {
     /// leaves. Empty (`Default`) for a standalone `ebuild <file> merge`
     /// / `qmerge` and every test. See `ebuild_phases::run_commands_async`.
     pub build_env: Vec<(String, String)>,
+    /// `/etc/portage/package.env`'s non-`USE` scalar half
+    /// (`Config::package_env_vars`): `(atom, [(KEY, value)])` pairs.
+    /// `emerge_build::entry_build_env` matches a build-bound entry's cpv
+    /// against each atom and layers the matching build vars
+    /// (`pretend::BUILD_VARS`) over `build_env` -- real `_grab_pkg_env`
+    /// into `configdict["pkg"]`. Empty (`Default`) everywhere else.
+    pub package_env_vars: Vec<(String, Vec<(String, String)>)>,
 }
 
 impl Default for MergeOptions {
@@ -310,6 +317,7 @@ impl Default for MergeOptions {
             // here regardless of what happens to exist on the host.
             config_root: PathBuf::from("/dev/null/no-config-root-configured"),
             build_env: Vec::new(),
+            package_env_vars: Vec::new(),
         }
     }
 }
@@ -354,6 +362,7 @@ impl MergeOptions {
             noconfmem: std::env::var_os("NOCONFMEM").is_some(),
             config_root: portage_repo::config_root_from_env(),
             build_env: Vec::new(),
+            package_env_vars: Vec::new(),
         }
     }
 }

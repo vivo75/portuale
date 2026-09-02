@@ -419,14 +419,50 @@ fn build_use_env(entry: &GraphEntry) -> Vec<(String, String)> {
     }
 }
 
+/// The per-package `package.env` build vars that match `entry`'s cpv --
+/// real `_grab_pkg_env` folding a matching `/etc/portage/package.env`
+/// entry's env file into `configdict["pkg"]`, narrowed to the
+/// deterministic `pretend::BUILD_VARS` set. Later `env` files (and later
+/// matching atoms) win, matching the caller's last-wins env application.
+fn entry_package_env_vars(
+    options: &ebuild_merge::MergeOptions,
+    entry: &GraphEntry,
+) -> Vec<(String, String)> {
+    if options.package_env_vars.is_empty() {
+        return Vec::new();
+    }
+    let Some(version) = entry_version(&entry.outcome) else {
+        return Vec::new();
+    };
+    let slot = entry.slot.as_deref().unwrap_or("0");
+    let sub_slot = entry.sub_slot.as_deref().unwrap_or(slot);
+    let cpv_slot = format!(
+        "{}/{}-{version}:{slot}/{sub_slot}",
+        entry.category, entry.package
+    );
+    let mut out: Vec<(String, String)> = Vec::new();
+    for (atom, vars) in &options.package_env_vars {
+        if portage_dep::match_from_list(atom, &[cpv_slot.as_str()]).is_some_and(|m| !m.is_empty()) {
+            for (k, v) in vars {
+                if crate::pretend::BUILD_VARS.contains(&k.as_str()) && !v.is_empty() {
+                    out.push((k.clone(), v.clone()));
+                }
+            }
+        }
+    }
+    out
+}
+
 /// The full per-entry build-phase env: the run-wide compiler/make flags
 /// the caller stashed on `options.build_env` (`pretend.rs::
-/// build_config_env`), then this entry's own resolved `USE` on top.
+/// build_config_env`), then any per-package `package.env` build vars on
+/// top of those, then this entry's own resolved `USE`.
 fn entry_build_env(
     options: &ebuild_merge::MergeOptions,
     entry: &GraphEntry,
 ) -> Vec<(String, String)> {
     let mut env = options.build_env.clone();
+    env.extend(entry_package_env_vars(options, entry));
     env.extend(build_use_env(entry));
     env
 }

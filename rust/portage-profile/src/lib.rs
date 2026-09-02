@@ -412,8 +412,8 @@ pub struct Config {
     /// snippet layered onto a matching package's config (real
     /// `_grab_pkg_env`, invoked from `setcpv`). An entry with no file
     /// names is dropped. The `USE=` half of each file is pre-resolved
-    /// into [`Config::package_env_use`]; the non-USE (scalar / other
-    /// incremental) half is a follow-up slice.
+    /// into [`Config::package_env_use`], the build-relevant scalar half
+    /// into [`Config::package_env_vars`].
     pub package_env: Vec<(String, Vec<String>)>,
     /// (atom-or-wildcard string, raw USE tokens) pairs derived from
     /// [`Config::package_env`]: for each entry, every referenced
@@ -428,6 +428,19 @@ pub struct Config {
     /// -- the pilot's standing "no warnings from deep in config
     /// resolution" precedent).
     pub package_env_use: Vec<(String, Vec<String>)>,
+    /// (atom-or-wildcard string, ordered `(KEY, value)` pairs) derived
+    /// from [`Config::package_env`]: for each entry, every referenced
+    /// `/etc/portage/env/<name>` file's **non-`USE`** `KEY=value`
+    /// assignments, concatenated in file order. Real `_grab_pkg_env`
+    /// folds every key into `configdict["pkg"]`; the pilot consumes the
+    /// deterministic build-var subset (`CFLAGS`, `CXXFLAGS`, `LDFLAGS`,
+    /// `MAKEOPTS`, `CHOST`, …) as a per-package override of the run-wide
+    /// build-phase env. `FEATURES` and other incrementals are a
+    /// documented cut (the pilot models `FEATURES` via its own
+    /// `feature_enabled`). Not consumed by `--pretend` (a build-phase
+    /// concern only), so unlike [`Config::package_env_use`] it has no
+    /// Python-reference mirror.
+    pub package_env_vars: Vec<(String, Vec<(String, String)>)>,
     /// `@system`'s real atom source: every profile level's own `packages`
     /// file, stacked in chain order and filtered to `*`-prefixed lines
     /// (the `*` stripped) -- see the module doc comment's `packages`
@@ -1302,6 +1315,19 @@ fn env_file_use_tokens(env_dir: &Path, name: &str, config_root: &Path) -> Vec<St
         .into_iter()
         .filter(|(k, _)| k == "USE")
         .flat_map(|(_, v)| v.split_whitespace().map(String::from).collect::<Vec<_>>())
+        .collect()
+}
+
+/// The **non-`USE`** `KEY=value` pairs of one `/etc/portage/env/<name>`
+/// file, in file order -- the scalar half of a `package.env` file (real
+/// `_grab_pkg_env` folds every key into `configdict["pkg"]`; `USE` is
+/// [`env_file_use_tokens`]' concern). No `${VAR}` expansion (same
+/// simplification as `read_env_file_kv`); `source` is followed.
+fn env_file_build_vars(env_dir: &Path, name: &str, config_root: &Path) -> Vec<(String, String)> {
+    let mut visited = HashSet::new();
+    read_env_file_kv(&env_dir.join(name), config_root, &mut visited)
+        .into_iter()
+        .filter(|(k, _)| k != "USE")
         .collect()
 }
 
@@ -2207,10 +2233,10 @@ pub fn resolve_config(
     // more env-file names under `/etc/portage/env/`; each file is a
     // `make.conf`-style `KEY=value` snippet (with `source`) layered onto
     // a matching package's config. Same `<atom> <token...>` line grammar
-    // as `package.accept_keywords` (real `grabdict` for both). This slice
-    // resolves the `USE=` half of each file into `package_env_use` (the
-    // `pkg` `USE_ORDER` layer, before user `package.use`); the non-USE
-    // half is a follow-up.
+    // as `package.accept_keywords` (real `grabdict` for both). The `USE=`
+    // half of each file lands in `package_env_use` (the `pkg` `USE_ORDER`
+    // layer, before user `package.use`); the non-`USE` scalar half lands
+    // in `package_env_vars` (a per-package build-phase env override).
     let package_env_lines = read_config_lines(&config_root.join("etc/portage/package.env"))?;
     config.package_env = parse_package_accept_keywords_lines(&package_env_lines)
         .into_iter()
@@ -2226,6 +2252,17 @@ pub fn resolve_config(
                 .flat_map(|name| env_file_use_tokens(&env_dir, name, config_root))
                 .collect();
             (!tokens.is_empty()).then(|| (atom.clone(), tokens))
+        })
+        .collect();
+    config.package_env_vars = config
+        .package_env
+        .iter()
+        .filter_map(|(atom, files)| {
+            let vars: Vec<(String, String)> = files
+                .iter()
+                .flat_map(|name| env_file_build_vars(&env_dir, name, config_root))
+                .collect();
+            (!vars.is_empty()).then(|| (atom.clone(), vars))
         })
         .collect();
 
@@ -4305,6 +4342,15 @@ sync-uri = file:///srv/pkgs
                     "sharedflag".to_string(),
                     "-commonflag".to_string(),
                 ]
+            )]
+        );
+        // The non-`USE` scalar half: `debug`'s CFLAGS only (`shared` sets
+        // no scalar, `common` none, `gone`/`c` contribute nothing).
+        assert_eq!(
+            config.package_env_vars,
+            vec![(
+                "dev-libs/a".to_string(),
+                vec![("CFLAGS".to_string(), "-O0 -g".to_string())]
             )]
         );
     }

@@ -4701,20 +4701,24 @@ fn news_item_relevant(text: &str, root: &Path) -> bool {
     })
 }
 
-/// The compiler / make-flags the resolved config carries, as
-/// `(name, value)` pairs for the ebuild build phase env -- real
-/// portage's `settings["CFLAGS"]` / `["MAKEOPTS"]` / … reaching
-/// `bin/ebuild.sh`. Pulled from `Config::other_vars` (make.conf +
-/// profile `make.defaults` + the `env` layer, all folded there), a
-/// fixed deterministic set: an unset var contributes nothing (so
-/// `phase_env_vars`' own absence stands). `FEATURES` is deliberately not
-/// here -- the pilot models it via `feature_enabled`, forcing `""` in
-/// the phase env.
+/// The deterministic compiler / make-flag set the pilot threads into
+/// the ebuild build-phase env -- real portage's `settings["CFLAGS"]` /
+/// `["MAKEOPTS"]` / … reaching `bin/ebuild.sh`. Read run-wide from
+/// `Config::other_vars` by `build_config_env`, and per-package from
+/// `Config::package_env_vars` by `emerge_build::entry_package_env_vars`.
+/// `FEATURES` is deliberately not here -- the pilot models it via
+/// `feature_enabled`, forcing `""` in the phase env.
+pub(crate) const BUILD_VARS: &[&str] = &[
+    "CFLAGS", "CXXFLAGS", "CPPFLAGS", "LDFLAGS", "FFLAGS", "FCFLAGS", "ASFLAGS", "MAKEOPTS",
+    "CHOST", "CBUILD", "CTARGET",
+];
+
+/// The run-wide half of the build-phase flag env: every [`BUILD_VARS`]
+/// entry the resolved config carries (make.conf + profile
+/// `make.defaults` + the `env` layer, all folded into
+/// `Config::other_vars`). An unset var contributes nothing, so
+/// `phase_env_vars`' own absence stands.
 fn build_config_env(config: &portage_profile::Config) -> Vec<(String, String)> {
-    const BUILD_VARS: &[&str] = &[
-        "CFLAGS", "CXXFLAGS", "CPPFLAGS", "LDFLAGS", "FFLAGS", "FCFLAGS", "ASFLAGS", "MAKEOPTS",
-        "CHOST", "CBUILD", "CTARGET",
-    ];
     BUILD_VARS
         .iter()
         .filter_map(|&k| {
@@ -8199,6 +8203,12 @@ pub fn run(args: &[String]) -> ExitCode {
         // `phase_env_vars` itself), and `FEATURES` stays out (the pilot
         // models it via its own `feature_enabled`, forcing `""` here).
         merge_options.build_env = build_config_env(&config);
+        // Real `_grab_pkg_env` into `configdict["pkg"]`: a `package.env`
+        // entry matching a build-bound package layers its env file's
+        // build vars over the run-wide set above.
+        // `emerge_build::entry_package_env_vars` does the per-entry atom
+        // match.
+        merge_options.package_env_vars = config.package_env_vars.clone();
         // Real `FEATURES=buildpkg` / `--buildpkg`/`-b` (real
         // `_emerge/EbuildBinpkg`): a binpkg of each source entry is
         // written into `$PKGDIR` as a side effect of the merge.

@@ -405,8 +405,18 @@ not just read this list. What's actually left, grouped by area:
 > `USE_ORDER` walk `repo → pkginternal → defaults → conf → pkg`. Repo
 > `package.use` was wrongly the *strongest* layer before; now it's the
 > weakest. New fixtures `dev-libs/repouseweakpkg` / `profileuseweakpkg`.
-> Remaining Part 2.C: `env`/`features`/`env.d` layers, repo
-> `make.defaults` USE, per-profile-level `package.use` interleaving.
+> Follow-ups shipped 2026-09-02: the process-`env` layer
+> (`apply_env_layer` over an allowlist), `package.env`'s `USE=` half
+> (`Config::package_env{,_use}`, a `pkg`-layer contribution before user
+> `package.use`) **and its non-`USE` build-var half**
+> (`Config::package_env_vars` → `MergeOptions::package_env_vars` →
+> `emerge_build::entry_package_env_vars`, a per-package override of
+> `build_config_env`'s run-wide `CFLAGS`/`MAKEOPTS`/… — build-phase only,
+> no Python mirror), the main repo's `profiles/make.defaults` USE
+> (`Config::repo_make_defaults_use`, head of the `repo` layer), and the
+> per-profile-level `defaults`-tier walk (`Config::profile_use_layers` /
+> `ProfileUseLayer`). Remaining Part 2.C: `env` `$USE`, the `features`
+> and `env.d` layers, an overlay's own `profiles/make.defaults` USE.
 > Also recently closed:
 > the **remote binpkg download + merge** (2026-08-31): `emerge
 > --getbinpkgonly <atom>` non-`--pretend` — live `Packages` refresh

@@ -296,10 +296,22 @@ single-pass BFS can't grow into these incrementally:
   flat `use_tokens` + `package_use` (kept as the fallback for a
   hand-built `Config`). New `dev-libs/interleavepkg` +
   `profiles/base/package.use`.)*
-  Still open: the **`package.env` non-USE half** (`FEATURES`, `CFLAGS`,
-  `MAKEOPTS`, … per package — affects the build-phase env and
-  `emerge --info <atom>`); `$USE` env var at its real `env` position
-  above `pkg`; the `features` and `env.d` layers; an *overlay's* own
+  *(Shipped 2026-09-02: the **`package.env` non-USE half** — real
+  `_grab_pkg_env` folding a matching `/etc/portage/package.env` entry's
+  env file into `configdict["pkg"]`. `Config::package_env_vars` (per
+  atom, the env files' non-`USE` `KEY=value` pairs in file order, via
+  `env_file_build_vars`); `MergeOptions::package_env_vars`;
+  `emerge_build::entry_package_env_vars` matches a build-bound entry's
+  cpv and layers the matching `pretend::BUILD_VARS` subset
+  (`CFLAGS`/`MAKEOPTS`/`CHOST`/…) over the run-wide `build_config_env`
+  set. New `dev-libs/penvbuildpkg` + `etc/portage/env/penv-buildflags`.
+  A build-phase concern only (`--pretend` and `--info` are untouched —
+  neither shows per-package compiler flags), so no Python-reference
+  mirror. `FEATURES` and other incrementals stay a cut (the pilot
+  models `FEATURES` via `feature_enabled`); no per-file `${VAR}` expand
+  map (same simplification as the `USE` half).)*
+  Still open: `$USE` env var at its real `env` position above `pkg`; the
+  `features` and `env.d` layers; an *overlay's* own
   `profiles/make.defaults` USE.
 
 ### D. Sandbox / build isolation — **substantially complete (2026-09-01)**
