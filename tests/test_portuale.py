@@ -555,16 +555,17 @@ def test_emerge_atom_without_pretend_really_builds_and_merges_from_source(
     assert world_lines == sorted(world_lines)
 
 
-def test_emerge_atom_source_build_sees_the_resolved_use_flags(
+def test_emerge_atom_source_build_sees_the_resolved_use_and_build_flags(
     emerge_binary, tmp_path
 ):
-    """`emerge <atom>` (source) now passes the resolved `USE` into every
-    ebuild phase (`MergeOptions::build_env`), so `bin/ebuild.sh`'s own
-    `use()` builtin works. `dev-libs/usebuildpkg` has `IUSE="buildflag"`,
-    enabled for it in `fixtures/etc/portage/package.use`; its
-    `src_install` writes `on` or `off` to a merged file depending on
-    `use buildflag`. Before this the phase env left `USE=""` and the file
-    always said `off`."""
+    """`emerge <atom>` (source) now passes the resolved `USE` and the
+    resolved compiler/make flags into every ebuild phase
+    (`MergeOptions::build_env` ← `build_config_env` + per-entry USE), so
+    `bin/ebuild.sh`'s `use()` works and `${CFLAGS}`/`${MAKEOPTS}` are
+    real. `dev-libs/usebuildpkg` has `IUSE="buildflag"` (enabled for it
+    in `fixtures/etc/portage/package.use`); its `src_install` records
+    `use buildflag` and the two flag vars into merged files. Before this
+    the phase env left `USE=""`/`CFLAGS=""`."""
     root = tmp_path / "root"
     import shutil
 
@@ -574,6 +575,10 @@ def test_emerge_atom_source_build_sees_the_resolved_use_flags(
     env["ROOT"] = str(root)
     env["DISTDIR"] = str(Path(FIXTURES_ROOT) / "distfiles")
     env["PORTAGE_TMPDIR"] = str(tmp_path / "portage-tmpdir")
+    # The `env` USE_ORDER layer folds these into Config::other_vars,
+    # which build_config_env reads.
+    env["CFLAGS"] = "-O2 -pipe"
+    env["MAKEOPTS"] = "-j3"
 
     result = subprocess.run(
         [str(emerge_binary), "dev-libs/usebuildpkg"],
@@ -585,6 +590,9 @@ def test_emerge_atom_source_build_sees_the_resolved_use_flags(
     assert result.returncode == 0, result.stderr
     assert ">>> dev-libs/usebuildpkg-1.0 merged." in result.stdout
     assert (root / "usr/share/usebuildpkg/state").read_text().strip() == "on"
+    assert (root / "usr/share/usebuildpkg/flags").read_text() == (
+        "CFLAGS=-O2 -pipe\nMAKEOPTS=-j3\n"
+    )
 
 
 def test_emerge_atom_with_buildpkg_writes_a_binpkg_and_still_merges(

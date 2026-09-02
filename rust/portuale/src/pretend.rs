@@ -4701,6 +4701,32 @@ fn news_item_relevant(text: &str, root: &Path) -> bool {
     })
 }
 
+/// The compiler / make-flags the resolved config carries, as
+/// `(name, value)` pairs for the ebuild build phase env -- real
+/// portage's `settings["CFLAGS"]` / `["MAKEOPTS"]` / … reaching
+/// `bin/ebuild.sh`. Pulled from `Config::other_vars` (make.conf +
+/// profile `make.defaults` + the `env` layer, all folded there), a
+/// fixed deterministic set: an unset var contributes nothing (so
+/// `phase_env_vars`' own absence stands). `FEATURES` is deliberately not
+/// here -- the pilot models it via `feature_enabled`, forcing `""` in
+/// the phase env.
+fn build_config_env(config: &portage_profile::Config) -> Vec<(String, String)> {
+    const BUILD_VARS: &[&str] = &[
+        "CFLAGS", "CXXFLAGS", "CPPFLAGS", "LDFLAGS", "FFLAGS", "FCFLAGS", "ASFLAGS", "MAKEOPTS",
+        "CHOST", "CBUILD", "CTARGET",
+    ];
+    BUILD_VARS
+        .iter()
+        .filter_map(|&k| {
+            config
+                .other_vars
+                .get(k)
+                .filter(|v| !v.is_empty())
+                .map(|v| (k.to_string(), v.clone()))
+        })
+        .collect()
+}
+
 /// Real `emerge --info` (`_emerge/actions.py::action_info`), **narrowed
 /// to its deterministic config/repository block**: the `Repositories:`
 /// list (real `repo.info_string()`), `Binary Repositories:`, `Installed
@@ -8132,7 +8158,16 @@ pub fn run(args: &[String]) -> ExitCode {
         let portage_tmpdir = std::env::var_os("PORTAGE_TMPDIR")
             .map(std::path::PathBuf::from)
             .unwrap_or_else(|| std::path::PathBuf::from("/var/tmp/portage"));
-        let merge_options = ebuild_merge::MergeOptions::from_env(shell, false);
+        let mut merge_options = ebuild_merge::MergeOptions::from_env(shell, false);
+        // The compiler / make flags real portage puts in every build
+        // phase's environment, from the resolved config (make.conf +
+        // profile `make.defaults` + the `env` layer -- all folded into
+        // `Config::other_vars`). `merge_one_source_entry` appends the
+        // per-entry `USE` on top. Only the deterministic build-var set --
+        // not every scalar (`PATH`/`HOME`/... are handled by
+        // `phase_env_vars` itself), and `FEATURES` stays out (the pilot
+        // models it via its own `feature_enabled`, forcing `""` here).
+        merge_options.build_env = build_config_env(&config);
         // Real `FEATURES=buildpkg` / `--buildpkg`/`-b` (real
         // `_emerge/EbuildBinpkg`): a binpkg of each source entry is
         // written into `$PKGDIR` as a side effect of the merge.

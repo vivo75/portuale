@@ -11627,41 +11627,48 @@ rust/target/release/portuale emerge --config --shell brush dev-libs/emergeconfig
 cat "$ROOT/var/lib/emergeconfigpkg.configured"   # -> configured 1.0
 ```
 
-### `emerge <atom>` builds see the resolved `USE`
+### `emerge <atom>` builds see the resolved `USE` and build flags
 
 Until now every `emerge <atom>` source build ran its ebuild phases with
-`USE=""` — `ebuild_phases::phase_env_vars` sets it empty and nothing
-overrode it. So `bin/ebuild.sh`'s own `use()` builtin returned false for
-every flag, every `USE`-conditional in `src_configure`/`src_compile`/
-`src_install`/`pkg_preinst`/`pkg_postinst` took its else branch, and a
-package's own `RDEPEND="flag? ( … )"` was USE-reduced against the empty
-set when `write_post_install_metadata` recorded it in the vdb.
+`USE=""` and no `CFLAGS`/`MAKEOPTS`/… — `ebuild_phases::phase_env_vars`
+sets `USE` empty and nothing set the compiler/make flags at all. So
+`bin/ebuild.sh`'s own `use()` builtin returned false for every flag,
+every `USE`-conditional in `src_configure`/`src_compile`/`src_install`/
+`pkg_preinst`/`pkg_postinst` took its else branch, a package's own
+`RDEPEND="flag? ( … )"` was USE-reduced against the empty set when
+`write_post_install_metadata` recorded it in the vdb, and every package
+compiled with an unset `${CFLAGS}`.
 
 `MergeOptions` gained a `build_env: Vec<(String, String)>` field.
-`merge_one_source_entry` / `merge_one_built_entry` (the parallel-build
-merge step) set it per entry to `[("USE", "<space-joined enabled IUSE
-flags>")]` from `GraphEntry::use_flags_display`, and
-`build_one_source_entry` (the `--jobs` build) passes the same directly to
-`run_commands_logged`. `run_commands`/`run_commands_logged`/
-`run_commands_async` and `run_single_phase` gained a `build_env`
-parameter, appended after the pilot's own base vars in `phase_env_vars`
-so it wins over the empty default; `merge_after_install` threads
-`options.build_env` into `pkg_preinst`/`pkg_postinst`.
-`write_post_install_metadata` now USE-reduces the `*DEPEND`/`LICENSE`/
-`PROPERTIES`/`RESTRICT` build-info files against that same resolved set
-(`build_phase_use` pulls it back out of `build_env`) instead of a
-hardcoded empty set.
+`pretend.rs` sets it to `build_config_env(&config)` — the deterministic
+compiler/make-flag set (`CFLAGS`/`CXXFLAGS`/`CPPFLAGS`/`LDFLAGS`/
+`FFLAGS`/`FCFLAGS`/`ASFLAGS`/`MAKEOPTS`/`CHOST`/`CBUILD`/`CTARGET`) from
+`Config::other_vars` (make.conf + profile `make.defaults` + the `env`
+layer). `merge_one_source_entry` / `merge_one_built_entry` (the
+parallel-build merge step) then append `[("USE", "<space-joined enabled
+IUSE flags>")]` from `GraphEntry::use_flags_display` (`entry_build_env`);
+`build_one_source_entry` (the `--jobs` build) builds the same combined
+list directly. `run_commands`/`run_commands_logged`/`run_commands_async`
+and `run_single_phase` gained a `build_env` parameter, appended after the
+pilot's own base vars in `phase_env_vars` so it wins over the empty
+default; `merge_after_install` threads `options.build_env` into
+`pkg_preinst`/`pkg_postinst`. `write_post_install_metadata` now
+USE-reduces the `*DEPEND`/`LICENSE`/`PROPERTIES`/`RESTRICT` build-info
+files against that same resolved USE (`build_phase_use` pulls it back
+out) instead of a hardcoded empty set.
 
 `dev-libs/usebuildpkg` (`IUSE="buildflag"`, enabled for it in
-`fixtures/etc/portage/package.use`) proves it: its `src_install` writes
-`on`/`off` to a merged file depending on `use buildflag`, and
-`test_emerge_atom_source_build_sees_the_resolved_use_flags`
-(`test_portuale.py`) asserts `on`.
+`fixtures/etc/portage/package.use`) proves it: its `src_install` records
+`use buildflag` and `${CFLAGS}`/`${MAKEOPTS}` into merged files, and
+`test_emerge_atom_source_build_sees_the_resolved_use_and_build_flags`
+(`test_portuale.py`) asserts `on` and `CFLAGS=-O2 -pipe` / `MAKEOPTS=-j3`.
 
 **Narrowing:** only the IUSE-declared enabled flags reach the phase
 `USE` (what `use()` needs), not the implicit/arch part of the full
-effective set. `CFLAGS`/`CXXFLAGS`/`MAKEOPTS`/`FEATURES`/… still aren't
-threaded (needs a resolved `Config` in the merge path — a separate
-slice). Standalone `ebuild <file> <phase>` still runs with `USE=""` (no
-graph, no resolved USE). The `Packages` *index* `USE` field for an
-`emerge -b` binpkg isn't back-filled from build-info yet.
+effective set; the build-var set is fixed (not every scalar).
+`FEATURES` stays `""` — the pilot models it via `feature_enabled`.
+Standalone `ebuild <file> <phase>` still runs with `USE=""`/no build
+flags (no graph, no resolved config). `emerge --resume` builds with an
+empty `build_env` (`resume_entry` carries no resolved USE). The
+`Packages` *index* `USE` field for an `emerge -b` binpkg isn't
+back-filled from build-info yet.

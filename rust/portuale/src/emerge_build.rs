@@ -390,7 +390,7 @@ pub(crate) fn merge_one_source_entry(
     // IUSE-declared enabled flags only (`GraphEntry::use_flags_display`),
     // not the implicit/arch part of the effective set.
     let mut per_entry = options.clone();
-    per_entry.build_env = build_use_env(entry);
+    per_entry.build_env = entry_build_env(options, entry);
     let status = ebuild_merge::run_merge(&path, root, portage_tmpdir, &per_entry, buildpkg)?;
     if status != 0 {
         return Err(format!("{cp}-{version}: merge failed ({status})"));
@@ -417,6 +417,18 @@ fn build_use_env(entry: &GraphEntry) -> Vec<(String, String)> {
     } else {
         vec![("USE".to_string(), enabled.join(" "))]
     }
+}
+
+/// The full per-entry build-phase env: the run-wide compiler/make flags
+/// the caller stashed on `options.build_env` (`pretend.rs::
+/// build_config_env`), then this entry's own resolved `USE` on top.
+fn entry_build_env(
+    options: &ebuild_merge::MergeOptions,
+    entry: &GraphEntry,
+) -> Vec<(String, String)> {
+    let mut env = options.build_env.clone();
+    env.extend(build_use_env(entry));
+    env
 }
 
 /// `(cat/pkg, version)` for an entry the scheduler will build -- the
@@ -564,7 +576,7 @@ fn build_one_source_entry(
         &options.config_root,
         shell,
         log_path.as_deref(),
-        &build_use_env(entry),
+        &entry_build_env(options, entry),
     )?;
     if status != 0 {
         let mut msg = format!("{cp}-{version}: build failed ({status})");
@@ -605,7 +617,7 @@ fn merge_one_built_entry(
     // `merge_after_install`'s `pkg_preinst`/`pkg_postinst` see this
     // entry's resolved `USE` too (see `merge_one_source_entry`).
     let mut per_entry = options.clone();
-    per_entry.build_env = build_use_env(entry);
+    per_entry.build_env = entry_build_env(options, entry);
     let status = ebuild_merge::run_qmerge(ebuild_path, root, portage_tmpdir, &per_entry)?;
     if status != 0 {
         return Err(format!("{cp}-{version}: merge failed ({status})"));

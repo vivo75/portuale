@@ -12,4 +12,8 @@ src_install() {
 		echo off > "${T}/state" || die
 	fi
 	doins "${T}/state"
+	# Records the build flags the phase env carried -- proves make.conf /
+	# env-layer CFLAGS/MAKEOPTS reach the build (empty before that slice).
+	printf 'CFLAGS=%s\nMAKEOPTS=%s\n' "${CFLAGS}" "${MAKEOPTS}" > "${T}/flags" || die
+	doins "${T}/flags"
 }
