@@ -5310,6 +5310,20 @@ pub fn run(args: &[String]) -> ExitCode {
     // the autounmask suggestion blocks (+ the unsatisfied-dep stderr
     // notes already printed during resolution).
     let mut autounmask_only = false;
+    // --autounmask-continue (real `true_y_or_n`, `main.py:345`/`810`) and
+    // --autounmask-backtrack (real `choices: ("y", "n")`, a REQUIRED
+    // value, `main.py:338`). Both are effectively inert in this
+    // `--pretend`-only pilot: real portage's "write the changes and
+    // continue merging" path is explicitly gated on `"--pretend" not in
+    // myopts` (`depgraph.py:5796`), and `--autounmask-backtrack` only
+    // ever toggles the `_autounmask_backtrack_disabled` "backtracking has
+    // terminated early" notice, which needs a backtracking resolver this
+    // pilot's narrow autounmask v1 doesn't have. The one real observable
+    // is the `actions.py:3772` warning when `--autounmask-continue` meets
+    // `--autounmask=n`. `None` = flag not given. `--autounmask-backtrack`
+    // carries no state at all here -- its value is validated (`y`/`n`)
+    // and then discarded.
+    let mut autounmask_continue: Option<bool> = None;
     // --usepkg/-k, --usepkgonly/-K, --binpkg-respect-use: all three real
     // "true_y_or_n" (bare flag, "=y", or "=n"), same shape --autounmask
     // already has. --binpkg-respect-use's own real default ("auto",
@@ -6412,6 +6426,43 @@ pub fn run(args: &[String]) -> ExitCode {
                 "y".to_string()
             };
             autounmask_only = matches!(val.as_str(), "y" | "True");
+        } else if arg == "--autounmask-continue" || arg.starts_with("--autounmask-continue=") {
+            // Real `true_y_or_n` (`main.py:345`) -- bare / `=y` / `=True`
+            // -> on, `=n` -> off. Same shape as `--autounmask-only`.
+            let val = if let Some(v) = arg.strip_prefix("--autounmask-continue=") {
+                i += 1;
+                v.to_string()
+            } else if matches!(
+                args.get(i + 1).map(String::as_str),
+                Some("y" | "n" | "True")
+            ) {
+                i += 2;
+                args[i - 1].clone()
+            } else {
+                i += 1;
+                "y".to_string()
+            };
+            autounmask_continue = Some(matches!(val.as_str(), "y" | "True"));
+        } else if arg == "--autounmask-backtrack" {
+            // Real `choices: ("y", "n")` (`main.py:338`) -- a REQUIRED
+            // value, the same shape `--autounmask-keep-keywords` has. No
+            // effect in this pilot (see the flag's own comment above) --
+            // the value is validated and discarded.
+            let Some(value) = args.get(i + 1) else {
+                eprintln!("emerge: option \"--autounmask-backtrack\" requires an argument");
+                return ExitCode::from(2);
+            };
+            if !matches!(value.as_str(), "y" | "n") {
+                eprintln!("emerge: option \"--autounmask-backtrack\": invalid choice: {value:?} (choose from \"y\", \"n\")");
+                return ExitCode::from(2);
+            }
+            i += 2;
+        } else if let Some(value) = arg.strip_prefix("--autounmask-backtrack=") {
+            if !matches!(value, "y" | "n") {
+                eprintln!("emerge: option \"--autounmask-backtrack\": invalid choice: {value:?} (choose from \"y\", \"n\")");
+                return ExitCode::from(2);
+            }
+            i += 1;
         } else if arg == "--autounmask-keep-keywords" {
             // Real "--autounmask-keep-keywords": plain y_or_n, a
             // REQUIRED value -- no bare/optional form real
@@ -7076,6 +7127,19 @@ pub fn run(args: &[String]) -> ExitCode {
             ask,
             shell,
             &color,
+        );
+    }
+
+    // Real `actions.py:3772`: `--autounmask-continue` + `--autounmask=n`
+    // -> a WARNING that the former "has been disabled by" the latter,
+    // printed on the merge/build path before the depgraph. The pilot's
+    // only observable effect for `--autounmask-continue` -- its
+    // write-and-continue path is real-portage-gated on `"--pretend" not
+    // in myopts` (`depgraph.py:5796`), inert here.
+    if autounmask_continue.is_some() && autounmask == Some(false) {
+        eprintln!(
+            " {} --autounmask-continue has been disabled by --autounmask=n",
+            color.c("WARN", "*")
         );
     }
 

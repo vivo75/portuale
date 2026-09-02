@@ -350,8 +350,16 @@ dev/test context — see also the `chown` note below).
   `portage_repo::set_useoldpkg_atoms` process-global + a `matched`
   restriction in `resolve_pretend`; only bites under
   `--usepkg`/`--getbinpkg`; new `useoldpkgpkg` fixture).
-  Remaining: `--quickpkg-direct`,
-  `--autounmask-continue` / `--autounmask-backtrack`.
+  **Shipped 2026-09-02 (batch 9): `--autounmask-continue` /
+  `--autounmask-backtrack`** — both recognized + validated but inert in a
+  `--pretend`-only pilot (real portage gates write-and-continue on
+  `"--pretend" not in myopts`, `depgraph.py:5796`, and the pilot has no
+  backtracking resolver). The one real observable is the
+  `actions.py:3772` `--autounmask-continue has been disabled by
+  --autounmask=n` warning.
+  Remaining: `--quickpkg-direct` (genuinely bigger — needs a cross-root
+  build + synthesizing binary candidates from another root's vdb; not a
+  modifier-flag-sized slice).
 
 ### G. Shell backend
 

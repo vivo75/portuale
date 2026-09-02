@@ -7805,8 +7805,9 @@ _VALUE_OPTIONS = [
     # in the parse loop, not via this "not implemented" table (mirrors
     # emerge_options.rs).
     ("--autounmask", None),
-    ("--autounmask-backtrack", None),
-    ("--autounmask-continue", None),
+    # --autounmask-continue / --autounmask-backtrack ARE recognized now --
+    # inert in this --pretend pilot except the actions.py:3772 warning
+    # (mirrors emerge_options.rs / pretend.rs).
     ("--autounmask-license", None),
     ("--autounmask-unrestricted-atoms", None),
     ("--autounmask-use", None),
@@ -11407,6 +11408,10 @@ def run(args):
     # --autounmask-only (real actions.py:456): skip the merge list, show
     # only the display_problems() equivalent, exit 0. Mirrors pretend.rs.
     autounmask_only = False
+    # --autounmask-continue (real true_y_or_n): inert here except the
+    # actions.py:3772 warning. None = not given. --autounmask-backtrack
+    # carries no state (validated + discarded). Mirrors pretend.rs.
+    autounmask_continue = None
     usepkg = False
     usepkgonly = False
     getbinpkg = False
@@ -12246,6 +12251,47 @@ def run(args):
                 val = "y"
                 i += 1
             autounmask_only = val in ("y", "True")
+        elif arg == "--autounmask-continue" or arg.startswith("--autounmask-continue="):
+            # Real true_y_or_n (main.py:345). Inert in this --pretend pilot
+            # except the actions.py:3772 warning below (real
+            # write-and-continue is gated on "--pretend" not in myopts).
+            if arg.startswith("--autounmask-continue="):
+                val = arg[len("--autounmask-continue=") :]
+                i += 1
+            elif i + 1 < len(args) and args[i + 1] in ("y", "n", "True"):
+                val = args[i + 1]
+                i += 2
+            else:
+                val = "y"
+                i += 1
+            autounmask_continue = val in ("y", "True")
+        elif arg == "--autounmask-backtrack":
+            # Real choices: ("y", "n") (main.py:338) -- a REQUIRED value.
+            # No effect in this pilot; the value is validated and discarded.
+            if i + 1 >= len(args):
+                print(
+                    'emerge: option "--autounmask-backtrack" requires an argument',
+                    file=sys.stderr,
+                )
+                return 2
+            if args[i + 1] not in ("y", "n"):
+                print(
+                    f'emerge: option "--autounmask-backtrack": invalid choice: "{args[i + 1]}" '
+                    '(choose from "y", "n")',
+                    file=sys.stderr,
+                )
+                return 2
+            i += 2
+        elif arg.startswith("--autounmask-backtrack="):
+            value = arg[len("--autounmask-backtrack=") :]
+            if value not in ("y", "n"):
+                print(
+                    f'emerge: option "--autounmask-backtrack": invalid choice: "{value}" '
+                    '(choose from "y", "n")',
+                    file=sys.stderr,
+                )
+                return 2
+            i += 1
         elif arg == "--autounmask-keep-keywords":
             # Real "--autounmask-keep-keywords": plain y_or_n, a
             # REQUIRED value -- no bare/optional form real "--autounmask"
@@ -12814,6 +12860,16 @@ def run(args):
             color,
             verbose=verbose,
             lib_check=lib_check,
+        )
+
+    # Real actions.py:3772: --autounmask-continue + --autounmask=n -> a
+    # WARNING, printed on the merge/build path before the depgraph. The
+    # pilot's only observable effect for --autounmask-continue. Mirrors
+    # pretend.rs.
+    if autounmask_continue is not None and autounmask is False:
+        print(
+            f" {color.c('WARN', '*')} --autounmask-continue has been disabled by --autounmask=n",
+            file=sys.stderr,
         )
 
     # The built-in set tokens each expand to their own real atom list, in

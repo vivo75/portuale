@@ -575,6 +575,41 @@ CASES = [
         0,
     ),
     (
+        "--autounmask-continue + --autounmask=n prints the actions.py:3772 warning",
+        ["--pretend", "--autounmask-continue", "--autounmask=n", "dev-libs/newpkg"],
+        0,
+    ),
+    (
+        "--autounmask-continue alone is inert under --pretend",
+        ["--pretend", "--autounmask-continue", "dev-libs/newpkg"],
+        0,
+    ),
+    (
+        "--autounmask-continue=n still trips the --autounmask=n warning (flag was given)",
+        ["--pretend", "--autounmask-continue=n", "--autounmask=n", "dev-libs/newpkg"],
+        0,
+    ),
+    (
+        "--autounmask-backtrack y is recognized and inert",
+        ["--pretend", "--autounmask-backtrack", "y", "dev-libs/newpkg"],
+        0,
+    ),
+    (
+        "--autounmask-backtrack=n inline form",
+        ["--pretend", "--autounmask-backtrack=n", "dev-libs/newpkg"],
+        0,
+    ),
+    (
+        "--autounmask-backtrack rejects a non-y/n value",
+        ["--pretend", "--autounmask-backtrack", "maybe", "dev-libs/newpkg"],
+        2,
+    ),
+    (
+        "--autounmask-backtrack with no argument is a usage error",
+        ["--pretend", "dev-libs/newpkg", "--autounmask-backtrack"],
+        2,
+    ),
+    (
         "--usepkg: a binary-only package is invisible without it",
         ["--pretend", "dev-libs/binaryonlypkg"],
         1,
@@ -2727,6 +2762,46 @@ def test_autounmask_suggests_a_keyword_once_explicitly_enabled(emerge_binary, fi
         "# required by dev-libs/autounmaskkeywordpkg (argument)\n"
         "=dev-libs/autounmaskkeywordpkg-1.0 ~amd64\n"
     )
+
+
+def test_autounmask_continue_and_backtrack_are_inert_under_pretend(
+    emerge_binary, emerge_pretend_python, fixture_env
+):
+    """--autounmask-continue (real true_y_or_n) and --autounmask-backtrack
+    (real y|n) are both inert in this --pretend-only pilot: real portage
+    gates write-and-continue on `"--pretend" not in myopts`
+    (depgraph.py:5796), and the pilot has no backtracking resolver. The
+    one real observable is the actions.py:3772 warning when
+    --autounmask-continue meets --autounmask=n."""
+    plain = ["--pretend", "dev-libs/newpkg"]
+    base = _run([str(emerge_binary)], plain, fixture_env)
+
+    # --autounmask-continue alone / --autounmask-backtrack: no output change.
+    for extra in (
+        ["--autounmask-continue"],
+        ["--autounmask-backtrack", "y"],
+        ["--autounmask-backtrack=n"],
+    ):
+        r = _run([str(emerge_binary)], plain[:1] + extra + plain[1:], fixture_env)
+        assert r.stdout == base.stdout
+        assert r.stderr == base.stderr
+        assert r.stdout == _run(emerge_pretend_python, plain[:1] + extra + plain[1:], fixture_env).stdout
+
+    # --autounmask-continue + --autounmask=n -> the warning on stderr,
+    # merge list unchanged on stdout.
+    warn = _run(
+        [str(emerge_binary)],
+        ["--pretend", "--autounmask-continue", "--autounmask=n", "dev-libs/newpkg"],
+        fixture_env,
+    )
+    assert warn.returncode == 0
+    assert warn.stdout == base.stdout
+    assert "--autounmask-continue has been disabled by --autounmask=n" in warn.stderr
+    assert warn.stderr == _run(
+        emerge_pretend_python,
+        ["--pretend", "--autounmask-continue", "--autounmask=n", "dev-libs/newpkg"],
+        fixture_env,
+    ).stderr
 
 
 def test_autounmask_only_suppresses_the_merge_list(emerge_binary, emerge_pretend_python, fixture_env):

@@ -9378,6 +9378,46 @@ contract test (a Rust unit test is skipped — the flag is a
 process-global that parallel test threads would poison; the
 subprocess-isolated contract tests are the coverage).
 
+### `emerge --autounmask-continue` / `--autounmask-backtrack` (2026-09-02)
+
+Both flags are now *recognized* (they used to hit the
+"recognized-but-unimplemented" abort) and their values validated
+(`--autounmask-continue` is real `true_y_or_n`: bare / `=y` / `=n`;
+`--autounmask-backtrack` is real `choices: ("y", "n")` — a value is
+required, `maybe` is a `choose from "y", "n"` usage error). Both are
+**inert** in this `--pretend`-only pilot, on solid ground:
+
+- `--autounmask-continue`'s "write the changes to config files and keep
+  merging" path is explicitly gated on `"--pretend" not in
+  self._frozen_config.myopts` (`depgraph.py:5796`) — it never runs for
+  any `emerge -p`.
+- `--autounmask-backtrack` only ever flips the
+  `_autounmask_backtrack_disabled` state, whose sole effect is the
+  "backtracking has terminated early due to the above autounmask
+  change(s)" notice (`depgraph.py:11093`). That needs the real
+  backtracking depgraph loop, which this pilot's narrow autounmask v1
+  doesn't have.
+
+The one real observable is `actions.py:3772`: when
+`--autounmask-continue` is given *and* `--autounmask=n`, a warning
+` * --autounmask-continue has been disabled by --autounmask=n` is printed
+to stderr on the merge/build path (before the depgraph), and the run
+otherwise proceeds normally.
+
+```sh
+FX="$(realpath fixtures)"
+run() { PORTAGE_CONFIGROOT="$FX" ROOT="$FX" PORTAGE_RUNNING_ROOT="$FX" \
+    rust/target/release/portuale emerge "$@"; }
+run -p --autounmask-continue --autounmask=n dev-libs/newpkg
+#  * --autounmask-continue has been disabled by --autounmask=n   (stderr)
+# [ebuild  N     ] dev-libs/newpkg-1.0
+run -p --autounmask-backtrack maybe dev-libs/newpkg
+# emerge: option "--autounmask-backtrack": invalid choice: "maybe" (choose from "y", "n")
+```
+
+Mirrored in `emerge_pretend_reference.py`; 7 `CASES` + 1 pinned contract
+test. No fixture (nothing new to resolve).
+
 ### `emerge -pc <atoms> --deselect=n`
 
 Real `action_depclean`: `deselect = myopts.get("--deselect") != "n"`

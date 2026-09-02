@@ -266,8 +266,13 @@ pub const VALUE_OPTIONS: &[(&str, Option<&str>)] = &[
     // pretend.rs's own parse loop + `ask_confirm`). Excluded here for the
     // same reason `--verbose`/`-v` is.
     ("--autounmask", None),
-    ("--autounmask-backtrack", None),
-    ("--autounmask-continue", None),
+    // `--autounmask-continue` (real `true_y_or_n`) and
+    // `--autounmask-backtrack` (real `y|n`) ARE recognized now -- both
+    // inert in this `--pretend`-only pilot (real portage gates
+    // write-and-continue on `"--pretend" not in myopts`, and the pilot
+    // has no backtracking resolver), except the `actions.py:3772`
+    // `--autounmask-continue has been disabled by --autounmask=n`
+    // warning. See pretend.rs.
     // `--autounmask-only` (real `true_y_or_n`, `actions.py:456`) IS
     // implemented -- resolve, show only the `display_problems()`
     // equivalent, exit 0 (see pretend.rs's `autounmask_only` /
