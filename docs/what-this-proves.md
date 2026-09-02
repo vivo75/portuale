@@ -9580,6 +9580,36 @@ New driver in `pretend.rs`'s post-merge loop; 5 `elog` unit tests + 1
 per-package file). No Python-reference change — elog only fires on a real
 merge, which the reference stubs out.
 
+### `elog` on unmerge — `pkg_prerm` / `pkg_postrm` messages (2026-09-02)
+
+Real `dblink.unmerge()` ends with
+`self._elog_process(phasefilter=("prerm", "postrm"))` — so a removed
+package's removal-phase `elog`/`ewarn`/`eerror` reach `echo` /
+`save` / `save_summary` exactly like a merge's. `execute_unmerge`
+(`emerge -C` / `--unmerge` / `--depclean` / `--prune` / `--prune
+--nodeps` / `--clean` / `--rage-clean` — every removal path funnels
+through it) now re-scans each removed package's `${T}/logging/` after
+the removal loop.
+
+The shared code was extracted into `elog::process_batch(logdir,
+root_display, &[(cpv, t_dir)], phases, color)`: `save`/`save_summary`
+run per package immediately, `echo` accumulates and prints once (real
+`mod_echo._finalize`). `phases` is the real `phasefilter` — `None`
+after a merge (every phase), `Some(&["prerm", "postrm"])` for an
+unmerge, so the never-cleaned builddir's stale install-time logs don't
+resurface on removal. The post-merge loop was refactored onto the same
+helper. `--getbinpkg`/`--getbinpkgonly` merges already fed elog (they
+share the post-merge loop).
+
+`dev-libs/elogrmpkg` (`pkg_prerm` `ewarn`s, `pkg_postrm` `elog`s)
+proves it: `test_emerge_unmerge_processes_prerm_postrm_elog`
+(`test_portuale.py`) seeds it via `ebuild merge`, runs `emerge -C`, and
+asserts the `* Messages for package` echo block and the `summary.log`
+entry. 1 new `elog` unit test (`collect_all_phases` / the phase
+filter). **Cut:** the in-place-replace path's superseded-version
+`pkg_prerm`/`pkg_postrm` elog (`unmerge_replaced_same_slot`, a separate
+caller of `unmerge_one_installed`). No Python-reference change.
+
 ### `emerge` honours config vars from the environment (2026-09-02)
 
 Real `config.regenerate()`'s `env` `USE_ORDER` layer: variables in the

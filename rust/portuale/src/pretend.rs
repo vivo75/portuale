@@ -3320,6 +3320,31 @@ fn execute_unmerge(
             return ExitCode::from(1);
         }
     }
+    // Real `dblink.unmerge()` -> `self._elog_process(phasefilter=("prerm",
+    // "postrm"))`: hand each removed package's `pkg_prerm`/`pkg_postrm`
+    // `elog`/`ewarn`/`eerror` output to the `echo`/`save`/`save_summary`
+    // modules. `${T}` for a removal is `unmerge_one_installed`'s own
+    // `run_phase_from_saved_env` builddir (`<PORTAGE_TMPDIR>/portage/
+    // <cat>/<pf>/temp`), which only ever holds prerm/postrm logs here.
+    let items: Vec<(String, std::path::PathBuf)> = removal_list
+        .iter()
+        .map(|(category, package, version)| {
+            let pf = format!("{package}-{version}");
+            let t_dir = portage_tmpdir
+                .join("portage")
+                .join(category)
+                .join(&pf)
+                .join("temp");
+            (format!("{category}/{pf}"), t_dir)
+        })
+        .collect();
+    crate::elog::process_batch(
+        &crate::elog::logdir(root),
+        &root.display().to_string(),
+        &items,
+        Some(&["prerm", "postrm"]),
+        color,
+    );
     ExitCode::SUCCESS
 }
 
@@ -8317,34 +8342,15 @@ pub fn run(args: &[String]) -> ExitCode {
         //   - `mail` / `mail_summary` -> a one-line "unsupported" notice
         //     (a real SMTP client is out of scope -- see `elog.rs`).
         if !buildpkgonly {
-            let echo = crate::elog::echo_enabled();
-            let save_any =
-                crate::elog::module_enabled("save") || crate::elog::module_enabled("save_summary");
-            let mail_any =
-                crate::elog::module_enabled("mail") || crate::elog::module_enabled("mail_summary");
-            if mail_any {
-                eprintln!(
-                    " {} elog `mail`/`mail_summary` is not supported in this pilot \
-                     (SMTP delivery is out of scope) -- messages still go to \
-                     `echo`/`save`/`save_summary`",
-                    color.c("WARN", "*")
-                );
-            }
-            if echo || save_any {
-                let split_elog = std::env::var("FEATURES")
-                    .unwrap_or_default()
-                    .split_whitespace()
-                    .any(|f| f == "split-elog");
-                let logdir = crate::elog::logdir(&root);
-                let root_str = root.display().to_string();
-                let mut packages = Vec::new();
-                for entry in entries {
+            let items: Vec<(String, std::path::PathBuf)> = entries
+                .iter()
+                .filter_map(|entry| {
                     let version = match &entry.outcome {
                         PretendOutcome::New { version }
                         | PretendOutcome::Reinstall { version, .. } => version.clone(),
                         PretendOutcome::Upgrade { to, .. }
                         | PretendOutcome::Downgrade { to, .. } => to.clone(),
-                        _ => continue,
+                        _ => return None,
                     };
                     let cpv = format!("{}/{}-{version}", entry.category, entry.package);
                     let t_dir = portage_tmpdir
@@ -8352,39 +8358,16 @@ pub fn run(args: &[String]) -> ExitCode {
                         .join(&entry.category)
                         .join(format!("{}-{version}", entry.package))
                         .join("temp");
-                    let all = crate::elog::collect_all(&t_dir);
-                    if all.is_empty() {
-                        continue;
-                    }
-                    if save_any {
-                        match crate::elog::save_modules_process(&logdir, &cpv, &all, split_elog) {
-                            Ok(paths) => {
-                                for p in paths {
-                                    println!(
-                                        "{}Elog messages for {cpv} written to {}",
-                                        color.c("INFO", " * "),
-                                        p.display()
-                                    );
-                                }
-                            }
-                            Err(e) => eprintln!("elog: {e}"),
-                        }
-                    }
-                    if echo {
-                        let messages: Vec<_> = crate::elog::collect(&t_dir);
-                        if !messages.is_empty() {
-                            packages.push(crate::elog::ElogPackage {
-                                cpv,
-                                root: root_str.clone(),
-                                messages,
-                            });
-                        }
-                    }
-                }
-                if echo {
-                    crate::elog::echo_summary(&packages, &color);
-                }
-            }
+                    Some((cpv, t_dir))
+                })
+                .collect();
+            crate::elog::process_batch(
+                &crate::elog::logdir(&root),
+                &root.display().to_string(),
+                &items,
+                None,
+                &color,
+            );
         }
     }
 

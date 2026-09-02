@@ -16,8 +16,11 @@
 //     ON by default (it's in `make.globals`'s `PORTAGE_ELOG_SYSTEM`).
 //
 // The pilot never deletes the builddir, so the driver (`pretend.rs`)
-// re-scans each merged entry's `${T}/logging/` after the merge loop --
-// no message buffer threaded through the merge machinery.
+// re-scans each entry's `${T}/logging/` after the merge loop (and after
+// the `emerge -C`/`--depclean`/`--prune` removal loop, filtered to the
+// `prerm`/`postrm` phases -- real `dblink.unmerge`'s own
+// `_elog_process(phasefilter=...)`) via `process_batch` -- no message
+// buffer threaded through the (un)merge machinery.
 //
 // v1 cuts: `mail` / `mail_summary` / `syslog` / `custom` are NOT ported
 // (a real SMTP client + MIME assembly is not "light"; `mail*` prints a
@@ -160,6 +163,17 @@ pub fn collect_all(t_dir: &Path) -> Vec<ElogMessage> {
     out
 }
 
+/// `collect_all`, restricted to the named phases -- real
+/// `_elog_process(phasefilter=...)`, which `dblink.unmerge()` calls with
+/// `("prerm", "postrm")` so a package's stale install-time `${T}/logging`
+/// files (the pilot never cleans the builddir) don't resurface on removal.
+pub fn collect_all_phases(t_dir: &Path, phases: &[&str]) -> Vec<ElogMessage> {
+    collect_all(t_dir)
+        .into_iter()
+        .filter(|m| phases.contains(&m.phase.as_str()))
+        .collect()
+}
+
 /// `collect_all` filtered to `classes` (real `filter_loglevels`).
 fn filter_by_classes<'a>(
     msgs: &'a [ElogMessage],
@@ -171,11 +185,15 @@ fn filter_by_classes<'a>(
 }
 
 /// `collect_all` filtered by the `echo` module's classes -- the shape
-/// `echo_summary` consumes.
-pub fn collect(t_dir: &Path) -> Vec<ElogMessage> {
+/// `echo_summary` consumes. `phases` optionally restricts which
+/// `${T}/logging/<phase>` files are read (real `phasefilter`).
+pub fn collect(t_dir: &Path, phases: Option<&[&str]>) -> Vec<ElogMessage> {
     let classes = module_classes("echo");
-    collect_all(t_dir)
-        .into_iter()
+    let all = match phases {
+        Some(p) => collect_all_phases(t_dir, p),
+        None => collect_all(t_dir),
+    };
+    all.into_iter()
         .filter(|m| classes.contains("*") || classes.contains(&m.level))
         .collect()
 }
@@ -316,6 +334,86 @@ pub fn save_modules_process(
     Ok(written)
 }
 
+/// Real `elog_process` over a batch of packages that just merged or
+/// unmerged. Each item is `(cpv, t_dir)` where `t_dir` is that package's
+/// `${T}` (`${PORTAGE_BUILDDIR}/temp`). `phases` restricts which
+/// `${T}/logging/<phase>` files are read (real
+/// `_elog_process(phasefilter=...)`): `None` after a merge (every
+/// phase), `Some(&["prerm", "postrm"])` for `dblink.unmerge()`.
+/// `root_display` is the `ROOT` string for the `echo` header (`/` gives
+/// the short form).
+///
+/// The `save` / `save_summary` modules run immediately per package (real
+/// `mod_save.process`), printing the `Elog messages ... written to ...`
+/// line; `echo` is accumulated and printed once at the end (real
+/// `mod_echo._finalize`, an atexit handler). The `mail`/`mail_summary`
+/// "unsupported" notice prints once. A no-op when no module is enabled
+/// or nothing has messages. The pilot never cleans the builddir, so the
+/// caller re-scans `${T}/logging/` here rather than threading a message
+/// buffer through the (un)merge machinery.
+pub fn process_batch(
+    logdir: &Path,
+    root_display: &str,
+    items: &[(String, PathBuf)],
+    phases: Option<&[&str]>,
+    color: &Colorizer,
+) {
+    let echo = echo_enabled();
+    let save_any = module_enabled("save") || module_enabled("save_summary");
+    let mail_any = module_enabled("mail") || module_enabled("mail_summary");
+    if mail_any {
+        eprintln!(
+            " {} elog `mail`/`mail_summary` is not supported in this pilot \
+             (SMTP delivery is out of scope) -- messages still go to \
+             `echo`/`save`/`save_summary`",
+            color.c("WARN", "*")
+        );
+    }
+    if !(echo || save_any) {
+        return;
+    }
+    let split_elog = std::env::var("FEATURES")
+        .unwrap_or_default()
+        .split_whitespace()
+        .any(|f| f == "split-elog");
+    let mut packages = Vec::new();
+    for (cpv, t_dir) in items {
+        if save_any {
+            let all = match phases {
+                Some(p) => collect_all_phases(t_dir, p),
+                None => collect_all(t_dir),
+            };
+            if !all.is_empty() {
+                match save_modules_process(logdir, cpv, &all, split_elog) {
+                    Ok(paths) => {
+                        for p in paths {
+                            println!(
+                                "{}Elog messages for {cpv} written to {}",
+                                color.c("INFO", " * "),
+                                p.display()
+                            );
+                        }
+                    }
+                    Err(e) => eprintln!("elog: {e}"),
+                }
+            }
+        }
+        if echo {
+            let messages = collect(t_dir, phases);
+            if !messages.is_empty() {
+                packages.push(ElogPackage {
+                    cpv: cpv.clone(),
+                    root: root_display.to_string(),
+                    messages,
+                });
+            }
+        }
+    }
+    if echo {
+        echo_summary(&packages, color);
+    }
+}
+
 /// Real `mod_echo._finalize`: the `* Messages for package <cpv>:` block
 /// for every accumulated package, all message types on stdout, each line
 /// `<colour> * </colour><msg>` (`EOutput.e{info,log,warn,error,qawarn}`).
@@ -376,7 +474,7 @@ mod tests {
         )
         .unwrap();
 
-        let msgs = collect(&t);
+        let msgs = collect(&t, None);
         let got: Vec<(&str, &str)> = msgs
             .iter()
             .map(|m| (m.level.as_str(), m.text.as_str()))
@@ -395,7 +493,35 @@ mod tests {
     #[test]
     fn collect_is_empty_when_there_are_no_message_files() {
         let t = tmpdir();
-        assert!(collect(&t).is_empty());
+        assert!(collect(&t, None).is_empty());
+        let _ = std::fs::remove_dir_all(&t);
+    }
+
+    #[test]
+    fn collect_phasefilter_keeps_only_the_named_phases() {
+        // A builddir the pilot never cleaned: install-time logs still
+        // sit next to the removal-time ones. `dblink.unmerge`'s
+        // `phasefilter=("prerm","postrm")` must ignore the install log.
+        let t = tmpdir();
+        std::fs::write(t.join("logging/install"), "LOG built fine\n").unwrap();
+        std::fs::write(t.join("logging/prerm"), "WARN leaving config behind\n").unwrap();
+        std::fs::write(t.join("logging/postrm"), "LOG run revdep-rebuild\n").unwrap();
+
+        let filtered = collect_all_phases(&t, &["prerm", "postrm"]);
+        let got: Vec<(&str, &str)> = filtered
+            .iter()
+            .map(|m| (m.phase.as_str(), m.text.as_str()))
+            .collect();
+        assert_eq!(
+            got,
+            vec![
+                ("prerm", "leaving config behind"),
+                ("postrm", "run revdep-rebuild"),
+            ]
+        );
+        // The echo-filtered variant drops the WARN only if classes say so;
+        // default classes keep it, so both survive here.
+        assert_eq!(collect(&t, Some(&["prerm", "postrm"])).len(), 2);
         let _ = std::fs::remove_dir_all(&t);
     }
 

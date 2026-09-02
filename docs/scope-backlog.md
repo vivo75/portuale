@@ -233,7 +233,17 @@ single-pass BFS can't grow into these incrementally:
   real `<BROOT>/var/log/portage`). **`mail` / `mail_summary`** are out of
   scope (a real SMTP client + MIME assembly is not light) — a one-line
   "unsupported" notice, then skipped. `syslog` / `custom` unported.
-  Remaining: binpkg-merge / unmerge `pkg_*` elog collection.
+  *Shipped 2026-09-02:* **unmerge `pkg_prerm`/`pkg_postrm` elog** — real
+  `dblink.unmerge()`'s `_elog_process(phasefilter=("prerm", "postrm"))`.
+  `execute_unmerge` (`emerge -C` / `--depclean` / `--prune` / `--clean` /
+  `--rage-clean`) re-scans each removed package's `${T}/logging/` via the
+  new shared `elog::process_batch` (a `phases` filter restricts it to
+  `prerm`/`postrm` so stale install-time logs in the never-cleaned
+  builddir don't resurface). The post-merge loop was refactored onto the
+  same helper. `--getbinpkg`/`--getbinpkgonly` merges already fed elog
+  (they share the post-merge loop). Remaining: the in-place-replace
+  path's superseded-version `pkg_prerm`/`pkg_postrm` elog
+  (`unmerge_replaced_same_slot`, not `execute_unmerge`).
 - **`PORTAGE_NICENESS` / `PORTAGE_IONICE_COMMAND`.** *Shipped
   2026-09-01:* `apply_portage_scheduling_policy` (real
   `actions.py::apply_priorities`) renices/ionices this process at startup.

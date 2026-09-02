@@ -867,15 +867,21 @@ not just read this list. What's actually left, grouped by area:
   (`clean_delay_countdown`, tests pin it to 0 via an autouse conftest
   fixture). `PORTAGE_NICENESS`/`PORTAGE_IONICE_COMMAND` also shipped
   (`apply_portage_scheduling_policy`, real `actions.py::apply_priorities`
-  -- renice/ionice this process once at startup). The elog `echo` module also shipped (`elog.rs` /
-  `elog::echo_summary` — real `mod_echo`, default-on, `* Messages for
-  package <cpv>:`; `create_directories` now makes `${T}/logging`).
+  -- renice/ionice this process once at startup). The elog modules
+  shipped in `elog.rs`: `echo` (real `mod_echo`, default-on, `* Messages
+  for package <cpv>:`), `save` + `save_summary` (2026-09-02, real
+  `_combine_logentries` files), and **unmerge `prerm`/`postrm` elog**
+  (2026-09-02 -- real `dblink.unmerge`'s `_elog_process(phasefilter=...)`;
+  `execute_unmerge` + the post-merge loop now share
+  `elog::process_batch`). `mail`/`mail_summary` stay a one-line
+  "unsupported" notice; `create_directories` makes `${T}/logging`.
   `--resume`/`--skipfirst` also shipped (`mtimedb.rs` -- a failed source
   `emerge` writes `mtimedb["resume"]`, `emerge --resume [--skipfirst]`
   replays it). **Part 2.B is now substantially complete.** Remaining
-  odds and ends: `resume_backup` rotation, the elog `save`/`mail`
-  modules, `--ask` for `--config`/`--deselect`,
-  `PORTAGE_SCHEDULING_POLICY`, killing in-flight builds on a hard fail.
+  odds and ends: `resume_backup` rotation, `mail*`/`syslog`/`custom`
+  elog, the in-place-replace path's superseded-version prerm/postrm
+  elog, `--ask` for `--config`/`--deselect`, `PORTAGE_SCHEDULING_POLICY`,
+  killing in-flight builds on a hard fail.
 
 **Depgraph / dry-run**:
 - **`--root-deps` fuller fidelity, remaining half.**

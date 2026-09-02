@@ -1219,6 +1219,55 @@ def test_emerge_elog_save_and_save_summary_write_log_files(emerge_binary, tmp_pa
     ) in summary
 
 
+def test_emerge_unmerge_processes_prerm_postrm_elog(emerge_binary, tmp_path):
+    """Real `dblink.unmerge()` -> `self._elog_process(phasefilter=("prerm",
+    "postrm"))`: the `elog`/`ewarn` a removed package's `pkg_prerm` /
+    `pkg_postrm` emit are echoed (`* Messages for package <cpv>:`) and
+    written to `<logdir>/elog/summary.log`, exactly like a merge --
+    `execute_unmerge` re-scans each removed package's `${T}/logging/`
+    via `elog::process_batch` with a prerm/postrm phase filter."""
+    import re
+    import shutil
+
+    root = tmp_path / "root"
+    shutil.copytree(Path(FIXTURES_ROOT) / "var", root / "var")
+    logdir = tmp_path / "logs"
+    env = dict(os.environ)
+    env["PORTAGE_CONFIGROOT"] = FIXTURES_ROOT
+    env["ROOT"] = str(root)
+    env["DISTDIR"] = str(Path(FIXTURES_ROOT) / "distfiles")
+    env["PORTAGE_TMPDIR"] = str(tmp_path / "pt")
+    env["PORTAGE_LOGDIR"] = str(logdir)
+
+    # Seed an installed 1.0 via a direct `ebuild <file> merge` (full vdb
+    # entry incl. environment.bz2 + <pf>.ebuild, so the removal hooks run).
+    v1 = str(Path(FIXTURES_ROOT) / "repo/dev-libs/elogrmpkg/elogrmpkg-1.0.ebuild")
+    ebuild_link = tmp_path / "ebuild"
+    ebuild_link.symlink_to(Path(emerge_binary).resolve())
+    r1 = subprocess.run(
+        [str(ebuild_link), v1, "merge"], capture_output=True, text=True, check=False, env=env
+    )
+    assert r1.returncode == 0, r1.stderr
+
+    result = subprocess.run(
+        [str(emerge_binary), "-C", "dev-libs/elogrmpkg"],
+        capture_output=True, text=True, check=False, env=env,
+    )
+    assert result.returncode == 0, result.stderr
+    out = result.stdout
+    assert " * Messages for package dev-libs/elogrmpkg-1.0" in out
+    assert " * config files in /etc/elogrmpkg are left behind" in out   # ewarn (prerm)
+    assert " * run revdep-rebuild after removing this package" in out    # elog (postrm)
+
+    summary = (logdir / "elog" / "summary.log").read_text()
+    assert "for package dev-libs/elogrmpkg-1.0:" in summary
+    assert re.search(
+        r"WARN: prerm\nconfig files in /etc/elogrmpkg are left behind\n"
+        r"LOG: postrm\nrun revdep-rebuild after removing this package\n",
+        summary,
+    )
+
+
 def test_emerge_applies_portage_niceness_and_ionice(emerge_binary, fixture_env):
     """Real `_emerge/actions.py::apply_priorities` (via `run_action`):
     `PORTAGE_NICENESS` -> `renice -n <n> <pid>`, `PORTAGE_IONICE_COMMAND`
