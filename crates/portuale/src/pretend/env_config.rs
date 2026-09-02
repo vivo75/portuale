@@ -92,6 +92,197 @@ pub(crate) fn package_options_from_env(
     }
 }
 
+/// Minimal POSIX-shell word splitting for `PORTAGE_IONICE_COMMAND`:
+/// whitespace-separated, with `'...'` / `"..."` quoting and backslash escaping.
+pub(crate) fn shell_split(s: &str) -> Vec<String> {
+    let mut words: Vec<String> = Vec::new();
+    let mut cur = String::new();
+    let mut has_word = false;
+    let mut chars = s.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            c if c.is_whitespace() => {
+                if has_word {
+                    words.push(std::mem::take(&mut cur));
+                    has_word = false;
+                }
+            }
+            '\'' => {
+                has_word = true;
+                for q in chars.by_ref() {
+                    if q == '\'' {
+                        break;
+                    }
+                    cur.push(q);
+                }
+            }
+            '"' => {
+                has_word = true;
+                while let Some(q) = chars.next() {
+                    match q {
+                        '"' => break,
+                        '\\' => match chars.peek() {
+                            Some(&n) if matches!(n, '"' | '\\' | '$' | '`') => {
+                                cur.push(n);
+                                chars.next();
+                            }
+                            _ => cur.push('\\'),
+                        },
+                        _ => cur.push(q),
+                    }
+                }
+            }
+            '\\' => {
+                has_word = true;
+                if let Some(n) = chars.next() {
+                    cur.push(n);
+                }
+            }
+            _ => {
+                has_word = true;
+                cur.push(c);
+            }
+        }
+    }
+    if has_word {
+        words.push(cur);
+    }
+    words
+}
+
+/// `EMERGE_DEFAULT_OPTS`, split and **prepended** to argv, so argv always wins.
+/// Portage: _emerge/main.py, parse_opts second pass
+pub(crate) fn args_with_emerge_defaults(
+    config: &portage_profile::Config,
+    args: &[String],
+) -> Vec<String> {
+    // `--ignore-default-opts` comes from the command line.
+    if args.iter().any(|arg| arg == "--ignore-default-opts") {
+        return args.to_vec();
+    }
+    let mut out = config
+        .other_vars
+        .get("EMERGE_DEFAULT_OPTS")
+        .map(|value| shell_split(value))
+        .unwrap_or_default();
+    out.extend(args.iter().cloned());
+    out
+}
+
+/// Applies `PORTAGE_NICENESS`, `PORTAGE_IONICE_COMMAND` and scheduling policy to
+/// this process for later subprocesses to inherit. Called once, unconditionally.
+/// Portage: _emerge/actions.py, apply_priorities
+///
+/// No forkserver equivalent: `-jN` parallelism is threads, and thread creation
+/// inherits the creator's policy.
+pub(crate) fn apply_portage_scheduling_policy() {
+    let pid = std::process::id().to_string();
+    apply_scheduling_policy();
+    if let Ok(niceness) = std::env::var("PORTAGE_NICENESS") {
+        let niceness = niceness.trim();
+        if !niceness.is_empty() {
+            match std::process::Command::new("renice")
+                .args(["-n", niceness, &pid])
+                .stdout(std::process::Stdio::null())
+                .status()
+            {
+                Err(_) => eprintln!(
+                    " * PORTAGE_NICENESS not applied because the renice command was not found"
+                ),
+                Ok(s) if !s.success() => {
+                    eprintln!(
+                        " * renice command returned {} for main pid {pid}",
+                        s.code().unwrap_or(-1)
+                    );
+                }
+                Ok(_) => {}
+            }
+        }
+    }
+    if let Ok(cmd) = std::env::var("PORTAGE_IONICE_COMMAND") {
+        let parts: Vec<String> = shell_split(&cmd)
+            .into_iter()
+            .map(|p| p.replace("${PID}", &pid).replace("$PID", &pid))
+            .collect();
+        if let Some((prog, args)) = parts.split_first() {
+            match std::process::Command::new(prog).args(args).status() {
+                Err(_) => {} // the kernel probably doesn't support ionice
+                Ok(s) if !s.success() => {
+                    eprintln!(
+                        " * PORTAGE_IONICE_COMMAND returned {} for main pid {pid}",
+                        s.code().unwrap_or(-1)
+                    );
+                    eprintln!(
+                        " * See the make.conf(5) man page for PORTAGE_IONICE_COMMAND usage \
+                         instructions."
+                    );
+                }
+                Ok(_) => {}
+            }
+        }
+    }
+}
+
+/// Maps `PORTAGE_SCHEDULING_POLICY` to `SCHED_*` and applies it. Unknown policy,
+/// out-of-range priority, or syscall failure prints and returns; unset is a no-op.
+/// Portage: _emerge/actions.py, set_scheduling_policy
+pub(crate) fn apply_scheduling_policy() {
+    let Ok(policy_name) = std::env::var("PORTAGE_SCHEDULING_POLICY") else {
+        return;
+    };
+    let policy_name = policy_name.trim();
+    if policy_name.is_empty() {
+        return;
+    }
+    // IDs from linux/sched.h.
+    let policy: libc::c_int = match policy_name {
+        "other" => 0,
+        "fifo" => 1,
+        "round-robin" => 2,
+        "batch" => 3,
+        "idle" => 5,
+        "deadline" => 6,
+        _ => {
+            eprintln!(" * Invalid policy in PORTAGE_SCHEDULING_POLICY.");
+            eprintln!(
+                " * See the make.conf(5) man page for PORTAGE_SCHEDULING_POLICY usage instructions."
+            );
+            return;
+        }
+    };
+    // SAFETY: both take a plain `int` policy and have no memory effects.
+    let min_prio = unsafe { libc::sched_get_priority_min(policy) };
+    let max_prio = unsafe { libc::sched_get_priority_max(policy) };
+    let priority = match std::env::var("PORTAGE_SCHEDULING_PRIORITY") {
+        Ok(p) if !p.trim().is_empty() => match p.trim().parse::<libc::c_int>() {
+            Ok(n) if n >= min_prio && n <= max_prio => n,
+            _ => {
+                eprintln!(" * Invalid priority in PORTAGE_SCHEDULING_PRIORITY.");
+                eprintln!(
+                    " * See the make.conf(5) man page for PORTAGE_SCHEDULING_PRIORITY usage instructions."
+                );
+                return;
+            }
+        },
+        _ => min_prio.max(0),
+    };
+    // Zero-init, then set only `sched_priority` (a plain struct literal does not
+    // compile for musl, whose `sched_param` carries extra SCHED_DEADLINE fields).
+    // SAFETY: all-zeroes is a valid `sched_param` value; `sched_priority`
+    // is overwritten immediately, and `param` outlives the call below.
+    let mut param: libc::sched_param = unsafe { std::mem::zeroed() };
+    param.sched_priority = priority;
+    let pid = std::process::id() as libc::pid_t;
+    // SAFETY: `param` outlives the call; `pid` / `policy` are plain ints.
+    let rc = unsafe { libc::sched_setscheduler(pid, policy, &param) };
+    if rc != 0 {
+        eprintln!(
+            " * Unable to apply PORTAGE_SCHEDULING_POLICY to main pid {pid}: {}",
+            std::io::Error::last_os_error()
+        );
+    }
+}
+
 /// `INSTALL_MASK` folded with the `no{man,info,doc}` tokens; non-empty process env
 /// wins, else the resolved config. Empty-blanking-the-config is an unhandled corner.
 /// Portage: bin/misc-functions.sh, preinst_mask

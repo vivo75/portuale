@@ -427,6 +427,34 @@ fn effective_use_flags_env_use_is_the_highest_tier_and_beats_user_package_use() 
 }
 
 #[test]
+fn effective_use_flags_envd_is_the_lowest_tier() {
+    // env.d is the lowest tier: anything higher overrides it.
+    let euf = |envd: &[String], repo_pu: &[(String, Vec<String>)]| {
+        let cfg = portage_profile::Config {
+            package_use_repo: repo_pu.to_vec(),
+            accept_keywords: HashSet::from(["amd64".to_string()]),
+            envd_use_tokens: envd.to_vec(),
+            ..Default::default()
+        };
+        effective_use_flags(EffectiveUseFlagsArgs {
+            config: &cfg,
+            iuse: "foo bar",
+            keywords: &["amd64".to_string()],
+            candidate_str: "dev-libs/pkg-1.0:0/0::testrepo",
+            category: "dev-libs",
+            package: "pkg",
+        })
+    };
+    // env.d `USE="foo bar"` with nothing else -> both on.
+    let both = euf(&["foo bar".to_string()], &[]);
+    assert!(both.contains("foo") && both.contains("bar"));
+    // a repo `package.use -foo` (a higher tier) cancels env.d's `foo`.
+    assert!(!euf(&["foo bar".to_string()], &pu("-foo")).contains("foo"));
+    // ...leaving `bar`, which nothing higher touched.
+    assert!(euf(&["foo bar".to_string()], &pu("-foo")).contains("bar"));
+}
+
+#[test]
 fn effective_use_flags_user_package_use_wins_over_make_conf() {
     // User package.use sits above `conf`.
     let flags = euf_layers(EufLayersArgs {

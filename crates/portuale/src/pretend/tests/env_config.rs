@@ -1,6 +1,23 @@
 use super::*;
 
 #[test]
+fn shell_split_handles_quotes_and_escapes() {
+    assert_eq!(
+        shell_split("ionice -c 3 -p ${PID}"),
+        ["ionice", "-c", "3", "-p", "${PID}"]
+    );
+    assert_eq!(
+        shell_split("/bin/sh -c 'exit 7' x"),
+        ["/bin/sh", "-c", "exit 7", "x"]
+    );
+    assert_eq!(shell_split(r#"a "b c" d"#), ["a", "b c", "d"]);
+    assert_eq!(shell_split(r#"a\ b c"#), ["a b", "c"]);
+    assert_eq!(shell_split("   "), Vec::<String>::new());
+    // An unterminated quote consumes the rest.
+    assert_eq!(shell_split("foo 'bar baz"), ["foo", "bar baz"]);
+}
+
+#[test]
 fn config_bzip2_command_prefers_the_placed_config() {
     // A configured compressor wins; unset or empty falls back to `bzip2`.
     let configured = portage_profile::Config {

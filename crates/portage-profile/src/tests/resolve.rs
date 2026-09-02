@@ -1792,6 +1792,54 @@ fn repo_make_defaults_use_is_read_per_repo_with_var_expansion() {
 }
 
 #[test]
+fn envd_use_tokens_are_read_from_profile_env() {
+    let root = TempDir::new("portage-profile-test-envd").keep();
+    let repo = root.join("repo");
+    let etc = root.join("etc");
+    fs::create_dir_all(repo.join("profiles")).unwrap();
+    fs::create_dir_all(&etc).unwrap();
+    fs::write(repo.join("profiles/repo_name"), "testrepo\n").unwrap();
+
+    // Portage `env-update` output shape: `export` lines, a plain assignment,
+    // and unrelated keys that must be ignored.
+    fs::write(
+        etc.join("profile.env"),
+        "# generated\n\
+         export PATH='/usr/bin'\n\
+         export USE='envdflag -other'\n\
+         LDPATH=/usr/lib\n",
+    )
+    .unwrap();
+
+    let config = resolve_config(ResolveConfigArgs {
+        config_root: &root,
+        main_repo_location: &repo,
+        overlay_repos: &[],
+        repo_aliases: &[],
+        main_repo_name: "testrepo",
+        repo_masters: &HashMap::new(),
+        eroot: &root,
+    })
+    .expect("config must resolve");
+    assert_eq!(config.envd_use_tokens, vec!["envdflag -other".to_string()]);
+
+    // No profile.env -> empty.
+    fs::remove_file(etc.join("profile.env")).unwrap();
+    let config = resolve_config(ResolveConfigArgs {
+        config_root: &root,
+        main_repo_location: &repo,
+        overlay_repos: &[],
+        repo_aliases: &[],
+        main_repo_name: "testrepo",
+        repo_masters: &HashMap::new(),
+        eroot: &root,
+    })
+    .expect("config must resolve");
+    assert!(config.envd_use_tokens.is_empty());
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
 fn package_env_resolves_env_file_use_including_source_and_missing_files() {
     let root = TempDir::new("portage-profile-test-package-env").keep();
     let repo = root.join("repo");
