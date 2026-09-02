@@ -1623,6 +1623,7 @@ pub fn effective_use_flags(
     use_tokens: &[String],
     conf_use_tokens: &[String],
     repo_make_defaults_use: &[String],
+    features_use: &[String],
     package_use_repo: &[(String, Vec<String>)],
     package_use: &[(String, Vec<String>)],
     profile_use_layers: &[portage_profile::ProfileUseLayer],
@@ -1646,9 +1647,9 @@ pub fn effective_use_flags(
     // The per-package `USE_ORDER` walk, low priority -> high (real
     // `regenerate()` over the reversed `uvlist`; see this function's own
     // doc comment for the full grounding). This pilot models, in order:
-    //   repo -> pkginternal -> defaults -> conf -> pkg
-    // then the final `use.force`/`use.mask` step. `env`/`features`/`env.d`
-    // are documented cuts (see `portage_profile`'s module doc comment).
+    //   repo -> features -> pkginternal -> defaults -> conf -> pkg
+    // then the final `use.force`/`use.mask` step. `env`/`env.d` are
+    // documented cuts (see `portage_profile`'s module doc comment).
     let mut use_flags: HashSet<String> = HashSet::new();
 
     // `repo` (real `configdict["repo"]`): the main repo's
@@ -1668,6 +1669,21 @@ pub fn effective_use_flags(
         }
     };
     apply_matching(&mut use_flags, package_use_repo);
+
+    // `features` (real `configdict["features"]["USE"]`, `config.py`
+    // ~2043): `FEATURES=test` appends `test` to this tier, so a package
+    // that declares `test` in IUSE builds with it enabled and its
+    // `test?( )` deps resolve -- the make.conf/env equivalent of
+    // `--with-test-deps` (which only pulls the deps, for top-level atoms,
+    // without enabling the flag). Sits between `repo` and `pkginternal`
+    // in `USE_ORDER`. Only `test` is modelled (real `feature_use` never
+    // holds anything else); `features_use` is `["test"]` or empty,
+    // derived from the pilot's last-wins `FEATURES` scalar. A
+    // use-masked `test` is still dropped by the `use.mask` step below,
+    // exactly as real portage's own `regenerate()` filtering intends.
+    for token in features_use {
+        portage_profile::apply_incremental(token, &mut use_flags);
+    }
 
     // `pkginternal`: only a token with an explicit "+"/"-" marker
     // contributes anything at all -- a markerless IUSE token (no
@@ -2256,6 +2272,7 @@ fn use_flags_if_conditional(
         &config.use_tokens,
         &config.conf_use_tokens,
         &config.repo_make_defaults_use,
+        &config.features_use,
         &config.package_use_repo,
         &config.package_use,
         &config.profile_use_layers,
@@ -3090,6 +3107,7 @@ fn flag_is_settable(
         &config.use_tokens,
         &config.conf_use_tokens,
         &config.repo_make_defaults_use,
+        &config.features_use,
         &config.package_use_repo,
         &config.package_use,
         &config.profile_use_layers,
@@ -5901,6 +5919,7 @@ fn candidate_iuse_and_use(
         &config.use_tokens,
         &config.conf_use_tokens,
         &config.repo_make_defaults_use,
+        &config.features_use,
         &config.package_use_repo,
         &config.package_use,
         &config.profile_use_layers,
@@ -7352,6 +7371,7 @@ pub fn resolve_pretend(
                     &config.use_tokens,
                     &config.conf_use_tokens,
                     &config.repo_make_defaults_use,
+                    &config.features_use,
                     &config.package_use_repo,
                     &config.package_use,
                     &config.profile_use_layers,
@@ -10579,6 +10599,7 @@ pub fn resolve_pretend_graph(
                 &config.use_tokens,
                 &config.conf_use_tokens,
                 &config.repo_make_defaults_use,
+                &config.features_use,
                 &config.package_use_repo,
                 &config.package_use,
                 &config.profile_use_layers,
@@ -11465,6 +11486,7 @@ fn enqueue_dependencies(
             &config.use_tokens,
             &config.conf_use_tokens,
             &config.repo_make_defaults_use,
+            &config.features_use,
             &config.package_use_repo,
             &config.package_use,
             &config.profile_use_layers,
@@ -19937,6 +19959,7 @@ mod tests {
             &[],
             &[],
             &[],
+            &[],
             package_use,
             &[],
             &[],
@@ -20748,6 +20771,7 @@ mod tests {
             use_tokens,
             conf_use_tokens,
             &[],
+            &[],
             package_use_repo,
             package_use,
             &[],
@@ -20796,6 +20820,7 @@ mod tests {
             &[], // use_tokens (fallback -- ignored while layers non-empty)
             &[],
             &[],
+            &[], // features_use
             &[],
             &[], // package_use (fallback)
             &layers,
@@ -20830,6 +20855,7 @@ mod tests {
             &[],
             &[],
             &[],
+            &[],
             &reversed,
             &[],
             &[],
@@ -20859,6 +20885,7 @@ mod tests {
                 &[],
                 &[],
                 repo_md,
+                &[], // features_use
                 repo_pu,
                 &[],
                 &[],
@@ -20886,6 +20913,74 @@ mod tests {
         assert!(!euf("-foo", &["foo".to_string()], &[]).contains("foo"));
         // ...and to a repo package.use entry (also applied after, same tier).
         assert!(!euf("foo", &["foo".to_string()], &pu("-foo")).contains("foo"));
+    }
+
+    #[test]
+    fn effective_use_flags_features_use_enables_test_between_repo_and_pkginternal() {
+        let euf = |iuse: &str, features_use: &[String]| {
+            effective_use_flags(
+                iuse,
+                &[],
+                &[],
+                &[],
+                features_use,
+                &[],
+                &[],
+                &[],
+                &[],
+                &[],
+                &[],
+                &[],
+                &HashSet::new(),
+                &HashSet::new(),
+                &HashSet::new(),
+                &HashSet::new(),
+                &[],
+                &[],
+                &["amd64".to_string()],
+                &HashSet::from(["amd64".to_string()]),
+                &[],
+                "dev-libs/pkg-1.0:0/0::testrepo",
+                "dev-libs",
+                "pkg",
+            )
+        };
+        let test_on = vec!["test".to_string()];
+        // `FEATURES=test` enables `test` for a package that declares it...
+        assert!(euf("test", &test_on).contains("test"));
+        // ...and, being a weaker tier than `pkginternal`, an explicit
+        // IUSE `-test` default (applied right after) still wins.
+        assert!(!euf("-test", &test_on).contains("test"));
+        // No `FEATURES=test` -> nothing added here.
+        assert!(!euf("test", &[]).contains("test"));
+        // A use.mask on `test` drops it even with FEATURES=test.
+        let masked = effective_use_flags(
+            "test",
+            &[],
+            &[],
+            &[],
+            &test_on,
+            &[],
+            &[],
+            &[],
+            &[],
+            &[],
+            &[],
+            &[],
+            &HashSet::new(),
+            &HashSet::from(["test".to_string()]),
+            &HashSet::new(),
+            &HashSet::new(),
+            &[],
+            &[],
+            &["amd64".to_string()],
+            &HashSet::from(["amd64".to_string()]),
+            &[],
+            "dev-libs/pkg-1.0:0/0::testrepo",
+            "dev-libs",
+            "pkg",
+        );
+        assert!(!masked.contains("test"));
     }
 
     #[test]
@@ -20937,6 +21032,7 @@ mod tests {
             &[],
             &["-foo".to_string()],
             &[],
+            &[], // features_use
             &[],
             &[],
             &[],
@@ -20968,6 +21064,7 @@ mod tests {
             &[],
             &[],
             &[],
+            &[], // features_use
             &[],
             &[],
             &[],

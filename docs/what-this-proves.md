@@ -11187,6 +11187,10 @@ does the real walk:
   weakest layer modeled. *(Repo `make.defaults` USE shipped 2026-09-02;
   an overlay's own `profiles/make.defaults` USE stays a cut — the main
   repo implicitly masters every overlay here.)*
+- `Config::features_use` — the `features` tier (real
+  `configdict["features"]["USE"]`): `["test"]` when `FEATURES` names
+  `test`, applied between `repo` and `pkginternal`, so a package with
+  `test` in IUSE resolves with it on. *(Shipped 2026-09-02.)* Then
 - `Config::profile_use_layers` — the `defaults` tier walked **one
   profile chain level at a time** (real `regenerate()` over
   `configdict["defaults"]`): that level's `make.defaults` USE, then that
@@ -11200,11 +11204,19 @@ does the real walk:
 - `Config::package_use_user` — the user-level `/etc/portage/package.use`.
   Strongest layer before the final `use.force`/`use.mask` step.
 
-Still documented cuts: the `env` layer's `$USE` env var, the `features`
-(`FEATURES`-implied USE) and `env.d` layers, and an overlay's own
-`profiles/make.defaults` USE. (`package.env`'s `USE=` shipped
-2026-09-02; its non-`USE` build vars — a build-phase concern, not a USE
-layer — shipped the same day.)
+Still documented cuts: the `env` layer's `$USE` env var, the `env.d`
+layer, and an overlay's own `profiles/make.defaults` USE.
+(`package.env`'s `USE=` shipped 2026-09-02; its non-`USE` build vars —
+a build-phase concern, not a USE layer — the same day; the `features`
+tier — modelled for its one real flag, `FEATURES=test` → `test` —
+also 2026-09-02.)
+
+`dev-libs/featuretestpkg` (`IUSE="test other"`, `RDEPEND="test? (
+dev-libs/newpkg )"`) proves the `features` tier:
+`test_features_test_enables_the_test_use_flag_and_pulls_test_deps`
+(contract suite) runs `emerge -p -v` with `FEATURES=test` → `USE="test
+-other"` and `dev-libs/newpkg` pulled; without it →
+`USE="-other -test"`, no dep. Rust == Python.
 
 `dev-libs/interleavepkg` proves the per-level walk: `profiles/base/
 package.use` (weakest chain level) enables `interleaveflag`, the leaf

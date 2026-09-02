@@ -1336,6 +1336,7 @@ def _use_flags_if_conditional(value_str, candidate, category, package, candidate
         config["use_tokens"],
         config["conf_use_tokens"],
         config["repo_make_defaults_use"],
+        config["features_use"],
         config["package_use_repo"],
         config["package_use"],
         config["profile_use_layers"],
@@ -1993,6 +1994,7 @@ def _flag_is_settable(candidate, category, package, flag, desired, config):
         config["use_tokens"],
         config["conf_use_tokens"],
         config["repo_make_defaults_use"],
+        config["features_use"],
         config["package_use_repo"],
         config["package_use"],
         config["profile_use_layers"],
@@ -2455,6 +2457,7 @@ def effective_use_flags(
     use_tokens,
     conf_use_tokens,
     repo_make_defaults_use,
+    features_use,
     package_use_repo,
     package_use,
     profile_use_layers,
@@ -2504,7 +2507,8 @@ def effective_use_flags(
     Every layer is replayed via _apply_incremental directly -- not a
     pre-flattened set unioned on top (see the `iuse` paragraph below).
     The rest of the env layer ($USE, package.env non-USE vars) and
-    features/env.d are documented cuts. Applied per package,
+    env.d are documented cuts; the features tier is modeled for its one
+    real flag (FEATURES=test -> "test"). Applied per package,
     mirroring portage-repo/src/lib.rs's effective_use_flags exactly.
 
     After the walk:
@@ -2592,6 +2596,13 @@ def effective_use_flags(
     for token in repo_make_defaults_use:
         _apply_incremental(token, use_flags)
     _apply_matching(package_use_repo)
+
+    # features (real configdict["features"]["USE"], config.py ~2043):
+    # FEATURES=test appends "test" here, between repo and pkginternal in
+    # USE_ORDER, so a package that declares test in IUSE resolves with it
+    # enabled. Only "test" is modeled; features_use is ["test"] or [].
+    for token in features_use:
+        _apply_incremental(token, use_flags)
 
     # pkginternal: only a token with an explicit "+"/"-" marker
     # contributes anything at all.
@@ -2827,6 +2838,7 @@ def _reinstall_flags_for_use_change(root, category, package, candidate, config, 
         config["use_tokens"],
         config["conf_use_tokens"],
         config["repo_make_defaults_use"],
+        config["features_use"],
         config["package_use_repo"],
         config["package_use"],
         config["profile_use_layers"],
@@ -3392,6 +3404,7 @@ def _candidate_iuse_and_use(candidate, category, package, config):
         config["use_tokens"],
         config["conf_use_tokens"],
         config["repo_make_defaults_use"],
+        config["features_use"],
         config["package_use_repo"],
         config["package_use"],
         config["profile_use_layers"],
@@ -3922,7 +3935,8 @@ def resolve_config(
     cuts. Returns a dict with keys "use_flags", "use_tokens",
     "conf_use_tokens", "accept_keywords",
     "package_mask", "package_unmask", "package_accept_keywords",
-    "package_use_repo", "repo_make_defaults_use", "package_use",
+    "package_use_repo", "repo_make_defaults_use", "features_use",
+    "package_use",
     "profile_use_layers", "package_env", "package_env_use",
     "package_use_user",
     "system_packages", "package_provided", "use_force",
@@ -4574,6 +4588,11 @@ def resolve_config(
         "package_use_repo": _parse_package_use_lines(repo_use_lines),
         "repo_make_defaults_use": _read_repo_make_defaults_use(
             os.path.join(main_repo_location, "profiles", "make.defaults"), scalars
+        ),
+        "features_use": (
+            ["test"]
+            if "test" in (scalars.get("FEATURES", "").split())
+            else []
         ),
         "package_use": _parse_package_use_lines(profile_use_lines),
         "profile_use_layers": profile_use_layers,
@@ -5599,6 +5618,7 @@ def resolve_pretend(
                 config["use_tokens"],
                 config["conf_use_tokens"],
                 config["repo_make_defaults_use"],
+                config["features_use"],
                 config["package_use_repo"],
                 config["package_use"],
                 config["profile_use_layers"],
@@ -7366,6 +7386,7 @@ def resolve_pretend_graph(
                 config["use_tokens"],
                 config["conf_use_tokens"],
                 config["repo_make_defaults_use"],
+                config["features_use"],
                 config["package_use_repo"],
                 config["package_use"],
                 config["profile_use_layers"],
@@ -8075,6 +8096,7 @@ def _enqueue_dependencies(
             config["use_tokens"],
             config["conf_use_tokens"],
             config["repo_make_defaults_use"],
+            config["features_use"],
             config["package_use_repo"],
             config["package_use"],
             config["profile_use_layers"],

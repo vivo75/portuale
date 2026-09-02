@@ -4770,6 +4770,39 @@ def test_repo_make_defaults_use_enables_a_flag_and_pulls_in_a_dependency(
     ]
 
 
+def test_features_test_enables_the_test_use_flag_and_pulls_test_deps(
+    emerge_binary, emerge_pretend_python, fixture_env
+):
+    """Real `configdict["features"]["USE"]` (config.py ~2043): `FEATURES=test`
+    appends `test` to the `features` USE_ORDER tier (between `repo` and
+    `pkginternal`), so `dev-libs/featuretestpkg` (`IUSE="test other"`,
+    `RDEPEND="test? ( dev-libs/newpkg )"`) resolves with `test` on and
+    pulls `dev-libs/newpkg`. Without `FEATURES=test` it doesn't. Rust ==
+    Python."""
+    with_test = dict(fixture_env)
+    with_test["FEATURES"] = "test"
+    args = ["--pretend", "-v", "dev-libs/featuretestpkg"]
+
+    rust = _run([str(emerge_binary)], args, with_test)
+    py = _run(emerge_pretend_python, args, with_test)
+    assert rust.returncode == 0
+    assert rust.stdout == py.stdout
+    assert rust.stdout.splitlines()[:2] == [
+        "[ebuild  N     ] dev-libs/newpkg-1.0::testrepo ",
+        '[ebuild  N     ] dev-libs/featuretestpkg-1.0::testrepo  '
+        'USE="test -other"',
+    ]
+
+    # No FEATURES=test -> test off, no dep.
+    rust_off = _run([str(emerge_binary)], args, fixture_env)
+    py_off = _run(emerge_pretend_python, args, fixture_env)
+    assert rust_off.stdout == py_off.stdout
+    assert rust_off.stdout.splitlines()[0] == (
+        '[ebuild  N     ] dev-libs/featuretestpkg-1.0::testrepo  '
+        'USE="-other -test"'
+    )
+
+
 def test_package_use_entry_disables_a_globally_enabled_flag_for_one_package(
     emerge_binary, fixture_env
 ):

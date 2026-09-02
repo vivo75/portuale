@@ -374,6 +374,15 @@ pub struct Config {
     /// the gap), consistent with this pilot's minimal `masters`
     /// handling elsewhere.
     pub repo_make_defaults_use: Vec<String>,
+    /// Real `configdict["features"]["USE"]` (`config.py` ~2043): the USE
+    /// flags implied by `FEATURES`. In practice only `test` -- appended
+    /// when `FEATURES` contains `test`, so a package that declares `test`
+    /// in IUSE resolves with it enabled (the make.conf/env equivalent of
+    /// `--with-test-deps`). Applied by `effective_use_flags` between the
+    /// `repo` and `pkginternal` tiers. `["test"]` or empty; the pilot's
+    /// `FEATURES` is a last-wins scalar (`other_vars["FEATURES"]`), a
+    /// documented simplification of real portage's incremental stacking.
+    pub features_use: Vec<String>,
     /// (atom-or-wildcard string, raw USE tokens) pairs from every
     /// **profile** level's own `package.use` (chain order) -- real
     /// `configdict["defaults"]` (`_pkgprofileuse`), as one flat group.
@@ -2224,6 +2233,21 @@ pub fn resolve_config(
     // head of the `repo` layer.
     config.repo_make_defaults_use =
         read_repo_make_defaults_use(&main_repo_location.join("profiles/make.defaults"), &scalars);
+
+    // `configdict["features"]["USE"]` -- real `config.py` appends `test`
+    // to this tier when `FEATURES` names it. The pilot's `FEATURES` is a
+    // last-wins scalar (make.conf / profile `make.defaults` / the `env`
+    // layer, whichever set it last), a documented simplification.
+    let features_has_test = scalars
+        .get("FEATURES")
+        .into_iter()
+        .flat_map(|f| f.split_whitespace())
+        .any(|t| t == "test");
+    config.features_use = if features_has_test {
+        vec!["test".to_string()]
+    } else {
+        Vec::new()
+    };
 
     config.package_use = parse_package_use_lines(&profile_use_lines, false);
     config.package_use_user = parse_package_use_lines(&user_use_lines, true);

@@ -415,8 +415,11 @@ not just read this list. What's actually left, grouped by area:
 > no Python mirror), the main repo's `profiles/make.defaults` USE
 > (`Config::repo_make_defaults_use`, head of the `repo` layer), and the
 > per-profile-level `defaults`-tier walk (`Config::profile_use_layers` /
-> `ProfileUseLayer`). Remaining Part 2.C: `env` `$USE`, the `features`
-> and `env.d` layers, an overlay's own `profiles/make.defaults` USE.
+> `ProfileUseLayer`), and the `features` tier (`Config::features_use` —
+> `FEATURES=test` → `test`, applied between `repo` and `pkginternal`;
+> new `dev-libs/featuretestpkg`, Python-mirrored). Remaining Part 2.C:
+> `env` `$USE`, the `env.d` layer, an overlay's own
+> `profiles/make.defaults` USE.
 > Also recently closed:
 > the **remote binpkg download + merge** (2026-08-31): `emerge
 > --getbinpkgonly <atom>` non-`--pretend` — live `Packages` refresh

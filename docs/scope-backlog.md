@@ -320,9 +320,18 @@ single-pass BFS can't grow into these incrementally:
   mirror. `FEATURES` and other incrementals stay a cut (the pilot
   models `FEATURES` via `feature_enabled`); no per-file `${VAR}` expand
   map (same simplification as the `USE` half).)*
+  *(Shipped 2026-09-02: the **`features` USE tier** — real
+  `configdict["features"]["USE"]` (`config.py` ~2043). `FEATURES=test`
+  appends `test` to a new `Config::features_use` (`["test"]` or empty),
+  applied by `effective_use_flags` between the `repo` and `pkginternal`
+  tiers, so a package with `test` in IUSE resolves with it on and its
+  `test?( )` deps pull (the make.conf/env equivalent of
+  `--with-test-deps`). New `dev-libs/featuretestpkg`; mirrored in the
+  Python reference. Narrowing: only `test` is modelled (real
+  `feature_use` never holds anything else); the pilot's `FEATURES` is a
+  last-wins scalar, a documented simplification.)*
   Still open: `$USE` env var at its real `env` position above `pkg`; the
-  `features` and `env.d` layers; an *overlay's* own
-  `profiles/make.defaults` USE.
+  `env.d` layer; an *overlay's* own `profiles/make.defaults` USE.
 
 ### D. Sandbox / build isolation — **substantially complete (2026-09-01)**
 
@@ -686,13 +695,13 @@ by a few large items rather than a long tail of small ones:
 3. **Config-resolution depth (Part 2.C).** *Now substantially complete:
    the full `repo → pkginternal → defaults → conf → pkg` `USE_ORDER`
    walk (per-profile-level `defaults` interleaving, repo `make.defaults`
-   USE, `package.env` USE, the process-environment `env` layer — all
-   2026-09-01/02); the build-phase env carries the resolved `USE` +
-   compiler/make flags (2026-09-02).* Remaining: `package.env`'s non-USE
-   vars for the phase env / `--info <atom>`, `$USE` at its exact `env`
+   USE, `package.env` USE, the `features` tier (`FEATURES=test`), the
+   process-environment `env` layer — all 2026-09-01/02); the build-phase
+   env carries the resolved `USE` + compiler/make flags + `package.env`'s
+   non-USE vars (2026-09-02).* Remaining: `$USE` at its exact `env`
    position (above user `package.use` rather than folded into `conf`),
-   an overlay's own `profiles/make.defaults` USE, and the `features` /
-   `env.d` layers — a config that leans on those still diverges.
+   an overlay's own `profiles/make.defaults` USE, and the `env.d`
+   layer — a config that leans on those still diverges.
 
 4. **Sandbox enforcement (Part 2.D).** *Substantially complete
    2026-09-01: `sandbox`/`usersandbox` + `network`/`ipc`/`mount`/`pid`-
