@@ -9221,6 +9221,156 @@ Mirrored in `emerge_pretend_reference.py`; 2 `portage-repo` unit tests +
 binary-package sibling) stays recognized-unimplemented — it needs the
 binpkg-ranking path, its own slice.
 
+### `emerge --rebuild-if-{unbuilt,new-rev,new-ver}` + `--rebuild-if-new-slot` / `--rebuild-exclude` / `--rebuild-ignore` (2026-09-02)
+
+Real `_emerge/depgraph.py`'s `_rebuild_config.trigger_rebuilds()`
+(`--rebuild-if-unbuilt` / `--rebuild-if-new-rev` / `--rebuild-if-new-ver`,
+all OFF by default): an already-installed package whose own build-time
+dependency (`DEPEND`/`BDEPEND` in its vdb, flattened against its *built*
+`USE`) is satisfied by a package this run is merging is scheduled for a
+rebuild. `_needs_rebuild(dep_pkg)` — every portuale merge is from source
+(`dep_pkg.built` always false) — so `unbuilt` always fires; `new_rev`
+fires unless the merged `cat/pkg-version` (revision included) is already
+installed; `new_ver` is the same with the `-r<n>` revision stripped. Real
+`main.py:958-975` precedence (`unbuilt` clears rev+ver, `rev` clears ver;
+`=n` disables) is resolved in `pretend.rs`.
+
+New `portage-repo::rebuild_if_entries` — structurally a sibling of the
+existing `slot_operator_rebuild_entries` (same `all_installed_packages`
+scan, same `[ebuild R]` rebuild-entry shape). `resolve_pretend_graph`
+gains six parameters: `rebuild_if_new_slot` (real `y_or_n`, default `y` —
+`=n` now also gates the pre-existing `:=` slot-operator auto-rebuild off,
+like `--ignore-built-slot-operator-deps`), the three `rebuild_if_*`
+bools, and `rebuild_exclude` / `rebuild_ignore` (`--rebuild-exclude
+ATOMS` matches the *parent* — skip rebuilding it; `--rebuild-ignore
+ATOMS` matches the *dep* — it never triggers). 37 call sites updated.
+
+```sh
+FX="$(realpath fixtures)"
+run() { PORTAGE_CONFIGROOT="$FX" ROOT="$FX" PORTAGE_RUNNING_ROOT="$FX" \
+    rust/target/release/portuale emerge "$@"; }
+run --pretend -u --rebuild-if-unbuilt dev-libs/rebuildtrigger
+# [ebuild     U  ] dev-libs/rebuildtrigger-2.0 [1.0]
+# [ebuild   R    ] dev-libs/rebuildconsumer-1.0     <- installed, DEPENDs rebuildtrigger
+
+run --pretend --rebuild-if-new-ver dev-libs/rebuildnochange
+# [ebuild   R    ] dev-libs/rebuildnochange-1.0     <- same version -> consumer NOT rebuilt
+```
+
+New fixtures `dev-libs/rebuild{trigger,consumer}` (a build-dep upgrade)
+and `dev-libs/rebuildnochange{,consumer}` (a same-version re-merge, to
+show `new-ver`/`new-rev` diverge from `unbuilt`). Mirrored in
+`emerge_pretend_reference.py`; 3 `portage-repo` unit tests + 10 `CASES` +
+1 pinned contract test. `--rebuild-if-new-slot`'s deeper real behavior
+(recording removable old slots for `--depclean`) beyond enabling/gating
+the existing `:=` pass stays a documented cut.
+
+### `emerge --dynamic-deps` / `--dynamic-deps=n` (2026-09-02)
+
+Real `create_depgraph_params.py:116-123` (`--dynamic-deps`, ON by default
+for a source install; `--nodeps` forces it off): when an
+`AlreadyInstalled` package's dependencies are walked under `--deep`, its
+**current ebuild** metadata is used (portuale's own long-standing
+behaviour — `enqueue_dependencies` always read `metadata/md5-cache`).
+`--dynamic-deps=n` reads the package's own vdb-recorded `*DEPEND`
+snapshot instead, flattened against its built (`vdb/USE`) flags — real
+portage's installed-time metadata. `enqueue_dependencies` gained `root:
+&Path` + `dynamic_deps: bool`; `resolve_pretend_graph` gained the
+`dynamic_deps` parameter (39 call sites), and `pretend.rs` applies the
+real `dynamic_deps && !nodeps`.
+
+```sh
+FX="$(realpath fixtures)"
+run() { PORTAGE_CONFIGROOT="$FX" ROOT="$FX" PORTAGE_RUNNING_ROOT="$FX" \
+    rust/target/release/portuale emerge "$@"; }
+# changeddepspkg: current ebuild RDEPENDs dev-libs/newpkg; vdb RDEPEND is
+# dev-libs/samepkg (installed).
+run --pretend -D --noreplace dev-libs/changeddepspkg
+# [ebuild  N     ] dev-libs/newpkg-1.0            <- current ebuild's dep
+#   (changeddepspkg itself: already installed, omitted from the merge list)
+run --pretend -D --noreplace --dynamic-deps=n dev-libs/changeddepspkg
+#   (no output: vdb dep (samepkg) already there, changeddepspkg already installed)
+```
+
+Reuses the existing `dev-libs/changeddepspkg` fixture (the `--changed-deps`
+one — vdb `RDEPEND` deliberately differs from its ebuild). Mirrored in
+`emerge_pretend_reference.py`; 1 `portage-repo` unit test + 4 `CASES` +
+1 pinned contract test. `--complete-graph[-if-*]` (the broader
+"account for every installed package's deps" mode) stays its own,
+higher-churn slice.
+
+### `emerge --misspell-suggestions` (2026-09-02)
+
+Real `depgraph.py:7034-7066` + `dbapi/_similar_name_search.py`
+(`--misspell-suggestions`, `y_or_n`, default `y`): when a **top-level**
+atom names a `cat/pkg` that doesn't exist in any repo (real `not
+cp_exists` — an existing-but-masked cp takes the autounmask-note path
+instead), the `there are no ebuilds to satisfy "…"` abort is followed by
+`emerge: searching for similar names...` and `difflib.get_close_matches`
+suggestions over every `cat/pkg` in the tree.
+
+`portuale/src/difflib.rs` gained `get_close_matches(word, possibilities,
+n, cutoff)` — the up-to-`n` entries scoring `ratio(possibility, word) >=
+cutoff`, ordered by real `_nlargest`'s `(score, string)` descending (a
+score tie breaks toward the lexicographically larger name). New
+`pretend.rs::misspell_suggestion_block` runs entirely at the CLI layer
+off the `resolve_pretend_graph` `Err` message — **no new resolver
+parameter** — parsing the quoted atom back out, checking
+`list_candidates` is empty, then emitting `Maybe you meant <X>?` /
+`Maybe you meant any of these: <X>, <Y>?` / ` nothing similar found.`
+exactly as real `writemsg` does. Mirrored in
+`emerge_pretend_reference.py` (its own `difflib.get_close_matches`).
+
+```sh
+FX="$(realpath fixtures)"
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" PORTAGE_RUNNING_ROOT="$FX" \
+    rust/target/release/portuale emerge --pretend dev-libs/newpgk
+# emerge: there are no ebuilds to satisfy "dev-libs/newpgk".
+#
+# emerge: searching for similar names...
+# emerge: Maybe you meant any of these: dev-libs/newpkg, dev-libs/newslotpkg, dev-libs/newrepopkg?
+```
+
+Simplification: the real case-folding round-trip (`cp_lower` /
+`matches_orig_case`) is skipped — every fixture `cat/pkg` is lowercase.
+1 `difflib` unit test + 3 `CASES` + 1 pinned contract test.
+
+### `emerge --package-moves` / `--package-moves=n` (2026-09-02)
+
+Real `main.py:936` (`y_or_n`, default `y`) + `actions.py:3675`: real
+portage gates the disk-rewriting `_global_updates` pass (renames vdb
+dirs, rewrites `world`, updates binpkgs) on `--package-moves != "n"`.
+Portuale never syncs — it applies `profiles/updates/`
+`move`/`slotmove` directives only at *read* time
+(`apply_updates_to_atom` / `_to_dep_string` / `_to_cp` / `_to_slot`,
+`installed_cp_sources`) — so `--package-moves=n` simply turns every one
+of those into a no-op: the resolver sees the pre-move `cat/pkg` names
+throughout.
+
+New `portage_repo::set_package_moves_enabled(bool)` — a process-global
+(`AtomicBool`, env-free, the same "no threading through the resolver's
+40-arg signature" pattern `--color`'s override map uses); `pretend.rs`
+calls it once from `--package-moves[=y|n]` right after option parsing.
+`global_package_updates()` short-circuits to `&[]` when it's off (the
+expensive parse stays cached for the common case).
+
+```sh
+FX="$(realpath fixtures)"
+run() { PORTAGE_CONFIGROOT="$FX" ROOT="$FX" PORTAGE_RUNNING_ROOT="$FX" \
+    rust/target/release/portuale emerge "$@"; }
+# fixture: move dev-libs/oldmovepkg dev-libs/newmovepkg, vdb has oldmovepkg-1.0
+run -p dev-libs/newmovepkg
+# [ebuild   R    ] dev-libs/newmovepkg-1.0        <- the moved installed pkg
+run -p --package-moves=n dev-libs/newmovepkg
+# [ebuild  N     ] dev-libs/newmovepkg-1.0        <- no installed match, fresh N
+run -p --package-moves=n dev-libs/oldmovepkg
+# emerge: there are no ebuilds to satisfy "dev-libs/oldmovepkg".   <- vdb-only name
+```
+
+Reuses the `oldmovepkg`/`newmovepkg` + `slotmovepkg` + `movedepconsumer`
+move fixtures. Mirrored in `emerge_pretend_reference.py`
+(`_package_moves_enabled`); 5 `CASES` + 1 pinned contract test.
+
 ### `emerge -pc <atoms> --deselect=n`
 
 Real `action_depclean`: `deselect = myopts.get("--deselect") != "n"`

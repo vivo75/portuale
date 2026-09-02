@@ -200,6 +200,29 @@ mod tests {
     }
 
     #[test]
+    fn get_close_matches_matches_cpython() {
+        let words: Vec<String> = ["ape", "apple", "peach", "puppy"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        // `get_close_matches("appel", words)` -> `['apple', 'ape']`.
+        assert_eq!(
+            get_close_matches("appel", &words, 3, 0.6),
+            vec!["apple", "ape"]
+        );
+        // Both clear 0.6; newpkg scores higher.
+        let cps: Vec<String> = ["dev-libs/oldpkg", "dev-libs/newpkg"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        assert_eq!(
+            get_close_matches("dev-libs/newpgk", &cps, 3, 0.6),
+            vec!["dev-libs/newpkg", "dev-libs/oldpkg"]
+        );
+        assert!(get_close_matches("zzzzzz", &words, 3, 0.6).is_empty());
+    }
+
+    #[test]
     fn matches_cpython_reference_values() {
         approx(ratio("newpkg", "newpkg"), 1.0);
         approx(ratio("", ""), 1.0);

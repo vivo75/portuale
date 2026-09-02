@@ -350,6 +350,16 @@ fn mk_at(root: &std::path::Path, name: &str, key: &str, dep: &str) {
     std::fs::write(d.join(key), format!("{dep}\n")).unwrap();
 }
 
+/// Arguments of [`graph_rebuild_if`].
+struct GraphRebuildIfArgs<'a> {
+    atom_str: &'a str,
+    unbuilt: bool,
+    new_rev: bool,
+    new_ver: bool,
+    rebuild_exclude: &'a [&'a str],
+    rebuild_ignore: &'a [&'a str],
+}
+
 /// Arguments of [`assert_one_conflict`].
 struct AssertOneConflictArgs<'a> {
     result: &'a GraphResult,

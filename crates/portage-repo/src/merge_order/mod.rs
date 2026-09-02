@@ -52,3 +52,15 @@ pub(crate) fn entry_version(e: &GraphEntry) -> Option<&str> {
         PretendOutcome::NoVisibleCandidate => None,
     }
 }
+
+/// Arguments of [`schedule_graph`].
+struct ScheduleGraphArgs<'a> {
+    entries: &'a [GraphEntry],
+    top_level_atoms: &'a [String],
+    config: &'a portage_profile::Config,
+    root: &'a Path,
+    implicit_system_deps: bool,
+    repos: &'a [RepoConfig],
+    dynamic_deps: bool,
+    circular: &'a HashMap<RootCp, Vec<CircularDepChild>>,
+}

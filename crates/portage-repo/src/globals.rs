@@ -7,6 +7,11 @@ use crate::*;
 // Portage: main.py, actions.py
 pub(crate) static PACKAGE_MOVES_ENABLED: AtomicBool = AtomicBool::new(true);
 
+/// Set by `pretend.rs` from `--package-moves[=y|n]` before any resolution.
+pub fn set_package_moves_enabled(enabled: bool) {
+    PACKAGE_MOVES_ENABLED.store(enabled, AtomicOrdering::Relaxed);
+}
+
 /// `--useoldpkg-atoms ATOMS`: for a matching package, prefer binary candidates over newer
 /// unbuilt ones (only with `--usepkg`/`--getbinpkg`). Process-global, set once by the CLI.
 // Portage: main.py, depgraph.py
