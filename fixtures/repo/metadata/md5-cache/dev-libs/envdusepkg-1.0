@@ -1,0 +1,8 @@
+DEFINED_PHASES=-
+DESCRIPTION=fixture package: /etc/profile.env USE= (configdict[env.d]) enables a flag
+EAPI=8
+IUSE=envdusetestflag other
+KEYWORDS=amd64
+RDEPEND=envdusetestflag? ( dev-libs/newpkg )
+SLOT=0
+_md5_=0000000000000000000000000000000

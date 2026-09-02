@@ -212,6 +212,12 @@ pub fn run_source_merge(
     buildpkg_exclude: &[String],
     jobs: usize,
     load_average: Option<f64>,
+    // Real `Scheduler._background_mode`: redirect each package's build
+    // output to `${T}/build.log` instead of the terminal. Always true for
+    // `jobs` >1 (a `-j` run must not interleave); otherwise driven by
+    // `--quiet-build=y` / `-q`. When set, the single-job path runs the
+    // same captured-build-then-serialized-merge split the scheduler uses.
+    capture_log: bool,
 ) -> Result<(), String> {
     if jobs > 1 {
         return run_build_scheduler(
@@ -229,7 +235,13 @@ pub fn run_source_merge(
     }
     run_merge_loop(entries, keep_going, |entry| {
         let bp = buildpkg.filter(|_| !entry_matches_any(entry, buildpkg_exclude));
-        merge_one_source_entry(entry, repos, root, portage_tmpdir, options, bp)
+        if capture_log && scheduler_needs_build(entry) {
+            let path =
+                build_one_source_entry(entry, repos, root, portage_tmpdir, options, bp, true)?;
+            merge_one_built_entry(entry, &path, root, portage_tmpdir, options)
+        } else {
+            merge_one_source_entry(entry, repos, root, portage_tmpdir, options, bp)
+        }
     })
 }
 
@@ -1146,6 +1158,7 @@ mod tests {
             &[],
             1,
             None,
+            false,
         )
         .expect("source merge succeeds");
 
@@ -1215,6 +1228,7 @@ mod tests {
             &[],
             2,
             None,
+            false,
         )
         .expect("parallel source merge succeeds");
 
@@ -1285,6 +1299,7 @@ mod tests {
             &[],
             2,
             Some(1e9),
+            false,
         )
         .expect("high --load-average must not stall the scheduler");
         for pkg in ["schedleaf-a-1.0", "schedleaf-b-1.0", "schedparent-1.0"] {
@@ -1342,6 +1357,7 @@ mod tests {
             &[],
             2,
             None,
+            false,
         )
         .expect_err("a failed build must make the whole run fail under --keep-going");
         assert!(err.contains("schedbad-1.0"), "{err}");
@@ -1430,6 +1446,7 @@ mod tests {
             &[],
             1,
             None,
+            false,
         )
         .unwrap_err();
         assert!(err.contains("binary package"), "{err}");
@@ -1544,6 +1561,7 @@ mod tests {
             &[],
             1,
             None,
+            false,
         )
         .expect("1.0 merges");
         run_source_merge(
@@ -1563,6 +1581,7 @@ mod tests {
             &[],
             1,
             None,
+            false,
         )
         .expect("2.0 upgrade merges");
 

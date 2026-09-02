@@ -1937,6 +1937,7 @@ fn blocked_installed_packages(
             &keywords,
             &config.accept_keywords,
             &config.package_accept_keywords,
+            &config.envd_use_tokens,
             &candidate_str,
             &env.category,
             &env.split.pn,
@@ -2551,6 +2552,37 @@ pub(crate) fn unmerge_replaced_same_slot(
             None,
         )?;
     }
+
+    // Real `dblink.unmerge()` -> `self._elog_process(phasefilter=("prerm",
+    // "postrm"))`: the superseded version's `pkg_prerm`/`pkg_postrm`
+    // `elog`/`ewarn`/`eerror` output reaches the `echo`/`save`/
+    // `save_summary` modules, exactly as `emerge -C` already does through
+    // `execute_unmerge`. Each old PF's `${T}` is `unmerge_one_installed`'s
+    // own `run_phase_from_saved_env` builddir
+    // (`<PORTAGE_TMPDIR>/portage/<cat>/<pf>/temp`), which here only ever
+    // holds `prerm`/`postrm` logs. Colour is resolved the same way every
+    // non-graph path does (`NO_COLOR` / not-a-tty aware).
+    let items: Vec<(String, PathBuf)> = replaced
+        .iter()
+        .map(|old_pf| {
+            (
+                format!("{category}/{old_pf}"),
+                portage_tmpdir
+                    .join("portage")
+                    .join(category)
+                    .join(old_pf)
+                    .join("temp"),
+            )
+        })
+        .collect();
+    crate::elog::process_batch(
+        &crate::elog::logdir(root),
+        &root.display().to_string(),
+        &items,
+        Some(&["prerm", "postrm"]),
+        &crate::color::Colorizer::new(crate::color::resolve_havecolor(None)),
+    );
+
     Ok(replaced)
 }
 

@@ -931,6 +931,53 @@ def test_emerge_jobs_builds_independent_packages_in_parallel(emerge_binary, tmp_
     ).is_file()
 
 
+def test_emerge_quiet_build_redirects_a_single_job_build_to_the_log(
+    emerge_binary, tmp_path
+):
+    """`--quiet-build[=y|n]` (real `Scheduler._background_mode`): at the
+    default `-j1`, `--quiet-build=y` redirects a package's phase output to
+    `${T}/build.log` instead of the terminal -- the same capture a `-j` >1
+    run always does. Without it (the default) the output streams and no
+    build.log is written. Either way the package builds and merges."""
+    import shutil
+
+    def _root(n):
+        root = tmp_path / f"root{n}"
+        shutil.copytree(Path(FIXTURES_ROOT) / "var", root / "var")
+        env = dict(os.environ)
+        env["PORTAGE_CONFIGROOT"] = FIXTURES_ROOT
+        env["ROOT"] = str(root)
+        env["DISTDIR"] = str(Path(FIXTURES_ROOT) / "distfiles")
+        env["PORTAGE_TMPDIR"] = str(tmp_path / f"pt{n}")
+        return root, env
+
+    log_rel = "portage/dev-libs/packagepkg-1.0/temp/build.log"
+
+    # --quiet-build=y: stdout carries only the pilot's own `>>>` /
+    # `[ebuild` lines; the phase output landed in build.log.
+    root, env = _root(0)
+    r = subprocess.run(
+        [str(emerge_binary), "--quiet-build=y", "dev-libs/packagepkg"],
+        capture_output=True, text=True, check=False, env=env,
+    )
+    assert r.returncode == 0, r.stderr
+    assert ">>> dev-libs/packagepkg-1.0 merged." in r.stdout
+    for line in r.stdout.splitlines():
+        assert line.startswith((">>>", "[ebuild", "[blocks", "[nomerge")), repr(line)
+    log = tmp_path / "pt0" / log_rel
+    assert log.is_file() and log.stat().st_size > 0
+
+    # Default: streamed, no build.log written.
+    root, env = _root(1)
+    r = subprocess.run(
+        [str(emerge_binary), "dev-libs/packagepkg"],
+        capture_output=True, text=True, check=False, env=env,
+    )
+    assert r.returncode == 0, r.stderr
+    assert ">>> dev-libs/packagepkg-1.0 merged." in r.stdout
+    assert not (tmp_path / "pt1" / log_rel).is_file()
+
+
 def test_emerge_jobs_with_load_average_still_builds_everything(emerge_binary, tmp_path):
     """`emerge -j4 --load-average <LA>` (real `main.py` `type=float`): the
     scheduler holds off on an *additional* build while the 1-minute system
@@ -1133,6 +1180,20 @@ def test_emerge_resume_replays_the_saved_mergelist(emerge_binary, tmp_path):
     assert cpvs == ["dev-libs/schedbad-1.0", "dev-libs/schedok-1.0"]
     assert saved["resume"]["favorites"] == ["dev-libs/schedbad", "dev-libs/schedok"]
 
+    # --resume --pretend: show the saved list, merge nothing, leave the
+    # resume list intact (real `_emerge/actions.py`: display + return 0).
+    r = subprocess.run(
+        [str(emerge_binary), "--resume", "--pretend"],
+        capture_output=True, text=True, check=False, env=env,
+    )
+    assert r.returncode == 0, r.stderr
+    assert "dev-libs/schedbad-1.0" in r.stdout
+    assert "dev-libs/schedok-1.0" in r.stdout
+    assert r.stdout.startswith("[ebuild")
+    assert "merged." not in r.stdout
+    assert mtimedb.is_file()
+    assert not (root / "var/db/pkg/dev-libs/schedok-1.0").exists()
+
     # --resume alone: retries schedbad, which fails again; list is re-saved.
     r = subprocess.run(
         [str(emerge_binary), "--resume"],
@@ -1332,6 +1393,59 @@ def test_emerge_unmerge_processes_prerm_postrm_elog(emerge_binary, tmp_path):
     )
 
 
+def test_emerge_upgrade_in_place_processes_the_old_versions_rm_elog(
+    emerge_binary, tmp_path
+):
+    """Real `dblink.unmerge()` runs `_elog_process(phasefilter=("prerm",
+    "postrm"))` for the SUPERSEDED version during an in-place replace too,
+    not just under `emerge -C`. `elogrmpkg-1.0`'s `pkg_prerm`/`pkg_postrm`
+    emit `ewarn`/`elog`; upgrading it to 2.0 (same SLOT) must echo and
+    log those -- `unmerge_replaced_same_slot` now calls `process_batch`
+    after the replace loop."""
+    import re
+    import shutil
+
+    root = tmp_path / "root"
+    shutil.copytree(Path(FIXTURES_ROOT) / "var", root / "var")
+    logdir = tmp_path / "logs"
+    env = dict(os.environ)
+    env["PORTAGE_CONFIGROOT"] = FIXTURES_ROOT
+    env["ROOT"] = str(root)
+    env["DISTDIR"] = str(Path(FIXTURES_ROOT) / "distfiles")
+    env["PORTAGE_TMPDIR"] = str(tmp_path / "pt")
+    env["PORTAGE_LOGDIR"] = str(logdir)
+
+    # Seed an installed 1.0 (full vdb entry so its rm hooks run on replace).
+    v1 = str(Path(FIXTURES_ROOT) / "repo/dev-libs/elogrmpkg/elogrmpkg-1.0.ebuild")
+    ebuild_link = tmp_path / "ebuild"
+    ebuild_link.symlink_to(Path(emerge_binary).resolve())
+    r1 = subprocess.run(
+        [str(ebuild_link), v1, "merge"], capture_output=True, text=True, check=False, env=env
+    )
+    assert r1.returncode == 0, r1.stderr
+
+    result = subprocess.run(
+        [str(emerge_binary), "dev-libs/elogrmpkg"],
+        capture_output=True, text=True, check=False, env=env,
+    )
+    assert result.returncode == 0, result.stderr
+    assert (root / "var/db/pkg/dev-libs/elogrmpkg-2.0/CONTENTS").is_file()
+    assert not (root / "var/db/pkg/dev-libs/elogrmpkg-1.0").exists()
+
+    out = result.stdout
+    assert " * Messages for package dev-libs/elogrmpkg-1.0" in out
+    assert " * config files in /etc/elogrmpkg are left behind" in out   # ewarn (prerm)
+    assert " * run revdep-rebuild after removing this package" in out    # elog (postrm)
+
+    summary = (logdir / "elog" / "summary.log").read_text()
+    assert "for package dev-libs/elogrmpkg-1.0:" in summary
+    assert re.search(
+        r"WARN: prerm\nconfig files in /etc/elogrmpkg are left behind\n"
+        r"LOG: postrm\nrun revdep-rebuild after removing this package\n",
+        summary,
+    )
+
+
 def test_emerge_applies_portage_niceness_and_ionice(emerge_binary, fixture_env):
     """Real `_emerge/actions.py::apply_priorities` (via `run_action`):
     `PORTAGE_NICENESS` -> `renice -n <n> <pid>`, `PORTAGE_IONICE_COMMAND`
@@ -1362,6 +1476,52 @@ def test_emerge_applies_portage_niceness_and_ionice(emerge_binary, fixture_env):
     assert r.returncode == 0
     assert "PORTAGE_IONICE_COMMAND returned" in r.stderr
     assert "make.conf(5)" in r.stderr
+
+    # PORTAGE_IONICE_COMMAND is shlex-split now (real `shlex.split`): a
+    # quoted argument stays one word rather than splitting on its space.
+    env = dict(clean, PORTAGE_IONICE_COMMAND="/bin/sh -c 'exit 7' ${PID}")
+    r = subprocess.run(base, capture_output=True, text=True, check=False, env=env)
+    assert r.returncode == 0
+    assert "PORTAGE_IONICE_COMMAND returned 7" in r.stderr
+
+
+def test_emerge_applies_portage_scheduling_policy(emerge_binary, fixture_env):
+    """`PORTAGE_SCHEDULING_POLICY` -> real `os.sched_setscheduler` (real
+    `_emerge/actions.py::set_scheduling_policy`). `batch` maps to
+    `SCHED_BATCH`; an unknown name prints the real "Invalid policy" eerror
+    pair. Either way the action still proceeds."""
+    base = [str(emerge_binary), "--pretend", "dev-libs/newpkg"]
+    clean = dict(fixture_env)
+    clean.pop("PORTAGE_SCHEDULING_POLICY", None)
+    clean.pop("PORTAGE_SCHEDULING_PRIORITY", None)
+
+    r = subprocess.run(base, capture_output=True, text=True, check=False, env=clean)
+    assert r.returncode == 0
+    assert "PORTAGE_SCHEDULING_POLICY" not in r.stderr
+
+    # A recognized policy: no "Invalid policy", run proceeds. (A stricter
+    # environment could still fail the syscall with EPERM -- tolerated;
+    # the point is the name was mapped, not rejected.)
+    env = dict(clean, PORTAGE_SCHEDULING_POLICY="batch")
+    r = subprocess.run(base, capture_output=True, text=True, check=False, env=env)
+    assert r.returncode == 0
+    assert "Invalid policy" not in r.stderr
+    assert r.stdout.strip() == "[ebuild  N     ] dev-libs/newpkg-1.0"
+
+    # An unknown policy name -> the real eerror pair, run still proceeds.
+    env = dict(clean, PORTAGE_SCHEDULING_POLICY="turbo")
+    r = subprocess.run(base, capture_output=True, text=True, check=False, env=env)
+    assert r.returncode == 0
+    assert "Invalid policy in PORTAGE_SCHEDULING_POLICY." in r.stderr
+    assert "make.conf(5)" in r.stderr
+    assert r.stdout.strip() == "[ebuild  N     ] dev-libs/newpkg-1.0"
+
+    # An out-of-range PORTAGE_SCHEDULING_PRIORITY -> its own eerror pair.
+    env = dict(clean, PORTAGE_SCHEDULING_POLICY="batch",
+               PORTAGE_SCHEDULING_PRIORITY="999999")
+    r = subprocess.run(base, capture_output=True, text=True, check=False, env=env)
+    assert r.returncode == 0
+    assert "Invalid priority in PORTAGE_SCHEDULING_PRIORITY." in r.stderr
 
 
 def test_emerge_ask_prompts_before_a_real_merge_and_honours_the_answer(

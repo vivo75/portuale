@@ -11834,3 +11834,125 @@ dry-run stub: real phase execution is deferred" (false since task
 #54/#55 — the actionmap phase chain, the standalone phases, and
 `merge`/`qmerge`/`unmerge`/`package`/`config`/`info`/`prerm`/`postrm` all
 run for real) and "`--shell … default: brush`" (the default is `bash`).
+
+### `PORTAGE_SCHEDULING_POLICY` + shlex-split `PORTAGE_IONICE_COMMAND` (2026-09-02)
+
+`apply_portage_scheduling_policy` now also applies
+`PORTAGE_SCHEDULING_POLICY` / `PORTAGE_SCHEDULING_PRIORITY` — real
+`_emerge/actions.py::set_scheduling_policy`, which modern portage
+implements with `os.sched_setscheduler(pid, policy, sched_param(prio))`
+(not the old `chrt` spawn). The pilot maps the policy name to the
+`linux/sched.h` ID (`other`=0, `fifo`=1, `round-robin`=2, `batch`=3,
+`idle`=5, `deadline`=6), resolves the priority
+(`PORTAGE_SCHEDULING_PRIORITY` if set and in
+`[sched_get_priority_min(policy), sched_get_priority_max(policy)]`, else
+the min), and calls `libc::sched_setscheduler` on its own pid. An
+unknown policy name prints the real `* Invalid policy in
+PORTAGE_SCHEDULING_POLICY.` + `* See the make.conf(5) man page …` eerror
+pair; an out-of-range priority prints the `* Invalid priority …` pair; a
+failing syscall (e.g. EPERM for a real-time policy without
+`CAP_SYS_NICE`) prints `* Unable to apply PORTAGE_SCHEDULING_POLICY to
+main pid <pid>: <errno>`. Every failure path still lets the action
+proceed (real `apply_priorities` ignores the return value).
+
+Same pass: `PORTAGE_IONICE_COMMAND` is split with a new `shell_split`
+(real `shlex.split` — quotes + backslash escaping) instead of a plain
+whitespace split, so `ionice … 'arg with spaces' ${PID}` survives. No
+Python-reference mirror (a process concern, not `--pretend` resolution);
+covered by `test_portuale.py`
+(`test_emerge_applies_portage_scheduling_policy`, plus a shlex case
+added to `test_emerge_applies_portage_niceness_and_ionice`) and a
+`shell_split` unit test. `conftest.py` strips the two
+`PORTAGE_SCHEDULING_*` vars for the session.
+
+**Cuts:** only this process gets the policy — real `apply_priorities`
+also applies it to the `multiprocessing` forkserver pid, which this
+pilot has no equivalent of.
+
+### `emerge --quiet-build[=y|n]` (2026-09-02)
+
+`--quiet-build` (real `true_y_or_n`, `_emerge/main.py`) is a real flag
+now. Real `Scheduler._background_mode` runs a package's phases in the
+"background" (output → `${T}/build.log`, not the terminal) when
+`parallel_jobs or ("--quiet" in myopts or --quiet-build == "y")`. The
+pilot already forced capture for `-j >1`; `run_source_merge` gained a
+`capture_log` param, and at `-j1` `--quiet-build=y` (or `-q`) now routes
+each entry through the same `build_one_source_entry` (captured) +
+`merge_one_built_entry` (serialized) split the scheduler uses — so a
+`build.log` is written and stdout stays just the pilot's own
+`>>>`/`[ebuild` lines. `--quiet-build=n` (the default) streams and
+writes no log. Matching real portage, `=n` does **not** disable capture
+under `-j >1` (`parallel_jobs` still forces it).
+
+Recognition dropped from `emerge_options.rs` / the Python reference's
+option tables (no `--pretend` effect → no behavioural mirror, only the
+"not a real unimplemented flag" drop). Added to `emerge --help`'s Build
+scheduling section (pinned). `test_portuale.py`:
+`test_emerge_quiet_build_redirects_a_single_job_build_to_the_log`
+(`--quiet-build=y` → clean stdout + non-empty `build.log`; default →
+streamed, no log).
+
+### `emerge --resume --pretend` prints the saved list (2026-09-02)
+
+Real `_emerge/actions.py` re-resolves `mtimedb["resume"]` into a
+depgraph, `mydepgraph.display(...)`, and `return os.EX_OK` — merging
+nothing. The pilot previously fell through to the normal resolver with
+an empty target list and errored (`exit 2`). Now `run_resume` takes a
+`pretend` flag: it builds the `resume_entry` list as before and, under
+`--pretend`, runs `print_entry_line` for each and returns success,
+leaving the resume list and `world` untouched. Because the pilot's
+resume list records only `cat/pkg-ver` (no re-resolution), every line
+prints `[ebuild N ...]` — a documented divergence from real portage's
+re-derived `N`/`U`/`R` markers, the same limitation the resume *merge*
+already carries. Covered by an added block in
+`test_emerge_resume_replays_the_saved_mergelist` (`test_portuale.py`).
+
+### In-place-replace runs the superseded version's removal-hook elog (2026-09-02)
+
+`emerge -C` (via `execute_unmerge`) already fed each removed package's
+`pkg_prerm`/`pkg_postrm` `elog`/`ewarn` output to the elog modules; an
+*upgrade* (merge new, then unmerge the old same-slot version via
+`unmerge_replaced_same_slot`) did not. `unmerge_replaced_same_slot` —
+shared by the source `emerge <atom>` upgrade path and `merge_binpkg` —
+now calls `elog::process_batch` after its replace loop, once per
+superseded PF, with `phasefilter=("prerm", "postrm")` and a locally
+resolved `Colorizer` (`NO_COLOR` / not-a-tty aware, like every non-graph
+path). So upgrading `dev-libs/elogrmpkg` 1.0→2.0 echoes `* Messages for
+package dev-libs/elogrmpkg-1.0` and appends 1.0's prerm `WARN` + postrm
+`LOG` to `summary.log`, exactly as `emerge -C dev-libs/elogrmpkg` does.
+New `elogrmpkg-2.0` fixture (+ md5-cache); `test_portuale.py`:
+`test_emerge_upgrade_in_place_processes_the_old_versions_rm_elog`.
+Same-call echo-block accumulation stays a documented divergence from
+real `mod_echo._finalize`'s single atexit flush.
+
+### The `env.d` USE tier — Part 2.C complete (2026-09-03)
+
+Real `config.py`'s `configdict["env.d"]["USE"]` comes from
+`<eroot>/etc/profile.env`, which `env-update` regenerates from
+`/etc/env.d/*`. It is the **lowest** `USE_ORDER` tier
+(`env:pkg:conf:defaults:pkginternal:features:repo:env.d`) — everything
+else overrides it. `Config` gained `envd_use_tokens`, read by
+`read_envd_use_tokens` (`_get_env_d`'s `getconfig(..., expand=False)`: an
+optional leading `export ` keyword, then `KEY=value` with quote removal,
+no `${VAR}` expansion). `portage-repo::effective_use_flags` and the
+Python `effective_use_flags` both fold it in first, before the `repo`
+tier, via `apply_incremental`. The pilot reads `profile.env` relative to
+`config_root` rather than a distinct `eroot` — they coincide in every
+tested and typical configuration, the same documented divergence every
+other `config_root`-relative read in that crate carries.
+
+New `fixtures/etc/profile.env` (`export USE='envdusetestflag'`) +
+`dev-libs/envdusepkg` (`IUSE="envdusetestflag other"`,
+`RDEPEND="envdusetestflag? ( dev-libs/newpkg )"`). Contract test
+`test_envd_use_enables_a_flag_and_pulls_in_a_dependency` (Rust ==
+Python), `portage-repo` unit test
+`effective_use_flags_envd_is_the_lowest_tier` (a repo `package.use -foo`
+overrides env.d's `foo`, `bar` survives), `portage-profile` unit test
+`envd_use_tokens_are_read_from_profile_env` (the `export ` shape, and
+missing-file → empty).
+
+**This closes Part 2.C.** The whole real `USE_ORDER` chain —
+`env.d → repo → features → pkginternal → defaults → conf → pkg → env` —
+is modelled, per-profile-level `defaults` interleaving included.
+`/etc/env.d/*` practically never sets `USE`, so in practice this tier is
+almost always empty; it is modelled for completeness.

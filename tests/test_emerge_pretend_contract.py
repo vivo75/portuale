@@ -1003,6 +1003,7 @@ CASES = [
     ("package.use depth: profile-level entry loses to make.conf", ["--pretend", "-v", "dev-libs/profileuseweakpkg"], 0),
     ("package.env: env-file USE= enables a flag, pulling in a dependency", ["--pretend", "dev-libs/penvpkg"], 0),
     ("repo make.defaults: USE= enables a flag, pulling in a dependency", ["--pretend", "-v", "dev-libs/repomakedefaultpkg"], 0),
+    ("env.d: /etc/profile.env USE= enables a flag, pulling in a dependency", ["--pretend", "-v", "dev-libs/envdusepkg"], 0),
     ("profile defaults walk: a leaf make.defaults cancels a parent package.use", ["--pretend", "-v", "dev-libs/interleavepkg"], 0),
     ("blocker: strong (!!) blocker matches an installed package", ["--pretend", "dev-libs/blockerpkg"], 0),
     ("blocker: weak (!) blocker matches another new package in the graph", ["--pretend", "dev-libs/graphblockerparent"], 0),
@@ -4793,6 +4794,28 @@ def test_repo_make_defaults_use_enables_a_flag_and_pulls_in_a_dependency(
     ]
 
 
+def test_envd_use_enables_a_flag_and_pulls_in_a_dependency(
+    emerge_binary, emerge_pretend_python, fixture_env
+):
+    """`fixtures/etc/profile.env` sets `USE='envdusetestflag'` -- real
+    `config.py`'s `configdict["env.d"]["USE"]` (from `/etc/env.d/*` via
+    `env-update`), the LOWEST `USE_ORDER` tier. `dev-libs/envdusepkg`
+    (`IUSE="envdusetestflag other"`,
+    `RDEPEND="envdusetestflag? ( dev-libs/newpkg )"`) resolves with the
+    flag on -- nothing higher touches it -- so `dev-libs/newpkg` is
+    pulled in. Rust == Python."""
+    base = ["--pretend", "-v", "dev-libs/envdusepkg"]
+    rust = _run([str(emerge_binary)], base, fixture_env)
+    py = _run(emerge_pretend_python, base, fixture_env)
+    assert rust.returncode == 0
+    assert rust.stdout == py.stdout
+    assert rust.stdout.splitlines()[:2] == [
+        "[ebuild  N     ] dev-libs/newpkg-1.0::testrepo ",
+        '[ebuild  N     ] dev-libs/envdusepkg-1.0::testrepo  '
+        'USE="envdusetestflag -other"',
+    ]
+
+
 def test_overlay_own_make_defaults_use_enables_a_flag_for_its_packages(
     emerge_binary, emerge_pretend_python, fixture_env
 ):
@@ -6857,6 +6880,7 @@ Build scheduling:
   -l, --load-average N       hold new builds while the load average exceeds N
   -a, --ask[=y|n]            prompt for confirmation before a real merge or removal
       --keep-going           on a build failure, drop that package's dependents and carry on
+      --quiet-build[=y|n]    redirect a build's phase output to ${T}/build.log (implied by -j >1 and -q)
 
 Output:
   -p, --pretend             resolve and print the merge list; do nothing

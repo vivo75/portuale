@@ -204,9 +204,13 @@ single-pass BFS can't grow into these incrementally:
   (`run_commands_logged` → `${T}/build.log`, real `PORTAGE_LOG_FILE`;
   captured builds forced onto the `bash` backend) + the `>>> Jobs: X of
   Y complete` status line + build-log tail folded into a failure report.
+  *Shipped 2026-09-02:* `--quiet-build[=y|n]` (real `true_y_or_n`) — at
+  `-j1`, `=y` (or `-q`) routes a build through the same captured-build-
+  then-serialized-merge split the scheduler uses (`build.log` written);
+  `=n` (default) streams. Real `Scheduler._background_mode`: `=n` never
+  *disables* capture under `-j >1`.
   Remaining: the merge step's `pkg_*` hooks still run uncaptured through
-  brush (residual stderr noise); `--quiet-build[=y|n]` isn't a flag yet
-  (capture is `-j >1`-only); one tokio runtime per `run_commands`;
+  brush (residual stderr noise); one tokio runtime per `run_commands`;
   killing in-flight builds on a hard failure; `PORTAGE_LOGDIR` /
   `split-log`.
 - **`--resume` / `--skipfirst`.** *Shipped 2026-09-01:* a failed source
@@ -216,9 +220,14 @@ single-pass BFS can't grow into these incrementally:
   records `--oneshot` / `--onlydeps` (`ResumeOpts`), so `--resume`
   replays with the same world-recording suppression the original run
   had (before, a `--oneshot` failure then `--resume` wrongly added the
-  recovered packages to `world`). Remaining: `resume_backup` rotation;
-  `--resume --pretend` list display; the rest of `myopts` (build-time
-  flags — bundled with binary-entry replay); binary-entry replay.
+  recovered packages to `world`). *Shipped 2026-09-02:* `--resume
+  --pretend` prints the saved list (`print_entry_line` per entry) and
+  stops, touching neither the resume list nor `world` — every line
+  prints `[ebuild N ...]` (the resume list records only `cat/pkg-ver`, no
+  re-resolution; a documented divergence from real portage's re-derived
+  `N`/`U`/`R`). Remaining: `resume_backup` rotation; the rest of `myopts`
+  (build-time flags — bundled with binary-entry replay); binary-entry
+  replay.
 - **`--ask` / interactive prompts.** *Shipped 2026-09-01:* `--ask`/`-a`
   prompts before a real `emerge <atom>` merge and before `-C` /
   `--depclean` / `--prune` removal (`ask_confirm`, exit 130 on No), and
@@ -251,14 +260,26 @@ single-pass BFS can't grow into these incrementally:
   `prerm`/`postrm` so stale install-time logs in the never-cleaned
   builddir don't resurface). The post-merge loop was refactored onto the
   same helper. `--getbinpkg`/`--getbinpkgonly` merges already fed elog
-  (they share the post-merge loop). Remaining: the in-place-replace
-  path's superseded-version `pkg_prerm`/`pkg_postrm` elog
-  (`unmerge_replaced_same_slot`, not `execute_unmerge`).
-- **`PORTAGE_NICENESS` / `PORTAGE_IONICE_COMMAND`.** *Shipped
-  2026-09-01:* `apply_portage_scheduling_policy` (real
-  `actions.py::apply_priorities`) renices/ionices this process at startup.
-  Remaining: `PORTAGE_SCHEDULING_POLICY` (`chrt`); `shlex` quoting for
-  the ionice command.
+  (they share the post-merge loop). *Shipped 2026-09-02:* the
+  **in-place-replace path** too — `unmerge_replaced_same_slot` (shared by
+  the source `emerge <atom>` upgrade path and `merge_binpkg`) calls
+  `elog::process_batch` for every superseded PF after the replace loop,
+  with the `prerm`/`postrm` phase filter, so an upgrade echoes/logs the
+  old version's removal-hook messages just like `emerge -C` does. **Part
+  2.B elog is now complete** except the out-of-scope `mail*` / unported
+  `syslog` / `custom` modules.
+- **`PORTAGE_NICENESS` / `PORTAGE_IONICE_COMMAND` /
+  `PORTAGE_SCHEDULING_POLICY`.** *Shipped 2026-09-01:*
+  `apply_portage_scheduling_policy` (real `actions.py::apply_priorities`)
+  renices/ionices this process at startup. *Shipped 2026-09-02:*
+  `PORTAGE_SCHEDULING_POLICY` / `PORTAGE_SCHEDULING_PRIORITY` (real
+  `set_scheduling_policy` → `os.sched_setscheduler`; the modern
+  syscall path, not the old `chrt`) — name→`SCHED_*` map, default
+  priority `sched_get_priority_min(policy)`, the real "Invalid policy" /
+  "Invalid priority" / "Unable to apply" eerror lines. `PORTAGE_IONICE_COMMAND`
+  is `shlex`-split now (new `shell_split`), not whitespace-split.
+  Remaining: only this process gets the policy (real also does the
+  `forkserver` pid).
 
 ### C. Config resolution depth
 
@@ -353,9 +374,19 @@ single-pass BFS can't grow into these incrementally:
   `USE="-X" emerge foo` overrides a `/etc/portage/package.use foo`
   entry. Mirrored in the Python reference; 1 contract test on
   `dev-libs/packageuseenablepkg`.)*
-  Still open: the `env.d` layer (real `configdict["env.d"]` from
-  `/etc/env.d/*` — practically never carries `USE`, the lowest-value
-  piece of the config-depth remainder).
+  *(Shipped 2026-09-03: the **`env.d` layer** — real `configdict["env.d"]
+  ["USE"]` from `<eroot>/etc/profile.env` (which `env-update` generates
+  from `/etc/env.d/*`), the **lowest** `USE_ORDER` tier. New
+  `Config::envd_use_tokens` (`read_envd_use_tokens`: optional `export `
+  keyword, `KEY=value` with quote removal, `expand=False`);
+  `effective_use_flags` folds it in first, before `repo`, so everything
+  overrides it. Mirrored in the Python reference; new
+  `fixtures/etc/profile.env` + `dev-libs/envdusepkg`; 1 contract test +
+  2 unit tests. Narrowing: read relative to `config_root`, not a
+  distinct `eroot` (they coincide in every tested/typical config).)*
+  **Part 2.C is now complete** — the whole
+  `env.d → repo → features → pkginternal → defaults → conf → pkg → env`
+  chain is modelled.
 
 ### D. Sandbox / build isolation — **substantially complete (2026-09-01)**
 
@@ -722,21 +753,21 @@ by a few large items rather than a long tail of small ones:
    / `CLEAN_DELAY` + `PORTAGE_NICENESS` / `PORTAGE_IONICE_COMMAND` shipped
    + `elog` `echo` module + `--resume`/`--skipfirst` (mtimedb) shipped
    2026-09-01; the elog `save` / `save_summary` modules shipped
-   2026-09-02.* **Part 2.B is now substantially complete** -- remaining:
+   2026-09-02.* `PORTAGE_SCHEDULING_POLICY` + shlex-split
+   `PORTAGE_IONICE_COMMAND` + `--quiet-build[=y|n]` shipped 2026-09-02.
+   **Part 2.B is now substantially complete** -- remaining:
    `resume_backup` rotation, the elog `mail*` modules (out of scope --
-   real SMTP), `PORTAGE_SCHEDULING_POLICY`, killing in-flight builds on a
-   hard fail.
+   real SMTP), killing in-flight builds on a hard fail.
 
-3. **Config-resolution depth (Part 2.C).** *Now substantially complete:
-   the full `repo → features → pkginternal → defaults → conf → pkg →
+3. **Config-resolution depth (Part 2.C). *Complete (2026-09-03).*** The
+   full `env.d → repo → features → pkginternal → defaults → conf → pkg →
    env` `USE_ORDER` walk (per-profile-level `defaults` interleaving,
    repo `make.defaults` USE, `package.env` USE, the `features` tier
    (`FEATURES=test`), `$USE` at its real `env` position above the user
-   `package.use`, and an overlay's own `profiles/make.defaults` USE —
-   all 2026-09-01/02); the build-phase env carries the resolved `USE` +
-   compiler/make flags + `package.env`'s non-USE vars (2026-09-02).*
-   Remaining: the `env.d` layer only — practically never carries `USE`,
-   so a config that leans on it is rare.
+   `package.use`, an overlay's own `profiles/make.defaults` USE, and now
+   the `env.d` tier from `/etc/profile.env`); the build-phase env carries
+   the resolved `USE` + compiler/make flags + `package.env`'s non-USE
+   vars. Nothing material left here.
 
 4. **Sandbox enforcement (Part 2.D).** *Substantially complete
    2026-09-01: `sandbox`/`usersandbox` + `network`/`ipc`/`mount`/`pid`-

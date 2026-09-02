@@ -139,10 +139,10 @@ it decays fast.
 
 **Dry-run (`emerge --pretend`)**: full recursive DEPEND/RDEPEND/BDEPEND/
 PDEPEND/IDEPEND resolution; profile/make.conf-derived USE/ACCEPT_KEYWORDS
-with the real `USE_ORDER` precedence for the `repo`/`features`/
-`pkginternal`/`defaults`/`conf`/`pkg`/`env` layers (`env.d` still cut,
-plus an overlay's own `make.defaults` USE — see scope-backlog.md Part
-2.C); every `package.*` file
+with the real `USE_ORDER` precedence for the full
+`env.d`/`repo`/`features`/`pkginternal`/`defaults`/`conf`/`pkg`/`env`
+layer chain (`env.d` from `/etc/profile.env`, the lowest tier, added
+2026-09-03 — Part 2.C is now complete); every `package.*` file
 (`.mask`/`.unmask`/`.accept_keywords`/`.use`/`.use.mask`/`.use.force`/
 `.use.stable.mask`/`.use.stable.force`), repo-scoped across main **and**
 overlay repos; `package.provided` (a listed CPV satisfies a dependency
@@ -431,8 +431,9 @@ not just read this list. What's actually left, grouped by area:
 > (`Config::repo_make_defaults_use` is now `(repo_name, tokens)` pairs;
 > empty name = main = applies to all, real name = only a candidate from
 > that overlay via `candidate_str`'s `::<repo>`; new
-> `dev-libs/overlaymakedefaultpkg`, Python-mirrored). Remaining Part
-> 2.C: only the `env.d` layer (rarely carries `USE`).
+> `dev-libs/overlaymakedefaultpkg`, Python-mirrored). The **`env.d`**
+> tier (`/etc/profile.env` `USE=`, the lowest `USE_ORDER` layer) closed
+> 2026-09-03 — **Part 2.C is now complete**.
 > Also recently closed:
 > the **remote binpkg download + merge** (2026-08-31): `emerge
 > --getbinpkgonly <atom>` non-`--pretend` — live `Packages` refresh

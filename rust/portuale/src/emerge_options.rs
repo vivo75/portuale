@@ -337,10 +337,11 @@ pub const VALUE_OPTIONS: &[(&str, Option<&str>)] = &[
     // when `--usepkg` + `--quickpkg-direct=y` + target `ROOT` != source
     // root, the source root's installed packages join the binary pool
     // (see `portage_repo::set_quickpkg_direct_root`).
-    // `--quiet`/`-q` (real `true_y_or_n`, verbosity level 1) IS
-    // implemented now -- deliberately excluded here for the same reason
-    // `--verbose`/`-v` is: the caller parses it directly. See pretend.rs.
-    ("--quiet-build", None),
+    // `--quiet`/`-q` (real `true_y_or_n`, verbosity level 1) and
+    // `--quiet-build[=y|n]` (redirect build output to `${T}/build.log`)
+    // are both implemented now -- deliberately excluded here for the same
+    // reason `--verbose`/`-v` is: the caller parses them directly. See
+    // pretend.rs.
     ("--quiet-fail", None),
     ("--read-news", None),
     // `--rebuild-if-new-slot` / `-new-rev` / `-new-ver` / `-unbuilt` ARE

@@ -22,8 +22,8 @@ resolve_config) come from a real profile chain + make.conf + package.*,
 not a hardcoded stand-in -- mirroring rust/portage-profile/src/lib.rs
 exactly (own implementation, not a wrapper around real config.py; see that
 crate's doc comment for the full algorithm and its documented scope cuts:
-the `repo`/`pkginternal`/`defaults`/`conf`/`pkg` USE_ORDER layers are
-modeled (`env`/`features`/`env.d` are not), `masters` (layout.conf repo
+the full `env.d`/`repo`/`features`/`pkginternal`/`defaults`/`conf`/`pkg`/
+`env` USE_ORDER chain is modeled, `masters` (layout.conf repo
 inheritance) still unimplemented, and the real config.py quirk where
 `${VAR}` substitution excludes USE across profile levels). Matching a candidate
 against a package.mask/.unmask/.accept_keywords/.use entry reuses the real
@@ -1354,6 +1354,7 @@ def _use_flags_if_conditional(value_str, candidate, category, package, candidate
         candidate["keywords"],
         config["accept_keywords"],
         config["package_accept_keywords"],
+        config["envd_use_tokens"],
         candidate_str,
         category,
         package,
@@ -2013,6 +2014,7 @@ def _flag_is_settable(candidate, category, package, flag, desired, config):
         candidate["keywords"],
         config["accept_keywords"],
         config["package_accept_keywords"],
+        config["envd_use_tokens"],
         candidate_str,
         category,
         package,
@@ -2477,6 +2479,7 @@ def effective_use_flags(
     keywords,
     accept_keywords,
     package_accept_keywords,
+    envd_use_tokens,
     candidate_str,
     category,
     package,
@@ -2510,12 +2513,16 @@ def effective_use_flags(
          highest tier: USE="-X" emerge foo beats a package.use flag.
          Strongest layer before the final use.force/use.mask step.
 
+    Below all of that, applied first, is `env.d` -- the USE= value in
+    /etc/profile.env (envd_use_tokens), the lowest tier (practically
+    always empty).
+
     Every layer is replayed via _apply_incremental directly -- not a
     pre-flattened set unioned on top (see the `iuse` paragraph below).
-    package.env's non-USE vars and env.d are documented cuts; the
-    features tier is modeled for its one real flag (FEATURES=test ->
-    "test"). Applied per package, mirroring portage-repo/src/lib.rs's
-    effective_use_flags exactly.
+    package.env's non-USE vars are a documented cut; the features tier is
+    modeled for its one real flag (FEATURES=test -> "test"). Applied per
+    package, mirroring portage-repo/src/lib.rs's effective_use_flags
+    exactly.
 
     After the walk:
     THEN package.use.force/package.use.mask layered on top of that (force
@@ -2595,6 +2602,12 @@ def effective_use_flags(
         for entry, tokens in entries:
             if _matches_config_entry(entry, candidate_str, category, package):
                 _apply_incremental(" ".join(tokens), use_flags)
+
+    # env.d (real configdict["env.d"]["USE"], from /etc/profile.env): the
+    # lowest USE_ORDER tier -- everything below overrides it. Practically
+    # always empty. Mirrors portage-repo's effective_use_flags.
+    for token in envd_use_tokens:
+        _apply_incremental(token, use_flags)
 
     # repo (real configdict["repo"]): each repo's own profiles/make.defaults
     # USE (real _repo_make_defaults) first, then every repo's own
@@ -2875,6 +2888,7 @@ def _reinstall_flags_for_use_change(root, category, package, candidate, config, 
         candidate["keywords"],
         config["accept_keywords"],
         config["package_accept_keywords"],
+        config["envd_use_tokens"],
         candidate_str,
         category,
         package,
@@ -3442,6 +3456,7 @@ def _candidate_iuse_and_use(candidate, category, package, config):
         candidate["keywords"],
         config["accept_keywords"],
         config["package_accept_keywords"],
+        config["envd_use_tokens"],
         candidate_str,
         category,
         package,
@@ -3924,6 +3939,29 @@ def _read_repo_make_defaults_use(path, scalars):
     return out
 
 
+def _read_envd_use_tokens(config_root):
+    """Every USE= value from <config_root>/etc/profile.env -- real
+    config.py's configdict["env.d"]["USE"] (getconfig(..., expand=False):
+    an optional leading `export ` keyword, then KEY=value with quote
+    removal, no ${VAR} expansion). The lowest USE_ORDER tier; practically
+    always empty. Mirrors portage-profile/src/lib.rs's
+    read_envd_use_tokens."""
+    path = os.path.join(config_root, "etc", "profile.env")
+    if not os.path.isfile(path):
+        return []
+    with open(path) as f:
+        text = f.read()
+    out = []
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("export "):
+            stripped = stripped[len("export "):]
+        parsed = _parse_kv_line(stripped)
+        if parsed is not None and parsed[0] == "USE":
+            out.append(parsed[1])
+    return out
+
+
 def _env_file_use_tokens(env_dir, name, config_root):
     """The USE= value token(s) of one /etc/portage/env/<name> file, in
     file order -- the only half of a package.env file this slice
@@ -3954,7 +3992,8 @@ def resolve_config(
     portage-profile/src/lib.rs's resolve_config exactly -- see that
     crate's doc comment for the full algorithm and its documented scope
     cuts. Returns a dict with keys "use_flags", "use_tokens",
-    "conf_use_tokens", "env_use_tokens", "accept_keywords",
+    "conf_use_tokens", "env_use_tokens", "envd_use_tokens",
+    "accept_keywords",
     "package_mask", "package_unmask", "package_accept_keywords",
     "package_use_repo", "repo_make_defaults_use", "features_use",
     "package_use",
@@ -4641,6 +4680,7 @@ def resolve_config(
             if "test" in (scalars.get("FEATURES", "").split())
             else []
         ),
+        "envd_use_tokens": _read_envd_use_tokens(config_root),
         "package_use": _parse_package_use_lines(profile_use_lines),
         "profile_use_layers": profile_use_layers,
         "package_env": package_env,
@@ -5683,6 +5723,7 @@ def resolve_pretend(
                 c["keywords"],
                 config["accept_keywords"],
                 config["package_accept_keywords"],
+                config["envd_use_tokens"],
                 candidate_str,
                 category,
                 package,
@@ -7452,6 +7493,7 @@ def resolve_pretend_graph(
                 resolved["keywords"],
                 config["accept_keywords"],
                 config["package_accept_keywords"],
+                config["envd_use_tokens"],
                 candidate_str,
                 category,
                 package,
@@ -8163,6 +8205,7 @@ def _enqueue_dependencies(
             resolved["keywords"],
             config["accept_keywords"],
             config["package_accept_keywords"],
+            config["envd_use_tokens"],
             candidate_str,
             category,
             package,
@@ -8402,10 +8445,11 @@ _VALUE_OPTIONS = [
     # --quickpkg-direct / --quickpkg-direct-root ARE implemented (source
     # root's installed packages join the binary pool -- see
     # _local_binpkg_index / _quickpkg_direct_index_entries).
-    # --quiet/-q (real true_y_or_n, verbosity level 1) IS implemented now
+    # --quiet/-q (real true_y_or_n, verbosity level 1) and --quiet-build
+    # (redirect build output to ${T}/build.log) are both implemented now
     # -- deliberately excluded here for the same reason --verbose/-v is:
-    # the caller parses it directly.
-    ("--quiet-build", None),
+    # the caller parses them directly. (--quiet-build has no --pretend
+    # effect, so no behavioural mirror -- only the recognition drop.)
     ("--quiet-fail", None),
     ("--read-news", None),
     # --rebuild-if-new-slot / -new-rev / -new-ver / -unbuilt ARE
@@ -8888,6 +8932,7 @@ Build scheduling:
   -l, --load-average N       hold new builds while the load average exceeds N
   -a, --ask[=y|n]            prompt for confirmation before a real merge or removal
       --keep-going           on a build failure, drop that package's dependents and carry on
+      --quiet-build[=y|n]    redirect a build's phase output to ${T}/build.log (implied by -j >1 and -q)
 
 Output:
   -p, --pretend             resolve and print the merge list; do nothing

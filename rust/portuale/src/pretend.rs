@@ -1931,6 +1931,7 @@ Build scheduling:
   -l, --load-average N       hold new builds while the load average exceeds N
   -a, --ask[=y|n]            prompt for confirmation before a real merge or removal
       --keep-going           on a build failure, drop that package's dependents and carry on
+      --quiet-build[=y|n]    redirect a build's phase output to ${T}/build.log (implied by -j >1 and -q)
 
 Output:
   -p, --pretend             resolve and print the merge list; do nothing
@@ -3099,9 +3100,72 @@ fn package_options_from_env(shell: ebuild_phases::ShellBackend) -> ebuild_packag
     }
 }
 
+/// Minimal POSIX-shell word splitting for `PORTAGE_IONICE_COMMAND` (real
+/// `shlex.split`): whitespace-separated, with `'...'` / `"..."` quoting
+/// and backslash escaping. Enough for the `ionice -c N -p ${PID}` shapes
+/// this variable ever carries; an unterminated quote just consumes the
+/// rest of the string.
+fn shell_split(s: &str) -> Vec<String> {
+    let mut words: Vec<String> = Vec::new();
+    let mut cur = String::new();
+    let mut has_word = false;
+    let mut chars = s.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            c if c.is_whitespace() => {
+                if has_word {
+                    words.push(std::mem::take(&mut cur));
+                    has_word = false;
+                }
+            }
+            '\'' => {
+                has_word = true;
+                for q in chars.by_ref() {
+                    if q == '\'' {
+                        break;
+                    }
+                    cur.push(q);
+                }
+            }
+            '"' => {
+                has_word = true;
+                while let Some(q) = chars.next() {
+                    match q {
+                        '"' => break,
+                        '\\' => match chars.peek() {
+                            Some(&n) if matches!(n, '"' | '\\' | '$' | '`') => {
+                                cur.push(n);
+                                chars.next();
+                            }
+                            _ => cur.push('\\'),
+                        },
+                        _ => cur.push(q),
+                    }
+                }
+            }
+            '\\' => {
+                has_word = true;
+                if let Some(n) = chars.next() {
+                    cur.push(n);
+                }
+            }
+            _ => {
+                has_word = true;
+                cur.push(c);
+            }
+        }
+    }
+    if has_word {
+        words.push(cur);
+    }
+    words
+}
+
 /// Real `_emerge/actions.py::apply_priorities` (via `run_action`, before
-/// any action): applies `PORTAGE_NICENESS` (`renice -n <n> <pid>`) and
-/// `PORTAGE_IONICE_COMMAND` (`${PID}`-expanded, spawned) to this process,
+/// any action): applies `PORTAGE_NICENESS` (`renice -n <n> <pid>`),
+/// `PORTAGE_IONICE_COMMAND` (`shlex.split`, `${PID}`-expanded, spawned)
+/// and `PORTAGE_SCHEDULING_POLICY` / `PORTAGE_SCHEDULING_PRIORITY` (real
+/// `set_scheduling_policy` -> `os.sched_setscheduler`) to this process,
 /// so every build/merge subprocess it later spawns inherits them. A
 /// missing `renice` prints the real "renice command was not found" line
 /// and gives up; a non-zero exit prints an eerror-style line and
@@ -3109,11 +3173,12 @@ fn package_options_from_env(shell: ebuild_phases::ShellBackend) -> ebuild_packag
 /// is silent (real: "kernel probably doesn't support ionice"). Called
 /// once, unconditionally -- harmless under `--pretend`.
 ///
-/// v1 cuts: `PORTAGE_SCHEDULING_POLICY` (real `set_scheduling_policy` --
-/// `chrt`) is not applied; `PORTAGE_IONICE_COMMAND` is whitespace-split,
-/// no shell quoting (real `shlex.split`).
+/// v1 cuts: only this process gets the policy (real also does the
+/// `forkserver` pid); no Python-reference mirror (a process concern, not
+/// a `--pretend` resolution one -- covered only by `test_portuale.py`).
 fn apply_portage_scheduling_policy() {
     let pid = std::process::id().to_string();
+    apply_scheduling_policy();
     if let Ok(niceness) = std::env::var("PORTAGE_NICENESS") {
         let niceness = niceness.trim();
         if !niceness.is_empty() {
@@ -3136,8 +3201,8 @@ fn apply_portage_scheduling_policy() {
         }
     }
     if let Ok(cmd) = std::env::var("PORTAGE_IONICE_COMMAND") {
-        let parts: Vec<String> = cmd
-            .split_whitespace()
+        let parts: Vec<String> = shell_split(&cmd)
+            .into_iter()
             .map(|p| p.replace("${PID}", &pid).replace("$PID", &pid))
             .collect();
         if let Some((prog, args)) = parts.split_first() {
@@ -3156,6 +3221,68 @@ fn apply_portage_scheduling_policy() {
                 Ok(_) => {}
             }
         }
+    }
+}
+
+/// Real `_emerge/actions.py::set_scheduling_policy`: map
+/// `PORTAGE_SCHEDULING_POLICY` to a `SCHED_*` constant (`linux/sched.h`
+/// IDs), resolve `PORTAGE_SCHEDULING_PRIORITY` (default
+/// `sched_get_priority_min(policy)`), and `sched_setscheduler(2)` this
+/// process. An unknown policy name / out-of-range priority prints the
+/// real eerror pair and returns; a failing syscall (e.g. EPERM for a
+/// real-time policy without `CAP_SYS_NICE`) prints the real
+/// "Unable to apply" line. Unset / empty is a no-op.
+fn apply_scheduling_policy() {
+    let Ok(policy_name) = std::env::var("PORTAGE_SCHEDULING_POLICY") else {
+        return;
+    };
+    let policy_name = policy_name.trim();
+    if policy_name.is_empty() {
+        return;
+    }
+    // IDs sourced from linux/sched.h (real `set_scheduling_policy`).
+    let policy: libc::c_int = match policy_name {
+        "other" => 0,
+        "fifo" => 1,
+        "round-robin" => 2,
+        "batch" => 3,
+        "idle" => 5,
+        "deadline" => 6,
+        _ => {
+            eprintln!(" * Invalid policy in PORTAGE_SCHEDULING_POLICY.");
+            eprintln!(
+                " * See the make.conf(5) man page for PORTAGE_SCHEDULING_POLICY usage instructions."
+            );
+            return;
+        }
+    };
+    // SAFETY: both take a plain `int` policy and have no memory effects.
+    let min_prio = unsafe { libc::sched_get_priority_min(policy) };
+    let max_prio = unsafe { libc::sched_get_priority_max(policy) };
+    let priority = match std::env::var("PORTAGE_SCHEDULING_PRIORITY") {
+        Ok(p) if !p.trim().is_empty() => match p.trim().parse::<libc::c_int>() {
+            Ok(n) if n >= min_prio && n <= max_prio => n,
+            _ => {
+                eprintln!(" * Invalid priority in PORTAGE_SCHEDULING_PRIORITY.");
+                eprintln!(
+                    " * See the make.conf(5) man page for PORTAGE_SCHEDULING_PRIORITY usage instructions."
+                );
+                return;
+            }
+        },
+        _ => min_prio.max(0),
+    };
+    let param = libc::sched_param {
+        sched_priority: priority,
+    };
+    let pid = std::process::id() as libc::pid_t;
+    // SAFETY: `param` outlives the call; `pid` / `policy` are plain ints.
+    let rc = unsafe { libc::sched_setscheduler(pid, policy, &param) };
+    if rc != 0 {
+        eprintln!(
+            " * Unable to apply PORTAGE_SCHEDULING_POLICY to main pid {pid}: {}",
+            std::io::Error::last_os_error()
+        );
     }
 }
 
@@ -3277,20 +3404,26 @@ fn source_entries_not_merged(
     out
 }
 
-/// `emerge --resume [--skipfirst]`: replay `mtimedb["resume"]["mergelist"]`
-/// (real `_emerge/actions.py`'s resume handling). Each saved `cat/pkg-ver`
-/// is built + merged as a source entry, in the recorded order;
-/// `--skipfirst` drops the first (the one that failed). On success the
+/// `emerge --resume [--skipfirst] [--pretend]`: replay
+/// `mtimedb["resume"]["mergelist"]` (real `_emerge/actions.py`'s resume
+/// handling). With `--pretend`, print the saved list and stop (merging
+/// nothing, touching neither the resume list nor `world`). Otherwise
+/// each saved `cat/pkg-ver` is built + merged as a source entry, in the
+/// recorded order; `--skipfirst` drops the first (the one that failed).
+/// On success the
 /// resume list is cleared and the saved `favorites` are recorded in the
 /// world file -- unless the recorded `myopts` carried `--oneshot` /
 /// `--onlydeps`, in which case the same suppression the original run
 /// would have applied is honoured. On another failure the still-unmerged
 /// tail is re-saved with the same `myopts`.
+#[allow(clippy::too_many_arguments)]
 fn run_resume(
     root: &Path,
     config_root: &Path,
     portage_tmpdir: &Path,
     skipfirst: bool,
+    pretend: bool,
+    color_opt: Option<bool>,
     jobs: usize,
     load_average: Option<f64>,
     shell: ebuild_phases::ShellBackend,
@@ -3320,6 +3453,39 @@ fn run_resume(
         .map(|(c, p, v)| emerge_build::resume_entry(c, p, v))
         .collect();
 
+    // `emerge --resume --pretend` (real `_emerge/actions.py`: re-resolve
+    // the resume list, `mydepgraph.display(...)`, `return os.EX_OK`):
+    // show the saved list and stop, merging nothing and touching neither
+    // the resume list nor `world`. The pilot's resume list only records
+    // `cat/pkg-ver` (no re-resolution), so every line prints as
+    // `[ebuild N ...]` -- a documented divergence from real portage's
+    // re-derived `N`/`U`/`R` markers, same limitation the resume merge
+    // itself already carries.
+    if pretend {
+        let color = Colorizer::new(color::resolve_havecolor(color_opt));
+        let mut blocker_lines: Vec<String> = Vec::new();
+        for entry in &entries {
+            print_entry_line(
+                entry,
+                "",
+                &HashSet::new(),
+                false,
+                opts.oneshot,
+                false,
+                false,
+                false,
+                false,
+                0,
+                None,
+                &color,
+                &[],
+                &[],
+                &mut blocker_lines,
+            );
+        }
+        return ExitCode::SUCCESS;
+    }
+
     println!(">>> Resuming merge of {} package(s)...", entries.len());
     let merge_options = ebuild_merge::MergeOptions::from_env(shell, false);
     if let Err(e) = emerge_build::run_source_merge(
@@ -3333,6 +3499,9 @@ fn run_resume(
         &[],
         jobs,
         load_average,
+        // `--resume` carries no `--quiet-build` in `mtimedb["resume"]`
+        // (a documented `myopts` cut) -- stream, unless `-j` >1.
+        false,
     ) {
         let still = source_entries_not_merged(root, &entries);
         let fav_refs: Vec<&str> = favorites.iter().map(String::as_str).collect();
@@ -5539,6 +5708,10 @@ pub fn run(args: &[String]) -> ExitCode {
     // matters on a real (non-`--pretend`) source merge -- see the
     // `!pretend` block below.
     let mut buildpkg_opt: Option<bool> = None;
+    // `--quiet-build[=y|n]` (real `true_y_or_n`): redirect a build's phase
+    // output to `${T}/build.log` instead of the terminal. `None` = not
+    // given. Also implied by `-q`/`--quiet` and (already) by `-j` >1.
+    let mut quiet_build: Option<bool> = None;
     // --buildpkg-exclude: source entries matching one of these atoms are
     // merged but not binpkg'd (real `--buildpkg-exclude`).
     let mut buildpkg_exclude: Vec<String> = Vec::new();
@@ -6508,6 +6681,32 @@ pub fn run(args: &[String]) -> ExitCode {
         } else if arg == "--buildpkg=n" {
             buildpkg_opt = Some(false);
             i += 1;
+        } else if arg == "--quiet-build" {
+            // Real `true_y_or_n` (`main.py`): bare / `y` -> redirect build
+            // output to `${T}/build.log`, `n` -> stream it. Real
+            // `Scheduler._background_mode`: `n` never *disables* capture
+            // under `-j` >1 (`parallel_jobs` still forces it) -- it only
+            // matters for a single-job build.
+            match args.get(i + 1).map(String::as_str) {
+                Some("y") => {
+                    quiet_build = Some(true);
+                    i += 2;
+                }
+                Some("n") => {
+                    quiet_build = Some(false);
+                    i += 2;
+                }
+                _ => {
+                    quiet_build = Some(true);
+                    i += 1;
+                }
+            }
+        } else if arg == "--quiet-build=y" {
+            quiet_build = Some(true);
+            i += 1;
+        } else if arg == "--quiet-build=n" {
+            quiet_build = Some(false);
+            i += 1;
         } else if arg == "--keep-going" {
             keep_going = true;
             i += 1;
@@ -7404,10 +7603,10 @@ pub fn run(args: &[String]) -> ExitCode {
     apply_portage_scheduling_policy();
 
     // `--resume` / `-r`: a standalone action -- replay the saved
-    // `mtimedb["resume"]` mergelist (real `_emerge/actions.py`). No atoms;
-    // `--pretend` is a documented no-op cut here (the pilot doesn't print
-    // the saved list).
-    if resume && !pretend {
+    // `mtimedb["resume"]` mergelist (real `_emerge/actions.py`). No atoms.
+    // `--resume --pretend` prints the saved list and stops (see
+    // `run_resume`).
+    if resume {
         let portage_tmpdir = std::env::var_os("PORTAGE_TMPDIR")
             .map(std::path::PathBuf::from)
             .unwrap_or_else(|| std::path::PathBuf::from("/var/tmp/portage"));
@@ -7416,6 +7615,8 @@ pub fn run(args: &[String]) -> ExitCode {
             &config_root,
             &portage_tmpdir,
             skipfirst,
+            pretend,
+            color_opt,
             jobs,
             load_average,
             shell,
@@ -8403,6 +8604,10 @@ pub fn run(args: &[String]) -> ExitCode {
                 &buildpkg_exclude,
                 jobs,
                 load_average,
+                // Real `Scheduler._background_mode`: capture per-package
+                // build output when `--quiet-build=y` or `-q` is set (a
+                // `-j` >1 run always captures regardless).
+                quiet_build.unwrap_or(false) || quiet,
             ) {
                 // Real `Scheduler._save_resume_list`: on a merge failure,
                 // record every still-unmerged package so `emerge --resume`
@@ -8501,6 +8706,23 @@ mod tests {
 
     fn fixtures_root() -> std::path::PathBuf {
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures")
+    }
+
+    #[test]
+    fn shell_split_handles_quotes_and_escapes() {
+        assert_eq!(
+            shell_split("ionice -c 3 -p ${PID}"),
+            ["ionice", "-c", "3", "-p", "${PID}"]
+        );
+        assert_eq!(
+            shell_split("/bin/sh -c 'exit 7' x"),
+            ["/bin/sh", "-c", "exit 7", "x"]
+        );
+        assert_eq!(shell_split(r#"a "b c" d"#), ["a", "b c", "d"]);
+        assert_eq!(shell_split(r#"a\ b c"#), ["a b", "c"]);
+        assert_eq!(shell_split("   "), Vec::<String>::new());
+        // Unterminated quote: consume the rest.
+        assert_eq!(shell_split("foo 'bar baz"), ["foo", "bar baz"]);
     }
 
     fn world_entry(category: &str, package: &str, slot: &str) -> GraphEntry {

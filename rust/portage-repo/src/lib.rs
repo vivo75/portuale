@@ -1642,6 +1642,7 @@ pub fn effective_use_flags(
     keywords: &[String],
     accept_keywords: &HashSet<String>,
     package_accept_keywords: &[(String, Vec<String>)],
+    envd_use_tokens: &[String],
     candidate_str: &str,
     category: &str,
     package: &str,
@@ -1649,10 +1650,16 @@ pub fn effective_use_flags(
     // The per-package `USE_ORDER` walk, low priority -> high (real
     // `regenerate()` over the reversed `uvlist`; see this function's own
     // doc comment for the full grounding). This pilot models, in order:
-    //   repo -> features -> pkginternal -> defaults -> conf -> pkg -> env
-    // then the final `use.force`/`use.mask` step. `env.d` is a documented
-    // cut (see `portage_profile`'s module doc comment).
+    //   env.d -> repo -> features -> pkginternal -> defaults -> conf -> pkg -> env
+    // then the final `use.force`/`use.mask` step.
     let mut use_flags: HashSet<String> = HashSet::new();
+
+    // `env.d` (real `configdict["env.d"]["USE"]`, from `/etc/profile.env`):
+    // the lowest `USE_ORDER` tier -- everything below overrides it.
+    // Practically always empty. See `Config::envd_use_tokens`.
+    for token in envd_use_tokens {
+        portage_profile::apply_incremental(token, &mut use_flags);
+    }
 
     // `repo` (real `configdict["repo"]`): each repo's own
     // `profiles/make.defaults` USE (real `_repo_make_defaults`) first,
@@ -2310,6 +2317,7 @@ fn use_flags_if_conditional(
         &candidate.keywords,
         &config.accept_keywords,
         &config.package_accept_keywords,
+        &config.envd_use_tokens,
         candidate_str,
         category,
         package,
@@ -3146,6 +3154,7 @@ fn flag_is_settable(
         &candidate.keywords,
         &config.accept_keywords,
         &config.package_accept_keywords,
+        &config.envd_use_tokens,
         &candidate_str,
         category,
         package,
@@ -5959,6 +5968,7 @@ fn candidate_iuse_and_use(
         &candidate.keywords,
         &config.accept_keywords,
         &config.package_accept_keywords,
+        &config.envd_use_tokens,
         &candidate_str,
         category,
         package,
@@ -7412,6 +7422,7 @@ pub fn resolve_pretend(
                     &candidate.keywords,
                     &config.accept_keywords,
                     &config.package_accept_keywords,
+                    &config.envd_use_tokens,
                     &candidate_str,
                     &atom.category,
                     &atom.package,
@@ -10641,6 +10652,7 @@ pub fn resolve_pretend_graph(
                 &keywords,
                 &config.accept_keywords,
                 &config.package_accept_keywords,
+                &config.envd_use_tokens,
                 &candidate_str,
                 &key.0,
                 &key.1,
@@ -11529,6 +11541,7 @@ fn enqueue_dependencies(
             &keywords,
             &config.accept_keywords,
             &config.package_accept_keywords,
+            &config.envd_use_tokens,
             &candidate_str,
             category,
             package,
@@ -20002,6 +20015,7 @@ mod tests {
             keywords,
             accept_keywords,
             package_accept_keywords,
+            &[], // envd_use_tokens
             candidate_str,
             category,
             package,
@@ -20816,6 +20830,7 @@ mod tests {
             &["amd64".to_string()],
             &HashSet::from(["amd64".to_string()]),
             &[],
+            &[], // envd_use_tokens
             "dev-libs/pkg-1.0:0/0::testrepo",
             "dev-libs",
             "pkg",
@@ -20866,6 +20881,7 @@ mod tests {
             &["amd64".to_string()],
             &HashSet::from(["amd64".to_string()]),
             &[],
+            &[], // envd_use_tokens
             "dev-libs/pkg-1.0:0/0::testrepo",
             "dev-libs",
             "pkg",
@@ -20900,6 +20916,7 @@ mod tests {
             &["amd64".to_string()],
             &HashSet::from(["amd64".to_string()]),
             &[],
+            &[], // envd_use_tokens
             "dev-libs/pkg-1.0:0/0::testrepo",
             "dev-libs",
             "pkg",
@@ -20934,6 +20951,7 @@ mod tests {
                     &["amd64".to_string()],
                     &HashSet::from(["amd64".to_string()]),
                     &[],
+                    &[], // envd_use_tokens
                     "dev-libs/pkg-1.0:0/0::testrepo",
                     "dev-libs",
                     "pkg",
@@ -20988,6 +21006,7 @@ mod tests {
                 &["amd64".to_string()],
                 &HashSet::from(["amd64".to_string()]),
                 &[],
+                &[], // envd_use_tokens
                 "dev-libs/pkg-1.0:0/0::testrepo",
                 "dev-libs",
                 "pkg",
@@ -21025,6 +21044,7 @@ mod tests {
             &["amd64".to_string()],
             &HashSet::from(["amd64".to_string()]),
             &[],
+            &[], // envd_use_tokens
             "dev-libs/pkg-1.0:0/0::testrepo",
             "dev-libs",
             "pkg",
@@ -21099,6 +21119,7 @@ mod tests {
             &["amd64".to_string()],
             &HashSet::from(["amd64".to_string()]),
             &[],
+            &[], // envd_use_tokens
             "dev-libs/pkg-1.0:0/0::testrepo",
             "dev-libs",
             "pkg",
@@ -21132,6 +21153,7 @@ mod tests {
             &["amd64".to_string()],
             &HashSet::from(["amd64".to_string()]),
             &[],
+            &[], // envd_use_tokens
             "dev-libs/pkg-1.0:0/0::testrepo",
             "dev-libs",
             "pkg",
@@ -21170,6 +21192,7 @@ mod tests {
                 &["amd64".to_string()],
                 &HashSet::from(["amd64".to_string()]),
                 &[],
+                &[], // envd_use_tokens
                 "dev-libs/pkg-1.0:0/0::testrepo",
                 "dev-libs",
                 "pkg",
@@ -21181,6 +21204,50 @@ mod tests {
         assert!(with_env_use(&["foo".to_string()], &pu("-foo")).contains("foo"));
         // no env tokens -> user package.use stands.
         assert!(with_env_use(&[], &pu("foo")).contains("foo"));
+    }
+
+    #[test]
+    fn effective_use_flags_envd_is_the_lowest_tier() {
+        // Real `configdict["env.d"]` (from `/etc/profile.env`) is the
+        // bottom of `USE_ORDER` -- it enables a flag nothing else touches,
+        // but any higher tier (here a repo `package.use -foo`) overrides.
+        let euf = |envd: &[String], repo_pu: &[(String, Vec<String>)]| {
+            effective_use_flags(
+                "foo bar",
+                &[],
+                &[],
+                &[],
+                &[],
+                repo_pu, // package_use_repo
+                &[],
+                &[],
+                &[],
+                &[],
+                &[],
+                &[],
+                &[],
+                &HashSet::new(),
+                &HashSet::new(),
+                &HashSet::new(),
+                &HashSet::new(),
+                &[],
+                &[],
+                &["amd64".to_string()],
+                &HashSet::from(["amd64".to_string()]),
+                &[],
+                envd,
+                "dev-libs/pkg-1.0:0/0::testrepo",
+                "dev-libs",
+                "pkg",
+            )
+        };
+        // env.d `USE="foo bar"` with nothing else -> both on.
+        let both = euf(&["foo bar".to_string()], &[]);
+        assert!(both.contains("foo") && both.contains("bar"));
+        // a repo `package.use -foo` (a higher tier) cancels env.d's `foo`.
+        assert!(!euf(&["foo bar".to_string()], &pu("-foo")).contains("foo"));
+        // ...leaving `bar`, which nothing higher touched.
+        assert!(euf(&["foo bar".to_string()], &pu("-foo")).contains("bar"));
     }
 
     #[test]

@@ -1,0 +1,6 @@
+DEFINED_PHASES=install
+DESCRIPTION=fixture package: elogrmpkg 2.0, replaces 1.0 in-place so 1.0's pkg_prerm/pkg_postrm elog must fire
+EAPI=8
+KEYWORDS=amd64
+SLOT=0
+_md5_=0000000000000000000000000000000

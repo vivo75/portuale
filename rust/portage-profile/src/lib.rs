@@ -34,15 +34,16 @@
 //     both.
 //   - Real config.py's `USE_ORDER` is
 //     `env:pkg:conf:defaults:pkginternal:features:repo:env.d`. This pilot
-//     now models `repo` (each repo's `make.defaults` USE then repo-level
-//     `package.use`), `features` (`FEATURES=test` -> `test`),
+//     now models the whole chain: `env.d` (`/etc/profile.env`'s `USE=`,
+//     the lowest tier), `repo` (each repo's `make.defaults` USE then
+//     repo-level `package.use`), `features` (`FEATURES=test` -> `test`),
 //     `pkginternal` (the ebuild's own IUSE `+`/`-` defaults), `defaults`
 //     (profile `make.defaults` + profile `package.use`), `conf`
 //     (make.conf), `pkg` (`package.env`'s own `USE=`, then user
 //     `package.use` on top), and `env` (the `$USE` env var, the highest
 //     tier) -- see `Config::package_use{,_repo,_user}` /
-//     `Config::{repo_make_defaults_use,package_env_use,features_use,env_use_tokens}`
-//     and `portage-repo::effective_use_flags`. Still absent: `env.d`.
+//     `Config::{envd_use_tokens,repo_make_defaults_use,package_env_use,features_use,env_use_tokens}`
+//     and `portage-repo::effective_use_flags`.
 //   - No line continuation / multi-line quoted values, and no trailing
 //     `# comment` after a real assignment (a `#` is only recognized as a
 //     comment when it starts the (trimmed) line). Real make.defaults/
@@ -118,8 +119,9 @@
 //     `_repo_make_defaults`) is folded into the `repo` layer too, ahead
 //     of repo `package.use` (`Config::repo_make_defaults_use`) -- the
 //     main repo's applies to every package, an overlay's only to a
-//     candidate from that overlay.
-//     Still not modeled: the `env.d` layer.
+//     candidate from that overlay. The `env.d` layer
+//     (`Config::envd_use_tokens`, from `/etc/profile.env`) is folded in
+//     below everything, as the lowest tier.
 //     Each source is still purely additive within itself (no `-atom`
 //     removal exists for this file -- see `parse_package_use_lines`), and
 //     still applied per package (not globally): a matching entry's tokens
@@ -348,6 +350,18 @@ pub struct Config {
     /// any package with no `package.use` entry; this field makes the
     /// per-package walk agree with it.)
     pub env_use_tokens: Vec<String>,
+    /// Real `configdict["env.d"]["USE"]` -- the **lowest** `USE_ORDER`
+    /// tier (`env:pkg:conf:defaults:pkginternal:features:repo:env.d`),
+    /// from `<eroot>/etc/profile.env` (which `env-update` generates from
+    /// `/etc/env.d/*`). Read `expand=False`, `export ` prefix stripped.
+    /// `effective_use_flags` replays these first, before the `repo` tier,
+    /// so everything else overrides them. The pilot reads `profile.env`
+    /// relative to `config_root` rather than a distinct `eroot` (they
+    /// coincide in every tested and typical configuration -- a documented
+    /// divergence, the same one every other config_root-relative read in
+    /// this crate carries). `/etc/env.d/*` practically never sets `USE`,
+    /// so this is almost always empty.
+    pub envd_use_tokens: Vec<String>,
     pub accept_keywords: HashSet<String>,
     /// Raw atom or bounded-wildcard-atom strings (see
     /// `portage_dep::parse_wildcard_atom`) from `package.mask`, with
@@ -1371,6 +1385,26 @@ fn read_repo_make_defaults_use(path: &Path, scalars: &HashMap<String, String>) -
         .collect()
 }
 
+/// Real `config.py`'s `configdict["env.d"]["USE"]` -- every `USE=` value
+/// in `<config_root>/etc/profile.env` (real `_get_env_d`'s
+/// `getconfig(..., expand=False)`: an optional leading `export ` keyword,
+/// then `KEY=value` with quote removal, no `${VAR}` expansion). Returned
+/// in file order for `effective_use_flags` to fold in via
+/// `apply_incremental`. A missing file yields an empty list.
+fn read_envd_use_tokens(config_root: &Path) -> Vec<String> {
+    let Ok(text) = fs::read_to_string(config_root.join("etc/profile.env")) else {
+        return Vec::new();
+    };
+    text.lines()
+        .filter_map(|line| {
+            let line = line.trim();
+            let line = line.strip_prefix("export ").unwrap_or(line);
+            let (key, value) = parse_kv_line(line)?;
+            (key == "USE").then(|| value.to_string())
+        })
+        .collect()
+}
+
 /// Reads every non-comment, non-blank, trimmed line from `path`, which
 /// may be a single file or (like `repos.conf` elsewhere in this pilot) a
 /// directory of files merged in sorted-filename order. A missing path
@@ -2270,6 +2304,11 @@ pub fn resolve_config(
     } else {
         Vec::new()
     };
+
+    // `configdict["env.d"]["USE"]` -- the lowest `USE_ORDER` tier, from
+    // `<config_root>/etc/profile.env` (real `_get_env_d`). Practically
+    // always empty (`/etc/env.d/*` doesn't set `USE`).
+    config.envd_use_tokens = read_envd_use_tokens(config_root);
 
     config.package_use = parse_package_use_lines(&profile_use_lines, false);
     config.package_use_user = parse_package_use_lines(&user_use_lines, true);
@@ -4352,6 +4391,38 @@ sync-uri = file:///srv/pkgs
                 ("myoverlay".to_string(), vec!["overlayflag".to_string()]),
             ]
         );
+    }
+
+    #[test]
+    fn envd_use_tokens_are_read_from_profile_env() {
+        let root = std::env::temp_dir().join("portage-profile-test-envd");
+        let repo = root.join("repo");
+        let etc = root.join("etc");
+        fs::create_dir_all(repo.join("profiles")).unwrap();
+        fs::create_dir_all(&etc).unwrap();
+        fs::write(repo.join("profiles/repo_name"), "testrepo\n").unwrap();
+
+        // real `env-update` output shape: `export KEY='value'` lines, a
+        // plain assignment, and unrelated keys that must be ignored.
+        fs::write(
+            etc.join("profile.env"),
+            "# generated\n\
+             export PATH='/usr/bin'\n\
+             export USE='envdflag -other'\n\
+             LDPATH=/usr/lib\n",
+        )
+        .unwrap();
+
+        let config = resolve_config(&root, &repo, &[], &[], "testrepo", &HashMap::new())
+            .expect("config must resolve");
+        assert_eq!(config.envd_use_tokens, vec!["envdflag -other".to_string()]);
+
+        // No profile.env -> empty.
+        fs::remove_file(etc.join("profile.env")).unwrap();
+        let config = resolve_config(&root, &repo, &[], &[], "testrepo", &HashMap::new())
+            .expect("config must resolve");
+        assert!(config.envd_use_tokens.is_empty());
+        let _ = fs::remove_dir_all(&root);
     }
 
     #[test]
