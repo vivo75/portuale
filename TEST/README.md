@@ -8,7 +8,11 @@ Gentoo tree, inside the `localhost/test-portuale:latest` container image.
 From the repo root:
 
 ```sh
-podman run --rm \
+podman run \
+  --rm \
+  --cgroups=enabled \
+  --cgroupns=private \
+  --security-opt seccomp=unconfined \
   -v ./TEST/scripts:/TEST/scripts \
   -v ./TEST/logs:/TEST/logs \
   -v "$PWD/rust/target/release:/usr/local/bin" \
