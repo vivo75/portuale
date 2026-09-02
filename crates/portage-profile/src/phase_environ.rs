@@ -452,6 +452,21 @@ mod tests {
     use std::fs;
     use std::path::{Path, PathBuf};
 
+    /// Thread-local override: the map is the entire process env for this
+    /// thread, never touching `std::env`.
+    fn with_test_env(vars: &[(&str, &str)], f: impl FnOnce()) {
+        let map: HashMap<String, String> = vars
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect();
+        TEST_ENV_OVERRIDE.with(|o| *o.borrow_mut() = Some(map));
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f));
+        TEST_ENV_OVERRIDE.with(|o| *o.borrow_mut() = None);
+        if let Err(e) = result {
+            std::panic::resume_unwind(e);
+        }
+    }
+
     /// A synthetic amd64-shaped profile under a temp `config_root` (no
     /// `make.globals`; everything from there is seeded in `make.conf`).
     /// Expected values from Portage (oracle env).

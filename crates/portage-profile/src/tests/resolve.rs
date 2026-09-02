@@ -1559,6 +1559,86 @@ fn env_layer_overrides_config_vars() {
 }
 
 #[test]
+fn env_layer_stacks_onto_the_config_protect_and_env_unset_folds() {
+    // CONFIG_PROTECT/_MASK and ENV_UNSET are in Portage
+    // const.INCREMENTALS, so the calling env stacks as the final source.
+    let root = TempDir::new("portage-profile-test-info-incrementals").keep();
+    let repo = root.join("repo");
+    let prof = repo.join("profiles/default");
+    let portage_dir = root.join("etc/portage");
+    fs::create_dir_all(&prof).unwrap();
+    fs::create_dir_all(&portage_dir).unwrap();
+    fs::write(
+        prof.join("make.defaults"),
+        "ARCH=\"amd64\"\nACCEPT_KEYWORDS=\"${ARCH}\"\n",
+    )
+    .unwrap();
+    fs::write(
+        portage_dir.join("make.conf"),
+        "CONFIG_PROTECT=\"/conf-protect\"\n\
+         CONFIG_PROTECT_MASK=\"/conf-mask\"\n\
+         ENV_UNSET=\"CONF_UNSET\"\n",
+    )
+    .unwrap();
+    let make_profile = portage_dir.join("make.profile");
+    let _ = fs::remove_file(&make_profile);
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(&prof, &make_profile).unwrap();
+    let resolve = || {
+        resolve_config(ResolveConfigArgs {
+            config_root: &root,
+            main_repo_location: &repo,
+            overlay_repos: &[],
+            repo_aliases: &[],
+            main_repo_name: "testrepo",
+            repo_masters: &HashMap::new(),
+            eroot: &root,
+        })
+        .expect("resolves")
+    };
+
+    // No env: the `make.conf` layer alone.
+    with_test_env(&[], || {
+        let c = resolve();
+        assert_eq!(
+            c.resolved_incremental("CONFIG_PROTECT"),
+            Some(vec!["/conf-protect".to_string()])
+        );
+        assert_eq!(
+            c.resolved_incremental("ENV_UNSET"),
+            Some(vec!["CONF_UNSET".to_string()])
+        );
+    });
+
+    // Calling env stacks onto the file fold (union, sorted, with `-tok` removal).
+    with_test_env(
+        &[
+            ("CONFIG_PROTECT", "/env-protect"),
+            ("CONFIG_PROTECT_MASK", "-/conf-mask /env-mask"),
+            ("ENV_UNSET", "ENV_UNSET_X"),
+        ],
+        || {
+            let c = resolve();
+            assert_eq!(
+                c.resolved_incremental("CONFIG_PROTECT"),
+                Some(vec![
+                    "/conf-protect".to_string(),
+                    "/env-protect".to_string()
+                ])
+            );
+            assert_eq!(
+                c.resolved_incremental("CONFIG_PROTECT_MASK"),
+                Some(vec!["/env-mask".to_string()])
+            );
+            assert_eq!(
+                c.resolved_incremental("ENV_UNSET"),
+                Some(vec!["CONF_UNSET".to_string(), "ENV_UNSET_X".to_string()])
+            );
+        },
+    );
+}
+
+#[test]
 fn user_package_use_star_atom_folds_onto_the_global_use() {
     // A user "*/*" entry pops out of the per-package dict and stacks onto the
     // global USE like make.conf USE= would (shorthand included).
