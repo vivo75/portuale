@@ -81,6 +81,165 @@ fn select_retry_cps(cps_in_order: &[String], unexpected_cps: &HashSet<String>) -
         .collect()
 }
 
+pub fn run(
+    config_root: &Path,
+    root: &Path,
+    debug: bool,
+    jobs: usize,
+    load_average: Option<f64>,
+) -> ExitCode {
+    // `--debug`: run each `depend` phase with `PORTAGE_DEBUG=1`.
+    let repos = match portage_repo::find_repos(config_root) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("emerge: {e}");
+            return ExitCode::from(1);
+        }
+    };
+
+    // A repo whose formats lack `md5-dict` is skipped: portuale has no `pms`
+    // writer, and writing the md5-cache there would be the wrong directory.
+    let mut skipped_repo = false;
+    let repos: Vec<portage_repo::RepoConfig> = repos
+        .into_iter()
+        .filter(|repo| {
+            if portage_repo::regen_writes_md5_cache(repo) {
+                return true;
+            }
+            eprintln!(
+                "emerge: --regen: repository '{}': cache-formats = '{}' has no md5-dict \
+                 format; skipping (no pms cache writer)",
+                repo.name,
+                repo.cache_formats.join(" ")
+            );
+            skipped_repo = true;
+            false
+        })
+        .collect();
+
+    let portage_tmpdir = portage_repo::portage_tmpdir_from_env();
+
+    // Work is collected before any phase runs; each pass's `Processing <cp>`
+    // lines print up front. Retries cover unexpectedly-failed cps up to
+    // `MAX_TRIES`; `done!` prints once at the very end.
+    let mut valid_per_repo: HashMap<PathBuf, HashSet<(String, String)>> = HashMap::new();
+    let mut work: Vec<RegenWorkItem> = Vec::new();
+    let mut cps_in_order: Vec<String> = Vec::new();
+    for cp in portage_repo::all_cp(&repos) {
+        cps_in_order.push(cp.clone());
+        let (category, package) = match cp.split_once('/') {
+            Some(x) => x,
+            None => continue,
+        };
+        for repo in &repos {
+            let pkg_dir = repo.location.join(category).join(package);
+            let Ok(entries) = portage_util::read_dir_entries(&pkg_dir) else {
+                continue;
+            };
+            for entry in entries {
+                let name = entry.file_name();
+                let name = name.to_string_lossy();
+                let Some(pf) = name.strip_suffix(".ebuild") else {
+                    continue;
+                };
+                valid_per_repo
+                    .entry(repo.location.clone())
+                    .or_default()
+                    .insert((category.to_string(), pf.to_string()));
+                work.push(RegenWorkItem {
+                    ebuild_path: entry.path(),
+                    repo_location: repo.location.clone(),
+                    masters: repo.masters.clone(),
+                    category: category.to_string(),
+                    pf: pf.to_string(),
+                    cp: cp.clone(),
+                });
+            }
+        }
+    }
+
+    // Only the last outcome per item matters.
+    let mut results: Vec<Option<Result<(), RegenFailure>>> =
+        (0..work.len()).map(|_| None).collect();
+    let mut pending_cps: Vec<String> = cps_in_order.clone();
+    let mut tries = MAX_TRIES;
+    while !pending_cps.is_empty() && tries > 0 {
+        println!("Regenerating cache entries...");
+        for cp in &pending_cps {
+            println!("Processing {cp}");
+        }
+        let pending_set: HashSet<&str> = pending_cps.iter().map(String::as_str).collect();
+        let pass_indices: Vec<usize> = (0..work.len())
+            .filter(|&i| pending_set.contains(work[i].cp.as_str()))
+            .collect();
+        let pass_results: Vec<(usize, Result<(), RegenFailure>)> = if jobs <= 1 {
+            pass_indices
+                .into_iter()
+                .map(|i| {
+                    (
+                        i,
+                        run_work_item(&work[i], root, config_root, &portage_tmpdir, debug),
+                    )
+                })
+                .collect()
+        } else {
+            run_parallel(RunParallelArgs {
+                work: &work,
+                pass_indices: &pass_indices,
+                root,
+                config_root,
+                portage_tmpdir: &portage_tmpdir,
+                debug,
+                jobs,
+                load_average,
+            })
+        };
+        for (i, r) in pass_results {
+            results[i] = Some(r);
+        }
+        tries -= 1;
+        let unexpected_cps: HashSet<String> = work
+            .iter()
+            .zip(results.iter())
+            .filter_map(|(item, r)| match r {
+                Some(Err(f)) if is_retryable_returncode(f.code) => Some(item.cp.clone()),
+                _ => None,
+            })
+            .collect();
+        pending_cps = if tries > 0 {
+            select_retry_cps(&cps_in_order, &unexpected_cps)
+        } else {
+            Vec::new()
+        };
+    }
+
+    let mut failures = 0u32;
+    for (item, r) in work.iter().zip(results.iter()) {
+        if let Some(Err(f)) = r {
+            eprintln!(" * {}", f.message);
+            failures += 1;
+            // A finally-failed cpv is dropped from the valid set, so pruning
+            // deletes any stale on-disk entry for it.
+            if let Some(valid) = valid_per_repo.get_mut(&item.repo_location) {
+                valid.remove(&(item.category.clone(), item.pf.clone()));
+            }
+        }
+    }
+
+    // Prune on-disk entries whose ebuild no longer exists in that repo.
+    for repo in &repos {
+        let valid = valid_per_repo.get(&repo.location);
+        prune_stale_entries(&repo.location, valid);
+    }
+
+    println!("done!");
+    if failures == 0 && !skipped_repo {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::from(1)
+    }
+}
+
 /// One item's `depend` phase plus cache write.
 /// Portage: MetadataRegen.py, EbuildMetadataPhase.
 fn run_work_item(

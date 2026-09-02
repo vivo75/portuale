@@ -31,6 +31,8 @@ mod registry;
 mod scratch;
 #[cfg(feature = "vdb-sqlite")]
 mod sqlite;
+#[cfg(all(test, any(feature = "vdb-sqlite", feature = "vdb-redb")))]
+mod test_support;
 mod types;
 pub use error::{Error, Result};
 pub use files::FilesDb;

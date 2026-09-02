@@ -1,5 +1,42 @@
 use super::*;
 
+/// The shared field set is Portage's own 23 names (format version 1),
+/// listed literally so a drift fails loudly.
+#[test]
+fn metadata_file_fields_match_portages_literal_set() {
+    assert_eq!(METADATA_FILE_FORMAT_VERSION, 1);
+    let mut got: Vec<&str> = METADATA_FILE_FIELDS.to_vec();
+    got.sort_unstable();
+    assert_eq!(
+        got,
+        vec![
+            "BDEPEND",
+            "BUILD_ID",
+            "BUILD_TIME",
+            "CHOST",
+            "COUNTER",
+            "DEFINED_PHASES",
+            "DEPEND",
+            "DESCRIPTION",
+            "EAPI",
+            "HOMEPAGE",
+            "IDEPEND",
+            "IUSE",
+            "KEYWORDS",
+            "LICENSE",
+            "PDEPEND",
+            "PROPERTIES",
+            "PROVIDES",
+            "RDEPEND",
+            "REQUIRES",
+            "RESTRICT",
+            "SLOT",
+            "USE",
+            "repository",
+        ]
+    );
+}
+
 #[test]
 fn emptytree_forces_an_installed_atom_to_a_bare_reinstall() {
     // Without --emptytree a selective resolve leaves it AlreadyInstalled;
