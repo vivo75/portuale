@@ -11355,6 +11355,25 @@ Python reference and contract-tested.
   version table, repository timestamps. None of that is reproduced;
   `FEATURES` reflects only `make.conf` (no `make.globals` defaults).
 
+  *(Shipped 2026-09-02: `emerge --info <atom>` — the `myfiles`-loop
+  handling. An atom whose `cat/pkg` has no ebuild anywhere aborts with
+  the real `emerge: there are no ebuilds to satisfy "<atom>".` +
+  `--misspell-suggestions` block, exit 1, before the config block.
+  Otherwise, after it, a real `Package Settings` section
+  (`header_width = 65`) with a `<cpv>::<repo> would be built with the
+  following:` + `USE="…"` block for each atom whose ebuild defines
+  `pkg_info()` — real portage's `mypkgs` gate (EAPI 4+ + `info` in
+  `DEFINED_PHASES`), so an ordinary package still shows only the config
+  block. New `portage_repo::resolve_info_candidate` (best visible ebuild
+  candidate + its `-pv`-style USE display, reusing the same
+  `build_use_expand_display` / `forced_or_masked_flags` the merge list
+  uses) + `dev-libs/pkginfopkg` fixture. Cuts: the block for an
+  *installed* package — real `was built with` + the `CHOST`/`CFLAGS` vdb
+  `_aux_env_search` diff, and `(non-installed binary)` — the `pkg_info()`
+  phase run itself, and ANSI colour on the USE line. Mirrored in
+  `emerge_pretend_reference.py` (`_resolve_info_candidate`); 3 contract
+  tests + 1 `portage-repo` unit test.)*
+
 ### `color.map` / `PORTAGE_COLORMAP`: user-overridable ANSI codes
 
 scope-backlog.md Part 2 Section H item 3. Real `output.py::_parse_color_map`

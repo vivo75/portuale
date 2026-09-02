@@ -10265,6 +10265,54 @@ def test_info_prints_the_deterministic_config_block(
     assert "\nUnset:  " in rust.stdout
 
 
+def test_info_atom_that_does_not_exist_errors_with_misspell_suggestions(
+    emerge_binary, emerge_pretend_python, fixture_env
+):
+    """Real action_info's `myfiles` loop: a target whose cat/pkg has no
+    ebuild anywhere aborts before the config block with `emerge: there
+    are no ebuilds to satisfy "<atom>".` + `--misspell-suggestions`,
+    exit 1. Rust == Python."""
+    rust = _run([str(emerge_binary)], ["--info", "dev-libs/newpgk"], fixture_env)
+    py = _run(emerge_pretend_python, ["--info", "dev-libs/newpgk"], fixture_env)
+    assert rust.returncode == 1
+    assert py.returncode == 1
+    assert rust.stdout == "" == py.stdout
+    assert rust.stderr == py.stderr
+    assert 'there are no ebuilds to satisfy "dev-libs/newpgk"' in rust.stderr
+    assert "emerge: Maybe you meant" in rust.stderr
+
+
+def test_info_atom_prints_package_settings_for_a_pkg_info_package(
+    emerge_binary, emerge_pretend_python, fixture_env
+):
+    """dev-libs/pkginfopkg's ebuild defines pkg_info() (DEFINED_PHASES=
+    info), so real action_info appends the `Package Settings` section
+    with a `<cpv>::<repo> would be built with the following:` + USE line.
+    An ordinary package (dev-libs/newpkg, no pkg_info) gets no such
+    block. Rust == Python."""
+    rust = _run([str(emerge_binary)], ["--info", "dev-libs/pkginfopkg"], fixture_env)
+    py = _run(emerge_pretend_python, ["--info", "dev-libs/pkginfopkg"], fixture_env)
+    assert rust.returncode == 0
+    assert rust.stdout == py.stdout
+    assert rust.stdout.endswith(
+        "=================================================================\n"
+        "                        Package Settings\n"
+        "=================================================================\n"
+        "\n"
+        "\n"
+        "dev-libs/pkginfopkg-1.0::testrepo would be built with the following:\n"
+        'USE="alpha -beta"\n'
+        "\n"
+        "\n"
+    )
+
+    plain = _run([str(emerge_binary)], ["--info", "dev-libs/newpkg"], fixture_env)
+    assert "Package Settings" not in plain.stdout
+    assert plain.stdout == _run(
+        emerge_pretend_python, ["--info", "dev-libs/newpkg"], fixture_env
+    ).stdout
+
+
 def test_check_news_reports_none_when_all_items_are_read(
     emerge_binary, emerge_pretend_python, fixture_env, tmp_path
 ):

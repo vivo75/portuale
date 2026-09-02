@@ -6179,6 +6179,140 @@ fn atom_currently_satisfiable(
     })
 }
 
+/// The best visible candidate for `atom_str` plus its `-pv`-style USE
+/// display -- what `emerge --info <atom>` shows in real `action_info`'s
+/// per-package "`<cpv>::<repo> would be built with the following:`"
+/// block (`actions.py:2321` + `pkg_use_display`). `None` when the atom
+/// resolves to no visible ebuild candidate (real `action_info` skips it
+/// with a `- <atom>` "no matches" note -- rendered by the caller).
+///
+/// Deliberately narrow vs real `action_info`: **ebuild candidates only**
+/// (no installed-package `was built with` + `CHOST`/`CFLAGS` vdb
+/// `_aux_env_search` diff, no `(non-installed binary)` line), and no
+/// `pkg_info()` phase execution. The USE display is built exactly the
+/// way a `New` `GraphEntry`'s `use_expand_display` is (all flags, real
+/// `pkg_use_display` for a non-installed package), so it matches the
+/// `emerge -pv` `USE="…"` column verbatim.
+pub fn resolve_info_candidate(
+    repos: &[RepoConfig],
+    atom_str: &str,
+    config: &portage_profile::Config,
+) -> Result<Option<InfoCandidate>, String> {
+    let atom =
+        portage_dep::parse_atom(atom_str).ok_or_else(|| format!("invalid atom {atom_str:?}"))?;
+    let candidates = list_candidates(repos, &atom.category, &atom.package)?;
+    let visible: Vec<&Candidate> = candidates
+        .iter()
+        .filter(|c| is_visible(c, &atom.category, &atom.package, config))
+        .collect();
+    if visible.is_empty() {
+        return Ok(None);
+    }
+    let candidate_strs: Vec<String> = visible
+        .iter()
+        .map(|c| {
+            format!(
+                "{}/{}-{}:{}/{}::{}",
+                atom.category, atom.package, c.version, c.slot, c.sub_slot, c.repo_name
+            )
+        })
+        .collect();
+    let refs: Vec<&str> = candidate_strs.iter().map(String::as_str).collect();
+    let Some(matched) = portage_dep::match_from_list(atom_str, &refs) else {
+        return Ok(None);
+    };
+    let by_str: HashMap<&str, &Candidate> =
+        refs.iter().copied().zip(visible.iter().copied()).collect();
+    // USE-dep post-filter (`dev-libs/foo[bar]`), same as `resolve_pretend`.
+    let matched: Vec<&&Candidate> = matched
+        .iter()
+        .filter_map(|m| by_str.get(m))
+        .filter(|c| match &atom.use_deps {
+            Some(use_deps) if !use_deps.is_empty() => candidate_iuse_and_use(
+                c,
+                &atom.category,
+                &atom.package,
+                config,
+            )
+            .is_some_and(|(iuse, use_flags)| {
+                portage_dep::use_deps_satisfied(use_deps, &valid_iuse(&iuse, config), &use_flags)
+            }),
+            _ => true,
+        })
+        .collect();
+    let Some(best) = matched.into_iter().copied().max_by(|a, b| {
+        vercmp_ordering(&a.version, &b.version).then(a.repo_priority.cmp(&b.repo_priority))
+    }) else {
+        return Ok(None);
+    };
+
+    let Some((_iuse, use_flags)) =
+        candidate_iuse_and_use(best, &atom.category, &atom.package, config)
+    else {
+        return Ok(None);
+    };
+    let mut disp: Vec<(String, bool)> = best
+        .iuse
+        .split_whitespace()
+        .map(|t| t.trim_start_matches(['+', '-']).to_string())
+        .map(|f| {
+            let on = use_flags.contains(&f);
+            (f, on)
+        })
+        .collect();
+    disp.sort_by_key(|p| alnum_sort_key(&p.0));
+    let cpv = format!("{}/{}-{}", atom.category, atom.package, best.version);
+    let candidate_str = format!(
+        "{}/{}-{}:{}/{}::{}",
+        atom.category, atom.package, best.version, best.slot, best.sub_slot, best.repo_name
+    );
+    let forced = forced_or_masked_flags(
+        &best.iuse,
+        &best.keywords,
+        &candidate_str,
+        &atom.category,
+        &atom.package,
+        config,
+    );
+    // `all_flags = true` (real `pkg_use_display` for a non-installed
+    // package renders every flag), no installed diff, no reinstall flags.
+    let use_expand_display =
+        build_use_expand_display(&disp, config, None, &forced, true, &HashSet::new());
+    // Real `action_info`'s `mypkgs` gate (`actions.py:1896-1900`): a
+    // candidate is only listed in the per-package block when its EAPI is
+    // 4+ and its `DEFINED_PHASES` names `info` (so `pkg_info()` can run).
+    let pf = format!("{}-{}", atom.package, best.version);
+    let defines_pkg_info = read_md5_cache(&best.repo_location, &atom.category, &pf)
+        .ok()
+        .and_then(|md| md.get("DEFINED_PHASES").cloned())
+        .is_some_and(|dp| dp.split_whitespace().any(|p| p == "info"));
+    Ok(Some(InfoCandidate {
+        cpv,
+        repo_name: best.repo_name.clone(),
+        use_expand_display,
+        defines_pkg_info,
+    }))
+}
+
+/// One `emerge --info <atom>` per-package result -- see
+/// `resolve_info_candidate`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InfoCandidate {
+    /// `category/package-version` of the best visible ebuild candidate.
+    pub cpv: String,
+    pub repo_name: String,
+    /// Real `_display_use`'s `USE="…"` + one `VAR="…"` per non-hidden
+    /// `USE_EXPAND` group -- each value already enabled-first/disabled-
+    /// last ordered, exactly the pairs `pretend.rs::use_suffix` renders
+    /// for a `New` entry under `-pv`.
+    pub use_expand_display: Vec<(String, String)>,
+    /// Whether this candidate's ebuild defines `pkg_info()` (EAPI 4+ +
+    /// `info` in `DEFINED_PHASES`) -- real `action_info` only prints the
+    /// `<cpv> would be built with the following:` block for such
+    /// packages (`actions.py:1896`).
+    pub defines_pkg_info: bool,
+}
+
 /// Real `--root-deps`'s own `DEPEND`/`BDEPEND`-vs-`ESYSROOT` distinction
 /// (see `running_root_satisfies_atom`'s own doc comment for the full real
 /// grounding), factored out so both real dep-walk sites in this file
@@ -11775,6 +11909,35 @@ mod tests {
             &[],
         )
         .unwrap_or_else(|e| panic!("resolve_pretend({atom_str}) failed: {e}"))
+    }
+
+    #[test]
+    fn resolve_info_candidate_reports_the_best_visible_ebuild_and_its_use_display() {
+        let repos = find_repos(&fixtures_root()).expect("fixture repos.conf must resolve");
+        // dev-libs/pkginfopkg: IUSE="+alpha beta", DEFINED_PHASES=info.
+        let info = resolve_info_candidate(&repos, "dev-libs/pkginfopkg", &test_config())
+            .expect("resolves")
+            .expect("has a visible candidate");
+        assert_eq!(info.cpv, "dev-libs/pkginfopkg-1.0");
+        assert_eq!(info.repo_name, "testrepo");
+        assert!(info.defines_pkg_info);
+        assert_eq!(
+            info.use_expand_display,
+            vec![("USE".to_string(), "alpha -beta".to_string())]
+        );
+
+        // dev-libs/newpkg has no pkg_info phase.
+        let plain = resolve_info_candidate(&repos, "dev-libs/newpkg", &test_config())
+            .expect("resolves")
+            .expect("has a visible candidate");
+        assert!(!plain.defines_pkg_info);
+
+        // A cat/pkg with no ebuild -> None.
+        assert!(
+            resolve_info_candidate(&repos, "dev-libs/nonexistent", &test_config())
+                .expect("resolves")
+                .is_none()
+        );
     }
 
     #[test]

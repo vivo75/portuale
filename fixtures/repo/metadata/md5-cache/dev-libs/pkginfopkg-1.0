@@ -1,0 +1,7 @@
+DEFINED_PHASES=info
+DESCRIPTION=fixture package: defines pkg_info(), so emerge --info <atom> shows a Package Settings block
+EAPI=8
+IUSE=+alpha beta
+KEYWORDS=amd64
+SLOT=0
+_md5_=0000000000000000000000000000000

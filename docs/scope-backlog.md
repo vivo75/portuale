@@ -355,6 +355,19 @@ dev/test context — see also the `chown` note below).
   — narrowed to the deterministic `Repositories:` + `VAR="value"` block;
   the host-state half — version header, uname/mem, tool-version probes,
   `info_pkgs`, timestamps — is a documented cut).*
+  **Shipped 2026-09-02: `emerge --info <atom>`** — the `myfiles`-loop
+  handling. An atom whose `cat/pkg` has no ebuild anywhere aborts with
+  the real `emerge: there are no ebuilds to satisfy "<atom>".` +
+  `--misspell-suggestions` block, exit 1, *before* the config block;
+  otherwise, after it, a real `Package Settings` section
+  (`header_width = 65`) with a `<cpv>::<repo> would be built with the
+  following:` + `USE="…"` block for each atom whose ebuild defines
+  `pkg_info()` (real `mypkgs` gate — EAPI 4+ + `info` in
+  `DEFINED_PHASES`). New `portage_repo::resolve_info_candidate` /
+  `InfoCandidate`; new `dev-libs/pkginfopkg` fixture. Cuts: the block
+  for an *installed* package (real `was built with` + `CHOST`/`CFLAGS`
+  vdb `_aux_env_search` diff, and `(non-installed binary)`), the
+  `pkg_info()` phase run itself, and ANSI colour on the USE line.
   **Shipped 2026-09-02 (batch 11): `--regen`** (real `action_regen` →
   `MetadataRegen`) — a real write action: run every ebuild's `depend`
   phase (`ebuild_phases::run_depend_phase`, a `PORTAGE_PIPE_FD`-wired

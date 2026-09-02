@@ -4698,17 +4698,65 @@ fn news_item_relevant(text: &str, root: &Path) -> bool {
 /// sets:`, then the sorted `VAR="value"` dump (real `myvars`) and the
 /// `Unset:` line.
 ///
+/// With one or more `atom_args`, also the per-atom handling real
+/// `action_info` does in its `myfiles` loop: an atom whose `cat/pkg`
+/// has no ebuild anywhere aborts with `emerge: there are no ebuilds to
+/// satisfy "<atom>".` + `--misspell-suggestions` (exit 1, before the
+/// config block); otherwise, after the config block, a `Package
+/// Settings` section with a `<cpv>::<repo> would be built with the
+/// following:` + `USE="…"` block for each atom whose ebuild defines
+/// `pkg_info()` (real `mypkgs` gate).
+///
 /// **Large, deliberate cut:** real `action_info`'s output is dominated by
 /// *host state* a fixture-driven test can't verify -- the
 /// `Portage <ver> (python …, <profile>, <chost>, <gcc>, <libc>,
 /// <kernel>)` header, `System uname`, `KiB Mem`, the
 /// `sh:`/`gcc:`/`ld:`/`binutils`/`ccache`/`distcc` version probes, the
 /// `info_pkgs` version table, repository timestamps / head commits. None
-/// of that is reproduced. Also cut: the per-package "settings that vary"
-/// block real `--info <atom>` prints, and `_hide_url_passwd`. `FEATURES`
+/// of that is reproduced. Also cut: the per-package block for an
+/// *installed* package (real `was built with` + the `CHOST`/`CFLAGS`
+/// vdb `_aux_env_search` diff, and `(non-installed binary)`), the
+/// `pkg_info()` phase run itself, and `_hide_url_passwd`. `FEATURES`
 /// reflects only `make.conf` (the pilot parses no `make.globals`
 /// defaults).
-fn run_info(config: &portage_profile::Config, repos: &[portage_repo::RepoConfig], root: &Path) {
+fn run_info(
+    config: &portage_profile::Config,
+    repos: &[portage_repo::RepoConfig],
+    root: &Path,
+    atom_args: &[&str],
+    misspell_suggestions: bool,
+    color: &Colorizer,
+) -> ExitCode {
+    // Real `action_info`'s `myfiles` loop: a target whose `cat/pkg` has
+    // no ebuild anywhere is fatal (exit 1) and printed *before* the
+    // config block. `list_candidates` (all versions, masked included) is
+    // the pilot's `cp_exists` proxy -- same narrowing as
+    // `misspell_suggestion_block` (an installed-only package isn't
+    // covered).
+    for atom_str in atom_args {
+        let Some(atom) = parse_atom(atom_str) else {
+            continue;
+        };
+        let exists = portage_repo::list_candidates(repos, &atom.category, &atom.package)
+            .map(|c| !c.is_empty())
+            .unwrap_or(false);
+        if !exists {
+            let mut xinfo = format!("\"{atom_str}\"");
+            if root != Path::new("/") {
+                xinfo = format!("{xinfo} for {}", root.display());
+            }
+            eprintln!(
+                "\nemerge: there are no ebuilds to satisfy {}.",
+                color.c("INFORM", &xinfo)
+            );
+            let msg = format!("there are no ebuilds to satisfy \"{atom_str}\".");
+            if let Some(extra) = misspell_suggestion_block(&msg, repos, misspell_suggestions) {
+                eprintln!("{extra}");
+            }
+            return ExitCode::from(1);
+        }
+    }
+
     // Repositories.
     println!("Repositories:\n");
     let name_of: std::collections::HashMap<&Path, &str> = repos
@@ -4841,6 +4889,49 @@ fn run_info(config: &portage_profile::Config, repos: &[portage_repo::RepoConfig]
     }
     println!();
     println!();
+
+    // Real `action_info`'s `Package Settings` section: one per atom whose
+    // best visible ebuild candidate defines `pkg_info()` (real `mypkgs`).
+    // The header (`header_width = 65`, `actions.py:1956`) is printed once,
+    // only if at least one atom qualifies.
+    let candidates: Vec<portage_repo::InfoCandidate> = atom_args
+        .iter()
+        .filter_map(|a| {
+            portage_repo::resolve_info_candidate(repos, a, config)
+                .ok()
+                .flatten()
+        })
+        .filter(|c| c.defines_pkg_info)
+        .collect();
+    if !candidates.is_empty() {
+        let title = "Package Settings";
+        // Real `header_title.rjust(int(header_width / 2 + len(title) / 2))`.
+        let pad = 65 / 2 + title.len() / 2;
+        println!("{}", "=".repeat(65));
+        println!("{title:>pad$}");
+        println!("{}", "=".repeat(65));
+        println!();
+        for c in &candidates {
+            // Real: `\n{INFORM(cpv::repo)} would be built with the following:`
+            println!(
+                "\n{} would be built with the following:",
+                color.c("INFORM", &format!("{}::{}", c.cpv, c.repo_name))
+            );
+            // Real `pkg_use_display` for a non-installed ebuild: `USE="…"`
+            // then one `VAR="…"` per non-hidden USE_EXPAND group.
+            let use_line = c
+                .use_expand_display
+                .iter()
+                .map(|(name, body)| format!("{name}=\"{body}\""))
+                .collect::<Vec<_>>()
+                .join(" ");
+            println!("{use_line}");
+            println!();
+            println!();
+        }
+    }
+
+    ExitCode::SUCCESS
 }
 
 /// Real `_emerge/actions.py::action_config` (`emerge --config <atom>`):
@@ -7153,10 +7244,17 @@ pub fn run(args: &[String]) -> ExitCode {
     }
 
     // `--info`: a standalone read-only query action (real
-    // `action_info`), narrowed to its deterministic config block.
+    // `action_info`), narrowed to its deterministic config block plus
+    // the per-atom "Package Settings" block.
     if info_action {
-        run_info(&config, &repos, &root);
-        return ExitCode::SUCCESS;
+        return run_info(
+            &config,
+            &repos,
+            &root,
+            &atom_args,
+            misspell_suggestions,
+            &color,
+        );
     }
 
     // `--clean`: a standalone removal action -- keep only the newest

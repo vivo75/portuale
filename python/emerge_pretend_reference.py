@@ -9330,11 +9330,106 @@ def _run_check_news(repos, root, quiet, color):
     return 0
 
 
-def _run_info(config, repos, root):
+def _resolve_info_candidate(repos, atom_str, config):
+    """The best visible ebuild candidate for `atom_str` + its -pv-style
+    USE display -- real action_info's per-package `<cpv>::<repo> would be
+    built with the following:` block. Returns a dict
+    {cpv, repo_name, use_expand_display, defines_pkg_info} or None.
+    Mirrors portage-repo/src/lib.rs's resolve_info_candidate (ebuild
+    candidates only; no installed/binary handling, no pkg_info() run)."""
+    atom = _parse_atom(atom_str)
+    if atom is None or "/" not in atom.cp:
+        return None
+    category, package = atom.cp.split("/", 1)
+    visible = [
+        c
+        for c in list_candidates(repos, category, package)
+        if is_visible(c, category, package, config)
+    ]
+    if not visible:
+        return None
+    cand_strs = [
+        f"{category}/{package}-{c['version']}:{c['slot']}/{c['sub_slot']}::{c['repo_name']}"
+        for c in visible
+    ]
+    matched = match_from_list(atom_str, cand_strs)
+    if not matched:
+        return None
+    by_str = dict(zip(cand_strs, visible))
+    cands = [by_str[m] for m in matched if m in by_str]
+    if atom.use and atom.use.enabled or (atom.use and atom.use.disabled):
+        kept = []
+        for c in cands:
+            iuse, use_flags = _candidate_iuse_and_use(c, category, package, config)
+            if _use_deps_satisfied(atom, _valid_iuse(iuse, config), use_flags):
+                kept.append(c)
+        cands = kept
+    if not cands:
+        return None
+    best = _best_candidate(cands)
+
+    iuse, use_flags = _candidate_iuse_and_use(best, category, package, config)
+    display = sorted(
+        (
+            (flag.lstrip("+-"), flag.lstrip("+-") in use_flags)
+            for flag in best["iuse"].split()
+        ),
+        key=lambda p: _alnum_sort_key(p[0]),
+    )
+    cpv = f"{category}/{package}-{best['version']}"
+    candidate_str = (
+        f"{cpv}:{best['slot']}/{best['sub_slot']}::{best['repo_name']}"
+    )
+    forced = _forced_or_masked_flags(
+        best["iuse"], best["keywords"], candidate_str, category, package, config
+    )
+    use_expand_display = _build_use_expand_display(
+        display,
+        config["use_expand"],
+        config["use_expand_hidden"],
+        None,
+        forced,
+        True,
+        None,
+    )
+    try:
+        md = read_md5_cache(best["repo_location"], category, f"{package}-{best['version']}")
+        defines_pkg_info = "info" in md.get("DEFINED_PHASES", "").split()
+    except OSError:
+        defines_pkg_info = False
+    return {
+        "cpv": cpv,
+        "repo_name": best["repo_name"],
+        "use_expand_display": use_expand_display,
+        "defines_pkg_info": defines_pkg_info,
+    }
+
+
+def _run_info(config, repos, root, atom_args, misspell_suggestions, color):
     """Real `emerge --info` (action_info), narrowed to its deterministic
-    config/repository block. Mirrors pretend.rs's run_info -- see its
-    docstring for the large host-state cut (Portage version header,
-    uname/mem, version probes, info_pkgs, timestamps)."""
+    config/repository block plus, with atom args, the `myfiles`-loop
+    no-match error (exit 1, before the config block) and the per-atom
+    `Package Settings` block for a candidate whose ebuild defines
+    pkg_info(). Mirrors pretend.rs's run_info -- see its docstring for the
+    large host-state cut."""
+    for atom_str in atom_args:
+        atom = _parse_atom(atom_str)
+        if atom is None or "/" not in atom.cp:
+            continue
+        category, package = atom.cp.split("/", 1)
+        if not list_candidates(repos, category, package):
+            xinfo = f'"{atom_str}"'
+            if str(root) != "/":
+                xinfo = f"{xinfo} for {root}"
+            sys.stderr.write(
+                f"\nemerge: there are no ebuilds to satisfy {color.c('INFORM', xinfo)}.\n"
+            )
+            msg = f'there are no ebuilds to satisfy "{atom_str}".'
+            extra = _misspell_suggestion_block(msg, repos, misspell_suggestions)
+            if extra is not None:
+                sys.stderr.write(extra + "\n")
+            return 1
+
     print("Repositories:\n")
     name_of = {r["location"]: r["name"] for r in repos}
     for repo in repos:
@@ -9416,6 +9511,31 @@ def _run_info(config, repos, root):
         print(f"Unset:  {', '.join(unset)}")
     print()
     print()
+
+    # Real action_info's `Package Settings` section: one per atom whose
+    # best visible ebuild candidate defines pkg_info() (real `mypkgs`).
+    candidates = [
+        c
+        for a in atom_args
+        for c in [_resolve_info_candidate(repos, a, config)]
+        if c is not None and c["defines_pkg_info"]
+    ]
+    if candidates:
+        title = "Package Settings"
+        pad = 65 // 2 + len(title) // 2
+        print("=" * 65)
+        print(title.rjust(pad))
+        print("=" * 65)
+        print()
+        for c in candidates:
+            print(
+                f"\n{color.c('INFORM', c['cpv'] + '::' + c['repo_name'])} "
+                "would be built with the following:"
+            )
+            print(" ".join(f'{name}="{body}"' for name, body in c["use_expand_display"]))
+            print()
+            print()
+
     return 0
 
 
@@ -13231,7 +13351,14 @@ def run(args):
             _main["name"],
             {r["name"]: r["masters"] for r in _repos},
         )
-        return _run_info(_info_config, _repos, _root())
+        return _run_info(
+            _info_config,
+            _repos,
+            _root(),
+            atom_args,
+            misspell_suggestions,
+            _Colorizer(_resolve_havecolor(color_opt)),
+        )
 
     # --config <atom>: a real action (real action_config runs pkg_config
     # from the vdb). Ignores --pretend entirely. No ebuild-execution
