@@ -1001,6 +1001,7 @@ CASES = [
     ("package.use: profile-level entry enables a flag not on globally", ["--pretend", "dev-libs/profileuseenablepkg"], 0),
     ("package.use depth: repo-level entry loses to the profile make.defaults", ["--pretend", "-v", "dev-libs/repouseweakpkg"], 0),
     ("package.use depth: profile-level entry loses to make.conf", ["--pretend", "-v", "dev-libs/profileuseweakpkg"], 0),
+    ("package.env: env-file USE= enables a flag, pulling in a dependency", ["--pretend", "dev-libs/penvpkg"], 0),
     ("blocker: strong (!!) blocker matches an installed package", ["--pretend", "dev-libs/blockerpkg"], 0),
     ("blocker: weak (!) blocker matches another new package in the graph", ["--pretend", "dev-libs/graphblockerparent"], 0),
     ("blocker: -v widens the [blocks B ] bracket by the mask column", ["--pretend", "-v", "dev-libs/blockerpkg"], 0),
@@ -4702,6 +4703,24 @@ def test_package_use_wildcard_entry_enables_a_flag_and_pulls_in_a_dependency(
                                              '[ebuild  N     ] dev-libs/newpkg-1.0 ',
                                              '[ebuild  N     ] dev-libs/packageuseenablepkg-1.0  USE="pkguseflag"',
                                          ]
+
+
+def test_package_env_env_file_use_enables_a_flag_and_pulls_in_a_dependency(
+    emerge_binary, fixture_env
+):
+    """fixtures/etc/portage/package.env maps "dev-libs/penvpkg" to the
+    env file "penv-on", whose USE="penvflag" isn't set anywhere else --
+    so penvpkg's own penvflag?-gated dependency (dev-libs/newpkg) is
+    pulled in only because the package.env `pkg`-layer USE reaches
+    effective_use_flags, and the flag shows in the USE="..." column."""
+    result = _run(
+        [str(emerge_binary)], ["--pretend", "dev-libs/penvpkg"], fixture_env
+    )
+    assert result.returncode == 0
+    assert result.stdout.splitlines() == [
+        "[ebuild  N     ] dev-libs/newpkg-1.0 ",
+        '[ebuild  N     ] dev-libs/penvpkg-1.0  USE="penvflag -penvother"',
+    ]
 
 
 def test_package_use_entry_disables_a_globally_enabled_flag_for_one_package(

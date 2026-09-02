@@ -260,11 +260,29 @@ single-pass BFS can't grow into these incrementally:
   `USE_EXPAND` variable values are last-wins into `scalars`, not
   genuinely incremental. Test isolation: `conftest.py` strips these vars
   process-wide for the session.)*
-  Still open: `/etc/portage/env` / `package.env` (the other half of the
-  `env` layer); the `features` and `env.d` layers; repo `make.defaults`
-  USE folded into `configdict["repo"]`; profile `package.use` interleaved
-  per profile level with that level's `make.defaults` (the pilot applies
-  it as one group).
+  *(Shipped 2026-09-02: the **`package.env` USE** half — real
+  `config.py:894` `grabdict_package(.../package.env)` +
+  `_grab_pkg_env`. `/etc/portage/package.env` maps an atom to one or
+  more `/etc/portage/env/<name>` files (`grabdict` line grammar, reused
+  from `package.accept_keywords`); each file is `make.conf`-style
+  `KEY=value` with `source`. `Config::package_env` +
+  `Config::package_env_use` (the pre-resolved `USE=` half, per atom),
+  fed to `effective_use_flags` as a new `pkg`-layer contribution applied
+  **before** `package_use_user` — real portage fills `pkg_configdict`
+  from `package.env`, then appends `package.use`'s USE on top, so a user
+  `package.use` flag wins. `read_env_file_kv` / `env_file_use_tokens`.
+  New `dev-libs/penvpkg` + `etc/portage/{package.env,env/penv-on}`
+  fixtures. A missing referenced file contributes nothing, silently —
+  the pilot's standing "no warnings from deep in config resolution"
+  precedent. No per-file `${VAR}` expand map (real portage seeds one
+  from the global config — a documented simplification).)*
+  Still open: the **`package.env` non-USE half** (`FEATURES`, `CFLAGS`,
+  `MAKEOPTS`, … per package — affects the build-phase env and
+  `emerge --info <atom>`); `$USE` env var at its real `env` position
+  above `pkg`; the `features` and `env.d` layers; repo `make.defaults`
+  USE folded into `configdict["repo"]`; profile `package.use`
+  interleaved per profile level with that level's `make.defaults` (the
+  pilot applies it as one group).
 
 ### D. Sandbox / build isolation — **substantially complete (2026-09-01)**
 
@@ -592,9 +610,11 @@ by a few large items rather than a long tail of small ones:
 
 3. **Config-resolution depth (Part 2.C).** *The `package.use` per-level
    `USE_ORDER` layering shipped 2026-09-01 (`repo`/`pkginternal`/
-   `defaults`/`conf`/`pkg` all modeled).* Remaining: the `env`
-   (`$USE` / `package.env`), `features`, and `env.d` layers — a config
-   that leans on those still diverges.
+   `defaults`/`conf`/`pkg` all modeled); the process-environment and
+   `package.env`-USE halves of the `env` layer shipped 2026-09-02.*
+   Remaining: `package.env`'s non-USE vars (build-phase env / `--info
+   <atom>`), `$USE` at its real `env` position, and the `features` /
+   `env.d` layers — a config that leans on those still diverges.
 
 4. **Sandbox enforcement (Part 2.D).** *Substantially complete
    2026-09-01: `sandbox`/`usersandbox` + `network`/`ipc`/`mount`/`pid`-

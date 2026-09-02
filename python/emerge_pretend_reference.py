@@ -1337,6 +1337,7 @@ def _use_flags_if_conditional(value_str, candidate, category, package, candidate
         config["conf_use_tokens"],
         config["package_use_repo"],
         config["package_use"],
+        config["package_env_use"],
         config["package_use_user"],
         config["package_use_force"],
         config["package_use_mask"],
@@ -1991,6 +1992,7 @@ def _flag_is_settable(candidate, category, package, flag, desired, config):
         config["conf_use_tokens"],
         config["package_use_repo"],
         config["package_use"],
+        config["package_env_use"],
         package_use_user,
         config["package_use_force"],
         config["package_use_mask"],
@@ -2450,6 +2452,7 @@ def effective_use_flags(
     conf_use_tokens,
     package_use_repo,
     package_use,
+    package_env_use,
     package_use_user,
     package_use_force,
     package_use_mask,
@@ -2486,13 +2489,14 @@ def effective_use_flags(
          package.use (package_use, as one group).
       4. conf -- make.conf USE, then the USE_EXPAND folded values
          (conf_use_tokens).
-      5. pkg -- the user-level /etc/portage/package.use
-         (package_use_user). Strongest layer before the final
-         use.force/use.mask step.
+      5. pkg -- package.env's own USE= (package_env_use), then the
+         user-level /etc/portage/package.use (package_use_user) on top.
+         Strongest layer before the final use.force/use.mask step.
 
     Every layer is replayed via _apply_incremental directly -- not a
     pre-flattened set unioned on top (see the `iuse` paragraph below).
-    env/features/env.d are documented cuts. Applied per package,
+    The rest of the env layer ($USE, package.env non-USE vars) and
+    features/env.d are documented cuts. Applied per package,
     mirroring portage-repo/src/lib.rs's effective_use_flags exactly.
 
     After the walk:
@@ -2595,8 +2599,12 @@ def effective_use_flags(
     for token in conf_use_tokens:
         _apply_incremental(token, use_flags)
 
-    # pkg (real configdict["pkg"]): user-level /etc/portage/package.use --
-    # strongest before the final use.force/use.mask step below.
+    # pkg (real configdict["pkg"]): package.env's own USE= first (real
+    # _grab_pkg_env fills pkg_configdict), then user-level
+    # /etc/portage/package.use on top (real config.py:2042-2048 appends
+    # self.puse after) -- a user package.use flag wins over a package.env
+    # one. Strongest before the final use.force/use.mask step below.
+    _apply_matching(package_env_use)
     _apply_matching(package_use_user)
 
     # _* wildcard USE_EXPAND expansion (real config.py setcpv ~2242):
@@ -2797,6 +2805,7 @@ def _reinstall_flags_for_use_change(root, category, package, candidate, config, 
         config["conf_use_tokens"],
         config["package_use_repo"],
         config["package_use"],
+        config["package_env_use"],
         config["package_use_user"],
         config["package_use_force"],
         config["package_use_mask"],
@@ -3359,6 +3368,7 @@ def _candidate_iuse_and_use(candidate, category, package, config):
         config["conf_use_tokens"],
         config["package_use_repo"],
         config["package_use"],
+        config["package_env_use"],
         config["package_use_user"],
         config["package_use_force"],
         config["package_use_mask"],
@@ -3802,6 +3812,53 @@ def _process_make_conf_file(
         scalars[key] = value
 
 
+def _read_env_file_kv(path, config_root, visited):
+    """One /etc/portage/env/<name> file as an ordered list of (KEY, value)
+    -- real getconfig(penvfile, allow_sourcing=True). "source <path>" is
+    expanded in place (absolute against config_root chroot-style, relative
+    against the file's dir); a ${VAR} in a value is left literal (no
+    per-file expand map this slice -- a documented simplification). A
+    missing file yields [] (real portage warns from setcpv; this pilot
+    follows its "no warnings from deep in config resolution" precedent).
+    Mirrors portage-profile/src/lib.rs's read_env_file_kv."""
+    if not os.path.isfile(path):
+        return []
+    canon = os.path.realpath(path)
+    if canon in visited:
+        return []
+    visited.add(canon)
+    with open(canon) as f:
+        text = f.read()
+    out = []
+    for line in text.splitlines():
+        trimmed = line.strip()
+        if trimmed.startswith("source "):
+            sourced = trimmed[len("source ") :].strip()
+            if os.path.isabs(sourced):
+                resolved = os.path.join(config_root, sourced.lstrip("/"))
+            else:
+                resolved = os.path.join(os.path.dirname(canon), sourced)
+            out.extend(_read_env_file_kv(resolved, config_root, visited))
+            continue
+        parsed = _parse_kv_line(trimmed)
+        if parsed is not None:
+            out.append(parsed)
+    return out
+
+
+def _env_file_use_tokens(env_dir, name, config_root):
+    """The USE= value token(s) of one /etc/portage/env/<name> file, in
+    file order -- the only half of a package.env file this slice
+    consumes. Mirrors portage-profile/src/lib.rs's env_file_use_tokens."""
+    tokens = []
+    for key, value in _read_env_file_kv(
+        os.path.join(env_dir, name), config_root, set()
+    ):
+        if key == "USE":
+            tokens.extend(value.split())
+    return tokens
+
+
 def resolve_config(
     config_root,
     main_repo_location,
@@ -3821,7 +3878,8 @@ def resolve_config(
     cuts. Returns a dict with keys "use_flags", "use_tokens",
     "conf_use_tokens", "accept_keywords",
     "package_mask", "package_unmask", "package_accept_keywords",
-    "package_use_repo", "package_use", "package_use_user",
+    "package_use_repo", "package_use", "package_env", "package_env_use",
+    "package_use_user",
     "system_packages", "package_provided", "use_force",
     "use_mask", "package_use_force", "package_use_mask", "use_expand",
     "use_expand_unprefixed", "use_expand_implicit", "iuse_implicit",
@@ -4207,6 +4265,32 @@ def resolve_config(
         os.path.join(config_root, "etc", "portage", "package.use")
     )
 
+    # package.env (real config.py:894 grabdict_package + _grab_pkg_env):
+    # /etc/portage/package.env maps an atom to one or more env-file names
+    # under /etc/portage/env/; each file is a make.conf-style KEY=value
+    # snippet (with "source") layered onto a matching package's config.
+    # Same "<atom> <token...>" line grammar as package.accept_keywords
+    # (real grabdict for both). This slice resolves the USE= half of each
+    # file into package_env_use (the pkg USE_ORDER layer, before user
+    # package.use); the non-USE half is a follow-up. Mirrors
+    # portage-profile/src/lib.rs's resolve_config.
+    package_env_lines = _read_config_lines(
+        os.path.join(config_root, "etc", "portage", "package.env")
+    )
+    package_env = [
+        (atom, files)
+        for atom, files in _parse_package_accept_keywords_lines(package_env_lines)
+        if files
+    ]
+    env_dir = os.path.join(config_root, "etc", "portage", "env")
+    package_env_use = []
+    for atom, files in package_env:
+        tokens = []
+        for name in files:
+            tokens.extend(_env_file_use_tokens(env_dir, name, config_root))
+        if tokens:
+            package_env_use.append((atom, tokens))
+
     # package.use.mask/package.use.force: repo-level (every repo, not
     # just main -- same ::repo-scoping the package.use bullet above now
     # applies here too) plus every profile level's own file (in chain
@@ -4431,6 +4515,8 @@ def resolve_config(
         "package_accept_keywords": package_accept_keywords,
         "package_use_repo": _parse_package_use_lines(repo_use_lines),
         "package_use": _parse_package_use_lines(profile_use_lines),
+        "package_env": package_env,
+        "package_env_use": package_env_use,
         "package_use_user": _parse_package_use_lines(
             user_use_lines, use_expand_shorthand=True
         ),
@@ -5452,6 +5538,7 @@ def resolve_pretend(
                 config["conf_use_tokens"],
                 config["package_use_repo"],
                 config["package_use"],
+                config["package_env_use"],
                 config["package_use_user"],
                 config["package_use_force"],
                 config["package_use_mask"],
@@ -7216,6 +7303,7 @@ def resolve_pretend_graph(
                 config["conf_use_tokens"],
                 config["package_use_repo"],
                 config["package_use"],
+                config["package_env_use"],
                 config["package_use_user"],
                 config["package_use_force"],
                 config["package_use_mask"],
@@ -7922,6 +8010,7 @@ def _enqueue_dependencies(
             config["conf_use_tokens"],
             config["package_use_repo"],
             config["package_use"],
+            config["package_env_use"],
             config["package_use_user"],
             config["package_use_force"],
             config["package_use_mask"],

@@ -1,0 +1,2 @@
+# fixture env file referenced by /etc/portage/package.env
+USE="penvflag"

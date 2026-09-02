@@ -1536,13 +1536,15 @@ fn matches_config_entry(entry: &str, candidate_str: &str, category: &str, packag
 ///   `package.use` (`Config::package_use`, as one group).
 /// - `conf` -- `make.conf` USE, then the `USE_EXPAND` folded values
 ///   (`Config::conf_use_tokens`).
-/// - `pkg` -- the user-level `/etc/portage/package.use`
-///   (`Config::package_use_user`). The strongest layer before the final
-///   `use.force`/`use.mask` step.
+/// - `pkg` -- `package.env`'s own `USE=` (`Config::package_env_use`),
+///   then the user-level `/etc/portage/package.use`
+///   (`Config::package_use_user`) on top. The strongest layer before
+///   the final `use.force`/`use.mask` step.
 ///
 /// Every layer is replayed via `apply_incremental` directly -- not a
 /// pre-flattened set unioned on top (see the `iuse` paragraph below for
-/// why that distinction matters). `env`/`features`/`env.d` are
+/// why that distinction matters). The rest of the `env` layer
+/// (`$USE`, `package.env` non-USE vars) and `features`/`env.d` are
 /// documented cuts. Unlike `is_visible`'s mask/keywords checks (which
 /// only ever add to an accepted set), this can both add and remove
 /// flags, and does so per package -- a `package.use` entry never affects
@@ -1618,6 +1620,7 @@ pub fn effective_use_flags(
     conf_use_tokens: &[String],
     package_use_repo: &[(String, Vec<String>)],
     package_use: &[(String, Vec<String>)],
+    package_env_use: &[(String, Vec<String>)],
     package_use_user: &[(String, Vec<String>)],
     package_use_force: &[(String, Vec<String>)],
     package_use_mask: &[(String, Vec<String>)],
@@ -1683,9 +1686,13 @@ pub fn effective_use_flags(
         portage_profile::apply_incremental(token, &mut use_flags);
     }
 
-    // `pkg` (real `configdict["pkg"]`): the user-level
-    // `/etc/portage/package.use` -- the strongest layer before the final
+    // `pkg` (real `configdict["pkg"]`): `package.env`'s own `USE=` first
+    // (real `_grab_pkg_env` fills `pkg_configdict`), then the user-level
+    // `/etc/portage/package.use` on top (real `config.py:2042-2048`
+    // appends `self.puse` after) -- so a user `package.use` flag wins
+    // over a `package.env` one. The strongest layer before the final
     // `use.force`/`use.mask` step below.
+    apply_matching(&mut use_flags, package_env_use);
     apply_matching(&mut use_flags, package_use_user);
 
     // `_*` wildcard USE_EXPAND expansion (real `config.py` `setcpv`
@@ -2227,6 +2234,7 @@ fn use_flags_if_conditional(
         &config.conf_use_tokens,
         &config.package_use_repo,
         &config.package_use,
+        &config.package_env_use,
         &config.package_use_user,
         &config.package_use_force,
         &config.package_use_mask,
@@ -3058,6 +3066,7 @@ fn flag_is_settable(
         &config.conf_use_tokens,
         &config.package_use_repo,
         &config.package_use,
+        &config.package_env_use,
         &package_use_user,
         &config.package_use_force,
         &config.package_use_mask,
@@ -5866,6 +5875,7 @@ fn candidate_iuse_and_use(
         &config.conf_use_tokens,
         &config.package_use_repo,
         &config.package_use,
+        &config.package_env_use,
         &config.package_use_user,
         &config.package_use_force,
         &config.package_use_mask,
@@ -7069,6 +7079,7 @@ pub fn resolve_pretend(
                     &config.conf_use_tokens,
                     &config.package_use_repo,
                     &config.package_use,
+                    &config.package_env_use,
                     &config.package_use_user,
                     &config.package_use_force,
                     &config.package_use_mask,
@@ -10293,6 +10304,7 @@ pub fn resolve_pretend_graph(
                 &config.conf_use_tokens,
                 &config.package_use_repo,
                 &config.package_use,
+                &config.package_env_use,
                 &config.package_use_user,
                 &config.package_use_force,
                 &config.package_use_mask,
@@ -11176,6 +11188,7 @@ fn enqueue_dependencies(
             &config.conf_use_tokens,
             &config.package_use_repo,
             &config.package_use,
+            &config.package_env_use,
             &config.package_use_user,
             &config.package_use_force,
             &config.package_use_mask,
@@ -19582,6 +19595,7 @@ mod tests {
             &[],
             package_use,
             &[],
+            &[],
             package_use_force,
             package_use_mask,
             use_force,
@@ -20390,6 +20404,7 @@ mod tests {
             conf_use_tokens,
             package_use_repo,
             package_use,
+            &[],
             package_use_user,
             &[],
             &[],
@@ -20447,6 +20462,70 @@ mod tests {
         assert!(
             !flags.contains("foo"),
             "make.conf -foo beats profile package.use"
+        );
+    }
+
+    #[test]
+    fn effective_use_flags_package_env_use_is_pkg_layer_and_loses_to_user_package_use() {
+        // package.env's own USE= sits in the `pkg` layer, applied just
+        // before user `/etc/portage/package.use` (real _grab_pkg_env
+        // fills pkg_configdict, then self.puse is appended after). So it
+        // beats make.conf...
+        let with_env = effective_use_flags(
+            "foo",
+            &[],
+            &["-foo".to_string()],
+            &[],
+            &[],
+            &pu("foo"), // package_env_use
+            &[],        // package_use_user
+            &[],
+            &[],
+            &HashSet::new(),
+            &HashSet::new(),
+            &HashSet::new(),
+            &HashSet::new(),
+            &[],
+            &[],
+            &["amd64".to_string()],
+            &HashSet::from(["amd64".to_string()]),
+            &[],
+            "dev-libs/pkg-1.0:0/0::testrepo",
+            "dev-libs",
+            "pkg",
+        );
+        assert!(
+            with_env.contains("foo"),
+            "package.env foo beats make.conf -foo"
+        );
+
+        // ...but a user package.use `-foo` still wins over package.env `foo`.
+        let user_wins = effective_use_flags(
+            "foo",
+            &[],
+            &[],
+            &[],
+            &[],
+            &pu("foo"),  // package_env_use
+            &pu("-foo"), // package_use_user
+            &[],
+            &[],
+            &HashSet::new(),
+            &HashSet::new(),
+            &HashSet::new(),
+            &HashSet::new(),
+            &[],
+            &[],
+            &["amd64".to_string()],
+            &HashSet::from(["amd64".to_string()]),
+            &[],
+            "dev-libs/pkg-1.0:0/0::testrepo",
+            "dev-libs",
+            "pkg",
+        );
+        assert!(
+            !user_wins.contains("foo"),
+            "user package.use -foo beats package.env foo"
         );
     }
 

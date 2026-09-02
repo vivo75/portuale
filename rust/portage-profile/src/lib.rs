@@ -37,11 +37,12 @@
 //     now models `repo` (repo-level `package.use` only, not repo
 //     `make.defaults`), `pkginternal` (the ebuild's own IUSE `+`/`-`
 //     defaults), `defaults` (profile `make.defaults` + profile
-//     `package.use`), `conf` (make.conf), and `pkg` (user
-//     `package.use`) -- see `Config::package_use{,_repo,_user}` and
-//     `portage-repo::effective_use_flags`. Still absent: `env` (the
-//     `$USE` env var, `/etc/portage/env`, `package.env`), `features`
-//     (`FEATURES`-implied USE), and `env.d`.
+//     `package.use`), `conf` (make.conf), and `pkg` (`package.env`'s
+//     own `USE=`, then user `package.use` on top) -- see
+//     `Config::package_use{,_repo,_user}` / `Config::package_env_use`
+//     and `portage-repo::effective_use_flags`. Still absent: the rest of
+//     `env` (the `$USE` env var, `package.env`'s non-USE vars),
+//     `features` (`FEATURES`-implied USE), and `env.d`.
 //   - No line continuation / multi-line quoted values, and no trailing
 //     `# comment` after a real assignment (a `#` is only recognized as a
 //     comment when it starts the (trimmed) line). Real make.defaults/
@@ -103,13 +104,20 @@
 //         only matters when a child profile's `make.defaults` and a
 //         parent profile's package-specific `package.use` disagree, which
 //         essentially never happens.)
+//       * `package.env`'s own `USE=` (`Config::package_env_use`, from
+//         `/etc/portage/package.env` -> `/etc/portage/env/<name>` files)
+//         -> real `configdict["pkg"]` via `_grab_pkg_env`, applied first
+//         in the `pkg` layer.
 //       * user-level (`/etc/portage/package.use`) ->
 //         `Config::package_use_user`, real `configdict["pkg"]` -- applied
-//         after `make.conf`, the strongest USE layer before the final
-//         `use.force`/`use.mask` step.
-//     Still not modeled: the `env`/`features`/`env.d` `USE_ORDER` layers,
-//     and repo-level `make.defaults` USE (real `_repo_make_defaults`,
-//     folded into `configdict["repo"]` alongside repo `package.use`).
+//         after `make.conf` and after `package.env` (real portage
+//         appends `self.puse` on top of the `_grab_pkg_env` result), the
+//         strongest USE layer before the final `use.force`/`use.mask`
+//         step.
+//     Still not modeled: the rest of the `env` layer (`$USE`,
+//     `package.env`'s non-USE vars), `features`/`env.d`, and repo-level
+//     `make.defaults` USE (real `_repo_make_defaults`, folded into
+//     `configdict["repo"]` alongside repo `package.use`).
 //     Each source is still purely additive within itself (no `-atom`
 //     removal exists for this file -- see `parse_package_use_lines`), and
 //     still applied per package (not globally): a matching entry's tokens
@@ -355,6 +363,29 @@ pub struct Config {
     /// (`VIDEO_CARDS: nvidia` lines) -- real portage's own user-only
     /// `extended_syntax`; see `parse_package_use_lines`.
     pub package_use_user: Vec<(String, Vec<String>)>,
+    /// (atom-or-wildcard string, ordered env-file names) pairs from
+    /// `/etc/portage/package.env` -- real `config.py:894`'s
+    /// `grabdict_package(.../package.env)`. Each named file lives under
+    /// `/etc/portage/env/` and is a `make.conf`-style `KEY=value`
+    /// snippet layered onto a matching package's config (real
+    /// `_grab_pkg_env`, invoked from `setcpv`). An entry with no file
+    /// names is dropped. The `USE=` half of each file is pre-resolved
+    /// into [`Config::package_env_use`]; the non-USE (scalar / other
+    /// incremental) half is a follow-up slice.
+    pub package_env: Vec<(String, Vec<String>)>,
+    /// (atom-or-wildcard string, raw USE tokens) pairs derived from
+    /// [`Config::package_env`]: for each entry, every referenced
+    /// `/etc/portage/env/<name>` file's `USE=` value(s), concatenated in
+    /// file order. Applied by `effective_use_flags` in the `pkg`
+    /// `USE_ORDER` layer, immediately **before**
+    /// [`Config::package_use_user`] -- real portage fills
+    /// `pkg_configdict` from `package.env` first, then appends
+    /// `package.use`'s own USE on top (`config.py:2042-2048`), so a
+    /// user `package.use` flag wins over a `package.env` one. A
+    /// referenced file that doesn't exist contributes nothing (silently
+    /// -- the pilot's standing "no warnings from deep in config
+    /// resolution" precedent).
+    pub package_env_use: Vec<(String, Vec<String>)>,
     /// `@system`'s real atom source: every profile level's own `packages`
     /// file, stacked in chain order and filtered to `*`-prefixed lines
     /// (the `*` stripped) -- see the module doc comment's `packages`
@@ -1168,6 +1199,68 @@ fn process_make_conf_file(
         scalars.insert(key.to_string(), value);
     }
     Ok(())
+}
+
+/// Reads one `/etc/portage/env/<name>` file as an ordered list of
+/// `(KEY, value)` assignments -- real `getconfig(penvfile,
+/// allow_sourcing=True)`. `source <path>` lines are expanded in place
+/// (absolute against `config_root` chroot-style, relative against the
+/// file's own directory), the same resolution `process_make_conf_file`
+/// uses; a `${VAR}` in a value is left literal (this slice has no
+/// per-file expand map -- real portage seeds one from the global
+/// config, a documented simplification). A missing file yields an empty
+/// list (real portage warns from `setcpv`; this pilot follows its
+/// standing "no warnings from deep in config resolution" precedent).
+/// `visited` guards a `source` cycle.
+fn read_env_file_kv(
+    path: &Path,
+    config_root: &Path,
+    visited: &mut HashSet<PathBuf>,
+) -> Vec<(String, String)> {
+    let Ok(canon) = path.canonicalize() else {
+        return Vec::new();
+    };
+    if !visited.insert(canon.clone()) {
+        return Vec::new();
+    }
+    let Ok(text) = fs::read_to_string(&canon) else {
+        return Vec::new();
+    };
+    let mut out: Vec<(String, String)> = Vec::new();
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if let Some(rest) = trimmed.strip_prefix("source ") {
+            let sourced = Path::new(rest.trim());
+            let resolved = if sourced.is_absolute() {
+                config_root.join(sourced.strip_prefix("/").unwrap_or(sourced))
+            } else {
+                canon
+                    .parent()
+                    .map(|p| p.join(sourced))
+                    .unwrap_or_else(|| sourced.to_path_buf())
+            };
+            out.extend(read_env_file_kv(&resolved, config_root, visited));
+            continue;
+        }
+        if let Some((key, raw_value)) = parse_kv_line(trimmed) {
+            out.push((key.to_string(), raw_value.to_string()));
+        }
+    }
+    out
+}
+
+/// The `USE=` value token(s) of one `/etc/portage/env/<name>` file, in
+/// file order -- the only half of a `package.env` file this slice
+/// consumes. Every `USE=` assignment's whitespace-split tokens
+/// (`-flag`/`flag`/`+flag` incremental syntax preserved for
+/// `effective_use_flags`' own `apply_incremental`).
+fn env_file_use_tokens(env_dir: &Path, name: &str, config_root: &Path) -> Vec<String> {
+    let mut visited = HashSet::new();
+    read_env_file_kv(&env_dir.join(name), config_root, &mut visited)
+        .into_iter()
+        .filter(|(k, _)| k == "USE")
+        .flat_map(|(_, v)| v.split_whitespace().map(String::from).collect::<Vec<_>>())
+        .collect()
 }
 
 /// Reads every non-comment, non-blank, trimmed line from `path`, which
@@ -2023,6 +2116,33 @@ pub fn resolve_config(
     config.package_use_repo = parse_package_use_lines(&repo_use_lines, false);
     config.package_use = parse_package_use_lines(&profile_use_lines, false);
     config.package_use_user = parse_package_use_lines(&user_use_lines, true);
+
+    // package.env (real config.py:894 `grabdict_package` +
+    // `_grab_pkg_env`): `/etc/portage/package.env` maps an atom to one or
+    // more env-file names under `/etc/portage/env/`; each file is a
+    // `make.conf`-style `KEY=value` snippet (with `source`) layered onto
+    // a matching package's config. Same `<atom> <token...>` line grammar
+    // as `package.accept_keywords` (real `grabdict` for both). This slice
+    // resolves the `USE=` half of each file into `package_env_use` (the
+    // `pkg` `USE_ORDER` layer, before user `package.use`); the non-USE
+    // half is a follow-up.
+    let package_env_lines = read_config_lines(&config_root.join("etc/portage/package.env"))?;
+    config.package_env = parse_package_accept_keywords_lines(&package_env_lines)
+        .into_iter()
+        .filter(|(_, files)| !files.is_empty())
+        .collect();
+    let env_dir = config_root.join("etc/portage/env");
+    config.package_env_use = config
+        .package_env
+        .iter()
+        .filter_map(|(atom, files)| {
+            let tokens: Vec<String> = files
+                .iter()
+                .flat_map(|name| env_file_use_tokens(&env_dir, name, config_root))
+                .collect();
+            (!tokens.is_empty()).then(|| (atom.clone(), tokens))
+        })
+        .collect();
 
     // package.use.mask/package.use.force: repo-level (every repo, not
     // just main -- see the package.use bullet just above for the same
@@ -3968,6 +4088,64 @@ sync-uri = file:///srv/pkgs
                 // Plain scalar -> other_vars (emerge --info).
                 assert_eq!(c.other_vars.get("CFLAGS").map(String::as_str), Some("-O3"));
             },
+        );
+    }
+
+    #[test]
+    fn package_env_resolves_env_file_use_including_source_and_missing_files() {
+        let root = std::env::temp_dir().join("portage-profile-test-package-env");
+        let repo = root.join("repo");
+        let portage_dir = root.join("etc/portage");
+        let env_dir = portage_dir.join("env");
+        fs::create_dir_all(repo.join("profiles")).unwrap();
+        fs::create_dir_all(&env_dir).unwrap();
+
+        fs::write(
+            portage_dir.join("package.env"),
+            "dev-libs/a debug shared\n\
+             dev-libs/b gone\n\
+             dev-libs/c\n",
+        )
+        .unwrap();
+        // `debug` sources `common` (relative) which sets one flag; `debug`
+        // itself sets another and a non-USE var (ignored by this slice).
+        fs::write(
+            env_dir.join("debug"),
+            "source common\nUSE=\"dbgflag\"\nCFLAGS=\"-O0 -g\"\n",
+        )
+        .unwrap();
+        fs::write(env_dir.join("common"), "USE=\"commonflag\"\n").unwrap();
+        fs::write(env_dir.join("shared"), "USE=\"sharedflag -commonflag\"\n").unwrap();
+        // `gone` is referenced but doesn't exist -> contributes nothing.
+
+        let config = resolve_config(&root, &repo, &[], &[], "testrepo", &HashMap::new())
+            .expect("config must resolve");
+
+        assert_eq!(
+            config.package_env,
+            vec![
+                (
+                    "dev-libs/a".to_string(),
+                    vec!["debug".to_string(), "shared".to_string()]
+                ),
+                ("dev-libs/b".to_string(), vec!["gone".to_string()]),
+            ]
+        );
+        // dev-libs/c (no file names) is dropped entirely.
+        assert_eq!(
+            config.package_env_use,
+            vec![(
+                "dev-libs/a".to_string(),
+                // `debug` -> source common ("commonflag"), then "dbgflag";
+                // then `shared` -> "sharedflag", "-commonflag". Order and
+                // negation are preserved for `apply_incremental`.
+                vec![
+                    "commonflag".to_string(),
+                    "dbgflag".to_string(),
+                    "sharedflag".to_string(),
+                    "-commonflag".to_string(),
+                ]
+            )]
         );
     }
 

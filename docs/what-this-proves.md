@@ -9629,6 +9629,51 @@ so an inherited make.conf-style env can't leak into the fixture config.
 1 `portage-profile` unit test + 1 pinned contract test (keyword override
 + USE_EXPAND flip + `--info`).
 
+### `package.env` reaches per-package USE (2026-09-02)
+
+The other half of the `env` `USE_ORDER` layer's file side: real
+`config.py:894`'s `grabdict_package(.../package.env)` +
+`_grab_pkg_env` (invoked from `setcpv`). `/etc/portage/package.env`
+maps an atom to one or more `/etc/portage/env/<name>` files; each is a
+`make.conf`-style `KEY=value` snippet (with `source`) layered onto a
+matching package's config.
+
+This slice resolves the **`USE=` half**. `Config` gained `package_env`
+(the parsed `(atom, [file names])` list — same `grabdict` line grammar
+as `package.accept_keywords`, so `parse_package_accept_keywords_lines`
+is reused) and `package_env_use` (per atom, every referenced file's
+`USE=` value tokens concatenated in file order, `source`-expanded via
+the new `read_env_file_kv`). `effective_use_flags` takes it as a new
+`pkg`-layer contribution applied **before** `package_use_user` — real
+portage fills `pkg_configdict` from `package.env` first, then appends
+`package.use`'s own USE on top (`config.py:2042-2048`), so a user
+`package.use` flag wins over a `package.env` one.
+
+```sh
+# fixtures/etc/portage/package.env:  dev-libs/penvpkg penv-on
+# fixtures/etc/portage/env/penv-on:  USE="penvflag"
+run -p dev-libs/penvpkg
+# [ebuild  N     ] dev-libs/newpkg-1.0            <- penvflag? ( dev-libs/newpkg )
+# [ebuild  N     ] dev-libs/penvpkg-1.0  USE="penvflag -penvother"
+```
+
+**Cuts:** the non-USE half of a `package.env` file (`FEATURES`,
+`CFLAGS`, `MAKEOPTS`, … — the build-phase env and `emerge --info
+<atom>`) is a follow-up; a referenced file that doesn't exist
+contributes nothing *silently* (real portage warns from `setcpv`; this
+pilot follows its standing "no warnings from deep in config resolution"
+precedent); no per-file `${VAR}` expand map (real portage seeds one
+from the global config). Atom-match ordering follows `package_use_user`'s
+own plain list order, not real `ordered_by_atom_specificity` — the same
+documented simplification `package.use` already makes.
+
+Mirrored in `emerge_pretend_reference.py` (`_read_env_file_kv` /
+`_env_file_use_tokens` / `package_env_use`). New `dev-libs/penvpkg`
+fixture + `etc/portage/{package.env, env/penv-on}`. 1 `portage-profile`
+unit test (parse + `source` + missing file), 1 `portage-repo` unit test
+(the `pkg`-layer ordering: `package.env` beats `make.conf`, user
+`package.use` beats `package.env`), 1 CASE + 1 pinned contract test.
+
 ### `emerge -pc <atoms> --deselect=n`
 
 Real `action_depclean`: `deselect = myopts.get("--deselect") != "n"`
