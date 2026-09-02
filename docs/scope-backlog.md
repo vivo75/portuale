@@ -287,13 +287,20 @@ single-pass BFS can't grow into these incrementally:
   make.defaults` + `dev-libs/repomakedefaultpkg`. Narrowing: only the
   *main* repo's file (an overlay's own is a cut — main implicitly
   masters every overlay here, so its USE already applies everywhere).)*
+  *(Shipped 2026-09-02: **per-profile-level `defaults`-tier walk** —
+  real `regenerate()` walks `configdict["defaults"]` one profile at a
+  time (that level's `make.defaults` USE, then its own `package.use`),
+  so a child profile's `make.defaults USE="-foo"` can cancel a parent's
+  `package.use foo`. New `Config::profile_use_layers` +
+  `ProfileUseLayer`; `effective_use_flags` iterates it in place of the
+  flat `use_tokens` + `package_use` (kept as the fallback for a
+  hand-built `Config`). New `dev-libs/interleavepkg` +
+  `profiles/base/package.use`.)*
   Still open: the **`package.env` non-USE half** (`FEATURES`, `CFLAGS`,
   `MAKEOPTS`, … per package — affects the build-phase env and
   `emerge --info <atom>`); `$USE` env var at its real `env` position
   above `pkg`; the `features` and `env.d` layers; an *overlay's* own
-  `profiles/make.defaults` USE; profile `package.use` interleaved per
-  profile level with that level's `make.defaults` (the pilot applies it
-  as one group).
+  `profiles/make.defaults` USE.
 
 ### D. Sandbox / build isolation — **substantially complete (2026-09-01)**
 

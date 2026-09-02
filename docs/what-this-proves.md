@@ -11155,11 +11155,14 @@ does the real walk:
   weakest layer modeled. *(Repo `make.defaults` USE shipped 2026-09-02;
   an overlay's own `profiles/make.defaults` USE stays a cut — the main
   repo implicitly masters every overlay here.)*
-- `Config::use_tokens` — every profile level's own `make.defaults` USE
-  (chain order), then
-- `Config::package_use` — every profile level's own `package.use` (as
-  one group — a narrow simplification of real per-level interleaving),
-  then
+- `Config::profile_use_layers` — the `defaults` tier walked **one
+  profile chain level at a time** (real `regenerate()` over
+  `configdict["defaults"]`): that level's `make.defaults` USE, then that
+  level's own `package.use`, before the next level — so a child
+  profile's `make.defaults USE="-foo"` can cancel a parent's
+  `package.use foo`. *(Per-level walk shipped 2026-09-02; the flat
+  `Config::use_tokens` + `Config::package_use` are kept only as the
+  fallback for a hand-built `Config`.)* Then
 - `Config::conf_use_tokens` — `make.conf` USE plus the `USE_EXPAND`
   folded values (split out of `use_tokens`), then
 - `Config::package_use_user` — the user-level `/etc/portage/package.use`.
@@ -11170,7 +11173,14 @@ Still documented cuts: the `env` layer's `$USE` env var and
 and `env.d` layers, and an overlay's own `profiles/make.defaults` USE.
 (`package.env`'s `USE=` shipped 2026-09-02.)
 
-Two new fixtures prove the ordering: `dev-libs/repouseweakpkg`
+`dev-libs/interleavepkg` proves the per-level walk: `profiles/base/
+package.use` (weakest chain level) enables `interleaveflag`, the leaf
+`profiles/default/make.defaults` (applied *after* base's `package.use`,
+one profile at a time) cancels it → `USE="-interleaveflag"`, its gated
+dep not pulled; a flat "all `make.defaults` then all `package.use`"
+model would leave it on.
+
+Two more fixtures prove the tier ordering: `dev-libs/repouseweakpkg`
 (repo-level `package.use` enables `repoweakflag`, the profile
 `make.defaults` disables it → `USE="-repoweakflag"`, its gated dep not
 pulled) and `dev-libs/profileuseweakpkg` (profile-level `package.use`

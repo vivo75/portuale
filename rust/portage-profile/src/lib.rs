@@ -95,15 +95,15 @@
 //         real `configdict["repo"]` -- applied *before* the ebuild's own
 //         IUSE `+`/`-` defaults, the weakest USE layer this pilot models.
 //       * every profile level's own `package.use` (chain order) ->
-//         `Config::package_use`, real `configdict["defaults"]` -- applied
-//         after the profile `make.defaults` USE tokens, *before*
-//         `make.conf`. (Real portage interleaves each level's
-//         `package.use` right after that same level's `make.defaults`;
-//         this pilot applies all profile `package.use` as one group after
-//         all profile `make.defaults` -- a narrow simplification that
-//         only matters when a child profile's `make.defaults` and a
-//         parent profile's package-specific `package.use` disagree, which
-//         essentially never happens.)
+//         `Config::profile_use_layers`, real `configdict["defaults"]` --
+//         the `defaults` tier is walked one profile at a time, each
+//         level's `make.defaults` USE then that level's own
+//         `package.use`, before the next level (real
+//         `regenerate()`), so a child profile's `make.defaults` can
+//         cancel a parent's `package.use`. Applied after the `repo` tier,
+//         *before* `make.conf`. (`Config::package_use` still holds the
+//         flat all-levels-as-one-group list, kept only as the fallback
+//         for a hand-built `Config`.)
 //       * `package.env`'s own `USE=` (`Config::package_env_use`, from
 //         `/etc/portage/package.env` -> `/etc/portage/env/<name>` files)
 //         -> real `configdict["pkg"]` via `_grab_pkg_env`, applied first
@@ -288,6 +288,15 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
+/// One profile chain level's `defaults`-tier USE contribution -- its
+/// `make.defaults` `USE=` value strings (in file order), then its own
+/// `package.use` entries. See [`Config::profile_use_layers`].
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ProfileUseLayer {
+    pub make_defaults_use: Vec<String>,
+    pub package_use: Vec<(String, Vec<String>)>,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct Config {
     pub use_flags: HashSet<String>,
@@ -367,11 +376,26 @@ pub struct Config {
     pub repo_make_defaults_use: Vec<String>,
     /// (atom-or-wildcard string, raw USE tokens) pairs from every
     /// **profile** level's own `package.use` (chain order) -- real
-    /// `configdict["defaults"]` (`_pkgprofileuse`). Applied by
-    /// `effective_use_flags` after the profile `make.defaults` tokens
-    /// ([`Config::use_tokens`]), before `make.conf`
-    /// ([`Config::conf_use_tokens`]).
+    /// `configdict["defaults"]` (`_pkgprofileuse`), as one flat group.
+    /// **Superseded** for the actual `defaults`-tier walk by
+    /// [`Config::profile_use_layers`] (which interleaves each level's
+    /// `package.use` right after that level's `make.defaults`, matching
+    /// real portage); `effective_use_flags` only falls back to this flat
+    /// list when `profile_use_layers` is empty (a hand-built `Config`,
+    /// e.g. a test helper). Still populated by `resolve_config` for
+    /// inspection / that fallback.
     pub package_use: Vec<(String, Vec<String>)>,
+    /// The `defaults` `USE_ORDER` tier, resolved **per profile chain
+    /// level** (weakest first) rather than as two flat groups. Real
+    /// `config.py::regenerate()` walks `configdict["defaults"]` one
+    /// profile at a time, applying that profile's `make.defaults` `USE=`
+    /// and then its own `package.use` before moving to the next -- so a
+    /// child profile's `make.defaults USE="-foo"` can cancel a parent
+    /// profile's `package.use foo` for a matching package.
+    /// `effective_use_flags` iterates this in place of the flat
+    /// [`Config::use_tokens`] + [`Config::package_use`] whenever it is
+    /// non-empty.
+    pub profile_use_layers: Vec<ProfileUseLayer>,
     /// (atom-or-wildcard string, raw USE tokens) pairs from the
     /// user-level `/etc/portage/package.use` -- real `configdict["pkg"]`
     /// (`_pusedict` / `getPUSE`). Applied by `effective_use_flags` after
@@ -1768,16 +1792,29 @@ pub fn resolve_config(
         Vec::new()
     };
     for level in &chain {
+        // `defaults`-tier walk, one profile at a time (real
+        // `regenerate()` over `configdict["defaults"]`): this level's
+        // `make.defaults` `USE=`, then this level's own `package.use`.
+        // `use_tokens` accumulates every level's `USE=` flat too (the
+        // fallback path + inspection) -- slice out just this level's by
+        // length delta.
+        let before = config.use_tokens.len();
         let make_defaults = level.join("make.defaults");
-        if !make_defaults.is_file() {
-            continue;
+        if make_defaults.is_file() {
+            // Real config.py quirk: USE is excluded from cross-level
+            // substitution -- see the module doc comment.
+            scalars.remove("USE");
+            let text = fs::read_to_string(&make_defaults)
+                .map_err(|e| format!("reading {}: {e}", make_defaults.display()))?;
+            process_lines(&text, &mut scalars, &mut config);
         }
-        // Real config.py quirk: USE is excluded from cross-level
-        // substitution -- see the module doc comment.
-        scalars.remove("USE");
-        let text = fs::read_to_string(&make_defaults)
-            .map_err(|e| format!("reading {}: {e}", make_defaults.display()))?;
-        process_lines(&text, &mut scalars, &mut config);
+        let level_make_defaults_use = config.use_tokens[before..].to_vec();
+        let level_package_use =
+            parse_package_use_lines(&read_config_lines(&level.join("package.use"))?, false);
+        config.profile_use_layers.push(ProfileUseLayer {
+            make_defaults_use: level_make_defaults_use,
+            package_use: level_package_use,
+        });
     }
 
     let make_conf = config_root.join("etc/portage/make.conf");
@@ -2134,9 +2171,11 @@ pub fn resolve_config(
     // pass) so only the user-level one gets the USE_EXPAND-prefix
     // shorthand's real user-only `extended_syntax` -- see
     // parse_package_use_lines. Still purely additive within each source
-    // (no `-atom` removal for this file). Still a simplification:
-    // profile package.use is applied as one group after all profile
-    // make.defaults rather than interleaved per level.
+    // (no `-atom` removal for this file). The `defaults`-tier profile
+    // `package.use` is interleaved per profile level (see
+    // `Config::profile_use_layers`, built in the `make.defaults` chain
+    // loop above); the flat `config.package_use` built here is only the
+    // fallback for a hand-built `Config`.
     let mut repo_use_lines: Vec<String> =
         read_config_lines(&main_repo_location.join("profiles/package.use"))?;
     for (repo_name, repo_location) in overlay_repos {
@@ -4134,6 +4173,48 @@ sync-uri = file:///srv/pkgs
                 // Plain scalar -> other_vars (emerge --info).
                 assert_eq!(c.other_vars.get("CFLAGS").map(String::as_str), Some("-O3"));
             },
+        );
+    }
+
+    #[test]
+    fn profile_use_layers_are_built_one_per_chain_level() {
+        let root = std::env::temp_dir().join("portage-profile-test-profile-use-layers");
+        let repo = root.join("repo");
+        let base = repo.join("profiles/base");
+        let leaf = repo.join("profiles/leaf");
+        let portage_dir = root.join("etc/portage");
+        fs::create_dir_all(&base).unwrap();
+        fs::create_dir_all(&leaf).unwrap();
+        fs::create_dir_all(&portage_dir).unwrap();
+        fs::write(base.join("make.defaults"), "USE=\"a b\"\n").unwrap();
+        fs::write(base.join("package.use"), "dev-libs/x flag\n").unwrap();
+        fs::write(leaf.join("parent"), "../base\n").unwrap();
+        fs::write(leaf.join("make.defaults"), "USE=\"-b c\"\n").unwrap();
+        // leaf has no package.use.
+        let make_profile = portage_dir.join("make.profile");
+        let _ = fs::remove_file(&make_profile);
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&leaf, &make_profile).unwrap();
+
+        let config = resolve_config(&root, &repo, &[], &[], "testrepo", &HashMap::new())
+            .expect("config must resolve");
+        assert_eq!(
+            config.profile_use_layers,
+            vec![
+                ProfileUseLayer {
+                    make_defaults_use: vec!["a b".to_string()],
+                    package_use: vec![("dev-libs/x".to_string(), vec!["flag".to_string()])],
+                },
+                ProfileUseLayer {
+                    make_defaults_use: vec!["-b c".to_string()],
+                    package_use: vec![],
+                },
+            ]
+        );
+        // The flat `use_tokens` still carries every level's USE= in order.
+        assert_eq!(
+            config.use_tokens,
+            vec!["a b".to_string(), "-b c".to_string()]
         );
     }
 

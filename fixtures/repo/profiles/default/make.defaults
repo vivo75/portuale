@@ -15,4 +15,9 @@
 # and this profile-level make.defaults (real configdict[defaults], a
 # stronger USE_ORDER layer than configdict[repo]) must win, leaving it
 # OFF.
-USE="-bar baz -cancelme -repoweakflag"
+# "-interleaveflag": the per-level defaults-walk check -- ../base's own
+# package.use enables it for dev-libs/interleavepkg, and this leaf
+# profile's make.defaults (applied *after* base's package.use, one
+# profile at a time) cancels it. A flat "all make.defaults then all
+# package.use" model would leave it ON.
+USE="-bar baz -cancelme -repoweakflag -interleaveflag"

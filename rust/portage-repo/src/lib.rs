@@ -1532,9 +1532,12 @@ fn matches_config_entry(entry: &str, candidate_str: &str, category: &str, packag
 ///   The weakest layer this pilot models.
 /// - `pkginternal` -- `iuse`'s own `+flag`/`-flag` default markers (see
 ///   the paragraph below for the grounding).
-/// - `defaults` -- every profile level's own `make.defaults` USE
-///   (`Config::use_tokens`, chain order), then every profile level's own
-///   `package.use` (`Config::package_use`, as one group).
+/// - `defaults` -- walked one profile chain level at a time
+///   (`Config::profile_use_layers`): that level's `make.defaults` USE,
+///   then that level's own `package.use`, before the next level (so a
+///   child profile's `make.defaults` can cancel a parent's
+///   `package.use`). Falls back to the flat `Config::use_tokens` +
+///   `Config::package_use` for a hand-built `Config`.
 /// - `conf` -- `make.conf` USE, then the `USE_EXPAND` folded values
 ///   (`Config::conf_use_tokens`).
 /// - `pkg` -- `package.env`'s own `USE=` (`Config::package_env_use`),
@@ -1622,6 +1625,7 @@ pub fn effective_use_flags(
     repo_make_defaults_use: &[String],
     package_use_repo: &[(String, Vec<String>)],
     package_use: &[(String, Vec<String>)],
+    profile_use_layers: &[portage_profile::ProfileUseLayer],
     package_env_use: &[(String, Vec<String>)],
     package_use_user: &[(String, Vec<String>)],
     package_use_force: &[(String, Vec<String>)],
@@ -1677,15 +1681,27 @@ pub fn effective_use_flags(
         .join(" ");
     portage_profile::apply_incremental(&iuse_defaults, &mut use_flags);
 
-    // `defaults` (real `configdict["defaults"]`): every profile level's
-    // own `make.defaults` USE (chain order), then every profile level's
-    // own `package.use` (applied as one group -- see
-    // `portage_profile::Config::package_use`'s own doc comment for that
-    // narrow simplification vs. real per-level interleaving).
-    for token in use_tokens {
-        portage_profile::apply_incremental(token, &mut use_flags);
+    // `defaults` (real `configdict["defaults"]`): real `regenerate()`
+    // walks this tier one profile at a time -- that level's
+    // `make.defaults` USE, then that level's own `package.use`, before
+    // the next level -- so a child profile's `make.defaults USE="-foo"`
+    // can cancel a parent's `package.use foo`. `profile_use_layers`
+    // carries that per-level structure; the flat `use_tokens` +
+    // `package_use` are the fallback for a hand-built `Config` (a test
+    // helper) that never populated the layers.
+    if profile_use_layers.is_empty() {
+        for token in use_tokens {
+            portage_profile::apply_incremental(token, &mut use_flags);
+        }
+        apply_matching(&mut use_flags, package_use);
+    } else {
+        for layer in profile_use_layers {
+            for token in &layer.make_defaults_use {
+                portage_profile::apply_incremental(token, &mut use_flags);
+            }
+            apply_matching(&mut use_flags, &layer.package_use);
+        }
     }
-    apply_matching(&mut use_flags, package_use);
 
     // `conf` (real `configdict["conf"]`): `make.conf` USE, then the
     // `USE_EXPAND`/`USE_EXPAND_UNPREFIXED` folded values.
@@ -2242,6 +2258,7 @@ fn use_flags_if_conditional(
         &config.repo_make_defaults_use,
         &config.package_use_repo,
         &config.package_use,
+        &config.profile_use_layers,
         &config.package_env_use,
         &config.package_use_user,
         &config.package_use_force,
@@ -3075,6 +3092,7 @@ fn flag_is_settable(
         &config.repo_make_defaults_use,
         &config.package_use_repo,
         &config.package_use,
+        &config.profile_use_layers,
         &config.package_env_use,
         &package_use_user,
         &config.package_use_force,
@@ -5885,6 +5903,7 @@ fn candidate_iuse_and_use(
         &config.repo_make_defaults_use,
         &config.package_use_repo,
         &config.package_use,
+        &config.profile_use_layers,
         &config.package_env_use,
         &config.package_use_user,
         &config.package_use_force,
@@ -7224,6 +7243,7 @@ pub fn resolve_pretend(
                     &config.repo_make_defaults_use,
                     &config.package_use_repo,
                     &config.package_use,
+                    &config.profile_use_layers,
                     &config.package_env_use,
                     &config.package_use_user,
                     &config.package_use_force,
@@ -10450,6 +10470,7 @@ pub fn resolve_pretend_graph(
                 &config.repo_make_defaults_use,
                 &config.package_use_repo,
                 &config.package_use,
+                &config.profile_use_layers,
                 &config.package_env_use,
                 &config.package_use_user,
                 &config.package_use_force,
@@ -11335,6 +11356,7 @@ fn enqueue_dependencies(
             &config.repo_make_defaults_use,
             &config.package_use_repo,
             &config.package_use,
+            &config.profile_use_layers,
             &config.package_env_use,
             &config.package_use_user,
             &config.package_use_force,
@@ -19773,6 +19795,7 @@ mod tests {
             package_use,
             &[],
             &[],
+            &[],
             package_use_force,
             package_use_mask,
             use_force,
@@ -20583,6 +20606,7 @@ mod tests {
             package_use_repo,
             package_use,
             &[],
+            &[],
             package_use_user,
             &[],
             &[],
@@ -20606,6 +20630,83 @@ mod tests {
     }
 
     #[test]
+    fn effective_use_flags_defaults_walk_is_per_profile_level() {
+        // Two chain levels: the parent's package.use enables `foo` for
+        // this package; the child's make.defaults disables it. Real
+        // portage walks make.defaults-then-package.use one profile at a
+        // time, so the child's `-foo` (applied after the parent's
+        // package.use) wins.
+        let layers = vec![
+            portage_profile::ProfileUseLayer {
+                make_defaults_use: vec![],
+                package_use: pu("foo"),
+            },
+            portage_profile::ProfileUseLayer {
+                make_defaults_use: vec!["-foo".to_string()],
+                package_use: vec![],
+            },
+        ];
+        let flags = effective_use_flags(
+            "foo",
+            &[], // use_tokens (fallback -- ignored while layers non-empty)
+            &[],
+            &[],
+            &[],
+            &[], // package_use (fallback)
+            &layers,
+            &[],
+            &[],
+            &[],
+            &[],
+            &HashSet::new(),
+            &HashSet::new(),
+            &HashSet::new(),
+            &HashSet::new(),
+            &[],
+            &[],
+            &["amd64".to_string()],
+            &HashSet::from(["amd64".to_string()]),
+            &[],
+            "dev-libs/pkg-1.0:0/0::testrepo",
+            "dev-libs",
+            "pkg",
+        );
+        assert!(
+            !flags.contains("foo"),
+            "child make.defaults -foo cancels parent package.use foo"
+        );
+        // Reversed order (child's -foo first, parent's package.use foo
+        // last) would leave it on -- proving order matters.
+        let reversed: Vec<_> = layers.into_iter().rev().collect();
+        let flags = effective_use_flags(
+            "foo",
+            &[],
+            &[],
+            &[],
+            &[],
+            &[],
+            &reversed,
+            &[],
+            &[],
+            &[],
+            &[],
+            &HashSet::new(),
+            &HashSet::new(),
+            &HashSet::new(),
+            &HashSet::new(),
+            &[],
+            &[],
+            &["amd64".to_string()],
+            &HashSet::from(["amd64".to_string()]),
+            &[],
+            "dev-libs/pkg-1.0:0/0::testrepo",
+            "dev-libs",
+            "pkg",
+        );
+        assert!(flags.contains("foo"));
+    }
+
+    #[test]
     fn effective_use_flags_repo_make_defaults_use_is_the_weakest_repo_layer() {
         let euf = |iuse: &str, repo_md: &[String], repo_pu: &[(String, Vec<String>)]| {
             effective_use_flags(
@@ -20614,6 +20715,7 @@ mod tests {
                 &[],
                 repo_md,
                 repo_pu,
+                &[],
                 &[],
                 &[],
                 &[],
@@ -20692,6 +20794,7 @@ mod tests {
             &[],
             &[],
             &[],
+            &[],
             &pu("foo"), // package_env_use
             &[],        // package_use_user
             &[],
@@ -20717,6 +20820,7 @@ mod tests {
         // ...but a user package.use `-foo` still wins over package.env `foo`.
         let user_wins = effective_use_flags(
             "foo",
+            &[],
             &[],
             &[],
             &[],

@@ -1338,6 +1338,7 @@ def _use_flags_if_conditional(value_str, candidate, category, package, candidate
         config["repo_make_defaults_use"],
         config["package_use_repo"],
         config["package_use"],
+        config["profile_use_layers"],
         config["package_env_use"],
         config["package_use_user"],
         config["package_use_force"],
@@ -1994,6 +1995,7 @@ def _flag_is_settable(candidate, category, package, flag, desired, config):
         config["repo_make_defaults_use"],
         config["package_use_repo"],
         config["package_use"],
+        config["profile_use_layers"],
         config["package_env_use"],
         package_use_user,
         config["package_use_force"],
@@ -2455,6 +2457,7 @@ def effective_use_flags(
     repo_make_defaults_use,
     package_use_repo,
     package_use,
+    profile_use_layers,
     package_env_use,
     package_use_user,
     package_use_force,
@@ -2488,9 +2491,10 @@ def effective_use_flags(
          layer modeled.
       2. pkginternal -- iuse's own +flag/-flag default markers (see the
          paragraph below for the grounding).
-      3. defaults -- every profile level's own make.defaults USE
-         (use_tokens, chain order), then every profile level's own
-         package.use (package_use, as one group).
+      3. defaults -- walked one profile chain level at a time
+         (profile_use_layers): that level's make.defaults USE, then that
+         level's own package.use, before the next level. Falls back to
+         the flat use_tokens + package_use for a hand-built config dict.
       4. conf -- make.conf USE, then the USE_EXPAND folded values
          (conf_use_tokens).
       5. pkg -- package.env's own USE= (package_env_use), then the
@@ -2596,11 +2600,22 @@ def effective_use_flags(
     )
     _apply_incremental(iuse_defaults, use_flags)
 
-    # defaults (real configdict["defaults"]): profile make.defaults USE,
-    # then profile package.use (as one group -- see resolve_config).
-    for token in use_tokens:
-        _apply_incremental(token, use_flags)
-    _apply_matching(package_use)
+    # defaults (real configdict["defaults"]): walked one profile chain
+    # level at a time (real regenerate() over configdict["defaults"]) --
+    # that level's make.defaults USE, then that level's own package.use,
+    # before the next level -- so a child profile's make.defaults
+    # USE="-foo" can cancel a parent's package.use foo. profile_use_layers
+    # carries that per-level structure; the flat use_tokens + package_use
+    # are the fallback for a hand-built config dict.
+    if not profile_use_layers:
+        for token in use_tokens:
+            _apply_incremental(token, use_flags)
+        _apply_matching(package_use)
+    else:
+        for layer in profile_use_layers:
+            for token in layer["make_defaults_use"]:
+                _apply_incremental(token, use_flags)
+            _apply_matching(layer["package_use"])
 
     # conf (real configdict["conf"]): make.conf USE, then the USE_EXPAND
     # folded values.
@@ -2814,6 +2829,7 @@ def _reinstall_flags_for_use_change(root, category, package, candidate, config, 
         config["repo_make_defaults_use"],
         config["package_use_repo"],
         config["package_use"],
+        config["profile_use_layers"],
         config["package_env_use"],
         config["package_use_user"],
         config["package_use_force"],
@@ -3378,6 +3394,7 @@ def _candidate_iuse_and_use(candidate, category, package, config):
         config["repo_make_defaults_use"],
         config["package_use_repo"],
         config["package_use"],
+        config["profile_use_layers"],
         config["package_env_use"],
         config["package_use_user"],
         config["package_use_force"],
@@ -3906,7 +3923,7 @@ def resolve_config(
     "conf_use_tokens", "accept_keywords",
     "package_mask", "package_unmask", "package_accept_keywords",
     "package_use_repo", "repo_make_defaults_use", "package_use",
-    "package_env", "package_env_use",
+    "profile_use_layers", "package_env", "package_env_use",
     "package_use_user",
     "system_packages", "package_provided", "use_force",
     "use_mask", "package_use_force", "package_use_mask", "use_expand",
@@ -4000,26 +4017,40 @@ def resolve_config(
         if os.path.exists(make_profile)
         else []
     )
+    # defaults tier, one profile at a time (real regenerate() over
+    # configdict["defaults"]): each level's make.defaults USE then its own
+    # package.use. use_tokens accumulates every level's USE= flat too (the
+    # fallback path); slice out just this level's by length delta. Mirrors
+    # portage-profile/src/lib.rs's resolve_config.
+    profile_use_layers = []
     for level in chain:
+        before = len(use_tokens)
         make_defaults = os.path.join(level, "make.defaults")
-        if not os.path.isfile(make_defaults):
-            continue
-        # Real config.py quirk: USE is excluded from cross-level
-        # substitution -- see the module doc comment.
-        scalars.pop("USE", None)
-        with open(make_defaults) as f:
-            text = f.read()
-        _process_config_lines(
-            text,
-            scalars,
-            use_flags,
-            use_tokens,
-            accept_keywords,
-            use_expand,
-            use_expand_unprefixed,
-            use_expand_implicit,
-            iuse_implicit,
-            use_expand_hidden,
+        if os.path.isfile(make_defaults):
+            # Real config.py quirk: USE is excluded from cross-level
+            # substitution -- see the module doc comment.
+            scalars.pop("USE", None)
+            with open(make_defaults) as f:
+                text = f.read()
+            _process_config_lines(
+                text,
+                scalars,
+                use_flags,
+                use_tokens,
+                accept_keywords,
+                use_expand,
+                use_expand_unprefixed,
+                use_expand_implicit,
+                iuse_implicit,
+                use_expand_hidden,
+            )
+        profile_use_layers.append(
+            {
+                "make_defaults_use": use_tokens[before:],
+                "package_use": _parse_package_use_lines(
+                    _read_config_lines(os.path.join(level, "package.use"))
+                ),
+            }
         )
 
     make_conf = os.path.join(config_root, "etc", "portage", "make.conf")
@@ -4545,6 +4576,7 @@ def resolve_config(
             os.path.join(main_repo_location, "profiles", "make.defaults"), scalars
         ),
         "package_use": _parse_package_use_lines(profile_use_lines),
+        "profile_use_layers": profile_use_layers,
         "package_env": package_env,
         "package_env_use": package_env_use,
         "package_use_user": _parse_package_use_lines(
@@ -5569,6 +5601,7 @@ def resolve_pretend(
                 config["repo_make_defaults_use"],
                 config["package_use_repo"],
                 config["package_use"],
+                config["profile_use_layers"],
                 config["package_env_use"],
                 config["package_use_user"],
                 config["package_use_force"],
@@ -7335,6 +7368,7 @@ def resolve_pretend_graph(
                 config["repo_make_defaults_use"],
                 config["package_use_repo"],
                 config["package_use"],
+                config["profile_use_layers"],
                 config["package_env_use"],
                 config["package_use_user"],
                 config["package_use_force"],
@@ -8043,6 +8077,7 @@ def _enqueue_dependencies(
             config["repo_make_defaults_use"],
             config["package_use_repo"],
             config["package_use"],
+            config["profile_use_layers"],
             config["package_env_use"],
             config["package_use_user"],
             config["package_use_force"],

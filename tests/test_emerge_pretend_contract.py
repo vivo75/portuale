@@ -1003,6 +1003,7 @@ CASES = [
     ("package.use depth: profile-level entry loses to make.conf", ["--pretend", "-v", "dev-libs/profileuseweakpkg"], 0),
     ("package.env: env-file USE= enables a flag, pulling in a dependency", ["--pretend", "dev-libs/penvpkg"], 0),
     ("repo make.defaults: USE= enables a flag, pulling in a dependency", ["--pretend", "-v", "dev-libs/repomakedefaultpkg"], 0),
+    ("profile defaults walk: a leaf make.defaults cancels a parent package.use", ["--pretend", "-v", "dev-libs/interleavepkg"], 0),
     ("blocker: strong (!!) blocker matches an installed package", ["--pretend", "dev-libs/blockerpkg"], 0),
     ("blocker: weak (!) blocker matches another new package in the graph", ["--pretend", "dev-libs/graphblockerparent"], 0),
     ("blocker: -v widens the [blocks B ] bracket by the mask column", ["--pretend", "-v", "dev-libs/blockerpkg"], 0),
@@ -4722,6 +4723,29 @@ def test_package_env_env_file_use_enables_a_flag_and_pulls_in_a_dependency(
         "[ebuild  N     ] dev-libs/newpkg-1.0 ",
         '[ebuild  N     ] dev-libs/penvpkg-1.0  USE="penvflag -penvother"',
     ]
+
+
+def test_profile_defaults_walk_is_per_level_not_flat(
+    emerge_binary, emerge_pretend_python, fixture_env
+):
+    """The `defaults` USE_ORDER tier is walked one profile chain level at
+    a time (real config.py::regenerate() over configdict["defaults"]):
+    make.defaults then package.use, per level. fixtures/repo/profiles/
+    base/package.use enables "interleaveflag" for dev-libs/interleavepkg;
+    the leaf profiles/default/make.defaults (applied *after* base's
+    package.use) disables it -> USE="-interleaveflag", its gated dep NOT
+    pulled. A flat "all make.defaults then all package.use" model would
+    leave it ON. Rust == Python."""
+    base = ["--pretend", "-v", "dev-libs/interleavepkg"]
+    rust = _run([str(emerge_binary)], base, fixture_env)
+    py = _run(emerge_pretend_python, base, fixture_env)
+    assert rust.returncode == 0
+    assert rust.stdout == py.stdout
+    assert rust.stdout.splitlines()[0] == (
+        '[ebuild  N     ] dev-libs/interleavepkg-1.0::testrepo  '
+        'USE="-interleaveflag -other"'
+    )
+    assert "dev-libs/newpkg" not in rust.stdout
 
 
 def test_repo_make_defaults_use_enables_a_flag_and_pulls_in_a_dependency(

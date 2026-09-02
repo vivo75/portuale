@@ -1,0 +1,8 @@
+# base profile level (weakest in the chain). Enables "interleaveflag"
+# for dev-libs/interleavepkg. The leaf "default" profile's own
+# make.defaults then disables it with USE="-interleaveflag" -- real
+# portage's per-level defaults walk (make.defaults then package.use, one
+# profile at a time) applies base's package.use *before* default's
+# make.defaults, so the flag ends up OFF. A flat "all make.defaults then
+# all package.use" model would leave it ON.
+dev-libs/interleavepkg interleaveflag

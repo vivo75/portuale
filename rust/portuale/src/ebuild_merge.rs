@@ -1900,6 +1900,7 @@ fn blocked_installed_packages(
             &config.repo_make_defaults_use,
             &config.package_use_repo,
             &config.package_use,
+            &config.profile_use_layers,
             &config.package_env_use,
             &config.package_use_user,
             &config.package_use_force,
