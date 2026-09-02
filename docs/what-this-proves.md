@@ -9195,6 +9195,42 @@ one — vdb `RDEPEND` deliberately differs from its ebuild). Mirrored in
 "account for every installed package's deps" mode) stays its own,
 higher-churn slice.
 
+### `emerge --misspell-suggestions` (2026-09-02)
+
+Real `depgraph.py:7034-7066` + `dbapi/_similar_name_search.py`
+(`--misspell-suggestions`, `y_or_n`, default `y`): when a **top-level**
+atom names a `cat/pkg` that doesn't exist in any repo (real `not
+cp_exists` — an existing-but-masked cp takes the autounmask-note path
+instead), the `there are no ebuilds to satisfy "…"` abort is followed by
+`emerge: searching for similar names...` and `difflib.get_close_matches`
+suggestions over every `cat/pkg` in the tree.
+
+`portuale/src/difflib.rs` gained `get_close_matches(word, possibilities,
+n, cutoff)` — the up-to-`n` entries scoring `ratio(possibility, word) >=
+cutoff`, ordered by real `_nlargest`'s `(score, string)` descending (a
+score tie breaks toward the lexicographically larger name). New
+`pretend.rs::misspell_suggestion_block` runs entirely at the CLI layer
+off the `resolve_pretend_graph` `Err` message — **no new resolver
+parameter** — parsing the quoted atom back out, checking
+`list_candidates` is empty, then emitting `Maybe you meant <X>?` /
+`Maybe you meant any of these: <X>, <Y>?` / ` nothing similar found.`
+exactly as real `writemsg` does. Mirrored in
+`emerge_pretend_reference.py` (its own `difflib.get_close_matches`).
+
+```sh
+FX="$(realpath fixtures)"
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" PORTAGE_RUNNING_ROOT="$FX" \
+    rust/target/release/portuale emerge --pretend dev-libs/newpgk
+# emerge: there are no ebuilds to satisfy "dev-libs/newpgk".
+#
+# emerge: searching for similar names...
+# emerge: Maybe you meant any of these: dev-libs/newpkg, dev-libs/newslotpkg, dev-libs/newrepopkg?
+```
+
+Simplification: the real case-folding round-trip (`cp_lower` /
+`matches_orig_case`) is skipped — every fixture `cat/pkg` is lowercase.
+1 `difflib` unit test + 3 `CASES` + 1 pinned contract test.
+
 ### `emerge -pc <atoms> --deselect=n`
 
 Real `action_depclean`: `deselect = myopts.get("--deselect") != "n"`

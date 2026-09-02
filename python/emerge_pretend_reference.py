@@ -7773,7 +7773,8 @@ _VALUE_OPTIONS = [
     ("--jobs-tmpdir-require-free-gb", None),
     ("--keep-going", None),
     ("--load-average", "-l"),
-    ("--misspell-suggestions", None),
+    # --misspell-suggestions IS implemented (difflib close-name
+    # suggestions for a missing cat/pkg).
     ("--reinstall", None),
     # --reinstall-atoms ATOMS IS implemented (force-reinstall a matching
     # already-installed package).
@@ -8571,6 +8572,40 @@ def _all_cp(repos):
                 ):
                     out.add(f"{category}/{package}")
     return sorted(out)
+
+
+def _misspell_suggestion_block(message, repos, enabled):
+    """Real depgraph.py:7034-7066 + dbapi/_similar_name_search.py
+    (--misspell-suggestions, default on): a top-level `there are no
+    ebuilds to satisfy "<atom>".` whose cat/pkg genuinely doesn't exist
+    -> difflib.get_close_matches suggestions. Returns the block to append
+    to the already-written `emerge: <message>` (no trailing newline), or
+    None. Mirrors pretend.rs's misspell_suggestion_block."""
+    import difflib
+
+    if not enabled:
+        return None
+    first = message.splitlines()[0] if message else ""
+    prefix = 'there are no ebuilds to satisfy "'
+    if not (first.startswith(prefix) and first.endswith('".')):
+        return None
+    atom_str = first[len(prefix) : -2]
+    atom = _parse_atom(atom_str)
+    if atom is None or "/" not in atom.cp:
+        return None
+    category, package = atom.cp.split("/", 1)
+    if list_candidates(repos, category, package):
+        return None
+    target = atom.cp
+    all_cp = [cp for cp in _all_cp(repos) if cp != target]
+    matches = difflib.get_close_matches(target, all_cp)
+    if not matches:
+        tail = " nothing similar found."
+    elif len(matches) == 1:
+        tail = f"\nemerge: Maybe you meant {matches[0]}?"
+    else:
+        tail = f"\nemerge: Maybe you meant any of these: {', '.join(matches)}?"
+    return f"\n\nemerge: searching for similar names...{tail}"
 
 
 def _search_best_candidate(cands):
@@ -11222,6 +11257,7 @@ def run(args):
     rebuild_exclude = []
     rebuild_ignore = []
     dynamic_deps = True
+    misspell_suggestions = True
     usepkg_exclude = []
     usepkg_include = []
     json_output = False
@@ -11505,6 +11541,17 @@ def run(args):
                 val = "y"
                 i += 1
             dynamic_deps = val not in ("n", "N")
+        elif arg == "--misspell-suggestions" or arg.startswith("--misspell-suggestions="):
+            if arg.startswith("--misspell-suggestions="):
+                val = arg[len("--misspell-suggestions=") :]
+                i += 1
+            elif i + 1 < len(args) and args[i + 1] in ("y", "n"):
+                val = args[i + 1]
+                i += 2
+            else:
+                val = "y"
+                i += 1
+            misspell_suggestions = val not in ("n", "N")
         elif arg == "--rebuild-if-new-slot" or arg.startswith("--rebuild-if-new-slot="):
             # Real y_or_n, default "y" -- only =n disables.
             if arg.startswith("--rebuild-if-new-slot="):
@@ -12867,7 +12914,13 @@ def run(args):
             dynamic_deps and not nodeps,
         )
     except ResolutionError as e:
-        print(f"emerge: {e}", file=sys.stderr)
+        sys.stderr.write(f"emerge: {e}")
+        extra = _misspell_suggestion_block(
+            str(e), find_repos(_config_root()), misspell_suggestions
+        )
+        if extra:
+            sys.stderr.write(extra)
+        sys.stderr.write("\n")
         return 1
     entries = result["entries"]
 

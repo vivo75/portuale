@@ -323,8 +323,11 @@ dev/test context — see also the `chown` note below).
   (real `create_depgraph_params.py` — `=n` walks an installed package's
   vdb `*DEPEND` snapshot for its `--deep` recursion instead of the
   current ebuild; `enqueue_dependencies` gained `root`/`dynamic_deps`).
+  **Shipped 2026-09-02 (batch 5): `--misspell-suggestions`** (real
+  `_similar_name_search` — `difflib.get_close_matches` package-name
+  suggestions for a missing `cat/pkg`; new `difflib::get_close_matches`,
+  `pretend.rs::misspell_suggestion_block`, no new resolver param).
   Remaining: `--complete-graph[-if-*]`, `--useoldpkg-atoms`,
-  `--misspell-suggestions`,
   `--package-moves` (`profiles/updates/`), `--quickpkg-direct`,
   `--autounmask-continue` / `--autounmask-backtrack`.
 

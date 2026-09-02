@@ -4978,6 +4978,55 @@ fn run_config_action(
     }
 }
 
+/// Real `depgraph.py:7034-7066` + `dbapi/_similar_name_search.py`
+/// (`--misspell-suggestions`, default on): when `resolve_pretend_graph`
+/// aborts a top-level atom with `there are no ebuilds to satisfy
+/// "<atom>".` **and** that atom's `cat/pkg` genuinely doesn't exist in
+/// any repo (real `not cp_exists` -- a `cat/pkg` that exists but is only
+/// masked gets the autounmask notes instead, never this), print
+/// `difflib.get_close_matches` suggestions over every `cat/pkg` in the
+/// tree. Returns the block to append to the already-printed
+/// `emerge: <message>` (no trailing newline -- the caller adds one), or
+/// `None` when it doesn't apply.
+fn misspell_suggestion_block(
+    message: &str,
+    repos: &[portage_repo::RepoConfig],
+    enabled: bool,
+) -> Option<String> {
+    if !enabled {
+        return None;
+    }
+    // The message's first line is exactly `there are no ebuilds to
+    // satisfy "<atom-debug>".` -- pull the quoted atom out.
+    let first = message.lines().next()?;
+    let rest = first.strip_prefix("there are no ebuilds to satisfy \"")?;
+    let atom_str = rest.strip_suffix("\".")?;
+    let atom = parse_atom(atom_str)?;
+    // Real `not cp_exists`: only when the `cat/pkg` directory has no
+    // ebuilds anywhere.
+    if !portage_repo::list_candidates(repos, &atom.category, &atom.package)
+        .map(|c| c.is_empty())
+        .unwrap_or(true)
+    {
+        return None;
+    }
+    let target = format!("{}/{}", atom.category, atom.package);
+    let all_cp: Vec<String> = portage_repo::all_cp(repos)
+        .into_iter()
+        .filter(|cp| *cp != target)
+        .collect();
+    let matches = difflib::get_close_matches(&target, &all_cp, 3, 0.6);
+    let tail = match matches.len() {
+        0 => " nothing similar found.".to_string(),
+        1 => format!("\nemerge: Maybe you meant {}?", matches[0]),
+        _ => format!(
+            "\nemerge: Maybe you meant any of these: {}?",
+            matches.join(", ")
+        ),
+    };
+    Some(format!("\n\nemerge: searching for similar names...{tail}"))
+}
+
 pub fn run(args: &[String]) -> ExitCode {
     if wants_help(args) {
         print_help();
@@ -5070,6 +5119,11 @@ pub fn run(args: &[String]) -> ExitCode {
     // snapshot. `--nodeps` forces it off (real
     // `create_depgraph_params.py:122`).
     let mut dynamic_deps = true;
+    // --misspell-suggestions (real `y_or_n`, `depgraph.py:7037`, default
+    // "y"): when a top-level atom names a `cat/pkg` that doesn't exist,
+    // suggest close package names (`difflib.get_close_matches` via
+    // `_similar_name_search`). Only `=n` disables it.
+    let mut misspell_suggestions = true;
     // --usepkg-exclude/--usepkg-include: same "action": "append",
     // space-separated-per-occurrence shape as --exclude/-X above (real
     // main.py: "A space separated list of package names or slot atoms"),
@@ -5519,6 +5573,18 @@ pub fn run(args: &[String]) -> ExitCode {
                 "y".to_string()
             };
             dynamic_deps = !matches!(val.as_str(), "n" | "N");
+        } else if arg == "--misspell-suggestions" || arg.starts_with("--misspell-suggestions=") {
+            let val = if let Some(v) = arg.strip_prefix("--misspell-suggestions=") {
+                i += 1;
+                v.to_string()
+            } else if matches!(args.get(i + 1).map(String::as_str), Some("y" | "n")) {
+                i += 2;
+                args[i - 1].clone()
+            } else {
+                i += 1;
+                "y".to_string()
+            };
+            misspell_suggestions = !matches!(val.as_str(), "n" | "N");
         } else if arg == "--rebuild-if-new-slot" || arg.starts_with("--rebuild-if-new-slot=") {
             // Real `y_or_n`, default "y" -- only `=n` disables.
             let val = if let Some(v) = arg.strip_prefix("--rebuild-if-new-slot=") {
@@ -7211,7 +7277,11 @@ pub fn run(args: &[String]) -> ExitCode {
     ) {
         Ok(result) => result,
         Err(e) => {
-            eprintln!("emerge: {e}");
+            eprint!("emerge: {e}");
+            if let Some(extra) = misspell_suggestion_block(&e, &repos, misspell_suggestions) {
+                eprint!("{extra}");
+            }
+            eprintln!();
             return ExitCode::from(1);
         }
     };

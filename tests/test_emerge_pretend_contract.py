@@ -869,6 +869,9 @@ CASES = [
     ("multi-atom: all requested atoms already installed", ["--pretend", "dev-libs/samepkg", "dev-libs/samepkg"], 0),
     ("multi-atom: a nonexistent atom aborts the whole run, first-bad-wins", ["--pretend", "dev-libs/does-not-exist", "dev-libs/newpkg"], 1),
     ("multi-atom: a later nonexistent atom still aborts the whole run", ["--pretend", "dev-libs/newpkg", "dev-libs/does-not-exist"], 1),
+    ("--misspell-suggestions: a near-miss package name gets suggestions", ["--pretend", "dev-libs/newpgk"], 1),
+    ("--misspell-suggestions=n: no suggestions", ["--pretend", "--misspell-suggestions=n", "dev-libs/newpgk"], 1),
+    ("--misspell-suggestions: a masked (existing) cp gets no name suggestions", ["--pretend", "dev-libs/autounmaskkeywordpkg"], 1),
     ("--verbose is now implemented, not rejected", ["--pretend", "--verbose", "dev-libs/newpkg"], 0),
     ("-v short alias is now implemented, not rejected", ["--pretend", "-v", "dev-libs/newpkg"], 0),
     ("without --verbose, USE= is never shown even for a package with IUSE", ["--pretend", "dev-libs/useflagpkg"], 0),
@@ -4937,7 +4940,9 @@ def test_usepkg_exclude_drops_the_only_binary_candidate(emerge_binary, fixture_e
     )
     assert result.returncode == 1
     assert result.stdout == ""
-    assert result.stderr.strip() == (
+    # binaryonlypkg has no ebuild, so real `not cp_exists` -> the
+    # --misspell-suggestions block is appended after the abort line.
+    assert result.stderr.splitlines()[0] == (
         'emerge: there are no ebuilds to satisfy "dev-libs/binaryonlypkg".'
     )
 
@@ -5889,7 +5894,12 @@ def test_bad_top_level_atom_aborts_the_whole_run_in_argv_order(emerge_binary, fi
     )
     assert result.returncode == 1
     assert result.stdout == ""
-    assert result.stderr.strip() == 'emerge: there are no ebuilds to satisfy "dev-libs/does-not-exist".'
+    # The first line is the abort; --misspell-suggestions (default on)
+    # appends its own block for a genuinely-missing cp.
+    assert result.stderr.splitlines()[0] == (
+        'emerge: there are no ebuilds to satisfy "dev-libs/does-not-exist".'
+    )
+    assert "emerge: searching for similar names..." in result.stderr
 
 
 def test_versioned_and_slotted_top_level_atoms_resolve_like_bare_ones(
@@ -9539,6 +9549,41 @@ def test_fuzzy_and_regex_search_change_the_result_set(
     assert apps(["-s", "--fuzzy-search=n", "useflgpkg"]) == 0  # exact only
     assert apps(["-s", "--search-similarity=100", "useflgpkg"]) == 0
     assert apps(["-s", "%^dev-libs/newpkg$"]) == 1  # regex, anchored
+
+
+def test_misspell_suggestions_for_a_missing_package_name(
+    emerge_binary, emerge_pretend_python, fixture_env
+):
+    """--misspell-suggestions (real depgraph.py:7037 + _similar_name_search,
+    default on): a top-level `cat/pkg` that doesn't exist gets
+    `difflib.get_close_matches` suggestions after the "there are no
+    ebuilds to satisfy" line. `--misspell-suggestions=n` drops them; an
+    existing-but-masked cp gets no name suggestions (real `not
+    cp_exists`)."""
+    r = _run([str(emerge_binary)], ["--pretend", "dev-libs/newpgk"], fixture_env)
+    p = _run(emerge_pretend_python, ["--pretend", "dev-libs/newpgk"], fixture_env)
+    assert r.returncode == 1
+    assert r.stderr == p.stderr
+    assert 'there are no ebuilds to satisfy "dev-libs/newpgk".' in r.stderr
+    assert "emerge: searching for similar names..." in r.stderr
+    assert "dev-libs/newpkg" in r.stderr  # the close match
+
+    off = _run(
+        [str(emerge_binary)],
+        ["--pretend", "--misspell-suggestions=n", "dev-libs/newpgk"],
+        fixture_env,
+    )
+    assert off.stderr == _run(
+        emerge_pretend_python,
+        ["--pretend", "--misspell-suggestions=n", "dev-libs/newpgk"],
+        fixture_env,
+    ).stderr
+    assert "searching for similar names" not in off.stderr
+
+    # dev-libs/autounmaskkeywordpkg exists (keyword-masked) -> the
+    # autounmask note path, never the name-suggestion path.
+    masked = _run([str(emerge_binary)], ["--pretend", "dev-libs/autounmaskkeywordpkg"], fixture_env)
+    assert "searching for similar names" not in masked.stderr
 
 
 def test_check_news_counts_unread_relevant_items(

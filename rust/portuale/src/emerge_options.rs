@@ -306,7 +306,9 @@ pub const VALUE_OPTIONS: &[(&str, Option<&str>)] = &[
     ("--jobs-tmpdir-require-free-gb", None),
     ("--keep-going", None),
     ("--load-average", Some("-l")),
-    ("--misspell-suggestions", None),
+    // `--misspell-suggestions` IS implemented -- `difflib` close-name
+    // suggestions when a top-level `cat/pkg` doesn't exist (see
+    // pretend.rs's `misspell_suggestion_block`).
     ("--reinstall", None),
     // `--reinstall-atoms ATOMS` IS implemented -- a matching
     // already-installed package is forced to re-merge (see pretend.rs's

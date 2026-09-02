@@ -40,6 +40,33 @@ pub fn ratio(a: &str, b: &str) -> f64 {
     2.0 * matches as f64 / total as f64
 }
 
+/// Real `difflib.get_close_matches(word, possibilities, n, cutoff)`: the
+/// up-to-`n` entries of `possibilities` whose `ratio()` against `word`
+/// reaches `cutoff`, best first. Real `get_close_matches` sets `word` as
+/// seq2 and each possibility as seq1, so the score is `ratio(possibility,
+/// word)`; its `_nlargest(n, [(score, x), ...])` orders by `(score, x)`
+/// descending, so a score tie breaks toward the lexicographically larger
+/// string -- reproduced here. (Real portage calls this with the default
+/// `n=3`, `cutoff=0.6` via `_similar_name_search`.)
+pub fn get_close_matches(
+    word: &str,
+    possibilities: &[String],
+    n: usize,
+    cutoff: f64,
+) -> Vec<String> {
+    let mut scored: Vec<(f64, &str)> = possibilities
+        .iter()
+        .map(|p| (ratio(p, word), p.as_str()))
+        .filter(|(r, _)| *r >= cutoff)
+        .collect();
+    scored.sort_by(|a, b| b.0.total_cmp(&a.0).then_with(|| b.1.cmp(a.1)));
+    scored
+        .into_iter()
+        .take(n)
+        .map(|(_, s)| s.to_string())
+        .collect()
+}
+
 /// Real `get_matching_blocks()`'s recursion, summed: `find_longest_match`
 /// on the window, then recurse into the slice before it and the slice
 /// after it. Block *order* doesn't matter for the sum, so the explicit
@@ -127,12 +154,38 @@ fn find_longest_match(
 
 #[cfg(test)]
 mod tests {
-    use super::ratio;
+    use super::{get_close_matches, ratio};
 
     // Values below were produced by CPython's own
     // `difflib.SequenceMatcher(None, a, b).ratio()`.
     fn approx(x: f64, y: f64) {
         assert!((x - y).abs() < 1e-9, "{x} != {y}");
+    }
+
+    #[test]
+    fn get_close_matches_matches_cpython() {
+        let words: Vec<String> = ["ape", "apple", "peach", "puppy"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        // CPython: difflib.get_close_matches("appel", words) -> ['apple', 'ape']
+        assert_eq!(
+            get_close_matches("appel", &words, 3, 0.6),
+            vec!["apple", "ape"]
+        );
+        // difflib.get_close_matches("dev-libs/newpgk",
+        //   ["dev-libs/newpkg", "dev-libs/oldpkg"])
+        //   -> ['dev-libs/newpkg', 'dev-libs/oldpkg'] (both clear 0.6;
+        //   newpkg scores higher).
+        let cps: Vec<String> = ["dev-libs/oldpkg", "dev-libs/newpkg"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        assert_eq!(
+            get_close_matches("dev-libs/newpgk", &cps, 3, 0.6),
+            vec!["dev-libs/newpkg", "dev-libs/oldpkg"]
+        );
+        assert!(get_close_matches("zzzzzz", &words, 3, 0.6).is_empty());
     }
 
     #[test]
