@@ -10385,6 +10385,26 @@ def test_check_news_reports_none_when_all_items_are_read(
     assert rust.stdout.strip() == "* No news items were found."
 
 
+def test_check_news_skip_file_excludes_items_like_the_read_file(
+    emerge_binary, emerge_pretend_python, fixture_env, tmp_path
+):
+    """An id in <eroot>/var/lib/gentoo/news/news-<repo>.skip (real
+    NewsManager.updateItems' permanent per-item skip list) is not
+    counted, exactly like a `.read` id. With ROOT at an empty tmp tree
+    only 2026-09-01-pilot-general (unrestricted) is relevant; a `.skip`
+    listing it -- and no `.read` at all -- drops the count to 0."""
+    news_dir = tmp_path / "var" / "lib" / "gentoo" / "news"
+    news_dir.mkdir(parents=True)
+    (news_dir / "news-testrepo.skip").write_text("2026-09-01-pilot-general\n")
+    env = dict(fixture_env)
+    env["ROOT"] = str(tmp_path)
+    rust = _run([str(emerge_binary)], ["--check-news"], env)
+    py = _run(emerge_pretend_python, ["--check-news"], env)
+    assert rust.returncode == 0
+    assert rust.stdout == py.stdout
+    assert rust.stdout.strip() == "* No news items were found."
+
+
 def test_genuinely_unrecognized_option_gets_a_distinct_message(emerge_binary, fixture_env):
     """A flag that isn't in real emerge's own option surface at all must
     be reported differently from a real-but-unimplemented one, so users

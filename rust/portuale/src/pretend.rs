@@ -4574,14 +4574,17 @@ fn search_candidate_visible(c: &portage_repo::Candidate) -> bool {
 /// `Display-If-Profile` are treated as always-satisfied here -- the
 /// pilot's fixtures are all one `amd64` profile). A `<id>` listed in
 /// `<eroot>/var/lib/gentoo/news/news-<repo>.read` (what `eselect news
-/// read` writes) is considered read.
+/// read` writes) **or** `.skip` (real `NewsManager.updateItems`'
+/// permanent per-item skip list -- an item lands there once it has been
+/// evaluated) is not counted.
 ///
-/// **v1 cut:** the incremental `.unread` / `.skip` bookkeeping real
-/// `NewsManager.updateItems` persists -- this pilot recomputes the
-/// relevant-unread set every run (writing nothing), the same
-/// "recompute, don't cache" stance it takes for `Packages` indexes and
-/// md5-cache elsewhere. Only bare `cat/pkg` `Display-If-Installed` atoms
-/// are matched (not `>=cat/pkg-1` etc.).
+/// **v1 cut:** the *write* side of that bookkeeping -- real
+/// `NewsManager.updateItems` rewrites `.unread` (newly-relevant items
+/// added) and `.skip` (every evaluated item added) each run; this pilot
+/// only *reads* `.read`/`.skip` and recomputes the relevant set,
+/// writing nothing (the same "recompute, don't cache" stance it takes
+/// for `Packages` indexes and md5-cache elsewhere). Only bare `cat/pkg`
+/// `Display-If-Installed` atoms are matched (not `>=cat/pkg-1` etc.).
 fn run_check_news(
     repos: &[portage_repo::RepoConfig],
     root: &Path,
@@ -4597,15 +4600,21 @@ fn run_check_news(
             per_repo.push((repo.name.clone(), 0));
             continue;
         };
-        let read: std::collections::HashSet<String> = std::fs::read_to_string(
-            root.join("var/lib/gentoo/news")
-                .join(format!("news-{}.read", repo.name)),
-        )
-        .unwrap_or_default()
-        .lines()
-        .map(|l| l.trim().to_string())
-        .filter(|l| !l.is_empty())
-        .collect();
+        // `.read` (eselect news read) + `.skip` (updateItems' permanent
+        // per-item skip list) -- an id in either is not counted.
+        let news_state_dir = root.join("var/lib/gentoo/news");
+        let read_state_file = |suffix: &str| -> std::collections::HashSet<String> {
+            std::fs::read_to_string(news_state_dir.join(format!("news-{}.{suffix}", repo.name)))
+                .unwrap_or_default()
+                .lines()
+                .map(|l| l.trim().to_string())
+                .filter(|l| !l.is_empty())
+                .collect()
+        };
+        let read: std::collections::HashSet<String> = read_state_file("read")
+            .into_iter()
+            .chain(read_state_file("skip"))
+            .collect();
 
         let mut ids: Vec<String> = entries
             .filter_map(|e| e.ok())

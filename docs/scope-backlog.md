@@ -366,8 +366,9 @@ dev/test context — see also the `chown` note below).
 - Standalone actions buildout (2026-09-01). *Shipped: `--list-sets`
   (real `actions.py:3839`); `--search` / `-s` / `--searchdesc` / `-S`
   (real `action_search` → `search.py` output shape); `--check-news`
-  (real `count_unread_news` / `display_news_notifications` — v1 cuts:
-  no `.unread`/`.skip` persistence, `Display-If-Installed` only);
+  (real `count_unread_news` / `display_news_notifications` — reads
+  `.read` + `.skip` (2026-09-02); v1 cuts: no `.unread`/`.skip`
+  *write-back*, `Display-If-Installed` only);
   `--clean` (real `unmerge` `unmerge_action="clean"` — keep newest per
   slot), `--rage-clean` (fast `--unmerge`), `--info` (real `action_info`
   — narrowed to the deterministic `Repositories:` + `VAR="value"` block;

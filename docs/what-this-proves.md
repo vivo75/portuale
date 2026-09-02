@@ -11334,14 +11334,16 @@ Python reference and contract-tested.
   *valid* (`News-Item-Format:` matches `[12].*`), *relevant* (no
   `Display-If-*` header, or a `Display-If-Installed:` `cat/pkg` that's in
   the vdb), and not listed in
-  `<eroot>/var/lib/gentoo/news/news-<repo>.read`. Prints the real
-  `IMPORTANT: N news items need reading for repository '<repo>'` /
+  `<eroot>/var/lib/gentoo/news/news-<repo>.read` **or `.skip`** (real
+  `NewsManager.updateItems`' permanent per-item skip list). Prints the
+  real `IMPORTANT: N news items need reading for repository '<repo>'` /
   `Use eselect news read to view new items` block, or ` * No news items
   were found.`. `dev-libs/samepkg` (in the fixture vdb) gates one of the
-  three `testrepo` news items. Documented cuts: the incremental
-  `.unread` / `.skip` bookkeeping (the pilot recomputes each run, writing
-  nothing); `Display-If-Keyword` / `Display-If-Profile` (always
-  satisfied); non-bare `Display-If-Installed` atoms.
+  three `testrepo` news items. Documented cuts: the *write* side of the
+  `.unread` / `.skip` bookkeeping (real `updateItems` rewrites both each
+  run; the pilot only reads them and recomputes, writing nothing);
+  `Display-If-Keyword` / `Display-If-Profile` (always satisfied); non-bare
+  `Display-If-Installed` atoms.
 - **`--clean`** (real `action_uninstall` → `unmerge` with
   `unmerge_action == "clean"`): like `--prune --nodeps` but *per slot* —
   for each `(cp, slot)`, keep only the newest version, remove the rest

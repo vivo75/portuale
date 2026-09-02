@@ -356,9 +356,10 @@ not just read this list. What's actually left, grouped by area:
 > shipped 2026-09-02**, `--search` is fuzzy + regex-auto by default now,
 > new `portuale/src/difflib.rs` `SequenceMatcher.ratio()` port);
 > **`--check-news`** (`run_check_news` / `_run_check_news` —
-> count valid+relevant+unread GLEP 42 items per repo; v1 cuts: no
-> `.unread`/`.skip` persistence, `Display-If-Installed` only; fixture
-> news items in `fixtures/repo/metadata/news/`); **`--clean`**
+> count valid+relevant GLEP 42 items per repo, minus `.read`/`.skip`
+> (`.skip` read added 2026-09-02); v1 cuts: no `.unread`/`.skip`
+> write-back, `Display-If-Installed` only; fixture news items in
+> `fixtures/repo/metadata/news/`); **`--clean`**
 > (`run_clean_pretend` -> `run_prune_nodeps_or_clean` +
 > `portage_repo::clean_selection` — keep newest per slot, no portage
 > self-skip) and **`--rage-clean`** (fast `--unmerge`;

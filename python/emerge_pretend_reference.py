@@ -9337,8 +9337,9 @@ def _news_item_relevant(text, root):
 def _run_check_news(repos, root, quiet, color):
     """Real `emerge --check-news` (actions.py:3844 -> portage.news
     count_unread_news / display_news_notifications). Mirrors pretend.rs's
-    run_check_news, including its v1 cuts (no .unread/.skip persistence;
-    only bare cat/pkg Display-If-Installed atoms)."""
+    run_check_news, including its v1 cut (only the *read* side of the
+    .read/.skip bookkeeping -- no write-back of .unread/.skip; only bare
+    cat/pkg Display-If-Installed atoms)."""
     per_repo = []
     any_unread = False
     for repo in repos:
@@ -9352,14 +9353,18 @@ def _run_check_news(repos, root, quiet, color):
         except OSError:
             per_repo.append((repo["name"], 0))
             continue
-        read_file = os.path.join(
-            root, "var", "lib", "gentoo", "news", f"news-{repo['name']}.read"
-        )
-        try:
-            with open(read_file) as f:
-                read = {ln.strip() for ln in f if ln.strip()}
-        except OSError:
-            read = set()
+        # .read (eselect news read) + .skip (updateItems' permanent
+        # per-item skip list) -- an id in either is not counted.
+        news_state_dir = os.path.join(root, "var", "lib", "gentoo", "news")
+        read = set()
+        for suffix in ("read", "skip"):
+            try:
+                with open(
+                    os.path.join(news_state_dir, f"news-{repo['name']}.{suffix}")
+                ) as f:
+                    read |= {ln.strip() for ln in f if ln.strip()}
+            except OSError:
+                pass
         count = 0
         for itemid in ids:
             if itemid in read:
