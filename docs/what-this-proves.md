@@ -11147,9 +11147,14 @@ Now each source has its own `Config` field at its own real position, and
 `portage-repo::effective_use_flags` (mirrored in the Python reference)
 does the real walk:
 
-- `Config::package_use_repo` — every configured repo's own
-  `profiles/package.use` (overlays `::repo`-scoped), applied **before**
-  the ebuild's own `IUSE` `+`/`-` defaults. Weakest layer modeled.
+- `Config::repo_make_defaults_use` — the main repo's top-level
+  `profiles/make.defaults` USE (real `_repo_make_defaults`,
+  `${VAR}`-expanded), then `Config::package_use_repo` — every configured
+  repo's own `profiles/package.use` (overlays `::repo`-scoped). Both
+  applied **before** the ebuild's own `IUSE` `+`/`-` defaults — the
+  weakest layer modeled. *(Repo `make.defaults` USE shipped 2026-09-02;
+  an overlay's own `profiles/make.defaults` USE stays a cut — the main
+  repo implicitly masters every overlay here.)*
 - `Config::use_tokens` — every profile level's own `make.defaults` USE
   (chain order), then
 - `Config::package_use` — every profile level's own `package.use` (as
@@ -11160,10 +11165,10 @@ does the real walk:
 - `Config::package_use_user` — the user-level `/etc/portage/package.use`.
   Strongest layer before the final `use.force`/`use.mask` step.
 
-Still documented cuts: the `env` (`$USE`, `/etc/portage/env`,
-`package.env`), `features` (`FEATURES`-implied USE), and `env.d` layers,
-and repo `make.defaults` USE (real `_repo_make_defaults`, folded into
-`configdict["repo"]` alongside repo `package.use`).
+Still documented cuts: the `env` layer's `$USE` env var and
+`package.env`'s non-USE vars, the `features` (`FEATURES`-implied USE)
+and `env.d` layers, and an overlay's own `profiles/make.defaults` USE.
+(`package.env`'s `USE=` shipped 2026-09-02.)
 
 Two new fixtures prove the ordering: `dev-libs/repouseweakpkg`
 (repo-level `package.use` enables `repoweakflag`, the profile

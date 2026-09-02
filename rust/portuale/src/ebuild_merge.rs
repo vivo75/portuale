@@ -1897,6 +1897,7 @@ fn blocked_installed_packages(
             iuse,
             &config.use_tokens,
             &config.conf_use_tokens,
+            &config.repo_make_defaults_use,
             &config.package_use_repo,
             &config.package_use,
             &config.package_env_use,

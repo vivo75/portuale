@@ -1525,10 +1525,11 @@ fn matches_config_entry(entry: &str, candidate_str: &str, category: &str, packag
 /// each `package.use` source sits at its own real position. The walk,
 /// weakest layer first:
 ///
-/// - `repo` -- every configured repo's own `profiles/package.use`
-///   (`Config::package_use_repo`), applied *before* the IUSE defaults.
-///   The weakest layer this pilot models. (Real portage also folds repo
-///   `make.defaults` USE in here; not modeled.)
+/// - `repo` -- the main repo's `profiles/make.defaults` USE
+///   (`Config::repo_make_defaults_use`, real `_repo_make_defaults`),
+///   then every configured repo's own `profiles/package.use`
+///   (`Config::package_use_repo`) -- all *before* the IUSE defaults.
+///   The weakest layer this pilot models.
 /// - `pkginternal` -- `iuse`'s own `+flag`/`-flag` default markers (see
 ///   the paragraph below for the grounding).
 /// - `defaults` -- every profile level's own `make.defaults` USE
@@ -1618,6 +1619,7 @@ pub fn effective_use_flags(
     iuse: &str,
     use_tokens: &[String],
     conf_use_tokens: &[String],
+    repo_make_defaults_use: &[String],
     package_use_repo: &[(String, Vec<String>)],
     package_use: &[(String, Vec<String>)],
     package_env_use: &[(String, Vec<String>)],
@@ -1645,10 +1647,15 @@ pub fn effective_use_flags(
     // are documented cuts (see `portage_profile`'s module doc comment).
     let mut use_flags: HashSet<String> = HashSet::new();
 
-    // `repo` (real `configdict["repo"]`): every configured repo's own
-    // `profiles/package.use`, applied *before* the ebuild's own IUSE
-    // defaults -- the weakest layer this pilot models. (Real portage also
-    // folds repo `make.defaults` USE in here; not modeled.)
+    // `repo` (real `configdict["repo"]`): the main repo's
+    // `profiles/make.defaults` USE (real `_repo_make_defaults`) first,
+    // then every configured repo's own `profiles/package.use` -- all
+    // *before* the ebuild's own IUSE defaults, the weakest layer this
+    // pilot models. Real `regenerate()` walks `configdict["repo"]["USE"]`
+    // (make.defaults) ahead of that tier's package-scoped USE.
+    for token in repo_make_defaults_use {
+        portage_profile::apply_incremental(token, &mut use_flags);
+    }
     let apply_matching = |flags: &mut HashSet<String>, entries: &[(String, Vec<String>)]| {
         for (entry, tokens) in entries {
             if matches_config_entry(entry, candidate_str, category, package) {
@@ -2232,6 +2239,7 @@ fn use_flags_if_conditional(
         &candidate.iuse,
         &config.use_tokens,
         &config.conf_use_tokens,
+        &config.repo_make_defaults_use,
         &config.package_use_repo,
         &config.package_use,
         &config.package_env_use,
@@ -3064,6 +3072,7 @@ fn flag_is_settable(
         iuse,
         &config.use_tokens,
         &config.conf_use_tokens,
+        &config.repo_make_defaults_use,
         &config.package_use_repo,
         &config.package_use,
         &config.package_env_use,
@@ -5873,6 +5882,7 @@ fn candidate_iuse_and_use(
         metadata.get("IUSE").map(String::as_str).unwrap_or_default(),
         &config.use_tokens,
         &config.conf_use_tokens,
+        &config.repo_make_defaults_use,
         &config.package_use_repo,
         &config.package_use,
         &config.package_env_use,
@@ -7211,6 +7221,7 @@ pub fn resolve_pretend(
                     &candidate.iuse,
                     &config.use_tokens,
                     &config.conf_use_tokens,
+                    &config.repo_make_defaults_use,
                     &config.package_use_repo,
                     &config.package_use,
                     &config.package_env_use,
@@ -10436,6 +10447,7 @@ pub fn resolve_pretend_graph(
                 metadata.get("IUSE").map(String::as_str).unwrap_or_default(),
                 &config.use_tokens,
                 &config.conf_use_tokens,
+                &config.repo_make_defaults_use,
                 &config.package_use_repo,
                 &config.package_use,
                 &config.package_env_use,
@@ -11320,6 +11332,7 @@ fn enqueue_dependencies(
             metadata.get("IUSE").map(String::as_str).unwrap_or_default(),
             &config.use_tokens,
             &config.conf_use_tokens,
+            &config.repo_make_defaults_use,
             &config.package_use_repo,
             &config.package_use,
             &config.package_env_use,
@@ -19756,6 +19769,7 @@ mod tests {
             use_tokens,
             &[],
             &[],
+            &[],
             package_use,
             &[],
             &[],
@@ -20565,6 +20579,7 @@ mod tests {
             iuse,
             use_tokens,
             conf_use_tokens,
+            &[],
             package_use_repo,
             package_use,
             &[],
@@ -20588,6 +20603,42 @@ mod tests {
 
     fn pu(flag: &str) -> Vec<(String, Vec<String>)> {
         vec![("dev-libs/pkg".to_string(), vec![flag.to_string()])]
+    }
+
+    #[test]
+    fn effective_use_flags_repo_make_defaults_use_is_the_weakest_repo_layer() {
+        let euf = |iuse: &str, repo_md: &[String], repo_pu: &[(String, Vec<String>)]| {
+            effective_use_flags(
+                iuse,
+                &[],
+                &[],
+                repo_md,
+                repo_pu,
+                &[],
+                &[],
+                &[],
+                &[],
+                &[],
+                &HashSet::new(),
+                &HashSet::new(),
+                &HashSet::new(),
+                &HashSet::new(),
+                &[],
+                &[],
+                &["amd64".to_string()],
+                &HashSet::from(["amd64".to_string()]),
+                &[],
+                "dev-libs/pkg-1.0:0/0::testrepo",
+                "dev-libs",
+                "pkg",
+            )
+        };
+        // repo make.defaults USE decides an unmarked IUSE flag...
+        assert!(euf("foo", &["foo".to_string()], &[]).contains("foo"));
+        // ...but loses to the ebuild's own IUSE default (applied after)...
+        assert!(!euf("-foo", &["foo".to_string()], &[]).contains("foo"));
+        // ...and to a repo package.use entry (also applied after, same tier).
+        assert!(!euf("foo", &["foo".to_string()], &pu("-foo")).contains("foo"));
     }
 
     #[test]
@@ -20640,6 +20691,7 @@ mod tests {
             &["-foo".to_string()],
             &[],
             &[],
+            &[],
             &pu("foo"), // package_env_use
             &[],        // package_use_user
             &[],
@@ -20665,6 +20717,7 @@ mod tests {
         // ...but a user package.use `-foo` still wins over package.env `foo`.
         let user_wins = effective_use_flags(
             "foo",
+            &[],
             &[],
             &[],
             &[],

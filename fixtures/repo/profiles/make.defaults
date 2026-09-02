@@ -1,0 +1,8 @@
+# fixture: the main repo's top-level profiles/make.defaults -- real
+# config.py's _repo_make_defaults, folded into configdict["repo"] (the
+# weakest USE_ORDER layer, before the ebuild's own IUSE defaults).
+# "repomakedefaultflag" is set nowhere else, so a package with it in
+# IUSE gets it enabled only via this source. "${ARCH}" exercises ${VAR}
+# expansion against the accumulated scalars (ARCH="amd64" from
+# profiles/arch/amd64/make.defaults).
+USE="repomakedefaultflag repo_${ARCH}"

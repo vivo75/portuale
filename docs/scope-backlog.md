@@ -276,13 +276,24 @@ single-pass BFS can't grow into these incrementally:
   the pilot's standing "no warnings from deep in config resolution"
   precedent. No per-file `${VAR}` expand map (real portage seeds one
   from the global config — a documented simplification).)*
+  *(Shipped 2026-09-02: the **main repo's `profiles/make.defaults` USE**
+  — real `config.py`'s `_repo_make_defaults`, the global half of
+  `configdict["repo"]`. `Config::repo_make_defaults_use` (every `USE=`
+  value in file order, `${VAR}`-expanded against the accumulated
+  scalars), applied by `effective_use_flags` at the head of the `repo`
+  layer, before `package_use_repo` (real `regenerate()` walks
+  `configdict["repo"]["USE"]` ahead of that tier's package-scoped USE).
+  New `read_repo_make_defaults_use`; new `fixtures/repo/profiles/
+  make.defaults` + `dev-libs/repomakedefaultpkg`. Narrowing: only the
+  *main* repo's file (an overlay's own is a cut — main implicitly
+  masters every overlay here, so its USE already applies everywhere).)*
   Still open: the **`package.env` non-USE half** (`FEATURES`, `CFLAGS`,
   `MAKEOPTS`, … per package — affects the build-phase env and
   `emerge --info <atom>`); `$USE` env var at its real `env` position
-  above `pkg`; the `features` and `env.d` layers; repo `make.defaults`
-  USE folded into `configdict["repo"]`; profile `package.use`
-  interleaved per profile level with that level's `make.defaults` (the
-  pilot applies it as one group).
+  above `pkg`; the `features` and `env.d` layers; an *overlay's* own
+  `profiles/make.defaults` USE; profile `package.use` interleaved per
+  profile level with that level's `make.defaults` (the pilot applies it
+  as one group).
 
 ### D. Sandbox / build isolation — **substantially complete (2026-09-01)**
 

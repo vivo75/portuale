@@ -114,10 +114,12 @@
 //         appends `self.puse` on top of the `_grab_pkg_env` result), the
 //         strongest USE layer before the final `use.force`/`use.mask`
 //         step.
+//     The main repo's top-level `profiles/make.defaults` USE (real
+//     `_repo_make_defaults`) is folded into the `repo` layer too, ahead
+//     of repo `package.use` (`Config::repo_make_defaults_use`).
 //     Still not modeled: the rest of the `env` layer (`$USE`,
-//     `package.env`'s non-USE vars), `features`/`env.d`, and repo-level
-//     `make.defaults` USE (real `_repo_make_defaults`, folded into
-//     `configdict["repo"]` alongside repo `package.use`).
+//     `package.env`'s non-USE vars), `features`/`env.d`, and an
+//     *overlay's* own `profiles/make.defaults` USE.
 //     Each source is still purely additive within itself (no `-atom`
 //     removal exists for this file -- see `parse_package_use_lines`), and
 //     still applied per package (not globally): a matching entry's tokens
@@ -347,6 +349,22 @@ pub struct Config {
     /// Tokens use the same `-flag`/`flag`/`+flag` incremental syntax as
     /// `USE` itself -- see `apply_incremental`.
     pub package_use_repo: Vec<(String, Vec<String>)>,
+    /// The `USE=` value string(s) from the **main repo's**
+    /// `<repo>/profiles/make.defaults` -- real `config.py`'s
+    /// `_repo_make_defaults`, folded into `configdict["repo"]` alongside
+    /// repo `package.use`. Applied by `effective_use_flags` at the very
+    /// start of the `repo` layer, **before** [`Config::package_use_repo`]
+    /// (real `regenerate()` walks `configdict["repo"]["USE"]` first, then
+    /// that tier's package-scoped USE). `${VAR}` in a value is expanded
+    /// against the profile-chain + `make.conf` scalars already
+    /// accumulated by the time this file is read. **Narrowing:** only
+    /// the *main* repo's file is read -- an overlay's own
+    /// `profiles/make.defaults` USE is a documented cut (the main repo
+    /// implicitly masters every overlay here, so its USE already applies
+    /// to every package; an overlay adding more for its own packages is
+    /// the gap), consistent with this pilot's minimal `masters`
+    /// handling elsewhere.
+    pub repo_make_defaults_use: Vec<String>,
     /// (atom-or-wildcard string, raw USE tokens) pairs from every
     /// **profile** level's own `package.use` (chain order) -- real
     /// `configdict["defaults"]` (`_pkgprofileuse`). Applied by
@@ -1263,6 +1281,25 @@ fn env_file_use_tokens(env_dir: &Path, name: &str, config_root: &Path) -> Vec<St
         .collect()
 }
 
+/// Every `USE=` value from a repo's top-level `profiles/make.defaults`
+/// (real `config.py`'s `_repo_make_defaults`), in file order, each
+/// `${VAR}`-substituted against `scalars`. A missing file yields an
+/// empty list. `source` is not handled (a repo `make.defaults` never
+/// uses it); `${USE}` self-reference resolves to whatever `make.conf`'s
+/// `USE=` last set (a documented approximation -- real portage's own
+/// `_repo_make_defaults` expand context differs).
+fn read_repo_make_defaults_use(path: &Path, scalars: &HashMap<String, String>) -> Vec<String> {
+    let Ok(text) = fs::read_to_string(path) else {
+        return Vec::new();
+    };
+    text.lines()
+        .filter_map(|line| {
+            let (key, raw_value) = parse_kv_line(line.trim())?;
+            (key == "USE").then(|| substitute(raw_value, scalars))
+        })
+        .collect()
+}
+
 /// Reads every non-comment, non-blank, trimmed line from `path`, which
 /// may be a single file or (like `repos.conf` elsewhere in this pilot) a
 /// directory of files merged in sorted-filename order. A missing path
@@ -2097,9 +2134,7 @@ pub fn resolve_config(
     // pass) so only the user-level one gets the USE_EXPAND-prefix
     // shorthand's real user-only `extended_syntax` -- see
     // parse_package_use_lines. Still purely additive within each source
-    // (no `-atom` removal for this file). Still a simplification: repo
-    // `make.defaults` USE (real _repo_make_defaults, folded into
-    // configdict["repo"] alongside repo package.use) is not modeled, and
+    // (no `-atom` removal for this file). Still a simplification:
     // profile package.use is applied as one group after all profile
     // make.defaults rather than interleaved per level.
     let mut repo_use_lines: Vec<String> =
@@ -2114,6 +2149,17 @@ pub fn resolve_config(
     }
     let user_use_lines = read_config_lines(&config_root.join("etc/portage/package.use"))?;
     config.package_use_repo = parse_package_use_lines(&repo_use_lines, false);
+
+    // Repo `make.defaults` USE -- real `config.py`'s `_repo_make_defaults`,
+    // the global (not package-scoped) half of `configdict["repo"]`. Read
+    // the main repo's `profiles/make.defaults` (see
+    // `Config::repo_make_defaults_use` for the overlay narrowing), keep
+    // every `USE=` value in file order with `${VAR}` expanded against the
+    // scalars accumulated so far. `effective_use_flags` applies it at the
+    // head of the `repo` layer.
+    config.repo_make_defaults_use =
+        read_repo_make_defaults_use(&main_repo_location.join("profiles/make.defaults"), &scalars);
+
     config.package_use = parse_package_use_lines(&profile_use_lines, false);
     config.package_use_user = parse_package_use_lines(&user_use_lines, true);
 
@@ -4088,6 +4134,39 @@ sync-uri = file:///srv/pkgs
                 // Plain scalar -> other_vars (emerge --info).
                 assert_eq!(c.other_vars.get("CFLAGS").map(String::as_str), Some("-O3"));
             },
+        );
+    }
+
+    #[test]
+    fn repo_make_defaults_use_is_read_from_the_main_repo_with_var_expansion() {
+        let root = std::env::temp_dir().join("portage-profile-test-repo-make-defaults");
+        let repo = root.join("repo");
+        let prof = repo.join("profiles/default");
+        let portage_dir = root.join("etc/portage");
+        fs::create_dir_all(&prof).unwrap();
+        fs::create_dir_all(&portage_dir).unwrap();
+        fs::write(
+            prof.join("make.defaults"),
+            "ARCH=\"amd64\"\nACCEPT_KEYWORDS=\"${ARCH}\"\nUSE_EXPAND_UNPREFIXED=\"ARCH\"\n",
+        )
+        .unwrap();
+        // The main repo's top-level profiles/make.defaults.
+        fs::write(
+            repo.join("profiles/make.defaults"),
+            "USE=\"repoflag\"\nUSE=\"more arch_${ARCH}\"\n",
+        )
+        .unwrap();
+        let make_profile = portage_dir.join("make.profile");
+        let _ = fs::remove_file(&make_profile);
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&prof, &make_profile).unwrap();
+
+        let config = resolve_config(&root, &repo, &[], &[], "testrepo", &HashMap::new())
+            .expect("config must resolve");
+        // Both USE= lines kept in file order; ${ARCH} expanded.
+        assert_eq!(
+            config.repo_make_defaults_use,
+            vec!["repoflag".to_string(), "more arch_amd64".to_string()]
         );
     }
 

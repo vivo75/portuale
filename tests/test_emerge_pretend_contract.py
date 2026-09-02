@@ -1002,6 +1002,7 @@ CASES = [
     ("package.use depth: repo-level entry loses to the profile make.defaults", ["--pretend", "-v", "dev-libs/repouseweakpkg"], 0),
     ("package.use depth: profile-level entry loses to make.conf", ["--pretend", "-v", "dev-libs/profileuseweakpkg"], 0),
     ("package.env: env-file USE= enables a flag, pulling in a dependency", ["--pretend", "dev-libs/penvpkg"], 0),
+    ("repo make.defaults: USE= enables a flag, pulling in a dependency", ["--pretend", "-v", "dev-libs/repomakedefaultpkg"], 0),
     ("blocker: strong (!!) blocker matches an installed package", ["--pretend", "dev-libs/blockerpkg"], 0),
     ("blocker: weak (!) blocker matches another new package in the graph", ["--pretend", "dev-libs/graphblockerparent"], 0),
     ("blocker: -v widens the [blocks B ] bracket by the mask column", ["--pretend", "-v", "dev-libs/blockerpkg"], 0),
@@ -4720,6 +4721,28 @@ def test_package_env_env_file_use_enables_a_flag_and_pulls_in_a_dependency(
     assert result.stdout.splitlines() == [
         "[ebuild  N     ] dev-libs/newpkg-1.0 ",
         '[ebuild  N     ] dev-libs/penvpkg-1.0  USE="penvflag -penvother"',
+    ]
+
+
+def test_repo_make_defaults_use_enables_a_flag_and_pulls_in_a_dependency(
+    emerge_binary, emerge_pretend_python, fixture_env
+):
+    """fixtures/repo/profiles/make.defaults (the main repo's top-level
+    make.defaults -- real config.py's _repo_make_defaults) sets
+    USE="repomakedefaultflag repo_${ARCH}". "repomakedefaultflag" is set
+    nowhere else, so repomakedefaultpkg's own repomakedefaultflag?-gated
+    dependency (dev-libs/newpkg) is pulled in only because this weakest
+    `repo` USE_ORDER layer now reaches effective_use_flags; ${ARCH}
+    expands to amd64 -> repo_amd64 also enabled. Rust == Python."""
+    base = ["--pretend", "-v", "dev-libs/repomakedefaultpkg"]
+    rust = _run([str(emerge_binary)], base, fixture_env)
+    py = _run(emerge_pretend_python, base, fixture_env)
+    assert rust.returncode == 0
+    assert rust.stdout == py.stdout
+    assert rust.stdout.splitlines()[:2] == [
+        "[ebuild  N     ] dev-libs/newpkg-1.0::testrepo ",
+        '[ebuild  N     ] dev-libs/repomakedefaultpkg-1.0::testrepo  '
+        'USE="repo_amd64 repomakedefaultflag -other"',
     ]
 
 

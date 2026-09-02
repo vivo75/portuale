@@ -1335,6 +1335,7 @@ def _use_flags_if_conditional(value_str, candidate, category, package, candidate
         candidate["iuse"],
         config["use_tokens"],
         config["conf_use_tokens"],
+        config["repo_make_defaults_use"],
         config["package_use_repo"],
         config["package_use"],
         config["package_env_use"],
@@ -1990,6 +1991,7 @@ def _flag_is_settable(candidate, category, package, flag, desired, config):
         iuse,
         config["use_tokens"],
         config["conf_use_tokens"],
+        config["repo_make_defaults_use"],
         config["package_use_repo"],
         config["package_use"],
         config["package_env_use"],
@@ -2450,6 +2452,7 @@ def effective_use_flags(
     iuse,
     use_tokens,
     conf_use_tokens,
+    repo_make_defaults_use,
     package_use_repo,
     package_use,
     package_env_use,
@@ -2478,10 +2481,11 @@ def effective_use_flags(
     ("IUSE seed, then use_tokens, then one flat package.use list") so
     each package.use source sits at its own real position:
 
-      1. repo -- every configured repo's own profiles/package.use
-         (package_use_repo), applied *before* the IUSE defaults. Weakest
-         layer modeled. (Real portage also folds repo make.defaults USE
-         in here; not modeled.)
+      1. repo -- the main repo's profiles/make.defaults USE
+         (repo_make_defaults_use, real _repo_make_defaults) first, then
+         every configured repo's own profiles/package.use
+         (package_use_repo) -- all *before* the IUSE defaults. Weakest
+         layer modeled.
       2. pkginternal -- iuse's own +flag/-flag default markers (see the
          paragraph below for the grounding).
       3. defaults -- every profile level's own make.defaults USE
@@ -2578,7 +2582,11 @@ def effective_use_flags(
             if _matches_config_entry(entry, candidate_str, category, package):
                 _apply_incremental(" ".join(tokens), use_flags)
 
-    # repo (real configdict["repo"]): before the IUSE defaults.
+    # repo (real configdict["repo"]): the main repo's profiles/make.defaults
+    # USE (real _repo_make_defaults) first, then every repo's own
+    # profiles/package.use -- all before the IUSE defaults.
+    for token in repo_make_defaults_use:
+        _apply_incremental(token, use_flags)
     _apply_matching(package_use_repo)
 
     # pkginternal: only a token with an explicit "+"/"-" marker
@@ -2803,6 +2811,7 @@ def _reinstall_flags_for_use_change(root, category, package, candidate, config, 
         metadata["IUSE"],
         config["use_tokens"],
         config["conf_use_tokens"],
+        config["repo_make_defaults_use"],
         config["package_use_repo"],
         config["package_use"],
         config["package_env_use"],
@@ -3366,6 +3375,7 @@ def _candidate_iuse_and_use(candidate, category, package, config):
         metadata.get("IUSE", ""),
         config["use_tokens"],
         config["conf_use_tokens"],
+        config["repo_make_defaults_use"],
         config["package_use_repo"],
         config["package_use"],
         config["package_env_use"],
@@ -3846,6 +3856,23 @@ def _read_env_file_kv(path, config_root, visited):
     return out
 
 
+def _read_repo_make_defaults_use(path, scalars):
+    """Every USE= value from a repo's top-level profiles/make.defaults
+    (real config.py's _repo_make_defaults), in file order, each
+    ${VAR}-substituted against `scalars`. Missing file -> []. Mirrors
+    portage-profile/src/lib.rs's read_repo_make_defaults_use."""
+    if not os.path.isfile(path):
+        return []
+    with open(path) as f:
+        text = f.read()
+    out = []
+    for line in text.splitlines():
+        parsed = _parse_kv_line(line.strip())
+        if parsed is not None and parsed[0] == "USE":
+            out.append(_substitute(parsed[1], scalars))
+    return out
+
+
 def _env_file_use_tokens(env_dir, name, config_root):
     """The USE= value token(s) of one /etc/portage/env/<name> file, in
     file order -- the only half of a package.env file this slice
@@ -3878,7 +3905,8 @@ def resolve_config(
     cuts. Returns a dict with keys "use_flags", "use_tokens",
     "conf_use_tokens", "accept_keywords",
     "package_mask", "package_unmask", "package_accept_keywords",
-    "package_use_repo", "package_use", "package_env", "package_env_use",
+    "package_use_repo", "repo_make_defaults_use", "package_use",
+    "package_env", "package_env_use",
     "package_use_user",
     "system_packages", "package_provided", "use_force",
     "use_mask", "package_use_force", "package_use_mask", "use_expand",
@@ -4243,9 +4271,8 @@ def resolve_config(
     #     before the final use.force/use.mask step. This is the only
     #     source that gets the USE_EXPAND-prefix shorthand (real
     #     user-only extended_syntax) -- see _parse_package_use_lines.
-    # Still simplified: repo make.defaults USE (real _repo_make_defaults)
-    # is not modeled, and profile package.use is applied as one group
-    # after all profile make.defaults rather than interleaved per level.
+    # Still simplified: profile package.use is applied as one group after
+    # all profile make.defaults rather than interleaved per level.
     repo_use_lines = _read_config_lines(
         os.path.join(main_repo_location, "profiles", "package.use")
     )
@@ -4514,6 +4541,9 @@ def resolve_config(
         "package_unmask": _stack_mask_lines(unmask_sources),
         "package_accept_keywords": package_accept_keywords,
         "package_use_repo": _parse_package_use_lines(repo_use_lines),
+        "repo_make_defaults_use": _read_repo_make_defaults_use(
+            os.path.join(main_repo_location, "profiles", "make.defaults"), scalars
+        ),
         "package_use": _parse_package_use_lines(profile_use_lines),
         "package_env": package_env,
         "package_env_use": package_env_use,
@@ -5536,6 +5566,7 @@ def resolve_pretend(
                 c["iuse"],
                 config["use_tokens"],
                 config["conf_use_tokens"],
+                config["repo_make_defaults_use"],
                 config["package_use_repo"],
                 config["package_use"],
                 config["package_env_use"],
@@ -7301,6 +7332,7 @@ def resolve_pretend_graph(
                 metadata.get("IUSE", ""),
                 config["use_tokens"],
                 config["conf_use_tokens"],
+                config["repo_make_defaults_use"],
                 config["package_use_repo"],
                 config["package_use"],
                 config["package_env_use"],
@@ -8008,6 +8040,7 @@ def _enqueue_dependencies(
             metadata.get("IUSE", ""),
             config["use_tokens"],
             config["conf_use_tokens"],
+            config["repo_make_defaults_use"],
             config["package_use_repo"],
             config["package_use"],
             config["package_env_use"],
