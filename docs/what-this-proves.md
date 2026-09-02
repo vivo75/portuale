@@ -9231,6 +9231,42 @@ Simplification: the real case-folding round-trip (`cp_lower` /
 `matches_orig_case`) is skipped — every fixture `cat/pkg` is lowercase.
 1 `difflib` unit test + 3 `CASES` + 1 pinned contract test.
 
+### `emerge --package-moves` / `--package-moves=n` (2026-09-02)
+
+Real `main.py:936` (`y_or_n`, default `y`) + `actions.py:3675`: real
+portage gates the disk-rewriting `_global_updates` pass (renames vdb
+dirs, rewrites `world`, updates binpkgs) on `--package-moves != "n"`.
+This pilot never syncs — it applies `profiles/updates/`
+`move`/`slotmove` directives only at *read* time
+(`apply_updates_to_atom` / `_to_dep_string` / `_to_cp` / `_to_slot`,
+`installed_cp_sources`) — so `--package-moves=n` simply turns every one
+of those into a no-op: the resolver sees the pre-move `cat/pkg` names
+throughout.
+
+New `portage_repo::set_package_moves_enabled(bool)` — a process-global
+(`AtomicBool`, env-free, the same "no threading through the resolver's
+40-arg signature" pattern `--color`'s override map uses); `pretend.rs`
+calls it once from `--package-moves[=y|n]` right after option parsing.
+`global_package_updates()` short-circuits to `&[]` when it's off (the
+expensive parse stays cached for the common case).
+
+```sh
+FX="$(realpath fixtures)"
+run() { PORTAGE_CONFIGROOT="$FX" ROOT="$FX" PORTAGE_RUNNING_ROOT="$FX" \
+    rust/target/release/portuale emerge "$@"; }
+# fixture: move dev-libs/oldmovepkg dev-libs/newmovepkg, vdb has oldmovepkg-1.0
+run -p dev-libs/newmovepkg
+# [ebuild   R    ] dev-libs/newmovepkg-1.0        <- the moved installed pkg
+run -p --package-moves=n dev-libs/newmovepkg
+# [ebuild  N     ] dev-libs/newmovepkg-1.0        <- no installed match, fresh N
+run -p --package-moves=n dev-libs/oldmovepkg
+# emerge: there are no ebuilds to satisfy "dev-libs/oldmovepkg".   <- vdb-only name
+```
+
+Reuses the `oldmovepkg`/`newmovepkg` + `slotmovepkg` + `movedepconsumer`
+move fixtures. Mirrored in `emerge_pretend_reference.py`
+(`_package_moves_enabled`); 5 `CASES` + 1 pinned contract test.
+
 ### `emerge -pc <atoms> --deselect=n`
 
 Real `action_depclean`: `deselect = myopts.get("--deselect") != "n"`

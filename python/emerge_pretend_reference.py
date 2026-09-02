@@ -307,6 +307,10 @@ def find_repos(config_root):
 # the deliberate cuts (all no-ops for a --pretend that never writes).
 
 _global_updates_cache = None
+# --package-moves (real y_or_n, default "y"): when False, every
+# profiles/updates/ move is a no-op. Set by run() before resolution.
+# Mirrors portage-repo's PACKAGE_MOVES_ENABLED.
+_package_moves_enabled = True
 
 
 def _bare_cp(s):
@@ -380,6 +384,8 @@ def _global_package_updates():
     $PORTAGE_CONFIGROOT directly (same pattern as _color_map_overrides).
     Mirrors portage-repo's global_package_updates."""
     global _global_updates_cache
+    if not _package_moves_enabled:
+        return []
     if _global_updates_cache is not None:
         return _global_updates_cache
     _global_updates_cache = []
@@ -7789,7 +7795,7 @@ _VALUE_OPTIONS = [
     ("--onlydeps-with-rdeps", None),
     # --rebuild-exclude / --rebuild-ignore ARE implemented (filters for
     # the --rebuild-if-* scan).
-    ("--package-moves", None),
+    # --package-moves IS implemented (=n disables profiles/updates/ moves).
     ("--prefix", None),
     ("--pkg-format", None),
     ("--quickpkg-direct", None),
@@ -11258,6 +11264,7 @@ def run(args):
     rebuild_ignore = []
     dynamic_deps = True
     misspell_suggestions = True
+    package_moves = True
     usepkg_exclude = []
     usepkg_include = []
     json_output = False
@@ -11552,6 +11559,17 @@ def run(args):
                 val = "y"
                 i += 1
             misspell_suggestions = val not in ("n", "N")
+        elif arg == "--package-moves" or arg.startswith("--package-moves="):
+            if arg.startswith("--package-moves="):
+                val = arg[len("--package-moves=") :]
+                i += 1
+            elif i + 1 < len(args) and args[i + 1] in ("y", "n"):
+                val = args[i + 1]
+                i += 2
+            else:
+                val = "y"
+                i += 1
+            package_moves = val not in ("n", "N")
         elif arg == "--rebuild-if-new-slot" or arg.startswith("--rebuild-if-new-slot="):
             # Real y_or_n, default "y" -- only =n disables.
             if arg.startswith("--rebuild-if-new-slot="):
@@ -12468,6 +12486,11 @@ def run(args):
             i += 1
         else:
             return _report_option(arg)
+
+    # --package-moves: must be set before anything reads
+    # profiles/updates/. Mirrors pretend.rs.
+    global _package_moves_enabled
+    _package_moves_enabled = package_moves
 
     # Real actions.py: "if '--tree' in emerge_config.opts and '--columns'
     # in emerge_config.opts: print(...); return 1" -- checked once

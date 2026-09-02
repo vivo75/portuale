@@ -5124,6 +5124,11 @@ pub fn run(args: &[String]) -> ExitCode {
     // suggest close package names (`difflib.get_close_matches` via
     // `_similar_name_search`). Only `=n` disables it.
     let mut misspell_suggestions = true;
+    // --package-moves (real `y_or_n`, `main.py:936`, default "y"): whether
+    // `profiles/updates/` moves are applied. Only `=n` disables. Threaded
+    // via `portage_repo::set_package_moves_enabled` (a process-global,
+    // like `--color`), not the resolver signature.
+    let mut package_moves = true;
     // --usepkg-exclude/--usepkg-include: same "action": "append",
     // space-separated-per-occurrence shape as --exclude/-X above (real
     // main.py: "A space separated list of package names or slot atoms"),
@@ -5585,6 +5590,18 @@ pub fn run(args: &[String]) -> ExitCode {
                 "y".to_string()
             };
             misspell_suggestions = !matches!(val.as_str(), "n" | "N");
+        } else if arg == "--package-moves" || arg.starts_with("--package-moves=") {
+            let val = if let Some(v) = arg.strip_prefix("--package-moves=") {
+                i += 1;
+                v.to_string()
+            } else if matches!(args.get(i + 1).map(String::as_str), Some("y" | "n")) {
+                i += 2;
+                args[i - 1].clone()
+            } else {
+                i += 1;
+                "y".to_string()
+            };
+            package_moves = !matches!(val.as_str(), "n" | "N");
         } else if arg == "--rebuild-if-new-slot" || arg.starts_with("--rebuild-if-new-slot=") {
             // Real `y_or_n`, default "y" -- only `=n` disables.
             let val = if let Some(v) = arg.strip_prefix("--rebuild-if-new-slot=") {
@@ -6685,6 +6702,12 @@ pub fn run(args: &[String]) -> ExitCode {
             return report_option(arg);
         }
     }
+
+    // `--package-moves` (real `y_or_n`, default "y"): must be applied
+    // before anything reads `profiles/updates/` -- see
+    // `portage_repo::set_package_moves_enabled`. Harmless for every
+    // action (a no-op when `y`).
+    portage_repo::set_package_moves_enabled(package_moves);
 
     // Real actions.py: "if '--tree' in emerge_config.opts and '--columns'
     // in emerge_config.opts: print(...); return 1" -- checked once

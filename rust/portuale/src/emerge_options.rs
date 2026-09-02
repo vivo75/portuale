@@ -325,7 +325,8 @@ pub const VALUE_OPTIONS: &[(&str, Option<&str>)] = &[
     // `--rebuild-exclude` / `--rebuild-ignore` IS implemented -- filters
     // for the `--rebuild-if-*` scan (see pretend.rs + portage-repo's
     // `rebuild_if_entries`).
-    ("--package-moves", None),
+    // `--package-moves` IS implemented -- `=n` disables `profiles/updates/`
+    // move application (`portage_repo::set_package_moves_enabled`).
     ("--prefix", None),
     ("--pkg-format", None),
     ("--quickpkg-direct", None),

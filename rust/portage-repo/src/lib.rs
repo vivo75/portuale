@@ -59,6 +59,7 @@ use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
 use std::sync::OnceLock;
 
 pub fn config_root_from_env() -> PathBuf {
@@ -226,7 +227,27 @@ fn grab_updates_for_repo(repo_location: &Path) -> Vec<UpdateCmd> {
 /// process-global, env-driven pattern `portuale::color`'s `color.map`
 /// override table uses, so no threading through the resolver's ~35-arg
 /// signature. An unreadable `repos.conf` yields no updates.
+/// `--package-moves` (real `y_or_n`, `main.py:936`, default `y`): whether
+/// `profiles/updates/` `move`/`slotmove` directives are applied at all.
+/// Real portage gates the disk-rewriting `_global_updates` pass on
+/// `--package-moves != "n"` (`actions.py:3675`); this pilot applies moves
+/// only at read time, so `=n` simply turns every `apply_updates_to_*`
+/// call into a no-op (the resolver then sees the pre-move `cat/pkg`
+/// names throughout). A process-global (env-free, like `color`'s
+/// override map) so it needn't thread through the resolver signature;
+/// the CLI layer sets it once before resolution.
+static PACKAGE_MOVES_ENABLED: AtomicBool = AtomicBool::new(true);
+
+/// Set by `pretend.rs` from `--package-moves[=y|n]` before any
+/// resolution. Default (never called) is `true`.
+pub fn set_package_moves_enabled(enabled: bool) {
+    PACKAGE_MOVES_ENABLED.store(enabled, AtomicOrdering::Relaxed);
+}
+
 pub fn global_package_updates() -> &'static [UpdateCmd] {
+    if !PACKAGE_MOVES_ENABLED.load(AtomicOrdering::Relaxed) {
+        return &[];
+    }
     static CACHE: OnceLock<Vec<UpdateCmd>> = OnceLock::new();
     CACHE.get_or_init(|| {
         let config_root = config_root_from_env();

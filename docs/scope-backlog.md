@@ -327,8 +327,12 @@ dev/test context — see also the `chown` note below).
   `_similar_name_search` — `difflib.get_close_matches` package-name
   suggestions for a missing `cat/pkg`; new `difflib::get_close_matches`,
   `pretend.rs::misspell_suggestion_block`, no new resolver param).
+  **Shipped 2026-09-02 (batch 6): `--package-moves` / `--package-moves=n`**
+  (real `actions.py:3675` — `=n` disables `profiles/updates/` move
+  application; new `portage_repo::set_package_moves_enabled` process-
+  global, no new resolver param).
   Remaining: `--complete-graph[-if-*]`, `--useoldpkg-atoms`,
-  `--package-moves` (`profiles/updates/`), `--quickpkg-direct`,
+  `--quickpkg-direct`,
   `--autounmask-continue` / `--autounmask-backtrack`.
 
 ### G. Shell backend

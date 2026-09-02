@@ -9736,6 +9736,12 @@ def test_quiet_drops_the_mask_column_and_the_use_line(emerge_binary, fixture_env
         ["-pv", "--deep", "dev-libs/movedepconsumer"],
         ["-pv", "dev-libs/slotmovepkg"],
         ["-p", "--tree", "--deep", "dev-libs/movedepconsumer"],
+        # --package-moves=n: no move applied anywhere.
+        ["-pv", "--package-moves=n", "dev-libs/newmovepkg"],
+        ["-pv", "--package-moves=n", "dev-libs/oldmovepkg"],
+        ["-pv", "--package-moves=n", "dev-libs/slotmovepkg"],
+        ["-pv", "--package-moves=n", "--deep", "dev-libs/movedepconsumer"],
+        ["-pv", "--package-moves", "y", "dev-libs/newmovepkg"],
     ],
 )
 def test_profiles_updates_package_moves_match_rust_and_python(
@@ -9767,6 +9773,29 @@ def test_profiles_updates_move_makes_the_renamed_package_already_installed(
 
     sm = _run([str(emerge_binary)], ["-pv", "dev-libs/slotmovepkg"], fixture_env)
     assert "[ebuild   R    ] dev-libs/slotmovepkg-1.0:1::testrepo" in sm.stdout
+
+
+def test_package_moves_n_disables_profiles_updates(emerge_binary, emerge_pretend_python, fixture_env):
+    """--package-moves (real y_or_n, default y): --package-moves=n turns
+    every profiles/updates/ move/slotmove into a no-op. `move
+    dev-libs/oldmovepkg dev-libs/newmovepkg` + vdb dev-libs/oldmovepkg-1.0:
+    with the move applied (default) `emerge -p dev-libs/newmovepkg` is a
+    bare `R` of the installed package; with `=n` there's no installed
+    match, so it's a fresh `N`, and the pre-move name has no ebuild at
+    all."""
+    default = _run([str(emerge_binary)], ["-p", "dev-libs/newmovepkg"], fixture_env)
+    assert "[ebuild   R    ] dev-libs/newmovepkg-1.0 " in default.stdout
+
+    off = _run([str(emerge_binary)], ["-p", "--package-moves=n", "dev-libs/newmovepkg"], fixture_env)
+    assert off.stdout == _run(
+        emerge_pretend_python, ["-p", "--package-moves=n", "dev-libs/newmovepkg"], fixture_env
+    ).stdout
+    assert "[ebuild  N     ] dev-libs/newmovepkg-1.0 " in off.stdout
+
+    # The pre-move name has only a vdb entry, no ebuild -> unsatisfiable.
+    old = _run([str(emerge_binary)], ["-p", "--package-moves=n", "dev-libs/oldmovepkg"], fixture_env)
+    assert old.returncode == 1
+    assert 'there are no ebuilds to satisfy "dev-libs/oldmovepkg".' in old.stderr
 
 
 def test_info_prints_the_deterministic_config_block(
