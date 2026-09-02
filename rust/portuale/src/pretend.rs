@@ -2368,7 +2368,7 @@ fn collect_installed_sets(
 /// Real `action_deselect` always returns `os.EX_OK` on every reachable
 /// path here (found matches, no matches, even no targets at all) --
 /// ported the same way, unconditionally `ExitCode::SUCCESS`.
-fn run_deselect(targets: &[&str], root: &Path, pretend: bool) -> ExitCode {
+fn run_deselect(targets: &[&str], root: &Path, pretend: bool, ask: bool) -> ExitCode {
     let world_atoms = match read_world_atoms(root) {
         Ok(atoms) => atoms,
         Err(e) => {
@@ -2470,6 +2470,18 @@ fn run_deselect(targets: &[&str], root: &Path, pretend: bool) -> ExitCode {
     let verb = if pretend { "Would remove" } else { "Removing" };
     for (entry, filename) in &discard {
         println!(">>> {verb} {entry} from \"{filename}\" favorites file...");
+    }
+
+    // Real `action_deselect`: `--ask` prompts once, after the
+    // `>>> Removing ...` lines, before either file is rewritten. `No`
+    // aborts with `128 + SIGINT`. `--pretend` never rewrites, so the
+    // prompt only matters for a real run (real `main.py` drops `--ask`
+    // under `-p` entirely).
+    if ask
+        && !pretend
+        && !ask_confirm("Would you like to remove these packages from your world favorites?")
+    {
+        return ExitCode::from(130);
     }
 
     if !pretend {
@@ -3147,6 +3159,38 @@ fn ask_confirm(question: &str) -> bool {
         Err(_) => {
             println!("Interrupted.");
             false
+        }
+    }
+}
+
+/// Real `_emerge/UserQuery.query` with an explicit `responses` list
+/// (`action_config`'s `--ask` package menu): prints `Selection? `, reads
+/// one line, accepts `1`..`n` (returns the 0-based index) or `x`/`X`
+/// (returns `None` -> the caller exits 130). Same v1 shortcuts as
+/// `ask_confirm`: not TTY-gated, no colour, an unrecognized answer
+/// cancels rather than re-prompting.
+fn ask_select(n: usize) -> Option<usize> {
+    use std::io::Write;
+    print!("\nSelection? ");
+    let _ = std::io::stdout().flush();
+    let mut line = String::new();
+    if std::io::stdin()
+        .read_line(&mut line)
+        .ok()
+        .filter(|&b| b > 0)
+        .is_none()
+    {
+        println!("Interrupted.");
+        return None;
+    }
+    let a = line.trim();
+    match a.parse::<usize>() {
+        Ok(i) if i >= 1 && i <= n => Some(i - 1),
+        _ => {
+            if !a.eq_ignore_ascii_case("x") {
+                println!("\nQuitting.\n");
+            }
+            None
         }
     }
 }
@@ -5049,6 +5093,7 @@ fn run_config_action(
     atom_args: &[&str],
     root: &Path,
     shell: ebuild_phases::ShellBackend,
+    ask: bool,
     color: &Colorizer,
 ) -> ExitCode {
     if atom_args.len() != 1 {
@@ -5110,24 +5155,49 @@ fn run_config_action(
         println!("No packages found.\n");
         return ExitCode::SUCCESS;
     }
-    if matches.len() > 1 {
-        println!("The following packages available:");
-        let mut cpvs: Vec<String> = matches
-            .iter()
-            .map(|(c, p, v)| format!("{c}/{p}-{v}"))
-            .collect();
-        cpvs.sort();
-        for cpv in &cpvs {
-            println!("* {cpv}");
+    let mut sorted_matches = matches.clone();
+    sorted_matches.sort_by(|a, b| {
+        format!("{}/{}-{}", a.0, a.1, a.2).cmp(&format!("{}/{}-{}", b.0, b.1, b.2))
+    });
+    let chosen: &(String, String, String) = if sorted_matches.len() > 1 {
+        if !ask {
+            // Real `action_config`: without `--ask`, list the matches and
+            // bail (`Please use a specific atom or the --ask option.`).
+            println!("The following packages available:");
+            for (c, p, v) in &sorted_matches {
+                println!("* {c}/{p}-{v}");
+            }
+            println!("\nPlease use a specific atom or the --ask option.");
+            return ExitCode::from(1);
         }
-        println!("\nPlease use a specific atom or the --ask option.");
-        return ExitCode::from(1);
-    }
+        // Real `action_config`'s `--ask` branch: a numbered menu +
+        // `X) Cancel`, `uq.query("Selection?", responses=[1..N, X])`.
+        // `X` -> exit `128 + SIGINT`.
+        println!("Please select a package to configure:");
+        for (idx, (c, p, v)) in sorted_matches.iter().enumerate() {
+            println!("{}) {c}/{p}-{v}", idx + 1);
+        }
+        println!("X) Cancel");
+        match ask_select(sorted_matches.len()) {
+            Some(i) => &sorted_matches[i],
+            None => return ExitCode::from(130),
+        }
+    } else {
+        &sorted_matches[0]
+    };
 
-    let (category, package, version) = &matches[0];
+    let (category, package, version) = chosen;
     let pf = format!("{package}-{version}");
     println!();
-    println!("Configuring pkg...");
+    // Real `action_config`: with `--ask`, prompt `Ready to configure
+    // <cpv>?` (No -> exit 130); without it, print `Configuring pkg...`.
+    if ask {
+        if !ask_confirm(&format!("Ready to configure {category}/{pf}?")) {
+            return ExitCode::from(130);
+        }
+    } else {
+        println!("Configuring pkg...");
+    }
     println!();
 
     let portage_tmpdir = std::env::var_os("PORTAGE_TMPDIR")
@@ -7161,7 +7231,7 @@ pub fn run(args: &[String]) -> ExitCode {
     // modifier on it (real `action_depclean`'s `deselect` -- see
     // `run_depclean_pretend`).
     if deselect && !depclean && !prune && !unmerge {
-        return run_deselect(&atom_args, &root_from_env(), pretend);
+        return run_deselect(&atom_args, &root_from_env(), pretend, ask);
     }
 
     // `--list-sets`: a standalone action needing nothing from the
@@ -7308,7 +7378,7 @@ pub fn run(args: &[String]) -> ExitCode {
     // installed package (real `action_config`). Needs nothing from the
     // resolved `config`; ignores `--pretend`.
     if config_action {
-        return run_config_action(&atom_args, &root, shell, &color);
+        return run_config_action(&atom_args, &root, shell, ask, &color);
     }
 
     // `--search`/`-s` (`--searchdesc`/`-S` also matches DESCRIPTION): a

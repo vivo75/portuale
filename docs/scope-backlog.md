@@ -218,8 +218,13 @@ single-pass BFS can't grow into these incrementally:
   prompts before a real `emerge <atom>` merge and before `-C` /
   `--depclean` / `--prune` removal (`ask_confirm`, exit 130 on No), and
   the `CLEAN_DELAY` countdown runs before every real removal
-  (`clean_delay_countdown`). Remaining: `--ask` for `--config` /
-  `--deselect`; TTY gating; prompt colour; re-prompt on a bad answer.
+  (`clean_delay_countdown`). *Shipped 2026-09-02:* `--ask` for
+  `--config` (`Ready to configure <cpv>?`, plus the numbered
+  package-selection menu when a bare name matches several installed
+  versions -- `ask_select`) and for `--deselect` (`Would you like to
+  remove these packages from your world favorites?`, after the
+  `>>> Removing` lines, before either file is rewritten). Remaining:
+  TTY gating; prompt colour; re-prompt on a bad answer.
 - **`elog` / `PORTAGE_ELOG_*`.** *Shipped 2026-09-01:* the `echo` module
   (`elog::echo_summary` — the `* Messages for package <cpv>:` block, real
   `mod_echo`; default-on, filtered by `PORTAGE_ELOG_CLASSES`);

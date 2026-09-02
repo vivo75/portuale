@@ -874,7 +874,9 @@ not just read this list. What's actually left, grouped by area:
 - **Scheduler Part 2.B shipped 2026-09-01**: `emerge -jN` parallel build
   scheduler + `--load-average` + build-log capture + `>>> Jobs:` line +
   `--ask`/`-a` (prompt before a real merge / `-C`/`--depclean`/`--prune`
-  removal, `ask_confirm`, exit 130 on No) + `CLEAN_DELAY` countdown
+  removal / `--deselect` write / `--config` run — `ask_confirm`, plus
+  `ask_select` for `--config`'s package menu; exit 130 on No) +
+  `CLEAN_DELAY` countdown
   (`clean_delay_countdown`, tests pin it to 0 via an autouse conftest
   fixture). `PORTAGE_NICENESS`/`PORTAGE_IONICE_COMMAND` also shipped
   (`apply_portage_scheduling_policy`, real `actions.py::apply_priorities`
@@ -891,8 +893,8 @@ not just read this list. What's actually left, grouped by area:
   replays it). **Part 2.B is now substantially complete.** Remaining
   odds and ends: `resume_backup` rotation, `mail*`/`syslog`/`custom`
   elog, the in-place-replace path's superseded-version prerm/postrm
-  elog, `--ask` for `--config`/`--deselect`, `PORTAGE_SCHEDULING_POLICY`,
-  killing in-flight builds on a hard fail.
+  elog, `PORTAGE_SCHEDULING_POLICY`, killing in-flight builds on a hard
+  fail.
 
 **Depgraph / dry-run**:
 - **`--root-deps` fuller fidelity, remaining half.**

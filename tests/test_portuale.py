@@ -1452,6 +1452,34 @@ def test_emerge_deselect_without_pretend_rewrites_world_and_world_sets(
     assert (wl / "world_sets").read_text() == "@keepset\n"
 
 
+def test_emerge_deselect_ask_prompts_before_rewriting_world(emerge_binary, tmp_path):
+    """`emerge --deselect --ask` (real `action_deselect`): after the
+    `>>> Removing ...` lines, prompt `Would you like to remove these
+    packages from your world favorites? [Yes/No]`; `n` aborts (exit 130)
+    with the world file untouched, empty answer proceeds."""
+    wl = tmp_path / "var" / "lib" / "portage"
+    wl.mkdir(parents=True)
+    (wl / "world").write_text("dev-libs/zkeep\ndev-libs/adrop\n")
+    env = dict(os.environ)
+    env["PORTAGE_CONFIGROOT"] = FIXTURES_ROOT
+    env["ROOT"] = str(tmp_path)
+
+    no = subprocess.run(
+        [str(emerge_binary), "--ask", "--deselect", "dev-libs/adrop"],
+        input="n\n", capture_output=True, text=True, check=False, env=env,
+    )
+    assert no.returncode == 130
+    assert "Would you like to remove these packages from your world favorites? [Yes/No]" in no.stdout
+    assert (wl / "world").read_text() == "dev-libs/zkeep\ndev-libs/adrop\n"
+
+    yes = subprocess.run(
+        [str(emerge_binary), "--ask", "--deselect", "dev-libs/adrop"],
+        input="\n", capture_output=True, text=True, check=False, env=env,
+    )
+    assert yes.returncode == 0, yes.stderr
+    assert (wl / "world").read_text() == "dev-libs/zkeep\n"
+
+
 def _seed_binpkgrmpkg(emerge_binary, root, env, version):
     """Merge dev-libs/binpkgrmpkg-<version> into `root` via a direct
     `ebuild <file> merge` (full vdb entry: CONTENTS, environment.bz2,
@@ -1580,6 +1608,25 @@ def test_emerge_config_runs_pkg_config_from_the_vdb(emerge_binary, tmp_path):
     )
     assert result.returncode == 0, result.stderr
     assert "Configuring pkg..." in result.stdout
+    assert (root / "var/lib/emergeconfigpkg.configured").read_text() == "configured 1.0\n"
+
+    # `--config --ask`: prompt `Ready to configure <cpv>?` instead of the
+    # `Configuring pkg...` line; `n` aborts (exit 130) before pkg_config.
+    (root / "var/lib/emergeconfigpkg.configured").unlink()
+    no = subprocess.run(
+        [str(emerge_binary), "--ask", "--config", "dev-libs/emergeconfigpkg"],
+        input="n\n", capture_output=True, text=True, check=False, env=env,
+    )
+    assert no.returncode == 130
+    assert "Ready to configure dev-libs/emergeconfigpkg-1.0? [Yes/No]" in no.stdout
+    assert "Configuring pkg..." not in no.stdout
+    assert not (root / "var/lib/emergeconfigpkg.configured").exists()
+
+    yes = subprocess.run(
+        [str(emerge_binary), "--ask", "--config", "dev-libs/emergeconfigpkg"],
+        input="\n", capture_output=True, text=True, check=False, env=env,
+    )
+    assert yes.returncode == 0, yes.stderr
     assert (root / "var/lib/emergeconfigpkg.configured").read_text() == "configured 1.0\n"
 
 

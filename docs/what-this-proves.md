@@ -11016,6 +11016,16 @@ list is displayed and before anything is built/merged/removed:
 - **removal** (`emerge -C` / `--depclean` / `--prune`, no `--pretend`):
   `Would you like to unmerge these packages? [Yes/No]` (real
   `_emerge/unmerge.py:621`), followed by the `CLEAN_DELAY` countdown.
+- **`--deselect`** (no `--pretend`): `Would you like to remove these
+  packages from your world favorites? [Yes/No]` (real
+  `action_deselect`), after the `>>> Removing ...` lines and before
+  either `world` / `world_sets` file is rewritten.
+- **`--config`**: `Ready to configure <cpv>? [Yes/No]` (real
+  `action_config`) in place of the `Configuring pkg...` line. When a
+  bare package name matches several installed versions, `--ask` also
+  drives the numbered `Please select a package to configure:` menu
+  (`ask_select` — `1`..`N` or `X`/Cancel → 130); without `--ask` that
+  case still errors `Please use a specific atom or the --ask option.`
 
 `ask_confirm` is the pilot's `UserQuery.query`: a bare Enter matches the
 first response ("Yes"); a `No` prints `\nQuitting.\n` and EOF prints
@@ -11032,7 +11042,7 @@ seconds (`CLEAN_DELAY` env, default 5; `0` skips). The test suite pins
 v1 cuts: not gated on stdin being a TTY (so it's testable by piping the
 answer); no colour on the prompt (real `bold()` + green/red); no
 `--ask-enter-invalid`; an unrecognized answer quits rather than
-re-prompting; `--ask` for `--deselect` / `--config` is not wired yet.
+re-prompting.
 
 ### `PORTAGE_NICENESS` / `PORTAGE_IONICE_COMMAND`
 
