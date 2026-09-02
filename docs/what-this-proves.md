@@ -9470,6 +9470,68 @@ rarely produces one, so the check is left out.
 **With this the entire recognized-but-unimplemented modifier-flag list
 (batches 1–10, 2026-09-02) is shipped.**
 
+### `emerge --regen` / `--metadata` + the `--pretend` rejection (2026-09-02)
+
+**`--regen`** (real `_emerge/actions.py::action_regen` →
+`_emerge/MetadataRegen.py`) is a real, filesystem-mutating action: for
+every `cat/pkg` in every repo, run each ebuild's `depend` phase and
+(re)write `<repo>/metadata/md5-cache/<cat>/<pf>`.
+
+The `depend` phase itself is new machinery
+(`ebuild_phases::run_depend_phase`): real `bin/ebuild.sh:781-804` writes
+the metadata `KEY=value` lines to `${PORTAGE_PIPE_FD}` (real portage's
+`_metadata_fd`) so incidental stdout/stderr can't corrupt them. This
+pilot wires that fd to a `${T}` temp file with a tiny `bash -c 'exec 9>…;
+exec "$@"'` wrapper (no `unsafe`, no extra crate), spawns a plain `bash
+bin/ebuild.sh depend` (never sandboxed — real `_doebuild_spawn`'s
+`SANDBOXED_SRC_PHASES` excludes `depend`), then parses the file back.
+
+`regen.rs` serializes each entry in real `portage.cache.flat_hash`
+(`md5_database`) format: keys are `sorted(auxdbkeys ∪ {_eclasses_,
+_md5_})` (and `_` sorts after every uppercase letter, so the two
+synthetic keys land last), empty values are omitted (`if not v:
+continue`), and `_md5_` is the real md5 of the ebuild file. Output on a
+trivial ebuild:
+
+```
+DEFINED_PHASES=-
+DESCRIPTION=regen test
+EAPI=8
+IUSE=foo
+KEYWORDS=amd64
+RDEPEND=dev-libs/other
+SLOT=0
+_md5_=771acfbca3818072a4255914e25afc4a
+```
+
+Console output mirrors `MetadataRegen` + `action_regen`: `Regenerating
+cache entries...`, `Processing <cp>` per `cat/pkg`, `done!`. v1 cuts:
+sequential (`--jobs` parsed but not threaded through), no stale-entry
+pruning (real `MetadataRegen` diffs `cp_all()` against the on-disk
+cache), `_eclasses_` computed from the `depend` phase's own `INHERITED`
+list against this repo's `eclass/*.eclass` md5s only (no masters chain —
+no fixture ebuild inherits).
+
+**`--metadata`** (real `action_metadata`) transfers a repo's
+pre-generated cache into portage's own `depcachedir` (`/var/cache/edb/
+dep/`). This pilot reads `metadata/md5-cache` directly and models no
+`depcachedir`, so there is nothing to transfer — it prints the real
+`\n>>> Updating Portage cache` header and exits 0.
+
+Both, plus `--config` (already implemented) and `--sync` (a non-goal),
+**reject `--pretend`** with the exact real message (`actions.py:4106-4111`):
+
+```
+$ portuale emerge -p --regen
+emerge: The 'regen' action does not support '--pretend'.
+```
+
+Mirrored in `emerge_pretend_reference.py` (the `--pretend` rejection +
+`--metadata` header + `--sync` message; `--regen`'s real work returns 0
+with no output, black-box-tested against `portuale` in `test_portuale.py`,
+never via the shared contract CASES). 5 `CASES` + 1 `test_portuale.py`
+integration test (byte-exact md5-cache output + `--pretend` rejection).
+
 ### `emerge -pc <atoms> --deselect=n`
 
 Real `action_depclean`: `deselect = myopts.get("--deselect") != "n"`

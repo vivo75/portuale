@@ -31,6 +31,7 @@ mod fetch;
 mod mtimedb;
 mod needed_elf;
 mod pretend;
+mod regen;
 
 use std::process::ExitCode;
 

@@ -407,6 +407,83 @@ def test_emerge_buildpkgonly_with_pretend_stays_dry_run(emerge_binary, tmp_path)
     assert not (Path(env["PKGDIR"]) / "dev-libs").exists()
 
 
+def test_emerge_regen_regenerates_md5_cache_from_the_depend_phase(
+    emerge_binary, tmp_path
+):
+    """`emerge --regen` (real action_regen -> MetadataRegen): run every
+    ebuild's `depend` phase and (re)write `metadata/md5-cache/<cat>/<pf>`
+    in real portage.cache.flat_hash format -- sorted keys, empty values
+    omitted, `_md5_=<md5 of the ebuild>` last. Exercised on a tiny
+    standalone repo so it stays fast. Then a resolve against the freshly
+    generated cache must work."""
+    import hashlib
+
+    repo = tmp_path / "repo"
+    (repo / "dev-libs" / "regenpkg").mkdir(parents=True)
+    (repo / "profiles").mkdir(parents=True)
+    (repo / "profiles" / "repo_name").write_text("regentest\n")
+    ebuild = repo / "dev-libs" / "regenpkg" / "regenpkg-1.0.ebuild"
+    ebuild_text = (
+        'EAPI=8\n'
+        'DESCRIPTION="regen test"\n'
+        'SLOT="0"\n'
+        'KEYWORDS="amd64"\n'
+        'IUSE="foo"\n'
+        'RDEPEND="dev-libs/other"\n'
+    )
+    ebuild.write_text(ebuild_text)
+
+    cfg = tmp_path / "cfg"
+    (cfg / "etc" / "portage").mkdir(parents=True)
+    (cfg / "etc" / "portage" / "repos.conf").write_text(
+        f"[DEFAULT]\nmain-repo = regentest\n\n[regentest]\nlocation = {repo}\n"
+    )
+
+    env = dict(os.environ)
+    env["PORTAGE_CONFIGROOT"] = str(cfg)
+    env["ROOT"] = str(cfg)
+    env["PORTAGE_RUNNING_ROOT"] = "/"
+    env["PORTAGE_TMPDIR"] = str(tmp_path / "pt")
+
+    result = subprocess.run(
+        [str(emerge_binary), "--regen"],
+        capture_output=True,
+        text=True,
+        check=False,
+        env=env,
+    )
+    assert result.returncode == 0, result.stderr
+    assert "Regenerating cache entries..." in result.stdout
+    assert "Processing dev-libs/regenpkg" in result.stdout
+    assert result.stdout.rstrip().endswith("done!")
+
+    entry = repo / "metadata" / "md5-cache" / "dev-libs" / "regenpkg-1.0"
+    md5 = hashlib.md5(ebuild_text.encode()).hexdigest()
+    assert entry.read_text() == (
+        "DEFINED_PHASES=-\n"
+        "DESCRIPTION=regen test\n"
+        "EAPI=8\n"
+        "IUSE=foo\n"
+        "KEYWORDS=amd64\n"
+        "RDEPEND=dev-libs/other\n"
+        "SLOT=0\n"
+        f"_md5_={md5}\n"
+    )
+
+    # `--pretend` is rejected outright (real actions.py:4106).
+    rej = subprocess.run(
+        [str(emerge_binary), "-p", "--regen"],
+        capture_output=True,
+        text=True,
+        check=False,
+        env=env,
+    )
+    assert rej.returncode == 1
+    assert rej.stderr.strip() == (
+        "emerge: The 'regen' action does not support '--pretend'."
+    )
+
+
 def test_emerge_buildpkgonly_refuses_a_real_src_uri_with_no_manifest_entry(
     emerge_binary, tmp_path
 ):

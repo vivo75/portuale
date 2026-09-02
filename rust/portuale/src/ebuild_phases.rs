@@ -1677,6 +1677,91 @@ fn run_one_phase_bash(
     Ok(status.code().unwrap_or(1))
 }
 
+/// Run one ebuild's `depend` phase (real `EbuildMetadataPhase` /
+/// `doebuild(mydo="depend")`) and return the raw metadata keys it emits.
+///
+/// Real `bin/ebuild.sh`'s `depend` branch (`ebuild.sh:781-804`) writes
+/// `KEY=value` lines (`DEPEND RDEPEND SLOT SRC_URI RESTRICT HOMEPAGE
+/// LICENSE DESCRIPTION KEYWORDS INHERITED IUSE REQUIRED_USE PDEPEND
+/// BDEPEND EAPI PROPERTIES DEFINED_PHASES IDEPEND INHERIT`) to
+/// `${PORTAGE_PIPE_FD}` -- real portage's `_metadata_fd` -- so incidental
+/// stdout/stderr can't corrupt the metadata. This pilot wires that fd to
+/// a `${T}` temp file via a tiny `exec 9>` shell wrapper (no `unsafe`,
+/// no extra crate), then parses it back. `depend` is never sandboxed
+/// (real `_doebuild_spawn`'s `SANDBOXED_SRC_PHASES` excludes it), so this
+/// is a plain `bash bin/ebuild.sh depend` -- no `sandbox`/`unshare`
+/// wrapper. Only the `Bash` backend is used (the metadata pipe is a raw
+/// fd the in-process `Brush` interpreter can't be handed).
+pub(crate) fn run_depend_phase(
+    env: &Environment,
+    root: &Path,
+    config_root: &Path,
+    debug: bool,
+) -> Result<std::collections::HashMap<String, String>, String> {
+    let bin_dir = bin_dir().to_path_buf();
+    let helpers_dir = bin_dir.join("ebuild-helpers");
+    create_directories(env)?;
+
+    let meta_path = env.t().join(".depend-metadata");
+    let _ = std::fs::remove_file(&meta_path);
+
+    let mut vars = phase_env_vars(
+        env,
+        root,
+        "depend",
+        debug,
+        &bin_dir,
+        &helpers_dir,
+        config_root,
+        &[],
+    );
+    vars.push(("PORTAGE_PIPE_FD".to_string(), "9".to_string()));
+
+    let mut cmd = std::process::Command::new("bash");
+    cmd.arg("-c")
+        .arg(r#"exec 9>"$1"; shift; exec "$@""#)
+        .arg("portuale-regen") // $0
+        .arg(&meta_path) // $1
+        .arg("bash")
+        .arg(bin_dir.join("ebuild.sh"))
+        .arg("depend");
+    cmd.envs(vars);
+    cmd.stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null());
+    let out = cmd
+        .output()
+        .map_err(|e| format!("spawning bash for the depend phase failed: {e}"))?;
+    if !out.status.success() {
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        let tail: String = stderr
+            .lines()
+            .rev()
+            .take(6)
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .collect::<Vec<_>>()
+            .join("\n");
+        return Err(format!(
+            "depend phase failed for {}/{} (exit {}):\n{tail}",
+            env.category,
+            env.split.pf,
+            out.status.code().unwrap_or(-1),
+        ));
+    }
+
+    let text =
+        std::fs::read_to_string(&meta_path).map_err(|e| format!("{}: {e}", meta_path.display()))?;
+    let _ = std::fs::remove_file(&meta_path);
+    let mut md = std::collections::HashMap::new();
+    for line in text.lines() {
+        if let Some((k, v)) = line.split_once('=') {
+            md.insert(k.to_string(), v.to_string());
+        }
+    }
+    Ok(md)
+}
+
 /// Real `bin/misc-functions.sh`'s own invocation shape -- unlike
 /// `run_one_phase`'s own `bin/ebuild.sh` + `__ebuild_main <phase>`, real
 /// `doebuild()` invokes commands like `"package"` as a *separate*

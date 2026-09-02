@@ -5194,6 +5194,17 @@ pub fn run(args: &[String]) -> ExitCode {
     // None else search_similarity`.
     let mut search_similarity: f64 = 80.0;
     let mut check_news = false;
+    // --regen (real `action_regen`): regenerate every repo's
+    // `metadata/md5-cache` by running each ebuild's `depend` phase. A
+    // real write action -- rejects `--pretend`. --metadata (real
+    // `action_metadata`) transfers a repo's pre-generated cache into
+    // portage's own `depcachedir`; this pilot reads `metadata/md5-cache`
+    // directly and has no `depcachedir`, so the transfer is a no-op.
+    // --sync stays a non-goal (network syncing) -- recognized only so its
+    // `--pretend` rejection matches real portage.
+    let mut regen_action = false;
+    let mut metadata_action = false;
+    let mut sync_action = false;
     // --clean / --rage-clean: standalone removal actions. --rage-clean
     // is a fast --unmerge (same selection, skips CLEAN_DELAY + prerm/
     // postrm -- invisible at --pretend); --clean keeps only the newest
@@ -6279,6 +6290,22 @@ pub fn run(args: &[String]) -> ExitCode {
             // items per repo.
             check_news = true;
             i += 1;
+        } else if arg == "--regen" {
+            // Real `main.py`: `--regen` is a standalone ACTION
+            // (`action_regen` -> `MetadataRegen`).
+            regen_action = true;
+            i += 1;
+        } else if arg == "--metadata" {
+            // Real `main.py`: `--metadata` is a standalone ACTION
+            // (`action_metadata` -- the post-`--sync` cache transfer).
+            metadata_action = true;
+            i += 1;
+        } else if arg == "--sync" {
+            // Real `main.py`: `--sync` is a standalone ACTION. Network
+            // repo syncing stays a non-goal -- recognized only so the
+            // `--pretend` rejection matches real portage.
+            sync_action = true;
+            i += 1;
         } else if arg == "--clean" {
             // Real `main.py`: `--clean` is a standalone ACTION
             // (`action_uninstall` -> `unmerge` `unmerge_action="clean"`)
@@ -6906,6 +6933,24 @@ pub fn run(args: &[String]) -> ExitCode {
         return ExitCode::from(2);
     }
 
+    // Real `actions.py:4106-4111`: the `config`, `metadata`, `regen` and
+    // `sync` actions all reject `--pretend` outright (they only ever do
+    // real work, so a dry run is meaningless). `--config` already runs
+    // ignoring `--pretend` in this pilot -- kept as-is for compatibility;
+    // the three others are gated here.
+    if pretend {
+        for (flag, name) in [
+            (regen_action, "regen"),
+            (metadata_action, "metadata"),
+            (sync_action, "sync"),
+        ] {
+            if flag {
+                eprintln!("emerge: The '{name}' action does not support '--pretend'.");
+                return ExitCode::from(1);
+            }
+        }
+    }
+
     // `--unmerge`/`-C`, `--depclean`/`-c`, `--prune`/`-P` and now
     // `--deselect`/`-W` WITHOUT `--pretend` are all real writes:
     // `run_unmerge_pretend` / `run_depclean_pretend` / `run_prune_pretend`
@@ -6935,6 +6980,29 @@ pub fn run(args: &[String]) -> ExitCode {
     // guard and all the repos.conf/profile machinery.
     if list_sets {
         return run_list_sets(&config_root_from_env());
+    }
+
+    // `--regen` (real `action_regen`): a real write action -- regenerate
+    // every repo's `metadata/md5-cache` by running each ebuild's `depend`
+    // phase. `--pretend` was already rejected above.
+    if regen_action {
+        return crate::regen::run(&config_root_from_env(), &root_from_env());
+    }
+    // `--metadata` (real `action_metadata`): transfers a repo's
+    // pre-generated cache into portage's own `depcachedir`. This pilot
+    // reads `metadata/md5-cache` directly and models no `depcachedir`, so
+    // there is nothing to transfer -- real portage's own
+    // `>>> Updating Portage cache` header, then done.
+    if metadata_action {
+        println!("\n>>> Updating Portage cache");
+        return ExitCode::SUCCESS;
+    }
+    // `--sync`: network repo syncing stays a non-goal -- `sync_action` is
+    // tracked only so the `-p --sync` rejection above matches real
+    // portage; a bare `emerge --sync` still reports the standard
+    // "recognized action, not implemented" message.
+    if sync_action {
+        return report_option("--sync");
     }
 
     if atom_args.is_empty()

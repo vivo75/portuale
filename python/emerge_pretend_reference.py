@@ -11408,6 +11408,13 @@ def run(args):
     regex_search_auto = True
     search_similarity = 80.0
     check_news = False
+    # --regen / --metadata / --sync: real actions that reject --pretend
+    # (actions.py:4106). --regen does real work on the Rust side (regen.rs);
+    # this reference is --pretend-only, so like every other non-dry-run
+    # path it just returns 0. Mirrors pretend.rs.
+    regen_action = False
+    metadata_action = False
+    sync_action = False
     clean_action = False
     rage_clean = False
     info_action = False
@@ -11992,6 +11999,15 @@ def run(args):
             search_similarity = n
         elif arg == "--check-news":
             check_news = True
+            i += 1
+        elif arg == "--regen":
+            regen_action = True
+            i += 1
+        elif arg == "--metadata":
+            metadata_action = True
+            i += 1
+        elif arg == "--sync":
+            sync_action = True
             i += 1
         elif arg == "--clean":
             clean_action = True
@@ -12763,6 +12779,21 @@ def run(args):
         print('emerge: can\'t specify both of "--tree" and "--columns".', file=sys.stderr)
         return 2
 
+    # Real actions.py:4106-4111: the config/metadata/regen/sync actions
+    # reject --pretend outright. Mirrors pretend.rs.
+    if pretend:
+        for flag, name in (
+            (regen_action, "regen"),
+            (metadata_action, "metadata"),
+            (sync_action, "sync"),
+        ):
+            if flag:
+                print(
+                    f"emerge: The '{name}' action does not support '--pretend'.",
+                    file=sys.stderr,
+                )
+                return 1
+
     # Real portage resolves COLUMNWIDTH (and warns on an unparsable
     # value) as part of general display setup, unconditionally -- never
     # gated on --columns itself actually being given. Mirrored here the
@@ -12791,6 +12822,22 @@ def run(args):
     # below). Mirrors pretend.rs.
     if list_sets:
         return _run_list_sets(_config_root())
+    # --regen: real work on the Rust side (regen.rs). This reference has no
+    # ebuild-execution machinery -- like every non-dry-run path it returns
+    # 0 with no output (the real behaviour is black-box-tested against
+    # portuale, not via the shared contract CASES). Mirrors pretend.rs.
+    if regen_action:
+        return 0
+    # --metadata: real action_metadata prints ">>> Updating Portage cache";
+    # this pilot models no depcachedir, so there is nothing to transfer.
+    if metadata_action:
+        print("\n>>> Updating Portage cache")
+        return 0
+    # --sync: network repo syncing is a deliberate non-goal. `sync_action`
+    # is tracked only for the `-p --sync` rejection above; a bare `emerge
+    # --sync` reports the standard "recognized action, not implemented".
+    if sync_action:
+        return _report_option("--sync")
     if search_action:
         # Real action_search passes search's `verbose` as `"--quiet" not
         # in myopts` -- so the full block shows by default and -q makes it

@@ -750,6 +750,31 @@ CASES = [
         2,
     ),
     (
+        "--regen rejects --pretend (real actions.py:4106)",
+        ["--pretend", "--regen"],
+        1,
+    ),
+    (
+        "--metadata rejects --pretend",
+        ["--pretend", "--metadata"],
+        1,
+    ),
+    (
+        "--sync rejects --pretend",
+        ["--pretend", "--sync"],
+        1,
+    ),
+    (
+        "--metadata without --pretend prints the cache-update header",
+        ["--metadata"],
+        0,
+    ),
+    (
+        "bare --sync still reports the recognized-action-not-implemented message",
+        ["--sync"],
+        2,
+    ),
+    (
         "--rebuilt-binaries: off by default, stays already-installed",
         ["--pretend", "--usepkg", "--selective", "dev-libs/rebuiltbinarypkg"],
         0,
@@ -9776,8 +9801,10 @@ def test_real_option_inline_equals_form_is_still_recognized(emerge_binary, fixtu
 def test_real_action_not_implemented_message_says_action_not_option(emerge_binary, fixture_env):
     """--sync is a real emerge action (see main.py's actions frozenset),
     not an option -- the error must say "action". (--search/--depclean/
-    --unmerge used to be the example here; all implemented now. --sync
-    stays a documented non-goal -- repo network syncing.)"""
+    --unmerge/--regen used to be the example here; all implemented now.
+    --sync is recognized only for its `-p` rejection -- a bare `emerge
+    --sync` still reports this standard message; repo network syncing
+    stays a documented non-goal.)"""
     result = _run([str(emerge_binary)], ["--sync"], fixture_env)
     assert result.returncode == 2
     expected = (

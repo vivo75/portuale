@@ -297,10 +297,24 @@ dev/test context — see also the `chown` note below).
   — narrowed to the deterministic `Repositories:` + `VAR="value"` block;
   the host-state half — version header, uname/mem, tool-version probes,
   `info_pkgs`, timestamps — is a documented cut).*
-  Remaining: `--regen` (metadata cache), `--metadata`.
+  **Shipped 2026-09-02 (batch 11): `--regen`** (real `action_regen` →
+  `MetadataRegen`) — a real write action: run every ebuild's `depend`
+  phase (`ebuild_phases::run_depend_phase`, a `PORTAGE_PIPE_FD`-wired
+  `bash bin/ebuild.sh depend` spawn) and (re)write
+  `metadata/md5-cache/<cat>/<pf>` in real `portage.cache.flat_hash`
+  format (new `regen.rs`). v1 cuts: sequential (no `--jobs` threading),
+  no stale-entry pruning, `_eclasses_` from `INHERITED` md5s (this repo
+  only, no masters chain). **`--metadata`** is recognized but an
+  architectural no-op — real `action_metadata` transfers a repo's
+  pre-generated cache into portage's own `depcachedir`, which this pilot
+  doesn't model (it reads `metadata/md5-cache` directly); it prints the
+  real `>>> Updating Portage cache` header and exits 0. `--regen` /
+  `--metadata` / `--sync` all reject `--pretend` with the exact real
+  `actions.py:4106` message.
   `--read-news` stays a recognized-unimplemented option (it's a
   post-merge display toggle, not an action). `--sync` (repo network
-  syncing) stays a non-goal.
+  syncing) stays a non-goal (recognized only for the `--pretend`
+  rejection).
 - Recognized-but-unimplemented modifier flags (user asked 2026-09-02 to
   implement the batch; shipping one coherent slice per commit).
   **Shipped 2026-09-02 (batch 1): `--fuzzy-search` / `--regex-search-auto`
@@ -536,10 +550,11 @@ by a few large items rather than a long tail of small ones:
 5. **Breadth of actions and flags (Parts 2.E/F).** *`--list-sets`,
    `--search`/`-s`/`-S`, `--check-news`, `--clean`, `--rage-clean`,
    `--info` shipped 2026-09-01; the whole recognized-but-unimplemented
-   modifier-flag list shipped 2026-09-02 (batches 1–10).* Remaining:
-   `--regen` / `--metadata` (needs a new depend-phase
-   md5-cache-generation capability, Rust-only), `--sync` (non-goal),
-   GLSA/`@security`.
+   modifier-flag list shipped 2026-09-02 (batches 1–10); `--regen`
+   (real depend-phase md5-cache regeneration) + `--metadata`
+   (architectural no-op) + the `config`/`metadata`/`regen`/`sync`
+   `--pretend` rejection shipped 2026-09-02 (batch 11).* Remaining:
+   `--sync` (non-goal), GLSA/`@security`.
 
 Everything else in Part 2 is genuinely incremental — one focused slice
 each, the rhythm this pilot already runs at. Items 1–4 above are the
