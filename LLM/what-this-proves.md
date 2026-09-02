@@ -9434,6 +9434,91 @@ Reuses the `deeppkg`→`deeppkg2`→`newpkg` chain and the
 `complete_graph_never_merges_a_missing_deep_dep_of_an_installed_pkg`
 + 10 `CASES` + 2 rewritten contract tests. Full suite: 1245 passed.
 
+### `emerge --useoldpkg-atoms ATOMS` (2026-09-02)
+
+Real `main.py:713` (`action: "append"` → `depgraph.py:370-371`
+`WildcardPackageSet(atoms)`): for a package matching one of these atoms,
+real `_select_pkg` collects the *built* (binary) candidates into
+`matched_oldpkg` (`depgraph.py:7936` / `8337`) and, when that list is
+non-empty, restricts `visible_matches` — and therefore the best-version
+pick — to them. `--help`: "Emerge will prefer matching binary packages
+over newer unbuilt packages." Only reachable when `--usepkg` /
+`--getbinpkg` puts binary candidates in the pool at all.
+
+Ported as `portage_repo::set_useoldpkg_atoms(Vec<String>)` — a
+process-global (env-free, the same pattern `--package-moves` /
+`--color`'s override map use, so no threading through `resolve_pretend`'s
+/ `resolve_pretend_graph`'s already-huge signatures) — plus one
+restriction in `resolve_pretend`: right after the `binpkg_respect_use`
+filter, if any surviving candidate is `CandidateSource::Binary` and its
+`cat/pkg-version` matches a `--useoldpkg-atoms` atom, `matched` becomes
+exactly those binaries, so every downstream check (the `--exclude` /
+`--update` already-installed lookups and the final best-version pick)
+sees only the old binaries. Empty `--useoldpkg-atoms` and a pool with no
+binary candidates are both strict no-ops. Same two-tier
+`matches_config_entry` wildcard matcher `--reinstall-atoms` / `--exclude`
+already use.
+
+```sh
+FX="$(realpath fixtures)"
+run() { PORTAGE_CONFIGROOT="$FX" ROOT="$FX" PORTAGE_RUNNING_ROOT="$FX" \
+    rust/target/release/portuale emerge "$@"; }
+# useoldpkgpkg: binary 1.0 in PKGDIR, ebuild 2.0 in the tree
+run -pk dev-libs/useoldpkgpkg
+# [ebuild  N     ] dev-libs/useoldpkgpkg-2.0              <- newer ebuild wins by default
+run -pk --useoldpkg-atoms dev-libs/useoldpkgpkg dev-libs/useoldpkgpkg
+# [binary  N     ] dev-libs/useoldpkgpkg-1.0              <- old binary preferred
+run -p --useoldpkg-atoms dev-libs/useoldpkgpkg dev-libs/useoldpkgpkg
+# [ebuild  N     ] dev-libs/useoldpkgpkg-2.0              <- inert without --usepkg
+```
+
+New `dev-libs/useoldpkgpkg` fixture (binary `1.0` added to
+`pkgdir/Packages`, ebuild `2.0` + md5-cache). Mirrored in
+`emerge_pretend_reference.py` (`_useoldpkg_atoms`); 7 `CASES` + 1 pinned
+contract test (a Rust unit test is skipped — the flag is a
+process-global that parallel test threads would poison; the
+subprocess-isolated contract tests are the coverage).
+
+### `emerge --autounmask-continue` / `--autounmask-backtrack` (2026-09-02)
+
+Both flags are now *recognized* (they used to hit the
+"recognized-but-unimplemented" abort) and their values validated
+(`--autounmask-continue` is real `true_y_or_n`: bare / `=y` / `=n`;
+`--autounmask-backtrack` is real `choices: ("y", "n")` — a value is
+required, `maybe` is a `choose from "y", "n"` usage error). Both are
+**inert** in this `--pretend`-only portuale, on solid ground:
+
+- `--autounmask-continue`'s "write the changes to config files and keep
+  merging" path is explicitly gated on `"--pretend" not in
+  self._frozen_config.myopts` (`depgraph.py:5796`) — it never runs for
+  any `emerge -p`.
+- `--autounmask-backtrack` only ever flips the
+  `_autounmask_backtrack_disabled` state, whose sole effect is the
+  "backtracking has terminated early due to the above autounmask
+  change(s)" notice (`depgraph.py:11093`). That needs the real
+  backtracking depgraph loop, which portuale's narrow autounmask v1
+  doesn't have.
+
+The one real observable is `actions.py:3772`: when
+`--autounmask-continue` is given *and* `--autounmask=n`, a warning
+` * --autounmask-continue has been disabled by --autounmask=n` is printed
+to stderr on the merge/build path (before the depgraph), and the run
+otherwise proceeds normally.
+
+```sh
+FX="$(realpath fixtures)"
+run() { PORTAGE_CONFIGROOT="$FX" ROOT="$FX" PORTAGE_RUNNING_ROOT="$FX" \
+    rust/target/release/portuale emerge "$@"; }
+run -p --autounmask-continue --autounmask=n dev-libs/newpkg
+#  * --autounmask-continue has been disabled by --autounmask=n   (stderr)
+# [ebuild  N     ] dev-libs/newpkg-1.0
+run -p --autounmask-backtrack maybe dev-libs/newpkg
+# emerge: option "--autounmask-backtrack": invalid choice: "maybe" (choose from "y", "n")
+```
+
+Mirrored in `emerge_pretend_reference.py`; 7 `CASES` + 1 pinned contract
+test. No fixture (nothing new to resolve).
+
 ### `emerge -pc <atoms> --deselect=n`
 
 Real `action_depclean`: `deselect = myopts.get("--deselect") != "n"`

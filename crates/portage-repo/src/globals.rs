@@ -17,6 +17,11 @@ pub fn set_package_moves_enabled(enabled: bool) {
 // Portage: main.py, depgraph.py
 pub(crate) static USEOLDPKG_ATOMS: RwLock<Vec<String>> = RwLock::new(Vec::new());
 
+/// Set by `pretend.rs` from `--useoldpkg-atoms ATOMS` before any resolution.
+pub fn set_useoldpkg_atoms(atoms: Vec<String>) {
+    *USEOLDPKG_ATOMS.write().unwrap() = atoms;
+}
+
 /// Whether `cat/pkg-version` matches an atom in the `--useoldpkg-atoms` set.
 // Portage: useoldpkg_atoms.findAtomForPackage
 pub(crate) fn useoldpkg_atom_matches(category: &str, package: &str, version: &str) -> bool {
