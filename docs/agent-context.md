@@ -890,10 +890,14 @@ not just read this list. What's actually left, grouped by area:
   "unsupported" notice; `create_directories` makes `${T}/logging`.
   `--resume`/`--skipfirst` also shipped (`mtimedb.rs` -- a failed source
   `emerge` writes `mtimedb["resume"]`, `emerge --resume [--skipfirst]`
-  replays it). **Part 2.B is now substantially complete.** Remaining
-  odds and ends: `resume_backup` rotation, `mail*`/`syslog`/`custom`
-  elog, the in-place-replace path's superseded-version prerm/postrm
-  elog, `PORTAGE_SCHEDULING_POLICY`, killing in-flight builds on a hard
+  replays it; 2026-09-02 the `myopts` half -- `--oneshot`/`--onlydeps`
+  are recorded in `ResumeOpts` and honoured on replay so `--resume`
+  doesn't world-record a `--oneshot` run's recovered packages).
+  **Part 2.B is now substantially complete.** Remaining odds and ends:
+  `resume_backup` rotation, the rest of `myopts` (build-time flags,
+  bundled with binary-entry replay), `mail*`/`syslog`/`custom` elog, the
+  in-place-replace path's superseded-version prerm/postrm elog,
+  `PORTAGE_SCHEDULING_POLICY`, killing in-flight builds on a hard
   fail.
 
 **Depgraph / dry-run**:

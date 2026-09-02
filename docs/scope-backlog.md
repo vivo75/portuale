@@ -211,9 +211,14 @@ single-pass BFS can't grow into these incrementally:
   `split-log`.
 - **`--resume` / `--skipfirst`.** *Shipped 2026-09-01:* a failed source
   `emerge <atoms>` writes `mtimedb["resume"]` (`mtimedb.rs`);
-  `emerge --resume [--skipfirst]` replays the saved mergelist. Remaining:
-  `resume_backup` rotation; `--resume --pretend` list display; carrying
-  the original `myopts`; binary-entry replay.
+  `emerge --resume [--skipfirst]` replays the saved mergelist.
+  *Shipped 2026-09-02:* the `myopts` half — `mtimedb["resume"]["myopts"]`
+  records `--oneshot` / `--onlydeps` (`ResumeOpts`), so `--resume`
+  replays with the same world-recording suppression the original run
+  had (before, a `--oneshot` failure then `--resume` wrongly added the
+  recovered packages to `world`). Remaining: `resume_backup` rotation;
+  `--resume --pretend` list display; the rest of `myopts` (build-time
+  flags — bundled with binary-entry replay); binary-entry replay.
 - **`--ask` / interactive prompts.** *Shipped 2026-09-01:* `--ask`/`-a`
   prompts before a real `emerge <atom>` merge and before `-C` /
   `--depclean` / `--prune` removal (`ask_confirm`, exit 130 on No), and

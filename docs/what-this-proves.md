@@ -11095,13 +11095,21 @@ rebuilds+merges each `cat/pkg-ver` in order via minimal
 saved `favorites` go into the world file; on another failure the still-
 unmerged tail is re-saved.
 
+`mtimedb["resume"]["myopts"]` records the two flags that change how the
+mergelist replays — **`--oneshot`** and **`--onlydeps`** (`ResumeOpts`):
+`--resume` honours whichever was set, so a failed `emerge --oneshot`
+then `emerge --resume` no longer wrongly adds the recovered packages to
+`world`. `test_emerge_resume_carries_the_oneshot_flag` pins it
+(`myopts == {"--oneshot": true}`, `world` stays empty after the resume).
+
 The file is real portage's JSON `mtimedb`, written real-compatibly
 (tab-indented) — but the pilot does **not** preserve any other top-level
 keys an existing one had (`info` / `ldpath` / `updates` are `--sync` /
 `env-update` state it never manages). v1 cuts: no `resume_backup`
 rotation; `--resume --pretend` doesn't print the saved list; a saved
-binary entry is replayed as source; `myopts` is written empty (resume
-doesn't carry the original flags).
+binary entry is replayed as source; the build-time `myopts`
+(`--usepkg` etc.) aren't carried (bundled with the binary-entry-replay
+cut).
 
 ### Remote binhost: compressed `Packages` index + binpkg `MD5` verification
 

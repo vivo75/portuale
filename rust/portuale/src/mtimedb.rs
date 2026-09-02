@@ -18,16 +18,29 @@
 //
 // v1 cuts: no `resume_backup` rotation (a cleared list is just deleted);
 // `--resume` only replays a *source* mergelist (a saved binary entry is
-// merged as source); `myopts` is written empty (`--resume` re-'s not
-// carry the original flags).
+// merged as source). `myopts` records only the two flags that change
+// how the mergelist is replayed -- `--oneshot` and `--onlydeps` (real
+// portage stores every option); the build-time flags (`--usepkg` etc.)
+// are the binary-entry-replay cut's concern.
 
 use regex::Regex;
 use std::path::{Path, PathBuf};
 
 /// `(category, package, version)` -- one entry of a resume mergelist.
 pub type ResumeCpv = (String, String, String);
-/// `(favorites, mergelist)` from `mtimedb["resume"]`.
-pub type ResumeList = (Vec<String>, Vec<ResumeCpv>);
+
+/// The subset of `mtimedb["resume"]["myopts"]` that changes how
+/// `--resume` replays the mergelist: `--oneshot` (don't add the
+/// `favorites` to `world`) and `--onlydeps` (the target was never in the
+/// mergelist, so nothing is world-recorded).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ResumeOpts {
+    pub oneshot: bool,
+    pub onlydeps: bool,
+}
+
+/// `(favorites, mergelist, myopts)` from `mtimedb["resume"]`.
+pub type ResumeList = (Vec<String>, Vec<ResumeCpv>, ResumeOpts);
 
 /// `<root>/var/cache/edb/mtimedb`.
 pub fn mtimedb_path(root: &Path) -> PathBuf {
@@ -53,11 +66,14 @@ fn json_str(s: &str) -> String {
 
 /// Writes `mtimedb["resume"]` for a failed merge: `favorites` (the atom
 /// args) + `mergelist` (`["ebuild", <root>, "<cat/pkg-ver>", "merge"]`
-/// per still-unmerged package). No-op if `mergelist` is empty.
+/// per still-unmerged package) + `myopts` (the `--oneshot`/`--onlydeps`
+/// flags, so `--resume` replays with the same world-recording
+/// behaviour). No-op if `mergelist` is empty.
 pub fn write_resume_list(
     root: &Path,
     favorites: &[&str],
     mergelist: &[ResumeCpv],
+    opts: &ResumeOpts,
 ) -> Result<(), String> {
     if mergelist.is_empty() {
         return Ok(());
@@ -83,16 +99,30 @@ pub fn write_resume_list(
             )
         })
         .collect();
+    // Real `json.dumps(..., sort_keys=True)` -> myopts keys alphabetical
+    // (`--onlydeps` < `--oneshot`), value `true`.
+    let mut opt_pairs: Vec<String> = Vec::new();
+    if opts.onlydeps {
+        opt_pairs.push(format!("\t\t\t{}: true", json_str("--onlydeps")));
+    }
+    if opts.oneshot {
+        opt_pairs.push(format!("\t\t\t{}: true", json_str("--oneshot")));
+    }
+    let myopts = if opt_pairs.is_empty() {
+        "{}".to_string()
+    } else {
+        format!("{{\n{}\n\t\t}}", opt_pairs.join(",\n"))
+    };
     let content = format!(
-        "{{\n\t\"resume\": {{\n\t\t\"favorites\": [\n{}\n\t\t],\n\t\t\"mergelist\": [\n{}\n\t\t],\n\t\t\"myopts\": {{}}\n\t}}\n}}\n",
+        "{{\n\t\"resume\": {{\n\t\t\"favorites\": [\n{}\n\t\t],\n\t\t\"mergelist\": [\n{}\n\t\t],\n\t\t\"myopts\": {myopts}\n\t}}\n}}\n",
         favs.join(",\n"),
         merges.join(",\n")
     );
     std::fs::write(&path, content).map_err(|e| format!("{}: {e}", path.display()))
 }
 
-/// Reads back `(favorites, mergelist-cpvs)` from `mtimedb["resume"]`, or
-/// `None` when there's nothing to resume.
+/// Reads back `(favorites, mergelist-cpvs, myopts)` from
+/// `mtimedb["resume"]`, or `None` when there's nothing to resume.
 pub fn read_resume_list(root: &Path) -> Option<ResumeList> {
     let content = std::fs::read_to_string(mtimedb_path(root)).ok()?;
     // Only look inside the "resume" object.
@@ -131,7 +161,20 @@ pub fn read_resume_list(root: &Path) -> Option<ResumeList> {
         .map(|c| c[1].to_string())
         .collect();
 
-    Some((favorites, mergelist))
+    // `myopts` -- the object after `"myopts"`, up to its closing brace
+    // (the pilot only ever writes flat `"--flag": true` pairs, so the
+    // first `}` closes it).
+    let myopts_block = resume
+        .split("\"myopts\"")
+        .nth(1)
+        .and_then(|s| s.split('}').next())
+        .unwrap_or("");
+    let opts = ResumeOpts {
+        oneshot: myopts_block.contains("\"--oneshot\""),
+        onlydeps: myopts_block.contains("\"--onlydeps\""),
+    };
+
+    Some((favorites, mergelist, opts))
 }
 
 /// `cat/pkg-1.2.3-r1` -> `("cat/pkg", "1.2.3-r1")`. Splits at the last
@@ -187,10 +230,14 @@ mod tests {
                     "2.3-r1".to_string(),
                 ),
             ],
+            &ResumeOpts {
+                oneshot: true,
+                onlydeps: false,
+            },
         )
         .unwrap();
 
-        let (favs, merges) = read_resume_list(&root).expect("a resume list");
+        let (favs, merges, opts) = read_resume_list(&root).expect("a resume list");
         assert_eq!(favs, vec!["dev-libs/foo", "dev-libs/bar"]);
         assert_eq!(
             merges,
@@ -207,13 +254,47 @@ mod tests {
                 ),
             ]
         );
+        assert_eq!(
+            opts,
+            ResumeOpts {
+                oneshot: true,
+                onlydeps: false
+            }
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn myopts_round_trips_onlydeps_and_defaults_to_none() {
+        let root = tmproot();
+        let cpv = &[("c".to_string(), "p".to_string(), "1".to_string())][..];
+        write_resume_list(&root, &[], cpv, &ResumeOpts::default()).unwrap();
+        assert_eq!(read_resume_list(&root).unwrap().2, ResumeOpts::default());
+
+        write_resume_list(
+            &root,
+            &[],
+            cpv,
+            &ResumeOpts {
+                oneshot: false,
+                onlydeps: true,
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            read_resume_list(&root).unwrap().2,
+            ResumeOpts {
+                oneshot: false,
+                onlydeps: true
+            }
+        );
         let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
     fn empty_mergelist_writes_nothing_and_reads_none() {
         let root = tmproot();
-        write_resume_list(&root, &["x/y"], &[]).unwrap();
+        write_resume_list(&root, &["x/y"], &[], &ResumeOpts::default()).unwrap();
         assert!(!mtimedb_path(&root).exists());
         assert!(read_resume_list(&root).is_none());
         let _ = std::fs::remove_dir_all(&root);
@@ -226,6 +307,7 @@ mod tests {
             &root,
             &[],
             &[("c".to_string(), "p".to_string(), "1".to_string())],
+            &ResumeOpts::default(),
         )
         .unwrap();
         assert!(mtimedb_path(&root).exists());

@@ -1125,6 +1125,42 @@ def test_emerge_resume_replays_the_saved_mergelist(emerge_binary, tmp_path):
     assert not mtimedb.exists()  # resume list cleared on success
 
 
+def test_emerge_resume_carries_the_oneshot_flag(emerge_binary, tmp_path):
+    """Real `mtimedb["resume"]["myopts"]`: a failed `emerge --oneshot
+    <atoms>` records `--oneshot`, so `emerge --resume` replays without
+    adding the recovered packages to the world file (before this the
+    resume always world-recorded its favorites)."""
+    import json
+    import shutil
+
+    root = tmp_path / "root"
+    shutil.copytree(Path(FIXTURES_ROOT) / "var", root / "var")
+    (root / "var/lib/portage").mkdir(parents=True, exist_ok=True)
+    (root / "var/lib/portage/world").write_text("")
+    env = dict(os.environ)
+    env["PORTAGE_CONFIGROOT"] = FIXTURES_ROOT
+    env["ROOT"] = str(root)
+    env["DISTDIR"] = str(Path(FIXTURES_ROOT) / "distfiles")
+    env["PORTAGE_TMPDIR"] = str(tmp_path / "pt")
+
+    r = subprocess.run(
+        [str(emerge_binary), "--oneshot", "dev-libs/schedbad", "dev-libs/schedok"],
+        capture_output=True, text=True, check=False, env=env,
+    )
+    assert r.returncode == 1
+    saved = json.loads((root / "var/cache/edb/mtimedb").read_text())
+    assert saved["resume"]["myopts"] == {"--oneshot": True}
+
+    r = subprocess.run(
+        [str(emerge_binary), "--resume", "--skipfirst"],
+        capture_output=True, text=True, check=False, env=env,
+    )
+    assert r.returncode == 0, r.stderr
+    assert (root / "var/db/pkg/dev-libs/schedok-1.0/CONTENTS").is_file()
+    # --oneshot carried through: schedok is NOT in world.
+    assert (root / "var/lib/portage/world").read_text() == ""
+
+
 def test_emerge_elog_echo_prints_a_message_summary(emerge_binary, tmp_path):
     """Real `elog_process` / `mod_echo` (default-on via `make.globals`
     `PORTAGE_ELOG_SYSTEM`): after the merge, the `elog`/`ewarn` messages an

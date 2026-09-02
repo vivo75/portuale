@@ -3248,7 +3248,10 @@ fn source_entries_not_merged(
 /// is built + merged as a source entry, in the recorded order;
 /// `--skipfirst` drops the first (the one that failed). On success the
 /// resume list is cleared and the saved `favorites` are recorded in the
-/// world file; on another failure the still-unmerged tail is re-saved.
+/// world file -- unless the recorded `myopts` carried `--oneshot` /
+/// `--onlydeps`, in which case the same suppression the original run
+/// would have applied is honoured. On another failure the still-unmerged
+/// tail is re-saved with the same `myopts`.
 fn run_resume(
     root: &Path,
     config_root: &Path,
@@ -3258,7 +3261,7 @@ fn run_resume(
     load_average: Option<f64>,
     shell: ebuild_phases::ShellBackend,
 ) -> ExitCode {
-    let Some((favorites, mut mergelist)) = crate::mtimedb::read_resume_list(root) else {
+    let Some((favorites, mut mergelist, opts)) = crate::mtimedb::read_resume_list(root) else {
         eprintln!("emerge: could not find a valid resume list");
         return ExitCode::from(1);
     };
@@ -3299,14 +3302,25 @@ fn run_resume(
     ) {
         let still = source_entries_not_merged(root, &entries);
         let fav_refs: Vec<&str> = favorites.iter().map(String::as_str).collect();
-        let _ = crate::mtimedb::write_resume_list(root, &fav_refs, &still);
+        let _ = crate::mtimedb::write_resume_list(root, &fav_refs, &still, &opts);
         eprintln!("emerge: {e}");
         return ExitCode::from(1);
     }
 
     crate::mtimedb::clear_resume_list(root);
     let fav_refs: Vec<&str> = favorites.iter().map(String::as_str).collect();
-    if let Err(e) = update_world_file(root, &fav_refs, &entries, &[], &repos, false, false) {
+    // Real `--resume` honours the recorded `--oneshot`/`--onlydeps`: the
+    // saved `favorites` are only world-recorded when the original run
+    // would have recorded them.
+    if let Err(e) = update_world_file(
+        root,
+        &fav_refs,
+        &entries,
+        &[],
+        &repos,
+        opts.oneshot,
+        opts.onlydeps,
+    ) {
         eprintln!("emerge: {e}");
         return ExitCode::from(1);
     }
@@ -8360,7 +8374,10 @@ pub fn run(args: &[String]) -> ExitCode {
                 // record every still-unmerged package so `emerge --resume`
                 // can pick up where this left off.
                 let unmerged = source_entries_not_merged(&root, entries);
-                if let Err(w) = crate::mtimedb::write_resume_list(&root, &atom_args, &unmerged) {
+                let resume_opts = crate::mtimedb::ResumeOpts { oneshot, onlydeps };
+                if let Err(w) =
+                    crate::mtimedb::write_resume_list(&root, &atom_args, &unmerged, &resume_opts)
+                {
                     eprintln!("emerge: warning: could not save the resume list: {w}");
                 } else if !unmerged.is_empty() {
                     eprintln!(
