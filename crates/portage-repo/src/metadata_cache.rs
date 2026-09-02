@@ -278,6 +278,19 @@ pub fn pregen_md5_cache_enabled(repo: &RepoConfig) -> bool {
         .is_some_and(|f| f.as_str() == "md5-dict")
 }
 
+/// Whether `egencache --update` would write this repo's
+/// `metadata/md5-cache`: `md5-dict` is among the **known** resolved
+/// `cache-formats`, in any position, or the list is empty.
+/// Portage: egencache iterates every known format with `force=True`.
+///
+/// Note the reader's mirror ([`pregen_md5_cache_enabled`]) is *not* the
+/// same for an empty list: the reader uses `force=False`, so a repo with
+/// no `cache-formats` and no cache dir reads from the ebuild, while
+/// egencache still creates `metadata/md5-cache` for it.
+pub fn regen_writes_md5_cache(repo: &RepoConfig) -> bool {
+    repo.cache_formats.is_empty() || repo.cache_formats.iter().any(|f| f == "md5-dict")
+}
+
 /// Whether the process's resolved `FEATURES` names `metadata-transfer`
 /// (which removes the pregen repo cache rung entirely), resolved once per
 /// process. `false` whenever the config cannot be resolved (fail open).

@@ -60,6 +60,27 @@ struct RegenFailure {
     message: String,
 }
 
+/// One initial run plus up to two retries of the unexpectedly-failed cps.
+/// Portage: MetadataRegen.py, metadata_regen_retry.
+const MAX_TRIES: u32 = 3;
+
+/// Only a non-1 returncode retries its whole cp; 1 is the "expected" failure
+/// (invalid metadata, pre-spawn failure) and is never retried.
+/// Portage: MetadataRegen.py, _task_exit.
+fn is_retryable_returncode(code: i32) -> bool {
+    code != 1
+}
+
+/// The unexpectedly-failed cps in first-seen order (Portage iterates a set;
+/// same set, stable order).
+fn select_retry_cps(cps_in_order: &[String], unexpected_cps: &HashSet<String>) -> Vec<String> {
+    cps_in_order
+        .iter()
+        .filter(|cp| unexpected_cps.contains(cp.as_str()))
+        .cloned()
+        .collect()
+}
+
 /// One item's `depend` phase plus cache write.
 /// Portage: MetadataRegen.py, EbuildMetadataPhase.
 fn run_work_item(
@@ -172,6 +193,35 @@ fn next_dispatchable_in(
         let idx = pass_indices[slot];
         !in_flight_keys.contains(&(work[idx].category.clone(), work[idx].pf.clone()))
     })
+}
+
+/// Remove on-disk entries with no matching ebuild this run.
+/// Portage: MetadataRegen.py, _cleanup.
+fn prune_stale_entries(repo_location: &Path, valid: Option<&HashSet<(String, String)>>) {
+    let empty = HashSet::new();
+    let valid = valid.unwrap_or(&empty);
+    let cache_root = repo_location.join("metadata/md5-cache");
+    let Ok(cats) = portage_util::read_dir_entries(&cache_root) else {
+        return;
+    };
+    for cat_entry in cats {
+        if !cat_entry.file_type().is_ok_and(|t| t.is_dir()) {
+            continue;
+        }
+        let category = cat_entry.file_name().to_string_lossy().to_string();
+        let Ok(files) = portage_util::read_dir_entries(&cat_entry.path()) else {
+            continue;
+        };
+        for f in files {
+            if !f.file_type().is_ok_and(|t| t.is_file()) {
+                continue;
+            }
+            let pf = f.file_name().to_string_lossy().to_string();
+            if !valid.contains(&(category.clone(), pf)) {
+                let _ = std::fs::remove_file(f.path());
+            }
+        }
+    }
 }
 /// Arguments of [`regen_one`].
 struct RegenOneArgs<'a> {
