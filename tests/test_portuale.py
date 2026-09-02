@@ -555,6 +555,38 @@ def test_emerge_atom_without_pretend_really_builds_and_merges_from_source(
     assert world_lines == sorted(world_lines)
 
 
+def test_emerge_atom_source_build_sees_the_resolved_use_flags(
+    emerge_binary, tmp_path
+):
+    """`emerge <atom>` (source) now passes the resolved `USE` into every
+    ebuild phase (`MergeOptions::build_env`), so `bin/ebuild.sh`'s own
+    `use()` builtin works. `dev-libs/usebuildpkg` has `IUSE="buildflag"`,
+    enabled for it in `fixtures/etc/portage/package.use`; its
+    `src_install` writes `on` or `off` to a merged file depending on
+    `use buildflag`. Before this the phase env left `USE=""` and the file
+    always said `off`."""
+    root = tmp_path / "root"
+    import shutil
+
+    shutil.copytree(Path(FIXTURES_ROOT) / "var", root / "var")
+    env = dict(os.environ)
+    env["PORTAGE_CONFIGROOT"] = FIXTURES_ROOT
+    env["ROOT"] = str(root)
+    env["DISTDIR"] = str(Path(FIXTURES_ROOT) / "distfiles")
+    env["PORTAGE_TMPDIR"] = str(tmp_path / "portage-tmpdir")
+
+    result = subprocess.run(
+        [str(emerge_binary), "dev-libs/usebuildpkg"],
+        capture_output=True,
+        text=True,
+        check=False,
+        env=env,
+    )
+    assert result.returncode == 0, result.stderr
+    assert ">>> dev-libs/usebuildpkg-1.0 merged." in result.stdout
+    assert (root / "usr/share/usebuildpkg/state").read_text().strip() == "on"
+
+
 def test_emerge_atom_with_buildpkg_writes_a_binpkg_and_still_merges(
     emerge_binary, tmp_path
 ):

@@ -8,3 +8,4 @@ dev-libs/uselicensepkgforced nonfreeflag
 dev-libs/iusedefaultpkg plainflag
 dev-libs/globalprecedencepkg -globalforceflag globalmaskflag
 dev-libs/wildexpandpkg linguas_*
+dev-libs/usebuildpkg buildflag

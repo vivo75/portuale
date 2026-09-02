@@ -44,12 +44,13 @@
 //     `BINPKG_COMPRESS="zstd"` (**not** `"bzip2"` -- real portage's own
 //     default changed at some point; this pilot's own previous hardcoded
 //     `"bzip2 -c"` predated noticing that).
-//   - `USE` is always empty in the Packages index entry, matching this
-//     pilot's own phase environment (`ebuild_phases`'s own setup block
-//     always exports `USE=""`, a pre-existing, separately-documented v1
-//     cut -- nothing was actually built with any USE flags enabled, so
-//     recording an empty set is the *honest* value, not an
-//     approximation).
+//   - `USE` in the Packages index entry is empty for a standalone
+//     `ebuild <file> package` (no resolved graph → no resolved USE, so
+//     `""` is the honest value). An `emerge <atom> -b` build *does* now
+//     run its phases with the resolved `USE`
+//     (`MergeOptions::build_env`), so a package built that way carries
+//     its real flags in build-info; propagating those into this index
+//     entry is a small remaining follow-up.
 //   - `SLOT`/`KEYWORDS`/`IUSE`/`LICENSE`/`PROPERTIES`/`RESTRICT`/the
 //     `*DEPEND` family in the `Packages` *index* entry are read from the
 //     ebuild's own repo's real `metadata/md5-cache` entry (via
@@ -321,6 +322,7 @@ pub fn run_package(
         options.debug,
         &options.config_root,
         options.shell,
+        &[],
     )?;
     if status != 0 {
         return Ok(status);

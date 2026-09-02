@@ -331,6 +331,18 @@ Remaining (deliberate cuts): `RESTRICT=network-sandbox` /
 addresses; SELinux sandbox; `userpriv` / `fakeroot` (single-user
 dev/test context — see also the `chown` note below).
 
+- **Build-phase environment.** *`USE` shipped 2026-09-02:* an
+  `emerge <atom>` source build/merge now runs its ebuild phases with the
+  resolved `USE` (`MergeOptions::build_env` ← `GraphEntry::
+  use_flags_display`), so `bin/ebuild.sh`'s `use()` works and
+  `write_post_install_metadata` USE-reduces the vdb `*DEPEND` against the
+  real set. Still `""`/absent in the phase env: `CFLAGS`/`CXXFLAGS`/
+  `CPPFLAGS`/`LDFLAGS`/`MAKEOPTS`/`CHOST`/… (needs a resolved `Config`
+  threaded into the merge path) and `FEATURES` (the pilot forces
+  `FEATURES=""` — see the non-isolation `FEATURES` item below). Also
+  still empty: `USE` for a standalone `ebuild <file> <phase>` (no
+  graph), and the `Packages` *index* `USE` field for an `emerge -b`
+  binpkg.
 - Various *non-isolation* `FEATURES` unmodelled (the pilot forces
   `FEATURES=""` into the phase env): `ccache`, `distcc`, `splitdebug`,
   `installsources`, `nostrip`/`strip`, `compressdebug`, `test` gating

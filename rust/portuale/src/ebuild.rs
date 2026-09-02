@@ -335,6 +335,7 @@ pub fn run(args: &[String]) -> ExitCode {
                     debug,
                     &merge_options.config_root,
                     shell,
+                    &[],
                 )
             } else {
                 ebuild_phases::run_commands(
@@ -346,6 +347,7 @@ pub fn run(args: &[String]) -> ExitCode {
                     debug,
                     &merge_options.config_root,
                     shell,
+                    &[],
                 )
             };
             match result {

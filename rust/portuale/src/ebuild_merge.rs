@@ -210,6 +210,7 @@ pub fn is_real_qmerge_command(command: &str) -> bool {
 /// sourced at the `ebuild.rs` CLI boundary, the same "env var, not full
 /// config resolution" shortcut `PORTAGE_TMPDIR`/`ROOT` already use;
 /// `Default` matches real `make.globals`'s own values exactly.
+#[derive(Clone)]
 pub struct MergeOptions {
     pub debug: bool,
     pub config_protect: String,
@@ -280,6 +281,15 @@ pub struct MergeOptions {
     /// impossible path instead, so `blocked_installed_packages` always
     /// degrades to an empty blocked set unless a test opts in explicitly.
     pub config_root: PathBuf,
+    /// Extra environment for every ebuild phase this merge runs
+    /// (`install` via `run_merge`, `pkg_preinst`/`pkg_postinst` via
+    /// `merge_after_install`). The `emerge <atom>` source path sets
+    /// `[("USE", "<resolved enabled IUSE flags>")]` here -- computed per
+    /// entry by `merge_one_source_entry`, so `bin/ebuild.sh`'s own
+    /// `use()` sees the real flags instead of the `""` `phase_env_vars`
+    /// leaves. Empty (`Default`) for a standalone `ebuild <file> merge`
+    /// / `qmerge` and every test. See `ebuild_phases::run_commands_async`.
+    pub build_env: Vec<(String, String)>,
 }
 
 impl Default for MergeOptions {
@@ -299,6 +309,7 @@ impl Default for MergeOptions {
             // filesystem, guaranteeing find_repos always fails cleanly
             // here regardless of what happens to exist on the host.
             config_root: PathBuf::from("/dev/null/no-config-root-configured"),
+            build_env: Vec::new(),
         }
     }
 }
@@ -342,6 +353,7 @@ impl MergeOptions {
                 .unwrap_or(d.protect_if_modified),
             noconfmem: std::env::var_os("NOCONFMEM").is_some(),
             config_root: portage_repo::config_root_from_env(),
+            build_env: Vec::new(),
         }
     }
 }
@@ -2251,6 +2263,7 @@ pub fn run_merge(
         options.debug,
         &options.config_root,
         options.shell,
+        &options.build_env,
     )?;
     if status != 0 {
         return Ok(status);
@@ -2388,6 +2401,7 @@ fn merge_after_install(
         options.debug,
         &options.config_root,
         options.shell,
+        &options.build_env,
     )?;
     if preinst_status != 0 {
         return Ok(preinst_status);
@@ -2444,6 +2458,7 @@ fn merge_after_install(
         options.debug,
         &options.config_root,
         options.shell,
+        &options.build_env,
     )?;
 
     if !contents.is_empty() || !replaced.is_empty() {
@@ -4003,6 +4018,7 @@ mod tests {
             false,
             &MergeOptions::default().config_root,
             ebuild_phases::ShellBackend::default(),
+            &[],
         )
         .expect("install phase succeeds");
         assert_eq!(install_status, 0);

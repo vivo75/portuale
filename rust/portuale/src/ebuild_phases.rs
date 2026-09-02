@@ -792,12 +792,12 @@ async fn fetch_sources(
 /// Source is the ebuild's own `metadata/md5-cache` entry (the same
 /// already-trusted source `fetch_sources` reads `SRC_URI` from) --
 /// `settings.configdict["pkg"]` in real portage. USE-conditionals are
-/// evaluated against this pilot's empty phase-side USE set (the same
-/// stance `fetch_sources` / `crate::fetch` document -- this pilot does
-/// not resolve a package's USE for real phase execution), via
-/// `use_reduce_structured` (real `paren_enclose(use_reduce(v,
-/// uselist=use))` -- the bracket/`||`-preserving normalized token
-/// stream).
+/// evaluated against `use_flags` -- the resolved `USE` for this package
+/// (`build_phase_use` pulls it out of the `emerge <atom>` build path's
+/// own `build_env`; empty for a standalone `ebuild <file>` run, which
+/// resolves no graph) -- via `use_reduce_structured` (real
+/// `paren_enclose(use_reduce(v, uselist=use))`, the bracket/`||`-
+/// preserving normalized token stream).
 ///
 /// Real `_slot_operator._eval_deps`'s own per-atom step: an atom with a
 /// `:=` slot operator (`slot_operator == "="`) is rewritten to
@@ -864,7 +864,22 @@ fn bind_slot_operator(token: &str, root: &Path) -> String {
 /// `--root-deps` documents); and the real `|| ( A:= B:= )` "record
 /// sub-slot on A only" TODO (bug #455904) is moot without disjunctive
 /// `:=` handling anywhere.
-fn write_post_install_metadata(env: &Environment, root: &Path) -> Result<(), String> {
+/// The `USE=` value from a `run_commands_async` `build_env` slice as a
+/// flag set -- what the `emerge <atom>` build path resolved for this
+/// package. Empty for a standalone `ebuild <file>` run (no `build_env`).
+fn build_phase_use(build_env: &[(String, String)]) -> std::collections::HashSet<String> {
+    build_env
+        .iter()
+        .find(|(k, _)| k == "USE")
+        .map(|(_, v)| v.split_whitespace().map(String::from).collect())
+        .unwrap_or_default()
+}
+
+fn write_post_install_metadata(
+    env: &Environment,
+    root: &Path,
+    use_flags: &std::collections::HashSet<String>,
+) -> Result<(), String> {
     let Some(repo_root) = repo_root_for(&env.pkg_dir) else {
         return Ok(());
     };
@@ -873,7 +888,6 @@ fn write_post_install_metadata(env: &Environment, root: &Path) -> Result<(), Str
         return Ok(());
     };
     let build_info = env.build_info();
-    let empty_use = std::collections::HashSet::new();
 
     // real `_vdb_use_conditional_keys` = `Package._dep_keys` + LICENSE /
     // PROPERTIES / RESTRICT.
@@ -900,7 +914,7 @@ fn write_post_install_metadata(env: &Environment, root: &Path) -> Result<(), Str
         let tokens: Vec<String> = raw.split_whitespace().map(String::from).collect();
         let reduced = portage_use_reduce::use_reduce_structured(
             &tokens,
-            &empty_use,
+            use_flags,
             portage_use_reduce::MatchMode::Normal,
         )
         .map_err(|e| format!("{}: build-info/{key}: {e}", env.pkg_dir.display()))?;
@@ -2020,6 +2034,12 @@ async fn run_commands_async(
     config_root: &Path,
     shell: ShellBackend,
     log_file: Option<&Path>,
+    // Caller-supplied env, appended after the pilot's own base vars so it
+    // overrides them -- the `emerge <atom>` build/merge path passes the
+    // resolved `USE` flags here (`bin/ebuild.sh`'s own `use()` reads the
+    // `USE` var), which `phase_env_vars` otherwise leaves `""`. `&[]` for
+    // a standalone `ebuild <file> <phase>` (no resolved graph entry).
+    build_env: &[(String, String)],
 ) -> Result<i32, String> {
     let env = compute_environment(ebuild_path, portage_tmpdir)?;
     create_directories(&env)?;
@@ -2029,6 +2049,7 @@ async fn run_commands_async(
         .flat_map(|&c| phase_prerequisites(c))
         .collect();
     let mut extra_env = vec![("DISTDIR".to_string(), distdir.display().to_string())];
+    extra_env.extend(build_env.iter().cloned());
     if chain.contains(&"unpack") {
         let (a, aa) = fetch_sources(&env, root, distdir, debug, config_root, shell).await?;
         extra_env.push(("A".to_string(), a.join(" ")));
@@ -2092,7 +2113,7 @@ async fn run_commands_async(
                 // the same spot -- after `install` + its post-phase
                 // misc-functions, before the vdb merge / xpak build reads
                 // `build-info`.
-                write_post_install_metadata(&env, root)?;
+                write_post_install_metadata(&env, root, &build_phase_use(build_env))?;
             }
         }
     }
@@ -2127,6 +2148,7 @@ pub fn run_commands(
     debug: bool,
     config_root: &Path,
     shell: ShellBackend,
+    build_env: &[(String, String)],
 ) -> Result<i32, String> {
     run_commands_logged(
         ebuild_path,
@@ -2138,6 +2160,7 @@ pub fn run_commands(
         config_root,
         shell,
         None,
+        build_env,
     )
 }
 
@@ -2158,6 +2181,7 @@ pub fn run_commands_logged(
     config_root: &Path,
     shell: ShellBackend,
     log_file: Option<&Path>,
+    build_env: &[(String, String)],
 ) -> Result<i32, String> {
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -2173,6 +2197,7 @@ pub fn run_commands_logged(
         config_root,
         shell,
         log_file,
+        build_env,
     ))
 }
 
@@ -2241,6 +2266,10 @@ pub(crate) fn run_single_phase(
     debug: bool,
     config_root: &Path,
     shell: ShellBackend,
+    // See `run_commands_async`'s `build_env` doc: the resolved `USE` for
+    // an `emerge <atom>` merge's own `pkg_preinst`/`pkg_postinst`. `&[]`
+    // for a standalone phase / a removal hook / a binary merge.
+    build_env: &[(String, String)],
 ) -> Result<i32, String> {
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -2255,7 +2284,17 @@ pub(crate) fn run_single_phase(
         // `doebuild()`'s own fetch-then-phases sequence at all -- see
         // this function's own doc comment), so there's nothing to
         // re-fetch or re-export here.
-        run_one_phase(&env, root, phase, debug, &[], config_root, shell, None).await
+        run_one_phase(
+            &env,
+            root,
+            phase,
+            debug,
+            build_env,
+            config_root,
+            shell,
+            None,
+        )
+        .await
     })
 }
 
@@ -2576,6 +2615,7 @@ mod tests {
             false,
             Path::new("/dev/null/no-config-root"),
             ShellBackend::Brush,
+            &[],
         )
         .expect("run_commands should not itself error");
         assert_eq!(status, 0, "install should exit successfully");
@@ -2637,6 +2677,7 @@ mod tests {
             false,
             Path::new("/dev/null/no-config-root"),
             ShellBackend::Brush,
+            &[],
         )
         .expect("run_commands should not itself error");
         assert_eq!(status, 0, "install should exit successfully");
@@ -2681,6 +2722,7 @@ mod tests {
             false,
             Path::new("/dev/null/no-config-root"),
             ShellBackend::Brush,
+            &[],
         )
         .expect("run_single_phase should not itself error");
         assert_eq!(config_status, 0);
@@ -2692,6 +2734,7 @@ mod tests {
             false,
             Path::new("/dev/null/no-config-root"),
             ShellBackend::Brush,
+            &[],
         )
         .expect("run_single_phase should not itself error");
         assert_eq!(info_status, 0);
@@ -2738,6 +2781,7 @@ mod tests {
             false,
             Path::new("/dev/null/no-config-root"),
             ShellBackend::Brush,
+            &[],
         )
         .expect("run_single_phase should not itself error");
         assert_eq!(prerm_status, 0);
@@ -2749,6 +2793,7 @@ mod tests {
             false,
             Path::new("/dev/null/no-config-root"),
             ShellBackend::Brush,
+            &[],
         )
         .expect("run_single_phase should not itself error");
         assert_eq!(postrm_status, 0);
@@ -2791,6 +2836,7 @@ mod tests {
             false,
             Path::new("/dev/null/no-config-root"),
             ShellBackend::Bash,
+            &[],
         )
         .expect("run_commands should not itself error");
         assert_eq!(status, 0, "install should exit successfully");
@@ -2849,6 +2895,7 @@ mod tests {
             false,
             Path::new("/dev/null/no-config-root"),
             ShellBackend::Brush,
+            &[],
         )
         .expect("run_commands should not itself error");
         assert_eq!(status, 0, "install should exit successfully");
@@ -2896,6 +2943,7 @@ mod tests {
             false,
             Path::new("/dev/null/no-config-root"),
             ShellBackend::Brush,
+            &[],
         )
         .expect("run_commands should not itself error");
         assert_eq!(status, 0, "install should exit successfully");
@@ -2948,6 +2996,7 @@ mod tests {
                 false,
                 Path::new("/dev/null/no-config-root"),
                 ShellBackend::Brush,
+                &[],
             );
             let _ = tx.send(result);
         });
@@ -3182,6 +3231,7 @@ mod tests {
             false,
             &tmp,
             ShellBackend::Brush,
+            &[],
         )
         .expect("run_commands should not itself error");
         assert_eq!(status, 0, "install should exit successfully");
@@ -3257,6 +3307,7 @@ mod tests {
                 debug,
                 Path::new("/dev/null/no-config-root"),
                 ShellBackend::Brush,
+                &[],
             )
             .expect("run_commands should not itself error");
             assert_eq!(status, 0);
@@ -3299,6 +3350,7 @@ mod tests {
             false,
             Path::new("/dev/null/no-config-root"),
             ShellBackend::Brush,
+            &[],
         )
         .expect("run_commands should not itself error");
         assert_eq!(status, 0);

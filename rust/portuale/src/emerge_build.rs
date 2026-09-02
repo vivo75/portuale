@@ -384,12 +384,39 @@ pub(crate) fn merge_one_source_entry(
     if buildpkg.is_some() {
         println!(">>> Building package for {cp}-{version}...");
     }
-    let status = ebuild_merge::run_merge(&path, root, portage_tmpdir, options, buildpkg)?;
+    // The resolved `USE` for this entry, so `bin/ebuild.sh`'s own `use()`
+    // (and every USE-conditional in the ebuild's phases) sees the real
+    // flags -- `phase_env_vars` otherwise leaves `USE=""`. Narrowing: the
+    // IUSE-declared enabled flags only (`GraphEntry::use_flags_display`),
+    // not the implicit/arch part of the effective set.
+    let mut per_entry = options.clone();
+    per_entry.build_env = build_use_env(entry);
+    let status = ebuild_merge::run_merge(&path, root, portage_tmpdir, &per_entry, buildpkg)?;
     if status != 0 {
         return Err(format!("{cp}-{version}: merge failed ({status})"));
     }
     println!(">>> {cp}-{version} merged.");
     Ok(())
+}
+
+/// `[("USE", "<space-joined enabled IUSE flags>")]` for `entry` -- the
+/// build-phase env every `emerge <atom>` source build/merge passes so
+/// `bin/ebuild.sh`'s `use()` sees the resolved flags. Empty vec (no
+/// `USE` entry) when the entry declares no enabled flags, so
+/// `phase_env_vars`' own `USE=""` stands. `GraphEntry::use_flags_display`
+/// is already the package's IUSE, enabled-resolved and bare-name-sorted.
+fn build_use_env(entry: &GraphEntry) -> Vec<(String, String)> {
+    let enabled: Vec<&str> = entry
+        .use_flags_display
+        .iter()
+        .filter(|(_, on)| *on)
+        .map(|(f, _)| f.as_str())
+        .collect();
+    if enabled.is_empty() {
+        Vec::new()
+    } else {
+        vec![("USE".to_string(), enabled.join(" "))]
+    }
 }
 
 /// `(cat/pkg, version)` for an entry the scheduler will build -- the
@@ -537,6 +564,7 @@ fn build_one_source_entry(
         &options.config_root,
         shell,
         log_path.as_deref(),
+        &build_use_env(entry),
     )?;
     if status != 0 {
         let mut msg = format!("{cp}-{version}: build failed ({status})");
@@ -574,7 +602,11 @@ fn merge_one_built_entry(
     options: &ebuild_merge::MergeOptions,
 ) -> Result<(), String> {
     let (cp, version) = scheduler_cp_version(entry)?;
-    let status = ebuild_merge::run_qmerge(ebuild_path, root, portage_tmpdir, options)?;
+    // `merge_after_install`'s `pkg_preinst`/`pkg_postinst` see this
+    // entry's resolved `USE` too (see `merge_one_source_entry`).
+    let mut per_entry = options.clone();
+    per_entry.build_env = build_use_env(entry);
+    let status = ebuild_merge::run_qmerge(ebuild_path, root, portage_tmpdir, &per_entry)?;
     if status != 0 {
         return Err(format!("{cp}-{version}: merge failed ({status})"));
     }
