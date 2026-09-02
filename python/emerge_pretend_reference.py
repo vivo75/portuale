@@ -6016,6 +6016,7 @@ def resolve_pretend_graph(
     rebuild_if_new_ver=False,
     rebuild_exclude=(),
     rebuild_ignore=(),
+    dynamic_deps=True,
 ):
     """Recursively resolves every atom in `atoms` and -- for packages that
     would newly merge or upgrade -- its DEPEND+RDEPEND+BDEPEND+PDEPEND+
@@ -6591,6 +6592,8 @@ def resolve_pretend_graph(
                 if outcome[0] == "already_installed" and not nodeps and _deep_recurses_at(deep, depth):
                     _enqueue_dependencies(
                         repos,
+                        root,
+                        dynamic_deps,
                         category,
                         package,
                         outcome[1],
@@ -7457,6 +7460,8 @@ def _deep_recurses_at(deep, depth):
 
 def _enqueue_dependencies(
     repos,
+    root,
+    dynamic_deps,
     category,
     package,
     version,
@@ -7525,35 +7530,45 @@ def _enqueue_dependencies(
     except OSError:
         return
     candidate_str = f"{category}/{package}-{version}:{slot}/{sub_slot}::{repo_name}"
-    use_flags = effective_use_flags(
-        metadata.get("IUSE", ""),
-        config["use_tokens"],
-        config["conf_use_tokens"],
-        config["package_use_repo"],
-        config["package_use"],
-        config["package_use_user"],
-        config["package_use_force"],
-        config["package_use_mask"],
-        config["use_force"],
-        config["use_mask"],
-        config["use_stable_force"],
-        config["use_stable_mask"],
-        config["package_use_stable_force"],
-        config["package_use_stable_mask"],
-        resolved["keywords"],
-        config["accept_keywords"],
-        config["package_accept_keywords"],
-        candidate_str,
-        category,
-        package,
-    )
 
     dep_keys = (
         ("DEPEND", "RDEPEND", "BDEPEND", "PDEPEND", "IDEPEND")
         if with_bdeps
         else ("RDEPEND", "PDEPEND", "IDEPEND")
     )
-    depstr = " ".join(metadata[k] for k in dep_keys if metadata.get(k))
+
+    # --dynamic-deps (default) walks the current ebuild metadata;
+    # --dynamic-deps=n walks the vdb snapshot + built USE. Mirrors
+    # pretend.rs / portage-repo's enqueue_dependencies.
+    if dynamic_deps:
+        use_flags = effective_use_flags(
+            metadata.get("IUSE", ""),
+            config["use_tokens"],
+            config["conf_use_tokens"],
+            config["package_use_repo"],
+            config["package_use"],
+            config["package_use_user"],
+            config["package_use_force"],
+            config["package_use_mask"],
+            config["use_force"],
+            config["use_mask"],
+            config["use_stable_force"],
+            config["use_stable_mask"],
+            config["package_use_stable_force"],
+            config["package_use_stable_mask"],
+            resolved["keywords"],
+            config["accept_keywords"],
+            config["package_accept_keywords"],
+            candidate_str,
+            category,
+            package,
+        )
+        depstr = " ".join(metadata[k] for k in dep_keys if metadata.get(k))
+    else:
+        use_flags = _read_vdb_flag_set(root, category, package, version, "USE")
+        depstr = " ".join(
+            _read_vdb_string(root, category, package, version, k) for k in dep_keys
+        )
     # --root-deps branch-selection feed-in -- see the main
     # New/Upgrade/Reinstall loop's own identical fix for the full
     # grounding (this is _enqueue_dependencies's own
@@ -7745,7 +7760,8 @@ _VALUE_OPTIONS = [
     ("--complete-graph-if-new-use", None),
     ("--complete-graph-if-new-ver", None),
     ("--depclean-lib-check", None),
-    ("--dynamic-deps", None),
+    # --dynamic-deps IS implemented (ON by default; =n walks the vdb
+    # snapshot).
     ("--fail-clean", None),
     # --fuzzy-search / --regex-search-auto / --search-similarity ARE
     # implemented (real --search difflib fuzzy + regex-auto).
@@ -11205,6 +11221,7 @@ def run(args):
     rebuild_if_new_ver = None
     rebuild_exclude = []
     rebuild_ignore = []
+    dynamic_deps = True
     usepkg_exclude = []
     usepkg_include = []
     json_output = False
@@ -11477,6 +11494,17 @@ def run(args):
         elif arg.startswith("--rebuild-ignore="):
             rebuild_ignore.extend(arg[len("--rebuild-ignore=") :].split())
             i += 1
+        elif arg == "--dynamic-deps" or arg.startswith("--dynamic-deps="):
+            if arg.startswith("--dynamic-deps="):
+                val = arg[len("--dynamic-deps=") :]
+                i += 1
+            elif i + 1 < len(args) and args[i + 1] in ("y", "n"):
+                val = args[i + 1]
+                i += 2
+            else:
+                val = "y"
+                i += 1
+            dynamic_deps = val not in ("n", "N")
         elif arg == "--rebuild-if-new-slot" or arg.startswith("--rebuild-if-new-slot="):
             # Real y_or_n, default "y" -- only =n disables.
             if arg.startswith("--rebuild-if-new-slot="):
@@ -12836,6 +12864,7 @@ def run(args):
             rebuild_if_new_ver_r,
             rebuild_exclude,
             rebuild_ignore,
+            dynamic_deps and not nodeps,
         )
     except ResolutionError as e:
         print(f"emerge: {e}", file=sys.stderr)

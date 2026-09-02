@@ -319,8 +319,12 @@ dev/test context — see also the `chown` note below).
   package whose vdb build-time dep is being merged; new
   `portage-repo::rebuild_if_entries`, six new `resolve_pretend_graph`
   params, `rebuild{trigger,consumer,nochange}` fixtures).
+  **Shipped 2026-09-02 (batch 4): `--dynamic-deps` / `--dynamic-deps=n`**
+  (real `create_depgraph_params.py` — `=n` walks an installed package's
+  vdb `*DEPEND` snapshot for its `--deep` recursion instead of the
+  current ebuild; `enqueue_dependencies` gained `root`/`dynamic_deps`).
   Remaining: `--complete-graph[-if-*]`, `--useoldpkg-atoms`,
-  `--dynamic-deps`, `--misspell-suggestions`,
+  `--misspell-suggestions`,
   `--package-moves` (`profiles/updates/`), `--quickpkg-direct`,
   `--autounmask-continue` / `--autounmask-backtrack`.
 

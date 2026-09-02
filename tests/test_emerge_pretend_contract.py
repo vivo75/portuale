@@ -195,6 +195,26 @@ CASES = [
         ["--pretend", "dev-libs/newpkg", "--rebuild-exclude"],
         2,
     ),
+    (
+        "--dynamic-deps default: an installed deep dep's CURRENT ebuild deps are walked",
+        ["--pretend", "-D", "--noreplace", "dev-libs/changeddepspkg"],
+        0,
+    ),
+    (
+        "--dynamic-deps=n: the vdb dep snapshot is walked instead",
+        ["--pretend", "-D", "--noreplace", "--dynamic-deps=n", "dev-libs/changeddepspkg"],
+        0,
+    ),
+    (
+        "--dynamic-deps=y is the same as the default",
+        ["--pretend", "-D", "--noreplace", "--dynamic-deps=y", "dev-libs/changeddepspkg"],
+        0,
+    ),
+    (
+        "--dynamic-deps is inert without --deep",
+        ["--pretend", "--noreplace", "--dynamic-deps=n", "dev-libs/changeddepspkg"],
+        0,
+    ),
     ("-pv: cpv decorated with ::repo", ["--pretend", "-v", "dev-libs/newpkg"], 0),
     ("-pv: :slot/sub_slot decoration on a sub-slotted dep", ["--pretend", "-v", "dev-libs/subslotconsumer"], 0),
     ("-pv: [old-ver] decorated for an Upgrade", ["--pretend", "-v", "--update", "dev-libs/upgradepkg"], 0),
@@ -8928,6 +8948,27 @@ def test_rebuild_if_star_rebuilds_an_installed_consumer_of_a_merged_build_dep(
         r = _run([str(emerge_binary)], args, fixture_env)
         assert r.stdout == _run(emerge_pretend_python, args, fixture_env).stdout
         assert "rebuildconsumer" not in r.stdout
+
+
+def test_dynamic_deps_chooses_ebuild_vs_vdb_deps_for_an_installed_deep_dep(
+    emerge_binary, emerge_pretend_python, fixture_env
+):
+    """--dynamic-deps (real create_depgraph_params.py, ON by default for a
+    source install): an AlreadyInstalled package's --deep dependency walk
+    uses its CURRENT ebuild metadata (the pilot's own long-standing
+    behaviour). --dynamic-deps=n uses the vdb-recorded *DEPEND snapshot.
+    dev-libs/changeddepspkg's current ebuild RDEPENDs dev-libs/newpkg
+    (New) but its vdb RDEPEND is dev-libs/samepkg (installed)."""
+    base = ["--pretend", "-D", "--noreplace", "dev-libs/changeddepspkg"]
+    dyn = _run([str(emerge_binary)], base, fixture_env)
+    assert dyn.stdout == _run(emerge_pretend_python, base, fixture_env).stdout
+    assert "[ebuild  N     ] dev-libs/newpkg-1.0 " in dyn.stdout
+
+    static = _run([str(emerge_binary)], base[:3] + ["--dynamic-deps=n"] + base[3:], fixture_env)
+    assert static.stdout == _run(
+        emerge_pretend_python, base[:3] + ["--dynamic-deps=n"] + base[3:], fixture_env
+    ).stdout
+    assert "newpkg" not in static.stdout
 
 
 def test_deep_equals_zero_matches_not_passing_deep_at_all(emerge_binary, fixture_env):

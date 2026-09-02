@@ -5063,6 +5063,13 @@ pub fn run(args: &[String]) -> ExitCode {
     // --exclude.
     let mut rebuild_exclude: Vec<String> = Vec::new();
     let mut rebuild_ignore: Vec<String> = Vec::new();
+    // --dynamic-deps (real `y_or_n`; real default is "y" for a source
+    // install -- see create_depgraph_params.py). ON is the pilot's own
+    // long-standing behaviour (an AlreadyInstalled package's `--deep`
+    // walk reads the current ebuild); only `=n` flips it to the vdb
+    // snapshot. `--nodeps` forces it off (real
+    // `create_depgraph_params.py:122`).
+    let mut dynamic_deps = true;
     // --usepkg-exclude/--usepkg-include: same "action": "append",
     // space-separated-per-occurrence shape as --exclude/-X above (real
     // main.py: "A space separated list of package names or slot atoms"),
@@ -5498,6 +5505,20 @@ pub fn run(args: &[String]) -> ExitCode {
         } else if let Some(value) = arg.strip_prefix("--rebuild-ignore=") {
             rebuild_ignore.extend(value.split_whitespace().map(String::from));
             i += 1;
+        } else if arg == "--dynamic-deps" || arg.starts_with("--dynamic-deps=") {
+            // Real `y_or_n` (a value is required in real `argparse`; the
+            // pilot is lenient and treats a bare flag as `y`).
+            let val = if let Some(v) = arg.strip_prefix("--dynamic-deps=") {
+                i += 1;
+                v.to_string()
+            } else if matches!(args.get(i + 1).map(String::as_str), Some("y" | "n")) {
+                i += 2;
+                args[i - 1].clone()
+            } else {
+                i += 1;
+                "y".to_string()
+            };
+            dynamic_deps = !matches!(val.as_str(), "n" | "N");
         } else if arg == "--rebuild-if-new-slot" || arg.starts_with("--rebuild-if-new-slot=") {
             // Real `y_or_n`, default "y" -- only `=n` disables.
             let val = if let Some(v) = arg.strip_prefix("--rebuild-if-new-slot=") {
@@ -7139,6 +7160,10 @@ pub fn run(args: &[String]) -> ExitCode {
     let rebuild_if_new_ver =
         !rebuild_if_unbuilt && !rebuild_if_new_rev && rebuild_if_new_ver == Some(true);
 
+    // Real `create_depgraph_params.py:122`: `--nodeps` forces
+    // `--dynamic-deps` off (there is no dep walk to apply it to).
+    let dynamic_deps = dynamic_deps && !nodeps;
+
     let result = match resolve_pretend_graph(
         &config_root,
         &root,
@@ -7182,6 +7207,7 @@ pub fn run(args: &[String]) -> ExitCode {
         rebuild_if_new_ver,
         &rebuild_exclude,
         &rebuild_ignore,
+        dynamic_deps,
     ) {
         Ok(result) => result,
         Err(e) => {

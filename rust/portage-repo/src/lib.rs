@@ -8838,6 +8838,13 @@ pub fn resolve_pretend_graph(
     // `--exclude`. `&[]` at every call site that passes neither.
     rebuild_exclude: &[String],
     rebuild_ignore: &[String],
+    // `--dynamic-deps` (real `create_depgraph_params.py`, ON by default
+    // for a source install): `true` walks an AlreadyInstalled package's
+    // deps from the current ebuild (the pilot's own long-standing
+    // behaviour); `false` (`--dynamic-deps=n`) walks its vdb snapshot --
+    // see `enqueue_dependencies`'s own doc comment. Only reachable under
+    // `--deep`.
+    dynamic_deps: bool,
 ) -> Result<GraphResult, String> {
     let repos = find_repos(config_root)?;
     // Real `create_depgraph_params.py:178`: `--emptytree` sets
@@ -9423,6 +9430,8 @@ pub fn resolve_pretend_graph(
                     if !nodeps && deep.recurses_at(depth) {
                         enqueue_dependencies(
                             &repos,
+                            root,
+                            dynamic_deps,
                             &key.0,
                             &key.1,
                             version,
@@ -10538,16 +10547,16 @@ pub fn resolve_pretend_graph(
 /// found in any repo, or its md5-cache entry can't be read -- matching
 /// the same tolerance the main loop already has for those cases.
 ///
-/// Deliberate simplification: real portage reads an AlreadyInstalled
-/// package's metadata from the vdb's own installed-time snapshot, not
-/// the repo's *current* ebuild -- this pilot has no vdb-metadata reader
-/// (`installed_versions` only checks presence, never reads DEPEND/USE/
-/// etc), so this reuses the repo's current metadata for that version
-/// instead, same as every other candidate lookup in this pilot already
-/// does. This can only observably differ from real portage if the repo's
-/// own copy of that exact version's ebuild changed since it was
-/// installed (rare, and already a pre-existing gap for e.g. `--newuse`'s
-/// own IUSE-diffing, not a new one introduced here).
+/// `dynamic_deps` (real `--dynamic-deps`, `create_depgraph_params.py:
+/// 116-123`, ON by default for a source install): when `true` (the
+/// pilot's own long-standing behaviour), an AlreadyInstalled package's
+/// dependency walk uses the repo's **current** ebuild metadata + the
+/// recomputed effective `USE`, exactly like every other candidate lookup
+/// in this pilot. When `false` (`--dynamic-deps=n`), it reads the
+/// package's own vdb-recorded `*DEPEND` snapshot instead, flattened
+/// against its built (`vdb/USE`) flags -- real portage's own
+/// installed-time metadata. The two only differ when the repo's copy of
+/// that exact version's ebuild changed since it was installed.
 ///
 /// `with_bdeps` (real `--with-bdeps`, see `resolve_pretend_graph`'s own
 /// doc comment for the full grounding): when `false`, DEPEND and BDEPEND
@@ -10575,6 +10584,8 @@ pub fn resolve_pretend_graph(
 #[allow(clippy::too_many_arguments)]
 fn enqueue_dependencies(
     repos: &[RepoConfig],
+    root: &Path,
+    dynamic_deps: bool,
     category: &str,
     package: &str,
     version: &str,
@@ -10610,41 +10621,56 @@ fn enqueue_dependencies(
         return;
     };
     let candidate_str = format!("{category}/{package}-{version}:{slot}/{sub_slot}::{repo_name}");
-    let use_flags = effective_use_flags(
-        metadata.get("IUSE").map(String::as_str).unwrap_or_default(),
-        &config.use_tokens,
-        &config.conf_use_tokens,
-        &config.package_use_repo,
-        &config.package_use,
-        &config.package_use_user,
-        &config.package_use_force,
-        &config.package_use_mask,
-        &config.use_force,
-        &config.use_mask,
-        &config.use_stable_force,
-        &config.use_stable_mask,
-        &config.package_use_stable_force,
-        &config.package_use_stable_mask,
-        &keywords,
-        &config.accept_keywords,
-        &config.package_accept_keywords,
-        &candidate_str,
-        category,
-        package,
-    );
 
     let dep_keys: &[&str] = if with_bdeps {
         &["DEPEND", "RDEPEND", "BDEPEND", "PDEPEND", "IDEPEND"]
     } else {
         &["RDEPEND", "PDEPEND", "IDEPEND"]
     };
-    let mut depstr = String::new();
-    for dep_key in dep_keys {
-        if let Some(d) = metadata.get(*dep_key) {
-            depstr.push_str(d);
+
+    // `--dynamic-deps` (default) walks the repo's *current* ebuild
+    // metadata; `--dynamic-deps=n` walks the vdb's own installed-time
+    // `*DEPEND` snapshot, flattened against the built (`vdb/USE`) flags.
+    let (use_flags, depstr) = if dynamic_deps {
+        let use_flags = effective_use_flags(
+            metadata.get("IUSE").map(String::as_str).unwrap_or_default(),
+            &config.use_tokens,
+            &config.conf_use_tokens,
+            &config.package_use_repo,
+            &config.package_use,
+            &config.package_use_user,
+            &config.package_use_force,
+            &config.package_use_mask,
+            &config.use_force,
+            &config.use_mask,
+            &config.use_stable_force,
+            &config.use_stable_mask,
+            &config.package_use_stable_force,
+            &config.package_use_stable_mask,
+            &keywords,
+            &config.accept_keywords,
+            &config.package_accept_keywords,
+            &candidate_str,
+            category,
+            package,
+        );
+        let mut depstr = String::new();
+        for dep_key in dep_keys {
+            if let Some(d) = metadata.get(*dep_key) {
+                depstr.push_str(d);
+                depstr.push(' ');
+            }
+        }
+        (use_flags, depstr)
+    } else {
+        let use_flags = read_vdb_flag_set(root, category, package, version, "USE");
+        let mut depstr = String::new();
+        for dep_key in dep_keys {
+            depstr.push_str(&read_vdb_string(root, category, package, version, dep_key));
             depstr.push(' ');
         }
-    }
+        (use_flags, depstr)
+    };
     let tokens: Vec<String> = depstr.split_whitespace().map(String::from).collect();
     // Real `--root-deps` branch-selection feed-in -- see the main
     // New/Upgrade/Reinstall loop's own identical fix, above, for the
@@ -12089,6 +12115,7 @@ mod tests {
             false,
             &[],
             &[],
+            true,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
     }
@@ -13947,6 +13974,7 @@ mod tests {
             false,
             &[],
             &[],
+            true,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -14001,6 +14029,7 @@ mod tests {
             false,
             &[],
             &[],
+            true,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -14057,6 +14086,7 @@ mod tests {
             false,
             &[],
             &[],
+            true,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -14117,6 +14147,7 @@ mod tests {
             false,
             &[],
             &[],
+            true,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph failed: {e}"))
         .entries
@@ -14194,6 +14225,7 @@ mod tests {
             false,
             &[],
             &[],
+            true,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -14253,6 +14285,7 @@ mod tests {
             false,
             &[],
             &[],
+            true,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -14373,6 +14406,7 @@ mod tests {
             new_ver,
             &ex,
             &ig,
+            true,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -14452,6 +14486,7 @@ mod tests {
                 nv,
                 &[],
                 &[],
+                true,
             )
             .unwrap()
             .entries
@@ -14492,6 +14527,74 @@ mod tests {
             &["dev-libs/rebuildtrigger"],
         );
         assert!(!ig.iter().any(|(n, _)| n == "dev-libs/rebuildconsumer"));
+    }
+
+    #[test]
+    fn dynamic_deps_picks_ebuild_vs_vdb_deps_for_an_already_installed_deep_walk() {
+        // changeddepspkg (installed) has vdb RDEPEND=dev-libs/samepkg but
+        // its current ebuild RDEPEND=dev-libs/newpkg. Kept from being a
+        // Reinstall via --reinstall-atoms's opposite... just drive it as
+        // AlreadyInstalled by NOT requesting a reinstall: resolve_pretend
+        // in test_config keeps a directly-named installed atom as
+        // AlreadyInstalled (selective=true here), so --deep recurses via
+        // enqueue_dependencies.
+        let root = fixtures_root();
+        let call = |dynamic_deps: bool| -> Vec<String> {
+            resolve_pretend_graph(
+                &root,
+                &root,
+                &["dev-libs/changeddepspkg".to_string()],
+                &test_config(),
+                false,
+                false,
+                false,
+                false,
+                Deep::Unlimited,
+                &[],
+                true,
+                false,
+                false,
+                false,
+                false,
+                true,
+                false,
+                false,
+                false,
+                false,
+                false,
+                false,
+                false,
+                &[],
+                &[],
+                false,
+                None,
+                false,
+                false,
+                None,
+                &fixtures_root().join("distfiles"),
+                false,
+                false,
+                false,
+                10,
+                &[],
+                true,
+                false,
+                false,
+                false,
+                &[],
+                &[],
+                dynamic_deps,
+            )
+            .unwrap()
+            .entries
+            .into_iter()
+            .map(|e| format!("{}/{}", e.category, e.package))
+            .collect()
+        };
+        // dynamic (default): the current ebuild's RDEPEND -> newpkg (New).
+        assert!(call(true).iter().any(|n| n == "dev-libs/newpkg"));
+        // =n: the vdb RDEPEND -> samepkg (installed) -> newpkg not pulled.
+        assert!(!call(false).iter().any(|n| n == "dev-libs/newpkg"));
     }
 
     /// Like `graph_deep`, but driven by `--emptytree`/`-e` instead
@@ -14541,6 +14644,7 @@ mod tests {
             false,
             &[],
             &[],
+            true,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -14699,6 +14803,7 @@ mod tests {
             false,
             &[],
             &[],
+            true,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -14851,6 +14956,7 @@ mod tests {
             false,
             &[],
             &[],
+            true,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -15019,6 +15125,7 @@ mod tests {
             false,
             &[],
             &[],
+            true,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph failed: {e}"))
         .entries;
@@ -15109,6 +15216,7 @@ mod tests {
             false,
             &[],
             &[],
+            true,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph failed: {e}"))
         .entries;
@@ -15203,6 +15311,7 @@ mod tests {
             false,
             &[],
             &[],
+            true,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph failed: {e}"))
         .entries
@@ -15277,6 +15386,7 @@ mod tests {
                 false,
                 &[],
                 &[],
+                true,
             )
             .unwrap_or_else(|e| panic!("resolve_pretend_graph failed: {e}"))
             .entries
@@ -15355,6 +15465,7 @@ mod tests {
             false,
             &[],
             &[],
+            true,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph failed: {e}"))
         .entries
@@ -15422,6 +15533,7 @@ mod tests {
             false,
             &[],
             &[],
+            true,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph failed: {e}"))
         .entries
@@ -15485,6 +15597,7 @@ mod tests {
             false,
             &[],
             &[],
+            true,
         )
         .expect("resolve_pretend_graph must succeed")
         .entries
@@ -15797,6 +15910,7 @@ mod tests {
             false,
             &[],
             &[],
+            true,
         )
         .expect("resolve_pretend_graph must succeed")
         .entries;
@@ -16135,6 +16249,7 @@ mod tests {
             false,
             &[],
             &[],
+            true,
         )
         .expect("resolve_pretend_graph must succeed")
         .entries
@@ -16271,6 +16386,7 @@ mod tests {
             false,
             &[],
             &[],
+            true,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -16465,6 +16581,7 @@ mod tests {
             false,
             &[],
             &[],
+            true,
         )
         .expect("resolve_pretend_graph must succeed")
         .entries;
@@ -16676,6 +16793,7 @@ mod tests {
             false,
             &[],
             &[],
+            true,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -16739,6 +16857,7 @@ mod tests {
             false,
             &[],
             &[],
+            true,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -16861,6 +16980,7 @@ mod tests {
             false,
             &[],
             &[],
+            true,
         )
         .expect_err(&format!(
             "resolve_pretend_graph({atom_str}) should have failed"
@@ -16922,6 +17042,7 @@ mod tests {
             false,
             &[],
             &[],
+            true,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -16985,6 +17106,7 @@ mod tests {
             false,
             &[],
             &[],
+            true,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -17048,6 +17170,7 @@ mod tests {
             false,
             &[],
             &[],
+            true,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -17329,6 +17452,7 @@ mod tests {
             false,
             &[],
             &[],
+            true,
         )
         .expect_err("both atoms should fail their own REQUIRED_USE");
         assert_eq!(
@@ -17404,6 +17528,7 @@ mod tests {
             false,
             &[],
             &[],
+            true,
         )
         .expect_err("no visible candidate at all");
         assert_eq!(
@@ -17502,6 +17627,7 @@ mod tests {
             false,
             &[],
             &[],
+            true,
         )
         .expect("dependency's own NoVisibleCandidate is never fatal");
         let dep = result
@@ -17589,6 +17715,7 @@ mod tests {
             false,
             &[],
             &[],
+            true,
         )
         .expect_err("no visible candidate at all");
         assert_eq!(
@@ -17820,6 +17947,7 @@ mod tests {
             false,
             &[],
             &[],
+            true,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
     }
@@ -17884,6 +18012,7 @@ mod tests {
             false,
             &[],
             &[],
+            true,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
     }
@@ -17944,6 +18073,7 @@ mod tests {
             false,
             &[],
             &[],
+            true,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
     }
@@ -18253,6 +18383,7 @@ mod tests {
                 false,
                 &[],
                 &[],
+                true,
             )
             .expect("resolves")
         };
@@ -18353,6 +18484,7 @@ mod tests {
             false,
             &[],
             &[],
+            true,
         )
         .expect("resolves");
 
@@ -18455,6 +18587,7 @@ mod tests {
             false,
             &[],
             &[],
+            true,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
     }

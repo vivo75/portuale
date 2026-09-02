@@ -290,7 +290,9 @@ pub const VALUE_OPTIONS: &[(&str, Option<&str>)] = &[
     ("--complete-graph-if-new-use", None),
     ("--complete-graph-if-new-ver", None),
     ("--depclean-lib-check", None),
-    ("--dynamic-deps", None),
+    // `--dynamic-deps` IS implemented -- ON by default (the pilot's own
+    // long-standing `--deep` behaviour); `=n` walks an installed
+    // package's vdb dep snapshot instead (see `enqueue_dependencies`).
     ("--fail-clean", None),
     // `--fuzzy-search` / `--regex-search-auto` / `--search-similarity` IS
     // implemented -- `emerge --search`'s real `difflib` fuzzy matching +

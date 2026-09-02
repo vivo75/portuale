@@ -9161,6 +9161,40 @@ show `new-ver`/`new-rev` diverge from `unbuilt`). Mirrored in
 (recording removable old slots for `--depclean`) beyond enabling/gating
 the existing `:=` pass stays a documented cut.
 
+### `emerge --dynamic-deps` / `--dynamic-deps=n` (2026-09-02)
+
+Real `create_depgraph_params.py:116-123` (`--dynamic-deps`, ON by default
+for a source install; `--nodeps` forces it off): when an
+`AlreadyInstalled` package's dependencies are walked under `--deep`, its
+**current ebuild** metadata is used (the pilot's own long-standing
+behaviour — `enqueue_dependencies` always read `metadata/md5-cache`).
+`--dynamic-deps=n` reads the package's own vdb-recorded `*DEPEND`
+snapshot instead, flattened against its built (`vdb/USE`) flags — real
+portage's installed-time metadata. `enqueue_dependencies` gained `root:
+&Path` + `dynamic_deps: bool`; `resolve_pretend_graph` gained the
+`dynamic_deps` parameter (39 call sites), and `pretend.rs` applies the
+real `dynamic_deps && !nodeps`.
+
+```sh
+FX="$(realpath fixtures)"
+run() { PORTAGE_CONFIGROOT="$FX" ROOT="$FX" PORTAGE_RUNNING_ROOT="$FX" \
+    rust/target/release/portuale emerge "$@"; }
+# changeddepspkg: current ebuild RDEPENDs dev-libs/newpkg; vdb RDEPEND is
+# dev-libs/samepkg (installed).
+run --pretend -D --noreplace dev-libs/changeddepspkg
+# [ebuild  N     ] dev-libs/newpkg-1.0            <- current ebuild's dep
+# dev-libs/changeddepspkg-1.0 is already installed; nothing to do
+run --pretend -D --noreplace --dynamic-deps=n dev-libs/changeddepspkg
+# dev-libs/changeddepspkg-1.0 is already installed; nothing to do   <- vdb dep (samepkg) already there
+```
+
+Reuses the existing `dev-libs/changeddepspkg` fixture (the `--changed-deps`
+one — vdb `RDEPEND` deliberately differs from its ebuild). Mirrored in
+`emerge_pretend_reference.py`; 1 `portage-repo` unit test + 4 `CASES` +
+1 pinned contract test. `--complete-graph[-if-*]` (the broader
+"account for every installed package's deps" mode) stays its own,
+higher-churn slice.
+
 ### `emerge -pc <atoms> --deselect=n`
 
 Real `action_depclean`: `deselect = myopts.get("--deselect") != "n"`
