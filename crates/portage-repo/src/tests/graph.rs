@@ -1,6 +1,170 @@
 use super::*;
 
 #[test]
+fn emptytree_forces_an_installed_atom_to_a_bare_reinstall() {
+    // Without --emptytree a selective resolve leaves it AlreadyInstalled;
+    // --emptytree (Portage pops "selective" and forces the merge) makes it a
+    // bare Reinstall.
+    assert_eq!(
+        resolve("dev-libs", "samepkg"),
+        PretendOutcome::AlreadyInstalled {
+            version: "1.0".to_string()
+        }
+    );
+    assert_eq!(
+        resolve_empty("dev-libs", "samepkg"),
+        PretendOutcome::Reinstall {
+            version: "1.0".to_string(),
+            changed_flags: vec![],
+            deps_changed: false,
+            slot_changed: false,
+            rebuilt_binary: false,
+            new_repo: false,
+            slot_operator_rebuild: false,
+        }
+    );
+}
+
+#[test]
+fn not_selective_top_level_atom_reinstalls_with_no_reason_when_nothing_else_changed() {
+    assert_eq!(
+        resolve_not_selective("dev-libs", "samepkg"),
+        PretendOutcome::Reinstall {
+            version: "1.0".to_string(),
+            changed_flags: Vec::new(),
+            deps_changed: false,
+            slot_changed: false,
+            rebuilt_binary: false,
+            new_repo: false,
+            slot_operator_rebuild: false,
+        }
+    );
+}
+
+#[test]
+fn not_selective_top_level_atom_still_offers_a_newer_visible_version() {
+    // Without `update`, Portage's avoid_update shortcut never fires for a
+    // not-selective top-level atom, so the best-visible search finds 2.0.
+    assert_eq!(
+        resolve_not_selective("dev-libs", "upgradepkg"),
+        PretendOutcome::Upgrade {
+            from: "1.0".to_string(),
+            to: "2.0".to_string(),
+        }
+    );
+}
+
+#[test]
+fn selective_true_preserves_the_pre_existing_already_installed_outcome() {
+    // Same fixture, selective=true: must still be AlreadyInstalled.
+    assert_eq!(
+        resolve("dev-libs", "samepkg"),
+        PretendOutcome::AlreadyInstalled {
+            version: "1.0".to_string()
+        }
+    );
+}
+
+#[test]
+fn new_install() {
+    assert_eq!(
+        resolve("dev-libs", "newpkg"),
+        PretendOutcome::New {
+            version: "1.0".to_string()
+        }
+    );
+}
+
+#[test]
+fn already_installed() {
+    assert_eq!(
+        resolve("dev-libs", "samepkg"),
+        PretendOutcome::AlreadyInstalled {
+            version: "1.0".to_string()
+        }
+    );
+}
+
+#[test]
+fn without_update_an_installed_version_that_still_satisfies_the_atom_is_kept() {
+    // Plain `emerge` with no --update never looks for a better version
+    // (Portage's avoid_update).
+    assert_eq!(
+        resolve("dev-libs", "upgradepkg"),
+        PretendOutcome::AlreadyInstalled {
+            version: "1.0".to_string()
+        }
+    );
+}
+
+#[test]
+fn upgrade() {
+    // Same fixture with --update: a genuine Upgrade (Portage's dont_miss_updates).
+    assert_eq!(
+        resolve_update("dev-libs", "upgradepkg"),
+        PretendOutcome::Upgrade {
+            from: "1.0".to_string(),
+            to: "2.0".to_string(),
+        }
+    );
+}
+
+#[test]
+fn downgrade() {
+    // Only 1.0 is visible (2.0's ebuild is gone): Portage's in-slot `best()`
+    // flags a genuine downgrade, and avoid_update needs a visible candidate.
+    assert_eq!(
+        resolve("dev-libs", "downgradepkg"),
+        PretendOutcome::Downgrade {
+            from: "2.0".to_string(),
+            to: "1.0".to_string(),
+        }
+    );
+}
+
+#[test]
+fn keyword_masked_but_installed_dependency_is_kept_not_downgraded() {
+    // Installed ~amd64-only 2.0 with only 1.0 visible, reached as a DEPENDENCY
+    // atom: Portage's early avoid_update return needs no visibility check,
+    // so it stays installed.
+    assert_eq!(
+        resolve_as_dependency("dev-libs", "keywordmaskedpkg"),
+        PretendOutcome::AlreadyInstalled {
+            version: "2.0".to_string()
+        }
+    );
+}
+
+#[test]
+fn keyword_masked_but_installed_dependency_still_requires_visibility_as_a_top_level_atom() {
+    // Same fixture as a TOP-LEVEL atom: Portage's separate, later avoid_update
+    // block DOES require visibility.
+    assert_eq!(
+        resolve("dev-libs", "keywordmaskedpkg"),
+        PretendOutcome::Downgrade {
+            from: "2.0".to_string(),
+            to: "1.0".to_string(),
+        }
+    );
+}
+
+#[test]
+fn masked_by_keywords_is_not_visible() {
+    assert_eq!(
+        resolve("dev-libs", "maskedpkg"),
+        PretendOutcome::NoVisibleCandidate
+    );
+}
+
+#[test]
+fn nonexistent_package_is_no_visible_candidate() {
+    assert_eq!(
+        resolve("dev-libs", "does-not-exist"),
+        PretendOutcome::NoVisibleCandidate
+    );
+}
+
+#[test]
 fn without_newuse_the_same_package_stays_already_installed() {
     // Without --newuse the USE mismatch goes undetected: stays AlreadyInstalled.
     assert_eq!(
@@ -229,6 +393,25 @@ fn fixture_package_accept_restrict_narrows_acceptance_for_one_package() {
     assert_eq!(
         resolve_real("dev-libs", "restrictedpkg"),
         PretendOutcome::NoVisibleCandidate
+    );
+}
+
+/// A sibling package sharing a name prefix ("foo-bar" installed) must not be
+/// misread as an installed version of "foo" (needs the digit-start guard in
+/// `strip_version_prefix`).
+#[test]
+fn sibling_package_prefix_does_not_contaminate_vdb_scan() {
+    assert_eq!(
+        resolve("dev-libs", "foo"),
+        PretendOutcome::New {
+            version: "1.0".to_string()
+        }
+    );
+    assert_eq!(
+        resolve("dev-libs", "foo-bar"),
+        PretendOutcome::AlreadyInstalled {
+            version: "2.0".to_string()
+        }
     );
 }
 

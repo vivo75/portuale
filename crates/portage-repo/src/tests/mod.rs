@@ -38,6 +38,112 @@ fn fixture_binhost() -> portage_profile::BinRepo {
     }
 }
 
+fn resolve(category: &str, package: &str) -> PretendOutcome {
+    let root = fixtures_root();
+    let repos = find_repos(&root).expect("fixture repos.conf must resolve");
+    let atom_str = format!("{category}/{package}");
+    resolve_pretend(
+        &SelectSource {
+            repos: &repos,
+            root: &root,
+            config: &test_config(),
+            local_binpkg: &build_local_binpkg_index(&test_config()),
+        },
+        &atom_str,
+        &SelectOptions {
+            is_top_level: true,
+            ..SelectOptions::default()
+        },
+    )
+    .unwrap_or_else(|e| panic!("resolve_pretend({atom_str}) failed: {e}"))
+}
+
+/// Like `resolve`, but with `--emptytree`/`-e` enabled.
+fn resolve_empty(category: &str, package: &str) -> PretendOutcome {
+    let root = fixtures_root();
+    let repos = find_repos(&root).expect("fixture repos.conf must resolve");
+    let atom_str = format!("{category}/{package}");
+    resolve_pretend(
+        &SelectSource {
+            repos: &repos,
+            root: &root,
+            config: &test_config(),
+            local_binpkg: &build_local_binpkg_index(&test_config()),
+        },
+        &atom_str,
+        &SelectOptions {
+            is_top_level: true,
+            empty: true,
+            ..SelectOptions::default()
+        },
+    )
+    .unwrap_or_else(|e| panic!("resolve_pretend({atom_str}) failed: {e}"))
+}
+
+/// Like `resolve`, but with `--update` enabled.
+fn resolve_update(category: &str, package: &str) -> PretendOutcome {
+    let root = fixtures_root();
+    let repos = find_repos(&root).expect("fixture repos.conf must resolve");
+    let atom_str = format!("{category}/{package}");
+    resolve_pretend(
+        &SelectSource {
+            repos: &repos,
+            root: &root,
+            config: &test_config(),
+            local_binpkg: &build_local_binpkg_index(&test_config()),
+        },
+        &atom_str,
+        &SelectOptions {
+            update: true,
+            is_top_level: true,
+            ..SelectOptions::default()
+        },
+    )
+    .unwrap_or_else(|e| panic!("resolve_pretend({atom_str}) failed: {e}"))
+}
+
+/// Like `resolve`, but `is_top_level=false`: exercises the avoid_update
+/// shortcut's DEPENDENCY-atom code path, distinct from the top-level one.
+fn resolve_as_dependency(category: &str, package: &str) -> PretendOutcome {
+    let root = fixtures_root();
+    let repos = find_repos(&root).expect("fixture repos.conf must resolve");
+    let atom_str = format!("{category}/{package}");
+    resolve_pretend(
+        &SelectSource {
+            repos: &repos,
+            root: &root,
+            config: &test_config(),
+            local_binpkg: &build_local_binpkg_index(&test_config()),
+        },
+        &atom_str,
+        &SelectOptions::default(),
+    )
+    .unwrap_or_else(|e| panic!("resolve_pretend({atom_str}) failed: {e}"))
+}
+
+/// Like `resolve`, but with `selective=false` (Portage's own default for a
+/// bare top-level atom).
+fn resolve_not_selective(category: &str, package: &str) -> PretendOutcome {
+    let root = fixtures_root();
+    let repos = find_repos(&root).expect("fixture repos.conf must resolve");
+    let atom_str = format!("{category}/{package}");
+    resolve_pretend(
+        &SelectSource {
+            repos: &repos,
+            root: &root,
+            config: &test_config(),
+            local_binpkg: &build_local_binpkg_index(&test_config()),
+        },
+        &atom_str,
+        &SelectOptions {
+            selective: false,
+            is_top_level: true,
+            ..SelectOptions::default()
+        },
+    )
+    .unwrap_or_else(|e| panic!("resolve_pretend({atom_str}) failed: {e}"))
+}
+
 /// Like `resolve_update`, but with `excluded` too (`--exclude` beats `--update`).
 fn resolve_update_excluded(category: &str, package: &str, excluded: &[String]) -> PretendOutcome {
     let root = fixtures_root();

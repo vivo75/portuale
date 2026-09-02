@@ -172,6 +172,11 @@ pub fn build_local_binpkg_index(config: &portage_profile::Config) -> std::sync::
 /// resolution signatures.
 pub(crate) static QUICKPKG_DIRECT_ROOT: RwLock<Option<PathBuf>> = RwLock::new(None);
 
+/// Set by `pretend.rs` from `--quickpkg-direct[-root]` before any resolution.
+pub fn set_quickpkg_direct_root(source_root: Option<PathBuf>) {
+    *QUICKPKG_DIRECT_ROOT.write().unwrap() = source_root;
+}
+
 pub(crate) fn quickpkg_direct_root() -> Option<PathBuf> {
     QUICKPKG_DIRECT_ROOT.read().unwrap().clone()
 }
