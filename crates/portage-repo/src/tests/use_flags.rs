@@ -197,6 +197,55 @@ fn effective_use_flags_defaults_walk_is_per_profile_level() {
 }
 
 #[test]
+fn effective_use_flags_features_use_enables_test_between_repo_and_pkginternal() {
+    let euf = |iuse: &str, features_use: &[String]| {
+        let cfg = portage_profile::Config {
+            features_use: features_use.to_vec(),
+            accept_keywords: HashSet::from(["amd64".to_string()]),
+            ..Default::default()
+        };
+        effective_use_flags(EffectiveUseFlagsArgs {
+            config: &cfg,
+            iuse,
+            keywords: &["amd64".to_string()],
+            candidate_str: "dev-libs/pkg-1.0:0/0::testrepo",
+            category: "dev-libs",
+            package: "pkg",
+        })
+    };
+    let test_on = vec!["test".to_string()];
+    // `FEATURES=test` enables `test` for a package that declares it...
+    assert!(euf("test", &test_on).contains("test"));
+    // ...and, being a weaker tier than `pkginternal`, an explicit
+    // IUSE `-test` default (applied right after) still wins.
+    assert!(!euf("-test", &test_on).contains("test"));
+    // No `FEATURES=test` -> nothing added here.
+    assert!(!euf("test", &[]).contains("test"));
+    // A use.mask on `test` drops it even with FEATURES=test.
+    let masked = {
+        let cfg = portage_profile::Config {
+            features_use: test_on.to_vec(),
+            use_mask: HashSet::from(["test".to_string()]),
+            use_mask_force_levels: vec![portage_profile::UseMaskForceLevel {
+                use_mask: vec!["test".to_string()],
+                ..Default::default()
+            }],
+            accept_keywords: HashSet::from(["amd64".to_string()]),
+            ..Default::default()
+        };
+        effective_use_flags(EffectiveUseFlagsArgs {
+            config: &cfg,
+            iuse: "test",
+            keywords: &["amd64".to_string()],
+            candidate_str: "dev-libs/pkg-1.0:0/0::testrepo",
+            category: "dev-libs",
+            package: "pkg",
+        })
+    };
+    assert!(!masked.contains("test"));
+}
+
+#[test]
 fn effective_use_flags_repo_package_use_is_weaker_than_an_iuse_default() {
     // Portage applies `repo` before `pkginternal`, so an ebuild IUSE
     // default overrides repo `package.use`.
@@ -303,6 +352,33 @@ fn effective_use_flags_package_env_use_is_pkg_layer_and_loses_to_user_package_us
         !user_wins.contains("foo"),
         "user package.use -foo beats package.env foo"
     );
+}
+
+#[test]
+fn effective_use_flags_env_use_is_the_highest_tier_and_beats_user_package_use() {
+    // Env USE is the highest tier: beats user package.use.
+    let with_env_use = |env_tokens: &[String], user_pu: &[(String, Vec<String>)]| {
+        let cfg = portage_profile::Config {
+            package_use_user: user_pu.to_vec(),
+            env_use_tokens: env_tokens.to_vec(),
+            accept_keywords: HashSet::from(["amd64".to_string()]),
+            ..Default::default()
+        };
+        effective_use_flags(EffectiveUseFlagsArgs {
+            config: &cfg,
+            iuse: "foo",
+            keywords: &["amd64".to_string()],
+            candidate_str: "dev-libs/pkg-1.0:0/0::testrepo",
+            category: "dev-libs",
+            package: "pkg",
+        })
+    };
+    // user package.use enables `foo`, env `USE="-foo"` cancels it.
+    assert!(!with_env_use(&["-foo".to_string()], &pu("foo")).contains("foo"));
+    // ...and the other way: env `USE="foo"` beats user package.use `-foo`.
+    assert!(with_env_use(&["foo".to_string()], &pu("-foo")).contains("foo"));
+    // no env tokens -> user package.use stands.
+    assert!(with_env_use(&[], &pu("foo")).contains("foo"));
 }
 
 #[test]
