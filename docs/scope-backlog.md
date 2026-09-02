@@ -202,8 +202,16 @@ single-pass BFS can't grow into these incrementally:
   (`elog::echo_summary` — the `* Messages for package <cpv>:` block, real
   `mod_echo`; default-on, filtered by `PORTAGE_ELOG_CLASSES`);
   `create_directories` makes `${T}/logging` so `elog`/`ewarn` reach it.
-  Remaining: `save` / `save_summary` (file-writing, `PORTAGE_LOGDIR`);
-  `mail*`; binpkg-merge / unmerge `pkg_*` elog collection.
+  *Shipped 2026-09-02:* the **`save`** module (one
+  `<logdir>/elog/<cat>:<pf>:<stamp>.log` per package, `FEATURES=split-elog`
+  aware) and **`save_summary`** (append to `<logdir>/elog/summary.log` —
+  ON by default), both writing real `_combine_logentries` format with
+  per-module `:levels` overrides; `<logdir>` is `$PORTAGE_LOGDIR` else
+  `<root>/var/log/portage` (root-relative — a documented divergence from
+  real `<BROOT>/var/log/portage`). **`mail` / `mail_summary`** are out of
+  scope (a real SMTP client + MIME assembly is not light) — a one-line
+  "unsupported" notice, then skipped. `syslog` / `custom` unported.
+  Remaining: binpkg-merge / unmerge `pkg_*` elog collection.
 - **`PORTAGE_NICENESS` / `PORTAGE_IONICE_COMMAND`.** *Shipped
   2026-09-01:* `apply_portage_scheduling_policy` (real
   `actions.py::apply_priorities`) renices/ionices this process at startup.
@@ -530,9 +538,11 @@ by a few large items rather than a long tail of small ones:
    `--load-average` + build-log capture + the `>>> Jobs:` line + `--ask`
    / `CLEAN_DELAY` + `PORTAGE_NICENESS` / `PORTAGE_IONICE_COMMAND` shipped
    + `elog` `echo` module + `--resume`/`--skipfirst` (mtimedb) shipped
-   2026-09-01.* **Part 2.B is now substantially complete** -- remaining:
-   `resume_backup` rotation, the elog `save`/`mail` modules,
-   `PORTAGE_SCHEDULING_POLICY`, killing in-flight builds on a hard fail.
+   2026-09-01; the elog `save` / `save_summary` modules shipped
+   2026-09-02.* **Part 2.B is now substantially complete** -- remaining:
+   `resume_backup` rotation, the elog `mail*` modules (out of scope --
+   real SMTP), `PORTAGE_SCHEDULING_POLICY`, killing in-flight builds on a
+   hard fail.
 
 3. **Config-resolution depth (Part 2.C).** *The `package.use` per-level
    `USE_ORDER` layering shipped 2026-09-01 (`repo`/`pkginternal`/

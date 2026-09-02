@@ -1,29 +1,39 @@
-// Real `lib/portage/elog/` -- the `echo` module (default-on via
-// `make.globals`'s `PORTAGE_ELOG_SYSTEM="save_summary:log,warn,error,qa
-// echo"`). After every package merge, real `elog_process(cpv, settings)`
-// reads the per-phase message files `bin/isolated-functions.sh::
-// __elog_base` wrote under `${T}/logging/`, filters them by
-// `PORTAGE_ELOG_CLASSES` (default `"log warn error"`), and hands them to
-// each enabled module; `mod_echo` accumulates and prints a
-// `* Messages for package <cpv>:` block for every package at the very end
-// of the run (its `finalize()` is an `atexit` handler).
+// Real `lib/portage/elog/`. After every package merge, real
+// `elog_process(cpv, settings)` reads the per-phase message files
+// `bin/isolated-functions.sh::__elog_base` wrote under `${T}/logging/`,
+// filters them by `PORTAGE_ELOG_CLASSES` (default `"log warn error"`),
+// and hands them to each module named in `PORTAGE_ELOG_SYSTEM` (default
+// `"save_summary:log,warn,error,qa echo"`).
 //
-// This module is the pilot's `mod_echo`: `collect` reads one package's
-// `${T}/logging/`, `echo_summary` prints the accumulated blocks. The
-// pilot never deletes the builddir, so `run()` just re-scans each merged
-// entry's `${T}/logging/` after the merge loop -- no need to thread a
-// message buffer through the merge machinery.
+// This module ports:
+//   - `mod_echo` -- `collect` reads one package's `${T}/logging/`,
+//     `echo_summary` prints the accumulated `* Messages for package
+//     <cpv>:` blocks (real `finalize()`, an atexit handler).
+//   - `mod_save` -- one `<logdir>/elog/[<cat>/]<pf>:<ts>.log` file per
+//     package (`save_process`).
+//   - `mod_save_summary` -- append every package's messages to a single
+//     `<logdir>/elog/summary.log` (`save_summary_process`). This one is
+//     ON by default (it's in `make.globals`'s `PORTAGE_ELOG_SYSTEM`).
 //
-// v1 cuts: only the `echo` module (`save`/`save_summary`/`mail*` write
-// files / send mail -- deferred); `PORTAGE_ELOG_CLASSES` is read from the
-// env only (no `make.conf`), defaulting to real `make.globals`'s
-// `"log warn error"`; the `:levels` per-module override on the `echo`
-// token itself is honoured, but the Python-side in-memory `einfo`
-// messages (generated before `setup`) have no pilot equivalent.
+// The pilot never deletes the builddir, so the driver (`pretend.rs`)
+// re-scans each merged entry's `${T}/logging/` after the merge loop --
+// no message buffer threaded through the merge machinery.
+//
+// v1 cuts: `mail` / `mail_summary` / `syslog` / `custom` are NOT ported
+// (a real SMTP client + MIME assembly is not "light"; `mail*` prints a
+// one-line "unsupported" notice and is skipped -- see `pretend.rs`).
+// `PORTAGE_ELOG_CLASSES` / `PORTAGE_ELOG_SYSTEM` are read from the env
+// only (no `make.conf`), defaulting to `make.globals`. The `logdir` is
+// `$PORTAGE_LOGDIR` else `<root>/var/log/portage` -- root-relative, a
+// deliberate divergence from real `mod_save`'s `<BROOT>/var/log/portage`
+// (`BROOT` is `/`, needs privileges), matching the pilot's other
+// `<root>`-relative path choices for a relocatable tree. The real
+// uid/gid/mode chmod dance on the log dir/files is a documented cut, like
+// every other privilege-preserving `chown` in this pilot.
 
 use crate::color::Colorizer;
 use std::collections::HashSet;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// Real `portage.const.EBUILD_PHASES`, in order -- `mod_echo._finalize`
 /// walks this so messages print in phase order regardless of file mtime.
@@ -50,6 +60,10 @@ const EBUILD_PHASES: &[&str] = &[
 
 /// One `<TYPE> <message>` line from a `${T}/logging/<phase>` file.
 pub struct ElogMessage {
+    /// Which `${T}/logging/<phase>` file this came from -- real
+    /// `collect_ebuild_messages` keys on it, and `_combine_logentries`
+    /// emits a `<LEVEL>: <phase>` header on every phase/level change.
+    pub phase: String,
     /// `LOG` / `INFO` / `WARN` / `ERROR` / `QA`.
     pub level: String,
     pub text: String,
@@ -72,24 +86,24 @@ fn elog_system_tokens() -> Vec<String> {
         .collect()
 }
 
-/// Whether the `echo` module is enabled (real default: yes).
-pub fn echo_enabled() -> bool {
+/// Whether the module named `name` (`echo`, `save`, `save_summary`, …)
+/// is listed in `PORTAGE_ELOG_SYSTEM` -- its token is either the bare
+/// name or `name:levels`. `-` is accepted for `_` (real `elog_process`:
+/// `s = s.replace("-", "_")`), so `save-summary` == `save_summary`.
+pub fn module_enabled(name: &str) -> bool {
     elog_system_tokens()
         .iter()
-        .any(|t| t.split(':').next() == Some("echo"))
+        .any(|t| t.split(':').next().map(|m| m.replace('-', "_")).as_deref() == Some(name))
 }
 
-/// The uppercased message classes the `echo` module shows -- its own
-/// `echo:levels` override if present, else `PORTAGE_ELOG_CLASSES` (real
-/// `make.globals` default `"log warn error"`).
-fn echo_classes() -> HashSet<String> {
-    for t in elog_system_tokens() {
-        if let Some((name, levels)) = t.split_once(':') {
-            if name == "echo" {
-                return levels.split(',').map(|l| l.trim().to_uppercase()).collect();
-            }
-        }
-    }
+/// Whether the `echo` module is enabled (real default: yes).
+pub fn echo_enabled() -> bool {
+    module_enabled("echo")
+}
+
+/// `PORTAGE_ELOG_CLASSES` (real `make.globals` default `"log warn
+/// error"`), uppercased.
+fn portage_elog_classes() -> HashSet<String> {
     std::env::var("PORTAGE_ELOG_CLASSES")
         .unwrap_or_else(|_| "log warn error".to_string())
         .split_whitespace()
@@ -97,11 +111,29 @@ fn echo_classes() -> HashSet<String> {
         .collect()
 }
 
-/// Reads `${t_dir}/logging/*` for one package and returns its
-/// class-filtered messages in phase order. Empty when there is nothing
-/// to report (real `collect_ebuild_messages` shortcut).
-pub fn collect(t_dir: &Path) -> Vec<ElogMessage> {
-    let classes = echo_classes();
+/// The uppercased message classes module `name` shows -- its own
+/// `name:levels` override in `PORTAGE_ELOG_SYSTEM` if present (real
+/// `elog_process`'s per-module `filter_loglevels(..., levels)`), else
+/// `PORTAGE_ELOG_CLASSES`.
+fn module_classes(name: &str) -> HashSet<String> {
+    for t in elog_system_tokens() {
+        if let Some((m, levels)) = t.split_once(':') {
+            if m.replace('-', "_") == name {
+                return levels
+                    .split(',')
+                    .map(|l| l.trim().to_uppercase())
+                    .filter(|l| !l.is_empty())
+                    .collect();
+            }
+        }
+    }
+    portage_elog_classes()
+}
+
+/// Reads `${t_dir}/logging/*` for one package -- every `LOG`/`INFO`/
+/// `WARN`/`ERROR`/`QA` line, in real `EBUILD_PHASES` order, unfiltered
+/// (real `collect_ebuild_messages`). Empty when there is nothing there.
+pub fn collect_all(t_dir: &Path) -> Vec<ElogMessage> {
     let logging = t_dir.join("logging");
     let mut out = Vec::new();
     for phase in EBUILD_PHASES {
@@ -118,15 +150,170 @@ pub fn collect(t_dir: &Path) -> Vec<ElogMessage> {
             if !matches!(level, "ERROR" | "INFO" | "LOG" | "QA" | "WARN") {
                 continue;
             }
-            if classes.contains("*") || classes.contains(level) {
-                out.push(ElogMessage {
-                    level: level.to_string(),
-                    text: text.to_string(),
-                });
-            }
+            out.push(ElogMessage {
+                phase: (*phase).to_string(),
+                level: level.to_string(),
+                text: text.to_string(),
+            });
         }
     }
     out
+}
+
+/// `collect_all` filtered to `classes` (real `filter_loglevels`).
+fn filter_by_classes<'a>(
+    msgs: &'a [ElogMessage],
+    classes: &HashSet<String>,
+) -> Vec<&'a ElogMessage> {
+    msgs.iter()
+        .filter(|m| classes.contains("*") || classes.contains(&m.level))
+        .collect()
+}
+
+/// `collect_all` filtered by the `echo` module's classes -- the shape
+/// `echo_summary` consumes.
+pub fn collect(t_dir: &Path) -> Vec<ElogMessage> {
+    let classes = module_classes("echo");
+    collect_all(t_dir)
+        .into_iter()
+        .filter(|m| classes.contains("*") || classes.contains(&m.level))
+        .collect()
+}
+
+/// Real `_combine_logentries`: one flat string, phases in `EBUILD_PHASES`
+/// order, a `<LEVEL>: <phase>` header emitted whenever the (phase, level)
+/// pair changes, a trailing blank line when anything was written.
+/// `msgs` must already be in `collect_all`'s phase order.
+fn combine_logentries(msgs: &[&ElogMessage]) -> String {
+    let mut lines: Vec<String> = Vec::new();
+    let mut prev: Option<(&str, &str)> = None;
+    for m in msgs {
+        let cur = (m.phase.as_str(), m.level.as_str());
+        if prev != Some(cur) {
+            lines.push(format!("{}: {}", m.level, m.phase));
+            prev = Some(cur);
+        }
+        lines.push(m.text.trim_end_matches('\n').to_string());
+    }
+    if !lines.is_empty() {
+        lines.push(String::new());
+    }
+    lines.join("\n")
+}
+
+/// `$PORTAGE_LOGDIR` if set, else `<root>/var/log/portage` -- see this
+/// module's own doc comment on the `<BROOT>` divergence.
+pub fn logdir(root: &Path) -> PathBuf {
+    std::env::var_os("PORTAGE_LOGDIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| root.join("var/log/portage"))
+}
+
+/// UTC `%Y%m%d-%H%M%S` (real `mod_save`'s `time.strftime(..., time.gmtime())`).
+fn utc_stamp() -> String {
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    // Civil-from-days (Howard Hinnant's algorithm) -- no chrono dep.
+    let days = (secs / 86_400) as i64;
+    let rem = secs % 86_400;
+    let (hh, mm, ss) = (rem / 3600, (rem % 3600) / 60, rem % 60);
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097);
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = if m <= 2 { y + 1 } else { y };
+    format!("{y:04}{m:02}{d:02}-{hh:02}{mm:02}{ss:02}")
+}
+
+/// Real `mod_save.process`: write one package's `fulltext` to
+/// `<logdir>/elog/<pf>:<utc-stamp>.log` (or, with `FEATURES=split-elog`,
+/// `<logdir>/elog/<cat>/<pf>:<stamp>.log`; otherwise the `<cat>:` is
+/// prefixed onto the filename). `key` is `cat/pkg-ver`. Returns the path
+/// written. Skipped entirely by the caller when the package has no
+/// class-filtered messages.
+pub fn save_process(
+    logdir: &Path,
+    key: &str,
+    fulltext: &str,
+    split_elog: bool,
+) -> Result<PathBuf, String> {
+    let (cat, pf) = key.split_once('/').unwrap_or(("", key));
+    let stamp = utc_stamp();
+    let (subdir, filename) = if split_elog {
+        (logdir.join("elog").join(cat), format!("{pf}:{stamp}.log"))
+    } else {
+        (logdir.join("elog"), format!("{cat}:{pf}:{stamp}.log"))
+    };
+    std::fs::create_dir_all(&subdir).map_err(|e| format!("{}: {e}", subdir.display()))?;
+    let path = subdir.join(filename);
+    std::fs::write(&path, fulltext).map_err(|e| format!("{}: {e}", path.display()))?;
+    Ok(path)
+}
+
+/// Real `mod_save_summary.process`: append one package's block to
+/// `<logdir>/elog/summary.log` -- a `>>> Messages generated by process
+/// <pid> on <local-time> for package <key>:\n\n` header, then `fulltext`,
+/// then `\n`. The pilot uses the same UTC stamp `mod_save` does (with a
+/// `UTC` suffix) rather than real `time.localtime()` + `%Z`, for a
+/// deterministic, timezone-independent line.
+pub fn save_summary_process(logdir: &Path, key: &str, fulltext: &str) -> Result<PathBuf, String> {
+    use std::io::Write as _;
+    let elogdir = logdir.join("elog");
+    std::fs::create_dir_all(&elogdir).map_err(|e| format!("{}: {e}", elogdir.display()))?;
+    let path = elogdir.join("summary.log");
+    let mut f = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+        .map_err(|e| format!("{}: {e}", path.display()))?;
+    write!(
+        f,
+        ">>> Messages generated by process {} on {} UTC for package {key}:\n\n{fulltext}\n",
+        std::process::id(),
+        utc_stamp(),
+    )
+    .map_err(|e| format!("{}: {e}", path.display()))?;
+    Ok(path)
+}
+
+/// Real `mod_save` / `mod_save_summary` for one merged package: build the
+/// per-module `fulltext` from `all_msgs` (unfiltered `collect_all`) and
+/// hand it to whichever of `save` / `save_summary` is enabled. Each
+/// module's own `filter_loglevels` runs here (`save_summary`'s default
+/// token carries `:log,warn,error,qa`). A module is skipped for this
+/// package when the filter leaves nothing (real `if len(mod_logentries)
+/// == 0: continue`). Returns the paths written, for the caller's log line.
+pub fn save_modules_process(
+    logdir: &Path,
+    key: &str,
+    all_msgs: &[ElogMessage],
+    split_elog: bool,
+) -> Result<Vec<PathBuf>, String> {
+    let mut written = Vec::new();
+    for (name, is_summary) in [("save", false), ("save_summary", true)] {
+        if !module_enabled(name) {
+            continue;
+        }
+        let filtered = filter_by_classes(all_msgs, &module_classes(name));
+        if filtered.is_empty() {
+            continue;
+        }
+        let fulltext = combine_logentries(&filtered);
+        let path = if is_summary {
+            save_summary_process(logdir, key, &fulltext)?
+        } else {
+            save_process(logdir, key, &fulltext, split_elog)?
+        };
+        written.push(path);
+    }
+    Ok(written)
 }
 
 /// Real `mod_echo._finalize`: the `* Messages for package <cpv>:` block
@@ -220,10 +407,12 @@ mod tests {
             root: "/".to_string(),
             messages: vec![
                 ElogMessage {
+                    phase: "postinst".to_string(),
                     level: "LOG".to_string(),
                     text: "read the docs".to_string(),
                 },
                 ElogMessage {
+                    phase: "postinst".to_string(),
                     level: "WARN".to_string(),
                     text: "watch out".to_string(),
                 },
@@ -235,15 +424,150 @@ mod tests {
     }
 
     #[test]
-    fn echo_classes_honours_the_per_module_override() {
-        // A bare `echo` token with a `:levels` suffix overrides the global
-        // PORTAGE_ELOG_CLASSES -- checked by parsing a literal token list.
-        let classes: std::collections::HashSet<String> = "echo:info,qa"
-            .split_once(':')
-            .map(|(_, l)| l.split(',').map(|x| x.trim().to_uppercase()).collect())
-            .unwrap();
-        assert!(classes.contains("INFO"));
-        assert!(classes.contains("QA"));
-        assert!(!classes.contains("LOG"));
+    fn module_classes_honours_the_per_module_override() {
+        // `save_summary:log,warn,error,qa` (the make.globals default token)
+        // overrides the bare PORTAGE_ELOG_CLASSES for that module only.
+        temp_env(
+            &[(
+                "PORTAGE_ELOG_SYSTEM",
+                Some("save_summary:log,warn,error,qa echo"),
+            )],
+            || {
+                let sc = module_classes("save_summary");
+                assert!(sc.contains("QA"));
+                assert!(sc.contains("LOG"));
+                // `echo` has no override -> the bare default {LOG,WARN,ERROR}.
+                let ec = module_classes("echo");
+                assert!(!ec.contains("QA"));
+                assert!(ec.contains("WARN"));
+            },
+        );
+    }
+
+    #[test]
+    fn combine_logentries_matches_real_combine_shape() {
+        let msgs = [
+            ElogMessage {
+                phase: "install".to_string(),
+                level: "LOG".to_string(),
+                text: "a".to_string(),
+            },
+            ElogMessage {
+                phase: "install".to_string(),
+                level: "LOG".to_string(),
+                text: "b".to_string(),
+            },
+            ElogMessage {
+                phase: "install".to_string(),
+                level: "WARN".to_string(),
+                text: "c".to_string(),
+            },
+            ElogMessage {
+                phase: "postinst".to_string(),
+                level: "WARN".to_string(),
+                text: "d".to_string(),
+            },
+        ];
+        let refs: Vec<&ElogMessage> = msgs.iter().collect();
+        assert_eq!(
+            combine_logentries(&refs),
+            "LOG: install\na\nb\nWARN: install\nc\nWARN: postinst\nd\n"
+        );
+        assert_eq!(combine_logentries(&[]), "");
+    }
+
+    #[test]
+    fn save_and_save_summary_write_the_expected_files() {
+        let t = tmpdir();
+        let logs = t.join("logs");
+        temp_env(
+            &[
+                (
+                    "PORTAGE_ELOG_SYSTEM",
+                    Some("save save_summary:log,warn,error,qa echo"),
+                ),
+                ("PORTAGE_ELOG_CLASSES", Some("log warn error")),
+            ],
+            || {
+                let msgs = [
+                    ElogMessage {
+                        phase: "install".to_string(),
+                        level: "LOG".to_string(),
+                        text: "hello".to_string(),
+                    },
+                    ElogMessage {
+                        phase: "install".to_string(),
+                        level: "QA".to_string(),
+                        text: "a qa note".to_string(),
+                    },
+                ];
+                let written =
+                    save_modules_process(&logs, "dev-libs/foo-1.0", &msgs, false).unwrap();
+                assert_eq!(written.len(), 2);
+
+                // save: one <cat>:<pf>:<stamp>.log, `fulltext` only has the
+                // LOG line (QA filtered out by PORTAGE_ELOG_CLASSES).
+                let elog = logs.join("elog");
+                let saved: Vec<_> = std::fs::read_dir(&elog)
+                    .unwrap()
+                    .filter_map(Result::ok)
+                    .map(|e| e.file_name().to_string_lossy().into_owned())
+                    .filter(|n| n.starts_with("dev-libs:foo-1.0:"))
+                    .collect();
+                assert_eq!(saved.len(), 1);
+                assert_eq!(
+                    std::fs::read_to_string(elog.join(&saved[0])).unwrap(),
+                    "LOG: install\nhello\n"
+                );
+
+                // save_summary: its :log,warn,error,qa override keeps the QA line.
+                let summary = std::fs::read_to_string(elog.join("summary.log")).unwrap();
+                assert!(summary.contains("for package dev-libs/foo-1.0:"));
+                assert!(summary.contains("LOG: install\nhello\nQA: install\na qa note\n"));
+            },
+        );
+        let _ = std::fs::remove_dir_all(&t);
+    }
+
+    #[test]
+    fn save_modules_are_off_when_not_in_portage_elog_system() {
+        let t = tmpdir();
+        temp_env(&[("PORTAGE_ELOG_SYSTEM", Some("echo"))], || {
+            let msgs = [ElogMessage {
+                phase: "install".to_string(),
+                level: "LOG".to_string(),
+                text: "x".to_string(),
+            }];
+            let written =
+                save_modules_process(&t.join("logs"), "dev-libs/foo-1.0", &msgs, false).unwrap();
+            assert!(written.is_empty());
+            assert!(!t.join("logs").exists());
+        });
+        let _ = std::fs::remove_dir_all(&t);
+    }
+
+    /// Minimal process-env scoping for these serial tests -- `env::var`
+    /// reads are process-global, so run one closure at a time.
+    fn temp_env(vars: &[(&str, Option<&str>)], f: impl FnOnce()) {
+        use std::sync::Mutex;
+        static LOCK: Mutex<()> = Mutex::new(());
+        let _g = LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let saved: Vec<(String, Option<String>)> = vars
+            .iter()
+            .map(|(k, _)| (k.to_string(), std::env::var(k).ok()))
+            .collect();
+        for (k, v) in vars {
+            match v {
+                Some(v) => std::env::set_var(k, v),
+                None => std::env::remove_var(k),
+            }
+        }
+        f();
+        for (k, v) in saved {
+            match v {
+                Some(v) => std::env::set_var(&k, v),
+                None => std::env::remove_var(&k),
+            }
+        }
     }
 }
