@@ -2,6 +2,23 @@
 
 use crate::remote::*;
 
+// --- Vdb shadow + pre-ship collision pre-check ---------------------------------
+///
+/// The server reasons about installed-file ownership *before* shipping a
+/// unit's tarball: a unit doomed by a foreign-owned collision fails here,
+/// with zero client writes. The shadow is the placed vdb read directly
+/// (`server:`) or pulled once at plan start (`client:`).
+///
+/// Deliberately lenient: only ownership by a *different* package fails
+/// the pre-check. Same-package ownership (any version/slot) passes --
+/// the client driver refines those against the live vdb, or fail-closed
+/// without one.
+///
+// Installed-file ownership: absolute path -> owning `(category, pf)`.
+pub(crate) struct VdbShadow {
+    pub(crate) owners: std::collections::HashMap<String, (String, String)>,
+}
+
 /// `obj`/`sym` paths out of one vdb `CONTENTS` file (Portage
 /// `dblink`/`vartree` shape: `obj <path> <md5> <mtime>`,
 /// `sym <path> -> <target> <mtime>`). `dir` lines merge freely

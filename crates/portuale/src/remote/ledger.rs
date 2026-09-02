@@ -11,6 +11,12 @@ pub(crate) struct LedgerEntry {
     pub cpv: String,
 }
 
+impl LedgerEntry {
+    pub(crate) fn line(&self) -> String {
+        format!("{} {} {} {}", self.ts, self.repo, self.commit, self.cpv)
+    }
+}
+
 /// Append one line, keeping the last 10 (rotation both sides share).
 pub(crate) fn ledger_append(path: &std::path::Path, line: &str) -> Result<(), String> {
     use std::io::Write as _;
@@ -31,6 +37,37 @@ pub(crate) fn ledger_append(path: &std::path::Path, line: &str) -> Result<(), St
         writeln!(file, "{kept}").map_err(|e| format!("{}: {e}", path.display()))?;
     }
     Ok(())
+}
+
+/// Hostname made filename-safe for the server ledger file.
+pub(crate) fn sanitize_hostname(hostname: &str) -> String {
+    hostname
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '.' || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect()
+}
+
+/// Server-side ledger record after one merged entry:
+/// `<pkgdir>/remote-ledger/<hostname>`, last 10 kept. Takes the ledger
+/// *directory*; the hostname file hangs off it.
+pub(crate) fn record_server_ledger(
+    ledger_dir: &std::path::Path,
+    hostname: &str,
+    entry: &LedgerEntry,
+) -> Result<(), String> {
+    ledger_append(&ledger_dir.join(sanitize_hostname(hostname)), &entry.line())
+}
+
+/// The client-side ledger destination baked into the merge driver:
+/// `<ctx.root>/var/db/remote-repos` (a plain file, not the vdb).
+pub(crate) fn client_ledger_file(ctx: &RemoteContext) -> String {
+    format!("{}/var/db/remote-repos", ctx.root.trim_end_matches('/'))
 }
 
 /// The newest (last non-empty) line of a last-10 ledger file.
