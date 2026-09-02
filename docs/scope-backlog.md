@@ -313,9 +313,13 @@ dev/test context — see also the `chown` note below).
   `WildcardPackageSet` — force-reinstall a matching already-installed
   package; scoped `--emptytree` rewrite in `resolve_pretend_graph`, new
   `reinstall_atoms` param).
-  Remaining: `--complete-graph[-if-*]`,
-  `--rebuild-if-new-{slot,rev,ver}` / `--rebuild-if-unbuilt`,
-  `--useoldpkg-atoms` / `--rebuild-exclude` / `--rebuild-ignore`,
+  **Shipped 2026-09-02 (batch 3): `--rebuild-if-{unbuilt,new-rev,new-ver}`
+  + `--rebuild-if-new-slot` + `--rebuild-exclude` / `--rebuild-ignore`**
+  (real `_rebuild_config.trigger_rebuilds` — rebuild an installed
+  package whose vdb build-time dep is being merged; new
+  `portage-repo::rebuild_if_entries`, six new `resolve_pretend_graph`
+  params, `rebuild{trigger,consumer,nochange}` fixtures).
+  Remaining: `--complete-graph[-if-*]`, `--useoldpkg-atoms`,
   `--dynamic-deps`, `--misspell-suggestions`,
   `--package-moves` (`profiles/updates/`), `--quickpkg-direct`,
   `--autounmask-continue` / `--autounmask-backtrack`.

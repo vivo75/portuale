@@ -9117,6 +9117,50 @@ Mirrored in `emerge_pretend_reference.py`; 2 `portage-repo` unit tests +
 binary-package sibling) stays recognized-unimplemented — it needs the
 binpkg-ranking path, its own slice.
 
+### `emerge --rebuild-if-{unbuilt,new-rev,new-ver}` + `--rebuild-if-new-slot` / `--rebuild-exclude` / `--rebuild-ignore` (2026-09-02)
+
+Real `_emerge/depgraph.py`'s `_rebuild_config.trigger_rebuilds()`
+(`--rebuild-if-unbuilt` / `--rebuild-if-new-rev` / `--rebuild-if-new-ver`,
+all OFF by default): an already-installed package whose own build-time
+dependency (`DEPEND`/`BDEPEND` in its vdb, flattened against its *built*
+`USE`) is satisfied by a package this run is merging is scheduled for a
+rebuild. `_needs_rebuild(dep_pkg)` — every pilot merge is from source
+(`dep_pkg.built` always false) — so `unbuilt` always fires; `new_rev`
+fires unless the merged `cat/pkg-version` (revision included) is already
+installed; `new_ver` is the same with the `-r<n>` revision stripped. Real
+`main.py:958-975` precedence (`unbuilt` clears rev+ver, `rev` clears ver;
+`=n` disables) is resolved in `pretend.rs`.
+
+New `portage-repo::rebuild_if_entries` — structurally a sibling of the
+existing `slot_operator_rebuild_entries` (same `all_installed_packages`
+scan, same `[ebuild R]` rebuild-entry shape). `resolve_pretend_graph`
+gains six parameters: `rebuild_if_new_slot` (real `y_or_n`, default `y` —
+`=n` now also gates the pre-existing `:=` slot-operator auto-rebuild off,
+like `--ignore-built-slot-operator-deps`), the three `rebuild_if_*`
+bools, and `rebuild_exclude` / `rebuild_ignore` (`--rebuild-exclude
+ATOMS` matches the *parent* — skip rebuilding it; `--rebuild-ignore
+ATOMS` matches the *dep* — it never triggers). 37 call sites updated.
+
+```sh
+FX="$(realpath fixtures)"
+run() { PORTAGE_CONFIGROOT="$FX" ROOT="$FX" PORTAGE_RUNNING_ROOT="$FX" \
+    rust/target/release/portuale emerge "$@"; }
+run --pretend -u --rebuild-if-unbuilt dev-libs/rebuildtrigger
+# [ebuild     U  ] dev-libs/rebuildtrigger-2.0 [1.0]
+# [ebuild   R    ] dev-libs/rebuildconsumer-1.0     <- installed, DEPENDs rebuildtrigger
+
+run --pretend --rebuild-if-new-ver dev-libs/rebuildnochange
+# [ebuild   R    ] dev-libs/rebuildnochange-1.0     <- same version -> consumer NOT rebuilt
+```
+
+New fixtures `dev-libs/rebuild{trigger,consumer}` (a build-dep upgrade)
+and `dev-libs/rebuildnochange{,consumer}` (a same-version re-merge, to
+show `new-ver`/`new-rev` diverge from `unbuilt`). Mirrored in
+`emerge_pretend_reference.py`; 3 `portage-repo` unit tests + 10 `CASES` +
+1 pinned contract test. `--rebuild-if-new-slot`'s deeper real behavior
+(recording removable old slots for `--depclean`) beyond enabling/gating
+the existing `:=` pass stays a documented cut.
+
 ### `emerge -pc <atoms> --deselect=n`
 
 Real `action_depclean`: `deselect = myopts.get("--deselect") != "n"`

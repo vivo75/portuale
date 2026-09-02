@@ -145,6 +145,56 @@ CASES = [
         2,
     ),
     ("--reinstall-atoms also reflected in --json", ["--pretend", "--deep", "--json", "--reinstall-atoms", "dev-libs/deeppkg2", "dev-libs/deeppkg"], 0),
+    (
+        "--rebuild-if-unbuilt: a build-dep upgrade rebuilds its installed consumer",
+        ["--pretend", "-u", "--rebuild-if-unbuilt", "dev-libs/rebuildtrigger"],
+        0,
+    ),
+    (
+        "--rebuild-if-new-ver: same as unbuilt for a version bump",
+        ["--pretend", "-u", "--rebuild-if-new-ver", "dev-libs/rebuildtrigger"],
+        0,
+    ),
+    (
+        "--rebuild-if-new-rev inline form",
+        ["--pretend", "-u", "--rebuild-if-new-rev=y", "dev-libs/rebuildtrigger"],
+        0,
+    ),
+    (
+        "--rebuild-if-new-ver does NOT rebuild for a same-version re-merge",
+        ["--pretend", "--rebuild-if-new-ver", "dev-libs/rebuildnochange"],
+        0,
+    ),
+    (
+        "--rebuild-if-unbuilt DOES rebuild for a same-version re-merge",
+        ["--pretend", "--rebuild-if-unbuilt", "dev-libs/rebuildnochange"],
+        0,
+    ),
+    (
+        "--rebuild-exclude keeps the parent out",
+        ["--pretend", "-u", "--rebuild-if-unbuilt", "--rebuild-exclude", "dev-libs/rebuildconsumer", "dev-libs/rebuildtrigger"],
+        0,
+    ),
+    (
+        "--rebuild-ignore keeps the dep from triggering",
+        ["--pretend", "-u", "--rebuild-if-unbuilt", "--rebuild-ignore", "dev-libs/rebuildtrigger", "dev-libs/rebuildtrigger"],
+        0,
+    ),
+    (
+        "--rebuild-if-unbuilt=n is a no-op",
+        ["--pretend", "-u", "--rebuild-if-unbuilt=n", "dev-libs/rebuildtrigger"],
+        0,
+    ),
+    (
+        "--rebuild-if-new-slot=n disables the := slot-op rebuild scan",
+        ["--pretend", "--rebuild-if-new-slot=n", "dev-libs/newpkg"],
+        0,
+    ),
+    (
+        "--rebuild-exclude with no value is a usage error",
+        ["--pretend", "dev-libs/newpkg", "--rebuild-exclude"],
+        2,
+    ),
     ("-pv: cpv decorated with ::repo", ["--pretend", "-v", "dev-libs/newpkg"], 0),
     ("-pv: :slot/sub_slot decoration on a sub-slotted dep", ["--pretend", "-v", "dev-libs/subslotconsumer"], 0),
     ("-pv: [old-ver] decorated for an Upgrade", ["--pretend", "-v", "--update", "dev-libs/upgradepkg"], 0),
@@ -8836,6 +8886,48 @@ def test_reinstall_atoms_forces_one_deep_dependency_to_reinstall(
     assert err.stderr == _run(
         emerge_pretend_python, ["--pretend", "dev-libs/deeppkg", "--reinstall-atoms"], fixture_env
     ).stderr
+
+
+def test_rebuild_if_star_rebuilds_an_installed_consumer_of_a_merged_build_dep(
+    emerge_binary, emerge_pretend_python, fixture_env
+):
+    """--rebuild-if-unbuilt / --rebuild-if-new-rev / --rebuild-if-new-ver
+    (real `_rebuild_config.trigger_rebuilds`): an installed package whose
+    vdb DEPEND/BDEPEND is satisfied by a package being merged this run
+    gets its own `[ebuild R]` rebuild entry -- it isn't otherwise in the
+    graph. `dev-libs/rebuildconsumer` (installed) DEPENDs
+    `dev-libs/rebuildtrigger` (installed 1.0, tree has 2.0)."""
+    up = ["--pretend", "-u", "--rebuild-if-unbuilt", "dev-libs/rebuildtrigger"]
+    rust = _run([str(emerge_binary)], up, fixture_env)
+    python = _run(emerge_pretend_python, up, fixture_env)
+    assert rust.returncode == 0
+    assert rust.stdout == python.stdout
+    assert rust.stderr == python.stderr
+    assert rust.stdout.splitlines() == [
+        "[ebuild     U  ] dev-libs/rebuildtrigger-2.0 [1.0]",
+        "[ebuild   R    ] dev-libs/rebuildconsumer-1.0 ",
+    ]
+
+    # --rebuild-if-new-ver vs --rebuild-if-unbuilt only diverge for a
+    # same-version re-merge: rebuildnochange's best tree version == the
+    # installed one.
+    nv = _run([str(emerge_binary)], ["--pretend", "--rebuild-if-new-ver", "dev-libs/rebuildnochange"], fixture_env)
+    assert nv.stdout == _run(
+        emerge_pretend_python, ["--pretend", "--rebuild-if-new-ver", "dev-libs/rebuildnochange"], fixture_env
+    ).stdout
+    assert "rebuildnochangeconsumer" not in nv.stdout
+    ub = _run([str(emerge_binary)], ["--pretend", "--rebuild-if-unbuilt", "dev-libs/rebuildnochange"], fixture_env)
+    assert "[ebuild   R    ] dev-libs/rebuildnochangeconsumer-1.0 " in ub.stdout
+
+    # --rebuild-exclude (parent) / --rebuild-ignore (dep) both suppress it.
+    for extra in (
+        ["--rebuild-exclude", "dev-libs/rebuildconsumer"],
+        ["--rebuild-ignore", "dev-libs/rebuildtrigger"],
+    ):
+        args = ["--pretend", "-u", "--rebuild-if-unbuilt", *extra, "dev-libs/rebuildtrigger"]
+        r = _run([str(emerge_binary)], args, fixture_env)
+        assert r.stdout == _run(emerge_pretend_python, args, fixture_env).stdout
+        assert "rebuildconsumer" not in r.stdout
 
 
 def test_deep_equals_zero_matches_not_passing_deep_at_all(emerge_binary, fixture_env):

@@ -7630,6 +7630,188 @@ fn slot_operator_rebuild_entries(
     (out, abi_rebuilds)
 }
 
+/// `<version>` with a trailing `-r<digits>` revision suffix removed
+/// (real `catpkgsplit(cpv)[:-1]` -- "revision numbers are ignored" for
+/// `--rebuild-if-new-ver`). Returns the input unchanged when there is no
+/// such suffix.
+fn strip_revision(version: &str) -> &str {
+    match version.rsplit_once("-r") {
+        Some((base, rev)) if !rev.is_empty() && rev.bytes().all(|b| b.is_ascii_digit()) => base,
+        _ => version,
+    }
+}
+
+/// Real `_emerge/depgraph.py`'s `_rebuild_config` (`--rebuild-if-unbuilt`
+/// / `--rebuild-if-new-rev` / `--rebuild-if-new-ver`): an already-
+/// installed package whose own build-time dependency (`DEPEND`/`BDEPEND`
+/// in its vdb, resolved against its *built* `USE`) is satisfied by a
+/// package this run is merging is scheduled for a rebuild.
+/// `_needs_rebuild(dep_pkg)` -- for this pilot every merge is from source
+/// (`dep_pkg.built` is always false), so: `unbuilt` triggers always (a
+/// source build invalidates any binary parent); `new_rev` triggers
+/// unless the merged `cat/pkg-version` (revision included) is already one
+/// of the installed versions of that cp; `new_ver` is the same but with
+/// the `-r<n>` revision stripped from both sides.
+/// The caller resolves the real precedence (`unbuilt` > `new_rev` >
+/// `new_ver`; `=n` disables) so at most one of the three is set here.
+/// `--rebuild-exclude ATOMS` matches the *parent* (skip rebuilding it);
+/// `--rebuild-ignore ATOMS` matches the *dep* (it never triggers a
+/// rebuild) -- both the same two-tier `matches_config_entry` matcher
+/// `excluded` uses. Structurally a sibling of
+/// `slot_operator_rebuild_entries` above (same `all_installed_packages`
+/// scan, same `Reinstall` rebuild-entry shape) -- `--rebuild-if-new-slot`
+/// stays that function's job.
+fn rebuild_if_entries(
+    root: &Path,
+    entries: &[GraphEntry],
+    unbuilt: bool,
+    new_rev: bool,
+    new_ver: bool,
+    rebuild_exclude: &[String],
+    rebuild_ignore: &[String],
+) -> Vec<GraphEntry> {
+    if !(unbuilt || new_rev || new_ver) {
+        return Vec::new();
+    }
+    // `cat/pkg` -> merged version, for every entry being installed this
+    // run (New / Upgrade / Downgrade / Reinstall).
+    let mut merged: HashMap<(String, String), String> = HashMap::new();
+    let mut in_graph: HashSet<(String, String)> = HashSet::new();
+    for e in entries {
+        let cp = (e.category.clone(), e.package.clone());
+        let version = match &e.outcome {
+            PretendOutcome::New { version } | PretendOutcome::Reinstall { version, .. } => {
+                Some(version)
+            }
+            PretendOutcome::Upgrade { to, .. } | PretendOutcome::Downgrade { to, .. } => Some(to),
+            PretendOutcome::AlreadyInstalled { .. } | PretendOutcome::NoVisibleCandidate => None,
+        };
+        if let Some(v) = version {
+            in_graph.insert(cp.clone());
+            merged.insert(cp, v.clone());
+        }
+    }
+    if merged.is_empty() {
+        return Vec::new();
+    }
+
+    let mut out: Vec<GraphEntry> = Vec::new();
+    for pkg in all_installed_packages(root) {
+        let cp = (pkg.category.clone(), pkg.package.clone());
+        if in_graph.contains(&cp) {
+            continue;
+        }
+        let parent_cpv = pkg.cpv();
+        if rebuild_exclude
+            .iter()
+            .any(|a| matches_config_entry(a, &parent_cpv, &pkg.category, &pkg.package))
+        {
+            continue;
+        }
+        let built_use = read_vdb_flag_set(root, &pkg.category, &pkg.package, &pkg.version, "USE");
+        let mut depstr = String::new();
+        for key in ["DEPEND", "BDEPEND"] {
+            depstr.push_str(&read_vdb_string(
+                root,
+                &pkg.category,
+                &pkg.package,
+                &pkg.version,
+                key,
+            ));
+            depstr.push(' ');
+        }
+        let tokens: Vec<String> = depstr.split_whitespace().map(String::from).collect();
+        let Ok(flat) = portage_use_reduce::use_reduce_flat(
+            &tokens,
+            &built_use,
+            portage_use_reduce::MatchMode::Normal,
+        ) else {
+            continue;
+        };
+
+        let triggered = flat
+            .iter()
+            .filter_map(|t| portage_dep::parse_atom(t))
+            .any(|atom| {
+                if atom.blocker != portage_dep::Blocker::None {
+                    return false;
+                }
+                let Some(merged_ver) = merged.get(&(atom.category.clone(), atom.package.clone()))
+                else {
+                    return false;
+                };
+                let dep_cpv = format!("{}/{}-{merged_ver}", atom.category, atom.package);
+                if rebuild_ignore
+                    .iter()
+                    .any(|a| matches_config_entry(a, &dep_cpv, &atom.category, &atom.package))
+                {
+                    return false;
+                }
+                if unbuilt {
+                    return true;
+                }
+                let installed = installed_versions(root, &atom.category, &atom.package);
+                if new_rev {
+                    return !installed.iter().any(|v| v == merged_ver);
+                }
+                // new_ver: revision ignored on both sides.
+                let want = strip_revision(merged_ver);
+                !installed.iter().any(|v| strip_revision(v) == want)
+            });
+        if !triggered {
+            continue;
+        }
+
+        let (slot, sub_slot) = read_vdb_slot(root, &pkg.category, &pkg.package, &pkg.version);
+        let repo = read_vdb_string(
+            root,
+            &pkg.category,
+            &pkg.package,
+            &pkg.version,
+            "repository",
+        )
+        .trim()
+        .to_string();
+        out.push(GraphEntry {
+            category: pkg.category.clone(),
+            package: pkg.package.clone(),
+            outcome: PretendOutcome::Reinstall {
+                version: pkg.version.clone(),
+                changed_flags: Vec::new(),
+                deps_changed: false,
+                slot_changed: false,
+                rebuilt_binary: false,
+                new_repo: false,
+                slot_operator_rebuild: false,
+            },
+            blockers: Vec::new(),
+            slot: Some(slot),
+            sub_slot: Some(sub_slot),
+            repo_name: (!repo.is_empty()).then_some(repo),
+            oldbest: Vec::new(),
+            use_flags_display: Vec::new(),
+            use_expand_display: Vec::new(),
+            use_expand_display_p: Vec::new(),
+            keyword_mask: None,
+            new_slot: false,
+            interactive: false,
+            fetch_restrict: false,
+            fetch_restrict_satisfied: false,
+            download_files: Vec::new(),
+            required_by: Vec::new(),
+            source: CandidateSource::Ebuild,
+            provenance: VisibilityProvenance::default(),
+            keyword_suggestion: None,
+            use_suggestion: None,
+            parent_use_suggestion: None,
+            targets_running_root: false,
+            remote_binary: false,
+        });
+    }
+    out.sort_by(|a, b| (a.category.as_str(), a.package.as_str()).cmp(&(&b.category, &b.package)));
+    out
+}
+
 fn topological_merge_order_impl(entries: Vec<GraphEntry>) -> Vec<GraphEntry> {
     let n = entries.len();
     if n < 2 {
@@ -8638,6 +8820,24 @@ pub fn resolve_pretend_graph(
     // `matches_config_entry` matcher `excluded` uses. Empty (`&[]`) at
     // every call site that doesn't pass `--reinstall-atoms`.
     reinstall_atoms: &[String],
+    // `--rebuild-if-new-slot` (real `y_or_n`, default `"y"`): the
+    // slot-operator (`:=`) auto-rebuild pass. `false` (`=n`) skips it,
+    // like `--ignore-built-slot-operator-deps` already does.
+    rebuild_if_new_slot: bool,
+    // `--rebuild-if-unbuilt` / `--rebuild-if-new-rev` /
+    // `--rebuild-if-new-ver` (real `true_y_or_n`, all OFF by default):
+    // rebuild an installed package whose build-time dep is being merged
+    // this run -- see `rebuild_if_entries`'s own doc comment. The caller
+    // resolves the real `unbuilt > new_rev > new_ver` precedence, so at
+    // most one is `true` here.
+    rebuild_if_unbuilt: bool,
+    rebuild_if_new_rev: bool,
+    rebuild_if_new_ver: bool,
+    // `--rebuild-exclude ATOMS` (parent skipped) / `--rebuild-ignore
+    // ATOMS` (dep never triggers) -- same repeatable atom-list shape as
+    // `--exclude`. `&[]` at every call site that passes neither.
+    rebuild_exclude: &[String],
+    rebuild_ignore: &[String],
 ) -> Result<GraphResult, String> {
     let repos = find_repos(config_root)?;
     // Real `create_depgraph_params.py:178`: `--emptytree` sets
@@ -10258,12 +10458,28 @@ pub fn resolve_pretend_graph(
         // leaves `cat/pkg` in that slot is scheduled for a reinstall. Added
         // before the merge-order sort so it lands in dependency-first order
         // like every other entry. `abi_rebuilds` feeds `_show_abi_rebuild_info`.
-        let (slot_op_rebuilds, abi_rebuilds) = if ignore_built_slot_operator_deps {
-            (Vec::new(), Vec::new())
-        } else {
-            slot_operator_rebuild_entries(root, &entries)
-        };
+        let (slot_op_rebuilds, abi_rebuilds) =
+            if ignore_built_slot_operator_deps || !rebuild_if_new_slot {
+                (Vec::new(), Vec::new())
+            } else {
+                slot_operator_rebuild_entries(root, &entries)
+            };
         entries.extend(slot_op_rebuilds);
+
+        // Real `_rebuild_config.trigger_rebuilds()` (`--rebuild-if-unbuilt`
+        // / `--rebuild-if-new-rev` / `--rebuild-if-new-ver`): an installed
+        // package whose build-time dep is being merged this run gets its
+        // own `[ebuild R]` rebuild entry. Same `all_installed_packages`
+        // scan / entry shape as the slot-operator pass above.
+        entries.extend(rebuild_if_entries(
+            root,
+            &entries,
+            rebuild_if_unbuilt,
+            rebuild_if_new_rev,
+            rebuild_if_new_ver,
+            rebuild_exclude,
+            rebuild_ignore,
+        ));
 
         // Real portage's `mylist` is dependency-first (its Scheduler installs
         // a package only after everything it depends on); the pilot's BFS
@@ -11866,6 +12082,12 @@ mod tests {
             false,
             false,
             10,
+            &[],
+            true,
+            false,
+            false,
+            false,
+            &[],
             &[],
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
@@ -13719,6 +13941,12 @@ mod tests {
             false,
             10,
             &[],
+            true,
+            false,
+            false,
+            false,
+            &[],
+            &[],
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -13766,6 +13994,12 @@ mod tests {
             false,
             false,
             10,
+            &[],
+            true,
+            false,
+            false,
+            false,
+            &[],
             &[],
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
@@ -13816,6 +14050,12 @@ mod tests {
             false,
             false,
             10,
+            &[],
+            true,
+            false,
+            false,
+            false,
+            &[],
             &[],
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
@@ -13870,6 +14110,12 @@ mod tests {
             false,
             false,
             10,
+            &[],
+            true,
+            false,
+            false,
+            false,
+            &[],
             &[],
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph failed: {e}"))
@@ -13942,6 +14188,12 @@ mod tests {
             false,
             10,
             &[],
+            true,
+            false,
+            false,
+            false,
+            &[],
+            &[],
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -13995,6 +14247,12 @@ mod tests {
             false,
             10,
             &ra,
+            true,
+            false,
+            false,
+            false,
+            &[],
+            &[],
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -14058,6 +14316,184 @@ mod tests {
         assert!(forced.iter().any(|(n, _)| n == "dev-libs/deeppkg2"));
     }
 
+    /// `resolve_pretend_graph` for one atom with the `--rebuild-if-*`
+    /// flags set (and `--update` on, so `rebuildtrigger` upgrades).
+    #[allow(clippy::too_many_arguments)]
+    fn graph_rebuild_if(
+        atom_str: &str,
+        unbuilt: bool,
+        new_rev: bool,
+        new_ver: bool,
+        rebuild_exclude: &[&str],
+        rebuild_ignore: &[&str],
+    ) -> Vec<(String, PretendOutcome)> {
+        let root = fixtures_root();
+        let ex: Vec<String> = rebuild_exclude.iter().map(|s| s.to_string()).collect();
+        let ig: Vec<String> = rebuild_ignore.iter().map(|s| s.to_string()).collect();
+        resolve_pretend_graph(
+            &root,
+            &root,
+            &[atom_str.to_string()],
+            &test_config(),
+            false,
+            false,
+            false,
+            true, // --update
+            Deep::NotRequested,
+            &[],
+            true,
+            false,
+            false,
+            false,
+            false,
+            true,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            &[],
+            &[],
+            false,
+            None,
+            false,
+            false,
+            None,
+            &fixtures_root().join("distfiles"),
+            false,
+            false,
+            false,
+            10,
+            &[],
+            true, // rebuild_if_new_slot
+            unbuilt,
+            new_rev,
+            new_ver,
+            &ex,
+            &ig,
+        )
+        .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
+        .entries
+        .into_iter()
+        .map(|e| (format!("{}/{}", e.category, e.package), e.outcome))
+        .collect()
+    }
+
+    #[test]
+    fn rebuild_if_unbuilt_reinstalls_a_consumer_of_a_merged_build_dep() {
+        // dev-libs/rebuildconsumer (installed) has a vdb DEPEND on
+        // dev-libs/rebuildtrigger; `emerge -u rebuildtrigger` upgrades it
+        // 1.0 -> 2.0. --rebuild-if-unbuilt then schedules rebuildconsumer
+        // for a rebuild (it isn't otherwise in the graph at all).
+        let g = graph_rebuild_if("dev-libs/rebuildtrigger", true, false, false, &[], &[]);
+        assert!(
+            g.iter().any(|(n, o)| n == "dev-libs/rebuildconsumer"
+                && matches!(
+                    o,
+                    PretendOutcome::Reinstall {
+                        slot_operator_rebuild: false,
+                        ..
+                    }
+                )),
+            "{g:?}"
+        );
+    }
+
+    #[test]
+    fn rebuild_if_new_ver_ignores_a_same_version_dep() {
+        // rebuildnochange's best tree version equals the installed one.
+        // Even forced to reinstall (--reinstall-atoms), that is not a
+        // "new version"/"new revision" -> its consumer is NOT rebuilt
+        // under --rebuild-if-new-ver / -new-rev.
+        let root = fixtures_root();
+        for (nr, nv) in [(true, false), (false, true)] {
+            let g = resolve_pretend_graph(
+                &root,
+                &root,
+                &["dev-libs/rebuildnochange".to_string()],
+                &test_config(),
+                false,
+                false,
+                false,
+                false,
+                Deep::NotRequested,
+                &[],
+                true,
+                false,
+                false,
+                false,
+                false,
+                true,
+                false,
+                false,
+                false,
+                false,
+                false,
+                false,
+                false,
+                &[],
+                &[],
+                false,
+                None,
+                false,
+                false,
+                None,
+                &fixtures_root().join("distfiles"),
+                false,
+                false,
+                false,
+                10,
+                &["dev-libs/rebuildnochange".to_string()], // --reinstall-atoms
+                true,
+                false,
+                nr,
+                nv,
+                &[],
+                &[],
+            )
+            .unwrap()
+            .entries
+            .into_iter()
+            .map(|e| (format!("{}/{}", e.category, e.package), e.outcome))
+            .collect::<Vec<_>>();
+            assert!(
+                g.iter().any(|(n, _)| n == "dev-libs/rebuildnochange"),
+                "the dep itself should be forced into the graph: {g:?}"
+            );
+            assert!(
+                !g.iter()
+                    .any(|(n, _)| n == "dev-libs/rebuildnochangeconsumer"),
+                "no rebuild for a same-version dep: {g:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn rebuild_exclude_and_ignore_suppress_the_rebuild() {
+        // --rebuild-exclude matches the parent; --rebuild-ignore matches
+        // the merged dep. Either one keeps rebuildconsumer out.
+        let ex = graph_rebuild_if(
+            "dev-libs/rebuildtrigger",
+            true,
+            false,
+            false,
+            &["dev-libs/rebuildconsumer"],
+            &[],
+        );
+        assert!(!ex.iter().any(|(n, _)| n == "dev-libs/rebuildconsumer"));
+        let ig = graph_rebuild_if(
+            "dev-libs/rebuildtrigger",
+            true,
+            false,
+            false,
+            &[],
+            &["dev-libs/rebuildtrigger"],
+        );
+        assert!(!ig.iter().any(|(n, _)| n == "dev-libs/rebuildconsumer"));
+    }
+
     /// Like `graph_deep`, but driven by `--emptytree`/`-e` instead
     /// (`deep` forced on, every installed atom -> a bare Reinstall).
     fn graph_empty(atom_str: &str) -> Vec<(String, PretendOutcome)> {
@@ -14098,6 +14534,12 @@ mod tests {
             false,
             false,
             10,
+            &[],
+            true,
+            false,
+            false,
+            false,
+            &[],
             &[],
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
@@ -14251,6 +14693,12 @@ mod tests {
             false,
             10,
             &[],
+            true,
+            false,
+            false,
+            false,
+            &[],
+            &[],
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -14396,6 +14844,12 @@ mod tests {
             false,
             false,
             10,
+            &[],
+            true,
+            false,
+            false,
+            false,
+            &[],
             &[],
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
@@ -14559,6 +15013,12 @@ mod tests {
             false,
             10,
             &[],
+            true,
+            false,
+            false,
+            false,
+            &[],
+            &[],
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph failed: {e}"))
         .entries;
@@ -14642,6 +15102,12 @@ mod tests {
             false,
             false,
             10,
+            &[],
+            true,
+            false,
+            false,
+            false,
+            &[],
             &[],
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph failed: {e}"))
@@ -14731,6 +15197,12 @@ mod tests {
             false,
             10,
             &[],
+            true,
+            false,
+            false,
+            false,
+            &[],
+            &[],
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph failed: {e}"))
         .entries
@@ -14798,6 +15270,12 @@ mod tests {
                 false,
                 false,
                 10,
+                &[],
+                true,
+                false,
+                false,
+                false,
+                &[],
                 &[],
             )
             .unwrap_or_else(|e| panic!("resolve_pretend_graph failed: {e}"))
@@ -14871,6 +15349,12 @@ mod tests {
             false,
             10,
             &[],
+            true,
+            false,
+            false,
+            false,
+            &[],
+            &[],
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph failed: {e}"))
         .entries
@@ -14932,6 +15416,12 @@ mod tests {
             false,
             10,
             &[],
+            true,
+            false,
+            false,
+            false,
+            &[],
+            &[],
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph failed: {e}"))
         .entries
@@ -14988,6 +15478,12 @@ mod tests {
             false,
             false,
             10,
+            &[],
+            true,
+            false,
+            false,
+            false,
+            &[],
             &[],
         )
         .expect("resolve_pretend_graph must succeed")
@@ -15294,6 +15790,12 @@ mod tests {
             false,
             false,
             10,
+            &[],
+            true,
+            false,
+            false,
+            false,
+            &[],
             &[],
         )
         .expect("resolve_pretend_graph must succeed")
@@ -15627,6 +16129,12 @@ mod tests {
             false,
             10,
             &[],
+            true,
+            false,
+            false,
+            false,
+            &[],
+            &[],
         )
         .expect("resolve_pretend_graph must succeed")
         .entries
@@ -15756,6 +16264,12 @@ mod tests {
             false,
             false,
             10,
+            &[],
+            true,
+            false,
+            false,
+            false,
+            &[],
             &[],
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
@@ -15944,6 +16458,12 @@ mod tests {
             false,
             false,
             10,
+            &[],
+            true,
+            false,
+            false,
+            false,
+            &[],
             &[],
         )
         .expect("resolve_pretend_graph must succeed")
@@ -16150,6 +16670,12 @@ mod tests {
             false,
             10,
             &[],
+            true,
+            false,
+            false,
+            false,
+            &[],
+            &[],
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -16206,6 +16732,12 @@ mod tests {
             false,
             false,
             10,
+            &[],
+            true,
+            false,
+            false,
+            false,
+            &[],
             &[],
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
@@ -16323,6 +16855,12 @@ mod tests {
             false,
             10,
             &[],
+            true,
+            false,
+            false,
+            false,
+            &[],
+            &[],
         )
         .expect_err(&format!(
             "resolve_pretend_graph({atom_str}) should have failed"
@@ -16377,6 +16915,12 @@ mod tests {
             false,
             false,
             10,
+            &[],
+            true,
+            false,
+            false,
+            false,
+            &[],
             &[],
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
@@ -16435,6 +16979,12 @@ mod tests {
             false,
             10,
             &[],
+            true,
+            false,
+            false,
+            false,
+            &[],
+            &[],
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -16491,6 +17041,12 @@ mod tests {
             false,
             false,
             10,
+            &[],
+            true,
+            false,
+            false,
+            false,
+            &[],
             &[],
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
@@ -16767,6 +17323,12 @@ mod tests {
             false,
             10,
             &[],
+            true,
+            false,
+            false,
+            false,
+            &[],
+            &[],
         )
         .expect_err("both atoms should fail their own REQUIRED_USE");
         assert_eq!(
@@ -16835,6 +17397,12 @@ mod tests {
             false,
             false,
             10,
+            &[],
+            true,
+            false,
+            false,
+            false,
+            &[],
             &[],
         )
         .expect_err("no visible candidate at all");
@@ -16928,6 +17496,12 @@ mod tests {
             false,
             10,
             &[],
+            true,
+            false,
+            false,
+            false,
+            &[],
+            &[],
         )
         .expect("dependency's own NoVisibleCandidate is never fatal");
         let dep = result
@@ -17008,6 +17582,12 @@ mod tests {
             false,
             false,
             10,
+            &[],
+            true,
+            false,
+            false,
+            false,
+            &[],
             &[],
         )
         .expect_err("no visible candidate at all");
@@ -17234,6 +17814,12 @@ mod tests {
             false,
             backtrack_max,
             &[],
+            true,
+            false,
+            false,
+            false,
+            &[],
+            &[],
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
     }
@@ -17292,6 +17878,12 @@ mod tests {
             false,
             10,
             &[],
+            true,
+            false,
+            false,
+            false,
+            &[],
+            &[],
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
     }
@@ -17345,6 +17937,12 @@ mod tests {
             false,
             false,
             10,
+            &[],
+            true,
+            false,
+            false,
+            false,
+            &[],
             &[],
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
@@ -17649,6 +18247,12 @@ mod tests {
                 ignore,
                 10,
                 &[],
+                true,
+                false,
+                false,
+                false,
+                &[],
+                &[],
             )
             .expect("resolves")
         };
@@ -17742,6 +18346,12 @@ mod tests {
             false,
             false,
             10,
+            &[],
+            true,
+            false,
+            false,
+            false,
+            &[],
             &[],
         )
         .expect("resolves");
@@ -17838,6 +18448,12 @@ mod tests {
             false,
             false,
             10,
+            &[],
+            true,
+            false,
+            false,
+            false,
+            &[],
             &[],
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))

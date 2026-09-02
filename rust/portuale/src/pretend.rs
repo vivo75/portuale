@@ -5048,6 +5048,21 @@ pub fn run(args: &[String]) -> ExitCode {
     // already-installed package is forced to re-merge (see
     // `resolve_pretend_graph`'s own `reinstall_atoms` doc comment).
     let mut reinstall_atoms: Vec<String> = Vec::new();
+    // --rebuild-if-new-slot (real `y_or_n`, default "y" -- `main.py:955`):
+    // the `:=` slot-operator auto-rebuild. Only `=n` disables it.
+    let mut rebuild_if_new_slot = true;
+    // --rebuild-if-unbuilt / --rebuild-if-new-rev / --rebuild-if-new-ver
+    // (real `true_y_or_n`, all OFF by default). Tracked as Option so the
+    // real precedence (`unbuilt` clears rev+ver; `rev` clears ver;
+    // `main.py:958-975`) can be resolved once parsing finishes.
+    let mut rebuild_if_unbuilt: Option<bool> = None;
+    let mut rebuild_if_new_rev: Option<bool> = None;
+    let mut rebuild_if_new_ver: Option<bool> = None;
+    // --rebuild-exclude ATOMS (parent skipped) / --rebuild-ignore ATOMS
+    // (dep never triggers) -- same repeatable/space-separated shape as
+    // --exclude.
+    let mut rebuild_exclude: Vec<String> = Vec::new();
+    let mut rebuild_ignore: Vec<String> = Vec::new();
     // --usepkg-exclude/--usepkg-include: same "action": "append",
     // space-separated-per-occurrence shape as --exclude/-X above (real
     // main.py: "A space separated list of package names or slot atoms"),
@@ -5464,6 +5479,69 @@ pub fn run(args: &[String]) -> ExitCode {
         } else if let Some(value) = arg.strip_prefix("--reinstall-atoms=") {
             reinstall_atoms.extend(value.split_whitespace().map(String::from));
             i += 1;
+        } else if arg == "--rebuild-exclude" || arg == "--rebuild-ignore" {
+            let is_exclude = arg == "--rebuild-exclude";
+            let Some(value) = args.get(i + 1) else {
+                eprintln!("emerge: option \"{arg}\" requires an argument");
+                return ExitCode::from(2);
+            };
+            let dst = if is_exclude {
+                &mut rebuild_exclude
+            } else {
+                &mut rebuild_ignore
+            };
+            dst.extend(value.split_whitespace().map(String::from));
+            i += 2;
+        } else if let Some(value) = arg.strip_prefix("--rebuild-exclude=") {
+            rebuild_exclude.extend(value.split_whitespace().map(String::from));
+            i += 1;
+        } else if let Some(value) = arg.strip_prefix("--rebuild-ignore=") {
+            rebuild_ignore.extend(value.split_whitespace().map(String::from));
+            i += 1;
+        } else if arg == "--rebuild-if-new-slot" || arg.starts_with("--rebuild-if-new-slot=") {
+            // Real `y_or_n`, default "y" -- only `=n` disables.
+            let val = if let Some(v) = arg.strip_prefix("--rebuild-if-new-slot=") {
+                i += 1;
+                v.to_string()
+            } else if matches!(args.get(i + 1).map(String::as_str), Some("y" | "n")) {
+                i += 2;
+                args[i - 1].clone()
+            } else {
+                i += 1;
+                "y".to_string()
+            };
+            rebuild_if_new_slot = !matches!(val.as_str(), "n" | "N");
+        } else if arg == "--rebuild-if-unbuilt"
+            || arg.starts_with("--rebuild-if-unbuilt=")
+            || arg == "--rebuild-if-new-rev"
+            || arg.starts_with("--rebuild-if-new-rev=")
+            || arg == "--rebuild-if-new-ver"
+            || arg.starts_with("--rebuild-if-new-ver=")
+        {
+            // Real `true_y_or_n` -- bare / `=y` / `=True` -> on, `=n` -> off.
+            let (name, inline) = match arg.split_once('=') {
+                Some((n, v)) => (n, Some(v.to_string())),
+                None => (arg, None),
+            };
+            let val = if let Some(v) = inline {
+                i += 1;
+                v
+            } else if matches!(
+                args.get(i + 1).map(String::as_str),
+                Some("y" | "n" | "True")
+            ) {
+                i += 2;
+                args[i - 1].clone()
+            } else {
+                i += 1;
+                "y".to_string()
+            };
+            let on = matches!(val.as_str(), "y" | "True");
+            match name {
+                "--rebuild-if-unbuilt" => rebuild_if_unbuilt = Some(on),
+                "--rebuild-if-new-rev" => rebuild_if_new_rev = Some(on),
+                _ => rebuild_if_new_ver = Some(on),
+            }
         } else if arg == "--usepkg-exclude" {
             // Same "action": "append", space-separated-per-occurrence
             // shape as --exclude above -- no short alias, real main.py
@@ -7052,6 +7130,15 @@ pub fn run(args: &[String]) -> ExitCode {
         }
     }
 
+    // Real `main.py:958-975` precedence for the `--rebuild-if-*` trio:
+    // `--rebuild-if-unbuilt` (=y) clears `new-rev` + `new-ver`;
+    // `--rebuild-if-new-rev` (=y) clears `new-ver`. An explicit `=n`
+    // leaves that one off; anything unset stays off.
+    let rebuild_if_unbuilt = rebuild_if_unbuilt == Some(true);
+    let rebuild_if_new_rev = !rebuild_if_unbuilt && rebuild_if_new_rev == Some(true);
+    let rebuild_if_new_ver =
+        !rebuild_if_unbuilt && !rebuild_if_new_rev && rebuild_if_new_ver == Some(true);
+
     let result = match resolve_pretend_graph(
         &config_root,
         &root,
@@ -7089,6 +7176,12 @@ pub fn run(args: &[String]) -> ExitCode {
         ignore_built_slot_operator_deps,
         backtrack_max,
         &reinstall_atoms,
+        rebuild_if_new_slot,
+        rebuild_if_unbuilt,
+        rebuild_if_new_rev,
+        rebuild_if_new_ver,
+        &rebuild_exclude,
+        &rebuild_ignore,
     ) {
         Ok(result) => result,
         Err(e) => {

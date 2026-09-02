@@ -318,8 +318,9 @@ pub const VALUE_OPTIONS: &[(&str, Option<&str>)] = &[
     ("--usepkg-include", None),
     ("--onlydeps-with-ideps", None),
     ("--onlydeps-with-rdeps", None),
-    ("--rebuild-exclude", None),
-    ("--rebuild-ignore", None),
+    // `--rebuild-exclude` / `--rebuild-ignore` IS implemented -- filters
+    // for the `--rebuild-if-*` scan (see pretend.rs + portage-repo's
+    // `rebuild_if_entries`).
     ("--package-moves", None),
     ("--prefix", None),
     ("--pkg-format", None),
@@ -331,10 +332,11 @@ pub const VALUE_OPTIONS: &[(&str, Option<&str>)] = &[
     ("--quiet-build", None),
     ("--quiet-fail", None),
     ("--read-news", None),
-    ("--rebuild-if-new-slot", None),
-    ("--rebuild-if-new-rev", None),
-    ("--rebuild-if-new-ver", None),
-    ("--rebuild-if-unbuilt", None),
+    // `--rebuild-if-new-slot` / `-new-rev` / `-new-ver` / `-unbuilt` ARE
+    // implemented -- rebuild an installed package whose build-time dep is
+    // being merged this run (see pretend.rs + portage-repo's
+    // `rebuild_if_entries`; `-new-slot` is the pre-existing `:=`
+    // slot-operator auto-rebuild).
     ("--rebuilt-binaries", None),
     ("--rebuilt-binaries-timestamp", None),
     // `--regex-search-auto` / `--search-similarity`: implemented, see the

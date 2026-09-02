@@ -5802,6 +5802,120 @@ def _slot_operator_rebuild_entries(root, repos, entries):
     return out, abi_rebuilds
 
 
+def _strip_revision(version):
+    base, sep, rev = version.rpartition("-r")
+    if sep and rev.isdigit():
+        return base
+    return version
+
+
+def _rebuild_if_entries(
+    root, entries, unbuilt, new_rev, new_ver, rebuild_exclude, rebuild_ignore
+):
+    """Real _rebuild_config.trigger_rebuilds (--rebuild-if-unbuilt /
+    --rebuild-if-new-rev / --rebuild-if-new-ver): an installed package
+    whose vdb build-time dep (DEPEND/BDEPEND, resolved against its built
+    USE) is satisfied by a package this run is merging gets its own
+    [ebuild R] rebuild entry. Caller has resolved the precedence so at
+    most one of the three is set. Mirrors portage-repo's
+    rebuild_if_entries exactly."""
+    if not (unbuilt or new_rev or new_ver):
+        return []
+    merged = {}
+    in_graph = set()
+    for entry in entries:
+        category, package, outcome = entry[0], entry[1], entry[2]
+        tag = outcome[0]
+        if tag in ("new", "reinstall"):
+            version = outcome[1]
+        elif tag in ("upgrade", "downgrade"):
+            version = outcome[2]
+        else:
+            continue
+        in_graph.add((category, package))
+        merged[(category, package)] = version
+    if not merged:
+        return []
+
+    out = []
+    for category, package, version, _slot in _all_installed_packages(root):
+        if (category, package) in in_graph:
+            continue
+        parent_cpv = f"{category}/{package}-{version}"
+        if any(
+            _matches_config_entry(a, parent_cpv, category, package)
+            for a in rebuild_exclude
+        ):
+            continue
+        built_use = list(_read_vdb_flag_set(root, category, package, version, "USE"))
+        depstr = " ".join(
+            _read_vdb_string(root, category, package, version, k)
+            for k in ("DEPEND", "BDEPEND")
+        )
+        try:
+            flat = use_reduce(depstr, uselist=built_use, flat=True)
+        except (InvalidDependString, InvalidAtom):
+            continue
+
+        triggered = False
+        for tok in flat:
+            if tok == "||":
+                continue
+            try:
+                atom = Atom(tok, allow_repo=True)
+            except Exception:
+                continue
+            if atom.blocker:
+                continue
+            cp = tuple(atom.cp.split("/", 1))
+            if cp not in merged:
+                continue
+            merged_ver = merged[cp]
+            dep_cpv = f"{atom.cp}-{merged_ver}"
+            if any(
+                _matches_config_entry(a, dep_cpv, cp[0], cp[1]) for a in rebuild_ignore
+            ):
+                continue
+            if unbuilt:
+                triggered = True
+                break
+            installed = installed_versions(root, cp[0], cp[1])
+            if new_rev:
+                if merged_ver not in installed:
+                    triggered = True
+                    break
+            else:
+                want = _strip_revision(merged_ver)
+                if not any(_strip_revision(v) == want for v in installed):
+                    triggered = True
+                    break
+        if not triggered:
+            continue
+
+        slot, _sub_slot = _read_vdb_slot(root, category, package, version)
+        repo = _read_vdb_string(root, category, package, version, "repository").strip()
+        outcome = ("reinstall", version, [], False, False, False, False, False)
+        out.append(
+            (
+                category,
+                package,
+                outcome,
+                [],
+                slot,
+                [],
+                [],
+                "ebuild",
+                {"mask_entry": None, "unmask_entry": None, "keyword_entry": None},
+                None,
+                None,
+                None,
+                False,
+            )
+        )
+    out.sort(key=lambda e: (e[0], e[1]))
+    return out
+
+
 def _topological_merge_order(entries):
     """Put `entries` in real portage's dependency-first *merge* order.
 
@@ -5896,6 +6010,12 @@ def resolve_pretend_graph(
     ignore_built_slot_operator_deps=False,
     backtrack_max=10,
     reinstall_atoms=(),
+    rebuild_if_new_slot=True,
+    rebuild_if_unbuilt=False,
+    rebuild_if_new_rev=False,
+    rebuild_if_new_ver=False,
+    rebuild_exclude=(),
+    rebuild_ignore=(),
 ):
     """Recursively resolves every atom in `atoms` and -- for packages that
     would newly merge or upgrade -- its DEPEND+RDEPEND+BDEPEND+PDEPEND+
@@ -7263,11 +7383,25 @@ def resolve_pretend_graph(
     # --ignore-built-slot-operator-deps (real main.py:470) skips the scan
     # entirely (real portage strips the built := parts so it finds
     # nothing; same net effect).
-    if ignore_built_slot_operator_deps:
+    if ignore_built_slot_operator_deps or not rebuild_if_new_slot:
         slot_op_rebuilds, abi_rebuilds = [], []
     else:
         slot_op_rebuilds, abi_rebuilds = _slot_operator_rebuild_entries(root, repos, entries)
     entries.extend(slot_op_rebuilds)
+
+    # Real _rebuild_config.trigger_rebuilds (--rebuild-if-unbuilt /
+    # --rebuild-if-new-rev / --rebuild-if-new-ver). Mirrors pretend.rs.
+    entries.extend(
+        _rebuild_if_entries(
+            root,
+            entries,
+            rebuild_if_unbuilt,
+            rebuild_if_new_rev,
+            rebuild_if_new_ver,
+            rebuild_exclude,
+            rebuild_ignore,
+        )
+    )
 
     # Real portage's `mylist` is dependency-first (its Scheduler installs
     # a package only after everything it depends on); this BFS builds
@@ -7636,8 +7770,8 @@ _VALUE_OPTIONS = [
     ("--usepkg-include", None),
     ("--onlydeps-with-ideps", None),
     ("--onlydeps-with-rdeps", None),
-    ("--rebuild-exclude", None),
-    ("--rebuild-ignore", None),
+    # --rebuild-exclude / --rebuild-ignore ARE implemented (filters for
+    # the --rebuild-if-* scan).
     ("--package-moves", None),
     ("--prefix", None),
     ("--pkg-format", None),
@@ -7649,10 +7783,8 @@ _VALUE_OPTIONS = [
     ("--quiet-build", None),
     ("--quiet-fail", None),
     ("--read-news", None),
-    ("--rebuild-if-new-slot", None),
-    ("--rebuild-if-new-rev", None),
-    ("--rebuild-if-new-ver", None),
-    ("--rebuild-if-unbuilt", None),
+    # --rebuild-if-new-slot / -new-rev / -new-ver / -unbuilt ARE
+    # implemented.
     ("--rebuilt-binaries", None),
     ("--rebuilt-binaries-timestamp", None),
     ("--root", None),
@@ -11067,6 +11199,12 @@ def run(args):
     deep = 0
     excluded = []
     reinstall_atoms = []
+    rebuild_if_new_slot = True
+    rebuild_if_unbuilt = None
+    rebuild_if_new_rev = None
+    rebuild_if_new_ver = None
+    rebuild_exclude = []
+    rebuild_ignore = []
     usepkg_exclude = []
     usepkg_include = []
     json_output = False
@@ -11325,6 +11463,56 @@ def run(args):
         elif arg.startswith("--reinstall-atoms="):
             reinstall_atoms.extend(arg[len("--reinstall-atoms=") :].split())
             i += 1
+        elif arg in ("--rebuild-exclude", "--rebuild-ignore"):
+            if i + 1 >= len(args):
+                print(f'emerge: option "{arg}" requires an argument', file=sys.stderr)
+                return 2
+            (rebuild_exclude if arg == "--rebuild-exclude" else rebuild_ignore).extend(
+                args[i + 1].split()
+            )
+            i += 2
+        elif arg.startswith("--rebuild-exclude="):
+            rebuild_exclude.extend(arg[len("--rebuild-exclude=") :].split())
+            i += 1
+        elif arg.startswith("--rebuild-ignore="):
+            rebuild_ignore.extend(arg[len("--rebuild-ignore=") :].split())
+            i += 1
+        elif arg == "--rebuild-if-new-slot" or arg.startswith("--rebuild-if-new-slot="):
+            # Real y_or_n, default "y" -- only =n disables.
+            if arg.startswith("--rebuild-if-new-slot="):
+                val = arg[len("--rebuild-if-new-slot=") :]
+                i += 1
+            elif i + 1 < len(args) and args[i + 1] in ("y", "n"):
+                val = args[i + 1]
+                i += 2
+            else:
+                val = "y"
+                i += 1
+            rebuild_if_new_slot = val not in ("n", "N")
+        elif (
+            arg in ("--rebuild-if-unbuilt", "--rebuild-if-new-rev", "--rebuild-if-new-ver")
+            or arg.startswith("--rebuild-if-unbuilt=")
+            or arg.startswith("--rebuild-if-new-rev=")
+            or arg.startswith("--rebuild-if-new-ver=")
+        ):
+            # Real true_y_or_n -- bare / =y / =True -> on, =n -> off.
+            name, _, inline = arg.partition("=")
+            if inline or "=" in arg:
+                val = inline
+                i += 1
+            elif i + 1 < len(args) and args[i + 1] in ("y", "n", "True"):
+                val = args[i + 1]
+                i += 2
+            else:
+                val = "y"
+                i += 1
+            on = val in ("y", "True")
+            if name == "--rebuild-if-unbuilt":
+                rebuild_if_unbuilt = on
+            elif name == "--rebuild-if-new-rev":
+                rebuild_if_new_rev = on
+            else:
+                rebuild_if_new_ver = on
         elif arg == "--usepkg-exclude":
             # Same "action": "append", space-separated-per-occurrence
             # shape as --exclude above -- no short alias, real main.py
@@ -12593,6 +12781,17 @@ def run(args):
     _rr = _running_root()
     root_deps_running_root = _rr if (root_deps or _rr != _root()) else None
 
+    # Real main.py:958-975 precedence: --rebuild-if-unbuilt clears
+    # new-rev + new-ver; --rebuild-if-new-rev clears new-ver. Mirrors
+    # pretend.rs.
+    rebuild_if_unbuilt_r = rebuild_if_unbuilt is True
+    rebuild_if_new_rev_r = not rebuild_if_unbuilt_r and rebuild_if_new_rev is True
+    rebuild_if_new_ver_r = (
+        not rebuild_if_unbuilt_r
+        and not rebuild_if_new_rev_r
+        and rebuild_if_new_ver is True
+    )
+
     try:
         result = resolve_pretend_graph(
             _config_root(),
@@ -12631,6 +12830,12 @@ def run(args):
             ignore_built_slot_operator_deps,
             backtrack_max,
             reinstall_atoms,
+            rebuild_if_new_slot,
+            rebuild_if_unbuilt_r,
+            rebuild_if_new_rev_r,
+            rebuild_if_new_ver_r,
+            rebuild_exclude,
+            rebuild_ignore,
         )
     except ResolutionError as e:
         print(f"emerge: {e}", file=sys.stderr)

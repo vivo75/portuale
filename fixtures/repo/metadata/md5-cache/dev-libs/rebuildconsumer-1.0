@@ -1,0 +1,8 @@
+DEFINED_PHASES=-
+DEPEND=dev-libs/rebuildtrigger
+DESCRIPTION=fixture: installed pkg that DEPENDs on rebuildtrigger (--rebuild-if-* consumer)
+EAPI=8
+IUSE=
+KEYWORDS=amd64
+SLOT=0
+_md5_=0000000000000000000000000000000
