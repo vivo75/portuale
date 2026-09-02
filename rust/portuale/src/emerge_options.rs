@@ -3,19 +3,14 @@
 // `argument_options` dict, and `actions` frozenset), so that using any
 // real emerge flag this pilot doesn't implement yet produces a clear
 // "recognized, but not implemented" message -- distinct from a
-// genuinely unknown/misspelled flag. Only `--pretend`/`-p`,
-// `--verbose`/`-v`, `--help`/`-h`, `--newuse`/`-N`, `--changed-use`/`-U`,
-// `--nodeps`/`-O`, `--onlydeps`/`-o`, and `--update`/`-u` are actually
-// implemented (see pretend.rs); every table here exists purely for
-// recognition, not
-// behavior. Mirrored exactly in
-// python/emerge_pretend_reference.py's own copy of these same
-// three tables, so both sides report identical text for identical input
-// (verified by the shared contract suite). `--deep`/`-D`,
-// `--exclude`/`-X`, `--deselect`/`-W`, `--with-bdeps`,
-// `--with-bdeps-auto`, `--changed-deps`, `--changed-slot`, and
-// `--with-test-deps` are ALSO implemented now (see below) -- all
-// excluded from `VALUE_OPTIONS` too, not just `BOOLEAN_OPTIONS`.
+// genuinely unknown/misspelled flag. The set that IS implemented is the
+// one `emerge --help` documents (see `pretend.rs`'s `HELP_TEXT`); every
+// table here exists purely for recognition, not behavior, and each
+// implemented flag is excluded from these tables (from `VALUE_OPTIONS`
+// too, not just `BOOLEAN_OPTIONS`). Mirrored exactly in
+// python/emerge_pretend_reference.py's own copy of these same three
+// tables, so both sides report identical text for identical input
+// (verified by the shared contract suite).
 //
 // KNOWN, DOCUMENTED SCOPE CUTS:
 //   - Short-flag bundling (`-pv`) IS supported -- see pretend.rs's own

@@ -1818,14 +1818,8 @@ fn report_option(token: &str) -> ExitCode {
         };
         eprintln!(
             "emerge (pilot v1): {kind} {:?} is a real emerge {kind}, but is not \
-             implemented in this pilot (only --pretend/-p, --verbose/-v, \
-             --quiet/-q, --newuse/-N, --changed-use/-U, --nodeps/-O, --onlydeps/-o, \
-             --update/-u, --deep/-D, --exclude/-X, --deselect/-W, \
-             --unmerge/-C, --depclean/-c, --prune/-P, --config, \
-             --with-bdeps, --with-bdeps-auto, --changed-deps, \
-             --changed-deps-report, --changed-slot, --verbose-slot-rebuilds, --ignore-built-slot-operator-deps, --buildpkg/-b, --buildpkg-exclude, --with-test-deps, \
-             --noreplace/-n, --selective, and --help/-h are implemented \
-             so far; see README.md)",
+             implemented in this pilot -- run \"emerge --help\" for the options \
+             and actions that are.",
             found.canonical
         );
     } else {
@@ -1845,79 +1839,119 @@ fn wants_help(args: &[String]) -> bool {
     })
 }
 
-/// A short, honest, pilot-specific summary -- not a port of real
-/// emerge's own `_emerge/help.py` (see the module doc comment for why).
+/// The `emerge --help` / `-h` text: a grouped tour of every action and
+/// option this pilot actually implements. NOT a port of real emerge's
+/// own `_emerge/help.py` (157 lines of colorized syntax for its full
+/// ~130-flag surface -- see the module doc comment). Kept byte-identical
+/// to `emerge_pretend_reference.py`'s `_HELP_TEXT`; the contract suite
+/// pins it in full.
 fn print_help() {
-    println!("emerge (pilot v1): command-line interface to the Rust porting pilot");
-    println!();
-    println!("Usage:");
-    println!("   emerge --pretend [--verbose] <atom> [<atom> ...]");
-    println!("   emerge --help");
-    println!();
-    println!("Options:");
-    println!("   -p, --pretend   required: the only real merge calculation this pilot implements");
-    println!("   -v, --verbose   show USE=\"...\" on each [ebuild ...] line (optionally: -v y|n)");
-    println!("   -q, --quiet     verbosity level 1: drop the mask column and the USE=\"...\" line (optionally: -q y|n)");
-    println!("   -N, --newuse    reinstall an already-installed package if its USE has changed");
-    println!("   -U, --changed-use  like -N, but ignores newly added/removed IUSE flags entirely");
-    println!("   -O, --nodeps    do not resolve or show any dependency, only the given atoms");
-    println!(
-        "   -o, --onlydeps  show only the given atoms' dependencies, not the atoms themselves"
-    );
-    println!(
-        "   -u, --update    upgrade to a newer visible version even if the installed one satisfies the atom"
-    );
-    println!(
-        "   -D, --deep[=N]  also recurse into an already-installed package's own dependencies (optionally, only N levels deep)"
-    );
-    println!(
-        "   -X, --exclude ATOMS  leave any matching already-installed package as-is, and never install a matching new one (repeatable, space-separated)"
-    );
-    println!(
-        "   -W, --deselect  a standalone action: remove matching ATOMS from the world / world_sets favorites files (--pretend previews)"
-    );
-    println!(
-        "       --with-bdeps y|n  include (y, the default) or skip (n) DEPEND/BDEPEND when --deep walks an already-installed package's own dependencies"
-    );
-    println!(
-        "       --with-bdeps-auto y|n  changes the *default* --with-bdeps value (only when --with-bdeps itself isn't given) -- n makes it default to n instead of the real \"auto\" (y here)"
-    );
-    println!(
-        "       --changed-deps[=y|n]  reinstall an already-installed package whose own vdb-recorded dependencies differ from the current ebuild's"
-    );
-    println!(
-        "       --changed-deps-report[=y|n]  report (without reinstalling) an already-installed package whose own vdb-recorded dependencies differ from the current ebuild's; silent if --changed-deps is also given"
-    );
-    println!(
-        "       --changed-slot[=y|n]  reinstall an already-installed package whose own vdb-recorded SLOT differs from the current ebuild's"
-    );
-    println!(
-        "       --with-test-deps[=y|n]  also pull in a top-level atom's own test?-gated dependencies, if it has a \"test\" USE flag not already enabled"
-    );
-    println!(
-        "   -n, --noreplace  a directly-named, already-installed, still-satisfying atom is left as-is (real portage's own default without this needs --update/--newuse/--changed-use/--changed-deps/--changed-slot/--selective to get the same result)"
-    );
-    println!(
-        "       --selective[=y|n]  identical to --noreplace; \"n\" explicitly cancels it even if another flag above would otherwise set it"
-    );
-    println!("   -h, --help      show this message and exit");
-    println!(
-        "       --json      dump the whole resolved graph as one line of JSON instead \
-         of the lines above (pilot-specific, not a real emerge option)"
-    );
-    println!(
-        "       --shell bash|brush  which real shell runs a real merge / unmerge \
-         (prerm/postrm) / --config (pkg_config) phase chain (not under --pretend); \
-         default bash, pilot-specific, not a real emerge option"
-    );
-    println!();
-    println!(
-        "Every other real emerge option/action is recognized by name (see \
-         lib/_emerge/main.py) but not implemented -- using one reports which \
-         option or action it is, instead of a generic error."
-    );
-    println!("See README.md for this pilot's current scope.");
+    print!("{HELP_TEXT}");
 }
+
+const HELP_TEXT: &str = r#"emerge (pilot v1): command-line interface to the Rust porting pilot
+
+This pilot does real dependency resolution, real ebuild phase execution,
+and real filesystem merge / unmerge. Any real emerge option or action not
+listed below is still recognized by name (lib/_emerge/main.py) -- using
+one reports which option it is, instead of a generic error.
+
+Usage:
+  emerge [options] <target> ...            build and merge the targets, resolving dependencies
+  emerge --pretend [options] <target> ...  show what would be merged; change nothing
+  emerge --unmerge <atom> ...              remove matching packages
+  emerge <action> [options]                run one of the actions listed below
+  emerge --help
+  A <target> is an atom, an @set, or an installed file / ebuild / tbz2 / gpkg.
+
+Actions (with none of these, the targets are built and merged):
+  -C, --unmerge              remove matching packages with no dependency check (CLEAN_DELAY countdown)
+      --rage-clean           like --unmerge, with CLEAN_DELAY=0
+  -c, --depclean             remove packages that nothing explicitly installed still needs
+  -P, --prune                remove all but the highest installed version of a package
+      --clean                remove all but the most recently installed version in each slot
+      --config               run pkg_config for an installed package
+  -W, --deselect[=y|n]       drop atoms / sets from the world favourites (implied by the removals above)
+  -s, --search               search package names; -S / --searchdesc also matches DESCRIPTION
+      --info                 print the configuration / build-environment block for bug reports
+      --list-sets            list the available package sets
+      --check-news           report how many unread GLEP 42 news items there are
+      --regen                regenerate every repo's metadata/md5-cache (runs each depend phase)
+      --metadata             no-op here (md5-cache is read directly); prints the real header only
+  -r, --resume [--skipfirst] replay the merge list saved by the last failed run (--skipfirst drops entry 1)
+  -h, --help                 show this message and exit
+
+Dependency and target selection:
+  -u, --update               pull a newer visible version even if the installed one satisfies the atom
+  -D, --deep[=N]             also recurse through installed packages' dependencies (optionally N levels)
+  -N, --newuse               reinstall an installed package whose USE settings changed
+  -U, --changed-use          like -N, but ignore flags newly added to or removed from IUSE
+  -e, --emptytree            rebuild the whole dependency tree, treating nothing as installed
+  -n, --noreplace            leave a directly named, still satisfied installed atom alone
+      --selective[=y|n]      same as --noreplace; =n cancels it
+  -1, --oneshot              merge without recording the target in world / world_sets
+  -o, --onlydeps             merge the targets' dependencies but not the targets themselves
+  -O, --nodeps               ignore dependencies entirely
+  -X, --exclude ATOMS        never act on a matching package (repeatable, space separated)
+      --newrepo              reinstall if the package would now come from a different repo
+      --changed-deps[=y|n], --changed-deps-report[=y|n]  react to a *DEPEND differing from the vdb record
+      --changed-slot[=y|n]  reinstall if the ebuild's SLOT differs from the vdb record
+      --with-bdeps <y|n>, --with-bdeps-auto <y|n>  keep DEPEND/BDEPEND when --deep walks installed packages
+      --with-test-deps[=y|n]  also pull a target's test?-gated dependencies
+      --root-deps[=rdeps|True]  resolve build dependencies against the running root
+      --reinstall-atoms ATOMS  force-reinstall matching installed packages
+      --rebuild-if-unbuilt, -new-rev, -new-ver, -new-slot  rebuild an installed package when a build dep is merged
+      --rebuild-exclude ATOMS, --rebuild-ignore ATOMS  keep packages out of the rebuild triggers
+      --complete-graph[=y|n], --complete-graph-if-new-use, --complete-graph-if-new-ver  force a full deep graph walk
+      --dynamic-deps[=y|n]  walk the ebuild (y, default) or the vdb snapshot (n) during --deep
+      --backtrack N         maximum resolver backtracking passes (default 10; 0 disables)
+      --package-moves[=y|n]  apply profiles/updates/ package moves (default y)
+      --misspell-suggestions[=y|n]  suggest close names for a missing cat/pkg
+
+Autounmask (read-only: prints the required changes and stops -- never writes config):
+      --autounmask[=y|n], --autounmask-use[=y|n], --autounmask-keep-keywords[=y|n]
+      --autounmask-license[=y|n], --autounmask-keep-masks[=y|n]
+      --autounmask-only[=y|n]  resolve, print only the change block, and exit 0
+      --autounmask-continue[=y|n], --autounmask-backtrack[=y|n]  recognized, but inert under --pretend
+
+Binary packages:
+  -b, --buildpkg[=y|n]       also build a binary package for each merged package
+  -B, --buildpkgonly         build binary packages only; never merge
+      --buildpkg-exclude ATOMS  skip the binary package for matching packages
+  -k, --usepkg / -K, --usepkgonly  use a usable binary package when one exists (-K: only, never build)
+  -g, --getbinpkg / -G, --getbinpkgonly  also fetch binary packages from a remote binhost (-G: only)
+      --usepkg-exclude ATOMS, --usepkg-include ATOMS  narrow which packages may come from a binary
+      --binpkg-respect-use[=y|n]  reject a binary package built with the wrong USE
+      --rebuilt-binaries[=y|n], --rebuilt-binaries-timestamp N  prefer / bound rebuilt binary packages
+      --useoldpkg-atoms ATOMS  prefer an existing binary package for matching atoms
+      --quickpkg-direct[=y|n], --quickpkg-direct-root DIR  reuse another root's installed packages as binaries
+
+Build scheduling:
+  -j, --jobs[=N]             run up to N package builds in parallel
+  -l, --load-average N       hold new builds while the load average exceeds N
+  -a, --ask[=y|n]            prompt for confirmation before a real merge or removal
+      --keep-going           on a build failure, drop that package's dependents and carry on
+
+Output:
+  -p, --pretend             resolve and print the merge list; do nothing
+  -v, --verbose[=y|n]       add the USE="..." column to each [ebuild ...] line
+  -q, --quiet[=y|n]         verbosity level 1: drop the mask column and the USE line
+  -t, --tree                show the merge list as a dependency tree
+      --columns             lay the merge list out in columns (not together with --tree)
+      --unordered-display, --alphabetical  merge-list ordering variants
+      --color <y|n>         force colour output on or off
+      --verbose-slot-rebuilds[=y|n]  show the atoms forcing a slot-operator rebuild
+      --ignore-built-slot-operator-deps[=y|n]  ignore recorded := slot-operator dependencies
+      --depclean-lib-check[=y|n]  with --depclean/--prune: scan for soname breakage (default y)
+
+Pilot-only (not real emerge options):
+      --json                dump the resolved graph as one JSON line instead of the display
+      --shell <bash|brush>  which real shell runs a merge / unmerge / --config phase chain (default bash)
+
+emerge --sync is a permanent non-goal: it prints
+"Functionality has moved to `emaint sync`." and exits 1.
+See README.md and emerge(1) for the full picture.
+"#;
 
 /// Reads `<root>/var/lib/portage/world` (real portage's own `WORLD_FILE`
 /// -- `lib/portage/const.py`) into a list of atom strings, one per line,

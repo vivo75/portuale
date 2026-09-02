@@ -94,12 +94,40 @@ def test_explicit_arg_fallback_dispatch(portuale_binary):
     assert "ebuild (pilot stub)" in result.stdout
 
 
-def test_unrecognized_applet_fails_clearly(portuale_binary):
+def test_no_applet_prints_the_applet_list(portuale_binary):
+    """A bare `portuale` (no symlink, no applet name) lists the applets
+    and exits 0 -- busybox-style -- rather than erroring."""
     result = subprocess.run(
         [str(portuale_binary)], capture_output=True, text=True, check=False
     )
+    assert result.returncode == 0
+    assert result.stderr == ""
+    assert result.stdout.startswith("portuale: a multicall binary")
+    assert "Applets:" in result.stdout
+    stripped = [line.strip() for line in result.stdout.splitlines()]
+    for name in ("emerge", "ebuild"):
+        row = next(line for line in stripped if line.startswith(name + " "))
+        description = row.split(None, 1)[1]
+        assert len(description) < 120, (name, len(description))
+
+
+@pytest.mark.parametrize("flag", ["-h", "--help"])
+def test_help_flag_prints_the_applet_list(portuale_binary, flag):
+    result = subprocess.run(
+        [str(portuale_binary), flag], capture_output=True, text=True, check=False
+    )
+    assert result.returncode == 0
+    assert result.stdout.startswith("portuale: a multicall binary")
+    assert "   emerge   " in result.stdout
+    assert "   ebuild   " in result.stdout
+
+
+def test_unrecognized_applet_fails_clearly(portuale_binary):
+    result = subprocess.run(
+        [str(portuale_binary), "frobnicate"], capture_output=True, text=True, check=False
+    )
     assert result.returncode != 0
-    assert "unrecognized applet" in result.stderr
+    assert 'unrecognized applet "frobnicate"' in result.stderr
 
 
 def test_ebuild_accepts_multiple_real_commands(ebuild_binary):

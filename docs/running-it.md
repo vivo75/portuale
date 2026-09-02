@@ -1790,3 +1790,22 @@ rust/target/release/portuale ebuild \
 ls "${DISTDIR}"
 # unzip60.tar.gz  unzip_6.0-31.debian.tar.xz
 ```
+
+Applet listing and per-applet help:
+
+```sh
+rust/target/release/portuale            # or `portuale --help` / `-h`
+# portuale: a multicall binary -- runs as `emerge` or `ebuild` ...
+# Applets:
+#    emerge   resolve dependencies and build, merge, or unmerge packages ...
+#    ebuild   run individual build phases (unpack/compile/install/...) ...
+rust/target/release/portuale frobnicate ; echo "exit=$?"
+# portuale: unrecognized applet "frobnicate" ... -- run `portuale --help` ...
+# exit=1
+
+ln -sf "$(realpath rust/target/release/portuale)" rust/target/release/emerge
+rust/target/release/emerge --help   # grouped tour: Actions / Dependency
+                                    # and target selection / Autounmask /
+                                    # Binary packages / Build scheduling /
+                                    # Output / Pilot-only
+```

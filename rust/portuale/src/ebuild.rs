@@ -86,30 +86,31 @@ fn print_help() {
     println!("ebuild (pilot stub): command-line interface to the Rust porting pilot");
     println!();
     println!("Usage:");
-    println!("   ebuild <ebuild file> <command> [command...]");
+    println!("   ebuild <ebuild file> <command> [command ...]");
     println!("   ebuild --help");
     println!();
-    println!("Still a pure dry-run stub: real phase execution is deferred (see");
-    println!("README.md), so no command below");
-    println!("actually does anything yet beyond being recognized and accepted.");
+    println!("Commands run for real: the actionmap phase chain (unpack, prepare,");
+    println!("configure, compile, test, install), the standalone phases (pretend,");
+    println!("setup, ...), and merge / qmerge / unmerge / package / config / info /");
+    println!("prerm / postrm. Any other real command (clean, digest, manifest, ...)");
+    println!("is recognized and accepted but still a no-op dry run.");
     println!();
     println!("Options:");
     println!("   --force              regenerate digests (with the digest/manifest commands)");
     println!("   --color y|n          enable or disable color output");
-    println!("   --debug              show debug output");
+    println!("   --debug              show debug output (real: sets PORTAGE_DEBUG, so bin/ebuild.sh runs set -x)");
     println!("   --ignore-default-opts  do not use the EBUILD_DEFAULT_OPTS environment variable");
     println!("   --skip-manifest      skip all manifest checks");
     println!(
-        "   --shell bash|brush   real shell backend for phase/hook execution (default: brush)"
+        "   --shell bash|brush   real shell backend for phase/hook execution (default: bash; pilot-only flag)"
     );
     println!("   -h, --help           show this message and exit");
     println!();
     println!(
         "Every other real ebuild option is recognized by name (see bin/ebuild) but \
          not implemented -- using one reports which option it is, instead of a \
-         generic error. Real commands (doebuild()'s own validcommands list) are \
-         recognized and accepted, still as a no-op. --shell is this pilot's own \
-         flag, not a real bin/ebuild option at all."
+         generic error. --shell is this pilot's own flag, not a real bin/ebuild \
+         option at all."
     );
     println!("See README.md for this pilot's current scope.");
 }

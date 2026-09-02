@@ -91,6 +91,11 @@ dispatching behavior based on `argv[0]` via symlinks/hardlinks pointing at
 a single executable. This is both a good minimal-Linux fit (one static
 binary, no duplicated code) and drop-in compatible with tooling that
 invokes `emerge`/`ebuild` by name directly. **Shipped**: `rust/portuale`.
+A bare `portuale` (or `portuale --help`/`-h`) lists the applets with a
+one-line description and exits 0; an unrecognized applet name still
+errors. `emerge --help` is a grouped tour of every action/option the
+pilot actually implements (`pretend.rs`'s `HELP_TEXT`, mirrored in
+`emerge_pretend_reference.py` and pinned by the contract suite).
 
 ## Test/benchmark harness architecture
 

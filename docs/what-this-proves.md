@@ -11791,3 +11791,46 @@ there is no Python-reference mirror. `FEATURES` and other incrementals
 stay out (the pilot models `FEATURES` via `feature_enabled`); no
 per-file `${VAR}` expand map. Standalone `ebuild`/`emerge --resume`
 carry an empty `package_env_vars`.
+
+### `emerge --help` rewrite + `portuale` applet listing (2026-09-02)
+
+The `emerge --help` / `-h` text was a curated subset written when
+`--pretend` was the only real slice — its first option line still read
+"`-p, --pretend   required: the only real merge calculation this pilot
+implements`" and its closing paragraph omitted ~40 shipped flags. It is
+now a grouped tour of the whole implemented surface: **Actions**
+(`--unmerge`/`--rage-clean`/`--depclean`/`--prune`/`--clean`/`--config`/
+`--deselect`/`--search`/`--info`/`--list-sets`/`--check-news`/`--regen`/
+`--metadata`/`--resume`), **Dependency and target selection** (the
+`--update`/`--deep`/`--newuse`/… family plus `--changed-*`, `--rebuild-if-*`,
+`--complete-graph*`, `--dynamic-deps`, `--backtrack`, …), **Autounmask**,
+**Binary packages**, **Build scheduling** (`-j`/`--load-average`/`--ask`/
+`--keep-going`), **Output**, and **Pilot-only** (`--json`/`--shell`). It
+is still not a port of real emerge's `_emerge/help.py` (157 lines of
+colourised syntax for its full ~130-flag surface). Kept byte-identical
+between `pretend.rs`'s `HELP_TEXT` const and
+`emerge_pretend_reference.py`'s `_HELP_TEXT`; the contract suite pins it
+in full (`test_help_prints_a_pilot_specific_summary_not_real_emerges_own`),
+and the two were diffed empirically.
+
+The stale tail of the "recognized but not implemented" error — a
+hand-maintained "only `--pretend/-p, …` are implemented so far" list
+duplicated across the Rust binary, the Python reference, and four
+contract assertions — is replaced by a fixed pointer: `… is a real
+emerge {option,action}, but is not implemented in this pilot -- run
+"emerge --help" for the options and actions that are.`
+
+The multicall binary gained its own help: a bare `portuale` (no symlink,
+no applet name) — and `portuale -h` / `--help` — prints a busybox-style
+applet listing (`emerge` / `ebuild`, each with a < 120-char description)
+and exits 0; an unrecognized applet name still errors (exit 1) and now
+names the bad token. `test_portuale.py` covers all three
+(`test_no_applet_prints_the_applet_list`,
+`test_help_flag_prints_the_applet_list`,
+`test_unrecognized_applet_fails_clearly`).
+
+`ebuild --help` was corrected in the same pass: it claimed "Still a pure
+dry-run stub: real phase execution is deferred" (false since task
+#54/#55 — the actionmap phase chain, the standalone phases, and
+`merge`/`qmerge`/`unmerge`/`package`/`config`/`info`/`prerm`/`postrm` all
+run for real) and "`--shell … default: brush`" (the default is `bash`).

@@ -603,6 +603,17 @@ dev/test context — see also the `chown` note below).
 
 ### H. Misc / cosmetic
 
+- ~~`emerge --help` was a stale curated subset ("only `--pretend` ...
+  implemented"); the `ebuild --help` claimed "pure dry-run stub"; the
+  `portuale` multicall had no `--help` / applet listing.~~ **Done
+  2026-09-02** — `emerge --help` rewritten as a grouped tour of the whole
+  implemented surface (Rust `HELP_TEXT` ⇄ Python `_HELP_TEXT`, pinned in
+  full); the "recognized but not implemented" error's hand-maintained
+  "implemented so far" list replaced with a fixed `run "emerge --help"`
+  pointer; `portuale` / `portuale --help` now lists the applets and exits
+  0; `ebuild --help` corrected. See `what-this-proves.md`, "`emerge
+  --help` rewrite + `portuale` applet listing".
+
 - ~~`chown` / privilege-preserving `chmod` not reproduced; directory
   merge order sorted for determinism, not real `os.listdir()` order
   (cosmetic).~~ **Assessed — largely a deliberate design choice, one

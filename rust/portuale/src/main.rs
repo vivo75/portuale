@@ -5,13 +5,14 @@
 // once and creates `emerge` / `ebuild` symlinks (or hardlinks) pointing
 // at it; argv[0] tells it which applet to run.
 //
-// `emerge` implements one real slice: `--pretend <category/package>` (see
-// pretend.rs). Everything else -- real merges, phase execution via
-// `ebuild`, and anything about `emerge` beyond that one slice -- is still
-// a dry-run/read-only stub (see docs/agent-context.md, "Scope of the first port").
-// Both applets recognize their real CLI surface by name (see
-// emerge_options.rs/ebuild_options.rs) even where the underlying
-// behavior isn't implemented.
+// Both applets now do real work: `emerge` resolves dependencies and
+// builds / merges / unmerges packages (see pretend.rs and its
+// `emerge_*` siblings), `ebuild` runs real phase chains and the real
+// merge / unmerge / package steps (see ebuild.rs). Both still recognize
+// their whole real CLI surface by name (see emerge_options.rs /
+// ebuild_options.rs) even where a given flag or action isn't
+// implemented, reporting which one it is rather than a generic error.
+// `portuale --help` (or a bare `portuale`) lists the applets.
 
 mod binpkg;
 mod color;
@@ -54,6 +55,31 @@ fn basename(path: &str) -> &str {
     path.rsplit(['/', '\\']).next().unwrap_or(path)
 }
 
+/// `portuale --help` / `portuale` with no applet: one line per applet,
+/// name plus a short (< 120 char) description. busybox lists its applets
+/// the same way. This dispatch shim has no upstream counterpart, so the
+/// text is not a port of anything.
+fn print_applets() {
+    println!(
+        "portuale: a multicall binary -- runs as `emerge` or `ebuild` depending on how it is invoked"
+    );
+    println!();
+    println!("Usage:");
+    println!("   portuale <applet> [args ...]   run an applet by name");
+    println!("   <applet> [args ...]            run via an 'emerge' / 'ebuild' symlink beside the binary");
+    println!("   portuale --help                show this message");
+    println!();
+    println!("Applets:");
+    println!(
+        "   emerge   resolve dependencies and build, merge, or unmerge packages -- the package-manager front end"
+    );
+    println!(
+        "   ebuild   run individual build phases (unpack/compile/install/merge/unmerge/...) on one ebuild file"
+    );
+    println!();
+    println!("Run `portuale <applet> --help` for that applet's own options.");
+}
+
 fn run_emerge(args: &[String]) -> ExitCode {
     pretend::run(args)
 }
@@ -81,13 +107,20 @@ fn main() -> ExitCode {
         return run(applet, &argv[1..]);
     }
 
-    match argv.get(1).and_then(|a| Applet::from_name(a)) {
-        Some(applet) => run(applet, &argv[2..]),
-        None => {
+    let sub = argv.get(1).map(String::as_str);
+    if let Some(applet) = sub.and_then(Applet::from_name) {
+        return run(applet, &argv[2..]);
+    }
+    match sub {
+        None | Some("-h") | Some("--help") => {
+            print_applets();
+            ExitCode::SUCCESS
+        }
+        Some(other) => {
             eprintln!(
-                "portuale: unrecognized applet (invoked as {invoked_as:?}); \
+                "portuale: unrecognized applet {other:?} (invoked as {invoked_as:?}); \
                  expected a symlink named 'emerge' or 'ebuild', or \
-                 `portuale <emerge|ebuild> ...`"
+                 `portuale <emerge|ebuild> ...` -- run `portuale --help` for the applet list"
             );
             ExitCode::from(1)
         }
