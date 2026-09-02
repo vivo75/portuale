@@ -7631,6 +7631,14 @@ pub struct GraphEntry {
     pub remote_binary: bool,
 }
 
+/// `(target cp, owner cp) -> (has_hard, has_soft)`: for each dependency
+/// edge the BFS walked, whether it was ever pulled as an unsatisfied
+/// build-time-only dep (`QueueItem::buildtime_hard`) and/or via any
+/// softer route. An edge is unbreakable in a cycle only when
+/// `(true, false)`. Built in `resolve_pretend_graph`, consumed by
+/// `topological_merge_order` (and Commit 2's cycle detection).
+type EdgeKindMap = HashMap<((String, String), (String, String)), (bool, bool)>;
+
 /// Put `entries` in real portage's dependency-first *merge* order.
 ///
 /// Real portage's `mylist` (`Display.__call__`'s input) is a genuine
@@ -7647,18 +7655,30 @@ pub struct GraphEntry {
 /// two packages with no dependency relationship keep their discovery
 /// order, and a dependency always precedes the packages that pull it in.
 ///
-/// A genuine dependency **cycle** (real portage's `Scheduler` breaks
-/// these with slot-operator/priority heuristics this pilot doesn't
-/// reproduce) is left in discovery order: when no unplaced entry has all
-/// its in-set dependencies placed, the earliest still-unplaced entry is
-/// emitted anyway and the walk continues.
+/// A genuine dependency **cycle** is broken the way real portage's
+/// `_serialize_tasks` does -- at a run-time edge. When no unplaced entry
+/// has all its in-set dependencies placed, the walk prefers an entry
+/// whose every still-unplaced dependency is a *soft* (run-time /
+/// optional) edge (`edge_kind_map` says `!has_hard || has_soft`); real
+/// portage's `DepPrioritySatisfiedRange` `ignore_priority` scan can drop
+/// an unsatisfied run-time edge but never an unsatisfied build-time one.
+/// Only if every remaining entry still has an unplaced *hard* build-time
+/// dependency (an unbreakable cycle -- Commit 2's `* Error: circular
+/// dependencies:`) does it fall back to emitting the earliest unplaced
+/// entry in discovery order.
+///
+/// `edge_kind_map` is keyed `(target cp, owner cp) -> (has_hard,
+/// has_soft)`; see its build site in `resolve_pretend_graph`.
 ///
 /// `--json`'s `merge_order` field and `emerge --buildpkgonly`'s build
 /// loop both read this order directly; `--tree` re-derives its own
 /// nesting from `required_by` and is unaffected by the Vec order (see
 /// `pretend.rs::print_tree`).
-fn topological_merge_order(entries: Vec<GraphEntry>) -> Vec<GraphEntry> {
-    topological_merge_order_impl(entries)
+fn topological_merge_order(
+    entries: Vec<GraphEntry>,
+    edge_kind_map: &EdgeKindMap,
+) -> Vec<GraphEntry> {
+    topological_merge_order_impl(entries, edge_kind_map)
 }
 
 /// Real depgraph's `_slot_operator_trigger_reinstalls` +
@@ -7995,7 +8015,10 @@ fn rebuild_if_entries(
     out
 }
 
-fn topological_merge_order_impl(entries: Vec<GraphEntry>) -> Vec<GraphEntry> {
+fn topological_merge_order_impl(
+    entries: Vec<GraphEntry>,
+    edge_kind_map: &EdgeKindMap,
+) -> Vec<GraphEntry> {
     let n = entries.len();
     if n < 2 {
         return entries;
@@ -8011,13 +8034,26 @@ fn topological_merge_order_impl(entries: Vec<GraphEntry>) -> Vec<GraphEntry> {
     }
     // `requires[i]` = the entries `i` depends on, i.e. every `j` whose
     // `required_by` names `i`'s own cp. `j` must be emitted before `i`.
+    // `requires_hard[i]` holds the same `j`s but only for edges that are
+    // an unsatisfied build-time dep with no run-time alternative
+    // (`edge_kind_map[(j cp, i cp)] == (true, false)`) -- the edges real
+    // portage's `ignore_priority` scan can never drop.
     let mut requires: Vec<Vec<usize>> = vec![Vec::new(); n];
+    let mut requires_hard: Vec<Vec<usize>> = vec![Vec::new(); n];
     for (j, e) in entries.iter().enumerate() {
+        let target_cp = (e.category.clone(), e.package.clone());
         for owner in &e.required_by {
             if let Some(owner_indices) = cp_indices.get(&(owner.0.as_str(), owner.1.as_str())) {
+                let hard = matches!(
+                    edge_kind_map.get(&(target_cp.clone(), owner.clone())),
+                    Some((true, false))
+                );
                 for &i in owner_indices {
                     if i != j {
                         requires[i].push(j);
+                        if hard {
+                            requires_hard[i].push(j);
+                        }
                     }
                 }
             }
@@ -8028,6 +8064,12 @@ fn topological_merge_order_impl(entries: Vec<GraphEntry>) -> Vec<GraphEntry> {
     while order.len() < n {
         let next = (0..n)
             .find(|&i| !placed[i] && requires[i].iter().all(|&d| placed[d]))
+            // Cycle: no entry is fully satisfied. Break it at a run-time
+            // edge -- pick an entry whose every *unplaced* dependency is a
+            // soft edge (real `_serialize_tasks`' `ignore_priority`).
+            .or_else(|| (0..n).find(|&i| !placed[i] && requires_hard[i].iter().all(|&d| placed[d])))
+            // Unbreakable cycle (all remaining have an unplaced hard dep):
+            // emit the earliest unplaced entry and continue.
             .unwrap_or_else(|| (0..n).find(|&i| !placed[i]).expect("n entries unplaced"));
         placed[next] = true;
         order.push(next);
@@ -8562,7 +8604,24 @@ impl Deep {
 /// -- see `suggested_parent_use_candidate`'s own doc comment) to recover
 /// the original conditional form after evaluation has already replaced
 /// it in the queued atom text itself.
-type QueueItem = (String, u32, Option<(String, String)>, Option<String>);
+struct QueueItem {
+    atom: String,
+    depth: u32,
+    owner: Option<(String, String)>,
+    unevaluated: Option<String>,
+    /// The edge from `owner` to this atom's `cat/pkg` is an unsatisfied
+    /// **build-time** dep (`DEPEND`/`BDEPEND`) with no run-time
+    /// alternative -- real `DepPriority` `buildtime && !runtime`. Such an
+    /// edge is unbreakable in `topological_merge_order`'s cycle
+    /// fallback, and a cycle made entirely of them is the fatal
+    /// `* Error: circular dependencies:` real portage reports
+    /// (`_serialize_tasks`'s `ignore_priority` scan can drop an
+    /// unsatisfied run-time edge but never an unsatisfied build-time
+    /// one). `false` for a top-level atom, the `--deep` walk (only ever
+    /// reaches already-satisfied deps), and anything with a run-time
+    /// alternative.
+    buildtime_hard: bool,
+}
 
 /// Backtracking: `(cat, pkg)` targeted by an atom -> every puller this
 /// pass, as `(parent_cat, parent_pkg, parent_version, atom_text)`. A
@@ -8593,6 +8652,7 @@ type SlotPullers = HashMap<(String, String), Vec<(String, String, String, String
 /// treated the same "can't tell, so pass it through as-is" way an
 /// unparseable-at-all token already silently falls through the
 /// `parse_atom` check below) is queued unevaluated rather than dropped.
+#[allow(clippy::too_many_arguments)]
 fn enqueue_flat_deps(
     flat_deps: Vec<String>,
     key: &(String, String),
@@ -8601,11 +8661,20 @@ fn enqueue_flat_deps(
     parent_use: &HashSet<String>,
     queue: &mut VecDeque<QueueItem>,
     pending_blockers: &mut Vec<PendingBlocker>,
+    // The same dependency string re-flattened over just the build-time
+    // keys (`DEPEND`/`BDEPEND`) and just the run-time keys
+    // (`RDEPEND`/`PDEPEND`/`IDEPEND`) -- an atom present in the first and
+    // absent from the second is a `QueueItem::buildtime_hard` edge. `&[]`
+    // (all edges soft) at the `--with-test-deps` call site: a `test?`
+    // dep is `DepPriority.optional`, never a hard cycle contributor.
+    buildtime_atoms: &HashSet<String>,
+    runtime_atoms: &HashSet<String>,
 ) {
     for tok in flat_deps {
         if tok == "||" {
             continue;
         }
+        let buildtime_hard = buildtime_atoms.contains(&tok) && !runtime_atoms.contains(&tok);
         // `evaluate_atom_conditionals` returns `Some(...)` even when
         // nothing changed (the common case: no conditional use-deps at
         // all) -- only `None` on a genuinely unparseable atom. So
@@ -8631,7 +8700,13 @@ fn enqueue_flat_deps(
                 continue;
             }
         }
-        queue.push_back((tok, depth + 1, Some(key.clone()), unevaluated));
+        queue.push_back(QueueItem {
+            atom: tok,
+            depth: depth + 1,
+            owner: Some(key.clone()),
+            unevaluated,
+            buildtime_hard,
+        });
     }
 }
 
@@ -9237,7 +9312,13 @@ pub fn resolve_pretend_graph(
             // itself (no parent to ever flip a flag on), matching real
             // portage, which never suggests a parent-flag fix for a
             // top-level atom either.
-            queue.push_back((a.clone(), 0, None, None));
+            queue.push_back(QueueItem {
+                atom: a.clone(),
+                depth: 0,
+                owner: None,
+                unevaluated: None,
+                buildtime_hard: false,
+            });
         }
 
         let mut pending_blockers: Vec<PendingBlocker> = Vec::new();
@@ -9262,8 +9343,20 @@ pub fn resolve_pretend_graph(
         // "accumulate now, merge once the whole graph is known" shape.
         let mut required_by_map: HashMap<(String, String), HashSet<(String, String)>> =
             HashMap::new();
+        // See `EdgeKindMap`'s own doc comment. An edge counts as
+        // unbreakable only when `has_hard && !has_soft` -- one run-time or
+        // optional route makes the whole edge breakable, matching real
+        // portage's per-edge `DepPriority`.
+        let mut edge_kind_map: EdgeKindMap = HashMap::new();
 
-        while let Some((current_atom, depth, owner, unevaluated_atom)) = queue.pop_front() {
+        while let Some(QueueItem {
+            atom: current_atom,
+            depth,
+            owner,
+            unevaluated: unevaluated_atom,
+            buildtime_hard,
+        }) = queue.pop_front()
+        {
             let Some(atom) = portage_dep::parse_atom(&current_atom) else {
                 continue;
             };
@@ -9292,7 +9385,15 @@ pub fn resolve_pretend_graph(
                 required_by_map
                     .entry(key.clone())
                     .or_default()
-                    .insert(owner);
+                    .insert(owner.clone());
+                let kinds = edge_kind_map
+                    .entry((key.clone(), owner))
+                    .or_insert((false, false));
+                if buildtime_hard {
+                    kinds.0 = true;
+                } else {
+                    kinds.1 = true;
+                }
             }
             if !visited_atoms.insert(current_atom.clone()) {
                 continue;
@@ -10368,6 +10469,34 @@ pub fn resolve_pretend_graph(
                 }
             }
             let tokens: Vec<String> = depstr.split_whitespace().map(String::from).collect();
+
+            // Per-edge build-time/run-time classification for the
+            // merge-order sort + circular-dependency detection (real
+            // `DepPriority`): re-flatten just the build-time keys and just
+            // the run-time keys, so `enqueue_flat_deps` can tag an atom
+            // present in the first and absent from the second as
+            // `buildtime_hard`. A plain (non-disjunctive) `use_reduce_flat`
+            // is enough here -- the classification only needs which key an
+            // atom came from, and a `||` group's branch choice matches the
+            // main flatten below in every case without one.
+            let flatten_keys = |keys: &[&str]| -> HashSet<String> {
+                let joined: String = keys
+                    .iter()
+                    .filter_map(|k| metadata.get(*k))
+                    .map(String::as_str)
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                let toks: Vec<String> = joined.split_whitespace().map(String::from).collect();
+                portage_use_reduce::use_reduce_flat(
+                    &toks,
+                    &use_flags,
+                    portage_use_reduce::MatchMode::Normal,
+                )
+                .map(|v| v.into_iter().filter(|t| t != "||").collect())
+                .unwrap_or_default()
+            };
+            let buildtime_atoms = flatten_keys(&["DEPEND", "BDEPEND"]);
+            let runtime_atoms = flatten_keys(&["RDEPEND", "PDEPEND", "IDEPEND"]);
             // Real `--root-deps` branch-selection feed-in (see
             // `root_deps_satisfied_atoms`'s own doc comment): a `||` group
             // with no branch tree-visible still needs a branch selected
@@ -10486,6 +10615,8 @@ pub fn resolve_pretend_graph(
                 &use_flags,
                 &mut queue,
                 &mut pending_blockers,
+                &buildtime_atoms,
+                &runtime_atoms,
             );
 
             // --with-test-deps: additive on top of the normal deps just
@@ -10529,6 +10660,10 @@ pub fn resolve_pretend_graph(
                             &test_uselist,
                             &mut queue,
                             &mut pending_blockers,
+                            // A `test?` dep is `DepPriority.optional` --
+                            // never a hard cycle contributor.
+                            &HashSet::new(),
+                            &HashSet::new(),
                         );
                     }
                 }
@@ -10755,7 +10890,7 @@ pub fn resolve_pretend_graph(
         // its dependencies are ever queued). Re-sort into merge order now
         // that every `required_by` edge is known -- see
         // `topological_merge_order`.
-        entries = topological_merge_order(entries);
+        entries = topological_merge_order(entries, &edge_kind_map);
 
         // Real depgraph.py:5706-5717 -- see GraphResult::
         // buildpkgonly_deps_unsatisfied's own doc comment.
@@ -11043,7 +11178,17 @@ fn enqueue_dependencies(
         // `--deep` doesn't evaluate conditional use-deps against its own
         // USE either) -- so there's never an "unevaluated" form to
         // preserve here.
-        queue.push_back((tok, child_depth, Some(owner_key.clone()), None));
+        // The `--deep` walk only ever reaches an already-installed
+        // package's deps, which are satisfied edges -- never a `hard`
+        // build-time cycle contributor (real `_ignore_runtime` would drop
+        // them anyway).
+        queue.push_back(QueueItem {
+            atom: tok,
+            depth: child_depth,
+            owner: Some(owner_key.clone()),
+            unevaluated: None,
+            buildtime_hard: false,
+        });
     }
 }
 
@@ -16910,6 +17055,59 @@ mod tests {
         let entries = graph("dev-libs/cycle-a");
         let names: Vec<&str> = entries.iter().map(|(n, _)| n.as_str()).collect();
         assert_eq!(names, vec!["dev-libs/cycle-a", "dev-libs/cycle-b"]);
+    }
+
+    #[test]
+    fn topological_order_breaks_a_cycle_at_its_run_time_edge() {
+        // Two packages in a cycle: a's DEPEND (build-time, no run-time
+        // alternative -- a hard edge) names b, b's RDEPEND (a soft edge)
+        // names a. Real portage's `ignore_priority` scan drops the
+        // unsatisfied run-time edge, so b (which a must build against)
+        // is merged first regardless of discovery order.
+        let mut a = graph_entry("dev-libs", "cyc-a", "1.0");
+        let mut b = graph_entry("dev-libs", "cyc-b", "1.0");
+        a.required_by = vec![("dev-libs".to_string(), "cyc-b".to_string())];
+        b.required_by = vec![("dev-libs".to_string(), "cyc-a".to_string())];
+        let mut edge_kind_map: EdgeKindMap = HashMap::new();
+        // a -> b is build-time-only (hard); b -> a is run-time (soft).
+        edge_kind_map.insert(
+            (
+                ("dev-libs".to_string(), "cyc-b".to_string()),
+                ("dev-libs".to_string(), "cyc-a".to_string()),
+            ),
+            (true, false),
+        );
+        edge_kind_map.insert(
+            (
+                ("dev-libs".to_string(), "cyc-a".to_string()),
+                ("dev-libs".to_string(), "cyc-b".to_string()),
+            ),
+            (false, true),
+        );
+        let ordered = topological_merge_order_impl(vec![a, b], &edge_kind_map);
+        let names: Vec<&str> = ordered.iter().map(|e| e.package.as_str()).collect();
+        assert_eq!(names, vec!["cyc-b", "cyc-a"]);
+
+        // A cycle made entirely of hard build-time edges can't be
+        // broken -- the walk falls back to discovery order (Commit 2
+        // renders the `* Error: circular dependencies:` block for it).
+        let mut a = graph_entry("dev-libs", "cyc-a", "1.0");
+        let mut b = graph_entry("dev-libs", "cyc-b", "1.0");
+        a.required_by = vec![("dev-libs".to_string(), "cyc-b".to_string())];
+        b.required_by = vec![("dev-libs".to_string(), "cyc-a".to_string())];
+        let mut hard_map: EdgeKindMap = HashMap::new();
+        for (t, o) in [("cyc-b", "cyc-a"), ("cyc-a", "cyc-b")] {
+            hard_map.insert(
+                (
+                    ("dev-libs".to_string(), t.to_string()),
+                    ("dev-libs".to_string(), o.to_string()),
+                ),
+                (true, false),
+            );
+        }
+        let ordered = topological_merge_order_impl(vec![a, b], &hard_map);
+        let names: Vec<&str> = ordered.iter().map(|e| e.package.as_str()).collect();
+        assert_eq!(names, vec!["cyc-a", "cyc-b"]);
     }
 
     #[test]

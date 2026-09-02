@@ -5744,7 +5744,17 @@ def resolve_blockers(root, pending, entries):
     return conflicts
 
 
-def _enqueue_flat_deps(flat_deps, key, version, depth, parent_use, queue, pending_blockers):
+def _enqueue_flat_deps(
+    flat_deps,
+    key,
+    version,
+    depth,
+    parent_use,
+    queue,
+    pending_blockers,
+    buildtime_atoms=frozenset(),
+    runtime_atoms=frozenset(),
+):
     """Queues every atom in `flat_deps` (a use_reduce(flat=True) result,
     with or without `subset`) onto `queue` at `depth + 1`, owned by
     `key`/`version`, splitting off a blocker atom into `pending_blockers`
@@ -5767,10 +5777,19 @@ def _enqueue_flat_deps(flat_deps, key, version, depth, parent_use, queue, pendin
     evaluate_conditionals is a safe no-op for an atom with no
     conditional use-deps at all (real Atom.evaluate_conditionals's own
     "if not (self.use and self.use.conditional): return self" guard).
+    `buildtime_atoms` / `runtime_atoms` are the same dependency string
+    re-flattened over just the build-time keys (DEPEND/BDEPEND) and just
+    the run-time keys (RDEPEND/PDEPEND/IDEPEND): an atom present in the
+    first and absent from the second is a hard (unbreakable-in-a-cycle)
+    edge -- real DepPriority `buildtime and not runtime`. Both default
+    empty (all edges soft) at the --with-test-deps call site: a test? dep
+    is DepPriority.optional, never a hard cycle contributor.
+
     Mirrors portage-repo/src/lib.rs's enqueue_flat_deps exactly."""
     for tok in flat_deps:
         if tok == "||":
             continue
+        buildtime_hard = tok in buildtime_atoms and tok not in runtime_atoms
         unevaluated = None
         dep_atom = _parse_atom(tok)
         if dep_atom is not None:
@@ -5801,7 +5820,7 @@ def _enqueue_flat_deps(flat_deps, key, version, depth, parent_use, queue, pendin
                 }
             )
             continue
-        queue.append((tok, depth + 1, key, unevaluated))
+        queue.append((tok, depth + 1, key, unevaluated, buildtime_hard))
 
 
 def _autounmask_dep_chain(owner, current_atom, top_level, entries):
@@ -6076,7 +6095,7 @@ def _rebuild_if_entries(
     return out
 
 
-def _topological_merge_order(entries):
+def _topological_merge_order(entries, edge_kind_map=None):
     """Put `entries` in real portage's dependency-first *merge* order.
 
     Real portage's `mylist` is a genuine topological merge schedule (its
@@ -6092,16 +6111,23 @@ def _topological_merge_order(entries):
     packages with no dependency relationship keep their discovery order;
     a dependency always precedes the packages that pull it in.
 
-    A genuine dependency cycle (real portage's Scheduler breaks these
-    with priority heuristics this reference doesn't reproduce) is left in
-    discovery order: when no unplaced entry has all its in-set
-    dependencies placed, the earliest still-unplaced one is emitted
-    anyway. Mirrors portage-repo/src/lib.rs's topological_merge_order
-    exactly.
+    A genuine dependency cycle is broken the way real portage's
+    _serialize_tasks does -- at a run-time edge. When no unplaced entry
+    has all its dependencies placed, the walk prefers an entry whose
+    every still-unplaced dependency is a *soft* (run-time / optional)
+    edge (edge_kind_map[(target cp, owner cp)] != [True, False]); real
+    portage's DepPrioritySatisfiedRange ignore_priority scan can drop an
+    unsatisfied run-time edge but never an unsatisfied build-time one.
+    Only if every remaining entry still has an unplaced *hard*
+    build-time dependency (an unbreakable cycle -- Commit 2's
+    `* Error: circular dependencies:`) does it fall back to the earliest
+    unplaced entry in discovery order. Mirrors portage-repo/src/lib.rs's
+    topological_merge_order exactly.
     """
     n = len(entries)
     if n < 2:
         return entries
+    edge_kind_map = edge_kind_map or {}
     # (category, package) -> every entry index with that cp (a multi-slot
     # package has one entry per resolved slot).
     cp_indices = {}
@@ -6109,12 +6135,22 @@ def _topological_merge_order(entries):
         cp_indices.setdefault((e[0], e[1]), []).append(i)
     # requires[i] = the entries i depends on, i.e. every j whose
     # required_by (tuple index 6) names i's own cp. j precedes i.
+    # requires_hard[i] holds the same j's but only for edges that are an
+    # unsatisfied build-time dep with no run-time alternative
+    # (edge_kind_map[(j cp, i cp)] == [True, False]).
     requires = [set() for _ in range(n)]
+    requires_hard = [set() for _ in range(n)]
     for j, e in enumerate(entries):
+        target_cp = (e[0], e[1])
         for owner in e[6]:
-            for i in cp_indices.get(tuple(owner), ()):
+            owner_cp = tuple(owner)
+            kinds = edge_kind_map.get((target_cp, owner_cp))
+            hard = bool(kinds) and kinds[0] and not kinds[1]
+            for i in cp_indices.get(owner_cp, ()):
                 if i != j:
                     requires[i].add(j)
+                    if hard:
+                        requires_hard[i].add(j)
     placed = [False] * n
     order = []
     while len(order) < n:
@@ -6127,6 +6163,18 @@ def _topological_merge_order(entries):
             None,
         )
         if nxt is None:
+            # Cycle: break it at a run-time edge -- pick an entry whose
+            # every unplaced dependency is a soft edge.
+            nxt = next(
+                (
+                    i
+                    for i in range(n)
+                    if not placed[i] and all(placed[d] for d in requires_hard[i])
+                ),
+                None,
+            )
+        if nxt is None:
+            # Unbreakable cycle: emit the earliest unplaced entry.
             nxt = next(i for i in range(n) if not placed[i])
         placed[nxt] = True
         order.append(nxt)
@@ -6423,7 +6471,7 @@ def resolve_pretend_graph(
         # required_by_map below, for each entry's own required_by.
         # A top-level atom has no "unevaluated" form distinct from itself (no
         # parent to ever flip a flag on).
-        queue = deque((a, 0, None, None) for a in atoms)
+        queue = deque((a, 0, None, None, False) for a in atoms)
         pending_blockers = []
         # Top-level atoms matched by package.provided -- see
         # portage-repo/src/lib.rs's GraphResult::pprovided_atoms.
@@ -6447,6 +6495,14 @@ def resolve_pretend_graph(
         # Pilot-specific, no real portage equivalent -- see run()'s own
         # --json handling for why it exists at all.
         required_by_map = {}
+        # (target cp, owner cp) -> [has_hard, has_soft]: whether the owner
+        # ever pulled this target via an unsatisfied build-time-only edge
+        # (queue item's buildtime_hard) and/or via any softer path. An
+        # edge is unbreakable in a cycle only when [True, False] -- one
+        # run-time/optional route makes the whole edge breakable, matching
+        # real portage's per-edge DepPriority. Consumed by
+        # _topological_merge_order. Mirrors portage-repo/src/lib.rs.
+        edge_kind_map = {}
         # Backtracking: every atom text (bare or constrained) that targeted
         # a given `cat/pkg` this pass. On a solvable slot conflict the whole
         # set for the conflicted package becomes its `slot_constraints`
@@ -6460,7 +6516,7 @@ def resolve_pretend_graph(
         slot_pullers = {}
 
         while queue:
-            current_atom_str, depth, owner, unevaluated_atom = queue.popleft()
+            current_atom_str, depth, owner, unevaluated_atom, buildtime_hard = queue.popleft()
             atom = _parse_atom(current_atom_str)
             if atom is None:
                 continue
@@ -6482,6 +6538,11 @@ def resolve_pretend_graph(
             key = (category, package)
             if owner is not None:
                 required_by_map.setdefault(key, set()).add(owner)
+                kinds = edge_kind_map.setdefault((key, owner), [False, False])
+                if buildtime_hard:
+                    kinds[0] = True
+                else:
+                    kinds[1] = True
             if current_atom_str in visited_atoms:
                 continue
             visited_atoms.add(current_atom_str)
@@ -7271,6 +7332,30 @@ def resolve_pretend_graph(
                 for k in ("DEPEND", "RDEPEND", "BDEPEND", "PDEPEND", "IDEPEND")
                 if metadata.get(k)
             )
+
+            # Per-edge build-time/run-time classification for the
+            # merge-order sort + circular-dependency detection (real
+            # DepPriority): re-flatten just the build-time keys and just
+            # the run-time keys, so _enqueue_flat_deps can tag an atom
+            # present in the first and absent from the second as a hard
+            # (unbreakable-in-a-cycle) edge. A plain use_reduce(flat=True)
+            # is enough -- the classification only needs which key an atom
+            # came from. Mirrors portage-repo/src/lib.rs's flatten_keys.
+            def _flatten_keys(keys):
+                joined = " ".join(metadata[k] for k in keys if metadata.get(k))
+                if not joined:
+                    return frozenset()
+                try:
+                    return frozenset(
+                        t
+                        for t in use_reduce(joined, uselist=use_flags, flat=True)
+                        if t != "||"
+                    )
+                except InvalidDependString:
+                    return frozenset()
+
+            buildtime_atoms = _flatten_keys(("DEPEND", "BDEPEND"))
+            runtime_atoms = _flatten_keys(("RDEPEND", "PDEPEND", "IDEPEND"))
             # --root-deps branch-selection feed-in (see
             # _root_deps_satisfied_atoms's own docstring): a "||" group with
             # no branch tree-visible still needs a branch selected here too,
@@ -7358,7 +7443,17 @@ def resolve_pretend_graph(
                 if dep_atom is not None and not dep_atom.blocker:
                     dc, dp = dep_atom.cp.split("/", 1)
                     slot_pullers.setdefault((dc, dp), []).append((key[0], key[1], version, tok))
-            _enqueue_flat_deps(flat_deps, key, version, depth, use_flags, queue, pending_blockers)
+            _enqueue_flat_deps(
+                flat_deps,
+                key,
+                version,
+                depth,
+                use_flags,
+                queue,
+                pending_blockers,
+                buildtime_atoms,
+                runtime_atoms,
+            )
 
             # --with-test-deps: additive on top of the normal deps just
             # queued above, never a replacement for them -- see this
@@ -7378,6 +7473,9 @@ def resolve_pretend_graph(
                         )
                     except InvalidDependString:
                         test_deps = []
+                    # buildtime_atoms/runtime_atoms left empty (all edges
+                    # soft): a test? dep is DepPriority.optional, never a
+                    # hard cycle contributor.
                     _enqueue_flat_deps(
                         test_deps, key, version, depth, use_flags | {"test"}, queue, pending_blockers
                     )
@@ -7455,6 +7553,7 @@ def resolve_pretend_graph(
             autounmask_mask_changes,
             slot_want,
             slot_pullers,
+            edge_kind_map,
         )
 
     def _nvc_count(rows):
@@ -7473,6 +7572,7 @@ def resolve_pretend_graph(
             autounmask_mask_changes,
             slot_want,
             slot_pullers,
+            edge_kind_map,
         ) = _graph_pass()
 
         if required_use_violations:
@@ -7607,7 +7707,7 @@ def resolve_pretend_graph(
     # dependencies are ever queued). Re-sort into merge order now that
     # every required_by edge is known. Mirrors portage-repo/src/lib.rs's
     # topological_merge_order exactly.
-    entries = _topological_merge_order(entries)
+    entries = _topological_merge_order(entries, edge_kind_map)
 
     # Real depgraph.py:5706-5717 -- see the Rust side's own
     # GraphResult::buildpkgonly_deps_unsatisfied doc comment.
@@ -7859,7 +7959,12 @@ def _enqueue_dependencies(
         # --deep doesn't evaluate conditional use-deps against its own
         # USE either) -- so there's never an "unevaluated" form to
         # preserve here.
-        queue.append((tok, child_depth, owner_key, None))
+        #
+        # buildtime_hard is always False on this path: the --deep walk
+        # only ever reaches an already-installed package's deps, which are
+        # satisfied edges -- never a hard build-time cycle contributor
+        # (mirrors portage-repo/src/lib.rs's enqueue_dependencies).
+        queue.append((tok, child_depth, owner_key, None, False))
 
 
 def _parse_atom(atom_str):
