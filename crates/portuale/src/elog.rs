@@ -1223,6 +1223,26 @@ mod tests {
     }
 
     #[test]
+    fn module_classes_honours_the_per_module_override() {
+        // `save_summary:log,warn,error,qa` (the default token) overrides
+        // the bare PORTAGE_ELOG_CLASSES for that module only.
+        temp_env(
+            &[(
+                "PORTAGE_ELOG_SYSTEM",
+                Some("save_summary:log,warn,error,qa echo"),
+            )],
+            || {
+                let sc = module_classes("save_summary");
+                assert!(sc.contains("QA"));
+                assert!(sc.contains("LOG"));
+                let ec = module_classes("echo");
+                assert!(!ec.contains("QA"));
+                assert!(ec.contains("WARN"));
+            },
+        );
+    }
+
+    #[test]
     fn combine_logentries_matches_portage_combine_shape() {
         let msgs = [
             ElogMessage {
@@ -1252,5 +1272,151 @@ mod tests {
             "LOG: install\na\nb\nWARN: install\nc\nWARN: postinst\nd\n"
         );
         assert_eq!(combine_logentries(&[]), "");
+    }
+
+    #[test]
+    fn save_and_save_summary_write_the_expected_files() {
+        let t = tmpdir();
+        let logs = t.join("logs");
+        temp_env(
+            &[
+                (
+                    "PORTAGE_ELOG_SYSTEM",
+                    Some("save save_summary:log,warn,error,qa echo"),
+                ),
+                ("PORTAGE_ELOG_CLASSES", Some("log warn error")),
+            ],
+            || {
+                let msgs = [
+                    ElogMessage {
+                        phase: "install".to_string(),
+                        level: "LOG".to_string(),
+                        text: "hello".to_string(),
+                    },
+                    ElogMessage {
+                        phase: "install".to_string(),
+                        level: "QA".to_string(),
+                        text: "a qa note".to_string(),
+                    },
+                ];
+                let written =
+                    save_modules_process(&logs, "dev-libs/foo-1.0", &msgs, false).unwrap();
+                assert_eq!(written.len(), 2);
+
+                // save: one <cat>:<pf>:<stamp>.log, `fulltext` only has the
+                // LOG line (QA filtered out by PORTAGE_ELOG_CLASSES).
+                let elog = logs.join("elog");
+                let saved: Vec<_> = portage_util::read_dir_entries(&elog)
+                    .unwrap()
+                    .into_iter()
+                    .map(|e| e.file_name().to_string_lossy().into_owned())
+                    .filter(|n| n.starts_with("dev-libs:foo-1.0:"))
+                    .collect();
+                assert_eq!(saved.len(), 1);
+                assert_eq!(
+                    std::fs::read_to_string(elog.join(&saved[0])).unwrap(),
+                    "LOG: install\nhello\n"
+                );
+
+                // save_summary: its :log,warn,error,qa override keeps the QA line.
+                let summary = std::fs::read_to_string(elog.join("summary.log")).unwrap();
+                assert!(summary.contains("for package dev-libs/foo-1.0:"));
+                assert!(summary.contains("LOG: install\nhello\nQA: install\na qa note\n"));
+            },
+        );
+        let _ = std::fs::remove_dir_all(&t);
+    }
+
+    #[test]
+    fn save_modules_process_dispatches_to_custom_when_enabled() {
+        let t = tmpdir();
+        let marker = t.join("marker");
+        temp_env(
+            &[
+                ("PORTAGE_ELOG_SYSTEM", Some("custom")),
+                ("PORTAGE_ELOG_CLASSES", Some("log warn error")),
+                (
+                    "PORTAGE_ELOG_COMMAND",
+                    Some(&format!("touch {}", marker.display())),
+                ),
+            ],
+            || {
+                let msgs = [ElogMessage {
+                    phase: "install".to_string(),
+                    level: "LOG".to_string(),
+                    text: "hello".to_string(),
+                }];
+                let written =
+                    save_modules_process(&t.join("logs"), "dev-libs/foo-1.0", &msgs, false)
+                        .expect("save_modules_process succeeds");
+                assert_eq!(written.len(), 1, "custom's own saved-file path");
+                assert!(marker.exists(), "PORTAGE_ELOG_COMMAND must have run");
+            },
+        );
+        let _ = std::fs::remove_dir_all(&t);
+    }
+
+    #[test]
+    fn save_modules_are_off_when_not_in_portage_elog_system() {
+        let t = tmpdir();
+        temp_env(&[("PORTAGE_ELOG_SYSTEM", Some("echo"))], || {
+            let msgs = [ElogMessage {
+                phase: "install".to_string(),
+                level: "LOG".to_string(),
+                text: "x".to_string(),
+            }];
+            let written =
+                save_modules_process(&t.join("logs"), "dev-libs/foo-1.0", &msgs, false).unwrap();
+            assert!(written.is_empty());
+            assert!(!t.join("logs").exists());
+        });
+        let _ = std::fs::remove_dir_all(&t);
+    }
+
+    #[test]
+    fn syslog_line_matches_portage_key_phase_line_shape() {
+        let msg = ElogMessage {
+            phase: "install".to_string(),
+            level: "WARN".to_string(),
+            text: "watch out\n".to_string(),
+        };
+        assert_eq!(
+            syslog_line("dev-libs/foo-1.0", &msg),
+            "dev-libs/foo-1.0: install: watch out"
+        );
+    }
+
+    /// Minimal process-env scoping for these serial tests -- `env::var`
+    /// reads are process-global, so run one closure at a time.
+    fn temp_env(vars: &[(&str, Option<&str>)], f: impl FnOnce()) {
+        use std::sync::Mutex;
+        static LOCK: Mutex<()> = Mutex::new(());
+        let _g = LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let saved: Vec<(String, Option<String>)> = vars
+            .iter()
+            .map(|(k, _)| (k.to_string(), std::env::var(k).ok()))
+            .collect();
+        for (k, v) in vars {
+            match v {
+                // SAFETY: env mutation is unsafe on edition 2024 (UB in
+                // the presence of other threads); these serial tests
+                // scope every env write behind `LOCK` (held by `_g`).
+                Some(v) => unsafe { std::env::set_var(k, v) },
+                // SAFETY: same serial-`LOCK`-scoped env mutation as the
+                // `Some` arm above (removing a var).
+                None => unsafe { std::env::remove_var(k) },
+            }
+        }
+        f();
+        for (k, v) in saved {
+            match v {
+                // SAFETY: same serial-`LOCK`-scoped env mutation as
+                // above; `_g` still holds `LOCK` here.
+                Some(v) => unsafe { std::env::set_var(&k, v) },
+                // SAFETY: same serial-`LOCK`-scoped env mutation as
+                // above (removing a var).
+                None => unsafe { std::env::remove_var(&k) },
+            }
+        }
     }
 }

@@ -41,3 +41,13 @@ pub fn for_root(root: &Path) -> Arc<dyn InstalledDb> {
             .or_insert_with(|| Arc::new(FilesDb::new(root))),
     )
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{BackendKind, Error};
+    use std::sync::Mutex;
+
+    /// The registry is process-global; serialise the tests that touch it.
+    static LOCK: Mutex<()> = Mutex::new(());
+}

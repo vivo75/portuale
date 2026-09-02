@@ -48,6 +48,24 @@ fn fixture(name: &str) -> std::path::PathBuf {
         .join(name)
 }
 
+/// Decompress a vdb `environment.bz2` for content assertions.
+fn read_vdb_env(vdb_env_bz2: &std::path::Path) -> String {
+    let bytes = std::fs::read(vdb_env_bz2).unwrap();
+    let output = std::process::Command::new("bzip2")
+        .args(["-d", "-c", "--"])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .and_then(|mut child| {
+            use std::io::Write as _;
+            child.stdin.take().unwrap().write_all(&bytes)?;
+            child.wait_with_output()
+        })
+        .expect("server bzip2 decompresses");
+    assert!(output.status.success());
+    String::from_utf8(output.stdout).unwrap()
+}
+
 fn s8_fixtures() -> std::path::PathBuf {
     std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures")
 }
