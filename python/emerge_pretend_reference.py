@@ -5979,6 +5979,36 @@ def _topological_merge_order(entries):
     return [entries[i] for i in order]
 
 
+def _complete_graph_auto_enable(entries, if_new_use, if_new_ver, if_new_slot):
+    """Real depgraph.py::_complete_graph (8581-8648) auto-enable check:
+    even without --complete-graph, complete mode switches on when
+    --complete-graph-if-new-use / -if-new-ver / complete_if_new_slot
+    (= --rebuild-if-new-slot) is on AND the freshly-built graph changes
+    an already-installed package -- its version (upgrade/downgrade, or a
+    slot change without revbump), its USE/IUSE, or a brand-new slot of an
+    installed cp. Mirrors portage-repo/src/lib.rs's
+    complete_graph_auto_enable; narrowing vs real: the USE comparison is
+    the reinstall's changed_flags (already computed against the vdb), not
+    a fresh iuse.all / enabled-intersection diff."""
+    for entry in entries:
+        outcome = entry[2]
+        tag = outcome[0]
+        if tag in ("upgrade", "downgrade"):
+            if if_new_ver:
+                return True
+        elif tag == "new":
+            provenance = entry[8] if len(entry) > 8 else None
+            new_slot = isinstance(provenance, dict) and provenance.get("new_slot")
+            if new_slot and (if_new_ver or if_new_slot):
+                return True
+        elif tag == "reinstall":
+            changed_flags = outcome[2] if len(outcome) > 2 else ()
+            slot_changed = outcome[4] if len(outcome) > 4 else False
+            if (if_new_use and changed_flags) or (if_new_ver and slot_changed):
+                return True
+    return False
+
+
 def resolve_pretend_graph(
     config_root,
     root,
@@ -6023,6 +6053,7 @@ def resolve_pretend_graph(
     rebuild_exclude=(),
     rebuild_ignore=(),
     dynamic_deps=True,
+    complete=False,
 ):
     """Recursively resolves every atom in `atoms` and -- for packages that
     would newly merge or upgrade -- its DEPEND+RDEPEND+BDEPEND+PDEPEND+
@@ -6143,8 +6174,12 @@ def resolve_pretend_graph(
     repos = find_repos(config_root)
     top_level = set(atoms)
     # Real create_depgraph_params.py:178: --emptytree sets
-    # myparams["deep"] = True.
-    if empty:
+    # myparams["deep"] = True. Real _complete_graph 8668-8670 does the
+    # same for --complete-graph -- see the `complete` param's grounding in
+    # portage-repo/src/lib.rs's resolve_pretend_graph doc comment (a
+    # forced deep walk is the whole observable delta in a --pretend that
+    # never removes or downgrades an installed package).
+    if empty or (complete and not deep):
         deep = True
 
     # Backtracking (real `_emerge/resolver/backtracking.py`): run the
@@ -7762,9 +7797,11 @@ _VALUE_OPTIONS = [
     ("--buildpkg-exclude", None),
     ("--config-root", None),
     ("--color", None),
-    ("--complete-graph", None),
-    ("--complete-graph-if-new-use", None),
-    ("--complete-graph-if-new-ver", None),
+    # --complete-graph / --complete-graph-if-new-use / -if-new-ver ARE
+    # implemented (real create_depgraph_params.py:169-175 +
+    # depgraph.py::_complete_graph; in this --pretend pilot `complete`
+    # mode collapses to a forced deep walk -- see resolve_pretend_graph's
+    # `complete` param and _complete_graph_auto_enable).
     ("--depclean-lib-check", None),
     # --dynamic-deps IS implemented (ON by default; =n walks the vdb
     # snapshot).
@@ -11262,6 +11299,12 @@ def run(args):
     rebuild_if_new_ver = None
     rebuild_exclude = []
     rebuild_ignore = []
+    # --complete-graph (real true_y_or_n, OFF by default) +
+    # --complete-graph-if-new-use / -if-new-ver (real y_or_n, both default
+    # ON -- None means "never given", treated as "y"). Mirrors pretend.rs.
+    complete_graph = False
+    complete_if_new_use = None
+    complete_if_new_ver = None
     dynamic_deps = True
     misspell_suggestions = True
     package_moves = True
@@ -11606,6 +11649,41 @@ def run(args):
                 rebuild_if_new_rev = on
             else:
                 rebuild_if_new_ver = on
+        elif arg == "--complete-graph" or arg.startswith("--complete-graph="):
+            # Real true_y_or_n -- bare / =y / =True -> on, =n -> off
+            # (real main.py:878-881: default None, only true_y flips it).
+            if arg.startswith("--complete-graph="):
+                val = arg[len("--complete-graph=") :]
+                i += 1
+            elif i + 1 < len(args) and args[i + 1] in ("y", "n", "True"):
+                val = args[i + 1]
+                i += 2
+            else:
+                val = "y"
+                i += 1
+            complete_graph = val in ("y", "True")
+        elif (
+            arg in ("--complete-graph-if-new-use", "--complete-graph-if-new-ver")
+            or arg.startswith("--complete-graph-if-new-use=")
+            or arg.startswith("--complete-graph-if-new-ver=")
+        ):
+            # Real y_or_n; the pilot is lenient (bare -> y, like
+            # --dynamic-deps). Both default ON, only =n opts out.
+            name, _, inline = arg.partition("=")
+            if "=" in arg:
+                val = inline
+                i += 1
+            elif i + 1 < len(args) and args[i + 1] in ("y", "n"):
+                val = args[i + 1]
+                i += 2
+            else:
+                val = "y"
+                i += 1
+            on = val not in ("n", "N")
+            if name == "--complete-graph-if-new-use":
+                complete_if_new_use = on
+            else:
+                complete_if_new_ver = on
         elif arg == "--usepkg-exclude":
             # Same "action": "append", space-separated-per-occurrence
             # shape as --exclude above -- no short alias, real main.py
@@ -12890,8 +12968,21 @@ def run(args):
         and rebuild_if_new_ver is True
     )
 
-    try:
-        result = resolve_pretend_graph(
+    # Real create_depgraph_params.py:169-175: --complete-graph and any of
+    # --rebuild-if-{unbuilt,new-rev,new-ver} set myparams["complete"];
+    # main.py:181-184 (--nodeps) pops it back off. Mirrors pretend.rs.
+    complete_graph_r = (
+        complete_graph
+        or rebuild_if_unbuilt_r
+        or rebuild_if_new_rev_r
+        or rebuild_if_new_ver_r
+    ) and not nodeps
+    # Real _complete_graph 8581-8648: both -if-new-* triggers default ON.
+    complete_if_new_use_r = complete_if_new_use is not False
+    complete_if_new_ver_r = complete_if_new_ver is not False
+
+    def _run_resolve(complete):
+        return resolve_pretend_graph(
             _config_root(),
             _root(),
             atom_args,
@@ -12935,7 +13026,29 @@ def run(args):
             rebuild_exclude,
             rebuild_ignore,
             dynamic_deps and not nodeps,
+            complete,
         )
+
+    try:
+        result = _run_resolve(complete_graph_r)
+        # Real _complete_graph auto-enable (depgraph.py:8581-8648): re-walk
+        # in complete mode when the first graph changes an already-installed
+        # package and the trigger is on -- unless --complete-graph/--deep
+        # already forced the deep walk, or --nodeps killed it. A clean
+        # second resolve mirrors real portage's "resolve, then
+        # _complete_graph re-walk". Mirrors pretend.rs.
+        if (
+            not complete_graph_r
+            and not deep
+            and not nodeps
+            and _complete_graph_auto_enable(
+                result["entries"],
+                complete_if_new_use_r,
+                complete_if_new_ver_r,
+                rebuild_if_new_slot,
+            )
+        ):
+            result = _run_resolve(True)
     except ResolutionError as e:
         sys.stderr.write(f"emerge: {e}")
         extra = _misspell_suggestion_block(

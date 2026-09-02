@@ -215,6 +215,51 @@ CASES = [
         ["--pretend", "--noreplace", "--dynamic-deps=n", "dev-libs/changeddepspkg"],
         0,
     ),
+    (
+        "--complete-graph forces the deep walk (== -D) even without --deep",
+        ["--pretend", "--complete-graph", "dev-libs/deeppkg"],
+        0,
+    ),
+    (
+        "--complete-graph=n leaves it as a shallow resolve",
+        ["--pretend", "--complete-graph=n", "dev-libs/deeppkg"],
+        0,
+    ),
+    (
+        "--complete-graph=y is the same as the bare flag",
+        ["--pretend", "--complete-graph=y", "dev-libs/deeppkg"],
+        0,
+    ),
+    (
+        "--complete-graph under -pv",
+        ["-pv", "--complete-graph", "dev-libs/deeppkg"],
+        0,
+    ),
+    (
+        "--complete-graph-if-new-ver auto-enables complete mode on an upgrade",
+        ["--pretend", "--update", "dev-libs/completegraphpkg"],
+        0,
+    ),
+    (
+        "--complete-graph-if-new-ver=n opts out of that auto-enable",
+        ["--pretend", "--update", "--complete-graph-if-new-ver=n", "dev-libs/completegraphpkg"],
+        0,
+    ),
+    (
+        "--complete-graph-if-new-use=n alone still lets the version trigger fire",
+        ["--pretend", "--update", "--complete-graph-if-new-use=n", "dev-libs/completegraphpkg"],
+        0,
+    ),
+    (
+        "--nodeps pops complete back off (no forced deep walk)",
+        ["--pretend", "--update", "--nodeps", "--complete-graph", "dev-libs/completegraphpkg"],
+        0,
+    ),
+    (
+        "the auto-enable trigger is inert when nothing installed changes",
+        ["--pretend", "--noreplace", "dev-libs/completegraphpkg"],
+        0,
+    ),
     ("-pv: cpv decorated with ::repo", ["--pretend", "-v", "dev-libs/newpkg"], 0),
     ("-pv: :slot/sub_slot decoration on a sub-slotted dep", ["--pretend", "-v", "dev-libs/subslotconsumer"], 0),
     ("-pv: [old-ver] decorated for an Upgrade", ["--pretend", "-v", "--update", "dev-libs/upgradepkg"], 0),
@@ -8979,6 +9024,54 @@ def test_dynamic_deps_chooses_ebuild_vs_vdb_deps_for_an_installed_deep_dep(
         emerge_pretend_python, base[:3] + ["--dynamic-deps=n"] + base[3:], fixture_env
     ).stdout
     assert "newpkg" not in static.stdout
+
+
+def test_complete_graph_forces_the_deep_walk(emerge_binary, emerge_pretend_python, fixture_env):
+    """--complete-graph (real create_depgraph_params.py:169-175 +
+    depgraph.py::_complete_graph 8668-8670): "completely account for all
+    known dependencies" -> myparams["deep"] = True. In this --pretend
+    pilot that forced deep walk is the whole observable delta (see
+    resolve_pretend_graph's `complete` param). deeppkg (installed) ->
+    deeppkg2 (installed) -> newpkg (New): plain `emerge -p deeppkg` never
+    walks deeppkg's deps; --complete-graph does, byte-identical to -D."""
+    plain = _run([str(emerge_binary)], ["--pretend", "dev-libs/deeppkg"], fixture_env)
+    assert "newpkg" not in plain.stdout
+
+    cg = _run([str(emerge_binary)], ["--pretend", "--complete-graph", "dev-libs/deeppkg"], fixture_env)
+    deep = _run([str(emerge_binary)], ["--pretend", "-D", "dev-libs/deeppkg"], fixture_env)
+    assert cg.stdout == deep.stdout
+    assert cg.stdout == _run(
+        emerge_pretend_python, ["--pretend", "--complete-graph", "dev-libs/deeppkg"], fixture_env
+    ).stdout
+    assert "[ebuild  N     ] dev-libs/newpkg-1.0 " in cg.stdout
+
+    off = _run(
+        [str(emerge_binary)], ["--pretend", "--complete-graph=n", "dev-libs/deeppkg"], fixture_env
+    )
+    assert off.stdout == plain.stdout
+
+
+def test_complete_graph_if_new_ver_auto_enables_on_an_upgrade(
+    emerge_binary, emerge_pretend_python, fixture_env
+):
+    """Real depgraph.py::_complete_graph 8581-8648: --complete-graph-if-new-ver
+    defaults ON, so complete mode (the forced deep walk) auto-enables when
+    a run would change an installed package's version -- even without
+    --complete-graph. completegraphpkg 1.0 installed, 2.0 in the tree,
+    RDEPEND dev-libs/deeppkg -> deeppkg2 -> newpkg (New). `emerge -pu
+    completegraphpkg` is an Upgrade, so newpkg is pulled in; =n opts out."""
+    base = ["--pretend", "--update", "dev-libs/completegraphpkg"]
+    auto = _run([str(emerge_binary)], base, fixture_env)
+    assert auto.stdout == _run(emerge_pretend_python, base, fixture_env).stdout
+    assert "[ebuild     U  ] dev-libs/completegraphpkg-2.0 [1.0]" in auto.stdout
+    assert "[ebuild  N     ] dev-libs/newpkg-1.0 " in auto.stdout
+
+    off = _run([str(emerge_binary)], base[:2] + ["--complete-graph-if-new-ver=n"] + base[2:], fixture_env)
+    assert off.stdout == _run(
+        emerge_pretend_python, base[:2] + ["--complete-graph-if-new-ver=n"] + base[2:], fixture_env
+    ).stdout
+    assert "newpkg" not in off.stdout
+    assert "[ebuild     U  ] dev-libs/completegraphpkg-2.0 [1.0]" in off.stdout
 
 
 def test_deep_equals_zero_matches_not_passing_deep_at_all(emerge_binary, fixture_env):

@@ -8473,6 +8473,54 @@ fn enqueue_flat_deps(
     }
 }
 
+/// Real `depgraph.py::_complete_graph` (8581-8648) auto-enable check:
+/// even without `--complete-graph`, complete mode switches on when
+/// `--complete-graph-if-new-use` (`complete_if_new_use`, default `"y"`)
+/// or `--complete-graph-if-new-ver` (`complete_if_new_ver`, default
+/// `"y"`) or `complete_if_new_slot` (= `--rebuild-if-new-slot`, default
+/// `"y"`) is on *and* the freshly-built graph contains a merge that
+/// changes an already-installed package. Real portage scans its digraph's
+/// `operation == "merge"` nodes and compares each to the vdb match on
+/// `node.slot_atom`:
+///
+///   - `complete_if_new_ver`: `inst_pkg < node or node < inst_pkg` (an
+///     in-slot version change -- this pilot's `Upgrade`/`Downgrade`), or
+///     a slot/sub-slot change without a revbump (8611-8618 -- this
+///     pilot's `--changed-slot` `Reinstall` with `slot_changed`, and a
+///     `New` into a slot of an already-installed `cp`, `new_slot`).
+///   - `complete_if_new_use`: `node.iuse.all != inst_pkg.iuse.all` or the
+///     enabled-USE ∩ IUSE sets differ -- this pilot's `--newuse`/
+///     `--changed-use` `Reinstall`, whose `changed_flags` is real
+///     `_reinstall_for_flags`'s own return value.
+///   - `complete_if_new_slot`: `vardb.match_pkgs(Atom(node.cp))` exists,
+///     same `cp`, and no installed pkg matches `node`'s slot/sub-slot
+///     (8634-8645) -- a new-slot install, this pilot's `New` + `new_slot`.
+///
+/// The CLI layer runs the first resolve, calls this on its entries, and
+/// (if it returns `true` and neither `--complete-graph` nor `--deep` is
+/// already in force) re-resolves with `complete = true` -- see
+/// `pretend.rs`'s two-pass, which mirrors real portage's own "resolve,
+/// then `_complete_graph` re-walk" structure. Narrowing vs real: the
+/// USE comparison is `changed_flags` (already computed against the vdb),
+/// not a fresh `iuse.all` / enabled-∩-IUSE diff.
+pub fn complete_graph_auto_enable(
+    entries: &[GraphEntry],
+    if_new_use: bool,
+    if_new_ver: bool,
+    if_new_slot: bool,
+) -> bool {
+    entries.iter().any(|e| match &e.outcome {
+        PretendOutcome::Upgrade { .. } | PretendOutcome::Downgrade { .. } => if_new_ver,
+        PretendOutcome::New { .. } if e.new_slot => if_new_ver || if_new_slot,
+        PretendOutcome::Reinstall {
+            changed_flags,
+            slot_changed,
+            ..
+        } => (if_new_use && !changed_flags.is_empty()) || (if_new_ver && *slot_changed),
+        _ => false,
+    })
+}
+
 /// Recursively resolves every atom in `atoms` and -- for packages that
 /// would newly merge or upgrade -- its DEPEND+RDEPEND+BDEPEND+PDEPEND+
 /// IDEPEND atoms, breadth-first. Returns one `GraphEntry` per distinct
@@ -8866,11 +8914,39 @@ pub fn resolve_pretend_graph(
     // see `enqueue_dependencies`'s own doc comment. Only reachable under
     // `--deep`.
     dynamic_deps: bool,
+    // `--complete-graph` (real `create_depgraph_params.py:169-175`:
+    // `--complete-graph` / `--rebuild-if-{unbuilt,new-rev,new-ver}` all
+    // set `myparams["complete"] = True`) plus the
+    // `--complete-graph-if-new-use` / `-if-new-ver` auto-enable, both
+    // resolved by the CLI layer (see `complete_graph_auto_enable` and
+    // `pretend.rs`'s two-pass). Real `depgraph.py::_complete_graph`
+    // (8562-8670) then does four things: loads the vdb, restricts package
+    // selection to installed-/already-graphed packages, seeds
+    // `args ∪ @system ∪ @world`, and toggles `myparams["deep"] = True`
+    // (8668-8670). In a `--pretend` that never removes or downgrades an
+    // installed package, the first three are provably inert -- a
+    // consistent installed set stays consistent, and this pilot's
+    // `--rebuild-if-*` / slot-operator (`:=`) auto-rebuild passes already
+    // scan *every* installed package (`all_installed_packages`), both
+    // firing only for a dep that actually merges this run (which
+    // installed-only selection never adds). So the whole observable delta
+    // is the forced deep walk. The one case the deep walk still surfaces
+    // that real complete mode would suppress -- an already-broken
+    // installed dep shown as `[ebuild N]` -- is existing `--deep`
+    // behaviour, and complete mode's stricter installed-/graph-only
+    // selection is already a documented `excluded_pkgs` scope cut.
+    complete: bool,
 ) -> Result<GraphResult, String> {
     let repos = find_repos(config_root)?;
     // Real `create_depgraph_params.py:178`: `--emptytree` sets
-    // `myparams["deep"] = True`.
-    let deep = if empty { Deep::Unlimited } else { deep };
+    // `myparams["deep"] = True`. Real `_complete_graph` 8668-8670 does the
+    // same for `--complete-graph` -- see the `complete` param's own doc
+    // comment above.
+    let deep = if empty || (complete && deep == Deep::NotRequested) {
+        Deep::Unlimited
+    } else {
+        deep
+    };
 
     // Only used to tell a top-level atom's own NoVisibleCandidate (fatal
     // to the whole call) apart from a dependency's (reported, not fatal)
@@ -12137,6 +12213,7 @@ mod tests {
             &[],
             &[],
             true,
+            false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
     }
@@ -13996,6 +14073,7 @@ mod tests {
             &[],
             &[],
             true,
+            false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -14051,6 +14129,7 @@ mod tests {
             &[],
             &[],
             true,
+            false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -14108,6 +14187,7 @@ mod tests {
             &[],
             &[],
             true,
+            false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -14169,6 +14249,7 @@ mod tests {
             &[],
             &[],
             true,
+            false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph failed: {e}"))
         .entries
@@ -14247,6 +14328,7 @@ mod tests {
             &[],
             &[],
             true,
+            false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -14307,6 +14389,7 @@ mod tests {
             &[],
             &[],
             true,
+            false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -14428,6 +14511,7 @@ mod tests {
             &ex,
             &ig,
             true,
+            false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -14508,6 +14592,7 @@ mod tests {
                 &[],
                 &[],
                 true,
+                false,
             )
             .unwrap()
             .entries
@@ -14605,6 +14690,7 @@ mod tests {
                 &[],
                 &[],
                 dynamic_deps,
+                false,
             )
             .unwrap()
             .entries
@@ -14616,6 +14702,126 @@ mod tests {
         assert!(call(true).iter().any(|n| n == "dev-libs/newpkg"));
         // =n: the vdb RDEPEND -> samepkg (installed) -> newpkg not pulled.
         assert!(!call(false).iter().any(|n| n == "dev-libs/newpkg"));
+    }
+
+    #[test]
+    fn complete_graph_forces_the_deep_walk_and_auto_enables_on_an_installed_change() {
+        // deeppkg (installed) -> RDEPEND deeppkg2 (installed) -> RDEPEND
+        // newpkg (New). Without `--deep` the pilot never walks deeppkg's
+        // deps; `complete` (real `_complete_graph` 8668-8670) toggles the
+        // deep walk on, so newpkg surfaces -- byte-identical to `-D`.
+        let root = fixtures_root();
+        #[allow(clippy::too_many_arguments)]
+        let resolve = |atom: &str, update: bool, deep: Deep, complete: bool| -> GraphResult {
+            resolve_pretend_graph(
+                &root,
+                &root,
+                &[atom.to_string()],
+                &test_config(),
+                false,
+                false,
+                false,
+                update,
+                deep,
+                &[],
+                true,
+                false,
+                false,
+                false,
+                false,
+                true,
+                false,
+                false,
+                false,
+                false,
+                false,
+                false,
+                false,
+                &[],
+                &[],
+                false,
+                None,
+                false,
+                false,
+                None,
+                &fixtures_root().join("distfiles"),
+                false,
+                false,
+                false,
+                10,
+                &[],
+                true,
+                false,
+                false,
+                false,
+                &[],
+                &[],
+                true,
+                complete,
+            )
+            .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom}) failed: {e}"))
+        };
+        let names = |r: &GraphResult| -> Vec<String> {
+            r.entries
+                .iter()
+                .map(|e| format!("{}/{}", e.category, e.package))
+                .collect()
+        };
+
+        // complete=false, no --deep: deeppkg's deps are not walked.
+        assert!(!names(&resolve(
+            "dev-libs/deeppkg",
+            false,
+            Deep::NotRequested,
+            false
+        ))
+        .iter()
+        .any(|n| n == "dev-libs/newpkg"));
+        // complete=true forces the deep walk -> newpkg, same as --deep.
+        assert!(names(&resolve(
+            "dev-libs/deeppkg",
+            false,
+            Deep::NotRequested,
+            true
+        ))
+        .iter()
+        .any(|n| n == "dev-libs/newpkg"));
+        assert_eq!(
+            names(&resolve(
+                "dev-libs/deeppkg",
+                false,
+                Deep::NotRequested,
+                true
+            )),
+            names(&resolve("dev-libs/deeppkg", false, Deep::Unlimited, false)),
+        );
+
+        // Auto-enable: `emerge -u completegraphpkg` is an Upgrade (a
+        // version change), so `complete_graph_auto_enable` says to re-walk
+        // when `complete_if_new_ver` is on -- but not when every trigger
+        // is off.
+        let up = resolve("dev-libs/completegraphpkg", true, Deep::NotRequested, false);
+        assert!(matches!(
+            up.entries
+                .iter()
+                .find(|e| e.package == "completegraphpkg")
+                .map(|e| &e.outcome),
+            Some(PretendOutcome::Upgrade { .. })
+        ));
+        assert!(!names(&up).iter().any(|n| n == "dev-libs/newpkg"));
+        assert!(complete_graph_auto_enable(&up.entries, true, true, true));
+        assert!(complete_graph_auto_enable(&up.entries, false, true, false));
+        assert!(!complete_graph_auto_enable(&up.entries, true, false, true));
+        assert!(!complete_graph_auto_enable(
+            &up.entries,
+            false,
+            false,
+            false
+        ));
+
+        // An AlreadyInstalled-only graph never auto-enables.
+        let noop = resolve("dev-libs/deeppkg2", false, Deep::NotRequested, false);
+        assert!(!complete_graph_auto_enable(&noop.entries, true, true, true));
     }
 
     /// Like `graph_deep`, but driven by `--emptytree`/`-e` instead
@@ -14666,6 +14872,7 @@ mod tests {
             &[],
             &[],
             true,
+            false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -14825,6 +15032,7 @@ mod tests {
             &[],
             &[],
             true,
+            false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -14978,6 +15186,7 @@ mod tests {
             &[],
             &[],
             true,
+            false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -15147,6 +15356,7 @@ mod tests {
             &[],
             &[],
             true,
+            false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph failed: {e}"))
         .entries;
@@ -15238,6 +15448,7 @@ mod tests {
             &[],
             &[],
             true,
+            false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph failed: {e}"))
         .entries;
@@ -15333,6 +15544,7 @@ mod tests {
             &[],
             &[],
             true,
+            false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph failed: {e}"))
         .entries
@@ -15408,6 +15620,7 @@ mod tests {
                 &[],
                 &[],
                 true,
+                false,
             )
             .unwrap_or_else(|e| panic!("resolve_pretend_graph failed: {e}"))
             .entries
@@ -15487,6 +15700,7 @@ mod tests {
             &[],
             &[],
             true,
+            false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph failed: {e}"))
         .entries
@@ -15555,6 +15769,7 @@ mod tests {
             &[],
             &[],
             true,
+            false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph failed: {e}"))
         .entries
@@ -15619,6 +15834,7 @@ mod tests {
             &[],
             &[],
             true,
+            false,
         )
         .expect("resolve_pretend_graph must succeed")
         .entries
@@ -15932,6 +16148,7 @@ mod tests {
             &[],
             &[],
             true,
+            false,
         )
         .expect("resolve_pretend_graph must succeed")
         .entries;
@@ -16271,6 +16488,7 @@ mod tests {
             &[],
             &[],
             true,
+            false,
         )
         .expect("resolve_pretend_graph must succeed")
         .entries
@@ -16408,6 +16626,7 @@ mod tests {
             &[],
             &[],
             true,
+            false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -16603,6 +16822,7 @@ mod tests {
             &[],
             &[],
             true,
+            false,
         )
         .expect("resolve_pretend_graph must succeed")
         .entries;
@@ -16815,6 +17035,7 @@ mod tests {
             &[],
             &[],
             true,
+            false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -16879,6 +17100,7 @@ mod tests {
             &[],
             &[],
             true,
+            false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -17002,6 +17224,7 @@ mod tests {
             &[],
             &[],
             true,
+            false,
         )
         .expect_err(&format!(
             "resolve_pretend_graph({atom_str}) should have failed"
@@ -17064,6 +17287,7 @@ mod tests {
             &[],
             &[],
             true,
+            false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -17128,6 +17352,7 @@ mod tests {
             &[],
             &[],
             true,
+            false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -17192,6 +17417,7 @@ mod tests {
             &[],
             &[],
             true,
+            false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -17474,6 +17700,7 @@ mod tests {
             &[],
             &[],
             true,
+            false,
         )
         .expect_err("both atoms should fail their own REQUIRED_USE");
         assert_eq!(
@@ -17550,6 +17777,7 @@ mod tests {
             &[],
             &[],
             true,
+            false,
         )
         .expect_err("no visible candidate at all");
         assert_eq!(
@@ -17649,6 +17877,7 @@ mod tests {
             &[],
             &[],
             true,
+            false,
         )
         .expect("dependency's own NoVisibleCandidate is never fatal");
         let dep = result
@@ -17737,6 +17966,7 @@ mod tests {
             &[],
             &[],
             true,
+            false,
         )
         .expect_err("no visible candidate at all");
         assert_eq!(
@@ -17969,6 +18199,7 @@ mod tests {
             &[],
             &[],
             true,
+            false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
     }
@@ -18034,6 +18265,7 @@ mod tests {
             &[],
             &[],
             true,
+            false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
     }
@@ -18095,6 +18327,7 @@ mod tests {
             &[],
             &[],
             true,
+            false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
     }
@@ -18405,6 +18638,7 @@ mod tests {
                 &[],
                 &[],
                 true,
+                false,
             )
             .expect("resolves")
         };
@@ -18506,6 +18740,7 @@ mod tests {
             &[],
             &[],
             true,
+            false,
         )
         .expect("resolves");
 
@@ -18609,6 +18844,7 @@ mod tests {
             &[],
             &[],
             true,
+            false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
     }

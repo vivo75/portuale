@@ -1,0 +1,8 @@
+DEFINED_PHASES=-
+DESCRIPTION=fixture: 1.0 installed, 2.0 visible -> -u is an Upgrade that trips --complete-graph-if-new-ver
+EAPI=8
+IUSE=
+KEYWORDS=amd64
+RDEPEND=dev-libs/deeppkg
+SLOT=0
+_md5_=0000000000000000000000000000000

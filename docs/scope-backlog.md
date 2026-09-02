@@ -331,7 +331,19 @@ dev/test context — see also the `chown` note below).
   (real `actions.py:3675` — `=n` disables `profiles/updates/` move
   application; new `portage_repo::set_package_moves_enabled` process-
   global, no new resolver param).
-  Remaining: `--complete-graph[-if-*]`, `--useoldpkg-atoms`,
+  **Shipped 2026-09-02 (batch 7): `--complete-graph[=y|n]` +
+  `--complete-graph-if-new-use` / `--complete-graph-if-new-ver`** (real
+  `create_depgraph_params.py:169-175` + `depgraph.py::_complete_graph` —
+  `--complete-graph` and any `--rebuild-if-{unbuilt,new-rev,new-ver}` set
+  `myparams["complete"]`, which toggles a forced deep walk; the two
+  `-if-new-*` triggers default ON and auto-enable it via a CLI-layer
+  two-pass when a run changes an installed package. In this `--pretend`
+  pilot complete mode's other facets — installed-only selection,
+  `@world`/`@system` seeding — are provably inert, so the forced deep
+  walk is the whole observable delta. New `resolve_pretend_graph`
+  `complete` param + `portage_repo::complete_graph_auto_enable`, new
+  `completegraphpkg` fixture).
+  Remaining: `--useoldpkg-atoms`,
   `--quickpkg-direct`,
   `--autounmask-continue` / `--autounmask-backtrack`.
 

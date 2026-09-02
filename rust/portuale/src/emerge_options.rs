@@ -286,9 +286,13 @@ pub const VALUE_OPTIONS: &[(&str, Option<&str>)] = &[
     ("--buildpkg-exclude", None),
     ("--config-root", None),
     ("--color", None),
-    ("--complete-graph", None),
-    ("--complete-graph-if-new-use", None),
-    ("--complete-graph-if-new-ver", None),
+    // `--complete-graph` / `--complete-graph-if-new-use` /
+    // `--complete-graph-if-new-ver` ARE implemented -- real
+    // `create_depgraph_params.py:169-175` + `depgraph.py::_complete_graph`.
+    // In this `--pretend` pilot `complete` mode collapses to a forced deep
+    // walk (see `portage_repo::resolve_pretend_graph`'s `complete` param
+    // and `complete_graph_auto_enable`); `pretend.rs` parses all three
+    // and runs the two-pass auto-enable.
     ("--depclean-lib-check", None),
     // `--dynamic-deps` IS implemented -- ON by default (the pilot's own
     // long-standing `--deep` behaviour); `=n` walks an installed

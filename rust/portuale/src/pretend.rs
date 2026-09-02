@@ -5112,6 +5112,21 @@ pub fn run(args: &[String]) -> ExitCode {
     // --exclude.
     let mut rebuild_exclude: Vec<String> = Vec::new();
     let mut rebuild_ignore: Vec<String> = Vec::new();
+    // --complete-graph (real `true_y_or_n`, `main.py:155`/`878-881`, OFF
+    // by default -- only a `y`-ish value turns it on). "completely account
+    // for all known dependencies": real `create_depgraph_params.py:169-175`
+    // sets `myparams["complete"]`, which `depgraph.py::_complete_graph`
+    // turns into a forced deep walk (see `resolve_pretend_graph`'s
+    // `complete` param). `--rebuild-if-{unbuilt,new-rev,new-ver}` imply it
+    // too (same `create_depgraph_params.py` block); `--nodeps` pops it.
+    let mut complete_graph = false;
+    // --complete-graph-if-new-use / --complete-graph-if-new-ver (real
+    // `y_or_n`, `main.py:157-158`). Both default ON -- real
+    // `_complete_graph` reads `myparams.get("complete_if_new_*", "y")`, so
+    // an absent flag behaves as `"y"`. Only `=n` opts out of that
+    // auto-enable trigger. `None` = never given (on); `Some(false)` = `=n`.
+    let mut complete_if_new_use: Option<bool> = None;
+    let mut complete_if_new_ver: Option<bool> = None;
     // --dynamic-deps (real `y_or_n`; real default is "y" for a source
     // install -- see create_depgraph_params.py). ON is the pilot's own
     // long-standing behaviour (an AlreadyInstalled package's `--deep`
@@ -5645,6 +5660,53 @@ pub fn run(args: &[String]) -> ExitCode {
                 "--rebuild-if-unbuilt" => rebuild_if_unbuilt = Some(on),
                 "--rebuild-if-new-rev" => rebuild_if_new_rev = Some(on),
                 _ => rebuild_if_new_ver = Some(on),
+            }
+        } else if arg == "--complete-graph" || arg.starts_with("--complete-graph=") {
+            // Real `true_y_or_n` -- bare / `=y` / `=True` -> on, `=n` -> off
+            // (real `main.py:878-881`: default `None`, only a `true_y`
+            // value flips it to `True`). Same bare/`=y`/`=n` shape as the
+            // `--rebuild-if-*` block above.
+            let val = if let Some(v) = arg.strip_prefix("--complete-graph=") {
+                i += 1;
+                v.to_string()
+            } else if matches!(
+                args.get(i + 1).map(String::as_str),
+                Some("y" | "n" | "True")
+            ) {
+                i += 2;
+                args[i - 1].clone()
+            } else {
+                i += 1;
+                "y".to_string()
+            };
+            complete_graph = matches!(val.as_str(), "y" | "True");
+        } else if arg == "--complete-graph-if-new-use"
+            || arg.starts_with("--complete-graph-if-new-use=")
+            || arg == "--complete-graph-if-new-ver"
+            || arg.starts_with("--complete-graph-if-new-ver=")
+        {
+            // Real `y_or_n` (a value is required in real `argparse`; the
+            // pilot is lenient and treats a bare flag as `y`, like
+            // `--dynamic-deps`). Both default ON, only `=n` opts out.
+            let (name, inline) = match arg.split_once('=') {
+                Some((n, v)) => (n, Some(v.to_string())),
+                None => (arg, None),
+            };
+            let val = if let Some(v) = inline {
+                i += 1;
+                v
+            } else if matches!(args.get(i + 1).map(String::as_str), Some("y" | "n")) {
+                i += 2;
+                args[i - 1].clone()
+            } else {
+                i += 1;
+                "y".to_string()
+            };
+            let on = !matches!(val.as_str(), "n" | "N");
+            if name == "--complete-graph-if-new-use" {
+                complete_if_new_use = Some(on);
+            } else {
+                complete_if_new_ver = Some(on);
             }
         } else if arg == "--usepkg-exclude" {
             // Same "action": "append", space-separated-per-occurrence
@@ -7253,60 +7315,107 @@ pub fn run(args: &[String]) -> ExitCode {
     // `--dynamic-deps` off (there is no dep walk to apply it to).
     let dynamic_deps = dynamic_deps && !nodeps;
 
-    let result = match resolve_pretend_graph(
-        &config_root,
-        &root,
-        &expanded_atoms,
-        &config,
-        newuse,
-        changed_use,
-        nodeps,
-        update,
-        deep,
-        &excluded,
-        with_bdeps,
-        changed_deps,
-        changed_slot,
-        with_test_deps,
-        changed_deps_report,
-        selective,
-        autounmask_suggest_keywords,
-        autounmask_suggest_use,
-        autounmask_suggest_license,
-        autounmask_suggest_masks,
-        usepkg,
-        usepkgonly,
-        binpkg_respect_use,
-        &usepkg_exclude,
-        &usepkg_include,
-        rebuilt_binaries,
-        rebuilt_binaries_timestamp,
-        newrepo,
-        buildpkgonly,
-        root_deps_running_root.as_deref(),
-        &distdir,
-        emptytree,
-        getbinpkg,
-        ignore_built_slot_operator_deps,
-        backtrack_max,
-        &reinstall_atoms,
-        rebuild_if_new_slot,
-        rebuild_if_unbuilt,
-        rebuild_if_new_rev,
-        rebuild_if_new_ver,
-        &rebuild_exclude,
-        &rebuild_ignore,
-        dynamic_deps,
-    ) {
-        Ok(result) => result,
+    // Real `create_depgraph_params.py:169-175`: `--complete-graph` *and*
+    // any of `--rebuild-if-{unbuilt,new-rev,new-ver}` set
+    // `myparams["complete"] = True`; `main.py:181-184` (`--nodeps`) pops
+    // it back off. In this pilot `complete` collapses to "force the deep
+    // walk" -- see `resolve_pretend_graph`'s `complete` param.
+    let complete_graph =
+        (complete_graph || rebuild_if_unbuilt || rebuild_if_new_rev || rebuild_if_new_ver)
+            && !nodeps;
+    // Real `_complete_graph` 8581-8648: both `--complete-graph-if-new-*`
+    // auto-enable triggers default ON (`myparams.get(..., "y")`).
+    let complete_if_new_use = complete_if_new_use != Some(false);
+    let complete_if_new_ver = complete_if_new_ver != Some(false);
+
+    let run_resolve = |complete: bool| {
+        resolve_pretend_graph(
+            &config_root,
+            &root,
+            &expanded_atoms,
+            &config,
+            newuse,
+            changed_use,
+            nodeps,
+            update,
+            deep,
+            &excluded,
+            with_bdeps,
+            changed_deps,
+            changed_slot,
+            with_test_deps,
+            changed_deps_report,
+            selective,
+            autounmask_suggest_keywords,
+            autounmask_suggest_use,
+            autounmask_suggest_license,
+            autounmask_suggest_masks,
+            usepkg,
+            usepkgonly,
+            binpkg_respect_use,
+            &usepkg_exclude,
+            &usepkg_include,
+            rebuilt_binaries,
+            rebuilt_binaries_timestamp,
+            newrepo,
+            buildpkgonly,
+            root_deps_running_root.as_deref(),
+            &distdir,
+            emptytree,
+            getbinpkg,
+            ignore_built_slot_operator_deps,
+            backtrack_max,
+            &reinstall_atoms,
+            rebuild_if_new_slot,
+            rebuild_if_unbuilt,
+            rebuild_if_new_rev,
+            rebuild_if_new_ver,
+            &rebuild_exclude,
+            &rebuild_ignore,
+            dynamic_deps,
+            complete,
+        )
+    };
+    let handle = |r: Result<portage_repo::GraphResult, String>| match r {
+        Ok(result) => Ok(result),
         Err(e) => {
             eprint!("emerge: {e}");
             if let Some(extra) = misspell_suggestion_block(&e, &repos, misspell_suggestions) {
                 eprint!("{extra}");
             }
             eprintln!();
-            return ExitCode::from(1);
+            Err(ExitCode::from(1))
         }
+    };
+
+    let result = match handle(run_resolve(complete_graph)) {
+        Ok(result) => result,
+        Err(code) => return code,
+    };
+    // Real portage's `_complete_graph` auto-enable (`depgraph.py:
+    // 8581-8648`): even without `--complete-graph`, re-walk in complete
+    // mode when the first graph changes an already-installed package and
+    // `--complete-graph-if-new-use`/`-if-new-ver`/`--rebuild-if-new-slot`
+    // is on. Skipped when `--complete-graph` or `--deep` already forced
+    // the deep walk (the observable delta), or `--nodeps` killed it. A
+    // clean second `resolve_pretend_graph` call mirrors real portage's
+    // own "resolve, then `_complete_graph` re-walk" -- see
+    // `complete_graph_auto_enable`.
+    let result = if !complete_graph
+        && deep == portage_repo::Deep::NotRequested
+        && !nodeps
+        && portage_repo::complete_graph_auto_enable(
+            &result.entries,
+            complete_if_new_use,
+            complete_if_new_ver,
+            rebuild_if_new_slot,
+        ) {
+        match handle(run_resolve(true)) {
+            Ok(result) => result,
+            Err(code) => return code,
+        }
+    } else {
+        result
     };
     let entries = &result.entries;
 
