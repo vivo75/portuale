@@ -371,6 +371,21 @@ fn cand_162(version: &str, keywords: &[&str], slot: &str) -> Candidate {
         binary_deps: HashMap::new(),
     }
 }
+
+/// One queued-but-unresolved atom for the drain-state legs
+/// (`atoms_all_in_graph`'s `queued_cps` shortcut).
+fn qatom_162(atom: &str) -> QueueItem {
+    QueueItem {
+        atom: atom.to_string(),
+        depth: 0,
+        owner: None,
+        owner_targets_running_root: false,
+        unevaluated: None,
+        targets_running_root: false,
+        buildtime_hard: false,
+        from_disjunction: false,
+    }
+}
 /// Arguments of [`demote_162`].
 struct Demote162Args<'a> {
     repos: &'a [RepoConfig],

@@ -1510,6 +1510,7 @@ mod info_pkgs;
 mod installed;
 mod license;
 mod masked_deps;
+mod metadata_cache;
 mod pretend;
 mod queue;
 mod reinstall;

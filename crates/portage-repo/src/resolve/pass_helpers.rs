@@ -26,6 +26,29 @@ pub(crate) struct OnlydepsRuntimeKeysArgs {
     pub(crate) eapi_has_idepend: bool,
 }
 
+/// Which run-time keys classify atoms as runtime edges for this package (an atom
+/// in a build-time key but no walked run-time key is an unbreakable merge-order
+/// edge). Mirrors `onlydeps_walk_dep_key` above.
+// Portage: DepPriority buildtime_hard
+pub(crate) fn onlydeps_runtime_keys(args: OnlydepsRuntimeKeysArgs) -> &'static [&'static str] {
+    let OnlydepsRuntimeKeysArgs {
+        onlydeps_blanks_runtime,
+        onlydeps_blanks_idepend,
+        eapi_has_idepend,
+    } = args;
+    if onlydeps_blanks_runtime {
+        if onlydeps_blanks_idepend || !eapi_has_idepend {
+            &[]
+        } else {
+            &["IDEPEND"]
+        }
+    } else if onlydeps_blanks_idepend || !eapi_has_idepend {
+        &["RDEPEND", "PDEPEND"]
+    } else {
+        &["RDEPEND", "PDEPEND", "IDEPEND"]
+    }
+}
+
 /// Arguments of [`arg_pinned_installed_reuse`].
 pub(crate) struct ArgPinnedInstalledReuseArgs<'a> {
     pub(crate) ctx: &'a ResolveCtx<'a>,

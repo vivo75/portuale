@@ -23,6 +23,59 @@ pub(crate) struct ClassifyDepAtomsArgs<'a> {
     pub(crate) eapi_has_idepend: bool,
 }
 
+/// Per-edge build-time/run-time classification for the merge-order sort
+/// and cycle detection: an atom in the build-time keys but not the run-time
+/// ones tags `buildtime_hard`. Portage: DepPriority
+pub(crate) fn classify_dep_atoms(args: ClassifyDepAtomsArgs<'_>) -> ClassifyDepAtomsOut {
+    let ClassifyDepAtomsArgs {
+        ctx,
+        candidate_source,
+        metadata,
+        use_flags,
+        onlydeps_blanks_runtime,
+        onlydeps_blanks_idepend,
+        eapi_has_idepend,
+    } = args;
+    let flatten_keys = |keys: &[&str]| -> HashSet<String> {
+        let joined: String = keys
+            .iter()
+            .filter_map(|k| metadata.get(*k))
+            .map(String::as_str)
+            .collect::<Vec<_>>()
+            .join(" ");
+        let toks: Vec<String> = joined.split_whitespace().map(String::from).collect();
+        portage_use_reduce::use_reduce_flat(&toks, use_flags, portage_use_reduce::MatchMode::Normal)
+            .map(|v| v.into_iter().filter(|t| t != "||").collect())
+            .unwrap_or_default()
+    };
+    let buildtime_atoms = if candidate_source == CandidateSource::Binary && !ctx.with_bdeps {
+        // Dropped from the walk above, so nothing can classify from them.
+        HashSet::new()
+    } else {
+        flatten_keys(&["DEPEND", "BDEPEND"])
+    };
+    // A blanked runtime key classifies nothing, so a build-time-only atom is
+    // `buildtime_hard`; a walked `IDEPEND` still classifies.
+    let runtime_keys: &[&str] = onlydeps_runtime_keys(OnlydepsRuntimeKeysArgs {
+        onlydeps_blanks_runtime,
+        onlydeps_blanks_idepend,
+        eapi_has_idepend,
+    });
+    let runtime_atoms = flatten_keys(runtime_keys);
+    // A running `BDEPEND` edge is soft (bootstrap cycles terminate); a running
+    // `DEPEND` edge stays hard (the cross-root cycle still reports).
+    let bdepend_atoms = if candidate_source == CandidateSource::Binary && !ctx.with_bdeps {
+        HashSet::new()
+    } else {
+        flatten_keys(&["BDEPEND"])
+    };
+    ClassifyDepAtomsOut {
+        buildtime_atoms,
+        runtime_atoms,
+        bdepend_atoms,
+    }
+}
+
 /// What [`prepare_disjunction_scope`] hands back to its caller.
 pub(crate) struct DisjunctionScopeOut<'a> {
     pub(crate) cross_running_root: Option<&'a Path>,
