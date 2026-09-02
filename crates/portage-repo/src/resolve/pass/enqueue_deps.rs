@@ -371,6 +371,74 @@ pub(crate) fn filter_root_deps(args: FilterRootDepsArgs<'_>) -> Vec<String> {
     flat_deps
 }
 
+/// The values [`record_slot_pullers_and_enqueue`] reads from its caller.
+pub(crate) struct RecordSlotPullersAndEnqueueArgs<'a> {
+    pub(crate) flat_deps: Vec<String>,
+    pub(crate) key: &'a (String, String),
+    pub(crate) version: &'a str,
+    pub(crate) depth: u32,
+    pub(crate) parent_use: &'a HashSet<String>,
+    pub(crate) state: &'a mut PassState,
+    pub(crate) entry_idx: usize,
+    pub(crate) buildtime_atoms: &'a HashSet<String>,
+    pub(crate) runtime_atoms: &'a HashSet<String>,
+    pub(crate) bdepend_atoms: &'a HashSet<String>,
+    pub(crate) tokens: &'a Vec<String>,
+    pub(crate) running_tags: &'a HashSet<String>,
+}
+
+/// Record this package as a puller of every non-blocker `cat/pkg` its dep
+/// string names, then queue the flattened deps.
+pub(crate) fn record_slot_pullers_and_enqueue(args: RecordSlotPullersAndEnqueueArgs<'_>) {
+    let RecordSlotPullersAndEnqueueArgs {
+        flat_deps,
+        key,
+        version,
+        depth,
+        parent_use,
+        state,
+        entry_idx,
+        buildtime_atoms,
+        runtime_atoms,
+        bdepend_atoms,
+        tokens,
+        running_tags,
+    } = args;
+    // Record this package as a puller of every non-blocker `cat/pkg` its
+    // dep string names (atom text kept for the `pulled in by` lines).
+    for tok in &flat_deps {
+        if let Some(dep_atom) = portage_dep::parse_atom(tok)
+            && dep_atom.blocker == portage_dep::Blocker::None
+        {
+            state
+                .slot_pullers
+                .entry((dep_atom.category.clone(), dep_atom.package.clone()))
+                .or_default()
+                .push((
+                    key.0.clone(),
+                    key.1.clone(),
+                    version.to_string(),
+                    tok.clone(),
+                ));
+        }
+    }
+    enqueue_flat_deps(EnqueueFlatDepsArgs {
+        flat_deps,
+        key,
+        version,
+        depth,
+        parent_use,
+        queue: &mut state.queue,
+        pending_blockers: &mut state.pending_blockers,
+        buildtime_atoms,
+        runtime_atoms,
+        bdepend_atoms,
+        or_universe: &or_group_universe(tokens),
+        running_atoms: running_tags,
+        owner_targets_running_root: state.entries[entry_idx].targets_running_root,
+    });
+}
+
 /// The values [`enqueue_test_deps`] reads from its caller.
 pub(crate) struct EnqueueTestDepsArgs<'a> {
     pub(crate) ctx: &'a ResolveCtx<'a>,

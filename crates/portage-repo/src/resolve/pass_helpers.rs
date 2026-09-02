@@ -19,6 +19,13 @@ pub(crate) fn overlay_use_want(
         .or_else(|| committed.get(key).and_then(|b| b.get(flag)).copied())
 }
 
+/// Arguments of [`onlydeps_runtime_keys`].
+pub(crate) struct OnlydepsRuntimeKeysArgs {
+    pub(crate) onlydeps_blanks_runtime: bool,
+    pub(crate) onlydeps_blanks_idepend: bool,
+    pub(crate) eapi_has_idepend: bool,
+}
+
 /// Arguments of [`arg_pinned_installed_reuse`].
 pub(crate) struct ArgPinnedInstalledReuseArgs<'a> {
     pub(crate) ctx: &'a ResolveCtx<'a>,
