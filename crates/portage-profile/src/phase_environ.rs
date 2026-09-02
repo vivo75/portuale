@@ -441,3 +441,53 @@ pub fn phase_environ_pkg(config: &Config, pkg: Option<PhaseUse<'_>>) -> Vec<(Str
     }
     env.into_iter().collect()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ResolveConfigArgs;
+    use crate::{TEST_ENV_OVERRIDE, resolve_config};
+    use portage_util::TempDir;
+    use std::collections::HashMap;
+    use std::fs;
+    use std::path::{Path, PathBuf};
+
+    /// A synthetic amd64-shaped profile under a temp `config_root` (no
+    /// `make.globals`; everything from there is seeded in `make.conf`).
+    /// Expected values from Portage (oracle env).
+    fn synthetic_root(name: &str, make_conf: &str) -> (std::path::PathBuf, PathBuf) {
+        let root = TempDir::new(&format!("portage-profile-phase-environ-{name}")).keep();
+        let _ = fs::remove_dir_all(&root);
+        let repo = root.join("repo");
+        let prof = repo.join("profiles/default");
+        let portage_dir = root.join("etc/portage");
+        fs::create_dir_all(&prof).unwrap();
+        fs::create_dir_all(&portage_dir).unwrap();
+        fs::write(
+            prof.join("make.defaults"),
+            "ARCH=\"amd64\"\nACCEPT_KEYWORDS=\"${ARCH}\"\n\
+             ELIBC=\"glibc\"\nKERNEL=\"linux\"\n\
+             CHOST=\"x86_64-pc-linux-gnu\"\nCOMMON_FLAGS=\"-O2 -pipe\"\nCFLAGS=\"${COMMON_FLAGS}\"\n\
+             MULTILIB_ABIS=\"amd64 x86\"\nDEFAULT_ABI=\"amd64\"\nABI=\"amd64\"\n\
+             LIBDIR_amd64=\"lib64\"\nLIBDIR_x86=\"lib\"\n\
+             USE_EXPAND=\"ABI_X86 ELIBC KERNEL L10N VIDEO_CARDS\"\nUSE_EXPAND_UNPREFIXED=\"ARCH\"\n\
+             USE_EXPAND_IMPLICIT=\"ARCH ELIBC KERNEL\"\n\
+             USE_EXPAND_VALUES_ARCH=\"amd64 x86\"\nUSE_EXPAND_VALUES_ELIBC=\"glibc musl\"\n\
+             USE_EXPAND_VALUES_KERNEL=\"linux\"\n\
+             IUSE_IMPLICIT=\"abi_x86_64 prefix\"\n\
+             ENV_UNSET=\"DISPLAY PERL5LIB\"\n\
+             PROFILE_ONLY_VARIABLES=\"KERNEL ELIBC\"\n\
+             PROFILE_ONLY_VARIABLES=\"${PROFILE_ONLY_VARIABLES} ARCH\"\n\
+             USE=\"abi_x86_64 baseflag\"\nVIDEO_CARDS=\"nvidia\"\n\
+             FEATURES=\"assume-digests binpkg-docompress binpkg-dostrip sandbox\"\n\
+             SRC_URI=\"should-never-export\"\nHOME=\"/profile/home\"\n",
+        )
+        .unwrap();
+        fs::write(portage_dir.join("make.conf"), make_conf).unwrap();
+        let make_profile = portage_dir.join("make.profile");
+        let _ = fs::remove_file(&make_profile);
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&prof, &make_profile).unwrap();
+        (root, repo)
+    }
+}

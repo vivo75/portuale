@@ -64,7 +64,27 @@ fn check_overlay_package_use_scoping(
     );
 }
 
+/// Runs `f` with `apply_env_layer` seeing exactly `vars` as the
+/// process environment -- via a thread-local override
+/// (`TEST_ENV_OVERRIDE`), so it never touches real `std::env` and
+/// can't race the many other test threads calling `resolve_config`
+/// concurrently.
+fn with_test_env<R>(vars: &[(&str, &str)], f: impl FnOnce() -> R) -> R {
+    let map: HashMap<String, String> = vars
+        .iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect();
+    TEST_ENV_OVERRIDE.with(|o| *o.borrow_mut() = Some(map));
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f));
+    TEST_ENV_OVERRIDE.with(|o| *o.borrow_mut() = None);
+    match result {
+        Ok(v) => v,
+        Err(e) => std::panic::resume_unwind(e),
+    }
+}
+
 mod binrepo;
+mod env_layer;
 mod graph;
 mod incrementals;
 mod package_files;

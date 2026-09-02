@@ -1486,6 +1486,128 @@ fn package_use_splits_repo_profile_and_user_into_their_own_fields() {
 }
 
 #[test]
+fn env_layer_overrides_config_vars() {
+    // Exercises the env layer's incremental (ACCEPT_KEYWORDS, USE), last-wins
+    // (USE_EXPAND value + plain scalar) and USE_EXPAND-name paths.
+    let root = TempDir::new("portage-profile-test-env-layer").keep();
+    let repo = root.join("repo");
+    let prof = repo.join("profiles/default");
+    let portage_dir = root.join("etc/portage");
+    fs::create_dir_all(&prof).unwrap();
+    fs::create_dir_all(&portage_dir).unwrap();
+    fs::write(
+        prof.join("make.defaults"),
+        "ARCH=\"amd64\"\nACCEPT_KEYWORDS=\"${ARCH}\"\n\
+         USE_EXPAND_UNPREFIXED=\"ARCH\"\nUSE=\"baseflag\"\n\
+         USE_EXPAND=\"VIDEO_CARDS\"\nVIDEO_CARDS=\"nvidia\"\n",
+    )
+    .unwrap();
+    let make_profile = portage_dir.join("make.profile");
+    let _ = fs::remove_file(&make_profile);
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(&prof, &make_profile).unwrap();
+
+    // No env: baseline.
+    with_test_env(&[], || {
+        let c = resolve_config(ResolveConfigArgs {
+            config_root: &root,
+            main_repo_location: &repo,
+            overlay_repos: &[],
+            repo_aliases: &[],
+            main_repo_name: "testrepo",
+            repo_masters: &HashMap::new(),
+            eroot: &root,
+        })
+        .expect("resolves");
+        assert!(c.accept_keywords.contains("amd64"));
+        assert!(!c.accept_keywords.contains("~amd64"));
+        assert!(c.use_flags.contains("video_cards_nvidia"));
+        assert!(!c.other_vars.contains_key("CFLAGS"));
+    });
+
+    with_test_env(
+        &[
+            ("ACCEPT_KEYWORDS", "~amd64"),
+            ("USE", "-baseflag envflag"),
+            ("VIDEO_CARDS", "amdgpu"),
+            ("CFLAGS", "-O3"),
+        ],
+        || {
+            let c = resolve_config(ResolveConfigArgs {
+                config_root: &root,
+                main_repo_location: &repo,
+                overlay_repos: &[],
+                repo_aliases: &[],
+                main_repo_name: "testrepo",
+                repo_masters: &HashMap::new(),
+                eroot: &root,
+            })
+            .expect("resolves");
+            // ACCEPT_KEYWORDS: incremental -- profile amd64 kept, env ~amd64 added.
+            assert!(c.accept_keywords.contains("amd64"));
+            assert!(c.accept_keywords.contains("~amd64"));
+            // USE: env stacks on the conf layer.
+            assert!(c.use_flags.contains("envflag"));
+            assert!(!c.use_flags.contains("baseflag"));
+            // USE_EXPAND value: env replaces the profile value.
+            assert!(c.use_flags.contains("video_cards_amdgpu"));
+            assert!(!c.use_flags.contains("video_cards_nvidia"));
+            // Plain scalar -> other_vars (emerge --info).
+            assert_eq!(c.other_vars.get("CFLAGS").map(String::as_str), Some("-O3"));
+        },
+    );
+}
+
+#[test]
+fn user_package_use_star_atom_folds_onto_the_global_use() {
+    // A user "*/*" entry pops out of the per-package dict and stacks onto the
+    // global USE like make.conf USE= would (shorthand included).
+    // Portage: UseManager.extract_global_USE_changes
+    let root = TempDir::new("portage-profile-test-global-puse").keep();
+    let repo = root.join("repo");
+    let prof = repo.join("profiles/default");
+    let portage_dir = root.join("etc/portage/package.use");
+    fs::create_dir_all(&prof).unwrap();
+    fs::create_dir_all(&portage_dir).unwrap();
+    fs::write(
+        prof.join("make.defaults"),
+        "ARCH=\"amd64\"\nUSE_EXPAND_UNPREFIXED=\"ARCH\"\n\
+         USE_EXPAND=\"VIDEO_CARDS\"\nVIDEO_CARDS=\"nvidia\"\n\
+         USE=\"profileflag\"\n",
+    )
+    .unwrap();
+    let make_profile = root.join("etc/portage/make.profile");
+    let _ = fs::remove_file(&make_profile);
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(&prof, &make_profile).unwrap();
+    fs::write(
+        portage_dir.join("00-global"),
+        "*/* globalflag -profileflag\n*/* VIDEO_CARDS: -nvidia nouveau\ndev-libs/x perpkgflag\n",
+    )
+    .unwrap();
+
+    with_test_env(&[], || {
+        let c = resolve_config(ResolveConfigArgs {
+            config_root: &root,
+            main_repo_location: &repo,
+            overlay_repos: &[],
+            repo_aliases: &[],
+            main_repo_name: "testrepo",
+            repo_masters: &HashMap::new(),
+            eroot: &root,
+        })
+        .expect("resolves");
+        assert!(c.use_flags.contains("globalflag"));
+        assert!(!c.use_flags.contains("profileflag"));
+        assert!(c.use_flags.contains("video_cards_nouveau"));
+        assert!(!c.use_flags.contains("video_cards_nvidia"));
+        // The "*/*" entry is popped; only the per-package one stays.
+        assert!(!c.package_use_user.iter().any(|(a, _)| a == "*/*"));
+        assert!(c.package_use_user.iter().any(|(a, _)| a == "dev-libs/x"));
+    });
+}
+
+#[test]
 fn profile_use_layers_are_built_one_per_chain_level() {
     let root = TempDir::new("portage-profile-test-profile-use-layers").keep();
     let repo = root.join("repo");
