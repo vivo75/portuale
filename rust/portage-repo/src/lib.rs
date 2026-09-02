@@ -1629,6 +1629,7 @@ pub fn effective_use_flags(
     profile_use_layers: &[portage_profile::ProfileUseLayer],
     package_env_use: &[(String, Vec<String>)],
     package_use_user: &[(String, Vec<String>)],
+    env_use_tokens: &[String],
     package_use_force: &[(String, Vec<String>)],
     package_use_mask: &[(String, Vec<String>)],
     use_force: &HashSet<String>,
@@ -1647,9 +1648,9 @@ pub fn effective_use_flags(
     // The per-package `USE_ORDER` walk, low priority -> high (real
     // `regenerate()` over the reversed `uvlist`; see this function's own
     // doc comment for the full grounding). This pilot models, in order:
-    //   repo -> features -> pkginternal -> defaults -> conf -> pkg
-    // then the final `use.force`/`use.mask` step. `env`/`env.d` are
-    // documented cuts (see `portage_profile`'s module doc comment).
+    //   repo -> features -> pkginternal -> defaults -> conf -> pkg -> env
+    // then the final `use.force`/`use.mask` step. `env.d` is a documented
+    // cut (see `portage_profile`'s module doc comment).
     let mut use_flags: HashSet<String> = HashSet::new();
 
     // `repo` (real `configdict["repo"]`): the main repo's
@@ -1729,10 +1730,18 @@ pub fn effective_use_flags(
     // (real `_grab_pkg_env` fills `pkg_configdict`), then the user-level
     // `/etc/portage/package.use` on top (real `config.py:2042-2048`
     // appends `self.puse` after) -- so a user `package.use` flag wins
-    // over a `package.env` one. The strongest layer before the final
-    // `use.force`/`use.mask` step below.
+    // over a `package.env` one.
     apply_matching(&mut use_flags, package_env_use);
     apply_matching(&mut use_flags, package_use_user);
+
+    // `env` (real `configdict["env"]`, the highest `USE_ORDER` tier):
+    // the process-environment `USE="..."` -- `USE="-X" emerge foo`
+    // overrides even a user `/etc/portage/package.use` flag. The tokens
+    // keep their `+`/`-` incremental syntax. This is the strongest layer
+    // before the final `use.force`/`use.mask` step below.
+    for token in env_use_tokens {
+        portage_profile::apply_incremental(token, &mut use_flags);
+    }
 
     // `_*` wildcard USE_EXPAND expansion (real `config.py` `setcpv`
     // ~2242): once `package.use` has been applied, a `k_*` flag still in
@@ -2278,6 +2287,7 @@ fn use_flags_if_conditional(
         &config.profile_use_layers,
         &config.package_env_use,
         &config.package_use_user,
+        &config.env_use_tokens,
         &config.package_use_force,
         &config.package_use_mask,
         &config.use_force,
@@ -3113,6 +3123,7 @@ fn flag_is_settable(
         &config.profile_use_layers,
         &config.package_env_use,
         &package_use_user,
+        &config.env_use_tokens,
         &config.package_use_force,
         &config.package_use_mask,
         &config.use_force,
@@ -5925,6 +5936,7 @@ fn candidate_iuse_and_use(
         &config.profile_use_layers,
         &config.package_env_use,
         &config.package_use_user,
+        &config.env_use_tokens,
         &config.package_use_force,
         &config.package_use_mask,
         &config.use_force,
@@ -7377,6 +7389,7 @@ pub fn resolve_pretend(
                     &config.profile_use_layers,
                     &config.package_env_use,
                     &config.package_use_user,
+                    &config.env_use_tokens,
                     &config.package_use_force,
                     &config.package_use_mask,
                     &config.use_force,
@@ -10605,6 +10618,7 @@ pub fn resolve_pretend_graph(
                 &config.profile_use_layers,
                 &config.package_env_use,
                 &config.package_use_user,
+                &config.env_use_tokens,
                 &config.package_use_force,
                 &config.package_use_mask,
                 &config.use_force,
@@ -11492,6 +11506,7 @@ fn enqueue_dependencies(
             &config.profile_use_layers,
             &config.package_env_use,
             &config.package_use_user,
+            &config.env_use_tokens,
             &config.package_use_force,
             &config.package_use_mask,
             &config.use_force,
@@ -19964,6 +19979,7 @@ mod tests {
             &[],
             &[],
             &[],
+            &[], // env_use_tokens
             package_use_force,
             package_use_mask,
             use_force,
@@ -20777,6 +20793,7 @@ mod tests {
             &[],
             &[],
             package_use_user,
+            &[], // env_use_tokens
             &[],
             &[],
             &HashSet::new(),
@@ -20826,6 +20843,7 @@ mod tests {
             &layers,
             &[],
             &[],
+            &[], // env_use_tokens
             &[],
             &[],
             &HashSet::new(),
@@ -20859,6 +20877,7 @@ mod tests {
             &reversed,
             &[],
             &[],
+            &[], // env_use_tokens
             &[],
             &[],
             &HashSet::new(),
@@ -20891,6 +20910,7 @@ mod tests {
                 &[],
                 &[],
                 &[],
+                &[], // env_use_tokens
                 &[],
                 &[],
                 &HashSet::new(),
@@ -20929,6 +20949,7 @@ mod tests {
                 &[],
                 &[],
                 &[],
+                &[], // env_use_tokens
                 &[],
                 &[],
                 &HashSet::new(),
@@ -20965,6 +20986,7 @@ mod tests {
             &[],
             &[],
             &[],
+            &[], // env_use_tokens
             &[],
             &[],
             &HashSet::new(),
@@ -21038,6 +21060,7 @@ mod tests {
             &[],
             &pu("foo"), // package_env_use
             &[],        // package_use_user
+            &[],        // env_use_tokens
             &[],
             &[],
             &HashSet::new(),
@@ -21070,6 +21093,7 @@ mod tests {
             &[],
             &pu("foo"),  // package_env_use
             &pu("-foo"), // package_use_user
+            &[],         // env_use_tokens
             &[],
             &[],
             &HashSet::new(),
@@ -21089,6 +21113,47 @@ mod tests {
             !user_wins.contains("foo"),
             "user package.use -foo beats package.env foo"
         );
+    }
+
+    #[test]
+    fn effective_use_flags_env_use_is_the_highest_tier_and_beats_user_package_use() {
+        // Real `configdict["env"]` is above `pkg`: `USE="-foo"` in the
+        // process env overrides a user `/etc/portage/package.use foo`.
+        let with_env_use = |env_tokens: &[String], user_pu: &[(String, Vec<String>)]| {
+            effective_use_flags(
+                "foo",
+                &[],
+                &[],
+                &[],
+                &[],
+                &[],
+                &[],
+                &[],
+                &[],
+                user_pu,
+                env_tokens,
+                &[],
+                &[],
+                &HashSet::new(),
+                &HashSet::new(),
+                &HashSet::new(),
+                &HashSet::new(),
+                &[],
+                &[],
+                &["amd64".to_string()],
+                &HashSet::from(["amd64".to_string()]),
+                &[],
+                "dev-libs/pkg-1.0:0/0::testrepo",
+                "dev-libs",
+                "pkg",
+            )
+        };
+        // user package.use enables `foo`, env `USE="-foo"` cancels it.
+        assert!(!with_env_use(&["-foo".to_string()], &pu("foo")).contains("foo"));
+        // ...and the other way: env `USE="foo"` beats user package.use `-foo`.
+        assert!(with_env_use(&["foo".to_string()], &pu("-foo")).contains("foo"));
+        // no env tokens -> user package.use stands.
+        assert!(with_env_use(&[], &pu("foo")).contains("foo"));
     }
 
     #[test]

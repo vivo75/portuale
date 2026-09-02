@@ -1925,6 +1925,7 @@ fn blocked_installed_packages(
             &config.profile_use_layers,
             &config.package_env_use,
             &config.package_use_user,
+            &config.env_use_tokens,
             &config.package_use_force,
             &config.package_use_mask,
             &config.use_force,

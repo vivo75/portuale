@@ -1342,6 +1342,7 @@ def _use_flags_if_conditional(value_str, candidate, category, package, candidate
         config["profile_use_layers"],
         config["package_env_use"],
         config["package_use_user"],
+        config["env_use_tokens"],
         config["package_use_force"],
         config["package_use_mask"],
         config["use_force"],
@@ -2000,6 +2001,7 @@ def _flag_is_settable(candidate, category, package, flag, desired, config):
         config["profile_use_layers"],
         config["package_env_use"],
         package_use_user,
+        config["env_use_tokens"],
         config["package_use_force"],
         config["package_use_mask"],
         config["use_force"],
@@ -2463,6 +2465,7 @@ def effective_use_flags(
     profile_use_layers,
     package_env_use,
     package_use_user,
+    env_use_tokens,
     package_use_force,
     package_use_mask,
     use_force,
@@ -2502,14 +2505,16 @@ def effective_use_flags(
          (conf_use_tokens).
       5. pkg -- package.env's own USE= (package_env_use), then the
          user-level /etc/portage/package.use (package_use_user) on top.
+      6. env -- the process-environment USE="..." (env_use_tokens), the
+         highest tier: USE="-X" emerge foo beats a package.use flag.
          Strongest layer before the final use.force/use.mask step.
 
     Every layer is replayed via _apply_incremental directly -- not a
     pre-flattened set unioned on top (see the `iuse` paragraph below).
-    The rest of the env layer ($USE, package.env non-USE vars) and
-    env.d are documented cuts; the features tier is modeled for its one
-    real flag (FEATURES=test -> "test"). Applied per package,
-    mirroring portage-repo/src/lib.rs's effective_use_flags exactly.
+    package.env's non-USE vars and env.d are documented cuts; the
+    features tier is modeled for its one real flag (FEATURES=test ->
+    "test"). Applied per package, mirroring portage-repo/src/lib.rs's
+    effective_use_flags exactly.
 
     After the walk:
     THEN package.use.force/package.use.mask layered on top of that (force
@@ -2637,9 +2642,16 @@ def effective_use_flags(
     # _grab_pkg_env fills pkg_configdict), then user-level
     # /etc/portage/package.use on top (real config.py:2042-2048 appends
     # self.puse after) -- a user package.use flag wins over a package.env
-    # one. Strongest before the final use.force/use.mask step below.
+    # one.
     _apply_matching(package_env_use)
     _apply_matching(package_use_user)
+
+    # env (real configdict["env"], the highest USE_ORDER tier): the
+    # process-environment USE="..." -- USE="-X" emerge foo overrides even
+    # a user /etc/portage/package.use flag. Strongest before the final
+    # use.force/use.mask step below.
+    for token in env_use_tokens:
+        _apply_incremental(token, use_flags)
 
     # _* wildcard USE_EXPAND expansion (real config.py setcpv ~2242):
     # once package.use has been applied, a "k_*" flag still in the set
@@ -2844,6 +2856,7 @@ def _reinstall_flags_for_use_change(root, category, package, candidate, config, 
         config["profile_use_layers"],
         config["package_env_use"],
         config["package_use_user"],
+        config["env_use_tokens"],
         config["package_use_force"],
         config["package_use_mask"],
         config["use_force"],
@@ -3410,6 +3423,7 @@ def _candidate_iuse_and_use(candidate, category, package, config):
         config["profile_use_layers"],
         config["package_env_use"],
         config["package_use_user"],
+        config["env_use_tokens"],
         config["package_use_force"],
         config["package_use_mask"],
         config["use_force"],
@@ -3606,7 +3620,7 @@ _ENV_SCALAR_VARS = (
 def _apply_env_layer(
     scalars,
     use_flags,
-    conf_use_tokens,
+    env_use_tokens,
     accept_keywords,
     use_expand,
     use_expand_unprefixed,
@@ -3616,9 +3630,9 @@ def _apply_env_layer(
 ):
     """Real config.regenerate()'s `env` USE_ORDER layer: the process
     environment overrides / stacks on the profile chain + make.conf, for
-    a curated allowlist of config vars. Env `USE` lands at the `conf`
-    layer (a documented narrowing -- real USE_ORDER puts `env` above the
-    user-level `package.use`). Mirrors portage-profile/src/lib.rs's
+    a curated allowlist of config vars. Env `USE` lands in env_use_tokens,
+    the highest USE_ORDER tier -- effective_use_flags replays it after the
+    user-level `package.use`. Mirrors portage-profile/src/lib.rs's
     apply_env_layer."""
     for name in _ENV_INCREMENTAL_VARS:
         value = os.environ.get(name)
@@ -3626,7 +3640,7 @@ def _apply_env_layer(
             continue
         if name == "USE":
             _apply_incremental(value, use_flags)
-            conf_use_tokens.append(value)
+            env_use_tokens.append(value)
         elif name == "ACCEPT_KEYWORDS":
             _apply_incremental(value, accept_keywords)
         elif name == "USE_EXPAND":
@@ -3933,7 +3947,7 @@ def resolve_config(
     portage-profile/src/lib.rs's resolve_config exactly -- see that
     crate's doc comment for the full algorithm and its documented scope
     cuts. Returns a dict with keys "use_flags", "use_tokens",
-    "conf_use_tokens", "accept_keywords",
+    "conf_use_tokens", "env_use_tokens", "accept_keywords",
     "package_mask", "package_unmask", "package_accept_keywords",
     "package_use_repo", "repo_make_defaults_use", "features_use",
     "package_use",
@@ -4003,6 +4017,7 @@ def resolve_config(
     use_flags = set()
     use_tokens = []
     conf_use_tokens = []
+    env_use_tokens = []
     accept_keywords = set()
     use_expand = set()
     use_expand_unprefixed = set()
@@ -4089,7 +4104,7 @@ def resolve_config(
     _apply_env_layer(
         scalars,
         use_flags,
-        conf_use_tokens,
+        env_use_tokens,
         accept_keywords,
         use_expand,
         use_expand_unprefixed,
@@ -4581,6 +4596,7 @@ def resolve_config(
         "use_flags": use_flags,
         "use_tokens": use_tokens,
         "conf_use_tokens": conf_use_tokens,
+        "env_use_tokens": env_use_tokens,
         "accept_keywords": accept_keywords,
         "package_mask": _stack_mask_lines(mask_sources),
         "package_unmask": _stack_mask_lines(unmask_sources),
@@ -5624,6 +5640,7 @@ def resolve_pretend(
                 config["profile_use_layers"],
                 config["package_env_use"],
                 config["package_use_user"],
+                config["env_use_tokens"],
                 config["package_use_force"],
                 config["package_use_mask"],
                 config["use_force"],
@@ -7392,6 +7409,7 @@ def resolve_pretend_graph(
                 config["profile_use_layers"],
                 config["package_env_use"],
                 config["package_use_user"],
+                config["env_use_tokens"],
                 config["package_use_force"],
                 config["package_use_mask"],
                 config["use_force"],
@@ -8102,6 +8120,7 @@ def _enqueue_dependencies(
             config["profile_use_layers"],
             config["package_env_use"],
             config["package_use_user"],
+            config["env_use_tokens"],
             config["package_use_force"],
             config["package_use_mask"],
             config["use_force"],

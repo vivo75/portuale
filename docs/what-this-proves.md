@@ -11201,15 +11201,26 @@ does the real walk:
   fallback for a hand-built `Config`.)* Then
 - `Config::conf_use_tokens` — `make.conf` USE plus the `USE_EXPAND`
   folded values (split out of `use_tokens`), then
-- `Config::package_use_user` — the user-level `/etc/portage/package.use`.
-  Strongest layer before the final `use.force`/`use.mask` step.
+- `Config::package_use_user` — the user-level `/etc/portage/package.use`,
+  then
+- `Config::env_use_tokens` — the process-environment `USE="..."` (real
+  `configdict["env"]`), the **highest** tier: `USE="-X" emerge foo`
+  overrides even a `package.use` flag. *(Shipped 2026-09-02; was folded
+  into the weaker `conf` tier before.)* The strongest layer before the
+  final `use.force`/`use.mask` step.
 
-Still documented cuts: the `env` layer's `$USE` env var, the `env.d`
-layer, and an overlay's own `profiles/make.defaults` USE.
-(`package.env`'s `USE=` shipped 2026-09-02; its non-`USE` build vars —
-a build-phase concern, not a USE layer — the same day; the `features`
-tier — modelled for its one real flag, `FEATURES=test` → `test` —
-also 2026-09-02.)
+Still documented cuts: the `env.d` layer and an overlay's own
+`profiles/make.defaults` USE. (`package.env`'s `USE=` shipped
+2026-09-02; its non-`USE` build vars — a build-phase concern, not a USE
+layer — the same day; the `features` tier — modelled for its one real
+flag, `FEATURES=test` → `test` — also 2026-09-02; `$USE` at its real
+`env` position — 2026-09-02.)
+
+`dev-libs/packageuseenablepkg` proves the `env` tier:
+`test_env_use_is_the_highest_tier_and_overrides_a_package_use_flag`
+(contract suite) — `fixtures/etc/portage/package.use` enables
+`pkguseflag` (pulling `dev-libs/newpkg`); `USE="-pkguseflag" emerge -p`
+cancels it → `USE="-pkguseflag"`, no dep. Rust == Python.
 
 `dev-libs/featuretestpkg` (`IUSE="test other"`, `RDEPEND="test? (
 dev-libs/newpkg )"`) proves the `features` tier:

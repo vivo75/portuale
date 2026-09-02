@@ -35,14 +35,15 @@
 //   - Real config.py's `USE_ORDER` is
 //     `env:pkg:conf:defaults:pkginternal:features:repo:env.d`. This pilot
 //     now models `repo` (repo-level `package.use` only, not repo
-//     `make.defaults`), `pkginternal` (the ebuild's own IUSE `+`/`-`
-//     defaults), `defaults` (profile `make.defaults` + profile
-//     `package.use`), `conf` (make.conf), and `pkg` (`package.env`'s
-//     own `USE=`, then user `package.use` on top) -- see
-//     `Config::package_use{,_repo,_user}` / `Config::package_env_use`
-//     and `portage-repo::effective_use_flags`. Still absent: the rest of
-//     `env` (the `$USE` env var, `package.env`'s non-USE vars),
-//     `features` (`FEATURES`-implied USE), and `env.d`.
+//     `make.defaults`), `features` (`FEATURES=test` -> `test`),
+//     `pkginternal` (the ebuild's own IUSE `+`/`-` defaults), `defaults`
+//     (profile `make.defaults` + profile `package.use`), `conf`
+//     (make.conf), `pkg` (`package.env`'s own `USE=`, then user
+//     `package.use` on top), and `env` (the `$USE` env var, the highest
+//     tier) -- see `Config::package_use{,_repo,_user}` /
+//     `Config::{package_env_use,features_use,env_use_tokens}` and
+//     `portage-repo::effective_use_flags`. Still absent: `package.env`'s
+//     non-USE vars and `env.d`.
 //   - No line continuation / multi-line quoted values, and no trailing
 //     `# comment` after a real assignment (a `#` is only recognized as a
 //     comment when it starts the (trimmed) line). Real make.defaults/
@@ -117,9 +118,8 @@
 //     The main repo's top-level `profiles/make.defaults` USE (real
 //     `_repo_make_defaults`) is folded into the `repo` layer too, ahead
 //     of repo `package.use` (`Config::repo_make_defaults_use`).
-//     Still not modeled: the rest of the `env` layer (`$USE`,
-//     `package.env`'s non-USE vars), `features`/`env.d`, and an
-//     *overlay's* own `profiles/make.defaults` USE.
+//     Still not modeled: the `env.d` layer and an *overlay's* own
+//     `profiles/make.defaults` USE.
 //     Each source is still purely additive within itself (no `-atom`
 //     removal exists for this file -- see `parse_package_use_lines`), and
 //     still applied per package (not globally): a matching entry's tokens
@@ -337,6 +337,17 @@ pub struct Config {
     /// `package.use`. Split out of `use_tokens` by the "Config depth"
     /// slice -- see that field's own doc comment.
     pub conf_use_tokens: Vec<String>,
+    /// The process-environment `USE="..."` value(s) -- real
+    /// `configdict["env"]["USE"]`, the **highest** `USE_ORDER` tier.
+    /// `effective_use_flags` replays these (via `apply_incremental`,
+    /// `+`/`-` syntax preserved) *after* the user-level
+    /// `/etc/portage/package.use`, so `USE="-X" emerge foo` overrides
+    /// even a `package.use` flag for `foo`. Populated by
+    /// `apply_env_layer` from `$USE`; empty otherwise. (The global
+    /// [`Config::use_flags`] set is also env-last, which is correct for
+    /// any package with no `package.use` entry; this field makes the
+    /// per-package walk agree with it.)
+    pub env_use_tokens: Vec<String>,
     pub accept_keywords: HashSet<String>,
     /// Raw atom or bounded-wildcard-atom strings (see
     /// `portage_dep::parse_wildcard_atom`) from `package.mask`, with
@@ -953,14 +964,13 @@ fn apply_env_layer(scalars: &mut HashMap<String, String>, config: &mut Config) {
             "USE" => {
                 apply_incremental(&value, &mut config.use_flags);
                 // Real `USE_ORDER` puts `env` above `pkg` (user
-                // `package.use`); this pilot lands env `USE` at the
-                // `conf` layer instead (`conf_use_tokens`, applied after
-                // `defaults` + profile/repo `package.use`, before the
-                // user-level `package.use`) -- a documented narrowing of
-                // the existing "`package.use` applied as one group" cut.
-                // The global `config.use_flags` above is still env-last
-                // (correct) for every package with no `package.use` entry.
-                config.conf_use_tokens.push(value.clone());
+                // `package.use`) -- the highest tier. `effective_use_flags`
+                // replays `env_use_tokens` after the user-level
+                // `package.use`, so `USE="-X" emerge foo` beats a
+                // `package.use foo` entry. (The global `config.use_flags`
+                // above is already env-last for a package with no
+                // `package.use` entry.)
+                config.env_use_tokens.push(value.clone());
             }
             "ACCEPT_KEYWORDS" => apply_incremental(&value, &mut config.accept_keywords),
             "USE_EXPAND" => apply_incremental(&value, &mut config.use_expand),

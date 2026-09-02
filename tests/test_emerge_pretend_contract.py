@@ -4707,6 +4707,29 @@ def test_package_use_wildcard_entry_enables_a_flag_and_pulls_in_a_dependency(
                                          ]
 
 
+def test_env_use_is_the_highest_tier_and_overrides_a_package_use_flag(
+    emerge_binary, emerge_pretend_python, fixture_env
+):
+    """Real `configdict["env"]` is the highest `USE_ORDER` tier -- above
+    the user-level `/etc/portage/package.use`. `fixtures/etc/portage/
+    package.use` enables `pkguseflag` for `dev-libs/packageuseenablepkg`
+    (pulling `dev-libs/newpkg`); a process-env `USE="-pkguseflag"` now
+    cancels it, so the dep is not pulled -- proving env `USE` reaches
+    `effective_use_flags` at its real position (was folded into the
+    weaker `conf` tier before). Rust == Python."""
+    env = dict(fixture_env)
+    env["USE"] = "-pkguseflag"
+    args = ["--pretend", "dev-libs/packageuseenablepkg"]
+
+    rust = _run([str(emerge_binary)], args, env)
+    py = _run(emerge_pretend_python, args, env)
+    assert rust.returncode == 0
+    assert rust.stdout == py.stdout
+    assert rust.stdout.splitlines() == [
+        '[ebuild  N     ] dev-libs/packageuseenablepkg-1.0  USE="-pkguseflag"',
+    ]
+
+
 def test_package_env_env_file_use_enables_a_flag_and_pulls_in_a_dependency(
     emerge_binary, fixture_env
 ):

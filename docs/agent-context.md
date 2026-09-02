@@ -134,9 +134,10 @@ it decays fast.
 
 **Dry-run (`emerge --pretend`)**: full recursive DEPEND/RDEPEND/BDEPEND/
 PDEPEND/IDEPEND resolution; profile/make.conf-derived USE/ACCEPT_KEYWORDS
-with the real `USE_ORDER` precedence for the `repo`/`pkginternal`/
-`defaults`/`conf`/`pkg` layers (`env`/`features`/`env.d` still cut — see
-scope-backlog.md Part 2.C); every `package.*` file
+with the real `USE_ORDER` precedence for the `repo`/`features`/
+`pkginternal`/`defaults`/`conf`/`pkg`/`env` layers (`env.d` still cut,
+plus an overlay's own `make.defaults` USE — see scope-backlog.md Part
+2.C); every `package.*` file
 (`.mask`/`.unmask`/`.accept_keywords`/`.use`/`.use.mask`/`.use.force`/
 `.use.stable.mask`/`.use.stable.force`), repo-scoped across main **and**
 overlay repos; `package.provided` (a listed CPV satisfies a dependency
@@ -415,11 +416,14 @@ not just read this list. What's actually left, grouped by area:
 > no Python mirror), the main repo's `profiles/make.defaults` USE
 > (`Config::repo_make_defaults_use`, head of the `repo` layer), and the
 > per-profile-level `defaults`-tier walk (`Config::profile_use_layers` /
-> `ProfileUseLayer`), and the `features` tier (`Config::features_use` —
+> `ProfileUseLayer`), the `features` tier (`Config::features_use` —
 > `FEATURES=test` → `test`, applied between `repo` and `pkginternal`;
-> new `dev-libs/featuretestpkg`, Python-mirrored). Remaining Part 2.C:
-> `env` `$USE`, the `env.d` layer, an overlay's own
-> `profiles/make.defaults` USE.
+> new `dev-libs/featuretestpkg`, Python-mirrored), and **`$USE` at its
+> real `env` position** (`Config::env_use_tokens`, the highest tier —
+> `effective_use_flags` replays it after the user `package.use`, so
+> `USE="-X" emerge foo` beats a `package.use` flag; was folded into
+> `conf` before). Remaining Part 2.C: the `env.d` layer, an overlay's
+> own `profiles/make.defaults` USE.
 > Also recently closed:
 > the **remote binpkg download + merge** (2026-08-31): `emerge
 > --getbinpkgonly <atom>` non-`--pretend` — live `Packages` refresh
