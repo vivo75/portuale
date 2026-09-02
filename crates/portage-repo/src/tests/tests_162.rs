@@ -56,6 +56,184 @@ fn entry_162(
     }
 }
 
+// ---- `complete_graph_auto_enable` (the `--complete` re-walk
+// trigger: an `Upgrade`/`Downgrade`, a new-slot `New`, or a
+// `Reinstall` with USE/slot churn enables it). ----
+
+/// Any `Upgrade`/`Downgrade` enables when `if_new_ver` is set, and
+/// neither does when it is not.
+#[test]
+fn complete_graph_auto_enable_upgrade_and_downgrade_follow_if_new_ver() {
+    let entries = vec![
+        entry_162(
+            "dev-libs",
+            "up",
+            PretendOutcome::Upgrade {
+                from: "1.0".to_string(),
+                to: "2.0".to_string(),
+            },
+            Some("0"),
+            false,
+        ),
+        entry_162(
+            "dev-libs",
+            "down",
+            PretendOutcome::Downgrade {
+                from: "2.0".to_string(),
+                to: "1.0".to_string(),
+            },
+            Some("0"),
+            false,
+        ),
+    ];
+    assert!(complete_graph_auto_enable(CompleteGraphAutoEnableArgs {
+        entries: &entries,
+        if_new_use: true,
+        if_new_ver: true,
+        if_new_slot: true,
+        root: std::path::Path::new(""),
+        repos: &[],
+        config: &portage_profile::Config::default()
+    }));
+    assert!(complete_graph_auto_enable(CompleteGraphAutoEnableArgs {
+        entries: &entries,
+        if_new_use: false,
+        if_new_ver: true,
+        if_new_slot: false,
+        root: std::path::Path::new(""),
+        repos: &[],
+        config: &portage_profile::Config::default()
+    }));
+    assert!(!complete_graph_auto_enable(CompleteGraphAutoEnableArgs {
+        entries: &entries,
+        if_new_use: true,
+        if_new_ver: false,
+        if_new_slot: true,
+        root: std::path::Path::new(""),
+        repos: &[],
+        config: &portage_profile::Config::default()
+    }));
+    assert!(!complete_graph_auto_enable(CompleteGraphAutoEnableArgs {
+        entries: &entries,
+        if_new_use: false,
+        if_new_ver: false,
+        if_new_slot: false,
+        root: std::path::Path::new(""),
+        repos: &[],
+        config: &portage_profile::Config::default()
+    }));
+}
+
+/// A new-slot `New` enables on `if_new_ver` or `if_new_slot`
+/// alone; a same-slot `New` never does even with every flag set.
+#[test]
+fn complete_graph_auto_enable_new_only_for_a_new_slot() {
+    let new_slot = vec![entry_162(
+        "dev-libs",
+        "fresh",
+        PretendOutcome::New {
+            version: "1.0".to_string(),
+        },
+        Some("1"),
+        true,
+    )];
+    assert!(complete_graph_auto_enable(CompleteGraphAutoEnableArgs {
+        entries: &new_slot,
+        if_new_use: false,
+        if_new_ver: false,
+        if_new_slot: true,
+        root: std::path::Path::new(""),
+        repos: &[],
+        config: &portage_profile::Config::default()
+    }));
+    assert!(complete_graph_auto_enable(CompleteGraphAutoEnableArgs {
+        entries: &new_slot,
+        if_new_use: false,
+        if_new_ver: true,
+        if_new_slot: false,
+        root: std::path::Path::new(""),
+        repos: &[],
+        config: &portage_profile::Config::default()
+    }));
+    assert!(!complete_graph_auto_enable(CompleteGraphAutoEnableArgs {
+        entries: &new_slot,
+        if_new_use: false,
+        if_new_ver: false,
+        if_new_slot: false,
+        root: std::path::Path::new(""),
+        repos: &[],
+        config: &portage_profile::Config::default()
+    }));
+    let same_slot = vec![entry_162(
+        "dev-libs",
+        "fresh",
+        PretendOutcome::New {
+            version: "1.0".to_string(),
+        },
+        Some("0"),
+        false,
+    )];
+    assert!(!complete_graph_auto_enable(CompleteGraphAutoEnableArgs {
+        entries: &same_slot,
+        if_new_use: true,
+        if_new_ver: true,
+        if_new_slot: true,
+        root: std::path::Path::new(""),
+        repos: &[],
+        config: &portage_profile::Config::default()
+    }));
+}
+
+/// A `Reinstall` with USE churn enables on `if_new_use`, one with
+/// a slot change on `if_new_ver`; a churn-free one never does.
+#[test]
+fn complete_graph_auto_enable_reinstall_needs_churn() {
+    let use_churn = |changed: Vec<String>| {
+        entry_162(
+            "dev-libs",
+            "re",
+            PretendOutcome::Reinstall {
+                version: "1.0".to_string(),
+                changed_flags: changed,
+                deps_changed: false,
+                slot_changed: false,
+                rebuilt_binary: false,
+                new_repo: false,
+                slot_operator_rebuild: false,
+            },
+            Some("0"),
+            false,
+        )
+    };
+    assert!(complete_graph_auto_enable(CompleteGraphAutoEnableArgs {
+        entries: &[use_churn(vec!["flip".to_string()])],
+        if_new_use: true,
+        if_new_ver: false,
+        if_new_slot: false,
+        root: std::path::Path::new(""),
+        repos: &[],
+        config: &portage_profile::Config::default()
+    }));
+    assert!(!complete_graph_auto_enable(CompleteGraphAutoEnableArgs {
+        entries: &[use_churn(vec!["flip".to_string()])],
+        if_new_use: false,
+        if_new_ver: false,
+        if_new_slot: false,
+        root: std::path::Path::new(""),
+        repos: &[],
+        config: &portage_profile::Config::default()
+    }));
+    assert!(!complete_graph_auto_enable(CompleteGraphAutoEnableArgs {
+        entries: &[use_churn(Vec::new())],
+        if_new_use: true,
+        if_new_ver: false,
+        if_new_slot: false,
+        root: std::path::Path::new(""),
+        repos: &[],
+        config: &portage_profile::Config::default()
+    }));
+}
+
 /// A `Reinstall` with only a slot change enables on `if_new_ver`
 /// alone; the crossed shape stays off.
 #[test]

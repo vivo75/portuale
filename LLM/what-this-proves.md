@@ -9371,6 +9371,69 @@ Reuses the `oldmovepkg`/`newmovepkg` + `slotmovepkg` + `movedepconsumer`
 move fixtures. Mirrored in `emerge_pretend_reference.py`
 (`_package_moves_enabled`); 5 `CASES` + 1 pinned contract test.
 
+### `emerge --complete-graph[=y|n]` + `--complete-graph-if-new-use` / `--complete-graph-if-new-ver` (2026-09-02)
+
+Real `create_depgraph_params.py:169-175`: `--complete-graph` (real
+`true_y_or_n`, OFF by default) *and* any of
+`--rebuild-if-{unbuilt,new-rev,new-ver}` set `myparams["complete"] =
+True`; `main.py:181-184` (`--nodeps`) pops it back off.
+`depgraph.py::_complete_graph` (8562-8670) then, if not already in
+complete mode, **auto-enables** it when `--complete-graph-if-new-use` or
+`--complete-graph-if-new-ver` (real `y_or_n`, both default `"y"`) or
+`complete_if_new_slot` (= `--rebuild-if-new-slot`) is on *and* the
+freshly-built graph contains a merge that changes an already-installed
+package — its version (upgrade/downgrade, or a slot change without a
+revbump), its USE/IUSE, or a brand-new slot of an installed `cp`. Once
+complete, real portage loads the vdb, restricts package selection to
+installed-/already-graphed packages, seeds `args ∪ @system ∪ @world`,
+and toggles `myparams["deep"] = True` (8668-8670).
+
+**Corrected 2026-09-04 — `_select_pkg_from_graph`, not just a deep
+walk.** Real `_complete_graph` does two things (`depgraph.py:8662-8670`):
+toggle `myparams["deep"] = True` **and** swap package selection to
+`_select_pkg_from_graph` — pick a package already in the graph, or the
+installed one, **or `None`; never a new merge**. Portuale's first cut
+did only the first half (`complete → Deep::Unlimited`), so complete
+mode's deep re-walk of the required sets pulled in `[ebuild N]` entries
+real would never merge — found live on this system: `emerge -pt
+gnome-base/gnome-control-center` blew up to **892 graph entries**
+(essentially the whole installed closure — `net-fs/samba`,
+`kde-plasma/plasma-workspace`, `sys-fs/lvm2` …) and merged `dev-lang/
+rust-bin`, `kde-frameworks/kdoctools` and a docbook toolchain, none of
+which real touches.
+
+The fix is real's 2-phase structure. `pretend.rs` (and
+`emerge_pretend_reference.py`) now always run **phase 1 non-complete**
+— the authoritative merge list — then, if `--complete-graph` is
+explicit or auto-enabled, run **phase 2 complete** passing phase 1's
+merge set as `Config::complete_locked_merges`. In the complete pass, an
+atom whose `cp` isn't a genuine phase-1 merge target may only resolve to
+`AlreadyInstalled` (an installed version satisfies it — real's
+`_select_pkg_from_installed` fallback) or be dropped entirely (nothing
+installed — real's `_initially_unsatisfied_deps`, no graph node). New
+`portage_repo::best_installed_for_atom`. The visible merge list in
+complete mode is now **identical to phase 1** — complete mode only
+widens `--json` / `--changed-deps-report` / slot-op-rebuild accounting,
+exactly as real intends.
+
+```sh
+FX="$(realpath fixtures)"
+run() { PORTAGE_CONFIGROOT="$FX" ROOT="$FX" PORTAGE_RUNNING_ROOT="$FX" \
+    rust/target/release/portuale emerge "$@"; }
+# deeppkg (installed) -> deeppkg2 (installed) -> newpkg (NOT installed)
+run -p dev-libs/deeppkg
+#   (no output: deeppkg already installed)
+run -pD dev-libs/deeppkg
+# [ebuild  N     ] dev-libs/newpkg-1.0             <- -D deep-walks AND merges
+run -p --complete-graph dev-libs/deeppkg
+#   (no output: complete mode deep-walks but _select_pkg_from_graph -> newpkg accounted for, never merged)
+```
+
+Reuses the `deeppkg`→`deeppkg2`→`newpkg` chain and the
+`dev-libs/completegraphpkg` fixture. `portage-repo` unit test
+`complete_graph_never_merges_a_missing_deep_dep_of_an_installed_pkg`
++ 10 `CASES` + 2 rewritten contract tests. Full suite: 1245 passed.
+
 ### `emerge -pc <atoms> --deselect=n`
 
 Real `action_depclean`: `deselect = myopts.get("--deselect") != "n"`

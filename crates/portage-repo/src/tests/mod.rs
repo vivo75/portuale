@@ -1395,6 +1395,7 @@ mod bind;
 mod binpkg_use;
 mod blockers;
 mod candidates;
+mod complete_graph;
 mod conflict_use_display;
 mod depclean;
 mod entry;
