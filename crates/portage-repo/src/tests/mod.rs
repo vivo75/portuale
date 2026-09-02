@@ -1503,6 +1503,7 @@ mod blockers;
 mod candidates;
 mod complete_graph;
 mod conflict_use_display;
+mod cycles;
 mod depclean;
 mod entry;
 mod graph;

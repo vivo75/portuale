@@ -38,6 +38,25 @@ pub(crate) fn merge_bound_index(entries: &[GraphEntry]) -> HashMap<(&str, &str),
     cp_index
 }
 
+/// First merge-bound index per (root, cp): the edge-resolution view (Portage's
+/// package-keyed digraph never merges two roots' instances). `merge_bound_index`
+/// stays the cp-level view for render order.
+pub(crate) fn merge_bound_root_index(entries: &[GraphEntry]) -> HashMap<(bool, &str, &str), usize> {
+    let mut index: HashMap<(bool, &str, &str), usize> = HashMap::new();
+    for (i, e) in entries.iter().enumerate() {
+        if merge_bound_cpv(e).is_some() {
+            index
+                .entry((
+                    e.targets_running_root,
+                    e.category.as_str(),
+                    e.package.as_str(),
+                ))
+                .or_insert(i);
+        }
+    }
+    index
+}
+
 /// Resolve one root-qualified map endpoint to its entry index -- the exact-root
 /// instance first, falling back to the cp-level first index when this graph holds
 /// no such instance in that root.

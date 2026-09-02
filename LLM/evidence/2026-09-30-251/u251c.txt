@@ -1,0 +1,39 @@
+### u251c ['dev-util/u251c', 'dev-libs/u251y'] success False mergelist None
+circular_dependency {'dev-libs/u251y-1': ['dev-util/u251c-1', 'dev-util/u251d-1'], 'dev-util/u251c-1': ['dev-libs/u251y-1'], 'dev-util/u251d-1': ['dev-libs/u251y-1']}
+[nomerge       ] dev-libs/u251y-1::test_repo 
+[ebuild  N     ]  dev-util/u251d-1::test_repo  0 KiB
+[ebuild  N     ]  dev-util/u251c-1::test_repo  0 KiB
+[ebuild  N     ]   dev-libs/u251y-1::test_repo  0 KiB
+Total: 3 packages (3 new), Size of downloads: 0 KiB
+ * Error: circular dependencies:
+(dev-libs/u251y-1:0/0::test_repo, ebuild scheduled for merge) depends on
+ (dev-util/u251c-1:0/0::test_repo, ebuild scheduled for merge) (buildtime)
+  (dev-libs/u251y-1:0/0::test_repo, ebuild scheduled for merge) (buildtime)
+ * Note that circular dependencies can often be avoided by temporarily
+ * disabling USE flags that trigger optional dependencies.
+### u251c ['dev-libs/u251y', 'dev-util/u251c'] success False mergelist None
+circular_dependency {'dev-util/u251d-1': ['dev-libs/u251y-1'], 'dev-libs/u251y-1': ['dev-util/u251c-1', 'dev-util/u251d-1'], 'dev-util/u251c-1': ['dev-libs/u251y-1']}
+[nomerge       ] dev-libs/u251y-1::test_repo 
+[ebuild  N     ]  dev-util/u251d-1::test_repo  0 KiB
+[ebuild  N     ]  dev-util/u251c-1::test_repo  0 KiB
+[ebuild  N     ]   dev-libs/u251y-1::test_repo  0 KiB
+Total: 3 packages (3 new), Size of downloads: 0 KiB
+ * Error: circular dependencies:
+(dev-util/u251d-1:0/0::test_repo, ebuild scheduled for merge) depends on
+ (dev-libs/u251y-1:0/0::test_repo, ebuild scheduled for merge) (buildtime)
+  (dev-util/u251d-1:0/0::test_repo, ebuild scheduled for merge) (buildtime)
+ * Note that circular dependencies can often be avoided by temporarily
+ * disabling USE flags that trigger optional dependencies.
+### u251c ['dev-libs/u251y'] success False mergelist None
+circular_dependency {'dev-util/u251d-1': ['dev-libs/u251y-1'], 'dev-libs/u251y-1': ['dev-util/u251d-1']}
+[nomerge       ] dev-libs/u251y-1::test_repo 
+[ebuild  N     ]  dev-util/u251c-1::test_repo  0 KiB
+[ebuild  N     ]  dev-util/u251d-1::test_repo  0 KiB
+[ebuild  N     ]   dev-libs/u251y-1::test_repo  0 KiB
+Total: 3 packages (3 new), Size of downloads: 0 KiB
+ * Error: circular dependencies:
+(dev-util/u251d-1:0/0::test_repo, ebuild scheduled for merge) depends on
+ (dev-libs/u251y-1:0/0::test_repo, ebuild scheduled for merge) (buildtime)
+  (dev-util/u251d-1:0/0::test_repo, ebuild scheduled for merge) (buildtime)
+ * Note that circular dependencies can often be avoided by temporarily
+ * disabling USE flags that trigger optional dependencies.
