@@ -228,11 +228,21 @@ single-pass BFS can't grow into these incrementally:
   layer after it; `use_tokens` split into profile `make.defaults` +
   `conf_use_tokens`. `effective_use_flags` does the real reversed-
   `USE_ORDER` walk `repo → pkginternal → defaults → conf → pkg`.)*
-  Still open: the `env` (`$USE` / `/etc/portage/env` / `package.env`),
-  `features`, and `env.d` layers; repo `make.defaults` USE folded into
-  `configdict["repo"]`; profile `package.use` interleaved per profile
-  level with that level's `make.defaults` (the pilot applies it as one
-  group).
+  *(Shipped 2026-09-02: the **process-environment** half of the `env`
+  layer — `ACCEPT_KEYWORDS=~amd64 emerge foo`, `USE="-X" emerge bar`,
+  `VIDEO_CARDS=… emerge baz`, `CFLAGS=… emerge --info`. New
+  `portage_profile::apply_env_layer` over a curated allowlist
+  (`ENV_INCREMENTAL_VARS` / `ENV_SCALAR_VARS`), applied right after
+  `make.conf`. Narrowing: env `USE` lands at the `conf` layer, not its
+  real `env` position above the user-level `package.use`; env
+  `USE_EXPAND` variable values are last-wins into `scalars`, not
+  genuinely incremental. Test isolation: `conftest.py` strips these vars
+  process-wide for the session.)*
+  Still open: `/etc/portage/env` / `package.env` (the other half of the
+  `env` layer); the `features` and `env.d` layers; repo `make.defaults`
+  USE folded into `configdict["repo"]`; profile `package.use` interleaved
+  per profile level with that level's `make.defaults` (the pilot applies
+  it as one group).
 
 ### D. Sandbox / build isolation — **substantially complete (2026-09-01)**
 
@@ -505,6 +515,20 @@ Standing decisions, not oversights.
   the `ESYSROOT` distinction** — not in scope.
 - **`equery` / `portageq` / `etc-update` / `dispatch-conf`** — separate
   tools, separate binaries.
+- **Switching CLI option parsing to `clap`** — evaluated 2026-09-02,
+  rejected. The parser (`pretend.rs`'s parse loop + `emerge_options.rs`
+  tables) faithfully reproduces `emerge`'s `argparse` quirks that `clap`
+  has no idiom for: optional values consumed only when they look like an
+  integer (`--deep[=N]`, `--jobs[=N]`, `--backtrack[=N]`), `true_y_or_n`
+  (bare / `=y` / `=n` / space `y`/`n`) vs `y_or_n` (required),
+  `action:"append"` atom lists where each occurrence is itself
+  space-split, `-pX requires an argument and can't be bundled`, and the
+  exact real error strings. It also carries the
+  recognized-but-unimplemented machinery (a real emerge option reports
+  "not implemented in this pilot", not "unknown") and is kept
+  structurally parallel to the Python reference so the two parsers can't
+  drift. `clap` would fight every one of these; ~1500 lines across two
+  languages under ~1100 contract tests, near-zero payoff.
 
 ---
 

@@ -767,6 +767,99 @@ pub fn apply_incremental(tokens: &str, set: &mut HashSet<String>) {
     }
 }
 
+/// Config variables the pilot honours from the **process environment** --
+/// real `config.regenerate()`'s `env` `USE_ORDER` layer, the
+/// highest-priority config source (`ACCEPT_KEYWORDS=~amd64 emerge foo`,
+/// `USE="-X" emerge bar`, …). Real portage passes nearly all of
+/// `os.environ` through `backupenv`; this pilot uses a curated allowlist
+/// instead -- it only reads a fixed set of config vars, and folding
+/// `PATH`/`HOME`/… into `other_vars` would pollute `emerge --info`.
+///
+/// The first list is real `INCREMENTALS` the pilot models (stacked onto
+/// the profile chain + `make.conf` via `apply_incremental`); the second
+/// is plain last-wins scalars the pilot reads out of `scalars` /
+/// `other_vars` later. `USE_EXPAND` *variable values* (`VIDEO_CARDS=…`)
+/// are handled separately, in the expansion loop, once their names are
+/// known.
+const ENV_INCREMENTAL_VARS: &[&str] = &[
+    "USE",
+    "ACCEPT_KEYWORDS",
+    "USE_EXPAND",
+    "USE_EXPAND_UNPREFIXED",
+    "USE_EXPAND_IMPLICIT",
+    "USE_EXPAND_HIDDEN",
+    "IUSE_IMPLICIT",
+];
+const ENV_SCALAR_VARS: &[&str] = &[
+    "ACCEPT_LICENSE",
+    "ACCEPT_PROPERTIES",
+    "ACCEPT_RESTRICT",
+    "PKGDIR",
+    "DISTDIR",
+    "PORTAGE_TMPDIR",
+    "PORTAGE_LOGDIR",
+    "PORTAGE_BINHOST",
+    "PORTAGE_NICENESS",
+    "PORTAGE_IONICE_COMMAND",
+    "PORTAGE_ELOG_SYSTEM",
+    "PORTAGE_ELOG_CLASSES",
+    "PORTAGE_ELOG_MAILURI",
+    "FEATURES",
+    "CHOST",
+    "CBUILD",
+    "CTARGET",
+    "CFLAGS",
+    "CXXFLAGS",
+    "CPPFLAGS",
+    "LDFLAGS",
+    "FFLAGS",
+    "FCFLAGS",
+    "MAKEOPTS",
+    "EMERGE_DEFAULT_OPTS",
+    "PORTAGE_RSYNC_EXTRA_OPTS",
+    "GENTOO_MIRRORS",
+];
+
+/// Apply the `env` `USE_ORDER` layer: for every allowlisted config var
+/// present in the process environment, override (scalars) or stack
+/// (incrementals) on top of the profile chain + `make.conf`. Called once,
+/// right after `make.conf` -- the same position real `regenerate()`
+/// gives the env layer (after `conf`, before the final USE calculation).
+fn apply_env_layer(scalars: &mut HashMap<String, String>, config: &mut Config) {
+    for &name in ENV_INCREMENTAL_VARS {
+        let Ok(value) = std::env::var(name) else {
+            continue;
+        };
+        match name {
+            "USE" => {
+                apply_incremental(&value, &mut config.use_flags);
+                // Real `USE_ORDER` puts `env` above `pkg` (user
+                // `package.use`); this pilot lands env `USE` at the
+                // `conf` layer instead (`conf_use_tokens`, applied after
+                // `defaults` + profile/repo `package.use`, before the
+                // user-level `package.use`) -- a documented narrowing of
+                // the existing "`package.use` applied as one group" cut.
+                // The global `config.use_flags` above is still env-last
+                // (correct) for every package with no `package.use` entry.
+                config.conf_use_tokens.push(value.clone());
+            }
+            "ACCEPT_KEYWORDS" => apply_incremental(&value, &mut config.accept_keywords),
+            "USE_EXPAND" => apply_incremental(&value, &mut config.use_expand),
+            "USE_EXPAND_UNPREFIXED" => apply_incremental(&value, &mut config.use_expand_unprefixed),
+            "USE_EXPAND_IMPLICIT" => apply_incremental(&value, &mut config.use_expand_implicit),
+            "USE_EXPAND_HIDDEN" => apply_incremental(&value, &mut config.use_expand_hidden),
+            "IUSE_IMPLICIT" => apply_incremental(&value, &mut config.iuse_implicit),
+            _ => {}
+        }
+        scalars.insert(name.to_string(), value);
+    }
+    for &name in ENV_SCALAR_VARS {
+        if let Ok(value) = std::env::var(name) {
+            scalars.insert(name.to_string(), value);
+        }
+    }
+}
+
 /// Processes one file's lines against the shared scalar/USE/ACCEPT_KEYWORDS
 /// state, without any `source` support (used for make.defaults; make.conf
 /// wraps this with `source` handling -- see `process_make_conf_file`).
@@ -1545,6 +1638,11 @@ pub fn resolve_config(
         )?;
     }
 
+    // Real `config.regenerate()`'s `env` `USE_ORDER` layer -- the process
+    // environment overrides / stacks on the profile chain + `make.conf`.
+    // See `apply_env_layer` / `ENV_*_VARS`.
+    apply_env_layer(&mut scalars, &mut config);
+
     // USE_EXPAND (PMS 7.3.4; real config.py's own regenerate(), "Do the
     // USE calculation last because it depends on USE_EXPAND"): now that
     // every profile level's own make.defaults plus make.conf have been
@@ -1579,6 +1677,26 @@ pub fn resolve_config(
     // candidate's own IUSE). `package.use`'s own USE_EXPAND-prefix
     // shorthand (`VIDEO_CARDS: nvidia` lines) is read too (see the
     // `package.use` bullet in this comment).
+    //
+    // `env` `USE_ORDER` layer for the USE_EXPAND / USE_EXPAND_UNPREFIXED
+    // variable *values* (`VIDEO_CARDS=nouveau emerge …`): their names
+    // aren't known until `USE_EXPAND` itself is finalized above, so the
+    // env override is folded into `scalars` here, right before both
+    // expansion loops read them. Real portage treats each as its own
+    // incremental; the pilot's last-wins `scalars` model just lets the
+    // env value replace the profile/`make.conf` one.
+    let env_expand_names: Vec<String> = config
+        .use_expand
+        .iter()
+        .chain(config.use_expand_unprefixed.iter())
+        .cloned()
+        .collect();
+    for var in env_expand_names {
+        if let Ok(value) = std::env::var(&var) {
+            scalars.insert(var, value);
+        }
+    }
+
     let use_expand_vars: Vec<String> = config.use_expand.iter().cloned().collect();
     for var in use_expand_vars {
         let Some(value) = scalars.get(&var) else {
@@ -3749,6 +3867,98 @@ sync-uri = file:///srv/pkgs
         assert_eq!(
             config.package_use_user,
             vec![("dev-libs/c".to_string(), vec!["flagc".to_string()])]
+        );
+    }
+
+    /// Serial env-scoping guard -- `resolve_config` reads the process
+    /// environment (`apply_env_layer`), which parallel test threads share.
+    fn with_env(vars: &[(&str, &str)], f: impl FnOnce()) {
+        use std::sync::Mutex;
+        static LOCK: Mutex<()> = Mutex::new(());
+        let _g = LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let saved: Vec<(String, Option<String>)> = vars
+            .iter()
+            .map(|(k, _)| (k.to_string(), std::env::var(k).ok()))
+            .collect();
+        for (k, v) in vars {
+            std::env::set_var(k, v);
+        }
+        f();
+        for (k, v) in saved {
+            match v {
+                Some(v) => std::env::set_var(&k, v),
+                None => std::env::remove_var(&k),
+            }
+        }
+    }
+
+    #[test]
+    fn env_layer_overrides_config_vars() {
+        // A minimal profile: ARCH/ACCEPT_KEYWORDS + a USE_EXPAND var, so
+        // the env layer's incremental (ACCEPT_KEYWORDS, USE), last-wins
+        // (a USE_EXPAND value + a plain scalar) and USE_EXPAND-name paths
+        // are all exercised.
+        let root = std::env::temp_dir().join("portage-profile-test-env-layer");
+        let repo = root.join("repo");
+        let prof = repo.join("profiles/default");
+        let portage_dir = root.join("etc/portage");
+        fs::create_dir_all(&prof).unwrap();
+        fs::create_dir_all(&portage_dir).unwrap();
+        fs::write(
+            prof.join("make.defaults"),
+            "ARCH=\"amd64\"\nACCEPT_KEYWORDS=\"${ARCH}\"\n\
+             USE_EXPAND_UNPREFIXED=\"ARCH\"\nUSE=\"baseflag\"\n\
+             USE_EXPAND=\"VIDEO_CARDS\"\nVIDEO_CARDS=\"nvidia\"\n",
+        )
+        .unwrap();
+        let make_profile = portage_dir.join("make.profile");
+        let _ = fs::remove_file(&make_profile);
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&prof, &make_profile).unwrap();
+
+        // No env: baseline.
+        with_env(
+            &[
+                ("ACCEPT_KEYWORDS", ""),
+                ("USE", ""),
+                ("VIDEO_CARDS", ""),
+                ("CFLAGS", ""),
+            ],
+            || {
+                for k in ["ACCEPT_KEYWORDS", "USE", "VIDEO_CARDS", "CFLAGS"] {
+                    std::env::remove_var(k);
+                }
+                let c = resolve_config(&root, &repo, &[], &[], "testrepo", &HashMap::new())
+                    .expect("resolves");
+                assert!(c.accept_keywords.contains("amd64"));
+                assert!(!c.accept_keywords.contains("~amd64"));
+                assert!(c.use_flags.contains("video_cards_nvidia"));
+                assert!(!c.other_vars.contains_key("CFLAGS"));
+            },
+        );
+
+        with_env(
+            &[
+                ("ACCEPT_KEYWORDS", "~amd64"),
+                ("USE", "-baseflag envflag"),
+                ("VIDEO_CARDS", "amdgpu"),
+                ("CFLAGS", "-O3"),
+            ],
+            || {
+                let c = resolve_config(&root, &repo, &[], &[], "testrepo", &HashMap::new())
+                    .expect("resolves");
+                // ACCEPT_KEYWORDS: incremental -- profile amd64 kept, env ~amd64 added.
+                assert!(c.accept_keywords.contains("amd64"));
+                assert!(c.accept_keywords.contains("~amd64"));
+                // USE: env stacks on the conf layer.
+                assert!(c.use_flags.contains("envflag"));
+                assert!(!c.use_flags.contains("baseflag"));
+                // USE_EXPAND value: env replaces the profile value.
+                assert!(c.use_flags.contains("video_cards_amdgpu"));
+                assert!(!c.use_flags.contains("video_cards_nvidia"));
+                // Plain scalar -> other_vars (emerge --info).
+                assert_eq!(c.other_vars.get("CFLAGS").map(String::as_str), Some("-O3"));
+            },
         );
     }
 

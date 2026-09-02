@@ -9580,6 +9580,55 @@ New driver in `pretend.rs`'s post-merge loop; 5 `elog` unit tests + 1
 per-package file). No Python-reference change — elog only fires on a real
 merge, which the reference stubs out.
 
+### `emerge` honours config vars from the environment (2026-09-02)
+
+Real `config.regenerate()`'s `env` `USE_ORDER` layer: variables in the
+process environment are the highest-priority config source, on top of
+the profile chain + `make.conf`. `ACCEPT_KEYWORDS=~amd64 emerge
+sys-apps/portage` installs the unstable version; `USE="-X" emerge foo`
+flips a flag; `CFLAGS="-O3" emerge --info` shows the override.
+
+New `portage_profile::apply_env_layer`, called once right after
+`make.conf` (the position real `regenerate()` gives the `env` layer).
+Real portage passes nearly all of `os.environ` through `backupenv`; this
+pilot uses a **curated allowlist** instead (`ENV_INCREMENTAL_VARS` /
+`ENV_SCALAR_VARS`) — it only reads a fixed set of config vars, and
+folding `PATH`/`HOME`/… into `other_vars` would pollute `emerge --info`.
+The real `INCREMENTALS` (`USE`, `ACCEPT_KEYWORDS`, `USE_EXPAND*`,
+`IUSE_IMPLICIT`) stack via `apply_incremental`; plain scalars
+(`ACCEPT_LICENSE`, `PKGDIR`, `CFLAGS`, `MAKEOPTS`, …) are last-wins into
+`scalars` → `other_vars`. `USE_EXPAND` *variable values*
+(`VIDEO_CARDS=…`) are folded in the expansion loop, once their names are
+known.
+
+```sh
+FX="$(realpath fixtures)"
+run() { PORTAGE_CONFIGROOT="$FX" ROOT="$FX" PORTAGE_RUNNING_ROOT="$FX" \
+    rust/target/release/portuale emerge "$@"; }
+run -p --autounmask=n dev-libs/autounmaskkeywordpkg
+# emerge: there are no ebuilds to satisfy "dev-libs/autounmaskkeywordpkg".
+ACCEPT_KEYWORDS=~amd64 run -p --autounmask=n dev-libs/autounmaskkeywordpkg
+# [ebuild  N     ] dev-libs/autounmaskkeywordpkg-1.0
+CFLAGS="-O3 -pipe" run --info | grep -E 'CFLAGS|ACCEPT_KEYWORDS'
+# ACCEPT_KEYWORDS="amd64"
+# CFLAGS="-O3 -pipe"
+```
+
+**Narrowings:** env `USE` lands at the `conf` `USE_ORDER` layer, not its
+real `env` position above the user-level `/etc/portage/package.use` (a
+narrowing of the existing "`package.use` applied as one group" cut — the
+global `config.use_flags` is still env-last for any package with no
+`package.use` entry). Env `USE_EXPAND` variable values are last-wins, not
+genuinely incremental (extending the pilot's pre-existing "no incremental
+merge outside `USE`/`ACCEPT_KEYWORDS`" cut). `/etc/portage/env` /
+`package.env` — the file half of the `env` layer — stays out.
+
+Mirrored in `emerge_pretend_reference.py` (`_apply_env_layer`); the test
+runner strips these vars process-wide (`conftest.py::_isolate_config_env`)
+so an inherited make.conf-style env can't leak into the fixture config.
+1 `portage-profile` unit test + 1 pinned contract test (keyword override
++ USE_EXPAND flip + `--info`).
+
 ### `emerge -pc <atoms> --deselect=n`
 
 Real `action_depclean`: `deselect = myopts.get("--deselect") != "n"`

@@ -3538,6 +3538,64 @@ def _apply_incremental(tokens, target_set):
             target_set.add(tok)
 
 
+_ENV_INCREMENTAL_VARS = (
+    "USE", "ACCEPT_KEYWORDS", "USE_EXPAND", "USE_EXPAND_UNPREFIXED",
+    "USE_EXPAND_IMPLICIT", "USE_EXPAND_HIDDEN", "IUSE_IMPLICIT",
+)
+_ENV_SCALAR_VARS = (
+    "ACCEPT_LICENSE", "ACCEPT_PROPERTIES", "ACCEPT_RESTRICT", "PKGDIR",
+    "DISTDIR", "PORTAGE_TMPDIR", "PORTAGE_LOGDIR", "PORTAGE_BINHOST",
+    "PORTAGE_NICENESS", "PORTAGE_IONICE_COMMAND", "PORTAGE_ELOG_SYSTEM",
+    "PORTAGE_ELOG_CLASSES", "PORTAGE_ELOG_MAILURI", "FEATURES", "CHOST",
+    "CBUILD", "CTARGET", "CFLAGS", "CXXFLAGS", "CPPFLAGS", "LDFLAGS",
+    "FFLAGS", "FCFLAGS", "MAKEOPTS", "EMERGE_DEFAULT_OPTS",
+    "PORTAGE_RSYNC_EXTRA_OPTS", "GENTOO_MIRRORS",
+)
+
+
+def _apply_env_layer(
+    scalars,
+    use_flags,
+    conf_use_tokens,
+    accept_keywords,
+    use_expand,
+    use_expand_unprefixed,
+    use_expand_implicit,
+    iuse_implicit,
+    use_expand_hidden,
+):
+    """Real config.regenerate()'s `env` USE_ORDER layer: the process
+    environment overrides / stacks on the profile chain + make.conf, for
+    a curated allowlist of config vars. Env `USE` lands at the `conf`
+    layer (a documented narrowing -- real USE_ORDER puts `env` above the
+    user-level `package.use`). Mirrors portage-profile/src/lib.rs's
+    apply_env_layer."""
+    for name in _ENV_INCREMENTAL_VARS:
+        value = os.environ.get(name)
+        if value is None:
+            continue
+        if name == "USE":
+            _apply_incremental(value, use_flags)
+            conf_use_tokens.append(value)
+        elif name == "ACCEPT_KEYWORDS":
+            _apply_incremental(value, accept_keywords)
+        elif name == "USE_EXPAND":
+            _apply_incremental(value, use_expand)
+        elif name == "USE_EXPAND_UNPREFIXED":
+            _apply_incremental(value, use_expand_unprefixed)
+        elif name == "USE_EXPAND_IMPLICIT":
+            _apply_incremental(value, use_expand_implicit)
+        elif name == "USE_EXPAND_HIDDEN":
+            _apply_incremental(value, use_expand_hidden)
+        elif name == "IUSE_IMPLICIT":
+            _apply_incremental(value, iuse_implicit)
+        scalars[name] = value
+    for name in _ENV_SCALAR_VARS:
+        value = os.environ.get(name)
+        if value is not None:
+            scalars[name] = value
+
+
 def _process_config_lines(
     text,
     scalars,
@@ -3895,6 +3953,20 @@ def resolve_config(
             set(),
         )
 
+    # Real config.regenerate()'s `env` USE_ORDER layer -- the process
+    # environment overrides / stacks on the profile chain + make.conf.
+    _apply_env_layer(
+        scalars,
+        use_flags,
+        conf_use_tokens,
+        accept_keywords,
+        use_expand,
+        use_expand_unprefixed,
+        use_expand_implicit,
+        iuse_implicit,
+        use_expand_hidden,
+    )
+
     # USE_EXPAND (PMS 7.3.4; real config.py's own regenerate(), "Do the
     # USE calculation last because it depends on USE_EXPAND"): now that
     # every profile level's own make.defaults plus make.conf have been
@@ -3918,6 +3990,16 @@ def resolve_config(
     # read too. Still out of scope: USE_EXPAND_HIDDEN (display-only for
     # EAPI 5+). Mirrors portage-profile/src/lib.rs's resolve_config
     # exactly.
+    #
+    # `env` USE_ORDER layer for USE_EXPAND / USE_EXPAND_UNPREFIXED
+    # variable *values* (VIDEO_CARDS=nouveau emerge ...): their names
+    # aren't known until USE_EXPAND is finalized, so the env override is
+    # folded into scalars here (last-wins, like the pilot's existing
+    # model). Mirrors portage-profile/src/lib.rs.
+    for var in set(use_expand) | set(use_expand_unprefixed):
+        if var in os.environ:
+            scalars[var] = os.environ[var]
+
     for var in use_expand:
         value = scalars.get(var)
         if value is None:

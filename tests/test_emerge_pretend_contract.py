@@ -3741,6 +3741,41 @@ def test_any_of_group_falls_back_to_every_alternative_when_none_satisfiable(
     ]
 
 
+def test_env_config_vars_override_the_profile_and_make_conf(
+    emerge_binary, emerge_pretend_python, fixture_env
+):
+    """Real `config.regenerate()`'s `env` USE_ORDER layer: config vars in
+    the process environment override / stack on the profile chain +
+    make.conf. `ACCEPT_KEYWORDS=~amd64 emerge <~amd64-only pkg>` makes it
+    visible; `USE=...`/`VIDEO_CARDS=...` flip a USE-conditional dep;
+    `CFLAGS=...` shows through `emerge --info`. Byte-identical Rust/Python."""
+
+    def run(extra_env, args):
+        env = {**fixture_env, **extra_env}
+        rust = _run([str(emerge_binary)], args, env)
+        py = _run(emerge_pretend_python, args, env)
+        assert rust.stdout == py.stdout, (args, extra_env)
+        assert rust.returncode == py.returncode
+        return rust
+
+    kw = ["--pretend", "--autounmask=n", "dev-libs/autounmaskkeywordpkg"]
+    assert run({}, kw).returncode == 1  # keyword-masked, fatal by default
+    ok = run({"ACCEPT_KEYWORDS": "~amd64"}, kw)
+    assert ok.returncode == 0
+    assert "[ebuild  N     ] dev-libs/autounmaskkeywordpkg-1.0" in ok.stdout
+
+    # VIDEO_CARDS=amdgpu -> useexpandpkg's `video_cards_amdgpu? ( hiddendep )`
+    # fires and `video_cards_nvidia? ( newpkg )` (profile default) does not.
+    base = run({}, ["--pretend", "dev-libs/useexpandpkg"])
+    assert "dev-libs/newpkg" in base.stdout and "dev-libs/hiddendep" not in base.stdout
+    flipped = run({"VIDEO_CARDS": "amdgpu"}, ["--pretend", "dev-libs/useexpandpkg"])
+    assert "dev-libs/hiddendep" in flipped.stdout and "dev-libs/newpkg" not in flipped.stdout
+
+    info = run({"CFLAGS": "-O3 -pipe", "ACCEPT_KEYWORDS": "~amd64"}, ["--info"])
+    assert '\nCFLAGS="-O3 -pipe"\n' in info.stdout
+    assert '\nACCEPT_KEYWORDS="amd64 ~amd64"\n' in info.stdout
+
+
 def test_real_use_flags_from_profile_gate_a_dependency(emerge_binary, fixture_env):
     """Pins the profile/make.conf -> real USE follow-up end to end: the
     fixture's profile chain + make.conf (see fixtures/repo/profiles

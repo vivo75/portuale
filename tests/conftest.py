@@ -15,6 +15,33 @@ REQUIRED_USE_PYTHON_HARNESS = REPO_ROOT / "python" / "required_use_harness.py"
 EMERGE_PRETEND_PYTHON_REFERENCE = REPO_ROOT / "python" / "emerge_pretend_reference.py"
 FIXTURES_ROOT = REPO_ROOT / "fixtures"
 
+# Config variables portuale now honours from the process environment
+# (real `config.regenerate()`'s `env` USE_ORDER layer -- see
+# portage-profile's `ENV_INCREMENTAL_VARS`/`ENV_SCALAR_VARS`). A test
+# runner's own environment must not leak into the fixture config, so
+# these are stripped process-wide for the whole test session; a test
+# that specifically exercises an env override sets the var explicitly.
+_ENV_CONFIG_VARS = (
+    "USE", "ACCEPT_KEYWORDS", "USE_EXPAND", "USE_EXPAND_UNPREFIXED",
+    "USE_EXPAND_IMPLICIT", "USE_EXPAND_HIDDEN", "IUSE_IMPLICIT",
+    "ACCEPT_LICENSE", "ACCEPT_PROPERTIES", "ACCEPT_RESTRICT",
+    "PKGDIR", "PORTAGE_LOGDIR", "PORTAGE_BINHOST", "PORTAGE_NICENESS",
+    "PORTAGE_IONICE_COMMAND", "PORTAGE_ELOG_SYSTEM", "PORTAGE_ELOG_CLASSES",
+    "PORTAGE_ELOG_MAILURI", "FEATURES", "CHOST", "CBUILD", "CTARGET",
+    "CFLAGS", "CXXFLAGS", "CPPFLAGS", "LDFLAGS", "FFLAGS", "FCFLAGS",
+    "MAKEOPTS", "EMERGE_DEFAULT_OPTS", "PORTAGE_RSYNC_EXTRA_OPTS",
+    "GENTOO_MIRRORS", "VIDEO_CARDS", "PYTHON_TARGETS", "PYTHON_SINGLE_TARGET",
+    "LINGUAS", "L10N", "CPU_FLAGS_X86", "ELIBC", "KERNEL", "USERLAND", "ABI_X86",
+)
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _isolate_config_env():
+    """Strip any inherited make.conf-style config vars for the session."""
+    for name in _ENV_CONFIG_VARS:
+        os.environ.pop(name, None)
+    yield
+
 
 def _cargo_build(package: str) -> Path:
     subprocess.run(
