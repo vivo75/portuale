@@ -11289,6 +11289,99 @@ committed `fixtures/pkgdir/dev-libs/gpkgreadpkg-1.0.gpkg.tar` was rebuilt
 with a real `Manifest`; `blake2` / `sha2` are new **dev**-dependencies
 (already vendored via `portage-fetch`) so the tests hash real bytes.
 
+### Config depth: `package.use` gets its real `USE_ORDER` layering
+
+Real `config.py`'s `USE_ORDER` is
+`env:pkg:conf:defaults:pkginternal:features:repo:env.d`; `regenerate()`
+walks it reversed, so per-package USE resolution is one continuous
+incremental pass over `repo` → `pkginternal` → `defaults` → `conf` →
+`pkg`. Portuale used to flatten all three `package.use` sources (repo /
+profile / user) into **one** list applied last — making repo-level
+`package.use` (real: the *weakest* USE layer) and profile-level
+`package.use` (real: below `make.conf`) both override things they
+shouldn't.
+
+Now each source has its own `Config` field at its own real position, and
+`portage-repo::effective_use_flags` (mirrored in the Python reference)
+does the real walk:
+
+- `Config::repo_make_defaults_use` — each repo's top-level
+  `profiles/make.defaults` USE as `(repo_name, tokens)` pairs (real
+  `_repo_make_defaults`, `${VAR}`-expanded): the main repo's (empty
+  name) applies to every package, an overlay's (real name) only to a
+  candidate resolved from that overlay (`effective_use_flags` reads
+  `candidate_str`'s `::<repo>` suffix). Then `Config::package_use_repo`
+  — every configured repo's own `profiles/package.use` (overlays
+  `::repo`-scoped). All applied **before** the ebuild's own `IUSE`
+  `+`/`-` defaults — the weakest layer modeled. *(Main-repo
+  `make.defaults` USE shipped 2026-09-02; per-overlay
+  `make.defaults` USE the same day — `dev-libs/overlaymakedefaultpkg`
+  proves it. Narrowing: the full masters-chain stacking order
+  collapses to "main, then the candidate's own repo".)*
+- `Config::features_use` — the `features` tier (real
+  `configdict["features"]["USE"]`): `["test"]` when `FEATURES` names
+  `test`, applied between `repo` and `pkginternal`, so a package with
+  `test` in IUSE resolves with it on. *(Shipped 2026-09-02.)* Then
+- `Config::profile_use_layers` — the `defaults` tier walked **one
+  profile chain level at a time** (real `regenerate()` over
+  `configdict["defaults"]`): that level's `make.defaults` USE, then that
+  level's own `package.use`, before the next level — so a child
+  profile's `make.defaults USE="-foo"` can cancel a parent's
+  `package.use foo`. *(Per-level walk shipped 2026-09-02; the flat
+  `Config::use_tokens` + `Config::package_use` are kept only as the
+  fallback for a hand-built `Config`.)* Then
+- `Config::conf_use_tokens` — `make.conf` USE plus the `USE_EXPAND`
+  folded values (split out of `use_tokens`), then
+- `Config::package_use_user` — the user-level `/etc/portage/package.use`,
+  then
+- `Config::env_use_tokens` — the process-environment `USE="..."` (real
+  `configdict["env"]`), the **highest** tier: `USE="-X" emerge foo`
+  overrides even a `package.use` flag. *(Shipped 2026-09-02; was folded
+  into the weaker `conf` tier before.)* The strongest layer before the
+  final `use.force`/`use.mask` step.
+
+The only remaining documented cut is the `env.d` layer (real
+`configdict["env.d"]` — practically never carries `USE`).
+(`package.env`'s `USE=` shipped 2026-09-02; its non-`USE` build vars —
+a build-phase concern, not a USE layer — the same day; the `features`
+tier — modelled for its one real flag, `FEATURES=test` → `test` — also
+2026-09-02; `$USE` at its real `env` position, and per-overlay
+`make.defaults` USE — 2026-09-02.)
+
+`dev-libs/packageuseenablepkg` proves the `env` tier:
+`test_env_use_is_the_highest_tier_and_overrides_a_package_use_flag`
+(contract suite) — `fixtures/etc/portage/package.use` enables
+`pkguseflag` (pulling `dev-libs/newpkg`); `USE="-pkguseflag" emerge -p`
+cancels it → `USE="-pkguseflag"`, no dep. Rust == Python.
+
+`dev-libs/featuretestpkg` (`IUSE="test other"`, `RDEPEND="test? (
+dev-libs/newpkg )"`) proves the `features` tier:
+`test_features_test_enables_the_test_use_flag_and_pulls_test_deps`
+(contract suite) runs `emerge -p -v` with `FEATURES=test` → `USE="test
+-other"` and `dev-libs/newpkg` pulled; without it →
+`USE="-other -test"`, no dep. Rust == Python.
+
+`dev-libs/interleavepkg` proves the per-level walk: `profiles/base/
+package.use` (weakest chain level) enables `interleaveflag`, the leaf
+`profiles/default/make.defaults` (applied *after* base's `package.use`,
+one profile at a time) cancels it → `USE="-interleaveflag"`, its gated
+dep not pulled; a flat "all `make.defaults` then all `package.use`"
+model would leave it on.
+
+Two more fixtures prove the tier ordering: `dev-libs/repouseweakpkg`
+(repo-level `package.use` enables `repoweakflag`, the profile
+`make.defaults` disables it → `USE="-repoweakflag"`, its gated dep not
+pulled) and `dev-libs/profileuseweakpkg` (profile-level `package.use`
+enables `profweakflag`, `make.conf` disables it → `USE="-profweakflag"`).
+
+```sh
+cd rust && cargo build --release && cd ../..
+ln -s "$PWD/rust/target/release/portuale" /tmp/emerge
+PORTAGE_CONFIGROOT="$PWD/fixtures" ROOT="$PWD/fixtures" \
+    /tmp/emerge --pretend -v dev-libs/repouseweakpkg
+# [ebuild  N     ] dev-libs/repouseweakpkg-1.0::testrepo  USE="-repoweakflag"
+```
+
 ### `FEATURES=network-sandbox`: `src_*` phases lose network access
 
 Real portage's `FEATURES=network-sandbox` puts a build's `src_*` phases
@@ -11727,5 +11820,51 @@ ln -s "$PWD/rust/target/release/portuale" /tmp/pbin/ebuild  # multicall by argv[
 rust/target/release/portuale emerge --config --shell brush dev-libs/emergeconfigpkg
 cat "$ROOT/var/lib/emergeconfigpkg.configured"   # -> configured 1.0
 ```
+
+### `emerge <atom>` builds see the resolved `USE` and build flags
+
+Until now every `emerge <atom>` source build ran its ebuild phases with
+`USE=""` and no `CFLAGS`/`MAKEOPTS`/… — `ebuild_phases::phase_env_vars`
+sets `USE` empty and nothing set the compiler/make flags at all. So
+`bin/ebuild.sh`'s own `use()` builtin returned false for every flag,
+every `USE`-conditional in `src_configure`/`src_compile`/`src_install`/
+`pkg_preinst`/`pkg_postinst` took its else branch, a package's own
+`RDEPEND="flag? ( … )"` was USE-reduced against the empty set when
+`write_post_install_metadata` recorded it in the vdb, and every package
+compiled with an unset `${CFLAGS}`.
+
+`MergeOptions` gained a `build_env: Vec<(String, String)>` field.
+`pretend.rs` sets it to `build_config_env(&config)` — the deterministic
+compiler/make-flag set (`CFLAGS`/`CXXFLAGS`/`CPPFLAGS`/`LDFLAGS`/
+`FFLAGS`/`FCFLAGS`/`ASFLAGS`/`MAKEOPTS`/`CHOST`/`CBUILD`/`CTARGET`) from
+`Config::other_vars` (make.conf + profile `make.defaults` + the `env`
+layer). `merge_one_source_entry` / `merge_one_built_entry` (the
+parallel-build merge step) then append `[("USE", "<space-joined enabled
+IUSE flags>")]` from `GraphEntry::use_flags_display` (`entry_build_env`);
+`build_one_source_entry` (the `--jobs` build) builds the same combined
+list directly. `run_commands`/`run_commands_logged`/`run_commands_async`
+and `run_single_phase` gained a `build_env` parameter, appended after the
+portuale's own base vars in `phase_env_vars` so it wins over the empty
+default; `merge_after_install` threads `options.build_env` into
+`pkg_preinst`/`pkg_postinst`. `write_post_install_metadata` now
+USE-reduces the `*DEPEND`/`LICENSE`/`PROPERTIES`/`RESTRICT` build-info
+files against that same resolved USE (`build_phase_use` pulls it back
+out) instead of a hardcoded empty set.
+
+`dev-libs/usebuildpkg` (`IUSE="buildflag"`, enabled for it in
+`fixtures/etc/portage/package.use`) proves it: its `src_install` records
+`use buildflag` and `${CFLAGS}`/`${MAKEOPTS}` into merged files, and
+`test_emerge_atom_source_build_sees_the_resolved_use_and_build_flags`
+(`test_portuale.py`) asserts `on` and `CFLAGS=-O2 -pipe` / `MAKEOPTS=-j3`.
+
+**Narrowing:** only the IUSE-declared enabled flags reach the phase
+`USE` (what `use()` needs), not the implicit/arch part of the full
+effective set; the build-var set is fixed (not every scalar).
+`FEATURES` stays `""` — portuale models it via `feature_enabled`.
+Standalone `ebuild <file> <phase>` still runs with `USE=""`/no build
+flags (no graph, no resolved config). `emerge --resume` builds with an
+empty `build_env` (`resume_entry` carries no resolved USE). The
+`Packages` *index* `USE` field for an `emerge -b` binpkg isn't
+back-filled from build-info yet.
 
 # # required by dev-libs/useflagpkg[-foo] (argument)

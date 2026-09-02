@@ -143,6 +143,60 @@ fn effective_use_flags_lets_package_use_override_a_plus_iuse_default() {
 }
 
 #[test]
+fn effective_use_flags_defaults_walk_is_per_profile_level() {
+    // The defaults walk is per profile level: a child's
+    // make.defaults can cancel a parent's package.use.
+    let layers = vec![
+        portage_profile::ProfileUseLayer {
+            make_defaults_use: vec![],
+            package_use: pu("foo"),
+        },
+        portage_profile::ProfileUseLayer {
+            make_defaults_use: vec!["-foo".to_string()],
+            package_use: vec![],
+        },
+    ];
+    let flags = {
+        let cfg = portage_profile::Config {
+            profile_use_layers: layers.to_vec(),
+            accept_keywords: HashSet::from(["amd64".to_string()]),
+            ..Default::default()
+        };
+        effective_use_flags(EffectiveUseFlagsArgs {
+            config: &cfg,
+            iuse: "foo",
+            keywords: &["amd64".to_string()],
+            candidate_str: "dev-libs/pkg-1.0:0/0::testrepo",
+            category: "dev-libs",
+            package: "pkg",
+        })
+    };
+    assert!(
+        !flags.contains("foo"),
+        "child make.defaults -foo cancels parent package.use foo"
+    );
+    // Reversed order (child's -foo first, parent's package.use foo
+    // last) would leave it on -- proving order matters.
+    let reversed: Vec<_> = layers.into_iter().rev().collect();
+    let flags = {
+        let cfg = portage_profile::Config {
+            profile_use_layers: reversed.to_vec(),
+            accept_keywords: HashSet::from(["amd64".to_string()]),
+            ..Default::default()
+        };
+        effective_use_flags(EffectiveUseFlagsArgs {
+            config: &cfg,
+            iuse: "foo",
+            keywords: &["amd64".to_string()],
+            candidate_str: "dev-libs/pkg-1.0:0/0::testrepo",
+            category: "dev-libs",
+            package: "pkg",
+        })
+    };
+    assert!(flags.contains("foo"));
+}
+
+#[test]
 fn effective_use_flags_repo_package_use_is_weaker_than_an_iuse_default() {
     // Portage applies `repo` before `pkginternal`, so an ebuild IUSE
     // default overrides repo `package.use`.
