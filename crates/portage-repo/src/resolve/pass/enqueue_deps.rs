@@ -129,6 +129,146 @@ pub(crate) fn prepare_disjunction_scope<'a>(
     }
 }
 
+/// The values [`flatten_dep_string`] reads from its caller.
+pub(crate) struct FlattenDepStringArgs<'a> {
+    pub(crate) tokens: &'a [String],
+    pub(crate) use_flags: &'a HashSet<String>,
+    pub(crate) metadata: &'a Arc<HashMap<String, String>>,
+    pub(crate) cross_running_root: Option<&'a Path>,
+    pub(crate) running_tags: &'a HashSet<String>,
+    pub(crate) ctx: &'a ResolveCtx<'a>,
+    pub(crate) config: &'a Config,
+    pub(crate) entries: &'a [GraphEntry],
+    pub(crate) self_node: &'a RootCp,
+    pub(crate) union_constraints: &'a HashMap<(String, String), Vec<String>>,
+    pub(crate) circular_view: &'a HashMap<RootCp, Vec<CircularDepChild>>,
+    pub(crate) queued: &'a [QueueItem],
+}
+
+/// Flatten the dep string with `||` branch selection.
+///
+/// Branch selection sees the group's own root; a `||` group with no
+/// tree-visible branch still selects one here. `Break` when the string does
+/// not flatten.
+pub(crate) fn flatten_dep_string(args: FlattenDepStringArgs<'_>) -> ControlFlow<(), Vec<String>> {
+    let FlattenDepStringArgs {
+        tokens,
+        use_flags,
+        metadata,
+        cross_running_root,
+        running_tags,
+        ctx,
+        config,
+        entries,
+        self_node,
+        union_constraints,
+        circular_view,
+        queued,
+    } = args;
+    let Ok(flat_deps) = portage_use_reduce::use_reduce_flat_disjunctive(
+        portage_use_reduce::UseReduceFlatDisjunctiveArgs {
+            tokens,
+            uselist: use_flags,
+            mode: portage_use_reduce::MatchMode::Normal,
+            empty_groups_always_true: md5_dict::eapi_empty_groups_always_true(
+                metadata.get("EAPI").map(String::as_str).unwrap_or("0"),
+            ),
+            tie_break: &mut |alts: &[Vec<String>]| {
+                // Same group-root scoping for the tied-alternative promotion.
+                let grp_running = cross_running_root.is_some()
+                    && alts
+                        .iter()
+                        .flat_map(|v| v.iter())
+                        .next()
+                        .is_some_and(|a| running_tags.contains(a));
+                let grp_root: &Path = if grp_running {
+                    cross_running_root.expect("running-root group without a cross root")
+                } else {
+                    ctx.root
+                };
+                let scoped_entries: Option<Vec<GraphEntry>> = cross_running_root.map(|_| {
+                    entries
+                        .iter()
+                        .filter(|e| e.targets_running_root == grp_running)
+                        .cloned()
+                        .collect()
+                });
+                let entries_view: &[GraphEntry] = scoped_entries.as_deref().unwrap_or(entries);
+                let scoped_queued: Option<Vec<QueueItem>> = cross_running_root.map(|_| {
+                    queued
+                        .iter()
+                        .filter(|q| q.targets_running_root == grp_running)
+                        .cloned()
+                        .collect()
+                });
+                let queued_view: &[QueueItem] = scoped_queued.as_deref().unwrap_or(queued);
+                promote_tied_alternative(PromoteTiedAlternativeArgs {
+                    repos: &ctx.repos,
+                    config,
+                    root: grp_root,
+                    entries: entries_view,
+                    constraints: union_constraints,
+                    alts,
+                    queued: queued_view,
+                })
+            },
+        },
+        &mut |atoms: &[String]| {
+            // Branch selection sees the group's own root (installed db and
+            // same-root graph only). Pass-through unless cross-root + running.
+            // Whether one `||` alternative resolves running-rooted: every member
+            // tagged running (mixed-key same text falls target). Same-root runs
+            // keep the pass-through below.
+            let grp_running =
+                cross_running_root.is_some() && atoms.iter().all(|a| running_tags.contains(a));
+            // A `||` group with no tree-visible branch still needs one selected here,
+            // or the unsatisfiable branch queues as an ordinary dep. Applies to all
+            // keys (the merged string hides which key an atom came from); harmless,
+            // since those atoms resolve via tree visibility anyway.
+            // Portage: --root-deps branch selection; see `root_deps_satisfied_atoms`
+            let grp_root: &Path = if grp_running {
+                cross_running_root.expect("running-root group without a cross root")
+            } else {
+                ctx.root
+            };
+            let scoped_entries: Option<Vec<GraphEntry>> = cross_running_root.map(|_| {
+                entries
+                    .iter()
+                    .filter(|e| e.targets_running_root == grp_running)
+                    .cloned()
+                    .collect()
+            });
+            let entries_view: &[GraphEntry] = scoped_entries.as_deref().unwrap_or(entries);
+            let scoped_queued: Option<Vec<QueueItem>> = cross_running_root.map(|_| {
+                queued
+                    .iter()
+                    .filter(|q| q.targets_running_root == grp_running)
+                    .cloned()
+                    .collect()
+            });
+            let queued_view: &[QueueItem] = scoped_queued.as_deref().unwrap_or(queued);
+            disjunction_preference(DisjunctionPreferenceArgs {
+                repos: &ctx.repos,
+                config,
+                root: grp_root,
+                entries: entries_view,
+                self_cp: self_node,
+                constraints: union_constraints,
+                circular_dependency: circular_view,
+                root_deps_running_root: ctx.root_deps_running_root,
+                atoms,
+                queued: queued_view,
+                update: ctx.update,
+                gate_entries: entries,
+                gate_queued: queued,
+            })
+        },
+    ) else {
+        return ControlFlow::Break(());
+    };
+    ControlFlow::Continue(flat_deps)
+}
+
 /// The values [`filter_root_deps`] reads from its caller.
 pub(crate) struct FilterRootDepsArgs<'a> {
     pub(crate) flat_deps: Vec<String>,
