@@ -1809,3 +1809,33 @@ rust/target/release/emerge --help   # grouped tour: Actions / Dependency
                                     # Binary packages / Build scheduling /
                                     # Output / Pilot-only
 ```
+
+`env.d` USE tier (`/etc/profile.env`, the lowest `USE_ORDER` layer):
+
+```sh
+export PORTAGE_CONFIGROOT="$PWD/fixtures" ROOT="$PWD/fixtures"
+# fixtures/etc/profile.env sets USE='envdusetestflag'
+rust/target/release/portuale emerge -pv dev-libs/envdusepkg
+# [ebuild  N     ] dev-libs/newpkg-1.0::testrepo
+# [ebuild  N     ] dev-libs/envdusepkg-1.0::testrepo  USE="envdusetestflag -other"
+#   ^ envdusetestflag on -> its envdusetestflag?( dev-libs/newpkg ) dep pulled
+python3 python/emerge_pretend_reference.py -pv dev-libs/envdusepkg   # byte-identical
+```
+
+`PORTAGE_SCHEDULING_POLICY` and `--resume --pretend`:
+
+```sh
+PORTAGE_SCHEDULING_POLICY=batch rust/target/release/portuale emerge -p dev-libs/newpkg
+#   (os.sched_setscheduler(SCHED_BATCH); an unknown name -> "* Invalid policy ...", run still proceeds)
+
+# after a failed `emerge <atoms>` wrote mtimedb["resume"]:
+rust/target/release/portuale emerge --resume --pretend
+# [ebuild  N     ] <cat>/<pkg>-<ver>        (the saved list; merges nothing, list kept)
+```
+
+`--quiet-build` at a single job:
+
+```sh
+rust/target/release/portuale emerge --quiet-build=y dev-libs/packagepkg
+# stdout: only >>> / [ebuild lines; phase output -> ${PORTAGE_TMPDIR}/portage/<cat>/<pf>/temp/build.log
+```
