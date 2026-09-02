@@ -204,6 +204,54 @@ fn effective_use_flags_profile_package_use_loses_to_make_conf() {
 }
 
 #[test]
+fn effective_use_flags_package_env_use_is_pkg_layer_and_loses_to_user_package_use() {
+    // package.env USE sits in the `pkg` layer: beats make.conf but
+    // loses to user package.use.
+    let with_env = {
+        let cfg = portage_profile::Config {
+            conf_use_tokens: vec!["-foo".to_string()],
+            package_env_use: pu("foo").to_vec(),
+            accept_keywords: HashSet::from(["amd64".to_string()]),
+            ..Default::default()
+        };
+        effective_use_flags(EffectiveUseFlagsArgs {
+            config: &cfg,
+            iuse: "foo",
+            keywords: &["amd64".to_string()],
+            candidate_str: "dev-libs/pkg-1.0:0/0::testrepo",
+            category: "dev-libs",
+            package: "pkg",
+        })
+    };
+    assert!(
+        with_env.contains("foo"),
+        "package.env foo beats make.conf -foo"
+    );
+
+    // ...but a user package.use `-foo` still wins over package.env `foo`.
+    let user_wins = {
+        let cfg = portage_profile::Config {
+            package_env_use: pu("foo").to_vec(),
+            package_use_user: pu("-foo").to_vec(),
+            accept_keywords: HashSet::from(["amd64".to_string()]),
+            ..Default::default()
+        };
+        effective_use_flags(EffectiveUseFlagsArgs {
+            config: &cfg,
+            iuse: "foo",
+            keywords: &["amd64".to_string()],
+            candidate_str: "dev-libs/pkg-1.0:0/0::testrepo",
+            category: "dev-libs",
+            package: "pkg",
+        })
+    };
+    assert!(
+        !user_wins.contains("foo"),
+        "user package.use -foo beats package.env foo"
+    );
+}
+
+#[test]
 fn effective_use_flags_user_package_use_wins_over_make_conf() {
     // User package.use sits above `conf`.
     let flags = euf_layers(EufLayersArgs {

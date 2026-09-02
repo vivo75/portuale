@@ -1792,6 +1792,135 @@ fn repo_make_defaults_use_is_read_per_repo_with_var_expansion() {
 }
 
 #[test]
+fn package_env_resolves_env_file_use_including_source_and_missing_files() {
+    let root = TempDir::new("portage-profile-test-package-env").keep();
+    let repo = root.join("repo");
+    let portage_dir = root.join("etc/portage");
+    let env_dir = portage_dir.join("env");
+    fs::create_dir_all(repo.join("profiles")).unwrap();
+    fs::create_dir_all(&env_dir).unwrap();
+
+    fs::write(
+        portage_dir.join("package.env"),
+        "dev-libs/a debug shared\n\
+         dev-libs/b gone\n\
+         dev-libs/c\n",
+    )
+    .unwrap();
+    // `debug` sources `common` (relative); `gone` is missing and contributes
+    // nothing; dev-libs/c (no file names) is dropped entirely.
+    fs::write(
+        env_dir.join("debug"),
+        "source common\nUSE=\"dbgflag\"\nCFLAGS=\"-O0 -g\"\n",
+    )
+    .unwrap();
+    fs::write(env_dir.join("common"), "USE=\"commonflag\"\n").unwrap();
+    fs::write(env_dir.join("shared"), "USE=\"sharedflag -commonflag\"\n").unwrap();
+
+    let config = resolve_config(ResolveConfigArgs {
+        config_root: &root,
+        main_repo_location: &repo,
+        overlay_repos: &[],
+        repo_aliases: &[],
+        main_repo_name: "testrepo",
+        repo_masters: &HashMap::new(),
+        eroot: &root,
+    })
+    .expect("config must resolve");
+
+    assert_eq!(
+        config.package_env,
+        vec![
+            (
+                "dev-libs/a".to_string(),
+                vec!["debug".to_string(), "shared".to_string()]
+            ),
+            ("dev-libs/b".to_string(), vec!["gone".to_string()]),
+        ]
+    );
+    // dev-libs/c (no file names) is dropped.
+    assert_eq!(
+        config.package_env_use,
+        vec![(
+            "dev-libs/a".to_string(),
+            // Order and negation preserved for `apply_incremental`.
+            vec![
+                "commonflag".to_string(),
+                "dbgflag".to_string(),
+                "sharedflag".to_string(),
+                "-commonflag".to_string(),
+            ]
+        )]
+    );
+    // The non-`USE` scalar half: `debug`'s CFLAGS only (`shared` sets
+    // no scalar, `common` none, `gone`/`c` contribute nothing).
+    assert_eq!(
+        config.package_env_vars,
+        vec![(
+            "dev-libs/a".to_string(),
+            vec![("CFLAGS".to_string(), "-O0 -g".to_string())]
+        )]
+    );
+}
+
+#[test]
+fn package_env_expands_dollar_vars_against_the_global_map_with_chaining() {
+    // Portage `_grab_pkg_env`'s per-package expand map: make.conf values plus
+    // same-file and earlier-file chaining. The scalar half expands the same way.
+    let root = TempDir::new("portage-profile-test-package-env-expand").keep();
+    let repo = root.join("repo");
+    let portage_dir = root.join("etc/portage");
+    let env_dir = portage_dir.join("env");
+    fs::create_dir_all(repo.join("profiles")).unwrap();
+    fs::create_dir_all(&env_dir).unwrap();
+    fs::write(portage_dir.join("make.conf"), "SHARED=\"sharedflag\"\n").unwrap();
+    fs::write(portage_dir.join("package.env"), "dev-libs/a first second\n").unwrap();
+    fs::write(
+        env_dir.join("first"),
+        "INNER=\"innerflag\"\nUSE=\"${SHARED} ${INNER}\"\n",
+    )
+    .unwrap();
+    fs::write(
+        env_dir.join("second"),
+        "USE=\"across-${INNER}\"\nCFLAGS=\"-O2 ${SHARED}\"\n",
+    )
+    .unwrap();
+
+    let config = resolve_config(ResolveConfigArgs {
+        config_root: &root,
+        main_repo_location: &repo,
+        overlay_repos: &[],
+        repo_aliases: &[],
+        main_repo_name: "testrepo",
+        repo_masters: &HashMap::new(),
+        eroot: &root,
+    })
+    .expect("config must resolve");
+    assert_eq!(
+        config.package_env_use,
+        vec![(
+            "dev-libs/a".to_string(),
+            vec![
+                "sharedflag".to_string(),
+                "innerflag".to_string(),
+                "across-innerflag".to_string(),
+            ]
+        )]
+    );
+    assert_eq!(
+        config.package_env_vars,
+        vec![(
+            "dev-libs/a".to_string(),
+            vec![
+                ("INNER".to_string(), "innerflag".to_string()),
+                ("CFLAGS".to_string(), "-O2 sharedflag".to_string()),
+            ]
+        )]
+    );
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
 fn package_use_expand_shorthand_applies_prefix_to_following_tokens_on_the_same_line() {
     // "nvidia"/"-intel" get the video_cards_ prefix (negation outside it);
     // "plainflag" (before the marker) does not.
