@@ -80,6 +80,19 @@ fn resolve_empty(category: &str, package: &str) -> PretendOutcome {
     .unwrap_or_else(|e| panic!("resolve_pretend({atom_str}) failed: {e}"))
 }
 
+/// A minimal ad-hoc vdb entry: `var/db/pkg/<cat>/<pf>/` with a
+/// `SLOT` file plus whatever extra files the test writes.
+fn tmp_vdb(cat: &str, pf: &str, files: &[(&str, &[u8])]) -> std::path::PathBuf {
+    let root = TempDir::new("portuale-vdb").keep();
+    let dir = root.join("var/db/pkg").join(cat).join(pf);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("SLOT"), "0\n").unwrap();
+    for (name, bytes) in files {
+        std::fs::write(dir.join(name), bytes).unwrap();
+    }
+    root
+}
+
 /// Like `resolve`, but with `--update` enabled.
 fn resolve_update(category: &str, package: &str) -> PretendOutcome {
     let root = fixtures_root();

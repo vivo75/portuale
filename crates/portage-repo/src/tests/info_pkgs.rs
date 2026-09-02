@@ -30,6 +30,65 @@ fn resolve_info_candidate_reports_the_best_visible_ebuild_and_its_use_display() 
 }
 
 #[test]
+fn resolve_installed_info_reads_the_vdb_use_line_and_the_differing_vars() {
+    let root = fixtures_root();
+    // dev-libs/infoinstpkg-1.0: vdb IUSE="alpha beta" USE="alpha",
+    // CFLAGS/CHOST recorded, test_config's make.conf sets neither.
+    let infos = resolve_installed_info(&root, "dev-libs/infoinstpkg", &test_config());
+    assert_eq!(infos.len(), 1);
+    let i = &infos[0];
+    assert_eq!(i.cpv, "dev-libs/infoinstpkg-1.0");
+    assert_eq!(i.repo_name, "testrepo");
+    assert_eq!(
+        i.use_expand_display,
+        vec![("USE".to_string(), "alpha -beta".to_string())]
+    );
+    assert_eq!(
+        i.differing_vars,
+        vec![
+            ("CHOST".to_string(), "x86_64-pc-linux-gnu".to_string()),
+            ("CFLAGS".to_string(), "-O2 -march=native".to_string()),
+        ]
+    );
+    assert_eq!(
+        i.unset_vars,
+        vec![
+            "CXXFLAGS".to_string(),
+            "FEATURES".to_string(),
+            "LDFLAGS".to_string()
+        ]
+    );
+
+    // Not installed -> empty.
+    assert!(resolve_installed_info(&root, "dev-libs/newpkg", &test_config()).is_empty());
+}
+
+#[test]
+fn resolve_installed_info_unsets_everything_without_environment_bz2() {
+    // With no `environment.bz2` Portage returns {}: all five vars are `Unset:`,
+    // even when a same-named individual vdb file exists.
+    let root = tmp_vdb(
+        "dev-libs",
+        "tmpenvpkg-1.0",
+        &[("CFLAGS", b"-O2 -stray\n"), ("USE", b""), ("IUSE", b"")],
+    );
+    let infos = resolve_installed_info(&root, "dev-libs/tmpenvpkg", &test_config());
+    assert_eq!(infos.len(), 1);
+    assert!(infos[0].differing_vars.is_empty());
+    assert_eq!(
+        infos[0].unset_vars,
+        vec![
+            "CHOST".to_string(),
+            "CFLAGS".to_string(),
+            "CXXFLAGS".to_string(),
+            "FEATURES".to_string(),
+            "LDFLAGS".to_string()
+        ]
+    );
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
 fn resolve_installed_info_wraps_a_globally_forced_flag() {
     // Portage's `pkg_use_display` wraps a forced flag regardless of its state.
     let root = fixtures_root();
