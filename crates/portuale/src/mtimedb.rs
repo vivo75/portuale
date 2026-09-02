@@ -416,6 +416,50 @@ mod tests {
     }
 
     #[test]
+    fn info_mtimes_round_trip_without_disturbing_the_resume_list() {
+        // One file, every key at once: an `info` write must not drop
+        // `resume`, and vice versa.
+        let root = tmproot();
+        write_resume_list(
+            &root,
+            &["dev-libs/a"],
+            &[(
+                ResumeEntryKind::Ebuild,
+                "dev-libs".to_string(),
+                "a".to_string(),
+                "1".to_string(),
+            )],
+            &ResumeOpts::default(),
+        )
+        .unwrap();
+
+        let mut mtimes = BTreeMap::new();
+        mtimes.insert("/usr/share/info".to_string(), 1_700_000_000);
+        mtimes.insert("/opt/pkg/info".to_string(), 1_700_000_001);
+        write_info_mtimes(&root, &mtimes).unwrap();
+
+        assert_eq!(read_info_mtimes(&root), mtimes);
+        // The resume list survived the info write.
+        assert_eq!(read_resume_list(&root).unwrap().0, vec!["dev-libs/a"]);
+
+        // And a resume write preserves the info memo.
+        write_resume_list(
+            &root,
+            &["dev-libs/b"],
+            &[(
+                ResumeEntryKind::Ebuild,
+                "dev-libs".to_string(),
+                "b".to_string(),
+                "2".to_string(),
+            )],
+            &ResumeOpts::default(),
+        )
+        .unwrap();
+        assert_eq!(read_info_mtimes(&root), mtimes);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
     fn info_mtimes_accepts_a_foreign_float_and_reads_empty_as_empty() {
         let root = tmproot();
         // Absent file -> empty memo: nothing recorded yet.
@@ -517,6 +561,38 @@ mod tests {
         assert_eq!(merges, mergelist);
         assert_eq!(merges[0].0, ResumeEntryKind::Ebuild);
         assert_eq!(merges[1].0, ResumeEntryKind::Binary);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn myopts_round_trips_onlydeps_and_defaults_to_none() {
+        let root = tmproot();
+        let cpv = &[(
+            ResumeEntryKind::Ebuild,
+            "c".to_string(),
+            "p".to_string(),
+            "1".to_string(),
+        )][..];
+        write_resume_list(&root, &[], cpv, &ResumeOpts::default()).unwrap();
+        assert_eq!(read_resume_list(&root).unwrap().2, ResumeOpts::default());
+
+        write_resume_list(
+            &root,
+            &[],
+            cpv,
+            &ResumeOpts {
+                oneshot: false,
+                onlydeps: true,
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            read_resume_list(&root).unwrap().2,
+            ResumeOpts {
+                oneshot: false,
+                onlydeps: true
+            }
+        );
         let _ = std::fs::remove_dir_all(&root);
     }
 
