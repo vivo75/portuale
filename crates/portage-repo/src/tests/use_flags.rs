@@ -197,6 +197,51 @@ fn effective_use_flags_defaults_walk_is_per_profile_level() {
 }
 
 #[test]
+fn effective_use_flags_repo_make_defaults_use_is_the_weakest_repo_layer() {
+    let euf = |iuse: &str, repo_md: &[(String, Vec<String>)], repo_pu: &[(String, Vec<String>)]| {
+        let cfg = portage_profile::Config {
+            repo_make_defaults_use: repo_md.to_vec(),
+            package_use_repo: repo_pu.to_vec(),
+            accept_keywords: HashSet::from(["amd64".to_string()]),
+            ..Default::default()
+        };
+        effective_use_flags(EffectiveUseFlagsArgs {
+            config: &cfg,
+            iuse,
+            keywords: &["amd64".to_string()],
+            candidate_str: "dev-libs/pkg-1.0:0/0::testrepo",
+            category: "dev-libs",
+            package: "pkg",
+        })
+    };
+    let md = |t: &str| vec![(String::new(), vec![t.to_string()])];
+    // repo make.defaults USE decides an unmarked IUSE flag...
+    assert!(euf("foo", &md("foo"), &[]).contains("foo"));
+    // ...but loses to the ebuild's own IUSE default (applied after)...
+    assert!(!euf("-foo", &md("foo"), &[]).contains("foo"));
+    // ...and to a repo package.use entry (also applied after, same tier).
+    assert!(!euf("foo", &md("foo"), &pu("-foo")).contains("foo"));
+    // A named (overlay) entry only applies to a candidate from that
+    // repo -- `candidate_str` here is `::testrepo`, so `::other` is inert.
+    assert!(
+        !euf(
+            "foo",
+            &[("other".to_string(), vec!["foo".to_string()])],
+            &[]
+        )
+        .contains("foo")
+    );
+    assert!(
+        euf(
+            "foo",
+            &[("testrepo".to_string(), vec!["foo".to_string()])],
+            &[]
+        )
+        .contains("foo")
+    );
+}
+
+#[test]
 fn effective_use_flags_features_use_enables_test_between_repo_and_pkginternal() {
     let euf = |iuse: &str, features_use: &[String]| {
         let cfg = portage_profile::Config {

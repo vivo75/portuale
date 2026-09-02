@@ -1519,6 +1519,7 @@ mod conflict_use_display;
 mod cycles;
 mod depclean;
 mod entry;
+mod force_scan;
 mod graph;
 mod info_pkgs;
 mod installed;
