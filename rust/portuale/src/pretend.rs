@@ -7966,6 +7966,48 @@ pub fn run(args: &[String]) -> ExitCode {
         return ExitCode::from(1);
     }
 
+    // Real `_serialize_tasks` -> `_show_circular_deps` (`depgraph.py:
+    // 10425`): an unbreakable build-time dependency cycle among the
+    // merge-bound packages -- every edge in it an unsatisfied
+    // `DEPEND`/`BDEPEND` with no run-time alternative, the only cycle
+    // real portage's `_ignore_runtime` scan can't linearize. Printed to
+    // stderr after the merge list, then the whole action fails (exit 1),
+    // pretend or not -- real portage never proceeds to build a cycle.
+    //
+    // Faithful transcription of `_show_circular_deps`'s `writemsg`
+    // sequence, with two documented cuts: (1) the reduced cycle-only
+    // `--tree` re-display (`self.display(handler.merge_list)`) and its
+    // leading `\n\n` separator -- the full merge list is already above;
+    // (2) `circular_dependency_handler._find_suggestions`, the ~180-line
+    // USE-flag heuristic that would replace the generic advisory with a
+    // specific "disable flag X on package Y" fix (the pilot always hits
+    // the `else` branch real portage takes when no suggestion is found).
+    // The shortest cycle drives `_prepare_circular_dep_message`; every
+    // edge is build-time by construction, so every priority label is
+    // `(buildtime)`.
+    if let Some(cycle) = result.circular_deps.first() {
+        let prefix = color.c("BAD", " * ");
+        eprint!("\n{prefix}Error: circular dependencies:\n\n");
+        // `_prepare_circular_dep_message`: `<pkg> depends on`, then each
+        // subsequent `<pkg> (buildtime)` at a growing one-space indent,
+        // closing back on the first package.
+        let mut lines: Vec<String> = vec![format!("{} depends on", cycle[0])];
+        for (pos, pkg) in cycle.iter().enumerate().skip(1) {
+            lines.push(format!("{}{pkg} (buildtime)", " ".repeat(pos)));
+        }
+        lines.push(format!(
+            "{}{} (buildtime)",
+            " ".repeat(cycle.len()),
+            cycle[0]
+        ));
+        eprint!("{}", lines.join("\n"));
+        eprint!(
+            "\n\n{prefix}Note that circular dependencies can often be avoided by temporarily\n\
+             {prefix}disabling USE flags that trigger optional dependencies.\n"
+        );
+        return ExitCode::from(1);
+    }
+
     // Real execution: only reachable when `!pretend`, which the gate at
     // the top of this function only ever lets through when `buildpkgonly`
     // is also `true` -- see `emerge_build.rs`'s own module doc comment

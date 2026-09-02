@@ -6181,6 +6181,82 @@ def _topological_merge_order(entries, edge_kind_map=None):
     return [entries[i] for i in order]
 
 
+def _merge_bound_cpv(entry):
+    """category/package-version an entry would install, or None for
+    already_installed / no_visible_candidate (never in a build-time
+    cycle). Mirrors portage-repo/src/lib.rs's merge_bound_cpv."""
+    outcome = entry[2]
+    tag = outcome[0]
+    if tag in ("new", "reinstall"):
+        version = outcome[1]
+    elif tag in ("upgrade", "downgrade"):
+        version = outcome[2]
+    else:
+        return None
+    return f"{entry[0]}/{entry[1]}-{version}"
+
+
+def _find_hard_cycles(entries, edge_kind_map):
+    """The shortest unbreakable dependency cycle among the merge-bound
+    entries -- real circular_dependency_handler._find_cycles +
+    shortest_cycle, restricted to hard edges (edge_kind_map[(dep cp,
+    owner cp)] == [True, False]): an unsatisfied build-time dep with no
+    run-time alternative, the only edges real _serialize_tasks'
+    _ignore_runtime scan can't drop. Returns [cycle] (a list of CPVs
+    where each depends on the next, wrapping, rotated to start at the
+    lowest entry index) or []. Documented cut: no full elementary-cycle
+    enumeration / large_cycle_count advisory. Mirrors
+    portage-repo/src/lib.rs's find_hard_cycles."""
+    cp_index = {}
+    for i, e in enumerate(entries):
+        if _merge_bound_cpv(e) is not None:
+            cp_index.setdefault((e[0], e[1]), i)
+    adj = {i: set() for i in range(len(entries))}
+    for (dep_cp, owner_cp), kinds in edge_kind_map.items():
+        if not kinds[0] or kinds[1]:
+            continue
+        oi = cp_index.get(tuple(owner_cp))
+        di = cp_index.get(tuple(dep_cp))
+        if oi is not None and di is not None and oi != di:
+            adj[oi].add(di)
+
+    best = None
+    for start in range(len(entries)):
+        if not adj[start]:
+            continue
+        prev = {}
+        seen = {start}
+        frontier = [start]
+        found = None
+        while frontier and found is None:
+            nxt = []
+            for u in frontier:
+                for w in sorted(adj[u]):
+                    if w == start:
+                        path = [u]
+                        cur = u
+                        while cur != start:
+                            cur = prev[cur]
+                            path.append(cur)
+                        path.reverse()
+                        found = path
+                        break
+                    if w not in seen:
+                        seen.add(w)
+                        prev[w] = u
+                        nxt.append(w)
+                if found is not None:
+                    break
+            frontier = nxt
+        if found is not None and (best is None or len(found) < len(best)):
+            best = found
+    if best is None:
+        return []
+    min_pos = min(range(len(best)), key=lambda p: best[p])
+    rotated = best[min_pos:] + best[:min_pos]
+    return [[_merge_bound_cpv(entries[i]) for i in rotated]]
+
+
 def _complete_graph_auto_enable(entries, if_new_use, if_new_ver, if_new_slot):
     """Real depgraph.py::_complete_graph (8581-8648) auto-enable check:
     even without --complete-graph, complete mode switches on when
@@ -7735,6 +7811,10 @@ def resolve_pretend_graph(
         "autounmask_license_changes": autounmask_license_changes,
         "autounmask_mask_changes": autounmask_mask_changes,
         "abi_rebuilds": abi_rebuilds,
+        # Real _serialize_tasks -> _show_circular_deps: an unbreakable
+        # build-time dependency cycle. See portage-repo/src/lib.rs's
+        # GraphResult::circular_deps.
+        "circular_deps": _find_hard_cycles(entries, edge_kind_map),
     }
 
 
@@ -14250,6 +14330,30 @@ def run(args):
         print("!!! --buildpkgonly requires all dependencies to be merged.", file=sys.stderr)
         print("!!! Cannot merge requested packages. Merge deps and try again.", file=sys.stderr)
         print(file=sys.stderr)
+        return 1
+
+    # Real _serialize_tasks -> _show_circular_deps (depgraph.py:10425): an
+    # unbreakable build-time dependency cycle -- printed to stderr after
+    # the merge list, then the action fails (exit 1). Faithful
+    # transcription of _show_circular_deps's writemsg sequence, minus the
+    # reduced cycle-only --tree re-display (+ its leading "\n\n") and
+    # _find_suggestions's USE-flag heuristic (the pilot always hits the
+    # generic-advisory else branch). Every cycle edge is build-time by
+    # construction, so every priority label is "(buildtime)". Mirrors
+    # pretend.rs.
+    if result["circular_deps"]:
+        cycle = result["circular_deps"][0]
+        prefix = color.c("BAD", " * ")
+        sys.stderr.write(f"\n{prefix}Error: circular dependencies:\n\n")
+        lines = [f"{cycle[0]} depends on"]
+        for pos, pkg in enumerate(cycle[1:], start=1):
+            lines.append(f"{' ' * pos}{pkg} (buildtime)")
+        lines.append(f"{' ' * len(cycle)}{cycle[0]} (buildtime)")
+        sys.stderr.write("\n".join(lines))
+        sys.stderr.write(
+            f"\n\n{prefix}Note that circular dependencies can often be avoided by temporarily\n"
+            f"{prefix}disabling USE flags that trigger optional dependencies.\n"
+        )
         return 1
 
     return 0

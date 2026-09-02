@@ -10801,6 +10801,64 @@ via a `_assert_slot_collision_block` helper (rather than pinning the
 whole paragraph in every test) + `--backtrack=30`/`=0` hint-gate CASES;
 a new `portage-repo` unit test asserts the per-instance parent data.
 
+### Backtracking: the real `* Error: circular dependencies:` block (slice 5)
+
+The pilot's BFS concatenated all five `*DEPEND` keys into one string
+before flattening, so every graph edge was priority-blind — it couldn't
+tell a *breakable* run-time cycle (`cycle-a`/`cycle-b`, which real portage
+merges silently) from an *unbreakable* build-time one (the only case real
+portage errors on).
+
+**Commit 1** gave each edge a priority. Every dependency string is
+re-flattened over just `DEPEND`+`BDEPEND` and just
+`RDEPEND`+`PDEPEND`+`IDEPEND`; a token in the first and not the second is
+tagged `buildtime_hard` on its `QueueItem` (promoted from a tuple alias
+to a struct). `resolve_pretend_graph` accumulates an `EdgeKindMap`,
+`(target cp, owner cp) → (has_hard, has_soft)`, and
+`topological_merge_order` uses it to break a cycle the way real
+`_serialize_tasks` does — at a run-time edge (an entry whose every
+unplaced dependency is soft — real `DepPrioritySatisfiedRange`'s
+`_ignore_runtime` can drop an unsatisfied run-time edge but never an
+unsatisfied build-time one) — before falling back to discovery order.
+This also makes cycle merge ordering deterministic in general.
+
+**Commit 2** added the display. `find_hard_cycles` runs a BFS over the
+hard-edge digraph (edges that are `(true, false)` in the `EdgeKindMap`)
+restricted to merge-bound entries and returns the shortest directed
+cycle, rotated to start at its lowest merge-order index.
+`GraphResult::circular_deps` carries it; `pretend.rs` renders real
+`_show_circular_deps` to stderr after the merge list —
+
+```
+ * Error: circular dependencies:
+
+dev-libs/hardcyclea-1.0 depends on
+ dev-libs/hardcycleb-1.0 (buildtime)
+  dev-libs/hardcyclea-1.0 (buildtime)
+
+ * Note that circular dependencies can often be avoided by temporarily
+ * disabling USE flags that trigger optional dependencies.
+```
+
+— and exits 1 (pretend or not: real portage never proceeds to build a
+cycle). New `dev-libs/hardcycle{a,b}` fixture (mutual `DEPEND`, empty
+`RDEPEND`, both unbuilt). The pure-`RDEPEND` `cycle-a`/`cycle-b` cycle
+still resolves exit 0 with both packages merged.
+
+Cut (documented): the reduced cycle-only `--tree` re-display
+(`self.display(handler.merge_list)`) — the pilot already prints the full
+merge list above; `circular_dependency_handler._find_suggestions`'s
+~180-line USE-flag heuristic, so the block always ends with the generic
+advisory real portage falls back to when it finds no specific
+suggestion; and full elementary-cycle enumeration / the
+`large_cycle_count` "lots of cycles" advisory (`_prepare_circular_dep_
+message` only ever renders the single shortest cycle); and `--json`
+output, which still exits 0 and omits `circular_deps` — the same way it
+already reports slot conflicts as data without failing. Contract-tested
+with a byte-exact pin of the whole block (Rust == Python) + an exit-code
+CASES entry; two `portage-repo` unit tests cover the priority-aware
+cycle break and `find_hard_cycles`.
+
 ### `emerge -jN` / `--jobs=N` / `--load-average`: a real parallel build scheduler
 
 `emerge <atom>` (source, no `--pretend`) gained real `_emerge/Scheduler.py`

@@ -347,6 +347,11 @@ CASES = [
     ("recursion: diamond dependency dedup", ["--pretend", "dev-libs/diamond"], 0),
     ("recursion: dependency cycle terminates", ["--pretend", "dev-libs/cycle-a"], 0),
     (
+        "recursion: unbreakable build-time cycle is a fatal error",
+        ["--pretend", "dev-libs/hardcyclea"],
+        1,
+    ),
+    (
         "recursion: any-of group resolves only the first satisfiable alternative",
         ["--pretend", "dev-libs/anyof"],
         0,
@@ -2061,6 +2066,41 @@ def test_root_deps_recursion_terminates_on_a_bdepend_cycle(
         '[ebuild  N     ] dev-libs/rdrcyca-1.0 to /\n'
         '[ebuild  N     ] dev-libs/rdrcyc-1.0 \n'
         )
+    )
+
+
+def test_unbreakable_build_time_cycle_prints_the_circular_deps_error(
+    emerge_binary, emerge_pretend_python, fixture_env
+):
+    """hardcyclea DEPENDs hardcycleb which DEPENDs hardcyclea, both
+    unbuilt, empty RDEPEND -- every edge an unsatisfied build-time dep
+    with no run-time alternative, so real portage's `_ignore_runtime`
+    scan can't linearize it. The full merge list still goes to stdout;
+    the `* Error: circular dependencies:` block (real `_show_circular_
+    deps`, minus the reduced --tree re-display and the USE-flag
+    suggestion heuristic) goes to stderr; exit 1. By contrast the
+    pure-RDEPEND cycle-a/cycle-b cycle stays exit 0 (a CASES entry)."""
+    base = ["--pretend", "dev-libs/hardcyclea"]
+    rust = _run([str(emerge_binary)], base, fixture_env)
+    python = _run(emerge_pretend_python, base, fixture_env)
+
+    assert rust.returncode == 1
+    assert python.returncode == 1
+    assert rust.stdout == python.stdout
+    assert rust.stderr == python.stderr
+    assert rust.stdout == (
+        "[ebuild  N     ] dev-libs/hardcyclea-1.0 \n"
+        "[ebuild  N     ] dev-libs/hardcycleb-1.0 \n"
+    )
+    assert rust.stderr == (
+        "\n * Error: circular dependencies:\n"
+        "\n"
+        "dev-libs/hardcyclea-1.0 depends on\n"
+        " dev-libs/hardcycleb-1.0 (buildtime)\n"
+        "  dev-libs/hardcyclea-1.0 (buildtime)\n"
+        "\n"
+        " * Note that circular dependencies can often be avoided by temporarily\n"
+        " * disabling USE flags that trigger optional dependencies.\n"
     )
 
 

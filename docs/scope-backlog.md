@@ -119,13 +119,35 @@ single-pass BFS can't grow into these incrementally:
     block (`SlotConflict.instances` — every conflicting version + its
     `(parent_cpv, atom)` pullers, via `build_slot_conflict`), the real
     advisory paragraph + `--backtrack=30` hint gated the real way.
-  - **Deferred (backlog):** "backtracking exhausted" / "circular
-    dependencies prevent backtracking" diagnostics; autounmask levels
-    tried in sequence inside the loop; autounmask parent-flip re-resolve
-    feeding `extra_constraints`; the `resolve_graph_once` helper
-    extraction (drop slice 1's `loop {}` reindent); real
-    `get_conflict()`'s `collision_reasons` grouping / best-atom
-    selection / `--verbose-conflicts` USE markers / stderr stream.
+  - **Slice 5 shipped 2026-09-02:** the real `_show_circular_deps` block.
+    Commit 1 gave every graph edge a build-time/run-time priority (the
+    BFS had concatenated all five `*DEPEND` keys before flattening):
+    each dep string is re-flattened over `DEPEND`+`BDEPEND` and over
+    `RDEPEND`+`PDEPEND`+`IDEPEND`, an atom in the first and not the
+    second is tagged `buildtime_hard` on its `QueueItem`, and
+    `resolve_pretend_graph` accumulates an `EdgeKindMap`
+    (`(target cp, owner cp) → (has_hard, has_soft)`).
+    `topological_merge_order` now breaks a cycle at a run-time edge
+    (real `_serialize_tasks`' `_ignore_runtime`) before falling back to
+    discovery order. Commit 2 added `find_hard_cycles` (shortest cycle
+    over the hard-edge digraph among merge-bound entries),
+    `GraphResult::circular_deps`, and the `pretend.rs` renderer — real
+    `_prepare_circular_dep_message`'s `<cpv> depends on` / ` <cpv>
+    (buildtime)` chain + the `* Error: circular dependencies:` header +
+    the generic advisory, exit 1. New `dev-libs/hardcycle{a,b}` fixture
+    (mutual `DEPEND`, empty `RDEPEND`). The pure-`RDEPEND`
+    `cycle-a`/`cycle-b` cycle stays exit 0. **Documented cuts:** the
+    reduced cycle-only `--tree` re-display
+    (`self.display(handler.merge_list)`); `_find_suggestions`'s
+    ~180-line USE-flag heuristic (always the generic-advisory `else`
+    branch); full elementary-cycle enumeration / `large_cycle_count`.
+  - **Deferred (backlog):** "backtracking exhausted" diagnostics;
+    autounmask levels tried in sequence inside the loop; autounmask
+    parent-flip re-resolve feeding `extra_constraints`; the
+    `resolve_graph_once` helper extraction (drop slice 1's `loop {}`
+    reindent); real `get_conflict()`'s `collision_reasons` grouping /
+    best-atom selection / `--verbose-conflicts` USE markers / stderr
+    stream; the circular-dep cuts listed under slice 5.
   `agent-context.md` lists a backtracking resolver as out of scope for v1;
   slices 1–4 nonetheless take it from "detects and reports conflicts" to
   "reconciles solvable conflicts, masks unsolvable ones, and reports the

@@ -8081,6 +8081,128 @@ fn topological_merge_order_impl(
         .collect()
 }
 
+/// The `category/package-version` a merge-bound `GraphEntry` would
+/// install, or `None` for `AlreadyInstalled`/`NoVisibleCandidate` (which
+/// never participate in a build-time cycle).
+fn merge_bound_cpv(entry: &GraphEntry) -> Option<String> {
+    let version = match &entry.outcome {
+        PretendOutcome::New { version } | PretendOutcome::Reinstall { version, .. } => version,
+        PretendOutcome::Upgrade { to, .. } | PretendOutcome::Downgrade { to, .. } => to,
+        PretendOutcome::AlreadyInstalled { .. } | PretendOutcome::NoVisibleCandidate => {
+            return None
+        }
+    };
+    Some(format!("{}/{}-{version}", entry.category, entry.package))
+}
+
+/// Finds the shortest **unbreakable** dependency cycle among the
+/// merge-bound `entries` -- real `circular_dependency_handler`'s
+/// `_find_cycles` + `shortest_cycle`, restricted to *hard* edges (an
+/// unsatisfied build-time dep with no run-time alternative,
+/// `edge_kind_map[(dep cp, owner cp)] == (true, false)`). Those are the
+/// only edges real `_serialize_tasks`' `_ignore_runtime` scan can't
+/// drop, so a cycle made entirely of them is exactly the case real
+/// portage reports with `* Error: circular dependencies:`.
+///
+/// The hard-edge digraph has an edge `owner -> dep` for every such
+/// `edge_kind_map` entry whose both endpoints are merge-bound `entries`.
+/// Returns the shortest directed cycle as an ordered CPV list where each
+/// element depends on the next (the last wrapping to the first), rotated
+/// to start at its lowest `entries` index for a deterministic render;
+/// empty when the hard-edge graph is acyclic (every ordinary resolve).
+///
+/// Documented cut vs real `_find_cycles`: no full elementary-cycle
+/// enumeration (`get_cycles`) and no `large_cycle_count` "lots of
+/// cycles" advisory -- `_prepare_circular_dep_message` only ever renders
+/// the single shortest cycle, which is all `pretend.rs` needs.
+fn find_hard_cycles(entries: &[GraphEntry], edge_kind_map: &EdgeKindMap) -> Vec<Vec<String>> {
+    // Merge-bound entries only, lowest index per cp (the merge list is
+    // already in dependency order, so the first is the one to start a
+    // rendered cycle at).
+    let mut cp_index: HashMap<(&str, &str), usize> = HashMap::new();
+    for (i, e) in entries.iter().enumerate() {
+        if merge_bound_cpv(e).is_some() {
+            cp_index
+                .entry((e.category.as_str(), e.package.as_str()))
+                .or_insert(i);
+        }
+    }
+    // adjacency: owner index -> sorted, deduped dep indices (hard edges).
+    let mut adj: Vec<Vec<usize>> = vec![Vec::new(); entries.len()];
+    for ((dep_cp, owner_cp), (has_hard, has_soft)) in edge_kind_map {
+        if !has_hard || *has_soft {
+            continue;
+        }
+        let (Some(&oi), Some(&di)) = (
+            cp_index.get(&(owner_cp.0.as_str(), owner_cp.1.as_str())),
+            cp_index.get(&(dep_cp.0.as_str(), dep_cp.1.as_str())),
+        ) else {
+            continue;
+        };
+        if oi != di {
+            adj[oi].push(di);
+        }
+    }
+    for v in &mut adj {
+        v.sort_unstable();
+        v.dedup();
+    }
+    // Shortest directed cycle: BFS from each node, first return to that
+    // node wins; keep the globally shortest.
+    let mut best: Option<Vec<usize>> = None;
+    for start in 0..entries.len() {
+        if adj[start].is_empty() {
+            continue;
+        }
+        let mut prev: HashMap<usize, usize> = HashMap::new();
+        let mut seen: HashSet<usize> = HashSet::from([start]);
+        let mut frontier = vec![start];
+        'bfs: while !frontier.is_empty() {
+            let mut next = Vec::new();
+            for &u in &frontier {
+                for &w in &adj[u] {
+                    if w == start {
+                        // Reconstruct start -> ... -> u, then wrap.
+                        let mut path = vec![u];
+                        let mut cur = u;
+                        while cur != start {
+                            cur = prev[&cur];
+                            path.push(cur);
+                        }
+                        path.reverse();
+                        if best.as_ref().is_none_or(|b| path.len() < b.len()) {
+                            best = Some(path);
+                        }
+                        break 'bfs;
+                    }
+                    if seen.insert(w) {
+                        prev.insert(w, u);
+                        next.push(w);
+                    }
+                }
+            }
+            frontier = next;
+        }
+    }
+    match best {
+        None => Vec::new(),
+        Some(cycle) => {
+            let min_pos = cycle
+                .iter()
+                .enumerate()
+                .min_by_key(|(_, &idx)| idx)
+                .map(|(p, _)| p)
+                .unwrap_or(0);
+            let rotated: Vec<String> = cycle[min_pos..]
+                .iter()
+                .chain(&cycle[..min_pos])
+                .map(|&i| merge_bound_cpv(&entries[i]).expect("merge-bound"))
+                .collect();
+            vec![rotated]
+        }
+    }
+}
+
 /// A blocker atom found while flattening one package's own dependency strings,
 /// not yet matched against anything -- collected during the BFS in
 /// `resolve_pretend_graph` and resolved in a single post-pass (see
@@ -8422,6 +8544,19 @@ pub struct GraphResult {
     /// causing rebuilds:" block (grouped by provider), unless
     /// `--verbose-slot-rebuilds=n`.
     pub abi_rebuilds: Vec<(String, String)>,
+    /// Unbreakable dependency cycles among the merge-bound entries: each
+    /// inner `Vec` is one cycle as an ordered list of `cat/pkg-version`
+    /// CPVs where every element depends on the next (and the last on the
+    /// first) via an unsatisfied build-time dep with no run-time
+    /// alternative -- real `circular_dependency_handler`'s
+    /// `_ignore_runtime` cycle set, the only case real portage errors on
+    /// with `* Error: circular dependencies:`. Currently at most one
+    /// entry (the shortest cycle -- real `_find_cycles`'s
+    /// `shortest_cycle`, all `_prepare_circular_dep_message` renders),
+    /// rotated to start at its lowest merge-order index. `pretend.rs`
+    /// renders `_show_circular_deps`'s block and exits 1 when this is
+    /// non-empty. Empty in every ordinary resolve.
+    pub circular_deps: Vec<Vec<String>>,
 }
 
 /// One real `--autounmask` change (`depgraph.py::_display_autounmask`):
@@ -10914,6 +11049,14 @@ pub fn resolve_pretend_graph(
             })
         };
 
+        // Real `_serialize_tasks` -> `_show_circular_deps`: an
+        // unbreakable build-time dependency cycle among the merge-bound
+        // packages. `topological_merge_order` above already left such a
+        // cycle in discovery order (it can't linearize one); this
+        // records it for `pretend.rs` to render the fatal
+        // `* Error: circular dependencies:` block.
+        let circular_deps = find_hard_cycles(&entries, &edge_kind_map);
+
         return Ok(GraphResult {
             entries,
             slot_conflicts,
@@ -10925,6 +11068,7 @@ pub fn resolve_pretend_graph(
             autounmask_license_changes,
             autounmask_mask_changes,
             abi_rebuilds,
+            circular_deps,
         });
     }
 }
@@ -17108,6 +17252,45 @@ mod tests {
         let ordered = topological_merge_order_impl(vec![a, b], &hard_map);
         let names: Vec<&str> = ordered.iter().map(|e| e.package.as_str()).collect();
         assert_eq!(names, vec!["cyc-a", "cyc-b"]);
+    }
+
+    #[test]
+    fn find_hard_cycles_reports_a_build_time_cycle_and_ignores_a_run_time_one() {
+        let hardcpv = |p: &str| format!("dev-libs/{p}-1.0");
+        let cp = |p: &str| ("dev-libs".to_string(), p.to_string());
+        let entries = vec![
+            graph_entry("dev-libs", "hca", "1.0"),
+            graph_entry("dev-libs", "hcb", "1.0"),
+        ];
+
+        // Pure hard cycle hca <-> hcb: reported, rotated to start at the
+        // lowest index (hca).
+        let mut hard: EdgeKindMap = HashMap::new();
+        hard.insert((cp("hcb"), cp("hca")), (true, false));
+        hard.insert((cp("hca"), cp("hcb")), (true, false));
+        assert_eq!(
+            find_hard_cycles(&entries, &hard),
+            vec![vec![hardcpv("hca"), hardcpv("hcb")]]
+        );
+
+        // Same shape but one edge has a run-time alternative -> breakable,
+        // nothing reported.
+        let mut mixed: EdgeKindMap = HashMap::new();
+        mixed.insert((cp("hcb"), cp("hca")), (true, false));
+        mixed.insert((cp("hca"), cp("hcb")), (true, true));
+        assert!(find_hard_cycles(&entries, &mixed).is_empty());
+
+        // An AlreadyInstalled node can't be in a build-time cycle.
+        let installed = vec![
+            graph_entry("dev-libs", "hca", "1.0"),
+            GraphEntry {
+                outcome: PretendOutcome::AlreadyInstalled {
+                    version: "1.0".to_string(),
+                },
+                ..graph_entry("dev-libs", "hcb", "1.0")
+            },
+        ];
+        assert!(find_hard_cycles(&installed, &hard).is_empty());
     }
 
     #[test]
