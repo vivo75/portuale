@@ -11377,19 +11377,25 @@ Python reference and contract-tested.
   the real `emerge: there are no ebuilds to satisfy "<atom>".` +
   `--misspell-suggestions` block, exit 1, before the config block.
   Otherwise, after it, a real `Package Settings` section
-  (`header_width = 65`) with a `<cpv>::<repo> would be built with the
-  following:` + `USE="…"` block for each atom whose ebuild defines
-  `pkg_info()` — real portage's `mypkgs` gate (EAPI 4+ + `info` in
-  `DEFINED_PHASES`), so an ordinary package still shows only the config
-  block. New `portage_repo::resolve_info_candidate` (best visible ebuild
-  candidate + its `-pv`-style USE display, reusing the same
-  `build_use_expand_display` / `forced_or_masked_flags` the merge list
-  uses) + `dev-libs/pkginfopkg` fixture. Cuts: the block for an
-  *installed* package — real `was built with` + the `CHOST`/`CFLAGS` vdb
-  `_aux_env_search` diff, and `(non-installed binary)` — the `pkg_info()`
-  phase run itself, and ANSI colour on the USE line. Mirrored in
-  `emerge_pretend_reference.py` (`_resolve_info_candidate`); 3 contract
-  tests + 1 `portage-repo` unit test.)*
+  (`header_width = 65`, real `mypkgs`): per atom, every **installed** vdb
+  match wins — `<cpv>::<repo> was built with the following:` + its vdb
+  `USE="…"` line + the `CHOST`/`CFLAGS`/`CXXFLAGS`/`FEATURES`/`LDFLAGS`
+  whose stored value differs from the current config + an `Unset: …`
+  line (real `mydesiredvars`); otherwise the best visible ebuild
+  candidate, but only if its ebuild defines `pkg_info()` — real
+  portage's gate (EAPI 4+ + `info` in `DEFINED_PHASES`), so an ordinary
+  *uninstalled* package still shows only the config block. New
+  `portage_repo::resolve_info_candidate` / `resolve_installed_info`,
+  reusing the same `build_use_expand_display` the merge list uses; new
+  `dev-libs/pkginfopkg` + `dev-libs/infoinstpkg` (a rich vdb entry —
+  `IUSE`/`USE`/`CFLAGS`/`CHOST`) fixtures. Cuts: the installed block's
+  `CHOST`/`CFLAGS`/… come only from the individual vdb `build-info`
+  files (real `_aux_env_search` falls back to `environment.bz2`) and
+  skip the `( )` force/mask wrapping; `(non-installed binary)`; the
+  `pkg_info()` phase run itself; ANSI colour on the USE line. Mirrored
+  in `emerge_pretend_reference.py`
+  (`_resolve_info_candidate`/`_resolve_installed_info`); 4 contract
+  tests + 2 `portage-repo` unit tests.)*
 
 ### `color.map` / `PORTAGE_COLORMAP`: user-overridable ANSI codes
 

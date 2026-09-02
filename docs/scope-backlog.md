@@ -393,14 +393,21 @@ dev/test context — see also the `chown` note below).
   the real `emerge: there are no ebuilds to satisfy "<atom>".` +
   `--misspell-suggestions` block, exit 1, *before* the config block;
   otherwise, after it, a real `Package Settings` section
-  (`header_width = 65`) with a `<cpv>::<repo> would be built with the
-  following:` + `USE="…"` block for each atom whose ebuild defines
-  `pkg_info()` (real `mypkgs` gate — EAPI 4+ + `info` in
-  `DEFINED_PHASES`). New `portage_repo::resolve_info_candidate` /
-  `InfoCandidate`; new `dev-libs/pkginfopkg` fixture. Cuts: the block
-  for an *installed* package (real `was built with` + `CHOST`/`CFLAGS`
-  vdb `_aux_env_search` diff, and `(non-installed binary)`), the
-  `pkg_info()` phase run itself, and ANSI colour on the USE line.
+  (`header_width = 65`, real `mypkgs`): per atom, every installed vdb
+  match wins (`<cpv>::<repo> was built with the following:` + its vdb
+  `USE="…"` + the `CHOST`/`CFLAGS`/`CXXFLAGS`/`FEATURES`/`LDFLAGS` that
+  differ from the current config + an `Unset: …` line — real
+  `mydesiredvars`; installed block shipped 2026-09-02); otherwise the
+  best visible ebuild candidate, but only if its ebuild defines
+  `pkg_info()` (real gate — EAPI 4+ + `info` in `DEFINED_PHASES` —
+  `<cpv> would be built with the following:` + `USE="…"`). New
+  `portage_repo::resolve_info_candidate` / `resolve_installed_info` +
+  `InfoCandidate` / `InstalledInfo`; new `dev-libs/pkginfopkg` +
+  `dev-libs/infoinstpkg` (a rich vdb entry) fixtures. Cuts: the
+  installed block reads only the individual vdb `build-info` files (not
+  the package's `environment.bz2`) and skips the `( )` force/mask
+  wrapping; `(non-installed binary)`; the `pkg_info()` phase run itself;
+  ANSI colour on the USE line.
   **Shipped 2026-09-02 (batch 11): `--regen`** (real `action_regen` →
   `MetadataRegen`) — a real write action: run every ebuild's `depend`
   phase (`ebuild_phases::run_depend_phase`, a `PORTAGE_PIPE_FD`-wired

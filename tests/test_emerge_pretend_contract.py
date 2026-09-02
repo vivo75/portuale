@@ -10360,6 +10360,32 @@ def test_info_atom_prints_package_settings_for_a_pkg_info_package(
     ).stdout
 
 
+def test_info_atom_prints_the_installed_package_block(
+    emerge_binary, emerge_pretend_python, fixture_env
+):
+    """Real action_info checks the vdb first: an installed match
+    short-circuits the ebuild lookup and prints `<cpv>::<repo> was built
+    with the following:` + the vdb USE line + the `mydesiredvars`
+    (CHOST/CFLAGS/CXXFLAGS/FEATURES/LDFLAGS) whose stored value differs
+    from the current config, then an `Unset:` line for the ones with no
+    stored value. `dev-libs/infoinstpkg` is installed with
+    IUSE="alpha beta" USE="alpha", CFLAGS/CHOST recorded, the make.conf
+    setting neither. Rust == Python."""
+    rust = _run([str(emerge_binary)], ["--info", "dev-libs/infoinstpkg"], fixture_env)
+    py = _run(emerge_pretend_python, ["--info", "dev-libs/infoinstpkg"], fixture_env)
+    assert rust.returncode == 0
+    assert rust.stdout == py.stdout
+    assert rust.stdout.endswith(
+        "dev-libs/infoinstpkg-1.0::testrepo was built with the following:\n"
+        'USE="alpha -beta"\n'
+        'CHOST="x86_64-pc-linux-gnu"\n'
+        'CFLAGS="-O2 -march=native"\n'
+        "Unset: CXXFLAGS, FEATURES, LDFLAGS\n"
+        "\n"
+        "\n"
+    )
+
+
 def test_check_news_reports_none_when_all_items_are_read(
     emerge_binary, emerge_pretend_python, fixture_env, tmp_path
 ):

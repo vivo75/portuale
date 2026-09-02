@@ -9478,6 +9478,67 @@ def _resolve_info_candidate(repos, atom_str, config):
     }
 
 
+_INFO_INSTALLED_VARS = ("CHOST", "CFLAGS", "CXXFLAGS", "FEATURES", "LDFLAGS")
+
+
+def _resolve_installed_info(root, atom_str, config):
+    """Every installed vdb entry `atom_str` matches, with the data real
+    action_info prints for an installed package. Mirrors
+    portage-repo/src/lib.rs's resolve_installed_info (reads only the vdb
+    file, not environment.bz2; no ( ) force/mask wrapping)."""
+    atom = _parse_atom(atom_str)
+    if atom is None or "/" not in atom.cp:
+        return []
+    category, package = atom.cp.split("/", 1)
+    triples = installed_candidates(root, category, package)
+    cpv_strs = [
+        f"{category}/{package}-{v}:{s}/{ss}::"
+        f"{_installed_pkg_repo(root, category, package, v)}"
+        for (v, s, ss) in triples
+    ]
+    matched = match_from_list(atom_str, cpv_strs)
+    if not matched:
+        return []
+    by_str = dict(zip(cpv_strs, triples))
+    out = []
+    for m in matched:
+        if m not in by_str:
+            continue
+        version = by_str[m][0]
+        repo_name = _installed_pkg_repo(root, category, package, version)
+        vdb_use = _read_vdb_flag_set(root, category, package, version, "USE")
+        vdb_iuse = _read_vdb_string(root, category, package, version, "IUSE")
+        disp = sorted(
+            {
+                (f.lstrip("+-"), f.lstrip("+-") in vdb_use)
+                for f in vdb_iuse.split()
+            },
+            key=lambda p: _alnum_sort_key(p[0]),
+        )
+        use_expand_display = _build_use_expand_display(
+            disp, config["use_expand"], config["use_expand_hidden"], None, None, True, None
+        )
+        differing, unset = [], []
+        for var in _INFO_INSTALLED_VARS:
+            stored = _read_vdb_string(root, category, package, version, var).strip()
+            if not stored:
+                unset.append(var)
+                continue
+            current = config["other_vars"].get(var, "")
+            if stored.split() != current.split():
+                differing.append((var, stored))
+        out.append(
+            {
+                "cpv": f"{category}/{package}-{version}",
+                "repo_name": repo_name,
+                "use_expand_display": use_expand_display,
+                "differing_vars": differing,
+                "unset_vars": unset,
+            }
+        )
+    return out
+
+
 def _run_info(config, repos, root, atom_args, misspell_suggestions, color):
     """Real `emerge --info` (action_info), narrowed to its deterministic
     config/repository block plus, with atom args, the `myfiles`-loop
@@ -9490,7 +9551,9 @@ def _run_info(config, repos, root, atom_args, misspell_suggestions, color):
         if atom is None or "/" not in atom.cp:
             continue
         category, package = atom.cp.split("/", 1)
-        if not list_candidates(repos, category, package):
+        if not list_candidates(repos, category, package) and not installed_candidates(
+            root, category, package
+        ):
             xinfo = f'"{atom_str}"'
             if str(root) != "/":
                 xinfo = f"{xinfo} for {root}"
@@ -9585,27 +9648,37 @@ def _run_info(config, repos, root, atom_args, misspell_suggestions, color):
     print()
     print()
 
-    # Real action_info's `Package Settings` section: one per atom whose
-    # best visible ebuild candidate defines pkg_info() (real `mypkgs`).
-    candidates = [
-        c
-        for a in atom_args
-        for c in [_resolve_info_candidate(repos, a, config)]
-        if c is not None and c["defines_pkg_info"]
-    ]
-    if candidates:
+    # Real action_info's `Package Settings` section (real `mypkgs`): per
+    # atom, every installed vdb match short-circuits the ebuild lookup;
+    # otherwise the best visible ebuild candidate, gated on pkg_info().
+    pkgs = []
+    for a in atom_args:
+        installed = _resolve_installed_info(root, a, config)
+        if installed:
+            pkgs.extend(("installed", i) for i in installed)
+            continue
+        c = _resolve_info_candidate(repos, a, config)
+        if c is not None and c["defines_pkg_info"]:
+            pkgs.append(("ebuild", c))
+    if pkgs:
         title = "Package Settings"
         pad = 65 // 2 + len(title) // 2
         print("=" * 65)
         print(title.rjust(pad))
         print("=" * 65)
         print()
-        for c in candidates:
+        for kind, p in pkgs:
+            verb = "was" if kind == "installed" else "would be"
             print(
-                f"\n{color.c('INFORM', c['cpv'] + '::' + c['repo_name'])} "
-                "would be built with the following:"
+                f"\n{color.c('INFORM', p['cpv'] + '::' + p['repo_name'])} "
+                f"{verb} built with the following:"
             )
-            print(" ".join(f'{name}="{body}"' for name, body in c["use_expand_display"]))
+            print(" ".join(f'{name}="{body}"' for name, body in p["use_expand_display"]))
+            if kind == "installed":
+                for name, value in p["differing_vars"]:
+                    print(f'{name}="{value}"')
+                if p["unset_vars"]:
+                    print(f"Unset: {', '.join(p['unset_vars'])}")
             print()
             print()
 

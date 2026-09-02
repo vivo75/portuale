@@ -4738,9 +4738,13 @@ fn build_config_env(config: &portage_profile::Config) -> Vec<(String, String)> {
 /// has no ebuild anywhere aborts with `emerge: there are no ebuilds to
 /// satisfy "<atom>".` + `--misspell-suggestions` (exit 1, before the
 /// config block); otherwise, after the config block, a `Package
-/// Settings` section with a `<cpv>::<repo> would be built with the
-/// following:` + `USE="…"` block for each atom whose ebuild defines
-/// `pkg_info()` (real `mypkgs` gate).
+/// Settings` section (real `mypkgs`): per atom, every installed vdb
+/// match wins (`<cpv>::<repo> was built with the following:` + its vdb
+/// `USE="…"` line + the `CHOST`/`CFLAGS`/`CXXFLAGS`/`FEATURES`/`LDFLAGS`
+/// that differ from the current config + an `Unset: …` line); otherwise
+/// the best visible ebuild candidate, but only if its ebuild defines
+/// `pkg_info()` (`<cpv>::<repo> would be built with the following:` +
+/// `USE="…"`).
 ///
 /// **Large, deliberate cut:** real `action_info`'s output is dominated by
 /// *host state* a fixture-driven test can't verify -- the
@@ -4748,12 +4752,14 @@ fn build_config_env(config: &portage_profile::Config) -> Vec<(String, String)> {
 /// <kernel>)` header, `System uname`, `KiB Mem`, the
 /// `sh:`/`gcc:`/`ld:`/`binutils`/`ccache`/`distcc` version probes, the
 /// `info_pkgs` version table, repository timestamps / head commits. None
-/// of that is reproduced. Also cut: the per-package block for an
-/// *installed* package (real `was built with` + the `CHOST`/`CFLAGS`
-/// vdb `_aux_env_search` diff, and `(non-installed binary)`), the
-/// `pkg_info()` phase run itself, and `_hide_url_passwd`. `FEATURES`
-/// reflects only `make.conf` (the pilot parses no `make.globals`
-/// defaults).
+/// of that is reproduced. Narrower than real for the installed block:
+/// the `CHOST`/`CFLAGS`/… values come only from the individual vdb
+/// `build-info` files (real `_aux_env_search` falls back to the
+/// package's `environment.bz2`), and the `USE` line skips the `( )`
+/// force/mask wrapping real `pkg_use_display` does. Also cut:
+/// `(non-installed binary)`, the `pkg_info()` phase run itself, and
+/// `_hide_url_passwd`. `FEATURES` reflects only `make.conf` (the pilot
+/// parses no `make.globals` defaults).
 fn run_info(
     config: &portage_profile::Config,
     repos: &[portage_repo::RepoConfig],
@@ -4762,19 +4768,18 @@ fn run_info(
     misspell_suggestions: bool,
     color: &Colorizer,
 ) -> ExitCode {
-    // Real `action_info`'s `myfiles` loop: a target whose `cat/pkg` has
-    // no ebuild anywhere is fatal (exit 1) and printed *before* the
-    // config block. `list_candidates` (all versions, masked included) is
-    // the pilot's `cp_exists` proxy -- same narrowing as
-    // `misspell_suggestion_block` (an installed-only package isn't
-    // covered).
+    // Real `action_info`'s `myfiles` loop: a target with no ebuild
+    // anywhere **and** nothing installed is fatal (exit 1) and printed
+    // *before* the config block. `list_candidates` (all versions, masked
+    // included) + the vdb is the pilot's `cp_exists` proxy.
     for atom_str in atom_args {
         let Some(atom) = parse_atom(atom_str) else {
             continue;
         };
         let exists = portage_repo::list_candidates(repos, &atom.category, &atom.package)
             .map(|c| !c.is_empty())
-            .unwrap_or(false);
+            .unwrap_or(false)
+            || !portage_repo::installed_candidates(root, &atom.category, &atom.package).is_empty();
         if !exists {
             let mut xinfo = format!("\"{atom_str}\"");
             if root != Path::new("/") {
@@ -4925,20 +4930,38 @@ fn run_info(
     println!();
     println!();
 
-    // Real `action_info`'s `Package Settings` section: one per atom whose
-    // best visible ebuild candidate defines `pkg_info()` (real `mypkgs`).
-    // The header (`header_width = 65`, `actions.py:1956`) is printed once,
-    // only if at least one atom qualifies.
-    let candidates: Vec<portage_repo::InfoCandidate> = atom_args
-        .iter()
-        .filter_map(|a| {
-            portage_repo::resolve_info_candidate(repos, a, config)
-                .ok()
-                .flatten()
-        })
-        .filter(|c| c.defines_pkg_info)
-        .collect();
-    if !candidates.is_empty() {
+    // Real `action_info`'s `Package Settings` section (real `mypkgs`):
+    // per atom, every installed vdb match short-circuits the ebuild
+    // lookup (`actions.py:1869-1875`); otherwise the best visible ebuild
+    // candidate, but only if its ebuild defines `pkg_info()`. The header
+    // (`header_width = 65`, `actions.py:1956`) is printed once, only if
+    // at least one atom yielded something.
+    enum InfoPkg {
+        Installed(portage_repo::InstalledInfo),
+        Ebuild(portage_repo::InfoCandidate),
+    }
+    let use_line = |disp: &[(String, String)]| -> String {
+        disp.iter()
+            .map(|(name, body)| format!("{name}=\"{body}\""))
+            .collect::<Vec<_>>()
+            .join(" ")
+    };
+    let mut pkgs: Vec<InfoPkg> = Vec::new();
+    for a in atom_args {
+        let installed = portage_repo::resolve_installed_info(root, a, config);
+        if !installed.is_empty() {
+            pkgs.extend(installed.into_iter().map(InfoPkg::Installed));
+            continue;
+        }
+        if let Some(c) = portage_repo::resolve_info_candidate(repos, a, config)
+            .ok()
+            .flatten()
+            .filter(|c| c.defines_pkg_info)
+        {
+            pkgs.push(InfoPkg::Ebuild(c));
+        }
+    }
+    if !pkgs.is_empty() {
         let title = "Package Settings";
         // Real `header_title.rjust(int(header_width / 2 + len(title) / 2))`.
         let pad = 65 / 2 + title.len() / 2;
@@ -4946,21 +4969,29 @@ fn run_info(
         println!("{title:>pad$}");
         println!("{}", "=".repeat(65));
         println!();
-        for c in &candidates {
-            // Real: `\n{INFORM(cpv::repo)} would be built with the following:`
-            println!(
-                "\n{} would be built with the following:",
-                color.c("INFORM", &format!("{}::{}", c.cpv, c.repo_name))
-            );
-            // Real `pkg_use_display` for a non-installed ebuild: `USE="…"`
-            // then one `VAR="…"` per non-hidden USE_EXPAND group.
-            let use_line = c
-                .use_expand_display
-                .iter()
-                .map(|(name, body)| format!("{name}=\"{body}\""))
-                .collect::<Vec<_>>()
-                .join(" ");
-            println!("{use_line}");
+        for pkg in &pkgs {
+            match pkg {
+                InfoPkg::Ebuild(c) => {
+                    println!(
+                        "\n{} would be built with the following:",
+                        color.c("INFORM", &format!("{}::{}", c.cpv, c.repo_name))
+                    );
+                    println!("{}", use_line(&c.use_expand_display));
+                }
+                InfoPkg::Installed(i) => {
+                    println!(
+                        "\n{} was built with the following:",
+                        color.c("INFORM", &format!("{}::{}", i.cpv, i.repo_name))
+                    );
+                    println!("{}", use_line(&i.use_expand_display));
+                    for (name, value) in &i.differing_vars {
+                        println!("{name}=\"{value}\"");
+                    }
+                    if !i.unset_vars.is_empty() {
+                        println!("Unset: {}", i.unset_vars.join(", "));
+                    }
+                }
+            }
             println!();
             println!();
         }

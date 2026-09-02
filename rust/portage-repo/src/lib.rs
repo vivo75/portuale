@@ -6342,6 +6342,117 @@ pub struct InfoCandidate {
     pub defines_pkg_info: bool,
 }
 
+/// Real `mydesiredvars` -- the `action_info` per-package block for an
+/// **installed** package prints each of these whose vdb-recorded value
+/// differs from the current config, and an `Unset: …` line for the ones
+/// with no recorded value (`actions.py:2333-2344`).
+const INFO_INSTALLED_VARS: &[&str] = &["CHOST", "CFLAGS", "CXXFLAGS", "FEATURES", "LDFLAGS"];
+
+/// Every installed vdb entry `atom_str` matches, with the data real
+/// `action_info` prints for an installed package: `<cpv>::<repo> was
+/// built with the following:` + its `USE="…"` line (from the vdb `USE`/
+/// `IUSE` files) + the `mydesiredvars` (`INFO_INSTALLED_VARS`) whose
+/// stored value differs from the current config, plus the ones with no
+/// stored value. Real `action_info` checks the vdb **first**: any
+/// installed match short-circuits the ebuild/binary lookup
+/// (`actions.py:1869-1875`).
+///
+/// Narrowing vs real: `_aux_env_search` reads the value from the
+/// package's `environment.bz2` when the individual `build-info` file is
+/// absent -- this pilot reads only the vdb file
+/// (`write_vdb_entry_from_dir` copies every `build-info` file, so a
+/// pilot-merged package has them all); the `USE` line skips the `( )`
+/// force/mask wrapping real `pkg_use_display` does.
+pub fn resolve_installed_info(
+    root: &Path,
+    atom_str: &str,
+    config: &portage_profile::Config,
+) -> Vec<InstalledInfo> {
+    let Some(atom) = portage_dep::parse_atom(atom_str) else {
+        return Vec::new();
+    };
+    let installed = installed_candidates(root, &atom.category, &atom.package);
+    let cpv_strs: Vec<String> = installed
+        .iter()
+        .map(|(v, s, ss)| {
+            format!(
+                "{}/{}-{v}:{s}/{ss}::{}",
+                atom.category,
+                atom.package,
+                installed_pkg_repo(root, &atom.category, &atom.package, v)
+            )
+        })
+        .collect();
+    let refs: Vec<&str> = cpv_strs.iter().map(String::as_str).collect();
+    let Some(matched) = portage_dep::match_from_list(atom_str, &refs) else {
+        return Vec::new();
+    };
+    let by_str: HashMap<&str, &(String, String, String)> =
+        refs.iter().copied().zip(installed.iter()).collect();
+
+    let mut out = Vec::new();
+    for m in matched {
+        let Some((version, _slot, _sub)) = by_str.get(m).copied() else {
+            continue;
+        };
+        let repo_name = installed_pkg_repo(root, &atom.category, &atom.package, version);
+        let vdb_use = read_vdb_flag_set(root, &atom.category, &atom.package, version, "USE");
+        let vdb_iuse_raw = read_vdb_string(root, &atom.category, &atom.package, version, "IUSE");
+        let mut disp: Vec<(String, bool)> = vdb_iuse_raw
+            .split_whitespace()
+            .map(|t| t.trim_start_matches(['+', '-']).to_string())
+            .map(|f| {
+                let on = vdb_use.contains(&f);
+                (f, on)
+            })
+            .collect();
+        disp.sort_by_key(|p| alnum_sort_key(&p.0));
+        disp.dedup();
+        let use_expand_display =
+            build_use_expand_display(&disp, config, None, &HashSet::new(), true, &HashSet::new());
+
+        let mut differing_vars = Vec::new();
+        let mut unset_vars = Vec::new();
+        for &var in INFO_INSTALLED_VARS {
+            let stored = read_vdb_string(root, &atom.category, &atom.package, version, var);
+            let stored = stored.trim();
+            if stored.is_empty() {
+                unset_vars.push(var.to_string());
+                continue;
+            }
+            let current = config.other_vars.get(var).map(String::as_str).unwrap_or("");
+            if stored.split_whitespace().ne(current.split_whitespace()) {
+                differing_vars.push((var.to_string(), stored.to_string()));
+            }
+        }
+
+        out.push(InstalledInfo {
+            cpv: format!("{}/{}-{version}", atom.category, atom.package),
+            repo_name,
+            use_expand_display,
+            differing_vars,
+            unset_vars,
+        });
+    }
+    out
+}
+
+/// One `emerge --info <atom>` result for an installed package -- see
+/// `resolve_installed_info`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InstalledInfo {
+    pub cpv: String,
+    pub repo_name: String,
+    /// The vdb-recorded `USE="…"` display, same shape as
+    /// `InfoCandidate::use_expand_display`.
+    pub use_expand_display: Vec<(String, String)>,
+    /// `INFO_INSTALLED_VARS` whose vdb value differs from the current
+    /// config, as `(name, stored value)` -- rendered `NAME="value"`.
+    pub differing_vars: Vec<(String, String)>,
+    /// `INFO_INSTALLED_VARS` with no vdb value -- the `Unset: …` line.
+    pub unset_vars: Vec<String>,
+}
+
 /// Real `--root-deps`'s own `DEPEND`/`BDEPEND`-vs-`ESYSROOT` distinction
 /// (see `running_root_satisfies_atom`'s own doc comment for the full real
 /// grounding), factored out so both real dep-walk sites in this file
@@ -11973,6 +12084,40 @@ mod tests {
                 .expect("resolves")
                 .is_none()
         );
+    }
+
+    #[test]
+    fn resolve_installed_info_reads_the_vdb_use_line_and_the_differing_vars() {
+        let root = fixtures_root();
+        // dev-libs/infoinstpkg-1.0: vdb IUSE="alpha beta" USE="alpha",
+        // CFLAGS/CHOST recorded, test_config's make.conf sets neither.
+        let infos = resolve_installed_info(&root, "dev-libs/infoinstpkg", &test_config());
+        assert_eq!(infos.len(), 1);
+        let i = &infos[0];
+        assert_eq!(i.cpv, "dev-libs/infoinstpkg-1.0");
+        assert_eq!(i.repo_name, "testrepo");
+        assert_eq!(
+            i.use_expand_display,
+            vec![("USE".to_string(), "alpha -beta".to_string())]
+        );
+        assert_eq!(
+            i.differing_vars,
+            vec![
+                ("CHOST".to_string(), "x86_64-pc-linux-gnu".to_string()),
+                ("CFLAGS".to_string(), "-O2 -march=native".to_string()),
+            ]
+        );
+        assert_eq!(
+            i.unset_vars,
+            vec![
+                "CXXFLAGS".to_string(),
+                "FEATURES".to_string(),
+                "LDFLAGS".to_string()
+            ]
+        );
+
+        // Not installed -> empty.
+        assert!(resolve_installed_info(&root, "dev-libs/newpkg", &test_config()).is_empty());
     }
 
     #[test]
