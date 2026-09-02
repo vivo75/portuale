@@ -654,12 +654,15 @@ by a few large items rather than a long tail of small ones:
    real SMTP), `PORTAGE_SCHEDULING_POLICY`, killing in-flight builds on a
    hard fail.
 
-3. **Config-resolution depth (Part 2.C).** *The `package.use` per-level
-   `USE_ORDER` layering shipped 2026-09-01 (`repo`/`pkginternal`/
-   `defaults`/`conf`/`pkg` all modeled); the process-environment and
-   `package.env`-USE halves of the `env` layer shipped 2026-09-02.*
-   Remaining: `package.env`'s non-USE vars (build-phase env / `--info
-   <atom>`), `$USE` at its real `env` position, and the `features` /
+3. **Config-resolution depth (Part 2.C).** *Now substantially complete:
+   the full `repo → pkginternal → defaults → conf → pkg` `USE_ORDER`
+   walk (per-profile-level `defaults` interleaving, repo `make.defaults`
+   USE, `package.env` USE, the process-environment `env` layer — all
+   2026-09-01/02); the build-phase env carries the resolved `USE` +
+   compiler/make flags (2026-09-02).* Remaining: `package.env`'s non-USE
+   vars for the phase env / `--info <atom>`, `$USE` at its exact `env`
+   position (above user `package.use` rather than folded into `conf`),
+   an overlay's own `profiles/make.defaults` USE, and the `features` /
    `env.d` layers — a config that leans on those still diverges.
 
 4. **Sandbox enforcement (Part 2.D).** *Substantially complete
