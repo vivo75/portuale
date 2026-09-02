@@ -133,6 +133,92 @@ pub(crate) fn key_priority(key: &str, built: bool) -> DepPriority {
     }
 }
 
+/// Flattens `metadata`'s dep-key strings, one key at a time in `keys` order.
+/// One `DepEdge` per distinct `(atom, category, package, priority)`: an atom
+/// named by two keys contributes two edges. `built` marks build-time keys
+/// `optional`.
+pub(crate) fn dep_edges_from_metadata(
+    metadata: &HashMap<String, String>,
+    use_flags: &HashSet<String>,
+    keys: &[&str],
+    built: bool,
+) -> Vec<DepEdge> {
+    let mut edges: Vec<DepEdge> = Vec::new();
+    let mut seen: HashSet<(String, String, String, DepPriority)> = HashSet::new();
+    for dep_key in keys {
+        let Some(d) = metadata.get(*dep_key) else {
+            continue;
+        };
+        let base = key_priority(dep_key, built);
+        let key_index = match *dep_key {
+            "RDEPEND" => 0,
+            "IDEPEND" => 1,
+            "PDEPEND" => 2,
+            "DEPEND" => 3,
+            _ => 4,
+        };
+        let toks: Vec<String> = d.split_whitespace().map(String::from).collect();
+        // The structured reduction keeps the `||` boundaries `split_disjunctive` needs.
+        let Ok(structured) = portage_use_reduce::use_reduce_structured(
+            &toks,
+            use_flags,
+            portage_use_reduce::MatchMode::Normal,
+        ) else {
+            continue;
+        };
+        let (inline, deferred) = split_disjunctive(&structured);
+        let flat: Vec<(String, Option<(u32, u32)>)> = inline
+            .into_iter()
+            .map(|a| (a, None))
+            .chain(deferred.into_iter().map(|(a, g, b)| (a, Some((g, b)))))
+            .collect();
+        for (t, alt) in flat {
+            if t == "||" {
+                continue;
+            }
+            let disjunctive = alt.is_some();
+            let Some(dep_atom) = portage_dep::parse_atom(&t) else {
+                crate::note_unparsed_dep_token(&t, "merge-order digraph");
+                continue;
+            };
+            if dep_atom.blocker != portage_dep::Blocker::None {
+                continue;
+            }
+            // A `:=`/`:slot=` atom promotes its key's priority to the slot-operator
+            // variant, which the ladder relaxes less readily.
+            let mut priority = base;
+            if dep_atom.slot_operator == Some(portage_dep::SlotOperator::Equals) {
+                if priority.buildtime {
+                    priority.buildtime_slot_op = true;
+                }
+                if priority.runtime {
+                    priority.runtime_slot_op = true;
+                }
+            }
+            let key = (
+                t.clone(),
+                dep_atom.category.clone(),
+                dep_atom.package.clone(),
+                priority,
+            );
+            if seen.insert(key) {
+                edges.push(DepEdge {
+                    atom: t.clone(),
+                    evaluated: portage_dep::evaluate_atom_conditionals(&t, use_flags)
+                        .unwrap_or_else(|| t.clone()),
+                    category: dep_atom.category,
+                    package: dep_atom.package,
+                    priority,
+                    disjunctive,
+                    alt,
+                    key: key_index,
+                });
+            }
+        }
+    }
+    edges
+}
+
 pub(crate) fn s_ignore_satisfied_runtime_post(p: &DepPriority) -> bool {
     if p.optional {
         return true;

@@ -73,3 +73,19 @@ pub fn set_resolver_debug(enabled: bool) {
 pub fn resolver_debug() -> bool {
     RESOLVER_DEBUG.load(AtomicOrdering::Relaxed)
 }
+
+/// Dependency tokens the resolver dropped because `portage_dep::parse_atom` could not read
+/// them. Every skip goes through `note_unparsed_dep_token`; the L0 bed and contract suite
+/// assert the count stays zero.
+// Portage: dep/__init__.py, use_reduce with token_class=Atom
+pub(crate) static UNPARSED_DEP_TOKENS: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+
+/// Record one dependency token dropped as unparseable (debug builds also name
+/// it on stderr).
+pub fn note_unparsed_dep_token(token: &str, site: &str) {
+    UNPARSED_DEP_TOKENS.fetch_add(1, AtomicOrdering::Relaxed);
+    if cfg!(debug_assertions) {
+        eprintln!("portage-repo: dropped unparseable dependency token {token:?} ({site})");
+    }
+}
