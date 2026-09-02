@@ -73,6 +73,40 @@ fn basename(path: &str) -> &str {
     path.rsplit(['/', '\\']).next().unwrap_or(path)
 }
 
+/// `portuale --help` / bare `portuale`: one line per applet. This dispatch
+/// shim has no upstream counterpart, so the text is not a port of anything.
+fn print_applets() {
+    println!(
+        "portuale: a multicall binary -- runs as `emerge`, `ebuild`, `mrg`, `vdb`, or `portageq` depending on how it is invoked"
+    );
+    println!();
+    println!("Usage:");
+    println!("   portuale <applet> [args ...]   run an applet by name");
+    println!(
+        "   <applet> [args ...]            run via an 'emerge' / 'ebuild' / 'mrg' symlink beside the binary"
+    );
+    println!("   portuale --help                show this message");
+    println!();
+    println!("Applets:");
+    println!(
+        "   emerge   resolve dependencies and build, merge, or unmerge packages -- the package-manager front end"
+    );
+    println!(
+        "   ebuild   run individual build phases (unpack/compile/install/merge/unmerge/...) on one ebuild file"
+    );
+    println!(
+        "   mrg      Portage's emerge option surface via clap, driving portuale's emerge codepath -- a relaxed re-take"
+    );
+    println!(
+        "   vdb      convert or verify the installed-package database between backends (files, sqlite)"
+    );
+    println!(
+        "   portageq has_version / best_version over the installed-package database (the only portageq commands)"
+    );
+    println!();
+    println!("Run `portuale <applet> --help` for that applet's own options.");
+}
+
 /// `emerge --pretend` in any spelling: `--pretend` or a short-option
 /// cluster holding `p` (`-p`, `-pv`, `-uDNp`).
 fn emerge_is_pretend(args: &[String]) -> bool {

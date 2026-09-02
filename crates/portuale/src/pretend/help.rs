@@ -10,3 +10,14 @@ pub(crate) fn wants_help(args: &[String]) -> bool {
             || (arg.starts_with('-') && !arg.starts_with("--") && arg[1..].contains('h'))
     })
 }
+
+/// The `emerge --help` / `-h` text: a grouped tour of every action and
+/// option portuale actually implements. NOT a port of real emerge's
+/// own `_emerge/help.py` (157 lines of colorized syntax for its full
+/// ~130-flag surface -- see the module doc comment). The contract suite
+/// pins it in full.
+pub(crate) fn print_help() {
+    print!("{HELP_TEXT}");
+}
+
+pub(crate) const HELP_TEXT: &str = include_str!("help.txt");
