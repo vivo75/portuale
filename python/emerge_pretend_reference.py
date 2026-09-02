@@ -315,6 +315,11 @@ _package_moves_enabled = True
 # package, prefer an existing binary package over a newer unbuilt ebuild.
 # Set by run() before resolution. Mirrors portage-repo's USEOLDPKG_ATOMS.
 _useoldpkg_atoms = []
+# --quickpkg-direct (real actions.py:150-164 + bintree._populate_additional):
+# when active, every package installed in this source root is injected into
+# the binary-package pool. None = not active. Set by run() before
+# resolution. Mirrors portage-repo's QUICKPKG_DIRECT_ROOT.
+_quickpkg_direct_root = None
 
 
 def _bare_cp(s):
@@ -998,9 +1003,52 @@ def _local_binpkg_index(config):
     <pkgdir>/Packages file. Mirrors portage-repo/src/lib.rs's
     local_binpkg_index."""
     scanned = config.get("scanned_binpkgs")
-    if scanned is not None:
-        return scanned
-    return _read_packages_index(config["pkgdir"])
+    entries = list(scanned) if scanned is not None else _read_packages_index(config["pkgdir"])
+    # --quickpkg-direct: inject the source root's installed packages as
+    # binary candidates (real bintree._populate_additional's cpv_inject).
+    # A CPV the local $PKGDIR already carries wins. Mirrors
+    # portage-repo/src/lib.rs's local_binpkg_index.
+    if _quickpkg_direct_root is not None:
+        have = {e["CPV"] for e in entries if "CPV" in e}
+        for e in _quickpkg_direct_index_entries(_quickpkg_direct_root):
+            if e.get("CPV") not in have:
+                entries.append(e)
+    return entries
+
+
+def _quickpkg_direct_index_entries(source_root):
+    """Every package under <source_root>/var/db/pkg as a Packages-style
+    metadata dict, from that root's own vdb (real
+    bintree._populate_additional using vartree.aux_get). Mirrors
+    portage-repo/src/lib.rs's quickpkg_direct_index_entries."""
+    out = []
+    for category, package, version, _slot in _all_installed_packages(source_root):
+        raw_slot = _read_vdb_string(source_root, category, package, version, "SLOT").strip()
+        entry = {
+            "CPV": f"{category}/{package}-{version}",
+            "SLOT": raw_slot if raw_slot else "0",
+        }
+        for key in (
+            "KEYWORDS",
+            "USE",
+            "IUSE",
+            "LICENSE",
+            "PROPERTIES",
+            "RESTRICT",
+            "DEPEND",
+            "RDEPEND",
+            "BDEPEND",
+            "PDEPEND",
+            "IDEPEND",
+        ):
+            val = _read_vdb_string(source_root, category, package, version, key)
+            if val.strip():
+                entry[key] = " ".join(val.split())
+        repo = _read_vdb_string(source_root, category, package, version, "repository").strip()
+        if repo:
+            entry["REPO"] = repo
+        out.append(entry)
+    return out
 
 
 def list_binary_candidates(index, category, package):
@@ -7860,8 +7908,9 @@ _VALUE_OPTIONS = [
     # --package-moves IS implemented (=n disables profiles/updates/ moves).
     ("--prefix", None),
     ("--pkg-format", None),
-    ("--quickpkg-direct", None),
-    ("--quickpkg-direct-root", None),
+    # --quickpkg-direct / --quickpkg-direct-root ARE implemented (source
+    # root's installed packages join the binary pool -- see
+    # _local_binpkg_index / _quickpkg_direct_index_entries).
     # --quiet/-q (real true_y_or_n, verbosity level 1) IS implemented now
     # -- deliberately excluded here for the same reason --verbose/-v is:
     # the caller parses it directly.
@@ -11419,6 +11468,10 @@ def run(args):
     binpkg_respect_use = None
     rebuilt_binaries = None
     rebuilt_binaries_timestamp = None
+    # --quickpkg-direct (real y_or_n, default "n") + --quickpkg-direct-root
+    # (real store, default = the running root). Mirrors pretend.rs.
+    quickpkg_direct = None
+    quickpkg_direct_root = None
     noreplace = False
     # None until an explicit --selective/--selective=y/--selective=n is
     # given, so "n" can override whatever update/newuse/changed_use/
@@ -12570,6 +12623,42 @@ def run(args):
             else:
                 print(f'emerge: invalid --rebuilt-binaries-timestamp parameter: "{value}"', file=sys.stderr)
                 return 2
+        elif arg == "--quickpkg-direct" or arg.startswith("--quickpkg-direct="):
+            # Real y_or_n (main.py:604) -- a REQUIRED value.
+            if arg.startswith("--quickpkg-direct="):
+                value = arg[len("--quickpkg-direct=") :]
+                i += 1
+            elif i + 1 < len(args):
+                value = args[i + 1]
+                i += 2
+            else:
+                print(
+                    'emerge: option "--quickpkg-direct" requires an argument',
+                    file=sys.stderr,
+                )
+                return 2
+            if value not in ("y", "n"):
+                print(
+                    f'emerge: option "--quickpkg-direct": invalid choice: "{value}" '
+                    '(choose from "y", "n")',
+                    file=sys.stderr,
+                )
+                return 2
+            quickpkg_direct = value == "y"
+        elif arg == "--quickpkg-direct-root" or arg.startswith("--quickpkg-direct-root="):
+            # Real "action": "store" (main.py:608) -- a required path.
+            if arg.startswith("--quickpkg-direct-root="):
+                quickpkg_direct_root = arg[len("--quickpkg-direct-root=") :]
+                i += 1
+            elif i + 1 < len(args):
+                quickpkg_direct_root = args[i + 1]
+                i += 2
+            else:
+                print(
+                    'emerge: option "--quickpkg-direct-root" requires an argument',
+                    file=sys.stderr,
+                )
+                return 2
         elif not arg.startswith("-"):
             atom_args.append(arg)
             i += 1
@@ -13025,6 +13114,19 @@ def run(args):
             return 1
         if scanned:
             config["scanned_binpkgs"] = scanned
+
+    # Real actions.py:134-149: --quickpkg-direct is active only when
+    # --usepkg is on, --quickpkg-direct=y was given, AND the target ROOT
+    # differs from the source root (--quickpkg-direct-root, else the
+    # running root). Path comparison is realpath-based (real
+    # os.path.abspath is a minor cut). Mirrors pretend.rs.
+    global _quickpkg_direct_root
+    _quickpkg_direct_root = None
+    if usepkg and quickpkg_direct is True:
+        src = quickpkg_direct_root if quickpkg_direct_root is not None else _running_root()
+        src = os.path.realpath(src)
+        if src != os.path.realpath(_root()):
+            _quickpkg_direct_root = src
 
     # --binpkg-respect-use: real default is "auto" (effectively on)
     # whenever --usepkgonly is NOT given, left off (unset/falsy) when it

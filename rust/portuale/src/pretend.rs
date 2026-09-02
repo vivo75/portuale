@@ -5339,6 +5339,15 @@ pub fn run(args: &[String]) -> ExitCode {
     let mut getbinpkg = false;
     let mut getbinpkgonly = false;
     let mut binpkg_respect_use: Option<bool> = None;
+    // --quickpkg-direct (real `y_or_n`, REQUIRED value, `main.py:604`,
+    // default "n") + --quickpkg-direct-root (real `store`, `main.py:608`,
+    // default = the running root's `ROOT`). When active (real
+    // `actions.py:145-149`: `--usepkg` is True AND `--quickpkg-direct ==
+    // "y"` AND target `ROOT` != the source root), every package installed
+    // in the source root becomes a binary candidate for the target-`ROOT`
+    // build -- see `portage_repo::set_quickpkg_direct_root`.
+    let mut quickpkg_direct: Option<bool> = None;
+    let mut quickpkg_direct_root: Option<String> = None;
     // --rebuilt-binaries's own real default ("auto-on" whenever
     // --usepkgonly/--deep/--update are ALL given together, even with no
     // explicit --rebuilt-binaries at all -- create_depgraph_params.py:
@@ -6770,6 +6779,43 @@ pub fn run(args: &[String]) -> ExitCode {
                     return ExitCode::from(2);
                 }
             }
+        } else if arg == "--quickpkg-direct" {
+            // Real `y_or_n` (`main.py:604`) -- a REQUIRED value, same shape
+            // as `--autounmask-backtrack`.
+            let Some(value) = args.get(i + 1) else {
+                eprintln!("emerge: option \"--quickpkg-direct\" requires an argument");
+                return ExitCode::from(2);
+            };
+            match value.as_str() {
+                "y" => quickpkg_direct = Some(true),
+                "n" => quickpkg_direct = Some(false),
+                _ => {
+                    eprintln!("emerge: option \"--quickpkg-direct\": invalid choice: {value:?} (choose from \"y\", \"n\")");
+                    return ExitCode::from(2);
+                }
+            }
+            i += 2;
+        } else if let Some(value) = arg.strip_prefix("--quickpkg-direct=") {
+            match value {
+                "y" => quickpkg_direct = Some(true),
+                "n" => quickpkg_direct = Some(false),
+                _ => {
+                    eprintln!("emerge: option \"--quickpkg-direct\": invalid choice: {value:?} (choose from \"y\", \"n\")");
+                    return ExitCode::from(2);
+                }
+            }
+            i += 1;
+        } else if arg == "--quickpkg-direct-root" {
+            // Real "action": "store" (`main.py:608`) -- a required path.
+            let Some(value) = args.get(i + 1) else {
+                eprintln!("emerge: option \"--quickpkg-direct-root\" requires an argument");
+                return ExitCode::from(2);
+            };
+            quickpkg_direct_root = Some(value.clone());
+            i += 2;
+        } else if let Some(value) = arg.strip_prefix("--quickpkg-direct-root=") {
+            quickpkg_direct_root = Some(value.to_string());
+            i += 1;
         } else if !arg.starts_with('-') {
             atom_args.push(arg);
             i += 1;
@@ -7337,6 +7383,27 @@ pub fn run(args: &[String]) -> ExitCode {
             }
         }
     }
+
+    // Real `actions.py:134-149`: `--quickpkg-direct` is active only when
+    // `--usepkg` is on, `--quickpkg-direct=y` was given, AND the target
+    // `ROOT` differs from the source root (`--quickpkg-direct-root`, else
+    // the running root). When active, every package installed in the
+    // source root joins the binary-candidate pool for the target build
+    // (`portage_repo::set_quickpkg_direct_root` ->
+    // `local_binpkg_index`). Path comparison is `canonicalize`-based --
+    // real portage's full `os.path.abspath` (cwd-relative, non-existent
+    // paths) is a minor documented cut; a real source root always exists.
+    let quickpkg_source = if usepkg && quickpkg_direct == Some(true) {
+        let norm = |p: &Path| p.canonicalize().unwrap_or_else(|_| p.to_path_buf());
+        let src = quickpkg_direct_root
+            .as_deref()
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(portage_repo::running_root_from_env);
+        Some(norm(&src)).filter(|s| *s != norm(&root))
+    } else {
+        None
+    };
+    portage_repo::set_quickpkg_direct_root(quickpkg_source);
 
     // --binpkg-respect-use: real default is "auto" (effectively on)
     // whenever --usepkgonly is NOT given, left off (unset/falsy) when it

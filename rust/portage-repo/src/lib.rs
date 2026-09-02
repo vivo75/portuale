@@ -1140,10 +1140,108 @@ impl BinaryIndex {
 /// -- i.e. `<pkgdir>/Packages` was absent -- otherwise the parsed
 /// `<pkgdir>/Packages` file.
 fn local_binpkg_index(config: &portage_profile::Config) -> BinaryIndex {
-    match &config.scanned_binpkgs {
-        Some(entries) => BinaryIndex::from_entries(entries.clone()),
-        None => BinaryIndex::from_pkgdir(Path::new(&config.pkgdir)),
+    let mut entries = match &config.scanned_binpkgs {
+        Some(entries) => entries.clone(),
+        None => read_packages_index(Path::new(&config.pkgdir)),
+    };
+    // `--quickpkg-direct` (real `actions.py:150-164` + `bintree.
+    // _populate_additional`): every package installed in the quickpkg
+    // source root is injected into the binary-package pool as a candidate
+    // for the target-`ROOT` build, using that root's own vdb-recorded
+    // metadata. Real portage does `dbapi.cpv_inject` on each; this pilot
+    // synthesizes the same `Packages`-style records and appends them
+    // here, so `list_binary_candidates` / `read_binary_metadata_any` /
+    // the dependency walk all pick them up transparently. A CPV the local
+    // `$PKGDIR` already carries wins (real `bintree.isremote` treats a
+    // local dup as already-present). Set once by the CLI layer -- the
+    // env-free process-global pattern `--package-moves` / `--useoldpkg-atoms`
+    // already use.
+    if let Some(source_root) = quickpkg_direct_root() {
+        let have: HashSet<String> = entries
+            .iter()
+            .filter_map(|e| e.get("CPV").cloned())
+            .collect();
+        for e in quickpkg_direct_index_entries(&source_root) {
+            if !e.get("CPV").is_some_and(|cpv| have.contains(cpv)) {
+                entries.push(e);
+            }
+        }
     }
+    BinaryIndex::from_entries(entries)
+}
+
+/// `--quickpkg-direct-root` (real `actions.py:134-149`): the root whose
+/// installed packages `--quickpkg-direct` offers as binary candidates.
+/// `None` = not active (the default, or `--usepkg` absent, or the source
+/// root coincides with the target `ROOT` -- all resolved by the CLI
+/// layer). A process-global so it needn't thread through `resolve_pretend`'s
+/// / `local_binpkg_index`'s signatures.
+static QUICKPKG_DIRECT_ROOT: RwLock<Option<PathBuf>> = RwLock::new(None);
+
+/// Set by `pretend.rs` from `--quickpkg-direct[-root]` before any
+/// resolution. Default (never called) is `None` -- a strict no-op.
+pub fn set_quickpkg_direct_root(source_root: Option<PathBuf>) {
+    *QUICKPKG_DIRECT_ROOT.write().unwrap() = source_root;
+}
+
+fn quickpkg_direct_root() -> Option<PathBuf> {
+    QUICKPKG_DIRECT_ROOT.read().unwrap().clone()
+}
+
+/// Every package recorded under `<source_root>/var/db/pkg`, as a
+/// `Packages`-style metadata record (real `bintree._populate_additional`'s
+/// `_pkg_str(cpv, metadata=dict(zip(aux_keys, repo.aux_get(cpv, aux_keys))))`
+/// -- the source is the vdb, so the deps/USE/keywords are that root's own
+/// installed-time snapshot). Keys mirror what `binary_candidates_from_index`
+/// / `read_binary_metadata` read: `CPV`, `SLOT` (with sub-slot),
+/// `KEYWORDS`, `USE`, `IUSE`, `LICENSE`, `PROPERTIES`, `RESTRICT`, the
+/// five `*DEPEND`, `REPO`.
+fn quickpkg_direct_index_entries(source_root: &Path) -> Vec<HashMap<String, String>> {
+    let mut out = Vec::new();
+    for pkg in all_installed_packages(source_root) {
+        let (cat, name, ver) = (
+            pkg.category.as_str(),
+            pkg.package.as_str(),
+            pkg.version.as_str(),
+        );
+        let read = |key: &str| read_vdb_string(source_root, cat, name, ver, key);
+        let raw_slot = read("SLOT");
+        let slot = if raw_slot.trim().is_empty() {
+            "0".to_string()
+        } else {
+            raw_slot.trim().to_string()
+        };
+        let mut entry: HashMap<String, String> = HashMap::new();
+        entry.insert("CPV".to_string(), format!("{cat}/{name}-{ver}"));
+        entry.insert("SLOT".to_string(), slot);
+        for key in [
+            "KEYWORDS",
+            "USE",
+            "IUSE",
+            "LICENSE",
+            "PROPERTIES",
+            "RESTRICT",
+            "DEPEND",
+            "RDEPEND",
+            "BDEPEND",
+            "PDEPEND",
+            "IDEPEND",
+        ] {
+            let v = read(key);
+            if !v.trim().is_empty() {
+                entry.insert(
+                    key.to_string(),
+                    v.split_whitespace().collect::<Vec<_>>().join(" "),
+                );
+            }
+        }
+        let repo = read("repository");
+        if !repo.trim().is_empty() {
+            entry.insert("REPO".to_string(), repo.trim().to_string());
+        }
+        out.push(entry);
+    }
+    out
 }
 
 /// Lists every binary-package build of `category/package` in `index`
@@ -11089,6 +11187,45 @@ mod tests {
         .expect("the binrepo index has dev-libs/remotebinpkg-1.0");
         assert_eq!(m.get("SIZE").map(String::as_str), Some("573440"));
         assert_eq!(m.get("REPO").map(String::as_str), Some("gentoo"));
+    }
+
+    #[test]
+    fn quickpkg_direct_index_entries_reads_the_source_root_vdb() {
+        // `fixtures/quickpkgroot` has one installed package,
+        // dev-libs/quickpkgdirectpkg-1.0, with RDEPEND=dev-libs/newpkg.
+        let src = fixtures_root().join("quickpkgroot");
+        let entries = quickpkg_direct_index_entries(&src);
+        assert_eq!(entries.len(), 1);
+        let e = &entries[0];
+        assert_eq!(
+            e.get("CPV").map(String::as_str),
+            Some("dev-libs/quickpkgdirectpkg-1.0")
+        );
+        assert_eq!(e.get("SLOT").map(String::as_str), Some("0"));
+        assert_eq!(
+            e.get("RDEPEND").map(String::as_str),
+            Some("dev-libs/newpkg")
+        );
+        assert_eq!(e.get("REPO").map(String::as_str), Some("testrepo"));
+        // An empty vdb file (DEPEND) contributes no key at all.
+        assert!(!e.contains_key("DEPEND"));
+
+        // The synthesized record is a valid binary candidate + its
+        // metadata is readable the same way a `Packages` entry's is.
+        let index = BinaryIndex::from_entries(entries);
+        let cands = list_binary_candidates(&index, "dev-libs", "quickpkgdirectpkg");
+        assert_eq!(cands.len(), 1);
+        assert_eq!(cands[0].source, CandidateSource::Binary);
+        assert_eq!(cands[0].version, "1.0");
+        assert_eq!(
+            read_binary_metadata(&index, "dev-libs", "quickpkgdirectpkg", "1.0")
+                .and_then(|m| m.get("RDEPEND").cloned())
+                .as_deref(),
+            Some("dev-libs/newpkg"),
+        );
+
+        // A root with no vdb at all is an empty list, not an error.
+        assert!(quickpkg_direct_index_entries(&fixtures_root().join("distfiles")).is_empty());
     }
 
     #[test]

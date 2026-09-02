@@ -338,8 +338,10 @@ pub const VALUE_OPTIONS: &[(&str, Option<&str>)] = &[
     // move application (`portage_repo::set_package_moves_enabled`).
     ("--prefix", None),
     ("--pkg-format", None),
-    ("--quickpkg-direct", None),
-    ("--quickpkg-direct-root", None),
+    // `--quickpkg-direct` / `--quickpkg-direct-root` ARE implemented --
+    // when `--usepkg` + `--quickpkg-direct=y` + target `ROOT` != source
+    // root, the source root's installed packages join the binary pool
+    // (see `portage_repo::set_quickpkg_direct_root`).
     // `--quiet`/`-q` (real `true_y_or_n`, verbosity level 1) IS
     // implemented now -- deliberately excluded here for the same reason
     // `--verbose`/`-v` is: the caller parses it directly. See pretend.rs.

@@ -9418,6 +9418,58 @@ run -p --autounmask-backtrack maybe dev-libs/newpkg
 Mirrored in `emerge_pretend_reference.py`; 7 `CASES` + 1 pinned contract
 test. No fixture (nothing new to resolve).
 
+### `emerge --quickpkg-direct` / `--quickpkg-direct-root` (2026-09-02)
+
+Real `actions.py:145-149`: `--quickpkg-direct` is active when
+`--usepkg` is on, `--quickpkg-direct=y` was given (real `y_or_n`, a value
+is required), and the target `ROOT` differs from the *source root*
+(`--quickpkg-direct-root`, else the running root). When active, real
+portage passes the source root's vartree dbapi as `add_repos` to the
+bintree, and `bintree._populate_additional` `cpv_inject`s every installed
+`cpv` there into the binary-package db — using that root's own
+vdb-recorded metadata (`aux_get`) — so the target build can satisfy its
+deps directly from the host's installed packages without rebuilding.
+
+Ported as `portage_repo::set_quickpkg_direct_root(Option<PathBuf>)` (a
+process-global, the env-free pattern `--package-moves` / `--useoldpkg-atoms`
+already use) plus `quickpkg_direct_index_entries`, which reads
+`<source_root>/var/db/pkg` and synthesizes a `Packages`-style record per
+package (`CPV`, `SLOT`, `KEYWORDS`, `USE`, `IUSE`, `LICENSE`,
+`PROPERTIES`, `RESTRICT`, the five `*DEPEND`, `REPO` from `repository`).
+`local_binpkg_index` appends those records to the local `$PKGDIR` index
+(a CPV the local index already carries wins — real `bintree.isremote`
+treats a local dup as already-present), so `list_binary_candidates`,
+`read_binary_metadata_any` and the dependency walk all pick them up
+transparently — no new resolver parameter. The CLI layer resolves the
+active/inactive decision (canonicalized-path comparison; real
+`os.path.abspath`'s cwd-relative / non-existent-path handling is a minor
+cut).
+
+```sh
+FX="$(realpath fixtures)"
+run() { PORTAGE_CONFIGROOT="$FX" ROOT="$FX" PORTAGE_RUNNING_ROOT="$FX" \
+    rust/target/release/portuale emerge "$@"; }
+# fixtures/quickpkgroot: one installed pkg, dev-libs/quickpkgdirectpkg-1.0
+# (RDEPEND=dev-libs/newpkg), that exists nowhere else.
+run -pk dev-libs/quickpkgdirectpkg
+# emerge: there are no ebuilds to satisfy "dev-libs/quickpkgdirectpkg".
+run -pk --quickpkg-direct=y --quickpkg-direct-root="$FX/quickpkgroot" dev-libs/quickpkgdirectpkg
+# [ebuild  N     ] dev-libs/newpkg-1.0              <- its vdb RDEPEND, walked
+# [binary  N     ] dev-libs/quickpkgdirectpkg-1.0   <- the injected candidate
+```
+
+New `fixtures/quickpkgroot/var/db/pkg/dev-libs/quickpkgdirectpkg-1.0/`
+vdb tree. Mirrored in `emerge_pretend_reference.py`
+(`_quickpkg_direct_index_entries`); 1 `portage-repo` unit test + 5
+`CASES` + 1 pinned contract test. **Documented cut:** the
+`_quickpkg_direct_deps_unsatisfied` error
+(`depgraph.py:5747-5761`/`11293`) — real portage aborts if the graph has
+a merge/uninstall task for the *running* root; this pilot's pretend model
+rarely produces one, so the check is left out.
+
+**With this the entire recognized-but-unimplemented modifier-flag list
+(batches 1–10, 2026-09-02) is shipped.**
+
 ### `emerge -pc <atoms> --deselect=n`
 
 Real `action_depclean`: `deselect = myopts.get("--deselect") != "n"`

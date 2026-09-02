@@ -357,9 +357,19 @@ dev/test context — see also the `chown` note below).
   backtracking resolver). The one real observable is the
   `actions.py:3772` `--autounmask-continue has been disabled by
   --autounmask=n` warning.
-  Remaining: `--quickpkg-direct` (genuinely bigger — needs a cross-root
-  build + synthesizing binary candidates from another root's vdb; not a
-  modifier-flag-sized slice).
+  **Shipped 2026-09-02 (batch 10): `--quickpkg-direct` /
+  `--quickpkg-direct-root`** (real `actions.py:150-164` +
+  `bintree._populate_additional` — when `--usepkg` + `--quickpkg-direct=y`
+  + target `ROOT` ≠ source root, every package installed in the source
+  root joins the binary-candidate pool for the target build, from that
+  root's own vdb metadata. New `portage_repo::set_quickpkg_direct_root`
+  process-global + `quickpkg_direct_index_entries`; `local_binpkg_index`
+  injects the synthesized `Packages`-style records. New `quickpkgroot`
+  fixture tree. Documented cut: the `_quickpkg_direct_deps_unsatisfied`
+  "requires all dependencies to be merged for root" error — needs a
+  running-root merge task, which this pilot's pretend model rarely
+  produces).
+  **The recognized-but-unimplemented modifier-flag list is now clear.**
 
 ### G. Shell backend
 
@@ -525,10 +535,11 @@ by a few large items rather than a long tail of small ones:
 
 5. **Breadth of actions and flags (Parts 2.E/F).** *`--list-sets`,
    `--search`/`-s`/`-S`, `--check-news`, `--clean`, `--rage-clean`,
-   `--info` shipped 2026-09-01.* Remaining: `--regen` / `--metadata`
-   (needs a new depend-phase md5-cache-generation capability, Rust-only),
-   `--sync` (non-goal), GLSA/`@security`, and the ~dozen
-   recognized-but-unimplemented modifier flags.
+   `--info` shipped 2026-09-01; the whole recognized-but-unimplemented
+   modifier-flag list shipped 2026-09-02 (batches 1–10).* Remaining:
+   `--regen` / `--metadata` (needs a new depend-phase
+   md5-cache-generation capability, Rust-only), `--sync` (non-goal),
+   GLSA/`@security`.
 
 Everything else in Part 2 is genuinely incremental — one focused slice
 each, the rhythm this pilot already runs at. Items 1–4 above are the

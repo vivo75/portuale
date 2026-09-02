@@ -725,6 +725,31 @@ CASES = [
         2,
     ),
     (
+        "--quickpkg-direct=y is inert without --usepkg",
+        ["--pretend", "--quickpkg-direct=y", "dev-libs/newpkg"],
+        0,
+    ),
+    (
+        "--quickpkg-direct=n is inert",
+        ["--pretend", "--usepkg", "--quickpkg-direct=n", "dev-libs/newpkg"],
+        0,
+    ),
+    (
+        "--quickpkg-direct rejects a non-y/n value",
+        ["--pretend", "--quickpkg-direct", "maybe", "dev-libs/newpkg"],
+        2,
+    ),
+    (
+        "--quickpkg-direct with no argument is a usage error",
+        ["--pretend", "dev-libs/newpkg", "--quickpkg-direct"],
+        2,
+    ),
+    (
+        "--quickpkg-direct-root with no argument is a usage error",
+        ["--pretend", "dev-libs/newpkg", "--quickpkg-direct-root"],
+        2,
+    ),
+    (
         "--rebuilt-binaries: off by default, stays already-installed",
         ["--pretend", "--usepkg", "--selective", "dev-libs/rebuiltbinarypkg"],
         0,
@@ -3306,6 +3331,56 @@ def test_useoldpkg_atoms_prefers_the_old_binary_over_a_newer_ebuild(
         fixture_env,
     )
     assert inert.stdout == default.stdout
+
+
+def test_quickpkg_direct_injects_source_root_packages(
+    emerge_binary, emerge_pretend_python, fixture_env, fixtures_root
+):
+    """--quickpkg-direct / --quickpkg-direct-root (real actions.py:150-164
+    + bintree._populate_additional): when --usepkg + --quickpkg-direct=y
+    and the source root differs from the target ROOT, every package
+    installed in the source root joins the binary-candidate pool for the
+    target build, using that root's own vdb metadata.
+
+    fixtures/quickpkgroot has one installed package,
+    dev-libs/quickpkgdirectpkg-1.0 (RDEPEND=dev-libs/newpkg), that exists
+    nowhere else -- no ebuild, not in the local PKGDIR."""
+    src = str(fixtures_root / "quickpkgroot")
+
+    # Not resolvable at all without --quickpkg-direct.
+    plain = _run(
+        [str(emerge_binary)], ["--pretend", "--usepkg", "dev-libs/quickpkgdirectpkg"], fixture_env
+    )
+    assert plain.returncode == 1
+    assert 'there are no ebuilds to satisfy "dev-libs/quickpkgdirectpkg"' in plain.stderr
+
+    args = [
+        "--pretend",
+        "--usepkg",
+        "--quickpkg-direct=y",
+        f"--quickpkg-direct-root={src}",
+        "dev-libs/quickpkgdirectpkg",
+    ]
+    got = _run([str(emerge_binary)], args, fixture_env)
+    assert got.returncode == 0
+    assert got.stdout == _run(emerge_pretend_python, args, fixture_env).stdout
+    # The quickpkg candidate resolves as a binary, and its vdb-recorded
+    # RDEPEND is walked (proving the source-root metadata is used).
+    assert "[binary  N     ] dev-libs/quickpkgdirectpkg-1.0 " in got.stdout
+    assert "[ebuild  N     ] dev-libs/newpkg-1.0 " in got.stdout
+
+    # Inert when the source root == the target ROOT.
+    same = _run(
+        [str(emerge_binary)],
+        args[:3] + [f"--quickpkg-direct-root={fixture_env['ROOT']}"] + args[4:],
+        fixture_env,
+    )
+    assert same.returncode == 1
+    assert same.stdout == _run(
+        emerge_pretend_python,
+        args[:3] + [f"--quickpkg-direct-root={fixture_env['ROOT']}"] + args[4:],
+        fixture_env,
+    ).stdout
 
 
 def _binscan_configroot(tmp_path, fixtures_root, binpkg_files):
