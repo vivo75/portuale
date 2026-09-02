@@ -1199,6 +1199,34 @@ mod tests {
     }
 
     #[test]
+    fn collect_phasefilter_keeps_only_the_named_phases() {
+        // A builddir never cleaned: install-time logs still sit next to
+        // the removal-time ones. The `("prerm","postrm")` filter must
+        // ignore the install log.
+        let t = tmpdir();
+        std::fs::write(t.join("logging/install"), "LOG built fine\n").unwrap();
+        std::fs::write(t.join("logging/prerm"), "WARN leaving config behind\n").unwrap();
+        std::fs::write(t.join("logging/postrm"), "LOG run revdep-rebuild\n").unwrap();
+
+        let filtered = collect_all_phases(&t, &["prerm", "postrm"]);
+        let got: Vec<(&str, &str)> = filtered
+            .iter()
+            .map(|m| (m.phase.as_str(), m.text.as_str()))
+            .collect();
+        assert_eq!(
+            got,
+            vec![
+                ("prerm", "leaving config behind"),
+                ("postrm", "run revdep-rebuild"),
+            ]
+        );
+        // The echo-filtered variant drops WARN only if classes say so;
+        // default classes keep it, so both survive here.
+        assert_eq!(collect(&t, Some(&["prerm", "postrm"])).len(), 2);
+        let _ = std::fs::remove_dir_all(&t);
+    }
+
+    #[test]
     fn echo_summary_renders_the_portage_message_block_shape() {
         let color = Colorizer::new(false);
         let pkg = ElogPackage {

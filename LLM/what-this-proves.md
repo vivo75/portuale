@@ -9681,6 +9681,36 @@ New driver in `pretend.rs`'s post-merge loop; 5 `elog` unit tests + 1
 per-package file). No Python-reference change — elog only fires on a real
 merge, which the reference stubs out.
 
+### `elog` on unmerge — `pkg_prerm` / `pkg_postrm` messages (2026-09-02)
+
+Real `dblink.unmerge()` ends with
+`self._elog_process(phasefilter=("prerm", "postrm"))` — so a removed
+package's removal-phase `elog`/`ewarn`/`eerror` reach `echo` /
+`save` / `save_summary` exactly like a merge's. `execute_unmerge`
+(`emerge -C` / `--unmerge` / `--depclean` / `--prune` / `--prune
+--nodeps` / `--clean` / `--rage-clean` — every removal path funnels
+through it) now re-scans each removed package's `${T}/logging/` after
+the removal loop.
+
+The shared code was extracted into `elog::process_batch(logdir,
+root_display, &[(cpv, t_dir)], phases, color)`: `save`/`save_summary`
+run per package immediately, `echo` accumulates and prints once (real
+`mod_echo._finalize`). `phases` is the real `phasefilter` — `None`
+after a merge (every phase), `Some(&["prerm", "postrm"])` for an
+unmerge, so the never-cleaned builddir's stale install-time logs don't
+resurface on removal. The post-merge loop was refactored onto the same
+helper. `--getbinpkg`/`--getbinpkgonly` merges already fed elog (they
+share the post-merge loop).
+
+`dev-libs/elogrmpkg` (`pkg_prerm` `ewarn`s, `pkg_postrm` `elog`s)
+proves it: `test_emerge_unmerge_processes_prerm_postrm_elog`
+(`test_portuale.py`) seeds it via `ebuild merge`, runs `emerge -C`, and
+asserts the `* Messages for package` echo block and the `summary.log`
+entry. 1 new `elog` unit test (`collect_all_phases` / the phase
+filter). **Cut:** the in-place-replace path's superseded-version
+`pkg_prerm`/`pkg_postrm` elog (`unmerge_replaced_same_slot`, a separate
+caller of `unmerge_one_installed`). No Python-reference change.
+
 ### `emerge` honours config vars from the environment (2026-09-02)
 
 Real `config.regenerate()`'s `env` `USE_ORDER` layer: variables in the
@@ -11866,5 +11896,38 @@ flags (no graph, no resolved config). `emerge --resume` builds with an
 empty `build_env` (`resume_entry` carries no resolved USE). The
 `Packages` *index* `USE` field for an `emerge -b` binpkg isn't
 back-filled from build-info yet.
+
+### `package.env` overrides the build flags per package (2026-09-02)
+
+The non-`USE` half of `/etc/portage/package.env` — real `_grab_pkg_env`
+folding a matching entry's `/etc/portage/env/<name>` file into
+`configdict["pkg"]`, so a package can build with its own
+`CFLAGS`/`MAKEOPTS`/`CHOST`/… distinct from the run-wide make.conf/env
+values. `Config` gained `package_env_vars` (per atom, every referenced
+env file's non-`USE` `KEY=value` pairs in file order — `env_file_build_vars`,
+sharing `read_env_file_kv` with the `USE=` half). `MergeOptions` gained
+`package_env_vars` (set from the config in `pretend.rs`);
+`emerge_build::entry_package_env_vars` matches a build-bound entry's
+`cat/pkg-ver:slot/sub` against each atom and layers the matching
+`BUILD_VARS` subset over `build_config_env`'s run-wide set in
+`entry_build_env` (last-wins, so `package.env` beats make.conf/env).
+`BUILD_VARS` moved to a shared `pretend` module const.
+
+`dev-libs/penvbuildpkg` proves it:
+`fixtures/etc/portage/package.env` maps it to `penv-buildflags`
+(`CFLAGS="-Os -march=fixturepkgenv"`, `MAKEOPTS="-j7"`), its
+`src_install` records `${CFLAGS}`/`${MAKEOPTS}`, and
+`test_emerge_atom_source_build_package_env_overrides_the_build_flags`
+(`test_portuale.py`) sets the env-layer `CFLAGS=-O2 -pipe` / `MAKEOPTS=-j3`
+and asserts the merged file carries the `package.env` values instead. 1
+`portage-profile` unit test (`package_env_vars` = `debug`'s `CFLAGS`
+only, `USE`/no-scalar files excluded).
+
+**Cuts:** a build-phase concern only — `--pretend` and `emerge --info
+<atom>` show no per-package compiler flags, so (unlike the `USE=` half)
+there is no Python-reference mirror. `FEATURES` and other incrementals
+stay out (portuale models `FEATURES` via `feature_enabled`); no
+per-file `${VAR}` expand map. Standalone `ebuild`/`emerge --resume`
+carry an empty `package_env_vars`.
 
 # # required by dev-libs/useflagpkg[-foo] (argument)
