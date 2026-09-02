@@ -1,0 +1,22 @@
+Undefined license group 'FREE'
+
+These are the packages that would be merged, in order:
+
+Calculating dependencies ... done!
+Dependency resolution took 0.12 s (backtrack: 0/0).
+
+
+
+[ebuild  N     ] dev-lang/g216comp-1.0::testrepo to /tmp/xa-inv-fx/fixtures/ 0 KiB
+[ebuild  N     ]  dev-lang/g216comp-1.0::testrepo  0 KiB
+
+Total: 2 packages (2 new), Size of downloads: 0 KiB
+
+ * Error: circular dependencies:
+
+(dev-lang/g216comp-1.0:0/0::testrepo, ebuild scheduled for merge) depends on
+ (dev-lang/g216comp-1.0:0/0::testrepo, ebuild scheduled for merge) (buildtime)
+
+ * Note that circular dependencies can often be avoided by temporarily
+ * disabling USE flags that trigger optional dependencies.
+rc=1

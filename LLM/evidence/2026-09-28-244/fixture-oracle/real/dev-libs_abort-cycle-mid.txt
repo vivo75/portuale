@@ -1,0 +1,26 @@
+Undefined license group 'FREE'
+
+These are the packages that would be merged, in order:
+
+Calculating dependencies ... done!
+Dependency resolution took 0.12 s (backtrack: 1/20).
+
+
+
+[ebuild  N     ] dev-libs/abort-cycle-mid-1.0::testrepo to /tmp/l0-fixture-oracle/fixtures/ 0 KiB
+[nomerge       ]  dev-libs/abort-cycle-a-1.0::testrepo to /tmp/l0-fixture-oracle/fixtures/
+[nomerge       ]   dev-libs/abort-cycle-b-1.0::testrepo 
+[ebuild  N     ]    dev-libs/abort-cycle-a-1.0::testrepo  0 KiB
+[ebuild  N     ]  dev-libs/abort-cycle-a-1.0::testrepo to /tmp/l0-fixture-oracle/fixtures/ 0 KiB
+[ebuild  N     ]   dev-libs/abort-cycle-b-1.0::testrepo  0 KiB
+
+Total: 4 packages (4 new), Size of downloads: 0 KiB
+
+ * Error: circular dependencies:
+
+(dev-libs/abort-cycle-a-1.0:0/0::testrepo, ebuild scheduled for merge) depends on
+ (dev-libs/abort-cycle-b-1.0:0/0::testrepo, ebuild scheduled for merge) (buildtime)
+  (dev-libs/abort-cycle-a-1.0:0/0::testrepo, ebuild scheduled for merge) (buildtime)
+
+ * Note that circular dependencies can often be avoided by temporarily
+ * disabling USE flags that trigger optional dependencies.

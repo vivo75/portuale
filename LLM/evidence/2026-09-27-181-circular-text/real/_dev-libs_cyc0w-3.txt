@@ -1,0 +1,41 @@
+--- EAPI '0' does not support 'package.use.stable.mask': '/tmp/l0-fixture-oracle/fixtures/repo/profiles/package.use.stable.mask'
+--- EAPI '0' does not support 'use.stable.force': '/tmp/l0-fixture-oracle/fixtures/repo/profiles/base/use.stable.force'
+--- EAPI '0' does not support 'package.use.stable.mask': '/tmp/l0-fixture-oracle/fixtures/repo/profiles/base/package.use.stable.mask'
+--- EAPI '0' does not support 'package.use.stable.mask': '/tmp/l0-fixture-oracle/fixtures/repo/profiles/package.use.stable.mask'
+Undefined license group 'FREE'
+
+These are the packages that would be merged, in order:
+
+Calculating dependencies ... done!
+Dependency resolution took 0.12 s (backtrack: 0/20).
+
+
+
+[ebuild  N     ] dev-libs/cyc0w-3::testrepo to /tmp/l0-fixture-oracle/fixtures/ 0 KiB
+[ebuild  N     ]  dev-libs/cyc0y-1::testrepo  0 KiB
+[ebuild  N     ]   dev-libs/cyc0z-3::testrepo  USE="bar foo" 0 KiB
+
+Total: 3 packages (3 new), Size of downloads: 0 KiB
+
+ * Error: circular dependencies:
+
+(dev-libs/cyc0y-1:0/0::testrepo, ebuild scheduled for merge) depends on
+ (dev-libs/cyc0z-3:0/0::testrepo, ebuild scheduled for merge) (buildtime)
+  (dev-libs/cyc0y-1:0/0::testrepo, ebuild scheduled for merge) (buildtime)
+
+It might be possible to break this cycle
+by applying the following change:
+- dev-libs/cyc0z-3 (Change USE: -foo)
+
+Note that this change can be reverted, once the package has been installed.
+
+The following USE changes are necessary to proceed:
+ (see "package.use" in the portage(5) man page for more details)
+# required by dev-libs/cyc0w-3::testrepo
+# required by =dev-libs/cyc0w-3 (argument)
+>=dev-libs/cyc0z-3 bar
+
+ * In order to avoid wasting time, backtracking has terminated early
+ * due to the above autounmask change(s). The --autounmask-backtrack=y
+ * option can be used to force further backtracking, but there is no
+ * guarantee that it will produce a solution.

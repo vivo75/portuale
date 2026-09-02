@@ -1,0 +1,22 @@
+
+
+### u249 {'--pretend': True} success True mergelist ['dev-util/u249make-bootstrap-1', 'virtual/u249make-0', 'dev-libs/u249json-1', 'dev-util/u249make-1']
+circular_dependency {'dev-libs/u249json-1': ['dev-util/u249make-1'], 'virtual/u249make-0': ['dev-libs/u249json-1'], 'dev-util/u249make-1': ['virtual/u249make-0']}
+### u249 {'--pretend': True, '--backtrack': 0} success False mergelist None
+circular_dependency {}
+[nomerge       ] dev-util/u249make-1::test_repo 
+[ebuild  N     ]  dev-libs/u249json-1::test_repo  0 KiB
+[ebuild  N     ]   virtual/u249make-0::test_repo  0 KiB
+[ebuild  N     ]    dev-util/u249make-1::test_repo  0 KiB
+
+Total: 3 packages (3 new), Size of downloads: 0 KiB
+
+ * Error: circular dependencies:
+
+(dev-libs/u249json-1:0/0::test_repo, ebuild scheduled for merge) depends on
+ (virtual/u249make-0:0/0::test_repo, ebuild scheduled for merge) (buildtime)
+  (dev-util/u249make-1:0/0::test_repo, ebuild scheduled for merge) (runtime)
+   (dev-libs/u249json-1:0/0::test_repo, ebuild scheduled for merge) (buildtime_slot_op)
+
+ * Note that circular dependencies can often be avoided by temporarily
+ * disabling USE flags that trigger optional dependencies.

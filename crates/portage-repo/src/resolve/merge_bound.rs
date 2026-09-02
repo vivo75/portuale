@@ -37,3 +37,34 @@ pub(crate) fn merge_bound_index(entries: &[GraphEntry]) -> HashMap<(&str, &str),
     }
     cp_index
 }
+
+/// Resolve one root-qualified map endpoint to its entry index -- the exact-root
+/// instance first, falling back to the cp-level first index when this graph holds
+/// no such instance in that root.
+pub(crate) fn root_cp_lookup(
+    root_index: &HashMap<(bool, &str, &str), usize>,
+    cp_index: &HashMap<(&str, &str), usize>,
+    endpoint: &(bool, String, String),
+) -> Option<usize> {
+    root_index
+        .get(&(endpoint.0, endpoint.1.as_str(), endpoint.2.as_str()))
+        .or_else(|| cp_index.get(&(endpoint.1.as_str(), endpoint.2.as_str())))
+        .copied()
+}
+
+/// Resolve a `deps` edge to its child instance -- the resolving-root instance when
+/// one is merge-bound, else the legacy cp-level first index. The walk always resolved
+/// the atom in the resolving root, so the filter only ever removes a provably-wrong
+/// same-cp other-root sibling.
+pub(crate) fn dep_child_lookup(
+    root_index: &HashMap<(bool, &str, &str), usize>,
+    cp_index: &HashMap<(&str, &str), usize>,
+    owner_running_root: bool,
+    dep: &DepEdge,
+) -> Option<usize> {
+    let want = dep_child_root(owner_running_root, dep.key);
+    root_index
+        .get(&(want, dep.category.as_str(), dep.package.as_str()))
+        .or_else(|| cp_index.get(&(dep.category.as_str(), dep.package.as_str())))
+        .copied()
+}

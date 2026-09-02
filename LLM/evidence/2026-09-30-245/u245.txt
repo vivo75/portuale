@@ -1,0 +1,21 @@
+
+
+### u245 success False mergelist None
+digraph.order ['(\x1b[32mapp-misc/g216top-1.0:0/0::test_repo\x1b[39;49;00m, ebuild scheduled for merge)', 'app-misc/g216top', '(\x1b[32mdev-libs/g216mid-1.0:0/0::test_repo\x1b[39;49;00m, ebuild scheduled for merge)', '(\x1b[32mdev-lang/g216comp-1.0:0/0::test_repo\x1b[39;49;00m, ebuild scheduled for merge)']
+NODE (app-misc/g216top-1.0:0/0::test_repo, ebuild scheduled for merge) children [('(\x1b[32mdev-libs/g216mid-1.0:0/0::test_repo\x1b[39;49;00m, ebuild scheduled for merge)', '[<_emerge.DepPriority.DepPriority object at 0x7f02f06b5cd0>]')]
+NODE app-misc/g216top children [('(\x1b[32mapp-misc/g216top-1.0:0/0::test_repo\x1b[39;49;00m, ebuild scheduled for merge)', '[<_emerge.DepPriority.DepPriority object at 0x7f02f06b51d0>]')]
+NODE (dev-libs/g216mid-1.0:0/0::test_repo, ebuild scheduled for merge) children [('(\x1b[32mdev-lang/g216comp-1.0:0/0::test_repo\x1b[39;49;00m, ebuild scheduled for merge)', '[<_emerge.DepPriority.DepPriority object at 0x7f02f06b5f50>]')]
+NODE (dev-lang/g216comp-1.0:0/0::test_repo, ebuild scheduled for merge) children [('(\x1b[32mdev-lang/g216comp-1.0:0/0::test_repo\x1b[39;49;00m, ebuild scheduled for merge)', '[<_emerge.DepPriority.DepPriority object at 0x7f02f06b61d0>]')]
+[ebuild  N     ] app-misc/g216top-1.0::test_repo  0 KiB
+[ebuild  N     ]  dev-libs/g216mid-1.0::test_repo  0 KiB
+[ebuild  N     ]   dev-lang/g216comp-1.0::test_repo  0 KiB
+
+Total: 3 packages (3 new), Size of downloads: 0 KiB
+
+ * Error: circular dependencies:
+
+(dev-lang/g216comp-1.0:0/0::test_repo, ebuild scheduled for merge) depends on
+ (dev-lang/g216comp-1.0:0/0::test_repo, ebuild scheduled for merge) (buildtime)
+
+ * Note that circular dependencies can often be avoided by temporarily
+ * disabling USE flags that trigger optional dependencies.

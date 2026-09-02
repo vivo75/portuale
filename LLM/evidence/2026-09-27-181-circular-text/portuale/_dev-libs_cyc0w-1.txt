@@ -1,0 +1,12 @@
+[ebuild  N     ] dev-libs/cyc0w-1 
+[ebuild  N     ] dev-libs/cyc0z-3  USE="foo -bar"
+[ebuild  N     ] dev-libs/cyc0y-1 
+
+ * Error: circular dependencies:
+
+dev-libs/cyc0z-3 depends on
+ dev-libs/cyc0y-1 (buildtime)
+  dev-libs/cyc0z-3 (buildtime)
+
+ * Note that circular dependencies can often be avoided by temporarily
+ * disabling USE flags that trigger optional dependencies.
