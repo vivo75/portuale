@@ -372,7 +372,8 @@ not just read this list. What's actually left, grouped by area:
 > `portage_repo::all_cp` / `clean_selection`, `Config::other_vars`.
 > `--read-news` stays recognized-unimplemented.
 > `test_real_action_not_implemented_message_says_action_not_option` now
-> uses `--sync` as its example (was `--search`).
+> uses `--moo` as its example (was `--search`, then `--sync`); `--sync`
+> now prints its own "Functionality has moved to `emaint sync`." message.
 > **Sandbox / build isolation — Part 2.D substantially complete
 > (2026-09-01)**: for the six real `src_*` phases
 > (`SANDBOXED_SRC_PHASES`), `run_one_phase` builds a wrapped bash

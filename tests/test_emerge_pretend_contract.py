@@ -760,19 +760,19 @@ CASES = [
         1,
     ),
     (
-        "--sync rejects --pretend",
-        ["--pretend", "--sync"],
-        1,
-    ),
-    (
         "--metadata without --pretend prints the cache-update header",
         ["--metadata"],
         0,
     ),
     (
-        "bare --sync still reports the recognized-action-not-implemented message",
+        "--sync points at `emaint sync` (a permanent non-goal), with or without --pretend",
         ["--sync"],
-        2,
+        1,
+    ),
+    (
+        "--sync + --pretend: same `emaint sync` message",
+        ["--pretend", "--sync"],
+        1,
     ),
     (
         "--rebuilt-binaries: off by default, stays already-installed",
@@ -9798,17 +9798,30 @@ def test_real_option_inline_equals_form_is_still_recognized(emerge_binary, fixtu
     )
 
 
+def test_sync_points_at_emaint(emerge_binary, emerge_pretend_python, fixture_env):
+    """`emerge --sync` is a permanent non-goal in portuale -- repo syncing
+    belongs to `emaint sync` (real portage's own long-standing split).
+    The exact message, with or without --pretend, exit 1, byte-identical
+    Rust/Python."""
+    for args in (["--sync"], ["--pretend", "--sync"]):
+        rust = _run([str(emerge_binary)], args, fixture_env)
+        py = _run(emerge_pretend_python, args, fixture_env)
+        assert rust.returncode == 1
+        assert rust.stdout == ""
+        assert rust.stderr.strip() == "Functionality has moved to `emaint sync`."
+        assert rust.stderr == py.stderr
+        assert rust.returncode == py.returncode
+
+
 def test_real_action_not_implemented_message_says_action_not_option(emerge_binary, fixture_env):
-    """--sync is a real emerge action (see main.py's actions frozenset),
+    """--moo is a real emerge action (see main.py's actions frozenset),
     not an option -- the error must say "action". (--search/--depclean/
     --unmerge/--regen used to be the example here; all implemented now.
-    --sync is recognized only for its `-p` rejection -- a bare `emerge
-    --sync` still reports this standard message; repo network syncing
-    stays a documented non-goal.)"""
-    result = _run([str(emerge_binary)], ["--sync"], fixture_env)
+    --sync has its own dedicated "moved to `emaint sync`" message.)"""
+    result = _run([str(emerge_binary)], ["--moo"], fixture_env)
     assert result.returncode == 2
     expected = (
-        'emerge (pilot v1): action "--sync" is a real emerge action, but is not '
+        'emerge (pilot v1): action "--moo" is a real emerge action, but is not '
         "implemented in this pilot (only --pretend/-p, --verbose/-v, --quiet/-q, --newuse/-N, --changed-use/-U, --nodeps/-O, "
         "--onlydeps/-o, --update/-u, --deep/-D, --exclude/-X, --deselect/-W, --unmerge/-C, --depclean/-c, --prune/-P, --config, "
         "--with-bdeps, --with-bdeps-auto, --changed-deps, --changed-deps-report, --changed-slot, --verbose-slot-rebuilds, --ignore-built-slot-operator-deps, --buildpkg/-b, --buildpkg-exclude, --with-test-deps, "

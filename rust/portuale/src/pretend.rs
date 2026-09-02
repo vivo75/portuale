@@ -5200,8 +5200,8 @@ pub fn run(args: &[String]) -> ExitCode {
     // `action_metadata`) transfers a repo's pre-generated cache into
     // portage's own `depcachedir`; this pilot reads `metadata/md5-cache`
     // directly and has no `depcachedir`, so the transfer is a no-op.
-    // --sync stays a non-goal (network syncing) -- recognized only so its
-    // `--pretend` rejection matches real portage.
+    // --sync is a permanent non-goal -- `emerge --sync` prints
+    // "Functionality has moved to `emaint sync`." and exits 1.
     let mut regen_action = false;
     let mut metadata_action = false;
     let mut sync_action = false;
@@ -6301,9 +6301,8 @@ pub fn run(args: &[String]) -> ExitCode {
             metadata_action = true;
             i += 1;
         } else if arg == "--sync" {
-            // Real `main.py`: `--sync` is a standalone ACTION. Network
-            // repo syncing stays a non-goal -- recognized only so the
-            // `--pretend` rejection matches real portage.
+            // Real `main.py`: `--sync` is a standalone ACTION. A permanent
+            // non-goal in portuale -- see the dispatch below.
             sync_action = true;
             i += 1;
         } else if arg == "--clean" {
@@ -6933,17 +6932,21 @@ pub fn run(args: &[String]) -> ExitCode {
         return ExitCode::from(2);
     }
 
-    // Real `actions.py:4106-4111`: the `config`, `metadata`, `regen` and
-    // `sync` actions all reject `--pretend` outright (they only ever do
-    // real work, so a dry run is meaningless). `--config` already runs
-    // ignoring `--pretend` in this pilot -- kept as-is for compatibility;
-    // the three others are gated here.
+    // `--sync`: repo syncing will never be part of portuale -- point the
+    // user at the tool that owns it (matching real portage's own
+    // long-standing split: `emerge --sync` delegates to `emaint sync`).
+    if sync_action {
+        eprintln!("Functionality has moved to `emaint sync`.");
+        return ExitCode::from(1);
+    }
+
+    // Real `actions.py:4106-4111`: the `config`, `metadata` and `regen`
+    // actions reject `--pretend` outright (they only ever do real work,
+    // so a dry run is meaningless). `--config` already runs ignoring
+    // `--pretend` in this pilot -- kept as-is for compatibility; the two
+    // others are gated here.
     if pretend {
-        for (flag, name) in [
-            (regen_action, "regen"),
-            (metadata_action, "metadata"),
-            (sync_action, "sync"),
-        ] {
+        for (flag, name) in [(regen_action, "regen"), (metadata_action, "metadata")] {
             if flag {
                 eprintln!("emerge: The '{name}' action does not support '--pretend'.");
                 return ExitCode::from(1);
@@ -6996,13 +6999,6 @@ pub fn run(args: &[String]) -> ExitCode {
     if metadata_action {
         println!("\n>>> Updating Portage cache");
         return ExitCode::SUCCESS;
-    }
-    // `--sync`: network repo syncing stays a non-goal -- `sync_action` is
-    // tracked only so the `-p --sync` rejection above matches real
-    // portage; a bare `emerge --sync` still reports the standard
-    // "recognized action, not implemented" message.
-    if sync_action {
-        return report_option("--sync");
     }
 
     if atom_args.is_empty()

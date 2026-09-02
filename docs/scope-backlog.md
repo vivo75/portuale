@@ -309,12 +309,12 @@ dev/test context — see also the `chown` note below).
   pre-generated cache into portage's own `depcachedir`, which this pilot
   doesn't model (it reads `metadata/md5-cache` directly); it prints the
   real `>>> Updating Portage cache` header and exits 0. `--regen` /
-  `--metadata` / `--sync` all reject `--pretend` with the exact real
-  `actions.py:4106` message.
+  `--metadata` reject `--pretend` with the exact real `actions.py:4106`
+  message. **`--sync`** is a permanent non-goal — `emerge --sync` prints
+  `Functionality has moved to \`emaint sync\`.` and exits 1 (with or
+  without `--pretend`); repo syncing will never be part of portuale.
   `--read-news` stays a recognized-unimplemented option (it's a
-  post-merge display toggle, not an action). `--sync` (repo network
-  syncing) stays a non-goal (recognized only for the `--pretend`
-  rejection).
+  post-merge display toggle, not an action).
 - Recognized-but-unimplemented modifier flags (user asked 2026-09-02 to
   implement the batch; shipping one coherent slice per commit).
   **Shipped 2026-09-02 (batch 1): `--fuzzy-search` / `--regex-search-auto`

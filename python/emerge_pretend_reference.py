@@ -11411,7 +11411,8 @@ def run(args):
     # --regen / --metadata / --sync: real actions that reject --pretend
     # (actions.py:4106). --regen does real work on the Rust side (regen.rs);
     # this reference is --pretend-only, so like every other non-dry-run
-    # path it just returns 0. Mirrors pretend.rs.
+    # path it just returns 0. --sync is a permanent non-goal in portuale.
+    # Mirrors pretend.rs.
     regen_action = False
     metadata_action = False
     sync_action = False
@@ -12779,14 +12780,16 @@ def run(args):
         print('emerge: can\'t specify both of "--tree" and "--columns".', file=sys.stderr)
         return 2
 
-    # Real actions.py:4106-4111: the config/metadata/regen/sync actions
-    # reject --pretend outright. Mirrors pretend.rs.
+    # --sync: repo syncing is a permanent non-goal in portuale.
+    # Mirrors pretend.rs.
+    if sync_action:
+        print("Functionality has moved to `emaint sync`.", file=sys.stderr)
+        return 1
+
+    # Real actions.py:4106-4111: the config/metadata/regen actions reject
+    # --pretend outright. Mirrors pretend.rs.
     if pretend:
-        for flag, name in (
-            (regen_action, "regen"),
-            (metadata_action, "metadata"),
-            (sync_action, "sync"),
-        ):
+        for flag, name in ((regen_action, "regen"), (metadata_action, "metadata")):
             if flag:
                 print(
                     f"emerge: The '{name}' action does not support '--pretend'.",
@@ -12833,11 +12836,6 @@ def run(args):
     if metadata_action:
         print("\n>>> Updating Portage cache")
         return 0
-    # --sync: network repo syncing is a deliberate non-goal. `sync_action`
-    # is tracked only for the `-p --sync` rejection above; a bare `emerge
-    # --sync` reports the standard "recognized action, not implemented".
-    if sync_action:
-        return _report_option("--sync")
     if search_action:
         # Real action_search passes search's `verbose` as `"--quiet" not
         # in myopts` -- so the full block shows by default and -q makes it

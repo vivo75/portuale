@@ -9518,13 +9518,18 @@ dep/`). This pilot reads `metadata/md5-cache` directly and models no
 `depcachedir`, so there is nothing to transfer — it prints the real
 `\n>>> Updating Portage cache` header and exits 0.
 
-Both, plus `--config` (already implemented) and `--sync` (a non-goal),
-**reject `--pretend`** with the exact real message (`actions.py:4106-4111`):
+Both `--regen` and `--metadata` **reject `--pretend`** with the exact
+real message (`actions.py:4106-4111`):
 
 ```
 $ portuale emerge -p --regen
 emerge: The 'regen' action does not support '--pretend'.
 ```
+
+**`--sync`** is a permanent non-goal — repo syncing belongs to
+`emaint sync` (real portage's own long-standing split). `emerge --sync`
+(with or without `--pretend`) prints `Functionality has moved to
+\`emaint sync\`.` and exits 1.
 
 Mirrored in `emerge_pretend_reference.py` (the `--pretend` rejection +
 `--metadata` header + `--sync` message; `--regen`'s real work returns 0
