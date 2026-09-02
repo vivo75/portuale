@@ -11179,14 +11179,19 @@ Now each source has its own `Config` field at its own real position, and
 `portage-repo::effective_use_flags` (mirrored in the Python reference)
 does the real walk:
 
-- `Config::repo_make_defaults_use` — the main repo's top-level
-  `profiles/make.defaults` USE (real `_repo_make_defaults`,
-  `${VAR}`-expanded), then `Config::package_use_repo` — every configured
-  repo's own `profiles/package.use` (overlays `::repo`-scoped). Both
-  applied **before** the ebuild's own `IUSE` `+`/`-` defaults — the
-  weakest layer modeled. *(Repo `make.defaults` USE shipped 2026-09-02;
-  an overlay's own `profiles/make.defaults` USE stays a cut — the main
-  repo implicitly masters every overlay here.)*
+- `Config::repo_make_defaults_use` — each repo's top-level
+  `profiles/make.defaults` USE as `(repo_name, tokens)` pairs (real
+  `_repo_make_defaults`, `${VAR}`-expanded): the main repo's (empty
+  name) applies to every package, an overlay's (real name) only to a
+  candidate resolved from that overlay (`effective_use_flags` reads
+  `candidate_str`'s `::<repo>` suffix). Then `Config::package_use_repo`
+  — every configured repo's own `profiles/package.use` (overlays
+  `::repo`-scoped). All applied **before** the ebuild's own `IUSE`
+  `+`/`-` defaults — the weakest layer modeled. *(Main-repo
+  `make.defaults` USE shipped 2026-09-02; per-overlay
+  `make.defaults` USE the same day — `dev-libs/overlaymakedefaultpkg`
+  proves it. Narrowing: the full masters-chain stacking order
+  collapses to "main, then the candidate's own repo".)*
 - `Config::features_use` — the `features` tier (real
   `configdict["features"]["USE"]`): `["test"]` when `FEATURES` names
   `test`, applied between `repo` and `pkginternal`, so a package with
@@ -11209,12 +11214,13 @@ does the real walk:
   into the weaker `conf` tier before.)* The strongest layer before the
   final `use.force`/`use.mask` step.
 
-Still documented cuts: the `env.d` layer and an overlay's own
-`profiles/make.defaults` USE. (`package.env`'s `USE=` shipped
-2026-09-02; its non-`USE` build vars — a build-phase concern, not a USE
-layer — the same day; the `features` tier — modelled for its one real
-flag, `FEATURES=test` → `test` — also 2026-09-02; `$USE` at its real
-`env` position — 2026-09-02.)
+The only remaining documented cut is the `env.d` layer (real
+`configdict["env.d"]` — practically never carries `USE`).
+(`package.env`'s `USE=` shipped 2026-09-02; its non-`USE` build vars —
+a build-phase concern, not a USE layer — the same day; the `features`
+tier — modelled for its one real flag, `FEATURES=test` → `test` — also
+2026-09-02; `$USE` at its real `env` position, and per-overlay
+`make.defaults` USE — 2026-09-02.)
 
 `dev-libs/packageuseenablepkg` proves the `env` tier:
 `test_env_use_is_the_highest_tier_and_overrides_a_package_use_flag`

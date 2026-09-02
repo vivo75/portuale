@@ -1,0 +1,4 @@
+# fixture overlay make.defaults: real config.py _repo_make_defaults,
+# per-repo. Enables omdflag -- applies only to packages resolved from
+# THIS overlay, never the main repo.
+USE="omdflag"

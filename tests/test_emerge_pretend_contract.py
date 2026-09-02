@@ -4793,6 +4793,28 @@ def test_repo_make_defaults_use_enables_a_flag_and_pulls_in_a_dependency(
     ]
 
 
+def test_overlay_own_make_defaults_use_enables_a_flag_for_its_packages(
+    emerge_binary, emerge_pretend_python, fixture_env
+):
+    """Real `_repo_make_defaults` is per-repo: `fixtures/overlay/profiles/
+    make.defaults` sets `USE="omdflag"`, which reaches
+    `effective_use_flags` at the head of the `repo` tier but only for a
+    candidate resolved from the `overlay` repo. `dev-libs/
+    overlaymakedefaultpkg` (`IUSE="omdflag other"`, overlay-only) gets
+    `omdflag` on and pulls `dev-libs/newpkg`; the main repo has no such
+    USE. Rust == Python."""
+    base = ["--pretend", "-v", "dev-libs/overlaymakedefaultpkg"]
+    rust = _run([str(emerge_binary)], base, fixture_env)
+    py = _run(emerge_pretend_python, base, fixture_env)
+    assert rust.returncode == 0
+    assert rust.stdout == py.stdout
+    assert rust.stdout.splitlines()[:2] == [
+        "[ebuild  N     ] dev-libs/newpkg-1.0::testrepo ",
+        '[ebuild  N     ] dev-libs/overlaymakedefaultpkg-1.0::overlay  '
+        'USE="omdflag -other"',
+    ]
+
+
 def test_features_test_enables_the_test_use_flag_and_pulls_test_deps(
     emerge_binary, emerge_pretend_python, fixture_env
 ):

@@ -2490,11 +2490,12 @@ def effective_use_flags(
     ("IUSE seed, then use_tokens, then one flat package.use list") so
     each package.use source sits at its own real position:
 
-      1. repo -- the main repo's profiles/make.defaults USE
-         (repo_make_defaults_use, real _repo_make_defaults) first, then
-         every configured repo's own profiles/package.use
-         (package_use_repo) -- all *before* the IUSE defaults. Weakest
-         layer modeled.
+      1. repo -- each repo's profiles/make.defaults USE
+         (repo_make_defaults_use, real _repo_make_defaults: the main
+         repo's applies to every package, an overlay's only to a
+         candidate from that overlay) first, then every configured repo's
+         own profiles/package.use (package_use_repo) -- all *before* the
+         IUSE defaults. Weakest layer modeled.
       2. pkginternal -- iuse's own +flag/-flag default markers (see the
          paragraph below for the grounding).
       3. defaults -- walked one profile chain level at a time
@@ -2595,11 +2596,17 @@ def effective_use_flags(
             if _matches_config_entry(entry, candidate_str, category, package):
                 _apply_incremental(" ".join(tokens), use_flags)
 
-    # repo (real configdict["repo"]): the main repo's profiles/make.defaults
+    # repo (real configdict["repo"]): each repo's own profiles/make.defaults
     # USE (real _repo_make_defaults) first, then every repo's own
-    # profiles/package.use -- all before the IUSE defaults.
-    for token in repo_make_defaults_use:
-        _apply_incremental(token, use_flags)
+    # profiles/package.use -- all before the IUSE defaults. An entry with
+    # an empty repo name applies to every package (the main repo, which
+    # masters every overlay); a named entry only to a candidate from that
+    # repo (candidate_str's "::<repo>" suffix).
+    candidate_repo = candidate_str.rpartition("::")[2]
+    for repo, tokens in repo_make_defaults_use:
+        if not repo or repo == candidate_repo:
+            for token in tokens:
+                _apply_incremental(token, use_flags)
     _apply_matching(package_use_repo)
 
     # features (real configdict["features"]["USE"], config.py ~2043):
@@ -4602,9 +4609,33 @@ def resolve_config(
         "package_unmask": _stack_mask_lines(unmask_sources),
         "package_accept_keywords": package_accept_keywords,
         "package_use_repo": _parse_package_use_lines(repo_use_lines),
-        "repo_make_defaults_use": _read_repo_make_defaults_use(
-            os.path.join(main_repo_location, "profiles", "make.defaults"), scalars
-        ),
+        "repo_make_defaults_use": [
+            (name, tokens)
+            for name, tokens in (
+                [
+                    (
+                        "",
+                        _read_repo_make_defaults_use(
+                            os.path.join(
+                                main_repo_location, "profiles", "make.defaults"
+                            ),
+                            scalars,
+                        ),
+                    )
+                ]
+                + [
+                    (
+                        repo_name,
+                        _read_repo_make_defaults_use(
+                            os.path.join(repo_location, "profiles", "make.defaults"),
+                            scalars,
+                        ),
+                    )
+                    for repo_name, repo_location in overlay_repos
+                ]
+            )
+            if tokens
+        ],
         "features_use": (
             ["test"]
             if "test" in (scalars.get("FEATURES", "").split())

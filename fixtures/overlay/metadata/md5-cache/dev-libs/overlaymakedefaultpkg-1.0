@@ -1,0 +1,8 @@
+DEFINED_PHASES=-
+DESCRIPTION=fixture package: the overlay's own profiles/make.defaults USE enables a flag, pulling in a dependency
+EAPI=8
+IUSE=omdflag other
+KEYWORDS=amd64
+RDEPEND=omdflag? ( dev-libs/newpkg )
+SLOT=0
+_md5_=0000000000000000000000000000000

@@ -34,16 +34,15 @@
 //     both.
 //   - Real config.py's `USE_ORDER` is
 //     `env:pkg:conf:defaults:pkginternal:features:repo:env.d`. This pilot
-//     now models `repo` (repo-level `package.use` only, not repo
-//     `make.defaults`), `features` (`FEATURES=test` -> `test`),
+//     now models `repo` (each repo's `make.defaults` USE then repo-level
+//     `package.use`), `features` (`FEATURES=test` -> `test`),
 //     `pkginternal` (the ebuild's own IUSE `+`/`-` defaults), `defaults`
 //     (profile `make.defaults` + profile `package.use`), `conf`
 //     (make.conf), `pkg` (`package.env`'s own `USE=`, then user
 //     `package.use` on top), and `env` (the `$USE` env var, the highest
 //     tier) -- see `Config::package_use{,_repo,_user}` /
-//     `Config::{package_env_use,features_use,env_use_tokens}` and
-//     `portage-repo::effective_use_flags`. Still absent: `package.env`'s
-//     non-USE vars and `env.d`.
+//     `Config::{repo_make_defaults_use,package_env_use,features_use,env_use_tokens}`
+//     and `portage-repo::effective_use_flags`. Still absent: `env.d`.
 //   - No line continuation / multi-line quoted values, and no trailing
 //     `# comment` after a real assignment (a `#` is only recognized as a
 //     comment when it starts the (trimmed) line). Real make.defaults/
@@ -115,11 +114,12 @@
 //         appends `self.puse` on top of the `_grab_pkg_env` result), the
 //         strongest USE layer before the final `use.force`/`use.mask`
 //         step.
-//     The main repo's top-level `profiles/make.defaults` USE (real
+//     Each repo's top-level `profiles/make.defaults` USE (real
 //     `_repo_make_defaults`) is folded into the `repo` layer too, ahead
-//     of repo `package.use` (`Config::repo_make_defaults_use`).
-//     Still not modeled: the `env.d` layer and an *overlay's* own
-//     `profiles/make.defaults` USE.
+//     of repo `package.use` (`Config::repo_make_defaults_use`) -- the
+//     main repo's applies to every package, an overlay's only to a
+//     candidate from that overlay.
+//     Still not modeled: the `env.d` layer.
 //     Each source is still purely additive within itself (no `-atom`
 //     removal exists for this file -- see `parse_package_use_lines`), and
 //     still applied per package (not globally): a matching entry's tokens
@@ -369,22 +369,24 @@ pub struct Config {
     /// Tokens use the same `-flag`/`flag`/`+flag` incremental syntax as
     /// `USE` itself -- see `apply_incremental`.
     pub package_use_repo: Vec<(String, Vec<String>)>,
-    /// The `USE=` value string(s) from the **main repo's**
-    /// `<repo>/profiles/make.defaults` -- real `config.py`'s
+    /// `(repo_name, USE= value string(s))` pairs from each configured
+    /// repo's `<repo>/profiles/make.defaults` -- real `config.py`'s
     /// `_repo_make_defaults`, folded into `configdict["repo"]` alongside
     /// repo `package.use`. Applied by `effective_use_flags` at the very
     /// start of the `repo` layer, **before** [`Config::package_use_repo`]
     /// (real `regenerate()` walks `configdict["repo"]["USE"]` first, then
     /// that tier's package-scoped USE). `${VAR}` in a value is expanded
     /// against the profile-chain + `make.conf` scalars already
-    /// accumulated by the time this file is read. **Narrowing:** only
-    /// the *main* repo's file is read -- an overlay's own
-    /// `profiles/make.defaults` USE is a documented cut (the main repo
-    /// implicitly masters every overlay here, so its USE already applies
-    /// to every package; an overlay adding more for its own packages is
-    /// the gap), consistent with this pilot's minimal `masters`
-    /// handling elsewhere.
-    pub repo_make_defaults_use: Vec<String>,
+    /// accumulated by the time each file is read.
+    ///
+    /// The **main repo's** entry has an empty `repo_name` -- it applies
+    /// to every package (the main repo implicitly masters every overlay
+    /// here). An **overlay's** entry is keyed by its real repo name and
+    /// applies only to a candidate resolved from that overlay
+    /// (`candidate_str`'s `::<repo>` suffix). **Narrowing:** the full
+    /// masters-chain stacking order (main, then each master, then the
+    /// repo) collapses to "main, then the candidate's own repo".
+    pub repo_make_defaults_use: Vec<(String, Vec<String>)>,
     /// Real `configdict["features"]["USE"]` (`config.py` ~2043): the USE
     /// flags implied by `FEATURES`. In practice only `test` -- appended
     /// when `FEATURES` contains `test`, so a package that declares `test`
@@ -2236,13 +2238,23 @@ pub fn resolve_config(
 
     // Repo `make.defaults` USE -- real `config.py`'s `_repo_make_defaults`,
     // the global (not package-scoped) half of `configdict["repo"]`. Read
-    // the main repo's `profiles/make.defaults` (see
-    // `Config::repo_make_defaults_use` for the overlay narrowing), keep
-    // every `USE=` value in file order with `${VAR}` expanded against the
-    // scalars accumulated so far. `effective_use_flags` applies it at the
-    // head of the `repo` layer.
-    config.repo_make_defaults_use =
-        read_repo_make_defaults_use(&main_repo_location.join("profiles/make.defaults"), &scalars);
+    // each repo's `profiles/make.defaults`, keeping every `USE=` value in
+    // file order with `${VAR}` expanded against the scalars accumulated
+    // so far. The main repo's entry (empty name) applies to every
+    // package; an overlay's (real name) only to a candidate from that
+    // overlay -- see `Config::repo_make_defaults_use`.
+    config.repo_make_defaults_use = std::iter::once((
+        String::new(),
+        read_repo_make_defaults_use(&main_repo_location.join("profiles/make.defaults"), &scalars),
+    ))
+    .chain(overlay_repos.iter().map(|(name, location)| {
+        (
+            name.clone(),
+            read_repo_make_defaults_use(&location.join("profiles/make.defaults"), &scalars),
+        )
+    }))
+    .filter(|(_, tokens)| !tokens.is_empty())
+    .collect();
 
     // `configdict["features"]["USE"]` -- real `config.py` appends `test`
     // to this tier when `FEATURES` names it. The pilot's `FEATURES` is a
@@ -4290,12 +4302,14 @@ sync-uri = file:///srv/pkgs
     }
 
     #[test]
-    fn repo_make_defaults_use_is_read_from_the_main_repo_with_var_expansion() {
+    fn repo_make_defaults_use_is_read_per_repo_with_var_expansion() {
         let root = std::env::temp_dir().join("portage-profile-test-repo-make-defaults");
         let repo = root.join("repo");
+        let overlay = root.join("overlay");
         let prof = repo.join("profiles/default");
         let portage_dir = root.join("etc/portage");
         fs::create_dir_all(&prof).unwrap();
+        fs::create_dir_all(overlay.join("profiles")).unwrap();
         fs::create_dir_all(&portage_dir).unwrap();
         fs::write(
             prof.join("make.defaults"),
@@ -4308,17 +4322,35 @@ sync-uri = file:///srv/pkgs
             "USE=\"repoflag\"\nUSE=\"more arch_${ARCH}\"\n",
         )
         .unwrap();
+        // An overlay's own -- keyed by its repo name.
+        fs::write(
+            overlay.join("profiles/make.defaults"),
+            "USE=\"overlayflag\"\n",
+        )
+        .unwrap();
         let make_profile = portage_dir.join("make.profile");
         let _ = fs::remove_file(&make_profile);
         #[cfg(unix)]
         std::os::unix::fs::symlink(&prof, &make_profile).unwrap();
 
-        let config = resolve_config(&root, &repo, &[], &[], "testrepo", &HashMap::new())
-            .expect("config must resolve");
-        // Both USE= lines kept in file order; ${ARCH} expanded.
+        let config = resolve_config(
+            &root,
+            &repo,
+            &[("myoverlay".to_string(), overlay.clone())],
+            &[],
+            "testrepo",
+            &HashMap::new(),
+        )
+        .expect("config must resolve");
         assert_eq!(
             config.repo_make_defaults_use,
-            vec!["repoflag".to_string(), "more arch_amd64".to_string()]
+            vec![
+                (
+                    String::new(),
+                    vec!["repoflag".to_string(), "more arch_amd64".to_string()]
+                ),
+                ("myoverlay".to_string(), vec!["overlayflag".to_string()]),
+            ]
         );
     }
 

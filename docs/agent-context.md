@@ -422,8 +422,12 @@ not just read this list. What's actually left, grouped by area:
 > real `env` position** (`Config::env_use_tokens`, the highest tier —
 > `effective_use_flags` replays it after the user `package.use`, so
 > `USE="-X" emerge foo` beats a `package.use` flag; was folded into
-> `conf` before). Remaining Part 2.C: the `env.d` layer, an overlay's
-> own `profiles/make.defaults` USE.
+> `conf` before), and **per-overlay `profiles/make.defaults` USE**
+> (`Config::repo_make_defaults_use` is now `(repo_name, tokens)` pairs;
+> empty name = main = applies to all, real name = only a candidate from
+> that overlay via `candidate_str`'s `::<repo>`; new
+> `dev-libs/overlaymakedefaultpkg`, Python-mirrored). Remaining Part
+> 2.C: only the `env.d` layer (rarely carries `USE`).
 > Also recently closed:
 > the **remote binpkg download + merge** (2026-08-31): `emerge
 > --getbinpkgonly <atom>` non-`--pretend` — live `Packages` refresh

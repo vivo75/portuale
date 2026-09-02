@@ -1525,11 +1525,12 @@ fn matches_config_entry(entry: &str, candidate_str: &str, category: &str, packag
 /// each `package.use` source sits at its own real position. The walk,
 /// weakest layer first:
 ///
-/// - `repo` -- the main repo's `profiles/make.defaults` USE
-///   (`Config::repo_make_defaults_use`, real `_repo_make_defaults`),
-///   then every configured repo's own `profiles/package.use`
-///   (`Config::package_use_repo`) -- all *before* the IUSE defaults.
-///   The weakest layer this pilot models.
+/// - `repo` -- each repo's `profiles/make.defaults` USE
+///   (`Config::repo_make_defaults_use`, real `_repo_make_defaults`:
+///   the main repo's applies to every package, an overlay's only to a
+///   candidate from that overlay), then every configured repo's own
+///   `profiles/package.use` (`Config::package_use_repo`) -- all *before*
+///   the IUSE defaults. The weakest layer this pilot models.
 /// - `pkginternal` -- `iuse`'s own `+flag`/`-flag` default markers (see
 ///   the paragraph below for the grounding).
 /// - `defaults` -- walked one profile chain level at a time
@@ -1622,7 +1623,7 @@ pub fn effective_use_flags(
     iuse: &str,
     use_tokens: &[String],
     conf_use_tokens: &[String],
-    repo_make_defaults_use: &[String],
+    repo_make_defaults_use: &[(String, Vec<String>)],
     features_use: &[String],
     package_use_repo: &[(String, Vec<String>)],
     package_use: &[(String, Vec<String>)],
@@ -1653,14 +1654,24 @@ pub fn effective_use_flags(
     // cut (see `portage_profile`'s module doc comment).
     let mut use_flags: HashSet<String> = HashSet::new();
 
-    // `repo` (real `configdict["repo"]`): the main repo's
+    // `repo` (real `configdict["repo"]`): each repo's own
     // `profiles/make.defaults` USE (real `_repo_make_defaults`) first,
     // then every configured repo's own `profiles/package.use` -- all
     // *before* the ebuild's own IUSE defaults, the weakest layer this
     // pilot models. Real `regenerate()` walks `configdict["repo"]["USE"]`
-    // (make.defaults) ahead of that tier's package-scoped USE.
-    for token in repo_make_defaults_use {
-        portage_profile::apply_incremental(token, &mut use_flags);
+    // (make.defaults) ahead of that tier's package-scoped USE, stacking
+    // the candidate's repo's masters chain then the repo itself. Here an
+    // entry with an empty repo name applies to every package (the main
+    // repo, which masters every overlay); a named entry applies only to
+    // a candidate from that repo. `candidate_str`'s `::<repo>` suffix
+    // names the candidate's repo.
+    let candidate_repo = candidate_str.rsplit_once("::").map_or("", |(_, r)| r);
+    for (repo, tokens) in repo_make_defaults_use {
+        if repo.is_empty() || repo == candidate_repo {
+            for token in tokens {
+                portage_profile::apply_incremental(token, &mut use_flags);
+            }
+        }
     }
     let apply_matching = |flags: &mut HashSet<String>, entries: &[(String, Vec<String>)]| {
         for (entry, tokens) in entries {
@@ -20898,41 +20909,57 @@ mod tests {
 
     #[test]
     fn effective_use_flags_repo_make_defaults_use_is_the_weakest_repo_layer() {
-        let euf = |iuse: &str, repo_md: &[String], repo_pu: &[(String, Vec<String>)]| {
-            effective_use_flags(
-                iuse,
-                &[],
-                &[],
-                repo_md,
-                &[], // features_use
-                repo_pu,
-                &[],
-                &[],
-                &[],
-                &[],
-                &[], // env_use_tokens
-                &[],
-                &[],
-                &HashSet::new(),
-                &HashSet::new(),
-                &HashSet::new(),
-                &HashSet::new(),
-                &[],
-                &[],
-                &["amd64".to_string()],
-                &HashSet::from(["amd64".to_string()]),
-                &[],
-                "dev-libs/pkg-1.0:0/0::testrepo",
-                "dev-libs",
-                "pkg",
-            )
-        };
+        let euf =
+            |iuse: &str, repo_md: &[(String, Vec<String>)], repo_pu: &[(String, Vec<String>)]| {
+                effective_use_flags(
+                    iuse,
+                    &[],
+                    &[],
+                    repo_md,
+                    &[], // features_use
+                    repo_pu,
+                    &[],
+                    &[],
+                    &[],
+                    &[],
+                    &[], // env_use_tokens
+                    &[],
+                    &[],
+                    &HashSet::new(),
+                    &HashSet::new(),
+                    &HashSet::new(),
+                    &HashSet::new(),
+                    &[],
+                    &[],
+                    &["amd64".to_string()],
+                    &HashSet::from(["amd64".to_string()]),
+                    &[],
+                    "dev-libs/pkg-1.0:0/0::testrepo",
+                    "dev-libs",
+                    "pkg",
+                )
+            };
+        let md = |t: &str| vec![(String::new(), vec![t.to_string()])];
         // repo make.defaults USE decides an unmarked IUSE flag...
-        assert!(euf("foo", &["foo".to_string()], &[]).contains("foo"));
+        assert!(euf("foo", &md("foo"), &[]).contains("foo"));
         // ...but loses to the ebuild's own IUSE default (applied after)...
-        assert!(!euf("-foo", &["foo".to_string()], &[]).contains("foo"));
+        assert!(!euf("-foo", &md("foo"), &[]).contains("foo"));
         // ...and to a repo package.use entry (also applied after, same tier).
-        assert!(!euf("foo", &["foo".to_string()], &pu("-foo")).contains("foo"));
+        assert!(!euf("foo", &md("foo"), &pu("-foo")).contains("foo"));
+        // A named (overlay) entry only applies to a candidate from that
+        // repo -- `candidate_str` here is `::testrepo`, so `::other` is inert.
+        assert!(!euf(
+            "foo",
+            &[("other".to_string(), vec!["foo".to_string()])],
+            &[]
+        )
+        .contains("foo"));
+        assert!(euf(
+            "foo",
+            &[("testrepo".to_string(), vec!["foo".to_string()])],
+            &[]
+        )
+        .contains("foo"));
     }
 
     #[test]

@@ -294,9 +294,15 @@ single-pass BFS can't grow into these incrementally:
   layer, before `package_use_repo` (real `regenerate()` walks
   `configdict["repo"]["USE"]` ahead of that tier's package-scoped USE).
   New `read_repo_make_defaults_use`; new `fixtures/repo/profiles/
-  make.defaults` + `dev-libs/repomakedefaultpkg`. Narrowing: only the
-  *main* repo's file (an overlay's own is a cut — main implicitly
-  masters every overlay here, so its USE already applies everywhere).)*
+  make.defaults` + `dev-libs/repomakedefaultpkg`.)*
+  *(Shipped 2026-09-02: **an overlay's own `profiles/make.defaults`
+  USE** — `Config::repo_make_defaults_use` is now `(repo_name, tokens)`
+  pairs; the main repo's (empty name) applies to every package, an
+  overlay's (real name) only to a candidate resolved from that overlay
+  (`effective_use_flags` reads `candidate_str`'s `::<repo>` suffix).
+  New `fixtures/overlay/profiles/make.defaults` +
+  `dev-libs/overlaymakedefaultpkg`. Narrowing: the full masters-chain
+  stacking order collapses to "main, then the candidate's own repo".)*
   *(Shipped 2026-09-02: **per-profile-level `defaults`-tier walk** —
   real `regenerate()` walks `configdict["defaults"]` one profile at a
   time (that level's `make.defaults` USE, then its own `package.use`),
@@ -337,8 +343,9 @@ single-pass BFS can't grow into these incrementally:
   `USE="-X" emerge foo` overrides a `/etc/portage/package.use foo`
   entry. Mirrored in the Python reference; 1 contract test on
   `dev-libs/packageuseenablepkg`.)*
-  Still open: the `env.d` layer; an *overlay's* own
-  `profiles/make.defaults` USE.
+  Still open: the `env.d` layer (real `configdict["env.d"]` from
+  `/etc/env.d/*` — practically never carries `USE`, the lowest-value
+  piece of the config-depth remainder).
 
 ### D. Sandbox / build isolation — **substantially complete (2026-09-01)**
 
@@ -703,12 +710,12 @@ by a few large items rather than a long tail of small ones:
    the full `repo → features → pkginternal → defaults → conf → pkg →
    env` `USE_ORDER` walk (per-profile-level `defaults` interleaving,
    repo `make.defaults` USE, `package.env` USE, the `features` tier
-   (`FEATURES=test`), and `$USE` at its real `env` position above the
-   user `package.use` — all 2026-09-01/02); the build-phase env carries
-   the resolved `USE` + compiler/make flags + `package.env`'s non-USE
-   vars (2026-09-02).* Remaining: an overlay's own
-   `profiles/make.defaults` USE, and the `env.d` layer — a config that
-   leans on those still diverges.
+   (`FEATURES=test`), `$USE` at its real `env` position above the user
+   `package.use`, and an overlay's own `profiles/make.defaults` USE —
+   all 2026-09-01/02); the build-phase env carries the resolved `USE` +
+   compiler/make flags + `package.env`'s non-USE vars (2026-09-02).*
+   Remaining: the `env.d` layer only — practically never carries `USE`,
+   so a config that leans on it is rare.
 
 4. **Sandbox enforcement (Part 2.D).** *Substantially complete
    2026-09-01: `sandbox`/`usersandbox` + `network`/`ipc`/`mount`/`pid`-
