@@ -820,6 +820,30 @@ const ENV_SCALAR_VARS: &[&str] = &[
     "GENTOO_MIRRORS",
 ];
 
+#[cfg(test)]
+thread_local! {
+    /// When `Some`, `config_env_var` reads from this map *instead of* the
+    /// real process environment -- the complete env for this thread, so
+    /// an absent key reads as unset. Lets the env-layer test drive
+    /// `resolve_config` without `set_var`, which would race every other
+    /// test thread also calling `resolve_config` (see `with_test_env`).
+    static TEST_ENV_OVERRIDE: std::cell::RefCell<Option<HashMap<String, String>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// The process environment as the `env` `USE_ORDER` layer sees it -- real
+/// `std::env::var`, except under `cfg(test)` with a `TEST_ENV_OVERRIDE`
+/// installed, when that map is authoritative.
+fn config_env_var(name: &str) -> Option<String> {
+    #[cfg(test)]
+    {
+        if TEST_ENV_OVERRIDE.with(|o| o.borrow().is_some()) {
+            return TEST_ENV_OVERRIDE.with(|o| o.borrow().as_ref().unwrap().get(name).cloned());
+        }
+    }
+    std::env::var(name).ok()
+}
+
 /// Apply the `env` `USE_ORDER` layer: for every allowlisted config var
 /// present in the process environment, override (scalars) or stack
 /// (incrementals) on top of the profile chain + `make.conf`. Called once,
@@ -827,7 +851,7 @@ const ENV_SCALAR_VARS: &[&str] = &[
 /// gives the env layer (after `conf`, before the final USE calculation).
 fn apply_env_layer(scalars: &mut HashMap<String, String>, config: &mut Config) {
     for &name in ENV_INCREMENTAL_VARS {
-        let Ok(value) = std::env::var(name) else {
+        let Some(value) = config_env_var(name) else {
             continue;
         };
         match name {
@@ -854,7 +878,7 @@ fn apply_env_layer(scalars: &mut HashMap<String, String>, config: &mut Config) {
         scalars.insert(name.to_string(), value);
     }
     for &name in ENV_SCALAR_VARS {
-        if let Ok(value) = std::env::var(name) {
+        if let Some(value) = config_env_var(name) {
             scalars.insert(name.to_string(), value);
         }
     }
@@ -1692,7 +1716,7 @@ pub fn resolve_config(
         .cloned()
         .collect();
     for var in env_expand_names {
-        if let Ok(value) = std::env::var(&var) {
+        if let Some(value) = config_env_var(&var) {
             scalars.insert(var, value);
         }
     }
@@ -3870,25 +3894,21 @@ sync-uri = file:///srv/pkgs
         );
     }
 
-    /// Serial env-scoping guard -- `resolve_config` reads the process
-    /// environment (`apply_env_layer`), which parallel test threads share.
-    fn with_env(vars: &[(&str, &str)], f: impl FnOnce()) {
-        use std::sync::Mutex;
-        static LOCK: Mutex<()> = Mutex::new(());
-        let _g = LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let saved: Vec<(String, Option<String>)> = vars
+    /// Runs `f` with `apply_env_layer` seeing exactly `vars` as the
+    /// process environment -- via a thread-local override
+    /// (`TEST_ENV_OVERRIDE`), so it never touches real `std::env` and
+    /// can't race the many other test threads calling `resolve_config`
+    /// concurrently.
+    fn with_test_env(vars: &[(&str, &str)], f: impl FnOnce()) {
+        let map: HashMap<String, String> = vars
             .iter()
-            .map(|(k, _)| (k.to_string(), std::env::var(k).ok()))
+            .map(|(k, v)| (k.to_string(), v.to_string()))
             .collect();
-        for (k, v) in vars {
-            std::env::set_var(k, v);
-        }
-        f();
-        for (k, v) in saved {
-            match v {
-                Some(v) => std::env::set_var(&k, v),
-                None => std::env::remove_var(&k),
-            }
+        TEST_ENV_OVERRIDE.with(|o| *o.borrow_mut() = Some(map));
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f));
+        TEST_ENV_OVERRIDE.with(|o| *o.borrow_mut() = None);
+        if let Err(e) = result {
+            std::panic::resume_unwind(e);
         }
     }
 
@@ -3917,27 +3937,16 @@ sync-uri = file:///srv/pkgs
         std::os::unix::fs::symlink(&prof, &make_profile).unwrap();
 
         // No env: baseline.
-        with_env(
-            &[
-                ("ACCEPT_KEYWORDS", ""),
-                ("USE", ""),
-                ("VIDEO_CARDS", ""),
-                ("CFLAGS", ""),
-            ],
-            || {
-                for k in ["ACCEPT_KEYWORDS", "USE", "VIDEO_CARDS", "CFLAGS"] {
-                    std::env::remove_var(k);
-                }
-                let c = resolve_config(&root, &repo, &[], &[], "testrepo", &HashMap::new())
-                    .expect("resolves");
-                assert!(c.accept_keywords.contains("amd64"));
-                assert!(!c.accept_keywords.contains("~amd64"));
-                assert!(c.use_flags.contains("video_cards_nvidia"));
-                assert!(!c.other_vars.contains_key("CFLAGS"));
-            },
-        );
+        with_test_env(&[], || {
+            let c = resolve_config(&root, &repo, &[], &[], "testrepo", &HashMap::new())
+                .expect("resolves");
+            assert!(c.accept_keywords.contains("amd64"));
+            assert!(!c.accept_keywords.contains("~amd64"));
+            assert!(c.use_flags.contains("video_cards_nvidia"));
+            assert!(!c.other_vars.contains_key("CFLAGS"));
+        });
 
-        with_env(
+        with_test_env(
             &[
                 ("ACCEPT_KEYWORDS", "~amd64"),
                 ("USE", "-baseflag envflag"),
