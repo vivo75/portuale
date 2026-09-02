@@ -5097,6 +5097,12 @@ pub fn run(args: &[String]) -> ExitCode {
     // already-installed package is forced to re-merge (see
     // `resolve_pretend_graph`'s own `reinstall_atoms` doc comment).
     let mut reinstall_atoms: Vec<String> = Vec::new();
+    // --useoldpkg-atoms ATOMS (real `main.py:713`, `action: "append"` ->
+    // `depgraph.py:370-371` `WildcardPackageSet`): same repeatable,
+    // space-separated-per-occurrence shape as --exclude / --reinstall-atoms.
+    // For a matching package, prefer an existing binary package over a
+    // newer unbuilt ebuild (see `portage_repo::set_useoldpkg_atoms`).
+    let mut useoldpkg_atoms: Vec<String> = Vec::new();
     // --rebuild-if-new-slot (real `y_or_n`, default "y" -- `main.py:955`):
     // the `:=` slot-operator auto-rebuild. Only `=n` disables it.
     let mut rebuild_if_new_slot = true;
@@ -5559,6 +5565,16 @@ pub fn run(args: &[String]) -> ExitCode {
             i += 2;
         } else if let Some(value) = arg.strip_prefix("--reinstall-atoms=") {
             reinstall_atoms.extend(value.split_whitespace().map(String::from));
+            i += 1;
+        } else if arg == "--useoldpkg-atoms" {
+            let Some(value) = args.get(i + 1) else {
+                eprintln!("emerge: option \"--useoldpkg-atoms\" requires an argument");
+                return ExitCode::from(2);
+            };
+            useoldpkg_atoms.extend(value.split_whitespace().map(String::from));
+            i += 2;
+        } else if let Some(value) = arg.strip_prefix("--useoldpkg-atoms=") {
+            useoldpkg_atoms.extend(value.split_whitespace().map(String::from));
             i += 1;
         } else if arg == "--rebuild-exclude" || arg == "--rebuild-ignore" {
             let is_exclude = arg == "--rebuild-exclude";
@@ -6770,6 +6786,11 @@ pub fn run(args: &[String]) -> ExitCode {
     // `portage_repo::set_package_moves_enabled`. Harmless for every
     // action (a no-op when `y`).
     portage_repo::set_package_moves_enabled(package_moves);
+
+    // `--useoldpkg-atoms ATOMS`: a process-global read during candidate
+    // selection (see `portage_repo::set_useoldpkg_atoms`). Set once here,
+    // before any `resolve_pretend_graph` call; empty is a strict no-op.
+    portage_repo::set_useoldpkg_atoms(useoldpkg_atoms);
 
     // Real actions.py: "if '--tree' in emerge_config.opts and '--columns'
     // in emerge_config.opts: print(...); return 1" -- checked once

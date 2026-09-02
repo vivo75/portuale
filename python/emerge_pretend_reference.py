@@ -311,6 +311,10 @@ _global_updates_cache = None
 # profiles/updates/ move is a no-op. Set by run() before resolution.
 # Mirrors portage-repo's PACKAGE_MOVES_ENABLED.
 _package_moves_enabled = True
+# --useoldpkg-atoms (real WildcardPackageSet, main.py:713): for a matching
+# package, prefer an existing binary package over a newer unbuilt ebuild.
+# Set by run() before resolution. Mirrors portage-repo's USEOLDPKG_ATOMS.
+_useoldpkg_atoms = []
 
 
 def _bare_cp(s):
@@ -5342,6 +5346,26 @@ def resolve_pretend(
     if not matched:
         return ("no_visible_candidate",)
 
+    # --useoldpkg-atoms (real depgraph.py:7936 + matched_oldpkg /
+    # visible_matches): for a package matching one of these atoms, prefer
+    # a *built* (binary) candidate over any newer *unbuilt* ebuild. Empty
+    # (the default) and a pool with no binary candidates are both no-ops.
+    # Mirrors portage-repo/src/lib.rs's resolve_pretend.
+    if _useoldpkg_atoms:
+        oldpkg = [
+            c
+            for c in matched
+            if c["source"] == "binary"
+            and any(
+                _matches_config_entry(
+                    a, f"{category}/{package}-{c['version']}", category, package
+                )
+                for a in _useoldpkg_atoms
+            )
+        ]
+        if oldpkg:
+            matched = oldpkg
+
     # installed_pairs carries each installed version's own main slot, so
     # "is this candidate already installed" is answered the way real
     # output.py::_get_installed_best does -- against
@@ -7854,7 +7878,8 @@ _VALUE_OPTIONS = [
     ("--sync-submodule", None),
     ("--sysroot", None),
     ("--use-ebuild-visibility", None),
-    ("--useoldpkg-atoms", None),
+    # --useoldpkg-atoms IS implemented (prefer an existing binary package
+    # over a newer unbuilt ebuild for a matching atom).
     ("--usepkg", "-k"),
     ("--usepkgonly", "-K"),
     ("--usepkg-exclude-live", None),
@@ -11293,6 +11318,7 @@ def run(args):
     deep = 0
     excluded = []
     reinstall_atoms = []
+    useoldpkg_atoms = []
     rebuild_if_new_slot = True
     rebuild_if_unbuilt = None
     rebuild_if_new_rev = None
@@ -11565,6 +11591,20 @@ def run(args):
             i += 2
         elif arg.startswith("--reinstall-atoms="):
             reinstall_atoms.extend(arg[len("--reinstall-atoms=") :].split())
+            i += 1
+        elif arg == "--useoldpkg-atoms":
+            # Real "action": "append" -> WildcardPackageSet -- same
+            # repeatable/space-separated shape as --reinstall-atoms.
+            if i + 1 >= len(args):
+                print(
+                    'emerge: option "--useoldpkg-atoms" requires an argument',
+                    file=sys.stderr,
+                )
+                return 2
+            useoldpkg_atoms.extend(args[i + 1].split())
+            i += 2
+        elif arg.startswith("--useoldpkg-atoms="):
+            useoldpkg_atoms.extend(arg[len("--useoldpkg-atoms=") :].split())
             i += 1
         elif arg in ("--rebuild-exclude", "--rebuild-ignore"):
             if i + 1 >= len(args):
@@ -12569,6 +12609,12 @@ def run(args):
     # profiles/updates/. Mirrors pretend.rs.
     global _package_moves_enabled
     _package_moves_enabled = package_moves
+
+    # --useoldpkg-atoms: a process-global read during candidate selection
+    # (see resolve_pretend). Set once here, before any resolve_pretend_graph
+    # call; empty is a strict no-op. Mirrors pretend.rs.
+    global _useoldpkg_atoms
+    _useoldpkg_atoms = useoldpkg_atoms
 
     # Real actions.py: "if '--tree' in emerge_config.opts and '--columns'
     # in emerge_config.opts: print(...); return 1" -- checked once

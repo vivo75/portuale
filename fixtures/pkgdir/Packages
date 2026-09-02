@@ -31,3 +31,13 @@ SLOT: 0
 USE:
 BUILD_ID: 1
 BUILD_TIME: 2000
+
+CPV: dev-libs/useoldpkgpkg-1.0
+DEFINED_PHASES: -
+DESCRIPTION: fixture package: old binary 1.0 here, newer ebuild 2.0 in the tree -- --useoldpkg-atoms
+EAPI: 8
+IUSE:
+KEYWORDS: amd64
+SLOT: 0
+USE:
+BUILD_ID: 1

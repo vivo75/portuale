@@ -655,6 +655,41 @@ CASES = [
         0,
     ),
     (
+        "--useoldpkg-atoms: prefer the old binary over the newer ebuild",
+        ["--pretend", "--usepkg", "--useoldpkg-atoms", "dev-libs/useoldpkgpkg", "dev-libs/useoldpkgpkg"],
+        0,
+    ),
+    (
+        "--useoldpkg-atoms: the newer ebuild still wins by default",
+        ["--pretend", "--usepkg", "dev-libs/useoldpkgpkg"],
+        0,
+    ),
+    (
+        "--useoldpkg-atoms: inert without --usepkg (no binary in the pool)",
+        ["--pretend", "--useoldpkg-atoms", "dev-libs/useoldpkgpkg", "dev-libs/useoldpkgpkg"],
+        0,
+    ),
+    (
+        "--useoldpkg-atoms: a wildcard atom matches",
+        ["--pretend", "--usepkg", "--useoldpkg-atoms", "dev-libs/*", "dev-libs/useoldpkgpkg"],
+        0,
+    ),
+    (
+        "--useoldpkg-atoms=ATOM inline form",
+        ["--pretend", "--usepkg", "--useoldpkg-atoms=dev-libs/useoldpkgpkg", "dev-libs/useoldpkgpkg"],
+        0,
+    ),
+    (
+        "--useoldpkg-atoms: a non-matching atom leaves the ebuild winning",
+        ["--pretend", "--usepkg", "--useoldpkg-atoms", "dev-libs/binaryonlypkg", "dev-libs/useoldpkgpkg"],
+        0,
+    ),
+    (
+        "--useoldpkg-atoms with no argument is a usage error",
+        ["--pretend", "dev-libs/useoldpkgpkg", "--useoldpkg-atoms"],
+        2,
+    ),
+    (
         "--rebuilt-binaries: off by default, stays already-installed",
         ["--pretend", "--usepkg", "--selective", "dev-libs/rebuiltbinarypkg"],
         0,
@@ -3161,6 +3196,41 @@ def test_usepkgonly_defaults_binpkg_respect_use_off(emerge_binary, fixture_env):
                                              '[binary  N     ] dev-libs/binaryusemismatchpkg-1.0  USE="foo"',
                                          ]
     assert result.stderr == ""
+
+
+def test_useoldpkg_atoms_prefers_the_old_binary_over_a_newer_ebuild(
+    emerge_binary, emerge_pretend_python, fixture_env
+):
+    """--useoldpkg-atoms ATOMS (real main.py:713 -> WildcardPackageSet;
+    depgraph.py:7936 + matched_oldpkg/visible_matches): for a matching
+    package, prefer an existing binary package over a newer unbuilt
+    ebuild. dev-libs/useoldpkgpkg: binary 1.0 in PKGDIR, ebuild 2.0 in
+    the tree. Only bites under --usepkg (no binary in the pool
+    otherwise)."""
+    default = _run(
+        [str(emerge_binary)], ["--pretend", "--usepkg", "dev-libs/useoldpkgpkg"], fixture_env
+    )
+    assert default.stdout.splitlines() == ["[ebuild  N     ] dev-libs/useoldpkgpkg-2.0 "]
+
+    old = _run(
+        [str(emerge_binary)],
+        ["--pretend", "--usepkg", "--useoldpkg-atoms", "dev-libs/useoldpkgpkg", "dev-libs/useoldpkgpkg"],
+        fixture_env,
+    )
+    assert old.stdout.splitlines() == ["[binary  N     ] dev-libs/useoldpkgpkg-1.0 "]
+    assert old.stdout == _run(
+        emerge_pretend_python,
+        ["--pretend", "--usepkg", "--useoldpkg-atoms", "dev-libs/useoldpkgpkg", "dev-libs/useoldpkgpkg"],
+        fixture_env,
+    ).stdout
+
+    # Without --usepkg the binary is never in the pool, so it's inert.
+    inert = _run(
+        [str(emerge_binary)],
+        ["--pretend", "--useoldpkg-atoms", "dev-libs/useoldpkgpkg", "dev-libs/useoldpkgpkg"],
+        fixture_env,
+    )
+    assert inert.stdout == default.stdout
 
 
 def _binscan_configroot(tmp_path, fixtures_root, binpkg_files):

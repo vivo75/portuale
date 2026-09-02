@@ -357,7 +357,10 @@ pub const VALUE_OPTIONS: &[(&str, Option<&str>)] = &[
     ("--sync-submodule", None),
     ("--sysroot", None),
     ("--use-ebuild-visibility", None),
-    ("--useoldpkg-atoms", None),
+    // `--useoldpkg-atoms ATOMS` IS implemented -- for a matching package,
+    // prefer an existing binary package over a newer unbuilt ebuild (see
+    // `portage_repo::set_useoldpkg_atoms`; only bites under
+    // `--usepkg`/`--getbinpkg`).
     ("--usepkg", Some("-k")),
     ("--usepkgonly", Some("-K")),
     ("--usepkg-exclude-live", None),

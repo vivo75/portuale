@@ -343,8 +343,14 @@ dev/test context — see also the `chown` note below).
   walk is the whole observable delta. New `resolve_pretend_graph`
   `complete` param + `portage_repo::complete_graph_auto_enable`, new
   `completegraphpkg` fixture).
-  Remaining: `--useoldpkg-atoms`,
-  `--quickpkg-direct`,
+  **Shipped 2026-09-02 (batch 8): `--useoldpkg-atoms ATOMS`** (real
+  `main.py:713` → `WildcardPackageSet`; `depgraph.py:7936` +
+  `matched_oldpkg` / `visible_matches` — for a matching package, prefer
+  an existing binary package over a newer unbuilt ebuild. New
+  `portage_repo::set_useoldpkg_atoms` process-global + a `matched`
+  restriction in `resolve_pretend`; only bites under
+  `--usepkg`/`--getbinpkg`; new `useoldpkgpkg` fixture).
+  Remaining: `--quickpkg-direct`,
   `--autounmask-continue` / `--autounmask-backtrack`.
 
 ### G. Shell backend

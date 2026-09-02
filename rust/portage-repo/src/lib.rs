@@ -60,7 +60,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
-use std::sync::OnceLock;
+use std::sync::{OnceLock, RwLock};
 
 pub fn config_root_from_env() -> PathBuf {
     std::env::var_os("PORTAGE_CONFIGROOT")
@@ -263,6 +263,41 @@ pub fn global_package_updates() -> &'static [UpdateCmd] {
         }
         cmds
     })
+}
+
+/// `--useoldpkg-atoms ATOMS` (real `main.py:713`, `action: "append"` ->
+/// `depgraph.py:370-371`: `WildcardPackageSet(atoms)`). For a package
+/// matching one of these atoms, real portage's `_select_pkg` collects
+/// the *built* (binary) candidates into `matched_oldpkg`
+/// (`depgraph.py:7936`/`8337`) and, when that list is non-empty,
+/// restricts `visible_matches` -- and therefore the best-version pick --
+/// to them: "prefer matching binary packages over newer unbuilt
+/// packages" (`--help`). Only reachable when `--usepkg`/`--getbinpkg`
+/// puts binary candidates in the pool at all. A process-global set once
+/// by the CLI layer -- the same env-free pattern `--package-moves` /
+/// `--color`'s override map use, so it needn't thread through
+/// `resolve_pretend`'s / `resolve_pretend_graph`'s already-huge
+/// signatures. Same two-tier `matches_config_entry` wildcard matcher
+/// `--reinstall-atoms` / `--exclude` already use.
+static USEOLDPKG_ATOMS: RwLock<Vec<String>> = RwLock::new(Vec::new());
+
+/// Set by `pretend.rs` from `--useoldpkg-atoms ATOMS` before any
+/// resolution. Default (never called) is empty -- a strict no-op.
+pub fn set_useoldpkg_atoms(atoms: Vec<String>) {
+    *USEOLDPKG_ATOMS.write().unwrap() = atoms;
+}
+
+/// Whether `cat/pkg-version` matches an atom in the current
+/// `--useoldpkg-atoms` set (real `useoldpkg_atoms.findAtomForPackage`).
+fn useoldpkg_atom_matches(category: &str, package: &str, version: &str) -> bool {
+    let atoms = USEOLDPKG_ATOMS.read().unwrap();
+    if atoms.is_empty() {
+        return false;
+    }
+    let cpv = format!("{category}/{package}-{version}");
+    atoms
+        .iter()
+        .any(|a| matches_config_entry(a, &cpv, category, package))
 }
 
 /// Real `update_dbentry` for a single `move`, applied to one atom token:
@@ -6965,6 +7000,35 @@ pub fn resolve_pretend(
     if matched.is_empty() {
         return Ok(PretendOutcome::NoVisibleCandidate);
     }
+
+    // `--useoldpkg-atoms ATOMS` (real `depgraph.py:7936` +
+    // `matched_oldpkg`/`visible_matches`): for a package matching one of
+    // these atoms, prefer a *built* (binary) candidate over any newer
+    // *unbuilt* ebuild. Real portage collects the built matches into
+    // `matched_oldpkg` and, when non-empty, restricts `visible_matches`
+    // to them -- so every downstream check here (the `--exclude` /
+    // `--update` already-installed lookups and the final best-version
+    // pick) sees only the old binaries. Empty `--useoldpkg-atoms` (the
+    // default) is a strict no-op; so is a run with no binary candidates
+    // in the pool at all (no `--usepkg`/`--getbinpkg`). See
+    // `set_useoldpkg_atoms`'s own doc comment.
+    let matched: Vec<&str> = {
+        let oldpkg: Vec<&str> = matched
+            .iter()
+            .copied()
+            .filter(|m| {
+                by_str.get(m).is_some_and(|c| {
+                    c.source == CandidateSource::Binary
+                        && useoldpkg_atom_matches(&atom.category, &atom.package, &c.version)
+                })
+            })
+            .collect();
+        if oldpkg.is_empty() {
+            matched
+        } else {
+            oldpkg
+        }
+    };
 
     // `installed_pairs` carries each installed version's own main slot,
     // so "is this candidate already installed" can be answered the way
