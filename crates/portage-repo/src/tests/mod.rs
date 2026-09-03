@@ -1588,6 +1588,7 @@ mod complete_graph;
 mod conflict_use_display;
 mod cycles;
 mod depclean;
+mod eliminate;
 mod entry;
 mod force_scan;
 mod graph;
