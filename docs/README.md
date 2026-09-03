@@ -26,6 +26,8 @@ holds everything else.
 | Doc | What it is |
 |---|---|
 | [`history/porting-strategy-prompt.md`](history/porting-strategy-prompt.md) | The original porting-strategy prompt, superseded by `agent-context.md`. Kept for the original derivation. |
+| [`history/scope-backlog-2026-09-03.md`](history/scope-backlog-2026-09-03.md) | `scope-backlog.md` before the 2026-09-03 compaction (its shipped-item narrative). |
+| [`history/agent-context-open-backlog-2026-09-03.md`](history/agent-context-open-backlog-2026-09-03.md) | `agent-context.md`'s "Open backlog" section before it was replaced by a pointer (2026-09-03). |
 
 Co-located READMEs that stay next to their code:
 [`../bin/README.md`](../bin/README.md),
