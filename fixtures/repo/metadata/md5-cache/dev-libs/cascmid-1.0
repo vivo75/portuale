@@ -1,0 +1,8 @@
+DEFINED_PHASES=-
+DESCRIPTION=fixture: slot-op cascade -- mid, tree ebuild bumped to 0/2
+EAPI=8
+IUSE=
+KEYWORDS=amd64
+RDEPEND=dev-libs/casctarget:=
+SLOT=0/2
+_md5_=0000000000000000000000000000000

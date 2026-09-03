@@ -468,6 +468,16 @@ pub struct Config {
     /// CLI-option carrier the resolver reads, not profile state; a
     /// hand-built `Config` literal leaves it `false`.
     pub autounmask_backtrack: bool,
+    /// The `@world ∪ @selected ∪ @system` atom list, populated by the CLI
+    /// layer **only when complete-graph mode is active** (real
+    /// `_complete_graph`'s deep re-walk of the required sets). The
+    /// resolver uses it (`required_set_reachable_cps`) to gate the
+    /// slot-operator-rebuild scan -- real only slot-op-rebuilds a
+    /// consumer reachable from those sets. Empty when not in complete
+    /// mode (and for any hand-built `Config`), which disables the scan
+    /// entirely, matching real (`emerge -p <atom>` with no installed
+    /// change triggers no slot-op rebuild).
+    pub complete_seed_atoms: Vec<String>,
     /// (atom-or-wildcard string, ordered env-file names) pairs from
     /// `/etc/portage/package.env` -- real `config.py:894`'s
     /// `grabdict_package(.../package.env)`. Each named file lives under

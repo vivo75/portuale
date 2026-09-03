@@ -10682,6 +10682,49 @@ permissive shape as the sibling flags). Contract test:
 → just the target Upgrade, no consumer reinstall, no "causing
 rebuilds:" block, `"abi_rebuilds":[]`.
 
+**Increment 4 — complete-graph reachability gate, the multi-level
+cascade, and real's `r` marker + `str(Package)` block rendering
+(2026-09-03).** Container cross-check (`TEST/scripts/40-slotop-cascade.sh`,
+real portage 3.0.82.2) pinned down three things Increments 1–3 got
+wrong or missing:
+
+- **The trigger is gated on the graph, not the whole vdb.** Real only
+  slot-op-rebuilds a consumer that `_complete_graph`'s deep required-set
+  re-walk reaches — a member of `@world ∪ @selected ∪ @system`, or a
+  transitive *forward* installed-dep of one. `slot_operator_rebuild_entries`
+  now takes a `reachable: &HashSet<(cat,pkg)>` (from the new
+  `required_set_reachable_cps` BFS over the installed dep graph) and
+  skips any consumer not in it; the set is empty except when
+  complete-graph mode is active (`complete_seed_atoms` on `Config`,
+  populated by the CLI layer only then), so a plain `emerge -p` is
+  unaffected. This *removes* the Increment-1 over-fire for a consumer
+  that no set reaches.
+- **The cascade.** A scheduled rebuild lands at its *tree ebuild*'s
+  `SLOT` sub-slot, not the vdb's; when those differ (a sub-slot bump
+  since install) the rebuild is itself a slot shift, so the scan now
+  iterates to a fixpoint — chasing the rebuilt consumer's own stale
+  built `:=` consumers. `abi_rebuilds` accumulates every level.
+- **`r` + block rendering.** Real tags every forced slot-op rebuild
+  *and* the triggering provider upgrade with the red `r`
+  (`PkgAttrDisplay.force_reinstall`); `pretend.rs`'s `field` closure
+  now sets it from a `force_reinstall_cps` set (both sides of every
+  `abi_rebuilds` edge). A rebuild whose sub-slot changed also gets the
+  `[oldver]` bracket (real `output.py::_get_installed_best` 723–732).
+  `_show_abi_rebuild_info` now prints each side as real's `str(Package)`
+  — `(cpv:slot/sub_slot::repo, ebuild scheduled for merge[ to '<root>'])`
+  — not a bare cpv.
+
+Container gate: `TEST/scripts/40-slotop-cascade.sh` builds the 3-level
+chain `casctail → cascmid → casctarget` (cascmid's tree ebuild bumped
+0/1→0/2) in `buildovl` + a faked vdb, and the `portuale -p` vs real
+`emerge -p` diff of the merge list **and** the full "causing rebuilds:"
+block is **empty**. Contract tests:
+`test_slot_operator_rebuild_reinstalls_a_stale_equals_consumer` (rewritten
+for the `r` marker + world-gated fixture + `str(Package)` block) and
+`test_slot_operator_rebuild_cascades_through_a_multi_level_chain` (the
+3-level fixture, bare + `--json` + `--tree` lockstep). New fixtures
+`dev-libs/{casctarget,cascmid,casctail}`.
+
 ### `FEATURES=buildpkg` / `emerge --buildpkg` / `-b`: a binpkg as a side effect of a source merge
 
 Real `_emerge/EbuildBinpkg`: after `src_install` and **before** the vdb

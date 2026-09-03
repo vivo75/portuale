@@ -6140,17 +6140,28 @@ def _autounmask_use_atom_form(resolved, all_candidates, category, package, confi
     )
 
 
-def _slot_operator_rebuild_entries(root, repos, entries):
+def _slot_operator_rebuild_entries(root, repos, entries, reachable):
     """Real depgraph's _slot_operator_trigger_reinstalls +
     _slot_operator_replace_installed (the
-    @__auto_slot_operator_replace_installed__ set), single-pass v1: an
-    installed package whose vdb *DEPEND carries a built slot-operator
-    atom (cat/pkg:S/SS=) whose bound S/SS no longer matches how this run
-    leaves cat/pkg in that same slot is scheduled for a reinstall.
+    @__auto_slot_operator_replace_installed__ set): an installed package
+    whose vdb *DEPEND carries a built slot-operator atom (cat/pkg:S/SS=)
+    whose bound S/SS no longer matches how this run leaves cat/pkg in
+    that same slot is scheduled for a reinstall.
+
+    The scan is gated on `reachable` -- real only slot-op-rebuilds a
+    consumer that is in the graph in complete mode (a member of, or a
+    forward-installed-dep of a member of, @world/@selected/@system).
+    `reachable` empty (not complete mode) means no rebuilds at all.
+
+    Cascade (real _backtrack_depgraph re-drive): a scheduled rebuild
+    lands at its *tree ebuild*'s SLOT sub-slot, not the vdb's; when those
+    differ the rebuild is itself a slot shift, so the scan iterates to a
+    fixpoint, chasing the consumer's own stale built-slot-op consumers.
+
     Returns (new_entries, abi_rebuilds), the latter being the sorted,
     deduped (provider-cpv, consumer-cpv) pairs real _compute_abi_rebuild_
     info records for _show_abi_rebuild_info. Mirrors portage-repo/src/
-    lib.rs's slot_operator_rebuild_entries exactly (v1 cuts and all)."""
+    lib.rs's slot_operator_rebuild_entries exactly (cuts and all)."""
     new_slot = {}
     in_graph = set()
     for entry in entries:
@@ -6167,33 +6178,78 @@ def _slot_operator_rebuild_entries(root, repos, entries):
                 continue
             resolved = max(matching, key=lambda c: c["repo_priority"])
             new_slot[(category, package)] = (version, resolved["slot"], resolved["sub_slot"])
-    if not new_slot:
+    if not new_slot or not reachable:
         return [], []
 
-    out = []
+    installed = _all_installed_packages(root)
+    # Fixpoint: each pass finds installed consumers (reachable, not
+    # already in the graph or scheduled) with a stale built `:S/SS=` dep
+    # on a `new_slot` provider; schedules them at their *tree ebuild*'s
+    # sub-slot, which -- when it differs from vdb -- becomes a fresh
+    # `new_slot` entry that the next pass chases.
+    scheduled = set()
     abi_rebuilds = []
-    for category, package, version, _slot in _all_installed_packages(root):
-        if (category, package) in in_graph:
+    while True:
+        grew = False
+        for category, package, version, _slot in installed:
+            cp = (category, package)
+            if cp in in_graph or cp in scheduled or cp not in reachable:
+                continue
+            consumer_cpv = f"{category}/{package}-{version}"
+            providers = set()
+            for key in ("RDEPEND", "PDEPEND", "DEPEND", "BDEPEND", "IDEPEND"):
+                for tok in _read_vdb_string(root, category, package, version, key).split():
+                    try:
+                        atom = Atom(tok, allow_repo=True)
+                    except Exception:
+                        continue
+                    if atom.slot_operator != "=" or atom.slot is None or atom.sub_slot is None:
+                        continue
+                    ns = new_slot.get(tuple(atom.cp.split("/", 1)))
+                    if ns is not None and atom.slot == ns[1] and atom.sub_slot != ns[2]:
+                        providers.add(f"{atom.cp}-{ns[0]}")
+            if not providers:
+                continue
+            for provider_cpv in sorted(providers):
+                abi_rebuilds.append((provider_cpv, consumer_cpv))
+            # The rebuild lands at the tree ebuild's SLOT, not the vdb's
+            # (real re-reads SLOT at merge time). A sub-slot bump here is
+            # itself a slot shift -> feed it back as a `new_slot` entry
+            # for the next fixpoint pass.
+            v_slot, v_sub = _read_vdb_slot(root, category, package, version)
+            tree = [
+                c
+                for c in list_candidates(repos, category, package)
+                if c["version"] == version
+            ]
+            slot, sub_slot = (
+                (tree[0]["slot"], tree[0]["sub_slot"]) if tree else (v_slot, v_sub)
+            )
+            new_slot[cp] = (version, slot, sub_slot)
+            scheduled.add(cp)
+            grew = True
+        if not grew:
+            break
+
+    out = []
+    for category, package, version, _slot in installed:
+        cp = (category, package)
+        if cp not in scheduled:
             continue
-        consumer_cpv = f"{category}/{package}-{version}"
-        providers = set()
-        for key in ("RDEPEND", "PDEPEND", "DEPEND", "BDEPEND", "IDEPEND"):
-            for tok in _read_vdb_string(root, category, package, version, key).split():
-                try:
-                    atom = Atom(tok, allow_repo=True)
-                except Exception:
-                    continue
-                if atom.slot_operator != "=" or atom.slot is None or atom.sub_slot is None:
-                    continue
-                ns = new_slot.get(tuple(atom.cp.split("/", 1)))
-                if ns is not None and atom.slot == ns[1] and atom.sub_slot != ns[2]:
-                    providers.add(f"{atom.cp}-{ns[0]}")
-        if not providers:
-            continue
-        for provider_cpv in providers:
-            abi_rebuilds.append((provider_cpv, consumer_cpv))
-        slot, sub_slot = _read_vdb_slot(root, category, package, version)
+        v_slot, v_sub = _read_vdb_slot(root, category, package, version)
+        ns = new_slot.get(cp)
+        slot, sub_slot = (ns[1], ns[2]) if ns is not None else (v_slot, v_sub)
         repo = _read_vdb_string(root, category, package, version, "repository").strip()
+        # Real output.py::_get_installed_best (723-732): the rebuilt cpv
+        # is already installed (replace = True), so the `[oldver]` bracket
+        # shows only when the rebuild lands at a different slot/sub-slot
+        # than the installed instance -- exactly the sub-slot bump that
+        # drives the cascade.
+        oldbest = (
+            [{"version": version, "slot": v_slot, "sub_slot": v_sub, "repo": repo}]
+            if (slot, sub_slot) != (v_slot, v_sub)
+            else []
+        )
         outcome = ("reinstall", version, [], False, False, False, False, True)
         out.append(
             (
@@ -6205,7 +6261,14 @@ def _slot_operator_rebuild_entries(root, repos, entries):
                 [],
                 [],
                 "ebuild",
-                {"mask_entry": None, "unmask_entry": None, "keyword_entry": None},
+                {
+                    "mask_entry": None,
+                    "unmask_entry": None,
+                    "keyword_entry": None,
+                    "sub_slot": sub_slot,
+                    "repo_name": repo,
+                    "oldbest": oldbest,
+                },
                 None,
                 None,
                 None,
@@ -6803,6 +6866,7 @@ def resolve_pretend_graph(
     rebuild_ignore=(),
     dynamic_deps=True,
     complete=False,
+    complete_seed_atoms=(),
 ):
     """Recursively resolves every atom in `atoms` and -- for packages that
     would newly merge or upgrade -- its DEPEND+RDEPEND+BDEPEND+PDEPEND+
@@ -8461,10 +8525,23 @@ def resolve_pretend_graph(
     # --ignore-built-slot-operator-deps (real main.py:470) skips the scan
     # entirely (real portage strips the built := parts so it finds
     # nothing; same net effect).
+    #
+    # The scan is gated on reachability: real only slot-op-rebuilds a
+    # consumer that is in the graph in complete mode (a member of, or a
+    # forward-installed-dep of a member of, @world/@selected/@system).
+    # `complete_seed_atoms` is populated by the CLI layer only when
+    # complete-graph mode is active; empty means no rebuilds at all.
+    slot_op_reachable = (
+        _required_set_reachable_cps(root, complete_seed_atoms, [])
+        if complete_seed_atoms
+        else set()
+    )
     if ignore_built_slot_operator_deps or not rebuild_if_new_slot:
         slot_op_rebuilds, abi_rebuilds = [], []
     else:
-        slot_op_rebuilds, abi_rebuilds = _slot_operator_rebuild_entries(root, repos, entries)
+        slot_op_rebuilds, abi_rebuilds = _slot_operator_rebuild_entries(
+            root, repos, entries, slot_op_reachable
+        )
     entries.extend(slot_op_rebuilds)
 
     # Real _rebuild_config.trigger_rebuilds (--rebuild-if-unbuilt /
@@ -12167,9 +12244,10 @@ def _attr_display_field(
     exact order:
 
       0. I  -- interactive
-      1. N  -- new; r instead when force_reinstall (portuale has no
-               --emptytree/arg.force_reinstall concept, so always N or
-               space here -- a plain reinstall shows R at col 2)
+      1. N  -- new; r instead when force_reinstall (a slot-operator
+               ABI-rebuild -- the forced consumer rebuilds and the
+               triggering provider upgrade; a plain reinstall shows R at
+               col 2 with no r here)
       2. S  -- new_slot; R instead when replace (the cpv is already
                installed -- every Reinstall outcome)
       3. f/F/g -- fetch-restrict satisfied / unsatisfied / remote binary
@@ -14619,6 +14697,18 @@ def run(args):
     complete_if_new_use_r = complete_if_new_use is not False
     complete_if_new_ver_r = complete_if_new_ver is not False
 
+    # Real _complete_graph re-walks @world u @selected u @system; portuale
+    # feeds that same seed list into the slot-operator-rebuild reachability
+    # gate, but *only* when complete-graph mode is actually active (an
+    # upgrade/reinstall run -- fresh installs never auto-enable it, so this
+    # stays empty and the gate is a no-op there). Mirrors pretend.rs.
+    _complete_seed_atoms = sorted(
+        set(
+            list(_expand_selected(_config_root(), _root()))
+            + list(config["system_packages"])
+        )
+    )
+
     def _run_resolve(complete):
         return resolve_pretend_graph(
             _config_root(),
@@ -14665,6 +14755,7 @@ def run(args):
             rebuild_ignore,
             dynamic_deps and not nodeps,
             complete,
+            _complete_seed_atoms if (complete and _complete_seed_atoms) else (),
         )
 
     try:
@@ -14904,6 +14995,20 @@ def run(args):
         )
         return 0
 
+    # Real PkgAttrDisplay.force_reinstall (the red `r` bracket column):
+    # every (cat, pkg) on either side of a slot-operator ABI-rebuild edge
+    # -- the triggering provider upgrade AND every forced consumer rebuild
+    # in the cascade. Real yields the
+    # @__auto_slot_operator_replace_installed__ set with
+    # force_reinstall=True and tags the provider via _forced_rebuilds.
+    # Mirrors pretend.rs's force_reinstall_cps.
+    force_reinstall_cps = set()
+    for provider_cpv, consumer_cpv in result["abi_rebuilds"]:
+        for cpv in (provider_cpv, consumer_cpv):
+            split = _split_cpv(cpv)
+            if split is not None:
+                force_reinstall_cps.add((split[0], split[1]))
+
     def print_entry_line(entry, indent):
         # One entry's own display line, `indent` prepended right before
         # the category/package text (empty for flat mode, print_tree's
@@ -15019,18 +15124,25 @@ def run(args):
                 )
             return "[" + ", ".join(parts) + "]"
 
+        # Real PkgAttrDisplay.force_reinstall (the red `r` column): this
+        # (cat, pkg) is on either side of a slot-operator ABI-rebuild
+        # edge, or it *is* one of the forced consumer rebuilds
+        # (outcome[7]). Mirrors pretend.rs's own `force_reinstall`.
+        force_reinstall = (category, package) in force_reinstall_cps or (
+            tag == "reinstall" and len(outcome) > 7 and outcome[7]
+        )
+
         def field(new=False, new_slot=False, replace=False, new_version=False, downgrade=False):
             # The fixed-width attr_display field flags this entry
             # contributes, shared by every merge outcome below (see
-            # _attr_display_field). force_reinstall is always False here;
-            # remote_binary (the `g` column) is prov["remote_binary"] --
-            # real attr_display.remote_binary = pkg.remote for a
-            # --getbinpkg binary not yet in $PKGDIR. Mirrors pretend.rs's
-            # own `field` closure.
+            # _attr_display_field). remote_binary (the `g` column) is
+            # prov["remote_binary"] -- real attr_display.remote_binary =
+            # pkg.remote for a --getbinpkg binary not yet in $PKGDIR.
+            # Mirrors pretend.rs's own `field` closure.
             return _attr_display_field(
                 interactive,
                 new,
-                False,
+                force_reinstall,
                 new_slot,
                 replace,
                 fetch_restrict and not fetch_restrict_satisfied,
@@ -15547,17 +15659,49 @@ def run(args):
     # Real _show_abi_rebuild_info (depgraph.py:1210), gated on
     # --verbose-slot-rebuilds != "n" (default on, NOT --verbose), after
     # the merge list / autounmask blocks and before the changed-deps
-    # report. writemsg_stdout -> stdout. Mirrors pretend.rs.
+    # report. writemsg_stdout -> stdout. Real prints each package as
+    # str(Package) (Package.__str__):
+    # "(cpv:slot/sub_slot::repo, ebuild scheduled for merge[ to '<root>'])".
+    # Mirrors pretend.rs.
     if verbose_slot_rebuilds and result["abi_rebuilds"]:
+        by_cpv = {}
+        for e in entries:
+            _oc = e[2]
+            _tag = _oc[0]
+            if _tag in ("new", "reinstall"):
+                _ver = _oc[1]
+            elif _tag in ("upgrade", "downgrade"):
+                _ver = _oc[2]
+            else:
+                continue
+            _prov = e[8] if isinstance(e[8], dict) else {}
+            by_cpv[f"{e[0]}/{e[1]}-{_ver}"] = (
+                e[4] or "0",
+                _prov.get("sub_slot") or "0",
+                _prov.get("repo_name") or "",
+                "binary" if e[7] == "binary" else "ebuild",
+            )
+        _root_suffix = "" if _root() == "/" else f" to '{_root()}'"
+
+        def _abi_pkg_str(cpv):
+            info = by_cpv.get(cpv)
+            if info is None:
+                return cpv
+            slot, sub_slot, repo, type_name = info
+            return (
+                f"({cpv}:{slot}/{sub_slot}::{repo}, "
+                f"{type_name} scheduled for merge{_root_suffix})"
+            )
+
         print()
         print("The following packages are causing rebuilds:")
         print()
         provider = None
         for child, parent in result["abi_rebuilds"]:
             if child != provider:
-                print(f"  {child} causes rebuilds for:")
+                print(f"  {_abi_pkg_str(child)} causes rebuilds for:")
                 provider = child
-            print(f"    {parent}")
+            print(f"    {_abi_pkg_str(parent)}")
 
     # --changed-deps-report: real _changed_deps_report's own WARN block,
     # ported verbatim (real portage colorizes it when the terminal

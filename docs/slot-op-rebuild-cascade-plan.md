@@ -1,6 +1,20 @@
 # Plan: slot-operator-rebuild — complete-graph mode + cascade + `r` marker
 
-*Working plan — 2026-09-03.*
+*Working plan — 2026-09-03.* **STATUS: COMPLETE (both slices shipped
+2026-09-03).** Slice 1 (`required_set_reachable_cps`, commit `bc1fbaa`).
+Slice 2 (the B rework: reachability-gated scan, sub-slot cascade to a
+fixpoint, `r` marker, `[oldver]` bracket on a slot-shifted rebuild,
+`str(Package)` "causing rebuilds:" rendering). Container-verified
+byte-for-byte against real portage 3.0.82.2 —
+`TEST/scripts/40-slotop-cascade.sh` diff is empty. Contract tests:
+`test_slot_operator_rebuild_reinstalls_a_stale_equals_consumer`
+(rewritten), `test_slot_operator_rebuild_cascades_through_a_multi_level_chain`
+(new). See `docs/what-this-proves.md` "Increment 4".
+
+One documented cut kept from the analysis below: a cascade rebuild's own
+`RDEPEND`/`DEPEND` are **not** re-walked, so a genuinely *new* dependency
+of a forced rebuild is missed (a pure sub-slot cascade — the only kind
+the fixture exercises — has none).
 
 ## What the real container showed
 

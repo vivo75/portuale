@@ -2502,7 +2502,9 @@ def _slotbind_root(tmp_path):
     SLOT="2" (sub-slot 2), plus two := consumers -- slotbindconsumer,
     bound to the stale "dev-libs/slotbindtarget:2/2=", and slotbindfresh,
     already bound to "dev-libs/slotbindtarget:2/9=" (what -2.0 provides).
-    PORTAGE_CONFIGROOT stays at the shared fixtures so the
+    Both consumers are in @world so the slot-operator-rebuild scan's
+    reachability gate (real _complete_graph's required-set re-walk) can
+    see them. PORTAGE_CONFIGROOT stays at the shared fixtures so the
     slotbindtarget-2.0 (SLOT="2/9") ebuild is visible."""
     for name, files in {
         "slotbindtarget-1.0": {"CATEGORY": "dev-libs\n", "SLOT": "2\n", "repository": "testrepo\n"},
@@ -2523,6 +2525,9 @@ def _slotbind_root(tmp_path):
         d.mkdir(parents=True)
         for fn, content in files.items():
             (d / fn).write_text(content)
+    world = tmp_path / "var" / "lib" / "portage" / "world"
+    world.parent.mkdir(parents=True)
+    world.write_text("dev-libs/slotbindconsumer\ndev-libs/slotbindfresh\n")
     return tmp_path
 
 
@@ -2533,25 +2538,33 @@ def test_slot_operator_rebuild_reinstalls_a_stale_equals_consumer(
     slotbindconsumer's vdb RDEPEND is "dev-libs/slotbindtarget:2/2="
     (bound when the target was at SLOT="2"). Emerging the target picks
     slotbindtarget-2.0 (SLOT="2/9"), so that built ABI link is stale and
-    the consumer is scheduled for a reinstall -- `[ebuild R]`, no reason
-    annotation (a slot-operator rebuild, not --newuse/--changed-*), in
-    dependency-first merge order after the target, plus real
-    _show_abi_rebuild_info's "The following packages are causing
-    rebuilds:" block (--verbose-slot-rebuilds, default on).
-    dev-libs/slotbindfresh is already bound to "2/9=" -> NOT rebuilt."""
+    the consumer is scheduled for a reinstall -- `[ebuild rR]` (real tags
+    every forced slot-op rebuild, and the triggering upgrade, with the
+    red `r` -- PkgAttrDisplay.force_reinstall), no reason annotation (a
+    slot-operator rebuild, not --newuse/--changed-*), in dependency-first
+    merge order after the target, plus real _show_abi_rebuild_info's "The
+    following packages are causing rebuilds:" block
+    (--verbose-slot-rebuilds, default on). dev-libs/slotbindfresh is
+    already bound to "2/9=" -> NOT rebuilt. Both consumers are in @world
+    so the reachability gate (real _complete_graph's required-set
+    re-walk, which auto-enables here because the target upgrade changes
+    an installed package) lets the scan see them."""
     env = dict(fixture_env)
-    env["ROOT"] = str(_slotbind_root(tmp_path))
+    root = str(_slotbind_root(tmp_path))
+    env["ROOT"] = root
     args = ["--pretend", "dev-libs/slotbindtarget"]
     result = _run([str(emerge_binary)], args, env)
     assert result.returncode == 0
+    # Real _show_abi_rebuild_info prints each side as str(Package):
+    # "(cpv:slot/sub_slot::repo, ebuild scheduled for merge to '<root>')".
     assert result.stdout.splitlines() == [
-        "[ebuild     U  ] dev-libs/slotbindtarget-2.0 [1.0]",
-        "[ebuild   R    ] dev-libs/slotbindconsumer-1.0 ",
+        "[ebuild  r  U  ] dev-libs/slotbindtarget-2.0 [1.0]",
+        "[ebuild  rR    ] dev-libs/slotbindconsumer-1.0 ",
         "",
         "The following packages are causing rebuilds:",
         "",
-        "  dev-libs/slotbindtarget-2.0 causes rebuilds for:",
-        "    dev-libs/slotbindconsumer-1.0",
+        f"  (dev-libs/slotbindtarget-2.0:2/9::testrepo, ebuild scheduled for merge to '{root}') causes rebuilds for:",
+        f"    (dev-libs/slotbindconsumer-1.0:0/0::testrepo, ebuild scheduled for merge to '{root}')",
     ]
     # Full Rust-vs-Python lockstep, incl. --json (slot_operator_rebuild +
     # abi_rebuilds), and --verbose-slot-rebuilds=n dropping the block.
@@ -2595,6 +2608,88 @@ def test_ignore_built_slot_operator_deps_suppresses_the_rebuild(
         rust = _run([str(emerge_binary)], these, env)
         assert rust.stdout == python.stdout, (these, rust.stdout, python.stdout)
     assert '"abi_rebuilds":[]' in _run([str(emerge_binary)], args + ["--json"], env).stdout
+
+
+def _slotcascade_root(tmp_path):
+    """A test-local ROOT for the multi-level slot-operator cascade: a
+    three-package chain casctail -> cascmid -> casctarget, all installed
+    at sub-slot 0/1. The tree ebuilds: casctarget bumps 0/1 -> 0/2
+    (the -2.0 upgrade), cascmid's own tree ebuild is already at 0/2
+    while its vdb still records 0/1, casctail's tree ebuild stays 0/1.
+
+    Emerging casctarget picks -2.0 (0/2) -> cascmid's built
+    "casctarget:0/1=" is stale -> cascmid rebuilt; the rebuild lands at
+    cascmid's *tree* SLOT 0/2, which makes casctail's built
+    "cascmid:0/1=" stale in turn -> casctail rebuilt (the cascade). Only
+    casctail is in @world; cascmid and casctarget are reachable from it
+    over the installed dep graph, so the reachability gate admits the
+    whole chain."""
+    for name, files in {
+        "casctarget-1.0": {"CATEGORY": "dev-libs\n", "SLOT": "0/1\n", "repository": "testrepo\n"},
+        "cascmid-1.0": {
+            "CATEGORY": "dev-libs\n",
+            "SLOT": "0/1\n",
+            "repository": "testrepo\n",
+            "RDEPEND": "dev-libs/casctarget:0/1=\n",
+        },
+        "casctail-1.0": {
+            "CATEGORY": "dev-libs\n",
+            "SLOT": "0/1\n",
+            "repository": "testrepo\n",
+            "RDEPEND": "dev-libs/cascmid:0/1=\n",
+        },
+    }.items():
+        d = tmp_path / "var" / "db" / "pkg" / "dev-libs" / name
+        d.mkdir(parents=True)
+        for fn, content in files.items():
+            (d / fn).write_text(content)
+    world = tmp_path / "var" / "lib" / "portage" / "world"
+    world.parent.mkdir(parents=True)
+    world.write_text("dev-libs/casctail\n")
+    return tmp_path
+
+
+def test_slot_operator_rebuild_cascades_through_a_multi_level_chain(
+    emerge_binary, emerge_pretend_python, fixture_env, tmp_path
+):
+    """Real _backtrack_depgraph's slot-operator re-drive to a fixpoint: a
+    scheduled rebuild lands at its tree ebuild's SLOT (not the vdb's), so
+    when cascmid's tree ebuild has moved 0/1 -> 0/2 since it was
+    installed, rebuilding it is itself a sub-slot shift that breaks
+    casctail's built "cascmid:0/1=" -- a second forced rebuild. Every
+    level is tagged with the red `r`, and every provider->consumer edge
+    shows in the "causing rebuilds:" block."""
+    env = dict(fixture_env)
+    root = str(_slotcascade_root(tmp_path))
+    env["ROOT"] = root
+    args = ["--pretend", "dev-libs/casctarget"]
+    result = _run([str(emerge_binary)], args, env)
+    assert result.returncode == 0, result.stderr
+
+    def pkgstr(cpv, slot):
+        return f"({cpv}:{slot}::testrepo, ebuild scheduled for merge to '{root}')"
+
+    assert result.stdout.splitlines() == [
+        "[ebuild  r  U  ] dev-libs/casctarget-2.0 [1.0]",
+        # cascmid's tree ebuild moved 0/1 -> 0/2, so the rebuild lands at
+        # a different sub-slot than the installed instance -> real shows
+        # the `[1.0]` bracket (output.py::_get_installed_best 723-732).
+        "[ebuild  rR    ] dev-libs/cascmid-1.0 [1.0]",
+        # casctail's tree SLOT is unchanged (0/1), so no bracket.
+        "[ebuild  rR    ] dev-libs/casctail-1.0 ",
+        "",
+        "The following packages are causing rebuilds:",
+        "",
+        f"  {pkgstr('dev-libs/cascmid-1.0', '0/2')} causes rebuilds for:",
+        f"    {pkgstr('dev-libs/casctail-1.0', '0/1')}",
+        f"  {pkgstr('dev-libs/casctarget-2.0', '0/2')} causes rebuilds for:",
+        f"    {pkgstr('dev-libs/cascmid-1.0', '0/2')}",
+    ]
+    # Full Rust-vs-Python lockstep, bare + --json + --tree.
+    for extra in ([], ["--json"], ["--tree"]):
+        python = _run(emerge_pretend_python, args + extra, env)
+        rust = _run([str(emerge_binary)], args + extra, env)
+        assert rust.stdout == python.stdout, (extra, rust.stdout, python.stdout)
 
 
 def test_use_dep_dependency_atoms_are_resolved_not_dropped(emerge_binary, fixture_env):

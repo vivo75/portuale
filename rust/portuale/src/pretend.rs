@@ -871,6 +871,11 @@ fn print_entry_line(
     color: &Colorizer,
     system_atoms: &[String],
     world_atoms: &[String],
+    // Real `PkgAttrDisplay.force_reinstall` (the red `r` column): every
+    // `(cat, pkg)` on either side of a slot-operator ABI-rebuild edge --
+    // `result.abi_rebuilds` -- so the triggering upgrade AND every forced
+    // rebuild in the cascade are tagged.
+    force_reinstall_cps: &HashSet<(String, String)>,
     blocker_lines: &mut Vec<String>,
 ) {
     // Real `_DisplayConfig` verbosity: `--quiet and 1 or --verbose and 3
@@ -925,15 +930,27 @@ fn print_entry_line(
     };
     // The fixed-width `attr_display` field flags this entry contributes,
     // shared by every merge outcome below (see `attr_display_field`).
-    // `force_reinstall` is always `false` here -- portuale has no
-    // `arg.force_reinstall` concept. `remote_binary` (the `g` column) is
+    // `force_reinstall` (the red `r` column) is set when this `(cat, pkg)`
+    // is on either side of a slot-operator ABI-rebuild edge -- real
+    // `PkgAttrDisplay.force_reinstall`, the
+    // `@__auto_slot_operator_replace_installed__` set yielded with
+    // `force_reinstall=True`. `remote_binary` (the `g` column) is
     // `entry.remote_binary` -- real `attr_display.remote_binary =
     // pkg.remote` for a `--getbinpkg` binary not yet in `$PKGDIR`.
+    let force_reinstall = force_reinstall_cps
+        .contains(&(entry.category.clone(), entry.package.clone()))
+        || matches!(
+            entry.outcome,
+            portage_repo::PretendOutcome::Reinstall {
+                slot_operator_rebuild: true,
+                ..
+            }
+        );
     let field = |new: bool, new_slot: bool, replace: bool, new_version: bool, downgrade: bool| {
         attr_display_field(
             entry.interactive,
             new,
-            false,
+            force_reinstall,
             new_slot,
             replace,
             entry.fetch_restrict && !entry.fetch_restrict_satisfied,
@@ -1273,6 +1290,7 @@ fn print_tree(
     color: &Colorizer,
     system_atoms: &[String],
     world_atoms: &[String],
+    force_reinstall_cps: &HashSet<(String, String)>,
     blocker_lines: &mut Vec<String>,
 ) {
     let mut children: HashMap<(String, String), Vec<usize>> = HashMap::new();
@@ -1308,6 +1326,7 @@ fn print_tree(
         color: &'a Colorizer,
         system_atoms: &'a [String],
         world_atoms: &'a [String],
+        force_reinstall_cps: &'a HashSet<(String, String)>,
     }
 
     fn render(
@@ -1340,6 +1359,7 @@ fn print_tree(
             ctx.color,
             ctx.system_atoms,
             ctx.world_atoms,
+            ctx.force_reinstall_cps,
             blocker_lines,
         );
         let key = (
@@ -1366,6 +1386,7 @@ fn print_tree(
         color,
         system_atoms,
         world_atoms,
+        force_reinstall_cps,
     };
     let mut rendered: HashSet<usize> = HashSet::new();
     for (i, entry) in entries.iter().enumerate() {
@@ -1394,6 +1415,7 @@ fn print_tree(
                 color,
                 system_atoms,
                 world_atoms,
+                force_reinstall_cps,
                 blocker_lines,
             );
         }
@@ -3604,6 +3626,10 @@ fn run_resume(
                 &color,
                 &[],
                 &[],
+                // `--resume --pretend` never re-resolves, so it can't
+                // know about slot-operator rebuilds -- see the marker
+                // caveat above.
+                &HashSet::new(),
                 &mut blocker_lines,
             );
         }
@@ -8496,12 +8522,33 @@ pub fn run(args: &[String]) -> ExitCode {
     let complete_if_new_use = complete_if_new_use != Some(false);
     let complete_if_new_ver = complete_if_new_ver != Some(false);
 
+    // Real `_complete_graph`'s required sets (`@world ∪ @selected ∪
+    // @system`): the resolver walks their installed closure in complete
+    // mode to gate the slot-operator-rebuild scan (real only
+    // slot-op-rebuilds a consumer reachable from these). Computed once;
+    // `run_resolve` injects it into a cloned `Config` only for the
+    // `complete = true` pass.
+    let complete_seed_atoms: Vec<String> = {
+        let mut v = expand_selected(&root, &config_root).unwrap_or_default();
+        v.extend(config.system_packages.iter().cloned());
+        v.sort();
+        v.dedup();
+        v
+    };
     let run_resolve = |complete: bool| {
+        let cfg: std::borrow::Cow<portage_profile::Config> =
+            if complete && !complete_seed_atoms.is_empty() {
+                let mut c = config.clone();
+                c.complete_seed_atoms = complete_seed_atoms.clone();
+                std::borrow::Cow::Owned(c)
+            } else {
+                std::borrow::Cow::Borrowed(&config)
+            };
         resolve_pretend_graph(
             &config_root,
             &root,
             &expanded_atoms,
-            &config,
+            &cfg,
             newuse,
             changed_use,
             nodeps,
@@ -8659,6 +8706,18 @@ pub fn run(args: &[String]) -> ExitCode {
         .map(|a| portage_repo::apply_updates_to_atom(a))
         .collect();
     let system_atoms = &config.system_packages;
+    // Real `PkgAttrDisplay.force_reinstall` (the red `r` bracket column):
+    // every `(cat, pkg)` on either side of a slot-operator ABI-rebuild
+    // edge -- the triggering provider upgrade AND every forced consumer
+    // rebuild in the cascade. Real yields the
+    // `@__auto_slot_operator_replace_installed__` set with
+    // `force_reinstall=True` and tags the provider via `_forced_rebuilds`.
+    let force_reinstall_cps: HashSet<(String, String)> = result
+        .abi_rebuilds
+        .iter()
+        .flat_map(|(provider, consumer)| [provider, consumer])
+        .filter_map(|cpv| portage_repo::split_cpv(cpv).map(|(c, p, _)| (c, p)))
+        .collect();
     // Real `Display.blockers`: blocker lines are collected while walking
     // the entries and printed as one group after every package line (see
     // `format_blocker_lines`).
@@ -8678,6 +8737,7 @@ pub fn run(args: &[String]) -> ExitCode {
                 &color,
                 system_atoms,
                 &world_atoms,
+                &force_reinstall_cps,
                 &mut blocker_lines,
             );
         } else {
@@ -8697,6 +8757,7 @@ pub fn run(args: &[String]) -> ExitCode {
                     &color,
                     system_atoms,
                     &world_atoms,
+                    &force_reinstall_cps,
                     &mut blocker_lines,
                 );
             }
@@ -8979,18 +9040,59 @@ pub fn run(args: &[String]) -> ExitCode {
     // rendered right after the merge list / autounmask blocks, before the
     // changed-deps report -- `_forced_rebuilds[root][child] = {parents}`,
     // grouped by the provider whose new sub-slot broke each consumer's
-    // built `:=` link. `writemsg_stdout`, so stdout.
+    // built `:=` link. `writemsg_stdout`, so stdout. Real prints each
+    // package as `str(Package)` (`Package.__str__`):
+    // `(cpv:slot/sub_slot::repo, ebuild scheduled for merge[ to '<root>'])`.
     if verbose_slot_rebuilds && !result.abi_rebuilds.is_empty() {
+        // cpv -> (slot, sub_slot, repo, type_name) for every merge-bound
+        // entry, so both sides of each edge render at their *resolved*
+        // slot (the rebuild's new sub-slot, not the vdb's).
+        let mut by_cpv: HashMap<String, (String, String, String, &str)> = HashMap::new();
+        for e in entries {
+            let version = match &e.outcome {
+                portage_repo::PretendOutcome::New { version }
+                | portage_repo::PretendOutcome::Reinstall { version, .. } => version.clone(),
+                portage_repo::PretendOutcome::Upgrade { to, .. }
+                | portage_repo::PretendOutcome::Downgrade { to, .. } => to.clone(),
+                _ => continue,
+            };
+            let type_name = match e.source {
+                portage_repo::CandidateSource::Binary => "binary",
+                portage_repo::CandidateSource::Ebuild => "ebuild",
+            };
+            by_cpv.insert(
+                format!("{}/{}-{version}", e.category, e.package),
+                (
+                    e.slot.clone().unwrap_or_else(|| "0".to_string()),
+                    e.sub_slot.clone().unwrap_or_else(|| "0".to_string()),
+                    e.repo_name.clone().unwrap_or_default(),
+                    type_name,
+                ),
+            );
+        }
+        let root_suffix = if root == Path::new("/") {
+            String::new()
+        } else {
+            format!(" to '{}'", root.display())
+        };
+        let render = |cpv: &str| -> String {
+            match by_cpv.get(cpv) {
+                Some((slot, sub_slot, repo, type_name)) => format!(
+                    "({cpv}:{slot}/{sub_slot}::{repo}, {type_name} scheduled for merge{root_suffix})"
+                ),
+                None => cpv.to_string(),
+            }
+        };
         println!();
         println!("The following packages are causing rebuilds:");
         println!();
         let mut provider: Option<&str> = None;
         for (child, parent) in &result.abi_rebuilds {
             if provider != Some(child.as_str()) {
-                println!("  {child} causes rebuilds for:");
+                println!("  {} causes rebuilds for:", render(child));
                 provider = Some(child.as_str());
             }
-            println!("    {parent}");
+            println!("    {}", render(parent));
         }
     }
 
