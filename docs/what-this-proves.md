@@ -12027,3 +12027,42 @@ Resolver` plus one `active_resolver` branch — no call-site changes, no
 CLI-layer changes. The extraction also unblocks the autounmask-in-loop
 and `||`-preference-feedback slices (both need to re-drive a pass with
 different inputs, awkward as a 1700-line closure, clean as a function).
+
+### The slot-collision notice grew real `collision_reasons` grouping + `--verbose-conflicts` (2026-09-03)
+
+Slice 4 replaced the compact `[slot conflict]` line with a transcription
+of real `_show_slot_collision_notice` → `slot_conflict_handler.
+get_conflict()`, but explicitly cut the grouping logic. This slice ports
+real `_prepare_conflict_msg_and_check_for_specificity`
+(`lib/_emerge/resolver/slot_collision.py`):
+
+- **`collision_reasons` grouping** — each conflicting parent atom is
+  classified by *why* it rejects the other instance in the slot: a
+  `("version", "ge"|"eq"|"le")` key from its operator (the `slot` / `use`
+  / `soname` keys stay cut — no fixture produces them).
+- **One representative per reason** — real keeps the atom "with version
+  as far away as possible" per `cp` for a version group; the rest are
+  replaced by `(and N more with the same problem[s])` (plural gated on
+  `len(selected_for_display) > 1`, exactly as real).
+- **`--verbose-conflicts`** — now *wired* (was rejected as
+  "not yet implemented"): real bare boolean, shows every parent and drops
+  both the `(and N more …)` tail and the footer.
+- **`NOTE: Use the '--verbose-conflicts' option to display parents
+  omitted above`** — `colorize("INFORM", …)`, printed once after the last
+  conflict when anything was omitted (real `any_omitted_parents`).
+- **`pkg_use_display` ` USE=""` slot** — real appends it to the instance
+  line (`{pkg} {use} pulled in by`) and every parent line; for a package
+  with empty `IUSE` it renders `USE=""`. Non-empty flag lists stay cut.
+- **`highlight_violations` `^` marker line** — the `colored_idx` span
+  (under the operator + version, and `:slot` when present) rendered as a
+  `^`/space line beneath each displayed parent atom, padded to
+  `len(cur_line)` exactly as real (trailing whitespace and all).
+
+Fixture: `dev-libs/slotconfgroup` (pulls `slotconfgroupnew` at
+`>=slotconflicttarget-2.0` plus `slotconfgroupa`/`b`/`c` at
+`<slotconflicttarget-2.0` — the `1.0` instance has three parents sharing
+one reason). Both sides byte-identical across the contract suite.
+
+Still cut (`scope-backlog.md` Part 2.A): `pkg_use_display` for non-default
+USE, the `use`/`soname` reason keys, operator/USE-token colorization, and
+the `need_rebuild` "cannot be rebuilt" trailer.

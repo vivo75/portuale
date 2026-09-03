@@ -326,11 +326,22 @@ backtracking loop moved out of `resolve_pretend_graph` into
 untouched). The resolver is self-contained and runtime-swappable -- a
 different architecture is one `impl Resolver` plus an `active_resolver`
 branch, no call-site changes. Pure refactor, full suite byte-identical.
+**Slot-collision notice fidelity (2026-09-03)**: the slice-4 transcription
+grew real `_prepare_conflict_msg_and_check_for_specificity` --
+`collision_reasons` grouping (version `ge`/`eq`/`le`), one
+representative per reason (`--verbose-conflicts` shows all, and is now
+wired instead of rejected), the `pkg_use_display` ` USE=""` slot, the
+`highlight_violations` `^` marker line, `(and N more with the same
+problem[s])`, and the `NOTE: Use the '--verbose-conflicts' option …`
+footer. Fixture: `dev-libs/slotconfgroup`.
 
-Deferred (see `scope-backlog.md` Part 2.A): "backtracking
-exhausted" / "circular dependencies" diagnostics, autounmask levels tried
-in sequence inside the loop, and real `get_conflict()`'s
-`collision_reasons` grouping / `--verbose-conflicts` markers / stderr.
+Deferred (see `scope-backlog.md` Part 2.A): the `Dependency resolution
+took X s (backtrack: N/M)` report line (non-deterministic timing --
+deliberate cut; the `--backtrack=30` hint gating already ships),
+"circular dependencies" diagnostics, autounmask levels tried in sequence
+inside the loop, and the slot-notice's remaining cuts (`pkg_use_display`
+for non-default USE, `use`/`soname` reason keys, colorization,
+`need_rebuild`).
 
 `what-this-proves.md` is the incrementally-
 updated record of every shipped slice, each grounded in cited real Python

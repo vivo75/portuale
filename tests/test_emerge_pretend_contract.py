@@ -1035,6 +1035,9 @@ CASES = [
     ("slot conflict: unsolvable, resolved by masking a puller version", ["--pretend", "dev-libs/btparent"], 0),
     ("slot conflict: --backtrack=0 also disables the runtime_pkg_mask trial", ["--pretend", "--backtrack=0", "dev-libs/btparent"], 0),
     ("slot conflict: --backtrack=30 suppresses the try-a-larger-value hint", ["--pretend", "--backtrack=30", "dev-libs/slotconflictunsolvable"], 0),
+    ("slot conflict: three same-reason parents collapse to one + '(and N more)'", ["--pretend", "dev-libs/slotconfgroup"], 0),
+    ("slot conflict: --verbose-conflicts shows every omitted parent", ["--pretend", "--verbose-conflicts", "dev-libs/slotconfgroup"], 0),
+    ("slot conflict: --verbose-conflicts=n is the default (collapsed)", ["--pretend", "--verbose-conflicts=n", "dev-libs/slotconfgroup"], 0),
     ("slot conflict: different slots of the same package coexist", ["--pretend", "dev-libs/multislotparent"], 0),
     ("virtual: resolved directly", ["--pretend", "virtual/texteditor"], 0),
     ("virtual: resolved as a dependency", ["--pretend", "dev-libs/virtualconsumerpkg"], 0),
@@ -1670,20 +1673,32 @@ _SLOT_COLLISION_PREAMBLE = (
 
 def _assert_slot_collision_block(stdout, slot_atom, instances, backtrack_hint=True):
     """`instances` is a list of (cpv, [(parent_cpv_or_None, atom), ...]).
-    Checks the slice-4 `!!! Multiple package instances ...` block rather
-    than pinning the whole multi-line paragraph in every test."""
+    Checks the real `get_conflict()` `!!! Multiple package instances ...`
+    block rather than pinning the whole multi-line paragraph in every
+    test. Each parent atom is followed by its ` USE=""` slot (real
+    `pkg_use_display`) and a `^` marker line (real `highlight_violations`)
+    -- both checked here structurally; the exact caret columns are pinned
+    once in the slotconfgroup test."""
     assert _SLOT_COLLISION_PREAMBLE in stdout
     assert f"\n{slot_atom}\n" in stdout
     for cpv, parents in instances:
-        assert f"  ({cpv}, ebuild scheduled for merge) pulled in by\n" in stdout
+        assert (
+            f'  ({cpv}, ebuild scheduled for merge) USE="" pulled in by\n' in stdout
+        )
         for parent_cpv, atom in parents:
             if parent_cpv is None:
                 assert f"    {atom} (Argument)\n" in stdout
             else:
-                assert (
-                    f"    {atom} required by ({parent_cpv}, ebuild scheduled for merge)\n"
-                    in stdout
+                line = (
+                    f'    {atom} required by ({parent_cpv}, '
+                    f'ebuild scheduled for merge) USE=""\n'
                 )
+                assert line in stdout
+                # the `^` marker line immediately follows
+                after = stdout.split(line, 1)[1]
+                marker = after.split("\n", 1)[0]
+                assert marker.startswith("    ") and set(marker) <= {" ", "^"}
+                assert "^" in marker
     assert (
         "It may be possible to solve this problem by using package.mask to" in stdout
     )
@@ -6102,6 +6117,53 @@ def test_unsolvable_slot_conflict_survives_backtracking_and_is_reported(
             ),
         ],
     )
+
+
+def test_slot_conflict_groups_same_reason_parents_and_offers_verbose_conflicts(
+    emerge_binary, fixture_env
+):
+    """dev-libs/slotconfgroup pulls slotconfgroupnew (>=slotconflicttarget-2.0,
+    reached first -> slot 0 resolves to 2.0) plus slotconfgroupa/b/c (each
+    <slotconflicttarget-2.0). The 1.0 instance has three parents sharing
+    one collision reason ("version", "le"): real
+    _prepare_conflict_msg_and_check_for_specificity keeps one
+    representative and appends "(and 2 more with the same problem)", then a
+    single "NOTE: Use the '--verbose-conflicts' option ..." footer.
+    --verbose-conflicts shows all three and drops both trailers."""
+    collapsed = _run(
+        [str(emerge_binary)], ["--pretend", "dev-libs/slotconfgroup"], fixture_env
+    )
+    assert collapsed.returncode == 0
+    out = collapsed.stdout
+    # the >=2.0 parent of the 2.0 instance: carets under ">=" and "2.0"
+    assert (
+        '  (dev-libs/slotconflicttarget-2.0:0/0::testrepo, ebuild scheduled for merge) USE="" pulled in by\n'
+        '    >=dev-libs/slotconflicttarget-2.0 required by (dev-libs/slotconfgroupnew-1.0:0/0::testrepo, ebuild scheduled for merge) USE=""\n'
+        "    ^^                            ^^^"
+    ) in out
+    # exactly one of a/b/c is shown, then the omission tail + NOTE
+    shown = [p for p in ("a", "b", "c") if f"slotconfgroup{p}-1.0:0/0::testrepo, ebuild scheduled for merge) USE=\"\"" in out]
+    assert shown == ["a"]
+    assert "    (and 2 more with the same problem)\n" in out
+    assert (
+        "\nNOTE: Use the '--verbose-conflicts' option to display parents omitted above\n"
+        in out
+    )
+
+    verbose = _run(
+        [str(emerge_binary)],
+        ["--pretend", "--verbose-conflicts", "dev-libs/slotconfgroup"],
+        fixture_env,
+    )
+    assert verbose.returncode == 0
+    vout = verbose.stdout
+    for p in ("a", "b", "c"):
+        assert (
+            f"    <dev-libs/slotconflicttarget-2.0 required by (dev-libs/slotconfgroup{p}-1.0:0/0::testrepo, ebuild scheduled for merge) USE=\"\"\n"
+            in vout
+        )
+    assert "with the same problem" not in vout
+    assert "--verbose-conflicts' option to display parents omitted" not in vout
 
 
 def test_different_slots_of_the_same_package_coexist_without_conflict(emerge_binary, fixture_env):

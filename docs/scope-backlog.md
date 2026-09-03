@@ -98,14 +98,23 @@ architectural — a single-pass BFS can't grow into these incrementally:
   (real `_emerge/resolver/backtracking.py` shape): it reconciles a
   **solvable** slot conflict, masks a version to resolve an **unsolvable**
   one via real `runtime_pkg_mask` (trial-and-revert), exposes
-  `--backtrack=COUNT`, and renders the real slot-collision and
-  circular-dependency notices. **Still open** (the deferred half):
-  - "backtracking exhausted" diagnostics;
+  `--backtrack=COUNT`, and renders the real slot-collision (now with
+  `collision_reasons` grouping, one-representative-per-reason selection,
+  `--verbose-conflicts`, the `^` marker line, and the `(and N more …)` /
+  `NOTE:` trailer) and circular-dependency notices. **Still open** (the
+  deferred half):
+  - "backtracking exhausted" diagnostics — *narrower than it looks:* the
+    `--backtrack=30` advisory-hint gating already ships; real portage's
+    remaining signal is the `Dependency resolution took X s (backtrack:
+    N/M).` report line, whose timing is non-deterministic (a deliberate
+    cut — portuale is a deterministic tool);
   - autounmask USE/keyword levels tried *in sequence inside* the loop;
   - autounmask parent-flip re-resolve feeding `extra_constraints`;
   - `||`-preference / slot-operator-rebuild feedback driving a retry;
-  - real `get_conflict()`'s `collision_reasons` grouping / best-atom
-    selection / `--verbose-conflicts` USE markers / stderr stream;
+  - the slot-collision notice's remaining cuts: `pkg_use_display` for a
+    package with non-default USE (the ` USE=""` slot renders, non-empty
+    flag lists don't), the `use`/`soname` reason keys, operator/USE-token
+    colorization, the `need_rebuild` "cannot be rebuilt" trailer;
   - the circular-dep cuts: the reduced cycle-only `--tree` re-display,
     `_find_suggestions`' ~180-line USE-flag heuristic, full
     elementary-cycle enumeration / `large_cycle_count`.

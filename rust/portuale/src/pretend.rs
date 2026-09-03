@@ -217,7 +217,7 @@ use crate::emerge_build;
 use crate::emerge_getbinpkg;
 use crate::emerge_options;
 use crate::needed_elf;
-use portage_dep::{match_from_list, parse_atom, Atom, Blocker};
+use portage_dep::{match_from_list, parse_atom, Atom, Blocker, Operator, SlotOperator};
 use portage_repo::{
     config_root_from_env, resolve_pretend_graph, root_from_env, ChangedDepsReportEntry, GraphEntry,
     PretendOutcome, SlotConflict,
@@ -5556,6 +5556,189 @@ fn misspell_suggestion_block(
     Some(format!("\n\nemerge: searching for similar names...{tail}"))
 }
 
+/// One classified reason a slot-conflicted parent atom rejects the
+/// *other* instance's version, mirroring real
+/// `_slot_conflict_handler._prepare_conflict_msg_and_check_for_specificity`'s
+/// `collision_reasons` keys -- restricted to the two kinds portuale's
+/// fixtures exercise (`version` with a `ge`/`eq`/`le` sub-type, and
+/// `slot`). Documented cuts vs. real: the `use`/`soname` reason keys, an
+/// `=*` operator's `("version", None)` key (portuale files it under
+/// `"eq"`), `pkg_use_display` for a package carrying non-default USE (the
+/// ` USE=""` slot is still rendered, non-empty flag lists are not),
+/// operator/USE colorization, and the `need_rebuild` "cannot be rebuilt"
+/// trailer.
+#[derive(Clone, PartialEq, Eq, Debug)]
+enum SlotConflictReason {
+    Version(&'static str), // "ge" | "eq" | "le"
+    Slot(String),          // the ":slot[/sub]" text, for the caret span
+}
+
+/// `atom` rendered back to `{op}{cat}/{pkg}-{ver}[-rN][*]`, optionally with
+/// its `:slot[/sub]` -- the two forms real portage builds as
+/// `atom.without_use.without_slot` and `atom.without_use` for its
+/// `findAtomForPackage` collision-reason probes.
+fn slot_conflict_atom_string(atom: &Atom, include_slot: bool) -> String {
+    let mut s = String::new();
+    s.push_str(match &atom.operator {
+        Operator::EqGlob => "=",
+        o => o.as_str(),
+    });
+    s.push_str(&atom.category);
+    s.push('/');
+    s.push_str(&atom.package);
+    if let Some(v) = &atom.version {
+        s.push('-');
+        s.push_str(v);
+        if let Some(r) = &atom.revision {
+            s.push_str("-r");
+            s.push_str(r);
+        }
+        if atom.operator == Operator::EqGlob {
+            s.push('*');
+        }
+    }
+    if include_slot {
+        if let Some(slot) = &atom.slot {
+            s.push(':');
+            s.push_str(slot);
+            if let Some(sub) = &atom.sub_slot {
+                s.push('/');
+                s.push_str(sub);
+            }
+        }
+    }
+    s
+}
+
+/// Real `_prepare_conflict_msg_and_check_for_specificity`'s per-parent
+/// `collision_reasons` classification: why `atom` (with USE and slot
+/// stripped in turn) fails to match each `other` conflicting instance
+/// (`{cat}/{pkg}-{ver}:{slot}/{sub}::{repo}` strings). Version mismatch
+/// wins over slot mismatch, matching real's `elif` ordering.
+fn slot_conflict_reasons(atom: &Atom, others: &[String]) -> Vec<SlotConflictReason> {
+    let bare = slot_conflict_atom_string(atom, false);
+    let no_use = slot_conflict_atom_string(atom, true);
+    let mut reasons: Vec<SlotConflictReason> = Vec::new();
+    for other in others {
+        let matches_bare = match_from_list(&bare, &[other.as_str()]).is_some_and(|v| !v.is_empty());
+        if !matches_bare {
+            let sub = match atom.operator {
+                Operator::Ge | Operator::Gt => Some("ge"),
+                Operator::Eq | Operator::EqGlob | Operator::Tilde => Some("eq"),
+                Operator::Le | Operator::Lt => Some("le"),
+                Operator::None => None,
+            };
+            if let Some(sub) = sub {
+                let r = SlotConflictReason::Version(sub);
+                if !reasons.contains(&r) {
+                    reasons.push(r);
+                }
+            }
+        } else if atom.slot.is_some() {
+            let matches_no_use =
+                match_from_list(&no_use, &[other.as_str()]).is_some_and(|v| !v.is_empty());
+            if !matches_no_use {
+                let mut s = String::new();
+                if let Some(slot) = &atom.slot {
+                    s.push(':');
+                    s.push_str(slot);
+                }
+                if let Some(sub) = &atom.sub_slot {
+                    s.push('/');
+                    s.push_str(sub);
+                }
+                let r = SlotConflictReason::Slot(s);
+                if !reasons.contains(&r) {
+                    reasons.push(r);
+                }
+            }
+        }
+    }
+    reasons
+}
+
+/// Real `highlight_violations`' `colored_idx`: the character positions in
+/// `atom_str` under the violated operator, version, and/or `:slot` -- the
+/// `^` marker line printed beneath a displayed parent atom. Colorization
+/// itself is a documented cut; this computes only the span.
+fn slot_conflict_caret_idx(
+    atom_str: &str,
+    atom: &Atom,
+    version_violated: bool,
+    slot_violated: bool,
+) -> std::collections::HashSet<usize> {
+    let chars: Vec<char> = atom_str.chars().collect();
+    let mut idx: std::collections::HashSet<usize> = std::collections::HashSet::new();
+
+    let mut slot_str = String::new();
+    if let Some(slot) = &atom.slot {
+        slot_str.push(':');
+        slot_str.push_str(slot);
+    }
+    if let Some(sub) = &atom.sub_slot {
+        slot_str.push('/');
+        slot_str.push_str(sub);
+    }
+    match atom.slot_operator {
+        Some(SlotOperator::Equals) => slot_str.push('='),
+        Some(SlotOperator::Star) => slot_str.push('*'),
+        None => {}
+    }
+
+    let span = |needle: &str, from_end: bool| -> Option<usize> {
+        if needle.is_empty() {
+            return None;
+        }
+        let n: Vec<char> = needle.chars().collect();
+        let positions = 0..=chars.len().saturating_sub(n.len());
+        let hit = |i: &usize| chars[*i..*i + n.len()] == n[..];
+        if from_end {
+            positions.rev().find(hit)
+        } else {
+            positions.into_iter().find(hit)
+        }
+    };
+    let mut mark = |start: usize, len: usize| {
+        for i in start..start + len {
+            idx.insert(i);
+        }
+    };
+
+    if version_violated {
+        let op_len = match &atom.operator {
+            Operator::EqGlob => 1, // "=" (the "*" rides with the version)
+            o => o.as_str().chars().count(),
+        };
+        if op_len > 0 {
+            mark(0, op_len);
+        }
+        let ver_str = atom.version.as_deref().map(|v| {
+            let mut s = v.to_string();
+            if let Some(r) = &atom.revision {
+                s.push_str("-r");
+                s.push_str(r);
+            }
+            if atom.operator == Operator::EqGlob {
+                s.push('*');
+            }
+            s
+        });
+        if let Some(ver) = &ver_str {
+            if let Some(start) = span(ver, true) {
+                mark(start, ver.chars().count());
+            }
+        }
+        if let Some(start) = span(&slot_str, false) {
+            mark(start, slot_str.chars().count());
+        }
+    } else if slot_violated {
+        if let Some(start) = span(&slot_str, false) {
+            mark(start, slot_str.chars().count());
+        }
+    }
+    idx
+}
+
 pub fn run(args: &[String]) -> ExitCode {
     if wants_help(args) {
         print_help();
@@ -5830,6 +6013,13 @@ pub fn run(args: &[String]) -> ExitCode {
     // portage's default (flag absent) is 10, `--backtrack=0` disables
     // backtracking. Threaded into `resolve_pretend_graph`.
     let mut backtrack_max: u32 = 10;
+    // --verbose-conflicts: real bare boolean (`main.py`'s `y_or_n` group,
+    // so `--verbose-conflicts` / `=y` / `=n`). Pure display: real
+    // `_prepare_conflict_msg_and_check_for_specificity` shows *every*
+    // parent atom of a slot conflict instead of one representative per
+    // collision reason, and drops the "(and N more ...)" / "NOTE: Use the
+    // '--verbose-conflicts' option" trailer. Never reaches the resolver.
+    let mut verbose_conflicts = false;
     // --autounmask/--autounmask-keep-keywords: real "true_y_or_n"
     // (bare flag, "=y", or "=n") for the first, plain required "y"/"n"
     // (no bare form) for the second -- see the on/off default-
@@ -6606,6 +6796,29 @@ pub fn run(args: &[String]) -> ExitCode {
             i += 1;
         } else if arg == "--changed-deps-report=n" {
             changed_deps_report = false;
+            i += 1;
+        } else if arg == "--verbose-conflicts" {
+            // Real bare boolean; portuale accepts the same permissive
+            // bare / `y` / `n` shape as its sibling display flags.
+            match args.get(i + 1).map(String::as_str) {
+                Some("y") => {
+                    verbose_conflicts = true;
+                    i += 2;
+                }
+                Some("n") => {
+                    verbose_conflicts = false;
+                    i += 2;
+                }
+                _ => {
+                    verbose_conflicts = true;
+                    i += 1;
+                }
+            }
+        } else if arg == "--verbose-conflicts=y" {
+            verbose_conflicts = true;
+            i += 1;
+        } else if arg == "--verbose-conflicts=n" {
+            verbose_conflicts = false;
             i += 1;
         } else if arg == "--verbose-slot-rebuilds" {
             // Real `y_or_n` (default "y"), same optional-value shape.
@@ -8382,16 +8595,23 @@ pub fn run(args: &[String]) -> ExitCode {
     // Real `depgraph._show_slot_collision_notice` -> `slot_conflict_handler.
     // get_conflict()` (`lib/_emerge/resolver/slot_collision.py`): the
     // `!!! Multiple package instances within a single package slot ...`
-    // block, then the advisory paragraph. Simplified transcription -- the
-    // preamble, per-instance `(<cpv>, ebuild scheduled for merge) pulled
-    // in by` + `<atom> required by (<parent>)` / `<atom> (Argument)`
-    // lines, and the advisory (with the `--backtrack=30` hint gated the
-    // real way: shown unless `--backtrack` is >=30 or 0). Cut (documented,
-    // fixtures don't exercise them): `collision_reasons` grouping /
-    // best-atom selection, `pkg_use_display`, `--verbose-conflicts` USE
-    // markers, "omitted N similar parents", operator colorization.
-    // Purely informational -- v1 neither refuses nor changes the exit code.
+    // block, then the advisory paragraph. Ported: the preamble, the
+    // per-instance `(<cpv>, ebuild scheduled for merge) USE="" pulled in
+    // by` line, real `_prepare_conflict_msg_and_check_for_specificity`'s
+    // `collision_reasons` grouping + one-representative-per-reason
+    // selection (every parent under `--verbose-conflicts`), the
+    // `highlight_violations` `^` marker line, the `(and N more with the
+    // same problem[s])` tail, the `NOTE: Use the '--verbose-conflicts'
+    // option ...` footer, and the advisory (with the `--backtrack=30`
+    // hint gated the real way: shown unless `--backtrack` is >=30 or 0).
+    // Documented cuts (fixtures don't exercise them): the `use`/`soname`
+    // reason keys, `pkg_use_display` for a package with non-default USE
+    // (the ` USE=""` slot is rendered, non-empty flag lists are not),
+    // operator/USE colorization, an `=*` operator's `("version", None)`
+    // key, and the `need_rebuild` "cannot be rebuilt" trailer. Purely
+    // informational -- v1 neither refuses nor changes the exit code.
     if !result.slot_conflicts.is_empty() {
+        let mut any_omitted = false;
         println!();
         println!("!!! Multiple package instances within a single package slot have been pulled");
         println!("!!! into the dependency graph, resulting in a slot conflict:");
@@ -8401,19 +8621,142 @@ pub fn run(args: &[String]) -> ExitCode {
             for inst in &c.instances {
                 println!();
                 println!(
-                    "  ({}/{}-{}:{}/{}::{}, ebuild scheduled for merge) pulled in by",
+                    "  ({}/{}-{}:{}/{}::{}, ebuild scheduled for merge) USE=\"\" pulled in by",
                     c.category, c.package, inst.version, c.slot, inst.sub_slot, inst.repo_name
                 );
-                for (parent_cpv, atom) in &inst.parents {
+                let others: Vec<String> = c
+                    .instances
+                    .iter()
+                    .filter(|o| o.version != inst.version)
+                    .map(|o| {
+                        format!(
+                            "{}/{}-{}:{}/{}::{}",
+                            c.category, c.package, o.version, c.slot, o.sub_slot, o.repo_name
+                        )
+                    })
+                    .collect();
+                // (parent_cpv, atom_str, parsed atom, its reasons)
+                let mut classified: Vec<(&String, &String, Atom, Vec<SlotConflictReason>)> =
+                    Vec::new();
+                for (parent_cpv, atom_str) in &inst.parents {
+                    // Real files a bare command-line (`AtomArg`) parent
+                    // under a reason only when the *other* package is
+                    // already installed; portuale's slot-conflict
+                    // instances are always "scheduled for merge", so such
+                    // a parent contributes no specific reason and is not
+                    // shown.
                     if parent_cpv.is_empty() {
-                        println!("    {atom} (Argument)");
-                    } else {
-                        println!(
-                            "    {atom} required by ({parent_cpv}, ebuild scheduled for merge)"
-                        );
+                        continue;
+                    }
+                    let Some(atom) = parse_atom(atom_str) else {
+                        continue;
+                    };
+                    let reasons = slot_conflict_reasons(&atom, &others);
+                    if !reasons.is_empty() {
+                        classified.push((parent_cpv, atom_str, atom, reasons));
                     }
                 }
+                let num_all_specific: usize = classified.iter().map(|(_, _, _, r)| r.len()).sum();
+                // Group parents by reason, first-seen order preserved.
+                let mut groups: Vec<(SlotConflictReason, Vec<usize>)> = Vec::new();
+                for (i, (_, _, _, reasons)) in classified.iter().enumerate() {
+                    for reason in reasons {
+                        match groups.iter_mut().find(|(r, _)| r == reason) {
+                            Some((_, members)) => members.push(i),
+                            None => groups.push((reason.clone(), vec![i])),
+                        }
+                    }
+                }
+                // Representative selection: farthest version per `cp` for
+                // a `version` group, the first member for a `slot` group,
+                // every member under `--verbose-conflicts`.
+                let mut selected: Vec<usize> = Vec::new();
+                for (reason, members) in &groups {
+                    if verbose_conflicts {
+                        selected.extend(members.iter().copied());
+                        continue;
+                    }
+                    match reason {
+                        SlotConflictReason::Version(sub) => {
+                            let mut best: Vec<(String, usize)> = Vec::new();
+                            for &m in members {
+                                let atom = &classified[m].2;
+                                let cp = format!("{}/{}", atom.category, atom.package);
+                                match best.iter_mut().find(|(c, _)| *c == cp) {
+                                    None => best.push((cp, m)),
+                                    Some((_, cur)) => {
+                                        let cur_ver =
+                                            classified[*cur].2.version.as_deref().unwrap_or("");
+                                        let new_ver = atom.version.as_deref().unwrap_or("");
+                                        let cmp = portage_versions::vercmp(new_ver, cur_ver);
+                                        let farther = match *sub {
+                                            "ge" | "eq" => cmp == Some(1),
+                                            "le" => cmp == Some(-1),
+                                            _ => false,
+                                        };
+                                        if farther {
+                                            *cur = m;
+                                        }
+                                    }
+                                }
+                            }
+                            selected.extend(best.into_iter().map(|(_, m)| m));
+                        }
+                        SlotConflictReason::Slot(_) => {
+                            if let Some(&first) = members.first() {
+                                selected.push(first);
+                            }
+                        }
+                    }
+                }
+                selected.sort_unstable();
+                selected.dedup();
+                for &m in &selected {
+                    let (parent_cpv, atom_str, atom, reasons) = &classified[m];
+                    let version_violated = reasons
+                        .iter()
+                        .any(|r| matches!(r, SlotConflictReason::Version(_)));
+                    let slot_violated = reasons
+                        .iter()
+                        .any(|r| matches!(r, SlotConflictReason::Slot(_)));
+                    let cur_line = format!(
+                        "{atom_str} required by ({parent_cpv}, ebuild scheduled for merge) USE=\"\"\n"
+                    );
+                    let idx =
+                        slot_conflict_caret_idx(atom_str, atom, version_violated, slot_violated);
+                    let marker: String = (0..cur_line.chars().count())
+                        .map(|k| if idx.contains(&k) { '^' } else { ' ' })
+                        .collect();
+                    print!("    {cur_line}");
+                    println!("    {marker}");
+                }
+                if selected.is_empty() && !classified.is_empty() {
+                    println!(
+                        "    (no parents that aren't satisfied by other packages in this slot)"
+                    );
+                }
+                let omitted = num_all_specific - selected.len();
+                if omitted > 0 {
+                    any_omitted = true;
+                    let noun = if selected.len() > 1 {
+                        "problems"
+                    } else {
+                        "problem"
+                    };
+                    println!("    (and {omitted} more with the same {noun})");
+                }
             }
+        }
+        if any_omitted {
+            println!();
+            println!(
+                "{}",
+                color.c(
+                    "INFORM",
+                    "NOTE: Use the '--verbose-conflicts' option to display parents omitted above"
+                )
+            );
+            println!();
         }
         println!();
         for line in [
@@ -8801,6 +9144,32 @@ mod tests {
 
     fn fixtures_root() -> std::path::PathBuf {
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures")
+    }
+
+    #[test]
+    fn slot_conflict_reason_and_caret_span() {
+        let others = vec!["dev-libs/t-1.0:0/0::r".to_string()];
+        // ">=dev-libs/t-2.0" does not accept 1.0 -> ("version", "ge")
+        let ge = parse_atom(">=dev-libs/t-2.0").unwrap();
+        assert_eq!(
+            slot_conflict_reasons(&ge, &others),
+            vec![SlotConflictReason::Version("ge")]
+        );
+        // a bare atom accepts any version -> no reason
+        let bare = parse_atom("dev-libs/t").unwrap();
+        assert!(slot_conflict_reasons(&bare, &others).is_empty());
+        // "<dev-libs/t-2.0" DOES accept 1.0 -> no reason against this other
+        let lt = parse_atom("<dev-libs/t-2.0").unwrap();
+        assert!(slot_conflict_reasons(&lt, &others).is_empty());
+
+        // caret span: under ">=" (idx 0,1) and under "2.0" (rfind)
+        let idx = slot_conflict_caret_idx(">=dev-libs/t-2.0", &ge, true, false);
+        let ver_start = ">=dev-libs/t-2.0".rfind("2.0").unwrap();
+        let expected: std::collections::HashSet<usize> =
+            [0, 1, ver_start, ver_start + 1, ver_start + 2]
+                .into_iter()
+                .collect();
+        assert_eq!(idx, expected);
     }
 
     #[test]

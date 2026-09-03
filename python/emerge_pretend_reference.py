@@ -12258,6 +12258,11 @@ def run(args):
     # resolver's retry ceiling after a solvable slot conflict; default
     # (flag absent) is 10, `--backtrack=0` disables backtracking.
     backtrack_max = 10
+    # --verbose-conflicts: real bare boolean; pure display (show every
+    # slot-conflict parent instead of one representative per collision
+    # reason, and drop the "(and N more ...)" / NOTE trailer). Mirrors
+    # pretend.rs. Never reaches the resolver.
+    verbose_conflicts = False
     # --autounmask/--autounmask-keep-keywords: None means "not explicitly
     # given" -- see the on/off default-resolution logic just below where
     # these are actually consumed, mirroring pretend.rs exactly.
@@ -12950,6 +12955,26 @@ def run(args):
             i += 1
         elif arg == "--changed-deps-report=n":
             changed_deps_report = False
+            i += 1
+        elif arg == "--verbose-conflicts":
+            # Real bare boolean; portuale accepts the same permissive
+            # bare / y / n shape as its sibling display flags. Mirrors
+            # pretend.rs.
+            nxt = args[i + 1] if i + 1 < len(args) else None
+            if nxt == "n":
+                verbose_conflicts = False
+                i += 2
+            elif nxt == "y":
+                verbose_conflicts = True
+                i += 2
+            else:
+                verbose_conflicts = True
+                i += 1
+        elif arg == "--verbose-conflicts=y":
+            verbose_conflicts = True
+            i += 1
+        elif arg == "--verbose-conflicts=n":
+            verbose_conflicts = False
             i += 1
         elif arg == "--verbose-slot-rebuilds":
             # Real y_or_n (default "y"), same optional-value shape.
@@ -14739,16 +14764,85 @@ def run(args):
     # Real depgraph._show_slot_collision_notice -> slot_conflict_handler.
     # get_conflict() (lib/_emerge/resolver/slot_collision.py): the
     # "!!! Multiple package instances within a single package slot ..."
-    # block, then the advisory paragraph. Simplified transcription -- the
-    # preamble, per-instance "(<cpv>, ebuild scheduled for merge) pulled in
-    # by" + "<atom> required by (<parent>)" / "<atom> (Argument)" lines,
-    # and the advisory (with the --backtrack=30 hint gated the real way:
-    # shown unless --backtrack is >=30 or 0). Cut (documented, fixtures
-    # don't exercise them): collision_reasons grouping / best-atom
-    # selection, pkg_use_display, --verbose-conflicts USE markers, "omitted
-    # N similar parents", operator colorization. Purely informational -- v1
-    # neither refuses nor changes the exit code. Mirrors pretend.rs.
+    # block, then the advisory paragraph. Ported: the preamble, the
+    # per-instance '(<cpv>, ebuild scheduled for merge) USE="" pulled in
+    # by' line, real _prepare_conflict_msg_and_check_for_specificity's
+    # collision_reasons grouping + one-representative-per-reason selection
+    # (every parent under --verbose-conflicts), the highlight_violations
+    # "^" marker line, the "(and N more with the same problem[s])" tail,
+    # the "NOTE: Use the '--verbose-conflicts' option ..." footer, and the
+    # advisory (--backtrack=30 hint gated the real way: shown unless
+    # --backtrack is >=30 or 0). Documented cuts (fixtures don't exercise
+    # them): the use/soname reason keys, pkg_use_display for a package
+    # with non-default USE (the ' USE=""' slot is rendered, non-empty flag
+    # lists are not), operator/USE colorization, an "=*" operator's
+    # ("version", None) key, and the need_rebuild "cannot be rebuilt"
+    # trailer. Purely informational -- v1 neither refuses nor changes the
+    # exit code. Mirrors pretend.rs.
     if result["slot_conflicts"]:
+
+        def _sc_version_sub(op):
+            if op in (">=", ">"):
+                return "ge"
+            if op in ("=", "=*", "~"):
+                return "eq"
+            if op in ("<=", "<"):
+                return "le"
+            return None
+
+        def _sc_reasons(atom, others):
+            bare = atom.without_use.without_slot
+            no_use = atom.without_use
+            reasons = []
+            for other in others:
+                if not match_from_list(bare, [other]):
+                    sub = _sc_version_sub(atom.operator)
+                    if sub is not None:
+                        r = ("version", sub)
+                        if r not in reasons:
+                            reasons.append(r)
+                elif atom.slot is not None:
+                    if not match_from_list(no_use, [other]):
+                        s = ":" + atom.slot
+                        if atom.sub_slot:
+                            s += "/" + atom.sub_slot
+                        r = ("slot", s)
+                        if r not in reasons:
+                            reasons.append(r)
+            return reasons
+
+        def _sc_caret_idx(atom_str, atom, version_violated, slot_violated):
+            idx = set()
+            slot_str = ""
+            if atom.slot:
+                slot_str = ":" + atom.slot
+            if atom.sub_slot:
+                slot_str += "/" + atom.sub_slot
+            if atom.slot_operator:
+                slot_str += atom.slot_operator
+            if version_violated:
+                op = atom.operator
+                ver = atom.version
+                if op == "=*":
+                    op = "="
+                    ver = (ver or "") + "*"
+                if op:
+                    idx.update(range(len(op)))
+                if ver:
+                    start = atom_str.rfind(ver)
+                    if start >= 0:
+                        idx.update(range(start, start + len(ver)))
+                if slot_str:
+                    start = atom_str.find(slot_str)
+                    if start >= 0:
+                        idx.update(range(start, start + len(slot_str)))
+            elif slot_violated and slot_str:
+                start = atom_str.find(slot_str)
+                if start >= 0:
+                    idx.update(range(start, start + len(slot_str)))
+            return idx
+
+        any_omitted = False
         print()
         print(
             "!!! Multiple package instances within a single package slot have been pulled"
@@ -14762,15 +14856,98 @@ def run(args):
                 print(
                     f"  ({c['category']}/{c['package']}-{inst['version']}:{c['slot']}"
                     f"/{inst['sub_slot']}::{inst['repo_name']}, ebuild scheduled for merge)"
-                    " pulled in by"
+                    ' USE="" pulled in by'
                 )
-                for parent_cpv, atom in inst["parents"]:
+                others = [
+                    f"{c['category']}/{c['package']}-{o['version']}:{c['slot']}"
+                    f"/{o['sub_slot']}::{o['repo_name']}"
+                    for o in c["instances"]
+                    if o["version"] != inst["version"]
+                ]
+                classified = []  # (parent_cpv, atom_str, Atom, reasons)
+                for parent_cpv, atom_str in inst["parents"]:
                     if not parent_cpv:
-                        print(f"    {atom} (Argument)")
-                    else:
-                        print(
-                            f"    {atom} required by ({parent_cpv}, ebuild scheduled for merge)"
-                        )
+                        continue
+                    try:
+                        atom = Atom(atom_str)
+                    except (InvalidAtom, InvalidDependString):
+                        continue
+                    reasons = _sc_reasons(atom, others)
+                    if reasons:
+                        classified.append((parent_cpv, atom_str, atom, reasons))
+                num_all_specific = sum(len(r) for *_, r in classified)
+                groups = []  # [reason, [member idx]]
+                for i, (_, _, _, reasons) in enumerate(classified):
+                    for reason in reasons:
+                        for g in groups:
+                            if g[0] == reason:
+                                g[1].append(i)
+                                break
+                        else:
+                            groups.append([reason, [i]])
+                selected = []
+                for reason, members in groups:
+                    if verbose_conflicts:
+                        selected.extend(members)
+                        continue
+                    if reason[0] == "version":
+                        best = []  # [cp, idx]
+                        for m in members:
+                            m_atom = classified[m][2]
+                            cp = m_atom.cp
+                            for b in best:
+                                if b[0] == cp:
+                                    cur_ver = classified[b[1]][2].version
+                                    cmp = vercmp(m_atom.version, cur_ver)
+                                    farther = (
+                                        reason[1] in ("ge", "eq")
+                                        and cmp is not None
+                                        and cmp > 0
+                                    ) or (
+                                        reason[1] == "le" and cmp is not None and cmp < 0
+                                    )
+                                    if farther:
+                                        b[1] = m
+                                    break
+                            else:
+                                best.append([cp, m])
+                        selected.extend(b[1] for b in best)
+                    else:  # slot
+                        if members:
+                            selected.append(members[0])
+                selected = sorted(set(selected))
+                for m in selected:
+                    parent_cpv, atom_str, atom, reasons = classified[m]
+                    version_violated = any(r[0] == "version" for r in reasons)
+                    slot_violated = any(r[0] == "slot" for r in reasons)
+                    cur_line = (
+                        f"{atom_str} required by ({parent_cpv}, "
+                        f'ebuild scheduled for merge) USE=""\n'
+                    )
+                    idx = _sc_caret_idx(atom_str, atom, version_violated, slot_violated)
+                    marker = "".join(
+                        "^" if k in idx else " " for k in range(len(cur_line))
+                    )
+                    sys.stdout.write("    " + cur_line)
+                    print("    " + marker)
+                if not selected and classified:
+                    print(
+                        "    (no parents that aren't satisfied by other packages in this slot)"
+                    )
+                omitted = num_all_specific - len(selected)
+                if omitted > 0:
+                    any_omitted = True
+                    noun = "problems" if len(selected) > 1 else "problem"
+                    print(f"    (and {omitted} more with the same {noun})")
+        if any_omitted:
+            print()
+            print(
+                color.c(
+                    "INFORM",
+                    "NOTE: Use the '--verbose-conflicts' option to display parents omitted above",
+                )
+            )
+            print()
         print()
         for line in (
             "It may be possible to solve this problem by using package.mask to",
