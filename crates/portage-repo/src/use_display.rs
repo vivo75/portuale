@@ -83,6 +83,50 @@ pub(crate) fn refresh_entry_use_display(
     }
 }
 
+/// Repaint every running-rooted merge entry's USE displays from the
+/// running root's own profile (cross-root rows use their own root).
+/// A no-op for entries the candidate lookup misses.
+/// Portage: output.py, _display_use (per-root config)
+pub fn repaint_running_root_entry_displays(
+    entries: &mut [GraphEntry],
+    repos: &[RepoConfig],
+    running_root: &Path,
+    running_config: &portage_profile::Config,
+) {
+    let mut cps: Vec<(String, String)> = entries
+        .iter()
+        .filter(|e| e.targets_running_root)
+        .map(|e| (e.category.clone(), e.package.clone()))
+        .collect();
+    cps.sort();
+    cps.dedup();
+    for (cat, pkg) in &cps {
+        let Ok(cands) = list_candidates(repos, cat, pkg) else {
+            continue;
+        };
+        for e in entries.iter_mut() {
+            if !e.targets_running_root || e.category != *cat || e.package != *pkg {
+                continue;
+            }
+            let outcome_version = match &e.outcome {
+                PretendOutcome::New { version } => Some(version.as_str()),
+                PretendOutcome::Upgrade { to, .. } | PretendOutcome::Downgrade { to, .. } => {
+                    Some(to.as_str())
+                }
+                PretendOutcome::Reinstall { version, .. } => Some(version.as_str()),
+                _ => None,
+            };
+            let Some(version) = outcome_version else {
+                continue;
+            };
+            let Some(cand) = cands.iter().find(|c| c.version == version) else {
+                continue;
+            };
+            refresh_one_entry_display(e, cand, running_root, running_config);
+        }
+    }
+}
+
 /// Per-entry core of [`refresh_entry_use_display`]: rebuild one merge
 /// entry's `use_flags_display` / `use_expand_display[_p]` from `config`
 /// (effective USE, force/mask wraps, expand grouping and the installed

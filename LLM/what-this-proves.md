@@ -12303,4 +12303,223 @@ resolved version equals the already-resolved one; `_autounmask_levels`
 ordering, `_autounmask_breakage`, the whole-graph parent-flip re-resolve,
 and `get_best_run` are still ahead.
 
+### Autounmask level ordering — license before ~arch before masks (2026-09-03)
+
+Slice 2 of the autounmask-in-loop plan. Real `_autounmask_levels`
+(`depgraph.py:7446`) tries the allowed relaxations least- to
+most-invasive: `USE` (always on) → `+license` → `+~arch` → `+missing
+keywords` → `+masks`, and `_select_pkg_highest_available_imp` stops at
+the first level that yields a candidate.
+
+portuale's `resolve_pretend` had the three `*_masked_only` visibility
+fallbacks (used when no candidate is normally visible) in the order
+`keyword` → `license` → `mask` -- a comment even claimed the order was
+irrelevant. It is not, *across versions*: with `levelpkg-1.0`
+@EULA-license-masked and `levelpkg-2.0` `~amd64` keyword-masked, the old
+order picked the higher `2.0` (keyword change); real portage picks the
+lower `1.0` (license change) because level 1 (`+license`) is tried and
+settles before level 2 (`+~arch`) is ever considered.
+
+The fallbacks now run `license` → `keyword` → `mask`, matching real's
+level order; each still picks the highest version it can unmask at its
+level. Fixture `dev-libs/levelconsumer`: `levelpkg-1.0` chosen, with `The
+following license changes are necessary to proceed:` / `=dev-libs/
+levelpkg-1.0 SomeEula`, no keyword change. 1 CASE + a pinned contract
+test, Rust==Python byte-identical, full suite green.
+
+Not yet (later slices): a true per-level version re-scan (portuale takes
+the best version at whichever single level first matches -- coincides
+with real for the cross-version cases the fallbacks distinguish);
+`_autounmask_breakage` revert-and-escalate; the whole-graph parent-flip
+re-resolve; keyword/mask in-loop accumulators; `get_best_run`.
+
+### Autounmask breakage — a flag wanted both ways abandons autounmask (2026-09-03)
+
+Slice 3 of the autounmask-in-loop plan. Real `_autounmask_breakage`
+(`depgraph.py:12262`): once an autounmask change leaves some other
+use-dep unsatisfiable and it can't be undone, portage stops trying to be
+clever -- `myparams["autounmask"] = False` and one final re-resolve, so
+the user sees the plain unsatisfied-dependency picture rather than a
+half-applied set of config changes. There is no per-level
+"revert-this-one-change-and-escalate" mechanism (an earlier draft of the
+plan misread this).
+
+portuale's loop now watches its `autounmask_use_config` accumulator: if a
+pass asks for `(cat/pkg, flag)` at a state opposite to one already
+recorded for a different atom, that's a contradiction no re-resolve can
+settle. It clears the accumulator and the pending change records, turns
+all four `autounmask_suggest_*` off, and runs one more pass (an
+`autounmask_disabled` latch bounds it to one).
+
+Fixture `dev-libs/aubreaktop` pulls `dev-libs/aubreaksub` plain, then
+`dev-libs/aubreakwant` (needs `aubreaksub[brk]`) and
+`dev-libs/aubreakunwant` (needs `aubreaksub[-brk]`). Before the slice the
+two use-deps pushed a self-contradictory block --
+`>=dev-libs/aubreaksub-1.0 brk` *and* `>=dev-libs/aubreaksub-1.0 -brk` --
+and Rust vs Python even disagreed on which parity the oscillation landed
+on (`USE="-brk"` vs `USE="brk"`). After it, both abandon autounmask and
+print the same clean list, with `aubreakwant`'s now-unsatisfiable `[brk]`
+surfacing as the ordinary non-fatal `!!! no visible ebuild for dependency
+"dev-libs/aubreaksub"` note -- identical to what `--autounmask-use=n`
+produces. 3 CASES + a pinned contract test + a `portage-repo` unit test,
+Rust==Python byte-identical, full suite green.
+
+Cuts: only the *contradiction* signal triggers the abandon (real also
+abandons when an autounmask flip makes a plain non-use dep that a package
+matches disappear -- portuale's re-check only compares use-deps). A
+fresh-path flip contradicted by a later atom on an already-resolved slot
+still slips through silently -- the pre-existing already-resolved-slot
+`match_from_list` use-dep blindness, tracked separately. Still ahead: the
+whole-graph parent-flip re-resolve; keyword/mask in-loop accumulators;
+`get_best_run`.
+
+### Autounmask parent flip — whole-graph re-resolve (2026-09-03)
+
+Slice 4 of the autounmask-in-loop plan; closes the documented
+`'parent_flip` single-dep cut. When a dependency's `opt?`/`opt=` use-dep
+can't be satisfied because the child's own flag is `use.mask`'d, portuale
+already flipped the *requesting parent's* conditional flag instead
+(real `_apply_parent_use_changes`). It used to re-resolve only the freed
+dependency; real portage folds the flip into `_needed_use_config_changes`
+and re-drives the whole graph via `_backtrack_depgraph`.
+
+The `'parent_flip` block now folds the parent-USE flip into the same
+`autounmask_use_config` accumulator the backward cascade uses (keyed
+`(parent_cat, parent_pkg)` -- it *is* a `package.use` entry) and
+`continue`s; the driver's existing `autounmask_grew` restart re-walks
+everything, so the parent's other `flag?`-gated deps re-evaluate against
+the flipped state. The old single-dep `resolve_pretend` survives only as
+a gate -- fold a flip only if it actually makes the freed atom resolve --
+and a parent flip that contradicts an already-accumulated change routes
+into Slice 3's `_autounmask_breakage`.
+
+Fixture `dev-libs/pfgraphparent` (IUSE `+pf`) RDEPENDs
+`dev-libs/pfgraphchild[pf=]` *and* `pf? ( dev-libs/pfgraphextra )`;
+`pfgraphchild`'s `pf` is `use.mask`'d. The parent's `pf` is flipped off
+-- and now `pf? ( pfgraphextra )` re-evaluates with `pf` OFF, so
+`pfgraphextra` is **not** merged. Before the slice the single-dep
+re-resolve left `pfgraphextra` wrongly in the list. 3 CASES + a pinned
+contract test + a `portage-repo` unit test, plus the pre-existing
+`parentflipeqpkg` cases still green, Rust==Python byte-identical, full
+suite green.
+
+Still ahead: keyword/mask in-loop accumulators; `get_best_run`
+(maskless-run preference) + wiring `--autounmask-backtrack`.
+
+### --autounmask-backtrack: off by default, gating the in-loop re-drive (2026-09-03)
+
+Slice 5 of the autounmask-in-loop plan -- and a *correction* of Slices 1
+and 4. Real `--autounmask-backtrack` is **disabled by default**
+(`man emerge`: "not recommended ... disabled by default";
+`depgraph.py:11736` -- `need_config_change()` returns True and
+`_backtrack_depgraph` breaks as soon as an attempt has autounmask
+changes). So real portage, by default, *collects* the autounmask config
+changes and shows them, but does **not** re-drive the graph afterwards:
+the flipped package's own USE line reflects the change (real
+`_pkg_use_enabled` consulting `_needed_use_config_changes`), but its
+newly-`flag?`-gated dependencies do not appear. Real's own
+`test_autounmask.py` spells this out in a comment ("With
+--autounmask-backtrack=y: [C-1, B-1, A-1] ... Without: [B-1, A-1]").
+
+Slices 1 and 4 were shipping the *`=y`* behaviour unconditionally.
+`Config::autounmask_backtrack` (parsed from `--autounmask-backtrack`,
+implied by `--autounmask-continue` unless `=n` is explicit) now gates the
+`'backtrack` loop's `autounmask_grew` re-drive:
+
+* **off (default):** the backward-cascade re-check still folds the change
+  into `autounmask_use_config` and records it for the block, but the loop
+  does not restart; a post-loop `refresh_entry_use_display` re-renders
+  just the flipped package's `USE=` line. The parent-flip path falls back
+  to its pre-Slice-4 single-dep local re-resolution.
+* **`=y` (or `--autounmask-continue`):** Slices 1/4's full whole-graph
+  cascade, and Slice 3's cross-pass `_autounmask_breakage` contradiction
+  detection.
+
+So `emerge -p dev-libs/aucasctop` now shows `aucascmid USE="cascade"`
+without `aucascleaf` (real's default); `--autounmask-backtrack=y` brings
+`aucascleaf` back. `dev-libs/pfgraphparent` keeps `pfgraphextra` by
+default, drops it under `=y`. `dev-libs/aubreaktop`'s contradiction is
+only spotted (and autounmask abandoned) under `=y`. Each Slice-1/3/4
+contract fixture grew a `--autounmask-backtrack=y` variant; the
+`portage-repo` unit tests for the cascade cases use a new
+`graph_result_autounmask_backtrack` helper. Rust==Python byte-identical,
+full suite green.
+
+`get_best_run` (real returns the settled backtrack run with the most
+config changes and no masks) has no separate analogue here: portuale's
+single `autounmask_use_config` accumulator plus the `MaskPhase`
+trial-and-revert already converge on the maskless most-changed state.
+
+Still ahead: keyword / mask in-loop accumulators (Slice 6).
+
+### Autounmask keyword/mask backward cascade (2026-09-03)
+
+Slice 6 (final) of the autounmask-in-loop plan. A slot pulled by both a
+bare atom and a version bound (`dev-libs/foo` + `>=dev-libs/foo-2`) where
+the stable version is out of range and only a keyword/license/mask-masked
+version is in range: portuale resolved the bare atom to the stable
+`foo-1` first, then reported `>=foo-2` as a plain missing dependency
+(with only a keyword *suggestion* note). Real portage weighs every atom
+that pulls the slot (`_select_pkg`) before deciding a version is
+unavailable, and `_autounmask_levels` autounmasks `foo-2`.
+
+The fix needed no new accumulator. The `slot_constraints` re-drive
+(shipped for solvable slot conflicts) already folds every atom that
+targeted the slot; the gap was `resolve_pretend`'s `*_masked_only`
+fallback gate, which was `visible.is_empty()` -- and `visible =
+[foo-1]` (stable, but out of the folded `>=2` range) is not empty. The
+gate is now `need_fallback(visible)` = "no `is_visible` candidate
+satisfies `atom_str` **and** every `extra_constraints` entry", using the
+same per-atom `match_from_list` tests the `matched` pipeline already
+runs. With no version bound and no `extra_constraints` it is exactly the
+old `is_empty()` check, so nothing else moves.
+
+So `emerge -p --autounmask dev-libs/kwbacktop` re-resolves the
+`kwbackmid` slot to `2.0` with `=dev-libs/kwbackmid-2.0 ~amd64` in the
+keyword-changes block (the `[ebuild N ~]` marker), instead of leaving a
+stray `kwbackmid-1.0` merge plus a "no visible ebuild" note. The default
+(keyword suggestions off) is unchanged: the `>=2.0` dep stays a
+non-fatal missing-dependency warning. The license and mask levels ride
+the identical code path with Slice 2's ordering. 3 CASES + a pinned
+contract test + a `portage-repo` unit test, Rust==Python byte-identical,
+full suite green.
+
+**All six slices of the autounmask-in-loop plan are shipped.**
+
+### Autounmask per-level version re-scan (2026-09-03)
+
+Follow-up to Slice 2. Real `_autounmask_levels` yields a *single mutable*
+`_AutounmaskLevel` object repeatedly, each yield adding one relaxation:
+`+license`, then `+~arch +license`, then `+~arch +license +missing-kw`,
+then `+license +masks`, then `+~arch +license +masks`, … And
+`_select_pkg_highest_available_imp` re-runs its full highest-version-first
+match at *each* level, stopping at the first that yields a package.
+
+portuale had three flat, mutually-exclusive fallbacks
+(`license_masked_only` / `keyword_masked_only` / `mask_masked_only`, each
+meaning "and this is the *only* thing wrong"). That coincided with real
+for single-reason masks but couldn't unmask a candidate blocked by two
+categories at once -- e.g. a version that is both `~arch` **and** `@EULA`
+license-masked. Real's level 2 (`+~arch +license`) accepts it; portuale's
+`keyword_masked_only` rejected it (license also wrong) and settled on a
+lower keyword-only version.
+
+Now `resolve_pretend` walks a cumulative level list built from the
+`--autounmask` / `--autounmask-license` / `--autounmask-keep-masks=n`
+flags, filtering candidates with a single `visible_with_relax(candidate,
+…, relax_license, relax_keywords, relax_masks)` predicate (`is_visible`
+with the named categories set aside). The recording side changed to
+per-category gates -- `!keywords_accepted(…)`, a non-empty
+`missing_licenses(…)`, `package.mask` matched-and-not-unmasked -- so a
+multi-category unmask records every part.
+
+Fixture `dev-libs/multimaskconsumer` RDEPENDs `dev-libs/multimaskdep`;
+`multimaskdep-2.0` is `~amd64` + `@EULA`, `multimaskdep-1.0` is `~amd64`
+only. `emerge -p --autounmask` now resolves the higher `2.0` with both a
+`=dev-libs/multimaskdep-2.0 ~amd64` keyword change and a
+`>=dev-libs/multimaskdep-2.0 SomeEula` license change. 3 CASES + a pinned
+contract test + a `portage-repo` unit test, Rust==Python byte-identical,
+full suite green. (portuale still skips real's `**` "missing keywords"
+levels -- it has no `**` suggestion.)
+
 # # required by dev-libs/useflagpkg[-foo] (argument)
