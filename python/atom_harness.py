@@ -30,8 +30,12 @@ Usage:
     atom_harness.py parse <atom>              -> tab-separated fields, or "INVALID"
     atom_harness.py match <atom> <cand...>    -> comma-joined matches
                                                   (possibly empty), or "INVALID"
-    atom_harness.py batch                     -> reads "parse <atom>" or
-                                                  "match <atom> <cand...>" lines
+    atom_harness.py affecting <atom> <dep...> -> sorted comma-joined
+                                                  extract_affecting_use flags,
+                                                  or "INVALID"
+    atom_harness.py batch                     -> reads "parse <atom>",
+                                                  "match <atom> <cand...>" or
+                                                  "affecting <atom> <dep...>" lines
                                                   from stdin, one result per line
 """
 
@@ -44,8 +48,8 @@ sys.path.insert(0, os.path.join(
     "lib",
 ))
 
-from portage.dep import Atom, match_from_list
-from portage.exception import InvalidAtom
+from portage.dep import Atom, extract_affecting_use, match_from_list
+from portage.exception import InvalidAtom, InvalidDependString
 from portage.versions import catpkgsplit
 
 _SUPPORTED_OPERATORS = {None, "=", "=*", ">", ">=", "<", "<=", "~"}
@@ -109,6 +113,17 @@ def _format_match(atom_str, candidates):
     return ",".join(matches)
 
 
+def _format_affecting(atom_str, dep_tokens):
+    """Real portage's own extract_affecting_use: sorted comma-joined
+    flags, or "INVALID" on malformed dep syntax (real raises
+    InvalidDependString; the Rust port returns None)."""
+    try:
+        flags = extract_affecting_use(" ".join(dep_tokens), atom_str)
+    except InvalidDependString:
+        return "INVALID"
+    return ",".join(sorted(flags))
+
+
 def _dispatch(op, args):
     if op == "parse":
         if len(args) != 1:
@@ -118,6 +133,10 @@ def _dispatch(op, args):
         if len(args) < 1:
             raise ValueError("match expects at least 1 arg (the atom)")
         return _format_match(args[0], args[1:])
+    if op == "affecting":
+        if len(args) < 1:
+            raise ValueError("affecting expects at least 1 arg (the atom)")
+        return _format_affecting(args[0], args[1:])
     raise ValueError(f"unknown op {op!r}")
 
 

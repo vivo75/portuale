@@ -7,8 +7,12 @@
 //   atom-harness parse <atom>              -> tab-separated fields, or "INVALID"
 //   atom-harness match <atom> <cand...>    -> comma-joined matches (possibly
 //                                              empty), or "INVALID"
-//   atom-harness batch                     -> reads "parse <atom>" or
-//                                              "match <atom> <cand...>" lines
+//   atom-harness affecting <atom> <dep...> -> sorted comma-joined
+//                                              extract_affecting_use flags,
+//                                              or "INVALID"
+//   atom-harness batch                     -> reads "parse <atom>",
+//                                              "match <atom> <cand...>" or
+//                                              "affecting <atom> <dep...>" lines
 //                                              from stdin, one result per line
 
 use portage_dep::{parse_atom, Blocker, SlotOperator, UseDep, UseDepDefault, UseDepOp};
@@ -83,6 +87,20 @@ fn format_match(atom_str: &str, candidates: &[&str]) -> String {
     }
 }
 
+/// `extract_affecting_use`: sorted comma-joined flags, or "INVALID" for
+/// malformed dep syntax. The dep string is the args after the atom joined
+/// on a single space (its tokens are whitespace-split again inside).
+fn format_affecting(atom_str: &str, dep_tokens: &[&str]) -> String {
+    match portage_dep::extract_affecting_use(&dep_tokens.join(" "), atom_str) {
+        None => "INVALID".to_string(),
+        Some(flags) => {
+            let mut v: Vec<&str> = flags.iter().map(String::as_str).collect();
+            v.sort_unstable();
+            v.join(",")
+        }
+    }
+}
+
 fn dispatch(op: &str, args: &[&str]) -> Result<String, String> {
     match op {
         "parse" => {
@@ -96,6 +114,12 @@ fn dispatch(op: &str, args: &[&str]) -> Result<String, String> {
                 return Err("match expects at least 1 arg (the atom)".to_string());
             };
             Ok(format_match(atom_str, candidates))
+        }
+        "affecting" => {
+            let [atom_str, dep_tokens @ ..] = args else {
+                return Err("affecting expects at least 1 arg (the atom)".to_string());
+            };
+            Ok(format_affecting(atom_str, dep_tokens))
         }
         other => Err(format!("unknown op {other:?}")),
     }

@@ -238,6 +238,65 @@ def test_match_matches_between_implementations(
     assert rust_result == python_result
 
 
+# extract_affecting_use: real portage's own test corpus
+# (lib/portage/tests/dep/test_extract_affecting_use.py) -- 23 well-formed
+# + 15 malformed, plus the docstring example -- run through both harnesses
+# (Python = real portage's function; Rust = portage_dep's port).
+AFFECTING_CASES = [
+    ("A", "a? ( A ) !b? ( B ) !c? ( C ) d? ( D )"),
+    ("B", "a? ( A ) !b? ( B ) !c? ( C ) d? ( D )"),
+    ("C", "a? ( A ) !b? ( B ) !c? ( C ) d? ( D )"),
+    ("D", "a? ( A ) !b? ( B ) !c? ( C ) d? ( D )"),
+    ("AB", "a? ( b? ( AB ) )"),
+    ("ABC", "a? ( b? ( c? ( ABC ) ) )"),
+    ("A", "a? ( A b? ( c? ( ABC ) AB ) )"),
+    ("AB", "a? ( A b? ( c? ( ABC ) AB ) )"),
+    ("ABC", "a? ( A b? ( c? ( ABC ) AB ) )"),
+    ("X", "a? ( A b? ( c? ( ABC ) AB ) ) X"),
+    ("X", "X a? ( A b? ( c? ( ABC ) AB ) )"),
+    ("A", "ab? ( || ( A B ) )"),
+    ("B", "!ab? ( || ( A B ) )"),
+    ("A", "ab? ( || ( A || ( b? ( || ( B C ) ) ) ) )"),
+    ("B", "ab? ( || ( A || ( b? ( || ( B C ) ) ) ) )"),
+    ("C", "ab? ( || ( A || ( b? ( || ( B C ) ) ) ) )"),
+    ("A", "( ab? ( || ( ( A ) || ( b? ( ( ( || ( B ( C ) ) ) ) ) ) ) ) )"),
+    ("B", "( ab? ( || ( ( A ) || ( b? ( ( ( || ( B ( C ) ) ) ) ) ) ) ) )"),
+    ("C", "( ab? ( || ( ( A ) || ( b? ( ( ( || ( B ( C ) ) ) ) ) ) ) ) )"),
+    ("B", "a? ( A )"),
+    ("B", "a? ( || ( A B ) )"),
+    (">=dev-lang/php-5.2[pcre(+)]", "a? ( >=dev-lang/php-5.2[pcre(+)] )"),
+    (
+        "dev-libs/cyrus-sasl",
+        "sasl? ( dev-libs/cyrus-sasl ) !minimal? ( cxx? ( dev-libs/cyrus-sasl ) )",
+    ),
+    # malformed -> "INVALID" on both
+    ("A", "? ( A )"),
+    ("A", "!? ( A )"),
+    ("A", "( A"),
+    ("A", "A )"),
+    ("A", "||( A B )"),
+    ("A", "|| (A B )"),
+    ("A", "|| ( A B)"),
+    ("A", "|| ( A B"),
+    ("A", "|| A B )"),
+    ("A", "|| A B"),
+    ("A", "|| ( A B ) )"),
+    ("A", "|| || B C"),
+    ("A", "|| ( A B || )"),
+    ("A", "a? A"),
+    ("A", "( || ( || || ( A ) foo? ( B ) ) )"),
+]
+
+
+@pytest.mark.parametrize("atom,dep", AFFECTING_CASES)
+def test_affecting_matches_between_implementations(
+    atom, dep, atom_harness_python, atom_harness_rust
+):
+    python_result = _run(atom_harness_python, "affecting", atom, *dep.split())
+    rust_result = _run([str(atom_harness_rust)], "affecting", atom, *dep.split())
+    assert rust_result == python_result
+
+
 def test_match_of_invalid_atom_is_invalid_in_both(
     atom_harness_python, atom_harness_rust
 ):
@@ -263,6 +322,7 @@ def test_batch_mode_output_matches(atom_harness_python, atom_harness_rust):
     all_atoms = [a for a in PARSE_VALID_ATOMS + PARSE_INVALID_ATOMS if " " not in a]
     lines = [f"parse {a}" for a in all_atoms]
     lines += [f"match {atom} {' '.join(candidates)}" for atom, candidates in MATCH_CASES]
+    lines += [f"affecting {atom} {dep}" for atom, dep in AFFECTING_CASES]
     stdin_data = "\n".join(lines) + "\n"
 
     python_out = subprocess.run(

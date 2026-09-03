@@ -1099,6 +1099,190 @@ mod wildcard_tests {
     }
 }
 
+/// One element on `extract_affecting_use`'s parse stack: a bare token
+/// (`"||"`, a `foo?` conditional, or the searched-for atom) or a nested
+/// group. Mirrors real portage's `stack` entries, which are `str` or
+/// `list`.
+#[derive(Clone, Debug, PartialEq)]
+enum Aff {
+    Tok(String),
+    Group(Vec<Aff>),
+}
+
+/// Real `l[0][-1] == "?"` / `stack[level][-1][-1] == "?"`: does this
+/// element's last character (recursing into a group's last element) end
+/// in `?`.
+fn aff_ends_q(e: &Aff) -> bool {
+    match e {
+        Aff::Tok(s) => s.ends_with('?'),
+        Aff::Group(v) => v.last().is_some_and(aff_ends_q),
+    }
+}
+
+/// Real `stack[level][-1] == "||"`.
+fn aff_is_barbar(e: &Aff) -> bool {
+    matches!(e, Aff::Tok(s) if s == "||")
+}
+
+fn affecting_useflag_re() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    // Real `_get_useflag_re` for the modern EAPI default -- EAPI is not
+    // parametrized here, matching every other primitive in this crate.
+    RE.get_or_init(|| Regex::new(r"^[A-Za-z0-9][A-Za-z0-9+_@-]*$").unwrap())
+}
+
+/// Real `extract_affecting_use`'s inner `flag(conditional)`: strip a
+/// leading `!` and the trailing `?`, then validate. `None` where real
+/// raises `InvalidDependString` (invalid flag name).
+fn aff_cond_flag(tok: &str) -> Option<String> {
+    let body = tok.strip_prefix('!').unwrap_or(tok);
+    let mut chars = body.chars();
+    chars.next_back();
+    let flag = chars.as_str();
+    if affecting_useflag_re().is_match(flag) {
+        Some(flag.to_string())
+    } else {
+        None
+    }
+}
+
+/// Real `extract_affecting_use`'s `special_append()` closure: fold `l`
+/// back into `stack[lvl]`, killing redundant brackets where possible.
+fn aff_special_append(stack: &mut [Vec<Aff>], lvl: usize, is_single: bool, l: &[Aff]) {
+    let keep_flat = is_single && !stack[lvl].last().is_some_and(aff_ends_q);
+    if keep_flat {
+        if l.len() == 1 {
+            if let Aff::Group(inner) = &l[0] {
+                stack[lvl].extend(inner.iter().cloned());
+                return;
+            }
+        }
+        stack[lvl].extend(l.iter().cloned());
+    } else {
+        stack[lvl].push(Aff::Group(l.to_vec()));
+    }
+}
+
+/// Rust port of `portage.dep.extract_affecting_use`
+/// (`lib/portage/dep/__init__.py`): the set of USE flags whose `flag?`
+/// conditionals decide whether `atom` (matched as an exact whitespace
+/// token) is in effect inside the dependency string `dep`. `None` on
+/// malformed `dep` syntax -- real raises `InvalidDependString`. EAPI is
+/// not parametrized (the useflag charset is the modern default), matching
+/// the rest of this crate.
+///
+/// ```
+/// # use std::collections::HashSet;
+/// let got = portage_dep::extract_affecting_use(
+///     "sasl? ( dev-libs/cyrus-sasl ) !minimal? ( cxx? ( dev-libs/cyrus-sasl ) )",
+///     "dev-libs/cyrus-sasl",
+/// ).unwrap();
+/// assert_eq!(got, HashSet::from(["cxx".to_string(), "minimal".to_string(), "sasl".to_string()]));
+/// ```
+pub fn extract_affecting_use(dep: &str, atom: &str) -> Option<HashSet<String>> {
+    let mut level: i32 = 0;
+    let mut stack: Vec<Vec<Aff>> = vec![Vec::new()];
+    let mut need_bracket = false;
+    let mut affecting: HashSet<String> = HashSet::new();
+
+    for token in dep.split_whitespace() {
+        if token == "(" {
+            need_bracket = false;
+            stack.push(Vec::new());
+            level += 1;
+        } else if token == ")" {
+            if need_bracket || level <= 0 {
+                return None;
+            }
+            level -= 1;
+            let lvl = level as usize;
+            let l = stack.pop().unwrap();
+            let is_single =
+                l.len() == 1 || (l.len() == 2 && (aff_is_barbar(&l[0]) || aff_ends_q(&l[0])));
+
+            // Predicates over the (still-unmutated) enclosing frames.
+            let ends_in_any_of_dep = |k: i32| -> bool {
+                k >= 0
+                    && stack
+                        .get(k as usize)
+                        .and_then(|s| s.last())
+                        .is_some_and(aff_is_barbar)
+            };
+            let ends_in_operator = |k: i32| -> bool {
+                k >= 0
+                    && stack
+                        .get(k as usize)
+                        .and_then(|s| s.last())
+                        .is_some_and(|e| aff_is_barbar(e) || aff_ends_q(e))
+            };
+            let eiad_prev = ends_in_any_of_dep(level - 1);
+            let eio_cur = ends_in_operator(level);
+            let eiad_cur = ends_in_any_of_dep(level);
+
+            if l.is_empty() {
+                if stack[lvl]
+                    .last()
+                    .is_some_and(|e| aff_is_barbar(e) || aff_ends_q(e))
+                {
+                    stack[lvl].pop();
+                }
+                continue;
+            }
+
+            if !eiad_prev && !eio_cur {
+                stack[lvl].extend(l);
+            } else if stack[lvl].is_empty() {
+                aff_special_append(&mut stack, lvl, is_single, &l);
+            } else if l.len() == 1 && eiad_cur {
+                stack[lvl].pop();
+                aff_special_append(&mut stack, lvl, is_single, &l);
+            } else if l.len() == 2
+                && (aff_is_barbar(&l[0]) || aff_ends_q(&l[0]))
+                && stack[lvl]
+                    .last()
+                    .is_some_and(|e| *e == l[0] || aff_is_barbar(e))
+            {
+                stack[lvl].pop();
+                aff_special_append(&mut stack, lvl, is_single, &l);
+                if aff_ends_q(&l[0]) {
+                    let Aff::Tok(t) = &l[0] else { return None };
+                    affecting.insert(aff_cond_flag(t)?);
+                }
+            } else {
+                if let Some(last) = stack[lvl].last() {
+                    if aff_ends_q(last) {
+                        let Aff::Tok(t) = last else { return None };
+                        let f = aff_cond_flag(t)?;
+                        affecting.insert(f);
+                    }
+                }
+                aff_special_append(&mut stack, lvl, is_single, &l);
+            }
+        } else if token == "||" {
+            if need_bracket {
+                return None;
+            }
+            need_bracket = true;
+            stack[level as usize].push(Aff::Tok(token.to_string()));
+        } else {
+            if need_bracket {
+                return None;
+            }
+            if token.ends_with('?') {
+                need_bracket = true;
+                stack[level as usize].push(Aff::Tok(token.to_string()));
+            } else if token == atom {
+                stack[level as usize].push(Aff::Tok(token.to_string()));
+            }
+        }
+    }
+
+    if level != 0 || need_bracket {
+        return None;
+    }
+    Some(affecting)
+}
+
 #[cfg(test)]
 mod use_dep_satisfaction_tests {
     use super::*;
@@ -1589,6 +1773,114 @@ mod use_dep_conditional_evaluation_tests {
         assert_eq!(
             evaluate_atom_conditionals("not a valid atom", &HashSet::new()),
             None
+        );
+    }
+}
+
+#[cfg(test)]
+mod extract_affecting_use_tests {
+    use super::*;
+
+    /// The 23 passing cases from real portage's
+    /// `lib/portage/tests/dep/test_extract_affecting_use.py`, verbatim.
+    #[test]
+    fn matches_real_portages_test_corpus() {
+        let cases: &[(&str, &str, &[&str])] = &[
+            ("a? ( A ) !b? ( B ) !c? ( C ) d? ( D )", "A", &["a"]),
+            ("a? ( A ) !b? ( B ) !c? ( C ) d? ( D )", "B", &["b"]),
+            ("a? ( A ) !b? ( B ) !c? ( C ) d? ( D )", "C", &["c"]),
+            ("a? ( A ) !b? ( B ) !c? ( C ) d? ( D )", "D", &["d"]),
+            ("a? ( b? ( AB ) )", "AB", &["a", "b"]),
+            ("a? ( b? ( c? ( ABC ) ) )", "ABC", &["a", "b", "c"]),
+            ("a? ( A b? ( c? ( ABC ) AB ) )", "A", &["a"]),
+            ("a? ( A b? ( c? ( ABC ) AB ) )", "AB", &["a", "b"]),
+            ("a? ( A b? ( c? ( ABC ) AB ) )", "ABC", &["a", "b", "c"]),
+            ("a? ( A b? ( c? ( ABC ) AB ) ) X", "X", &[]),
+            ("X a? ( A b? ( c? ( ABC ) AB ) )", "X", &[]),
+            ("ab? ( || ( A B ) )", "A", &["ab"]),
+            ("!ab? ( || ( A B ) )", "B", &["ab"]),
+            ("ab? ( || ( A || ( b? ( || ( B C ) ) ) ) )", "A", &["ab"]),
+            (
+                "ab? ( || ( A || ( b? ( || ( B C ) ) ) ) )",
+                "B",
+                &["ab", "b"],
+            ),
+            (
+                "ab? ( || ( A || ( b? ( || ( B C ) ) ) ) )",
+                "C",
+                &["ab", "b"],
+            ),
+            (
+                "( ab? ( || ( ( A ) || ( b? ( ( ( || ( B ( C ) ) ) ) ) ) ) ) )",
+                "A",
+                &["ab"],
+            ),
+            (
+                "( ab? ( || ( ( A ) || ( b? ( ( ( || ( B ( C ) ) ) ) ) ) ) ) )",
+                "B",
+                &["ab", "b"],
+            ),
+            (
+                "( ab? ( || ( ( A ) || ( b? ( ( ( || ( B ( C ) ) ) ) ) ) ) ) )",
+                "C",
+                &["ab", "b"],
+            ),
+            ("a? ( A )", "B", &[]),
+            ("a? ( || ( A B ) )", "B", &["a"]),
+            (
+                "a? ( >=dev-lang/php-5.2[pcre(+)] )",
+                ">=dev-lang/php-5.2[pcre(+)]",
+                &["a"],
+            ),
+        ];
+        for (dep, atom, want) in cases {
+            let got = extract_affecting_use(dep, atom)
+                .unwrap_or_else(|| panic!("({dep:?}, {atom:?}) returned None, want {want:?}"));
+            let want: HashSet<String> = want.iter().map(|s| s.to_string()).collect();
+            assert_eq!(got, want, "extract_affecting_use({dep:?}, {atom:?})");
+        }
+    }
+
+    /// The 15 malformed cases from the same file's `test_cases_xfail`
+    /// (real raises `InvalidDependString`; portuale returns `None`).
+    #[test]
+    fn malformed_syntax_returns_none() {
+        let cases: &[(&str, &str)] = &[
+            ("? ( A )", "A"),
+            ("!? ( A )", "A"),
+            ("( A", "A"),
+            ("A )", "A"),
+            ("||( A B )", "A"),
+            ("|| (A B )", "A"),
+            ("|| ( A B)", "A"),
+            ("|| ( A B", "A"),
+            ("|| A B )", "A"),
+            ("|| A B", "A"),
+            ("|| ( A B ) )", "A"),
+            ("|| || B C", "A"),
+            ("|| ( A B || )", "A"),
+            ("a? A", "A"),
+            ("( || ( || || ( A ) foo? ( B ) ) )", "A"),
+        ];
+        for (dep, atom) in cases {
+            assert_eq!(
+                extract_affecting_use(dep, atom),
+                None,
+                "extract_affecting_use({dep:?}, {atom:?}) should be None"
+            );
+        }
+    }
+
+    #[test]
+    fn docstring_example() {
+        let got = extract_affecting_use(
+            "sasl? ( dev-libs/cyrus-sasl ) !minimal? ( cxx? ( dev-libs/cyrus-sasl ) )",
+            "dev-libs/cyrus-sasl",
+        )
+        .unwrap();
+        assert_eq!(
+            got,
+            HashSet::from(["cxx".to_string(), "minimal".to_string(), "sasl".to_string()])
         );
     }
 }
