@@ -108,3 +108,56 @@ pub(crate) fn highest_visible_slot(
         .max_by(|a, b| vercmp_ordering(&a.version, &b.version))
         .map(|c| (c.slot.clone(), c.version.clone()))
 }
+
+/// The requested cps Portage's `--update` greedy expansion actually pins:
+/// each directly-requested atom expands into per-slot `cat/pkg:S` args, but
+/// only when the atom spans slots (an explicit slot or exact-version request
+/// pins nothing). Visibility/masking is unfiltered here.
+// Portage: _emerge/depgraph.py, _greedy_slots
+pub(crate) fn greedy_pinned_cps(
+    atoms: &HashSet<String>,
+    repos: &[RepoConfig],
+    installed_by_cp: &HashMap<(String, String), Vec<(String, String)>>,
+) -> HashSet<(String, String)> {
+    let mut out = HashSet::new();
+    for atom_str in atoms {
+        let Some(atom) = portage_dep::parse_atom(atom_str) else {
+            continue;
+        };
+        let cp = (atom.category.clone(), atom.package.clone());
+        if out.contains(&cp) {
+            continue;
+        }
+        let mut slots: HashSet<String> = HashSet::new();
+        if let Some(insts) = installed_by_cp.get(&cp) {
+            for (version, slot) in insts {
+                let r = format!("{}/{}-{version}:{slot}", atom.category, atom.package);
+                if portage_dep::match_from_list(atom_str, &[r.as_str()])
+                    .is_some_and(|m| !m.is_empty())
+                {
+                    slots.insert(slot.split('/').next().unwrap_or(slot).to_string());
+                }
+            }
+        }
+        if let Ok(tree) = list_candidates(repos, &atom.category, &atom.package) {
+            let best = tree
+                .iter()
+                .filter(|c| {
+                    let r = format!(
+                        "{}/{}-{}:{}/{}",
+                        atom.category, atom.package, c.version, c.slot, c.sub_slot
+                    );
+                    portage_dep::match_from_list(atom_str, &[r.as_str()])
+                        .is_some_and(|m| !m.is_empty())
+                })
+                .max_by(|a, b| vercmp_ordering(&a.version, &b.version));
+            if let Some(h) = best {
+                slots.insert(h.slot.clone());
+            }
+        }
+        if slots.len() >= 2 {
+            out.insert(cp);
+        }
+    }
+    out
+}

@@ -286,3 +286,306 @@ pub fn split_cpv(cpv: &str) -> Option<(String, String, String)> {
     }
     None
 }
+
+/// Every USE flag name referenced anywhere in a `REQUIRED_USE` string.
+// Portage: portage.dep, get_required_use_flags
+pub(crate) fn required_use_flag_names(required_use: &str) -> HashSet<String> {
+    let mut out = HashSet::new();
+    for tok in required_use.split_whitespace() {
+        let t = tok.strip_suffix('?').unwrap_or(tok);
+        let t = t.strip_prefix('!').unwrap_or(t);
+        if matches!(t, "(" | ")" | "||" | "^^" | "??" | "") {
+            continue;
+        }
+        if t.starts_with(|c: char| c.is_ascii_alphanumeric())
+            && t.chars()
+                .all(|c| c.is_ascii_alphanumeric() || "+_@-".contains(c))
+        {
+            out.insert(t.to_string());
+        }
+    }
+    out
+}
+
+/// One entry of the circular-dependency suggestions: a specific `Change
+/// USE:` fix that would break the cycle at one edge.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CircularSuggestion {
+    /// `category/package-version` of the package whose USE would change.
+    pub parent_cpv: String,
+    /// `(flag, enable)` diffs from the package's current USE, sorted.
+    pub changes: Vec<(String, bool)>,
+    /// A grandparent's atom conditionally constrains one of these flags, so
+    /// the fix may cascade upward.
+    pub followup: bool,
+}
+
+/// For each edge of the shortest cycle, the minimal `package.use` changes on
+/// the *depending* package that would drop the offending atom from its
+/// build-time deps without violating its own `REQUIRED_USE`. Deduped and
+/// sorted for a deterministic render.
+// Portage: resolver/circular_dependency.py, _find_suggestions
+pub fn circular_dep_solutions(
+    cycle: &[String],
+    repos: &[RepoConfig],
+    config: &portage_profile::Config,
+    autounmask_use_changes: &[AutounmaskChange],
+    entries: &[GraphEntry],
+) -> Vec<CircularSuggestion> {
+    const MAX_AFFECTING_USE: usize = 10;
+    let mut out: Vec<CircularSuggestion> = Vec::new();
+    let n = cycle.len();
+    if n == 0 {
+        return out;
+    }
+
+    for pos in 0..n {
+        let parent_cpv = &cycle[(pos + n - 1) % n];
+        let child_cpv = &cycle[pos];
+        let (Some((pcat, ppkg, pver)), Some((ccat, cpkg, _))) =
+            (split_cpv(parent_cpv), split_cpv(child_cpv))
+        else {
+            continue;
+        };
+        let Ok(pcands) = list_candidates(repos, &pcat, &ppkg) else {
+            continue;
+        };
+        let Some(pc) = pcands.iter().find(|c| c.version == pver) else {
+            continue;
+        };
+        let Ok(md) = repo_aux_metadata(&pc.repo_location, &pcat, &format!("{ppkg}-{pver}")) else {
+            continue;
+        };
+        let get = |k: &str| md.get(k).map(String::as_str).unwrap_or("");
+        let dep = format!("{} {}", get("DEPEND"), get("BDEPEND"));
+        let dep_tokens: Vec<String> = dep.split_whitespace().map(str::to_string).collect();
+        let required_use = get("REQUIRED_USE");
+        let iuse_names: HashSet<String> = pc
+            .iuse
+            .split_whitespace()
+            .map(|t| t.trim_start_matches(['+', '-']).to_string())
+            .collect();
+        let parent_str = format!(
+            "{pcat}/{ppkg}-{pver}:{}/{}::{}",
+            pc.slot, pc.sub_slot, pc.repo_name
+        );
+        // The parent USE plus the autounmask-USE overlay; the changed flags
+        // themselves stay untouchable below.
+        let mut parent_use: HashSet<String> = effective_use_flags(EffectiveUseFlagsArgs {
+            config,
+            iuse: &pc.iuse,
+            keywords: &pc.keywords,
+            candidate_str: &parent_str,
+            category: &pcat,
+            package: &ppkg,
+        })
+        .as_ref()
+        .clone();
+        for ch in autounmask_use_changes {
+            if matches_config_entry(&ch.atom, &parent_str, &pcat, &ppkg) {
+                for tok in ch.token.split_whitespace() {
+                    if let Some(flag) = tok.strip_prefix('-') {
+                        parent_use.remove(flag);
+                    } else {
+                        parent_use.insert(tok.trim_start_matches('+').to_string());
+                    }
+                }
+            }
+        }
+
+        // `parent_atom`: the (unevaluated) token in `dep` that pulls the child.
+        let ccp = format!("{ccat}/{cpkg}");
+        let Some(parent_atom) = dep_tokens.iter().find(|t| {
+            portage_dep::parse_atom(t)
+                .is_some_and(|a| format!("{}/{}", a.category, a.package) == ccp)
+        }) else {
+            continue;
+        };
+        let parent_atom = parent_atom.clone();
+
+        let Some(mut affecting) = portage_dep::extract_affecting_use(&dep, &parent_atom) else {
+            continue;
+        };
+
+        // untouchable = use.mask ∪ use.force ∪ autounmask-changed
+        let mut untouchable = forced_or_masked_flags(ForcedOrMaskedFlagsArgs {
+            iuse: &pc.iuse,
+            keywords: &pc.keywords,
+            candidate_str: &parent_str,
+            category: &pcat,
+            package: &ppkg,
+            config,
+        });
+        for ch in autounmask_use_changes {
+            if matches_config_entry(&ch.atom, &parent_str, &pcat, &ppkg) {
+                for tok in ch.token.split_whitespace() {
+                    untouchable.insert(tok.trim_start_matches(['+', '-']).to_string());
+                }
+            }
+        }
+        affecting.retain(|f| !untouchable.contains(f));
+
+        // REQUIRED_USE entanglement: bounded widening to the referenced flags.
+        let ruf = required_use_flag_names(required_use);
+        if affecting.iter().any(|f| ruf.contains(f)) {
+            let mut total: HashSet<String> = affecting.clone();
+            total.extend(ruf.iter().cloned());
+            total.retain(|f| !untouchable.contains(f));
+            if total.len() <= MAX_AFFECTING_USE {
+                affecting = total;
+            }
+        }
+
+        if affecting.is_empty() {
+            continue;
+        }
+        let mut affecting: Vec<String> = affecting.into_iter().collect();
+        affecting.sort();
+        if affecting.len() > MAX_AFFECTING_USE {
+            // Drop irrelevant not-currently-enabled flags.
+            affecting.retain(|f| parent_use.contains(f));
+            if affecting.len() > MAX_AFFECTING_USE {
+                continue;
+            }
+        }
+
+        // Every enable/disable assignment of the affecting flags whose
+        // reduced `dep` no longer contains `parent_atom` and still
+        // satisfies `REQUIRED_USE`, recorded as a minimal diff.
+        let n_aff = affecting.len();
+        let mut solutions: HashSet<Vec<(String, bool)>> = HashSet::new();
+        for mask in 0u32..(1u32 << n_aff) {
+            let mut cur = parent_use.clone();
+            for (i, f) in affecting.iter().enumerate() {
+                if mask & (1 << i) != 0 {
+                    cur.insert(f.clone());
+                } else {
+                    cur.remove(f);
+                }
+            }
+            let Ok(reduced) = portage_use_reduce::use_reduce_flat(
+                &dep_tokens,
+                &cur,
+                portage_use_reduce::MatchMode::Normal,
+            ) else {
+                continue;
+            };
+            if reduced.contains(&parent_atom) {
+                continue;
+            }
+            if !required_use.trim().is_empty()
+                && !matches!(
+                    portage_required_use::check_required_use(required_use, &cur, &iuse_names),
+                    Ok(true)
+                )
+            {
+                continue;
+            }
+            let mut sol: Vec<(String, bool)> = Vec::new();
+            for (i, f) in affecting.iter().enumerate() {
+                let enabled = mask & (1 << i) != 0;
+                if enabled && !parent_use.contains(f) {
+                    sol.push((f.clone(), true));
+                } else if !enabled && parent_use.contains(f) {
+                    sol.push((f.clone(), false));
+                }
+            }
+            sol.sort();
+            solutions.insert(sol);
+        }
+
+        let all: Vec<Vec<(String, bool)>> = solutions.into_iter().collect();
+        for sol in &all {
+            // Drop a solution that's a strict superset of another.
+            let sol_set: HashSet<&(String, bool)> = sol.iter().collect();
+            if all
+                .iter()
+                .any(|o| o != sol && o.iter().all(|x| sol_set.contains(x)))
+            {
+                continue;
+            }
+            let (ignore, followup) = grandparent_use_conflict(&pcat, &ppkg, sol, repos, entries);
+            if ignore {
+                continue;
+            }
+            out.push(CircularSuggestion {
+                parent_cpv: format!("{pcat}/{ppkg}-{pver}"),
+                changes: sol.clone(),
+                followup,
+            });
+        }
+    }
+
+    out.sort_by(|a, b| {
+        (a.parent_cpv.as_str(), &a.changes).cmp(&(b.parent_cpv.as_str(), &b.changes))
+    });
+    out.dedup();
+    out
+}
+
+/// Whether a grandparent's own atom on `parent`'s `cat/pkg` constrains a flag
+/// in `solution`: a hard `[flag]`/`[-flag]` clash disqualifies it, a
+/// conditional one only flags `followup_change`.
+pub(crate) fn grandparent_use_conflict(
+    pcat: &str,
+    ppkg: &str,
+    solution: &[(String, bool)],
+    repos: &[RepoConfig],
+    entries: &[GraphEntry],
+) -> (bool, bool) {
+    let pcp = format!("{pcat}/{ppkg}");
+    let mut followup = false;
+    let Some(pe) = entries
+        .iter()
+        .find(|e| e.category == pcat && e.package == ppkg)
+    else {
+        return (false, false);
+    };
+    for (ocat, opkg) in &pe.required_by {
+        let Some(over) = entries
+            .iter()
+            .find(|e| &e.category == ocat && &e.package == opkg)
+            .and_then(merge_bound_cpv)
+            .and_then(|cpv| split_cpv(&cpv).map(|(_, _, v)| v))
+        else {
+            continue;
+        };
+        let Ok(ocands) = list_candidates(repos, ocat, opkg) else {
+            continue;
+        };
+        let Some(oc) = ocands.iter().find(|c| c.version == over) else {
+            continue;
+        };
+        let Ok(omd) = repo_aux_metadata(&oc.repo_location, ocat, &format!("{opkg}-{over}")) else {
+            continue;
+        };
+        for key in ["DEPEND", "BDEPEND", "RDEPEND", "PDEPEND"] {
+            let Some(dep) = omd.get(key) else { continue };
+            for tok in dep.split_whitespace() {
+                let Some(a) = portage_dep::parse_atom(tok) else {
+                    continue;
+                };
+                if format!("{}/{}", a.category, a.package) != pcp {
+                    continue;
+                }
+                let Some(use_deps) = &a.use_deps else {
+                    continue;
+                };
+                for (flag, _) in solution {
+                    for ud in use_deps {
+                        if &ud.flag != flag {
+                            continue;
+                        }
+                        match ud.op {
+                            portage_dep::UseDepOp::Enabled | portage_dep::UseDepOp::Disabled => {
+                                return (true, followup);
+                            }
+                            _ => followup = true,
+                        }
+                    }
+                }
+            }
+        }
+    }
+    (false, followup)
+}
