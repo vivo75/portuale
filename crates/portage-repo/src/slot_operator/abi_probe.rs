@@ -26,6 +26,79 @@ pub(crate) struct CollectProbeParentsArgs<'a> {
     pub(crate) excluded: &'a [String],
 }
 
+/// Per provider cp, every installed package whose recorded deps name that cp.
+/// `probe_refused` then refuses a fresh provider candidate that fails any
+/// surviving parent atom (skipping the consumer itself, whose rebuild replaces
+/// it). The `:2622` replacement-parent gate is vacuous here: the scheduled
+/// rebuild reinstalls the same version.
+// Portage: _emerge/depgraph.py, _slot_operator_check_reverse_dependencies
+pub(crate) fn collect_probe_parents(
+    args: CollectProbeParentsArgs<'_>,
+) -> HashMap<(String, String), Vec<ProbeParent>> {
+    let CollectProbeParentsArgs {
+        root,
+        entries,
+        reachable,
+        walked,
+        in_graph,
+        already,
+        with_bdeps,
+        excluded,
+    } = args;
+    let mut being_removed: HashSet<(String, String)> = HashSet::new();
+    for e in entries {
+        if matches!(e.outcome, PretendOutcome::Uninstall { .. }) {
+            being_removed.insert((e.category.clone(), e.package.clone()));
+        }
+    }
+    let mut parents: HashMap<(String, String), Vec<ProbeParent>> = HashMap::new();
+    for pkg in all_installed_packages(root) {
+        let qcp = (pkg.category.clone(), pkg.package.clone());
+        if !reachable.contains(&qcp) && !walked.contains(&qcp) {
+            continue;
+        }
+        // Merge-bound this pass, already scheduled, being removed, or
+        // excluded: the pin is stale.
+        if in_graph.contains(&qcp) || already.contains(&qcp) {
+            continue;
+        }
+        if being_removed.contains(&qcp) {
+            continue;
+        }
+        let q_str = format!("{}/{}-{}", pkg.category, pkg.package, pkg.version);
+        if excluded
+            .iter()
+            .any(|ex| matches_config_entry(ex, &q_str, &pkg.category, &pkg.package))
+        {
+            continue;
+        }
+        // A built package's DEPEND/BDEPEND only count when bdeps is on and
+        // the parent was walked.
+        let dep_keys: &[&str] = match with_bdeps && walked.contains(&qcp) {
+            true => &["RDEPEND", "PDEPEND", "DEPEND", "BDEPEND", "IDEPEND"],
+            false => &["RDEPEND", "PDEPEND", "IDEPEND"],
+        };
+        for key in dep_keys {
+            let tokens = read_vdb_string(root, &pkg.category, &pkg.package, &pkg.version, key);
+            for token in tokens.split_whitespace() {
+                let Some(atom) = portage_dep::parse_atom(token) else {
+                    continue;
+                };
+                if atom.blocker != portage_dep::Blocker::None {
+                    continue;
+                }
+                let provider_cp = (atom.category.clone(), atom.package.clone());
+                let effective = relax_built_slot_operator_atom(token);
+                parents.entry(provider_cp).or_default().push(ProbeParent {
+                    parent: qcp.clone(),
+                    atom: effective,
+                });
+            }
+        }
+    }
+    parents
+}
+
 /// Argument parents of the update probe: each top-level atom is filed under
 /// its own cp with an empty-cp pseudo parent, so it vetoes a provider
 /// candidate it does not match. Only the rebuild scan files arguments.
@@ -300,4 +373,81 @@ pub(crate) fn greedy_pin_survives_revision(
         })
     };
     !(hits(&h_blockers, &g_ref) || hits(&g_blockers, &h_ref))
+}
+
+/// Arguments of [`replacement_parent_accepts`].
+pub(crate) struct ReplacementParentAcceptsArgs<'a> {
+    pub(crate) repos: &'a [RepoConfig],
+    pub(crate) config: &'a portage_profile::Config,
+    pub(crate) consumer: (&'a str, &'a str, &'a str),
+    pub(crate) dep_keys: &'a [&'a str],
+    pub(crate) provider: (&'a str, &'a str),
+    pub(crate) candidate: &'a str,
+}
+
+/// Portage's update probe only reports a new-slot update when some replacement
+/// parent (another available package in the consumer's slot) carries an atom
+/// on the provider that accepts the candidate. The candidate is refused only
+/// when some replacement ebuild names the provider and none of those atoms
+/// accepts it; a replacement that names the provider nowhere stays accepted.
+// Portage: _emerge/depgraph.py, _slot_operator_update_probe
+pub(crate) fn replacement_parent_accepts(args: ReplacementParentAcceptsArgs<'_>) -> bool {
+    let ReplacementParentAcceptsArgs {
+        repos,
+        config,
+        consumer,
+        dep_keys,
+        provider,
+        candidate,
+    } = args;
+    let (cat, pkg, slot) = consumer;
+    let Ok(cands) = list_candidates(repos, cat, pkg) else {
+        return true;
+    };
+    let mut names_provider = false;
+    for c in cands
+        .iter()
+        .filter(|c| c.source == CandidateSource::Ebuild && c.slot == slot)
+    {
+        let Ok(meta) = repo_aux_metadata(&c.repo_location, cat, &format!("{pkg}-{}", c.version))
+        else {
+            continue;
+        };
+        let cand_str = format!(
+            "{cat}/{pkg}-{}:{}/{}::{}",
+            c.version, c.slot, c.sub_slot, c.repo_name
+        );
+        let use_flags = effective_use_flags_uncached(EffectiveUseFlagsUncachedArgs {
+            config,
+            iuse: meta.get("IUSE").map(String::as_str).unwrap_or_default(),
+            keywords: &c.keywords,
+            candidate_str: &cand_str,
+            category: cat,
+            package: pkg,
+        });
+        for tok in dep_keys
+            .iter()
+            .filter_map(|k| {
+                flat_dep_atoms(meta.get(*k).map(String::as_str).unwrap_or(""), &use_flags)
+            })
+            .flatten()
+        {
+            let Some(la) = portage_dep::parse_atom(&tok) else {
+                continue;
+            };
+            if la.blocker != portage_dep::Blocker::None
+                || la.category != provider.0
+                || la.package != provider.1
+            {
+                continue;
+            }
+            names_provider = true;
+            if portage_dep::match_from_list(portage_dep::without_use(&tok), &[candidate])
+                .is_some_and(|m| !m.is_empty())
+            {
+                return true;
+            }
+        }
+    }
+    !names_provider
 }
