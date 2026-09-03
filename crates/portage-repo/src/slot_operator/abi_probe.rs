@@ -14,6 +14,52 @@ pub(crate) struct ProbeParent {
     pub(crate) atom: String,
 }
 
+/// Argument parents of the update probe: each top-level atom is filed under
+/// its own cp with an empty-cp pseudo parent, so it vetoes a provider
+/// candidate it does not match. Only the rebuild scan files arguments.
+pub(crate) fn add_argument_probe_parents(
+    parents: &mut HashMap<(String, String), Vec<ProbeParent>>,
+    top_level_atoms: &HashSet<String>,
+) {
+    for token in top_level_atoms {
+        let Some(atom) = portage_dep::parse_atom(token) else {
+            continue;
+        };
+        if atom.blocker != portage_dep::Blocker::None {
+            continue;
+        }
+        parents
+            .entry((atom.category.clone(), atom.package.clone()))
+            .or_default()
+            .push(ProbeParent {
+                parent: (String::new(), String::new()),
+                atom: token.clone(),
+            });
+    }
+}
+
+/// Refusal half of the probe: does any surviving parent of `provider_cp`
+/// (other than the consumer itself) reject `fresh_cand`? A parent scheduled
+/// earlier in this same scan is already being rebuilt, so its pin is stale too.
+pub(crate) fn probe_refused(
+    parents: &HashMap<(String, String), Vec<ProbeParent>>,
+    scheduled: &BTreeSet<(String, String)>,
+    provider_cp: &(String, String),
+    fresh_cand: &str,
+    consumer_cp: &(String, String),
+) -> bool {
+    let Some(list) = parents.get(provider_cp) else {
+        return false;
+    };
+    let refs = [fresh_cand];
+    list.iter().any(|p| {
+        if &p.parent == consumer_cp || scheduled.contains(&p.parent) {
+            return false;
+        }
+        portage_dep::match_from_list(&p.atom, &refs).is_none_or(|m| m.is_empty())
+    })
+}
+
 /// Display continuity for conflict-fired rebuilds: recomputed here from the
 /// settled state, since the firing pass restarts the search. For every
 /// `slot_operator_rebuild` reinstall entry, each recorded built `:=` atom on
@@ -160,4 +206,86 @@ pub(crate) fn greedy_pinned_cps(
         }
     }
     out
+}
+
+/// Whether the bound-slot pin survives Portage's greedy revision with blocker
+/// lookahead: a `!`/`!!` token on either side matching the other package
+/// discards the pin, so the old slot is uninstalled instead of updated and the
+/// probe fires. Unreadable tree metadata keeps the pin; an unreducible dep
+/// string drops it.
+// Portage: _emerge/depgraph.py, _greedy_slots
+pub(crate) fn greedy_pin_survives_revision(
+    repos: &[RepoConfig],
+    config: &portage_profile::Config,
+    provider_cp: &(String, String),
+    bound_slot: &str,
+) -> bool {
+    let Ok(tree) = list_candidates(repos, &provider_cp.0, &provider_cp.1) else {
+        return true;
+    };
+    let ebuilds: Vec<&Candidate> = tree
+        .iter()
+        .filter(|c| c.source == CandidateSource::Ebuild)
+        .collect();
+    let highest = ebuilds
+        .iter()
+        .max_by(|a, b| vercmp_ordering(&a.version, &b.version));
+    let bound = ebuilds
+        .iter()
+        .filter(|c| c.slot == bound_slot)
+        .max_by(|a, b| vercmp_ordering(&a.version, &b.version));
+    let (Some(h), Some(g)) = (highest, bound) else {
+        return true;
+    };
+    if h.version == g.version {
+        return true;
+    }
+    let blockers_of = |c: &Candidate| -> Option<HashSet<String>> {
+        let pf = format!("{}-{}", provider_cp.1, c.version);
+        let meta = repo_aux_metadata(&c.repo_location, &provider_cp.0, &pf).ok()?;
+        let cand_str = format!(
+            "{}/{}-{}:{}/{}::{}",
+            provider_cp.0, provider_cp.1, c.version, c.slot, c.sub_slot, c.repo_name
+        );
+        let use_flags = effective_use_flags_uncached(EffectiveUseFlagsUncachedArgs {
+            config,
+            iuse: meta.get("IUSE").map(String::as_str).unwrap_or_default(),
+            keywords: &c.keywords,
+            candidate_str: &cand_str,
+            category: &provider_cp.0,
+            package: &provider_cp.1,
+        });
+        let mut out = HashSet::new();
+        for key in ["BDEPEND", "DEPEND", "IDEPEND", "PDEPEND", "RDEPEND"] {
+            let atoms =
+                flat_dep_atoms(meta.get(key).map(String::as_str).unwrap_or(""), &use_flags)?;
+            for tok in atoms {
+                let Some(la) = portage_dep::parse_atom(&tok) else {
+                    continue;
+                };
+                if la.blocker != portage_dep::Blocker::None {
+                    out.insert(tok);
+                }
+            }
+        }
+        Some(out)
+    };
+    let (Some(h_blockers), Some(g_blockers)) = (blockers_of(h), blockers_of(g)) else {
+        return false;
+    };
+    let g_ref = format!(
+        "{}/{}-{}:{}/{}",
+        provider_cp.0, provider_cp.1, g.version, g.slot, g.sub_slot
+    );
+    let h_ref = format!(
+        "{}/{}-{}:{}/{}",
+        provider_cp.0, provider_cp.1, h.version, h.slot, h.sub_slot
+    );
+    let hits = |tokens: &HashSet<String>, r: &str| {
+        tokens.iter().any(|t| {
+            portage_dep::match_from_list(portage_dep::without_use(t), &[r])
+                .is_some_and(|m| !m.is_empty())
+        })
+    };
+    !(hits(&h_blockers, &g_ref) || hits(&g_blockers, &h_ref))
 }
