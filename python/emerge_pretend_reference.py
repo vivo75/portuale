@@ -1332,29 +1332,9 @@ def _use_flags_if_conditional(value_str, candidate, category, package, candidate
     if "?" not in value_str:
         return set()
     return effective_use_flags(
+        config,
         candidate["iuse"],
-        config["use_tokens"],
-        config["conf_use_tokens"],
-        config["repo_make_defaults_use"],
-        config["features_use"],
-        config["package_use_repo"],
-        config["package_use"],
-        config["profile_use_layers"],
-        config["package_env_use"],
-        config["package_use_user"],
-        config["env_use_tokens"],
-        config["package_use_force"],
-        config["package_use_mask"],
-        config["use_force"],
-        config["use_mask"],
-        config["use_stable_force"],
-        config["use_stable_mask"],
-        config["package_use_stable_force"],
-        config["package_use_stable_mask"],
         candidate["keywords"],
-        config["accept_keywords"],
-        config["package_accept_keywords"],
-        config["envd_use_tokens"],
         candidate_str,
         category,
         package,
@@ -1985,36 +1965,15 @@ def _flag_is_settable(candidate, category, package, flag, desired, config):
     )
     synthetic_token = flag if desired else f"-{flag}"
     synthetic_atom = f"={category}/{package}-{candidate['version']}"
-    # The synthetic entry stands in for a hypothetical *user* package.use
-    # line, so it joins the "pkg" layer (strongest).
-    package_use_user = [
-        *config["package_use_user"],
-        (synthetic_atom, [synthetic_token]),
-    ]
+    # The synthetic entry stands in for the hypothetical autounmask
+    # change, so it joins the autounmask_use tier (top). If use.mask/
+    # .force still override it, the synthetic entry's effect is silently
+    # discarded -- which is exactly what makes the flag "not settable".
+    probe_cfg = {**config, "autounmask_use": [(synthetic_atom, [synthetic_token])]}
     use_flags = effective_use_flags(
+        probe_cfg,
         iuse,
-        config["use_tokens"],
-        config["conf_use_tokens"],
-        config["repo_make_defaults_use"],
-        config["features_use"],
-        config["package_use_repo"],
-        config["package_use"],
-        config["profile_use_layers"],
-        config["package_env_use"],
-        package_use_user,
-        config["env_use_tokens"],
-        config["package_use_force"],
-        config["package_use_mask"],
-        config["use_force"],
-        config["use_mask"],
-        config["use_stable_force"],
-        config["use_stable_mask"],
-        config["package_use_stable_force"],
-        config["package_use_stable_mask"],
         candidate["keywords"],
-        config["accept_keywords"],
-        config["package_accept_keywords"],
-        config["envd_use_tokens"],
         candidate_str,
         category,
         package,
@@ -2456,34 +2415,7 @@ def _is_stable(keywords, candidate_str, category, package, accept_keywords, pack
     )
 
 
-def effective_use_flags(
-    iuse,
-    use_tokens,
-    conf_use_tokens,
-    repo_make_defaults_use,
-    features_use,
-    package_use_repo,
-    package_use,
-    profile_use_layers,
-    package_env_use,
-    package_use_user,
-    env_use_tokens,
-    package_use_force,
-    package_use_mask,
-    use_force,
-    use_mask,
-    use_stable_force,
-    use_stable_mask,
-    package_use_stable_force,
-    package_use_stable_mask,
-    keywords,
-    accept_keywords,
-    package_accept_keywords,
-    envd_use_tokens,
-    candidate_str,
-    category,
-    package,
-):
+def effective_use_flags(config, iuse, keywords, candidate_str, category, package):
     """The USE flags in effect for one specific package -- one continuous
     incremental walk over the real USE_ORDER layers portuale models,
     low priority to high (real config.py::regenerate() over the reversed
@@ -2606,7 +2538,7 @@ def effective_use_flags(
     # env.d (real configdict["env.d"]["USE"], from /etc/profile.env): the
     # lowest USE_ORDER tier -- everything below overrides it. Practically
     # always empty. Mirrors portage-repo's effective_use_flags.
-    for token in envd_use_tokens:
+    for token in config["envd_use_tokens"]:
         _apply_incremental(token, use_flags)
 
     # repo (real configdict["repo"]): each repo's own profiles/make.defaults
@@ -2616,17 +2548,17 @@ def effective_use_flags(
     # masters every overlay); a named entry only to a candidate from that
     # repo (candidate_str's "::<repo>" suffix).
     candidate_repo = candidate_str.rpartition("::")[2]
-    for repo, tokens in repo_make_defaults_use:
+    for repo, tokens in config["repo_make_defaults_use"]:
         if not repo or repo == candidate_repo:
             for token in tokens:
                 _apply_incremental(token, use_flags)
-    _apply_matching(package_use_repo)
+    _apply_matching(config["package_use_repo"])
 
     # features (real configdict["features"]["USE"], config.py ~2043):
     # FEATURES=test appends "test" here, between repo and pkginternal in
     # USE_ORDER, so a package that declares test in IUSE resolves with it
     # enabled. Only "test" is modeled; features_use is ["test"] or [].
-    for token in features_use:
+    for token in config["features_use"]:
         _apply_incremental(token, use_flags)
 
     # pkginternal: only a token with an explicit "+"/"-" marker
@@ -2643,19 +2575,19 @@ def effective_use_flags(
     # USE="-foo" can cancel a parent's package.use foo. profile_use_layers
     # carries that per-level structure; the flat use_tokens + package_use
     # are the fallback for a hand-built config dict.
-    if not profile_use_layers:
-        for token in use_tokens:
+    if not config["profile_use_layers"]:
+        for token in config["use_tokens"]:
             _apply_incremental(token, use_flags)
-        _apply_matching(package_use)
+        _apply_matching(config["package_use"])
     else:
-        for layer in profile_use_layers:
+        for layer in config["profile_use_layers"]:
             for token in layer["make_defaults_use"]:
                 _apply_incremental(token, use_flags)
             _apply_matching(layer["package_use"])
 
     # conf (real configdict["conf"]): make.conf USE, then the USE_EXPAND
     # folded values.
-    for token in conf_use_tokens:
+    for token in config["conf_use_tokens"]:
         _apply_incremental(token, use_flags)
 
     # pkg (real configdict["pkg"]): package.env's own USE= first (real
@@ -2663,16 +2595,24 @@ def effective_use_flags(
     # /etc/portage/package.use on top (real config.py:2042-2048 appends
     # self.puse after) -- a user package.use flag wins over a package.env
     # one.
-    _apply_matching(package_env_use)
-    _apply_matching(package_use_user)
+    _apply_matching(config["package_env_use"])
+    _apply_matching(config["package_use_user"])
 
     # env (real configdict["env"], the highest USE_ORDER tier): the
     # process-environment USE="..." -- USE="-X" emerge foo overrides even
     # a user /etc/portage/package.use flag. Strongest before the final
     # use.force/use.mask step below.
-    for token in env_use_tokens:
+    for token in config["env_use_tokens"]:
         _apply_incremental(token, use_flags)
 
+
+    # --autounmask-use (real _dynamic_config._needed_use_config_changes,
+    # fed back into the 'backtrack loop by _feedback_config): a USE change
+    # the resolver already decided is needed. Applied here -- after env,
+    # before use.force/use.mask -- as the top USE tier, so a package under
+    # an autounmask flip is walked with the flipped flag and its
+    # flag?-gated deps appear. Normally empty. Mirrors pretend.rs.
+    _apply_matching(config.get("autounmask_use", []))
     # _* wildcard USE_EXPAND expansion (real config.py setcpv ~2242):
     # once package.use has been applied, a "k_*" flag still in the set
     # (from USE="linguas_*" / LINGUAS="*" folding / package.use "LINGUAS: *"
@@ -2692,26 +2632,26 @@ def effective_use_flags(
                 use_flags.add(name)
 
     stable = _is_stable(
-        keywords, candidate_str, category, package, accept_keywords, package_accept_keywords
+        keywords, candidate_str, category, package, config["accept_keywords"], config["package_accept_keywords"]
     )
 
-    use_flags |= use_force
+    use_flags |= config["use_force"]
     use_flags |= _specificity_ordered_flags(
-        package_use_force, candidate_str, category, package
+        config["package_use_force"], candidate_str, category, package
     )
     if stable:
-        use_flags |= use_stable_force
+        use_flags |= config["use_stable_force"]
         use_flags |= _specificity_ordered_flags(
-            package_use_stable_force, candidate_str, category, package
+            config["package_use_stable_force"], candidate_str, category, package
         )
-    use_flags -= use_mask
+    use_flags -= config["use_mask"]
     use_flags -= _specificity_ordered_flags(
-        package_use_mask, candidate_str, category, package
+        config["package_use_mask"], candidate_str, category, package
     )
     if stable:
-        use_flags -= use_stable_mask
+        use_flags -= config["use_stable_mask"]
         use_flags -= _specificity_ordered_flags(
-            package_use_stable_mask, candidate_str, category, package
+            config["package_use_stable_mask"], candidate_str, category, package
         )
     # The "k_*" pseudo-flags themselves are not real USE flags -- real
     # portage strips every "_*"-suffixed token from PORTAGE_USE
@@ -2866,29 +2806,9 @@ def _reinstall_flags_for_use_change(root, category, package, candidate, config, 
         f"::{candidate['repo_name']}"
     )
     cur_use = effective_use_flags(
+        config,
         metadata["IUSE"],
-        config["use_tokens"],
-        config["conf_use_tokens"],
-        config["repo_make_defaults_use"],
-        config["features_use"],
-        config["package_use_repo"],
-        config["package_use"],
-        config["profile_use_layers"],
-        config["package_env_use"],
-        config["package_use_user"],
-        config["env_use_tokens"],
-        config["package_use_force"],
-        config["package_use_mask"],
-        config["use_force"],
-        config["use_mask"],
-        config["use_stable_force"],
-        config["use_stable_mask"],
-        config["package_use_stable_force"],
-        config["package_use_stable_mask"],
         candidate["keywords"],
-        config["accept_keywords"],
-        config["package_accept_keywords"],
-        config["envd_use_tokens"],
         candidate_str,
         category,
         package,
@@ -3434,29 +3354,9 @@ def _candidate_iuse_and_use(candidate, category, package, config):
         f"{candidate['repo_name']}"
     )
     use_flags = effective_use_flags(
+        config,
         metadata.get("IUSE", ""),
-        config["use_tokens"],
-        config["conf_use_tokens"],
-        config["repo_make_defaults_use"],
-        config["features_use"],
-        config["package_use_repo"],
-        config["package_use"],
-        config["profile_use_layers"],
-        config["package_env_use"],
-        config["package_use_user"],
-        config["env_use_tokens"],
-        config["package_use_force"],
-        config["package_use_mask"],
-        config["use_force"],
-        config["use_mask"],
-        config["use_stable_force"],
-        config["use_stable_mask"],
-        config["package_use_stable_force"],
-        config["package_use_stable_mask"],
         candidate["keywords"],
-        config["accept_keywords"],
-        config["package_accept_keywords"],
-        config["envd_use_tokens"],
         candidate_str,
         category,
         package,
@@ -5701,29 +5601,9 @@ def resolve_pretend(
                 f"::{c['repo_name']}"
             )
             would_select = effective_use_flags(
+                config,
                 c["iuse"],
-                config["use_tokens"],
-                config["conf_use_tokens"],
-                config["repo_make_defaults_use"],
-                config["features_use"],
-                config["package_use_repo"],
-                config["package_use"],
-                config["profile_use_layers"],
-                config["package_env_use"],
-                config["package_use_user"],
-                config["env_use_tokens"],
-                config["package_use_force"],
-                config["package_use_mask"],
-                config["use_force"],
-                config["use_mask"],
-                config["use_stable_force"],
-                config["use_stable_mask"],
-                config["package_use_stable_force"],
-                config["package_use_stable_mask"],
                 c["keywords"],
-                config["accept_keywords"],
-                config["package_accept_keywords"],
-                config["envd_use_tokens"],
                 candidate_str,
                 category,
                 package,
@@ -6745,6 +6625,27 @@ def resolve_pretend_graph(
     mask_negatives = []
     pre_trial_nvc = 0
 
+    # Backtracking slice: --autounmask-use changes fed back into the loop
+    # (real _dynamic_config._needed_use_config_changes / _feedback_config).
+    # A dependency atom X[flag] that lands on an already-resolved slot
+    # whose package can't satisfy [flag] -- but a package.use flip could --
+    # folds the flip in here ((cat,pkg) -> {flag: desired}) and the driver
+    # re-runs the whole walk with the grown config, so the flipped
+    # package's flag?-gated deps appear. Survives across passes like
+    # slot_constraints; converges when a pass adds nothing new. Mirrors
+    # portage-repo/src/lib.rs.
+    _base_config = config
+    autounmask_use_config = {}
+    autounmask_use_change_records = []
+
+    def _autounmask_use_tier(acc):
+        out = []
+        for (cat, pkg), flags in acc.items():
+            toks = sorted(f if on else f"-{f}" for f, on in flags.items())
+            out.append((f"{cat}/{pkg}", toks))
+        out.sort()
+        return out
+
     def _graph_pass():
         # Guards against infinite requeuing (e.g. a dependency cycle): the
         # exact same atom text is only ever resolved once -- deliberately
@@ -7316,6 +7217,77 @@ def resolve_pretend_graph(
                             slot_pullers,
                         )
                     )
+                    continue
+
+                # match_from_list above matched version + slot only. If this
+                # atom carries a [flag] use-dep, the already-resolved package
+                # still has to satisfy it -- and if it doesn't, but a
+                # package.use flip would (real --autounmask-use for a dep on a
+                # package already in the graph), fold the flip into
+                # autounmask_use_config and (driver re-runs) re-resolve the
+                # whole walk so the package is walked with the flag on and
+                # its flag?-gated deps appear. Mirrors pretend.rs.
+                _reatom = Atom(current_atom_str, allow_wildcard=True)
+                if autounmask_suggest_use and _reatom.use:
+                    _ec = next(
+                        (
+                            c
+                            for c in list_candidates(repos, category, package)
+                            if c["version"] == existing_version
+                        ),
+                        None,
+                    )
+                    if _ec is not None:
+                        _declared = {t.lstrip("+-") for t in _ec["iuse"].split()}
+                        _ecs = (
+                            f"{category}/{package}-{existing_version}:"
+                            f"{_ec['slot']}/{_ec['sub_slot']}::{_ec['repo_name']}"
+                        )
+                        _euse = effective_use_flags(
+                            config, _ec["iuse"], _ec["keywords"], _ecs, category, package
+                        )
+                        if not _use_deps_satisfied(
+                            _reatom, _valid_iuse(_declared, config), _euse
+                        ):
+                            _flip = _suggested_use_flip(
+                                _ec, category, package, _reatom, config
+                            )
+                            if _flip is not None:
+                                _bucket = autounmask_use_config.setdefault(
+                                    (category, package), {}
+                                )
+                                _newly = False
+                                for _f, _on in _flip:
+                                    if _bucket.get(_f) != _on:
+                                        _bucket[_f] = _on
+                                        _newly = True
+                                if _newly:
+                                    _token = " ".join(
+                                        _f if _on else f"-{_f}" for _f, _on in _flip
+                                    )
+                                    _af = _autounmask_use_atom_form(
+                                        _ec,
+                                        list_candidates(repos, category, package),
+                                        category,
+                                        package,
+                                        config,
+                                    )
+                                    if not any(
+                                        r["atom"] == _af and r["token"] == _token
+                                        for r in autounmask_use_change_records
+                                    ):
+                                        autounmask_use_change_records.append(
+                                            {
+                                                "atom": _af,
+                                                "token": _token,
+                                                "dep_chain": _autounmask_dep_chain(
+                                                    owner,
+                                                    current_atom_str,
+                                                    top_level,
+                                                    entries,
+                                                ),
+                                            }
+                                        )
                 continue
             entry_idx = len(entries)
             resolved_slots[slot_key] = entry_idx
@@ -7471,29 +7443,9 @@ def resolve_pretend_graph(
                     continue
             candidate_str = f"{category}/{package}-{version}:{slot}/{sub_slot}::{repo_name}"
             use_flags = effective_use_flags(
+                config,
                 metadata.get("IUSE", ""),
-                config["use_tokens"],
-                config["conf_use_tokens"],
-                config["repo_make_defaults_use"],
-                config["features_use"],
-                config["package_use_repo"],
-                config["package_use"],
-                config["profile_use_layers"],
-                config["package_env_use"],
-                config["package_use_user"],
-                config["env_use_tokens"],
-                config["package_use_force"],
-                config["package_use_mask"],
-                config["use_force"],
-                config["use_mask"],
-                config["use_stable_force"],
-                config["use_stable_mask"],
-                config["package_use_stable_force"],
-                config["package_use_stable_mask"],
                 resolved["keywords"],
-                config["accept_keywords"],
-                config["package_accept_keywords"],
-                config["envd_use_tokens"],
                 candidate_str,
                 category,
                 package,
@@ -7902,6 +7854,7 @@ def resolve_pretend_graph(
         return sum(1 for r in rows if r[2][0] == "no_visible_candidate")
 
     while True:
+        _au_before = sum(len(v) for v in autounmask_use_config.values())
         (
             entries,
             slot_conflicts,
@@ -8013,7 +7966,38 @@ def resolve_pretend_graph(
                 mask_trial_spent = True
                 backtrack_iteration += 1
                 continue
+
+        # Backtracking slice: this pass folded a new --autounmask-use flip
+        # into autounmask_use_config (real _feedback_config growing
+        # _needed_use_config_changes). Re-run the whole walk with the grown
+        # config so the flipped package is re-resolved with the flag on and
+        # its flag?-gated deps appear. Converges because the accumulator
+        # only ever grows on a newly-added (cp, flag). Mirrors pretend.rs.
+        _au_after = sum(len(v) for v in autounmask_use_config.values())
+        if (
+            _au_after > _au_before
+            and mask_phase == "none"
+            and backtrack_iteration < backtrack_max
+        ):
+            backtrack_iteration += 1
+            config = {
+                **_base_config,
+                "autounmask_use": _autounmask_use_tier(autounmask_use_config),
+            }
+            continue
         break
+
+    # Backtracking slice: surface the --autounmask-use changes recorded
+    # during the already-resolved-slot re-check (autounmask_use_change_
+    # records) in the same "necessary to proceed" block as the fresh-path
+    # ones -- the graph has settled with those flips applied. Deduped by
+    # (atom, token). Mirrors portage-repo/src/lib.rs.
+    for _rec in autounmask_use_change_records:
+        if not any(
+            c["atom"] == _rec["atom"] and c["token"] == _rec["token"]
+            for c in autounmask_use_changes
+        ):
+            autounmask_use_changes.append(_rec)
 
     if required_use_violations:
         raise ResolutionError("\n".join(required_use_violations))
@@ -8183,29 +8167,9 @@ def _enqueue_dependencies(
     # pretend.rs / portage-repo's enqueue_dependencies.
     if dynamic_deps:
         use_flags = effective_use_flags(
+            config,
             metadata.get("IUSE", ""),
-            config["use_tokens"],
-            config["conf_use_tokens"],
-            config["repo_make_defaults_use"],
-            config["features_use"],
-            config["package_use_repo"],
-            config["package_use"],
-            config["profile_use_layers"],
-            config["package_env_use"],
-            config["package_use_user"],
-            config["env_use_tokens"],
-            config["package_use_force"],
-            config["package_use_mask"],
-            config["use_force"],
-            config["use_mask"],
-            config["use_stable_force"],
-            config["use_stable_mask"],
-            config["package_use_stable_force"],
-            config["package_use_stable_mask"],
             resolved["keywords"],
-            config["accept_keywords"],
-            config["package_accept_keywords"],
-            config["envd_use_tokens"],
             candidate_str,
             category,
             package,

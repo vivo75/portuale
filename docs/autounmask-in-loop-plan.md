@@ -62,11 +62,21 @@ autounmask_use_config: HashMap<(String, String), HashMap<String, bool>>
 
 ## Slices (each: both sides + fixture + contract test + Rust unit test, verified byte-identical, committed on request)
 
-1. **Backward-cascade re-resolve (USE).** The accumulator + apply helper +
-   the already-resolved-slot use-dep re-check + the `continue 'backtrack`
-   feedback. Fixture `dev-libs/aucasctop`: `aucascleaf` now appears and
-   the block prints `>=dev-libs/aucascmid-1.0 cascade`. This is the
-   headline behaviour; slices 2–6 refine.
+1. **Backward-cascade re-resolve (USE).** ✅ **Shipped 2026-09-03.**
+   `Config::autounmask_use` applied by `effective_use_flags` (Slice 0) +
+   `autounmask_use_config` accumulator + `autounmask_use_change_records`
+   (survive across passes like `slot_constraints`) + the already-resolved-
+   slot use-dep re-check in the queue walk + a driver-level restart
+   (`autounmask_grew` / accumulator-size grew → rebuild `backtrack_config`,
+   `continue 'backtrack`). Fixture `dev-libs/aucasctop`: `aucascleaf` now
+   appears, `aucascmid` shows `USE="cascade"`, the block prints
+   `>=dev-libs/aucascmid-1.0 cascade`. Rust==Python byte-identical; full
+   suite 1178 passed. **Slice-1 simplifications** (later slices):
+   `autounmask_use` atom is `cat/pkg` not `=cat/pkg-ver`; the re-check
+   only fires when the atom's independently-resolved version equals the
+   already-resolved one (a `>=`/`<`-bounded atom pulling a *different*
+   version of the same slot is not re-checked); no `*` autounmask marker
+   on the `-pv` `USE=` line (a pre-existing fresh-path gap, unchanged).
 2. **`_autounmask_levels` ordering.** A per-iteration "max level" counter;
    pass N only allows levels ≤ N; a lower version fixable at a lower
    level wins. Fixture: `pkg-1.5` (USE-fixable) + `pkg-2.0` (`~arch`) →

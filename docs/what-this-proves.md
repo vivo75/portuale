@@ -12113,3 +12113,51 @@ option, but is not yet implemented". Now:
 
 Also wired in the same pass: `--verbose-conflicts` gained its `emerge
 --help` line (the flag itself shipped with the slot-collision slice).
+
+### Autounmask backward cascade — a re-resolve after `_needed_use_config_changes` grows (2026-09-03)
+
+Slice 1 of the autounmask-in-loop plan (`docs/autounmask-in-loop-plan.md`;
+Slice 0 was the `effective_use_flags(&Config)` refactor). portuale's
+single-pass autounmask already cascades *forward* (a flag flip changes
+which `flag?`-gated deps get walked). It could not cascade *backward*: a
+dependency atom `X[flag]` from a package processed *late* needs `flag` on
+package `A` processed *early* -- `A` was already walked with its original
+USE, and portuale's already-resolved-slot check did a plain
+`match_from_list` that can't see use-deps, so the mismatch was **silently
+ignored**.
+
+Now, reusing the shipped `'backtrack` loop:
+
+- **`Config::autounmask_use`** (Slice 0) is a `package.use`-shaped USE
+  tier applied by `effective_use_flags` after `env`, before
+  `use.force`/`use.mask`.
+- **`autounmask_use_config`** (`(cat,pkg) -> {flag: desired}`) and
+  **`autounmask_use_change_records`** survive across `'backtrack`
+  iterations like `slot_constraints` / `backtrack_iteration`.
+- The **already-resolved-slot re-check**: when `X[flag]` lands on a slot
+  already resolved (version + slot match), portuale now also checks
+  `[flag]` against that package's recomputed effective USE. On a mismatch
+  a `suggested_use_flip` folds `flag -> on` into `autounmask_use_config`
+  and records the `>=cat/pkg-ver flag` change.
+- The **driver** (bottom of `'backtrack`, after the slot-conflict
+  feedback): if the accumulator grew this pass, rebuild the per-iteration
+  `Config` (`req.config` + `autounmask_use` tier) and `continue
+  'backtrack` -- exactly real `_backtrack_depgraph` finishing the attempt
+  and restarting with the grown `_needed_use_config_changes`. Converges
+  because only a *newly*-added `(cp, flag)` triggers a restart, and
+  `backtrack_iteration < backtrack_max` still bounds it.
+
+Fixture `dev-libs/aucasctop` (→ `aucascmid` bare, then `aucasclate` →
+`aucascmid[cascade]`): `dev-libs/aucascleaf` (the `cascade?`-gated dep)
+now appears, `aucascmid` shows `USE="cascade"`, and the standard `The
+following USE changes are necessary to proceed:` block reports
+`>=dev-libs/aucascmid-1.0 cascade`. `--autounmask-use=n` keeps the old
+"no visible ebuild for dependency" outcome. 4 CASES + a pinned contract
+test (incl. `--json`), Rust==Python byte-identical, full suite 1178
+passed.
+
+Slice-1 cuts (later slices): the `autounmask_use` atom is `cat/pkg` not
+`=cat/pkg-ver`; the re-check only fires when the atom's independently-
+resolved version equals the already-resolved one; `_autounmask_levels`
+ordering, `_autounmask_breakage`, the whole-graph parent-flip re-resolve,
+and `get_best_run` are still ahead.

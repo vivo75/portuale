@@ -8944,6 +8944,28 @@ fn autounmask_use_atom_form(
     check_if_latest_atom_form(resolved, all_candidates, category, package, config, true)
 }
 
+/// The `'backtrack` loop's `autounmask_use_config` accumulator rendered
+/// as `Config::autounmask_use` -- one `(cat/pkg, [±flag …])` entry per
+/// package, tokens sorted for determinism. Fed to `effective_use_flags`
+/// as the top USE tier on the next attempt.
+fn autounmask_use_tier(
+    acc: &HashMap<(String, String), HashMap<String, bool>>,
+) -> Vec<(String, Vec<String>)> {
+    let mut out: Vec<(String, Vec<String>)> = acc
+        .iter()
+        .map(|((cat, pkg), flags)| {
+            let mut toks: Vec<String> = flags
+                .iter()
+                .map(|(f, on)| if *on { f.clone() } else { format!("-{f}") })
+                .collect();
+            toks.sort();
+            (format!("{cat}/{pkg}"), toks)
+        })
+        .collect();
+    out.sort();
+    out
+}
+
 /// `--deep`/`-D` (real `lib/_emerge/main.py`'s own `"--deep": valid_integers`
 /// declaration, `create_depgraph_params.py`'s `myparams["deep"]`, and
 /// `depgraph.py`'s own `_too_deep`/`_add_pkg` combination): how far past
@@ -9623,7 +9645,37 @@ fn backtracking_resolve(req: &ResolveRequest) -> Result<GraphResult, String> {
     let mut mask_trial_spent = false;
     let mut mask_negatives: Vec<((String, String), String)> = Vec::new();
     let mut pre_trial_nvc: usize = 0;
+
+    // Backtracking slice: `--autounmask-use` changes fed back into the
+    // loop (real `_dynamic_config._needed_use_config_changes`, applied by
+    // `backtracking.py::_feedback_config` on the next attempt). A
+    // dependency atom `X[flag]` that lands on an *already-resolved* slot
+    // whose package can't satisfy `[flag]` -- but a `package.use` flip
+    // could -- folds the flip in here (`(cat, pkg) -> {flag -> desired}`)
+    // and re-runs the whole walk, so the freshly-walked package's
+    // `flag?`-gated deps appear. Survives across passes like
+    // `slot_constraints`; converges when a pass adds nothing new.
+    let mut autounmask_use_config: HashMap<(String, String), HashMap<String, bool>> =
+        HashMap::new();
+    // The `The following USE changes are necessary to proceed:` block
+    // entries recorded at the moment each flip is folded in above --
+    // recorded here (not the per-pass `autounmask_use_changes`) because a
+    // `continue 'backtrack` discards the pass, and after the re-resolve
+    // the atom's `[flag]` is *satisfied* (by the accumulator) so nothing
+    // re-records it. Merged into `autounmask_use_changes` once the graph
+    // settles. Deduped by `(atom, token)`.
+    let mut autounmask_use_change_records: Vec<AutounmaskChange> = Vec::new();
+    // `req.config` with `autounmask_use` filled from the accumulator --
+    // rebuilt whenever the accumulator grows, `None` until then (so the
+    // common no-autounmask path never clones `Config`).
+    let mut backtrack_config: Option<portage_profile::Config> = None;
+
     'backtrack: loop {
+        // The per-pass config view: the accumulator's autounmask-use
+        // changes layered on as the top USE tier (see `Config::
+        // autounmask_use`). `config` is the outer `&req.config` until the
+        // first flip is folded in.
+        let config: &portage_profile::Config = backtrack_config.as_ref().unwrap_or(config);
         // Guards against infinite requeuing (e.g. a dependency cycle): the
         // exact same atom *text* is only ever resolved once. This is
         // deliberately coarser than the (category, package, slot) dedup
@@ -9666,6 +9718,11 @@ fn backtracking_resolve(req: &ResolveRequest) -> Result<GraphResult, String> {
         // a lower alternative so the retry falls back to it (real
         // `runtime_pkg_mask` propagation).
         let mut slot_pullers: SlotPullers = HashMap::new();
+        // Set when this pass folded a new `--autounmask-use` flip into
+        // `autounmask_use_config` (the already-resolved-slot re-check).
+        // The driver at the bottom re-runs the whole walk with the grown
+        // config, so the flipped package's `flag?`-gated deps appear.
+        let mut autounmask_grew = false;
 
         let mut entries: Vec<GraphEntry> = Vec::new();
         // REQUIRED_USE (see the check further below, in the main BFS loop):
@@ -10380,6 +10437,113 @@ fn backtracking_resolve(req: &ResolveRequest) -> Result<GraphResult, String> {
                         &version,
                         &slot_pullers,
                     ));
+                    continue;
+                }
+
+                // `match_from_list` above matched version + slot only. If
+                // this atom carries a `[flag]` use-dep, the already-resolved
+                // package still has to satisfy it -- and if it doesn't, but
+                // a `package.use` flip would (real `--autounmask-use` for a
+                // dep on a package already in the graph), fold the flip into
+                // `autounmask_use_config` and re-run the whole walk so the
+                // package is re-resolved with the flag and its `flag?`-gated
+                // deps appear (real `_need_restart` after
+                // `_needed_use_config_changes` grows).
+                if autounmask_suggest_use {
+                    if let Some(use_deps) = atom.use_deps.as_deref().filter(|d| !d.is_empty()) {
+                        let all_ebuild_cands =
+                            list_candidates(&repos, &key.0, &key.1).unwrap_or_default();
+                        if let Some(existing_cand) = all_ebuild_cands
+                            .iter()
+                            .find(|c| c.version == existing_version)
+                        {
+                            let declared: HashSet<String> = existing_cand
+                                .iuse
+                                .split_whitespace()
+                                .map(|t| t.trim_start_matches(['+', '-']).to_string())
+                                .collect();
+                            let iuse_set = valid_iuse(&declared, config);
+                            let existing_cand_str = format!(
+                                "{}/{}-{existing_version}:{}/{}::{}",
+                                key.0,
+                                key.1,
+                                existing_cand.slot,
+                                existing_cand.sub_slot,
+                                existing_cand.repo_name
+                            );
+                            let existing_use = effective_use_flags(
+                                config,
+                                &existing_cand.iuse,
+                                &existing_cand.keywords,
+                                &existing_cand_str,
+                                &key.0,
+                                &key.1,
+                            );
+                            if !portage_dep::use_deps_satisfied(use_deps, &iuse_set, &existing_use)
+                            {
+                                if let Some(flip) = suggested_use_flip(
+                                    existing_cand,
+                                    &key.0,
+                                    &key.1,
+                                    use_deps,
+                                    config,
+                                ) {
+                                    let bucket =
+                                        autounmask_use_config.entry(key.clone()).or_default();
+                                    let mut newly = false;
+                                    for (f, on) in &flip {
+                                        if bucket.get(f) != Some(on) {
+                                            bucket.insert(f.clone(), *on);
+                                            newly = true;
+                                        }
+                                    }
+                                    if newly {
+                                        let token = flip
+                                            .iter()
+                                            .map(
+                                                |(f, e)| {
+                                                    if *e {
+                                                        f.clone()
+                                                    } else {
+                                                        format!("-{f}")
+                                                    }
+                                                },
+                                            )
+                                            .collect::<Vec<_>>()
+                                            .join(" ");
+                                        let atom_form = autounmask_use_atom_form(
+                                            existing_cand,
+                                            &all_ebuild_cands,
+                                            &key.0,
+                                            &key.1,
+                                            config,
+                                        );
+                                        if !autounmask_use_change_records
+                                            .iter()
+                                            .any(|c| c.atom == atom_form && c.token == token)
+                                        {
+                                            autounmask_use_change_records.push(AutounmaskChange {
+                                                atom: atom_form,
+                                                token,
+                                                dep_chain: autounmask_dep_chain(
+                                                    &owner,
+                                                    &current_atom,
+                                                    &top_level,
+                                                    &entries,
+                                                ),
+                                            });
+                                        }
+                                        // Real `_backtrack_depgraph` finishes
+                                        // the attempt, then restarts with the
+                                        // grown config -- the driver at the
+                                        // bottom of `'backtrack` does the
+                                        // `continue`, not here.
+                                        autounmask_grew = true;
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
                 continue;
             }
@@ -11237,6 +11401,21 @@ fn backtracking_resolve(req: &ResolveRequest) -> Result<GraphResult, String> {
             }
         }
 
+        // Backtracking slice: this pass folded a new `--autounmask-use`
+        // flip into `autounmask_use_config` (real `_feedback_config`
+        // growing `_needed_use_config_changes`). Re-run the whole walk
+        // with the grown config so the flipped package is re-resolved
+        // with the flag on and its `flag?`-gated deps appear. Converges
+        // because `autounmask_grew` is only set on a *newly*-added
+        // `(cp, flag)` entry.
+        if autounmask_grew && mask_phase == MaskPhase::None && backtrack_iteration < backtrack_max {
+            backtrack_iteration += 1;
+            let mut c = req.config.clone();
+            c.autounmask_use = autounmask_use_tier(&autounmask_use_config);
+            backtrack_config = Some(c);
+            continue 'backtrack;
+        }
+
         // Real depgraph's slot-operator auto-rebuild: an installed consumer
         // whose built `cat/pkg:S/SS=` dep no longer matches how this run
         // leaves `cat/pkg` in that slot is scheduled for a reinstall. Added
@@ -11302,6 +11481,21 @@ fn backtracking_resolve(req: &ResolveRequest) -> Result<GraphResult, String> {
         // records it for `pretend.rs` to render the fatal
         // `* Error: circular dependencies:` block.
         let circular_deps = find_hard_cycles(&entries, &edge_kind_map);
+
+        // Backtracking slice: the `--autounmask-use` changes recorded
+        // during the already-resolved-slot re-check (see
+        // `autounmask_use_change_records`) -- the graph has settled with
+        // those flips applied, so surface them in the same "necessary to
+        // proceed" block as the fresh-path ones. Deduped by `(atom,
+        // token)`.
+        for rec in &autounmask_use_change_records {
+            if !autounmask_use_changes
+                .iter()
+                .any(|c| c.atom == rec.atom && c.token == rec.token)
+            {
+                autounmask_use_changes.push(rec.clone());
+            }
+        }
 
         return Ok(GraphResult {
             entries,

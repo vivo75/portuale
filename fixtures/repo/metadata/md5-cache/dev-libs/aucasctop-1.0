@@ -1,0 +1,7 @@
+DEFINED_PHASES=-
+DESCRIPTION=fixture: RDEPENDs aucascmid (resolved cascade-off first) then aucasclate; aucasclate then needs aucascmid[cascade], so autounmask must re-resolve aucascmid with cascade on -- pulling in aucascleaf that a single pass would miss
+EAPI=8
+KEYWORDS=amd64
+RDEPEND=dev-libs/aucascmid dev-libs/aucasclate
+SLOT=0
+_md5_=0000000000000000000000000000000

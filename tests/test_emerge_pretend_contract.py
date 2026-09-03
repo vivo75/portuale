@@ -380,6 +380,26 @@ CASES = [
         0,
     ),
     (
+        "autounmask backward cascade: [flag] on an already-resolved slot re-resolves the whole graph",
+        ["--pretend", "dev-libs/aucasctop"],
+        0,
+    ),
+    (
+        "autounmask backward cascade, -v: the flipped-in dep and the counters line",
+        ["--pretend", "-v", "dev-libs/aucasctop"],
+        0,
+    ),
+    (
+        "autounmask backward cascade, --autounmask-use=n: no flip, dep stays unresolvable",
+        ["--pretend", "--autounmask-use=n", "dev-libs/aucasctop"],
+        0,
+    ),
+    (
+        "autounmask backward cascade, --json: the change in autounmask_use_changes",
+        ["--pretend", "--json", "dev-libs/aucasctop"],
+        0,
+    ),
+    (
         "USE-dep enforcement: plain flag declared and enabled matches",
         ["--pretend", "dev-libs/useflagpkg[foo]"],
         0,
@@ -2490,6 +2510,68 @@ def test_autounmask_use_resolves_a_dependency_use_dep_mismatch(
         "# required by dev-libs/usedeprejectedpkg (argument)\n"
         ">=dev-libs/useflagpkg-1.0 -foo\n"
     )
+
+
+def test_autounmask_backward_cascade_re_resolves_an_already_resolved_slot(
+    emerge_binary, emerge_pretend_python, fixture_env
+):
+    """dev-libs/aucasctop RDEPENDs aucascmid (resolved cascade-off first,
+    the bare atom) then aucasclate, whose RDEPEND is
+    dev-libs/aucascmid[cascade]. A single pass would silently drop the
+    mismatch. Now the already-resolved-slot re-check sees `[cascade]`
+    unsatisfied, folds `cascade -> on` into the loop's autounmask_use_config
+    (real _needed_use_config_changes), and the driver re-runs the whole
+    walk with the flip applied -- so aucascmid is re-resolved with
+    USE="cascade" and its cascade?-gated aucascleaf now appears. The
+    change is reported in the standard "USE changes are necessary" block.
+    Full Rust==Python lockstep, incl. --json."""
+    base = ["--pretend", "dev-libs/aucasctop"]
+    rust = _run([str(emerge_binary)], base, fixture_env)
+    py = _run(emerge_pretend_python, base, fixture_env)
+    assert rust.returncode == 0
+    assert rust.stdout == py.stdout and rust.stderr == py.stderr
+    assert rust.stdout.splitlines() == [
+        "[ebuild  N     ] dev-libs/aucascleaf-1.0 ",
+        '[ebuild  N     ] dev-libs/aucascmid-1.0  USE="cascade"',
+        "[ebuild  N     ] dev-libs/aucasclate-1.0 ",
+        "[ebuild  N     ] dev-libs/aucasctop-1.0 ",
+    ]
+    assert rust.stderr == (
+        "\nThe following USE changes are necessary to proceed:\n"
+        ' (see "package.use" in the portage(5) man page for more details)\n'
+        "# required by dev-libs/aucasclate-1.0::testrepo\n"
+        ">=dev-libs/aucascmid-1.0 cascade\n"
+    )
+
+    # --json carries the same change
+    j = _run([str(emerge_binary)], base + ["--json"], fixture_env)
+    payload = json.loads(j.stdout)
+    assert payload["autounmask_use_changes"] == [
+        {
+            "atom": ">=dev-libs/aucascmid-1.0",
+            "token": "cascade",
+            "dep_chain": ["required by dev-libs/aucasclate-1.0::testrepo"],
+        }
+    ]
+    assert {e["package"] for e in payload["entries"]} == {
+        "aucasctop",
+        "aucasclate",
+        "aucascmid",
+        "aucascleaf",
+    }
+
+    # --autounmask-use=n: no flip, aucascmid[cascade] is unresolvable
+    n = _run(
+        [str(emerge_binary)], ["--pretend", "--autounmask-use=n", "dev-libs/aucasctop"], fixture_env
+    )
+    npy = _run(
+        emerge_pretend_python,
+        ["--pretend", "--autounmask-use=n", "dev-libs/aucasctop"],
+        fixture_env,
+    )
+    assert n.stdout == npy.stdout and n.stderr == npy.stderr
+    assert "aucascleaf" not in n.stdout
+    assert 'no visible ebuild for dependency "dev-libs/aucascmid"' in n.stderr
 
 
 def test_use_dep_enforcement_plain_flag_declared_and_enabled_matches(

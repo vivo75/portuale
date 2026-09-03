@@ -108,8 +108,18 @@ architectural — a single-pass BFS can't grow into these incrementally:
     remaining signal is the `Dependency resolution took X s (backtrack:
     N/M).` report line, whose timing is non-deterministic (a deliberate
     cut — portuale is a deterministic tool);
-  - autounmask USE/keyword levels tried *in sequence inside* the loop;
-  - autounmask parent-flip re-resolve feeding `extra_constraints`;
+  - autounmask in-loop (plan: `docs/autounmask-in-loop-plan.md`) —
+    **Slice 0** (`effective_use_flags(&Config)` + `Config::autounmask_use`
+    tier) and **Slice 1** (the *backward* cascade: a `[flag]` dep on an
+    already-resolved slot folds a `suggested_use_flip` into an
+    `autounmask_use_config` accumulator and the driver re-runs the whole
+    walk — real `_needed_use_config_changes` / `_feedback_config`)
+    **shipped 2026-09-03**. Still open: `_autounmask_levels` ordering
+    (USE → +license → +~arch → +missing-kw → +masks, per candidate in
+    version order), `_autounmask_breakage` revert-and-escalate, the
+    whole-graph parent-flip re-resolve (removes the `'parent_flip`
+    single-dep cut), keyword/mask accumulators in the loop, `get_best_run`
+    (prefer the maskless settled run);
   - `||`-preference / slot-operator-rebuild feedback driving a retry;
   - the slot-collision notice's remaining cuts: `pkg_use_display` for a
     package with non-default USE (the ` USE=""` slot renders, non-empty
