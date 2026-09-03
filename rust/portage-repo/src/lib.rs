@@ -8295,6 +8295,77 @@ fn slot_operator_rebuild_entries(
     (out, abi_rebuilds)
 }
 
+/// The `(category, package)` of every installed package reachable, over
+/// the **installed** dependency graph, from the required sets
+/// (`@world` ∪ `@selected` ∪ `@system`) -- real `_complete_graph`'s deep
+/// re-walk of those sets in complete mode (`_select_pkg_from_graph`
+/// never merges anything, it just pulls the reachable installed closure
+/// into the digraph so downstream triggers can see it).
+///
+/// `world_selected_atoms` is the `world` file's own atoms unioned with
+/// every `world_sets` nested set (real `@selected`; portuale's `@world`
+/// expands to exactly this -- see `pretend.rs::expand_selected`);
+/// `system_atoms` is the profile's own `packages` file.
+///
+/// The edges are every installed package's vdb `RDEPEND`/`PDEPEND`/
+/// `DEPEND`/`BDEPEND`, USE-reduced against its own recorded `USE` and
+/// matched by `cat/pkg` (real's `_parent_atoms` is cp-level for this
+/// purpose). Used to gate `slot_operator_rebuild_entries` -- real only
+/// slot-op-rebuilds a consumer that is in the graph.
+pub fn required_set_reachable_cps(
+    root: &Path,
+    world_selected_atoms: &[String],
+    system_atoms: &[String],
+) -> HashSet<(String, String)> {
+    let installed = all_installed_packages(root);
+    let by_cp: HashMap<(&str, &str), &InstalledPackage> = installed
+        .iter()
+        .map(|p| ((p.category.as_str(), p.package.as_str()), p))
+        .collect();
+    let matches_cp = |atom_str: &str| -> Option<(String, String)> {
+        let a = portage_dep::parse_atom(atom_str)?;
+        let p = by_cp.get(&(a.category.as_str(), a.package.as_str()))?;
+        // A slot/version-constrained seed still only needs cp-level
+        // reachability here (real `_parent_atoms` records the cp edge
+        // regardless); an installed package is a single instance per cp
+        // in portuale's model, so no `match_from_list` narrowing.
+        Some((p.category.clone(), p.package.clone()))
+    };
+
+    let mut reachable: HashSet<(String, String)> = HashSet::new();
+    let mut queue: Vec<(String, String)> = Vec::new();
+    for atom_str in world_selected_atoms.iter().chain(system_atoms) {
+        if let Some(cp) = matches_cp(atom_str) {
+            if reachable.insert(cp.clone()) {
+                queue.push(cp);
+            }
+        }
+    }
+    while let Some((cat, pkg)) = queue.pop() {
+        let Some(p) = by_cp.get(&(cat.as_str(), pkg.as_str())) else {
+            continue;
+        };
+        let use_flags = read_vdb_flag_set(root, &p.category, &p.package, &p.version, "USE");
+        for dep_key in ["RDEPEND", "PDEPEND", "DEPEND", "BDEPEND"] {
+            let depstr = read_vdb_string(root, &p.category, &p.package, &p.version, dep_key);
+            if depstr.trim().is_empty() {
+                continue;
+            }
+            let Some(atoms) = flat_dep_atoms(&depstr, &use_flags) else {
+                continue;
+            };
+            for atom_str in atoms {
+                if let Some(cp) = matches_cp(&atom_str) {
+                    if reachable.insert(cp.clone()) {
+                        queue.push(cp);
+                    }
+                }
+            }
+        }
+    }
+    reachable
+}
+
 /// `<version>` with a trailing `-r<digits>` revision suffix removed
 /// (real `catpkgsplit(cpv)[:-1]` -- "revision numbers are ignored" for
 /// `--rebuild-if-new-ver`). Returns the input unchanged when there is no
@@ -20695,6 +20766,51 @@ mod tests {
         // Nothing changing `bar` -> no rebuilds.
         let (empty_out, empty_abi) = slot_operator_rebuild_entries(&dir, &[]);
         assert!(empty_out.is_empty() && empty_abi.is_empty());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn required_set_reachable_cps_follows_the_forward_installed_dep_graph() {
+        // Throwaway vdb: a 3-link chain tail -> mid -> target, plus an
+        // `island` reachable from nothing and a `sysdep` pulled only by a
+        // `@system` member. Mirrors the container's CASE 2 / CASE 3.
+        let dir = std::env::temp_dir().join(format!(
+            "portage-repo-reach-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let mk = |name: &str, rdepend: &str| {
+            let d = dir.join("var/db/pkg/dev-libs").join(name);
+            fs::create_dir_all(&d).unwrap();
+            fs::write(d.join("CATEGORY"), "dev-libs\n").unwrap();
+            fs::write(d.join("SLOT"), "0\n").unwrap();
+            fs::write(d.join("USE"), "\n").unwrap();
+            fs::write(d.join("RDEPEND"), format!("{rdepend}\n")).unwrap();
+        };
+        mk("tail-1.0", "dev-libs/mid:0/1=");
+        mk("mid-1.0", "dev-libs/target:0/1=");
+        mk("target-1.0", "");
+        mk("island-1.0", "");
+        mk("sysmember-1.0", "dev-libs/sysdep");
+        mk("sysdep-1.0", "");
+
+        let cp = |p: &str| ("dev-libs".to_string(), p.to_string());
+
+        // Only `tail` in @world -> the whole chain is reachable, `island`
+        // and the @system half are not.
+        let r = required_set_reachable_cps(&dir, &["dev-libs/tail".to_string()], &[]);
+        assert!(r.contains(&cp("tail")) && r.contains(&cp("mid")) && r.contains(&cp("target")));
+        assert!(!r.contains(&cp("island")));
+        assert!(!r.contains(&cp("sysmember")) && !r.contains(&cp("sysdep")));
+
+        // `sysmember` in @system pulls `sysdep`.
+        let r = required_set_reachable_cps(&dir, &[], &["dev-libs/sysmember".to_string()]);
+        assert!(r.contains(&cp("sysmember")) && r.contains(&cp("sysdep")));
+        assert!(!r.contains(&cp("mid")));
+
         let _ = fs::remove_dir_all(&dir);
     }
 

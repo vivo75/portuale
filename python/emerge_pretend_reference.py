@@ -10781,6 +10781,51 @@ def _all_installed_packages(root):
     return out
 
 
+def _required_set_reachable_cps(root, world_selected_atoms, system_atoms):
+    """The (category, package) of every installed package reachable, over
+    the installed dependency graph, from @world u @selected u @system --
+    real _complete_graph's deep re-walk of the required sets. Used to
+    gate _slot_operator_rebuild_entries. Mirrors portage-repo/src/lib.rs's
+    required_set_reachable_cps."""
+    installed = _all_installed_packages(root)
+    by_cp = {(c, p): (c, p, v) for (c, p, v, _s) in installed}
+
+    def matches_cp(atom_str):
+        a = _parse_atom(atom_str)
+        if a is None:
+            return None
+        c, p = a.cp.split("/", 1)
+        return (c, p) if (c, p) in by_cp else None
+
+    reachable = set()
+    queue = []
+    for atom_str in list(world_selected_atoms) + list(system_atoms):
+        cp = matches_cp(atom_str)
+        if cp is not None and cp not in reachable:
+            reachable.add(cp)
+            queue.append(cp)
+    while queue:
+        cat, pkg = queue.pop()
+        entry = by_cp.get((cat, pkg))
+        if entry is None:
+            continue
+        _c, _p, ver = entry
+        use_flags = _read_vdb_flag_set(root, cat, pkg, ver, "USE")
+        for dep_key in ("RDEPEND", "PDEPEND", "DEPEND", "BDEPEND"):
+            depstr = _read_vdb_string(root, cat, pkg, ver, dep_key)
+            if not depstr.strip():
+                continue
+            atoms = _flat_dep_atoms(depstr, use_flags)
+            if atoms is None:
+                continue
+            for atom_str in atoms:
+                cp = matches_cp(atom_str)
+                if cp is not None and cp not in reachable:
+                    reachable.add(cp)
+                    queue.append(cp)
+    return reachable
+
+
 def _render_show_parents(edges):
     """Real show_parents's per-package rendering (actions.py:1274-1291):
     group (parent, atom) edges by parent, render one "<parent> requires
