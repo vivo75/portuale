@@ -34,6 +34,22 @@
 use std::path::{Path, PathBuf};
 
 // ---------------------------------------------------------------------------
+// Solver
+// ---------------------------------------------------------------------------
+
+/// A dependency-resolution strategy: [`ResolveRequest`] in, merge-ordered
+/// [`GraphResult`] out (or a hard-error string).
+///
+/// A **re-export** of `portage_repo::Resolver`, so there is exactly one
+/// solver seam in the workspace. The only implementation is
+/// [`portage_repo::BacktrackingResolver`], via [`portage_repo::active_resolver`].
+///
+/// Grounding: Portage's solver boundary is `_emerge/actions.py`
+/// constructing `_emerge/depgraph.py`'s `depgraph` from
+/// `create_depgraph_params(...)` and reading the merged graph back out.
+pub use portage_repo::Resolver;
+
+// ---------------------------------------------------------------------------
 // PkgDatabase
 // ---------------------------------------------------------------------------
 
@@ -646,7 +662,7 @@ impl SchedulerPolicy for UnlimitedPolicy {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use portage_repo::GraphResult;
+    use portage_repo::{GraphResult, ResolveRequest};
     use portage_util::TempDir;
 
     /// Arguments of [`write_vdb_entry`].

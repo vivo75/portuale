@@ -46,3 +46,10 @@ impl std::fmt::Display for SolverKind {
         f.write_str(self.as_str())
     }
 }
+
+/// A dependency-resolution strategy: [`ResolveRequest`] in, merge-ordered
+/// [`GraphResult`] out. Alternates plug in via [`active_resolver_for`]
+/// without touching a call site.
+pub trait Resolver {
+    fn resolve(&self, req: &ResolveRequest) -> Result<GraphResult, Error>;
+}
