@@ -52,10 +52,9 @@ const WRITE_KEYS: &[&str] = &[
     "_md5_",
 ];
 
-pub fn run(config_root: &Path, root: &Path) -> ExitCode {
-    // `--debug`/`-d` is not wired through the pretend CLI path; the
-    // `depend` phase always runs non-debug here.
-    const DEBUG: bool = false;
+pub fn run(config_root: &Path, root: &Path, debug: bool) -> ExitCode {
+    // `--debug`/`-d`: run each `depend` phase with `PORTAGE_DEBUG=1`
+    // (real `bin/ebuild.sh` `set -x`).
     let repos = match portage_repo::find_repos(config_root) {
         Ok(r) => r,
         Err(e) => {
@@ -100,7 +99,7 @@ pub fn run(config_root: &Path, root: &Path) -> ExitCode {
                     root,
                     config_root,
                     &portage_tmpdir,
-                    DEBUG,
+                    debug,
                 ) {
                     eprintln!(" * {e}");
                     failures += 1;

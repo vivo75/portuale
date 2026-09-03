@@ -336,7 +336,7 @@ CASES = [
     #  build + merge -- a non-dry-run path, Rust-black-box-tested in
     #  test_portuale.py, not exercised via these shared CASES.)
     ("real emerge option, value-taking, not implemented", ["--accept-properties", "dev-libs/newpkg"], 2),
-    ("real emerge option, boolean, not implemented", ["--debug", "--pretend", "dev-libs/newpkg"], 2),
+    ("real emerge option, boolean, not implemented", ["--quiet-repo-display", "--pretend", "dev-libs/newpkg"], 2),
     ("real emerge option, inline =value form, not implemented", ["--accept-properties=*", "--pretend", "dev-libs/newpkg"], 2),
     # (`emerge --depclean` / `-c` / `--prune` / `-P` / `-C` with no
     #  --pretend are all real removals now -- non-dry-run paths,
@@ -1057,6 +1057,10 @@ CASES = [
     ("--misspell-suggestions: a near-miss package name gets suggestions", ["--pretend", "dev-libs/newpgk"], 1),
     ("--misspell-suggestions=n: no suggestions", ["--pretend", "--misspell-suggestions=n", "dev-libs/newpgk"], 1),
     ("--misspell-suggestions: a masked (existing) cp gets no name suggestions", ["--pretend", "dev-libs/autounmaskkeywordpkg"], 1),
+    ("--debug: recognized, byte-for-byte no-op under --pretend", ["--pretend", "--debug", "dev-libs/newpkg"], 0),
+    ("-d: --debug short alias, recognized", ["--pretend", "-d", "dev-libs/newpkg"], 0),
+    ("-pd: --debug bundles with -p", ["-pd", "dev-libs/newpkg"], 0),
+    ("--debug + a slot conflict: still no resolver debug trace", ["--pretend", "--debug", "dev-libs/slotconfgroup"], 0),
     ("--verbose is now implemented, not rejected", ["--pretend", "--verbose", "dev-libs/newpkg"], 0),
     ("-v short alias is now implemented, not rejected", ["--pretend", "-v", "dev-libs/newpkg"], 0),
     ("without --verbose, USE= is never shown even for a package with IUSE", ["--pretend", "dev-libs/useflagpkg"], 0),
@@ -1068,7 +1072,7 @@ CASES = [
     ("--verbose=y inline form enables", ["--pretend", "--verbose=y", "dev-libs/useflagpkg"], 0),
     ("short-flag bundle -pv: both implemented flags", ["-pv", "dev-libs/useflagpkg"], 0),
     ("short-flag bundle -vp: order doesn't matter", ["-vp", "dev-libs/useflagpkg"], 0),
-    ("short-flag bundle -pd: pretend + unimplemented option", ["-pd", "dev-libs/useflagpkg"], 2),
+    ("short-flag bundle -pf: pretend + unimplemented option", ["-pf", "dev-libs/useflagpkg"], 2),
     ("short-flag bundle -pz: pretend + genuinely unrecognized", ["-pz", "dev-libs/useflagpkg"], 2),
     ("bundled -v never consumes a following token as its value", ["-pv", "n"], 1),
     ("--help is now implemented, not rejected", ["--help"], 0),
@@ -6819,18 +6823,18 @@ def test_short_flag_bundle_pv_enables_both_pretend_and_verbose(emerge_binary, fi
 def test_short_flag_bundle_reports_the_first_out_of_scope_character(
     emerge_binary, fixture_env
 ):
-    """-pd (pretend + real-but-unimplemented -d/--debug) and -pz
+    """-pf (pretend + real-but-unimplemented -f/--fetchonly) and -pz
     (pretend + a genuinely unrecognized "-z") each decompose left to
     right, processing "-p" silently and then reporting on the next
     character exactly as a standalone occurrence of it would -- same
     messages, same exit code."""
     unimplemented = _run(
-        [str(emerge_binary)], ["-pd", "dev-libs/useflagpkg"], fixture_env
+        [str(emerge_binary)], ["-pf", "dev-libs/useflagpkg"], fixture_env
     )
     assert unimplemented.returncode == 2
     assert (
         unimplemented.stderr.strip()
-        == 'emerge: option "--debug" is a real emerge option, but is not yet '
+        == 'emerge: option "--fetchonly" is a real emerge option, but is not yet '
         'implemented in portuale -- run "emerge --help" for the options '
         "and actions that are."
     )
@@ -6962,8 +6966,10 @@ Output:
       --unordered-display, --alphabetical  merge-list ordering variants
       --color <y|n>         force colour output on or off
       --verbose-slot-rebuilds[=y|n]  show the atoms forcing a slot-operator rebuild
+      --verbose-conflicts   list every parent of a slot conflict, not one per collision reason
       --ignore-built-slot-operator-deps[=y|n]  ignore recorded := slot-operator dependencies
       --depclean-lib-check[=y|n]  with --depclean/--prune: scan for soname breakage (default y)
+  -d, --debug               run ebuild phases under `set -x` (PORTAGE_DEBUG=1); no effect under --pretend
 
 Portuale extensions (not real emerge options):
       --json                dump the resolved graph as one JSON line instead of the display

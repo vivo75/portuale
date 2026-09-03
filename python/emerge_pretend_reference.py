@@ -8944,8 +8944,10 @@ Output:
       --unordered-display, --alphabetical  merge-list ordering variants
       --color <y|n>         force colour output on or off
       --verbose-slot-rebuilds[=y|n]  show the atoms forcing a slot-operator rebuild
+      --verbose-conflicts   list every parent of a slot conflict, not one per collision reason
       --ignore-built-slot-operator-deps[=y|n]  ignore recorded := slot-operator dependencies
       --depclean-lib-check[=y|n]  with --depclean/--prune: scan for soname breakage (default y)
+  -d, --debug               run ebuild phases under `set -x` (PORTAGE_DEBUG=1); no effect under --pretend
 
 Portuale extensions (not real emerge options):
       --json                dump the resolved graph as one JSON line instead of the display
@@ -12195,6 +12197,8 @@ def run(args):
     # Only consulted by --depclean/--prune. See pretend.rs.
     lib_check = True
     update = False
+    # --debug / -d: PORTAGE_DEBUG for a real build; a no-op for --pretend.
+    debug = False
     deep = 0
     excluded = []
     reinstall_atoms = []
@@ -12401,6 +12405,14 @@ def run(args):
             lib_check = val not in ("n", "N")
         elif arg in ("--update", "-u"):
             update = True
+            i += 1
+        elif arg in ("--debug", "-d"):
+            # Real main.py:1235: --debug/-d sets PORTAGE_DEBUG=1 (real
+            # bin/ebuild.sh `set -x` on a real build) and
+            # initialize_logger(DEBUG) (Python-implementation trace, no
+            # portuale equivalent). A pure no-op for --pretend, which is
+            # all this reference does. Mirrors pretend.rs.
+            debug = True
             i += 1
         elif arg in ("--noreplace", "-n"):
             # Real "--noreplace"/"-n": a plain boolean, no value at all
@@ -13564,6 +13576,8 @@ def run(args):
                     update = True
                 elif c == "n":
                     noreplace = True
+                elif c == "d":
+                    debug = True
                 elif c == "D":
                     deep = True
                 elif c == "e":

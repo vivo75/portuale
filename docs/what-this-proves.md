@@ -12079,3 +12079,37 @@ one reason). Both sides byte-identical across the contract suite.
 Still cut (`scope-backlog.md` Part 2.A): `pkg_use_display` for non-default
 USE, the `use`/`soname` reason keys, operator/USE-token colorization, and
 the `need_rebuild` "cannot be rebuilt" trailer.
+
+### `emerge --debug` / `-d` — real `PORTAGE_DEBUG=1` on a build (2026-09-03)
+
+Real `emerge --debug` (`_emerge/main.py:1235`) does two things: `os.environ
+["PORTAGE_DEBUG"] = "1"` (real `bin/ebuild.sh` then runs `set -x` in every
+phase) and `portage.util.initialize_logger(logging.DEBUG)` (turns on
+portage's internal `writemsg_level(level=logging.DEBUG)` trace). `-d` is
+the short alias (`shortmapping`), bundle-compatible (`-pd`).
+
+`emerge --debug` / `-d` / bundled `-d` were rejected as "a real emerge
+option, but is not yet implemented". Now:
+
+- **The real half — `PORTAGE_DEBUG=1`** — is threaded through `emerge`'s
+  own build/merge/removal paths. `MergeOptions::from_env(shell, debug)`
+  and `package_options_from_env(shell, debug)` carry it into
+  `phase_env_vars`'s `PORTAGE_DEBUG` slot (the exact mechanism `ebuild
+  --debug` already used), so `emerge --debug <atom>`, `emerge --debug -C`,
+  `emerge --debug --config`, `emerge --debug --depclean/--prune/--clean`,
+  `emerge --debug --resume`, and `emerge --debug --regen` all run their
+  real phases (`src_*` / `pkg_prerm` / `pkg_postrm` / `pkg_config` /
+  `depend`) under `set -x`. A new `test_portuale.py` test proves a plain
+  `emerge <atom>` build emits no `+ ` trace lines and `emerge --debug
+  <atom>` does.
+- **The `logging.DEBUG` half is a documented no-op.** portuale's resolver
+  and config layer have no logging framework, and real portage's
+  `--debug` output there (`dep_check` / `dep_zapdeps` / `_slot_conflict`
+  internals / the `circular dependency graph:` digraph dump) is
+  Python-implementation tracing, not behaviour. So `emerge --pretend
+  --debug` is **byte-for-byte identical** to `emerge --pretend` — pinned
+  by 4 contract CASES (`--debug`, `-d`, `-pd`, `--debug` + a slot
+  conflict), all Rust == Python.
+
+Also wired in the same pass: `--verbose-conflicts` gained its `emerge
+--help` line (the flag itself shipped with the slot-collision slice).

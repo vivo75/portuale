@@ -1943,8 +1943,10 @@ Output:
       --unordered-display, --alphabetical  merge-list ordering variants
       --color <y|n>         force colour output on or off
       --verbose-slot-rebuilds[=y|n]  show the atoms forcing a slot-operator rebuild
+      --verbose-conflicts   list every parent of a slot conflict, not one per collision reason
       --ignore-built-slot-operator-deps[=y|n]  ignore recorded := slot-operator dependencies
       --depclean-lib-check[=y|n]  with --depclean/--prune: scan for soname breakage (default y)
+  -d, --debug               run ebuild phases under `set -x` (PORTAGE_DEBUG=1); no effect under --pretend
 
 Portuale extensions (not real emerge options):
       --json                dump the resolved graph as one JSON line instead of the display
@@ -2855,6 +2857,9 @@ fn run_unmerge_pretend(
     // package's `pkg_prerm`/`pkg_postrm` (and the `FEATURES=unmerge-backup`
     // `quickpkg`). Inert when `pretend` is `true`.
     shell: ebuild_phases::ShellBackend,
+    // `--debug`/`-d`: `PORTAGE_DEBUG=1` for the `pkg_prerm`/`pkg_postrm`
+    // phases (and the `unmerge-backup` `quickpkg`). Inert when `pretend`.
+    debug: bool,
     color: &Colorizer,
 ) -> ExitCode {
     if targets.is_empty() {
@@ -3157,7 +3162,7 @@ fn run_unmerge_pretend(
             return ExitCode::from(130);
         }
         clean_delay_countdown();
-        return execute_unmerge(&removal_list, root, shell, color);
+        return execute_unmerge(&removal_list, root, shell, debug, color);
     }
     ExitCode::SUCCESS
 }
@@ -3188,7 +3193,10 @@ fn run_unmerge_pretend(
 /// `merge`/`qmerge`/`package` construction uses. Shared by the
 /// non-`--pretend` build/merge dispatch and `execute_unmerge`'s own
 /// `FEATURES=unmerge-backup` `quickpkg`.
-fn package_options_from_env(shell: ebuild_phases::ShellBackend) -> ebuild_package::PackageOptions {
+fn package_options_from_env(
+    shell: ebuild_phases::ShellBackend,
+    debug: bool,
+) -> ebuild_package::PackageOptions {
     let d = ebuild_package::PackageOptions::default();
     let binpkg_compress =
         std::env::var("BINPKG_COMPRESS").unwrap_or_else(|_| d.binpkg_compress.clone());
@@ -3197,7 +3205,7 @@ fn package_options_from_env(shell: ebuild_phases::ShellBackend) -> ebuild_packag
         .or_else(|_| std::env::var("BINPKG_COMPRESS_FLAGS"))
         .unwrap_or_else(|_| d.binpkg_compress_flags.clone());
     ebuild_package::PackageOptions {
-        debug: false,
+        debug,
         pkgdir: std::env::var_os("PKGDIR")
             .map(std::path::PathBuf::from)
             .unwrap_or_else(|| d.pkgdir.clone()),
@@ -3541,6 +3549,7 @@ fn run_resume(
     jobs: usize,
     load_average: Option<f64>,
     shell: ebuild_phases::ShellBackend,
+    debug: bool,
 ) -> ExitCode {
     let Some((favorites, mut mergelist, opts)) = crate::mtimedb::read_resume_list(root) else {
         eprintln!("emerge: could not find a valid resume list");
@@ -3601,7 +3610,7 @@ fn run_resume(
     }
 
     println!(">>> Resuming merge of {} package(s)...", entries.len());
-    let merge_options = ebuild_merge::MergeOptions::from_env(shell, false);
+    let merge_options = ebuild_merge::MergeOptions::from_env(shell, debug);
     if let Err(e) = emerge_build::run_source_merge(
         &entries,
         &repos,
@@ -3656,15 +3665,16 @@ fn execute_unmerge(
     removal_list: &[(String, String, String)],
     root: &Path,
     shell: ebuild_phases::ShellBackend,
+    debug: bool,
     color: &Colorizer,
 ) -> ExitCode {
     let portage_tmpdir = std::env::var_os("PORTAGE_TMPDIR")
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|| std::path::PathBuf::from("/var/tmp/portage"));
-    let options = ebuild_merge::MergeOptions::from_env(shell, false);
+    let options = ebuild_merge::MergeOptions::from_env(shell, debug);
     // Real `dblink._pre_unmerge_backup`: `FEATURES=unmerge-backup` -> a
     // `quickpkg` of each package before it's removed.
-    let backup = feature_enabled("unmerge-backup").then(|| package_options_from_env(shell));
+    let backup = feature_enabled("unmerge-backup").then(|| package_options_from_env(shell, debug));
     let scratch = portage_tmpdir.join("portage").join("_unmerge_src");
     let total = removal_list.len();
     for (idx, (category, package, version)) in removal_list.iter().enumerate() {
@@ -3939,6 +3949,7 @@ fn run_prune_pretend(
     pretend: bool,
     ask: bool,
     shell: ebuild_phases::ShellBackend,
+    debug: bool,
     color: &Colorizer,
 ) -> ExitCode {
     let args = match resolve_cleanup_args(targets, root, "prune") {
@@ -4002,6 +4013,7 @@ fn run_prune_pretend(
         pretend,
         ask,
         shell,
+        debug,
         color,
     )
 }
@@ -4025,6 +4037,7 @@ fn run_prune_pretend(
 /// exit 0). Without `--pretend`, `execute_unmerge` removes the selected
 /// versions after the display -- real `actions.py:2684` routes `prune
 /// --nodeps` through the very same `unmerge()` `-C` uses.
+#[allow(clippy::too_many_arguments)]
 fn run_prune_nodeps_pretend(
     targets: &[&str],
     root: &Path,
@@ -4032,6 +4045,7 @@ fn run_prune_nodeps_pretend(
     pretend: bool,
     ask: bool,
     shell: ebuild_phases::ShellBackend,
+    debug: bool,
     color: &Colorizer,
 ) -> ExitCode {
     run_prune_nodeps_or_clean(
@@ -4041,6 +4055,7 @@ fn run_prune_nodeps_pretend(
         pretend,
         ask,
         shell,
+        debug,
         color,
         false,
     )
@@ -4054,6 +4069,7 @@ fn run_prune_nodeps_pretend(
 /// names `clean`. Individual ebuild-path args are rejected (real
 /// `unmerge.py:131`); `resolve_cleanup_args` already only produces
 /// `cat/pkg` atoms here.
+#[allow(clippy::too_many_arguments)]
 fn run_clean_pretend(
     targets: &[&str],
     root: &Path,
@@ -4061,9 +4077,20 @@ fn run_clean_pretend(
     pretend: bool,
     ask: bool,
     shell: ebuild_phases::ShellBackend,
+    debug: bool,
     color: &Colorizer,
 ) -> ExitCode {
-    run_prune_nodeps_or_clean(targets, root, config_root, pretend, ask, shell, color, true)
+    run_prune_nodeps_or_clean(
+        targets,
+        root,
+        config_root,
+        pretend,
+        ask,
+        shell,
+        debug,
+        color,
+        true,
+    )
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -4074,6 +4101,7 @@ fn run_prune_nodeps_or_clean(
     pretend: bool,
     ask: bool,
     shell: ebuild_phases::ShellBackend,
+    debug: bool,
     color: &Colorizer,
     is_clean: bool,
 ) -> ExitCode {
@@ -4203,7 +4231,7 @@ fn run_prune_nodeps_or_clean(
             return ExitCode::from(130);
         }
         clean_delay_countdown();
-        return execute_unmerge(&removal_list, root, shell, color);
+        return execute_unmerge(&removal_list, root, shell, debug, color);
     }
     ExitCode::SUCCESS
 }
@@ -4450,6 +4478,7 @@ fn run_depclean_pretend(
     pretend: bool,
     ask: bool,
     shell: ebuild_phases::ShellBackend,
+    debug: bool,
     color: &Colorizer,
 ) -> ExitCode {
     // Bare-name targets get their category from the vdb, then each atom
@@ -4650,6 +4679,7 @@ fn run_depclean_pretend(
         pretend,
         ask,
         shell,
+        debug,
         color,
     );
     // Real `action_depclean` prints the stats block after `unmerge()`
@@ -5424,6 +5454,7 @@ fn run_config_action(
     atom_args: &[&str],
     root: &Path,
     shell: ebuild_phases::ShellBackend,
+    debug: bool,
     ask: bool,
     color: &Colorizer,
 ) -> ExitCode {
@@ -5534,7 +5565,7 @@ fn run_config_action(
     let portage_tmpdir = std::env::var_os("PORTAGE_TMPDIR")
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|| std::path::PathBuf::from("/var/tmp/portage"));
-    let options = ebuild_merge::MergeOptions::from_env(shell, false);
+    let options = ebuild_merge::MergeOptions::from_env(shell, debug);
     let scratch = portage_tmpdir.join("portage").join("_config_src");
     let rc = match ebuild_merge::run_vdb_saved_env_phase(
         root,
@@ -6022,6 +6053,11 @@ pub fn run(args: &[String]) -> ExitCode {
     // semantics much narrower than real portage's own general
     // mergelist-recalculation/resume-state machinery.
     let mut keep_going = false;
+    // --debug / -d (real `main.py:1235`): `PORTAGE_DEBUG=1` in the phase
+    // env for a real build (real `bin/ebuild.sh` `set -x`); a no-op for
+    // `--pretend` (real's `logging.DEBUG` trace has no portuale
+    // equivalent). Threaded into the build/merge/config/unmerge paths.
+    let mut debug = false;
     // --jobs[=N] / -j[N] (real `main.py`, `valid_integers`): the maximum
     // number of package *builds* to run concurrently (real
     // `_emerge/Scheduler.py`'s `_max_jobs`). Default 1 = portuale's
@@ -7037,6 +7073,18 @@ pub fn run(args: &[String]) -> ExitCode {
         } else if arg == "--keep-going" {
             keep_going = true;
             i += 1;
+        } else if arg == "--debug" || arg == "-d" {
+            // Real `main.py:1235`: `--debug`/`-d` sets `PORTAGE_DEBUG=1`
+            // (real `bin/ebuild.sh` then runs `set -x` in every phase --
+            // portuale threads it into the phase env, same as `ebuild
+            // --debug`) and `initialize_logger(logging.DEBUG)` (portage's
+            // internal `logging.DEBUG` trace -- Python-implementation
+            // noise with no portuale equivalent and not part of the
+            // "same behaviour" contract, a documented no-op here). So
+            // `emerge --pretend --debug` is byte-identical to `emerge
+            // --pretend`; the flag only bites on a real build.
+            debug = true;
+            i += 1;
         } else if arg == "--resume" || arg == "-r" {
             resume = true;
             i += 1;
@@ -7694,6 +7742,7 @@ pub fn run(args: &[String]) -> ExitCode {
                     't' => tree = true,
                     'u' => update = true,
                     'n' => noreplace = true,
+                    'd' => debug = true,
                     'D' => deep = portage_repo::Deep::Unlimited,
                     'e' => emptytree = true,
                     'k' => usepkg = true,
@@ -7819,7 +7868,7 @@ pub fn run(args: &[String]) -> ExitCode {
     // every repo's `metadata/md5-cache` by running each ebuild's `depend`
     // phase. `--pretend` was already rejected above.
     if regen_action {
-        return crate::regen::run(&config_root_from_env(), &root_from_env());
+        return crate::regen::run(&config_root_from_env(), &root_from_env(), debug);
     }
     // `--metadata` (real `action_metadata`): transfers a repo's
     // pre-generated cache into portage's own `depcachedir`. Portuale
@@ -7950,6 +7999,7 @@ pub fn run(args: &[String]) -> ExitCode {
             jobs,
             load_average,
             shell,
+            debug,
         );
     }
 
@@ -7957,7 +8007,7 @@ pub fn run(args: &[String]) -> ExitCode {
     // installed package (real `action_config`). Needs nothing from the
     // resolved `config`; ignores `--pretend`.
     if config_action {
-        return run_config_action(&atom_args, &root, shell, ask, &color);
+        return run_config_action(&atom_args, &root, shell, debug, ask, &color);
     }
 
     // `--search`/`-s` (`--searchdesc`/`-S` also matches DESCRIPTION): a
@@ -8004,7 +8054,16 @@ pub fn run(args: &[String]) -> ExitCode {
     // `--clean`: a standalone removal action -- keep only the newest
     // version per slot.
     if clean_action {
-        return run_clean_pretend(&atom_args, &root, &config_root, pretend, ask, shell, &color);
+        return run_clean_pretend(
+            &atom_args,
+            &root,
+            &config_root,
+            pretend,
+            ask,
+            shell,
+            debug,
+            &color,
+        );
     }
     // `--rage-clean`: a fast `--unmerge` (identical `--pretend` display).
     if rage_clean {
@@ -8018,6 +8077,7 @@ pub fn run(args: &[String]) -> ExitCode {
             pretend,
             ask,
             shell,
+            debug,
             &color,
         );
     }
@@ -8038,6 +8098,7 @@ pub fn run(args: &[String]) -> ExitCode {
             pretend,
             ask,
             shell,
+            debug,
             &color,
         );
     }
@@ -8053,6 +8114,7 @@ pub fn run(args: &[String]) -> ExitCode {
             pretend,
             ask,
             shell,
+            debug,
             &color,
         );
     }
@@ -8065,6 +8127,7 @@ pub fn run(args: &[String]) -> ExitCode {
                 pretend,
                 ask,
                 shell,
+                debug,
                 &color,
             );
         }
@@ -8078,6 +8141,7 @@ pub fn run(args: &[String]) -> ExitCode {
             pretend,
             ask,
             shell,
+            debug,
             &color,
         );
     }
@@ -9028,11 +9092,11 @@ pub fn run(args: &[String]) -> ExitCode {
         // Real BINPKG_COMPRESS/BINPKG_COMPRESS_FLAGS[_<NAME>]/
         // PORTAGE_BZIP2_COMMAND/PKGDIR/... resolution -- see
         // `package_options_from_env`.
-        let package_options = package_options_from_env(shell);
+        let package_options = package_options_from_env(shell, debug);
         let portage_tmpdir = std::env::var_os("PORTAGE_TMPDIR")
             .map(std::path::PathBuf::from)
             .unwrap_or_else(|| std::path::PathBuf::from("/var/tmp/portage"));
-        let mut merge_options = ebuild_merge::MergeOptions::from_env(shell, false);
+        let mut merge_options = ebuild_merge::MergeOptions::from_env(shell, debug);
         // The compiler / make flags real portage puts in every build
         // phase's environment, from the resolved config (make.conf +
         // profile `make.defaults` + the `env` layer -- all folded into

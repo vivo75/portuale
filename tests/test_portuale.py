@@ -583,6 +583,41 @@ def test_emerge_atom_without_pretend_really_builds_and_merges_from_source(
     assert world_lines == sorted(world_lines)
 
 
+def test_emerge_debug_flag_enables_set_x_in_the_build_phases(emerge_binary, tmp_path):
+    """`emerge --debug`/`-d` (real main.py:1235) sets PORTAGE_DEBUG=1 in
+    every phase environment, so real bin/ebuild.sh's `set -x` guard fires
+    during the source build -- the same real effect as `ebuild --debug`,
+    now threaded through emerge's own MergeOptions. A plain `emerge
+    <atom>` build emits no `+ ` trace lines; `emerge --debug <atom>`
+    does. (`--pretend --debug` is separately verified to be a byte-for-
+    byte no-op by the contract suite.)"""
+    import shutil
+
+    def _run(extra_args):
+        root = tmp_path / ("root" + "".join(extra_args))
+        shutil.copytree(Path(FIXTURES_ROOT) / "var", root / "var")
+        env = dict(os.environ)
+        env["PORTAGE_CONFIGROOT"] = FIXTURES_ROOT
+        env["ROOT"] = str(root)
+        env["DISTDIR"] = str(Path(FIXTURES_ROOT) / "distfiles")
+        env["PORTAGE_TMPDIR"] = str(tmp_path / ("tmp" + "".join(extra_args)))
+        return subprocess.run(
+            [str(emerge_binary), *extra_args, "dev-libs/packagepkg"],
+            capture_output=True,
+            text=True,
+            check=False,
+            env=env,
+        )
+
+    plain = _run([])
+    assert plain.returncode == 0, plain.stderr
+    assert not any(ln.startswith("+ ") for ln in plain.stderr.splitlines())
+
+    debug = _run(["--debug"])
+    assert debug.returncode == 0, debug.stderr
+    assert any(ln.startswith("+ ") for ln in debug.stderr.splitlines())
+
+
 def test_emerge_atom_source_build_sees_the_resolved_use_and_build_flags(
     emerge_binary, tmp_path
 ):
