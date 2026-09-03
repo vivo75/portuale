@@ -644,6 +644,10 @@ fn residual_161_setup(dir: &Path) -> (Vec<RepoConfig>, portage_profile::Config, 
     (repos, config, upgrade)
 }
 
+/// Shared harness for the `collect_feedback` legs: a minimal `ResolveCtx` plus
+/// an empty `PassResult` each leg fills in.
+static NO_STRINGS_161: Vec<String> = Vec::new();
+
 #[derive(Default)]
 struct CtxOpts161 {
     reachable: HashSet<(String, String)>,
@@ -672,6 +676,72 @@ struct CtxOpts161 {
     /// Request atoms expanded from `@world`/`@selected`
     /// (see [`ResolveRequest::set_args`]).
     set_args: HashSet<String>,
+}
+
+fn ctx_161<'a>(
+    root: &'a Path,
+    config: &'a portage_profile::Config,
+    repos: Vec<RepoConfig>,
+    o: &'a CtxOpts161,
+) -> ResolveCtx<'a> {
+    ResolveCtx {
+        root,
+        atoms: &o.atoms,
+        update: o.update,
+        config,
+        newuse: o.newuse,
+        changed_use: false,
+        nodeps: o.nodeps,
+        onlydeps: false,
+        onlydeps_with_rdeps: true,
+        onlydeps_with_ideps: false,
+        deep: o.deep,
+        excluded: &o.excluded,
+        with_bdeps: o.with_bdeps,
+        changed_deps: false,
+        changed_slot: false,
+        with_test_deps: o.with_test_deps,
+        changed_deps_report: false,
+        selective: o.selective,
+        autounmask_backtrack_enabled: false,
+        usepkg: o.usepkg,
+        usepkgonly: o.usepkgonly,
+        binpkg_respect_use: o.binpkg_respect_use,
+        usepkg_exclude: &NO_STRINGS_161,
+        usepkg_include: &NO_STRINGS_161,
+        rebuilt_binaries: false,
+        rebuilt_binaries_timestamp: None,
+        newrepo: false,
+        buildpkgonly: o.buildpkgonly,
+        root_deps_running_root: None,
+        distdir: root,
+        empty: false,
+        getbinpkg: false,
+        ignore_built_slot_operator_deps: false,
+        backtrack_max: o.backtrack_max,
+        reinstall_atoms: &NO_STRINGS_161,
+        rebuild_if_new_slot: true,
+        rebuild_if_unbuilt: false,
+        rebuild_if_new_rev: false,
+        rebuild_if_new_ver: false,
+        rebuild_exclude: &NO_STRINGS_161,
+        rebuild_ignore: &NO_STRINGS_161,
+        dynamic_deps: true,
+        implicit_system_deps: false,
+        complete: o.complete,
+        set_args: o.set_args.clone(),
+        repos,
+        slot_op_reachable: o.reachable.clone(),
+        world_reachable: o.reachable.clone(),
+        blocker_retry_closure: o.blocker_closure.clone(),
+        complete_locked_merges: o.locked.clone(),
+        top_level: o.top_level.iter().map(|s| s.as_str()).collect(),
+        top_level_cps: HashSet::new(),
+        // Like production's `ResolveCtx::new`: the binary pool
+        // derives from the config's scanned binpkgs (empty here
+        // unless a leg stages some).
+        local_binpkg: build_local_binpkg_index(config),
+    }
 }
 
 fn pass_161() -> PassResult {
