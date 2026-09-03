@@ -1530,3 +1530,111 @@ mod use_dep_conditional_evaluation_tests {
         );
     }
 }
+
+#[cfg(test)]
+mod extract_affecting_use_tests {
+    use super::*;
+
+    /// The 23 passing cases from Portage's
+    /// `lib/portage/tests/dep/test_extract_affecting_use.py`, verbatim.
+    #[test]
+    fn matches_portages_test_corpus() {
+        let cases: &[(&str, &str, &[&str])] = &[
+            ("a? ( A ) !b? ( B ) !c? ( C ) d? ( D )", "A", &["a"]),
+            ("a? ( A ) !b? ( B ) !c? ( C ) d? ( D )", "B", &["b"]),
+            ("a? ( A ) !b? ( B ) !c? ( C ) d? ( D )", "C", &["c"]),
+            ("a? ( A ) !b? ( B ) !c? ( C ) d? ( D )", "D", &["d"]),
+            ("a? ( b? ( AB ) )", "AB", &["a", "b"]),
+            ("a? ( b? ( c? ( ABC ) ) )", "ABC", &["a", "b", "c"]),
+            ("a? ( A b? ( c? ( ABC ) AB ) )", "A", &["a"]),
+            ("a? ( A b? ( c? ( ABC ) AB ) )", "AB", &["a", "b"]),
+            ("a? ( A b? ( c? ( ABC ) AB ) )", "ABC", &["a", "b", "c"]),
+            ("a? ( A b? ( c? ( ABC ) AB ) ) X", "X", &[]),
+            ("X a? ( A b? ( c? ( ABC ) AB ) )", "X", &[]),
+            ("ab? ( || ( A B ) )", "A", &["ab"]),
+            ("!ab? ( || ( A B ) )", "B", &["ab"]),
+            ("ab? ( || ( A || ( b? ( || ( B C ) ) ) ) )", "A", &["ab"]),
+            (
+                "ab? ( || ( A || ( b? ( || ( B C ) ) ) ) )",
+                "B",
+                &["ab", "b"],
+            ),
+            (
+                "ab? ( || ( A || ( b? ( || ( B C ) ) ) ) )",
+                "C",
+                &["ab", "b"],
+            ),
+            (
+                "( ab? ( || ( ( A ) || ( b? ( ( ( || ( B ( C ) ) ) ) ) ) ) ) )",
+                "A",
+                &["ab"],
+            ),
+            (
+                "( ab? ( || ( ( A ) || ( b? ( ( ( || ( B ( C ) ) ) ) ) ) ) ) )",
+                "B",
+                &["ab", "b"],
+            ),
+            (
+                "( ab? ( || ( ( A ) || ( b? ( ( ( || ( B ( C ) ) ) ) ) ) ) ) )",
+                "C",
+                &["ab", "b"],
+            ),
+            ("a? ( A )", "B", &[]),
+            ("a? ( || ( A B ) )", "B", &["a"]),
+            (
+                "a? ( >=dev-lang/php-5.2[pcre(+)] )",
+                ">=dev-lang/php-5.2[pcre(+)]",
+                &["a"],
+            ),
+        ];
+        for (dep, atom, want) in cases {
+            let got = extract_affecting_use(dep, atom)
+                .unwrap_or_else(|| panic!("({dep:?}, {atom:?}) returned None, want {want:?}"));
+            let want: HashSet<String> = want.iter().map(|s| s.to_string()).collect();
+            assert_eq!(got, want, "extract_affecting_use({dep:?}, {atom:?})");
+        }
+    }
+
+    /// The 15 malformed cases from the same file's `test_cases_xfail`
+    /// (Portage raises `InvalidDependString`; portuale returns `None`).
+    #[test]
+    fn malformed_syntax_returns_none() {
+        let cases: &[(&str, &str)] = &[
+            ("? ( A )", "A"),
+            ("!? ( A )", "A"),
+            ("( A", "A"),
+            ("A )", "A"),
+            ("||( A B )", "A"),
+            ("|| (A B )", "A"),
+            ("|| ( A B)", "A"),
+            ("|| ( A B", "A"),
+            ("|| A B )", "A"),
+            ("|| A B", "A"),
+            ("|| ( A B ) )", "A"),
+            ("|| || B C", "A"),
+            ("|| ( A B || )", "A"),
+            ("a? A", "A"),
+            ("( || ( || || ( A ) foo? ( B ) ) )", "A"),
+        ];
+        for (dep, atom) in cases {
+            assert_eq!(
+                extract_affecting_use(dep, atom),
+                None,
+                "extract_affecting_use({dep:?}, {atom:?}) should be None"
+            );
+        }
+    }
+
+    #[test]
+    fn docstring_example() {
+        let got = extract_affecting_use(
+            "sasl? ( dev-libs/cyrus-sasl ) !minimal? ( cxx? ( dev-libs/cyrus-sasl ) )",
+            "dev-libs/cyrus-sasl",
+        )
+        .unwrap();
+        assert_eq!(
+            got,
+            HashSet::from(["cxx".to_string(), "minimal".to_string(), "sasl".to_string()])
+        );
+    }
+}
