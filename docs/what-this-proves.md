@@ -11995,3 +11995,35 @@ emits only the deterministic list. A bare name carrying a version or slot
 `invalid atom` / `no ebuilds` paths. The `null/<name>` fallback +
 cross-category misspell search for the no-match case is replaced by the
 direct message.
+
+### The resolver is a self-contained, swappable unit (2026-09-03)
+
+Pure refactor, zero behaviour change (full suite byte-identical), and the
+first of the backtracking-resolver deferred items (`scope-backlog.md`
+Part 2.A). The ~1700-line graph walk + `_emerge/resolver/backtracking.py`
+retry loop was the entire body of `resolve_pretend_graph`, wrapped in a
+`'backtrack: loop {}` by an earlier slice (a large reindent). It now
+lives in:
+
+- **`struct ResolveRequest`** — owns every input the resolver needs (the
+  44 historical `resolve_pretend_graph` parameters, field-for-field). Owned,
+  not borrowed, so a resolver can be a `Box<dyn Resolver>`.
+- **`trait Resolver { fn resolve(&self, req: &ResolveRequest) -> Result<GraphResult, String>; }`**
+  — the resolution contract: request in, merge-ordered graph out.
+- **`struct BacktrackingResolver` + `impl Resolver`** — delegates to a
+  free `fn backtracking_resolve(req: &ResolveRequest)` whose first act is
+  a `let` block re-binding each `req` field to the exact borrowed type
+  the walk expects (`&Path`, `&[String]`, `&Config`, `bool`, …), so the
+  ~1700 lines below it are **unchanged** — same text, same indentation.
+- **`fn active_resolver() -> Box<dyn Resolver>`** — the selection hook;
+  currently always `BacktrackingResolver`, later an env-var / config
+  branch.
+- **`resolve_pretend_graph`** keeps its 44-argument signature verbatim
+  (every one of ~56 call sites untouched) and is now a thin marshaller:
+  build a `ResolveRequest`, `active_resolver().resolve(&req)`.
+
+Swapping in a different resolver architecture wholesale is now one `impl
+Resolver` plus one `active_resolver` branch — no call-site changes, no
+CLI-layer changes. The extraction also unblocks the autounmask-in-loop
+and `||`-preference-feedback slices (both need to re-drive a pass with
+different inputs, awkward as a 1700-line closure, clean as a function).

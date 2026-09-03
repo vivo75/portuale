@@ -318,10 +318,18 @@ a simplified transcription of real `_show_slot_collision_notice` →
 instances …` block (`SlotConflict.instances` = every conflicting version
 + its `(parent_cpv, atom)` pullers, via `build_slot_conflict`) + the
 advisory paragraph with the `--backtrack=30` hint gated the real way.
+**Resolver extraction (2026-09-03)**: the ~1700-line graph walk +
+backtracking loop moved out of `resolve_pretend_graph` into
+`backtracking_resolve(req: &ResolveRequest)` behind a `trait Resolver` /
+`struct BacktrackingResolver` / `active_resolver() -> Box<dyn Resolver>`.
+`resolve_pretend_graph` is now a thin 44-arg marshaller (every call site
+untouched). The resolver is self-contained and runtime-swappable -- a
+different architecture is one `impl Resolver` plus an `active_resolver`
+branch, no call-site changes. Pure refactor, full suite byte-identical.
+
 Deferred (see `scope-backlog.md` Part 2.A): "backtracking
 exhausted" / "circular dependencies" diagnostics, autounmask levels tried
-in sequence inside the loop, the `resolve_graph_once` helper extraction
-(drop slice 1's `loop {}` reindent), and real `get_conflict()`'s
+in sequence inside the loop, and real `get_conflict()`'s
 `collision_reasons` grouping / `--verbose-conflicts` markers / stderr.
 
 `what-this-proves.md` is the incrementally-

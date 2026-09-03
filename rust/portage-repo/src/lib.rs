@@ -9235,6 +9235,85 @@ pub fn complete_graph_auto_enable(
     })
 }
 
+/// Everything a resolver needs to turn a set of requested atoms into a
+/// merge-ordered [`GraphResult`]. Owns its inputs so a [`Resolver`] can
+/// be a `Box<dyn Resolver>` selected at runtime, and so the resolution
+/// job is fully decoupled from the CLI layer that assembles it. Field
+/// names and types match the historical `resolve_pretend_graph`
+/// parameter list one-for-one.
+#[derive(Debug, Clone)]
+pub struct ResolveRequest {
+    pub config_root: PathBuf,
+    pub root: PathBuf,
+    pub atoms: Vec<String>,
+    pub config: portage_profile::Config,
+    pub newuse: bool,
+    pub changed_use: bool,
+    pub nodeps: bool,
+    pub update: bool,
+    pub deep: Deep,
+    pub excluded: Vec<String>,
+    pub with_bdeps: bool,
+    pub changed_deps: bool,
+    pub changed_slot: bool,
+    pub with_test_deps: bool,
+    pub changed_deps_report: bool,
+    pub selective: bool,
+    pub autounmask_suggest_keywords: bool,
+    pub autounmask_suggest_use: bool,
+    pub autounmask_suggest_license: bool,
+    pub autounmask_suggest_masks: bool,
+    pub usepkg: bool,
+    pub usepkgonly: bool,
+    pub binpkg_respect_use: bool,
+    pub usepkg_exclude: Vec<String>,
+    pub usepkg_include: Vec<String>,
+    pub rebuilt_binaries: bool,
+    pub rebuilt_binaries_timestamp: Option<u64>,
+    pub newrepo: bool,
+    pub buildpkgonly: bool,
+    pub root_deps_running_root: Option<PathBuf>,
+    pub distdir: PathBuf,
+    pub empty: bool,
+    pub getbinpkg: bool,
+    pub ignore_built_slot_operator_deps: bool,
+    pub backtrack_max: u32,
+    pub reinstall_atoms: Vec<String>,
+    pub rebuild_if_new_slot: bool,
+    pub rebuild_if_unbuilt: bool,
+    pub rebuild_if_new_rev: bool,
+    pub rebuild_if_new_ver: bool,
+    pub rebuild_exclude: Vec<String>,
+    pub rebuild_ignore: Vec<String>,
+    pub dynamic_deps: bool,
+    pub complete: bool,
+}
+
+/// A dependency-resolution strategy: [`ResolveRequest`] in, merge-ordered
+/// [`GraphResult`] out (or a hard-error string). The current and only
+/// implementation is [`BacktrackingResolver`]; the trait exists so a
+/// different resolver architecture can be swapped in wholesale via
+/// [`active_resolver`] without touching a call site.
+pub trait Resolver {
+    fn resolve(&self, req: &ResolveRequest) -> Result<GraphResult, String>;
+}
+
+/// The default resolver: a single-pass BFS graph walk wrapped in real
+/// `_emerge/resolver/backtracking.py`'s retry loop. See `backtracking_resolve`.
+pub struct BacktrackingResolver;
+
+impl Resolver for BacktrackingResolver {
+    fn resolve(&self, req: &ResolveRequest) -> Result<GraphResult, String> {
+        backtracking_resolve(req)
+    }
+}
+
+/// The resolver portuale uses -- a hook for runtime selection between
+/// resolver implementations, currently always [`BacktrackingResolver`].
+pub fn active_resolver() -> Box<dyn Resolver> {
+    Box::new(BacktrackingResolver)
+}
+
 /// Recursively resolves every atom in `atoms` and -- for packages that
 /// would newly merge or upgrade -- its DEPEND+RDEPEND+BDEPEND+PDEPEND+
 /// IDEPEND atoms, breadth-first. Returns one `GraphEntry` per distinct
@@ -9517,140 +9596,58 @@ pub fn complete_graph_auto_enable(
 ///     flags at all both suppress; bare `--autounmask` and
 ///     `--autounmask-keep-keywords=n` alone both suggest;
 ///     `--autounmask --autounmask-keep-keywords=y` suppresses again.
-// 14 args trips clippy::too_many_arguments; a bundled options struct
-// would touch every one of this function's own call sites (production
-// and test) for a single-slice-sized addition of one more CLI flag
-// alongside eight already threaded the same way -- not worth it.
-#[allow(clippy::too_many_arguments)]
-pub fn resolve_pretend_graph(
-    config_root: &Path,
-    root: &Path,
-    atoms: &[String],
-    config: &portage_profile::Config,
-    newuse: bool,
-    changed_use: bool,
-    nodeps: bool,
-    update: bool,
-    deep: Deep,
-    excluded: &[String],
-    with_bdeps: bool,
-    changed_deps: bool,
-    changed_slot: bool,
-    with_test_deps: bool,
-    changed_deps_report: bool,
-    selective: bool,
-    autounmask_suggest_keywords: bool,
-    autounmask_suggest_use: bool,
-    autounmask_suggest_license: bool,
-    autounmask_suggest_masks: bool,
-    usepkg: bool,
-    usepkgonly: bool,
-    binpkg_respect_use: bool,
-    usepkg_exclude: &[String],
-    usepkg_include: &[String],
-    rebuilt_binaries: bool,
-    rebuilt_binaries_timestamp: Option<u64>,
-    newrepo: bool,
-    buildpkgonly: bool,
-    root_deps_running_root: Option<&Path>,
-    distdir: &Path,
-    // `--emptytree`/`-e` (real `create_depgraph_params.py:176-179`).
-    // Forces `deep` on (`myparams["deep"] = True`) and is threaded into
-    // every `resolve_pretend` call so an already-installed atom -- top
-    // level *or* a dependency reached by the now-mandatory deep walk --
-    // resolves to a bare `Reinstall` instead of `AlreadyInstalled`. The
-    // net effect matches real `emerge -e`: the entire deep dependency
-    // tree is (re)merged. Useful for byte-for-byte comparison against
-    // real portage and for debugging resolution.
-    empty: bool,
-    // `--getbinpkg`/`-g` (real `main.py` -- distinct from `--usepkg`/
-    // `-k`). The caller folds `--getbinpkgonly`/`-G` into `usepkgonly`
-    // (real: `--getbinpkgonly` implies binary-only) and into this flag,
-    // so `getbinpkg` here means "also consider *remote* binary-package
-    // candidates from `config.binrepos`" (`list_remote_binary_candidates`
-    // -- each binrepo's own on-disk `Packages` index). A remote-only
-    // candidate that wins resolution renders the real `g` bracket column
-    // and contributes its download `SIZE` to `Size of downloads:`.
-    getbinpkg: bool,
-    // `--ignore-built-slot-operator-deps` (real `main.py:470`, `y_or_n`,
-    // default `"n"`). Real portage feeds this into `FakeVartree`, which
-    // then strips the slot/sub-slot `:=` operator parts out of every
-    // installed package's recorded `*DEPEND` (`_slot_operator.
-    // ignore_built_slot_operator_deps`) -- so the slot-operator
-    // auto-rebuild scan (`_slot_operator_trigger_reinstalls`) finds
-    // nothing to trigger. Same net effect here: when set, the
-    // `slot_operator_rebuild_entries` post-pass is skipped entirely.
-    // "Intended only for debugging purposes" per the real `--help`.
-    ignore_built_slot_operator_deps: bool,
-    // `--backtrack=COUNT` (real `main.py`, `type=int`, `valid_integers`).
-    // The maximum number of times the `'backtrack` retry loop below may
-    // re-run the whole graph walk after a solvable slot conflict. Real
-    // portage's default is 10 (the CLI layer passes 10 when the flag is
-    // absent); `--backtrack=0` disables backtracking entirely -- the
-    // `backtrack_iteration < backtrack_max` guard is false from the first
-    // pass, so a slot conflict is reported without any retry, exactly the
-    // pre-backtracking behavior.
-    backtrack_max: u32,
-    // `--reinstall-atoms ATOMS` (real `main.py`, `action: "append"` ->
-    // `depgraph.py:363-365`: `WildcardPackageSet(atoms)`). An
-    // already-installed package whose `cat/pkg-version` matches one of
-    // these atoms is treated as if not installed -- real `depgraph.py:
-    // 4547`/`4643`/`8331` drop it from every `inst_pkgs` satisfaction
-    // list, forcing a re-merge. In portuale's model that is exactly a
-    // scoped `--emptytree`: `resolve_pretend`'s own
-    // `AlreadyInstalled` -> `Reinstall` rewrite (see `empty`), applied
-    // per matching atom right after resolution. Same two-tier
-    // `matches_config_entry` matcher `excluded` uses. Empty (`&[]`) at
-    // every call site that doesn't pass `--reinstall-atoms`.
-    reinstall_atoms: &[String],
-    // `--rebuild-if-new-slot` (real `y_or_n`, default `"y"`): the
-    // slot-operator (`:=`) auto-rebuild pass. `false` (`=n`) skips it,
-    // like `--ignore-built-slot-operator-deps` already does.
-    rebuild_if_new_slot: bool,
-    // `--rebuild-if-unbuilt` / `--rebuild-if-new-rev` /
-    // `--rebuild-if-new-ver` (real `true_y_or_n`, all OFF by default):
-    // rebuild an installed package whose build-time dep is being merged
-    // this run -- see `rebuild_if_entries`'s own doc comment. The caller
-    // resolves the real `unbuilt > new_rev > new_ver` precedence, so at
-    // most one is `true` here.
-    rebuild_if_unbuilt: bool,
-    rebuild_if_new_rev: bool,
-    rebuild_if_new_ver: bool,
-    // `--rebuild-exclude ATOMS` (parent skipped) / `--rebuild-ignore
-    // ATOMS` (dep never triggers) -- same repeatable atom-list shape as
-    // `--exclude`. `&[]` at every call site that passes neither.
-    rebuild_exclude: &[String],
-    rebuild_ignore: &[String],
-    // `--dynamic-deps` (real `create_depgraph_params.py`, ON by default
-    // for a source install): `true` walks an AlreadyInstalled package's
-    // deps from the current ebuild (portuale's own long-standing
-    // behaviour); `false` (`--dynamic-deps=n`) walks its vdb snapshot --
-    // see `enqueue_dependencies`'s own doc comment. Only reachable under
-    // `--deep`.
-    dynamic_deps: bool,
-    // `--complete-graph` (real `create_depgraph_params.py:169-175`:
-    // `--complete-graph` / `--rebuild-if-{unbuilt,new-rev,new-ver}` all
-    // set `myparams["complete"] = True`) plus the
-    // `--complete-graph-if-new-use` / `-if-new-ver` auto-enable, both
-    // resolved by the CLI layer (see `complete_graph_auto_enable` and
-    // `pretend.rs`'s two-pass). Real `depgraph.py::_complete_graph`
-    // (8562-8670) then does four things: loads the vdb, restricts package
-    // selection to installed-/already-graphed packages, seeds
-    // `args ∪ @system ∪ @world`, and toggles `myparams["deep"] = True`
-    // (8668-8670). In a `--pretend` that never removes or downgrades an
-    // installed package, the first three are provably inert -- a
-    // consistent installed set stays consistent, and portuale's
-    // `--rebuild-if-*` / slot-operator (`:=`) auto-rebuild passes already
-    // scan *every* installed package (`all_installed_packages`), both
-    // firing only for a dep that actually merges this run (which
-    // installed-only selection never adds). So the whole observable delta
-    // is the forced deep walk. The one case the deep walk still surfaces
-    // that real complete mode would suppress -- an already-broken
-    // installed dep shown as `[ebuild N]` -- is existing `--deep`
-    // behaviour, and complete mode's stricter installed-/graph-only
-    // selection is already a documented `excluded_pkgs` scope cut.
-    complete: bool,
-) -> Result<GraphResult, String> {
+///
+/// (Formerly the whole body of `resolve_pretend_graph`; that name is now
+/// a thin marshaller. Kept as a free function taking one `ResolveRequest`
+/// so the ~1700-line body below keeps its original indentation. The `let`
+/// block re-binds each field to the exact borrowed type the walk expects;
+/// everything past it is unchanged.)
+fn backtracking_resolve(req: &ResolveRequest) -> Result<GraphResult, String> {
+    let config_root: &Path = &req.config_root;
+    let root: &Path = &req.root;
+    let atoms: &[String] = &req.atoms;
+    let config: &portage_profile::Config = &req.config;
+    let newuse: bool = req.newuse;
+    let changed_use: bool = req.changed_use;
+    let nodeps: bool = req.nodeps;
+    let update: bool = req.update;
+    let deep: Deep = req.deep;
+    let excluded: &[String] = &req.excluded;
+    let with_bdeps: bool = req.with_bdeps;
+    let changed_deps: bool = req.changed_deps;
+    let changed_slot: bool = req.changed_slot;
+    let with_test_deps: bool = req.with_test_deps;
+    let changed_deps_report: bool = req.changed_deps_report;
+    let selective: bool = req.selective;
+    let autounmask_suggest_keywords: bool = req.autounmask_suggest_keywords;
+    let autounmask_suggest_use: bool = req.autounmask_suggest_use;
+    let autounmask_suggest_license: bool = req.autounmask_suggest_license;
+    let autounmask_suggest_masks: bool = req.autounmask_suggest_masks;
+    let usepkg: bool = req.usepkg;
+    let usepkgonly: bool = req.usepkgonly;
+    let binpkg_respect_use: bool = req.binpkg_respect_use;
+    let usepkg_exclude: &[String] = &req.usepkg_exclude;
+    let usepkg_include: &[String] = &req.usepkg_include;
+    let rebuilt_binaries: bool = req.rebuilt_binaries;
+    let rebuilt_binaries_timestamp: Option<u64> = req.rebuilt_binaries_timestamp;
+    let newrepo: bool = req.newrepo;
+    let buildpkgonly: bool = req.buildpkgonly;
+    let root_deps_running_root: Option<&Path> = req.root_deps_running_root.as_deref();
+    let distdir: &Path = &req.distdir;
+    let empty: bool = req.empty;
+    let getbinpkg: bool = req.getbinpkg;
+    let ignore_built_slot_operator_deps: bool = req.ignore_built_slot_operator_deps;
+    let backtrack_max: u32 = req.backtrack_max;
+    let reinstall_atoms: &[String] = &req.reinstall_atoms;
+    let rebuild_if_new_slot: bool = req.rebuild_if_new_slot;
+    let rebuild_if_unbuilt: bool = req.rebuild_if_unbuilt;
+    let rebuild_if_new_rev: bool = req.rebuild_if_new_rev;
+    let rebuild_if_new_ver: bool = req.rebuild_if_new_ver;
+    let rebuild_exclude: &[String] = &req.rebuild_exclude;
+    let rebuild_ignore: &[String] = &req.rebuild_ignore;
+    let dynamic_deps: bool = req.dynamic_deps;
+    let complete: bool = req.complete;
+
     let repos = find_repos(config_root)?;
     // Real `create_depgraph_params.py:178`: `--emptytree` sets
     // `myparams["deep"] = True`. Real `_complete_graph` 8668-8670 does the
@@ -11419,6 +11416,194 @@ pub fn resolve_pretend_graph(
             circular_deps,
         });
     }
+}
+
+/// Historical entry point, kept at its original 44-argument signature so
+/// every call site is untouched: assembles a [`ResolveRequest`] and
+/// hands it to [`active_resolver`]. New code should build a
+/// `ResolveRequest` and call a [`Resolver`] directly.
+///
+/// The 44 args trip `clippy::too_many_arguments`; folding them into the
+/// struct at every call site (production + ~55 tests) is its own churn,
+/// deferred -- the struct now exists (`ResolveRequest`), so the migration
+/// can happen call-site by call-site later.
+#[allow(clippy::too_many_arguments)]
+pub fn resolve_pretend_graph(
+    config_root: &Path,
+    root: &Path,
+    atoms: &[String],
+    config: &portage_profile::Config,
+    newuse: bool,
+    changed_use: bool,
+    nodeps: bool,
+    update: bool,
+    deep: Deep,
+    excluded: &[String],
+    with_bdeps: bool,
+    changed_deps: bool,
+    changed_slot: bool,
+    with_test_deps: bool,
+    changed_deps_report: bool,
+    selective: bool,
+    autounmask_suggest_keywords: bool,
+    autounmask_suggest_use: bool,
+    autounmask_suggest_license: bool,
+    autounmask_suggest_masks: bool,
+    usepkg: bool,
+    usepkgonly: bool,
+    binpkg_respect_use: bool,
+    usepkg_exclude: &[String],
+    usepkg_include: &[String],
+    rebuilt_binaries: bool,
+    rebuilt_binaries_timestamp: Option<u64>,
+    newrepo: bool,
+    buildpkgonly: bool,
+    root_deps_running_root: Option<&Path>,
+    distdir: &Path,
+    // `--emptytree`/`-e` (real `create_depgraph_params.py:176-179`).
+    // Forces `deep` on (`myparams["deep"] = True`) and is threaded into
+    // every `resolve_pretend` call so an already-installed atom -- top
+    // level *or* a dependency reached by the now-mandatory deep walk --
+    // resolves to a bare `Reinstall` instead of `AlreadyInstalled`. The
+    // net effect matches real `emerge -e`: the entire deep dependency
+    // tree is (re)merged. Useful for byte-for-byte comparison against
+    // real portage and for debugging resolution.
+    empty: bool,
+    // `--getbinpkg`/`-g` (real `main.py` -- distinct from `--usepkg`/
+    // `-k`). The caller folds `--getbinpkgonly`/`-G` into `usepkgonly`
+    // (real: `--getbinpkgonly` implies binary-only) and into this flag,
+    // so `getbinpkg` here means "also consider *remote* binary-package
+    // candidates from `config.binrepos`" (`list_remote_binary_candidates`
+    // -- each binrepo's own on-disk `Packages` index). A remote-only
+    // candidate that wins resolution renders the real `g` bracket column
+    // and contributes its download `SIZE` to `Size of downloads:`.
+    getbinpkg: bool,
+    // `--ignore-built-slot-operator-deps` (real `main.py:470`, `y_or_n`,
+    // default `"n"`). Real portage feeds this into `FakeVartree`, which
+    // then strips the slot/sub-slot `:=` operator parts out of every
+    // installed package's recorded `*DEPEND` (`_slot_operator.
+    // ignore_built_slot_operator_deps`) -- so the slot-operator
+    // auto-rebuild scan (`_slot_operator_trigger_reinstalls`) finds
+    // nothing to trigger. Same net effect here: when set, the
+    // `slot_operator_rebuild_entries` post-pass is skipped entirely.
+    // "Intended only for debugging purposes" per the real `--help`.
+    ignore_built_slot_operator_deps: bool,
+    // `--backtrack=COUNT` (real `main.py`, `type=int`, `valid_integers`).
+    // The maximum number of times the `'backtrack` retry loop below may
+    // re-run the whole graph walk after a solvable slot conflict. Real
+    // portage's default is 10 (the CLI layer passes 10 when the flag is
+    // absent); `--backtrack=0` disables backtracking entirely -- the
+    // `backtrack_iteration < backtrack_max` guard is false from the first
+    // pass, so a slot conflict is reported without any retry, exactly the
+    // pre-backtracking behavior.
+    backtrack_max: u32,
+    // `--reinstall-atoms ATOMS` (real `main.py`, `action: "append"` ->
+    // `depgraph.py:363-365`: `WildcardPackageSet(atoms)`). An
+    // already-installed package whose `cat/pkg-version` matches one of
+    // these atoms is treated as if not installed -- real `depgraph.py:
+    // 4547`/`4643`/`8331` drop it from every `inst_pkgs` satisfaction
+    // list, forcing a re-merge. In portuale's model that is exactly a
+    // scoped `--emptytree`: `resolve_pretend`'s own
+    // `AlreadyInstalled` -> `Reinstall` rewrite (see `empty`), applied
+    // per matching atom right after resolution. Same two-tier
+    // `matches_config_entry` matcher `excluded` uses. Empty (`&[]`) at
+    // every call site that doesn't pass `--reinstall-atoms`.
+    reinstall_atoms: &[String],
+    // `--rebuild-if-new-slot` (real `y_or_n`, default `"y"`): the
+    // slot-operator (`:=`) auto-rebuild pass. `false` (`=n`) skips it,
+    // like `--ignore-built-slot-operator-deps` already does.
+    rebuild_if_new_slot: bool,
+    // `--rebuild-if-unbuilt` / `--rebuild-if-new-rev` /
+    // `--rebuild-if-new-ver` (real `true_y_or_n`, all OFF by default):
+    // rebuild an installed package whose build-time dep is being merged
+    // this run -- see `rebuild_if_entries`'s own doc comment. The caller
+    // resolves the real `unbuilt > new_rev > new_ver` precedence, so at
+    // most one is `true` here.
+    rebuild_if_unbuilt: bool,
+    rebuild_if_new_rev: bool,
+    rebuild_if_new_ver: bool,
+    // `--rebuild-exclude ATOMS` (parent skipped) / `--rebuild-ignore
+    // ATOMS` (dep never triggers) -- same repeatable atom-list shape as
+    // `--exclude`. `&[]` at every call site that passes neither.
+    rebuild_exclude: &[String],
+    rebuild_ignore: &[String],
+    // `--dynamic-deps` (real `create_depgraph_params.py`, ON by default
+    // for a source install): `true` walks an AlreadyInstalled package's
+    // deps from the current ebuild (portuale's own long-standing
+    // behaviour); `false` (`--dynamic-deps=n`) walks its vdb snapshot --
+    // see `enqueue_dependencies`'s own doc comment. Only reachable under
+    // `--deep`.
+    dynamic_deps: bool,
+    // `--complete-graph` (real `create_depgraph_params.py:169-175`:
+    // `--complete-graph` / `--rebuild-if-{unbuilt,new-rev,new-ver}` all
+    // set `myparams["complete"] = True`) plus the
+    // `--complete-graph-if-new-use` / `-if-new-ver` auto-enable, both
+    // resolved by the CLI layer (see `complete_graph_auto_enable` and
+    // `pretend.rs`'s two-pass). Real `depgraph.py::_complete_graph`
+    // (8562-8670) then does four things: loads the vdb, restricts package
+    // selection to installed-/already-graphed packages, seeds
+    // `args ∪ @system ∪ @world`, and toggles `myparams["deep"] = True`
+    // (8668-8670). In a `--pretend` that never removes or downgrades an
+    // installed package, the first three are provably inert -- a
+    // consistent installed set stays consistent, and portuale's
+    // `--rebuild-if-*` / slot-operator (`:=`) auto-rebuild passes already
+    // scan *every* installed package (`all_installed_packages`), both
+    // firing only for a dep that actually merges this run (which
+    // installed-only selection never adds). So the whole observable delta
+    // is the forced deep walk. The one case the deep walk still surfaces
+    // that real complete mode would suppress -- an already-broken
+    // installed dep shown as `[ebuild N]` -- is existing `--deep`
+    // behaviour, and complete mode's stricter installed-/graph-only
+    // selection is already a documented `excluded_pkgs` scope cut.
+    complete: bool,
+) -> Result<GraphResult, String> {
+    let req = ResolveRequest {
+        config_root: config_root.to_path_buf(),
+        root: root.to_path_buf(),
+        atoms: atoms.to_vec(),
+        config: config.clone(),
+        newuse,
+        changed_use,
+        nodeps,
+        update,
+        deep,
+        excluded: excluded.to_vec(),
+        with_bdeps,
+        changed_deps,
+        changed_slot,
+        with_test_deps,
+        changed_deps_report,
+        selective,
+        autounmask_suggest_keywords,
+        autounmask_suggest_use,
+        autounmask_suggest_license,
+        autounmask_suggest_masks,
+        usepkg,
+        usepkgonly,
+        binpkg_respect_use,
+        usepkg_exclude: usepkg_exclude.to_vec(),
+        usepkg_include: usepkg_include.to_vec(),
+        rebuilt_binaries,
+        rebuilt_binaries_timestamp,
+        newrepo,
+        buildpkgonly,
+        root_deps_running_root: root_deps_running_root.map(|p| p.to_path_buf()),
+        distdir: distdir.to_path_buf(),
+        empty,
+        getbinpkg,
+        ignore_built_slot_operator_deps,
+        backtrack_max,
+        reinstall_atoms: reinstall_atoms.to_vec(),
+        rebuild_if_new_slot,
+        rebuild_if_unbuilt,
+        rebuild_if_new_rev,
+        rebuild_if_new_ver,
+        rebuild_exclude: rebuild_exclude.to_vec(),
+        rebuild_ignore: rebuild_ignore.to_vec(),
+        dynamic_deps,
+        complete,
+    };
+    active_resolver().resolve(&req)
 }
 
 /// Reads `category/package-version`'s own DEPEND+RDEPEND+BDEPEND+PDEPEND+

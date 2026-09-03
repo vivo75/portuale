@@ -108,9 +108,15 @@ architectural — a single-pass BFS can't grow into these incrementally:
     selection / `--verbose-conflicts` USE markers / stderr stream;
   - the circular-dep cuts: the reduced cycle-only `--tree` re-display,
     `_find_suggestions`' ~180-line USE-flag heuristic, full
-    elementary-cycle enumeration / `large_cycle_count`;
-  - the `resolve_graph_once` helper extraction (drop the slice-1
-    `loop {}` reindent).
+    elementary-cycle enumeration / `large_cycle_count`.
+
+  *(The resolver-extraction item shipped 2026-09-03: the ~1700-line
+  graph walk + backtracking loop is now `backtracking_resolve(req:
+  &ResolveRequest)` behind a `trait Resolver` / `BacktrackingResolver` /
+  `active_resolver()`; `resolve_pretend_graph` is a thin 44-arg
+  marshaller. Self-contained and runtime-swappable — a different
+  resolver architecture is one `impl Resolver` + an `active_resolver`
+  branch away, no call-site changes.)*
 
   `agent-context.md` lists a real backtracking resolver as out of scope
   for v1; the shipped loop nonetheless takes it from "detects and reports
