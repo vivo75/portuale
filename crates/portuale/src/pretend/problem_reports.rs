@@ -5,6 +5,79 @@ use portage_profile::Config;
 use portage_repo::GraphResult;
 use portage_repo::RepoConfig;
 
+/// Missing arguments, and the abort reports for cycles and unsatisfied dependencies.
+pub(crate) fn show_missing_args_and_aborts(
+    result: &GraphResult,
+    root: &Path,
+    color: &Colorizer,
+    repos: &[RepoConfig],
+    config: &Config,
+) {
+    // The world-file tail for dropped set members: the notice fires only for
+    // a missing member of the world file itself; the masked-or-don't-exist
+    // list names every missing arg in requested order. Neither carries a
+    // `--quiet` gate; `--json` returns above, and `--columns` has no gate.
+    // Portage: depgraph.py, display_problems
+    if !result.missing_args.is_empty() {
+        let world_atoms: HashSet<String> = read_world_atoms(root)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|a| portage_repo::apply_updates_to_atom(&a))
+            .collect();
+        if result.missing_args.iter().any(|a| world_atoms.contains(a)) {
+            println!();
+            println!("!!! Problems have been detected with your world file");
+            println!("!!! Please run emaint --check world");
+            println!();
+        }
+        println!();
+        println!("!!! Ebuilds for the following packages are either all");
+        println!("!!! masked or don't exist:");
+        println!("{}", result.missing_args.join(" "));
+    }
+
+    // With the abort gate on, an aborted cycle prints its circular block here,
+    // before the autounmask section, matching Portage's `display_problems`
+    // order. A masked/unsat abort prints no circular block at all.
+    // Portage: depgraph.py, display_problems
+    if portage_repo::abort_path_enabled()
+        && let portage_repo::ResolveOutcome::Aborted {
+            reason: portage_repo::AbortReason::UnserializableCycle { members: _ },
+            ..
+        } = &result.outcome
+        && let Some(cycle) = result.circular_deps.first()
+    {
+        print_circular_block(PrintCircularBlockArgs {
+            cycle,
+            edge_labels: &portage_repo::cycle_edge_labels(&result.entries, cycle),
+            color,
+            repos,
+            config,
+            autounmask_use_changes: &result.autounmask_use_changes,
+            entries: &result.entries,
+            large_cycle_count: result.large_cycle_count,
+        });
+    }
+
+    // A virtual cycle prints `\n\n!!! virtual cycle detected:\n\n`, one
+    // `  {cpv}::{repo}` line per probe-stack member (sorted), then `\n`,
+    // to stderr, mid-resolution. No merge list, no counters, no trailing
+    // error block; the shared abort gate below exits 1. Uncoloured.
+    // Portage: lib/_emerge/depgraph.py, select_files
+    if portage_repo::abort_path_enabled()
+        && let portage_repo::ResolveOutcome::Aborted {
+            reason: portage_repo::AbortReason::VirtualCycle { members },
+            ..
+        } = &result.outcome
+    {
+        eprint!("\n\n!!! virtual cycle detected:\n\n");
+        for member in members {
+            eprintln!("  {member}");
+        }
+        eprintln!();
+    }
+}
+
 /// The values [`show_deferred_unsat`] reads from its caller.
 pub(crate) struct ShowDeferredUnsatArgs<'a> {
     pub(crate) plan: &'a ResolvePlan,
