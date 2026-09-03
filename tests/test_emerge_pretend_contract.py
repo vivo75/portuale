@@ -455,6 +455,21 @@ CASES = [
         0,
     ),
     (
+        "--autounmask-use parent flip re-resolves the whole graph (pf? dep drops)",
+        ["--pretend", "dev-libs/pfgraphparent"],
+        0,
+    ),
+    (
+        "--autounmask-use parent flip whole-graph re-resolve, -pv",
+        ["--pretend", "-v", "dev-libs/pfgraphparent"],
+        0,
+    ),
+    (
+        "--autounmask-use parent flip whole-graph re-resolve, --autounmask-use=n",
+        ["--pretend", "--autounmask-use=n", "dev-libs/pfgraphparent"],
+        0,
+    ),
+    (
         "USE-dep enforcement: negated flag declared and disabled matches",
         ["--pretend", "dev-libs/useflagpkg[-missingflag]"],
         0,
@@ -3473,6 +3488,53 @@ def test_autounmask_use_parent_flip_resolves_when_the_child_flag_is_masked(
         n.stderr.strip()
         == '!!! no visible ebuild for dependency "dev-libs/parentflipchildpkg"'
     )
+
+
+def test_autounmask_use_parent_flip_re_resolves_the_whole_graph(
+    emerge_binary, emerge_pretend_python, fixture_env
+):
+    """Slice 4: real portage folds a parent-USE flip into
+    _needed_use_config_changes and re-drives the WHOLE graph
+    (_backtrack_depgraph), not just the freed dependency. dev-libs/
+    pfgraphparent (IUSE +pf) RDEPENDs pfgraphchild[pf=] AND
+    `pf? ( dev-libs/pfgraphextra )`; pfgraphchild's `pf` is use.mask'd, so
+    the parent's own `pf` is flipped off. The whole-graph re-resolve then
+    re-evaluates `pf? ( pfgraphextra )` with pf OFF, so pfgraphextra is
+    NOT merged -- the pre-Slice-4 single-dep re-resolve left it wrongly in
+    the list. Rust==Python byte-identical."""
+    args = ["--pretend", "dev-libs/pfgraphparent"]
+    rust = _run([str(emerge_binary)], args, fixture_env)
+    py = _run(emerge_pretend_python, args, fixture_env)
+    assert rust.returncode == 0 and py.returncode == 0
+    assert rust.stdout == py.stdout and rust.stderr == py.stderr
+    assert rust.stdout.splitlines() == [
+        '[ebuild  N     ] dev-libs/pfgraphchild-1.0  USE="(-pf)"',
+        '[ebuild  N     ] dev-libs/pfgraphparent-1.0  USE="-pf"',
+    ]
+    assert "pfgraphextra" not in rust.stdout
+    assert rust.stderr == (
+        "\nThe following USE changes are necessary to proceed:\n"
+        ' (see "package.use" in the portage(5) man page for more details)\n'
+        "# required by dev-libs/pfgraphparent-1.0::testrepo\n"
+        "# required by dev-libs/pfgraphparent (argument)\n"
+        ">=dev-libs/pfgraphparent-1.0 -pf\n"
+    )
+
+    # --autounmask-use=n: the shared gate is off -> pf stays on,
+    # pfgraphchild[pf] is unresolvable, and pf? ( pfgraphextra ) still fires.
+    n = _run(
+        [str(emerge_binary)],
+        ["--pretend", "--autounmask-use=n", "dev-libs/pfgraphparent"],
+        fixture_env,
+    )
+    npy = _run(
+        emerge_pretend_python,
+        ["--pretend", "--autounmask-use=n", "dev-libs/pfgraphparent"],
+        fixture_env,
+    )
+    assert n.stdout == npy.stdout and n.stderr == npy.stderr
+    assert "pfgraphextra" in n.stdout
+    assert 'no visible ebuild for dependency "dev-libs/pfgraphchild"' in n.stderr
 
 
 def test_unresolvable_dependency_is_reported_not_silently_dropped(

@@ -12,3 +12,8 @@ dev-libs/wildexpandpkg linguas_en
 # forces real portage's opt=-aware *parent* flip (flip the requesting
 # dev-libs/parentflipeqpkg's own "feat" off instead).
 dev-libs/parentflipchildpkg feat
+
+# fixture: same idea for the whole-graph parent-flip re-resolve
+# (dev-libs/pfgraphparent) -- pf can't be enabled on the child, so the
+# parent's own pf is flipped off, which must also drop pf? ( pfgraphextra ).
+dev-libs/pfgraphchild pf

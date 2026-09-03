@@ -115,12 +115,14 @@ architectural — a single-pass BFS can't grow into these incrementally:
     `autounmask_use_config` accumulator and the driver re-runs the whole
     walk — real `_needed_use_config_changes` / `_feedback_config`),
     **Slice 2** (`_autounmask_levels` ordering: the `*_masked_only`
-    fallbacks run `+license` → `+~arch` → `+masks`) and **Slice 3**
+    fallbacks run `+license` → `+~arch` → `+masks`), **Slice 3**
     (`_autounmask_breakage`: a flag the accumulator ends up wanting both
     ways abandons autounmask wholesale — `myparams["autounmask"] = False`
-    — and re-resolves one clean pass) **shipped 2026-09-03**. Still open:
-    a true per-level version re-scan, the whole-graph parent-flip
-    re-resolve (removes the `'parent_flip` single-dep cut), keyword/mask
+    — and re-resolves one clean pass) and **Slice 4** (the whole-graph
+    parent-flip re-resolve: `'parent_flip` folds the parent-USE flip into
+    `autounmask_use_config` and the driver re-walks everything — removes
+    the `'parent_flip` single-dep cut) **shipped 2026-09-03**. Still open:
+    a true per-level version re-scan, keyword/mask
     accumulators in the loop, `get_best_run` (prefer the maskless settled
     run);
   - `||`-preference / slot-operator-rebuild feedback driving a retry;

@@ -12231,3 +12231,36 @@ still slips through silently -- the pre-existing already-resolved-slot
 `match_from_list` use-dep blindness, tracked separately. Still ahead: the
 whole-graph parent-flip re-resolve; keyword/mask in-loop accumulators;
 `get_best_run`.
+
+### Autounmask parent flip — whole-graph re-resolve (2026-09-03)
+
+Slice 4 of the autounmask-in-loop plan; closes the documented
+`'parent_flip` single-dep cut. When a dependency's `opt?`/`opt=` use-dep
+can't be satisfied because the child's own flag is `use.mask`'d, portuale
+already flipped the *requesting parent's* conditional flag instead
+(real `_apply_parent_use_changes`). It used to re-resolve only the freed
+dependency; real portage folds the flip into `_needed_use_config_changes`
+and re-drives the whole graph via `_backtrack_depgraph`.
+
+The `'parent_flip` block now folds the parent-USE flip into the same
+`autounmask_use_config` accumulator the backward cascade uses (keyed
+`(parent_cat, parent_pkg)` -- it *is* a `package.use` entry) and
+`continue`s; the driver's existing `autounmask_grew` restart re-walks
+everything, so the parent's other `flag?`-gated deps re-evaluate against
+the flipped state. The old single-dep `resolve_pretend` survives only as
+a gate -- fold a flip only if it actually makes the freed atom resolve --
+and a parent flip that contradicts an already-accumulated change routes
+into Slice 3's `_autounmask_breakage`.
+
+Fixture `dev-libs/pfgraphparent` (IUSE `+pf`) RDEPENDs
+`dev-libs/pfgraphchild[pf=]` *and* `pf? ( dev-libs/pfgraphextra )`;
+`pfgraphchild`'s `pf` is `use.mask`'d. The parent's `pf` is flipped off
+-- and now `pf? ( pfgraphextra )` re-evaluates with `pf` OFF, so
+`pfgraphextra` is **not** merged. Before the slice the single-dep
+re-resolve left `pfgraphextra` wrongly in the list. 3 CASES + a pinned
+contract test + a `portage-repo` unit test, plus the pre-existing
+`parentflipeqpkg` cases still green, Rust==Python byte-identical, full
+suite green.
+
+Still ahead: keyword/mask in-loop accumulators; `get_best_run`
+(maskless-run preference) + wiring `--autounmask-backtrack`.

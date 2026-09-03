@@ -34,9 +34,19 @@ What a single pass **cannot** do, and real `_backtrack_depgraph` +
    depgraph.py:12262) and re-resolve one clean pass. There is no
    per-level "revert this one change and escalate" mechanism — that was a
    misreading in an earlier draft of this plan.
-4. **Parent-flip re-resolve of the whole graph.** The `'parent_flip`
-   block re-resolves only the freed dep (documented cut); real re-drives
-   the whole pass via `needed_use_config_changes`.
+4. **Parent-flip re-resolve of the whole graph.** ✅ **Shipped
+   2026-09-03.** The `'parent_flip` block used to re-resolve only the
+   freed dep (documented cut); it now folds the parent-USE flip into
+   `autounmask_use_config` (keyed `(parent_cat, parent_pkg)` — a
+   `package.use` entry) and `continue 'queue`s, so the driver's
+   `autounmask_grew` restart re-walks the whole graph and the parent's
+   other `flag?`-gated deps re-evaluate. A probe re-resolution of just
+   the freed atom still gates it (only a flip that actually helps is
+   folded); a parent flip contradicting an accumulated change routes into
+   Slice 3's `_autounmask_breakage`. Fixture `dev-libs/pfgraphparent`:
+   `pf? ( pfgraphextra )` correctly drops once `pf` is flipped off — the
+   old single-dep re-resolve left `pfgraphextra` in the list. Rust==Python
+   byte-identical.
 5. **`get_best_run`.** After backtracking, real returns the run with the
    most config changes and *no* masks.
 
@@ -118,11 +128,16 @@ autounmask_use_config: HashMap<(String, String), HashMap<String, bool>>
    doesn't carry the pass-local fresh flip) — that's the pre-existing
    already-resolved-slot `match_from_list` use-dep blindness, tracked
    separately, untouched here.
-4. **Parent-flip whole-graph re-resolve (#4).** `suggested_parent_use_
-   candidate` folds the parent flip into `autounmask_use_config` and
-   re-resolves the whole pass instead of just the freed dep. Removes the
-   documented `'parent_flip` cut. Fixtures largely exist
-   (`test_autounmask_use_parent_flip_*`).
+4. **Parent-flip whole-graph re-resolve (#4).** ✅ **Shipped 2026-09-03.**
+   The `'parent_flip` block folds the parent flip into
+   `autounmask_use_config` (keyed `(parent_cat, parent_pkg)`) and
+   `continue 'queue`s; the driver's `autounmask_grew` restart re-walks
+   everything. The single-dep `resolve_pretend` probe survives only as a
+   gate ("does this flip actually help"), and a contradicting flip is
+   handed to Slice 3. Removes the documented `'parent_flip` cut. New
+   fixture `dev-libs/pfgraphparent` (`pf? ( pfgraphextra )` must drop when
+   `pf` flips off) + the existing `parentflipeqpkg` cases, all
+   Rust==Python byte-identical.
 5. **`get_best_run` (maskless preference)** + wire `--autounmask-backtrack
    [=y|n]` (currently inert under `--pretend`) to actually gate the
    re-resolve.

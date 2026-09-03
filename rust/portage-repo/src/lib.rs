@@ -9820,7 +9820,7 @@ fn backtracking_resolve(req: &ResolveRequest) -> Result<GraphResult, String> {
         // portage's per-edge `DepPriority`.
         let mut edge_kind_map: EdgeKindMap = HashMap::new();
 
-        while let Some(QueueItem {
+        'queue: while let Some(QueueItem {
             atom: current_atom,
             depth,
             owner,
@@ -9955,13 +9955,17 @@ fn backtracking_resolve(req: &ResolveRequest) -> Result<GraphResult, String> {
             // forms), and no candidate satisfies the evaluated form -- because
             // the child's own flag is `use.mask`'d/forced, so a child-side
             // `package.use` flip (`suggested_use_flip`) is impossible. Real
-            // portage then flips the *parent's* conditional flag instead
-            // (`suggested_parent_use_candidate`), re-resolves, and prints the
-            // change in the same "necessary to proceed" USE block. Portuale
-            // applies that one change and re-resolves only the freed
-            // dependency (real portage re-resolves the whole graph -- see the
-            // deliberate-cut note); a `--autounmask-use=n` suppresses it via
-            // the shared `autounmask_suggest_use` gate.
+            // portage flips the *parent's* conditional flag instead
+            // (`suggested_parent_use_candidate`), folds it into
+            // `_needed_use_config_changes`, and re-drives the *whole* graph
+            // (`_backtrack_depgraph`) so the parent's other `flag?`-gated deps
+            // re-evaluate against the flipped state too. Slice 4: fold the flip
+            // into `autounmask_use_config` (keyed `(parent_cat, parent_pkg)` --
+            // exactly a `package.use` entry) and let the driver's
+            // `autounmask_grew` restart re-walk everything; a probe
+            // re-resolution of just the freed atom still gates it, so only a
+            // flip that actually helps is folded. `--autounmask-use=n`
+            // suppresses it via the shared `autounmask_suggest_use` gate.
             let (current_atom, atom) = 'parent_flip: {
                 if !(matches!(outcome, PretendOutcome::NoVisibleCandidate)
                     && autounmask_suggest_use
@@ -9974,7 +9978,7 @@ fn backtracking_resolve(req: &ResolveRequest) -> Result<GraphResult, String> {
                 else {
                     break 'parent_flip (current_atom, atom);
                 };
-                let Some((pc, pp, pv, target_use)) = suggested_parent_use_candidate(
+                let Some((pc, pp, _pv, target_use)) = suggested_parent_use_candidate(
                     &repos,
                     &entries,
                     unevaluated,
@@ -10001,9 +10005,9 @@ fn backtracking_resolve(req: &ResolveRequest) -> Result<GraphResult, String> {
                 else {
                     break 'parent_flip (current_atom, atom);
                 };
-                let Some(re_parsed) = portage_dep::parse_atom(&re_atom) else {
+                if portage_dep::parse_atom(&re_atom).is_none() {
                     break 'parent_flip (current_atom, atom);
-                };
+                }
                 let re_outcome = resolve_pretend(
                     &repos,
                     root,
@@ -10037,61 +10041,63 @@ fn backtracking_resolve(req: &ResolveRequest) -> Result<GraphResult, String> {
                 if matches!(re_outcome, PretendOutcome::NoVisibleCandidate) {
                     break 'parent_flip (current_atom, atom);
                 }
-                // The parent flip works: adopt the re-resolved outcome, record
-                // the `=parent -flag` change, and re-render the parent entry's
-                // own USE line to match (real `_pkg_use_enabled` on `myparent`).
-                outcome = re_outcome;
-                let parent_cpv = format!("{pc}/{pp}-{pv}");
+                // The flip works. A parent flip that contradicts an already-
+                // accumulated change is real `_autounmask_breakage` territory
+                // -- hand it to the driver (Slice 3).
+                let key_pp = (pc.clone(), pp.clone());
+                if target_use.iter().any(|(f, want)| {
+                    autounmask_use_config
+                        .get(&key_pp)
+                        .and_then(|b| b.get(f))
+                        .is_some_and(|p| p != want)
+                }) {
+                    autounmask_use_broke = true;
+                    break 'parent_flip (current_atom, atom);
+                }
+                // Fold the flip into `autounmask_use_config` (a `package.use`
+                // change on the parent) and let the driver re-walk the whole
+                // graph so `flag?`-gated deps of the parent re-evaluate against
+                // the flipped state (real `_needed_use_config_changes` ->
+                // `_backtrack_depgraph`).
+                let bucket = autounmask_use_config.entry(key_pp).or_default();
+                let mut newly = false;
+                for (f, want) in &target_use {
+                    if bucket.get(f) != Some(want) {
+                        bucket.insert(f.clone(), *want);
+                        newly = true;
+                    }
+                }
+                if !newly {
+                    // Already folded on an earlier pass yet the dep still
+                    // failed this one -- let the ordinary NoVisibleCandidate
+                    // path (with `parent_use_suggestion`) render it.
+                    break 'parent_flip (current_atom, atom);
+                }
                 let parent_all = list_candidates(&repos, &pc, &pp).unwrap_or_default();
                 let token = target_use
                     .iter()
                     .map(|(f, e)| if *e { f.clone() } else { format!("-{f}") })
                     .collect::<Vec<_>>()
                     .join(" ");
-                autounmask_use_changes.push(AutounmaskChange {
-                    atom: autounmask_use_atom_form(&parent_cand, &parent_all, &pc, &pp, config),
-                    token,
-                    dep_chain: autounmask_dep_chain(
-                        &Some((pc.clone(), pp.clone())),
-                        "",
-                        &top_level,
-                        &entries,
-                    ),
-                });
-                let mut disp: Vec<(String, bool)> = parent_cand
-                    .iuse
-                    .split_whitespace()
-                    .map(|t| t.trim_start_matches(['+', '-']).to_string())
-                    .map(|f| {
-                        let on = new_parent_use.contains(&f);
-                        (f, on)
-                    })
-                    .collect();
-                disp.sort_by_key(|p| alnum_sort_key(&p.0));
-                let forced = forced_or_masked_flags(
-                    &parent_cand.iuse,
-                    &parent_cand.keywords,
-                    &parent_cpv,
-                    &pc,
-                    &pp,
-                    config,
-                );
-                // The autounmask parent flip re-renders the parent as `New`
-                // (no `installed` diff), so there is no reinstall trigger set.
-                let no_reinst = HashSet::new();
-                let pv_disp =
-                    build_use_expand_display(&disp, config, None, &forced, true, &no_reinst);
-                let p_disp =
-                    build_use_expand_display(&disp, config, None, &forced, false, &no_reinst);
-                if let Some(pe) = entries
-                    .iter_mut()
-                    .find(|e| e.category == pc && e.package == pp)
+                let atom_form =
+                    autounmask_use_atom_form(&parent_cand, &parent_all, &pc, &pp, config);
+                if !autounmask_use_change_records
+                    .iter()
+                    .any(|c| c.atom == atom_form && c.token == token)
                 {
-                    pe.use_flags_display = disp;
-                    pe.use_expand_display = pv_disp;
-                    pe.use_expand_display_p = p_disp;
+                    autounmask_use_change_records.push(AutounmaskChange {
+                        atom: atom_form,
+                        token,
+                        dep_chain: autounmask_dep_chain(
+                            &Some((pc.clone(), pp.clone())),
+                            "",
+                            &top_level,
+                            &entries,
+                        ),
+                    });
                 }
-                (re_atom, re_parsed)
+                autounmask_grew = true;
+                continue 'queue;
             };
 
             // `--changed-deps-report`: real portage stays "completely
@@ -19774,6 +19780,35 @@ mod tests {
                 "required by dev-libs/parentflipeqpkg (argument)".to_string(),
             ]
         );
+    }
+
+    #[test]
+    fn autounmask_use_parent_flip_re_resolves_the_whole_graph() {
+        // `dev-libs/pfgraphparent` (IUSE +pf) RDEPENDs
+        // `dev-libs/pfgraphchild[pf=]` AND `pf? ( dev-libs/pfgraphextra )`.
+        // The child's `pf` is `use.mask`'d, so the parent's own `pf` is
+        // flipped off. Slice 4: that flip is folded into
+        // `autounmask_use_config` and the whole walk re-runs -- so
+        // `pf? ( pfgraphextra )` re-evaluates with `pf` OFF and
+        // `pfgraphextra` is NOT pulled (the pre-Slice-4 single-dep
+        // re-resolve left it wrongly in the graph). Real
+        // `_needed_use_config_changes` -> `_backtrack_depgraph`.
+        let result = graph_result_autounmask("dev-libs/pfgraphparent");
+        let names: Vec<&str> = result.entries.iter().map(|e| e.package.as_str()).collect();
+        assert!(
+            names.contains(&"pfgraphchild") && names.contains(&"pfgraphparent"),
+            "{names:?}"
+        );
+        assert!(
+            !names.contains(&"pfgraphextra"),
+            "pf? ( pfgraphextra ) must drop once the parent flip turns pf off: {names:?}"
+        );
+        assert_eq!(result.autounmask_use_changes.len(), 1);
+        assert_eq!(
+            result.autounmask_use_changes[0].atom,
+            ">=dev-libs/pfgraphparent-1.0"
+        );
+        assert_eq!(result.autounmask_use_changes[0].token, "-pf");
     }
 
     #[test]

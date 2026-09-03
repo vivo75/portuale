@@ -6937,38 +6937,53 @@ def resolve_pretend_graph(
                             autounmask_suggest_masks,
                         )
                         if _re_outcome[0] != "no_visible_candidate":
-                            outcome = _re_outcome
-                            current_atom_str = _re_atom
-                            atom = _re_parsed
-                            _token = " ".join(
-                                f if e else f"-{f}" for f, e in _target_use
-                            )
-                            autounmask_use_changes.append(
-                                {
-                                    "atom": _autounmask_use_atom_form(
+                            # The flip works. Fold it into autounmask_use_config
+                            # (a package.use change on the parent) and let the
+                            # driver re-walk the WHOLE graph so the parent's
+                            # other flag?-gated deps re-evaluate against the
+                            # flipped state (real _needed_use_config_changes ->
+                            # _backtrack_depgraph). A contradiction with an
+                            # already-accumulated change is _autounmask_breakage
+                            # territory -- hand it to the driver (Slice 3).
+                            # Mirrors portage-repo/src/lib.rs.
+                            _pbucket = autounmask_use_config.get((_pc, _pp), {})
+                            if any(
+                                _f in _pbucket and _pbucket[_f] != _want
+                                for _f, _want in _target_use
+                            ):
+                                autounmask_use_broke = True
+                            else:
+                                _pb = autounmask_use_config.setdefault((_pc, _pp), {})
+                                _newly = False
+                                for _f, _want in _target_use:
+                                    if _pb.get(_f) != _want:
+                                        _pb[_f] = _want
+                                        _newly = True
+                                if _newly:
+                                    _token = " ".join(
+                                        f if e else f"-{f}" for f, e in _target_use
+                                    )
+                                    _af = _autounmask_use_atom_form(
                                         _parent_cand,
                                         list_candidates(repos, _pc, _pp),
                                         _pc,
                                         _pp,
                                         config,
-                                    ),
-                                    "token": _token,
-                                    "dep_chain": _autounmask_dep_chain(
-                                        (_pc, _pp), "", top_level, entries
-                                    ),
-                                }
-                            )
-                            _pflip_display = sorted(
-                                (
-                                    (t.lstrip("+-"), t.lstrip("+-") in _new_parent_use)
-                                    for t in _parent_cand.get("iuse", "").split()
-                                ),
-                                key=lambda p: _alnum_sort_key(p[0]),
-                            )
-                            for _i, _e in enumerate(entries):
-                                if _e[0] == _pc and _e[1] == _pp:
-                                    entries[_i] = _e[:5] + (_pflip_display,) + _e[6:]
-                                    break
+                                    )
+                                    if not any(
+                                        r["atom"] == _af and r["token"] == _token
+                                        for r in autounmask_use_change_records
+                                    ):
+                                        autounmask_use_change_records.append(
+                                            {
+                                                "atom": _af,
+                                                "token": _token,
+                                                "dep_chain": _autounmask_dep_chain(
+                                                    (_pc, _pp), "", top_level, entries
+                                                ),
+                                            }
+                                        )
+                                    continue
 
             # --changed-deps-report: real portage stays "completely silent"
             # whenever --changed-deps itself is also given (its own

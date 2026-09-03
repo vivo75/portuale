@@ -1,0 +1,7 @@
+DEFINED_PHASES=-
+DESCRIPTION=fixture: IUSE pf is use.mask'd -- a child flip can't enable it, forcing the opt=-aware parent flip
+EAPI=8
+IUSE=pf
+KEYWORDS=amd64
+SLOT=0
+_md5_=0000000000000000000000000000000
