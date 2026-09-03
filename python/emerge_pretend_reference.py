@@ -3512,6 +3512,21 @@ def installed_versions(root, category, package):
     return [version for version, _slot, _sub_slot in installed_candidates(root, category, package)]
 
 
+def _best_installed_for_atom(root, atom_str, category, package):
+    """The highest installed version of category/package that satisfies
+    atom_str, or None -- real _select_pkg_from_installed
+    (depgraph.py:8518), the graph-or-installed fallback complete mode
+    uses. Mirrors portage-repo/src/lib.rs's best_installed_for_atom."""
+    cands = installed_candidates(root, category, package)
+    strs = [f"{category}/{package}-{v}:{s}/{ss}::__installed__" for v, s, ss in cands]
+    matched = set(match_from_list(atom_str, strs))
+    best = None
+    for (v, _s, _ss), cs in zip(cands, strs):
+        if cs in matched and (best is None or (vercmp(v, best) or 0) > 0):
+            best = v
+    return best
+
+
 def _running_root_satisfies_atom(atom_str, running_root):
     """--root-deps's own real ESYSROOT-vs-ROOT distinction, narrowed to an
     "is it already there" existence check -- see _root_deps_satisfied_atoms's
@@ -6907,6 +6922,7 @@ def resolve_pretend_graph(
     dynamic_deps=True,
     complete=False,
     complete_seed_atoms=(),
+    complete_locked_merges=(),
 ):
     """Recursively resolves every atom in `atoms` and -- for packages that
     would newly merge or upgrade -- its DEPEND+RDEPEND+BDEPEND+PDEPEND+
@@ -7034,6 +7050,11 @@ def resolve_pretend_graph(
         _pa = _parse_atom(_a)
         if _pa is not None:
             top_level_cps.add(tuple(_pa.cp.split("/", 1)))
+    # Real _complete_graph's _select_pkg_from_graph (depgraph.py:8495):
+    # graph-or-installed, never a new merge. The CLI layer passes phase
+    # 1's merge set; in the complete pass an atom whose cp is outside it
+    # may only resolve already_installed (or be dropped with no node).
+    _locked_merges = {tuple(s.split("/", 1)) for s in complete_locked_merges}
     # Real create_depgraph_params.py:178: --emptytree sets
     # myparams["deep"] = True. Real _complete_graph 8668-8670 does the
     # same for --complete-graph -- see the `complete` param's grounding in
@@ -7298,6 +7319,27 @@ def resolve_pretend_graph(
                 autounmask_suggest_masks,
                 extra_constraints,
             )
+
+            # Real _complete_graph's _select_pkg_from_graph
+            # (depgraph.py:8495): in complete mode an atom that isn't a
+            # genuine phase-1 merge target may only resolve
+            # graph-or-installed. An installed version that satisfies it
+            # -> already_installed; nothing installed -> real's
+            # _select_pkg_from_graph returns None, recorded in
+            # _initially_unsatisfied_deps with no graph node, so drop it.
+            # No-op unless complete_locked_merges was populated (only the
+            # CLI layer's complete pass does that). Mirrors
+            # portage-repo/src/lib.rs.
+            if (
+                complete
+                and _locked_merges
+                and key not in _locked_merges
+                and outcome[0] in ("new", "upgrade", "downgrade", "reinstall")
+            ):
+                _iv = _best_installed_for_atom(root, current_atom_str, key[0], key[1])
+                if _iv is None:
+                    continue
+                outcome = ("already_installed", _iv)
 
             # --reinstall-atoms: a matching already-installed package is
             # forced to re-merge (real depgraph.py drops it from every
@@ -14871,7 +14913,7 @@ def run(args):
         )
     )
 
-    def _run_resolve(complete):
+    def _run_resolve(complete, locked=()):
         return resolve_pretend_graph(
             _config_root(),
             _root(),
@@ -14918,19 +14960,26 @@ def run(args):
             dynamic_deps and not nodeps,
             complete,
             _complete_seed_atoms if (complete and _complete_seed_atoms) else (),
+            tuple(locked) if complete else (),
         )
 
     try:
-        result = _run_resolve(complete_graph_r)
-        # Real _complete_graph auto-enable (depgraph.py:8581-8648): re-walk
-        # in complete mode when the first graph changes an already-installed
-        # package and the trigger is on -- unless --complete-graph/--deep
-        # already forced the deep walk, or --nodeps killed it. A clean
-        # second resolve mirrors real portage's "resolve, then
-        # _complete_graph re-walk". Mirrors pretend.rs.
-        if (
-            not complete_graph_r
-            and not deep
+        # Phase 1 is always non-complete -- the authoritative merge list
+        # (real _complete_graph runs *after* the normal graph is built).
+        result = _run_resolve(False)
+        _locked = [
+            f"{e[0]}/{e[1]}"
+            for e in result["entries"]
+            if e[2][0] in ("new", "upgrade", "downgrade", "reinstall")
+        ]
+        # Phase 2 (_complete_graph): explicit --complete-graph, or
+        # auto-enabled (depgraph.py:8581-8648) when the first graph
+        # changes an already-installed package and the trigger is on --
+        # unless --deep already forced the deep walk, or --nodeps killed
+        # it. The locked set gates it so the visible merge list never
+        # changes. Mirrors pretend.rs.
+        if complete_graph_r or (
+            not deep
             and not nodeps
             and _complete_graph_auto_enable(
                 result["entries"],
@@ -14939,7 +14988,7 @@ def run(args):
                 rebuild_if_new_slot,
             )
         ):
-            result = _run_resolve(True)
+            result = _run_resolve(True, _locked)
     except ResolutionError as e:
         sys.stderr.write(f"emerge: {e}")
         extra = _misspell_suggestion_block(

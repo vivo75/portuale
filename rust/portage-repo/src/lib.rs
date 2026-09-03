@@ -3948,6 +3948,32 @@ pub fn installed_versions(root: &Path, category: &str, package: &str) -> Vec<Str
         .collect()
 }
 
+/// The highest installed version of `category/package` that satisfies
+/// `atom_str`, or `None`. Real `_select_pkg_from_installed`
+/// (`depgraph.py:8518`) -- the graph-or-installed fallback complete mode
+/// uses so its deep re-walk of the required sets never merges a new
+/// package.
+fn best_installed_for_atom(
+    root: &Path,
+    atom_str: &str,
+    category: &str,
+    package: &str,
+) -> Option<String> {
+    let cands = installed_candidates(root, category, package);
+    let strs: Vec<String> = cands
+        .iter()
+        .map(|(v, s, ss)| format!("{category}/{package}-{v}:{s}/{ss}::__installed__"))
+        .collect();
+    let refs: Vec<&str> = strs.iter().map(String::as_str).collect();
+    let matched = portage_dep::match_from_list(atom_str, &refs)?;
+    cands
+        .iter()
+        .zip(strs.iter())
+        .filter(|(_, s)| matched.contains(&s.as_str()))
+        .map(|((v, _, _), _)| v.clone())
+        .max_by(|a, b| vercmp_ordering(a, b))
+}
+
 /// `--root-deps`'s own real `ESYSROOT`-vs-`ROOT` distinction, narrowed to
 /// an "is it already there" existence check (see `enqueue_dependencies`'s
 /// own doc comment for the full real grounding and why a fuller,
@@ -10298,6 +10324,21 @@ fn backtracking_resolve(req: &ResolveRequest) -> Result<GraphResult, String> {
     } else {
         required_set_reachable_cps(root, &req.config.complete_seed_atoms, &[])
     };
+    // Real `_complete_graph` swaps package selection to
+    // `_select_pkg_from_graph` (`depgraph.py:8662`) -- graph-or-installed,
+    // never a new merge. Portuale re-resolves the whole graph in complete
+    // mode instead, so the CLI layer passes phase 1's merge set here; in
+    // the complete pass an atom whose `cp` is not a genuine phase-1 merge
+    // target may only resolve `AlreadyInstalled`/`NoVisibleCandidate`.
+    let complete_locked_merges: HashSet<(String, String)> = req
+        .config
+        .complete_locked_merges
+        .iter()
+        .filter_map(|s| {
+            s.split_once('/')
+                .map(|(c, p)| (c.to_string(), p.to_string()))
+        })
+        .collect();
     // Real `create_depgraph_params.py:178`: `--emptytree` sets
     // `myparams["deep"] = True`. Real `_complete_graph` 8668-8670 does the
     // same for `--complete-graph` -- see the `complete` param's own doc
@@ -10643,6 +10684,36 @@ fn backtracking_resolve(req: &ResolveRequest) -> Result<GraphResult, String> {
                 autounmask_suggest_masks,
                 extra_constraints,
             )?;
+
+            // Real `_complete_graph`'s `_select_pkg_from_graph`
+            // (`depgraph.py:8495`): in complete mode, an atom that isn't a
+            // genuine phase-1 merge target may only resolve
+            // graph-or-installed -- never to a `[ebuild N]` the deep
+            // re-walk of the required sets would otherwise invent. An
+            // installed version that satisfies it becomes `AlreadyInstalled`
+            // (real's fallback); nothing installed means real's
+            // `_select_pkg_from_graph` returns `None` -- the dep is
+            // recorded in `_initially_unsatisfied_deps` with **no graph
+            // node** (`allow_unsatisfied=True`), so drop it here entirely
+            // rather than emit a `NoVisibleCandidate` entry. A no-op
+            // unless `complete_locked_merges` was populated (only the CLI
+            // layer's complete pass does that).
+            if complete
+                && !complete_locked_merges.is_empty()
+                && !complete_locked_merges.contains(&key)
+                && matches!(
+                    outcome,
+                    PretendOutcome::New { .. }
+                        | PretendOutcome::Upgrade { .. }
+                        | PretendOutcome::Downgrade { .. }
+                        | PretendOutcome::Reinstall { .. }
+                )
+            {
+                match best_installed_for_atom(root, &current_atom, &key.0, &key.1) {
+                    Some(v) => outcome = PretendOutcome::AlreadyInstalled { version: v },
+                    None => continue 'queue,
+                }
+            }
 
             // `--reinstall-atoms`: a matching already-installed package
             // is forced to re-merge (real `depgraph.py` drops it from
@@ -16851,19 +16922,30 @@ mod tests {
     }
 
     #[test]
-    fn complete_graph_forces_the_deep_walk_and_auto_enables_on_an_installed_change() {
+    fn complete_graph_deep_re_walks_but_does_not_merge_a_missing_installed_dep() {
         // deeppkg (installed) -> RDEPEND deeppkg2 (installed) -> RDEPEND
-        // newpkg (New). Without `--deep` portuale never walks deeppkg's
-        // deps; `complete` (real `_complete_graph` 8668-8670) toggles the
-        // deep walk on, so newpkg surfaces -- byte-identical to `-D`.
+        // newpkg (not installed). `-D` deep-walks and merges newpkg.
+        // Real `complete` mode (`_complete_graph` 8662) also deep-walks
+        // but swaps to `_select_pkg_from_graph` -- graph-or-installed,
+        // never a new merge -- so the CLI's 2-pass (phase 1 non-complete,
+        // phase 2 complete with phase 1's merge set locked) leaves newpkg
+        // accounted-for but unmerged. The low-level `complete=true` with
+        // no locked set is the pre-2-pass fallback: a plain deep walk.
         let root = fixtures_root();
         #[allow(clippy::too_many_arguments)]
-        let resolve = |atom: &str, update: bool, deep: Deep, complete: bool| -> GraphResult {
+        let resolve_cfg = |atom: &str,
+                           update: bool,
+                           deep: Deep,
+                           complete: bool,
+                           locked: &[&str]|
+         -> GraphResult {
+            let mut cfg = test_config();
+            cfg.complete_locked_merges = locked.iter().map(|s| s.to_string()).collect();
             resolve_pretend_graph(
                 &root,
                 &root,
                 &[atom.to_string()],
-                &test_config(),
+                &cfg,
                 false,
                 false,
                 false,
@@ -16907,31 +16989,33 @@ mod tests {
             )
             .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom}) failed: {e}"))
         };
+        let resolve = |atom: &str, update: bool, deep: Deep, complete: bool| -> GraphResult {
+            resolve_cfg(atom, update, deep, complete, &[])
+        };
         let names = |r: &GraphResult| -> Vec<String> {
             r.entries
                 .iter()
                 .map(|e| format!("{}/{}", e.category, e.package))
                 .collect()
         };
+        let has_newpkg = |r: &GraphResult| names(r).iter().any(|n| n == "dev-libs/newpkg");
 
         // complete=false, no --deep: deeppkg's deps are not walked.
-        assert!(!names(&resolve(
+        assert!(!has_newpkg(&resolve(
             "dev-libs/deeppkg",
             false,
             Deep::NotRequested,
             false
-        ))
-        .iter()
-        .any(|n| n == "dev-libs/newpkg"));
-        // complete=true forces the deep walk -> newpkg, same as --deep.
-        assert!(names(&resolve(
+        )));
+        // `-D` deep-walks and merges the missing dep.
+        assert!(has_newpkg(&resolve(
             "dev-libs/deeppkg",
             false,
-            Deep::NotRequested,
-            true
-        ))
-        .iter()
-        .any(|n| n == "dev-libs/newpkg"));
+            Deep::Unlimited,
+            false
+        )));
+        // Low-level `complete=true`, no locked set (the pre-2-pass
+        // fallback): still a plain deep walk == `-D`.
         assert_eq!(
             names(&resolve(
                 "dev-libs/deeppkg",
@@ -16941,6 +17025,16 @@ mod tests {
             )),
             names(&resolve("dev-libs/deeppkg", false, Deep::Unlimited, false)),
         );
+        // The CLI's real 2-pass: complete mode with phase 1's merge set
+        // locked. `_select_pkg_from_graph` -- newpkg is accounted for but
+        // never merged.
+        assert!(!has_newpkg(&resolve_cfg(
+            "dev-libs/deeppkg",
+            false,
+            Deep::NotRequested,
+            true,
+            &["dev-libs/deeppkg"],
+        )));
 
         // Auto-enable: `emerge -u completegraphpkg` is an Upgrade (a
         // version change), so `complete_graph_auto_enable` says to re-walk
@@ -16954,7 +17048,7 @@ mod tests {
                 .map(|e| &e.outcome),
             Some(PretendOutcome::Upgrade { .. })
         ));
-        assert!(!names(&up).iter().any(|n| n == "dev-libs/newpkg"));
+        assert!(!has_newpkg(&up));
         assert!(complete_graph_auto_enable(&up.entries, true, true, true));
         assert!(complete_graph_auto_enable(&up.entries, false, true, false));
         assert!(!complete_graph_auto_enable(&up.entries, true, false, true));
@@ -16964,6 +17058,15 @@ mod tests {
             false,
             false
         ));
+        // Even after the auto-enable re-walk, the missing deep dep is not
+        // merged (2-pass, `completegraphpkg` is the only phase-1 merge).
+        assert!(!has_newpkg(&resolve_cfg(
+            "dev-libs/completegraphpkg",
+            true,
+            Deep::NotRequested,
+            true,
+            &["dev-libs/completegraphpkg"],
+        )));
 
         // An AlreadyInstalled-only graph never auto-enables.
         let noop = resolve("dev-libs/deeppkg2", false, Deep::NotRequested, false);

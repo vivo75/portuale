@@ -8535,11 +8535,12 @@ pub fn run(args: &[String]) -> ExitCode {
         v.dedup();
         v
     };
-    let run_resolve = |complete: bool| {
+    let run_resolve = |complete: bool, locked: &[String]| {
         let cfg: std::borrow::Cow<portage_profile::Config> =
-            if complete && !complete_seed_atoms.is_empty() {
+            if complete && (!complete_seed_atoms.is_empty() || !locked.is_empty()) {
                 let mut c = config.clone();
                 c.complete_seed_atoms = complete_seed_atoms.clone();
+                c.complete_locked_merges = locked.to_vec();
                 std::borrow::Cow::Owned(c)
             } else {
                 std::borrow::Cow::Borrowed(&config)
@@ -8603,29 +8604,51 @@ pub fn run(args: &[String]) -> ExitCode {
         }
     };
 
-    let result = match handle(run_resolve(complete_graph)) {
+    // Phase 1 is **always non-complete** -- the authoritative merge
+    // list. Real `_complete_graph` runs *after* the normal graph is
+    // built and only extends it (graph-or-installed selection, never a
+    // new merge).
+    let result = match handle(run_resolve(false, &[])) {
         Ok(result) => result,
         Err(code) => return code,
     };
-    // Real portage's `_complete_graph` auto-enable (`depgraph.py:
-    // 8581-8648`): even without `--complete-graph`, re-walk in complete
-    // mode when the first graph changes an already-installed package and
-    // `--complete-graph-if-new-use`/`-if-new-ver`/`--rebuild-if-new-slot`
-    // is on. Skipped when `--complete-graph` or `--deep` already forced
-    // the deep walk (the observable delta), or `--nodeps` killed it. A
-    // clean second `resolve_pretend_graph` call mirrors real portage's
-    // own "resolve, then `_complete_graph` re-walk" -- see
-    // `complete_graph_auto_enable`.
-    let result = if !complete_graph
-        && deep == portage_repo::Deep::NotRequested
-        && !nodeps
-        && portage_repo::complete_graph_auto_enable(
-            &result.entries,
-            complete_if_new_use,
-            complete_if_new_ver,
-            rebuild_if_new_slot,
-        ) {
-        match handle(run_resolve(true)) {
+    // The `cp`s phase 1 would actually merge -- real's "already in the
+    // graph" for `_select_pkg_from_graph`. The complete pass may not
+    // merge anything outside this set.
+    let locked_merges: Vec<String> = result
+        .entries
+        .iter()
+        .filter(|e| {
+            matches!(
+                e.outcome,
+                portage_repo::PretendOutcome::New { .. }
+                    | portage_repo::PretendOutcome::Upgrade { .. }
+                    | portage_repo::PretendOutcome::Downgrade { .. }
+                    | portage_repo::PretendOutcome::Reinstall { .. }
+            )
+        })
+        .map(|e| format!("{}/{}", e.category, e.package))
+        .collect();
+    // Phase 2 (`_complete_graph`): run when `--complete-graph` is
+    // explicit, or auto-enabled -- real `depgraph.py:8581-8648`, re-walk
+    // in complete mode when the first graph changes an already-installed
+    // package and `--complete-graph-if-new-use`/`-if-new-ver`/
+    // `--rebuild-if-new-slot` is on. Skipped when `--deep` already forced
+    // the deep walk or `--nodeps` killed it. The completeness re-walk
+    // never changes the visible merge list (the locked set gates it) --
+    // it only widens `--json` / `--changed-deps-report` / slot-op
+    // accounting.
+    let want_complete = complete_graph
+        || (deep == portage_repo::Deep::NotRequested
+            && !nodeps
+            && portage_repo::complete_graph_auto_enable(
+                &result.entries,
+                complete_if_new_use,
+                complete_if_new_ver,
+                rebuild_if_new_slot,
+            ));
+    let result = if want_complete {
+        match handle(run_resolve(true, &locked_merges)) {
             Ok(result) => result,
             Err(code) => return code,
         }

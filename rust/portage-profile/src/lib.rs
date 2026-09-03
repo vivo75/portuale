@@ -478,6 +478,17 @@ pub struct Config {
     /// entirely, matching real (`emerge -p <atom>` with no installed
     /// change triggers no slot-op rebuild).
     pub complete_seed_atoms: Vec<String>,
+    /// `"category/package"` of every package the **first, non-complete**
+    /// resolve pass would actually merge. Real `_complete_graph` runs
+    /// after the normal graph is built and swaps package selection to
+    /// `_select_pkg_from_graph` -- graph-or-installed, **never a new
+    /// merge** (`depgraph.py:8662`). Portuale re-resolves the whole graph
+    /// in complete mode instead, so the CLI layer passes phase 1's merge
+    /// set here: in the complete pass, an atom whose `cp` is not in this
+    /// set may only resolve to `AlreadyInstalled`/`NoVisibleCandidate`,
+    /// never a merge. Empty for any non-complete pass and every
+    /// hand-built `Config` -- a strict no-op there.
+    pub complete_locked_merges: Vec<String>,
     /// (atom-or-wildcard string, ordered env-file names) pairs from
     /// `/etc/portage/package.env` -- real `config.py:894`'s
     /// `grabdict_package(.../package.env)`. Each named file lives under

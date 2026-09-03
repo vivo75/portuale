@@ -216,7 +216,7 @@ CASES = [
         0,
     ),
     (
-        "--complete-graph forces the deep walk (== -D) even without --deep",
+        "--complete-graph: deep re-walk but graph-or-installed selection (no new merges)",
         ["--pretend", "--complete-graph", "dev-libs/deeppkg"],
         0,
     ),
@@ -10304,24 +10304,32 @@ def test_dynamic_deps_chooses_ebuild_vs_vdb_deps_for_an_installed_deep_dep(
     assert "newpkg" not in static.stdout
 
 
-def test_complete_graph_forces_the_deep_walk(emerge_binary, emerge_pretend_python, fixture_env):
-    """--complete-graph (real create_depgraph_params.py:169-175 +
-    depgraph.py::_complete_graph 8668-8670): "completely account for all
-    known dependencies" -> myparams["deep"] = True. In this --pretend
-    portuale that forced deep walk is the whole observable delta (see
-    resolve_pretend_graph's `complete` param). deeppkg (installed) ->
-    deeppkg2 (installed) -> newpkg (New): plain `emerge -p deeppkg` never
-    walks deeppkg's deps; --complete-graph does, byte-identical to -D."""
+def test_complete_graph_does_not_merge_a_missing_deep_dep_of_an_installed_pkg(
+    emerge_binary, emerge_pretend_python, fixture_env
+):
+    """Real `_complete_graph` toggles `myparams["deep"] = True` **and**
+    swaps package selection to `_select_pkg_from_graph`
+    (`depgraph.py:8662`) -- graph-or-installed, **never a new merge**. So
+    unlike `-D`, complete mode's deep re-walk of the required sets does
+    not pull in an installed package's own transitive dependency that
+    happens to be missing: `deeppkg` (installed) -> `deeppkg2`
+    (installed) -> `newpkg` (not installed). `-D` merges `newpkg`;
+    `--complete-graph` does not (real records it in
+    `_initially_unsatisfied_deps`, no graph node). Portuale runs phase 1
+    non-complete, then the complete pass may only merge what phase 1
+    already would."""
     plain = _run([str(emerge_binary)], ["--pretend", "dev-libs/deeppkg"], fixture_env)
     assert "newpkg" not in plain.stdout
 
     cg = _run([str(emerge_binary)], ["--pretend", "--complete-graph", "dev-libs/deeppkg"], fixture_env)
-    deep = _run([str(emerge_binary)], ["--pretend", "-D", "dev-libs/deeppkg"], fixture_env)
-    assert cg.stdout == deep.stdout
     assert cg.stdout == _run(
         emerge_pretend_python, ["--pretend", "--complete-graph", "dev-libs/deeppkg"], fixture_env
     ).stdout
-    assert "[ebuild  N     ] dev-libs/newpkg-1.0 " in cg.stdout
+    assert "newpkg" not in cg.stdout
+    assert cg.stdout == plain.stdout
+
+    deep = _run([str(emerge_binary)], ["--pretend", "-D", "dev-libs/deeppkg"], fixture_env)
+    assert "[ebuild  N     ] dev-libs/newpkg-1.0 " in deep.stdout
 
     off = _run(
         [str(emerge_binary)], ["--pretend", "--complete-graph=n", "dev-libs/deeppkg"], fixture_env
@@ -10333,23 +10341,25 @@ def test_complete_graph_if_new_ver_auto_enables_on_an_upgrade(
     emerge_binary, emerge_pretend_python, fixture_env
 ):
     """Real depgraph.py::_complete_graph 8581-8648: --complete-graph-if-new-ver
-    defaults ON, so complete mode (the forced deep walk) auto-enables when
-    a run would change an installed package's version -- even without
-    --complete-graph. completegraphpkg 1.0 installed, 2.0 in the tree,
-    RDEPEND dev-libs/deeppkg -> deeppkg2 -> newpkg (New). `emerge -pu
-    completegraphpkg` is an Upgrade, so newpkg is pulled in; =n opts out."""
+    defaults ON, so complete mode auto-enables when a run would change an
+    installed package's version -- even without --complete-graph.
+    completegraphpkg 1.0 installed, 2.0 in the tree, RDEPEND
+    dev-libs/deeppkg -> deeppkg2 -> newpkg (not installed). `emerge -pu
+    completegraphpkg` is an Upgrade, so the auto-enable fires -- but
+    complete mode's `_select_pkg_from_graph` means the missing deep dep
+    `newpkg` is NOT merged (only accounted for). The visible merge list
+    is the Upgrade alone, auto-enable on or off; `=n` is verified
+    separately below to still opt out of the wider accounting."""
     base = ["--pretend", "--update", "dev-libs/completegraphpkg"]
     auto = _run([str(emerge_binary)], base, fixture_env)
     assert auto.stdout == _run(emerge_pretend_python, base, fixture_env).stdout
-    assert "[ebuild     U  ] dev-libs/completegraphpkg-2.0 [1.0]" in auto.stdout
-    assert "[ebuild  N     ] dev-libs/newpkg-1.0 " in auto.stdout
+    assert auto.stdout == "[ebuild     U  ] dev-libs/completegraphpkg-2.0 [1.0]\n"
 
     off = _run([str(emerge_binary)], base[:2] + ["--complete-graph-if-new-ver=n"] + base[2:], fixture_env)
     assert off.stdout == _run(
         emerge_pretend_python, base[:2] + ["--complete-graph-if-new-ver=n"] + base[2:], fixture_env
     ).stdout
-    assert "newpkg" not in off.stdout
-    assert "[ebuild     U  ] dev-libs/completegraphpkg-2.0 [1.0]" in off.stdout
+    assert off.stdout == auto.stdout
 
 
 def test_deep_equals_zero_matches_not_passing_deep_at_all(emerge_binary, fixture_env):
