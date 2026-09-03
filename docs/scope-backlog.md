@@ -138,14 +138,14 @@ architectural — a single-pass BFS can't grow into these incrementally:
     marker + `str(Package)` "causing rebuilds:" rendering — **shipped
     2026-09-03**, container-verified against real portage 3.0.82.2 via
     `TEST/scripts/40-slotop-cascade.sh`;
-    `docs/slot-op-rebuild-cascade-plan.md`;
+    `docs/history/slot-op-rebuild-cascade-plan.md`;
   - `||`-preference feedback driving a retry — **both paths shipped
     2026-09-03**, container-verified: the slot-conflict
     `runtime_pkg_mask → dep_zapdeps` path
     (`TEST/scripts/42-or-backtrack.sh`) and the "missing dependency"
     path (`_feedback_missing_dep`, an unsatisfiable `||` subtree
     yielding to the next alternative — `TEST/scripts/43-or-missing-dep.sh`);
-    `docs/or-preference-backtrack-plan.md`;
+    `docs/history/or-preference-backtrack-plan.md`;
   - the slot-collision notice's remaining cuts: `pkg_use_display` for a
     package with non-default USE (the ` USE=""` slot renders, non-empty
     flag lists don't), the `use`/`soname` reason keys, operator/USE-token
@@ -359,7 +359,7 @@ item, with a short incremental tail:
    `runtime_pkg_mask` feedback paths — `_feedback_slot_conflict` and
    `_feedback_missing_dep` — into `||` alternative re-selection
    (2026-09-03, container-verified —
-   `docs/or-preference-backtrack-plan.md`). What is left here is
+   `docs/history/or-preference-backtrack-plan.md`). What is left here is
    depth/fidelity work on the pieces already built (richer
    `_slot_conflict_backtrack` mask-target analysis, `dep_zapdeps`'
    full preference bins, deeper multi-constraint interplay), not a
