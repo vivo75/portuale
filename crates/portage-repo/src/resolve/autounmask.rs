@@ -182,3 +182,24 @@ pub(crate) fn autounmask_use_atom_form(
         check_visibility: true,
     })
 }
+
+/// The `'backtrack` loop's `autounmask_use_config` accumulator rendered
+/// as `Config::autounmask_use` -- one `(cat/pkg, [±flag …])` entry per
+/// package, tokens sorted for determinism.
+pub(crate) fn autounmask_use_tier(
+    acc: &HashMap<(String, String), HashMap<String, bool>>,
+) -> Vec<(String, Vec<String>)> {
+    let mut out: Vec<(String, Vec<String>)> = acc
+        .iter()
+        .map(|((cat, pkg), flags)| {
+            let mut toks: Vec<String> = flags
+                .iter()
+                .map(|(f, on)| if *on { f.clone() } else { format!("-{f}") })
+                .collect();
+            toks.sort();
+            (format!("{cat}/{pkg}"), toks)
+        })
+        .collect();
+    out.sort();
+    out
+}

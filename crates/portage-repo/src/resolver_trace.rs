@@ -96,6 +96,15 @@ pub(crate) fn is_nomerge(e: &GraphEntry) -> bool {
     )
 }
 
+/// `USE="flag -flag …"`, bare-name-sorted the way Portage opens its string.
+fn use_str(e: &GraphEntry) -> String {
+    e.use_flags_display
+        .iter()
+        .map(|(f, on)| if *on { f.clone() } else { format!("-{f}") })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 /// Stage 3: the per-atom candidate list, in ebuild-then-installed order, to
 /// stderr. Binary candidates are not listed (no `BinaryIndex` at this call
 /// site); for a fixture with no binaries the list is identical to Portage's.
@@ -175,4 +184,23 @@ pub(crate) struct ParentAtom {
     /// Present only when evaluating the parent's conditional use-deps rewrote
     /// the atom.
     pub unevaluated: Option<String>,
+}
+
+/// `USE="…"` for an installed-only child, read from the vdb.
+fn installed_use_str(root: &Path, cat: &str, pkg: &str, ver: &str) -> String {
+    let iuse = crate::read_vdb_flag_set(root, cat, pkg, ver, "IUSE");
+    let enabled = crate::read_vdb_flag_set(root, cat, pkg, ver, "USE");
+    let mut names: Vec<&String> = iuse.iter().collect();
+    names.sort();
+    names
+        .iter()
+        .map(|f| {
+            if enabled.contains(*f) {
+                (*f).clone()
+            } else {
+                format!("-{f}")
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
 }
