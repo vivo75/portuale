@@ -1495,7 +1495,7 @@ grep configpkg "${ROOT}"/var/db/pkg/dev-libs/configpkg-1.0/CONTENTS
 # obj /etc/configpkg.conf <md5-of-the-new-content> <mtime>
 ```
 
-(A real host's own ambient `CONFIG_PROTECT` -- if this pilot's dev/test
+(A real host's own ambient `CONFIG_PROTECT` -- if portuale's dev/test
 machine is itself a real Gentoo system -- will override the `/etc`
 default shown above via the same env-var-sourced CLI boundary; export
 `CONFIG_PROTECT=/etc` explicitly first if reproducing this by hand

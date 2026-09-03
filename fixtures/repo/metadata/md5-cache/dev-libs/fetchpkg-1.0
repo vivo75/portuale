@@ -1,5 +1,5 @@
 DEFINED_PHASES=-
-DESCRIPTION=fixture package: a real, unresolvable SRC_URI (no fetch/unpack machinery in this pilot)
+DESCRIPTION=fixture package: a real, unresolvable SRC_URI (no fetch/unpack machinery in portuale)
 EAPI=8
 IUSE=
 KEYWORDS=amd64

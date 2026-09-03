@@ -2,7 +2,7 @@
 // `lib/portage/versions.py` (functions `ververify` and `vercmp`) in the
 // Python codebase. Ported by hand, structurally close to the Python
 // original so it stays easy to diff against on future changes -- this is
-// a pilot artifact, not yet idiomatic-first Rust; see docs/agent-context.md.
+// a portuale artifact, not yet idiomatic-first Rust; see docs/agent-context.md.
 //
 // Known simplification vs. Python: version components are parsed as
 // `i128` rather than arbitrary-precision integers. This covers every

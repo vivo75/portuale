@@ -1,7 +1,7 @@
 // Rust port of real `portage.dep.check_required_use`
 // (`lib/portage/dep/__init__.py`, `is_active`/`is_satisfied` plus the
 // tokenizer/group-tree builder around them) -- the REQUIRED_USE
-// (PMS 7.3.4/8.2) pilot slice from docs/agent-context.md's follow-up work.
+// (PMS 7.3.4/8.2) slice from docs/agent-context.md's follow-up work.
 //
 // PMS 8.2's own grammar for REQUIRED_USE (a "specification style
 // variable"): a leaf is `flag` or `!flag`; a group is either a bare
@@ -11,7 +11,7 @@
 // (`?? ( item+ )` -- EAPI-gated per PMS table 8.5, `eapi >= 5` per real
 // `lib/portage/eapi.py`'s own `required_use_at_most_one_of` attribute;
 // always recognized here, matching this repo's EAPI 5+ profile floor and
-// this pilot's established "no EAPI parametrization" precedent
+// portuale's established "no EAPI parametrization" precedent
 // elsewhere -- see e.g. `atom-harness`'s own scope-cut comment), or a
 // use-conditional (`[!]flag? ( item+ )`). No `=`/`!=`/`?=` forms exist in
 // REQUIRED_USE at all (those are USE-*dep*, atom-only forms -- see
@@ -24,11 +24,11 @@
 //     pretty-print exactly which sub-expression failed
 //     (`human_readable_required_use`, real depgraph.py's own elaborate,
 //     colorized "The following REQUIRED_USE flag constraints are
-//     unsatisfied" report). This pilot only ever needs the final yes/no
+//     unsatisfied" report). Portuale only ever needs the final yes/no
 //     verdict (`resolve_pretend_graph` reports a violation with a short,
-//     honest, pilot-specific message showing the package's own full,
+//     honest, portuale-specific message showing the package's own full,
 //     as-declared REQUIRED_USE string -- not real portage's own
-//     "reduced," violation-only sub-expression -- same "pilot-specific
+//     "reduced," violation-only sub-expression -- same "portuale-specific
 //     summary, not a port of real formatting" precedent `--help` already
 //     set), so this port is a much simpler direct recursive-descent
 //     boolean evaluator with no tree bookkeeping at all -- verified to
@@ -44,7 +44,7 @@
 //     its own spec here) always falls through to ordinary per-operator
 //     evaluation on an empty list (`||`/`^^` unsatisfied, `??`/a
 //     use-conditional trivially satisfied) -- real EAPI 7+ behavior,
-//     used unconditionally here, another instance of this pilot's
+//     used unconditionally here, another instance of portuale's
 //     established "no EAPI parametrization" precedent. The only real
 //     divergence this causes: a literal, degenerate `|| ( )` or
 //     `^^ ( )` (which no real-world ebuild has a reason to write) would

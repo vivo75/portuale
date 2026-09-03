@@ -4,7 +4,7 @@
 // verification, all offline and 100% unit-testable). Shells out to real
 // `wget`, using real `make.globals`'s own default `FETCHCOMMAND`
 // template verbatim (`cnf/make.globals`), rather than an in-process HTTP
-// client -- matching this pilot's own "run the same real external
+// client -- matching portuale's own "run the same real external
 // process portage would" precedent (`bin/*.sh`, `xpak-helper.py`, ...).
 //
 // Real `FEATURES=distlocks` is real too (`lib/portage/locks.py:175-`'s
@@ -21,11 +21,11 @@
 // fd (`DistfileLock`'s own `Drop`), the same real effect real
 // `unlockfile()`'s own explicit `flock(fd, LOCK_UN)` has -- POSIX
 // guarantees all of a process's own `flock` locks on an fd are released
-// when that fd is closed. Real `unlinkfile=0` (this pilot's own default
+// when that fd is closed. Real `unlinkfile=0` (portuale's own default
 // too, matching real `fetch.py`'s own call): the lockfile itself
 // persists on disk after release, just unlocked, ready for reuse.
 //
-// KNOWN, DOCUMENTED GAPS (v1 scope, matching this whole pilot's own
+// KNOWN, DOCUMENTED GAPS (v1 scope, matching portuale's own
 // "narrow v1, document the cut" pattern):
 //   - Resume IS modelled now (`wget_resume` = real `make.globals`'s own
 //     default `RESUMECOMMAND`, `FETCHCOMMAND` + `-c`): once a non-empty
@@ -35,7 +35,7 @@
 //     but-corrupt file (digest mismatch after a full download) is still
 //     dropped -- it can't be resumed. Not modelled: real portage's
 //     `PORTAGE_FETCH_RESUME_MIN_SIZE` threshold (it only resumes a
-//     partial past 350000 bytes) -- the pilot resumes any non-empty one.
+//     partial past 350000 bytes) -- portuale resumes any non-empty one.
 //   - `mirror://` resolution is real now (`portage_fetch::
 //     resolve_mirror_candidates`/`gentoo_mirror_fallback`, see that
 //     crate's own module doc comment for the exact real mechanics
@@ -45,7 +45,7 @@
 //     `GENTOO_MIRRORS` flat-layout fallback is skipped) -- and the real
 //     ones deliberately not attempted: live per-mirror `layout.conf`
 //     negotiation, real candidate-ordering/shuffling, and `RESTRICT=
-//     primaryuri` (doesn't port cleanly -- this pilot's candidate
+//     primaryuri` (doesn't port cleanly -- portuale's candidate
 //     ordering already deviates from real). The `mirror+`/`fetch+`
 //     SRC_URI prefixes ARE parsed (`portage_fetch::SrcUriEntry::
 //     override_mirror`/`override_fetch`): `mirror+` re-permits the
@@ -68,7 +68,7 @@
 //     `lib/portage/sync/modules/webrsync`'s own gemato-based Manifest
 //     signing), not a `SRC_URI`/distfile-fetch one at all -- confirmed
 //     by grepping `fetch.py` directly and finding zero hits for either
-//     term. Neither `gpkg` nor repo syncing are in this pilot's own
+//     term. Neither `gpkg` nor repo syncing are in portuale's own
 //     scope at all yet, so there's nothing to port here.
 
 use portage_fetch::{
@@ -107,7 +107,7 @@ impl DistfileLock {
             .open(&lock_path)
             .map_err(|e| format!("{}: {e}", lock_path.display()))?;
         // Real default (no `os.O_NONBLOCK`, real `fetchonly`-only
-        // override this pilot's own CLI has no equivalent mode for):
+        // override portuale's own CLI has no equivalent mode for):
         // block until the lock is available.
         if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX) } != 0 {
             return Err(format!(
@@ -150,7 +150,7 @@ pub fn gentoo_mirrors_from_env() -> Vec<String> {
 /// `PORTAGE_CONFIGROOT`) is consulted only for real `custommirrors`
 /// (`${config_root}/etc/portage/mirrors`) -- deliberately a field, not
 /// an ambient env read inside this module, mirroring `ebuild_merge::
-/// MergeOptions::config_root`'s own doc comment exactly (this pilot's
+/// MergeOptions::config_root`'s own doc comment exactly (portuale's
 /// own dev/test machine is a real Gentoo system with a real, populated
 /// `/etc/portage/mirrors`-shaped tree, so a silent real-`/`-style
 /// default here would make every test that doesn't override this field
@@ -197,7 +197,7 @@ pub struct FetchOptions {
     /// is already verified in `DISTDIR` (or comes from `custommirrors` /
     /// a `mirror://`-named mirror). Sourced from the ebuild's own
     /// `RESTRICT` md5-cache field by `ebuild_phases::fetch_sources`.
-    /// This pilot does NOT run the ebuild's own `pkg_nofetch` phase for
+    /// Portuale does NOT run the ebuild's own `pkg_nofetch` phase for
     /// a missing file (a documented cut) -- `fetch_src_uri` fails with a
     /// generic "place it in DISTDIR by hand" pointer instead.
     pub restrict_fetch: bool,
@@ -273,7 +273,7 @@ fn wget_run(uri: &str, dest: &Path, resume: bool) -> Result<(), String> {
 /// site): for every file `src_uri` (this ebuild's own real, md5-cache-
 /// sourced `SRC_URI` string) names for the current USE set, fetches it
 /// into `options.distdir` unless a real, Manifest-verified copy is
-/// already there. This pilot's own USE is always empty (see
+/// already there. Portuale's own USE is always empty (see
 /// `ebuild_phases.rs`'s own `phase_setup_script`, which always exports
 /// `USE=""`) -- so a `flag?` group never fires and a `!flag?` one
 /// always does, matching real `use_reduce(pkgsettings["USE"].split())`
@@ -341,7 +341,7 @@ pub fn fetch_src_uri(
         // drops at the end of this loop iteration -- see this module's
         // own doc comment. Deliberately acquired *after* the "no
         // Manifest entry" refusal just below rather than strictly
-        // mirroring real ordering: this pilot's own single unified
+        // mirroring real ordering: portuale's own single unified
         // refusal for unverifiable content has no real single-point
         // equivalent (real portage's own structure is different here),
         // and there's nothing to actually fetch or protect with a lock

@@ -13,7 +13,7 @@ src_install() {
 	# access to ${SANDBOX_LOG} and exit non-zero, failing the phase.
 	# Without sandbox it just fails with EACCES (/var/lib is root-owned)
 	# and is recorded here.
-	local target=/var/lib/portage-pilot-sandbox-probe
+	local target=/var/lib/portage-portuale-sandbox-probe
 	if echo escaped > "${target}" 2>"${T}/escape.err"; then
 		einfo "fssandboxpkg: wrote ${target} (NOT sandboxed)"
 	else

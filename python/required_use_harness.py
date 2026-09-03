@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Neutral CLI test-harness binary (Python side) for the REQUIRED_USE
-pilot -- see docs/agent-context.md and
+portuale -- see docs/agent-context.md and
 rust/portage-required-use/src/lib.rs for what is and isn't
 ported. Wraps the real portage.dep.check_required_use rather than
 reimplementing it, always called with eapi="8" -- pinned so both sides

@@ -1,5 +1,5 @@
-Title: Pilot news: relevant only if dev-libs/samepkg is installed
-Author: Pilot Test <pilot@example.org>
+Title: Portuale news: relevant only if dev-libs/samepkg is installed
+Author: Portuale Test <portuale@example.org>
 Content-Type: text/plain
 Posted: 2026-09-02
 Revision: 1

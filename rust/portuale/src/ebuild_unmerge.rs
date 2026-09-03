@@ -46,7 +46,7 @@
 // check) and `ebuild_merge::read_installed_slot`, both promoted to
 // `pub(crate)` for this. Real `isowner`'s own path-ambiguity-via-
 // symlinked-directories inode-cache mechanism isn't reproduced --
-// this pilot's own `owns_path_pf` is a plain string scan, matching the
+// portuale's own `owns_path_pf` is a plain string scan, matching the
 // same simplification `find_owners`/blocker exclusion already made.
 //
 // The real "symlink orphan" refinement (bug #326685) is real too: when
@@ -131,12 +131,12 @@
 // "narrow v1, document the cut" pattern):
 //   - No `bsd_chflags` handling -- confirmed dead code on Linux, not a
 //     real gap: `lib/portage/__init__.py:311` sets `bsd_chflags = None`
-//     unconditionally on non-BSD, and this pilot's own hard goal is
+//     unconditionally on non-BSD, and portuale's own hard goal is
 //     Linux-only/musl-static.
 //   - Failure handling is coarser: real `_unmerge_pkgfiles()` counts
 //     per-file failures and keeps going regardless (overall success is
 //     governed by the `prerm`/`postrm` phase exit codes, not by
-//     individual file-removal failures); this pilot's own removal loop
+//     individual file-removal failures); portuale's own removal loop
 //     tolerates "already gone" (`NotFound`, matching real
 //     `_ignored_unlink_errnos`/`_ignored_rmdir_errnos`) and "directory
 //     not empty" (matching real `!empty` tolerance) but treats any
@@ -144,7 +144,7 @@
 //   - `${T}`/`${D}`/etc. are recomputed fresh via `ebuild_phases::
 //     compute_environment` for every `unmerge` call, the same as
 //     `merge` -- real `unmerge()` reuses whatever `PORTAGE_BUILDDIR` a
-//     prior merge left behind when present; this pilot doesn't attempt
+//     prior merge left behind when present; portuale doesn't attempt
 //     that distinction.
 
 use crate::ebuild_merge;
@@ -516,7 +516,7 @@ fn remove_dirs(
 }
 
 /// Options for `run_unmerge`, bundled into a struct rather than more
-/// positional parameters -- this pilot already relearned the
+/// positional parameters -- portuale already relearned the
 /// "positional-parameter pain" lesson once, in `--newrepo`'s own
 /// bulk-fix saga (see `ebuild_merge::MergeOptions`'s own doc comment,
 /// the precedent this mirrors). `config_protect`/`config_protect_mask`
@@ -536,7 +536,7 @@ pub struct UnmergeOptions {
     /// incorrectly claiming "not in FEATURES by default", the same
     /// mistake `ebuild_merge::MergeOptions::protect_owned` had). `Default`
     /// is now `true`, matching real portage's own actual out-of-the-box
-    /// behavior. This pilot's own env-var read still only checks
+    /// behavior. Portuale's own env-var read still only checks
     /// whether the literal `FEATURES` value (when set at all) contains
     /// the `"unmerge-orphans"` token -- it doesn't *accumulate* onto the
     /// real default set the way real portage's own `+`/`-`-prefixed

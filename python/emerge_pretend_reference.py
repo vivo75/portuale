@@ -42,7 +42,7 @@ Dependency recursion (see resolve_pretend_graph) walks all five real
 dependency-string keys -- DEPEND, RDEPEND, BDEPEND, PDEPEND, IDEPEND --
 concatenated and flattened together with no distinction between them:
 real portage's own merge ordering treats these differently, but that's
-meaningless for a --pretend-only pilot with no real merge ordering to
+meaningless for a --pretend-only portuale with no real merge ordering to
 begin with, so v1 treats all five uniformly as "a dependency this package
 needs, resolve and report it". Flattening itself uses the real
 portage.dep.use_reduce(flat=True), with its own documented scope cuts
@@ -127,7 +127,7 @@ def _running_root():
     unset -- see the Rust side's own running_root_satisfies_atom doc
     comment for the full grounding. PORTAGE_RUNNING_ROOT itself is NOT a
     real portage environment variable (real portage has no way to
-    override this at all) -- a pilot-specific override purely so a test
+    override this at all) -- a portuale-specific override purely so a test
     can point this at a fixture's own fake vdb tree instead of the real
     host, matching PORTAGE_CONFIGROOT/ROOT's own existing precedent.
     """
@@ -137,7 +137,7 @@ def _running_root():
 def _parse_layout_conf(repo_location):
     """Parses a repo's own metadata/layout.conf (real parse_layout_conf,
     lib/portage/repository/config.py:1516) -- a section-less key = value
-    file. Empty dict when absent. This pilot reads exactly three keys:
+    file. Empty dict when absent. Portuale reads exactly three keys:
     masters, repo-name, profile-formats. Mirrors portage-repo/src/lib.rs's
     parse_layout_conf exactly."""
     path = os.path.join(repo_location, "metadata", "layout.conf")
@@ -193,7 +193,7 @@ def find_repos(config_root):
         if location is None:
             continue
         # Real repos.conf always uses absolute locations; relative ones
-        # are a pilot/testing convenience -- see the matching comment in
+        # are a portuale/testing convenience -- see the matching comment in
         # portage-repo/src/lib.rs.
         if not os.path.isabs(location):
             location = os.path.join(config_root, location)
@@ -302,7 +302,7 @@ def find_repos(config_root):
 # Real portage.update + portage._global_updates: each repo's
 # profiles/updates/<quarter> files hold `move cat/old cat/new` and
 # `slotmove cat/pkg <oldslot> <newslot>` directives a sync applies once and
-# permanently. This pilot never syncs, so it applies them at read time --
+# permanently. Portuale never syncs, so it applies them at read time --
 # see portage-repo/src/lib.rs's matching section for the full grounding and
 # the deliberate cuts (all no-ops for a --pretend that never writes).
 
@@ -587,7 +587,7 @@ def _stack_mask_lines(sources):
     user-level -atom in package.mask can remove an atom the repo or a
     profile level added). Shared between package.mask and
     package.unmask, which real portage stacks identically -- unlike this
-    pilot's previous, user-level-only package.unmask handling, which
+    portuale's previous, user-level-only package.unmask handling, which
     treated a leading "-" there as meaningless; it's meaningful once
     more than one source can contribute an unmask entry.
 
@@ -689,7 +689,7 @@ def _expand_license_token(token, groups, traversed=None):
     LicenseManager._expandLicenseToken and portage-profile/src/lib.rs's
     expand_license_token exactly (deliberately silent here, unlike real
     portage's own writemsg, same as every other real-portage-warning-only
-    path this pilot already skips silently)."""
+    path portuale already skips silently)."""
     if traversed is None:
         traversed = set()
     negate = token.startswith("-")
@@ -792,7 +792,7 @@ def read_md5_cache(repo_location, category, pf):
             if sep:
                 result[key] = value
     # Real profiles/updates/ package moves (SCOPE_BACKLOG Part 2 Section H
-    # item 2): a sync bakes move/slotmove into md5-cache; this pilot reads
+    # item 2): a sync bakes move/slotmove into md5-cache; portuale reads
     # a static fixture cache, so it applies them here on read instead --
     # real update_dbentry over each *DEPEND string.
     for key in ("DEPEND", "RDEPEND", "PDEPEND", "BDEPEND", "IDEPEND"):
@@ -902,7 +902,7 @@ _GPKG_COMPRESSIONS = {
 def _read_gpkg_metadata(path):
     """Real gpkg.get_metadata() / unpack_metadata(want=None), narrowed
     exactly like portuale/src/binpkg.rs::read_gpkg_metadata (NO
-    Manifest/.sig verification -- so it also reads this pilot's own
+    Manifest/.sig verification -- so it also reads portuale's own
     hand-built fixture gpkgs, which real portage.gpkg would reject).
     Hand-rolled rather than `from portage.gpkg import gpkg` for that
     reason. Mirrors the Rust reader."""
@@ -1238,7 +1238,7 @@ def _license_struct_has_masked(struct, acceptable):
     list instead) has at least one required-but-unaccepted license.
     Mirrors real `LicenseManager._getMaskedLicenses`, as a bool rather
     than the full "list every masked license" diagnostic real portage's
-    own mask-display machinery uses (this pilot has no mask-reason
+    own mask-display machinery uses (portuale has no mask-reason
     display to feed it). Mirrors portage-repo/src/lib.rs's
     tree_has_masked_license/node_has_masked_license exactly (structural
     difference only: this walks real use_reduce's own list-of-str-or-
@@ -1410,7 +1410,7 @@ def _license_accepted(candidate, category, package, candidate_str, config):
     LicenseManager.getMissingLicenses/_getPkgAcceptLicense). A LICENSE
     string real use_reduce can't parse is treated as masked (not
     visible) rather than accepted -- matching the "can't tell, so
-    exclude" precedent this pilot's own _reinstall_flags_for_use_change
+    exclude" precedent portuale's own _reinstall_flags_for_use_change
     already establishes for an unreadable candidate. Mirrors
     portage-repo/src/lib.rs's license_accepted exactly."""
     license_str = candidate.get("license", "")
@@ -1500,7 +1500,7 @@ def _flatten_src_uri(src_uri, use_flags):
     3.1.6). Recursive-descent, mirroring portage-fetch::flatten_src_uri /
     parse_list exactly (a small bespoke parser, not real use_reduce, the
     same "two independent implementations" approach the rest of this
-    pilot uses). Raises ValueError on a grammar it can't parse."""
+    portuale uses). Raises ValueError on a grammar it can't parse."""
     tokens = src_uri.split()
     pos = 0
 
@@ -1549,7 +1549,7 @@ def _manifest_dist_sizes(manifest_path):
     """Every `DIST <name> <size> ...` line of a repo Manifest, as
     {name: size}. A missing Manifest is an empty dict (same tolerance the
     Rust parse_manifest gives). Mirrors portage-fetch::parse_manifest,
-    narrowed to the size field this pilot's f/F column needs."""
+    narrowed to the size field portuale's f/F column needs."""
     out = {}
     try:
         with open(manifest_path) as fh:
@@ -1627,7 +1627,7 @@ def _fetch_bytes_to_download(src_uri, use_flags, repo_location, category, packag
 def _localized_size(num_bytes):
     """Real portage.localization.localized_size: math.ceil(num_bytes /
     1024) KiB ("always round up, so small files don't end up as
-    '0 KiB'"). This pilot drops real portage's LC_NUMERIC thousands
+    '0 KiB'"). Portuale drops real portage's LC_NUMERIC thousands
     grouping of the KiB count -- only observable above 999 KiB, and a
     locale-dependent separator would break the contract suite. Always
     KiB. Mirrors pretend.rs's localized_size."""
@@ -1700,7 +1700,7 @@ def is_visible(candidate, category, package, config):
 def _keyword_masked_only(candidate, category, package, config):
     """--autounmask's own keyword-suggestion sub-feature (real
     --autounmask-keep-keywords=n, see resolve_pretend_graph's own
-    docstring for the full on/off default-resolution logic this pilot
+    docstring for the full on/off default-resolution logic portuale
     ported): true iff candidate would be is_visible except for its own
     KEYWORDS -- every other check is_visible makes (package.mask,
     license, properties, restrict) passes, only _keywords_accepted
@@ -1708,7 +1708,7 @@ def _keyword_masked_only(candidate, category, package, config):
     to return a reason -- real portage's own _get_masking_status is
     considerably more elaborate (distinguishing package.mask/license/
     keyword/REQUIRED_USE/etc. reasons, each with its own "unmask hint"),
-    and this pilot only needs the single "keywords, and only keywords"
+    and portuale only needs the single "keywords, and only keywords"
     question for its own deliberately narrow v1."""
     candidate_str = (
         f"{category}/{package}-{candidate['version']}:{candidate['slot']}/{candidate['sub_slot']}"
@@ -1904,7 +1904,7 @@ def _suggested_license_candidate(repos, category, package, config):
 
 
 def _suggested_keyword(candidate):
-    """The keyword this pilot's own --autounmask v1 would suggest adding
+    """The keyword portuale's own --autounmask v1 would suggest adding
     to package.accept_keywords for candidate -- the first of its own
     (non-"-"-prefixed) KEYWORDS tokens. Deliberately simpler than real
     portage's own _get_masking_status -- see _keyword_masked_only's own
@@ -2175,7 +2175,7 @@ def _suggested_parent_use_candidate(repos, entries, unevaluated_atom, owner, con
     instead, would the re-evaluated atom now actually resolve?"
 
     Deliberately narrower than real Atom.violated_conditionals (~150
-    lines of per-token-operator partitioning this pilot doesn't
+    lines of per-token-operator partitioning portuale doesn't
     reproduce): instead of determining exactly *which* conditional
     use-deps were violated, this toggles *every* flag the unevaluated
     atom's own conditional use-deps reference, together, in one
@@ -2259,7 +2259,7 @@ def _suggested_parent_use_candidate(repos, entries, unevaluated_atom, owner, con
 
 
 def _visibility_provenance(candidate, category, package, config):
-    """--json's own "state-change trace" (this pilot's own feature, not
+    """--json's own "state-change trace" (portuale's own feature, not
     a port of any real emerge output): which config entries, if any,
     were actually load-bearing for an already-is_visible candidate to
     end up visible. Mirrors portage-repo/src/lib.rs's
@@ -2389,7 +2389,7 @@ def _keywords_accepted(
     that ignored fold order entirely -- once folded, its presence in the
     final accepted set still means "accept any KEYWORDS state, even
     empty," the same real '"**" in pgroups' unconditional-match rule
-    this pilot already documented. A bare package.accept_keywords atom
+    portuale already documented. A bare package.accept_keywords atom
     with no keyword list at all no longer reaches this function empty:
     resolve_config already substitutes real accept_keywords_defaults's
     own implicit meaning -- the "~"-prefixed unstable form of every
@@ -2485,7 +2485,7 @@ def effective_use_flags(
     package,
 ):
     """The USE flags in effect for one specific package -- one continuous
-    incremental walk over the real USE_ORDER layers this pilot models,
+    incremental walk over the real USE_ORDER layers portuale models,
     low priority to high (real config.py::regenerate() over the reversed
     uvlist; USE_ORDER default
     "env:pkg:conf:defaults:pkginternal:features:repo:env.d"). The "Config
@@ -2538,12 +2538,12 @@ def effective_use_flags(
     effective_use_flags exactly -- a package.use entry never affects any
     other package's own resolution.
 
-    `iuse`'s own defaults: found and grounded by comparing this pilot's
+    `iuse`'s own defaults: found and grounded by comparing portuale's
     own output against the real, installed system emerge on a real
     package (media-video/ffmpeg) -- REQUIRED_USE reported violated for a
     USE combination that's actually fully satisfied once IUSE's own +/-
     markers are honored (ffmpeg's own real IUSE declares
-    +gpl/+dav1d/+drm/etc., none of which this pilot's prior
+    +gpl/+dav1d/+drm/etc., none of which portuale's prior
     effective_use_flags ever enabled, silently defaulting every one of
     them to disabled instead). Real config.py's own _setup_pkg_iuse
     (lib/portage/package/ebuild/config.py, ~line 1878) builds exactly
@@ -2561,11 +2561,11 @@ def effective_use_flags(
     portage's own actual precedence has every one of those three able to
     override an IUSE default; only env/env.d (real per-invocation/
     stacked-profile-env overrides, positions 8 and 1) sit even lower/
-    higher than this pilot models at all. Applied here at that same
+    higher than portuale models at all. Applied here at that same
     relative position (step 2 of the walk above), with the repo
     package.use applied first (step 1) and every later layer replayed
     directly on top via _apply_incremental -- NOT a plain set union of
-    the already-flattened use_flags. An earlier version of this pilot did
+    the already-flattened use_flags. An earlier version of portuale did
     union a flattened base here, which meant base could only ever *add* a
     flag, never explicitly cancel an IUSE +default the way real
     defaults/conf genuinely can (real regenerate() runs one continuous
@@ -2681,7 +2681,7 @@ def effective_use_flags(
     # global config layer can't do. Masked k_<x> are dropped again by the
     # use.mask steps below (real portage's own "x not in usemask" guard).
     # Not guarded on k being a USE_EXPAND var name -- a "_*" token in
-    # this pilot's USE set only ever comes from USE_EXPAND folding or
+    # portuale's USE set only ever comes from USE_EXPAND folding or
     # package.use's USE_EXPAND shorthand. Mirrors portage-repo/src/lib.rs's
     # effective_use_flags exactly.
     iuse_names = [tok.lstrip("+-") for tok in iuse.split()]
@@ -2760,7 +2760,7 @@ def _atom_specificity(entry):
     portage-repo/src/lib.rs's atom_specificity exactly, including its
     own documented simplifications: comparison operators (>,<,>=,<=)
     all share one tier without real portage's own "closest version wins
-    a tie" refinement, and every wildcard entry this pilot's own grammar
+    a tie" refinement, and every wildcard entry portuale's own grammar
     can produce falls into real portage's lowest extended-syntax tier,
     since it never has a slot or "=*" glob of its own."""
     try:
@@ -2824,7 +2824,7 @@ def _read_vdb_flag_set(root, category, package, version, filename):
 
 def _vdb_pkg_dir(root, category, package, version):
     """The on-disk vdb directory for <category>/<package>-<version>. Real
-    global-updates renames a moved package's vdb dir; this pilot never
+    global-updates renames a moved package's vdb dir; portuale never
     writes, so when the direct path is absent it falls back to every
     _installed_cp_sources name. Mirrors portage-repo's vdb_pkg_dir."""
     pkgdir = os.path.join(root, "var", "db", "pkg")
@@ -3232,7 +3232,7 @@ def _slot_changed(root, repos, category, package, version):
 
     KNOWN, DOCUMENTED SCOPE CUT: real portage's own consumers of
     _changed_slot live deep inside binary-package/slot-operator-rebuild
-    scheduling this pilot has none of -- rejecting a matched installed
+    scheduling portuale has none of -- rejecting a matched installed
     candidate and, depending on context, either aborting the search or
     continuing to look for a binary package with the right SLOT. Ported
     here as simply another independent reinstall trigger instead, the
@@ -3244,7 +3244,7 @@ def _slot_changed(root, repos, category, package, version):
     Deliberately does not reuse a candidate's own already-parsed slot
     (list_candidates already truncates that to the main component only)
     -- re-reads the repo's own raw SLOT value directly instead, the same
-    "re-read metadata this pilot's general candidate model doesn't
+    "re-read metadata portuale's general candidate model doesn't
     carry" approach _deps_changed already uses for DEPEND/RDEPEND. A
     repo-side lookup that fails (version no longer in the tree,
     unreadable metadata) reports "unchanged" (False), the same tolerant
@@ -3339,7 +3339,7 @@ def _use_deps_satisfied(atom, iuse, enabled):
     lines 3143-3188) -- NOT called from match_from_list itself, since
     real match_from_list skips this same block entirely for a
     plain-string candidate (its own "hasattr(x, 'use')" guard), which is
-    exactly what this pilot's own candidate strings always are -- see
+    exactly what portuale's own candidate strings always are -- see
     portage-repo/src/lib.rs's own use_deps_satisfied doc comment for the
     full architecture writeup this mirrors. Called separately, after
     match_from_list's own version/slot/repo filtering, once a real
@@ -3364,9 +3364,9 @@ def _use_deps_satisfied(atom, iuse, enabled):
     enabled/disabled". The four conditional forms (`flag?`/`!flag?`/
     `flag=`/`!flag=`) impose NO enabled/disabled constraint here at all
     -- genuine real match_from_list behavior (it never reads their own
-    `.conditional` structure), not a pilot simplification: evaluating a
+    `.conditional` structure), not a deliberate simplification: evaluating a
     conditional use-dep needs the *atom-owning* package's own USE state,
-    a completely different mechanism this pilot doesn't have and
+    a completely different mechanism portuale doesn't have and
     match_from_list itself doesn't either."""
     use = atom.use
     if use is None:
@@ -3547,16 +3547,16 @@ def _running_root_satisfies_atom(atom_str, running_root):
     recursive second-root graph isn't attempted. Whether atom_str is
     satisfied by anything installed under running_root's own real vdb --
     installed_candidates, keyed directly off the atom's own parsed
-    category/package (no wildcard-atom support needed: this pilot's own
+    category/package (no wildcard-atom support needed: portuale's own
     atom grammar never has an atom without an explicit category/package),
     matched via match_from_list the same way every other real
-    installed-package match in this pilot works. Deliberately generic on
+    installed-package match in portuale works. Deliberately generic on
     running_root: this function has no idea whether it's being pointed at
     a real host "/" or a fixture's own fake vdb tree -- only the real CLI
     boundary (--root-deps's own default resolution) ever points this at
     real "/". USE-deps on the atom aren't checked against the running
     root's own recorded USE (the same simplification blocker-atom
-    matching elsewhere in this pilot already makes) -- a documented v1
+    matching elsewhere in portuale already makes) -- a documented v1
     scope cut. Mirrors portage-repo/src/lib.rs's own
     running_root_satisfies_atom."""
     try:
@@ -3833,7 +3833,7 @@ def _process_make_conf_file(
 ):
     """Resolves "source <path>" against config_root as if it were "/"
     (chroot-style), matching PORTAGE_CONFIGROOT/ROOT semantics elsewhere
-    in this pilot. A missing sourced file is silently skipped."""
+    in portuale. A missing sourced file is silently skipped."""
     if not os.path.isfile(path):
         return
     canon = os.path.realpath(path)
@@ -3894,7 +3894,7 @@ def _read_env_file_kv(path, config_root, visited):
     expanded in place (absolute against config_root chroot-style, relative
     against the file's dir); a ${VAR} in a value is left literal (no
     per-file expand map this slice -- a documented simplification). A
-    missing file yields [] (real portage warns from setcpv; this pilot
+    missing file yields [] (real portage warns from setcpv; portuale
     follows its "no warnings from deep in config resolution" precedent).
     Mirrors portage-profile/src/lib.rs's read_env_file_kv."""
     if not os.path.isfile(path):
@@ -4027,7 +4027,7 @@ def resolve_config(
     silently also mask a same-named package in the main repo or another
     overlay, which real portage's own scoping specifically prevents.
     Deliberately asymmetric, confirmed while implementing this: the main
-    repo's own entries above stay unscoped, matching this pilot's own
+    repo's own entries above stay unscoped, matching portuale's own
     pre-existing (unchanged) behavior -- real portage scopes every
     repo's own repo-level entries this same way, including the main
     repo's, so a package.mask entry from main only masking main's own
@@ -4036,7 +4036,7 @@ def resolve_config(
     and ONLY package.mask, MaskManager.py's own package.unmask loop
     never consults masters at all -- stacks with its declared masters'
     own lines before repo-scoping) is now modeled to the extent every
-    fixture here needs: a repo with no explicit "masters =" (this pilot
+    fixture here needs: a repo with no explicit "masters =" (portuale
     doesn't parse that repos.conf key at all yet) implicitly masters the
     main repo alone, real config.py's own
     "repo.masters = (self.mainRepo(),)" default -- every overlay here
@@ -4186,7 +4186,7 @@ def resolve_config(
     # `env` USE_ORDER layer for USE_EXPAND / USE_EXPAND_UNPREFIXED
     # variable *values* (VIDEO_CARDS=nouveau emerge ...): their names
     # aren't known until USE_EXPAND is finalized, so the env override is
-    # folded into scalars here (last-wins, like the pilot's existing
+    # folded into scalars here (last-wins, like portuale's existing
     # model). Mirrors portage-profile/src/lib.rs.
     for var in set(use_expand) | set(use_expand_unprefixed):
         if var in os.environ:
@@ -4249,11 +4249,11 @@ def resolve_config(
     # order), stacked with the same "-atom" removal semantics
     # package.mask uses (see _stack_mask_lines) -- mirrors
     # portage-profile/src/lib.rs's resolve_config exactly. Deliberately
-    # NOT folded into use_flags here (an earlier version of this pilot
+    # NOT folded into use_flags here (an earlier version of portuale
     # did, which was wrong): real regenerate() applies self.useforce/
     # self.usemask (which setcpv() sets to the *per-package*
     # getUseForce(pkg)/getUseMask(pkg) -- global use.force/use.mask
-    # combined with the atom-scoped package.use.force/.mask this pilot
+    # combined with the atom-scoped package.use.force/.mask portuale
     # already applies per-candidate) as the literal *last* step of its
     # own incremental USE walk, strictly *after* the "pkg" (package.use)
     # tier -- see effective_use_flags's own doc comment for where
@@ -4303,7 +4303,7 @@ def resolve_config(
         # of* every one of its declared masters' own package.mask, in
         # declared order, before the usual "::reponame" scoping. No
         # entry for repo_name in repo_masters at all falls back to the
-        # same "main repo alone" default this pilot always used before
+        # same "main repo alone" default portuale always used before
         # "masters =" parsing existed. package.unmask deliberately does
         # NOT get the same treatment -- confirmed by reading
         # MaskManager.py's own two loops side by side: only the
@@ -4464,7 +4464,7 @@ def resolve_config(
 
     # use.stable.mask/use.stable.force (PMS 5+; real
     # eapi_supports_stable_use_forcing_and_masking's own EAPI floor,
-    # always recognized here -- this pilot's established "no EAPI
+    # always recognized here -- portuale's established "no EAPI
     # parametrization" precedent): profile-chain only, same
     # "-atom"-removal stacking use_force/use_mask already get --
     # deliberately NOT folded into use_flags here, since "stable" is a
@@ -4572,7 +4572,7 @@ def resolve_config(
     ).items():
         license_groups.setdefault(name, []).extend(members)
 
-    # ACCEPT_LICENSE: last-level-wins scalar (see this pilot's own
+    # ACCEPT_LICENSE: last-level-wins scalar (see portuale's own
     # pre-existing "any variable other than USE/ACCEPT_KEYWORDS is a
     # plain last-level-wins scalar" cut, extended here rather than
     # inventing a new, ACCEPT_LICENSE-specific incremental mechanism) --
@@ -4775,7 +4775,7 @@ def _parse_binrepos(binrepos_conf, portage_binhost):
             k, _, v = line.partition("=")
             k, v = k.strip(), v.strip()
             if k == "sync-uri":
-                # ${VAR} in sync-uri expands from the env (pilot
+                # ${VAR} in sync-uri expands from the env (portuale
                 # convenience, so a fixture can use
                 # file://${PORTAGE_CONFIGROOT}/binhost). Mirrors
                 # portage-profile's parse_binrepos.
@@ -4878,14 +4878,14 @@ def _use_reduce_flat_disjunctive(depstr, uselist, alternative_satisfiable):
     Falls back to keeping the *whole* "||" group exactly as
     use_reduce(flat=True) would have flattened it (literal "||" marker,
     every alternative's own atoms, no selection at all) whenever *no*
-    alternative is currently satisfiable -- so a dependency this pilot
+    alternative is currently satisfiable -- so a dependency portuale
     can't currently resolve is never silently dropped, preserving the
     exact "never silently wrong about whether a dependency exists"
     invariant resolve_pretend_graph's own docstring already established
     for the unconditional-flatten v1 this replaces. Real portage's own
     considerably richer preference order (installed packages first,
     backtracking on a later constraint failure, etc.) isn't ported --
-    this pilot has no backtracking architecture at all -- just the
+    portuale has no backtracking architecture at all -- just the
     single "first currently-resolvable alternative wins" rule. Mirrors
     portage-repo/src/lib.rs's use_reduce_flat_disjunctive exactly."""
     tree = use_reduce(depstr, flat=False, uselist=uselist)
@@ -4967,7 +4967,7 @@ def _root_deps_satisfied_atoms(
     already-flattened flat_deps before queueing (real "no separate graph
     node needed for an already-satisfied dep"). Degrades to an empty set
     on any flatten failure -- never a false negative that could silently
-    drop a dep this pilot actually needed to walk. Mirrors
+    drop a dep portuale actually needed to walk. Mirrors
     portage-repo/src/lib.rs's root_deps_satisfied_atoms exactly."""
     build_depstr = " ".join(metadata[k] for k in dep_keys if metadata.get(k))
     try:
@@ -5434,7 +5434,7 @@ def resolve_pretend(
     to no_visible_candidate, the same outcome an atom with no eligible
     candidate for any other reason already gets. Deliberately NOT
     replicated: real depgraph.py's own ~18 excluded_pkgs call sites
-    cover many more specific interaction points this pilot doesn't
+    cover many more specific interaction points portuale doesn't
     implement at all -- these two checks cover the dominant real-world
     use ("pin an installed package so --update/--deep never touch it")
     and the new/upgrade selection case, not every real edge case.
@@ -5449,7 +5449,7 @@ def resolve_pretend(
     grounding.
 
     `selective`/`is_top_level`: a real, previously-undiscovered gap in
-    the `update` handling above, found by comparing this pilot's own
+    the `update` handling above, found by comparing portuale's own
     output against the real, installed system emerge on a real package
     (sys-apps/portage) and tracing real portage's own decision live.
     Real portage's own avoid_update shortcut (`not update`, ported as
@@ -5477,12 +5477,12 @@ def resolve_pretend(
     set real myparams["selective"]) restore the "nothing to do" result.
     `selective` here mirrors real create_depgraph_params.py's own
     myparams["selective"] = True condition, computed from whichever of
-    its own real trigger flags this pilot actually implements: update,
+    its own real trigger flags portuale actually implements: update,
     newuse, changed_use (real portage's own --changed-use/-U rewrites to
     --reinstall=changed-use before create_depgraph_params ever runs,
     lib/_emerge/main.py, and --reinstall is itself constrained to that
     one literal choice in real portage -- so changed_use alone covers
-    this pilot's whole share of that real condition, no separate
+    portuale's whole share of that real condition, no separate
     --reinstall flag needed), changed_deps (any non-"n" value),
     changed_slot, plus the two flags whose entire real effect is exactly
     this (see run()'s own CLI parsing): --noreplace/-n and
@@ -5492,11 +5492,11 @@ def resolve_pretend(
     unconditionally). Real --newrepo (forces reinstall specifically on
     an installed-vs-current repo mismatch, and separately contributes to
     selective) is a documented, narrower scope cut, deliberately not
-    modeled: this pilot has no vdb REPOSITORY reader (confirmed absent
+    modeled: portuale has no vdb REPOSITORY reader (confirmed absent
     during this same investigation -- the real vdb file is even
     lowercase "repository", unlike every other metadata key).
 
-    `is_top_level` is this pilot's own existing "argument" equivalent --
+    `is_top_level` is portuale's own existing "argument" equivalent --
     resolve_pretend_graph's own `depth == 0`, the identical equivalence
     already established for --with-test-deps's own `pkg.depth == 0 and
     self._is_argument(pkg)` gating. A dependency atom (is_top_level =
@@ -5556,7 +5556,7 @@ def resolve_pretend(
     # _dependency_avoid_update_candidate's own docstring for the full
     # citation) genuinely happens before real portage ever tries to
     # find a "best available" candidate at all -- so it's checked here
-    # too, before this pilot's own visibility/USE-dep-against-the-tree
+    # too, before portuale's own visibility/USE-dep-against-the-tree
     # filtering below gets a chance to (wrongly) bail out with
     # no_visible_candidate for an atom whose installed version already
     # satisfies it. Confirmed live: sys-fs/fuse's own real
@@ -5564,7 +5564,7 @@ def resolve_pretend(
     # this -- the tree's only *visible* liburing candidate doesn't even
     # have the right USE profile to satisfy the atom (nothing enables
     # it there), while the real, installed version does (its own real
-    # vdb USE). --exclude deliberately keeps this pilot's own
+    # vdb USE). --exclude deliberately keeps portuale's own
     # pre-existing, narrower behavior instead (see the later,
     # is_top_level-aware "not update" shortcut's own comment) --
     # skipped here so that block still gets a chance to run. Mirrors
@@ -5801,7 +5801,7 @@ def resolve_pretend(
     # shortcut above (_dependency_avoid_update_candidate) already
     # handles the common case (see its own docstring for the full real-
     # portage citation). It deliberately skips when --exclude is
-    # active, though, to preserve this pilot's own pre-existing
+    # active, though, to preserve portuale's own pre-existing
     # --exclude-vs-matched interaction exactly -- so this block still
     # needs its own not-is_top_level branch, reusing the same broader
     # (not is_visible-filtered) lookup, for that one remaining
@@ -6027,7 +6027,7 @@ def _enqueue_flat_deps(
     argument for this same dependency string) evaluates each token's own
     PMS 8.3.4 conditional use-deps (flag?/!flag?/flag=/!flag=) before
     it's ever queued or classified as a blocker, via the real Atom
-    class's own evaluate_conditionals (this pilot's Python side uses the
+    class's own evaluate_conditionals (portuale's Python side uses the
     real portage.dep.Atom directly, so this is genuinely the same
     mechanism real use_reduce's own per-token integration point uses
     -- lib/portage/dep/__init__.py:1045-1046, confirmed by reading it
@@ -6085,7 +6085,7 @@ def _enqueue_flat_deps(
 
 def _autounmask_dep_chain(owner, current_atom, top_level, entries):
     """Real _get_dep_chain_as_comment (depgraph.py:6457), narrowed to
-    this pilot's one-level-parent tracking: the `#required by ...` lines
+    portuale's one-level-parent tracking: the `#required by ...` lines
     for an autounmask change on `owner`'s dependency (or a top-level
     `current_atom`). A top-level atom yields a single `required by <atom>
     (argument)`; a dependency yields `required by <parent cpv>::<repo>`
@@ -6677,7 +6677,7 @@ def resolve_pretend_graph(
     from two atoms simply requesting different slots (not a conflict at
     all -- see above). Purely informational, same "report, don't enforce"
     spirit as blockers: real portage's own depgraph treats an unresolved
-    slot conflict as fatal; this pilot instead reports it and keeps
+    slot conflict as fatal; portuale instead reports it and keeps
     going, using whichever version was resolved first.
 
     `selective` (see resolve_pretend's own docstring for the full real
@@ -6687,7 +6687,7 @@ def resolve_pretend_graph(
     (resolve_pretend's own parameter) is this BFS's own pre-existing
     `depth == 0`, passed at the one call site below -- the same
     equivalence --with-test-deps already established between real
-    "argument" and this pilot's own `depth == 0`.
+    "argument" and portuale's own `depth == 0`.
 
     New-slot installs ("[ebuild NS]", real output.py::
     _get_installed_best's own new_slot): resolve_pretend's own "is this
@@ -6782,7 +6782,7 @@ def resolve_pretend_graph(
         # reachable candidate has had a chance to resolve (or fail) on its
         # own terms -- matching real portage's own _unsatisfied_deps_for_
         # display list (checked once, at the very end of the real resolve)
-        # rather than this pilot's own previous "abort on the first hit"
+        # rather than portuale's own previous "abort on the first hit"
         # shortcut. Mirrors portage-repo/src/lib.rs's own
         # required_use_violations exactly.
         required_use_violations = []
@@ -6828,7 +6828,7 @@ def resolve_pretend_graph(
         # resolution -- merged into entries in a single post-pass at the
         # end, the same "accumulate now, merge once the whole graph is
         # known" shape pending_blockers/resolve_blockers already use.
-        # Pilot-specific, no real portage equivalent -- see run()'s own
+        # Portuale-specific, no real portage equivalent -- see run()'s own
         # --json handling for why it exists at all.
         required_by_map = {}
         # (target cp, owner cp) -> [has_hard, has_soft]: whether the owner
@@ -7594,7 +7594,7 @@ def resolve_pretend_graph(
             # "except InvalidDependString" branch below) is different: real
             # check_required_use itself raises for that case, outside the
             # explicit "if not required_use_is_sat:" branch the delayed
-            # collection above lives in -- so this pilot keeps that one
+            # collection above lives in -- so portuale keeps that one
             # immediately fatal, same as before. Calls the real
             # portage.dep.check_required_use directly (pinned to eapi="8",
             # same reasoning as required_use_harness.py's own docstring) --
@@ -7706,7 +7706,7 @@ def resolve_pretend_graph(
             # branch would remain in flat_deps and get queued as an ordinary
             # (and wrongly reported) dependency. Real --root-deps only ever
             # applies to DEPEND/BDEPEND -- this closure can't tell which of
-            # the five merged dep keys a given atom came from (this pilot's
+            # the five merged dep keys a given atom came from (portuale's
             # own single-unified-graph architecture merges them into one
             # combined string before flattening at all), so an
             # RDEPEND/PDEPEND/IDEPEND "||" group gets this same permissive
@@ -7749,7 +7749,7 @@ def resolve_pretend_graph(
             # it isn't satisfied by the running root either, so it must not
             # fall through into the ordinary flat_deps queue below and get
             # wrongly resolved against ROOT instead (real DEPEND/BDEPEND
-            # never targets ROOT/ESYSROOT at all under this pilot's own
+            # never targets ROOT/ESYSROOT at all under portuale's own
             # established --root-deps simplification). Each one instead gets
             # resolved against the running root directly, added as its own
             # targets_running_root entry, and recursed into. Kept as a list
@@ -8131,10 +8131,10 @@ def _enqueue_dependencies(
 
     Deliberate simplification: real portage reads an AlreadyInstalled
     package's metadata from the vdb's own installed-time snapshot, not
-    the repo's *current* ebuild -- this pilot has no vdb-metadata reader
+    the repo's *current* ebuild -- portuale has no vdb-metadata reader
     (installed_versions only checks presence, never reads DEPEND/USE/
     etc), so this reuses the repo's current metadata for that version
-    instead, same as every other candidate lookup in this pilot already
+    instead, same as every other candidate lookup in portuale already
     does.
 
     `with_bdeps` (real --with-bdeps, see resolve_pretend_graph's own
@@ -8302,7 +8302,7 @@ def _enqueue_dependencies(
             continue
         if tok in root_deps_unsatisfied:
             # Real DEPEND/BDEPEND never targets ROOT/ESYSROOT at all
-            # under this pilot's own established --root-deps
+            # under portuale's own established --root-deps
             # simplification -- already handled above instead.
             continue
         # This path never calls evaluate_conditionals at all (a real,
@@ -8336,7 +8336,7 @@ def _parse_atom(atom_str):
 # Enumerates the real `emerge` CLI's full option surface (see
 # lib/_emerge/main.py: the `options` list, `shortmapping` dict,
 # `argument_options` dict, and `actions` frozenset), so that using any
-# real emerge flag this pilot doesn't implement yet produces a clear
+# real emerge flag portuale doesn't implement yet produces a clear
 # "recognized, but not implemented" message -- distinct from a
 # genuinely unknown/misspelled flag. The set that IS implemented is the
 # one `emerge --help` documents (see _print_help / _HELP_TEXT); every
@@ -8388,7 +8388,7 @@ _VALUE_OPTIONS = [
     # emerge_options.rs).
     ("--autounmask", None),
     # --autounmask-continue / --autounmask-backtrack ARE recognized now --
-    # inert in this --pretend pilot except the actions.py:3772 warning
+    # inert in this --pretend portuale except the actions.py:3772 warning
     # (mirrors emerge_options.rs / pretend.rs).
     ("--autounmask-license", None),
     ("--autounmask-unrestricted-atoms", None),
@@ -8406,7 +8406,7 @@ _VALUE_OPTIONS = [
     ("--color", None),
     # --complete-graph / --complete-graph-if-new-use / -if-new-ver ARE
     # implemented (real create_depgraph_params.py:169-175 +
-    # depgraph.py::_complete_graph; in this --pretend pilot `complete`
+    # depgraph.py::_complete_graph; in this --pretend portuale `complete`
     # mode collapses to a forced deep walk -- see resolve_pretend_graph's
     # `complete` param and _complete_graph_auto_enable).
     ("--depclean-lib-check", None),
@@ -8540,7 +8540,7 @@ def _has_unsupported_top_level_features(a):
 def _json_escape(s):
     """Escapes `s` for embedding in a JSON string literal (quote,
     backslash, and control characters -- category/package/version/atom
-    text from this pilot's own inputs never needs anything fancier).
+    text from portuale's own inputs never needs anything fancier).
     Hand-rolled, not json.dumps, so this side's --json output is
     byte-for-byte identical to pretend.rs's own hand-rolled
     json_escape/json_string -- both build the exact same string via the
@@ -8590,7 +8590,7 @@ def _entry_to_json(category, package, merge_order, outcome, blockers, slot, use_
     always dumps the whole resolved graph, letting a consumer filter on
     "requested" itself if they want the --onlydeps view. "provenance"
     (alongside "source", so also absent for "no_visible_candidate")
-    mirrors this pilot's own state-change trace -- which package.mask/
+    mirrors portuale's own state-change trace -- which package.mask/
     .unmask/package.accept_keywords entries, if any, were actually
     load-bearing for this candidate to be visible at all -- always
     present (each of its three sub-fields null rather than omitted when
@@ -8773,7 +8773,7 @@ def _print_json(
 ):
     """The whole --json output: {"entries": [...], "slot_conflicts": [...],
     "changed_deps_report": [...], "autounmask_keyword_changes": [...]}, one
-    line, no pretty-printing (a pilot-specific convenience format, not a
+    line, no pretty-printing (a portuale-specific convenience format, not a
     stable schema -- see run()'s own --json handling). Mirrors
     pretend.rs's own print_json exactly."""
     entries_json = ",".join(
@@ -8959,7 +8959,7 @@ See README.md and emerge(1) for the full picture.
 
 def _print_help():
     """The `emerge --help` / `-h` text -- a grouped tour of every action
-    and option this pilot implements. Not a port of real emerge's own
+    and option portuale implements. Not a port of real emerge's own
     _emerge/help.py (see pretend.rs's module doc comment). Mirrors
     pretend.rs's HELP_TEXT byte-for-byte; the contract suite pins it."""
     sys.stdout.write(_HELP_TEXT)
@@ -9079,7 +9079,7 @@ def _resolve_custom_set(config_root, name, seen):
 def _expand_selected(config_root, root):
     """Real @selected (WorldSelectedSet -- cnf/sets/portage.conf): the
     world file's own package atoms unioned with every nested set named in
-    world_sets. This pilot's @world expands to exactly this too -- real
+    world_sets. Portuale's @world expands to exactly this too -- real
     @world = @profile @selected @system and the @profile/@system union is
     a pre-existing documented simplification. Mirrors pretend.rs's
     expand_selected."""
@@ -9898,7 +9898,7 @@ def _run_deselect(targets, root, pretend):
     expanded_atoms = set(atoms) with that same atom, unconditionally. So
     "--deselect cat/pkg" (or a bare "pkg" resolvable via the world file)
     genuinely discards a matching world entry even if never installed --
-    this pilot's own earlier doc comment (and test) claimed installation
+    portuale's own earlier doc comment (and test) claimed installation
     was always required, an incorrect generalization: real portage's own
     vardb-derived narrowing (vardb.match) is a *separate, additional*
     contribution on top of the unconditional substitution/literal-target
@@ -9935,7 +9935,7 @@ def _run_deselect(targets, root, pretend):
     side. So despite _resolve_custom_set's own real, working nested-set
     expansion (built for -- and still only used by -- @world's own
     dependency-resolution walk, a genuinely different real mechanism),
-    it has no role here at all: this pilot's own equivalent is a plain
+    it has no role here at all: portuale's own equivalent is a plain
     membership check against _read_world_sets, nothing more. Each
     discarded entry is reported against its own real source file
     ("world" for a plain atom, "world_sets" for a "@name" reference),
@@ -10326,7 +10326,7 @@ def _all_installed_packages(root):
             sub = (raw.split("/", 1)[1] if "/" in raw else slot) or "0"
             # Real profiles/updates/ package moves: present each vdb entry
             # under its post-move/slotmove identity (real global-updates
-            # rewrites the vdb on sync; this pilot never writes -- see
+            # rewrites the vdb on sync; portuale never writes -- see
             # _vdb_pkg_dir for the read-back side).
             category_m, name = _apply_updates_to_cp(category, name)
             slot, _sub = _apply_updates_to_slot(category_m, name, slot, sub)
@@ -11675,7 +11675,7 @@ def _attr_display_field(
     exact order:
 
       0. I  -- interactive
-      1. N  -- new; r instead when force_reinstall (this pilot has no
+      1. N  -- new; r instead when force_reinstall (portuale has no
                --emptytree/arg.force_reinstall concept, so always N or
                space here -- a plain reinstall shows R at col 2)
       2. S  -- new_slot; R instead when replace (the cpv is already
@@ -11745,7 +11745,7 @@ def _package_counters_summary(entries, top_level_pkgs, onlydeps, color):
     myfetchlist) and the "\\nFetch Restriction: N package[s][ (M
     unsatisfied)]" line (from provenance["fetch_restrict"] /
     "fetch_restrict_satisfied"). The "Conflict:" line's own "(N
-    unsatisfied)"/"(all satisfied)" suffix is still dropped -- this pilot
+    unsatisfied)"/"(all satisfied)" suffix is still dropped -- portuale
     resolves no blocker. A top-level package suppressed by --onlydeps
     isn't in real's merge list, so it isn't counted here either. Mirrors
     pretend.rs's package_counters_summary."""
@@ -11831,17 +11831,17 @@ def _package_counters_summary(entries, top_level_pkgs, onlydeps, color):
 def _columnwidth_from_env():
     """Real output_helpers.py's own columnwidth resolution
     (MergeListItem.__init__): 130 by default, overridden by a
-    COLUMNWIDTH setting -- this pilot only ever reads it as a plain
+    COLUMNWIDTH setting -- portuale only ever reads it as a plain
     environment variable (real portage's own frozen_config.settings is
     env + make.conf + profile merged together; parsing COLUMNWIDTH out
     of make.conf too would need a new generic scalar-lookup path through
-    the config dict, which nothing else in this pilot needs yet -- a
+    the config dict, which nothing else in portuale needs yet -- a
     deliberate v1 narrowing, same spirit as every other scope cut in
     this codebase). An unparsable value warns and falls back to the
     default, exactly like real portage's own except ValueError branch,
     rather than treating it as a hard error. Real portage's own warning
     has a first line echoing the raw exception text -- omitted here,
-    same as every other parse-error message in this pilot (see
+    same as every other parse-error message in portuale (see
     --deep's own invalid-value handling): Rust's ParseIntError and
     Python's ValueError never stringify identically, so echoing either
     verbatim would make this the one message the two implementations
@@ -12105,7 +12105,7 @@ def _columns_line(
 ):
     """One --columns line: real _set_root_columns's own layout algorithm
     (the pkg_info.merge == True branch only -- the "not merging" branch
-    never applies to any outcome this pilot prints in brackets at all),
+    never applies to any outcome portuale prints in brackets at all),
     color stripped for increment 1 (real's nc_len/plain len() distinction
     collapses to just len() until increment 2 adds ANSI color).
     bracket/field reproduce the exact same "[{bracket} {field}]" segment
@@ -12115,7 +12115,7 @@ def _columns_line(
     padded out to columnwidth - 60 (newlp), then [version] right-padded
     to columnwidth - 30 (oldlp), then oldbest ("[from]" for an
     Upgrade/Downgrade, empty otherwise -- real pkg_info.oldbest_list,
-    mirrored here via data this pilot already has). Padding is skipped
+    mirrored here via data portuale already has). Padding is skipped
     once the line's already past the target width, exactly like real
     portage's own guard -- never truncates, just doesn't pad further.
     Mirrors pretend.rs's own columns_line exactly."""
@@ -12153,7 +12153,7 @@ def run(args):
     oneshot = False
     # --tree/-t and --unordered-display: display-only, entirely
     # independent of resolution itself. See print_tree's own docstring
-    # for the full pilot-specific design this needed.
+    # for the full portuale-specific design this needed.
     tree = False
     unordered_display = False
     # --columns: display-only, same "entirely independent of resolution"
@@ -12238,13 +12238,13 @@ def run(args):
     # --buildpkgonly/-B: same plain-boolean shape as --newrepo above.
     buildpkgonly = False
     # --root-deps: real main.py's own choices=("True", "rdeps"), plus a
-    # bare form (no =value at all). This pilot doesn't distinguish "True"
+    # bare form (no =value at all). Portuale doesn't distinguish "True"
     # (fold DEPEND/BDEPEND/IDEPEND into RDEPEND) from "rdeps" -- and for
     # this EAPI-7+-only fork it never needs to: at EAPI 7+
     # (eapi_attrs.bdepend, depgraph.py:4218-4238) the `--root-deps ==
     # "rdeps"` ignore_depend_deps branch is inside `else: if
     # eapi_attrs.bdepend`, so `=rdeps` is a complete no-op. Every
-    # accepted form just enables the one behavior this pilot implements:
+    # accepted form just enables the one behavior portuale implements:
     # real running-root satisfiability for DEPEND/BDEPEND/IDEPEND atoms.
     root_deps = False
     with_test_deps = False
@@ -12577,7 +12577,7 @@ def run(args):
             or arg.startswith("--complete-graph-if-new-use=")
             or arg.startswith("--complete-graph-if-new-ver=")
         ):
-            # Real y_or_n; the pilot is lenient (bare -> y, like
+            # Real y_or_n; portuale is lenient (bare -> y, like
             # --dynamic-deps). Both default ON, only =n opts out.
             name, _, inline = arg.partition("=")
             if "=" in arg:
@@ -12617,14 +12617,14 @@ def run(args):
             i += 1
         elif arg == "--json":
             # NOT a real emerge option at all -- real portage has no
-            # structured-output mode for --pretend. Pilot-specific, so
+            # structured-output mode for --pretend. Portuale-specific, so
             # deliberately not routed through _lookup_option's real-CLI-
             # surface tables at all (unlike every other flag here), and
             # given no short alias (nothing to bundle).
             json_output = True
             i += 1
         elif arg == "--shell" or arg.startswith("--shell="):
-            # Pilot-only (real emerge has no --shell): selects the real
+            # Portuale-only (real emerge has no --shell): selects the real
             # shell backend for a real merge / unmerge (prerm/postrm) /
             # --config (pkg_config) phase chain. This reference
             # only models --pretend, where it's entirely inert -- parsed
@@ -12970,7 +12970,7 @@ def run(args):
             verbose_slot_rebuilds = False
             i += 1
         elif arg == "--ignore-built-slot-operator-deps":
-            # Real y_or_n (no default arg); this pilot accepts the bare
+            # Real y_or_n (no default arg); portuale accepts the bare
             # form as y, same permissive shape as its sibling flags.
             nxt = args[i + 1] if i + 1 < len(args) else None
             if nxt == "n":
@@ -13126,7 +13126,7 @@ def run(args):
                 i += 1
             autounmask_only = val in ("y", "True")
         elif arg == "--autounmask-continue" or arg.startswith("--autounmask-continue="):
-            # Real true_y_or_n (main.py:345). Inert in this --pretend pilot
+            # Real true_y_or_n (main.py:345). Inert in this --pretend portuale
             # except the actions.py:3772 warning below (real
             # write-and-continue is gated on "--pretend" not in myopts).
             if arg.startswith("--autounmask-continue="):
@@ -13141,7 +13141,7 @@ def run(args):
             autounmask_continue = val in ("y", "True")
         elif arg == "--autounmask-backtrack":
             # Real choices: ("y", "n") (main.py:338) -- a REQUIRED value.
-            # No effect in this pilot; the value is validated and discarded.
+            # No effect in portuale; the value is validated and discarded.
             if i + 1 >= len(args):
                 print(
                     'emerge: option "--autounmask-backtrack" requires an argument',
@@ -13546,12 +13546,12 @@ def run(args):
                     # Unlike every other bundle-compatible short flag
                     # here, -X's own value is *required*, not optional --
                     # there's no sensible "just default it" behavior the
-                    # way a bundled -v/-D has, so this pilot deliberately
+                    # way a bundled -v/-D has, so portuale deliberately
                     # doesn't support bundling -X at all, with a specific
                     # message instead of a misleading generic one.
                     print(
                         "emerge: -X (--exclude) requires an argument and can't be "
-                        "bundled with other short flags in this pilot",
+                        "bundled with other short flags in portuale",
                         file=sys.stderr,
                     )
                     return 2
@@ -13576,9 +13576,9 @@ def run(args):
     # in emerge_config.opts: print(...); return 1" -- checked once
     # parsing finishes (order-independent), right after option parsing
     # and before any other validation, matching real portage's own
-    # placement. This pilot's own CLI-usage-error convention (exit 2,
+    # placement. Portuale's own CLI-usage-error convention (exit 2,
     # stderr) differs deliberately from real portage's literal `return
-    # 1`/stdout here, matching every other CLI-usage error this pilot
+    # 1`/stdout here, matching every other CLI-usage error portuale
     # already reports. Mirrors pretend.rs exactly.
     if tree and columns:
         print('emerge: can\'t specify both of "--tree" and "--columns".', file=sys.stderr)
@@ -13636,7 +13636,7 @@ def run(args):
     if regen_action:
         return 0
     # --metadata: real action_metadata prints ">>> Updating Portage cache";
-    # this pilot models no depcachedir, so there is nothing to transfer.
+    # portuale models no depcachedir, so there is nothing to transfer.
     if metadata_action:
         print("\n>>> Updating Portage cache")
         return 0
@@ -13809,7 +13809,7 @@ def run(args):
 
     # Real actions.py:3772: --autounmask-continue + --autounmask=n -> a
     # WARNING, printed on the merge/build path before the depgraph. The
-    # pilot's only observable effect for --autounmask-continue. Mirrors
+    # portuale's only observable effect for --autounmask-continue. Mirrors
     # pretend.rs.
     if autounmask_continue is not None and autounmask is False:
         print(
@@ -13911,14 +13911,14 @@ def run(args):
     # Real create_depgraph_params.py's own precedence: an explicit
     # --with-bdeps always wins; only when it's absent does
     # --with-bdeps-auto=n override the real default ("auto", this
-    # pilot's own pre-existing with_bdeps=True) down to "n" instead.
+    # portuale's own pre-existing with_bdeps=True) down to "n" instead.
     if not with_bdeps_given:
         with_bdeps = with_bdeps_auto
 
     # Real create_depgraph_params.py's own `selective` condition,
-    # computed from whichever of its real trigger flags this pilot
+    # computed from whichever of its real trigger flags portuale
     # implements -- see resolve_pretend's own docstring for the full
-    # grounding, including why --changed-use alone covers this pilot's
+    # grounding, including why --changed-use alone covers portuale's
     # whole share of real --reinstall's own contribution. --newrepo is
     # one of real create_depgraph_params.py's own listed triggers too
     # (confirmed by reading it, line ~147: "--newrepo" in myopts). An
@@ -13942,7 +13942,7 @@ def run(args):
 
     # --autounmask/--autounmask-keep-keywords/--autounmask-use: real
     # create_depgraph_params.py's own default-resolution logic,
-    # simplified for this pilot's own v1 scope (--autounmask-license/
+    # simplified for portuale's own v1 scope (--autounmask-license/
     # -masks still aren't read at all). Real logic: autounmask itself
     # defaults to enabled (only --autounmask=n turns the whole feature
     # off). autounmask_keep_keywords (real: "suppress keyword
@@ -14185,12 +14185,12 @@ def run(args):
         # Real ResolverOutput._blockers (output.py:75-123). Purely
         # informational (see resolve_pretend_graph's doc comment): v1
         # neither refuses nor changes the exit code for a blocker match.
-        # This pilot only ever reports an *unsatisfied* blocker (it never
+        # Portuale only ever reports an *unsatisfied* blocker (it never
         # resolves one away), so real `blocker.satisfied` is always False
         # here: the bracket letter is always the red `B` / style
         # PKG_BLOCKER, never the teal `b` / PKG_BLOCKER_SATISFIED branch.
         # `resolved` is real `dep_expand(str(atom).lstrip("!"))` -- a
-        # category-qualification only, and every pilot blocker atom is
+        # category-qualification only, and every portuale blocker atom is
         # already `cat/pkg[...]`, so it reduces to stripping the leading
         # `!`/`!!`. Real's `(is <desc> <parents>)` alternative
         # (`self.resolved == blocker.atom`) is unreachable: `resolved`
@@ -14327,7 +14327,7 @@ def run(args):
         # with where it actually installs -- exactly as real portage
         # annotates any entry whose own pkg.root_config.settings["ROOT"]
         # != "/". Deliberately narrower than that real gate, though: this
-        # pilot annotates only the running-root build entries, never
+        # portuale annotates only the running-root build entries, never
         # every entry merged under a non-"/" ROOT, since that would make
         # every fixture test emit its own non-deterministic mktemp -d
         # ROOT path (see pretend.rs's own root_suffix docstring). "" for
@@ -14570,7 +14570,7 @@ def run(args):
             # a brand-new package; the other-slot version list real
             # portage shows for a new-slot install (myoldbest =
             # installed_versions) is deferred to a follow-up increment
-            # (this pilot doesn't carry the other-slot versions yet).
+            # (portuale doesn't carry the other-slot versions yet).
             emit(field(new=True, new_slot=new_slot_flag), outcome[1])
             print_blockers(category, package, outcome[1], blockers)
         elif tag == "upgrade":
@@ -14589,7 +14589,7 @@ def run(args):
             # -> attr.replace (the yellow R at column 2), and myoldbest
             # stays empty for a same-slot/same-repo reinstall -> no
             # [from]. Real portage's -pv shows no inline "why" for a
-            # reinstall at all -- the pilot's former "(reinstall for
+            # reinstall at all -- portuale's former "(reinstall for
             # changed ...)" prose is dropped here (the USE diff still
             # shows in the USE="..." section for --changed-use;
             # --changed-deps/--changed-slot reasons are genuinely
@@ -14656,12 +14656,12 @@ def run(args):
 
     def print_tree(entries):
         # --tree/-t: indents each entry under whichever other entry's own
-        # dependency string reached it. Pilot-specific simplification,
+        # dependency string reached it. Portuale-specific simplification,
         # NOT a faithful port of real output_helpers.py's own
         # _tree_display -- see pretend.rs's own print_tree docstring for
         # the full grounding on why a faithful port isn't tractable here
         # (no merge scheduler, no real bidirectional digraph) and the
-        # design this pilot uses instead: invert each entry's own
+        # design portuale uses instead: invert each entry's own
         # required_by (already "every distinct owner, sorted") into a
         # children map, walk it from the top-level/requested entries as
         # roots in their own entries order (now real portage's
@@ -14673,7 +14673,7 @@ def run(args):
         # unordered_display chooses child order at each level: entries'
         # own order when true (merge order now, not raw BFS discovery),
         # versus alphabetical-by-(category, package) when false (this
-        # pilot's own deterministic default). Any entry
+        # portuale's own deterministic default). Any entry
         # never reached from a root at all (shouldn't normally happen) is
         # still printed, unindented, after the tree itself, rather than
         # silently dropped. Mirrors pretend.rs's own print_tree exactly.
@@ -14864,7 +14864,7 @@ def run(args):
 
     # --changed-deps-report: real _changed_deps_report's own WARN block,
     # ported verbatim (real portage colorizes it when the terminal
-    # supports it; this pilot, like every other message it prints, stays
+    # supports it; portuale, like every other message it prints, stays
     # plain text). Already empty unless changed_deps_report was given
     # AND changed_deps was NOT (see resolve_pretend_graph's own
     # docstring for that gating), so no extra condition needed here
@@ -14914,7 +14914,7 @@ def run(args):
     # the merge list, then the action fails (exit 1). Faithful
     # transcription of _show_circular_deps's writemsg sequence, minus the
     # reduced cycle-only --tree re-display (+ its leading "\n\n") and
-    # _find_suggestions's USE-flag heuristic (the pilot always hits the
+    # _find_suggestions's USE-flag heuristic (portuale always hits the
     # generic-advisory else branch). Every cycle edge is build-time by
     # construction, so every priority label is "(buildtime)". Mirrors
     # pretend.rs.

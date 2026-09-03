@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Neutral CLI test-harness binary (Python side) for the versions-comparison
-pilot -- see docs/agent-context.md, "Test/benchmark harness architecture". Wraps
+portuale -- see docs/agent-context.md, "Test/benchmark harness architecture". Wraps
 portage.versions instead of the real product CLI, and exposes the same
 argv/output contract as the Rust harness at
 rust/versions-harness so both can be driven identically by a

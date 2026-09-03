@@ -1,4 +1,4 @@
-"""Black-box contract suite for the use_reduce(flat=True) pilot (see
+"""Black-box contract suite for the use_reduce(flat=True) portuale (see
 docs/agent-context.md and rust/use-reduce-harness/src/use_reduce.rs).
 Drives the Python harness (a thin wrapper around the real
 portage.dep.use_reduce) and the Rust harness identically via subprocess,

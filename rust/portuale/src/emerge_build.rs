@@ -30,7 +30,7 @@
 // winning version in the first place.
 //
 // KNOWN, DOCUMENTED GAPS (same "narrow v1, document the cut" pattern as
-// every other real-execution slice in this pilot):
+// every other real-execution slice in portuale):
 //   - A `CandidateSource::Binary` entry (would only appear via
 //     `--usepkg`) is skipped outright -- it's already a binary, there is
 //     nothing to build.
@@ -40,7 +40,7 @@
 //     above were relaxed, a dep would still build before its dependent.
 //   - A build failure aborts immediately, unless real `--keep-going` is
 //     given (now real, see `run_buildpkgonly`'s own doc comment) -- no
-//     cleanup of any already-built packages either way, this pilot's
+//     cleanup of any already-built packages either way, portuale's
 //     own single-invocation-at-a-time CLI usage never needs partial-
 //     build cleanup.
 
@@ -100,9 +100,9 @@ fn ebuild_path(candidate: &Candidate, category: &str, package: &str, version: &s
 /// `entries` that real `--buildpkgonly` would build -- see the module
 /// doc comment for the full scope. Without `keep_going`, returns the
 /// *first* failure encountered (message already includes which package
-/// failed) and stops there, matching this pilot's own long-established
+/// failed) and stops there, matching portuale's own long-established
 /// default. With real `--keep-going` (real `main.py`'s own `y_or_n`
-/// option, narrowed by this pilot's own CLI transcription to the bare/
+/// option, narrowed by portuale's own CLI transcription to the bare/
 /// `y` form -- see `pretend.rs`'s own `keep_going` doc comment), every
 /// entry is still attempted regardless of earlier failures -- safe here
 /// specifically because the gate `pretend.rs` already checks before
@@ -179,7 +179,7 @@ pub fn run_buildpkgonly(
 }
 
 /// Real `emerge <atom>` with no `--pretend` and no `--buildpkgonly`/
-/// `--getbinpkgonly`: the pilot's first source build-and-merge path for
+/// `--getbinpkgonly`: portuale's first source build-and-merge path for
 /// `emerge` itself. Iterates the resolved entries (already in real
 /// dependency-first merge order, so every dependency merges before its
 /// dependents), and for each `New` **source** entry runs the full real
@@ -268,7 +268,7 @@ pub(crate) fn entry_matches_any(entry: &GraphEntry, atoms: &[String]) -> bool {
 
 /// The shared per-entry loop for `run_source_merge` /
 /// `emerge_getbinpkg::run_merge_plan`. Without `keep_going` it stops at
-/// the first failure (`merge_one`'s own `Err`), the pilot's long-
+/// the first failure (`merge_one`'s own `Err`), portuale's long-
 /// standing default. With real `--keep-going` (real `Scheduler`'s own
 /// `_calc_resume_list`) it records the failure, drops every entry that
 /// (transitively) depends on the failed one via the `GraphEntry`'s
@@ -608,7 +608,7 @@ fn build_one_source_entry(
     // A captured parallel build runs through real `bash` (not the
     // embedded `brush`), whose stdout+stderr redirect to `build.log`
     // cleanly at the OS level -- real portage uses real bash for builds
-    // regardless of the pilot's default backend.
+    // regardless of portuale's default backend.
     let shell = if log_path.is_some() {
         ebuild_phases::ShellBackend::Bash
     } else {

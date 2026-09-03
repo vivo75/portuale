@@ -173,7 +173,7 @@ def test_ebuild_rejects_an_unrecognized_option(ebuild_binary):
     in bin/ebuild's own option surface at all is rejected immediately
     and specifically, unlike real bin/ebuild's own argparse (which uses
     parse_known_args and would silently swallow it into the positional
-    args instead -- see ebuild.rs's doc comment for why this pilot
+    args instead -- see ebuild.rs's doc comment for why portuale
     deviates)."""
     result = subprocess.run(
         [str(ebuild_binary), "--not-a-real-option", "foo-1.0.ebuild", "clean"],
@@ -340,7 +340,7 @@ def test_ebuild_debug_flag_enables_real_set_x_tracing(ebuild_binary, tmp_path):
 def _real_build_env(tmp_path):
     """`ROOT` stays the real, read-only fixture tree (`run_package`'s own
     real chain never writes under `ROOT` at all -- only `${D}`/`PKGDIR`,
-    both `tmp_path`-relative here), matching how this pilot's own manual
+    both `tmp_path`-relative here), matching how portuale's own manual
     verification of `ebuild <file> package` and `emerge --buildpkgonly`
     already proved this is safe."""
     env = _fixture_env()
@@ -354,7 +354,7 @@ def test_emerge_buildpkgonly_without_pretend_really_builds_a_binary_package(
 ):
     """The feature this whole slice is about: `emerge --buildpkgonly
     <atom>` -- deliberately WITHOUT `--pretend` -- is the one real,
-    non-dry-run execution path this pilot implements for `emerge`
+    non-dry-run execution path portuale implements for `emerge`
     itself (see emerge_build.rs's own module doc comment). `packagepkg`
     RDEPENDs on `samepkg`, which the shared fixture ROOT already has an
     installed vdb entry for, so --buildpkgonly's own real depgraph gate
@@ -537,7 +537,7 @@ def test_emerge_atom_without_pretend_really_builds_and_merges_from_source(
     emerge_binary, tmp_path
 ):
     """A plain `emerge <atom>` (no --pretend, no --buildpkgonly/-G) is the
-    pilot's first real source build-and-merge for `emerge` itself
+    portuale's first real source build-and-merge for `emerge` itself
     (emerge_build::run_source_merge): resolve the graph, then for each New
     source entry run the full `install` phase chain + the vdb merge
     (ebuild_merge::run_merge). `dev-libs/packagepkg` RDEPENDs on
@@ -922,7 +922,7 @@ def test_emerge_jobs_builds_independent_packages_in_parallel(emerge_binary, tmp_
 
     # Real `--quiet-build` (on by default under `--jobs`): each build's
     # own phase output is captured to `${T}/build.log`, NOT interleaved on
-    # the parsable stdout. Every stdout line is a pilot-emitted `>>>` /
+    # the parsable stdout. Every stdout line is a portuale-emitted `>>>` /
     # `[ebuild` line, never a stray phase / shell diagnostic.
     for line in out.splitlines():
         assert line.startswith((">>>", "[ebuild", "[blocks", "[nomerge")), repr(line)
@@ -953,7 +953,7 @@ def test_emerge_quiet_build_redirects_a_single_job_build_to_the_log(
 
     log_rel = "portage/dev-libs/packagepkg-1.0/temp/build.log"
 
-    # --quiet-build=y: stdout carries only the pilot's own `>>>` /
+    # --quiet-build=y: stdout carries only portuale's own `>>>` /
     # `[ebuild` lines; the phase output landed in build.log.
     root, env = _root(0)
     r = subprocess.run(
@@ -1880,7 +1880,7 @@ def test_emerge_config_rejects_multiple_atoms_and_reports_missing(emerge_binary,
 def test_emerge_config_shell_flag_selects_the_pkg_config_backend(
     emerge_binary, tmp_path
 ):
-    """`emerge --config --shell bash|brush <atom>`: the pilot-only
+    """`emerge --config --shell bash|brush <atom>`: the portuale-only
     `--shell` flag now reaches the `pkg_config` phase too (real
     `action_config` -> `doebuild(ebuildpath, "config", ...)`), not just a
     real merge. Both backends run `dev-libs/emergeconfigpkg`'s own
@@ -2170,7 +2170,7 @@ def test_ebuild_install_restrict_fetch_never_downloads_the_plain_uri(
 def test_ebuild_install_really_inherits_a_real_eclass(ebuild_binary, tmp_path):
     """`dev-libs/eclasspkg` really `inherit`s a real (if fixture-only)
     eclass, `pilotcheck.eclass`, via real, unmodified `bin/ebuild.sh`'s
-    own `inherit()` function -- previously this pilot never populated
+    own `inherit()` function -- previously portuale never populated
     `PORTAGE_ECLASS_LOCATIONS` at all, so this would have `die`d
     immediately with `"pilotcheck.eclass could not be found by
     inherit()"`. Confirmed live against a real system before this fix:
@@ -2292,7 +2292,7 @@ def test_ebuild_shell_accepts_the_inline_equals_form(ebuild_binary, tmp_path):
 
 
 def test_ebuild_shell_rejects_an_invalid_value(ebuild_binary):
-    """A pilot-only flag, not a real `bin/ebuild` option -- so unlike
+    """A portuale-only flag, not a real `bin/ebuild` option -- so unlike
     every real `Kind::Value` option (which accepts any string, unchecked)
     `--shell` validates its own value against exactly `"bash"`/
     `"brush"`."""
@@ -2486,7 +2486,7 @@ def test_ebuild_sandbox_denies_and_fails_on_a_write_outside_the_build_tree(
     """FEATURES=sandbox (SCOPE_BACKLOG Part 2.D): the six real src_* phases
     run wrapped in the sys-apps/sandbox binary (real portage's own
     spawn_sandbox). `dev-libs/fssandboxpkg`'s src_install writes a legit
-    file into ${D} and also tries to write /var/lib/portage-pilot-sandbox-
+    file into ${D} and also tries to write /var/lib/portage-portuale-sandbox-
     probe; with the feature on, `sandbox` denies the stray write, records
     it in ${T}/sandbox.log, and exits non-zero -- so `ebuild install`
     fails."""
@@ -2507,7 +2507,7 @@ def test_ebuild_sandbox_denies_and_fails_on_a_write_outside_the_build_tree(
     assert "ACCESS DENIED" in result.stderr
     log = tmp_path / "pt" / _FSSANDBOX_SANDBOX_LOG
     assert log.is_file() and log.stat().st_size > 0
-    assert "/var/lib/portage-pilot-sandbox-probe" in log.read_text()
+    assert "/var/lib/portage-portuale-sandbox-probe" in log.read_text()
 
 
 def test_ebuild_without_sandbox_tolerates_the_same_stray_write(

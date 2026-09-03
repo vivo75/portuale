@@ -28,14 +28,14 @@
 // time -- unless `NOCONFMEM` is set (real `--noconfmem`: an `emerge`-only
 // CLI flag, real `lib/_emerge/actions.py:2790`, that lands as
 // `settings["NOCONFMEM"]`, real `vartree.py:4949`'s own `cfgfiledict[
-// "IGNORE"]`; real `bin/ebuild` has no such flag at all, so this pilot
+// "IGNORE"]`; real `bin/ebuild` has no such flag at all, so portuale
 // reads the env var directly, the same "env var, not full config
 // resolution" shortcut `CONFIG_PROTECT` itself already uses), which
 // forces every already-offered update to be re-protected into a fresh
 // `._cfgNNNN_` file regardless of memory. `CONFIG_PROTECT`/
 // `CONFIG_PROTECT_MASK`/`NOCONFMEM` are read via env vars at the
 // `ebuild.rs` CLI boundary (bundled into `MergeOptions`, deliberately a
-// struct and not more positional parameters -- this pilot already
+// struct and not more positional parameters -- portuale already
 // relearned the "positional-parameter pain" lesson once, in `--newrepo`'s
 // own bulk-fix saga), defaulting to real `make.globals`'s own
 // `CONFIG_PROTECT="/etc"`/`CONFIG_PROTECT_MASK="/etc/env.d"` (`NOCONFMEM`
@@ -50,7 +50,7 @@
 // real too now (`vartree.py:4409-4418`/`5849-5866`): `installed_
 // instance_pf` picks the max-`COUNTER` same-slot instance this merge is
 // upgrading over (reusing the same real per-package `COUNTER` this
-// pilot already writes on every merge), and `protect_decision` consults
+// portuale already writes on every merge), and `protect_decision` consults
 // its own real `CONTENTS` (`owned_node_value_pf`) for two distinct real
 // behaviors: a path it recorded that's now missing entirely on disk
 // (the admin deleted it) always force-diverts (real bug #523684); and,
@@ -103,7 +103,7 @@
 // own `json.dumps(indent="\t", sort_keys=True)`) -- read/written with a
 // small hand-rolled parser/writer (`read_plib_registry`/
 // `write_plib_registry`) rather than a new `serde_json` dependency,
-// matching this pilot's own "small, format-specific parser over a
+// matching portuale's own "small, format-specific parser over a
 // generic dependency" precedent (`--json` output, `SRC_URI`'s grammar,
 // `grabdict`-format `thirdpartymirrors`).
 //
@@ -124,7 +124,7 @@
 // `mypkglist = others_in_slot + blockers`. Real `dblink._blockers` is
 // never computed by `dblink` itself -- it's injected by the real
 // depgraph resolver, which already knows the full dependency graph by
-// the time a merge runs. This pilot's own `ebuild <file> merge` has no
+// the time a merge runs. Portuale's own `ebuild <file> merge` has no
 // depgraph at all (a standalone, single-ebuild real-execution path,
 // unlike `emerge --pretend`), so `blocked_installed_packages` is new,
 // self-contained machinery: real `repos.conf`/profile/USE config
@@ -138,7 +138,7 @@
 // match_from_list`). Degrades gracefully to an empty blocked set on any
 // resolution failure -- see `MergeOptions::config_root`'s own doc
 // comment for a real safety issue this surfaced and how it was fixed
-// (this pilot's own dev/test machine has a real, populated
+// (portuale's own dev/test machine has a real, populated
 // `/etc/portage/repos.conf`, so an ambient env-var default here would
 // have made every pre-existing test silently start reading real host
 // config).
@@ -160,11 +160,11 @@
 //     `std::fs::set_permissions` after the copy (on top of the mode bits
 //     `std::fs::copy` already carries over on Unix). Real `movefile()`'s
 //     `os.lchown` is still not reproduced -- it needs root, which this
-//     pilot's single-user dev/test context never has, so it would only
+//     portuale's single-user dev/test context never has, so it would only
 //     ever no-op; there's no privilege-dropping concept anywhere else in
-//     the pilot either.
+//     portuale either.
 //   - Directory-entry merge order is sorted by filename for determinism
-//     (this pilot's own test-reproducibility need) rather than real
+//     (portuale's own test-reproducibility need) rather than real
 //     `os.listdir()`'s own arbitrary/OS-dependent order -- a deliberate
 //     choice, not a gap: `CONTENTS` line order has no semantic meaning
 //     portage itself relies on (unmerge re-sorts, `qmerge`/`qlist` sort
@@ -204,7 +204,7 @@ pub fn is_real_qmerge_command(command: &str) -> bool {
 }
 
 /// Options for `run_merge`, bundled into a struct rather than more
-/// positional parameters -- this pilot already relearned the
+/// positional parameters -- portuale already relearned the
 /// "positional-parameter pain" lesson once, in `--newrepo`'s own
 /// bulk-fix saga. `config_protect`/`config_protect_mask` are env-var-
 /// sourced at the `ebuild.rs` CLI boundary, the same "env var, not full
@@ -232,7 +232,7 @@ pub struct MergeOptions {
     /// incorrectly claiming the same "not in FEATURES by default"
     /// reasoning `collision_protect` genuinely has). `Default` is now
     /// `true`, matching real portage's own actual out-of-the-box
-    /// behavior. This pilot's own env-var read still only checks
+    /// behavior. Portuale's own env-var read still only checks
     /// whether the literal `FEATURES` value (when set at all) contains
     /// the `"protect-owned"` token -- it doesn't *accumulate* onto the
     /// real default set the way real portage's own `+`/`-`-prefixed
@@ -245,7 +245,7 @@ pub struct MergeOptions {
     /// Real `--noconfmem`/`settings["NOCONFMEM"]` (`lib/_emerge/
     /// actions.py:2790`, `vartree.py:4949`'s own `cfgfiledict["IGNORE"]`):
     /// an `emerge`-only CLI flag with no real `bin/ebuild` equivalent, so
-    /// this pilot reads the `NOCONFMEM` env var directly (presence-based,
+    /// portuale reads the `NOCONFMEM` env var directly (presence-based,
     /// matching real `"NOCONFMEM" in self.settings`) rather than adding a
     /// CLI flag real `ebuild` doesn't have. Forces every already-offered,
     /// unmodified-since CONFIG_PROTECT update to be re-protected into a
@@ -273,7 +273,7 @@ pub struct MergeOptions {
     /// "explicit parameter, not an ambient env read inside library code"
     /// reasoning `portage_fetch::FetchOptions::gentoo_mirrors` already
     /// established, load-bearing here for a genuinely different reason:
-    /// this pilot's own dev/test machine has a real, populated
+    /// portuale's own dev/test machine has a real, populated
     /// `/etc/portage/repos.conf` (a real Gentoo system), so silently
     /// defaulting to real `/` the way `ebuild.rs`'s own CLI boundary
     /// does would make every test that doesn't override this field read
@@ -326,7 +326,7 @@ impl MergeOptions {
     /// Real portage's own `settings`-derived merge configuration, but via
     /// the same "read the env var, fall back to `make.globals`'s own
     /// default" shortcut every other real-execution CLI boundary in this
-    /// pilot already takes (`PORTAGE_TMPDIR`/`PKGDIR`/... -- no full
+    /// portuale already takes (`PORTAGE_TMPDIR`/`PKGDIR`/... -- no full
     /// profile+`make.conf` resolution): `CONFIG_PROTECT`/
     /// `CONFIG_PROTECT_MASK`, `DISTDIR`, the `FEATURES` tokens
     /// `collision-protect`/`protect-owned`/`config-protect-if-modified`,
@@ -613,7 +613,7 @@ fn protect_decision(
 /// path" memory (real `grabdict`/`writedict`'s own `"path value\n"`
 /// format) -- without it, re-merging an already-protected update would
 /// spawn a fresh `._cfgNNNN_` file every single time, even though the
-/// admin has already been shown this exact change once. This pilot's
+/// admin has already been shown this exact change once. Portuale's
 /// own `ebuild` CLI has no `--noconfmem` flag, so behavior always
 /// matches real portage's own default (`--noconfmem` off).
 fn cfg_mem_path(root: &Path) -> PathBuf {
@@ -931,7 +931,7 @@ fn unregister_preserved_libs(
 /// all (real `except OSError: ... new_needed` stays `None`), nothing is
 /// written, matching real `if new_needed is not None:` in
 /// `writeContentsToContentsFile`. When it does exist, every entry whose
-/// own `filename` (already `ROOT`-relative, this pilot's own `CONTENTS`/
+/// own `filename` (already `ROOT`-relative, portuale's own `CONTENTS`/
 /// `NEEDED.ELF.2` convention -- no `os.path.join(root, ...)` needed the
 /// way real Python does, since both sides already agree on the same
 /// convention here) still appears among the *surviving* `CONTENTS`
@@ -1031,13 +1031,13 @@ fn register_preserved_libs(
 /// from real `unmerge()` with `unmerge=True` right before real
 /// `_unmerge_pkgfiles()` runs (`vartree.py:2493`/`2529` -- confirmed by
 /// reading the real call site, not just the method itself), narrowed to
-/// the one real shape this pilot's own standalone `ebuild <file>
+/// the one real shape portuale's own standalone `ebuild <file>
 /// unmerge` always reaches: `unmerge_with_replacement=False`. Real
 /// `preserve_paths` (a `_prune_plib_registry` parameter, not to be
 /// confused with this function's own *return* value) is only ever
 /// non-`None` when a real depgraph-driven upgrade transaction already
 /// computed it via a companion `merge()` call in the *same* transaction
-/// -- this pilot's own `merge`/`unmerge` are always separate,
+/// -- portuale's own `merge`/`unmerge` are always separate,
 /// independent CLI invocations, so this is always the real shape that
 /// applies (real `instance_owns_files and not unmerge_with_replacement`
 /// collapses to just `instance_owns_files`).
@@ -1058,10 +1058,10 @@ fn register_preserved_libs(
 /// new keeper of those paths (real `plib_registry.register`).
 ///
 /// Returns the set of preserved paths (already `ROOT`-relative absolute
-/// paths, this pilot's own `CONTENTS` convention) -- the caller is
+/// paths, portuale's own `CONTENTS` convention) -- the caller is
 /// responsible for excluding them from its own real file-removal loop
 /// (real "remove the preserved files from our contents so that they
-/// won't be unmerged"; this pilot's own vdb entry directory gets deleted
+/// won't be unmerged"; portuale's own vdb entry directory gets deleted
 /// wholesale moments later regardless, so there's no separate real
 /// `CONTENTS`-file rewrite to also perform here).
 pub(crate) fn preserve_libs_on_unmerge(
@@ -1375,7 +1375,7 @@ fn merge_tree(
                     // Real `movefile()` explicitly `os.chmod(dest,
                     // sstat.st_mode)`s after the copy/rename (and
                     // `os.lchown`s -- omitted here: it needs root, which
-                    // this pilot's single-user dev/test context never
+                    // portuale's single-user dev/test context never
                     // has, and would only ever no-op). `std::fs::copy`
                     // already carries a regular file's permission bits
                     // over on Unix, so this is belt-and-suspenders that
@@ -1442,7 +1442,7 @@ fn merge_tree(
                 // what type of file it's moving (real `movefile()`'s own
                 // comment: "we don't yet handle special, so we need to
                 // fall back to /bin/mv" only fires on a genuine cross-
-                // device `EXDEV` failure). This pilot's own merge step
+                // device `EXDEV` failure). Portuale's own merge step
                 // never moves `${D}` content though (every other branch
                 // above copies/recreates instead, so `${D}` itself stays
                 // intact) -- recreating a fresh node at `write_dest` via
@@ -1473,7 +1473,7 @@ fn merge_tree(
 /// (`st_rdev`) -- the "recreate, don't move" equivalent of real
 /// `movefile()`'s ordinary same-device `rename(2)` for a special file
 /// (see `merge_tree`'s own `fif`/`dev` branch doc comment for why this
-/// pilot recreates rather than moves). `mkfifo(3)`/`mknod(3)` both apply
+/// portuale recreates rather than moves). `mkfifo(3)`/`mknod(3)` both apply
 /// the process umask to the mode given, unlike `std::fs::copy`'s own
 /// automatic exact permission-bit preservation for a regular file -- an
 /// explicit `chmod` afterward closes that gap, so a real, non-default
@@ -1541,7 +1541,7 @@ fn create_special_node(
 /// `get_counter_tick_core()`'s own extra safety net of scanning every
 /// already-installed package's own `COUNTER` for a higher value, in case
 /// the global file itself is stale/corrupt relative to the vdb -- a
-/// corner case with no real relevance to this pilot's own synthetic
+/// corner case with no real relevance to portuale's own synthetic
 /// fixtures.
 fn next_counter(root: &Path) -> Result<i64, String> {
     let counter_path = root.join("var/cache/edb/counter");
@@ -1576,7 +1576,7 @@ const MERGING_IDENTIFIER: &str = "-MERGING-";
 /// `environment.bz2`, the `<PF>.ebuild` copy) lands in the vdb. Then the
 /// merge-generated files that were never in `build-info` are written on
 /// top: `CONTENTS` (the real file list, built during the copy loop) and
-/// `COUNTER` (real `cpv_counter`, this pilot's own `next_counter`).
+/// `COUNTER` (real `cpv_counter`, portuale's own `next_counter`).
 /// `CATEGORY`/`SLOT`/`repository` are re-asserted explicitly too -- a
 /// standalone `ebuild <file> install` outside a repo checkout has no
 /// `build-info/repository`, and `SLOT` here is the sub-slot-stripped
@@ -1687,7 +1687,7 @@ pub(crate) fn read_installed_slot(
 /// Real `self._installed_instance` selection (`vartree.py:4409-4418`):
 /// among every other real, currently-installed version of this exact
 /// `category/package/slot`, the one with the highest real `COUNTER`
-/// (real `cpv_counter`, this pilot's own real per-package `COUNTER` file
+/// (real `cpv_counter`, portuale's own real per-package `COUNTER` file
 /// -- see `next_counter`'s own doc comment) -- `None` when none exist (a
 /// first-ever install, or every other same-slot instance's own
 /// `COUNTER` is unreadable). Real `_installed_instance` is only ever
@@ -1837,7 +1837,7 @@ fn owned_node_value_pf(
 /// `own_versions`). Real `dblink._blockers` is never computed by
 /// `dblink` itself: it's injected by the real depgraph resolver, which
 /// already knows the full dependency graph by the time a merge runs.
-/// This pilot's own `ebuild <file> merge` has no depgraph at all (a
+/// Portuale's own `ebuild <file> merge` has no depgraph at all (a
 /// standalone, single-ebuild real-execution path, unlike `emerge
 /// --pretend`) -- so this is a new, self-contained computation:
 /// resolves real `repos.conf`/profile/USE config for the merging
@@ -1851,7 +1851,7 @@ fn owned_node_value_pf(
 /// it, and matches every blocker atom found (`!atom`/`!!atom`,
 /// `portage_dep::parse_atom`'s own `.blocker`) against every real
 /// installed package (`portage_dep::match_from_list`, which -- real,
-/// verified behavior already relied on elsewhere in this pilot --
+/// verified behavior already relied on elsewhere in portuale --
 /// ignores an atom's blocker marker entirely when matching, so the
 /// blocker atom string can be passed in as-is). Real weak vs. strong
 /// blockers are not distinguished (`dblink.merge()`'s own `mypkglist`
@@ -1863,7 +1863,7 @@ fn owned_node_value_pf(
 /// (missing `repos.conf`, unreadable md5-cache, an ebuild path outside
 /// any real repo, etc.) -- config resolution isn't guaranteed to
 /// succeed in every context `ebuild <file> merge` is used from (unlike
-/// `emerge --pretend`, this pilot's own real-execution CLI has never
+/// `emerge --pretend`, portuale's own real-execution CLI has never
 /// required it before this slice), and a collision that would have been
 /// excluded here just gets reported as an ordinary one instead: never a
 /// false negative in the direction that could silently corrupt a real
@@ -2140,7 +2140,7 @@ fn find_collisions(
 /// Real `vardbapi._owners.get_owners()`, narrowed: for each of
 /// `collisions`, walks every installed package under `<root>/var/db/
 /// pkg` (all categories, all packages -- real portage keeps a
-/// persistent reverse index for this; this pilot just scans fresh every
+/// persistent reverse index for this; portuale just scans fresh every
 /// time, acceptable for a real, but not performance-critical, error-
 /// reporting path only reached when a merge is about to abort anyway)
 /// and returns the `category/pf` -> claimed-paths map for whichever
@@ -2191,7 +2191,7 @@ fn find_owners(root: &Path, collisions: &[String]) -> BTreeMap<String, Vec<Strin
 }
 
 /// Real "package NOT merged due to file collisions" abort message,
-/// narrowed to what this pilot can cheaply compute (see this module's
+/// narrowed to what portuale can cheaply compute (see this module's
 /// own module doc comment): every colliding path, annotated with
 /// whichever other real installed package(s) `find_owners` found
 /// actually claiming it (`(unclaimed)` when none did -- a real,
@@ -2301,9 +2301,9 @@ pub fn run_merge(
 /// which runs `install` first) already populated `${D}` -- gated on the
 /// same real marker real `doebuild()` itself checks, `${PORTAGE_BUILDDIR}/
 /// .installed` (see `Environment::installed_marker`'s own doc comment for
-/// why this pilot doesn't need to write it itself). Real portage doesn't
+/// why portuale doesn't need to write it itself). Real portage doesn't
 /// treat a missing marker as a hard failure (`writemsg(...); return 1`,
-/// not a raised exception) -- this pilot's own established idiom for
+/// not a raised exception) -- portuale's own established idiom for
 /// surfacing an internal message through `ebuild.rs`'s own `Err` ->
 /// `eprintln!("ebuild: {e}")` path still produces the same real exit code
 /// (1) either way (see `ebuild.rs`'s own `Ok(_) => ExitCode::from(1)`
@@ -2488,7 +2488,7 @@ fn merge_after_install(
 /// `pkg_postrm` runs from *that* version's own vdb-stored
 /// `environment.bz2` + `<pf>.ebuild` (`ebuild_phases::
 /// run_phase_from_saved_env`, gated on its recorded `DEFINED_PHASES`) --
-/// a version merged before the pilot kept those files, or via a bare
+/// a version merged before portuale kept those files, or via a bare
 /// `ebuild <file> merge` of an older build, has neither and its rm
 /// hooks are skipped (documented degrade). Only the files the new
 /// version does **not** itself own are deleted (`also_keep = [new_pf]`,
@@ -2592,7 +2592,7 @@ pub(crate) fn unmerge_replaced_same_slot(
 /// `<category>/<pf>`. Both phase hooks run from *that version's own*
 /// vdb-stored `environment.bz2` + `<pf>.ebuild`
 /// (`ebuild_phases::run_phase_from_saved_env`, gated on its recorded
-/// `DEFINED_PHASES`); a version installed before the pilot kept those
+/// `DEFINED_PHASES`); a version installed before portuale kept those
 /// files has neither and its rm hooks are skipped (documented degrade).
 /// A phase failure is logged, never fatal -- real `treewalk()`'s replace
 /// loop is a literal `# TODO: Check status and abort if necessary` that
@@ -2704,7 +2704,7 @@ pub(crate) fn unmerge_one_installed(
 /// `scratch_dir` as `<cat>/<pn>/<pf>.ebuild` so `compute_environment`'s
 /// `<cat>/<pn>/<pf>.ebuild` path parse works (the vdb layout is
 /// `<cat>/<pf>/<pf>.ebuild`). Errors if the vdb entry carries no saved
-/// environment or ebuild (a package installed before the pilot started
+/// environment or ebuild (a package installed before portuale started
 /// keeping them). Unlike `unmerge_one_installed`'s own internal hook
 /// runner this does **not** gate on `DEFINED_PHASES` -- the caller
 /// decides (real `emerge --config` runs `pkg_config` unconditionally,
@@ -2783,7 +2783,7 @@ pub(crate) fn run_vdb_saved_env_phase(
 /// **v1 cuts, all deliberate** (same "narrow the first slice, document
 /// it" pattern as every other real-execution feature here):
 ///   - a binpkg (or a replaced version) carrying no `environment.bz2` /
-///     `<pf>.ebuild` -- older, or built before the pilot kept them --
+///     `<pf>.ebuild` -- older, or built before portuale kept them --
 ///     gets no hooks: a documented degrade, not a fallback to
 ///     re-sourcing the ebuild.
 ///   - a *different*-slot installed version is left untouched (real slot
@@ -2859,7 +2859,7 @@ pub fn merge_binpkg(
     // Gated on `DEFINED_PHASES` (real `_defined_phases`) so a binpkg
     // that defines neither -- the common case -- spawns no shell at all.
     // Both files must be present (an older binpkg, or one built before
-    // the pilot kept them, gets no hooks -- a documented degrade).
+    // portuale kept them, gets no hooks -- a documented degrade).
     let defined_phases = meta_get("DEFINED_PHASES").unwrap_or_default();
     let phase_defined = |p: &str| defined_phases.split_whitespace().any(|d| d == p);
     let saved_env = build_info.join("environment.bz2");
@@ -4709,7 +4709,7 @@ mod tests {
     }
 
     /// Real `_prune_plib_registry`'s own early-exit shape for a package
-    /// that owns no files at all (empty `CONTENTS`): this pilot's own
+    /// that owns no files at all (empty `CONTENTS`): portuale's own
     /// `preserve_libs_on_unmerge` short-circuits to an empty preserved
     /// set without touching the registry or rebuilding the linkage map.
     #[test]
@@ -4721,7 +4721,7 @@ mod tests {
         assert!(!plib_registry_path(&tmp).exists());
     }
 
-    /// Sanity baseline (this pilot's own "fixtures must actually
+    /// Sanity baseline (portuale's own "fixtures must actually
     /// distinguish the new behavior" rule): with no preserve-libs
     /// registry entry at all, `preservepkg-new` colliding with
     /// `preservepkg-old` on the exact same path is an ordinary
@@ -4763,7 +4763,7 @@ mod tests {
 
     /// Real `_collision_protect`'s own preserve-libs exclusion: with
     /// `preservepkg-old`'s own already-merged file registered in
-    /// `preserved_libs_registry` (hand-seeded here -- this pilot has no
+    /// `preserved_libs_registry` (hand-seeded here -- portuale has no
     /// registration/detection side yet, see this module's own doc
     /// comment), `preservepkg-new` colliding on that exact path is
     /// excluded from collision-protect's abort entirely (even with
@@ -4934,7 +4934,7 @@ mod tests {
     /// node in place too, matching real `_unmerge_pkgfiles()`'s own
     /// `"fif"`/`"dev"` branches never calling `unlink()` at all (see
     /// `ebuild_unmerge::remove_contents`'s own doc comment) -- this
-    /// pilot's own vdb entry is still removed as normal either way.
+    /// portuale's own vdb entry is still removed as normal either way.
     #[test]
     fn real_merge_creates_a_real_fifo_and_records_a_fif_contents_line() {
         let tmp = tempdir();
@@ -5017,7 +5017,7 @@ mod tests {
     /// requires root/`CAP_MKNOD` for a *real* (nonzero major:minor)
     /// device on a real Linux system -- confirmed empirically both via a
     /// plain standalone `mknod(2)` call and via this very function, as
-    /// this pilot's own unprivileged dev/test user. (A privilege-free
+    /// portuale's own unprivileged dev/test user. (A privilege-free
     /// carve-out does exist for `mknod(path, S_IFCHR, 0)` specifically --
     /// the real kernel's own overlayfs "whiteout" convention, `dev_t ==
     /// 0` never being a usable real device -- which is precisely why
@@ -5112,7 +5112,7 @@ mod tests {
     /// `<ROOT>/sbin/ldconfig` (never a host `PATH` lookup -- see
     /// `env_update.rs`'s own module doc comment). Seeding a fake,
     /// marker-writing executable there before merging proves this
-    /// pilot's own real subprocess invocation, the same "prove it with a
+    /// portuale's own real subprocess invocation, the same "prove it with a
     /// marker file" style already used for `pkg_preinst`/`pkg_postinst`
     /// ordering elsewhere in this file.
     #[test]
@@ -5159,7 +5159,7 @@ mod tests {
     /// the real vdb entry, matching real `dblink.merge()`'s own
     /// `treewalk()` (`vartree.py:4912-4913`) copying it out of
     /// `build-info` (see `write_vdb_entry`'s own doc comment for why
-    /// this pilot copies only this one build-info file, not the whole
+    /// portuale copies only this one build-info file, not the whole
     /// directory). Installs a real, dynamically-linked ELF binary
     /// (`/bin/true`, whatever the real host machine actually has) so
     /// real `scanelf` has something genuine to report on.
@@ -5236,7 +5236,7 @@ mod tests {
     }
 
     /// Real, end-to-end proof of the full preserve-libs pipeline this
-    /// pilot's own `preserve_libs_on_unmerge` (see its own doc comment
+    /// portuale's own `preserve_libs_on_unmerge` (see its own doc comment
     /// above) actually wires into real `ebuild_unmerge::run_unmerge`:
     /// merge a real library, merge a real consumer that's genuinely
     /// linked against it (real `DT_NEEDED: libpreservetest.so.1`, baked
@@ -5323,7 +5323,7 @@ mod tests {
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures")
     }
 
-    /// Sanity baseline (this pilot's own "fixtures must actually
+    /// Sanity baseline (portuale's own "fixtures must actually
     /// distinguish the new behavior" rule): with `MergeOptions::default()`
     /// (its own deliberately-inert `config_root` sentinel, see that
     /// field's own doc comment), real config/USE resolution never even

@@ -32,7 +32,7 @@
 // `__check_bash_version` (called unconditionally at ebuild.sh's own
 // top level) checks `BASH_VERSINFO` against the EAPI's own minimum real
 // bash version -- brush reports one high enough to satisfy every EAPI
-// this pilot's own `portage_dep`/`portage_profile` crates already
+// portuale's own `portage_dep`/`portage_profile` crates already
 // recognize, confirmed empirically, not by reading brush's own
 // version-reporting code. Real `bin/ebuild.sh`'s own top-level code
 // ALSO already sources the ebuild file itself unconditionally
@@ -64,7 +64,7 @@
 // brush-core's own `Cargo.toml` requiring tokio's `rt-multi-thread`
 // feature under unix, not just `rt`.
 //
-// KNOWN, DOCUMENTED GAPS (v1 scope, matching this whole pilot's own
+// KNOWN, DOCUMENTED GAPS (v1 scope, matching portuale's own
 // "narrow v1, document the cut" pattern):
 //   - This module itself only runs the `actionmap_deps`-chained phases
 //     for real: `pretend`, `setup`, `unpack`, `prepare`, `configure`,
@@ -90,7 +90,7 @@
 //     same six real `src_*` phases (`unpack`/`prepare`/`configure`/
 //     `compile`/`test`/`install` -- real `_doebuild_spawn` sandboxes
 //     every phase not in `_unsandboxed_phases` and unshares every phase
-//     not in `_ipc_phases`; for the phases this pilot runs as real bash
+//     not in `_ipc_phases`; for the phases portuale runs as real bash
 //     both come out to this set, `SANDBOXED_SRC_PHASES`). Any one of
 //     them forces the `Bash` backend for those phases: neither an
 //     `unshare(2)` namespace nor an LD_PRELOAD `libsandbox.so` can
@@ -126,7 +126,7 @@
 //       carries no USE-reduced `RESTRICT`/`PROPERTIES`); SELinux
 //       sandbox; `userpriv` / `fakeroot` (single-user dev/test
 //       context); and, unlike real portage (which only unshares when
-//       `uid == 0`), this pilot always uses `--map-root-user` so it
+//       `uid == 0`), portuale always uses `--map-root-user` so it
 //       works non-root -- an unavailable user namespace degrades with a
 //       warning (real "Unable to unshare").
 //   - `PORTAGE_PYM_PATH` (real portage's own Python-package import path)
@@ -143,7 +143,7 @@
 //   - `__source_all_bashrcs` (real per-profile/package bashrc hook
 //     support, `/etc/portage/bashrc` and friends) is left unimplemented
 //     -- also observed as a non-fatal "command not found" warning, not a
-//     phase failure. This pilot has no profile/make.conf-driven bashrc
+//     phase failure. Portuale has no profile/make.conf-driven bashrc
 //     concept anywhere yet.
 //   - Starting from the third phase in any given `ebuild_phases::
 //     run_commands` call, sourcing `bin/ebuild.sh` prints six additional
@@ -158,14 +158,14 @@
 //     exit status regardless.
 //   - `EAPI` is read via the real PMS 7.3.1 rule directly from the
 //     ebuild's own text (see `parse_eapi`) rather than through this
-//     pilot's own md5-cache-reading machinery (`portage-repo`'s own
+//     portuale's own md5-cache-reading machinery (`portage-repo`'s own
 //     `read_md5_cache`) -- real `ebuild <file> <command>` operates on an
 //     arbitrary standalone ebuild file, not necessarily one that's part
 //     of a configured, md5-cache-indexed repo, so this mirrors real
 //     `_parse_eapi_ebuild_head` instead.
 //   - `PORTAGE_TMPDIR` defaults to `/var/tmp/portage` (real portage's own
 //     `make.globals` default) but is overridable via the `PORTAGE_TMPDIR`
-//     environment variable -- this pilot has no make.conf-reading path
+//     environment variable -- portuale has no make.conf-reading path
 //     into `ebuild.rs` at all yet, so an env var is the only override
 //     mechanism, the same "env var, not full config resolution"
 //     simplification `ROOT`/`PORTAGE_CONFIGROOT` already established for
@@ -224,7 +224,7 @@ fn parse_eapi(ebuild_text: &str) -> String {
 
 /// Real `doebuild.py`'s own `_pkgsplit`-derived `P`/`PN`/`PV`/`PR`/`PVR`.
 /// Real `_pkgsplit` derives `PN` from the version-shaped *suffix* of a
-/// bare `PF` string with no other information -- this pilot's own
+/// bare `PF` string with no other information -- portuale's own
 /// `portage-versions` crate doesn't port that algorithm (it only has
 /// `ververify`/`vercmp`, not a name/version splitter), so this reuses the
 /// same shortcut `portage-repo`'s own `strip_version_prefix` already
@@ -330,7 +330,7 @@ pub fn is_real_phase_command(command: &str) -> bool {
 /// reproduce -- `preinst` must run *before* anything is merged,
 /// `postinst` only *after*), so they stay internal-only; `pretend` is
 /// already part of the `actionmap_deps` chain above; `help` this
-/// pilot's own CLI already handles separately (`wants_help`).
+/// portuale's own CLI already handles separately (`wants_help`).
 /// `prerm`/`postrm` have no equivalent ordering constraint tying them to
 /// `unmerge`'s own file-removal step the way `preinst`/`postinst` do to
 /// `merge`'s -- real portage itself allows invoking them completely
@@ -489,9 +489,9 @@ impl Environment {
     /// `bin/phase-functions.sh`'s own `__dyn_install` already creates
     /// this unconditionally on a successful `src_install`
     /// (`phase-functions.sh:653`, no `FEATURES` gate at all) -- this
-    /// pilot writes nothing new for it, real phase execution already
+    /// portuale writes nothing new for it, real phase execution already
     /// leaves it behind as a side effect (confirmed empirically: a real
-    /// `ebuild <file> install` run via this pilot's own binary leaves
+    /// `ebuild <file> install` run via portuale's own binary leaves
     /// `.installed` in place). `ebuild_merge::run_qmerge` is the one
     /// caller: real `doebuild()`'s own `mydo == "qmerge"` branch checks
     /// for exactly this marker before skipping the install phase.
@@ -509,7 +509,7 @@ impl Environment {
 /// `S` is created here too, empty, as a deliberate v1 simplification:
 /// real `S` only ever exists because `src_unpack`'s own `unpack ${A}`
 /// call creates it as a side effect of extracting a real, fetched
-/// `SRC_URI` archive -- this pilot has no fetch/unpack machinery at all
+/// `SRC_URI` archive -- portuale has no fetch/unpack machinery at all
 /// (no network access attempted, no archive-format support), so an
 /// ebuild whose own `A` is empty (real `default_src_unpack`'s own
 /// `[[ -n ${A} ]] && unpack ${A}` never runs `unpack` at all in that
@@ -531,9 +531,9 @@ fn create_directories(env: &Environment) -> Result<(), String> {
         // as soon as it's sourced, EAPI 8's own comment: "requires us to
         // use an empty directory here"): `cd`s into `${PORTAGE_BUILDDIR}/
         // empty` if it exists, falling back to `${PORTAGE_PYM_PATH}`
-        // (unset in this pilot -- no Python-package-path concept at all)
+        // (unset in portuale -- no Python-package-path concept at all)
         // otherwise, `die`-ing if neither works. Always pre-created here
-        // so that fallback path, which this pilot can't satisfy, is
+        // so that fallback path, which portuale can't satisfy, is
         // never reached at all.
         env.portage_builddir.join("empty"),
         // Real `prepare_build_dirs` creates `${T}/logging`;
@@ -663,7 +663,7 @@ pub(crate) fn repo_root_for(pkg_dir: &Path) -> Option<PathBuf> {
 /// (no fetch attempted, `A`/`AA` both empty) for a standalone ebuild
 /// file outside any repo checkout, the same tolerance `repo_root_for`
 /// already established. Returns `(A, AA)`: `A` is the real, actually-
-/// fetched filename list (this pilot's own always-empty USE set, see
+/// fetched filename list (portuale's own always-empty USE set, see
 /// `crate::fetch::fetch_src_uri`'s own doc comment); `AA` is every
 /// filename `SRC_URI` could ever reference regardless of USE (real
 /// PMS's own definition), computed but never itself fetched.
@@ -671,7 +671,7 @@ pub(crate) fn repo_root_for(pkg_dir: &Path) -> Option<PathBuf> {
 /// the deprecated negative `nomirror` counts too). The md5-cache
 /// `RESTRICT` field is the raw ebuild value, so it's USE-conditional-
 /// evaluated first (real `_PackageMetadataWrapper`'s own `use_reduce`
-/// pass, same as `PROPERTIES`/`LICENSE`) against this pilot's own
+/// pass, same as `PROPERTIES`/`LICENSE`) against portuale's own
 /// always-empty fetch-side USE set (see `fetch::fetch_src_uri`'s own doc
 /// comment) -- so every `foo? ( … )` group drops and only an
 /// unconditional `mirror`/`nomirror` counts. An unparsable value yields
@@ -851,15 +851,15 @@ fn bind_slot_operator(token: &str, root: &Path) -> String {
 /// instead: every `:=` slot-operator atom is bound to the actual
 /// `<slot>/<sub-slot>=` of the highest installed version that satisfies
 /// it (`vardb.match(x)[-1]`), leaving an unresolvable one bare. This
-/// pilot now does the same, `bind_slot_operator` per `*DEPEND` token
-/// (`_eval_deps`'s own per-atom loop) -- so a package the pilot merges
+/// portuale now does the same, `bind_slot_operator` per `*DEPEND` token
+/// (`_eval_deps`'s own per-atom loop) -- so a package portuale merges
 /// records `dev-libs/foo:2/3=` in its vdb/binpkg build-info, the data a
 /// later sub-slot rebuild check needs. An ebuild with no `:=` operator,
 /// or one whose `:=` dep isn't installed, is byte-identical to before.
 ///
 /// v1 cut still: real `_eval_deps` walks `RDEPEND`/`PDEPEND` against the
 /// target `ROOT` vdb and `DEPEND`/`BDEPEND` against the target/running
-/// vdb respectively -- this pilot's own single-root world binds every
+/// vdb respectively -- portuale's own single-root world binds every
 /// `*DEPEND` key against the one `<root>/var/db/pkg` (same simplification
 /// `--root-deps` documents); and the real `|| ( A:= B:= )` "record
 /// sub-slot on A only" TODO (bug #455904) is moot without disjunctive
@@ -942,7 +942,7 @@ fn write_post_install_metadata(
     // #386829) -- `bin/phase-functions.sh` already wrote it, but only
     // when non-empty; re-assert from md5-cache so it is always present
     // and canonical. `IUSE_EFFECTIVE` is the profile's own EAPI 5+
-    // `_calc_iuse_effective` result -- this pilot computes it as
+    // `_calc_iuse_effective` result -- portuale computes it as
     // `Config::iuse_effective`, not reachable from here without threading
     // a resolved `Config` through the whole phase chain; left as a
     // documented gap (the vdb `IUSE_EFFECTIVE` file is only read by a
@@ -960,7 +960,7 @@ fn write_post_install_metadata(
 }
 
 /// Which real shell executes a phase, and every real `bin/*.sh` this
-/// pilot sources unmodified along with it.
+/// portuale sources unmodified along with it.
 ///
 /// `Bash` (**the default**) is a genuine `bash <bin_dir>/ebuild.sh
 /// <phase>` subprocess -- matching real portage's own `_doebuild_spawn()`
@@ -991,7 +991,7 @@ fn write_post_install_metadata(
 /// parse and the next phase's `source "${T}/environment" || die` aborts
 /// the build. That breaks a real `emerge <atom>` for essentially every
 /// compiled package. `Bash` has no such problem; `Brush` stays available
-/// via `--shell brush` / `--shell=brush` (a pilot-only flag on both
+/// via `--shell brush` / `--shell=brush` (a portuale-only flag on both
 /// `emerge` and `ebuild`, deliberately NOT in `ebuild_options::OPTIONS`
 /// -- that table transcribes real `bin/ebuild`'s argparse only). The
 /// brush `declare -f` bug is tracked in `docs/brush-pin.md`.
@@ -1002,13 +1002,13 @@ pub enum ShellBackend {
     Brush,
 }
 
-/// The real `src_*` phases the pilot puts inside a sandbox -- both the
+/// The real `src_*` phases portuale puts inside a sandbox -- both the
 /// `FEATURES=network-sandbox` net namespace and the `FEATURES=sandbox`
 /// `sys-apps/sandbox` filesystem confinement apply to exactly this set.
 /// Real portage: `_doebuild_spawn` sandboxes every phase not in
 /// `_unsandboxed_phases` (`clean`/`config`/`setup`/`pre|post*`/…), and
 /// network-unshares every phase not in `_ipc_phases`; for the phases
-/// this pilot actually runs as real bash both come out to this list.
+/// portuale actually runs as real bash both come out to this list.
 /// `nofetch` is deliberately excluded (real `spawn_nofetch` uses its own
 /// private tmpdir and neither unshares nor `sandbox`-wraps).
 const SANDBOXED_SRC_PHASES: &[&str] = &[
@@ -1035,7 +1035,7 @@ fn network_sandbox_requested() -> bool {
 
 /// `FEATURES=sandbox` or `FEATURES=usersandbox` present -- real
 /// `_spawn`'s own `"sandbox" not in features and "usersandbox" not in
-/// features` gate. (This pilot does no `userpriv`, so `sandbox` and
+/// features` gate. (Portuale does no `userpriv`, so `sandbox` and
 /// `usersandbox` are equivalent here.)
 fn fs_sandbox_requested() -> bool {
     feature_token_present("sandbox") || feature_token_present("usersandbox")
@@ -1093,7 +1093,7 @@ fn fs_sandbox_for_phase(phase: &str) -> bool {
 
 /// Every namespace/confinement wrapper to apply to one phase's real bash
 /// subprocess -- real `_doebuild_spawn`'s `unshare_{net,ipc,mount,pid}`
-/// + `spawn_sandbox`, collapsed to what this pilot models.
+/// + `spawn_sandbox`, collapsed to what portuale models.
 #[derive(Clone, Copy, Default)]
 struct Isolation {
     /// `FEATURES=network-sandbox` -> `unshare --net` (real `CLONE_NEWNET`).
@@ -1121,7 +1121,7 @@ impl Isolation {
         self.any_unshare() || self.fs_sandbox
     }
     /// The `unshare(1)` flags for this combination (always with
-    /// `--map-root-user` first, so it works from the pilot's non-root
+    /// `--map-root-user` first, so it works from portuale's non-root
     /// context -- real portage only unshares when `uid == 0`).
     fn unshare_flags(&self) -> Vec<&'static str> {
         let mut f = vec!["--map-root-user"];
@@ -1145,7 +1145,7 @@ impl Isolation {
 /// distinct flag combination). Real portage validates the `unshare(2)`
 /// call in a short-lived subprocess before relying on it
 /// (`_unshare_validator`); this is the same idea via the `unshare(1)`
-/// CLI, which the pilot already assumes is present the way it assumes
+/// CLI, which portuale already assumes is present the way it assumes
 /// `tar`/`wget`/`bash`. A `false` result (unprivileged user namespaces
 /// disabled, or no `unshare` binary) drops the wrappers with a warning
 /// -- real portage's own non-fatal "Unable to unshare" degrade.
@@ -1283,7 +1283,7 @@ fn sandbox_wrapped_command(script: &Path, arg: &str, iso: Isolation) -> std::pro
 /// builds it the same way. `inherit()` itself (also real, unmodified
 /// bash) then walks that array looking for `<location>/eclass/
 /// <name>.eclass` for every eclass named on an ebuild's own top-level
-/// `inherit ...` line -- previously this pilot never populated this
+/// `inherit ...` line -- previously portuale never populated this
 /// var at all, so `inherit()` always `die`d immediately for ANY
 /// eclass, confirmed live against a real system: `sys-fs/fuse`,
 /// `app-editors/nano`, and `app-arch/xz-utils` all failed here before
@@ -1477,7 +1477,7 @@ fn phase_env_vars(
 /// NAME=value` bash source text (Rust's own `{:?}` Debug-format
 /// double-quoted escaping -- not a full shell-quoting implementation,
 /// so a value containing `$`/backtick isn't protected against
-/// expansion, but every value here is this pilot's own computed path/
+/// expansion, but every value here is portuale's own computed path/
 /// metadata text, never arbitrary ebuild-controlled content). `Bash`
 /// backend needs no such text at all -- `phase_env_vars`'s own pairs
 /// are passed directly as real subprocess environment variables
@@ -1515,7 +1515,7 @@ fn phase_setup_script(
 /// `bin/ebuild.sh`'s own tail makes `EBUILD_PHASE` (among other
 /// variables) `readonly` (`declare -r`), so a real fresh process is the
 /// only way a *second* phase can `export EBUILD_PHASE=<next>` at all.
-/// This pilot mirrors that exactly with a fresh `Shell` per phase rather
+/// Portuale mirrors that exactly with a fresh `Shell` per phase rather
 /// than trying to reuse one across phases (an earlier version of this
 /// function did share one shell across a whole command's own prerequisite
 /// chain -- confirmed empirically to fail with "cannot mutate readonly
@@ -1525,7 +1525,7 @@ fn phase_setup_script(
 /// `__dyn_*` themselves) still make a prerequisite phase that's already
 /// run cheap to "re-run" from a fresh shell, exactly the way real
 /// `doebuild()` itself relies on across its own separate `spawnebuild()`
-/// calls -- this isn't a new mechanism invented for this pilot.
+/// calls -- this isn't a new mechanism invented for portuale.
 #[allow(clippy::too_many_arguments)]
 async fn run_one_phase(
     env: &Environment,
@@ -1699,7 +1699,7 @@ fn run_one_phase_bash(
 /// LICENSE DESCRIPTION KEYWORDS INHERITED IUSE REQUIRED_USE PDEPEND
 /// BDEPEND EAPI PROPERTIES DEFINED_PHASES IDEPEND INHERIT`) to
 /// `${PORTAGE_PIPE_FD}` -- real portage's `_metadata_fd` -- so incidental
-/// stdout/stderr can't corrupt the metadata. This pilot wires that fd to
+/// stdout/stderr can't corrupt the metadata. Portuale wires that fd to
 /// a `${T}` temp file via a tiny `exec 9>` shell wrapper (no `unsafe`,
 /// no extra crate), then parses it back. `depend` is never sandboxed
 /// (real `_doebuild_spawn`'s `SANDBOXED_SRC_PHASES` excludes it), so this
@@ -1785,7 +1785,7 @@ pub(crate) fn run_depend_phase(
 /// all -- confirmed by reading it: `bin/phase-functions.sh`'s own
 /// `__ebuild_main` case statement has no `"package"` branch whatsoever.
 /// `misc-functions.sh` itself sources `bin/ebuild.sh` (inheriting the
-/// same environment/ebuild-sourcing this pilot's own `run_one_phase`
+/// same environment/ebuild-sourcing portuale's own `run_one_phase`
 /// already relies on), captures its own positional args into
 /// `MISC_FUNCTIONS_ARGS` *before* sourcing (so `ebuild.sh`'s own arg
 /// handling never sees them), then its own tail unconditionally runs
@@ -2034,7 +2034,7 @@ async fn run_commands_async(
     config_root: &Path,
     shell: ShellBackend,
     log_file: Option<&Path>,
-    // Caller-supplied env, appended after the pilot's own base vars so it
+    // Caller-supplied env, appended after portuale's own base vars so it
     // overrides them -- the `emerge <atom>` build/merge path passes the
     // resolved `USE` flags here (`bin/ebuild.sh`'s own `use()` reads the
     // `USE` var), which `phase_env_vars` otherwise leaves `""`. `&[]` for
@@ -2122,13 +2122,13 @@ async fn run_commands_async(
 
 /// Synchronous entry point for `ebuild.rs` (which is not itself async --
 /// `emerge`'s own dispatch never needs an async runtime at all, so this
-/// pilot doesn't pay for one there; only this one code path does). Spins
+/// portuale doesn't pay for one there; only this one code path does). Spins
 /// up a tokio runtime for the duration of the call -- MUST be
 /// multi-threaded (`new_multi_thread`, not `new_current_thread`):
 /// confirmed empirically (a single-threaded runtime deadlocks partway
 /// through a real multi-phase run -- brush-core's own `Cargo.toml`
 /// requires tokio's `rt-multi-thread` feature under unix, not just
-/// `rt`, which is the same thing this pilot rediscovered the hard way).
+/// `rt`, which is the same thing portuale rediscovered the hard way).
 ///
 /// `PORTAGE_TMPDIR` (real portage's own `make.globals` default:
 /// `/var/tmp/portage`) is read by the caller, not internally here --
@@ -2247,7 +2247,7 @@ fn brush_phase_params(
 /// via `doebuild()`'s own chain at all. Real `dblink.treewalk()` invokes
 /// `pkg_preinst`/`pkg_postinst` directly (`EbuildPhase(phase="preinst"/
 /// "postinst")`, `lib/portage/dbapi/vartree.py`), not through
-/// `doebuild(mydo=...)` -- `ebuild_merge::run_merge` is this pilot's own
+/// `doebuild(mydo=...)` -- `ebuild_merge::run_merge` is portuale's own
 /// equivalent call site, wrapping its own file-merge step with real
 /// `pkg_preinst`/`pkg_postinst` hook execution the same way. Real
 /// `bin/phase-functions.sh`'s own `__ebuild_main` already accepts
@@ -2861,7 +2861,7 @@ mod tests {
     /// attempted at all, while still exercising the full real SRC_URI
     /// grammar: an arrow-rename (`-> verifiedfetchpkg-1.0.tar.gz`) and a
     /// `test?` USE-conditional group that must stay excluded from `A`
-    /// (this pilot's own always-empty USE set) but still appear in
+    /// (portuale's own always-empty USE set) but still appear in
     /// `AA` (real PMS's own "every file regardless of USE" definition).
     #[test]
     fn install_computes_real_a_and_aa_from_a_verified_distfile_with_no_network() {
@@ -2917,7 +2917,7 @@ mod tests {
     /// Real, end-to-end proof of `eclass_locations_value`: `dev-libs/
     /// eclasspkg` really `inherit`s a real (if fixture-only) eclass,
     /// `pilotcheck.eclass`, via real, unmodified `bin/ebuild.sh`'s own
-    /// `inherit()` function -- previously this pilot never populated
+    /// `inherit()` function -- previously portuale never populated
     /// `PORTAGE_ECLASS_LOCATIONS` at all, so this would have `die`d
     /// immediately with `"pilotcheck.eclass could not be found by
     /// inherit()"`. `src_install` calls a real function the eclass
@@ -3283,7 +3283,7 @@ mod tests {
     /// Real `bin/ebuild.sh:479`'s own `[[ ${PORTAGE_DEBUG} == 1 ]]` guard
     /// is what turns this exported value into the real `set -x` xtrace a
     /// human running `ebuild <file> install --debug` directly would see;
-    /// that guard itself is real, unmodified bash this pilot doesn't
+    /// that guard itself is real, unmodified bash portuale doesn't
     /// reimplement, so proving the export is correct is sufficient here.
     #[test]
     fn debug_flag_exports_real_portage_debug() {

@@ -9,7 +9,7 @@
 // implemented -- real phase execution is explicitly deferred (see
 // docs/agent-context.md's "Deferred: ebuild phase execution") -- but recognizing
 // real syntax lets `ebuild.rs` tell "a real ebuild option/command this
-// pilot doesn't implement yet" apart from "not valid ebuild syntax at
+// portuale doesn't implement yet" apart from "not valid ebuild syntax at
 // all", the same distinction `emerge_options.rs` draws for `emerge`.
 // Unlike `emerge --pretend`, `ebuild` has no Python reference
 // implementation at all -- it's Rust-only, tested directly against the
@@ -18,7 +18,7 @@
 //
 // `-h`/`--help` IS implemented now, deliberately excluded from
 // `OPTIONS` for the same reason `emerge_options.rs`'s own `--help`/`-h`
-// is excluded from its tables -- see `ebuild.rs` for the pilot-specific
+// is excluded from its tables -- see `ebuild.rs` for the portuale-specific
 // help text. Real bin/ebuild declares no short aliases for any of its
 // own six options ("None have short aliases" below still holds), so
 // `-h` is purely argparse's own auto-added short form for `--help`; no
@@ -37,7 +37,7 @@
 // against the current commit and working-tree state (verified directly:
 // `git describe` in this repo returns `portage-3.0.81-272-g1cb1941de`,
 // parsed into `3.0.81.dev272+g1cb1941de`) -- host/git-state-dependent,
-// non-deterministic output this pilot's own pinned-test philosophy
+// non-deterministic output portuale's own pinned-test philosophy
 // already rules out elsewhere (the same reasoning that ruled out
 // `emerge --version`/`-V`'s own `getportageversion()`, which pulls in
 // live python/gcc/libc/uname info -- a different real function, same

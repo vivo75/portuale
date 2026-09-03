@@ -1,6 +1,6 @@
 // The `$PKGDIR` directory-scan fallback -- real `bintree._populate_local`
 // (see `docs/agent-context.md`). Every other binary-package path in this
-// pilot is `<pkgdir>/Packages`-index driven and format-agnostic, so a
+// portuale is `<pkgdir>/Packages`-index driven and format-agnostic, so a
 // `gpkg`/`xpak` *listed in an index* already resolves for `--pretend`.
 // What the index reader can't do is the "no trusted index" branch: when
 // `$PKGDIR` holds binpkg *files* but no `Packages`, open each file, read
@@ -20,7 +20,7 @@
 //   - `scan_pkgdir`: walks `<pkgdir>/<cat>/<pf>.{tbz2,gpkg.tar}` and
 //     synthesizes one `Packages`-style entry per file. Its output
 //     becomes `portage_profile::Config::scanned_binpkgs` (NOT written
-//     back to `Packages` -- this pilot recomputes each run, so
+//     back to `Packages` -- portuale recomputes each run, so
 //     `--pretend` still writes nothing).
 
 use std::collections::HashMap;
@@ -117,7 +117,7 @@ impl Drop for ScratchDir {
 /// `InvalidBinaryPackageFormat` guard).
 ///
 /// **v1 cut, documented**: NO GPG `.sig` signature check anywhere -- this
-/// pilot has no crypto; a container that carries `.sig` members still
+/// portuale has no crypto; a container that carries `.sig` members still
 /// has its cleartext `DATA` digests verified (real portage's own
 /// `binpkg-ignore-signature` behaviour).
 pub fn read_gpkg_metadata(gpkg_path: &Path) -> Result<HashMap<String, String>, String> {
@@ -413,7 +413,7 @@ fn verify_gpkg_manifest(gpkg_path: &Path) -> Result<(), String> {
         .map_err(|e| format!("{}: {e}", manifest_path.display()))?;
 
     // Parse the `DATA` lines. PGP-armor lines (an inline-signed
-    // Manifest) are skipped -- the pilot has no crypto and reads the
+    // Manifest) are skipped -- portuale has no crypto and reads the
     // cleartext body straight through.
     let mut records: HashMap<String, portage_fetch::DistfileDigests> = HashMap::new();
     for line in manifest_text.lines() {
@@ -535,7 +535,7 @@ fn verify_gpkg_manifest(gpkg_path: &Path) -> Result<(), String> {
 /// non-scalar members (`environment.bz2` -- the package's saved build-
 /// time bash environment -- and `<pf>.ebuild`) are written back
 /// **verbatim** as raw bytes, not through the lossy scalar path. Real
-/// portage keeps both in the vdb, and the pilot now needs them: the
+/// portage keeps both in the vdb, and portuale now needs them: the
 /// binpkg merge runs real `pkg_preinst`/`pkg_postinst` by `bunzip2`'ing
 /// `environment.bz2` into `${T}/environment` (real `BinpkgEnvExtractor`
 /// -> `bin/ebuild.sh`'s own saved-env source path).
@@ -728,11 +728,11 @@ fn extract_gpkg_member(gpkg_path: &Path, want: &str, dest: &Path) -> Result<(), 
 /// for a deterministic pool order.
 ///
 /// v1 cuts: bare `.xpak` files (real `binpkg-multi-instance`
-/// `<pkgdir>/<cat>/<pf>/<build_id>.xpak`) are skipped -- this pilot has
+/// `<pkgdir>/<cat>/<pf>/<build_id>.xpak`) are skipped -- portuale has
 /// no multi-instance concept and a bare `.xpak` is a different on-disk
 /// shape (just the segment, no `[tarball]…STOP` trailer); real
 /// portage's own mtime-based `Packages` staleness revalidation is not
-/// done (a present index is always trusted, this pilot's long-standing
+/// done (a present index is always trusted, portuale's long-standing
 /// stance); a file that fails to parse aborts the scan (rather than
 /// real portage's own skip-and-warn) -- a `$PKGDIR` full of unreadable
 /// binpkgs is a real problem worth surfacing, not silently resolving
@@ -950,7 +950,7 @@ mod tests {
 
     /// Reads a **genuine** `.tbz2` -- checked in at
     /// `fixtures/pkgdir/dev-libs/packagepkg-1.0.tbz2`, built once by the
-    /// pilot's own `ebuild <file> package` on `dev-libs/packagepkg`
+    /// portuale's own `ebuild <file> package` on `dev-libs/packagepkg`
     /// (real `bin/misc-functions.sh` -> unmodified `xpak-helper.py
     /// recompose` -> real `xpak.py`). Kept as a committed fixture rather
     /// than rebuilt per-test on purpose: the read side doesn't need

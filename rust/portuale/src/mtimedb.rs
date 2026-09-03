@@ -7,13 +7,13 @@
 // and merges them in order; `emerge --resume --skipfirst` drops the first
 // (the one that failed) before continuing.
 //
-// The file is real portage's JSON `mtimedb`. The pilot writes a
+// The file is real portage's JSON `mtimedb`. Portuale writes a
 // real-compatible `{"resume": {...}}` (hand-rolled, tab-indented like
 // real `json.dumps(indent="\t", sort_keys=True)`); it does NOT preserve
 // any other top-level keys an existing file had (`info`/`ldpath`/
-// `updates` are `--sync`/`env-update` state the pilot never manages).
+// `updates` are `--sync`/`env-update` state portuale never manages).
 // Reading extracts the two `resume` arrays with a regex rather than a
-// full JSON parse -- enough for a pilot-written file, and tolerant of a
+// full JSON parse -- enough for a portuale-written file, and tolerant of a
 // real-portage-written one with the same shape.
 //
 // v1 cuts: no `resume_backup` rotation (a cleared list is just deleted);
@@ -162,7 +162,7 @@ pub fn read_resume_list(root: &Path) -> Option<ResumeList> {
         .collect();
 
     // `myopts` -- the object after `"myopts"`, up to its closing brace
-    // (the pilot only ever writes flat `"--flag": true` pairs, so the
+    // (portuale only ever writes flat `"--flag": true` pairs, so the
     // first `}` closes it).
     let myopts_block = resume
         .split("\"myopts\"")
@@ -190,7 +190,7 @@ fn split_cpv(cpv: &str) -> Option<(&str, &str)> {
 }
 
 /// Clears `mtimedb["resume"]` after a successful `--resume` run -- the
-/// pilot just removes the file (real rotates it to `resume_backup`).
+/// portuale just removes the file (real rotates it to `resume_backup`).
 pub fn clear_resume_list(root: &Path) {
     let _ = std::fs::remove_file(mtimedb_path(root));
 }

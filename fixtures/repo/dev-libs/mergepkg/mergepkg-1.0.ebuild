@@ -21,7 +21,7 @@ pkg_preinst() {
 
 pkg_postinst() {
 	# Real ordering proof: pkg_postinst runs only after the merge (and
-	# this pilot's own vdb write) has completed.
+	# portuale's own vdb write) has completed.
 	if [[ -e "${ROOT}"/usr/share/${PN}/hello.txt && -e "${ROOT}"/var/db/pkg/${CATEGORY}/${PF}/CONTENTS ]]; then
 		touch "${T}"/postinst-ran-after-merge || die
 	fi

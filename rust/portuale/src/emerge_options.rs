@@ -1,7 +1,7 @@
 // Enumerates the real `emerge` CLI's full option surface (see
 // lib/_emerge/main.py: the `options` list, `shortmapping` dict,
 // `argument_options` dict, and `actions` frozenset), so that using any
-// real emerge flag this pilot doesn't implement yet produces a clear
+// real emerge flag portuale doesn't implement yet produces a clear
 // "recognized, but not implemented" message -- distinct from a
 // genuinely unknown/misspelled flag. The set that IS implemented is the
 // one `emerge --help` documents (see `pretend.rs`'s `HELP_TEXT`); every
@@ -32,7 +32,7 @@
 //   - `--help`/`-h` IS implemented now, deliberately excluded from
 //     `ACTIONS` below for the same reason `--pretend`/`-p` and
 //     `--verbose`/`-v` are excluded from their own tables -- see
-//     pretend.rs for the pilot-specific (not a port of real emerge's own
+//     pretend.rs for the portuale-specific (not a port of real emerge's own
 //     `_emerge/help.py`) help text, and why it's checked before anything
 //     else, unconditionally, regardless of position in argv.
 //   - `--newuse`/`-N` and `--changed-use`/`-U` (a real, narrower
@@ -119,7 +119,7 @@
 //     = myopts.get("--with-bdeps"); if bdeps is not None: ... elif
 //     ... myopts.get("--with-bdeps-auto") != "n" ...: myparams["bdeps"] =
 //     "auto"` -- the `--usepkg`-gated half of that same real condition
-//     is always true here, since this pilot's CLI has no `--usepkg` at
+//     is always true here, since portuale's CLI has no `--usepkg` at
 //     all.
 //   - `--changed-deps` IS implemented now too, deliberately excluded from
 //     `VALUE_OPTIONS` for the same reason -- real `default_arg_opts` with
@@ -131,7 +131,7 @@
 //     it ports (reinstalls an already-installed package whose own
 //     vdb-recorded dependency strings differ from the repo's current
 //     ebuild) and its own documented flat-comparison scope cut (this
-//     pilot has no structured, non-flat `use_reduce` anywhere, so a
+//     portuale has no structured, non-flat `use_reduce` anywhere, so a
 //     dependency moved between two dep-string keys with the same net
 //     atom set, or a pure `||`-restructuring, isn't detected as
 //     "changed" here the way real portage's own structured comparison
@@ -150,7 +150,7 @@
 //     `_changed_deps_pkgs` collection is discarded unread in that case
 //     anyway (a documented, behavior-preserving simplification, not a
 //     guess). `--dynamic-deps` itself stays unimplemented/unrecognized
-//     in this pilot (real portage's own now-defunct alternate resolver
+//     in portuale (real portage's own now-defunct alternate resolver
 //     strategy), so only the `--changed-deps` half of that real
 //     silencing condition is reachable here at all.
 //   - `--changed-slot` IS implemented now too, deliberately excluded
@@ -163,7 +163,7 @@
 //     already-installed package whose own vdb-recorded `SLOT` differs
 //     from the repo's current ebuild) and its own documented scope cut:
 //     real portage's own consumers of `_changed_slot` live deep inside
-//     binary-package/slot-operator-rebuild scheduling this pilot has
+//     binary-package/slot-operator-rebuild scheduling portuale has
 //     none of, so this is ported as simply another independent
 //     `Reinstall` trigger instead of replicating that considerably
 //     messier real control flow.
@@ -178,7 +178,7 @@
 //     for the real `use_reduce(..., subset={"test"})` extraction it's
 //     built on.
 //   - `--noreplace`/`-n` and `--selective` ARE implemented now too,
-//     found and grounded by comparing this pilot's own output against
+//     found and grounded by comparing portuale's own output against
 //     the real, installed system `emerge` on a real package
 //     (`sys-apps/portage`) and tracing real portage's own decision
 //     live: a bare `emerge <atom>` with no other flags does NOT keep an
@@ -197,10 +197,10 @@
 //     `create_depgraph_params.py`'s own unconditional `if myopts.get(
 //     "--selective") == "n": pop`). See `resolve_pretend`'s own doc
 //     comment (portage-repo) for the full grounding, including why this
-//     pilot's own `selective` computation needs no separate
+//     portuale's own `selective` computation needs no separate
 //     `--reinstall` flag (`--changed-use` already covers its whole real
 //     contribution) and the documented, narrower scope cut around real
-//     `--newrepo` (needs a vdb `REPOSITORY` reader this pilot doesn't
+//     `--newrepo` (needs a vdb `REPOSITORY` reader portuale doesn't
 //     have).
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -263,8 +263,8 @@ pub const VALUE_OPTIONS: &[(&str, Option<&str>)] = &[
     ("--autounmask", None),
     // `--autounmask-continue` (real `true_y_or_n`) and
     // `--autounmask-backtrack` (real `y|n`) ARE recognized now -- both
-    // inert in this `--pretend`-only pilot (real portage gates
-    // write-and-continue on `"--pretend" not in myopts`, and the pilot
+    // inert in this `--pretend`-only portuale (real portage gates
+    // write-and-continue on `"--pretend" not in myopts`, and portuale
     // has no backtracking resolver), except the `actions.py:3772`
     // `--autounmask-continue has been disabled by --autounmask=n`
     // warning. See pretend.rs.
@@ -289,12 +289,12 @@ pub const VALUE_OPTIONS: &[(&str, Option<&str>)] = &[
     // `--complete-graph` / `--complete-graph-if-new-use` /
     // `--complete-graph-if-new-ver` ARE implemented -- real
     // `create_depgraph_params.py:169-175` + `depgraph.py::_complete_graph`.
-    // In this `--pretend` pilot `complete` mode collapses to a forced deep
+    // In this `--pretend` portuale `complete` mode collapses to a forced deep
     // walk (see `portage_repo::resolve_pretend_graph`'s `complete` param
     // and `complete_graph_auto_enable`); `pretend.rs` parses all three
     // and runs the two-pass auto-enable.
     ("--depclean-lib-check", None),
-    // `--dynamic-deps` IS implemented -- ON by default (the pilot's own
+    // `--dynamic-deps` IS implemented -- ON by default (portuale's own
     // long-standing `--deep` behaviour); `=n` walks an installed
     // package's vdb dep snapshot instead (see `enqueue_dependencies`).
     ("--fail-clean", None),

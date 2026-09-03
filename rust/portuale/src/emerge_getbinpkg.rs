@@ -39,7 +39,7 @@
 //     stance the `--pretend` half already takes.
 //   - digest verification checks `SIZE` and the `Packages` record's
 //     `MD5` (the md5 of the whole `.tbz2`, real `bintree`'s own field).
-//     Real portage also checks `SHA1` -- the pilot has no sha1 crate, and
+//     Real portage also checks `SHA1` -- portuale has no sha1 crate, and
 //     `MD5` is always present in a real `Packages`. A downloaded gpkg
 //     additionally has its internal `Manifest` (`DATA` BLAKE2B/SHA512
 //     lines) verified at merge time (`binpkg::extract_binpkg` ->
@@ -263,7 +263,7 @@ fn download_and_verify(
 
     // Real `bintree.gettbz2` / `_verify_dist_hashes`: the `Packages`
     // record's `MD5` field is the md5 of the whole `.tbz2`. (Real portage
-    // also checks `SHA1`; the pilot has no sha1 crate, and `MD5` is
+    // also checks `SHA1`; portuale has no sha1 crate, and `MD5` is
     // always present in a real `Packages`.)
     if let Some(expected_md5) = record.get("MD5").filter(|s| !s.is_empty()) {
         use md5::Digest as _;
@@ -422,7 +422,7 @@ mod tests {
             "0"
         );
         // The saved env + ebuild are kept in the vdb now (real portage
-        // does; the pilot needs them for pkg_preinst/pkg_postinst). This
+        // does; portuale needs them for pkg_preinst/pkg_postinst). This
         // fixture's DEFINED_PHASES is `install` only, so no hook ran.
         assert!(vdb.join("environment.bz2").is_file());
         assert!(vdb.join("packagepkg-1.0.ebuild").is_file());

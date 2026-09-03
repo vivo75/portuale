@@ -1,4 +1,4 @@
-// Neutral CLI test-harness binary for the versions-comparison pilot (see
+// Neutral CLI test-harness binary for portuale's version comparison (see
 // docs/agent-context.md, "Test/benchmark harness architecture"). Exposes the
 // same argv/output contract as python/versions_harness.py so a
 // black-box test suite can drive both implementations identically.

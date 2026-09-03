@@ -31,7 +31,7 @@
 // here via the real, standard BLAKE2b-512 and SHA-512 algorithms
 // (`blake2`/`sha2` crates), not reimplemented from scratch.
 //
-// KNOWN, DOCUMENTED GAPS (v1 scope, matching this whole pilot's own
+// KNOWN, DOCUMENTED GAPS (v1 scope, matching portuale's own
 // "narrow v1, document the cut" pattern):
 //   - `mirror://` resolution (`resolve_mirror_candidates`) consults both
 //     real `profiles/thirdpartymirrors` (the ebuild's own repo's copy,
@@ -49,7 +49,7 @@
 //     `mirror://local/...` token still resolves correctly regardless.
 //     Real portage's own `random.shuffle`s the `thirdpartymirrors` half
 //     of the resulting candidate list (load-balancing across equally-
-//     valid mirrors) -- not replicated here: this pilot's own "pinned,
+//     valid mirrors) -- not replicated here: portuale's own "pinned,
 //     reproducible" test philosophy already rules out non-determinism
 //     elsewhere, and shuffling only affects *which* mirror is tried
 //     first, not correctness (every candidate is still real-digest-
@@ -61,7 +61,7 @@
 //     get_path`) -- real portage negotiates a per-mirror `layout.conf`
 //     live over the network (itself cached in `.mirror-cache.json`)
 //     that can describe a hashed directory layout instead
-//     (`filename-hash`/`content-hash`); this pilot never attempts that
+//     (`filename-hash`/`content-hash`); portuale never attempts that
 //     live negotiation, which matches real `MirrorLayoutConfig.get_
 //     best_supported_layout`'s own fallback whenever a mirror's
 //     `layout.conf` can't be reached at all, and is what the real,
@@ -76,7 +76,7 @@
 //     itself in a specific, somewhat subtle order (real `fetch.py`'s
 //     own comment: "Prefer thirdpartymirrors over normal mirrors in
 //     cases when the file does not yet exist on the normal mirrors").
-//     This pilot instead tries the most-specific candidate first,
+//     Portuale instead tries the most-specific candidate first,
 //     deterministically: `mirror://`-expanded (or the literal URI for
 //     a non-`mirror://` token) first, `gentoo_mirror_fallback` last --
 //     a real, deliberate deviation from real portage's own precise
@@ -89,7 +89,7 @@
 //     from scratch" reasoning `ebuild_merge.rs`'s own real MD5 CONTENTS
 //     digest already established for `obj` entries.
 //   - No AUX/MISC/EBUILD Manifest line support (`parse_manifest` only
-//     reads `DIST` lines) -- this pilot never needs to verify anything
+//     reads `DIST` lines) -- portuale never needs to verify anything
 //     else a Manifest records.
 
 use std::collections::HashMap;
@@ -156,7 +156,7 @@ pub struct SrcUriEntry {
     /// Real `override_fetch` (`fetch.py:1104`): `mirror+` OR `fetch+`
     /// prefix. Real `if (restrict_fetch and not override_fetch)` skips a
     /// normal URI entirely under `RESTRICT=fetch` -- `fetch+` exempts
-    /// this one URI. (This pilot's fetch path doesn't model
+    /// this one URI. (Portuale's fetch path doesn't model
     /// `RESTRICT=fetch` yet, so today this only guarantees the `fetch+`
     /// prefix is stripped so the URL is valid -- see
     /// `portuale/src/fetch.rs`.)
@@ -170,7 +170,7 @@ fn basename(uri: &str) -> String {
 /// Recursive-descent parser for the grammar described in the module doc
 /// comment. `active(negated, flag)` decides whether a `flag?`/`!flag?`
 /// group's own contents should be collected -- callers pass a real USE
-/// membership check for `SRC_URI` itself (this pilot's own always-empty
+/// membership check for `SRC_URI` itself (portuale's own always-empty
 /// USE set, same v1 cut every other real-execution slice already has),
 /// or an always-true closure to compute the real `AA` variable (every
 /// file `SRC_URI` could ever reference, regardless of USE -- PMS's own
@@ -258,7 +258,7 @@ pub fn flatten_src_uri(
 }
 
 /// Real `grabdict()` (`lib/portage/util/__init__.py`), narrowed to what
-/// this pilot needs: real `profiles/thirdpartymirrors`'s own format --
+/// portuale needs: real `profiles/thirdpartymirrors`'s own format --
 /// one `<name> <url1> [<url2> ...]` entry per line. A whole line
 /// starting with `#`, or any token from the first `#`-prefixed one
 /// onward, is a comment (real `grabdict`'s own per-token truncation,
@@ -351,7 +351,7 @@ pub fn resolve_mirror_candidates(
 /// Real `async_mirror_url`'s own flat-layout fallback path, applied to
 /// *every* file real portage fetches (not just `mirror://` ones) --
 /// see this module's own doc comment for the real `layout.conf`
-/// negotiation this pilot doesn't attempt, and why flat is the right
+/// negotiation portuale doesn't attempt, and why flat is the right
 /// default anyway.
 pub fn gentoo_mirror_fallback(filename: &str, gentoo_mirrors: &[String]) -> Vec<String> {
     gentoo_mirrors
@@ -512,7 +512,7 @@ mod tests {
 
     #[test]
     fn flatten_src_uri_negated_conditional_is_active_when_the_flag_is_unset() {
-        // This pilot's own always-empty USE set (see the module doc
+        // Portuale's own always-empty USE set (see the module doc
         // comment) means every `!flag?` group is always active -- the
         // real, common way an optional dependency's SRC_URI still gets
         // fetched by default. `is_set` here stands in for that

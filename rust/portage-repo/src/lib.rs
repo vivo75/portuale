@@ -1,4 +1,4 @@
-// Repo/metadata/vdb access for the single-atom `emerge --pretend` pilot
+// Repo/metadata/vdb access for the single-atom `emerge --pretend` portuale
 // slice (see docs/agent-context.md's depgraph/config-resolution follow-up
 // work, and docs/what-this-proves.md for the full scope writeup).
 //
@@ -50,9 +50,9 @@
 // Config/target roots are read from the real `PORTAGE_CONFIGROOT` and
 // `ROOT` environment variables (portage's own mechanism for relocating
 // `/etc/portage` and the install target -- see lib/portage/const.py),
-// defaulting to `/` when unset. This is not a pilot-only convention: it's
+// defaulting to `/` when unset. This is not a portuale-only convention: it's
 // what lets tests point at a fixture tree without needing anything
-// pilot-specific.
+// portuale-specific.
 
 use portage_versions::vercmp;
 use std::cmp::Ordering;
@@ -78,7 +78,7 @@ pub fn config_root_from_env() -> PathBuf {
 // and permanently, to the vdb, world file, binary packages and config files,
 // and that ebuild metadata regeneration bakes into `metadata/md5-cache`.
 //
-// This pilot never syncs and never mutates the vdb, so it applies the
+// Portuale never syncs and never mutates the vdb, so it applies the
 // directives at *read* time instead: `apply_updates_to_atom` (command-line and
 // world atoms), `apply_updates_to_dep_string` (each `*DEPEND` string read from
 // md5-cache -- real `update_dbentry`), and `apply_updates_to_cp` /
@@ -92,14 +92,14 @@ pub fn config_root_from_env() -> PathBuf {
 //     `/etc/portage/package.*` (`p`) rewrite -- `--pretend` mutates none of
 //     these, so applying the moves in memory on read is equivalent.
 //   - real `grab_updates`' `os.scandir` file order (+ `prev_mtimes`
-//     incremental logic): this pilot sorts the quarter files by `(year,
+//     incremental logic): portuale sorts the quarter files by `(year,
 //     quarter)` parsed from the `NQ-YYYY` name (non-matching names last, by
 //     name) and re-reads them every run. Deterministic, and strictly better
 //     than real portage's arbitrary order for a chained move that spans two
 //     quarter files.
 //   - a `slotmove` whose atom carries a version/operator: real
 //     `update_dbentry` acts only on the unversioned case
-//     (`orig_atom.version is None`), so this pilot just drops the qualified
+//     (`orig_atom.version is None`), so portuale just drops the qualified
 //     form at parse time (same net effect).
 
 /// One validated `profiles/updates/` directive (real
@@ -230,7 +230,7 @@ fn grab_updates_for_repo(repo_location: &Path) -> Vec<UpdateCmd> {
 /// `--package-moves` (real `y_or_n`, `main.py:936`, default `y`): whether
 /// `profiles/updates/` `move`/`slotmove` directives are applied at all.
 /// Real portage gates the disk-rewriting `_global_updates` pass on
-/// `--package-moves != "n"` (`actions.py:3675`); this pilot applies moves
+/// `--package-moves != "n"` (`actions.py:3675`); portuale applies moves
 /// only at read time, so `=n` simply turns every `apply_updates_to_*`
 /// call into a no-op (the resolver then sees the pre-move `cat/pkg`
 /// names throughout). A process-global (env-free, like `color`'s
@@ -427,7 +427,7 @@ pub fn apply_updates_to_cp(category: &str, package: &str) -> (String, String) {
 /// Every `cat/pkg` whose forward-`move` chain lands on `(category,
 /// package)` -- including `(category, package)` itself. Lets a vdb query
 /// for the *new* name also scan the *old*, not-yet-renamed directory
-/// (real global-updates renames it on disk; this pilot doesn't).
+/// (real global-updates renames it on disk; portuale doesn't).
 pub fn installed_cp_sources(category: &str, package: &str) -> Vec<(String, String)> {
     let target = (category.to_string(), package.to_string());
     let mut out = vec![target.clone()];
@@ -487,7 +487,7 @@ pub fn root_from_env() -> PathBuf {
 /// `/`. `PORTAGE_RUNNING_ROOT` itself is NOT a real portage environment
 /// variable (real portage has no way to override this at all -- it's
 /// always genuinely `/`, full stop, outside of Prefix's own `BROOT`
-/// concept) -- a pilot-specific override purely so a test can point this
+/// concept) -- a portuale-specific override purely so a test can point this
 /// at a fixture's own fake vdb tree instead of the real host, the same
 /// "explicit override for tests, real default at the CLI boundary"
 /// pattern `MergeOptions::config_root` already established.
@@ -529,7 +529,7 @@ pub struct RepoConfig {
     /// `metadata/layout.conf`'s own `profile-formats` list (real
     /// `parse_layout_conf`, `config.py:1516`), verbatim -- empty when
     /// `layout.conf` is absent or the key isn't set. The one value this
-    /// pilot acts on is `portage-2`: real `LocationsManager`'s own
+    /// portuale acts on is `portage-2`: real `LocationsManager`'s own
     /// `_allow_parent_colon = frozenset(["portage-2"])` gate
     /// (`_config/LocationsManager.py:47`/`259`) -- a profile `parent`
     /// line's `reponame:path`/`:path` cross-repo syntax is only expanded
@@ -544,7 +544,7 @@ pub struct RepoConfig {
     pub profile_formats: Vec<String>,
     /// This repo's own `aliases` (real `config.py:216-224`/`492-499`):
     /// `layout.conf`'s `aliases =` first, then `repos.conf`'s appended.
-    /// This pilot acts on aliases in exactly one place -- the
+    /// Portuale acts on aliases in exactly one place -- the
     /// section-name-vs-repo-name mismatch escape hatch in `find_repos`
     /// (real `config.py:1121`: a repo whose resolved `name` differs from
     /// its `repos.conf` `[section]` name is dropped with an error
@@ -584,11 +584,11 @@ fn parse_ini(text: &str, sections: &mut HashMap<String, HashMap<String, String>>
 /// Parses a repo's own `metadata/layout.conf` (real `parse_layout_conf`,
 /// `lib/portage/repository/config.py:1516`) -- a section-less `key =
 /// value` file. Returns an empty map when the file is absent (every key
-/// this pilot reads has a real "absent" default). This pilot reads
+/// portuale reads has a real "absent" default). Portuale reads
 /// exactly four keys -- `masters`, `repo-name`, `profile-formats`,
 /// `aliases` -- out of the ~20 real ones (`sign-manifests`,
 /// `manifest-hashes`, `cache-formats`, `eapis-banned`, `use-manifests`,
-/// ...); the rest are real but out of this pilot's scope.
+/// ...); the rest are real but out of portuale's scope.
 fn parse_layout_conf(repo_location: &Path) -> HashMap<String, String> {
     let Ok(text) = fs::read_to_string(repo_location.join("metadata/layout.conf")) else {
         return HashMap::new();
@@ -612,7 +612,7 @@ fn parse_layout_conf(repo_location: &Path) -> HashMap<String, String> {
 /// Reads `<repo_location>/profiles/repo_name` (real `_read_repo_name`,
 /// `config.py:670-688`), the first line trimmed. `None` when the file is
 /// absent or empty -- real portage falls back to `"x-" + basename` +
-/// `missing = True`, but this pilot's own fallback (the `repos.conf`
+/// `missing = True`, but portuale's own fallback (the `repos.conf`
 /// `[section]` name) is applied by the caller, so a missing file is
 /// simply `None` here.
 fn read_repo_name_file(repo_location: &Path) -> Option<String> {
@@ -621,7 +621,7 @@ fn read_repo_name_file(repo_location: &Path) -> Option<String> {
     (!name.is_empty()).then_some(name)
 }
 
-/// Parses `repos.conf` (a file, or -- as on this pilot's dev machine -- a
+/// Parses `repos.conf` (a file, or -- as on portuale's dev machine -- a
 /// directory of `*.conf` files merged in sorted-filename order) and
 /// returns every `[reponame]` section that has a `location` (the main
 /// repo plus any overlays), sorted ascending by `(priority, name)` --
@@ -685,7 +685,7 @@ pub fn find_repos(config_root: &Path) -> Result<Vec<RepoConfig>, String> {
         };
         let location = PathBuf::from(location);
         // Real repos.conf always uses absolute locations; relative ones
-        // are a pilot/testing convenience so the fixture tree under
+        // are a portuale/testing convenience so the fixture tree under
         // fixtures can be committed without a machine-specific
         // absolute path baked in.
         let location = if location.is_absolute() {
@@ -856,7 +856,7 @@ pub fn read_md5_cache(
     }
     // Real `profiles/updates/` package moves (SCOPE_BACKLOG Part 2 Section
     // H item 2): a sync bakes the `move`/`slotmove` directives into
-    // `metadata/md5-cache` when it regenerates ebuild metadata. This pilot
+    // `metadata/md5-cache` when it regenerates ebuild metadata. Portuale
     // reads a static fixture cache, so it applies them here on read
     // instead -- real `update_dbentry` over each `*DEPEND` string.
     for key in ["DEPEND", "RDEPEND", "PDEPEND", "BDEPEND", "IDEPEND"] {
@@ -915,7 +915,7 @@ pub struct Candidate {
     /// (except the two paths noted in the module doc comment's
     /// `::reponame` bullet), so a `::repo`-constrained atom actually
     /// filters. Real portage cross-checks this against each repo's own
-    /// `profiles/repo_name` file too; this pilot reuses the already-read
+    /// `profiles/repo_name` file too; portuale reuses the already-read
     /// `repos.conf` name as-is rather than reading a second file.
     pub repo_name: String,
     /// The raw `LICENSE` metadata string (PMS 7.3.2), unreduced -- read
@@ -1058,7 +1058,7 @@ pub fn list_candidates(
 /// binpkg file (real portage's own `FEATURES="pkgdir-index-trusted"`
 /// behavior, not the real default -- but re-deriving IUSE/USE/SLOT/dep
 /// strings from an actual `.tbz2`/`.xpak`/`.gpkg.tar` file would need a
-/// real archive-format parser this pilot doesn't have and doesn't need:
+/// real archive-format parser portuale doesn't have and doesn't need:
 /// the `Packages` index alone already carries every field a candidate
 /// needs). A missing `Packages` file is an empty list, not an error --
 /// same "PKGDIR simply has nothing yet" tolerance a missing/empty repo
@@ -1148,7 +1148,7 @@ fn local_binpkg_index(config: &portage_profile::Config) -> BinaryIndex {
     // _populate_additional`): every package installed in the quickpkg
     // source root is injected into the binary-package pool as a candidate
     // for the target-`ROOT` build, using that root's own vdb-recorded
-    // metadata. Real portage does `dbapi.cpv_inject` on each; this pilot
+    // metadata. Real portage does `dbapi.cpv_inject` on each; portuale
     // synthesizes the same `Packages`-style records and appends them
     // here, so `list_binary_candidates` / `read_binary_metadata_any` /
     // the dependency walk all pick them up transparently. A CPV the local
@@ -1345,7 +1345,7 @@ fn binary_candidates_from_index(
 /// lives (`BinRepo::packages_dir`). A remote build of a cpv+version the
 /// local `$PKGDIR` (`local_pkgdir`) also carries is dropped -- real
 /// `bintree.isremote` returns `False` once a package is in
-/// `_additional_pkgs` (downloaded), and this pilot treats "present in
+/// `_additional_pkgs` (downloaded), and portuale treats "present in
 /// `$PKGDIR/Packages`" as exactly that. Binrepos are consulted in
 /// `config.binrepos` order (already `(priority, name)`-sorted); a later
 /// binrepo does not shadow an earlier one for the same version (both
@@ -1516,7 +1516,7 @@ fn matches_config_entry(entry: &str, candidate_str: &str, category: &str, packag
 }
 
 /// The USE flags in effect for one specific package -- one continuous
-/// incremental walk over the real `USE_ORDER` layers this pilot models,
+/// incremental walk over the real `USE_ORDER` layers portuale models,
 /// low priority to high (real `config.py::regenerate()` over the
 /// reversed `uvlist`; `USE_ORDER` default
 /// `env:pkg:conf:defaults:pkginternal:features:repo:env.d`). The "Config
@@ -1530,7 +1530,7 @@ fn matches_config_entry(entry: &str, candidate_str: &str, category: &str, packag
 ///   the main repo's applies to every package, an overlay's only to a
 ///   candidate from that overlay), then every configured repo's own
 ///   `profiles/package.use` (`Config::package_use_repo`) -- all *before*
-///   the IUSE defaults. The weakest layer this pilot models.
+///   the IUSE defaults. The weakest layer portuale models.
 /// - `pkginternal` -- `iuse`'s own `+flag`/`-flag` default markers (see
 ///   the paragraph below for the grounding).
 /// - `defaults` -- walked one profile chain level at a time
@@ -1556,11 +1556,11 @@ fn matches_config_entry(entry: &str, candidate_str: &str, category: &str, packag
 /// any other package's own resolution.
 ///
 /// **`iuse`'s own defaults**: found and grounded by comparing this
-/// pilot's own output against the real, installed system `emerge` on a
+/// portuale's own output against the real, installed system `emerge` on a
 /// real package (`media-video/ffmpeg`) -- REQUIRED_USE reported violated
 /// for a USE combination that's actually fully satisfied once IUSE's own
 /// `+`/`-` markers are honored (`ffmpeg`'s own real IUSE declares
-/// `+gpl`/`+dav1d`/`+drm`/etc., none of which this pilot's prior
+/// `+gpl`/`+dav1d`/`+drm`/etc., none of which portuale's prior
 /// `effective_use_flags` ever enabled, silently defaulting every one of
 /// them to disabled instead). Real `config.py`'s own `_setup_pkg_iuse`
 /// (`lib/portage/package/ebuild/config.py`, ~line 1878) builds exactly
@@ -1578,13 +1578,13 @@ fn matches_config_entry(entry: &str, candidate_str: &str, category: &str, packag
 /// (`package.use`) -- real portage's own actual precedence has every one
 /// of those three able to override an IUSE default; only `env`/`env.d`
 /// (real per-invocation/stacked-profile-env overrides at the far ends of
-/// `USE_ORDER`) sit even lower/higher than this pilot models at all.
+/// `USE_ORDER`) sit even lower/higher than portuale models at all.
 /// Applied here at that same relative position (the `pkginternal` step
 /// of the walk above), with the `repo` `package.use` applied first and
 /// every later layer replayed directly on top via `apply_incremental` --
 /// **not** a plain set union of the already-flattened `use_flags`. An
 /// earlier version of
-/// this pilot *did* union a flattened `base` here, which meant `base`
+/// portuale *did* union a flattened `base` here, which meant `base`
 /// could only ever *add* a flag, never explicitly cancel an IUSE
 /// `+default` the way real `defaults`/`conf` genuinely can (real
 /// `regenerate()` runs one continuous incremental walk across the whole
@@ -1613,7 +1613,7 @@ fn matches_config_entry(entry: &str, candidate_str: &str, category: &str, packag
 /// comment for the real "would masking every keyword make this
 /// invisible" definition. Grouped here as force-then-mask, ordinary
 /// then stable, within each tier (not real portage's own
-/// per-profile-level interleaving, which this pilot's own flat global
+/// per-profile-level interleaving, which portuale's own flat global
 /// `use_force`/`use_mask` accumulation already doesn't replicate either
 /// -- see `portage-profile`'s own `package.use.mask`/`.force` doc
 /// comment for that established, confirmed simplification, extended
@@ -1649,7 +1649,7 @@ pub fn effective_use_flags(
 ) -> HashSet<String> {
     // The per-package `USE_ORDER` walk, low priority -> high (real
     // `regenerate()` over the reversed `uvlist`; see this function's own
-    // doc comment for the full grounding). This pilot models, in order:
+    // doc comment for the full grounding). Portuale models, in order:
     //   env.d -> repo -> features -> pkginternal -> defaults -> conf -> pkg -> env
     // then the final `use.force`/`use.mask` step.
     let mut use_flags: HashSet<String> = HashSet::new();
@@ -1665,7 +1665,7 @@ pub fn effective_use_flags(
     // `profiles/make.defaults` USE (real `_repo_make_defaults`) first,
     // then every configured repo's own `profiles/package.use` -- all
     // *before* the ebuild's own IUSE defaults, the weakest layer this
-    // pilot models. Real `regenerate()` walks `configdict["repo"]["USE"]`
+    // portuale models. Real `regenerate()` walks `configdict["repo"]["USE"]`
     // (make.defaults) ahead of that tier's package-scoped USE, stacking
     // the candidate's repo's masters chain then the repo itself. Here an
     // entry with an empty repo name applies to every package (the main
@@ -1697,7 +1697,7 @@ pub fn effective_use_flags(
     // without enabling the flag). Sits between `repo` and `pkginternal`
     // in `USE_ORDER`. Only `test` is modelled (real `feature_use` never
     // holds anything else); `features_use` is `["test"]` or empty,
-    // derived from the pilot's last-wins `FEATURES` scalar. A
+    // derived from portuale's last-wins `FEATURES` scalar. A
     // use-masked `test` is still dropped by the `use.mask` step below,
     // exactly as real portage's own `regenerate()` filtering intends.
     for token in features_use {
@@ -1771,7 +1771,7 @@ pub fn effective_use_flags(
     // real portage's own `x not in usemask` guard intends. Deliberately
     // NOT guarded on `k` actually being a `USE_EXPAND` variable name
     // (real portage's own `use_expand_split` check): a `_*`-suffixed
-    // token in this pilot's USE set only ever originates from
+    // token in portuale's USE set only ever originates from
     // `USE_EXPAND` folding or `package.use`'s own `USE_EXPAND` shorthand.
     let iuse_names: Vec<String> = iuse
         .split_whitespace()
@@ -1809,7 +1809,7 @@ pub fn effective_use_flags(
     // use.stable.mask/package.use.stable.mask (when stable) join the
     // mask tier -- see this function's own doc comment. `use_force`/
     // `use_mask` (global) are applied at this exact position -- not
-    // folded into `base` early the way an earlier version of this pilot
+    // folded into `base` early the way an earlier version of portuale
     // did -- matching real `regenerate()`'s own `self.useforce`/
     // `self.usemask` (which `setcpv()` sets to the *per-package*
     // `getUseForce(pkg)`/`getUseMask(pkg)`, i.e. global force/mask
@@ -1908,7 +1908,7 @@ fn specificity_ordered_flags(
         .filter(|(entry, _)| matches_config_entry(entry, candidate_str, category, package))
         .collect();
     // Stable sort: ties (including every comparison-operator atom, which
-    // this pilot deliberately doesn't further distinguish -- see the
+    // portuale deliberately doesn't further distinguish -- see the
     // module doc comment) keep their original file/stacking order.
     matching.sort_by_key(|(entry, _)| atom_specificity(entry));
     for (_, tokens) in matching {
@@ -1986,13 +1986,13 @@ fn forced_or_masked_flags(
 }
 
 /// Simplified port of real `best_match_to_list`'s own specificity
-/// ranking table: versioned/slotted bare atoms and this pilot's own
+/// ranking table: versioned/slotted bare atoms and portuale's own
 /// bounded wildcard atoms only, matching `portage-dep`'s v1 grammar
 /// scope. A bounded wildcard atom (`*/*`, `category/*`, `*/package`)
 /// always ranks below every real atom, at `-2` -- real portage's own
 /// code has three separate extended-syntax tiers (`0` for a wildcard
 /// combined with `=*`, `-1` for one combined with a slot, `-2` for a
-/// bare one with neither), and this pilot's own wildcard grammar has no
+/// bare one with neither), and portuale's own wildcard grammar has no
 /// slot or glob concept at all, so every wildcard entry always falls
 /// into that third, lowest tier.
 fn atom_specificity(entry: &str) -> i32 {
@@ -2029,7 +2029,7 @@ fn atom_specificity(entry: &str) -> i32 {
 /// parent instead (opconvert's own "AND of AND is just AND" collapse).
 /// This distinction is why `use_reduce_flat` (which discards *all* group
 /// boundaries, a deliberate, already-documented simplification real
-/// DEPEND/RDEPEND recursion in this pilot relies on) can't be reused for
+/// DEPEND/RDEPEND recursion in portuale relies on) can't be reused for
 /// LICENSE at all -- the same reasoning that already made
 /// `portage_required_use` its own separate algorithm rather than a mode
 /// of this same function.
@@ -2165,7 +2165,7 @@ fn parse_license_tree(
 /// has at least one license that isn't in `acceptable`. Mirrors real
 /// `LicenseManager._getMaskedLicenses`'s own non-`||` branch, as a bool
 /// rather than the full "list every masked license" diagnostic (this
-/// pilot has no mask-reason display to feed it -- same simplification
+/// portuale has no mask-reason display to feed it -- same simplification
 /// `check_required_use` already makes for REQUIRED_USE).
 fn tree_has_masked_license(nodes: &[LicenseNode], acceptable: &HashSet<String>) -> bool {
     nodes.iter().any(|n| node_has_masked_license(n, acceptable))
@@ -2257,7 +2257,7 @@ fn has_masked_license(
 /// atom-specificity order -- real `_getPkgAcceptLicense`'s own
 /// `accept_license.extend(x)` loop over `ordered_by_atom_specificity`
 /// matches, ported the same way `package.use.mask`/`.force` already
-/// order multiple matches in this pilot (see `effective_use_flags`).
+/// order multiple matches in portuale (see `effective_use_flags`).
 /// The resulting symbolic token list is resolved into a *concrete*
 /// per-candidate acceptable-license set via the same `*`/`-*`/
 /// `-license`/`license` algorithm real `getMissingLicenses`/
@@ -2269,14 +2269,14 @@ fn has_masked_license(
 /// exist at all" question the way they do for the real masking check
 /// below).
 ///
-/// A `LICENSE` string this pilot's own bespoke parser can't make sense
+/// A `LICENSE` string portuale's own bespoke parser can't make sense
 /// of is treated as masked (not visible) rather than accepted --
-/// matching the "can't tell, so exclude" precedent this pilot's own
+/// matching the "can't tell, so exclude" precedent portuale's own
 /// `reinstall_flags_for_use_change`/`candidate_iuse_and_use` already
 /// establish for an unreadable candidate, rather than real portage's own
 /// (differently-plumbed) `InvalidDependString` handling, which routes a
 /// malformed `LICENSE` to a wholly separate "invalid metadata" masking
-/// reason this pilot has no equivalent pathway for.
+/// reason portuale has no equivalent pathway for.
 /// This candidate's own effective USE, only actually resolved if
 /// `value_str` (a `LICENSE`/`PROPERTIES`/`RESTRICT` string) contains a
 /// `?` at all -- real `use_reduce`'s own "if '?' in license_str"
@@ -2470,7 +2470,7 @@ fn fetch_bytes_to_download(
 /// matches (and its `_getMissingProperties`/`_getMissingRestrict`
 /// siblings, which do the identical thing for their own accept lists),
 /// ported the same way `package.use.mask`/`.force` already order
-/// multiple matches in this pilot (see `effective_use_flags`).
+/// multiple matches in portuale (see `effective_use_flags`).
 fn resolve_accept_tokens(
     global_accept: &[String],
     package_accept: &[(String, Vec<String>)],
@@ -2749,7 +2749,7 @@ pub fn is_visible(
 
 /// `--autounmask`'s own keyword-suggestion sub-feature (real
 /// `--autounmask-keep-keywords=n`, see `resolve_pretend_graph`'s doc
-/// comment for the full on/off default-resolution logic this pilot
+/// comment for the full on/off default-resolution logic portuale
 /// ported): true iff `candidate` would be `is_visible` except for its
 /// own KEYWORDS -- every other check `is_visible` makes (package.mask,
 /// license, properties, restrict) passes, only `keywords_accepted`
@@ -2757,7 +2757,7 @@ pub fn is_visible(
 /// to return a reason enum -- real portage's own `_get_masking_status`
 /// is considerably more elaborate (distinguishing package.mask/license/
 /// keyword/REQUIRED_USE/etc. reasons, each with its own "unmask hint"),
-/// and this pilot only needs the single "keywords, and only keywords"
+/// and portuale only needs the single "keywords, and only keywords"
 /// question for its own deliberately narrow v1 (see
 /// `resolve_pretend_graph`'s own doc comment for the full scope
 /// writeup, including what's deliberately still out: package.mask/
@@ -2832,8 +2832,8 @@ fn keyword_masked_only(
 /// `is_visible` check (KEYWORDS, LICENSE, PROPERTIES, RESTRICT) passes.
 /// Real portage keeps masks by default (`autounmask_keep_masks` defaults
 /// `True`); only `--autounmask-keep-masks=n` unmasks -- and even then
-/// this pilot's v1 doesn't reproduce real's `# <filename>:` + masking-
-/// comment lines (the pilot's `package_mask` list carries no source-file
+/// portuale's v1 doesn't reproduce real's `# <filename>:` + masking-
+/// comment lines (portuale's `package_mask` list carries no source-file
 /// / comment provenance), only the `#required by` dep chain + `=<cpv>`.
 fn mask_masked_only(
     candidate: &Candidate,
@@ -2981,7 +2981,7 @@ fn license_masked_only(
     !license_accepted(candidate, category, package, &candidate_str, config)
 }
 
-/// The keyword this pilot's own `--autounmask` v1 would suggest adding
+/// The keyword portuale's own `--autounmask` v1 would suggest adding
 /// to `package.accept_keywords` for `candidate` -- the first of its own
 /// (non-`-`-prefixed; a `-`-prefixed KEYWORDS token means "explicitly
 /// unsupported here," never a valid suggestion) `KEYWORDS` tokens.
@@ -3377,7 +3377,7 @@ fn conditional_flags(unevaluated_atom: &str) -> Vec<String> {
 /// re-evaluated atom now actually resolve?"
 ///
 /// Deliberately narrower than real `Atom.violated_conditionals` (~150
-/// lines of per-token-operator partitioning this pilot doesn't
+/// lines of per-token-operator partitioning portuale doesn't
 /// reproduce): instead of determining exactly *which* conditional
 /// use-deps were violated, this toggles *every* flag the unevaluated
 /// atom's own conditional use-deps reference, together, in one
@@ -3404,7 +3404,7 @@ fn conditional_flags(unevaluated_atom: &str) -> Vec<String> {
 /// [(flag, desired_state)])`, attached to the *dependency's* own
 /// `GraphEntry` (`parent_use_suggestion`) rather than the parent's own
 /// entry, unlike real portage's own `missing_use_reasons.append
-/// ((myparent, ...))` -- a pragmatic simplification: this pilot's
+/// ((myparent, ...))` -- a pragmatic simplification: portuale's
 /// `GraphEntry` model has no per-parent "reasons" list to attach it to
 /// instead, and the dependency's own entry is where the "no visible
 /// ebuild for dependency" note already lives.
@@ -3485,7 +3485,7 @@ fn suggested_parent_use_candidate(
     ))
 }
 
-/// `--json`'s own "state-change trace" (this pilot's own feature -- see
+/// `--json`'s own "state-change trace" (portuale's own feature -- see
 /// the `--json` module doc comment; not a port of any real emerge
 /// output): which config entries, if any, were actually load-bearing for
 /// an already-`is_visible` candidate to end up visible. `None` in every
@@ -3697,7 +3697,7 @@ fn keyword_mask_marker(
 /// unconditional-accept pre-scan that ignored fold order entirely --
 /// once folded, its presence in the final accepted set still means
 /// "accept any KEYWORDS state, even empty," the same real `"**" in
-/// pgroups` unconditional-match rule this pilot already documented. A
+/// pgroups` unconditional-match rule portuale already documented. A
 /// bare `package.accept_keywords` atom with no keyword list at all no
 /// longer reaches this function empty: `resolve_config`
 /// (`portage-profile`) already substitutes real `accept_keywords_
@@ -3835,7 +3835,7 @@ fn vercmp_ordering(a: &str, b: &str) -> Ordering {
 /// `portuale/src/pretend.rs`'s own `--deselect`/`-W` implementation can
 /// reuse it directly -- real `action_deselect` (`lib/_emerge/actions.py`)
 /// only ever consults `vardb`/the world file, never repos/config at
-/// all, so this is the one real feature in this pilot with no need for
+/// all, so this is the one real feature in portuale with no need for
 /// `portage-repo`'s own repo/config-resolution machinery. `run_deselect`
 /// itself only ever uses `version`/`slot` from this (real
 /// `Atom(f"{pkg.cp}:{pkg.slot}")` never includes sub-slot either), so
@@ -3913,15 +3913,15 @@ pub fn installed_versions(root: &Path, category: &str, package: &str) -> Vec<Str
 /// recursive second-root graph isn't attempted). Whether `atom_str` is
 /// satisfied by anything installed under `running_root`'s own real vdb --
 /// `installed_candidates`, keyed directly off the atom's own parsed
-/// `category`/`package` (no wildcard-atom support needed: this pilot's
+/// `category`/`package` (no wildcard-atom support needed: portuale's
 /// own atom grammar never has an atom without an explicit category/
 /// package, see `portage_dep::parse_atom`'s own doc comment), matched via
 /// `portage_dep::match_from_list` the same way every other real
-/// installed-package match in this pilot works. Deliberately generic on
+/// installed-package match in portuale works. Deliberately generic on
 /// `running_root` (just like `installed_versions`/`owns_path_pf`
 /// elsewhere): this function has no idea whether it's being pointed at a
 /// real host `/` or a fixture's own fake vdb tree, and every automated
-/// test in this pilot uses the latter -- only `pretend.rs`'s own real CLI
+/// test in portuale uses the latter -- only `pretend.rs`'s own real CLI
 /// boundary ever points this at real `/`, matching real portage's own
 /// actual default (`SYSROOT` unset). USE-deps on the atom aren't checked
 /// against the running root's own recorded `USE` (the same simplification
@@ -3962,7 +3962,7 @@ pub enum PretendOutcome {
     /// because a newer version got masked/removed from the tree since
     /// `from` was merged. Real portage flags this with a distinct
     /// `attr_display.downgrade` column alongside its own `U` column
-    /// (both set together); this pilot's simplified one-letter-per-
+    /// (both set together); portuale's simplified one-letter-per-
     /// outcome scheme (see `Upgrade`/`Reinstall`'s own `r`/`U`) uses a
     /// single dedicated `D` instead of stacking two.
     Downgrade {
@@ -4003,7 +4003,7 @@ pub enum PretendOutcome {
     /// run leaves `cat/pkg` in that slot, so it must be rebuilt against
     /// the new ABI (`slot_operator_rebuild_entries`, a single-pass v1 --
     /// see its own doc comment). Never combined with the other five in
-    /// this pilot: the post-pass only ever constructs it standalone.
+    /// portuale: the post-pass only ever constructs it standalone.
     Reinstall {
         version: String,
         changed_flags: Vec<String>,
@@ -4021,7 +4021,7 @@ pub enum PretendOutcome {
 /// whitespace-separated token, with any `+`/`-` IUSE default-marker
 /// prefix stripped (irrelevant here: a reinstall check only cares which
 /// flags exist/are enabled, not their declared defaults). A missing file
-/// (e.g. an older vdb entry from before this pilot's fixtures modeled
+/// (e.g. an older vdb entry from before portuale's fixtures modeled
 /// USE/IUSE at all) is an empty set, not an error -- same "absence is a
 /// real, valid state" precedent `read_world_atoms` (pretend.rs) already
 /// established.
@@ -4040,7 +4040,7 @@ fn read_vdb_flag_set(
 }
 
 /// The on-disk vdb directory for `<category>/<package>-<version>`. Real
-/// global-updates renames a moved package's vdb dir; this pilot never
+/// global-updates renames a moved package's vdb dir; portuale never
 /// writes, so when the direct path is absent it falls back to every
 /// `installed_cp_sources` name (the pre-`move` locations that map onto
 /// this `cat/pkg`). Returns the direct path unchanged when nothing
@@ -4175,7 +4175,7 @@ pub fn all_installed_packages(root: &Path) -> Vec<InstalledPackage> {
             );
             // Real `profiles/updates/` package moves: present each vdb
             // entry under its post-`move`/`slotmove` identity, the way
-            // real global-updates rewrites the vdb on sync (this pilot
+            // real global-updates rewrites the vdb on sync (portuale
             // never writes -- see `vdb_pkg_dir` for the read-back side).
             let (category, name) = apply_updates_to_cp(&category, &name);
             let (slot, _sub) = apply_updates_to_slot(&category, &name, &slot, &sub);
@@ -4268,7 +4268,7 @@ fn split_installed_dir(dirname: &str) -> Option<(String, String)> {
 /// kept -- `emerge --depclean` will not remove something the tree still
 /// needs in order to rebuild what stays installed. Real removal walks
 /// build deps against the root being cleaned (`depend_root = myroot`,
-/// `depgraph.py:4218-4219`), i.e. the same vdb, so this pilot reads them
+/// `depgraph.py:4218-4219`), i.e. the same vdb, so portuale reads them
 /// from the same `<root>` vdb as the runtime keys.
 ///
 /// **No `args`** (a full `emerge --depclean`): roots = the installed
@@ -5084,7 +5084,7 @@ pub struct PruneNodepsCp {
 /// "Best" is real portage's own: the highest version, except that on a
 /// same-slot collision (two versions in one slot -- a broken vdb) the
 /// one with the highest `COUNTER` (most recently installed) wins. This
-/// pilot's single-slot fixtures never hit that collision, so `best` is
+/// portuale's single-slot fixtures never hit that collision, so `best` is
 /// just the highest version -- the `COUNTER` tiebreak is a documented
 /// narrowing, the same category as the other `-pC` slot refinements.
 ///
@@ -5151,7 +5151,7 @@ pub fn prune_nodeps_selection(root: &Path, args: &[String]) -> Vec<PruneNodepsCp
 /// `(cp, slot)` (real `vardb.cp_all()` -> `cp_list`).
 ///
 /// Same `COUNTER`-tiebreak narrowing as [`prune_nodeps_selection`] (the
-/// pilot's single-instance-per-slot fixtures never hit it), and no
+/// portuale's single-instance-per-slot fixtures never hit it), and no
 /// `sys-apps/portage` self-skip (real `unmerge.py:368`: the self-skip is
 /// explicitly *not* applied for `--clean`).
 pub fn clean_selection(root: &Path, args: &[String]) -> Vec<PruneNodepsCp> {
@@ -5498,7 +5498,7 @@ fn build_use_expand_display(
             .collect();
         // Natural sort, same key as the `display` list above (real
         // `_alnum_sort_key`). Real portage sorts `cur ∪ old` as one list;
-        // this pilot keeps its own cur-then-removed routing, a
+        // portuale keeps its own cur-then-removed routing, a
         // pre-existing structural difference -- only the key changes here.
         removed.sort_by_key(|f| alnum_sort_key(f));
         for flag in removed {
@@ -5738,7 +5738,7 @@ fn read_vdb_slot(root: &Path, category: &str, package: &str, version: &str) -> (
 ///
 /// KNOWN, DOCUMENTED SCOPE CUT: real portage's own consumers of
 /// `_changed_slot` live deep inside binary-package/slot-operator-rebuild
-/// scheduling this pilot has none of
+/// scheduling portuale has none of
 /// (`_slot_operator_replace_installed`, `built`/`useoldpkg` branches in
 /// `_privileged_size_fetch`/candidate selection) -- rejecting a matched
 /// installed candidate and, depending on context, either aborting the
@@ -5753,7 +5753,7 @@ fn read_vdb_slot(root: &Path, category: &str, package: &str, version: &str) -> (
 /// Deliberately does *not* reuse `Candidate::slot` (which
 /// `list_candidates` already truncates to the main component only, see
 /// its own doc comment) -- re-reads the repo's own raw `SLOT` value
-/// directly instead, the same "re-read metadata this pilot's general
+/// directly instead, the same "re-read metadata portuale's general
 /// `Candidate` model doesn't carry" approach `deps_changed` already uses
 /// for `DEPEND`/`RDEPEND`. A repo-side lookup that fails (version no
 /// longer in the tree, unreadable metadata) reports "unchanged" (`false`),
@@ -6076,8 +6076,8 @@ fn reinstall_flags_for_use_change(
 /// behavior is exactly as before this parameter existed.
 ///
 /// `selective`/`is_top_level`: a real, previously-undiscovered gap this
-/// pilot's own `update` handling above didn't capture, found by
-/// comparing this pilot's own output against the real, installed system
+/// portuale's own `update` handling above didn't capture, found by
+/// comparing portuale's own output against the real, installed system
 /// `emerge` on a real package (`sys-apps/portage`) and tracing real
 /// portage's own decision live. Real portage's `avoid_update` shortcut
 /// above (`!update`, ported as `update` here) is NOT sufficient on its
@@ -6104,12 +6104,12 @@ fn reinstall_flags_for_use_change(
 /// which set real `myparams["selective"]`) restore the "nothing to do"
 /// result. `selective` here mirrors real `create_depgraph_params.py`'s
 /// own `myparams["selective"] = True` condition, computed from
-/// whichever of its own real trigger flags this pilot actually
+/// whichever of its own real trigger flags portuale actually
 /// implements: `update`, `newuse`, `changed_use` (real portage's own
 /// `--changed-use`/`-U` rewrites to `--reinstall=changed-use` before
 /// `create_depgraph_params` ever runs, `lib/_emerge/main.py`, and
 /// `--reinstall` is itself constrained to that one literal choice in
-/// real portage -- so `changed_use` alone covers this pilot's whole
+/// real portage -- so `changed_use` alone covers portuale's whole
 /// share of that real condition, no separate `--reinstall` flag
 /// needed), `changed_deps` (any non-`"n"` value), `changed_slot`, plus
 /// the two flags whose *entire* real effect is exactly this (see
@@ -6120,13 +6120,13 @@ fn reinstall_flags_for_use_change(
 /// unconditionally). Real `--newrepo` (forces reinstall specifically on
 /// an installed-vs-current repo mismatch, and separately contributes to
 /// `selective`) is a documented, narrower scope cut, deliberately not
-/// modeled: this pilot has no vdb `REPOSITORY` reader (confirmed absent
+/// modeled: portuale has no vdb `REPOSITORY` reader (confirmed absent
 /// during this same investigation -- the real vdb file is even
 /// lowercase `repository`, unlike every other metadata key), the same
 /// "no vdb-metadata reader" simplification already documented elsewhere
 /// in this crate (e.g. `enqueue_dependencies`'s own doc comment).
 ///
-/// `is_top_level` is this pilot's own existing "argument" equivalent --
+/// `is_top_level` is portuale's own existing "argument" equivalent --
 /// `resolve_pretend_graph`'s own `depth == 0`, the identical
 /// equivalence already established for `--with-test-deps`'s own
 /// `pkg.depth == 0 and self._is_argument(pkg)` gating -- since every
@@ -6175,11 +6175,11 @@ fn reinstall_flags_for_use_change(
 /// depgraph.py (e.g. around its own lines 2331 and 5544) -- if every
 /// remaining candidate for this atom is excluded and none is already
 /// installed, this resolves to `NoVisibleCandidate`, the same outcome
-/// this pilot already gives an atom with no eligible candidate for any
+/// portuale already gives an atom with no eligible candidate for any
 /// other reason. Deliberately NOT replicated: real depgraph.py's own
 /// ~18 `excluded_pkgs` call sites cover many more specific interaction
 /// points (autounmask, binpkg selection, `--complete-graph`, ...) this
-/// pilot doesn't implement at all -- the two checks above cover the
+/// portuale doesn't implement at all -- the two checks above cover the
 /// dominant real-world use ("pin an installed package so `--update`/
 /// `--deep` never touch it") and the New/Upgrade selection case, not
 /// every real edge case.
@@ -6411,9 +6411,9 @@ const INFO_INSTALLED_VARS: &[&str] = &["CHOST", "CFLAGS", "CXXFLAGS", "FEATURES"
 ///
 /// Narrowing vs real: `_aux_env_search` reads the value from the
 /// package's `environment.bz2` when the individual `build-info` file is
-/// absent -- this pilot reads only the vdb file
+/// absent -- portuale reads only the vdb file
 /// (`write_vdb_entry_from_dir` copies every `build-info` file, so a
-/// pilot-merged package has them all); the `USE` line skips the `( )`
+/// portuale-merged package has them all); the `USE` line skips the `( )`
 /// force/mask wrapping real `pkg_use_display` does.
 pub fn resolve_installed_info(
     root: &Path,
@@ -6532,7 +6532,7 @@ pub struct InstalledInfo {
 /// already-flattened `flat_deps` before queueing (real "no separate
 /// graph node needed for an already-satisfied dep"). Degrades to an
 /// empty set on any flatten failure -- never a false negative that
-/// could silently drop a dep this pilot actually needed to walk.
+/// could silently drop a dep portuale actually needed to walk.
 fn root_deps_satisfied_atoms(
     metadata: &HashMap<String, String>,
     use_flags: &HashSet<String>,
@@ -6667,7 +6667,7 @@ fn resolved_version_meta_and_use(
 /// resolved -- reusing `resolve_pretend` wholesale, `is_top_level: false`/
 /// `selective: true`, `usepkg`/`usepkgonly` both `false` (a build-time
 /// tool needed to actually perform a build is never satisfied by a
-/// `--usepkg` binary, and this pilot's `--root-deps` scope has never
+/// `--usepkg` binary, and portuale's `--root-deps` scope has never
 /// touched binary packages) -- and then walks the resolved package's
 /// *own* `DEPEND` + `BDEPEND` + `RDEPEND` + `IDEPEND` against the running
 /// root too, recursively: real portage resolves all four of those
@@ -6913,7 +6913,7 @@ fn dependency_avoid_update_candidate<'a>(
                 // authoritative for what counts as a valid flag,
                 // independent of the profile's current `IUSE_IMPLICIT` --
                 // e.g. an ebuild that has since dropped a flag from its
-                // `IUSE`). This pilot doesn't persist a vdb
+                // `IUSE`). Portuale doesn't persist a vdb
                 // `IUSE_EFFECTIVE` file, but real `_match_use` recomputes
                 // the domain this same way rather than reading it.
                 let mut valid = valid_iuse(&vdb_iuse, config);
@@ -6956,12 +6956,12 @@ fn already_installed_or_reinstall(
     // `--emptytree`/`-e` (real `create_depgraph_params.py:176` --
     // `myparams["empty"] = True`, `depgraph.py:7889` -- installed
     // packages are not selected as candidates, so every atom in the
-    // deep tree resolves to a merge). This pilot's candidate pool is
+    // deep tree resolves to a merge). Portuale's candidate pool is
     // already tree-only, so `empty` just forces the "would be
     // `AlreadyInstalled`" fallback to a bare `Reinstall` instead
     // (real `output.py`: `attr_display.replace` still set from
     // `vardb.cpv_exists`, no `[oldver]`, no reason -- exactly the
-    // pilot's own reasonless `[ebuild R]`).
+    // portuale's own reasonless `[ebuild R]`).
     empty: bool,
 ) -> Result<PretendOutcome, String> {
     let changed_flags = if newuse || changed_use {
@@ -7067,7 +7067,7 @@ pub fn resolve_pretend(
     // myparams.pop("selective")`). Real portage stops selecting
     // installed packages as candidates (`depgraph.py:7889`), so every
     // atom in the (now forced-deep) tree resolves to a merge. This
-    // pilot's candidate pool is already tree-only; `empty` just (a)
+    // portuale's candidate pool is already tree-only; `empty` just (a)
     // clears `selective` locally and (b) turns every "already
     // installed at the resolved version" result into a bare
     // `Reinstall` (real `output.py`: `attr_display.replace` from
@@ -7182,7 +7182,7 @@ pub fn resolve_pretend(
     // `dependency_avoid_update_candidate`'s own doc comment for the
     // full citation) genuinely happens before real portage ever tries
     // to find a "best available" candidate at all -- so it's checked
-    // here too, before this pilot's own visibility/USE-dep-against-the-
+    // here too, before portuale's own visibility/USE-dep-against-the-
     // tree filtering below gets a chance to (wrongly) bail out with
     // `NoVisibleCandidate` for an atom whose installed version already
     // satisfies it. Confirmed live: `sys-fs/fuse`'s own real
@@ -7191,7 +7191,7 @@ pub fn resolve_pretend(
     // doesn't even have the right USE profile to satisfy the atom
     // (nothing enables it there), while the real, installed version
     // does (its own real vdb `USE`). `--exclude` deliberately keeps
-    // this pilot's own pre-existing, narrower behavior instead (see the
+    // portuale's own pre-existing, narrower behavior instead (see the
     // later, `!is_top_level`-aware `!update` shortcut's own comment) --
     // skipped here so that block still gets a chance to run.
     if !update && !is_top_level && excluded.is_empty() {
@@ -7533,7 +7533,7 @@ pub fn resolve_pretend(
     // shortcut above (`dependency_avoid_update_candidate`) already
     // handles the common case (see its own doc comment for the full
     // real-portage citation). It deliberately skips when `--exclude` is
-    // active, though, to preserve this pilot's own pre-existing
+    // active, though, to preserve portuale's own pre-existing
     // `--exclude`-vs-`matched` interaction exactly -- so this block
     // still needs its own `!is_top_level` branch, reusing the same
     // broader (not `is_visible`-filtered) lookup, for that one
@@ -7733,7 +7733,7 @@ pub struct BlockerConflict {
     pub matched_version: String,
 }
 
-/// One installed package this pilot's renderer needs to name in an
+/// One installed package portuale's renderer needs to name in an
 /// `[old-ver]` column -- version plus the slot/sub-slot/repo `emerge -pv`
 /// decorates it with (real `convert_myoldbest` at verbosity 3). `repo`
 /// is the vdb `repository` file's contents, or `"__unknown__"` when it's
@@ -7817,7 +7817,7 @@ pub struct GraphEntry {
     /// self.include_mask_str()` (`verbosity > 1`), and real default
     /// `emerge -p` verbosity is 2 -- so the column shows at plain `-p`
     /// *and* `-pv`, absent only under `--quiet` (verbosity 1), which
-    /// this pilot doesn't model (`pretend.rs::attr_display_field` always
+    /// portuale doesn't model (`pretend.rs::attr_display_field` always
     /// renders it). `'#'` for a candidate hard-masked in some
     /// profile/`package.mask` but pulled in anyway (`isHardMasked`, wins
     /// first), `'~'` for one visible only via a `~<our-arch>` testing
@@ -7861,7 +7861,7 @@ pub struct GraphEntry {
     /// already present in `DISTDIR` at the size its `Manifest` records.
     /// Only meaningful when `fetch_restrict` is `true`: `true` -> the
     /// green `f` column ("nothing to fetch"), `false` -> the red `F`
-    /// ("fetch these by hand"). A `SRC_URI` this pilot can't parse, or a
+    /// ("fetch these by hand"). A `SRC_URI` portuale can't parse, or a
     /// missing `Manifest` entry, counts as not-satisfied (`F`, the loud
     /// choice).
     pub fetch_restrict_satisfied: bool,
@@ -7874,7 +7874,7 @@ pub struct GraphEntry {
     /// can dedup a distfile shared by two entries once, exactly as real
     /// portage's own `myfetchlist` does. Empty for every non-`New`/
     /// `Upgrade`/`Downgrade`/`Reinstall` entry, for a binary candidate
-    /// (real `_calc_size` runs for binaries too, but this pilot has no
+    /// (real `_calc_size` runs for binaries too, but portuale has no
     /// remote-binpkg fetch so a local `PKGDIR` binary is always already
     /// present -> 0), and for an unparsable `SRC_URI` / incomplete
     /// `Manifest` (real `getfetchsizes` returns `None` and `_calc_size`
@@ -7907,7 +7907,7 @@ pub struct GraphEntry {
     /// `--autounmask`'s own keyword-suggestion sub-feature (see
     /// `resolve_pretend_graph`'s own doc comment), extended to a
     /// *dependency's* own `NoVisibleCandidate` -- previously deliberately
-    /// out of scope (this pilot's own v1 only ever suggested something
+    /// out of scope (portuale's own v1 only ever suggested something
     /// for a top-level atom's own fatal `NoVisibleCandidate`, which
     /// aborts the whole call and never reaches a `GraphEntry` at all).
     /// `(version, keyword)` of the best `suggested_keyword_candidate`
@@ -7945,13 +7945,13 @@ pub struct GraphEntry {
     /// `--root-deps`'s own real `ESYSROOT`-vs-running-root distinction
     /// (see `running_root_satisfies_atom`'s own doc comment for the full
     /// real `depgraph.py:4207-4271` grounding): `true` for an entry this
-    /// pilot resolved as a real `DEPEND`/`BDEPEND` (or, one recursion
+    /// portuale resolved as a real `DEPEND`/`BDEPEND` (or, one recursion
     /// level deeper, `RDEPEND`/`IDEPEND`) atom that isn't satisfied by
     /// the running root's own vdb and needs building *there*, not under
     /// the target `ROOT` at all -- real portage's own "recursively pull
     /// in and build new packages against the running root" behavior.
     /// `false` for every ordinary `ROOT`-targeted entry (every entry this
-    /// pilot ever produced before this field existed). Resolved via
+    /// portuale ever produced before this field existed). Resolved via
     /// `resolve_root_deps_build_entries`, which walks such an entry's own
     /// `DEPEND` + `BDEPEND` + `RDEPEND` + `IDEPEND` against the running
     /// root recursively, cycle-guarded by the shared `root_deps_build_seen`
@@ -7985,7 +7985,7 @@ type EdgeKindMap = HashMap<((String, String), (String, String)), (bool, bool)>;
 ///
 /// Real portage's `mylist` (`Display.__call__`'s input) is a genuine
 /// topological merge schedule -- its `Scheduler` runs every install
-/// after the installs it depends on. This pilot has no scheduler, but
+/// after the installs it depends on. Portuale has no scheduler, but
 /// every entry already carries `required_by` (the `(category, package)`
 /// of each entry that pulled it in), which is exactly the reverse of a
 /// dependency edge -- enough to order the list.
@@ -8191,7 +8191,7 @@ fn strip_revision(version: &str) -> &str {
 /// installed package whose own build-time dependency (`DEPEND`/`BDEPEND`
 /// in its vdb, resolved against its *built* `USE`) is satisfied by a
 /// package this run is merging is scheduled for a rebuild.
-/// `_needs_rebuild(dep_pkg)` -- for this pilot every merge is from source
+/// `_needs_rebuild(dep_pkg)` -- for portuale every merge is from source
 /// (`dep_pkg.built` is always false), so: `unbuilt` triggers always (a
 /// source build invalidates any binary parent); `new_rev` triggers
 /// unless the merged `cat/pkg-version` (revision included) is already one
@@ -8655,12 +8655,12 @@ fn resolve_blockers(
 /// caused to be resolved (and recursed into). This is distinct from two
 /// atoms simply requesting *different* slots of the same package (e.g.
 /// `dev-lang/python:3.11` and `dev-lang/python:3.12`), which real portage
-/// -- and this pilot, see `resolve_pretend_graph`'s doc comment -- treats
+/// -- and portuale, see `resolve_pretend_graph`'s doc comment -- treats
 /// as normal, valid coexistence, not a conflict at all.
 ///
 /// Purely informational, the same "report, don't enforce" spirit as
 /// `BlockerConflict`: real portage's own depgraph treats an unresolved
-/// slot conflict as fatal and refuses to proceed; this pilot instead
+/// slot conflict as fatal and refuses to proceed; portuale instead
 /// reports it and keeps going (using whichever version was resolved
 /// first), consistent with the rest of this follow-up series --
 /// `--pretend` itself never touches anything real, so nothing here is
@@ -8794,7 +8794,7 @@ fn build_slot_conflict(
 /// repo's current ebuild for that exact version (`deps_changed`) -- but
 /// reported, not reinstalled (see `resolve_pretend_graph`'s own doc
 /// comment). `repo_name` is the repo that currently provides `version`,
-/// standing in for real `pkg.repo` (this pilot has no vdb `REPOSITORY`
+/// standing in for real `pkg.repo` (portuale has no vdb `REPOSITORY`
 /// reader to know what the *installed* copy's own repo was) -- real
 /// `_changed_deps_report`'s own `if pkg.repo != ebuild.repo: continue`
 /// filter requires the two to already be equal before a package is even
@@ -8875,7 +8875,7 @@ pub struct GraphResult {
     /// `The following mask changes are necessary to proceed:` block,
     /// between keyword and USE. Off unless `--autounmask-keep-masks=n`.
     /// v1 cut: real's `# <filename>:` + masking-comment lines (no
-    /// source-file provenance on the pilot's `package_mask` list).
+    /// source-file provenance on portuale's `package_mask` list).
     pub autounmask_mask_changes: Vec<AutounmaskChange>,
     /// `(provider-cpv, consumer-cpv)` pairs behind each slot-operator
     /// auto-rebuild (real `_compute_abi_rebuild_info`'s `_forced_rebuilds`):
@@ -8924,7 +8924,7 @@ pub struct AutounmaskChange {
 }
 
 /// Real `_get_dep_chain_as_comment` (`depgraph.py:6457`), narrowed to
-/// this pilot's own one-level-parent tracking: the `#required by …`
+/// portuale's own one-level-parent tracking: the `#required by …`
 /// lines for an autounmask change on `owner`'s dependency (or a
 /// top-level `current_atom`). A top-level atom yields a single
 /// `required by <atom> (argument)`; a dependency yields `required by
@@ -9031,7 +9031,7 @@ fn autounmask_use_atom_form(
 /// `myparams` entirely, since `create_depgraph_params.py` only sets it
 /// when `--deep`'s own value is present and non-zero) means an
 /// AlreadyInstalled package's own further dependencies are *never*
-/// walked, at any depth -- exactly this pilot's own pre-existing,
+/// walked, at any depth -- exactly portuale's own pre-existing,
 /// hardcoded behavior (see `resolve_pretend_graph`'s own doc comment,
 /// "A package's dependencies are only walked if..."), which is why
 /// `NotRequested` needed no new code of its own to stay correct. A bare
@@ -9198,17 +9198,17 @@ fn enqueue_flat_deps(
 /// `node.slot_atom`:
 ///
 ///   - `complete_if_new_ver`: `inst_pkg < node or node < inst_pkg` (an
-///     in-slot version change -- this pilot's `Upgrade`/`Downgrade`), or
+///     in-slot version change -- portuale's `Upgrade`/`Downgrade`), or
 ///     a slot/sub-slot change without a revbump (8611-8618 -- this
-///     pilot's `--changed-slot` `Reinstall` with `slot_changed`, and a
+///     portuale's `--changed-slot` `Reinstall` with `slot_changed`, and a
 ///     `New` into a slot of an already-installed `cp`, `new_slot`).
 ///   - `complete_if_new_use`: `node.iuse.all != inst_pkg.iuse.all` or the
-///     enabled-USE ∩ IUSE sets differ -- this pilot's `--newuse`/
+///     enabled-USE ∩ IUSE sets differ -- portuale's `--newuse`/
 ///     `--changed-use` `Reinstall`, whose `changed_flags` is real
 ///     `_reinstall_for_flags`'s own return value.
 ///   - `complete_if_new_slot`: `vardb.match_pkgs(Atom(node.cp))` exists,
 ///     same `cp`, and no installed pkg matches `node`'s slot/sub-slot
-///     (8634-8645) -- a new-slot install, this pilot's `New` + `new_slot`.
+///     (8634-8645) -- a new-slot install, portuale's `New` + `new_slot`.
 ///
 /// The CLI layer runs the first resolve, calls this on its entries, and
 /// (if it returns `true` and neither `--complete-graph` nor `--deep` is
@@ -9283,7 +9283,7 @@ pub fn complete_graph_auto_enable(
 ///     ordering treats these differently (BDEPEND must be satisfied on
 ///     the build host before compiling; PDEPEND only after this package
 ///     itself merges; IDEPEND only at install time) -- meaningless
-///     distinctions for a `--pretend`-only pilot with no real merge
+///     distinctions for a `--pretend`-only portuale with no real merge
 ///     ordering or phase execution to begin with (see docs/agent-context.md's
 ///     "Deferred: ebuild phase execution"), so v1 treats all five as "a
 ///     dependency this package needs, resolve and report it" uniformly,
@@ -9319,17 +9319,17 @@ pub fn complete_graph_auto_enable(
 ///     behavior when *none* is currently satisfiable, so the same
 ///     "never silently wrong about whether a dependency exists"
 ///     invariant still holds -- nothing regresses for a dependency this
-///     pilot genuinely can't resolve either way. Real portage's own
+///     portuale genuinely can't resolve either way. Real portage's own
 ///     considerably richer preference order (installed packages first,
 ///     backtracking on a later constraint failure) isn't ported -- this
-///     pilot has no backtracking architecture at all -- just the single
+///     portuale has no backtracking architecture at all -- just the single
 ///     "first currently-resolvable alternative wins" rule.
 ///   - A dependency atom with no visible candidate does not fail the
 ///     whole graph: it still gets a `GraphEntry` with
 ///     `PretendOutcome::NoVisibleCandidate` (so it's visible in the
 ///     output, not silently dropped), it's just not recursed into
 ///     further, matching the "best effort" spirit of the rest of this
-///     pilot slice. Repeat atoms resolving to `NoVisibleCandidate` (or
+///     slice. Repeat atoms resolving to `NoVisibleCandidate` (or
 ///     `AlreadyInstalled`) for the same category/package are still
 ///     deduped to a single entry -- these two outcomes carry no slot to
 ///     usefully distinguish repeats by, unlike New/Upgrade.
@@ -9351,7 +9351,7 @@ pub fn complete_graph_auto_enable(
 ///     `--newuse` existed -- unless `deep` (`--deep`/`-D`, see `Deep`)
 ///     says otherwise for this particular package's own depth, in which
 ///     case its dependencies are walked too (via the same repo-metadata
-///     lookup as any other resolved candidate, since this pilot has no
+///     lookup as any other resolved candidate, since portuale has no
 ///     vdb-metadata reader of its own -- a deliberate simplification vs
 ///     real portage, which reads the installed copy's own recorded
 ///     metadata instead; see `enqueue_dependencies`'s own doc comment).
@@ -9365,7 +9365,7 @@ pub fn complete_graph_auto_enable(
 ///     `newuse`/`changed_use` combine.
 ///   - `with_test_deps` (`--with-test-deps`, real `depgraph.py`'s own
 ///     `_add_pkg`) additionally pulls in `test?`-gated deps for a
-///     top-level atom (`depth == 0` -- this pilot's own equivalent of
+///     top-level atom (`depth == 0` -- portuale's own equivalent of
 ///     real `pkg.depth == 0 and self._is_argument(pkg)`, since every
 ///     depth-0 atom here already came from `atoms` itself or a `@world`/
 ///     `@system` expansion of it, both of which real portage also
@@ -9392,7 +9392,7 @@ pub fn complete_graph_auto_enable(
 ///     whether its dependencies get walked), but no DEPEND/RDEPEND/etc
 ///     is ever read, so no dependency atom is ever queued and no blocker
 ///     is ever collected -- blockers only ever come from a dependency
-///     string in this pilot, so this falls out for free rather than
+///     string in portuale, so this falls out for free rather than
 ///     needing its own special case.
 ///   - `update` (`--update`/`-u`) is threaded uniformly to every atom this
 ///     BFS resolves, top-level and dependency alike, via `resolve_pretend`
@@ -9403,7 +9403,7 @@ pub fn complete_graph_auto_enable(
 ///     `myopts` checks inside real `_wrapped_select_pkg_highest_available_imp`,
 ///     the one package-selection function every atom resolution (args and
 ///     dependencies alike) already funnels through in real portage too,
-///     so this isn't a new pilot-specific simplification beyond the one
+///     so this isn't a new portuale-specific simplification beyond the one
 ///     `newuse`/`changed_use` already made.
 ///   - `deep` (`--deep`/`-D`, see `Deep`'s own doc comment): gates only
 ///     whether an AlreadyInstalled package's own further dependencies get
@@ -9422,7 +9422,7 @@ pub fn complete_graph_auto_enable(
 ///     walked at all once `deep` says to. `false` is real
 ///     `--with-bdeps=n`; `true` covers both real `y` and the real default
 ///     `auto` (`create_depgraph_params.py`'s own `myparams["bdeps"] =
-///     "auto"` whenever `--usepkg` isn't given, which this pilot's own
+///     "auto"` whenever `--usepkg` isn't given, which portuale's own
 ///     `--usepkg`-less CLI always satisfies) -- `depgraph.py` itself only
 ///     ever tests `in ("y", "auto")`, never distinguishing the two, so
 ///     collapsing them into one caller-facing bool loses no real
@@ -9438,8 +9438,8 @@ pub fn complete_graph_auto_enable(
 ///     `resolve_pretend` call like any other, with no special case
 ///     needed.
 ///   - Each `GraphEntry`'s own `required_by` (which package(s), if any,
-///     pulled it in via a dependency string -- pilot-specific, no real
-///     portage equivalent asked for by this pilot's own `--json` output;
+///     pulled it in via a dependency string -- portuale-specific, no real
+///     portage equivalent asked for by portuale's own `--json` output;
 ///     see `GraphEntry`'s own doc comment) is tracked in a separate
 ///     `required_by_map` accumulated throughout the BFS and merged into
 ///     `entries` in one pass at the end, the same "accumulate now, merge
@@ -9455,7 +9455,7 @@ pub fn complete_graph_auto_enable(
 ///     (`resolve_pretend`'s own new parameter) is this BFS's own
 ///     pre-existing `depth == 0`, passed at the one call site below --
 ///     the same equivalence `--with-test-deps` already established
-///     between real "argument" and this pilot's own `depth == 0`.
+///     between real "argument" and portuale's own `depth == 0`.
 ///   - New-slot installs (`[ebuild NS]`, real `output.py::
 ///     _get_installed_best`'s own `new_slot`): `resolve_pretend`'s own
 ///     "is this candidate already installed" checks are slot-aware --
@@ -9474,14 +9474,14 @@ pub fn complete_graph_auto_enable(
 ///     `_get_masking_status`, builds dependency-chain comments via
 ///     `_get_dep_chain_as_comment`, and picks specific suggested-atom
 ///     syntax based on whether the suggested version is the latest --
-///     none of that is ported here). This pilot's own v1 only detects
+///     none of that is ported here). Portuale's own v1 only detects
 ///     the single "masked by KEYWORDS, and only KEYWORDS" case (see
 ///     `keyword_masked_only`'s own doc comment) for a top-level atom's
-///     own fatal `NoVisibleCandidate`, and appends a pilot-specific
+///     own fatal `NoVisibleCandidate`, and appends a portuale-specific
 ///     summary line naming the best such candidate and its own
 ///     suggested keyword (see `suggested_keyword`'s own doc comment) --
 ///     not real portage's own exact suggested-atom syntax or comment-
-///     chain formatting, the same "pilot-specific summary, not a port
+///     chain formatting, the same "portuale-specific summary, not a port
 ///     of real formatting" precedent already established for
 ///     REQUIRED_USE's own error message. **USE** (`autounmask_suggest_use`)
 ///     and **license** (`autounmask_suggest_license`) resolution have
@@ -9491,19 +9491,19 @@ pub fn complete_graph_auto_enable(
 ///     `package.mask` suggestions (real `--autounmask-keep-masks`),
 ///     combining multiple simultaneous suggestion kinds the way real
 ///     `_autounmask_levels` does, and any actual mutation
-///     (`--autounmask-write`) -- report only, matching this pilot's own
+///     (`--autounmask-write`) -- report only, matching portuale's own
 ///     "report, don't enforce" spirit throughout.
 ///
 ///     `autounmask_suggest_keywords` itself is the caller's own
 ///     already-resolved on/off decision (computed in `pretend.rs`),
 ///     grounded against real `create_depgraph_params.py`'s own
 ///     `autounmask`/`autounmask_keep_keywords` default-resolution logic,
-///     simplified since this pilot's v1 never reads
+///     simplified since portuale's v1 never reads
 ///     `--autounmask-use`/`-license` at all (confirmed: with those two
 ///     always unset, real `create_depgraph_params.py`'s own "is
 ///     autounmask itself enabled" branch always takes its "yes" arm
 ///     regardless, so this is a faithful simplification for exactly the
-///     scope this pilot supports, not a shortcut around it):
+///     scope portuale supports, not a shortcut around it):
 ///     `autounmask` itself defaults to enabled, off only via explicit
 ///     `--autounmask=n`; `autounmask_keep_keywords` (real: "suppress
 ///     keyword suggestions") defaults to suppressed (kept) when
@@ -9596,7 +9596,7 @@ pub fn resolve_pretend_graph(
     // already-installed package whose `cat/pkg-version` matches one of
     // these atoms is treated as if not installed -- real `depgraph.py:
     // 4547`/`4643`/`8331` drop it from every `inst_pkgs` satisfaction
-    // list, forcing a re-merge. In this pilot's model that is exactly a
+    // list, forcing a re-merge. In portuale's model that is exactly a
     // scoped `--emptytree`: `resolve_pretend`'s own
     // `AlreadyInstalled` -> `Reinstall` rewrite (see `empty`), applied
     // per matching atom right after resolution. Same two-tier
@@ -9623,7 +9623,7 @@ pub fn resolve_pretend_graph(
     rebuild_ignore: &[String],
     // `--dynamic-deps` (real `create_depgraph_params.py`, ON by default
     // for a source install): `true` walks an AlreadyInstalled package's
-    // deps from the current ebuild (the pilot's own long-standing
+    // deps from the current ebuild (portuale's own long-standing
     // behaviour); `false` (`--dynamic-deps=n`) walks its vdb snapshot --
     // see `enqueue_dependencies`'s own doc comment. Only reachable under
     // `--deep`.
@@ -9639,7 +9639,7 @@ pub fn resolve_pretend_graph(
     // `args ∪ @system ∪ @world`, and toggles `myparams["deep"] = True`
     // (8668-8670). In a `--pretend` that never removes or downgrades an
     // installed package, the first three are provably inert -- a
-    // consistent installed set stays consistent, and this pilot's
+    // consistent installed set stays consistent, and portuale's
     // `--rebuild-if-*` / slot-operator (`:=`) auto-rebuild passes already
     // scan *every* installed package (`all_installed_packages`), both
     // firing only for a dep that actually merges this run (which
@@ -9760,7 +9760,7 @@ pub fn resolve_pretend_graph(
         // reachable candidate has had a chance to resolve (or fail) on its
         // own terms -- matching real portage's own `_unsatisfied_deps_for_
         // display` list (checked once, at the very end of the real resolve)
-        // rather than this pilot's own previous "abort on the first hit"
+        // rather than portuale's own previous "abort on the first hit"
         // shortcut.
         let mut required_use_violations: Vec<String> = Vec::new();
         let mut slot_conflicts: Vec<SlotConflict> = Vec::new();
@@ -9934,7 +9934,7 @@ pub fn resolve_pretend_graph(
 
             // `--reinstall-atoms`: a matching already-installed package
             // is forced to re-merge (real `depgraph.py` drops it from
-            // every `inst_pkgs` list). In this pilot's model that is the
+            // every `inst_pkgs` list). In portuale's model that is the
             // `--emptytree` rewrite, scoped to the matched atom.
             if let PretendOutcome::AlreadyInstalled { version } = &outcome {
                 let cpv = format!("{}/{}-{version}", key.0, key.1);
@@ -9963,7 +9963,7 @@ pub fn resolve_pretend_graph(
             // `package.use` flip (`suggested_use_flip`) is impossible. Real
             // portage then flips the *parent's* conditional flag instead
             // (`suggested_parent_use_candidate`), re-resolves, and prints the
-            // change in the same "necessary to proceed" USE block. This pilot
+            // change in the same "necessary to proceed" USE block. Portuale
             // applies that one change and re-resolves only the freed
             // dependency (real portage re-resolves the whole graph -- see the
             // deliberate-cut note); a `--autounmask-use=n` suppresses it via
@@ -10162,7 +10162,7 @@ pub fn resolve_pretend_graph(
                 // candidate masked by package.mask/license/etc. too gets no
                 // suggestion here, matching real portage's own "only
                 // suggest a change that would actually fix it" spirit,
-                // even though this pilot doesn't yet combine multiple
+                // even though portuale doesn't yet combine multiple
                 // simultaneous suggestion kinds the way real portage can.
                 if autounmask_suggest_keywords {
                     if let Some((version, keyword)) =
@@ -10807,7 +10807,7 @@ pub fn resolve_pretend_graph(
             // flag that isn't even valid IUSE) is different: real
             // `check_required_use` itself raises for that case, outside the
             // explicit `if not required_use_is_sat:` branch that the delayed
-            // collection above lives in -- so this pilot keeps that one
+            // collection above lives in -- so portuale keeps that one
             // immediately fatal, same as before.
             if let Some(required_use) = metadata.get("REQUIRED_USE") {
                 if !required_use.trim().is_empty() {
@@ -10989,7 +10989,7 @@ pub fn resolve_pretend_graph(
             // queued as an ordinary (and wrongly reported) dependency. Real
             // `--root-deps` only ever applies to `DEPEND`/`BDEPEND` -- this
             // closure can't tell which of the five merged dep keys a given
-            // atom came from (this pilot's own single-unified-graph
+            // atom came from (portuale's own single-unified-graph
             // architecture merges them into one combined string before
             // flattening at all -- the same documented limitation
             // `docs/agent-context.md`'s own `--root-deps` backlog entry
@@ -11039,7 +11039,7 @@ pub fn resolve_pretend_graph(
             // slice) it must *not* fall through into the ordinary `flat_deps`
             // queue below and get wrongly resolved against `ROOT` instead
             // (real `DEPEND`/`BDEPEND` never targets `ROOT`/`ESYSROOT` at all
-            // under this pilot's own established `--root-deps` simplification
+            // under portuale's own established `--root-deps` simplification
             // -- see `root_deps_satisfied_atoms`'s own doc comment). Each one
             // instead gets resolved against the running root directly, the
             // same way any other atom would be, added as its own
@@ -11368,7 +11368,7 @@ pub fn resolve_pretend_graph(
         ));
 
         // Real portage's `mylist` is dependency-first (its Scheduler installs
-        // a package only after everything it depends on); the pilot's BFS
+        // a package only after everything it depends on); portuale's BFS
         // builds `entries` the other way (a package's entry is pushed before
         // its dependencies are ever queued). Re-sort into merge order now
         // that every `required_by` edge is known -- see
@@ -11435,10 +11435,10 @@ pub fn resolve_pretend_graph(
 ///
 /// `dynamic_deps` (real `--dynamic-deps`, `create_depgraph_params.py:
 /// 116-123`, ON by default for a source install): when `true` (the
-/// pilot's own long-standing behaviour), an AlreadyInstalled package's
+/// portuale's own long-standing behaviour), an AlreadyInstalled package's
 /// dependency walk uses the repo's **current** ebuild metadata + the
 /// recomputed effective `USE`, exactly like every other candidate lookup
-/// in this pilot. When `false` (`--dynamic-deps=n`), it reads the
+/// in portuale. When `false` (`--dynamic-deps=n`), it reads the
 /// package's own vdb-recorded `*DEPEND` snapshot instead, flattened
 /// against its built (`vdb/USE`) flags -- real portage's own
 /// installed-time metadata. The two only differ when the repo's copy of
@@ -11663,7 +11663,7 @@ fn enqueue_dependencies(
         }
         if root_deps_unsatisfied.contains(&tok) {
             // Real `DEPEND`/`BDEPEND` never targets `ROOT`/`ESYSROOT` at
-            // all under this pilot's own established `--root-deps`
+            // all under portuale's own established `--root-deps`
             // simplification -- already handled above instead (either a
             // new `targets_running_root` entry, or silently dropped on
             // failure/cycle -- see `resolve_root_deps_build_entries`'s own
@@ -12570,7 +12570,7 @@ mod tests {
         // (lines 7814/8448) means plain `emerge dev-libs/upgradepkg`,
         // with no --update, never even looks for a better version --
         // see resolve_pretend's own doc comment. This was, before this
-        // slice, this pilot's own (inaccurate) default behavior for
+        // slice, portuale's own (inaccurate) default behavior for
         // `upgrade` below.
         assert_eq!(
             resolve("dev-libs", "upgradepkg"),
@@ -12627,7 +12627,7 @@ mod tests {
         // confirmed live against a real system (`sys-libs/liburing`,
         // installed ~amd64-only, real emerge --pretend never even
         // considers downgrading it). Before this slice's own fix, this
-        // pilot incorrectly required the installed version to also be
+        // portuale incorrectly required the installed version to also be
         // in the visible-filtered candidate set, so this fixture would
         // have (wrongly) resolved to `Downgrade { from: "2.0", to:
         // "1.0" }` instead.
@@ -14030,7 +14030,7 @@ mod tests {
         // (`not myinslotlist` while `vardb.match(cp)` is non-empty) makes
         // this a `New` with `new_slot=True` (`[ebuild NS]`), NOT an
         // `Upgrade` from 1.0. Before installed matching was slot-aware
-        // this pilot mis-reported it as `Upgrade { from: "1.0", to:
+        // portuale mis-reported it as `Upgrade { from: "1.0", to:
         // "2.0" }` (both this crate and the Python oracle agreed, and
         // both were wrong).
         let entries = graph_entries_real("dev-libs/newslotpkg:1");
@@ -14661,13 +14661,13 @@ mod tests {
         // inspection): an ordinary ebuild whose RDEPEND is a
         // "|| ( dev-libs/newpkg dev-libs/samepkg )" any-of group of real
         // providers -- no PROVIDE mechanism, no dedicated virtuals
-        // resolution code anywhere in this pilot. Real "||" semantics
+        // resolution code anywhere in portuale. Real "||" semantics
         // (see use_reduce_flat_disjunctive, portage-use-reduce): the
         // first alternative with a currently-satisfiable candidate wins
         // -- dev-libs/newpkg (listed first, and visible) -- so
         // dev-libs/samepkg (second, and already installed -- also
         // satisfiable, but never even reached) is correctly never
-        // enqueued at all, unlike this pilot's own earlier "resolve
+        // enqueued at all, unlike portuale's own earlier "resolve
         // every alternative" v1.
         let entries = graph_entries_real("virtual/texteditor");
         let full_names: Vec<String> = entries
@@ -15614,7 +15614,7 @@ mod tests {
     #[test]
     fn complete_graph_forces_the_deep_walk_and_auto_enables_on_an_installed_change() {
         // deeppkg (installed) -> RDEPEND deeppkg2 (installed) -> RDEPEND
-        // newpkg (New). Without `--deep` the pilot never walks deeppkg's
+        // newpkg (New). Without `--deep` portuale never walks deeppkg's
         // deps; `complete` (real `_complete_graph` 8668-8670) toggles the
         // deep walk on, so newpkg surfaces -- byte-identical to `-D`.
         let root = fixtures_root();
@@ -15952,7 +15952,7 @@ mod tests {
     fn with_bdeps_default_true_walks_depend_and_bdepend_of_an_already_installed_package() {
         // withbdepspkg is already installed, RDEPENDs on newpkg, DEPENDs
         // on builddeponlypkg, BDEPENDs on hostdeponlypkg -- with_bdeps
-        // defaulting to true (real --with-bdeps=auto/y, this pilot's own
+        // defaulting to true (real --with-bdeps=auto/y, portuale's own
         // --usepkg-less default) walks all three under --deep, same as
         // before --with-bdeps existed.
         // Dep-key iteration order (DEPEND, RDEPEND, BDEPEND, PDEPEND,
@@ -16106,7 +16106,7 @@ mod tests {
     fn without_root_deps_a_bdepend_only_satisfiable_on_the_running_root_is_no_visible_candidate() {
         // rootdepspkg's own BDEPEND (dev-libs/rootdepsprovider) has no
         // ebuild anywhere in the fixture repo tree -- without
-        // `--root-deps`, this pilot has no way to know it's already
+        // `--root-deps`, portuale has no way to know it's already
         // satisfied elsewhere, so it's reported (not fatal, since it's a
         // dependency, not a top-level atom) exactly like any other
         // unresolvable dependency.
@@ -16156,7 +16156,7 @@ mod tests {
         // rootdepsprovider )` -- neither branch has an ebuild anywhere
         // in the fixture repo tree, so without `--root-deps` no branch
         // can be selected via ordinary tree-visibility at all: this
-        // pilot's own pre-existing, unrelated `portage_use_reduce`
+        // portuale's own pre-existing, unrelated `portage_use_reduce`
         // simplification (real `dep_zapdeps()`'s own "fall back to the
         // *last* alternative" isn't ported) leaves the whole `||` group
         // unresolved instead, so *both* branches end up queued and
@@ -17455,7 +17455,7 @@ mod tests {
     #[test]
     fn entries_are_returned_in_dependency_first_merge_order() {
         // `topological_merge_order`: real portage's `mylist` is a genuine
-        // topological merge schedule; the pilot's BFS builds entries
+        // topological merge schedule; portuale's BFS builds entries
         // parent-first, so `resolve_pretend_graph` re-sorts them into
         // dependency-first order before returning. `dev-libs/withdeps`
         // RDEPENDs `dev-libs/newpkg` + `dev-libs/upgradepkg`; both deps
@@ -17719,7 +17719,7 @@ mod tests {
         // satisfiable) is never even reached. See
         // use_reduce_flat_disjunctive's own doc comment
         // (portage-use-reduce) for the full "first satisfiable
-        // alternative wins" grounding this replaced this pilot's
+        // alternative wins" grounding this replaced portuale's
         // earlier "resolve every alternative" v1 with.
         let entries = graph("dev-libs/anyof");
         let names: Vec<&str> = entries.iter().map(|(n, _)| n.as_str()).collect();
@@ -18640,7 +18640,7 @@ mod tests {
         // dev-libs/requiredusebadpkg's own "foo? ( bar )") still gets
         // reached, resolved, and reported too -- not silently skipped
         // because the first atom already failed. Confirmed live against
-        // both this pilot's own Rust and Python implementations
+        // both portuale's own Rust and Python implementations
         // (byte-identical joined output) before this test was written.
         let root = fixtures_root();
         let config = portage_profile::resolve_config(
@@ -18720,7 +18720,7 @@ mod tests {
         // off (the real, correct default -- see resolve_pretend_graph's
         // own doc comment for the full on/off default-resolution logic
         // this mirrors), no suggestion is appended, matching this
-        // pilot's own pre-existing behavior exactly.
+        // portuale's own pre-existing behavior exactly.
         let root = fixtures_root();
         let config = portage_profile::resolve_config(
             &root,
@@ -18908,7 +18908,7 @@ mod tests {
         // alone (package.mask/license/KEYWORDS all pass), the exact
         // "use_masked_only" shape --autounmask-use's own v1 suggestion
         // targets. With autounmask_suggest_use off (the real default),
-        // no suggestion is appended, matching this pilot's own
+        // no suggestion is appended, matching portuale's own
         // pre-existing behavior exactly.
         let root = fixtures_root();
         let config = portage_profile::resolve_config(
@@ -19097,7 +19097,7 @@ mod tests {
         // exactly like real media-libs/mesa's own REQUIRED_USE
         // referencing "x86" without declaring it in IUSE -- confirmed
         // live against the real, installed system. Before this fix,
-        // this pilot's own iuse_set never consulted PORTAGE_ARCHLIST at
+        // portuale's own iuse_set never consulted PORTAGE_ARCHLIST at
         // all, so this would fail with "USE flag 'x86' is not in IUSE"
         // instead of resolving (x86 isn't the active profile's own arch,
         // so it stays disabled, and "!x86" is satisfied).
@@ -19774,7 +19774,7 @@ mod tests {
 
         // A new-slot New: oldbest lists every installed version (all
         // slots); the vdb entry for newslotpkg-1.0 has no `repository`
-        // file -> `__unknown__`... but this pilot's fixtures add one, so
+        // file -> `__unknown__`... but portuale's fixtures add one, so
         // it's testrepo. Its slot ("0") differs from the resolved slot.
         let ns = &graph_entries_real("dev-libs/newslotpkg:1")[0];
         assert!(ns.new_slot);
@@ -20126,7 +20126,7 @@ mod tests {
         let tree_disabled =
             parse_license_tree(&license_tokens("|| ( foo? ( GPL-2 MIT ) BSD )"), &disabled)
                 .unwrap();
-        // This pilot's own parser keeps the || wrapper (unlike real
+        // Portuale's own parser keeps the || wrapper (unlike real
         // use_reduce's own further single-alternative collapse -- see
         // the module doc comment on why that specific collapse isn't
         // replicated); masking-wise this is equivalent either way,
@@ -20735,7 +20735,7 @@ mod tests {
 
     #[test]
     fn effective_use_flags_lets_use_tokens_explicitly_cancel_a_plus_iuse_default() {
-        // The gap this pilot's own IUSE-defaults slice originally left
+        // The gap portuale's own IUSE-defaults slice originally left
         // open, now closed: real regenerate() runs ONE continuous
         // incremental walk (pkginternal -> defaults -> conf -> pkg), so
         // a genuine "-foo" in profile/make.conf really does cancel an
@@ -21419,7 +21419,7 @@ mod tests {
         // last step of its own incremental USE walk, strictly after the
         // "pkg" (package.use) tier -- so a package.use "-flag" entry can
         // NEVER turn off a globally use.force'd flag, unlike an earlier
-        // version of this pilot which folded use_force into `base` too
+        // version of portuale which folded use_force into `base` too
         // early, letting package.use incorrectly win.
         let use_force = HashSet::from(["forceflag".to_string()]);
         let package_use = vec![("dev-libs/bar".to_string(), vec!["-forceflag".to_string()])];

@@ -135,7 +135,7 @@ implements (`pretend.rs`'s `HELP_TEXT`, mirrored in
 
 ## Current state (read `what-this-proves.md` for the authoritative, living detail)
 
-Both major phases of this pilot are live — re-verify against `git
+Both major phases of portuale are live — re-verify against `git
 log`/`what-this-proves.md` before trusting this paragraph for long, since
 it decays fast.
 
@@ -285,7 +285,7 @@ merges a mix of binary and source entries per the resolver's plan
 fetch (including `mirror://`/`custommirrors` resolution and real
 `FEATURES=distlocks` file locking) via real `wget`; real eclass
 `inherit()` support; `ebuild --shell bash|brush` and `emerge --shell
-bash|brush` (pilot-only flags) pick the execution backend explicitly —
+bash|brush` (portuale-only flags) pick the execution backend explicitly —
 `emerge`'s covers every real phase chain it can drive as of 2026-09-02
 (source/binpkg merge, the `pkg_prerm`/`pkg_postrm` removal hooks under
 `-C`/`--unmerge`/`--depclean`/`--prune`/`--clean`/`--rage-clean`, and
@@ -328,7 +328,7 @@ in sequence inside the loop, the `resolve_graph_once` helper extraction
 updated record of every shipped slice, each grounded in cited real Python
 source — read that, not this list, for current detail, and `git log` for
 how work has actually been landing (one small, fully-shipped, documented-
-and-tested slice at a time — see "How this pilot actually runs" below).
+and-tested slice at a time — see "How portuale actually runs" below).
 
 ### Open backlog
 
@@ -485,7 +485,7 @@ version-pinned args that identify one slot, the vdb-only multislot
 fallback. `emerge @set` build support shipped 2026-08-31 (any non-built-in
 `@name` → recursive `resolve_custom_set`, same as the unmerge/depclean
 paths), and with it `saveNomergeFavorites`'s `@name` → `world_sets`
-recording (`update_world_sets_file`); `@selected` (= the pilot's `@world`
+recording (`update_world_sets_file`); `@selected` (= portuale's `@world`
 expansion, shared `expand_selected`) and `@installed` (`installed_set_atoms`,
 real `EverythingSet` — a `cat/pkg:slot` atom per vdb package, always
 slot-qualified) landed alongside. Real `SRC_URI` fetch (`portage-fetch` crate +
@@ -592,7 +592,7 @@ work, not an exhaustive compatibility sweep. **Full fork-tracking record:
    flipped from `brush` to `bash` on 2026-09-01** — brush's `declare -f`
    corrupts real eclass functions with redirected here-docs
    (`toolchain-funcs`'s `_tc-has-openmp`), breaking `emerge <atom>` for
-   compiled packages. So in practice this pilot now does the *reverse*:
+   compiled packages. So in practice portuale now does the *reverse*:
    default to bash, opt into brush. See `what-this-proves.md`'s
    "`--shell` default is now `bash`" and `brush-pin.md`.
 2. **Fix our own `bin/*.sh` to avoid brush-hostile constructs** — **done
@@ -608,7 +608,7 @@ work, not an exhaustive compatibility sweep. **Full fork-tracking record:
    #2 above, not patched). `brush-pin.md` tracks the pin and its
    periodic-re-pin checklist.
 
-## How this pilot actually runs, session to session
+## How portuale actually runs, session to session
 
 The session-to-session operating rhythm — the "next slice" workflow, the
 lockstep/fixture/test rules, the full verification pass, and the

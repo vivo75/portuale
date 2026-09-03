@@ -29,7 +29,7 @@
 // scoped and reviewed on its own, without risk to the already-shipped
 // preserve-libs *consult/unregister* side. `#[allow(dead_code)]` below
 // is deliberate: this module has no real caller yet, the same "narrow,
-// additive, no wiring until the next slice needs it" shape this pilot
+// additive, no wiring until the next slice needs it" shape portuale
 // has used before (e.g. `masters =` parsing landing before eclass
 // masters-chain search consumed it).
 #![allow(dead_code)]
@@ -148,7 +148,7 @@ impl NeededEntry {
 /// an empty `Vec`, matching real `rebuild()`'s own unconditional per-cpv
 /// walk (it never skips a `cpv` just because it happens to own no ELF
 /// content). Returns `(cpv, entries)` pairs in sorted vdb directory-
-/// listing order, for this pilot's own determinism -- real `cpv_all()`
+/// listing order, for portuale's own determinism -- real `cpv_all()`
 /// has no particular real ordering guarantee, so this doesn't lose
 /// anything real by sorting.
 ///
@@ -201,7 +201,7 @@ pub fn read_all_needed_entries(root: &Path) -> Vec<(String, Vec<NeededEntry>)> {
 /// `bin/misc-functions.sh` before it's ever written) to an approximate
 /// multilib category -- only ever consulted when a `NeededEntry` has no
 /// `multilib_category` field of its own (real, pre-multilib-category
-/// `NEEDED.ELF.2` data, or this pilot's own fixtures, which never emit
+/// `NEEDED.ELF.2` data, or portuale's own fixtures, which never emit
 /// that optional 6th field). Falls back to the raw `arch` string
 /// unchanged for anything not in the table, exactly like real portage.
 fn approx_multilib_category(arch: &str) -> String {
@@ -522,11 +522,11 @@ fn grab_lines(path: &Path) -> Vec<String> {
 /// (real `grabfile` semantics, see `grab_lines`), then the real
 /// `/usr/lib`/`/lib` defaults -- each `normalize_path`'d. Real
 /// `/etc/ld.so.conf.d/*.conf`'s own `include` directive expansion is
-/// deliberately not reproduced here, the same v1 cut this pilot's own
+/// deliberately not reproduced here, the same v1 cut portuale's own
 /// `env_update.rs` module doc comment already documents and confirmed
 /// with the user for the *other* real `/etc/ld.so.conf` reader in this
-/// pilot (`run_env_update`'s own candidate-lib-dir scan) -- a rare,
-/// admin-configured mechanism, not populated by anything this pilot's
+/// portuale (`run_env_update`'s own candidate-lib-dir scan) -- a rare,
+/// admin-configured mechanism, not populated by anything portuale's
 /// own fixtures do.
 pub fn getlibpaths(root: &Path, ld_library_path: Option<&str>) -> Vec<String> {
     let mut rval: Vec<String> = ld_library_path
@@ -628,7 +628,7 @@ impl LibGraph {
 /// directory is in the consumer's own runpath or `defpath`) are
 /// returned at all.
 ///
-/// `Err` for a real `KeyError` (matching this pilot's own established
+/// `Err` for a real `KeyError` (matching portuale's own established
 /// error-string convention) -- `obj` itself not a real indexed object at
 /// all.
 pub fn find_consumers(
@@ -734,9 +734,9 @@ pub fn find_consumers(
 ///
 /// `old_contents`: the *previous* same-slot instance's own real
 /// `CONTENTS` paths (real `installed_instance.getcontents()`) -- already
-/// `ROOT`-relative absolute paths in this pilot's own convention, unlike
+/// `ROOT`-relative absolute paths in portuale's own convention, unlike
 /// real Python's own `f_abs[root_len:]` stripping (which starts from a
-/// `ROOT`-joined absolute path; this pilot's `CONTENTS` entries never
+/// `ROOT`-joined absolute path; portuale's `CONTENTS` entries never
 /// carry `ROOT` in the first place, so there's nothing to strip).
 /// `old_owner_is_owner`: real `installed_instance.isowner` (does the
 /// *old*, being-replaced/removed instance own this path). `new_owner_is_
@@ -1370,7 +1370,7 @@ mod tests {
         let root = tempdir();
         make_object(&root, "/usr/lib/libfoo.so.1.2.3");
         // A real soname *symlink* (not a hardlink -- `alt_paths` for a
-        // preserve node is only ever populated from paths this pilot's
+        // preserve node is only ever populated from paths portuale's
         // own `old_contents`/consumer walk actually mentions, matching
         // real portage's own `path_to_node` semantics, never from a
         // filesystem-wide inode scan; both the real file and its own

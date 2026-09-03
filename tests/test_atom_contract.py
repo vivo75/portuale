@@ -1,4 +1,4 @@
-"""Black-box contract suite for the atom-matching pilot (see
+"""Black-box contract suite for the atom-matching portuale (see
 docs/agent-context.md and rust/portage-dep/src/lib.rs). Drives the
 Python harness (a thin wrapper around the real portage.dep.Atom /
 match_from_list) and the Rust harness identically via subprocess, and
@@ -60,7 +60,7 @@ PARSE_VALID_ATOMS = [
 ]
 
 # Not valid at all, or valid PMS atoms that use a feature outside the v1
-# grammar this pilot ports (see portage-dep/src/lib.rs's module doc
+# grammar portuale ports (see portage-dep/src/lib.rs's module doc
 # comment).
 PARSE_INVALID_ATOMS = [
     "not-an-atom",

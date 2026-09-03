@@ -1,4 +1,4 @@
-"""Black-box contract suite for the `emerge --pretend` pilot slice (see
+"""Black-box contract suite for the `emerge --pretend` slice (see
 docs/agent-context.md and rust/portage-repo/src/lib.rs for the full
 scope writeup, including the dependency-recursion follow-up in
 resolve_pretend_graph, the profile/make.conf -> real USE/ACCEPT_KEYWORDS
@@ -1069,7 +1069,7 @@ CASES = [
     ("-h bundled with other short flags still wins", ["-ph"], 0),
     ("--help wins even without --pretend at all", ["--help", "dev-libs/newpkg"], 0),
     (
-        "--shell (pilot-only) is accepted and inert under --pretend",
+        "--shell (portuale-only) is accepted and inert under --pretend",
         ["--pretend", "--shell", "brush", "dev-libs/newpkg"],
         0,
     ),
@@ -1094,7 +1094,7 @@ CASES = [
     ("@system combined with an explicit atom too", ["--pretend", "dev-libs/samepkg", "@system"], 0),
     ("a user-defined set given directly expands to its members", ["--pretend", "@nestedtestset"], 0),
     ("a user-defined set combined with an explicit atom too", ["--pretend", "dev-libs/samepkg", "@nestedtestset"], 0),
-    ("@selected expands like the pilot's @world", ["--pretend", "--update", "@selected"], 0),
+    ("@selected expands like portuale's @world", ["--pretend", "--update", "@selected"], 0),
     ("@selected combined with an explicit atom too", ["--pretend", "--update", "dev-libs/samepkg", "@selected"], 0),
     ("an unknown @set name is a real error", ["--pretend", "@some-other-set"], 1),
     (
@@ -1733,7 +1733,7 @@ def test_root_deps_matches_between_implementations(
 ):
     """--root-deps: rootdepspkg's own BDEPEND (dev-libs/rootdepsprovider)
     has no ebuild anywhere in the fixture repo tree -- only a hand-seeded
-    vdb entry. PORTAGE_RUNNING_ROOT (a pilot-specific, test-only override
+    vdb entry. PORTAGE_RUNNING_ROOT (a portuale-specific, test-only override
     -- see running_root_from_env's own doc comment) is pointed at the
     same fixture tree here purely as a convenient real vdb; ordinary
     dependency resolution never consults a root's own vdb at all, only
@@ -1803,7 +1803,7 @@ def test_root_deps_disjunctive_branch_selection_matches_between_implementations(
     is "|| ( dev-libs/rootdepsnonexistent dev-libs/rootdepsprovider )" --
     neither branch has an ebuild anywhere in the fixture repo tree, so
     without --root-deps no branch resolves at all and *both* are reported
-    as unresolvable dependencies (this pilot's own pre-existing "leave an
+    as unresolvable dependencies (portuale's own pre-existing "leave an
     unresolved || group's branches all in flat_deps" fallback, unrelated
     to --root-deps itself). With --root-deps, rootdepsprovider's own
     running-root satisfaction lets the closure select that branch
@@ -1845,7 +1845,7 @@ def test_root_deps_recursive_build_entry_matches_between_implementations(
     rather than the older running-root-satisfiability check alone. It
     isn't installed in the running root either way, so both with and
     without --root-deps it falls through to a real New entry -- without
-    --root-deps via this pilot's own pre-existing (unrelated to this
+    --root-deps via portuale's own pre-existing (unrelated to this
     slice) "BDEPEND resolved as an ordinary ROOT-targeted dependency"
     fallback, with --root-deps via the new targets_running_root entry
     instead. The --root-deps case now carries a " to <running root>"
@@ -1892,7 +1892,7 @@ def test_root_deps_recursive_build_entry_matches_between_implementations(
 def test_root_deps_build_entry_output_marks_the_running_root(
     emerge_binary, emerge_pretend_python, fixture_env
 ):
-    """The " to <running root>" marker this pilot adds to a --root-deps
+    """The " to <running root>" marker portuale adds to a --root-deps
     running-root build entry (real lib/_emerge/resolver/output.py:841-862's
     own darkgreen("to " + pkg.root), narrowed -- see pretend.rs's own
     root_suffix docstring). PORTAGE_RUNNING_ROOT is pinned to "/" here so
@@ -2146,7 +2146,7 @@ def test_diamond_dependency_is_deduped_and_ordered(emerge_binary, fixture_env):
     dependency-first *merge* order (portage_repo::topological_merge_order,
     mirrored _topological_merge_order) -- the shared leaf `common` first,
     then its two consumers in RDEPEND-string order, then the root
-    `diamond` last. Before this the pilot emitted BFS-discovery order
+    `diamond` last. Before this portuale emitted BFS-discovery order
     (root first)."""
     result = _run([str(emerge_binary)], ["--pretend", "dev-libs/diamond"], fixture_env)
     assert result.returncode == 0
@@ -2206,7 +2206,7 @@ def test_bdepend_pdepend_idepend_are_walked_same_as_depend_rdepend(
     was declared via BDEPEND (build-time, EAPI 7+), PDEPEND (post-merge),
     or IDEPEND (install-time, EAPI 8+, rare) would silently resolve with
     no dependencies at all. v1 makes no distinction between any of the
-    five real dependency-string keys (this pilot has no real merge
+    five real dependency-string keys (portuale has no real merge
     ordering for the distinction to matter to), so each of these three
     single-key fixtures must still pull in dev-libs/newpkg exactly like
     dev-libs/withdeps's own DEPEND/RDEPEND-based fixture does."""
@@ -2622,13 +2622,13 @@ def test_required_use_satisfied_resolves_normally(emerge_binary, fixture_env):
 def test_iuse_plus_minus_defaults_apply_when_nothing_else_says_otherwise(
     emerge_binary, fixture_env
 ):
-    """A real, previously-undetected gap, found by comparing this pilot's
+    """A real, previously-undetected gap, found by comparing portuale's
     own output against the real, installed system emerge on a real
     package (media-video/ffmpeg) -- REQUIRED_USE reported violated for a
     USE combination that's actually fully satisfied once IUSE's own
     "+"/"-" markers are honored. dev-libs/iusedefaultpkg's own IUSE is
     "+enableddefault -disableddefault plainflag": before this slice,
-    this pilot's own effective_use_flags never consulted IUSE's own
+    portuale's own effective_use_flags never consulted IUSE's own
     default markers at all, so "enableddefault" would have defaulted to
     disabled -- violating this fixture's own REQUIRED_USE
     ("enableddefault !disableddefault") and aborting the whole run with a
@@ -2659,7 +2659,7 @@ def test_required_use_referencing_an_implicit_arch_flag_resolves_normally(
     arch.list) among other things -- "x86" is a real, valid arch.list
     entry even on an amd64 profile, just not the active arch, so it's
     implicitly valid (and stays disabled). Before this slice, this
-    pilot's own iuse_set was built purely from a package's own literal
+    portuale's own iuse_set was built purely from a package's own literal
     IUSE, so this fixture (mirroring mesa's shape: empty IUSE,
     REQUIRED_USE="!x86") would abort with "USE flag 'x86' is not in
     IUSE" instead of resolving -- confirmed live against the real,
@@ -2687,8 +2687,8 @@ def test_global_use_force_and_use_mask_win_over_a_contradicting_package_use_entr
     (package.use) tier -- and setcpv() confirms self.useforce/
     self.usemask are themselves getUseForce(pkg)/getUseMask(pkg), i.e.
     *global* use.force/use.mask combined with the atom-scoped
-    package.use.force/.mask this pilot already applies last. Before this
-    slice, this pilot folded global use_force/use_mask into `base` early
+    package.use.force/.mask portuale already applies last. Before this
+    slice, portuale folded global use_force/use_mask into `base` early
     (inside portage_profile::resolve_config), before package.use ever
     ran in effective_use_flags -- so a package.use entry could
     previously override a global force/mask decision real portage never
@@ -2715,12 +2715,12 @@ def test_global_use_force_and_use_mask_win_over_a_contradicting_package_use_entr
 def test_profile_level_minus_flag_genuinely_cancels_an_iuse_plus_default(
     emerge_binary, fixture_env
 ):
-    """The gap this pilot's own IUSE-defaults slice originally left open,
+    """The gap portuale's own IUSE-defaults slice originally left open,
     now closed: real regenerate() runs ONE continuous incremental walk
     (pkginternal -> defaults -> conf -> pkg), so a genuine "-flag" in
     profile/make.conf really does cancel an earlier IUSE "+flag" default
     -- not just fail to add on top of it. Before this slice, this
-    pilot's own effective_use_flags union-ed the already-flattened
+    portuale's own effective_use_flags union-ed the already-flattened
     profile+make.conf result on top of the IUSE-defaults seed, which
     could only ever *add* a flag, never explicitly cancel one --
     dev-libs/cancelledpkg's own IUSE is "+cancelme" (defaults on), and
@@ -2787,7 +2787,7 @@ def test_required_use_violations_are_collected_across_the_whole_walk_not_just_th
     _dynamic_config._required_use_unsatisfied = True and returns 0 on a
     violation -- it does NOT abort the whole graph walk (unlike a
     top-level atom's own NoVisibleCandidate). Before this slice, this
-    pilot's own resolve_pretend_graph returned Err(...) immediately on
+    portuale's own resolve_pretend_graph returned Err(...) immediately on
     the first REQUIRED_USE violation, meaning a SECOND, independent
     top-level atom passed on the same command line (here,
     dev-libs/requiredusebadpkg2's own "baz? ( qux )", unrelated to
@@ -2865,9 +2865,9 @@ def test_autounmask_continue_and_backtrack_are_inert_under_pretend(
     emerge_binary, emerge_pretend_python, fixture_env
 ):
     """--autounmask-continue (real true_y_or_n) and --autounmask-backtrack
-    (real y|n) are both inert in this --pretend-only pilot: real portage
+    (real y|n) are both inert in this --pretend-only portuale: real portage
     gates write-and-continue on `"--pretend" not in myopts`
-    (depgraph.py:5796), and the pilot has no backtracking resolver. The
+    (depgraph.py:5796), and portuale has no backtracking resolver. The
     one real observable is the actions.py:3772 warning when
     --autounmask-continue meets --autounmask=n."""
     plain = ["--pretend", "dev-libs/newpkg"]
@@ -3490,7 +3490,7 @@ def test_pkgdir_directory_scan_resolves_a_binpkg_with_no_packages_index(
     as if a `Packages` entry had listed them.
 
     Both fixture binpkgs are genuine: `packagepkg-1.0.tbz2` was built by
-    the pilot's own `ebuild <file> package` (real `xpak.py`);
+    portuale's own `ebuild <file> package` (real `xpak.py`);
     `gpkgreadpkg-1.0.gpkg.tar` is a hand-built real gpkg container."""
     env = _binscan_configroot(
         tmp_path,
@@ -3692,7 +3692,7 @@ def test_keyword_masked_but_installed_dependency_is_kept_not_downgraded(
     means it's kept exactly as installed (2.0), never even considered
     for a downgrade. Confirmed live against a real system
     (sys-fs/fuse's own sys-libs/liburing dependency) before this fix:
-    this pilot used to (wrongly) print a spurious downgrade line here."""
+    portuale used to (wrongly) print a spurious downgrade line here."""
     result = _run(
         [str(emerge_binary)], ["--pretend", "dev-libs/needskeywordmasked"], fixture_env
     )
@@ -3771,7 +3771,7 @@ def test_any_of_group_falls_back_to_every_alternative_when_none_satisfiable(
     -- NEITHER alternative has a visible candidate anywhere, so real
     "||" resolution (use_reduce_flat_disjunctive, portage-use-reduce)
     falls back to keeping every alternative exactly like plain
-    use_reduce(flat=True) always did, matching this pilot's own
+    use_reduce(flat=True) always did, matching portuale's own
     pre-existing "never silently wrong about whether a dependency
     exists" invariant -- both get reported on stderr, neither silently
     dropped just because they're inside an unresolvable || group."""
@@ -4393,7 +4393,7 @@ def test_user_level_minus_atom_removes_a_repo_level_mask_entry(emerge_binary, fi
     across the whole combined [repo, profile chain, user] stack (real
     MaskManager.py's stack_lists(incremental=1) semantics), not just
     within the single file that contains the "-atom" line, which is all
-    the pilot supported before this slice."""
+    portuale supported before this slice."""
     result = _run(
         [str(emerge_binary)],
         ["--pretend", "dev-libs/repomaskedthenuserremovedpkg"],
@@ -4506,7 +4506,7 @@ def test_pv_bracket_mask_marker(emerge_binary, emerge_pretend_python, fixture_en
     The marker column is real set_pkg_info's `if self.include_mask_str()`
     (verbosity > 1), and real default `emerge -p` verbosity is 2, so it
     shows at plain -p too, not only -v -- absent only under --quiet
-    (verbosity 1), which this pilot doesn't model. A plain stable-amd64
+    (verbosity 1), which portuale doesn't model. A plain stable-amd64
     package (dev-libs/newpkg) shows a bare space there regardless."""
     for pkg, marker in [
         ("bareacceptkeywordspkg", "~"),
@@ -5814,9 +5814,9 @@ def test_use_dep_equal_parent_mismatches_when_parent_flag_is_disabled(emerge_bin
 
 
 def test_tree_indents_a_diamond_dependency_and_shows_it_once(emerge_binary, fixture_env):
-    """--tree/-t: pilot-specific simplified indentation (real
+    """--tree/-t: portuale-specific simplified indentation (real
     output_helpers.py's own _tree_display needs a genuine merge
-    scheduler this pilot doesn't have -- see pretend.rs's own print_tree
+    scheduler portuale doesn't have -- see pretend.rs's own print_tree
     docstring for the full grounding). dev-libs/diamond's own two
     children (shared-a, shared-b) both RDEPEND on dev-libs/common -- the
     diamond dependency must be shown exactly once, nested under whichever
@@ -5840,7 +5840,7 @@ def test_tree_unordered_display_preserves_discovery_order(emerge_binary, fixture
     order. dev-libs/treeorderpkg's own RDEPEND deliberately lists its
     two children in reverse-alphabetical order
     ("dev-libs/ztreechild dev-libs/atreechild"). The default (--tree
-    alone) sorts children alphabetically, this pilot's own deterministic
+    alone) sorts children alphabetically, portuale's own deterministic
     stand-in for real portage's genuine merge-order sort (no scheduler
     exists to be more faithful than that) -- --unordered-display instead
     preserves the RDEPEND string's own literal order, using
@@ -5888,7 +5888,7 @@ def test_tree_onlydeps_suppresses_only_the_root_line(emerge_binary, fixture_env)
 
 
 def test_columns_right_aligns_the_version_into_a_fixed_column(emerge_binary, fixture_env):
-    """--columns: real _set_root_columns's own layout (this pilot's own
+    """--columns: real _set_root_columns's own layout (portuale's own
     port, see columns_line's docstring) -- category/package with no
     version, padded to columnwidth - 60, then "[version]" padded to
     columnwidth - 30. COLUMNWIDTH is pinned in the test's own env (70,
@@ -5921,9 +5921,9 @@ def test_columns_shows_both_new_and_old_version_for_an_upgrade(emerge_binary, fi
 
 def test_columns_and_tree_together_is_a_usage_error(emerge_binary, fixture_env):
     """Real actions.py: "can't specify both of --tree and --columns" --
-    this pilot's own CLI-usage-error convention (exit 2, stderr) rather
+    portuale's own CLI-usage-error convention (exit 2, stderr) rather
     than real portage's own literal exit 1/stdout, matching every other
-    CLI-usage error this pilot already reports."""
+    CLI-usage error portuale already reports."""
     result = _run(
         [str(emerge_binary)],
         ["--pretend", "--tree", "--columns", "dev-libs/newpkg"],
@@ -5939,7 +5939,7 @@ def test_columns_and_tree_together_is_a_usage_error(emerge_binary, fixture_env):
 def test_columns_columnwidth_falls_back_to_default_on_an_unparsable_value(
     emerge_binary, fixture_env
 ):
-    """An unparsable COLUMNWIDTH warns (a fixed, pilot-authored message,
+    """An unparsable COLUMNWIDTH warns (a fixed, portuale-authored message,
     not either language's own raw parse-error text -- see
     columnwidth_from_env's own docstring for why) and falls back to the
     real default of 130, rather than treating it as a hard error."""
@@ -6248,7 +6248,7 @@ def test_pv_totals_summary_line(emerge_binary, fixture_env):
     `localized_size`, KiB-only, no locale grouping) and the `Fetch
     Restriction: N package[s][ (M unsatisfied)]` line. Ported minus the
     `Conflict:` line's `(N unsatisfied)`/`(all satisfied)` suffix (this
-    pilot resolves no blocker)."""
+    portuale resolves no blocker)."""
     # Plain `-p` (no -v): no Total line at all.
     plain = _run([str(emerge_binary)], ["--pretend", "dev-libs/newpkg"], fixture_env)
     assert "Total:" not in plain.stdout
@@ -7019,7 +7019,7 @@ def test_custom_set_as_a_top_level_target_expands_to_its_members(
 def test_selected_set_expands_the_same_as_world(emerge_binary, fixture_env):
     """Real cnf/sets/portage.conf: @world = @profile @selected @system,
     and @selected = WorldSelectedSet (the world file's atoms + world_sets'
-    nested sets). This pilot's @world already IS that (the @profile /
+    nested sets). Portuale's @world already IS that (the @profile /
     @system union is a pre-existing simplification), so @selected is the
     exact same expansion."""
     a = _run([str(emerge_binary)], ["--pretend", "--update", "@selected"], fixture_env)
@@ -7726,7 +7726,7 @@ def test_depclean_pretend_removal_order_is_topological(emerge_binary, fixture_en
     ]
     assert blocks == ["dev-libs/mmid", "dev-libs/zztop", "dev-libs/aabase"]
     # "All selected packages" stays sorted (real portage's set-iteration
-    # order there is not a meaningful spec; both pilot sides sort it).
+    # order there is not a meaningful spec; both portuale sides sort it).
     line = next(
         ln for ln in result.stdout.splitlines() if ln.startswith("All selected packages:")
     )
@@ -8312,7 +8312,7 @@ def test_deselect_matches_an_explicit_category_target_never_installed(
     action_deselect ever seeds expanded_atoms with it unconditionally.
     So installation is NOT required here: the world file's own text is
     enough by itself for an explicit-category target. (An earlier
-    version of this pilot got this backwards -- see run_deselect's own
+    version of portuale got this backwards -- see run_deselect's own
     doc comment in pretend.rs for the full correction.)"""
     result = _run(
         [str(emerge_binary)],
@@ -8446,7 +8446,7 @@ def test_deselect_combines_a_world_atom_and_a_world_sets_entry_sorted_together(
     run are sorted into ONE combined list (real "sorted(discard_atoms,
     key=str)"), not printed as two separate "world" then "world_sets"
     blocks -- "@myselectedset" sorts before "dev-libs/foo" (real Python
-    "@" < "d" and canonical str.sort() ordering, which this pilot's own
+    "@" < "d" and canonical str.sort() ordering, which portuale's own
     plain string sort already matches)."""
     result = _run(
         [str(emerge_binary)],
@@ -8768,7 +8768,7 @@ def test_changed_deps_reinstalls_and_recurses_into_the_current_ebuilds_own_depen
     depgraph.py's own _changed_deps compares these (flattened against
     the installed package's own recorded USE, real portage's own
     uselist=pkg.use.enabled) and, once --changed-deps is given, this
-    pilot reports a reinstall and recurses into the CURRENT ebuild's own
+    portuale reports a reinstall and recurses into the CURRENT ebuild's own
     dependency (newpkg), not the vdb's stale one -- matching how
     --deep's own AlreadyInstalled walk already reuses the repo's current
     metadata rather than a vdb snapshot."""
@@ -8812,7 +8812,7 @@ def test_changed_deps_detects_an_atom_moved_between_two_dep_keys(
     "merge every dep key into one string, then flatten and compare"
     approach saw no change -- real _changed_deps (depgraph.py:3168)
     compares built_deps to unbuilt_deps element-wise, one struct per dep
-    key, which this pilot now mirrors: the move registers as changed."""
+    key, which portuale now mirrors: the move registers as changed."""
     args = ["--pretend", "--changed-deps", "dev-libs/movedkeydepspkg"]
     rust = _run([str(emerge_binary)], args, fixture_env)
     python = _run(emerge_pretend_python, args, fixture_env)
@@ -8853,7 +8853,7 @@ def test_changed_deps_structured_comparison(
 ):
     """Real _changed_deps (depgraph.py:3168) compares structured
     use_reduce(token_class=Atom) output as Python lists -- order-sensitive
-    everywhere, redundant brackets collapsed. The pilot's
+    everywhere, redundant brackets collapsed. Portuale's
     portage_use_reduce::use_reduce_structured ports real use_reduce's own
     flat=False bracket-optimization pass to match:
 
@@ -8929,7 +8929,7 @@ def test_changed_slot_reinstalls_a_package_whose_vdb_slot_differs_from_the_curre
     but the repo's current ebuild for that exact version now has
     SLOT="0/2" instead (an ABI-bump sub-slot change) -- real
     depgraph.py's own _changed_slot compares these and, once
-    --changed-slot is given, this pilot reports a reinstall. Without
+    --changed-slot is given, portuale reports a reinstall. Without
     --changed-deps, only the slot reason appears even though this same
     fixture package's own RDEPEND also differs (see the combined-reason
     test below)."""
@@ -9048,7 +9048,7 @@ def test_with_test_deps_n_explicitly_disables_it(emerge_binary, fixture_env):
 def test_with_test_deps_does_not_apply_beyond_a_top_level_atom(emerge_binary, fixture_env):
     """dev-libs/withtestdepconsumer RDEPENDs on dev-libs/withtestdeppkg,
     reaching it at depth 1, not depth 0 -- real depgraph.py's own
-    "pkg.depth == 0" gate (this pilot's own equivalent) means
+    "pkg.depth == 0" gate (portuale's own equivalent) means
     dev-libs/testonlydep must NOT be pulled in even with --with-test-deps
     given, since withtestdeppkg itself isn't the top-level atom here."""
     result = _run(
@@ -9168,7 +9168,7 @@ def test_without_update_a_bare_top_level_atom_still_offers_a_newer_version(
     search proceeds, finding 2.0. Confirmed live against the real,
     installed system `emerge` (not just read from source) during this
     slice's own research. This directly reverses what an earlier version
-    of this pilot's own test suite asserted here, before this real
+    of portuale's own test suite asserted here, before this real
     behavior was discovered."""
     result = _run([str(emerge_binary)], ["--pretend", "dev-libs/upgradepkg"], fixture_env)
     assert result.returncode == 0
@@ -9180,7 +9180,7 @@ def test_noreplace_restores_the_real_avoid_update_shortcut(emerge_binary, fixtur
     installed version (1.0) IS still a matched candidate (real
     `want_reinstall` no longer forces it out), so real `avoid_update`'s
     own shortcut fires normally and 2.0 is never even considered --
-    matching this pilot's own pre-existing behavior for every case
+    matching portuale's own pre-existing behavior for every case
     other than a bare top-level atom."""
     result = _run(
         [str(emerge_binary)], ["--pretend", "--noreplace", "dev-libs/upgradepkg"], fixture_env
@@ -9467,7 +9467,7 @@ def test_emptytree_reinstalls_the_whole_deep_dependency_tree(
     ).stdout
     assert "[ebuild     U  ] dev-libs/upgradepkg-2.0 [1.0]" in eu.stdout
 
-    # -e without -p is still refused (this pilot never really merges).
+    # -e without -p is still refused (portuale never really merges).
     assert _run([str(emerge_binary)], ["-e", "dev-libs/deeppkg"], fixture_env).returncode != 0
 
 
@@ -9565,7 +9565,7 @@ def test_dynamic_deps_chooses_ebuild_vs_vdb_deps_for_an_installed_deep_dep(
 ):
     """--dynamic-deps (real create_depgraph_params.py, ON by default for a
     source install): an AlreadyInstalled package's --deep dependency walk
-    uses its CURRENT ebuild metadata (the pilot's own long-standing
+    uses its CURRENT ebuild metadata (portuale's own long-standing
     behaviour). --dynamic-deps=n uses the vdb-recorded *DEPEND snapshot.
     dev-libs/changeddepspkg's current ebuild RDEPENDs dev-libs/newpkg
     (New) but its vdb RDEPEND is dev-libs/samepkg (installed)."""
@@ -9585,7 +9585,7 @@ def test_complete_graph_forces_the_deep_walk(emerge_binary, emerge_pretend_pytho
     """--complete-graph (real create_depgraph_params.py:169-175 +
     depgraph.py::_complete_graph 8668-8670): "completely account for all
     known dependencies" -> myparams["deep"] = True. In this --pretend
-    pilot that forced deep walk is the whole observable delta (see
+    portuale that forced deep walk is the whole observable delta (see
     resolve_pretend_graph's `complete` param). deeppkg (installed) ->
     deeppkg2 (installed) -> newpkg (New): plain `emerge -p deeppkg` never
     walks deeppkg's deps; --complete-graph does, byte-identical to -D."""
@@ -9829,21 +9829,21 @@ def test_exclude_inline_equals_form_and_missing_argument(emerge_binary, fixture_
 
 def test_exclude_is_not_bundle_compatible(emerge_binary, fixture_env):
     """Unlike -v/-D, -X's own value is required, not optional, so this
-    pilot deliberately doesn't support bundling it -- a specific message
+    portuale deliberately doesn't support bundling it -- a specific message
     instead of a misleading generic one."""
     result = _run([str(emerge_binary)], ["-pX", "dev-libs/upgradepkg"], fixture_env)
     assert result.returncode == 2
     assert result.stdout == ""
     assert result.stderr.strip() == (
         "emerge: -X (--exclude) requires an argument and can't be bundled with "
-        "other short flags in this pilot"
+        "other short flags in portuale"
     )
 
 
 def test_json_is_not_a_real_emerge_option(emerge_binary, fixture_env):
-    """--json is a pilot-specific addition (real portage has no
+    """--json is a portuale-specific addition (real portage has no
     structured-output mode for --pretend at all) -- pinned in full since
-    it's this pilot's own content, not derived from any real emerge
+    it's portuale's own content, not derived from any real emerge
     output, unlike every other flag's own contract test."""
     result = _run(
         [str(emerge_binary)], ["--pretend", "--json", "dev-libs/newpkg"], fixture_env
@@ -10064,7 +10064,7 @@ def test_virtual_is_resolved_as_a_dependency(emerge_binary, fixture_env):
     """dev-libs/virtualconsumerpkg RDEPENDs on virtual/texteditor --
     proving a virtual/ atom extracted from another package's own
     DEPEND/RDEPEND resolves identically to the top-level case above,
-    with no virtual-specific code path anywhere in this pilot."""
+    with no virtual-specific code path anywhere in portuale."""
     result = _run(
         [str(emerge_binary)], ["--pretend", "dev-libs/virtualconsumerpkg"], fixture_env
     )
@@ -10078,7 +10078,7 @@ def test_virtual_is_resolved_as_a_dependency(emerge_binary, fixture_env):
 
 def test_real_option_not_implemented_message_names_the_option(emerge_binary, fixture_env):
     """--accept-properties is a real emerge option (see lib/_emerge/main.py's
-    argument_options) this pilot doesn't implement -- the error must
+    argument_options) portuale doesn't implement -- the error must
     name it specifically and say "option", distinct from both a
     genuinely unrecognized flag and an unimplemented action."""
     result = _run([str(emerge_binary)], ["--accept-properties", "dev-libs/newpkg"], fixture_env)
@@ -10290,7 +10290,7 @@ def test_bare_name_with_no_match_reports_no_ebuilds(
 ):
     """A bare name matching no package anywhere -> `emerge: there are no
     ebuilds to satisfy "<name>".`, exit 1 (real `cpv_expand` returns
-    `null/<name>` and resolution then fails; the pilot short-circuits
+    `null/<name>` and resolution then fails; portuale short-circuits
     with the message). Rust == Python."""
     r = _run([str(emerge_binary)], ["--pretend", "nosuchpkgname"], fixture_env)
     p = _run(emerge_pretend_python, ["--pretend", "nosuchpkgname"], fixture_env)
@@ -10462,7 +10462,7 @@ def test_profiles_updates_package_moves_match_rust_and_python(
 ):
     """Real profiles/updates/ package moves (portage.update /
     _do_global_updates): `move`/`slotmove` directives, applied at read
-    time (this pilot never syncs), rewrite command-line atoms, `*DEPEND`
+    time (portuale never syncs), rewrite command-line atoms, `*DEPEND`
     strings and an installed package's identity. Rust == Python."""
     rust = _run([str(emerge_binary)], args, fixture_env)
     py = _run(emerge_pretend_python, args, fixture_env)
@@ -10615,9 +10615,9 @@ def test_check_news_reports_none_when_all_items_are_read(
     read_dir = tmp_path / "var" / "lib" / "gentoo" / "news"
     read_dir.mkdir(parents=True)
     (read_dir / "news-testrepo.read").write_text(
-        "2026-09-01-pilot-general\n"
-        "2026-09-02-pilot-samepkg\n"
-        "2026-09-03-pilot-irrelevant\n"
+        "2026-09-01-portuale-general\n"
+        "2026-09-02-portuale-samepkg\n"
+        "2026-09-03-portuale-irrelevant\n"
     )
     # ROOT at tmp (for the .read file + an empty vdb) but CONFIGROOT still
     # the fixtures (for repos.conf / the news items themselves).
@@ -10636,11 +10636,11 @@ def test_check_news_skip_file_excludes_items_like_the_read_file(
     """An id in <eroot>/var/lib/gentoo/news/news-<repo>.skip (real
     NewsManager.updateItems' permanent per-item skip list) is not
     counted, exactly like a `.read` id. With ROOT at an empty tmp tree
-    only 2026-09-01-pilot-general (unrestricted) is relevant; a `.skip`
+    only 2026-09-01-portuale-general (unrestricted) is relevant; a `.skip`
     listing it -- and no `.read` at all -- drops the count to 0."""
     news_dir = tmp_path / "var" / "lib" / "gentoo" / "news"
     news_dir.mkdir(parents=True)
-    (news_dir / "news-testrepo.skip").write_text("2026-09-01-pilot-general\n")
+    (news_dir / "news-testrepo.skip").write_text("2026-09-01-portuale-general\n")
     env = dict(fixture_env)
     env["ROOT"] = str(tmp_path)
     rust = _run([str(emerge_binary)], ["--check-news"], env)
@@ -10653,7 +10653,7 @@ def test_check_news_skip_file_excludes_items_like_the_read_file(
 def test_genuinely_unrecognized_option_gets_a_distinct_message(emerge_binary, fixture_env):
     """A flag that isn't in real emerge's own option surface at all must
     be reported differently from a real-but-unimplemented one, so users
-    can tell a typo apart from a pilot scope gap."""
+    can tell a typo apart from a portuale scope gap."""
     result = _run(
         [str(emerge_binary)], ["--totally-fake-option", "dev-libs/newpkg"], fixture_env
     )

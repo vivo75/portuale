@@ -1,7 +1,7 @@
 # Operation block diagrams
 
 Block diagrams for four representative `emerge` invocations, as this
-pilot's `portuale` binary actually implements them. Each diagram traces
+portuale's `portuale` binary actually implements them. Each diagram traces
 the real call path through `rust/portuale/src/`; blocks are labelled with
 the function that does the work so the diagram doubles as a map into the
 source.

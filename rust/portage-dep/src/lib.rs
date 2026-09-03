@@ -1,6 +1,6 @@
 // Rust port of a deliberately narrowed subset of `portage.dep.Atom` and
 // `portage.dep.match_from_list` (lib/portage/dep/__init__.py) -- the
-// "atom matching" pilot slice from docs/agent-context.md's depgraph/config
+// "atom matching" slice from docs/agent-context.md's depgraph/config
 // resolution follow-up work.
 //
 // KNOWN, DOCUMENTED SCOPE CUT vs. the real grammar (PMS chapter 8):
@@ -35,7 +35,7 @@
 //
 // Candidates for match_from_list are plain strings shaped like
 // `category/package-version[-rN][:slot[/subslot]]` -- not full Package
-// objects (no USE/IUSE/repo metadata), since this pilot has no
+// objects (no USE/IUSE/repo metadata), since portuale has no
 // package-db/depgraph model yet. This mirrors how the real
 // match_from_list already supports plain strings (via dep_getslot's
 // ":slot" suffix convention) as a fallback when candidates aren't Package
@@ -90,7 +90,7 @@
 // only ever rejects a candidate that carries a KNOWN, different repo; a
 // repo-less candidate string always passes, matching real
 // `dep_getrepo`'s own "unknown, not absent" semantics for a plain
-// string). This pilot's own candidate strings never carried repo
+// string). Portuale's own candidate strings never carried repo
 // identity before this slice -- `portage-repo` now appends `::reponame`
 // (using each repo's own `repos.conf` section name -- already tracked
 // as `RepoConfig::name`, reused as-is rather than reading a second,
@@ -647,7 +647,7 @@ fn matches_slot(atom: &Atom, candidate: &Candidate) -> bool {
 /// `if mydep.repo:` -- an atom with no `::repo` constraint never filters
 /// on repo at all): a candidate is rejected only if it carries a KNOWN
 /// repo that differs from the atom's. A candidate with no repo info at
-/// all (`candidate.repo == None`, this pilot's default for any
+/// all (`candidate.repo == None`, portuale's default for any
 /// plain-string candidate that never had `::repo` appended -- see
 /// `dep_getrepo`'s own real semantics, which return `None` for a
 /// repo-less string) always passes, regardless of what the atom asks
@@ -670,7 +670,7 @@ fn matches_repo(atom: &Atom, candidate: &Candidate) -> bool {
 /// that function only ever sees plain candidate strings, which carry no
 /// IUSE/USE state at all (real `match_from_list` skips this same block
 /// entirely for a plain-string candidate too -- its own `hasattr(x,
-/// "use")` guard -- so this pilot's `match_from_list` staying unaware of
+/// "use")` guard -- so portuale's `match_from_list` staying unaware of
 /// use deps isn't a divergence). Callers with real per-candidate
 /// IUSE/USE state (`portage-repo`, which already computes both via
 /// `read_md5_cache`/`effective_use_flags` for other reasons) call this
@@ -698,10 +698,10 @@ fn matches_repo(atom: &Atom, candidate: &Candidate) -> bool {
 /// `mydep.use.enabled`/`.disabled`, which real `_use_dep.__init__` populates
 /// solely from the two unconditional forms; the four conditional ones
 /// land in a separate `.conditional` structure that `match_from_list`
-/// never reads), not a pilot simplification: evaluating a conditional
+/// never reads), not a deliberate simplification: evaluating a conditional
 /// use-dep needs the *atom-owning* package's own USE state, a completely
 /// different mechanism (dependency-string conditional evaluation) this
-/// pilot doesn't have and `match_from_list` itself doesn't either.
+/// portuale doesn't have and `match_from_list` itself doesn't either.
 pub fn use_deps_satisfied(
     use_deps: &[UseDep],
     iuse: &HashSet<String>,
@@ -879,7 +879,7 @@ pub fn evaluate_use_dep_conditionals(
 /// token.evaluate_conditionals(uselist)`, called on every dependency
 /// *atom* token as `use_reduce` walks a dependency string -- the exact
 /// same `uselist` parameter it already threads through for `flag?
-/// ( ... )` *group* conditionals). This pilot's own `use_reduce_flat`
+/// ( ... )` *group* conditionals). Portuale's own `use_reduce_flat`
 /// (portage-use-reduce) deliberately stays atom-grammar-agnostic (see
 /// its own module doc comment on the atom-parsing/tokenizing split), so
 /// this step lives here instead, applied by the caller (portage-repo's
@@ -1552,7 +1552,7 @@ mod use_dep_conditional_evaluation_tests {
 
     #[test]
     fn evaluate_atom_conditionals_preserves_slot_and_repo() {
-        // This pilot's own atom grammar orders "::repo" before the
+        // Portuale's own atom grammar orders "::repo" before the
         // use-deps bracket (see atom_regex's own group order) -- unlike
         // real portage, which puts use-deps before "::repo". Matching
         // this crate's own already-accepted order, not inventing a new

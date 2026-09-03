@@ -1,7 +1,7 @@
 # What this proves
 
 > The living, append-only per-slice record of everything shipped in this
-> pilot, moved out of the root `README.md` verbatim. Each paragraph is a
+> portuale, moved out of the root `README.md` verbatim. Each paragraph is a
 > historical entry — earlier paragraphs are fixed in place only to correct a
 > claim that later went stale (see [`agent-context.md`](agent-context.md),
 > workflow step 7). For the short version, see
@@ -80,13 +80,13 @@
   real `Atom`), but the *values* are never consulted by
   `matches_version`/`matches_slot`/`match_from_list` -- at the time this
   paragraph was written, full enforcement was scoped out because this
-  pilot's `Candidate`/`match_from_list` model had no per-candidate
+  portuale's `Candidate`/`match_from_list` model had no per-candidate
   IUSE/USE state to check a use-dep against at all. This wasn't an
   invented gap, though: verified empirically, real `match_from_list`
-  given this pilot's own plain-string candidates (no `.use`/`.iuse`
+  given portuale's own plain-string candidates (no `.use`/`.iuse`
   attributes) already skips its own USE-dep filtering entirely too --
   `dev-libs/foo[bar]` and `dev-libs/foo[-bar]` return the identical
-  match set against real `match_from_list` itself, not just this pilot's
+  match set against real `match_from_list` itself, not just portuale's
   port of it. **Now stale**: once `package.use`/`package.use.mask`/
   `.force` gave every candidate real, computable IUSE/effective-USE
   state for other reasons, this stopped being a hard blocker -- see the
@@ -94,7 +94,7 @@
   follow-up that closed most of this gap, and the later **`opt=`/`opt?`
   conditional USE-deps** paragraph for the one named here as a "wholly
   different mechanism" (conditional on the *atom-owning* package's own
-  USE state, not just the candidate's) -- closed too, once this pilot's
+  USE state, not just the candidate's) -- closed too, once portuale's
   own dependency recursion had a natural place to plug that state in.
 
   **The `=*` glob version operator** (PMS 8.3.1) closes the last named
@@ -109,7 +109,7 @@
   still implements it as a literal string-prefix match rather than a
   `vercmp`-based one (its own comment: "Nasty special casing for leading
   zeros / Required as =* is a literal prefix match, so can't use
-  vercmp"), so this pilot ports that same algorithm: a prefix match on
+  vercmp"), so portuale ports that same algorithm: a prefix match on
   `version[-rN]`, accepted only at a genuine component boundary (fixing
   real bug 560466 -- `"1*"` must not match `"10"`, even though `"10"`
   literally starts with `"1"`: the boundary check is "next character is
@@ -135,7 +135,7 @@
   mydep.repo:`): a candidate is rejected only if it carries a *known*
   repo that differs from the atom's -- a candidate with no repo info at
   all always passes, matching real `dep_getrepo`'s own "unknown, not
-  absent" semantics for a plain string. This pilot's own candidate
+  absent" semantics for a plain string. Portuale's own candidate
   strings never carried repo identity at all before this slice, so it
   pairs a `portage-dep` grammar/matching addition (`Atom::repo`/
   `Candidate::repo`, mirroring the existing `:slot` suffix convention)
@@ -185,7 +185,7 @@
   `check_required_use`, which builds and returns a full navigable tree
   purely so a caller can later pretty-print exactly which sub-expression
   failed, this is a much simpler direct recursive-descent boolean
-  evaluator with no tree bookkeeping -- this pilot only ever needs the
+  evaluator with no tree bookkeeping -- portuale only ever needs the
   final yes/no verdict (see the `emerge --pretend` paragraph below for
   how a violation gets reported). Verified against real
   `check_required_use` directly via 37 cases (28 satisfied/unsatisfied
@@ -195,10 +195,10 @@
   just my own reasoning about equivalence. One EAPI-conditional
   real behavior is deliberately not replicated: real `eapi <= Eapi("6")`
   treats an empty group (`( )`, `|| ( )`) as vacuously satisfied; this
-  pilot always uses the newer (EAPI 7+) behavior of evaluating an empty
+  portuale always uses the newer (EAPI 7+) behavior of evaluating an empty
   group with the ordinary per-operator rule instead (unsatisfied for
   `||`/`^^`, satisfied for `??`/a use-conditional) -- consistent with
-  this pilot's established "no EAPI parametrization" precedent elsewhere
+  portuale's established "no EAPI parametrization" precedent elsewhere
   (`portage-dep`'s own grammar, `use.mask`/`.force`'s atom-specificity
   ordering), and pinned on the Python reference side by passing
   `eapi="8"` explicitly to the real function rather than leaving it
@@ -218,7 +218,7 @@
   not a silent omission (see the doc comment at the top of
   `rust/portage-repo/src/lib.rs`).
   Config/target roots come from the real `PORTAGE_CONFIGROOT`/`ROOT`
-  environment variables (portage's own mechanism, not a pilot invention --
+  environment variables (portage's own mechanism, not a portuale invention --
   see `lib/portage/const.py`), which is what lets `fixtures` be
   used hermetically in tests instead of the real system tree. Output is a
   documented, simplified subset of real `--pretend` formatting
@@ -340,7 +340,7 @@
   uses, which turns out to ignore an atom's blocker marker entirely, so a
   `!`/`!!`-prefixed atom string matches candidates by
   category/package/version/slot exactly like a normal one (verified
-  empirically before relying on it, same as everywhere else this pilot
+  empirically before relying on it, same as everywhere else portuale
   reaches for real portage code to settle a question rather than
   guessing) -- against both currently-installed packages
   (`installed_candidates`, a small SLOT-aware sibling of
@@ -424,7 +424,7 @@
   than ordinary ebuilds in a category named `virtual`, whose `RDEPEND`
   is a plain `|| ( ... )` any-of group of real providers -- there is no
   separate PROVIDE-based virtuals mechanism in modern portage for this
-  pilot to have missed. Since `portage-repo` already treats every
+  portuale to have missed. Since `portage-repo` already treats every
   category identically (no special-casing anywhere) and already
   resolves every alternative of an any-of group (the documented v1
   simplification from the recursion follow-up), a `virtual/foo` atom --
@@ -454,7 +454,7 @@
   included -- whenever *none* is currently satisfiable, so the "never
   silently wrong about whether a dependency exists" invariant the
   original v1 established still holds; nothing regresses for a
-  dependency this pilot genuinely can't resolve either way. This crate
+  dependency portuale genuinely can't resolve either way. This crate
   stays atom-agnostic throughout (matching its own established "tokens
   stay opaque strings" architecture) -- `portage-repo`'s own new
   `atom_currently_satisfiable` (the *early* half of `resolve_pretend`'s
@@ -471,7 +471,7 @@
   is a "pick one alternative to enqueue" decision). Real portage's own
   considerably richer preference order (installed packages first,
   backtracking on a later constraint failure) isn't ported -- this
-  pilot has no backtracking architecture at all -- just the single
+  portuale has no backtracking architecture at all -- just the single
   "first currently-resolvable alternative wins" rule. `virtual/
   texteditor`'s own RDEPEND (`"|| ( dev-libs/newpkg dev-libs/samepkg )"`)
   now correctly enqueues only `dev-libs/newpkg` (listed first, visible)
@@ -497,7 +497,7 @@
   naming it specifically and saying whether it's an "option" or an
   "action" and that it's real-but-unimplemented, while a token that
   isn't in any of the three tables at all gets a different message
-  ("unrecognized option") -- so a user hitting a genuine pilot gap
+  ("unrecognized option") -- so a user hitting a genuine portuale gap
   (say, from `EMERGE_DEFAULT_OPTS` or a script) can tell that apart
   from a typo. Unlike every other change in this series, this one adds
   *zero* new behavior for any of those ~130 flags -- it only makes the
@@ -524,7 +524,7 @@
   foo-1.0.ebuild merge`, asserting success) depend on that continuing to
   work. So the split here is different: a real option/command (even
   though none of them do anything) still succeeds, still prints the
-  `"ebuild (pilot stub)"` marker those tests check for -- only input
+  `"ebuild: dry run"` marker those tests check for -- only input
   that isn't valid `ebuild` syntax *at all* (an unrecognized option, a
   filename not ending in `.ebuild`, an unrecognized command, or missing
   required args) is now rejected, with exit codes mirroring real
@@ -541,7 +541,7 @@
   argparse's `parse_known_args`, which silently swallows an unrecognized
   flag into the positional-args list rather than rejecting it (usually
   surfacing later as a confusing "does not end with '.ebuild'" error);
-  this pilot reports an unrecognized option immediately and specifically
+  portuale reports an unrecognized option immediately and specifically
   instead, matching `emerge`'s own clearer philosophy. `ebuild` still has
   no Python reference implementation to contract-test against -- it has
   no real behavior to keep in sync between two implementations, so
@@ -559,7 +559,7 @@
   but simpler here, since real `ebuild` declares no short aliases for
   any option at all, so there's no bundling concept to scan through
   (unlike `emerge`'s own `-pv`-style bundling). The help text itself is
-  a short, honest, pilot-specific summary, not a port of real
+  a short, honest, portuale-specific summary, not a port of real
   `argparse`'s own generated usage block, matching `emerge --help`'s own
   precedent there too. `--version` was scoped alongside it but turned
   out to be a considerably worse fit than expected: real `bin/ebuild`'s
@@ -598,7 +598,7 @@
   and each expanded form is matched against every world-file atom,
   printing `>>> Would remove <atom> from "world" favorites file...` for
   each one discarded (pretend mode; real portage only writes the world
-  file outside of `--pretend`, so this pilot's own "never merges"
+  file outside of `--pretend`, so portuale's own "never merges"
   invariant holds here unchanged), or `>>> No matching atoms found in
   "world" favorites file...` if none matched at all. (At the time of
   this original slice, `pretend.rs`'s own `run_deselect` used a narrower
@@ -619,13 +619,13 @@
   enabling, the same reasoning already established for a bundled `-v`/
   `-D`. Deliberately out of scope: `--ask` interactive confirmation
   (needs no special-casing at all -- it already falls through to this
-  pilot's existing "not yet implemented" rejection) and `--json` output
+  portuale's existing "not yet implemented" rejection) and `--json` output
   (simply not offered for deselect mode).
 
   **`emerge --pretend --unmerge` / `-pC <atoms>`: the second real emerge
   action.** Real `main.py` makes `--unmerge`/`-C` a standalone action
   (`myaction = "unmerge"`, same shape as `--deselect`), and real `emerge
-  -C` *removes* packages -- this pilot only ever *previews* it (`ebuild
+  -C` *removes* packages -- portuale only ever *previews* it (`ebuild
   <file> unmerge` stays its one real removal path), same `--pretend`-only
   gate `--deselect` has. New `run_unmerge_pretend` ports
   `_emerge/unmerge.py::_unmerge_display` for `unmerge_action ==
@@ -941,11 +941,11 @@
   packages, and only ever matters for an `AlreadyInstalled` package's own
   dependency walk once `--deep` says to walk it at all. The real default,
   `auto` (`create_depgraph_params.py`'s own `myparams["bdeps"] = "auto"`
-  whenever `--usepkg` isn't given -- which this pilot's own
+  whenever `--usepkg` isn't given -- which portuale's own
   `--usepkg`-less CLI always satisfies), and the real `y` are collapsed
   into one caller-facing `true`, since `depgraph.py` itself only ever
   tests `bdeps in ("y", "auto")`, never distinguishing the two -- so this
-  pilot's own pre-existing "walk all five dependency-string keys
+  portuale's own pre-existing "walk all five dependency-string keys
   uniformly" behavior (see the dependency-recursion paragraph above) was
   already exactly the real default, and `--with-bdeps=n` is the one value
   that actually changes anything. Unlike `--exclude` (arbitrary text) or
@@ -954,16 +954,16 @@
   value -- a missing value is a real, immediate usage error (same shape
   as `--exclude`'s own), and a value that's neither `y` nor `n` is *also*
   a real, immediate usage error (real `argparse`'s own choices
-  validation, reproduced here as a pilot-specific message rather than
+  validation, reproduced here as a portuale-specific message rather than
   argparse's own multi-line usage banner, consistent with every other
-  CLI error in this pilot). It has no short alias and isn't
+  CLI error in portuale). It has no short alias and isn't
   bundle-compatible either -- real `main.py` declares no `shortopt` for
   it at all, so unlike `--exclude`'s own deliberate bundling cut, there's
   no bundling concept to begin with. `--with-bdeps-auto` (the only other
   real lever on this same `bdeps` value) was still a deliberate,
   documented out-of-scope cut at the time -- closed by a later follow-up
   below (it turns out to matter *now*, not "only once `--usepkg`/binary-
-  package support exists" as first assumed here, since this pilot's own
+  package support exists" as first assumed here, since portuale's own
   `--usepkg`-less CLI always satisfies the real `--usepkg`-gated half of
   its own condition). New fixture packages `withbdepspkg`
   (installed, `DEPEND`s on `builddeponlypkg`, `BDEPEND`s on
@@ -979,12 +979,12 @@
   != "n" and "--usepkg" not in myopts): myparams["bdeps"] = "auto"` -- an
   explicit `--with-bdeps` always wins outright; only in its *absence*
   does `--with-bdeps-auto=n` matter at all, changing the real default
-  from `"auto"` (this pilot's own pre-existing `with_bdeps = true`) down
+  from `"auto"` (portuale's own pre-existing `with_bdeps = true`) down
   to unset (equivalent to `"n"`, since `depgraph.py` itself only ever
   tests `bdeps in ("y", "auto")`). The real `"--usepkg" not in
   myopts` half of that same condition is always true here, since this
-  pilot's CLI has no `--usepkg` at all -- so `--with-bdeps-auto` isn't
-  gated on anything else in this pilot, unlike the module doc comment's
+  portuale's CLI has no `--usepkg` at all -- so `--with-bdeps-auto` isn't
+  gated on anything else in portuale, unlike the module doc comment's
   own earlier (now-corrected) assumption. Same real
   `argument_options`/`"choices": ("y", "n")` shape `--with-bdeps` itself
   has -- required value, no short alias, not bundle-compatible. Verified
@@ -1001,7 +1001,7 @@
   *current* ebuild for that exact version -- catching the case where an
   ebuild's own dependencies were edited upstream since this package was
   last merged, something `--newuse`/`--changed-use` (USE-driven reasons
-  only) can never detect. Needed a genuinely new capability this pilot
+  only) can never detect. Needed a genuinely new capability portuale
   didn't have before: reading an installed package's own recorded
   `DEPEND`/`RDEPEND`/`BDEPEND`/`PDEPEND`/`IDEPEND` from the vdb (`read_
   vdb_string`, alongside the pre-existing `read_vdb_flag_set` for `USE`/
@@ -1021,12 +1021,12 @@
   `AlreadyInstalled` walk already does. **Deliberate, documented scope
   cut, not an oversight**: real `_changed_deps` compares genuine
   *structured* `use_reduce` output (`||`-group boundaries preserved) key
-  by key; this pilot has no structured, non-flat `use_reduce` anywhere
+  by key; portuale has no structured, non-flat `use_reduce` anywhere
   (the same limitation the `LICENSE` slice's own bespoke `LicenseNode`
   parser exists specifically to work around, for that one different
   mechanism) -- so this reuses the same flat comparison every other
-  dependency-recursion path in this pilot already uses, consistent with,
-  not a new exception to, the rest of this pilot's own dependency
+  dependency-recursion path in portuale already uses, consistent with,
+  not a new exception to, the rest of portuale's own dependency
   handling. (Fully closed by two later follow-ups below --
   "`--changed-deps`: per-key comparison and `strip_slots`" and
   "`--changed-deps`: the structured (non-flat) comparison, in full" --
@@ -1051,7 +1051,7 @@
   across revisions, and real portage strips that noise out of both sides
   of its own `_changed_deps` comparison before comparing, rather than
   reporting a reinstall for it. `find_libc_deps(vardb, realized=False)`
-  is itself a call into real `expand_new_virt` -- this pilot ports a
+  is itself a call into real `expand_new_virt` -- portuale ports a
   simplified, one-level version of it (`libc_provider_cps`): find the
   installed `virtual/libc` package in the vdb (if any), read *its own*
   vdb-recorded `RDEPEND`, flatten it against its own installed `USE`,
@@ -1062,11 +1062,11 @@
   recursing into a *second* virtual reached this way -- a case real
   `virtual/libc` never actually needs, the same "ported faithfully where
   it matters, simplified where the simplification is provably safe"
-  judgment this pilot already applies elsewhere. This was a real,
-  previously-named gap, not a new discovery: both this pilot's own
+  judgment portuale already applies elsewhere. This was a real,
+  previously-named gap, not a new discovery: both portuale's own
   `deps_changed`/`_deps_changed` doc comments already flagged
   `strip_libc_deps` explicitly as "unaddressed... no fixture in this
-  pilot's own tree represents a libc package" -- closing it needed a new
+  portuale's own tree represents a libc package" -- closing it needed a new
   fixture-side `virtual/libc` vdb entry (`RDEPEND="|| ( sys-libs/glibc
   sys-libs/musl )"`, no repo ebuild needed at all, since `find_libc_deps`
   only ever reads the vdb) plus `dev-libs/libcnoisepkg` (vdb-recorded
@@ -1093,7 +1093,7 @@
   into a dict and discarding it unread at print time: real portage's own
   `_changed_deps_pkgs` dict has no other reader, so the two are
   behaviorally identical, a documented simplification, not a guess.
-  (`--dynamic-deps` itself stays unrecognized in this pilot -- real
+  (`--dynamic-deps` itself stays unrecognized in portuale -- real
   portage's own now-defunct alternate resolver strategy -- so only the
   `--changed-deps` half of that real silencing condition is reachable
   here at all.) Detection happens inline in `resolve_pretend_graph`'s own
@@ -1106,12 +1106,12 @@
   already triggered by `--newuse`/`--changed-slot` for unrelated reasons
   still gets checked and reported independently, matching real portage's
   own freely-combinable reinstall/report triggers. `repo_name` in each
-  report entry stands in for real `pkg.repo` (this pilot has no vdb
+  report entry stands in for real `pkg.repo` (portuale has no vdb
   `REPOSITORY` reader) -- a safe substitution, since real
   `_changed_deps_report`'s own `if pkg.repo != ebuild.repo: continue`
   filter requires the two to already match before a package is even
-  collected. Extended this pilot's own `--json` schema with a new
-  `"changed_deps_report"` array too (a pilot-specific convenience format,
+  collected. Extended portuale's own `--json` schema with a new
+  `"changed_deps_report"` array too (a portuale-specific convenience format,
   not real portage's own concern -- real `--json` doesn't exist -- but
   keeping every out-of-band signal representable in both output modes,
   the same way `slot_conflicts` already is, avoids a silently lossy
@@ -1127,7 +1127,7 @@
   steps toward real `_changed_deps` (`depgraph.py:3168`), which builds a
   per-key list `[use_reduce(DEPEND), use_reduce(RDEPEND), ...]` on each
   side and compares them element-wise, after `strip_slots` and
-  `strip_libc_deps`. The pilot used to concatenate every dep key into one
+  `strip_libc_deps`. Portuale used to concatenate every dep key into one
   string, flatten once, and compare as a single set -- so (1) an atom
   moved from one dep key to another with the same overall set showed no
   change, and (2) a `:=` slot-operator dependency *always* showed a
@@ -1185,13 +1185,13 @@
   reinstalls an already-installed package once its own vdb-recorded
   `SLOT` (main *and* sub-slot, e.g. an ABI-bump `SLOT="0"` ->
   `SLOT="0/2"`) differs from the repo's *current* ebuild for that exact
-  version. The first slice in this pilot to model sub-slots at all: real
+  version. The first slice in portuale to model sub-slots at all: real
   `SLOT="main/sub"` splits on `/`, defaulting `sub_slot` to the slot
   itself when no `/` is present (`split_slot`, shared by both the vdb
   and repo sides) -- deliberately narrow at the time, though, not the
   general `Candidate.sub_slot` threading real dependency-atom sub-slot
   matching would eventually need: this reuses the exact same
-  "dedicated, narrow re-read of metadata this pilot's general
+  "dedicated, narrow re-read of metadata portuale's general
   `Candidate` model doesn't carry" approach `--changed-deps` already
   established for `DEPEND`/`RDEPEND`, rather than growing `Candidate`
   itself and touching the whole matching/visibility pipeline for a
@@ -1202,7 +1202,7 @@
   USE- and deps-based ones -- confirmed real: `_changed_slot`'s own real
   callers (`_slot_operator_replace_installed`, and the main
   package-selection loop's own `built`/`useoldpkg` branches) live deep
-  inside binary-package/slot-operator-rebuild scheduling this pilot has
+  inside binary-package/slot-operator-rebuild scheduling portuale has
   none of, so this ports the *effect* (a package whose `SLOT` changed
   upstream gets flagged) via the same "report a reinstall" pattern
   `--changed-deps` already used, rather than replicating real portage's
@@ -1329,7 +1329,7 @@
   for either side. So despite `resolve_custom_set`'s own real, working
   nested-set expansion (built for -- and still only used by -- `@world`'s
   own dependency-resolution walk, `SetConfig.getSetAtoms`, a genuinely
-  different real mechanism), it plays no role here at all: this pilot's
+  different real mechanism), it plays no role here at all: portuale's
   own equivalent of real `action_deselect`'s own `@`-target handling is
   a plain membership check against `read_world_sets`'s own already-read
   list, nothing more. Each discarded entry is now reported against its
@@ -1372,7 +1372,7 @@
   reasoning, rather than reusing `match_from_list`).
 
   Re-deriving the exact match ordering surfaced a genuine correctness
-  bug in this pilot's own **pre-existing** `--deselect` port, present
+  bug in portuale's own **pre-existing** `--deselect` port, present
   since its very first slice: both `pretend.rs` and its own doc comments
   assumed every `--deselect` target -- bare name or explicit-category
   alike -- had to be actually installed before it could match anything,
@@ -1396,7 +1396,7 @@
   catalogued under category `"null"`). So `--deselect cat/pkg` (or a
   bare name resolvable via the world file) genuinely discards a matching
   world entry even if that package was never installed at all -- this
-  pilot's own earlier tests asserted the opposite, an incorrect
+  portuale's own earlier tests asserted the opposite, an incorrect
   generalization from "a bare name with *no* matching world entry
   contributes nothing" to "every target needs to be installed",
   conflated two genuinely different real code paths. A further, related
@@ -1441,7 +1441,7 @@
   any later atom, top-level or not, is even attempted, and before
   anything is printed -- matching real portage's own actual behavior:
   grounded against `lib/_emerge/depgraph.py`'s real "there are no ebuilds
-  to satisfy" message (not a guess), which the pilot's own top-level
+  to satisfy" message (not a guess), which portuale's own top-level
   "not found" message now uses verbatim instead of its previous
   placeholder wording. The old single-atom "already installed; nothing
   to do" shortcut (a `len(entries) == 1` special case) generalizes
@@ -1508,7 +1508,7 @@
   shows only the plain enabled/disabled set, which is a real, useful
   subset rather than an invented one, matching the "documented,
   simplified subset" spirit of every other output-formatting decision in
-  this pilot. (The `USE_EXPAND` grouping, the `*`/`%` diff markers, the
+  portuale. (The `USE_EXPAND` grouping, the `*`/`%` diff markers, the
   `( … )` forced/masked wrap, and the `[ebuild N ~]` bracket-mask column
   were all closed later -- see the "`emerge --pretend -v`: …" slices
   below, as was the `all_flags`-driven "show every flag / `(-flag%)`
@@ -1518,12 +1518,12 @@
   concatenates and flattens all five real dependency-string keys --
   `DEPEND`, `RDEPEND`, `BDEPEND` (build-time-only, EAPI 7+), `PDEPEND`
   (post-merge), `IDEPEND` (install-time, EAPI 8+, rare) -- fully closing
-  a scope cut this pilot had named explicitly since the original
+  a scope cut portuale had named explicitly since the original
   recursion follow-up. Real portage's own merge ordering treats these
   differently (BDEPEND must be satisfied on the *build host* before
   compiling starts; PDEPEND only needs to be satisfied *after* this
   package itself merges; IDEPEND only at install time), but that
-  distinction is meaningless for a `--pretend`-only pilot with no real
+  distinction is meaningless for a `--pretend`-only portuale with no real
   merge ordering or phase execution to begin with (see `agent-context.md`'s
   "Deferred: ebuild phase execution") -- so v1 treats all five uniformly
   as "a dependency this package needs, resolve and report it", the same
@@ -1546,7 +1546,7 @@
   `stack_lists(incremental=1)` exactly (`stack_mask_lines`, shared
   between mask and unmask, both of which real portage stacks
   identically). This is a genuine correctness improvement beyond just
-  adding sources: the pilot's own `package.unmask` previously treated a
+  adding sources: portuale's own `package.unmask` previously treated a
   leading `-` as meaningless, since with only one source there was
   nothing for it to meaningfully remove -- reading real `MaskManager.py`
   showed `-atom` removal is just as real for `package.unmask` as for
@@ -1614,17 +1614,17 @@
   overlay `package.mask` work above, grounded against real `config.py`
   (lines ~1229-1260) and `MaskManager.py` (lines ~69-100) together. A
   repo with no explicit `masters =` doesn't read its own `package.mask`
-  standalone the way this pilot's own doc comments previously claimed --
+  standalone the way portuale's own doc comments previously claimed --
   real `config.py`'s own `repo.masters = (self.mainRepo(),)` default
   means every non-main repo *implicitly* masters the main repo alone
   (the main repo's own masters default to `()`, since it can't be its
   own master), and `MaskManager.py`'s own per-repo loop stacks each
   master's own `package.mask` lines in *ahead of* the repo's own (real
-  `stack_lists(incremental=1)`, i.e. this pilot's own `stack_mask_lines`)
+  `stack_lists(incremental=1)`, i.e. portuale's own `stack_mask_lines`)
   before the combined result gets `::reponame`-scoped -- so an overlay
   with no explicit masters still inherits the main repo's own masks for
   its own packages. This was a genuine, if narrow, behavior gap this
-  pilot's own doc comments mis-described as intentional (`"every repo's
+  portuale's own doc comments mis-described as intentional (`"every repo's
   own entries here are read standalone, which is exactly what real
   portage would also do for a masters-less repo"` -- a masters-less repo
   and a repo with no *explicit* `masters =` are not the same thing, and
@@ -1632,7 +1632,7 @@
   reading `MaskManager.py`'s own two loops side by side: only
   `package.mask` consults masters at all -- `package.unmask`'s own loop
   never does, so this stays exactly as the previous follow-up left it,
-  main-repo-only, no inheritance. Since this pilot doesn't parse an
+  main-repo-only, no inheritance. Since portuale doesn't parse an
   explicit `masters =` `repos.conf` key at all (no fixture repo ever
   declares one), only the implicit main-repo default is modeled -- an
   explicit override or a multi-master chain stays unimplemented. Two new
@@ -1653,7 +1653,7 @@
   `repositories.repos_with_profiles()` -- every configured repo, not
   just main -- for every one of these five files, the exact same
   "every repo, unconditionally" mechanism `package.mask` already ports,
-  closing a gap this pilot's own doc comments had explicitly flagged
+  closing a gap portuale's own doc comments had explicitly flagged
   ("main repo only") in five separate places. Each overlay's own entries
   get the identical `::repo`-auto-scoping `package.mask`'s own overlay
   entries already get (`scope_repo_package_use_lines`, the same
@@ -1669,7 +1669,7 @@
   parse time here at all; the masters chain is only consulted later, per
   candidate, in `getUseMask`/`getUseForce` (`repos = masters +
   [pkg.repo]`, each repo's own already-independent dict appended in that
-  order), so this pilot's own `resolve_config` just scopes-then-appends
+  order), so portuale's own `resolve_config` just scopes-then-appends
   each overlay's own lines instead, no merge step needed. Three new
   overlay-only fixture packages exercise the three files most likely to
   matter in practice end to end: `overlayuseenablepkg` (its own
@@ -1690,11 +1690,11 @@
 
   **Scoping the main repo's own `package.mask`/`.unmask` too**: an
   immediate follow-up to the overlay `package.use` work above, closing a
-  gap this pilot's own doc comment had explicitly named and deferred at
+  gap portuale's own doc comment had explicitly named and deferred at
   the time of the original overlay-`package.mask` slice: real
   `append_repo` scopes *every* repo's own repo-level `package.mask`/
   `.unmask`, including the main repo's, not just an overlay's -- this
-  pilot previously left the main repo's own entries unscoped. Turned out
+  portuale previously left the main repo's own entries unscoped. Turned out
   to be a more interesting investigation than expected: an initial live
   repro (masking a package by its bare name in the main repo, then
   querying an identically-named package that exists only in an overlay
@@ -1768,7 +1768,7 @@
   `stack_mask_lines` call over every master's lines followed by the
   repo's own -- produces the identical final masked-atom set for the
   common case, diverging only from real portage's own warning-
-  attribution mechanics this pilot doesn't reproduce at all regardless.
+  attribution mechanics portuale doesn't reproduce at all regardless.
   New fixture repo `independentoverlay` (`repos.conf`'s own `masters =
   overlay`, explicitly *not* the main repo) proves both directions with
   two packages that exist only there: one masked only by the main
@@ -1796,10 +1796,10 @@
   already added to build that combined list. One real, deliberate
   simplification: real portage only allows this syntax when the
   *referencing* profile node's own repo declares `profile-formats =
-  portage-2` in `layout.conf`; this pilot doesn't model `layout.conf`
+  portage-2` in `layout.conf`; portuale doesn't model `layout.conf`
   profile-formats at all (a pre-existing cut, unrelated to this one), so
   it's always allowed here -- every real Gentoo profile fixture this
-  pilot already ships implies it, the same "real default, ported without
+  portuale already ships implies it, the same "real default, ported without
   modeling the mechanism that technically gates it" treatment already
   applied elsewhere (e.g. `ACCEPT_LICENSE`'s own hardcoded `"* -@EULA"`
   default). This closes the exact gap the previous follow-up's own scope
@@ -1829,7 +1829,7 @@
   `KeywordsManager.__init__`, which never reads a repo-location path for
   it), so this is a clean 2-source extension, not 3. **Correction (see
   the `package.accept_keywords` negation paragraph further below): this
-  pilot's own matching *was* purely additive at the time this paragraph
+  portuale's own matching *was* purely additive at the time this paragraph
   was first written, but real `package.accept_keywords` itself was never
   purely additive -- real `KeywordsManager._getEgroups` supports
   `-atom`/`-*` removal too, ported later, not at this slice.**
@@ -1842,7 +1842,7 @@
   turned out to be considerably more entangled: real portage's
   repo-level `package.use` lands in a distinct `configdict["repo"]`
   layer and profile-level in `configdict["defaults"]`, both governed by
-  the full `USE_ORDER` precedence sequence this pilot only partially
+  the full `USE_ORDER` precedence sequence portuale only partially
   implements -- extending it the same way `package.mask` and
   `package.accept_keywords` were would be a further, undocumented
   simplification beyond what's already there, not a precedent-following
@@ -1863,7 +1863,7 @@
   combined global-`ACCEPT_KEYWORDS`-plus-`package.accept_keywords` list,
   not just additions -- so a `package.accept_keywords` entry can revoke
   a keyword the global set already granted, not only extend it (the
-  stale claim two paragraphs up, corrected there). This pilot's own
+  stale claim two paragraphs up, corrected there). Portuale's own
   `keywords_accepted` previously just unioned every matching entry's own
   tokens (including a literal, never-matching `"-amd64"` string) onto
   the global set, silently no-op'ing any negation instead of applying
@@ -1898,7 +1898,7 @@
   "accept any stable keyword," `"~*"` means "accept any testing
   keyword" -- both distinct from `"**"` (accept even an *empty*
   `KEYWORDS`), which was already ported. Before this fix, `"*"`/`"~*"`
-  had no special meaning at all in this pilot's own `keywords_accepted`
+  had no special meaning at all in portuale's own `keywords_accepted`
   -- `apply_incremental` would just insert the literal string `"*"` (or
   `"~*"`) into the accepted set, an inert token that can never equal a
   real `KEYWORDS` entry, so `ACCEPT_KEYWORDS="*"` (real portage's own
@@ -1927,14 +1927,14 @@
   every plain (non-`~`/`-`-prefixed) token in the *current* global
   `ACCEPT_KEYWORDS` -- e.g. `ACCEPT_KEYWORDS="amd64"` turns a bare
   `dev-libs/foo` entry into the same thing as `dev-libs/foo ~amd64`
-  written by hand. This pilot's own doc comments previously claimed real
+  written by hand. Portuale's own doc comments previously claimed real
   portage only applies this at the *profile*-level source and a bare
   *user*-level entry "never gets" it -- re-reading `__init__` itself
   while investigating this slice showed that's wrong: the user-level
   source gets the identical substitution too, just baked in at
   config-load time (`self.pkeywordsdict`) rather than read time
   (`getPKeywords`'s own per-entry check) -- a real behavior gap, not
-  just a stale comment, since this pilot's own bare atom previously
+  just a stale comment, since portuale's own bare atom previously
   stayed a true no-op at both levels. Fixed by computing the derived
   `~arch` default list once, right after `config.accept_keywords` is
   fully resolved, and substituting it into every bare `package.
@@ -1978,7 +1978,7 @@
   exactly as a standalone occurrence of it would (same messages, same
   exit code) -- a deliberate simplification of *processing order* versus
   real emerge's own value-scanning recycling algorithm, not of
-  *outcome*, since this pilot exits at the first out-of-scope input
+  *outcome*, since portuale exits at the first out-of-scope input
   either way. A bundled `-v` (e.g. `-pv`) never consumes a value at all,
   even if followed by a bare `"y"`/`"n"` token -- matching real emerge's
   own `short_arg_opts_n` handling, whose comment explains why: an inline
@@ -1997,7 +1997,7 @@
   (`if myaction == "help": emerge_help(); return os.EX_OK`), checked
   once *after* the whole line has already parsed successfully, so it
   wins regardless of position or what other real-but-unimplemented flags
-  accompany it -- including bundled, e.g. `-ph`. This pilot's own scan
+  accompany it -- including bundled, e.g. `-ph`. Portuale's own scan
   is a documented simplification of that: it checks every token
   (including each character of a short-flag bundle) for a literal
   `--help`/`-h`/`h` match unconditionally, rather than first confirming
@@ -2007,8 +2007,8 @@
   argparse's post-parse action dispatch at all). The help text itself is
   deliberately **not** a port of real emerge's own `_emerge/help.py`
   (157 lines of colorized usage syntax for its full ~130-flag surface,
-  most of which this pilot doesn't implement -- reproducing it here
-  would be actively misleading); it's a short, honest, pilot-specific
+  most of which portuale doesn't implement -- reproducing it here
+  would be actively misleading); it's a short, honest, portuale-specific
   summary of what's actually implemented, ending with a pointer to
   `../README.md`/`agent-context.md` for the rest.
 
@@ -2029,7 +2029,7 @@
   portage's own mechanism: real repo-level `package.use` lands in a
   distinct `configdict["repo"]` `USE_ORDER` layer and profile-level in
   `configdict["defaults"]` (merged per-level with that level's own
-  `make.defaults` USE), while this pilot's own per-package application
+  `make.defaults` USE), while portuale's own per-package application
   (`effective_use_flags`, unchanged by this slice) already flattens
   `package.use` into one incremental list regardless of source --
   extending that flat model from one source to three doesn't add a *new*
@@ -2044,7 +2044,7 @@
   `lib/portage/_sets/files.py`, which confirms real `@world` is the
   *union* of that flat file's own atoms with any nested `@set`
   references it may also contain (added by a prior `emerge --noreplace
-  @some-set`). This pilot reads the file's plain atom lines and expands
+  @some-set`). Portuale reads the file's plain atom lines and expands
   them in place at whatever position `@world` appears in argv, feeding
   the exact same multi-atom/recursion machinery every other invocation
   already uses -- not a separate code path. **Correction (see the
@@ -2054,7 +2054,7 @@
   general set-recursion machinery needed to explain that part) -- but
   the claim that this was the *whole* story for real `@world`'s own
   nested-set union was wrong; nested `@set` references live in a
-  genuinely separate file this pilot didn't yet read at the time this
+  genuinely separate file portuale didn't yet read at the time this
   paragraph was written.** A missing world file (a fresh `ROOT` that's
   never had anything merged into it) is treated as a real, valid empty
   state, not an error. Only the literal token `@world` triggers this
@@ -2071,7 +2071,7 @@
   reinstalled if its currently-effective USE differs from what the vdb
   recorded at merge time -- `flags = (orig_iuse ^ cur_iuse) |
   ((orig_iuse∩orig_use) ^ (cur_iuse∩cur_use))`, read from two new vdb
-  files (`USE`/`IUSE`, alongside the `CATEGORY`/`SLOT` this pilot already
+  files (`USE`/`IUSE`, alongside the `CATEGORY`/`SLOT` portuale already
   read) and the candidate ebuild's own current IUSE/`effective_use_flags`.
   A `Reinstall` entry is walked for dependencies exactly like New/Upgrade
   (the dead end an already-installed package used to always be), printed
@@ -2079,9 +2079,9 @@
   `N`/`U` already established, with the changed flags named inline
   (`(reinstall for changed USE: foo)`) for a deterministic, testable
   report -- real emerge instead color-hints changed flags within its
-  `-v` USE display, a UI feature out of scope for this pilot's plain-text
+  `-v` USE display, a UI feature out of scope for portuale's plain-text
   output. Real `_reinstall_for_flags` also subtracts a `forced_flags`
-  set (from `use.force`/`use.mask`) before deciding -- this pilot
+  set (from `use.force`/`use.mask`) before deciding -- portuale
   initially always treated it as empty (`use.force`/`use.mask` weren't
   modeled at all yet), a deliberate, confirmed-with-the-user
   simplification at the time; see the `use.mask`/`use.force` paragraph
@@ -2097,7 +2097,7 @@
   -- ported here as skipping a resolved package's own DEPEND/RDEPEND/etc
   entirely, for every entry (not just top-level atoms), so no dependency
   atom is ever queued and no blocker is ever collected (blockers only
-  ever come from a dependency string in this pilot, so this falls out
+  ever come from a dependency string in portuale, so this falls out
   for free). A resolved package's own USE display is still computed and
   shown by `-v` regardless -- real portage's USE display is about a
   package's own metadata, unrelated to whether its dependencies get
@@ -2152,7 +2152,7 @@
   paragraph above named. Grounded against `UseManager.
   getUseMask`/`getUseForce`'s own `pkg=None` case -- the one real
   `config.py`'s `regenerate()` actually calls to build the *global* `USE`
-  value this pilot's flat model corresponds to -- which returns
+  value portuale's flat model corresponds to -- which returns
   `stack_lists(self._usemask_list/self._useforce_list, incremental=True)`
   directly: every profile level's own file, stacked with the identical
   machinery `package.mask`/`packages` (`@system`, above) already port, no
@@ -2206,22 +2206,22 @@
   Grounded against `UseManager.__init__`'s own file/variable comment
   table: unlike `package.use`, there is no user-level source for either
   file at all (the "user config" section lists only `package.use ->
-  _pusedict`) -- confirmed real behavior, not a pilot simplification.
+  _pusedict`) -- confirmed real behavior, not a deliberate simplification.
   Read from repo-level (main repo only, no `masters` -- the same cut
   `package.mask`'s own repo-level source already makes) plus every
   profile level's own file, in chain order. Unlike real per-instance
   `getUseMask(pkg)`/`getUseForce(pkg)`, which interleave global and
   per-package entries level-by-level in one `stack_lists` pass, this
-  pilot applies `package.use.mask`/`.force` as a separate layer on top
+  portuale applies `package.use.mask`/`.force` as a separate layer on top
   of the already-shipped global `use.mask`/`use.force` and `package.use`
   -- a deliberate, confirmed simplification of the real application
   order, kept separate so the already-tested global implementation
   didn't need reworking. When more than one entry matches the same
   candidate, real `ordered_by_atom_specificity`/`best_match_to_list`
-  decides which one wins a conflict; this pilot ports a simplified
+  decides which one wins a conflict; portuale ports a simplified
   version of that ranking table (`=cpv` highest, then `~cpv`, then
   `=cpv*`, then `cp:slot`, then any comparison-operator atom, then a
-  bare `cp`, then this pilot's own bounded wildcard atoms lowest) and
+  bare `cp`, then portuale's own bounded wildcard atoms lowest) and
   applies each specificity-ordered entry's tokens via the same
   incremental semantics `package.use` itself uses, so a more-specific
   entry's own `-flag` can cancel a less-specific entry's own mask/force.
@@ -2261,7 +2261,7 @@
   stay that way*; it can still end up offering one for a different, less
   obvious reason -- see `--noreplace`/`--selective` below.) This was a
   genuine, discovered inaccuracy
-  in this pilot's own prior default behavior: every prior slice's
+  in portuale's own prior default behavior: every prior slice's
   New/Upgrade/AlreadyInstalled decision unconditionally searched for the
   single best visible version first, with no way to prefer "stay
   installed" at all -- there was no flag whose absence this
@@ -2277,13 +2277,13 @@
   best-visible-candidate path unchanged, matching real portage's own
   "enable upgrade or downgrade to a version with visible KEYWORDS when
   the installed version is masked" comment sitting right above its own
-  `avoid_update` check -- a real corner this pilot gets right for free,
+  `avoid_update` check -- a real corner portuale gets right for free,
   not by accident. `update` threads uniformly through
   `resolve_pretend_graph`'s whole BFS, top-level atoms and dependencies
   alike, the same way `newuse`/`changed_use` already do -- and unlike
   that pair's own whole-graph application (a *documented* simplification
   of real portage's own more selective default), this one isn't a new
-  pilot-specific simplification at all: `avoid_update`/`dont_miss_updates`
+  portuale-specific simplification at all: `avoid_update`/`dont_miss_updates`
   are themselves plain `myopts` checks inside the one package-selection
   function every atom resolution, args and dependencies alike, already
   funnels through in real portage too. No new fixture was needed:
@@ -2298,7 +2298,7 @@
 
   **`--noreplace`/`-n` and `--selective`: real portage's own `selective`
   gap, closing a genuine correctness bug the `--update` slice above
-  didn't catch.** Found by comparing this pilot's own output against
+  didn't catch.** Found by comparing portuale's own output against
   the real, installed system `emerge` on a real package
   (`sys-apps/portage`) and tracing real portage's own decision live,
   via monkeypatched instrumentation of the actual installed
@@ -2324,11 +2324,11 @@
   restore the "nothing to do" result, confirmed against the real system
   both ways. `selective` mirrors real `create_depgraph_params.py`'s own
   `myparams["selective"] = True` condition, computed from whichever of
-  its eight real trigger flags this pilot implements: `--update`,
+  its eight real trigger flags portuale implements: `--update`,
   `--newuse`, `--changed-use` (real portage's own `-U` rewrites to
   `--reinstall=changed-use` before `create_depgraph_params` ever runs,
   and `--reinstall` is itself constrained to that one literal choice in
-  real portage -- so `--changed-use` alone covers this pilot's whole
+  real portage -- so `--changed-use` alone covers portuale's whole
   share of that real condition, no separate `--reinstall` flag needed),
   `--changed-deps`, `--changed-slot`, plus the two flags whose *entire*
   real effect is exactly this: `--noreplace`/`-n` (a plain boolean,
@@ -2339,7 +2339,7 @@
   "--selective") == "n": pop`, checked last). Real `--newrepo` (forces
   reinstall specifically on an installed-vs-current repo mismatch, and
   separately contributes to `selective`) is a documented, narrower
-  scope cut: this pilot has no vdb `REPOSITORY` reader (confirmed
+  scope cut: portuale has no vdb `REPOSITORY` reader (confirmed
   absent from the real system during this same investigation -- the
   real vdb file is even lowercase `repository`, unlike every other
   metadata key). A dependency atom (not top-level) is never affected at
@@ -2349,7 +2349,7 @@
   required a genuinely new `resolve_pretend` parameter,
   `is_top_level`, since the function previously had no way to tell a
   directly-requested atom apart from a dependency reached by
-  recursion -- reused this pilot's own pre-existing `depth == 0` from
+  recursion -- reused portuale's own pre-existing `depth == 0` from
   `resolve_pretend_graph`'s BFS, the identical equivalence
   `--with-test-deps` already established between real "argument" and
   `depth == 0`. `PretendOutcome::Reinstall` gained a new, genuinely
@@ -2359,7 +2359,7 @@
   `_reinstall_reason` now return `None`/an option rather than asserting
   at least one reason is always present, and the caller omits the
   parenthetical entirely for that case. This was the largest blast-radius
-  fix in this pilot's own history: roughly two dozen pre-existing pinned
+  fix in portuale's own history: roughly two dozen pre-existing pinned
   tests whose own point was something else entirely (`--deep`,
   `--changed-deps`, `--changed-slot`, `--newuse`, package.mask, multiple
   top-level atoms) happened to lean on the old, incorrect "bare
@@ -2373,7 +2373,7 @@
   grammar since the slot-operator follow-up, but never enforced it when
   matching -- confirmed by grepping both crates: `matches_version`/
   `matches_slot`/`match_from_list` never once consulted `Atom::use_deps`.
-  This was a *deliberate* cut at the time ("this pilot's dependency-graph
+  This was a *deliberate* cut at the time ("portuale's dependency-graph
   model has no per-package IUSE/USE state to check a use-dep against"),
   but that stopped being true once `package.use`/`package.use.mask`/
   `.force` gave every candidate a real, computable effective-USE set --
@@ -2388,7 +2388,7 @@
   never inside `match_from_list` itself: real `match_from_list` skips its
   own USE-dep block entirely for a plain-string candidate (its own
   `hasattr(x, "use")` guard), which is exactly what every candidate this
-  pilot ever builds already is -- so `portage-repo` only calls
+  portuale ever builds already is -- so `portage-repo` only calls
   `use_deps_satisfied` once it has a real candidate's own current-tree
   IUSE and effective USE in hand (`candidate_iuse_and_use`, extracted
   from what `reinstall_flags_for_use_change` already computed the same
@@ -2401,7 +2401,7 @@
   The four conditional forms impose no enabled/disabled constraint
   here at all -- genuine real `match_from_list` behavior (their own
   values live in a separate `.conditional` structure it never reads),
-  not a pilot simplification: evaluating one for real needs the
+  not a deliberate simplification: evaluating one for real needs the
   *atom-owning* package's own USE state, a wholly different mechanism
   (real `Atom.evaluate_conditionals`, not anything `match_from_list`
   itself does) -- **now closed**, see the dedicated `opt=`/`opt?`
@@ -2415,7 +2415,7 @@
   error" precedent `read_vdb_flag_set` already sets for a missing vdb
   file), and roughly a dozen older fixture packages' own md5-cache
   entries genuinely omit `IUSE=` entirely (predating IUSE being modeled
-  in this pilot at all) -- previously harmless, since nothing before
+  in portuale at all) -- previously harmless, since nothing before
   this slice ever read a non-installed candidate's IUSE this broadly.
   `dev-libs/useflagpkg` (already-established `IUSE="foo missingflag"`,
   `foo` enabled globally, `missingflag` not) needed no new fixture at
@@ -2440,7 +2440,7 @@
   "evaluate_conditionals"): token = token.evaluate_conditionals(uselist)`
   -- called on *every* dependency-string atom token, the same `uselist`
   already threaded through for `flag? ( ... )` *group* conditionals).
-  This pilot's own `use_reduce_flat` (`portage-use-reduce`) deliberately
+  Portuale's own `use_reduce_flat` (`portage-use-reduce`) deliberately
   stays atom-grammar-agnostic (see that crate's own module doc comment on
   the tokenizing/atom-parsing split), so the equivalent step lives one
   layer up instead: `portage-repo`'s own `enqueue_flat_deps` (shared by
@@ -2489,7 +2489,7 @@
   `resolve_pretend_graph` at exactly that point: right after a
   candidate is newly resolved to New/Upgrade/Reinstall (never
   AlreadyInstalled -- matching real `not pkg.built`, trivially always
-  true here since this pilot has no binary-package concept at all to
+  true here since portuale has no binary-package concept at all to
   make that check meaningful), its own `REQUIRED_USE` (if declared and
   non-empty) is checked via `check_required_use` against its own
   already-computed IUSE/effective-USE. On violation (or a malformed/
@@ -2501,18 +2501,18 @@
   violating package was reached as a top-level target or a dependency
   deep in the graph -- a materially different, *harsher* severity than
   a dependency's own `NoVisibleCandidate` (report, don't fail the whole
-  call) that this pilot already had. Ported as a `Result::Err` returned
+  call) that portuale already had. Ported as a `Result::Err` returned
   straight out of the BFS loop, reusing the exact same fatal-error
   plumbing a top-level atom's own unsatisfiable `NoVisibleCandidate`
   already needed -- no new plumbing required in `pretend.rs` at all.
-  The error message itself is a short, honest, pilot-specific one
+  The error message itself is a short, honest, portuale-specific one
   (`REQUIRED_USE not satisfied for cat/pkg-version: "<normalized
   REQUIRED_USE string>"`) showing the package's own full, as-declared
   constraint -- not real portage's own elaborate, colorized report with
   the "reduced," violation-only sub-expression extracted via the tree
   `check_required_use` itself doesn't build here (see
   `required-use-harness`'s own bullet above), matching the same
-  "pilot-specific summary, not a port of real formatting" precedent
+  "portuale-specific summary, not a port of real formatting" precedent
   `--help` already set. `dev-libs/requireduseokpkg` (`REQUIRED_USE="foo?
   ( bar )"`, `foo` enabled globally by the fixture profile chain, `bar`
   forced on by this package's own `package.use` entry -- genuinely
@@ -2535,7 +2535,7 @@
   other reachable branch (other top-level atoms, other dependencies),
   collecting every violation into `_unsatisfied_deps_for_display`, and
   only fails the whole run at the very end, once nothing more is left to
-  attempt. This pilot's own previous "return `Err` immediately, right
+  attempt. Portuale's own previous "return `Err` immediately, right
   there in the BFS loop" shortcut meant a second, wholly independent
   top-level atom passed on the same command line -- one with its own,
   unrelated REQUIRED_USE violation -- would never even be attempted,
@@ -2555,7 +2555,7 @@
   a flag that isn't even valid IUSE) stays immediately fatal, deliberately
   -- real `check_required_use` raises for that case from outside the
   explicit "not satisfied" branch the delayed collection lives in, so
-  this remains the one case this pilot's own architecture can't delay.
+  this remains the one case portuale's own architecture can't delay.
   New fixture `dev-libs/requiredusebadpkg2` (a second, independent
   REQUIRED_USE violation, `"baz? ( qux )"`, unrelated to the original
   `dev-libs/requiredusebadpkg`'s own `"foo? ( bar )"`) proves both
@@ -2571,8 +2571,8 @@
   from USE-conditional mask), builds dependency-chain comments
   (`_get_dep_chain_as_comment`), and picks specific suggested-atom syntax
   (`=`/`>=`, with/without slot) based on whether the suggested version is
-  the latest -- none of that machinery exists in this pilot at all, and
-  this pilot's own `is_visible` returned a plain `bool` with no reason
+  the latest -- none of that machinery exists in portuale at all, and
+  portuale's own `is_visible` returned a plain `bool` with no reason
   tracking whatsoever. On top of that, real `--autounmask-keep-keywords`
   (found while reading `create_depgraph_params.py`'s own default-
   resolution logic) defaults to **suppressing** keyword suggestions --
@@ -2583,12 +2583,12 @@
   package.mask/license/properties/restrict all still have to pass) and a
   `suggested_keyword` helper (the first non-`-`-prefixed KEYWORDS token,
   a real simplification of `_get_masking_status`'s own unstable-vs-
-  different-arch-vs-`**` distinction); (2) appends a pilot-specific
+  different-arch-vs-`**` distinction); (2) appends a portuale-specific
   (not real-portage-formatted) suggestion line to a top-level atom's own
   fatal `NoVisibleCandidate` message when the best keyword-masked-only
   candidate exists; (3) ports real `create_depgraph_params.py`'s own
   `autounmask`/`autounmask_keep_keywords` default-resolution logic
-  faithfully for the one sub-flag this pilot actually reads (with
+  faithfully for the one sub-flag portuale actually reads (with
   `--autounmask-use`/`-license` never consulted at all, confirmed this
   simplifies to exactly the same real outcome, not a shortcut around
   it): `autounmask` defaults enabled, off only via explicit
@@ -2607,9 +2607,9 @@
   -- Rust and Python byte-identical on every one.
 
   **`IUSE`'s own `+`/`-` default markers, closing a real, comprehensive
-  gap this pilot's own REQUIRED_USE reporting (paragraph above) helped
+  gap portuale's own REQUIRED_USE reporting (paragraph above) helped
   surface.** Found the same way the `selective` gap above was: comparing
-  this pilot's own output against the real, installed system `emerge` on
+  portuale's own output against the real, installed system `emerge` on
   a real package (`media-video/ffmpeg`) -- a bare `--noreplace --newuse
   media-video/ffmpeg` reported `REQUIRED_USE not satisfied`, aborting the
   whole run, for a USE combination hand-verified (and confirmed via a
@@ -2624,7 +2624,7 @@
   branching on which one was there. Real `ffmpeg-8.1.2`'s own IUSE
   declares `+gpl`/`+dav1d`/`+drm`/`+gnutls`/`+libass`/`+truetype`/`+xml`/
   `+zlib` (among others) -- every one of them silently defaulted to
-  *disabled* by this pilot instead of real portage's own *enabled*,
+  *disabled* by portuale instead of real portage's own *enabled*,
   which is what actually violated the (otherwise satisfied)
   `REQUIRED_USE`. Grounded precisely against real `config.py`'s own
   `_setup_pkg_iuse` (`lib/portage/package/ebuild/config.py`, ~line
@@ -2641,7 +2641,7 @@
   still override an IUSE default; it only wins when none of them
   mentions the flag at all. Ported as simply the seed `effective_use_flags`'s
   own `use_flags` now starts from (a new `iuse` parameter, threaded
-  through all four of its real call sites), with `base` (this pilot's
+  through all four of its real call sites), with `base` (portuale's
   own already-flattened profile+`make.conf` result) unioned on top --
   `base` can only ever *add* a flag here, never force one off that IUSE
   defaulted on, since it's a plain enabled-name set with no "explicitly
@@ -2662,7 +2662,7 @@
   all) proves package.use still layers normally on top, not just that
   IUSE defaults exist in isolation. (A second, related finding from the
   same investigation -- a *different* real package's REQUIRED_USE
-  referencing a profile-injected implicit USE flag this pilot doesn't
+  referencing a profile-injected implicit USE flag portuale doesn't
   model at all -- is closed by the next paragraph.)
 
   **Implicit IUSE: `PORTAGE_ARCHLIST`/`use.mask`/`use.force`/`build`/
@@ -2687,7 +2687,7 @@
   profile -- just not the *active* arch, so it stays disabled, and
   `mesa`'s `REQUIRED_USE` (which only *references* `x86`, doesn't
   require it enabled) is satisfied once the flag is merely recognized as
-  valid. This pilot's own `iuse_set` (`portage-repo`'s
+  valid. Portuale's own `iuse_set` (`portage-repo`'s
   `resolve_pretend_graph`, the single call site feeding
   `check_required_use`) was built purely from a package's own literal
   `IUSE` metadata, with no implicit-IUSE concept at all. Fixed by adding
@@ -2700,7 +2700,7 @@
   `portage.dep.check_required_use` directly, so this union is the only
   change needed there). Deliberately out of scope: `USE_EXPAND_HIDDEN`-
   derived regex-pattern implicit flags (`elibc_.*`/`kernel_.*`/
-  `userland_.*`) -- a bigger, separate feature this pilot doesn't
+  `userland_.*`) -- a bigger, separate feature portuale doesn't
   otherwise model at all (no `ELIBC`/`KERNEL`/`USERLAND` support). New
   fixture `dev-libs/archiuseimplicitpkg` (`IUSE=""`,
   `REQUIRED_USE="!x86"`, with a new `profiles/base/arch.list` declaring
@@ -2718,8 +2718,8 @@
   `pkg` (`package.use`) tier -- and `setcpv()` confirms
   `self.useforce`/`self.usemask` are themselves
   `getUseForce(pkg)`/`getUseMask(pkg)`: *global* `use.force`/`use.mask`
-  combined with the atom-scoped `package.use.force`/`.force` this pilot
-  already applies last. This pilot previously folded global
+  combined with the atom-scoped `package.use.force`/`.force` portuale
+  already applies last. Portuale previously folded global
   `use_force`/`use_mask` into `base` early, inside
   `portage_profile::resolve_config` (alongside `defaults`/`conf`), well
   *before* `package.use` ever ran in `effective_use_flags` -- so a
@@ -2774,13 +2774,13 @@
   per-variable handling, a separate `USE_EXPAND_UNPREFIXED` mode,
   IUSE-aware wildcard expansion for cases like `linguas_*`, an
   early-expand pass specifically so sub-profiles get useful incremental
-  behavior) considerably bigger than this pilot's own flat accumulation
+  behavior) considerably bigger than portuale's own flat accumulation
   model, so v1 ports a deliberately narrower core: `USE_EXPAND` itself
   (the variable-NAME list, e.g. `VIDEO_CARDS PYTHON_TARGETS`) accumulates
   incrementally across the profile chain and `make.conf`, the exact same
   `apply_incremental` mechanism `USE`/`ACCEPT_KEYWORDS` already use; each
   named variable's own VALUE (e.g. `VIDEO_CARDS="nvidia"`) is read via
-  this pilot's own pre-existing, already-documented "last-level-wins,
+  portuale's own pre-existing, already-documented "last-level-wins,
   no incremental merge" scalar mechanism (the same one `ARCH` already
   uses) -- a deliberate simplification of real portage's own genuinely
   per-variable-incremental behavior, extending an already-confirmed cut
@@ -2789,7 +2789,7 @@
   (`VIDEO_CARDS="nvidia"` -> `video_cards_nvidia`), folded directly into
   the same flat `use_flags` set every other USE source already
   populates -- no separate per-variable breakdown is kept, since nothing
-  in this pilot (no `--info` action) needs one. Deliberately out of
+  in portuale (no `--info` action) needs one. Deliberately out of
   scope at the time, all confirmed real, named corners: `USE_EXPAND_UNPREFIXED`
   (closed by a later follow-up below),
   IUSE-aware wildcard expansion (needs a specific package's own IUSE,
@@ -2813,7 +2813,7 @@
   the exact same variable-NAME accumulation (`apply_incremental` on the
   `USE_EXPAND_UNPREFIXED` key itself, across the profile chain and
   `make.conf`) and the exact same "last-level-wins" scalar read for each
-  named variable's own value this pilot's own `USE_EXPAND` already uses
+  named variable's own value portuale's own `USE_EXPAND` already uses
   -- the *only* difference is that the value's own tokens fold into
   `use_flags` with **no prefix at all**, not `lowercase(varname)_`.
   This is a real, load-bearing mechanism, not an edge case: real
@@ -2846,7 +2846,7 @@
   and the real code's own loop resets its prefix on each one; the
   original `package.use` slice's own paragraph above had mis-described
   this as "resets on a blank line," now fixed). A genuinely real,
-  *user-level-only* restriction, not a pilot-invented one: confirmed by
+  *user-level-only* restriction, not a portuale-invented one: confirmed by
   reading `UseManager.__init__`, only `_parse_user_files_to_extatomdict`
   (the user-level `package.use` parser) ever applies this shorthand --
   the repo-level/profile-level parsers
@@ -2856,10 +2856,10 @@
   no such expansion step at all, so the identical `VIDEO_CARDS:` syntax
   in a repo-level or profile-level `package.use` file is just a literal,
   unexpanded token there. This real distinction meant splitting this
-  pilot's own previously-uniform "concatenate all three sources, parse
+  portuale's own previously-uniform "concatenate all three sources, parse
   once" `package.use` handling into two parses -- repo+profile-level
   lines (no shorthand) and user-level lines (shorthand enabled) --
-  concatenated together afterward, rather than adding a new pilot-wide
+  concatenated together afterward, rather than adding a new portuale-wide
   simplification. `dev-libs/packageuseexpandpkg`, gated by a
   `fixtures/etc/portage/package.use` entry reading
   `dev-libs/packageuseexpandpkg PYTHON_TARGETS: python3_12`, proves the
@@ -2895,7 +2895,7 @@
   ANSI colorization; its installed-vs-new `*`/`%` diff markers (closed by
   the next slice); the enabled-first within-group ordering (closed by the
   "`emerge --pretend -v`: enabled-first USE order + `--alphabetical`"
-  slice below -- until then this kept the pilot's own bare-name sort).
+  slice below -- until then this kept portuale's own bare-name sort).
   Fixture
   profile's `USE_EXPAND` gained `PYTHON_TARGETS` (so
   `dev-libs/packageuseexpandpkg` groups) and `CPU_FLAGS_X86` with
@@ -2964,13 +2964,13 @@
   through `print_entry_line`/`print_tree`) that, when set, re-sorts each
   group's already-rendered tokens by their bare flag name (new
   `use_flag_sort_key`: strip a leading `(`/`-` and trailing `)`/`*`/`%`).
-  `--json`'s own `use_flags` map is untouched -- it's the pilot's
+  `--json`'s own `use_flags` map is untouched -- it's portuale's
   structured representation, and real `--json` has no USE display to
   match. Two pinned fixtures flipped: `dev-libs/iusedefaultpkg` now
   `USE="enableddefault plainflag -disableddefault"` (was fully
   alphabetical), `dev-libs/useexpandpkg` `VIDEO_CARDS="nvidia -amdgpu"`.
   Still cut (unchanged): ANSI color and real portage's *natural*
-  within-group sort (`_alnum_sort_key` -- this pilot's plain lexicographic
+  within-group sort (`_alnum_sort_key` -- portuale's plain lexicographic
   only differs on e.g. `python3_9` vs `python3_12`).
 
   **`emerge --pretend -v`: `all_flags` -- the diff shows every flag.**
@@ -2999,7 +2999,7 @@
   **`emerge --pretend`: real `PkgAttrDisplay` bracket layout + `[old-ver]`
   column (increment 1 of the `-pv` real-`output.py` layout + ANSI-color
   buildout, confirmed with the user before implementing).** Until this
-  slice the pilot kept a deliberately compact bracket (`[ebuild  N]`,
+  slice portuale kept a deliberately compact bracket (`[ebuild  N]`,
   `[ebuild  U] cat/pkg-2.0 (upgrade from 1.0)`, `[ebuild  r] cat/pkg-1.0
   (reinstall for changed dependencies)`) -- readable, but visibly not
   real `emerge`. The user chose (via `AskUserQuestion`) to adopt real
@@ -3021,7 +3021,7 @@
   is `[ebuild   R    ]` with **no** inline reason (real `_get_installed_best`
   sets `attr.replace` -- the `R` -- only when the exact cpv is already
   installed, and `emerge -pv` genuinely shows no "why" for a reinstall;
-  the pilot's `(reinstall for …)` prose and `reinstall_reason` helper are
+  portuale's `(reinstall for …)` prose and `reinstall_reason` helper are
   dropped -- a `--changed-use` reinstall still shows its USE diff in the
   `USE="…"` section, `--changed-deps`/`--changed-slot` reasons are
   invisible in real `-pv` too). `_set_no_columns`' trailing ` {oldbest}`
@@ -3062,7 +3062,7 @@
   directly-requested / world-file package, `PKG_MERGE_SYSTEM` /
   `PKG_MERGE` (darkgreen) otherwise, `PKG_BINARY_MERGE_WORLD` (fuchsia) /
   `PKG_BINARY_MERGE` (purple) for a binary; `system` wins over `world`,
-  exactly as real. `check_system_world` is narrowed to what this pilot
+  exactly as real. `check_system_world` is narrowed to what portuale
   has: `world` = a `var/lib/portage/world` atom match OR a favorite (a
   directly-requested target) that `create_world_atom` would actually add
   (not `--oneshot`/`--onlydeps` -- see the "world file" section below --
@@ -3090,7 +3090,7 @@
   *core* is wrapped, never the `*`/`%` markers or the `( )` forced/removed
   wrap (real `yellow(flag) + "%*"` appends the markers *after* the
   `colorize` call). Since the marker suffix and sign fully determine the
-  colour, this pilot applies it as a render-time pass over the
+  colour, portuale applies it as a render-time pass over the
   already-rendered tokens (`pretend.rs::colorize_use_token` /
   `_colorize_use_token`) rather than threading colour back into
   `build_use_expand_display` (which runs at resolve time, before
@@ -3098,7 +3098,7 @@
   `--alphabetical` re-sort already uses, and colour is applied *after*
   that sort so the sort key still sees plain tokens. One documented
   imperfection, unreachable by any fixture: a forced *disabled* flag
-  newly in IUSE on an Upgrade renders `(-flag)` (the pilot's own
+  newly in IUSE on an Upgrade renders `(-flag)` (portuale's own
   `render_flag` drops the `%` for forced flags) and is coloured `blue`
   here where real portage would `yellow` it. A dedicated pinned contract
   test (the New red/blue case + the Upgrade `added%*`/`keep`/`-change*`/
@@ -3151,7 +3151,7 @@
   keyword (`get_keyword_mask` "unstable"), `*` if visible only via `**`
   or a different arch's keyword ("missing"). New
   `portage_repo::keyword_mask_marker` ports that: hard-mask via the
-  provenance `mask_entry` this pilot already computes; then
+  provenance `mask_entry` portuale already computes; then
   `keywords_accepted` against the *global* `ACCEPT_KEYWORDS` alone (empty
   `package.accept_keywords`) to decide "needs help at all"; then a
   `~<arch>`-in-`ACCEPT_KEYWORDS` check off the candidate's own `KEYWORDS`
@@ -3212,7 +3212,7 @@
   letter. `pkg.properties` is `PROPERTIES` after real USE-conditional
   evaluation against the candidate's own effective USE
   (`_PackageMetadataWrapper.__getitem__`, gated on `"?" in v` -- the
-  same "resolve USE only when it could matter" shortcut this pilot
+  same "resolve USE only when it could matter" shortcut portuale
   already applies to `LICENSE`/`PROPERTIES`/`RESTRICT` masking). New
   `portage_repo::evaluated_metadata_tokens` (Rust: `use_reduce_flat`
   with the candidate's `use_flags_if_conditional` USE; Python: real
@@ -3253,7 +3253,7 @@
   flat/`--columns`/`--tree` layouts alike, with a leading blank line.
   **Cut**: the
   `Conflict:` line's own `(N unsatisfied)`/`(all satisfied)` suffix --
-  this pilot resolves no blocker (report, don't enforce), so it can't
+  portuale resolves no blocker (report, don't enforce), so it can't
   honestly classify one. ~18 existing `-pv` pinned-output contract
   tests updated for the new trailing line. Then (once the `f`/`F`
   fetch-restrict slice built the machinery) completed with `, Size of
@@ -3272,7 +3272,7 @@
   `parse_manifest` with the `f`/`F` helper), summed with a
   filename-`HashSet` dedup in `package_counters_summary`, formatted by
   `localized_size` (real `portage.localization.localized_size`:
-  `ceil(bytes/1024)` KiB, always KiB -- this pilot drops real portage's
+  `ceil(bytes/1024)` KiB, always KiB -- portuale drops real portage's
   `LC_NUMERIC` thousands grouping of the KiB count, only observable
   above 999 KiB and locale-dependent). The `Fetch Restriction: N
   package[s][ (M unsatisfied)]` line comes straight from the
@@ -3281,7 +3281,7 @@
   no-`SRC_URI` package (real portage always shows it); ~18 more pinned
   tests updated. `--json` is unchanged (`download_files` is a
   display-time detail). Binary candidates contribute 0 (real
-  `_calc_size` runs for them too, but this pilot has no remote-binpkg
+  `_calc_size` runs for them too, but portuale has no remote-binpkg
   fetch -- a local `PKGDIR` binary is always already present). This
   closes `_PackageCounters.__str__`.
 
@@ -3341,11 +3341,11 @@
   `effective_use_flags` conditionally, once it knows a specific
   candidate's own stability (the same layer `package.use.mask`/`.force`
   and USE-dep enforcement already work at). `use.stable.mask`/`.force`
-  read from the profile chain only, matching this pilot's own
+  read from the profile chain only, matching portuale's own
   already-established (not newly cut) profile-only sourcing for the
   non-stable global `use.mask`/`.force`, rather than also adding the
   repo-level sourcing real per-package `getUseMask`/`getUseForce` has
-  for it that this pilot's own global mechanism never had either;
+  for it that portuale's own global mechanism never had either;
   `package.use.stable.mask`/`.force` read repo-level (main repo only)
   plus profile-chain, mirroring `package.use.mask`/`.force`'s own
   already-confirmed sourcing exactly, no user-level source (same
@@ -3367,10 +3367,10 @@
   `myparams` entirely unless `--deep`'s own value is present and
   non-zero) means an already-installed, already-satisfied package's own
   further dependencies are *never* walked, at any depth -- which turned
-  out to already be exactly this pilot's own pre-existing, hardcoded
+  out to already be exactly portuale's own pre-existing, hardcoded
   behavior (an AlreadyInstalled outcome never reads its own DEPEND/
   RDEPEND/etc at all), so implementing `--deep` meant adding the
-  recursion this pilot never had, not fixing a gap in what it already
+  recursion portuale never had, not fixing a gap in what it already
   did. A bare `--deep` means real Python `True` (unlimited depth);
   `--deep=N`/`--deep N` bounds it to `N` levels past a directly-
   requested top-level atom (depth `0`) -- both threaded through the BFS
@@ -3388,16 +3388,16 @@
   version (via `enqueue_dependencies`, factored out of the ordinary New/
   Upgrade/Reinstall dependency walk so both share the same lookup-and-
   flatten logic) rather than from real portage's own vdb-snapshot
-  metadata, since this pilot has no vdb-metadata reader at all -- a
+  metadata, since portuale has no vdb-metadata reader at all -- a
   deliberate, documented simplification consistent with every other
-  candidate lookup in this pilot already working this way, not a new
+  candidate lookup in portuale already working this way, not a new
   gap introduced here. `dev-libs/deeppkg` (installed, RDEPENDs on
   `dev-libs/deeppkg2`) and `dev-libs/deeppkg2` (also installed, RDEPENDs
   on `dev-libs/newpkg`, New) exercise the exact depth-cutoff semantics:
   without `--deep`, only `deeppkg`'s own "nothing to do" line shows;
   a bare `--deep` reaches all the way to `newpkg`; `--deep=1` reaches
   `deeppkg2` but not `newpkg` (indistinguishable from no `--deep` at all
-  in this pilot's own plain-text output, since `deeppkg2` stays a
+  in portuale's own plain-text output, since `deeppkg2` stays a
   silent, non-top-level AlreadyInstalled entry either way); `--deep=2`
   reaches `newpkg`, same as unlimited -- proving the bound is real in
   both directions, not silently ignored. `--deep=0` parses fine but is
@@ -3412,7 +3412,7 @@
   `myparams.pop("selective", None)`. Real portage then stops selecting
   installed packages as merge-list candidates (`depgraph.py:7889`), so
   every atom in the (now mandatory-deep) tree resolves to a merge. This
-  pilot's candidate pool is *already* tree-only -- it consults the vdb
+  portuale's candidate pool is *already* tree-only -- it consults the vdb
   only to *classify* an outcome -- so `empty` threads through
   `resolve_pretend` as three small changes: it forces `deep` on
   (`Deep::Unlimited`), clears `selective` locally, and turns every "the
@@ -3420,7 +3420,7 @@
   result -- top-level *or* a dependency reached by the deep walk -- into a
   bare `Reinstall` (real `output.py`: `attr_display.replace` is still set
   from `vardb.cpv_exists`, so `[ebuild   R   ]`, no `[oldver]`, no
-  reason -- exactly the pilot's own reasonless `[ebuild R]`). The net
+  reason -- exactly portuale's own reasonless `[ebuild R]`). The net
   effect matches real `emerge -e`: `emerge -p --emptytree dev-libs/deeppkg`
   shows `deeppkg` + `deeppkg2` as `[ebuild   R   ]` (both installed) and
   `newpkg` as `[ebuild  N    ]` (not), where a plain `emerge -p
@@ -3464,7 +3464,7 @@
   re-checks per specific candidate rather than blacklisting a whole
   category/package once. Deliberately NOT replicated: real depgraph.py's
   remaining `excluded_pkgs` call sites cover interaction points this
-  pilot doesn't implement at all (autounmask, binpkg selection,
+  portuale doesn't implement at all (autounmask, binpkg selection,
   `--complete-graph`, ...) -- a documented scope cut, not an oversight.
   Real `WildcardPackageSet` accepts wildcard atoms as well as plain
   ones, so this reuses the exact same two-tier `matches_config_entry`
@@ -3475,7 +3475,7 @@
   atom list (help text: "A space separated list of package names or
   slot atoms") -- both accumulate here: `--exclude foo --exclude "bar
   baz"` excludes all three. Unlike `--deep`/`-D`'s own optional value,
-  `--exclude`'s is required, so this pilot deliberately doesn't support
+  `--exclude`'s is required, so portuale deliberately doesn't support
   bundling it (`-pX` gets a specific "requires an argument, can't be
   bundled" message) -- there's no sensible default the way a bundled
   `-v`/`-D` has.
@@ -3518,19 +3518,19 @@
   `pretend.rs`, `_json_escape`/`_entry_to_json`/`_print_json` in the
   Python reference) rather than a JSON library on either side -- the
   same "two independent implementations building the identical string
-  via the identical algorithm" approach this whole pilot uses
+  via the identical algorithm" approach this whole portuale uses
   everywhere else, verified to produce genuinely byte-for-byte identical
   output (not just structurally-equal-as-JSON) via the shared contract
   suite.
   **`LICENSE`/`ACCEPT_LICENSE`/`package.license` masking** (PMS 7.3.2).
-  A new, real visibility-gating mechanism this pilot had zero handling
+  A new, real visibility-gating mechanism portuale had zero handling
   for before this slice -- grounded against real
   `LicenseManager.getMissingLicenses`/`_getPkgAcceptLicense`
   (`lib/portage/package/ebuild/_config/LicenseManager.py`) and
   `Package.py`'s own `settings._getMissingLicenses` call, alongside
   `package.mask` as another independent masking reason. The real
   algorithm turned out to need genuine `||`-group *structure* (real
-  `use_reduce(..., opconvert=True)`) that this pilot's own existing
+  `use_reduce(..., opconvert=True)`) that portuale's own existing
   `use_reduce_flat` deliberately discards (the same DEPEND/RDEPEND `||`-
   flattening simplification `resolve_pretend_graph` already documents),
   so the Rust side needed a bespoke recursive-descent parser
@@ -3560,7 +3560,7 @@
   `ACCEPT_LICENSE` itself is a deliberate, documented simplification:
   real portage genuinely accumulates it incrementally across every
   config source (`prune_incremental` over each source's own raw
-  tokens); this pilot instead extends its own pre-existing "any variable
+  tokens); portuale instead extends its own pre-existing "any variable
   other than USE/ACCEPT_KEYWORDS is a plain last-level-wins scalar" cut
   to this one too, rather than inventing a new, single-variable-only
   incremental mechanism -- real portage's own meaningful default when
@@ -3595,14 +3595,14 @@
   building `PROPERTIES`/`RESTRICT` on top of the same three functions,
   rather than copy-pasting the algorithm a second time. Real portage's
   own default -- `"*"` (accept everything) -- comes from
-  `cnf/make.globals`, a real, always-sourced config layer this pilot
+  `cnf/make.globals`, a real, always-sourced config layer portuale
   doesn't model as an actual read file (unlike the profile chain/
   make.conf), so it's replicated as a hardcoded fallback, the same "real
   default, ported without modeling the file it technically comes from"
   treatment `accept_license`'s own `"* -@EULA"` already gets (there, the
   default is a genuine Python-level hardcoded fallback even in real
   portage itself, not read from any file at all -- a slightly different
-  real mechanism arriving at the same pilot-side treatment).
+  real mechanism arriving at the same portuale-side treatment).
   `dev-libs/propertiespkg` (`PROPERTIES="live"`, visible under the real
   default) and `dev-libs/restrictedpkg`/`interactivepkg`
   (`RESTRICT="bindist"`/`PROPERTIES="interactive"`, each individually
@@ -3615,7 +3615,7 @@
   **`--with-test-deps[=y|n]`**: grounded against real `depgraph.py`'s own
   `_add_pkg`, which additionally pulls in a package's own `test?`-gated
   dependencies -- but only for a top-level atom (`pkg.depth == 0` --
-  this pilot's own `depth == 0`, since every depth-0 atom here already
+  portuale's own `depth == 0`, since every depth-0 atom here already
   came from `atoms` itself or a `@world`/`@system` expansion of it, both
   of which real portage also counts as an "argument" for this exact
   purpose), only when its own IUSE declares a `"test"` flag not already
@@ -3624,7 +3624,7 @@
   pkg.use.mask"` exactly). The extraction itself -- real `use_reduce(dep_
   string, uselist=use_enabled | {"test"}, ..., subset={"test"})` -- is
   the first real use of `use_reduce`'s own `subset` parameter in this
-  pilot, previously an explicit, documented cut on the Rust side
+  portuale, previously an explicit, documented cut on the Rust side
   (`use_reduce_flat`'s own module doc comment) -- the Python side needed
   no new code at all, since it already calls real `portage.dep.
   use_reduce` directly and real `use_reduce` already implements `subset`
@@ -3720,13 +3720,13 @@ deps", "`=*` glob version operator", and "`::reponame` repo constraint"
 paragraphs in "What this proves" above; USE deps are parsed and
 `atom-harness`/`match_from_list` itself still never enforces them --
 matching real `match_from_list`'s own behavior for the same
-plain-string candidates this pilot always uses -- but `portage-repo`
+plain-string candidates portuale always uses -- but `portage-repo`
 now enforces them as a separate post-filter, once it has a real
 candidate's own IUSE/effective-USE in hand; see the "USE-dep
 enforcement" paragraph in "What this proves" above). Candidates for matching are plain
 `category/package-version[-rN][:slot[/subslot]][::repo]` strings rather
 than full Package objects (no package-db/depgraph model exists yet in
-this pilot), which mirrors a fallback path the real `match_from_list`
+portuale), which mirrors a fallback path the real `match_from_list`
 already supports.
 
 `fixtures` is a small synthetic repo (not the vendored real tree
@@ -4079,7 +4079,7 @@ rebuilt", real `main.py`'s own help text -- the common real-world case
 being a same-version binary rebuilt against updated dependencies, e.g.
 a toolchain/ABI bump, not a version change at all). Real code's own
 "skip the check if a newer *source* candidate exists" branch has no
-equivalent here: this pilot only ever reaches the check once the best
+equivalent here: portuale only ever reaches the check once the best
 *visible* candidate already equals what's installed, so nothing newer
 can exist by construction. `--rebuilt-binaries-timestamp`, when given,
 narrows the comparison from "any difference triggers a reinstall"
@@ -4112,7 +4112,7 @@ merged). `PretendOutcome::Downgrade` now exists as its own variant
 constructed unconditionally), printing `(downgrade from X)` instead of
 `(upgrade from X)`, with its own dedicated `D` bracket letter --
 deliberately a single letter, not real portage's own stacked `U`+`D`
-columns, matching this pilot's established one-letter-per-outcome
+columns, matching portuale's established one-letter-per-outcome
 scheme. `dev-libs/downgradepkg` (installed at `2.0`, only `1.0` visible
 in the tree) proves it live -- and does so even *without* `--update`,
 since the installed `2.0` has no visible candidate of its own to satisfy
@@ -4132,10 +4132,10 @@ scheduled* merge order (`mylist`) and a real bidirectional digraph
 (`parent_nodes`/`child_nodes`) to decide, for each node, exactly which
 already-placed node to nest it under, including cycle-avoiding
 parent-chasing logic when a fresh top-level branch needs to attach
-somewhere -- machinery this pilot has no equivalent of at all, since
+somewhere -- machinery portuale has no equivalent of at all, since
 there's no merge scheduler (that's task #55's own "real merge/install"
-boundary). A deliberate, pilot-specific simplification instead: the
-only edges this pilot has are `GraphEntry::required_by` (already "every
+boundary). A deliberate, portuale-specific simplification instead: the
+only edges portuale has are `GraphEntry::required_by` (already "every
 distinct owner, sorted"), inverted here into a `children` map (owner
 key -> the entries it pulled in), walked from the top-level/requested
 entries as roots in their own already-argv-ordered `entries` sequence.
@@ -4150,7 +4150,7 @@ matching real portage's own `_tree_display`-never-called-otherwise
 gating) chooses the child order at each level: `entries`' own natural
 BFS discovery order when given -- genuinely "not sorted", using real
 already-existing data, no invented bookkeeping -- versus alphabetical-
-by-`(category, package)` by default, this pilot's own deterministic
+by-`(category, package)` by default, portuale's own deterministic
 stand-in for real portage's genuine merge-order sort. Both display
 modes (flat and tree) now share one `print_entry_line` per-outcome
 implementation (indent-parameterized) rather than duplicating the
@@ -4163,7 +4163,7 @@ reverse-alphabetical) proves the ordered/unordered distinction itself,
 since every pre-existing fixture's own RDEPEND happened to already be
 alphabetical. An entry never reached from any root at all (shouldn't
 normally happen) still prints, unindented, after the tree rather than
-being silently dropped -- this pilot's own "never silently lose
+being silently dropped -- portuale's own "never silently lose
 information" invariant, already established for slot conflicts and
 unresolvable dependencies.
 
@@ -4187,7 +4187,7 @@ dependency` unit test + `--tree`/`--json` contract assertions on
 `"provenance"` object (`{"mask_entry", "unmask_entry", "keyword_entry"}`)
 recording which `package.mask`/`.unmask`/`package.accept_keywords`
 config entries, if any, were actually load-bearing for that candidate to
-be visible at all -- this pilot's own feature, not a port of any real
+be visible at all -- portuale's own feature, not a port of any real
 emerge output (see `--json`'s own module doc comment for why `--json`
 exists in the first place). `mask_entry` is set even when a matching
 `unmask_entry` goes on to cancel it, so the trace shows the mask was
@@ -4214,7 +4214,7 @@ to trace at all, so their own `provenance` is always all-`null`, same
 scope cut as `slot`/`use_flags_display`.
 
 > **Superseded 2026-08-30** by "`emerge --pretend --autounmask`: real
-> keyword *resolution*" below: the pilot no longer *suggests* a keyword
+> keyword *resolution*" below: portuale no longer *suggests* a keyword
 > change and fails — it applies the implicit `=cpv ~arch` change,
 > resolves the graph, and prints the real `The following keyword changes
 > are necessary to proceed:` block. The `!!! note:` text and the
@@ -4223,7 +4223,7 @@ scope cut as `slot`/`use_flags_display`.
 > given (they still do for the *default*, keyword-keeping behavior).
 
 `--autounmask`'s own keyword-suggestion sub-feature, extended to a
-*dependency's* own `NoVisibleCandidate`: this pilot's own v1 (task #51)
+*dependency's* own `NoVisibleCandidate`: portuale's own v1 (task #51)
 only ever suggested something for a top-level atom's own **fatal**
 `NoVisibleCandidate` (the one that aborts the whole call) -- a
 dependency's own `NoVisibleCandidate` (reported, not fatal -- the graph
@@ -4252,7 +4252,7 @@ on the existing keyword-masked-only package) proves it live, both with
 and without `--autounmask`, and in both plain-text and `--json` form.
 
 > **Superseded 2026-08-30** by "`emerge --pretend`: real
-> `--autounmask-use` USE *resolution*" below (increment 2): the pilot no
+> `--autounmask-use` USE *resolution*" below (increment 2): portuale no
 > longer *suggests* a USE flip and reports the dependency unresolvable —
 > it applies the flip, resolves the graph, and prints the real `The
 > following USE changes are necessary to proceed:` block. The
@@ -4308,9 +4308,9 @@ out (confirmed with the user before implementing, given real portage's
 own considerably bigger machinery here — cross-parent conflict
 detection, a full backtrack-restart when a USE change cascades into
 other packages' own dependencies, no equivalent of which exists anywhere
-in this pilot): the real `binpkg_respect_use == "y"` interaction (a rare
+in portuale): the real `binpkg_respect_use == "y"` interaction (a rare
 corner case: an *explicit* `--binpkg-respect-use=y` forcing `autounmask_
-use` to `"n"`, not reproduced since this pilot's own `binpkg_respect_use`
+use` to `"n"`, not reproduced since portuale's own `binpkg_respect_use`
 is already a resolved bool with no way to distinguish "explicit y" from
 the "auto" default by the time it's available), and the separate
 `opt?`/REQUIRED_USE-conditional mechanism (real `_show_unsatisfied_dep`
@@ -4330,7 +4330,7 @@ second, architecturally distinct mechanism from the plain-atom flip
 above: when a dependency atom's own use-dep was originally conditional
 on the *requesting parent's* own USE state (`opt?`/`!opt?`/`opt=`/
 `!opt=`), the fix isn't a change to the candidate at all — it's a
-change to the *parent's* own USE. This pilot's own conditional-use-dep
+change to the *parent's* own USE. Portuale's own conditional-use-dep
 evaluation (`enqueue_flat_deps`/`_enqueue_flat_deps`, using the real
 `Atom.evaluate_conditionals`/`portage_dep::evaluate_atom_conditionals`
 already ported for `opt=`/`opt?` support) happens eagerly, at
@@ -4384,7 +4384,7 @@ was *already* `REQUIRED_USE`-violating before isn't disqualified by it,
 only one that flips from satisfied to violated is).
 
 **Deliberately narrower than real `Atom.violated_conditionals`** (~150
-lines of per-token-operator partitioning this pilot doesn't reproduce
+lines of per-token-operator partitioning portuale doesn't reproduce
 in either language): instead of determining exactly *which* conditional
 use-deps were violated, this toggles *every* flag the unevaluated
 atom's own conditional use-deps reference, together, in one
@@ -4400,7 +4400,7 @@ entry (`parent_use_suggestion`, a new field alongside `use_suggestion`
 genuinely independent, alternative fixes for the same mismatch) rather
 than the parent's own entry the way real `missing_use_reasons.append
 ((myparent, ...))` does — a pragmatic simplification, since this
-pilot's own entry model has no per-parent "reasons" list to attach it
+portuale's own entry model has no per-parent "reasons" list to attach it
 to instead, and the dependency's own entry is where the "no visible
 ebuild for dependency" note already lives.
 
@@ -4424,10 +4424,10 @@ display-layer alternate rendering of the same New/Upgrade/Downgrade/
 Reinstall entries the default bracket format already shows -- no new
 resolution logic, just a different layout, and mutually exclusive with
 `--tree` (real `actions.py`: `"can't specify both of \"--tree\" and
-\"--columns\"."`, checked once parsing finishes -- this pilot reports it
+\"--columns\"."`, checked once parsing finishes -- portuale reports it
 via its own established CLI-usage-error convention, exit 2 on stderr,
 rather than real portage's own literal exit 1 on stdout, same deviation
-every other CLI-usage error in this pilot already makes). The
+every other CLI-usage error in portuale already makes). The
 `"[{bracket}  {code}]"` segment is untouched -- only what comes after it
 changes: bare `category/package` (no version) padded out to
 `columnwidth - 60`, then `[version]` right-padded to `columnwidth - 30`,
@@ -4442,8 +4442,8 @@ the `COLUMNWIDTH` environment variable exactly like real portage (an
 unparsable value warns and falls back to the default rather than
 erroring) -- except the warning text itself: real portage's own message
 echoes the raw exception's `str()`, which Rust's `ParseIntError` and
-Python's `ValueError` never render identically, so this pilot uses one
-fixed, pilot-authored line instead, the same "never leak a language-
+Python's `ValueError` never render identically, so portuale uses one
+fixed, portuale-authored line instead, the same "never leak a language-
 specific parse-error string into pinned output" precedent `--deep`'s own
 invalid-value handling already set.
 
@@ -4468,7 +4468,7 @@ an unrecorded repo is a real, distinct value, and it either equals the
 current repo or it doesn't. `--newrepo` is also one of real
 `create_depgraph_params.py`'s own `selective` triggers (confirmed by
 reading it), so it now joins `update`/`newuse`/`changed_use`/
-`changed_deps`/`changed_slot`/`noreplace` in this pilot's own `selective`
+`changed_deps`/`changed_slot`/`noreplace` in portuale's own `selective`
 default-resolution OR-list too. Three fixtures prove it: `newrepopkg`
 (vdb `repository=oldrepo`, current provider `testrepo` -- fires),
 `samerepopkg` (vdb `repository=testrepo`, matching -- doesn't fire), and
@@ -4488,7 +4488,7 @@ every entry that would newly merge (`New`/`Upgrade`/`Downgrade`/
 `Reinstall` -- anything but `AlreadyInstalled`/`NoVisibleCandidate`),
 then check whether any of *those* entries has a `required_by` owner
 that's *also* in that same set -- exactly real `digraph.hasallzeros()`'s
-own check, expressed against this pilot's own `required_by` edges
+own check, expressed against portuale's own `required_by` edges
 instead of a real `digraph`. When it fires, `pretend.rs` prints the
 resolved merge list first (matching real `display_problems()`'s own
 `_show_merge_list()`-then-error ordering) and *then* the real error text
@@ -4500,26 +4500,26 @@ stderr) and exits `1`. Two fixtures prove it: `dualdep` (`New`, both
 `samepkg` -- doesn't fire).
 
 **v1 scope cuts**: no real "build the `.tbz2`/skip the merge, run
-`clean`" *execution* at all -- this pilot's `emerge` binary is still a
+`clean`" *execution* at all -- portuale's `emerge` binary is still a
 pure `--pretend`-only dependency-resolution tool with no real merge
 orchestration of its own (`ebuild <file> merge`/`package` are the real,
 separate execution surfaces task #54/#55 built; `--buildpkgonly` doesn't
 change what either of those does, since it's an `emerge`-level flag).
 No `ignore_priority` distinction (real `DepPrioritySatisfiedRange.
 ignore_medium` ignores soft/optional edges when deciding whether the
-graph is "clean" -- this pilot treats every `required_by` edge as hard).
+graph is "clean" -- portuale treats every `required_by` edge as hard).
 No `--fetchonly` interaction (real portage only runs this check when
-`--fetchonly` is *not* also given -- this pilot has no `--fetchonly` at
+`--fetchonly` is *not* also given -- portuale has no `--fetchonly` at
 all yet, so the interaction can't arise). No `--quickpkg-direct`
 sibling check, and no `_start_resolution_display`'s own cosmetic
-"packages that would be *built*" spinner text (this pilot has no spinner
+"packages that would be *built*" spinner text (portuale has no spinner
 concept at all).
 
 ### Real ebuild phase execution (task #54): the first slice
 
 A genuinely different kind of slice from everything above: not a new
 `emerge --pretend` flag, but the first working piece of the *next major
-phase* this pilot's own `agent-context.md` had investigated but
+phase* portuale's own `agent-context.md` had investigated but
 never started in code -- running real ebuild phase functions
 (`pkg_setup`, `src_unpack`, `src_prepare`, `src_configure`, `src_compile`,
 `src_test`, `src_install`) and landing real files under a real `${D}`,
@@ -4539,7 +4539,7 @@ still open upstream) is no longer load-bearing because **brush strategy
 #2** (below) rewrote the offending `bin/phase-functions.sh` construct
 instead. Full tracking record and the periodic re-pin checklist live in
 **`brush-pin.md`**. A deliberate,
-accepted departure from this pilot's own near-zero-dependencies
+accepted departure from portuale's own near-zero-dependencies
 discipline elsewhere -- the alternative (shelling out to the system's
 real bash) was rejected earlier for tension with the "runs on even the
 most minimal Linux system" hard goal.
@@ -4588,7 +4588,7 @@ more literally than sharing one shell ever would have; real
 `.unpacked`/etc., written by `__dyn_*` themselves) are what make
 re-"running" an already-done prerequisite phase from a fresh shell
 cheap, exactly like real portage's own separate `spawnebuild()` calls
-rely on -- not a mechanism invented for this pilot. Also confirmed the
+rely on -- not a mechanism invented for portuale. Also confirmed the
 hard way: the embedding tokio runtime **must** be multi-threaded
 (`rt-multi-thread`) -- a single-threaded one deadlocks partway through a
 real multi-phase run, consistent with `brush-core`'s own `Cargo.toml`
@@ -4624,10 +4624,10 @@ merges it into `${ROOT}` -- matching real `dblink.mergeme()`'s own
 <mtime>`, `sym <path> -> <target> <mtime>`. Writes that `CONTENTS` text,
 plus `CATEGORY`/`SLOT`/`repository`/`COUNTER`, into a real
 `${ROOT}/var/db/pkg/<category>/<pf>/` directory -- the same
-one-value-per-file vdb layout this pilot's own fixtures and
+one-value-per-file vdb layout portuale's own fixtures and
 `portage_repo`'s own vdb readers (`installed_candidates`,
 `read_vdb_string`, etc.) already use, so a package merged this way is
-immediately visible to every other slice in this pilot (`emerge
+immediately visible to every other slice in portuale (`emerge
 --pretend`'s own `AlreadyInstalled`/`Reinstall` detection, `--deselect`,
 and so on) -- then really runs `pkg_postinst`, only once the vdb entry is
 fully written, matching real `treewalk()`'s own relative ordering.
@@ -4716,7 +4716,7 @@ in the same `SLOT` (an in-place upgrade -- real portage's own
 "install new, then remove old" merge-list order) and then `unmerge`-ing
 the *old* vdb entry would delete every file the old version's own
 `CONTENTS` lists, including ones the just-installed new version also
-owns, since this pilot's `unmerge` had no concept of "another installed
+owns, since portuale's `unmerge` had no concept of "another installed
 package might still need this" at all before this slice.
 
 `run_unmerge` now computes real `others_in_slot` before doing any
@@ -4740,7 +4740,7 @@ sub-case is out of v1 scope.
 New fixtures `dev-libs/othersinslotpkg-1.0`/`-2.0`, both `SLOT="0"`,
 both installing a real shared file (`shared.txt`) plus a version-unique
 one (`only-in-v1.txt`/`only-in-v2.txt`). No Python mirror needed -- like
-every other real-execution (non-dry-run) slice in this pilot, this is
+every other real-execution (non-dry-run) slice in portuale, this is
 Rust-only; the shared pytest contract suite doesn't touch real
 `merge`/`unmerge` at all.
 
@@ -4831,7 +4831,7 @@ type since a later slice -- see "CONFIG_PROTECT: a type-changing update
 is real-protected too" below). **`NOCONFMEM`**: real `--noconfmem`
 (`lib/_emerge/actions.py:2790`) is an `emerge`-only CLI flag with no real
 `bin/ebuild` equivalent at all (confirmed against `bin/ebuild`'s own
-six-option `argparse` list), so this pilot reads the `NOCONFMEM` env var
+six-option `argparse` list), so portuale reads the `NOCONFMEM` env var
 directly instead -- the same "env var, not full config resolution"
 shortcut `CONFIG_PROTECT` itself already uses. Real `vartree.py:4949`'s
 own `cfgfiledict["IGNORE"]`: forces every already-offered,
@@ -4853,7 +4853,7 @@ Real `dblink._protect()`'s own destination-side computation
 was already the case that its own `dest_md5`/`dest_link` comparison is
 computed from the *live destination's own lstat'd on-disk type*,
 regardless of what type the incoming source itself is -- previously,
-this pilot's `merge_tree` only ever protect-compared an `obj` entry
+portuale's `merge_tree` only ever protect-compared an `obj` entry
 against an `obj` (regular file) dest, and a `sym` entry only against a
 `sym` dest, silently overwriting a type-changing update (a symlink
 replacing a previously-installed regular file at the same path, or vice
@@ -4902,7 +4902,7 @@ area's own module doc comment used to list. `installed_instance_pf`
 picks the *previous* same-slot installed instance a merge is upgrading
 over -- the one with the highest real `COUNTER` among every other
 currently-installed version in this exact `category/package/slot`,
-reusing the same real per-package `COUNTER` file this pilot already
+reusing the same real per-package `COUNTER` file portuale already
 writes on every merge (`next_counter`), rather than needing any new
 persistence. `owned_node_value_pf` (the value-returning sibling of the
 already-existing `owned_node_type_pf`) consults that instance's own real
@@ -4966,13 +4966,13 @@ against the exact real caller (`mergeme()`'s own `obj`/`sym` branches,
 symlink-write (and its mtime stamp) `if moveme`, matching real
 `mergeme()`'s own `if moveme:` gate around `movefile()`.
 
-Real `moveme` is `false` in exactly the case this pilot's own doc
+Real `moveme` is `false` in exactly the case portuale's own doc
 comment already named: an update whose exact `src_md5` was already
 offered for this path (`cfgfiledict` remembers it from an earlier merge)
 and `NOCONFMEM` is unset -- real `move_me = protected = bool(cfgfiledict
 ["IGNORE"])` with `IGNORE == 0` (`vartree.py:5877`), real `mergeme()`'s
 own `zing = "---"`, "confmem rejected this update". Before this slice,
-this pilot applied the update directly instead, silently overwriting
+portuale applied the update directly instead, silently overwriting
 whatever the admin had locally edited into that already-offered file --
 a real, observable divergence from real portage now closed. Real
 `cfgfiledict` is deliberately left untouched in this one branch too:
@@ -5058,9 +5058,9 @@ actually claim each colliding path in the abort message.
 Deliberately not attempted (see `ebuild_merge.rs`'s own module doc
 comment for the full list): `preserve-libs` exclusion (a collision
 against a library real portage is about to unregister and hand over is
-a real, separately-scoped subsystem this pilot doesn't implement
+a real, separately-scoped subsystem portuale doesn't implement
 anywhere yet), blocker exclusion (real `mypkglist = others_in_slot +
-blockers` -- blockers are a real, broad gap this pilot doesn't attempt
+blockers` -- blockers are a real, broad gap portuale doesn't attempt
 anywhere else either), and `FEATURES=protect-owned` (a separate real
 feature: abort only when an owner was actually identified, regardless
 of `collision-protect`).
@@ -5080,7 +5080,7 @@ earlier attempt that reused one `ROOT` across sequential merges without
 unmerging in between produced a stale, misleading result -- a leftover
 vdb entry from an earlier merge made a later package look like it
 already "owned" a path it didn't actually still own on disk; not a bug
-in the collision logic itself, a reminder that this pilot's own
+in the collision logic itself, a reminder that portuale's own
 `unmerge` is what real portage relies on to keep vdb ownership in sync,
 not just overwriting files in place).
 
@@ -5106,7 +5106,7 @@ cat "${ROOT}"/usr/share/collisiontest/shared.txt
 
 Real `emerge --debug` (`lib/_emerge/main.py:1234-1239`) does two things:
 sets `PORTAGE_DEBUG=1` in the environment, and bumps Python's own
-`logging` level to `DEBUG`. Grounding both against this pilot's own
+`logging` level to `DEBUG`. Grounding both against portuale's own
 real-execution surface (`ebuild_phases.rs`/`ebuild_merge.rs`) found they
 split into two unrelated features: the logging-level bump has *zero*
 effect on `doebuild.py`/`vartree.py` (they route messages through
@@ -5118,7 +5118,7 @@ not attempted here. `PORTAGE_DEBUG=1` itself, though, is exactly what
 real `bin/ebuild.sh:479` and friends (`phase-functions.sh`,
 `phase-helpers.sh`, `misc-functions.sh`) check to `set -x` -- real bash
 xtrace of every phase command as it runs -- and that part *is* real
-execution this pilot already drives.
+execution portuale already drives.
 
 `ebuild.rs`'s option-parsing loop now captures `--debug` instead of
 silently discarding it like every other real `Kind::Boolean` option
@@ -5177,7 +5177,7 @@ reimplementation needed on either side). `PORTAGE_BINPKG_TMPFILE` is the
 real, final destination path itself (`lib/_emerge/EbuildPhase.py:210-249`:
 `os.path.join(PKGDIR, CATEGORY, PF) + ".tbz2"` for the real default
 `BINPKG_FORMAT="xpak"`) -- no separate atomic-rename step for the binpkg
-file the way this pilot's own vdb write uses one.
+file the way portuale's own vdb write uses one.
 
 `portage_repo`'s own pre-existing binary-package reader (task #53/#63)
 never parses a `.tbz2`/XPAK file's own content at all -- only
@@ -5211,11 +5211,11 @@ package`: the `gpkg` binary-package format" section below. Real
 file's own "Real `PORTAGE_COMPRESSION_COMMAND` resolution" section
 below; that paragraph's original claim (hardcoded `"bzip2 -c"`) is now
 stale. `USE` is always empty in the `Packages` entry, matching this
-pilot's own phase
+portuale's own phase
 environment (nothing was actually built with any USE flags enabled, so
 an empty set is the honest value). No `BUILD_ID`/`packdebug`/
 `splitdebug`/RPM (`__dyn_rpm`) support, no `PKGDIR`-index locking (this
-pilot's own CLI is never invoked concurrently against the same
+portuale's own CLI is never invoked concurrently against the same
 `PKGDIR`), and no real `bindbapi.inject()` equivalent (no long-lived
 in-memory binary-package database here, only ever re-reading `Packages`
 fresh each invocation).
@@ -5230,12 +5230,12 @@ runs `run_package`, asserts the produced `.tbz2` contains the real
 unmodified `list_binary_candidates`/`read_binary_metadata` correctly see
 the freshly-built package with the right version/slot/keywords/`RDEPEND`
 -- proving the metadata really flowed end-to-end from the ebuild's
-md5-cache entry into a `Packages` index this pilot's own binary-package
+md5-cache entry into a `Packages` index portuale's own binary-package
 reader already trusts.
 
 ### Real `emerge --buildpkgonly` execution: `emerge`'s own first real, non-dry-run action
 
-Every prior slice in this pilot kept `emerge` itself 100% dry-run --
+Every prior slice in portuale kept `emerge` itself 100% dry-run --
 `--pretend` was a hard requirement, and even `--buildpkgonly` only ever
 changed what the dry-run *report* said (see the write-up above). This
 slice makes `emerge --buildpkgonly <atom>`, given *without* `--pretend`,
@@ -5245,7 +5245,7 @@ graph says needs one -- at the time, the one real, non-dry-run action
 plain `emerge <atom>` source merge -- see their own sections below).
 `--pretend --buildpkgonly` together still stays a pure
 dry-run report, unchanged: real `--pretend` always suppresses every real
-action, no matter what else is requested alongside it, and this pilot
+action, no matter what else is requested alongside it, and portuale
 now mirrors that precisely rather than only supporting dry-run at all.
 
 The gate `resolve_pretend_graph`'s own `buildpkgonly_deps_unsatisfied`
@@ -5265,19 +5265,19 @@ lookup `resolve_pretend_graph` already did internally to pick the
 winning version in the first place.
 
 Building this surfaced a real, worth-recording finding, checked
-empirically rather than assumed: this pilot's environment setup never
+empirically rather than assumed: portuale's environment setup never
 populates `A`/`AA` from `SRC_URI` at all, so a real ebuild with a
 nonempty `SRC_URI` does *not* fail at `unpack` the way "no fetch
 machinery" first suggested it would -- EAPI 0's own default `src_unpack`
 (`unpack ${A}`) just runs with nothing to unpack and silently
 *succeeds*. Real portage's own `SRC_URI`-vs-`DISTDIR` check happens in a
 separate pre-phase step inside `doebuild()` itself, before the ebuild's
-own phases ever run at all -- a mechanism this pilot has no equivalent
+own phases ever run at all -- a mechanism portuale has no equivalent
 of. Left unguarded, this would silently produce a real, valid-looking
 but functionally *empty* binary package instead of erroring, which is
 worse than a loud failure. `run_buildpkgonly` therefore checks the
 winning candidate's own md5-cache `SRC_URI` field and refuses outright
-(exit 1, `"has a real SRC_URI, but this pilot has no real fetch/unpack
+(exit 1, `"has a real SRC_URI, but portuale has no real fetch/unpack
 machinery ... refusing rather than silently building an empty
 package"`) rather than letting that happen. Real fetch + Manifest
 verification stays a separately-scoped, not-yet-attempted follow-up.
@@ -5308,7 +5308,7 @@ dry-run-only feature so far): the Python side gained the identical
 CLI-gate/message-text changes so the shared dry-run contract tests
 still match byte-for-byte, but it has no real ebuild-execution
 machinery to mirror the actual building with, consistent with every
-other real-execution slice in this pilot staying Rust-only.
+other real-execution slice in portuale staying Rust-only.
 
 ### Real `ebuild <file> package`: the `gpkg` binary-package format
 
@@ -5316,7 +5316,7 @@ other real-execution slice in this pilot staying Rust-only.
 `.tbz2` unconditionally -- `BINPKG_FORMAT` was hardcoded. The `$PKGDIR`
 directory-scan buildout added a *reader* for the newer `gpkg`
 (`.gpkg.tar`) format (`binpkg::read_gpkg_metadata`, see that section);
-this slice closes the loop with the *writer*, so a package this pilot
+this slice closes the loop with the *writer*, so a package portuale
 builds can round-trip through its own reader.
 
 The mechanism is the same "drive real, unmodified bash + a real,
@@ -5348,12 +5348,12 @@ outer tar of `<basename>/gpkg-1` (the format marker), the compressed
 `<basename>/image.tar.<comp>`, and a `<basename>/Manifest`. **v1 cuts**
 (see `ebuild_package.rs`'s own doc comment): no `gpkg` *signing*
 (`FEATURES=binpkg-signing`/`binpkg-request-signature` -- the same "this
-pilot has no crypto" cut the reader's `Manifest`/`.sig` verification
+portuale has no crypto" cut the reader's `Manifest`/`.sig` verification
 already documents), no `BUILD_ID` in the basename.
 
 Proven end-to-end both ways:
 `ebuild_package::tests::real_package_with_gpkg_format_builds_a_real_gpkg_tar_this_pilots_reader_round_trips`
-builds the `.gpkg.tar` (bzip2), then reads it back with this pilot's
+builds the `.gpkg.tar` (bzip2), then reads it back with portuale's
 *own* `binpkg::read_gpkg_metadata` and asserts `SLOT`/`CATEGORY`/`PF`/
 `RDEPEND` survived the round trip, plus `BinaryIndex::from_pkgdir` and
 `binpkg::scan_pkgdir` both see it; the black-box
@@ -5418,7 +5418,7 @@ all (a real, live, documented gap confirmed above) -- real
 separately-scoped follow-up. No resume support (real `RESUMECOMMAND`'s
 own `-c`/retry behavior) -- a failed download is removed and retried
 from scratch. No GPG verification (`FEATURES=verify-sig`). No
-`FEATURES=distlocks` (this pilot's own single-invocation-at-a-time CLI
+`FEATURES=distlocks` (portuale's own single-invocation-at-a-time CLI
 usage never races a concurrent fetch of the same file). A file with no
 `Manifest` entry at all is refused outright (unverifiable content is
 worse than a loud failure) rather than fetched-but-unverified.
@@ -5448,14 +5448,14 @@ real Gentoo tree (not a fixture): `sys-fs/fuse`'s own real
 `sys-libs/liburing:=[abi_x86_64(-)?,...]` dependency was installed at
 2.14, whose real `KEYWORDS` had since gone `~amd64`-only (no longer
 accepted under this system's own default `ACCEPT_KEYWORDS="amd64"`).
-This pilot's `resolve_pretend` printed a spurious `[ebuild D]
+Portuale's `resolve_pretend` printed a spurious `[ebuild D]
 sys-libs/liburing-2.9 (downgrade from 2.14)` -- and, worse, recursed
 into `liburing-2.9`'s own dependency chain as if it needed real work,
 inflating the "would rebuild" set with ~20 unrelated packages
 (`python`, `openssl`, `perl`, `meson`, ...) that real portage never
 touches at all. Real `emerge --pretend --buildpkgonly
 =sys-fs/fuse-3.18.2` prints exactly one line
-(`[ebuild R] sys-fs/fuse-3.18.2`); this pilot's own `--buildpkgonly`
+(`[ebuild R] sys-fs/fuse-3.18.2`); portuale's own `--buildpkgonly`
 gate (task #100-#104) then correctly refused to proceed given that
 inflated set -- the gate itself was never wrong, the resolution
 feeding it was.
@@ -5468,7 +5468,7 @@ _want_update_pkg(parent, inst_pkg)`) -- with **no visibility check at
 all**. That's a genuinely different, *earlier* real code path than the
 **top-level** atom's own `avoid_update` block a few lines later, which
 *does* require visibility (`self._pkg_visibility_check(pkg, ...)`).
-This pilot's own `resolve_pretend` had only ever ported the top-level
+Portuale's own `resolve_pretend` had only ever ported the top-level
 version of that shortcut, applying its visibility requirement
 uniformly to dependency atoms too -- silently wrong for any dependency
 installed at a version the tree no longer keyword-accepts, a routine
@@ -5510,7 +5510,7 @@ found by running `emerge --buildpkgonly` against real packages
 function (unmodified bash) walks a real bash array,
 `PORTAGE_ECLASS_LOCATIONS`, looking for `<location>/eclass/
 <name>.eclass` for every eclass an ebuild's own top-level `inherit
-...` line names -- and this pilot never populated that variable at
+...` line names -- and portuale never populated that variable at
 all, so `inherit()` `die`d immediately for literally any eclass,
 before this fix. Nearly every real-world ebuild inherits *something*
 (`nano` needed `verify-sig`; `xz-utils` needed `dot-a`/`flag-o-matic`/
@@ -5545,7 +5545,7 @@ whole phase-execution call chain (`run_commands`/`run_single_phase` ->
 ... -> `phase_env_vars`). Any resolution failure (missing `repos.conf`,
 the containing repo not listed in it, etc.) degrades to the original
 v1 behavior -- the same graceful-degrade precedent `blocked_installed_
-packages` established. Every real eclass this pilot had live-verified
+packages` established. Every real eclass portuale had live-verified
 before this fix happened to live in the *same* repo as the ebuild that
 inherits it (`nano`'s/`xz-utils`'s/`fuse`'s own eclasses are all real
 files under the real `gentoo` main repo's own `eclass/` directory,
@@ -5614,7 +5614,7 @@ pulls in `multilib-build` -> `multibuild`/`multilib`) reproduces the
 hang.
 
 Root-caused down to a real bug in the pinned `brush` fork itself, not
-this pilot's own code, confirmed with a minimal, portage-free repro
+portuale's own code, confirmed with a minimal, portage-free repro
 against the standalone `brush` binary (nothing eclass- or
 ebuild-related):
 
@@ -5691,7 +5691,7 @@ black-box one against the compiled `ebuild` binary
 ### `ebuild --shell bash|brush`: a second, real shell execution backend
 
 Every phase, hook, and `bin/misc-functions.sh` `__dyn_*` call this
-pilot runs (`ebuild_phases::run_one_phase`/`run_misc_functions`) had
+portuale runs (`ebuild_phases::run_one_phase`/`run_misc_functions`) had
 exactly one real execution backend until now: an embedded
 `brush_core::Shell` (see this module's own doc comment for why brush
 at all). `--shell bash|brush` (default `brush`, matching the pre-
@@ -5720,12 +5720,12 @@ them directly as real subprocess environment variables
 no `$`/backtick-expansion risk -- at all, arguably simpler and safer
 than the brush path's own `{value:?}` Rust-Debug escaping.
 
-A pilot-only flag, not a real `bin/ebuild` option at all -- checked
+A portuale-only flag, not a real `bin/ebuild` option at all -- checked
 directly in `ebuild.rs`'s own CLI-parsing loop (the same "special-
 cased outside the real-options table" treatment `--help`/`-h` already
 get), deliberately not added to `ebuild_options::OPTIONS` (a
 transcription of real bin/ebuild's own argparse setup). Threaded down
-through every real-execution call site this pilot has (`ebuild_
+through every real-execution call site portuale has (`ebuild_
 phases::run_commands`/`run_single_phase`/`run_misc_function`,
 `ebuild_merge::MergeOptions`, `ebuild_package::PackageOptions`,
 `ebuild_unmerge::run_unmerge`) -- `emerge --buildpkgonly`'s own real
@@ -5783,7 +5783,7 @@ trades the zero-dependency embedded-shell fit (hard goal 3) for a `bash`
 runtime dependency during real phase execution -- an accepted change
 (the phase runtime already shells out to real helper binaries anyway).
 `brush` stays fully available: `ebuild --shell brush` (existing flag,
-default just flipped) and a **new pilot-only `emerge --shell bash|brush`**
+default just flipped) and a **new portuale-only `emerge --shell bash|brush`**
 flag (special-cased in `pretend.rs`'s parse loop like `--json`, mirrored
 in `emerge_pretend_reference.py` for CLI-surface parity, inert under
 `--pretend`). `emerge`'s flag threads into the real build/merge path
@@ -5801,7 +5801,7 @@ got as far as `src_prepare` and died in `autotools.eclass` --
 returned nothing. Root cause: the vendored `bin/` helper scripts that
 `import portage` -- `portageq-wrapper`, `ebuild-pyhelper` (and its
 `chmod-lite`/`doins`/`ebuild-ipc` symlinks), `save-ebuild-env.sh` -- each
-begin with `cd "${PORTAGE_PYM_PATH}" || exit 1`, and this pilot left
+begin with `cd "${PORTAGE_PYM_PATH}" || exit 1`, and portuale left
 `PORTAGE_PYM_PATH` unset (originally so `bin/ebuild.sh`'s own cwd choice
 would take its `${PORTAGE_BUILDDIR}/empty` branch). So every `portageq`
 call an eclass made aborted before running, and the mysterious
@@ -5835,7 +5835,7 @@ ${__INHERITED_QA_CACHE}`. Real portage sets `INHERITED` in the phase env
 (`porttree.py:872`: `" ".join(_eclasses_)`), and `bin/ebuild.sh`
 snapshots it into `__INHERITED_QA_CACHE` right before it `unset`s
 `INHERITED` and re-`source`s the ebuild for a non-`depend` phase -- so
-the re-run `inherit` calls find every eclass already known. This pilot
+the re-run `inherit` calls find every eclass already known. Portuale
 never set `INHERITED`, so every re-source warned.
 
 `compute_environment` now reads the eclass list from the ebuild's own
@@ -5861,7 +5861,7 @@ name (real `.rstrip("/") + "/" + path` string-built exactly).
 `portage_fetch::gentoo_mirror_fallback` adds real portage's *second*
 mirror mechanism on top: even a plain (non-`mirror://`) URI gets a
 `GENTOO_MIRRORS`-root + `/distfiles/<filename>` fallback candidate
-appended, real `async_mirror_url`'s own flat-layout path (this pilot
+appended, real `async_mirror_url`'s own flat-layout path (portuale
 never negotiates a live, per-mirror `layout.conf` the way real portage
 can -- confirmed by reading `MirrorLayoutConfig.get_best_supported_
 layout`'s own fallback, this is exactly what real portage itself falls
@@ -5897,7 +5897,7 @@ call site (`ebuild_phases::fetch_sources`'s own `FetchOptions`
 construction), not inside `fetch_src_uri` -- `FetchOptions.gentoo_
 mirrors` is an explicit field precisely so tests can set it to `vec![]`
 (no real fallback attempted) or a scratch local server, matching this
-pilot's own established "explicit parameter, not an ambient env read
+portuale's own established "explicit parameter, not an ambient env read
 inside library code" reasoning for anything a parallel test might need
 to vary.
 
@@ -5940,7 +5940,7 @@ is a narrow, fixed-shape JSON document (real `PreservedLibsRegistry.
 store()`'s own `{"cp:slot": [cpv, counter, [paths...]]}`,
 `json.dumps(indent="\t", sort_keys=True)`) -- read and written with a
 small hand-rolled parser/writer rather than a new `serde_json`
-dependency, matching this pilot's own "small, format-specific parser
+dependency, matching portuale's own "small, format-specific parser
 over a generic dependency" precedent (`--json` output's own hand-rolled
 emitter, `SRC_URI`'s recursive-descent grammar, `grabdict`-format
 `thirdpartymirrors`).
@@ -5969,7 +5969,7 @@ that no longer exists on disk is silently skipped (real
 `_lstat_inode_map`'s own `except OSError` -> `continue`); a sanity
 baseline proving the new `dev-libs/preservepkg-old`/`dev-libs/
 preservepkg-new` fixture pair is a genuine ordinary collision-protect
-abort with **no** registry entry present (this pilot's own "a fixture
+abort with **no** registry entry present (portuale's own "a fixture
 must actually distinguish the new behavior" rule); and the main
 end-to-end proof -- with `preservepkg-old`'s own already-merged file
 hand-registered in a seeded `preserved_libs_registry`,
@@ -6025,13 +6025,13 @@ generated by real, unmodified `bin/misc-functions.sh`'s own real
 `scanelf`-driven `install_qa_check` (`bin/misc-functions.sh:164-221`,
 `app-misc/pax-utils`'s own `scanelf` binary) -- no new ELF-parsing code
 needed at all, the same "reuse real, unmodified `bin/*.sh`" precedent
-this whole pilot already relies on everywhere else.
+this whole portuale already relies on everywhere else.
 
 The real catch, found while grounding this: `install_qa_check` (plus
 `install_symlink_html_docs`/`install_hooks`) is real `_post_phase_cmds
 ["install"]` (`EbuildPhase.py:424`/`442-461`) -- an **unconditional**
 step real portage runs after *every* real `install` phase completes,
-gated on no `FEATURES` flag at all, that this pilot's own install chain
+gated on no `FEATURES` flag at all, that portuale's own install chain
 never ran at all before this slice. `ebuild_phases::run_commands_async`
 now runs all three (as one combined `bin/misc-functions.sh` invocation,
 matching real `MISC_FUNCTIONS_ARGS`'s own unquoted `for x in
@@ -6043,7 +6043,7 @@ then copies the resulting `build-info/NEEDED.ELF.2` (if `scanelf`
 actually found anything) into the real vdb entry, mirroring one file of
 real `dblink.merge()`'s own broader `treewalk()` behavior (`vartree.py:
 4912-4913`: *every* `build-info` file gets copied into the vdb wholesale
--- real `IUSE`/`KEYWORDS`/`EAPI`/etc. metadata this pilot's own vdb
+-- real `IUSE`/`KEYWORDS`/`EAPI`/etc. metadata portuale's own vdb
 entries still don't carry at all, a separate, broader, not-yet-attempted
 gap deliberately left alone here).
 
@@ -6053,7 +6053,7 @@ unconditionally strip any genuinely empty directory from the install
 image (real PMS: ebuilds must not install empty directories; the real
 ebuild-author fix is `keepdir`, not bare `dodir`). Two existing fixtures
 (`envupdatepkg`, `collisionpkg-a`) used bare `dodir` on a directory
-nothing was ever installed into -- accidentally relying on this pilot
+nothing was ever installed into -- accidentally relying on portuale
 never having run this real check before. Both switched to `keepdir`,
 the real fix a real ebuild author would make; not a workaround.
 
@@ -6142,7 +6142,7 @@ the real `/usr/lib`/`/lib` defaults. Its own `/etc/ld.so.conf.d/*.conf`
 `include`-directive expansion is deliberately not reproduced, the same
 v1 cut `env_update.rs`'s own module doc comment already documents and
 confirmed with the user for the *other* real `/etc/ld.so.conf` reader in
-this pilot.
+portuale.
 
 `find_consumers` ports real `LinkageMap.findConsumers()`
 (`LinkageMapELF.py:817-960`), narrowed to the one real calling
@@ -6192,7 +6192,7 @@ tested files, left for a following slice rather than risking the
 already-shipped preserve-libs *consult/unregister* side. This module
 still has no real caller (`#[allow(dead_code)]`, documented in its own
 module doc comment) -- the same "narrow, additive, no wiring until the
-next slice needs it" shape this pilot used for explicit `masters =`
+next slice needs it" shape portuale used for explicit `masters =`
 parsing landing before eclass masters-chain search ever consumed it.
 That control-flow wiring has since shipped -- see "`preserve-libs`
 registration: wired into a real unmerge's control flow" below.
@@ -6234,9 +6234,9 @@ previous section is real now: `preserve_libs_on_unmerge` (new,
 (`lib/portage/dbapi/vartree.py:2228-2314`), called from real
 `unmerge()` right before `_unmerge_pkgfiles()` runs (`vartree.py:2493`/
 `2529`, confirmed by reading the real call site, not just the method
-itself), narrowed to the one real shape this pilot's own standalone
+itself), narrowed to the one real shape portuale's own standalone
 `ebuild <file> unmerge` always reaches: `unmerge_with_replacement=
-False`, since this pilot's own `merge`/`unmerge` are always separate,
+False`, since portuale's own `merge`/`unmerge` are always separate,
 independent CLI invocations, never a combined depgraph-driven upgrade
 transaction passing `preserve_paths` between them (real `instance_owns_
 files and not unmerge_with_replacement` collapses to just `instance_
@@ -6263,12 +6263,12 @@ parameter that filters them out of the parsed `CONTENTS` entries
 immediately -- real "remove the preserved files from our contents so
 that they won't be unmerged" (`vartree.py:2293-2294`). Persisting a
 separately-rewritten `CONTENTS` file was judged unnecessary for this
-pilot's own observable-behavior fidelity: the whole vdb entry directory
+portuale's own observable-behavior fidelity: the whole vdb entry directory
 gets deleted wholesale moments later regardless, so filtering the
 in-memory entries before the deletion loop already matches real
 portage's own observable behavior (the file survives on `ROOT`) without
 a wasted disk write real portage's own architecture needs but this
-pilot's doesn't.
+portuale's doesn't.
 
 Verified end to end against two real, `gcc`-compiled packages (`dev-
 libs/libpreservetest`/`dev-libs/consumepreservetest` fixtures): the
@@ -6335,7 +6335,7 @@ paths. When something was removed and this package's own `NEEDED.ELF.2`
 exists at all (real `if new_needed is not None:` -- a package that
 never had one is left alone, no file conjured into existence), every
 entry whose own `filename` no longer appears among the surviving paths
-is dropped; every other entry survives untouched. This pilot's own
+is dropped; every other entry survives untouched. Portuale's own
 `CONTENTS`/`NEEDED.ELF.2` convention already stores both `ROOT`-relative
 (no literal `ROOT` prefix baked in), so the comparison needs no
 `os.path.join(root, ...)` step the real Python side requires.
@@ -6424,7 +6424,7 @@ and regenerates all four real output files: `/etc/ld.so.conf`,
 the real systemd `/etc/environment.d/10-gentoo-env.conf`. It then
 really runs `ldconfig` -- specifically the *target `ROOT`'s own*
 `<ROOT>/sbin/ldconfig` (real `env_update()`'s own `else` branch when no
-`CHOST`/`CBUILD` cross-compile is configured, which this pilot never
+`CHOST`/`CBUILD` cross-compile is configured, which portuale never
 is), invoked exactly as real portage does: `ldconfig -X -r <ROOT>`,
 `cwd="/"` -- a real, unmodified subprocess, the same "real subprocess,
 accepted dependency" pattern already established for `wget` in the
@@ -6435,7 +6435,7 @@ fetch slice.
 biggest cut is real `ldconfig`-triggering's own persistent, cross-
 process mtime cache (real `portage.mtimedb["ldpath"]`, which lets a
 long-lived real portage session skip `ldconfig` on a merge that didn't
-touch any lib directory). This pilot's own CLI is a fresh process per
+touch any lib directory). Portuale's own CLI is a fresh process per
 command, so there's no such cache to persist -- every merge is instead
 treated as a first run: any candidate lib dir (`LDPATH` entries from
 env.d, an existing `usr/lib*`/`lib*` directory, excluding `libexec`)
@@ -6443,17 +6443,17 @@ found on disk *after* the merge triggers `ldconfig`, exactly matching
 real portage's own genuine first-run behavior (empty `prev_mtimes`).
 The only real divergence is a *repeat* merge into the same `ROOT` that
 didn't touch any lib dir, where real portage would skip `ldconfig` and
-this pilot re-runs it anyway -- never wrong, just occasionally extra,
+portuale re-runs it anyway -- never wrong, just occasionally extra,
 cheap, idempotent invocations. Also cut: real `getlibpaths()`'s own
 `/etc/ld.so.conf.d/*.conf` `include`-directive parsing (a rare,
 admin-configured mechanism no fixture needs); real `EPREFIX`/bfd-linker
-`/usr/etc/ld.so.conf` (no `EPREFIX` concept anywhere in this pilot);
+`/usr/etc/ld.so.conf` (no `EPREFIX` concept anywhere in portuale);
 env.d-declared extra `SPACE_SEPARATED`/`COLON_SEPARATED` keys (a rare
 escape hatch); real `getconfig()`'s own shlex-based parser (env.d files
 are parsed with the same simple per-line `KEY="value"` shortcut
 `ebuild_merge::parse_slot` already takes for `SLOT`); and always
 rewriting `/etc/ld.so.conf` rather than only when its content actually
-changed (moot here since it isn't vdb-tracked and this pilot's own
+changed (moot here since it isn't vdb-tracked and portuale's own
 `ldconfig`-triggering decision doesn't depend on that comparison at
 all).
 
@@ -6475,7 +6475,7 @@ heredoc to write the env.d file from `src_install` -- silently produced
 an *empty* `${D}` under brush, caught by live-verifying against the
 built binary before trusting the Rust test suite alone; switched to
 plain `echo`/`>>` redirection, the same style every other fixture in
-this pilot already uses, which works correctly.)
+portuale already uses, which works correctly.)
 
 Running it:
 
@@ -6507,7 +6507,7 @@ cat "${ROOT}"/ldconfig-was-invoked
 ### `FEATURES=protect-owned`: a merge aborts only when the colliding file has a known owner
 
 `collision-protect`'s own sibling real merge-track feature, and the
-last item queued from this pilot's own "next slice" backlog: real
+last item queued from portuale's own "next slice" backlog: real
 `dblink.merge()`'s own *separate* abort condition alongside
 `collision-protect` (`lib/portage/dbapi/vartree.py:4770-4838`). Python
 operator precedence makes the real check `collision_protect or
@@ -6581,10 +6581,10 @@ cat "${ROOT}"/usr/share/collisiontest/shared.txt
 The last item on `ebuild_merge.rs`'s own gap list from the collision-
 detection work above is real now: real `dblink.merge()`'s own
 `mypkglist = others_in_slot + blockers` (`others_in_slot` is already
-this pilot's own `own_versions`). Real `dblink._blockers` is never
+portuale's own `own_versions`). Real `dblink._blockers` is never
 computed by `dblink` itself -- it's injected by the real depgraph
 resolver, which already knows the full dependency graph by the time a
-merge runs. This pilot's own `ebuild <file> merge` has no depgraph at
+merge runs. Portuale's own `ebuild <file> merge` has no depgraph at
 all (a standalone, single-ebuild real-execution path, unlike `emerge
 --pretend`), so closing this gap meant something genuinely new: bringing
 real `repos.conf`/profile/USE config resolution into the real-execution
@@ -6605,7 +6605,7 @@ its own real `DEPEND`+`RDEPEND`+`BDEPEND`+`PDEPEND`+`IDEPEND`
 (`portage_use_reduce::use_reduce_flat`) against it, and matches every
 blocker atom found against every real installed package
 (`portage_dep::match_from_list`, which -- real, already-verified
-behavior elsewhere in this pilot -- ignores an atom's own blocker
+behavior elsewhere in portuale -- ignores an atom's own blocker
 marker when matching, so the atom string is passed through as-is,
 `!`/`!!` prefix included). Weak and strong blockers aren't
 distinguished, matching real `mypkglist`'s own construction. Degrades
@@ -6616,7 +6616,7 @@ never a false negative in the direction that could silently corrupt a
 real merge.
 
 A real safety issue surfaced and was fixed before this ever ran against
-real fixtures: this pilot's own dev/test machine has a real, populated
+real fixtures: portuale's own dev/test machine has a real, populated
 `/etc/portage/repos.conf` (a real Gentoo system), so naively reading
 `PORTAGE_CONFIGROOT` via an ambient env-var default (real portage's own
 default is `/` when unset) would have made every existing test that
@@ -6629,7 +6629,7 @@ load-bearing here for a genuinely different, more serious reason.
 `MergeOptions::default()`'s own value is a deliberately impossible path
 (`/dev/null/...` -- `/dev/null` is a real character device, never a
 directory, so nothing can ever exist under it), guaranteeing
-`find_repos` always fails cleanly for every one of this pilot's own
+`find_repos` always fails cleanly for every one of portuale's own
 ~30 pre-existing merge tests unless a test opts in explicitly; only
 `ebuild.rs`'s own real CLI boundary reads the real env var, matching
 real portage's own actual default behavior for real usage.
@@ -6675,7 +6675,7 @@ cat "${ROOT}"/usr/share/mergeblockertest/shared.txt
 ### `ebuild_merge.rs`/`ebuild_unmerge.rs`: real FIFO/device node `CONTENTS` support (`fif`/`dev`)
 
 `merge_tree`'s own last documented gap ("real `mergeme()` handles these
-too, but no fixture this pilot has needs them") is closed: real
+too, but no fixture portuale has needs them") is closed: real
 `mergeme()`'s own `else:` branch ("we are merging a fifo or device
 node", `vartree.py:5787-5811`) is real now. Neither node type is ever
 `_protect()`'d (that branch doesn't call it at all, unlike `obj`/`sym`),
@@ -6691,7 +6691,7 @@ an ordinary same-filesystem `os.rename()` just works for a special file
 too, since `rename(2)` doesn't care what type of file it's moving (real
 `movefile()`'s own "we don't yet handle special, so we need to fall
 back to /bin/mv" comment only fires on a genuine cross-device `EXDEV`
-failure). This pilot's own merge step never moves `${D}` content at all
+failure). Portuale's own merge step never moves `${D}` content at all
 though -- every other branch copies/recreates instead, so `${D}` itself
 stays intact -- so new `create_special_node` recreates a fresh node at
 the destination via real `mkfifo(3)`/`mknod(3)` instead, matching the
@@ -6728,7 +6728,7 @@ to cite the real one.
 Verified end to end with a new `dev-libs/fifopkg` fixture (a real FIFO,
 created via real `mkfifo(1)` in `src_install` -- unlike a device node,
 this needs no special privilege at all, so it's the one of the two real
-node types this pilot can actually exercise live): merging creates a
+node types portuale can actually exercise live): merging creates a
 real FIFO and records a real `fif` line; re-merging over something else
 already planted at that same path leaves it completely untouched;
 unmerging leaves the FIFO in place while still removing the vdb entry
@@ -6765,16 +6765,16 @@ The last genuinely open item in the dry-run backlog's own "Open backlog"
 section (`agent-context.md`) is real now, at a deliberately narrowed v1
 scope confirmed with the user before implementing (see below). Real
 `depgraph.py`'s own `depend_root` selection (~`depgraph.py:4209-4225`)
-resolves `DEPEND` (and, for a `BDEPEND`-capable EAPI -- this pilot's own
+resolves `DEPEND` (and, for a `BDEPEND`-capable EAPI -- portuale's own
 5+ floor always is -- also the root `BDEPEND` folds into) against
 `ESYSROOT`, not the target `ROOT` -- and real `ESYSROOT`'s own default
 (`LocationsManager.py:406-411`) is the **real build machine's own `/`**
 whenever `SYSROOT` is left unset, which is true for every single fixture
-test this pilot has ever run (`ROOT` always a `mktemp -d`, `SYSROOT`
+test portuale has ever run (`ROOT` always a `mktemp -d`, `SYSROOT`
 never set). Porting this literally would mean every existing `--deep`/
 `--with-bdeps` test's own `DEPEND`/`BDEPEND` resolution would start
 silently consulting whichever real host machine happens to run the test
-suite -- fundamentally in tension with this pilot's own hard goal of a
+suite -- fundamentally in tension with portuale's own hard goal of a
 deterministic shared pytest contract suite (`agent-context.md`'s own "Rust must
 be measurably faster... shared pytest contract suite as executable
 behavioral spec" framing implicitly assumes deterministic tests to
@@ -6796,17 +6796,17 @@ already used, so branch choices are always identical), threaded through
 both real dep-walk sites (`enqueue_dependencies`'s `AlreadyInstalled`
 path, and the main New/Upgrade/Reinstall flatten) via a new
 `root_deps_running_root: Option<&Path>` parameter on
-`resolve_pretend_graph` -- `None` for every one of this pilot's own
+`resolve_pretend_graph` -- `None` for every one of portuale's own
 ~30 pre-existing call sites/tests (a strict no-op, verified by the full
 `cargo test` suite passing unchanged before and after). Only
 `pretend.rs`'s own real CLI boundary ever resolves this to real `/` by
 default (`running_root_from_env`, matching real portage's own actual
 default), gated on the new `--root-deps` flag (bare, `=True`, or
-`=rdeps` all just enable this pilot's one real behavior -- the "fold
+`=rdeps` all just enable portuale's one real behavior -- the "fold
 DEPEND into RDEPEND" vs. "ignore DEPEND for non-BDEPEND-EAPI packages"
 distinction real portage's own two explicit values carry isn't
-observable in this pilot's own single-root graph architecture anyway,
-so it's deliberately not reproduced). A new, pilot-specific
+observable in portuale's own single-root graph architecture anyway,
+so it's deliberately not reproduced). A new, portuale-specific
 `PORTAGE_RUNNING_ROOT` environment variable (real portage has no
 equivalent override at all) lets a test point this at a fixture's own
 fake vdb tree instead, the same "explicit override for tests, real
@@ -6818,7 +6818,7 @@ branch-selection closure too: a `DEPEND`/`BDEPEND` `||` group with no
 branch visible in the fixture tree resolves correctly when some branch
 *is* running-root-satisfied, in both real dep-walk sites (the main
 New/Upgrade/Reinstall flatten and `enqueue_dependencies`'s own
-`--deep`/`AlreadyInstalled` recursion). Since this pilot's own single-
+`--deep`/`AlreadyInstalled` recursion). Since portuale's own single-
 unified-graph architecture merges all five dep keys into one combined
 string before ever flattening at all, the running-root-aware closure
 can't tell which key a given atom came from, so an `RDEPEND`/`PDEPEND`/
@@ -6872,7 +6872,7 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" rust/target/release/portuale \
 # [ebuild  N] dev-libs/rootdepspkg-1.0
 # !!! no visible ebuild for dependency "dev-libs/rootdepsprovider"
 
-# With --root-deps, pointed (via the pilot-specific PORTAGE_RUNNING_ROOT
+# With --root-deps, pointed (via the portuale-specific PORTAGE_RUNNING_ROOT
 # override) at a running root where rootdepsprovider genuinely is
 # installed: no more unresolved-dependency report.
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" PORTAGE_RUNNING_ROOT="$FX" \
@@ -6883,7 +6883,7 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" PORTAGE_RUNNING_ROOT="$FX" \
 # Disjunctive branch-selection feed-in: rootdepsorpkg's own BDEPEND is
 # "|| ( rootdepsnonexistent rootdepsprovider )" -- neither branch has an
 # ebuild anywhere in the fixture repo tree, so without --root-deps
-# *both* branches are reported (this pilot's own pre-existing "leave an
+# *both* branches are reported (portuale's own pre-existing "leave an
 # unresolved || group's branches all in flat_deps" fallback).
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" rust/target/release/portuale \
     emerge --pretend dev-libs/rootdepsorpkg
@@ -6946,7 +6946,7 @@ immediately: the atom was resolving *twice*, once as the new
 `targets_running_root` entry and once more via the old `ROOT`-targeted
 fallback. Fixed by excluding the full `unsatisfied_root_deps_atoms` set
 from `flat_deps` too, not just `root_deps_satisfied_atoms`'s own already-
-satisfied subset -- consistent with this pilot's own established
+satisfied subset -- consistent with portuale's own established
 `--root-deps` simplification (real `DEPEND`/`BDEPEND` never targets
 `ROOT`/`ESYSROOT` at all under it, matching `root_deps_satisfied_atoms`'s
 own pre-existing DEPEND-and-BDEPEND-treated-uniformly precedent).
@@ -7009,9 +7009,9 @@ exactly this -- `lib/_emerge/resolver/output.py:841-862` appends
 
 New `root_suffix` (`pretend.rs`, mirrored in `emerge_pretend_reference.
 py`) ports that suffix, deliberately narrower than real portage's own
-gate: this pilot annotates *only* the running-root build entries, never
+gate: portuale annotates *only* the running-root build entries, never
 every entry merged under a non-`/` `ROOT`. Porting the real gate
-literally would make every one of this pilot's ~30 fixture tests emit
+literally would make every one of portuale's ~30 fixture tests emit
 its own non-deterministic `mktemp -d` `ROOT` path on every line,
 breaking the shared contract suite's determinism -- the same tension
 the parent `--root-deps` slice resolved by scoping its behavior as
@@ -7140,7 +7140,7 @@ both dep-walk sites).
 Still open, a separately-scoped follow-up: `IDEPEND` of a running-root
 build entry (real portage resolves `IDEPEND` against the running root
 too; `PDEPEND` correctly stays a target-`ROOT` concern and is not
-walked here), and the full multi-root graph architecture this pilot
+walked here), and the full multi-root graph architecture portuale
 still approximates edge by edge rather than carrying a `root` per
 dependency.
 
@@ -7234,7 +7234,7 @@ pass `["DEPEND", "BDEPEND", "IDEPEND"]` to *both* functions -- the
 satisfied and unsatisfied subsets must stay in lockstep, since an atom
 in neither would fall through to the ordinary `flat_deps` queue and be
 wrongly resolved against `ROOT`. When this slice landed, `DEPEND`/
-`BDEPEND`/`IDEPEND` all rode the pilot's `--root-deps`-gated
+`BDEPEND`/`IDEPEND` all rode portuale's `--root-deps`-gated
 simplification (real portage's `ESYSROOT`-vs-`ROOT` split); the
 "only under `--root-deps`" part of that was lifted 2026-09-02 (a
 cross-root build now routes them unconditionally — see "`BDEPEND`/
@@ -7276,7 +7276,7 @@ a complete no-op** — its `ignore_depend_deps` branch sits inside
 `IDEPEND` always resolve against the running root (genuinely `/`),
 `DEPEND` against `ESYSROOT` (≈ target `ROOT`), and bare
 `--root-deps`/`=True` folds them into `RDEPEND` (a debugging flag). The
-last residual — the pilot routed `BDEPEND`/`IDEPEND` to `/` only under
+last residual — portuale routed `BDEPEND`/`IDEPEND` to `/` only under
 `--root-deps` — was closed 2026-09-02, see "`BDEPEND`/`IDEPEND` route to
 the running root unconditionally" below.
 
@@ -7285,7 +7285,7 @@ the running root unconditionally" below.
 Real EAPI-7+ `depgraph.py` resolves `edepend["BDEPEND"]` / `["IDEPEND"]`
 (and, for a native build, `["DEPEND"]` — `ESYSROOT` collapses to `BROOT`
 with nothing cross-compiling) against `_running_root.root` = `/` for
-**every** package, flag or no flag. The pilot previously only did this
+**every** package, flag or no flag. Portuale previously only did this
 under `--root-deps`, leaving one residual: a genuine cross-root build
 (`ROOT` != the running root, i.e. populating a stage3 / chroot) resolved
 build-time deps against the target `ROOT` instead of the build host.
@@ -7341,9 +7341,9 @@ first) already populated `${D}`. Real portage gates this on a real,
 on-disk marker, `${PORTAGE_BUILDDIR}/.installed` -- and real, unmodified
 `bin/phase-functions.sh`'s own `__dyn_install` already creates that
 marker unconditionally on a successful `src_install`
-(`phase-functions.sh:653`), so this pilot needed to write no new
+(`phase-functions.sh:653`), so portuale needed to write no new
 marker-writing code at all: a real `ebuild <file> install` run via this
-pilot's own binary already leaves `.installed` behind as a natural
+portuale's own binary already leaves `.installed` behind as a natural
 byproduct of real phase execution, confirmed empirically. Missing the
 marker is real portage's own ordinary "forgot a step" mistake, not a
 crash: `writemsg(...); return 1`, ported here as the exact same message
@@ -7431,7 +7431,7 @@ directory, real comment: "Don't unlink symlinks to directories here
 since that can remove /lib and /usr/lib symlinks"), it bypasses the
 ordinary `!mtime` staleness check entirely and deletes the entry
 unconditionally, even if locally modified. `UnmergeOptions` (new: this
-pilot's own `run_unmerge` had only two loose parameters,
+portuale's own `run_unmerge` had only two loose parameters,
 `debug`/`shell`, before this slice -- now five, so it gets the same
 struct treatment `MergeOptions` already established) reuses
 `ebuild_merge::is_protected` (promoted to `pub(crate)` for this) for
@@ -7456,7 +7456,7 @@ test -e "${ROOT}"/usr/share/mergepkg/hello.txt && echo "still there" || echo "go
 # gone
 
 # Re-merge, modify again, unmerge with FEATURES="-unmerge-orphans" (real
-# make.conf's own opt-out syntax -- this pilot's own simplified env-var
+# make.conf's own opt-out syntax -- portuale's own simplified env-var
 # check treats *any* explicit FEATURES value as a literal membership
 # list rather than a +/- delta against the real default set, so setting
 # FEATURES at all to anything other than the literal token
@@ -7605,9 +7605,9 @@ ls "${PORTAGE_TMPDIR}"/portage/dev-libs/standalonephasepkg-1.0/temp/ | grep pkg-
 # pkg-config-ran
 # pkg-info-ran
 
-# Still a dry-run stub, unlike config/info now:
+# Still a no-op dry run, unlike config/info now:
 rust/target/release/portuale ebuild foo-1.0.ebuild clean
-# ebuild (pilot stub): dry-run only, no phase execution yet ...
+# ebuild: dry run -- one or more of these commands is recognized but not yet implemented in portuale
 ```
 
 ### Standalone `ebuild <file> prerm`/`postrm`
@@ -7640,7 +7640,7 @@ ls "${PORTAGE_TMPDIR}"/portage/dev-libs/standalonephasepkg-1.0/temp/ | grep pkg-
 Real `doebuild.py:697-750`'s own `PORTAGE_COMPRESSION_COMMAND`
 resolution is real now, replacing the previous hardcoded `"bzip2 -c"`.
 Looks up `BINPKG_COMPRESS` (real `make.globals`'s own default is
-`"zstd"` -- **not** `"bzip2"`; this pilot's own previous hardcoded
+`"zstd"` -- **not** `"bzip2"`; portuale's own previous hardcoded
 value predated noticing real portage's own default had changed) in the
 real `_compressors` table (all six real entries: `bzip2`/`gzip`/`lz4`/
 `lzip`/`lzop`/`xz`/`zstd`), substitutes `{JOBS}` (real host CPU count)
@@ -7653,16 +7653,16 @@ whose binary isn't actually installed leaves `PORTAGE_COMPRESSION_
 COMMAND` unset entirely -- matching real behavior exactly, real,
 unmodified `bin/misc-functions.sh` then hits its own real `[[ -z
 "${PORTAGE_COMPRESSION_COMMAND}" ]] && die "PORTAGE_COMPRESSION_COMMAND
-is unset"` guard naturally, rather than this pilot fabricating a
+is unset"` guard naturally, rather than portuale fabricating a
 fallback. `BINPKG_COMPRESS_FLAGS_<NAME>` (the real per-compressor
 override) is resolved once, at the `ebuild.rs`/`pretend.rs` CLI
 boundary (both real entry points into `PackageOptions`), falling back to
 plain `BINPKG_COMPRESS_FLAGS` when unset -- `ebuild_package.rs` itself
 never needs to know about the override naming convention at all.
 
-Since this pilot's own `portage_repo` binary-package reader never parses
+Since portuale's own `portage_repo` binary-package reader never parses
 a `.tbz2`/XPAK file's own content (only `Packages`), the tar body's
-actual compression codec was always cosmetic to this pilot's own
+actual compression codec was always cosmetic to portuale's own
 reading path -- verified by checking the real magic bytes at the start
 of the produced `.tbz2` directly (`28 b5 2f fd` for real zstd, `fd 37 7a
 58 5a 00` for real xz, both matching real `compression_probe.py`'s own
@@ -7712,7 +7712,7 @@ real file) rather than a second, duplicate parser.
 `FetchOptions` gained a `config_root` field (real `PORTAGE_CONFIGROOT`),
 mirroring `ebuild_merge::MergeOptions::config_root`'s own doc comment
 and its own deliberately-impossible-path `Default` exactly -- this
-pilot's own dev/test machine is a real Gentoo system, so a naive
+portuale's own dev/test machine is a real Gentoo system, so a naive
 real-`/`-style default here would make every test that doesn't
 override this field read real host config. Fixed a real bug surfaced by
 that exact sentinel path during this slice's own implementation:
@@ -7755,11 +7755,11 @@ same file. `DistfileLock` releases it simply by closing the lock file's
 own fd when the guard drops -- POSIX guarantees all of a process's own
 `flock` locks on an fd release when that fd closes, the same real effect
 real `unlockfile()`'s own explicit `LOCK_UN` has. Real `unlinkfile=0`
-(this pilot's own default too): the lockfile persists on disk after
+(portuale's own default too): the lockfile persists on disk after
 release, just unlocked, ready for reuse. No std equivalent exists for
 `flock(2)` at all, so `libc` (already a transitive dependency of
 `tokio`/`brush-core`, declared directly here now for its own direct use)
-joins this pilot's own small set of deliberate, documented dependency
+joins portuale's own small set of deliberate, documented dependency
 waivers.
 
 Verified genuinely live, not just "returns `Ok`": a real, blocking,
@@ -7803,7 +7803,7 @@ collision_protect_and_protect_owned_off`, explicitly setting
 `protect_owned: false` rather than relying on a default that no longer
 means what the name implied.
 
-This pilot's own env-var read for all three flags still only checks
+Portuale's own env-var read for all three flags still only checks
 whether the literal `FEATURES` value, when set at all, contains the
 exact token -- it doesn't *accumulate* onto the real default set the way
 real portage's own `+`/`-`-prefixed `make.conf` `FEATURES` merging does,
@@ -7837,7 +7837,7 @@ Real `fetch.py`'s own `restrict_mirror = "mirror" in restrict or
 "nomirror" in restrict` (`:880`) and `file_restrict_mirror`
 (`:1117-1127`): when a package restricts mirroring, real portage does
 **not** append the public `GENTOO_MIRRORS` list to that file's candidate
-locations. This pilot's `gentoo_mirror_fallback` step (the flat
+locations. Portuale's `gentoo_mirror_fallback` step (the flat
 `<mirror>/distfiles/<filename>` expansion) is now gated on
 `!options.restrict_mirror` -- a `mirror://` URI's own
 `custommirrors`/`thirdpartymirrors` expansion and any explicit `SRC_URI`
@@ -7849,7 +7849,7 @@ URI are still tried (real portage keeps `local_mirrors` in
 `RESTRICT` field via `restrict_mirror_from_restrict`, which
 USE-conditional-evaluates the raw value (real `_PackageMetadataWrapper`'s
 own `use_reduce` pass, same as `PROPERTIES`/`LICENSE`) against this
-pilot's always-empty fetch-side USE set -- so a `foo? ( mirror )` group
+portuale's always-empty fetch-side USE set -- so a `foo? ( mirror )` group
 drops and only an unconditional `mirror`/`nomirror` counts.
 
 v1 scope (**superseded 2026-08-30** -- see "`mirror+`/`fetch+` `SRC_URI`
@@ -7938,7 +7938,7 @@ md5-cache field via the new `restrict_fetch_from_restrict`
 token` helper). `fetch_src_uri` `retain`s the plain URI out of the
 candidate list when `restrict_fetch && !override_fetch && !uri.starts_
 with("mirror://")`, and folds `restrict_fetch` into `public_mirrors_
-barred`. **v1 cut:** this pilot does **not** run the ebuild's own
+barred`. **v1 cut:** portuale does **not** run the ebuild's own
 `pkg_nofetch` phase for a missing file (real `spawn_nofetch` — custom
 "download it from … and place it in `DISTDIR`" instructions);
 `fetch_src_uri` fails with a generic pointer instead.
@@ -7989,7 +7989,7 @@ matching real `emerge --pretend`'s package set. Both sides; 1 `CASES` +
 ### `emerge --buildpkgonly --keep-going`
 
 Real `--keep-going` (real `main.py`'s own `y_or_n` option, narrowed by
-this pilot's own CLI transcription, `emerge_options::BOOLEAN_OPTIONS`,
+portuale's own CLI transcription, `emerge_options::BOOLEAN_OPTIONS`,
 to the bare/`y` form only -- already recognized on the command line
 before this slice, just silently ignored) is real now, for
 `--buildpkgonly` without `--pretend`: without it, `run_buildpkgonly`
@@ -7998,7 +7998,7 @@ default; with it, every remaining entry is still attempted regardless
 of an earlier failure, and all failures are collected into a single
 combined error at the end.
 
-This pilot's own version is genuinely simpler than real portage's own
+Portuale's own version is genuinely simpler than real portage's own
 general `--keep-going`: real `Scheduler.py` must also skip every
 *dependent* of a failed package (tracked via real mergelist
 recalculation against `_mtimedb`), since a real merge list can have
@@ -8007,7 +8007,7 @@ depgraph gate (`GraphResult::buildpkgonly_deps_unsatisfied`, already
 checked in `pretend.rs` before `run_buildpkgonly` is ever called at
 all) guarantees the opposite here: every entry it resolves already has
 every real dependency satisfied by something *already installed*, so
-no entry in this pilot's own build list can ever depend on another one
+no entry in portuale's own build list can ever depend on another one
 in it. A failure therefore has nothing downstream left to invalidate --
 `--keep-going` here reduces to "attempt every entry regardless, report
 every failure at the end," with none of real portage's own mergelist
@@ -8048,7 +8048,7 @@ on top of its declared `IUSE`, every flag derived from a
 KERNEL USERLAND"`, so `elibc_glibc`, `kernel_linux`, `userland_GNU`,
 etc. count as valid IUSE for *every* package even when unlisted, and a
 USE-dep like `dev-libs/foo[elibc_glibc]` matches a `foo` that never
-declares `elibc_glibc`. Before this slice the pilot checked a USE-dep's
+declares `elibc_glibc`. Before this slice portuale checked a USE-dep's
 `.required` flags against a candidate's *declared* `IUSE` alone, so such
 a dep spuriously failed and its target went invisible.
 
@@ -8076,7 +8076,7 @@ form).
 `USE_EXPAND_HIDDEN` stays unimplemented and is genuinely a non-gap: for
 EAPI 5+ it is a pure `emerge --info`/`-pv` USE-*grouping* display
 concern (the pre-EAPI-5 `_get_implicit_iuse` is the only place it fed
-`is_valid_flag`), and this pilot's `-pv` shows a flat declared-IUSE list
+`is_valid_flag`), and portuale's `-pv` shows a flat declared-IUSE list
 with no `USE_EXPAND` grouping to hide from. The two stale
 "`USE_EXPAND_HIDDEN`/`_IMPLICIT` are display-only" comments in
 `portage-profile` (they conflated the two) are corrected in place.
@@ -8096,7 +8096,7 @@ mirrored in `emerge_pretend_reference.py` (`_valid_iuse`,
 Deliberately still a documented cut: an *installed* package's USE-dep
 check (`dependency_avoid_update_candidate`) uses the raw vdb `IUSE`,
 since real portage uses that package's own *vdb-recorded*
-`IUSE_EFFECTIVE`, which this pilot doesn't persist; and IUSE-aware `_*`
+`IUSE_EFFECTIVE`, which portuale doesn't persist; and IUSE-aware `_*`
 wildcard expansion (`linguas_*`), which needs a specific package's own
 `IUSE`.
 
@@ -8136,7 +8136,7 @@ pseudo-flag is stripped from the result (real portage strips them from
 
 Deliberately **not** guarded on `k` actually being a declared
 `USE_EXPAND` variable name (real portage checks `use_expand_split`): a
-`_*`-suffixed token in this pilot's USE set only ever originates from
+`_*`-suffixed token in portuale's USE set only ever originates from
 `USE_EXPAND` folding or `package.use`'s own `USE_EXPAND` shorthand
 anyway. This was the "IUSE-aware `_*` wildcard expansion (`linguas_*` --
 needs a specific package's own `IUSE`)" cut named in `portage-profile`'s
@@ -8184,7 +8184,7 @@ pass between them.
 **`repo-name`.** Real `config.py:500-505`: `layout.conf`'s `repo-name`
 overrides the repo's name, applied onto `RepoConfig::name` after the
 `profiles/repo_name` resolution below. (An earlier version of this
-paragraph said the pilot used the `repos.conf` section name as
+paragraph said portuale used the `repos.conf` section name as
 canonical and didn't model `profiles/repo_name` -- both since closed,
 see the next section.)
 
@@ -8239,7 +8239,7 @@ precedence is `layout.conf` `repo-name` > `profiles/repo_name` > section.
 
 `aliases` (real `config.py:216-224`/`492-499`): a repo's own
 `layout.conf` `aliases =` (first) plus its `repos.conf` `aliases =`
-(appended), stored on `RepoConfig::aliases`. This pilot acts on aliases
+(appended), stored on `RepoConfig::aliases`. Portuale acts on aliases
 in exactly one place -- the mismatch escape hatch below;
 `::alias`-constrained atoms and `alias:path` profile parents still use
 the canonical name only (a documented cut).
@@ -8282,7 +8282,7 @@ Real `config.py:970-1027` builds `pprovideddict` from every profile
 level's own `package.provided` file (chain order) plus the user-level
 `/etc/portage/profile/package.provided`, stacked with the same
 `stack_lists(incremental=1)` `-atom` removal `package.mask`/`packages`
-already use. Each line is a bare `cat/pkg-version` CPV. This pilot's
+already use. Each line is a bare `cat/pkg-version` CPV. Portuale's
 `portage_profile::Config` gains a flat `package_provided: Vec<String>`
 (real cp-keys it into a dict, but `match_from_list` already filters by cp,
 so the flat list is equivalent -- and it keeps `portage-profile`
@@ -8304,17 +8304,17 @@ blocker check, before any resolution:
   line per match, singular/plural phrasing on the count, exit `0`.
 
 **Documented cuts**: the real EAPI 7+ gate (`allows_package_provided`
-disallows `package.provided` for EAPI 7+) isn't ported -- this pilot
+disallows `package.provided` for EAPI 7+) isn't ported -- portuale
 tracks no per-profile-level EAPI, consistent with its "no EAPI
 parametrization within the 5+ floor" precedent (EAPI 5 -- what every
 fixture profile is -- does allow it). Real portage validates each line
 with `isvalidatom("=" + line)` and drops malformed ones with a warning;
-this pilot carries every stacked line through and simply lets
-`match_from_list` never match a malformed one. The pilot has no `SetArg`,
+portuale carries every stacked line through and simply lets
+`match_from_list` never match a malformed one. Portuale has no `SetArg`,
 so the "pulled in by" ref is always `'args'` and real portage's
 `@world`/`@selected` "A) B) C)" solution text is unreachable. Directory-
 form `package.provided` (portage-1 `recursive`) is not read (no
-`package.*` file in this pilot is).
+`package.*` file in portuale is).
 
 New fixtures: `profiles/default/package.provided` lists
 `dev-libs/providedpkg-1.0` + `dev-libs/providedpkg2-1.0` (both have
@@ -8354,7 +8354,7 @@ Real `emerge -pv` runs at verbosity 3, which triggers
 - **`::repo` is always appended** (`_append_repository`, gated only on
   `quiet_repo_display`, whose default -- `--quiet-repo-display` not given
   -- is off). So `emerge -pv dev-libs/newpkg` is `[ebuild  N     ]
-  dev-libs/newpkg-1.0::testrepo` (`testrepo` being this pilot's fixture
+  dev-libs/newpkg-1.0::testrepo` (`testrepo` being portuale's fixture
   repo).
 - **`:slot` is appended** when the package's slot/sub-slot is other than
   `0/0`, or `new_slot` (`_append_slot`'s own `elif any(x.slot + "/" +
@@ -8438,7 +8438,7 @@ an old `openssl` an un-rebuilt binary still needs.
   `action in ("depclean", "prune")`).
 
 **Documented narrowings**: `find_consumers` is not clean-set aware, so
-the pilot can under-report in the rare case where the only surviving
+portuale can under-report in the rare case where the only surviving
 provider of a soname is itself another cleanlist member; the intermediate
 `>>> Assigning files to packages...` line is printed only alongside the
 WARNING (real can print it with all consumers satisfied elsewhere); and a
@@ -8500,7 +8500,7 @@ contract tests + a `portage-repo` unit test; mirrored in
 The `--pretend` half of `--getbinpkg`/`-g` and `--getbinpkgonly`/`-G`
 (real `main.py`, `y_or_n`). Real `emerge` adds every configured binhost's
 own `Packages` index to the candidate pool alongside `$PKGDIR`
-(`bintree._populate_remote`); this pilot reads each binhost's *cached*
+(`bintree._populate_remote`); portuale reads each binhost's *cached*
 index off disk (`<EROOT>/var/cache/edb/binhost/<host>/<path>/Packages`
 for an `http(s)`/`ssh` `sync-uri`, the URI path itself for `file://`) and
 resolves against it -- `--pretend` never downloads, so a binhost whose
@@ -8551,7 +8551,7 @@ real (non-`--pretend`) merge.
 
 ### `emerge -p`: the blocker line follows real `ResolverOutput._blockers`
 
-The pilot's blocker report was pilot-shaped (`[blocks] cat/foo-1.0 hard
+Portuale's blocker report was portuale-shaped (`[blocks] cat/foo-1.0 hard
 blocks cat/bar-2.0 ("!!cat/bar")`, printed inline right after its
 owner's `[ebuild …]` line). Now it ports real `ResolverOutput._blockers`
 (`lib/_emerge/resolver/output.py:75-123`):
@@ -8563,13 +8563,13 @@ owner's `[ebuild …]` line). Now it ports real `ResolverOutput._blockers`
 the fixed-width `[blocks B     ]` bracket (`B` + 5 spaces + a 6th mask-
 column space at `-v`, real `empty_space_in_brackets`); the `!`-stripped
 atom (real `dep_expand(str(atom).lstrip("!"))` — category-qualification
-only, and every pilot blocker atom is already `cat/pkg[…]`); then
+only, and every portuale blocker atom is already `cat/pkg[…]`); then
 `("<atom>" is {hard,soft} blocking <parent cpv>)` — `hard` for a `!!`
 blocker (real `blocker.atom.blocker.overlap.forbid`), `soft` for `!`.
 Under `--color=y` the `blocks` word, the `B`, the atom, and the
 parenthetical are each `colorize("PKG_BLOCKER", …)` — style `red`
 (`\x1b[31;01m`); the teal `b` / `PKG_BLOCKER_SATISFIED` branch is
-unreachable here (this pilot only ever *reports* a blocker, never
+unreachable here (portuale only ever *reports* a blocker, never
 resolves one away, so `blocker.satisfied` is always false), as is real's
 `(is <desc> <parents>)` alternative (`resolved` drops the `!` while
 `blocker.atom` keeps it).
@@ -8583,7 +8583,7 @@ plain dep follows) proves the deferral. 8 contract `CASES` + 4 dedicated
 pinned-output contract tests (including the exact `--color=y` ANSI
 codes); mirrored in `emerge_pretend_reference.py`. This closes the
 blocker half of the `-pv` layout gap; only `--autounmask` message colour
-is left (its own future slice — that text is pilot-invented, not a port).
+is left (its own future slice — that text is portuale-invented, not a port).
 
 ### `emerge -p`: an installed dependency's USE-dep checked against its *built* USE (bug 640318)
 
@@ -8600,7 +8600,7 @@ a built package's own `USE` is authoritative for what counts as a valid
 flag, independent of the profile's current `IUSE_IMPLICIT` or an ebuild
 that has since dropped a flag from its `IUSE`). Real `_match_use`
 recomputes the domain this way rather than reading a vdb `IUSE_EFFECTIVE`
-file, so the pilot not persisting one is not a gap here.
+file, so portuale not persisting one is not a gap here.
 
 New fixture `dev-libs/builtusedivergedep` (installed 1.0 with vdb
 `USE="divergedflag"` but vdb `IUSE=""`, and the current ebuild has
@@ -8615,12 +8615,12 @@ mirrored in `emerge_pretend_reference.py`.
 
 ### `$PKGDIR` directory-scan fallback + the `gpkg`/`xpak` metadata readers
 
-Every binary-package path in this pilot so far is `<pkgdir>/Packages`-
+Every binary-package path in portuale so far is `<pkgdir>/Packages`-
 index-driven and format-agnostic: `portage-repo` never opens a binpkg
 file, so a `gpkg` (`.gpkg.tar`) listed in the index already resolves for
 `--pretend` exactly like an `xpak` `.tbz2` (verified: `PATH:
 …gpkg.tar` → `[binary … g]`, `::repo`, `SIZE`, recursive dep walk, all
-unchanged). What the pilot **can't** do is the real
+unchanged). What portuale **can't** do is the real
 `bintree._populate_local` fallback: scan `$PKGDIR` for binpkg *files*
 when there is no `Packages` index and rebuild it from each file's own
 embedded metadata. That needs a real per-format metadata reader.
@@ -8644,10 +8644,10 @@ here (`wget`, `ldconfig`, `scanelf`, `bash`/`brush`, the compressors
 hard Gentoo requirements anyway (real `gpkg.py` is `tarfile` + the exact
 same compressor subprocesses).
 
-**v1 cuts** (matching this pilot's own `Packages`-index reader, which
+**v1 cuts** (matching portuale's own `Packages`-index reader, which
 "trusts the index outright" — real `pkgdir-index-trusted`): NO `Manifest`
 digest verification and NO GPG `.sig` signature check (real
-`gpkg._verify_binpkg`). Those are `gpkg`'s whole point, but this pilot
+`gpkg._verify_binpkg`). Those are `gpkg`'s whole point, but portuale
 has no crypto anywhere and its `--pretend` binary path has never verified
 a binpkg's integrity — a separately-scoped follow-up. The `gpkg-1`
 version-marker presence check is still enforced (real
@@ -8673,7 +8673,7 @@ be32(datalen)` records into `<data>`; every metadata key is one record.
 `xpak()` skips it — it's a merge-time artifact). Codec-agnostic (the
 trailer is raw whatever compressed the tarball). New committed fixture
 `fixtures/pkgdir/dev-libs/packagepkg-1.0.tbz2` — a genuine
-`.tbz2` built once by the pilot's own `ebuild <file> package` (real
+`.tbz2` built once by portuale's own `ebuild <file> package` (real
 `xpak-helper.py recompose` → real `xpak.py`) rather than rebuilt
 per-test (the read side needs no reproducible bytes, and driving the
 full brush phase chain in a unit test adds parallel-load pressure to the
@@ -8681,15 +8681,15 @@ suite's brush-heavy tests for no reader-coverage gain). 3 more `portuale`
 unit tests (a synthetic multi-key XPAK segment, the committed real
 `.tbz2`, a no-trailer rejection).
 
-**Discovered while writing the real-`.tbz2` test**: this pilot's own
+**Discovered while writing the real-`.tbz2` test**: portuale's own
 `build-info` generation is a *subset* of real portage's — it writes
 `EAPI`/`SLOT`/`CATEGORY`/`PF`/`KEYWORDS`/`USE`/`DEFINED_PHASES`/
 `BUILD_TIME` + the bundled `<pf>.ebuild` + `environment.bz2`, but **not**
 the dependency-string files (`DEPEND`/`RDEPEND`/`BDEPEND`/`PDEPEND`/
 `IDEPEND`/`IUSE`/`LICENSE`/`PROPERTIES`/`RESTRICT`/`INHERITED`/
 `IUSE_EFFECTIVE`/`SIZE`/`PROVIDES`/`REQUIRES`/…). Those come through into
-the pilot's `Packages` index anyway (from `md5-cache`), so `--pretend`
-binary resolution is unaffected — but a `$PKGDIR` scan of a pilot-built
+portuale's `Packages` index anyway (from `md5-cache`), so `--pretend`
+binary resolution is unaffected — but a `$PKGDIR` scan of a portuale-built
 `.tbz2` would see an incomplete candidate. Tracked as its own
 `ebuild_package.rs` / phase-execution follow-up, orthogonal to these
 readers.
@@ -8705,7 +8705,7 @@ given and `<pkgdir>/Packages` is *absent*; the result lands on the new
 `portage_profile::Config::scanned_binpkgs` field. **Not written back to
 `Packages`** — real portage caches it there, but that would make
 `--pretend` mutate `$PKGDIR` and break contract-suite determinism, so
-this pilot recomputes each run (same "recompute, don't persist" stance
+portuale recomputes each run (same "recompute, don't persist" stance
 as not persisting vdb `IUSE_EFFECTIVE`).
 
 The plumbing decision (`portage-repo` is deliberately subprocess-free —
@@ -8720,7 +8720,7 @@ the index file or scan the files" is decided exactly once
 (`local_binpkg_index`, from `config`). The scan itself stays in
 `portuale`. A present `Packages` is always trusted as is — no
 mtime-staleness revalidation (real `FEATURES=pkgdir-index-trusted`
-behavior, this pilot's long-standing stance for the index).
+behavior, portuale's long-standing stance for the index).
 
 v1 cuts: bare `.xpak` files (real `binpkg-multi-instance`
 `<pkgdir>/<cat>/<pf>/<build_id>.xpak`) are skipped — no multi-instance
@@ -8739,13 +8739,13 @@ the index alone. 3 more `portuale` + 1 `portage-repo` unit tests.
 
 ### `build-info` metadata generation: a merged vdb entry / built `.tbz2` carries its real dependencies
 
-The `$PKGDIR`-scan work above surfaced this: a package the pilot *itself*
+The `$PKGDIR`-scan work above surfaced this: a package portuale *itself*
 built or merged carried **no dependency metadata**. `bin/phase-functions.
 sh __dyn_install` (run unmodified) writes `${PORTAGE_BUILDDIR}/build-info/
 {CATEGORY,SLOT,KEYWORDS,IUSE,USE,EAPI,DEFINED_PHASES,DESCRIPTION,…}` — but
 not `DEPEND`/`RDEPEND`/`BDEPEND`/`PDEPEND`/`IDEPEND`/`LICENSE`/
 `PROPERTIES`/`RESTRICT`; in real portage the *Python* side fills those in.
-And this pilot's `write_vdb_entry` only ever copied a hardcoded
+And portuale's `write_vdb_entry` only ever copied a hardcoded
 `{CATEGORY,SLOT,repository,CONTENTS,COUNTER,NEEDED.ELF.2}` subset.
 
 New `ebuild_phases::write_post_install_metadata` ports real
@@ -8753,12 +8753,12 @@ New `ebuild_phases::write_post_install_metadata` ports real
 (`doebuild.py:2700-2782`): after a successful `src_install` (and its
 post-phase `misc-functions.sh`), write those keys into `build-info`,
 USE-conditional-evaluated (`use_reduce_structured` — real
-`paren_enclose(use_reduce(v, uselist=use))`) against the pilot's empty
+`paren_enclose(use_reduce(v, uselist=use))`) against portuale's empty
 phase-side USE set (the same stance `crate::fetch` documents). Source is
 the ebuild's own `metadata/md5-cache` entry (real `settings.configdict
 ["pkg"]`). And `write_vdb_entry` now copies **every** regular file from
 `build-info` into the vdb entry (real `treewalk()`,
-`vartree.py:4911-4913`) — so a pilot-merged package's vdb dir carries
+`vartree.py:4911-4913`) — so a portuale-merged package's vdb dir carries
 `RDEPEND`/`EAPI`/`KEYWORDS`/`environment.bz2`/the `<PF>.ebuild` copy/…
 like a real one, and `ebuild <file> package`'s `.tbz2` (whose XPAK is
 built from `build-info` by the real `xpak-helper.py`) gets the dep
@@ -8766,13 +8766,13 @@ strings too.
 
 For an EAPI with slot operators (every EAPI 5+) real portage writes the
 `*DEPEND` files from `evaluate_slot_operator_equal_deps`
-(`dep/_slot_operator.py`) rather than the plain loop. **The pilot now
+(`dep/_slot_operator.py`) rather than the plain loop. **Portuale now
 does the same**: `bind_slot_operator` runs per `*DEPEND` token
 (`_eval_deps`'s own per-atom step) — an atom with a `:=` operator is
 rewritten to `:<slot>/<sub-slot>=` from the highest installed version in
 `<root>/var/db/pkg` that satisfies it (`vardb.match(x)[-1]` +
 `with_slot`); a non-`:=` atom, or a `:=` dep with nothing installed, is
-left untouched. So a package the pilot merges records
+left untouched. So a package portuale merges records
 `dev-libs/foo:2/3=` in its vdb / `.tbz2` build-info — the exact data a
 later sub-slot rebuild check needs. Byte-identical to before for an
 ebuild with no installed `:=` dep. The rewrite is targeted string
@@ -8780,7 +8780,7 @@ surgery on the atom's own slot-dep substring (`:=` / `:2=` / `:2/3=`,
 all reconstructable from the parsed `slot`/`sub_slot`), so operators,
 versions and `[usedep]`s pass through unchanged. v1 simplification:
 real `_eval_deps` binds `RDEPEND`/`PDEPEND` against the target vdb and
-`DEPEND`/`BDEPEND` against target/running respectively — this pilot's
+`DEPEND`/`BDEPEND` against target/running respectively — portuale's
 single-root world binds every `*DEPEND` key against the one
 `<root>/var/db/pkg` (the `--root-deps` simplification again); the
 `|| ( A:= B:= )` "sub-slot on A only" TODO (bug #455904) is moot with no
@@ -8814,7 +8814,7 @@ already-taken name).
 **Not a gap, and deliberately left as-is: an atom's own `::alias`.** Real
 `match_from_list` filters `::repo` with a straight `pkg.repo ==
 atom.repo` name comparison (`dep/__init__.py:3201`) — no alias step — so
-`emerge cat/pkg::somealias` finds nothing. The pilot already matched
+`emerge cat/pkg::somealias` finds nothing. Portuale already matched
 this on both sides (the Python reference calls the real
 `portage.dep.match_from_list`; the fixture
 `dev-libs/repnamepkg::repnamesection` — an alias — is rejected by Rust
@@ -8833,7 +8833,7 @@ Real `output_helpers.py::_alnum_sort_key` (`any_iuse.sort(key=
 _alnum_sort_key)` in `_create_use_string`): split each flag on runs of
 digits and compare the digit runs as numbers, not lexically — so
 `python3_9` sorts *before* `python3_12` (`9 < 12`), not after (`"9" >
-"12"`). The pilot's flat list was plain lexicographic. New
+"12"`). Portuale's flat list was plain lexicographic. New
 `portage_repo::alnum_sort_key` (+ an `AlnumKey` `Str`/`Num` enum,
 `u128`-or-`Str`-on-overflow) applied at all three flag-sort sites — the
 `display` list, the removed-from-IUSE list, and `pretend.rs`'s
@@ -8846,7 +8846,7 @@ Part 2.A item 2 residual (b).
 ### `emerge --pretend --autounmask`: real keyword *resolution* + the "necessary to proceed" block (increment 1)
 
 Until now, `emerge --pretend --autounmask <keyword-masked-pkg>` *failed*
-with a pilot-invented `there are no ebuilds to satisfy … note: … suggests
+with a portuale-invented `there are no ebuilds to satisfy … note: … suggests
 adding …` hint. Real portage doesn't do that: when `--autounmask` can
 find a consistent set of changes, it *resolves the graph as if those
 changes were applied*, shows the normal merge list, then prints the
@@ -8932,7 +8932,7 @@ the child's own flag is `use.mask`'d/forced. Real portage then flips the
 *parent's* conditional flag instead (dropping the constraint) and
 re-resolves.
 
-The pilot already *computed* `suggested_parent_use_candidate` (flip the
+Portuale already *computed* `suggested_parent_use_candidate` (flip the
 parent flag, re-evaluate the atom, verify it now resolves, check the
 parent's REQUIRED_USE) — this increment *acts* on it. In the BFS loop,
 when a dependency comes back `NoVisibleCandidate` and the parent flip
@@ -8961,7 +8961,7 @@ The following USE changes are necessary to proceed:
 ```
 
 Deliberate cuts, confirmed against the "one change per blocked atom, no
-real backtracking" boundary the earlier increments set: this pilot
+real backtracking" boundary the earlier increments set: portuale
 re-resolves only the *freed dependency*, not the whole graph (a parent
 `feat? ( other-dep )` sibling dep that the flip would also drop stays in
 the list); the parent's own dep chain is its one-level chain (a parent
@@ -9041,7 +9041,7 @@ always the exact-version form). `pretend.rs` prints `The following mask
 changes are necessary to proceed:` **between** the keyword and USE
 blocks (real `_writemsg` order: keyword, mask, USE, license); `--json`
 grows `autounmask_mask_changes`. **v1 cut**: real's `# <filename>:` +
-masking-comment lines (`getmaskingreason`) — the pilot's `package_mask`
+masking-comment lines (`getmaskingreason`) — portuale's `package_mask`
 list carries no source-file / comment provenance.
 
 Reuses `dev-libs/hardmaskedpkg` (`package.mask`'d via the fixture repo /
@@ -9068,7 +9068,7 @@ Every `--autounmask*` member is now shipped; only `--autounmask-write`
 Real `main.py:813` (`true_y_or_n` → `True`/`None`) + `actions.py:456`:
 once the graph is resolved, `mydepgraph.display_problems(); return 0` —
 the whole `_show_merge_list()` step is skipped, so only the
-`display_problems()` output shows (the pilot's equivalent: the
+`display_problems()` output shows (portuale's equivalent: the
 slot-conflict notice + the autounmask suggestion blocks, plus the
 unsatisfied-dep stderr notes already printed during resolution), and the
 exit code stays 0. It also forces the dry-run path — a plain
@@ -9087,7 +9087,7 @@ Real `main.py` (`action: "append"`) → `depgraph.py:363-365`
 `8331`: an already-installed package whose `cat/pkg-version` matches one
 of the atoms is dropped from every `inst_pkgs` satisfaction list, so the
 dependency it would otherwise satisfy is re-merged instead. In this
-pilot's model that is exactly a **scoped `--emptytree`** — the same
+portuale's model that is exactly a **scoped `--emptytree`** — the same
 `AlreadyInstalled` → bare `Reinstall` rewrite `empty` already does,
 applied per matching atom right after `resolve_pretend` returns, in
 `resolve_pretend_graph`'s main loop (a new `reinstall_atoms: &[String]`
@@ -9124,7 +9124,7 @@ Real `_emerge/depgraph.py`'s `_rebuild_config.trigger_rebuilds()`
 all OFF by default): an already-installed package whose own build-time
 dependency (`DEPEND`/`BDEPEND` in its vdb, flattened against its *built*
 `USE`) is satisfied by a package this run is merging is scheduled for a
-rebuild. `_needs_rebuild(dep_pkg)` — every pilot merge is from source
+rebuild. `_needs_rebuild(dep_pkg)` — every portuale merge is from source
 (`dep_pkg.built` always false) — so `unbuilt` always fires; `new_rev`
 fires unless the merged `cat/pkg-version` (revision included) is already
 installed; `new_ver` is the same with the `-r<n>` revision stripped. Real
@@ -9166,7 +9166,7 @@ the existing `:=` pass stays a documented cut.
 Real `create_depgraph_params.py:116-123` (`--dynamic-deps`, ON by default
 for a source install; `--nodeps` forces it off): when an
 `AlreadyInstalled` package's dependencies are walked under `--deep`, its
-**current ebuild** metadata is used (the pilot's own long-standing
+**current ebuild** metadata is used (portuale's own long-standing
 behaviour — `enqueue_dependencies` always read `metadata/md5-cache`).
 `--dynamic-deps=n` reads the package's own vdb-recorded `*DEPEND`
 snapshot instead, flattened against its built (`vdb/USE`) flags — real
@@ -9236,7 +9236,7 @@ Simplification: the real case-folding round-trip (`cp_lower` /
 Real `main.py:936` (`y_or_n`, default `y`) + `actions.py:3675`: real
 portage gates the disk-rewriting `_global_updates` pass (renames vdb
 dirs, rewrites `world`, updates binpkgs) on `--package-moves != "n"`.
-This pilot never syncs — it applies `profiles/updates/`
+Portuale never syncs — it applies `profiles/updates/`
 `move`/`slotmove` directives only at *read* time
 (`apply_updates_to_atom` / `_to_dep_string` / `_to_cp` / `_to_slot`,
 `installed_cp_sources`) — so `--package-moves=n` simply turns every one
@@ -9287,7 +9287,7 @@ and toggles `myparams["deep"] = True` (8668-8670).
 In a `--pretend` that never removes or downgrades an installed package,
 the observable delta reduces to **that forced deep walk**. The other
 three facets are provably inert: a consistent installed set stays
-consistent under installed-only selection, and this pilot's
+consistent under installed-only selection, and portuale's
 `--rebuild-if-*` / slot-operator (`:=`) auto-rebuild passes already scan
 *every* installed package (`all_installed_packages`), both firing only
 for a dep that actually merges this run (which installed-only selection
@@ -9385,7 +9385,7 @@ Both flags are now *recognized* (they used to hit the
 (`--autounmask-continue` is real `true_y_or_n`: bare / `=y` / `=n`;
 `--autounmask-backtrack` is real `choices: ("y", "n")` — a value is
 required, `maybe` is a `choose from "y", "n"` usage error). Both are
-**inert** in this `--pretend`-only pilot, on solid ground:
+**inert** in this `--pretend`-only portuale, on solid ground:
 
 - `--autounmask-continue`'s "write the changes to config files and keep
   merging" path is explicitly gated on `"--pretend" not in
@@ -9395,7 +9395,7 @@ required, `maybe` is a `choose from "y", "n"` usage error). Both are
   `_autounmask_backtrack_disabled` state, whose sole effect is the
   "backtracking has terminated early due to the above autounmask
   change(s)" notice (`depgraph.py:11093`). That needs the real
-  backtracking depgraph loop, which this pilot's narrow autounmask v1
+  backtracking depgraph loop, which portuale's narrow autounmask v1
   doesn't have.
 
 The one real observable is `actions.py:3772`: when
@@ -9464,7 +9464,7 @@ vdb tree. Mirrored in `emerge_pretend_reference.py`
 `CASES` + 1 pinned contract test. **Documented cut:** the
 `_quickpkg_direct_deps_unsatisfied` error
 (`depgraph.py:5747-5761`/`11293`) — real portage aborts if the graph has
-a merge/uninstall task for the *running* root; this pilot's pretend model
+a merge/uninstall task for the *running* root; portuale's pretend model
 rarely produces one, so the check is left out.
 
 **With this the entire recognized-but-unimplemented modifier-flag list
@@ -9481,7 +9481,7 @@ The `depend` phase itself is new machinery
 (`ebuild_phases::run_depend_phase`): real `bin/ebuild.sh:781-804` writes
 the metadata `KEY=value` lines to `${PORTAGE_PIPE_FD}` (real portage's
 `_metadata_fd`) so incidental stdout/stderr can't corrupt them. This
-pilot wires that fd to a `${T}` temp file with a tiny `bash -c 'exec 9>…;
+portuale wires that fd to a `${T}` temp file with a tiny `bash -c 'exec 9>…;
 exec "$@"'` wrapper (no `unsafe`, no extra crate), spawns a plain `bash
 bin/ebuild.sh depend` (never sandboxed — real `_doebuild_spawn`'s
 `SANDBOXED_SRC_PHASES` excludes `depend`), then parses the file back.
@@ -9514,7 +9514,7 @@ no fixture ebuild inherits).
 
 **`--metadata`** (real `action_metadata`) transfers a repo's
 pre-generated cache into portage's own `depcachedir` (`/var/cache/edb/
-dep/`). This pilot reads `metadata/md5-cache` directly and models no
+dep/`). Portuale reads `metadata/md5-cache` directly and models no
 `depcachedir`, so there is nothing to transfer — it prints the real
 `\n>>> Updating Portage cache` header and exits 0.
 
@@ -9565,13 +9565,13 @@ nothing (real `if len(mod_logentries) == 0: continue`).
 `<logdir>` is `$PORTAGE_LOGDIR` else `<root>/var/log/portage`
 (root-relative — a deliberate divergence from real
 `<BROOT>/var/log/portage`, since `BROOT` is `/` and needs privileges,
-matching the pilot's other `<root>`-relative path choices). The real
+matching portuale's other `<root>`-relative path choices). The real
 uid/gid/mode chmod dance is a documented cut.
 
 **`mail` / `mail_summary`** are out of scope — a real SMTP client plus
 MIME assembly is not "light". When `PORTAGE_ELOG_SYSTEM` names either,
 the merge prints ` * elog \`mail\`/\`mail_summary\` is not supported in
-this pilot (SMTP delivery is out of scope) -- messages still go to
+portuale (SMTP delivery is out of scope) -- messages still go to
 \`echo\`/\`save\`/\`save_summary\`` and skips it. `syslog` / `custom`
 stay unported too.
 
@@ -9621,7 +9621,7 @@ flips a flag; `CFLAGS="-O3" emerge --info` shows the override.
 New `portage_profile::apply_env_layer`, called once right after
 `make.conf` (the position real `regenerate()` gives the `env` layer).
 Real portage passes nearly all of `os.environ` through `backupenv`; this
-pilot uses a **curated allowlist** instead (`ENV_INCREMENTAL_VARS` /
+portuale uses a **curated allowlist** instead (`ENV_INCREMENTAL_VARS` /
 `ENV_SCALAR_VARS`) — it only reads a fixed set of config vars, and
 folding `PATH`/`HOME`/… into `other_vars` would pollute `emerge --info`.
 The real `INCREMENTALS` (`USE`, `ACCEPT_KEYWORDS`, `USE_EXPAND*`,
@@ -9649,7 +9649,7 @@ real `env` position above the user-level `/etc/portage/package.use` (a
 narrowing of the existing "`package.use` applied as one group" cut — the
 global `config.use_flags` is still env-last for any package with no
 `package.use` entry). Env `USE_EXPAND` variable values are last-wins, not
-genuinely incremental (extending the pilot's pre-existing "no incremental
+genuinely incremental (extending portuale's pre-existing "no incremental
 merge outside `USE`/`ACCEPT_KEYWORDS`" cut). `/etc/portage/env` /
 `package.env` — the file half of the `env` layer — stays out.
 
@@ -9693,7 +9693,7 @@ see "`package.env` overrides the build flags per package" below;
 `FEATURES` and other incrementals stay a cut. A referenced file that
 doesn't exist
 contributes nothing *silently* (real portage warns from `setcpv`; this
-pilot follows its standing "no warnings from deep in config resolution"
+portuale follows its standing "no warnings from deep in config resolution"
 precedent); no per-file `${VAR}` expand map (real portage seeds one
 from the global config). Atom-match ordering follows `package_use_user`'s
 own plain list order, not real `ordered_by_atom_specificity` — the same
@@ -9760,7 +9760,7 @@ atom), `-pC 'dev-libs/dualslotpkg:2'` prints the warning (nothing
 higher). This slice also recorded the one remaining `_unmerge_display`
 cut — the "currently used Python interpreter" self-skip (real
 `_dblink(cpv).isowner(portage._python_interpreter)`) — as a **non-gap**
-for this pilot: its `emerge` is a Rust binary with no Python interpreter
+for portuale: its `emerge` is a Rust binary with no Python interpreter
 of its own to protect. 2 contract `CASES` + 1 pinned test + 2
 `pretend.rs` unit tests; both sides.
 
@@ -9783,13 +9783,13 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge -pC 'dev-libs/dualslotpkg:2'
 Running `portuale` against a real Gentoo tree in the container turned up
 a one-column width difference from real `emerge`: portuale printed
 `[ebuild   R   ]` (13 inside the brackets) where real portage printed
-`[ebuild   R    ]` (14). The pilot had gated the 7th `PkgAttrDisplay`
+`[ebuild   R    ]` (14). Portuale had gated the 7th `PkgAttrDisplay`
 column — the `#`/`~`/`*`/space mask marker from `output.py::gen_mask_str`
 — on `-v`, per `include_mask_str()` = `verbosity > 1`. But real portage's
 **default** `emerge -p` verbosity is **2**, not 1
 (`_DisplayConfig.__init__`: `"--quiet" and 1 or "--verbose" and 3 or 2`)
 — so `include_mask_str()` is already true at plain `-p`, and the column
-is absent only under `--quiet` (verbosity 1), which this pilot doesn't
+is absent only under `--quiet` (verbosity 1), which portuale doesn't
 model at all.
 
 `attr_display_field` (`pretend.rs`, mirrored `_attr_display_field`) now
@@ -9809,7 +9809,7 @@ Not addressed here (a separate gap, its own slice below — "the `USE="…"`
 line shows at plain `-p`"): at verbosity 2 real portage *also* prints
 the `USE="…"` line for a **changed** flag set or a new package
 (`_create_use_string` only returns "" when nothing changed *and*
-`all_flags` is off), where the pilot still gates the whole `USE=`
+`all_flags` is off), where portuale still gates the whole `USE=`
 display on `-v`.
 
 ```sh
@@ -9830,7 +9830,7 @@ printed `tmux` *before* its dependency `libevent`, where real `emerge`
 prints `libevent` first. Real portage's `mylist` (the list
 `resolver/output.py::Display` renders) is a genuine topological **merge
 schedule** — its `Scheduler` installs every package only after the
-packages it depends on. The pilot's BFS builds `entries` the opposite
+packages it depends on. Portuale's BFS builds `entries` the opposite
 way: a package's entry is appended *before* its dependencies are ever
 queued.
 
@@ -9842,7 +9842,7 @@ already carries — a dependency always precedes the packages that pull it
 in, and two packages with no dependency relationship keep their
 BFS-discovery (RDEPEND-string / argv) order. A genuine dependency cycle
 (real portage's `Scheduler` breaks these with slot-operator/priority
-heuristics the pilot doesn't reproduce) is left in discovery order.
+heuristics portuale doesn't reproduce) is left in discovery order.
 
 The chosen model (confirmed with the user via `AskUserQuestion`, "Model
 A"): `entries` is *canonically* merge-ordered — one order for the flat
@@ -9949,7 +9949,7 @@ The `--pretend` half of `--getbinpkg`/`--getbinpkgonly` shipped earlier
 (`binrepos.conf`/`PORTAGE_BINHOST` parsing, remote binhost candidates
 from each binhost's *cached* `Packages` index, the `g` bracket column,
 `Size of downloads:`). This is the other half — the first non-dry-run
-`emerge <atom>` action the pilot implements (alongside `--buildpkgonly`,
+`emerge <atom>` action portuale implements (alongside `--buildpkgonly`,
 which builds but never merges).
 
 `emerge --getbinpkgonly <atom>` now:
@@ -10057,7 +10057,7 @@ A binary package has no ebuild-with-phase-function-bodies to re-source
 (eclass-inherited phases in particular live only in the *saved*
 environment) — so real portage runs a binpkg's `pkg_*` phases from the
 package's **saved build-time bash environment**, decompressed from the
-xpak/gpkg's own `environment.bz2`. The pilot now does the same:
+xpak/gpkg's own `environment.bz2`. Portuale now does the same:
 
 - `binpkg::extract_binpkg` keeps `environment.bz2` and `<pf>.ebuild`
   **verbatim** (raw bytes — the earlier scalar-metadata path stringified
@@ -10228,7 +10228,7 @@ existing remote-download and binary-upgrade tests (renamed from
 
 Real `emerge dev-libs/foo` adds `dev-libs/foo` to
 `<root>/var/lib/portage/world` — the `@world` set `--update`/`--depclean`
-start from. The pilot's merge paths didn't; a package merged by
+start from. Portuale's merge paths didn't; a package merged by
 `emerge <atom>` would be wrongly removed by a subsequent
 `emerge --depclean`.
 
@@ -10297,7 +10297,7 @@ real `>>> Recording @name in "world_sets" favorites file...` line per
 add. The set's *member packages* are not added to the plain `world` file
 (they aren't directly-named atoms). **v1 cuts:** real's `world_candidate`
 gate (built-ins like `@security` aren't world candidates — moot here,
-the pilot only knows `@world`/`@system` as built-ins and everything else
+portuale only knows `@world`/`@system` as built-ins and everything else
 reaching the recorder resolved via a real set file); the `--ask` prompt.
 
 Contract-tested (`@nestedtestset` alone and alongside an explicit atom,
@@ -10310,7 +10310,7 @@ recorded, members not in `world`, `--oneshot` records nothing) + an
 `cnf/sets/portage.conf`: `@world = @profile @selected @system` (a
 `DummyPackageSet`), `@selected = WorldSelectedSet` (the world file's
 atoms + `world_sets`' nested sets), `@installed = EverythingSet`. This
-pilot's `@world` already expanded to exactly `@selected`'s contents (the
+portuale's `@world` already expanded to exactly `@selected`'s contents (the
 `@profile`/`@system` union is a pre-existing simplification), so
 `@selected` is a straight alias — both now route through a shared
 `expand_selected`. `@installed` (`installed_set_atoms`) yields a
@@ -10429,7 +10429,7 @@ unmerged:` header — real `unmerge.py:195`) computes the `selected` set,
   equals the removed package's `cat/pkg` is dropped **unless** an
   installed version still satisfies it; every other atom is left
   untouched. The file is rewritten sorted, comment / `@set` lines not
-  carried forward (real `.write`; already the pilot's convention).
+  carried forward (real `.write`; already portuale's convention).
 
 `run_unmerge_pretend` gained a `pretend: bool` param: `false` from the
 `-C` CLI path (header suppressed, `execute_unmerge` runs), `true` under
@@ -10440,7 +10440,7 @@ through too — see the next section.
 `--ask`; `FEATURES=unmerge-backup` not honored; a `pkg_prerm`/
 `pkg_postrm` non-zero is logged and removal continues (real `unmerge()`
 `sys.exit`s, but only on the file-removal core failing — which the
-pilot still surfaces as a hard error). Like every other non-`--pretend`
+portuale still surfaces as a hard error). Like every other non-`--pretend`
 `emerge` path this is **not** in the shared contract CASES (the Python
 reference has no ebuild-execution machinery — `emerge --unmerge <atom>`
 without `--pretend` just returns 0 there now); the old
@@ -10520,7 +10520,7 @@ comment gone.
 ### `emerge --config <atom>`: run `pkg_config` for an installed package
 
 Real `action_config` is the emerge-level `pkg_config` runner (the
-counterpart to `ebuild <file> config`, which the pilot already had).
+counterpart to `ebuild <file> config`, which portuale already had).
 `run_config_action` ports it:
 
 - exactly one atom (real `if len(myfiles) != 1` → `!!! config can only
@@ -10544,7 +10544,7 @@ standalone action that ignores `--pretend` entirely (real `action_config`
 never checks it) and needs nothing from the resolved config.
 
 **v1 cuts:** `--ask` (the interactive package picker and the "Ready to
-configure?" prompt) — the pilot's non-interactive stance, matching real
+configure?" prompt) — portuale's non-interactive stance, matching real
 portage's own non-`--ask` branch; `elog` processing. Not in the contract
 CASES (the Python reference returns 0 for this action — no
 ebuild-execution machinery). `--config` was added to the "implemented so
@@ -10675,7 +10675,7 @@ so `_slot_operator_trigger_reinstalls` finds nothing. `resolve_pretend_graph`
 gained a matching `ignore_built_slot_operator_deps` param (threaded from
 `pretend.rs` / mirrored in `emerge_pretend_reference.py`) that, when
 set, skips the `slot_operator_rebuild_entries` post-pass entirely — same
-net effect. The pilot accepts `--ignore-built-slot-operator-deps`,
+net effect. Portuale accepts `--ignore-built-slot-operator-deps`,
 `=y`/`=n`, and a space-separated `y`/`n` (bare form → `y`, same
 permissive shape as the sibling flags). Contract test:
 `emerge -p --ignore-built-slot-operator-deps=y dev-libs/slotbindtarget`
@@ -10733,7 +10733,7 @@ Real portage's resolver is a retry loop (`_emerge/resolver/backtracking.py`
 and if `_process_slot_conflicts` finds a slot conflict that *one* version
 could resolve (every parent atom that landed on the slot is jointly
 satisfiable), it records the extra constraints and re-runs the entire
-walk from scratch, up to `--backtrack` (default 10) times. The pilot's
+walk from scratch, up to `--backtrack` (default 10) times. Portuale's
 BFS was single-pass with first-atom-wins, so two dependencies that
 disagreed about a slot always surfaced a `[slot conflict]` line even when
 a lower version would have satisfied both.
@@ -10833,7 +10833,7 @@ pinned-output test (with `--backtrack=0`); two `portage-repo` unit tests
 
 ### Backtracking: the real slot-collision notice + `--backtrack=30` hint (slice 4)
 
-The pilot's compact `[slot conflict] … resolved to …, which does not
+Portuale's compact `[slot conflict] … resolved to …, which does not
 satisfy "…"` line is replaced by a simplified transcription of real
 `depgraph._show_slot_collision_notice` → `slot_conflict_handler.
 get_conflict()` (`lib/_emerge/resolver/slot_collision.py`):
@@ -10873,14 +10873,14 @@ Cut (documented, the fixtures don't exercise them): real
 `get_conflict()`'s `collision_reasons` grouping / best-atom selection,
 `pkg_use_display`, `--verbose-conflicts` USE markers, "omitted N similar
 parents", operator colorization; and the block prints to stdout (after
-the merge list) like the pilot's old line, not stderr. Contract-tested
+the merge list) like portuale's old line, not stderr. Contract-tested
 via a `_assert_slot_collision_block` helper (rather than pinning the
 whole paragraph in every test) + `--backtrack=30`/`=0` hint-gate CASES;
 a new `portage-repo` unit test asserts the per-instance parent data.
 
 ### Backtracking: the real `* Error: circular dependencies:` block (slice 5)
 
-The pilot's BFS concatenated all five `*DEPEND` keys into one string
+Portuale's BFS concatenated all five `*DEPEND` keys into one string
 before flattening, so every graph edge was priority-blind — it couldn't
 tell a *breakable* run-time cycle (`cycle-a`/`cycle-b`, which real portage
 merges silently) from an *unbreakable* build-time one (the only case real
@@ -10923,7 +10923,7 @@ cycle). New `dev-libs/hardcycle{a,b}` fixture (mutual `DEPEND`, empty
 still resolves exit 0 with both packages merged.
 
 Cut (documented): the reduced cycle-only `--tree` re-display
-(`self.display(handler.merge_list)`) — the pilot already prints the full
+(`self.display(handler.merge_list)`) — portuale already prints the full
 merge list above; `circular_dependency_handler._find_suggestions`'s
 ~180-line USE-flag heuristic, so the block always ends with the generic
 advisory real portage falls back to when it finds no specific
@@ -10991,7 +10991,7 @@ After each merge the scheduler prints `>>> Jobs: X of Y complete` (real
 `Scheduler.JobStatusDisplay`); on a build failure the last 40 lines of
 that package's `build.log` are folded into the error report. The
 parsable **stdout** is now clean under `-j >1` — every line is a
-pilot-emitted `>>>` / `[ebuild …]` line.
+portuale-emitted `>>>` / `[ebuild …]` line.
 
 KNOWN CUTS (documented in `emerge_build.rs`): the serialized *merge*
 step's `pkg_pre/postinst` hooks still run through `brush` uncaptured, so
@@ -11027,7 +11027,7 @@ list is displayed and before anything is built/merged/removed:
   (`ask_select` — `1`..`N` or `X`/Cancel → 130); without `--ask` that
   case still errors `Please use a specific atom or the --ask option.`
 
-`ask_confirm` is the pilot's `UserQuery.query`: a bare Enter matches the
+`ask_confirm` is portuale's `UserQuery.query`: a bare Enter matches the
 first response ("Yes"); a `No` prints `\nQuitting.\n` and EOF prints
 `Interrupted.`, both exiting `130` (real `128 + SIGINT`). `--ask` is
 ignored under `--pretend` (nothing executes anyway).
@@ -11062,7 +11062,7 @@ has no shell quoting (real `shlex.split`).
 `create_directories` now makes `${T}/logging` (real `prepare_build_dirs`)
 — `bin/isolated-functions.sh::__elog_base` silently drops every `elog` /
 `ewarn` / `eerror` message if that dir is missing. The new `elog` module
-is the pilot's `mod_echo` (default-on via `make.globals`'s
+is portuale's `mod_echo` (default-on via `make.globals`'s
 `PORTAGE_ELOG_SYSTEM="save_summary:log,warn,error,qa echo"`): after the
 merge loop, `run()` re-scans each merged entry's `${T}/logging/<phase>`
 files (`<TYPE> <msg>` lines), filters them by `PORTAGE_ELOG_CLASSES`
@@ -11103,7 +11103,7 @@ then `emerge --resume` no longer wrongly adds the recovered packages to
 (`myopts == {"--oneshot": true}`, `world` stays empty after the resume).
 
 The file is real portage's JSON `mtimedb`, written real-compatibly
-(tab-indented) — but the pilot does **not** preserve any other top-level
+(tab-indented) — but portuale does **not** preserve any other top-level
 keys an existing one had (`info` / `ldpath` / `updates` are `--sync` /
 `env-update` state it never manages). v1 cuts: no `resume_backup`
 rotation; `--resume --pretend` doesn't print the saved list; a saved
@@ -11123,7 +11123,7 @@ compressed remote index: it tries `<uri>/Packages.gz`, then
 `download_and_verify` now checks the `Packages` record's `MD5` field (the
 md5 of the whole `.tbz2`, real `bintree`'s own hash) after the existing
 `SIZE` check — a mismatch removes the file and fails. (Real portage also
-checks `SHA1`; the pilot has no sha1 crate and `MD5` is always present.)
+checks `SHA1`; portuale has no sha1 crate and `MD5` is always present.)
 
 ### Fetch: real `RESUMECOMMAND` resume + the `pkg_nofetch` phase
 
@@ -11135,7 +11135,7 @@ than restarted, matching real `fetch.py`. A complete-but-corrupt file
 (digest mismatch after a full download) is still dropped; only a genuine
 partial is resumed. Not modelled: real portage's
 `PORTAGE_FETCH_RESUME_MIN_SIZE` (it only resumes past 350000 bytes) — the
-pilot resumes any non-empty partial. Tested end-to-end against a real
+portuale resumes any non-empty partial. Tested end-to-end against a real
 `wget -c` subprocess and a loopback HTTP server that drops connection 1
 mid-body and serves a `206 Partial Content` on connection 2.
 
@@ -11187,7 +11187,7 @@ Real `config.py`'s `USE_ORDER` is
 `env:pkg:conf:defaults:pkginternal:features:repo:env.d`; `regenerate()`
 walks it reversed, so per-package USE resolution is one continuous
 incremental pass over `repo` → `pkginternal` → `defaults` → `conf` →
-`pkg`. The pilot used to flatten all three `package.use` sources (repo /
+`pkg`. Portuale used to flatten all three `package.use` sources (repo /
 profile / user) into **one** list applied last — making repo-level
 `package.use` (real: the *weakest* USE layer) and profile-level
 `package.use` (real: below `make.conf`) both override things they
@@ -11280,7 +11280,7 @@ Real portage's `FEATURES=network-sandbox` puts a build's `src_*` phases
 in a fresh network namespace (`unshare(CLONE_NEWNET)` in
 `portage.process._exec`) so an ebuild can't reach the internet during
 `src_compile` — the "misbehaving ebuild hits the network" case from
-scope-backlog.md Part 2.D. The pilot now models this: when `network-sandbox`
+scope-backlog.md Part 2.D. Portuale now models this: when `network-sandbox`
 is in `FEATURES`, the six real `src_*` phases
 (`unpack`/`prepare`/`configure`/`compile`/`test`/`install` — real
 `_doebuild_spawn`'s own network-unshared set) run as
@@ -11288,7 +11288,7 @@ is in `FEATURES`, the six real `src_*` phases
 with `lo` brought up inside. This forces the `Bash` backend for those
 phases (an in-process `Brush` interpreter can't be put in its own
 namespace) and — unlike real portage, which only unshares as root — uses
-`--map-root-user` so it works from the pilot's normal non-root context.
+`--map-root-user` so it works from portuale's normal non-root context.
 If unprivileged user namespaces are unavailable, the wrapper is skipped
 with a one-shot warning, matching real portage's own non-fatal "Unable
 to unshare" degrade.
@@ -11314,7 +11314,7 @@ unreachable" when the feature is on.
 Real portage's `FEATURES=sandbox` wraps a build's `src_*` phases in the
 `sys-apps/sandbox` binary (an `LD_PRELOAD` `libsandbox.so` that
 intercepts file syscalls) — the classic guard against an ebuild
-scribbling outside `${D}`. The pilot now models it: when `sandbox` (or
+scribbling outside `${D}`. Portuale now models it: when `sandbox` (or
 `usersandbox`) is in `FEATURES` and `/usr/bin/sandbox` exists (real
 `sandbox_capable`), the six `src_*` phases run as
 `sandbox bash <bin_dir>/ebuild.sh <phase>` (real
@@ -11338,7 +11338,7 @@ cuts: SELinux sandbox; `userpriv` / `fakeroot` (single-user dev/test
 context).
 
 `dev-libs/fssandboxpkg`'s `src_install` writes a legit file into `${D}`
-and also tries to write `/var/lib/portage-pilot-sandbox-probe`; with
+and also tries to write `/var/lib/portage-portuale-sandbox-probe`; with
 `FEATURES=sandbox` the stray write is denied, recorded in
 `${T}/sandbox.log`, and `ebuild <file> install` fails — without the
 feature the same run just installs the legit file and exits 0.
@@ -11421,7 +11421,7 @@ Python reference and contract-tested.
   were found.`. `dev-libs/samepkg` (in the fixture vdb) gates one of the
   three `testrepo` news items. Documented cuts: the *write* side of the
   `.unread` / `.skip` bookkeeping (real `updateItems` rewrites both each
-  run; the pilot only reads them and recomputes, writing nothing);
+  run; portuale only reads them and recomputes, writing nothing);
   `Display-If-Keyword` / `Display-If-Profile` (always satisfied); non-bare
   `Display-If-Installed` atoms.
 - **`--clean`** (real `action_uninstall` → `unmerge` with
@@ -11502,23 +11502,23 @@ escape for any `_styles` key (`GOOD`, `BAD`, `WARN`, `BRACKET`, the
 - **`PORTAGE_COLORMAP`** is *not* an input — real `doebuild.py:543`
   **exports** it (`= colormap()`) as bash that `isolated-functions.sh`
   `eval`s so an ebuild's `elog`/`einfo` share the same palette. The
-  pilot now emits the same 10 `PORTAGE_COLOR_<KEY>=$'…'` lines (`BAD
+  portuale now emits the same 10 `PORTAGE_COLOR_<KEY>=$'…'` lines (`BAD
   BRACKET ERR GOOD HILITE INFO LOG NORMAL QAWARN WARN`, `\e` written
   `\E`) into every build phase's environment
   (`color::phase_colormap_export`).
 - Documented cut: real portage's `codes`/`_styles` tables are larger
-  (256-colour and RGB entries, `0x……` hex names); the pilot ports the
+  (256-colour and RGB entries, `0x……` hex names); portuale ports the
   16-colour ANSI set it already used.
 
 ### `emerge --quiet` / `-q`: verbosity level 1
 
-scope-backlog.md Part 2 Section H item 4 — the pilot previously modelled
+scope-backlog.md Part 2 Section H item 4 — portuale previously modelled
 only plain `-p` (verbosity 2) and `-pv` (verbosity 3). Real
 `_DisplayConfig.__init__` computes `verbosity = "--quiet" and 1 or
 "--verbose" and 3 or 2` — `--quiet` wins over `-v`. `-q` takes an
 optional `y|n` (real `true_y_or_n`), and bundles (`-pq`, `-pvq`).
 
-What verbosity 1 changes, for the non-`--columns` display the pilot
+What verbosity 1 changes, for the non-`--columns` display portuale
 renders:
 
 - **The mask column disappears.** Real `include_mask_str()` is
@@ -11537,7 +11537,7 @@ renders:
   shows.
 - **`emerge --search` goes terse** — real `action_search` passes
   `search`'s `verbose` as `"--quiet" not in myopts`, so `-sq` prints
-  just the `*  cat/pkg` lines (and this fixes the pilot's earlier
+  just the `*  cat/pkg` lines (and this fixes portuale's earlier
   `-s`-was-terse-by-default divergence: it now shows the full block by
   default, like real portage).
 - **`emerge --check-news -q`** suppresses only the ` * No news items
@@ -11546,7 +11546,7 @@ renders:
 
 The `_set_root_columns` / `_set_non_root_columns` quiet *line-format*
 rewrite (dropping the `[ebuild …]` bracket entirely for a bare
-`N cat/pkg [ver]` line) is real only under `--columns`, which the pilot
+`N cat/pkg [ver]` line) is real only under `--columns`, which portuale
 doesn't render, so it's not reproduced.
 
 ### `profiles/updates/` package moves (`move` / `slotmove`)
@@ -11559,7 +11559,7 @@ scope-backlog.md Part 2 Section H item 2. Real `portage.update` +
 config files, and that ebuild-metadata regeneration bakes into
 `metadata/md5-cache`.
 
-This pilot never syncs and never mutates the vdb, so it applies the
+Portuale never syncs and never mutates the vdb, so it applies the
 directives **at read time** instead (`portage_repo`'s
 `global_package_updates` — a memoised, `$PORTAGE_CONFIGROOT`-driven scan
 of every configured repo's `profiles/updates/`, quarter files sorted by
@@ -11593,7 +11593,7 @@ Deliberate cuts (all no-ops for a `--pretend` that never writes): the
 on-disk vdb category rename / `*DEPEND` rewrite, the world /
 `world_sets` file rewrite, binary-package (`%` / `S`) updates, the
 `/etc/portage/package.*` (`p`) rewrite; real `grab_updates`' `os.scandir`
-order + `prev_mtimes` incremental logic (this pilot sorts and re-reads
+order + `prev_mtimes` incremental logic (portuale sorts and re-reads
 every run — strictly better for a chained cross-file move); a `slotmove`
 whose atom carries a version/operator (a no-op in real `update_dbentry`
 too); and `emerge -C` / `--unmerge` bare-name resolution, which keeps
@@ -11680,7 +11680,7 @@ hardcoded `ShellBackend::default()` into `MergeOptions::from_env(...)`:
   (`action_config` → `doebuild(ebuildpath, "config", ...)`), run by
   `run_config_action` → `ebuild_merge::run_vdb_saved_env_phase`.
 
-The pilot-only `--shell` value parsed in `pretend.rs`'s loop is now
+The portuale-only `--shell` value parsed in `pretend.rs`'s loop is now
 threaded down every one of those call chains — `run_unmerge_pretend`,
 `run_depclean_pretend`, `run_prune_pretend`, `run_prune_nodeps_pretend`,
 `run_clean_pretend`, `run_prune_nodeps_or_clean`, `execute_unmerge`,
@@ -11736,7 +11736,7 @@ IUSE flags>")]` from `GraphEntry::use_flags_display` (`entry_build_env`);
 `build_one_source_entry` (the `--jobs` build) builds the same combined
 list directly. `run_commands`/`run_commands_logged`/`run_commands_async`
 and `run_single_phase` gained a `build_env` parameter, appended after the
-pilot's own base vars in `phase_env_vars` so it wins over the empty
+portuale's own base vars in `phase_env_vars` so it wins over the empty
 default; `merge_after_install` threads `options.build_env` into
 `pkg_preinst`/`pkg_postinst`. `write_post_install_metadata` now
 USE-reduces the `*DEPEND`/`LICENSE`/`PROPERTIES`/`RESTRICT` build-info
@@ -11752,7 +11752,7 @@ out) instead of a hardcoded empty set.
 **Narrowing:** only the IUSE-declared enabled flags reach the phase
 `USE` (what `use()` needs), not the implicit/arch part of the full
 effective set; the build-var set is fixed (not every scalar).
-`FEATURES` stays `""` — the pilot models it via `feature_enabled`.
+`FEATURES` stays `""` — portuale models it via `feature_enabled`.
 Standalone `ebuild <file> <phase>` still runs with `USE=""`/no build
 flags (no graph, no resolved config). `emerge --resume` builds with an
 empty `build_env` (`resume_entry` carries no resolved USE). The
@@ -11788,7 +11788,7 @@ only, `USE`/no-scalar files excluded).
 **Cuts:** a build-phase concern only — `--pretend` and `emerge --info
 <atom>` show no per-package compiler flags, so (unlike the `USE=` half)
 there is no Python-reference mirror. `FEATURES` and other incrementals
-stay out (the pilot models `FEATURES` via `feature_enabled`); no
+stay out (portuale models `FEATURES` via `feature_enabled`); no
 per-file `${VAR}` expand map. Standalone `ebuild`/`emerge --resume`
 carry an empty `package_env_vars`.
 
@@ -11796,7 +11796,7 @@ carry an empty `package_env_vars`.
 
 The `emerge --help` / `-h` text was a curated subset written when
 `--pretend` was the only real slice — its first option line still read
-"`-p, --pretend   required: the only real merge calculation this pilot
+"`-p, --pretend   required: the only real merge calculation portuale
 implements`" and its closing paragraph omitted ~40 shipped flags. It is
 now a grouped tour of the whole implemented surface: **Actions**
 (`--unmerge`/`--rage-clean`/`--depclean`/`--prune`/`--clean`/`--config`/
@@ -11805,7 +11805,7 @@ now a grouped tour of the whole implemented surface: **Actions**
 `--update`/`--deep`/`--newuse`/… family plus `--changed-*`, `--rebuild-if-*`,
 `--complete-graph*`, `--dynamic-deps`, `--backtrack`, …), **Autounmask**,
 **Binary packages**, **Build scheduling** (`-j`/`--load-average`/`--ask`/
-`--keep-going`), **Output**, and **Pilot-only** (`--json`/`--shell`). It
+`--keep-going`), **Output**, and **Portuale-only** (`--json`/`--shell`). It
 is still not a port of real emerge's `_emerge/help.py` (157 lines of
 colourised syntax for its full ~130-flag surface). Kept byte-identical
 between `pretend.rs`'s `HELP_TEXT` const and
@@ -11817,7 +11817,7 @@ The stale tail of the "recognized but not implemented" error — a
 hand-maintained "only `--pretend/-p, …` are implemented so far" list
 duplicated across the Rust binary, the Python reference, and four
 contract assertions — is replaced by a fixed pointer: `… is a real
-emerge {option,action}, but is not implemented in this pilot -- run
+emerge {option,action}, but is not implemented in portuale -- run
 "emerge --help" for the options and actions that are.`
 
 The multicall binary gained its own help: a bare `portuale` (no symlink,
@@ -11841,7 +11841,7 @@ run for real) and "`--shell … default: brush`" (the default is `bash`).
 `PORTAGE_SCHEDULING_POLICY` / `PORTAGE_SCHEDULING_PRIORITY` — real
 `_emerge/actions.py::set_scheduling_policy`, which modern portage
 implements with `os.sched_setscheduler(pid, policy, sched_param(prio))`
-(not the old `chrt` spawn). The pilot maps the policy name to the
+(not the old `chrt` spawn). Portuale maps the policy name to the
 `linux/sched.h` ID (`other`=0, `fifo`=1, `round-robin`=2, `batch`=3,
 `idle`=5, `deadline`=6), resolves the priority
 (`PORTAGE_SCHEDULING_PRIORITY` if set and in
@@ -11867,7 +11867,7 @@ added to `test_emerge_applies_portage_niceness_and_ionice`) and a
 
 **Cuts:** only this process gets the policy — real `apply_priorities`
 also applies it to the `multiprocessing` forkserver pid, which this
-pilot has no equivalent of.
+portuale has no equivalent of.
 
 ### `emerge --quiet-build[=y|n]` (2026-09-02)
 
@@ -11875,11 +11875,11 @@ pilot has no equivalent of.
 now. Real `Scheduler._background_mode` runs a package's phases in the
 "background" (output → `${T}/build.log`, not the terminal) when
 `parallel_jobs or ("--quiet" in myopts or --quiet-build == "y")`. The
-pilot already forced capture for `-j >1`; `run_source_merge` gained a
+portuale already forced capture for `-j >1`; `run_source_merge` gained a
 `capture_log` param, and at `-j1` `--quiet-build=y` (or `-q`) now routes
 each entry through the same `build_one_source_entry` (captured) +
 `merge_one_built_entry` (serialized) split the scheduler uses — so a
-`build.log` is written and stdout stays just the pilot's own
+`build.log` is written and stdout stays just portuale's own
 `>>>`/`[ebuild` lines. `--quiet-build=n` (the default) streams and
 writes no log. Matching real portage, `=n` does **not** disable capture
 under `-j >1` (`parallel_jobs` still forces it).
@@ -11896,11 +11896,11 @@ streamed, no log).
 
 Real `_emerge/actions.py` re-resolves `mtimedb["resume"]` into a
 depgraph, `mydepgraph.display(...)`, and `return os.EX_OK` — merging
-nothing. The pilot previously fell through to the normal resolver with
+nothing. Portuale previously fell through to the normal resolver with
 an empty target list and errored (`exit 2`). Now `run_resume` takes a
 `pretend` flag: it builds the `resume_entry` list as before and, under
 `--pretend`, runs `print_entry_line` for each and returns success,
-leaving the resume list and `world` untouched. Because the pilot's
+leaving the resume list and `world` untouched. Because portuale's
 resume list records only `cat/pkg-ver` (no re-resolution), every line
 prints `[ebuild N ...]` — a documented divergence from real portage's
 re-derived `N`/`U`/`R` markers, the same limitation the resume *merge*
@@ -11936,7 +11936,7 @@ else overrides it. `Config` gained `envd_use_tokens`, read by
 optional leading `export ` keyword, then `KEY=value` with quote removal,
 no `${VAR}` expansion). `portage-repo::effective_use_flags` and the
 Python `effective_use_flags` both fold it in first, before the `repo`
-tier, via `apply_incremental`. The pilot reads `profile.env` relative to
+tier, via `apply_incremental`. Portuale reads `profile.env` relative to
 `config_root` rather than a distinct `eroot` — they coincide in every
 tested and typical configuration, the same documented divergence every
 other `config_root`-relative read in that crate carries.
@@ -11962,7 +11962,7 @@ almost always empty; it is modelled for completeness.
 Real `emerge` runs a command-line target with no category through
 `dep_expand()` → `cpv_expand()` (`lib/portage/dbapi/`), which scans every
 category in the tree (`portdbapi.categories`) for a package matching the
-bare name. The pilot's `parse_atom` grammar requires an explicit
+bare name. Portuale's `parse_atom` grammar requires an explicit
 `category/package`, so `emerge eix` used to fail with `emerge: invalid
 atom "eix"`.
 
@@ -11988,7 +11988,7 @@ non-virtual-preference case). 3 CASES entries + 3 pinned contract tests
 (Rust == Python) + a `pretend.rs` unit test.
 
 **Documented cuts:** real's non-`--quiet` `ambiguous_package_name` runs a
-full `search` and prints its output before the `!!!` lines — the pilot
+full `search` and prints its output before the `!!!` lines — portuale
 emits only the deterministic list. A bare name carrying a version or slot
 (`emerge eix-1.2`, `emerge eix:0`) is not qualified (real `dep_expand`'s
 `null/`-insertion handles those); it falls through to the existing

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Neutral CLI test-harness binary (Python side) for the atom-matching
-pilot -- see docs/agent-context.md and rust/portage-dep/src/lib.rs
+portuale -- see docs/agent-context.md and rust/portage-dep/src/lib.rs
 for the deliberately narrowed v1 grammar this exercises. Wraps the real
 portage.dep.Atom / portage.dep.match_from_list rather than reimplementing
 them, and rejects any atom that uses a feature outside the v1 subset
@@ -11,7 +11,7 @@ wider one. Slot operators (":=", ":*",
 defaults) ARE in the v1 subset -- see portage-dep's own doc comment on
 why: real portage's own matching logic (_match_slot, and
 match_from_list's own use-dep filtering, which it skips entirely for
-plain-string candidates -- the only kind this pilot has) never actually
+plain-string candidates -- the only kind portuale has) never actually
 needs either one to decide whether an atom matches a candidate, so
 parsing them needed no new *matching* logic on either side, even though
 the values themselves aren't enforced. The "=*" glob version operator
@@ -23,7 +23,7 @@ letting "=*" through _SUPPORTED_OPERATORS. The "::reponame" repo
 constraint (PMS 3.1.5) IS in the v1 subset too -- see portage-dep's own
 doc comment on the matching semantics (real match_from_list's own final
 post-pass filter, ported as `matches_repo`) and on why plain-string
-candidates never carried repo identity before this pilot's own
+candidates never carried repo identity before portuale's own
 portage-repo started appending "::reponame" to the strings it builds.
 
 Usage:
@@ -54,7 +54,7 @@ _SUPPORTED_OPERATORS = {None, "=", "=*", ">", ">=", "<", "<=", "~"}
 def _parse_v1_atom(s):
     """Returns a real Atom if `s` parses under the v1 grammar subset, else
     None (either it's not a valid atom at all, or it uses a feature this
-    pilot's Rust side doesn't implement)."""
+    portuale's Rust side doesn't implement)."""
     try:
         a = Atom(s, allow_wildcard=True)
     except InvalidAtom:

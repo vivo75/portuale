@@ -8,11 +8,11 @@
 // systemd `/etc/environment.d/10-gentoo-env.conf`/`/etc/ld.so.conf`, and
 // -- when warranted -- runs the real, unmodified `ldconfig` binary.
 //
-// v1 scope, this pilot's own "narrow, documented" pattern (confirmed
+// v1 scope, portuale's own "narrow, documented" pattern (confirmed
 // with the user before implementing):
 //   - No cross-process mtime cache (real `portage.mtimedb["ldpath"]`,
 //     which persists across a real, long-lived portage session): this
-//     pilot's own CLI is a fresh process per command, so every
+//     portuale's own CLI is a fresh process per command, so every
 //     invocation is treated as a first run instead -- any candidate lib
 //     dir (`LDPATH` entries from env.d, an existing `usr/lib*`/`lib*`
 //     directory) found on disk post-merge is treated as "changed",
@@ -20,18 +20,18 @@
 //     genuine first-run behavior (empty `prev_mtimes`); the only real
 //     divergence is a *repeat* merge into the same `ROOT` that didn't
 //     touch any lib dir, where real portage would skip `ldconfig` and
-//     this pilot re-runs it anyway -- never wrong, just occasionally
+//     portuale re-runs it anyway -- never wrong, just occasionally
 //     extra (cheap, idempotent) invocations.
 //   - Real `getlibpaths()`'s own `/etc/ld.so.conf.d/*.conf` (`include`
 //     directive) parsing is not reproduced -- a rare, admin-configured
-//     mechanism, not populated by anything this pilot's own fixtures do.
-//   - No `CHOST`/`CBUILD` cross-compile handling at all (this pilot has
+//     mechanism, not populated by anything portuale's own fixtures do.
+//   - No `CHOST`/`CBUILD` cross-compile handling at all (portuale has
 //     no cross-compile concept anywhere else either) -- always takes
 //     real `env_update()`'s own `else` branch, `<ROOT>/sbin/ldconfig`
 //     (note: the *target* `ROOT`'s own binary, not a host `PATH` lookup
 //     -- real `_doebuild_spawn`-adjacent code relies on this being
 //     chroot-compatible with `-r target_root`).
-//   - No `EPREFIX` support anywhere in this pilot -- the real bfd-linker
+//   - No `EPREFIX` support anywhere in portuale -- the real bfd-linker
 //     alternate `/usr/etc/ld.so.conf` is never written.
 //   - env.d files that declare their own extra `SPACE_SEPARATED`/
 //     `COLON_SEPARATED` keys are not honored -- only the two real,
@@ -44,7 +44,7 @@
 //   - `/etc/ld.so.conf` is unconditionally rewritten every run (real
 //     `env_update()` only rewrites it -- and only then considers
 //     `ldconfig` worth running for *that specific reason* -- when its
-//     own content actually changed); moot here since this pilot's own
+//     own content actually changed); moot here since portuale's own
 //     `ldconfig`-triggering decision doesn't depend on that comparison
 //     at all (see the mtime-cache cut above), and `/etc/ld.so.conf`
 //     itself isn't vdb-tracked (no `CONFIG_PROTECT`/unmerge interaction
@@ -115,7 +115,7 @@ fn is_env_d_filename(name: &str) -> bool {
 /// `cleanup_info_dir`'s own real `inode_key in infodirs_inodes` check).
 /// Each real, `root`-joined candidate directory that actually exists on
 /// disk right now contributes its own `(dev, ino)` -- real `os.stat`
-/// (follows symlinks, unlike the `lstat`-based inode keys this pilot's
+/// (follows symlinks, unlike the `lstat`-based inode keys portuale's
 /// own `dirs`/`protected_symlinks` otherwise use, since a real
 /// `INFOPATH` entry naming a symlink should still match the directory
 /// it resolves to). A missing env.d directory, or a named candidate
@@ -196,11 +196,11 @@ fn candidate_lib_dirs(root: &Path, ldpath_entries: &[String]) -> Vec<PathBuf> {
 
 /// Real `os.path.join(eroot, "sbin", "ldconfig")` invoked as `[ldconfig,
 /// "-X", "-r", target_root]` with `cwd="/"` -- a real, unmodified
-/// subprocess (this pilot's own "real subprocess, accepted dependency"
+/// subprocess (portuale's own "real subprocess, accepted dependency"
 /// pattern already established for `wget` in the fetch slice). A
 /// missing or non-executable `<root>/sbin/ldconfig` is silently a no-op
 /// (real `env_update()`'s own tolerance -- most real `ROOT`s in this
-/// pilot's own synthetic fixtures never install one at all). Real
+/// portuale's own synthetic fixtures never install one at all). Real
 /// `env_update()` only ever warns on a nonzero exit, never aborts the
 /// merge over it -- mirrored here by ignoring the exit status entirely
 /// once spawned.

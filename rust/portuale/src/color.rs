@@ -144,7 +144,7 @@ const CODE_NAMES: &[&str] = &[
 /// `_styles`/`codes` name; `VALUE` is either a raw ANSI code
 /// (`^[0-9;]*m$` -> `\x1b[` + it) or a space-separated list of `codes`
 /// names (concatenated). A malformed line is skipped with a warning
-/// (this pilot's `onerror`), never fatal. Cached once per process (real
+/// (portuale's `onerror`), never fatal. Cached once per process (real
 /// portage's own `_color_map_loaded` one-shot).
 fn color_map_overrides() -> &'static HashMap<String, String> {
     use std::sync::OnceLock;
@@ -347,7 +347,7 @@ impl Colorizer {
 
     /// Real `Display.pkgprint` (`output.py:265-292`), the merge-list case
     /// only (`pkg_info.merge` is always true for every bracket entry this
-    /// pilot prints): pick the palette entry from `built` (binary) +
+    /// portuale prints): pick the palette entry from `built` (binary) +
     /// `system` + `world`. `system` wins over `world`, exactly as real.
     pub fn pkgprint(&self, text: &str, binary: bool, system: bool, world: bool) -> String {
         let key = match (binary, system, world) {

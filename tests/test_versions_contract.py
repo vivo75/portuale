@@ -1,4 +1,4 @@
-"""Black-box contract suite for the versions-comparison pilot (see
+"""Black-box contract suite for the versions-comparison portuale (see
 docs/agent-context.md). Drives the Python harness (a thin wrapper around the
 real `portage.versions`) and the Rust harness identically via subprocess,
 and asserts their outputs are byte-for-byte the same. Neither harness's
@@ -6,7 +6,7 @@ internals are imported directly -- this is deliberately implementation-
 agnostic, per the "black-box via CLI/API" decision in docs/agent-context.md.
 
 Test vectors are mirrored from lib/portage/tests/versions/test_vercmp.py so
-the pilot is graded against the same cases the Python implementation is
+portuale is graded against the same cases the Python implementation is
 already known to satisfy.
 """
 

@@ -1,5 +1,5 @@
-Title: Pilot news: relevant only if an uninstalled package is present
-Author: Pilot Test <pilot@example.org>
+Title: Portuale news: relevant only if an uninstalled package is present
+Author: Portuale Test <portuale@example.org>
 Content-Type: text/plain
 Posted: 2026-09-03
 Revision: 1

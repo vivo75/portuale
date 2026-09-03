@@ -177,7 +177,7 @@ fn regen_one(
 /// `name\tmd5\tname\tmd5...` (`serialize_eclasses(..., "md5")`). Built
 /// from the `depend` phase's own `INHERITED` list -- for each eclass
 /// name, md5 of `<repo>/eclass/<name>.eclass` (this repo only; a
-/// masters-chain lookup is a documented cut, none of this pilot's
+/// masters-chain lookup is a documented cut, none of portuale's
 /// fixture ebuilds inherit). `None` when nothing was inherited.
 fn eclasses_field(
     md: &std::collections::HashMap<String, String>,

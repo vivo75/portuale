@@ -49,7 +49,7 @@
 // the leftover-positional-args list rather than rejecting it outright
 // -- in practice this usually surfaces later as a confusing "does not
 // end with '.ebuild'" error instead of a clear "unrecognized option"
-// one. This pilot deliberately reports an unrecognized option
+// one. Portuale deliberately reports an unrecognized option
 // immediately and specifically instead, matching the clearer error
 // philosophy `emerge`'s own CLI already uses.
 //
@@ -61,7 +61,7 @@
 // own doc comment for why `--version` is deliberately NOT implemented
 // alongside it. The help text itself is NOT a port of real bin/ebuild's
 // own argparse-generated usage block -- it's a short, honest,
-// pilot-specific summary, the same "pilot-specific summary, not a port
+// portuale-specific summary, the same "portuale-specific summary, not a port
 // of real formatting" precedent `emerge --help` already set.
 
 use crate::ebuild_merge;
@@ -79,7 +79,7 @@ fn wants_help(args: &[String]) -> bool {
     args.iter().any(|arg| arg == "--help" || arg == "-h")
 }
 
-/// A short, honest, pilot-specific summary -- not a port of real
+/// A short, honest, portuale-specific summary -- not a port of real
 /// bin/ebuild's own argparse-generated usage block (see the module doc
 /// comment for why).
 fn print_help() {
@@ -134,7 +134,7 @@ pub fn run(args: &[String]) -> ExitCode {
     // `--shell bash|brush` (default `bash`): selects which real shell
     // backend executes every phase/hook/misc-function below -- see
     // `ebuild_phases::ShellBackend`'s own doc comment (including why the
-    // default is `bash`, not the embedded `brush`). A pilot-only flag,
+    // default is `bash`, not the embedded `brush`). A portuale-only flag,
     // not a real `bin/ebuild` option at all, so it's checked here
     // directly rather than through `ebuild_options::lookup_option`
     // (deliberately NOT added to `ebuild_options::OPTIONS`, which is
@@ -214,12 +214,12 @@ pub fn run(args: &[String]) -> ExitCode {
 
     // Real execution (task #54/#55, ebuild_phases's/ebuild_merge's/
     // ebuild_unmerge's/ebuild_package's own module doc comments) only
-    // when EVERY requested command is one this pilot actually implements
+    // when EVERY requested command is one portuale actually implements
     // for real (the actionmap_deps-chained phase subset, plus
     // `merge`/`qmerge`/`unmerge`/`package`/`config`/`info`/`prerm`/
     // `postrm`) -- a
     // deliberate, simple v1 boundary: no partial-real-execution ambiguity
-    // when a request mixes a real command with one this pilot still only
+    // when a request mixes a real command with one portuale still only
     // dry-runs (e.g. `ebuild foo.ebuild compile clean`). A purely dry-run
     // request keeps the exact pre-existing stub message unchanged.
     if commands.iter().all(|cmd| {
@@ -383,7 +383,7 @@ mod tests {
     #[test]
     fn accepts_a_real_command_and_still_prints_the_stub_marker() {
         // "clean" is a real ebuild command (doebuild()'s own
-        // validcommands list) that this pilot still doesn't implement
+        // validcommands list) that portuale still doesn't implement
         // for real (unlike "merge"/"qmerge"/"package"/"config"/"info"/
         // the actionmap_deps-chained phases) -- exactly the case the
         // dry-run stub still needs to cover.

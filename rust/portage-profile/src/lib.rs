@@ -33,7 +33,7 @@
 //     `USE_EXPAND` bullet further below for the follow-up that closed
 //     both.
 //   - Real config.py's `USE_ORDER` is
-//     `env:pkg:conf:defaults:pkginternal:features:repo:env.d`. This pilot
+//     `env:pkg:conf:defaults:pkginternal:features:repo:env.d`. Portuale
 //     now models the whole chain: `env.d` (`/etc/profile.env`'s `USE=`,
 //     the lowest tier), `repo` (each repo's `make.defaults` USE then
 //     repo-level `package.use`), `features` (`FEATURES=test` -> `test`),
@@ -65,7 +65,7 @@
 //     overlay's own `package.mask` (only `package.mask` -- real portage
 //     never consults masters for `package.unmask`) also now stacks with
 //     its implicit `masters` default (the main repo alone, since this
-//     pilot doesn't parse an explicit `masters =` repos.conf key). Still
+//     portuale doesn't parse an explicit `masters =` repos.conf key). Still
 //     out of scope: eclass inheritance via `masters`, and an explicit
 //     `masters =` override/multi-master chain.
 //   - `package.accept_keywords` is stacked from profile-chain (in chain
@@ -73,7 +73,7 @@
 //     getPKeywords` exactly -- confirmed by reading it, there's no
 //     repo-level source for this file in real portage at all (unlike
 //     `package.mask`'s repo-level `profiles/package.mask`). Purely
-//     additive, like the pilot's own pre-existing user-level-only
+//     additive, like portuale's own pre-existing user-level-only
 //     handling always was: no `-atom` removal exists for this file in
 //     real portage either, so every matching source's keyword tokens are
 //     just unioned together (see `is_visible`). A bare atom with no
@@ -81,7 +81,7 @@
 //     implicit `~arch` meaning at *both* levels (see
 //     `parse_package_accept_keywords_lines`'s own doc comment) --
 //     confirmed by reading `KeywordsManager.__init__` itself: contrary
-//     to this pilot's own earlier assumption, the *user*-level source
+//     to portuale's own earlier assumption, the *user*-level source
 //     gets the identical substitution too (baked in at load time,
 //     `self.pkeywordsdict`), not just the profile-level one
 //     (`getPKeywords`'s own read-time substitution).
@@ -94,7 +94,7 @@
 //         repo, overlays `::repo`-scoped via
 //         `scope_repo_package_use_lines`) -> `Config::package_use_repo`,
 //         real `configdict["repo"]` -- applied *before* the ebuild's own
-//         IUSE `+`/`-` defaults, the weakest USE layer this pilot models.
+//         IUSE `+`/`-` defaults, the weakest USE layer portuale models.
 //       * every profile level's own `package.use` (chain order) ->
 //         `Config::profile_use_layers`, real `configdict["defaults"]` --
 //         the `defaults` tier is walked one profile at a time, each
@@ -158,14 +158,14 @@
 //     `stack_mask_lines`) -- confirmed by reading `UseManager.
 //     getUseMask`/`getUseForce`'s own `pkg=None` case, the one real
 //     `config.py`'s `regenerate()` actually calls to build the *global*
-//     `USE` value this pilot's flat model corresponds to: it returns
+//     `USE` value portuale's flat model corresponds to: it returns
 //     `stack_lists(self._usemask_list/self._useforce_list,
 //     incremental=True)` directly, never touching a repo-level or
 //     per-package source at all here -- those only exist on the
 //     *per-package* path (`pkg` not `None`), see the
 //     `package.use.mask`/`.force` bullet further below for that follow-up.
 //     Deliberately NOT folded into `use_flags` here at all (an earlier
-//     version of this pilot did, which was wrong): real `regenerate()`
+//     version of portuale did, which was wrong): real `regenerate()`
 //     applies `self.useforce`/`self.usemask` (which `setcpv()` sets to
 //     the *per-package* `getUseForce(pkg)`/`getUseMask(pkg)` -- global
 //     `use.force`/`use.mask` combined with the atom-scoped
@@ -192,7 +192,7 @@
 //     confirmed by reading
 //     `UseManager.__init__`'s own file/variable table that there's no
 //     user-level source for either file at all (unlike `package.use`
-//     itself), so this pilot doesn't invent one. Stored flat, same as
+//     itself), so portuale doesn't invent one. Stored flat, same as
 //     `package_use`; `portage-repo`'s own `effective_use_flags` decides
 //     which entries actually apply to a given candidate and in what
 //     order -- see that crate's doc comment for the atom-specificity
@@ -211,10 +211,10 @@
 //     list (e.g. `VIDEO_CARDS PYTHON_TARGETS`) accumulates incrementally
 //     across the profile chain and `make.conf`, the same mechanism
 //     `USE`/`ACCEPT_KEYWORDS` already use; each named variable's own
-//     VALUE is read via this pilot's own pre-existing "last-level-wins,
+//     VALUE is read via portuale's own pre-existing "last-level-wins,
 //     no incremental merge" scalar mechanism (the same one `ARCH`
 //     already uses -- real portage is genuinely per-variable-incremental
-//     here, but this pilot's own blanket "no incremental merge outside
+//     here, but portuale's own blanket "no incremental merge outside
 //     USE/ACCEPT_KEYWORDS" cut, confirmed above, already covers every
 //     other such variable, so this just extends it rather than inventing
 //     a new one) and expanded into lowercase-`varname_`-prefixed
@@ -245,7 +245,7 @@
 //     for EAPI 5+, honoured only by `emerge --pretend -v`'s own
 //     `USE_EXPAND` grouping (`portage_repo`), never by resolution.
 //   - `use.stable.mask`/`.force`/`package.use.stable.mask`/`.force`
-//     (PMS 5+, always recognized here per this pilot's own "no EAPI
+//     (PMS 5+, always recognized here per portuale's own "no EAPI
 //     parametrization" precedent) ARE now read too, closing the
 //     stable-vs-`~arch` cut named above: ported as `portage-repo`'s own
 //     `is_stable`, grounded against real `KeywordsManager.isStable` --
@@ -262,10 +262,10 @@
 //     `portage-repo`'s own `effective_use_flags` applies these
 //     conditionally instead, once it knows a specific candidate's own
 //     stability. `use.stable.mask`/`.force` read from the profile chain
-//     only (matching this pilot's own already-established profile-only
+//     only (matching portuale's own already-established profile-only
 //     sourcing for the non-stable global files, not real per-package
 //     `getUseMask`/`getUseForce`'s own additional repo-level source for
-//     them, which this pilot's global mechanism never had either);
+//     them, which portuale's global mechanism never had either);
 //     `package.use.stable.mask`/`.force` read repo-level (every repo,
 //     `::repo`-scoped) plus profile-chain, mirroring
 //     `package.use.mask`/`.force`'s own sourcing exactly, no user-level
@@ -278,7 +278,7 @@
 // *except* USE, which is reset before each level's make.defaults is
 // parsed. This stops a parent profile's accumulated USE from leaking into
 // a child's own `USE="${USE} flag"` self-append. In the flat, single-set
-// consumption model this pilot uses (no package.use interaction, unlike
+// consumption model portuale uses (no package.use interaction, unlike
 // the real bug this quirk guards against), that particular scenario
 // usually doesn't change the final *set* of enabled flags -- it's ported
 // anyway for fidelity with the real algorithm, since it's cheap to do and
@@ -355,7 +355,7 @@ pub struct Config {
     /// from `<eroot>/etc/profile.env` (which `env-update` generates from
     /// `/etc/env.d/*`). Read `expand=False`, `export ` prefix stripped.
     /// `effective_use_flags` replays these first, before the `repo` tier,
-    /// so everything else overrides them. The pilot reads `profile.env`
+    /// so everything else overrides them. Portuale reads `profile.env`
     /// relative to `config_root` rather than a distinct `eroot` (they
     /// coincide in every tested and typical configuration -- a documented
     /// divergence, the same one every other config_root-relative read in
@@ -379,7 +379,7 @@ pub struct Config {
     /// `::repo`-scoped (`scope_repo_package_use_lines`); the main repo's
     /// stay unscoped (it implicitly masters every overlay). Applied by
     /// `effective_use_flags` *first*, before the ebuild's own IUSE
-    /// `+`/`-` defaults -- the weakest USE layer this pilot models.
+    /// `+`/`-` defaults -- the weakest USE layer portuale models.
     /// Tokens use the same `-flag`/`flag`/`+flag` incremental syntax as
     /// `USE` itself -- see `apply_incremental`.
     pub package_use_repo: Vec<(String, Vec<String>)>,
@@ -406,7 +406,7 @@ pub struct Config {
     /// when `FEATURES` contains `test`, so a package that declares `test`
     /// in IUSE resolves with it enabled (the make.conf/env equivalent of
     /// `--with-test-deps`). Applied by `effective_use_flags` between the
-    /// `repo` and `pkginternal` tiers. `["test"]` or empty; the pilot's
+    /// `repo` and `pkginternal` tiers. `["test"]` or empty; portuale's
     /// `FEATURES` is a last-wins scalar (`other_vars["FEATURES"]`), a
     /// documented simplification of real portage's incremental stacking.
     pub features_use: Vec<String>,
@@ -461,18 +461,18 @@ pub struct Config {
     /// `package.use`'s own USE on top (`config.py:2042-2048`), so a
     /// user `package.use` flag wins over a `package.env` one. A
     /// referenced file that doesn't exist contributes nothing (silently
-    /// -- the pilot's standing "no warnings from deep in config
+    /// -- portuale's standing "no warnings from deep in config
     /// resolution" precedent).
     pub package_env_use: Vec<(String, Vec<String>)>,
     /// (atom-or-wildcard string, ordered `(KEY, value)` pairs) derived
     /// from [`Config::package_env`]: for each entry, every referenced
     /// `/etc/portage/env/<name>` file's **non-`USE`** `KEY=value`
     /// assignments, concatenated in file order. Real `_grab_pkg_env`
-    /// folds every key into `configdict["pkg"]`; the pilot consumes the
+    /// folds every key into `configdict["pkg"]`; portuale consumes the
     /// deterministic build-var subset (`CFLAGS`, `CXXFLAGS`, `LDFLAGS`,
     /// `MAKEOPTS`, `CHOST`, …) as a per-package override of the run-wide
     /// build-phase env. `FEATURES` and other incrementals are a
-    /// documented cut (the pilot models `FEATURES` via its own
+    /// documented cut (portuale models `FEATURES` via its own
     /// `feature_enabled`). Not consumed by `--pretend` (a build-phase
     /// concern only), so unlike [`Config::package_env_use`] it has no
     /// Python-reference mirror.
@@ -494,11 +494,11 @@ pub struct Config {
     /// real portage cp-keys this into a dict, but `match_from_list`
     /// already filters by cp, so the flat list is equivalent). Each line
     /// should be a bare CPV -- real portage validates with `isvalidatom(
-    /// "=" + line)` and drops invalid ones with a warning; this pilot
+    /// "=" + line)` and drops invalid ones with a warning; portuale
     /// carries every stacked line through and lets `match_from_list`
     /// simply never match a malformed one (a documented simplification).
     /// The real EAPI 7+ gate (`allows_package_provided`, disallowed for
-    /// EAPI 7+) is NOT ported: this pilot tracks no per-profile-level
+    /// EAPI 7+) is NOT ported: portuale tracks no per-profile-level
     /// EAPI, consistent with its "no EAPI parametrization within the 5+
     /// floor" precedent (and EAPI 5 -- what every fixture profile is --
     /// does allow it).
@@ -527,7 +527,7 @@ pub struct Config {
     /// user-level source for this file at all (confirmed by reading
     /// `UseManager.__init__`'s own file/variable table) -- see the module
     /// doc comment's `package.use.mask`/`.force` bullet for the full
-    /// scope writeup, including the deliberate simplifications this pilot
+    /// scope writeup, including the deliberate simplifications portuale
     /// makes applying these per package.
     pub package_use_force: Vec<(String, Vec<String>)>,
     /// (atom-or-wildcard string, flag tokens) pairs from `package.use.mask`.
@@ -608,7 +608,7 @@ pub struct Config {
     /// `package.use.stable.mask`/`.force` scope writeup, including the
     /// deliberate simplification of not also adding the repo-level
     /// sourcing real per-package `getUseForce(pkg)` has for the
-    /// *non-stable* global file (which this pilot's own `use_force`
+    /// *non-stable* global file (which portuale's own `use_force`
     /// never had either, profile-chain-only, so the stable variant stays
     /// consistent with it rather than gaining new capability the
     /// non-stable one lacks).
@@ -629,7 +629,7 @@ pub struct Config {
     /// module doc comment's own "implicit IUSE" bullet for the full scope
     /// writeup, including the deliberate simplification of not also
     /// modeling `USE_EXPAND_HIDDEN`-derived regex flags (`elibc_.*` etc.)
-    /// -- a bigger, separate feature this pilot doesn't otherwise model
+    /// -- a bigger, separate feature portuale doesn't otherwise model
     /// (no ELIBC/KERNEL/USERLAND support at all).
     pub archlist: HashSet<String>,
     /// (atom-or-wildcard string, flag tokens) pairs from
@@ -671,7 +671,7 @@ pub struct Config {
     /// application). Deliberately last-level-wins (profile chain, then
     /// make.conf), not genuinely incremental across sources the way real
     /// portage's own `ACCEPT_LICENSE` is (`prune_incremental` over every
-    /// source's own raw tokens) -- extends this pilot's own pre-existing
+    /// source's own raw tokens) -- extends portuale's own pre-existing
     /// "any variable other than USE/ACCEPT_KEYWORDS is a plain last-
     /// level-wins scalar" cut (see the module doc comment) to this one
     /// too, rather than inventing a new, ACCEPT_LICENSE-specific
@@ -687,13 +687,13 @@ pub struct Config {
     /// also reading a profile-level `package.license` via its own
     /// `profile-license` profile-format marker, a rare, opt-in newer
     /// feature deliberately NOT replicated here, same "narrow, rare real
-    /// sourcing variant" cut this pilot already makes elsewhere).
+    /// sourcing variant" cut portuale already makes elsewhere).
     /// Real portage's own `*/*`-line "extract into the global
     /// `ACCEPT_LICENSE` instead of a real per-package entry" quirk
     /// (`extract_global_changes`) is deliberately NOT replicated either
     /// -- a `*/*` line here is just an ordinary (if unusual) per-package
     /// entry, matched via the same wildcard-atom machinery every other
-    /// `*/*` entry in this pilot already uses.
+    /// `*/*` entry in portuale already uses.
     pub package_license: Vec<(String, Vec<String>)>,
     /// `ACCEPT_PROPERTIES`, last-level-wins scalar (same reasoning as
     /// `accept_license`'s own doc comment -- real config.py's own
@@ -703,13 +703,13 @@ pub struct Config {
     /// handling, which never touches `LicenseManager`). Real portage's
     /// own default when unset anywhere -- `"*"` -- comes from
     /// `cnf/make.globals` (a real, always-sourced config layer this
-    /// pilot doesn't model as an actual read file), so it's replicated
+    /// portuale doesn't model as an actual read file), so it's replicated
     /// here as a hardcoded fallback, the same "real default, ported
     /// without modeling the file it technically comes from" approach
     /// `accept_license`'s own `"* -@EULA"` already takes (there, the
     /// default is a genuine Python-level hardcoded fallback even in
     /// real portage itself, not read from any file at all -- a slightly
-    /// different real mechanism arriving at the same pilot-side
+    /// different real mechanism arriving at the same portuale-side
     /// treatment).
     pub accept_properties: Vec<String>,
     /// (atom-or-wildcard string, raw tokens) pairs from
@@ -759,7 +759,7 @@ pub struct Config {
     /// `--usepkgonly` wasn't given (binary candidates aren't eligible
     /// anyway). `portage-repo` builds a `BinaryIndex` from this when set,
     /// or reads `<pkgdir>/Packages` when not. Not written back to disk --
-    /// real portage caches it as `Packages`; this pilot recomputes each
+    /// real portage caches it as `Packages`; portuale recomputes each
     /// run, so `--pretend` still writes nothing.
     pub scanned_binpkgs: Option<Vec<std::collections::HashMap<String, String>>>,
     /// Every non-USE/ACCEPT_KEYWORDS variable's final scalar value
@@ -889,17 +889,17 @@ pub fn apply_incremental(tokens: &str, set: &mut HashSet<String>) {
     }
 }
 
-/// Config variables the pilot honours from the **process environment** --
+/// Config variables portuale honours from the **process environment** --
 /// real `config.regenerate()`'s `env` `USE_ORDER` layer, the
 /// highest-priority config source (`ACCEPT_KEYWORDS=~amd64 emerge foo`,
 /// `USE="-X" emerge bar`, …). Real portage passes nearly all of
-/// `os.environ` through `backupenv`; this pilot uses a curated allowlist
+/// `os.environ` through `backupenv`; portuale uses a curated allowlist
 /// instead -- it only reads a fixed set of config vars, and folding
 /// `PATH`/`HOME`/… into `other_vars` would pollute `emerge --info`.
 ///
-/// The first list is real `INCREMENTALS` the pilot models (stacked onto
+/// The first list is real `INCREMENTALS` portuale models (stacked onto
 /// the profile chain + `make.conf` via `apply_incremental`); the second
-/// is plain last-wins scalars the pilot reads out of `scalars` /
+/// is plain last-wins scalars portuale reads out of `scalars` /
 /// `other_vars` later. `USE_EXPAND` *variable values* (`VIDEO_CARDS=…`)
 /// are handled separately, in the expansion loop, once their names are
 /// known.
@@ -1233,10 +1233,10 @@ fn visit_profile(
 
 /// Resolves `source <path>` directives against `config_root` as if it
 /// were `/` (chroot-style), matching PORTAGE_CONFIGROOT/ROOT semantics
-/// elsewhere in this pilot -- an absolute `source /etc/make.local` reads
+/// elsewhere in portuale -- an absolute `source /etc/make.local` reads
 /// `<config_root>/etc/make.local`, not the real host path. A missing
 /// sourced file is silently skipped (lenient default; real bash would
-/// error, but no fixture or real usage in this pilot relies on that).
+/// error, but no fixture or real usage in portuale relies on that).
 fn process_make_conf_file(
     path: &Path,
     config_root: &Path,
@@ -1299,7 +1299,7 @@ fn process_make_conf_file(
 /// uses; a `${VAR}` in a value is left literal (this slice has no
 /// per-file expand map -- real portage seeds one from the global
 /// config, a documented simplification). A missing file yields an empty
-/// list (real portage warns from `setcpv`; this pilot follows its
+/// list (real portage warns from `setcpv`; portuale follows its
 /// standing "no warnings from deep in config resolution" precedent).
 /// `visited` guards a `source` cycle.
 fn read_env_file_kv(
@@ -1406,7 +1406,7 @@ fn read_envd_use_tokens(config_root: &Path) -> Vec<String> {
 }
 
 /// Reads every non-comment, non-blank, trimmed line from `path`, which
-/// may be a single file or (like `repos.conf` elsewhere in this pilot) a
+/// may be a single file or (like `repos.conf` elsewhere in portuale) a
 /// directory of files merged in sorted-filename order. A missing path
 /// yields an empty list, not an error.
 fn read_config_lines(path: &Path) -> Result<Vec<String>, String> {
@@ -1507,7 +1507,7 @@ fn scope_repo_package_use_lines(lines: &[String], repo_name: &str) -> Vec<String
 /// (e.g. a user-level `-atom` in `package.mask` can remove an atom the
 /// repo or a profile level added). Shared between `package.mask` and
 /// `package.unmask`, which real portage stacks identically -- unlike
-/// this pilot's previous, user-level-only `package.unmask` handling,
+/// portuale's previous, user-level-only `package.unmask` handling,
 /// which treated a leading `-` there as meaningless; it's meaningful
 /// once more than one source can contribute an unmask entry.
 ///
@@ -1636,9 +1636,9 @@ fn parse_license_groups_lines(lines: &[String]) -> HashMap<String, Vec<String>> 
 /// for a genuinely undefined group name (never declared in any
 /// `license_groups` file at all) -- both deliberately silent here (no
 /// stderr warning), unlike real portage's own `writemsg`, since this
-/// pilot has no precedent for emitting warnings to stderr from deep
+/// portuale has no precedent for emitting warnings to stderr from deep
 /// inside config resolution (every other real portage warning-only path
-/// in this pilot is silently skipped the same way).
+/// in portuale is silently skipped the same way).
 fn expand_license_token(token: &str, groups: &HashMap<String, Vec<String>>) -> Vec<String> {
     fn expand(
         token: &str,
@@ -1716,7 +1716,7 @@ fn expand_license_tokens(tokens: &[String], groups: &HashMap<String, Vec<String>
 /// has no such expansion step, so a `VIDEO_CARDS:` token in a
 /// repo-level or profile-level `package.use` file is (in real portage)
 /// just a literal, almost-certainly-invalid USE token, not shorthand at
-/// all. This is genuine real behavior, not a pilot-invented
+/// all. This is genuine real behavior, not a portuale-invented
 /// restriction -- see `resolve_config`'s own call sites.
 fn parse_package_use_lines(
     lines: &[String],
@@ -1788,7 +1788,7 @@ fn parse_package_use_lines(
 /// package in the main repo or another overlay, which real portage's
 /// own scoping specifically prevents. Deliberately asymmetric,
 /// confirmed while implementing this: the main repo's own entries above
-/// stay unscoped, matching this pilot's own pre-existing (unchanged)
+/// stay unscoped, matching portuale's own pre-existing (unchanged)
 /// behavior -- real portage scopes *every* repo's own repo-level
 /// entries this same way, including the main repo's, so a `package.mask`
 /// entry from main only masking main's own packages (not an
@@ -1798,8 +1798,8 @@ fn parse_package_use_lines(
 /// `package.mask`, real `MaskManager.py`'s own `package.unmask` loop
 /// never consults masters at all -- stacks with its declared masters'
 /// own lines before repo-scoping) is now modeled to the extent every
-/// fixture in this pilot ever needs: a repo with no explicit
-/// `masters =` (this pilot doesn't parse that `repos.conf` key at all
+/// fixture in portuale ever needs: a repo with no explicit
+/// `masters =` (portuale doesn't parse that `repos.conf` key at all
 /// yet) implicitly masters the main repo alone, real `config.py`'s own
 /// `repo.masters = (self.mainRepo(),)` default -- every overlay here
 /// gets exactly that, the main repo gets `()` (itself, since it can
@@ -1835,7 +1835,7 @@ fn parse_package_use_lines(
 /// `(alias, location)` pair. (An atom's own `::alias` is a *different*
 /// thing and is deliberately NOT resolved -- real `match_from_list` does
 /// a straight `pkg.repo == atom.repo` name comparison with no alias
-/// step, and this pilot matches that.)
+/// step, and portuale matches that.)
 pub fn resolve_config(
     config_root: &Path,
     main_repo_location: &Path,
@@ -1955,7 +1955,7 @@ pub fn resolve_config(
     // aren't known until `USE_EXPAND` itself is finalized above, so the
     // env override is folded into `scalars` here, right before both
     // expansion loops read them. Real portage treats each as its own
-    // incremental; the pilot's last-wins `scalars` model just lets the
+    // incremental; portuale's last-wins `scalars` model just lets the
     // env value replace the profile/`make.conf` one.
     let env_expand_names: Vec<String> = config
         .use_expand
@@ -2026,7 +2026,7 @@ pub fn resolve_config(
     // `Config::iuse_effective`'s own doc comment for what this grants a
     // candidate's `is_valid_flag` domain on top of its declared `IUSE`.
     // Deliberately a plain scalar read of each `USE_EXPAND_VALUES_<v>`
-    // (this pilot's established "no incremental merge outside USE/
+    // (portuale's established "no incremental merge outside USE/
     // ACCEPT_KEYWORDS" cut -- `USE_EXPAND_VALUES_*` isn't even in real
     // portage's own INCREMENTALS list anyway).
     config.iuse_effective = config.iuse_implicit.clone();
@@ -2059,19 +2059,19 @@ pub fn resolve_config(
     // which returns stack_lists(self._usemask_list/self._useforce_list,
     // incremental=True) directly, never consulting a repo-level or
     // per-package source at all (those only exist on the *per-package*
-    // path, out of scope for this pilot's flat/global USE model, same
+    // path, out of scope for portuale's flat/global USE model, same
     // as package.use's own repo/profile/user-only sourcing already is).
     // NOT folded into `use_flags` here -- real config.py's own
     // `regenerate()` applies `self.useforce`/`self.usemask` (which
     // `setcpv()` sets to the *per-package* `getUseForce(pkg)`/
     // `getUseMask(pkg)` -- global use.force/use.mask combined with the
-    // atom-scoped package.use.force/.mask this pilot already applies
+    // atom-scoped package.use.force/.mask portuale already applies
     // per-candidate) as the literal *last* step of its own incremental
     // USE walk (`lib/portage/package/ebuild/config.py`, ~line 3024:
     // `myflags.update(self.useforce); ...;
     // myflags.difference_update(self.usemask)`), strictly *after* the
     // `pkg` (`package.use`) tier -- not folded in early alongside
-    // `defaults`/`conf` the way this pilot previously (incorrectly) did,
+    // `defaults`/`conf` the way portuale previously (incorrectly) did,
     // which let a `package.use` entry override a global force/mask
     // decision real portage never lets it override. See
     // `portage-repo`'s own `effective_use_flags` doc comment for where
@@ -2100,7 +2100,7 @@ pub fn resolve_config(
     // .unmask, including the main repo's own -- not just an overlay's,
     // confirmed by reading MaskManager.py's own repo_pkgmasklines/
     // repo_pkgunmasklines loop (`for repo in repositories.
-    // repos_with_profiles()`, unconditional). This pilot previously left
+    // repos_with_profiles()`, unconditional). Portuale previously left
     // the main repo's own entries unscoped, a genuine, documented gap
     // (see this function's own earlier doc comment on the overlay
     // scoping work): an identically-named package.mask atom from main
@@ -2132,7 +2132,7 @@ pub fn resolve_config(
         // scoping. No entry for `repo_name` in `repo_masters` at all
         // (every pre-existing test call site, which never populates this
         // map) falls back to the same "main repo alone" default this
-        // pilot always used before `masters =` parsing existed, so
+        // portuale always used before `masters =` parsing existed, so
         // nothing already-tested changes behavior. Simplified from real
         // `MaskManager.py`'s own per-master `stack_lists` (which stacks
         // each master separately against the repo's own lines, then
@@ -2141,7 +2141,7 @@ pub fn resolve_config(
         // attributed correctly) to one flat `stack_mask_lines` call over
         // every master's lines followed by the repo's own -- produces
         // the identical final masked-atom set for the common case (no
-        // fixture in this pilot exercises the exotic case where two
+        // fixture in portuale exercises the exotic case where two
         // masters' own "-atom" removals would need to be told apart).
         let masters = repo_masters
             .get(repo_name)
@@ -2165,7 +2165,7 @@ pub fn resolve_config(
         // only ever stacks a repo's own lines against itself
         // (`stack_lists([repo_lines], incremental=1, ...)`, no masters
         // iteration at all), a real asymmetry in real portage itself,
-        // not a simplification on this pilot's part.
+        // not a simplification on portuale's part.
         unmask_sources.push(scope_repo_mask_lines(
             &read_config_lines(&repo_location.join("profiles/package.unmask"))?,
             repo_name,
@@ -2291,7 +2291,7 @@ pub fn resolve_config(
     .collect();
 
     // `configdict["features"]["USE"]` -- real `config.py` appends `test`
-    // to this tier when `FEATURES` names it. The pilot's `FEATURES` is a
+    // to this tier when `FEATURES` names it. Portuale's `FEATURES` is a
     // last-wins scalar (make.conf / profile `make.defaults` / the `env`
     // layer, whichever set it last), a documented simplification.
     let features_has_test = scalars
@@ -2395,7 +2395,7 @@ pub fn resolve_config(
     // use.stable.mask/use.stable.force (PMS 5+; real
     // eapi_supports_stable_use_forcing_and_masking's own EAPI floor,
     // always recognized here -- see this crate's own module doc comment
-    // for this pilot's established "no EAPI parametrization"
+    // for portuale's established "no EAPI parametrization"
     // precedent): profile-chain only, same -atom-removal stacking
     // use_force/use_mask already get -- deliberately NOT folded into
     // use_flags here; see use_stable_force's own doc comment for why.
@@ -2504,7 +2504,7 @@ pub fn resolve_config(
     config.license_groups = license_groups;
 
     // ACCEPT_LICENSE: last-level-wins scalar (see `accept_license`'s own
-    // doc comment for why, and the real "* -@EULA" default this pilot
+    // doc comment for why, and the real "* -@EULA" default portuale
     // replicates when it's never set anywhere at all) -- `scalars`
     // already holds whatever the profile chain + make.conf left it as,
     // via the same catch-all `scalars.insert` every other scalar
@@ -2592,7 +2592,7 @@ fn read_to_string_opt(path: &Path) -> String {
 /// (repo.priority or 0, repo.name or repo.name_fallback))`.
 ///
 /// **Documented narrowings**: the implicit-entry name is `md5(uri)` in
-/// real portage; this pilot has no md5, so it uses the URI's own
+/// real portage; portuale has no md5, so it uses the URI's own
 /// `host/path` (still stable and unique per URI, only ever surfaced as a
 /// sort key here). `[DEFAULT]` interpolation, `getbinpkg-exclude`/
 /// `-include`, `fetchcommand`/`resumecommand`, signature-verification
@@ -2642,7 +2642,7 @@ fn parse_binrepos(binrepos_conf: &str, portage_binhost: &str) -> Vec<BinRepo> {
         if let Some((k, v)) = line.split_once('=') {
             match k.trim() {
                 // `${VAR}` in `sync-uri` expands from the environment
-                // (pilot convenience -- real configparser doesn't -- so a
+                // (portuale convenience -- real configparser doesn't -- so a
                 // fixture can use `file://${PORTAGE_CONFIGROOT}/binhost`
                 // instead of an absolute, non-relocatable path).
                 "sync-uri" => sync_uri = Some(substitute(v.trim(), &HashMap::new())),
@@ -3785,7 +3785,7 @@ sync-uri = file:///srv/pkgs
         // when a flag is both forced AND masked, matching real
         // regenerate()'s update-then-difference_update order).
         // use_force/use_mask stack correctly across levels -- but,
-        // unlike an earlier version of this pilot, are deliberately NOT
+        // unlike an earlier version of portuale, are deliberately NOT
         // folded into use_flags at all: real regenerate() applies them
         // as the literal last step of its own incremental USE walk,
         // strictly after package.use, so `use_flags` here stays exactly
@@ -4069,7 +4069,7 @@ sync-uri = file:///srv/pkgs
         // Profile-level entry for "a", user-level entry for "b" -- both
         // must appear, in that order (profile-chain first, matching real
         // KeywordsManager.getPKeywords), proving there's no repo-level
-        // source at all (only the pilot's existing repo/profiles/package.mask
+        // source at all (only portuale's existing repo/profiles/package.mask
         // convention would exist if there were one, and this test
         // deliberately never creates that file).
         let root = std::env::temp_dir().join("portage-profile-test-accept-keywords-stack");

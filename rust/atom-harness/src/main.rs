@@ -1,4 +1,4 @@
-// Neutral CLI test-harness binary for the atom-matching pilot (see
+// Neutral CLI test-harness binary for portuale's atom matching (see
 // docs/agent-context.md and rust/portage-dep/src/lib.rs for the v1
 // grammar this implements). Same argv/output contract as
 // python/atom_harness.py.
@@ -17,7 +17,7 @@ use std::process::ExitCode;
 
 /// Reconstructs one use-dep token's canonical text ("{prefix}{flag}{default}{suffix}"),
 /// matching real `a.use.tokens`' own original-text preservation byte for
-/// byte, since this pilot's grammar doesn't normalize anything the token
+/// byte, since portuale's grammar doesn't normalize anything the token
 /// regex didn't already require.
 fn format_use_dep(u: &UseDep) -> String {
     let (prefix, suffix) = match u.op {

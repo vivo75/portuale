@@ -152,12 +152,12 @@ def fixtures_root() -> Path:
 @pytest.fixture
 def fixture_env() -> dict[str, str]:
     """PORTAGE_CONFIGROOT/ROOT pointed at fixtures, the synthetic
-    repo+vdb tree the emerge --pretend pilot slice is tested against.
+    repo+vdb tree the emerge --pretend contract is tested against.
     DISTDIR points at the committed fixtures/distfiles/ so the
     `f`/`F` fetch-restrict bracket column has a deterministic on-disk
     state to check against.
 
-    PORTAGE_RUNNING_ROOT is pinned to the same fixture ROOT: the pilot
+    PORTAGE_RUNNING_ROOT is pinned to the same fixture ROOT: portuale
     now routes BDEPEND/IDEPEND against the running root whenever it
     differs from the target ROOT (real EAPI-7+ portage does this
     unconditionally -- see running_root_from_env's doc comment), so

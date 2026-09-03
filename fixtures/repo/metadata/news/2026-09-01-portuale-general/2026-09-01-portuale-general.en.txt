@@ -1,5 +1,5 @@
-Title: Pilot news: a general item with no restrictions
-Author: Pilot Test <pilot@example.org>
+Title: Portuale news: a general item with no restrictions
+Author: Portuale Test <portuale@example.org>
 Content-Type: text/plain
 Posted: 2026-09-01
 Revision: 1

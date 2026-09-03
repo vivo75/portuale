@@ -15,7 +15,7 @@
 // reader already parses, closing the loop: a package built this way is
 // immediately visible to `emerge --pretend --usepkg`.
 //
-// KNOWN, DOCUMENTED GAPS (v1 scope, matching this whole pilot's own
+// KNOWN, DOCUMENTED GAPS (v1 scope, matching portuale's own
 // "narrow v1, document the cut" pattern):
 //   - `BINPKG_FORMAT` (`"xpak"` -- real portage's own first-listed
 //     `SUPPORTED_GENTOO_BINPKG_FORMATS` default -- or `"gpkg"`) is real
@@ -24,12 +24,12 @@
 //     compress` (real `portage.gpkg.gpkg().compress()`, no
 //     reimplementation) exactly the way the `"xpak"` branch already
 //     shells out to `bin/xpak-helper.py recompose`, producing a genuine
-//     `${PKGDIR}/${CATEGORY}/${PF}.gpkg.tar` this pilot's own
+//     `${PKGDIR}/${CATEGORY}/${PF}.gpkg.tar` portuale's own
 //     `binpkg::read_gpkg_metadata` reader round-trips. Anything other
 //     than those two values is `Err("Unknown BINPKG_FORMAT ...")`, real
 //     `__dyn_package`'s own `die`. Cuts: no gpkg signing
 //     (`FEATURES=binpkg-signing`/`binpkg-request-signature` -- the same
-//     "this pilot has no crypto" cut the reader's `Manifest`/`.sig`
+//     "portuale has no crypto" cut the reader's `Manifest`/`.sig`
 //     verification already documents), no `BUILD_ID` in the gpkg
 //     basename.
 //   - Real `PORTAGE_COMPRESSION_COMMAND` resolution (real
@@ -42,7 +42,7 @@
 //     not full config resolution" shortcut `CONFIG_PROTECT` already
 //     established; `Default` matches real `make.globals`'s own
 //     `BINPKG_COMPRESS="zstd"` (**not** `"bzip2"` -- real portage's own
-//     default changed at some point; this pilot's own previous hardcoded
+//     default changed at some point; portuale's own previous hardcoded
 //     `"bzip2 -c"` predated noticing that).
 //   - `USE` in the Packages index entry is empty for a standalone
 //     `ebuild <file> package` (no resolved graph → no resolved USE, so
@@ -71,12 +71,12 @@
 //     RPM (`__dyn_rpm`) format.
 //   - No `PKGDIR`-index locking -- a genuinely concurrent build racing
 //     another write to the same `Packages` file could interleave; this
-//     pilot's own single-invocation-at-a-time CLI usage never exercises
+//     portuale's own single-invocation-at-a-time CLI usage never exercises
 //     that.
 //   - Real `EbuildBinpkg`'s own separate `bindbapi.inject()` step (an
 //     in-memory binary-package database update, distinct from the
 //     on-disk `Packages` file write) has no equivalent here -- this
-//     pilot has no long-lived `bindbapi` process at all, only ever
+//     portuale has no long-lived `bindbapi` process at all, only ever
 //     re-reading `Packages` fresh each invocation.
 
 use crate::ebuild_merge;
@@ -187,7 +187,7 @@ fn find_binary(name: &str) -> bool {
 /// looks up `binpkg_compress` in the real `_compressors` table,
 /// substitutes `{JOBS}` (real host CPU count, matching real
 /// `makeopts_to_job_count`'s own `get_cpu_count()` fallback path --
-/// this pilot's own `MAKEOPTS` is always unset, the same path real code
+/// portuale's own `MAKEOPTS` is always unset, the same path real code
 /// takes whenever `MAKEOPTS` doesn't itself contain a `-j`/`--jobs=`
 /// value) and `${PORTAGE_BZIP2_COMMAND}`/`${BINPKG_COMPRESS_FLAGS}` (a
 /// plain, narrow `${VAR}` substitution -- not a full shell `varexpand`,
@@ -238,10 +238,10 @@ fn now_unix_time() -> Result<u64, String> {
 /// Real `<pkgdir>/Packages`'s own header block (see `portage_repo::
 /// read_packages_index`'s own doc comment: always the first, blank-
 /// line-terminated block, unconditionally skipped by every reader,
-/// real and this pilot's own alike) -- a single real field
+/// real and portuale's own alike) -- a single real field
 /// (`TIMESTAMP`) is enough to be an honest, non-empty header without
 /// needing to replicate every real field (`VERSION`/`PACKAGES`/etc.)
-/// this pilot's own reader never looks at anyway.
+/// portuale's own reader never looks at anyway.
 fn packages_index_header(now: u64) -> String {
     format!("TIMESTAMP: {now}\n")
 }
@@ -441,7 +441,7 @@ fn invoke_dyn_package(
         ("BINPKG_FORMAT".to_string(), binpkg_format.to_string()),
         // Real `bin/misc-functions.sh`'s own `xpak-helper.py`/
         // `gpkg-helper.py` invocation prefers `PORTAGE_PYTHONPATH` over
-        // `PORTAGE_PYM_PATH` (which this pilot deliberately leaves unset
+        // `PORTAGE_PYM_PATH` (which portuale deliberately leaves unset
         // -- see `ebuild_phases`'s own module doc comment) -- set
         // directly so the real, unmodified helper subprocess imports
         // `portage` from *this* checkout, not whatever else might be
@@ -458,7 +458,7 @@ fn invoke_dyn_package(
         // `${PORTAGE_BZIP2_COMMAND}` via `varexpand` -- real
         // `gpkg._get_binary_cmd`), NOT from `PORTAGE_COMPRESSION_COMMAND`
         // (that is xpak's `bin/misc-functions.sh` tar-pipe only). Export
-        // the same values this pilot already resolves at the `ebuild.rs`
+        // the same values portuale already resolves at the `ebuild.rs`
         // CLI boundary so the gpkg build is deterministic rather than
         // inheriting the host's own `make.conf`.
         extra_env.push((
@@ -867,7 +867,7 @@ mod tests {
             pkgdir: tmp.join("pkgdir"),
             distdir: tmp.join("distdir"),
             shell: ebuild_phases::ShellBackend::default(),
-            // Real xpak/tbz2 building is codec-agnostic (this pilot's
+            // Real xpak/tbz2 building is codec-agnostic (portuale's
             // own `portage_repo` binpkg reader never parses a `.tbz2`'s
             // own content, only `Packages`) -- pinned to "bzip2"
             // explicitly here (rather than the real `Default`, "zstd")
@@ -887,7 +887,7 @@ mod tests {
             run_package(&ebuild, &root, &portage_tmpdir, &options).expect("run_package succeeds");
         assert_eq!(status, 0);
 
-        // A real file, real bzip2+tar+XPAK content -- not this pilot's
+        // A real file, real bzip2+tar+XPAK content -- not portuale's
         // own invention: real portage's own `xpak.py` writes a real
         // `XPAKPACK` magic marker (`lib/portage/xpak.py`'s own
         // `xpak()`) right before the metadata blob it appends, via the
@@ -963,11 +963,11 @@ mod tests {
             binpkg_path.display()
         );
 
-        // The round trip: this pilot's OWN gpkg reader (the `$PKGDIR`
+        // The round trip: portuale's OWN gpkg reader (the `$PKGDIR`
         // directory-scan buildout's `binpkg::read_gpkg_metadata`) reads
         // back exactly what the real writer put in.
         let scalar = crate::binpkg::read_gpkg_metadata(&binpkg_path)
-            .expect("this pilot's gpkg reader parses the real writer's output");
+            .expect("portuale's gpkg reader parses the real writer's output");
         assert_eq!(scalar.get("SLOT").map(String::as_str), Some("0"));
         assert_eq!(scalar.get("CATEGORY").map(String::as_str), Some("dev-libs"));
         assert_eq!(scalar.get("PF").map(String::as_str), Some("packagepkg-1.0"));

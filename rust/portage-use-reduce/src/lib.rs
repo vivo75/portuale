@@ -9,7 +9,7 @@
 // parameters* the harness simply never exercises: `masklist`, `excludeall`
 // (rare flag-override sets), `is_src_uri`/the "->" SRC_URI arrow token
 // (fetch-restriction syntax), `opconvert` (the operator-into-argument-list
-// shape, which nothing in this pilot needs), and
+// shape, which nothing in portuale needs), and
 // `token_class`/`is_valid_flag` (tokens stay opaque strings here, matching
 // how config.py itself calls use_reduce for RESTRICT/PROPERTIES/IUSE-like
 // values -- see the grep in docs/what-this-proves.md).
@@ -45,7 +45,7 @@
 // flattening every alternative the way `use_reduce_flat` alone always
 // has -- see its own doc comment for the full grounding (real
 // `_add_pkg_dep_string`'s own considerably richer preference order isn't
-// ported; this pilot has no backtracking architecture at all). This
+// ported; portuale has no backtracking architecture at all). This
 // crate stays atom-agnostic throughout, matching its own established
 // "tokens stay opaque strings" architecture -- portage-repo supplies the
 // actual visibility-checking closure.
@@ -620,14 +620,14 @@ fn next_alternative<'a>(
 /// Falls back to keeping the *whole* `"||"` group exactly as
 /// `use_reduce_flat` would have flattened it (literal `"||"` marker,
 /// every alternative's own atoms, no selection at all) whenever *no*
-/// alternative is currently satisfiable -- so a dependency this pilot
+/// alternative is currently satisfiable -- so a dependency portuale
 /// can't currently resolve is never silently dropped, preserving the
 /// exact "never silently wrong about whether a dependency exists"
 /// invariant `resolve_pretend_graph`'s own doc comment (portage-repo)
 /// already established for the unconditional-flatten v1 this replaces.
 /// Real portage's own considerably richer preference order (installed
 /// packages first, backtracking on a later constraint failure, etc.)
-/// isn't ported -- this pilot has no backtracking architecture at all --
+/// isn't ported -- portuale has no backtracking architecture at all --
 /// just the single "first currently-resolvable alternative wins" rule.
 pub fn use_reduce_flat_disjunctive(
     tokens: &[String],
@@ -828,7 +828,7 @@ mod tests {
     fn disjunctive_falls_back_to_every_alternative_when_none_satisfiable() {
         // Nothing is satisfiable -- matches plain use_reduce_flat's own
         // "flatten everything" output exactly, so nothing regresses
-        // when this pilot can't currently resolve any alternative.
+        // when portuale can't currently resolve any alternative.
         let result = use_reduce_flat_disjunctive(
             &toks("|| ( dev-libs/a dev-libs/b )"),
             &HashSet::new(),

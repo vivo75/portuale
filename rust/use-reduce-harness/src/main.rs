@@ -1,4 +1,4 @@
-// Neutral CLI test-harness binary for the use_reduce(flat=True) pilot
+// Neutral CLI test-harness binary for portuale's use_reduce(flat=True)
 // (see docs/agent-context.md and portage-use-reduce/src/lib.rs's doc comment). Same
 // argv/output contract as python/use_reduce_harness.py.
 //
