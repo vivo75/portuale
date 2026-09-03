@@ -12344,3 +12344,39 @@ contract test + a `portage-repo` unit test, Rust==Python byte-identical,
 full suite green.
 
 **All six slices of the autounmask-in-loop plan are shipped.**
+
+### Autounmask per-level version re-scan (2026-09-03)
+
+Follow-up to Slice 2. Real `_autounmask_levels` yields a *single mutable*
+`_AutounmaskLevel` object repeatedly, each yield adding one relaxation:
+`+license`, then `+~arch +license`, then `+~arch +license +missing-kw`,
+then `+license +masks`, then `+~arch +license +masks`, … And
+`_select_pkg_highest_available_imp` re-runs its full highest-version-first
+match at *each* level, stopping at the first that yields a package.
+
+portuale had three flat, mutually-exclusive fallbacks
+(`license_masked_only` / `keyword_masked_only` / `mask_masked_only`, each
+meaning "and this is the *only* thing wrong"). That coincided with real
+for single-reason masks but couldn't unmask a candidate blocked by two
+categories at once -- e.g. a version that is both `~arch` **and** `@EULA`
+license-masked. Real's level 2 (`+~arch +license`) accepts it; portuale's
+`keyword_masked_only` rejected it (license also wrong) and settled on a
+lower keyword-only version.
+
+Now `resolve_pretend` walks a cumulative level list built from the
+`--autounmask` / `--autounmask-license` / `--autounmask-keep-masks=n`
+flags, filtering candidates with a single `visible_with_relax(candidate,
+…, relax_license, relax_keywords, relax_masks)` predicate (`is_visible`
+with the named categories set aside). The recording side changed to
+per-category gates -- `!keywords_accepted(…)`, a non-empty
+`missing_licenses(…)`, `package.mask` matched-and-not-unmasked -- so a
+multi-category unmask records every part.
+
+Fixture `dev-libs/multimaskconsumer` RDEPENDs `dev-libs/multimaskdep`;
+`multimaskdep-2.0` is `~amd64` + `@EULA`, `multimaskdep-1.0` is `~amd64`
+only. `emerge -p --autounmask` now resolves the higher `2.0` with both a
+`=dev-libs/multimaskdep-2.0 ~amd64` keyword change and a
+`>=dev-libs/multimaskdep-2.0 SomeEula` license change. 3 CASES + a pinned
+contract test + a `portage-repo` unit test, Rust==Python byte-identical,
+full suite green. (portuale still skips real's `**` "missing keywords"
+levels -- it has no `**` suggestion.)

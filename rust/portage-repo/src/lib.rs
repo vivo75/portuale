@@ -2723,6 +2723,86 @@ pub fn is_visible(
     )
 }
 
+/// Whether `candidate` would pass [`is_visible`] once the named masking
+/// categories are set aside -- real `_pkg_visibility_check(pkg,
+/// autounmask_level)`. `relax_license` / `relax_keywords` / `relax_masks`
+/// mirror `_AutounmaskLevel`'s `allow_license_changes` /
+/// `allow_unstable_keywords` / `allow_unmasks`. With all three `false`
+/// this is exactly `is_visible`; the single-flag `*_masked_only` fns are
+/// the "and *only* this category is wrong" special cases (kept for their
+/// other callers). `resolve_pretend` walks the `_autounmask_levels`
+/// sequence of these, re-scanning every version at each level, so a
+/// candidate blocked by *two* categories (e.g. `~arch` **and** `LICENSE`)
+/// still resolves once both relaxations are in play.
+fn visible_with_relax(
+    candidate: &Candidate,
+    category: &str,
+    package: &str,
+    config: &portage_profile::Config,
+    relax_license: bool,
+    relax_keywords: bool,
+    relax_masks: bool,
+) -> bool {
+    let candidate_str = format!(
+        "{category}/{package}-{}:{}/{}::{}",
+        candidate.version, candidate.slot, candidate.sub_slot, candidate.repo_name
+    );
+
+    if !relax_masks {
+        let masked = config
+            .package_mask
+            .iter()
+            .any(|m| matches_config_entry(m, &candidate_str, category, package))
+            && !config
+                .package_unmask
+                .iter()
+                .any(|u| matches_config_entry(u, &candidate_str, category, package));
+        if masked {
+            return false;
+        }
+    }
+
+    if !relax_license && !license_accepted(candidate, category, package, &candidate_str, config) {
+        return false;
+    }
+
+    if !metadata_key_accepted(
+        &candidate.properties,
+        candidate,
+        category,
+        package,
+        &candidate_str,
+        config,
+        &config.accept_properties,
+        &config.package_properties,
+    ) {
+        return false;
+    }
+
+    if !metadata_key_accepted(
+        &candidate.restrict,
+        candidate,
+        category,
+        package,
+        &candidate_str,
+        config,
+        &config.accept_restrict,
+        &config.package_accept_restrict,
+    ) {
+        return false;
+    }
+
+    relax_keywords
+        || keywords_accepted(
+            &candidate.keywords,
+            &candidate_str,
+            category,
+            package,
+            &config.accept_keywords,
+            &config.package_accept_keywords,
+        )
+}
+
 /// `--autounmask`'s own keyword-suggestion sub-feature (real
 /// `--autounmask-keep-keywords=n`, see `resolve_pretend_graph`'s doc
 /// comment for the full on/off default-resolution logic portuale
@@ -7284,42 +7364,40 @@ pub fn resolve_pretend(
         })
     };
     let need_fallback = |vis: &[&Candidate]| !vis.iter().any(|c| usable(c));
-    // Real `_autounmask_levels` (`depgraph.py:7446`): the allowed
-    // relaxations are tried from least to most invasive -- `USE` (always
-    // on, handled by the `matched` use-dep filter below), then `+license`,
-    // then `+~arch` (unstable keywords), then `+missing keywords`, then
-    // `+masks` -- and `_select_pkg_highest_available_imp` stops at the
-    // first level that yields any candidate. So among these `*_masked_only`
-    // fallbacks the ORDER MATTERS across versions: a lower version fixable
-    // by a `package.license` accept beats a higher version needing
-    // `~arch`, which beats one needing `package.unmask`. Each fallback
-    // still picks the best (highest) version it can unmask at its level.
-    if need_fallback(&visible) && autounmask_license {
-        // Real `--autounmask-license` (level 1): a candidate masked by
-        // `LICENSE` alone becomes visible via the implicit
-        // `package.license` accept.
-        visible = candidates
-            .iter()
-            .filter(|c| license_masked_only(c, &atom.category, &atom.package, config))
-            .collect();
+    // Real `_autounmask_levels` (`depgraph.py:7446`) + `_select_pkg_
+    // highest_available_imp`'s per-level loop: try each allowed relaxation
+    // set from least to most invasive, re-scanning EVERY version at each
+    // level (real re-runs its highest-first match), and stop at the first
+    // level that yields a candidate satisfying the atom + slot
+    // constraints. `_AutounmaskLevel` is a single mutable object that's
+    // re-yielded, so a later level relaxes `LICENSE` only if level 1 was
+    // allowed to (`allow_license_changes` sticks once set). portuale skips
+    // real's `missing keywords` steps (levels 3 & 6) -- it has no `**`
+    // suggestion. `(relax_license, relax_keywords, relax_masks)`:
+    let mut levels: Vec<(bool, bool, bool)> = Vec::new();
+    let mut relax_license = false;
+    if autounmask_license {
+        relax_license = true;
+        levels.push((true, false, false)); // 1. +license
     }
-    if need_fallback(&visible) && autounmask_keywords {
-        // Real `--autounmask` (level 2, `~arch`): a candidate masked by
-        // `KEYWORDS` alone becomes visible via the implicit `=cpv ~arch`
-        // change. Everything else (`package.mask`/properties/restrict)
-        // still has to pass.
-        visible = candidates
-            .iter()
-            .filter(|c| keyword_masked_only(c, &atom.category, &atom.package, config))
-            .collect();
+    if autounmask_keywords {
+        levels.push((relax_license, true, false)); // 2. +~arch (+license)
     }
-    if need_fallback(&visible) && autounmask_masks {
-        // Real `--autounmask-keep-masks=n`: a candidate masked by
-        // `package.mask` alone becomes visible via the implicit
-        // `package.unmask` entry.
+    if autounmask_masks {
+        // 4. +masks, keywords still respected (real bug #463394).
+        levels.push((relax_license, false, true));
+        if autounmask_keywords {
+            // 5. +~arch +masks (+license).
+            levels.push((relax_license, true, true));
+        }
+    }
+    for (rl, rk, rm) in levels {
+        if !need_fallback(&visible) {
+            break;
+        }
         visible = candidates
             .iter()
-            .filter(|c| mask_masked_only(c, &atom.category, &atom.package, config))
+            .filter(|c| visible_with_relax(c, &atom.category, &atom.package, config, rl, rk, rm))
             .collect();
     }
     if need_fallback(&visible) {
@@ -10780,14 +10858,28 @@ fn backtracking_resolve(req: &ResolveRequest) -> Result<GraphResult, String> {
             let provenance = visibility_provenance(resolved, &key.0, &key.1, config);
             let keyword_mask =
                 keyword_mask_marker(resolved, &key.0, &key.1, config, &provenance.mask_entry);
-            // Real `--autounmask` keyword resolution: this candidate resolved
-            // only because `resolve_pretend` was told to accept a
-            // `KEYWORDS`-alone mask (`keyword_masked_only`). Record the
-            // implicit `=<cpv> <keyword>` change (real
+            let resolved_cpv_str = format!(
+                "{}/{}-{version}:{slot}/{sub_slot}::{repo_name}",
+                key.0, key.1
+            );
+            // Real `--autounmask` keyword resolution: `resolve_pretend`
+            // accepted this candidate over an unaccepted `KEYWORDS` (real
+            // `_pkg_visibility_check` under an `allow_unstable_keywords`
+            // level). Record the implicit `=<cpv> <keyword>` change (real
             // `depgraph.py::_display_autounmask`'s `unstable_keyword_msg` +
             // `_get_dep_chain_as_comment`; `autounmask_unrestricted_atoms`
-            // defaults to `"n"`, so always the exact-version `=` form).
-            if autounmask_suggest_keywords && keyword_masked_only(resolved, &key.0, &key.1, config)
+            // defaults to `"n"`, so always the exact-version `=` form). The
+            // gate is per-category, not `keyword_masked_only`: a candidate
+            // masked by `~arch` *and* `LICENSE` records *both* changes.
+            if autounmask_suggest_keywords
+                && !keywords_accepted(
+                    &resolved.keywords,
+                    &resolved_cpv_str,
+                    &key.0,
+                    &key.1,
+                    &config.accept_keywords,
+                    &config.package_accept_keywords,
+                )
             {
                 if let Some(kw) = suggested_keyword(resolved) {
                     autounmask_keyword_changes.push(AutounmaskChange {
@@ -10802,22 +10894,15 @@ fn backtracking_resolve(req: &ResolveRequest) -> Result<GraphResult, String> {
                     });
                 }
             }
-            // Real `--autounmask-license`: this candidate resolved only
-            // because `resolve_pretend` was told to accept a `LICENSE`-alone
-            // mask (`license_masked_only`). Record the missing licenses (real
-            // `_display_autounmask`'s `license_msg`; `check_if_latest(pkg)`
-            // without `check_visibility` -> the `>=` / `>=…:slot` / `=` form).
-            if autounmask_suggest_license && license_masked_only(resolved, &key.0, &key.1, config) {
-                let missing = missing_licenses(
-                    resolved,
-                    &key.0,
-                    &key.1,
-                    &format!(
-                        "{}/{}-{version}:{slot}/{sub_slot}::{repo_name}",
-                        key.0, key.1
-                    ),
-                    config,
-                );
+            // Real `--autounmask-license`: `resolve_pretend` accepted this
+            // candidate over an unaccepted `LICENSE`. Record the missing
+            // licenses (real `_display_autounmask`'s `license_msg`;
+            // `check_if_latest(pkg)` without `check_visibility` -> the `>=` /
+            // `>=…:slot` / `=` form). Per-category gate (the non-empty
+            // `missing` list *is* the "license needs a change" signal), so a
+            // multi-category mask still records its license part.
+            if autounmask_suggest_license {
+                let missing = missing_licenses(resolved, &key.0, &key.1, &resolved_cpv_str, config);
                 if !missing.is_empty() {
                     let all = list_candidates(&repos, &key.0, &key.1).unwrap_or_default();
                     autounmask_license_changes.push(AutounmaskChange {
@@ -10834,12 +10919,16 @@ fn backtracking_resolve(req: &ResolveRequest) -> Result<GraphResult, String> {
                     });
                 }
             }
-            // Real `--autounmask-keep-masks=n`: this candidate resolved only
-            // because `resolve_pretend` was told to accept a `package.mask`-
-            // alone mask (`mask_masked_only`). Record `=<cpv>` (real
-            // `p_mask_change_msg`; `autounmask_unrestricted_atoms` `"n"` ->
-            // always the exact-version form; no token).
-            if autounmask_suggest_masks && mask_masked_only(resolved, &key.0, &key.1, config) {
+            // Real `--autounmask-keep-masks=n`: `resolve_pretend` accepted
+            // this candidate over an active `package.mask`. Record `=<cpv>`
+            // (real `p_mask_change_msg`; `autounmask_unrestricted_atoms`
+            // `"n"` -> always the exact-version form; no token). Per-category
+            // gate (`package.mask` matched, nothing unmasked it), so a
+            // multi-category mask still records its mask part.
+            if autounmask_suggest_masks
+                && provenance.mask_entry.is_some()
+                && provenance.unmask_entry.is_none()
+            {
                 autounmask_mask_changes.push(AutounmaskChange {
                     atom: format!("={}/{}-{version}", key.0, key.1),
                     token: String::new(),
@@ -19935,6 +20024,42 @@ mod tests {
             "=dev-libs/kwbackmid-2.0"
         );
         assert_eq!(result.autounmask_keyword_changes[0].token, "~amd64");
+    }
+
+    #[test]
+    fn autounmask_levels_unmask_two_categories_at_once_on_the_same_version() {
+        // `dev-libs/multimaskdep-2.0` is `~amd64` keyword-masked AND
+        // `@EULA` license-masked; `multimaskdep-1.0` is only keyword-masked.
+        // Real `_autounmask_levels`: level 1 (+license) yields nothing (both
+        // still keyword-blocked); level 2 (+~arch +license) unmasks BOTH
+        // categories, and re-scanning every version picks the higher `2.0`.
+        // Before the per-level re-scan, portuale's flat `keyword_masked_only`
+        // fallback excluded `2.0` (it has a license problem too) and settled
+        // on `1.0` with only a keyword change.
+        let result = graph_result_autounmask("dev-libs/multimaskconsumer");
+        let dep = result
+            .entries
+            .iter()
+            .find(|e| e.package == "multimaskdep")
+            .expect("multimaskdep entry");
+        assert_eq!(
+            dep.outcome,
+            PretendOutcome::New {
+                version: "2.0".to_string()
+            }
+        );
+        assert_eq!(result.autounmask_keyword_changes.len(), 1);
+        assert_eq!(
+            result.autounmask_keyword_changes[0].atom,
+            "=dev-libs/multimaskdep-2.0"
+        );
+        assert_eq!(result.autounmask_keyword_changes[0].token, "~amd64");
+        assert_eq!(result.autounmask_license_changes.len(), 1);
+        assert_eq!(
+            result.autounmask_license_changes[0].atom,
+            ">=dev-libs/multimaskdep-2.0"
+        );
+        assert_eq!(result.autounmask_license_changes[0].token, "SomeEula");
     }
 
     #[test]

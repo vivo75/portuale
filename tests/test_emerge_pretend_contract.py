@@ -450,6 +450,21 @@ CASES = [
         0,
     ),
     (
+        "autounmask per-level re-scan: ~arch + license unmasked on one version, default",
+        ["--pretend", "dev-libs/multimaskconsumer"],
+        0,
+    ),
+    (
+        "autounmask per-level re-scan, --autounmask: two categories on the same version",
+        ["--pretend", "--autounmask", "dev-libs/multimaskconsumer"],
+        0,
+    ),
+    (
+        "autounmask per-level re-scan, -pv --autounmask",
+        ["--pretend", "-v", "--autounmask", "dev-libs/multimaskconsumer"],
+        0,
+    ),
+    (
         "USE-dep enforcement: plain flag declared and enabled matches",
         ["--pretend", "dev-libs/useflagpkg[foo]"],
         0,
@@ -2752,6 +2767,55 @@ def test_autounmask_keyword_backward_cascade_re_resolves_a_slot_to_a_masked_vers
         "# required by dev-libs/kwbacktop (argument)\n"
         "=dev-libs/kwbackmid-2.0 ~amd64\n"
     )
+
+
+def test_autounmask_levels_unmask_two_categories_at_once_on_the_same_version(
+    emerge_binary, emerge_pretend_python, fixture_env
+):
+    """Per-level version re-scan (real `_select_pkg_highest_available_imp`
+    re-runs its highest-first match for each `_autounmask_levels` step).
+    dev-libs/multimaskdep-2.0 is ~amd64 keyword-masked AND @EULA
+    license-masked; multimaskdep-1.0 is only keyword-masked. Level 1
+    (+license) yields nothing (both still keyword-blocked); level 2
+    (+~arch +license) unmasks BOTH categories and the re-scan picks the
+    higher 2.0 -- recording a keyword change AND a license change for the
+    same version. Before, portuale's flat `keyword_masked_only` fallback
+    dropped 2.0 (it also had a license problem) and settled on 1.0.
+    Rust==Python byte-identical."""
+    a = ["--pretend", "--autounmask", "dev-libs/multimaskconsumer"]
+    rust = _run([str(emerge_binary)], a, fixture_env)
+    py = _run(emerge_pretend_python, a, fixture_env)
+    assert rust.returncode == 0
+    assert rust.stdout == py.stdout and rust.stderr == py.stderr
+    assert rust.stdout.splitlines() == [
+        "[ebuild  N    ~] dev-libs/multimaskdep-2.0 ",
+        "[ebuild  N     ] dev-libs/multimaskconsumer-1.0 ",
+    ]
+    assert rust.stderr == (
+        "\nThe following keyword changes are necessary to proceed:\n"
+        ' (see "package.accept_keywords" in the portage(5) man page for more details)\n'
+        "# required by dev-libs/multimaskconsumer-1.0::testrepo\n"
+        "# required by dev-libs/multimaskconsumer (argument)\n"
+        "=dev-libs/multimaskdep-2.0 ~amd64\n"
+        "\nThe following license changes are necessary to proceed:\n"
+        ' (see "package.license" in the portage(5) man page for more details)\n'
+        "# required by dev-libs/multimaskconsumer-1.0::testrepo\n"
+        "# required by dev-libs/multimaskconsumer (argument)\n"
+        ">=dev-libs/multimaskdep-2.0 SomeEula\n"
+    )
+
+    # default (no keyword suggestions): the dep stays unresolvable
+    d = _run(
+        [str(emerge_binary)], ["--pretend", "dev-libs/multimaskconsumer"], fixture_env
+    )
+    dpy = _run(
+        emerge_pretend_python,
+        ["--pretend", "dev-libs/multimaskconsumer"],
+        fixture_env,
+    )
+    assert d.stdout == dpy.stdout and d.stderr == dpy.stderr
+    assert "multimaskdep" not in d.stdout
+    assert 'no visible ebuild for dependency "dev-libs/multimaskdep"' in d.stderr
 
 
 def test_autounmask_levels_prefer_license_over_a_higher_keyword_masked_version(

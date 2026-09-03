@@ -1677,6 +1677,71 @@ def is_visible(candidate, category, package, config):
     )
 
 
+def _visible_with_relax(
+    candidate, category, package, config, relax_license, relax_keywords, relax_masks
+):
+    """Whether candidate would pass is_visible once the named masking
+    categories are set aside -- real _pkg_visibility_check(pkg,
+    autounmask_level). With all three False this is exactly is_visible;
+    the single-flag _*_masked_only fns are the "and only this category is
+    wrong" special cases. resolve_pretend walks the _autounmask_levels
+    sequence of these, re-scanning every version at each level. Mirrors
+    portage-repo/src/lib.rs's visible_with_relax."""
+    candidate_str = (
+        f"{category}/{package}-{candidate['version']}:{candidate['slot']}/{candidate['sub_slot']}"
+        f"::{candidate['repo_name']}"
+    )
+
+    if not relax_masks:
+        masked = any(
+            _matches_config_entry(m, candidate_str, category, package)
+            for m in config["package_mask"]
+        ) and not any(
+            _matches_config_entry(u, candidate_str, category, package)
+            for u in config["package_unmask"]
+        )
+        if masked:
+            return False
+
+    if not relax_license and not _license_accepted(
+        candidate, category, package, candidate_str, config
+    ):
+        return False
+
+    if not _metadata_key_accepted(
+        candidate.get("properties", ""),
+        candidate,
+        category,
+        package,
+        candidate_str,
+        config,
+        config["accept_properties"],
+        config["package_properties"],
+    ):
+        return False
+
+    if not _metadata_key_accepted(
+        candidate.get("restrict", ""),
+        candidate,
+        category,
+        package,
+        candidate_str,
+        config,
+        config["accept_restrict"],
+        config["package_accept_restrict"],
+    ):
+        return False
+
+    return relax_keywords or _keywords_accepted(
+        candidate["keywords"],
+        candidate_str,
+        category,
+        package,
+        config["accept_keywords"],
+        config["package_accept_keywords"],
+    )
+
+
 def _keyword_masked_only(candidate, category, package, config):
     """--autounmask's own keyword-suggestion sub-feature (real
     --autounmask-keep-keywords=n, see resolve_pretend_graph's own
@@ -5524,39 +5589,32 @@ def resolve_pretend(
     def _need_fallback(vis):
         return not any(_usable(c) for c in vis)
 
-    # Real _autounmask_levels (depgraph.py:7446): least- to most-invasive
-    # -- USE (always on, the matched use-dep filter below), then +license,
-    # then +~arch, then +missing keywords, then +masks -- stopping at the
-    # first level that yields a candidate. So ORDER MATTERS across
-    # versions: a lower license-masked version beats a higher ~arch one,
-    # which beats one needing package.unmask. Mirrors pretend.rs.
-    if _need_fallback(visible) and autounmask_license:
-        # Real --autounmask-license (level 1): a candidate masked by
-        # LICENSE alone becomes visible via the implicit package.license
-        # accept.
+    # Real _autounmask_levels (depgraph.py:7446) + _select_pkg_highest_
+    # available_imp's per-level loop: try each allowed relaxation set from
+    # least to most invasive, re-scanning EVERY version at each level, and
+    # stop at the first that yields a candidate satisfying the atom + slot
+    # constraints. _AutounmaskLevel is one mutable object re-yielded, so a
+    # later level relaxes LICENSE only if level 1 was allowed to. portuale
+    # skips real's "missing keywords" steps (levels 3 & 6). Mirrors
+    # pretend.rs. (relax_license, relax_keywords, relax_masks):
+    _levels = []
+    _relax_license = False
+    if autounmask_license:
+        _relax_license = True
+        _levels.append((True, False, False))  # 1. +license
+    if autounmask_keywords:
+        _levels.append((_relax_license, True, False))  # 2. +~arch (+license)
+    if autounmask_masks:
+        _levels.append((_relax_license, False, True))  # 4. +masks (kw respected)
+        if autounmask_keywords:
+            _levels.append((_relax_license, True, True))  # 5. +~arch +masks
+    for _rl, _rk, _rm in _levels:
+        if not _need_fallback(visible):
+            break
         visible = [
             c
             for c in candidates
-            if _license_masked_only(c, category, package, config)
-        ]
-    if _need_fallback(visible) and autounmask_keywords:
-        # Real --autounmask (level 2, ~arch): a candidate masked by
-        # KEYWORDS alone becomes visible via the implicit `=cpv ~arch`
-        # change. Everything else (package.mask/properties/restrict) still
-        # has to pass.
-        visible = [
-            c
-            for c in candidates
-            if _keyword_masked_only(c, category, package, config)
-        ]
-    if _need_fallback(visible) and autounmask_masks:
-        # Real --autounmask-keep-masks=n: a candidate masked by
-        # package.mask alone becomes visible via the implicit
-        # package.unmask entry.
-        visible = [
-            c
-            for c in candidates
-            if _mask_masked_only(c, category, package, config)
+            if _visible_with_relax(c, category, package, config, _rl, _rk, _rm)
         ]
     if _need_fallback(visible):
         return ("no_visible_candidate",)
@@ -7444,15 +7502,21 @@ def resolve_pretend_graph(
             provenance["keyword_mask"] = _keyword_mask_marker(
                 resolved, category, package, config, provenance["mask_entry"]
             )
-            # Real --autounmask keyword resolution: this candidate resolved
-            # only because resolve_pretend was told to accept a KEYWORDS-alone
-            # mask (_keyword_masked_only). Record the implicit `=<cpv> <kw>`
-            # change (real depgraph.py::_display_autounmask's
-            # unstable_keyword_msg + _get_dep_chain_as_comment;
-            # autounmask_unrestricted_atoms defaults to "n", so always the
-            # exact-version `=` form). Mirrors portage-repo/src/lib.rs.
-            if autounmask_suggest_keywords and _keyword_masked_only(
-                resolved, category, package, config
+            _resolved_cpv_str = (
+                f"{category}/{package}-{version}:{slot}/{sub_slot}::{repo_name}"
+            )
+            # Real --autounmask keyword resolution: resolve_pretend accepted
+            # this candidate over an unaccepted KEYWORDS. Record the implicit
+            # `=<cpv> <kw>` change. Per-category gate, not _keyword_masked_only:
+            # a candidate masked by ~arch AND LICENSE records BOTH changes.
+            # Mirrors portage-repo/src/lib.rs.
+            if autounmask_suggest_keywords and not _keywords_accepted(
+                resolved["keywords"],
+                _resolved_cpv_str,
+                category,
+                package,
+                config["accept_keywords"],
+                config["package_accept_keywords"],
             ):
                 _kw = _suggested_keyword(resolved)
                 if _kw is not None:
@@ -7465,16 +7529,15 @@ def resolve_pretend_graph(
                             ),
                         }
                     )
-            # Real --autounmask-license: this candidate resolved only because
-            # resolve_pretend was told to accept a LICENSE-alone mask
-            # (_license_masked_only). Record the missing licenses (real
-            # _display_autounmask's license_msg; check_if_latest(pkg) without
-            # check_visibility -> the `>=` / `>=…:slot` / `=` form).
-            if autounmask_suggest_license and _license_masked_only(
-                resolved, category, package, config
-            ):
-                _cs = f"{category}/{package}-{version}:{slot}/{sub_slot}::{repo_name}"
-                _missing = _missing_licenses(resolved, category, package, _cs, config)
+            # Real --autounmask-license: resolve_pretend accepted this
+            # candidate over an unaccepted LICENSE. Record the missing
+            # licenses. Per-category gate (the non-empty _missing list IS the
+            # "license needs a change" signal), so a multi-category mask
+            # still records its license part.
+            if autounmask_suggest_license:
+                _missing = _missing_licenses(
+                    resolved, category, package, _resolved_cpv_str, config
+                )
                 if _missing:
                     _all = list_candidates(repos, category, package)
                     autounmask_license_changes.append(
@@ -7488,12 +7551,15 @@ def resolve_pretend_graph(
                             ),
                         }
                     )
-            # Real --autounmask-keep-masks=n: this candidate resolved only
-            # because resolve_pretend was told to accept a package.mask-alone
-            # mask (_mask_masked_only). Record `=<cpv>` (real p_mask_change_msg;
-            # no token, always the exact-version form).
-            if autounmask_suggest_masks and _mask_masked_only(
-                resolved, category, package, config
+            # Real --autounmask-keep-masks=n: resolve_pretend accepted this
+            # candidate over an active package.mask. Record `=<cpv>` (real
+            # p_mask_change_msg; no token). Per-category gate (package.mask
+            # matched, nothing unmasked it), so a multi-category mask still
+            # records its mask part.
+            if (
+                autounmask_suggest_masks
+                and provenance["mask_entry"] is not None
+                and provenance["unmask_entry"] is None
             ):
                 autounmask_mask_changes.append(
                     {

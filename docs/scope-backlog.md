@@ -128,9 +128,11 @@ architectural — a single-pass BFS can't grow into these incrementally:
     (keyword/mask backward cascade — `resolve_pretend`'s `*_masked_only`
     fallback gate is now "no visible candidate satisfies `atom_str` +
     the folded slot constraints", so a slot pulled to a keyword/mask-
-    masked version re-resolves there) all **shipped 2026-09-03** — the
-    plan is complete. Still open (smaller, unplanned): a true per-level
-    version re-scan;
+    masked version re-resolves there) all **shipped 2026-09-03**, plus a
+    follow-up making the fallback a real `_autounmask_levels` per-level
+    version re-scan (`visible_with_relax` + cumulative levels; a candidate
+    blocked by `~arch` **and** `LICENSE` resolves once both relaxations
+    are in play, recording both changes) — **the plan is complete**;
   - `||`-preference / slot-operator-rebuild feedback driving a retry;
   - the slot-collision notice's remaining cuts: `pkg_use_display` for a
     package with non-default USE (the ` USE=""` slot renders, non-empty

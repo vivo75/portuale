@@ -127,12 +127,16 @@ autounmask_use_config: HashMap<(String, String), HashMap<String, bool>>
    unmask. So a lower license-masked version beats a higher
    keyword-masked one. Fixture: `dev-libs/levelconsumer` →
    `levelpkg-1.0` (@EULA license) chosen over `levelpkg-2.0` (~amd64).
-   Rust==Python byte-identical. *(Not yet: a true per-level version scan
-   — portuale still takes the best version at whichever single level
-   first matches, which coincides with real for the cross-version
-   cases the fallbacks distinguish, but not for a "level-1 unmasks v1
-   AND v2, level-2 would unmask v3" chain where real re-scans. No
-   fixture exercises that.)*
+   Rust==Python byte-identical. **Per-level version re-scan follow-up
+   (2026-09-03):** the three flat `*_masked_only` fallbacks are now a
+   `_autounmask_levels` loop over `visible_with_relax(license, keywords,
+   masks)` predicates — cumulative (`allow_license_changes` sticks once
+   set), re-scanning every version at each level (real
+   `_select_pkg_highest_available_imp`). A candidate blocked by `~arch`
+   **and** `LICENSE` resolves once level 2 (`+~arch +license`) is
+   reached, and the recording side (now per-category, not
+   `*_masked_only`) records *both* changes. Fixture
+   `dev-libs/multimaskconsumer` → `multimaskdep-2.0`.
 3. **`_autounmask_breakage`.** ✅ **Shipped 2026-09-03.** Faithful to real
    (depgraph.py:12262): when the accumulator ends up wanting the same
    `(cp, flag)` both on *and* off — a contradiction no re-resolve can
