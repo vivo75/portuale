@@ -12116,8 +12116,9 @@ Also wired in the same pass: `--verbose-conflicts` gained its `emerge
 
 ### Autounmask backward cascade — a re-resolve after `_needed_use_config_changes` grows (2026-09-03)
 
-Slice 1 of the autounmask-in-loop plan (`docs/autounmask-in-loop-plan.md`;
-Slice 0 was the `effective_use_flags(&Config)` refactor). portuale's
+Slice 1 of the autounmask-in-loop plan
+(`docs/history/autounmask-in-loop-plan.md`; Slice 0 was the
+`effective_use_flags(&Config)` refactor). portuale's
 single-pass autounmask already cascades *forward* (a flag flip changes
 which `flag?`-gated deps get walked). It could not cascade *backward*: a
 dependency atom `X[flag]` from a package processed *late* needs `flag` on

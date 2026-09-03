@@ -108,7 +108,7 @@ architectural — a single-pass BFS can't grow into these incrementally:
     remaining signal is the `Dependency resolution took X s (backtrack:
     N/M).` report line, whose timing is non-deterministic (a deliberate
     cut — portuale is a deterministic tool);
-  - autounmask in-loop (plan: `docs/autounmask-in-loop-plan.md`) —
+  - autounmask in-loop (plan: `docs/history/autounmask-in-loop-plan.md`) —
     **Slice 0** (`effective_use_flags(&Config)` + `Config::autounmask_use`
     tier) and **Slice 1** (the *backward* cascade: a `[flag]` dep on an
     already-resolved slot folds a `suggested_use_flip` into an

@@ -1,6 +1,9 @@
 # Plan: autounmask in-loop (convert the post-resolution autounmask pass to real backtracking's config-change feedback)
 
-*Working plan — 2026-09-03. Move to `docs/history/` once complete.*
+> **COMPLETE — 2026-09-03.** All six slices plus the per-level version
+> re-scan follow-up shipped (commits `1d6b6db`..`bc58d41` on `main`).
+> Kept here as the record of what each slice did and why; the shipped-
+> behaviour narrative lives in [`../what-this-proves.md`](../what-this-proves.md).
 
 ## The gap
 
