@@ -12384,7 +12384,7 @@ levels -- it has no `**` suggestion.)
 
 ### Circular-dependency USE-flag suggestions — `_find_suggestions` (2026-09-03)
 
-`docs/find-suggestions-plan.md` (2 slices). When portuale hits an
+`docs/history/find-suggestions-plan.md` (2 slices). When portuale hits an
 unbreakable build-time dependency cycle it prints the
 `* Error: circular dependencies:` block. Real portage also runs
 `circular_dependency_handler._find_suggestions` — a ~180-line USE-flag

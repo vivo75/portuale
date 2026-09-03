@@ -141,7 +141,7 @@ architectural — a single-pass BFS can't grow into these incrementally:
   - the circular-dep cuts: the reduced cycle-only `--tree` re-display,
     full elementary-cycle enumeration / `large_cycle_count`
     (`_find_suggestions`' USE-flag heuristic **shipped 2026-09-03** —
-    `circular_dep_solutions`, `docs/find-suggestions-plan.md`; the
+    `circular_dep_solutions`, `docs/history/find-suggestions-plan.md`; the
     grandparent-atom conflict path has no fixture yet).
 
   *(The resolver-extraction item shipped 2026-09-03: the ~1700-line

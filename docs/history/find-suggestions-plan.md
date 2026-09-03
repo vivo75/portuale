@@ -3,7 +3,7 @@
 > **COMPLETE — 2026-09-03.** Slice 1 (`extract_affecting_use` port) and
 > Slice 2 (the full `_find_suggestions` + wire-in) both shipped. Kept as
 > the design record; the shipped-behaviour narrative is in
-> [`what-this-proves.md`](what-this-proves.md).
+> [`what-this-proves.md`](../what-this-proves.md).
 
 ## The gap
 
