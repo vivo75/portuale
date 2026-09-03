@@ -30,3 +30,30 @@ pub(crate) struct DirectSolveOutput {
     /// the removal -- their story is the skip notice, not a block).
     pub surviving: Vec<SlotConflict>,
 }
+
+/// Whether the installed instance is excluded from every parent's match
+/// list: the cp was explicitly requested, without `--exclude` and outside
+/// selective mode.
+// Portage: depgraph.py, _want_installed_pkg
+pub(crate) fn direct_solve_arg_mode(input: &DirectSolveInput<'_>, c: &SlotConflict) -> bool {
+    if !c.instances.iter().any(|i| i.installed) || input.selective {
+        return false;
+    }
+    if !input
+        .top_level
+        .contains(&(c.category.clone(), c.package.clone()))
+    {
+        return false;
+    }
+    let inst_ver = c
+        .instances
+        .iter()
+        .find(|i| i.installed)
+        .map(|i| i.version.clone())
+        .unwrap_or_default();
+    let probe = format!("{}/{}-{inst_ver}", c.category, c.package);
+    !input
+        .excluded
+        .iter()
+        .any(|ex| matches_config_entry(ex, &probe, &c.category, &c.package))
+}
