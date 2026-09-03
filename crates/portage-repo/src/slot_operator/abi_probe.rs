@@ -14,6 +14,18 @@ pub(crate) struct ProbeParent {
     pub(crate) atom: String,
 }
 
+/// Arguments of [`collect_probe_parents`].
+pub(crate) struct CollectProbeParentsArgs<'a> {
+    pub(crate) root: &'a Path,
+    pub(crate) entries: &'a [GraphEntry],
+    pub(crate) reachable: &'a HashSet<(String, String)>,
+    pub(crate) walked: &'a HashSet<(String, String)>,
+    pub(crate) in_graph: &'a HashSet<(String, String)>,
+    pub(crate) already: &'a BTreeSet<(String, String)>,
+    pub(crate) with_bdeps: bool,
+    pub(crate) excluded: &'a [String],
+}
+
 /// Argument parents of the update probe: each top-level atom is filed under
 /// its own cp with an empty-cp pseudo parent, so it vetoes a provider
 /// candidate it does not match. Only the rebuild scan files arguments.
