@@ -1,3 +1,15 @@
+# Agent context: portuale, a Rust reimplementation of Portage
+
+This file is the single entry point for (re)deriving where portuale
+stands and what to do next: goals, hard constraints, architecture
+decisions, the phase-execution/bash-backend findings, and pointers to the
+live state + open backlog. The original porting-strategy prompt (`history/porting-strategy-prompt.md`)
+was deleted 2026-10-03 and is in git history;
+the session-to-session operating rhythm is [`../AGENTS.md`](../AGENTS.md).
+
+As with any settled decision below: if you disagree, say so explicitly
+and re-open it — don't silently override it.
+
 ## Context
 
 Portage (this repository) is the Gentoo package manager, written in Python.
@@ -52,6 +64,13 @@ this precedent is invoked.)
    architecture turns out to be.
 
 ## Open / deliberately undecided
+
+- **The end state is a real, complete, usable Portage** — a drop-in
+  same-behaviour replacement, and then some. What's still open is whether
+  it *replaces* Python Portage in Gentoo or stands permanently alongside
+  it (like `uutils` vs GNU coreutils). Do not pick an architecture that
+  forecloses either: subprocess/CLI-based testing keeps both open,
+  in-process FFI embedding (e.g. PyO3) would not — avoid it.
 
 ### `emerge`/`ebuild` binary shape
 
