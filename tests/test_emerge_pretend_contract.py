@@ -2417,6 +2417,38 @@ def test_or_group_alternative_yields_to_the_next_when_backtracking_masks_it(
     assert "slot conflict" in nobt.stdout
 
 
+def test_or_group_alternative_yields_to_the_next_on_a_missing_transitive_dep(
+    emerge_binary, emerge_pretend_python, fixture_env
+):
+    """Real `backtracking.py::_feedback_missing_dep`: a dependency atom
+    with no matching package masks its parent and re-drives, so
+    `dep_zapdeps` re-picks a `||` group whose chosen alternative had an
+    unsatisfiable subtree. `dev-libs/ormisstop` RDEPENDs
+    `|| ( dev-libs/ormissbad dev-libs/ormissgood )`; `ormissbad` is
+    visible but RDEPENDs the nonexistent `dev-libs/ormiss-nonexistent`.
+    Backtracking masks `ormissbad`; the retry finds the first `||`
+    alternative unsatisfiable and picks `dev-libs/ormissgood`. With
+    `--backtrack=0` the missing dep is reported instead, byte-identical
+    to before this slice. Container-verified
+    (TEST/scripts/43-or-missing-dep.sh)."""
+    ok = _run([str(emerge_binary)], ["--pretend", "dev-libs/ormisstop"], fixture_env)
+    assert ok.returncode == 0
+    assert ok.stdout.splitlines() == [
+        "[ebuild  N     ] dev-libs/ormissgood-1.0 ",
+        "[ebuild  N     ] dev-libs/ormisstop-1.0 ",
+    ]
+    for extra in ([], ["--backtrack=0"], ["--tree"]):
+        args = ["--pretend", *extra, "dev-libs/ormisstop"]
+        py = _run(emerge_pretend_python, args, fixture_env)
+        rs = _run([str(emerge_binary)], args, fixture_env)
+        assert rs.stdout == py.stdout, (extra, rs.stdout, py.stdout)
+        assert rs.stderr == py.stderr, (extra, rs.stderr, py.stderr)
+    nobt = _run(
+        [str(emerge_binary)], ["--pretend", "--backtrack=0", "dev-libs/ormisstop"], fixture_env
+    )
+    assert "ormiss-nonexistent" in nobt.stderr
+
+
 def test_bdepend_pdepend_idepend_are_walked_same_as_depend_rdepend(
     emerge_binary, fixture_env
 ):

@@ -10771,8 +10771,29 @@ reports the conflict instead. Contract test
 `test_or_group_alternative_yields_to_the_next_when_backtracking_masks_it`
 (bare + `--backtrack=0` + `--tree` lockstep). Full suite: 1243 passed.
 
-The complementary "missing dependency" backtrack path (a `||`
-alternative whose *subtree* is unsatisfiable) is the next slice.
+**The complementary "missing dependency" path (2026-09-03).** Real
+`backtracking.py::_feedback_missing_dep` (`depgraph.py:3484-3503`): a
+dependency atom with *no* matching package (not merely a USE change —
+real skips that, `depgraph.py:3473`) masks its parent and re-drives. A
+dependency `NoVisibleCandidate` in `backtracking_resolve` now records
+`missing_dep_trigger = ((parent_cat, parent_pkg), "!=parent-cpv")` once
+per pass — gated on backtracking being live, the parent being a
+merge-bound non-top-level entry, a `missing_dep_masked` latch (real's
+`dep.parent not in _runtime_pkg_mask`), and the atom having no candidate
+even without its USE deps. The driver folds the negative into
+`slot_constraints` and `continue 'backtrack`s; combined with the `||`
+closure above, `dev-libs/ormisstop`'s
+`|| ( dev-libs/ormissbad dev-libs/ormissgood )` — where `ormissbad`
+RDEPENDs the nonexistent `dev-libs/ormiss-nonexistent` — now merges
+`ormissgood`. `--backtrack=0` reports the missing dep instead.
+Container-verified (`TEST/scripts/43-or-missing-dep.sh`); contract test
+`test_or_group_alternative_yields_to_the_next_on_a_missing_transitive_dep`.
+Full suite: 1244 passed.
+
+With both paths, portuale's `'backtrack` loop drives every real
+`runtime_pkg_mask` feedback (`_feedback_slot_conflict` +
+`_feedback_missing_dep`) into `||` re-selection — the last piece of
+Part 2.A's architectural work.
 
 ### `FEATURES=buildpkg` / `emerge --buildpkg` / `-b`: a binpkg as a side effect of a source merge
 

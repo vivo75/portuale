@@ -139,12 +139,13 @@ architectural — a single-pass BFS can't grow into these incrementally:
     2026-09-03**, container-verified against real portage 3.0.82.2 via
     `TEST/scripts/40-slotop-cascade.sh`;
     `docs/slot-op-rebuild-cascade-plan.md`;
-  - `||`-preference feedback driving a retry: the slot-conflict
-    `runtime_pkg_mask → dep_zapdeps` path **shipped 2026-09-03**
-    (container-verified, `TEST/scripts/42-or-backtrack.sh`,
-    `docs/or-preference-backtrack-plan.md`); the "missing dependency"
-    path (an unsatisfiable `||` subtree yielding to the next
-    alternative) is the next slice;
+  - `||`-preference feedback driving a retry — **both paths shipped
+    2026-09-03**, container-verified: the slot-conflict
+    `runtime_pkg_mask → dep_zapdeps` path
+    (`TEST/scripts/42-or-backtrack.sh`) and the "missing dependency"
+    path (`_feedback_missing_dep`, an unsatisfiable `||` subtree
+    yielding to the next alternative — `TEST/scripts/43-or-missing-dep.sh`);
+    `docs/or-preference-backtrack-plan.md`;
   - the slot-collision notice's remaining cuts: `pkg_use_display` for a
     package with non-default USE (the ` USE=""` slot renders, non-empty
     flag lists don't), the `use`/`soname` reason keys, operator/USE-token
@@ -349,19 +350,20 @@ at a time**, it is close.
 The distance to a drop-in replacement is now dominated by **one** large
 item, with a short incremental tail:
 
-1. **The backtracking resolver (Part 2.A).** The shipped `'backtrack`
-   loop reconciles solvable slot conflicts, masks unsolvable ones,
-   renders the real notices, tries USE/keyword autounmask levels
-   *inside* the loop (shipped 2026-09-03), drives the
-   slot-operator-rebuild sub-slot cascade to a fixpoint (shipped
-   2026-09-03, container-verified), and lets a slot-conflict
-   `runtime_pkg_mask` re-drive a `||` group's alternative choice
-   (shipped 2026-09-03, container-verified —
-   `docs/or-preference-backtrack-plan.md`). What remains is the
-   "missing dependency" backtrack path (a `||` alternative whose
-   *subtree* is unsatisfiable yielding to the next). This is the last
-   of the architectural work between "installs and uninstalls packages"
-   and "is portage".
+1. **The backtracking resolver (Part 2.A) — the architectural core is
+   now in place.** The shipped `'backtrack` loop reconciles solvable
+   slot conflicts, masks unsolvable ones, renders the real notices,
+   tries USE/keyword autounmask levels *inside* the loop (2026-09-03),
+   drives the slot-operator-rebuild sub-slot cascade to a fixpoint
+   (2026-09-03, container-verified), and drives **both** real
+   `runtime_pkg_mask` feedback paths — `_feedback_slot_conflict` and
+   `_feedback_missing_dep` — into `||` alternative re-selection
+   (2026-09-03, container-verified —
+   `docs/or-preference-backtrack-plan.md`). What is left here is
+   depth/fidelity work on the pieces already built (richer
+   `_slot_conflict_backtrack` mask-target analysis, `dep_zapdeps`'
+   full preference bins, deeper multi-constraint interplay), not a
+   missing mechanism.
 
 2. **The rest of Part 2** — the scheduler tail (2.B), the deliberate
    sandbox and `FEATURES` cuts (2.D), the remote-binhost / gpkg-signing

@@ -106,7 +106,39 @@ path, nothing more.
   incompatible slots) and `orbtclean` resolves cleanly. Real picks
   `orbtclean`. Container cross-check.
 
-### Slice 2 — "missing dependency" backtracking
+### Slice 2 — "missing dependency" backtracking — **SHIPPED 2026-09-03**
+
+Container-verified byte-for-byte vs real portage 3.0.82.2
+(`TEST/scripts/43-or-missing-dep.sh`). As shipped:
+
+- A dependency atom resolving to `NoVisibleCandidate` records a
+  `missing_dep_trigger = ((parent_cat, parent_pkg), "!=parent-cpv")`
+  once per pass, gated on: backtracking live (`backtrack_max > 0`,
+  `mask_phase == None`), the parent is a **merge-bound, non-top-level**
+  entry, the `!=parent-cpv` not already in the `missing_dep_masked`
+  latch, **and** the atom has no candidate even ignoring its USE deps
+  (`!atom_currently_satisfiable(bare_atom)` — real `depgraph.py:3473`
+  does not missing-dep backtrack a USE-only failure; that stays the
+  autounmask machinery's job and an unfixable `[flag]` dep is a plain
+  NVC).
+- The driver (after the autounmask re-run check) folds the negative
+  into `slot_constraints`, latches it, `backtrack_iteration += 1`,
+  `continue 'backtrack`. Slice 1's `||` closure then yields to the next
+  alternative. Latch + ceiling guarantee termination; an un-fixable dep
+  falls through to the unchanged NVC report.
+
+Fixture `dev-libs/{ormisstop,ormissbad,ormissgood}`: `ormisstop`
+RDEPEND `|| ( dev-libs/ormissbad dev-libs/ormissgood )`; `ormissbad`
+(visible) RDEPEND `dev-libs/ormiss-nonexistent` (no candidate anywhere).
+Real masks `ormissbad`, retry picks `ormissgood`; `--backtrack=0`
+reports the missing dep. Contract test
+`test_or_group_alternative_yields_to_the_next_on_a_missing_transitive_dep`.
+Zero fallout across the 1243 pre-existing contract tests (one existing
+autounmask-breakage unit test flagged the USE-only guard, now in place).
+
+---
+
+*Original Slice 2 sketch (for reference):*
 
 When resolving a dependency atom yields `NoVisibleCandidate`, and
 backtracking is live (`backtrack_max > 0`, `backtrack_iteration <

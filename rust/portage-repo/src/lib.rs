@@ -10300,6 +10300,23 @@ fn backtracking_resolve(req: &ResolveRequest) -> Result<GraphResult, String> {
     // to the whole call) apart from a dependency's (reported, not fatal)
     // -- see the doc comment above.
     let top_level: HashSet<&str> = atoms.iter().map(|s| s.as_str()).collect();
+    // The `(cat, pkg)` of every directly-requested atom -- the
+    // "missing dependency" backtrack (real `_feedback_missing_dep`)
+    // never masks one of these (masking a requested package just turns
+    // its own line into a fatal `there are no ebuilds to satisfy`, no
+    // better than reporting the missing transitive dep).
+    let top_level_cps: HashSet<(String, String)> = atoms
+        .iter()
+        .filter_map(|a| portage_dep::parse_atom(a))
+        .map(|a| (a.category, a.package))
+        .collect();
+    // Real `backtracking.py::_feedback_missing_dep`: a dependency atom
+    // with no matching package makes `_backtrack_depgraph` mask that
+    // atom's *parent* and retry, so `dep_zapdeps` re-picks a `||` group
+    // whose chosen alternative had an unsatisfiable subtree. The latch
+    // (real's `dep.parent not in _runtime_pkg_mask` check) holds every
+    // `!=parent-cpv` already tried, guaranteeing termination.
+    let mut missing_dep_masked: HashSet<String> = HashSet::new();
 
     // The local `$PKGDIR` binary index, built once for the whole walk
     // (either the CLI layer's `$PKGDIR` directory scan or the parsed
@@ -10426,6 +10443,11 @@ fn backtracking_resolve(req: &ResolveRequest) -> Result<GraphResult, String> {
         // The driver at the bottom re-runs the whole walk with the grown
         // config, so the flipped package's `flag?`-gated deps appear.
         let mut autounmask_grew = false;
+        // Set (once) when this pass hit a dependency `NoVisibleCandidate`
+        // whose non-top-level parent isn't already latched -- the driver
+        // at the bottom masks `!=parent-cpv` and re-runs (real
+        // `_feedback_missing_dep`).
+        let mut missing_dep_trigger: Option<((String, String), String)> = None;
 
         let mut entries: Vec<GraphEntry> = Vec::new();
         // REQUIRED_USE (see the check further below, in the main BFS loop):
@@ -10996,6 +11018,52 @@ fn backtracking_resolve(req: &ResolveRequest) -> Result<GraphResult, String> {
             };
 
             let Some(version) = resolved_version else {
+                // Real `_feedback_missing_dep`: this dependency atom has
+                // no matching package. If backtracking is live and its
+                // parent is a merge-bound, non-top-level entry not yet
+                // tried, remember to mask `!=parent-cpv` and retry -- so a
+                // `||` group whose chosen alternative has an unsatisfiable
+                // subtree yields to the next alternative. Only the first
+                // such trigger per pass is acted on (like real, one
+                // backtrack node at a time); the NVC entry is still built
+                // below so an un-fixable dep is reported unchanged.
+                // Real (depgraph.py:3473-3483) does NOT missing-dep
+                // backtrack when only a USE change would satisfy the dep
+                // (`_select_package(dep.atom.without_use)` still finds a
+                // package) -- that path is the autounmask machinery's, and
+                // an unfixable `[flag]` dep is reported as a plain NVC.
+                let bare_atom = current_atom
+                    .split_once('[')
+                    .map_or(current_atom.as_str(), |(b, _)| b);
+                if matches!(outcome, PretendOutcome::NoVisibleCandidate)
+                    && backtrack_max > 0
+                    && mask_phase == MaskPhase::None
+                    && missing_dep_trigger.is_none()
+                    && !atom_currently_satisfiable(&repos, bare_atom, config, &[])
+                {
+                    if let Some((pc, pp)) = owner.clone() {
+                        if !top_level_cps.contains(&(pc.clone(), pp.clone())) {
+                            let parent_cpv = entries
+                                .iter()
+                                .find(|e| e.category == pc && e.package == pp)
+                                .and_then(|e| match &e.outcome {
+                                    PretendOutcome::New { version }
+                                    | PretendOutcome::Reinstall { version, .. } => {
+                                        Some(version.clone())
+                                    }
+                                    PretendOutcome::Upgrade { to, .. }
+                                    | PretendOutcome::Downgrade { to, .. } => Some(to.clone()),
+                                    _ => None,
+                                });
+                            if let Some(pv) = parent_cpv {
+                                let neg = format!("!={pc}/{pp}-{pv}");
+                                if !missing_dep_masked.contains(&neg) {
+                                    missing_dep_trigger = Some(((pc, pp), neg));
+                                }
+                            }
+                        }
+                    }
+                }
                 // AlreadyInstalled / NoVisibleCandidate: no slot to key a
                 // repeat by, so dedup on category/package alone, same as v1
                 // always did before slot-aware resolution existed.
@@ -12260,6 +12328,26 @@ fn backtracking_resolve(req: &ResolveRequest) -> Result<GraphResult, String> {
             c.autounmask_use = autounmask_use_tier(&autounmask_use_config);
             backtrack_config = Some(c);
             continue 'backtrack;
+        }
+
+        // Real `backtracking.py::_feedback_missing_dep`: this pass hit a
+        // dependency with no matching package; mask its parent (`!=cpv`,
+        // via `slot_constraints`, latched in `missing_dep_masked` so the
+        // same parent is never re-masked) and re-run. Combined with the
+        // `||` closure honouring `slot_constraints`, a `|| ( a b )` whose
+        // `a` has an unsatisfiable subtree now yields to `b`. When the
+        // latch or `backtrack_max` blocks the retry, the pass's own
+        // `NoVisibleCandidate` entry is reported, exactly as before.
+        if let Some(((pc, pp), neg)) = missing_dep_trigger.take() {
+            if mask_phase == MaskPhase::None && backtrack_iteration < backtrack_max {
+                slot_constraints
+                    .entry((pc, pp))
+                    .or_default()
+                    .push(neg.clone());
+                missing_dep_masked.insert(neg);
+                backtrack_iteration += 1;
+                continue 'backtrack;
+            }
         }
 
         // Real depgraph's slot-operator auto-rebuild: an installed consumer

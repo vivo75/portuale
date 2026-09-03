@@ -7021,6 +7021,14 @@ def resolve_pretend_graph(
     Mirrors portage-repo/src/lib.rs's resolve_pretend_graph exactly."""
     repos = find_repos(config_root)
     top_level = set(atoms)
+    # The (cat, pkg) of every directly-requested atom -- the
+    # "missing dependency" backtrack (real _feedback_missing_dep) never
+    # masks one of these. Mirrors portage-repo/src/lib.rs.
+    top_level_cps = set()
+    for _a in atoms:
+        _pa = _parse_atom(_a)
+        if _pa is not None:
+            top_level_cps.add(tuple(_pa.cp.split("/", 1)))
     # Real create_depgraph_params.py:178: --emptytree sets
     # myparams["deep"] = True. Real _complete_graph 8668-8670 does the
     # same for --complete-graph -- see the `complete` param's grounding in
@@ -7043,6 +7051,14 @@ def resolve_pretend_graph(
     # resolve_pretend_graph exactly.
     slot_constraints = {}
     backtrack_iteration = 0
+    # Real backtracking.py::_feedback_missing_dep: a dependency atom with
+    # no matching package makes _backtrack_depgraph mask that atom's
+    # *parent* and retry, so dep_zapdeps re-picks a "||" group whose
+    # chosen alternative had an unsatisfiable subtree. The latch (real's
+    # "dep.parent not in _runtime_pkg_mask") holds every "!=parent-cpv"
+    # already tried. Mirrors portage-repo/src/lib.rs.
+    missing_dep_masked = set()
+    _missing_dep_trigger = None
     # Backtracking slice 3 (unsolvable conflict -> runtime_pkg_mask): a
     # small state machine across passes. "none" = ordinary pass; "trying" =
     # the pass just ran with a trial set of "!=cpv" masks and its result
@@ -7093,7 +7109,8 @@ def resolve_pretend_graph(
         return out
 
     def _graph_pass():
-        nonlocal autounmask_use_broke
+        nonlocal autounmask_use_broke, _missing_dep_trigger
+        _missing_dep_trigger = None
         # Guards against infinite requeuing (e.g. a dependency cycle): the
         # exact same atom text is only ever resolved once -- deliberately
         # coarser than the (category, package, slot) dedup below, which
@@ -7567,6 +7584,40 @@ def resolve_pretend_graph(
             elif outcome[0] == "reinstall":
                 version = outcome[1]
             else:
+                # Real _feedback_missing_dep: this dependency atom has no
+                # matching package. If backtracking is live and its parent
+                # is a merge-bound, non-top-level entry not yet tried,
+                # remember to mask "!=parent-cpv" and retry (so a "||"
+                # group whose chosen alternative has an unsatisfiable
+                # subtree yields to the next). Only the first such trigger
+                # per pass is acted on. Mirrors portage-repo/src/lib.rs.
+                # Real (depgraph.py:3473-3483) does NOT missing-dep
+                # backtrack when only a USE change would satisfy the dep
+                # (_select_package(dep.atom.without_use) still finds a
+                # package) -- an unfixable "[flag]" dep is a plain NVC.
+                _bare_atom = current_atom_str.split("[", 1)[0]
+                if (
+                    outcome[0] == "no_visible_candidate"
+                    and backtrack_max > 0
+                    and mask_phase == "none"
+                    and _missing_dep_trigger is None
+                    and owner is not None
+                    and owner not in top_level_cps
+                    and not _atom_currently_satisfiable(repos, _bare_atom, config)
+                ):
+                    _pv = None
+                    for _e in entries:
+                        if (_e[0], _e[1]) == owner:
+                            _eo = _e[2]
+                            if _eo[0] in ("new", "reinstall"):
+                                _pv = _eo[1]
+                            elif _eo[0] in ("upgrade", "downgrade"):
+                                _pv = _eo[2]
+                            break
+                    if _pv is not None:
+                        _neg = f"!={owner[0]}/{owner[1]}-{_pv}"
+                        if _neg not in missing_dep_masked:
+                            _missing_dep_trigger = (owner, _neg)
                 # AlreadyInstalled / NoVisibleCandidate: no slot to key a
                 # repeat by, so dedup on category/package alone, same as v1
                 # always did before slot-aware resolution existed.
@@ -8550,6 +8601,26 @@ def resolve_pretend_graph(
                 **_base_config,
                 "autounmask_use": _autounmask_use_tier(autounmask_use_config),
             }
+            continue
+
+        # Real backtracking.py::_feedback_missing_dep: this pass hit a
+        # dependency with no matching package; mask its parent ("!=cpv"
+        # via slot_constraints, latched in missing_dep_masked so the same
+        # parent is never re-masked) and re-run. Combined with the "||"
+        # closure honouring slot_constraints, a "|| ( a b )" whose `a` has
+        # an unsatisfiable subtree yields to `b`. When the latch or
+        # backtrack_max blocks the retry, the pass's own
+        # no_visible_candidate entry is reported, as before. Mirrors
+        # portage-repo/src/lib.rs.
+        if (
+            _missing_dep_trigger is not None
+            and mask_phase == "none"
+            and backtrack_iteration < backtrack_max
+        ):
+            _mdp_owner, _mdp_neg = _missing_dep_trigger
+            slot_constraints.setdefault(_mdp_owner, []).append(_mdp_neg)
+            missing_dep_masked.add(_mdp_neg)
+            backtrack_iteration += 1
             continue
         break
 
