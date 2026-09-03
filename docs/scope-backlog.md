@@ -150,11 +150,12 @@ architectural — a single-pass BFS can't grow into these incrementally:
   root, and the `-pc` advisory's "will be removed by depclean even if in
   world" wording.
 
-- **Bare command-line names, remaining shapes** — a versioned or slotted
-  bare name (`emerge eix-1.2`, `emerge eix:0`) is not category-qualified
-  (real `dep_expand`'s `null/`-insertion path handles those); real's
-  non-`--quiet` `ambiguous_package_name` runs a full `search` before the
-  `!!!` lines (portuale emits only the deterministic list).
+- **Bare command-line names, remaining shape** — real's non-`--quiet`
+  `ambiguous_package_name` runs a full `search` before the `!!!` lines
+  (portuale emits only the deterministic list). *(The versioned/slotted
+  bare name — `emerge eix-1.2`, `emerge '>=eix-1.2'`, `emerge eix:0` —
+  shipped 2026-09-03: real `dep_expand`'s `null/`-insertion +
+  missing-`=` retry + `cpv_expand` + splice, as `dep_expand_token`.)*
 
 ### B. Scheduler / build orchestration
 

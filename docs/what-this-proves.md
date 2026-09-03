@@ -11989,12 +11989,25 @@ non-virtual-preference case). 3 CASES entries + 3 pinned contract tests
 
 **Documented cuts:** real's non-`--quiet` `ambiguous_package_name` runs a
 full `search` and prints its output before the `!!!` lines — portuale
-emits only the deterministic list. A bare name carrying a version or slot
-(`emerge eix-1.2`, `emerge eix:0`) is not qualified (real `dep_expand`'s
-`null/`-insertion handles those); it falls through to the existing
-`invalid atom` / `no ebuilds` paths. The `null/<name>` fallback +
+emits only the deterministic list. The `null/<name>` fallback +
 cross-category misspell search for the no-match case is replaced by the
 direct message.
+
+**Follow-up (2026-09-03): the versioned/slotted shape.** `emerge eix-1.2`,
+`emerge '>=eix-1.2'`, `emerge eix:0` now qualify too. `is_bare_package_name`
++ the direct `qualify_bare_name` call became `dep_expand_token`, a
+field-for-field port of real `dep_expand`: insert `null/` before the first
+`\w` char, parse (retrying `="+dep` for the "missing `=` prefix is allowed
+for backward compatibility" shape — `eix-1.2` → `=null/eix-1.2`), pull the
+package name back out of `mydep.cp`, `cpv_expand` (`qualify_bare_name`)
+just that name, and splice the category into the original string with a
+single `str.replace(pn, cat/pn, 1)`. `>=eix-1.2` → `>=cat/eix-1.2`,
+`eix-1.2` → `=cat/eix-1.2` (the missing `=`), `eix:0` → `cat/eix:0`. The
+ambiguous / no-match branches run on the stripped package name, so
+`emerge ambigpkg-1.0` still errors like `emerge ambigpkg`. 5 CASES + a
+pinned contract test + a `pretend.rs` unit test. Remaining cut: an
+explicit `virtual/` category's old-style PROVIDE-virtual expansion
+(`dep_expand`'s `has_cat` branch — dead since 2011).
 
 ### The resolver is a self-contained, swappable unit (2026-09-03)
 

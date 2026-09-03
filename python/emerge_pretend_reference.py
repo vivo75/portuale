@@ -9262,19 +9262,45 @@ def _all_cp(repos):
     return sorted(out)
 
 
-def _is_bare_package_name(s):
-    """Whether `s` is a plain package name with no category, version,
-    operator, slot, use-dep, or repo -- the only shape
-    `_qualify_bare_name` handles (real `dep_expand`'s `null/`-insertion
-    path also covers `eix:0` / `eix-1.2`; a documented v1 cut). Mirrors
-    pretend.rs's is_bare_package_name."""
-    return bool(
-        s
-        and s[0] not in "@!=<>~-*"
-        and "/" not in s
-        and all(c.isalnum() or c in "+._-" for c in s)
-        and _parse_atom(s) is None
-    )
+def _dep_expand_token(token, all_cp):
+    """Real `dep_expand` (lib/portage/dbapi/dep_expand.py): a command-line
+    target with no category is qualified against the tree. Covers the
+    pure-bare name (`emerge eix`) and one carrying an operator / bare
+    version / slot / use-deps / repo (`emerge eix-1.2`, `emerge
+    '>=eix-1.2'`, `emerge eix:0`): insert `null/` before the first word
+    char, parse (retrying with a leading `=` for the "missing `=`"
+    backward-compat shape), pull the package name back out of `mydep.cp`,
+    `cpv_expand` just that name, splice the category into the original
+    string. Returns ("unchanged", None), ("qualified", "<token>"),
+    ("ambiguous", [<cat/pkg>...]) or ("nomatch", None). Mirrors
+    pretend.rs's dep_expand_token.
+
+    Documented cut vs real: old-style PROVIDE-virtual expansion for an
+    explicit `virtual/` category (dead since 2011, unused by this fork)."""
+    if not token or token[0] == "@":
+        return ("unchanged", None)
+    deref = token[1:] if token[:1] == "*" else token
+    if "/" in deref.split(":")[0]:
+        return ("unchanged", None)
+    m = re.search(r"\w", deref)
+    if not m:
+        return ("unchanged", None)
+    with_null = deref[: m.start()] + "null/" + deref[m.start() :]
+    added_eq = False
+    atom = _parse_atom(with_null)
+    if atom is None:
+        atom = _parse_atom("=" + with_null)
+        added_eq = True
+    if atom is None:
+        return ("unchanged", None)
+    pn = atom.cp.split("/", 1)[1]
+    kind, val = _qualify_bare_name(pn, all_cp)
+    if kind == "nomatch":
+        return ("nomatch", None)
+    if kind == "ambiguous":
+        return ("ambiguous", val)
+    orig = ("=" + deref) if added_eq else deref
+    return ("qualified", orig.replace(pn, val, 1))
 
 
 def _qualify_bare_name(name, all_cp):
@@ -13874,18 +13900,18 @@ def run(args):
     atom_args = [apply_updates_to_atom(a) for a in expanded_atoms]
 
     # Real dep_expand() / cpv_expand() (lib/portage/dbapi/): a
-    # command-line target with no category (`emerge eix`) is qualified
-    # against the repo tree. Exactly one match -> use it silently; more
-    # than one -> the real ambiguous_package_name block (--quiet form),
-    # exit 1; none -> "there are no ebuilds to satisfy", exit 1. Mirrors
-    # pretend.rs.
+    # command-line target with no category (`emerge eix`, `emerge
+    # eix-1.2`, `emerge eix:0`) is qualified against the repo tree.
+    # Exactly one match -> use it silently; more than one -> the real
+    # ambiguous_package_name block (--quiet form), exit 1; none -> "there
+    # are no ebuilds to satisfy", exit 1. Mirrors pretend.rs.
     _bare_all_cp = None
     for i, atom_arg in enumerate(atom_args):
-        if not _is_bare_package_name(atom_arg):
-            continue
         if _bare_all_cp is None:
             _bare_all_cp = _all_cp(all_repos)
-        kind, val = _qualify_bare_name(atom_arg, _bare_all_cp)
+        kind, val = _dep_expand_token(atom_arg, _bare_all_cp)
+        if kind == "unchanged":
+            continue
         if kind == "qualified":
             atom_args[i] = val
         elif kind == "ambiguous":

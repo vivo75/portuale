@@ -2623,25 +2623,83 @@ fn run_deselect(targets: &[&str], root: &Path, pretend: bool, ask: bool) -> Exit
 /// working). Real portage's own stray `print(sp_absx)` / `print(absx)`
 /// debug lines before the "not inside …; aborting" message (a raw
 /// list repr -- clearly unintended output) are deliberately omitted.
-/// Whether `s` is a plain package name with no category, version,
-/// operator, slot, use-dep, or repo -- the only shape `qualify_bare_name`
-/// handles. Real `dep_expand`'s `null/`-insertion path also covers a
-/// trailing `:slot` / bare version (`emerge eix:0`, `emerge eix-1.2`);
-/// that is a documented v1 cut here.
-fn is_bare_package_name(s: &str) -> bool {
-    !s.is_empty()
-        && !s.starts_with(['@', '!', '=', '<', '>', '~', '-', '*'])
-        && !s.contains('/')
-        && s.bytes()
-            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'+' | b'.' | b'_' | b'-'))
-        && parse_atom(s).is_none()
-}
-
 /// Outcome of qualifying a bare command-line name against the repo tree.
 enum BareName {
     Qualified(String),
     Ambiguous(Vec<String>),
     NoMatch,
+}
+
+/// Outcome of running real `dep_expand` over one command-line token.
+enum DepExpand {
+    /// Already category-qualified, a `@set`, or not a package token --
+    /// left as-is.
+    Unchanged,
+    /// The token with its category spliced in (`eix-1.2` ->
+    /// `=app-portage/eix-1.2`, `eix:0` -> `app-portage/eix:0`).
+    Qualified(String),
+    /// The bare name matches more than one `cat/pkg` (real
+    /// `AmbiguousPackageName`) -- carries the sorted `cat/pkg` list.
+    Ambiguous(Vec<String>),
+    /// The bare name matches no `cat/pkg` anywhere.
+    NoMatch,
+}
+
+/// Real `dep_expand` (`lib/portage/dbapi/dep_expand.py`): a command-line
+/// target with no category is qualified against the tree. Covers the
+/// pure-bare name (`emerge eix`) **and** one that carries an operator /
+/// bare version / slot / use-deps / repo (`emerge eix-1.2`,
+/// `emerge '>=eix-1.2'`, `emerge eix:0`): real inserts `null/` before the
+/// first word character, parses the result (retrying with a leading `=`
+/// for the "missing `=`" backward-compat shape), pulls the package name
+/// back out of `mydep.cp`, `cpv_expand`s just that name, and splices the
+/// category into the original string with a single `str.replace`.
+///
+/// Documented cut vs real: old-style PROVIDE-virtual expansion for an
+/// explicit `virtual/` category (`dep_expand`'s `has_cat` branch) -- dead
+/// since 2011 and unused by this fork.
+fn dep_expand_token(token: &str, all_cp: &[String]) -> DepExpand {
+    if token.is_empty() || token.starts_with('@') {
+        return DepExpand::Unchanged;
+    }
+    // Real: a leading `*` (set-file atom form) is stripped and does not
+    // survive into `orig_dep`.
+    let deref = token.strip_prefix('*').unwrap_or(token);
+    // `has_cat = "/" in orig_dep.split(":")[0]`
+    if deref.split(':').next().unwrap_or(deref).contains('/') {
+        return DepExpand::Unchanged;
+    }
+    // `alphanum = re.search(r"\w", orig_dep)`, then insert `null/` there.
+    let Some((wpos, _)) = deref
+        .char_indices()
+        .find(|(_, c)| c.is_alphanumeric() || *c == '_')
+    else {
+        return DepExpand::Unchanged;
+    };
+    let with_null = format!("{}null/{}", &deref[..wpos], &deref[wpos..]);
+    let (atom, added_eq) = match parse_atom(&with_null) {
+        Some(a) => (a, false),
+        // "Missing '=' prefix is allowed for backward compatibility."
+        None => match parse_atom(&format!("={with_null}")) {
+            Some(a) => (a, true),
+            None => return DepExpand::Unchanged,
+        },
+    };
+    let pn = atom.package;
+    match qualify_bare_name(&pn, all_cp) {
+        BareName::NoMatch => DepExpand::NoMatch,
+        BareName::Ambiguous(m) => DepExpand::Ambiguous(m),
+        BareName::Qualified(cp) => {
+            // `Atom(str(orig_dep).replace(mydep, expanded, 1))`, where
+            // `orig_dep` has gained the `=` iff we did above.
+            let orig = if added_eq {
+                format!("={deref}")
+            } else {
+                deref.to_string()
+            };
+            DepExpand::Qualified(orig.replacen(&pn, &cp, 1))
+        }
+    }
 }
 
 /// Real `cpv_expand` (`lib/portage/dbapi/cpv_expand.py`): the `cat/pkg`
@@ -8096,24 +8154,23 @@ pub fn run(args: &[String]) -> ExitCode {
     }
 
     // Real `dep_expand()` / `cpv_expand()` (`lib/portage/dbapi/`): a
-    // command-line target with no category (`emerge eix`) is qualified
-    // against the repo tree -- scan every `<repo>/<cat>/<pkg>/` for a
-    // package matching the bare name. Exactly one -> use it silently;
-    // more than one -> the real `ambiguous_package_name` block (its
-    // `--quiet` form -- real's default form runs a full `search`, a
-    // documented cut), exit 1; none -> `there are no ebuilds to
-    // satisfy`, exit 1. A `@set`-expanded atom is already `cat/pkg`, so
-    // only a genuine command-line bare name reaches this.
+    // command-line target with no category (`emerge eix`, `emerge
+    // eix-1.2`, `emerge eix:0`) is qualified against the repo tree --
+    // scan every `<repo>/<cat>/<pkg>/` for a package matching the bare
+    // name. Exactly one -> use it silently; more than one -> the real
+    // `ambiguous_package_name` block (its `--quiet` form -- real's
+    // default form runs a full `search`, a documented cut), exit 1;
+    // none -> `there are no ebuilds to satisfy`, exit 1. A
+    // `@set`-expanded atom is already `cat/pkg`, so only a genuine
+    // command-line bare name reaches this.
     {
         let mut all_cp: Option<Vec<String>> = None;
         for atom in &mut expanded_atoms {
-            if !is_bare_package_name(atom) {
-                continue;
-            }
             let cps = all_cp.get_or_insert_with(|| portage_repo::all_cp(&repos));
-            match qualify_bare_name(atom, cps) {
-                BareName::Qualified(cp) => *atom = cp,
-                BareName::Ambiguous(matches) => {
+            match dep_expand_token(atom, cps) {
+                DepExpand::Unchanged => {}
+                DepExpand::Qualified(q) => *atom = q,
+                DepExpand::Ambiguous(matches) => {
                     eprintln!(
                         "\n!!! The short ebuild name \"{atom}\" is ambiguous. Please specify"
                     );
@@ -8123,7 +8180,7 @@ pub fn run(args: &[String]) -> ExitCode {
                     }
                     return ExitCode::from(1);
                 }
-                BareName::NoMatch => {
+                DepExpand::NoMatch => {
                     eprintln!("emerge: there are no ebuilds to satisfy {atom:?}.");
                     return ExitCode::from(1);
                 }
@@ -9174,13 +9231,6 @@ mod tests {
 
     #[test]
     fn bare_name_qualification() {
-        assert!(is_bare_package_name("eix"));
-        assert!(is_bare_package_name("app-misc"));
-        assert!(!is_bare_package_name("app-portage/eix")); // has category
-        assert!(!is_bare_package_name("@world")); // set
-        assert!(!is_bare_package_name("!dev-libs/foo")); // blocker
-        assert!(!is_bare_package_name("dev-libs/foo:0")); // parses as an atom
-
         let tree = [
             "app-portage/eix".to_string(),
             "app-misc/dup".to_string(),
@@ -9210,6 +9260,58 @@ mod tests {
         assert!(matches!(
             qualify_bare_name("nope", &tree),
             BareName::NoMatch
+        ));
+    }
+
+    #[test]
+    fn dep_expand_token_covers_versioned_and_slotted_bare_names() {
+        let tree = [
+            "app-portage/eix".to_string(),
+            "app-misc/dup".to_string(),
+            "dev-libs/dup".to_string(),
+        ];
+        // already qualified / not a package token -> untouched
+        assert!(matches!(
+            dep_expand_token("app-portage/eix", &tree),
+            DepExpand::Unchanged
+        ));
+        assert!(matches!(
+            dep_expand_token(">=app-portage/eix-1.2", &tree),
+            DepExpand::Unchanged
+        ));
+        assert!(matches!(
+            dep_expand_token("@world", &tree),
+            DepExpand::Unchanged
+        ));
+        // pure bare
+        assert!(matches!(
+            dep_expand_token("eix", &tree),
+            DepExpand::Qualified(q) if q == "app-portage/eix"
+        ));
+        // bare + version: real inserts the missing "=" (dep_expand's
+        // backward-compat path)
+        assert!(matches!(
+            dep_expand_token("eix-1.2", &tree),
+            DepExpand::Qualified(q) if q == "=app-portage/eix-1.2"
+        ));
+        // bare + operator + version
+        assert!(matches!(
+            dep_expand_token(">=eix-1.2", &tree),
+            DepExpand::Qualified(q) if q == ">=app-portage/eix-1.2"
+        ));
+        // bare + slot
+        assert!(matches!(
+            dep_expand_token("eix:0", &tree),
+            DepExpand::Qualified(q) if q == "app-portage/eix:0"
+        ));
+        // still ambiguous / no-match after stripping the version
+        assert!(matches!(
+            dep_expand_token("dup-2.0", &tree),
+            DepExpand::Ambiguous(m) if m == ["app-misc/dup", "dev-libs/dup"]
+        ));
+        assert!(matches!(
+            dep_expand_token("nope-1.0", &tree),
+            DepExpand::NoMatch
         ));
     }
 

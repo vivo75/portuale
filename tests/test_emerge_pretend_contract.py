@@ -1007,6 +1007,11 @@ CASES = [
     ("bare name: a unique package name is category-qualified", ["--pretend", "newpkg"], 0),
     ("bare name: ambiguous across two categories is rejected", ["--pretend", "ambigpkg"], 1),
     ("bare name: no match reports 'no ebuilds to satisfy'", ["--pretend", "nosuchpkgname"], 1),
+    ("bare name + version: dep_expand splices the category (=cat/pkg-ver)", ["--pretend", "newpkg-1.0"], 0),
+    ("bare name + operator + version: dep_expand splices the category", ["--pretend", ">=newpkg-1.0"], 0),
+    ("bare name + slot: dep_expand splices the category", ["--pretend", "newpkg:0"], 0),
+    ("bare name + nonexistent version: 'no ebuilds' on the expanded atom", ["--pretend", "newpkg-9.9"], 1),
+    ("bare name + version, ambiguous: still rejected after stripping the version", ["--pretend", "ambigpkg-1.0"], 1),
     ("profile defaults walk: a leaf make.defaults cancels a parent package.use", ["--pretend", "-v", "dev-libs/interleavepkg"], 0),
     ("blocker: strong (!!) blocker matches an installed package", ["--pretend", "dev-libs/blockerpkg"], 0),
     ("blocker: weak (!) blocker matches another new package in the graph", ["--pretend", "dev-libs/graphblockerparent"], 0),
@@ -10328,6 +10333,43 @@ def test_bare_command_line_name_is_category_qualified(
         assert r.returncode == 0, r.stderr
         assert r.stdout == p.stdout
         assert r.stdout.splitlines()[0].rstrip() == expected
+
+
+def test_bare_command_line_name_with_version_or_slot_is_category_qualified(
+    emerge_binary, emerge_pretend_python, fixture_env
+):
+    """Real `dep_expand` (lib/portage/dbapi/dep_expand.py): a no-category
+    target that carries an operator, a bare version, or a slot is still
+    qualified -- `null/` is inserted before the first word char, the
+    result is parsed (retrying with a leading `=` for the missing-`=`
+    backward-compat shape), the package name is pulled back out and
+    `cpv_expand`ed, and the category is spliced into the original string.
+    `dev-libs/newpkg` is the only `newpkg` anywhere. Rust == Python."""
+    for target, first_line, exit_code in (
+        ("newpkg-1.0", "[ebuild  N     ] dev-libs/newpkg-1.0", 0),
+        (">=newpkg-1.0", "[ebuild  N     ] dev-libs/newpkg-1.0", 0),
+        ("newpkg:0", "[ebuild  N     ] dev-libs/newpkg-1.0", 0),
+    ):
+        r = _run([str(emerge_binary)], ["--pretend", target], fixture_env)
+        p = _run(emerge_pretend_python, ["--pretend", target], fixture_env)
+        assert r.returncode == exit_code, r.stderr
+        assert r.stdout == p.stdout and r.stderr == p.stderr
+        assert r.stdout.splitlines()[0].rstrip() == first_line
+
+    # a bare version with no matching ebuild: the message quotes the
+    # dep_expand'd atom (real cpv_expand splices the category, then
+    # resolution fails)
+    r = _run([str(emerge_binary)], ["--pretend", "newpkg-9.9"], fixture_env)
+    p = _run(emerge_pretend_python, ["--pretend", "newpkg-9.9"], fixture_env)
+    assert r.returncode == 1 and r.stderr == p.stderr
+    assert r.stderr.strip() == 'emerge: there are no ebuilds to satisfy "=dev-libs/newpkg-9.9".'
+
+    # ambiguous survives version stripping
+    r = _run([str(emerge_binary)], ["--pretend", "ambigpkg-1.0"], fixture_env)
+    p = _run(emerge_pretend_python, ["--pretend", "ambigpkg-1.0"], fixture_env)
+    assert r.returncode == 1 and r.stdout == p.stdout and r.stderr == p.stderr
+    assert '!!! The short ebuild name "ambigpkg-1.0" is ambiguous.' in r.stderr
+    assert r.stdout.split() == ["app-misc/ambigpkg", "dev-libs/ambigpkg"]
 
 
 def test_bare_name_ambiguous_across_categories_is_rejected(
