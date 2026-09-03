@@ -2,6 +2,30 @@
 
 use crate::pretend::*;
 
+/// Wrap every `idx`-marked char of `text` in `BAD` red (a no-op when color
+/// is off) and return the wrapped string plus the marked positions shifted
+/// onto it, so carets land on visible text, never inside an escape.
+pub(crate) fn colorize_marked_spans(
+    text: &str,
+    idx: &std::collections::HashSet<usize>,
+    color: &Colorizer,
+) -> (String, std::collections::HashSet<usize>) {
+    let (open, close) = color.wrap_codes("BAD");
+    let mut out = String::new();
+    let mut shifted = std::collections::HashSet::new();
+    for (i, c) in text.chars().enumerate() {
+        if idx.contains(&i) {
+            out.push_str(&open);
+            shifted.insert(out.chars().count());
+            out.push(c);
+            out.push_str(&close);
+        } else {
+            out.push(c);
+        }
+    }
+    (out, shifted)
+}
+
 /// Portage's `pkg_use_display(pkg, ...)` return string -- `USE="…"` followed
 /// by one ` VAR="…"` per non-hidden `USE_EXPAND` group. Always renders a
 /// `USE=` field, even with no flags. Flag colorization is cut.

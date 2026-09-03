@@ -574,6 +574,53 @@ pub fn use_deps_satisfied(
     true
 }
 
+/// The `("use", flag)` reason keys one parent atom's `use_deps` contribute
+/// against a conflicting `other` instance: `(unconditional, violated)`.
+///
+/// - Unconditional: default-less flags absent from `other`'s IUSE; when
+///   non-empty, the violated check is skipped.
+/// - Violated: `[x]` with `x` off in `other` (while valid, or with a `(-)`
+///   default); `[-x]` with `x` on (or invalid with a `(+)` default).
+/// - Conditional forms never yield keys.
+///
+/// "Valid" flag means plain declared-IUSE membership (Portage also consults
+/// implicit IUSE).
+/// Portage: lib/portage/dep/slot_collision.py, _prepare_conflict_msg_and_check_for_specificity
+pub fn use_mismatch_flags(
+    use_deps: &[UseDep],
+    other_use: &HashSet<String>,
+    other_iuse: &HashSet<String>,
+) -> (HashSet<String>, HashSet<String>) {
+    let missing: HashSet<String> = use_deps
+        .iter()
+        .filter(|ud| ud.default.is_none() && !other_iuse.contains(&ud.flag))
+        .map(|ud| ud.flag.clone())
+        .collect();
+    if !missing.is_empty() {
+        return (missing, HashSet::new());
+    }
+    let mut violated = HashSet::new();
+    for ud in use_deps {
+        let hit = match ud.op {
+            UseDepOp::Enabled => {
+                !other_use.contains(&ud.flag)
+                    && (other_iuse.contains(&ud.flag)
+                        || ud.default == Some(UseDepDefault::Disabled))
+            }
+            UseDepOp::Disabled => {
+                other_use.contains(&ud.flag)
+                    || (!other_iuse.contains(&ud.flag)
+                        && ud.default == Some(UseDepDefault::Enabled))
+            }
+            _ => false,
+        };
+        if hit {
+            violated.insert(ud.flag.clone());
+        }
+    }
+    (HashSet::new(), violated)
+}
+
 /// Whether any of `use_deps` is violated by `child_use`/`child_iuse` given the
 /// recording package's `parent_use`: parent-conditionals are evaluated first,
 /// then checked as in `use_deps_satisfied`.
