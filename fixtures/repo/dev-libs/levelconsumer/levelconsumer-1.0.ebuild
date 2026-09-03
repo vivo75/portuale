@@ -1,0 +1,5 @@
+EAPI=8
+DESCRIPTION="fixture: RDEPEND dev-libs/levelpkg -- levelpkg-1.0 is @EULA-license-masked, levelpkg-2.0 is ~amd64 keyword-masked; real _autounmask_levels tries license before ~arch, so the lower license-masked 1.0 wins over the higher keyword-masked 2.0"
+SLOT="0"
+KEYWORDS="amd64"
+RDEPEND="dev-libs/levelpkg"

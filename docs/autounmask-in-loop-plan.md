@@ -77,10 +77,20 @@ autounmask_use_config: HashMap<(String, String), HashMap<String, bool>>
    already-resolved one (a `>=`/`<`-bounded atom pulling a *different*
    version of the same slot is not re-checked); no `*` autounmask marker
    on the `-pv` `USE=` line (a pre-existing fresh-path gap, unchanged).
-2. **`_autounmask_levels` ordering.** A per-iteration "max level" counter;
-   pass N only allows levels ≤ N; a lower version fixable at a lower
-   level wins. Fixture: `pkg-1.5` (USE-fixable) + `pkg-2.0` (`~arch`) →
-   `1.5`.
+2. **`_autounmask_levels` ordering.** ✅ **Shipped 2026-09-03.** The
+   `*_masked_only` visibility fallbacks in `resolve_pretend` now run in
+   real's least-to-most-invasive order (`+license` → `+~arch` → `+masks`,
+   was `~arch` → license → masks), stopping at the first level that
+   yields a candidate — each still picking the highest version it can
+   unmask. So a lower license-masked version beats a higher
+   keyword-masked one. Fixture: `dev-libs/levelconsumer` →
+   `levelpkg-1.0` (@EULA license) chosen over `levelpkg-2.0` (~amd64).
+   Rust==Python byte-identical. *(Not yet: a true per-level version scan
+   — portuale still takes the best version at whichever single level
+   first matches, which coincides with real for the cross-version
+   cases the fallbacks distinguish, but not for a "level-1 unmasks v1
+   AND v2, level-2 would unmask v3" chain where real re-scans. No
+   fixture exercises that.)*
 3. **`_autounmask_breakage`.** Detect an autounmask change that makes a
    previously-satisfied dep unsatisfiable; revert it, escalate. Fixture:
    flipping `x` on `A` to satisfy `Z` also kills `x? ( needed-by-Y )`.

@@ -12161,3 +12161,33 @@ Slice-1 cuts (later slices): the `autounmask_use` atom is `cat/pkg` not
 resolved version equals the already-resolved one; `_autounmask_levels`
 ordering, `_autounmask_breakage`, the whole-graph parent-flip re-resolve,
 and `get_best_run` are still ahead.
+
+### Autounmask level ordering — license before ~arch before masks (2026-09-03)
+
+Slice 2 of the autounmask-in-loop plan. Real `_autounmask_levels`
+(`depgraph.py:7446`) tries the allowed relaxations least- to
+most-invasive: `USE` (always on) → `+license` → `+~arch` → `+missing
+keywords` → `+masks`, and `_select_pkg_highest_available_imp` stops at
+the first level that yields a candidate.
+
+portuale's `resolve_pretend` had the three `*_masked_only` visibility
+fallbacks (used when no candidate is normally visible) in the order
+`keyword` → `license` → `mask` -- a comment even claimed the order was
+irrelevant. It is not, *across versions*: with `levelpkg-1.0`
+@EULA-license-masked and `levelpkg-2.0` `~amd64` keyword-masked, the old
+order picked the higher `2.0` (keyword change); real portage picks the
+lower `1.0` (license change) because level 1 (`+license`) is tried and
+settles before level 2 (`+~arch`) is ever considered.
+
+The fallbacks now run `license` → `keyword` → `mask`, matching real's
+level order; each still picks the highest version it can unmask at its
+level. Fixture `dev-libs/levelconsumer`: `levelpkg-1.0` chosen, with `The
+following license changes are necessary to proceed:` / `=dev-libs/
+levelpkg-1.0 SomeEula`, no keyword change. 1 CASE + a pinned contract
+test, Rust==Python byte-identical, full suite green.
+
+Not yet (later slices): a true per-level version re-scan (portuale takes
+the best version at whichever single level first matches -- coincides
+with real for the cross-version cases the fallbacks distinguish);
+`_autounmask_breakage` revert-and-escalate; the whole-graph parent-flip
+re-resolve; keyword/mask in-loop accumulators; `get_best_run`.

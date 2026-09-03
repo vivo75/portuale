@@ -7170,26 +7170,33 @@ pub fn resolve_pretend(
         .iter()
         .filter(|c| is_visible(c, &atom.category, &atom.package, config))
         .collect();
-    if visible.is_empty() && autounmask_keywords {
-        // Real `--autounmask`: a candidate masked by `KEYWORDS` alone
-        // becomes visible via the implicit `=cpv ~arch` change (see this
-        // parameter's own doc comment). Everything else
-        // (`package.mask`/license/properties/restrict) still has to pass.
-        visible = candidates
-            .iter()
-            .filter(|c| keyword_masked_only(c, &atom.category, &atom.package, config))
-            .collect();
-    }
+    // Real `_autounmask_levels` (`depgraph.py:7446`): the allowed
+    // relaxations are tried from least to most invasive -- `USE` (always
+    // on, handled by the `matched` use-dep filter below), then `+license`,
+    // then `+~arch` (unstable keywords), then `+missing keywords`, then
+    // `+masks` -- and `_select_pkg_highest_available_imp` stops at the
+    // first level that yields any candidate. So among these `*_masked_only`
+    // fallbacks the ORDER MATTERS across versions: a lower version fixable
+    // by a `package.license` accept beats a higher version needing
+    // `~arch`, which beats one needing `package.unmask`. Each fallback
+    // still picks the best (highest) version it can unmask at its level.
     if visible.is_empty() && autounmask_license {
-        // Real `--autounmask-license`: a candidate masked by `LICENSE`
-        // alone becomes visible via the implicit `package.license`
-        // accept. Order among these three `*_masked_only` fallbacks is
-        // irrelevant -- a candidate masked by exactly one of
-        // KEYWORDS / LICENSE / package.mask can only ever match one
-        // filter (each requires the other reasons to pass).
+        // Real `--autounmask-license` (level 1): a candidate masked by
+        // `LICENSE` alone becomes visible via the implicit
+        // `package.license` accept.
         visible = candidates
             .iter()
             .filter(|c| license_masked_only(c, &atom.category, &atom.package, config))
+            .collect();
+    }
+    if visible.is_empty() && autounmask_keywords {
+        // Real `--autounmask` (level 2, `~arch`): a candidate masked by
+        // `KEYWORDS` alone becomes visible via the implicit `=cpv ~arch`
+        // change. Everything else (`package.mask`/properties/restrict)
+        // still has to pass.
+        visible = candidates
+            .iter()
+            .filter(|c| keyword_masked_only(c, &atom.category, &atom.package, config))
             .collect();
     }
     if visible.is_empty() && autounmask_masks {

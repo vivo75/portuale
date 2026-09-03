@@ -385,6 +385,11 @@ CASES = [
         0,
     ),
     (
+        "autounmask levels: a lower license-masked version beats a higher ~arch one",
+        ["--pretend", "--autounmask", "dev-libs/levelconsumer"],
+        0,
+    ),
+    (
         "autounmask backward cascade, -v: the flipped-in dep and the counters line",
         ["--pretend", "-v", "dev-libs/aucasctop"],
         0,
@@ -2572,6 +2577,29 @@ def test_autounmask_backward_cascade_re_resolves_an_already_resolved_slot(
     assert n.stdout == npy.stdout and n.stderr == npy.stderr
     assert "aucascleaf" not in n.stdout
     assert 'no visible ebuild for dependency "dev-libs/aucascmid"' in n.stderr
+
+
+def test_autounmask_levels_prefer_license_over_a_higher_keyword_masked_version(
+    emerge_binary, emerge_pretend_python, fixture_env
+):
+    """Real _autounmask_levels (depgraph.py:7446) tries relaxations least-
+    to most-invasive -- +license (level 1) before +~arch (level 2) -- and
+    stops at the first level yielding a candidate. dev-libs/levelpkg-1.0
+    is @EULA-license-masked (stable keyword); levelpkg-2.0 is ~amd64
+    keyword-masked (acceptable license). So the LOWER 1.0 wins, with a
+    license change, over the higher 2.0's keyword change. Rust==Python."""
+    args = ["--pretend", "--autounmask", "dev-libs/levelconsumer"]
+    rust = _run([str(emerge_binary)], args, fixture_env)
+    py = _run(emerge_pretend_python, args, fixture_env)
+    assert rust.returncode == 0
+    assert rust.stdout == py.stdout and rust.stderr == py.stderr
+    assert rust.stdout.splitlines() == [
+        "[ebuild  N     ] dev-libs/levelpkg-1.0 ",
+        "[ebuild  N     ] dev-libs/levelconsumer-1.0 ",
+    ]
+    assert "license changes are necessary" in rust.stderr
+    assert "=dev-libs/levelpkg-1.0 SomeEula" in rust.stderr
+    assert "keyword changes are necessary" not in rust.stderr
 
 
 def test_use_dep_enforcement_plain_flag_declared_and_enabled_matches(

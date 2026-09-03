@@ -5498,25 +5498,30 @@ def resolve_pretend(
             )
 
     visible = [c for c in candidates if is_visible(c, category, package, config)]
-    if not visible and autounmask_keywords:
-        # Real --autounmask: a candidate masked by KEYWORDS alone becomes
-        # visible via the implicit `=cpv ~arch` change (see portage-repo's
-        # resolve_pretend `autounmask_keywords` param). Everything else
-        # (package.mask/license/properties/restrict) still has to pass.
-        visible = [
-            c
-            for c in candidates
-            if _keyword_masked_only(c, category, package, config)
-        ]
+    # Real _autounmask_levels (depgraph.py:7446): least- to most-invasive
+    # -- USE (always on, the matched use-dep filter below), then +license,
+    # then +~arch, then +missing keywords, then +masks -- stopping at the
+    # first level that yields a candidate. So ORDER MATTERS across
+    # versions: a lower license-masked version beats a higher ~arch one,
+    # which beats one needing package.unmask. Mirrors pretend.rs.
     if not visible and autounmask_license:
-        # Real --autounmask-license: a candidate masked by LICENSE alone
-        # becomes visible via the implicit package.license accept. Order
-        # among the three *_masked_only fallbacks is irrelevant (each
-        # requires the other reasons to pass).
+        # Real --autounmask-license (level 1): a candidate masked by
+        # LICENSE alone becomes visible via the implicit package.license
+        # accept.
         visible = [
             c
             for c in candidates
             if _license_masked_only(c, category, package, config)
+        ]
+    if not visible and autounmask_keywords:
+        # Real --autounmask (level 2, ~arch): a candidate masked by
+        # KEYWORDS alone becomes visible via the implicit `=cpv ~arch`
+        # change. Everything else (package.mask/properties/restrict) still
+        # has to pass.
+        visible = [
+            c
+            for c in candidates
+            if _keyword_masked_only(c, category, package, config)
         ]
     if not visible and autounmask_masks:
         # Real --autounmask-keep-masks=n: a candidate masked by
