@@ -1602,7 +1602,7 @@ fn matches_config_entry(entry: &str, candidate_str: &str, category: &str, packag
 /// closes the narrower case where a profile, `make.conf`, or a
 /// wrongly-layered repo/user `package.use` genuinely does mention it.
 ///
-/// `use_stable_force`/`use_stable_mask`/`package_use_stable_force`/
+/// `Config::use_stable_force`/`use_stable_mask`/`package_use_stable_force`/
 /// `package_use_stable_mask` (`keywords`/`candidate_str` decide, via
 /// `is_stable`, whether this candidate even counts as "stable") are the
 /// `.stable.` variants of the global/per-package force/mask sources
@@ -1618,31 +1618,18 @@ fn matches_config_entry(entry: &str, candidate_str: &str, category: &str, packag
 /// -- see `portage-profile`'s own `package.use.mask`/`.force` doc
 /// comment for that established, confirmed simplification, extended
 /// here rather than re-litigated).
-#[allow(clippy::too_many_arguments)]
+///
+/// Every layer above comes from `config`; only the candidate's own
+/// identity -- `iuse`, `keywords` (its raw `KEYWORDS`), `candidate_str`
+/// (`cat/pkg-ver:slot/sub::repo`), `category`, `package` -- is passed
+/// separately. `Config::autounmask_use` is applied as the top tier
+/// (after `env`, before `use.force`/`use.mask`) so the `'backtrack`
+/// loop's in-progress `--autounmask-use` changes flow through -- see
+/// that field's doc comment.
 pub fn effective_use_flags(
+    config: &portage_profile::Config,
     iuse: &str,
-    use_tokens: &[String],
-    conf_use_tokens: &[String],
-    repo_make_defaults_use: &[(String, Vec<String>)],
-    features_use: &[String],
-    package_use_repo: &[(String, Vec<String>)],
-    package_use: &[(String, Vec<String>)],
-    profile_use_layers: &[portage_profile::ProfileUseLayer],
-    package_env_use: &[(String, Vec<String>)],
-    package_use_user: &[(String, Vec<String>)],
-    env_use_tokens: &[String],
-    package_use_force: &[(String, Vec<String>)],
-    package_use_mask: &[(String, Vec<String>)],
-    use_force: &HashSet<String>,
-    use_mask: &HashSet<String>,
-    use_stable_force: &HashSet<String>,
-    use_stable_mask: &HashSet<String>,
-    package_use_stable_force: &[(String, Vec<String>)],
-    package_use_stable_mask: &[(String, Vec<String>)],
     keywords: &[String],
-    accept_keywords: &HashSet<String>,
-    package_accept_keywords: &[(String, Vec<String>)],
-    envd_use_tokens: &[String],
     candidate_str: &str,
     category: &str,
     package: &str,
@@ -1657,7 +1644,7 @@ pub fn effective_use_flags(
     // `env.d` (real `configdict["env.d"]["USE"]`, from `/etc/profile.env`):
     // the lowest `USE_ORDER` tier -- everything below overrides it.
     // Practically always empty. See `Config::envd_use_tokens`.
-    for token in envd_use_tokens {
+    for token in &config.envd_use_tokens {
         portage_profile::apply_incremental(token, &mut use_flags);
     }
 
@@ -1673,7 +1660,7 @@ pub fn effective_use_flags(
     // a candidate from that repo. `candidate_str`'s `::<repo>` suffix
     // names the candidate's repo.
     let candidate_repo = candidate_str.rsplit_once("::").map_or("", |(_, r)| r);
-    for (repo, tokens) in repo_make_defaults_use {
+    for (repo, tokens) in &config.repo_make_defaults_use {
         if repo.is_empty() || repo == candidate_repo {
             for token in tokens {
                 portage_profile::apply_incremental(token, &mut use_flags);
@@ -1687,7 +1674,7 @@ pub fn effective_use_flags(
             }
         }
     };
-    apply_matching(&mut use_flags, package_use_repo);
+    apply_matching(&mut use_flags, &config.package_use_repo);
 
     // `features` (real `configdict["features"]["USE"]`, `config.py`
     // ~2043): `FEATURES=test` appends `test` to this tier, so a package
@@ -1696,11 +1683,11 @@ pub fn effective_use_flags(
     // `--with-test-deps` (which only pulls the deps, for top-level atoms,
     // without enabling the flag). Sits between `repo` and `pkginternal`
     // in `USE_ORDER`. Only `test` is modelled (real `feature_use` never
-    // holds anything else); `features_use` is `["test"]` or empty,
+    // holds anything else); `config.features_use` is `["test"]` or empty,
     // derived from portuale's last-wins `FEATURES` scalar. A
     // use-masked `test` is still dropped by the `use.mask` step below,
     // exactly as real portage's own `regenerate()` filtering intends.
-    for token in features_use {
+    for token in &config.features_use {
         portage_profile::apply_incremental(token, &mut use_flags);
     }
 
@@ -1720,17 +1707,17 @@ pub fn effective_use_flags(
     // walks this tier one profile at a time -- that level's
     // `make.defaults` USE, then that level's own `package.use`, before
     // the next level -- so a child profile's `make.defaults USE="-foo"`
-    // can cancel a parent's `package.use foo`. `profile_use_layers`
-    // carries that per-level structure; the flat `use_tokens` +
-    // `package_use` are the fallback for a hand-built `Config` (a test
+    // can cancel a parent's `package.use foo`. `config.profile_use_layers`
+    // carries that per-level structure; the flat `config.use_tokens` +
+    // `config.package_use` are the fallback for a hand-built `Config` (a test
     // helper) that never populated the layers.
-    if profile_use_layers.is_empty() {
-        for token in use_tokens {
+    if config.profile_use_layers.is_empty() {
+        for token in &config.use_tokens {
             portage_profile::apply_incremental(token, &mut use_flags);
         }
-        apply_matching(&mut use_flags, package_use);
+        apply_matching(&mut use_flags, &config.package_use);
     } else {
-        for layer in profile_use_layers {
+        for layer in &config.profile_use_layers {
             for token in &layer.make_defaults_use {
                 portage_profile::apply_incremental(token, &mut use_flags);
             }
@@ -1740,7 +1727,7 @@ pub fn effective_use_flags(
 
     // `conf` (real `configdict["conf"]`): `make.conf` USE, then the
     // `USE_EXPAND`/`USE_EXPAND_UNPREFIXED` folded values.
-    for token in conf_use_tokens {
+    for token in &config.conf_use_tokens {
         portage_profile::apply_incremental(token, &mut use_flags);
     }
 
@@ -1749,17 +1736,26 @@ pub fn effective_use_flags(
     // `/etc/portage/package.use` on top (real `config.py:2042-2048`
     // appends `self.puse` after) -- so a user `package.use` flag wins
     // over a `package.env` one.
-    apply_matching(&mut use_flags, package_env_use);
-    apply_matching(&mut use_flags, package_use_user);
+    apply_matching(&mut use_flags, &config.package_env_use);
+    apply_matching(&mut use_flags, &config.package_use_user);
 
     // `env` (real `configdict["env"]`, the highest `USE_ORDER` tier):
     // the process-environment `USE="..."` -- `USE="-X" emerge foo`
     // overrides even a user `/etc/portage/package.use` flag. The tokens
     // keep their `+`/`-` incremental syntax. This is the strongest layer
     // before the final `use.force`/`use.mask` step below.
-    for token in env_use_tokens {
+    for token in &config.env_use_tokens {
         portage_profile::apply_incremental(token, &mut use_flags);
     }
+
+    // `--autounmask-use` (real `_dynamic_config._needed_use_config_changes`,
+    // fed back into the `'backtrack` loop by `_feedback_config`): a USE
+    // change the resolver has already decided is needed to make the graph
+    // resolve. Applied here -- after `env`, before `use.force`/`use.mask`
+    // -- as the top USE tier, so a package under an autounmask flip is
+    // walked with the flipped flag and its `flag?`-gated deps appear.
+    // Normally empty; see `Config::autounmask_use`.
+    apply_matching(&mut use_flags, &config.autounmask_use);
 
     // `_*` wildcard USE_EXPAND expansion (real `config.py` `setcpv`
     // ~2242): once `package.use` has been applied, a `k_*` flag still in
@@ -1795,8 +1791,8 @@ pub fn effective_use_flags(
         candidate_str,
         category,
         package,
-        accept_keywords,
-        package_accept_keywords,
+        &config.accept_keywords,
+        &config.package_accept_keywords,
     );
 
     // use.mask/use.force (global) and package.use.mask/.force (atom-
@@ -1807,21 +1803,21 @@ pub fn effective_use_flags(
     // `.force` bullet for the full scope writeup. use.stable.force/
     // package.use.stable.force (when stable) join the force tier;
     // use.stable.mask/package.use.stable.mask (when stable) join the
-    // mask tier -- see this function's own doc comment. `use_force`/
-    // `use_mask` (global) are applied at this exact position -- not
+    // mask tier -- see this function's own doc comment. `config.use_force`/
+    // `config.use_mask` (global) are applied at this exact position -- not
     // folded into `base` early the way an earlier version of portuale
     // did -- matching real `regenerate()`'s own `self.useforce`/
     // `self.usemask` (which `setcpv()` sets to the *per-package*
     // `getUseForce(pkg)`/`getUseMask(pkg)`, i.e. global force/mask
     // combined with the atom-scoped variant) applied as the literal last
     // step of its incremental USE walk, strictly after `package.use` --
-    // see `portage_profile::Config::use_force`'s own doc comment for the
+    // see `portage_profile::Config::config.use_force`'s own doc comment for the
     // full grounding.
-    for flag in use_force {
+    for flag in &config.use_force {
         use_flags.insert(flag.clone());
     }
     for flag in specificity_ordered_flags(
-        package_use_force,
+        &config.package_use_force,
         candidate_str,
         category,
         package,
@@ -1830,11 +1826,11 @@ pub fn effective_use_flags(
         use_flags.insert(flag);
     }
     if stable {
-        for flag in use_stable_force {
+        for flag in &config.use_stable_force {
             use_flags.insert(flag.clone());
         }
         for flag in specificity_ordered_flags(
-            package_use_stable_force,
+            &config.package_use_stable_force,
             candidate_str,
             category,
             package,
@@ -1843,11 +1839,11 @@ pub fn effective_use_flags(
             use_flags.insert(flag);
         }
     }
-    for flag in use_mask {
+    for flag in &config.use_mask {
         use_flags.remove(flag);
     }
     for flag in specificity_ordered_flags(
-        package_use_mask,
+        &config.package_use_mask,
         candidate_str,
         category,
         package,
@@ -1856,11 +1852,11 @@ pub fn effective_use_flags(
         use_flags.remove(&flag);
     }
     if stable {
-        for flag in use_stable_mask {
+        for flag in &config.use_stable_mask {
             use_flags.remove(flag);
         }
         for flag in specificity_ordered_flags(
-            package_use_stable_mask,
+            &config.package_use_stable_mask,
             candidate_str,
             category,
             package,
@@ -2295,29 +2291,9 @@ fn use_flags_if_conditional(
         return HashSet::new();
     }
     effective_use_flags(
+        config,
         &candidate.iuse,
-        &config.use_tokens,
-        &config.conf_use_tokens,
-        &config.repo_make_defaults_use,
-        &config.features_use,
-        &config.package_use_repo,
-        &config.package_use,
-        &config.profile_use_layers,
-        &config.package_env_use,
-        &config.package_use_user,
-        &config.env_use_tokens,
-        &config.package_use_force,
-        &config.package_use_mask,
-        &config.use_force,
-        &config.use_mask,
-        &config.use_stable_force,
-        &config.use_stable_mask,
-        &config.package_use_stable_force,
-        &config.package_use_stable_mask,
         &candidate.keywords,
-        &config.accept_keywords,
-        &config.package_accept_keywords,
-        &config.envd_use_tokens,
         candidate_str,
         category,
         package,
@@ -3127,34 +3103,19 @@ fn flag_is_settable(
     // expects an atom on the left, a candidate string on the right, not
     // a fully-qualified candidate string used as both).
     let synthetic_atom = format!("={category}/{package}-{}", candidate.version);
-    // The synthetic entry stands in for a hypothetical *user*
-    // `package.use` line, so it joins the `pkg` layer (strongest).
-    let mut package_use_user = config.package_use_user.clone();
-    package_use_user.push((synthetic_atom, vec![synthetic_token]));
+    // The synthetic entry stands in for the hypothetical autounmask
+    // change itself, so it joins the `autounmask_use` tier (top) -- if
+    // `use.mask`/`.force` still override it, the synthetic entry's effect
+    // is silently discarded the same way a real autounmask change would
+    // be, which is exactly what makes the flag "not settable".
+    let mut probe = config.clone();
+    probe
+        .autounmask_use
+        .push((synthetic_atom, vec![synthetic_token]));
     let use_flags = effective_use_flags(
+        &probe,
         iuse,
-        &config.use_tokens,
-        &config.conf_use_tokens,
-        &config.repo_make_defaults_use,
-        &config.features_use,
-        &config.package_use_repo,
-        &config.package_use,
-        &config.profile_use_layers,
-        &config.package_env_use,
-        &package_use_user,
-        &config.env_use_tokens,
-        &config.package_use_force,
-        &config.package_use_mask,
-        &config.use_force,
-        &config.use_mask,
-        &config.use_stable_force,
-        &config.use_stable_mask,
-        &config.package_use_stable_force,
-        &config.package_use_stable_mask,
         &candidate.keywords,
-        &config.accept_keywords,
-        &config.package_accept_keywords,
-        &config.envd_use_tokens,
         &candidate_str,
         category,
         package,
@@ -5946,29 +5907,9 @@ fn candidate_iuse_and_use(
         candidate.version, candidate.slot, candidate.sub_slot, candidate.repo_name
     );
     let use_flags = effective_use_flags(
+        config,
         metadata.get("IUSE").map(String::as_str).unwrap_or_default(),
-        &config.use_tokens,
-        &config.conf_use_tokens,
-        &config.repo_make_defaults_use,
-        &config.features_use,
-        &config.package_use_repo,
-        &config.package_use,
-        &config.profile_use_layers,
-        &config.package_env_use,
-        &config.package_use_user,
-        &config.env_use_tokens,
-        &config.package_use_force,
-        &config.package_use_mask,
-        &config.use_force,
-        &config.use_mask,
-        &config.use_stable_force,
-        &config.use_stable_mask,
-        &config.package_use_stable_force,
-        &config.package_use_stable_mask,
         &candidate.keywords,
-        &config.accept_keywords,
-        &config.package_accept_keywords,
-        &config.envd_use_tokens,
         &candidate_str,
         category,
         package,
@@ -7400,29 +7341,9 @@ pub fn resolve_pretend(
                     candidate.repo_name
                 );
                 let would_select = effective_use_flags(
+                    config,
                     &candidate.iuse,
-                    &config.use_tokens,
-                    &config.conf_use_tokens,
-                    &config.repo_make_defaults_use,
-                    &config.features_use,
-                    &config.package_use_repo,
-                    &config.package_use,
-                    &config.profile_use_layers,
-                    &config.package_env_use,
-                    &config.package_use_user,
-                    &config.env_use_tokens,
-                    &config.package_use_force,
-                    &config.package_use_mask,
-                    &config.use_force,
-                    &config.use_mask,
-                    &config.use_stable_force,
-                    &config.use_stable_mask,
-                    &config.package_use_stable_force,
-                    &config.package_use_stable_mask,
                     &candidate.keywords,
-                    &config.accept_keywords,
-                    &config.package_accept_keywords,
-                    &config.envd_use_tokens,
                     &candidate_str,
                     &atom.category,
                     &atom.package,
@@ -10627,29 +10548,9 @@ fn backtracking_resolve(req: &ResolveRequest) -> Result<GraphResult, String> {
                 metadata
             };
             let mut use_flags = effective_use_flags(
+                config,
                 metadata.get("IUSE").map(String::as_str).unwrap_or_default(),
-                &config.use_tokens,
-                &config.conf_use_tokens,
-                &config.repo_make_defaults_use,
-                &config.features_use,
-                &config.package_use_repo,
-                &config.package_use,
-                &config.profile_use_layers,
-                &config.package_env_use,
-                &config.package_use_user,
-                &config.env_use_tokens,
-                &config.package_use_force,
-                &config.package_use_mask,
-                &config.use_force,
-                &config.use_mask,
-                &config.use_stable_force,
-                &config.use_stable_mask,
-                &config.package_use_stable_force,
-                &config.package_use_stable_mask,
                 &keywords,
-                &config.accept_keywords,
-                &config.package_accept_keywords,
-                &config.envd_use_tokens,
                 &candidate_str,
                 &key.0,
                 &key.1,
@@ -11704,29 +11605,9 @@ fn enqueue_dependencies(
     // `*DEPEND` snapshot, flattened against the built (`vdb/USE`) flags.
     let (use_flags, depstr) = if dynamic_deps {
         let use_flags = effective_use_flags(
+            config,
             metadata.get("IUSE").map(String::as_str).unwrap_or_default(),
-            &config.use_tokens,
-            &config.conf_use_tokens,
-            &config.repo_make_defaults_use,
-            &config.features_use,
-            &config.package_use_repo,
-            &config.package_use,
-            &config.profile_use_layers,
-            &config.package_env_use,
-            &config.package_use_user,
-            &config.env_use_tokens,
-            &config.package_use_force,
-            &config.package_use_mask,
-            &config.use_force,
-            &config.use_mask,
-            &config.use_stable_force,
-            &config.use_stable_mask,
-            &config.package_use_stable_force,
-            &config.package_use_stable_mask,
             &keywords,
-            &config.accept_keywords,
-            &config.package_accept_keywords,
-            &config.envd_use_tokens,
             &candidate_str,
             category,
             package,
@@ -20177,34 +20058,22 @@ mod tests {
         category: &str,
         package: &str,
     ) -> HashSet<String> {
-        effective_use_flags(
-            iuse,
-            use_tokens,
-            &[],
-            &[],
-            &[],
-            &[],
-            package_use,
-            &[],
-            &[],
-            &[],
-            &[], // env_use_tokens
-            package_use_force,
-            package_use_mask,
-            use_force,
-            use_mask,
-            use_stable_force,
-            use_stable_mask,
-            package_use_stable_force,
-            package_use_stable_mask,
-            keywords,
-            accept_keywords,
-            package_accept_keywords,
-            &[], // envd_use_tokens
-            candidate_str,
-            category,
-            package,
-        )
+        let config = portage_profile::Config {
+            use_tokens: use_tokens.to_vec(),
+            package_use: package_use.to_vec(),
+            package_use_force: package_use_force.to_vec(),
+            package_use_mask: package_use_mask.to_vec(),
+            use_force: use_force.clone(),
+            use_mask: use_mask.clone(),
+            use_stable_force: use_stable_force.clone(),
+            use_stable_mask: use_stable_mask.clone(),
+            package_use_stable_force: package_use_stable_force.to_vec(),
+            package_use_stable_mask: package_use_stable_mask.to_vec(),
+            accept_keywords: accept_keywords.clone(),
+            package_accept_keywords: package_accept_keywords.to_vec(),
+            ..Default::default()
+        };
+        effective_use_flags(&config, iuse, keywords, candidate_str, category, package)
     }
 
     fn candidate(version: &str, keywords: &[&str]) -> Candidate {
@@ -20992,30 +20861,19 @@ mod tests {
         package_use: &[(String, Vec<String>)],
         package_use_user: &[(String, Vec<String>)],
     ) -> HashSet<String> {
+        let cfg = portage_profile::Config {
+            use_tokens: use_tokens.to_vec(),
+            conf_use_tokens: conf_use_tokens.to_vec(),
+            package_use_repo: package_use_repo.to_vec(),
+            package_use: package_use.to_vec(),
+            package_use_user: package_use_user.to_vec(),
+            accept_keywords: HashSet::from(["amd64".to_string()]),
+            ..Default::default()
+        };
         effective_use_flags(
+            &cfg,
             iuse,
-            use_tokens,
-            conf_use_tokens,
-            &[],
-            &[],
-            package_use_repo,
-            package_use,
-            &[],
-            &[],
-            package_use_user,
-            &[], // env_use_tokens
-            &[],
-            &[],
-            &HashSet::new(),
-            &HashSet::new(),
-            &HashSet::new(),
-            &HashSet::new(),
-            &[],
-            &[],
             &["amd64".to_string()],
-            &HashSet::from(["amd64".to_string()]),
-            &[],
-            &[], // envd_use_tokens
             "dev-libs/pkg-1.0:0/0::testrepo",
             "dev-libs",
             "pkg",
@@ -21043,34 +20901,21 @@ mod tests {
                 package_use: vec![],
             },
         ];
-        let flags = effective_use_flags(
-            "foo",
-            &[], // use_tokens (fallback -- ignored while layers non-empty)
-            &[],
-            &[],
-            &[], // features_use
-            &[],
-            &[], // package_use (fallback)
-            &layers,
-            &[],
-            &[],
-            &[], // env_use_tokens
-            &[],
-            &[],
-            &HashSet::new(),
-            &HashSet::new(),
-            &HashSet::new(),
-            &HashSet::new(),
-            &[],
-            &[],
-            &["amd64".to_string()],
-            &HashSet::from(["amd64".to_string()]),
-            &[],
-            &[], // envd_use_tokens
-            "dev-libs/pkg-1.0:0/0::testrepo",
-            "dev-libs",
-            "pkg",
-        );
+        let flags = {
+            let cfg = portage_profile::Config {
+                profile_use_layers: layers.to_vec(),
+                accept_keywords: HashSet::from(["amd64".to_string()]),
+                ..Default::default()
+            };
+            effective_use_flags(
+                &cfg,
+                "foo",
+                &["amd64".to_string()],
+                "dev-libs/pkg-1.0:0/0::testrepo",
+                "dev-libs",
+                "pkg",
+            )
+        };
         assert!(
             !flags.contains("foo"),
             "child make.defaults -foo cancels parent package.use foo"
@@ -21078,34 +20923,21 @@ mod tests {
         // Reversed order (child's -foo first, parent's package.use foo
         // last) would leave it on -- proving order matters.
         let reversed: Vec<_> = layers.into_iter().rev().collect();
-        let flags = effective_use_flags(
-            "foo",
-            &[],
-            &[],
-            &[],
-            &[],
-            &[],
-            &[],
-            &reversed,
-            &[],
-            &[],
-            &[], // env_use_tokens
-            &[],
-            &[],
-            &HashSet::new(),
-            &HashSet::new(),
-            &HashSet::new(),
-            &HashSet::new(),
-            &[],
-            &[],
-            &["amd64".to_string()],
-            &HashSet::from(["amd64".to_string()]),
-            &[],
-            &[], // envd_use_tokens
-            "dev-libs/pkg-1.0:0/0::testrepo",
-            "dev-libs",
-            "pkg",
-        );
+        let flags = {
+            let cfg = portage_profile::Config {
+                profile_use_layers: reversed.to_vec(),
+                accept_keywords: HashSet::from(["amd64".to_string()]),
+                ..Default::default()
+            };
+            effective_use_flags(
+                &cfg,
+                "foo",
+                &["amd64".to_string()],
+                "dev-libs/pkg-1.0:0/0::testrepo",
+                "dev-libs",
+                "pkg",
+            )
+        };
         assert!(flags.contains("foo"));
     }
 
@@ -21113,30 +20945,16 @@ mod tests {
     fn effective_use_flags_repo_make_defaults_use_is_the_weakest_repo_layer() {
         let euf =
             |iuse: &str, repo_md: &[(String, Vec<String>)], repo_pu: &[(String, Vec<String>)]| {
+                let cfg = portage_profile::Config {
+                    repo_make_defaults_use: repo_md.to_vec(),
+                    package_use_repo: repo_pu.to_vec(),
+                    accept_keywords: HashSet::from(["amd64".to_string()]),
+                    ..Default::default()
+                };
                 effective_use_flags(
+                    &cfg,
                     iuse,
-                    &[],
-                    &[],
-                    repo_md,
-                    &[], // features_use
-                    repo_pu,
-                    &[],
-                    &[],
-                    &[],
-                    &[],
-                    &[], // env_use_tokens
-                    &[],
-                    &[],
-                    &HashSet::new(),
-                    &HashSet::new(),
-                    &HashSet::new(),
-                    &HashSet::new(),
-                    &[],
-                    &[],
                     &["amd64".to_string()],
-                    &HashSet::from(["amd64".to_string()]),
-                    &[],
-                    &[], // envd_use_tokens
                     "dev-libs/pkg-1.0:0/0::testrepo",
                     "dev-libs",
                     "pkg",
@@ -21168,30 +20986,15 @@ mod tests {
     #[test]
     fn effective_use_flags_features_use_enables_test_between_repo_and_pkginternal() {
         let euf = |iuse: &str, features_use: &[String]| {
+            let cfg = portage_profile::Config {
+                features_use: features_use.to_vec(),
+                accept_keywords: HashSet::from(["amd64".to_string()]),
+                ..Default::default()
+            };
             effective_use_flags(
+                &cfg,
                 iuse,
-                &[],
-                &[],
-                &[],
-                features_use,
-                &[],
-                &[],
-                &[],
-                &[],
-                &[],
-                &[], // env_use_tokens
-                &[],
-                &[],
-                &HashSet::new(),
-                &HashSet::new(),
-                &HashSet::new(),
-                &HashSet::new(),
-                &[],
-                &[],
                 &["amd64".to_string()],
-                &HashSet::from(["amd64".to_string()]),
-                &[],
-                &[], // envd_use_tokens
                 "dev-libs/pkg-1.0:0/0::testrepo",
                 "dev-libs",
                 "pkg",
@@ -21206,34 +21009,22 @@ mod tests {
         // No `FEATURES=test` -> nothing added here.
         assert!(!euf("test", &[]).contains("test"));
         // A use.mask on `test` drops it even with FEATURES=test.
-        let masked = effective_use_flags(
-            "test",
-            &[],
-            &[],
-            &[],
-            &test_on,
-            &[],
-            &[],
-            &[],
-            &[],
-            &[],
-            &[], // env_use_tokens
-            &[],
-            &[],
-            &HashSet::new(),
-            &HashSet::from(["test".to_string()]),
-            &HashSet::new(),
-            &HashSet::new(),
-            &[],
-            &[],
-            &["amd64".to_string()],
-            &HashSet::from(["amd64".to_string()]),
-            &[],
-            &[], // envd_use_tokens
-            "dev-libs/pkg-1.0:0/0::testrepo",
-            "dev-libs",
-            "pkg",
-        );
+        let masked = {
+            let cfg = portage_profile::Config {
+                features_use: test_on.to_vec(),
+                use_mask: HashSet::from(["test".to_string()]),
+                accept_keywords: HashSet::from(["amd64".to_string()]),
+                ..Default::default()
+            };
+            effective_use_flags(
+                &cfg,
+                "test",
+                &["amd64".to_string()],
+                "dev-libs/pkg-1.0:0/0::testrepo",
+                "dev-libs",
+                "pkg",
+            )
+        };
         assert!(!masked.contains("test"));
     }
 
@@ -21281,68 +21072,44 @@ mod tests {
         // before user `/etc/portage/package.use` (real _grab_pkg_env
         // fills pkg_configdict, then self.puse is appended after). So it
         // beats make.conf...
-        let with_env = effective_use_flags(
-            "foo",
-            &[],
-            &["-foo".to_string()],
-            &[],
-            &[], // features_use
-            &[],
-            &[],
-            &[],
-            &pu("foo"), // package_env_use
-            &[],        // package_use_user
-            &[],        // env_use_tokens
-            &[],
-            &[],
-            &HashSet::new(),
-            &HashSet::new(),
-            &HashSet::new(),
-            &HashSet::new(),
-            &[],
-            &[],
-            &["amd64".to_string()],
-            &HashSet::from(["amd64".to_string()]),
-            &[],
-            &[], // envd_use_tokens
-            "dev-libs/pkg-1.0:0/0::testrepo",
-            "dev-libs",
-            "pkg",
-        );
+        let with_env = {
+            let cfg = portage_profile::Config {
+                conf_use_tokens: vec!["-foo".to_string()],
+                package_env_use: pu("foo").to_vec(),
+                accept_keywords: HashSet::from(["amd64".to_string()]),
+                ..Default::default()
+            };
+            effective_use_flags(
+                &cfg,
+                "foo",
+                &["amd64".to_string()],
+                "dev-libs/pkg-1.0:0/0::testrepo",
+                "dev-libs",
+                "pkg",
+            )
+        };
         assert!(
             with_env.contains("foo"),
             "package.env foo beats make.conf -foo"
         );
 
         // ...but a user package.use `-foo` still wins over package.env `foo`.
-        let user_wins = effective_use_flags(
-            "foo",
-            &[],
-            &[],
-            &[],
-            &[], // features_use
-            &[],
-            &[],
-            &[],
-            &pu("foo"),  // package_env_use
-            &pu("-foo"), // package_use_user
-            &[],         // env_use_tokens
-            &[],
-            &[],
-            &HashSet::new(),
-            &HashSet::new(),
-            &HashSet::new(),
-            &HashSet::new(),
-            &[],
-            &[],
-            &["amd64".to_string()],
-            &HashSet::from(["amd64".to_string()]),
-            &[],
-            &[], // envd_use_tokens
-            "dev-libs/pkg-1.0:0/0::testrepo",
-            "dev-libs",
-            "pkg",
-        );
+        let user_wins = {
+            let cfg = portage_profile::Config {
+                package_env_use: pu("foo").to_vec(),
+                package_use_user: pu("-foo").to_vec(),
+                accept_keywords: HashSet::from(["amd64".to_string()]),
+                ..Default::default()
+            };
+            effective_use_flags(
+                &cfg,
+                "foo",
+                &["amd64".to_string()],
+                "dev-libs/pkg-1.0:0/0::testrepo",
+                "dev-libs",
+                "pkg",
+            )
+        };
         assert!(
             !user_wins.contains("foo"),
             "user package.use -foo beats package.env foo"
@@ -21354,30 +21121,16 @@ mod tests {
         // Real `configdict["env"]` is above `pkg`: `USE="-foo"` in the
         // process env overrides a user `/etc/portage/package.use foo`.
         let with_env_use = |env_tokens: &[String], user_pu: &[(String, Vec<String>)]| {
+            let cfg = portage_profile::Config {
+                package_use_user: user_pu.to_vec(),
+                env_use_tokens: env_tokens.to_vec(),
+                accept_keywords: HashSet::from(["amd64".to_string()]),
+                ..Default::default()
+            };
             effective_use_flags(
+                &cfg,
                 "foo",
-                &[],
-                &[],
-                &[],
-                &[],
-                &[],
-                &[],
-                &[],
-                &[],
-                user_pu,
-                env_tokens,
-                &[],
-                &[],
-                &HashSet::new(),
-                &HashSet::new(),
-                &HashSet::new(),
-                &HashSet::new(),
-                &[],
-                &[],
                 &["amd64".to_string()],
-                &HashSet::from(["amd64".to_string()]),
-                &[],
-                &[], // envd_use_tokens
                 "dev-libs/pkg-1.0:0/0::testrepo",
                 "dev-libs",
                 "pkg",
@@ -21397,30 +21150,16 @@ mod tests {
         // bottom of `USE_ORDER` -- it enables a flag nothing else touches,
         // but any higher tier (here a repo `package.use -foo`) overrides.
         let euf = |envd: &[String], repo_pu: &[(String, Vec<String>)]| {
+            let cfg = portage_profile::Config {
+                package_use_repo: repo_pu.to_vec(),
+                accept_keywords: HashSet::from(["amd64".to_string()]),
+                envd_use_tokens: envd.to_vec(),
+                ..Default::default()
+            };
             effective_use_flags(
+                &cfg,
                 "foo bar",
-                &[],
-                &[],
-                &[],
-                &[],
-                repo_pu, // package_use_repo
-                &[],
-                &[],
-                &[],
-                &[],
-                &[],
-                &[],
-                &[],
-                &HashSet::new(),
-                &HashSet::new(),
-                &HashSet::new(),
-                &HashSet::new(),
-                &[],
-                &[],
                 &["amd64".to_string()],
-                &HashSet::from(["amd64".to_string()]),
-                &[],
-                envd,
                 "dev-libs/pkg-1.0:0/0::testrepo",
                 "dev-libs",
                 "pkg",

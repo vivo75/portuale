@@ -441,6 +441,21 @@ pub struct Config {
     /// (`VIDEO_CARDS: nvidia` lines) -- real portage's own user-only
     /// `extended_syntax`; see `parse_package_use_lines`.
     pub package_use_user: Vec<(String, Vec<String>)>,
+    /// `--autounmask-use` USE changes the resolver has decided are needed
+    /// to make the graph resolve -- real `_dynamic_config.
+    /// _needed_use_config_changes`, the in-loop config-change feedback
+    /// (`backtracking.py::_feedback_config`). `(atom, [+flag | -flag …])`
+    /// pairs, exactly `package_use_user`-shaped -- so `effective_use_flags`
+    /// replays them the same way, as the **top** USE tier (after `env`,
+    /// before `use.force`/`use.mask`): a package under an autounmask flip
+    /// is walked with the flipped flag, and its `flag?`-gated deps appear.
+    ///
+    /// Normally empty. `portage-repo`'s `'backtrack` loop rebuilds it from
+    /// its own `autounmask_use_config` accumulator at the top of each
+    /// retry iteration (it clones `Config` per iteration to vary this),
+    /// so a hand-built `Config` literal never sets it and gets the
+    /// pre-autounmask behaviour.
+    pub autounmask_use: Vec<(String, Vec<String>)>,
     /// (atom-or-wildcard string, ordered env-file names) pairs from
     /// `/etc/portage/package.env` -- real `config.py:894`'s
     /// `grabdict_package(.../package.env)`. Each named file lives under
