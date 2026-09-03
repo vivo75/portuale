@@ -4805,7 +4805,15 @@ def _resolve_disjunctions(nodes, uselist, alternative_satisfiable):
     a nested list (a plain bracketed group, or one member of a "||"
     alternatives list). Mirrors portage-repo/src/lib.rs's own
     resolve_disjunctions in observable behavior, not literal structure."""
+    # Real _create_graph fully drains the plain dep_stack before popping a
+    # single entry off _dep_disjunctive_stack (depgraph.py:3257-3268), so
+    # every non-"||" dependency enters the graph -- and the merge list --
+    # ahead of whichever atom a "||" group resolves to. Mirror the
+    # ordering: this level's plain results first, then the "||"-chosen
+    # ones (each bucket in its own original order). An unresolved "||"
+    # group (literal "||" fallback) stays in place, not deferred.
     result = []
+    deferred = []
     i = 0
     while i < len(nodes):
         node = nodes[i]
@@ -4822,7 +4830,7 @@ def _resolve_disjunctions(nodes, uselist, alternative_satisfiable):
                     chosen = _resolve_disjunctions(alt_nodes, uselist, alternative_satisfiable)
                     break
             if chosen is not None:
-                result.extend(chosen)
+                deferred.extend(chosen)
             else:
                 result.append("||")
                 result.append(alternatives)
@@ -4833,6 +4841,7 @@ def _resolve_disjunctions(nodes, uselist, alternative_satisfiable):
         else:
             result.append(node)
             i += 1
+    result.extend(deferred)
     return result
 
 
@@ -4865,7 +4874,7 @@ def _use_reduce_flat_disjunctive(depstr, uselist, alternative_satisfiable):
     return use_reduce(paren_enclose(resolved), flat=True, uselist=uselist)
 
 
-def _atom_currently_satisfiable(repos, atom_str, config):
+def _atom_currently_satisfiable(repos, atom_str, config, extra_constraints=()):
     """Whether every atom in `atoms` currently has a satisfying
     candidate -- the probe _use_reduce_flat_disjunctive needs to pick a
     "||" group's own first currently-resolvable alternative. A blocker
@@ -4879,7 +4888,13 @@ def _atom_currently_satisfiable(repos, atom_str, config):
     post-filter) -- not a call to resolve_pretend itself, which also
     applies --update/--newuse/--exclude/reinstall refinements that only
     matter once an alternative has already been chosen and is actually
-    being resolved. Mirrors portage-repo/src/lib.rs's
+    being resolved.
+
+    `extra_constraints` is the 'backtrack loop's accumulated per-cat/pkg
+    runtime_pkg_mask for this atom's package (real dep_zapdeps'
+    all_available): a "!"-prefixed entry the candidate must NOT match, a
+    bare one it must. Empty () at every non-disjunctive call site -- a
+    strict no-op. Mirrors portage-repo/src/lib.rs's
     atom_currently_satisfiable exactly."""
     atom = _parse_atom(atom_str)
     if atom is None:
@@ -4898,6 +4913,26 @@ def _atom_currently_satisfiable(repos, atom_str, config):
     ]
     by_str = dict(zip(candidate_strs, visible))
     matched = [by_str[m] for m in match_from_list(atom_str, candidate_strs) if m in by_str]
+
+    if extra_constraints:
+        def _con_ok(cstr, con):
+            cs = [cstr]
+            if con.startswith("!"):
+                return not match_from_list(con[1:], cs)
+            return bool(match_from_list(con, cs))
+
+        matched = [
+            c
+            for c in matched
+            if all(
+                _con_ok(
+                    f"{category}/{package}-{c['version']}:{c['slot']}"
+                    f"/{c['sub_slot']}::{c['repo_name']}",
+                    con,
+                )
+                for con in extra_constraints
+            )
+        ]
 
     if atom.use:
         matched = [c for c in matched if _candidate_use_deps_satisfied(atom, c, category, package, config)]
@@ -7563,6 +7598,7 @@ def resolve_pretend_graph(
                         root_deps_running_root,
                         entries,
                         root_deps_build_seen,
+                        slot_constraints,
                     )
                 # --autounmask's own keyword-suggestion sub-feature, extended
                 # here to a *dependency's* own NoVisibleCandidate -- see
@@ -8145,12 +8181,26 @@ def resolve_pretend_graph(
             # RDEPEND/PDEPEND/IDEPEND "||" group gets this same permissive
             # check too -- harmless in practice, mirrors
             # portage-repo/src/lib.rs's identical fix exactly.
+            # Real dep_zapdeps re-choosing a "||" alternative once
+            # backtracking has masked the preferred one: an atom whose
+            # only satisfying candidates are excluded by the negatives
+            # this loop accumulated for its cat/pkg (slot_constraints, =
+            # runtime_pkg_mask) counts as unsatisfiable, so the next
+            # alternative wins on the retry.
+            def _disj_constraints(a):
+                _pa = _parse_atom(a)
+                if _pa is None:
+                    return ()
+                return slot_constraints.get(tuple(_pa.cp.split("/", 1)), ())
+
             try:
                 flat_deps = _use_reduce_flat_disjunctive(
                     depstr,
                     use_flags,
                     lambda atoms: all(
-                        _atom_currently_satisfiable(repos, a, config)
+                        _atom_currently_satisfiable(
+                            repos, a, config, _disj_constraints(a)
+                        )
                         or (
                             root_deps_running_root is not None
                             and _running_root_satisfies_atom(a, root_deps_running_root)
@@ -8420,8 +8470,21 @@ def resolve_pretend_graph(
             negatives = []
             for _sc in slot_conflicts:
                 _cp = (_sc["category"], _sc["package"])
+                # Mask the *highest* conflicting instance, not merely the
+                # first-resolved one -- real backtracking's downgrade bias,
+                # and the version a "||"-pulled ">=" alternative
+                # re-selects, so dep_zapdeps yields to the next alternative
+                # on the retry. Mirrors pretend.rs.
+                _insts = _sc.get("instances") or []
+                if _insts:
+                    _mask_ver = _insts[0]["version"]
+                    for _inst in _insts[1:]:
+                        if (vercmp(_inst["version"], _mask_ver) or 0) > 0:
+                            _mask_ver = _inst["version"]
+                else:
+                    _mask_ver = _sc["resolved_version"]
                 negatives.append(
-                    (_cp, f'!={_sc["category"]}/{_sc["package"]}-{_sc["resolved_version"]}')
+                    (_cp, f'!={_sc["category"]}/{_sc["package"]}-{_mask_ver}')
                 )
                 _seen = set()
                 for _pc, _pp, _pv, _atom in slot_pullers.get(_cp, []):
@@ -8631,6 +8694,7 @@ def _enqueue_dependencies(
     root_deps_running_root=None,
     entries=None,
     root_deps_build_seen=None,
+    disj_constraints=None,
 ):
     """Reads `category/package-version`'s own DEPEND+RDEPEND+BDEPEND+
     PDEPEND+IDEPEND metadata (from whichever repo actually carries this
@@ -8715,12 +8779,20 @@ def _enqueue_dependencies(
     # New/Upgrade/Reinstall loop's own identical fix for the full
     # grounding (this is _enqueue_dependencies's own
     # --deep/AlreadyInstalled-recursion counterpart to it).
+    _dc = disj_constraints or {}
+
+    def _disj_c(a):
+        _pa = _parse_atom(a)
+        if _pa is None:
+            return ()
+        return _dc.get(tuple(_pa.cp.split("/", 1)), ())
+
     try:
         flat_deps = _use_reduce_flat_disjunctive(
             depstr,
             use_flags,
             lambda atoms: all(
-                _atom_currently_satisfiable(repos, a, config)
+                _atom_currently_satisfiable(repos, a, config, _disj_c(a))
                 or (
                     root_deps_running_root is not None
                     and _running_root_satisfies_atom(a, root_deps_running_root)

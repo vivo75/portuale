@@ -649,6 +649,18 @@ fn resolve_disjunctions(
     alternative_satisfiable: &mut impl FnMut(&[String]) -> bool,
 ) -> Result<Vec<DepNode>, String> {
     let mut result: Vec<DepNode> = Vec::new();
+    // Real `_create_graph` fully drains the plain `dep_stack` before
+    // popping a single entry off `_dep_disjunctive_stack`
+    // (`depgraph.py:3257-3268`), so every non-`||` dependency of a
+    // package enters the graph -- and thus the merge list -- ahead of
+    // whichever atom a `||` group resolves to. Portuale's single flatten
+    // can't interleave two stacks, but it can mirror the *ordering*: emit
+    // this level's plain results first, then the `||`-chosen ones, each
+    // bucket in its own original order. A `||` group that stays
+    // unresolved (no satisfiable alternative -> literal `"||"` fallback)
+    // is left in place, not deferred -- it isn't a resolved dependency to
+    // schedule.
+    let mut deferred: Vec<DepNode> = Vec::new();
     let mut iter = nodes.iter();
     while let Some(node) = iter.next() {
         match node {
@@ -690,7 +702,7 @@ fn resolve_disjunctions(
                     }
                 }
                 match chosen {
-                    Some(alt_nodes) => result.extend(alt_nodes),
+                    Some(alt_nodes) => deferred.extend(alt_nodes),
                     None => {
                         result.push(DepNode::Str("||".to_string()));
                         result.push(DepNode::Group(alternatives.clone()));
@@ -702,6 +714,7 @@ fn resolve_disjunctions(
             }
         }
     }
+    result.extend(deferred);
     Ok(result)
 }
 

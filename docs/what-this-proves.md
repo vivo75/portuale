@@ -10725,6 +10725,55 @@ for the `r` marker + world-gated fixture + `str(Package)` block) and
 3-level fixture, bare + `--json` + `--tree` lockstep). New fixtures
 `dev-libs/{casctarget,cascmid,casctail}`.
 
+### `||` (any-of) preference feedback drives a backtrack retry (2026-09-03)
+
+Real portage has no dedicated "`||` backtracking" pass: a slot conflict
+(or a missing dependency) adds the offending package to
+`runtime_pkg_mask`, and on the retry `dep_check`/`dep_zapdeps`
+re-evaluates every `|| ( … )` group — a masked package makes its
+choice-bin `all_available = False` (`dep_check.py:449`), so the next
+alternative wins. Portuale's `'backtrack` loop already accumulated
+`slot_constraints` (`!=cpv` negatives = `runtime_pkg_mask`) but its
+`||` selection (`use_reduce_flat_disjunctive`'s
+`atom_currently_satisfiable` probe) never consulted them, so a
+backtrack-masked `||` alternative was still chosen.
+
+Shipped as three coupled changes (container-verified byte-for-byte vs
+real portage 3.0.82.2, `TEST/scripts/42-or-backtrack.sh`):
+
+- **`atom_currently_satisfiable` grows `extra_constraints: &[String]`**
+  (`&[]` no-op at every non-disjunctive call site), applying the same
+  `!`-negative filter `resolve_pretend` uses. The two disjunctive
+  closures in `backtracking_resolve` (the main BFS flatten and
+  `enqueue_dependencies`'s `--deep` walk) pass
+  `slot_constraints.get(&(cat,pkg))` per atom — so a `||` alternative
+  whose only satisfying candidates are backtrack-masked counts as
+  unsatisfiable and the next alternative is chosen.
+- **`use_reduce_flat_disjunctive` now schedules a `||` group's chosen
+  atoms after the plain deps of the same parent** — real `_create_graph`
+  fully drains `dep_stack` before popping one `_dep_disjunctive_stack`
+  entry (`depgraph.py:3257-3268`), so `||`-pulled packages merge after
+  the plain ones. Zero fallout across the 1242 pre-existing contract
+  tests.
+- **The slice-3 `runtime_pkg_mask` trial masks the *highest* conflicting
+  instance** (`sc.instances` vercmp-max) rather than the first-resolved
+  one — real backtracking's downgrade bias, and the version a `||`-pulled
+  `>=` atom re-selects. A no-op for every existing conflict fixture.
+
+Fixture `dev-libs/{orbttool,orbtclean,orbtblocked}`: `orbtblocked`'s
+RDEPEND is `|| ( >=dev-libs/orbttool-2.0 dev-libs/orbtclean )
+=dev-libs/orbttool-1.0`. The first `||` alternative (`orbttool-2.0`)
+collides with the hard `=orbttool-1.0` dep in `dev-libs/orbttool:0` — an
+unsolvable slot conflict. Backtracking masks `orbttool-2.0`; the retry
+finds the first alternative unsatisfiable and picks `dev-libs/orbtclean`
+(with `orbttool-1.0` still merged, ahead of `orbtclean`). `--backtrack=0`
+reports the conflict instead. Contract test
+`test_or_group_alternative_yields_to_the_next_when_backtracking_masks_it`
+(bare + `--backtrack=0` + `--tree` lockstep). Full suite: 1243 passed.
+
+The complementary "missing dependency" backtrack path (a `||`
+alternative whose *subtree* is unsatisfiable) is the next slice.
+
 ### `FEATURES=buildpkg` / `emerge --buildpkg` / `-b`: a binpkg as a side effect of a source merge
 
 Real `_emerge/EbuildBinpkg`: after `src_install` and **before** the vdb

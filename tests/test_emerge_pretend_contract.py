@@ -2378,6 +2378,45 @@ def test_any_of_group_resolves_only_the_first_satisfiable_alternative(
     ]
 
 
+def test_or_group_alternative_yields_to_the_next_when_backtracking_masks_it(
+    emerge_binary, emerge_pretend_python, fixture_env
+):
+    """Real `dep_zapdeps` re-choosing a `||` alternative once
+    backtracking's `runtime_pkg_mask` hides the preferred one. dev-libs/
+    orbtblocked's RDEPEND is
+    `|| ( >=dev-libs/orbttool-2.0 dev-libs/orbtclean ) =dev-libs/orbttool-1.0`
+    -- the first `||` alternative (orbttool-2.0) lands in the same
+    `dev-libs/orbttool:0` slot as the hard `=orbttool-1.0` dep, an
+    unsolvable slot conflict. The `'backtrack` loop masks the highest
+    conflicting instance (orbttool-2.0), and on the retry the `||`
+    group's first alternative is no longer satisfiable, so
+    `dev-libs/orbtclean` (the second alternative) is chosen -- no
+    conflict. `orbttool-1.0` merges ahead of `orbtclean` because a `||`
+    group's chosen atom is scheduled after the plain deps of the same
+    parent (real `_create_graph` drains `dep_stack` before
+    `_dep_disjunctive_stack`). With `--backtrack=0` the conflict is
+    reported instead, byte-identical to before this slice.
+    Container-verified against real portage 3.0.82.2
+    (TEST/scripts/42-or-backtrack.sh)."""
+    ok = _run([str(emerge_binary)], ["--pretend", "dev-libs/orbtblocked"], fixture_env)
+    assert ok.returncode == 0
+    assert ok.stdout.splitlines() == [
+        "[ebuild  N     ] dev-libs/orbttool-1.0 ",
+        "[ebuild  N     ] dev-libs/orbtclean-1.0 ",
+        "[ebuild  N     ] dev-libs/orbtblocked-1.0 ",
+    ]
+    # Full Rust-vs-Python lockstep: the backtracking path and the
+    # --backtrack=0 conflict path both match byte-for-byte.
+    for extra in ([], ["--backtrack=0"], ["--tree"]):
+        args = ["--pretend", *extra, "dev-libs/orbtblocked"]
+        py = _run(emerge_pretend_python, args, fixture_env)
+        rs = _run([str(emerge_binary)], args, fixture_env)
+        assert rs.stdout == py.stdout, (extra, rs.stdout, py.stdout)
+        assert rs.stderr == py.stderr, (extra, rs.stderr, py.stderr)
+    nobt = _run([str(emerge_binary)], ["--pretend", "--backtrack=0", "dev-libs/orbtblocked"], fixture_env)
+    assert "slot conflict" in nobt.stdout
+
+
 def test_bdepend_pdepend_idepend_are_walked_same_as_depend_rdepend(
     emerge_binary, fixture_env
 ):

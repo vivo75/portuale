@@ -133,12 +133,18 @@ architectural — a single-pass BFS can't grow into these incrementally:
     version re-scan (`visible_with_relax` + cumulative levels; a candidate
     blocked by `~arch` **and** `LICENSE` resolves once both relaxations
     are in play, recording both changes) — **the plan is complete**;
-  - `||`-preference driving a retry (the slot-operator-rebuild feedback —
-    complete-graph reachability gate, the multi-level sub-slot cascade to
-    a fixpoint, real's `r` marker + `str(Package)` "causing rebuilds:"
-    rendering — **shipped 2026-09-03**, container-verified against real
-    portage 3.0.82.2 via `TEST/scripts/40-slotop-cascade.sh`;
-    `docs/slot-op-rebuild-cascade-plan.md`);
+  - the slot-operator-rebuild feedback — complete-graph reachability
+    gate, the multi-level sub-slot cascade to a fixpoint, real's `r`
+    marker + `str(Package)` "causing rebuilds:" rendering — **shipped
+    2026-09-03**, container-verified against real portage 3.0.82.2 via
+    `TEST/scripts/40-slotop-cascade.sh`;
+    `docs/slot-op-rebuild-cascade-plan.md`;
+  - `||`-preference feedback driving a retry: the slot-conflict
+    `runtime_pkg_mask → dep_zapdeps` path **shipped 2026-09-03**
+    (container-verified, `TEST/scripts/42-or-backtrack.sh`,
+    `docs/or-preference-backtrack-plan.md`); the "missing dependency"
+    path (an unsatisfiable `||` subtree yielding to the next
+    alternative) is the next slice;
   - the slot-collision notice's remaining cuts: `pkg_use_display` for a
     package with non-default USE (the ` USE=""` slot renders, non-empty
     flag lists don't), the `use`/`soname` reason keys, operator/USE-token
@@ -346,13 +352,16 @@ item, with a short incremental tail:
 1. **The backtracking resolver (Part 2.A).** The shipped `'backtrack`
    loop reconciles solvable slot conflicts, masks unsolvable ones,
    renders the real notices, tries USE/keyword autounmask levels
-   *inside* the loop (shipped 2026-09-03), and drives the
+   *inside* the loop (shipped 2026-09-03), drives the
    slot-operator-rebuild sub-slot cascade to a fixpoint (shipped
-   2026-09-03, container-verified) — what remains is letting
-   `||`-preference feedback drive a retry. An upgrade that needs portage
-   to juggle that alongside the rest still exceeds portuale. This is the
-   last of the architectural work between "installs and uninstalls
-   packages" and "is portage".
+   2026-09-03, container-verified), and lets a slot-conflict
+   `runtime_pkg_mask` re-drive a `||` group's alternative choice
+   (shipped 2026-09-03, container-verified —
+   `docs/or-preference-backtrack-plan.md`). What remains is the
+   "missing dependency" backtrack path (a `||` alternative whose
+   *subtree* is unsatisfiable yielding to the next). This is the last
+   of the architectural work between "installs and uninstalls packages"
+   and "is portage".
 
 2. **The rest of Part 2** — the scheduler tail (2.B), the deliberate
    sandbox and `FEATURES` cuts (2.D), the remote-binhost / gpkg-signing

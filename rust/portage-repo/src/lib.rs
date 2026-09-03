@@ -3497,7 +3497,7 @@ fn suggested_parent_use_candidate(
 
     let re_evaluated =
         portage_dep::evaluate_atom_conditionals(unevaluated_atom, &hypothetical_use)?;
-    if !atom_currently_satisfiable(repos, &re_evaluated, config) {
+    if !atom_currently_satisfiable(repos, &re_evaluated, config, &[]) {
         return None;
     }
 
@@ -6315,6 +6315,13 @@ fn atom_currently_satisfiable(
     repos: &[RepoConfig],
     atom_str: &str,
     config: &portage_profile::Config,
+    // The `'backtrack` loop's accumulated per-`cat/pkg` constraints for
+    // this atom's package -- real backtracking's `runtime_pkg_mask` seen
+    // by `dep_zapdeps` (`dep_check.py:449` `all_available`). A `!`-prefixed
+    // entry is a negative (the candidate must NOT match it); a bare entry
+    // is positive. Empty `&[]` at every non-disjunctive call site -- a
+    // strict no-op, exactly the pre-`||`-backtrack behaviour.
+    extra_constraints: &[String],
 ) -> bool {
     let Some(atom) = portage_dep::parse_atom(atom_str) else {
         return false;
@@ -6345,6 +6352,29 @@ fn atom_currently_satisfiable(
     let candidate_str_refs: Vec<&str> = candidate_strs.iter().map(String::as_str).collect();
     let Some(matched) = portage_dep::match_from_list(atom_str, &candidate_str_refs) else {
         return false;
+    };
+    // Apply the accumulated `runtime_pkg_mask` negatives/positives the
+    // same way `resolve_pretend` filters its own `matched` list
+    // (lib.rs ~7437) -- an alternative whose every satisfying candidate is
+    // masked out counts as unsatisfiable, so the next `||` alternative
+    // wins on the retry.
+    let matched: Vec<&str> = if extra_constraints.is_empty() {
+        matched
+    } else {
+        matched
+            .into_iter()
+            .filter(|m| {
+                extra_constraints.iter().all(|c| {
+                    if let Some(neg) = c.strip_prefix('!') {
+                        !portage_dep::match_from_list(neg, std::slice::from_ref(m))
+                            .is_some_and(|r| !r.is_empty())
+                    } else {
+                        portage_dep::match_from_list(c, std::slice::from_ref(m))
+                            .is_some_and(|r| !r.is_empty())
+                    }
+                })
+            })
+            .collect()
     };
 
     let Some(use_deps) = atom.use_deps.as_ref().filter(|d| !d.is_empty()) else {
@@ -6662,7 +6692,7 @@ fn root_deps_satisfied_atoms(
         portage_use_reduce::MatchMode::Normal,
         &mut |atoms: &[String]| {
             atoms.iter().all(|a| {
-                atom_currently_satisfiable(repos, a, config)
+                atom_currently_satisfiable(repos, a, config, &[])
                     || running_root_satisfies_atom(a, running_root)
             })
         },
@@ -6721,7 +6751,7 @@ fn unsatisfied_root_deps_atoms(
         portage_use_reduce::MatchMode::Normal,
         &mut |atoms: &[String]| {
             atoms.iter().all(|a| {
-                atom_currently_satisfiable(repos, a, config)
+                atom_currently_satisfiable(repos, a, config, &[])
                     || running_root_satisfies_atom(a, running_root)
             })
         },
@@ -10998,6 +11028,7 @@ fn backtracking_resolve(req: &ResolveRequest) -> Result<GraphResult, String> {
                             root_deps_running_root,
                             &mut entries,
                             &mut root_deps_build_seen,
+                            &slot_constraints,
                         );
                     }
                 }
@@ -11831,13 +11862,24 @@ fn backtracking_resolve(req: &ResolveRequest) -> Result<GraphResult, String> {
             // (those atoms almost always resolve via ordinary tree
             // visibility already; a running-root coincidence only ever
             // widens acceptance, never narrows it).
+            // Real `dep_zapdeps` re-choosing a `||` alternative once
+            // backtracking has masked the preferred one: an atom whose
+            // only satisfying candidates are excluded by the negatives
+            // this loop accumulated for its `cat/pkg` (`slot_constraints`,
+            // = `runtime_pkg_mask`) counts as unsatisfiable, so the next
+            // alternative wins on the retry.
+            let disj_constraints = |a: &str| -> &[String] {
+                portage_dep::parse_atom(a)
+                    .and_then(|at| slot_constraints.get(&(at.category, at.package)))
+                    .map_or(&[][..], Vec::as_slice)
+            };
             let Ok(flat_deps) = portage_use_reduce::use_reduce_flat_disjunctive(
                 &tokens,
                 &use_flags,
                 portage_use_reduce::MatchMode::Normal,
                 &mut |atoms: &[String]| {
                     atoms.iter().all(|a| {
-                        atom_currently_satisfiable(&repos, a, config)
+                        atom_currently_satisfiable(&repos, a, config, disj_constraints(a))
                             || root_deps_running_root
                                 .is_some_and(|root| running_root_satisfies_atom(a, root))
                     })
@@ -12127,9 +12169,23 @@ fn backtracking_resolve(req: &ResolveRequest) -> Result<GraphResult, String> {
             let mut negatives: Vec<((String, String), String)> = Vec::new();
             for sc in &slot_conflicts {
                 let cp = (sc.category.clone(), sc.package.clone());
+                // Mask the *highest* conflicting instance, not merely the
+                // first-resolved one: real backtracking's downgrade bias
+                // ("try a larger --backtrack ... to see if that will solve
+                // this conflict" == fall back to a lower version), and the
+                // version a `||`-pulled `>=` alternative re-selects, so
+                // `dep_zapdeps` yields to the next alternative on the
+                // retry. Falls back to `resolved_version` if the instance
+                // list is somehow empty.
+                let mask_ver = sc
+                    .instances
+                    .iter()
+                    .map(|i| i.version.clone())
+                    .max_by(|a, b| vercmp_ordering(a, b))
+                    .unwrap_or_else(|| sc.resolved_version.clone());
                 negatives.push((
                     cp.clone(),
-                    format!("!={}/{}-{}", sc.category, sc.package, sc.resolved_version),
+                    format!("!={}/{}-{}", sc.category, sc.package, mask_ver),
                 ));
                 if let Some(pullers) = slot_pullers.get(&cp) {
                     let mut seen: HashSet<(String, String, String)> = HashSet::new();
@@ -12571,6 +12627,11 @@ fn enqueue_dependencies(
     root_deps_running_root: Option<&Path>,
     entries: &mut Vec<GraphEntry>,
     root_deps_build_seen: &mut HashSet<(String, String)>,
+    // The `'backtrack` loop's accumulated per-`cat/pkg` `runtime_pkg_mask`
+    // (`slot_constraints`), consulted by this walk's `||` branch
+    // selection the same way the main New/Upgrade loop's is -- empty on
+    // the first pass, so a strict no-op there.
+    disj_constraints: &HashMap<(String, String), Vec<String>>,
 ) {
     let Ok(repo_candidates) = list_candidates(repos, category, package) else {
         return;
@@ -12634,13 +12695,18 @@ fn enqueue_dependencies(
     // New/Upgrade/Reinstall loop's own identical fix, above, for the
     // full grounding (this is `resolve_pretend_graph`'s own
     // `--deep`/AlreadyInstalled-recursion counterpart to it).
+    let disj_c = |a: &str| -> &[String] {
+        portage_dep::parse_atom(a)
+            .and_then(|at| disj_constraints.get(&(at.category, at.package)))
+            .map_or(&[][..], Vec::as_slice)
+    };
     let Ok(flat_deps) = portage_use_reduce::use_reduce_flat_disjunctive(
         &tokens,
         &use_flags,
         portage_use_reduce::MatchMode::Normal,
         &mut |atoms: &[String]| {
             atoms.iter().all(|a| {
-                atom_currently_satisfiable(repos, a, config)
+                atom_currently_satisfiable(repos, a, config, disj_c(a))
                     || root_deps_running_root
                         .is_some_and(|root| running_root_satisfies_atom(a, root))
             })
