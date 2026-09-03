@@ -13,6 +13,7 @@ members = [
     "crates/harness-common",
     "crates/mrg-director",
     "crates/versions-harness",
+    "crates/atom-harness",
     "crates/use-reduce-harness",
     "crates/required-use-harness",
     "crates/portuale",

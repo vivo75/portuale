@@ -902,10 +902,177 @@ mod wildcard_tests {
     }
 }
 
+/// An element of `extract_affecting_use`'s parse stack: a token or a nested group.
+#[derive(Clone, Debug, PartialEq)]
+enum Aff {
+    Tok(String),
+    Group(Vec<Aff>),
+}
+
+/// Whether the element ends in `?`, recursing into a group's last element.
+fn aff_ends_q(e: &Aff) -> bool {
+    match e {
+        Aff::Tok(s) => s.ends_with('?'),
+        Aff::Group(v) => v.last().is_some_and(aff_ends_q),
+    }
+}
+
+/// Whether the element is the `||` token.
+fn aff_is_barbar(e: &Aff) -> bool {
+    matches!(e, Aff::Tok(s) if s == "||")
+}
+
 fn affecting_useflag_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     // Modern-EAPI useflag charset; EAPI is not parametrized.
     RE.get_or_init(|| Regex::new(r"^[A-Za-z0-9][A-Za-z0-9+_@-]*$").unwrap())
+}
+
+/// Strips a leading `!` and the trailing `?`, then validates the flag name;
+/// `None` where Portage raises `InvalidDependString`.
+fn aff_cond_flag(tok: &str) -> Option<String> {
+    let body = tok.strip_prefix('!').unwrap_or(tok);
+    let mut chars = body.chars();
+    chars.next_back();
+    let flag = chars.as_str();
+    if affecting_useflag_re().is_match(flag) {
+        Some(flag.to_string())
+    } else {
+        None
+    }
+}
+
+/// Folds `l` back into `stack[lvl]`, dropping redundant brackets (Portage's `special_append`).
+fn aff_special_append(stack: &mut [Vec<Aff>], lvl: usize, is_single: bool, l: &[Aff]) {
+    let keep_flat = is_single && !stack[lvl].last().is_some_and(aff_ends_q);
+    if keep_flat {
+        if l.len() == 1
+            && let Aff::Group(inner) = &l[0]
+        {
+            stack[lvl].extend(inner.iter().cloned());
+            return;
+        }
+        stack[lvl].extend(l.iter().cloned());
+    } else {
+        stack[lvl].push(Aff::Group(l.to_vec()));
+    }
+}
+
+/// Port of `portage.dep.extract_affecting_use`: the USE flags whose `flag?`
+/// conditionals decide whether `atom` (an exact whitespace token) is in
+/// effect inside `dep`. `None` on malformed `dep` (Portage raises
+/// `InvalidDependString`). Not EAPI-parametrized.
+///
+/// ```
+/// # use std::collections::HashSet;
+/// let got = portage_dep::extract_affecting_use(
+///     "sasl? ( dev-libs/cyrus-sasl ) !minimal? ( cxx? ( dev-libs/cyrus-sasl ) )",
+///     "dev-libs/cyrus-sasl",
+/// ).unwrap();
+/// assert_eq!(got, HashSet::from(["cxx".to_string(), "minimal".to_string(), "sasl".to_string()]));
+/// ```
+pub fn extract_affecting_use(dep: &str, atom: &str) -> Option<HashSet<String>> {
+    let mut level: i32 = 0;
+    let mut stack: Vec<Vec<Aff>> = vec![Vec::new()];
+    let mut need_bracket = false;
+    let mut affecting: HashSet<String> = HashSet::new();
+
+    for token in dep.split_whitespace() {
+        if token == "(" {
+            need_bracket = false;
+            stack.push(Vec::new());
+            level += 1;
+        } else if token == ")" {
+            if need_bracket || level <= 0 {
+                return None;
+            }
+            level -= 1;
+            let lvl = level as usize;
+            let l = stack.pop().unwrap();
+            let is_single =
+                l.len() == 1 || (l.len() == 2 && (aff_is_barbar(&l[0]) || aff_ends_q(&l[0])));
+
+            // Predicates over the still-unmutated enclosing frames.
+            let ends_in_any_of_dep = |k: i32| -> bool {
+                k >= 0
+                    && stack
+                        .get(k as usize)
+                        .and_then(|s| s.last())
+                        .is_some_and(aff_is_barbar)
+            };
+            let ends_in_operator = |k: i32| -> bool {
+                k >= 0
+                    && stack
+                        .get(k as usize)
+                        .and_then(|s| s.last())
+                        .is_some_and(|e| aff_is_barbar(e) || aff_ends_q(e))
+            };
+            let eiad_prev = ends_in_any_of_dep(level - 1);
+            let eio_cur = ends_in_operator(level);
+            let eiad_cur = ends_in_any_of_dep(level);
+
+            if l.is_empty() {
+                if stack[lvl]
+                    .last()
+                    .is_some_and(|e| aff_is_barbar(e) || aff_ends_q(e))
+                {
+                    stack[lvl].pop();
+                }
+                continue;
+            }
+
+            if !eiad_prev && !eio_cur {
+                stack[lvl].extend(l);
+            } else if stack[lvl].is_empty() {
+                aff_special_append(&mut stack, lvl, is_single, &l);
+            } else if l.len() == 1 && eiad_cur {
+                stack[lvl].pop();
+                aff_special_append(&mut stack, lvl, is_single, &l);
+            } else if l.len() == 2
+                && (aff_is_barbar(&l[0]) || aff_ends_q(&l[0]))
+                && stack[lvl]
+                    .last()
+                    .is_some_and(|e| *e == l[0] || aff_is_barbar(e))
+            {
+                stack[lvl].pop();
+                aff_special_append(&mut stack, lvl, is_single, &l);
+                if aff_ends_q(&l[0]) {
+                    let Aff::Tok(t) = &l[0] else { return None };
+                    affecting.insert(aff_cond_flag(t)?);
+                }
+            } else {
+                if let Some(last) = stack[lvl].last()
+                    && aff_ends_q(last)
+                {
+                    let Aff::Tok(t) = last else { return None };
+                    let f = aff_cond_flag(t)?;
+                    affecting.insert(f);
+                }
+                aff_special_append(&mut stack, lvl, is_single, &l);
+            }
+        } else if token == "||" {
+            if need_bracket {
+                return None;
+            }
+            need_bracket = true;
+            stack[level as usize].push(Aff::Tok(token.to_string()));
+        } else {
+            if need_bracket {
+                return None;
+            }
+            if token.ends_with('?') {
+                need_bracket = true;
+                stack[level as usize].push(Aff::Tok(token.to_string()));
+            } else if token == atom {
+                stack[level as usize].push(Aff::Tok(token.to_string()));
+            }
+        }
+    }
+
+    if level != 0 || need_bracket {
+        return None;
+    }
+    Some(affecting)
 }
 
 #[cfg(test)]

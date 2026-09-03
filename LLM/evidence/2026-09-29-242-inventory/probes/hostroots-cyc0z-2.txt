@@ -1,0 +1,26 @@
+
+These are the packages that would be merged, in order:
+
+Calculating dependencies ... done!
+Dependency resolution took 0.06 s (backtrack: 1/20).
+
+
+
+[nomerge       ] dev-libs/cyc0z-2::testrepo  USE="foo -bar" 
+[ebuild  N     ]  dev-libs/cyc0y-1::testrepo  0 KiB
+[ebuild  N     ]   dev-libs/cyc0z-2::testrepo  USE="foo -bar" 0 KiB
+
+Total: 2 packages (2 new), Size of downloads: 0 KiB
+
+ * Error: circular dependencies:
+
+(dev-libs/cyc0y-1:0/0::testrepo, ebuild scheduled for merge) depends on
+ (dev-libs/cyc0z-2:0/0::testrepo, ebuild scheduled for merge) (buildtime)
+  (dev-libs/cyc0y-1:0/0::testrepo, ebuild scheduled for merge) (buildtime)
+
+It might be possible to break this cycle
+by applying the following change:
+- dev-libs/cyc0z-2 (Change USE: +bar -foo)
+
+Note that this change can be reverted, once the package has been installed.
+rc=1

@@ -1,0 +1,14 @@
+[ebuild  N     ] dev-libs/cyc0z-3  USE="foo -bar"
+[ebuild  N     ] dev-libs/cyc0y-1 
+
+ * Error: circular dependencies:
+
+dev-libs/cyc0z-3 depends on
+ dev-libs/cyc0y-1 (buildtime)
+  dev-libs/cyc0z-3 (buildtime)
+
+It might be possible to break this cycle
+by applying the following change:
+- dev-libs/cyc0z-3 (Change USE: +bar -foo)
+
+Note that this change can be reverted, once the package has been installed.

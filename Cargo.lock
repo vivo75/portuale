@@ -133,6 +133,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "atom-harness"
+version = "0.1.0"
+dependencies = [
+ "harness-common",
+ "portage-dep",
+]
+
+[[package]]
 name = "autocfg"
 version = "1.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
