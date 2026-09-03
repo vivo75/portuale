@@ -12191,3 +12191,43 @@ the best version at whichever single level first matches -- coincides
 with real for the cross-version cases the fallbacks distinguish);
 `_autounmask_breakage` revert-and-escalate; the whole-graph parent-flip
 re-resolve; keyword/mask in-loop accumulators; `get_best_run`.
+
+### Autounmask breakage — a flag wanted both ways abandons autounmask (2026-09-03)
+
+Slice 3 of the autounmask-in-loop plan. Real `_autounmask_breakage`
+(`depgraph.py:12262`): once an autounmask change leaves some other
+use-dep unsatisfiable and it can't be undone, portage stops trying to be
+clever -- `myparams["autounmask"] = False` and one final re-resolve, so
+the user sees the plain unsatisfied-dependency picture rather than a
+half-applied set of config changes. There is no per-level
+"revert-this-one-change-and-escalate" mechanism (an earlier draft of the
+plan misread this).
+
+portuale's loop now watches its `autounmask_use_config` accumulator: if a
+pass asks for `(cat/pkg, flag)` at a state opposite to one already
+recorded for a different atom, that's a contradiction no re-resolve can
+settle. It clears the accumulator and the pending change records, turns
+all four `autounmask_suggest_*` off, and runs one more pass (an
+`autounmask_disabled` latch bounds it to one).
+
+Fixture `dev-libs/aubreaktop` pulls `dev-libs/aubreaksub` plain, then
+`dev-libs/aubreakwant` (needs `aubreaksub[brk]`) and
+`dev-libs/aubreakunwant` (needs `aubreaksub[-brk]`). Before the slice the
+two use-deps pushed a self-contradictory block --
+`>=dev-libs/aubreaksub-1.0 brk` *and* `>=dev-libs/aubreaksub-1.0 -brk` --
+and Rust vs Python even disagreed on which parity the oscillation landed
+on (`USE="-brk"` vs `USE="brk"`). After it, both abandon autounmask and
+print the same clean list, with `aubreakwant`'s now-unsatisfiable `[brk]`
+surfacing as the ordinary non-fatal `!!! no visible ebuild for dependency
+"dev-libs/aubreaksub"` note -- identical to what `--autounmask-use=n`
+produces. 3 CASES + a pinned contract test + a `portage-repo` unit test,
+Rust==Python byte-identical, full suite green.
+
+Cuts: only the *contradiction* signal triggers the abandon (real also
+abandons when an autounmask flip makes a plain non-use dep that a package
+matches disappear -- portuale's re-check only compares use-deps). A
+fresh-path flip contradicted by a later atom on an already-resolved slot
+still slips through silently -- the pre-existing already-resolved-slot
+`match_from_list` use-dep blindness, tracked separately. Still ahead: the
+whole-graph parent-flip re-resolve; keyword/mask in-loop accumulators;
+`get_best_run`.

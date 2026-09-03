@@ -1,0 +1,7 @@
+DEFINED_PHASES=-
+DESCRIPTION=fixture: pulls aubreaksub plain, then aubreakwant (needs aubreaksub[brk]) and aubreakunwant (needs aubreaksub[-brk]) -- autounmask can't satisfy both, so it must be abandoned (_autounmask_breakage)
+EAPI=8
+KEYWORDS=amd64
+RDEPEND=dev-libs/aubreaksub dev-libs/aubreakwant dev-libs/aubreakunwant
+SLOT=0
+_md5_=0000000000000000000000000000000

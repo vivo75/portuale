@@ -28,8 +28,12 @@ What a single pass **cannot** do, and real `_backtrack_depgraph` +
    first level that yields a package — so a lower version fixable by USE
    alone beats a higher version needing `~arch`. portuale's masked-only
    fallbacks fire keyword→license→mask and don't escalate per version.
-3. **`_autounmask_breakage`.** An autounmask change that breaks a
-   *previously satisfied* dep is reverted and the next level tried.
+3. **`_autounmask_breakage`.** An autounmask change that leaves another
+   use-dep unsatisfiable and can't be reconciled makes portage abandon
+   autounmask *wholesale* (`myparams["autounmask"] = False`,
+   depgraph.py:12262) and re-resolve one clean pass. There is no
+   per-level "revert this one change and escalate" mechanism — that was a
+   misreading in an earlier draft of this plan.
 4. **Parent-flip re-resolve of the whole graph.** The `'parent_flip`
    block re-resolves only the freed dep (documented cut); real re-drives
    the whole pass via `needed_use_config_changes`.
@@ -91,9 +95,29 @@ autounmask_use_config: HashMap<(String, String), HashMap<String, bool>>
    cases the fallbacks distinguish, but not for a "level-1 unmasks v1
    AND v2, level-2 would unmask v3" chain where real re-scans. No
    fixture exercises that.)*
-3. **`_autounmask_breakage`.** Detect an autounmask change that makes a
-   previously-satisfied dep unsatisfiable; revert it, escalate. Fixture:
-   flipping `x` on `A` to satisfy `Z` also kills `x? ( needed-by-Y )`.
+3. **`_autounmask_breakage`.** ✅ **Shipped 2026-09-03.** Faithful to real
+   (depgraph.py:12262): when the accumulator ends up wanting the same
+   `(cp, flag)` both on *and* off — a contradiction no re-resolve can
+   settle — every autounmask change is dropped, all four
+   `autounmask_suggest_*` are switched off, and the loop runs one final
+   clean pass (`autounmask_disabled` latch keeps it to one). Fixture
+   `dev-libs/aubreaktop` → `aubreakwant` needs `aubreaksub[brk]`,
+   `aubreakunwant` needs `aubreaksub[-brk]`: before, the two pushed a
+   contradictory `>=aubreaksub-1.0 brk` + `>=aubreaksub-1.0 -brk` block
+   (and Rust/Python even disagreed on the final `USE=` parity); after,
+   both abandon autounmask and print the same clean list with
+   `aubreakwant`'s unsatisfiable `[brk]` as the ordinary non-fatal
+   dependency `!!! no visible ebuild` note — identical to what
+   `--autounmask-use=n` produces. Rust==Python byte-identical.
+   **Simplification**: only the *contradiction* signal triggers the
+   abandon; real also abandons when an autounmask flip makes a plain
+   (non-use) dep vanish that a package matches, but portuale's re-check
+   only ever compares use-deps. Also, a fresh-path flip that a later atom
+   contradicts on an *already-resolved* slot still slips through
+   silently (the re-check recomputes effective USE from `config`, which
+   doesn't carry the pass-local fresh flip) — that's the pre-existing
+   already-resolved-slot `match_from_list` use-dep blindness, tracked
+   separately, untouched here.
 4. **Parent-flip whole-graph re-resolve (#4).** `suggested_parent_use_
    candidate` folds the parent flip into `autounmask_use_config` and
    re-resolves the whole pass instead of just the freed dep. Removes the

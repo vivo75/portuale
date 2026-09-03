@@ -405,6 +405,21 @@ CASES = [
         0,
     ),
     (
+        "autounmask breakage: a flag wanted both ways abandons autounmask entirely",
+        ["--pretend", "dev-libs/aubreaktop"],
+        0,
+    ),
+    (
+        "autounmask breakage, -v",
+        ["--pretend", "-v", "dev-libs/aubreaktop"],
+        0,
+    ),
+    (
+        "autounmask breakage, --autounmask: still abandoned, same clean result",
+        ["--pretend", "--autounmask", "dev-libs/aubreaktop"],
+        0,
+    ),
+    (
         "USE-dep enforcement: plain flag declared and enabled matches",
         ["--pretend", "dev-libs/useflagpkg[foo]"],
         0,
@@ -2577,6 +2592,36 @@ def test_autounmask_backward_cascade_re_resolves_an_already_resolved_slot(
     assert n.stdout == npy.stdout and n.stderr == npy.stderr
     assert "aucascleaf" not in n.stdout
     assert 'no visible ebuild for dependency "dev-libs/aucascmid"' in n.stderr
+
+
+def test_autounmask_breakage_abandons_autounmask_when_a_flag_is_wanted_both_ways(
+    emerge_binary, emerge_pretend_python, fixture_env
+):
+    """dev-libs/aubreaktop pulls dev-libs/aubreaksub plain, then
+    dev-libs/aubreakwant (needs aubreaksub[brk]) and dev-libs/aubreakunwant
+    (needs aubreaksub[-brk]). Autounmask folds brk on for aubreakwant; the
+    next pass's aubreakunwant[-brk] asks for it back off -- the same flag
+    wanted both ways. Real _autounmask_breakage (depgraph.py:12262) drops
+    every autounmask change and re-resolves one final pass with suggestion
+    off. So there is NO 'USE changes are necessary' block, aubreaksub keeps
+    its default USE="-brk", and aubreakwant's now-unsatisfiable [brk] shows
+    up as the ordinary non-fatal dependency warning -- exactly what
+    --autounmask-use=n would have produced. Rust==Python byte-identical."""
+    args = ["--pretend", "dev-libs/aubreaktop"]
+    rust = _run([str(emerge_binary)], args, fixture_env)
+    py = _run(emerge_pretend_python, args, fixture_env)
+    assert rust.returncode == 0 and py.returncode == 0
+    assert rust.stdout == py.stdout and rust.stderr == py.stderr
+    assert rust.stdout.splitlines() == [
+        '[ebuild  N     ] dev-libs/aubreaksub-1.0  USE="-brk"',
+        "[ebuild  N     ] dev-libs/aubreakwant-1.0 ",
+        "[ebuild  N     ] dev-libs/aubreakunwant-1.0 ",
+        "[ebuild  N     ] dev-libs/aubreaktop-1.0 ",
+    ]
+    assert "USE changes are necessary" not in rust.stderr
+    assert rust.stderr == (
+        '!!! no visible ebuild for dependency "dev-libs/aubreaksub"\n'
+    )
 
 
 def test_autounmask_levels_prefer_license_over_a_higher_keyword_masked_version(

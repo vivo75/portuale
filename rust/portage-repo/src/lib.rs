@@ -9569,10 +9569,13 @@ fn backtracking_resolve(req: &ResolveRequest) -> Result<GraphResult, String> {
     let with_test_deps: bool = req.with_test_deps;
     let changed_deps_report: bool = req.changed_deps_report;
     let selective: bool = req.selective;
-    let autounmask_suggest_keywords: bool = req.autounmask_suggest_keywords;
-    let autounmask_suggest_use: bool = req.autounmask_suggest_use;
-    let autounmask_suggest_license: bool = req.autounmask_suggest_license;
-    let autounmask_suggest_masks: bool = req.autounmask_suggest_masks;
+    // `mut` so the `_autounmask_breakage` fallback (real depgraph.py:12262)
+    // can switch all four off for one final clean pass once an accumulated
+    // autounmask change turns out to break another dependency.
+    let mut autounmask_suggest_keywords: bool = req.autounmask_suggest_keywords;
+    let mut autounmask_suggest_use: bool = req.autounmask_suggest_use;
+    let mut autounmask_suggest_license: bool = req.autounmask_suggest_license;
+    let mut autounmask_suggest_masks: bool = req.autounmask_suggest_masks;
     let usepkg: bool = req.usepkg;
     let usepkgonly: bool = req.usepkgonly;
     let binpkg_respect_use: bool = req.binpkg_respect_use;
@@ -9676,6 +9679,15 @@ fn backtracking_resolve(req: &ResolveRequest) -> Result<GraphResult, String> {
     // rebuilt whenever the accumulator grows, `None` until then (so the
     // common no-autounmask path never clones `Config`).
     let mut backtrack_config: Option<portage_profile::Config> = None;
+    // Real `_autounmask_breakage` (depgraph.py:12262): once an accumulated
+    // autounmask USE change turns out to make some *other* use-dep
+    // unsatisfiable and cannot be reconciled -- the same flag ends up
+    // wanted both on and off -- portage abandons autounmask entirely
+    // (`myparams["autounmask"] = False`) and re-resolves one final clean
+    // pass. `autounmask_use_broke` latches the contradiction; the driver
+    // acts on it once and sets `autounmask_disabled` so it can't re-fire.
+    let mut autounmask_use_broke = false;
+    let mut autounmask_disabled = false;
 
     'backtrack: loop {
         // The per-pass config view: the accumulator's autounmask-use
@@ -10499,9 +10511,20 @@ fn backtracking_resolve(req: &ResolveRequest) -> Result<GraphResult, String> {
                                         autounmask_use_config.entry(key.clone()).or_default();
                                     let mut newly = false;
                                     for (f, on) in &flip {
-                                        if bucket.get(f) != Some(on) {
-                                            bucket.insert(f.clone(), *on);
-                                            newly = true;
+                                        match bucket.get(f) {
+                                            Some(prev) if prev == on => {}
+                                            // The accumulator already wants this
+                                            // flag the *other* way for a different
+                                            // atom -- flipping it now would just
+                                            // re-break that one. Real
+                                            // `_autounmask_breakage`: give up on
+                                            // autounmask entirely (handled by the
+                                            // driver below).
+                                            Some(_) => autounmask_use_broke = true,
+                                            None => {
+                                                bucket.insert(f.clone(), *on);
+                                                newly = true;
+                                            }
                                         }
                                     }
                                     if newly {
@@ -11406,6 +11429,26 @@ fn backtracking_resolve(req: &ResolveRequest) -> Result<GraphResult, String> {
                 backtrack_iteration += 1;
                 continue 'backtrack;
             }
+        }
+
+        // Real `_autounmask_breakage` (depgraph.py:12262-12280): an
+        // accumulated autounmask USE change made another use-dep
+        // unsatisfiable and the two can't be reconciled (a flag wanted
+        // both ways). Drop every autounmask change, turn suggestion fully
+        // off, and re-resolve one final clean pass -- exactly real's
+        // `myparams["autounmask"] = False` retry. The `autounmask_disabled`
+        // latch keeps it to a single extra pass.
+        if autounmask_use_broke && !autounmask_disabled && mask_phase == MaskPhase::None {
+            autounmask_disabled = true;
+            autounmask_suggest_keywords = false;
+            autounmask_suggest_use = false;
+            autounmask_suggest_license = false;
+            autounmask_suggest_masks = false;
+            autounmask_use_config.clear();
+            autounmask_use_change_records.clear();
+            backtrack_config = None;
+            backtrack_iteration += 1;
+            continue 'backtrack;
         }
 
         // Backtracking slice: this pass folded a new `--autounmask-use`
@@ -19730,6 +19773,45 @@ mod tests {
                 "required by dev-libs/parentflipeqpkg-1.0::testrepo".to_string(),
                 "required by dev-libs/parentflipeqpkg (argument)".to_string(),
             ]
+        );
+    }
+
+    #[test]
+    fn autounmask_use_breakage_abandons_autounmask_and_re_resolves_clean() {
+        // `dev-libs/aubreaktop` RDEPENDs `aubreaksub` (plain, resolves
+        // `brk` off first), then `aubreakwant` (needs `aubreaksub[brk]`)
+        // and `aubreakunwant` (needs `aubreaksub[-brk]`). Autounmask folds
+        // `brk` on for `aubreakwant`; the next pass's `aubreakunwant[-brk]`
+        // asks for it back off -- a flag wanted both ways. Real
+        // `_autounmask_breakage` (depgraph.py:12262): drop every autounmask
+        // change and re-resolve one final pass with suggestion off. So
+        // nothing is recorded, `aubreaksub` settles at its default `brk`
+        // off, and `aubreakwant`'s now-unsatisfiable `[brk]` shows up as an
+        // ordinary (non-fatal) dependency `NoVisibleCandidate` -- exactly
+        // what `--autounmask-use=n` would have produced from the start.
+        let result = graph_result_autounmask("dev-libs/aubreaktop");
+        assert!(
+            result.autounmask_use_changes.is_empty(),
+            "autounmask must be abandoned, not left with a contradictory change: {:?}",
+            result.autounmask_use_changes
+        );
+        let sub = result
+            .entries
+            .iter()
+            .find(|e| e.package == "aubreaksub" && matches!(e.outcome, PretendOutcome::New { .. }))
+            .expect("aubreaksub still resolves as New");
+        assert_eq!(
+            sub.use_flags_display
+                .iter()
+                .find(|(f, _)| f == "brk")
+                .map(|(_, on)| *on),
+            Some(false),
+            "the reverted graph keeps aubreaksub's default brk off"
+        );
+        assert!(
+            result.entries.iter().any(|e| e.package == "aubreaksub"
+                && matches!(e.outcome, PretendOutcome::NoVisibleCandidate)),
+            "aubreakwant's [brk] dep is unsatisfiable once autounmask is off"
         );
     }
 

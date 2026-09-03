@@ -6642,6 +6642,16 @@ def resolve_pretend_graph(
     _base_config = config
     autounmask_use_config = {}
     autounmask_use_change_records = []
+    # Real _autounmask_breakage (depgraph.py:12262): once an accumulated
+    # autounmask USE change turns out to make some other use-dep
+    # unsatisfiable and cannot be reconciled -- the same flag ends up wanted
+    # both on and off -- portage abandons autounmask entirely
+    # (myparams["autounmask"] = False) and re-resolves one final clean pass.
+    # autounmask_use_broke latches the contradiction; the driver acts on it
+    # once and sets autounmask_disabled so it can't re-fire. Mirrors
+    # portage-repo/src/lib.rs.
+    autounmask_use_broke = False
+    autounmask_disabled = False
 
     def _autounmask_use_tier(acc):
         out = []
@@ -6652,6 +6662,7 @@ def resolve_pretend_graph(
         return out
 
     def _graph_pass():
+        nonlocal autounmask_use_broke
         # Guards against infinite requeuing (e.g. a dependency cycle): the
         # exact same atom text is only ever resolved once -- deliberately
         # coarser than the (category, package, slot) dedup below, which
@@ -7263,7 +7274,17 @@ def resolve_pretend_graph(
                                 )
                                 _newly = False
                                 for _f, _on in _flip:
-                                    if _bucket.get(_f) != _on:
+                                    _prev = _bucket.get(_f)
+                                    if _prev == _on:
+                                        pass
+                                    elif _prev is not None:
+                                        # The accumulator already wants this flag
+                                        # the other way for a different atom --
+                                        # flipping it now would just re-break that
+                                        # one. Real _autounmask_breakage: give up
+                                        # on autounmask entirely (driver below).
+                                        autounmask_use_broke = True
+                                    else:
                                         _bucket[_f] = _on
                                         _newly = True
                                 if _newly:
@@ -7971,6 +7992,24 @@ def resolve_pretend_graph(
                 mask_trial_spent = True
                 backtrack_iteration += 1
                 continue
+
+        # Real _autounmask_breakage (depgraph.py:12262-12280): an accumulated
+        # autounmask USE change made another use-dep unsatisfiable and the
+        # two can't be reconciled (a flag wanted both ways). Drop every
+        # autounmask change, turn suggestion fully off, and re-resolve one
+        # final clean pass -- real's myparams["autounmask"] = False retry.
+        # The autounmask_disabled latch keeps it to a single extra pass.
+        if autounmask_use_broke and not autounmask_disabled and mask_phase == "none":
+            autounmask_disabled = True
+            autounmask_suggest_keywords = False
+            autounmask_suggest_use = False
+            autounmask_suggest_license = False
+            autounmask_suggest_masks = False
+            autounmask_use_config.clear()
+            autounmask_use_change_records.clear()
+            config = _base_config
+            backtrack_iteration += 1
+            continue
 
         # Backtracking slice: this pass folded a new --autounmask-use flip
         # into autounmask_use_config (real _feedback_config growing

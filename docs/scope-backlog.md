@@ -113,13 +113,16 @@ architectural — a single-pass BFS can't grow into these incrementally:
     tier) and **Slice 1** (the *backward* cascade: a `[flag]` dep on an
     already-resolved slot folds a `suggested_use_flip` into an
     `autounmask_use_config` accumulator and the driver re-runs the whole
-    walk — real `_needed_use_config_changes` / `_feedback_config`)
-    **shipped 2026-09-03**. Still open: `_autounmask_levels` ordering
-    (USE → +license → +~arch → +missing-kw → +masks, per candidate in
-    version order), `_autounmask_breakage` revert-and-escalate, the
-    whole-graph parent-flip re-resolve (removes the `'parent_flip`
-    single-dep cut), keyword/mask accumulators in the loop, `get_best_run`
-    (prefer the maskless settled run);
+    walk — real `_needed_use_config_changes` / `_feedback_config`),
+    **Slice 2** (`_autounmask_levels` ordering: the `*_masked_only`
+    fallbacks run `+license` → `+~arch` → `+masks`) and **Slice 3**
+    (`_autounmask_breakage`: a flag the accumulator ends up wanting both
+    ways abandons autounmask wholesale — `myparams["autounmask"] = False`
+    — and re-resolves one clean pass) **shipped 2026-09-03**. Still open:
+    a true per-level version re-scan, the whole-graph parent-flip
+    re-resolve (removes the `'parent_flip` single-dep cut), keyword/mask
+    accumulators in the loop, `get_best_run` (prefer the maskless settled
+    run);
   - `||`-preference / slot-operator-rebuild feedback driving a retry;
   - the slot-collision notice's remaining cuts: `pkg_use_display` for a
     package with non-default USE (the ` USE=""` slot renders, non-empty
