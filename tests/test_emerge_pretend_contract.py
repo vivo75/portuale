@@ -1004,6 +1004,9 @@ CASES = [
     ("package.env: env-file USE= enables a flag, pulling in a dependency", ["--pretend", "dev-libs/penvpkg"], 0),
     ("repo make.defaults: USE= enables a flag, pulling in a dependency", ["--pretend", "-v", "dev-libs/repomakedefaultpkg"], 0),
     ("env.d: /etc/profile.env USE= enables a flag, pulling in a dependency", ["--pretend", "-v", "dev-libs/envdusepkg"], 0),
+    ("bare name: a unique package name is category-qualified", ["--pretend", "newpkg"], 0),
+    ("bare name: ambiguous across two categories is rejected", ["--pretend", "ambigpkg"], 1),
+    ("bare name: no match reports 'no ebuilds to satisfy'", ["--pretend", "nosuchpkgname"], 1),
     ("profile defaults walk: a leaf make.defaults cancels a parent package.use", ["--pretend", "-v", "dev-libs/interleavepkg"], 0),
     ("blocker: strong (!!) blocker matches an installed package", ["--pretend", "dev-libs/blockerpkg"], 0),
     ("blocker: weak (!) blocker matches another new package in the graph", ["--pretend", "dev-libs/graphblockerparent"], 0),
@@ -6779,12 +6782,12 @@ def test_bundled_verbose_never_consumes_the_next_token_as_its_value(
     short option (one sharing a token with another flag) pick up an
     inline or next-token value -- only a standalone, unbundled -v does
     (see test_verbose_consumes_an_explicit_y_or_n_value). "-pv n" must
-    treat "n" as a positional atom, not as -v's value -- proven here by
-    it failing as an invalid atom, not by "n" silently disabling
-    verbose."""
+    treat "n" as a positional target, not as -v's value -- proven here
+    by "n" being category-qualified as a (nonexistent) bare package name
+    (real dep_expand), not by "n" silently disabling verbose."""
     result = _run([str(emerge_binary)], ["-pv", "n"], fixture_env)
     assert result.returncode == 1
-    assert result.stderr.strip() == 'emerge: invalid atom "n"'
+    assert result.stderr.strip() == 'emerge: there are no ebuilds to satisfy "n".'
 
 
 def test_help_prints_a_pilot_specific_summary_not_real_emerges_own(
@@ -10241,6 +10244,58 @@ def test_misspell_suggestions_for_a_missing_package_name(
     # autounmask note path, never the name-suggestion path.
     masked = _run([str(emerge_binary)], ["--pretend", "dev-libs/autounmaskkeywordpkg"], fixture_env)
     assert "searching for similar names" not in masked.stderr
+
+
+def test_bare_command_line_name_is_category_qualified(
+    emerge_binary, emerge_pretend_python, fixture_env
+):
+    """Real `dep_expand()` / `cpv_expand()` (`lib/portage/dbapi/`): a
+    command-line target with no category is qualified against the repo
+    tree. `dev-libs/newpkg` is the only `newpkg` anywhere, so
+    `emerge newpkg` resolves it. `virtprefpkg` exists as both
+    `dev-libs/virtprefpkg` and `virtual/virtprefpkg` -> the non-virtual
+    wins silently (real "assume that the non-virtual is desired"). Rust
+    == Python throughout."""
+    for target, expected in (
+        ("newpkg", "[ebuild  N     ] dev-libs/newpkg-1.0"),
+        ("virtprefpkg", "[ebuild  N     ] dev-libs/virtprefpkg-1.0"),
+    ):
+        r = _run([str(emerge_binary)], ["--pretend", target], fixture_env)
+        p = _run(emerge_pretend_python, ["--pretend", target], fixture_env)
+        assert r.returncode == 0, r.stderr
+        assert r.stdout == p.stdout
+        assert r.stdout.splitlines()[0].rstrip() == expected
+
+
+def test_bare_name_ambiguous_across_categories_is_rejected(
+    emerge_binary, emerge_pretend_python, fixture_env
+):
+    """`ambigpkg` exists as both `app-misc/ambigpkg` and
+    `dev-libs/ambigpkg` (both non-virtual) -> real
+    `ambiguous_package_name` (its `--quiet` form: the two `!!!` lines +
+    the sorted fully-qualified list, exit 1). Rust == Python."""
+    r = _run([str(emerge_binary)], ["--pretend", "ambigpkg"], fixture_env)
+    p = _run(emerge_pretend_python, ["--pretend", "ambigpkg"], fixture_env)
+    assert r.returncode == 1
+    assert r.stdout == p.stdout
+    assert r.stderr == p.stderr
+    assert '!!! The short ebuild name "ambigpkg" is ambiguous.' in r.stderr
+    assert "!!! one of the following fully-qualified ebuild names instead:" in r.stderr
+    assert r.stdout.split() == ["app-misc/ambigpkg", "dev-libs/ambigpkg"]
+
+
+def test_bare_name_with_no_match_reports_no_ebuilds(
+    emerge_binary, emerge_pretend_python, fixture_env
+):
+    """A bare name matching no package anywhere -> `emerge: there are no
+    ebuilds to satisfy "<name>".`, exit 1 (real `cpv_expand` returns
+    `null/<name>` and resolution then fails; the pilot short-circuits
+    with the message). Rust == Python."""
+    r = _run([str(emerge_binary)], ["--pretend", "nosuchpkgname"], fixture_env)
+    p = _run(emerge_pretend_python, ["--pretend", "nosuchpkgname"], fixture_env)
+    assert r.returncode == 1
+    assert r.stderr == p.stderr
+    assert r.stderr.strip() == 'emerge: there are no ebuilds to satisfy "nosuchpkgname".'
 
 
 def test_check_news_counts_unread_relevant_items(

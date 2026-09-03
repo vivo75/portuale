@@ -194,6 +194,15 @@ single-pass BFS can't grow into these incrementally:
 - Minor: `dependency_avoid_update_candidate` version-only cross-slot match
   — **fixed 2026-08-31**, listed here only so a future re-derivation
   doesn't re-flag it.
+- **Bare command-line names** (`emerge eix` → `app-portage/eix`) — real
+  `dep_expand()` / `cpv_expand()`'s category qualification against the
+  repo tree. **Shipped 2026-09-03:** `is_bare_package_name` +
+  `qualify_bare_name` over `all_cp(&repos)`, applied before the atom-
+  validation loop; unique → qualify, non-virtual-on-a-tie → qualify,
+  else the real `ambiguous_package_name` `--quiet`-form block (exit 1),
+  no match → `there are no ebuilds to satisfy` (exit 1). Rust + Python.
+  Cuts: a versioned/slotted bare name (`emerge eix-1.2`, `emerge eix:0`),
+  and real's non-`--quiet` full-`search` ambiguity output.
 
 ### B. Scheduler / build orchestration
 

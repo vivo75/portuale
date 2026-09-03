@@ -1839,3 +1839,20 @@ rust/target/release/portuale emerge --resume --pretend
 rust/target/release/portuale emerge --quiet-build=y dev-libs/packagepkg
 # stdout: only >>> / [ebuild lines; phase output -> ${PORTAGE_TMPDIR}/portage/<cat>/<pf>/temp/build.log
 ```
+
+Bare command-line names (`dep_expand` / `cpv_expand` category qualification):
+
+```sh
+export PORTAGE_CONFIGROOT="$PWD/fixtures" ROOT="$PWD/fixtures"
+rust/target/release/portuale emerge -p newpkg          # -> [ebuild  N     ] dev-libs/newpkg-1.0
+rust/target/release/portuale emerge -p virtprefpkg     # dev-libs/ + virtual/ -> the non-virtual, silently
+rust/target/release/portuale emerge -p ambigpkg ; echo "exit=$?"
+# !!! The short ebuild name "ambigpkg" is ambiguous. Please specify
+# !!! one of the following fully-qualified ebuild names instead:
+#     app-misc/ambigpkg
+#     dev-libs/ambigpkg
+# exit=1
+rust/target/release/portuale emerge -p nosuchpkgname ; echo "exit=$?"
+# emerge: there are no ebuilds to satisfy "nosuchpkgname".
+# exit=1
+```

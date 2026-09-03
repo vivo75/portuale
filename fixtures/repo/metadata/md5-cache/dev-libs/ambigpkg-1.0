@@ -1,0 +1,7 @@
+DEFINED_PHASES=-
+DESCRIPTION=fixture: same package name in two non-virtual categories -> bare emerge is ambiguous
+EAPI=8
+IUSE=
+KEYWORDS=amd64
+SLOT=0
+_md5_=0000000000000000000000000000000

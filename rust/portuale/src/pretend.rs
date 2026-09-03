@@ -2622,6 +2622,61 @@ fn run_deselect(targets: &[&str], root: &Path, pretend: bool, ask: bool) -> Exit
 /// working). Real portage's own stray `print(sp_absx)` / `print(absx)`
 /// debug lines before the "not inside …; aborting" message (a raw
 /// list repr -- clearly unintended output) are deliberately omitted.
+/// Whether `s` is a plain package name with no category, version,
+/// operator, slot, use-dep, or repo -- the only shape `qualify_bare_name`
+/// handles. Real `dep_expand`'s `null/`-insertion path also covers a
+/// trailing `:slot` / bare version (`emerge eix:0`, `emerge eix-1.2`);
+/// that is a documented v1 cut here.
+fn is_bare_package_name(s: &str) -> bool {
+    !s.is_empty()
+        && !s.starts_with(['@', '!', '=', '<', '>', '~', '-', '*'])
+        && !s.contains('/')
+        && s.bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'+' | b'.' | b'_' | b'-'))
+        && parse_atom(s).is_none()
+}
+
+/// Outcome of qualifying a bare command-line name against the repo tree.
+enum BareName {
+    Qualified(String),
+    Ambiguous(Vec<String>),
+    NoMatch,
+}
+
+/// Real `cpv_expand` (`lib/portage/dbapi/cpv_expand.py`): the `cat/pkg`
+/// keys under which a package named `name` has an ebuild. Zero ->
+/// `NoMatch`; one -> `Qualified`; more than one -> `Qualified` if exactly
+/// one is not a `virtual/` / `acct-group/` / `acct-user/` key (real
+/// "assume that the non-virtual is desired"), else `Ambiguous` (sorted).
+fn qualify_bare_name(name: &str, all_cp: &[String]) -> BareName {
+    let mut matches: Vec<String> = all_cp
+        .iter()
+        .filter(|cp| cp.rsplit_once('/').is_some_and(|(_, p)| p == name))
+        .cloned()
+        .collect();
+    matches.sort();
+    matches.dedup();
+    match matches.len() {
+        0 => BareName::NoMatch,
+        1 => BareName::Qualified(matches.pop().unwrap()),
+        _ => {
+            let non_virtual: Vec<&String> = matches
+                .iter()
+                .filter(|cp| {
+                    !["virtual/", "acct-group/", "acct-user/"]
+                        .iter()
+                        .any(|p| cp.starts_with(p))
+                })
+                .collect();
+            if non_virtual.len() == 1 {
+                BareName::Qualified(non_virtual[0].clone())
+            } else {
+                BareName::Ambiguous(matches)
+            }
+        }
+    }
+}
+
 fn resolve_vdb_path_arg(arg: &str, root: &Path) -> Result<Option<String>, ExitCode> {
     let path_shaped = arg.starts_with('.') || arg.starts_with('/') || arg.ends_with(".ebuild");
     if !path_shaped {
@@ -7823,6 +7878,42 @@ pub fn run(args: &[String]) -> ExitCode {
         *atom = portage_repo::apply_updates_to_atom(atom);
     }
 
+    // Real `dep_expand()` / `cpv_expand()` (`lib/portage/dbapi/`): a
+    // command-line target with no category (`emerge eix`) is qualified
+    // against the repo tree -- scan every `<repo>/<cat>/<pkg>/` for a
+    // package matching the bare name. Exactly one -> use it silently;
+    // more than one -> the real `ambiguous_package_name` block (its
+    // `--quiet` form -- real's default form runs a full `search`, a
+    // documented cut), exit 1; none -> `there are no ebuilds to
+    // satisfy`, exit 1. A `@set`-expanded atom is already `cat/pkg`, so
+    // only a genuine command-line bare name reaches this.
+    {
+        let mut all_cp: Option<Vec<String>> = None;
+        for atom in &mut expanded_atoms {
+            if !is_bare_package_name(atom) {
+                continue;
+            }
+            let cps = all_cp.get_or_insert_with(|| portage_repo::all_cp(&repos));
+            match qualify_bare_name(atom, cps) {
+                BareName::Qualified(cp) => *atom = cp,
+                BareName::Ambiguous(matches) => {
+                    eprintln!(
+                        "\n!!! The short ebuild name \"{atom}\" is ambiguous. Please specify"
+                    );
+                    eprintln!("!!! one of the following fully-qualified ebuild names instead:\n");
+                    for cp in &matches {
+                        println!("    {cp}");
+                    }
+                    return ExitCode::from(1);
+                }
+                BareName::NoMatch => {
+                    eprintln!("emerge: there are no ebuilds to satisfy {atom:?}.");
+                    return ExitCode::from(1);
+                }
+            }
+        }
+    }
+
     if expanded_atoms.is_empty() {
         eprintln!(
             "emerge (pilot v1): no package atoms to resolve (the target list, after \
@@ -8706,6 +8797,47 @@ mod tests {
 
     fn fixtures_root() -> std::path::PathBuf {
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures")
+    }
+
+    #[test]
+    fn bare_name_qualification() {
+        assert!(is_bare_package_name("eix"));
+        assert!(is_bare_package_name("app-misc"));
+        assert!(!is_bare_package_name("app-portage/eix")); // has category
+        assert!(!is_bare_package_name("@world")); // set
+        assert!(!is_bare_package_name("!dev-libs/foo")); // blocker
+        assert!(!is_bare_package_name("dev-libs/foo:0")); // parses as an atom
+
+        let tree = [
+            "app-portage/eix".to_string(),
+            "app-misc/dup".to_string(),
+            "dev-libs/dup".to_string(),
+            "dev-libs/solo".to_string(),
+            "virtual/vpref".to_string(),
+            "dev-libs/vpref".to_string(),
+        ];
+        assert!(matches!(
+            qualify_bare_name("eix", &tree),
+            BareName::Qualified(cp) if cp == "app-portage/eix"
+        ));
+        assert!(matches!(
+            qualify_bare_name("solo", &tree),
+            BareName::Qualified(cp) if cp == "dev-libs/solo"
+        ));
+        // two non-virtual matches -> ambiguous, sorted.
+        assert!(matches!(
+            qualify_bare_name("dup", &tree),
+            BareName::Ambiguous(m) if m == ["app-misc/dup", "dev-libs/dup"]
+        ));
+        // one non-virtual + one virtual -> the non-virtual wins silently.
+        assert!(matches!(
+            qualify_bare_name("vpref", &tree),
+            BareName::Qualified(cp) if cp == "dev-libs/vpref"
+        ));
+        assert!(matches!(
+            qualify_bare_name("nope", &tree),
+            BareName::NoMatch
+        ));
     }
 
     #[test]

@@ -9261,6 +9261,42 @@ def _all_cp(repos):
     return sorted(out)
 
 
+def _is_bare_package_name(s):
+    """Whether `s` is a plain package name with no category, version,
+    operator, slot, use-dep, or repo -- the only shape
+    `_qualify_bare_name` handles (real `dep_expand`'s `null/`-insertion
+    path also covers `eix:0` / `eix-1.2`; a documented v1 cut). Mirrors
+    pretend.rs's is_bare_package_name."""
+    return bool(
+        s
+        and s[0] not in "@!=<>~-*"
+        and "/" not in s
+        and all(c.isalnum() or c in "+._-" for c in s)
+        and _parse_atom(s) is None
+    )
+
+
+def _qualify_bare_name(name, all_cp):
+    """Real `cpv_expand`: returns ("qualified", "<cat/pkg>"),
+    ("ambiguous", [<cat/pkg>, ...]) or ("nomatch", None) for a bare
+    command-line name. More than one match resolves silently when exactly
+    one is not a virtual/acct key (real "assume the non-virtual is
+    desired"). Mirrors pretend.rs's qualify_bare_name."""
+    matches = sorted({cp for cp in all_cp if cp.rsplit("/", 1)[-1] == name})
+    if not matches:
+        return ("nomatch", None)
+    if len(matches) == 1:
+        return ("qualified", matches[0])
+    non_virtual = [
+        cp
+        for cp in matches
+        if not cp.startswith(("virtual/", "acct-group/", "acct-user/"))
+    ]
+    if len(non_virtual) == 1:
+        return ("qualified", non_virtual[0])
+    return ("ambiguous", matches)
+
+
 def _misspell_suggestion_block(message, repos, enabled):
     """Real depgraph.py:7034-7066 + dbapi/_similar_name_search.py
     (--misspell-suggestions, default on): a top-level `there are no
@@ -13810,6 +13846,39 @@ def run(args):
     # before it is resolved or used as a display "requested" key. Mirrors
     # pretend.rs.
     atom_args = [apply_updates_to_atom(a) for a in expanded_atoms]
+
+    # Real dep_expand() / cpv_expand() (lib/portage/dbapi/): a
+    # command-line target with no category (`emerge eix`) is qualified
+    # against the repo tree. Exactly one match -> use it silently; more
+    # than one -> the real ambiguous_package_name block (--quiet form),
+    # exit 1; none -> "there are no ebuilds to satisfy", exit 1. Mirrors
+    # pretend.rs.
+    _bare_all_cp = None
+    for i, atom_arg in enumerate(atom_args):
+        if not _is_bare_package_name(atom_arg):
+            continue
+        if _bare_all_cp is None:
+            _bare_all_cp = _all_cp(all_repos)
+        kind, val = _qualify_bare_name(atom_arg, _bare_all_cp)
+        if kind == "qualified":
+            atom_args[i] = val
+        elif kind == "ambiguous":
+            print(
+                f'\n!!! The short ebuild name "{atom_arg}" is ambiguous. Please specify',
+                file=sys.stderr,
+            )
+            print(
+                "!!! one of the following fully-qualified ebuild names instead:\n",
+                file=sys.stderr,
+            )
+            for cp in val:
+                print(f"    {cp}")
+            return 1
+        else:
+            print(
+                f'emerge: there are no ebuilds to satisfy "{atom_arg}".', file=sys.stderr
+            )
+            return 1
 
     if not atom_args:
         print(

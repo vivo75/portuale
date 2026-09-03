@@ -11956,3 +11956,42 @@ missing-file → empty).
 is modelled, per-profile-level `defaults` interleaving included.
 `/etc/env.d/*` practically never sets `USE`, so in practice this tier is
 almost always empty; it is modelled for completeness.
+
+### Bare command-line package names — `emerge eix` → `app-portage/eix` (2026-09-03)
+
+Real `emerge` runs a command-line target with no category through
+`dep_expand()` → `cpv_expand()` (`lib/portage/dbapi/`), which scans every
+category in the tree (`portdbapi.categories`) for a package matching the
+bare name. The pilot's `parse_atom` grammar requires an explicit
+`category/package`, so `emerge eix` used to fail with `emerge: invalid
+atom "eix"`.
+
+Now, right after `@set` expansion and package-move rewriting and before
+the atom-validation loop, `pretend.rs` (and the Python reference)
+qualifies every command-line entry that `is_bare_package_name` accepts —
+a plain name, no `/`, no operator/slot/use-dep, and not already a valid
+atom — via `qualify_bare_name` over `portage_repo::all_cp(&repos)`:
+
+- **exactly one** `cat/pkg` → silently qualified
+- **more than one**, with exactly one non-`virtual/`/`acct-*` → that one
+  silently (real `cpv_expand`'s "assume that the non-virtual is desired")
+- **more than one** otherwise → real `ambiguous_package_name`'s `--quiet`
+  form: `\n!!! The short ebuild name "X" is ambiguous. Please specify` +
+  `!!! one of the following fully-qualified ebuild names instead:` + the
+  sorted `cat/pkg` list, exit 1
+- **none** → `emerge: there are no ebuilds to satisfy "X".`, exit 1
+
+New fixtures: `app-misc/` category (first non-`dev-libs`/`virtual`
+category in the tree) with `app-misc/ambigpkg` + `dev-libs/ambigpkg` (the
+ambiguous case) and `dev-libs/virtprefpkg` + `virtual/virtprefpkg` (the
+non-virtual-preference case). 3 CASES entries + 3 pinned contract tests
+(Rust == Python) + a `pretend.rs` unit test.
+
+**Documented cuts:** real's non-`--quiet` `ambiguous_package_name` runs a
+full `search` and prints its output before the `!!!` lines — the pilot
+emits only the deterministic list. A bare name carrying a version or slot
+(`emerge eix-1.2`, `emerge eix:0`) is not qualified (real `dep_expand`'s
+`null/`-insertion handles those); it falls through to the existing
+`invalid atom` / `no ebuilds` paths. The `null/<name>` fallback +
+cross-category misspell search for the no-match case is replaced by the
+direct message.

@@ -148,7 +148,10 @@ layer chain (`env.d` from `/etc/profile.env`, the lowest tier, added
 overlay repos; `package.provided` (a listed CPV satisfies a dependency
 atom silently / triggers the real `WARNING: … package.provided:` block
 for a direct target); explicit `repos.conf` `masters =` parsing (not just
-the implicit main-repo default); cross-repo profile parents; `USE_EXPAND`;
+the implicit main-repo default); cross-repo profile parents;
+bare command-line names (`emerge eix` → `app-portage/eix`, real
+`dep_expand`/`cpv_expand`, ambiguity → the real `!!! ... ambiguous`
+block, added 2026-09-03); `USE_EXPAND`;
 REQUIRED_USE; blockers; slot conflicts (sub-slots, slot operators);
 slot-aware installed matching with the `[ebuild NS]` new-slot marker;
 the `[ebuild I..]` interactive (`PROPERTIES=interactive`) bracket column;
