@@ -2,6 +2,155 @@
 
 use crate::*;
 
+/// Arguments of [`slot_operator_rebuild_entries`].
+pub(crate) struct SlotOperatorRebuildEntriesArgs<'a> {
+    pub(crate) root: &'a Path,
+    pub(crate) repos: &'a [RepoConfig],
+    pub(crate) entries: &'a [GraphEntry],
+    pub(crate) reachable: &'a HashSet<(String, String)>,
+    pub(crate) with_bdeps: bool,
+    pub(crate) excluded: &'a [String],
+    pub(crate) update: bool,
+    pub(crate) top_level_cps: &'a HashSet<(String, String)>,
+    pub(crate) top_level_atoms: &'a HashSet<String>,
+    pub(crate) config: &'a portage_profile::Config,
+}
+
+/// Legacy path for the `--solver=pubgrub` / `--solver=resolvo` bridges only:
+/// those engines re-drive no pass, so they keep the post-pass synthesiser --
+/// one `slot_operator_rebuild` reinstall entry per scheduled consumer,
+/// iterated until the set stops growing. The default solver path seeds the
+/// consumer as a walked node instead.
+pub(crate) fn slot_operator_rebuild_entries(
+    args: SlotOperatorRebuildEntriesArgs<'_>,
+) -> (Vec<GraphEntry>, Vec<(String, String)>) {
+    let SlotOperatorRebuildEntriesArgs {
+        root,
+        repos,
+        entries,
+        reachable,
+        with_bdeps,
+        excluded,
+        update,
+        top_level_cps,
+        top_level_atoms,
+        config,
+    } = args;
+    let installed = all_installed_packages(root);
+    let mut scheduled: BTreeSet<(String, String)> = BTreeSet::new();
+    let mut out: Vec<GraphEntry> = Vec::new();
+    let mut abi_rebuilds: Vec<(String, String)>;
+    loop {
+        let mut combined: Vec<GraphEntry> = entries.to_vec();
+        combined.extend(out.iter().cloned());
+        let (next, pairs, ..) = slot_operator_rebuild_scan(SlotOperatorRebuildScanArgs {
+            root,
+            repos,
+            entries: &combined,
+            reachable,
+            already: &scheduled,
+            undone: &BTreeSet::new(),
+            with_bdeps,
+            update,
+            top_level_cps,
+            top_level_atoms,
+            excluded,
+            config,
+        });
+        abi_rebuilds = pairs;
+        if next == scheduled {
+            break;
+        }
+        scheduled = next;
+        out = installed
+            .iter()
+            .filter(|pkg| scheduled.contains(&(pkg.category.clone(), pkg.package.clone())))
+            .map(|pkg| {
+                // The rebuild lands at the tree ebuild's SLOT, not the vdb's.
+                let (v_slot, v_sub) =
+                    read_vdb_slot(root, &pkg.category, &pkg.package, &pkg.version);
+                let (slot, sub_slot, tree_repo) =
+                    list_candidates(repos, &pkg.category, &pkg.package)
+                        .ok()
+                        .and_then(|cands| {
+                            cands
+                                .iter()
+                                .find(|c| c.version == pkg.version)
+                                .map(|c| (c.slot.clone(), c.sub_slot.clone(), c.repo_name.clone()))
+                        })
+                        .map(|(slot, sub_slot, repo)| (slot, sub_slot, Some(repo)))
+                        .unwrap_or_else(|| (v_slot.clone(), v_sub.clone(), None));
+                // The installed repo, `__unknown__` when the vdb records none.
+                let installed_repo =
+                    installed_pkg_repo(root, &pkg.category, &pkg.package, &pkg.version);
+                // The rebuilt cpv is already installed, so the `[oldver]`
+                // bracket shows when the rebuild lands at a different
+                // slot/sub-slot or repo than the installed instance.
+                let repo_drift = tree_repo
+                    .as_deref()
+                    .is_some_and(|tree| tree != installed_repo.as_str());
+                let oldbest = if (slot.as_str(), sub_slot.as_str())
+                    != (v_slot.as_str(), v_sub.as_str())
+                    || repo_drift
+                {
+                    vec![InstalledRef {
+                        version: pkg.version.clone(),
+                        slot: v_slot,
+                        sub_slot: v_sub,
+                        repo: installed_repo.clone(),
+                    }]
+                } else {
+                    Vec::new()
+                };
+                // The entry is the tree package being merged, not the installed
+                // instance.
+                let entry_repo = tree_repo
+                    .filter(|tree| !tree.is_empty())
+                    .or_else(|| (installed_repo != "__unknown__").then(|| installed_repo.clone()));
+                GraphEntry {
+                    discovery: 0,
+                    category: pkg.category.clone(),
+                    package: pkg.package.clone(),
+                    outcome: PretendOutcome::Reinstall {
+                        version: pkg.version.clone(),
+                        changed_flags: Vec::new(),
+                        deps_changed: false,
+                        slot_changed: false,
+                        rebuilt_binary: false,
+                        new_repo: false,
+                        slot_operator_rebuild: true,
+                    },
+                    slot: Some(slot),
+                    sub_slot: Some(sub_slot),
+                    repo_name: entry_repo,
+                    oldbest,
+                    blockers: Vec::new(),
+                    use_flags_display: Vec::new(),
+                    use_expand_display: Vec::new(),
+                    use_expand_display_p: Vec::new(),
+                    keyword_mask: None,
+                    new_slot: false,
+                    interactive: false,
+                    fetch_restrict: false,
+                    fetch_restrict_satisfied: false,
+                    download_files: Vec::new(),
+                    required_by: Vec::new(),
+                    source: CandidateSource::Ebuild,
+                    provenance: VisibilityProvenance::default(),
+                    keyword_suggestion: None,
+                    use_suggestion: None,
+                    parent_use_suggestion: None,
+                    targets_running_root: false,
+                    remote_binary: false,
+                    build_id: None,
+                    deps: Vec::new(),
+                }
+            })
+            .collect();
+    }
+    (out, abi_rebuilds)
+}
+
 /// Every installed package reachable over the installed dependency graph from
 /// the required sets (`@world` ∪ `@selected` ∪ `@system`). Gates
 /// `slot_operator_rebuild_entries`: Portage only slot-op-rebuilds a consumer
