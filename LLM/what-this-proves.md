@@ -12095,4 +12095,56 @@ is modelled, per-profile-level `defaults` interleaving included.
 `/etc/env.d/*` practically never sets `USE`, so in practice this tier is
 almost always empty; it is modelled for completeness.
 
+### Bare command-line package names — `emerge eix` → `app-portage/eix` (2026-09-03)
+
+Real `emerge` runs a command-line target with no category through
+`dep_expand()` → `cpv_expand()` (`lib/portage/dbapi/`), which scans every
+category in the tree (`portdbapi.categories`) for a package matching the
+bare name. Portuale's `parse_atom` grammar requires an explicit
+`category/package`, so `emerge eix` used to fail with `emerge: invalid
+atom "eix"`.
+
+Now, right after `@set` expansion and package-move rewriting and before
+the atom-validation loop, `pretend.rs` (and the Python reference)
+qualifies every command-line entry that `is_bare_package_name` accepts —
+a plain name, no `/`, no operator/slot/use-dep, and not already a valid
+atom — via `qualify_bare_name` over `portage_repo::all_cp(&repos)`:
+
+- **exactly one** `cat/pkg` → silently qualified
+- **more than one**, with exactly one non-`virtual/`/`acct-*` → that one
+  silently (real `cpv_expand`'s "assume that the non-virtual is desired")
+- **more than one** otherwise → real `ambiguous_package_name`'s `--quiet`
+  form: `\n!!! The short ebuild name "X" is ambiguous. Please specify` +
+  `!!! one of the following fully-qualified ebuild names instead:` + the
+  sorted `cat/pkg` list, exit 1
+- **none** → `emerge: there are no ebuilds to satisfy "X".`, exit 1
+
+New fixtures: `app-misc/` category (first non-`dev-libs`/`virtual`
+category in the tree) with `app-misc/ambigpkg` + `dev-libs/ambigpkg` (the
+ambiguous case) and `dev-libs/virtprefpkg` + `virtual/virtprefpkg` (the
+non-virtual-preference case). 3 CASES entries + 3 pinned contract tests
+(Rust == Python) + a `pretend.rs` unit test.
+
+**Documented cuts:** real's non-`--quiet` `ambiguous_package_name` runs a
+full `search` and prints its output before the `!!!` lines — portuale
+emits only the deterministic list. The `null/<name>` fallback +
+cross-category misspell search for the no-match case is replaced by the
+direct message.
+
+**Follow-up (2026-09-03): the versioned/slotted shape.** `emerge eix-1.2`,
+`emerge '>=eix-1.2'`, `emerge eix:0` now qualify too. `is_bare_package_name`
++ the direct `qualify_bare_name` call became `dep_expand_token`, a
+field-for-field port of real `dep_expand`: insert `null/` before the first
+`\w` char, parse (retrying `="+dep` for the "missing `=` prefix is allowed
+for backward compatibility" shape — `eix-1.2` → `=null/eix-1.2`), pull the
+package name back out of `mydep.cp`, `cpv_expand` (`qualify_bare_name`)
+just that name, and splice the category into the original string with a
+single `str.replace(pn, cat/pn, 1)`. `>=eix-1.2` → `>=cat/eix-1.2`,
+`eix-1.2` → `=cat/eix-1.2` (the missing `=`), `eix:0` → `cat/eix:0`. The
+ambiguous / no-match branches run on the stripped package name, so
+`emerge ambigpkg-1.0` still errors like `emerge ambigpkg`. 5 CASES + a
+pinned contract test + a `pretend.rs` unit test. Remaining cut: an
+explicit `virtual/` category's old-style PROVIDE-virtual expansion
+(`dep_expand`'s `has_cat` branch — dead since 2011).
+
 # # required by dev-libs/useflagpkg[-foo] (argument)

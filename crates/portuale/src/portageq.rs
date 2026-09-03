@@ -20,6 +20,17 @@ use std::process::ExitCode;
 
 use portage_vdb::BackendKind;
 
+// ---------------------------------------------------------------------
+// dep_expand (the fall-through path for strings the strict parse rejects)
+// ---------------------------------------------------------------------
+
+enum ExpandError {
+    Invalid,
+    Ambiguous(Vec<String>),
+    /// The parent pipe failed.
+    Internal(String),
+}
+
 /// The categories that have `pn` installed under `root`. Also what the
 /// parent pipe answers to a `categories` request.
 pub(crate) fn installed_categories_of(root: &Path, pn: &str) -> Vec<String> {
