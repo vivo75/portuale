@@ -1,0 +1,4 @@
+EAPI=8
+DESCRIPTION="fixture: ~amd64 2.0"
+SLOT="0"
+KEYWORDS="~amd64"

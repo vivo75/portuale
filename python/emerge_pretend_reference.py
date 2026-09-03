@@ -5498,13 +5498,39 @@ def resolve_pretend(
             )
 
     visible = [c for c in candidates if is_visible(c, category, package, config)]
+
+    def _usable(c):
+        # Whether c satisfies atom_str itself AND every extra_constraints
+        # entry -- the same per-atom tests the matched pipeline below runs.
+        # A *_masked_only fallback level is worth trying not just when
+        # nothing passes is_visible, but when nothing visible actually
+        # satisfies what this atom (+ any slot-conflict constraints folded
+        # in with it) asks for. With no version bound and no
+        # extra_constraints this is exactly the old `not visible` gate.
+        cs = [
+            f"{category}/{package}-{c['version']}:{c['slot']}"
+            f"/{c['sub_slot']}::{c['repo_name']}"
+        ]
+        if not match_from_list(atom_str, cs):
+            return False
+        for con in extra_constraints:
+            if con.startswith("!"):
+                if match_from_list(con[1:], cs):
+                    return False
+            elif not match_from_list(con, cs):
+                return False
+        return True
+
+    def _need_fallback(vis):
+        return not any(_usable(c) for c in vis)
+
     # Real _autounmask_levels (depgraph.py:7446): least- to most-invasive
     # -- USE (always on, the matched use-dep filter below), then +license,
     # then +~arch, then +missing keywords, then +masks -- stopping at the
     # first level that yields a candidate. So ORDER MATTERS across
     # versions: a lower license-masked version beats a higher ~arch one,
     # which beats one needing package.unmask. Mirrors pretend.rs.
-    if not visible and autounmask_license:
+    if _need_fallback(visible) and autounmask_license:
         # Real --autounmask-license (level 1): a candidate masked by
         # LICENSE alone becomes visible via the implicit package.license
         # accept.
@@ -5513,7 +5539,7 @@ def resolve_pretend(
             for c in candidates
             if _license_masked_only(c, category, package, config)
         ]
-    if not visible and autounmask_keywords:
+    if _need_fallback(visible) and autounmask_keywords:
         # Real --autounmask (level 2, ~arch): a candidate masked by
         # KEYWORDS alone becomes visible via the implicit `=cpv ~arch`
         # change. Everything else (package.mask/properties/restrict) still
@@ -5523,7 +5549,7 @@ def resolve_pretend(
             for c in candidates
             if _keyword_masked_only(c, category, package, config)
         ]
-    if not visible and autounmask_masks:
+    if _need_fallback(visible) and autounmask_masks:
         # Real --autounmask-keep-masks=n: a candidate masked by
         # package.mask alone becomes visible via the implicit
         # package.unmask entry.
@@ -5532,7 +5558,7 @@ def resolve_pretend(
             for c in candidates
             if _mask_masked_only(c, category, package, config)
         ]
-    if not visible:
+    if _need_fallback(visible):
         return ("no_visible_candidate",)
 
     # Reuses the real match_from_list rather than re-deriving

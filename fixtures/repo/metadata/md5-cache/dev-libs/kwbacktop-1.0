@@ -1,0 +1,7 @@
+DEFINED_PHASES=-
+DESCRIPTION=fixture: RDEPENDs kwbackmid (bare -> stable 1.0 first) then >=kwbackmid-2.0 (~amd64) -- a backward keyword cascade
+EAPI=8
+KEYWORDS=amd64
+RDEPEND=dev-libs/kwbackmid >=dev-libs/kwbackmid-2.0
+SLOT=0
+_md5_=0000000000000000000000000000000

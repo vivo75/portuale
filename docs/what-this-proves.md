@@ -12310,3 +12310,37 @@ single `autounmask_use_config` accumulator plus the `MaskPhase`
 trial-and-revert already converge on the maskless most-changed state.
 
 Still ahead: keyword / mask in-loop accumulators (Slice 6).
+
+### Autounmask keyword/mask backward cascade (2026-09-03)
+
+Slice 6 (final) of the autounmask-in-loop plan. A slot pulled by both a
+bare atom and a version bound (`dev-libs/foo` + `>=dev-libs/foo-2`) where
+the stable version is out of range and only a keyword/license/mask-masked
+version is in range: portuale resolved the bare atom to the stable
+`foo-1` first, then reported `>=foo-2` as a plain missing dependency
+(with only a keyword *suggestion* note). Real portage weighs every atom
+that pulls the slot (`_select_pkg`) before deciding a version is
+unavailable, and `_autounmask_levels` autounmasks `foo-2`.
+
+The fix needed no new accumulator. The `slot_constraints` re-drive
+(shipped for solvable slot conflicts) already folds every atom that
+targeted the slot; the gap was `resolve_pretend`'s `*_masked_only`
+fallback gate, which was `visible.is_empty()` -- and `visible =
+[foo-1]` (stable, but out of the folded `>=2` range) is not empty. The
+gate is now `need_fallback(visible)` = "no `is_visible` candidate
+satisfies `atom_str` **and** every `extra_constraints` entry", using the
+same per-atom `match_from_list` tests the `matched` pipeline already
+runs. With no version bound and no `extra_constraints` it is exactly the
+old `is_empty()` check, so nothing else moves.
+
+So `emerge -p --autounmask dev-libs/kwbacktop` re-resolves the
+`kwbackmid` slot to `2.0` with `=dev-libs/kwbackmid-2.0 ~amd64` in the
+keyword-changes block (the `[ebuild N ~]` marker), instead of leaving a
+stray `kwbackmid-1.0` merge plus a "no visible ebuild" note. The default
+(keyword suggestions off) is unchanged: the `>=2.0` dep stays a
+non-fatal missing-dependency warning. The license and mask levels ride
+the identical code path with Slice 2's ordering. 3 CASES + a pinned
+contract test + a `portage-repo` unit test, Rust==Python byte-identical,
+full suite green.
+
+**All six slices of the autounmask-in-loop plan are shipped.**

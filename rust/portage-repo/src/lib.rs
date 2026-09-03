@@ -7256,6 +7256,34 @@ pub fn resolve_pretend(
         .iter()
         .filter(|c| is_visible(c, &atom.category, &atom.package, config))
         .collect();
+    // Whether a candidate satisfies `atom_str` itself *and* every
+    // `extra_constraints` entry (positive: must match; `!`-prefixed: must
+    // not) -- the same per-atom tests the `matched` pipeline below runs. A
+    // `*_masked_only` fallback level is worth trying not just when
+    // *nothing* passes `is_visible`, but when nothing visible actually
+    // satisfies what this atom (and any slot-conflict constraints folded in
+    // with it) asks for: real `_select_pkg` weighs the whole request before
+    // calling a version unavailable, so `>=dev-libs/foo-2` where `foo-1` is
+    // stable but only `foo-2` (`~arch`) is in range autounmasks `foo-2`'s
+    // keyword rather than reporting the dep missing. With no version bound
+    // and no `extra_constraints` this is exactly the old `is_empty()` gate.
+    let usable = |c: &Candidate| {
+        let s = format!(
+            "{}/{}-{}:{}/{}::{}",
+            atom.category, atom.package, c.version, c.slot, c.sub_slot, c.repo_name
+        );
+        if !portage_dep::match_from_list(atom_str, &[s.as_str()]).is_some_and(|r| !r.is_empty()) {
+            return false;
+        }
+        extra_constraints.iter().all(|ec| {
+            if let Some(neg) = ec.strip_prefix('!') {
+                !portage_dep::match_from_list(neg, &[s.as_str()]).is_some_and(|r| !r.is_empty())
+            } else {
+                portage_dep::match_from_list(ec, &[s.as_str()]).is_some_and(|r| !r.is_empty())
+            }
+        })
+    };
+    let need_fallback = |vis: &[&Candidate]| !vis.iter().any(|c| usable(c));
     // Real `_autounmask_levels` (`depgraph.py:7446`): the allowed
     // relaxations are tried from least to most invasive -- `USE` (always
     // on, handled by the `matched` use-dep filter below), then `+license`,
@@ -7266,7 +7294,7 @@ pub fn resolve_pretend(
     // by a `package.license` accept beats a higher version needing
     // `~arch`, which beats one needing `package.unmask`. Each fallback
     // still picks the best (highest) version it can unmask at its level.
-    if visible.is_empty() && autounmask_license {
+    if need_fallback(&visible) && autounmask_license {
         // Real `--autounmask-license` (level 1): a candidate masked by
         // `LICENSE` alone becomes visible via the implicit
         // `package.license` accept.
@@ -7275,7 +7303,7 @@ pub fn resolve_pretend(
             .filter(|c| license_masked_only(c, &atom.category, &atom.package, config))
             .collect();
     }
-    if visible.is_empty() && autounmask_keywords {
+    if need_fallback(&visible) && autounmask_keywords {
         // Real `--autounmask` (level 2, `~arch`): a candidate masked by
         // `KEYWORDS` alone becomes visible via the implicit `=cpv ~arch`
         // change. Everything else (`package.mask`/properties/restrict)
@@ -7285,7 +7313,7 @@ pub fn resolve_pretend(
             .filter(|c| keyword_masked_only(c, &atom.category, &atom.package, config))
             .collect();
     }
-    if visible.is_empty() && autounmask_masks {
+    if need_fallback(&visible) && autounmask_masks {
         // Real `--autounmask-keep-masks=n`: a candidate masked by
         // `package.mask` alone becomes visible via the implicit
         // `package.unmask` entry.
@@ -7294,7 +7322,7 @@ pub fn resolve_pretend(
             .filter(|c| mask_masked_only(c, &atom.category, &atom.package, config))
             .collect();
     }
-    if visible.is_empty() {
+    if need_fallback(&visible) {
         return Ok(PretendOutcome::NoVisibleCandidate);
     }
 
@@ -19875,6 +19903,38 @@ mod tests {
                 "required by dev-libs/autounmaskdepconsumer (argument)".to_string(),
             ]
         );
+    }
+
+    #[test]
+    fn autounmask_keyword_backward_cascade_re_resolves_a_slot_to_a_masked_version() {
+        // `dev-libs/kwbacktop` RDEPENDs `dev-libs/kwbackmid` (bare -> stable
+        // `1.0` wins the slot first) AND `>=dev-libs/kwbackmid-2.0` (only
+        // `2.0` exists there, and it is `~amd64`). Slice 6: the slot
+        // conflict folds both atoms into `slot_constraints`, and on the
+        // retry `resolve_pretend`'s `*_masked_only` fallback fires because
+        // no *is_visible* candidate satisfies the folded `>=2.0` -- so
+        // `kwbackmid-2.0`'s keyword is autounmasked and the slot settles on
+        // `2.0`. Real `_select_pkg` weighing every atom pulling the slot +
+        // `_autounmask_levels`.
+        let result = graph_result_autounmask("dev-libs/kwbacktop");
+        let mid: Vec<&GraphEntry> = result
+            .entries
+            .iter()
+            .filter(|e| e.package == "kwbackmid")
+            .collect();
+        assert_eq!(mid.len(), 1, "exactly one kwbackmid entry: {mid:?}");
+        assert_eq!(
+            mid[0].outcome,
+            PretendOutcome::New {
+                version: "2.0".to_string()
+            }
+        );
+        assert_eq!(result.autounmask_keyword_changes.len(), 1);
+        assert_eq!(
+            result.autounmask_keyword_changes[0].atom,
+            "=dev-libs/kwbackmid-2.0"
+        );
+        assert_eq!(result.autounmask_keyword_changes[0].token, "~amd64");
     }
 
     #[test]

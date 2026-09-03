@@ -435,6 +435,21 @@ CASES = [
         0,
     ),
     (
+        "autounmask keyword backward cascade: slot narrowed to a ~arch version, default",
+        ["--pretend", "dev-libs/kwbacktop"],
+        0,
+    ),
+    (
+        "autounmask keyword backward cascade, --autounmask: the slot re-resolves to 2.0",
+        ["--pretend", "--autounmask", "dev-libs/kwbacktop"],
+        0,
+    ),
+    (
+        "autounmask keyword backward cascade, -pv --autounmask",
+        ["--pretend", "-v", "--autounmask", "dev-libs/kwbacktop"],
+        0,
+    ),
+    (
         "USE-dep enforcement: plain flag declared and enabled matches",
         ["--pretend", "dev-libs/useflagpkg[foo]"],
         0,
@@ -2695,6 +2710,47 @@ def test_autounmask_breakage_abandons_autounmask_when_a_flag_is_wanted_both_ways
     assert "USE changes are necessary" not in rust_ab.stderr
     assert rust_ab.stderr == (
         '!!! no visible ebuild for dependency "dev-libs/aubreaksub"\n'
+    )
+
+
+def test_autounmask_keyword_backward_cascade_re_resolves_a_slot_to_a_masked_version(
+    emerge_binary, emerge_pretend_python, fixture_env
+):
+    """Slice 6: dev-libs/kwbacktop RDEPENDs dev-libs/kwbackmid (bare ->
+    stable 1.0 wins the slot first) AND >=dev-libs/kwbackmid-2.0 (only 2.0
+    exists there, and it is ~amd64). The slot conflict folds both atoms
+    into slot_constraints; on the retry `resolve_pretend`'s *_masked_only
+    fallback fires because no *is_visible* candidate satisfies the folded
+    >=2.0 -- so with --autounmask, kwbackmid-2.0's keyword is autounmasked
+    and the slot settles on 2.0.
+
+    Default (keyword suggestions off): the >=2.0 dep just stays
+    unresolvable (a non-fatal dependency warning), same as before.
+    Rust==Python byte-identical."""
+    # default: no keyword suggestions -> >=2.0 unresolvable, top still merges
+    d = _run([str(emerge_binary)], ["--pretend", "dev-libs/kwbacktop"], fixture_env)
+    dpy = _run(emerge_pretend_python, ["--pretend", "dev-libs/kwbacktop"], fixture_env)
+    assert d.returncode == 0
+    assert d.stdout == dpy.stdout and d.stderr == dpy.stderr
+    assert "kwbackmid-2.0" not in d.stdout
+    assert 'no visible ebuild for dependency "dev-libs/kwbackmid"' in d.stderr
+
+    # --autounmask: the slot re-resolves to 2.0 with an implicit keyword change
+    a = ["--pretend", "--autounmask", "dev-libs/kwbacktop"]
+    rust = _run([str(emerge_binary)], a, fixture_env)
+    py = _run(emerge_pretend_python, a, fixture_env)
+    assert rust.returncode == 0
+    assert rust.stdout == py.stdout and rust.stderr == py.stderr
+    assert rust.stdout.splitlines() == [
+        "[ebuild  N    ~] dev-libs/kwbackmid-2.0 ",
+        "[ebuild  N     ] dev-libs/kwbacktop-1.0 ",
+    ]
+    assert rust.stderr == (
+        "\nThe following keyword changes are necessary to proceed:\n"
+        ' (see "package.accept_keywords" in the portage(5) man page for more details)\n'
+        "# required by dev-libs/kwbacktop-1.0::testrepo\n"
+        "# required by dev-libs/kwbacktop (argument)\n"
+        "=dev-libs/kwbackmid-2.0 ~amd64\n"
     )
 
 

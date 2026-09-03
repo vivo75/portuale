@@ -63,9 +63,20 @@ What a single pass **cannot** do, and real `_backtrack_depgraph` +
    "maskless run" preference is moot for portuale's single-accumulator +
    `MaskPhase` revert model (it already prefers the maskless settled
    state) — not separately implemented.
-6. **Keyword / mask accumulators in the loop** — the keyword / unmask
-   analogues of Slice 1's USE accumulator, with the level ordering from
-   Slice 2. *(Still open.)*
+6. **Keyword / mask backward cascade.** ✅ **Shipped 2026-09-03.** Turned
+   out *not* to need a new accumulator: the existing `slot_constraints`
+   re-drive already folds every atom that pulled a slot, but
+   `resolve_pretend`'s `*_masked_only` fallback was gated on
+   `visible.is_empty()` — so `dev-libs/foo` + `>=dev-libs/foo-2` where
+   `foo-1` is stable and only `foo-2` is `~arch` left `visible = [foo-1]`
+   non-empty and never tried the keyword level. The gate is now "no
+   *is_visible* candidate satisfies `atom_str` **and** every
+   `extra_constraints` entry" (`need_fallback` / `usable`), so the
+   slot-conflict retry re-resolves the slot to the keyword/license/mask-
+   masked version and records the change. Same code path serves all three
+   levels (Slice 2's ordering). Fixture `dev-libs/kwbacktop`. Not gated by
+   `--autounmask-backtrack` (slot-conflict reconciliation never was); the
+   real control is `--autounmask` (keyword suggestions off by default).
 
 ## Approach
 
@@ -166,9 +177,17 @@ autounmask_use_config: HashMap<(String, String), HashMap<String, bool>>
    fixtures grew a `--autounmask-backtrack=y` variant each.
    `get_best_run`'s maskless-run preference is subsumed by portuale's
    single-accumulator + `MaskPhase` revert model.
-6. **`--autounmask-keep-keywords` / keyword+mask accumulators in the loop**
-   — the keyword / unmask analogues of slice 1, with level ordering from
-   slice 2. *(Still open.)*
+6. **Keyword / mask backward cascade.** ✅ **Shipped 2026-09-03.** No new
+   accumulator: the `slot_constraints` re-drive already folds every atom
+   pulling a slot; `resolve_pretend`'s `*_masked_only` fallback gate is
+   now "no *is_visible* candidate satisfies `atom_str` + `extra_
+   constraints`" instead of `visible.is_empty()`, so the retry
+   re-resolves the slot to the keyword/license/mask-masked version and
+   records the change (Slice 2's level ordering, all three at once).
+   Fixture `dev-libs/kwbacktop`. Gated by `--autounmask` (keyword
+   suggestions off by default), not `--autounmask-backtrack`.
+
+**All six slices shipped.** Move this file to `docs/history/`.
 
 Slices 1 + 4 deliver the two items named in `scope-backlog.md` Part 2.A
 ("USE/keyword levels tried in sequence inside the loop", "autounmask
