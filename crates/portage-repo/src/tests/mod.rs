@@ -1599,6 +1599,7 @@ mod masked_deps;
 mod metadata_cache;
 mod pretend;
 mod queue;
+mod rebuild_scan;
 mod reinstall;
 mod repo_config;
 mod updates;

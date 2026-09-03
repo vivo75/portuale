@@ -184,3 +184,99 @@ pub(crate) fn final_gates(args: FinalGatesArgs<'_>) -> Option<ExitCode> {
     }
     None
 }
+
+/// The `--debug` resolver trace stages printed after the merge list.
+pub(crate) fn print_resolver_debug(
+    root: &Path,
+    entries: &Vec<GraphEntry>,
+    reinstall_atoms: &[String],
+    result: &GraphResult,
+) {
+    // Stage 5: the slot-operator/`forced rebuilds` DEBUG dump on stdout, right
+    // before the "causing rebuilds" block. Only the edges that actually forced
+    // a rebuild this run are listed (a documented fidelity gap: Portage lists
+    // every installed `:=` edge).
+    // Portage: depgraph.py, _compute_abi_rebuild_info
+    if portage_repo::resolver_debug() {
+        let root_str = root.display().to_string();
+        let mut by_cpv: HashMap<String, (String, String, String, String, &str)> = HashMap::new();
+        for e in entries {
+            let version = match &e.outcome {
+                portage_repo::PretendOutcome::New { version }
+                | portage_repo::PretendOutcome::Reinstall { version, .. } => version.clone(),
+                portage_repo::PretendOutcome::Upgrade { to, .. }
+                | portage_repo::PretendOutcome::Downgrade { to, .. } => to.clone(),
+                _ => continue,
+            };
+            let ty = match e.source {
+                portage_repo::CandidateSource::Binary => "binary",
+                portage_repo::CandidateSource::Ebuild => "ebuild",
+            };
+            by_cpv.insert(
+                format!("{}/{}-{version}", e.category, e.package),
+                (
+                    format!("{}/{}", e.category, e.package),
+                    e.slot.clone().unwrap_or_else(|| "0".to_string()),
+                    e.sub_slot.clone().unwrap_or_else(|| "0".to_string()),
+                    e.repo_name
+                        .clone()
+                        .unwrap_or_else(|| "__unknown__".to_string()),
+                    ty,
+                ),
+            );
+        }
+        let label = |cpv: &str| -> String {
+            match by_cpv.get(cpv) {
+                Some((_, slot, sub_slot, repo, ty)) => {
+                    format!("({cpv}:{slot}/{sub_slot}::{repo}, {ty} scheduled for merge)")
+                }
+                None => format!("({cpv}, installed)"),
+            }
+        };
+
+        println!("forced reinstall atoms:");
+        if !reinstall_atoms.is_empty() {
+            println!("   root: {root_str}");
+            for atom in reinstall_atoms {
+                println!("      atom: {atom}");
+            }
+        }
+        print!("\n\n");
+
+        println!("slot operator dependencies:");
+        let mut by_slot_atom: std::collections::BTreeMap<String, Vec<&(String, String)>> =
+            std::collections::BTreeMap::new();
+        for pair in &result.abi_rebuilds {
+            let slot_atom = match by_cpv.get(&pair.0) {
+                Some((cp, slot, ..)) => format!("{cp}:{slot}"),
+                None => pair.0.clone(),
+            };
+            by_slot_atom.entry(slot_atom).or_default().push(pair);
+        }
+        for (slot_atom, pairs) in &by_slot_atom {
+            println!("   ({root_str}, {slot_atom})");
+            for (provider, consumer) in pairs {
+                println!("      parent: {}", label(consumer));
+                println!("        child: {} (runtime_slot_op)", label(provider));
+            }
+        }
+        print!("\n\n");
+
+        println!("forced rebuilds:");
+        let mut by_child: std::collections::BTreeMap<&str, Vec<&str>> =
+            std::collections::BTreeMap::new();
+        for (provider, consumer) in &result.abi_rebuilds {
+            by_child.entry(provider).or_default().push(consumer);
+        }
+        if !by_child.is_empty() {
+            println!("   root: {root_str}");
+            for (child, parents) in &by_child {
+                println!("      child: {}", label(child));
+                for parent in parents {
+                    println!("         parent: {}", label(parent));
+                }
+            }
+        }
+        print!("\n\n");
+    }
+}
