@@ -297,6 +297,58 @@ pub(crate) struct SlotConflictNeedRebuildArgs<'a> {
     pub(crate) installed: &'a std::collections::HashSet<(String, String, String)>,
 }
 
+/// Portage's `need_rebuild` scan for one shown parent in a `slot` group: when
+/// the parent is installed and its atom is a built `cat/pkg:S/SS=` atom,
+/// report why it cannot be rebuilt -- `--exclude` / `--useoldpkg-atoms`
+/// match, or its ebuild masked/unavailable. Quiet under `--usepkgonly`.
+/// `installed` holds every vdb `(cat, pkg, ver)`.
+/// Portage: dep/slot_collision.py, need_rebuild
+pub(crate) fn slot_conflict_need_rebuild(args: SlotConflictNeedRebuildArgs<'_>) -> Option<String> {
+    let SlotConflictNeedRebuildArgs {
+        parent_cpv,
+        atom,
+        excluded,
+        useoldpkg_atoms,
+        usepkgonly,
+        repos,
+        config,
+        installed,
+    } = args;
+    if atom.slot_operator != Some(SlotOperator::Equals) || atom.sub_slot.is_none() {
+        return None;
+    }
+    let (cp, slot_part) = parent_cpv.split_once(':')?;
+    let (ccat, cpkg, cver) = portage_repo::split_cpv(cp)?;
+    if !installed.contains(&(ccat.clone(), cpkg.clone(), cver.clone())) {
+        return None;
+    }
+    let slot = slot_part.split('/').next().unwrap_or("");
+    let against = if slot.is_empty() {
+        format!("{ccat}/{cpkg}-{cver}")
+    } else {
+        format!("{ccat}/{cpkg}-{cver}:{slot}")
+    };
+    if excluded
+        .iter()
+        .any(|e| match_from_list(e, &[against.as_str()]).is_some_and(|m| !m.is_empty()))
+    {
+        return Some("matched by --exclude argument".to_string());
+    }
+    if useoldpkg_atoms
+        .iter()
+        .any(|e| match_from_list(e, &[against.as_str()]).is_some_and(|m| !m.is_empty()))
+    {
+        return Some("matched by --useoldpkg-atoms argument".to_string());
+    }
+    if usepkgonly {
+        return None;
+    }
+    if !ebuild_visible_at(repos, &ccat, &cpkg, &cver, config) {
+        return Some("ebuild is masked or unavailable".to_string());
+    }
+    None
+}
+
 /// Portage's `pkg_use_display(pkg, ...)` return string -- `USE="…"` followed
 /// by one ` VAR="…"` per non-hidden `USE_EXPAND` group. Always renders a
 /// `USE=` field, even with no flags. Flag colorization is cut.
