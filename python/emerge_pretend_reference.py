@@ -6849,8 +6849,13 @@ def _refresh_entry_use_display(entries, repos, cp, cfg):
         _rn = _prov.get("repo_name", _c.get("repo_name", ""))
         _cs = f"{cat}/{pkg}-{_ver}:{_slot}/{_ss}::{_rn}"
         _uf = effective_use_flags(cfg, _c["iuse"], _c["keywords"], _cs, cat, pkg)
+        _seen = set()
         _disp = sorted(
-            ((f.lstrip("+-"), f.lstrip("+-") in _uf) for f in _c["iuse"].split()),
+            (
+                (f, f in _uf)
+                for f in (t.lstrip("+-") for t in _c["iuse"].split())
+                if not (f in _seen or _seen.add(f))
+            ),
             key=lambda p: _alnum_sort_key(p[0]),
         )
         entries[_i] = _e[:5] + (_disp,) + _e[6:]
@@ -7410,10 +7415,15 @@ def resolve_pretend_graph(
                                     ),
                                 }
                             )
+                            _pfseen = set()
                             _pflip_display = sorted(
                                 (
-                                    (t.lstrip("+-"), t.lstrip("+-") in _new_parent_use)
-                                    for t in _parent_cand.get("iuse", "").split()
+                                    (f, f in _new_parent_use)
+                                    for f in (
+                                        t.lstrip("+-")
+                                        for t in _parent_cand.get("iuse", "").split()
+                                    )
+                                    if not (f in _pfseen or _pfseen.add(f))
                                 ),
                                 key=lambda p: _alnum_sort_key(p[0]),
                             )
@@ -8161,10 +8171,17 @@ def resolve_pretend_graph(
             # whether its dependencies get walked. Mirrors
             # portage-repo/src/lib.rs's resolve_pretend_graph exactly.
             if metadata.get("IUSE"):
+                # Real builds the USE display from sorted(pkg.iuse.all),
+                # where iuse.all is a frozenset -- a flag IUSE names twice
+                # (eclass + ebuild, e.g. gnome-color-manager's
+                # `IUSE="test test"`) still renders once. Dedup by bare
+                # name. Mirrors portage-repo/src/lib.rs.
+                _iuse_seen = set()
                 display = sorted(
                     (
-                        (flag.lstrip("+-"), flag.lstrip("+-") in use_flags)
-                        for flag in metadata["IUSE"].split()
+                        (f, f in use_flags)
+                        for f in (t.lstrip("+-") for t in metadata["IUSE"].split())
+                        if not (f in _iuse_seen or _iuse_seen.add(f))
                     ),
                     key=lambda p: _alnum_sort_key(p[0]),
                 )
@@ -10291,10 +10308,12 @@ def _resolve_info_candidate(repos, atom_str, config):
     best = _best_candidate(cands)
 
     iuse, use_flags = _candidate_iuse_and_use(best, category, package, config)
+    _seen = set()
     display = sorted(
         (
-            (flag.lstrip("+-"), flag.lstrip("+-") in use_flags)
-            for flag in best["iuse"].split()
+            (f, f in use_flags)
+            for f in (t.lstrip("+-") for t in best["iuse"].split())
+            if not (f in _seen or _seen.add(f))
         ),
         key=lambda p: _alnum_sort_key(p[0]),
     )

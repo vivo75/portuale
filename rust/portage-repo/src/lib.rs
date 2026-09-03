@@ -5438,10 +5438,18 @@ fn refresh_entry_use_display(
         let candidate_str = format!("{cat}/{pkg}-{version}:{slot}/{sub_slot}::{repo_name}");
         let use_flags =
             effective_use_flags(config, &cand.iuse, &cand.keywords, &candidate_str, cat, pkg);
+        // Real builds the USE display from `sorted(pkg.iuse.all)`, where
+        // `iuse.all` is a `frozenset` (`Package.py`) -- so a flag that
+        // `IUSE` names more than once (an eclass and the ebuild both
+        // declaring it, e.g. gnome-extra/gnome-color-manager's
+        // `IUSE="test test"`) still renders exactly once. Dedup by bare
+        // name, keeping the first spelling.
+        let mut iuse_seen: HashSet<String> = HashSet::new();
         let mut display: Vec<(String, bool)> = cand
             .iuse
             .split_whitespace()
             .map(|tok| tok.trim_start_matches(['+', '-']).to_string())
+            .filter(|flag| iuse_seen.insert(flag.clone()))
             .map(|flag| {
                 let enabled = use_flags.contains(&flag);
                 (flag, enabled)
@@ -6469,10 +6477,14 @@ pub fn resolve_info_candidate(
     else {
         return Ok(None);
     };
+    // Dedup a flag `IUSE` names twice (eclass + ebuild) -- real renders
+    // `sorted(pkg.iuse.all)`, a frozenset. See `refresh_entry_use_display`.
+    let mut disp_seen: HashSet<String> = HashSet::new();
     let mut disp: Vec<(String, bool)> = best
         .iuse
         .split_whitespace()
         .map(|t| t.trim_start_matches(['+', '-']).to_string())
+        .filter(|f| disp_seen.insert(f.clone()))
         .map(|f| {
             let on = use_flags.contains(&f);
             (f, on)
@@ -10774,10 +10786,12 @@ fn backtracking_resolve(req: &ResolveRequest) -> Result<GraphResult, String> {
                             &entries,
                         ),
                     });
+                    let mut disp_seen: HashSet<String> = HashSet::new();
                     let mut disp: Vec<(String, bool)> = parent_cand
                         .iuse
                         .split_whitespace()
                         .map(|t| t.trim_start_matches(['+', '-']).to_string())
+                        .filter(|f| disp_seen.insert(f.clone()))
                         .map(|f| {
                             let on = new_parent_use.contains(&f);
                             (f, on)
@@ -11791,9 +11805,14 @@ fn backtracking_resolve(req: &ResolveRequest) -> Result<GraphResult, String> {
             }
 
             if let Some(iuse) = metadata.get("IUSE") {
+                // Dedup a flag `IUSE` names twice (eclass + ebuild, e.g.
+                // gnome-extra/gnome-color-manager's `IUSE="test test"`) --
+                // real renders `sorted(pkg.iuse.all)`, a `frozenset`.
+                let mut iuse_seen: HashSet<String> = HashSet::new();
                 let mut display: Vec<(String, bool)> = iuse
                     .split_whitespace()
                     .map(|tok| tok.trim_start_matches(['+', '-']).to_string())
+                    .filter(|flag| iuse_seen.insert(flag.clone()))
                     .map(|flag| {
                         let enabled = use_flags.contains(&flag);
                         (flag, enabled)

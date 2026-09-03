@@ -3237,6 +3237,25 @@ def test_iuse_plus_minus_defaults_apply_when_nothing_else_says_otherwise(
     )
 
 
+def test_iuse_names_a_flag_twice_and_it_renders_once(emerge_binary, fixture_env):
+    """Found live against gnome-extra/gnome-color-manager, whose
+    md5-cache carries `IUSE=test test` (an eclass and the ebuild both
+    declare it). Real portage builds the USE display from
+    `sorted(pkg.iuse.all)`, where `iuse.all` is a `frozenset`
+    (`_emerge/Package.py`), so a doubly-named flag still renders exactly
+    once; portuale split the raw `IUSE` string and showed `-test -test`.
+    dev-libs/dupiusepkg's own IUSE is "foo test bar test" -- `test`
+    appears once in the `USE=` column, at its sorted position."""
+    result = _run(
+        [str(emerge_binary)], ["--pretend", "-v", "dev-libs/dupiusepkg"], fixture_env
+    )
+    assert result.returncode == 0
+    assert result.stdout == (
+        '[ebuild  N     ] dev-libs/dupiusepkg-1.0::testrepo  USE="foo -bar -test"'
+        "\n\nTotal: 1 package (1 new), Size of downloads: 0 KiB\n"
+    )
+
+
 def test_required_use_referencing_an_implicit_arch_flag_resolves_normally(
     emerge_binary, fixture_env
 ):

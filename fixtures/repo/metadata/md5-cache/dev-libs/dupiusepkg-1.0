@@ -1,0 +1,7 @@
+DEFINED_PHASES=-
+DESCRIPTION=fixture: a flag IUSE names twice (eclass + ebuild), like gnome-color-manager
+EAPI=8
+IUSE=foo test bar test
+KEYWORDS=amd64
+SLOT=0
+_md5_=0000000000000000000000000000000
