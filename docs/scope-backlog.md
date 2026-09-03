@@ -139,8 +139,10 @@ architectural — a single-pass BFS can't grow into these incrementally:
     flag lists don't), the `use`/`soname` reason keys, operator/USE-token
     colorization, the `need_rebuild` "cannot be rebuilt" trailer;
   - the circular-dep cuts: the reduced cycle-only `--tree` re-display,
-    `_find_suggestions`' ~180-line USE-flag heuristic, full
-    elementary-cycle enumeration / `large_cycle_count`.
+    full elementary-cycle enumeration / `large_cycle_count`
+    (`_find_suggestions`' USE-flag heuristic **shipped 2026-09-03** —
+    `circular_dep_solutions`, `docs/find-suggestions-plan.md`; the
+    grandparent-atom conflict path has no fixture yet).
 
   *(The resolver-extraction item shipped 2026-09-03: the ~1700-line
   graph walk + backtracking loop is now `backtracking_resolve(req:

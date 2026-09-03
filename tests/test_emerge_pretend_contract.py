@@ -352,6 +352,16 @@ CASES = [
         1,
     ),
     (
+        "circular dep: USE-flag suggestion (_find_suggestions)",
+        ["--pretend", "dev-libs/usecyclea"],
+        1,
+    ),
+    (
+        "circular dep: USE-flag suggestion, --color y",
+        ["--pretend", "--color", "y", "dev-libs/usecyclea"],
+        1,
+    ),
+    (
         "recursion: any-of group resolves only the first satisfiable alternative",
         ["--pretend", "dev-libs/anyof"],
         0,
@@ -2209,13 +2219,16 @@ def test_unbreakable_build_time_cycle_prints_the_circular_deps_error(
     emerge_binary, emerge_pretend_python, fixture_env
 ):
     """hardcyclea DEPENDs hardcycleb which DEPENDs hardcyclea, both
-    unbuilt, empty RDEPEND -- every edge an unsatisfied build-time dep
-    with no run-time alternative, so real portage's `_ignore_runtime`
-    scan can't linearize it. The full merge list still goes to stdout;
-    the `* Error: circular dependencies:` block (real `_show_circular_
-    deps`, minus the reduced --tree re-display and the USE-flag
-    suggestion heuristic) goes to stderr; exit 1. By contrast the
-    pure-RDEPEND cycle-a/cycle-b cycle stays exit 0 (a CASES entry)."""
+    unbuilt, empty RDEPEND, no IUSE -- every edge an unsatisfied
+    build-time dep with no run-time alternative, so real portage's
+    `_ignore_runtime` scan can't linearize it. The full merge list still
+    goes to stdout; the `* Error: circular dependencies:` block (real
+    `_show_circular_deps`, minus the reduced --tree re-display) goes to
+    stderr; exit 1. With no IUSE, `_find_suggestions` finds nothing and
+    the generic advisory prints (the `else` branch) -- see
+    test_circular_dep_use_flag_suggestion for the suggestion path. By
+    contrast the pure-RDEPEND cycle-a/cycle-b cycle stays exit 0 (a
+    CASES entry)."""
     base = ["--pretend", "dev-libs/hardcyclea"]
     rust = _run([str(emerge_binary)], base, fixture_env)
     python = _run(emerge_pretend_python, base, fixture_env)
@@ -2238,6 +2251,44 @@ def test_unbreakable_build_time_cycle_prints_the_circular_deps_error(
         " * Note that circular dependencies can often be avoided by temporarily\n"
         " * disabling USE flags that trigger optional dependencies.\n"
     )
+
+
+def test_circular_dep_use_flag_suggestion(
+    emerge_binary, emerge_pretend_python, fixture_env
+):
+    """find-suggestions Slice 2: dev-libs/usecyclea (IUSE +x) build-depends
+    on dev-libs/usecycleb only when x is on; usecycleb unconditionally
+    build-depends back. `circular_dependency_handler._find_suggestions`
+    finds that disabling x on usecyclea drops the offending atom without
+    violating REQUIRED_USE, so real prints `It might be possible to break
+    this cycle / by applying the following change: / - dev-libs/
+    usecyclea-1.0 (Change USE: -x)` instead of the generic advisory.
+    Rust==Python byte-identical; the `-x` renders blue under --color y."""
+    base = ["--pretend", "dev-libs/usecyclea"]
+    rust = _run([str(emerge_binary)], base, fixture_env)
+    py = _run(emerge_pretend_python, base, fixture_env)
+    assert rust.returncode == 1 and py.returncode == 1
+    assert rust.stdout == py.stdout and rust.stderr == py.stderr
+    assert rust.stderr == (
+        "\n * Error: circular dependencies:\n"
+        "\n"
+        "dev-libs/usecyclea-1.0 depends on\n"
+        " dev-libs/usecycleb-1.0 (buildtime)\n"
+        "  dev-libs/usecyclea-1.0 (buildtime)\n"
+        "\n"
+        "It might be possible to break this cycle\n"
+        "by applying the following change:\n"
+        "- dev-libs/usecyclea-1.0 (Change USE: -x)\n"
+        "\n"
+        "Note that this change can be reverted, once the package has been installed.\n"
+    )
+
+    # --color y: the -x flag renders blue (real colorize("blue", ...))
+    c = ["--pretend", "--color", "y", "dev-libs/usecyclea"]
+    rc = _run([str(emerge_binary)], c, fixture_env)
+    cpy = _run(emerge_pretend_python, c, fixture_env)
+    assert rc.stderr == cpy.stderr
+    assert "(Change USE: \x1b[34;01m-x\x1b[39;49;00m)" in rc.stderr
 
 
 def test_root_deps_recursion_reports_an_unbuildable_build_dep(

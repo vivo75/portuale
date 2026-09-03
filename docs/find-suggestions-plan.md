@@ -1,6 +1,9 @@
 # Plan: `_find_suggestions` — the circular-dependency USE-flag heuristic
 
-*Working plan — 2026-09-03. Move to `docs/history/` once complete.*
+> **COMPLETE — 2026-09-03.** Slice 1 (`extract_affecting_use` port) and
+> Slice 2 (the full `_find_suggestions` + wire-in) both shipped. Kept as
+> the design record; the shipped-behaviour narrative is in
+> [`what-this-proves.md`](what-this-proves.md).
 
 ## The gap
 
@@ -142,29 +145,34 @@ lines, Slice 2).
 
 ## Slices (each: both sides + verified byte-identical, committed on request)
 
-1. **Port `extract_affecting_use`.** New `pub fn extract_affecting_use(
-   dep: &str, atom: &str) -> Result<HashSet<String>, ParseError>` in
-   `portage-dep` (it's a dep-string primitive). Faithful transcription of
-   the bracket-stack parser. All 23 pass cases + 15 malformed cases as
-   Rust unit tests; a Python mirror + harness test over the same corpus.
-   **No behaviour change** — nothing calls it yet.
-2. **The full `_find_suggestions` + wire it in.** The heuristic helper
-   (all of steps 1–10, grandparent check included), and the
-   `_show_circular_deps` render branch: replace the unconditional generic
-   advisory with real's `if suggestions: "It might be possible to break
-   this cycle" / "by applying the following change:" | "by applying
-   <bold>any of</bold> the following changes:" / <lines> / "Note that
-   this change can be reverted…"  else: <generic advisory>`. Grandparent
-   step (9): re-derive `parent`'s own puller atoms (same md5-cache scan
-   as step 2, over `result.entries[parent].required_by`), drop solutions
-   a grandparent's `[flag]`/`[-flag]` use-dep forbids, add
-   ` (This change might require USE changes on parent packages.)` for a
-   conditional-only clash. Fixtures: `dev-libs/usecyclea` + `usecycleb`
-   where `x? ( <the cycle DEPEND> )` gates the cycle (`-x` breaks it),
-   and a second pair with a grandparent `dep[flag]` for the step-9 path.
-   Contract test (byte-identical Rust==Python) + `portage-repo` unit
-   tests on the helper. The existing `hardcyclea` fixture (no IUSE)
-   keeps hitting the `else` branch unchanged.
+1. **Port `extract_affecting_use`.** ✅ **Shipped 2026-09-03** (`d285f64`).
+   `pub fn extract_affecting_use(dep: &str, atom: &str) ->
+   Option<HashSet<String>>` in `portage-dep` (`Option`, not a new error
+   type — `None` where real raises `InvalidDependString`, matching the
+   crate's style). Faithful transcription of the bracket-stack parser.
+   All 23 pass + 15 malformed cases from real's
+   `test_extract_affecting_use.py` as Rust unit tests + docstring
+   example; an `affecting` op on `atom-harness` / `atom_harness.py`
+   (Python = real portage's own function) with 38 parametrized contract
+   cases + batch coverage. No behaviour change.
+2. **The full `_find_suggestions` + wire it in.** ✅ **Shipped
+   2026-09-03.** `portage_repo::circular_dep_solutions(cycle, repos,
+   config, autounmask_use_changes, entries) -> Vec<CircularSuggestion>`
+   (heavy logic where the primitives live; `pretend.rs` / the Python
+   `run` do the colour + text). All of steps 1–10, grandparent check
+   included. The `_show_circular_deps` render branch replaced with real's
+   `if suggestions: "It might be possible to break this cycle" / "by
+   applying the following change:" | "by applying <bold>any of</bold> …"
+   / <lines> / "Note that this change can be reverted…"  else: <generic
+   advisory>`. Fixture `dev-libs/usecyclea` + `usecycleb`
+   (`x? ( dev-libs/usecycleb )` gates the cycle → `- dev-libs/
+   usecyclea-1.0 (Change USE: -x)`). Contract CASE + pinned test (incl.
+   `--color y` ANSI) + 2 `portage-repo` unit tests; `hardcyclea` (no
+   IUSE) unchanged on the `else` branch. Rust==Python byte-identical.
+   **Grandparent step not exercised by a fixture** — the re-derivation
+   is in place (`grandparent_use_conflict`) but no fixture drives a
+   grandparent `[flag]` clash yet; left for a follow-up if a real case
+   turns up.
 
 ## Simplifications / cuts (call out in code + `what-this-proves.md`)
 

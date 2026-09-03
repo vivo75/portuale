@@ -9083,10 +9083,57 @@ pub fn run(args: &[String]) -> ExitCode {
             cycle[0]
         ));
         eprint!("{}", lines.join("\n"));
-        eprint!(
-            "\n\n{prefix}Note that circular dependencies can often be avoided by temporarily\n\
-             {prefix}disabling USE flags that trigger optional dependencies.\n"
+
+        // Real `_show_circular_deps` (`depgraph.py:10448`): when
+        // `circular_dependency_handler._find_suggestions` turns up a
+        // concrete `Change USE:` fix, print it instead of the generic
+        // advisory. `+flag` red / `-flag` blue / `any of` bold, exactly as
+        // real `colorize`s them. `large_cycle_count` (the "a lot of
+        // cycles" trailer) needs full cycle enumeration -- a separate cut,
+        // so it never fires here.
+        let suggestions = portage_repo::circular_dep_solutions(
+            cycle,
+            &repos,
+            &config,
+            &result.autounmask_use_changes,
+            &result.entries,
         );
+        if suggestions.is_empty() {
+            eprint!(
+                "\n\n{prefix}Note that circular dependencies can often be avoided by temporarily\n\
+                 {prefix}disabling USE flags that trigger optional dependencies.\n"
+            );
+        } else {
+            eprint!("\n\nIt might be possible to break this cycle\n");
+            if suggestions.len() == 1 {
+                eprintln!("by applying the following change:");
+            } else {
+                eprintln!(
+                    "by applying {} the following changes:",
+                    color.c("bold", "any of")
+                );
+            }
+            for s in &suggestions {
+                let changes: Vec<String> = s
+                    .changes
+                    .iter()
+                    .map(|(f, on)| {
+                        if *on {
+                            color.c("red", &format!("+{f}"))
+                        } else {
+                            color.c("blue", &format!("-{f}"))
+                        }
+                    })
+                    .collect();
+                eprintln!("- {} (Change USE: {})", s.parent_cpv, changes.join(" "));
+                if s.followup {
+                    eprint!(" (This change might require USE changes on parent packages.)");
+                }
+            }
+            eprintln!(
+                "\nNote that this change can be reverted, once the package has been installed."
+            );
+        }
         return ExitCode::from(1);
     }
 

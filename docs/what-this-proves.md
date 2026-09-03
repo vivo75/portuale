@@ -12381,3 +12381,58 @@ only. `emerge -p --autounmask` now resolves the higher `2.0` with both a
 contract test + a `portage-repo` unit test, Rust==Python byte-identical,
 full suite green. (portuale still skips real's `**` "missing keywords"
 levels -- it has no `**` suggestion.)
+
+### Circular-dependency USE-flag suggestions — `_find_suggestions` (2026-09-03)
+
+`docs/find-suggestions-plan.md` (2 slices). When portuale hits an
+unbreakable build-time dependency cycle it prints the
+`* Error: circular dependencies:` block. Real portage also runs
+`circular_dependency_handler._find_suggestions` — a ~180-line USE-flag
+heuristic — and, when it finds a fix, replaces the generic "disable USE
+flags that trigger optional dependencies" advisory with a concrete one:
+
+```
+It might be possible to break this cycle
+by applying the following change:
+- dev-libs/foo-1.0 (Change USE: -bar)
+
+Note that this change can be reverted, once the package has been installed.
+```
+
+**Slice 1** ported `portage.dep.extract_affecting_use` (the bracket-stack
+parser returning the flags whose `flag?` conditionals gate a given atom
+inside a dep string) into `portage-dep` — verified against all 23
+well-formed + 15 malformed cases of real portage's own
+`test_extract_affecting_use.py`, and cross-checked live against real
+portage via a new `affecting` op on the atom harness (38 contract
+cases).
+
+**Slice 2** is `portage_repo::circular_dep_solutions`: for each edge of
+the shortest cycle it takes the depending package's build-time deps,
+`extract_affecting_use` for the offending atom, subtracts
+`use.mask`/`use.force`/autounmask-changed flags, folds in entangled
+`REQUIRED_USE` flags (bounded at 10), then brute-forces every
+enable/disable assignment of those flags — keeping the ones whose
+`use_reduce`d dep no longer contains the atom and still satisfy
+`REQUIRED_USE` — as minimal `(flag, state)` diffs, superset-pruned, with
+a grandparent-atom conflict filter (`[flag]` clash → drop; conditional
+clash → "might require USE changes on parent packages"). `pretend.rs` /
+the Python `run` colour it (`+flag` red, `-flag` blue, `any of` bold —
+real's exact `colorize` bytes) and print real's `if suggestions / else`
+framing.
+
+Fixture `dev-libs/usecyclea` (IUSE `+x`, `DEPEND="x? (
+dev-libs/usecycleb )"`) ↔ `dev-libs/usecycleb` (`DEPEND="dev-libs/
+usecyclea"`): portuale now emits `- dev-libs/usecyclea-1.0 (Change USE:
+-x)`. `dev-libs/hardcyclea` (no IUSE) still hits the generic advisory.
+Contract CASE + pinned test (incl. the `--color y` ANSI) + 2
+`portage-repo` unit tests, Rust==Python byte-identical.
+
+Cuts (documented in the plan): `_pkg_use_enabled` is `effective_use_flags`
+without the rare autounmask-USE overlay (autounmask-*changed* flags are
+still untouchable); the grandparent atom set is re-derived from raw
+`DEPEND`/`BDEPEND`/`RDEPEND`/`PDEPEND` scans rather than real's recorded
+`_parent_atoms`; `large_cycle_count` (needs full cycle enumeration) never
+fires; portuale sorts the suggestions (real iterates a `set()`, order
+undefined). The forced cycle-only `--verbose --tree` re-display remains a
+separate open cut.

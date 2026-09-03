@@ -102,7 +102,14 @@ PORTAGE_CHECKOUT = os.environ.get("PORTUALE_PORTAGE_CHECKOUT") or os.path.join(
 
 sys.path.insert(0, os.path.join(PORTAGE_CHECKOUT, "lib"))
 
-from portage.dep import Atom, check_required_use, match_from_list, paren_enclose, use_reduce
+from portage.dep import (
+    Atom,
+    check_required_use,
+    extract_affecting_use,
+    match_from_list,
+    paren_enclose,
+    use_reduce,
+)
 from portage.dep._slot_operator import strip_slots
 from portage.dep.libc import strip_libc_deps
 from portage.exception import InvalidAtom, InvalidDependString
@@ -6484,6 +6491,205 @@ def _find_hard_cycles(entries, edge_kind_map):
     min_pos = min(range(len(best)), key=lambda p: best[p])
     rotated = best[min_pos:] + best[:min_pos]
     return [[_merge_bound_cpv(entries[i]) for i in rotated]]
+
+
+def _split_cpv(cpv):
+    """`category/package-version` -> (cat, pkg, version), the last
+    `-`-separated boundary whose right half ververifies."""
+    if "/" not in cpv:
+        return None
+    cat, rest = cpv.split("/", 1)
+    parts = rest.split("-")
+    for i in range(1, len(parts)):
+        version = "-".join(parts[i:])
+        if ververify(version):
+            return (cat, "-".join(parts[:i]), version)
+    return None
+
+
+def _required_use_flag_names(required_use):
+    """Every USE flag name in a REQUIRED_USE string -- real
+    get_required_use_flags, as a token scan. Mirrors
+    portage-repo/src/lib.rs's required_use_flag_names."""
+    out = set()
+    for tok in required_use.split():
+        t = tok[:-1] if tok.endswith("?") else tok
+        t = t[1:] if t.startswith("!") else t
+        if t in ("(", ")", "||", "^^", "??", ""):
+            continue
+        if t[0].isalnum() and all(c.isalnum() or c in "+_@-" for c in t):
+            out.add(t)
+    return out
+
+
+def _grandparent_use_conflict(pcat, ppkg, solution, repos, entries):
+    """Real _find_suggestions step 9. Mirrors portage-repo/src/lib.rs's
+    grandparent_use_conflict."""
+    pcp = f"{pcat}/{ppkg}"
+    followup = False
+    pe = next((e for e in entries if e[0] == pcat and e[1] == ppkg), None)
+    if pe is None:
+        return (False, False)
+    for ocat, opkg in pe[6]:
+        oe = next((e for e in entries if e[0] == ocat and e[1] == opkg), None)
+        ov = _merge_bound_cpv(oe) if oe is not None else None
+        ov = _split_cpv(ov)[2] if ov is not None else None
+        if ov is None:
+            continue
+        ocands = list_candidates(repos, ocat, opkg)
+        oc = next((c for c in ocands if c["version"] == ov), None)
+        if oc is None:
+            continue
+        try:
+            omd = read_md5_cache(oc["repo_location"], ocat, f"{opkg}-{ov}")
+        except (OSError, ValueError):
+            continue
+        for key in ("DEPEND", "BDEPEND", "RDEPEND", "PDEPEND"):
+            for tok in omd.get(key, "").split():
+                a = _parse_atom(tok)
+                if a is None or a.cp != pcp or not a.use:
+                    continue
+                for flag, _ in solution:
+                    if flag in a.use.enabled or flag in a.use.disabled:
+                        return (True, followup)
+                    if a.use.conditional:
+                        for flags in a.use.conditional.values():
+                            if flag in flags:
+                                followup = True
+    return (False, followup)
+
+
+def _circular_dep_solutions(cycle, repos, config, autounmask_use_changes, entries):
+    """Python mirror of portage-repo/src/lib.rs's circular_dep_solutions
+    (real circular_dependency_handler._find_suggestions). Returns a sorted,
+    deduped list of {parent_cpv, changes: [(flag, enable)], followup}."""
+    MAX_AFFECTING_USE = 10
+    out = []
+    n = len(cycle)
+    if n == 0:
+        return out
+
+    for pos in range(n):
+        parent_cpv = cycle[(pos + n - 1) % n]
+        child_cpv = cycle[pos]
+        psplit = _split_cpv(parent_cpv)
+        csplit = _split_cpv(child_cpv)
+        if psplit is None or csplit is None:
+            continue
+        pcat, ppkg, pver = psplit
+        ccat, cpkg, _ = csplit
+        pcands = list_candidates(repos, pcat, ppkg)
+        pc = next((c for c in pcands if c["version"] == pver), None)
+        if pc is None:
+            continue
+        try:
+            md = read_md5_cache(pc["repo_location"], pcat, f"{ppkg}-{pver}")
+        except (OSError, ValueError):
+            continue
+        dep = f"{md.get('DEPEND', '')} {md.get('BDEPEND', '')}"
+        dep_tokens = dep.split()
+        required_use = md.get("REQUIRED_USE", "")
+        iuse_names = {t.lstrip("+-") for t in pc["iuse"].split()}
+        parent_str = (
+            f"{pcat}/{ppkg}-{pver}:{pc['slot']}/{pc['sub_slot']}::{pc['repo_name']}"
+        )
+        parent_use = effective_use_flags(
+            config, pc["iuse"], pc["keywords"], parent_str, pcat, ppkg
+        )
+
+        ccp = f"{ccat}/{cpkg}"
+        parent_atom = None
+        for tok in dep_tokens:
+            a = _parse_atom(tok)
+            if a is not None and a.cp == ccp:
+                parent_atom = tok
+                break
+        if parent_atom is None:
+            continue
+
+        try:
+            affecting = set(extract_affecting_use(dep, parent_atom))
+        except InvalidDependString:
+            continue
+
+        untouchable = set(
+            _forced_or_masked_flags(
+                pc["iuse"], pc["keywords"], parent_str, pcat, ppkg, config
+            )
+        )
+        for ch in autounmask_use_changes:
+            if _matches_config_entry(ch["atom"], parent_str, pcat, ppkg):
+                for tok in ch["token"].split():
+                    untouchable.add(tok.lstrip("+-"))
+        affecting -= untouchable
+
+        ruf = _required_use_flag_names(required_use)
+        if affecting & ruf:
+            total = set(affecting) | ruf
+            total -= untouchable
+            if len(total) <= MAX_AFFECTING_USE:
+                affecting = total
+
+        if not affecting:
+            continue
+        affecting = sorted(affecting)
+        if len(affecting) > MAX_AFFECTING_USE:
+            affecting = [f for f in affecting if f in parent_use]
+            if len(affecting) > MAX_AFFECTING_USE:
+                continue
+
+        n_aff = len(affecting)
+        solutions = set()
+        for mask in range(1 << n_aff):
+            cur = set(parent_use)
+            for i, f in enumerate(affecting):
+                if mask & (1 << i):
+                    cur.add(f)
+                else:
+                    cur.discard(f)
+            try:
+                reduced = use_reduce(" ".join(dep_tokens), uselist=cur, flat=True)
+            except InvalidDependString:
+                continue
+            if parent_atom in reduced:
+                continue
+            if required_use.strip() and not check_required_use(
+                required_use, cur, iuse_names.__contains__
+            ):
+                continue
+            sol = []
+            for i, f in enumerate(affecting):
+                enabled = bool(mask & (1 << i))
+                if enabled and f not in parent_use:
+                    sol.append((f, True))
+                elif not enabled and f in parent_use:
+                    sol.append((f, False))
+            solutions.add(tuple(sorted(sol)))
+
+        all_sols = list(solutions)
+        for sol in all_sols:
+            sol_set = set(sol)
+            if any(o != sol and set(o) <= sol_set for o in all_sols):
+                continue
+            ignore, followup = _grandparent_use_conflict(
+                pcat, ppkg, sol, repos, entries
+            )
+            if ignore:
+                continue
+            out.append(
+                {
+                    "parent_cpv": f"{pcat}/{ppkg}-{pver}",
+                    "changes": list(sol),
+                    "followup": followup,
+                }
+            )
+
+    out.sort(key=lambda s: (s["parent_cpv"], s["changes"]))
+    deduped = []
+    for s in out:
+        if not deduped or deduped[-1] != s:
+            deduped.append(s)
+    return deduped
 
 
 def _complete_graph_auto_enable(entries, if_new_use, if_new_ver, if_new_slot):
@@ -15360,10 +15566,9 @@ def run(args):
     # the merge list, then the action fails (exit 1). Faithful
     # transcription of _show_circular_deps's writemsg sequence, minus the
     # reduced cycle-only --tree re-display (+ its leading "\n\n") and
-    # _find_suggestions's USE-flag heuristic (portuale always hits the
-    # generic-advisory else branch). Every cycle edge is build-time by
-    # construction, so every priority label is "(buildtime)". Mirrors
-    # pretend.rs.
+    # large_cycle_count (needs full cycle enumeration). Every cycle edge is
+    # build-time by construction, so every priority label is "(buildtime)".
+    # Mirrors pretend.rs.
     if result["circular_deps"]:
         cycle = result["circular_deps"][0]
         prefix = color.c("BAD", " * ")
@@ -15373,10 +15578,40 @@ def run(args):
             lines.append(f"{' ' * pos}{pkg} (buildtime)")
         lines.append(f"{' ' * len(cycle)}{cycle[0]} (buildtime)")
         sys.stderr.write("\n".join(lines))
-        sys.stderr.write(
-            f"\n\n{prefix}Note that circular dependencies can often be avoided by temporarily\n"
-            f"{prefix}disabling USE flags that trigger optional dependencies.\n"
+
+        suggestions = _circular_dep_solutions(
+            cycle,
+            find_repos(_config_root()),
+            config,
+            result["autounmask_use_changes"],
+            result["entries"],
         )
+        if not suggestions:
+            sys.stderr.write(
+                f"\n\n{prefix}Note that circular dependencies can often be avoided by temporarily\n"
+                f"{prefix}disabling USE flags that trigger optional dependencies.\n"
+            )
+        else:
+            sys.stderr.write("\n\nIt might be possible to break this cycle\n")
+            if len(suggestions) == 1:
+                sys.stderr.write("by applying the following change:\n")
+            else:
+                sys.stderr.write(
+                    f"by applying {color.c('bold', 'any of')} the following changes:\n"
+                )
+            for s in suggestions:
+                changes = " ".join(
+                    color.c("red", f"+{f}") if on else color.c("blue", f"-{f}")
+                    for f, on in s["changes"]
+                )
+                sys.stderr.write(f"- {s['parent_cpv']} (Change USE: {changes})\n")
+                if s["followup"]:
+                    sys.stderr.write(
+                        " (This change might require USE changes on parent packages.)"
+                    )
+            sys.stderr.write(
+                "\nNote that this change can be reverted, once the package has been installed.\n"
+            )
         return 1
 
     return 0
