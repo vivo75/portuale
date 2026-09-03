@@ -12264,3 +12264,49 @@ suite green.
 
 Still ahead: keyword/mask in-loop accumulators; `get_best_run`
 (maskless-run preference) + wiring `--autounmask-backtrack`.
+
+### --autounmask-backtrack: off by default, gating the in-loop re-drive (2026-09-03)
+
+Slice 5 of the autounmask-in-loop plan -- and a *correction* of Slices 1
+and 4. Real `--autounmask-backtrack` is **disabled by default**
+(`man emerge`: "not recommended ... disabled by default";
+`depgraph.py:11736` -- `need_config_change()` returns True and
+`_backtrack_depgraph` breaks as soon as an attempt has autounmask
+changes). So real portage, by default, *collects* the autounmask config
+changes and shows them, but does **not** re-drive the graph afterwards:
+the flipped package's own USE line reflects the change (real
+`_pkg_use_enabled` consulting `_needed_use_config_changes`), but its
+newly-`flag?`-gated dependencies do not appear. Real's own
+`test_autounmask.py` spells this out in a comment ("With
+--autounmask-backtrack=y: [C-1, B-1, A-1] ... Without: [B-1, A-1]").
+
+Slices 1 and 4 were shipping the *`=y`* behaviour unconditionally.
+`Config::autounmask_backtrack` (parsed from `--autounmask-backtrack`,
+implied by `--autounmask-continue` unless `=n` is explicit) now gates the
+`'backtrack` loop's `autounmask_grew` re-drive:
+
+* **off (default):** the backward-cascade re-check still folds the change
+  into `autounmask_use_config` and records it for the block, but the loop
+  does not restart; a post-loop `refresh_entry_use_display` re-renders
+  just the flipped package's `USE=` line. The parent-flip path falls back
+  to its pre-Slice-4 single-dep local re-resolution.
+* **`=y` (or `--autounmask-continue`):** Slices 1/4's full whole-graph
+  cascade, and Slice 3's cross-pass `_autounmask_breakage` contradiction
+  detection.
+
+So `emerge -p dev-libs/aucasctop` now shows `aucascmid USE="cascade"`
+without `aucascleaf` (real's default); `--autounmask-backtrack=y` brings
+`aucascleaf` back. `dev-libs/pfgraphparent` keeps `pfgraphextra` by
+default, drops it under `=y`. `dev-libs/aubreaktop`'s contradiction is
+only spotted (and autounmask abandoned) under `=y`. Each Slice-1/3/4
+contract fixture grew a `--autounmask-backtrack=y` variant; the
+`portage-repo` unit tests for the cascade cases use a new
+`graph_result_autounmask_backtrack` helper. Rust==Python byte-identical,
+full suite green.
+
+`get_best_run` (real returns the settled backtrack run with the most
+config changes and no masks) has no separate analogue here: portuale's
+single `autounmask_use_config` accumulator plus the `MaskPhase`
+trial-and-revert already converge on the maskless most-changed state.
+
+Still ahead: keyword / mask in-loop accumulators (Slice 6).

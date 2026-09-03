@@ -456,6 +456,18 @@ pub struct Config {
     /// so a hand-built `Config` literal never sets it and gets the
     /// pre-autounmask behaviour.
     pub autounmask_use: Vec<(String, Vec<String>)>,
+    /// `--autounmask-backtrack` (real `emerge` option, `choices: ("y",
+    /// "n")`, **disabled by default** -- `man emerge`). When off (the
+    /// default), real portage collects autounmask config changes but does
+    /// **not** re-drive the whole graph afterwards (`need_config_change`
+    /// -> break in `_backtrack_depgraph`): the flipped package's own USE
+    /// line reflects the change, but its newly-`flag?`-gated deps do not
+    /// appear. When on (or implied by `--autounmask-continue`), the
+    /// `'backtrack` loop re-runs the walk on every accumulator growth so
+    /// the cascade is fully realised. Like [`autounmask_use`], this is a
+    /// CLI-option carrier the resolver reads, not profile state; a
+    /// hand-built `Config` literal leaves it `false`.
+    pub autounmask_backtrack: bool,
     /// (atom-or-wildcard string, ordered env-file names) pairs from
     /// `/etc/portage/package.env` -- real `config.py:894`'s
     /// `grabdict_package(.../package.env)`. Each named file lives under

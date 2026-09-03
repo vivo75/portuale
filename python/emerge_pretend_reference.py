@@ -6432,6 +6432,42 @@ def _complete_graph_auto_enable(entries, if_new_use, if_new_ver, if_new_slot):
     return False
 
 
+def _refresh_entry_use_display(entries, repos, cp, cfg):
+    """Re-render the `use_display` of every merge entry for `cp` using
+    `cfg` -- the --autounmask-backtrack off path uses this to reflect an
+    accumulated package.use change on a package the loop did not re-walk
+    (real _pkg_use_enabled consulting _needed_use_config_changes for the
+    display only). Mirrors portage-repo/src/lib.rs's refresh_entry_use_
+    display; a no-op for a non-merge entry / no matching candidate / no
+    on-disk IUSE."""
+    cat, pkg = cp
+    cands = list_candidates(repos, cat, pkg)
+    for _i, _e in enumerate(entries):
+        if _e[0] != cat or _e[1] != pkg:
+            continue
+        _tag = _e[2][0]
+        if _tag in ("new", "reinstall"):
+            _ver = _e[2][1]
+        elif _tag in ("upgrade", "downgrade"):
+            _ver = _e[2][2]
+        else:
+            continue
+        _c = next((c for c in cands if c["version"] == _ver), None)
+        if _c is None or not _c.get("iuse"):
+            continue
+        _slot = _e[4] or _c.get("slot", "")
+        _prov = _e[8] if isinstance(_e[8], dict) else {}
+        _ss = _prov.get("sub_slot", _c.get("sub_slot", ""))
+        _rn = _prov.get("repo_name", _c.get("repo_name", ""))
+        _cs = f"{cat}/{pkg}-{_ver}:{_slot}/{_ss}::{_rn}"
+        _uf = effective_use_flags(cfg, _c["iuse"], _c["keywords"], _cs, cat, pkg)
+        _disp = sorted(
+            ((f.lstrip("+-"), f.lstrip("+-") in _uf) for f in _c["iuse"].split()),
+            key=lambda p: _alnum_sort_key(p[0]),
+        )
+        entries[_i] = _e[:5] + (_disp,) + _e[6:]
+
+
 def resolve_pretend_graph(
     config_root,
     root,
@@ -6652,6 +6688,12 @@ def resolve_pretend_graph(
     # portage-repo/src/lib.rs.
     autounmask_use_broke = False
     autounmask_disabled = False
+    # Real --autounmask-backtrack (off by default, depgraph.py:11736): only
+    # when on does the loop re-drive the whole walk after an autounmask
+    # change grows the accumulator. Off, the change is collected + displayed
+    # but the graph structure is left alone (a post-loop pass refreshes just
+    # the flipped package's USE line). Mirrors portage-repo/src/lib.rs.
+    _ab_enabled = bool(config.get("autounmask_backtrack", False))
 
     def _autounmask_use_tier(acc):
         out = []
@@ -6936,16 +6978,52 @@ def resolve_pretend_graph(
                             autounmask_suggest_license,
                             autounmask_suggest_masks,
                         )
-                        if _re_outcome[0] != "no_visible_candidate":
-                            # The flip works. Fold it into autounmask_use_config
-                            # (a package.use change on the parent) and let the
-                            # driver re-walk the WHOLE graph so the parent's
-                            # other flag?-gated deps re-evaluate against the
-                            # flipped state (real _needed_use_config_changes ->
+                        if _re_outcome[0] != "no_visible_candidate" and not _ab_enabled:
+                            # Default (real --autounmask-backtrack off): apply
+                            # the parent flip to THIS dependency's resolution
+                            # and re-render the parent's own USE line, but do
+                            # NOT re-drive the whole graph -- the parent's
+                            # other flag?-gated deps keep whatever the first
+                            # walk gave them. Mirrors portage-repo/src/lib.rs.
+                            outcome = _re_outcome
+                            current_atom_str = _re_atom
+                            atom = _re_parsed
+                            _token = " ".join(f if e else f"-{f}" for f, e in _target_use)
+                            autounmask_use_changes.append(
+                                {
+                                    "atom": _autounmask_use_atom_form(
+                                        _parent_cand,
+                                        list_candidates(repos, _pc, _pp),
+                                        _pc,
+                                        _pp,
+                                        config,
+                                    ),
+                                    "token": _token,
+                                    "dep_chain": _autounmask_dep_chain(
+                                        (_pc, _pp), "", top_level, entries
+                                    ),
+                                }
+                            )
+                            _pflip_display = sorted(
+                                (
+                                    (t.lstrip("+-"), t.lstrip("+-") in _new_parent_use)
+                                    for t in _parent_cand.get("iuse", "").split()
+                                ),
+                                key=lambda p: _alnum_sort_key(p[0]),
+                            )
+                            for _i, _e in enumerate(entries):
+                                if _e[0] == _pc and _e[1] == _pp:
+                                    entries[_i] = _e[:5] + (_pflip_display,) + _e[6:]
+                                    break
+                        elif _re_outcome[0] != "no_visible_candidate":
+                            # --autounmask-backtrack=y: fold the flip into
+                            # autounmask_use_config (a package.use change on the
+                            # parent) and let the driver re-walk the WHOLE graph
+                            # so the parent's other flag?-gated deps re-evaluate
+                            # (real _needed_use_config_changes ->
                             # _backtrack_depgraph). A contradiction with an
-                            # already-accumulated change is _autounmask_breakage
-                            # territory -- hand it to the driver (Slice 3).
-                            # Mirrors portage-repo/src/lib.rs.
+                            # accumulated change is _autounmask_breakage
+                            # territory (Slice 3). Mirrors portage-repo/src/lib.rs.
                             _pbucket = autounmask_use_config.get((_pc, _pp), {})
                             if any(
                                 _f in _pbucket and _pbucket[_f] != _want
@@ -8031,10 +8109,14 @@ def resolve_pretend_graph(
         # _needed_use_config_changes). Re-run the whole walk with the grown
         # config so the flipped package is re-resolved with the flag on and
         # its flag?-gated deps appear. Converges because the accumulator
-        # only ever grows on a newly-added (cp, flag). Mirrors pretend.rs.
+        # only ever grows on a newly-added (cp, flag). Only with
+        # --autounmask-backtrack=y (real depgraph.py:11736); off (default),
+        # the change is recorded + displayed but the graph is not re-driven.
+        # Mirrors pretend.rs.
         _au_after = sum(len(v) for v in autounmask_use_config.values())
         if (
-            _au_after > _au_before
+            _ab_enabled
+            and _au_after > _au_before
             and mask_phase == "none"
             and backtrack_iteration < backtrack_max
         ):
@@ -8057,6 +8139,21 @@ def resolve_pretend_graph(
             for c in autounmask_use_changes
         ):
             autounmask_use_changes.append(_rec)
+
+    # Real --autounmask-backtrack off (the default): the backward-cascade
+    # re-check folded a package.use change into autounmask_use_config but
+    # the driver did NOT re-drive the walk, so the affected package's entry
+    # still shows its pre-flip USE. Real _pkg_use_enabled consults
+    # _needed_use_config_changes for the display regardless -- so re-render
+    # just that USE line here (its flag?-gated deps still, correctly, do
+    # not appear). Mirrors portage-repo/src/lib.rs.
+    if not _ab_enabled and autounmask_use_config:
+        _tier_cfg = {
+            **_base_config,
+            "autounmask_use": _autounmask_use_tier(autounmask_use_config),
+        }
+        for _cp in autounmask_use_config:
+            _refresh_entry_use_display(entries, repos, _cp, _tier_cfg)
 
     if required_use_violations:
         raise ResolutionError("\n".join(required_use_violations))
@@ -8937,7 +9034,8 @@ Autounmask (read-only: prints the required changes and stops -- never writes con
       --autounmask[=y|n], --autounmask-use[=y|n], --autounmask-keep-keywords[=y|n]
       --autounmask-license[=y|n], --autounmask-keep-masks[=y|n]
       --autounmask-only[=y|n]  resolve, print only the change block, and exit 0
-      --autounmask-continue[=y|n], --autounmask-backtrack[=y|n]  recognized, but inert under --pretend
+      --autounmask-backtrack<y|n>  keep re-resolving after autounmask changes (off by default)
+      --autounmask-continue[=y|n]  recognized; implies --autounmask-backtrack=y
 
 Binary packages:
   -b, --buildpkg[=y|n]       also build a binary package for each merged package
@@ -12327,10 +12425,14 @@ def run(args):
     # --autounmask-only (real actions.py:456): skip the merge list, show
     # only the display_problems() equivalent, exit 0. Mirrors pretend.rs.
     autounmask_only = False
-    # --autounmask-continue (real true_y_or_n): inert here except the
-    # actions.py:3772 warning. None = not given. --autounmask-backtrack
-    # carries no state (validated + discarded). Mirrors pretend.rs.
+    # --autounmask-continue (real true_y_or_n): its "keep merging" path is
+    # gated on "--pretend" not in myopts, so under --pretend the only
+    # observable is the actions.py:3772 warning -- but it also implies
+    # --autounmask-backtrack=y (man emerge), and THAT half gates the
+    # 'backtrack loop's autounmask re-drive. None = not given. Mirrors
+    # pretend.rs.
     autounmask_continue = None
+    autounmask_backtrack = None
     usepkg = False
     usepkgonly = False
     getbinpkg = False
@@ -13226,8 +13328,9 @@ def run(args):
                 i += 1
             autounmask_continue = val in ("y", "True")
         elif arg == "--autounmask-backtrack":
-            # Real choices: ("y", "n") (main.py:338) -- a REQUIRED value.
-            # No effect in portuale; the value is validated and discarded.
+            # Real choices: ("y", "n") (main.py:338), disabled by default.
+            # Gates the 'backtrack loop's autounmask re-drive
+            # (Config::autounmask_backtrack). Mirrors pretend.rs.
             if i + 1 >= len(args):
                 print(
                     'emerge: option "--autounmask-backtrack" requires an argument',
@@ -13241,6 +13344,7 @@ def run(args):
                     file=sys.stderr,
                 )
                 return 2
+            autounmask_backtrack = args[i + 1] == "y"
             i += 2
         elif arg.startswith("--autounmask-backtrack="):
             value = arg[len("--autounmask-backtrack=") :]
@@ -13251,6 +13355,7 @@ def run(args):
                     file=sys.stderr,
                 )
                 return 2
+            autounmask_backtrack = value == "y"
             i += 1
         elif arg == "--autounmask-keep-keywords":
             # Real "--autounmask-keep-keywords": plain y_or_n, a
@@ -14065,6 +14170,15 @@ def run(args):
     # Real create_depgraph_params.py: masks stay masked unless
     # --autounmask-keep-masks=n is given explicitly.
     autounmask_suggest_masks = autounmask_enabled and autounmask_keep_masks is False
+    # Real _backtrack_depgraph (depgraph.py:11736): backtracking continues
+    # after autounmask changes only with --autounmask-backtrack=y -- or
+    # --autounmask-continue (implies it) unless --autounmask-backtrack=n is
+    # explicit. Off by default. Carried on the config dict. Mirrors pretend.rs.
+    config["autounmask_backtrack"] = autounmask_enabled and (
+        autounmask_backtrack
+        if autounmask_backtrack is not None
+        else autounmask_continue is True
+    )
 
     # Fold the --getbinpkg family into the --usepkg family (see their
     # parsing): --getbinpkgonly implies binary-only; either getbinpkg

@@ -121,10 +121,12 @@ architectural — a single-pass BFS can't grow into these incrementally:
     — and re-resolves one clean pass) and **Slice 4** (the whole-graph
     parent-flip re-resolve: `'parent_flip` folds the parent-USE flip into
     `autounmask_use_config` and the driver re-walks everything — removes
-    the `'parent_flip` single-dep cut) **shipped 2026-09-03**. Still open:
-    a true per-level version re-scan, keyword/mask
-    accumulators in the loop, `get_best_run` (prefer the maskless settled
-    run);
+    the `'parent_flip` single-dep cut) and **Slice 5** (`--autounmask-
+    backtrack` gate — **off by default**, matching real: collect + display
+    the change and re-render the flipped package's USE line, but no
+    graph re-walk unless `=y` / `--autounmask-continue`) **shipped
+    2026-09-03**. Still open: a true per-level version re-scan, keyword/
+    mask accumulators in the loop (Slice 6);
   - `||`-preference / slot-operator-rebuild feedback driving a retry;
   - the slot-collision notice's remaining cuts: `pkg_use_display` for a
     package with non-default USE (the ` USE=""` slot renders, non-empty

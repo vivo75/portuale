@@ -405,8 +405,13 @@ CASES = [
         0,
     ),
     (
-        "autounmask breakage: a flag wanted both ways abandons autounmask entirely",
+        "autounmask breakage: default (no --autounmask-backtrack) collects the change",
         ["--pretend", "dev-libs/aubreaktop"],
+        0,
+    ),
+    (
+        "autounmask breakage, --autounmask-backtrack=y: flag wanted both ways -> abandon",
+        ["--pretend", "--autounmask-backtrack=y", "dev-libs/aubreaktop"],
         0,
     ),
     (
@@ -415,8 +420,18 @@ CASES = [
         0,
     ),
     (
-        "autounmask breakage, --autounmask: still abandoned, same clean result",
-        ["--pretend", "--autounmask", "dev-libs/aubreaktop"],
+        "autounmask breakage, --autounmask --autounmask-backtrack=y",
+        ["--pretend", "--autounmask", "--autounmask-backtrack=y", "dev-libs/aubreaktop"],
+        0,
+    ),
+    (
+        "autounmask backward cascade, --autounmask-backtrack=y: aucascleaf appears",
+        ["--pretend", "--autounmask-backtrack=y", "dev-libs/aucasctop"],
+        0,
+    ),
+    (
+        "autounmask backward cascade, --autounmask-backtrack=n is the default",
+        ["--pretend", "--autounmask-backtrack=n", "dev-libs/aucasctop"],
         0,
     ),
     (
@@ -455,17 +470,22 @@ CASES = [
         0,
     ),
     (
-        "--autounmask-use parent flip re-resolves the whole graph (pf? dep drops)",
+        "--autounmask-use parent flip, default: single-dep re-resolve, pf? dep stays",
         ["--pretend", "dev-libs/pfgraphparent"],
         0,
     ),
     (
-        "--autounmask-use parent flip whole-graph re-resolve, -pv",
+        "--autounmask-use parent flip, --autounmask-backtrack=y: whole-graph, pf? dep drops",
+        ["--pretend", "--autounmask-backtrack=y", "dev-libs/pfgraphparent"],
+        0,
+    ),
+    (
+        "--autounmask-use parent flip, -pv",
         ["--pretend", "-v", "dev-libs/pfgraphparent"],
         0,
     ),
     (
-        "--autounmask-use parent flip whole-graph re-resolve, --autounmask-use=n",
+        "--autounmask-use parent flip, --autounmask-use=n",
         ["--pretend", "--autounmask-use=n", "dev-libs/pfgraphparent"],
         0,
     ),
@@ -2552,25 +2572,29 @@ def test_autounmask_backward_cascade_re_resolves_an_already_resolved_slot(
 ):
     """dev-libs/aucasctop RDEPENDs aucascmid (resolved cascade-off first,
     the bare atom) then aucasclate, whose RDEPEND is
-    dev-libs/aucascmid[cascade]. A single pass would silently drop the
-    mismatch. Now the already-resolved-slot re-check sees `[cascade]`
-    unsatisfied, folds `cascade -> on` into the loop's autounmask_use_config
-    (real _needed_use_config_changes), and the driver re-runs the whole
-    walk with the flip applied -- so aucascmid is re-resolved with
-    USE="cascade" and its cascade?-gated aucascleaf now appears. The
-    change is reported in the standard "USE changes are necessary" block.
-    Full Rust==Python lockstep, incl. --json."""
+    dev-libs/aucascmid[cascade]. The already-resolved-slot re-check sees
+    `[cascade]` unsatisfied and folds `cascade -> on` into the loop's
+    autounmask_use_config (real _needed_use_config_changes).
+
+    Default (real --autounmask-backtrack off, depgraph.py:11736): the
+    graph is NOT re-driven -- aucascmid's own USE line is re-rendered to
+    `USE="cascade"` (real _pkg_use_enabled), but its cascade?-gated
+    aucascleaf does NOT appear. The change is still reported in the
+    standard "USE changes are necessary" block.
+
+    --autounmask-backtrack=y: the loop re-runs the whole walk with the
+    flip applied, so aucascleaf now appears too. Full Rust==Python."""
     base = ["--pretend", "dev-libs/aucasctop"]
     rust = _run([str(emerge_binary)], base, fixture_env)
     py = _run(emerge_pretend_python, base, fixture_env)
     assert rust.returncode == 0
     assert rust.stdout == py.stdout and rust.stderr == py.stderr
     assert rust.stdout.splitlines() == [
-        "[ebuild  N     ] dev-libs/aucascleaf-1.0 ",
         '[ebuild  N     ] dev-libs/aucascmid-1.0  USE="cascade"',
         "[ebuild  N     ] dev-libs/aucasclate-1.0 ",
         "[ebuild  N     ] dev-libs/aucasctop-1.0 ",
     ]
+    assert "aucascleaf" not in rust.stdout
     assert rust.stderr == (
         "\nThe following USE changes are necessary to proceed:\n"
         ' (see "package.use" in the portage(5) man page for more details)\n'
@@ -2578,7 +2602,19 @@ def test_autounmask_backward_cascade_re_resolves_an_already_resolved_slot(
         ">=dev-libs/aucascmid-1.0 cascade\n"
     )
 
-    # --json carries the same change
+    # --autounmask-backtrack=y: the whole graph is re-driven, aucascleaf appears
+    ab = ["--pretend", "--autounmask-backtrack=y", "dev-libs/aucasctop"]
+    rust_ab = _run([str(emerge_binary)], ab, fixture_env)
+    py_ab = _run(emerge_pretend_python, ab, fixture_env)
+    assert rust_ab.stdout == py_ab.stdout and rust_ab.stderr == py_ab.stderr
+    assert rust_ab.stdout.splitlines() == [
+        "[ebuild  N     ] dev-libs/aucascleaf-1.0 ",
+        '[ebuild  N     ] dev-libs/aucascmid-1.0  USE="cascade"',
+        "[ebuild  N     ] dev-libs/aucasclate-1.0 ",
+        "[ebuild  N     ] dev-libs/aucasctop-1.0 ",
+    ]
+
+    # --json (default) carries the same change, without aucascleaf
     j = _run([str(emerge_binary)], base + ["--json"], fixture_env)
     payload = json.loads(j.stdout)
     assert payload["autounmask_use_changes"] == [
@@ -2592,7 +2628,6 @@ def test_autounmask_backward_cascade_re_resolves_an_already_resolved_slot(
         "aucasctop",
         "aucasclate",
         "aucascmid",
-        "aucascleaf",
     }
 
     # --autounmask-use=n: no flip, aucascmid[cascade] is unresolvable
@@ -2614,27 +2649,51 @@ def test_autounmask_breakage_abandons_autounmask_when_a_flag_is_wanted_both_ways
 ):
     """dev-libs/aubreaktop pulls dev-libs/aubreaksub plain, then
     dev-libs/aubreakwant (needs aubreaksub[brk]) and dev-libs/aubreakunwant
-    (needs aubreaksub[-brk]). Autounmask folds brk on for aubreakwant; the
-    next pass's aubreakunwant[-brk] asks for it back off -- the same flag
-    wanted both ways. Real _autounmask_breakage (depgraph.py:12262) drops
-    every autounmask change and re-resolves one final pass with suggestion
-    off. So there is NO 'USE changes are necessary' block, aubreaksub keeps
-    its default USE="-brk", and aubreakwant's now-unsatisfiable [brk] shows
-    up as the ordinary non-fatal dependency warning -- exactly what
-    --autounmask-use=n would have produced. Rust==Python byte-identical."""
+    (needs aubreaksub[-brk]) -- the same flag wanted both ways.
+
+    Default (real --autounmask-backtrack off): the loop is not re-driven,
+    so the contradiction is never noticed -- brk is collected for
+    aubreakwant, aubreaksub's USE line re-renders to "brk", and the block
+    reports `>=aubreaksub-1.0 brk` (aubreakunwant's opposite need is left
+    silently unmet, a pre-existing already-resolved-slot limitation).
+
+    --autounmask-backtrack=y: the loop re-drives, spots brk wanted both
+    ways, and real _autounmask_breakage (depgraph.py:12262) drops every
+    autounmask change and re-resolves once with suggestion off -- NO 'USE
+    changes are necessary' block, aubreaksub at its default USE="-brk",
+    aubreakwant's [brk] as the ordinary non-fatal dependency warning.
+    Rust==Python byte-identical both ways."""
     args = ["--pretend", "dev-libs/aubreaktop"]
     rust = _run([str(emerge_binary)], args, fixture_env)
     py = _run(emerge_pretend_python, args, fixture_env)
     assert rust.returncode == 0 and py.returncode == 0
     assert rust.stdout == py.stdout and rust.stderr == py.stderr
     assert rust.stdout.splitlines() == [
+        '[ebuild  N     ] dev-libs/aubreaksub-1.0  USE="brk"',
+        "[ebuild  N     ] dev-libs/aubreakwant-1.0 ",
+        "[ebuild  N     ] dev-libs/aubreakunwant-1.0 ",
+        "[ebuild  N     ] dev-libs/aubreaktop-1.0 ",
+    ]
+    assert rust.stderr == (
+        "\nThe following USE changes are necessary to proceed:\n"
+        ' (see "package.use" in the portage(5) man page for more details)\n'
+        "# required by dev-libs/aubreakwant-1.0::testrepo\n"
+        ">=dev-libs/aubreaksub-1.0 brk\n"
+    )
+
+    # --autounmask-backtrack=y: the contradiction is detected, autounmask abandoned
+    ab = ["--pretend", "--autounmask-backtrack=y", "dev-libs/aubreaktop"]
+    rust_ab = _run([str(emerge_binary)], ab, fixture_env)
+    py_ab = _run(emerge_pretend_python, ab, fixture_env)
+    assert rust_ab.stdout == py_ab.stdout and rust_ab.stderr == py_ab.stderr
+    assert rust_ab.stdout.splitlines() == [
         '[ebuild  N     ] dev-libs/aubreaksub-1.0  USE="-brk"',
         "[ebuild  N     ] dev-libs/aubreakwant-1.0 ",
         "[ebuild  N     ] dev-libs/aubreakunwant-1.0 ",
         "[ebuild  N     ] dev-libs/aubreaktop-1.0 ",
     ]
-    assert "USE changes are necessary" not in rust.stderr
-    assert rust.stderr == (
+    assert "USE changes are necessary" not in rust_ab.stderr
+    assert rust_ab.stderr == (
         '!!! no visible ebuild for dependency "dev-libs/aubreaksub"\n'
     )
 
@@ -3055,19 +3114,21 @@ def test_autounmask_suggests_a_keyword_once_explicitly_enabled(emerge_binary, fi
     )
 
 
-def test_autounmask_continue_and_backtrack_are_inert_under_pretend(
+def test_autounmask_continue_and_backtrack_are_inert_without_autounmask_changes(
     emerge_binary, emerge_pretend_python, fixture_env
 ):
-    """--autounmask-continue (real true_y_or_n) and --autounmask-backtrack
-    (real y|n) are both inert in this --pretend-only portuale: real portage
-    gates write-and-continue on `"--pretend" not in myopts`
-    (depgraph.py:5796), and portuale has no backtracking resolver. The
-    one real observable is the actions.py:3772 warning when
-    --autounmask-continue meets --autounmask=n."""
+    """--autounmask-continue's write-and-continue half is gated on
+    `"--pretend" not in myopts` (depgraph.py:5796), so under --pretend its
+    only observable is the actions.py:3772 --autounmask=n warning. Its
+    OTHER half -- implying --autounmask-backtrack=y -- and
+    --autounmask-backtrack itself only matter once a resolution actually
+    produces autounmask changes (see the aucasctop / pfgraphparent /
+    aubreaktop tests); dev-libs/newpkg has none, so all three flags are
+    no-ops here."""
     plain = ["--pretend", "dev-libs/newpkg"]
     base = _run([str(emerge_binary)], plain, fixture_env)
 
-    # --autounmask-continue alone / --autounmask-backtrack: no output change.
+    # No autounmask changes for newpkg -> these flags change nothing.
     for extra in (
         ["--autounmask-continue"],
         ["--autounmask-backtrack", "y"],
@@ -3493,15 +3554,19 @@ def test_autounmask_use_parent_flip_resolves_when_the_child_flag_is_masked(
 def test_autounmask_use_parent_flip_re_resolves_the_whole_graph(
     emerge_binary, emerge_pretend_python, fixture_env
 ):
-    """Slice 4: real portage folds a parent-USE flip into
-    _needed_use_config_changes and re-drives the WHOLE graph
-    (_backtrack_depgraph), not just the freed dependency. dev-libs/
-    pfgraphparent (IUSE +pf) RDEPENDs pfgraphchild[pf=] AND
+    """dev-libs/pfgraphparent (IUSE +pf) RDEPENDs pfgraphchild[pf=] AND
     `pf? ( dev-libs/pfgraphextra )`; pfgraphchild's `pf` is use.mask'd, so
-    the parent's own `pf` is flipped off. The whole-graph re-resolve then
-    re-evaluates `pf? ( pfgraphextra )` with pf OFF, so pfgraphextra is
-    NOT merged -- the pre-Slice-4 single-dep re-resolve left it wrongly in
-    the list. Rust==Python byte-identical."""
+    the parent's own `pf` is flipped off.
+
+    Default (real --autounmask-backtrack off): the flip is applied to the
+    freed child and the parent's USE line, but the graph is NOT re-driven
+    -- `pf? ( pfgraphextra )` was walked with pf on, so pfgraphextra stays
+    in the list (matching real).
+
+    --autounmask-backtrack=y (Slice 4): the flip is fed back into
+    _needed_use_config_changes and the WHOLE graph re-resolves, so
+    `pf? ( pfgraphextra )` re-evaluates with pf OFF and pfgraphextra is
+    dropped. Rust==Python byte-identical."""
     args = ["--pretend", "dev-libs/pfgraphparent"]
     rust = _run([str(emerge_binary)], args, fixture_env)
     py = _run(emerge_pretend_python, args, fixture_env)
@@ -3509,9 +3574,9 @@ def test_autounmask_use_parent_flip_re_resolves_the_whole_graph(
     assert rust.stdout == py.stdout and rust.stderr == py.stderr
     assert rust.stdout.splitlines() == [
         '[ebuild  N     ] dev-libs/pfgraphchild-1.0  USE="(-pf)"',
+        "[ebuild  N     ] dev-libs/pfgraphextra-1.0 ",
         '[ebuild  N     ] dev-libs/pfgraphparent-1.0  USE="-pf"',
     ]
-    assert "pfgraphextra" not in rust.stdout
     assert rust.stderr == (
         "\nThe following USE changes are necessary to proceed:\n"
         ' (see "package.use" in the portage(5) man page for more details)\n'
@@ -3519,6 +3584,17 @@ def test_autounmask_use_parent_flip_re_resolves_the_whole_graph(
         "# required by dev-libs/pfgraphparent (argument)\n"
         ">=dev-libs/pfgraphparent-1.0 -pf\n"
     )
+
+    # --autounmask-backtrack=y: the whole graph re-resolves, pfgraphextra drops
+    ab = ["--pretend", "--autounmask-backtrack=y", "dev-libs/pfgraphparent"]
+    rust_ab = _run([str(emerge_binary)], ab, fixture_env)
+    py_ab = _run(emerge_pretend_python, ab, fixture_env)
+    assert rust_ab.stdout == py_ab.stdout and rust_ab.stderr == py_ab.stderr
+    assert rust_ab.stdout.splitlines() == [
+        '[ebuild  N     ] dev-libs/pfgraphchild-1.0  USE="(-pf)"',
+        '[ebuild  N     ] dev-libs/pfgraphparent-1.0  USE="-pf"',
+    ]
+    assert "pfgraphextra" not in rust_ab.stdout
 
     # --autounmask-use=n: the shared gate is off -> pf stays on,
     # pfgraphchild[pf] is unresolvable, and pf? ( pfgraphextra ) still fires.
@@ -7153,7 +7229,8 @@ Autounmask (read-only: prints the required changes and stops -- never writes con
       --autounmask[=y|n], --autounmask-use[=y|n], --autounmask-keep-keywords[=y|n]
       --autounmask-license[=y|n], --autounmask-keep-masks[=y|n]
       --autounmask-only[=y|n]  resolve, print only the change block, and exit 0
-      --autounmask-continue[=y|n], --autounmask-backtrack[=y|n]  recognized, but inert under --pretend
+      --autounmask-backtrack<y|n>  keep re-resolving after autounmask changes (off by default)
+      --autounmask-continue[=y|n]  recognized; implies --autounmask-backtrack=y
 
 Binary packages:
   -b, --buildpkg[=y|n]       also build a binary package for each merged package

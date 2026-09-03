@@ -1913,7 +1913,8 @@ Autounmask (read-only: prints the required changes and stops -- never writes con
       --autounmask[=y|n], --autounmask-use[=y|n], --autounmask-keep-keywords[=y|n]
       --autounmask-license[=y|n], --autounmask-keep-masks[=y|n]
       --autounmask-only[=y|n]  resolve, print only the change block, and exit 0
-      --autounmask-continue[=y|n], --autounmask-backtrack[=y|n]  recognized, but inert under --pretend
+      --autounmask-backtrack<y|n>  keep re-resolving after autounmask changes (off by default)
+      --autounmask-continue[=y|n]  recognized; implies --autounmask-backtrack=y
 
 Binary packages:
   -b, --buildpkg[=y|n]       also build a binary package for each merged package
@@ -6140,18 +6141,16 @@ pub fn run(args: &[String]) -> ExitCode {
     let mut autounmask_only = false;
     // --autounmask-continue (real `true_y_or_n`, `main.py:345`/`810`) and
     // --autounmask-backtrack (real `choices: ("y", "n")`, a REQUIRED
-    // value, `main.py:338`). Both are effectively inert in this
-    // `--pretend`-only portuale: real portage's "write the changes and
-    // continue merging" path is explicitly gated on `"--pretend" not in
-    // myopts` (`depgraph.py:5796`), and `--autounmask-backtrack` only
-    // ever toggles the `_autounmask_backtrack_disabled` "backtracking has
-    // terminated early" notice, which needs a backtracking resolver this
-    // portuale's narrow autounmask v1 doesn't have. The one real observable
-    // is the `actions.py:3772` warning when `--autounmask-continue` meets
-    // `--autounmask=n`. `None` = flag not given. `--autounmask-backtrack`
-    // carries no state at all here -- its value is validated (`y`/`n`)
-    // and then discarded.
+    // value, `main.py:338`, **disabled by default** -- `man emerge`).
+    // `--autounmask-continue`'s "write the changes and keep merging" path
+    // is gated on `"--pretend" not in myopts` (`depgraph.py:5796`), so
+    // under `--pretend` its only observable is the `actions.py:3772`
+    // warning against `--autounmask=n` -- but it also *implies*
+    // `--autounmask-backtrack=y` (`man emerge`), and that half IS
+    // observable here: it gates the `'backtrack` loop's autounmask
+    // re-drive (`Config::autounmask_backtrack`). `None` = flag not given.
     let mut autounmask_continue: Option<bool> = None;
+    let mut autounmask_backtrack: Option<bool> = None;
     // --usepkg/-k, --usepkgonly/-K, --binpkg-respect-use: all three real
     // "true_y_or_n" (bare flag, "=y", or "=n"), same shape --autounmask
     // already has. --binpkg-respect-use's own real default ("auto",
@@ -7358,9 +7357,9 @@ pub fn run(args: &[String]) -> ExitCode {
             autounmask_continue = Some(matches!(val.as_str(), "y" | "True"));
         } else if arg == "--autounmask-backtrack" {
             // Real `choices: ("y", "n")` (`main.py:338`) -- a REQUIRED
-            // value, the same shape `--autounmask-keep-keywords` has. No
-            // effect in portuale (see the flag's own comment above) --
-            // the value is validated and discarded.
+            // value, the same shape `--autounmask-keep-keywords` has.
+            // Gates the `'backtrack` loop's autounmask re-drive (see
+            // `Config::autounmask_backtrack`); disabled by default.
             let Some(value) = args.get(i + 1) else {
                 eprintln!("emerge: option \"--autounmask-backtrack\" requires an argument");
                 return ExitCode::from(2);
@@ -7369,12 +7368,14 @@ pub fn run(args: &[String]) -> ExitCode {
                 eprintln!("emerge: option \"--autounmask-backtrack\": invalid choice: {value:?} (choose from \"y\", \"n\")");
                 return ExitCode::from(2);
             }
+            autounmask_backtrack = Some(value == "y");
             i += 2;
         } else if let Some(value) = arg.strip_prefix("--autounmask-backtrack=") {
             if !matches!(value, "y" | "n") {
                 eprintln!("emerge: option \"--autounmask-backtrack\": invalid choice: {value:?} (choose from \"y\", \"n\")");
                 return ExitCode::from(2);
             }
+            autounmask_backtrack = Some(value == "y");
             i += 1;
         } else if arg == "--autounmask-keep-keywords" {
             // Real "--autounmask-keep-keywords": plain y_or_n, a
@@ -8356,6 +8357,16 @@ pub fn run(args: &[String]) -> ExitCode {
     // = autounmask_keep_masks not in (None, "n")` -- masks stay masked
     // unless `--autounmask-keep-masks=n` is given explicitly.
     let autounmask_suggest_masks = autounmask_enabled && autounmask_keep_masks == Some(false);
+    // Real `_backtrack_depgraph` (`depgraph.py:11736`): backtracking keeps
+    // going after autounmask changes only with `--autounmask-backtrack=y`
+    // -- or `--autounmask-continue` (which implies it), unless
+    // `--autounmask-backtrack=n` is explicit. Off by default. Carried into
+    // the resolver on `Config` (see `Config::autounmask_backtrack`).
+    config.autounmask_backtrack = autounmask_enabled
+        && match autounmask_backtrack {
+            Some(v) => v,
+            None => autounmask_continue == Some(true),
+        };
 
     // Fold the --getbinpkg family into the --usepkg family (see their
     // parsing above): `--getbinpkgonly` implies binary-only; either

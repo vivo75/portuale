@@ -47,8 +47,25 @@ What a single pass **cannot** do, and real `_backtrack_depgraph` +
    `pf? ( pfgraphextra )` correctly drops once `pf` is flipped off — the
    old single-dep re-resolve left `pfgraphextra` in the list. Rust==Python
    byte-identical.
-5. **`get_best_run`.** After backtracking, real returns the run with the
-   most config changes and *no* masks.
+5. **`--autounmask-backtrack` gate.** ✅ **Shipped 2026-09-03.** Turned out
+   to be a *correction*: real `--autounmask-backtrack` is **off by
+   default** (`man emerge`, `depgraph.py:11736` — `need_config_change` ->
+   break in `_backtrack_depgraph` once autounmask changes exist), so
+   Slices 1 & 4 were shipping the `=y` behaviour unconditionally. Now
+   `Config::autounmask_backtrack` (set from `--autounmask-backtrack` /
+   implied by `--autounmask-continue`) gates the `autounmask_grew`
+   re-drive. **Off (default):** the change is collected + shown; the
+   flipped package's own USE line is re-rendered (`refresh_entry_use_
+   display`, mirroring real `_pkg_use_enabled` consulting
+   `_needed_use_config_changes`) but its `flag?`-gated deps do NOT appear,
+   and the parent-flip path falls back to the single-dep local
+   re-resolve. **On:** Slices 1/4's full cascade. `get_best_run`'s
+   "maskless run" preference is moot for portuale's single-accumulator +
+   `MaskPhase` revert model (it already prefers the maskless settled
+   state) — not separately implemented.
+6. **Keyword / mask accumulators in the loop** — the keyword / unmask
+   analogues of Slice 1's USE accumulator, with the level ordering from
+   Slice 2. *(Still open.)*
 
 ## Approach
 
@@ -138,12 +155,20 @@ autounmask_use_config: HashMap<(String, String), HashMap<String, bool>>
    fixture `dev-libs/pfgraphparent` (`pf? ( pfgraphextra )` must drop when
    `pf` flips off) + the existing `parentflipeqpkg` cases, all
    Rust==Python byte-identical.
-5. **`get_best_run` (maskless preference)** + wire `--autounmask-backtrack
-   [=y|n]` (currently inert under `--pretend`) to actually gate the
-   re-resolve.
+5. **`--autounmask-backtrack` gate.** ✅ **Shipped 2026-09-03.**
+   `Config::autounmask_backtrack` (from `--autounmask-backtrack`, implied
+   by `--autounmask-continue`) gates the `autounmask_grew` re-drive --
+   **off by default** to match real (`man emerge` /
+   `depgraph.py:11736`). Off: collect + display the change, re-render just
+   the flipped package's USE line (`refresh_entry_use_display`), no
+   graph re-walk; parent-flip falls back to the single-dep local
+   re-resolve. On: Slices 1/4's full cascade. The Slice 1/4/3 contract
+   fixtures grew a `--autounmask-backtrack=y` variant each.
+   `get_best_run`'s maskless-run preference is subsumed by portuale's
+   single-accumulator + `MaskPhase` revert model.
 6. **`--autounmask-keep-keywords` / keyword+mask accumulators in the loop**
    — the keyword / unmask analogues of slice 1, with level ordering from
-   slice 2.
+   slice 2. *(Still open.)*
 
 Slices 1 + 4 deliver the two items named in `scope-backlog.md` Part 2.A
 ("USE/keyword levels tried in sequence inside the loop", "autounmask
