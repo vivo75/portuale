@@ -643,7 +643,7 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/newpkg:0
 # reported rejection instead of the pre-existing silent no-op (accepted
 # by the CLI, then dropped by resolve_pretend_graph's own blocker skip)
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend '!!dev-libs/newpkg'
-# emerge (pilot v1): "!!dev-libs/newpkg" is a blocker, not a valid emerge target  (exit 2)
+# emerge: "!!dev-libs/newpkg" is a blocker, not a valid emerge target  (exit 2)
 
 # @world expands in place to the union of the fixture world file's own
 # atoms (newpkg directly, withdeps -- which recurses into newpkg again,
@@ -685,7 +685,7 @@ PORTAGE_CONFIGROOT="$FX" ROOT="/tmp/badset-root" /tmp/emerge --pretend @world
 # "nothing to resolve" error any other empty target list would
 mkdir -p /tmp/empty-world-root
 PORTAGE_CONFIGROOT="$FX" ROOT="/tmp/empty-world-root" /tmp/emerge --pretend @world
-# emerge (pilot v1): no package atoms to resolve (the target list, after
+# emerge: no package atoms to resolve (the target list, after
 # expanding any @world/@system, is empty)  (exit 2)
 
 # @system is real and implemented too: base/packages contributes newpkg,
@@ -862,7 +862,7 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --exclude dev-libs/new
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --update --exclude "dev-libs/does-not-exist dev-libs/upgradepkg" dev-libs/upgradepkg
 # dev-libs/upgradepkg-1.0 is already installed; nothing to do
 
-# --json is pilot-specific (NOT a real emerge option): the whole
+# --json is a portuale extension (NOT a real emerge option): the whole
 # resolved graph as one line of JSON instead of the plain-text lines
 # above, including "requested" and "required_by" -- two fields no
 # plain-text line has ever carried
@@ -982,32 +982,27 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge -pv dev-libs/useflagpkg
 # a bundled flag reports on the first out-of-scope character, left to
 # right, exactly like a standalone occurrence of it would
 /tmp/emerge -pd dev-libs/newpkg
-# emerge (pilot v1): option "--debug" is a real emerge option, but is not
-# implemented in this pilot (only --pretend/-p, --verbose/-v, --newuse/-N,
-# --changed-use/-U, --nodeps/-O, --onlydeps/-o, --update/-u, --deep/-D,
-# --exclude/-X, --deselect/-W, --with-bdeps, --changed-deps,
-# --changed-slot, and --help/-h are implemented so far; see README.md)
-# (exit 2)
+# emerge: option "--debug" is a real emerge option, but is not yet
+# implemented in portuale -- run "emerge --help" for the options and
+# actions that are.  (exit 2)
 
-# --help/-h is real and implemented: a short, honest, pilot-specific
-# summary, not a port of real emerge's own (157-line, colorized,
-# ~130-flag) help text -- wins unconditionally, regardless of position
-# or what else accompanies it
+# --help/-h is real and implemented: a grouped tour of what portuale
+# does, not a port of real emerge's own (157-line, colorized, ~130-flag)
+# help text -- wins unconditionally, regardless of position or what else
+# accompanies it
 /tmp/emerge --help
-# emerge (pilot v1): command-line interface to the Rust porting pilot
+# emerge: command-line interface to the Portuale package manager
 # ...
-# See README.md for this pilot's current scope.
-/tmp/emerge --jobs --help          # --help wins even combined with other flags
-/tmp/emerge -ph                    # ...and even bundled with other short flags
+# See README.md and emerge(1) for the full picture.
+/tmp/emerge --accept-properties --help   # --help wins even combined with other flags
+/tmp/emerge -ph                          # ...and even bundled with other short flags
 
-# CLI surface recognition: a real emerge option this pilot doesn't
-# implement is named specifically, not lumped in with a typo
-/tmp/emerge --jobs dev-libs/newpkg
-# emerge (pilot v1): option "--jobs" is a real emerge option, but is not
-# implemented in this pilot (only --pretend/-p, --verbose/-v, --newuse/-N,
-# --changed-use/-U, --nodeps/-O, --onlydeps/-o, --update/-u, --deep/-D,
-# --exclude/-X, --deselect/-W, --with-bdeps, --changed-deps,
-# --changed-slot, and --help/-h are implemented so far; see README.md)
+# CLI surface recognition: a real emerge option portuale doesn't
+# implement yet is named specifically, not lumped in with a typo
+/tmp/emerge --accept-properties '*' dev-libs/newpkg
+# emerge: option "--accept-properties" is a real emerge option, but is
+# not yet implemented in portuale -- run "emerge --help" for the options
+# and actions that are.
 # (exit 2)
 
 # a token that isn't a real emerge option/action at all gets a
@@ -1336,12 +1331,12 @@ ebuild.rs/ebuild_options.rs):
 ```sh
 ln -sf "$(realpath rust/target/release/portuale)" /tmp/ebuild
 
-# a real, valid ebuild command -- still just a no-op stub
-/tmp/ebuild foo-1.0.ebuild merge
-# ebuild (pilot stub): dry-run only, no phase execution yet (see
-# README.md)
+# a recognized-but-not-yet-implemented command -- a no-op dry run
+/tmp/ebuild foo-1.0.ebuild clean
+# ebuild: dry run -- one or more of these commands is recognized but not
+# yet implemented in portuale
 # ebuild file: "foo-1.0.ebuild"
-# commands: ["merge"]
+# commands: ["clean"]
 
 # real invocations often chain several phases in one call
 /tmp/ebuild foo-1.0.ebuild clean compile install
@@ -1358,7 +1353,7 @@ ln -sf "$(realpath rust/target/release/portuale)" /tmp/ebuild
 # --help/-h are real and implemented too, winning unconditionally
 # regardless of position or what else accompanies them
 /tmp/ebuild --help
-# ebuild (pilot stub): command-line interface to the Rust porting pilot
+# ebuild: command-line interface to the Portuale package manager
 # ...
 /tmp/ebuild --not-a-real-option -h
 # (same help text -- wins even alongside an otherwise-invalid option)
@@ -1369,8 +1364,8 @@ ln -sf "$(realpath rust/target/release/portuale)" /tmp/ebuild
 # string) -- it's still a real, recognized option though, just a no-op
 # like the other five, unlike emerge's own CLI philosophy of rejecting
 # every merely-recognized-but-unimplemented flag by name
-/tmp/ebuild --version foo-1.0.ebuild merge
-# ebuild (pilot stub): dry-run only, no phase execution yet ...
+/tmp/ebuild --version foo-1.0.ebuild clean
+# ebuild: dry run -- one or more of these commands is recognized ...
 ```
 
 Run the contract suite (builds the Rust binaries itself; requires `cargo`
@@ -1807,7 +1802,7 @@ ln -sf "$(realpath rust/target/release/portuale)" rust/target/release/emerge
 rust/target/release/emerge --help   # grouped tour: Actions / Dependency
                                     # and target selection / Autounmask /
                                     # Binary packages / Build scheduling /
-                                    # Output / Pilot-only
+                                    # Output / Portuale extensions
 ```
 
 `env.d` USE tier (`/etc/profile.env`, the lowest `USE_ORDER` layer):

@@ -8,8 +8,8 @@ the operating rhythm and the rules.
 
 ## The "next slice" workflow
 
-The user drives this pilot by saying **"next slice"** (or "scope the next
-slice") and expects the same rhythm every time:
+The user drives portuale forward by saying **"next slice"** (or "scope
+the next slice") and expects the same rhythm every time:
 
 1. **Ground candidates in real code, not guesses.** Grep for the actual
    scope-cut / TODO / "deferred" doc comment, or read the corresponding

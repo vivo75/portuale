@@ -121,7 +121,7 @@ architectural — a single-pass BFS can't grow into these incrementally:
 - **`--root-deps` / multi-root, remaining edges.** *Mostly a non-gap for
   this fork* — the ebuilds are all EAPI 7+, where `--root-deps=rdeps` is
   a complete no-op and `BDEPEND`/`IDEPEND` always resolve against the
-  running root (which the pilot does, `--root-deps` or not). The full
+  running root (which portuale does, `--root-deps` or not). The full
   multi-root graph (a `root` per dependency edge) stays a deliberate
   edge-by-edge approximation; a running-root entry's `PDEPEND` stays a
   target-`ROOT` concern (a permanent non-gap).
@@ -139,7 +139,7 @@ architectural — a single-pass BFS can't grow into these incrementally:
   bare name (`emerge eix-1.2`, `emerge eix:0`) is not category-qualified
   (real `dep_expand`'s `null/`-insertion path handles those); real's
   non-`--quiet` `ambiguous_package_name` runs a full `search` before the
-  `!!!` lines (the pilot emits only the deterministic list).
+  `!!!` lines (portuale emits only the deterministic list).
 
 ### B. Scheduler / build orchestration
 
@@ -168,7 +168,7 @@ Remaining are documented simplifications only, none observed to matter:
 env-layer `USE_EXPAND` values are last-wins into `scalars`, not
 genuinely incremental; no per-file `${VAR}` expand map for
 `package.env` / `env.d` (real portage seeds one from the global config);
-the pilot's `FEATURES` is a last-wins scalar (modelled via
+portuale's `FEATURES` is a last-wins scalar (modelled via
 `feature_enabled`), not real incremental stacking; `env.d` is read
 relative to `config_root`, not a distinct `eroot` (they coincide in
 every tested and typical configuration).
@@ -199,7 +199,7 @@ The whole `FEATURES` isolation set wraps the six real `src_*` phases
   `RESTRICT=primaryuri` interleave, `Packages.bz2` / `.lz4`, binpkg
   `SHA1` (no sha1 crate).
 - **gpkg** — `.sig` verification + signing (`FEATURES=binpkg-signing` —
-  cut, the pilot has no crypto), bare `.xpak` multi-instance,
+  cut, portuale has no crypto), bare `.xpak` multi-instance,
   `binpkg-multi-instance`, mtime-staleness index revalidation, `BUILD_ID`
   in the basename.
 - **`BUILD_ID` / `splitdebug` / `packdebug` / RPM**, PKGDIR-index
@@ -221,7 +221,7 @@ The action and modifier-flag surface is broadly complete. Remaining:
   `_eclasses_` from this repo only (no masters chain);
 - `--check-news`: no `.unread` / `.skip` *write-back*,
   `Display-If-Installed` only;
-- `--metadata` is an architectural no-op (this pilot reads
+- `--metadata` is an architectural no-op (portuale reads
   `metadata/md5-cache` directly, models no `depcachedir`);
 - `--sync` is a permanent non-goal (points at `emaint sync`); GLSA /
   `@security` is not in scope.
@@ -237,7 +237,7 @@ The action and modifier-flag surface is broadly complete. Remaining:
 ### H. Misc / cosmetic
 
 - `os.lchown` / privilege-preserving ownership is not reproduced (needs
-  root, which the pilot's single-user context never has — it would only
+  root, which portuale's single-user context never has — it would only
   no-op); directory merge traversal is sorted for test determinism, not
   real `os.listdir()` order (`CONTENTS` line order carries no semantics
   portage relies on). Both are deliberate — see `ebuild_merge.rs`'s
@@ -260,7 +260,7 @@ Standing decisions, not oversights.
   two-sibling-implementations end state.
 - **EAPI 0/1/2/3/4/6** — dead in this repo; the `portage-*` crates have no
   EAPI parametrization at all within the 5+ floor.
-- **`bsd_chflags`** — `None` on non-BSD; the pilot is Linux-only/musl-static.
+- **`bsd_chflags`** — `None` on non-BSD; portuale is Linux-only/musl-static.
 - **RPM binary packages, repo syncing (`emerge --sync`), news items,
   GLSA/`@security`, GPG signing/verification, Prefix/cross-`ROOT` beyond
   the `ESYSROOT` distinction** — not in scope.
@@ -276,7 +276,7 @@ Standing decisions, not oversights.
   space-split, `-pX requires an argument and can't be bundled`, and the
   exact real error strings. It also carries the
   recognized-but-unimplemented machinery (a real emerge option reports
-  "not implemented in this pilot", not "unknown") and is kept
+  "not yet implemented in portuale", not "unknown") and is kept
   structurally parallel to the Python reference so the two parsers can't
   drift. `clap` would fight every one of these; ~1500 lines across two
   languages under ~1100 contract tests, near-zero payoff.
@@ -285,7 +285,7 @@ Standing decisions, not oversights.
 
 ## Part 4 — how far is this from a "perfect clone that installs and uninstalls"?
 
-**Short answer: the pilot already installs and uninstalls packages for
+**Short answer: portuale already installs and uninstalls packages for
 real** — `emerge <atom>` (source and binary), `emerge -C`, `--depclean`,
 `--prune`, `--config`, `--deselect` all perform real filesystem mutation,
 with real ebuild-phase execution, real vdb bookkeeping, real
@@ -302,7 +302,7 @@ item, with a short incremental tail:
    renders the real notices — but it does **not** try USE/keyword
    autounmask levels *inside* the loop, or let `||`-preference /
    slot-operator-rebuild feedback drive a retry. An upgrade that needs
-   portage to juggle all of those together still exceeds the pilot. This
+   portage to juggle all of those together still exceeds portuale. This
    is the one piece of architectural work left between "installs and
    uninstalls packages" and "is portage".
 
@@ -310,7 +310,7 @@ item, with a short incremental tail:
    sandbox and `FEATURES` cuts (2.D), the remote-binhost / gpkg-signing
    gaps (2.E), the `--info` host-state half and `--regen` threading
    (2.F), the brush `declare -f` upstream fix (2.G). Each is one focused
-   slice, the rhythm this pilot already runs at.
+   slice, the rhythm portuale already runs at.
 
 Config-resolution depth (2.C) is complete; the action/flag surface (2.F)
 and sandbox isolation (2.D) are substantially complete.

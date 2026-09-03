@@ -1817,8 +1817,8 @@ fn report_option(token: &str) -> ExitCode {
             "option"
         };
         eprintln!(
-            "emerge (pilot v1): {kind} {:?} is a real emerge {kind}, but is not \
-             implemented in this pilot -- run \"emerge --help\" for the options \
+            "emerge: {kind} {:?} is a real emerge {kind}, but is not yet \
+             implemented in portuale -- run \"emerge --help\" for the options \
              and actions that are.",
             found.canonical
         );
@@ -1849,12 +1849,13 @@ fn print_help() {
     print!("{HELP_TEXT}");
 }
 
-const HELP_TEXT: &str = r#"emerge (pilot v1): command-line interface to the Rust porting pilot
+const HELP_TEXT: &str = r#"emerge: command-line interface to the Portuale package manager
 
-This pilot does real dependency resolution, real ebuild phase execution,
-and real filesystem merge / unmerge. Any real emerge option or action not
-listed below is still recognized by name (lib/_emerge/main.py) -- using
-one reports which option it is, instead of a generic error.
+Portuale is a drop-in Rust reimplementation of Portage: same behaviour,
+verified against the Python original by a shared test suite. Any real
+emerge option or action not listed below is recognized by name
+(lib/_emerge/main.py) -- using one reports that it is not yet implemented
+in portuale, rather than a generic error.
 
 Usage:
   emerge [options] <target> ...            build and merge the targets, resolving dependencies
@@ -1945,7 +1946,7 @@ Output:
       --ignore-built-slot-operator-deps[=y|n]  ignore recorded := slot-operator dependencies
       --depclean-lib-check[=y|n]  with --depclean/--prune: scan for soname breakage (default y)
 
-Pilot-only (not real emerge options):
+Portuale extensions (not real emerge options):
       --json                dump the resolved graph as one JSON line instead of the display
       --shell <bash|brush>  which real shell runs a merge / unmerge / --config phase chain (default bash)
 
@@ -7571,7 +7572,10 @@ pub fn run(args: &[String]) -> ExitCode {
         && !rage_clean
         && !info_action
     {
-        eprintln!("emerge (pilot v1): expected a package atom, e.g. `emerge --pretend cat/pkg`");
+        eprintln!(
+            "emerge: no targets given (an atom, an @set, or an installed file / \
+             ebuild / tbz2 / gpkg; `emerge --help` for usage)"
+        );
         return ExitCode::from(2);
     }
 
@@ -7916,7 +7920,7 @@ pub fn run(args: &[String]) -> ExitCode {
 
     if expanded_atoms.is_empty() {
         eprintln!(
-            "emerge (pilot v1): no package atoms to resolve (the target list, after \
+            "emerge: no package atoms to resolve (the target list, after \
              expanding any @world/@selected/@system/@installed/@<set>, is empty)"
         );
         return ExitCode::from(2);
@@ -7928,7 +7932,7 @@ pub fn run(args: &[String]) -> ExitCode {
             return ExitCode::from(1);
         };
         if atom.blocker != Blocker::None {
-            eprintln!("emerge (pilot v1): {atom_str:?} is a blocker, not a valid emerge target");
+            eprintln!("emerge: {atom_str:?} is a blocker, not a valid emerge target");
             return ExitCode::from(2);
         }
     }

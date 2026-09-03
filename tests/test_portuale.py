@@ -59,7 +59,7 @@ def test_dispatch_via_symlink_ebuild(portuale_binary, tmp_path):
         text=True,
         check=True,
     )
-    assert "ebuild (pilot stub)" in result.stdout
+    assert "ebuild: dry run" in result.stdout
 
 
 def test_dispatch_via_path_lookup_by_bare_name(portuale_binary, tmp_path):
@@ -91,7 +91,7 @@ def test_explicit_arg_fallback_dispatch(portuale_binary):
         text=True,
         check=True,
     )
-    assert "ebuild (pilot stub)" in result.stdout
+    assert "ebuild: dry run" in result.stdout
 
 
 def test_no_applet_prints_the_applet_list(portuale_binary):
@@ -140,7 +140,7 @@ def test_ebuild_accepts_multiple_real_commands(ebuild_binary):
         text=True,
         check=True,
     )
-    assert "ebuild (pilot stub)" in result.stdout
+    assert "ebuild: dry run" in result.stdout
 
 
 def test_ebuild_accepts_a_real_value_option_without_misreading_its_value(ebuild_binary):
@@ -153,7 +153,7 @@ def test_ebuild_accepts_a_real_value_option_without_misreading_its_value(ebuild_
         text=True,
         check=True,
     )
-    assert "ebuild (pilot stub)" in result.stdout
+    assert "ebuild: dry run" in result.stdout
     assert 'ebuild file: "foo-1.0.ebuild"' in result.stdout
     assert 'commands: ["clean"]' in result.stdout
 
@@ -165,7 +165,7 @@ def test_ebuild_accepts_the_inline_equals_form_of_a_value_option(ebuild_binary):
         text=True,
         check=True,
     )
-    assert "ebuild (pilot stub)" in result.stdout
+    assert "ebuild: dry run" in result.stdout
 
 
 def test_ebuild_rejects_an_unrecognized_option(ebuild_binary):
@@ -243,7 +243,7 @@ def test_ebuild_help_is_implemented(ebuild_binary):
     assert result.returncode == 0
     assert result.stderr == ""
     assert result.stdout.startswith(
-        "ebuild (pilot stub): command-line interface to the Rust porting pilot"
+        "ebuild: command-line interface to the Portuale package manager"
     )
 
 
@@ -253,7 +253,7 @@ def test_ebuild_short_help_alias_is_implemented(ebuild_binary):
     )
     assert result.returncode == 0
     assert result.stdout.startswith(
-        "ebuild (pilot stub): command-line interface to the Rust porting pilot"
+        "ebuild: command-line interface to the Portuale package manager"
     )
 
 
@@ -274,7 +274,7 @@ def test_ebuild_help_wins_unconditionally_regardless_of_position_or_other_args(
         )
         assert result.returncode == 0, args
         assert result.stdout.startswith(
-            "ebuild (pilot stub): command-line interface to the Rust porting pilot"
+            "ebuild: command-line interface to the Portuale package manager"
         ), args
 
 
@@ -295,7 +295,7 @@ def test_ebuild_version_is_recognized_but_not_specially_implemented(ebuild_binar
         check=False,
     )
     assert result.returncode == 0
-    assert "ebuild (pilot stub)" in result.stdout
+    assert "ebuild: dry run" in result.stdout
 
 
 def test_ebuild_debug_flag_enables_real_set_x_tracing(ebuild_binary, tmp_path):

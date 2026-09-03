@@ -548,7 +548,7 @@ pub(crate) fn quickpkg_from_vdb(
     let vdb_ebuild = vdb_dir.join(format!("{pf}.ebuild"));
     if !vdb_ebuild.is_file() {
         return Err(format!(
-            "{}: no vdb ebuild to package from (installed before the pilot kept one?)",
+            "{}: no vdb ebuild to package from (installed before portuale kept one?)",
             vdb_dir.display()
         ));
     }

@@ -83,7 +83,7 @@ fn wants_help(args: &[String]) -> bool {
 /// bin/ebuild's own argparse-generated usage block (see the module doc
 /// comment for why).
 fn print_help() {
-    println!("ebuild (pilot stub): command-line interface to the Rust porting pilot");
+    println!("ebuild: command-line interface to the Portuale package manager");
     println!();
     println!("Usage:");
     println!("   ebuild <ebuild file> <command> [command ...]");
@@ -93,7 +93,7 @@ fn print_help() {
     println!("configure, compile, test, install), the standalone phases (pretend,");
     println!("setup, ...), and merge / qmerge / unmerge / package / config / info /");
     println!("prerm / postrm. Any other real command (clean, digest, manifest, ...)");
-    println!("is recognized and accepted but still a no-op dry run.");
+    println!("is recognized and accepted but not yet implemented -- a no-op dry run.");
     println!();
     println!("Options:");
     println!("   --force              regenerate digests (with the digest/manifest commands)");
@@ -102,17 +102,17 @@ fn print_help() {
     println!("   --ignore-default-opts  do not use the EBUILD_DEFAULT_OPTS environment variable");
     println!("   --skip-manifest      skip all manifest checks");
     println!(
-        "   --shell bash|brush   real shell backend for phase/hook execution (default: bash; pilot-only flag)"
+        "   --shell bash|brush   real shell backend for phase/hook execution (default: bash; portuale extension)"
     );
     println!("   -h, --help           show this message and exit");
     println!();
     println!(
         "Every other real ebuild option is recognized by name (see bin/ebuild) but \
-         not implemented -- using one reports which option it is, instead of a \
-         generic error. --shell is this pilot's own flag, not a real bin/ebuild \
-         option at all."
+         not yet implemented -- using one reports which option it is, instead of a \
+         generic error. --shell is a portuale extension, not a real bin/ebuild \
+         option."
     );
-    println!("See README.md for this pilot's current scope.");
+    println!("See README.md and ebuild(1) for the full picture.");
 }
 
 pub fn run(args: &[String]) -> ExitCode {
@@ -364,8 +364,8 @@ pub fn run(args: &[String]) -> ExitCode {
     }
 
     println!(
-        "ebuild (pilot stub): dry-run only, no phase execution yet \
-         (see README.md)"
+        "ebuild: dry run -- one or more of these commands is recognized but not \
+         yet implemented in portuale"
     );
     println!("ebuild file: {ebuild_file:?}");
     println!("commands: {commands:?}");

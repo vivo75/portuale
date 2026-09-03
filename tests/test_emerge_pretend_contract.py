@@ -6465,7 +6465,7 @@ def test_blocker_top_level_atom_is_rejected_not_silently_dropped(emerge_binary, 
     assert result.stdout == ""
     assert (
         result.stderr.strip()
-        == 'emerge (pilot v1): "!!dev-libs/newpkg" is a blocker, not a valid emerge target'
+        == 'emerge: "!!dev-libs/newpkg" is a blocker, not a valid emerge target'
     )
 
 
@@ -6763,8 +6763,8 @@ def test_short_flag_bundle_reports_the_first_out_of_scope_character(
     assert unimplemented.returncode == 2
     assert (
         unimplemented.stderr.strip()
-        == 'emerge (pilot v1): option "--debug" is a real emerge option, but is '
-        'not implemented in this pilot -- run "emerge --help" for the options '
+        == 'emerge: option "--debug" is a real emerge option, but is not yet '
+        'implemented in portuale -- run "emerge --help" for the options '
         "and actions that are."
     )
 
@@ -6794,19 +6794,20 @@ def test_help_prints_a_pilot_specific_summary_not_real_emerges_own(
     emerge_binary, fixture_env
 ):
     """--help/-h is real and implemented, but the text is a grouped tour
-    of what this pilot actually does -- not a port of real emerge's own
+    of what portuale actually does -- not a port of real emerge's own
     _emerge/help.py (157 lines of colorized usage syntax for its full
-    ~130-flag surface). Pinned in full since it's this pilot's own
+    ~130-flag surface). Pinned in full since it's portuale's own
     content, byte-identical to emerge_pretend_reference.py's _HELP_TEXT."""
     result = _run([str(emerge_binary)], ["--help"], fixture_env)
     assert result.returncode == 0
     assert result.stderr == ""
-    assert result.stdout == r"""emerge (pilot v1): command-line interface to the Rust porting pilot
+    assert result.stdout == r"""emerge: command-line interface to the Portuale package manager
 
-This pilot does real dependency resolution, real ebuild phase execution,
-and real filesystem merge / unmerge. Any real emerge option or action not
-listed below is still recognized by name (lib/_emerge/main.py) -- using
-one reports which option it is, instead of a generic error.
+Portuale is a drop-in Rust reimplementation of Portage: same behaviour,
+verified against the Python original by a shared test suite. Any real
+emerge option or action not listed below is recognized by name
+(lib/_emerge/main.py) -- using one reports that it is not yet implemented
+in portuale, rather than a generic error.
 
 Usage:
   emerge [options] <target> ...            build and merge the targets, resolving dependencies
@@ -6897,7 +6898,7 @@ Output:
       --ignore-built-slot-operator-deps[=y|n]  ignore recorded := slot-operator dependencies
       --depclean-lib-check[=y|n]  with --depclean/--prune: scan for soname breakage (default y)
 
-Pilot-only (not real emerge options):
+Portuale extensions (not real emerge options):
       --json                dump the resolved graph as one JSON line instead of the display
       --shell <bash|brush>  which real shell runs a merge / unmerge / --config phase chain (default bash)
 
@@ -6925,7 +6926,7 @@ def test_help_wins_unconditionally_regardless_of_other_flags_or_position(
         result = _run([str(emerge_binary)], args, fixture_env)
         assert result.returncode == 0, args
         assert result.stdout.startswith(
-            "emerge (pilot v1): command-line interface to the Rust porting pilot"
+            "emerge: command-line interface to the Portuale package manager"
         ), args
 
 
@@ -7073,7 +7074,7 @@ def test_world_missing_file_expands_to_nothing_not_an_error(
     assert result.stdout == ""
     assert (
         result.stderr.strip()
-        == "emerge (pilot v1): no package atoms to resolve (the target list, "
+        == "emerge: no package atoms to resolve (the target list, "
         "after expanding any @world/@selected/@system/@installed/@<set>, is empty)"
     )
 
@@ -10085,9 +10086,9 @@ def test_real_option_not_implemented_message_names_the_option(emerge_binary, fix
     assert result.stdout == ""
     assert (
         result.stderr.strip()
-        == 'emerge (pilot v1): option "--accept-properties" is a real emerge option, but is '
-        'not implemented in this pilot -- run "emerge --help" for the options '
-        "and actions that are."
+        == 'emerge: option "--accept-properties" is a real emerge option, but is '
+        'not yet implemented in portuale -- run "emerge --help" for the '
+        "options and actions that are."
     )
 
 
@@ -10101,9 +10102,9 @@ def test_real_option_inline_equals_form_is_still_recognized(emerge_binary, fixtu
     assert result.returncode == 2
     assert (
         result.stderr.strip()
-        == 'emerge (pilot v1): option "--accept-properties" is a real emerge option, but is '
-        'not implemented in this pilot -- run "emerge --help" for the options '
-        "and actions that are."
+        == 'emerge: option "--accept-properties" is a real emerge option, but is '
+        'not yet implemented in portuale -- run "emerge --help" for the '
+        "options and actions that are."
     )
 
 
@@ -10130,8 +10131,8 @@ def test_real_action_not_implemented_message_says_action_not_option(emerge_binar
     result = _run([str(emerge_binary)], ["--moo"], fixture_env)
     assert result.returncode == 2
     expected = (
-        'emerge (pilot v1): action "--moo" is a real emerge action, but is '
-        'not implemented in this pilot -- run "emerge --help" for the options '
+        'emerge: action "--moo" is a real emerge action, but is not yet '
+        'implemented in portuale -- run "emerge --help" for the options '
         "and actions that are."
     )
     assert result.stderr.strip() == expected

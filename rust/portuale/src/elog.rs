@@ -363,7 +363,7 @@ pub fn process_batch(
     let mail_any = module_enabled("mail") || module_enabled("mail_summary");
     if mail_any {
         eprintln!(
-            " {} elog `mail`/`mail_summary` is not supported in this pilot \
+            " {} elog `mail`/`mail_summary` is not supported by portuale \
              (SMTP delivery is out of scope) -- messages still go to \
              `echo`/`save`/`save_summary`",
             color.c("WARN", "*")

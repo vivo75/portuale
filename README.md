@@ -1,12 +1,13 @@
-# portuale — a Python-to-Rust friendly fork of Portage
+# portuale — a Rust reimplementation of Portage
 
-`portuale` is a Rust implementation of Gentoo's package manager, developed
-as a **friendly fork** of [Portage](https://wiki.gentoo.org/wiki/Project:Portage):
-a separate, cooperating codebase, verified against the Python original by a
-shared, black-box, jointly-owned test suite. It began as an end-to-end
-pilot on the smallest meaningful slice (`portage.versions`) and has grown,
-one reviewed slice at a time, into a package manager that resolves,
-builds, merges, and unmerges real Gentoo packages.
+`portuale` is a drop-in Rust reimplementation of Gentoo's package
+manager: **same behaviour as [Portage](https://wiki.gentoo.org/wiki/Project:Portage)
+(and then some)**, developed as a **friendly fork** — a separate,
+cooperating codebase, verified against the Python original by a shared,
+black-box, jointly-owned test suite. It builds, merges, and unmerges
+real Gentoo packages today; it began (one reviewed slice at a time,
+starting from `portage.versions`) as a smaller pilot, and it isn't a
+complete replacement yet — see **Status** below.
 
 The four hard goals it is built to (see
 [`docs/agent-context.md`](docs/agent-context.md) for the full rationale):
@@ -37,9 +38,10 @@ fetch; real filesystem merge/unmerge with `CONFIG_PROTECT`,
 `--buildpkgonly`, `--getbinpkg`/`--getbinpkgonly`; xpak + gpkg binary
 packages.
 
-It is **not** a drop-in replacement. The largest remaining gaps are a
-full backtracking resolver, deeper scheduler/config-resolution coverage,
-and the breadth of `emerge` actions/flags — see
+It is **not yet a complete replacement**. The distance to one is now
+dominated by a single large item — a full backtracking resolver — plus a
+short incremental tail (scheduler odds and ends, the deliberate
+sandbox/`FEATURES` cuts, some binhost/gpkg gaps). See
 [`docs/scope-backlog.md`](docs/scope-backlog.md) for the honest
 distance-to-parity assessment, and
 [`docs/what-this-proves.md`](docs/what-this-proves.md) for the

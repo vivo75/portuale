@@ -2727,7 +2727,7 @@ pub(crate) fn run_vdb_saved_env_phase(
     let ebuild = vdb_dir.join(format!("{pf}.ebuild"));
     if !env.is_file() || !ebuild.is_file() {
         return Err(format!(
-            "{}: no saved build environment (installed before the pilot kept one?)",
+            "{}: no saved build environment (installed before portuale kept one?)",
             vdb_dir.display()
         ));
     }

@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Python reference implementation for the `emerge --pretend` pilot slice
-(see docs/agent-context.md and rust/portage-repo/src/lib.rs for the
-full scope writeup). Mirrors the exact same restricted v1 algorithm as the
+"""Python reference implementation of `emerge --pretend` dependency
+resolution (see docs/agent-context.md and rust/portage-repo/src/lib.rs
+for the full scope writeup). Mirrors the exact same algorithm as the
 Rust side so the two can be contract-tested against each other,
-argv-for-argv and byte-for-byte on stdout, the same way every other pilot
-slice is.
+argv-for-argv and byte-for-byte on stdout, the same way every other
+change to portuale is.
 
 Overlays (see find_repos/list_candidates): candidates for a given
 category/package are gathered from every repos.conf repo with a
@@ -8826,9 +8826,9 @@ def _report_option(token):
         category, canonical = found
         kind = "action" if category == "action" else "option"
         print(
-            f'emerge (pilot v1): {kind} "{canonical}" is a real emerge {kind}, '
-            'but is not implemented in this pilot -- run "emerge --help" for the '
-            "options and actions that are.",
+            f'emerge: {kind} "{canonical}" is a real emerge {kind}, but is not '
+            'yet implemented in portuale -- run "emerge --help" for the options '
+            "and actions that are.",
             file=sys.stderr,
         )
     else:
@@ -8850,12 +8850,13 @@ def _wants_help(args):
     return False
 
 
-_HELP_TEXT = r"""emerge (pilot v1): command-line interface to the Rust porting pilot
+_HELP_TEXT = r"""emerge: command-line interface to the Portuale package manager
 
-This pilot does real dependency resolution, real ebuild phase execution,
-and real filesystem merge / unmerge. Any real emerge option or action not
-listed below is still recognized by name (lib/_emerge/main.py) -- using
-one reports which option it is, instead of a generic error.
+Portuale is a drop-in Rust reimplementation of Portage: same behaviour,
+verified against the Python original by a shared test suite. Any real
+emerge option or action not listed below is recognized by name
+(lib/_emerge/main.py) -- using one reports that it is not yet implemented
+in portuale, rather than a generic error.
 
 Usage:
   emerge [options] <target> ...            build and merge the targets, resolving dependencies
@@ -8946,7 +8947,7 @@ Output:
       --ignore-built-slot-operator-deps[=y|n]  ignore recorded := slot-operator dependencies
       --depclean-lib-check[=y|n]  with --depclean/--prune: scan for soname breakage (default y)
 
-Pilot-only (not real emerge options):
+Portuale extensions (not real emerge options):
       --json                dump the resolved graph as one JSON line instead of the display
       --shell <bash|brush>  which real shell runs a merge / unmerge / --config phase chain (default bash)
 
@@ -13716,8 +13717,8 @@ def run(args):
         and not info_action
     ):
         print(
-            "emerge (pilot v1): expected a package atom, e.g. "
-            "`emerge --pretend cat/pkg`",
+            "emerge: no targets given (an atom, an @set, or an installed file / "
+            "ebuild / tbz2 / gpkg; `emerge --help` for usage)",
             file=sys.stderr,
         )
         return 2
@@ -13882,7 +13883,7 @@ def run(args):
 
     if not atom_args:
         print(
-            "emerge (pilot v1): no package atoms to resolve (the target list, "
+            "emerge: no package atoms to resolve (the target list, "
             "after expanding any @world/@selected/@system/@installed/@<set>, is empty)",
             file=sys.stderr,
         )
@@ -13895,7 +13896,7 @@ def run(args):
             return 1
         if atom.blocker:
             print(
-                f'emerge (pilot v1): "{atom_arg}" is a blocker, not a valid emerge target',
+                f'emerge: "{atom_arg}" is a blocker, not a valid emerge target',
                 file=sys.stderr,
             )
             return 2

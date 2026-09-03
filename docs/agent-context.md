@@ -1,7 +1,7 @@
-# Agent context: the Python-to-Rust Portage pilot
+# Agent context: portuale, a Rust reimplementation of Portage
 
 This file (`docs/agent-context.md`, formerly `PROMPT-next.md`) is the
-single entry point for (re)deriving where this effort stands and what to
+single entry point for (re)deriving where portuale stands and what to
 do next, without repeating the discovery conversations that produced it.
 It merges: the original porting-strategy prompt (goals, hard constraints,
 architectural decisions — the standalone historic copy is
@@ -16,16 +16,18 @@ and re-open it — don't silently override it.
 ## Context
 
 Portage (this repository) is the Gentoo package manager, written in Python.
-The goal is to create a Rust implementation as a **friendly fork**: a
-separate, cooperating codebase, not a hostile competitor and not (yet)
-committed to being a full replacement.
+Portuale is a Rust reimplementation of it, developed as a **friendly
+fork**: a separate, cooperating codebase, not a hostile competitor. The
+aim is a **real, drop-in, same-behaviour replacement** (and then some) —
+reached one reviewed, contract-tested slice at a time. It is not there
+yet; `scope-backlog.md` is the honest distance-to-parity.
 
 **EAPI floor**: EAPI 0, 1, 2, 3, 4, and 6 are deprecated and removed in
 this repo/fork — no ebuild uses them, and all profiles are EAPI 5 or
 higher (5, 7, 8 are the live versions). Any EAPI-conditional logic being
 read or ported only needs to account for EAPI 5+ as the real, live
 baseline — branches that only apply to EAPI 0/1/2/3/4/6 are dead code and
-can be ignored rather than faithfully ported. (This pilot's own `portage-*`
+can be ignored rather than faithfully ported. (Portuale's own `portage-*`
 crates go further, as a deliberate simplification confirmed with the user:
 no EAPI parametrization at all within the 5+ floor — every EAPI in that
 range is treated identically. See `what-this-proves.md` for the many places
@@ -64,12 +66,12 @@ this precedent is invoked.)
 
 ## Open / deliberately undecided
 
-- **End state is undecided**: this may become two permanent sibling
-  implementations (like `uutils` vs GNU coreutils) or a strangler-fig
-  migration where Rust eventually replaces Python. Do not pick an
-  architecture that forecloses either option. Subprocess/CLI-based testing
-  satisfies this; in-process FFI embedding (e.g. PyO3) would not, so avoid
-  it for now.
+- **The end state is a real, complete, usable Portage** — a drop-in
+  same-behaviour replacement, and then some. What's still open is whether
+  it *replaces* Python Portage in Gentoo or stands permanently alongside
+  it (like `uutils` vs GNU coreutils). Do not pick an architecture that
+  forecloses either: subprocess/CLI-based testing keeps both open,
+  in-process FFI embedding (e.g. PyO3) would not — avoid it.
 
 ## Scope of the first port
 
@@ -93,8 +95,8 @@ binary, no duplicated code) and drop-in compatible with tooling that
 invokes `emerge`/`ebuild` by name directly. **Shipped**: `rust/portuale`.
 A bare `portuale` (or `portuale --help`/`-h`) lists the applets with a
 one-line description and exits 0; an unrecognized applet name still
-errors. `emerge --help` is a grouped tour of every action/option the
-pilot actually implements (`pretend.rs`'s `HELP_TEXT`, mirrored in
+errors. `emerge --help` is a grouped tour of every action/option portuale
+implements (`pretend.rs`'s `HELP_TEXT`, mirrored in
 `emerge_pretend_reference.py` and pinned by the contract suite).
 
 ## Test/benchmark harness architecture
