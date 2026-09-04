@@ -4127,7 +4127,7 @@ fn run_prune_pretend(
         Err(code) => return code,
     };
 
-    let result = portage_repo::prune_cleanlist(root, &args, &[]);
+    let result = portage_repo::prune_cleanlist(root, &args, &[], &config.package_provided);
     // Real `_calc_depclean`'s `unresolved_deps()` safety halt -- serves
     // `action in ("depclean", "prune")`, so it applies here too (with the
     // prune-only `use --nodeps` trailer).
@@ -4137,7 +4137,7 @@ fn run_prune_pretend(
     // Real `_calc_depclean` serves `action in ("depclean", "prune")`, so
     // `--depclean-lib-check` applies to `--prune` too.
     let result = apply_depclean_lib_check(root, result, lib_check, color, |providers| {
-        portage_repo::prune_cleanlist(root, &args, providers)
+        portage_repo::prune_cleanlist(root, &args, providers, &config.package_provided)
     });
 
     // Real `create_cleanlist`'s prune branch prints `show_parents(pkg)`
@@ -4768,6 +4768,7 @@ fn run_depclean_pretend(
         &args,
         deselect,
         &[],
+        &config.package_provided,
     );
     // Real `_calc_depclean`'s `unresolved_deps()` safety halt
     // (`actions.py:1247`) -- checked before the lib scan.
@@ -4786,6 +4787,7 @@ fn run_depclean_pretend(
             &args,
             deselect,
             providers,
+            &config.package_provided,
         )
     });
 

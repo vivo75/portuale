@@ -8249,6 +8249,72 @@ def test_depclean_pretend_nothing_to_remove(emerge_binary, fixture_env, tmp_path
     assert result.stdout.splitlines()[-1] == "Number to remove:     0"
 
 
+def _depclean_pprovided_root(tmp_path):
+    """A ROOT exercising `package.provided` during `--depclean`: the
+    shared `fixtures/repo/profiles/default/package.provided` lists
+    `dev-libs/providedpkg-1.0` and `dev-libs/providedpkg2-1.0`.
+    `providedpkg` is installed AND a @world member; `providedpkg2` is
+    installed and only reachable via `pdwtest`'s RDEPEND. Real
+    `_resolve`'s per-arg loop (`depgraph.py:5497-5503`) intercepts a
+    `package.provided`-matched world seed before it ever becomes a graph
+    root, and real `dep_check.py:1052` intercepts a `package.provided`-
+    matched dependency edge the same way -- so both stay unreachable and
+    join the cleanlist, matching the real `-pc` advisory's "will be
+    removed by depclean, even if they are part of the world set"
+    wording."""
+    portage_dir = tmp_path / "var" / "lib" / "portage"
+    portage_dir.mkdir(parents=True)
+    (portage_dir / "world").write_text("dev-libs/pdwtest\ndev-libs/providedpkg\n")
+
+    def install(package, rdepend=""):
+        d = tmp_path / "var" / "db" / "pkg" / "dev-libs" / f"{package}-1.0"
+        d.mkdir(parents=True)
+        (d / "CATEGORY").write_text("dev-libs\n")
+        (d / "SLOT").write_text("0\n")
+        if rdepend:
+            (d / "RDEPEND").write_text(rdepend + "\n")
+
+    install("pdwtest", rdepend="dev-libs/providedpkg2")
+    install("providedpkg")
+    install("providedpkg2")
+    return tmp_path
+
+
+def test_depclean_package_provided_removes_a_provided_cpv_even_as_a_world_root_or_dep(
+    emerge_binary, fixture_env, tmp_path
+):
+    env = dict(fixture_env)
+    env["ROOT"] = str(_depclean_pprovided_root(tmp_path))
+    result = _run([str(emerge_binary)], ["--pretend", "--depclean"], env)
+    assert result.returncode == 0
+    out = result.stdout.splitlines()
+    # Both provided cpvs are the cleanlist -- providedpkg despite being a
+    # @world member, providedpkg2 despite pdwtest's RDEPEND on it.
+    assert [ln for ln in out if ln.startswith(" dev-libs/")] == [
+        " dev-libs/providedpkg",
+        " dev-libs/providedpkg2",
+    ]
+    # pdwtest itself is a genuine, non-provided world member -- kept.
+    assert " dev-libs/pdwtest\n" not in result.stdout
+
+
+def test_depclean_package_provided_matches_between_implementations(
+    emerge_binary, emerge_pretend_python, fixture_env, tmp_path
+):
+    env = dict(fixture_env)
+    env["ROOT"] = str(_depclean_pprovided_root(tmp_path))
+    for args in (
+        ["--pretend", "--depclean"],
+        ["--pretend", "--depclean", "-v"],
+        ["--pretend", "--depclean", "--color=y"],
+    ):
+        rust = _run([str(emerge_binary)], args, env)
+        python = _run(emerge_pretend_python, args, env)
+        assert rust.returncode == python.returncode, args
+        assert rust.stdout == python.stdout, args
+        assert rust.stderr == python.stderr, args
+
+
 def test_depclean_keeps_a_build_only_dependency(emerge_binary, fixture_env, tmp_path):
     """Real _calc_depclean runs the depgraph in "remove" mode, where
     create_depgraph_params(myopts, "remove") sets bdeps="auto" and

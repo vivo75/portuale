@@ -12225,7 +12225,17 @@ def _apply_depclean_lib_check(root, result, lib_check, color, recompute):
     return recompute([prov for (prov, _c) in protections])
 
 
-def _unresolved_runtime_deps(root, kept, installed, libc_cps):
+def _pprovided_matches(atom_str, package_provided):
+    """package.provided (pkgsettings.pprovideddict): true when atom_str's
+    cat/pkg is listed and its constraint matches one of that cp's provided
+    CPVs (real portage.match_from_list(atom, pprovided), e.g.
+    depgraph.py:5497-5503 for a top-level target, dep_check.py:1052 area
+    for a dependency -- the same check run() 's own pprovided_atoms logic
+    performs). Mirrors portage-repo's pprovided_matches."""
+    return bool(package_provided) and bool(match_from_list(atom_str, package_provided))
+
+
+def _unresolved_runtime_deps(root, kept, installed, libc_cps, package_provided=()):
     """Real _calc_depclean's unresolved_deps() check (actions.py:1137-1245):
     a *kept* installed package's hard runtime dep (RDEPEND/PDEPEND --
     real dep.priority > UnmergeDepPriority.SOFT; DEPEND/BDEPEND are
@@ -12274,6 +12284,8 @@ def _unresolved_runtime_deps(root, kept, installed, libc_cps):
                 if atom is None:
                     continue
                 if atom.cp in libc_cps:
+                    continue
+                if _pprovided_matches(atom_str, package_provided):
                     continue
                 if not matches_any(atom_str, atom):
                     edge = (atom_str, parent_cpv)
@@ -12336,7 +12348,13 @@ def _depclean_unresolved_halt(unresolved, is_prune, color):
 
 
 def _depclean_cleanlist(
-    root, world_seeds, system_atoms, args, deselect=True, lib_protected_providers=()
+    root,
+    world_seeds,
+    system_atoms,
+    args,
+    deselect=True,
+    lib_protected_providers=(),
+    package_provided=(),
 ):
     """Real emerge --depclean's removal list (_calc_depclean +
     create_cleanlist). No `args`: roots = installed pkgs @world ∪ @system
@@ -12406,6 +12424,15 @@ def _depclean_cleanlist(
     if not args or not deselect:
         seed_pairs += [(a, label) for (a, label) in world_seeds]
     for atom_str, label in seed_pairs:
+        # package.provided: a @world/@system seed atom this covers is
+        # intercepted before it ever becomes a graph root (real _resolve's
+        # per-arg loop, depgraph.py:5497-5503 -- before _add_pkg/
+        # _select_package ever run). It never becomes a depclean
+        # protection root here either, even if an installed package of
+        # the same cpv happens to exist -- the real -pc advisory's "will
+        # be removed by depclean even if in world" case.
+        if _pprovided_matches(atom_str, package_provided):
+            continue
         for (c, p, v, _s) in matches_atom(atom_str):
             add_edge((c, p, v), label, atom_str)
             seed(c, p, v)
@@ -12434,6 +12461,13 @@ def _depclean_cleanlist(
             if atoms is None:
                 continue
             for atom_str in atoms:
+                # package.provided: a dependency atom this covers is
+                # satisfied without ever adding a graph edge to a literal
+                # installed provider (real dep_check.py:1052 area -- the
+                # same intercept the main resolver's own pprovided check
+                # applies).
+                if _pprovided_matches(atom_str, package_provided):
+                    continue
                 for (dc, dp, dv, _ds) in matches_atom(atom_str):
                     add_edge((dc, dp, dv), parent_cpv, atom_str)
                     if (dc, dp, dv) not in reachable:
@@ -12471,7 +12505,7 @@ def _depclean_cleanlist(
     # Real unresolved_deps() -- over every kept installed package.
     all_kept = [(c, p, v, s) for (c, p, v, s) in installed if (c, p, v) in reachable]
     unresolved = _unresolved_runtime_deps(
-        root, all_kept, installed, _libc_provider_cps(root)
+        root, all_kept, installed, _libc_provider_cps(root), package_provided=package_provided
     )
 
     slot_of = {(c, p, v): s for (c, p, v, s) in installed}
@@ -12654,7 +12688,7 @@ def _run_prune_pretend(
     except _CleanupArgsExit as e:
         return e.code
 
-    result = _prune_cleanlist(root, args)
+    result = _prune_cleanlist(root, args, package_provided=config["package_provided"])
     # Real _calc_depclean's unresolved_deps() safety halt -- serves
     # action in ("depclean", "prune"), so it applies here too (with the
     # prune-only `use --nodeps` trailer).
@@ -12668,7 +12702,9 @@ def _run_prune_pretend(
         result,
         lib_check,
         color,
-        lambda providers: _prune_cleanlist(root, args, providers),
+        lambda providers: _prune_cleanlist(
+            root, args, providers, package_provided=config["package_provided"]
+        ),
     )
     cleanlist, _required_count, ordered, kept_parents, _unresolved = result
 
@@ -12872,7 +12908,7 @@ def _run_prune_nodeps_or_clean(targets, root, config_root, color, is_clean):
     return 0
 
 
-def _prune_cleanlist(root, args, lib_protected_providers=()):
+def _prune_cleanlist(root, args, lib_protected_providers=(), package_provided=()):
     """Real emerge --prune's removal list (_calc_depclean with
     action="prune" -- actions.py:1059-1110 + create_cleanlist's prune
     branch). Removes superseded installed versions: for every cp with >1
@@ -12962,6 +12998,10 @@ def _prune_cleanlist(root, args, lib_protected_providers=()):
             if atoms is None:
                 continue
             for atom_str in atoms:
+                # package.provided -- see _depclean_cleanlist's own
+                # dependency-walk intercept.
+                if _pprovided_matches(atom_str, package_provided):
+                    continue
                 for (dc, dp, dv, _ds) in matches_atom(atom_str):
                     parent_atoms.setdefault((dc, dp, dv), []).append((parent_cpv, atom_str))
                     if (dc, dp, dv) not in reachable:
@@ -12996,7 +13036,7 @@ def _prune_cleanlist(root, args, lib_protected_providers=()):
 
     all_kept = [(c, p, v, s) for (c, p, v, s) in installed if (c, p, v) in reachable]
     unresolved = _unresolved_runtime_deps(
-        root, all_kept, installed, _libc_provider_cps(root)
+        root, all_kept, installed, _libc_provider_cps(root), package_provided=package_provided
     )
 
     slot_of = {(c, p, v): s for (c, p, v, s) in installed}
@@ -13084,7 +13124,12 @@ def _run_depclean_pretend(
     world_atom_count = len({a for (a, _l) in world_seeds})
 
     result = _depclean_cleanlist(
-        root, world_seeds, config["system_packages"], args, deselect=deselect
+        root,
+        world_seeds,
+        config["system_packages"],
+        args,
+        deselect=deselect,
+        package_provided=config["package_provided"],
     )
     # Real _calc_depclean's unresolved_deps() safety halt (actions.py:1247)
     # -- checked before the lib scan.
@@ -13106,6 +13151,7 @@ def _run_depclean_pretend(
             args,
             deselect=deselect,
             lib_protected_providers=providers,
+            package_provided=config["package_provided"],
         ),
     )
     cleanlist, required_count, ordered, kept_parents, _unresolved = result

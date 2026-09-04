@@ -4859,6 +4859,24 @@ fn render_show_parents(edges: &[(String, String)]) -> Vec<String> {
     lines
 }
 
+/// `package.provided` (`pkgsettings.pprovideddict`): true when `atom_str`'s
+/// `cat/pkg` is listed and its constraint matches one of that cp's
+/// provided CPVs (real `portage.match_from_list(atom, pprovided)`, e.g.
+/// `depgraph.py:5497-5503` for a top-level target, `dep_check.py:1052`
+/// area for a dependency -- the same check the main resolver's own
+/// `pprovided_refs` logic performs).
+fn pprovided_matches(atom_str: &str, package_provided: &[String]) -> bool {
+    !package_provided.is_empty()
+        && portage_dep::match_from_list(
+            atom_str,
+            &package_provided
+                .iter()
+                .map(String::as_str)
+                .collect::<Vec<_>>(),
+        )
+        .is_some_and(|m| !m.is_empty())
+}
+
 /// Real `_calc_depclean`'s `unresolved_deps()` check (`actions.py:1137-1245`),
 /// narrowed: a *kept* installed package's hard runtime dependency
 /// (`RDEPEND`/`PDEPEND` -- real `dep.priority > UnmergeDepPriority.SOFT`,
@@ -4884,6 +4902,7 @@ fn unresolved_runtime_deps(
     kept: &[&InstalledPackage],
     installed: &[InstalledPackage],
     libc_cps: &HashSet<(String, String)>,
+    package_provided: &[String],
 ) -> Vec<(String, String)> {
     // Include the sub-slot (real `_match_slot` checks it whenever the
     // atom specifies one, slot operator or not -- a built `foo:2/3=` dep
@@ -4955,6 +4974,9 @@ fn unresolved_runtime_deps(
                         if libc_cps.contains(&(atom.category.clone(), atom.package.clone())) {
                             continue;
                         }
+                        if pprovided_matches(atom_str, package_provided) {
+                            continue;
+                        }
                         if !matches_any(atom_str, &atom) {
                             let edge = (atom_str.to_string(), parent_cpv.clone());
                             if !out.contains(&edge) {
@@ -4992,6 +5014,11 @@ pub fn depclean_cleanlist(
     // a surviving consumer. Seeded as extra reachability roots. Empty on
     // the caller's first pass (and always when `--depclean-lib-check=n`).
     lib_protected_providers: &[InstalledPackage],
+    // `package.provided` (`config.package_provided`, real
+    // `pkgsettings.pprovideddict`). See `pprovided_matches`'s own doc
+    // comment for the real citations and the exact real behaviour this
+    // mirrors.
+    package_provided: &[String],
 ) -> DepcleanResult {
     let installed = all_installed_packages(root);
     // Candidate strings for `match_from_list`, one per installed package,
@@ -5049,6 +5076,18 @@ pub fn depclean_cleanlist(
             .filter(|_| args.is_empty() || !deselect)
             .map(|(a, l)| (a.as_str(), l.as_str())),
     ) {
+        // `package.provided`: a `@world`/`@system` seed atom this covers
+        // is intercepted before it ever becomes a graph root (real
+        // `_resolve`'s per-arg loop, `depgraph.py:5497-5503` --
+        // `pprovided and match_from_list(atom, pprovided): ... continue`,
+        // *before* `_add_pkg`/`_select_package` ever run). It therefore
+        // never becomes a depclean protection root here either, even if
+        // an installed package of the same cpv happens to exist --
+        // that's the real `-pc` advisory's "will be removed by depclean
+        // even if in world" case. See `pprovided_matches`.
+        if pprovided_matches(atom_str, package_provided) {
+            continue;
+        }
         for p in matches_atom(atom_str) {
             parent_atoms
                 .entry(key(p))
@@ -5093,6 +5132,14 @@ pub fn depclean_cleanlist(
                 continue;
             };
             for atom_str in atoms {
+                // `package.provided`: a dependency atom this covers is
+                // satisfied without ever adding a graph edge to a
+                // literal installed provider (real `dep_check.py:1052`
+                // area -- the same intercept the main resolver's own
+                // `pprovided_refs` check applies). See `pprovided_matches`.
+                if pprovided_matches(&atom_str, package_provided) {
+                    continue;
+                }
                 for dep in matches_atom(&atom_str) {
                     parent_atoms
                         .entry(key(dep))
@@ -5150,7 +5197,13 @@ pub fn depclean_cleanlist(
         .iter()
         .filter(|p| reachable.contains(&key(p)))
         .collect();
-    let unresolved = unresolved_runtime_deps(root, &all_kept, &installed, &libc_provider_cps(root));
+    let unresolved = unresolved_runtime_deps(
+        root,
+        &all_kept,
+        &installed,
+        &libc_provider_cps(root),
+        package_provided,
+    );
 
     let required_count = reachable.len();
     let (ordered, cleanlist) = topological_removal_order(root, cleanlist);
@@ -5199,6 +5252,11 @@ pub fn prune_cleanlist(
     args: &[String],
     // `--depclean-lib-check` feedback -- see `depclean_cleanlist`.
     lib_protected_providers: &[InstalledPackage],
+    // `package.provided` -- see `depclean_cleanlist`'s own param. `--prune`
+    // has no atom-seeded roots (its protected set is bare installed
+    // packages, not atoms), so this only reaches the dependency-walk and
+    // `unresolved_deps()` intercepts, same as `depclean_cleanlist`.
+    package_provided: &[String],
 ) -> DepcleanResult {
     let installed = all_installed_packages(root);
     let key = |p: &InstalledPackage| (p.category.clone(), p.package.clone(), p.version.clone());
@@ -5305,6 +5363,11 @@ pub fn prune_cleanlist(
                 continue;
             };
             for atom_str in atoms {
+                // `package.provided` -- see `depclean_cleanlist`'s own
+                // dependency-walk intercept.
+                if pprovided_matches(&atom_str, package_provided) {
+                    continue;
+                }
                 for dep in matches_atom(&atom_str) {
                     parent_atoms
                         .entry(key(dep))
@@ -5359,7 +5422,13 @@ pub fn prune_cleanlist(
         .iter()
         .filter(|p| reachable.contains(&key(p)))
         .collect();
-    let unresolved = unresolved_runtime_deps(root, &all_kept, &installed, &libc_provider_cps(root));
+    let unresolved = unresolved_runtime_deps(
+        root,
+        &all_kept,
+        &installed,
+        &libc_provider_cps(root),
+        package_provided,
+    );
 
     let required_count = reachable.len();
     let (ordered, cleanlist) = topological_removal_order(root, cleanlist);
@@ -16560,6 +16629,7 @@ mod tests {
             &[],
             true,
             &[],
+            &[],
         );
         let clean: Vec<String> = result.cleanlist.iter().map(|p| p.cpv()).collect();
         assert_eq!(
@@ -16582,6 +16652,7 @@ mod tests {
             &["dev-libs/dcorphan".to_string()],
             true,
             &[],
+            &[],
         );
         assert_eq!(
             narrowed
@@ -16598,6 +16669,7 @@ mod tests {
             &["dev-libs/systempkg".to_string()],
             &["dev-libs/dcsub".to_string()],
             true,
+            &[],
             &[],
         );
         assert!(needed.cleanlist.is_empty());
@@ -16618,6 +16690,7 @@ mod tests {
             &[],
             true,
             std::slice::from_ref(&protected),
+            &[],
         );
         assert!(lib_kept.cleanlist.is_empty(), "{:?}", lib_kept.cleanlist);
         assert_eq!(lib_kept.required_count, 9);
@@ -16660,6 +16733,7 @@ mod tests {
             &[],
             true,
             &[],
+            &[],
         );
         assert_eq!(
             result.unresolved,
@@ -16685,7 +16759,7 @@ mod tests {
 
         // `-c dev-libs/dw` (deselect default true): the world seed is
         // dropped in args mode -> dw is unreachable -> removed.
-        let removed = depclean_cleanlist(&root, world, &[], args, true, &[]);
+        let removed = depclean_cleanlist(&root, world, &[], args, true, &[], &[]);
         assert_eq!(
             removed
                 .cleanlist
@@ -16697,7 +16771,7 @@ mod tests {
 
         // `-c dev-libs/dw --deselect=n`: the world seed is kept ->
         // @selected still reaches dw -> nothing to remove.
-        let kept = depclean_cleanlist(&root, world, &[], args, false, &[]);
+        let kept = depclean_cleanlist(&root, world, &[], args, false, &[], &[]);
         assert!(kept.cleanlist.is_empty(), "{:?}", kept.cleanlist);
 
         std::fs::remove_dir_all(&root).ok();
@@ -16726,6 +16800,7 @@ mod tests {
             &[],
             &[],
             true,
+            &[],
             &[],
         );
         // rorphan is the cleanlist; kept = rdep, rshared, rw (cpv order).
@@ -16762,6 +16837,103 @@ mod tests {
     }
 
     #[test]
+    fn depclean_cleanlist_package_provided_intercepts_both_a_world_root_and_a_dependency_edge() {
+        // Real `-pc` advisory: "package.provided ... will be removed by
+        // depclean, even if they are part of the world set." `pwprov` is
+        // a @world member that is also listed in `package_provided` --
+        // real `_resolve`'s per-arg loop intercepts it before it ever
+        // becomes a graph root (`depgraph.py:5497-5503`, *before*
+        // `_add_pkg`/`_select_package` run), so world membership does not
+        // protect it. `pdprov` is only reachable via `pw`'s RDEPEND,
+        // which is also `package_provided`-listed -- real
+        // `dep_check.py:1052` intercepts that edge too (no graph node
+        // for the literal installed provider), so `pdprov` stays
+        // unreachable and joins the cleanlist as well. `pw` itself (a
+        // genuine, non-provided world member) stays required throughout.
+        let root = masters_test_root("depclean-pprovided");
+        let install = |name: &str, rdepend: &str| {
+            let d = root.join("var/db/pkg/dev-libs").join(format!("{name}-1.0"));
+            std::fs::create_dir_all(&d).unwrap();
+            std::fs::write(d.join("CATEGORY"), "dev-libs\n").unwrap();
+            std::fs::write(d.join("SLOT"), "0\n").unwrap();
+            if !rdepend.is_empty() {
+                std::fs::write(d.join("RDEPEND"), format!("{rdepend}\n")).unwrap();
+            }
+        };
+        install("pw", "dev-libs/pdprov");
+        install("pwprov", "");
+        install("pdprov", "");
+
+        let world = &[
+            ("dev-libs/pw".to_string(), "@selected".to_string()),
+            ("dev-libs/pwprov".to_string(), "@selected".to_string()),
+        ];
+        let package_provided = vec![
+            "dev-libs/pwprov-1.0".to_string(),
+            "dev-libs/pdprov-1.0".to_string(),
+        ];
+
+        let result = depclean_cleanlist(&root, world, &[], &[], true, &[], &package_provided);
+        let clean: Vec<String> = result.cleanlist.iter().map(|p| p.cpv()).collect();
+        assert_eq!(
+            clean,
+            vec![
+                "dev-libs/pdprov-1.0".to_string(),
+                "dev-libs/pwprov-1.0".to_string(),
+            ]
+        );
+
+        // Without `package_provided`, both stay protected (pwprov by its
+        // own world membership, pdprov by pw's RDEPEND) -- nothing to
+        // clean.
+        let baseline = depclean_cleanlist(&root, world, &[], &[], true, &[], &[]);
+        assert!(baseline.cleanlist.is_empty(), "{:?}", baseline.cleanlist);
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn depclean_unresolved_halt_does_not_fire_for_a_dep_satisfied_only_by_package_provided() {
+        // `uk` (kept, reachable from world) RDEPENDs on
+        // `dev-libs/uprovided`, which has no literal vdb entry at all --
+        // only a `package_provided` listing. Real dependency resolution
+        // treats a `package.provided`-matched atom as already satisfied
+        // (`dep_check.py:1052`), so `unresolved_deps()` must not flag it;
+        // without the fix this spuriously halts with "not being
+        // installed" (real behaviour: it doesn't).
+        let root = masters_test_root("depclean-unresolved-pprovided");
+        let install = |name: &str, rdepend: &str| {
+            let d = root.join("var/db/pkg/dev-libs").join(format!("{name}-1.0"));
+            std::fs::create_dir_all(&d).unwrap();
+            std::fs::write(d.join("CATEGORY"), "dev-libs\n").unwrap();
+            std::fs::write(d.join("SLOT"), "0\n").unwrap();
+            if !rdepend.is_empty() {
+                std::fs::write(d.join("RDEPEND"), format!("{rdepend}\n")).unwrap();
+            }
+        };
+        install("uw", "dev-libs/uk");
+        install("uk", "dev-libs/uprovided");
+
+        let world = &[("dev-libs/uw".to_string(), "@selected".to_string())];
+        let package_provided = vec!["dev-libs/uprovided-9.9".to_string()];
+
+        let result = depclean_cleanlist(&root, world, &[], &[], true, &[], &package_provided);
+        assert!(result.unresolved.is_empty(), "{:?}", result.unresolved);
+
+        // Without `package_provided`, the same setup halts.
+        let baseline = depclean_cleanlist(&root, world, &[], &[], true, &[], &[]);
+        assert_eq!(
+            baseline.unresolved,
+            vec![(
+                "dev-libs/uprovided".to_string(),
+                "dev-libs/uk-1.0".to_string()
+            )]
+        );
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
     fn depclean_cleanlist_a_use_conditional_dep_that_is_off_does_not_keep_its_target() {
         let root = masters_test_root("depclean-usecond");
         let install = |name: &str, rdepend: &str, use_str: &str| {
@@ -16785,6 +16957,7 @@ mod tests {
             &[],
             &[],
             true,
+            &[],
             &[],
         );
         let clean: Vec<String> = result.cleanlist.iter().map(|p| p.cpv()).collect();
@@ -16816,7 +16989,7 @@ mod tests {
         install("aabase", "");
         install("loner", "");
 
-        let result = depclean_cleanlist(&root, &[], &[], &[], true, &[]);
+        let result = depclean_cleanlist(&root, &[], &[], &[], true, &[], &[]);
         assert!(result.ordered);
         let clean: Vec<String> = result.cleanlist.iter().map(|p| p.cpv()).collect();
         // Level 0 ready = {mmid, loner} (nothing depends on them),
@@ -16839,7 +17012,7 @@ mod tests {
             std::fs::write(d.join("CATEGORY"), "dev-libs\n").unwrap();
             std::fs::write(d.join("SLOT"), "0\n").unwrap();
         }
-        let flat = depclean_cleanlist(&root2, &[], &[], &[], true, &[]);
+        let flat = depclean_cleanlist(&root2, &[], &[], &[], true, &[], &[]);
         assert!(!flat.ordered);
         assert_eq!(
             flat.cleanlist.iter().map(|p| p.cpv()).collect::<Vec<_>>(),
@@ -16961,7 +17134,7 @@ mod tests {
         install("keeper", "1.0", "=dev-libs/mm-2.0");
         install("single", "1.0", "");
 
-        let result = prune_cleanlist(&root, &[], &[]);
+        let result = prune_cleanlist(&root, &[], &[], &[]);
         assert!(result.ordered);
         let clean: Vec<String> = result.cleanlist.iter().map(|p| p.cpv()).collect();
         // mm-2.0 kept (keeper needs it), mm-3.0/aa-2.0/zz-2.0 highest,
@@ -17034,7 +17207,7 @@ mod tests {
         );
 
         // `--prune dev-libs/mm`: only mm's old versions are candidates.
-        let narrowed = prune_cleanlist(&root, &["dev-libs/mm".to_string()], &[]);
+        let narrowed = prune_cleanlist(&root, &["dev-libs/mm".to_string()], &[], &[]);
         assert_eq!(
             narrowed
                 .cleanlist
@@ -17052,7 +17225,7 @@ mod tests {
             std::fs::write(d.join("CATEGORY"), "dev-libs\n").unwrap();
             std::fs::write(d.join("SLOT"), "0\n").unwrap();
         }
-        assert!(prune_cleanlist(&root2, &[], &[]).cleanlist.is_empty());
+        assert!(prune_cleanlist(&root2, &[], &[], &[]).cleanlist.is_empty());
 
         std::fs::remove_dir_all(&root).ok();
         std::fs::remove_dir_all(&root2).ok();
