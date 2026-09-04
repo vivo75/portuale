@@ -307,6 +307,11 @@ pub fn run(args: &[String]) -> ExitCode {
             binpkg_format: std::env::var("BINPKG_FORMAT")
                 .unwrap_or(default_package_options.binpkg_format),
             config_root: portage_repo::config_root_from_env(),
+            // Real default-on FEATURES token -- see `PackageOptions::
+            // buildpkg_live`'s own doc comment.
+            buildpkg_live: !std::env::var("FEATURES")
+                .map(|f| f.split_whitespace().any(|t| t == "-buildpkg-live"))
+                .unwrap_or(false),
         };
         let ebuild_path = std::path::Path::new(ebuild_file);
         // One command at a time here, not the whole slice at once --

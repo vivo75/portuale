@@ -3253,6 +3253,14 @@ fn package_options_from_env(
             .unwrap_or(d.portage_bzip2_command),
         binpkg_format: std::env::var("BINPKG_FORMAT").unwrap_or(d.binpkg_format),
         config_root: portage_repo::config_root_from_env(),
+        // Real default-on FEATURES token: enabled unless explicitly
+        // negated (`-buildpkg-live`) -- unlike the sibling fields above,
+        // this doesn't fall back to `d.buildpkg_live` on an *unset*
+        // `FEATURES` var, since a default-on flag mustn't flip off just
+        // because `FEATURES` happens to be set to something else that
+        // doesn't mention it (`ebuild_package::PackageOptions::
+        // buildpkg_live`'s own doc comment has the full real grounding).
+        buildpkg_live: !feature_enabled("-buildpkg-live"),
     }
 }
 

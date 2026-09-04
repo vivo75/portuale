@@ -133,6 +133,16 @@ pub struct PackageOptions {
     /// split this mirrors (only consulted by `ebuild_phases::
     /// eclass_locations_value`'s own masters-chain resolution).
     pub config_root: PathBuf,
+    /// Real `FEATURES=buildpkg-live` (`_emerge/Package.py:621-637`'s own
+    /// `binpkg_wanted`): whether a `PROPERTIES=live` build also gets
+    /// packaged when `buildpkg` is otherwise on. Real default is `true`
+    /// (`buildpkg-live` is one of real `make.globals`'s own default
+    /// `FEATURES` tokens) -- explicit `FEATURES=-buildpkg-live` is the
+    /// only way to skip packaging a live build. Consulted by
+    /// `emerge_build::entry_buildpkg_wanted`, not by this module itself
+    /// (a live-vs-not decision needs the resolved graph entry, which
+    /// this module never sees -- it just builds whatever it's told to).
+    pub buildpkg_live: bool,
 }
 
 impl Default for PackageOptions {
@@ -147,6 +157,7 @@ impl Default for PackageOptions {
             portage_bzip2_command: "bzip2".to_string(),
             binpkg_format: "xpak".to_string(),
             config_root: PathBuf::from("/dev/null/no-config-root-configured"),
+            buildpkg_live: true,
         }
     }
 }

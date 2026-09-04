@@ -234,7 +234,9 @@ pub fn run_source_merge(
         );
     }
     run_merge_loop(entries, keep_going, |entry| {
-        let bp = buildpkg.filter(|_| !entry_matches_any(entry, buildpkg_exclude));
+        let bp = buildpkg.filter(|opts| {
+            entry_buildpkg_wanted(entry, repos, buildpkg_exclude, opts.buildpkg_live)
+        });
         if capture_log && scheduler_needs_build(entry) {
             let path =
                 build_one_source_entry(entry, repos, root, portage_tmpdir, options, bp, true)?;
@@ -264,6 +266,65 @@ pub(crate) fn entry_matches_any(entry: &GraphEntry, atoms: &[String]) -> bool {
     atoms.iter().any(|atom| {
         portage_dep::match_from_list(atom, &[cpv_slot.as_str()]).is_some_and(|m| !m.is_empty())
     })
+}
+
+/// Real `Package.binpkg_wanted`'s own `"live" not in self.properties`
+/// half (`_emerge/Package.py:621-637`): this candidate's own evaluated
+/// `PROPERTIES` (real USE-conditional-reduced against the *build*, not
+/// the resolve-time, USE set -- `entry.use_flags_display`'s own enabled
+/// subset is the same set `entry_build_env`'s `USE=` export already
+/// uses) contains the bare token `live`. `PROPERTIES` has no `||`-group
+/// semantics (same reasoning `portage_repo::evaluated_metadata_tokens`'
+/// own doc comment gives), so a flat `use_reduce` is faithful.
+fn entry_is_live(candidate: &Candidate, entry: &GraphEntry) -> bool {
+    if candidate.properties.trim().is_empty() {
+        return false;
+    }
+    let use_flags: std::collections::HashSet<String> = entry
+        .use_flags_display
+        .iter()
+        .filter(|(_, on)| *on)
+        .map(|(f, _)| f.clone())
+        .collect();
+    let tokens: Vec<String> = candidate
+        .properties
+        .split_whitespace()
+        .map(String::from)
+        .collect();
+    portage_use_reduce::use_reduce_flat(&tokens, &use_flags, portage_use_reduce::MatchMode::Normal)
+        .map(|flat| flat.iter().any(|t| t == "live"))
+        .unwrap_or(false)
+}
+
+/// Real `Package.binpkg_wanted(exclude)` (`_emerge/Package.py:621-637`),
+/// narrowed to the `buildpkg` (not `buildsyspkg`) half portuale's own
+/// `--buildpkg`/`FEATURES=buildpkg` already models: `--buildpkg-exclude`
+/// (`entry_matches_any`) always wins outright; otherwise a
+/// `PROPERTIES=live` build is skipped unless `FEATURES=buildpkg-live`
+/// (real default -- `buildpkg_live` -- is on). A candidate this can't
+/// even locate falls through to `true` (not live, by construction) --
+/// the real build path a moment later raises its own clear "could not
+/// locate its own ebuild file" error instead of this filter silently
+/// swallowing it.
+pub(crate) fn entry_buildpkg_wanted(
+    entry: &GraphEntry,
+    repos: &[RepoConfig],
+    buildpkg_exclude: &[String],
+    buildpkg_live: bool,
+) -> bool {
+    if entry_matches_any(entry, buildpkg_exclude) {
+        return false;
+    }
+    if buildpkg_live {
+        return true;
+    }
+    let Some(version) = entry_version(&entry.outcome) else {
+        return true;
+    };
+    match locate_candidate(repos, &entry.category, &entry.package, version) {
+        Some(candidate) => !entry_is_live(&candidate, entry),
+        None => true,
+    }
 }
 
 /// The shared per-entry loop for `run_source_merge` /
@@ -807,7 +868,14 @@ fn run_build_scheduler(
                 started.insert(idx);
                 in_flight += 1;
                 let tx = tx.clone();
-                let bp = buildpkg.filter(|_| !entry_matches_any(&entries[idx], buildpkg_exclude));
+                let bp = buildpkg.filter(|opts| {
+                    entry_buildpkg_wanted(
+                        &entries[idx],
+                        repos,
+                        buildpkg_exclude,
+                        opts.buildpkg_live,
+                    )
+                });
                 let entry = &entries[idx];
                 scope.spawn(move || {
                     let r = build_one_source_entry(
@@ -928,6 +996,78 @@ mod tests {
         let config_root = fixtures_root();
         let repos = find_repos(&config_root).unwrap();
         assert!(locate_candidate(&repos, "dev-libs", "packagepkg", "99.0").is_none());
+    }
+
+    fn live_test_entry() -> GraphEntry {
+        GraphEntry {
+            category: "dev-libs".into(),
+            package: "propertiespkg".into(),
+            outcome: PretendOutcome::New {
+                version: "1.0".into(),
+            },
+            blockers: vec![],
+            slot: None,
+            sub_slot: None,
+            repo_name: None,
+            oldbest: vec![],
+            use_flags_display: vec![],
+            use_expand_display: vec![],
+            use_expand_display_p: vec![],
+            keyword_mask: None,
+            new_slot: false,
+            interactive: false,
+            fetch_restrict: false,
+            fetch_restrict_satisfied: false,
+            download_files: Vec::new(),
+            required_by: vec![],
+            source: CandidateSource::Ebuild,
+            provenance: Default::default(),
+            keyword_suggestion: None,
+            use_suggestion: None,
+            parent_use_suggestion: None,
+            targets_running_root: false,
+            remote_binary: false,
+            build_id: None,
+            dep_order: Vec::new(),
+            runtime_dep_order: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn entry_is_live_reads_a_real_properties_live_fixture() {
+        let config_root = fixtures_root();
+        let repos = find_repos(&config_root).unwrap();
+        let live_candidate = locate_candidate(&repos, "dev-libs", "propertiespkg", "1.0").unwrap();
+        assert!(entry_is_live(&live_candidate, &live_test_entry()));
+
+        let non_live_candidate = locate_candidate(&repos, "dev-libs", "packagepkg", "1.0").unwrap();
+        assert!(!entry_is_live(&non_live_candidate, &live_test_entry()));
+    }
+
+    #[test]
+    fn entry_buildpkg_wanted_skips_a_live_build_only_when_buildpkg_live_is_off() {
+        let config_root = fixtures_root();
+        let repos = find_repos(&config_root).unwrap();
+        let entry = live_test_entry();
+
+        // Real default (buildpkg-live on): a live build is still packaged.
+        assert!(entry_buildpkg_wanted(&entry, &repos, &[], true));
+        // FEATURES=-buildpkg-live: a live build is skipped...
+        assert!(!entry_buildpkg_wanted(&entry, &repos, &[], false));
+
+        // ...but a non-live package is unaffected either way.
+        let mut non_live = entry.clone();
+        non_live.package = "packagepkg".to_string();
+        assert!(entry_buildpkg_wanted(&non_live, &repos, &[], true));
+        assert!(entry_buildpkg_wanted(&non_live, &repos, &[], false));
+
+        // --buildpkg-exclude still wins outright, regardless of buildpkg-live.
+        assert!(!entry_buildpkg_wanted(
+            &entry,
+            &repos,
+            &["dev-libs/propertiespkg".to_string()],
+            true
+        ));
     }
 
     #[test]

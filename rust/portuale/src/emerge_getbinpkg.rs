@@ -132,8 +132,14 @@ pub fn run_merge_plan(
         if entry.source == CandidateSource::Binary {
             merge_one_binary_entry(entry, config, root, pkgdir, portage_tmpdir, merge_options)
         } else {
-            let bp = buildpkg
-                .filter(|_| !crate::emerge_build::entry_matches_any(entry, buildpkg_exclude));
+            let bp = buildpkg.filter(|opts| {
+                crate::emerge_build::entry_buildpkg_wanted(
+                    entry,
+                    repos,
+                    buildpkg_exclude,
+                    opts.buildpkg_live,
+                )
+            });
             crate::emerge_build::merge_one_source_entry(
                 entry,
                 repos,
