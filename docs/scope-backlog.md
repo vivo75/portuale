@@ -244,16 +244,61 @@ architectural — a single-pass BFS can't grow into these incrementally:
   online-accounts` both moved substantially earlier, though not yet to
   their exact real positions.
 
-  **Still open:** real's fuller priority hierarchy
-  (`DepPrioritySatisfiedRange`/`DepPriorityNormalRange`'s
-  `NONE`/`SOFT`/`MEDIUM_SOFT`/`MEDIUM_POST` ladder, vs. portuale's binary
-  hard/soft edge distinction) — the likely remaining cause of the gcc gap
-  now that discovery order, bias, and batching are all shipped;
-  `asap_nodes`/libc-first special-casing; the `_FrontierDigraph` perf
-  layer (not needed at portuale's graph sizes); blocker/uninstall
-  interleaving (portuale's `-p` pretend path has no uninstall/blocker
-  resolution yet, a separate pre-existing gap); a full `gather_deps`
-  port for the genuine-cycle case.
+  **Priority-hierarchy hypothesis falsified, real cause found (2026-09-04,
+  same day, fourth pass).** Instrumented the "strict batch is empty"
+  fallback (the only place `DepPriorityNormalRange`'s `SOFT`/
+  `MEDIUM_SOFT` ladder could ever matter) and ran the live gcc merge: it
+  never fires, not once. Real's ladder only activates when a round's
+  strict-leaf batch comes up empty — a cycle-like stall — and the gcc
+  graph has no circular dependencies (confirmed: portuale's own
+  `find_hard_cycles` reports none, matching real's own `--debug` output),
+  so every round already finds a full batch at the strictest level. The
+  priority hierarchy is provably irrelevant to this gap.
+
+  The actual cause, found via real's own `--debug` digraph dump: real's
+  full dependency graph for the gcc case has **~267 already-installed
+  nodes** in its transitive closure (`emerge -p -d ...gnome-control-
+  center 2>&1 | grep -c ", installed)"`) — vastly more than the ~26
+  entries that end up needing action. Real's `.order` discovery position
+  (what `real_discovery_order` simulates) is computed across that *entire*
+  ~300-node graph, every already-satisfied dependency included. Portuale
+  only ever creates a `GraphEntry` for packages it actually needs to
+  track (a top-level target's own transitive deps down to whatever
+  actually needs an operation) — it doesn't walk into an
+  already-installed package's own further dependencies without `--deep`
+  (`Deep::recurses_at`), a pre-existing, load-bearing simplification many
+  other tests already depend on (real's own default resolution *does*
+  build the full transitive graph regardless of `--deep`; portuale's
+  `--deep` gate is a narrower, different thing: whether to check an
+  already-satisfied dependency for a possible *upgrade*, not whether to
+  discover it at all). `real_discovery_order`'s rank simulation therefore
+  runs over a far smaller universe than real's own, spacing ranks out
+  very differently — which reproduces exactly the "same batches, scrambled
+  fine-grained order" pattern observed (structurally correct groupings,
+  wrong relative order within them).
+
+  Closing this needs portuale to walk (or at minimum rank) the *entire*
+  already-installed transitive tree for discovery-order purposes,
+  independent of `--deep` and independent of whether an entry is ever
+  rendered — a real architectural change (every `AlreadyInstalled`
+  outcome would need its own further recursion walked, purely to feed
+  `dep_order`, with no display/resolution consequence), not a bounded
+  fixture-sized fix, and carries real risk to the existing, well-tested
+  BFS walk's own performance and semantics at scale. Deferred rather than
+  attempted without a concrete need -- see `docs/what-this-proves.md`'s
+  "Merge-list order" entries for the full empirical trail.
+
+  **Still open:** the full-transitive-tree discovery-order walk above (now
+  the confirmed, not merely hypothesized, remaining cause of the gcc gap);
+  real's fuller priority hierarchy (`DepPrioritySatisfiedRange`/
+  `DepPriorityNormalRange`'s `NONE`/`SOFT`/`MEDIUM_SOFT`/`MEDIUM_POST`
+  ladder, vs. portuale's binary hard/soft edge distinction) — real, cited
+  behavior for genuinely circular graphs, but confirmed *not* the cause of
+  any currently-observed gap; `asap_nodes`/libc-first special-casing; the
+  `_FrontierDigraph` perf layer (not needed at portuale's graph sizes);
+  blocker/uninstall interleaving (portuale's `-p` pretend path has no
+  uninstall/blocker resolution yet, a separate pre-existing gap); a full
+  `gather_deps` port for the genuine-cycle case.
 
 - **`--root-deps` / multi-root, remaining edges.** *Mostly a non-gap for
   this fork* — the ebuilds are all EAPI 7+, where `--root-deps=rdeps` is

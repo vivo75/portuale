@@ -12938,3 +12938,59 @@ hierarchy (`DepPrioritySatisfiedRange`/`DepPriorityNormalRange`'s full
 hard/soft edge distinction), `asap_nodes` (libc-first merging), and the
 `_FrontierDigraph` incremental-leaf-tracking layer -- none yet ported;
 see `docs/scope-backlog.md`'s "Merge-list order" entry.
+
+### Merge-list order — the priority-hierarchy hypothesis, falsified (2026-09-04, same day, fourth pass)
+
+The previous entry's own remaining-gap hypothesis (real's fuller
+`DepPriorityNormalRange` ladder) turned out to be wrong, caught before
+any implementation work: `topological_merge_order_impl`'s "batch is
+empty" fallback -- the *only* code path where that ladder could ever
+matter, since real's own `SOFT`/`MEDIUM_SOFT` relaxation levels only
+activate once the ordinary strict-leaf scan finds nothing available at
+all, a cycle-like stall -- was instrumented with a one-line counter and
+run against the live `gnome-base/gnome-control-center` merge. It never
+fired. Portuale's own `find_hard_cycles` already reports no circular
+dependencies for this graph, matching real's own `--debug` output (no
+`runtime cycle` block anywhere in it); with no cycle, every round's
+strict batch is already non-empty, so the ladder never engages. A full
+priority-hierarchy port -- modeling each edge's real `DepPriority`
+subtype (`optional`/`runtime_post`/etc.), a genuinely large change --
+would have been provably unable to move this specific gap at all.
+
+The actual cause, found via real's own `emerge -p -d` digraph dump
+(`--debug`'s `digraph:` section, which lists every node's own direct
+children with their priority, in real's own actual discovery/insertion
+order): real's full dependency graph for the gcc merge has **~267
+already-installed nodes** in its transitive closure -- `grep -c
+", installed)"` on the debug log -- against ~26 entries that end up
+needing an actual merge operation. Real's `.order` discovery position
+(what `real_discovery_order` reproduces) is computed across that entire
+~300-node graph; every already-satisfied dependency, however deep,
+participates and consumes a discovery-rank slot. Portuale only ever
+creates a `GraphEntry` for packages it actually needs to track -- an
+`AlreadyInstalled` outcome's own further dependencies are walked only
+under `--deep` (`Deep::recurses_at`), a pre-existing, load-bearing
+simplification the whole resolver already leans on. Real's own default
+behavior is different from what that name suggests: real *always*
+builds the complete transitive graph regardless of `--deep` (needed for
+correctness -- conflict detection, visibility, slot binding); `--deep`
+only controls whether an already-satisfied dependency also gets checked
+for a possible *upgrade*. So `real_discovery_order`'s simulation runs
+over a far smaller universe than real's own ~300-node one, spacing its
+ranks out very differently -- which reproduces exactly the observed
+pattern (the same *groupings*/batches as real, correctly structured, but
+scrambled fine-grained order within them) without needing any priority
+distinction at all.
+
+Closing this would need portuale to walk (or at minimum rank) the entire
+already-installed transitive tree for discovery-order purposes, whether
+or not `--deep` is given and whether or not any of it is ever rendered
+-- a real architectural change (recursion into every `AlreadyInstalled`
+entry's own dependencies, purely to feed one field, with no display or
+resolution consequence otherwise), not a bounded, fixture-sized fix.
+Deferred (see `docs/scope-backlog.md`'s "Merge-list order" entry) rather
+than attempted speculatively -- the three shipped pieces this same day
+(`real_discovery_order`, correctly-scoped `merge_order_bias`, batched
+leaf selection) already took live gcc exact-position matches from 3/26
+to 8/26 lines, a real, verified improvement in their own right,
+independent of whether the full-tree walk is ever built.
