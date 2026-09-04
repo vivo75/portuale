@@ -220,23 +220,37 @@ architectural — a single-pass BFS can't grow into these incrementally:
   `net-libs/gnome-online-accounts` gcc-case gap is therefore NOT
   `gather_deps`-shaped; live gnome-control-center has no actual
   dependency cycle, so real never even calls `gather_deps` while
-  resolving it. The gap's real cause is still open — most likely the
-  "greedily pop every currently-available leaf at once, in `.order`"
-  optimization (`depgraph.py:9764-9777`) interacting with the ordinary
-  priority-ranged scan in a way `topological_merge_order_impl`'s
-  one-at-a-time `min_by_key` Kahn's walk doesn't reproduce (each pick
-  immediately re-opens availability for the next, where real only
-  reopens it on the *next* outer round) — not yet isolated to a minimal
-  fixture. Portuale's own existing cycle-breaking fallback (prefer an
-  entry whose every unplaced dependency is a soft edge; otherwise emit
-  the earliest-discovered entry) stays as the practical approximation --
-  a full `gather_deps`/`find_smallest_cycle` port (smallest-cycle
-  selection across multiple priority levels) is deferred until a real
-  fixture actually needs it.
+  resolving it. Portuale's own existing cycle-breaking fallback (prefer
+  an entry whose every unplaced dependency is a soft edge; otherwise
+  emit the earliest-discovered entry) stays as the practical
+  approximation -- a full `gather_deps`/`find_smallest_cycle` port
+  (smallest-cycle selection across multiple priority levels) is deferred
+  until a real fixture actually needs it.
 
-  **Still open:** the priority-ranged/batched leaf-selection mechanism
-  above; `asap_nodes`/libc-first special-casing; the `_FrontierDigraph`
-  perf layer (not needed at portuale's graph sizes); blocker/uninstall
+  **Batched leaf selection shipped (2026-09-04, same day, third pass).**
+  The leading hypothesis above was right: `topological_merge_order_impl`
+  / `_topological_merge_order`'s main loop picked one entry at a time,
+  recomputing availability after every placement, so a freshly-freed
+  entry could jump ahead of an already-available sibling with a higher
+  rank that real would have already committed to *that round*. Fixed to
+  mirror real's own "Greedily pop all of these nodes since no
+  relationship has been ignored" optimization
+  (`depgraph.py:9764-9777`): each round now computes the *whole* current
+  batch of genuine leaves (no unplaced dependency of any kind), sorts it
+  by discovery/bias rank, and emits the entire batch before recomputing
+  -- only an empty batch falls through to the unchanged one-at-a-time
+  cycle-breaking fallback. Live gcc-merge exact-position matches against
+  real went from 3/26 to 8/26 lines; `net-libs/rest`/`net-libs/gnome-
+  online-accounts` both moved substantially earlier, though not yet to
+  their exact real positions.
+
+  **Still open:** real's fuller priority hierarchy
+  (`DepPrioritySatisfiedRange`/`DepPriorityNormalRange`'s
+  `NONE`/`SOFT`/`MEDIUM_SOFT`/`MEDIUM_POST` ladder, vs. portuale's binary
+  hard/soft edge distinction) — the likely remaining cause of the gcc gap
+  now that discovery order, bias, and batching are all shipped;
+  `asap_nodes`/libc-first special-casing; the `_FrontierDigraph` perf
+  layer (not needed at portuale's graph sizes); blocker/uninstall
   interleaving (portuale's `-p` pretend path has no uninstall/blocker
   resolution yet, a separate pre-existing gap); a full `gather_deps`
   port for the genuine-cycle case.

@@ -12882,3 +12882,59 @@ correctly-scoped bias neither helps nor hurts that segment, since none
 of its packages are `@system`-reachable in the live profile. `portage-repo`'s
 full unit suite (286 tests) and the full contract suite (Rust==Python
 byte-identical) pass.
+
+### Merge-list order — batched leaf selection (2026-09-04, same day, third pass)
+
+The previous entry's own leading hypothesis for the remaining
+`net-libs/rest`/`net-libs/gnome-online-accounts` gcc-case gap: real
+`_serialize_tasks`' ordinary (non-cycle) selection loop doesn't pick one
+leaf at a time. Its first, strictest priority level
+(`depgraph.py:9764-9777`, `ignore_priority is None`) computes `nodes` --
+every entry that's a *genuine* leaf right now, no unplaced dependency of
+any kind -- and, in the common non-`--tree` case, sets `selected_nodes =
+nodes` ("Greedily pop all of these nodes since no relationship has been
+ignored"): the *whole* batch is emitted together, in `.order` sequence,
+before the next round even looks at what those placements just freed up.
+
+`topological_merge_order_impl` / `_topological_merge_order`'s main
+Kahn's-algorithm loop was picking one entry at a time via `min_by_key`,
+recomputing the emittable set after *every single* placement -- so a
+freshly-freed entry (one whose only remaining blocker was just placed)
+could immediately jump ahead of an already-available sibling with a
+higher discovery/bias rank that real would already have committed to
+*that same round*. Fixed: each iteration of the main loop now computes
+the whole current-round batch (every entry whose `requires` are already
+satisfied), sorts it by discovery rank, and emits the entire batch before
+recomputing -- only once a round's batch comes up empty does the walk
+fall through to the existing (unchanged) one-at-a-time cycle-breaking
+fallbacks, matching real's own drop to a looser priority level.
+
+Verified against the same live `gnome-base/gnome-control-center` merge:
+exact-position matches against real's own order went from 3/26 to 8/26
+lines (measured by comparing each line's package name at its own
+position), including the first three lines now matching exactly, and
+`net-libs/rest`/`net-libs/gnome-online-accounts` both moved substantially
+earlier (though not yet to their exact real positions) -- confirming the
+batching hypothesis was a genuine, real-grounded contributor to the gap,
+not the whole story. Rust and Python verified byte-identical on this
+exact live command (`emerge -p --getbinpkg=y gnome-base/gnome-control-
+center` piped through both binaries, diffed).
+
+Two more fixtures needed their expected order updated for the same
+reason as the previous entry's two: `dev-libs/upgradepkg` and
+`dev-libs/innernestedsetpkg` are both genuine leaves (no dependency of
+their own) available from round one in the `@world`/`@system`-membership
+fixtures, so they're now batched into that first round together with
+`dev-libs/newpkg`/the trivial entries -- ahead of `dev-libs/withdeps`,
+which needs both `newpkg` *and* `upgradepkg` placed first and so only
+becomes available starting round two. `portage-repo`'s full unit suite
+(286 tests) and the full contract suite (Rust==Python byte-identical)
+pass.
+
+**Remaining gcc-case gap, characterized but not yet closed:** the
+still-mismatched positions are consistent with real's deeper priority
+hierarchy (`DepPrioritySatisfiedRange`/`DepPriorityNormalRange`'s full
+`NONE`/`SOFT`/`MEDIUM_SOFT`/`MEDIUM_POST` ladder, vs. portuale's binary
+hard/soft edge distinction), `asap_nodes` (libc-first merging), and the
+`_FrontierDigraph` incremental-leaf-tracking layer -- none yet ported;
+see `docs/scope-backlog.md`'s "Merge-list order" entry.

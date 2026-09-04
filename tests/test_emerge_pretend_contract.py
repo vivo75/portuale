@@ -7912,10 +7912,18 @@ def test_world_expands_to_the_fixture_world_files_own_atoms(emerge_binary, fixtu
 
     Merge order: newpkg/withdeps/upgradepkg are also reachable from
     @system in this shared fixture profile (profiles/base+default/
-    packages), so real's own _merge_order_bias promotes all three ahead
-    of the unrelated, non-system innernestedsetpkg -- which lands dead
-    last despite being discovered earlier -- same real-grounded bias
-    documented on portage-repo::merge_order_bias / _merge_order_bias."""
+    packages), so real's own _merge_order_bias promotes newpkg ahead of
+    the unrelated, non-system innernestedsetpkg. upgradepkg and
+    innernestedsetpkg are both genuine leaves (no dependency of their
+    own) available from round one, so real's own "greedily pop every
+    available leaf at once" batching (_serialize_tasks'
+    ignore_priority-is-None branch) places both of them -- and
+    nestedsetpkg/dualslotpkg -- in that same first round, before withdeps
+    (which needs newpkg *and* upgradepkg placed first) becomes available
+    at all; withdeps therefore lands last, after innernestedsetpkg, even
+    though upgradepkg is withdeps' own RDEPEND target. Same real-grounded
+    bias + batching documented on portage-repo::merge_order_bias /
+    topological_merge_order_impl."""
     result = _run([str(emerge_binary)], ["--pretend", "--update", "@world"], fixture_env)
     assert result.returncode == 0
     assert result.stdout.splitlines() == [
@@ -7923,8 +7931,8 @@ def test_world_expands_to_the_fixture_world_files_own_atoms(emerge_binary, fixtu
         'dev-libs/nestedsetpkg-1.0 is already installed; nothing to do',
         'dev-libs/dualslotpkg-2.0 is already installed; nothing to do',
         '[ebuild     U  ] dev-libs/upgradepkg-2.0 [1.0]',
-        '[ebuild  N     ] dev-libs/withdeps-1.0 ',
         '[ebuild  N     ] dev-libs/innernestedsetpkg-1.0 ',
+        '[ebuild  N     ] dev-libs/withdeps-1.0 ',
     ]
 
 
@@ -7934,7 +7942,7 @@ def test_world_combines_with_an_explicit_atom(emerge_binary, fixture_env):
     real portage's own most common combined usage shape. --update is
     added for the same reason as the plain @world test above. Merge
     order: see test_world_expands_to_the_fixture_world_files_own_atoms's
-    own doc comment for why innernestedsetpkg lands last."""
+    own doc comment for why withdeps lands last, after innernestedsetpkg."""
     result = _run(
         [str(emerge_binary)],
         ["--pretend", "--update", "dev-libs/samepkg", "@world"],
@@ -7947,8 +7955,8 @@ def test_world_combines_with_an_explicit_atom(emerge_binary, fixture_env):
         'dev-libs/nestedsetpkg-1.0 is already installed; nothing to do',
         'dev-libs/dualslotpkg-2.0 is already installed; nothing to do',
         '[ebuild     U  ] dev-libs/upgradepkg-2.0 [1.0]',
-        '[ebuild  N     ] dev-libs/withdeps-1.0 ',
         '[ebuild  N     ] dev-libs/innernestedsetpkg-1.0 ',
+        '[ebuild  N     ] dev-libs/withdeps-1.0 ',
     ]
 
 

@@ -9481,17 +9481,44 @@ fn topological_merge_order_impl(
     let mut placed = vec![false; n];
     let mut order: Vec<usize> = Vec::with_capacity(n);
     while order.len() < n {
-        let next = (0..n)
+        // Real `_serialize_tasks`' own "Greedily pop all of these nodes
+        // since no relationship has been ignored" optimization
+        // (`depgraph.py:9764-9777`, the `ignore_priority is None`
+        // branch of its priority-ranged scan): every entry that's a
+        // *genuine* leaf right now -- no unplaced dependency of any
+        // kind, hard or soft -- gets emitted together, in one batch, in
+        // `.order` (bias-adjusted discovery rank) sequence, before the
+        // next round even looks at what that batch's placements just
+        // freed up. A one-at-a-time walk here would let a freshly-freed
+        // entry (say, one whose only blocker was `A` in this same
+        // batch) jump ahead of an already-available sibling with a
+        // higher discovery rank that real would have already committed
+        // to this round -- exactly the gap a live `gnome-base/gnome-
+        // control-center` comparison caught (`net-libs/rest` /
+        // `net-libs/gnome-online-accounts`, both available from round
+        // one, were landing after entries only *they* would go on to
+        // free up).
+        let mut batch: Vec<usize> = (0..n)
             .filter(|&i| !placed[i] && requires[i].iter().all(|&d| placed[d]))
+            .collect();
+        if !batch.is_empty() {
+            batch.sort_by_key(|&i| discovery_rank[i]);
+            for i in batch {
+                placed[i] = true;
+                order.push(i);
+            }
+            continue;
+        }
+        // Cycle: no entry is fully satisfied via an ordinary edge. Real's
+        // own priority-relaxation scan drops down to one-at-a-time
+        // selection past this point (an asap/parent-preference heuristic
+        // portuale approximates with the same discovery-rank tie-break) --
+        // break it at a run-time edge, picking an entry whose every
+        // *unplaced* dependency is a soft edge (real `_serialize_tasks`'
+        // `ignore_priority`).
+        let next = (0..n)
+            .filter(|&i| !placed[i] && requires_hard[i].iter().all(|&d| placed[d]))
             .min_by_key(|&i| discovery_rank[i])
-            // Cycle: no entry is fully satisfied. Break it at a run-time
-            // edge -- pick an entry whose every *unplaced* dependency is a
-            // soft edge (real `_serialize_tasks`' `ignore_priority`).
-            .or_else(|| {
-                (0..n)
-                    .filter(|&i| !placed[i] && requires_hard[i].iter().all(|&d| placed[d]))
-                    .min_by_key(|&i| discovery_rank[i])
-            })
             // Unbreakable cycle (all remaining have an unplaced hard dep):
             // emit the earliest-discovered unplaced entry and continue.
             .unwrap_or_else(|| {

@@ -6971,27 +6971,47 @@ def _topological_merge_order(entries, edge_kind_map=None, top_level_atoms=(), co
     placed = [False] * n
     order = []
     while len(order) < n:
+        # Real _serialize_tasks' own "Greedily pop all of these nodes
+        # since no relationship has been ignored" optimization
+        # (depgraph.py:9764-9777, the ignore_priority is None branch of
+        # its priority-ranged scan): every entry that's a *genuine* leaf
+        # right now -- no unplaced dependency of any kind, hard or soft
+        # -- gets emitted together, in one batch, in .order (bias-
+        # adjusted discovery rank) sequence, before the next round even
+        # looks at what that batch's placements just freed up. A
+        # one-at-a-time walk here would let a freshly-freed entry (say,
+        # one whose only blocker was A in this same batch) jump ahead of
+        # an already-available sibling with a higher discovery rank that
+        # real would have already committed to this round -- exactly the
+        # gap a live gnome-base/gnome-control-center comparison caught
+        # (net-libs/rest / net-libs/gnome-online-accounts, both
+        # available from round one, were landing after entries only
+        # *they* would go on to free up). Mirrors portage-repo/src/
+        # lib.rs's topological_merge_order_impl exactly.
+        batch = sorted(
+            (i for i in range(n) if not placed[i] and all(placed[d] for d in requires[i])),
+            key=lambda i: discovery_rank[i],
+        )
+        if batch:
+            for i in batch:
+                placed[i] = True
+                order.append(i)
+            continue
+        # Cycle: no entry is fully satisfied via an ordinary edge. Real's
+        # own priority-relaxation scan drops down to one-at-a-time
+        # selection past this point (an asap/parent-preference heuristic
+        # this reference approximates with the same discovery-rank
+        # tie-break) -- break it at a run-time edge, picking an entry
+        # whose every unplaced dependency is a soft edge.
         nxt = min(
             (
                 i
                 for i in range(n)
-                if not placed[i] and all(placed[d] for d in requires[i])
+                if not placed[i] and all(placed[d] for d in requires_hard[i])
             ),
             key=lambda i: discovery_rank[i],
             default=None,
         )
-        if nxt is None:
-            # Cycle: break it at a run-time edge -- pick an entry whose
-            # every unplaced dependency is a soft edge.
-            nxt = min(
-                (
-                    i
-                    for i in range(n)
-                    if not placed[i] and all(placed[d] for d in requires_hard[i])
-                ),
-                key=lambda i: discovery_rank[i],
-                default=None,
-            )
         if nxt is None:
             # Unbreakable cycle: emit the earliest-discovered unplaced
             # entry.
