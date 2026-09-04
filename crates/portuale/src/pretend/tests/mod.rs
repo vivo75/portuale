@@ -54,6 +54,11 @@ fn ask_pretend_unowned_root() -> Option<std::path::PathBuf> {
     ))
 }
 
+/// The `portuale` binary next to the current test executable.
+fn built_portuale_bin() -> std::path::PathBuf {
+    crate::self_exe::built_portuale_bin()
+}
+
 /// A scratch `ROOT` with a stale multi-item resume list. Returns the root plus
 /// the file's bytes before the run under test.
 fn stale_resume_root(tag: &str) -> (std::path::PathBuf, Vec<u8>) {
@@ -81,6 +86,30 @@ fn stale_resume_root(tag: &str) -> (std::path::PathBuf, Vec<u8>) {
     .unwrap();
     let before = std::fs::read(crate::mtimedb::mtimedb_path(&root)).unwrap();
     (root, before)
+}
+
+/// Fixture-config env for a spawned `portuale emerge` that resolves: the
+/// committed fixture tree as config and the scratch dir as `ROOT`.
+fn fixture_resolve_env(
+    root: &std::path::Path,
+    portage_tmpdir: &std::path::Path,
+) -> Vec<(String, String)> {
+    let fixtures = fixtures_root();
+    vec![
+        (
+            "PORTAGE_CONFIGROOT".to_string(),
+            fixtures.display().to_string(),
+        ),
+        ("ROOT".to_string(), root.display().to_string()),
+        (
+            "DISTDIR".to_string(),
+            fixtures.join("distfiles").display().to_string(),
+        ),
+        (
+            "PORTAGE_TMPDIR".to_string(),
+            portage_tmpdir.display().to_string(),
+        ),
+    ]
 }
 
 /// Bound every wait on a pty-driven child (default 60 s, overridable); on expiry
