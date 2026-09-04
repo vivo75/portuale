@@ -1100,6 +1100,35 @@ fn feature_token_present(token: &str) -> bool {
         .unwrap_or(false)
 }
 
+/// Real `FEATURES` for the phase's own bash environment
+/// (`doebuild_environment()`'s own `mysettings["FEATURES"]`, the same
+/// source every isolation check above already reads via
+/// `feature_token_present`) -- passed straight through rather than
+/// blanked, so real, unmodified bash that gates its own behavior on a
+/// `contains_word <token> "${FEATURES}"` check runs correctly: real
+/// `bin/estrip`'s own `compressdebug`/`installsources`/`nostrip`/
+/// `splitdebug`/`xattr` handling (called from `prepstrip`/`prepallstrip`
+/// during `install`); `phase-functions.sh`'s own `__dyn_test` (`FEATURES=
+/// test` is what actually makes `src_test` run at all -- previously a
+/// silent, unconditional no-op here regardless of what the invoker
+/// asked for) and `nostrip`/`ccache`/`distcc`/`noauto` checks;
+/// `misc-functions.sh`'s own `noclean`/`keepwork`/`sfperms`/`suidctl`/
+/// `selinux`/`packdebug`/`chflags`/`binpkg-do{compress,strip}` handling.
+/// None of these are also interpreted by portuale's own Rust side (the
+/// tokens Rust *does* independently act on --
+/// `sandbox`/`usersandbox`/`{network,ipc,mount,pid}-sandbox`,
+/// `distlocks`, `buildpkg-live`, `binpkg-multi-instance` -- are never
+/// gated on again by any real bash this module runs, confirmed by
+/// grepping every `contains_word … "${FEATURES}"` site in `bin/*.sh`),
+/// so there's no double-handling risk; a token real bash doesn't
+/// understand, or whose supporting tool/env var isn't present
+/// (`ccache`/`distcc`/`selinux` all require their own binaries), is
+/// exactly as inert as it always was, and degrades exactly the way real
+/// portage's own bash would under the same conditions.
+fn phase_features_value() -> String {
+    std::env::var("FEATURES").unwrap_or_default()
+}
+
 /// `FEATURES=network-sandbox` present?
 fn network_sandbox_requested() -> bool {
     feature_token_present("network-sandbox")
@@ -1547,7 +1576,7 @@ fn phase_env_vars(
             }
             .to_string(),
         ),
-        ("FEATURES".to_string(), String::new()),
+        ("FEATURES".to_string(), phase_features_value()),
         ("USE".to_string(), String::new()),
         ("EPREFIX".to_string(), String::new()),
         ("EMERGE_FROM".to_string(), "ebuild".to_string()),
@@ -2625,6 +2654,73 @@ mod tests {
         assert!(shim.contains("ip link set lo up"));
         assert!(shim.contains("ip addr add 10.0.0.1/8 dev lo"));
         assert!(shim.contains("ip -6 addr add fd::1/8 dev lo"));
+    }
+
+    #[test]
+    fn features_test_passthrough_actually_runs_src_test() {
+        // A real subprocess invocation, not `std::env::set_var` --
+        // `run_commands`'s own doc comment already establishes that
+        // mutating process-global env vars is unsound from parallel
+        // test threads. Spawning the real `portuale` binary gives each
+        // invocation its own independent environment, exactly the way
+        // real portage's own `FEATURES` behavior is env-var-scoped.
+        let tmp = std::env::temp_dir().join(format!(
+            "ebuild-phases-test-{}-features_test_passthrough",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&tmp);
+        let pkg_dir = tmp.join("pkg/dev-libs/srctestpkg");
+        std::fs::create_dir_all(&pkg_dir).unwrap();
+        let ebuild = pkg_dir.join("srctestpkg-1.0.ebuild");
+        std::fs::write(
+            &ebuild,
+            "EAPI=8\nSLOT=\"0\"\nsrc_test() { touch \"${T}/test-ran\" || die; }\n",
+        )
+        .unwrap();
+        let root = tmp.join("root");
+        let portage_tmpdir = tmp.join("tmp");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::create_dir_all(&portage_tmpdir).unwrap();
+        let marker = portage_tmpdir.join("portage/dev-libs/srctestpkg-1.0/temp/test-ran");
+
+        // `CARGO_BIN_EXE_<name>` is only set for `tests/` integration
+        // targets, not for a unit test compiled into the crate's own
+        // binary -- derive the sibling `portuale` binary's path from
+        // this very test binary's own path instead (`target/<profile>/
+        // deps/portuale-<hash>` -> `target/<profile>/portuale`).
+        let mut portuale_bin = std::env::current_exe().expect("current test exe");
+        portuale_bin.pop();
+        if portuale_bin.ends_with("deps") {
+            portuale_bin.pop();
+        }
+        portuale_bin.push("portuale");
+
+        let run = |features: &str| {
+            let _ = std::fs::remove_file(&marker);
+            let status = std::process::Command::new(&portuale_bin)
+                .env_clear()
+                .env("PATH", std::env::var("PATH").unwrap())
+                .env("HOME", std::env::var("HOME").unwrap_or_default())
+                .env("ROOT", &root)
+                .env("PORTAGE_TMPDIR", &portage_tmpdir)
+                .env("FEATURES", features)
+                .args(["ebuild", ebuild.to_str().unwrap(), "test"])
+                .status()
+                .expect("portuale ebuild spawns");
+            assert!(status.success(), "FEATURES={features:?}: {status:?}");
+        };
+
+        // Real `__dyn_test` (`phase-functions.sh:559`): `src_test` is a
+        // no-op ("Test phase [not enabled]") unless `FEATURES` contains
+        // `test` -- previously always the case here regardless of the
+        // real, outer `FEATURES` the invoker actually asked for, since
+        // the phase's own exported `FEATURES` was unconditionally
+        // blanked (`phase_features_value`'s own doc comment).
+        run("");
+        assert!(!marker.exists(), "src_test ran without FEATURES=test");
+
+        run("test");
+        assert!(marker.exists(), "src_test did not run with FEATURES=test");
     }
 
     #[test]
