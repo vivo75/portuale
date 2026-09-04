@@ -3351,9 +3351,31 @@ fn shell_split(s: &str) -> Vec<String> {
 /// is silent (real: "kernel probably doesn't support ionice"). Called
 /// once, unconditionally -- harmless under `--pretend`.
 ///
-/// v1 cuts: only this process gets the policy (real also does the
-/// `forkserver` pid); no Python-reference mirror (a process concern, not
-/// a `--pretend` resolution one -- covered only by `test_portuale.py`).
+/// Investigated and confirmed a non-issue, not a gap: real also applies
+/// this to a Python `multiprocessing` "forkserver" pid when
+/// `multiprocessing.get_start_method() == "forkserver"`
+/// (`actions.py:3250-3271`) -- a long-lived daemon process real
+/// portage's own `Scheduler` forks *worker* processes from under that
+/// specific start method, so the forkserver's own policy (not just the
+/// main process's) determines what those forked workers inherit.
+/// Portuale has no equivalent at all: `emerge_build::run_build_
+/// scheduler`'s own `-jN` parallelism is OS *threads*
+/// (`std::thread::scope`), not forked worker processes, and every real
+/// build subprocess (`ebuild_phases::spawn_trackable`) is spawned
+/// directly from whichever thread needs it -- main or a scheduler
+/// worker -- via a plain `fork`+`exec`, never through a persistent
+/// forker. `sched_setscheduler` applied here, on the main thread,
+/// before any worker thread is ever created (this runs once, at the
+/// very top of `run()`, well before `run_build_scheduler`'s own
+/// `std::thread::scope` call), is therefore already sufficient: POSIX
+/// thread creation inherits the creating thread's own scheduling policy
+/// by default (`PTHREAD_INHERIT_SCHED`), confirmed empirically on Linux
+/// (a `std::thread::spawn`ed thread reports the same `sched_getscheduler`
+/// value the main thread set moments earlier) -- so every scheduler
+/// worker thread, and every subprocess it in turn spawns, already gets
+/// the same policy this call establishes, with nothing further to do.
+/// No Python-reference mirror needed either way: a process/thread
+/// concern, not a `--pretend` resolution one.
 fn apply_portage_scheduling_policy() {
     let pid = std::process::id().to_string();
     apply_scheduling_policy();

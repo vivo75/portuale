@@ -324,21 +324,53 @@ architectural — a single-pass BFS can't grow into these incrementally:
   shipped 2026-09-03: real `dep_expand`'s `null/`-insertion +
   missing-`=` retry + `cpv_expand` + splice, as `dep_expand_token`.)*
 
-### B. Scheduler / build orchestration
+### B. Scheduler / build orchestration — **complete (2026-09-04)**
 
-**Substantially complete.** Remaining:
+All six remaining points shipped 2026-09-04:
 
-- the merge step's `pkg_*` hooks still run uncaptured through brush
-  (residual stderr noise under `-jN` / `--quiet-build`);
-- one tokio runtime per `run_commands`; killing in-flight builds on a
-  hard failure; `PORTAGE_LOGDIR` / `split-log`;
-- `mtimedb["resume"]`: `resume_backup` rotation; the build-time-flag half
-  of `myopts`; binary-entry replay;
-- `--ask`: TTY gating, prompt colour, re-prompt on a bad answer;
-- `elog`: `mail` / `mail_summary` (out of scope — a real SMTP client +
-  MIME assembly), `syslog` / `custom` (unported);
-- `PORTAGE_SCHEDULING_POLICY` reaches only this process (real
-  `apply_priorities` also does the `multiprocessing` forkserver pid).
+- The merge step's `pkg_preinst`/`pkg_postinst`/`pkg_prerm`/`pkg_postrm`
+  hooks are captured to the same per-package `build.log` the `install`
+  phase chain already was, instead of leaking straight to the terminal
+  under `-jN`/`--quiet-build` (`MergeOptions::log_file`, threaded
+  through `run_single_phase`/`run_phase_from_saved_env`).
+- One process-wide tokio runtime (`shared_runtime`) instead of a fresh
+  one per phase per package. Hard scheduler failures now `SIGTERM` every
+  still-running build's own process group instead of letting
+  `std::thread::scope`'s implicit join wait them out (`spawn_trackable`
+  + a per-`run_build_scheduler`-call registry — deliberately *not* a
+  single process-wide one, which would let one `cargo test` thread's
+  failure kill an unrelated, concurrently-running test's subprocess).
+  `PORTAGE_LOGDIR`/`FEATURES=split-log` real now too (`${T}/build.log`
+  becomes a symlink to the real, permanent logdir location); cut:
+  `FEATURES=compress-build-logs` (a separate gzip-piping addition).
+- `mtimedb["resume"]`: `resume_backup` rotation (real
+  `actions.py:664-672`/`220-225`) and binary-entry replay (each
+  mergelist item now carries real's own `"ebuild"`/`"binary"` type tag,
+  `ResumeEntryKind`, dispatched through `emerge_getbinpkg::
+  run_merge_plan` the same way `--getbinpkg` itself is) are both real.
+  This also closes the "build-time flags" gap `myopts` had no room for
+  -- the mergelist's own per-entry kind now records that decision
+  directly, more robust than re-deriving it from restored flags. Cut: a
+  resumed binary entry always resolves from the local `$PKGDIR`.
+- `--ask`: TTY gating (`stdin.isatty()`, real `actions.py:3920-3926`),
+  real bold-question + green/red `[Yes/No]` prompt colouring
+  (`PROMPT_CHOICE_DEFAULT`/`PROMPT_CHOICE_OTHER`), and re-prompting on
+  an unrecognized answer instead of quitting are all real now.
+- `elog`: `syslog` (one real `syslog(3)` call per line, `LOG_LOCAL5`,
+  ported bug-for-bug including real's own `openlog()` logopt mix-up)
+  and `custom` (`$PORTAGE_ELOG_COMMAND`, real bash, `${LOGFILE}`/
+  `${PACKAGE}` substituted) are both real now. `mail`/`mail_summary`
+  remain the one deliberate cut (a real SMTP client + MIME assembly).
+- `PORTAGE_SCHEDULING_POLICY` reaching only "this process" — investigated
+  and confirmed a non-issue, not a gap: real's own second target is a
+  Python `multiprocessing` "forkserver" daemon process, a concept
+  portuale's OS-thread-based (not forked-worker-process-based)
+  scheduler has no equivalent of at all. POSIX thread creation inherits
+  the creating thread's own scheduling policy by default, confirmed
+  empirically on Linux, and the policy is applied once, on the main
+  thread, before any scheduler worker thread is ever created -- so
+  every worker thread (and every subprocess it spawns) already gets it
+  for free.
 
 ### C. Config resolution depth — **complete (2026-09-03)**
 
@@ -569,11 +601,11 @@ item, with a short incremental tail:
    full preference bins, deeper multi-constraint interplay), not a
    missing mechanism.
 
-2. **The rest of Part 2** — the scheduler tail (2.B), the deliberate
-   sandbox and `FEATURES` cuts (2.D), the remote-binhost / gpkg-signing
+2. **The rest of Part 2** — the remaining gpkg-signing/xpak-multi-instance
    gaps (2.E), the `--info` host-state half and `--regen` threading
    (2.F), the brush `declare -f` upstream fix (2.G). Each is one focused
    slice, the rhythm portuale already runs at.
 
-Config-resolution depth (2.C) and sandbox isolation (2.D) are complete;
-the action/flag surface (2.F) is substantially complete.
+Config-resolution depth (2.C), sandbox isolation (2.D), and scheduler /
+build orchestration (2.B) are complete; the action/flag surface (2.F)
+is substantially complete.

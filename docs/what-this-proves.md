@@ -13153,3 +13153,136 @@ phase and the index entry can never disagree. A standalone `ebuild
 <file> package`/`merge` still passes `""` -- no resolved graph reaches
 that deep, and that gap (along with the identical one for `emerge
 --resume`) stays open, honestly documented rather than papered over.
+
+### Scheduler / build orchestration backlog -- all six points, one day (2026-09-04)
+
+Asked to implement "B. Scheduler / build orchestration"
+(`docs/scope-backlog.md`) "all six points", every one turned out real
+and tractable -- no stale backlog text this time (unlike the binary-
+packages pass earlier the same day), but two of the six needed real
+investigation before landing on the right scope.
+
+**Captured merge-step hook output**: `pkg_preinst`/`pkg_postinst`/
+`pkg_prerm`/`pkg_postrm` (run outside `install`'s own `actionmap_deps`
+chain -- real `dblink.treewalk()` invokes them directly) had no log
+file threaded to them at all, so their own output always leaked
+straight to the terminal even under `-jN`/`--quiet-build`, where every
+*other* phase's output was already cleanly redirected. Added
+`MergeOptions::log_file`, threaded to every hook call site already
+reachable through it; the scheduler now derives the same
+`build_log_path` its own `install`-phase capture used, so a hook's
+output lands appended after the phase's, in one continuous per-package
+log. A new fixture (`hookoutputpkg`, `pkg_preinst`/`pkg_postinst` each
+echoing an observable marker) and regression test caught this working
+correctly on the first real end-to-end run.
+
+**One shared tokio runtime**: four separate sync entry points
+(`run_misc_function`/`run_commands_logged`/`run_single_phase`/
+`run_phase_from_saved_env`) each spun up and tore down their own fresh
+multi-threaded runtime per call -- a real `emerge` merging many
+packages paid that setup cost once per phase per package instead of
+once per invocation, unlike real `_emerge/Scheduler.py`'s own single
+`asyncio` event loop for the whole run. A `OnceLock`-backed
+`shared_runtime` fixed this in four one-line call-site changes.
+
+**Killing in-flight builds on a hard failure** needed a real design
+decision, caught by the test suite itself: the first implementation
+used a single process-wide registry of running subprocess groups, and
+under the *default parallel* `cargo test` runner, one test's own
+scheduler hard-failure path sent `SIGTERM` to a completely unrelated,
+concurrently-running test's subprocess -- 13 unrelated tests failed,
+none of them touching the scheduler at all. The registry needed to be
+scoped per `run_build_scheduler` *call*, not a single global: a
+thread-local pointer (safe here specifically because none of this
+module's async phase bodies ever `tokio::spawn` an inner task, so
+`runtime.block_on(fut)` always drives the whole future to completion on
+the calling OS thread -- the same one a scheduler worker's own
+`std::thread::scope` closure set the guard on, with no tokio-internal
+worker-migration to break the thread-local's visibility) set at the top
+of each worker closure, read by `spawn_trackable` deep inside the
+phase-execution machinery, with zero signature changes to the whole
+chain in between. Every scheduled build's own top-level subprocess
+spawns into a fresh process group (`process_group(0)`) so one signal
+reaches the whole real descendant tree (`unshare` -> `sandbox` -> real
+`bash` -> a real compiler), not just its outermost process. A new
+fixture (`schedslow`, a 20-second `src_compile` sleep) proved the fix:
+paired with an immediately-failing sibling under `jobs=2`, the whole
+run now completes in well under a second instead of waiting out the
+full sleep.
+
+**`PORTAGE_LOGDIR`/`FEATURES=split-log`**: real `prepare_build_dirs()`
+makes `${T}/build.log` a symlink to a permanent location under
+`$PORTAGE_LOGDIR` when one's configured, rather than the real log file
+itself. Ported the same way, with the env-var reads (`PORTAGE_LOGDIR`/
+`PORTAGE_LOG_FILE_SEP`/`FEATURES=split-log`) kept at the single call
+site (`build_log_path`) and passed as explicit parameters into the
+actual symlink logic, so that logic stays directly unit-testable
+without any env-var mutation -- a real regression risk found and fixed
+before it shipped, not after (an earlier draft read the vars deep
+inside the symlink function itself).
+
+**`mtimedb["resume"]`**: `resume_backup` rotation (real
+`actions.py:664-672`/`220-225`) was a self-contained, bounded piece --
+the trickiest part was a proper brace-matched `extract_object` replacing
+a naive "read up to the first `}`" parser, needed once a second
+top-level section could trail after the first in the same file (caught
+by a test that found favorites parsing corrupted by exactly that
+before the fix). Binary-entry replay turned out both real and
+genuinely tractable once traced through: `entries_not_merged`
+(the renamed `source_entries_not_merged`) was silently dropping every
+`Binary` entry instead of tagging and keeping it, and the `--getbinpkg`
+failure path never called `write_resume_list` at all -- a failed mixed
+run left nothing for `--resume` to find, full stop. Tagging each
+mergelist entry with real's own `"ebuild"`/`"binary"` type turned out
+to *also* close the separately-listed "build-time flags in myopts" gap
+for free: real re-derives usepkg/getbinpkg preference from restored
+`myopts` and re-decides binary-vs-source at resume time, but recording
+that decision directly, once, at the point the original run made it,
+sidesteps needing to restore the flags that led to it at all.
+
+**`--ask`**: TTY gating (real `actions.py:3920-3926`, exits before
+prompting rather than hanging a pipe nobody can answer) and prompt
+colour (`PROMPT_CHOICE_DEFAULT`/`PROMPT_CHOICE_OTHER`, two `_styles`
+entries `color.rs` didn't have yet) were mechanical. Re-prompting on an
+unrecognized answer instead of quitting surfaced a genuine test-design
+problem: the natural way to test it -- pipe a bad answer then a good
+one to a real subprocess -- is now provably *impossible* once the TTY
+gate is in place, since a pipe is never a terminal. Confirmed by
+writing the test anyway and watching it fail exactly that way, matching
+a real limitation portage itself has (there is no way to test `--ask`'s
+own prompt loop through a pipe in real portage either). Fixed by
+extracting the loop's pure matching logic (`classify_yes_no`) for
+direct unit testing, and keeping only the TTY-gate's own exit-1
+behavior -- which doesn't need a real terminal to observe -- as a real
+subprocess test.
+
+**`elog` `syslog`/`custom`**: both real, both bounded. `syslog` ports
+real's own `openlog()` "logopt" argument bug-for-bug (priority-level
+constants passed where option flags belong, almost certainly a
+copy-paste mistake in real portage's own source) rather than silently
+fixing it -- a same-behavior clone stays a same-behavior clone even
+when upstream's own code has a wart. `custom` reuses the existing
+`save_process` (real's own `mod_custom.process` always calls
+`mod_save.process` first, unconditionally) plus a real, unmodified
+`bash -c $PORTAGE_ELOG_COMMAND` spawn, matching the same "run the real
+external process" precedent already established everywhere else in
+this codebase.
+
+**`PORTAGE_SCHEDULING_POLICY` reaching only "this process"** was the
+other point needing real investigation before landing on a scope: real
+also applies it to a Python `multiprocessing` "forkserver" pid, a
+persistent daemon process real's own `Scheduler` forks worker
+*processes* from under that specific multiprocessing start method.
+Portuale's own `-jN` parallelism is OS *threads*
+(`std::thread::scope`), with no forked-worker-process layer at all --
+there is no forkserver-equivalent to apply anything to. Whether the
+existing single `sched_setscheduler` call (on the main thread, before
+any worker thread is created) actually reaches those worker threads at
+all came down to an empirical question -- POSIX leaves the default
+scheduling-inheritance attribute implementation-defined -- settled with
+a five-line throwaway program: a `std::thread::spawn`ed thread reported
+the exact same `sched_getscheduler` value the main thread had just set,
+confirming Linux's actual default is to inherit. Investigated,
+confirmed a non-issue for portuale's own architecture, and documented
+as such rather than either building a needless workaround or leaving
+the question unresolved.
