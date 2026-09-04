@@ -813,7 +813,7 @@ pub fn populate_local_pkgdir(pkgdir: &Path) -> Result<Vec<HashMap<String, String
 
             // Stale, moved, or unindexed -- re-derive fresh metadata
             // from the file itself.
-            let (pf, mut meta) = if is_gpkg {
+            let (mut pf, mut meta) = if is_gpkg {
                 (
                     name.strip_suffix(".gpkg.tar").unwrap().to_string(),
                     read_gpkg_metadata(&file)?,
@@ -824,6 +824,29 @@ pub fn populate_local_pkgdir(pkgdir: &Path) -> Result<Vec<HashMap<String, String
                     read_xpak_metadata(&file)?,
                 )
             };
+            // Real `FEATURES=binpkg-multi-instance`'s own
+            // `{pf}-{build_id}.gpkg.tar` naming (`PackageOptions::
+            // binpkg_multi_instance`'s own doc comment): the archive's
+            // own embedded `PF` (always authoritative -- real build-info,
+            // read by `read_gpkg_metadata` above) is the ground truth, so
+            // a numeric filename suffix beyond it is unambiguously a
+            // `BUILD_ID`, not part of the version -- no PMS version-
+            // grammar guessing needed. xpak is never multi-instance here
+            // (see the same doc comment), so this is gpkg-only.
+            if is_gpkg {
+                if let Some(real_pf) = meta.get("PF").filter(|p| !p.is_empty()).cloned() {
+                    if real_pf != pf {
+                        if let Some(build_id) = pf
+                            .strip_prefix(&real_pf)
+                            .and_then(|s| s.strip_prefix('-'))
+                            .filter(|s| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit()))
+                        {
+                            meta.insert("BUILD_ID".to_string(), build_id.to_string());
+                            pf = real_pf;
+                        }
+                    }
+                }
+            }
             meta.insert("CPV".to_string(), format!("{category}/{pf}"));
             meta.entry("CATEGORY".to_string())
                 .or_insert_with(|| category.to_string());

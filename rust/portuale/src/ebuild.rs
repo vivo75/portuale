@@ -312,6 +312,11 @@ pub fn run(args: &[String]) -> ExitCode {
             buildpkg_live: !std::env::var("FEATURES")
                 .map(|f| f.split_whitespace().any(|t| t == "-buildpkg-live"))
                 .unwrap_or(false),
+            // Real default is on, but this defaults off -- see
+            // `PackageOptions::binpkg_multi_instance`'s own doc comment.
+            binpkg_multi_instance: std::env::var("FEATURES")
+                .map(|f| f.split_whitespace().any(|t| t == "binpkg-multi-instance"))
+                .unwrap_or(false),
         };
         let ebuild_path = std::path::Path::new(ebuild_file);
         // One command at a time here, not the whole slice at once --
