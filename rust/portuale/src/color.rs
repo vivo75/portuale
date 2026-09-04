@@ -77,6 +77,10 @@ fn style(key: &str) -> &'static str {
         "PKG_NOMERGE_WORLD" => "blue",
         "PKG_BLOCKER" => "red",
         "PKG_BLOCKER_SATISFIED" => "teal",
+        // Real `output.py:154-155` -- `UserQuery.query`'s own default
+        // `[Yes/No]` colours (`pretend.rs`'s own `ask_confirm`).
+        "PROMPT_CHOICE_DEFAULT" => "green",
+        "PROMPT_CHOICE_OTHER" => "red",
         _ => "",
     }
 }
@@ -110,6 +114,8 @@ const STYLE_KEYS: &[&str] = &[
     "PKG_NOMERGE_WORLD",
     "PKG_BLOCKER",
     "PKG_BLOCKER_SATISFIED",
+    "PROMPT_CHOICE_DEFAULT",
+    "PROMPT_CHOICE_OTHER",
 ];
 
 /// Every `codes` colour-name -- the RHS-names a `color.map` value may

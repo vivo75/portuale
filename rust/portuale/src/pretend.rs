@@ -2440,7 +2440,13 @@ fn collect_installed_sets(
 /// Real `action_deselect` always returns `os.EX_OK` on every reachable
 /// path here (found matches, no matches, even no targets at all) --
 /// ported the same way, unconditionally `ExitCode::SUCCESS`.
-fn run_deselect(targets: &[&str], root: &Path, pretend: bool, ask: bool) -> ExitCode {
+fn run_deselect(
+    targets: &[&str],
+    root: &Path,
+    pretend: bool,
+    ask: bool,
+    color: &Colorizer,
+) -> ExitCode {
     let world_atoms = match read_world_atoms(root) {
         Ok(atoms) => atoms,
         Err(e) => {
@@ -2551,7 +2557,10 @@ fn run_deselect(targets: &[&str], root: &Path, pretend: bool, ask: bool) -> Exit
     // under `-p` entirely).
     if ask
         && !pretend
-        && !ask_confirm("Would you like to remove these packages from your world favorites?")
+        && !ask_confirm(
+            color,
+            "Would you like to remove these packages from your world favorites?",
+        )
     {
         return ExitCode::from(130);
     }
@@ -3192,7 +3201,7 @@ fn run_unmerge_pretend(
     // returns EX_OK and we're not in `--pretend`, the packages are
     // actually removed.
     if !pretend {
-        if ask && !ask_confirm("Would you like to unmerge these packages?") {
+        if ask && !ask_confirm(color, "Would you like to unmerge these packages?") {
             return ExitCode::from(130);
         }
         clean_delay_countdown();
@@ -3455,72 +3464,119 @@ fn apply_scheduling_policy() {
     }
 }
 
-/// Real `_emerge/UserQuery.query` (`portage.output.userquery`'s wrapper):
-/// prints `<question> [Yes/No] `, reads a line from stdin, and matches it
-/// case-insensitively as a prefix of one of the responses -- a bare Enter
-/// matches the first ("Yes"). Returns `true` to proceed. On "No" prints
-/// `\nQuitting.\n`; on EOF prints `Interrupted.` -- both cases the caller
-/// exits `130` (real `128 + signal.SIGINT`).
+/// Real `sys.stdin.isatty()` (`actions.py:3922`'s own `--ask` gate).
+fn stdin_is_tty() -> bool {
+    // SAFETY: `isatty` is a pure syscall on a well-known, always-valid
+    // fd (0); no pointers involved.
+    unsafe { libc::isatty(libc::STDIN_FILENO) != 0 }
+}
+
+/// Real `_emerge/UserQuery.query` (`portage.output.userquery`'s
+/// wrapper), the default `responses=["Yes", "No"]` case: prints the
+/// bold `<question>` once (real `print(bold(prompt), end=" ")`), then
+/// loops printing the bracketed, coloured choices (real `output.py:
+/// 154-155`'s own `PROMPT_CHOICE_DEFAULT`/`PROMPT_CHOICE_OTHER` --
+/// green/red) and reading a line, until it gets one that
+/// case-insensitively prefix-matches "Yes" or "No" (a bare Enter always
+/// matches "Yes") -- an unrecognized response reprints "Sorry,
+/// response '...' not understood." and loops again, real's own
+/// behavior, rather than giving up on the first bad answer. Returns
+/// `true` for "Yes"/EOF, `false` (after printing `Quitting.`, a caller-
+/// side convenience real portage's own callers each print for
+/// themselves) for "No". TTY gating happens once, globally, before
+/// `ask` is ever `true` at all (`run()`'s own `stdin_is_tty` check
+/// right after CLI parsing) -- by the time this runs, stdin is already
+/// known to be a real terminal.
 ///
-/// v1 cuts: not gated on stdin being a TTY (so it's testable by piping
-/// the answer); no colour on the prompt (real `bold()` + green/red); no
-/// `--ask-enter-invalid` (bare Enter always accepted); an unrecognized
-/// answer quits rather than re-prompting (real loops until it gets a
-/// valid response).
-fn ask_confirm(question: &str) -> bool {
+/// v1 cut: no `--ask-enter-invalid` (bare Enter always accepted as
+/// "Yes" -- real's own `enter_invalid` flag, when set, makes even a
+/// bare Enter loop back for a real answer instead).
+fn ask_confirm(color: &Colorizer, question: &str) -> bool {
     use std::io::Write;
-    print!("\n{question} [Yes/No] ");
-    let _ = std::io::stdout().flush();
-    let mut line = String::new();
-    match std::io::stdin().read_line(&mut line) {
-        Ok(0) => {
-            println!("Interrupted.");
-            false
-        }
-        Ok(_) => {
-            let a = line.trim().to_ascii_lowercase();
-            if a.is_empty() || "yes".starts_with(a.as_str()) {
-                true
-            } else {
-                println!("\nQuitting.\n");
-                false
+    print!("\n{} ", color.c("bold", question));
+    loop {
+        print!(
+            "[{}/{}] ",
+            color.c("PROMPT_CHOICE_DEFAULT", "Yes"),
+            color.c("PROMPT_CHOICE_OTHER", "No")
+        );
+        let _ = std::io::stdout().flush();
+        let mut line = String::new();
+        match std::io::stdin().read_line(&mut line) {
+            Ok(0) => {
+                println!("Interrupted.");
+                return false;
             }
-        }
-        Err(_) => {
-            println!("Interrupted.");
-            false
+            Err(_) => {
+                println!("Interrupted.");
+                return false;
+            }
+            Ok(_) => match classify_yes_no(line.trim()) {
+                Some(true) => return true,
+                Some(false) => {
+                    println!("\nQuitting.\n");
+                    return false;
+                }
+                None => print!("Sorry, response '{}' not understood. ", line.trim()),
+            },
         }
     }
 }
 
+/// The matching half of `ask_confirm`'s own loop, split out so it's
+/// directly unit-testable without any stdin involvement (the loop
+/// itself, and `ask_confirm`'s own real `--ask` TTY gate, can't be
+/// driven from a test -- feeding it piped input would trip the very
+/// `stdin_is_tty` check this backlog item added, matching real
+/// portage's own identical limitation). Real `response.upper() ==
+/// key[:len(response)].upper()`: a case-insensitive prefix match, `Yes`
+/// first so a bare empty answer (an already-trimmed line) matches it.
+fn classify_yes_no(answer: &str) -> Option<bool> {
+    let lower = answer.to_ascii_lowercase();
+    if answer.is_empty() || "yes".starts_with(lower.as_str()) {
+        Some(true)
+    } else if "no".starts_with(lower.as_str()) {
+        Some(false)
+    } else {
+        None
+    }
+}
+
 /// Real `_emerge/UserQuery.query` with an explicit `responses` list
-/// (`action_config`'s `--ask` package menu): prints `Selection? `, reads
-/// one line, accepts `1`..`n` (returns the 0-based index) or `x`/`X`
-/// (returns `None` -> the caller exits 130). Same v1 shortcuts as
-/// `ask_confirm`: not TTY-gated, no colour, an unrecognized answer
-/// cancels rather than re-prompting.
+/// (`action_config`'s `--ask` package menu, `responses = [str(i) for i
+/// in 1..=n] + ["X"]`): loops printing `Selection? ` and reading a
+/// line, accepting `1`..`n` (returns the 0-based index) or `x`/`X`
+/// (returns `None` -> the caller exits 130), reprompting on anything
+/// else -- same real "loop until valid, real UserQuery.query" behavior
+/// `ask_confirm` now has. No colour here: real's own default `colours =
+/// [bold]` only applies to `prompt` (there isn't one for this bare
+/// numeric menu -- the caller already printed the numbered list before
+/// calling this).
 fn ask_select(n: usize) -> Option<usize> {
     use std::io::Write;
-    print!("\nSelection? ");
-    let _ = std::io::stdout().flush();
-    let mut line = String::new();
-    if std::io::stdin()
-        .read_line(&mut line)
-        .ok()
-        .filter(|&b| b > 0)
-        .is_none()
-    {
-        println!("Interrupted.");
-        return None;
-    }
-    let a = line.trim();
-    match a.parse::<usize>() {
-        Ok(i) if i >= 1 && i <= n => Some(i - 1),
-        _ => {
-            if !a.eq_ignore_ascii_case("x") {
-                println!("\nQuitting.\n");
+    loop {
+        print!("\nSelection? ");
+        let _ = std::io::stdout().flush();
+        let mut line = String::new();
+        if std::io::stdin()
+            .read_line(&mut line)
+            .ok()
+            .filter(|&b| b > 0)
+            .is_none()
+        {
+            println!("Interrupted.");
+            return None;
+        }
+        let a = line.trim();
+        match a.parse::<usize>() {
+            Ok(i) if i >= 1 && i <= n => return Some(i - 1),
+            _ => {
+                if a.eq_ignore_ascii_case("x") {
+                    println!("\nQuitting.\n");
+                    return None;
+                }
+                print!("Sorry, response '{a}' not understood.");
             }
-            None
         }
     }
 }
@@ -4319,7 +4375,7 @@ fn run_prune_nodeps_or_clean(
     );
 
     if !pretend {
-        if ask && !ask_confirm("Would you like to unmerge these packages?") {
+        if ask && !ask_confirm(color, "Would you like to unmerge these packages?") {
             return ExitCode::from(130);
         }
         clean_delay_countdown();
@@ -5646,7 +5702,7 @@ fn run_config_action(
     // Real `action_config`: with `--ask`, prompt `Ready to configure
     // <cpv>?` (No -> exit 130); without it, print `Configuring pkg...`.
     if ask {
-        if !ask_confirm(&format!("Ready to configure {category}/{pf}?")) {
+        if !ask_confirm(color, &format!("Ready to configure {category}/{pf}?")) {
             return ExitCode::from(130);
         }
     } else {
@@ -7903,6 +7959,23 @@ pub fn run(args: &[String]) -> ExitCode {
         return ExitCode::from(2);
     }
 
+    // Real `actions.py:3917-3926`, checked in the same order right after
+    // option parsing finishes: `-p` first silently removes `--ask` (a
+    // `--pretend` run never does anything an actual confirmation would
+    // gate), and only once that's settled is `--ask` checked against
+    // `stdin.isatty()` -- so `--ask --pretend` on a non-terminal stdin
+    // is fine (ask is already `false` by the time the isatty check
+    // runs), but a bare `--ask` piped from a non-terminal is a hard,
+    // immediate exit rather than a prompt nobody typing into a pipe
+    // could ever answer.
+    if pretend {
+        ask = false;
+    }
+    if ask && !stdin_is_tty() {
+        eprintln!("!!! \"--ask\" should only be used in a terminal. Exiting.");
+        return ExitCode::from(1);
+    }
+
     // `--sync`: repo syncing will never be part of portuale -- point the
     // user at the tool that owns it (matching real portage's own
     // long-standing split: `emerge --sync` delegates to `emaint sync`).
@@ -7946,7 +8019,13 @@ pub fn run(args: &[String]) -> ExitCode {
     // modifier on it (real `action_depclean`'s `deselect` -- see
     // `run_depclean_pretend`).
     if deselect && !depclean && !prune && !unmerge {
-        return run_deselect(&atom_args, &root_from_env(), pretend, ask);
+        return run_deselect(
+            &atom_args,
+            &root_from_env(),
+            pretend,
+            ask,
+            &Colorizer::new(color::resolve_havecolor(color_opt)),
+        );
     }
 
     // `--list-sets`: a standalone action needing nothing from the
@@ -9342,7 +9421,7 @@ pub fn run(args: &[String]) -> ExitCode {
     if !pretend {
         // Real `_emerge/actions.py:525-536`: `--ask` prompts once, after
         // the whole merge list is displayed, before anything is built.
-        if ask && !ask_confirm("Would you like to merge these packages?") {
+        if ask && !ask_confirm(&color, "Would you like to merge these packages?") {
             return ExitCode::from(130);
         }
         // Real BINPKG_COMPRESS/BINPKG_COMPRESS_FLAGS[_<NAME>]/
@@ -9551,6 +9630,50 @@ mod tests {
 
     fn fixtures_root() -> std::path::PathBuf {
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures")
+    }
+
+    #[test]
+    fn classify_yes_no_prefix_matches_case_insensitively_and_rejects_garbage() {
+        assert_eq!(classify_yes_no(""), Some(true));
+        assert_eq!(classify_yes_no("y"), Some(true));
+        assert_eq!(classify_yes_no("Y"), Some(true));
+        assert_eq!(classify_yes_no("yes"), Some(true));
+        assert_eq!(classify_yes_no("YES"), Some(true));
+        assert_eq!(classify_yes_no("n"), Some(false));
+        assert_eq!(classify_yes_no("No"), Some(false));
+        assert_eq!(classify_yes_no("garbage"), None);
+        assert_eq!(classify_yes_no("yesplease"), None);
+    }
+
+    #[test]
+    fn ask_without_a_tty_exits_immediately_instead_of_prompting() {
+        // Real `actions.py:3920-3926`: "--ask" is rejected outright, up
+        // front, when stdin isn't a real terminal -- there would be
+        // nobody able to answer a prompt piped from a non-interactive
+        // source. Checked right after CLI parsing finishes, before any
+        // atom resolution, so this fires even for an atom that
+        // wouldn't otherwise resolve.
+        let mut portuale_bin = std::env::current_exe().expect("current test exe");
+        portuale_bin.pop();
+        if portuale_bin.ends_with("deps") {
+            portuale_bin.pop();
+        }
+        portuale_bin.push("portuale");
+
+        let output = std::process::Command::new(&portuale_bin)
+            .args(["emerge", "--ask", "dev-libs/does-not-matter"])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .output()
+            .expect("portuale emerge spawns");
+
+        assert_eq!(output.status.code(), Some(1));
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains("\"--ask\" should only be used in a terminal"),
+            "{stderr}"
+        );
     }
 
     #[test]
