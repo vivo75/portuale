@@ -311,7 +311,56 @@ architectural — a single-pass BFS can't grow into these incrementally:
 - **Slot-operator rebuild v1 cuts** — single-pass (no backtracking for a
   rebuild that itself shifts another sub-slot); the rebuilt consumer's
   own `:=` deps not re-bound in the pretend graph; no `--changed-slot`
-  interaction; `IUSE_EFFECTIVE` in the built-dep domain.
+  interaction; `IUSE_EFFECTIVE` in the built-dep domain. **Investigated
+  2026-09-05, confirmed still accurately scoped, not implemented** --
+  real source shows these four are one architectural gap wearing four
+  faces, not four independent bounded fixes:
+
+  Real's own slot-operator machinery is a *reconciliation*, not a
+  one-shot scan: `_slot_operator_update_probe`/`_slot_operator_update_
+  backtrack`/`_slot_operator_check_reverse_dependencies`/`_slot_operator_
+  unsatisfied_probe`/`_slot_operator_unsatisfied_backtrack`/`_slot_
+  operator_trigger_reinstalls` (`depgraph.py:2400-3200`) tentatively
+  schedule a consumer for rebuild, then can *undo* that scheduling if a
+  later pass shows it unnecessary (`_slot_operator_replace_installed`'s
+  own `removed = []` tracking, `depgraph.py:3878+`). `--changed-slot`'s
+  one point of contact with this whole family is inside that undo path
+  (`depgraph.py:3898-3899`): `if changed_slot and (self._changed_slot(pkg)
+  or self._changed_slot(installed_instance)): continue` -- i.e. *skip*
+  undoing the scheduled rebuild when the package's own `SLOT` metadata
+  is independently stale. `--changed-slot` itself already ships (see
+  `slot_changed`'s own doc comment) as a standalone `PretendOutcome::
+  Reinstall` trigger; what's missing is only this narrow interaction
+  with the cascade's *undo* path.
+
+  `slot_operator_rebuild_entries` (`portage-repo/src/lib.rs`) has no
+  undo path at all -- its fixpoint loop only ever adds to `scheduled`,
+  a monotonic one-way schedule. So "single-pass (no backtracking for a
+  rebuild that itself shifts another sub-slot)" and "no `--changed-slot`
+  interaction" are the *same* missing piece: there is no reconciliation
+  step for `--changed-slot` to have an opinion inside. Building one
+  isn't a bounded addition -- it's the same shape of architectural
+  investment `docs/what-this-proves.md`'s "Merge-list order" entries
+  already declined for the full-tree discovery walk, for the same
+  reason (real risk to a well-tested fixpoint's own performance and
+  semantics, no concrete fixture currently needs it).
+
+  The remaining two cuts are a matched pair on the *display* side, not
+  the graph side: "the rebuilt consumer's own `:=` deps not re-bound in
+  the pretend graph" and `IUSE_EFFECTIVE` in the built-dep domain both
+  concern how a *scheduled* consumer's own dependency string gets
+  re-evaluated once it's marked `slot_operator_rebuild: true` --
+  real re-parses it against fresh (tree) metadata, portuale's pretend
+  graph still reflects the installed (built) parse. `IUSE_EFFECTIVE`
+  specifically (`dbapi/__init__.py:238-276`, `_iuse_implicit_cnstr`):
+  for a *built* package on an EAPI with `eapi_attrs.iuse_effective`, an
+  implicit/profile-only USE flag actually present in the recorded `USE`
+  string counts as valid IUSE even if absent from the built `IUSE`
+  string (tolerating profile `IUSE_IMPLICIT` drift since build time) --
+  a narrow atom-matching nuance that only bites a USE-conditional dep
+  atom referencing such a flag against a rebuild-scheduled consumer,
+  with no fixture currently exercising it. Deferred alongside the graph-
+  side gap above rather than partially patched.
 
 - **`package.provided` depclean corner** — a provided CPV as a depclean
   root, and the `-pc` advisory's "will be removed by depclean even if in
