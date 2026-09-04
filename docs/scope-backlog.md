@@ -149,7 +149,44 @@ architectural — a single-pass BFS can't grow into these incrementally:
   - the slot-collision notice's remaining cuts: `pkg_use_display` for a
     package with non-default USE (the ` USE=""` slot renders, non-empty
     flag lists don't), the `use`/`soname` reason keys, operator/USE-token
-    colorization, the `need_rebuild` "cannot be rebuilt" trailer;
+    colorization, the `need_rebuild` "cannot be rebuilt" trailer.
+    **Investigated 2026-09-05, confirmed still accurately scoped, not
+    implemented** — none of the four are bounded fixes:
+    - `pkg_use_display` needs a per-instance resolved USE set on
+      `SlotConflictInstance` (currently `version`/`sub_slot`/`repo_name`/
+      `parents` only, no USE at all) threaded all the way from wherever
+      `SlotConflict`s get built deep in the resolver — new plumbing, not
+      a rendering tweak;
+    - the `use`/`soname` reason keys need real's `violated_conditionals`/
+      `get_missing_iuse` (`_prepare_conflict_msg_and_check_for_
+      specificity`, `slot_collision.py:335-388`) — atom-vs-package
+      USE-conditional-violation matching portuale's `Atom`/`portage_dep`
+      has no equivalent of yet — plus soname-aware collision detection,
+      both new atom-matching infrastructure;
+    - operator/USE-token colorization turns out to replicate a genuine
+      upstream **bug**, not just a missing coat of paint: real's
+      `highlight_violations` (`slot_collision.py:516-610`) colorizes
+      `atom_str` *before* building `cur_line`, then builds the `^`
+      marker line by iterating `range(len(cur_line))` against
+      `colored_idx` — a set computed on the **pre-color** string length.
+      Once any span left of a later one gets wrapped in ANSI codes,
+      `cur_line` is longer than `colored_idx`'s own coordinate space, so
+      the marker line silently drifts out of alignment with the visible
+      atom under `--verbose-conflicts --color y`. Faithfully reproducing
+      this means faithfully reproducing the drift, byte-offset for
+      byte-offset — real portage's own bug, not a feature to design
+      around;
+    - the `need_rebuild` "cannot be rebuilt" trailer needs
+      `_equiv_ebuild_visible`/`useoldpkg_atoms`/`excluded_pkgs` threaded
+      into the collision renderer, none of which the slot-collision path
+      currently touches.
+
+    Each is comparable in shape to the merge-list-order full-tree-walk
+    and slot-operator-rebuild reconciliation deferrals above: real
+    architectural investment against a purely informational/cosmetic
+    payoff (the resolver's actual decisions are unaffected either way),
+    with no concrete fixture currently demanding any of the four.
+    Deferred rather than attempted piecemeal;
   - the circular-dep cuts: the reduced cycle-only `--tree` re-display,
     full elementary-cycle enumeration / `large_cycle_count`
     (`_find_suggestions`' USE-flag heuristic **shipped 2026-09-03** —
@@ -159,6 +196,23 @@ architectural — a single-pass BFS can't grow into these incrementally:
     `[x]` use-dep that disqualifies the "disable x" suggestion, both a
     `portage-repo` unit test and a Rust==Python contract test; the
     *conditional* `followup_change` grandparent variant still has none).
+    **The remaining two, also investigated 2026-09-05, confirmed
+    genuinely architectural:** full elementary-cycle enumeration is real
+    `digraph.get_cycles(ignore_priority=...)` (`circular_dependency.py:
+    38-53`) over the *whole* multi-priority dependency digraph object
+    real keeps — a different, richer graph representation than
+    portuale's, and a full cycle-enumeration algorithm over it (Johnson's
+    or similar), not a bounded addition; `large_cycle_count` is a
+    one-line derivative (`len(self.cycles) > 3`) that only matters once
+    enumeration exists. The cycle-only `--tree` re-display
+    (`_prepare_reduced_merge_list`, same file, `:60-74`) needs that same
+    full digraph (`tempgraph.leaf_nodes()`/`.remove()`) fed back through
+    the *entire* `--tree` merge-list renderer restricted to the reduced
+    node set — real architectural reuse of the general-graph display
+    machinery portuale's simpler single-priority BFS has no equivalent
+    of. Same shape and same reasoning as the merge-list-order and
+    slot-operator-rebuild deferrals: real risk to well-tested code for a
+    purely informational payoff, no concrete fixture currently needs it.
 
   *(The resolver-extraction item shipped 2026-09-03: the ~1700-line
   graph walk + backtracking loop is now `backtracking_resolve(req:
