@@ -356,25 +356,52 @@ portuale's `FEATURES` is a last-wins scalar (modelled via
 relative to `config_root`, not a distinct `eroot` (they coincide in
 every tested and typical configuration).
 
-### D. Sandbox / build isolation — **substantially complete**
+### D. Sandbox / build isolation — **complete (2026-09-04)**
 
 The whole `FEATURES` isolation set wraps the six real `src_*` phases
-(`unshare` + `sandbox`). Remaining (deliberate cuts):
+(`unshare` + `sandbox`). All five remaining points shipped 2026-09-04:
 
 - `RESTRICT=network-sandbox` / `PROPERTIES=live` / `test_network`
-  exemptions (no USE-reduced `RESTRICT`/`PROPERTIES` in the phase env);
-- the `AI_ADDRCONFIG` loopback addresses; SELinux sandbox;
-- `userpriv` / `fakeroot` (single-user dev/test context — see the
-  `os.lchown` note below);
-- various **non-isolation** `FEATURES`, forced to `""` in the phase env:
-  `ccache`, `distcc`, `splitdebug`, `installsources`, `nostrip`/`strip`,
-  `compressdebug`, `test` gating beyond `src_test` running, the
-  `preserve-libs` live-`scanelf` orphan branch. A scoped real-`FEATURES`
-  passthrough is a separate slice;
-- build flags / resolved `USE` are still `""`/absent for a standalone
-  `ebuild <file> <phase>` (no graph) and for `emerge --resume`
-  (`resume_entry` carries none); the `Packages` *index* `USE` field for
-  an `emerge -b` binpkg isn't back-filled from build-info.
+  exemptions from real `_doebuild_spawn`'s own `networked` formula
+  (`doebuild.py:241-251`) are real now: the phase env carries
+  USE-reduced `PORTAGE_RESTRICT`/`PORTAGE_PROPERTIES` (real
+  `doebuild_environment()` always sets both), and `phase_isolation`
+  skips the `unshare --net` wrapper accordingly.
+- The `AI_ADDRCONFIG` loopback workaround addresses (`10.0.0.1/8` +
+  `fd::1/8`, bug #690758) are real now, alongside the pre-existing
+  `ip link set lo up`. SELinux sandbox is a confirmed non-goal
+  (documented in `ebuild_phases.rs`'s own module doc comment): a kernel
+  LSM feature with no reasonable degrade to model outside a real
+  SELinux-enabled host.
+- `userpriv` / `fakeroot` are a confirmed non-goal, not a gap: both
+  exist in real portage specifically to drop privileges *from* an
+  already-root process, and portuale never assumes root to begin with
+  (the same reason `ebuild_merge.rs`'s own `os.lchown` is already a
+  documented cut) -- there's no privilege to drop and nothing for
+  either feature to do here.
+- The phase's own `FEATURES` env var is passed through for real now
+  (previously always blanked to `""`), so real, unmodified bash that
+  gates on `contains_word <token> "${FEATURES}"` runs correctly:
+  `bin/estrip`'s own `compressdebug`/`installsources`/`nostrip`/
+  `splitdebug`/`xattr` handling, `nostrip`/`ccache`/`distcc`/`noauto`,
+  `noclean`/`keepwork`/`sfperms`/`suidctl`/`selinux`/`packdebug`/
+  `chflags`/`binpkg-do{compress,strip}`. The single biggest find: real
+  `__dyn_test` only runs `src_test` at all when `FEATURES` contains
+  `test` -- previously always a silent no-op here regardless of what
+  was requested, confirmed and fixed with a subprocess-spawned
+  regression test. None of the tokens portuale's own Rust side already
+  interprets independently are also gated on by any of this bash, so
+  the passthrough carries no double-handling risk (confirmed by
+  grepping every `contains_word … "${FEATURES}"` site in `bin/*.sh`).
+- The `Packages` *index* `USE` field for an `emerge -b` binpkg is
+  back-filled from the resolved build now (`package_after_install`'s
+  new `use_flags` parameter, threaded from `emerge_build.rs`'s
+  `build_one_source_entry` and `ebuild_merge.rs`'s `run_merge`, both
+  reusing the same resolved `USE` their own `install` phase call
+  already used). Build flags / resolved USE remain `""`/absent for a
+  standalone `ebuild <file> <phase>` (no graph) and for `emerge
+  --resume` (`resume_entry` carries none) -- both need a resolved graph
+  this deep, and stay a documented gap.
 
 ### E. Binary packages / fetch — **substantially complete (2026-09-04)**
 
@@ -548,5 +575,5 @@ item, with a short incremental tail:
    (2.F), the brush `declare -f` upstream fix (2.G). Each is one focused
    slice, the rhythm portuale already runs at.
 
-Config-resolution depth (2.C) is complete; the action/flag surface (2.F)
-and sandbox isolation (2.D) are substantially complete.
+Config-resolution depth (2.C) and sandbox isolation (2.D) are complete;
+the action/flag surface (2.F) is substantially complete.

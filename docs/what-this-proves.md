@@ -13066,3 +13066,90 @@ an already-automatic default), and `splitdebug`/`packdebug` (real's own
 `__generate_packdebug` is gated on a `BUILD_ID` env var portuale's
 phase invocation never actually exports to the running phase --
 needs its own investigation, not attempted this round).
+
+### Sandbox / build isolation backlog -- all five points, closed the same day (2026-09-04)
+
+Asked to implement "D. Sandbox / build isolation" (`docs/scope-backlog.md`)
+"all five points", each of the five turned out to be real and
+tractable -- no stale backlog text this time, unlike the binary-packages
+pass earlier the same day.
+
+**`RESTRICT=network-sandbox`/`PROPERTIES=live`/`test_network`
+exemptions**: real `_doebuild_spawn`'s own `networked` exemption formula
+(`doebuild.py:241-251`) skips the `FEATURES=network-sandbox` `unshare
+--net` wrapper for a live package's `unpack`, a `test_network` package's
+`test`, or an ebuild that opts itself out via `RESTRICT=network-sandbox`
+outright. `phase_isolation` had no way to check any of this -- the
+phase env carried no USE-reduced `RESTRICT`/`PROPERTIES` at all. Added
+`restrict_and_properties` (reusing the same md5-cache read
+`fetch_sources`'s own `RESTRICT` check already trusts) and a pure
+`network_sandbox_exempt` formula kept deliberately separate from the
+`FEATURES` env read specifically so it stays unit-testable --
+`std::env::set_var` is unsound to call from parallel test threads
+(`run_commands`'s own doc comment already established that), so no test
+in this module mutates `FEATURES` directly; the isolation *decision*
+itself is therefore untestable in isolation, but the formula it's built
+from is. `phase_env_vars` now also exports real `PORTAGE_RESTRICT`/
+`PORTAGE_PROPERTIES` for every phase (real `doebuild_environment()`
+always sets both), which turned out to matter beyond just this one
+exemption -- see the `FEATURES` passthrough below.
+
+**`AI_ADDRCONFIG` loopback addresses**: small, mechanical -- real
+`_configure_loopback_interface` (bug #690758) adds `10.0.0.1/8` and
+`fd::1/8` to `lo` inside the net namespace, since some glibc
+`getaddrinfo()` calls with `AI_ADDRCONFIG` set return no results at all
+for a family with zero non-loopback addresses configured. Added
+alongside the pre-existing `ip link set lo up`. SELinux sandbox got a
+documented non-goal instead: a kernel LSM feature with no reasonable
+degrade to model at all outside a real SELinux-enabled host, unlike
+every other item in this isolation set.
+
+**`userpriv`/`fakeroot`**: investigated and confirmed as a genuine
+non-goal, not a gap -- both exist in real portage specifically to drop
+privileges *from* an already-root process, and portuale never assumes
+root to begin with (`ebuild_merge.rs`'s own `os.lchown` is already a
+documented cut for the identical reason). There is no privilege to drop
+and nothing for either feature to do in a context that was never
+privileged in the first place. No code to write here, just the
+reasoning recorded where the doc comment already discusses the rest of
+the isolation set's cuts.
+
+**Real `FEATURES` passthrough**: the single highest-value item. Every
+phase's own exported `FEATURES` was unconditionally blanked to `""`.
+Grepping every `contains_word <token> "${FEATURES}"` site across
+`bin/*.sh` found a surprising amount of real, unmodified, already-
+sourced bash gating its own behavior on that variable: `bin/estrip`'s
+own `compressdebug`/`installsources`/`nostrip`/`splitdebug`/`xattr`
+handling (called from `prepstrip` during `install`); `phase-functions.
+sh`'s own `ccache`/`distcc`/`noauto` checks; `misc-functions.sh`'s own
+`noclean`/`keepwork`/`sfperms`/`suidctl`/`selinux`/`packdebug`/
+`chflags`/`binpkg-do{compress,strip}` handling. None of it was
+reimplemented in Rust -- blanking the env var had simply been silently
+no-opping all of it, regardless of what `FEATURES` the invoker actually
+set. The single biggest individual find: real `__dyn_test`
+(`phase-functions.sh:559`) only runs `src_test` at all when `FEATURES`
+contains `test` -- otherwise it's unconditionally a no-op ("Test phase
+[not enabled]"). Since `FEATURES` was always blanked, `FEATURES=test`
+had **zero effect** here; the test phase never actually ran, ever,
+regardless of what was requested. Confirmed via a subprocess-spawned
+regression test (env vars are process-scoped, sidestepping the
+`set_var`-in-parallel-tests hazard) that `src_test` now runs under
+`FEATURES=test` and doesn't under a blank one. Checked for
+double-handling risk before shipping: none of the tokens portuale's own
+Rust side already interprets independently (the sandbox family,
+`distlocks`, `buildpkg-live`, `binpkg-multi-instance`) are also gated
+on by any of the bash above, so the passthrough is a clean, one-
+directional win.
+
+**`Packages` index `USE` back-fill**: `package_after_install` always
+wrote an empty `USE` field, even for an `emerge -b` build that already
+runs its phases with a real resolved `USE` (`entry_build_env`/
+`MergeOptions::build_env`) -- that value simply never reached the
+index-writing tail. Added a `use_flags: &str` parameter, threaded from
+both real callers (`emerge_build.rs`'s `build_one_source_entry`,
+`ebuild_merge.rs`'s `run_merge`), each extracting it from the exact
+same `build_env` their own `install` phase call already used, so the
+phase and the index entry can never disagree. A standalone `ebuild
+<file> package`/`merge` still passes `""` -- no resolved graph reaches
+that deep, and that gap (along with the identical one for `emerge
+--resume`) stays open, honestly documented rather than papered over.
