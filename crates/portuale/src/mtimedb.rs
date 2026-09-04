@@ -597,6 +597,127 @@ mod tests {
     }
 
     #[test]
+    fn rotate_to_backup_preserves_a_multi_item_resume_list() {
+        let root = tmproot();
+        let mergelist = vec![
+            (
+                ResumeEntryKind::Ebuild,
+                "dev-libs".to_string(),
+                "a".to_string(),
+                "1".to_string(),
+            ),
+            (
+                ResumeEntryKind::Ebuild,
+                "dev-libs".to_string(),
+                "b".to_string(),
+                "1".to_string(),
+            ),
+        ];
+        write_resume_list(&root, &["dev-libs/a"], &mergelist, &ResumeOpts::default()).unwrap();
+
+        rotate_resume_to_backup(&root);
+
+        // "resume" itself is gone, but it stays recoverable via the backup.
+        assert!(read_section(&root, "resume").is_none());
+        let (favs, merges, _) = read_resume_list(&root).expect("promoted from resume_backup");
+        assert_eq!(favs, vec!["dev-libs/a"]);
+        assert_eq!(merges, mergelist);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn rotate_to_backup_ignores_a_single_item_resume_list() {
+        let root = tmproot();
+        let mergelist = vec![(
+            ResumeEntryKind::Ebuild,
+            "dev-libs".to_string(),
+            "a".to_string(),
+            "1".to_string(),
+        )];
+        write_resume_list(&root, &[], &mergelist, &ResumeOpts::default()).unwrap();
+
+        rotate_resume_to_backup(&root);
+
+        // A single-package list isn't worth preserving, so "resume"
+        // survives untouched.
+        assert!(read_section(&root, "resume_backup").is_none());
+        assert_eq!(read_resume_list(&root).unwrap().1, mergelist);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn clear_resume_list_leaves_resume_backup_alone() {
+        let root = tmproot();
+        let mergelist = vec![
+            (
+                ResumeEntryKind::Ebuild,
+                "dev-libs".to_string(),
+                "a".to_string(),
+                "1".to_string(),
+            ),
+            (
+                ResumeEntryKind::Ebuild,
+                "dev-libs".to_string(),
+                "b".to_string(),
+                "1".to_string(),
+            ),
+        ];
+        write_resume_list(&root, &[], &mergelist, &ResumeOpts::default()).unwrap();
+        rotate_resume_to_backup(&root);
+        assert!(read_section(&root, "resume_backup").is_some());
+
+        // A brand-new resume list, then cleared (as if it merged fully).
+        write_resume_list(&root, &[], &mergelist, &ResumeOpts::default()).unwrap();
+        clear_resume_list(&root);
+
+        assert!(read_section(&root, "resume").is_none());
+        assert!(
+            read_section(&root, "resume_backup").is_some(),
+            "clear_resume_list must not touch resume_backup"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn write_resume_list_preserves_an_existing_resume_backup() {
+        let root = tmproot();
+        let backup_list = vec![
+            (
+                ResumeEntryKind::Ebuild,
+                "dev-libs".to_string(),
+                "old-a".to_string(),
+                "1".to_string(),
+            ),
+            (
+                ResumeEntryKind::Ebuild,
+                "dev-libs".to_string(),
+                "old-b".to_string(),
+                "1".to_string(),
+            ),
+        ];
+        write_resume_list(&root, &[], &backup_list, &ResumeOpts::default()).unwrap();
+        rotate_resume_to_backup(&root);
+        assert!(read_section(&root, "resume").is_none());
+        assert!(read_section(&root, "resume_backup").is_some());
+
+        // A fresh failure writes a new "resume" -- the backup from the
+        // *previous* abandoned run must survive untouched.
+        let new_list = vec![(
+            ResumeEntryKind::Ebuild,
+            "dev-libs".to_string(),
+            "new".to_string(),
+            "2".to_string(),
+        )];
+        write_resume_list(&root, &[], &new_list, &ResumeOpts::default()).unwrap();
+
+        let resume = read_section(&root, "resume").expect("new resume written");
+        assert_eq!(resume.mergelist, new_list);
+        let backup = read_section(&root, "resume_backup").expect("old backup preserved");
+        assert_eq!(backup.mergelist, backup_list);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
     fn remove_merged_entry_without_any_resume_file_is_a_noop() {
         let root = tmproot();
         let ghost = (
@@ -607,6 +728,66 @@ mod tests {
         );
         remove_merged_entry(&root, &ghost);
         assert!(!mtimedb_path(&root).exists());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn driver_sequence_rotates_first_then_saves_up_front_and_shrinks_per_merge() {
+        // The whole driver lifecycle in one hermetic sequence: (d) a stale
+        // multi-item list rotates to backup first; (a) the fresh run saves
+        // its full mergelist before the first merge; (b) each successful
+        // merge shrinks it; (c) the last merge deletes the key -- while the
+        // rotated backup survives the run.
+        let root = tmproot();
+        let stale = vec![
+            (
+                ResumeEntryKind::Ebuild,
+                "dev-libs".to_string(),
+                "stale-a".to_string(),
+                "1".to_string(),
+            ),
+            (
+                ResumeEntryKind::Ebuild,
+                "dev-libs".to_string(),
+                "stale-b".to_string(),
+                "1".to_string(),
+            ),
+        ];
+        write_resume_list(&root, &["stale"], &stale, &ResumeOpts::default()).unwrap();
+
+        rotate_resume_to_backup(&root);
+        assert!(read_section(&root, "resume").is_none());
+
+        let full = vec![
+            (
+                ResumeEntryKind::Ebuild,
+                "dev-libs".to_string(),
+                "run-a".to_string(),
+                "1".to_string(),
+            ),
+            (
+                ResumeEntryKind::Ebuild,
+                "dev-libs".to_string(),
+                "run-b".to_string(),
+                "1".to_string(),
+            ),
+            (
+                ResumeEntryKind::Ebuild,
+                "dev-libs".to_string(),
+                "run-c".to_string(),
+                "1".to_string(),
+            ),
+        ];
+        write_resume_list(&root, &["fav"], &full, &ResumeOpts::default()).unwrap();
+        assert_eq!(read_resume_list(&root).unwrap().1, full);
+
+        remove_merged_entry(&root, &full[0]);
+        assert_eq!(read_resume_list(&root).unwrap().1, full[1..]);
+
+        remove_merged_entry(&root, &full[1]);
+        remove_merged_entry(&root, &full[2]);
+        assert!(read_section(&root, "resume").is_none());
+        assert!(read_section(&root, "resume_backup").is_some());
         let _ = std::fs::remove_dir_all(&root);
     }
 }
