@@ -14,6 +14,12 @@
 //   - `mod_save_summary` -- append every package's messages to a single
 //     `<logdir>/elog/summary.log` (`save_summary_process`). This one is
 //     ON by default (it's in `make.globals`'s `PORTAGE_ELOG_SYSTEM`).
+//   - `mod_syslog` -- one real `syslog(3)` call per elog line, tagged
+//     `"portage"`, facility `LOG_LOCAL5` (`syslog_process`).
+//   - `mod_custom` -- always saves the file first (real, unconditional
+//     `mod_save.process` call), then runs the real, unmodified
+//     `$PORTAGE_ELOG_COMMAND` with `${LOGFILE}`/`${PACKAGE}` substituted
+//     (`custom_process`).
 //
 // Portuale never deletes the builddir, so the driver (`pretend.rs`)
 // re-scans each entry's `${T}/logging/` after the merge loop (and after
@@ -22,12 +28,12 @@
 // `_elog_process(phasefilter=...)`) via `process_batch` -- no message
 // buffer threaded through the (un)merge machinery.
 //
-// v1 cuts: `mail` / `mail_summary` / `syslog` / `custom` are NOT ported
-// (a real SMTP client + MIME assembly is not "light"; `mail*` prints a
-// one-line "unsupported" notice and is skipped -- see `pretend.rs`).
-// `PORTAGE_ELOG_CLASSES` / `PORTAGE_ELOG_SYSTEM` are read from the env
-// only (no `make.conf`), defaulting to `make.globals`. The `logdir` is
-// `$PORTAGE_LOGDIR` else `<root>/var/log/portage` -- root-relative, a
+// v1 cut: `mail` / `mail_summary` are NOT ported (a real SMTP client +
+// MIME assembly is not "light"; `mail*` prints a one-line "unsupported"
+// notice and is skipped -- see `pretend.rs`). `syslog`/`custom` ARE real
+// now. `PORTAGE_ELOG_CLASSES` / `PORTAGE_ELOG_SYSTEM` are read from the
+// env only (no `make.conf`), defaulting to `make.globals`. The `logdir`
+// is `$PORTAGE_LOGDIR` else `<root>/var/log/portage` -- root-relative, a
 // deliberate divergence from real `mod_save`'s `<BROOT>/var/log/portage`
 // (`BROOT` is `/`, needs privileges), matching portuale's other
 // `<root>`-relative path choices for a relocatable tree. The real
@@ -311,13 +317,123 @@ pub fn save_summary_process(logdir: &Path, key: &str, fulltext: &str) -> Result<
     Ok(path)
 }
 
-/// Real `mod_save` / `mod_save_summary` for one merged package: build the
-/// per-module `fulltext` from `all_msgs` (unfiltered `collect_all`) and
-/// hand it to whichever of `save` / `save_summary` is enabled. Each
-/// module's own `filter_loglevels` runs here (`save_summary`'s default
-/// token carries `:log,warn,error,qa`). A module is skipped for this
-/// package when the filter leaves nothing (real `if len(mod_logentries)
-/// == 0: continue`). Returns the paths written, for the caller's log line.
+/// Real `mod_syslog.py`'s own `_pri` map: `INFO`/`ERROR`/`LOG` each get
+/// their own real syslog level; `WARN` and `QA` (a real, distinct level
+/// -- see `ElogMessage::level`'s own vocabulary) both fall to
+/// `LOG_WARNING`, matching real `_pri["QA"] = syslog.LOG_WARNING`. Split
+/// out from `syslog_process` so the mapping is directly unit-testable
+/// without any real `syslog(3)` call involved.
+fn syslog_priority(level: &str) -> libc::c_int {
+    match level {
+        "INFO" => libc::LOG_INFO,
+        "ERROR" => libc::LOG_ERR,
+        "LOG" => libc::LOG_NOTICE,
+        _ => libc::LOG_WARNING,
+    }
+}
+
+/// Real `mod_syslog.process`'s own per-line format: `"{key}: {phase}:
+/// {line}"`, trailing newline stripped (real `line.rstrip("\n")`). Split
+/// out from `syslog_process` for the same direct-unit-test reason
+/// `syslog_priority` is.
+fn syslog_line(key: &str, msg: &ElogMessage) -> String {
+    format!("{key}: {}: {}", msg.phase, msg.text.trim_end_matches('\n'))
+}
+
+/// Real `mod_syslog.process` (`elog/mod_syslog.py`): one `syslog(3)`
+/// message per elog line, tagged `"portage"`, facility `LOG_LOCAL5`,
+/// priority mapped from that line's own level (`syslog_priority`).
+/// `key` is `cat/pkg-ver`. The real `openlog()` "logopt" argument is
+/// literally `LOG_ERR | LOG_WARNING | LOG_INFO | LOG_NOTICE` in real
+/// portage's own source -- those are priority-level constants, not
+/// `LOG_PID`/`LOG_CONS`-style option flags, almost certainly a
+/// copy-paste mistake upstream -- but this ports real behavior
+/// bug-for-bug rather than the (more sensible) `0` an author fixing it
+/// today would likely use.
+pub fn syslog_process(key: &str, msgs: &[&ElogMessage]) {
+    if msgs.is_empty() {
+        return;
+    }
+    let Ok(ident) = std::ffi::CString::new("portage") else {
+        return;
+    };
+    // SAFETY: `ident` outlives the openlog/closelog pair (glibc keeps
+    // only the pointer, not a copy); the priority/facility arguments
+    // are plain ints.
+    unsafe {
+        libc::openlog(
+            ident.as_ptr(),
+            libc::LOG_ERR | libc::LOG_WARNING | libc::LOG_INFO | libc::LOG_NOTICE,
+            libc::LOG_LOCAL5,
+        );
+    }
+    for msg in msgs {
+        let priority = syslog_priority(&msg.level);
+        let line = syslog_line(key, msg);
+        let Ok(c_line) = std::ffi::CString::new(line) else {
+            continue;
+        };
+        // SAFETY: a real, fixed `"%s"` format string -- `c_line` (which
+        // may contain `%` from arbitrary ebuild output) is never itself
+        // interpreted as a format string, matching real Python's own
+        // `syslog.syslog()` (which always does the same internally).
+        unsafe {
+            libc::syslog(priority, c"%s".as_ptr(), c_line.as_ptr());
+        }
+    }
+    unsafe {
+        libc::closelog();
+    }
+}
+
+/// Real `mod_custom.process` (`elog/mod_custom.py`): always calls
+/// `mod_save.process` first (real, unconditionally, even when the
+/// `save` module itself isn't separately enabled -- `${LOGFILE}` below
+/// needs a real path to substitute), then runs `$PORTAGE_ELOG_COMMAND`
+/// (real, unmodified `bash -c`, matching portuale's own "run the real
+/// external process" precedent) with `${LOGFILE}`/`${PACKAGE}`
+/// substituted. Errors if `PORTAGE_ELOG_COMMAND` is unset/empty (real
+/// `MissingParameter`) or the command exits non-zero (real
+/// `PortageException`). Returns the saved log file's own path, for the
+/// caller's "written to" line -- the same file `${LOGFILE}` pointed the
+/// command at.
+pub fn custom_process(
+    logdir: &Path,
+    key: &str,
+    fulltext: &str,
+    split_elog: bool,
+) -> Result<PathBuf, String> {
+    let logfile = save_process(logdir, key, fulltext, split_elog)?;
+    let cmd_template = std::env::var("PORTAGE_ELOG_COMMAND").unwrap_or_default();
+    if cmd_template.trim().is_empty() {
+        return Err("Custom logging requested but PORTAGE_ELOG_COMMAND is not defined".to_string());
+    }
+    let cmd = cmd_template
+        .replace("${LOGFILE}", &logfile.display().to_string())
+        .replace("${PACKAGE}", key);
+    let status = std::process::Command::new("bash")
+        .arg("-c")
+        .arg(&cmd)
+        .status()
+        .map_err(|e| format!("failed to spawn PORTAGE_ELOG_COMMAND: {e}"))?;
+    if !status.success() {
+        return Err(format!(
+            "PORTAGE_ELOG_COMMAND failed with exitcode {}",
+            status.code().unwrap_or(-1)
+        ));
+    }
+    Ok(logfile)
+}
+
+/// Real `mod_save` / `mod_save_summary` / `mod_syslog` / `mod_custom`
+/// for one merged package: build the per-module `fulltext` from
+/// `all_msgs` (unfiltered `collect_all`) and hand it to whichever
+/// modules are enabled. Each module's own `filter_loglevels` runs here
+/// (`save_summary`'s default token carries `:log,warn,error,qa`). A
+/// module is skipped for this package when the filter leaves nothing
+/// (real `if len(mod_logentries) == 0: continue`). Returns the paths
+/// written (`save`/`save_summary`/`custom`; `syslog` writes no file),
+/// for the caller's log line.
 pub fn save_modules_process(
     logdir: &Path,
     key: &str,
@@ -340,6 +456,19 @@ pub fn save_modules_process(
             save_process(logdir, key, &fulltext, split_elog)?
         };
         written.push(path);
+    }
+    if module_enabled("syslog") {
+        let filtered = filter_by_classes(all_msgs, &module_classes("syslog"));
+        if !filtered.is_empty() {
+            syslog_process(key, &filtered);
+        }
+    }
+    if module_enabled("custom") {
+        let filtered = filter_by_classes(all_msgs, &module_classes("custom"));
+        if !filtered.is_empty() {
+            let fulltext = combine_logentries(&filtered);
+            written.push(custom_process(logdir, key, &fulltext, split_elog)?);
+        }
     }
     Ok(written)
 }
@@ -369,13 +498,20 @@ pub fn process_batch(
     color: &Colorizer,
 ) {
     let echo = echo_enabled();
-    let save_any = module_enabled("save") || module_enabled("save_summary");
+    // "save_any" gates the one `collect_all`/`save_modules_process` call
+    // below, so it needs every module that call also dispatches to --
+    // `syslog`/`custom` included, not just the `save`/`save_summary`
+    // pair its own name still refers to.
+    let save_any = module_enabled("save")
+        || module_enabled("save_summary")
+        || module_enabled("syslog")
+        || module_enabled("custom");
     let mail_any = module_enabled("mail") || module_enabled("mail_summary");
     if mail_any {
         eprintln!(
             " {} elog `mail`/`mail_summary` is not supported by portuale \
              (SMTP delivery is out of scope) -- messages still go to \
-             `echo`/`save`/`save_summary`",
+             `echo`/`save`/`save_summary`/`syslog`/`custom`",
             color.c("WARN", "*")
         );
     }
@@ -666,6 +802,35 @@ mod tests {
     }
 
     #[test]
+    fn save_modules_process_dispatches_to_custom_when_enabled() {
+        let t = tmpdir();
+        let marker = t.join("marker");
+        temp_env(
+            &[
+                ("PORTAGE_ELOG_SYSTEM", Some("custom")),
+                ("PORTAGE_ELOG_CLASSES", Some("log warn error")),
+                (
+                    "PORTAGE_ELOG_COMMAND",
+                    Some(&format!("touch {}", marker.display())),
+                ),
+            ],
+            || {
+                let msgs = [ElogMessage {
+                    phase: "install".to_string(),
+                    level: "LOG".to_string(),
+                    text: "hello".to_string(),
+                }];
+                let written =
+                    save_modules_process(&t.join("logs"), "dev-libs/foo-1.0", &msgs, false)
+                        .expect("save_modules_process succeeds");
+                assert_eq!(written.len(), 1, "custom's own saved-file path");
+                assert!(marker.exists(), "PORTAGE_ELOG_COMMAND must have run");
+            },
+        );
+        let _ = std::fs::remove_dir_all(&t);
+    }
+
+    #[test]
     fn save_modules_are_off_when_not_in_portage_elog_system() {
         let t = tmpdir();
         temp_env(&[("PORTAGE_ELOG_SYSTEM", Some("echo"))], || {
@@ -678,6 +843,74 @@ mod tests {
                 save_modules_process(&t.join("logs"), "dev-libs/foo-1.0", &msgs, false).unwrap();
             assert!(written.is_empty());
             assert!(!t.join("logs").exists());
+        });
+        let _ = std::fs::remove_dir_all(&t);
+    }
+
+    #[test]
+    fn syslog_priority_matches_real_mod_syslogs_own_pri_map() {
+        assert_eq!(syslog_priority("INFO"), libc::LOG_INFO);
+        assert_eq!(syslog_priority("ERROR"), libc::LOG_ERR);
+        assert_eq!(syslog_priority("LOG"), libc::LOG_NOTICE);
+        assert_eq!(syslog_priority("WARN"), libc::LOG_WARNING);
+        assert_eq!(syslog_priority("QA"), libc::LOG_WARNING);
+    }
+
+    #[test]
+    fn syslog_line_matches_real_key_phase_line_shape() {
+        let msg = ElogMessage {
+            phase: "install".to_string(),
+            level: "WARN".to_string(),
+            text: "watch out\n".to_string(),
+        };
+        assert_eq!(
+            syslog_line("dev-libs/foo-1.0", &msg),
+            "dev-libs/foo-1.0: install: watch out"
+        );
+    }
+
+    #[test]
+    fn custom_process_runs_the_real_command_with_logfile_and_package_substituted() {
+        let t = tmpdir();
+        let marker = t.join("marker");
+        temp_env(
+            &[(
+                "PORTAGE_ELOG_COMMAND",
+                Some(&format!(
+                    "echo \"${{PACKAGE}} $(cat \"${{LOGFILE}}\")\" > {}",
+                    marker.display()
+                )),
+            )],
+            || {
+                let path =
+                    custom_process(&t.join("logs"), "dev-libs/foo-1.0", "hello there", false)
+                        .expect("custom_process succeeds");
+                assert!(path.exists(), "the underlying saved log file must exist");
+                let recorded = std::fs::read_to_string(&marker).unwrap();
+                assert_eq!(recorded.trim(), "dev-libs/foo-1.0 hello there");
+            },
+        );
+        let _ = std::fs::remove_dir_all(&t);
+    }
+
+    #[test]
+    fn custom_process_errors_when_the_command_is_unset() {
+        let t = tmpdir();
+        temp_env(&[("PORTAGE_ELOG_COMMAND", None)], || {
+            let err = custom_process(&t.join("logs"), "dev-libs/foo-1.0", "hello", false)
+                .expect_err("no PORTAGE_ELOG_COMMAND must fail");
+            assert!(err.contains("PORTAGE_ELOG_COMMAND"), "{err}");
+        });
+        let _ = std::fs::remove_dir_all(&t);
+    }
+
+    #[test]
+    fn custom_process_errors_when_the_command_fails() {
+        let t = tmpdir();
+        temp_env(&[("PORTAGE_ELOG_COMMAND", Some("exit 1"))], || {
+            let err = custom_process(&t.join("logs"), "dev-libs/foo-1.0", "hello", false)
+                .expect_err("a failing command must fail");
+            assert!(err.contains("exitcode"), "{err}");
         });
         let _ = std::fs::remove_dir_all(&t);
     }
