@@ -1013,6 +1013,21 @@ CASES = [
         0,
     ),
     (
+        "--getbinpkg: _equiv_ebuild_visible rejects a binary whose ebuild left the tree",
+        ["--pretend", "--getbinpkg", "dev-libs/eqebvispkg"],
+        0,
+    ),
+    (
+        "--getbinpkgonly: _equiv_ebuild_visible is skipped, the orphaned binary is kept",
+        ["--pretend", "--getbinpkgonly", "dev-libs/eqebvispkg"],
+        0,
+    ),
+    (
+        "--getbinpkg =cpv: a binhost-only version (no ebuild matches) keeps the binary",
+        ["--pretend", "--getbinpkg", "=dev-libs/eqebvispkg-2.0"],
+        0,
+    ),
+    (
         "--newrepo: off by default, stays already-installed",
         ["--pretend", "--selective", "dev-libs/newrepopkg"],
         0,
@@ -4451,6 +4466,41 @@ def test_getbinpkg_slot_repo_decoration_on_a_remote_binary_line(
         '',
         'Total: 1 package (1 new, 1 binary), Size of downloads: 1024 KiB',
     ]
+
+
+def test_getbinpkg_equiv_ebuild_visible_rejects_an_orphaned_binary(
+    emerge_binary, emerge_pretend_python, fixture_env
+):
+    """_equiv_ebuild_visible (real depgraph.py:8015-8025): dev-libs/
+    eqebvispkg has only a 1.0 ebuild in the tree, but the binhost carries
+    a 2.0 binary (its ebuild since removed). Because a visible ebuild
+    (1.0) matches the atom, real requires a visible ebuild at the
+    binary's *exact* version -- there is none at 2.0, so the binary is
+    dropped and the resolve is `[ebuild N] eqebvispkg-1.0`. Under
+    --getbinpkgonly the check is skipped (the orphan 2.0 binary is
+    merged), and a `=…-2.0` atom that no ebuild can match leaves the gate
+    falsy (binary kept)."""
+    getbinpkg = _run(
+        [str(emerge_binary)], ["--pretend", "--getbinpkg", "dev-libs/eqebvispkg"], fixture_env
+    )
+    py = _run(
+        emerge_pretend_python, ["--pretend", "--getbinpkg", "dev-libs/eqebvispkg"], fixture_env
+    )
+    assert getbinpkg.returncode == 0
+    assert getbinpkg.stdout == py.stdout
+    assert getbinpkg.stdout.splitlines() == ["[ebuild  N     ] dev-libs/eqebvispkg-1.0 "]
+
+    only = _run(
+        [str(emerge_binary)], ["--pretend", "--getbinpkgonly", "dev-libs/eqebvispkg"], fixture_env
+    )
+    assert only.stdout.splitlines() == ["[binary  N g   ] dev-libs/eqebvispkg-2.0-1 "]
+
+    exact = _run(
+        [str(emerge_binary)],
+        ["--pretend", "--getbinpkg", "=dev-libs/eqebvispkg-2.0"],
+        fixture_env,
+    )
+    assert exact.stdout.splitlines() == ["[binary  N g   ] dev-libs/eqebvispkg-2.0-1 "]
 
 
 def test_getbinpkg_binpkg_changed_deps_rejects_a_stale_binary(

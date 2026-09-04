@@ -7713,6 +7713,47 @@ pub fn resolve_pretend(
                 !binary_deps_changed(root, repos, c, &atom.category, &atom.package, with_bdeps)
             });
         }
+        // `_equiv_ebuild_visible` (real `depgraph.py:8015-8025`): once a
+        // visible ebuild has matched the atom (`dbs` order is ebuild-first,
+        // so real's `matched_packages` is non-empty by the time binaries
+        // are weighed), a binary is only eligible if a visible ebuild
+        // exists at its *exact* version -- a binhost package whose ebuild
+        // was dropped from the tree, or masked, since it was built is not
+        // merged stale (the ebuild at another version is rebuilt instead).
+        // Skipped for a binhost-only atom (no ebuild matches at all ->
+        // real's `(use_ebuild_visibility or matched_packages)` gate is
+        // falsy) and under `--usepkgonly` (real: ebuild status is ignored
+        // there unless `--use-ebuild-visibility`, a documented cut).
+        if !usepkgonly && !binary_candidates.is_empty() {
+            let ebuild_visible_at = |ver: &str| {
+                candidates.iter().any(|c| {
+                    c.source == CandidateSource::Ebuild
+                        && c.version == ver
+                        && is_visible(c, &atom.category, &atom.package, config)
+                })
+            };
+            let some_ebuild_matches_atom = candidates.iter().any(|c| {
+                c.source == CandidateSource::Ebuild
+                    && is_visible(c, &atom.category, &atom.package, config)
+                    && {
+                        let s = format!(
+                            "{}/{}-{}:{}/{}::{}",
+                            atom.category, atom.package, c.version, c.slot, c.sub_slot, c.repo_name
+                        );
+                        portage_dep::match_from_list(atom_str, &[s.as_str()])
+                            .is_some_and(|r| !r.is_empty())
+                    }
+            });
+            if some_ebuild_matches_atom {
+                // Real's `(usepkgonly or useoldpkg)` exemption: a binary
+                // matching `--useoldpkg-atoms` is never subjected to the
+                // ebuild-visibility check.
+                binary_candidates.retain(|c| {
+                    ebuild_visible_at(&c.version)
+                        || useoldpkg_atom_matches(&atom.category, &atom.package, &c.version)
+                });
+            }
+        }
         // binpkg-multi-instance: keep only the highest-`BUILD_TIME`
         // surviving build of each `cpv:slot::repo` (real
         // `_iter_match_pkgs` yields instances newest-first and the
@@ -11676,6 +11717,34 @@ fn backtracking_resolve(req: &ResolveRequest) -> Result<GraphResult, String> {
                     binary_candidates.retain(|c| {
                         !binary_deps_changed(root, &repos, c, &key.0, &key.1, with_bdeps)
                     });
+                }
+                // `_equiv_ebuild_visible` (see `resolve_pretend`): a
+                // binary re-derived here needs a visible ebuild at its
+                // own exact version, when any visible ebuild satisfies
+                // the atom.
+                if !usepkgonly && !binary_candidates.is_empty() {
+                    let some_ebuild_matches = repo_candidates.iter().any(|c| {
+                        c.source == CandidateSource::Ebuild
+                            && is_visible(c, &key.0, &key.1, config)
+                            && {
+                                let s = format!(
+                                    "{}/{}-{}:{}/{}::{}",
+                                    key.0, key.1, c.version, c.slot, c.sub_slot, c.repo_name
+                                );
+                                portage_dep::match_from_list(&current_atom, &[s.as_str()])
+                                    .is_some_and(|r| !r.is_empty())
+                            }
+                    });
+                    if some_ebuild_matches {
+                        binary_candidates.retain(|c| {
+                            useoldpkg_atom_matches(&key.0, &key.1, &c.version)
+                                || repo_candidates.iter().any(|e| {
+                                    e.source == CandidateSource::Ebuild
+                                        && e.version == c.version
+                                        && is_visible(e, &key.0, &key.1, config)
+                                })
+                        });
+                    }
                 }
                 let binary_candidates = dedup_binary_instances(binary_candidates, &atom, config);
                 repo_candidates.extend(filter_usepkg_exclude_include(

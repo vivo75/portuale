@@ -8684,6 +8684,24 @@ still differs. New fixture `dev-libs/multiinst` (3 builds, `BUILD_ID`
   binary candidate that would actually be selected -- local *or* remote
   (`best_binary_build_time` over the candidate pool, which now carries
   `Candidate::build_time`).
+- **`_equiv_ebuild_visible`** (real `depgraph.py:8015-8025`): once a
+  visible ebuild has matched an atom (`dbs` order is ebuild-first, so
+  real's `matched_packages` is non-empty by the time binaries are
+  weighed), a binary is only eligible if a visible ebuild exists at its
+  *exact* version -- a binhost package whose ebuild was since dropped
+  from the tree, or masked, is not merged stale; the ebuild at whatever
+  other version matched is rebuilt instead. Skipped for a binhost-only
+  atom (no ebuild matches at all → real's `(use_ebuild_visibility or
+  matched_packages)` gate is falsy), under `--usepkgonly`
+  (`--use-ebuild-visibility` is a documented cut), and for a candidate
+  matching `--useoldpkg-atoms` (real's `(usepkgonly or useoldpkg)`
+  exemption -- confirmed live by a regression: without it, the existing
+  `--useoldpkg-atoms` test started preferring the *ebuild* again, since
+  the old binary usually has no equivalent ebuild left visible). Fixture
+  `dev-libs/eqebvispkg` (tree ebuild only at `1.0`; the binhost has an
+  orphaned `2.0` binary) -- `--getbinpkg` resolves to the `1.0` ebuild,
+  `--getbinpkgonly` keeps the orphan, `=…-2.0` (no ebuild can match the
+  atom at all) also keeps it.
 
 ### `emerge -p`: the blocker line follows real `ResolverOutput._blockers`
 

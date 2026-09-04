@@ -259,12 +259,15 @@ The whole `FEATURES` isolation set wraps the six real `src_*` phases
   instance `--binpkg-respect-use` + atom-`[use]` filtering,
   `dedup_binary_instances` keeps the newest `BUILD_TIME` survivor —
   shipped 2026-09-04, plus `--binpkg-changed-deps` (auto whenever not
-  `--usepkgonly` -- `binary_deps_changed`) and `--rebuilt-binaries` for a
-  *remote* binhost binary. Still open: `identical_binary` /
-  `_equiv_ebuild_visible` (both gated on real's `matched_packages`
-  bookkeeping), BUILD_TIME-vs-installed *reinstall* trigger outside
-  `--rebuilt-binaries`, `useoldpkg` multi-instance, the explicit
-  `--binpkg-changed-deps=y|n` override.)*
+  `--usepkgonly` -- `binary_deps_changed`), `--rebuilt-binaries` for a
+  *remote* binhost binary, and `_equiv_ebuild_visible` (a binary needs a
+  visible ebuild at its own exact version once some ebuild has matched
+  the atom, `--useoldpkg-atoms`-exempted). Still open: `identical_binary`
+  (guards `_equiv_ebuild_visible` against rejecting an *installed*
+  package -- moot for portuale, whose installed-package path never runs
+  that check to begin with), BUILD_TIME-vs-installed *reinstall* trigger
+  outside `--rebuilt-binaries`, `useoldpkg` multi-instance, the explicit
+  `--binpkg-changed-deps=y|n` / `--use-ebuild-visibility` overrides.)*
 - **`splitdebug` / `packdebug` / RPM**, PKGDIR-index
   locking, `FEATURES=buildpkg-live`, real `EbuildBinpkg` failure
   semantics under `--keep-going`.

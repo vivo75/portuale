@@ -5780,6 +5780,51 @@ def resolve_pretend(
                 for c in binary_candidates
                 if not _binary_deps_changed(root, repos, c, category, package, with_bdeps)
             ]
+        # _equiv_ebuild_visible (real depgraph.py:8015-8025): once a
+        # visible ebuild has matched the atom (dbs order is ebuild-first,
+        # so real's matched_packages is non-empty by the time binaries are
+        # weighed), a binary is only eligible if a visible ebuild exists at
+        # its *exact* version -- a binhost package whose ebuild was dropped
+        # from the tree, or masked, since it was built is not merged stale.
+        # Skipped for a binhost-only atom (no ebuild matches -> gate falsy)
+        # and under --usepkgonly. Mirrors portage-repo/src/lib.rs.
+        if not usepkgonly and binary_candidates:
+            def _ebuild_visible_at(ver):
+                return any(
+                    c["source"] == "ebuild"
+                    and c["version"] == ver
+                    and is_visible(c, category, package, config)
+                    for c in candidates
+                )
+
+            some_ebuild_matches = any(
+                c["source"] == "ebuild"
+                and is_visible(c, category, package, config)
+                and match_from_list(
+                    atom_str,
+                    [
+                        f"{category}/{package}-{c['version']}:{c['slot']}/{c['sub_slot']}::{c['repo_name']}"
+                    ],
+                )
+                for c in candidates
+            )
+            if some_ebuild_matches:
+                # Real's (usepkgonly or useoldpkg) exemption: a binary
+                # matching --useoldpkg-atoms is never subjected to the
+                # ebuild-visibility check.
+                def _is_useoldpkg(c):
+                    return any(
+                        _matches_config_entry(
+                            a, f"{category}/{package}-{c['version']}", category, package
+                        )
+                        for a in _useoldpkg_atoms
+                    )
+
+                binary_candidates = [
+                    c
+                    for c in binary_candidates
+                    if _ebuild_visible_at(c["version"]) or _is_useoldpkg(c)
+                ]
         # binpkg-multi-instance: keep only the highest-BUILD_TIME
         # surviving build of each cpv:slot::repo (real _iter_match_pkgs
         # yields instances newest-first and the selection loop breaks on
@@ -7990,6 +8035,41 @@ def resolve_pretend_graph(
                             root, repos, c, category, package, with_bdeps
                         )
                     ]
+                # _equiv_ebuild_visible (see resolve_pretend): a binary
+                # re-derived here needs a visible ebuild at its own exact
+                # version, when any visible ebuild satisfies the atom.
+                if not usepkgonly and binary_candidates:
+                    _some_eb = any(
+                        c["source"] == "ebuild"
+                        and is_visible(c, category, package, config)
+                        and match_from_list(
+                            current_atom_str,
+                            [
+                                f"{category}/{package}-{c['version']}:{c['slot']}/{c['sub_slot']}::{c['repo_name']}"
+                            ],
+                        )
+                        for c in repo_candidates
+                    )
+                    if _some_eb:
+                        binary_candidates = [
+                            c
+                            for c in binary_candidates
+                            if any(
+                                _matches_config_entry(
+                                    a,
+                                    f"{category}/{package}-{c['version']}",
+                                    category,
+                                    package,
+                                )
+                                for a in _useoldpkg_atoms
+                            )
+                            or any(
+                                e["source"] == "ebuild"
+                                and e["version"] == c["version"]
+                                and is_visible(e, category, package, config)
+                                for e in repo_candidates
+                            )
+                        ]
                 binary_candidates = _dedup_binary_instances(binary_candidates, atom, config)
                 repo_candidates = repo_candidates + _filter_usepkg_exclude_include(
                     binary_candidates, category, package, usepkg_exclude, usepkg_include
