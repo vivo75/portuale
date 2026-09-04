@@ -11291,12 +11291,15 @@ def test_bare_command_line_name_with_version_or_slot_is_category_qualified(
     assert r.returncode == 1 and r.stderr == p.stderr
     assert r.stderr.strip() == 'emerge: there are no ebuilds to satisfy "=dev-libs/newpkg-9.9".'
 
-    # ambiguous survives version stripping
+    # ambiguous survives version stripping (non-`--quiet`: the full
+    # search-style block -- see
+    # test_bare_name_ambiguous_across_categories_is_rejected)
     r = _run([str(emerge_binary)], ["--pretend", "ambigpkg-1.0"], fixture_env)
     p = _run(emerge_pretend_python, ["--pretend", "ambigpkg-1.0"], fixture_env)
     assert r.returncode == 1 and r.stdout == p.stdout and r.stderr == p.stderr
     assert '!!! The short ebuild name "ambigpkg-1.0" is ambiguous.' in r.stderr
-    assert r.stdout.split() == ["app-misc/ambigpkg", "dev-libs/ambigpkg"]
+    assert "*  app-misc/ambigpkg" in r.stdout
+    assert "*  dev-libs/ambigpkg" in r.stdout
 
 
 def test_bare_name_ambiguous_across_categories_is_rejected(
@@ -11304,10 +11307,37 @@ def test_bare_name_ambiguous_across_categories_is_rejected(
 ):
     """`ambigpkg` exists as both `app-misc/ambigpkg` and
     `dev-libs/ambigpkg` (both non-virtual) -> real
-    `ambiguous_package_name` (its `--quiet` form: the two `!!!` lines +
-    the sorted fully-qualified list, exit 1). Rust == Python."""
+    `ambiguous_package_name`'s own non-`--quiet` form (no `--quiet` on
+    this command line): a full `search.output()`-shaped listing (`[
+    Results for search key : ambigpkg ]` header, one `*  cat/pkg` block
+    with its own `Latest version`/installed-status/`Homepage`/
+    `Description`/`License` lines per match, `[ Applications found : N
+    ]` footer) followed by the `!!!` "is ambiguous... one of the above"
+    trailer, exit 1. Rust == Python."""
     r = _run([str(emerge_binary)], ["--pretend", "ambigpkg"], fixture_env)
     p = _run(emerge_pretend_python, ["--pretend", "ambigpkg"], fixture_env)
+    assert r.returncode == 1
+    assert r.stdout == p.stdout
+    assert r.stderr == p.stderr
+    assert '!!! The short ebuild name "ambigpkg" is ambiguous.' in r.stderr
+    assert "!!! one of the above fully-qualified ebuild names instead." in r.stderr
+    assert "[ Results for search key : ambigpkg ]" in r.stdout
+    assert "*  app-misc/ambigpkg" in r.stdout
+    assert "*  dev-libs/ambigpkg" in r.stdout
+    assert "[ Applications found : 2 ]" in r.stdout
+
+
+def test_bare_name_ambiguous_quiet_form_is_the_terse_deterministic_list(
+    emerge_binary, emerge_pretend_python, fixture_env
+):
+    """The same ambiguity, but with `--quiet`: real `ambiguous_package_
+    name`'s own `--quiet` form -- the two `!!!` lines plus the sorted,
+    colourized fully-qualified list, no search-style block at all.
+    Rust == Python."""
+    r = _run([str(emerge_binary)], ["--pretend", "--quiet", "ambigpkg"], fixture_env)
+    p = _run(
+        emerge_pretend_python, ["--pretend", "--quiet", "ambigpkg"], fixture_env
+    )
     assert r.returncode == 1
     assert r.stdout == p.stdout
     assert r.stderr == p.stderr

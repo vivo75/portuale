@@ -10739,6 +10739,60 @@ def _search_candidate_visible(c):
     )
 
 
+def _render_ambiguous_search_output(key, cps, repos, root, color):
+    """Real `ambiguous_package_name`'s own non-`--quiet` branch
+    (depgraph.py:12063-12083): a `search` object seeded via `addCP(cp)`
+    for each ambiguous cp (not a free-text query -- so, per real
+    `_results_specified`, `output()` skips straight to rendering the
+    given list, no `_iter_search()`/"Searching...\\n\\n" line at all),
+    then `s.output()`. Real's own `verbose` here is always True (this
+    branch is only reached when "--quiet" not in myopts already), so
+    the full metadata block always renders. Mirrors pretend.rs's
+    render_ambiguous_search_output -- reuses `_search_best_candidate`/
+    `_search_candidate_visible`, same v1 cut `_run_search` already
+    documents (Size of files, the bestmatch-visible approximation)."""
+    sys.stdout.write(
+        "\b\b  \n[ Results for search key : %s ]\n" % color.c("bold", key)
+    )
+    star = color.c("GOOD", "*")
+    for cp in cps:
+        cat, _, pkg = cp.partition("/")
+        cands = list_candidates(repos, cat, pkg)
+        best = _search_best_candidate(cands)
+        masked = best is None or not _search_candidate_visible(best)
+        if masked:
+            print(f"{star}  {color.c('bold', cp)} {color.c('BAD', '[ Masked ]')}")
+        else:
+            print(f"{star}  {color.c('bold', cp)}")
+        if best is not None:
+            try:
+                meta = read_md5_cache(
+                    best["repo_location"], cat, f"{pkg}-{best['version']}"
+                )
+            except OSError:
+                meta = {}
+
+            def _g(k):
+                return color.c("darkgreen", k)
+
+            installed = installed_versions(root, cat, pkg)
+            inst = " ".join(installed) if installed else "[ Not Installed ]"
+            print(f"      {_g('Latest version available:')} {best['version']}")
+            print(f"      {_g('Latest version installed:')} {inst}")
+            print(f"      {_g('Homepage:')}      {meta.get('HOMEPAGE', '')}")
+            print(f"      {_g('Description:')}   {meta.get('DESCRIPTION', '')}")
+            print(f"      {_g('License:')}       {meta.get('LICENSE', '')}\n")
+    print(f"[ Applications found : {color.c('bold', str(len(cps)))} ]\n")
+    print(
+        f'!!! The short ebuild name "{key}" is ambiguous. Please specify',
+        file=sys.stderr,
+    )
+    print(
+        "!!! one of the above fully-qualified ebuild names instead.\n",
+        file=sys.stderr,
+    )
+
+
 def _run_search(
     terms,
     config_root,
@@ -15345,16 +15399,21 @@ def run(args):
         if kind == "qualified":
             atom_args[i] = val
         elif kind == "ambiguous":
-            print(
-                f'\n!!! The short ebuild name "{atom_arg}" is ambiguous. Please specify',
-                file=sys.stderr,
-            )
-            print(
-                "!!! one of the following fully-qualified ebuild names instead:\n",
-                file=sys.stderr,
-            )
-            for cp in val:
-                print(f"    {cp}")
+            if quiet:
+                print(
+                    f'\n!!! The short ebuild name "{atom_arg}" is ambiguous. Please specify',
+                    file=sys.stderr,
+                )
+                print(
+                    "!!! one of the following fully-qualified ebuild names instead:\n",
+                    file=sys.stderr,
+                )
+                for cp in val:
+                    print(f"    {color.c('INFORM', cp)}")
+            else:
+                _render_ambiguous_search_output(
+                    atom_arg, val, all_repos, _root(), color
+                )
             return 1
         else:
             print(

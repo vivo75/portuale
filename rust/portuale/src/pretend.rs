@@ -5159,6 +5159,89 @@ fn search_candidate_visible(c: &portage_repo::Candidate) -> bool {
         .any(|k| matches!(k.as_str(), "amd64" | "~amd64" | "*" | "~*" | "**"))
 }
 
+/// Real `ambiguous_package_name`'s own non-`--quiet` branch
+/// (`depgraph.py:12063-12083`): builds a `search` object seeded via
+/// `addCP(cp)` for each ambiguous `cp` (not a free-text query -- so, per
+/// real `_results_specified`, `output()` skips straight to rendering
+/// the given list, no `_iter_search()`/`"Searching...\n\n"` line at
+/// all), then calls `s.output()`. Real's own `verbose` here is always
+/// `True` (`search(..., "--quiet" not in myopts, ...)`, and this branch
+/// is only reached when `"--quiet" not in myopts` already) -- so the
+/// full metadata block always renders, unlike `run_search`'s own
+/// `--quiet`-gated `verbose` toggle. Reuses `run_search`'s own
+/// `search_best_candidate`/`search_candidate_visible`/render shape;
+/// same v1 cut that function's own doc comment already documents
+/// (`Size of files`, the `bestmatch-visible` mask/keyword filter
+/// approximation) -- not re-derived here, this is the identical
+/// renderer real's own single `search.output()` is, just fed a
+/// `addCP`-built list instead of a query match.
+fn render_ambiguous_search_output(
+    key: &str,
+    cps: &[String],
+    repos: &[portage_repo::RepoConfig],
+    root: &Path,
+    color: &Colorizer,
+) {
+    print!(
+        "\x08\x08  \n[ Results for search key : {} ]\n",
+        color.c("bold", key)
+    );
+    let star = color.c("GOOD", "*");
+    for cp in cps {
+        let (cat, pkg) = cp.split_once('/').unwrap_or((cp.as_str(), ""));
+        let cands = portage_repo::list_candidates(repos, cat, pkg).unwrap_or_default();
+        let best = search_best_candidate(&cands);
+        let masked = !best.as_ref().is_some_and(search_candidate_visible);
+        if masked {
+            println!(
+                "{star}  {} {}",
+                color.c("bold", cp),
+                color.c("BAD", "[ Masked ]")
+            );
+        } else {
+            println!("{star}  {}", color.c("bold", cp));
+        }
+        if let Some(c) = &best {
+            let meta = portage_repo::read_md5_cache(
+                &c.repo_location,
+                cat,
+                &format!("{pkg}-{}", c.version),
+            )
+            .unwrap_or_default();
+            let g = |k: &str| color.c("darkgreen", k);
+            let installed = portage_repo::installed_versions(root, cat, pkg);
+            let inst = if installed.is_empty() {
+                "[ Not Installed ]".to_string()
+            } else {
+                installed.join(" ")
+            };
+            println!("      {} {}", g("Latest version available:"), c.version);
+            println!("      {} {inst}", g("Latest version installed:"));
+            println!(
+                "      {}      {}",
+                g("Homepage:"),
+                meta.get("HOMEPAGE").map(String::as_str).unwrap_or("")
+            );
+            println!(
+                "      {}   {}",
+                g("Description:"),
+                meta.get("DESCRIPTION").map(String::as_str).unwrap_or("")
+            );
+            println!(
+                "      {}       {}\n",
+                g("License:"),
+                meta.get("LICENSE").map(String::as_str).unwrap_or("")
+            );
+        }
+    }
+    println!(
+        "[ Applications found : {} ]\n",
+        color.c("bold", &cps.len().to_string())
+    );
+    eprintln!("!!! The short ebuild name \"{key}\" is ambiguous. Please specify");
+    eprintln!("!!! one of the above fully-qualified ebuild names instead.\n");
+}
+
 /// Real `emerge --check-news` (`_emerge/actions.py:3844` ->
 /// `portage.news.count_unread_news` / `NewsManager`): count the GLEP 42
 /// news items that are **valid**, **relevant** to this system, and not
@@ -8429,12 +8512,18 @@ pub fn run(args: &[String]) -> ExitCode {
                 DepExpand::Unchanged => {}
                 DepExpand::Qualified(q) => *atom = q,
                 DepExpand::Ambiguous(matches) => {
-                    eprintln!(
-                        "\n!!! The short ebuild name \"{atom}\" is ambiguous. Please specify"
-                    );
-                    eprintln!("!!! one of the following fully-qualified ebuild names instead:\n");
-                    for cp in &matches {
-                        println!("    {cp}");
+                    if quiet {
+                        eprintln!(
+                            "\n!!! The short ebuild name \"{atom}\" is ambiguous. Please specify"
+                        );
+                        eprintln!(
+                            "!!! one of the following fully-qualified ebuild names instead:\n"
+                        );
+                        for cp in &matches {
+                            println!("    {}", color.c("INFORM", cp));
+                        }
+                    } else {
+                        render_ambiguous_search_output(atom, &matches, &repos, &root, &color);
                     }
                     return ExitCode::from(1);
                 }
