@@ -575,8 +575,18 @@ fn scheduler_needs_build(entry: &GraphEntry) -> bool {
 /// display/USE/blocker fields are all empty. `required_by` is empty too --
 /// the resume mergelist is already in dependency-first merge order, so
 /// `run_merge_loop`'s `--keep-going` dependent-drop has nothing to key on
-/// (and `--resume` doesn't pass `--keep-going` anyway).
-pub(crate) fn resume_entry(category: &str, package: &str, version: &str) -> GraphEntry {
+/// (and `--resume` doesn't pass `--keep-going` anyway). `source` is the
+/// resumed mergelist entry's own recorded `ResumeEntryKind` (real's own
+/// `type` tag): `CandidateSource::Binary` always resolves from the local
+/// `$PKGDIR` (`remote_binary: false`) -- see `mtimedb.rs`'s own module
+/// doc comment for why re-deriving "was this fetched remotely" isn't
+/// attempted.
+pub(crate) fn resume_entry(
+    category: &str,
+    package: &str,
+    version: &str,
+    source: CandidateSource,
+) -> GraphEntry {
     GraphEntry {
         category: category.to_string(),
         package: package.to_string(),
@@ -598,7 +608,7 @@ pub(crate) fn resume_entry(category: &str, package: &str, version: &str) -> Grap
         fetch_restrict_satisfied: false,
         download_files: Vec::new(),
         required_by: Vec::new(),
-        source: CandidateSource::Ebuild,
+        source,
         provenance: Default::default(),
         keyword_suggestion: None,
         use_suggestion: None,

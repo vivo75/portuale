@@ -28,17 +28,49 @@
 // (real `Scheduler.py:1599-1601`'s own `del mtimedb["resume"]` once the
 // mergelist empties), leaving `resume_backup` untouched.
 //
-// v1 cuts: `--resume` only replays a *source* mergelist (a saved binary
-// entry is merged as source). `myopts` records only the two flags that
-// change how the mergelist is replayed -- `--oneshot` and `--onlydeps`
-// (real portage stores every option); the build-time flags (`--usepkg`
-// etc.) are the binary-entry-replay cut's concern.
+// Binary-entry replay IS real now too: each mergelist item carries real
+// portage's own `type` tag (`"ebuild"` or `"binary"`, `ResumeEntryKind`),
+// so `emerge --resume` can dispatch a resumed binary package through
+// `emerge_getbinpkg::run_merge_plan` the same way `--getbinpkg` itself
+// does, rather than only ever replaying source entries. This also closes
+// the real "build-time flags (`--usepkg` etc.)" gap `myopts` used to have
+// no room for: real portage re-derives usepkg/getbinpkg preference from
+// `myopts` and re-decides binary-vs-source at resume time, but portuale's
+// own mergelist already records that *decision* directly (each entry's own
+// `ResumeEntryKind`, fixed at the point the original run resolved it) --
+// arguably more robust than re-deciding from restored flags, so `myopts`
+// itself still only carries `--oneshot`/`--onlydeps` (the two flags that
+// govern *world*-recording, unrelated to which entries are binary).
+// Cut: a resumed binary entry always resolves from the local `$PKGDIR`
+// (`ResumeEntryKind::Binary` maps to `GraphEntry::remote_binary: false`)
+// -- real re-fetches from a remote binhost too if the original run would
+// have; portuale doesn't try to re-derive "was this fetched remotely"
+// from the failed run's own state.
 
 use regex::Regex;
 use std::path::{Path, PathBuf};
 
-/// `(category, package, version)` -- one entry of a resume mergelist.
-pub type ResumeCpv = (String, String, String);
+/// Real portage's own `mergelist` entry `type` tag
+/// (`["ebuild"|"binary", <root>, <cpv>, <action>]`) -- which kind of
+/// merge `emerge --resume` replays this entry as.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ResumeEntryKind {
+    Ebuild,
+    Binary,
+}
+
+impl ResumeEntryKind {
+    fn as_json_str(self) -> &'static str {
+        match self {
+            ResumeEntryKind::Ebuild => "ebuild",
+            ResumeEntryKind::Binary => "binary",
+        }
+    }
+}
+
+/// `(kind, category, package, version)` -- one entry of a resume
+/// mergelist.
+pub type ResumeCpv = (ResumeEntryKind, String, String, String);
 
 /// The subset of `mtimedb["resume"]["myopts"]` that changes how
 /// `--resume` replays the mergelist: `--oneshot` (don't add the
@@ -98,10 +130,10 @@ fn format_section_body(root: &Path, section: &Section) -> String {
     let merges: Vec<String> = section
         .mergelist
         .iter()
-        .map(|(cat, pkg, ver)| {
+        .map(|(kind, cat, pkg, ver)| {
             format!(
                 "\t\t\t[\n\t\t\t\t{},\n\t\t\t\t{},\n\t\t\t\t{},\n\t\t\t\t{}\n\t\t\t]",
-                json_str("ebuild"),
+                json_str(kind.as_json_str()),
                 json_str(&root_str),
                 json_str(&format!("{cat}/{pkg}-{ver}")),
                 json_str("merge")
@@ -213,18 +245,24 @@ fn extract_object<'a>(content: &'a str, key: &str) -> Option<&'a str> {
 /// Parses one section's own object text (`extract_object`'s own
 /// return) into a `Section`, or `None` if it's missing/malformed.
 fn parse_section(object: &str) -> Option<Section> {
-    // Match `["ebuild", "<root>", "<cat/pkg-ver>", "merge"]`; the cpv is
-    // split into `(cat, pkg, ver)` in Rust below (the version grammar is
-    // too broad for a clean regex group).
+    // Match `["ebuild"|"binary", "<root>", "<cat/pkg-ver>", "merge"]`;
+    // the cpv is split into `(cat, pkg, ver)` in Rust below (the version
+    // grammar is too broad for a clean regex group).
     let entry_re =
-        Regex::new(r#"\[\s*"ebuild"\s*,\s*"[^"]*"\s*,\s*"([^"]+)"\s*,\s*"merge"\s*\]"#).ok()?;
+        Regex::new(r#"\[\s*"(ebuild|binary)"\s*,\s*"[^"]*"\s*,\s*"([^"]+)"\s*,\s*"merge"\s*\]"#)
+            .ok()?;
 
     let mut mergelist = Vec::new();
     for cap in entry_re.captures_iter(object) {
-        let cpv = &cap[1];
+        let kind = if &cap[1] == "binary" {
+            ResumeEntryKind::Binary
+        } else {
+            ResumeEntryKind::Ebuild
+        };
+        let cpv = &cap[2];
         if let Some((cp, ver)) = split_cpv(cpv) {
             if let Some((cat, pkg)) = cp.split_once('/') {
-                mergelist.push((cat.to_string(), pkg.to_string(), ver.to_string()));
+                mergelist.push((kind, cat.to_string(), pkg.to_string(), ver.to_string()));
             }
         }
     }
@@ -371,11 +409,13 @@ mod tests {
             &["dev-libs/foo", "dev-libs/bar"],
             &[
                 (
+                    ResumeEntryKind::Ebuild,
                     "dev-libs".to_string(),
                     "leaf-a".to_string(),
                     "1.0".to_string(),
                 ),
                 (
+                    ResumeEntryKind::Ebuild,
                     "dev-libs".to_string(),
                     "leaf-b".to_string(),
                     "2.3-r1".to_string(),
@@ -394,11 +434,13 @@ mod tests {
             merges,
             vec![
                 (
+                    ResumeEntryKind::Ebuild,
                     "dev-libs".to_string(),
                     "leaf-a".to_string(),
                     "1.0".to_string()
                 ),
                 (
+                    ResumeEntryKind::Ebuild,
                     "dev-libs".to_string(),
                     "leaf-b".to_string(),
                     "2.3-r1".to_string()
@@ -416,9 +458,44 @@ mod tests {
     }
 
     #[test]
+    fn a_mixed_ebuild_and_binary_mergelist_round_trips_its_own_kind_tags() {
+        // Real portage's own resume mergelist can hold both types
+        // together (`[type, root, cpv, action]`, `type` is `"ebuild"`
+        // or `"binary"`) -- portuale's own used to only ever write
+        // `"ebuild"`.
+        let root = tmproot();
+        let mergelist = vec![
+            (
+                ResumeEntryKind::Ebuild,
+                "dev-libs".to_string(),
+                "src-pkg".to_string(),
+                "1.0".to_string(),
+            ),
+            (
+                ResumeEntryKind::Binary,
+                "dev-libs".to_string(),
+                "bin-pkg".to_string(),
+                "2.0".to_string(),
+            ),
+        ];
+        write_resume_list(&root, &[], &mergelist, &ResumeOpts::default()).unwrap();
+
+        let (_, merges, _) = read_resume_list(&root).expect("a resume list");
+        assert_eq!(merges, mergelist);
+        assert_eq!(merges[0].0, ResumeEntryKind::Ebuild);
+        assert_eq!(merges[1].0, ResumeEntryKind::Binary);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
     fn myopts_round_trips_onlydeps_and_defaults_to_none() {
         let root = tmproot();
-        let cpv = &[("c".to_string(), "p".to_string(), "1".to_string())][..];
+        let cpv = &[(
+            ResumeEntryKind::Ebuild,
+            "c".to_string(),
+            "p".to_string(),
+            "1".to_string(),
+        )][..];
         write_resume_list(&root, &[], cpv, &ResumeOpts::default()).unwrap();
         assert_eq!(read_resume_list(&root).unwrap().2, ResumeOpts::default());
 
@@ -446,8 +523,18 @@ mod tests {
     fn rotate_to_backup_preserves_a_multi_item_resume_list() {
         let root = tmproot();
         let mergelist = vec![
-            ("dev-libs".to_string(), "a".to_string(), "1".to_string()),
-            ("dev-libs".to_string(), "b".to_string(), "1".to_string()),
+            (
+                ResumeEntryKind::Ebuild,
+                "dev-libs".to_string(),
+                "a".to_string(),
+                "1".to_string(),
+            ),
+            (
+                ResumeEntryKind::Ebuild,
+                "dev-libs".to_string(),
+                "b".to_string(),
+                "1".to_string(),
+            ),
         ];
         write_resume_list(&root, &["dev-libs/a"], &mergelist, &ResumeOpts::default()).unwrap();
 
@@ -466,7 +553,12 @@ mod tests {
     #[test]
     fn rotate_to_backup_ignores_a_single_item_resume_list() {
         let root = tmproot();
-        let mergelist = vec![("dev-libs".to_string(), "a".to_string(), "1".to_string())];
+        let mergelist = vec![(
+            ResumeEntryKind::Ebuild,
+            "dev-libs".to_string(),
+            "a".to_string(),
+            "1".to_string(),
+        )];
         write_resume_list(&root, &[], &mergelist, &ResumeOpts::default()).unwrap();
 
         rotate_resume_to_backup(&root);
@@ -482,8 +574,18 @@ mod tests {
     fn clear_resume_list_leaves_resume_backup_alone() {
         let root = tmproot();
         let mergelist = vec![
-            ("dev-libs".to_string(), "a".to_string(), "1".to_string()),
-            ("dev-libs".to_string(), "b".to_string(), "1".to_string()),
+            (
+                ResumeEntryKind::Ebuild,
+                "dev-libs".to_string(),
+                "a".to_string(),
+                "1".to_string(),
+            ),
+            (
+                ResumeEntryKind::Ebuild,
+                "dev-libs".to_string(),
+                "b".to_string(),
+                "1".to_string(),
+            ),
         ];
         write_resume_list(&root, &[], &mergelist, &ResumeOpts::default()).unwrap();
         rotate_resume_to_backup(&root);
@@ -505,8 +607,18 @@ mod tests {
     fn write_resume_list_preserves_an_existing_resume_backup() {
         let root = tmproot();
         let backup_list = vec![
-            ("dev-libs".to_string(), "old-a".to_string(), "1".to_string()),
-            ("dev-libs".to_string(), "old-b".to_string(), "1".to_string()),
+            (
+                ResumeEntryKind::Ebuild,
+                "dev-libs".to_string(),
+                "old-a".to_string(),
+                "1".to_string(),
+            ),
+            (
+                ResumeEntryKind::Ebuild,
+                "dev-libs".to_string(),
+                "old-b".to_string(),
+                "1".to_string(),
+            ),
         ];
         write_resume_list(&root, &[], &backup_list, &ResumeOpts::default()).unwrap();
         rotate_resume_to_backup(&root);
@@ -515,7 +627,12 @@ mod tests {
 
         // A fresh failure writes a new "resume" -- the backup from the
         // *previous* abandoned run must survive untouched.
-        let new_list = vec![("dev-libs".to_string(), "new".to_string(), "2".to_string())];
+        let new_list = vec![(
+            ResumeEntryKind::Ebuild,
+            "dev-libs".to_string(),
+            "new".to_string(),
+            "2".to_string(),
+        )];
         write_resume_list(&root, &[], &new_list, &ResumeOpts::default()).unwrap();
 
         let resume = read_section(&root, "resume").expect("new resume written");

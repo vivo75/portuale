@@ -3544,18 +3544,20 @@ fn clean_delay_countdown() {
     std::thread::sleep(std::time::Duration::from_secs(secs));
 }
 
-/// The `(category, package, version)` of every source entry in `entries`
-/// that was supposed to merge but has no `CONTENTS` under `root` yet --
-/// the resume list for `mtimedb::write_resume_list`.
-fn source_entries_not_merged(
+/// The `(kind, category, package, version)` of every entry in `entries`
+/// (source *or* binary -- real portage's own resume mergelist records
+/// both) that was supposed to merge but has no `CONTENTS` under `root`
+/// yet -- the resume list for `mtimedb::write_resume_list`.
+fn entries_not_merged(
     root: &Path,
     entries: &[portage_repo::GraphEntry],
-) -> Vec<(String, String, String)> {
+) -> Vec<crate::mtimedb::ResumeCpv> {
     let mut out = Vec::new();
     for e in entries {
-        if e.source != portage_repo::CandidateSource::Ebuild {
-            continue;
-        }
+        let kind = match e.source {
+            portage_repo::CandidateSource::Ebuild => crate::mtimedb::ResumeEntryKind::Ebuild,
+            portage_repo::CandidateSource::Binary => crate::mtimedb::ResumeEntryKind::Binary,
+        };
         let version = match &e.outcome {
             PretendOutcome::New { version } | PretendOutcome::Reinstall { version, .. } => version,
             PretendOutcome::Upgrade { to, .. } | PretendOutcome::Downgrade { to, .. } => to,
@@ -3567,7 +3569,7 @@ fn source_entries_not_merged(
             .join(format!("{}-{version}", e.package))
             .join("CONTENTS");
         if !contents.is_file() {
-            out.push((e.category.clone(), e.package.clone(), version.clone()));
+            out.push((kind, e.category.clone(), e.package.clone(), version.clone()));
         }
     }
     out
@@ -3577,18 +3579,21 @@ fn source_entries_not_merged(
 /// `mtimedb["resume"]["mergelist"]` (real `_emerge/actions.py`'s resume
 /// handling). With `--pretend`, print the saved list and stop (merging
 /// nothing, touching neither the resume list nor `world`). Otherwise
-/// each saved `cat/pkg-ver` is built + merged as a source entry, in the
-/// recorded order; `--skipfirst` drops the first (the one that failed).
-/// On success the
-/// resume list is cleared and the saved `favorites` are recorded in the
-/// world file -- unless the recorded `myopts` carried `--oneshot` /
-/// `--onlydeps`, in which case the same suppression the original run
-/// would have applied is honoured. On another failure the still-unmerged
-/// tail is re-saved with the same `myopts`.
+/// each saved `cat/pkg-ver` is built + merged through
+/// `emerge_getbinpkg::run_merge_plan` in the recorded order and per its
+/// own recorded `ResumeEntryKind` (source or binary -- real portage's
+/// own resume mergelist records both); `--skipfirst` drops the first
+/// (the one that failed). On success the resume list is cleared and the
+/// saved `favorites` are recorded in the world file -- unless the
+/// recorded `myopts` carried `--oneshot` / `--onlydeps`, in which case
+/// the same suppression the original run would have applied is
+/// honoured. On another failure the still-unmerged tail is re-saved
+/// with the same `myopts`.
 #[allow(clippy::too_many_arguments)]
 fn run_resume(
     root: &Path,
     config_root: &Path,
+    config: &portage_profile::Config,
     portage_tmpdir: &Path,
     skipfirst: bool,
     pretend: bool,
@@ -3620,7 +3625,13 @@ fn run_resume(
     };
     let entries: Vec<portage_repo::GraphEntry> = mergelist
         .iter()
-        .map(|(c, p, v)| emerge_build::resume_entry(c, p, v))
+        .map(|(kind, c, p, v)| {
+            let source = match kind {
+                crate::mtimedb::ResumeEntryKind::Ebuild => portage_repo::CandidateSource::Ebuild,
+                crate::mtimedb::ResumeEntryKind::Binary => portage_repo::CandidateSource::Binary,
+            };
+            emerge_build::resume_entry(c, p, v, source)
+        })
         .collect();
 
     // `emerge --resume --pretend` (real `_emerge/actions.py`: re-resolve
@@ -3662,22 +3673,52 @@ fn run_resume(
 
     println!(">>> Resuming merge of {} package(s)...", entries.len());
     let merge_options = ebuild_merge::MergeOptions::from_env(shell, debug);
-    if let Err(e) = emerge_build::run_source_merge(
-        &entries,
-        &repos,
-        root,
-        portage_tmpdir,
-        &merge_options,
-        false,
-        None,
-        &[],
-        jobs,
-        load_average,
-        // `--resume` carries no `--quiet-build` in `mtimedb["resume"]`
-        // (a documented `myopts` cut) -- stream, unless `-j` >1.
-        false,
-    ) {
-        let still = source_entries_not_merged(root, &entries);
+    // An all-source resume list keeps going through `run_source_merge`
+    // (full `--jobs`/`--load-average` scheduler support); a mergelist
+    // with at least one resumed binary entry (real portage's own resume
+    // mergelist can mix both -- `ResumeEntryKind`) goes through
+    // `run_merge_plan` instead, the same per-entry binary-vs-source
+    // dispatch `--getbinpkg` itself already uses. `run_merge_plan` has
+    // no scheduler of its own yet (a pre-existing, separate gap, not
+    // introduced here) -- unlike a pure-source resume, a binary-
+    // involving one never had `--jobs` parallelism to begin with, so
+    // this isn't a regression for it.
+    let merge_result = if entries
+        .iter()
+        .all(|e| e.source == portage_repo::CandidateSource::Ebuild)
+    {
+        emerge_build::run_source_merge(
+            &entries,
+            &repos,
+            root,
+            portage_tmpdir,
+            &merge_options,
+            false,
+            None,
+            &[],
+            jobs,
+            load_average,
+            // `--resume` carries no `--quiet-build` in `mtimedb["resume"]`
+            // (a documented `myopts` cut) -- stream, unless `-j` >1.
+            false,
+        )
+    } else {
+        let package_options = package_options_from_env(shell, debug);
+        emerge_getbinpkg::run_merge_plan(
+            &entries,
+            config,
+            &repos,
+            root,
+            &package_options.pkgdir,
+            portage_tmpdir,
+            &merge_options,
+            false,
+            None,
+            &[],
+        )
+    };
+    if let Err(e) = merge_result {
+        let still = entries_not_merged(root, &entries);
         let fav_refs: Vec<&str> = favorites.iter().map(String::as_str).collect();
         let _ = crate::mtimedb::write_resume_list(root, &fav_refs, &still, &opts);
         eprintln!("emerge: {e}");
@@ -8043,6 +8084,7 @@ pub fn run(args: &[String]) -> ExitCode {
         return run_resume(
             &root,
             &config_root,
+            &config,
             &portage_tmpdir,
             skipfirst,
             pretend,
@@ -9370,6 +9412,26 @@ pub fn run(args: &[String]) -> ExitCode {
                 buildpkg,
                 &buildpkg_exclude,
             ) {
+                // Real `Scheduler._save_resume_list`: on a merge
+                // failure, record every still-unmerged package (source
+                // *or* binary -- `entries_not_merged`'s own
+                // `ResumeEntryKind` tag) so `emerge --resume` can pick
+                // up where this left off. Previously missing entirely
+                // for this `--getbinpkg` path -- a failed mixed-source-
+                // and-binary run left nothing for `--resume` to find.
+                let unmerged = entries_not_merged(&root, entries);
+                let resume_opts = crate::mtimedb::ResumeOpts { oneshot, onlydeps };
+                if let Err(w) =
+                    crate::mtimedb::write_resume_list(&root, &atom_args, &unmerged, &resume_opts)
+                {
+                    eprintln!("emerge: warning: could not save the resume list: {w}");
+                } else if !unmerged.is_empty() {
+                    eprintln!(
+                        "\n * The resume list contains packages that could not be \
+                         merged.\n * Use `emerge --resume` to retry, or `emerge --resume \
+                         --skipfirst` to skip the first one."
+                    );
+                }
                 eprintln!("emerge: {e}");
                 return ExitCode::from(1);
             }
@@ -9395,7 +9457,7 @@ pub fn run(args: &[String]) -> ExitCode {
                 // Real `Scheduler._save_resume_list`: on a merge failure,
                 // record every still-unmerged package so `emerge --resume`
                 // can pick up where this left off.
-                let unmerged = source_entries_not_merged(&root, entries);
+                let unmerged = entries_not_merged(&root, entries);
                 let resume_opts = crate::mtimedb::ResumeOpts { oneshot, onlydeps };
                 if let Err(w) =
                     crate::mtimedb::write_resume_list(&root, &atom_args, &unmerged, &resume_opts)
@@ -9489,6 +9551,59 @@ mod tests {
 
     fn fixtures_root() -> std::path::PathBuf {
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures")
+    }
+
+    #[test]
+    fn entries_not_merged_tags_and_includes_both_source_and_binary_entries() {
+        // Real portage's own resume mergelist can hold both a source
+        // and a binary entry together -- `source_entries_not_merged`
+        // (this function's own former name) used to silently drop
+        // every `Binary` entry instead of tagging and including it.
+        let root = std::env::temp_dir().join(format!(
+            "pretend-test-{}-entries_not_merged_binary",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+
+        let source_entry = emerge_build::resume_entry(
+            "dev-libs",
+            "src-pkg",
+            "1.0",
+            portage_repo::CandidateSource::Ebuild,
+        );
+        let binary_entry = emerge_build::resume_entry(
+            "dev-libs",
+            "bin-pkg",
+            "2.0",
+            portage_repo::CandidateSource::Binary,
+        );
+        let entries = vec![source_entry, binary_entry];
+
+        // Neither has a real vdb CONTENTS under `root` -- both count as
+        // "not merged".
+        let unmerged = entries_not_merged(&root, &entries);
+        assert_eq!(unmerged.len(), 2);
+        assert_eq!(
+            unmerged[0],
+            (
+                crate::mtimedb::ResumeEntryKind::Ebuild,
+                "dev-libs".to_string(),
+                "src-pkg".to_string(),
+                "1.0".to_string(),
+            )
+        );
+        assert_eq!(
+            unmerged[1],
+            (
+                crate::mtimedb::ResumeEntryKind::Binary,
+                "dev-libs".to_string(),
+                "bin-pkg".to_string(),
+                "2.0".to_string(),
+            )
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
