@@ -172,11 +172,11 @@ architectural — a single-pass BFS can't grow into these incrementally:
 
 - **Merge-list order (`-p` non-tree), remaining sub-algorithms.** Real
   `_serialize_tasks` (depgraph.py:9457+) is a genuine bidirectional
-  digraph scheduler: priority-ranged `leaf_nodes`, RDEPEND `gather_deps`
-  clustering, `asap_nodes`/libc-first special-casing, `_merge_order_bias`
-  (system-deps-first, descending reference count), a `_FrontierDigraph`
-  perf layer, blocker/uninstall interleaving.
-  `topological_merge_order` / `_topological_merge_order` ported one of
+  digraph scheduler: priority-ranged `leaf_nodes`, a `gather_deps`
+  cycle-breaking helper, `asap_nodes`/libc-first special-casing,
+  `_merge_order_bias` (system-deps-first, descending reference count), a
+  `_FrontierDigraph` perf layer, blocker/uninstall interleaving.
+  `topological_merge_order` / `_topological_merge_order` ported two of
   its sub-algorithms (2026-09-04): `real_discovery_order` (an
   explicit-stack DFS simulating real's own `.order` discovery position —
   `_create_graph`'s LIFO `dep_stack`, `_add_pkg`'s early `digraph.add` /
@@ -184,28 +184,62 @@ architectural — a single-pass BFS can't grow into these incrementally:
   PDEPEND/DEPEND/BDEPEND key order; top-level atoms seed in the *given*
   order, not real's own per-arg alphabetical `sorted()` — a documented
   cut, portuale's flattened atom list has no arg/pset boundary left to
-  sort within). Verified against a live `gnome-base/gnome-control-center`
-  merge (a ~26-entry real graph): a long contiguous run now matches real
-  exactly.
-  **Still open:** a `_merge_order_bias` port was attempted the same
-  session (system-deps-first via `_find_deep_system_runtime_deps`, then
-  descending reference count) and reverted -- it fixed one fixture
-  (`@system` alone) but broke five others as soon as a non-system
-  explicit atom shared the command line with `@system`/`@world`/a custom
-  set, and the real semantics that reconcile the two weren't pinned down
-  (see `docs/what-this-proves.md`'s "Merge-list order" entry for the
-  full empirical writeup) -- a real port here needs to first establish
-  whether/how real's `_serialize_tasks` digraph excludes no-op
-  (already-installed) packages from scheduling, which portuale's unified
-  GraphEntry-array architecture doesn't cleanly separate; `gather_deps`
-  (RDEPEND-connected packages merged as one scheduling group) — without
-  it, a package reached late in discovery order but RDEPEND-connected to
-  an early one (`net-libs/rest`, `net-libs/gnome-online-accounts` in the
-  gcc case) still renders later than real places it; `asap_nodes`/
-  libc-first special-casing; the `_FrontierDigraph` perf layer (not
-  needed at portuale's graph sizes); blocker/uninstall interleaving
-  (portuale's `-p` pretend path has no uninstall/blocker resolution yet,
-  a separate pre-existing gap).
+  sort within) and `merge_order_bias`/`deep_system_deps`
+  (`_find_deep_system_runtime_deps` + the system-first/descending-
+  reference-count re-sort, correctly scoped this time to *merge-bound*
+  entries only — see below). Verified against a live
+  `gnome-base/gnome-control-center` merge (a ~26-entry real graph): a
+  long contiguous run now matches real exactly.
+
+  `_merge_order_bias`'s first attempt (earlier the same day) fixed one
+  fixture (`@system` alone) but broke five others the instant a
+  non-system explicit atom shared the command line with `@system`/
+  `@world`/a custom set. Root cause, confirmed live (`emerge -p
+  --noreplace <already-installed pkg>` prints nothing at all, not even a
+  notice): real's `_serialize_tasks` prunes every "nomerge"
+  (`AlreadyInstalled`) root node from `mygraph` *before*
+  `_merge_order_bias` ever runs (`depgraph.py:9505-9519`) — trivial
+  top-level targets never enter scheduling, so bias never compares them
+  against anything. Portuale's own "package is already installed;
+  nothing to do" notice (a portuale-only UX addition, no real precedent)
+  was wrongly being bias-compared against real merge tasks. Fixed by
+  restricting the bias re-sort to `merge_bound_cpv(entry).is_some()`
+  entries only, weaving trivial entries back in afterward by simple
+  insertion on their own unbiased discovery rank. Full writeup in
+  `docs/what-this-proves.md`'s "Merge-list order" entries.
+
+  **`gather_deps` researched, not ported.** Direct read of
+  `_serialize_tasks`'s main loop: `gather_deps` (and
+  `_gather_deps_closures`/`find_smallest_cycle`) is called *only* from
+  the `if not selected_nodes:` branch — i.e. only once the ordinary
+  priority-ranged `leaf_nodes()` scan finds nothing available at *any*
+  priority level, a genuine unresolved runtime cycle. It is not a
+  general "cluster RDEPEND-connected packages together" mechanism for
+  the ordinary (acyclic) scheduling path, contradicting this doc's own
+  earlier (pre-2026-09-04-research) guess. The `net-libs/rest`/
+  `net-libs/gnome-online-accounts` gcc-case gap is therefore NOT
+  `gather_deps`-shaped; live gnome-control-center has no actual
+  dependency cycle, so real never even calls `gather_deps` while
+  resolving it. The gap's real cause is still open — most likely the
+  "greedily pop every currently-available leaf at once, in `.order`"
+  optimization (`depgraph.py:9764-9777`) interacting with the ordinary
+  priority-ranged scan in a way `topological_merge_order_impl`'s
+  one-at-a-time `min_by_key` Kahn's walk doesn't reproduce (each pick
+  immediately re-opens availability for the next, where real only
+  reopens it on the *next* outer round) — not yet isolated to a minimal
+  fixture. Portuale's own existing cycle-breaking fallback (prefer an
+  entry whose every unplaced dependency is a soft edge; otherwise emit
+  the earliest-discovered entry) stays as the practical approximation --
+  a full `gather_deps`/`find_smallest_cycle` port (smallest-cycle
+  selection across multiple priority levels) is deferred until a real
+  fixture actually needs it.
+
+  **Still open:** the priority-ranged/batched leaf-selection mechanism
+  above; `asap_nodes`/libc-first special-casing; the `_FrontierDigraph`
+  perf layer (not needed at portuale's graph sizes); blocker/uninstall
+  interleaving (portuale's `-p` pretend path has no uninstall/blocker
+  resolution yet, a separate pre-existing gap); a full `gather_deps`
+  port for the genuine-cycle case.
 
 - **`--root-deps` / multi-root, remaining edges.** *Mostly a non-gap for
   this fork* — the ebuilds are all EAPI 7+, where `--root-deps=rdeps` is

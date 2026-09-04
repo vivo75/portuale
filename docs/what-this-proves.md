@@ -12780,3 +12780,105 @@ RDEPEND before DEPEND, so `newpkg` now correctly precedes
 `builddeponlypkg` — the fixture's own doc comment updated to match.
 `portage-repo`'s full unit suite (286 tests) and the full contract suite
 (Rust==Python byte-identical) pass unchanged otherwise.
+
+### Merge-list order — `merge_order_bias`, correctly scoped this time; `gather_deps` researched (2026-09-04, later the same day)
+
+The reverted `_merge_order_bias` attempt (previous entry) is back, fixed.
+Root cause of the earlier revert, confirmed against the live system:
+`emerge -p --noreplace sys-libs/zlib app-editors/nano` (zlib already
+satisfied, nano new) prints *nothing at all* for zlib — no line, no
+notice, not even under `-v`/`--tree`/`--update`. Reading
+`_serialize_tasks` confirms why: right before `self._merge_order_bias(
+mygraph)` runs (`depgraph.py:9519`), a loop prunes every "nomerge"
+(`AlreadyInstalled`) *root* node — one with nothing depending on it —
+from `mygraph` entirely (`depgraph.py:9505-9518`, "Prune 'nomerge' root
+nodes if nothing depends on them"). A trivial top-level target never
+enters scheduling, so real's own bias comparator never runs against it
+at all. Portuale shows a "package is already installed; nothing to do"
+notice for a top-level `AlreadyInstalled`/`NoVisibleCandidate` entry
+anyway — a portuale-only UX addition with no real precedent — and the
+first `_merge_order_bias` attempt bias-compared it against real merge
+tasks regardless, which is exactly what let an unrelated `@system`
+member outrank a plain requested package it should never have been
+weighed against.
+
+Fixed by scoping the bias re-sort to *merge-bound* entries only
+(`merge_bound_cpv(entry).is_some()` — New/Upgrade/Downgrade/Reinstall,
+real's own "has an operation" test) and weaving trivial entries back
+into the resulting preference order afterward: each trivial entry is
+inserted by its own (unbiased) discovery rank relative to each
+merge-bound entry's own (also unbiased) discovery rank — i.e. bias only
+ever reorders merge-bound entries *among themselves*; a trivial entry
+never gets bias-promoted ahead of, or demoted behind, a merge-bound
+entry it wasn't already ahead of (or behind) in plain discovery order.
+This reproduces real's pruned-graph scope without portuale actually
+needing a second, separate graph representation.
+
+Caught two more bugs on the way to a clean pass:
+
+- **A missing field write.** The earlier (reverted) attempt's
+  `GraphEntry::runtime_dep_order` -- the RDEPEND/IDEPEND/PDEPEND-only
+  subset of `dep_order`, feeding `deep_system_deps`'s reachability walk
+  -- was restored on the struct and at the `AlreadyInstalled` recursion
+  site, but the *main* New/Upgrade/Downgrade/Reinstall construction site
+  only ever restored `dep_order`, never `runtime_dep_order` next to it.
+  Silent in Rust (an empty `Vec` is a valid value, not a compile error)
+  and invisible in every existing test (nothing depended on a
+  merge-bound entry's own `runtime_dep_order` before this slice) --
+  found by comparing Rust's and Python's own `is_deep_sys`/ref-count
+  debug traces for the same fixture side by side, line by line, until
+  they diverged on exactly this field.
+- **Two fixtures actually encode real, verified-live behavior, not a
+  stale expectation.** `@world`/`@world`-combined-with-an-atom: the
+  shared fixture profile's `dev-libs/newpkg`/`dev-libs/withdeps` are
+  *also* genuine `@system` members (profiles/base+default/`packages`,
+  set up for an earlier, unrelated `@system`-expansion test) -- so real's
+  own bias legitimately promotes them, and the RDEPEND chain they pull
+  in (`dev-libs/upgradepkg`), ahead of the unrelated, non-system
+  `dev-libs/innernestedsetpkg`, which now lands last despite being
+  discovered earlier. Both fixtures' expected `stdout` updated to the
+  new (Rust==Python-verified) order, with a doc-comment note explaining
+  why. A third, `test_verbose_use_order_is_enabled_first_and_
+  alphabetical_flips_it`, asserted `lines[0]` was a specific top-level
+  package's own USE line -- incidental to what the test is actually
+  about (USE-flag *display* ordering, not merge order) -- and broke for
+  the same underlying reason (one of its two top-level targets RDEPENDs,
+  conditionally, on the same shared-fixture `dev-libs/newpkg`). Changed
+  to `any(...)` content matching instead of a positional assertion,
+  which is what it should have been all along.
+
+**`gather_deps` researched, not ported.** A direct read of
+`_serialize_tasks`'s main selection loop shows `gather_deps` (and its
+`_gather_deps_closures`/`find_smallest_cycle` callers) invoked *only*
+from the `if not selected_nodes:` branch -- i.e. only once the ordinary
+priority-ranged `leaf_nodes()` scan finds nothing available at *any*
+priority level: a genuine, currently-unresolved runtime dependency
+cycle. It is not a general "cluster RDEPEND-connected packages together"
+mechanism for the ordinary acyclic scheduling path -- contradicting this
+project's own earlier guess (the previous "Merge-list order" backlog
+entry, before this research). The live `gnome-base/gnome-control-center`
+merge has no actual dependency cycle in it, so real never calls
+`gather_deps` at all while resolving it -- meaning the `net-libs/rest`/
+`net-libs/gnome-online-accounts` gap seen there has a different real
+cause, most likely `_serialize_tasks`'s own "greedily pop every
+currently-available leaf at once" batching optimization
+(`depgraph.py:9764-9777`) interacting with the ordinary priority-ranged
+scan in a way `topological_merge_order_impl`'s one-at-a-time
+`min_by_key` Kahn's walk doesn't reproduce (each pick immediately
+re-opens availability for the very next pick, where real only reopens it
+on the *next outer round*) -- not yet isolated to a minimal fixture.
+Portuale's own pre-existing cycle-breaking fallback (prefer an entry
+whose every still-unplaced dependency is a soft/run-time edge; otherwise
+emit the earliest-discovered entry) is left as the practical
+approximation for the genuine-cycle case; a full `gather_deps`/
+`find_smallest_cycle` port (smallest-cycle selection across multiple
+priority levels, `_gather_deps_closures`) is deferred to
+`docs/scope-backlog.md` until a real fixture actually needs it.
+
+Verified live against the same `gnome-base/gnome-control-center` merge:
+the previously-matching contiguous run (`x11-misc/colord` through
+`gnome-base/gnome-control-center`) still matches real exactly --
+correctly-scoped bias neither helps nor hurts that segment, since none
+of its packages are `@system`-reachable in the live profile. `portage-repo`'s
+full unit suite (286 tests) and the full contract suite (Rust==Python
+byte-identical) pass.

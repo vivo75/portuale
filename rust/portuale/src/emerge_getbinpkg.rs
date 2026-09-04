@@ -384,6 +384,7 @@ mod tests {
             remote_binary: false,
             build_id: None,
             dep_order: Vec::new(),
+            runtime_dep_order: Vec::new(),
         }
     }
 
@@ -790,6 +791,7 @@ mod tests {
             remote_binary: true,
             build_id: None,
             dep_order: Vec::new(),
+            runtime_dep_order: Vec::new(),
         };
 
         run_merge_plan(
@@ -900,6 +902,7 @@ mod tests {
             remote_binary: true,
             build_id: None,
             dep_order: Vec::new(),
+            runtime_dep_order: Vec::new(),
         };
 
         run_merge_plan(

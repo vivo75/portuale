@@ -546,6 +546,7 @@ pub(crate) fn resume_entry(category: &str, package: &str, version: &str) -> Grap
         remote_binary: false,
         build_id: None,
         dep_order: Vec::new(),
+        runtime_dep_order: Vec::new(),
     }
 }
 
@@ -967,6 +968,7 @@ mod tests {
                 remote_binary: false,
                 build_id: None,
                 dep_order: Vec::new(),
+                runtime_dep_order: Vec::new(),
             },
             GraphEntry {
                 category: "dev-libs".into(),
@@ -996,6 +998,7 @@ mod tests {
                 remote_binary: false,
                 build_id: None,
                 dep_order: Vec::new(),
+                runtime_dep_order: Vec::new(),
             },
         ];
         let bogus = PathBuf::from("/nonexistent/does/not/exist");
@@ -1060,6 +1063,7 @@ mod tests {
             remote_binary: false,
             build_id: None,
             dep_order: Vec::new(),
+            runtime_dep_order: Vec::new(),
         }];
 
         let result = run_buildpkgonly(
@@ -1125,6 +1129,7 @@ mod tests {
             remote_binary: false,
             build_id: None,
             dep_order: Vec::new(),
+            runtime_dep_order: Vec::new(),
         }
     }
 
@@ -1648,6 +1653,7 @@ mod tests {
             remote_binary: false,
             build_id: None,
             dep_order: Vec::new(),
+            runtime_dep_order: Vec::new(),
         }];
 
         let result = run_buildpkgonly(
@@ -1713,6 +1719,7 @@ mod tests {
             remote_binary: false,
             build_id: None,
             dep_order: Vec::new(),
+            runtime_dep_order: Vec::new(),
         }
     }
 

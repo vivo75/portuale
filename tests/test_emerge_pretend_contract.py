@@ -7546,7 +7546,14 @@ def test_verbose_use_order_is_enabled_first_and_alphabetical_flips_it(
     list. dev-libs/iusedefaultpkg resolves enableddefault + plainflag on,
     disableddefault off; the disabled flag sorts first alphabetically, so
     the two orderings differ. Applies to USE_EXPAND groups too
-    (dev-libs/useexpandpkg's VIDEO_CARDS)."""
+    (dev-libs/useexpandpkg's VIDEO_CARDS).
+
+    Asserted by content (`any(...)`), not position: useexpandpkg's
+    conditional RDEPEND on dev-libs/newpkg -- itself also reachable from
+    @system in this shared fixture profile -- means real's own
+    _merge_order_bias can legitimately place newpkg's own line ahead of
+    either top-level package; this test is about USE-flag formatting,
+    not merge order, so it doesn't pin a position."""
     default = _run(
         [str(emerge_binary)],
         ["--pretend", "-v", "dev-libs/iusedefaultpkg", "dev-libs/useexpandpkg"],
@@ -7554,8 +7561,10 @@ def test_verbose_use_order_is_enabled_first_and_alphabetical_flips_it(
     )
     assert default.returncode == 0
     lines = default.stdout.splitlines()
-    assert lines[0] == (
-        '[ebuild  N     ] dev-libs/iusedefaultpkg-1.0::testrepo  USE="enableddefault plainflag -disableddefault"'
+    assert any(
+        ln
+        == '[ebuild  N     ] dev-libs/iusedefaultpkg-1.0::testrepo  USE="enableddefault plainflag -disableddefault"'
+        for ln in lines
     )
     assert any(
         ln == '[ebuild  N     ] dev-libs/useexpandpkg-1.0::testrepo  VIDEO_CARDS="nvidia -amdgpu"'
@@ -7569,8 +7578,10 @@ def test_verbose_use_order_is_enabled_first_and_alphabetical_flips_it(
     )
     assert alpha.returncode == 0
     alines = alpha.stdout.splitlines()
-    assert alines[0] == (
-        '[ebuild  N     ] dev-libs/iusedefaultpkg-1.0::testrepo  USE="-disableddefault enableddefault plainflag"'
+    assert any(
+        ln
+        == '[ebuild  N     ] dev-libs/iusedefaultpkg-1.0::testrepo  USE="-disableddefault enableddefault plainflag"'
+        for ln in alines
     )
     assert any(
         ln == '[ebuild  N     ] dev-libs/useexpandpkg-1.0::testrepo  VIDEO_CARDS="-amdgpu nvidia"'
@@ -7897,16 +7908,23 @@ def test_world_expands_to_the_fixture_world_files_own_atoms(emerge_binary, fixtu
     forever or erroring). --update is added purely so upgradepkg's own
     dependency-level entry actually upgrades (see the --update contract
     tests) rather than staying silently AlreadyInstalled -- unrelated to
-    what this test itself is about."""
+    what this test itself is about.
+
+    Merge order: newpkg/withdeps/upgradepkg are also reachable from
+    @system in this shared fixture profile (profiles/base+default/
+    packages), so real's own _merge_order_bias promotes all three ahead
+    of the unrelated, non-system innernestedsetpkg -- which lands dead
+    last despite being discovered earlier -- same real-grounded bias
+    documented on portage-repo::merge_order_bias / _merge_order_bias."""
     result = _run([str(emerge_binary)], ["--pretend", "--update", "@world"], fixture_env)
     assert result.returncode == 0
     assert result.stdout.splitlines() == [
         '[ebuild  N     ] dev-libs/newpkg-1.0 ',
         'dev-libs/nestedsetpkg-1.0 is already installed; nothing to do',
-        '[ebuild  N     ] dev-libs/innernestedsetpkg-1.0 ',
         'dev-libs/dualslotpkg-2.0 is already installed; nothing to do',
         '[ebuild     U  ] dev-libs/upgradepkg-2.0 [1.0]',
         '[ebuild  N     ] dev-libs/withdeps-1.0 ',
+        '[ebuild  N     ] dev-libs/innernestedsetpkg-1.0 ',
     ]
 
 
@@ -7914,7 +7932,9 @@ def test_world_combines_with_an_explicit_atom(emerge_binary, fixture_env):
     """@world can appear alongside an explicit atom in the same
     invocation, expanding in place at whatever position it's given --
     real portage's own most common combined usage shape. --update is
-    added for the same reason as the plain @world test above."""
+    added for the same reason as the plain @world test above. Merge
+    order: see test_world_expands_to_the_fixture_world_files_own_atoms's
+    own doc comment for why innernestedsetpkg lands last."""
     result = _run(
         [str(emerge_binary)],
         ["--pretend", "--update", "dev-libs/samepkg", "@world"],
@@ -7925,10 +7945,10 @@ def test_world_combines_with_an_explicit_atom(emerge_binary, fixture_env):
         'dev-libs/samepkg-1.0 is already installed; nothing to do',
         '[ebuild  N     ] dev-libs/newpkg-1.0 ',
         'dev-libs/nestedsetpkg-1.0 is already installed; nothing to do',
-        '[ebuild  N     ] dev-libs/innernestedsetpkg-1.0 ',
         'dev-libs/dualslotpkg-2.0 is already installed; nothing to do',
         '[ebuild     U  ] dev-libs/upgradepkg-2.0 [1.0]',
         '[ebuild  N     ] dev-libs/withdeps-1.0 ',
+        '[ebuild  N     ] dev-libs/innernestedsetpkg-1.0 ',
     ]
 
 

@@ -6787,7 +6787,124 @@ def _real_discovery_order(entries, top_level_atoms):
     return rank
 
 
-def _topological_merge_order(entries, edge_kind_map=None, top_level_atoms=()):
+def _deep_system_deps(entries, config):
+    """Which `entries` real `_find_deep_system_runtime_deps` reaches by
+    BFS from every `@system`-set package, following only RDEPEND/IDEPEND/
+    PDEPEND (runtime-priority) edges -- never DEPEND/BDEPEND. Mirrors
+    portage-repo/src/lib.rs's deep_system_deps exactly."""
+    n = len(entries)
+    cp_indices = {}
+    for i, e in enumerate(entries):
+        cp_indices.setdefault((e[0], e[1]), []).append(i)
+    system_cps = set()
+    for atom_str in config["system_packages"]:
+        atom = _parse_atom(atom_str)
+        if atom is not None:
+            system_cps.add(tuple(atom.cp.split("/", 1)))
+    is_deep_sys = [False] * n
+    stack = []
+    for i, e in enumerate(entries):
+        if (e[0], e[1]) in system_cps:
+            is_deep_sys[i] = True
+            stack.append(i)
+    while stack:
+        i = stack.pop()
+        runtime_dep_order = entries[i][8].get("runtime_dep_order", []) if entries[i][8] else []
+        for cp in runtime_dep_order:
+            for j in cp_indices.get(tuple(cp), ()):
+                if not is_deep_sys[j]:
+                    is_deep_sys[j] = True
+                    stack.append(j)
+    return is_deep_sys
+
+
+def _merge_order_bias(entries, discovery_rank, config, top_level_atoms):
+    """Real `_merge_order_bias` (depgraph.py:9274-9307, `implicit_system_
+    deps` -- default on, no `--implicit-system-deps=n` support here, a
+    documented cut) only ever reorders real's own *merge* digraph, which
+    -- crucially -- has already had every "nomerge" (already_installed)
+    root node pruned from it (`_serialize_tasks`'s own "Prune 'nomerge'
+    root nodes if nothing depends on them" loop, depgraph.py:9505-9518,
+    which runs BEFORE `self._merge_order_bias(mygraph)` at line 9519): a
+    trivial top-level target with nothing depending on it never enters
+    scheduling at all -- confirmed live (`emerge -p --noreplace
+    <already-installed pkg>` prints nothing whatsoever for it, not even a
+    notice). This reference shows a "package is already installed;
+    nothing to do" notice for a top-level already_installed/
+    no_visible_candidate entry anyway (a portuale-only UX nicety with no
+    real precedent to order against) -- so this bias only ever compares
+    *merge-bound* entries (`_merge_bound_cpv(entry) is not None`, i.e.
+    new/upgrade/downgrade/reinstall) against each other, exactly
+    mirroring real's pruned-graph scope. A trivial entry is woven back
+    into the resulting preference order by simple insertion on its own
+    (unbiased) discovery_rank, relative to each merge-bound entry's own
+    *original* (also unbiased) discovery_rank -- i.e. bias only ever
+    reorders merge-bound entries *among themselves*; a trivial entry
+    never gets bias-promoted ahead of (or demoted behind) a merge-bound
+    entry it wasn't already ahead of (or behind) in plain discovery
+    order. Caught by a fixture (@system, one of whose three top-level
+    members -- withdeps -- RDEPENDs on newpkg and upgradepkg, combined
+    with an unrelated already-installed top-level samepkg): biasing
+    samepkg against the @system members promoted every @system member
+    ahead of it, when real would never even schedule samepkg (or bias
+    against it) in the first place.
+
+    Real's own comparator, restricted this way: (1) an @system-deep
+    entry before a non-@system one; (2) among entries tied on (1),
+    *descending* reference count (real `len(mygraph.parent_nodes(node))`
+    -- how many other packages in the graph depend on this one); (3)
+    original discovery order breaks any remaining tie. Mirrors
+    portage-repo/src/lib.rs's merge_order_bias exactly.
+
+    Reference count is NOT simply `len(entry[6])` (required_by): real
+    `_add_pkg(pkg, dep)` calls `digraph.add(pkg, dep.parent, ...)` for
+    *every* package, including a top-level one, where `dep.parent` is
+    the originating `Arg` (`SetArg`/`PackageArg`) itself, not `None` --
+    `digraph.add`'s own `if not parent: return` only skips a genuinely
+    falsy parent. So a top-level target's own `parent_nodes` count
+    always includes that `Arg`, on top of any package that also depends
+    on it -- required_by (populated only from dependency-string owners,
+    `owner is not None`) misses this "requested at all" edge entirely."""
+    n = len(entries)
+    is_deep_sys = _deep_system_deps(entries, config)
+    top_level_cps = set()
+    for atom_str in top_level_atoms:
+        atom = _parse_atom(atom_str)
+        if atom is not None and not atom.blocker:
+            top_level_cps.add(tuple(atom.cp.split("/", 1)))
+
+    def _ref_count(i):
+        e = entries[i]
+        return len(e[6]) + (1 if (e[0], e[1]) in top_level_cps else 0)
+
+    merge_bound = [i for i in range(n) if _merge_bound_cpv(entries[i]) is not None]
+    merge_bound.sort(key=lambda i: (not is_deep_sys[i], -_ref_count(i), discovery_rank[i]))
+
+    trivial = [i for i in range(n) if _merge_bound_cpv(entries[i]) is None]
+    trivial.sort(key=lambda i: discovery_rank[i])
+
+    # Weave `trivial` back in: before each merge-bound entry, insert
+    # every trivial entry whose own (unbiased) discovery_rank still
+    # precedes that merge-bound entry's own (unbiased) discovery_rank --
+    # i.e. bias reorders `merge_bound` among itself only; a trivial
+    # entry's position relative to any merge-bound entry never changes
+    # from what plain discovery order already had.
+    order = []
+    ti = 0
+    for m in merge_bound:
+        while ti < len(trivial) and discovery_rank[trivial[ti]] < discovery_rank[m]:
+            order.append(trivial[ti])
+            ti += 1
+        order.append(m)
+    order.extend(trivial[ti:])
+
+    rank = [0] * n
+    for pos, i in enumerate(order):
+        rank[i] = pos
+    return rank
+
+
+def _topological_merge_order(entries, edge_kind_map=None, top_level_atoms=(), config=None):
     """Put `entries` in real portage's dependency-first *merge* order.
 
     Real portage's `mylist` is a genuine topological merge schedule (its
@@ -6799,10 +6916,11 @@ def _topological_merge_order(entries, edge_kind_map=None, top_level_atoms=()):
     A stable topological sort: an entry is emitted only once every other
     entry it requires (within this set) has already been emitted; among
     the entries that are all currently emittable, real's own discovery
-    position (`_real_discovery_order`, see its own doc comment) goes
-    first, not raw array position. Two packages with no dependency
-    relationship keep this discovery order; a dependency always precedes
-    the packages that pull it in.
+    position -- `_real_discovery_order`, biased by `_merge_order_bias` --
+    goes first (see both functions' own doc comments), not raw array
+    position. Two packages with no dependency relationship keep this
+    discovery order; a dependency always precedes the packages that pull
+    it in.
 
     A genuine dependency cycle is broken the way real portage's
     _serialize_tasks does -- at a run-time edge. When no unplaced entry
@@ -6821,6 +6939,7 @@ def _topological_merge_order(entries, edge_kind_map=None, top_level_atoms=()):
     if n < 2:
         return entries
     edge_kind_map = edge_kind_map or {}
+    config = config or {"system_packages": []}
     # (category, package) -> every entry index with that cp (a multi-slot
     # package has one entry per resolved slot).
     cp_indices = {}
@@ -6848,6 +6967,7 @@ def _topological_merge_order(entries, edge_kind_map=None, top_level_atoms=()):
     # `mygraph.order` discovery position (`_real_discovery_order`), not
     # raw array index -- see this function's own doc comment.
     discovery_rank = _real_discovery_order(entries, top_level_atoms)
+    discovery_rank = _merge_order_bias(entries, discovery_rank, config, top_level_atoms)
     placed = [False] * n
     order = []
     while len(order) < n:
@@ -8045,6 +8165,7 @@ def resolve_pretend_graph(
                 # walk entirely, matching every other outcome's own `nodeps`
                 # handling further below.
                 already_installed_dep_order = []
+                already_installed_runtime_dep_order = []
                 if outcome[0] == "already_installed" and not nodeps and _deep_recurses_at(deep, depth):
                     # GraphEntry::dep_order for an AlreadyInstalled entry:
                     # always the *current* tree ebuild's metadata (real
@@ -8089,6 +8210,9 @@ def resolve_pretend_graph(
                             )
                             already_installed_dep_order = _dep_order_from_metadata(
                                 _ai_metadata, _ai_use_flags, _ai_real_order_keys
+                            )
+                            already_installed_runtime_dep_order = _dep_order_from_metadata(
+                                _ai_metadata, _ai_use_flags, ("RDEPEND", "IDEPEND", "PDEPEND")
                             )
                     _enqueue_dependencies(
                         repos,
@@ -8160,6 +8284,7 @@ def resolve_pretend_graph(
                             "unmask_entry": None,
                             "keyword_entry": None,
                             "dep_order": already_installed_dep_order,
+                            "runtime_dep_order": already_installed_runtime_dep_order,
                         },
                         keyword_suggestion,
                         use_suggestion,
@@ -8762,6 +8887,9 @@ def resolve_pretend_graph(
                 else ("RDEPEND", "IDEPEND", "PDEPEND", "DEPEND", "BDEPEND")
             )
             provenance["dep_order"] = _dep_order_from_metadata(metadata, use_flags, _real_order_keys)
+            provenance["runtime_dep_order"] = _dep_order_from_metadata(
+                metadata, use_flags, ("RDEPEND", "IDEPEND", "PDEPEND")
+            )
 
             # Per-edge build-time/run-time classification for the
             # merge-order sort + circular-dependency detection (real
@@ -9270,7 +9398,7 @@ def resolve_pretend_graph(
     # dependencies are ever queued). Re-sort into merge order now that
     # every required_by edge is known. Mirrors portage-repo/src/lib.rs's
     # topological_merge_order exactly.
-    entries = _topological_merge_order(entries, edge_kind_map, atoms)
+    entries = _topological_merge_order(entries, edge_kind_map, atoms, config)
 
     # Real depgraph.py:5706-5717 -- see the Rust side's own
     # GraphResult::buildpkgonly_deps_unsatisfied doc comment.
