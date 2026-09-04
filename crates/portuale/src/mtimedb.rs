@@ -718,6 +718,92 @@ mod tests {
     }
 
     #[test]
+    fn remove_merged_entry_shrinks_the_list_and_deletes_it_when_empty() {
+        // After each successful merge the merged package leaves the list
+        // (committed, so a SIGKILL still leaves the tail); once the list
+        // empties, the `resume` key is deleted.
+        let root = tmproot();
+        let full = vec![
+            (
+                ResumeEntryKind::Ebuild,
+                "dev-libs".to_string(),
+                "resume-a".to_string(),
+                "1".to_string(),
+            ),
+            (
+                ResumeEntryKind::Ebuild,
+                "dev-libs".to_string(),
+                "resume-b".to_string(),
+                "1".to_string(),
+            ),
+            (
+                ResumeEntryKind::Binary,
+                "dev-libs".to_string(),
+                "resume-c".to_string(),
+                "2".to_string(),
+            ),
+        ];
+        write_resume_list(&root, &["dev-libs/resume-a"], &full, &ResumeOpts::default()).unwrap();
+
+        // After package 1 of 3 merges: the remaining 2.
+        remove_merged_entry(&root, &full[0]);
+        assert_eq!(read_resume_list(&root).unwrap().1, full[1..]);
+
+        // After package 2 of 3: the remaining 1.
+        remove_merged_entry(&root, &full[1]);
+        assert_eq!(read_resume_list(&root).unwrap().1, full[2..]);
+
+        // After the last merge: the `resume` key is gone (and with no
+        // backup to preserve, the file itself is gone too).
+        remove_merged_entry(&root, &full[2]);
+        assert!(read_resume_list(&root).is_none());
+        assert!(!mtimedb_path(&root).exists());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn remove_merged_entry_keeps_the_backup_and_ignores_unknown_entries() {
+        let root = tmproot();
+        let old = vec![
+            (
+                ResumeEntryKind::Ebuild,
+                "dev-libs".to_string(),
+                "old-a".to_string(),
+                "1".to_string(),
+            ),
+            (
+                ResumeEntryKind::Ebuild,
+                "dev-libs".to_string(),
+                "old-b".to_string(),
+                "1".to_string(),
+            ),
+        ];
+        write_resume_list(&root, &[], &old, &ResumeOpts::default()).unwrap();
+        rotate_resume_to_backup(&root);
+        let fresh = vec![(
+            ResumeEntryKind::Ebuild,
+            "dev-libs".to_string(),
+            "new".to_string(),
+            "2".to_string(),
+        )];
+        write_resume_list(&root, &["dev-libs/new"], &fresh, &ResumeOpts::default()).unwrap();
+
+        // Removing an entry that is only in the backup (not in `resume`)
+        // leaves the file byte-identical.
+        let before = std::fs::read(mtimedb_path(&root)).unwrap();
+        remove_merged_entry(&root, &old[0]);
+        assert_eq!(std::fs::read(mtimedb_path(&root)).unwrap(), before);
+
+        // Removing the last fresh entry deletes `resume` but keeps the
+        // rotated backup recoverable.
+        remove_merged_entry(&root, &fresh[0]);
+        assert!(read_section(&root, "resume").is_none());
+        let (_, back, _) = read_resume_list(&root).expect("backup promoted");
+        assert_eq!(back, old);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
     fn remove_merged_entry_without_any_resume_file_is_a_noop() {
         let root = tmproot();
         let ghost = (
@@ -788,6 +874,45 @@ mod tests {
         remove_merged_entry(&root, &full[2]);
         assert!(read_section(&root, "resume").is_none());
         assert!(read_section(&root, "resume_backup").is_some());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn up_front_save_of_an_all_noop_plan_overwrites_a_stale_list_with_empty() {
+        // The up-front save assigns `mtimedb["resume"]` unconditionally at
+        // merge start, so a run whose plan has nothing to merge still
+        // commits the fresh (empty) list -- no stale entry survives. The
+        // driver passes exactly the up-front-filtered mergelist (empty for
+        // an all-noop plan), so the write itself must not no-op on empty.
+        let root = tmproot();
+        let stale = vec![(
+            ResumeEntryKind::Ebuild,
+            "dev-libs".to_string(),
+            "stale".to_string(),
+            "9.9".to_string(),
+        )];
+        write_resume_list(&root, &["dev-libs/stale"], &stale, &ResumeOpts::default()).unwrap();
+
+        // A single-item stale list does not rotate -- the up-front save
+        // overwrites it directly.
+        rotate_resume_to_backup(&root);
+        assert!(read_section(&root, "resume").is_some());
+
+        write_resume_list(&root, &["dev-libs/noop"], &[], &ResumeOpts::default()).unwrap();
+        // On disk the file still records the fresh run (favorites present)
+        // with an empty mergelist -- and the stale entry is gone. Readers
+        // treat an empty list as nothing to resume, so behaviour matches
+        // "nothing left to merge" too.
+        let content = std::fs::read_to_string(mtimedb_path(&root)).expect("mtimedb written");
+        assert!(
+            !content.contains("stale-9.9"),
+            "no stale 1-item resume may survive: {content}"
+        );
+        assert!(
+            content.contains("dev-libs/noop"),
+            "the fresh run's favorites are recorded: {content}"
+        );
+        assert!(read_resume_list(&root).is_none());
         let _ = std::fs::remove_dir_all(&root);
     }
 }

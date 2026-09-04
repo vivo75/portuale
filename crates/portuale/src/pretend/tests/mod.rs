@@ -6,6 +6,25 @@ fn fixtures_root() -> std::path::PathBuf {
     std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures")
 }
 
+/// A scratch `ROOT` with a single-item stale resume list, so
+/// `--resume --skipfirst` exits with nothing to do and no merge.
+fn single_resume_root(tag: &str) -> std::path::PathBuf {
+    let root = TempDir::new(&format!("resume_single_{tag}")).keep();
+    crate::mtimedb::write_resume_list(
+        &root,
+        &["dev-libs/stale-a"],
+        &[(
+            crate::mtimedb::ResumeEntryKind::Ebuild,
+            "dev-libs".to_string(),
+            "stale-a".to_string(),
+            "1".to_string(),
+        )],
+        &crate::mtimedb::ResumeOpts::default(),
+    )
+    .unwrap();
+    root
+}
+
 /// A stub `eselect` on `PATH`, logging its argv to a marker file. Returns the
 /// stub dir (to prepend to `PATH`) and the marker path.
 #[cfg(unix)]
@@ -33,6 +52,35 @@ fn ask_pretend_unowned_root() -> Option<std::path::PathBuf> {
     Some(std::path::PathBuf::from(
         "/usr/portuale-ask-pretend-test-does-not-exist",
     ))
+}
+
+/// A scratch `ROOT` with a stale multi-item resume list. Returns the root plus
+/// the file's bytes before the run under test.
+fn stale_resume_root(tag: &str) -> (std::path::PathBuf, Vec<u8>) {
+    let root = TempDir::new(&format!("resume_no_write_{tag}")).keep();
+    let stale = vec![
+        (
+            crate::mtimedb::ResumeEntryKind::Ebuild,
+            "dev-libs".to_string(),
+            "stale-a".to_string(),
+            "1".to_string(),
+        ),
+        (
+            crate::mtimedb::ResumeEntryKind::Ebuild,
+            "dev-libs".to_string(),
+            "stale-b".to_string(),
+            "1".to_string(),
+        ),
+    ];
+    crate::mtimedb::write_resume_list(
+        &root,
+        &["dev-libs/stale-a"],
+        &stale,
+        &crate::mtimedb::ResumeOpts::default(),
+    )
+    .unwrap();
+    let before = std::fs::read(crate::mtimedb::mtimedb_path(&root)).unwrap();
+    (root, before)
 }
 
 /// Bound every wait on a pty-driven child (default 60 s, overridable); on expiry
