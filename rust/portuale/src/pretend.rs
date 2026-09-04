@@ -8418,26 +8418,28 @@ pub fn run(args: &[String]) -> ExitCode {
     let usepkg = usepkg || getbinpkg || getbinpkgonly;
     let getbinpkg = getbinpkg || getbinpkgonly;
 
-    // Real `bintree._populate_local`'s own "no trusted index" branch: when
-    // `--usepkg`/`--usepkgonly` makes local binary candidates eligible
-    // but `<PKGDIR>/Packages` is absent, walk `$PKGDIR` for binpkg files
-    // and synthesize the index from each file's own embedded metadata
-    // (`binpkg::scan_pkgdir` -- real `xpak`/`gpkg`). Unlike real portage
-    // this is NOT written back to `Packages` (see
-    // `Config::scanned_binpkgs`). A present `Packages` is always used as
-    // is (no mtime-staleness revalidation -- real
-    // `FEATURES=pkgdir-index-trusted` behavior, portuale's own
-    // long-standing stance for the index).
+    // Real `bintree._populate_local`: when `--usepkg`/`--usepkgonly`
+    // makes local binary candidates eligible, walk `$PKGDIR` for binpkg
+    // files and build the pool from each file's own embedded metadata,
+    // fast-pathed against any already-parsed `<pkgdir>/Packages` entry
+    // whose `_mtime_`/`SIZE` still agree with the live file (real's own
+    // mtime-staleness revalidation -- `binpkg::populate_local_pkgdir`'s
+    // own doc comment has the full real grounding). Runs unconditionally
+    // now, `Packages` present or not -- real portage always walks
+    // `$PKGDIR`, never just trusts a present index outright (that's
+    // `FEATURES=pkgdir-index-trusted`, a real *non-default* opt-in this
+    // used to approximate as portuale's own default). Unlike real
+    // portage this is NOT written back to `Packages` (see
+    // `Config::scanned_binpkgs`) -- portuale recomputes each run, so
+    // `--pretend` still writes nothing.
     if usepkg || usepkgonly {
         let pkgdir_path = Path::new(&config.pkgdir);
-        if !pkgdir_path.join("Packages").is_file() {
-            match crate::binpkg::scan_pkgdir(pkgdir_path) {
-                Ok(entries) if !entries.is_empty() => config.scanned_binpkgs = Some(entries),
-                Ok(_) => {}
-                Err(e) => {
-                    eprintln!("emerge: scanning {}: {e}", config.pkgdir);
-                    return ExitCode::from(1);
-                }
+        match crate::binpkg::populate_local_pkgdir(pkgdir_path) {
+            Ok(entries) if !entries.is_empty() => config.scanned_binpkgs = Some(entries),
+            Ok(_) => {}
+            Err(e) => {
+                eprintln!("emerge: scanning {}: {e}", config.pkgdir);
+                return ExitCode::from(1);
             }
         }
     }

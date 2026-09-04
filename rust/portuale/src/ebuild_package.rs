@@ -79,6 +79,7 @@
 //     portuale has no long-lived `bindbapi` process at all, only ever
 //     re-reading `Packages` fresh each invocation.
 
+use crate::binpkg;
 use crate::ebuild_merge;
 use crate::ebuild_phases;
 use std::collections::HashMap;
@@ -365,7 +366,6 @@ pub(crate) fn package_after_install(
     if package_status != 0 {
         return Ok(package_status);
     }
-    let binpkg_format = options.binpkg_format.as_str();
 
     let cpv = format!("{}/{}", env.category, env.split.pf);
     let metadata: HashMap<String, String> = ebuild_phases::repo_root_for(&env.pkg_dir)
@@ -375,11 +375,21 @@ pub(crate) fn package_after_install(
         .unwrap_or_default();
     let get = |key: &str| metadata.get(key).map(String::as_str).unwrap_or("");
     let build_time_str = build_time.to_string();
-    let path_field = if binpkg_format == "gpkg" {
-        format!("{}/{}.{binpkg_extension}", env.category, env.split.pf)
-    } else {
-        String::new()
-    };
+    // Real `_pkgindex_entry` (`bintree.py:2311`) always writes `PATH`,
+    // regardless of format -- not gpkg-only. Needed for correctness (a
+    // remote fetch falls back to a bare `<pf>.<ext>` guess without it,
+    // real `gettbz2`'s own `if not rel_url: rel_url = pkgname + ".tbz2"`)
+    // and now also for `binpkg::populate_local_pkgdir`'s own mtime-
+    // staleness fast path, which looks up a cached entry by this same
+    // `PATH`'s basename.
+    let path_field = format!("{}/{}.{binpkg_extension}", env.category, env.split.pf);
+    let size_str = std::fs::metadata(&binpkg_path)
+        .map(|st| st.len().to_string())
+        .unwrap_or_default();
+    let mtime_str = std::fs::metadata(&binpkg_path)
+        .ok()
+        .map(|st| binpkg::file_mtime(&st).to_string())
+        .unwrap_or_default();
     write_packages_index_entry(
         &options.pkgdir,
         &cpv,
@@ -399,6 +409,8 @@ pub(crate) fn package_after_install(
             ("IDEPEND", get("IDEPEND")),
             ("PATH", &path_field),
             ("BUILD_TIME", &build_time_str),
+            ("SIZE", &size_str),
+            ("_mtime_", &mtime_str),
         ],
     )?;
 
@@ -624,11 +636,18 @@ pub(crate) fn quickpkg_from_vdb(
     };
     let cpv = format!("{category}/{pf}");
     let build_time = bi("BUILD_TIME");
-    let path_field = if options.binpkg_format == "gpkg" {
-        format!("{category}/{pf}.{ext}")
-    } else {
-        String::new()
-    };
+    // Real `_pkgindex_entry` always writes `PATH` -- see
+    // `package_after_install`'s own identical fix for the full real
+    // grounding (also needed for `populate_local_pkgdir`'s mtime-
+    // staleness fast path to find this entry at all).
+    let path_field = format!("{category}/{pf}.{ext}");
+    let size_str = std::fs::metadata(&binpkg_path)
+        .map(|st| st.len().to_string())
+        .unwrap_or_default();
+    let mtime_str = std::fs::metadata(&binpkg_path)
+        .ok()
+        .map(|st| binpkg::file_mtime(&st).to_string())
+        .unwrap_or_default();
     write_packages_index_entry(
         &options.pkgdir,
         &cpv,
@@ -648,6 +667,8 @@ pub(crate) fn quickpkg_from_vdb(
             ("IDEPEND", &bi("IDEPEND")),
             ("PATH", &path_field),
             ("BUILD_TIME", &build_time),
+            ("SIZE", &size_str),
+            ("_mtime_", &mtime_str),
         ],
     )?;
 
@@ -992,9 +1013,12 @@ mod tests {
         assert_eq!(candidates.len(), 1);
         assert_eq!(candidates[0].version, "1.0");
 
-        // And the directory scan (real `bintree._populate_local`, used
-        // when there is no `Packages` at all) reads the file directly.
-        let scanned = crate::binpkg::scan_pkgdir(&options.pkgdir).expect("scan succeeds");
+        // And the directory scan (real `bintree._populate_local`) reads
+        // the file directly -- the just-written index entry above has no
+        // `_mtime_`/`SIZE` of its own yet, so the fast path can't match
+        // and this re-derives fresh metadata from the real file, same as
+        // a `Packages`-less scan would.
+        let scanned = crate::binpkg::populate_local_pkgdir(&options.pkgdir).expect("scan succeeds");
         assert_eq!(scanned.len(), 1);
         assert_eq!(
             scanned[0].get("CPV").map(String::as_str),

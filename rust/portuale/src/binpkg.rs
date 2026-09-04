@@ -17,10 +17,13 @@
 //   - `read_xpak_metadata`: real `xpak.tbz2.scan` -- the self-describing
 //     `XPAKPACK…XPAKSTOP…STOP` trailer appended after the image tarball.
 //     Pure Rust, no subprocess, reads only the bounded file tail.
-//   - `scan_pkgdir`: walks `<pkgdir>/<cat>/<pf>.{tbz2,gpkg.tar}` and
-//     synthesizes one `Packages`-style entry per file. Its output
-//     becomes `portage_profile::Config::scanned_binpkgs` (NOT written
-//     back to `Packages` -- portuale recomputes each run, so
+//   - `populate_local_pkgdir`: walks `<pkgdir>/<cat>/<pf>.{tbz2,gpkg.tar}`
+//     and synthesizes one `Packages`-style entry per file, fast-pathed
+//     against any already-parsed `<pkgdir>/Packages` entry whose own
+//     `_mtime_`/`SIZE` still agree with the live file (real's own
+//     mtime-staleness revalidation -- see its own doc comment). Its
+//     output becomes `portage_profile::Config::scanned_binpkgs` (NOT
+//     written back to `Packages` -- portuale recomputes each run, so
 //     `--pretend` still writes nothing).
 
 use std::collections::HashMap;
@@ -714,11 +717,28 @@ fn extract_gpkg_member(gpkg_path: &Path, want: &str, dest: &Path) -> Result<(), 
     run_tar(&["-xpf", &lossy(&inner_tar), "-C", &lossy(dest)])
 }
 
-/// Real `bintree._populate_local`, narrowed: walk `pkgdir` for binpkg
-/// *files* and synthesize one `Packages`-style entry per file from its
-/// own embedded metadata (`read_xpak_metadata` / `read_gpkg_metadata`).
-/// The caller only runs this when `<pkgdir>/Packages` is absent (see
-/// `pretend.rs`).
+/// Real `bintree._populate_local`'s own default (non-`FEATURES=
+/// pkgdir-index-trusted`) behavior: walk `pkgdir` for binpkg *files* and
+/// synthesize one `Packages`-style entry per file from its own embedded
+/// metadata (`read_xpak_metadata` / `read_gpkg_metadata`), fast-pathed
+/// against any already-parsed `<pkgdir>/Packages` entries first -- real
+/// `bintree.py:1108-1136`'s own "Validate data from the package index
+/// and try to avoid reading the xpak if possible" comment names this
+/// exact optimization. A candidate entry (matched by basename) whose
+/// own `_mtime_`/`SIZE` still agree with the live file's `stat(2)` (and
+/// which carries at least `CPV`/`SLOT`, real's own `minimum_keys`) is
+/// reused verbatim -- its `PATH` is refreshed in case the file moved,
+/// matching real's own `if oldpath != mypath: d["PATH"] = mypath`.
+/// Anything else (a changed file, a brand-new one, an absent index
+/// entirely, or a stale match) is freshly parsed via
+/// `read_xpak_metadata`/`read_gpkg_metadata`, and gets a fresh
+/// `_mtime_`/`SIZE` recorded on the returned entry so a *later* call can
+/// hit the fast path. This real revalidation replaces portuale's own
+/// former "present `Packages` is always trusted outright, no scan at
+/// all" stance (`portage_repo::read_packages_index`'s own doc comment
+/// used to describe that as portuale's long-standing default) -- the
+/// caller (`pretend.rs`'s own `--usepkg` CLI-boundary setup) now uses
+/// this function unconditionally, `Packages` present or not.
 ///
 /// `$PKGDIR` layout is `<pkgdir>/<category>/<pf>.{tbz2,gpkg.tar}` (one
 /// level deep). `CPV` is derived from the path (`<category>/<pf>` --
@@ -730,14 +750,22 @@ fn extract_gpkg_member(gpkg_path: &Path, want: &str, dest: &Path) -> Result<(), 
 /// v1 cuts: bare `.xpak` files (real `binpkg-multi-instance`
 /// `<pkgdir>/<cat>/<pf>/<build_id>.xpak`) are skipped -- portuale has
 /// no multi-instance concept and a bare `.xpak` is a different on-disk
-/// shape (just the segment, no `[tarball]…STOP` trailer); real
-/// portage's own mtime-based `Packages` staleness revalidation is not
-/// done (a present index is always trusted, portuale's long-standing
-/// stance); a file that fails to parse aborts the scan (rather than
-/// real portage's own skip-and-warn) -- a `$PKGDIR` full of unreadable
-/// binpkgs is a real problem worth surfacing, not silently resolving
-/// against a partial pool.
-pub fn scan_pkgdir(pkgdir: &Path) -> Result<Vec<HashMap<String, String>>, String> {
+/// shape (just the segment, no `[tarball]…STOP` trailer); a file that
+/// fails to parse aborts the scan (rather than real portage's own
+/// skip-and-warn) -- a `$PKGDIR` full of unreadable binpkgs is a real
+/// problem worth surfacing, not silently resolving against a partial
+/// pool.
+pub fn populate_local_pkgdir(pkgdir: &Path) -> Result<Vec<HashMap<String, String>>, String> {
+    let existing = portage_repo::read_packages_index(pkgdir);
+    let mut by_basename: HashMap<&str, Vec<&HashMap<String, String>>> = HashMap::new();
+    for e in &existing {
+        if let Some(path) = e.get("PATH") {
+            if let Some(basename) = Path::new(path).file_name().and_then(|n| n.to_str()) {
+                by_basename.entry(basename).or_default().push(e);
+            }
+        }
+    }
+
     let mut out: Vec<HashMap<String, String>> = Vec::new();
     let Ok(categories) = fs::read_dir(pkgdir) else {
         return Ok(out);
@@ -757,12 +785,44 @@ pub fn scan_pkgdir(pkgdir: &Path) -> Result<Vec<HashMap<String, String>>, String
             let Some(name) = file.file_name().and_then(|n| n.to_str()) else {
                 continue;
             };
-            let (pf, mut meta) = if let Some(pf) = name.strip_suffix(".gpkg.tar") {
-                (pf.to_string(), read_gpkg_metadata(&file)?)
-            } else if let Some(pf) = name.strip_suffix(".tbz2") {
-                (pf.to_string(), read_xpak_metadata(&file)?)
-            } else {
+            let is_gpkg = name.ends_with(".gpkg.tar");
+            let is_xpak = !is_gpkg && name.ends_with(".tbz2");
+            if !is_gpkg && !is_xpak {
                 continue;
+            }
+            let Ok(st) = fs::metadata(&file) else {
+                continue;
+            };
+            let mtime = file_mtime(&st);
+            let size = st.len();
+            let path_field = format!("{category}/{name}");
+
+            if let Some(candidates) = by_basename.get(name) {
+                if let Some(&hit) = candidates.iter().find(|d| {
+                    d.get("_mtime_").and_then(|m| m.parse::<i64>().ok()) == Some(mtime)
+                        && d.get("SIZE").and_then(|s| s.parse::<u64>().ok()) == Some(size)
+                        && d.contains_key("CPV")
+                        && d.contains_key("SLOT")
+                }) {
+                    let mut entry = hit.clone();
+                    entry.insert("PATH".to_string(), path_field);
+                    out.push(entry);
+                    continue;
+                }
+            }
+
+            // Stale, moved, or unindexed -- re-derive fresh metadata
+            // from the file itself.
+            let (pf, mut meta) = if is_gpkg {
+                (
+                    name.strip_suffix(".gpkg.tar").unwrap().to_string(),
+                    read_gpkg_metadata(&file)?,
+                )
+            } else {
+                (
+                    name.strip_suffix(".tbz2").unwrap().to_string(),
+                    read_xpak_metadata(&file)?,
+                )
             };
             meta.insert("CPV".to_string(), format!("{category}/{pf}"));
             meta.entry("CATEGORY".to_string())
@@ -771,15 +831,22 @@ pub fn scan_pkgdir(pkgdir: &Path) -> Result<Vec<HashMap<String, String>>, String
             if let Some(repo) = meta.remove("repository") {
                 meta.entry("REPO".to_string()).or_insert(repo);
             }
-            if let Ok(st) = fs::metadata(&file) {
-                meta.insert("SIZE".to_string(), st.len().to_string());
-            }
-            meta.insert("PATH".to_string(), format!("{category}/{name}"));
+            meta.insert("SIZE".to_string(), size.to_string());
+            meta.insert("PATH".to_string(), path_field);
+            meta.insert("_mtime_".to_string(), mtime.to_string());
             out.push(meta);
         }
     }
     out.sort_by(|a, b| a.get("CPV").cmp(&b.get("CPV")));
     Ok(out)
+}
+
+/// Real `os.lstat(...)[stat.ST_MTIME]` -- whole seconds, the same
+/// integer real portage's own `_mtime_` index field records
+/// (`bintree.py:2306`'s own `d["_mtime_"] = str(st[stat.ST_MTIME])`).
+pub(crate) fn file_mtime(st: &fs::Metadata) -> i64 {
+    use std::os::unix::fs::MetadataExt;
+    st.mtime()
 }
 
 fn run_tar(args: &[&str]) -> Result<(), String> {
@@ -1175,12 +1242,13 @@ mod tests {
     }
 
     #[test]
-    fn scan_pkgdir_synthesizes_a_packages_style_entry_per_binpkg_file() {
+    fn populate_local_pkgdir_synthesizes_a_packages_style_entry_per_binpkg_file() {
         // fixtures/pkgdir/dev-libs/ holds both a real `.tbz2` and a real
-        // `.gpkg.tar` (the increment-1/2 fixtures). `scan_pkgdir` itself
-        // doesn't care whether a `Packages` file is also present -- the
-        // caller (pretend.rs) makes that decision.
-        let entries = scan_pkgdir(&fixture("pkgdir")).expect("scan succeeds");
+        // `.gpkg.tar` (the increment-1/2 fixtures), no `Packages` file --
+        // `populate_local_pkgdir` freshly parses every entry, the same
+        // "no trusted index" shape real `_populate_local` starts cold
+        // with.
+        let entries = populate_local_pkgdir(&fixture("pkgdir")).expect("scan succeeds");
         let by_cpv: HashMap<&str, &HashMap<String, String>> = entries
             .iter()
             .map(|e| (e.get("CPV").unwrap().as_str(), e))
@@ -1196,6 +1264,9 @@ mod tests {
             Some("dev-libs/packagepkg-1.0.tbz2")
         );
         assert!(tbz2.get("SIZE").is_some_and(|s| s.parse::<u64>().is_ok()));
+        assert!(tbz2
+            .get("_mtime_")
+            .is_some_and(|m| m.parse::<i64>().is_ok()));
 
         let gpkg = by_cpv["dev-libs/gpkgreadpkg-1.0"];
         assert_eq!(gpkg.get("KEYWORDS").map(String::as_str), Some("amd64"));
@@ -1218,11 +1289,64 @@ mod tests {
     }
 
     #[test]
-    fn scan_pkgdir_of_a_missing_or_empty_dir_is_empty() {
-        assert!(scan_pkgdir(Path::new("/nonexistent/pkgdir"))
+    fn populate_local_pkgdir_of_a_missing_or_empty_dir_is_empty() {
+        assert!(populate_local_pkgdir(Path::new("/nonexistent/pkgdir"))
             .unwrap()
             .is_empty());
         let scratch = ScratchDir::new("scan-empty").unwrap();
-        assert!(scan_pkgdir(scratch.path()).unwrap().is_empty());
+        assert!(populate_local_pkgdir(scratch.path()).unwrap().is_empty());
+    }
+
+    #[test]
+    fn populate_local_pkgdir_trusts_an_unchanged_index_entry_and_revalidates_a_stale_one() {
+        // A stale `Packages` entry (wrong SIZE/_mtime_, real `bintree.
+        // py:1108-1136`'s own "avoid reading the xpak if possible" fast
+        // path failing its own check) is dropped in favor of the file's
+        // own real embedded metadata -- proven here by a bogus SLOT the
+        // index claims that the real `.tbz2` itself does not carry.
+        let scratch = ScratchDir::new("mtime-staleness").unwrap();
+        let pkgdir = scratch.path();
+        let cat_dir = pkgdir.join("dev-libs");
+        fs::create_dir_all(&cat_dir).unwrap();
+        let real_tbz2 = fixture("pkgdir/dev-libs/packagepkg-1.0.tbz2");
+        let dest = cat_dir.join("packagepkg-1.0.tbz2");
+        fs::copy(&real_tbz2, &dest).unwrap();
+        let st = fs::metadata(&dest).unwrap();
+        let real_size = st.len();
+        let real_mtime = file_mtime(&st);
+
+        // A trustworthy entry (matching SIZE/_mtime_) is reused verbatim,
+        // even though its SLOT is fabricated -- proving the fast path
+        // really does skip re-parsing the file.
+        let trusted = format!(
+            "CPV: dev-libs/packagepkg-1.0\nSLOT: 99-not-the-real-slot\nSIZE: {real_size}\n_mtime_: {real_mtime}\nPATH: dev-libs/packagepkg-1.0.tbz2\n"
+        );
+        fs::write(
+            pkgdir.join("Packages"),
+            format!("TIMESTAMP: 0\n\n{trusted}"),
+        )
+        .unwrap();
+        let entries = populate_local_pkgdir(pkgdir).expect("scan succeeds");
+        assert_eq!(entries.len(), 1);
+        assert_eq!(
+            entries[0].get("SLOT").map(String::as_str),
+            Some("99-not-the-real-slot"),
+            "an unchanged index entry must be trusted, not re-derived"
+        );
+
+        // The same claim, but with a wrong _mtime_ -- now stale, so the
+        // real SLOT ("0") is re-derived from the file itself instead.
+        let stale = format!(
+            "CPV: dev-libs/packagepkg-1.0\nSLOT: 99-not-the-real-slot\nSIZE: {real_size}\n_mtime_: {}\nPATH: dev-libs/packagepkg-1.0.tbz2\n",
+            real_mtime + 1000
+        );
+        fs::write(pkgdir.join("Packages"), format!("TIMESTAMP: 0\n\n{stale}")).unwrap();
+        let entries = populate_local_pkgdir(pkgdir).expect("scan succeeds");
+        assert_eq!(entries.len(), 1);
+        assert_eq!(
+            entries[0].get("SLOT").map(String::as_str),
+            Some("0"),
+            "a stale index entry must be re-derived from the real file"
+        );
     }
 }

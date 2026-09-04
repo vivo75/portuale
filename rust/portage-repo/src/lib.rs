@@ -1112,17 +1112,23 @@ pub fn list_candidates(
 /// *first* block being a global header (`PROFILE`/`ACCEPT_KEYWORDS`/etc
 /// -- confirmed live against this machine's own real `/var/cache/
 /// binpkgs/Packages`) rather than a package entry at all, so it's
-/// always skipped here. Trusts the index outright rather than
-/// re-verifying each entry's own mtime/size against the real on-disk
-/// binpkg file (real portage's own `FEATURES="pkgdir-index-trusted"`
-/// behavior, not the real default -- but re-deriving IUSE/USE/SLOT/dep
-/// strings from an actual `.tbz2`/`.xpak`/`.gpkg.tar` file would need a
-/// real archive-format parser portuale doesn't have and doesn't need:
-/// the `Packages` index alone already carries every field a candidate
-/// needs). A missing `Packages` file is an empty list, not an error --
-/// same "PKGDIR simply has nothing yet" tolerance a missing/empty repo
-/// directory already gets in `list_candidates`.
-fn read_packages_index(pkgdir: &Path) -> Vec<HashMap<String, String>> {
+/// always skipped here. Trusts the index outright -- no mtime/size
+/// revalidation against the real on-disk binpkg file at this layer
+/// (real portage's own `FEATURES="pkgdir-index-trusted"` behavior, not
+/// the real default). The real default's own mtime-staleness
+/// revalidation (`bintree.py:1108-1136`'s own "avoid reading the xpak
+/// if possible" fast path) lives one layer up, at the *local* `$PKGDIR`
+/// CLI boundary (`portuale::binpkg::populate_local_pkgdir`, which calls
+/// this function as its own fast-path cache and re-derives fresh
+/// metadata via `read_xpak_metadata`/`read_gpkg_metadata` for anything
+/// stale) -- this function alone is pub, format-parsing-only, with no
+/// opinion on trust; `local_binpkg_index`'s own remote-binhost callers
+/// still use it directly, unrevalidated, matching real (a synced remote
+/// index has no local file to revalidate against). A missing `Packages`
+/// file is an empty list, not an error -- same "PKGDIR simply has
+/// nothing yet" tolerance a missing/empty repo directory already gets
+/// in `list_candidates`.
+pub fn read_packages_index(pkgdir: &Path) -> Vec<HashMap<String, String>> {
     let path = pkgdir.join("Packages");
     let Ok(text) = fs::read_to_string(&path) else {
         return Vec::new();
