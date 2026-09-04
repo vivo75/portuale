@@ -498,6 +498,7 @@ pub(crate) fn package_after_install(
         .ok()
         .map(|st| binpkg::file_mtime(&st).to_string())
         .unwrap_or_default();
+    let md5_str = binpkg_md5_hex(&binpkg_path).unwrap_or_default();
     write_packages_index_entry(
         &options.pkgdir,
         &cpv,
@@ -522,6 +523,7 @@ pub(crate) fn package_after_install(
             ("SIZE", &size_str),
             ("_mtime_", &mtime_str),
             ("BUILD_ID", &build_id_str),
+            ("MD5", &md5_str),
         ],
     )?;
 
@@ -580,6 +582,29 @@ fn allocate_gpkg_build_id(pkgdir: &Path, category: &str, pf: &str) -> u64 {
         build_id += 1;
     }
     build_id
+}
+
+/// Real `_pkgindex_entry` (`bintree.py:2302`'s own
+/// `perform_multiple_checksums(pkg_path, hashes=self._pkgindex_hashes)`,
+/// `_pkgindex_hashes = ["MD5", "SHA1"]` at `bintree.py:548`) writes both
+/// an `MD5` and a `SHA1` digest of the whole binpkg file into its own
+/// `Packages` entry. Only `MD5` is computed here (real always writes
+/// both, but `emerge_getbinpkg::download_and_verify`'s own doc comment
+/// already documents the `SHA1` cut -- portuale has no sha1 crate, and
+/// `MD5` is always present in a real `Packages` too, so verifying
+/// against it alone is sufficient). Without this, a binpkg portuale
+/// itself built would carry no `MD5` at all, silently skipping
+/// `download_and_verify`'s own integrity check for anyone fetching it
+/// from a portuale-served pkgdir as a remote binhost.
+fn binpkg_md5_hex(path: &Path) -> Option<String> {
+    use md5::Digest as _;
+    let bytes = std::fs::read(path).ok()?;
+    Some(
+        md5::Md5::digest(&bytes)
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect(),
+    )
 }
 
 /// Runs the real, unmodified `bin/misc-functions.sh __dyn_package`
@@ -775,10 +800,30 @@ pub(crate) fn quickpkg_from_vdb(
     let _ = std::fs::remove_dir_all(&build_info);
     copy_dir_recursive(&vdb_dir, &build_info)?;
 
-    let status = invoke_dyn_package(&scratch_ebuild, portage_tmpdir, root, options, &binpkg_path)?;
+    // Same temp-file-then-rename dance as `package_after_install` (see
+    // its own doc comment for the full real grounding) -- real `bin/
+    // quickpkg` does this too (its own `binpkg_tmpfile = bintree.pkgdir
+    // + cpv + ".tbz2." + str(portage.getpid())`, later `bintree.inject`
+    // renamed), so a failed compressor never leaves a corrupt archive at
+    // `binpkg_path` (the `if binpkg_path.exists() { return Ok(None) }`
+    // check above means this only ever runs when nothing was there
+    // before -- but leaving a corrupt file behind would still poison the
+    // next `--getbinpkg`/`--usepkg` scan of this pkgdir).
+    let tmp_path = binpkg_path.with_extension(format!(
+        "{}.tmp{}",
+        binpkg_path
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or_default(),
+        std::process::id()
+    ));
+    let status = invoke_dyn_package(&scratch_ebuild, portage_tmpdir, root, options, &tmp_path)?;
     if status != 0 {
+        let _ = std::fs::remove_file(&tmp_path);
         return Err(format!("{category}/{pf}: __dyn_package failed ({status})"));
     }
+    std::fs::rename(&tmp_path, &binpkg_path)
+        .map_err(|e| format!("{} -> {}: {e}", tmp_path.display(), binpkg_path.display()))?;
 
     // `$PKGDIR/Packages` entry from the vdb's own build-info files.
     let bi = |k: &str| {
@@ -801,6 +846,7 @@ pub(crate) fn quickpkg_from_vdb(
         .ok()
         .map(|st| binpkg::file_mtime(&st).to_string())
         .unwrap_or_default();
+    let md5_str = binpkg_md5_hex(&binpkg_path).unwrap_or_default();
     write_packages_index_entry(
         &options.pkgdir,
         &cpv,
@@ -824,6 +870,7 @@ pub(crate) fn quickpkg_from_vdb(
             ("BUILD_TIME", &build_time),
             ("SIZE", &size_str),
             ("_mtime_", &mtime_str),
+            ("MD5", &md5_str),
         ],
     )?;
 
@@ -1097,6 +1144,21 @@ mod tests {
         assert_eq!(
             metadata.get("RDEPEND").map(String::as_str),
             Some("dev-libs/samepkg")
+        );
+
+        // Real `_pkgindex_entry` always writes an `MD5` of the whole
+        // binpkg file (`binpkg_md5_hex`'s own doc comment) -- without
+        // it, `emerge_getbinpkg::download_and_verify` would silently
+        // skip integrity-checking anyone fetching this same file from a
+        // portuale-served pkgdir as a remote binhost.
+        use md5::Digest as _;
+        let expected_md5: String = md5::Md5::digest(&binpkg_bytes)
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect();
+        assert_eq!(
+            metadata.get("MD5").map(String::as_str),
+            Some(expected_md5.as_str())
         );
     }
 
