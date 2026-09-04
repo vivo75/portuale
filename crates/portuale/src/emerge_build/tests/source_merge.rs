@@ -121,6 +121,81 @@ fn source_merge_protects_the_config_fold_and_env_d_added_paths() {
     let _ = fs::remove_dir_all(&portage_tmpdir);
 }
 
+/// A variable the ebuild `unset` in an earlier phase stays unset in later
+/// phases: `unsetcflagspkg`'s `src_compile` unsets `CFLAGS`, so no vdb `CFLAGS`
+/// row is written while `CXXFLAGS` (never unset) keeps its row as the control.
+/// Expected value from Portage source.
+#[allow(clippy::field_reassign_with_default)]
+#[test]
+fn source_merge_omits_a_vdb_aux_file_the_ebuild_unset_in_an_earlier_phase() {
+    let config_root = fixtures_root();
+    let repos = find_repos(&config_root).unwrap();
+    let root = tempdir();
+    let portage_tmpdir = tempdir();
+    let mut options = ebuild_merge::MergeOptions {
+        distdir: tempdir(),
+        config_root: config_root.clone(),
+        shell: ebuild_phases::ShellBackend::Bash,
+        ..ebuild_merge::MergeOptions::default()
+    };
+    // Point `PORTAGE_GRPNAME` at this process's own gid, so the per-phase
+    // `chgrp` of `${T}/environment` is a permitted no-op instead of a
+    // per-phase "Operation not permitted" line on harness stderr.
+    let gid = unsafe { libc::getegid() };
+    options.build_env = vec![
+        ("CFLAGS".to_string(), "-O2 -pipe".to_string()),
+        ("CXXFLAGS".to_string(), "-O2 -pipe".to_string()),
+        ("PORTAGE_GRPNAME".to_string(), gid.to_string()),
+    ];
+    // Keep the builddir (`FEATURES=noclean`): the observed `${T}` file is
+    // copied into the merged image, and the vdb read below happens on the
+    // final tree.
+    options.features = "noclean".to_string();
+
+    let entries = vec![source_entry(
+        "unsetcflagspkg",
+        PretendOutcome::New {
+            version: "1.0".into(),
+        },
+    )];
+    run_source_merge(RunSourceMergeArgs {
+        entries: &entries,
+        repos: &repos,
+        root: &root,
+        portage_tmpdir: &portage_tmpdir,
+        options: &options,
+        keep_going: false,
+        buildpkg: None,
+        buildpkg_exclude: &[],
+        jobs: 1,
+        load_average: None,
+        capture_log: false,
+        mode: StatusMode::for_tests(),
+    })
+    .expect("source merge succeeds");
+
+    let observed = fs::read_to_string(root.join("usr/share/unsetcflagspkg/unset-observed.txt"))
+        .expect("the install phase ran and merged its observation");
+    assert_eq!(
+        observed, "CFLAGS=<unset>\nCXXFLAGS=-O2 -pipe\n",
+        "src_install must still see the `unset CFLAGS` from src_compile (bug #189417)"
+    );
+
+    let vdb = root.join("var/db/pkg/dev-libs/unsetcflagspkg-1.0");
+    assert!(
+        !vdb.join("CFLAGS").exists(),
+        "#160: real omits the vdb CFLAGS row its ebuild unset"
+    );
+    assert_eq!(
+        fs::read_to_string(vdb.join("CXXFLAGS")).unwrap().trim(),
+        "-O2 -pipe",
+        "an aux file the package still has a value for must stay"
+    );
+
+    let _ = fs::remove_dir_all(&root);
+    let _ = fs::remove_dir_all(&portage_tmpdir);
+}
+
 /// A byte-identical installed file survives a re-merge when the ebuild's
 /// `pkg_preinst` helper is gated on `REPLACING_VERSIONS`: the preinst returns
 /// early and the destination keeps its inode. Expected value from Portage source.
