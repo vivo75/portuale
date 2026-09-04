@@ -8650,6 +8650,48 @@ still differs. New fixture `dev-libs/multiinst` (3 builds, `BUILD_ID`
 
 **Binpkg acceptability-web reinstall cases (2026-09-04).**
 
+- **`--binpkg-changed-deps`** (real `create_depgraph_params.py:196-203` --
+  **auto-enabled whenever `--usepkgonly` is not given**, so on for every
+  ordinary `--getbinpkg`): real `_wrapped_select_pkg…` rejects a binary
+  candidate whose recorded `*DEPEND` differs from the current ebuild's
+  (`self._changed_deps(binpkg)` → `ignored_binaries[…]["changed_deps"]`),
+  so a package built against a since-changed ebuild is rebuilt from
+  source rather than merged stale. New `binary_deps_changed` -- the same
+  canonical `use_reduce(token_class=Atom)` / `strip_slots` /
+  `strip_libc_deps` comparison as `deps_changed` (factored into
+  `canonical_dep_key`), but the built side is *this exact instance's* own
+  recorded deps (`Candidate::binary_deps`, since a binpkg-multi-instance
+  cpv has one dep set per build) reduced with its baked `USE`. Explicit
+  `--binpkg-changed-deps=y|n` overrides are a documented cut. Fixture
+  `dev-libs/bcdeppkg` (tree ebuild `RDEPEND`s `bcdepnew`, the binhost
+  binary was built `RDEPEND`ing `bcdepold` → binary rejected, resolves to
+  the ebuild).
+- **`--rebuilt-binaries` for a remote binhost binary**: portuale's
+  `rebuilt_binary_changed` only ever consulted the local `$PKGDIR`
+  index, so a `--getbinpkg` remote binary with a differing `BUILD_TIME`
+  never triggered the reinstall. It now takes the `BUILD_TIME` of the
+  binary candidate that would actually be selected -- local *or* remote
+  (`best_binary_build_time` over the candidate pool, which now carries
+  `Candidate::build_time`).
+- **`_equiv_ebuild_visible`** (real `depgraph.py:8015-8025`): once a
+  visible ebuild has matched an atom (`dbs` order is ebuild-first, so
+  real's `matched_packages` is non-empty by the time binaries are
+  weighed), a binary is only eligible if a visible ebuild exists at its
+  *exact* version -- a binhost package whose ebuild was since dropped
+  from the tree, or masked, is not merged stale; the ebuild at whatever
+  other version matched is rebuilt instead. Skipped for a binhost-only
+  atom (no ebuild matches at all → real's `(use_ebuild_visibility or
+  matched_packages)` gate is falsy), under `--usepkgonly`
+  (`--use-ebuild-visibility` is a documented cut), and for a candidate
+  matching `--useoldpkg-atoms` (real's `(usepkgonly or useoldpkg)`
+  exemption -- confirmed live by a regression: without it, the existing
+  `--useoldpkg-atoms` test started preferring the *ebuild* again, since
+  the old binary usually has no equivalent ebuild left visible). Fixture
+  `dev-libs/eqebvispkg` (tree ebuild only at `1.0`; the binhost has an
+  orphaned `2.0` binary) -- `--getbinpkg` resolves to the `1.0` ebuild,
+  `--getbinpkgonly` keeps the orphan, `=…-2.0` (no ebuild can match the
+  atom at all) also keeps it.
+
 ### `emerge -p`: the blocker line follows real `ResolverOutput._blockers`
 
 Portuale's blocker report was portuale-shaped (`[blocks] cat/foo-1.0 hard
