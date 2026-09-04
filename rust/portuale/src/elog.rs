@@ -227,9 +227,19 @@ pub fn logdir(root: &Path) -> PathBuf {
         .unwrap_or_else(|| root.join("var/log/portage"))
 }
 
-/// UTC `%Y%m%d-%H%M%S` (real `mod_save`'s `time.strftime(..., time.gmtime())`).
+/// UTC `%Y%m%d-%H%M%S` of the current time (real `mod_save`'s
+/// `time.strftime(..., time.gmtime())`).
 fn utc_stamp() -> String {
-    let secs = std::time::SystemTime::now()
+    utc_stamp_at(std::time::SystemTime::now())
+}
+
+/// UTC `%Y%m%d-%H%M%S` of an arbitrary `SystemTime` -- `utc_stamp`'s own
+/// formatting, generalized so `emerge_build`'s own `PORTAGE_LOGDIR`
+/// build-log naming can reuse it against a `.logid` marker file's mtime
+/// (real `prepare_build_dirs.py`'s own `time.gmtime(os.stat(logid_path)
+/// .st_mtime)`) instead of "now".
+pub(crate) fn utc_stamp_at(time: std::time::SystemTime) -> String {
+    let secs = time
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0);

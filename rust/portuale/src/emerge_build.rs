@@ -614,12 +614,115 @@ pub(crate) fn resume_entry(category: &str, package: &str, version: &str) -> Grap
 /// Real portage's `PORTAGE_LOG_FILE` (`PORTAGE_LOGDIR` unset →
 /// `${T}/build.log`, i.e. `${PORTAGE_BUILDDIR}/temp/build.log`).
 fn build_log_path(portage_tmpdir: &Path, category: &str, package: &str, version: &str) -> PathBuf {
-    portage_tmpdir
+    let builddir = portage_tmpdir
         .join("portage")
         .join(category)
-        .join(format!("{package}-{version}"))
-        .join("temp")
-        .join("build.log")
+        .join(format!("{package}-{version}"));
+    let path = builddir.join("temp").join("build.log");
+    // Real `PORTAGE_LOGDIR`/`PORTAGE_LOG_FILE_SEP`/`FEATURES=split-log`
+    // -- the same "env var, not full config resolution" shortcut this
+    // whole CLI boundary already uses elsewhere (`DISTDIR`/`FEATURES`
+    // tokens/...); read once here, right where the log path itself is
+    // decided, and handed to the pure logic in
+    // `ensure_portage_logdir_symlink` so that function stays directly
+    // unit-testable with no env-var involvement at all.
+    let logdir = std::env::var_os("PORTAGE_LOGDIR")
+        .map(PathBuf::from)
+        .filter(|p| !p.as_os_str().is_empty());
+    let sep = std::env::var("PORTAGE_LOG_FILE_SEP").unwrap_or_else(|_| ":".to_string());
+    let split_log = std::env::var("FEATURES")
+        .map(|f| f.split_whitespace().any(|t| t == "split-log"))
+        .unwrap_or(false);
+    ensure_portage_logdir_symlink(
+        &path,
+        &builddir,
+        category,
+        &format!("{package}-{version}"),
+        logdir.as_deref(),
+        &sep,
+        split_log,
+    );
+    path
+}
+
+/// Real `prepare_build_dirs()`'s own `PORTAGE_LOGDIR`/`FEATURES=
+/// split-log` handling (`prepare_build_dirs.py:368-468`): when
+/// `logdir` is given (`PORTAGE_LOGDIR` set, `build_log_path`'s own
+/// doc comment), the real build log lives there permanently --
+/// `<logdir>/<CATEGORY><sep><PF><sep><logid_time>.log`, or under
+/// `split_log`, `<logdir>/build/<CATEGORY>/<PF><sep><logid_time>.log`
+/// -- and `tmpdir_log_path` (`${T}/build.log`) becomes a symlink to it
+/// rather than the real file. Everything downstream that opens
+/// `tmpdir_log_path` (`ebuild_phases::open_log_file` et al.) still just
+/// opens `${T}/build.log`, symlinks transparently followed by
+/// `std::fs`, so this is the only place that needs to know about
+/// `PORTAGE_LOGDIR` at all. A no-op when `logdir` is `None`
+/// (`PORTAGE_LOGDIR` unset or empty -- real's own `if
+/// mysettings.get("PORTAGE_LOGDIR", "") == "": del it`) or when it
+/// can't be created (real's own "Permission issues... Disabling
+/// logging").
+///
+/// `logid_time`: a `.logid` marker file's own mtime (real's own
+/// `os.stat(logid_path).st_mtime`), created on first use and reused
+/// afterward -- so every phase of the same build (each its own fresh
+/// shell, `ebuild_phases::run_one_phase`'s own doc comment) and a
+/// resumed one all share one timestamp, matching real exactly. Cut:
+/// `FEATURES=compress-build-logs` (a real `.gz`-suffix + actual gzip
+/// pipe, a separate, self-contained addition the backlog item this is
+/// closing didn't name).
+fn ensure_portage_logdir_symlink(
+    tmpdir_log_path: &Path,
+    builddir: &Path,
+    category: &str,
+    pf: &str,
+    logdir: Option<&Path>,
+    sep: &str,
+    split_log: bool,
+) {
+    let Some(logdir) = logdir else {
+        return;
+    };
+    if std::fs::create_dir_all(logdir).is_err() {
+        // Real: permission issues here disable logging for this build
+        // entirely (`tmpdir_log_path` stays the real file).
+        return;
+    }
+
+    let logid_path = builddir.join(".logid");
+    let logid_time = std::fs::metadata(&logid_path)
+        .and_then(|m| m.modified())
+        .or_else(|_| {
+            std::fs::create_dir_all(builddir)?;
+            std::fs::write(&logid_path, [])?;
+            std::fs::metadata(&logid_path)?.modified()
+        })
+        .unwrap_or_else(|_| std::time::SystemTime::now());
+    let stamp = crate::elog::utc_stamp_at(logid_time);
+
+    let (log_subdir, real_log) = if split_log {
+        let subdir = logdir.join("build").join(category);
+        let file = subdir.join(format!("{pf}{sep}{stamp}.log"));
+        (subdir, file)
+    } else {
+        let file = logdir.join(format!("{category}{sep}{pf}{sep}{stamp}.log"));
+        (logdir.to_path_buf(), file)
+    };
+    if std::fs::create_dir_all(&log_subdir).is_err() {
+        return;
+    }
+
+    // Real's own idempotent re-symlink check (`make_new_symlink`):
+    // skip if it already points at the right place.
+    let needs_new = std::fs::read_link(tmpdir_log_path)
+        .map(|target| target != real_log)
+        .unwrap_or(true);
+    if needs_new {
+        if let Some(parent) = tmpdir_log_path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        let _ = std::fs::remove_file(tmpdir_log_path);
+        let _ = std::os::unix::fs::symlink(&real_log, tmpdir_log_path);
+    }
 }
 
 /// Last `n` lines of `path`, or a short "(build log unavailable)" note.
@@ -872,6 +975,12 @@ fn run_build_scheduler(
     let mut skip: HashSet<usize> = HashSet::new();
     let mut failures: Vec<String> = Vec::new();
     let mut skipped: Vec<String> = Vec::new();
+    // One registry for this whole scheduler call, shared only with the
+    // worker threads *it* spawns below -- see `ebuild_phases::
+    // SCHEDULER_REGISTRY`'s own doc comment for why this must not be a
+    // single process-wide singleton (an unrelated `cargo test` thread's
+    // subprocess must never be reachable from here).
+    let registry = ebuild_phases::new_scheduler_registry();
 
     std::thread::scope(|scope| -> Result<(), String> {
         let (tx, rx) = mpsc::channel::<(usize, Result<PathBuf, String>)>();
@@ -909,7 +1018,13 @@ fn run_build_scheduler(
                     )
                 });
                 let entry = &entries[idx];
+                let registry = registry.clone();
                 scope.spawn(move || {
+                    // Registers every real subprocess this worker
+                    // thread spawns into `registry` for the closure's
+                    // own lifetime -- see `ebuild_phases::
+                    // SCHEDULER_REGISTRY`'s own doc comment.
+                    let _guard = ebuild_phases::scope_scheduler_registry(registry);
                     let r = build_one_source_entry(
                         entry,
                         repos,
@@ -954,6 +1069,19 @@ fn run_build_scheduler(
                 }
                 Some(e) => {
                     if !keep_going {
+                        // Real `_keep_scheduling`/`_terminate_tasks`
+                        // (`PollScheduler.py:106-126`): once any package
+                        // fails without `--keep-going`, real portage
+                        // stops scheduling new work AND sends kill
+                        // signals to what's already running, rather than
+                        // letting it finish. `return Err(e)` here already
+                        // does the first half (the outer `loop` never
+                        // starts another build), but without this,
+                        // `std::thread::scope`'s own implicit join would
+                        // otherwise just wait for every other in-flight
+                        // build to run to completion anyway -- wasted
+                        // work whose result is discarded regardless.
+                        ebuild_phases::kill_registered_children(&registry);
                         return Err(e);
                     }
                     failures.push(e);
@@ -1011,6 +1139,108 @@ mod tests {
         ));
         fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    #[test]
+    fn ensure_portage_logdir_symlink_is_a_noop_without_a_logdir() {
+        let tmp = tempdir();
+        let t_dir = tmp.join("t");
+        fs::create_dir_all(&t_dir).unwrap();
+        let log_path = t_dir.join("build.log");
+        fs::write(&log_path, "already here").unwrap();
+        ensure_portage_logdir_symlink(
+            &log_path,
+            &tmp.join("builddir"),
+            "dev-libs",
+            "foo-1.0",
+            None,
+            ":",
+            false,
+        );
+        // Real file untouched -- no PORTAGE_LOGDIR means no symlink.
+        assert_eq!(fs::read_to_string(&log_path).unwrap(), "already here");
+        assert!(fs::symlink_metadata(&log_path)
+            .unwrap()
+            .file_type()
+            .is_file());
+    }
+
+    #[test]
+    fn ensure_portage_logdir_symlink_points_t_build_log_at_the_real_logdir() {
+        let tmp = tempdir();
+        let builddir = tmp.join("builddir");
+        let t_dir = builddir.join("temp");
+        fs::create_dir_all(&t_dir).unwrap();
+        let log_path = t_dir.join("build.log");
+        let logdir = tmp.join("logdir");
+
+        ensure_portage_logdir_symlink(
+            &log_path,
+            &builddir,
+            "dev-libs",
+            "foo-1.0",
+            Some(&logdir),
+            ":",
+            false,
+        );
+
+        let target = fs::read_link(&log_path).expect("build.log must be a symlink");
+        assert!(
+            target.starts_with(&logdir),
+            "{target:?} should live under {logdir:?}"
+        );
+        assert_eq!(target.parent().unwrap(), logdir);
+        let name = target.file_name().unwrap().to_str().unwrap();
+        // Real "<CATEGORY><sep><PF><sep><logid_time>.log".
+        assert!(name.starts_with("dev-libs:foo-1.0:"), "{name}");
+        assert!(name.ends_with(".log"), "{name}");
+        // Writing through the symlink lands in the real logdir file.
+        std::fs::write(&log_path, b"hello").unwrap();
+        assert_eq!(fs::read_to_string(&target).unwrap(), "hello");
+
+        // Idempotent: calling again doesn't churn the symlink or drop
+        // the timestamp (the .logid marker file makes it stable).
+        let before = fs::read_link(&log_path).unwrap();
+        ensure_portage_logdir_symlink(
+            &log_path,
+            &builddir,
+            "dev-libs",
+            "foo-1.0",
+            Some(&logdir),
+            ":",
+            false,
+        );
+        assert_eq!(fs::read_link(&log_path).unwrap(), before);
+    }
+
+    #[test]
+    fn ensure_portage_logdir_symlink_honors_split_log_and_the_separator() {
+        let tmp = tempdir();
+        let builddir = tmp.join("builddir");
+        let t_dir = builddir.join("temp");
+        fs::create_dir_all(&t_dir).unwrap();
+        let log_path = t_dir.join("build.log");
+        let logdir = tmp.join("logdir");
+
+        ensure_portage_logdir_symlink(
+            &log_path,
+            &builddir,
+            "dev-libs",
+            "foo-1.0",
+            Some(&logdir),
+            "-",
+            true, // split_log
+        );
+
+        let target = fs::read_link(&log_path).expect("build.log must be a symlink");
+        // Real "<logdir>/build/<CATEGORY>/<PF><sep><logid_time>.log".
+        assert_eq!(
+            target.parent().unwrap(),
+            logdir.join("build").join("dev-libs")
+        );
+        let name = target.file_name().unwrap().to_str().unwrap();
+        assert!(name.starts_with("foo-1.0-"), "{name}");
+        assert!(!name.contains(':'), "{name} should use the '-' separator");
     }
 
     #[test]
@@ -1619,6 +1849,77 @@ mod tests {
             !root.join("var/db/pkg/dev-libs/schedbaddep-1.0").exists(),
             "schedbaddep depends on the failed schedbad and must be skipped"
         );
+        let _ = fs::remove_dir_all(&root);
+        let _ = fs::remove_dir_all(&portage_tmpdir);
+    }
+
+    #[test]
+    fn a_hard_failure_kills_still_running_builds_instead_of_waiting_them_out() {
+        // Real `Scheduler._keep_scheduling`/`_terminate_tasks`
+        // (`PollScheduler.py:106-126`): once any package fails without
+        // `--keep-going`, real portage sends kill signals to whatever's
+        // still running rather than letting it finish -- its own result
+        // would be discarded regardless. `schedbad` (fails almost
+        // instantly, in `install`, the last phase) and `schedslow`
+        // (sleeps 20s in `compile`, well before `install`) are
+        // independent leaves under `jobs=2`, so both start together;
+        // `schedbad` fails long before `schedslow`'s own sleep would
+        // ever finish on its own.
+        let config_root = fixtures_root();
+        let repos = find_repos(&config_root).unwrap();
+        let root = tempdir();
+        let portage_tmpdir = tempdir();
+
+        let bad = source_entry(
+            "schedbad",
+            PretendOutcome::New {
+                version: "1.0".into(),
+            },
+        );
+        let slow = source_entry(
+            "schedslow",
+            PretendOutcome::New {
+                version: "1.0".into(),
+            },
+        );
+        let entries = vec![bad, slow];
+
+        let options = ebuild_merge::MergeOptions {
+            distdir: tempdir(),
+            config_root: config_root.clone(),
+            ..ebuild_merge::MergeOptions::default()
+        };
+        let started = std::time::Instant::now();
+        let err = run_source_merge(
+            &entries,
+            &repos,
+            &root,
+            &portage_tmpdir,
+            &options,
+            false, // keep_going
+            None,
+            &[],
+            2,
+            None,
+            false,
+        )
+        .expect_err("schedbad's own failure must fail the whole run");
+        assert!(err.contains("schedbad-1.0"), "{err}");
+        // Real generously bounded: well under schedslow's own 20s sleep,
+        // proving the scheduler didn't just wait it out.
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(15),
+            "run_source_merge took {:?}, schedslow's sleep should have been killed",
+            started.elapsed()
+        );
+
+        let marker = portage_tmpdir
+            .join("portage/dev-libs/schedslow-1.0/temp/schedslow-slept-to-completion");
+        assert!(
+            !marker.exists(),
+            "schedslow's own sleep must have been killed, not left to finish"
+        );
+
         let _ = fs::remove_dir_all(&root);
         let _ = fs::remove_dir_all(&portage_tmpdir);
     }
