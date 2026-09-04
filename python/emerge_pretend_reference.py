@@ -1169,6 +1169,36 @@ def _read_binary_metadata_any(config, root, local_index, category, package, vers
     return None
 
 
+def _binpkg_respect_use_ok(candidate, category, package, config):
+    """Real --binpkg-respect-use (default "auto"): whether a *binary*
+    candidate's baked-in USE (its `USE:` Packages field) matches what
+    USE would currently be selected for it, over its own declared IUSE
+    only. A mismatch means real _wrapped_select_pkg_highest_available_imp
+    rejects the binary and falls back to the same-version ebuild. An
+    ebuild candidate (binary_use is None) always passes. Shared by
+    resolve_pretend's filter and run()'s post-resolution source
+    re-derivation. Mirrors portage-repo/src/lib.rs's
+    binpkg_respect_use_ok."""
+    if candidate["binary_use"] is None:
+        return True
+    candidate_str = (
+        f"{category}/{package}-{candidate['version']}:{candidate['slot']}"
+        f"/{candidate['sub_slot']}::{candidate['repo_name']}"
+    )
+    would_select = effective_use_flags(
+        config,
+        candidate["iuse"],
+        candidate["keywords"],
+        candidate_str,
+        category,
+        package,
+    )
+    return all(
+        (flag in would_select) == (flag in candidate["binary_use"])
+        for flag in (tok.lstrip("+-") for tok in candidate["iuse"].split())
+    )
+
+
 def _filter_usepkg_exclude_include(binary_candidates, category, package, usepkg_exclude, usepkg_include):
     """--usepkg-exclude/--usepkg-include (real main.py: "a space
     separated list of package names or slot atoms", same "plain atom or
@@ -4790,16 +4820,24 @@ def _parse_binrepos(binrepos_conf, portage_binhost):
     return repos
 
 
-def _best_candidate(candidates):
+def _best_candidate(candidates, prefer_binary=False):
     """Picks the best of `candidates` by version, breaking a tie on an
-    identical version toward the higher-priority repo -- mirroring
-    portage-repo/src/lib.rs's max_by(vercmp_ordering(...).then(repo_priority))
-    exactly, since more than one repo can now provide the identical
-    version."""
+    identical version. Real `_wrapped_select_pkg_highest_available_imp`
+    returns `matched_packages[-1]` with `ebuild` built first in `dbs`
+    order -- "ebuild type is the last resort" (`depgraph.py:8492`) -- so
+    at the final pick (`prefer_binary=True`) a `--usepkg`/`--getbinpkg`
+    binary that passed `binpkg-respect-use` beats the same-version
+    ebuild; then the higher-priority repo. Mirrors
+    portage-repo/src/lib.rs's `max_by`."""
+
+    def key(c):
+        src = 1 if (prefer_binary and c.get("source") == "binary") else 0
+        return (src, c["repo_priority"])
+
     best = candidates[0]
     for c in candidates[1:]:
         cmp = vercmp(c["version"], best["version"]) or 0
-        if cmp > 0 or (cmp == 0 and c["repo_priority"] > best["repo_priority"]):
+        if cmp > 0 or (cmp == 0 and key(c) > key(best)):
             best = c
     return best
 
@@ -5570,6 +5608,16 @@ def resolve_pretend(
             binary_candidates = binary_candidates + _list_remote_binary_candidates(
                 config.get("binrepos", []), root, local_index, category, package
             )
+        # --binpkg-respect-use: reject a binary built with the wrong USE
+        # and keep searching (depgraph.py:8259-8288). A candidate-level
+        # filter -- see portage-repo/src/lib.rs for why (the Rust
+        # `by_str` collision). Mirrors it.
+        if binpkg_respect_use:
+            binary_candidates = [
+                c
+                for c in binary_candidates
+                if _binpkg_respect_use_ok(c, category, package, config)
+            ]
         candidates = candidates + _filter_usepkg_exclude_include(
             binary_candidates, category, package, usepkg_exclude, usepkg_include
         )
@@ -5728,36 +5776,7 @@ def resolve_pretend(
             )
         ]
 
-    # --binpkg-respect-use (real default: "auto", effectively on, unless
-    # --usepkgonly is set -- see run()'s own default-resolution logic).
-    # For each matched *binary* candidate, computes what USE would
-    # currently be selected (the same effective_use_flags machinery an
-    # ebuild candidate's own display/dependency-walk already uses) and
-    # compares it, over this candidate's own declared IUSE flags only,
-    # against its own baked-in "binary_use" -- any mismatch rejects it.
-    # Mirrors portage-repo/src/lib.rs's resolve_pretend exactly.
-    if binpkg_respect_use:
-        new_matched = []
-        for c in matched:
-            if c["binary_use"] is None:
-                new_matched.append(c)
-                continue
-            candidate_str = (
-                f"{category}/{package}-{c['version']}:{c['slot']}/{c['sub_slot']}"
-                f"::{c['repo_name']}"
-            )
-            would_select = effective_use_flags(
-                config,
-                c["iuse"],
-                c["keywords"],
-                candidate_str,
-                category,
-                package,
-            )
-            flags = [tok.lstrip("+-") for tok in c["iuse"].split()]
-            if all((flag in would_select) == (flag in c["binary_use"]) for flag in flags):
-                new_matched.append(c)
-        matched = new_matched
+    # (--binpkg-respect-use was applied as a candidate-level filter above.)
 
     if not matched:
         return ("no_visible_candidate",)
@@ -5885,7 +5904,7 @@ def resolve_pretend(
         if not matched:
             return ("no_visible_candidate",)
 
-    best = _best_candidate(matched)
+    best = _best_candidate(matched, prefer_binary=True)
 
     if _candidate_is_installed(best):
         changed_flags = (
@@ -7289,57 +7308,62 @@ def resolve_pretend_graph(
             # disappears.
             extra_constraints = slot_constraints.get(key, ())
 
-            outcome = resolve_pretend(
-                repos,
-                root,
-                current_atom_str,
-                config,
-                newuse,
-                changed_use,
-                update,
-                excluded,
-                changed_deps,
-                with_bdeps,
-                changed_slot,
-                selective,
-                depth == 0,
-                usepkg,
-                usepkgonly,
-                binpkg_respect_use,
-                usepkg_exclude,
-                usepkg_include,
-                rebuilt_binaries,
-                rebuilt_binaries_timestamp,
-                newrepo,
-                empty,
-                getbinpkg,
-                autounmask_suggest_keywords,
-                autounmask_suggest_use,
-                autounmask_suggest_license,
-                autounmask_suggest_masks,
-                extra_constraints,
-            )
-
             # Real _complete_graph's _select_pkg_from_graph
-            # (depgraph.py:8495): in complete mode an atom that isn't a
-            # genuine phase-1 merge target may only resolve
-            # graph-or-installed. An installed version that satisfies it
-            # -> already_installed; nothing installed -> real's
-            # _select_pkg_from_graph returns None, recorded in
-            # _initially_unsatisfied_deps with no graph node, so drop it.
-            # No-op unless complete_locked_merges was populated (only the
-            # CLI layer's complete pass does that). Mirrors
-            # portage-repo/src/lib.rs.
+            # (depgraph.py:8495): in complete mode the deep re-walk of the
+            # required sets may only pick a package already in the graph
+            # or installed -- never resolve/merge anything new. For a
+            # dependency atom whose cp isn't a genuine phase-1 merge
+            # target: an installed version that satisfies it ->
+            # already_installed (deep-walk its deps, merge nothing);
+            # nothing installed -> real's _initially_unsatisfied_deps, no
+            # node -> drop. Done *before* resolve_pretend -- the full
+            # candidate/visibility/USE resolution for every installed
+            # package in the world is exactly the work real's cheap
+            # graph-or-installed check avoids. No-op unless
+            # complete_locked_merges was populated (only the CLI layer's
+            # complete pass does); top-level atoms always resolve fully.
+            # Mirrors portage-repo/src/lib.rs.
             if (
                 complete
                 and _locked_merges
+                and owner is not None
                 and key not in _locked_merges
-                and outcome[0] in ("new", "upgrade", "downgrade", "reinstall")
             ):
                 _iv = _best_installed_for_atom(root, current_atom_str, key[0], key[1])
                 if _iv is None:
                     continue
                 outcome = ("already_installed", _iv)
+            else:
+                outcome = resolve_pretend(
+                    repos,
+                    root,
+                    current_atom_str,
+                    config,
+                    newuse,
+                    changed_use,
+                    update,
+                    excluded,
+                    changed_deps,
+                    with_bdeps,
+                    changed_slot,
+                    selective,
+                    depth == 0,
+                    usepkg,
+                    usepkgonly,
+                    binpkg_respect_use,
+                    usepkg_exclude,
+                    usepkg_include,
+                    rebuilt_binaries,
+                    rebuilt_binaries_timestamp,
+                    newrepo,
+                    empty,
+                    getbinpkg,
+                    autounmask_suggest_keywords,
+                    autounmask_suggest_use,
+                    autounmask_suggest_license,
+                    autounmask_suggest_masks,
+                    extra_constraints,
+                )
 
             # --reinstall-atoms: a matching already-installed package is
             # forced to re-merge (real depgraph.py drops it from every
@@ -7758,17 +7782,16 @@ def resolve_pretend_graph(
                 )
                 continue
 
-            # The resolved version may have come from any of `repos`, or
-            # from PKGDIR (--usepkg/--usepkgonly), so re-derive which one it
-            # actually lives in -- reusing list_candidates/
-            # list_binary_candidates rather than threading a repo location
-            # back out of resolve_pretend's outcome tuple, since more than
-            # one source could in principle carry the identical version. The
-            # ordinary repo_priority tie-break already does the right thing
-            # with no special-casing: a binary candidate's own repo_priority
-            # (list_binary_candidates) is deliberately float("-inf"), lower
-            # than any real repo, so an identical-version ebuild naturally
-            # wins the tie. Mirrors portage-repo/src/lib.rs exactly.
+            # The resolved version may have come from any of `repos`, from
+            # PKGDIR (--usepkg), or a remote binhost (--getbinpkg), so
+            # re-derive which one it actually lives in -- reusing
+            # list_candidates/list_binary_candidates. This MUST agree with
+            # what resolve_pretend chose: real
+            # _wrapped_select_pkg_highest_available_imp returns
+            # matched_packages[-1] with ebuild built first ("ebuild type
+            # is the last resort", depgraph.py:8492), so at a version tie
+            # a --usepkg/--getbinpkg binary that passed binpkg-respect-use
+            # beats the ebuild. Mirrors portage-repo/src/lib.rs.
             repo_candidates = [] if usepkgonly else list_candidates(repos, category, package)
             if usepkg or usepkgonly:
                 local_index = _local_binpkg_index(config)
@@ -7777,13 +7800,22 @@ def resolve_pretend_graph(
                     binary_candidates = binary_candidates + _list_remote_binary_candidates(
                         config.get("binrepos", []), root, local_index, category, package
                     )
+                if binpkg_respect_use:
+                    binary_candidates = [
+                        c
+                        for c in binary_candidates
+                        if _binpkg_respect_use_ok(c, category, package, config)
+                    ]
                 repo_candidates = repo_candidates + _filter_usepkg_exclude_include(
                     binary_candidates, category, package, usepkg_exclude, usepkg_include
                 )
             repo_candidates = [c for c in repo_candidates if c["version"] == version]
             if not repo_candidates:
                 continue
-            resolved = max(repo_candidates, key=lambda c: c["repo_priority"])
+            resolved = max(
+                repo_candidates,
+                key=lambda c: (1 if c["source"] == "binary" else 0, c["repo_priority"]),
+            )
             slot = resolved["slot"]
             sub_slot = resolved["sub_slot"]
             repo_location = resolved["repo_location"]

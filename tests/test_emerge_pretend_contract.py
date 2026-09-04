@@ -4025,6 +4025,51 @@ def test_binpkg_respect_use_rejects_a_use_mismatched_binary_by_default(
     assert result.stderr == ""
 
 
+def test_use_mismatched_remote_binary_at_the_ebuilds_key_does_not_hide_the_ebuild(
+    emerge_binary, emerge_pretend_python, fixture_env
+):
+    """Regression: found live with `emerge -p --getbinpkg x11-misc/colord`
+    -- "there are no ebuilds to satisfy". A remote binhost binary and a
+    tree ebuild at the *same* `cpv:slot::repo` collapse to one key
+    downstream (`by_str`), so when `--binpkg-respect-use` rejected the
+    USE-mismatched binary it took the same-version ebuild down with it.
+    Fixed by rejecting the binary as a *candidate*, before that key is
+    built. `dev-libs/binaryusemismatchpkg` has a `::testrepo` binhost
+    binary with `USE:` empty at the exact key of its `::testrepo`
+    ebuild; `--getbinpkg` must still land on the ebuild."""
+    args = ["--pretend", "--getbinpkg", "dev-libs/binaryusemismatchpkg"]
+    rust = _run([str(emerge_binary)], args, fixture_env)
+    py = _run(emerge_pretend_python, args, fixture_env)
+    assert rust.returncode == 0, (rust.stdout, rust.stderr)
+    assert rust.stdout == py.stdout
+    assert rust.stdout.splitlines() == [
+        '[ebuild  N     ] dev-libs/binaryusemismatchpkg-1.0  USE="foo"',
+    ]
+
+
+def test_binary_wins_a_version_tie_against_the_ebuild(
+    emerge_binary, emerge_pretend_python, fixture_env
+):
+    """Real `_wrapped_select_pkg_highest_available_imp` builds
+    `matched_packages` in `dbs` order -- ebuild before binary -- and
+    returns `matched_packages[-1]`: "ebuild type is the last resort"
+    (`depgraph.py:8492`). So a `--usepkg`/`--getbinpkg` binary that
+    passed `--binpkg-respect-use` beats the same-version ebuild.
+    Portuale gave binary candidates `repo_priority = i32::MIN`, so the
+    ebuild always won -- a misreading of real (`dbs` order is
+    iteration order, not preference; the *last* match wins).
+    `dev-libs/binebuildtie` has a USE-matching `::testrepo` binhost
+    binary at its tree ebuild's version."""
+    plain = _run([str(emerge_binary)], ["--pretend", "dev-libs/binebuildtie"], fixture_env)
+    assert plain.stdout.splitlines() == ["[ebuild  N     ] dev-libs/binebuildtie-1.0 "]
+
+    args = ["--pretend", "--getbinpkg", "dev-libs/binebuildtie"]
+    rust = _run([str(emerge_binary)], args, fixture_env)
+    py = _run(emerge_pretend_python, args, fixture_env)
+    assert rust.stdout == py.stdout
+    assert rust.stdout.splitlines() == ["[binary  N g   ] dev-libs/binebuildtie-1.0 "]
+
+
 def test_usepkgonly_defaults_binpkg_respect_use_off(emerge_binary, fixture_env):
     """The opposite asymmetry: create_depgraph_params.py:47-55 defaults
     --binpkg-respect-use to off once --usepkgonly is given (no ebuild

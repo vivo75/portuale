@@ -8548,6 +8548,37 @@ eligibility (real depgraph treats a binhost package like a `$PKGDIR`
 one), with `getbinpkg` additionally switching on remote-index loading, so
 `--usepkg` alone still never reaches a binhost.
 
+**Binary-vs-ebuild selection (2026-09-04).** Real
+`_wrapped_select_pkg_highest_available_imp` builds `matched_packages` in
+`dbs` order -- `ebuild` before `binary` -- and returns
+`matched_packages[-1]`: *"ebuild type is the last resort"*
+(`depgraph.py:8492`). So at a version tie a `--usepkg`/`--getbinpkg`
+binary that passed `--binpkg-respect-use` **beats** the same-version
+ebuild. Portuale had given binary candidates `repo_priority = i32::MIN`
+so the ebuild always won -- a *misreading* of real (`dbs` order is
+iteration order, not preference). Found live: `emerge -p` on this
+system showed `[ebuild R]` for every installed package where real (with
+its `--getbinpkg=y` default) showed `[binary Rg]`. Fixed: a `src_rank`
+tie-break (`Binary` > `Ebuild`) at both the `resolve_pretend` `best`
+pick and the post-resolution source re-derivation. `--binpkg-respect-use`
+was hoisted from a matched-*string* filter to a *candidate* filter
+(shared `binpkg_respect_use_ok`) -- an ebuild and a binhost binary at
+the same `cpv:slot::repo` collapse to one `by_str` key, so rejecting a
+USE-mismatched binary as a matched string also dropped the ebuild
+("`there are no ebuilds to satisfy x11-misc/colord`" with
+`--getbinpkg`). The remote `Packages` index (~20 MB, ~18 000 entries)
+is now parsed once (`cached_binary_index`) and indexed by `cat/pkg`
+(`BinaryIndex::by_cp`), not re-scanned per atom.
+
+New fixtures: `dev-libs/binebuildtie` (ebuild + USE-matching `::testrepo`
+binhost binary -> binary wins), a `::testrepo` `dev-libs/
+binaryusemismatchpkg` binhost entry (the `by_str`-collision regression).
+Contract tests `test_binary_wins_a_version_tie_against_the_ebuild`,
+`test_use_mismatched_remote_binary_at_the_ebuilds_key_does_not_hide_the_ebuild`.
+*Still not ported:* the full acceptability web
+(`identical_binary` / BUILD_TIME-vs-installed / `useoldpkg` /
+`_equiv_ebuild_visible`).
+
 New fixtures: `fixtures/etc/portage/binrepos.conf` (one
 `file://` `[testbinhost]`) + `fixtures/binhost/Packages`
 (`dev-libs/remotebinpkg-1.0`, and `dev-libs/remotebinslotpkg-1.0` with

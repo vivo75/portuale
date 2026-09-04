@@ -1102,19 +1102,29 @@ fn read_packages_index(pkgdir: &Path) -> Vec<HashMap<String, String>> {
 /// function takes `&BinaryIndex` rather than re-reading a path, so the
 /// "where did these entries come from" decision -- read the index file,
 /// or scan the files -- is made exactly once, at the CLI boundary.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default)]
 pub struct BinaryIndex {
     entries: Vec<HashMap<String, String>>,
+    /// `(category, package)` -> the indices into `entries` for that cp,
+    /// built once. A remote binhost index has ~18 000 entries and is
+    /// consulted once per resolved atom, so a linear `CPV`-prefix scan
+    /// per lookup was quadratic on a big graph.
+    by_cp: HashMap<(String, String), Vec<usize>>,
 }
+
+impl PartialEq for BinaryIndex {
+    fn eq(&self, other: &Self) -> bool {
+        self.entries == other.entries
+    }
+}
+impl Eq for BinaryIndex {}
 
 impl BinaryIndex {
     /// Parse `<pkgdir>/Packages` (real `bintree`'s own index format --
     /// `KEY: value`, blank-line-separated blocks, first block is the
     /// global header and is skipped). A missing file is an empty index.
     pub fn from_pkgdir(pkgdir: &Path) -> Self {
-        Self {
-            entries: read_packages_index(pkgdir),
-        }
+        Self::from_entries(read_packages_index(pkgdir))
     }
 
     /// Build from entries a caller assembled itself -- a `$PKGDIR`
@@ -1123,7 +1133,13 @@ impl BinaryIndex {
     /// synthesized `Packages`-style record (`CPV`, `SLOT`, `KEYWORDS`,
     /// the dep strings, `SIZE`, `REPO`, …).
     pub fn from_entries(entries: Vec<HashMap<String, String>>) -> Self {
-        Self { entries }
+        let mut by_cp: HashMap<(String, String), Vec<usize>> = HashMap::new();
+        for (i, e) in entries.iter().enumerate() {
+            if let Some((cat, pkg, _)) = e.get("CPV").and_then(|cpv| split_cpv(cpv)) {
+                by_cp.entry((cat, pkg)).or_default().push(i);
+            }
+        }
+        Self { entries, by_cp }
     }
 
     pub fn is_empty(&self) -> bool {
@@ -1133,6 +1149,39 @@ impl BinaryIndex {
     fn entries(&self) -> &[HashMap<String, String>] {
         &self.entries
     }
+
+    /// The index records for `category/package` -- O(matches), not a scan.
+    fn entries_for_cp(
+        &self,
+        category: &str,
+        package: &str,
+    ) -> impl Iterator<Item = &HashMap<String, String>> {
+        self.by_cp
+            .get(&(category.to_string(), package.to_string()))
+            .into_iter()
+            .flatten()
+            .map(move |&i| &self.entries[i])
+    }
+}
+
+/// `BinaryIndex::from_pkgdir`, memoised by directory for the life of the
+/// process. A remote binhost's `Packages` index can be ~20 MB and is
+/// re-consulted once per resolved atom, so parsing it afresh every time
+/// made a large `emerge -p --getbinpkg` graph take minutes. `emerge` is
+/// a one-shot process and a synced index doesn't change mid-run, so a
+/// path-keyed global cache is safe.
+fn cached_binary_index(pkgdir: &Path) -> std::sync::Arc<BinaryIndex> {
+    static CACHE: OnceLock<RwLock<HashMap<PathBuf, std::sync::Arc<BinaryIndex>>>> = OnceLock::new();
+    let cache = CACHE.get_or_init(|| RwLock::new(HashMap::new()));
+    if let Some(hit) = cache.read().unwrap().get(pkgdir) {
+        return hit.clone();
+    }
+    let idx = std::sync::Arc::new(BinaryIndex::from_pkgdir(pkgdir));
+    cache
+        .write()
+        .unwrap()
+        .insert(pkgdir.to_path_buf(), idx.clone());
+    idx
 }
 
 /// The local `$PKGDIR` binary index for this run: the CLI layer's own
@@ -1286,7 +1335,7 @@ fn binary_candidates_from_index(
     remote: bool,
 ) -> Vec<Candidate> {
     let mut candidates = Vec::new();
-    for entry in index.entries() {
+    for entry in index.entries_for_cp(category, package) {
         let Some(cpv) = entry.get("CPV") else {
             continue;
         };
@@ -1372,7 +1421,7 @@ pub fn list_remote_binary_candidates(
     let mut out: Vec<Candidate> = Vec::new();
     let mut seen: HashSet<String> = local_versions.clone();
     for binrepo in binrepos {
-        let binrepo_index = BinaryIndex::from_pkgdir(&binrepo.packages_dir(root));
+        let binrepo_index = cached_binary_index(&binrepo.packages_dir(root));
         for cand in binary_candidates_from_index(&binrepo_index, category, package, true) {
             if seen.insert(cand.version.clone()) {
                 out.push(cand);
@@ -1396,7 +1445,7 @@ pub fn find_remote_binpkg(
 ) -> Option<(String, HashMap<String, String>)> {
     let want_cpv = format!("{category}/{package}-{version}");
     for binrepo in binrepos {
-        let index = BinaryIndex::from_pkgdir(&binrepo.packages_dir(root));
+        let index = cached_binary_index(&binrepo.packages_dir(root));
         for entry in index.entries() {
             if entry.get("CPV").map(String::as_str) == Some(want_cpv.as_str()) {
                 return Some((binrepo.sync_uri.clone(), entry.clone()));
@@ -1422,6 +1471,46 @@ pub fn find_remote_binpkg(
 /// on then. Applied only to binary candidates: real `usepkg_exclude`/
 /// `usepkg_include` gate binary-candidate eligibility specifically
 /// (`built and not installed`), never ebuild candidates.
+/// Real `--binpkg-respect-use` (default "auto" -- effectively on unless
+/// `--usepkgonly`): whether a *binary* candidate's baked-in USE
+/// (`Candidate::binary_use`, the `USE:` field of its `Packages` record)
+/// matches what USE would currently be selected for it, over its own
+/// declared `IUSE` only. A mismatch means real
+/// `_wrapped_select_pkg_highest_available_imp` rejects the binary
+/// (`ignored_binaries[...]["respect_use"]`, "continue searching") and
+/// falls back to the same-version ebuild. An ebuild candidate (no
+/// `binary_use`) always passes. Shared by `resolve_pretend`'s own
+/// candidate filter and the post-resolution source re-derivation in
+/// `backtracking_resolve`, so the two can never disagree about whether a
+/// binary was eligible.
+fn binpkg_respect_use_ok(
+    candidate: &Candidate,
+    category: &str,
+    package: &str,
+    config: &portage_profile::Config,
+) -> bool {
+    let Some(binary_use) = &candidate.binary_use else {
+        return true;
+    };
+    let candidate_str = format!(
+        "{category}/{package}-{}:{}/{}::{}",
+        candidate.version, candidate.slot, candidate.sub_slot, candidate.repo_name
+    );
+    let would_select = effective_use_flags(
+        config,
+        &candidate.iuse,
+        &candidate.keywords,
+        &candidate_str,
+        category,
+        package,
+    );
+    candidate
+        .iuse
+        .split_whitespace()
+        .map(|tok| tok.trim_start_matches(['+', '-']))
+        .all(|flag| would_select.contains(flag) == binary_use.contains(flag))
+}
+
 fn filter_usepkg_exclude_include(
     binary_candidates: Vec<Candidate>,
     category: &str,
@@ -1490,7 +1579,7 @@ pub fn read_binary_metadata_any(
         return Some(m);
     }
     for binrepo in &config.binrepos {
-        let binrepo_index = BinaryIndex::from_pkgdir(&binrepo.packages_dir(root));
+        let binrepo_index = cached_binary_index(&binrepo.packages_dir(root));
         if let Some(m) = read_binary_metadata(&binrepo_index, category, package, version) {
             return Some(m);
         }
@@ -7344,6 +7433,17 @@ pub fn resolve_pretend(
                 &atom.package,
             ));
         }
+        // `--binpkg-respect-use` (real: reject a binary built with the
+        // wrong USE and keep searching -- `depgraph.py:8259-8288`). A
+        // *candidate*-level filter, not a matched-string one: an ebuild
+        // and a binary at the same `cpv:slot::repo` collapse to one key
+        // downstream (`by_str`), so a USE-mismatched binary left in the
+        // pool would take that key and, when it's dropped, take the
+        // same-version ebuild with it.
+        if binpkg_respect_use {
+            binary_candidates
+                .retain(|c| binpkg_respect_use_ok(c, &atom.category, &atom.package, config));
+        }
         candidates.extend(filter_usepkg_exclude_include(
             binary_candidates,
             &atom.category,
@@ -7573,58 +7673,9 @@ pub fn resolve_pretend(
         _ => matched,
     };
 
-    // --binpkg-respect-use (real create_depgraph_params.py's own default:
-    // "auto", i.e. effectively on, whenever --usepkgonly is NOT set;
-    // left off when it IS -- ported as the caller's own already-resolved
-    // `binpkg_respect_use` bool, see pretend.rs). For each matched
-    // *binary* candidate, computes what USE would currently be selected
-    // (the exact same `effective_use_flags` machinery an ebuild
-    // candidate's own display/dependency-walk already uses) and
-    // compares it, over this candidate's own declared IUSE flags only,
-    // against its own baked-in `binary_use` -- any mismatch rejects it
-    // (falls through to another candidate, e.g. a same-version ebuild,
-    // if `matched` still has one), matching real `_reinstall_for_flags`'
-    // own rejection spirit inside `_wrapped_select_pkg_highest_available_
-    // imp`. Skipped entirely when `binpkg_respect_use` is false (either
-    // explicitly, or the real "off under --usepkgonly" default), same as
-    // real portage never bothering with this check in that case either.
-    let matched: Vec<&str> = if binpkg_respect_use {
-        matched
-            .into_iter()
-            .filter(|m| {
-                let Some(candidate) = by_str.get(m) else {
-                    return false;
-                };
-                let Some(binary_use) = &candidate.binary_use else {
-                    return true;
-                };
-                let candidate_str = format!(
-                    "{}/{}-{}:{}/{}::{}",
-                    atom.category,
-                    atom.package,
-                    candidate.version,
-                    candidate.slot,
-                    candidate.sub_slot,
-                    candidate.repo_name
-                );
-                let would_select = effective_use_flags(
-                    config,
-                    &candidate.iuse,
-                    &candidate.keywords,
-                    &candidate_str,
-                    &atom.category,
-                    &atom.package,
-                );
-                candidate
-                    .iuse
-                    .split_whitespace()
-                    .map(|tok| tok.trim_start_matches(['+', '-']))
-                    .all(|flag| would_select.contains(flag) == binary_use.contains(flag))
-            })
-            .collect()
-    } else {
-        matched
-    };
+    // (`--binpkg-respect-use` was applied as a candidate-level filter
+    // above, before `by_str` -- see there for why it can't be a
+    // matched-string filter.)
     if matched.is_empty() {
         return Ok(PretendOutcome::NoVisibleCandidate);
     }
@@ -7791,7 +7842,22 @@ pub fn resolve_pretend(
                 .any(|ex| matches_config_entry(ex, &candidate_str, &atom.category, &atom.package))
         })
         .max_by(|a, b| {
-            vercmp_ordering(&a.version, &b.version).then(a.repo_priority.cmp(&b.repo_priority))
+            // Real `_wrapped_select_pkg_highest_available_imp` builds
+            // `matched_packages` in `dbs` order -- `ebuild` before
+            // `binary` -- and returns `matched_packages[-1]`, "ebuild
+            // type is the last resort" (`depgraph.py:8492`). So at the
+            // winning version a `--usepkg`/`--getbinpkg` binary that
+            // survived the `binpkg-respect-use` filter above beats the
+            // same-version ebuild. (`--usepkgonly` has no ebuilds in the
+            // pool; without `--usepkg` there are no binaries -- moot
+            // either way.)
+            let src_rank = |c: &Candidate| match c.source {
+                CandidateSource::Binary => 1u8,
+                CandidateSource::Ebuild => 0,
+            };
+            vercmp_ordering(&a.version, &b.version)
+                .then(src_rank(a).cmp(&src_rank(b)))
+                .then(a.repo_priority.cmp(&b.repo_priority))
         })
     else {
         return Ok(PretendOutcome::NoVisibleCandidate);
@@ -10654,66 +10720,64 @@ fn backtracking_resolve(req: &ResolveRequest) -> Result<GraphResult, String> {
             let empty_constraints: Vec<String> = Vec::new();
             let extra_constraints = slot_constraints.get(&key).unwrap_or(&empty_constraints);
 
-            let mut outcome = resolve_pretend(
-                &repos,
-                root,
-                &current_atom,
-                config,
-                newuse,
-                changed_use,
-                update,
-                excluded,
-                changed_deps,
-                with_bdeps,
-                changed_slot,
-                selective,
-                depth == 0,
-                usepkg,
-                usepkgonly,
-                binpkg_respect_use,
-                usepkg_exclude,
-                usepkg_include,
-                rebuilt_binaries,
-                rebuilt_binaries_timestamp,
-                newrepo,
-                empty,
-                getbinpkg,
-                autounmask_suggest_keywords,
-                autounmask_suggest_use,
-                autounmask_suggest_license,
-                autounmask_suggest_masks,
-                extra_constraints,
-            )?;
-
             // Real `_complete_graph`'s `_select_pkg_from_graph`
-            // (`depgraph.py:8495`): in complete mode, an atom that isn't a
-            // genuine phase-1 merge target may only resolve
-            // graph-or-installed -- never to a `[ebuild N]` the deep
-            // re-walk of the required sets would otherwise invent. An
-            // installed version that satisfies it becomes `AlreadyInstalled`
-            // (real's fallback); nothing installed means real's
-            // `_select_pkg_from_graph` returns `None` -- the dep is
-            // recorded in `_initially_unsatisfied_deps` with **no graph
-            // node** (`allow_unsatisfied=True`), so drop it here entirely
-            // rather than emit a `NoVisibleCandidate` entry. A no-op
+            // (`depgraph.py:8495`): in complete mode the deep re-walk of
+            // the required sets may only pick a package already in the
+            // graph or installed -- never resolve/merge anything new. For
+            // a dependency atom whose `cp` isn't a genuine phase-1 merge
+            // target, that means: an installed version that satisfies it
+            // -> `AlreadyInstalled` (deep-walk its deps, merge nothing);
+            // nothing installed -> real's `_initially_unsatisfied_deps`,
+            // no graph node -> drop. Done **before** `resolve_pretend`,
+            // not after -- the full candidate/visibility/USE resolution
+            // for every installed package in the world is exactly the
+            // work real's cheap graph-or-installed check avoids (it made
+            // `emerge -pt gnome-control-center` take minutes). A no-op
             // unless `complete_locked_merges` was populated (only the CLI
-            // layer's complete pass does that).
-            if complete
+            // layer's complete pass does that); top-level atoms always go
+            // through `resolve_pretend` (their `NoVisibleCandidate` is
+            // fatal, handled below).
+            let mut outcome = if complete
                 && !complete_locked_merges.is_empty()
+                && owner.is_some()
                 && !complete_locked_merges.contains(&key)
-                && matches!(
-                    outcome,
-                    PretendOutcome::New { .. }
-                        | PretendOutcome::Upgrade { .. }
-                        | PretendOutcome::Downgrade { .. }
-                        | PretendOutcome::Reinstall { .. }
-                )
             {
                 match best_installed_for_atom(root, &current_atom, &key.0, &key.1) {
-                    Some(v) => outcome = PretendOutcome::AlreadyInstalled { version: v },
+                    Some(v) => PretendOutcome::AlreadyInstalled { version: v },
                     None => continue 'queue,
                 }
-            }
+            } else {
+                resolve_pretend(
+                    &repos,
+                    root,
+                    &current_atom,
+                    config,
+                    newuse,
+                    changed_use,
+                    update,
+                    excluded,
+                    changed_deps,
+                    with_bdeps,
+                    changed_slot,
+                    selective,
+                    depth == 0,
+                    usepkg,
+                    usepkgonly,
+                    binpkg_respect_use,
+                    usepkg_exclude,
+                    usepkg_include,
+                    rebuilt_binaries,
+                    rebuilt_binaries_timestamp,
+                    newrepo,
+                    empty,
+                    getbinpkg,
+                    autounmask_suggest_keywords,
+                    autounmask_suggest_use,
+                    autounmask_suggest_license,
+                    autounmask_suggest_masks,
+                    extra_constraints,
+                )?
+            };
 
             // `--reinstall-atoms`: a matching already-installed package
             // is forced to re-merge (real `depgraph.py` drops it from
@@ -11272,25 +11336,20 @@ fn backtracking_resolve(req: &ResolveRequest) -> Result<GraphResult, String> {
             };
 
             // The resolved version may have come from any of `repos`, or
-            // from PKGDIR (`--usepkg`/`--usepkgonly`), so re-derive which
-            // one it actually lives in -- reusing `list_candidates`/
-            // `list_binary_candidates` rather than threading a repo
-            // location back out of `PretendOutcome`, since more than one
-            // source could in principle carry the identical version. The
-            // ordinary `repo_priority` tie-break already does the right
-            // thing with no special-casing here: a binary candidate's own
-            // `repo_priority` (`list_binary_candidates`) is deliberately
-            // `i32::MIN`, lower than any real repo, so an identical-version
-            // ebuild naturally wins the tie -- matching real depgraph.py's
-            // own `dbs` list order (`"ebuild"` always checked before
-            // `"binary"`, see `resolve_pretend`'s own doc comment).
-            // Mirrors `resolve_pretend`'s own pool construction exactly
-            // (`--usepkgonly` excludes ebuild candidates entirely) -- this
-            // step has to agree with what `resolve_pretend` itself actually
-            // chose from, or it can silently re-derive a *different*
-            // candidate than the one that really won (e.g. picking an
-            // ebuild back up here that `--usepkgonly` had already excluded
-            // from consideration).
+            // from PKGDIR (`--usepkg`/`--usepkgonly`) or a remote binhost
+            // (`--getbinpkg`), so re-derive which one it actually lives in
+            // -- reusing `list_candidates`/`list_binary_candidates` rather
+            // than threading a repo location back out of `PretendOutcome`,
+            // since more than one source could carry the identical
+            // version. This step MUST agree with what `resolve_pretend`
+            // itself chose: real `_wrapped_select_pkg_highest_available_
+            // imp` returns `matched_packages[-1]` with `ebuild` built
+            // first in `dbs` order -- "ebuild type is the last resort"
+            // (`depgraph.py:8492`) -- so at a version tie a
+            // `--usepkg`/`--getbinpkg` binary that passed
+            // `binpkg-respect-use` beats the ebuild. Mirrors
+            // `resolve_pretend`'s own pool construction (`--usepkgonly`
+            // excludes ebuilds entirely).
             let mut repo_candidates = if usepkgonly {
                 Vec::new()
             } else {
@@ -11310,6 +11369,13 @@ fn backtracking_resolve(req: &ResolveRequest) -> Result<GraphResult, String> {
                         &key.1,
                     ));
                 }
+                // Same `--binpkg-respect-use` gate `resolve_pretend`
+                // applied when it chose this version -- a USE-mismatched
+                // binary was never eligible, so it can't be re-derived as
+                // the source here either.
+                if binpkg_respect_use {
+                    binary_candidates.retain(|c| binpkg_respect_use_ok(c, &key.0, &key.1, config));
+                }
                 repo_candidates.extend(filter_usepkg_exclude_include(
                     binary_candidates,
                     &key.0,
@@ -11321,7 +11387,17 @@ fn backtracking_resolve(req: &ResolveRequest) -> Result<GraphResult, String> {
             let Some(resolved) = repo_candidates
                 .iter()
                 .filter(|c| c.version == *version)
-                .max_by_key(|c| c.repo_priority)
+                .max_by(|a, b| {
+                    // "ebuild type is the last resort" -- see
+                    // `resolve_pretend`'s own `best` pick.
+                    let src_rank = |c: &Candidate| match c.source {
+                        CandidateSource::Binary => 1u8,
+                        CandidateSource::Ebuild => 0,
+                    };
+                    src_rank(a)
+                        .cmp(&src_rank(b))
+                        .then(a.repo_priority.cmp(&b.repo_priority))
+                })
             else {
                 continue;
             };

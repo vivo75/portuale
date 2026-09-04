@@ -1,5 +1,5 @@
 TIMESTAMP: 0
-PACKAGES: 2
+PACKAGES: 4
 
 BUILD_ID: 1
 CPV: dev-libs/remotebinpkg-1.0
@@ -23,4 +23,28 @@ KEYWORDS: amd64
 REPO: gentoo
 SIZE: 1048576
 SLOT: 2/1
+USE:
+
+BUILD_ID: 1
+CPV: dev-libs/binaryusemismatchpkg-1.0
+DEFINED_PHASES: -
+DESCRIPTION: fixture: a remote binhost binary at the SAME cpv:slot::repo as a tree ebuild, but USE-mismatched -- --binpkg-respect-use must reject it WITHOUT taking the ebuild down too (by_str key collision)
+EAPI: 8
+IUSE: foo
+KEYWORDS: amd64
+REPO: testrepo
+SIZE: 40960
+SLOT: 0
+USE:
+
+BUILD_ID: 1
+CPV: dev-libs/binebuildtie-1.0
+DEFINED_PHASES: -
+DESCRIPTION: fixture: USE-matching binhost binary at a tree ebuild's version
+EAPI: 8
+IUSE:
+KEYWORDS: amd64
+REPO: testrepo
+SIZE: 51200
+SLOT: 0
 USE:
