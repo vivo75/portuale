@@ -4209,6 +4209,57 @@ def test_pkgdir_directory_scan_resolves_a_binpkg_with_no_packages_index(
     assert v.stdout == vp.stdout
 
 
+def test_binrepos_conf_is_read_as_a_directory_of_fragments(
+    emerge_binary, emerge_pretend_python, tmp_path, fixtures_root
+):
+    """Real `BinRepoConfigLoader._parse` runs `_recursive_file_list` over
+    the `binrepos.conf` path, so it may be a **directory** of `*.conf`
+    fragments -- the standard portage "file or dir" pattern, and how the
+    release profile ships it (`gentoobinhost.conf`). Portuale read it as
+    a single file, so on a real desktop `config.binrepos` came out empty
+    and every remote binary silently became `[ebuild]`. Two fragments,
+    each a `file://` binhost with its own package: both are picked up."""
+    cfg = tmp_path / "cfg"
+    repo = tmp_path / "repo"
+    (cfg / "etc/portage/binrepos.conf").mkdir(parents=True)
+    (repo / "profiles").mkdir(parents=True)
+    (repo / "profiles/repo_name").write_text("main\n")
+    (repo / "profiles/make.defaults").write_text('ACCEPT_KEYWORDS="amd64"\n')
+    (cfg / "etc/portage/repos.conf").write_text(
+        f"[DEFAULT]\nmain-repo = main\n\n[main]\nlocation = {repo}\n"
+    )
+    (cfg / "etc/portage/make.conf").write_text(f'PKGDIR="{tmp_path / "empty-pkgdir"}"\n')
+    (cfg / "etc/portage/make.profile").symlink_to(repo / "profiles")
+    # Fragment 1: the shared fixture binhost (has dev-libs/remotebinpkg).
+    (cfg / "etc/portage/binrepos.conf/10-a.conf").write_text(
+        f"[a]\nsync-uri = file://{fixtures_root / 'binhost'}\npriority = 1\n"
+    )
+    # Fragment 2: a second binhost, only reachable if the directory's
+    # other files are read too.
+    bh2 = tmp_path / "binhost2"
+    bh2.mkdir()
+    (bh2 / "Packages").write_text(
+        "TIMESTAMP: 0\nPACKAGES: 1\n\n"
+        "BUILD_ID: 1\nCPV: dev-libs/dirbinhostonly-1.0\nDEFINED_PHASES: -\n"
+        "EAPI: 8\nIUSE:\nKEYWORDS: amd64\nREPO: gentoo\nSIZE: 4096\nSLOT: 0\nUSE:\n"
+    )
+    (cfg / "etc/portage/binrepos.conf/20-b.conf").write_text(
+        f"[b]\nsync-uri = file://{bh2}\npriority = 2\n"
+    )
+    env = {"PORTAGE_CONFIGROOT": str(cfg), "ROOT": str(cfg)}
+
+    for pkg in ("dev-libs/remotebinpkg", "dev-libs/dirbinhostonly"):
+        args = ["--pretend", "--getbinpkgonly", pkg]
+        rust = _run([str(emerge_binary)], args, env)
+        py = _run(emerge_pretend_python, args, env)
+        assert rust.returncode == 0, (pkg, rust.stdout, rust.stderr)
+        assert rust.stdout == py.stdout, pkg
+        # remote-only binary -> the `g` (PkgAttrDisplay.remote_binary) column.
+        assert rust.stdout.splitlines()[0].startswith(
+            f"[binary  N g   ] {pkg}-1.0"
+        ), (pkg, rust.stdout)
+
+
 def test_pkgdir_scan_is_skipped_when_a_packages_index_is_present(
     emerge_binary, fixture_env
 ):

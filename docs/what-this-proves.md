@@ -8513,7 +8513,16 @@ cache is absent simply contributes nothing.
 `priority`), then one implicit entry per whitespace-separated
 `PORTAGE_BINHOST` URI not already a section's `sync-uri` (real "Convert
 PORTAGE_BINHOST entries into implicit binrepos.conf ones", reversed with
-an incrementing priority), sorted `(priority, name)`. Documented
+an incrementing priority), sorted `(priority, name)`. Real
+`BinRepoConfigLoader._parse` runs `_recursive_file_list` over the path,
+so `binrepos.conf` may be a **file or a directory** of `*.conf`
+fragments -- the standard portage pattern, and how the release profile
+ships it (`gentoobinhost.conf`). *(Read as a single file until
+2026-09-04; on a real desktop that left `config.binrepos` empty and
+every remote binary silently rendered `[ebuild]` -- found live with
+`emerge -pt gnome-base/gnome-control-center`. Now reuses
+`read_config_lines`, the file-or-dir reader; contract test
+`test_binrepos_conf_is_read_as_a_directory_of_fragments`.)* Documented
 narrowings: the implicit-entry name is `md5(uri)` in real portage (no md5
 here -- the URI's own `host/path`, only ever a sort key); `[DEFAULT]`
 interpolation, `getbinpkg-exclude`/`-include`, `fetchcommand`/

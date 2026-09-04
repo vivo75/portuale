@@ -2609,8 +2609,15 @@ pub fn resolve_config(
         .unwrap_or_else(|| "/var/cache/binpkgs".to_string());
 
     // binrepos.conf + PORTAGE_BINHOST (see `binrepos`'s own doc comment).
+    // Real `BinRepoConfigLoader._parse` runs `_recursive_file_list` over
+    // the path, so `etc/portage/binrepos.conf` may be a **directory** of
+    // `*.conf` fragments (the standard portage "file or dir" pattern, and
+    // how the release profile ships it -- `gentoobinhost.conf`), not just
+    // a single file.
     config.binrepos = parse_binrepos(
-        &read_to_string_opt(&config_root.join("etc/portage/binrepos.conf")),
+        &read_config_lines(&config_root.join("etc/portage/binrepos.conf"))
+            .unwrap_or_default()
+            .join("\n"),
         scalars
             .get("PORTAGE_BINHOST")
             .map(String::as_str)
@@ -2620,12 +2627,6 @@ pub fn resolve_config(
     config.other_vars = scalars;
 
     Ok(config)
-}
-
-/// A missing file reads as an empty string (the same "absence is a valid
-/// state" tolerance the rest of this crate uses).
-fn read_to_string_opt(path: &Path) -> String {
-    std::fs::read_to_string(path).unwrap_or_default()
 }
 
 /// Real `BinRepoConfigLoader` (`lib/portage/binrepo/config.py:97-172`),

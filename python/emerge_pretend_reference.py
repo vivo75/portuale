@@ -4705,10 +4705,18 @@ def resolve_config(
         # portage-profile/src/lib.rs's Config::pkgdir exactly.
         "pkgdir": scalars.get("PKGDIR", "/var/cache/binpkgs"),
         # binrepos.conf + PORTAGE_BINHOST (--getbinpkg/--getbinpkgonly),
-        # real lib/portage/binrepo/config.py. Mirrors
-        # portage-profile/src/lib.rs's Config::binrepos.
+        # real lib/portage/binrepo/config.py. Real
+        # BinRepoConfigLoader._parse runs _recursive_file_list over the
+        # path, so etc/portage/binrepos.conf may be a *directory* of
+        # *.conf fragments (how the release profile ships it), not just a
+        # single file. Mirrors portage-profile/src/lib.rs's
+        # Config::binrepos.
         "binrepos": _parse_binrepos(
-            _read_text_opt(os.path.join(config_root, "etc/portage/binrepos.conf")),
+            "\n".join(
+                _read_config_lines(
+                    os.path.join(config_root, "etc/portage/binrepos.conf")
+                )
+            ),
             scalars.get("PORTAGE_BINHOST", ""),
         ),
         # Every non-USE/ACCEPT_KEYWORDS variable's final scalar value --
@@ -4716,14 +4724,6 @@ def resolve_config(
         # portage-profile/src/lib.rs's Config::other_vars.
         "other_vars": dict(scalars),
     }
-
-
-def _read_text_opt(path):
-    try:
-        with open(path) as f:
-            return f.read()
-    except OSError:
-        return ""
 
 
 def _parse_binrepos(binrepos_conf, portage_binhost):
