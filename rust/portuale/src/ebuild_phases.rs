@@ -114,9 +114,10 @@
 //       unsandboxed run with a one-shot warning (real `_spawn`'s own
 //       silent `free = True` fallback).
 //     * `FEATURES=network-sandbox` -> `unshare --net` + `ip link set lo
-//       up` inside (real `_configure_loopback_interface`, minus its
-//       `10.0.0.1/8` + `fd::1/8` `AI_ADDRCONFIG`-workaround addresses,
-//       bug #690758). `FEATURES=ipc-sandbox` -> `unshare --ipc`.
+//       up` plus the real `10.0.0.1/8` + `fd::1/8`
+//       `AI_ADDRCONFIG`-workaround addresses (bug #690758) inside (real
+//       `_configure_loopback_interface`). `FEATURES=ipc-sandbox` ->
+//       `unshare --ipc`.
 //       `FEATURES=mount-sandbox` -> `unshare --mount` + `mount
 //       --make-rslave /` inside (real `_exec2`). `FEATURES=pid-sandbox`
 //       -> `unshare --pid --fork --mount-proc` (real `CLONE_NEWPID` +
@@ -1330,10 +1331,17 @@ fn phase_isolation(env: &Environment, phase: &str) -> Isolation {
 ///   matching `unshare(1)` namespaces (real `_exec`'s
 ///   `unshare(CLONE_NEW*)`). The `sh -c` shim configures what real
 ///   `_exec2` configures inside each namespace -- `ip link set lo up`
-///   for `--net` (real `_configure_loopback_interface`, minus the
-///   `AI_ADDRCONFIG` addresses), `mount --make-rslave /` for `--mount`
-///   (real `_exec2`'s own call) -- then `exec "$@"` runs the real
-///   (possibly `sandbox`-prefixed) command.
+///   plus the real `AI_ADDRCONFIG`-workaround addresses (real
+///   `_configure_loopback_interface`, `process.py:838-871`; bug #690758
+///   -- some glibc `getaddrinfo()` calls with `AI_ADDRCONFIG` set return
+///   no results at all when a family has zero non-loopback addresses
+///   configured, so real adds one anyway) for `--net`, `mount
+///   --make-rslave /` for `--mount` (real `_exec2`'s own call) -- then
+///   `exec "$@"` runs the real (possibly `sandbox`-prefixed) command.
+///   The IPv6 address add is allowed to fail silently (`2>/dev/null`,
+///   same as every other command in this shim) exactly the way real's
+///   own `has_ipv6()` guard skips it outright on an IPv6-less host --
+///   the net effect (no IPv6 loopback address) is identical either way.
 fn sandbox_wrapped_command(script: &Path, arg: &str, iso: Isolation) -> std::process::Command {
     use std::ffi::OsString;
 
@@ -1357,7 +1365,11 @@ fn sandbox_wrapped_command(script: &Path, arg: &str, iso: Isolation) -> std::pro
 
     let mut shim = String::new();
     if iso.net {
-        shim.push_str("ip link set lo up 2>/dev/null; ");
+        shim.push_str(
+            "ip link set lo up 2>/dev/null; \
+             ip addr add 10.0.0.1/8 dev lo 2>/dev/null; \
+             ip -6 addr add fd::1/8 dev lo 2>/dev/null; ",
+        );
     }
     if iso.mount {
         shim.push_str("mount --make-rslave / 2>/dev/null; ");
@@ -2588,6 +2600,31 @@ mod tests {
         assert!(!restrict_fetch_from_restrict("mirror strip"));
         // USE-conditional drops against the always-empty fetch-side USE
         assert!(!restrict_fetch_from_restrict("foo? ( fetch )"));
+    }
+
+    #[test]
+    fn sandbox_wrapped_command_configures_the_real_addrconfig_workaround_addresses() {
+        // Real `_configure_loopback_interface` (`process.py:838-871`,
+        // bug #690758): `ip link set lo up` plus a real, non-loopback-
+        // looking address per family, so glibc's `getaddrinfo()` with
+        // `AI_ADDRCONFIG` set doesn't return spuriously empty results
+        // for a build that only ever talks to `localhost`.
+        let iso = Isolation {
+            net: true,
+            ipc: false,
+            mount: false,
+            pid: false,
+            fs_sandbox: false,
+        };
+        let cmd = sandbox_wrapped_command(Path::new("/bin/true"), "install", iso);
+        let shim = cmd
+            .get_args()
+            .filter_map(|a| a.to_str())
+            .find(|a| a.contains("exec"))
+            .expect("the sh -c shim argument is present");
+        assert!(shim.contains("ip link set lo up"));
+        assert!(shim.contains("ip addr add 10.0.0.1/8 dev lo"));
+        assert!(shim.contains("ip -6 addr add fd::1/8 dev lo"));
     }
 
     #[test]
