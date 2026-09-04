@@ -37,6 +37,62 @@ fn list_remote_binary_candidates_reads_each_binrepos_own_packages_index() {
 }
 
 #[test]
+fn dedup_binary_instances_keeps_newest_build_time_per_group() {
+    let bin = |ver: &str, bid: &str, bt: i64, use_flags: &[&str]| Candidate {
+        version: ver.to_string(),
+        keywords: vec!["amd64".to_string()],
+        slot: "0".to_string(),
+        sub_slot: "0".to_string(),
+        repo_location: PathBuf::new(),
+        repo_priority: i32::MIN,
+        repo_name: "gentoo".to_string(),
+        license: String::new(),
+        iuse: "feat".to_string(),
+        properties: String::new(),
+        restrict: String::new(),
+        source: CandidateSource::Binary,
+        binary_use: Some(use_flags.iter().map(|s| s.to_string()).collect()),
+        remote: true,
+        build_id: Some(bid.to_string()),
+        build_time: Some(bt),
+        binary_deps: HashMap::new(),
+    };
+    let cfg = test_config();
+
+    // Bare atom: newest BUILD_TIME wins.
+    let atom = portage_dep::parse_atom("dev-libs/x").unwrap();
+    let out = dedup_binary_instances(
+        vec![
+            bin("1.0", "1", 1000, &[]),
+            bin("1.0", "3", 3000, &[]),
+            bin("1.0", "2", 2000, &[]),
+        ],
+        &atom,
+        &cfg,
+    );
+    assert_eq!(out.len(), 1);
+    assert_eq!(out[0].build_id.as_deref(), Some("3"));
+
+    // Atom `[feat]`: the satisfying instance wins even when older.
+    let atom_use = portage_dep::parse_atom("dev-libs/x[feat]").unwrap();
+    let out = dedup_binary_instances(
+        vec![bin("1.0", "1", 1000, &["feat"]), bin("1.0", "2", 2000, &[])],
+        &atom_use,
+        &cfg,
+    );
+    assert_eq!(out.len(), 1);
+    assert_eq!(out[0].build_id.as_deref(), Some("1"));
+
+    // Ebuilds pass through untouched.
+    let mut eb = bin("1.0", "9", 9000, &[]);
+    eb.source = CandidateSource::Ebuild;
+    eb.build_id = None;
+    let out = dedup_binary_instances(vec![eb], &atom, &cfg);
+    assert_eq!(out.len(), 1);
+    assert_eq!(out[0].source, CandidateSource::Ebuild);
+}
+
+#[test]
 fn quickpkg_direct_index_entries_reads_the_source_root_vdb() {
     // One installed package with an RDEPEND on newpkg.
     let src = fixtures_root().join("quickpkgroot");
