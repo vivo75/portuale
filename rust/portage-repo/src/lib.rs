@@ -7323,6 +7323,7 @@ fn resolve_root_deps_build_entries(
         targets_running_root: true,
         remote_binary: false,
         build_id: None,
+        dep_order: Vec::new(),
     }];
 
     if let Some(version) = recurse_version {
@@ -8549,6 +8550,24 @@ pub struct GraphEntry {
     /// the `-pv` `:slot` / `::repo` decoration. `None` for an ebuild
     /// entry or `AlreadyInstalled`/`NoVisibleCandidate`.
     pub build_id: Option<String>,
+    /// This entry's own direct dependency `(category, package)`s, in real
+    /// portage's own graph-*discovery* order -- `RDEPEND`, `IDEPEND`,
+    /// `PDEPEND`, `DEPEND`, `BDEPEND` (real `_add_pkg_dep_string`'s own
+    /// `deps` tuple, `depgraph.py:4253-4289`), each key's own atom list
+    /// left in written/`use_reduce`d token order, first occurrence only
+    /// (a later repeat of the same cp is a no-op, matching real
+    /// `digraph.add`'s own idempotency). Feeds `real_discovery_order`,
+    /// which `topological_merge_order` uses to break ties among several
+    /// simultaneously-runnable leaves the same way real's own `.order`
+    /// does. Populated for a New/Upgrade/Downgrade/Reinstall entry and
+    /// for an `AlreadyInstalled` entry that `--deep` actually recurses
+    /// into (real's own `_add_pkg` gate: an installed package whose deps
+    /// aren't recursed into is pushed onto `_ignored_deps`, never
+    /// `.order`); empty for `NoVisibleCandidate` and for the handful of
+    /// entry-construction sites that don't populate it (slot-operator-
+    /// rebuild/`--rebuild-if-*` synthetic entries, `--nodeps`) -- those
+    /// fall back to array position, same as before this field existed.
+    pub dep_order: Vec<(String, String)>,
 }
 
 /// `(target cp, owner cp) -> (has_hard, has_soft)`: for each dependency
@@ -8597,8 +8616,9 @@ type EdgeKindMap = HashMap<((String, String), (String, String)), (bool, bool)>;
 fn topological_merge_order(
     entries: Vec<GraphEntry>,
     edge_kind_map: &EdgeKindMap,
+    top_level_atoms: &[String],
 ) -> Vec<GraphEntry> {
-    topological_merge_order_impl(entries, edge_kind_map)
+    topological_merge_order_impl(entries, edge_kind_map, top_level_atoms)
 }
 
 /// Real depgraph's `_slot_operator_trigger_reinstalls` +
@@ -8811,6 +8831,7 @@ fn slot_operator_rebuild_entries(
             targets_running_root: false,
             remote_binary: false,
             build_id: None,
+            dep_order: Vec::new(),
         });
     }
     out.sort_by(|a, b| (a.category.as_str(), a.package.as_str()).cmp(&(&b.category, &b.package)));
@@ -9067,15 +9088,177 @@ fn rebuild_if_entries(
             targets_running_root: false,
             remote_binary: false,
             build_id: None,
+            dep_order: Vec::new(),
         });
     }
     out.sort_by(|a, b| (a.category.as_str(), a.package.as_str()).cmp(&(&b.category, &b.package)));
     out
 }
 
+/// `GraphEntry::dep_order` itself: flattens `metadata`'s own dep-key
+/// strings, one key at a time in `real_order_keys`' given order (so
+/// cross-key token order can't leak in), with `use_flags`
+/// (`use_reduce_flat` transparently drops `||`/`(`/`)` markers, listing
+/// every branch's atoms in written order -- the *other* branches simply
+/// never correspond to a real entry, so `real_discovery_order`'s own
+/// lookup skips them for free), first occurrence per `(category,
+/// package)` only. Shared by the main New/Upgrade/Downgrade/Reinstall
+/// walk and the `AlreadyInstalled` entry construction (`enqueue_
+/// dependencies`'s own dynamic-deps-aware metadata/`use_flags` derivation
+/// feeds this the same way).
+fn dep_order_from_metadata(
+    metadata: &HashMap<String, String>,
+    use_flags: &HashSet<String>,
+    real_order_keys: &[&str],
+) -> Vec<(String, String)> {
+    let mut dep_order: Vec<(String, String)> = Vec::new();
+    let mut seen: HashSet<(String, String)> = HashSet::new();
+    for dep_key in real_order_keys {
+        let Some(d) = metadata.get(*dep_key) else {
+            continue;
+        };
+        let toks: Vec<String> = d.split_whitespace().map(String::from).collect();
+        let Ok(flat) = portage_use_reduce::use_reduce_flat(
+            &toks,
+            use_flags,
+            portage_use_reduce::MatchMode::Normal,
+        ) else {
+            continue;
+        };
+        for t in flat {
+            if t == "||" {
+                continue;
+            }
+            let Some(dep_atom) = portage_dep::parse_atom(&t) else {
+                continue;
+            };
+            if dep_atom.blocker != portage_dep::Blocker::None {
+                continue;
+            }
+            let cp = (dep_atom.category, dep_atom.package);
+            if seen.insert(cp.clone()) {
+                dep_order.push(cp);
+            }
+        }
+    }
+    dep_order
+}
+
+/// Real portage's own dependency-graph *discovery* order -- real
+/// `digraph.order`, the sequence nodes are first added to the digraph.
+/// `_serialize_tasks`' `leaf_nodes()` walks nodes in `.order`, so this is
+/// exactly the tie-break real portage itself uses among several
+/// simultaneously-runnable leaves (`topological_merge_order_impl`'s own
+/// consumer).
+///
+/// Real seeds this from one arg's own top-level atoms, iterated
+/// `sorted(atoms, key=str)` (`depgraph.py:5500`) -- alphabetical *within
+/// that one arg's own pset*, but args themselves (a bare atom, `@world`,
+/// `@system`, a nested custom set -- each its own `SetArg`/`PackageArg`)
+/// are processed in the order given, and each arg's own pset can itself
+/// recursively expand nested sets whose members interleave with the
+/// parent's own in a way that isn't a flat alphabetical merge either
+/// (confirmed empirically: real's `@world`-with-a-nested-custom-set
+/// fixture output isn't alphabetical across the whole expansion, only
+/// within narrower groupings this flattened `top_level_atoms` list has
+/// already lost the boundaries for). Portuale's own set-expansion
+/// machinery flattens every arg into one `Vec<String>` before this
+/// function ever sees it, with no arg/pset boundary left to sort within
+/// -- alphabetizing the *whole* flattened list was tried and broke
+/// multiple already-verified fixtures (`@world`/`@system` combined with
+/// an explicit atom, a nested custom set). So this deliberately uses
+/// `top_level_atoms` in the given order instead -- the same order the
+/// pre-existing (already real-verified) set-expansion code already
+/// produces -- and leaves real's intra-arg alphabetization as a known,
+/// unreproduced cut. Each seed is immediately `digraph.add`ed (recorded
+/// into `.order` right away) and pushed onto a LIFO `dep_stack`
+/// (`_add_pkg`, `depgraph.py:3827`). `_create_graph`'s own outer loop
+/// (`depgraph.py:3257-3269`) then repeatedly `dep_stack.pop()`s the
+/// *last*-pushed node and walks its own dependency keys (real
+/// `_add_pkg_dep_string`'s `deps` tuple order -- see `GraphEntry::
+/// dep_order`'s own doc comment), recording each of *its* children
+/// immediately, forward, before recursing into any of them. So a node's
+/// direct children always land in `.order` as one contiguous forward-order
+/// run -- but the run belonging to whichever child was declared *last*
+/// gets its own children recorded (and so on, recursively) before any
+/// earlier sibling's, since the stack pops last-in-first-out. Net effect:
+/// a plain recursive DFS that visits each node's children in *reverse*
+/// declared order, numbering every node (this node included) at the
+/// moment it's first reached -- exactly what this function computes,
+/// with an explicit stack instead of native recursion (same reason
+/// `topological_removal_order` uses one: no recursion-depth surprises on
+/// a large graph).
+///
+/// Returns `rank[i]` = `entries[i]`'s own discovery position (smaller is
+/// earlier). An entry this walk never reaches at all -- a gap in
+/// `dep_order`'s own coverage (`slot_operator_rebuild_entries`/
+/// `rebuild_if_entries`' synthetic entries carry no `dep_order`, nor does
+/// an `--nodeps` run) -- keeps its original array position, appended
+/// after every genuinely-discovered entry; multiple such gaps stay in
+/// their own relative array order among themselves.
+fn real_discovery_order(entries: &[GraphEntry], top_level_atoms: &[String]) -> Vec<usize> {
+    let n = entries.len();
+    let mut cp_indices: HashMap<(&str, &str), Vec<usize>> = HashMap::new();
+    for (i, e) in entries.iter().enumerate() {
+        cp_indices
+            .entry((e.category.as_str(), e.package.as_str()))
+            .or_default()
+            .push(i);
+    }
+    let mut rank: Vec<Option<usize>> = vec![None; n];
+    let mut next_rank: usize = 0;
+    let mut stack: Vec<usize> = Vec::new();
+
+    let discover = |i: usize, rank: &mut Vec<Option<usize>>, next_rank: &mut usize| -> bool {
+        if rank[i].is_some() {
+            return false;
+        }
+        rank[i] = Some(*next_rank);
+        *next_rank += 1;
+        true
+    };
+
+    for atom_str in top_level_atoms {
+        let Some(atom) = portage_dep::parse_atom(atom_str) else {
+            continue;
+        };
+        if atom.blocker != portage_dep::Blocker::None {
+            continue;
+        }
+        if let Some(idxs) = cp_indices.get(&(atom.category.as_str(), atom.package.as_str())) {
+            for &i in idxs {
+                if discover(i, &mut rank, &mut next_rank) {
+                    stack.push(i);
+                }
+            }
+        }
+    }
+    while let Some(i) = stack.pop() {
+        for (cat, pkg) in &entries[i].dep_order {
+            if let Some(idxs) = cp_indices.get(&(cat.as_str(), pkg.as_str())) {
+                for &j in idxs {
+                    if discover(j, &mut rank, &mut next_rank) {
+                        stack.push(j);
+                    }
+                }
+            }
+        }
+    }
+    (0..n)
+        .map(|i| {
+            rank[i].unwrap_or_else(|| {
+                let r = next_rank;
+                next_rank += 1;
+                r
+            })
+        })
+        .collect()
+}
+
 fn topological_merge_order_impl(
     entries: Vec<GraphEntry>,
     edge_kind_map: &EdgeKindMap,
+    top_level_atoms: &[String],
 ) -> Vec<GraphEntry> {
     let n = entries.len();
     if n < 2 {
@@ -9117,18 +9300,32 @@ fn topological_merge_order_impl(
             }
         }
     }
+    // Tie-break among several currently-emittable entries: real's own
+    // `mygraph.order` discovery position (`real_discovery_order`), not
+    // raw array index -- see this function's own doc comment.
+    let discovery_rank = real_discovery_order(&entries, top_level_atoms);
     let mut placed = vec![false; n];
     let mut order: Vec<usize> = Vec::with_capacity(n);
     while order.len() < n {
         let next = (0..n)
-            .find(|&i| !placed[i] && requires[i].iter().all(|&d| placed[d]))
+            .filter(|&i| !placed[i] && requires[i].iter().all(|&d| placed[d]))
+            .min_by_key(|&i| discovery_rank[i])
             // Cycle: no entry is fully satisfied. Break it at a run-time
             // edge -- pick an entry whose every *unplaced* dependency is a
             // soft edge (real `_serialize_tasks`' `ignore_priority`).
-            .or_else(|| (0..n).find(|&i| !placed[i] && requires_hard[i].iter().all(|&d| placed[d])))
+            .or_else(|| {
+                (0..n)
+                    .filter(|&i| !placed[i] && requires_hard[i].iter().all(|&d| placed[d]))
+                    .min_by_key(|&i| discovery_rank[i])
+            })
             // Unbreakable cycle (all remaining have an unplaced hard dep):
-            // emit the earliest unplaced entry and continue.
-            .unwrap_or_else(|| (0..n).find(|&i| !placed[i]).expect("n entries unplaced"));
+            // emit the earliest-discovered unplaced entry and continue.
+            .unwrap_or_else(|| {
+                (0..n)
+                    .filter(|&i| !placed[i])
+                    .min_by_key(|&i| discovery_rank[i])
+                    .expect("n entries unplaced")
+            });
         placed[next] = true;
         order.push(next);
     }
@@ -11561,9 +11758,56 @@ fn backtracking_resolve(req: &ResolveRequest) -> Result<GraphResult, String> {
                 // doc comment) -- never for NoVisibleCandidate (no version to
                 // look anything up by), and never when `nodeps` disables the
                 // dependency walk entirely, matching every other outcome's
-                // own `nodeps` handling further below.
+                // own `nodeps` handling further below. Real's own `_add_pkg`
+                // gate is the same: an installed package whose deps aren't
+                // recursed into gets pushed onto `_ignored_deps`, never
+                // `.order`, so `dep_order` (below) is likewise only ever
+                // computed under this identical condition.
+                let mut already_installed_dep_order: Vec<(String, String)> = Vec::new();
                 if let PretendOutcome::AlreadyInstalled { version } = &outcome {
                     if !nodeps && deep.recurses_at(depth) {
+                        // `GraphEntry::dep_order` for an AlreadyInstalled
+                        // entry: always the *current* tree ebuild's metadata
+                        // (real `--dynamic-deps`'s own default) -- ordering
+                        // is a display nicety, not resolution-critical, so
+                        // this doesn't also mirror `enqueue_dependencies`'
+                        // own `--dynamic-deps=n` vdb-snapshot branch.
+                        if let Some(resolved) =
+                            list_candidates(&repos, &key.0, &key.1).ok().and_then(|cs| {
+                                cs.into_iter()
+                                    .filter(|c| &c.version == version)
+                                    .max_by_key(|c| c.repo_priority)
+                            })
+                        {
+                            let pf = format!("{}-{version}", key.1);
+                            if let Ok(metadata) =
+                                read_md5_cache(&resolved.repo_location, &key.0, &pf)
+                            {
+                                let candidate_str = format!(
+                                    "{}/{}-{version}:{}/{}::{}",
+                                    key.0,
+                                    key.1,
+                                    resolved.slot,
+                                    resolved.sub_slot,
+                                    resolved.repo_name
+                                );
+                                let use_flags = effective_use_flags(
+                                    config,
+                                    metadata.get("IUSE").map(String::as_str).unwrap_or_default(),
+                                    &resolved.keywords,
+                                    &candidate_str,
+                                    &key.0,
+                                    &key.1,
+                                );
+                                let real_order_keys: &[&str] = if with_bdeps {
+                                    &["RDEPEND", "IDEPEND", "PDEPEND", "DEPEND", "BDEPEND"]
+                                } else {
+                                    &["RDEPEND", "IDEPEND", "PDEPEND"]
+                                };
+                                already_installed_dep_order =
+                                    dep_order_from_metadata(&metadata, &use_flags, real_order_keys);
+                            }
+                        }
                         enqueue_dependencies(
                             &repos,
                             root,
@@ -11668,6 +11912,7 @@ fn backtracking_resolve(req: &ResolveRequest) -> Result<GraphResult, String> {
                     targets_running_root: false,
                     remote_binary: false,
                     build_id: None,
+                    dep_order: already_installed_dep_order,
                 });
                 continue;
             };
@@ -12118,6 +12363,7 @@ fn backtracking_resolve(req: &ResolveRequest) -> Result<GraphResult, String> {
                 targets_running_root: false,
                 remote_binary: candidate_remote,
                 build_id: candidate_build_id,
+                dep_order: Vec::new(),
             });
 
             let metadata = if candidate_source == CandidateSource::Binary {
@@ -12456,6 +12702,26 @@ fn backtracking_resolve(req: &ResolveRequest) -> Result<GraphResult, String> {
                 }
             }
             let tokens: Vec<String> = depstr.split_whitespace().map(String::from).collect();
+
+            // Real graph *discovery* order (`GraphEntry::dep_order`, see
+            // its own doc comment): real `_add_pkg_dep_string` walks
+            // `RDEPEND`, `IDEPEND`, `PDEPEND`, `DEPEND`, `BDEPEND` in that
+            // exact order (`depgraph.py:4253-4289`'s own `deps` tuple) --
+            // a different order than `dep_keys` above (which only cares
+            // which keys are included, not their order). Each key is
+            // flattened separately so cross-key token order can't leak in;
+            // `use_reduce_flat` transparently drops `||`/`(`/`)` markers,
+            // listing every branch's atoms in written order (the *other*
+            // branches are simply never a real entry, so they contribute
+            // no edge once `real_discovery_order` looks them up).
+            let real_order_keys: &[&str] =
+                if candidate_source == CandidateSource::Binary && !with_bdeps {
+                    &["RDEPEND", "PDEPEND", "IDEPEND"]
+                } else {
+                    &["RDEPEND", "IDEPEND", "PDEPEND", "DEPEND", "BDEPEND"]
+                };
+            entries[entry_idx].dep_order =
+                dep_order_from_metadata(&metadata, &use_flags, real_order_keys);
 
             // Per-edge build-time/run-time classification for the
             // merge-order sort + circular-dependency detection (real
@@ -12963,7 +13229,7 @@ fn backtracking_resolve(req: &ResolveRequest) -> Result<GraphResult, String> {
         // its dependencies are ever queued). Re-sort into merge order now
         // that every `required_by` edge is known -- see
         // `topological_merge_order`.
-        entries = topological_merge_order(entries, &edge_kind_map);
+        entries = topological_merge_order(entries, &edge_kind_map, atoms);
 
         // Real depgraph.py:5706-5717 -- see GraphResult::
         // buildpkgonly_deps_unsatisfied's own doc comment.
@@ -17907,23 +18173,23 @@ mod tests {
         // defaulting to true (real --with-bdeps=auto/y, portuale's own
         // --usepkg-less default) walks all three under --deep, same as
         // before --with-bdeps existed.
-        // Dep-key iteration order (DEPEND, RDEPEND, BDEPEND, PDEPEND,
-        // IDEPEND) determines queue order here, same as every other
-        // dependency-recursion test in this file: DEPEND's own
-        // builddeponlypkg is queued (and therefore resolved) before
-        // RDEPEND's newpkg, which is queued before BDEPEND's
+        // Merge order follows real's own discovery order (RDEPEND,
+        // IDEPEND, PDEPEND, DEPEND, BDEPEND -- `_add_pkg_dep_string`'s
+        // `deps` tuple, `depgraph.py:4253-4289`), via
+        // `real_discovery_order`: RDEPEND's newpkg is discovered before
+        // DEPEND's builddeponlypkg, which is discovered before BDEPEND's
         // hostdeponlypkg.
         assert_eq!(
             graph_deep_with_bdeps("dev-libs/withbdepspkg", true),
             vec![
                 (
-                    "dev-libs/builddeponlypkg".to_string(),
+                    "dev-libs/newpkg".to_string(),
                     PretendOutcome::New {
                         version: "1.0".to_string()
                     }
                 ),
                 (
-                    "dev-libs/newpkg".to_string(),
+                    "dev-libs/builddeponlypkg".to_string(),
                     PretendOutcome::New {
                         version: "1.0".to_string()
                     }
@@ -19597,7 +19863,7 @@ mod tests {
             ),
             (false, true),
         );
-        let ordered = topological_merge_order_impl(vec![a, b], &edge_kind_map);
+        let ordered = topological_merge_order_impl(vec![a, b], &edge_kind_map, &[]);
         let names: Vec<&str> = ordered.iter().map(|e| e.package.as_str()).collect();
         assert_eq!(names, vec!["cyc-b", "cyc-a"]);
 
@@ -19618,7 +19884,7 @@ mod tests {
                 (true, false),
             );
         }
-        let ordered = topological_merge_order_impl(vec![a, b], &hard_map);
+        let ordered = topological_merge_order_impl(vec![a, b], &hard_map, &[]);
         let names: Vec<&str> = ordered.iter().map(|e| e.package.as_str()).collect();
         assert_eq!(names, vec!["cyc-a", "cyc-b"]);
     }
@@ -23721,6 +23987,7 @@ mod tests {
             targets_running_root: false,
             remote_binary: false,
             build_id: None,
+            dep_order: Vec::new(),
         }
     }
 

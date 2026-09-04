@@ -9966,6 +9966,7 @@ mod tests {
             targets_running_root: false,
             remote_binary: false,
             build_id: None,
+            dep_order: Vec::new(),
         }
     }
 

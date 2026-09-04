@@ -6682,7 +6682,112 @@ def _rebuild_if_entries(
     return out
 
 
-def _topological_merge_order(entries, edge_kind_map=None):
+def _dep_order_from_metadata(metadata, use_flags, real_order_keys):
+    """An entry's own direct dependency `(category, package)`s, in real
+    portage's own graph-*discovery* order -- flattens `metadata`'s dep-key
+    strings one key at a time, in `real_order_keys`' given order (so
+    cross-key token order can't leak in), first occurrence per
+    (category, package) only (a later repeat of the same cp is a no-op,
+    matching real `digraph.add`'s own idempotency). Mirrors
+    portage-repo/src/lib.rs's dep_order_from_metadata exactly."""
+    dep_order = []
+    seen = set()
+    for dep_key in real_order_keys:
+        depstr = metadata.get(dep_key)
+        if not depstr:
+            continue
+        try:
+            flat = use_reduce(depstr, uselist=use_flags, flat=True)
+        except (InvalidDependString, InvalidAtom):
+            continue
+        for tok in flat:
+            if tok == "||":
+                continue
+            dep_atom = _parse_atom(tok)
+            if dep_atom is None or dep_atom.blocker:
+                continue
+            cp = tuple(dep_atom.cp.split("/", 1))
+            if cp not in seen:
+                seen.add(cp)
+                dep_order.append(cp)
+    return dep_order
+
+
+def _real_discovery_order(entries, top_level_atoms):
+    """Simulates real depgraph's own `.order` discovery position -- an
+    explicit-stack DFS, not the BFS `queue` this reference's own graph
+    walk actually uses (portuale's BFS exists for correctness/dedup
+    determinism, unrelated to real's own merge-order mechanics).
+
+    Real `_resolve` seeds the walk with `for atom in
+    sorted(arg.pset.getAtoms(), key=str)` -- alphabetical *within that
+    one arg's own pset*, but args themselves (a bare atom, @world,
+    @system, a nested custom set -- each its own SetArg/PackageArg) are
+    processed in the order given, and each arg's own pset can itself
+    recursively expand nested sets whose members interleave with the
+    parent's own in a way that isn't a flat alphabetical merge either
+    (confirmed empirically: real's @world-with-a-nested-custom-set
+    fixture output isn't alphabetical across the whole expansion, only
+    within narrower groupings this flattened top_level_atoms list has
+    already lost the boundaries for). This reference's own set-expansion
+    code flattens every arg into one list before this function ever sees
+    it, with no arg/pset boundary left to sort within -- alphabetizing
+    the *whole* flattened list was tried and broke multiple
+    already-verified fixtures (@world/@system combined with an explicit
+    atom, a nested custom set). So this deliberately uses
+    top_level_atoms in the given order instead -- the same order the
+    pre-existing (already real-verified) set-expansion code already
+    produces -- and leaves real's intra-arg alphabetization as a known,
+    unreproduced cut. Each seed is then `_create_graph()`-walked once:
+    real `_create_graph` (depgraph.py:3254-3269) is `while dep_stack:
+    dep = dep_stack.pop()` -- a genuine LIFO stack. Real `_add_pkg`
+    (depgraph.py:3550-3828) calls `digraph.add(pkg, dep.parent, ...)`
+    EARLY (records this entry's `.order` position at discovery time) but
+    only `dep_stack.append(pkg)`s (defers recursion into it) near the
+    end -- so popping a parent discovers ALL its direct children (via
+    its own `dep_order`, real `_add_pkg_dep_string`'s own `deps` tuple
+    order, depgraph.py:4253-4291) in one forward pass, but then dives
+    into the LAST-discovered child first (LIFO) before any earlier
+    sibling's own children are ever discovered. Mirrors
+    portage-repo/src/lib.rs's real_discovery_order exactly."""
+    n = len(entries)
+    cp_indices = {}
+    for i, e in enumerate(entries):
+        cp_indices.setdefault((e[0], e[1]), []).append(i)
+    rank = [None] * n
+    next_rank = 0
+    stack = []
+
+    def discover(i):
+        nonlocal next_rank
+        if rank[i] is not None:
+            return False
+        rank[i] = next_rank
+        next_rank += 1
+        return True
+
+    for atom_str in top_level_atoms:
+        atom = _parse_atom(atom_str)
+        if atom is None or atom.blocker:
+            continue
+        for i in cp_indices.get(tuple(atom.cp.split("/", 1)), ()):
+            if discover(i):
+                stack.append(i)
+    while stack:
+        i = stack.pop()
+        dep_order = entries[i][8].get("dep_order", []) if entries[i][8] else []
+        for cp in dep_order:
+            for j in cp_indices.get(tuple(cp), ()):
+                if discover(j):
+                    stack.append(j)
+    for i in range(n):
+        if rank[i] is None:
+            rank[i] = next_rank
+            next_rank += 1
+    return rank
+
+
+def _topological_merge_order(entries, edge_kind_map=None, top_level_atoms=()):
     """Put `entries` in real portage's dependency-first *merge* order.
 
     Real portage's `mylist` is a genuine topological merge schedule (its
@@ -6693,10 +6798,11 @@ def _topological_merge_order(entries, edge_kind_map=None):
 
     A stable topological sort: an entry is emitted only once every other
     entry it requires (within this set) has already been emitted; among
-    the entries that are all currently emittable, the one with the
-    earliest original (BFS-discovery, i.e. argv) position goes first. Two
-    packages with no dependency relationship keep their discovery order;
-    a dependency always precedes the packages that pull it in.
+    the entries that are all currently emittable, real's own discovery
+    position (`_real_discovery_order`, see its own doc comment) goes
+    first, not raw array position. Two packages with no dependency
+    relationship keep this discovery order; a dependency always precedes
+    the packages that pull it in.
 
     A genuine dependency cycle is broken the way real portage's
     _serialize_tasks does -- at a run-time edge. When no unplaced entry
@@ -6707,9 +6813,9 @@ def _topological_merge_order(entries, edge_kind_map=None):
     unsatisfied run-time edge but never an unsatisfied build-time one.
     Only if every remaining entry still has an unplaced *hard*
     build-time dependency (an unbreakable cycle -- Commit 2's
-    `* Error: circular dependencies:`) does it fall back to the earliest
-    unplaced entry in discovery order. Mirrors portage-repo/src/lib.rs's
-    topological_merge_order exactly.
+    `* Error: circular dependencies:`) does it fall back to the
+    earliest-discovered unplaced entry. Mirrors
+    portage-repo/src/lib.rs's topological_merge_order exactly.
     """
     n = len(entries)
     if n < 2:
@@ -6738,31 +6844,41 @@ def _topological_merge_order(entries, edge_kind_map=None):
                     requires[i].add(j)
                     if hard:
                         requires_hard[i].add(j)
+    # Tie-break among several currently-emittable entries: real's own
+    # `mygraph.order` discovery position (`_real_discovery_order`), not
+    # raw array index -- see this function's own doc comment.
+    discovery_rank = _real_discovery_order(entries, top_level_atoms)
     placed = [False] * n
     order = []
     while len(order) < n:
-        nxt = next(
+        nxt = min(
             (
                 i
                 for i in range(n)
                 if not placed[i] and all(placed[d] for d in requires[i])
             ),
-            None,
+            key=lambda i: discovery_rank[i],
+            default=None,
         )
         if nxt is None:
             # Cycle: break it at a run-time edge -- pick an entry whose
             # every unplaced dependency is a soft edge.
-            nxt = next(
+            nxt = min(
                 (
                     i
                     for i in range(n)
                     if not placed[i] and all(placed[d] for d in requires_hard[i])
                 ),
-                None,
+                key=lambda i: discovery_rank[i],
+                default=None,
             )
         if nxt is None:
-            # Unbreakable cycle: emit the earliest unplaced entry.
-            nxt = next(i for i in range(n) if not placed[i])
+            # Unbreakable cycle: emit the earliest-discovered unplaced
+            # entry.
+            nxt = min(
+                (i for i in range(n) if not placed[i]),
+                key=lambda i: discovery_rank[i],
+            )
         placed[nxt] = True
         order.append(nxt)
     return [entries[i] for i in order]
@@ -7928,7 +8044,52 @@ def resolve_pretend_graph(
                 # up by), and never when `nodeps` disables the dependency
                 # walk entirely, matching every other outcome's own `nodeps`
                 # handling further below.
+                already_installed_dep_order = []
                 if outcome[0] == "already_installed" and not nodeps and _deep_recurses_at(deep, depth):
+                    # GraphEntry::dep_order for an AlreadyInstalled entry:
+                    # always the *current* tree ebuild's metadata (real
+                    # --dynamic-deps's own default) -- ordering is a
+                    # display nicety, not resolution-critical, so this
+                    # doesn't also mirror _enqueue_dependencies's own
+                    # --dynamic-deps=n vdb-snapshot branch. Real's own
+                    # _add_pkg gate is the same: an installed package
+                    # whose deps aren't recursed into gets pushed onto
+                    # _ignored_deps, never .order, so dep_order is
+                    # likewise only ever computed under this identical
+                    # condition. Mirrors portage-repo/src/lib.rs exactly.
+                    _ai_candidates = [
+                        c
+                        for c in list_candidates(repos, category, package)
+                        if c["version"] == outcome[1]
+                    ]
+                    if _ai_candidates:
+                        _ai_resolved = max(_ai_candidates, key=lambda c: c["repo_priority"])
+                        _ai_pf = f"{package}-{outcome[1]}"
+                        try:
+                            _ai_metadata = read_md5_cache(_ai_resolved["repo_location"], category, _ai_pf)
+                        except OSError:
+                            _ai_metadata = None
+                        if _ai_metadata is not None:
+                            _ai_candidate_str = (
+                                f"{category}/{package}-{outcome[1]}:{_ai_resolved['slot']}/"
+                                f"{_ai_resolved['sub_slot']}::{_ai_resolved['repo_name']}"
+                            )
+                            _ai_use_flags = effective_use_flags(
+                                config,
+                                _ai_metadata.get("IUSE", ""),
+                                _ai_resolved["keywords"],
+                                _ai_candidate_str,
+                                category,
+                                package,
+                            )
+                            _ai_real_order_keys = (
+                                ("RDEPEND", "IDEPEND", "PDEPEND", "DEPEND", "BDEPEND")
+                                if with_bdeps
+                                else ("RDEPEND", "IDEPEND", "PDEPEND")
+                            )
+                            already_installed_dep_order = _dep_order_from_metadata(
+                                _ai_metadata, _ai_use_flags, _ai_real_order_keys
+                            )
                     _enqueue_dependencies(
                         repos,
                         root,
@@ -7994,7 +8155,12 @@ def resolve_pretend_graph(
                         [],
                         [],
                         "ebuild",
-                        {"mask_entry": None, "unmask_entry": None, "keyword_entry": None},
+                        {
+                            "mask_entry": None,
+                            "unmask_entry": None,
+                            "keyword_entry": None,
+                            "dep_order": already_installed_dep_order,
+                        },
                         keyword_suggestion,
                         use_suggestion,
                         parent_use_suggestion,
@@ -8582,6 +8748,21 @@ def resolve_pretend_graph(
             )
             depstr = " ".join(metadata[k] for k in _dep_keys if metadata.get(k))
 
+            # Real graph *discovery* order (see this file's own
+            # _real_discovery_order doc comment): real _add_pkg_dep_string
+            # walks RDEPEND, IDEPEND, PDEPEND, DEPEND, BDEPEND in that
+            # exact order (depgraph.py:4253-4289's own deps tuple) -- a
+            # different order than _dep_keys above (which only cares
+            # which keys are included, not their order). Stashed on
+            # provenance like build_id/new_slot above. Mirrors
+            # portage-repo/src/lib.rs exactly.
+            _real_order_keys = (
+                ("RDEPEND", "PDEPEND", "IDEPEND")
+                if candidate_source == "binary" and not with_bdeps
+                else ("RDEPEND", "IDEPEND", "PDEPEND", "DEPEND", "BDEPEND")
+            )
+            provenance["dep_order"] = _dep_order_from_metadata(metadata, use_flags, _real_order_keys)
+
             # Per-edge build-time/run-time classification for the
             # merge-order sort + circular-dependency detection (real
             # DepPriority): re-flatten just the build-time keys and just
@@ -9089,7 +9270,7 @@ def resolve_pretend_graph(
     # dependencies are ever queued). Re-sort into merge order now that
     # every required_by edge is known. Mirrors portage-repo/src/lib.rs's
     # topological_merge_order exactly.
-    entries = _topological_merge_order(entries, edge_kind_map)
+    entries = _topological_merge_order(entries, edge_kind_map, atoms)
 
     # Real depgraph.py:5706-5717 -- see the Rust side's own
     # GraphResult::buildpkgonly_deps_unsatisfied doc comment.

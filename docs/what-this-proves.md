@@ -12701,3 +12701,82 @@ still untouchable); the grandparent atom set is re-derived from raw
 fires; portuale sorts the suggestions (real iterates a `set()`, order
 undefined). The forced cycle-only `--verbose --tree` re-display remains a
 separate open cut.
+
+### Merge-list order — real discovery order (2026-09-04)
+
+The earlier `topological_merge_order` fix (above) made the merge list
+dependency-first, but its tie-break among several simultaneously-emittable
+entries was raw array position — not real's own. `real_discovery_order`
+(`portage-repo::real_discovery_order` / `_real_discovery_order`) now
+simulates real depgraph's own `.order` discovery position instead,
+without touching the graph-*walk* itself (portuale's BFS `queue` stays a
+BFS — it exists for correctness/dedup determinism, and changing it would
+be a much larger, riskier rewrite).
+
+Real `_create_graph()` (`depgraph.py:3254-3269`) is `while dep_stack: dep
+= dep_stack.pop()` — a genuine LIFO stack. Real `_add_pkg`
+(`depgraph.py:3550-3828`) calls `digraph.add(pkg, dep.parent, ...)`
+*early* (records `.order` position at discovery time) but only
+`dep_stack.append(pkg)`s (defers recursion) near the end — so popping a
+parent discovers *all* its direct children in one forward pass over its
+own dep-key tokens (real `_add_pkg_dep_string`'s `deps` tuple order —
+RDEPEND, IDEPEND, PDEPEND, DEPEND, BDEPEND, `depgraph.py:4253-4291`), but
+the *recursion* then dives into the LAST-discovered child first (LIFO)
+before any earlier sibling's own children are ever discovered.
+`real_discovery_order` reproduces this exactly as a small standalone
+DFS-via-explicit-stack over a new `GraphEntry::dep_order` field (each
+entry's own direct deps, in that same RDEPEND/IDEPEND/PDEPEND/DEPEND/
+BDEPEND order, first-occurrence-deduped, populated at every
+entry-construction site — the main New/Upgrade/Downgrade/Reinstall walk
+and, separately, an AlreadyInstalled entry that `--deep` actually
+recurses into, mirroring real's own "`_ignored_deps` if not recursed,
+`.order` only if it is" gate). Top-level atoms seed the walk in the
+*given* order, not real's own per-arg `sorted(arg.pset.getAtoms(),
+key=str)` (`depgraph.py:5500`) — portuale's own set-expansion code
+flattens `@world`/`@system`/nested custom sets/explicit atoms into one
+list with no arg/pset boundary left to sort within, and alphabetizing
+the whole flattened list was tried and broke multiple already-verified
+fixtures (`@world`/`@system` combined with an explicit atom, a nested
+custom set) — a documented, deliberate cut, see `real_discovery_order`'s
+own doc comment.
+
+`topological_merge_order_impl`'s three `min_by_key`/cycle-break selection
+points now key off this discovery rank instead of raw array index.
+
+**Tried and reverted in the same session:** a port of real's own
+post-discovery `_merge_order_bias` (`depgraph.py:9274-9307` — system-
+deps-first, then descending reference count) plus its
+`_find_deep_system_runtime_deps` reachability walk. It fixed one fixture
+(`@system` alone) but broke five others the instant a *non*-system
+explicit atom shared the command line with `@system`/`@world`/a custom
+set: real's own bias tier evidently doesn't promote `@system` packages
+ahead of an ordinary requested target the way a literal reading of
+`_merge_order_bias`'s comparator suggests (`_serialize_tasks`'s digraph
+almost certainly excludes already-installed/no-op packages from
+scheduling entirely, in a way this reference's own unified
+GraphEntry-array architecture doesn't cleanly separate) — full real
+semantics not pinned down. Backed out rather than shipped with an
+unverified guess; see `docs/scope-backlog.md`'s "Merge-list order" entry
+for the reopened item.
+
+Verified live against a real `gnome-base/gnome-control-center` merge (a
+~26-entry real graph, `--getbinpkg=y`): a long contiguous run of the list
+— `x11-misc/colord` → `gnome-base/gnome-settings-daemon` →
+`x11-libs/colord-gtk` → `gnome-extra/gnome-color-manager` →
+`gnome-base/gnome-session` → `gnome-base/gnome-control-center` — matches
+real's actual observed order exactly (unaffected by the `_merge_order_
+bias` revert — this segment matched with or without it). The list isn't
+byte-identical overall yet: `net-libs/rest` / `net-libs/gnome-online-
+accounts` still render much later than real places them, because real's
+remaining `gather_deps` mechanism (RDEPEND-connected packages scheduled
+as one group) isn't ported — see `docs/scope-backlog.md`'s "Merge-list
+order" entry for the full remaining-gap list.
+
+Existing test `with_bdeps_default_true_walks_depend_and_bdepend_of_an_
+already_installed_package` updated: its expected order previously had
+DEPEND's `builddeponlypkg` before RDEPEND's `newpkg` (the old raw-array-
+index tie-break's artifact of insertion order); real discovery order puts
+RDEPEND before DEPEND, so `newpkg` now correctly precedes
+`builddeponlypkg` — the fixture's own doc comment updated to match.
+`portage-repo`'s full unit suite (286 tests) and the full contract suite
+(Rust==Python byte-identical) pass unchanged otherwise.
