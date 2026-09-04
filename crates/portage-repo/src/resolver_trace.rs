@@ -84,6 +84,52 @@ pub(crate) fn max_priority(prios: &[DepPriority]) -> DepPriority {
         .unwrap_or_default()
 }
 
+/// `(cat/pkg-ver[-build_id]:slot/sub_slot::repo, <state>)` for a graph node:
+/// `installed` for a nomerge node, `<type> scheduled for merge` otherwise
+/// (minus Portage's ANSI colour).
+// Portage: _emerge/Package.py, Package.__str__
+pub(crate) fn node_label(e: &GraphEntry, root: &Path, installed: bool) -> String {
+    let ver = entry_version(e).unwrap_or("");
+    let (slot, sub_slot, repo) = if installed {
+        let (s, ss) = read_vdb_slot(root, &e.category, &e.package, ver);
+        (
+            s,
+            ss,
+            installed_pkg_repo(root, &e.category, &e.package, ver),
+        )
+    } else {
+        (
+            e.slot.clone().unwrap_or_else(|| "0".to_string()),
+            e.sub_slot.clone().unwrap_or_else(|| "0".to_string()),
+            e.repo_name
+                .clone()
+                .unwrap_or_else(|| "__unknown__".to_string()),
+        )
+    };
+    // Only a merge-bound multi-instance binary carries a build id here.
+    let build_id_str = if installed {
+        String::new()
+    } else {
+        e.build_id
+            .as_deref()
+            .map(|b| format!("-{b}"))
+            .unwrap_or_default()
+    };
+    let state = if installed {
+        "installed".to_string()
+    } else {
+        let ty = match e.source {
+            CandidateSource::Binary => "binary",
+            CandidateSource::Ebuild => "ebuild",
+        };
+        format!("{ty} scheduled for merge")
+    };
+    format!(
+        "({}/{}-{ver}{build_id_str}:{slot}/{sub_slot}::{repo}, {state})",
+        e.category, e.package
+    )
+}
+
 /// Whether a `GraphEntry` is a nomerge node (installed, no-visible-candidate,
 /// or removal): never selected as a merge.
 // Portage: depgraph.py, pkg.operation == "nomerge"

@@ -219,6 +219,34 @@ pub(crate) fn dep_edges_from_metadata(
     edges
 }
 
+// ---------------------------------------------------------------------
+// `ignore_priority` predicates
+// ---------------------------------------------------------------------
+
+/// One `ignore_priority` filter: a rung of `NORMAL` (`N*`) or `SATISFIED` (`S*`).
+/// An enum so a filter has one identity whatever the codegen.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Ignore {
+    NOptional,
+    NRuntimePost,
+    NRuntime,
+    SOptional,
+    SSatisfiedRuntimePost,
+    SRuntimePost,
+    SSatisfiedRuntime,
+    SSatisfiedBuildtime,
+    SSatisfiedBuildtimeSlotOp,
+    SRuntime,
+}
+
+pub(crate) fn n_ignore_runtime_post(p: &DepPriority) -> bool {
+    p.optional || p.runtime_post
+}
+
+pub(crate) fn n_ignore_runtime(p: &DepPriority) -> bool {
+    !p.runtime_slot_op && (p.optional || !p.buildtime)
+}
+
 pub(crate) fn s_ignore_satisfied_runtime_post(p: &DepPriority) -> bool {
     if p.optional {
         return true;
@@ -273,6 +301,10 @@ pub(crate) fn s_ignore_satisfied_buildtime_slot_op(p: &DepPriority) -> bool {
         return true;
     }
     !p.buildtime && !p.runtime
+}
+
+pub(crate) fn s_ignore_runtime(p: &DepPriority) -> bool {
+    (!p.runtime_slot_op || p.satisfied) && (p.satisfied || p.optional || !p.buildtime)
 }
 
 impl std::fmt::Display for DepPriority {
