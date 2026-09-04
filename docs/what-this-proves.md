@@ -8634,10 +8634,30 @@ appends it ahead of `decorate_version`. Verified live against real
 portage 3.0.82.2 (`emerge -pv --getbinpkg app-editors/vim`). Every
 binary fixture line in the contract suite now carries its `BUILD_ID`
 (`-1`), including `remotebinslotpkg-1.0-1:2/1::gentoo` (suffix before
-slot). *Not yet ported:* real's *choice* of which multi-instance binary
-to select (highest `BUILD_TIME` that passes the acceptability web) --
-portuale still picks by `vercmp` alone, so on a binhost with several
-builds of one cpv it can name a different `-N` than real.
+slot).
+
+**Which binpkg-multi-instance build gets picked (2026-09-04).** A
+binhost lists several builds of one cpv (`BUILD_ID` 5…12), and real
+`dbapi._cmp_cpv` orders same-version instances by `BUILD_TIME` while
+`_iter_match_pkgs` reverses that + the selection loop `break`s on the
+first instance that passes every per-instance check
+(visibility, the atom's own `[use]` deps, `--binpkg-respect-use`).
+Portuale kept only *one* instance per cpv (`list_remote_binary_candidates`
+deduped by version, and the `by_str` map collapsed the rest), so it
+named whichever build happened to land first. Now every instance
+survives into the candidate pool, `--binpkg-respect-use` and the atom
+`[use]` filter run per-instance, and `dedup_binary_instances` keeps the
+`(satisfies-atom-use, BUILD_TIME, BUILD_ID)`-highest of each
+`cpv:slot::repo` group. Also fixed: `candidate_iuse_and_use` couldn't
+read a *binary* candidate's metadata at all (no `repo_location`
+md5-cache entry), so any atom `[use]` dep silently rejected every
+binary -- it now uses the binary's own recorded `IUSE` + baked `USE`
+(real `pkg.use.enabled` for a built package). Live result: `emerge -pt
+--getbinpkg gnome-base/gnome-control-center` on the reporter's system
+now selects the **exact same 26 packages as real portage** (`-11` for
+`libgweather`, `-13` for `libgusb`, …); only the merge-list *ordering*
+still differs. New fixture `dev-libs/multiinst` (3 builds, `BUILD_ID`
+1/3/2, `BUILD_TIME` 1000/3000/2000 -- selection lands on 3).
 
 ### `emerge -p`: the blocker line follows real `ResolverOutput._blockers`
 

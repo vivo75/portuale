@@ -1,5 +1,5 @@
 TIMESTAMP: 0
-PACKAGES: 7
+PACKAGES: 10
 
 BUILD_ID: 1
 CPV: dev-libs/remotebinpkg-1.0
@@ -85,5 +85,41 @@ KEYWORDS: amd64
 RDEPEND: >=dev-libs/subslotdep-0.5:0/1=
 REPO: testrepo
 SIZE: 40960
+SLOT: 0
+USE:
+
+BUILD_ID: 1
+BUILD_TIME: 1000
+CPV: dev-libs/multiinst-1.0
+DEFINED_PHASES: -
+EAPI: 8
+IUSE:
+KEYWORDS: amd64
+REPO: gentoo
+SIZE: 4096
+SLOT: 0
+USE:
+
+BUILD_ID: 3
+BUILD_TIME: 3000
+CPV: dev-libs/multiinst-1.0
+DEFINED_PHASES: -
+EAPI: 8
+IUSE:
+KEYWORDS: amd64
+REPO: gentoo
+SIZE: 4096
+SLOT: 0
+USE:
+
+BUILD_ID: 2
+BUILD_TIME: 2000
+CPV: dev-libs/multiinst-1.0
+DEFINED_PHASES: -
+EAPI: 8
+IUSE:
+KEYWORDS: amd64
+REPO: gentoo
+SIZE: 4096
 SLOT: 0
 USE:

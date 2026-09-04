@@ -1,0 +1,7 @@
+DEFINED_PHASES=-
+DESCRIPTION=fixture: three binhost builds of one cpv -- newest BUILD_TIME wins (real dbapi._cmp_cpv + _iter_match_pkgs)
+EAPI=8
+IUSE=
+KEYWORDS=amd64
+SLOT=0
+_md5_=0000000000000000000000000000000

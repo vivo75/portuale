@@ -1104,6 +1104,9 @@ def _binary_candidates_from_index(index, category, package, remote):
                 # binary's version shows "<cpv>-<build_id>" when its
                 # Packages entry carries BUILD_ID.
                 "build_id": entry.get("BUILD_ID") or None,
+                # Real _pkg_str.build_time -> dbapi._cmp_cpv: same-version
+                # binary instances are ordered by BUILD_TIME.
+                "build_time": _int_or_none(entry.get("BUILD_TIME")),
             }
         )
     return candidates
@@ -1138,19 +1141,76 @@ def _list_remote_binary_candidates(binrepos, root, local_index, category, packag
     Mirrors portage-repo/src/lib.rs's list_remote_binary_candidates."""
     if not binrepos:
         return []
-    seen = {
+    # A version already carried by the local $PKGDIR (real
+    # bintree.isremote), or by an *earlier*-priority binrepo, shadows a
+    # later binrepo's build of it -- but binpkg-multi-instance means one
+    # binrepo can legitimately list several builds of one version, so the
+    # shadow set is only grown a whole binrepo at a time (all of that
+    # binrepo's instances stay; _dedup_binary_instances collapses them
+    # later by (cpv, slot, repo) keeping the newest BUILD_TIME).
+    shadowed = {
         c["version"]
         for c in _binary_candidates_from_index(local_index, category, package, False)
     }
     out = []
     for binrepo in binrepos:
         pkgdir = _binrepo_packages_dir(binrepo["sync_uri"], root)
+        this_repo = set()
         for cand in _binary_candidates_from_index(
             _read_packages_index(pkgdir), category, package, True
         ):
-            if cand["version"] not in seen:
-                seen.add(cand["version"])
-                out.append(cand)
+            if cand["version"] in shadowed:
+                continue
+            this_repo.add(cand["version"])
+            out.append(cand)
+        shadowed |= this_repo
+    return out
+
+
+def _dedup_binary_instances(candidates, atom, config):
+    """Collapse binpkg-multi-instance duplicates: several Packages entries
+    for one cat/pkg-ver:slot/sub_slot::repo (different BUILD_IDs). Real
+    _iter_match_pkgs yields same-version instances newest-BUILD_TIME first
+    and the selection loop breaks on the first that passes every
+    per-instance check. --binpkg-respect-use has already run; this applies
+    the atom-`[use]` check and, per group, keeps the highest
+    (satisfies-use, BUILD_TIME, BUILD_ID) instance -- or the newest anyway
+    if none in the group satisfy (so the group still flows to the ordinary
+    NoVisibleCandidate / ebuild-fallback path). Ebuild candidates pass
+    straight through. Mirrors portage-repo/src/lib.rs's
+    dedup_binary_instances."""
+    has_use_deps = bool(atom.package and atom.use)
+    _cat, _pkg = atom.cp.split("/", 1)
+
+    def _use_ok(c):
+        if not has_use_deps:
+            return True
+        iuse, use_flags = _candidate_iuse_and_use(c, _cat, _pkg, config)
+        return _use_deps_satisfied(atom, _valid_iuse(iuse, config), use_flags)
+
+    def _rank(c):
+        return (
+            _use_ok(c),
+            c.get("build_time") if c.get("build_time") is not None else -(1 << 62),
+            int(c["build_id"])
+            if (c.get("build_id") or "").lstrip("-").isdigit()
+            else -(1 << 62),
+        )
+
+    kept = {}
+    out = []
+    for c in candidates:
+        if c.get("source") != "binary":
+            out.append(c)
+            continue
+        key = (c["version"], c["slot"], c["sub_slot"], c["repo_name"])
+        if key in kept:
+            idx = kept[key]
+            if _rank(c) > _rank(out[idx]):
+                out[idx] = c
+        else:
+            kept[key] = len(out)
+            out.append(c)
     return out
 
 
@@ -3448,6 +3508,15 @@ def _candidate_iuse_and_use(candidate, category, package, config):
     can't be satisfied by a declared flag" via the ordinary matching
     logic, not a separate error path. Mirrors portage-repo/src/lib.rs's
     candidate_iuse_and_use exactly."""
+    # A binary candidate has no repo_location md5-cache entry, and --
+    # unlike an ebuild -- its USE isn't recomputed from the profile: it
+    # carries the flags it was *actually built with* (Packages `USE:`
+    # field) over its own recorded IUSE. Real _iter_match_pkgs checks an
+    # atom's `[use]` deps against pkg.use.enabled (the baked set) for a
+    # built package.
+    if candidate.get("source") == "binary":
+        iuse = {tok.lstrip("+-") for tok in candidate.get("iuse", "").split()}
+        return (iuse, set(candidate.get("binary_use") or set()))
     try:
         metadata = read_md5_cache(
             candidate["repo_location"], category, f"{package}-{candidate['version']}"
@@ -5622,6 +5691,11 @@ def resolve_pretend(
                 for c in binary_candidates
                 if _binpkg_respect_use_ok(c, category, package, config)
             ]
+        # binpkg-multi-instance: keep only the highest-BUILD_TIME
+        # surviving build of each cpv:slot::repo (real _iter_match_pkgs
+        # yields instances newest-first and the selection loop breaks on
+        # the first acceptable one).
+        binary_candidates = _dedup_binary_instances(binary_candidates, atom, config)
         candidates = candidates + _filter_usepkg_exclude_include(
             binary_candidates, category, package, usepkg_exclude, usepkg_include
         )
@@ -7812,6 +7886,7 @@ def resolve_pretend_graph(
                         for c in binary_candidates
                         if _binpkg_respect_use_ok(c, category, package, config)
                     ]
+                binary_candidates = _dedup_binary_instances(binary_candidates, atom, config)
                 repo_candidates = repo_candidates + _filter_usepkg_exclude_include(
                     binary_candidates, category, package, usepkg_exclude, usepkg_include
                 )

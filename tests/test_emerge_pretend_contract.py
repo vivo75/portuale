@@ -998,6 +998,11 @@ CASES = [
         0,
     ),
     (
+        "--getbinpkg: binpkg-multi-instance -- newest BUILD_TIME build of one cpv wins",
+        ["--pretend", "--getbinpkg", "dev-libs/multiinst"],
+        0,
+    ),
+    (
         "--newrepo: off by default, stays already-installed",
         ["--pretend", "--selective", "dev-libs/newrepopkg"],
         0,
@@ -4436,6 +4441,23 @@ def test_getbinpkg_slot_repo_decoration_on_a_remote_binary_line(
         '',
         'Total: 1 package (1 new, 1 binary), Size of downloads: 1024 KiB',
     ]
+
+
+def test_getbinpkg_multi_instance_newest_build_time_wins(
+    emerge_binary, emerge_pretend_python, fixture_env
+):
+    """binpkg-multi-instance: the binhost `Packages` lists three builds of
+    dev-libs/multiinst-1.0 (BUILD_ID 1/3/2, BUILD_TIME 1000/3000/2000, in
+    that file order). Real `dbapi._cmp_cpv` orders same-version instances
+    by BUILD_TIME and `_iter_match_pkgs` yields them newest-first, so the
+    selection lands on BUILD_ID 3 -- not the first in file order, nor the
+    highest BUILD_ID by numeric luck."""
+    args = ["--pretend", "--getbinpkg", "dev-libs/multiinst"]
+    rust = _run([str(emerge_binary)], args, fixture_env)
+    py = _run(emerge_pretend_python, args, fixture_env)
+    assert rust.returncode == 0, (rust.stdout, rust.stderr)
+    assert rust.stdout == py.stdout
+    assert rust.stdout.splitlines() == ["[binary  N g   ] dev-libs/multiinst-1.0-3 "]
 
 
 def test_downgrade_is_distinguished_from_upgrade(emerge_binary, fixture_env):

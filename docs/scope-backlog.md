@@ -253,11 +253,14 @@ The whole `FEATURES` isolation set wraps the six real `src_*` phases
   `SHA1` (no sha1 crate).
 - **gpkg** — `.sig` verification + signing (`FEATURES=binpkg-signing` —
   cut, portuale has no crypto), bare `.xpak` multi-instance,
-  `binpkg-multi-instance`, mtime-staleness index revalidation, `BUILD_ID`
-  in the basename. *(The `-pretend` `-N` `BUILD_ID` display suffix
-  shipped 2026-09-04 — `_append_build_id`; still open: which
-  multi-instance binary of one cpv gets picked — real's highest
-  `BUILD_TIME` past the acceptability web vs portuale's `vercmp`-only.)*
+  mtime-staleness index revalidation, `BUILD_ID`
+  in the basename. *(The `-pretend` `-N` `BUILD_ID` display suffix and
+  binpkg-multi-instance selection — every build into the pool, per-
+  instance `--binpkg-respect-use` + atom-`[use]` filtering,
+  `dedup_binary_instances` keeps the newest `BUILD_TIME` survivor —
+  shipped 2026-09-04. Still open: the rest of the acceptability web
+  (`identical_binary`, BUILD_TIME-vs-installed reinstall, `useoldpkg`,
+  `_equiv_ebuild_visible`, `--changed-deps` for a binary).)*
 - **`splitdebug` / `packdebug` / RPM**, PKGDIR-index
   locking, `FEATURES=buildpkg-live`, real `EbuildBinpkg` failure
   semantics under `--keep-going`.

@@ -1003,6 +1003,15 @@ pub struct Candidate {
     /// appends `-{build_id}` to the displayed version of a `type_name ==
     /// "binary"` package (before the `:slot` / `::repo` decoration).
     pub build_id: Option<String>,
+    /// The `BUILD_TIME` field from this binary's own `Packages` entry
+    /// (real `_pkg_str.build_time`). Real `dbapi._cmp_cpv` sorts
+    /// same-version binary instances by `build_time`, and
+    /// `_iter_match_pkgs` reverses that + `break`s on the first
+    /// acceptable one -- so among several builds of one cpv the highest
+    /// `BUILD_TIME` (that passes `--binpkg-respect-use` etc.) wins
+    /// (`dedup_binary_instances`). `None` for an ebuild or a `Packages`
+    /// entry with no `BUILD_TIME`.
+    pub build_time: Option<i64>,
 }
 
 /// A directory entry's name is only accepted as `<package>-<version>` if
@@ -1080,6 +1089,7 @@ pub fn list_candidates(
                 binary_use: None,
                 remote: false,
                 build_id: None,
+                build_time: None,
             });
         }
     }
@@ -1423,9 +1433,80 @@ fn binary_candidates_from_index(
             binary_use: Some(binary_use),
             remote,
             build_id: entry.get("BUILD_ID").filter(|s| !s.is_empty()).cloned(),
+            build_time: entry.get("BUILD_TIME").and_then(|s| s.trim().parse().ok()),
         });
     }
     candidates
+}
+
+/// Collapse binpkg-multi-instance duplicates: several `Packages` entries
+/// for one `cat/pkg-ver:slot/sub_slot::repo` (different `BUILD_ID`s).
+/// Real `_iter_match_pkgs` yields same-version instances newest-`BUILD_TIME`
+/// first (`dbapi._cmp_cpv`, reversed) and the selection loop `break`s on
+/// the first instance that passes every per-instance check -- visibility,
+/// the atom's own `[use]` deps, `--binpkg-respect-use`. `--binpkg-respect-use`
+/// has already run on `candidates`; this applies the atom-`[use]` check
+/// (`atom`/`config`) and, per `cpv:slot::repo` group, keeps the
+/// highest-`(BUILD_TIME, BUILD_ID)` instance that *satisfies* it -- or, if
+/// none in the group do, the newest one anyway (so the group still flows
+/// to the ordinary `NoVisibleCandidate` / ebuild-fallback path exactly as
+/// a lone candidate would). Ebuild candidates pass straight through; the
+/// kept instance takes the position of the group's first member.
+fn dedup_binary_instances(
+    candidates: Vec<Candidate>,
+    atom: &portage_dep::Atom,
+    config: &portage_profile::Config,
+) -> Vec<Candidate> {
+    let use_deps = atom.use_deps.as_deref().filter(|d| !d.is_empty());
+    let use_ok = |c: &Candidate| -> bool {
+        let Some(use_deps) = use_deps else {
+            return true;
+        };
+        candidate_iuse_and_use(c, &atom.category, &atom.package, config).is_some_and(
+            |(iuse, use_flags)| {
+                portage_dep::use_deps_satisfied(use_deps, &valid_iuse(&iuse, config), &use_flags)
+            },
+        )
+    };
+    // key -> index into `out` of the currently-kept instance.
+    let mut kept: HashMap<(String, String, String, String), usize> = HashMap::new();
+    let mut out: Vec<Candidate> = Vec::with_capacity(candidates.len());
+    // Ranks an instance: `(satisfies-atom-use, BUILD_TIME, BUILD_ID)` --
+    // a satisfying instance always outranks a non-satisfying one.
+    let rank = |x: &Candidate| {
+        (
+            use_ok(x),
+            x.build_time.unwrap_or(i64::MIN),
+            x.build_id
+                .as_deref()
+                .and_then(|s| s.parse::<i64>().ok())
+                .unwrap_or(i64::MIN),
+        )
+    };
+    for c in candidates {
+        if c.source != CandidateSource::Binary {
+            out.push(c);
+            continue;
+        }
+        let key = (
+            c.version.clone(),
+            c.slot.clone(),
+            c.sub_slot.clone(),
+            c.repo_name.clone(),
+        );
+        match kept.get(&key).copied() {
+            Some(idx) => {
+                if rank(&c) > rank(&out[idx]) {
+                    out[idx] = c;
+                }
+            }
+            None => {
+                kept.insert(key, out.len());
+                out.push(c);
+            }
+        }
+    }
+    out
 }
 
 /// `--getbinpkg`/`-g`: binary candidates for `category/package` from
@@ -1460,15 +1541,26 @@ pub fn list_remote_binary_candidates(
             .map(|c| c.version)
             .collect();
 
+    // A version already carried by the local `$PKGDIR` (real
+    // `bintree.isremote`), or by an *earlier*-priority binrepo, shadows
+    // a later binrepo's build of it -- but binpkg-multi-instance means
+    // one binrepo can legitimately list several builds of one version,
+    // so the shadow set is only grown a whole binrepo at a time (all of
+    // that binrepo's instances stay; `dedup_binary_instances` collapses
+    // them later by `(cpv, slot, repo)` keeping the newest `BUILD_TIME`).
     let mut out: Vec<Candidate> = Vec::new();
-    let mut seen: HashSet<String> = local_versions.clone();
+    let mut shadowed: HashSet<String> = local_versions;
     for binrepo in binrepos {
         let binrepo_index = cached_binary_index(&binrepo.packages_dir(root));
+        let mut this_repo: HashSet<String> = HashSet::new();
         for cand in binary_candidates_from_index(&binrepo_index, category, package, true) {
-            if seen.insert(cand.version.clone()) {
-                out.push(cand);
+            if shadowed.contains(&cand.version) {
+                continue;
             }
+            this_repo.insert(cand.version.clone());
+            out.push(cand);
         }
+        shadowed.extend(this_repo);
     }
     out
 }
@@ -6218,6 +6310,21 @@ fn candidate_iuse_and_use(
     package: &str,
     config: &portage_profile::Config,
 ) -> Option<(HashSet<String>, HashSet<String>)> {
+    // A binary candidate has no `repo_location` md5-cache entry to read,
+    // and -- unlike an ebuild -- its USE isn't recomputed from the
+    // profile: it carries the flags it was *actually built with*
+    // (`Packages` `USE:` field, `binary_use`) over its own recorded
+    // `IUSE`. Real `_iter_match_pkgs` checks an atom's `[use]` deps
+    // against `pkg.use.enabled` (the baked set) for a built package.
+    if candidate.source == CandidateSource::Binary {
+        let iuse: HashSet<String> = candidate
+            .iuse
+            .split_whitespace()
+            .map(|tok| tok.trim_start_matches(['+', '-']).to_string())
+            .collect();
+        let use_flags = candidate.binary_use.clone().unwrap_or_default();
+        return Some((iuse, use_flags));
+    }
     let pf = format!("{package}-{}", candidate.version);
     let metadata = read_md5_cache(&candidate.repo_location, category, &pf).ok()?;
     // A missing IUSE key is a real, valid "declares no USE flags at all"
@@ -7487,6 +7594,11 @@ pub fn resolve_pretend(
             binary_candidates
                 .retain(|c| binpkg_respect_use_ok(c, &atom.category, &atom.package, config));
         }
+        // binpkg-multi-instance: keep only the highest-`BUILD_TIME`
+        // surviving build of each `cpv:slot::repo` (real
+        // `_iter_match_pkgs` yields instances newest-first and the
+        // selection loop `break`s on the first acceptable one).
+        let binary_candidates = dedup_binary_instances(binary_candidates, &atom, config);
         candidates.extend(filter_usepkg_exclude_include(
             binary_candidates,
             &atom.category,
@@ -11439,6 +11551,7 @@ fn backtracking_resolve(req: &ResolveRequest) -> Result<GraphResult, String> {
                 if binpkg_respect_use {
                     binary_candidates.retain(|c| binpkg_respect_use_ok(c, &key.0, &key.1, config));
                 }
+                let binary_candidates = dedup_binary_instances(binary_candidates, &atom, config);
                 repo_candidates.extend(filter_usepkg_exclude_include(
                     binary_candidates,
                     &key.0,
@@ -13300,6 +13413,95 @@ mod tests {
             "remotebinpkg",
         )
         .is_empty());
+    }
+
+    #[test]
+    fn dedup_binary_instances_keeps_newest_build_time_per_group() {
+        let bin = |ver: &str, bid: &str, bt: i64, use_flags: &[&str]| Candidate {
+            version: ver.to_string(),
+            keywords: vec!["amd64".to_string()],
+            slot: "0".to_string(),
+            sub_slot: "0".to_string(),
+            repo_location: PathBuf::new(),
+            repo_priority: i32::MIN,
+            repo_name: "gentoo".to_string(),
+            license: String::new(),
+            iuse: "feat".to_string(),
+            properties: String::new(),
+            restrict: String::new(),
+            source: CandidateSource::Binary,
+            binary_use: Some(use_flags.iter().map(|s| s.to_string()).collect()),
+            remote: true,
+            build_id: Some(bid.to_string()),
+            build_time: Some(bt),
+        };
+        let cfg = test_config();
+
+        // Bare atom: newest BUILD_TIME of the group wins, regardless of
+        // input order or BUILD_ID.
+        let atom = portage_dep::parse_atom("dev-libs/x").unwrap();
+        let out = dedup_binary_instances(
+            vec![
+                bin("1.0", "1", 1000, &[]),
+                bin("1.0", "3", 3000, &[]),
+                bin("1.0", "2", 2000, &[]),
+            ],
+            &atom,
+            &cfg,
+        );
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].build_id.as_deref(), Some("3"));
+
+        // Atom `[feat]`: the instance that satisfies it wins even when a
+        // newer instance in the same group does not.
+        let atom_use = portage_dep::parse_atom("dev-libs/x[feat]").unwrap();
+        let out = dedup_binary_instances(
+            vec![bin("1.0", "1", 1000, &["feat"]), bin("1.0", "2", 2000, &[])],
+            &atom_use,
+            &cfg,
+        );
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].build_id.as_deref(), Some("1"));
+
+        // Ebuild candidates pass straight through, untouched.
+        let mut eb = bin("1.0", "9", 9000, &[]);
+        eb.source = CandidateSource::Ebuild;
+        eb.build_id = None;
+        let out = dedup_binary_instances(vec![eb], &atom, &cfg);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].source, CandidateSource::Ebuild);
+    }
+
+    #[test]
+    fn candidate_iuse_and_use_reads_a_binarys_own_baked_use() {
+        // A binary candidate carries the flags it was built with
+        // (`binary_use`) over its own `iuse` -- no md5-cache read, no
+        // profile recompute (real `pkg.use.enabled` for a built package).
+        let c = Candidate {
+            version: "1.0".to_string(),
+            keywords: vec!["amd64".to_string()],
+            slot: "0".to_string(),
+            sub_slot: "0".to_string(),
+            repo_location: PathBuf::new(),
+            repo_priority: i32::MIN,
+            repo_name: "gentoo".to_string(),
+            license: String::new(),
+            iuse: "feat other".to_string(),
+            properties: String::new(),
+            restrict: String::new(),
+            source: CandidateSource::Binary,
+            binary_use: Some(HashSet::from(["feat".to_string()])),
+            remote: true,
+            build_id: Some("1".to_string()),
+            build_time: Some(1),
+        };
+        let (iuse, use_flags) =
+            candidate_iuse_and_use(&c, "dev-libs", "x", &test_config()).unwrap();
+        assert_eq!(
+            iuse,
+            HashSet::from(["feat".to_string(), "other".to_string()])
+        );
+        assert_eq!(use_flags, HashSet::from(["feat".to_string()]));
     }
 
     #[test]
@@ -21846,6 +22048,7 @@ mod tests {
             binary_use: None,
             remote: false,
             build_id: None,
+            build_time: None,
         }
     }
 
