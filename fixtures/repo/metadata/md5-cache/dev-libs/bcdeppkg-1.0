@@ -1,0 +1,8 @@
+DEFINED_PHASES=-
+DESCRIPTION=fixture: tree ebuild RDEPENDs dev-libs/bcdepnew; the binhost binary was built RDEPENDing dev-libs/bcdepold -- --binpkg-changed-deps rejects the stale binary
+EAPI=8
+IUSE=
+KEYWORDS=amd64
+RDEPEND=dev-libs/bcdepnew
+SLOT=0
+_md5_=0000000000000000000000000000000

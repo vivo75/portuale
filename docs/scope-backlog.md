@@ -258,9 +258,13 @@ The whole `FEATURES` isolation set wraps the six real `src_*` phases
   binpkg-multi-instance selection — every build into the pool, per-
   instance `--binpkg-respect-use` + atom-`[use]` filtering,
   `dedup_binary_instances` keeps the newest `BUILD_TIME` survivor —
-  shipped 2026-09-04. Still open: the rest of the acceptability web
-  (`identical_binary`, BUILD_TIME-vs-installed reinstall, `useoldpkg`,
-  `_equiv_ebuild_visible`, `--changed-deps` for a binary).)*
+  shipped 2026-09-04, plus `--binpkg-changed-deps` (auto whenever not
+  `--usepkgonly` -- `binary_deps_changed`) and `--rebuilt-binaries` for a
+  *remote* binhost binary. Still open: `identical_binary` /
+  `_equiv_ebuild_visible` (both gated on real's `matched_packages`
+  bookkeeping), BUILD_TIME-vs-installed *reinstall* trigger outside
+  `--rebuilt-binaries`, `useoldpkg` multi-instance, the explicit
+  `--binpkg-changed-deps=y|n` override.)*
 - **`splitdebug` / `packdebug` / RPM**, PKGDIR-index
   locking, `FEATURES=buildpkg-live`, real `EbuildBinpkg` failure
   semantics under `--keep-going`.

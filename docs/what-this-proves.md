@@ -8659,6 +8659,32 @@ now selects the **exact same 26 packages as real portage** (`-11` for
 still differs. New fixture `dev-libs/multiinst` (3 builds, `BUILD_ID`
 1/3/2, `BUILD_TIME` 1000/3000/2000 -- selection lands on 3).
 
+**Binpkg acceptability-web reinstall cases (2026-09-04).**
+
+- **`--binpkg-changed-deps`** (real `create_depgraph_params.py:196-203` --
+  **auto-enabled whenever `--usepkgonly` is not given**, so on for every
+  ordinary `--getbinpkg`): real `_wrapped_select_pkg…` rejects a binary
+  candidate whose recorded `*DEPEND` differs from the current ebuild's
+  (`self._changed_deps(binpkg)` → `ignored_binaries[…]["changed_deps"]`),
+  so a package built against a since-changed ebuild is rebuilt from
+  source rather than merged stale. New `binary_deps_changed` -- the same
+  canonical `use_reduce(token_class=Atom)` / `strip_slots` /
+  `strip_libc_deps` comparison as `deps_changed` (factored into
+  `canonical_dep_key`), but the built side is *this exact instance's* own
+  recorded deps (`Candidate::binary_deps`, since a binpkg-multi-instance
+  cpv has one dep set per build) reduced with its baked `USE`. Explicit
+  `--binpkg-changed-deps=y|n` overrides are a documented cut. Fixture
+  `dev-libs/bcdeppkg` (tree ebuild `RDEPEND`s `bcdepnew`, the binhost
+  binary was built `RDEPEND`ing `bcdepold` → binary rejected, resolves to
+  the ebuild).
+- **`--rebuilt-binaries` for a remote binhost binary**: portuale's
+  `rebuilt_binary_changed` only ever consulted the local `$PKGDIR`
+  index, so a `--getbinpkg` remote binary with a differing `BUILD_TIME`
+  never triggered the reinstall. It now takes the `BUILD_TIME` of the
+  binary candidate that would actually be selected -- local *or* remote
+  (`best_binary_build_time` over the candidate pool, which now carries
+  `Candidate::build_time`).
+
 ### `emerge -p`: the blocker line follows real `ResolverOutput._blockers`
 
 Portuale's blocker report was portuale-shaped (`[blocks] cat/foo-1.0 hard

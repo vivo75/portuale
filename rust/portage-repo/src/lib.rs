@@ -1012,6 +1012,13 @@ pub struct Candidate {
     /// (`dedup_binary_instances`). `None` for an ebuild or a `Packages`
     /// entry with no `BUILD_TIME`.
     pub build_time: Option<i64>,
+    /// This binary instance's own recorded `*DEPEND` strings (its
+    /// `Packages` entry's `DEPEND`/`RDEPEND`/`BDEPEND`/`PDEPEND`/`IDEPEND`
+    /// -- absent keys omitted), kept so `--binpkg-changed-deps` compares
+    /// the *exact* instance's deps rather than re-looking-up the cpv (a
+    /// binpkg-multi-instance cpv has one dep set per build). Empty for an
+    /// ebuild candidate.
+    pub binary_deps: HashMap<String, String>,
 }
 
 /// A directory entry's name is only accepted as `<package>-<version>` if
@@ -1090,6 +1097,7 @@ pub fn list_candidates(
                 remote: false,
                 build_id: None,
                 build_time: None,
+                binary_deps: HashMap::new(),
             });
         }
     }
@@ -1434,6 +1442,10 @@ fn binary_candidates_from_index(
             remote,
             build_id: entry.get("BUILD_ID").filter(|s| !s.is_empty()).cloned(),
             build_time: entry.get("BUILD_TIME").and_then(|s| s.trim().parse().ok()),
+            binary_deps: ["DEPEND", "RDEPEND", "BDEPEND", "PDEPEND", "IDEPEND"]
+                .iter()
+                .filter_map(|k| entry.get(*k).map(|v| (k.to_string(), v.clone())))
+                .collect(),
         });
     }
     candidates
@@ -5982,6 +5994,130 @@ fn build_use_expand_display(
 /// tolerant "can't tell, don't crash" fallback `enqueue_dependencies`
 /// already uses, since real portage has no equivalent fallback to mirror
 /// there (the repo side is assumed always well-formed).
+/// One `*DEPEND` string, real `use_reduce(token_class=Atom)` ->
+/// `strip_slots` -> `strip_libc_deps`, reduced to a canonical token
+/// stream (`(`/`)` around every group, `||` markers kept). `None` if the
+/// string -- or any atom in it -- doesn't parse (real
+/// `except InvalidDependString`). Shared by `deps_changed` (installed
+/// side) and `binary_deps_changed` (a binhost binary's baked deps).
+fn canonical_dep_key(
+    depstr: &str,
+    use_flags: &HashSet<String>,
+    libc_cps: &HashSet<(String, String)>,
+) -> Option<Vec<String>> {
+    let tokens: Vec<String> = depstr.split_whitespace().map(String::from).collect();
+    let reduced = portage_use_reduce::use_reduce_structured(
+        &tokens,
+        use_flags,
+        portage_use_reduce::MatchMode::Normal,
+    )
+    .ok()?;
+    let mut out: Vec<String> = Vec::with_capacity(reduced.len());
+    let mut depth: usize = 0;
+    for tok in reduced {
+        match tok.as_str() {
+            "(" => {
+                depth += 1;
+                out.push(tok);
+            }
+            ")" => {
+                depth = depth.saturating_sub(1);
+                out.push(tok);
+            }
+            "||" => out.push(tok),
+            _ => {
+                let evaluated = portage_dep::evaluate_atom_conditionals(&tok, use_flags)?;
+                let stripped = strip_slot_operator_one(&evaluated);
+                if depth == 0 && !libc_cps.is_empty() {
+                    if let Some(atom) = portage_dep::parse_atom(&stripped) {
+                        if libc_cps.contains(&(atom.category, atom.package)) {
+                            continue;
+                        }
+                    }
+                }
+                out.push(stripped);
+            }
+        }
+    }
+    Some(out)
+}
+
+/// `--binpkg-changed-deps` (auto-enabled whenever `--usepkgonly` is not
+/// given, `create_depgraph_params.py:196-203`): real
+/// `_wrapped_select_pkg_highest_available_imp` (`depgraph.py:8288-8300`)
+/// rejects a *binary* candidate whose recorded `*DEPEND` differs from the
+/// current ebuild's (`self._changed_deps(binpkg)` -> `ignored_binaries
+/// [pkg]["changed_deps"] = True; continue`), so a binhost package built
+/// against a since-changed ebuild is not merged -- the ebuild is rebuilt
+/// instead. Same canonical `use_reduce(token_class=Atom)` / `strip_slots`
+/// / `strip_libc_deps` comparison as `deps_changed`, but the built side
+/// is the binary's own `Packages` metadata, use-reduced with the flags it
+/// was *actually built with* (`Candidate::binary_use`). A binary whose
+/// metadata can't be read, or whose deps parse but the ebuild's don't,
+/// stays "unchanged" (`false`); an unparsable binary dep string is
+/// "changed" (`true`), matching real's `except InvalidDependString`.
+fn binary_deps_changed(
+    root: &Path,
+    repos: &[RepoConfig],
+    candidate: &Candidate,
+    category: &str,
+    package: &str,
+    with_bdeps: bool,
+) -> bool {
+    let dep_keys: &[&str] = if with_bdeps {
+        &["DEPEND", "RDEPEND", "BDEPEND", "PDEPEND", "IDEPEND"]
+    } else {
+        &["RDEPEND", "PDEPEND", "IDEPEND"]
+    };
+    let built_use = candidate.binary_use.clone().unwrap_or_default();
+    let binary_metadata = &candidate.binary_deps;
+    let Ok(repo_candidates) = list_candidates(repos, category, package) else {
+        return false;
+    };
+    let Some(resolved) = repo_candidates
+        .iter()
+        .filter(|c| c.version == candidate.version)
+        .max_by_key(|c| c.repo_priority)
+    else {
+        return false;
+    };
+    let pf = format!("{package}-{}", candidate.version);
+    let Ok(ebuild_metadata) = read_md5_cache(&resolved.repo_location, category, &pf) else {
+        return false;
+    };
+    let libc_cps = libc_provider_cps(root);
+
+    let mut built_by_key: Vec<Vec<String>> = Vec::with_capacity(dep_keys.len());
+    for key in dep_keys {
+        match canonical_dep_key(
+            binary_metadata
+                .get(*key)
+                .map(String::as_str)
+                .unwrap_or_default(),
+            &built_use,
+            &libc_cps,
+        ) {
+            Some(canon) => built_by_key.push(canon),
+            None => return true,
+        }
+    }
+    let mut ebuild_by_key: Vec<Vec<String>> = Vec::with_capacity(dep_keys.len());
+    for key in dep_keys {
+        match canonical_dep_key(
+            ebuild_metadata
+                .get(*key)
+                .map(String::as_str)
+                .unwrap_or_default(),
+            &built_use,
+            &libc_cps,
+        ) {
+            Some(canon) => ebuild_by_key.push(canon),
+            None => return false,
+        }
+    }
+    built_by_key != ebuild_by_key
+}
+
 fn deps_changed(
     root: &Path,
     repos: &[RepoConfig],
@@ -6014,52 +6150,7 @@ fn deps_changed(
     };
 
     let libc_cps = libc_provider_cps(root);
-
-    // Real `use_reduce(token_class=Atom)` -> `strip_slots` ->
-    // `strip_libc_deps` for one dep key, reduced to a canonical token
-    // stream (`(`/`)` around every group, `||` markers kept). `None` if
-    // the string -- or any atom in it -- doesn't parse.
-    let canonical_key = |depstr: &str| -> Option<Vec<String>> {
-        let tokens: Vec<String> = depstr.split_whitespace().map(String::from).collect();
-        let reduced = portage_use_reduce::use_reduce_structured(
-            &tokens,
-            &installed_use,
-            portage_use_reduce::MatchMode::Normal,
-        )
-        .ok()?;
-        // Per-atom post-pass (real `token_class=Atom`'s own per-token
-        // `evaluate_conditionals`, then `strip_slots`): structural
-        // markers pass through untouched.
-        let mut out: Vec<String> = Vec::with_capacity(reduced.len());
-        let mut depth: usize = 0;
-        for tok in reduced {
-            match tok.as_str() {
-                "(" => {
-                    depth += 1;
-                    out.push(tok);
-                }
-                ")" => {
-                    depth = depth.saturating_sub(1);
-                    out.push(tok);
-                }
-                "||" => out.push(tok),
-                _ => {
-                    let evaluated = portage_dep::evaluate_atom_conditionals(&tok, &installed_use)?;
-                    let stripped = strip_slot_operator_one(&evaluated);
-                    // `strip_libc_deps`: top-level list only, by cp.
-                    if depth == 0 && !libc_cps.is_empty() {
-                        if let Some(atom) = portage_dep::parse_atom(&stripped) {
-                            if libc_cps.contains(&(atom.category, atom.package)) {
-                                continue;
-                            }
-                        }
-                    }
-                    out.push(stripped);
-                }
-            }
-        }
-        Some(out)
-    };
+    let canonical_key = |depstr: &str| canonical_dep_key(depstr, &installed_use, &libc_cps);
 
     // vdb side first (real `_changed_deps`'s own `built_deps` loop, whose
     // `except InvalidDependString: changed = True` makes an unparsable
@@ -6245,33 +6336,44 @@ fn new_repo_changed(
 /// `depgraph.py`'s own `dbs` construction exactly.
 fn rebuilt_binary_changed(
     root: &Path,
-    binpkg_index: &BinaryIndex,
+    // The `BUILD_TIME` of the binary candidate that would be selected for
+    // this exact version -- local `$PKGDIR` *or* a `--getbinpkg` remote
+    // binhost (real `matched_packages`' `built_pkg` is whichever the pool
+    // actually offers). `None` when no binary candidate exists, or its
+    // `Packages` entry carried no `BUILD_TIME` (real code's own falsy
+    // guard, `bug #306659`).
+    binary_build_time: Option<i64>,
     category: &str,
     package: &str,
     version: &str,
     rebuilt_binaries_timestamp: Option<u64>,
 ) -> bool {
-    let Some(binary_metadata) = read_binary_metadata(binpkg_index, category, package, version)
-    else {
-        return false;
-    };
-    let Some(built_timestamp) = binary_metadata
-        .get("BUILD_TIME")
-        .and_then(|s| s.trim().parse::<u64>().ok())
-    else {
+    let Some(built_timestamp) = binary_build_time else {
         return false;
     };
     let Some(installed_timestamp) = read_vdb_string(root, category, package, version, "BUILD_TIME")
         .trim()
-        .parse::<u64>()
+        .parse::<i64>()
         .ok()
     else {
         return false;
     };
     match rebuilt_binaries_timestamp {
-        Some(minimal) => built_timestamp > installed_timestamp && built_timestamp >= minimal,
+        Some(minimal) => built_timestamp > installed_timestamp && built_timestamp >= minimal as i64,
         None => built_timestamp != installed_timestamp,
     }
+}
+
+/// The highest `BUILD_TIME` among binary candidates (local `$PKGDIR` or a
+/// `--getbinpkg` remote binhost) at exactly `version` -- what real
+/// `matched_packages`' `built_pkg.build_time` would be. `None` if there's
+/// no binary candidate for that version.
+fn best_binary_build_time(candidates: &[Candidate], version: &str) -> Option<i64> {
+    candidates
+        .iter()
+        .filter(|c| c.source == CandidateSource::Binary && c.version == version)
+        .filter_map(|c| c.build_time)
+        .max()
 }
 
 /// A candidate's own `is_valid_flag` domain: its declared `IUSE`
@@ -7366,6 +7468,10 @@ fn already_installed_or_reinstall(
     usepkgonly: bool,
     rebuilt_binaries: bool,
     rebuilt_binaries_timestamp: Option<u64>,
+    // `BUILD_TIME` of the binary candidate (local or remote) at
+    // `installed_best.version`, for the `--rebuilt-binaries` check --
+    // `None` when the pool has no binary for this version.
+    binary_build_time: Option<i64>,
     newrepo: bool,
     // `--emptytree`/`-e` (real `create_depgraph_params.py:176` --
     // `myparams["empty"] = True`, `depgraph.py:7889` -- installed
@@ -7412,7 +7518,7 @@ fn already_installed_or_reinstall(
         && rebuilt_binaries
         && rebuilt_binary_changed(
             root,
-            &local_binpkg_index(config),
+            binary_build_time,
             &atom.category,
             &atom.package,
             &installed_best.version,
@@ -7594,6 +7700,19 @@ pub fn resolve_pretend(
             binary_candidates
                 .retain(|c| binpkg_respect_use_ok(c, &atom.category, &atom.package, config));
         }
+        // `--binpkg-changed-deps` (real `create_depgraph_params.py:196-203`:
+        // auto-enabled whenever `--usepkgonly` is not given): reject a
+        // binhost binary whose recorded `*DEPEND` differs from the current
+        // ebuild's (real `depgraph.py:8288` -> `ignored_binaries[pkg]
+        // ["changed_deps"] = True; continue`), so a package built against
+        // a since-changed ebuild is rebuilt from source rather than
+        // merged stale. The explicit `--binpkg-changed-deps=y|n` overrides
+        // are a documented cut (like `--use-ebuild-visibility`).
+        if !usepkgonly {
+            binary_candidates.retain(|c| {
+                !binary_deps_changed(root, repos, c, &atom.category, &atom.package, with_bdeps)
+            });
+        }
         // binpkg-multi-instance: keep only the highest-`BUILD_TIME`
         // surviving build of each `cpv:slot::repo` (real
         // `_iter_match_pkgs` yields instances newest-first and the
@@ -7649,6 +7768,7 @@ pub fn resolve_pretend(
                 usepkgonly,
                 rebuilt_binaries,
                 rebuilt_binaries_timestamp,
+                best_binary_build_time(&candidates, &installed_best.version),
                 newrepo,
                 empty,
             );
@@ -7968,6 +8088,7 @@ pub fn resolve_pretend(
                 usepkgonly,
                 rebuilt_binaries,
                 rebuilt_binaries_timestamp,
+                best_binary_build_time(&candidates, &installed_best.version),
                 newrepo,
                 empty,
             );
@@ -8047,7 +8168,7 @@ pub fn resolve_pretend(
             && rebuilt_binaries
             && rebuilt_binary_changed(
                 root,
-                &local_binpkg_index(config),
+                best_binary_build_time(&candidates, &best.version),
                 &atom.category,
                 &atom.package,
                 &best.version,
@@ -11544,12 +11665,17 @@ fn backtracking_resolve(req: &ResolveRequest) -> Result<GraphResult, String> {
                         &key.1,
                     ));
                 }
-                // Same `--binpkg-respect-use` gate `resolve_pretend`
-                // applied when it chose this version -- a USE-mismatched
-                // binary was never eligible, so it can't be re-derived as
-                // the source here either.
+                // Same `--binpkg-respect-use` / `--binpkg-changed-deps`
+                // gates `resolve_pretend` applied when it chose this
+                // version -- a binary that was never eligible then can't
+                // be re-derived as the source here either.
                 if binpkg_respect_use {
                     binary_candidates.retain(|c| binpkg_respect_use_ok(c, &key.0, &key.1, config));
+                }
+                if !usepkgonly {
+                    binary_candidates.retain(|c| {
+                        !binary_deps_changed(root, &repos, c, &key.0, &key.1, with_bdeps)
+                    });
                 }
                 let binary_candidates = dedup_binary_instances(binary_candidates, &atom, config);
                 repo_candidates.extend(filter_usepkg_exclude_include(
@@ -13434,6 +13560,7 @@ mod tests {
             remote: true,
             build_id: Some(bid.to_string()),
             build_time: Some(bt),
+            binary_deps: HashMap::new(),
         };
         let cfg = test_config();
 
@@ -13494,6 +13621,7 @@ mod tests {
             remote: true,
             build_id: Some("1".to_string()),
             build_time: Some(1),
+            binary_deps: HashMap::new(),
         };
         let (iuse, use_flags) =
             candidate_iuse_and_use(&c, "dev-libs", "x", &test_config()).unwrap();
@@ -13502,6 +13630,37 @@ mod tests {
             HashSet::from(["feat".to_string(), "other".to_string()])
         );
         assert_eq!(use_flags, HashSet::from(["feat".to_string()]));
+    }
+
+    #[test]
+    fn best_binary_build_time_is_the_newest_binary_of_the_version() {
+        let mk = |source, ver: &str, bt: Option<i64>| Candidate {
+            version: ver.to_string(),
+            keywords: vec![],
+            slot: "0".to_string(),
+            sub_slot: "0".to_string(),
+            repo_location: PathBuf::new(),
+            repo_priority: 0,
+            repo_name: "gentoo".to_string(),
+            license: String::new(),
+            iuse: String::new(),
+            properties: String::new(),
+            restrict: String::new(),
+            source,
+            binary_use: None,
+            remote: false,
+            build_id: None,
+            build_time: bt,
+            binary_deps: HashMap::new(),
+        };
+        let cands = vec![
+            mk(CandidateSource::Ebuild, "1.0", None),
+            mk(CandidateSource::Binary, "1.0", Some(100)),
+            mk(CandidateSource::Binary, "1.0", Some(300)),
+            mk(CandidateSource::Binary, "2.0", Some(999)),
+        ];
+        assert_eq!(best_binary_build_time(&cands, "1.0"), Some(300));
+        assert_eq!(best_binary_build_time(&cands, "3.0"), None);
     }
 
     #[test]
@@ -22049,6 +22208,7 @@ mod tests {
             remote: false,
             build_id: None,
             build_time: None,
+            binary_deps: HashMap::new(),
         }
     }
 

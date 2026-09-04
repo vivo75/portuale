@@ -1,5 +1,5 @@
 TIMESTAMP: 0
-PACKAGES: 10
+PACKAGES: 11
 
 BUILD_ID: 1
 CPV: dev-libs/remotebinpkg-1.0
@@ -119,6 +119,19 @@ DEFINED_PHASES: -
 EAPI: 8
 IUSE:
 KEYWORDS: amd64
+REPO: gentoo
+SIZE: 4096
+SLOT: 0
+USE:
+
+BUILD_ID: 1
+BUILD_TIME: 100
+CPV: dev-libs/bcdeppkg-1.0
+DEFINED_PHASES: -
+EAPI: 8
+IUSE:
+KEYWORDS: amd64
+RDEPEND: dev-libs/bcdepold
 REPO: gentoo
 SIZE: 4096
 SLOT: 0

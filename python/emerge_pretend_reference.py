@@ -1107,6 +1107,14 @@ def _binary_candidates_from_index(index, category, package, remote):
                 # Real _pkg_str.build_time -> dbapi._cmp_cpv: same-version
                 # binary instances are ordered by BUILD_TIME.
                 "build_time": _int_or_none(entry.get("BUILD_TIME")),
+                # This exact instance's recorded *DEPEND (for
+                # --binpkg-changed-deps -- a multi-instance cpv has one
+                # dep set per build). Mirrors Candidate::binary_deps.
+                "binary_deps": {
+                    k: entry[k]
+                    for k in ("DEPEND", "RDEPEND", "BDEPEND", "PDEPEND", "IDEPEND")
+                    if k in entry
+                },
             }
         )
     return candidates
@@ -3282,6 +3290,63 @@ def _deps_changed(root, repos, category, package, version, with_bdeps):
     return built_deps != unbuilt_deps
 
 
+def _binary_deps_changed(root, repos, candidate, category, package, with_bdeps):
+    """--binpkg-changed-deps (auto-enabled whenever --usepkgonly is not
+    given, create_depgraph_params.py:196-203): real
+    _wrapped_select_pkg_highest_available_imp (depgraph.py:8288-8300)
+    rejects a *binary* candidate whose recorded *DEPEND differs from the
+    current ebuild's (self._changed_deps(binpkg) ->
+    ignored_binaries[pkg]["changed_deps"] = True; continue). Same
+    canonical use_reduce(token_class=Atom) / strip_slots / strip_libc_deps
+    comparison as _deps_changed, but the built side is this exact
+    instance's own Packages metadata (candidate["binary_deps"]),
+    use-reduced with the flags it was actually built with
+    (candidate["binary_use"]). Mirrors portage-repo/src/lib.rs's
+    binary_deps_changed."""
+    dep_keys = (
+        ("DEPEND", "RDEPEND", "BDEPEND", "PDEPEND", "IDEPEND")
+        if with_bdeps
+        else ("RDEPEND", "PDEPEND", "IDEPEND")
+    )
+    built_use = set(candidate.get("binary_use") or set())
+    binary_deps = candidate.get("binary_deps") or {}
+
+    repo_candidates = [
+        c for c in list_candidates(repos, category, package) if c["version"] == candidate["version"]
+    ]
+    if not repo_candidates:
+        return False
+    resolved = max(repo_candidates, key=lambda c: c["repo_priority"])
+    try:
+        ebuild_metadata = read_md5_cache(
+            resolved["repo_location"], category, f"{package}-{candidate['version']}"
+        )
+    except OSError:
+        return False
+
+    libc_deps = {Atom(cp) for cp in _libc_provider_cps(root)}
+
+    def reduced(depstr):
+        ds = use_reduce(depstr, uselist=built_use, token_class=Atom)
+        strip_slots(ds)
+        strip_libc_deps(ds, libc_deps)
+        return ds
+
+    built = []
+    for k in dep_keys:
+        try:
+            built.append(reduced(binary_deps.get(k, "")))
+        except InvalidDependString:
+            return True
+    unbuilt = []
+    for k in dep_keys:
+        try:
+            unbuilt.append(reduced(ebuild_metadata.get(k, "")))
+        except InvalidDependString:
+            return False
+    return built != unbuilt
+
+
 def _split_slot(raw):
     """Splits a raw SLOT string into (slot, sub_slot) -- real portage:
     SLOT="main/sub", sub_slot defaulting to the slot itself when no "/"
@@ -3352,7 +3417,23 @@ def _slot_changed(root, repos, category, package, version):
     return vdb_slot != repo_slot
 
 
-def _rebuilt_binary_changed(root, index, category, package, version, rebuilt_binaries_timestamp):
+def _best_binary_build_time(candidates, version):
+    """The highest BUILD_TIME among binary candidates (local $PKGDIR or a
+    --getbinpkg remote binhost) at exactly `version` -- what real
+    matched_packages' built_pkg.build_time would be. None if there's no
+    binary candidate for that version. Mirrors portage-repo/src/lib.rs's
+    best_binary_build_time."""
+    times = [
+        c["build_time"]
+        for c in candidates
+        if c.get("source") == "binary"
+        and c["version"] == version
+        and c.get("build_time") is not None
+    ]
+    return max(times) if times else None
+
+
+def _rebuilt_binary_changed(root, binary_build_time, category, package, version, rebuilt_binaries_timestamp):
     """--rebuilt-binaries: real depgraph.py's own reinstall trigger
     (lines ~8394-8429, confirmed by reading it) comparing a binary
     candidate's own BUILD_TIME against the already-installed package's
@@ -3378,13 +3459,9 @@ def _rebuilt_binary_changed(root, index, category, package, version, rebuilt_bin
     missing local/remote BUILD_TIME must never cause a spurious
     reinstall). Mirrors portage-repo/src/lib.rs's rebuilt_binary_changed
     exactly."""
-    binary_metadata = read_binary_metadata(index, category, package, version)
-    if binary_metadata is None:
+    if binary_build_time is None:
         return False
-    try:
-        built_timestamp = int(binary_metadata.get("BUILD_TIME", "").strip())
-    except ValueError:
-        return False
+    built_timestamp = binary_build_time
     try:
         installed_timestamp = int(_read_vdb_string(root, category, package, version, "BUILD_TIME").strip())
     except ValueError:
@@ -5440,6 +5517,7 @@ def _already_installed_or_reinstall(
     usepkgonly,
     rebuilt_binaries,
     rebuilt_binaries_timestamp,
+    binary_build_time,
     newrepo,
     empty=False,
 ):
@@ -5461,7 +5539,7 @@ def _already_installed_or_reinstall(
         root, repos, category, package, installed_best["version"]
     )
     rebuilt_binary_flag = (usepkg or usepkgonly) and rebuilt_binaries and _rebuilt_binary_changed(
-        root, _local_binpkg_index(config), category, package, installed_best["version"], rebuilt_binaries_timestamp
+        root, binary_build_time, category, package, installed_best["version"], rebuilt_binaries_timestamp
     )
     new_repo_flag = newrepo and _new_repo_changed(
         root, category, package, installed_best["version"], installed_best["repo_name"]
@@ -5691,6 +5769,17 @@ def resolve_pretend(
                 for c in binary_candidates
                 if _binpkg_respect_use_ok(c, category, package, config)
             ]
+        # --binpkg-changed-deps (auto whenever --usepkgonly is not given,
+        # create_depgraph_params.py:196-203): reject a binhost binary
+        # whose recorded *DEPEND differs from the current ebuild's
+        # (depgraph.py:8288). Explicit --binpkg-changed-deps=y|n overrides
+        # are a documented cut.
+        if not usepkgonly:
+            binary_candidates = [
+                c
+                for c in binary_candidates
+                if not _binary_deps_changed(root, repos, c, category, package, with_bdeps)
+            ]
         # binpkg-multi-instance: keep only the highest-BUILD_TIME
         # surviving build of each cpv:slot::repo (real _iter_match_pkgs
         # yields instances newest-first and the selection loop breaks on
@@ -5741,6 +5830,7 @@ def resolve_pretend(
                 usepkgonly,
                 rebuilt_binaries,
                 rebuilt_binaries_timestamp,
+                _best_binary_build_time(candidates, installed_best["version"]),
                 newrepo,
                 empty,
             )
@@ -5955,6 +6045,7 @@ def resolve_pretend(
                 usepkgonly,
                 rebuilt_binaries,
                 rebuilt_binaries_timestamp,
+                _best_binary_build_time(candidates, installed_best["version"]),
                 newrepo,
                 empty,
             )
@@ -5997,7 +6088,12 @@ def resolve_pretend(
             root, repos, category, package, best["version"]
         )
         rebuilt_binary_flag = (usepkg or usepkgonly) and rebuilt_binaries and _rebuilt_binary_changed(
-            root, config["pkgdir"], category, package, best["version"], rebuilt_binaries_timestamp
+            root,
+            _best_binary_build_time(candidates, best["version"]),
+            category,
+            package,
+            best["version"],
+            rebuilt_binaries_timestamp,
         )
         new_repo_flag = newrepo and _new_repo_changed(
             root, category, package, best["version"], best["repo_name"]
@@ -7885,6 +7981,14 @@ def resolve_pretend_graph(
                         c
                         for c in binary_candidates
                         if _binpkg_respect_use_ok(c, category, package, config)
+                    ]
+                if not usepkgonly:
+                    binary_candidates = [
+                        c
+                        for c in binary_candidates
+                        if not _binary_deps_changed(
+                            root, repos, c, category, package, with_bdeps
+                        )
                     ]
                 binary_candidates = _dedup_binary_instances(binary_candidates, atom, config)
                 repo_candidates = repo_candidates + _filter_usepkg_exclude_include(

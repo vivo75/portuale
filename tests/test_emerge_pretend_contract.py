@@ -1003,6 +1003,16 @@ CASES = [
         0,
     ),
     (
+        "--getbinpkg: --binpkg-changed-deps (auto) rejects a binary built against a since-changed ebuild",
+        ["--pretend", "--getbinpkg", "dev-libs/bcdeppkg"],
+        0,
+    ),
+    (
+        "no --getbinpkg: the same package resolves to its ebuild anyway",
+        ["--pretend", "dev-libs/bcdeppkg"],
+        0,
+    ),
+    (
         "--newrepo: off by default, stays already-installed",
         ["--pretend", "--selective", "dev-libs/newrepopkg"],
         0,
@@ -4441,6 +4451,28 @@ def test_getbinpkg_slot_repo_decoration_on_a_remote_binary_line(
         '',
         'Total: 1 package (1 new, 1 binary), Size of downloads: 1024 KiB',
     ]
+
+
+def test_getbinpkg_binpkg_changed_deps_rejects_a_stale_binary(
+    emerge_binary, emerge_pretend_python, fixture_env
+):
+    """--binpkg-changed-deps auto-enables whenever --usepkgonly is not
+    given (create_depgraph_params.py:196-203). dev-libs/bcdeppkg's tree
+    ebuild RDEPENDs dev-libs/bcdepnew, but the binhost binary was built
+    RDEPENDing dev-libs/bcdepold. Real _wrapped_select_pkg... rejects the
+    binary (self._changed_deps) and falls to the ebuild, so the resolve
+    is `[ebuild N] bcdeppkg` + `[ebuild N] bcdepnew` -- never the binary,
+    never bcdepold."""
+    args = ["--pretend", "--getbinpkg", "dev-libs/bcdeppkg"]
+    rust = _run([str(emerge_binary)], args, fixture_env)
+    py = _run(emerge_pretend_python, args, fixture_env)
+    assert rust.returncode == 0, (rust.stdout, rust.stderr)
+    assert rust.stdout == py.stdout
+    assert set(rust.stdout.splitlines()) == {
+        "[ebuild  N     ] dev-libs/bcdeppkg-1.0 ",
+        "[ebuild  N     ] dev-libs/bcdepnew-1.0 ",
+    }
+    assert "bcdepold" not in rust.stdout
 
 
 def test_getbinpkg_multi_instance_newest_build_time_wins(
