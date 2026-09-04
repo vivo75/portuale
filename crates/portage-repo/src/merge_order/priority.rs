@@ -239,12 +239,56 @@ pub(crate) enum Ignore {
     SRuntime,
 }
 
+impl Ignore {
+    /// Whether the filter drops an edge with priority `p`.
+    pub(crate) fn ignores(self, p: &DepPriority) -> bool {
+        match self {
+            Self::NOptional => n_ignore_optional(p),
+            Self::NRuntimePost => n_ignore_runtime_post(p),
+            Self::NRuntime => n_ignore_runtime(p),
+            Self::SOptional => s_ignore_optional(p),
+            Self::SSatisfiedRuntimePost => s_ignore_satisfied_runtime_post(p),
+            Self::SRuntimePost => s_ignore_runtime_post(p),
+            Self::SSatisfiedRuntime => s_ignore_satisfied_runtime(p),
+            Self::SSatisfiedBuildtime => s_ignore_satisfied_buildtime(p),
+            Self::SSatisfiedBuildtimeSlotOp => s_ignore_satisfied_buildtime_slot_op(p),
+            Self::SRuntime => s_ignore_runtime(p),
+        }
+    }
+
+    /// Portage's `ignore_priority.__name__`.
+    pub(crate) fn name(self) -> &'static str {
+        match self {
+            Self::NOptional => "ignore_optional",
+            Self::NRuntimePost => "ignore_runtime_post",
+            Self::NRuntime => "ignore_runtime",
+            Self::SOptional => "ignore_optional",
+            Self::SSatisfiedRuntimePost => "ignore_satisfied_runtime_post",
+            Self::SRuntimePost => "ignore_runtime_post",
+            Self::SSatisfiedRuntime => "ignore_satisfied_runtime",
+            Self::SSatisfiedBuildtime => "ignore_satisfied_buildtime",
+            Self::SSatisfiedBuildtimeSlotOp => "ignore_satisfied_buildtime_slot_op",
+            Self::SRuntime => "ignore_runtime",
+        }
+    }
+}
+
+// `_emerge/DepPriorityNormalRange.py`.
+pub(crate) fn n_ignore_optional(p: &DepPriority) -> bool {
+    p.optional
+}
+
 pub(crate) fn n_ignore_runtime_post(p: &DepPriority) -> bool {
     p.optional || p.runtime_post
 }
 
 pub(crate) fn n_ignore_runtime(p: &DepPriority) -> bool {
     !p.runtime_slot_op && (p.optional || !p.buildtime)
+}
+
+// `_emerge/DepPrioritySatisfiedRange.py`.
+pub(crate) fn s_ignore_optional(p: &DepPriority) -> bool {
+    p.optional
 }
 
 pub(crate) fn s_ignore_satisfied_runtime_post(p: &DepPriority) -> bool {

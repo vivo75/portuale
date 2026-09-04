@@ -16,7 +16,9 @@
 use std::cmp::Reverse;
 
 mod alt_edges;
+mod build;
 mod debug;
+mod digraph;
 mod installed_closure;
 mod prelude;
 mod priority;
@@ -26,7 +28,9 @@ mod replay;
 mod tests;
 
 pub use alt_edges::*;
+pub(crate) use build::*;
 pub(crate) use debug::*;
+pub(crate) use digraph::*;
 pub use installed_closure::*;
 pub(crate) use prelude::*;
 pub use priority::*;
