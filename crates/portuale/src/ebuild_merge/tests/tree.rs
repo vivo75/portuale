@@ -81,6 +81,56 @@ fn merge_tree_copies_files_dirs_and_symlinks_and_writes_matching_contents() {
     assert!(contents.contains("sym /usr/share/x/link.txt -> hello.txt"));
 }
 
+/// A symlink replacement uses the same atomic rename path and stays a symlink.
+#[test]
+fn merge_tree_replaces_a_symlink_without_temporaries() {
+    let tmp = tempdir();
+    let d = tmp.join("D");
+    let root = tmp.join("ROOT");
+    std::fs::create_dir_all(d.join("usr/lib")).unwrap();
+    std::fs::create_dir_all(root.join("usr/lib")).unwrap();
+    std::fs::write(root.join("usr/lib/libx.so.1"), b"lib").unwrap();
+    std::fs::write(d.join("usr/lib/libx.so.1"), b"lib").unwrap();
+    std::os::unix::fs::symlink("libx.so.0", root.join("usr/lib/libx.so")).unwrap();
+    std::os::unix::fs::symlink("libx.so.1", d.join("usr/lib/libx.so")).unwrap();
+
+    let mut cfgfiledict = BTreeMap::new();
+    merge_tree(MergeTreeArgs {
+        d: &d,
+        root: &root,
+        category: "sys-libs",
+        installed_instance_pf: None,
+        protect_if_modified: false,
+        config_protect: "/etc",
+        config_protect_mask: "/etc/env.d",
+        noconfmem: false,
+        cfgfiledict: &mut cfgfiledict,
+        xattrs: &XattrPolicy::default(),
+    })
+    .expect("merge_tree succeeds");
+
+    assert_eq!(
+        std::fs::read_link(root.join("usr/lib/libx.so")).unwrap(),
+        PathBuf::from("libx.so.1")
+    );
+    assert!(
+        std::fs::symlink_metadata(root.join("usr/lib/libx.so"))
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+    let leftovers: Vec<String> = std::fs::read_dir(root.join("usr/lib"))
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().to_string())
+        .filter(|n| n.contains("_portage_merge_"))
+        .collect();
+    assert!(
+        leftovers.is_empty(),
+        "no merge temporary may remain: {leftovers:?}"
+    );
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
 #[test]
 fn merge_tree_preserves_ownership_from_the_source_when_root() {
     // The destination takes the source's uid/gid (Portage's movefile/mergeme).
