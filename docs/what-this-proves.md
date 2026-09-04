@@ -13286,3 +13286,108 @@ confirming Linux's actual default is to inherit. Investigated,
 confirmed a non-issue for portuale's own architecture, and documented
 as such rather than either building a needless workaround or leaving
 the question unresolved.
+
+### Resolver backlog -- five points, three shapes of "done" (2026-09-05)
+
+Asked to implement "A. Resolver" (`docs/scope-backlog.md`), excluding
+the already-documented `--root-deps` non-goal, one commit per point.
+Unlike the sections closed the prior day (binary packages, sandbox,
+scheduler -- five or six genuinely tractable points apiece), this
+section split three ways: two points were real, bounded, dual-language
+features; one point needed a narrow fixture gap closed in already-
+correct code; two points, on investigation, turned out to be the same
+kind of deliberately-deferred architectural gap the section's own
+"Merge-list order" entry had already established a precedent for.
+
+**Bare command-line names, remaining shape.** Real `ambiguous_package_
+name`'s one call site (`depgraph.py:5318`) only takes the terse `!!!
+... one of the following ...` + sorted-list form under `--quiet`.
+Without it, real builds a `search` seeded via `addCP()` per candidate
+(so `_iter_search()`'s `"Searching...\n\n"` line never fires --
+`_results_specified` short-circuits it) and calls `search.output()`
+with `verbose=True` unconditionally in this branch: a `[ Results for
+search key : ... ]` header, one `* cat/pkg` block per match with
+Latest-version/installed-status/Homepage/Description/License, a `[
+Applications found : N ]` footer, then the `!!! ... one of the above
+...` trailer (different wording from the `--quiet` form, no leading
+blank line). Portuale previously emitted the terse form regardless of
+`--quiet`. Turned out to be far smaller than it looked: portuale's own
+pre-existing `emerge --search` implementation already had
+`search_best_candidate`/`search_candidate_visible` built and tested,
+so this was mostly extraction into a new small render function rather
+than new machinery. Both languages, full contract coverage including
+the previously-untested `--quiet` path.
+
+**`package.provided` depclean corner.** Real `_calc_depclean`/`_calc_
+prune` run the *full* depgraph resolver, which intercepts `package.
+provided` before ever creating a graph node: a `@world`/`@system` seed
+atom it covers never becomes a root (`_resolve`'s per-arg loop,
+`depgraph.py:5497-5503`, run *before* `_add_pkg`/`_select_package`),
+and a dependency atom it covers never gets an edge to a literal
+installed provider (`dep_check.py:1052` area) -- both matching the
+real `-pc` advisory's own "will be removed by depclean, even if they
+are part of the world set" wording verbatim. `portage-repo`'s
+`depclean_cleanlist`/`prune_cleanlist` are a separate, simplified BFS
+that never consulted `package.provided` at all, so a genuinely-
+installed provided CPV that was also a world member (or reachable only
+through a dependency edge `package.provided` also covered) was wrongly
+kept, and `unresolved_runtime_deps` could spuriously trip the "not
+being installed" safety halt for a dependency satisfied only via
+`package.provided` (no literal vdb entry). Fixed with the same
+`match_from_list`-against-`config.package_provided` check the main
+resolver's own `pprovided_refs` logic already performs, threaded
+through both cleanlist builders' root-seeding and dependency-walk
+loops plus the unresolved-deps check. New coverage at both layers: two
+`portage-repo` unit tests (isolated root/dependency interception, and
+the unresolved-halt suppression) and two contract tests reusing the
+existing `fixtures/repo/profiles/default/package.provided` fixture
+through the real CLI.
+
+**Circular-dep's grandparent-atom conflict path.** Not a missing
+feature -- `grandparent_use_conflict` (ported during the 2026-09-03
+find-suggestions work) was already correct, just never exercised by
+any fixture. New three-package cycle (`gpcyclea`/`gpcycleb`/`gpcyclec`,
+same USE-gated shape as the existing `usecyclea`/`usecycleb` pair, plus
+a "grandparent" that build-depends on `gpcyclea[x]` with a *hard*
+use-dep) drives the disqualification branch: the otherwise-viable
+"disable x" fix would violate the grandparent's own hard requirement,
+so real -- and, confirmed byte-identical, portuale -- falls back to the
+generic advisory instead of a specific `Change USE:` suggestion. No
+logic changed; only the gap in test coverage closed.
+
+**The two deferrals, and why they earned that treatment rather than an
+attempt.** "Slot-operator rebuild v1 cuts" turned out to be one
+architectural gap wearing four listed faces: real's slot-operator
+machinery is a *reconciliation* (`_slot_operator_update_probe`/`_
+backtrack`/`_check_reverse_dependencies`/`_unsatisfied_probe`/`_
+unsatisfied_backtrack`/`_trigger_reinstalls`, `depgraph.py:2400-3200`)
+that tentatively schedules a rebuild and can *undo* it later; `--
+changed-slot`'s only contact with that family is a `continue` inside
+the undo path (`depgraph.py:3898-3899`) that skips undoing when the
+package's own `SLOT` is independently stale. `slot_operator_rebuild_
+entries`'s fixpoint has no undo path at all -- it only ever adds to
+`scheduled` -- so "single-pass" and "no `--changed-slot` interaction"
+are the same missing piece, not two, and building it is the same shape
+of investment the "Merge-list order" full-tree-walk deferral already
+declined: real risk to a well-tested fixpoint, no concrete fixture
+demanding it. The remaining backtracking cluster (the slot-collision
+notice's `pkg_use_display`/`use`-`soname` reason keys/colorization/
+`need_rebuild` trailer, and circular-dep's `--tree` re-display / full
+elementary-cycle enumeration) turned out the same way on inspection --
+each needs new plumbing or a genuinely different graph representation,
+none of it changes an actual resolver *decision*, only how thoroughly
+a diagnostic explains one. One finding from that pass is worth keeping
+regardless of whether the feature ever gets built: real's own
+`highlight_violations` (`slot_collision.py:516-610`) colorizes an atom
+string *before* measuring where to put the `^` marker line under it,
+so the marker silently drifts out of alignment with the visible text
+whenever `--verbose-conflicts --color y` actually colors something --
+a genuine upstream bug, not a design choice a from-scratch port would
+naturally reproduce without being told to look for it.
+
+Both deferrals were investigated fresh (not just re-asserted) against
+current real source, with method-name and line-range citations added
+to `scope-backlog.md` so a future implementer inherits the trail
+instead of re-deriving it. Full contract suite green throughout (933 ->
+936 across the section), `portuale` and `portage-repo` unit suites
+green, `cargo fmt`/`clippy` clean at every commit.
