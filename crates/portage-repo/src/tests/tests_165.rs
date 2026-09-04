@@ -130,6 +130,22 @@ fn topological_removal_order_follows_a_cross_category_edge() {
     );
     let _ = std::fs::remove_dir_all(&root);
 }
+
+/// The highest-version guard does not depend on scan order (sorted
+/// readdir or creation order): 10.0 is kept over 9.0 either way.
+/// Portage comparison is order-independent.
+#[test]
+fn prune_cleanlist_protects_the_highest_regardless_of_install_order() {
+    let root = dir_165("prune-reverse-order");
+    install_165(&root, "dev-libs", "aa-10.0", "0", &[]);
+    install_165(&root, "dev-libs", "aa-9.0", "0", &[]);
+    let result = prune_cleanlist(&root, &[], &[], &[]);
+    assert_eq!(
+        result.cleanlist.iter().map(|p| p.cpv()).collect::<Vec<_>>(),
+        vec!["dev-libs/aa-9.0"]
+    );
+    let _ = std::fs::remove_dir_all(&root);
+}
 /// Arguments of [`pending_165`].
 struct Pending165Args<'a> {
     atom: &'a str,
