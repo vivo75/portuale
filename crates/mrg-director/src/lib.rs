@@ -211,6 +211,26 @@ pub struct MergeUnit {
     pub progress: MergeProgress,
 }
 
+impl MergeUnit {
+    /// A source-build unit for `cpv` into `root` (no replace, local,
+    /// unqualified -- the common case).
+    pub fn source(cpv: &str, root: &Path) -> Self {
+        Self {
+            cpv: cpv.to_string(),
+            kind: MergeKind::Source,
+            repo: None,
+            root: root.to_path_buf(),
+            replaces_same_slot: None,
+            remote_binary: false,
+            build_id: None,
+            slot: None,
+            sub_slot: None,
+            use_flags: Vec::new(),
+            progress: MergeProgress::single(),
+        }
+    }
+}
+
 /// The execution context a merge engine runs under: Portage
 /// `_emerge/Scheduler.py`'s two knobs (`--jobs`, `--keep-going`) plus the
 /// paths the merge writes to. Deliberately coarse.
