@@ -4355,15 +4355,24 @@ def test_binrepos_conf_is_read_as_a_directory_of_fragments(
         ), (pkg, rust.stdout)
 
 
-def test_pkgdir_scan_is_skipped_when_a_packages_index_is_present(
+def test_pkgdir_scan_finds_both_indexed_and_loose_binpkgs(
     emerge_binary, fixture_env
 ):
-    """Regression guard: the committed fixtures/pkgdir HAS both a
-    `Packages` index AND the two loose binpkg fixture files. The scan
-    must NOT run there -- `--usepkg` resolution stays driven by the
-    `Packages` index alone (`dev-libs/binaryonlypkg` is only in the
-    index; `dev-libs/packagepkg`/`gpkgreadpkg` are only loose files and
-    must stay invisible)."""
+    """Real `bintree._populate_local`'s own default (`reindex=True`
+    unless `FEATURES=pkgdir-index-trusted`, a real *non-default* opt-in
+    -- `bintree.py:936-937`): every run walks `$PKGDIR` for real, real
+    portage never just trusts a present `Packages` index outright. An
+    index entry whose own `_mtime_`/`SIZE` still agree with the real
+    file on disk is reused verbatim (a real perf optimization, not a
+    "skip the walk" one -- see `binpkg::populate_local_pkgdir`'s own
+    doc comment and its own dedicated Rust unit test for that fast
+    path); a file the walk finds with NO matching index entry at all
+    (`dev-libs/gpkgreadpkg`, a loose fixture `.gpkg.tar`) is still
+    discovered and injected via a fresh parse of its own embedded
+    metadata -- exactly like a bare directory scan with no `Packages`
+    file at all would. The committed `fixtures/pkgdir` HAS both a
+    `Packages` index (`dev-libs/binaryonlypkg`, among others) and loose
+    binpkg files (`dev-libs/gpkgreadpkg`) -- both kinds are visible."""
     idx = _run(
         [str(emerge_binary)], ["--pretend", "--usepkgonly", "dev-libs/binaryonlypkg"], fixture_env
     )
@@ -4373,8 +4382,10 @@ def test_pkgdir_scan_is_skipped_when_a_packages_index_is_present(
     loose = _run(
         [str(emerge_binary)], ["--pretend", "--usepkgonly", "dev-libs/gpkgreadpkg"], fixture_env
     )
-    assert loose.returncode == 1
-    assert 'no ebuilds to satisfy "dev-libs/gpkgreadpkg"' in loose.stderr
+    assert loose.returncode == 0
+    assert loose.stdout.splitlines() == [
+        '[binary  N     ] dev-libs/gpkgreadpkg-1.0  USE="-grfoo"'
+    ]
 
 
 def test_getbinpkg_makes_a_remote_binhost_binary_eligible(

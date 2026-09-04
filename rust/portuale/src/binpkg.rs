@@ -1266,11 +1266,13 @@ mod tests {
 
     #[test]
     fn populate_local_pkgdir_synthesizes_a_packages_style_entry_per_binpkg_file() {
-        // fixtures/pkgdir/dev-libs/ holds both a real `.tbz2` and a real
-        // `.gpkg.tar` (the increment-1/2 fixtures), no `Packages` file --
-        // `populate_local_pkgdir` freshly parses every entry, the same
-        // "no trusted index" shape real `_populate_local` starts cold
-        // with.
+        // fixtures/pkgdir/dev-libs/ holds a real `.tbz2` and a real
+        // `.gpkg.tar` (among other loose binpkgs) plus an index-only
+        // `Packages` file (fixtures/pkgdir/Packages) covering unrelated
+        // CPVs. `populate_local_pkgdir` walks the directory unconditionally
+        // (real `_populate_local`'s default `reindex=True`), so entries
+        // for these two files are always freshly parsed from disk
+        // regardless of what the index claims.
         let entries = populate_local_pkgdir(&fixture("pkgdir")).expect("scan succeeds");
         let by_cpv: HashMap<&str, &HashMap<String, String>> = entries
             .iter()
