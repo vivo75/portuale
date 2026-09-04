@@ -2,6 +2,7 @@
 
 use crate::*;
 use std::ops::ControlFlow;
+mod candidate_pool;
 mod enqueue_deps;
 mod entry_fetch;
 mod entry_use_display;
@@ -16,6 +17,7 @@ mod prepare_atom;
 mod resolve_outcome;
 mod seed_queue;
 mod unresolved_dep;
+pub(crate) use candidate_pool::*;
 pub(crate) use enqueue_deps::*;
 pub(crate) use entry_fetch::*;
 pub(crate) use entry_use_display::*;
