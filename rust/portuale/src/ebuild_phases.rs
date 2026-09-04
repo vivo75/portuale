@@ -121,11 +121,23 @@
 //       --make-rslave /` inside (real `_exec2`). `FEATURES=pid-sandbox`
 //       -> `unshare --pid --fork --mount-proc` (real `CLONE_NEWPID` +
 //       `pid-ns-init`; `--fork` stands in for the full init).
-//     * Cuts: `RESTRICT=network-sandbox` / `PROPERTIES=live` (unpack) /
-//       `PROPERTIES=test_network` (test) exemptions (the phase env
-//       carries no USE-reduced `RESTRICT`/`PROPERTIES`); SELinux
-//       sandbox; `userpriv` / `fakeroot` (single-user dev/test
-//       context); and, unlike real portage (which only unshares when
+//     * `RESTRICT=network-sandbox` / `PROPERTIES=live` (unpack) /
+//       `PROPERTIES=test_network` (test) exemptions ARE real now
+//       (`phase_isolation`'s own doc comment) -- the phase env carries
+//       USE-reduced `PORTAGE_RESTRICT`/`PORTAGE_PROPERTIES` too
+//       (`restrict_and_properties`), the same real `doebuild_environment`
+//       always sets, for real bash's own direct consumption
+//       (`RESTRICT=test`/`RESTRICT=nostrip`/`RESTRICT=strip` skips).
+//     * Cuts: SELinux sandbox (a kernel LSM feature with no meaning
+//       outside a real SELinux-enabled host -- unlike the rest of this
+//       set, there is no reasonable degrade to model, only a real
+//       `libselinux`/policy dependency this scope has no use for);
+//       `userpriv` / `fakeroot` -- these exist in real portage
+//       specifically to drop privileges *from* an already-root process;
+//       portuale never assumes root to begin with (see `ebuild_merge.rs`'s
+//       own `os.lchown` cut, which needs root for the same reason), so
+//       there's no privilege to drop and nothing for either feature to
+//       do here; and, unlike real portage (which only unshares when
 //       `uid == 0`), portuale always uses `--map-root-user` so it
 //       works non-root -- an unavailable user namespace degrades with a
 //       warning (real "Unable to unshare").
@@ -677,7 +689,7 @@ pub(crate) fn repo_root_for(pkg_dir: &Path) -> Option<PathBuf> {
 /// unconditional `mirror`/`nomirror` counts. An unparsable value yields
 /// `false` (the "can't tell, so don't claim it" precedent).
 pub(crate) fn restrict_mirror_from_restrict(restrict: &str) -> bool {
-    restrict_has_token(restrict, &["mirror", "nomirror"])
+    flat_field_has_token(restrict, &["mirror", "nomirror"])
 }
 
 /// Real `RESTRICT=fetch` (`fetch.py:1061`, `restrict_fetch = "fetch" in
@@ -686,14 +698,22 @@ pub(crate) fn restrict_mirror_from_restrict(restrict: &str) -> bool {
 /// and public-`GENTOO_MIRRORS` candidates in
 /// `crate::fetch::fetch_src_uri` (see `FetchOptions::restrict_fetch`).
 pub(crate) fn restrict_fetch_from_restrict(restrict: &str) -> bool {
-    restrict_has_token(restrict, &["fetch"])
+    flat_field_has_token(restrict, &["fetch"])
 }
 
-fn restrict_has_token(restrict: &str, wanted: &[&str]) -> bool {
-    if restrict.trim().is_empty() {
+/// USE-conditional-evaluates a raw md5-cache `RESTRICT`/`PROPERTIES`
+/// value (real `_PackageMetadataWrapper`'s own `use_reduce` pass)
+/// against portuale's own always-empty phase-side USE set (see
+/// `restrict_and_properties`'s own doc comment for why), then checks
+/// whether any of `wanted` survived. Shared by every `RESTRICT`/
+/// `PROPERTIES` single-token check in this module -- the field doesn't
+/// matter to the tokenizing/reducing/matching logic itself, only to the
+/// caller's own choice of `wanted`.
+fn flat_field_has_token(raw: &str, wanted: &[&str]) -> bool {
+    if raw.trim().is_empty() {
         return false;
     }
-    let tokens: Vec<String> = restrict.split_whitespace().map(String::from).collect();
+    let tokens: Vec<String> = raw.split_whitespace().map(String::from).collect();
     portage_use_reduce::use_reduce_flat(
         &tokens,
         &std::collections::HashSet::new(),
@@ -701,6 +721,57 @@ fn restrict_has_token(restrict: &str, wanted: &[&str]) -> bool {
     )
     .map(|flat| flat.iter().any(|t| wanted.contains(&t.as_str())))
     .unwrap_or(false)
+}
+
+/// USE-conditional-evaluates a raw `RESTRICT`/`PROPERTIES` value the
+/// same way `flat_field_has_token` does, but returns the whole flattened
+/// token list joined back into a plain-text string -- real portage's
+/// own `PORTAGE_RESTRICT`/`PORTAGE_PROPERTIES` env vars carry exactly
+/// this shape (`doebuild_environment()`'s own `str(self._pkg.restrict)`/
+/// `str(self._pkg.properties)`, both already USE-reduced `_pkg`
+/// accessors -- real bash's own `contains_word … "${PORTAGE_RESTRICT}"`
+/// checks, e.g. `phase-functions.sh:549`'s `RESTRICT=test` skip and
+/// `:777`'s `RESTRICT=nostrip`/`RESTRICT=strip`, consume the reduced
+/// form, not the raw ebuild one). An unparsable value degrades to `""`,
+/// the same "can't tell, so don't claim it" precedent
+/// `flat_field_has_token` already uses.
+fn flat_field(raw: &str) -> String {
+    if raw.trim().is_empty() {
+        return String::new();
+    }
+    let tokens: Vec<String> = raw.split_whitespace().map(String::from).collect();
+    portage_use_reduce::use_reduce_flat(
+        &tokens,
+        &std::collections::HashSet::new(),
+        portage_use_reduce::MatchMode::Normal,
+    )
+    .map(|flat| flat.join(" "))
+    .unwrap_or_default()
+}
+
+/// Real `PORTAGE_RESTRICT`/`PORTAGE_PROPERTIES` (`doebuild_environment()`
+/// sets both, unconditionally, for every phase): the ebuild's own
+/// `RESTRICT`/`PROPERTIES` metadata, USE-reduced. Read from the same
+/// repo's own `metadata/md5-cache` entry `fetch_sources`'s own `RESTRICT`
+/// read already trusts, against portuale's own always-empty phase-side
+/// USE set -- no resolved graph reaches a standalone `ebuild <file>
+/// <phase>`, and `entry_build_env`'s own resolved USE (an `emerge -b`
+/// build) doesn't reach this deep yet either (see this module's own
+/// "KNOWN, DOCUMENTED GAPS"). `("", "")` outside any repo checkout,
+/// matching `repo_root_for`'s own established tolerance.
+fn restrict_and_properties(env: &Environment) -> (String, String) {
+    let Some(repo_root) = repo_root_for(&env.pkg_dir) else {
+        return (String::new(), String::new());
+    };
+    let metadata = portage_repo::read_md5_cache(&repo_root, &env.category, &env.split.pf).ok();
+    let get = |key: &str| {
+        metadata
+            .as_ref()
+            .and_then(|m| m.get(key))
+            .map(String::as_str)
+            .unwrap_or("")
+    };
+    (flat_field(get("RESTRICT")), flat_field(get("PROPERTIES")))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1033,6 +1104,26 @@ fn network_sandbox_requested() -> bool {
     feature_token_present("network-sandbox")
 }
 
+/// Real `_doebuild_spawn`'s own `networked` exemption formula
+/// (`doebuild.py:241-251`), the half of `phase_isolation`'s own
+/// network-unshare decision that doesn't depend on `FEATURES` itself
+/// (that part is `network_sandbox_requested()`, a process-env read
+/// tests can't safely mutate in parallel -- see `run_commands`'s own
+/// doc comment) -- kept as its own pure function purely so it can be
+/// unit-tested directly. `restrict`/`properties` are already
+/// USE-reduced flat token strings (`restrict_and_properties`). `true`
+/// when: `phase == "unpack"` and the ebuild's own `PROPERTIES` says
+/// `live` (a live/VCS package's checkout step needs the network by
+/// definition); `phase == "test"` and `PROPERTIES` says `test_network`
+/// (an ebuild that declares its own test suite needs network access);
+/// or the ebuild's own `RESTRICT` says `network-sandbox` (an explicit
+/// per-package opt-out of the whole feature, regardless of phase).
+fn network_sandbox_exempt(phase: &str, restrict: &str, properties: &str) -> bool {
+    (phase == "unpack" && flat_field_has_token(properties, &["live"]))
+        || (phase == "test" && flat_field_has_token(properties, &["test_network"]))
+        || flat_field_has_token(restrict, &["network-sandbox"])
+}
+
 /// `FEATURES=sandbox` or `FEATURES=usersandbox` present -- real
 /// `_spawn`'s own `"sandbox" not in features and "usersandbox" not in
 /// features` gate. (Portuale does no `userpriv`, so `sandbox` and
@@ -1175,13 +1266,33 @@ fn unshare_combo_usable(flags: &[&str]) -> bool {
 /// `_doebuild_spawn`. Only the `src_*` phases (`SANDBOXED_SRC_PHASES`)
 /// are wrapped; a requested-but-unusable `unshare` combination degrades
 /// to no unshare with one warning (real "Unable to unshare").
-fn phase_isolation(phase: &str) -> Isolation {
+///
+/// `net` also carries real `_doebuild_spawn`'s own `networked` exemption
+/// formula (`doebuild.py:241-251`): `FEATURES=network-sandbox` is
+/// requested but this call still isn't network-unshared when `phase ==
+/// "unpack"` and the ebuild's own `PROPERTIES` says `live` (a live/VCS
+/// package's checkout step needs the network by definition), when
+/// `phase == "test"` and `PROPERTIES` says `test_network` (an ebuild
+/// that declares its own test suite needs network access), or when the
+/// ebuild's own `RESTRICT` says `network-sandbox` (an explicit ebuild
+/// opt-out of the whole feature, regardless of phase). `_ipc_phases`
+/// (`setup`/`pretend`/`config`/`info`/`pre|postinst`/`pre|postrm`) is
+/// real's own third exemption clause, but every one of those is already
+/// outside `SANDBOXED_SRC_PHASES` here, so it never needs its own check.
+fn phase_isolation(env: &Environment, phase: &str) -> Isolation {
     use std::sync::OnceLock;
     if !SANDBOXED_SRC_PHASES.contains(&phase) {
         return Isolation::default();
     }
+    let mut net = network_sandbox_requested();
+    if net {
+        let (restrict, properties) = restrict_and_properties(env);
+        if network_sandbox_exempt(phase, &restrict, &properties) {
+            net = false;
+        }
+    }
     let mut iso = Isolation {
-        net: network_sandbox_requested(),
+        net,
         ipc: feature_token_present("ipc-sandbox"),
         mount: feature_token_present("mount-sandbox"),
         pid: feature_token_present("pid-sandbox"),
@@ -1436,6 +1547,22 @@ fn phase_env_vars(
         ("EBUILD_PHASE".to_string(), ebuild_phase_value.to_string()),
     ];
 
+    // Real `doebuild_environment()`: `PORTAGE_RESTRICT`/
+    // `PORTAGE_PROPERTIES` are set for every phase, always, from the
+    // package's own already-USE-reduced `RESTRICT`/`PROPERTIES` (real
+    // `str(self._pkg.restrict)`/`str(self._pkg.properties)`). Real bash
+    // consults these directly -- `phase-functions.sh:549`'s own
+    // `RESTRICT=test` skip, `:777`'s `RESTRICT=nostrip`/
+    // `RESTRICT=strip` -- rather than re-deriving them from `RESTRICT`/
+    // `PROPERTIES` itself, which portuale's own phase env never exports
+    // at all (only the ebuild's own bash sees the raw, unreduced values,
+    // via its own sourced metadata). See `restrict_and_properties`'s own
+    // doc comment for the exact real source and portuale's own
+    // USE-reduction narrowing.
+    let (restrict, properties) = restrict_and_properties(env);
+    vars.push(("PORTAGE_RESTRICT".to_string(), restrict));
+    vars.push(("PORTAGE_PROPERTIES".to_string(), properties));
+
     // Real `INHERITED` (`porttree.py:872`): exported into every phase so
     // that when a non-`depend` phase re-sources the ebuild,
     // `bin/ebuild.sh`'s `__INHERITED_QA_CACHE=${INHERITED}` snapshot (then
@@ -1547,7 +1674,7 @@ async fn run_one_phase(
     // LD_PRELOAD `libsandbox.so` can confine the in-process `Brush`
     // interpreter without taking the whole `portuale` process with it.
     // See this module's own doc comment.
-    let iso = phase_isolation(phase);
+    let iso = phase_isolation(env, phase);
     let effective_shell = if iso.any() { ShellBackend::Bash } else { shell };
 
     match effective_shell {
@@ -2461,6 +2588,67 @@ mod tests {
         assert!(!restrict_fetch_from_restrict("mirror strip"));
         // USE-conditional drops against the always-empty fetch-side USE
         assert!(!restrict_fetch_from_restrict("foo? ( fetch )"));
+    }
+
+    #[test]
+    fn network_sandbox_exempt_matches_real_doebuild_spawns_own_formula() {
+        // PROPERTIES=live only exempts the unpack phase.
+        assert!(network_sandbox_exempt("unpack", "", "live"));
+        assert!(!network_sandbox_exempt("compile", "", "live"));
+        assert!(!network_sandbox_exempt("test", "", "live"));
+
+        // PROPERTIES=test_network only exempts the test phase.
+        assert!(network_sandbox_exempt("test", "", "test_network"));
+        assert!(!network_sandbox_exempt("unpack", "", "test_network"));
+
+        // RESTRICT=network-sandbox exempts every phase.
+        assert!(network_sandbox_exempt("unpack", "network-sandbox", ""));
+        assert!(network_sandbox_exempt("compile", "network-sandbox", ""));
+        assert!(network_sandbox_exempt("test", "network-sandbox", ""));
+
+        // None of the three -> not exempt.
+        assert!(!network_sandbox_exempt("unpack", "", ""));
+        assert!(!network_sandbox_exempt("test", "", ""));
+
+        // USE-conditional groups already dropped by the time these
+        // strings arrive (restrict_and_properties's own job) -- a raw
+        // conditional token string is simply never matched.
+        assert!(!network_sandbox_exempt("unpack", "", "foo? ( live )"));
+    }
+
+    #[test]
+    fn restrict_and_properties_reads_and_use_reduces_the_real_md5_cache_entry() {
+        let repo_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/repo");
+        let portage_tmpdir = std::env::temp_dir().join(format!(
+            "ebuild-phases-test-{}-restrict_and_properties_reads_real_md5_cache",
+            std::process::id()
+        ));
+        let env = compute_environment(
+            &repo_root.join("dev-libs/propertiespkg/propertiespkg-1.0.ebuild"),
+            &portage_tmpdir,
+        )
+        .expect("real fixture parses");
+        let (restrict, properties) = restrict_and_properties(&env);
+        assert_eq!(restrict, "");
+        assert_eq!(properties, "live");
+    }
+
+    #[test]
+    fn restrict_and_properties_is_empty_outside_any_repo_checkout() {
+        let tmp = std::env::temp_dir().join(format!(
+            "ebuild-phases-test-{}-restrict_and_properties_outside_repo",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&tmp);
+        let pkg_dir = tmp.join("standalone");
+        std::fs::create_dir_all(&pkg_dir).unwrap();
+        let ebuild = pkg_dir.join("standalone-1.0.ebuild");
+        std::fs::write(&ebuild, "EAPI=8\nSLOT=\"0\"\n").unwrap();
+        let env = compute_environment(&ebuild, &tmp).expect("standalone ebuild parses");
+        assert_eq!(
+            restrict_and_properties(&env),
+            (String::new(), String::new())
+        );
     }
 
     #[test]
