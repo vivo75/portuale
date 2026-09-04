@@ -12805,4 +12805,221 @@ RDEPEND before DEPEND, so `newpkg` now correctly precedes
 `portage-repo`'s full unit suite (286 tests) and the full contract suite
 (Rust==Python byte-identical) pass unchanged otherwise.
 
+### Merge-list order — `merge_order_bias`, correctly scoped this time; `gather_deps` researched (2026-09-04, later the same day)
+
+The reverted `_merge_order_bias` attempt (previous entry) is back, fixed.
+Root cause of the earlier revert, confirmed against the live system:
+`emerge -p --noreplace sys-libs/zlib app-editors/nano` (zlib already
+satisfied, nano new) prints *nothing at all* for zlib — no line, no
+notice, not even under `-v`/`--tree`/`--update`. Reading
+`_serialize_tasks` confirms why: right before `self._merge_order_bias(
+mygraph)` runs (`depgraph.py:9519`), a loop prunes every "nomerge"
+(`AlreadyInstalled`) *root* node — one with nothing depending on it —
+from `mygraph` entirely (`depgraph.py:9505-9518`, "Prune 'nomerge' root
+nodes if nothing depends on them"). A trivial top-level target never
+enters scheduling, so real's own bias comparator never runs against it
+at all. Portuale (before the 2026-09-07 removal) showed a "package is
+already installed; nothing to do" notice for a top-level
+`AlreadyInstalled`/`NoVisibleCandidate` entry — a portuale-only UX
+addition with no real precedent — and the first `_merge_order_bias`
+attempt bias-compared it against real merge tasks regardless, which is
+exactly what let an unrelated `@system` member outrank a plain requested
+package it should never have been weighed against. That notice is gone
+now (see the entry near the end of this file); a top-level
+`AlreadyInstalled` entry is simply omitted from the merge list, like
+real.
+
+Fixed by scoping the bias re-sort to *merge-bound* entries only
+(`merge_bound_cpv(entry).is_some()` — New/Upgrade/Downgrade/Reinstall,
+real's own "has an operation" test) and weaving trivial entries back
+into the resulting preference order afterward: each trivial entry is
+inserted by its own (unbiased) discovery rank relative to each
+merge-bound entry's own (also unbiased) discovery rank — i.e. bias only
+ever reorders merge-bound entries *among themselves*; a trivial entry
+never gets bias-promoted ahead of, or demoted behind, a merge-bound
+entry it wasn't already ahead of (or behind) in plain discovery order.
+This reproduces real's pruned-graph scope without portuale actually
+needing a second, separate graph representation.
+
+Caught two more bugs on the way to a clean pass:
+
+- **A missing field write.** The earlier (reverted) attempt's
+  `GraphEntry::runtime_dep_order` -- the RDEPEND/IDEPEND/PDEPEND-only
+  subset of `dep_order`, feeding `deep_system_deps`'s reachability walk
+  -- was restored on the struct and at the `AlreadyInstalled` recursion
+  site, but the *main* New/Upgrade/Downgrade/Reinstall construction site
+  only ever restored `dep_order`, never `runtime_dep_order` next to it.
+  Silent in Rust (an empty `Vec` is a valid value, not a compile error)
+  and invisible in every existing test (nothing depended on a
+  merge-bound entry's own `runtime_dep_order` before this slice) --
+  found by comparing Rust's and Python's own `is_deep_sys`/ref-count
+  debug traces for the same fixture side by side, line by line, until
+  they diverged on exactly this field.
+- **Two fixtures actually encode real, verified-live behavior, not a
+  stale expectation.** `@world`/`@world`-combined-with-an-atom: the
+  shared fixture profile's `dev-libs/newpkg`/`dev-libs/withdeps` are
+  *also* genuine `@system` members (profiles/base+default/`packages`,
+  set up for an earlier, unrelated `@system`-expansion test) -- so real's
+  own bias legitimately promotes them, and the RDEPEND chain they pull
+  in (`dev-libs/upgradepkg`), ahead of the unrelated, non-system
+  `dev-libs/innernestedsetpkg`, which now lands last despite being
+  discovered earlier. Both fixtures' expected `stdout` updated to the
+  new (Rust==Python-verified) order, with a doc-comment note explaining
+  why. A third, `test_verbose_use_order_is_enabled_first_and_
+  alphabetical_flips_it`, asserted `lines[0]` was a specific top-level
+  package's own USE line -- incidental to what the test is actually
+  about (USE-flag *display* ordering, not merge order) -- and broke for
+  the same underlying reason (one of its two top-level targets RDEPENDs,
+  conditionally, on the same shared-fixture `dev-libs/newpkg`). Changed
+  to `any(...)` content matching instead of a positional assertion,
+  which is what it should have been all along.
+
+**`gather_deps` researched, not ported.** A direct read of
+`_serialize_tasks`'s main selection loop shows `gather_deps` (and its
+`_gather_deps_closures`/`find_smallest_cycle` callers) invoked *only*
+from the `if not selected_nodes:` branch -- i.e. only once the ordinary
+priority-ranged `leaf_nodes()` scan finds nothing available at *any*
+priority level: a genuine, currently-unresolved runtime dependency
+cycle. It is not a general "cluster RDEPEND-connected packages together"
+mechanism for the ordinary acyclic scheduling path -- contradicting this
+project's own earlier guess (the previous "Merge-list order" backlog
+entry, before this research). The live `gnome-base/gnome-control-center`
+merge has no actual dependency cycle in it, so real never calls
+`gather_deps` at all while resolving it -- meaning the `net-libs/rest`/
+`net-libs/gnome-online-accounts` gap seen there has a different real
+cause, most likely `_serialize_tasks`'s own "greedily pop every
+currently-available leaf at once" batching optimization
+(`depgraph.py:9764-9777`) interacting with the ordinary priority-ranged
+scan in a way `topological_merge_order_impl`'s one-at-a-time
+`min_by_key` Kahn's walk doesn't reproduce (each pick immediately
+re-opens availability for the very next pick, where real only reopens it
+on the *next outer round*) -- not yet isolated to a minimal fixture.
+Portuale's own pre-existing cycle-breaking fallback (prefer an entry
+whose every still-unplaced dependency is a soft/run-time edge; otherwise
+emit the earliest-discovered entry) is left as the practical
+approximation for the genuine-cycle case; a full `gather_deps`/
+`find_smallest_cycle` port (smallest-cycle selection across multiple
+priority levels, `_gather_deps_closures`) is deferred to
+`docs/scope-backlog.md` until a real fixture actually needs it.
+
+Verified live against the same `gnome-base/gnome-control-center` merge:
+the previously-matching contiguous run (`x11-misc/colord` through
+`gnome-base/gnome-control-center`) still matches real exactly --
+correctly-scoped bias neither helps nor hurts that segment, since none
+of its packages are `@system`-reachable in the live profile. `portage-repo`'s
+full unit suite (286 tests) and the full contract suite (Rust==Python
+byte-identical) pass.
+
+### Merge-list order — batched leaf selection (2026-09-04, same day, third pass)
+
+The previous entry's own leading hypothesis for the remaining
+`net-libs/rest`/`net-libs/gnome-online-accounts` gcc-case gap: real
+`_serialize_tasks`' ordinary (non-cycle) selection loop doesn't pick one
+leaf at a time. Its first, strictest priority level
+(`depgraph.py:9764-9777`, `ignore_priority is None`) computes `nodes` --
+every entry that's a *genuine* leaf right now, no unplaced dependency of
+any kind -- and, in the common non-`--tree` case, sets `selected_nodes =
+nodes` ("Greedily pop all of these nodes since no relationship has been
+ignored"): the *whole* batch is emitted together, in `.order` sequence,
+before the next round even looks at what those placements just freed up.
+
+`topological_merge_order_impl` / `_topological_merge_order`'s main
+Kahn's-algorithm loop was picking one entry at a time via `min_by_key`,
+recomputing the emittable set after *every single* placement -- so a
+freshly-freed entry (one whose only remaining blocker was just placed)
+could immediately jump ahead of an already-available sibling with a
+higher discovery/bias rank that real would already have committed to
+*that same round*. Fixed: each iteration of the main loop now computes
+the whole current-round batch (every entry whose `requires` are already
+satisfied), sorts it by discovery rank, and emits the entire batch before
+recomputing -- only once a round's batch comes up empty does the walk
+fall through to the existing (unchanged) one-at-a-time cycle-breaking
+fallbacks, matching real's own drop to a looser priority level.
+
+Verified against the same live `gnome-base/gnome-control-center` merge:
+exact-position matches against real's own order went from 3/26 to 8/26
+lines (measured by comparing each line's package name at its own
+position), including the first three lines now matching exactly, and
+`net-libs/rest`/`net-libs/gnome-online-accounts` both moved substantially
+earlier (though not yet to their exact real positions) -- confirming the
+batching hypothesis was a genuine, real-grounded contributor to the gap,
+not the whole story. Rust and Python verified byte-identical on this
+exact live command (`emerge -p --getbinpkg=y gnome-base/gnome-control-
+center` piped through both binaries, diffed).
+
+Two more fixtures needed their expected order updated for the same
+reason as the previous entry's two: `dev-libs/upgradepkg` and
+`dev-libs/innernestedsetpkg` are both genuine leaves (no dependency of
+their own) available from round one in the `@world`/`@system`-membership
+fixtures, so they're now batched into that first round together with
+`dev-libs/newpkg`/the trivial entries -- ahead of `dev-libs/withdeps`,
+which needs both `newpkg` *and* `upgradepkg` placed first and so only
+becomes available starting round two. `portage-repo`'s full unit suite
+(286 tests) and the full contract suite (Rust==Python byte-identical)
+pass.
+
+**Remaining gcc-case gap, characterized but not yet closed:** the
+still-mismatched positions are consistent with real's deeper priority
+hierarchy (`DepPrioritySatisfiedRange`/`DepPriorityNormalRange`'s full
+`NONE`/`SOFT`/`MEDIUM_SOFT`/`MEDIUM_POST` ladder, vs. portuale's binary
+hard/soft edge distinction), `asap_nodes` (libc-first merging), and the
+`_FrontierDigraph` incremental-leaf-tracking layer -- none yet ported;
+see `docs/scope-backlog.md`'s "Merge-list order" entry.
+
+### Merge-list order — the priority-hierarchy hypothesis, falsified (2026-09-04, same day, fourth pass)
+
+The previous entry's own remaining-gap hypothesis (real's fuller
+`DepPriorityNormalRange` ladder) turned out to be wrong, caught before
+any implementation work: `topological_merge_order_impl`'s "batch is
+empty" fallback -- the *only* code path where that ladder could ever
+matter, since real's own `SOFT`/`MEDIUM_SOFT` relaxation levels only
+activate once the ordinary strict-leaf scan finds nothing available at
+all, a cycle-like stall -- was instrumented with a one-line counter and
+run against the live `gnome-base/gnome-control-center` merge. It never
+fired. Portuale's own `find_hard_cycles` already reports no circular
+dependencies for this graph, matching real's own `--debug` output (no
+`runtime cycle` block anywhere in it); with no cycle, every round's
+strict batch is already non-empty, so the ladder never engages. A full
+priority-hierarchy port -- modeling each edge's real `DepPriority`
+subtype (`optional`/`runtime_post`/etc.), a genuinely large change --
+would have been provably unable to move this specific gap at all.
+
+The actual cause, found via real's own `emerge -p -d` digraph dump
+(`--debug`'s `digraph:` section, which lists every node's own direct
+children with their priority, in real's own actual discovery/insertion
+order): real's full dependency graph for the gcc merge has **~267
+already-installed nodes** in its transitive closure -- `grep -c
+", installed)"` on the debug log -- against ~26 entries that end up
+needing an actual merge operation. Real's `.order` discovery position
+(what `real_discovery_order` reproduces) is computed across that entire
+~300-node graph; every already-satisfied dependency, however deep,
+participates and consumes a discovery-rank slot. Portuale only ever
+creates a `GraphEntry` for packages it actually needs to track -- an
+`AlreadyInstalled` outcome's own further dependencies are walked only
+under `--deep` (`Deep::recurses_at`), a pre-existing, load-bearing
+simplification the whole resolver already leans on. Real's own default
+behavior is different from what that name suggests: real *always*
+builds the complete transitive graph regardless of `--deep` (needed for
+correctness -- conflict detection, visibility, slot binding); `--deep`
+only controls whether an already-satisfied dependency also gets checked
+for a possible *upgrade*. So `real_discovery_order`'s simulation runs
+over a far smaller universe than real's own ~300-node one, spacing its
+ranks out very differently -- which reproduces exactly the observed
+pattern (the same *groupings*/batches as real, correctly structured, but
+scrambled fine-grained order within them) without needing any priority
+distinction at all.
+
+Closing this would need portuale to walk (or at minimum rank) the entire
+already-installed transitive tree for discovery-order purposes, whether
+or not `--deep` is given and whether or not any of it is ever rendered
+-- a real architectural change (recursion into every `AlreadyInstalled`
+entry's own dependencies, purely to feed one field, with no display or
+resolution consequence otherwise), not a bounded, fixture-sized fix.
+Deferred (see `docs/scope-backlog.md`'s "Merge-list order" entry) rather
+than attempted speculatively -- the three shipped pieces this same day
+(`real_discovery_order`, correctly-scoped `merge_order_bias`, batched
+leaf selection) already took live gcc exact-position matches from 3/26
+to 8/26 lines, a real, verified improvement in their own right,
+independent of whether the full-tree walk is ever built.
+
 # # required by dev-libs/useflagpkg[-foo] (argument)
