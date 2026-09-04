@@ -1402,6 +1402,15 @@ mod tests {
     }
 
     #[test]
+    fn syslog_priority_matches_portage_mod_syslogs_own_pri_map() {
+        assert_eq!(syslog_priority("INFO"), libc::LOG_INFO);
+        assert_eq!(syslog_priority("ERROR"), libc::LOG_ERR);
+        assert_eq!(syslog_priority("LOG"), libc::LOG_NOTICE);
+        assert_eq!(syslog_priority("WARN"), libc::LOG_WARNING);
+        assert_eq!(syslog_priority("QA"), libc::LOG_WARNING);
+    }
+
+    #[test]
     fn syslog_line_matches_portage_key_phase_line_shape() {
         let msg = ElogMessage {
             phase: "install".to_string(),
@@ -1412,6 +1421,52 @@ mod tests {
             syslog_line("dev-libs/foo-1.0", &msg),
             "dev-libs/foo-1.0: install: watch out"
         );
+    }
+
+    #[test]
+    fn custom_process_runs_the_real_command_with_logfile_and_package_substituted() {
+        let t = tmpdir();
+        let marker = t.join("marker");
+        temp_env(
+            &[(
+                "PORTAGE_ELOG_COMMAND",
+                Some(&format!(
+                    "echo \"${{PACKAGE}} $(cat \"${{LOGFILE}}\")\" > {}",
+                    marker.display()
+                )),
+            )],
+            || {
+                let path =
+                    custom_process(&t.join("logs"), "dev-libs/foo-1.0", "hello there", false)
+                        .expect("custom_process succeeds");
+                assert!(path.exists(), "the underlying saved log file must exist");
+                let recorded = std::fs::read_to_string(&marker).unwrap();
+                assert_eq!(recorded.trim(), "dev-libs/foo-1.0 hello there");
+            },
+        );
+        let _ = std::fs::remove_dir_all(&t);
+    }
+
+    #[test]
+    fn custom_process_errors_when_the_command_is_unset() {
+        let t = tmpdir();
+        temp_env(&[("PORTAGE_ELOG_COMMAND", None)], || {
+            let err = custom_process(&t.join("logs"), "dev-libs/foo-1.0", "hello", false)
+                .expect_err("no PORTAGE_ELOG_COMMAND must fail");
+            assert!(err.contains("PORTAGE_ELOG_COMMAND"), "{err}");
+        });
+        let _ = std::fs::remove_dir_all(&t);
+    }
+
+    #[test]
+    fn custom_process_errors_when_the_command_fails() {
+        let t = tmpdir();
+        temp_env(&[("PORTAGE_ELOG_COMMAND", Some("exit 1"))], || {
+            let err = custom_process(&t.join("logs"), "dev-libs/foo-1.0", "hello", false)
+                .expect_err("a failing command must fail");
+            assert!(err.contains("exitcode"), "{err}");
+        });
+        let _ = std::fs::remove_dir_all(&t);
     }
 
     /// Minimal process-env scoping for these serial tests -- `env::var`
