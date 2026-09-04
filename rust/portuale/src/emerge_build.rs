@@ -678,6 +678,7 @@ fn build_one_source_entry(
     } else {
         options.shell
     };
+    let build_env = entry_build_env(options, entry);
     let status = ebuild_phases::run_commands_logged(
         &path,
         &["install"],
@@ -688,7 +689,7 @@ fn build_one_source_entry(
         &options.config_root,
         shell,
         log_path.as_deref(),
-        &entry_build_env(options, entry),
+        &build_env,
     )?;
     if status != 0 {
         let mut msg = format!("{cp}-{version}: build failed ({status})");
@@ -703,8 +704,25 @@ fn build_one_source_entry(
     }
     if let Some(package_options) = buildpkg {
         println!(">>> Building package for {cp}-{version}...");
-        let status =
-            ebuild_package::package_after_install(&path, root, portage_tmpdir, package_options)?;
+        // Real `Package.use.enabled` is what real `_pkgindex_entry`
+        // writes as this binpkg's own `USE` field -- the same resolved
+        // flag set the `install` phase itself just ran with, not the
+        // ebuild's own default (`use_flags_display`-derived `USE` env
+        // var `entry_build_env` already resolved for that phase, reused
+        // verbatim here rather than re-derived, so the two can never
+        // drift apart).
+        let use_flags = build_env
+            .iter()
+            .find(|(k, _)| k == "USE")
+            .map(|(_, v)| v.as_str())
+            .unwrap_or("");
+        let status = ebuild_package::package_after_install(
+            &path,
+            root,
+            portage_tmpdir,
+            package_options,
+            use_flags,
+        )?;
         if status != 0 {
             return Err(format!("{cp}-{version}: binpkg build failed ({status})"));
         }

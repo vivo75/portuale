@@ -45,13 +45,14 @@
 //     `BINPKG_COMPRESS="zstd"` (**not** `"bzip2"` -- real portage's own
 //     default changed at some point; portuale's own previous hardcoded
 //     `"bzip2 -c"` predated noticing that).
-//   - `USE` in the Packages index entry is empty for a standalone
-//     `ebuild <file> package` (no resolved graph → no resolved USE, so
-//     `""` is the honest value). An `emerge <atom> -b` build *does* now
-//     run its phases with the resolved `USE`
-//     (`MergeOptions::build_env`), so a package built that way carries
-//     its real flags in build-info; propagating those into this index
-//     entry is a small remaining follow-up.
+//   - `USE` in the Packages index entry is real now
+//     (`package_after_install`'s own `use_flags` parameter): an
+//     `emerge <atom> -b` build's resolved flags (the same `USE`
+//     `MergeOptions::build_env`/`entry_build_env` already resolved for
+//     the `install` phase this binpkg is built from) are written
+//     verbatim, matching real `Package.use.enabled`. Still empty for a
+//     standalone `ebuild <file> package`/`merge` -- no resolved graph
+//     reaches that deep, so `""` stays the honest value there.
 //   - `SLOT`/`KEYWORDS`/`IUSE`/`LICENSE`/`PROPERTIES`/`RESTRICT`/the
 //     `*DEPEND` family in the `Packages` *index* entry are read from the
 //     ebuild's own repo's real `metadata/md5-cache` entry (via
@@ -389,19 +390,30 @@ pub fn run_package(
     if status != 0 {
         return Ok(status);
     }
-    package_after_install(ebuild_path, root, portage_tmpdir, options)
+    // Standalone `ebuild <file> package`: no resolved graph reaches
+    // this deep, so there is no resolved USE to report -- the same "no
+    // graph, no USE" gap `package_after_install`'s own doc comment
+    // covers.
+    package_after_install(ebuild_path, root, portage_tmpdir, options, "")
 }
 
 /// The packaging tail of `run_package`, split out so it can also run as a
 /// side effect of a source merge (`FEATURES=buildpkg` / `--buildpkg`,
 /// real `_emerge/EbuildBinpkg`: after `src_install`, before the vdb
 /// merge -- `ebuild_merge::run_merge`'s own `buildpkg` param). Assumes a
-/// populated `${D}` from a prior real `install` chain.
+/// populated `${D}` from a prior real `install` chain. `use_flags` is
+/// real `Package.use.enabled`, the resolved flag set the `install`
+/// phase this binpkg is built from just ran with -- space-joined,
+/// already-enabled-only, the exact shape a real `Packages` index `USE`
+/// field carries. `""` for a standalone `ebuild <file> package`/`merge`
+/// (no resolved graph reaches that deep -- the documented gap this
+/// module's own doc comment already covers).
 pub(crate) fn package_after_install(
     ebuild_path: &Path,
     root: &Path,
     portage_tmpdir: &Path,
     options: &PackageOptions,
+    use_flags: &str,
 ) -> Result<i32, String> {
     let binpkg_extension = binpkg_extension(&options.binpkg_format)?;
 
@@ -508,7 +520,7 @@ pub(crate) fn package_after_install(
             ("CATEGORY", &env.category),
             ("SLOT", get("SLOT")),
             ("KEYWORDS", get("KEYWORDS")),
-            ("USE", ""),
+            ("USE", use_flags),
             ("LICENSE", get("LICENSE")),
             ("IUSE", get("IUSE")),
             ("PROPERTIES", get("PROPERTIES")),
@@ -1160,6 +1172,55 @@ mod tests {
             metadata.get("MD5").map(String::as_str),
             Some(expected_md5.as_str())
         );
+    }
+
+    #[test]
+    fn package_after_install_writes_the_resolved_use_flags_into_the_packages_index() {
+        // Real `Package.use.enabled` (`emerge_build.rs`'s own
+        // `build_one_source_entry`/`ebuild_merge.rs`'s own `run_merge`
+        // both now extract this from their own already-resolved build
+        // env and pass it straight through) -- exercised here directly
+        // against `package_after_install` itself, the shared tail both
+        // callers route through.
+        let tmp = tempdir();
+        let root = tmp.join("root");
+        let portage_tmpdir = tmp.join("tmp");
+        let options = PackageOptions {
+            debug: false,
+            pkgdir: tmp.join("pkgdir"),
+            distdir: tmp.join("distdir"),
+            shell: ebuild_phases::ShellBackend::default(),
+            binpkg_compress: "bzip2".to_string(),
+            ..PackageOptions::default()
+        };
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::create_dir_all(&portage_tmpdir).unwrap();
+
+        let repo_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/repo");
+        let ebuild = repo_root.join("dev-libs/packagepkg/packagepkg-1.0.ebuild");
+
+        let status = ebuild_phases::run_commands(
+            &ebuild,
+            &["install"],
+            &root,
+            &portage_tmpdir,
+            &options.distdir,
+            options.debug,
+            &options.config_root,
+            options.shell,
+            &[],
+        )
+        .expect("install succeeds");
+        assert_eq!(status, 0);
+
+        let status = package_after_install(&ebuild, &root, &portage_tmpdir, &options, "foo bar")
+            .expect("package_after_install succeeds");
+        assert_eq!(status, 0);
+
+        let index = portage_repo::BinaryIndex::from_pkgdir(&options.pkgdir);
+        let metadata = portage_repo::read_binary_metadata(&index, "dev-libs", "packagepkg", "1.0")
+            .expect("binary metadata entry exists");
+        assert_eq!(metadata.get("USE").map(String::as_str), Some("foo bar"));
     }
 
     #[test]

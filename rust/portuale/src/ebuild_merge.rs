@@ -2261,11 +2261,22 @@ pub fn run_merge(
         return Ok(status);
     }
     if let Some(package_options) = buildpkg {
+        // Real `Package.use.enabled` for this binpkg's own `Packages`
+        // index `USE` field -- the same resolved flag set the `install`
+        // phase above just ran with (`options.build_env`'s own `USE`
+        // entry, if any flags are enabled at all).
+        let use_flags = options
+            .build_env
+            .iter()
+            .find(|(k, _)| k == "USE")
+            .map(|(_, v)| v.as_str())
+            .unwrap_or("");
         let status = crate::ebuild_package::package_after_install(
             ebuild_path,
             root,
             portage_tmpdir,
             package_options,
+            use_flags,
         )?;
         if status != 0 {
             return Ok(status);
