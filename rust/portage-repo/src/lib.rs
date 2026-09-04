@@ -376,7 +376,40 @@ fn apply_slotmove_to_token(
 
 /// Apply every `move`/`slotmove` (in order, so chains resolve) to one atom
 /// string -- for a command-line or world atom.
+/// Every `cat/pkg` that *could* be the first command in the loop to
+/// touch an atom -- the union of every `move` command's `old` and every
+/// `slotmove`'s `cp`. `apply_move_to_token` / `apply_slotmove_to_token`
+/// only ever rewrite a token whose current `cp` equals a command's
+/// `old`/`cp`, and the loop starts from `atom.cp`, so an atom whose `cp`
+/// is not in this set is a guaranteed no-op for the whole loop. On a
+/// real tree `profiles/updates/` holds thousands of accumulated
+/// commands, and this walk runs per atom per pass -- the `format!`
+/// alloc per command per atom was ~17% of `emerge -pt` on a big graph.
+fn update_move_targets() -> &'static HashSet<(String, String)> {
+    static TARGETS: OnceLock<HashSet<(String, String)>> = OnceLock::new();
+    TARGETS.get_or_init(|| {
+        global_package_updates()
+            .iter()
+            .map(|cmd| match cmd {
+                UpdateCmd::Move { old, .. } => old.clone(),
+                UpdateCmd::SlotMove { cp, .. } => cp.clone(),
+            })
+            .collect()
+    })
+}
+
 pub fn apply_updates_to_atom(atom: &str) -> String {
+    let targets = update_move_targets();
+    if targets.is_empty() {
+        return atom.to_string();
+    }
+    // Fast path: if the atom's own `cp` isn't the `old`/`cp` of any
+    // command, nothing in the loop below can ever rewrite it.
+    if let Some(parsed) = portage_dep::parse_atom(atom.trim_start_matches('!')) {
+        if !targets.contains(&(parsed.category.clone(), parsed.package.clone())) {
+            return atom.to_string();
+        }
+    }
     let mut cur = atom.to_string();
     for cmd in global_package_updates() {
         cur = match cmd {
@@ -10406,10 +10439,20 @@ fn backtracking_resolve(req: &ResolveRequest) -> Result<GraphResult, String> {
         })
         .collect();
     // Real `create_depgraph_params.py:178`: `--emptytree` sets
-    // `myparams["deep"] = True`. Real `_complete_graph` 8668-8670 does the
-    // same for `--complete-graph` -- see the `complete` param's own doc
-    // comment above.
-    let deep = if empty || (complete && deep == Deep::NotRequested) {
+    // `myparams["deep"] = True`. Real `_complete_graph` (8668-8670) does
+    // the same -- but paired with `_select_pkg_from_graph`, a cheap
+    // graph-or-installed check. Portuale's deep walk runs full
+    // resolution per node, so forcing it over the whole installed world
+    // for every `--complete-graph` (which auto-enables on any upgrade)
+    // made `emerge -pt gnome-control-center` take minutes for a merge
+    // list that -- with the `complete_locked_merges` gate -- is
+    // identical to the non-deep phase-1 result. So complete mode only
+    // forces the deep walk when a consumer actually needs the wider
+    // installed-dependency scan: `--changed-deps-report` (real
+    // `_changed_deps_report`, which in complete mode walks the required
+    // sets). The slot-operator-rebuild gate uses `complete_seed_atoms`
+    // /`required_set_reachable_cps` directly, not this walk.
+    let deep = if empty || (complete && deep == Deep::NotRequested && changed_deps_report) {
         Deep::Unlimited
     } else {
         deep
@@ -16998,7 +17041,7 @@ mod tests {
     }
 
     #[test]
-    fn complete_graph_deep_re_walks_but_does_not_merge_a_missing_installed_dep() {
+    fn complete_graph_never_merges_a_missing_deep_dep_of_an_installed_pkg() {
         // deeppkg (installed) -> RDEPEND deeppkg2 (installed) -> RDEPEND
         // newpkg (not installed). `-D` deep-walks and merges newpkg.
         // Real `complete` mode (`_complete_graph` 8662) also deep-walks
@@ -17090,20 +17133,19 @@ mod tests {
             Deep::Unlimited,
             false
         )));
-        // Low-level `complete=true`, no locked set (the pre-2-pass
-        // fallback): still a plain deep walk == `-D`.
-        assert_eq!(
-            names(&resolve(
-                "dev-libs/deeppkg",
-                false,
-                Deep::NotRequested,
-                true
-            )),
-            names(&resolve("dev-libs/deeppkg", false, Deep::Unlimited, false)),
-        );
-        // The CLI's real 2-pass: complete mode with phase 1's merge set
-        // locked. `_select_pkg_from_graph` -- newpkg is accounted for but
-        // never merged.
+        // `complete=true` never merges the missing deep dep -- neither
+        // the low-level call (no locked set) nor the CLI's real 2-pass
+        // (phase 1's merge set locked). Real `_select_pkg_from_graph`:
+        // graph-or-installed, never a new merge. And -- unlike `-D` --
+        // complete mode doesn't force the deep walk at all unless
+        // `--changed-deps-report` needs the wider scan (portuale's deep
+        // walk is full resolution per node, far heavier than real's).
+        assert!(!has_newpkg(&resolve(
+            "dev-libs/deeppkg",
+            false,
+            Deep::NotRequested,
+            true
+        )));
         assert!(!has_newpkg(&resolve_cfg(
             "dev-libs/deeppkg",
             false,

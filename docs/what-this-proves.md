@@ -9368,7 +9368,7 @@ run -p --complete-graph dev-libs/deeppkg
 
 Reuses the `deeppkg`→`deeppkg2`→`newpkg` chain and the
 `dev-libs/completegraphpkg` fixture. `portage-repo` unit test
-`complete_graph_deep_re_walks_but_does_not_merge_a_missing_installed_dep`
+`complete_graph_never_merges_a_missing_deep_dep_of_an_installed_pkg`
 + 10 `CASES` + 2 rewritten contract tests. Full suite: 1245 passed.
 
 ### `emerge --useoldpkg-atoms ATOMS` (2026-09-02)

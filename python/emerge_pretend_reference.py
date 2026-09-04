@@ -7075,12 +7075,14 @@ def resolve_pretend_graph(
     # may only resolve already_installed (or be dropped with no node).
     _locked_merges = {tuple(s.split("/", 1)) for s in complete_locked_merges}
     # Real create_depgraph_params.py:178: --emptytree sets
-    # myparams["deep"] = True. Real _complete_graph 8668-8670 does the
-    # same for --complete-graph -- see the `complete` param's grounding in
-    # portage-repo/src/lib.rs's resolve_pretend_graph doc comment (a
-    # forced deep walk is the whole observable delta in a --pretend that
-    # never removes or downgrades an installed package).
-    if empty or (complete and not deep):
+    # myparams["deep"] = True. Real _complete_graph (8668-8670) does the
+    # same -- but paired with _select_pkg_from_graph, a cheap
+    # graph-or-installed check. Portuale runs full resolution per node,
+    # so complete mode only forces the deep walk when a consumer needs
+    # the wider installed-dependency scan (--changed-deps-report); with
+    # the complete_locked_merges gate the merge list is identical to
+    # phase 1 either way. Mirrors portage-repo/src/lib.rs.
+    if empty or (complete and not deep and changed_deps_report):
         deep = True
 
     # Backtracking (real `_emerge/resolver/backtracking.py`): run the
