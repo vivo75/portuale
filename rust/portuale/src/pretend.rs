@@ -8298,12 +8298,17 @@ pub fn run(args: &[String]) -> ExitCode {
         }
     }
 
-    // Real create_depgraph_params.py's own precedence: an explicit
-    // --with-bdeps always wins; only when it's absent does
-    // --with-bdeps-auto=n override the real default ("auto", this
-    // portuale's own pre-existing `with_bdeps = true`) down to "n" instead.
+    // Real create_depgraph_params.py:97-103's own precedence: an explicit
+    // --with-bdeps always wins; absent it, `bdeps` is set to "auto" only
+    // when `--with-bdeps-auto != n` AND `--usepkg` is NOT in myopts --
+    // and `--getbinpkg`/`--usepkgonly`/`--getbinpkgonly` all imply
+    // `--usepkg` (actions.py:3716-3723). When `bdeps` is left unset (the
+    // --usepkg case), depgraph.py:4196 treats it as "not in (y, auto)",
+    // so `_add_pkg_dep_string` drops DEPEND/BDEPEND for every *built*
+    // (binary or installed) package. `with_bdeps` carries exactly that
+    // "keep build-time deps of a built package" bit through the resolver.
     if !with_bdeps_given {
-        with_bdeps = with_bdeps_auto;
+        with_bdeps = with_bdeps_auto && !(usepkg || usepkgonly || getbinpkg || getbinpkgonly);
     }
 
     // Real create_depgraph_params.py's own `selective` condition,

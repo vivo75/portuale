@@ -978,6 +978,16 @@ CASES = [
         1,
     ),
     (
+        "--getbinpkg: a binary's recorded BDEPEND is not walked (real depgraph.py:4195)",
+        ["--pretend", "--getbinpkg", "dev-libs/binbdepconsumer"],
+        0,
+    ),
+    (
+        "no --getbinpkg: the same ebuild's BDEPEND *is* walked",
+        ["--pretend", "dev-libs/binbdepconsumer"],
+        0,
+    ),
+    (
         "--newrepo: off by default, stays already-installed",
         ["--pretend", "--selective", "dev-libs/newrepopkg"],
         0,

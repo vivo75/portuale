@@ -1,0 +1,7 @@
+DEFINED_PHASES=-
+DESCRIPTION=fixture: pulled ONLY via another package's BDEPEND -- must not appear when that package resolves to a binary under --usepkg/--getbinpkg
+EAPI=8
+IUSE=
+KEYWORDS=amd64
+SLOT=0
+_md5_=0000000000000000000000000000000

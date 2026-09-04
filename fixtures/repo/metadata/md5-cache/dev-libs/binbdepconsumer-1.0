@@ -1,0 +1,8 @@
+BDEPEND=dev-libs/binbdeponly
+DEFINED_PHASES=-
+DESCRIPTION=fixture: ebuild with a BDEPEND, plus a same-version binhost binary -- BDEPEND is walked for the ebuild, dropped for the binary (real depgraph.py:4195)
+EAPI=8
+IUSE=
+KEYWORDS=amd64
+SLOT=0
+_md5_=0000000000000000000000000000000

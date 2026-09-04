@@ -8282,11 +8282,21 @@ def resolve_pretend_graph(
             if nodeps:
                 continue
 
-            depstr = " ".join(
-                metadata[k]
-                for k in ("DEPEND", "RDEPEND", "BDEPEND", "PDEPEND", "IDEPEND")
-                if metadata.get(k)
+            # Real depgraph.py:4195-4247 (_add_pkg_dep_string): for a
+            # *built* package (pkg.built -- a binary, not a fresh ebuild)
+            # with myparams["bdeps"] not in ("y","auto") -- i.e.
+            # --usepkg/--getbinpkg given, which leaves bdeps unset
+            # (create_depgraph_params.py:100) -- DEPEND and BDEPEND are
+            # both emptied before the walk. with_bdeps (built from that
+            # same rule) carries the bit; a binary's recorded BDEPEND
+            # (e.g. libgweather's "|| ( ( python:3.14 pygobject[...] ) )")
+            # must not drive a merge.
+            _dep_keys = (
+                ("RDEPEND", "PDEPEND", "IDEPEND")
+                if candidate_source == "binary" and not with_bdeps
+                else ("DEPEND", "RDEPEND", "BDEPEND", "PDEPEND", "IDEPEND")
             )
+            depstr = " ".join(metadata[k] for k in _dep_keys if metadata.get(k))
 
             # Per-edge build-time/run-time classification for the
             # merge-order sort + circular-dependency detection (real
@@ -8309,7 +8319,11 @@ def resolve_pretend_graph(
                 except InvalidDependString:
                     return frozenset()
 
-            buildtime_atoms = _flatten_keys(("DEPEND", "BDEPEND"))
+            buildtime_atoms = (
+                frozenset()
+                if candidate_source == "binary" and not with_bdeps
+                else _flatten_keys(("DEPEND", "BDEPEND"))
+            )
             runtime_atoms = _flatten_keys(("RDEPEND", "PDEPEND", "IDEPEND"))
             # --root-deps branch-selection feed-in (see
             # _root_deps_satisfied_atoms's own docstring): a "||" group with
@@ -14760,12 +14774,18 @@ def run(args):
     color_system_atoms = config["system_packages"]
     color_world_atoms = [apply_updates_to_atom(a) for a in _read_world_atoms(_root())]
 
-    # Real create_depgraph_params.py's own precedence: an explicit
-    # --with-bdeps always wins; only when it's absent does
-    # --with-bdeps-auto=n override the real default ("auto", this
-    # portuale's own pre-existing with_bdeps=True) down to "n" instead.
+    # Real create_depgraph_params.py:97-103's own precedence: an explicit
+    # --with-bdeps always wins; absent it, `bdeps` is "auto" only when
+    # `--with-bdeps-auto != n` AND `--usepkg` is NOT in myopts -- and
+    # --getbinpkg/--usepkgonly/--getbinpkgonly all imply --usepkg
+    # (actions.py:3716-3723). When `bdeps` is left unset (the --usepkg
+    # case) depgraph.py:4196 treats it as "not in (y, auto)", so
+    # _add_pkg_dep_string drops DEPEND/BDEPEND for every *built* (binary
+    # or installed) package. with_bdeps carries exactly that bit.
     if not with_bdeps_given:
-        with_bdeps = with_bdeps_auto
+        with_bdeps = with_bdeps_auto and not (
+            usepkg or usepkgonly or getbinpkg or getbinpkgonly
+        )
 
     # Real create_depgraph_params.py's own `selective` condition,
     # computed from whichever of its real trigger flags portuale

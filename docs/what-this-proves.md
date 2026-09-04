@@ -8589,6 +8589,25 @@ contract `CASES` + 2 dedicated pinned-output contract tests + 3
 download / `layout.conf` negotiation / `gpkg`, and `--getbinpkg` for a
 real (non-`--pretend`) merge.
 
+**A binary's `BDEPEND`/`DEPEND` don't drive a merge (2026-09-04).** Real
+`_add_pkg_dep_string` (`depgraph.py:4195-4247`): for a *built* package
+(`pkg.built` -- true for a binary, not for a fresh ebuild) with
+`myparams["bdeps"]` not in `("y", "auto")`, both `DEPEND` and `BDEPEND`
+are emptied before the walk. `bdeps` is left unset whenever `--usepkg`
+is in `myopts` (`create_depgraph_params.py:100`) -- and
+`--getbinpkg`/`--usepkgonly`/`--getbinpkgonly` all imply `--usepkg`
+(`actions.py:3716-3723`). Portuale walked all five `*DEPEND` keys of the
+selected candidate's metadata unconditionally, so a binary package's
+recorded `BDEPEND` -- e.g. `dev-libs/libgweather`'s `|| ( (
+dev-lang/python:3.14 dev-python/pygobject[python_targets_python3_14(-)] )
+( dev-lang/python:3.13 … ) … )` -- pulled Python slots and a
+`dev-python/pygobject` USE change into `emerge -pt --getbinpkg
+gnome-base/gnome-control-center` that real portage never asks for. Fixed:
+`with_bdeps` (the resolver's "keep a built package's build-time deps"
+bit) is now `false` under the `--usepkg` family, and the main graph
+walk drops `DEPEND`/`BDEPEND` for a `CandidateSource::Binary` entry when
+it is `false` (the `AlreadyInstalled` deep-walk already respected it).
+
 ### `emerge -p`: the blocker line follows real `ResolverOutput._blockers`
 
 Portuale's blocker report was portuale-shaped (`[blocks] cat/foo-1.0 hard

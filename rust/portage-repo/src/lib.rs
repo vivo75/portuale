@@ -12084,9 +12084,23 @@ fn backtracking_resolve(req: &ResolveRequest) -> Result<GraphResult, String> {
                 continue;
             }
 
+            // Real `depgraph.py:4195-4247` (`_add_pkg_dep_string`): for a
+            // *built* package (`pkg.built` -- true for a binary, not for a
+            // fresh ebuild) with `myparams["bdeps"]` not in `("y","auto")`
+            // -- i.e. `--usepkg`/`--getbinpkg` given, which leaves `bdeps`
+            // unset (`create_depgraph_params.py:100`) -- `DEPEND` and
+            // `BDEPEND` are both emptied before the walk. `with_bdeps`
+            // (built from that same rule in `pretend.rs`) carries the bit;
+            // a binary's recorded `BDEPEND` (e.g. libgweather's `|| ( (
+            // python:3.14 pygobject[...] ) ... )`) must not drive a merge.
+            let dep_keys: &[&str] = if candidate_source == CandidateSource::Binary && !with_bdeps {
+                &["RDEPEND", "PDEPEND", "IDEPEND"]
+            } else {
+                &["DEPEND", "RDEPEND", "BDEPEND", "PDEPEND", "IDEPEND"]
+            };
             let mut depstr = String::new();
-            for dep_key in ["DEPEND", "RDEPEND", "BDEPEND", "PDEPEND", "IDEPEND"] {
-                if let Some(d) = metadata.get(dep_key) {
+            for dep_key in dep_keys {
+                if let Some(d) = metadata.get(*dep_key) {
                     depstr.push_str(d);
                     depstr.push(' ');
                 }
@@ -12118,7 +12132,13 @@ fn backtracking_resolve(req: &ResolveRequest) -> Result<GraphResult, String> {
                 .map(|v| v.into_iter().filter(|t| t != "||").collect())
                 .unwrap_or_default()
             };
-            let buildtime_atoms = flatten_keys(&["DEPEND", "BDEPEND"]);
+            let buildtime_atoms = if candidate_source == CandidateSource::Binary && !with_bdeps {
+                // Build-time deps were dropped from the walk above -- no
+                // queued atom can be classified from them.
+                HashSet::new()
+            } else {
+                flatten_keys(&["DEPEND", "BDEPEND"])
+            };
             let runtime_atoms = flatten_keys(&["RDEPEND", "PDEPEND", "IDEPEND"]);
             // Real `--root-deps` branch-selection feed-in (see
             // `root_deps_satisfied_atoms`'s own doc comment): a `||` group

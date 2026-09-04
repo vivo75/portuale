@@ -1,5 +1,5 @@
 TIMESTAMP: 0
-PACKAGES: 4
+PACKAGES: 5
 
 BUILD_ID: 1
 CPV: dev-libs/remotebinpkg-1.0
@@ -48,3 +48,17 @@ REPO: testrepo
 SIZE: 51200
 SLOT: 0
 USE:
+
+BDEPEND: dev-libs/binbdeponly
+BUILD_ID: 1
+CPV: dev-libs/binbdepconsumer-1.0
+DEFINED_PHASES: -
+DESCRIPTION: fixture: binhost binary whose recorded BDEPEND (dev-libs/binbdeponly) must NOT be walked under --getbinpkg/--usepkg (real depgraph.py:4195 drops DEPEND/BDEPEND for a built package)
+EAPI: 8
+IUSE:
+KEYWORDS: amd64
+REPO: testrepo
+SIZE: 45056
+SLOT: 0
+USE:
+
