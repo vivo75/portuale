@@ -20355,6 +20355,39 @@ mod tests {
     }
 
     #[test]
+    fn circular_dep_solutions_grandparent_conflict_disqualifies_the_suggestion() {
+        // Same USE-gated cycle shape as usecyclea/usecycleb (here
+        // gpcyclea/gpcycleb), but the top-level target dev-libs/gpcyclec
+        // is a "grandparent" of the cycle with its own hard
+        // dev-libs/gpcyclea[x] use-dep -- grandparent_use_conflict's
+        // `ignore` branch fires (the "disable x" fix would violate
+        // gpcyclec's own hard requirement), so the suggestion list comes
+        // back empty. `docs/history/find-suggestions-plan.md`'s "no
+        // fixture yet" note.
+        let root = fixtures_root();
+        let config = portage_profile::resolve_config(
+            &root,
+            &root.join("repo"),
+            &[("overlay".to_string(), root.join("overlay"))],
+            &[],
+            "testrepo",
+            &HashMap::new(),
+        )
+        .expect("fixture config resolves");
+        let repos = find_repos(&root).expect("repos");
+        let result = graph_result_real("dev-libs/gpcyclec");
+        assert_eq!(result.circular_deps.len(), 1);
+        let sols = circular_dep_solutions(
+            &result.circular_deps[0],
+            &repos,
+            &config,
+            &result.autounmask_use_changes,
+            &result.entries,
+        );
+        assert!(sols.is_empty(), "{:?}", sols);
+    }
+
+    #[test]
     fn circular_dep_solutions_is_empty_for_a_cycle_with_no_conditional_edge() {
         // `hardcyclea` <-> `hardcycleb`, both with an unconditional
         // `DEPEND` and no IUSE -- `extract_affecting_use` finds nothing,

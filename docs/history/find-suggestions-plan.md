@@ -169,10 +169,21 @@ lines, Slice 2).
    usecyclea-1.0 (Change USE: -x)`). Contract CASE + pinned test (incl.
    `--color y` ANSI) + 2 `portage-repo` unit tests; `hardcyclea` (no
    IUSE) unchanged on the `else` branch. Rust==Python byte-identical.
-   **Grandparent step not exercised by a fixture** — the re-derivation
-   is in place (`grandparent_use_conflict`) but no fixture drives a
-   grandparent `[flag]` clash yet; left for a follow-up if a real case
-   turns up.
+   **Grandparent step now exercised (2026-09-05).** Fixture
+   `dev-libs/gpcyclea` + `gpcycleb` (same USE-gated cycle shape as
+   `usecyclea`/`usecycleb`) plus `dev-libs/gpcyclec`, a top-level target
+   that build-depends on `dev-libs/gpcyclea[x]` with a *hard* use-dep --
+   a genuine "grandparent" of the cycle. The otherwise-viable "disable x
+   on gpcyclea" fix would violate `gpcyclec`'s own hard requirement, so
+   `grandparent_use_conflict`'s `ignore` branch fires and the suggestion
+   list comes back empty; real (and portuale) fall through to the
+   generic "temporarily disabling USE flags" advisory instead of a
+   `Change USE:` line. 1 `portage-repo` unit test (asserts
+   `circular_dep_solutions` returns empty) + 1 contract test (byte-
+   identical Rust vs Python, full stderr pinned). The `followup_change`
+   (conditional `flag?`/`flag=` grandparent atom, cascading rather than
+   disqualifying) still has no fixture -- left for a further follow-up
+   if a real case turns up.
 
 ## Simplifications / cuts (call out in code + `what-this-proves.md`)
 

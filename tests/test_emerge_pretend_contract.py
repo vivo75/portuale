@@ -2341,6 +2341,38 @@ def test_circular_dep_use_flag_suggestion(
     assert "(Change USE: \x1b[34;01m-x\x1b[39;49;00m)" in rc.stderr
 
 
+def test_circular_dep_grandparent_use_conflict_disqualifies_the_suggestion(
+    emerge_binary, emerge_pretend_python, fixture_env
+):
+    """The grandparent-atom conflict path (`docs/history/find-suggestions-
+    plan.md`'s "no fixture yet" note, `grandparent_use_conflict` /
+    `_grandparent_use_conflict`): same USE-gated build-cycle shape as
+    `dev-libs/usecyclea`/`usecycleb` (here `gpcyclea`/`gpcycleb`), but
+    `dev-libs/gpcyclec` -- the top-level target and a "grandparent" of
+    the cycle -- build-depends on `dev-libs/gpcyclea[x]` with a *hard*
+    USE-dep. Real `_find_suggestions` step 9: the otherwise-viable "flip
+    x off on gpcyclea" fix would violate gpcyclec's own hard requirement,
+    so the suggestion is disqualified and dropped -- real prints the
+    generic "temporarily disabling USE flags" advisory instead of a
+    `Change USE:` line. Rust == Python byte-identical."""
+    args = ["--pretend", "dev-libs/gpcyclec"]
+    rust = _run([str(emerge_binary)], args, fixture_env)
+    py = _run(emerge_pretend_python, args, fixture_env)
+    assert rust.returncode == 1 and py.returncode == 1
+    assert rust.stdout == py.stdout and rust.stderr == py.stderr
+    assert rust.stderr == (
+        "\n * Error: circular dependencies:\n"
+        "\n"
+        "dev-libs/gpcyclea-1.0 depends on\n"
+        " dev-libs/gpcycleb-1.0 (buildtime)\n"
+        "  dev-libs/gpcyclea-1.0 (buildtime)\n"
+        "\n"
+        " * Note that circular dependencies can often be avoided by temporarily\n"
+        " * disabling USE flags that trigger optional dependencies.\n"
+    )
+    assert "Change USE:" not in rust.stderr
+
+
 def test_root_deps_recursion_reports_an_unbuildable_build_dep(
     emerge_binary, emerge_pretend_python, fixture_env
 ):

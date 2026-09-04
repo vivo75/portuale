@@ -1,0 +1,8 @@
+DEFINED_PHASES=-
+DEPEND=x? ( dev-libs/gpcycleb )
+DESCRIPTION=fixture: build-cycle with dev-libs/gpcycleb gated behind USE=x -- same shape as usecyclea, but also pulled in by dev-libs/gpcyclec's own hard [x] use-dep (the grandparent-conflict path)
+EAPI=8
+IUSE=+x
+KEYWORDS=amd64
+SLOT=0
+_md5_=0000000000000000000000000000000

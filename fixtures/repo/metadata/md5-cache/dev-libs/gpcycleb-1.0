@@ -1,0 +1,7 @@
+DEFINED_PHASES=-
+DEPEND=dev-libs/gpcyclea
+DESCRIPTION=fixture: unconditionally build-depends on dev-libs/gpcyclea -- the other half of the USE-gated build cycle, mirrors usecycleb
+EAPI=8
+KEYWORDS=amd64
+SLOT=0
+_md5_=0000000000000000000000000000000

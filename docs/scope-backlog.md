@@ -153,8 +153,12 @@ architectural — a single-pass BFS can't grow into these incrementally:
   - the circular-dep cuts: the reduced cycle-only `--tree` re-display,
     full elementary-cycle enumeration / `large_cycle_count`
     (`_find_suggestions`' USE-flag heuristic **shipped 2026-09-03** —
-    `circular_dep_solutions`, `docs/history/find-suggestions-plan.md`; the
-    grandparent-atom conflict path has no fixture yet).
+    `circular_dep_solutions`, `docs/history/find-suggestions-plan.md`;
+    **its grandparent-atom conflict path gained fixture coverage
+    2026-09-05** — `dev-libs/gpcyclea`/`gpcycleb`/`gpcyclec`, a hard
+    `[x]` use-dep that disqualifies the "disable x" suggestion, both a
+    `portage-repo` unit test and a Rust==Python contract test; the
+    *conditional* `followup_change` grandparent variant still has none).
 
   *(The resolver-extraction item shipped 2026-09-03: the ~1700-line
   graph walk + backtracking loop is now `backtracking_resolve(req:
