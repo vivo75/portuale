@@ -376,15 +376,30 @@ The whole `FEATURES` isolation set wraps the six real `src_*` phases
   (`resume_entry` carries none); the `Packages` *index* `USE` field for
   an `emerge -b` binpkg isn't back-filled from build-info.
 
-### E. Binary packages / fetch
+### E. Binary packages / fetch — **substantially complete (2026-09-04)**
 
-- **Remote binhost** — live `layout.conf` negotiation,
-  `RESTRICT=primaryuri` interleave, `Packages.bz2` / `.lz4`, binpkg
-  `SHA1` (no sha1 crate).
+- **Remote binhost** — re-audited 2026-09-04 against the pinned
+  `3rdparty/portage` checkout: "live `layout.conf` negotiation" and
+  `RESTRICT=primaryuri` interleave are not real `bintree.py` mechanisms
+  at all (zero hits in that file; `RESTRICT=primaryuri` is a
+  `SRC_URI`/distfile-fetch concept instead, see Fetch below) —
+  mis-scoped when first written. `Packages.bz2`/`.lz4` was also
+  inaccurate: real only ever writes plain-text `Packages` (no
+  compression variant at all); portuale already matches. Binpkg `SHA1`
+  remains a real, deliberate cut (no sha1 crate) — `MD5` (real always
+  writes both) is now written into every index entry portuale itself
+  creates, which is sufficient for `download_and_verify`'s own
+  integrity check (shipped 2026-09-04, `emerge_getbinpkg.rs`'s own doc
+  comment already covered why SHA1 alone is skippable).
 - **gpkg** — `.sig` verification + signing (`FEATURES=binpkg-signing` —
-  cut, portuale has no crypto), bare `.xpak` multi-instance,
-  mtime-staleness index revalidation, `BUILD_ID`
-  in the basename. *(The `-pretend` `-N` `BUILD_ID` display suffix and
+  cut, portuale has no crypto) and bare `.xpak` multi-instance (a
+  genuinely different on-disk shape, a bare metadata segment rather
+  than a `.tbz2` archive) remain open. Shipped: mtime-staleness index
+  revalidation and `BUILD_ID` in the gpkg basename (2026-09-04,
+  `FEATURES=binpkg-multi-instance`, default **off** here — real
+  defaults it on, but xpak's differing shape isn't ported, so matching
+  real's default would silently mislabel xpak output as multi-instance
+  when it isn't). *(The `--pretend` `-N` `BUILD_ID` display suffix and
   binpkg-multi-instance selection — every build into the pool, per-
   instance `--binpkg-respect-use` + atom-`[use]` filtering,
   `dedup_binary_instances` keeps the newest `BUILD_TIME` survivor —
@@ -397,11 +412,30 @@ The whole `FEATURES` isolation set wraps the six real `src_*` phases
   package -- moot for portuale, whose installed-package path never runs
   that check to begin with), BUILD_TIME-vs-installed *reinstall* trigger
   outside `--rebuilt-binaries`, `useoldpkg` multi-instance, the explicit
-  `--binpkg-changed-deps=y|n` / `--use-ebuild-visibility` overrides.)*
-- **`splitdebug` / `packdebug` / RPM**, PKGDIR-index
-  locking, `FEATURES=buildpkg-live`, real `EbuildBinpkg` failure
-  semantics under `--keep-going`.
-- **Fetch** — real candidate ordering / shuffling.
+  `--binpkg-changed-deps=y|n` / `--use-ebuild-visibility` overrides —
+  deferred: a ~30-to-90-call-site plumbing job through
+  `resolve_pretend`/`resolve_pretend_graph`/`backtracking_resolve` for a
+  rarely-used explicit override of an already-automatic default.)*
+- **`splitdebug` / `packdebug`** — open; real `__generate_packdebug`
+  (`bin/misc-functions.sh`) is gated on a `BUILD_ID` env var portuale's
+  own phase invocation never exports (build_id is currently allocated
+  and used Rust-side only, post-hoc, for the gpkg filename/index entry
+  above), so it would never fire even under
+  `FEATURES=binpkg-multi-instance` today; needs its own investigation
+  pass, not attempted this round. **RPM** — out of scope, duplicates
+  the existing Part 3 non-goal.
+  **PKGDIR-index locking** (real `flock(2)`-based, shared with
+  distfile locking — `portage_lock::PortageLockfile`),
+  **`FEATURES=buildpkg-live`**, and real **`EbuildBinpkg` failure
+  semantics** (temp-file-then-atomic-rename, both for a fresh build and
+  for `quickpkg`; a failed packaging phase no longer leaves a
+  truncated/corrupt archive at the real, discoverable path) all shipped
+  2026-09-04.
+- **Fetch** — real candidate ordering/shuffling and `RESTRICT=
+  primaryuri` for `SRC_URI` fetch remain deliberately unported
+  (determinism > a non-observable mirror-selection detail; already
+  documented in `fetch.rs`'s own module doc comment, predates this
+  session).
 
 ### F. Whole `emerge` actions
 

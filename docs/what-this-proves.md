@@ -12994,3 +12994,75 @@ than attempted speculatively -- the three shipped pieces this same day
 leaf selection) already took live gcc exact-position matches from 3/26
 to 8/26 lines, a real, verified improvement in their own right,
 independent of whether the full-tree walk is ever built.
+
+### Binary packages / fetch backlog audit -- most of it was already done or never real (2026-09-04)
+
+Asked to implement "E. Binary packages / fetch" (`docs/scope-backlog.md`)
+"all five points", a source-reading pass against the pinned
+`3rdparty/portage` checkout found the backlog text itself was
+substantially stale: "live `layout.conf` negotiation" and
+`RESTRICT=primaryuri` interleave for a *remote binhost* correspond to
+no mechanism in real `bintree.py` at all (zero hits for either term);
+`Packages.bz2`/`.lz4` compression variants don't exist in real either
+(plain-text `Packages`, unconditionally); RPM under binary-package
+build orchestration duplicates the existing Part 3 non-goal; and real
+candidate-ordering/shuffling plus `RESTRICT=primaryuri` for actual
+`SRC_URI` fetch were already deliberately, correctly left unported in
+an earlier session, with the reasoning already sitting in `fetch.rs`'s
+own module doc comment (determinism over a non-observable
+mirror-selection detail). None of that needed new code -- reporting it
+accurately, rather than either implementing nonexistent behavior or
+silently skipping it, was the actual work.
+
+What genuinely was real and open, and shipped this session:
+**`FEATURES=binpkg-multi-instance` `BUILD_ID` naming for gpkg** (real
+`bintree.py:529-531`/`2607-2669`'s `_allocate_filename_multi`, ported
+gpkg-only -- real xpak multi-instance uses a bare `.xpak` metadata
+segment, a genuinely different on-disk shape from the single-instance
+`.tbz2` archive `read_xpak_metadata` already reads, not attempted;
+`binpkg_multi_instance` therefore defaults *off* here despite real
+defaulting it *on*, a deliberate, documented divergence to avoid
+mislabeling xpak output). Writing the regression test for this
+surfaced a real, independent, pre-existing bug: `write_packages_index_entry`
+never wrote `PF`/`CATEGORY` fields at all -- invisible until a test
+checked them on an index-fast-path-hit entry rather than a
+fresh-parse one -- fixed alongside it, plus the dedup key itself
+(previously CPV-only, which would let a second multi-instance build
+silently replace the first one's index entry -- rereading real
+`_inject_file`, `bintree.py:2211-2250`, confirmed PATH-primary dedup
+with CPV as a fallback only when PATH is absent, ported that).
+
+**Real `EbuildBinpkg` failure semantics**
+(`_emerge/EbuildBinpkg.py:37-67`): real `__dyn_package` never writes
+the final, discoverable `Packages`-index path directly -- only a
+same-directory temp file, renamed into place by `bintree.inject()`
+only after the packaging phase exits `EX_OK`, and unlinked on failure.
+Portuale's own `package_after_install`/`quickpkg_from_vdb` pointed
+`PORTAGE_BINPKG_TMPFILE` straight at the final path instead, so a
+mid-write failure (compressor crash, disk full) could leave a
+truncated/corrupt archive sitting where a later `--usepkg` scan would
+trust it. Fixed with the same temp-file-then-atomic-rename shape real
+uses; a new test builds an unresolvable-compressor `PackageOptions`
+against a pre-existing sentinel binpkg file and confirms the sentinel
+survives untouched and no temp file is left behind.
+
+**Binpkg `MD5`**: real `_pkgindex_entry` (`bintree.py:2302`) always
+writes an `MD5` (and `SHA1` -- already a documented, justified cut, no
+sha1 crate) digest of the whole binpkg file into its `Packages` entry.
+Neither of portuale's own two binpkg-writing paths ever computed one,
+so a binpkg portuale itself built carried no `MD5` at all -- silently
+skipping `emerge_getbinpkg::download_and_verify`'s own integrity check
+for anyone fetching it from a portuale-served pkgdir as a remote
+binhost. Fixed at both call sites; confirmed real doesn't compute this
+during a bare directory rescan either (`_populate_local`'s own
+`_read_metadata` call uses `_aux_cache_keys`, not `_pkgindex_hashes` --
+build-time-only, matching where portuale now computes it too).
+
+Left genuinely open, with reasons recorded in `docs/scope-backlog.md`:
+xpak multi-instance (differing on-disk shape), the explicit
+`--binpkg-changed-deps=y|n` override (a large plumbing job through
+`resolve_pretend`/`backtracking_resolve` for a rarely-used override of
+an already-automatic default), and `splitdebug`/`packdebug` (real's own
+`__generate_packdebug` is gated on a `BUILD_ID` env var portuale's
+phase invocation never actually exports to the running phase --
+needs its own investigation, not attempted this round).
