@@ -9326,6 +9326,16 @@ pub fn run(args: &[String]) -> ExitCode {
         // `emerge_build::entry_package_env_vars` does the per-entry atom
         // match.
         merge_options.package_env_vars = config.package_env_vars.clone();
+        // Real `actions.py:664-672`: right before a fresh, non-`--resume`
+        // merge starts, an existing multi-package `mtimedb["resume"]`
+        // (left over from some earlier, abandoned run) is preserved as
+        // `resume_backup` rather than just being silently overwritten
+        // once this run's own outcome gets recorded -- `emerge --resume`
+        // can still recover it later if this run wasn't actually meant
+        // to replace it. This whole branch is only ever reached for a
+        // non-`--resume` action (`--resume` returns early, well above).
+        crate::mtimedb::rotate_resume_to_backup(&root);
+
         // Real `FEATURES=buildpkg` / `--buildpkg`/`-b` (real
         // `_emerge/EbuildBinpkg`): a binpkg of each source entry is
         // written into `$PKGDIR` as a side effect of the merge.
