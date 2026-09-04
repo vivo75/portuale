@@ -748,6 +748,20 @@ fn merge_one_built_entry(
     // entry's resolved `USE` too (see `merge_one_source_entry`).
     let mut per_entry = options.clone();
     per_entry.build_env = entry_build_env(options, entry);
+    // This function is only ever reached once `build_one_source_entry`
+    // already captured the same package's own `install` phase to this
+    // exact path (both callers only route here when `capture_log` is
+    // true) -- reusing it here (`MergeOptions::log_file`'s own doc
+    // comment) means `pkg_preinst`/`pkg_postinst`'s own output lands
+    // appended after `install`'s, in one continuous per-package log,
+    // instead of leaking straight to the terminal the way it
+    // previously did under `-jN`/`--quiet-build`.
+    per_entry.log_file = Some(build_log_path(
+        portage_tmpdir,
+        &entry.category,
+        &entry.package,
+        &version,
+    ));
     let status = ebuild_merge::run_qmerge(ebuild_path, root, portage_tmpdir, &per_entry)?;
     if status != 0 {
         return Err(format!("{cp}-{version}: merge failed ({status})"));
@@ -1347,6 +1361,66 @@ mod tests {
             fs::read_to_string(vdb.join("RDEPEND")).unwrap().trim(),
             "dev-libs/samepkg"
         );
+        let _ = fs::remove_dir_all(&root);
+        let _ = fs::remove_dir_all(&portage_tmpdir);
+    }
+
+    #[test]
+    fn capture_log_also_captures_pkg_preinst_and_pkg_postinst_output() {
+        // Real `Scheduler._background_mode`: under `capture_log` (always
+        // true for `--jobs` >1, opt-in via `--quiet-build`/`-q`
+        // otherwise), a package's own `install` phase output already
+        // went to its own `build.log` -- but `pkg_preinst`/`pkg_postinst`
+        // (run separately, not part of `install`'s own `actionmap_deps`
+        // chain -- `merge_after_install`'s own doc comment) previously
+        // had no log file threaded to them at all, so their own output
+        // always leaked straight to the terminal regardless of
+        // `capture_log`. `hookoutputpkg`'s `pkg_preinst`/`pkg_postinst`
+        // each echo an observable marker for this test to look for in
+        // the captured log instead.
+        let config_root = fixtures_root();
+        let repos = find_repos(&config_root).unwrap();
+        let root = tempdir();
+        let portage_tmpdir = tempdir();
+
+        let entries = vec![source_entry(
+            "hookoutputpkg",
+            PretendOutcome::New {
+                version: "1.0".into(),
+            },
+        )];
+        let options = ebuild_merge::MergeOptions {
+            distdir: tempdir(),
+            config_root: config_root.clone(),
+            ..ebuild_merge::MergeOptions::default()
+        };
+        run_source_merge(
+            &entries,
+            &repos,
+            &root,
+            &portage_tmpdir,
+            &options,
+            false,
+            None,
+            &[],
+            1,
+            None,
+            true, // capture_log
+        )
+        .expect("source merge succeeds");
+
+        let log = build_log_path(&portage_tmpdir, "dev-libs", "hookoutputpkg", "1.0");
+        let log_text =
+            fs::read_to_string(&log).unwrap_or_else(|e| panic!("{}: {e}", log.display()));
+        assert!(
+            log_text.contains("HOOKOUTPUTPKG-PREINST-MARKER"),
+            "pkg_preinst output missing from the captured log:\n{log_text}"
+        );
+        assert!(
+            log_text.contains("HOOKOUTPUTPKG-POSTINST-MARKER"),
+            "pkg_postinst output missing from the captured log:\n{log_text}"
+        );
+
         let _ = fs::remove_dir_all(&root);
         let _ = fs::remove_dir_all(&portage_tmpdir);
     }

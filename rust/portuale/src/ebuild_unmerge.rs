@@ -716,6 +716,7 @@ pub fn run_unmerge(
         &options.config_root,
         options.shell,
         &[],
+        None,
     )?;
     if prerm_status != 0 {
         return Ok(prerm_status);
@@ -739,6 +740,7 @@ pub fn run_unmerge(
         &options.config_root,
         options.shell,
         &[],
+        None,
     )?;
     if postrm_status != 0 {
         return Ok(postrm_status);

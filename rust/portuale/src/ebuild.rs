@@ -347,6 +347,7 @@ pub fn run(args: &[String]) -> ExitCode {
                     &merge_options.config_root,
                     shell,
                     &[],
+                    None,
                 )
             } else {
                 ebuild_phases::run_commands(

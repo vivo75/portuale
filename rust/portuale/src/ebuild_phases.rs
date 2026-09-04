@@ -2438,6 +2438,11 @@ pub(crate) fn run_single_phase(
     // an `emerge <atom>` merge's own `pkg_preinst`/`pkg_postinst`. `&[]`
     // for a standalone phase / a removal hook / a binary merge.
     build_env: &[(String, String)],
+    // Real `Scheduler._background_mode`'s own `PORTAGE_LOG_FILE`,
+    // extended to this hook -- see `ebuild_merge::MergeOptions::
+    // log_file`'s own doc comment. `None` for a standalone/foreground
+    // run.
+    log_file: Option<&Path>,
 ) -> Result<i32, String> {
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -2460,7 +2465,7 @@ pub(crate) fn run_single_phase(
             build_env,
             config_root,
             shell,
-            None,
+            log_file,
         )
         .await
     })
@@ -2508,6 +2513,11 @@ pub(crate) fn run_phase_from_saved_env(
     debug: bool,
     config_root: &Path,
     shell: ShellBackend,
+    // Real `Scheduler._background_mode`'s own `PORTAGE_LOG_FILE`,
+    // extended to this hook -- see `ebuild_merge::MergeOptions::
+    // log_file`'s own doc comment. `None` for a standalone/foreground
+    // run.
+    log_file: Option<&Path>,
 ) -> Result<i32, String> {
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -2545,7 +2555,7 @@ pub(crate) fn run_phase_from_saved_env(
             &extra_env,
             config_root,
             shell,
-            None,
+            log_file,
         )
         .await
     })
@@ -3044,6 +3054,7 @@ mod tests {
             Path::new("/dev/null/no-config-root"),
             ShellBackend::Brush,
             &[],
+            None,
         )
         .expect("run_single_phase should not itself error");
         assert_eq!(config_status, 0);
@@ -3056,6 +3067,7 @@ mod tests {
             Path::new("/dev/null/no-config-root"),
             ShellBackend::Brush,
             &[],
+            None,
         )
         .expect("run_single_phase should not itself error");
         assert_eq!(info_status, 0);
@@ -3103,6 +3115,7 @@ mod tests {
             Path::new("/dev/null/no-config-root"),
             ShellBackend::Brush,
             &[],
+            None,
         )
         .expect("run_single_phase should not itself error");
         assert_eq!(prerm_status, 0);
@@ -3115,6 +3128,7 @@ mod tests {
             Path::new("/dev/null/no-config-root"),
             ShellBackend::Brush,
             &[],
+            None,
         )
         .expect("run_single_phase should not itself error");
         assert_eq!(postrm_status, 0);

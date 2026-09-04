@@ -297,6 +297,28 @@ pub struct MergeOptions {
     /// (`pretend::BUILD_VARS`) over `build_env` -- real `_grab_pkg_env`
     /// into `configdict["pkg"]`. Empty (`Default`) everywhere else.
     pub package_env_vars: Vec<(String, Vec<(String, String)>)>,
+    /// Real `Scheduler._background_mode`'s own `PORTAGE_LOG_FILE`
+    /// redirection, extended to this merge's own `pkg_preinst`/
+    /// `pkg_postinst`/`pkg_prerm`/`pkg_postrm` hooks -- previously only
+    /// the `install` phase chain (`emerge_build.rs`'s own
+    /// `build_one_source_entry`/`run_build_scheduler`) had a log path at
+    /// all, so every hook this module runs (`merge_after_install`'s
+    /// `preinst`/`postinst`, and the same-slot-replace/binary-merge
+    /// `prerm`/`postrm`/`setup` hooks reached through `unmerge_one_
+    /// installed`/`run_binary_merge`'s own `run_hook` closures) printed
+    /// straight to the terminal even under `-jN`/`--quiet-build`,
+    /// interleaving with -- or outliving -- the per-job build log real
+    /// portage keeps genuinely separate. `Some` only when the caller
+    /// already derived a `build.log` path for this same package's
+    /// `install` phase (`emerge_build.rs`'s own `build_log_path`) --
+    /// `run_one_phase`'s own log file is opened in append mode, so a
+    /// hook's own output lands after that phase's, in the same file,
+    /// exactly the way real portage's own single `PORTAGE_LOG_FILE`
+    /// spans a whole package's build-then-merge lifecycle. `None`
+    /// (`Default`) for a standalone `ebuild <file> merge`/`qmerge`/
+    /// `unmerge`, `emerge -C`, and every test -- terminal output there
+    /// already matches what real portage's own foreground run does.
+    pub log_file: Option<PathBuf>,
 }
 
 impl Default for MergeOptions {
@@ -318,6 +340,7 @@ impl Default for MergeOptions {
             config_root: PathBuf::from("/dev/null/no-config-root-configured"),
             build_env: Vec::new(),
             package_env_vars: Vec::new(),
+            log_file: None,
         }
     }
 }
@@ -363,6 +386,7 @@ impl MergeOptions {
             config_root: portage_repo::config_root_from_env(),
             build_env: Vec::new(),
             package_env_vars: Vec::new(),
+            log_file: d.log_file,
         }
     }
 }
@@ -2405,6 +2429,7 @@ fn merge_after_install(
         &options.config_root,
         options.shell,
         &options.build_env,
+        options.log_file.as_deref(),
     )?;
     if preinst_status != 0 {
         return Ok(preinst_status);
@@ -2462,6 +2487,7 @@ fn merge_after_install(
         &options.config_root,
         options.shell,
         &options.build_env,
+        options.log_file.as_deref(),
     )?;
 
     if !contents.is_empty() || !replaced.is_empty() {
@@ -2735,6 +2761,7 @@ pub(crate) fn run_vdb_saved_env_phase(
         options.debug,
         &options.config_root,
         options.shell,
+        options.log_file.as_deref(),
     )
 }
 
@@ -2877,6 +2904,7 @@ pub fn merge_binpkg(
                 options.debug,
                 &options.config_root,
                 options.shell,
+                options.log_file.as_deref(),
             ),
             _ => Ok(0),
         }
