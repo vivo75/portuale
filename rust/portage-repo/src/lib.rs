@@ -11466,7 +11466,21 @@ fn backtracking_resolve(req: &ResolveRequest) -> Result<GraphResult, String> {
                         "resolved_slots only ever indexes New/Upgrade/Downgrade/Reinstall entries"
                     ),
                 };
-                let existing_str = format!("{}/{}-{existing_version}:{slot}", key.0, key.1);
+                // Include the already-resolved version's own sub-slot: a
+                // *built* slot-operator atom (`cat/pkg:0/2=`, common in a
+                // binary package's recorded RDEPEND) carries an explicit
+                // sub-slot and won't match a `:slot`-only string even when
+                // the sub-slots agree -- which produced a spurious slot
+                // conflict for a package two binary parents both depend on.
+                let existing_sub = slot_conflict_meta(&repos, &key.0, &key.1, &existing_version).0;
+                let existing_str = if existing_sub.is_empty() {
+                    format!("{}/{}-{existing_version}:{slot}", key.0, key.1)
+                } else {
+                    format!(
+                        "{}/{}-{existing_version}:{slot}/{existing_sub}",
+                        key.0, key.1
+                    )
+                };
                 let satisfied =
                     portage_dep::match_from_list(&current_atom, &[existing_str.as_str()])
                         .is_some_and(|m| !m.is_empty());

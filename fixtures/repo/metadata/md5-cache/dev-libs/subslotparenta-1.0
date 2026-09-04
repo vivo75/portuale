@@ -1,0 +1,8 @@
+DEFINED_PHASES=-
+DESCRIPTION=fixture: ebuild + same-version binhost binary whose RDEPEND carries a BUILT slot-op atom dev-libs/subslotdep:0/1= -- two such parents must not slot-conflict on subslotdep
+EAPI=8
+IUSE=
+KEYWORDS=amd64
+RDEPEND=dev-libs/subslotdep:0=
+SLOT=0
+_md5_=0000000000000000000000000000000

@@ -988,6 +988,16 @@ CASES = [
         0,
     ),
     (
+        "--getbinpkg: two binaries' built slot-op atoms on one dep don't slot-conflict",
+        [
+            "--pretend",
+            "--getbinpkg",
+            "dev-libs/subslotparenta",
+            "dev-libs/subslotparentb",
+        ],
+        0,
+    ),
+    (
         "--newrepo: off by default, stays already-installed",
         ["--pretend", "--selective", "dev-libs/newrepopkg"],
         0,

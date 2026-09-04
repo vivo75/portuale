@@ -7838,7 +7838,20 @@ def resolve_pretend_graph(
                     if existing_outcome[0] in ("new", "reinstall")
                     else existing_outcome[2]
                 )
-                existing_str = f"{category}/{package}-{existing_version}:{slot}"
+                # Include the already-resolved version's own sub-slot: a
+                # *built* slot-operator atom (cat/pkg:0/2=, common in a
+                # binary package's recorded RDEPEND) carries an explicit
+                # sub-slot and won't match a :slot-only string even when the
+                # sub-slots agree -- which produced a spurious slot conflict
+                # for a package two binary parents both depend on.
+                _existing_sub = _slot_conflict_meta(
+                    repos, category, package, existing_version
+                )[0]
+                existing_str = (
+                    f"{category}/{package}-{existing_version}:{slot}/{_existing_sub}"
+                    if _existing_sub
+                    else f"{category}/{package}-{existing_version}:{slot}"
+                )
                 satisfied = bool(match_from_list(current_atom_str, [existing_str]))
                 if not satisfied:
                     slot_conflicts.append(

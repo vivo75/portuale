@@ -8608,6 +8608,18 @@ bit) is now `false` under the `--usepkg` family, and the main graph
 walk drops `DEPEND`/`BDEPEND` for a `CandidateSource::Binary` entry when
 it is `false` (the `AlreadyInstalled` deep-walk already respected it).
 
+**No spurious slot conflict from a built slot-operator atom
+(2026-09-04).** When two parents both depend on the same package, the
+second atom is checked against the already-resolved version via
+`match_from_list(current_atom, ["cat/pkg-VER:SLOT"])`. That string
+carried only the main slot -- so a *built* slot-operator atom
+`cat/pkg:0/2=` (an explicit sub-slot, as recorded in a binary package's
+`RDEPEND`) failed to match even when the sub-slots agreed, and portuale
+reported a slot conflict for a package two `--getbinpkg` binary parents
+shared (`gnome-settings-daemon` + `gnome-color-manager` both →
+`x11-misc/colord`). Fixed: the check string now includes the resolved
+version's own sub-slot (`_slot_conflict_meta`).
+
 ### `emerge -p`: the blocker line follows real `ResolverOutput._blockers`
 
 Portuale's blocker report was portuale-shaped (`[blocks] cat/foo-1.0 hard

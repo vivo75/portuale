@@ -1,0 +1,7 @@
+DEFINED_PHASES=-
+DESCRIPTION=fixture: shared sub-slotted dep (SLOT=0/1) two --getbinpkg binary parents both pull via a built :0/1= atom
+EAPI=8
+IUSE=
+KEYWORDS=amd64
+SLOT=0/1
+_md5_=0000000000000000000000000000000

@@ -1,5 +1,5 @@
 TIMESTAMP: 0
-PACKAGES: 5
+PACKAGES: 7
 
 BUILD_ID: 1
 CPV: dev-libs/remotebinpkg-1.0
@@ -62,3 +62,28 @@ SIZE: 45056
 SLOT: 0
 USE:
 
+BUILD_ID: 1
+CPV: dev-libs/subslotparenta-1.0
+DEFINED_PHASES: -
+DESCRIPTION: fixture: binhost binary, RDEPEND a BUILT slot-op atom >=dev-libs/subslotdep-1.0:0/1=
+EAPI: 8
+IUSE:
+KEYWORDS: amd64
+RDEPEND: >=dev-libs/subslotdep-1.0:0/1=
+REPO: testrepo
+SIZE: 40960
+SLOT: 0
+USE:
+
+BUILD_ID: 1
+CPV: dev-libs/subslotparentb-1.0
+DEFINED_PHASES: -
+DESCRIPTION: fixture: second binhost binary, a DIFFERENT-text built slot-op atom on the same dep (>=..-0.5 vs >=..-1.0) so visited_atoms doesn't dedup it -- must not slot-conflict with subslotparenta
+EAPI: 8
+IUSE:
+KEYWORDS: amd64
+RDEPEND: >=dev-libs/subslotdep-0.5:0/1=
+REPO: testrepo
+SIZE: 40960
+SLOT: 0
+USE:
