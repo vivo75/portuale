@@ -17,6 +17,7 @@ use std::cmp::Reverse;
 
 mod alt_edges;
 mod build;
+mod cycles;
 mod debug;
 mod digraph;
 mod installed_closure;
@@ -29,6 +30,7 @@ mod tests;
 
 pub use alt_edges::*;
 pub(crate) use build::*;
+pub(crate) use cycles::*;
 pub(crate) use debug::*;
 pub(crate) use digraph::*;
 pub use installed_closure::*;

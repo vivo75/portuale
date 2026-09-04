@@ -351,6 +351,38 @@ pub(crate) fn s_ignore_runtime(p: &DepPriority) -> bool {
     (!p.runtime_slot_op || p.satisfied) && (p.satisfied || p.optional || !p.buildtime)
 }
 
+/// The two `DepPriority*Range` ladders: an `ignore_priority` ladder plus the
+/// named rungs `_serialize_tasks` reaches for directly.
+/// Portage: _emerge/DepPriorityNormalRange.py, DepPrioritySatisfiedRange.py
+pub(crate) struct PriorityRange {
+    pub(crate) ignore: &'static [Option<Ignore>],
+    pub(crate) medium: usize,
+    pub(crate) medium_soft: usize,
+    pub(crate) medium_post: usize,
+}
+
+pub(crate) static SATISFIED: PriorityRange = PriorityRange {
+    ignore: &[
+        None,
+        Some(Ignore::SOptional),
+        Some(Ignore::SSatisfiedRuntimePost),
+        Some(Ignore::SRuntimePost),
+        Some(Ignore::SSatisfiedRuntime),
+        Some(Ignore::SSatisfiedBuildtime),
+        Some(Ignore::SSatisfiedBuildtimeSlotOp),
+        Some(Ignore::SRuntime),
+    ],
+    medium: 7,
+    medium_soft: 6,
+    medium_post: 3,
+};
+
+impl PriorityRange {
+    pub(crate) fn ig_medium_soft(&self) -> Option<Ignore> {
+        self.ignore[self.medium_soft]
+    }
+}
+
 impl std::fmt::Display for DepPriority {
     /// The single highest classification; `Priority:` lines and edge labels use it.
     /// Portage: _emerge/DepPriority.py, __str__
