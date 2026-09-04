@@ -434,11 +434,36 @@ pub(crate) fn package_after_install(
         std::fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
     }
 
-    let package_status =
-        invoke_dyn_package(ebuild_path, portage_tmpdir, root, options, &binpkg_path)?;
+    // Real `EbuildBinpkg._start`/`_package_phase_exit`
+    // (`_emerge/EbuildBinpkg.py:37-67`): `__dyn_package` never writes the
+    // real, discoverable `Packages`-index path directly -- it writes a
+    // same-directory `PORTAGE_BINPKG_TMPFILE` (a `NamedTemporaryFile`
+    // with a PID suffix) instead, and only `bintree.inject()` renames it
+    // into place, and only after the packaging phase has already exited
+    // `EX_OK`. A mid-write failure (tar/compressor/xpak-helper crash,
+    // disk full) therefore never leaves a truncated or corrupt archive
+    // sitting at the final path for a later scan to pick up -- the temp
+    // file is unlinked instead (`_package_phase_exit`'s own
+    // `os.unlink(self._binpkg_tmpfile)` on non-`EX_OK`). Mirrored here
+    // with `std::fs::rename` (atomic, same directory => same
+    // filesystem) rather than a real `NamedTemporaryFile`, since this is
+    // a single-process CLI with no concurrent packaging of the same CPV
+    // to race against.
+    let tmp_path = binpkg_path.with_extension(format!(
+        "{}.tmp{}",
+        binpkg_path
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or_default(),
+        std::process::id()
+    ));
+    let package_status = invoke_dyn_package(ebuild_path, portage_tmpdir, root, options, &tmp_path)?;
     if package_status != 0 {
+        let _ = std::fs::remove_file(&tmp_path);
         return Ok(package_status);
     }
+    std::fs::rename(&tmp_path, &binpkg_path)
+        .map_err(|e| format!("{} -> {}: {e}", tmp_path.display(), binpkg_path.display()))?;
 
     let cpv = format!("{}/{}", env.category, env.split.pf);
     let metadata: HashMap<String, String> = ebuild_phases::repo_root_for(&env.pkg_dir)
@@ -1223,5 +1248,66 @@ mod tests {
             );
             assert_eq!(entry.get("PF").map(String::as_str), Some("packagepkg-1.0"));
         }
+    }
+
+    #[test]
+    fn a_failed_packaging_phase_never_touches_the_final_binpkg_path() {
+        // Real `EbuildBinpkg`'s own temp-file-then-rename dance
+        // (`_emerge/EbuildBinpkg.py:37-67`, this function's own doc
+        // comment above the `tmp_path` it now builds) -- `__dyn_package`
+        // only ever writes a same-directory temp file, so a mid-write
+        // failure can never leave a truncated/corrupt archive at the
+        // real, discoverable `Packages`-index path for a later
+        // `--usepkg` scan to trust.
+        let tmp = tempdir();
+        let root = tmp.join("root");
+        let portage_tmpdir = tmp.join("tmp");
+        let options = PackageOptions {
+            debug: false,
+            pkgdir: tmp.join("pkgdir"),
+            distdir: tmp.join("distdir"),
+            shell: ebuild_phases::ShellBackend::default(),
+            // A compressor name find_binary can never resolve leaves
+            // PORTAGE_COMPRESSION_COMMAND unset, so real, unmodified
+            // `__dyn_package` hits its own `[[ -z
+            // "${PORTAGE_COMPRESSION_COMMAND}" ]] && die` before ever
+            // opening the tar pipe -- a clean, deterministic failure
+            // that never touches PORTAGE_BINPKG_TMPFILE at all.
+            binpkg_compress: "made-up-codec".to_string(),
+            ..PackageOptions::default()
+        };
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::create_dir_all(&portage_tmpdir).unwrap();
+
+        let repo_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/repo");
+        let ebuild = repo_root.join("dev-libs/packagepkg/packagepkg-1.0.ebuild");
+
+        // Sentinel content already at the final path, standing in for a
+        // real prior successful build -- a failed *re*-package (e.g. a
+        // `--buildpkg` rebuild after edits) must never clobber it.
+        let binpkg_path = options.pkgdir.join("dev-libs/packagepkg-1.0.tbz2");
+        std::fs::create_dir_all(binpkg_path.parent().unwrap()).unwrap();
+        std::fs::write(&binpkg_path, b"OLD-CONTENT").unwrap();
+
+        let status = run_package(&ebuild, &root, &portage_tmpdir, &options)
+            .expect("run_package returns Ok(status)");
+        assert_ne!(
+            status, 0,
+            "packaging should fail with an unresolvable compressor"
+        );
+
+        assert_eq!(
+            std::fs::read(&binpkg_path).unwrap(),
+            b"OLD-CONTENT",
+            "a failed packaging phase must not touch the final binpkg path"
+        );
+        // No stray temp file left behind either.
+        let leftovers: Vec<_> = std::fs::read_dir(binpkg_path.parent().unwrap())
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|n| n.contains(".tmp"))
+            .collect();
+        assert!(leftovers.is_empty(), "leftover temp files: {leftovers:?}");
     }
 }
