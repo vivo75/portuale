@@ -69,10 +69,11 @@
 //     single source of truth, is a documented follow-up.
 //   - No `BUILD_ID` support, no `packdebug`/`splitdebug` handling, no
 //     RPM (`__dyn_rpm`) format.
-//   - No `PKGDIR`-index locking -- a genuinely concurrent build racing
-//     another write to the same `Packages` file could interleave; this
-//     portuale's own single-invocation-at-a-time CLI usage never exercises
-//     that.
+//   - `PKGDIR`-index locking IS real now (`write_packages_index_entry`'s
+//     own doc comment) -- the same real `flock(2)`-based
+//     `PortageLockfile` `fetch.rs`'s own distlocks already use, wrapping
+//     the whole read-modify-write sequence, matching real `bintree.
+//     inject`/`update_pkgindex`/`remove`.
 //   - Real `EbuildBinpkg`'s own separate `bindbapi.inject()` step (an
 //     in-memory binary-package database update, distinct from the
 //     on-disk `Packages` file write) has no equivalent here -- this
@@ -265,6 +266,17 @@ fn format_packages_entry(fields: &[(&str, &str)]) -> String {
 /// (a rebuild) is replaced in place, not duplicated -- every other
 /// entry (including other versions of the same package) is preserved
 /// verbatim.
+///
+/// Real `bintree.inject`/`update_pkgindex`/`remove` (`bintree.py:948`/
+/// `:1999`/`:2059`) all wrap this exact "reread the index, in case
+/// another process changed it, then update it" sequence in a real,
+/// blocking `lockfile(self._pkgindex_file, wantnewlockfile=1)` --
+/// `PortageLockfile::acquire`, the same real primitive `fetch.rs`'s own
+/// distfile locking already uses. A genuinely concurrent `emerge -b`/
+/// `--buildpkg` racing another write to the same `Packages` file could
+/// otherwise interleave (portuale's own single-invocation-at-a-time CLI
+/// usage rarely exercises this, but it's cheap and correct to hold the
+/// same real lock real portage does regardless).
 fn write_packages_index_entry(
     pkgdir: &Path,
     cpv: &str,
@@ -272,6 +284,12 @@ fn write_packages_index_entry(
 ) -> Result<(), String> {
     let path = pkgdir.join("Packages");
     let now = now_unix_time()?;
+
+    // Real order: `os.makedirs(self.pkgdir, exist_ok=True)` *then*
+    // acquire the lock (`bintree.py:2057-2059`) -- the lock file itself
+    // is a sibling of `Packages`, so its own parent dir must exist first.
+    std::fs::create_dir_all(pkgdir).map_err(|e| format!("{}: {e}", pkgdir.display()))?;
+    let _lock = crate::portage_lock::PortageLockfile::acquire(&path)?;
 
     let mut blocks: Vec<String> = Vec::new();
     if let Ok(text) = std::fs::read_to_string(&path) {
@@ -298,8 +316,9 @@ fn write_packages_index_entry(
     }
     text.push('\n');
 
-    std::fs::create_dir_all(pkgdir).map_err(|e| format!("{}: {e}", pkgdir.display()))?;
     std::fs::write(&path, text).map_err(|e| format!("{}: {e}", path.display()))
+    // `_lock` drops here, releasing the flock -- same real effect real
+    // `unlockfile()` has.
 }
 
 /// Real `doebuild()`'s own first step for `"package"` is always the real

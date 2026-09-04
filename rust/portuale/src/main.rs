@@ -31,6 +31,7 @@ mod env_update;
 mod fetch;
 mod mtimedb;
 mod needed_elf;
+mod portage_lock;
 mod pretend;
 mod regen;
 

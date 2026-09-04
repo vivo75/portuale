@@ -16,9 +16,9 @@
 // '.portage_lockfile'`) -- guards against two concurrent portage
 // processes racing the same distfile. Confirmed via `cnf/make.globals`
 // (line 77-84) that `distlocks` is one of real portage's own *default*
-// `FEATURES` tokens (`DistfileLock::acquire`'s own callers default to
+// `FEATURES` tokens (`PortageLockfile::acquire`'s own callers default to
 // locking accordingly). Released by simply closing the lock file's own
-// fd (`DistfileLock`'s own `Drop`), the same real effect real
+// fd (`PortageLockfile`'s own `Drop`), the same real effect real
 // `unlockfile()`'s own explicit `flock(fd, LOCK_UN)` has -- POSIX
 // guarantees all of a process's own `flock` locks on an fd are released
 // when that fd is closed. Real `unlinkfile=0` (portuale's own default
@@ -75,50 +75,10 @@ use portage_fetch::{
     flatten_src_uri, gentoo_mirror_fallback, parse_manifest, parse_thirdpartymirrors,
     resolve_mirror_candidates, verify_digests,
 };
-use std::os::unix::io::AsRawFd;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-/// Real `lockfile(mypath, wantnewlockfile=1)` (`lib/portage/locks.py`):
-/// a real, separate `.{basename}.portage_lockfile` sibling of `dest`,
-/// locked via a real, blocking `flock(2)` exclusive lock for the
-/// lifetime of this guard -- see this module's own doc comment for the
-/// full real grounding. Held open for as long as the returned guard
-/// lives; dropping it closes the fd, which releases the `flock` (POSIX
-/// guarantees this), the same real effect real `unlockfile()` has.
-struct DistfileLock {
-    _file: std::fs::File,
-}
-
-impl DistfileLock {
-    fn acquire(dest: &Path) -> Result<Self, String> {
-        let parent = dest.parent().unwrap_or_else(|| Path::new("."));
-        let basename = dest.file_name().and_then(|n| n.to_str()).unwrap_or("");
-        let lock_path = parent.join(format!(".{basename}.portage_lockfile"));
-        let file = std::fs::OpenOptions::new()
-            .create(true)
-            .write(true)
-            // Never truncate: only the lock itself matters, real
-            // `os.open(lockfile, O_CREAT)` doesn't `O_TRUNC` either, and
-            // truncating would race a concurrent holder's own in-flight
-            // read of the file (moot in practice since nothing is ever
-            // written to it, but explicit is cheap and correct).
-            .truncate(false)
-            .open(&lock_path)
-            .map_err(|e| format!("{}: {e}", lock_path.display()))?;
-        // Real default (no `os.O_NONBLOCK`, real `fetchonly`-only
-        // override portuale's own CLI has no equivalent mode for):
-        // block until the lock is available.
-        if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX) } != 0 {
-            return Err(format!(
-                "{}: {}",
-                lock_path.display(),
-                std::io::Error::last_os_error()
-            ));
-        }
-        Ok(Self { _file: file })
-    }
-}
+use crate::portage_lock::PortageLockfile;
 
 /// Real `make.globals`'s own `GENTOO_MIRRORS="http://distfiles.gentoo.
 /// org"` default. Used only by `ebuild_phases::fetch_sources`'s own
@@ -356,7 +316,7 @@ pub fn fetch_src_uri(
             ));
         };
         let _lock = if options.distlocks {
-            Some(DistfileLock::acquire(&dest)?)
+            Some(PortageLockfile::acquire(&dest)?)
         } else {
             None
         };
@@ -547,7 +507,7 @@ mod tests {
         let dir = tempdir();
         let dest = dir.join("foo-1.0.tar.gz");
 
-        let _lock = DistfileLock::acquire(&dest).expect("acquire succeeds");
+        let _lock = PortageLockfile::acquire(&dest).expect("acquire succeeds");
 
         assert!(
             dir.join(".foo-1.0.tar.gz.portage_lockfile").is_file(),
@@ -560,14 +520,14 @@ mod tests {
         let dir = tempdir();
         let dest = dir.join("foo-1.0.tar.gz");
 
-        let lock1 = DistfileLock::acquire(&dest).expect("first acquire succeeds");
+        let lock1 = PortageLockfile::acquire(&dest).expect("first acquire succeeds");
         drop(lock1);
 
         // Real `unlinkfile=0`: the lockfile persists on disk, just
         // unlocked -- a second acquire (in the same process, a
         // re-entrant flock on a fresh fd for the same file) must
         // succeed immediately, not block on itself.
-        DistfileLock::acquire(&dest).expect("second acquire succeeds once the first is dropped");
+        PortageLockfile::acquire(&dest).expect("second acquire succeeds once the first is dropped");
     }
 
     /// Real, end-to-end proof of the actual blocking behavior
@@ -579,13 +539,13 @@ mod tests {
         let dir = tempdir();
         let dest = dir.join("foo-1.0.tar.gz");
 
-        let lock1 = DistfileLock::acquire(&dest).expect("first acquire succeeds");
+        let lock1 = PortageLockfile::acquire(&dest).expect("first acquire succeeds");
 
         let dest2 = dest.clone();
         let (tx, rx) = std::sync::mpsc::channel();
         let handle = std::thread::spawn(move || {
             let _lock2 =
-                DistfileLock::acquire(&dest2).expect("second acquire succeeds once unblocked");
+                PortageLockfile::acquire(&dest2).expect("second acquire succeeds once unblocked");
             tx.send(()).unwrap();
         });
 
