@@ -544,6 +544,7 @@ pub(crate) fn resume_entry(category: &str, package: &str, version: &str) -> Grap
         parent_use_suggestion: None,
         targets_running_root: false,
         remote_binary: false,
+        build_id: None,
     }
 }
 
@@ -963,6 +964,7 @@ mod tests {
                 parent_use_suggestion: None,
                 targets_running_root: false,
                 remote_binary: false,
+                build_id: None,
             },
             GraphEntry {
                 category: "dev-libs".into(),
@@ -990,6 +992,7 @@ mod tests {
                 parent_use_suggestion: None,
                 targets_running_root: false,
                 remote_binary: false,
+                build_id: None,
             },
         ];
         let bogus = PathBuf::from("/nonexistent/does/not/exist");
@@ -1052,6 +1055,7 @@ mod tests {
             parent_use_suggestion: None,
             targets_running_root: false,
             remote_binary: false,
+            build_id: None,
         }];
 
         let result = run_buildpkgonly(
@@ -1115,6 +1119,7 @@ mod tests {
             parent_use_suggestion: None,
             targets_running_root: false,
             remote_binary: false,
+            build_id: None,
         }
     }
 
@@ -1636,6 +1641,7 @@ mod tests {
             parent_use_suggestion: None,
             targets_running_root: false,
             remote_binary: false,
+            build_id: None,
         }];
 
         let result = run_buildpkgonly(
@@ -1699,6 +1705,7 @@ mod tests {
             parent_use_suggestion: None,
             targets_running_root: false,
             remote_binary: false,
+            build_id: None,
         }
     }
 

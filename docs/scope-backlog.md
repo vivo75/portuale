@@ -254,8 +254,11 @@ The whole `FEATURES` isolation set wraps the six real `src_*` phases
 - **gpkg** — `.sig` verification + signing (`FEATURES=binpkg-signing` —
   cut, portuale has no crypto), bare `.xpak` multi-instance,
   `binpkg-multi-instance`, mtime-staleness index revalidation, `BUILD_ID`
-  in the basename.
-- **`BUILD_ID` / `splitdebug` / `packdebug` / RPM**, PKGDIR-index
+  in the basename. *(The `-pretend` `-N` `BUILD_ID` display suffix
+  shipped 2026-09-04 — `_append_build_id`; still open: which
+  multi-instance binary of one cpv gets picked — real's highest
+  `BUILD_TIME` past the acceptability web vs portuale's `vercmp`-only.)*
+- **`splitdebug` / `packdebug` / RPM**, PKGDIR-index
   locking, `FEATURES=buildpkg-live`, real `EbuildBinpkg` failure
   semantics under `--keep-going`.
 - **Fetch** — real candidate ordering / shuffling.

@@ -382,6 +382,7 @@ mod tests {
             parent_use_suggestion: None,
             targets_running_root: false,
             remote_binary: false,
+            build_id: None,
         }
     }
 
@@ -786,6 +787,7 @@ mod tests {
             parent_use_suggestion: None,
             targets_running_root: false,
             remote_binary: true,
+            build_id: None,
         };
 
         run_merge_plan(
@@ -894,6 +896,7 @@ mod tests {
             parent_use_suggestion: None,
             targets_running_root: false,
             remote_binary: true,
+            build_id: None,
         };
 
         run_merge_plan(

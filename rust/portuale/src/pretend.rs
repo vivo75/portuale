@@ -975,12 +975,20 @@ fn print_entry_line(
         || is_non00(entry_slot, entry_sub)
         || entry.oldbest.iter().any(|r| is_non00(&r.slot, &r.sub_slot));
     // The version as displayed in the bracket line: bare at `-p`,
-    // `:slot::repo`-decorated at `-pv`.
+    // `:slot::repo`-decorated at `-pv`. Real `output.py::_append_build_id`
+    // runs first (before `_append_slot`/`_append_repository`): a
+    // `type_name == "binary"` entry whose `Packages` index carried
+    // `BUILD_ID` shows `<cpv>-<build_id>` (`GraphEntry::build_id`, `Some`
+    // only for such a binary).
     let disp_version = |v: &str| -> String {
+        let v = match &entry.build_id {
+            Some(bid) => format!("{v}-{bid}"),
+            None => v.to_string(),
+        };
         if v3 {
-            decorate_version(v, entry_slot, entry_sub, entry_repo, show_slot)
+            decorate_version(&v, entry_slot, entry_sub, entry_repo, show_slot)
         } else {
-            v.to_string()
+            v
         }
     };
     // Real `convert_myoldbest`: `blue("[" + ", ".join(versions) + "]")`,
@@ -1576,6 +1584,9 @@ fn entry_to_json(
             portage_repo::CandidateSource::Ebuild => "ebuild",
         };
         fields.push(format!("\"source\":{}", json_string(source_tag)));
+        if let Some(bid) = &entry.build_id {
+            fields.push(format!("\"build_id\":{}", json_string(bid)));
+        }
         let opt_str = |v: &Option<String>| {
             v.as_deref()
                 .map(json_string)
@@ -9954,6 +9965,7 @@ mod tests {
             parent_use_suggestion: None,
             targets_running_root: false,
             remote_binary: false,
+            build_id: None,
         }
     }
 

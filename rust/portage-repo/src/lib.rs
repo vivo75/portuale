@@ -996,6 +996,13 @@ pub struct Candidate {
     /// Always `false` for an ebuild candidate or a local `$PKGDIR`
     /// binary.
     pub remote: bool,
+    /// The `BUILD_ID` field from this binary's own `Packages` index entry
+    /// (real binpkg-multi-instance / binhost `_pkg_str.build_id`) --
+    /// `Some("4")` for a binary, `None` for an ebuild or a `Packages`
+    /// entry with no `BUILD_ID`. Real `output.py::_append_build_id`
+    /// appends `-{build_id}` to the displayed version of a `type_name ==
+    /// "binary"` package (before the `:slot` / `::repo` decoration).
+    pub build_id: Option<String>,
 }
 
 /// A directory entry's name is only accepted as `<package>-<version>` if
@@ -1072,6 +1079,7 @@ pub fn list_candidates(
                 source: CandidateSource::Ebuild,
                 binary_use: None,
                 remote: false,
+                build_id: None,
             });
         }
     }
@@ -1414,6 +1422,7 @@ fn binary_candidates_from_index(
             source: CandidateSource::Binary,
             binary_use: Some(binary_use),
             remote,
+            build_id: entry.get("BUILD_ID").filter(|s| !s.is_empty()).cloned(),
         });
     }
     candidates
@@ -7104,6 +7113,7 @@ fn resolve_root_deps_build_entries(
         parent_use_suggestion: None,
         targets_running_root: true,
         remote_binary: false,
+        build_id: None,
     }];
 
     if let Some(version) = recurse_version {
@@ -8258,6 +8268,13 @@ pub struct GraphEntry {
     /// this alone drives the column. Always `false` for an ebuild entry,
     /// a local `$PKGDIR` binary, and `AlreadyInstalled`/`NoVisibleCandidate`.
     pub remote_binary: bool,
+    /// The resolved candidate's `BUILD_ID` (`Candidate::build_id`) --
+    /// `Some` only for a merge-bound *binary* entry whose `Packages`
+    /// index carried `BUILD_ID`. Real `output.py::_append_build_id`
+    /// appends `-{build_id}` to this entry's displayed version, before
+    /// the `-pv` `:slot` / `::repo` decoration. `None` for an ebuild
+    /// entry or `AlreadyInstalled`/`NoVisibleCandidate`.
+    pub build_id: Option<String>,
 }
 
 /// `(target cp, owner cp) -> (has_hard, has_soft)`: for each dependency
@@ -8519,6 +8536,7 @@ fn slot_operator_rebuild_entries(
             parent_use_suggestion: None,
             targets_running_root: false,
             remote_binary: false,
+            build_id: None,
         });
     }
     out.sort_by(|a, b| (a.category.as_str(), a.package.as_str()).cmp(&(&b.category, &b.package)));
@@ -8774,6 +8792,7 @@ fn rebuild_if_entries(
             parent_use_suggestion: None,
             targets_running_root: false,
             remote_binary: false,
+            build_id: None,
         });
     }
     out.sort_by(|a, b| (a.category.as_str(), a.package.as_str()).cmp(&(&b.category, &b.package)));
@@ -11374,6 +11393,7 @@ fn backtracking_resolve(req: &ResolveRequest) -> Result<GraphResult, String> {
                     parent_use_suggestion,
                     targets_running_root: false,
                     remote_binary: false,
+                    build_id: None,
                 });
                 continue;
             };
@@ -11628,6 +11648,13 @@ fn backtracking_resolve(req: &ResolveRequest) -> Result<GraphResult, String> {
             let candidate_source = resolved.source;
             // Real `output.py:648`: `attr_display.remote_binary = pkg.remote`.
             let candidate_remote = resolved.remote;
+            // Real `output.py::_append_build_id`: only a `type_name ==
+            // "binary"` package's version gets the `-{build_id}` suffix.
+            let candidate_build_id = if candidate_source == CandidateSource::Binary {
+                resolved.build_id.clone()
+            } else {
+                None
+            };
             let provenance = visibility_provenance(resolved, &key.0, &key.1, config);
             let keyword_mask =
                 keyword_mask_marker(resolved, &key.0, &key.1, config, &provenance.mask_entry);
@@ -11782,6 +11809,7 @@ fn backtracking_resolve(req: &ResolveRequest) -> Result<GraphResult, String> {
                 parent_use_suggestion: None,
                 targets_running_root: false,
                 remote_binary: candidate_remote,
+                build_id: candidate_build_id,
             });
 
             let metadata = if candidate_source == CandidateSource::Binary {
@@ -21817,6 +21845,7 @@ mod tests {
             source: CandidateSource::Ebuild,
             binary_use: None,
             remote: false,
+            build_id: None,
         }
     }
 
@@ -23259,6 +23288,7 @@ mod tests {
             parent_use_suggestion: None,
             targets_running_root: false,
             remote_binary: false,
+            build_id: None,
         }
     }
 

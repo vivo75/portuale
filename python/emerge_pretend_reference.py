@@ -1100,6 +1100,10 @@ def _binary_candidates_from_index(index, category, package, remote):
                 "binary_use": set(entry.get("USE", "").split()),
                 "remote": remote,
                 "size": _int_or_none(entry.get("SIZE")),
+                # Real _pkg_str.build_id -> output.py::_append_build_id: a
+                # binary's version shows "<cpv>-<build_id>" when its
+                # Packages entry carries BUILD_ID.
+                "build_id": entry.get("BUILD_ID") or None,
             }
         )
     return candidates
@@ -8064,6 +8068,14 @@ def resolve_pretend_graph(
             # `g` bracket column). Mirrors portage-repo/src/lib.rs's
             # GraphEntry::remote_binary.
             provenance["remote_binary"] = bool(resolved.get("remote"))
+            # Real output.py::_append_build_id: only a type_name ==
+            # "binary" package's version gets the "-<build_id>" suffix
+            # (before the -pv :slot/::repo decoration). Stashed on
+            # provenance like remote_binary; mirrors
+            # portage-repo/src/lib.rs's GraphEntry::build_id.
+            provenance["build_id"] = (
+                resolved.get("build_id") if candidate_source == "binary" else None
+            )
             # Real _append_slot / _append_repository / convert_myoldbest
             # inputs (verbosity 3 -- emerge -pv), stashed on provenance like
             # new_slot/interactive above. Mirrors portage-repo/src/lib.rs's
@@ -9408,6 +9420,8 @@ def _entry_to_json(category, package, merge_order, outcome, blockers, slot, use_
     fields.append(f'"slot":{_json_string(slot) if slot is not None else "null"}')
     if tag != "no_visible_candidate":
         fields.append(f'"source":{_json_string(source)}')
+        if provenance.get("build_id"):
+            fields.append(f'"build_id":{_json_string(provenance["build_id"])}')
 
         def _opt_str(v):
             return _json_string(v) if v is not None else "null"
@@ -15366,6 +15380,7 @@ def run(args):
         fetch_restrict_satisfied = bool(prov.get("fetch_restrict_satisfied"))
         remote_binary = bool(prov.get("remote_binary"))
         new_slot_flag = bool(prov.get("new_slot"))
+        build_id = prov.get("build_id")
 
         # Real _DisplayConfig verbosity: `--quiet and 1 or --verbose and
         # 3 or 2` -- --quiet wins over -v. v3 is "verbosity == 3", the
@@ -15385,6 +15400,11 @@ def run(args):
         )
 
         def disp_version(v):
+            # Real output.py::_append_build_id runs before
+            # _append_slot/_append_repository: a binary entry whose
+            # Packages index carried BUILD_ID shows "<cpv>-<build_id>".
+            if build_id:
+                v = f"{v}-{build_id}"
             if not v3:
                 return v
             return _decorate_version(v, entry_slot, entry_sub, entry_repo, show_slot)

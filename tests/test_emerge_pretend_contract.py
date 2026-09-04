@@ -4018,7 +4018,7 @@ def test_usepkg_makes_a_binary_only_package_eligible(emerge_binary, fixture_env)
     )
     assert result.returncode == 0
     assert result.stdout.splitlines() == [
-        '[binary  N     ] dev-libs/binaryonlypkg-1.0 ',
+        '[binary  N     ] dev-libs/binaryonlypkg-1.0-1 ',
     ]
     assert result.stderr == ""
 
@@ -4087,7 +4087,7 @@ def test_binary_wins_a_version_tie_against_the_ebuild(
     rust = _run([str(emerge_binary)], args, fixture_env)
     py = _run(emerge_pretend_python, args, fixture_env)
     assert rust.stdout == py.stdout
-    assert rust.stdout.splitlines() == ["[binary  N g   ] dev-libs/binebuildtie-1.0 "]
+    assert rust.stdout.splitlines() == ["[binary  N g   ] dev-libs/binebuildtie-1.0-1 "]
 
 
 def test_usepkgonly_defaults_binpkg_respect_use_off(emerge_binary, fixture_env):
@@ -4103,7 +4103,7 @@ def test_usepkgonly_defaults_binpkg_respect_use_off(emerge_binary, fixture_env):
     )
     assert result.returncode == 0
     assert result.stdout.splitlines() == [
-                                             '[binary  N     ] dev-libs/binaryusemismatchpkg-1.0  USE="foo"',
+                                             '[binary  N     ] dev-libs/binaryusemismatchpkg-1.0-1  USE="foo"',
                                          ]
     assert result.stderr == ""
 
@@ -4127,7 +4127,7 @@ def test_useoldpkg_atoms_prefers_the_old_binary_over_a_newer_ebuild(
         ["--pretend", "--usepkg", "--useoldpkg-atoms", "dev-libs/useoldpkgpkg", "dev-libs/useoldpkgpkg"],
         fixture_env,
     )
-    assert old.stdout.splitlines() == ["[binary  N     ] dev-libs/useoldpkgpkg-1.0 "]
+    assert old.stdout.splitlines() == ["[binary  N     ] dev-libs/useoldpkgpkg-1.0-1 "]
     assert old.stdout == _run(
         emerge_pretend_python,
         ["--pretend", "--usepkg", "--useoldpkg-atoms", "dev-libs/useoldpkgpkg", "dev-libs/useoldpkgpkg"],
@@ -4338,7 +4338,7 @@ def test_pkgdir_scan_is_skipped_when_a_packages_index_is_present(
         [str(emerge_binary)], ["--pretend", "--usepkgonly", "dev-libs/binaryonlypkg"], fixture_env
     )
     assert idx.returncode == 0
-    assert idx.stdout.splitlines() == ['[binary  N     ] dev-libs/binaryonlypkg-1.0 ']
+    assert idx.stdout.splitlines() == ['[binary  N     ] dev-libs/binaryonlypkg-1.0-1 ']
 
     loose = _run(
         [str(emerge_binary)], ["--pretend", "--usepkgonly", "dev-libs/gpkgreadpkg"], fixture_env
@@ -4377,7 +4377,7 @@ def test_getbinpkg_makes_a_remote_binhost_binary_eligible(
     assert g.returncode == 0
     assert g.stdout == gp.stdout
     assert g.stdout.splitlines() == [
-                                        '[binary  N g   ] dev-libs/remotebinpkg-1.0  USE="-rbfoo"',
+                                        '[binary  N g   ] dev-libs/remotebinpkg-1.0-1  USE="-rbfoo"',
                                     ]
 
     # --getbinpkg -v: the `g` column, the ::repo decoration, the ` N KiB`
@@ -4395,7 +4395,7 @@ def test_getbinpkg_makes_a_remote_binhost_binary_eligible(
     assert v.returncode == 0
     assert v.stdout == vp.stdout
     assert v.stdout.splitlines() == [
-        '[binary  N g   ] dev-libs/remotebinpkg-1.0::gentoo  USE="-rbfoo" 560 KiB',
+        '[binary  N g   ] dev-libs/remotebinpkg-1.0-1::gentoo  USE="-rbfoo" 560 KiB',
         '',
         'Total: 1 package (1 new, 1 binary), Size of downloads: 560 KiB',
     ]
@@ -4406,7 +4406,7 @@ def test_getbinpkg_makes_a_remote_binhost_binary_eligible(
     )
     assert only.returncode == 0
     assert only.stdout.splitlines() == [
-                                           '[binary  N g   ] dev-libs/remotebinpkg-1.0  USE="-rbfoo"',
+                                           '[binary  N g   ] dev-libs/remotebinpkg-1.0-1  USE="-rbfoo"',
                                        ]
 
 
@@ -4416,7 +4416,9 @@ def test_getbinpkg_slot_repo_decoration_on_a_remote_binary_line(
     """dev-libs/remotebinslotpkg is a binhost-only binary with SLOT=2/1 --
     verbosity-3 `:slot/sub_slot` + `::repo` decoration (real _append_slot
     / _append_repository) applies to a `[binary ... g]` line just like any
-    other bracket cpv."""
+    other bracket cpv. The `BUILD_ID` suffix (`-1`, real
+    _append_build_id) lands *before* the `:slot` decoration:
+    `remotebinslotpkg-1.0-1:2/1::gentoo`."""
     v = _run(
         [str(emerge_binary)],
         ["--pretend", "-v", "--getbinpkg", "dev-libs/remotebinslotpkg"],
@@ -4430,7 +4432,7 @@ def test_getbinpkg_slot_repo_decoration_on_a_remote_binary_line(
     assert v.returncode == 0
     assert v.stdout == vp.stdout
     assert v.stdout.splitlines() == [
-        '[binary  N g   ] dev-libs/remotebinslotpkg-1.0:2/1::gentoo  1024 KiB',
+        '[binary  N g   ] dev-libs/remotebinslotpkg-1.0-1:2/1::gentoo  1024 KiB',
         '',
         'Total: 1 package (1 new, 1 binary), Size of downloads: 1024 KiB',
     ]
@@ -6300,7 +6302,7 @@ def test_usepkg_include_gates_binary_eligibility_both_ways(emerge_binary, fixtur
     )
     assert matching.returncode == 0
     assert matching.stdout.splitlines() == [
-        '[binary  N     ] dev-libs/binaryonlypkg-1.0 ',
+        '[binary  N     ] dev-libs/binaryonlypkg-1.0-1 ',
     ]
 
 
@@ -6464,7 +6466,7 @@ def test_rebuilt_binaries_triggers_a_reinstall_for_a_differing_build_time(
     )
     assert result.returncode == 0
     assert result.stdout.splitlines() == [
-        '[binary   R    ] dev-libs/rebuiltbinarypkg-1.0 ',
+        '[binary   R    ] dev-libs/rebuiltbinarypkg-1.0-1 ',
     ]
 
 
@@ -6509,7 +6511,7 @@ def test_rebuilt_binaries_timestamp_gates_the_reinstall(emerge_binary, fixture_e
     )
     assert low_enough.returncode == 0
     assert low_enough.stdout.splitlines() == [
-        '[binary   R    ] dev-libs/rebuiltbinarypkg-1.0 ',
+        '[binary   R    ] dev-libs/rebuiltbinarypkg-1.0-1 ',
     ]
 
 
@@ -6534,7 +6536,7 @@ def test_rebuilt_binaries_auto_enables_under_usepkgonly_deep_update(emerge_binar
     )
     assert auto_on.returncode == 0
     assert auto_on.stdout.splitlines() == [
-        '[binary   R    ] dev-libs/rebuiltbinarypkg-1.0 ',
+        '[binary   R    ] dev-libs/rebuiltbinarypkg-1.0-1 ',
     ]
 
     bounded_deep = _run(

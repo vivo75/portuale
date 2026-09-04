@@ -8620,6 +8620,25 @@ shared (`gnome-settings-daemon` + `gnome-color-manager` both →
 `x11-misc/colord`). Fixed: the check string now includes the resolved
 version's own sub-slot (`_slot_conflict_meta`).
 
+**The `-N` `BUILD_ID` suffix on a `[binary]` cpv (2026-09-04).** Real
+`output.py::_append_build_id` (`output.py:430-440`): a `type_name ==
+"binary"` package whose `_pkg_str.build_id` is not `None`
+(binpkg-multi-instance / a modern binhost, where files are
+`pkg-ver-N.gpkg.tar` and `Packages` carries `BUILD_ID`) shows
+`<cpv>-<build_id>` -- appended *before* the `-pv` `:slot` / `::repo`
+decoration, so `app-editors/vim-9.1.1652-r2-4::gentoo`. Portuale
+rendered the bare version. Now `Candidate::build_id` (from the
+`Packages` entry's `BUILD_ID`) flows to `GraphEntry::build_id` (`Some`
+only for a merge-bound binary), and `pretend.rs`'s `disp_version`
+appends it ahead of `decorate_version`. Verified live against real
+portage 3.0.82.2 (`emerge -pv --getbinpkg app-editors/vim`). Every
+binary fixture line in the contract suite now carries its `BUILD_ID`
+(`-1`), including `remotebinslotpkg-1.0-1:2/1::gentoo` (suffix before
+slot). *Not yet ported:* real's *choice* of which multi-instance binary
+to select (highest `BUILD_TIME` that passes the acceptability web) --
+portuale still picks by `vercmp` alone, so on a binhost with several
+builds of one cpv it can name a different `-N` than real.
+
 ### `emerge -p`: the blocker line follows real `ResolverOutput._blockers`
 
 Portuale's blocker report was portuale-shaped (`[blocks] cat/foo-1.0 hard
