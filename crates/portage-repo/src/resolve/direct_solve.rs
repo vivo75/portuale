@@ -31,6 +31,53 @@ pub(crate) struct DirectSolveOutput {
     pub surviving: Vec<SlotConflict>,
 }
 
+/// Resolved USE (enabled) plus declared IUSE for a conflict instance: merge
+/// entries read their display flags, shadowed merges the tree candidate,
+/// installed instances the vdb record.
+pub(crate) fn direct_solve_instance_use(
+    input: &DirectSolveInput<'_>,
+    category: &str,
+    package: &str,
+    inst: &SlotConflictInstance,
+) -> (HashSet<String>, HashSet<String>) {
+    if inst.installed {
+        let enabled = read_vdb_flag_set(input.root, category, package, &inst.version, "USE");
+        let declared = list_candidates(input.repos, category, package)
+            .ok()
+            .and_then(|cs| {
+                cs.iter().find(|c| c.version == inst.version).map(|c| {
+                    c.iuse
+                        .split_whitespace()
+                        .map(|t| t.trim_start_matches(['+', '-']).to_string())
+                        .collect()
+                })
+            })
+            .unwrap_or_else(|| enabled.clone());
+        return (enabled, declared);
+    }
+    if let Some(entry) = input.entries.iter().find(|e| {
+        e.category.as_str() == category
+            && e.package.as_str() == package
+            && merge_bound_version(&e.outcome) == Some(&inst.version)
+    }) {
+        let enabled: HashSet<String> = entry
+            .use_flags_display
+            .iter()
+            .filter(|(_, on)| *on)
+            .map(|(f, _)| f.clone())
+            .collect();
+        let declared: HashSet<String> = entry
+            .use_flags_display
+            .iter()
+            .map(|(f, _)| f.clone())
+            .collect();
+        return (enabled, declared);
+    }
+    let (declared, enabled) =
+        slot_conflict_flag_sets(input.repos, input.config, category, package, &inst.version);
+    (enabled, declared)
+}
+
 /// Whether the installed instance is excluded from every parent's match
 /// list: the cp was explicitly requested, without `--exclude` and outside
 /// selective mode.

@@ -1497,4 +1497,63 @@ mod tests {
             .map(|c| c.version)
             .collect()
     }
+
+    #[test]
+    fn run_merge_plan_merges_a_binary_and_a_source_entry_in_one_run() {
+        // A mixed plan: one `Binary` entry (a local `$PKGDIR` `.tbz2`) and one
+        // `Source` entry (built from its fixture ebuild), merged in one pass.
+        let tmp = tempdir();
+        let root = tmp.join("root");
+        let pkgdir = tmp.join("pkgdir");
+        std::fs::create_dir_all(pkgdir.join("dev-libs")).unwrap();
+        std::fs::copy(
+            fixtures_root().join("pkgdir/dev-libs/packagepkg-1.0.tbz2"),
+            pkgdir.join("dev-libs/packagepkg-1.0.tbz2"),
+        )
+        .unwrap();
+
+        let config_root = fixtures_root();
+        let repos = portage_repo::find_repos(&config_root).unwrap();
+        let options = MergeOptions {
+            distdir: tmp.join("distdir"),
+            config_root: config_root.clone(),
+            ..MergeOptions::default()
+        };
+
+        run_merge_plan(RunMergePlanArgs {
+            entries: &[
+                graph_entry("packagepkg", CandidateSource::Binary, "1.0"),
+                graph_entry("binpkgphasepkg", CandidateSource::Ebuild, "1.0"),
+            ],
+            config: &Config::default(),
+            repos: &repos,
+            root: &root,
+            pkgdir: &pkgdir,
+            portage_tmpdir: &tmp.join("portage_tmpdir"),
+            merge_options: &options,
+            keep_going: false,
+            buildpkg: None,
+            buildpkg_exclude: &[],
+            mode: crate::emerge_build::StatusMode::for_tests(),
+        })
+        .expect("mixed merge plan succeeds");
+
+        // The Binary entry: merged from the local .tbz2.
+        assert!(
+            root.join("var/db/pkg/dev-libs/packagepkg-1.0/CONTENTS")
+                .is_file()
+        );
+        assert!(root.join("usr/share/packagepkg/hello.txt").is_file());
+        // The Source entry: built + merged from its ebuild, hooks ran.
+        assert!(
+            root.join("var/db/pkg/dev-libs/binpkgphasepkg-1.0/CONTENTS")
+                .is_file()
+        );
+        assert!(root.join("usr/share/binpkgphasepkg/payload.txt").is_file());
+        assert_eq!(
+            std::fs::read_to_string(root.join("var/lib/binpkgphasepkg.phases")).unwrap(),
+            "preinst\npostinst\n"
+        );
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
 }
