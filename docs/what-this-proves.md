@@ -13473,3 +13473,60 @@ recorded rather than partially built.
 Full contract suite green throughout (936 -> 938 across the section);
 `portuale` (342) and `portage-repo` (286 -> 290) unit suites green;
 `cargo fmt`/`clippy` clean at every commit.
+
+### os.lchown / merge ownership preservation (2026-09-05)
+
+Asked to implement `os.lchown` (`docs/scope-backlog.md`'s "H. Misc /
+cosmetic"), previously left cut on the assumption that it needs root
+and portuale's dev/test context never has it. The premise changed: this
+container has passwordless `sudo`, so the feature could actually be
+exercised as real root rather than left as an unverifiable "would only
+no-op" guess.
+
+Real `movefile()` (`movefile.py:255`, `_apply_stat`) `lchown`/`chown`s a
+merged symlink or regular file to the *source*'s own recorded uid/gid
+from `${D}`; real `mergeme()` (`vartree.py:5865-5867`) does the same
+chown+chmod for a directory it creates for the first time, but --
+critically -- never touches an already-existing directory's ownership
+(`vartree.py:5808-5810`'s "keep it" branch). Missing that last detail
+would have been a real bug: an already-installed shared directory like
+`/usr/lib` must not have its ownership clobbered by every subsequent
+package that also installs into it. Implemented via `lchown_or_chown`
+(raw `libc::lchown`/`libc::chown`, the same FFI pattern
+`create_special_node`'s pre-existing `mkfifo`/`mknod` calls already
+established), wired into all three `merge_tree` branches with that
+existing-directory exception preserved.
+
+Deliberately unconditional -- not gated on "am I root" -- matching
+real's own call site, which has no such check either: it succeeds as
+root, and also succeeds unprivileged whenever the source is already
+owned by the calling process (the overwhelmingly common single-user
+case, which is exactly why every pre-existing `merge_tree` test kept
+passing with zero changes needed), and fails with the same real `EPERM`
+a real non-root portage installation would hit otherwise -- propagated
+as an ordinary merge failure, never silently swallowed.
+
+Verification went further than a written-but-unexercised test: the new
+`merge_tree_preserves_ownership_from_the_source_when_root` test (gated
+on `geteuid() == 0`, skipping cleanly rather than failing when not
+root) was run for real via `sudo` directly against the compiled test
+binary, confirming actual cross-uid ownership preservation for a file,
+a symlink, and a freshly created directory, plus that a *second* merge
+with a different source owner does not reclaim an already-installed
+directory's ownership. Beyond that one test, the **entire** `portuale`
+unit suite (343) and `test_portuale.py` (73 passed, the same 5
+pre-existing TTY-only `--ask` failures) were run as actual root end to
+end -- confirming the whole real merge/unmerge/config path works
+correctly with live chown calls, not just the isolated new test. The
+one test that newly fails under root
+(`create_special_node_reports_a_permission_failure_cleanly_rather_than_
+panicking`) does so for the *expected*, unrelated reason: it
+specifically asserts `mknod` fails for a non-root caller, which stops
+being true once actually running as root -- not a regression, and left
+as a non-root-only test by design, the mirror image of the new
+ownership test's own root-only design.
+
+Rust-only (real filesystem mutation, no Python mirror -- same
+"execution code, not resolver" reasoning as `--regen`/`--config`/the
+sandbox and scheduler sections). Full contract suite (938) and
+`portage-repo` (290) unaffected and green; `cargo fmt`/`clippy` clean.
