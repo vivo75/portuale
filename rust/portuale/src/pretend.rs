@@ -1959,6 +1959,8 @@ Binary packages:
   -g, --getbinpkg / -G, --getbinpkgonly  also fetch binary packages from a remote binhost (-G: only)
       --usepkg-exclude ATOMS, --usepkg-include ATOMS  narrow which packages may come from a binary
       --binpkg-respect-use[=y|n]  reject a binary package built with the wrong USE
+      --binpkg-changed-deps[=y|n]  reject a binary whose recorded deps differ from the ebuild (auto unless -K)
+      --use-ebuild-visibility[=y|n]  apply ebuild visibility checks to built packages even under -K
       --rebuilt-binaries[=y|n], --rebuilt-binaries-timestamp N  prefer / bound rebuilt binary packages
       --useoldpkg-atoms ATOMS  prefer an existing binary package for matching atoms
       --quickpkg-direct[=y|n], --quickpkg-direct-root DIR  reuse another root's installed packages as binaries
@@ -6483,6 +6485,12 @@ pub fn run(args: &[String]) -> ExitCode {
     let mut rebuild_if_unbuilt: Option<bool> = None;
     let mut rebuild_if_new_rev: Option<bool> = None;
     let mut rebuild_if_new_ver: Option<bool> = None;
+    // `--binpkg-changed-deps[=y|n]` (real `true_y_or_n`): `None` = auto
+    // (real `create_depgraph_params.py`'s "enabled unless `--usepkgonly`"),
+    // `Some(true|false)` = explicit force on/off.
+    // `--use-ebuild-visibility[=y|n]` (real `true_y_or_n`, default off).
+    let mut binpkg_changed_deps_override: Option<bool> = None;
+    let mut use_ebuild_visibility = false;
     // --rebuild-exclude ATOMS (parent skipped) / --rebuild-ignore ATOMS
     // (dep never triggers) -- same repeatable/space-separated shape as
     // --exclude.
@@ -7094,6 +7102,41 @@ pub fn run(args: &[String]) -> ExitCode {
                 "--rebuild-if-unbuilt" => rebuild_if_unbuilt = Some(on),
                 "--rebuild-if-new-rev" => rebuild_if_new_rev = Some(on),
                 _ => rebuild_if_new_ver = Some(on),
+            }
+        } else if arg == "--binpkg-changed-deps"
+            || arg.starts_with("--binpkg-changed-deps=")
+            || arg == "--use-ebuild-visibility"
+            || arg.starts_with("--use-ebuild-visibility=")
+        {
+            // Real `true_y_or_n` (`main.py:390`/`709`) + `default_arg_opts`
+            // (bare -> `y`): same bare / `=y` / `y` / `=n` / `n` / `True`
+            // shape as the `--rebuild-if-*` block above. Both are
+            // resolver-time overrides of an automatic default -- applied
+            // via `portage_repo::set_binpkg_changed_deps_override` /
+            // `set_use_ebuild_visibility` (process-globals, the same
+            // env-free pattern `--useoldpkg-atoms` uses).
+            let (name, inline) = match arg.split_once('=') {
+                Some((n, v)) => (n, Some(v.to_string())),
+                None => (arg, None),
+            };
+            let val = if let Some(v) = inline {
+                i += 1;
+                v
+            } else if matches!(
+                args.get(i + 1).map(String::as_str),
+                Some("y" | "n" | "True")
+            ) {
+                i += 2;
+                args[i - 1].clone()
+            } else {
+                i += 1;
+                "y".to_string()
+            };
+            let on = matches!(val.as_str(), "y" | "True");
+            if name == "--binpkg-changed-deps" {
+                binpkg_changed_deps_override = Some(on);
+            } else {
+                use_ebuild_visibility = on;
             }
         } else if arg == "--complete-graph" || arg.starts_with("--complete-graph=") {
             // Real `true_y_or_n` -- bare / `=y` / `=True` -> on, `=n` -> off
@@ -8362,6 +8405,13 @@ pub fn run(args: &[String]) -> ExitCode {
     // selection (see `portage_repo::set_useoldpkg_atoms`). Set once here,
     // before any `resolve_pretend_graph` call; empty is a strict no-op.
     portage_repo::set_useoldpkg_atoms(useoldpkg_atoms);
+
+    // `--binpkg-changed-deps=y|n` / `--use-ebuild-visibility=y|n`:
+    // resolver-time overrides of automatic defaults, applied as
+    // process-globals (see those setters' own doc comments). `None` /
+    // `false` (the defaults when the flag is absent) are strict no-ops.
+    portage_repo::set_binpkg_changed_deps_override(binpkg_changed_deps_override);
+    portage_repo::set_use_ebuild_visibility(use_ebuild_visibility);
 
     // Real actions.py: "if '--tree' in emerge_config.opts and '--columns'
     // in emerge_config.opts: print(...); return 1" -- checked once

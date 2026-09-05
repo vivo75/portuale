@@ -1255,6 +1255,24 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend -v --getbinpkg dev-lib
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend -G dev-libs/remotebinpkg
 # [binary  N g  ] dev-libs/remotebinpkg-1.0
 
+# --binpkg-changed-deps=n: bcdeppkg's binhost binary was built against a
+# since-changed ebuild, so plain --getbinpkg rebuilds it from source;
+# =n keeps the stale binary anyway
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --getbinpkg dev-libs/bcdeppkg
+# [ebuild  N     ] dev-libs/bcdepnew-1.0
+# [ebuild  N     ] dev-libs/bcdeppkg-1.0
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --getbinpkg --binpkg-changed-deps=n dev-libs/bcdeppkg
+# [ebuild  N     ] dev-libs/bcdepold-1.0
+# [binary  N g   ] dev-libs/bcdeppkg-1.0-1
+
+# --use-ebuild-visibility: --getbinpkgonly normally ignores ebuild
+# visibility, so eqebvispkg's orphaned 2.0 binary (ebuild since removed)
+# is merged; with the flag the check is enforced and nothing satisfies it
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --getbinpkgonly dev-libs/eqebvispkg
+# [binary  N g   ] dev-libs/eqebvispkg-2.0-1
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --getbinpkgonly --use-ebuild-visibility dev-libs/eqebvispkg
+# emerge: there are no ebuilds to satisfy "dev-libs/eqebvispkg".  (exit 1)
+
 # --newrepo: newrepopkg is installed with a vdb repository file
 # recording "oldrepo", but the current best candidate for this exact
 # version lives in "testrepo" instead -- off by default...

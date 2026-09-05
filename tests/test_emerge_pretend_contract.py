@@ -1025,6 +1025,31 @@ CASES = [
         0,
     ),
     (
+        "--getbinpkgonly --use-ebuild-visibility: the orphaned binary is rejected, nothing satisfies",
+        ["--pretend", "--getbinpkgonly", "--use-ebuild-visibility", "dev-libs/eqebvispkg"],
+        1,
+    ),
+    (
+        "--getbinpkg --use-ebuild-visibility: same as default here (already enforced)",
+        ["--pretend", "--getbinpkg", "--use-ebuild-visibility", "dev-libs/eqebvispkg"],
+        0,
+    ),
+    (
+        "--getbinpkg --binpkg-changed-deps=n: keeps the stale binary",
+        ["--pretend", "--getbinpkg", "--binpkg-changed-deps=n", "dev-libs/bcdeppkg"],
+        0,
+    ),
+    (
+        "--getbinpkg --binpkg-changed-deps n: the space-separated value form",
+        ["--pretend", "--getbinpkg", "--binpkg-changed-deps", "n", "dev-libs/bcdeppkg"],
+        0,
+    ),
+    (
+        "--getbinpkgonly --binpkg-changed-deps=y: forces the check on, stale binary rejected",
+        ["--pretend", "--getbinpkgonly", "--binpkg-changed-deps=y", "dev-libs/bcdeppkg"],
+        1,
+    ),
+    (
         "--getbinpkg =cpv: a binhost-only version (no ebuild matches) keeps the binary",
         ["--pretend", "--getbinpkg", "=dev-libs/eqebvispkg-2.0"],
         0,
@@ -4762,6 +4787,67 @@ def test_getbinpkg_binpkg_changed_deps_rejects_a_stale_binary(
     assert "bcdepold" not in rust.stdout
 
 
+def test_binpkg_changed_deps_explicit_override(
+    emerge_binary, emerge_pretend_python, fixture_env
+):
+    """`--binpkg-changed-deps=y|n` (real `create_depgraph_params.py:196-203`
+    + `default_arg_opts`): the explicit override of the automatic default
+    (on unless `--usepkgonly`). `=n` keeps the stale dev-libs/bcdeppkg
+    binary that `--getbinpkg` would otherwise reject; `=y` forces the
+    rejection under `--getbinpkgonly` (`--usepkgonly`), where the check is
+    off by default -- and with no ebuild fallback there, that leaves the
+    atom unsatisfied. rust == python throughout."""
+    # =n: the stale binary is kept (default --getbinpkg rejects it).
+    n_args = ["--pretend", "--getbinpkg", "--binpkg-changed-deps=n", "dev-libs/bcdeppkg"]
+    rn = _run([str(emerge_binary)], n_args, fixture_env)
+    assert rn.stdout == _run(emerge_pretend_python, n_args, fixture_env).stdout
+    assert rn.returncode == 0
+    assert "[binary  N g   ] dev-libs/bcdeppkg-1.0-1 " in rn.stdout.splitlines()
+    # The space-separated value form parses the same.
+    sp_args = ["--pretend", "--getbinpkg", "--binpkg-changed-deps", "n", "dev-libs/bcdeppkg"]
+    assert _run([str(emerge_binary)], sp_args, fixture_env).stdout == rn.stdout
+
+    # =y under --getbinpkgonly: the check is forced on (off by default
+    # there), the stale binary is rejected, nothing else can satisfy it.
+    y_args = ["--pretend", "--getbinpkgonly", "--binpkg-changed-deps=y", "dev-libs/bcdeppkg"]
+    ry = _run([str(emerge_binary)], y_args, fixture_env)
+    py = _run(emerge_pretend_python, y_args, fixture_env)
+    assert ry.returncode == 1
+    assert ry.stdout == py.stdout
+    assert ry.stderr == py.stderr
+    assert 'no ebuilds to satisfy "dev-libs/bcdeppkg"' in ry.stderr
+    # ...whereas plain --getbinpkgonly keeps it (check off by default).
+    base = _run(
+        [str(emerge_binary)], ["--pretend", "--getbinpkgonly", "dev-libs/bcdeppkg"], fixture_env
+    )
+    assert base.returncode == 0
+    assert "[binary  N g   ] dev-libs/bcdeppkg-1.0-1 " in base.stdout.splitlines()
+
+
+def test_use_ebuild_visibility_enforces_the_check_under_usepkgonly(
+    emerge_binary, emerge_pretend_python, fixture_env
+):
+    """`--use-ebuild-visibility` (real `main.py:1103`, `depgraph.py:8027`'s
+    `not use_ebuild_visibility and (usepkgonly or useoldpkg)` guard):
+    `_equiv_ebuild_visible` is normally skipped under `--usepkgonly`, so
+    `--getbinpkgonly dev-libs/eqebvispkg` keeps the orphaned 2.0 binary
+    (its ebuild since removed). With `--use-ebuild-visibility` the check is
+    enforced there too, rejecting the orphan -- and `--usepkgonly` has no
+    ebuild to fall back to, so the atom is unsatisfied. rust == python."""
+    base = _run(
+        [str(emerge_binary)], ["--pretend", "--getbinpkgonly", "dev-libs/eqebvispkg"], fixture_env
+    )
+    assert base.stdout.splitlines() == ["[binary  N g   ] dev-libs/eqebvispkg-2.0-1 "]
+
+    args = ["--pretend", "--getbinpkgonly", "--use-ebuild-visibility", "dev-libs/eqebvispkg"]
+    rust = _run([str(emerge_binary)], args, fixture_env)
+    py = _run(emerge_pretend_python, args, fixture_env)
+    assert rust.returncode == 1
+    assert rust.stdout == py.stdout
+    assert rust.stderr == py.stderr
+    assert 'no ebuilds to satisfy "dev-libs/eqebvispkg"' in rust.stderr
+
+
 def test_getbinpkg_multi_instance_newest_build_time_wins(
     emerge_binary, emerge_pretend_python, fixture_env
 ):
@@ -8096,6 +8182,8 @@ Binary packages:
   -g, --getbinpkg / -G, --getbinpkgonly  also fetch binary packages from a remote binhost (-G: only)
       --usepkg-exclude ATOMS, --usepkg-include ATOMS  narrow which packages may come from a binary
       --binpkg-respect-use[=y|n]  reject a binary package built with the wrong USE
+      --binpkg-changed-deps[=y|n]  reject a binary whose recorded deps differ from the ebuild (auto unless -K)
+      --use-ebuild-visibility[=y|n]  apply ebuild visibility checks to built packages even under -K
       --rebuilt-binaries[=y|n], --rebuilt-binaries-timestamp N  prefer / bound rebuilt binary packages
       --useoldpkg-atoms ATOMS  prefer an existing binary package for matching atoms
       --quickpkg-direct[=y|n], --quickpkg-direct-root DIR  reuse another root's installed packages as binaries

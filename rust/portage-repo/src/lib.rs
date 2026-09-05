@@ -300,6 +300,49 @@ fn useoldpkg_atom_matches(category: &str, package: &str, version: &str) -> bool 
         .any(|a| matches_config_entry(a, &cpv, category, package))
 }
 
+/// Explicit `--binpkg-changed-deps=y|n` override (real `create_depgraph_
+/// params.py:196-203`). `None` = not given, so the auto default applies
+/// (`binpkg_changed_deps` enabled unless `--usepkgonly`); `Some(true)` =
+/// `=y` (force on, even under `--usepkgonly`); `Some(false)` = `=n`
+/// (force off, even for an ordinary `--getbinpkg`). A process-global,
+/// the same env-free "CLI sets it once before resolution" pattern
+/// `--useoldpkg-atoms` / `--package-moves` use.
+static BINPKG_CHANGED_DEPS_OVERRIDE: RwLock<Option<bool>> = RwLock::new(None);
+
+/// Set by `pretend.rs` from `--binpkg-changed-deps[=y|n]` before any
+/// resolution. Default (never called) is `None` -- the auto behavior.
+pub fn set_binpkg_changed_deps_override(value: Option<bool>) {
+    *BINPKG_CHANGED_DEPS_OVERRIDE.write().unwrap() = value;
+}
+
+/// Whether the `--binpkg-changed-deps` binary-candidate rejection is
+/// active this run: the explicit override if given, else real's own
+/// auto default (`myparams["binpkg_changed_deps"] = "auto"` iff
+/// `--usepkgonly` not given -> `depgraph.py:7828`'s `!= "n"` -> `True`).
+fn binpkg_changed_deps_active(usepkgonly: bool) -> bool {
+    BINPKG_CHANGED_DEPS_OVERRIDE
+        .read()
+        .unwrap()
+        .unwrap_or(!usepkgonly)
+}
+
+/// `--use-ebuild-visibility[=y|n]` (real `main.py:1103`, `depgraph.py`'s
+/// own `use_ebuild_visibility = myopts.get(...) != "n"`): when set,
+/// `_equiv_ebuild_visible` is enforced on a built candidate even under
+/// `--usepkgonly` / a `--useoldpkg-atoms` match (both of which otherwise
+/// exempt it). Real default is off. Process-global, same pattern.
+static USE_EBUILD_VISIBILITY: AtomicBool = AtomicBool::new(false);
+
+/// Set by `pretend.rs` from `--use-ebuild-visibility[=y|n]` before any
+/// resolution. Default (never called) is `false`.
+pub fn set_use_ebuild_visibility(enabled: bool) {
+    USE_EBUILD_VISIBILITY.store(enabled, AtomicOrdering::Relaxed);
+}
+
+fn use_ebuild_visibility() -> bool {
+    USE_EBUILD_VISIBILITY.load(AtomicOrdering::Relaxed)
+}
+
 /// Real `update_dbentry` for a single `move`, applied to one atom token:
 /// if the token parses as an atom whose `cp` is `old`, rewrite just the
 /// `cat/pkg` part (first occurrence, real `token.replace(old, new, 1)`),
@@ -7985,9 +8028,10 @@ pub fn resolve_pretend(
         // ebuild's (real `depgraph.py:8288` -> `ignored_binaries[pkg]
         // ["changed_deps"] = True; continue`), so a package built against
         // a since-changed ebuild is rebuilt from source rather than
-        // merged stale. The explicit `--binpkg-changed-deps=y|n` overrides
-        // are a documented cut (like `--use-ebuild-visibility`).
-        if !usepkgonly {
+        // merged stale. An explicit `--binpkg-changed-deps=y|n` forces
+        // the check on (even under `--usepkgonly`) or off (even for an
+        // ordinary `--getbinpkg`) -- `binpkg_changed_deps_active`.
+        if binpkg_changed_deps_active(usepkgonly) {
             binary_candidates.retain(|c| {
                 !binary_deps_changed(root, repos, c, &atom.category, &atom.package, with_bdeps)
             });
@@ -8002,8 +8046,12 @@ pub fn resolve_pretend(
         // Skipped for a binhost-only atom (no ebuild matches at all ->
         // real's `(use_ebuild_visibility or matched_packages)` gate is
         // falsy) and under `--usepkgonly` (real: ebuild status is ignored
-        // there unless `--use-ebuild-visibility`, a documented cut).
-        if !usepkgonly && !binary_candidates.is_empty() {
+        // there) -- `--use-ebuild-visibility` overrides both of those
+        // skips (real `depgraph.py:8027`'s `not use_ebuild_visibility and
+        // (usepkgonly or useoldpkg)` guard), enforcing the check even
+        // under `--usepkgonly` / for a `--useoldpkg-atoms` match.
+        let uev = use_ebuild_visibility();
+        if (!usepkgonly || uev) && !binary_candidates.is_empty() {
             let ebuild_visible_at = |ver: &str| {
                 candidates.iter().any(|c| {
                     c.source == CandidateSource::Ebuild
@@ -8023,13 +8071,15 @@ pub fn resolve_pretend(
                             .is_some_and(|r| !r.is_empty())
                     }
             });
-            if some_ebuild_matches_atom {
+            if some_ebuild_matches_atom || uev {
                 // Real's `(usepkgonly or useoldpkg)` exemption: a binary
-                // matching `--useoldpkg-atoms` is never subjected to the
-                // ebuild-visibility check.
+                // matching `--useoldpkg-atoms` is not subjected to the
+                // ebuild-visibility check -- unless `--use-ebuild-
+                // visibility` was given.
                 binary_candidates.retain(|c| {
                     ebuild_visible_at(&c.version)
-                        || useoldpkg_atom_matches(&atom.category, &atom.package, &c.version)
+                        || (!uev
+                            && useoldpkg_atom_matches(&atom.category, &atom.package, &c.version))
                 });
             }
         }
@@ -12541,7 +12591,7 @@ fn backtracking_resolve(req: &ResolveRequest) -> Result<GraphResult, String> {
                 if binpkg_respect_use {
                     binary_candidates.retain(|c| binpkg_respect_use_ok(c, &key.0, &key.1, config));
                 }
-                if !usepkgonly {
+                if binpkg_changed_deps_active(usepkgonly) {
                     binary_candidates.retain(|c| {
                         !binary_deps_changed(root, &repos, c, &key.0, &key.1, with_bdeps)
                     });
@@ -12549,8 +12599,10 @@ fn backtracking_resolve(req: &ResolveRequest) -> Result<GraphResult, String> {
                 // `_equiv_ebuild_visible` (see `resolve_pretend`): a
                 // binary re-derived here needs a visible ebuild at its
                 // own exact version, when any visible ebuild satisfies
-                // the atom.
-                if !usepkgonly && !binary_candidates.is_empty() {
+                // the atom. `--use-ebuild-visibility` enforces it even
+                // under `--usepkgonly` / a `--useoldpkg-atoms` match.
+                let uev = use_ebuild_visibility();
+                if (!usepkgonly || uev) && !binary_candidates.is_empty() {
                     let some_ebuild_matches = repo_candidates.iter().any(|c| {
                         c.source == CandidateSource::Ebuild
                             && is_visible(c, &key.0, &key.1, config)
@@ -12563,9 +12615,9 @@ fn backtracking_resolve(req: &ResolveRequest) -> Result<GraphResult, String> {
                                     .is_some_and(|r| !r.is_empty())
                             }
                     });
-                    if some_ebuild_matches {
+                    if some_ebuild_matches || uev {
                         binary_candidates.retain(|c| {
-                            useoldpkg_atom_matches(&key.0, &key.1, &c.version)
+                            (!uev && useoldpkg_atom_matches(&key.0, &key.1, &c.version))
                                 || repo_candidates.iter().any(|e| {
                                     e.source == CandidateSource::Ebuild
                                         && e.version == c.version

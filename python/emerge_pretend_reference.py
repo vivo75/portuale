@@ -327,6 +327,23 @@ _useoldpkg_atoms = []
 # the binary-package pool. None = not active. Set by run() before
 # resolution. Mirrors portage-repo's QUICKPKG_DIRECT_ROOT.
 _quickpkg_direct_root = None
+# --binpkg-changed-deps=y|n (real create_depgraph_params.py:196-203):
+# None = auto (on unless --usepkgonly), True/False = explicit force.
+# Mirrors portage-repo's BINPKG_CHANGED_DEPS_OVERRIDE.
+_binpkg_changed_deps_override = None
+# --use-ebuild-visibility=y|n (real main.py:1103): enforce
+# _equiv_ebuild_visible on built candidates even under --usepkgonly /
+# --useoldpkg-atoms. Default off. Mirrors portage-repo's USE_EBUILD_VISIBILITY.
+_use_ebuild_visibility = False
+
+
+def _binpkg_changed_deps_active(usepkgonly):
+    """The explicit --binpkg-changed-deps override if given, else real's
+    auto default (on iff --usepkgonly not given). Mirrors
+    portage-repo::binpkg_changed_deps_active."""
+    if _binpkg_changed_deps_override is not None:
+        return _binpkg_changed_deps_override
+    return not usepkgonly
 
 
 def _bare_cp(s):
@@ -5906,9 +5923,9 @@ def resolve_pretend(
         # --binpkg-changed-deps (auto whenever --usepkgonly is not given,
         # create_depgraph_params.py:196-203): reject a binhost binary
         # whose recorded *DEPEND differs from the current ebuild's
-        # (depgraph.py:8288). Explicit --binpkg-changed-deps=y|n overrides
-        # are a documented cut.
-        if not usepkgonly:
+        # (depgraph.py:8288). Explicit --binpkg-changed-deps=y|n forces it
+        # on (even under --usepkgonly) / off (even for --getbinpkg).
+        if _binpkg_changed_deps_active(usepkgonly):
             binary_candidates = [
                 c
                 for c in binary_candidates
@@ -5921,8 +5938,10 @@ def resolve_pretend(
         # its *exact* version -- a binhost package whose ebuild was dropped
         # from the tree, or masked, since it was built is not merged stale.
         # Skipped for a binhost-only atom (no ebuild matches -> gate falsy)
-        # and under --usepkgonly. Mirrors portage-repo/src/lib.rs.
-        if not usepkgonly and binary_candidates:
+        # and under --usepkgonly -- --use-ebuild-visibility overrides both
+        # of those skips (real depgraph.py:8027). Mirrors portage-repo.
+        uev = _use_ebuild_visibility
+        if (not usepkgonly or uev) and binary_candidates:
             def _ebuild_visible_at(ver):
                 return any(
                     c["source"] == "ebuild"
@@ -5942,12 +5961,12 @@ def resolve_pretend(
                 )
                 for c in candidates
             )
-            if some_ebuild_matches:
+            if some_ebuild_matches or uev:
                 # Real's (usepkgonly or useoldpkg) exemption: a binary
-                # matching --useoldpkg-atoms is never subjected to the
-                # ebuild-visibility check.
+                # matching --useoldpkg-atoms is not subjected to the
+                # ebuild-visibility check -- unless --use-ebuild-visibility.
                 def _is_useoldpkg(c):
-                    return any(
+                    return not uev and any(
                         _matches_config_entry(
                             a, f"{category}/{package}-{c['version']}", category, package
                         )
@@ -8472,7 +8491,7 @@ def resolve_pretend_graph(
                         for c in binary_candidates
                         if _binpkg_respect_use_ok(c, category, package, config)
                     ]
-                if not usepkgonly:
+                if _binpkg_changed_deps_active(usepkgonly):
                     binary_candidates = [
                         c
                         for c in binary_candidates
@@ -8483,7 +8502,9 @@ def resolve_pretend_graph(
                 # _equiv_ebuild_visible (see resolve_pretend): a binary
                 # re-derived here needs a visible ebuild at its own exact
                 # version, when any visible ebuild satisfies the atom.
-                if not usepkgonly and binary_candidates:
+                # --use-ebuild-visibility enforces it even under --usepkgonly.
+                _uev = _use_ebuild_visibility
+                if (not usepkgonly or _uev) and binary_candidates:
                     _some_eb = any(
                         c["source"] == "ebuild"
                         and is_visible(c, category, package, config)
@@ -8495,18 +8516,21 @@ def resolve_pretend_graph(
                         )
                         for c in repo_candidates
                     )
-                    if _some_eb:
+                    if _some_eb or _uev:
                         binary_candidates = [
                             c
                             for c in binary_candidates
-                            if any(
-                                _matches_config_entry(
-                                    a,
-                                    f"{category}/{package}-{c['version']}",
-                                    category,
-                                    package,
+                            if (
+                                not _uev
+                                and any(
+                                    _matches_config_entry(
+                                        a,
+                                        f"{category}/{package}-{c['version']}",
+                                        category,
+                                        package,
+                                    )
+                                    for a in _useoldpkg_atoms
                                 )
-                                for a in _useoldpkg_atoms
                             )
                             or any(
                                 e["source"] == "ebuild"
@@ -9892,7 +9916,6 @@ _VALUE_OPTIONS = [
     ("--accept-properties", None),
     ("--accept-restrict", None),
     ("--backtrack", None),
-    ("--binpkg-changed-deps", None),
     ("--buildpkg", "-b"),
     ("--buildpkg-exclude", None),
     ("--config-root", None),
@@ -9955,7 +9978,6 @@ _VALUE_OPTIONS = [
     ("--select", "-w"),
     ("--sync-submodule", None),
     ("--sysroot", None),
-    ("--use-ebuild-visibility", None),
     # --useoldpkg-atoms IS implemented (prefer an existing binary package
     # over a newer unbuilt ebuild for a matching atom).
     ("--usepkg", "-k"),
@@ -10422,6 +10444,8 @@ Binary packages:
   -g, --getbinpkg / -G, --getbinpkgonly  also fetch binary packages from a remote binhost (-G: only)
       --usepkg-exclude ATOMS, --usepkg-include ATOMS  narrow which packages may come from a binary
       --binpkg-respect-use[=y|n]  reject a binary package built with the wrong USE
+      --binpkg-changed-deps[=y|n]  reject a binary whose recorded deps differ from the ebuild (auto unless -K)
+      --use-ebuild-visibility[=y|n]  apply ebuild visibility checks to built packages even under -K
       --rebuilt-binaries[=y|n], --rebuilt-binaries-timestamp N  prefer / bound rebuilt binary packages
       --useoldpkg-atoms ATOMS  prefer an existing binary package for matching atoms
       --quickpkg-direct[=y|n], --quickpkg-direct-root DIR  reuse another root's installed packages as binaries
@@ -14052,6 +14076,8 @@ def run(args):
     excluded = []
     reinstall_atoms = []
     useoldpkg_atoms = []
+    binpkg_changed_deps_override = None
+    use_ebuild_visibility_opt = False
     rebuild_if_new_slot = True
     rebuild_if_unbuilt = None
     rebuild_if_new_rev = None
@@ -14455,6 +14481,30 @@ def run(args):
                 rebuild_if_new_rev = on
             else:
                 rebuild_if_new_ver = on
+        elif (
+            arg in ("--binpkg-changed-deps", "--use-ebuild-visibility")
+            or arg.startswith("--binpkg-changed-deps=")
+            or arg.startswith("--use-ebuild-visibility=")
+        ):
+            # Real true_y_or_n + default_arg_opts (bare -> y). Both are
+            # resolver-time overrides of an automatic default, applied via
+            # the module globals below (mirrors portage-repo's
+            # set_binpkg_changed_deps_override / set_use_ebuild_visibility).
+            name, _, inline = arg.partition("=")
+            if "=" in arg:
+                val = inline
+                i += 1
+            elif i + 1 < len(args) and args[i + 1] in ("y", "n", "True"):
+                val = args[i + 1]
+                i += 2
+            else:
+                val = "y"
+                i += 1
+            on = val in ("y", "True")
+            if name == "--binpkg-changed-deps":
+                binpkg_changed_deps_override = on
+            else:
+                use_ebuild_visibility_opt = on
         elif arg == "--complete-graph" or arg.startswith("--complete-graph="):
             # Real true_y_or_n -- bare / =y / =True -> on, =n -> off
             # (real main.py:878-881: default None, only true_y flips it).
@@ -15492,6 +15542,13 @@ def run(args):
     # call; empty is a strict no-op. Mirrors pretend.rs.
     global _useoldpkg_atoms
     _useoldpkg_atoms = useoldpkg_atoms
+
+    # --binpkg-changed-deps=y|n / --use-ebuild-visibility=y|n: resolver-time
+    # overrides of automatic defaults, applied as module globals (see
+    # _binpkg_changed_deps_active). None / False (the defaults) are no-ops.
+    global _binpkg_changed_deps_override, _use_ebuild_visibility
+    _binpkg_changed_deps_override = binpkg_changed_deps_override
+    _use_ebuild_visibility = use_ebuild_visibility_opt
 
     # Real actions.py: "if '--tree' in emerge_config.opts and '--columns'
     # in emerge_config.opts: print(...); return 1" -- checked once

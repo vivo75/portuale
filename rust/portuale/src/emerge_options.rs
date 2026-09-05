@@ -202,6 +202,21 @@
 //     contribution) and the documented, narrower scope cut around real
 //     `--newrepo` (needs a vdb `REPOSITORY` reader portuale doesn't
 //     have).
+//   - `--binpkg-changed-deps[=y|n]` and `--use-ebuild-visibility[=y|n]`
+//     ARE implemented now too, deliberately excluded from `VALUE_OPTIONS`
+//     for the same reason -- both real `true_y_or_n` + `default_arg_opts`
+//     (bare -> `y`), the same shape the `--rebuild-if-*` block parses.
+//     Each is a resolver-time override of an automatic default:
+//     `--binpkg-changed-deps=n` turns off the changed-`*DEPEND`
+//     binary-rejection that's otherwise auto-on for any non-`--usepkgonly`
+//     run (and `=y` forces it on even under `--usepkgonly`);
+//     `--use-ebuild-visibility` enforces the `_equiv_ebuild_visible`
+//     check on a built candidate even under `--usepkgonly` / a
+//     `--useoldpkg-atoms` match (real `depgraph.py:8027`'s `not
+//     use_ebuild_visibility and (usepkgonly or useoldpkg)` guard). Both
+//     applied via process-globals (`portage_repo::set_binpkg_changed_
+//     deps_override` / `set_use_ebuild_visibility`), the env-free pattern
+//     `--useoldpkg-atoms` / `--package-moves` already use.
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Category {
@@ -281,7 +296,6 @@ pub const VALUE_OPTIONS: &[(&str, Option<&str>)] = &[
     ("--accept-properties", None),
     ("--accept-restrict", None),
     ("--backtrack", None),
-    ("--binpkg-changed-deps", None),
     ("--buildpkg", Some("-b")),
     ("--buildpkg-exclude", None),
     ("--config-root", None),
@@ -359,7 +373,6 @@ pub const VALUE_OPTIONS: &[(&str, Option<&str>)] = &[
     ("--select", Some("-w")),
     ("--sync-submodule", None),
     ("--sysroot", None),
-    ("--use-ebuild-visibility", None),
     // `--useoldpkg-atoms ATOMS` IS implemented -- for a matching package,
     // prefer an existing binary package over a newer unbuilt ebuild (see
     // `portage_repo::set_useoldpkg_atoms`; only bites under

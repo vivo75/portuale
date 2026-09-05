@@ -8979,6 +8979,38 @@ by `test_useoldpkg_atoms_picks_the_newest_multi_instance_old_binary` (a
 `[ebuild N] oldmi-2.0`, `--useoldpkg-atoms dev-libs/oldmi` resolves
 `[binary N g] oldmi-1.0-2`), Rust ≡ Python.
 
+### `--binpkg-changed-deps=y|n` and `--use-ebuild-visibility` explicit overrides
+
+Two `true_y_or_n` flags (real `main.py:390`/`709` + `default_arg_opts`,
+bare → `y`) that override an otherwise-automatic resolver default:
+
+- **`--binpkg-changed-deps=n`** turns off the changed-`*DEPEND`
+  binary-rejection that's auto-on for any non-`--usepkgonly` run
+  (real `create_depgraph_params.py:196-203`) — so `--getbinpkg
+  --binpkg-changed-deps=n dev-libs/bcdeppkg` keeps the stale
+  `bcdeppkg-1.0-1` binary that plain `--getbinpkg` rebuilds from source.
+  `=y` forces the check on under `--usepkgonly`, where it's off by
+  default (`--getbinpkgonly --binpkg-changed-deps=y dev-libs/bcdeppkg`
+  → the binary is rejected and nothing else can satisfy the atom, exit 1).
+- **`--use-ebuild-visibility`** enforces `_equiv_ebuild_visible` on a
+  built candidate even under `--usepkgonly` / a `--useoldpkg-atoms`
+  match — real `depgraph.py:8027`'s `not use_ebuild_visibility and
+  (usepkgonly or useoldpkg)` guard, and its outer
+  `(use_ebuild_visibility or matched_packages)` gate. `--getbinpkgonly
+  dev-libs/eqebvispkg` keeps the orphaned `2.0` binary (ebuild since
+  removed); `--getbinpkgonly --use-ebuild-visibility` rejects it, and
+  `--usepkgonly` has no ebuild fallback → exit 1.
+
+Both were deferred as "a ~30-to-90-call-site plumbing job"; done with
+the env-free process-global pattern `--useoldpkg-atoms` / `--package-moves`
+already use (two statics + setters in `portage-repo`, one `true_y_or_n`
+parse block in `pretend.rs` cloning the `--rebuild-if-*` one, and a
+`binpkg_changed_deps_active(usepkgonly)` / `use_ebuild_visibility()` term
+in each of the two `resolve_pretend` / `resolve_pretend_graph` filter
+conditions) it was a small slice. Dual-language; 2 dedicated contract
+tests + 6 `CASES`. Both removed from the "recognized, not implemented"
+option tables.
+
 ### `build-info` metadata generation: a merged vdb entry / built `.tbz2` carries its real dependencies
 
 The `$PKGDIR`-scan work above surfaced this: a package portuale *itself*

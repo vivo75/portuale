@@ -255,14 +255,28 @@ by `cat/pkg-version` only (a `:slot`/`[use]` in a `--useoldpkg-atoms`
 atom isn't post-filtered), the same `match_from_list` scope every other
 portuale caller has.
 
+The explicit `--binpkg-changed-deps=y|n` and `--use-ebuild-visibility`
+overrides **shipped 2026-09-05** — the "~30-to-90-call-site plumbing
+job" the earlier deferral feared evaporated once done with the same
+env-free process-global pattern `--useoldpkg-atoms` / `--package-moves`
+use (two `RwLock`/`AtomicBool` statics + setters in `portage-repo`, one
+`true_y_or_n` parse block in `pretend.rs` mirroring the `--rebuild-if-*`
+one, and the two filter conditions in `resolve_pretend` /
+`resolve_pretend_graph` gaining a `binpkg_changed_deps_active(usepkgonly)`
+/ `use_ebuild_visibility()` term). `--binpkg-changed-deps=n` keeps a
+stale binary `--getbinpkg` would reject; `=y` forces the check under
+`--usepkgonly`. `--use-ebuild-visibility` enforces `_equiv_ebuild_visible`
+on a built candidate even under `--usepkgonly` / a `--useoldpkg-atoms`
+match (real `depgraph.py:8027`'s `not use_ebuild_visibility and
+(usepkgonly or useoldpkg)` guard). Dual-language; 2 dedicated contract
+tests + 6 `CASES`.
+
 Still open: `.sig` verification/signing
 (`FEATURES=binpkg-signing` — no crypto crate, a real cut); a
 `BUILD_TIME`-vs-installed reinstall
-trigger outside `--rebuilt-binaries` (the residual divergence above),
-and
-the explicit `--binpkg-changed-deps=y|n`/`--use-ebuild-visibility`
-overrides (a ~30-to-90-call-site plumbing job for a rarely-used
-explicit override of an already-automatic default — deferred). Binpkg
+trigger outside `--rebuilt-binaries` (the residual divergence above);
+quickpkg multi-instance (`quickpkg_from_vdb` always writes the bare
+`<pf>.<ext>` name). Binpkg
 `SHA1` (no sha1 crate) and fetch candidate ordering/`RESTRICT=
 primaryuri` (determinism > a non-observable mirror-selection detail)
 are deliberate, pre-existing cuts documented in their own module doc
