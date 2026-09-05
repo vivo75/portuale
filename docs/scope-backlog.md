@@ -242,11 +242,24 @@ differing-`BUILD_TIME` binary at the installed version — real reinstalls
 it, portuale keeps installed (which is exactly what `--rebuilt-binaries`
 opts into); left as a deliberate cut.
 
+`--useoldpkg-atoms` + `binpkg-multi-instance` was likewise
+**investigated 2026-09-05 and found already correct**: `dedup_binary_
+instances` collapses each `cpv:slot::repo` group to its highest-
+`(satisfies-atom-use, BUILD_TIME, BUILD_ID)` instance *before* the
+`--useoldpkg-atoms` filter runs on the matched set, so the newest
+multi-instance old binary is the one preferred over the newer ebuild —
+matching real's `_iter_match_pkgs` newest-first + `break`. Pinned by
+`test_useoldpkg_atoms_picks_the_newest_multi_instance_old_binary`
+(rust ≡ python). The one narrow spot: `useoldpkg_atom_matches` matches
+by `cat/pkg-version` only (a `:slot`/`[use]` in a `--useoldpkg-atoms`
+atom isn't post-filtered), the same `match_from_list` scope every other
+portuale caller has.
+
 Still open: `.sig` verification/signing
 (`FEATURES=binpkg-signing` — no crypto crate, a real cut); a
 `BUILD_TIME`-vs-installed reinstall
 trigger outside `--rebuilt-binaries` (the residual divergence above),
-`useoldpkg` multi-instance, and
+and
 the explicit `--binpkg-changed-deps=y|n`/`--use-ebuild-visibility`
 overrides (a ~30-to-90-call-site plumbing job for a rarely-used
 explicit override of an already-automatic default — deferred). Binpkg

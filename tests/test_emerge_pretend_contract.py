@@ -4209,6 +4209,72 @@ def test_useoldpkg_atoms_prefers_the_old_binary_over_a_newer_ebuild(
     assert inert.stdout == default.stdout
 
 
+def test_useoldpkg_atoms_picks_the_newest_multi_instance_old_binary(
+    emerge_binary, emerge_pretend_python, tmp_path
+):
+    """`--useoldpkg-atoms` + `binpkg-multi-instance`: when the matched
+    "old binary" cpv has several builds (different `BUILD_ID`s), real
+    portage's `_iter_match_pkgs` yields them newest-`BUILD_TIME` first and
+    the selection loop `break`s on the first acceptable one -- so the
+    highest-`(BUILD_TIME, BUILD_ID)` build is the one preferred over the
+    newer ebuild.
+
+    Portuale needs no `--useoldpkg-atoms`-specific handling here:
+    `dedup_binary_instances` already collapses each `cpv:slot::repo`
+    group to its highest-`(satisfies-atom-use, BUILD_TIME, BUILD_ID)`
+    instance *before* the `--useoldpkg-atoms` filter runs on the matched
+    set. This pins that the two compose correctly."""
+    cfg = tmp_path / "cfg"
+    repo = tmp_path / "repo"
+    binhost = tmp_path / "binhost"
+    (cfg / "etc/portage").mkdir(parents=True)
+    (repo / "profiles").mkdir(parents=True)
+    (repo / "profiles/repo_name").write_text("main\n")
+    (repo / "profiles/make.defaults").write_text('ACCEPT_KEYWORDS="amd64"\n')
+    (repo / "dev-libs/oldmi").mkdir(parents=True)
+    (repo / "dev-libs/oldmi/oldmi-2.0.ebuild").write_text(
+        'EAPI=8\nDESCRIPTION="uo"\nSLOT="0"\nKEYWORDS="amd64"\n'
+    )
+    (repo / "metadata/md5-cache/dev-libs").mkdir(parents=True)
+    (repo / "metadata/md5-cache/dev-libs/oldmi-2.0").write_text(
+        "DEFINED_PHASES=-\nEAPI=8\nIUSE=\nKEYWORDS=amd64\nSLOT=0\n"
+        "_md5_=0000000000000000000000000000000\n"
+    )
+    (cfg / "etc/portage/repos.conf").write_text(
+        f"[DEFAULT]\nmain-repo = main\n\n[main]\nlocation = {repo}\n"
+    )
+    (cfg / "etc/portage/make.conf").write_text(f'PKGDIR="{tmp_path / "empty-pkgdir"}"\n')
+    (cfg / "etc/portage/make.profile").symlink_to(repo / "profiles")
+    (cfg / "etc/portage/binrepos.conf").write_text(
+        f"[bh]\nsync-uri = file://{binhost}\npriority = 1\n"
+    )
+    binhost.mkdir()
+    entries = "".join(
+        f"BUILD_ID: {bid}\nBUILD_TIME: {bt}\nCPV: dev-libs/oldmi-1.0\n"
+        f"DEFINED_PHASES: -\nEAPI: 8\nIUSE:\nKEYWORDS: amd64\n"
+        f"PATH: dev-libs/oldmi/oldmi-1.0-{bid}.gpkg.tar\nREPO: main\n"
+        f"SIZE: 4096\nSLOT: 0\nUSE:\n\n"
+        # BUILD_ID 2 has the highest BUILD_TIME -> it is the one picked.
+        for bid, bt in ((1, 100), (2, 300), (3, 200))
+    )
+    (binhost / "Packages").write_text(f"TIMESTAMP: 0\nPACKAGES: 3\n\n{entries}")
+    env = {"PORTAGE_CONFIGROOT": str(cfg), "ROOT": str(cfg)}
+
+    # Default: the newer ebuild wins.
+    default = _run([str(emerge_binary)], ["--pretend", "--getbinpkg", "dev-libs/oldmi"], env)
+    assert default.stdout == _run(
+        emerge_pretend_python, ["--pretend", "--getbinpkg", "dev-libs/oldmi"], env
+    ).stdout
+    assert default.stdout.splitlines() == ["[ebuild  N     ] dev-libs/oldmi-2.0 "]
+
+    # --useoldpkg-atoms: the newest multi-instance old binary (BUILD_ID 2).
+    args = ["--pretend", "--getbinpkg", "--useoldpkg-atoms", "dev-libs/oldmi", "dev-libs/oldmi"]
+    old = _run([str(emerge_binary)], args, env)
+    assert old.returncode == 0, (old.stdout, old.stderr)
+    assert old.stdout == _run(emerge_pretend_python, args, env).stdout
+    assert old.stdout.splitlines() == ["[binary  N g   ] dev-libs/oldmi-1.0-2 "]
+
+
 def test_quickpkg_direct_injects_source_root_packages(
     emerge_binary, emerge_pretend_python, fixture_env, fixtures_root
 ):

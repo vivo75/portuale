@@ -8963,6 +8963,22 @@ is a documented cut (`scope-backlog.md` E): ebuild gone **and** a
 differing-`BUILD_TIME` binary at the installed version — real reinstalls,
 portuale keeps installed (what `--rebuilt-binaries` opts into).
 
+### `--useoldpkg-atoms` + `binpkg-multi-instance`: already correct
+
+When the "old binary" cpv a `--useoldpkg-atoms` atom matches has several
+builds, real portage's `_iter_match_pkgs` yields them newest-`BUILD_TIME`
+first and the selection loop `break`s on the first acceptable one — so
+the highest-`(BUILD_TIME, BUILD_ID)` build is what's preferred over the
+newer ebuild. Portuale needs no `--useoldpkg-atoms`-specific code:
+`dedup_binary_instances` already collapses each `cpv:slot::repo` group to
+its highest-`(satisfies-atom-use, BUILD_TIME, BUILD_ID)` instance
+*before* the `--useoldpkg-atoms` filter runs on the matched set. Pinned
+by `test_useoldpkg_atoms_picks_the_newest_multi_instance_old_binary` (a
+`dev-libs/oldmi` ebuild at 2.0, three `oldmi-1.0` binhost builds
+`BUILD_ID` 1/2/3 at `BUILD_TIME` 100/300/200 — default resolves
+`[ebuild N] oldmi-2.0`, `--useoldpkg-atoms dev-libs/oldmi` resolves
+`[binary N g] oldmi-1.0-2`), Rust ≡ Python.
+
 ### `build-info` metadata generation: a merged vdb entry / built `.tbz2` carries its real dependencies
 
 The `$PKGDIR`-scan work above surfaced this: a package portuale *itself*
