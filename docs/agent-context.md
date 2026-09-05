@@ -335,13 +335,17 @@ wired instead of rejected), the `pkg_use_display` ` USE=""` slot, the
 problem[s])`, and the `NOTE: Use the '--verbose-conflicts' option …`
 footer. Fixture: `dev-libs/slotconfgroup`.
 
-Deferred (see `scope-backlog.md` Part 2.A): the `Dependency resolution
-took X s (backtrack: N/M)` report line (non-deterministic timing --
-deliberate cut; the `--backtrack=30` hint gating already ships),
-"circular dependencies" diagnostics, autounmask levels tried in sequence
-inside the loop, and the slot-notice's remaining cuts (`pkg_use_display`
-for non-default USE, `use`/`soname` reason keys, colorization,
-`need_rebuild`).
+Autounmask levels tried in sequence inside the loop, and both real
+`||`-preference / slot-operator-rebuild feedback paths driving a retry,
+shipped 2026-09-03 (see `scope-backlog.md` Part 1 / `what-this-proves.md`)
+-- this paragraph predates that work and is kept only for the slice-1-4
+chronology above. Still deferred (see `scope-backlog.md` Part 2.A): the
+`Dependency resolution took X s (backtrack: N/M)` report line
+(non-deterministic timing -- deliberate cut; the `--backtrack=30` hint
+gating already ships), full elementary-cycle enumeration for the
+"circular dependencies" notice, and the slot-notice's remaining cuts
+(`pkg_use_display` for non-default USE, `use`/`soname` reason keys,
+colorization, `need_rebuild`).
 
 `what-this-proves.md` is the incrementally-
 updated record of every shipped slice, each grounded in cited real Python
@@ -366,12 +370,14 @@ fought, and the same fix: the narrative is gone. It is snapshotted at
   Kept lean on purpose; keep it current when a slice closes one of its
   entries.
 
-The single large architectural item left is a **real backtracking
-resolver** (`scope-backlog.md` Part 2.A / Part 4) — the shipped
+The architectural core of a **real backtracking resolver**
+(`scope-backlog.md` Part 2.A / Part 4) is now in place: the shipped
 `'backtrack` loop reconciles solvable slot conflicts, masks unsolvable
-ones, and renders the real notices, but does not try autounmask levels
-*inside* the loop or let `||`-preference / slot-operator-rebuild feedback
-drive a retry. Everything else in Part 2 is one focused slice each.
+ones, renders the real notices, tries autounmask levels *inside* the
+loop, and drives both `||`-preference / slot-operator-rebuild feedback
+into a retry. What's left there is depth/fidelity work on pieces already
+built, not a missing mechanism — see Part 2.A for the specific remaining
+cuts. Everything else in Part 2 is one focused slice each.
 
 When scoping the next slice, re-ground candidates in current code
 (`what-this-proves.md` / `git log` / the source), never in a stale list.
@@ -385,9 +391,12 @@ When scoping the next slice, re-ground candidates in current code
   semantics need grounding.
 - `helpers/emerge_-1v_--debug_--getbinpkgonly__sys-fs--fuse.log`
   — a real `emerge --getbinpkgonly` debug trace. The remote binpkg
-  download + merge is shipped; this trace stays useful for the still-open
-  pieces (live `layout.conf` negotiation, `Packages.bz2`/`.lz4` — see
-  `scope-backlog.md` Part 2.E).
+  download + merge is shipped (the trace's own "live `layout.conf`
+  negotiation" and `Packages.bz2`/`.lz4` were later found to be
+  mis-scoped -- not real `bintree.py` mechanisms at all, see
+  `scope-backlog.md` Part 2.E); this trace stays useful for the
+  genuinely-still-open gpkg-signing/xpak-multi-instance/`splitdebug`
+  pieces in that same section.
 
 ## Real ebuild phase execution + filesystem merge (shipped; ongoing refinement)
 
