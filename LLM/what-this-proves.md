@@ -8946,6 +8946,79 @@ scan for an entry at this cpv with the vdb's recorded `BUILD_TIME`.
 `emerge -C` with `FEATURES="unmerge-backup binpkg-multi-instance"` lands
 the backup at `dev-libs/emergeconfigpkg/emergeconfigpkg-1.0-1.xpak`.
 
+### bug #354441 (`identical_binary`): not a portuale bug
+
+Real portage's `identical_binary` check (`depgraph.py:8001-8014`) exists
+because real's `_select_pkg_highest_available_imp` rejects an
+**installed built instance** for ebuild-invisibility (ebuild removed, or
+its keywords dropped) and would then merge the available binary in its
+place — a needless reinstall even when that binary is byte-identical to
+what's installed. `identical_binary` suppresses that.
+
+Portuale's resolver never builds a rejectable "installed package"
+candidate. `_equiv_ebuild_visible` only ever filters *binary*
+candidates, and only when a visible ebuild matches the atom at some
+version; "already installed" is a pure vdb-membership predicate
+(`candidate_is_installed`). So a binary at the installed version is
+classified `AlreadyInstalled` directly. Verified empirically across the
+variants — ebuild removed, ebuild keyword-dropped, ebuild `package.mask`'d
+(where real hides the binary too and both correctly report the atom
+unsatisfiable), `--selective` vs bare top-level (`[binary R]`, matching
+real's "`emerge foo` always replaces"), and a matching vs differing
+binary `BUILD_TIME`. `test_usepkg_binary_of_a_since_removed_ebuild_is_
+not_reinstalled` pins it, Rust ≡ Python. One narrow residual divergence
+is a documented cut (`scope-backlog.md` E): ebuild gone **and** a
+differing-`BUILD_TIME` binary at the installed version — real reinstalls,
+portuale keeps installed (what `--rebuilt-binaries` opts into).
+
+### `--useoldpkg-atoms` + `binpkg-multi-instance`: already correct
+
+When the "old binary" cpv a `--useoldpkg-atoms` atom matches has several
+builds, real portage's `_iter_match_pkgs` yields them newest-`BUILD_TIME`
+first and the selection loop `break`s on the first acceptable one — so
+the highest-`(BUILD_TIME, BUILD_ID)` build is what's preferred over the
+newer ebuild. Portuale needs no `--useoldpkg-atoms`-specific code:
+`dedup_binary_instances` already collapses each `cpv:slot::repo` group to
+its highest-`(satisfies-atom-use, BUILD_TIME, BUILD_ID)` instance
+*before* the `--useoldpkg-atoms` filter runs on the matched set. Pinned
+by `test_useoldpkg_atoms_picks_the_newest_multi_instance_old_binary` (a
+`dev-libs/oldmi` ebuild at 2.0, three `oldmi-1.0` binhost builds
+`BUILD_ID` 1/2/3 at `BUILD_TIME` 100/300/200 — default resolves
+`[ebuild N] oldmi-2.0`, `--useoldpkg-atoms dev-libs/oldmi` resolves
+`[binary N g] oldmi-1.0-2`), Rust ≡ Python.
+
+### `--binpkg-changed-deps=y|n` and `--use-ebuild-visibility` explicit overrides
+
+Two `true_y_or_n` flags (real `main.py:390`/`709` + `default_arg_opts`,
+bare → `y`) that override an otherwise-automatic resolver default:
+
+- **`--binpkg-changed-deps=n`** turns off the changed-`*DEPEND`
+  binary-rejection that's auto-on for any non-`--usepkgonly` run
+  (real `create_depgraph_params.py:196-203`) — so `--getbinpkg
+  --binpkg-changed-deps=n dev-libs/bcdeppkg` keeps the stale
+  `bcdeppkg-1.0-1` binary that plain `--getbinpkg` rebuilds from source.
+  `=y` forces the check on under `--usepkgonly`, where it's off by
+  default (`--getbinpkgonly --binpkg-changed-deps=y dev-libs/bcdeppkg`
+  → the binary is rejected and nothing else can satisfy the atom, exit 1).
+- **`--use-ebuild-visibility`** enforces `_equiv_ebuild_visible` on a
+  built candidate even under `--usepkgonly` / a `--useoldpkg-atoms`
+  match — real `depgraph.py:8027`'s `not use_ebuild_visibility and
+  (usepkgonly or useoldpkg)` guard, and its outer
+  `(use_ebuild_visibility or matched_packages)` gate. `--getbinpkgonly
+  dev-libs/eqebvispkg` keeps the orphaned `2.0` binary (ebuild since
+  removed); `--getbinpkgonly --use-ebuild-visibility` rejects it, and
+  `--usepkgonly` has no ebuild fallback → exit 1.
+
+Both were deferred as "a ~30-to-90-call-site plumbing job"; done with
+the env-free process-global pattern `--useoldpkg-atoms` / `--package-moves`
+already use (two statics + setters in `portage-repo`, one `true_y_or_n`
+parse block in `pretend.rs` cloning the `--rebuild-if-*` one, and a
+`binpkg_changed_deps_active(usepkgonly)` / `use_ebuild_visibility()` term
+in each of the two `resolve_pretend` / `resolve_pretend_graph` filter
+conditions) it was a small slice. Dual-language; 2 dedicated contract
+tests + 6 `CASES`. Both removed from the "recognized, not implemented"
+option tables.
+
 ### `build-info` metadata generation: a merged vdb entry / built `.tbz2` carries its real dependencies
 
 The `$PKGDIR`-scan work above surfaced this: a package portuale *itself*

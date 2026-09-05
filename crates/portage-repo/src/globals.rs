@@ -40,6 +40,11 @@ pub(crate) fn useoldpkg_atom_matches(category: &str, package: &str, version: &st
 // Portage: create_depgraph_params.py
 pub(crate) static BINPKG_CHANGED_DEPS_OVERRIDE: RwLock<Option<bool>> = RwLock::new(None);
 
+/// Set by `pretend.rs` from `--binpkg-changed-deps[=y|n]` before any resolution.
+pub fn set_binpkg_changed_deps_override(value: Option<bool>) {
+    *BINPKG_CHANGED_DEPS_OVERRIDE.write().unwrap() = value;
+}
+
 /// Whether the `--binpkg-changed-deps` binary-candidate rejection is active this
 /// run: the explicit override if given, else on unless `--usepkgonly`.
 // Portage: depgraph.py
@@ -54,6 +59,11 @@ pub(crate) fn binpkg_changed_deps_active(usepkgonly: bool) -> bool {
 /// `--usepkgonly` or a `--useoldpkg-atoms` match (both otherwise exempt it). Off by default.
 // Portage: main.py, depgraph.py
 pub(crate) static USE_EBUILD_VISIBILITY: AtomicBool = AtomicBool::new(false);
+
+/// Set by `pretend.rs` from `--use-ebuild-visibility[=y|n]` before any resolution.
+pub fn set_use_ebuild_visibility(enabled: bool) {
+    USE_EBUILD_VISIBILITY.store(enabled, AtomicOrdering::Relaxed);
+}
 
 pub(crate) fn use_ebuild_visibility() -> bool {
     USE_EBUILD_VISIBILITY.load(AtomicOrdering::Relaxed)
