@@ -13391,3 +13391,85 @@ to `scope-backlog.md` so a future implementer inherits the trail
 instead of re-deriving it. Full contract suite green throughout (933 ->
 936 across the section), `portuale` and `portage-repo` unit suites
 green, `cargo fmt`/`clippy` clean at every commit.
+
+### Whole emerge actions backlog -- three points, one exclusion (2026-09-05)
+
+Asked to implement "F. Whole `emerge` actions" (`docs/scope-backlog.md`),
+excluding permanent non-goals. Of the five listed items, `--metadata`
+(an architectural no-op -- portuale reads `metadata/md5-cache` directly
+and models no `depcachedir` to transfer into) and `--sync` (points at
+`emaint sync`, GLSA/`@security` out of scope) are exactly that: nothing
+to build, nothing to defer. The other three each got real work.
+
+**`--regen`.** Two of its three documented cuts were genuine
+correctness gaps, not performance-only: real `MetadataRegen._cleanup`'s
+"global cleanse" (`MetadataRegen.py:142-189`) deletes a `metadata/
+md5-cache/<cat>/<pf>` entry whose ebuild has since vanished, which
+portuale's `--regen` never did (a removed ebuild's stale cache entry
+sat there forever); and real `eclass_cache.cache.update_eclasses`
+(`eclass_cache.py:108-148`) walks a repo's own `masters` chain, not
+just that repo's own `eclass/` dir, so an ebuild inheriting an eclass
+that only exists in a master got silently no `_eclasses_` field at all.
+Both fixed -- stale-entry pruning tracks every `(category, pf)` found
+per repo during the main loop and prunes anything else afterward; the
+masters-chain lookup searches `masters`-then-self, last location that
+has the file wins (a documented, behavior-preserving simplification of
+real's mtime-equality tie-break). `--jobs` threading stayed an
+explicit, *not-implemented* performance-only cut: the cache content a
+threaded run would write is byte-identical to a sequential one, so
+there was no correctness gap to close. Rust-only (execution code, like
+the binary-packages/sandbox/scheduler sections) -- 2 new subprocess
+tests in `test_portuale.py`.
+
+**`--check-news`.** Real `NewsManager.updateItems` (`news.py:112-190`)
+does two things `--check-news` only ever read: an item not already in
+`.skip` gets (re-)evaluated, and once valid+relevant it's added to
+*both* `.unread` and `.skip`, permanently; and real's printed count is
+`getUnreadItems`'s own `len(.unread)` (`news.py:234`), **not a live
+recompute** -- an item, once counted, stays counted on every future run
+until something actually removes it from `.unread`. The only thing real
+ever does that is the separate `eselect news read` tool; portuale's own
+`.read` file (a pre-existing, portuale-only stand-in, since real has no
+such file) now models that tool's effect, applied lazily on the next
+`--check-news` run. Wiring in the real write-back surfaced a genuine,
+separate correctness hazard in the *test harness*, not the feature: two
+existing contract tests ran Rust then Python sequentially against the
+same shared, git-tracked `fixtures/` `ROOT` -- once `--check-news`
+started writing files for real, Rust's own write-back silently leaked
+into what Python read back (wrong counts both ways) *and* left stray
+`.unread`/`.skip` files sitting in the committed fixtures tree after
+every run. Caught via a failing assertion, root-caused, and fixed with
+a `_check_news_isolated_root` helper (symlinks in the fixtures' own
+read-only vdb, keeps `var/lib` a fresh per-invocation directory) used
+with a *distinct* root per language -- the same principle a resolver
+contract test already follows (one side's execution must never mutate
+what the other side reads), just newly relevant here because this was
+the suite's first real *write* action compared side-by-side. Verified
+clean before committing (`git status` on `fixtures/` after every run).
+
+**`--info <atom>`.** The `( )` force/mask wrap and per-flag ANSI colour
+on the `USE=` line (real `pkg_use_display`'s `UseFlagDisplay.__str__`)
+shipped by reusing infrastructure the ebuild-candidate side of the same
+function already had: `forced_or_masked_flags` (previously only fed
+from a tree candidate, now also from the vdb's own recorded `IUSE`/
+`KEYWORDS`) and `colorize_use_token` (previously only used by the
+merge-list `USE="…"` column). The remaining two items -- the
+`(non-installed binary)` case and actually running `pkg_info()` --
+turned out to be one gap, not two, on inspection: real only ever lists
+a binary candidate for `--info` when it defines `pkg_info()`, so
+*showing* it is inseparable from being able to *run* it; a binary
+candidate additionally needs `--usepkg`/the scanned-binpkg index set up
+before `run_info`'s own CLI dispatch point (today that happens after);
+and running `pkg_info()` for real produces arbitrary ebuild-authored
+output no Python mirror can replicate byte-for-byte. `--config`/
+`--regen` solve that identical problem by having no Python mirror at
+all for their execution path -- but `--info` already has extensive,
+passing dual-language contract coverage (including an exact-match test
+asserting stdout ends immediately after the `USE="…"` line today), so
+shipping this needs the same test-architecture split those two actions
+use, not a one-line addition to an existing test. Investigated and
+recorded rather than partially built.
+
+Full contract suite green throughout (936 -> 938 across the section);
+`portuale` (342) and `portage-repo` (286 -> 290) unit suites green;
+`cargo fmt`/`clippy` clean at every commit.
