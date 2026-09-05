@@ -417,6 +417,48 @@ def test_emerge_buildpkgonly_with_binpkg_format_gpkg_builds_a_real_gpkg_tar(
     assert "PATH: dev-libs/packagepkg-1.0.gpkg.tar" in packages
 
 
+def test_emerge_buildpkgonly_multi_instance_gpkg_exports_a_real_build_id(
+    emerge_binary, tmp_path
+):
+    """Real `EbuildBinpkg._start`'s own condition, exactly: `if
+    "binpkg-multi-instance" in self.settings.features: self.settings[
+    "BUILD_ID"] = str(build_id)` (`EbuildBinpkg.py:47-48`). Previously
+    `BUILD_ID` was never exported to the `package` phase at all, so the
+    archive itself never got a real `build-info/BUILD_ID` file (only the
+    `$PKGDIR/Packages` *index* entry carried it) -- `invoke_dyn_package`
+    now exports it whenever one is allocated. `FEATURES=packdebug
+    splitdebug` is added here too: real `__generate_packdebug` needs
+    that same `BUILD_ID` and was consequently dead code regardless of
+    what was requested; with no compiled binaries to strip in this
+    fixture its own early-return guard is a clean no-op, but the whole
+    build must still succeed with the feature turned on."""
+    env = _real_build_env(tmp_path)
+    env["BINPKG_FORMAT"] = "gpkg"
+    env["BINPKG_COMPRESS"] = "gzip"
+    env["FEATURES"] = "binpkg-multi-instance packdebug splitdebug"
+    result = subprocess.run(
+        [str(emerge_binary), "--buildpkgonly", "dev-libs/packagepkg"],
+        capture_output=True,
+        text=True,
+        check=True,
+        env=env,
+    )
+    assert ">>> Building binary for dev-libs/packagepkg-1.0..." in result.stdout
+
+    gpkg = Path(env["PKGDIR"]) / "dev-libs/packagepkg-1.0-1.gpkg.tar"
+    assert gpkg.is_file()
+
+    with tarfile.open(gpkg, "r") as container:
+        with tarfile.open(
+            fileobj=container.extractfile("packagepkg-1.0-1/metadata.tar.gz"), mode="r"
+        ) as metadata:
+            build_id = metadata.extractfile("metadata/BUILD_ID").read().decode().strip()
+    assert build_id == "1"
+
+    packages = (Path(env["PKGDIR"]) / "Packages").read_text()
+    assert "BUILD_ID: 1" in packages
+
+
 def test_emerge_buildpkgonly_with_pretend_stays_dry_run(emerge_binary, tmp_path):
     """The exact same atom as the real-build test above, but with
     `--pretend` also given -- must stay a pure dry-run report, matching

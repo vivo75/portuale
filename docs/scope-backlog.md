@@ -205,17 +205,18 @@ Remote-binhost MD5 indexing, gpkg mtime-staleness revalidation +
 `BUILD_ID` basename, binpkg-multi-instance selection (`--binpkg-
 respect-use`/atom-`[use]` filtering/`dedup_binary_instances`),
 `--binpkg-changed-deps`/`--rebuilt-binaries`/`_equiv_ebuild_visible`,
-PKGDIR-index locking, `FEATURES=buildpkg-live`, and real `EbuildBinpkg`
-failure semantics all shipped 2026-09-04 — see `what-this-proves.md`'s
-"Binary packages / fetch" entry for the cited detail. Still open:
-`.sig` verification/signing (`FEATURES=binpkg-signing` — no crypto
-crate, a real cut) and bare `.xpak` multi-instance (a genuinely
-different on-disk shape than gpkg's); `splitdebug`/`packdebug` (real
-`__generate_packdebug` gates on a `BUILD_ID` env var portuale's own
-phase invocation never exports — needs its own investigation pass);
-`identical_binary`, a `BUILD_TIME`-vs-installed reinstall trigger
-outside `--rebuilt-binaries`, `useoldpkg` multi-instance, and the
-explicit `--binpkg-changed-deps=y|n`/`--use-ebuild-visibility`
+PKGDIR-index locking, `FEATURES=buildpkg-live`, real `EbuildBinpkg`
+failure semantics (2026-09-04), and the `BUILD_ID` env-var export that
+unblocked both the archive's own embedded `build-info/BUILD_ID` file
+and `FEATURES=packdebug` (2026-09-05, real `EbuildBinpkg._start`'s own
+`if "binpkg-multi-instance" in features` condition, exactly) all
+shipped — see `what-this-proves.md`'s "Binary packages / fetch" entry
+for the cited detail. Still open: `.sig` verification/signing
+(`FEATURES=binpkg-signing` — no crypto crate, a real cut) and bare
+`.xpak` multi-instance (a genuinely different on-disk shape than
+gpkg's); `identical_binary`, a `BUILD_TIME`-vs-installed reinstall
+trigger outside `--rebuilt-binaries`, `useoldpkg` multi-instance, and
+the explicit `--binpkg-changed-deps=y|n`/`--use-ebuild-visibility`
 overrides (a ~30-to-90-call-site plumbing job for a rarely-used
 explicit override of an already-automatic default — deferred). Binpkg
 `SHA1` (no sha1 crate) and fetch candidate ordering/`RESTRICT=

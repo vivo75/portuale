@@ -469,7 +469,14 @@ pub(crate) fn package_after_install(
             .unwrap_or_default(),
         std::process::id()
     ));
-    let package_status = invoke_dyn_package(ebuild_path, portage_tmpdir, root, options, &tmp_path)?;
+    let package_status = invoke_dyn_package(
+        ebuild_path,
+        portage_tmpdir,
+        root,
+        options,
+        &tmp_path,
+        build_id,
+    )?;
     if package_status != 0 {
         let _ = std::fs::remove_file(&tmp_path);
         return Ok(package_status);
@@ -625,12 +632,30 @@ fn binpkg_md5_hex(path: &Path) -> Option<String> {
 /// with the compressor / `PKGDIR` / `PORTAGE_BINPKG_TMPFILE` environment
 /// real portage sets. Shared by `run_package` (fresh `src_install`
 /// image) and `quickpkg_from_vdb` (installed-files image).
+///
+/// `build_id`: real `EbuildBinpkg._start`'s own condition, exactly --
+/// `if "binpkg-multi-instance" in self.settings.features:
+/// self.settings["BUILD_ID"] = str(build_id)` (`EbuildBinpkg.py:47-48`),
+/// which for portuale is precisely when the caller already allocated one
+/// (`package_after_install`'s own gpkg-only multi-instance gate -- xpak
+/// multi-instance stays out of scope, so `BUILD_ID` is never exported
+/// for it either, matching real's `binpkg-multi-instance` feature being
+/// meaningless there in this fork). Exporting it makes real,
+/// unmodified `__dyn_package` do two things for free that portuale
+/// previously never triggered: write a real `build-info/BUILD_ID` file
+/// into the archive itself (`bin/misc-functions.sh:557-558` --
+/// previously only the `$PKGDIR/Packages` *index* entry carried this
+/// value, so `binpkg::populate_local_pkgdir`'s own filename-inference
+/// fallback was silently doing the archive's job), and, if
+/// `FEATURES=packdebug` is also set, real `__generate_packdebug`
+/// (needs `BUILD_ID` for the debug tarball's own filename).
 fn invoke_dyn_package(
     ebuild_path: &Path,
     portage_tmpdir: &Path,
     root: &Path,
     options: &PackageOptions,
     binpkg_path: &Path,
+    build_id: Option<u64>,
 ) -> Result<i32, String> {
     let binpkg_format = options.binpkg_format.as_str();
     let repo_lib_path = ebuild_phases::portage_checkout().join("lib");
@@ -653,6 +678,9 @@ fn invoke_dyn_package(
             repo_lib_path.display().to_string(),
         ),
     ];
+    if let Some(id) = build_id {
+        extra_env.push(("BUILD_ID".to_string(), id.to_string()));
+    }
     if binpkg_format == "gpkg" {
         // Real `gpkg-helper.py` builds its own `portage.settings` inside
         // the subprocess and reads the compressor from it
@@ -829,7 +857,17 @@ pub(crate) fn quickpkg_from_vdb(
             .unwrap_or_default(),
         std::process::id()
     ));
-    let status = invoke_dyn_package(&scratch_ebuild, portage_tmpdir, root, options, &tmp_path)?;
+    // `quickpkg` never allocates a multi-instance `BUILD_ID` in portuale
+    // today (`binpkg_path` above is always the bare `{pf}.{ext}` name,
+    // pre-existing and out of scope here) -- `None`, unaffected.
+    let status = invoke_dyn_package(
+        &scratch_ebuild,
+        portage_tmpdir,
+        root,
+        options,
+        &tmp_path,
+        None,
+    )?;
     if status != 0 {
         let _ = std::fs::remove_file(&tmp_path);
         return Err(format!("{category}/{pf}: __dyn_package failed ({status})"));
@@ -1344,6 +1382,16 @@ mod tests {
             .pkgdir
             .join("dev-libs/packagepkg-1.0.gpkg.tar")
             .exists());
+
+        // Real `EbuildBinpkg._start`'s own `BUILD_ID` export
+        // (`invoke_dyn_package`'s own doc comment): each archive's
+        // *embedded* `build-info/BUILD_ID` -- written by real,
+        // unmodified `__dyn_package` bash, not synthesized Rust-side --
+        // must match its own filename suffix.
+        let first_meta = crate::binpkg::read_gpkg_metadata(&first).expect("reads metadata");
+        assert_eq!(first_meta.get("BUILD_ID").map(String::as_str), Some("1"));
+        let second_meta = crate::binpkg::read_gpkg_metadata(&second).expect("reads metadata");
+        assert_eq!(second_meta.get("BUILD_ID").map(String::as_str), Some("2"));
 
         // Both builds' own Packages entries survive -- real `_inject_file`'s
         // own PATH-keyed dedup (not CPV-keyed), which
