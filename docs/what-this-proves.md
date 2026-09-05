@@ -8938,6 +8938,31 @@ with `BUILD_ID`; the gpkg multi-instance test now asserts the
 `<cat>/<pn>/` layout and that neither wrong name is written.
 `test_portuale.py`'s multi-instance gpkg test updated to the real path.
 
+### bug #354441 (`identical_binary`): not a portuale bug
+
+Real portage's `identical_binary` check (`depgraph.py:8001-8014`) exists
+because real's `_select_pkg_highest_available_imp` rejects an
+**installed built instance** for ebuild-invisibility (ebuild removed, or
+its keywords dropped) and would then merge the available binary in its
+place — a needless reinstall even when that binary is byte-identical to
+what's installed. `identical_binary` suppresses that.
+
+Portuale's resolver never builds a rejectable "installed package"
+candidate. `_equiv_ebuild_visible` only ever filters *binary*
+candidates, and only when a visible ebuild matches the atom at some
+version; "already installed" is a pure vdb-membership predicate
+(`candidate_is_installed`). So a binary at the installed version is
+classified `AlreadyInstalled` directly. Verified empirically across the
+variants — ebuild removed, ebuild keyword-dropped, ebuild `package.mask`'d
+(where real hides the binary too and both correctly report the atom
+unsatisfiable), `--selective` vs bare top-level (`[binary R]`, matching
+real's "`emerge foo` always replaces"), and a matching vs differing
+binary `BUILD_TIME`. `test_usepkg_binary_of_a_since_removed_ebuild_is_
+not_reinstalled` pins it, Rust ≡ Python. One narrow residual divergence
+is a documented cut (`scope-backlog.md` E): ebuild gone **and** a
+differing-`BUILD_TIME` binary at the installed version — real reinstalls,
+portuale keeps installed (what `--rebuilt-binaries` opts into).
+
 ### `build-info` metadata generation: a merged vdb entry / built `.tbz2` carries its real dependencies
 
 The `$PKGDIR`-scan work above surfaced this: a package portuale *itself*

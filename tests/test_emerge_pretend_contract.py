@@ -4599,6 +4599,81 @@ def test_getbinpkg_equiv_ebuild_visible_rejects_an_orphaned_binary(
     assert exact.stdout.splitlines() == ["[binary  N g   ] dev-libs/eqebvispkg-2.0-1 "]
 
 
+def test_usepkg_binary_of_a_since_removed_ebuild_is_not_reinstalled(
+    emerge_binary, emerge_pretend_python, tmp_path
+):
+    """Real bug #354441 / `identical_binary` (`depgraph.py:8001-8014`):
+    when a package's ebuild has since been removed (or its keywords
+    dropped), real portage rejects the *installed* built instance for
+    ebuild-invisibility and would merge the available binary in its
+    place -- even when that binary is byte-identical to what's installed.
+    `identical_binary` suppresses that needless reinstall.
+
+    Portuale's resolver has no "installed package" candidate that can be
+    rejected for ebuild-invisibility: `_equiv_ebuild_visible` only ever
+    filters *binary* candidates (and only when a visible ebuild matches
+    the atom at some version), while "already installed" is a pure vdb
+    membership check (`candidate_is_installed`). So the binary at the
+    installed version is classified `AlreadyInstalled` directly, no
+    `identical_binary` special-case needed -- this pins that, for both a
+    matching and a differing `BUILD_TIME`.
+
+    (`scope-backlog.md` E documents the one narrow residual real
+    divergence: with the ebuild gone AND a differing-`BUILD_TIME` binary
+    at the installed version, real reinstalls it -- portuale keeps the
+    installed version, which is what `--rebuilt-binaries` opts into.)"""
+    cfg = tmp_path / "cfg"
+    repo = tmp_path / "repo"
+    pkgdir = tmp_path / "binpkgs"
+    (cfg / "etc/portage").mkdir(parents=True)
+    (repo / "profiles").mkdir(parents=True)
+    (repo / "profiles/repo_name").write_text("main\n")
+    (repo / "profiles/make.defaults").write_text('ACCEPT_KEYWORDS="amd64"\n')
+    # No dev-libs/idbinpkg ebuild at all -- removed from the tree since
+    # it was installed.
+    (cfg / "etc/portage/repos.conf").write_text(
+        f"[DEFAULT]\nmain-repo = main\n\n[main]\nlocation = {repo}\n"
+    )
+    (cfg / "etc/portage/make.conf").write_text(f'PKGDIR="{pkgdir}"\n')
+    (cfg / "etc/portage/make.profile").symlink_to(repo / "profiles")
+
+    vdb = cfg / "var/db/pkg/dev-libs/idbinpkg-1.0"
+    vdb.mkdir(parents=True)
+    (vdb / "CATEGORY").write_text("dev-libs\n")
+    (vdb / "SLOT").write_text("0\n")
+    (vdb / "KEYWORDS").write_text("amd64\n")
+    (vdb / "USE").write_text("\n")
+    (vdb / "BUILD_TIME").write_text("1000\n")
+    (vdb / "repository").write_text("main\n")
+    pkgdir.mkdir()
+    env = {"PORTAGE_CONFIGROOT": str(cfg), "ROOT": str(cfg)}
+
+    for binary_build_time in ("1000", "2000"):  # identical, then differing
+        (pkgdir / "Packages").write_text(
+            "TIMESTAMP: 0\nPACKAGES: 1\n\n"
+            f"CPV: dev-libs/idbinpkg-1.0\nBUILD_TIME: {binary_build_time}\n"
+            "DEFINED_PHASES: -\nEAPI: 8\nIUSE:\nKEYWORDS: amd64\n"
+            "PATH: dev-libs/idbinpkg-1.0.tbz2\nREPO: main\nSIZE: 4096\nSLOT: 0\nUSE:\n"
+        )
+        args = [
+            "--pretend", "--usepkg", "--update", "--deep", "--selective",
+            "dev-libs/idbinpkg",
+        ]
+        rust = _run([str(emerge_binary)], args, env)
+        py = _run(emerge_pretend_python, args, env)
+        assert rust.returncode == 0, (binary_build_time, rust.stdout, rust.stderr)
+        assert rust.stdout == py.stdout, binary_build_time
+        assert rust.stderr == py.stderr, binary_build_time
+        assert "[binary" not in rust.stdout, binary_build_time
+        assert "[ebuild" not in rust.stdout, binary_build_time
+
+    # A bare top-level atom still reinstalls (matches real -- `emerge foo`
+    # always replaces), so this isn't a "never reinstall" regression.
+    bare = _run([str(emerge_binary)], ["--pretend", "--usepkg", "dev-libs/idbinpkg"], env)
+    assert bare.returncode == 0
+    assert bare.stdout.splitlines() == ["[binary   R    ] dev-libs/idbinpkg-1.0 "]
+
+
 def test_getbinpkg_binpkg_changed_deps_rejects_a_stale_binary(
     emerge_binary, emerge_pretend_python, fixture_env
 ):

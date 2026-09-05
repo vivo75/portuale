@@ -223,10 +223,30 @@ not the "bare metadata segment" the earlier deferral assumed; the fix
 also corrected gpkg multi-instance, which portuale had been writing one
 directory level too shallow) all
 shipped — see `what-this-proves.md`'s "Binary packages / fetch" entry
-for the cited detail. Still open: `.sig` verification/signing
-(`FEATURES=binpkg-signing` — no crypto crate, a real cut);
-`identical_binary`, a `BUILD_TIME`-vs-installed reinstall
-trigger outside `--rebuilt-binaries`, `useoldpkg` multi-instance, and
+for the cited detail.
+
+`identical_binary` (bug #354441, real `depgraph.py:8001-8014`) was
+**investigated 2026-09-05 and found not to be a portuale bug**: real's
+`identical_binary` guards against real rejecting an *installed built
+instance* for ebuild-invisibility and then merging the available binary
+in its place. Portuale's resolver has no rejectable "installed package"
+candidate — `_equiv_ebuild_visible` only ever filters *binary*
+candidates, and "already installed" is a pure vdb-membership check
+(`candidate_is_installed`) — so a binary at the installed version is
+classified `AlreadyInstalled` directly, for a matching *or* differing
+`BUILD_TIME`. Verified empirically (ebuild removed / keyword-dropped /
+package.mask'd, `--selective` vs bare top-level) — pinned by
+`test_usepkg_binary_of_a_since_removed_ebuild_is_not_reinstalled`. The
+one narrow residual real-divergence: ebuild gone **and** a
+differing-`BUILD_TIME` binary at the installed version — real reinstalls
+it, portuale keeps installed (which is exactly what `--rebuilt-binaries`
+opts into); left as a deliberate cut.
+
+Still open: `.sig` verification/signing
+(`FEATURES=binpkg-signing` — no crypto crate, a real cut); a
+`BUILD_TIME`-vs-installed reinstall
+trigger outside `--rebuilt-binaries` (the residual divergence above),
+`useoldpkg` multi-instance, and
 the explicit `--binpkg-changed-deps=y|n`/`--use-ebuild-visibility`
 overrides (a ~30-to-90-call-site plumbing job for a rarely-used
 explicit override of an already-automatic default — deferred). Binpkg
