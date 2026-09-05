@@ -13593,3 +13593,38 @@ test building with `packdebug`/`splitdebug` also enabled and extracting
 
 Full contract suite (938, unaffected) green; `portuale` (343) and
 `portage-repo` (290) unit suites green; `cargo fmt`/`clippy` clean.
+
+### check-news: full atom matching for Display-If-Installed (2026-09-05)
+
+`docs/scope-backlog.md`'s "F. Whole `emerge` actions" `--check-news`
+item -- "only bare `cat/pkg` `Display-If-Installed` atoms are matched
+(not `>=cat/pkg-1` etc.)".
+
+Real `DisplayInstalledRestriction.checkRestriction` (`news.py:444`) is
+one line: `kwargs["vardb"].match(self.atom)` -- a full atom match,
+version operators and slot/sub-slot and all. `news_item_relevant` /
+`_news_item_relevant` were doing `cat, pkg = atom.split("/")` then
+asking whether that `cat/pkg` had *any* installed version -- so
+`>=dev-libs/foo-1` split into a bogus category `>=dev-libs` that never
+matched a vdb directory, and `dev-libs/foo:2` into a bogus package
+`foo:2` the same way. The versioned/slotted case wasn't wrong-answered
+so much as silently unreachable.
+
+Fixed by `parse_atom` + one `cat/pkg-ver:slot/sub_slot` candidate per
+installed version (`installed_candidates`) + `match_from_list` -- the
+exact same pattern `depclean_cleanlist`'s own vdb atom matching already
+uses, both languages. New fixture items exercise a `>=` atom that
+matches the installed 1.0 and a `>` atom that (correctly) doesn't,
+proving the operator is evaluated rather than dropped.
+
+The remaining cuts are all narrow and all consistent with existing
+project stances: a `[use]`-dep in the atom isn't post-filtered (the
+`match_from_list` scope every portuale caller shares), a malformed atom
+is treated as an unsatisfied restriction rather than making the whole
+item invalid (real `DisplayInstalledRestriction.isValid`), and the
+`News-Item-Format` 1.x-vs-2.x EAPI gate on atom validity isn't applied
+-- `portage_dep` has no EAPI parametrization by design (the Part 3
+non-goal), so there's nothing to gate against.
+
+Full contract suite (939) green; `portuale` (343) and `portage-repo`
+(290) unaffected; `cargo fmt`/`clippy` clean.
