@@ -664,12 +664,20 @@ The action and modifier-flag surface is broadly complete. Remaining:
 
 ### H. Misc / cosmetic
 
-- `os.lchown` / privilege-preserving ownership is not reproduced (needs
-  root, which portuale's single-user context never has — it would only
-  no-op); directory merge traversal is sorted for test determinism, not
-  real `os.listdir()` order (`CONTENTS` line order carries no semantics
-  portage relies on). Both are deliberate — see `ebuild_merge.rs`'s
-  module doc comment.
+- **`os.lchown` / ownership preservation shipped 2026-09-05** — real
+  `movefile()`'s `lchown`/`chown` (symlink, regular file) and real
+  `mergeme()`'s own directory `chown`/`chmod` (a *newly created*
+  directory only; an already-existing one is left alone, matching
+  real's own "kept as-is" branch) are reproduced via
+  `ebuild_merge.rs::lchown_or_chown` (raw `libc::lchown`/`libc::chown`).
+  Unconditional, matching real — succeeds as root or when the source is
+  already owned by the calling process (the common single-user case),
+  fails with the same real `EPERM` otherwise, propagated as an ordinary
+  merge failure rather than silently swallowed. Directory merge
+  traversal is still sorted for test determinism, not real
+  `os.listdir()` order (`CONTENTS` line order carries no semantics
+  portage relies on) — deliberate, see `ebuild_merge.rs`'s module doc
+  comment.
 
 ---
 

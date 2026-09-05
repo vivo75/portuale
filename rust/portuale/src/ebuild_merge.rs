@@ -155,14 +155,23 @@
 //     module) and unmerge (`preserve_libs_on_unmerge`, this module) are
 //     real now -- see `docs/what-this-proves.md`'s own "`preserve-libs`" sections for
 //     the full grounding of each slice.
-//   - `merge_tree`'s regular-file copy now mirrors real `movefile()`'s
+//   - `merge_tree`'s regular-file copy mirrors real `movefile()`'s
 //     explicit `os.chmod(dest, sstat.st_mode)` with a
 //     `std::fs::set_permissions` after the copy (on top of the mode bits
-//     `std::fs::copy` already carries over on Unix). Real `movefile()`'s
-//     `os.lchown` is still not reproduced -- it needs root, which this
-//     portuale's single-user dev/test context never has, so it would only
-//     ever no-op; there's no privilege-dropping concept anywhere else in
-//     portuale either.
+//     `std::fs::copy` already carries over on Unix). **Shipped
+//     2026-09-05:** real `movefile()`'s `os.lchown`/`os.chown` (symlink,
+//     regular file) and real `mergeme()`'s own directory
+//     `os.chown`/`os.chmod` (a *newly created* directory only -- an
+//     already-existing one is left alone) are now reproduced via
+//     `lchown_or_chown` (`libc::lchown`/`libc::chown`, see its own doc
+//     comment) -- see this file's own `lchown_or_chown` for the
+//     root/non-root behavior (unconditional, matching real; fails with
+//     `EPERM` like real does when genuinely privileged and not root).
+//     There's still no privilege-*dropping* concept anywhere in
+//     portuale (real userpriv/fakeroot's own reason for existing) --
+//     see the "sandbox / build isolation" section of
+//     `docs/scope-backlog.md` for that separate, still-correct
+//     non-goal.
 //   - Directory-entry merge order is sorted by filename for determinism
 //     (portuale's own test-reproducibility need) rather than real
 //     `os.listdir()`'s own arbitrary/OS-dependent order -- a deliberate
@@ -1325,6 +1334,14 @@ fn merge_tree(
                     }
                     std::os::unix::fs::symlink(&target, &write_dest)
                         .map_err(|e| format!("{}: {e}", write_dest.display()))?;
+                    // Real movefile(): `lchown(dest, sstat.st_uid,
+                    // sstat.st_gid)` right after creating the symlink --
+                    // preserves the source's own recorded owner/group onto
+                    // the merged destination. See `lchown_or_chown`'s own
+                    // doc comment for the root/non-root behavior.
+                    let src_meta = std::fs::symlink_metadata(&src)
+                        .map_err(|e| format!("{}: {e}", src.display()))?;
+                    lchown_or_chown(&write_dest, src_meta.uid(), src_meta.gid(), true)?;
                     // Real movefile() preserves the source's own mtime onto
                     // the merged destination -- without this, the freshly
                     // created symlink would get its own "now" mtime, never
@@ -1348,7 +1365,27 @@ fn merge_tree(
                     Some(mtime),
                 ));
             } else if file_type.is_dir() {
+                // Real `mergeme()`: a *newly created* directory gets
+                // `os.chmod`/`os.chown`ed to the source's own recorded
+                // mode/owner (`vartree.py:5865-5867`); a destination that
+                // already exists as a directory is left completely alone
+                // (the `--- {mydest}/` "kept as-is" branch, `:5808-5810`)
+                // -- an existing shared directory (e.g. `/usr/lib`) must
+                // never have its ownership clobbered by every package
+                // that happens to also install into it.
+                let dir_existed = dest.is_dir();
                 std::fs::create_dir_all(&dest).map_err(|e| format!("{}: {e}", dest.display()))?;
+                if !dir_existed {
+                    use std::os::unix::fs::PermissionsExt;
+                    let src_meta =
+                        std::fs::metadata(&src).map_err(|e| format!("{}: {e}", src.display()))?;
+                    lchown_or_chown(&dest, src_meta.uid(), src_meta.gid(), false)?;
+                    std::fs::set_permissions(
+                        &dest,
+                        std::fs::Permissions::from_mode(src_meta.permissions().mode()),
+                    )
+                    .map_err(|e| format!("{}: {e}", dest.display()))?;
+                }
                 contents.push_str(&format_contents_line("dir", &abs_path, None, None, None));
                 stack.push(relative_path);
             } else if file_type.is_file() {
@@ -1396,25 +1433,26 @@ fn merge_tree(
                     }
                     std::fs::copy(&src, &write_dest)
                         .map_err(|e| format!("{}: {e}", src.display()))?;
-                    // Real `movefile()` explicitly `os.chmod(dest,
-                    // sstat.st_mode)`s after the copy/rename (and
-                    // `os.lchown`s -- omitted here: it needs root, which
-                    // portuale's single-user dev/test context never
-                    // has, and would only ever no-op). `std::fs::copy`
-                    // already carries a regular file's permission bits
-                    // over on Unix, so this is belt-and-suspenders that
-                    // makes the mode explicit and also fixes up a
+                    // Real `movefile()`'s `_apply_stat`: `os.chown(dest,
+                    // sstat.st_uid, sstat.st_gid)` then `os.chmod(dest,
+                    // sstat.st_mode)` after the copy/rename -- preserves
+                    // the source's own recorded owner/group and mode.
+                    // `std::fs::copy` already carries a regular file's
+                    // permission bits over on Unix, so the chmod here is
+                    // belt-and-suspenders that also fixes up a
                     // pre-existing `._cfgNNNN_` sibling should the umask
-                    // have masked a bit.
+                    // have masked a bit; the chown is not redundant --
+                    // `std::fs::copy` never touches ownership. See
+                    // `lchown_or_chown`'s own doc comment for the
+                    // root/non-root behavior.
                     {
                         use std::os::unix::fs::PermissionsExt;
-                        let mode = std::fs::metadata(&src)
-                            .map_err(|e| format!("{}: {e}", src.display()))?
-                            .permissions()
-                            .mode();
+                        let src_meta = std::fs::metadata(&src)
+                            .map_err(|e| format!("{}: {e}", src.display()))?;
+                        lchown_or_chown(&write_dest, src_meta.uid(), src_meta.gid(), false)?;
                         std::fs::set_permissions(
                             &write_dest,
-                            std::fs::Permissions::from_mode(mode),
+                            std::fs::Permissions::from_mode(src_meta.permissions().mode()),
                         )
                         .map_err(|e| format!("{}: {e}", write_dest.display()))?;
                     }
@@ -1546,6 +1584,44 @@ fn create_special_node(
         ));
     }
     if unsafe { libc::chmod(dest_c.as_ptr(), mode) } != 0 {
+        return Err(format!(
+            "{}: {}",
+            dest.display(),
+            std::io::Error::last_os_error()
+        ));
+    }
+    Ok(())
+}
+
+/// Real `movefile()`'s ownership preservation: `lchown(dest, sstat.
+/// st_uid, sstat.st_gid)` for a symlink (real `movefile.py:255`, via
+/// `portage.data.lchown` -- a thin `os.lchown` wrapper, `data.py:18`),
+/// `os.chown(dest, sstat.st_uid, sstat.st_gid)` for anything else (real
+/// `_apply_stat`, `movefile.py:28-30`) -- both set `dest`'s owner/group
+/// to match the *source*'s own recorded uid/gid from `${D}` (whatever
+/// the build phases, or an ebuild's own `fowners`, actually left
+/// there).
+///
+/// Real portage runs merges as root in normal operation, so this always
+/// succeeds there; it's not gated on "am I root" here either, matching
+/// real's own unconditional call with no privilege check at this call
+/// site. Run unprivileged with the source already owned by the calling
+/// process (the common single-user case `${D}`'s files are almost
+/// always in), `chown(path, self_uid, self_gid)` is permitted regardless
+/// and still succeeds. Only a genuinely privileged ownership change
+/// attempted without root hits the same real `EPERM` real portage would
+/// -- propagated here as an ordinary merge failure, exactly like every
+/// other I/O error in this function, never silently swallowed.
+fn lchown_or_chown(dest: &Path, uid: u32, gid: u32, is_symlink: bool) -> Result<(), String> {
+    use std::os::unix::ffi::OsStrExt;
+    let dest_c = std::ffi::CString::new(dest.as_os_str().as_bytes())
+        .map_err(|e| format!("{}: {e}", dest.display()))?;
+    let ret = if is_symlink {
+        unsafe { libc::lchown(dest_c.as_ptr(), uid, gid) }
+    } else {
+        unsafe { libc::chown(dest_c.as_ptr(), uid, gid) }
+    };
+    if ret != 0 {
         return Err(format!(
             "{}: {}",
             dest.display(),
@@ -3203,6 +3279,115 @@ mod tests {
             .lines()
             .any(|l| l.starts_with("obj /usr/share/x/hello.txt ")));
         assert!(contents.contains("sym /usr/share/x/link.txt -> hello.txt"));
+    }
+
+    /// Directly `libc::lchown`/`libc::chown`s a test-source path to an
+    /// arbitrary uid/gid, independent of `lchown_or_chown` itself (the
+    /// function under test) -- test setup, not a call into production
+    /// code.
+    fn raw_chown(path: &Path, uid: u32, gid: u32, is_symlink: bool) {
+        use std::os::unix::ffi::OsStrExt;
+        let c = std::ffi::CString::new(path.as_os_str().as_bytes()).unwrap();
+        let ret = if is_symlink {
+            unsafe { libc::lchown(c.as_ptr(), uid, gid) }
+        } else {
+            unsafe { libc::chown(c.as_ptr(), uid, gid) }
+        };
+        assert_eq!(
+            ret,
+            0,
+            "{}: {}",
+            path.display(),
+            std::io::Error::last_os_error()
+        );
+    }
+
+    #[test]
+    fn merge_tree_preserves_ownership_from_the_source_when_root() {
+        // Real movefile()'s lchown/chown (symlink, regular file) and
+        // mergeme()'s own directory chown/chmod (a newly created
+        // directory only): the merged destination's owner/group must
+        // match the *source*'s own recorded uid/gid, not whoever ran
+        // the merge. Only actually exercisable as root -- chowning to
+        // an arbitrary uid needs privilege, the same real precondition
+        // this whole feature has (see `lchown_or_chown`'s own doc
+        // comment). Run under `sudo cargo test ...` to exercise it;
+        // skipped (not failed) otherwise, matching that real
+        // precondition rather than asserting something no local
+        // environment could ever satisfy.
+        if unsafe { libc::geteuid() } != 0 {
+            eprintln!(
+                "skipping merge_tree_preserves_ownership_from_the_source_when_root: not root"
+            );
+            return;
+        }
+        let tmp = tempdir();
+        let d = tmp.join("D");
+        let root = tmp.join("ROOT");
+        std::fs::create_dir_all(d.join("usr/share/x")).unwrap();
+        std::fs::write(d.join("usr/share/x/hello.txt"), b"hello").unwrap();
+        std::os::unix::fs::symlink("hello.txt", d.join("usr/share/x/link.txt")).unwrap();
+        std::fs::create_dir_all(&root).unwrap();
+
+        // A uid/gid that's certainly neither 0 nor this process's own.
+        let (uid, gid) = (65534u32, 65534u32);
+        for p in [
+            d.join("usr"),
+            d.join("usr/share"),
+            d.join("usr/share/x"),
+            d.join("usr/share/x/hello.txt"),
+        ] {
+            raw_chown(&p, uid, gid, false);
+        }
+        raw_chown(&d.join("usr/share/x/link.txt"), uid, gid, true);
+
+        let mut cfgfiledict = BTreeMap::new();
+        merge_tree(
+            &d,
+            &root,
+            "dev-libs",
+            None,
+            false,
+            "/etc",
+            "/etc/env.d",
+            false,
+            &mut cfgfiledict,
+        )
+        .expect("merge_tree succeeds");
+
+        for p in [
+            root.join("usr"),
+            root.join("usr/share"),
+            root.join("usr/share/x"),
+            root.join("usr/share/x/hello.txt"),
+            root.join("usr/share/x/link.txt"),
+        ] {
+            let meta = std::fs::symlink_metadata(&p).unwrap();
+            assert_eq!(meta.uid(), uid, "{}: uid", p.display());
+            assert_eq!(meta.gid(), gid, "{}: gid", p.display());
+        }
+
+        // An already-existing directory is left alone (real mergeme()'s
+        // "kept as-is" branch, vartree.py:5808-5810) -- merging a
+        // *second* time with a different source owner must not clobber
+        // usr/share/x's now-installed ownership.
+        raw_chown(&d.join("usr/share/x"), 0, 0, false);
+        let mut cfgfiledict2 = BTreeMap::new();
+        merge_tree(
+            &d,
+            &root,
+            "dev-libs",
+            None,
+            false,
+            "/etc",
+            "/etc/env.d",
+            false,
+            &mut cfgfiledict2,
+        )
+        .expect("merge_tree succeeds");
+        let meta = std::fs::symlink_metadata(root.join("usr/share/x")).unwrap();
+        assert_eq!(meta.uid(), uid, "existing dir must keep its ownership");
+        assert_eq!(meta.gid(), gid, "existing dir must keep its ownership");
     }
 
     #[test]

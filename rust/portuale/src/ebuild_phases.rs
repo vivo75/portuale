@@ -139,11 +139,14 @@
 //       set, there is no reasonable degrade to model, only a real
 //       `libselinux`/policy dependency this scope has no use for);
 //       `userpriv` / `fakeroot` -- these exist in real portage
-//       specifically to drop privileges *from* an already-root process;
-//       portuale never assumes root to begin with (see `ebuild_merge.rs`'s
-//       own `os.lchown` cut, which needs root for the same reason), so
-//       there's no privilege to drop and nothing for either feature to
-//       do here; and, unlike real portage (which only unshares when
+//       specifically to drop privileges *from* an already-root process
+//       (a build should not itself run as root); portuale's merge code
+//       does now reproduce real's own `os.lchown`/`os.chown` calls
+//       (`ebuild_merge.rs`'s `lchown_or_chown`), but that's a *merge*
+//       (into `${ROOT}`) concern, not a *build* (`src_compile` etc.,
+//       still never run as root) one -- there's still no privilege to
+//       drop at build time and nothing for either feature to do here;
+//       and, unlike real portage (which only unshares when
 //       `uid == 0`), portuale always uses `--map-root-user` so it
 //       works non-root -- an unavailable user namespace degrades with a
 //       warning (real "Unable to unshare").
