@@ -1717,19 +1717,21 @@ fn slot_conflict_to_json(c: &SlotConflict) -> String {
             let parents: Vec<String> = inst
                 .parents
                 .iter()
-                .map(|(cpv, atom)| {
+                .map(|p| {
                     format!(
-                        "{{\"parent\":{},\"atom\":{}}}",
-                        json_string(cpv),
-                        json_string(atom)
+                        "{{\"parent\":{},\"atom\":{},\"use\":{}}}",
+                        json_string(&p.parent_cpv),
+                        json_string(&p.atom),
+                        json_string(&render_pkg_use_display(&p.use_display))
                     )
                 })
                 .collect();
             format!(
-                "{{\"version\":{},\"sub_slot\":{},\"repo_name\":{},\"parents\":[{}]}}",
+                "{{\"version\":{},\"sub_slot\":{},\"repo_name\":{},\"use\":{},\"parents\":[{}]}}",
                 json_string(&inst.version),
                 json_string(&inst.sub_slot),
                 json_string(&inst.repo_name),
+                json_string(&render_pkg_use_display(&inst.use_display)),
                 parents.join(",")
             )
         })
@@ -6193,6 +6195,18 @@ enum SlotConflictReason {
     Slot(String),          // the ":slot[/sub]" text, for the caret span
 }
 
+/// One slot-conflict parent that contributed at least one specific
+/// collision reason -- the working row of `get_conflict()`'s per-instance
+/// `pulled in by` rendering.
+struct ClassifiedParent<'a> {
+    parent_cpv: &'a str,
+    atom_str: &'a str,
+    atom: Atom,
+    reasons: Vec<SlotConflictReason>,
+    /// Real `pkg_use_display(parent, ...)` pairs for this parent package.
+    use_display: &'a [(String, String)],
+}
+
 /// `atom` rendered back to `{op}{cat}/{pkg}-{ver}[-rN][*]`, optionally with
 /// its `:slot[/sub]` -- the two forms real portage builds as
 /// `atom.without_use.without_slot` and `atom.without_use` for its
@@ -6357,6 +6371,30 @@ fn slot_conflict_caret_idx(
         }
     }
     idx
+}
+
+/// Real `pkg_use_display(pkg, ...)`'s own return string -- `USE="…"`
+/// followed by one ` VAR="…"` per non-hidden `USE_EXPAND` group (the
+/// pairs `portage_repo::pkg_use_display_for` produced). Real always
+/// renders a `USE=` field even when the package declares no flags
+/// (`var_order.insert(0, "USE")` + the unconditional
+/// `flag_displays.append`), so an empty slice still yields `USE=""`.
+/// Colorization of the flag tokens (real `UseFlagDisplay.__str__`'s
+/// `red`/`blue`) is a documented cut here -- it is a no-op under
+/// `emerge -p` without `--color=y` anyway.
+fn render_pkg_use_display(disp: &[(String, String)]) -> String {
+    let use_body = disp
+        .iter()
+        .find(|(name, _)| name == "USE")
+        .map(|(_, body)| body.as_str())
+        .unwrap_or("");
+    let mut out = format!("USE=\"{use_body}\"");
+    for (name, body) in disp {
+        if name != "USE" {
+            out.push_str(&format!(" {name}=\"{body}\""));
+        }
+    }
+    out
 }
 
 pub fn run(args: &[String]) -> ExitCode {
@@ -9398,8 +9436,14 @@ pub fn run(args: &[String]) -> ExitCode {
             for inst in &c.instances {
                 println!();
                 println!(
-                    "  ({}/{}-{}:{}/{}::{}, ebuild scheduled for merge) USE=\"\" pulled in by",
-                    c.category, c.package, inst.version, c.slot, inst.sub_slot, inst.repo_name
+                    "  ({}/{}-{}:{}/{}::{}, ebuild scheduled for merge) {} pulled in by",
+                    c.category,
+                    c.package,
+                    inst.version,
+                    c.slot,
+                    inst.sub_slot,
+                    inst.repo_name,
+                    render_pkg_use_display(&inst.use_display)
                 );
                 let others: Vec<String> = c
                     .instances
@@ -9412,32 +9456,36 @@ pub fn run(args: &[String]) -> ExitCode {
                         )
                     })
                     .collect();
-                // (parent_cpv, atom_str, parsed atom, its reasons)
-                let mut classified: Vec<(&String, &String, Atom, Vec<SlotConflictReason>)> =
-                    Vec::new();
-                for (parent_cpv, atom_str) in &inst.parents {
+                let mut classified: Vec<ClassifiedParent> = Vec::new();
+                for p in &inst.parents {
                     // Real files a bare command-line (`AtomArg`) parent
                     // under a reason only when the *other* package is
                     // already installed; portuale's slot-conflict
                     // instances are always "scheduled for merge", so such
                     // a parent contributes no specific reason and is not
                     // shown.
-                    if parent_cpv.is_empty() {
+                    if p.parent_cpv.is_empty() {
                         continue;
                     }
-                    let Some(atom) = parse_atom(atom_str) else {
+                    let Some(atom) = parse_atom(&p.atom) else {
                         continue;
                     };
                     let reasons = slot_conflict_reasons(&atom, &others);
                     if !reasons.is_empty() {
-                        classified.push((parent_cpv, atom_str, atom, reasons));
+                        classified.push(ClassifiedParent {
+                            parent_cpv: &p.parent_cpv,
+                            atom_str: &p.atom,
+                            atom,
+                            reasons,
+                            use_display: &p.use_display,
+                        });
                     }
                 }
-                let num_all_specific: usize = classified.iter().map(|(_, _, _, r)| r.len()).sum();
+                let num_all_specific: usize = classified.iter().map(|p| p.reasons.len()).sum();
                 // Group parents by reason, first-seen order preserved.
                 let mut groups: Vec<(SlotConflictReason, Vec<usize>)> = Vec::new();
-                for (i, (_, _, _, reasons)) in classified.iter().enumerate() {
-                    for reason in reasons {
+                for (i, p) in classified.iter().enumerate() {
+                    for reason in &p.reasons {
                         match groups.iter_mut().find(|(r, _)| r == reason) {
                             Some((_, members)) => members.push(i),
                             None => groups.push((reason.clone(), vec![i])),
@@ -9457,13 +9505,13 @@ pub fn run(args: &[String]) -> ExitCode {
                         SlotConflictReason::Version(sub) => {
                             let mut best: Vec<(String, usize)> = Vec::new();
                             for &m in members {
-                                let atom = &classified[m].2;
+                                let atom = &classified[m].atom;
                                 let cp = format!("{}/{}", atom.category, atom.package);
                                 match best.iter_mut().find(|(c, _)| *c == cp) {
                                     None => best.push((cp, m)),
                                     Some((_, cur)) => {
                                         let cur_ver =
-                                            classified[*cur].2.version.as_deref().unwrap_or("");
+                                            classified[*cur].atom.version.as_deref().unwrap_or("");
                                         let new_ver = atom.version.as_deref().unwrap_or("");
                                         let cmp = portage_versions::vercmp(new_ver, cur_ver);
                                         let farther = match *sub {
@@ -9489,18 +9537,27 @@ pub fn run(args: &[String]) -> ExitCode {
                 selected.sort_unstable();
                 selected.dedup();
                 for &m in &selected {
-                    let (parent_cpv, atom_str, atom, reasons) = &classified[m];
-                    let version_violated = reasons
+                    let p = &classified[m];
+                    let version_violated = p
+                        .reasons
                         .iter()
                         .any(|r| matches!(r, SlotConflictReason::Version(_)));
-                    let slot_violated = reasons
+                    let slot_violated = p
+                        .reasons
                         .iter()
                         .any(|r| matches!(r, SlotConflictReason::Slot(_)));
                     let cur_line = format!(
-                        "{atom_str} required by ({parent_cpv}, ebuild scheduled for merge) USE=\"\"\n"
+                        "{} required by ({}, ebuild scheduled for merge) {}\n",
+                        p.atom_str,
+                        p.parent_cpv,
+                        render_pkg_use_display(p.use_display)
                     );
-                    let idx =
-                        slot_conflict_caret_idx(atom_str, atom, version_violated, slot_violated);
+                    let idx = slot_conflict_caret_idx(
+                        p.atom_str,
+                        &p.atom,
+                        version_violated,
+                        slot_violated,
+                    );
                     let marker: String = (0..cur_line.chars().count())
                         .map(|k| if idx.contains(&k) { '^' } else { ' ' })
                         .collect();

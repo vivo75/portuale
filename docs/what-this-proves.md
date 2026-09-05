@@ -12330,7 +12330,8 @@ real `_prepare_conflict_msg_and_check_for_specificity`
   conflict when anything was omitted (real `any_omitted_parents`).
 - **`pkg_use_display` ` USE=""` slot** — real appends it to the instance
   line (`{pkg} {use} pulled in by`) and every parent line; for a package
-  with empty `IUSE` it renders `USE=""`. Non-empty flag lists stay cut.
+  with empty `IUSE` it renders `USE=""`. Non-empty flag lists were cut
+  here (shipped later — see "slot-collision notice `pkg_use_display`" below).
 - **`highlight_violations` `^` marker line** — the `colored_idx` span
   (under the operator + version, and `:slot` when present) rendered as a
   `^`/space line beneath each displayed parent atom, padded to
@@ -12341,9 +12342,10 @@ Fixture: `dev-libs/slotconfgroup` (pulls `slotconfgroupnew` at
 `<slotconflicttarget-2.0` — the `1.0` instance has three parents sharing
 one reason). Both sides byte-identical across the contract suite.
 
-Still cut (`scope-backlog.md` Part 2.A): `pkg_use_display` for non-default
-USE, the `use`/`soname` reason keys, operator/USE-token colorization, and
-the `need_rebuild` "cannot be rebuilt" trailer.
+Still cut (`scope-backlog.md` Part 2.A): the `use`/`soname` reason keys,
+operator/USE-token colorization, and the `need_rebuild` "cannot be
+rebuilt" trailer. (`pkg_use_display` for non-default USE shipped
+2026-09-05 — see below.)
 
 ### `emerge --debug` / `-d` — real `PORTAGE_DEBUG=1` on a build (2026-09-03)
 
@@ -13514,6 +13516,48 @@ v1 cut carried forward: an installed match with an entirely empty vdb
 falsy-check still would).
 
 Contract suite 938 -> 940; `portuale` 343, `portage-repo` 290 -> 292;
+`cargo fmt`/`clippy` clean.
+
+### Slot-collision notice: real `pkg_use_display` for non-default USE (2026-09-05)
+
+The slice-4 / 2026-09-03 slot-collision notice appended a hardcoded
+`USE=""` to every instance header and every shown parent line -- correct
+only because every slot-conflict fixture happened to have empty `IUSE`.
+Real `get_conflict()` appends `str(pkg_use_display(pkg, myopts,
+modified_use=self.depgraph._pkg_use_enabled(pkg)))`
+(`_emerge/UseFlagDisplay.py:55`) -- the full `USE="…"` string (+ one
+`VAR="…"` per non-hidden `USE_EXPAND` group), every `IUSE` flag,
+enabled-first, `( )`-wrapped for profile force/mask -- for the
+scheduled-for-merge instance *and* for each `Package` parent that pulled
+it (a non-`Package` `(Argument)` parent still renders a bare `""`).
+
+`SlotConflictInstance` gained `use_display: Vec<(String, String)>` and
+its parents became `SlotConflictParent { parent_cpv, atom, use_display }`
+(was a bare `(String, String)`). `build_slot_conflict` computes each via
+a new `pkg_use_display_for(repos, config, cat, pkg, version)` --
+`list_candidates` → highest-`repo_priority` candidate at that version →
+`candidate_iuse_and_use` → `build_use_expand_display(disp, config, None,
+forced, all_flags=true, {})`, exactly the `--info` block's own pattern.
+A version gone from every repo → empty display → the line still renders
+`USE=""` (matching real's unconditional `var_order.insert(0, "USE")`).
+The `^` marker line still spans the full (now longer) `cur_line`. The
+flag-token colorization real does via `UseFlagDisplay.__str__`'s
+`red`/`blue` stays a documented cut -- it is a no-op under `emerge -p`
+without `--color=y` anyway (the remaining Part 2.A cuts: `use`/`soname`
+reason keys, that colorization, the `need_rebuild` trailer).
+
+Mirrored in `emerge_pretend_reference.py` (`_pkg_use_display_for` /
+`_render_pkg_use_display`); `--json` `slot_conflicts[]` instances and
+parents gain a `"use"` string. New fixture family `dev-libs/scusetarget`
+(`IUSE="+scuon scuoff"`, two versions) / `scusenewpin` (`IUSE="+scupin"`,
+`>=scusetarget-2.0`) / `scuseoldpin` (no IUSE, `<scusetarget-2.0`) /
+`scuseparent` -- an unsolvable conflict whose notice now shows
+`USE="scuon -scuoff"` on both instances, `USE="scupin"` on one parent
+line and `USE=""` on the other. 2 param CASES + 1 pinned-text contract
+test + 1 `portage-repo` unit test; the existing empty-IUSE slot-conflict
+tests are unchanged (still `USE=""`).
+
+Contract suite 940 -> 943; `portuale` 343, `portage-repo` 292 -> 293;
 `cargo fmt`/`clippy` clean.
 
 ### os.lchown / merge ownership preservation (2026-09-05)

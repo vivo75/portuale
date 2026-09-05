@@ -1207,6 +1207,8 @@ CASES = [
     ("slot conflict: unsolvable, resolved by masking a puller version", ["--pretend", "dev-libs/btparent"], 0),
     ("slot conflict: --backtrack=0 also disables the runtime_pkg_mask trial", ["--pretend", "--backtrack=0", "dev-libs/btparent"], 0),
     ("slot conflict: --backtrack=30 suppresses the try-a-larger-value hint", ["--pretend", "--backtrack=30", "dev-libs/slotconflictunsolvable"], 0),
+    ("slot conflict: pkg_use_display renders non-empty USE on instance + parent lines", ["--pretend", "dev-libs/scuseparent"], 0),
+    ("slot conflict: --json carries the per-instance / per-parent pkg_use_display", ["--pretend", "--json", "dev-libs/scuseparent"], 0),
     ("slot conflict: three same-reason parents collapse to one + '(and N more)'", ["--pretend", "dev-libs/slotconfgroup"], 0),
     ("slot conflict: --verbose-conflicts shows every omitted parent", ["--pretend", "--verbose-conflicts", "dev-libs/slotconfgroup"], 0),
     ("slot conflict: --verbose-conflicts=n is the default (collapsed)", ["--pretend", "--verbose-conflicts=n", "dev-libs/slotconfgroup"], 0),
@@ -7042,6 +7044,36 @@ def test_unsolvable_slot_conflict_survives_backtracking_and_is_reported(
             ),
         ],
     )
+
+
+def test_slot_conflict_notice_renders_pkg_use_display(emerge_binary, emerge_pretend_python, fixture_env):
+    """Real `slot_collision.py`'s `get_conflict()`: each instance header
+    and each shown parent line carries that package's own
+    `pkg_use_display(pkg, myopts, modified_use=...)` -- `USE="…"` with
+    every IUSE flag, enabled-first -- not a hardcoded `USE=""`.
+    `dev-libs/scusetarget` has `IUSE="+scuon scuoff"`, `dev-libs/scusenewpin`
+    `IUSE="+scupin"`, `dev-libs/scuseoldpin` none. The `^` marker line
+    still spans the full (now longer) `cur_line`. Rust == Python."""
+    rust = _run([str(emerge_binary)], ["--pretend", "dev-libs/scuseparent"], fixture_env)
+    py = _run(emerge_pretend_python, ["--pretend", "dev-libs/scuseparent"], fixture_env)
+    assert rust.returncode == 0
+    assert rust.stdout == py.stdout
+    assert (
+        '  (dev-libs/scusetarget-2.0:0/0::testrepo, ebuild scheduled for merge) '
+        'USE="scuon -scuoff" pulled in by\n'
+        '    >=dev-libs/scusetarget-2.0 required by (dev-libs/scusenewpin-1.0:0/0::testrepo, '
+        'ebuild scheduled for merge) USE="scupin"\n'
+    ) in rust.stdout
+    # a parent with no IUSE still renders a bare USE=""
+    assert (
+        '    <dev-libs/scusetarget-2.0 required by (dev-libs/scuseoldpin-1.0:0/0::testrepo, '
+        'ebuild scheduled for merge) USE=""\n'
+    ) in rust.stdout
+    # the caret marker line immediately follows the >=… parent line and
+    # spans at least to the atom's version token
+    tail = rust.stdout.split("required by (dev-libs/scusenewpin-1.0:0/0::testrepo, ebuild scheduled for merge) USE=\"scupin\"\n", 1)[1]
+    marker = tail.split("\n", 1)[0]
+    assert marker.startswith("    ") and set(marker) <= {" ", "^"} and "^" in marker
 
 
 def test_slot_conflict_groups_same_reason_parents_and_offers_verbose_conflicts(

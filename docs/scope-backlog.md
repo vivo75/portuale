@@ -111,16 +111,21 @@ can't grow into these incrementally:
   remaining signal is the `Dependency resolution took X s (backtrack:
   N/M).` report line, whose timing is non-deterministic (a deliberate
   cut — portuale is a deterministic tool).
-- **Slot-collision notice's remaining cuts** — `pkg_use_display` for
-  non-default USE, the `use`/`soname` reason keys, operator/USE-token
-  colorization, the `need_rebuild` trailer. Investigated 2026-09-05: all
-  four need new plumbing (a per-instance USE set on `SlotConflictInstance`,
-  atom-vs-package USE-conditional-violation matching, soname-aware
-  collision detection, `_equiv_ebuild_visible`/`useoldpkg_atoms`/
-  `excluded_pkgs` threading) rather than a bounded fix, for a purely
-  informational payoff — see `history/scope-backlog-2026-09-05.md` for
-  the full citations, including a genuine upstream colorization bug
-  (`highlight_violations`) found along the way.
+- **Slot-collision notice's remaining cuts** — `pkg_use_display` for a
+  package with non-default USE **shipped 2026-09-05**: every instance
+  header and every shown parent line now carries that package's own
+  `pkg_use_display(pkg, modified_use=…)` (`USE="…"` + `USE_EXPAND`
+  groups, every IUSE flag, enabled-first, `( )`-wrapped for force/mask),
+  via a new per-instance/per-parent `use_display` on `SlotConflict`
+  (`what-this-proves.md`'s "slot-collision notice `pkg_use_display`"
+  entry). Still cut, each needing new plumbing for a purely
+  informational payoff: the `use`/`soname` reason keys
+  (atom-vs-package USE-conditional-violation matching + soname-aware
+  collision detection), operator/USE-token colorization (which faithfully
+  reproduces a genuine upstream `highlight_violations` marker-drift bug —
+  see `history/scope-backlog-2026-09-05.md`), and the `need_rebuild`
+  "cannot be rebuilt" trailer (`_equiv_ebuild_visible`/`useoldpkg_atoms`/
+  `excluded_pkgs` threading).
 - **Circular-dep's remaining cuts** — full elementary-cycle enumeration /
   `large_cycle_count` (real's own richer multi-priority digraph, a
   different graph representation than portuale keeps) and the cycle-only

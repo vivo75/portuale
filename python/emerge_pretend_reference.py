@@ -5287,8 +5287,74 @@ def _slot_conflict_meta(repos, category, package, version):
     return (c["sub_slot"], c["repo_name"], c["slot"])
 
 
+def _render_pkg_use_display(disp):
+    """Real pkg_use_display's return string -- USE="..." then one
+    VAR="..." per non-hidden USE_EXPAND group (the pairs
+    _pkg_use_display_for produced). Real always emits a USE= field even
+    with no flags, so [] still yields USE="". Flag-token colorization
+    (real UseFlagDisplay.__str__) is a documented cut -- a no-op under
+    emerge -p without --color=y anyway. Mirrors pretend.rs's
+    render_pkg_use_display."""
+    use_body = next((body for name, body in disp if name == "USE"), "")
+    out = f'USE="{use_body}"'
+    for name, body in disp:
+        if name != "USE":
+            out += f' {name}="{body}"'
+    return out
+
+
+def _pkg_use_display_for(repos, config, category, package, version):
+    """Real pkg_use_display(pkg, opts, modified_use=...) for a
+    scheduled-for-merge package (_emerge/UseFlagDisplay.py:55) -- the
+    [(VAR, "flag -flag"), ...] pairs (USE first, then non-hidden
+    USE_EXPAND groups) on a slot-conflict instance's / parent's line.
+    cat/pkg at `version`, highest-repo_priority candidate carrying it;
+    every IUSE flag, enabled-first, ( )-wrapped for profile force/mask --
+    the same _build_use_expand_display(disp, ..., all_flags=True) shape
+    _resolve_info_candidate already uses. [] when the version is gone
+    from every repo (renders as a bare USE=""). Mirrors
+    portage-repo/src/lib.rs's pkg_use_display_for."""
+    cands = [c for c in list_candidates(repos, category, package) if c["version"] == version]
+    if not cands:
+        return []
+    cand = max(cands, key=lambda c: c["repo_priority"])
+    _iuse, use_flags = _candidate_iuse_and_use(cand, category, package, config)
+    _seen = set()
+    disp = sorted(
+        (
+            (f, f in use_flags)
+            for f in (t.lstrip("+-") for t in cand["iuse"].split())
+            if not (f in _seen or _seen.add(f))
+        ),
+        key=lambda p: _alnum_sort_key(p[0]),
+    )
+    candidate_str = (
+        f"{category}/{package}-{version}:{cand['slot']}/{cand['sub_slot']}::{cand['repo_name']}"
+    )
+    forced = _forced_or_masked_flags(
+        cand["iuse"], cand["keywords"], candidate_str, category, package, config
+    )
+    return _build_use_expand_display(
+        disp,
+        config["use_expand"],
+        config["use_expand_hidden"],
+        None,
+        forced,
+        True,
+        None,
+    )
+
+
 def _build_slot_conflict(
-    repos, category, package, slot, existing_version, current_atom, current_version, slot_pullers
+    repos,
+    config,
+    category,
+    package,
+    slot,
+    existing_version,
+    current_atom,
+    current_version,
+    slot_pullers,
 ):
     """Assembles a slot_conflicts entry (real slot_collision_handler's
     (pkg, parent_atoms) per slot_atom): instance A is `existing_version`
@@ -5312,7 +5378,13 @@ def _build_slot_conflict(
     for pc, pp, pv, atom in slot_pullers.get((category, package), []):
         hits_a = bool(match_from_list(atom, [a_match]))
         hits_b = bool(match_from_list(atom, [b_match]))
-        entry = [_puller_cpv(pc, pp, pv), atom]
+        entry = {
+            "parent": _puller_cpv(pc, pp, pv),
+            "atom": atom,
+            "use_display": (
+                [] if not pc else _pkg_use_display_for(repos, config, pc, pp, pv)
+            ),
+        }
         if hits_a:
             if entry not in parents_a:
                 parents_a.append(entry)
@@ -5329,12 +5401,18 @@ def _build_slot_conflict(
                 "version": existing_version,
                 "sub_slot": a_sub,
                 "repo_name": a_repo,
+                "use_display": _pkg_use_display_for(
+                    repos, config, category, package, existing_version
+                ),
                 "parents": parents_a,
             },
             {
                 "version": current_version,
                 "sub_slot": b_sub,
                 "repo_name": b_repo,
+                "use_display": _pkg_use_display_for(
+                    repos, config, category, package, current_version
+                ),
                 "parents": parents_b,
             },
         ],
@@ -8431,6 +8509,7 @@ def resolve_pretend_graph(
                     slot_conflicts.append(
                         _build_slot_conflict(
                             repos,
+                            config,
                             category,
                             package,
                             slot,
@@ -10086,9 +10165,11 @@ def _slot_conflict_to_json(c):
         (
             f'{{"version":{_json_string(inst["version"])},'
             f'"sub_slot":{_json_string(inst["sub_slot"])},'
-            f'"repo_name":{_json_string(inst["repo_name"])},"parents":['
+            f'"repo_name":{_json_string(inst["repo_name"])},'
+            f'"use":{_json_string(_render_pkg_use_display(inst["use_display"]))},"parents":['
             + ",".join(
-                f'{{"parent":{_json_string(p[0])},"atom":{_json_string(p[1])}}}'
+                f'{{"parent":{_json_string(p["parent"])},"atom":{_json_string(p["atom"])},'
+                f'"use":{_json_string(_render_pkg_use_display(p["use_display"]))}}}'
                 for p in inst["parents"]
             )
             + "]}"
@@ -16683,7 +16764,7 @@ def run(args):
                 print(
                     f"  ({c['category']}/{c['package']}-{inst['version']}:{c['slot']}"
                     f"/{inst['sub_slot']}::{inst['repo_name']}, ebuild scheduled for merge)"
-                    ' USE="" pulled in by'
+                    f" {_render_pkg_use_display(inst['use_display'])} pulled in by"
                 )
                 others = [
                     f"{c['category']}/{c['package']}-{o['version']}:{c['slot']}"
@@ -16691,8 +16772,9 @@ def run(args):
                     for o in c["instances"]
                     if o["version"] != inst["version"]
                 ]
-                classified = []  # (parent_cpv, atom_str, Atom, reasons)
-                for parent_cpv, atom_str in inst["parents"]:
+                classified = []  # (parent_cpv, atom_str, Atom, reasons, parent_use_display)
+                for p in inst["parents"]:
+                    parent_cpv, atom_str = p["parent"], p["atom"]
                     if not parent_cpv:
                         continue
                     try:
@@ -16701,10 +16783,12 @@ def run(args):
                         continue
                     reasons = _sc_reasons(atom, others)
                     if reasons:
-                        classified.append((parent_cpv, atom_str, atom, reasons))
-                num_all_specific = sum(len(r) for *_, r in classified)
+                        classified.append(
+                            (parent_cpv, atom_str, atom, reasons, p["use_display"])
+                        )
+                num_all_specific = sum(len(c[3]) for c in classified)
                 groups = []  # [reason, [member idx]]
-                for i, (_, _, _, reasons) in enumerate(classified):
+                for i, (_, _, _, reasons, _) in enumerate(classified):
                     for reason in reasons:
                         for g in groups:
                             if g[0] == reason:
@@ -16744,12 +16828,12 @@ def run(args):
                             selected.append(members[0])
                 selected = sorted(set(selected))
                 for m in selected:
-                    parent_cpv, atom_str, atom, reasons = classified[m]
+                    parent_cpv, atom_str, atom, reasons, parent_use = classified[m]
                     version_violated = any(r[0] == "version" for r in reasons)
                     slot_violated = any(r[0] == "slot" for r in reasons)
                     cur_line = (
                         f"{atom_str} required by ({parent_cpv}, "
-                        f'ebuild scheduled for merge) USE=""\n'
+                        f"ebuild scheduled for merge) {_render_pkg_use_display(parent_use)}\n"
                     )
                     idx = _sc_caret_idx(atom_str, atom, version_violated, slot_violated)
                     marker = "".join(

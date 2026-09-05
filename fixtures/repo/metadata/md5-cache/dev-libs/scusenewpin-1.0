@@ -1,0 +1,8 @@
+DEFINED_PHASES=-
+DESCRIPTION=fixture package: RDEPEND pins dev-libs/scusetarget to >=2.0, reached first; its own IUSE gives the parent line a non-empty pkg_use_display
+EAPI=8
+IUSE=+scupin
+KEYWORDS=amd64
+RDEPEND=>=dev-libs/scusetarget-2.0
+SLOT=0
+_md5_=0000000000000000000000000000000

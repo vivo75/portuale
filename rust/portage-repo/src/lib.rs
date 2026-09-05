@@ -10388,10 +10388,30 @@ pub struct SlotConflictInstance {
     pub version: String,
     pub sub_slot: String,
     pub repo_name: String,
-    /// `(parent_cpv, atom)` -- `parent_cpv` is
+    /// Real `pkg_use_display(pkg, ...)` for this scheduled-for-merge
+    /// instance -- the `USE="…"` (+ one `VAR="…"` per non-hidden
+    /// `USE_EXPAND` group) pairs rendered on its own `(… ebuild
+    /// scheduled for merge) USE="…" pulled in by` header line. Every
+    /// `IUSE` flag, enabled-first, `( )`-wrapped for profile force/mask
+    /// (same `build_use_expand_display` the `--info` block uses). Empty
+    /// slice → the header still renders a bare `USE=""`.
+    pub use_display: Vec<(String, String)>,
+    pub parents: Vec<SlotConflictParent>,
+}
+
+/// One parent that pulled a `SlotConflictInstance` into the graph. See
+/// `SlotConflictInstance::parents`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SlotConflictParent {
     /// `cat/pkg-ver:slot/sub_slot::repo` for a dependency, or empty for a
     /// top-level atom (rendered `<atom> (Argument)`).
-    pub parents: Vec<(String, String)>,
+    pub parent_cpv: String,
+    pub atom: String,
+    /// Real `pkg_use_display(parent, ...)` -- the parent package's own
+    /// resolved `USE="…"` on its `<atom> required by (<parent_cpv>, …)
+    /// USE="…"` line. Empty for a top-level `(Argument)` parent (real
+    /// renders a bare `""` for a non-`Package` parent).
+    pub use_display: Vec<(String, String)>,
 }
 
 /// `(sub_slot, repo_name, slot)` of `cat/pkg`'s own `version` -- the
@@ -10418,6 +10438,67 @@ fn slot_conflict_meta(
     }
 }
 
+/// Real `pkg_use_display(pkg, opts, modified_use=...)` for a
+/// scheduled-for-merge package (`_emerge/UseFlagDisplay.py:55`) -- the
+/// `USE="…"` (+ one `VAR="…"` per non-hidden `USE_EXPAND` group) pairs
+/// on a slot-conflict instance's / parent's line. `category/package` at
+/// `version`, resolved against the highest-`repo_priority` candidate
+/// carrying that exact version (the same re-lookup `slot_conflict_meta`
+/// does); every `IUSE` flag rendered (real never abbreviates here),
+/// enabled-first, `( )`-wrapped for profile force/mask -- exactly the
+/// `build_use_expand_display(disp, config, None, forced, true, {})`
+/// shape `resolve_info_candidate` already uses for `--info`. Empty when
+/// the version is gone from every repo (rendered as a bare `USE=""`).
+fn pkg_use_display_for(
+    repos: &[RepoConfig],
+    config: &portage_profile::Config,
+    category: &str,
+    package: &str,
+    version: &str,
+) -> Vec<(String, String)> {
+    let Some(cand) = list_candidates(repos, category, package)
+        .ok()
+        .and_then(|cs| {
+            cs.into_iter()
+                .filter(|c| c.version == version)
+                .max_by_key(|c| c.repo_priority)
+        })
+    else {
+        return Vec::new();
+    };
+    // A missing md5-cache entry yields an empty effective-USE set (same
+    // "absence is real" handling the Python oracle's `_candidate_iuse_
+    // and_use` OSError branch has) -- every declared `IUSE` flag then
+    // renders disabled, rather than the whole `USE=` field vanishing.
+    let (_iuse, use_flags) =
+        candidate_iuse_and_use(&cand, category, package, config).unwrap_or_default();
+    let mut seen: HashSet<String> = HashSet::new();
+    let mut disp: Vec<(String, bool)> = cand
+        .iuse
+        .split_whitespace()
+        .map(|t| t.trim_start_matches(['+', '-']).to_string())
+        .filter(|f| seen.insert(f.clone()))
+        .map(|f| {
+            let on = use_flags.contains(&f);
+            (f, on)
+        })
+        .collect();
+    disp.sort_by_key(|p| alnum_sort_key(&p.0));
+    let candidate_str = format!(
+        "{category}/{package}-{version}:{}/{}::{}",
+        cand.slot, cand.sub_slot, cand.repo_name
+    );
+    let forced = forced_or_masked_flags(
+        &cand.iuse,
+        &cand.keywords,
+        &candidate_str,
+        category,
+        package,
+        config,
+    );
+    build_use_expand_display(&disp, config, None, &forced, true, &HashSet::new())
+}
+
 /// Assembles a `SlotConflict` (real `slot_collision_handler`'s
 /// `(pkg, parent_atoms)` per `slot_atom`): instance A is `existing_version`
 /// (already in the graph), instance B is `current_version` (what the
@@ -10427,6 +10508,7 @@ fn slot_conflict_meta(
 #[allow(clippy::too_many_arguments)]
 fn build_slot_conflict(
     repos: &[RepoConfig],
+    config: &portage_profile::Config,
     category: &str,
     package: &str,
     slot: &str,
@@ -10446,15 +10528,23 @@ fn build_slot_conflict(
         let (psub, prepo, pslot) = slot_conflict_meta(repos, pc, pp, pv);
         format!("{pc}/{pp}-{pv}:{pslot}/{psub}::{prepo}")
     };
-    let mut parents_a: Vec<(String, String)> = Vec::new();
-    let mut parents_b: Vec<(String, String)> = Vec::new();
+    let mut parents_a: Vec<SlotConflictParent> = Vec::new();
+    let mut parents_b: Vec<SlotConflictParent> = Vec::new();
     if let Some(pullers) = slot_pullers.get(&(category.to_string(), package.to_string())) {
         for (pc, pp, pv, atom) in pullers {
             let hits_a = portage_dep::match_from_list(atom, &[a_match.as_str()])
                 .is_some_and(|m| !m.is_empty());
             let hits_b = portage_dep::match_from_list(atom, &[b_match.as_str()])
                 .is_some_and(|m| !m.is_empty());
-            let entry = (puller_cpv(pc, pp, pv), atom.clone());
+            let entry = SlotConflictParent {
+                parent_cpv: puller_cpv(pc, pp, pv),
+                atom: atom.clone(),
+                use_display: if pc.is_empty() {
+                    Vec::new()
+                } else {
+                    pkg_use_display_for(repos, config, pc, pp, pv)
+                },
+            };
             if hits_a {
                 if !parents_a.contains(&entry) {
                     parents_a.push(entry);
@@ -10475,12 +10565,20 @@ fn build_slot_conflict(
                 version: existing_version.to_string(),
                 sub_slot: a_sub,
                 repo_name: a_repo,
+                use_display: pkg_use_display_for(
+                    repos,
+                    config,
+                    category,
+                    package,
+                    existing_version,
+                ),
                 parents: parents_a,
             },
             SlotConflictInstance {
                 version: current_version.to_string(),
                 sub_slot: b_sub,
                 repo_name: b_repo,
+                use_display: pkg_use_display_for(repos, config, category, package, current_version),
                 parents: parents_b,
             },
         ],
@@ -12545,6 +12643,7 @@ fn backtracking_resolve(req: &ResolveRequest) -> Result<GraphResult, String> {
                 if !satisfied {
                     slot_conflicts.push(build_slot_conflict(
                         &repos,
+                        config,
                         &key.0,
                         &key.1,
                         &slot,
@@ -16702,19 +16801,54 @@ mod tests {
             vec!["2.0", "1.0"]
         );
         assert_eq!(
-            c.instances[0].parents,
+            c.instances[0]
+                .parents
+                .iter()
+                .map(|p| (p.parent_cpv.as_str(), p.atom.as_str()))
+                .collect::<Vec<_>>(),
             vec![(
-                "dev-libs/slotconflictnewpin-1.0:0/0::testrepo".to_string(),
-                ">=dev-libs/slotconflicttarget-2.0".to_string()
+                "dev-libs/slotconflictnewpin-1.0:0/0::testrepo",
+                ">=dev-libs/slotconflicttarget-2.0"
             )]
         );
         assert_eq!(
-            c.instances[1].parents,
+            c.instances[1]
+                .parents
+                .iter()
+                .map(|p| (p.parent_cpv.as_str(), p.atom.as_str()))
+                .collect::<Vec<_>>(),
             vec![(
-                "dev-libs/slotconflictoldpin-1.0:0/0::testrepo".to_string(),
-                "<dev-libs/slotconflicttarget-2.0".to_string()
+                "dev-libs/slotconflictoldpin-1.0:0/0::testrepo",
+                "<dev-libs/slotconflicttarget-2.0"
             )]
         );
+        // slotconflicttarget and both pins declare no IUSE -> every
+        // instance/parent renders a bare `USE=""` (empty display).
+        assert!(c.instances.iter().all(|i| i.use_display.is_empty()));
+    }
+
+    #[test]
+    fn fixture_slot_conflict_carries_pkg_use_display() {
+        // dev-libs/scuseparent -> scusenewpin (>=scusetarget-2.0) +
+        // scuseoldpin (<scusetarget-2.0): unsolvable slot conflict on
+        // scusetarget:0. scusetarget IUSE="+scuon scuoff" -> both
+        // instances render `USE="scuon -scuoff"` (real pkg_use_display,
+        // enabled-first). scusenewpin IUSE="+scupin" -> that parent line
+        // renders `USE="scupin"`; scuseoldpin has no IUSE -> `USE=""`.
+        let result = graph_result_real("dev-libs/scuseparent");
+        assert_eq!(result.slot_conflicts.len(), 1);
+        let c = &result.slot_conflicts[0];
+        for inst in &c.instances {
+            assert_eq!(
+                inst.use_display,
+                vec![("USE".to_string(), "scuon -scuoff".to_string())]
+            );
+        }
+        assert_eq!(
+            c.instances[0].parents[0].use_display,
+            vec![("USE".to_string(), "scupin".to_string())]
+        );
+        assert!(c.instances[1].parents[0].use_display.is_empty());
     }
 
     #[test]
