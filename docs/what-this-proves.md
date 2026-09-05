@@ -13530,3 +13530,66 @@ Rust-only (real filesystem mutation, no Python mirror -- same
 "execution code, not resolver" reasoning as `--regen`/`--config`/the
 sandbox and scheduler sections). Full contract suite (938) and
 `portage-repo` (290) unaffected and green; `cargo fmt`/`clippy` clean.
+
+### splitdebug/packdebug's missing link: BUILD_ID reaching the phase (2026-09-05)
+
+Asked to investigate `docs/scope-backlog.md`'s "E. Binary packages /
+fetch" `splitdebug`/`packdebug` item, previously scoped as "needs its
+own investigation pass" rather than attempted. The investigation turned
+out to land on a one-line fix once traced to its real source.
+
+Real `EbuildBinpkg._start` (`EbuildBinpkg.py:47-48`) exports `BUILD_ID`
+into the `package` phase's own settings with one exact condition: `if
+"binpkg-multi-instance" in self.settings.features`. Portuale's
+`invoke_dyn_package` (`ebuild_package.rs`) already *computed* a
+`build_id` under precisely that same condition (gpkg format + multi-
+instance -- xpak multi-instance stays a separate, already-documented
+non-goal, so `BUILD_ID` never needing to reach it either is consistent,
+not a new gap) -- it just never passed that value into the real,
+unmodified `__dyn_package` bash function's own environment. Real bash's
+own `if [[ ! -z "${BUILD_ID}" ]]` gate (`bin/misc-functions.sh:558`)
+was therefore always false, silently skipping two things every time,
+regardless of what was requested:
+
+1. Writing a real `build-info/BUILD_ID` file into the archive itself.
+   Only the `$PKGDIR/Packages` *index* entry ever carried the value --
+   `binpkg::populate_local_pkgdir`'s own filename-inference fallback
+   (comparing an archive's embedded `PF` against its filename suffix)
+   was quietly doing the archive's own job instead, a working but
+   not-quite-real substitute.
+2. `FEATURES=packdebug`'s `__generate_packdebug` (`bin/misc-functions.
+   sh:507-534`, needs `BUILD_ID` for the debug tarball's own filename)
+   never ran at all, independent of whether the feature was even
+   requested -- the backlog's "needs BUILD_ID" framing was exactly
+   right, just narrower than "needs an investigation pass" suggested.
+
+Fixed with a single `extra_env.push(("BUILD_ID", ...))` in
+`invoke_dyn_package`, gated on the exact same `Option<u64>` the caller
+already had in hand. Verified for real rather than assumed: a manual
+`ebuild <file> package` run with `BINPKG_FORMAT=gpkg FEATURES=
+binpkg-multi-instance`, followed by extracting the produced archive's
+own `metadata.tar.zst` by hand, showed a genuine `metadata/BUILD_ID`
+file with the correct value -- confirmed *before* writing the
+corresponding test, not after. A second manual run adding
+`FEATURES=packdebug splitdebug` on top confirmed the build still
+succeeds cleanly (`__generate_packdebug`'s own early-return guard
+correctly no-ops for a fixture with no compiled binaries to strip --
+real, unmodified bash, exercised, not touched).
+
+`splitdebug`/`packdebug`'s *other* half -- `bin/estrip` actually
+populating `/usr/lib/debug` when `FEATURES=splitdebug`/`installsources`
+is set during `install` -- already shipped in the 2026-09-04 sandbox/
+build-isolation pass (the real `FEATURES` passthrough to the phase env).
+This closes the remaining missing link between the two: the archive
+step can now actually see a `BUILD_ID` to build a debug tarball's
+filename from, whenever one exists to pack.
+
+New coverage: a `portage-repo`-side assertion added to the existing
+multi-instance unit test (reads each archive's own embedded `BUILD_ID`
+via `read_gpkg_metadata`, not just the `Packages` index -- the exact
+distinction this fix closes), plus a new `test_portuale.py` subprocess
+test building with `packdebug`/`splitdebug` also enabled and extracting
+`metadata/BUILD_ID` from the real produced archive's own nested tar.
+
+Full contract suite (938, unaffected) green; `portuale` (343) and
+`portage-repo` (290) unit suites green; `cargo fmt`/`clippy` clean.
