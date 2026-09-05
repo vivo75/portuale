@@ -613,8 +613,15 @@ The action and modifier-flag surface is broadly complete. Remaining:
   files, not `environment.bz2`, and skips the `( )` force/mask wrapping;
   the `(non-installed binary)` case, the `pkg_info()` phase run itself,
   and ANSI colour on the `USE=` line are all cut;
-- `--regen`: sequential (no `--jobs` threading), no stale-entry pruning,
-  `_eclasses_` from this repo only (no masters chain);
+- `--regen`: sequential (no `--jobs` threading -- real's own scheduler
+  parallelism only changes wall-clock time, not the cache content
+  written, so this stays a documented performance cut, not implemented).
+  **Stale-entry pruning and the `_eclasses_` masters chain shipped
+  2026-09-05** — a `metadata/md5-cache` entry whose ebuild has since
+  vanished is now removed on a plain `--regen` (real `MetadataRegen.
+  _cleanup`'s "global cleanse"), and an inherited eclass is now looked
+  up across the repo's own `masters` chain (declared order, then the
+  repo itself) instead of only that repo's own `eclass/` dir;
 - `--check-news`: no `.unread` / `.skip` *write-back*,
   `Display-If-Installed` only;
 - `--metadata` is an architectural no-op (portuale reads

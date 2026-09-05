@@ -512,6 +512,125 @@ def test_emerge_regen_regenerates_md5_cache_from_the_depend_phase(
     )
 
 
+def test_emerge_regen_prunes_a_stale_cache_entry(emerge_binary, tmp_path):
+    """Real `MetadataRegen._cleanup`'s "global cleanse"
+    (`MetadataRegen.py:142-189`): a plain, unfiltered `--regen` diffs the
+    on-disk `metadata/md5-cache` against every ebuild actually found this
+    run and deletes any entry whose ebuild has since vanished. Build a
+    cache entry, remove its ebuild, regen again -- the stale entry must
+    be gone, and a still-live sibling package's own entry must survive."""
+    repo = tmp_path / "repo"
+    (repo / "dev-libs" / "keeperpkg").mkdir(parents=True)
+    (repo / "dev-libs" / "goneppkg").mkdir(parents=True)
+    (repo / "profiles").mkdir(parents=True)
+    (repo / "profiles" / "repo_name").write_text("regentest\n")
+    keeper = repo / "dev-libs" / "keeperpkg" / "keeperpkg-1.0.ebuild"
+    keeper.write_text('EAPI=8\nSLOT="0"\nKEYWORDS="amd64"\n')
+    gone = repo / "dev-libs" / "goneppkg" / "goneppkg-1.0.ebuild"
+    gone.write_text('EAPI=8\nSLOT="0"\nKEYWORDS="amd64"\n')
+
+    cfg = tmp_path / "cfg"
+    (cfg / "etc" / "portage").mkdir(parents=True)
+    (cfg / "etc" / "portage" / "repos.conf").write_text(
+        f"[DEFAULT]\nmain-repo = regentest\n\n[regentest]\nlocation = {repo}\n"
+    )
+
+    env = dict(os.environ)
+    env["PORTAGE_CONFIGROOT"] = str(cfg)
+    env["ROOT"] = str(cfg)
+    env["PORTAGE_RUNNING_ROOT"] = "/"
+    env["PORTAGE_TMPDIR"] = str(tmp_path / "pt")
+
+    first = subprocess.run(
+        [str(emerge_binary), "--regen"],
+        capture_output=True,
+        text=True,
+        check=False,
+        env=env,
+    )
+    assert first.returncode == 0, first.stderr
+    keeper_entry = repo / "metadata" / "md5-cache" / "dev-libs" / "keeperpkg-1.0"
+    gone_entry = repo / "metadata" / "md5-cache" / "dev-libs" / "goneppkg-1.0"
+    assert keeper_entry.exists()
+    assert gone_entry.exists()
+
+    gone.unlink()
+    second = subprocess.run(
+        [str(emerge_binary), "--regen"],
+        capture_output=True,
+        text=True,
+        check=False,
+        env=env,
+    )
+    assert second.returncode == 0, second.stderr
+    assert keeper_entry.exists()
+    assert not gone_entry.exists()
+
+
+def test_emerge_regen_finds_an_inherited_eclass_across_the_masters_chain(
+    emerge_binary, tmp_path
+):
+    """Real `eclass_cache.cache.update_eclasses` walks a repo's own
+    masters chain (`repository/config.py:1267-1276`: masters first, in
+    declared order, then the repo itself), not just the repo's own
+    `eclass/` dir. An ebuild in an overlay that inherits an eclass which
+    only exists in the overlay's master must still get a real `md5`
+    for it in `_eclasses_`, instead of the field being silently dropped
+    (real `_eclasses_` is only absent when nothing was inherited at
+    all)."""
+    import hashlib
+
+    master_repo = tmp_path / "masterrepo"
+    (master_repo / "eclass").mkdir(parents=True)
+    (master_repo / "profiles").mkdir(parents=True)
+    (master_repo / "profiles" / "repo_name").write_text("mastertest\n")
+    eclass_text = "# fixture eclass, lives only in the master repo\n"
+    (master_repo / "eclass" / "regenclass.eclass").write_text(eclass_text)
+
+    overlay_repo = tmp_path / "repo"
+    (overlay_repo / "dev-libs" / "inheritspkg").mkdir(parents=True)
+    (overlay_repo / "profiles").mkdir(parents=True)
+    (overlay_repo / "profiles" / "repo_name").write_text("regentest\n")
+    ebuild = overlay_repo / "dev-libs" / "inheritspkg" / "inheritspkg-1.0.ebuild"
+    ebuild_text = (
+        'EAPI=8\n'
+        'inherit regenclass\n'
+        'DESCRIPTION="inherits an eclass only present in the master"\n'
+        'SLOT="0"\n'
+        'KEYWORDS="amd64"\n'
+    )
+    ebuild.write_text(ebuild_text)
+
+    cfg = tmp_path / "cfg"
+    (cfg / "etc" / "portage").mkdir(parents=True)
+    (cfg / "etc" / "portage" / "repos.conf").write_text(
+        "[DEFAULT]\nmain-repo = regentest\n\n"
+        f"[regentest]\nlocation = {overlay_repo}\nmasters = mastertest\n\n"
+        f"[mastertest]\nlocation = {master_repo}\n"
+    )
+
+    env = dict(os.environ)
+    env["PORTAGE_CONFIGROOT"] = str(cfg)
+    env["ROOT"] = str(cfg)
+    env["PORTAGE_RUNNING_ROOT"] = "/"
+    env["PORTAGE_TMPDIR"] = str(tmp_path / "pt")
+
+    result = subprocess.run(
+        [str(emerge_binary), "--regen"],
+        capture_output=True,
+        text=True,
+        check=False,
+        env=env,
+    )
+    assert result.returncode == 0, result.stderr
+
+    entry = overlay_repo / "metadata" / "md5-cache" / "dev-libs" / "inheritspkg-1.0"
+    eclass_md5 = hashlib.md5(eclass_text.encode()).hexdigest()
+    lines = entry.read_text().splitlines()
+    assert f"_eclasses_=regenclass\t{eclass_md5}" in lines
+    assert "INHERITED=regenclass" in lines
+
+
 def test_emerge_buildpkgonly_refuses_a_real_src_uri_with_no_manifest_entry(
     emerge_binary, tmp_path
 ):
