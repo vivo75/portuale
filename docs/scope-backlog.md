@@ -622,8 +622,17 @@ The action and modifier-flag surface is broadly complete. Remaining:
   _cleanup`'s "global cleanse"), and an inherited eclass is now looked
   up across the repo's own `masters` chain (declared order, then the
   repo itself) instead of only that repo's own `eclass/` dir;
-- `--check-news`: no `.unread` / `.skip` *write-back*,
-  `Display-If-Installed` only;
+- `--check-news`: **`.unread`/`.skip` write-back shipped 2026-09-05** —
+  real `NewsManager.updateItems`'s own accumulator files are now really
+  written (a newly-relevant item joins both, permanently, matching
+  real's own "never re-evaluated again" `.skip` semantics), and the
+  printed count is real's own `len(.unread)` rather than a live
+  recompute, so an item stays counted until removed -- the only thing
+  real does that is the separate `eselect news read` tool, which
+  portuale's own `.read` file models the effect of, applied lazily on
+  the next `--check-news` run. Only bare `cat/pkg` `Display-If-
+  Installed` atoms are matched (not `>=cat/pkg-1` etc.) remains a v1
+  cut;
 - `--metadata` is an architectural no-op (portuale reads
   `metadata/md5-cache` directly, models no `depcachedir`);
 - `--sync` is a permanent non-goal (points at `emaint sync`); GLSA /

@@ -5245,10 +5245,9 @@ fn render_ambiguous_search_output(
 }
 
 /// Real `emerge --check-news` (`_emerge/actions.py:3844` ->
-/// `portage.news.count_unread_news` / `NewsManager`): count the GLEP 42
-/// news items that are **valid**, **relevant** to this system, and not
-/// yet read, per repo; print the `IMPORTANT: N news items need reading`
-/// block if any, else ` * No news items were found.` (unless `--quiet`).
+/// `portage.news.getUnreadItems` / `NewsManager`): print the `IMPORTANT:
+/// N news items need reading` block if any repo's `.unread` count is
+/// nonzero, else ` * No news items were found.` (unless `--quiet`).
 ///
 /// A news item lives at `<repo>/metadata/news/<id>/<id>.<lang>.txt`
 /// (`<lang>` = `en` here -- `L10N`/`PORTAGE_L10N` not modelled). It is
@@ -5257,18 +5256,25 @@ fn render_ambiguous_search_output(
 /// restriction, or its `Display-If-Installed:` atom matches the vdb
 /// (real `DisplayInstalledRestriction`; `Display-If-Keyword` /
 /// `Display-If-Profile` are treated as always-satisfied here -- the
-/// portuale's fixtures are all one `amd64` profile). A `<id>` listed in
-/// `<eroot>/var/lib/gentoo/news/news-<repo>.read` (what `eselect news
-/// read` writes) **or** `.skip` (real `NewsManager.updateItems`'
-/// permanent per-item skip list -- an item lands there once it has been
-/// evaluated) is not counted.
+/// portuale's fixtures are all one `amd64` profile).
 ///
-/// **v1 cut:** the *write* side of that bookkeeping -- real
-/// `NewsManager.updateItems` rewrites `.unread` (newly-relevant items
-/// added) and `.skip` (every evaluated item added) each run; portuale
-/// only *reads* `.read`/`.skip` and recomputes the relevant set,
-/// writing nothing (the same "recompute, don't cache" stance it takes
-/// for `Packages` indexes and md5-cache elsewhere). Only bare `cat/pkg`
+/// Real `NewsManager.updateItems`'s write-back (`news.py:112-190`) is
+/// shipped: an item not already in `.skip` is (re-)evaluated; once
+/// valid+relevant, it's added to *both* `.unread` and `.skip`
+/// (permanently -- from then on it's `.skip`-excluded from
+/// re-evaluation, even if it later stops matching a live
+/// `Display-If-*` restriction). The printed count is real's own `N =
+/// len(.unread)` (`getUnreadItems`, `news.py:234`) -- **not** a live
+/// recompute -- so an item, once counted, stays counted on every future
+/// run until something removes it from `.unread`. The only thing real
+/// ever does that is `eselect news read`, a separate tool portuale
+/// doesn't implement as its own action; `<eroot>/var/lib/gentoo/news/
+/// news-<repo>.read` models that tool's effect (an id there is removed
+/// from the `unread` set, lazily, on the next `--check-news` run,
+/// rather than requiring a real `eselect news read` invocation to have
+/// rewritten the file directly). Either file is rewritten (sorted, one
+/// id per line) only when its set actually changed --
+/// `write_news_state_if_changed`. **v1 cut:** only bare `cat/pkg`
 /// `Display-If-Installed` atoms are matched (not `>=cat/pkg-1` etc.).
 fn run_check_news(
     repos: &[portage_repo::RepoConfig],
@@ -5296,9 +5302,13 @@ fn run_check_news(
                 .filter(|l| !l.is_empty())
                 .collect()
         };
-        let read: std::collections::HashSet<String> = read_state_file("read")
-            .into_iter()
-            .chain(read_state_file("skip"))
+        let read_only = read_state_file("read");
+        let skip_orig = read_state_file("skip");
+        let unread_orig = read_state_file("unread");
+        let read: std::collections::HashSet<String> = read_only
+            .iter()
+            .cloned()
+            .chain(skip_orig.iter().cloned())
             .collect();
 
         let mut ids: Vec<String> = entries
@@ -5308,7 +5318,14 @@ fn run_check_news(
             .collect();
         ids.sort();
 
-        let mut count = 0usize;
+        // Real `NewsManager.updateItems` (`news.py:112-190`): every item
+        // not already in `.skip` is (re-)evaluated; a valid, relevant one
+        // is added to *both* the `unread` and `skip` accumulators
+        // (permanently -- once relevant, always in `.skip`, so it is
+        // never re-evaluated again even if it later stops matching a
+        // live `Display-If-*` restriction).
+        let mut unread = unread_orig.clone();
+        let mut skip = skip_orig.clone();
         for id in ids {
             if read.contains(&id) {
                 continue;
@@ -5321,9 +5338,25 @@ fn run_check_news(
                 continue;
             }
             if news_item_relevant(&text, root) {
-                count += 1;
+                unread.insert(id.clone());
+                skip.insert(id);
             }
         }
+        // Real `getUnreadItems`'s count is simply `len(.unread)` -- once
+        // an item is added, it stays counted on every future run,
+        // regardless of whether it would still evaluate as "relevant"
+        // (it's `.skip`-permanent, never re-checked). The only thing
+        // real ever *removes* from `.unread` is `eselect news read`,
+        // which portuale doesn't implement as its own action; `.read`
+        // models that tool's effect instead, applied lazily here each
+        // run (real would have rewritten `.unread` at the time the user
+        // ran it) rather than requiring a separate action to exist.
+        for id in &read_only {
+            unread.remove(id);
+        }
+        write_news_state_if_changed(&news_state_dir, &repo.name, "unread", &unread_orig, &unread);
+        write_news_state_if_changed(&news_state_dir, &repo.name, "skip", &skip_orig, &skip);
+        let count = unread.len();
         per_repo.push((repo.name.clone(), count));
         if count > 0 {
             any = true;
@@ -5354,6 +5387,39 @@ fn run_check_news(
         println!(" {} No news items were found.", color.c("GOOD", "*"));
     }
     ExitCode::SUCCESS
+}
+
+/// Real `NewsManager.updateItems`'s own `write_atomic` calls
+/// (`news.py:184-193`): `news-<repo>.<suffix>` gets rewritten -- one id
+/// per line, sorted -- only when `updated` differs from `orig`, i.e. the
+/// set genuinely changed this run. A create-dir failure (real's
+/// `OperationNotPermitted`/`PermissionDenied` catch around `ensure_dirs`)
+/// is a silent no-op, same as real.
+fn write_news_state_if_changed(
+    news_state_dir: &Path,
+    repo_name: &str,
+    suffix: &str,
+    orig: &std::collections::HashSet<String>,
+    updated: &std::collections::HashSet<String>,
+) {
+    if updated == orig {
+        return;
+    }
+    if std::fs::create_dir_all(news_state_dir).is_err() {
+        return;
+    }
+    let mut ids: Vec<&String> = updated.iter().collect();
+    ids.sort();
+    let mut out = String::new();
+    for id in ids {
+        out.push_str(id);
+        out.push('\n');
+    }
+    let path = news_state_dir.join(format!("news-{repo_name}.{suffix}"));
+    let tmp = news_state_dir.join(format!(".news-{repo_name}.{suffix}.tmp"));
+    if std::fs::write(&tmp, &out).is_ok() {
+        let _ = std::fs::rename(&tmp, &path);
+    }
 }
 
 /// Real `NewsItem.isValid`: a `News-Item-Format:` header whose value

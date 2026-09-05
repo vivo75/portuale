@@ -25,8 +25,10 @@ stdout, stderr, and exit codes all match exactly.
 """
 
 import json
+import os
 import shutil
 import subprocess
+from pathlib import Path
 
 import pytest
 
@@ -11458,20 +11460,64 @@ def test_bare_name_with_no_match_reports_no_ebuilds(
     assert r.stderr.strip() == 'emerge: there are no ebuilds to satisfy "nosuchpkgname".'
 
 
+def _check_news_isolated_root(fixture_env, tmp_path, name="root"):
+    """A ROOT for `--check-news` that shares the fixtures' own vdb (real
+    `Display-If-Installed` needs it) but isolates `var/lib/gentoo/news/`
+    -- since 2026-09-05 `--check-news` really writes `.unread`/`.skip`
+    there (real `NewsManager.updateItems`'s own write-back), and this
+    must never land in the shared, git-tracked `fixtures/` tree itself
+    (every test using plain `fixture_env` shares that ROOT). `var/db` is
+    symlinked in (read-only vdb access); `var/lib` is a fresh, real,
+    per-call directory, so each call starts with a clean, unwritten
+    news-state directory and never mutates the fixtures checkout. Pass a
+    distinct `name` per invocation in the same test (e.g. one for Rust,
+    one for Python) so neither implementation's own write-back is ever
+    visible to the other's read -- a real write action compared
+    sequentially needs two independent starting states, not one shared
+    one, the same way a resolver contract test never lets one side's
+    execution mutate what the other side reads."""
+    root = tmp_path / name
+    (root / "var").mkdir(parents=True)
+    (root / "var" / "lib").mkdir()
+    os.symlink(
+        os.path.join(fixture_env["ROOT"], "var", "db"), str(root / "var" / "db")
+    )
+    env = dict(fixture_env)
+    env["ROOT"] = str(root)
+    return env
+
+
 def test_check_news_counts_unread_relevant_items(
-    emerge_binary, emerge_pretend_python, fixture_env
+    emerge_binary, emerge_pretend_python, fixture_env, tmp_path
 ):
     """emerge --check-news (real actions.py:3844 -> count_unread_news):
     the fixture testrepo has three GLEP 42 news items -- one unrestricted,
     one Display-If-Installed: dev-libs/samepkg (in the vdb), one
     Display-If-Installed on an uninstalled package. Only the first two are
     relevant, so the count is 2. Rust == Python."""
-    rust = _run([str(emerge_binary)], ["--check-news"], fixture_env)
-    py = _run(emerge_pretend_python, ["--check-news"], fixture_env)
+    rust_env = _check_news_isolated_root(fixture_env, tmp_path, "root-rust")
+    py_env = _check_news_isolated_root(fixture_env, tmp_path, "root-py")
+    rust = _run([str(emerge_binary)], ["--check-news"], rust_env)
+    py = _run(emerge_pretend_python, ["--check-news"], py_env)
     assert rust.returncode == 0
     assert rust.stdout == py.stdout
     assert "2 news items need reading for repository 'testrepo'." in rust.stdout
     assert "eselect news read" in rust.stdout
+    env = rust_env
+
+    # Real NewsManager.updateItems' own write-back: both relevant items
+    # now sit in .unread *and* .skip, sorted, so a re-run doesn't
+    # re-evaluate them (and, since they're already accounted for, still
+    # reports the same count -- the .skip entry makes the item "sticky").
+    news_dir = Path(env["ROOT"]) / "var" / "lib" / "gentoo" / "news"
+    unread = (news_dir / "news-testrepo.unread").read_text().splitlines()
+    skip = (news_dir / "news-testrepo.skip").read_text().splitlines()
+    assert unread == sorted(unread) and len(unread) == 2
+    assert skip == sorted(skip) and len(skip) == 2
+    assert set(unread) == set(skip)
+
+    again = _run([str(emerge_binary)], ["--check-news"], env)
+    assert "2 news items need reading for repository 'testrepo'." in again.stdout
 
 
 @pytest.mark.parametrize(
@@ -11563,15 +11609,24 @@ def test_color_map_overrides_the_ansi_codes(
     ],
 )
 def test_quiet_verbosity_level_1_matches_rust_and_python(
-    emerge_binary, emerge_pretend_python, fixture_env, args
+    emerge_binary, emerge_pretend_python, fixture_env, tmp_path, args
 ):
     """emerge --quiet/-q (real _DisplayConfig verbosity 1): the mask
     column disappears from the [ebuild ...] bracket, the USE="..." line
     is suppressed (unless -v is also given), the ::repo cpv decoration
     and the Total: line never show, and --search drops its verbose
     block. Rust == Python."""
-    rust = _run([str(emerge_binary)], args, fixture_env)
-    py = _run(emerge_pretend_python, args, fixture_env)
+    # --check-news really writes .unread/.skip now (see
+    # _check_news_isolated_root's own doc comment) -- never against the
+    # shared, git-tracked fixture ROOT other args here still use, and
+    # each side needs its own starting state since both are real writes.
+    if "--check-news" in args:
+        rust_env = _check_news_isolated_root(fixture_env, tmp_path, "root-rust")
+        py_env = _check_news_isolated_root(fixture_env, tmp_path, "root-py")
+    else:
+        rust_env = py_env = fixture_env
+    rust = _run([str(emerge_binary)], args, rust_env)
+    py = _run(emerge_pretend_python, args, py_env)
     assert rust.stdout == py.stdout, args
     assert rust.returncode == py.returncode
 
@@ -11807,6 +11862,42 @@ def test_check_news_skip_file_excludes_items_like_the_read_file(
     assert rust.returncode == 0
     assert rust.stdout == py.stdout
     assert rust.stdout.strip() == "* No news items were found."
+
+
+def test_check_news_read_file_lazily_removes_a_previously_unread_item(
+    emerge_binary, emerge_pretend_python, fixture_env, tmp_path
+):
+    """Real `getUnreadItems`'s count is `len(.unread)`, not a live
+    recompute (see `run_check_news`'s own doc comment) -- an item stays
+    counted until something removes it from `.unread`. The only thing
+    real ever does that is `eselect news read`, a separate tool portuale
+    doesn't implement as its own action; `.read` models that tool's
+    effect, applied lazily on the next `--check-news` run. Pre-seed
+    `.unread`/`.skip` as if a prior run had already found both fixture
+    items relevant, then mark one `.read` -- the count must drop from 2
+    to 1, and the rewritten `.unread` file must no longer list it."""
+    news_dir = tmp_path / "var" / "lib" / "gentoo" / "news"
+    news_dir.mkdir(parents=True)
+    both = "2026-09-01-portuale-general\n2026-09-02-portuale-samepkg\n"
+    (news_dir / "news-testrepo.unread").write_text(both)
+    (news_dir / "news-testrepo.skip").write_text(both)
+    (news_dir / "news-testrepo.read").write_text("2026-09-01-portuale-general\n")
+    env = dict(fixture_env)
+    env["ROOT"] = str(tmp_path)
+    rust = _run([str(emerge_binary)], ["--check-news"], env)
+    py = _run(emerge_pretend_python, ["--check-news"], env)
+    assert rust.returncode == 0
+    assert rust.stdout == py.stdout
+    assert "1 news items need reading for repository 'testrepo'." in rust.stdout
+
+    assert (news_dir / "news-testrepo.unread").read_text().splitlines() == [
+        "2026-09-02-portuale-samepkg"
+    ]
+    # .skip stays untouched -- real never removes from it.
+    assert set((news_dir / "news-testrepo.skip").read_text().splitlines()) == {
+        "2026-09-01-portuale-general",
+        "2026-09-02-portuale-samepkg",
+    }
 
 
 def test_genuinely_unrecognized_option_gets_a_distinct_message(emerge_binary, fixture_env):

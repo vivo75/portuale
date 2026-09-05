@@ -10959,12 +10959,44 @@ def _news_item_relevant(text, root):
     return False
 
 
+def _read_news_state_file(news_state_dir, repo_name, suffix):
+    try:
+        with open(os.path.join(news_state_dir, f"news-{repo_name}.{suffix}")) as f:
+            return {ln.strip() for ln in f if ln.strip()}
+    except OSError:
+        return set()
+
+
+def _write_news_state_if_changed(news_state_dir, repo_name, suffix, orig, updated):
+    """Real `NewsManager.updateItems`'s own `write_atomic` calls
+    (`news.py:184-193`): `news-<repo>.<suffix>` gets rewritten -- one id
+    per line, sorted -- only when `updated` differs from `orig`. A
+    create-dir failure (real's `OperationNotPermitted`/`PermissionDenied`
+    catch around `ensure_dirs`) is a silent no-op, same as real. Mirrors
+    pretend.rs's write_news_state_if_changed."""
+    if updated == orig:
+        return
+    try:
+        os.makedirs(news_state_dir, exist_ok=True)
+    except OSError:
+        return
+    path = os.path.join(news_state_dir, f"news-{repo_name}.{suffix}")
+    tmp = os.path.join(news_state_dir, f".news-{repo_name}.{suffix}.tmp")
+    try:
+        with open(tmp, "w") as f:
+            for itemid in sorted(updated):
+                f.write(f"{itemid}\n")
+        os.replace(tmp, path)
+    except OSError:
+        pass
+
+
 def _run_check_news(repos, root, quiet, color):
     """Real `emerge --check-news` (actions.py:3844 -> portage.news
-    count_unread_news / display_news_notifications). Mirrors pretend.rs's
-    run_check_news, including its v1 cut (only the *read* side of the
-    .read/.skip bookkeeping -- no write-back of .unread/.skip; only bare
-    cat/pkg Display-If-Installed atoms)."""
+    getUnreadItems / display_news_notifications). Mirrors pretend.rs's
+    run_check_news -- see its own doc comment for the full write-back
+    and counting model, including its v1 cut (only bare cat/pkg
+    Display-If-Installed atoms)."""
     per_repo = []
     any_unread = False
     for repo in repos:
@@ -10979,18 +11011,21 @@ def _run_check_news(repos, root, quiet, color):
             per_repo.append((repo["name"], 0))
             continue
         # .read (eselect news read) + .skip (updateItems' permanent
-        # per-item skip list) -- an id in either is not counted.
+        # per-item skip list) -- an id in either is excluded from
+        # (re-)evaluation.
         news_state_dir = os.path.join(root, "var", "lib", "gentoo", "news")
-        read = set()
-        for suffix in ("read", "skip"):
-            try:
-                with open(
-                    os.path.join(news_state_dir, f"news-{repo['name']}.{suffix}")
-                ) as f:
-                    read |= {ln.strip() for ln in f if ln.strip()}
-            except OSError:
-                pass
-        count = 0
+        read_only = _read_news_state_file(news_state_dir, repo["name"], "read")
+        skip_orig = _read_news_state_file(news_state_dir, repo["name"], "skip")
+        unread_orig = _read_news_state_file(news_state_dir, repo["name"], "unread")
+        read = read_only | skip_orig
+
+        # Real NewsManager.updateItems (news.py:112-190): an item not
+        # already in .skip is (re-)evaluated; once valid+relevant, it's
+        # added to *both* .unread and .skip (permanently -- from then on
+        # it's .skip-excluded, even if it later stops matching a live
+        # Display-If-* restriction).
+        unread = set(unread_orig)
+        skip = set(skip_orig)
         for itemid in ids:
             if itemid in read:
                 continue
@@ -11003,7 +11038,24 @@ def _run_check_news(repos, root, quiet, color):
             if not _news_item_valid(text):
                 continue
             if _news_item_relevant(text, root):
-                count += 1
+                unread.add(itemid)
+                skip.add(itemid)
+        # Real getUnreadItems' count is simply len(.unread) -- not a live
+        # recompute -- so an item, once counted, stays counted on every
+        # future run until something removes it from .unread. The only
+        # thing real ever does that is `eselect news read`, a separate
+        # tool portuale doesn't implement as its own action; .read
+        # models that tool's effect instead, applied lazily here each
+        # run rather than requiring a real eselect news read invocation
+        # to have rewritten the file directly.
+        unread -= read_only
+        _write_news_state_if_changed(
+            news_state_dir, repo["name"], "unread", unread_orig, unread
+        )
+        _write_news_state_if_changed(
+            news_state_dir, repo["name"], "skip", skip_orig, skip
+        )
+        count = len(unread)
         per_repo.append((repo["name"], count))
         if count > 0:
             any_unread = True
