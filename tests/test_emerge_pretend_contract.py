@@ -11491,33 +11491,34 @@ def test_check_news_counts_unread_relevant_items(
     emerge_binary, emerge_pretend_python, fixture_env, tmp_path
 ):
     """emerge --check-news (real actions.py:3844 -> count_unread_news):
-    the fixture testrepo has three GLEP 42 news items -- one unrestricted,
-    one Display-If-Installed: dev-libs/samepkg (in the vdb), one
-    Display-If-Installed on an uninstalled package. Only the first two are
-    relevant, so the count is 2. Rust == Python."""
+    the fixture testrepo has five GLEP 42 news items -- one unrestricted,
+    one `Display-If-Installed: dev-libs/samepkg` (in the vdb at 1.0), one
+    `>=dev-libs/samepkg-1.0` (1.0 satisfies it), one `>dev-libs/samepkg-
+    1.0` (1.0 does NOT), and one on an uninstalled package. Three are
+    relevant, so the count is 3. Rust == Python."""
     rust_env = _check_news_isolated_root(fixture_env, tmp_path, "root-rust")
     py_env = _check_news_isolated_root(fixture_env, tmp_path, "root-py")
     rust = _run([str(emerge_binary)], ["--check-news"], rust_env)
     py = _run(emerge_pretend_python, ["--check-news"], py_env)
     assert rust.returncode == 0
     assert rust.stdout == py.stdout
-    assert "2 news items need reading for repository 'testrepo'." in rust.stdout
+    assert "3 news items need reading for repository 'testrepo'." in rust.stdout
     assert "eselect news read" in rust.stdout
     env = rust_env
 
-    # Real NewsManager.updateItems' own write-back: both relevant items
-    # now sit in .unread *and* .skip, sorted, so a re-run doesn't
+    # Real NewsManager.updateItems' own write-back: every relevant item
+    # now sits in .unread *and* .skip, sorted, so a re-run doesn't
     # re-evaluate them (and, since they're already accounted for, still
     # reports the same count -- the .skip entry makes the item "sticky").
     news_dir = Path(env["ROOT"]) / "var" / "lib" / "gentoo" / "news"
     unread = (news_dir / "news-testrepo.unread").read_text().splitlines()
     skip = (news_dir / "news-testrepo.skip").read_text().splitlines()
-    assert unread == sorted(unread) and len(unread) == 2
-    assert skip == sorted(skip) and len(skip) == 2
+    assert unread == sorted(unread) and len(unread) == 3
+    assert skip == sorted(skip) and len(skip) == 3
     assert set(unread) == set(skip)
 
     again = _run([str(emerge_binary)], ["--check-news"], env)
-    assert "2 news items need reading for repository 'testrepo'." in again.stdout
+    assert "3 news items need reading for repository 'testrepo'." in again.stdout
 
 
 @pytest.mark.parametrize(
@@ -11857,15 +11858,13 @@ def test_check_news_reports_none_when_all_items_are_read(
 ):
     """A news item id listed in
     <eroot>/var/lib/gentoo/news/news-<repo>.read (what `eselect news
-    read` writes) is not counted. With all three fixture items marked
-    read, `--check-news` prints ` * No news items were found.`"""
+    read` writes) is not counted. ROOT is an empty tmp vdb here, so the
+    only otherwise-relevant fixture item is the unrestricted one; with
+    it marked read, `--check-news` prints ` * No news items were found.`
+    (the four Display-If-Installed items never match an empty vdb)."""
     read_dir = tmp_path / "var" / "lib" / "gentoo" / "news"
     read_dir.mkdir(parents=True)
-    (read_dir / "news-testrepo.read").write_text(
-        "2026-09-01-portuale-general\n"
-        "2026-09-02-portuale-samepkg\n"
-        "2026-09-03-portuale-irrelevant\n"
-    )
+    (read_dir / "news-testrepo.read").write_text("2026-09-01-portuale-general\n")
     # ROOT at tmp (for the .read file + an empty vdb) but CONFIGROOT still
     # the fixtures (for repos.conf / the news items themselves).
     env = dict(fixture_env)
@@ -11931,6 +11930,37 @@ def test_check_news_read_file_lazily_removes_a_previously_unread_item(
         "2026-09-01-portuale-general",
         "2026-09-02-portuale-samepkg",
     }
+
+
+def test_check_news_matches_a_versioned_display_if_installed_atom(
+    emerge_binary, emerge_pretend_python, fixture_env, tmp_path
+):
+    """Real `DisplayInstalledRestriction.checkRestriction` is
+    `vardb.match(self.atom)` -- a full atom match, not a bare `cat/pkg`
+    existence check. `dev-libs/samepkg-1.0` is in the fixture vdb:
+    `>=dev-libs/samepkg-1.0` (2026-09-04-portuale-versioned-match) is
+    relevant, `>dev-libs/samepkg-1.0` (2026-09-05-portuale-versioned-
+    nomatch) is not. Pre-seed `.read` with only the three relevant ids
+    (the unrestricted one, the bare `samepkg` one, and the `>=` one) and
+    the count must drop to 0 -- the `>` item was never counted, and no
+    other item is left. Rust == Python."""
+    rust_env = _check_news_isolated_root(fixture_env, tmp_path, "root-rust")
+    py_env = _check_news_isolated_root(fixture_env, tmp_path, "root-py")
+    read_ids = (
+        "2026-09-01-portuale-general\n"
+        "2026-09-02-portuale-samepkg\n"
+        "2026-09-04-portuale-versioned-match\n"
+    )
+    for env in (rust_env, py_env):
+        news_dir = Path(env["ROOT"]) / "var" / "lib" / "gentoo" / "news"
+        news_dir.mkdir(parents=True, exist_ok=True)
+        (news_dir / "news-testrepo.read").write_text(read_ids)
+
+    rust = _run([str(emerge_binary)], ["--check-news"], rust_env)
+    py = _run(emerge_pretend_python, ["--check-news"], py_env)
+    assert rust.returncode == 0
+    assert rust.stdout == py.stdout
+    assert rust.stdout.strip() == "* No news items were found."
 
 
 def test_genuinely_unrecognized_option_gets_a_distinct_message(emerge_binary, fixture_env):

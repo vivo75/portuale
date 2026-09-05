@@ -5274,8 +5274,9 @@ fn render_ambiguous_search_output(
 /// rather than requiring a real `eselect news read` invocation to have
 /// rewritten the file directly). Either file is rewritten (sorted, one
 /// id per line) only when its set actually changed --
-/// `write_news_state_if_changed`. **v1 cut:** only bare `cat/pkg`
-/// `Display-If-Installed` atoms are matched (not `>=cat/pkg-1` etc.).
+/// `write_news_state_if_changed`. `Display-If-Installed` atoms are
+/// matched in full (version operators, slot/sub-slot) -- see
+/// `news_item_relevant`'s own doc comment for its remaining narrow cuts.
 fn run_check_news(
     repos: &[portage_repo::RepoConfig],
     root: &Path,
@@ -5434,8 +5435,22 @@ fn news_item_valid(text: &str) -> bool {
 
 /// Real `NewsItem.isRelevant`: no restriction → relevant; otherwise each
 /// `Display-If-*` type is OR'd within and AND'd across. Only
-/// `Display-If-Installed` (bare `cat/pkg`, matched against the vdb) is
-/// modelled -- see `run_check_news`.
+/// `Display-If-Installed` is modelled (`Display-If-Keyword` /
+/// `Display-If-Profile` are treated as always-satisfied -- portuale's
+/// fixtures are all one `amd64` profile). Real
+/// `DisplayInstalledRestriction.checkRestriction` is `vardb.match(self.
+/// atom)` -- a full atom match, version operators (`>=cat/pkg-1`),
+/// slot/sub-slot (`cat/pkg:2/3`) and all, against every installed
+/// version of the atom's `cat/pkg`.
+///
+/// **v1 cuts:** a `[use]`-dep in the atom is not post-filtered (the same
+/// `match_from_list` scope every other portuale caller has); a
+/// malformed atom (`parse_atom` → `None`) is treated as an unsatisfied
+/// restriction rather than making the whole item *invalid* (real
+/// `DisplayInstalledRestriction.isValid`); the `News-Item-Format` 1.x
+/// vs 2.x EAPI gate on atom validity (real `isValid`'s own `eapi="0"`/
+/// `"5"` split) is not applied -- `portage_dep` has no EAPI
+/// parametrization by design (Part 3 non-goal).
 fn news_item_relevant(text: &str, root: &Path) -> bool {
     let mut installed_atoms: Vec<&str> = Vec::new();
     for line in text.lines() {
@@ -5446,9 +5461,19 @@ fn news_item_relevant(text: &str, root: &Path) -> bool {
     if installed_atoms.is_empty() {
         return true;
     }
-    installed_atoms.iter().any(|atom| {
-        atom.split_once('/')
-            .is_some_and(|(cat, pkg)| !portage_repo::installed_versions(root, cat, pkg).is_empty())
+    installed_atoms.iter().any(|atom_str| {
+        let Some(atom) = parse_atom(atom_str) else {
+            return false;
+        };
+        portage_repo::installed_candidates(root, &atom.category, &atom.package)
+            .iter()
+            .any(|(version, slot, sub_slot)| {
+                let candidate = format!(
+                    "{}/{}-{version}:{slot}/{sub_slot}",
+                    atom.category, atom.package
+                );
+                match_from_list(atom_str, &[candidate.as_str()]).is_some_and(|m| !m.is_empty())
+            })
     })
 }
 

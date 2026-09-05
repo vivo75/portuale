@@ -10944,6 +10944,13 @@ def _news_item_valid(text):
 
 
 def _news_item_relevant(text, root):
+    """Real DisplayInstalledRestriction.checkRestriction: `vardb.match(
+    self.atom)` -- a full atom match (version operators, slot/sub-slot)
+    against every installed version of the atom's cat/pkg. Mirrors
+    pretend.rs's news_item_relevant -- see its doc comment for the same
+    narrow v1 cuts ([use]-dep not post-filtered, a malformed atom is an
+    unsatisfied restriction rather than an invalid item, no format-1.x/
+    2.x EAPI atom-validity gate)."""
     installed_atoms = [
         line[len("Display-If-Installed:") :].strip()
         for line in text.splitlines()
@@ -10951,10 +10958,14 @@ def _news_item_relevant(text, root):
     ]
     if not installed_atoms:
         return True
-    for atom in installed_atoms:
-        if "/" in atom:
-            cat, _, pkg = atom.partition("/")
-            if installed_versions(root, cat, pkg):
+    for atom_str in installed_atoms:
+        parsed = _parse_atom(atom_str)
+        if parsed is None:
+            continue
+        cat, _, pkg = parsed.cp.partition("/")
+        for version, slot, sub_slot in installed_candidates(root, cat, pkg):
+            candidate = f"{cat}/{pkg}-{version}:{slot}/{sub_slot}"
+            if match_from_list(atom_str, [candidate]):
                 return True
     return False
 

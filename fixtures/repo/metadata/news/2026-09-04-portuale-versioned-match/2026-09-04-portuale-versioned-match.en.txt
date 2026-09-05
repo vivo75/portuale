@@ -1,0 +1,13 @@
+Title: Portuale news: relevant only if dev-libs/samepkg >= 1.0 is installed
+Author: Portuale Test <portuale@example.org>
+Content-Type: text/plain
+Posted: 2026-09-04
+Revision: 1
+News-Item-Format: 2.0
+Display-If-Installed: >=dev-libs/samepkg-1.0
+
+dev-libs/samepkg-1.0 is in the fixture vdb, and 1.0 satisfies
+>=dev-libs/samepkg-1.0, so `emerge --check-news` counts this item --
+exercising a versioned Display-If-Installed atom (real
+DisplayInstalledRestriction.checkRestriction -> vardb.match), not just a
+bare cat/pkg existence check.

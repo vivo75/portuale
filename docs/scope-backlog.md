@@ -247,8 +247,14 @@ ANSI USE colour all shipped 2026-09-05, see `what-this-proves.md`'s
 - `--regen`: `--jobs` threading stays unimplemented on purpose — real's
   scheduler parallelism only changes wall-clock time, not the cache
   content written, so there's no correctness gap to close;
-- `--check-news`: only bare `cat/pkg` `Display-If-Installed` atoms are
-  matched (not `>=cat/pkg-1` etc.) — a v1 cut;
+- `--check-news`: versioned/slotted `Display-If-Installed` atoms are
+  matched in full now (2026-09-05, real `DisplayInstalledRestriction.
+  checkRestriction` → `vardb.match`); remaining v1 cuts are narrow — a
+  `[use]`-dep in the atom isn't post-filtered (the same `match_from_list`
+  scope every portuale caller has), a malformed atom is an unsatisfied
+  restriction rather than an invalid item, and the `News-Item-Format`
+  1.x/2.x EAPI atom-validity gate isn't applied (`portage_dep` has no
+  EAPI parametrization, Part 3);
 - `--metadata` is an architectural no-op (portuale reads
   `metadata/md5-cache` directly, models no `depcachedir`);
 - `--sync` is a permanent non-goal (points at `emaint sync`); GLSA /
