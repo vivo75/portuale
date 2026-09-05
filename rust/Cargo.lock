@@ -224,7 +224,7 @@ dependencies = [
 [[package]]
 name = "brush-builtins"
 version = "0.2.0"
-source = "git+https://github.com/reubeno/brush?rev=a04b09dc4a3f5beaa78899c4100734cf0f8f4472#a04b09dc4a3f5beaa78899c4100734cf0f8f4472"
+source = "git+https://github.com/vivo75/brush?rev=5af3f6c1869550389a9254be43b0448667a90365#5af3f6c1869550389a9254be43b0448667a90365"
 dependencies = [
  "brush-core",
  "brush-parser",
@@ -240,13 +240,14 @@ dependencies = [
  "thiserror",
  "tokio",
  "tracing",
+ "utf8-chars",
  "uucore",
 ]
 
 [[package]]
 name = "brush-core"
 version = "0.5.0"
-source = "git+https://github.com/reubeno/brush?rev=a04b09dc4a3f5beaa78899c4100734cf0f8f4472#a04b09dc4a3f5beaa78899c4100734cf0f8f4472"
+source = "git+https://github.com/vivo75/brush?rev=5af3f6c1869550389a9254be43b0448667a90365#5af3f6c1869550389a9254be43b0448667a90365"
 dependencies = [
  "async-recursion",
  "async-trait",
@@ -284,12 +285,11 @@ dependencies = [
 [[package]]
 name = "brush-parser"
 version = "0.4.0"
-source = "git+https://github.com/reubeno/brush?rev=a04b09dc4a3f5beaa78899c4100734cf0f8f4472#a04b09dc4a3f5beaa78899c4100734cf0f8f4472"
+source = "git+https://github.com/vivo75/brush?rev=5af3f6c1869550389a9254be43b0448667a90365#5af3f6c1869550389a9254be43b0448667a90365"
 dependencies = [
  "bon",
  "cached",
  "getrandom",
- "indenter",
  "peg",
  "thiserror",
  "tracing",
@@ -992,12 +992,6 @@ name = "ident_case"
 version = "1.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b9e0384b61958566e926dc50660321d12159025e767c18e043daf26b70104c39"
-
-[[package]]
-name = "indenter"
-version = "0.3.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "964de6e86d545b246d84badc0fef527924ace5134f30641c203ef52ba83f58d5"
 
 [[package]]
 name = "inherent"

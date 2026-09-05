@@ -1,0 +1,133 @@
+From ca11d652d6c0b9e325f114c1d00a5b8e9e3b5692 Mon Sep 17 00:00:00 2001
+From: Francesco Riosa <me@francesco-riosa.com>
+Date: Sat, 5 Sep 2026 20:22:35 +0200
+Subject: [PATCH] fix(commands): run a function pipeline stage as a background
+ task, not inline
+
+`spawn_pipeline_processes` awaits each stage's spawn before starting the
+next. For an external command that returns `StartedProcess`, or a builtin
+in an owned shell that `spawn_blocking`s and returns `StartedTask`, that
+await resolves immediately. `execute_via_function` awaited
+`invoke_shell_function` *inline*, so the loop blocked until the function
+body fully returned and the next stage -- the reader of this stage's
+stdout pipe -- was never spawned. A function that writes more than one
+pipe buffer (~64 KiB on Linux) before returning then deadlocks on
+`write()` forever.
+
+Split `execute_via_function` the way `execute_via_builtin` already is: an
+owned-shell path that `spawn_blocking`s the body and returns
+`StartedTask` immediately, and an unchanged parent-shell path (only ever
+a pipeline's own last stage) that still awaits inline.
+
+Re-does the never-merged #1276 against current `main`.
+---
+ brush-core/src/commands.rs                   | 67 ++++++++++++++++++++
+ brush-shell/tests/cases/compat/pipeline.yaml | 17 +++++
+ 2 files changed, 84 insertions(+)
+
+diff --git a/brush-core/src/commands.rs b/brush-core/src/commands.rs
+index 6fc537e9..d054aefa 100644
+--- a/brush-core/src/commands.rs
++++ b/brush-core/src/commands.rs
+@@ -503,6 +503,73 @@ impl<'a, SE: extensions::ShellExtensions> SimpleCommand<'a, SE> {
+     async fn execute_via_function(
+         self,
+         func_registration: functions::Registration,
++    ) -> Result<ExecutionSpawnResult, error::Error> {
++        match self.shell {
++            ShellForCommand::OwnedShell { target, .. } => {
++                Ok(Self::execute_via_function_in_owned_shell(
++                    *target,
++                    self.params,
++                    func_registration,
++                    self.command_name,
++                    self.args,
++                ))
++            }
++            ShellForCommand::ParentShell(..) => {
++                self.execute_via_function_in_parent_shell(func_registration)
++                    .await
++            }
++        }
++    }
++
++    // A shell function used as a non-last pipeline stage must run as a background task -- exactly
++    // like `execute_via_builtin_in_owned_shell` -- rather than being awaited inline in
++    // `spawn_pipeline_processes`'s per-stage loop. Awaiting it inline blocks that loop until the
++    // function body fully returns, so the *next* stage (the one that would drain this function's
++    // stdout pipe) is never even spawned. A function that writes more to its stdout than the OS
++    // pipe buffer holds (~64 KiB on Linux) before returning then blocks on that `write()`
++    // forever -- a hard deadlock, not slow completion. A real shell always runs every pipeline
++    // stage as its own concurrently-running process, so this never arises there.
++    fn execute_via_function_in_owned_shell(
++        mut shell: Shell<SE>,
++        params: ExecutionParameters,
++        func_registration: functions::Registration,
++        command_name: String,
++        args: Vec<CommandArg>,
++    ) -> ExecutionSpawnResult {
++        let last_arg = Self::take_last_arg(&args);
++        let join_handle = tokio::task::spawn_blocking(move || {
++            let cmd_context = ExecutionContext {
++                shell: &mut shell,
++                command_name,
++                params,
++            };
++
++            let rt = tokio::runtime::Handle::current();
++            let spawn_result = rt.block_on(invoke_shell_function(
++                func_registration,
++                cmd_context,
++                &args[1..],
++            ));
++
++            // Update $_ after command execution.
++            shell.update_last_arg_variable(last_arg);
++
++            match spawn_result? {
++                ExecutionSpawnResult::Completed(result) => Ok(result),
++                ExecutionSpawnResult::StartedProcess(_) | ExecutionSpawnResult::StartedTask(_) => {
++                    // `invoke_shell_function` only ever returns `Completed` today; this guards
++                    // against a silent behavior change rather than dropping already-started work.
++                    error::unimp("invoke_shell_function returned an unexpected spawn result")
++                }
++            }
++        });
++
++        ExecutionSpawnResult::StartedTask(join_handle)
++    }
++
++    async fn execute_via_function_in_parent_shell(
++        self,
++        func_registration: functions::Registration,
+     ) -> Result<ExecutionSpawnResult, error::Error> {
+         let mut shell = self.shell;
+         let last_arg = Self::take_last_arg(&self.args);
+diff --git a/brush-shell/tests/cases/compat/pipeline.yaml b/brush-shell/tests/cases/compat/pipeline.yaml
+index b7a4f555..8dad9e81 100644
+--- a/brush-shell/tests/cases/compat/pipeline.yaml
++++ b/brush-shell/tests/cases/compat/pipeline.yaml
+@@ -58,3 +58,20 @@ cases:
+     stdin: |
+       printf '%s\n' {0..10000} | x=1
+       echo "Last: $?, PIPESTATUS: ${PIPESTATUS[*]}"
++
++  - name: "Function stage writing more than a pipe buffer before the next stage is spawned"
++    # Regression: a shell function used as a non-last pipeline stage must run
++    # concurrently with the rest of the pipeline, not be awaited to completion
++    # before the next stage is even spawned. Otherwise, once the function writes
++    # more to its stdout pipe than the OS pipe buffer holds (commonly 64 KiB on
++    # Linux) before returning, that write() blocks forever -- nothing is reading
++    # the other end yet. A real shell always runs every stage as its own process.
++    stdin: |
++      big() {
++        local i
++        for i in $(seq 1 5000); do
++          echo "padding line number ${i} to exceed the pipe buffer size"
++        done
++      }
++      big | wc -l
++      echo "Last: $?, PIPESTATUS: ${PIPESTATUS[*]}"
+-- 
+2.55.0
+

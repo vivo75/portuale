@@ -25,11 +25,18 @@ portage's own upstream base included) in sync too.
 
 | | |
 |---|---|
-| Repo | `https://github.com/reubeno/brush` (upstream) |
-| Rev | `a04b09dc4a3f5beaa78899c4100734cf0f8f4472` (`main`, PR #1322) |
+| Repo | `https://github.com/vivo75/brush` (upstream) |
+| Rev | `5af3f6c1869550389a9254be43b0448667a90365` (`main`, PR #1322) |
 
-Frozen in `Cargo.lock` too (three `git+https://github.com/reubeno/brush?rev=a04b09dc…`
+Frozen in `Cargo.lock` too (three `git+https://github.com/vivo75/brush?rev=5af3f6c1…`
 source lines: `brush-core`, `brush-builtins`, `brush-parser`).
+
+> The **`3rdparty/brush/` working checkout** (gitignored, cloned per
+> `3rdparty/repos.toml`) is deliberately *ahead* of this pin — as of
+> 2026-09-05 it sits at upstream `main` `a250b84e` (`brush-v0.4.0-136`),
+> with `origin` = `vivo75/brush`, `upstream` = `reubeno/brush`. It is
+> where the [`brush-pr/`](brush-pr/) fixes are being developed; the pin
+> only moves once they land upstream.
 
 ## The two fixes the fork used to carry
 
@@ -133,7 +140,37 @@ real `emerge <atom>` for essentially every compiled package.
 [`what-this-proves.md`](what-this-proves.md), "`--shell` default is now
 `bash`".
 
-**Still to do:** minimize and report upstream; pin a fix when one lands.
+**Root-caused + fixed 2026-09-05** against `reubeno/brush` `main`
+(`a250b84e`) — it is really *four* bugs, staged as PRs in
+[`brush-pr/`](brush-pr/) (write-ups + `git format-patch` exports, **not yet
+submitted**). In the `3rdparty/brush` checkout: one commit per bug on
+`fix/tokenizer-nested-construct-heredoc` (`bd4793ab`) /
+`fix/declare-f-heredoc-serialization` (`3d2bde47`) /
+`fix/function-pipeline-stage-deadlock` (`ca11d652`), and **`main` = `a250b84e`
++ all three cherry-picked** (tip `de451b39`) — a working combined branch (still
+needs a push + `Cargo.toml` re-pin before portuale builds against it; that also
+pulls ~130 commits of upstream drift, so do it as its own slice).
+
+1. **tokenizer** — a `${…}` / `$(…)` / `$((…))` on a here-tag line has its
+   sub-tokens stolen by the pending here-doc, so `"${base}.c"` tokenizes as
+   `base` + `"${}.c"` (and `<<${VAR}`'s tag becomes `VAR`). An *execution*
+   bug, not just serialization.
+2. **AST `Display`** — the here-doc body is emitted inline (indented by the
+   enclosing block, and before any later redirect on the same command)
+   instead of deferred to column 0 after the line. Plus: multi-line words
+   (`local x='…\n…'`) get re-indented every round-trip; `>(list)` renders
+   with doubled parens; `|` / `>&` spacing.
+3. **command exec** — a function used as a non-last pipeline stage runs
+   inline to completion before the next stage is spawned → deadlocks past
+   one pipe buffer (re-do of the never-merged #1276).
+
+Verified: full brush-compat-tests suite 0-regressions (+5 new cases);
+every function in all 211 Gentoo eclasses (1843 fns) now round-trips
+`declare -f` → `eval` → `declare -f` with 0 parse-fail / 0 eval-fail /
+0 non-idempotent.
+
+**Still to do:** submit the three PRs; once merged, re-pin
+`portuale/Cargo.toml` and (optionally) flip the `--shell` default back.
 
 ## What is *not* tracked here
 

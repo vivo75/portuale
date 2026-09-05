@@ -36,11 +36,11 @@ vendored_paths = ["bin/"]
 
 [brush]
 description = "Rust-native bash interpreter (brush-core + brush-builtins), embedded in portuale as the real ebuild phase execution backend (bin/*.sh phases run through it, not a shelled-out system bash)."
-url = "https://github.com/reubeno/brush"
+url = "https://github.com/vivo75/brush"
 kind = "cargo-git-dependency"
 checkout_path = "3rdparty/brush"
 ref = "main"
-commit = "a04b09dc4a3f5beaa78899c4100734cf0f8f4472"
+commit = "5af3f6c1869550389a9254be43b0448667a90365"
 pinned_in = "rust/portuale/Cargo.toml"
 pinned_at = "2026-09-01"
 tracking_doc = "docs/brush-pin.md"
@@ -49,4 +49,4 @@ tracking_doc = "docs/brush-pin.md"
 # of bin/eapi.sh needs). Cargo.toml still fetches this via git; the
 # 3rdparty/brush checkout is for hacking/reference. Re-pin periodically --
 # see docs/brush-pin.md's checklist.
-notes = "Was vivo75/brush (a fork) until 2026-09-01; dropped once both fixes the fork carried were resolved (see tracking_doc)."
+notes = "Back to vivo75/brush (a fork) Operator will manually follow upstream at reubeno/brush"

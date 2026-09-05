@@ -34,8 +34,8 @@ portage-versions = { path = "../portage-versions" }
 #     is the guard.
 # See docs/brush-pin.md for the tracking record and the periodic
 # re-pin checklist (bump the rev to a newer `main`, re-run the suite).
-brush-core = { git = "https://github.com/reubeno/brush", rev = "a04b09dc4a3f5beaa78899c4100734cf0f8f4472" }
-brush-builtins = { git = "https://github.com/reubeno/brush", rev = "a04b09dc4a3f5beaa78899c4100734cf0f8f4472" }
+brush-core = { git = "https://github.com/vivo75/brush", rev = "5af3f6c1869550389a9254be43b0448667a90365" }
+brush-builtins = { git = "https://github.com/vivo75/brush", rev = "5af3f6c1869550389a9254be43b0448667a90365" }
 # "rt-multi-thread", not just "rt": a single-threaded runtime deadlocks
 # partway through a real multi-phase run (confirmed empirically -- see
 # ebuild_phases::run_commands's own doc comment) -- brush-core's own
