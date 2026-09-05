@@ -12,14 +12,13 @@ In the local `3rdparty/brush` checkout (base `a250b84e`, `brush-v0.4.0-136`):
 | [02](02-ast-heredoc-serialization.md) | `fix/declare-f-heredoc-serialization` | `3d2bde47` | `brush-parser` AST `Display` | `declare -f` of a function with a here-document produces output that neither bash nor brush can re-parse (redirect ordering, body indentation), + smaller mismatches that make `declare -f` non-idempotent. Also drops the now-unused `indenter` dep. |
 | [03](03-pipeline-function-deadlock.md) | `fix/function-pipeline-stage-deadlock` | `ca11d652` | `brush-core` command exec | A function used as a non-last pipeline stage runs to completion inline before the next stage spawns → deadlocks past one pipe buffer. (Re-do of the never-merged #1276.) |
 
-Each branch is one commit off `a250b84e`. **`main` = `a250b84e` + the three
-commits cherry-picked linearly** (`95959d30` → `e9157f0a` → `de451b39`, tip
-`de451b39`) — the "working" branch for portuale to build against once it is
-pushed and `portuale/Cargo.toml` re-pinned (that bump also pulls ~130 commits of
-upstream drift, so treat it as its own slice).
+Each branch is one commit off `a250b84e`. `vivo75/brush`'s `main` carries all
+three (`95959d30` → `e9157f0a` → `de451b39`) plus a merge of `reubeno:main`;
+**portuale is pinned to that merge, `5af3f6c1`** (commit `8184c11`), so it
+already builds against these fixes. See [`../brush-pin.md`](../brush-pin.md).
 
 `patches/*.patch` are `git format-patch` exports of the branch commits (carry the
-full messages; `git am` them, or submit each branch as its own PR).
+full messages; `git am` them, or submit each branch as its own PR — still to do).
 
 ## Verification (all three applied)
 
