@@ -13454,25 +13454,67 @@ function already had: `forced_or_masked_flags` (previously only fed
 from a tree candidate, now also from the vdb's own recorded `IUSE`/
 `KEYWORDS`) and `colorize_use_token` (previously only used by the
 merge-list `USE="…"` column). The remaining two items -- the
-`(non-installed binary)` case and actually running `pkg_info()` --
-turned out to be one gap, not two, on inspection: real only ever lists
-a binary candidate for `--info` when it defines `pkg_info()`, so
-*showing* it is inseparable from being able to *run* it; a binary
-candidate additionally needs `--usepkg`/the scanned-binpkg index set up
-before `run_info`'s own CLI dispatch point (today that happens after);
-and running `pkg_info()` for real produces arbitrary ebuild-authored
-output no Python mirror can replicate byte-for-byte. `--config`/
-`--regen` solve that identical problem by having no Python mirror at
-all for their execution path -- but `--info` already has extensive,
-passing dual-language contract coverage (including an exact-match test
-asserting stdout ends immediately after the `USE="…"` line today), so
-shipping this needs the same test-architecture split those two actions
-use, not a one-line addition to an existing test. Investigated and
-recorded rather than partially built.
+`(non-installed binary)` case and actually running `pkg_info()` -- were
+investigated here and shipped a few hours later; see the next section.
 
 Full contract suite green throughout (936 -> 938 across the section);
 `portuale` (342) and `portage-repo` (286 -> 290) unit suites green;
 `cargo fmt`/`clippy` clean at every commit.
+
+### `--info` (non-installed binary) + `pkg_info()` execution (2026-09-05)
+
+The two items the section above left "investigated, recorded, not
+built". On a closer look the "one gap wearing two faces" framing held,
+but each face was tractable:
+
+**`(non-installed binary)` selection.** Real `action_info`'s
+`(bindb, "binary")` search half (`actions.py:1876-1900`): reached only
+under `--usepkg`/`--usepkgonly`, only when the atom has no installed vdb
+match and no visible ebuild that defines `pkg_info()`. The highest-
+version local `$PKGDIR` binary whose EAPI is 4+ **and** whose
+`DEFINED_PHASES` names `info` is chosen (`resolve_info_binary_candidate`,
+reusing `list_binary_candidates` / `read_binary_metadata` /
+`candidate_iuse_and_use` / `forced_or_masked_flags` /
+`build_use_expand_display` -- all already there for the resolver's own
+binary path), and rendered `<cpv>::<repo> (non-installed binary) was
+built with the following:` + the binary's own baked `USE=` line. The
+"needs `--usepkg`/the scanned-binpkg index set up before `run_info`'s
+dispatch point" obstacle was real but small: `--info` now runs its own
+`populate_local_pkgdir` scan in its dispatch block (the ordinary
+`--usepkg` resolve path's identical scan happens further down the CLI
+flow), rather than reordering the whole standalone-action dispatch.
+
+**Running `pkg_info()`.** For every selected package that defines the
+phase -- the ebuild and binary halves always (they were *selected*
+because they define it), an installed match only when its vdb's own
+`DEFINED_PHASES` names `info` (new `InstalledInfo::defines_pkg_info`) --
+portuale prints the deterministic `>>> Attempting to run pkg_info() for
+'<cpv>'` and then actually runs the phase: `run_single_phase` for an
+ebuild candidate, `run_vdb_saved_env_phase` (the `--config` path) for an
+installed match, and for a binary, `extract_binpkg` + lay the embedded
+`<pf>.ebuild` out as `<cat>/<pn>/<pf>.ebuild` (so the phase driver
+derives `CATEGORY`/`PN` from the path, the way real
+`doebuild(tree="bintree")` gets them from the binpkg metadata) + a
+`run_single_phase` on it. The phase's own output is whatever the ebuild
+`einfo`s -- it lands on stderr, so the stdout contract is untouched.
+
+The test-architecture split is exactly `--config`/`--regen`'s: the
+Python reference gained the full binary selection + `(non-installed
+binary)` render + the `>>> Attempting` line, but **stops there** (no
+phase machinery). The deterministic stdout stays `rust == py` and is
+contract-tested (the existing exact-match test updated for the new
+trailing line, plus a new `--usepkg` binary test with a real committed
+`.tbz2` fixture built via `portage.xpak` -- `dev-libs/binaryinfopkg`,
+binary-only, `pkg_info()` as an `einfo`). The phase's real execution
+(ebuild + binary) is covered Rust-only in `test_portuale.py` with a
+writable `PORTAGE_TMPDIR`.
+
+v1 cut carried forward: an installed match with an entirely empty vdb
+`DEFINED_PHASES` is not attempted (real's `if metadata["DEFINED_PHASES"]`
+falsy-check still would).
+
+Contract suite 938 -> 940; `portuale` 343, `portage-repo` 290 -> 292;
+`cargo fmt`/`clippy` clean.
 
 ### os.lchown / merge ownership preservation (2026-09-05)
 

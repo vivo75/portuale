@@ -235,15 +235,18 @@ ANSI USE colour all shipped 2026-09-05, see `what-this-proves.md`'s
 - `--info`: the host-state half (version header, uname/mem, tool-version
   probes, `info_pkgs`, timestamps) is a documented cut; the installed
   block still reads the individual vdb `build-info` files, not
-  `environment.bz2`. The `(non-installed binary)` case and the
-  `pkg_info()` phase run itself are one gap, not two (investigated
-  2026-09-05): real only ever lists a binary candidate for `--info` when
-  it defines `pkg_info()`, so showing it is inseparable from running it,
-  and running it produces arbitrary ebuild-authored output no Python
-  mirror can replicate — unlike `--config`/`--regen` (no Python mirror
-  at all), `--info` already has passing exact-match dual-language
-  contract coverage assuming no execution happens, so this needs that
-  same test-architecture split, not a one-line addition;
+  `environment.bz2`. The `(non-installed binary)` candidate path and the
+  `pkg_info()` phase run itself both shipped 2026-09-05: `--usepkg
+  --info` now selects the highest local `$PKGDIR` binary that defines
+  `pkg_info()` and renders its `(non-installed binary) was built with the
+  following:` block, and for every selected ebuild/binary/installed
+  package that defines `pkg_info()` portuale prints
+  `>>> Attempting to run pkg_info() for '<cpv>'` and actually runs the
+  phase. The deterministic message is dual-language contract-tested; the
+  phase's own output is Rust-only (`test_portuale.py`), the same
+  test-architecture split `--config`/`--regen` use. v1 cut: an installed
+  match with an entirely empty vdb `DEFINED_PHASES` is not attempted
+  (real's falsy-check quirk still would);
 - `--regen`: `--jobs` threading stays unimplemented on purpose — real's
   scheduler parallelism only changes wall-clock time, not the cache
   content written, so there's no correctness gap to close;

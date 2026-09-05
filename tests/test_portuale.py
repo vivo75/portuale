@@ -2073,6 +2073,44 @@ def test_emerge_config_rejects_multiple_atoms_and_reports_missing(emerge_binary,
     assert "No packages found." in missing.stdout
 
 
+def test_emerge_info_runs_pkg_info_for_an_ebuild_and_a_binary(emerge_binary, tmp_path):
+    """Real `action_info`'s `>>> Attempting to run pkg_info() for '<cpv>'`
+    + `doebuild(ebuildpath, "info", ...)` step -- Rust actually runs the
+    phase (the deterministic message is contract-tested; the phase's real
+    execution is Rust-only, like `--config`). `dev-libs/pkginfopkg`
+    (ebuild half) and `dev-libs/binaryinfopkg` (a $PKGDIR-only binary,
+    `--usepkg`) both define `pkg_info()` as an `einfo` line, which the
+    phase writes to stderr."""
+    env = dict(os.environ)
+    env["PORTAGE_CONFIGROOT"] = FIXTURES_ROOT
+    env["ROOT"] = FIXTURES_ROOT
+    env["PORTAGE_RUNNING_ROOT"] = FIXTURES_ROOT
+    env["PORTAGE_TMPDIR"] = str(tmp_path / "portage-tmpdir")
+
+    ebuild = subprocess.run(
+        [str(emerge_binary), "--info", "dev-libs/pkginfopkg"],
+        capture_output=True, text=True, check=False, env=env,
+    )
+    assert ebuild.returncode == 0, ebuild.stderr
+    assert (
+        ">>> Attempting to run pkg_info() for 'dev-libs/pkginfopkg-1.0'\n"
+        in ebuild.stdout
+    )
+    assert "pkginfopkg 1.0" in ebuild.stderr
+
+    binary = subprocess.run(
+        [str(emerge_binary), "--info", "--usepkg", "dev-libs/binaryinfopkg"],
+        capture_output=True, text=True, check=False, env=env,
+    )
+    assert binary.returncode == 0, binary.stderr
+    assert "(non-installed binary) was built with the following:" in binary.stdout
+    assert (
+        ">>> Attempting to run pkg_info() for 'dev-libs/binaryinfopkg-1.0'\n"
+        in binary.stdout
+    )
+    assert "binaryinfopkg pkg_info 1.0" in binary.stderr
+
+
 def test_emerge_config_shell_flag_selects_the_pkg_config_backend(
     emerge_binary, tmp_path
 ):

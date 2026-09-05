@@ -5524,7 +5524,23 @@ fn build_config_env(config: &portage_profile::Config) -> Vec<(String, String)> {
 /// that differ from the current config + an `Unset: …` line); otherwise
 /// the best visible ebuild candidate, but only if its ebuild defines
 /// `pkg_info()` (`<cpv>::<repo> would be built with the following:` +
-/// `USE="…"`).
+/// `USE="…"`); otherwise, under `--usepkg`/`--usepkgonly`, the highest
+/// local `$PKGDIR` binary build whose EAPI is 4+ and whose
+/// `DEFINED_PHASES` names `info` (`<cpv>::<repo> (non-installed binary)
+/// was built with the following:` + the binary's own baked `USE="…"`).
+///
+/// For each selected package that defines `pkg_info()` -- the ebuild and
+/// binary halves always, an installed match only when its vdb's own
+/// `DEFINED_PHASES` names `info` -- portuale then prints `>>> Attempting
+/// to run pkg_info() for '<cpv>'` and actually runs the phase
+/// (`ebuild_phases::run_single_phase` for an ebuild or an extracted
+/// binary, `ebuild_merge::run_vdb_saved_env_phase` for an installed
+/// match), exactly the real `writemsg_stdout(...)` + `doebuild(...,
+/// "info", ...)` step. The phase's own output is whatever the ebuild
+/// `einfo`s; the Python contract reference stops at the deterministic
+/// message (the `--config`/`--regen` "no Python mirror for execution"
+/// precedent), and the real phase run is covered Rust-only in
+/// `test_portuale.py`.
 ///
 /// **Large, deliberate cut:** real `action_info`'s output is dominated by
 /// *host state* a fixture-driven test can't verify -- the
@@ -5540,44 +5556,32 @@ fn build_config_env(config: &portage_profile::Config) -> Vec<(String, String)> {
 /// `UseFlagDisplay`) are shipped -- see `resolve_installed_info`/
 /// `resolve_info_candidate`'s own doc comments and `colorize_use_token`.
 ///
-/// **Still cut, investigated 2026-09-05:** the `(non-installed binary)`
-/// case and the `pkg_info()` phase run itself are the same underlying
-/// gap wearing two faces, and neither is a bounded display tweak:
-/// - real only ever adds a binary candidate to `mypkgs` when it defines
-///   `pkg_info()` (`actions.py:1888-1900`) -- i.e. showing it is
-///   *inseparable* from being able to run its phase, unlike the ebuild
-///   candidate case (portuale already filters those on `defines_pkg_
-///   info` for *display*, independent of ever running anything). A
-///   binary candidate also needs `--usepkg`/`--usepkgonly` and the
-///   scanned-binpkg index, which today are only set up *after*
-///   `run_info`'s own dispatch point in the CLI's main flow -- reaching
-///   it here needs reordering that setup, not just a new branch.
-/// - actually running `pkg_info()` is real bash execution (via
-///   `ebuild_phases::run_single_phase` for the ebuild case,
-///   `ebuild_merge::run_vdb_saved_env_phase` for the installed case --
-///   both already exist and are reused by `--regen`/`--config`), but
-///   its output is *arbitrary*, whatever the ebuild's own `pkg_info()`
-///   happens to `einfo`/`echo`. Real `--config`/`--regen` solve this by
-///   having **no Python mirror at all** for their execution path
-///   (Rust-only, `test_portuale.py`-tested); `--info` is different --
-///   it already has extensive dual-language contract coverage for its
-///   deterministic text (including the exact-match
-///   `test_info_atom_prints_package_settings_for_a_pkg_info_package`,
-///   which asserts stdout ends immediately after the `USE="…"` line,
-///   with no further output). Shipping this needs the same test-
-///   architecture split `--config`/`--regen` already use -- the
-///   deterministic `>>> Attempting to run pkg_info() for '<cpv>'`
-///   message contract-tested on both sides, the phase's own real output
-///   Rust-only -- not a one-line addition to an existing test.
+/// The binary half's own narrowing (v1): an installed match's
+/// `>>> Attempting` step is gated strictly on its vdb `DEFINED_PHASES`
+/// naming `info` -- real also *still attempts* when `DEFINED_PHASES` is
+/// entirely empty (a falsy-check quirk, `actions.py:2350`), not modelled
+/// here (portuale's own merged packages always record it, and no fixture
+/// has an installed empty-`DEFINED_PHASES` `pkg_info()` package). The
+/// binary's ebuild is extracted from the archive and laid out as
+/// `<cat>/<pn>/<pf>.ebuild` so the phase driver derives `CATEGORY`/`PN`
+/// from the path (real `doebuild(tree="bintree")` gets them from the
+/// binpkg metadata). `--info` runs its own `$PKGDIR` scan before
+/// dispatching (the ordinary `--usepkg` resolve path's scan runs later
+/// in the CLI flow).
 ///
 /// `_hide_url_passwd` is also cut. `FEATURES` reflects only `make.conf`
 /// (portuale parses no `make.globals` defaults).
+#[allow(clippy::too_many_arguments)]
 fn run_info(
     config: &portage_profile::Config,
     repos: &[portage_repo::RepoConfig],
     root: &Path,
     atom_args: &[&str],
     misspell_suggestions: bool,
+    usepkg: bool,
+    config_root: &Path,
+    shell: ebuild_phases::ShellBackend,
+    debug: bool,
     color: &Colorizer,
 ) -> ExitCode {
     // Real `action_info`'s `myfiles` loop: a target with no ebuild
@@ -5591,7 +5595,11 @@ fn run_info(
         let exists = portage_repo::list_candidates(repos, &atom.category, &atom.package)
             .map(|c| !c.is_empty())
             .unwrap_or(false)
-            || !portage_repo::installed_candidates(root, &atom.category, &atom.package).is_empty();
+            || !portage_repo::installed_candidates(root, &atom.category, &atom.package).is_empty()
+            // Real `action_info` also checks `bindb.match(x.cp)` when
+            // `--usepkg` is on (`actions.py:1877-1885`): a package only
+            // ever available as a binary isn't a "no ebuilds" error.
+            || (usepkg && portage_repo::has_local_binary_candidate(config, atom_str));
         if !exists {
             let mut xinfo = format!("\"{atom_str}\"");
             if root != Path::new("/") {
@@ -5751,6 +5759,11 @@ fn run_info(
     enum InfoPkg {
         Installed(portage_repo::InstalledInfo),
         Ebuild(portage_repo::InfoCandidate),
+        // Real `(bindb, "binary")` half of the search loop, reached only
+        // under `--usepkg`/`--usepkgonly` when nothing is installed and
+        // no visible ebuild defines `pkg_info()` -- see
+        // `resolve_info_binary_candidate`.
+        Binary(portage_repo::InfoBinaryCandidate),
     }
     // Real `pkg_use_display`'s own `UseFlagDisplay.__str__`: each flag
     // token is coloured (the same `colorize_use_token` scheme the
@@ -5785,6 +5798,17 @@ fn run_info(
             .filter(|c| c.defines_pkg_info)
         {
             pkgs.push(InfoPkg::Ebuild(c));
+            continue;
+        }
+        // Real `(bindb, "binary")`: only when `--usepkg` and the ebuild
+        // half yielded nothing (`actions.py:1876`).
+        if usepkg {
+            if let Some(b) = portage_repo::resolve_info_binary_candidate(config, a)
+                .ok()
+                .flatten()
+            {
+                pkgs.push(InfoPkg::Binary(b));
+            }
         }
     }
     if !pkgs.is_empty() {
@@ -5795,14 +5819,34 @@ fn run_info(
         println!("{title:>pad$}");
         println!("{}", "=".repeat(65));
         println!();
+        let portage_tmpdir = std::env::var_os("PORTAGE_TMPDIR")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| std::path::PathBuf::from("/var/tmp/portage"));
         for pkg in &pkgs {
-            match pkg {
+            // Real `action_info`: header + `pkg_use_display` line (+ the
+            // installed-only `mydesiredvars` diff), then two blank lines,
+            // then `>>> Attempting to run pkg_info() for '<cpv>'` and the
+            // phase itself (`actions.py:2314-2410`). `run_phase` is real's
+            // `if metadata["DEFINED_PHASES"]: if "info" not in ...:
+            // continue` -- always true for the ebuild/binary halves (they
+            // were only selected *because* they define it), gated on the
+            // vdb's own `DEFINED_PHASES` for an installed match.
+            let (cpv, run_phase): (&str, bool) = match pkg {
                 InfoPkg::Ebuild(c) => {
                     println!(
                         "\n{} would be built with the following:",
                         color.c("INFORM", &format!("{}::{}", c.cpv, c.repo_name))
                     );
                     println!("{}", use_line(&c.use_expand_display));
+                    (&c.cpv, true)
+                }
+                InfoPkg::Binary(b) => {
+                    println!(
+                        "\n{} (non-installed binary) was built with the following:",
+                        color.c("INFORM", &format!("{}::{}", b.cpv, b.repo_name))
+                    );
+                    println!("{}", use_line(&b.use_expand_display));
+                    (&b.cpv, true)
                 }
                 InfoPkg::Installed(i) => {
                     println!(
@@ -5816,10 +5860,105 @@ fn run_info(
                     if !i.unset_vars.is_empty() {
                         println!("Unset: {}", i.unset_vars.join(", "));
                     }
+                    (&i.cpv, i.defines_pkg_info)
                 }
+            };
+            println!();
+            println!();
+            if !run_phase {
+                continue;
             }
-            println!();
-            println!();
+            // Real `writemsg_stdout(f">>> Attempting to run pkg_info() for
+            // '{pkg.cpv}'\n")` then `portage.doebuild(ebuildpath, "info",
+            // ...)`. The Python contract reference stops here (no phase
+            // machinery, like `--config`/`--regen`); the phase's own
+            // output is covered Rust-only in `test_portuale.py`.
+            println!(">>> Attempting to run pkg_info() for '{cpv}'");
+            let _ = std::io::Write::flush(&mut std::io::stdout());
+            let phase = match pkg {
+                InfoPkg::Ebuild(c) => ebuild_phases::run_single_phase(
+                    &c.ebuild_path,
+                    "info",
+                    root,
+                    &portage_tmpdir,
+                    debug,
+                    config_root,
+                    shell,
+                    &[],
+                    None,
+                ),
+                InfoPkg::Installed(i) => {
+                    let opts = ebuild_merge::MergeOptions::from_env(shell, debug);
+                    let scratch = portage_tmpdir.join("portage").join("_info_src");
+                    ebuild_merge::run_vdb_saved_env_phase(
+                        root,
+                        &i.category,
+                        &i.package,
+                        &format!("{}-{}", i.package, i.version),
+                        "info",
+                        &scratch,
+                        &portage_tmpdir,
+                        &opts,
+                    )
+                }
+                InfoPkg::Binary(b) => {
+                    // Real `bindb.bintree.getname(cpv)` + extract the
+                    // `<pf>.ebuild` member to a tmpdir, `doebuild(...,
+                    // "info", tree="bintree")` -- portuale reuses the full
+                    // binpkg extractor, then lays the extracted ebuild out
+                    // as `<cat>/<pn>/<pf>.ebuild` so the phase driver
+                    // derives `CATEGORY`/`PN` from the path (real
+                    // `doebuild` gets them from the binpkg metadata).
+                    let dest = portage_tmpdir.join("portage").join("_info_binpkg");
+                    let _ = std::fs::remove_dir_all(&dest);
+                    let image = dest.join("image");
+                    let build_info = dest.join("build-info");
+                    let run = |ep: &Path| {
+                        ebuild_phases::run_single_phase(
+                            ep,
+                            "info",
+                            root,
+                            &portage_tmpdir,
+                            debug,
+                            config_root,
+                            shell,
+                            &[],
+                            None,
+                        )
+                    };
+                    match crate::binpkg::extract_binpkg(&b.archive_path, &image, &build_info) {
+                        Ok(()) => {
+                            let extracted = std::fs::read_dir(&build_info)
+                                .ok()
+                                .into_iter()
+                                .flatten()
+                                .flatten()
+                                .map(|e| e.path())
+                                .find(|p| p.extension().is_some_and(|x| x == "ebuild"));
+                            match extracted {
+                                Some(src) => {
+                                    let pkg_dir = dest.join(&b.category).join(&b.package);
+                                    let laid_out = pkg_dir.join(format!("{}.ebuild", b.pf));
+                                    match std::fs::create_dir_all(&pkg_dir)
+                                        .and_then(|()| std::fs::copy(&src, &laid_out))
+                                    {
+                                        Ok(_) => run(&laid_out),
+                                        Err(e) => Err(format!("{}: {e}", laid_out.display())),
+                                    }
+                                }
+                                None => Err(format!(
+                                    "No ebuild found for '{cpv}' in {}",
+                                    b.archive_path.display()
+                                )),
+                            }
+                        }
+                        Err(e) => Err(e),
+                    }
+                }
+            };
+            if let Err(e) = phase {
+                eprintln!("emerge: {e}");
+            }
         }
     }
 
@@ -8457,12 +8596,32 @@ pub fn run(args: &[String]) -> ExitCode {
     // `action_info`), narrowed to its deterministic config block plus
     // the per-atom "Package Settings" block.
     if info_action {
+        let info_usepkg = usepkg || usepkgonly || getbinpkg || getbinpkgonly;
+        // Real `action_info` consults `bindb` (the local `$PKGDIR` pool)
+        // for its `(bindb, "binary")` search half whenever `--usepkg` is
+        // on -- so scan `$PKGDIR` here too, exactly as the ordinary
+        // `--usepkg` resolve path does further down (that scan runs after
+        // this standalone-action dispatch, so `--info` needs its own).
+        if info_usepkg {
+            match crate::binpkg::populate_local_pkgdir(Path::new(&config.pkgdir)) {
+                Ok(entries) if !entries.is_empty() => config.scanned_binpkgs = Some(entries),
+                Ok(_) => {}
+                Err(e) => {
+                    eprintln!("emerge: scanning {}: {e}", config.pkgdir);
+                    return ExitCode::from(1);
+                }
+            }
+        }
         return run_info(
             &config,
             &repos,
             &root,
             &atom_args,
             misspell_suggestions,
+            info_usepkg,
+            &config_root,
+            shell,
+            debug,
             &color,
         );
     }

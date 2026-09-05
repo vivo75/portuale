@@ -1,6 +1,17 @@
 TIMESTAMP: 0
 PACKAGES: 2
 
+CPV: dev-libs/binaryinfopkg-1.0
+DEFINED_PHASES: info
+DESCRIPTION: fixture package: binary-only, defines pkg_info() -- emerge --usepkg --info runs it
+EAPI: 8
+IUSE: +alpha beta
+KEYWORDS: amd64
+PATH: dev-libs/binaryinfopkg-1.0.tbz2
+REPO: testrepo
+SLOT: 0
+USE: alpha
+
 CPV: dev-libs/binaryonlypkg-1.0
 DEFINED_PHASES: -
 DESCRIPTION: fixture package: exists ONLY as a binary package, no ebuild anywhere -- --usepkg/--usepkgonly

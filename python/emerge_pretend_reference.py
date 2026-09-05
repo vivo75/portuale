@@ -11227,6 +11227,9 @@ def _resolve_installed_info(root, atom_str, config):
             current = config["other_vars"].get(var, "")
             if stored.split() != current.split():
                 differing.append((var, stored))
+        defines_pkg_info = "info" in _read_vdb_string(
+            root, category, package, version, "DEFINED_PHASES"
+        ).split()
         out.append(
             {
                 "cpv": f"{category}/{package}-{version}",
@@ -11234,25 +11237,116 @@ def _resolve_installed_info(root, atom_str, config):
                 "use_expand_display": use_expand_display,
                 "differing_vars": differing,
                 "unset_vars": unset,
+                "defines_pkg_info": defines_pkg_info,
             }
         )
     return out
 
 
-def _run_info(config, repos, root, atom_args, misspell_suggestions, color):
+def _resolve_info_binary_candidate(config, atom_str):
+    """Real `(bindb, "binary")` half of action_info's search loop
+    (actions.py:1876-1900), reached only under --usepkg when nothing is
+    installed and no visible ebuild defines pkg_info(). The highest-version
+    local binary build whose EAPI is 4+ and whose DEFINED_PHASES names
+    `info`, else None. Mirrors portage-repo/src/lib.rs's
+    resolve_info_binary_candidate (the Python contract stops at candidate
+    selection + the `>>> Attempting` line -- no phase run, like
+    --config/--regen)."""
+    atom = _parse_atom(atom_str)
+    if atom is None or "/" not in atom.cp:
+        return None
+    category, package = atom.cp.split("/", 1)
+    index = _local_binpkg_index(config)
+    candidates = list_binary_candidates(index, category, package)
+    if not candidates:
+        return None
+    cand_strs = [
+        f"{category}/{package}-{c['version']}:{c['slot']}/{c['sub_slot']}::{c['repo_name']}"
+        for c in candidates
+    ]
+    matched = match_from_list(atom_str, cand_strs)
+    if not matched:
+        return None
+    by_str = dict(zip(cand_strs, candidates))
+    ranked = [by_str[m] for m in matched if m in by_str]
+    ranked.sort(
+        key=functools.cmp_to_key(
+            lambda a, b: vercmp(b["version"], a["version"]) or 0
+        )
+    )
+    for best in ranked:
+        metadata = read_binary_metadata(index, category, package, best["version"])
+        if metadata is None:
+            continue
+        eapi = metadata.get("EAPI", "0")
+        defines_info = "info" in metadata.get("DEFINED_PHASES", "").split()
+        if eapi in ("0", "1", "2", "3") or not defines_info:
+            continue
+        if not metadata.get("PATH"):
+            continue
+        _iuse, use_flags = _candidate_iuse_and_use(best, category, package, config)
+        _seen = set()
+        disp = sorted(
+            (
+                (f, f in use_flags)
+                for f in (t.lstrip("+-") for t in best["iuse"].split())
+                if not (f in _seen or _seen.add(f))
+            ),
+            key=lambda p: _alnum_sort_key(p[0]),
+        )
+        cpv = f"{category}/{package}-{best['version']}"
+        candidate_str = (
+            f"{cpv}:{best['slot']}/{best['sub_slot']}::{best['repo_name']}"
+        )
+        forced = _forced_or_masked_flags(
+            best["iuse"], best["keywords"], candidate_str, category, package, config
+        )
+        use_expand_display = _build_use_expand_display(
+            disp,
+            config["use_expand"],
+            config["use_expand_hidden"],
+            None,
+            forced,
+            True,
+            None,
+        )
+        return {
+            "cpv": cpv,
+            "repo_name": best["repo_name"],
+            "use_expand_display": use_expand_display,
+        }
+    return None
+
+
+def _run_info(config, repos, root, atom_args, misspell_suggestions, usepkg, color):
     """Real `emerge --info` (action_info), narrowed to its deterministic
     config/repository block plus, with atom args, the `myfiles`-loop
     no-match error (exit 1, before the config block) and the per-atom
-    `Package Settings` block for a candidate whose ebuild defines
-    pkg_info(). Mirrors pretend.rs's run_info -- see its docstring for the
-    large host-state cut."""
+    `Package Settings` block: an installed vdb match, else the best
+    visible ebuild candidate that defines pkg_info(), else (under
+    --usepkg) the highest local $PKGDIR binary build that defines it
+    (`(non-installed binary) was built with the following:`). For each
+    that defines pkg_info(), the deterministic
+    `>>> Attempting to run pkg_info() for '<cpv>'` line -- this reference
+    stops there (no phase machinery, the --config/--regen precedent); the
+    Rust side actually runs the phase. Mirrors pretend.rs's run_info --
+    see its docstring for the large host-state cut."""
     for atom_str in atom_args:
         atom = _parse_atom(atom_str)
         if atom is None or "/" not in atom.cp:
             continue
         category, package = atom.cp.split("/", 1)
-        if not list_candidates(repos, category, package) and not installed_candidates(
-            root, category, package
+        if (
+            not list_candidates(repos, category, package)
+            and not installed_candidates(root, category, package)
+            # Real also checks `bindb.match(x.cp)` when --usepkg is on
+            # (actions.py:1877-1885): a binary-only package isn't an error.
+            and not (
+                usepkg
+                and list_binary_candidates(
+                    _local_binpkg_index(config), category, package
+                )
+            )
         ):
             xinfo = f'"{atom_str}"'
             if str(root) != "/":
@@ -11360,6 +11454,13 @@ def _run_info(config, repos, root, atom_args, misspell_suggestions, color):
         c = _resolve_info_candidate(repos, a, config)
         if c is not None and c["defines_pkg_info"]:
             pkgs.append(("ebuild", c))
+            continue
+        # Real `(bindb, "binary")`: only under --usepkg, only when the
+        # ebuild half yielded nothing (actions.py:1876).
+        if usepkg:
+            b = _resolve_info_binary_candidate(config, a)
+            if b is not None:
+                pkgs.append(("binary", b))
     if pkgs:
         title = "Package Settings"
         pad = 65 // 2 + len(title) // 2
@@ -11368,10 +11469,14 @@ def _run_info(config, repos, root, atom_args, misspell_suggestions, color):
         print("=" * 65)
         print()
         for kind, p in pkgs:
-            verb = "was" if kind == "installed" else "would be"
+            if kind == "installed":
+                tail = "was built with the following:"
+            elif kind == "binary":
+                tail = "(non-installed binary) was built with the following:"
+            else:
+                tail = "would be built with the following:"
             print(
-                f"\n{color.c('INFORM', p['cpv'] + '::' + p['repo_name'])} "
-                f"{verb} built with the following:"
+                f"\n{color.c('INFORM', p['cpv'] + '::' + p['repo_name'])} {tail}"
             )
             # Real pkg_use_display's own UseFlagDisplay.__str__: each
             # flag token is coloured (the same _colorize_use_token
@@ -11395,6 +11500,17 @@ def _run_info(config, repos, root, atom_args, misspell_suggestions, color):
                     print(f"Unset: {', '.join(p['unset_vars'])}")
             print()
             print()
+            # Real `if metadata["DEFINED_PHASES"]: if "info" not in ...:
+            # continue`, then `writemsg_stdout(">>> Attempting to run
+            # pkg_info() for '<cpv>'\n")` + `doebuild(..., "info")`. This
+            # reference has no phase machinery (like --config/--regen), so
+            # it prints the deterministic message and stops -- the phase's
+            # real output is covered Rust-only in test_portuale.py. The
+            # ebuild/binary halves were selected *because* they define
+            # pkg_info(); an installed match is gated on its vdb's own
+            # DEFINED_PHASES.
+            if kind != "installed" or p.get("defines_pkg_info"):
+                print(f">>> Attempting to run pkg_info() for '{p['cpv']}'")
 
     return 0
 
@@ -15353,6 +15469,7 @@ def run(args):
             _root(),
             atom_args,
             misspell_suggestions,
+            usepkg or usepkgonly or getbinpkg or getbinpkgonly,
             _Colorizer(_resolve_havecolor(color_opt)),
         )
 

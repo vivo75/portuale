@@ -6957,11 +6957,19 @@ pub fn resolve_info_candidate(
         .ok()
         .and_then(|md| md.get("DEFINED_PHASES").cloned())
         .is_some_and(|dp| dp.split_whitespace().any(|p| p == "info"));
+    // Real `action_info`'s own `portdb.findname(pkg.cpv, myrepo=pkg.repo)`
+    // for the `pkg_info()` run -- `<repo>/<cat>/<pkg>/<pf>.ebuild`.
+    let ebuild_path = best
+        .repo_location
+        .join(&atom.category)
+        .join(&atom.package)
+        .join(format!("{pf}.ebuild"));
     Ok(Some(InfoCandidate {
         cpv,
         repo_name: best.repo_name.clone(),
         use_expand_display,
         defines_pkg_info,
+        ebuild_path,
     }))
 }
 
@@ -6982,6 +6990,150 @@ pub struct InfoCandidate {
     /// `<cpv> would be built with the following:` block for such
     /// packages (`actions.py:1896`).
     pub defines_pkg_info: bool,
+    /// `<repo>/<cat>/<pkg>/<pf>.ebuild` -- real `action_info`'s own
+    /// `portdb.findname(pkg.cpv, myrepo=pkg.repo)` for the `pkg_info()`
+    /// phase run (`actions.py:2360`).
+    pub ebuild_path: PathBuf,
+}
+
+/// One `emerge --usepkg --info <atom>` result for a non-installed binary
+/// package -- see `resolve_info_binary_candidate`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InfoBinaryCandidate {
+    /// `category/package-version` of the chosen binary build.
+    pub cpv: String,
+    pub repo_name: String,
+    /// Real `pkg_use_display` for a `built=True` package -- the binary's
+    /// own recorded `USE`/`IUSE`, `( )`-wrapped for the current profile's
+    /// forced/masked flags (same as `InstalledInfo`).
+    pub use_expand_display: Vec<(String, String)>,
+    /// `$PKGDIR/<PATH>` -- the archive itself, for extracting its
+    /// embedded `<pf>.ebuild` to run `pkg_info()` (real `action_info`'s
+    /// `bindb.bintree.getname(cpv)` + `xpak.tbz2(...).getfile` / `gpkg
+    /// (...).get_metadata`, `actions.py:2362-2384`).
+    pub archive_path: PathBuf,
+    /// `category`, `package`, `pf` of the chosen build -- the caller lays
+    /// the extracted ebuild out as `<scratch>/<category>/<package>/
+    /// <pf>.ebuild` so the phase driver can derive `CATEGORY`/`PN` from
+    /// the path the way real `doebuild(tree="bintree")` derives them from
+    /// the binpkg metadata.
+    pub category: String,
+    pub package: String,
+    pub pf: String,
+}
+
+/// Whether `atom_str`'s `cat/pkg` has *any* local binary build -- real
+/// `action_info`'s own `bindb.match(x.cp)` `cp_exists` probe
+/// (`actions.py:1883`), which (unlike `resolve_info_binary_candidate`)
+/// does not gate on `pkg_info()`: a binary-only package still isn't a
+/// "no ebuilds to satisfy" error even if it can't be `pkg_info()`'d.
+pub fn has_local_binary_candidate(config: &portage_profile::Config, atom_str: &str) -> bool {
+    let Some(atom) = portage_dep::parse_atom(atom_str) else {
+        return false;
+    };
+    !list_binary_candidates(&local_binpkg_index(config), &atom.category, &atom.package).is_empty()
+}
+
+/// Real `action_info`'s `(portdb, "ebuild"), (bindb, "binary")` search
+/// loop for the **binary** half (`actions.py:1876-1900`), reached only
+/// when the atom has no installed vdb match and no visible ebuild
+/// candidate, and only when `--usepkg`/`--usepkgonly` is on. A binary
+/// build is chosen (highest version) *only* if its EAPI is 4+ **and**
+/// its `DEFINED_PHASES` names `info` -- real never lists a binary
+/// candidate it couldn't run `pkg_info()` for, so unlike the ebuild
+/// path there is no separate "list but don't run" state. `None` when no
+/// such build exists.
+pub fn resolve_info_binary_candidate(
+    config: &portage_profile::Config,
+    atom_str: &str,
+) -> Result<Option<InfoBinaryCandidate>, String> {
+    let atom =
+        portage_dep::parse_atom(atom_str).ok_or_else(|| format!("invalid atom {atom_str:?}"))?;
+    let index = local_binpkg_index(config);
+    let candidates = list_binary_candidates(&index, &atom.category, &atom.package);
+    if candidates.is_empty() {
+        return Ok(None);
+    }
+    let candidate_strs: Vec<String> = candidates
+        .iter()
+        .map(|c| {
+            format!(
+                "{}/{}-{}:{}/{}::{}",
+                atom.category, atom.package, c.version, c.slot, c.sub_slot, c.repo_name
+            )
+        })
+        .collect();
+    let refs: Vec<&str> = candidate_strs.iter().map(String::as_str).collect();
+    let Some(matched) = portage_dep::match_from_list(atom_str, &refs) else {
+        return Ok(None);
+    };
+    let by_str: HashMap<&str, &Candidate> = refs.iter().copied().zip(candidates.iter()).collect();
+    // Highest version first, then take the first that defines pkg_info()
+    // -- real `matches.reverse()` + `break` on the first that passes.
+    let mut ranked: Vec<&Candidate> = matched
+        .iter()
+        .filter_map(|m| by_str.get(m).copied())
+        .collect();
+    ranked.sort_by(|a, b| vercmp_ordering(&b.version, &a.version));
+    for best in ranked {
+        let Some(metadata) =
+            read_binary_metadata(&index, &atom.category, &atom.package, &best.version)
+        else {
+            continue;
+        };
+        let eapi = metadata.get("EAPI").map(String::as_str).unwrap_or("0");
+        let defines_info = metadata
+            .get("DEFINED_PHASES")
+            .is_some_and(|dp| dp.split_whitespace().any(|p| p == "info"));
+        if matches!(eapi, "0" | "1" | "2" | "3") || !defines_info {
+            continue;
+        }
+        let Some(rel_path) = metadata.get("PATH").filter(|p| !p.is_empty()) else {
+            continue;
+        };
+        let Some((_iuse, use_flags)) =
+            candidate_iuse_and_use(best, &atom.category, &atom.package, config)
+        else {
+            continue;
+        };
+        let mut disp_seen: HashSet<String> = HashSet::new();
+        let mut disp: Vec<(String, bool)> = best
+            .iuse
+            .split_whitespace()
+            .map(|t| t.trim_start_matches(['+', '-']).to_string())
+            .filter(|f| disp_seen.insert(f.clone()))
+            .map(|f| {
+                let on = use_flags.contains(&f);
+                (f, on)
+            })
+            .collect();
+        disp.sort_by_key(|p| alnum_sort_key(&p.0));
+        let cpv = format!("{}/{}-{}", atom.category, atom.package, best.version);
+        let candidate_str = format!(
+            "{}/{}-{}:{}/{}::{}",
+            atom.category, atom.package, best.version, best.slot, best.sub_slot, best.repo_name
+        );
+        let forced = forced_or_masked_flags(
+            &best.iuse,
+            &best.keywords,
+            &candidate_str,
+            &atom.category,
+            &atom.package,
+            config,
+        );
+        let use_expand_display =
+            build_use_expand_display(&disp, config, None, &forced, true, &HashSet::new());
+        return Ok(Some(InfoBinaryCandidate {
+            cpv,
+            repo_name: best.repo_name.clone(),
+            use_expand_display,
+            archive_path: Path::new(&config.pkgdir).join(rel_path),
+            category: atom.category.clone(),
+            package: atom.package.clone(),
+            pf: format!("{}-{}", atom.package, best.version),
+        }));
+    }
+    Ok(None)
 }
 
 /// Real `mydesiredvars` -- the `action_info` per-package block for an
@@ -7087,12 +7239,26 @@ pub fn resolve_installed_info(
             }
         }
 
+        let defines_pkg_info = read_vdb_string(
+            root,
+            &atom.category,
+            &atom.package,
+            version,
+            "DEFINED_PHASES",
+        )
+        .split_whitespace()
+        .any(|p| p == "info");
+
         out.push(InstalledInfo {
             cpv: format!("{}/{}-{version}", atom.category, atom.package),
             repo_name,
             use_expand_display,
             differing_vars,
             unset_vars,
+            defines_pkg_info,
+            category: atom.category.clone(),
+            package: atom.package.clone(),
+            version: version.clone(),
         });
     }
     out
@@ -7112,6 +7278,23 @@ pub struct InstalledInfo {
     pub differing_vars: Vec<(String, String)>,
     /// `INFO_INSTALLED_VARS` with no vdb value -- the `Unset: …` line.
     pub unset_vars: Vec<String>,
+    /// Whether the vdb's own `DEFINED_PHASES` names `info`. Unlike the
+    /// ebuild-candidate path, an installed package is listed in
+    /// `action_info`'s `mypkgs` regardless -- this only gates the
+    /// `>>> Attempting to run pkg_info()` step (`actions.py:2350-2356`).
+    /// Real's `if metadata["DEFINED_PHASES"]:` also *skips* the gate
+    /// (i.e. still attempts) when `DEFINED_PHASES` is empty -- a v1 cut
+    /// here: portuale's own merged packages always record it, and no
+    /// fixture has an installed `pkg_info()` package with an empty one.
+    pub defines_pkg_info: bool,
+    /// `category`, `package`, `version` of this vdb entry -- real
+    /// `vardb.findname(pkg.cpv)` locates `<pf>.ebuild`; portuale runs the
+    /// `pkg_info()` phase from the vdb-saved `environment.bz2` +
+    /// `<pf>.ebuild` (`ebuild_merge::run_vdb_saved_env_phase`), the same
+    /// path `--config` uses.
+    pub category: String,
+    pub package: String,
+    pub version: String,
 }
 
 /// Real `--root-deps`'s own `DEPEND`/`BDEPEND`-vs-`ESYSROOT` distinction
@@ -14695,6 +14878,55 @@ mod tests {
                 "(globalforceflag) -otherflag".to_string()
             )]
         );
+    }
+
+    #[test]
+    fn resolve_installed_info_flags_a_vdb_recorded_pkg_info_phase() {
+        let root = fixtures_root();
+        // infoinstpkg's vdb has no DEFINED_PHASES file -> not flagged.
+        let plain = resolve_installed_info(&root, "dev-libs/infoinstpkg", &test_config());
+        assert_eq!(plain.len(), 1);
+        assert!(!plain[0].defines_pkg_info);
+        assert_eq!(plain[0].category, "dev-libs");
+        assert_eq!(plain[0].package, "infoinstpkg");
+        assert_eq!(plain[0].version, "1.0");
+    }
+
+    #[test]
+    fn resolve_info_binary_candidate_picks_a_pkg_info_defining_local_binpkg() {
+        // dev-libs/binaryinfopkg: $PKGDIR binary only (no ebuild), its
+        // Packages entry has EAPI 8 + DEFINED_PHASES=info + a baked
+        // USE="alpha". Real `(bindb, "binary")` selects it for `--usepkg
+        // --info`.
+        let config = portage_profile::Config {
+            pkgdir: fixtures_root()
+                .join("pkgdir")
+                .to_string_lossy()
+                .into_owned(),
+            ..test_config()
+        };
+        let got = resolve_info_binary_candidate(&config, "dev-libs/binaryinfopkg")
+            .expect("no error")
+            .expect("a candidate");
+        assert_eq!(got.cpv, "dev-libs/binaryinfopkg-1.0");
+        assert_eq!(got.repo_name, "testrepo");
+        assert_eq!(got.pf, "binaryinfopkg-1.0");
+        assert_eq!(
+            got.use_expand_display,
+            vec![("USE".to_string(), "alpha -beta".to_string())]
+        );
+
+        // A binary with DEFINED_PHASES="-" (binaryonlypkg) is not a
+        // pkg_info() candidate.
+        assert!(
+            resolve_info_binary_candidate(&config, "dev-libs/binaryonlypkg")
+                .expect("no error")
+                .is_none()
+        );
+        assert!(has_local_binary_candidate(
+            &config,
+            "dev-libs/binaryonlypkg"
+        ));
     }
 
     #[test]

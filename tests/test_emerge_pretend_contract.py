@@ -11768,9 +11768,12 @@ def test_info_atom_prints_package_settings_for_a_pkg_info_package(
 ):
     """dev-libs/pkginfopkg's ebuild defines pkg_info() (DEFINED_PHASES=
     info), so real action_info appends the `Package Settings` section
-    with a `<cpv>::<repo> would be built with the following:` + USE line.
-    An ordinary package (dev-libs/newpkg, no pkg_info) gets no such
-    block. Rust == Python."""
+    with a `<cpv>::<repo> would be built with the following:` + USE line,
+    then `>>> Attempting to run pkg_info() for '<cpv>'` before running the
+    phase (the phase's own output goes to stderr -- einfo -- so stdout
+    stays Rust == Python; the Python reference stops at the message, like
+    --config/--regen). An ordinary package (dev-libs/newpkg, no pkg_info)
+    gets no such block. Rust == Python on stdout."""
     rust = _run([str(emerge_binary)], ["--info", "dev-libs/pkginfopkg"], fixture_env)
     py = _run(emerge_pretend_python, ["--info", "dev-libs/pkginfopkg"], fixture_env)
     assert rust.returncode == 0
@@ -11785,7 +11788,12 @@ def test_info_atom_prints_package_settings_for_a_pkg_info_package(
         'USE="alpha -beta"\n'
         "\n"
         "\n"
+        ">>> Attempting to run pkg_info() for 'dev-libs/pkginfopkg-1.0'\n"
     )
+    # The Rust side then actually runs the phase; its output goes to
+    # stderr (einfo) so it never perturbs the stdout contract above. That
+    # the phase genuinely executes is covered in test_portuale.py, which
+    # sets up a writable PORTAGE_TMPDIR.
 
     plain = _run([str(emerge_binary)], ["--info", "dev-libs/newpkg"], fixture_env)
     assert "Package Settings" not in plain.stdout
@@ -11851,6 +11859,45 @@ def test_info_atom_prints_the_installed_package_block(
         "\n"
         "\n"
     )
+    # infoinstpkg's vdb has no DEFINED_PHASES entry -> no pkg_info() step.
+    assert "Attempting to run pkg_info()" not in rust.stdout
+
+
+def test_info_usepkg_atom_selects_a_non_installed_binary_and_attempts_pkg_info(
+    emerge_binary, emerge_pretend_python, fixture_env
+):
+    """Real action_info's `(bindb, "binary")` search half (only under
+    --usepkg, only when nothing is installed and no visible ebuild defines
+    pkg_info()): dev-libs/binaryinfopkg exists ONLY as a $PKGDIR binary
+    (no ebuild anywhere) whose build-info EAPI is 8 and DEFINED_PHASES
+    names `info`. Real prints `<cpv>::<repo> (non-installed binary) was
+    built with the following:` + the binary's own baked USE, then
+    `>>> Attempting to run pkg_info() for '<cpv>'`. Without --usepkg the
+    same atom is a hard `no ebuilds to satisfy` error. Rust == Python on
+    stdout (the phase output the Rust side then produces goes to stderr)."""
+    rust = _run(
+        [str(emerge_binary)], ["--info", "--usepkg", "dev-libs/binaryinfopkg"], fixture_env
+    )
+    py = _run(
+        emerge_pretend_python, ["--info", "--usepkg", "dev-libs/binaryinfopkg"], fixture_env
+    )
+    assert rust.returncode == 0
+    assert rust.stdout == py.stdout
+    assert rust.stdout.endswith(
+        "dev-libs/binaryinfopkg-1.0::testrepo (non-installed binary) was built with the following:\n"
+        'USE="alpha -beta"\n'
+        "\n"
+        "\n"
+        ">>> Attempting to run pkg_info() for 'dev-libs/binaryinfopkg-1.0'\n"
+    )
+
+    # No --usepkg: binary-only package is invisible -> the pre-config
+    # `myfiles` no-match error (exit 1), Rust == Python.
+    rust_no = _run([str(emerge_binary)], ["--info", "dev-libs/binaryinfopkg"], fixture_env)
+    py_no = _run(emerge_pretend_python, ["--info", "dev-libs/binaryinfopkg"], fixture_env)
+    assert rust_no.returncode == 1 == py_no.returncode
+    assert rust_no.stdout == "" == py_no.stdout
+    assert 'there are no ebuilds to satisfy "dev-libs/binaryinfopkg"' in rust_no.stderr
 
 
 def test_check_news_reports_none_when_all_items_are_read(
