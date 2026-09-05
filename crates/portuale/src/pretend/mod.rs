@@ -45,6 +45,7 @@ mod removal;
 mod resolve_plan;
 mod resume;
 mod search;
+mod standalone_actions;
 mod world;
 
 #[cfg(test)]
@@ -76,6 +77,7 @@ pub(crate) use removal::*;
 pub(crate) use resolve_plan::*;
 pub(crate) use resume::*;
 pub(crate) use search::*;
+pub(crate) use standalone_actions::*;
 pub(crate) use world::*;
 
 use crate::difflib;

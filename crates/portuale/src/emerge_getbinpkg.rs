@@ -818,6 +818,166 @@ mod tests {
     }
 
     #[test]
+    fn merge_one_binary_entry_fails_a_truncated_index_vouched_binpkg_at_merge() {
+        // End to end at the merge boundary: a truncated index-vouched binary is
+        // selected at scan and fails at merge with `!!! Digest verification
+        // failed:`, renaming the file, logging the block, and reporting `>>>
+        // Failed to emerge ...` -- rc 1 with a clean root, before unpacking
+        // anything. The `Err` is the silent sentinel, so the CLI boundary adds
+        // no resume notice or `emerge:` line.
+        let tmp = tempdir();
+        let root = tmp.join("root");
+        let pkgdir = tmp.join("pkgdir");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::create_dir_all(pkgdir.join("dev-libs")).unwrap();
+        let whole = std::fs::read(fixtures_root().join("pkgdir/dev-libs/gpkgreadpkg-1.0.gpkg.tar"))
+            .unwrap();
+        let dest = pkgdir.join("dev-libs/gpkgreadpkg-1.0.gpkg.tar");
+        std::fs::write(&dest, &whole[..whole.len() / 2]).unwrap();
+        use md5::Digest as _;
+        let md5: String = md5::Md5::digest(&whole)
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect();
+        std::fs::write(
+            pkgdir.join("Packages"),
+            format!(
+                "TIMESTAMP: 0\n\nCPV: dev-libs/gpkgreadpkg-1.0\nSLOT: 0\nSIZE: {}\nMD5: {md5}\n_mtime_: 1\nPATH: dev-libs/gpkgreadpkg-1.0.gpkg.tar\n",
+                whole.len()
+            ),
+        )
+        .unwrap();
+
+        // The scan half of the same shape: the truncated file is accepted on the
+        // index's word, so resolution can select it.
+        let scanned = crate::binpkg::populate_local_pkgdir(&pkgdir, true).expect("scan succeeds");
+        assert_eq!(scanned.len(), 1, "{scanned:?}");
+
+        let pt = tmp.join("pt");
+        let entry = graph_entry("gpkgreadpkg", CandidateSource::Binary, "1.0");
+        let err = merge_one_binary_entry(MergeOneBinaryEntryArgs {
+            entry: &entry,
+            config: &Config::default(),
+            root: &root,
+            pkgdir: &pkgdir,
+            portage_tmpdir: &pt,
+            merge_options: &MergeOptions::default(),
+            progress: mrg_director::MergeProgress::single(),
+            display: &crate::emerge_build::StatusDisplay::for_tests(),
+        })
+        .expect_err("a truncated vouched binpkg must fail at merge");
+        assert_eq!(
+            err, "dev-libs/gpkgreadpkg-1.0: binpkg digest verification failed",
+            "{err}"
+        );
+        assert!(
+            is_binpkg_digest_failure(&err),
+            "the CLI boundary must recognize the silent sentinel"
+        );
+        assert!(!dest.exists(), "the corrupt file is renamed away");
+        let renamed: Vec<_> = portage_util::read_dir_paths(&pkgdir.join("dev-libs"))
+            .unwrap()
+            .into_iter()
+            .filter(|p| {
+                p.file_name()
+                    .and_then(|n| n.to_str())
+                    .is_some_and(|n| n.starts_with("gpkgreadpkg-1.0.gpkg.tar._checksum_failure_."))
+            })
+            .collect();
+        assert_eq!(renamed.len(), 1, "one checksum-failure sibling");
+        let rand = renamed[0]
+            .file_name()
+            .and_then(|n| n.to_str())
+            .and_then(|n| n.strip_prefix("gpkgreadpkg-1.0.gpkg.tar._checksum_failure_."))
+            .unwrap_or("");
+        assert_eq!(rand.len(), 8, "{renamed:?}");
+        assert!(
+            rand.bytes()
+                .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_'),
+            "{renamed:?}"
+        );
+        // The digest block lands in the package `build.log` too, non-empty so it
+        // is reported.
+        let log = pt.join("portage/dev-libs/gpkgreadpkg-1.0/temp/build.log");
+        let logged = std::fs::read_to_string(&log).unwrap_or_default();
+        assert!(
+            logged.contains("!!! Digest verification failed:")
+                && logged.contains("!!! Reason: Failed on size verification"),
+            "build.log holds the digest block: {log:?}"
+        );
+        // Clean root: nothing unpacked, no vdb entry, no merge marker.
+        assert!(!root.join("var/db/pkg/dev-libs/gpkgreadpkg-1.0").exists());
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn merge_one_binary_entry_aborts_a_stale_index_binary_like_portage() {
+        // End to end at the merge boundary: a binary removed from `$PKGDIR` with
+        // its stanza kept is selected from the trusted index and fails at merge
+        // with the stale-index pair to stdout AND `build.log`, plus the `>>>
+        // Failed to emerge ...` tail -- rc 1 with a clean root. The `Err` is the
+        // silent sentinel. Used to fail with portuale's own `no binpkg file under
+        // ...` error.
+        let tmp = tempdir();
+        let root = tmp.join("root");
+        let pkgdir = tmp.join("pkgdir");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::create_dir_all(pkgdir.join("dev-libs")).unwrap();
+        // No binpkg file on disk at all -- only the stale stanza,
+        // exactly like the bed's `$nopkg` after `find -delete`.
+        std::fs::write(
+            pkgdir.join("Packages"),
+            "TIMESTAMP: 0\n\nCPV: dev-libs/packagepkg-1.0\nSLOT: 0\nSIZE: 12345\n_mtime_: 1\nPATH: dev-libs/packagepkg-1.0.tbz2\n",
+        )
+        .unwrap();
+
+        // The scan half: the removed file's stanza rejoins the pool, so the
+        // binary can be selected.
+        let scanned = crate::binpkg::populate_local_pkgdir(&pkgdir, true).expect("scan succeeds");
+        assert_eq!(scanned.len(), 1, "{scanned:?}");
+        assert_eq!(
+            scanned[0].get("CPV").map(String::as_str),
+            Some("dev-libs/packagepkg-1.0")
+        );
+
+        let pt = tmp.join("pt");
+        let entry = graph_entry("packagepkg", CandidateSource::Binary, "1.0");
+        let err = merge_one_binary_entry(MergeOneBinaryEntryArgs {
+            entry: &entry,
+            config: &Config::default(),
+            root: &root,
+            pkgdir: &pkgdir,
+            portage_tmpdir: &pt,
+            merge_options: &MergeOptions::default(),
+            progress: mrg_director::MergeProgress::single(),
+            display: &crate::emerge_build::StatusDisplay::for_tests(),
+        })
+        .expect_err("a stale-index binary must fail at merge, not fall back");
+        assert_eq!(
+            err, "dev-libs/packagepkg-1.0: non-existent binary package",
+            "{err}"
+        );
+        assert!(
+            is_binpkg_missing_failure(&err),
+            "the CLI boundary must recognize the silent sentinel"
+        );
+        // The two `!!!` lines land in `build.log` too -- byte for byte Portage's
+        // pair -- non-empty so it is reported.
+        let log = pt.join("portage/dev-libs/packagepkg-1.0/temp/build.log");
+        let logged = std::fs::read_to_string(&log).unwrap_or_default();
+        assert_eq!(
+            logged,
+            "!!! Tried to use non-existent binary for 'dev-libs/packagepkg-1.0'\n\
+             !!! Likely caused by an outdated index. Run 'emaint binhost -f'.\n",
+            "build.log holds real's stale-index pair: {log:?}"
+        );
+        // Clean root: nothing unpacked, no vdb entry, no merge marker.
+        assert!(!root.join("var/db/pkg/dev-libs/packagepkg-1.0").exists());
+        assert!(!root.join("usr/share/packagepkg/hello.txt").exists());
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
     fn merge_one_binary_entry_reports_fetching_failed_without_an_index_stanza() {
         // Portage's other ENOENT arm -- the cpv is NOT in the index, so the text
         // is `!!! Fetching Binary failed` instead of the stale-index pair. Same
