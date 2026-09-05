@@ -395,8 +395,10 @@ When scoping the next slice, re-ground candidates in current code
   negotiation" and `Packages.bz2`/`.lz4` were later found to be
   mis-scoped -- not real `bintree.py` mechanisms at all, see
   `scope-backlog.md` Part 2.E); this trace stays useful for the
-  genuinely-still-open gpkg-signing/xpak-multi-instance/`splitdebug`
-  pieces in that same section.
+  genuinely-still-open gpkg-signing / `identical_binary` /
+  `useoldpkg`-multi-instance pieces in that same section
+  (`splitdebug`/`packdebug` and `binpkg-multi-instance` for both
+  formats have since shipped).
 
 ## Real ebuild phase execution + filesystem merge (shipped; ongoing refinement)
 

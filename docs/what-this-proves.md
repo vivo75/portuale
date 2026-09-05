@@ -8876,11 +8876,12 @@ the index file or scan the files" is decided exactly once
 mtime-staleness revalidation (real `FEATURES=pkgdir-index-trusted`
 behavior, portuale's long-standing stance for the index).
 
-v1 cuts: bare `.xpak` files (real `binpkg-multi-instance`
-`<pkgdir>/<cat>/<pf>/<build_id>.xpak`) are skipped — no multi-instance
-concept here, and a bare `.xpak` is a different on-disk shape; a file
-that fails to parse aborts the scan (rather than real portage's own
-skip-and-warn — a `$PKGDIR` of unreadable binpkgs is worth surfacing).
+v1 cuts (at the time of this increment): `.xpak` files and
+multi-instance subdirs were skipped — **since lifted**, see
+"`FEATURES=binpkg-multi-instance` writes and scans the real subdir
+layout" below. A file that fails to parse still aborts the scan (rather
+than real portage's own skip-and-warn — a `$PKGDIR` of unreadable
+binpkgs is worth surfacing).
 The Python mirror scans too (`_scan_pkgdir` — `portage.xpak.tbz2` for
 `.tbz2`, a hand-rolled `tarfile` + decompressor-subprocess reader for
 `.gpkg.tar` that matches the Rust reader's cuts, since real
@@ -8890,6 +8891,52 @@ binpkgs and resolves each under `--usepkgonly`, Rust ≡ Python; a
 regression test confirms the committed `fixtures/pkgdir` (which
 has a `Packages` *and* the two loose fixture files) still resolves via
 the index alone. 3 more `portuale` + 1 `portage-repo` unit tests.
+
+### `FEATURES=binpkg-multi-instance` writes and scans the real subdir layout, both formats
+
+The earlier `$PKGDIR`-scan cut ("bare `.xpak` files … a different
+on-disk shape") rested on a wrong assumption. Reading real
+`bin/misc-functions.sh __dyn_package`: the xpak packaging branch builds
+`gtar -cf - -C "${D}" . | ${compressor} > TMPFILE` then
+`xpak-helper.py recompose TMPFILE build-info` — **identical bytes
+regardless of `BUILD_ID`**. A multi-instance `.xpak` file is
+`[image tarball][XPAK …STOP]`, byte-format-identical to a `.tbz2`
+(real `get_binpkg_format(check_file=True)` checks the same 16-byte
+`XPAKSTOP…STOP` tail for both). What actually differs is only
+`bintree._allocate_filename_multi` (`bintree.py:2607-2669`): a
+multi-instance binpkg — either format — is written to
+`<pkgdir>/<cat>/<pn>/<pf>-<build_id>.<suffix>`, a `<cat>/<pn>` subdir
+with a `-<build_id>` filename suffix, `<suffix>` being `xpak` (not
+`tbz2`) for the xpak format and `gpkg.tar` for gpkg.
+
+Portuale had been writing gpkg multi-instance one level too shallow
+(`<pkgdir>/<cat>/<pf>-<build_id>.gpkg.tar`) and not doing xpak
+multi-instance at all. Now `ebuild_package.rs`'s `allocate_binpkg_
+build_id` scans `<pkgdir>/<cat>/<pn>/` and `package_after_install`
+writes the real subdir path (its `Packages` `PATH` field derived from
+`binpkg_path` relative to `$PKGDIR`, so the two can't drift); the
+`BUILD_ID` env export that already fed real `__dyn_package`'s embedded
+`build-info/BUILD_ID` file is unchanged. `binpkg::populate_local_pkgdir`
+(and the Python `_scan_pkgdir` mirror) walk one directory deeper: a
+`<cat>/<pn>` subdir's `<pf>-<build_id>.{xpak,gpkg.tar}` files are read
+with the same format readers (`.xpak` via the `.tbz2` reader), the
+archive's own embedded `PF` validates the `<pf>-<build_id>` filename
+(real `_parse_build_id` + `myfile != f"{mypf}-{build_id}.<ext>"`), and
+the `BUILD_ID` comes from the filename. Real's
+`tuple(catsplit(mydir)) == name_split[:2]` guard (the subdir must be the
+package's own `<pn>`) is ported; the old flat `All/` layout still
+isn't walked (v1 cut).
+
+Contract test: an ad-hoc `$PKGDIR` with no `Packages`, holding the
+genuine `packagepkg-1.0.tbz2` fixture placed at
+`dev-libs/packagepkg/packagepkg-1.0-3.xpak`, resolves under
+`--usepkgonly` with the real `output.py::_append_build_id` `-3` version
+suffix, Rust ≡ Python. Plus `ebuild_package.rs` unit tests: a real
+`FEATURES=binpkg-multi-instance BINPKG_FORMAT=xpak` build lands at
+`<cat>/<pn>/<pf>-1.xpak` (not `.tbz2`, not one-level) and scans back
+with `BUILD_ID`; the gpkg multi-instance test now asserts the
+`<cat>/<pn>/` layout and that neither wrong name is written.
+`test_portuale.py`'s multi-instance gpkg test updated to the real path.
 
 ### `build-info` metadata generation: a merged vdb entry / built `.tbz2` carries its real dependencies
 

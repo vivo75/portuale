@@ -30,9 +30,11 @@
 //     `__dyn_package`'s own `die`. Cut: no gpkg signing
 //     (`FEATURES=binpkg-signing`/`binpkg-request-signature` -- the same
 //     "portuale has no crypto" cut the reader's `Manifest`/`.sig`
-//     verification already documents). `BUILD_ID` in the gpkg basename
-//     IS real now, opt-in (`PackageOptions::binpkg_multi_instance`'s
-//     own doc comment).
+//     verification already documents). `FEATURES=binpkg-multi-instance`
+//     IS real now for both formats, opt-in (`PackageOptions::
+//     binpkg_multi_instance`'s own doc comment) -- the `<cat>/<pn>/<pf>-
+//     <build_id>.<suffix>` subdir layout real `_allocate_filename_multi`
+//     writes, `.xpak` suffix for xpak.
 //   - Real `PORTAGE_COMPRESSION_COMMAND` resolution (real
 //     `_compressors`/`BINPKG_COMPRESS_FLAGS_*`, `doebuild.py:697-750`) is
 //     real now -- see `resolve_compression_command`'s own doc comment
@@ -146,19 +148,19 @@ pub struct PackageOptions {
     pub buildpkg_live: bool,
     /// Real `FEATURES=binpkg-multi-instance` (`bintree.py:526-531`) --
     /// real default is `true` (one of real `make.globals`'s own default
-    /// `FEATURES` tokens too), but this defaults to `false` here: real's
-    /// multi-instance shape genuinely differs by format -- a `.gpkg.tar`
-    /// is self-contained either way, so multi-instance there is purely
-    /// a `{pf}-{build_id}.gpkg.tar` filename convention
-    /// (`package_after_install`'s own `allocate_gpkg_build_id`), but a
-    /// real multi-instance *xpak* binpkg is a bare `.xpak` metadata
-    /// segment on a genuinely different on-disk layout (not the single-
-    /// instance `.tbz2` archive shape `binpkg::read_xpak_metadata`
-    /// already reads) that this doesn't attempt -- so matching real's
-    /// actual default here would silently keep producing single-
-    /// instance-shaped xpak binpkgs while claiming multi-instance is on.
-    /// Opt in explicitly (`FEATURES=binpkg-multi-instance`) to get
-    /// gpkg's own real multi-instance naming; xpak stays bare regardless.
+    /// `FEATURES` tokens too), but this defaults to `false` here (a
+    /// deliberate conservatism, not a capability gap). Both formats are
+    /// supported: real `bin/misc-functions.sh __dyn_package` builds the
+    /// exact same archive bytes regardless of `BUILD_ID` -- an xpak
+    /// `[image tarball][XPAK trailer]` (a `.xpak` file is byte-format-
+    /// identical to a `.tbz2`; the extension is just the multi-instance
+    /// marker), a self-contained gpkg container -- so multi-instance is
+    /// purely `real bintree._allocate_filename_multi`'s own path
+    /// convention: `<pkgdir>/<cat>/<pn>/<pf>-<build_id>.<suffix>`, with
+    /// `<suffix>` `xpak` for xpak and `gpkg.tar` for gpkg
+    /// (`allocate_binpkg_build_id`), plus the `BUILD_ID` env export
+    /// `invoke_dyn_package` already does. `binpkg::populate_local_pkgdir`
+    /// walks that subdir layout back on the no-`Packages`-index scan.
     pub binpkg_multi_instance: bool,
 }
 
@@ -426,22 +428,37 @@ pub(crate) fn package_after_install(
     std::fs::write(build_info_dir.join("BUILD_TIME"), build_time.to_string())
         .map_err(|e| format!("{}: {e}", build_info_dir.join("BUILD_TIME").display()))?;
 
-    // Real FEATURES=binpkg-multi-instance (`bintree.py:529-531`'s own
-    // `_allocate_filename_multi` swap-in, real default-on --
-    // `PackageOptions::binpkg_multi_instance`'s own doc comment has the
-    // full grounding) -- gpkg only for now: a `.gpkg.tar` is self-
-    // contained regardless of multi-instance mode, so this is purely a
-    // filename convention (`{pf}-{build_id}.gpkg.tar`); real xpak
-    // multi-instance uses a genuinely different on-disk shape (a bare
-    // `.xpak` metadata segment, not a `.tbz2` archive) this doesn't
-    // attempt.
-    let build_id = (options.binpkg_multi_instance && binpkg_format_is_gpkg(&options.binpkg_format))
-        .then(|| allocate_gpkg_build_id(&options.pkgdir, &env.category, &env.split.pf));
-    let binpkg_filename = match build_id {
-        Some(id) => format!("{}-{id}.{binpkg_extension}", env.split.pf),
-        None => format!("{}.{binpkg_extension}", env.split.pf),
+    // Real `FEATURES=binpkg-multi-instance` (`bintree.py:529-531`'s own
+    // `_allocate_filename = self._allocate_filename_multi` swap-in) --
+    // both formats (`PackageOptions::binpkg_multi_instance`'s own doc
+    // comment has the full grounding). Real `_allocate_filename_multi`
+    // (`bintree.py:2607-2669`) writes to `<pkgdir>/<cat>/<pn>/<pf>-
+    // <build_id>.<suffix>` -- a `<cat>/<pn>` subdir, a `-<build_id>`
+    // suffix, and `<suffix>` `xpak` (not `tbz2`) for the xpak format.
+    // The archive bytes are the single-instance form either way, so this
+    // is a pure path/naming convention plus the `BUILD_ID` env export in
+    // `invoke_dyn_package`.
+    let multi_instance_suffix = multi_instance_binpkg_suffix(&options.binpkg_format)?;
+    let build_id = options.binpkg_multi_instance.then(|| {
+        allocate_binpkg_build_id(
+            &options.pkgdir,
+            &env.category,
+            &env.split.pn,
+            &env.split.pf,
+            multi_instance_suffix,
+        )
+    });
+    let binpkg_path = match build_id {
+        Some(id) => options
+            .pkgdir
+            .join(&env.category)
+            .join(&env.split.pn)
+            .join(format!("{}-{id}.{multi_instance_suffix}", env.split.pf)),
+        None => options
+            .pkgdir
+            .join(&env.category)
+            .join(format!("{}.{binpkg_extension}", env.split.pf)),
     };
-    let binpkg_path = options.pkgdir.join(&env.category).join(binpkg_filename);
     if let Some(parent) = binpkg_path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
     }
@@ -498,17 +515,27 @@ pub(crate) fn package_after_install(
     // real `gettbz2`'s own `if not rel_url: rel_url = pkgname + ".tbz2"`)
     // and now also for `binpkg::populate_local_pkgdir`'s own mtime-
     // staleness fast path, which looks up a cached entry by this same
-    // `PATH`'s basename. Reuses `binpkg_path`'s own filename (bare, or
-    // `-{build_id}`-suffixed under multi-instance) rather than
-    // reconstructing it, so the two can never drift apart.
-    let path_field = format!(
-        "{}/{}",
-        env.category,
-        binpkg_path
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or_default()
-    );
+    // `PATH`'s basename. Derived from `binpkg_path` relative to
+    // `$PKGDIR` rather than reconstructed, so the two can never drift
+    // apart -- `<cat>/<pf>.<ext>` for a single instance, `<cat>/<pn>/
+    // <pf>-<build_id>.<suffix>` under multi-instance (real
+    // `_allocate_filename_multi`'s own `os.path.join(pkgdir, cpv.cp,
+    // pf)`).
+    let path_field = binpkg_path
+        .strip_prefix(&options.pkgdir)
+        .ok()
+        .and_then(|rel| rel.to_str())
+        .map(str::to_string)
+        .unwrap_or_else(|| {
+            format!(
+                "{}/{}",
+                env.category,
+                binpkg_path
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or_default()
+            )
+        });
     let build_id_str = build_id.map(|id| id.to_string()).unwrap_or_default();
     let size_str = std::fs::metadata(&binpkg_path)
         .map(|st| st.len().to_string())
@@ -561,24 +588,37 @@ fn binpkg_extension(binpkg_format: &str) -> Result<&'static str, String> {
     }
 }
 
-fn binpkg_format_is_gpkg(binpkg_format: &str) -> bool {
-    binpkg_format == "gpkg"
+/// The `_allocate_filename_multi` filename suffix (`bintree.py:2620-2626`):
+/// `xpak` for the xpak format (NOT `tbz2` -- a multi-instance xpak file
+/// is `<pf>-<build_id>.xpak`, byte-format-identical to a `.tbz2` but
+/// named for the multi-instance layout), `gpkg.tar` for gpkg.
+fn multi_instance_binpkg_suffix(binpkg_format: &str) -> Result<&'static str, String> {
+    match binpkg_format {
+        "xpak" => Ok("xpak"),
+        "gpkg" => Ok("gpkg.tar"),
+        other => Err(format!("Unknown BINPKG_FORMAT {other}")),
+    }
 }
 
 /// Real `_allocate_filename_multi`'s own build_id search
-/// (`bintree.py:2607-2669`), narrowed to gpkg (see `PackageOptions::
-/// binpkg_multi_instance`'s own doc comment for why xpak isn't
-/// attempted): starts one past the highest `BUILD_ID` already used by
-/// this `cp/pf` (scanning `{pkgdir}/{category}/{pf}-*.gpkg.tar`, real's
-/// own `_max_build_id` equivalent -- portuale has no long-lived
-/// `bindbapi` to consult instead, so this re-derives it from the
-/// filesystem each call), then increments past any that's since become
-/// occupied (real's own "avoid races" `while True` retry loop, narrowed
-/// to a single-process CLI that never races itself: existence alone is
-/// enough, no `open(..., "x")` placeholder-file dance needed).
-fn allocate_gpkg_build_id(pkgdir: &Path, category: &str, pf: &str) -> u64 {
-    let dir = pkgdir.join(category);
+/// (`bintree.py:2607-2669`): starts one past the highest `BUILD_ID`
+/// already used by this `cp/pf` (scanning `<pkgdir>/<cat>/<pn>/<pf>-*.
+/// <suffix>`, real's own `_max_build_id` equivalent -- portuale has no
+/// long-lived `bindbapi` to consult instead, so this re-derives it from
+/// the filesystem each call), then increments past any that's since
+/// become occupied (real's own "avoid races" `while True` retry loop,
+/// narrowed to a single-process CLI that never races itself: existence
+/// alone is enough, no `open(..., "x")` placeholder-file dance needed).
+fn allocate_binpkg_build_id(
+    pkgdir: &Path,
+    category: &str,
+    pn: &str,
+    pf: &str,
+    suffix: &str,
+) -> u64 {
+    let dir = pkgdir.join(category).join(pn);
     let prefix = format!("{pf}-");
+    let dot_suffix = format!(".{suffix}");
     let mut max_existing: u64 = 0;
     if let Ok(entries) = std::fs::read_dir(&dir) {
         for entry in entries.flatten() {
@@ -588,7 +628,7 @@ fn allocate_gpkg_build_id(pkgdir: &Path, category: &str, pf: &str) -> u64 {
             let Some(rest) = name.strip_prefix(&prefix) else {
                 continue;
             };
-            let Some(id_str) = rest.strip_suffix(".gpkg.tar") else {
+            let Some(id_str) = rest.strip_suffix(&dot_suffix) else {
                 continue;
             };
             if let Ok(id) = id_str.parse::<u64>() {
@@ -597,7 +637,7 @@ fn allocate_gpkg_build_id(pkgdir: &Path, category: &str, pf: &str) -> u64 {
         }
     }
     let mut build_id = max_existing + 1;
-    while dir.join(format!("{pf}-{build_id}.gpkg.tar")).exists() {
+    while dir.join(format!("{pf}-{build_id}.{suffix}")).exists() {
         build_id += 1;
     }
     build_id
@@ -637,10 +677,8 @@ fn binpkg_md5_hex(path: &Path) -> Option<String> {
 /// `if "binpkg-multi-instance" in self.settings.features:
 /// self.settings["BUILD_ID"] = str(build_id)` (`EbuildBinpkg.py:47-48`),
 /// which for portuale is precisely when the caller already allocated one
-/// (`package_after_install`'s own gpkg-only multi-instance gate -- xpak
-/// multi-instance stays out of scope, so `BUILD_ID` is never exported
-/// for it either, matching real's `binpkg-multi-instance` feature being
-/// meaningless there in this fork). Exporting it makes real,
+/// (`package_after_install`'s own multi-instance gate, either format).
+/// Exporting it makes real,
 /// unmodified `__dyn_package` do two things for free that portuale
 /// previously never triggered: write a real `build-info/BUILD_ID` file
 /// into the archive itself (`bin/misc-functions.sh:557-558` --
@@ -1343,7 +1381,7 @@ mod tests {
     }
 
     #[test]
-    fn real_package_with_binpkg_multi_instance_names_the_gpkg_with_a_build_id() {
+    fn real_package_with_binpkg_multi_instance_writes_the_cat_pn_subdir_layout() {
         let tmp = tempdir();
         let root = tmp.join("root");
         let portage_tmpdir = tmp.join("tmp");
@@ -1373,14 +1411,25 @@ mod tests {
             run_package(&ebuild, &root, &portage_tmpdir, &options).expect("run_package succeeds");
         assert_eq!(status, 0);
 
-        let first = options.pkgdir.join("dev-libs/packagepkg-1.0-1.gpkg.tar");
-        let second = options.pkgdir.join("dev-libs/packagepkg-1.0-2.gpkg.tar");
+        // Real `bintree._allocate_filename_multi`: `<pkgdir>/<cat>/<pn>/
+        // <pf>-<build_id>.gpkg.tar`, not a bare `<cat>/<pf>` name.
+        let first = options
+            .pkgdir
+            .join("dev-libs/packagepkg/packagepkg-1.0-1.gpkg.tar");
+        let second = options
+            .pkgdir
+            .join("dev-libs/packagepkg/packagepkg-1.0-2.gpkg.tar");
         assert!(first.is_file(), "{} should exist", first.display());
         assert!(second.is_file(), "{} should exist", second.display());
-        // The old bare (non-multi-instance) filename was never written.
+        // Neither the bare single-instance name nor the old (wrong)
+        // one-level multi-instance name was written.
         assert!(!options
             .pkgdir
             .join("dev-libs/packagepkg-1.0.gpkg.tar")
+            .exists());
+        assert!(!options
+            .pkgdir
+            .join("dev-libs/packagepkg-1.0-1.gpkg.tar")
             .exists());
 
         // Real `EbuildBinpkg._start`'s own `BUILD_ID` export
@@ -1397,14 +1446,13 @@ mod tests {
         // own PATH-keyed dedup (not CPV-keyed), which
         // `write_packages_index_entry`'s own doc comment mirrors.
         let packages = std::fs::read_to_string(options.pkgdir.join("Packages")).unwrap();
-        assert!(packages.contains("PATH: dev-libs/packagepkg-1.0-1.gpkg.tar"));
-        assert!(packages.contains("PATH: dev-libs/packagepkg-1.0-2.gpkg.tar"));
+        assert!(packages.contains("PATH: dev-libs/packagepkg/packagepkg-1.0-1.gpkg.tar"));
+        assert!(packages.contains("PATH: dev-libs/packagepkg/packagepkg-1.0-2.gpkg.tar"));
         assert!(packages.contains("BUILD_ID: 1"));
         assert!(packages.contains("BUILD_ID: 2"));
 
-        // The directory scan re-derives BUILD_ID from the real archive's
-        // own embedded PF (not a filename-parsing guess) for each build,
-        // and CPV stays the bare `cat/pf` either way.
+        // The directory scan walks the `<cat>/<pn>/` subdir, keeps each
+        // build's own BUILD_ID, and CPV stays the bare `cat/pf`.
         let scanned = crate::binpkg::populate_local_pkgdir(&options.pkgdir).expect("scan succeeds");
         assert_eq!(scanned.len(), 2);
         let build_ids: std::collections::HashSet<&str> = scanned
@@ -1419,6 +1467,70 @@ mod tests {
             );
             assert_eq!(entry.get("PF").map(String::as_str), Some("packagepkg-1.0"));
         }
+    }
+
+    #[test]
+    fn real_multi_instance_xpak_uses_the_dot_xpak_extension_and_scans_back() {
+        // Real `bintree._allocate_filename_multi`: an xpak multi-instance
+        // binpkg is `<pkgdir>/<cat>/<pn>/<pf>-<build_id>.xpak` -- the
+        // `.xpak` extension (not `.tbz2`), but byte-format-identical to a
+        // `.tbz2` (real `bin/misc-functions.sh` builds `[image][XPAK]`
+        // regardless of `BUILD_ID`). The no-`Packages`-index scan
+        // (`populate_local_pkgdir`) must walk the subdir, read the file
+        // with the same xpak reader, and carry `BUILD_ID` back.
+        let tmp = tempdir();
+        let root = tmp.join("root");
+        let portage_tmpdir = tmp.join("tmp");
+        let options = PackageOptions {
+            debug: false,
+            pkgdir: tmp.join("pkgdir"),
+            distdir: tmp.join("distdir"),
+            shell: ebuild_phases::ShellBackend::default(),
+            binpkg_format: "xpak".to_string(),
+            binpkg_multi_instance: true,
+            ..PackageOptions::default()
+        };
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::create_dir_all(&portage_tmpdir).unwrap();
+
+        let repo_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/repo");
+        let ebuild = repo_root.join("dev-libs/packagepkg/packagepkg-1.0.ebuild");
+
+        let status =
+            run_package(&ebuild, &root, &portage_tmpdir, &options).expect("run_package succeeds");
+        assert_eq!(status, 0);
+
+        let xpak = options
+            .pkgdir
+            .join("dev-libs/packagepkg/packagepkg-1.0-1.xpak");
+        assert!(xpak.is_file(), "{} should exist", xpak.display());
+        // Not a `.tbz2`, and not the wrong one-level name.
+        assert!(!options.pkgdir.join("dev-libs/packagepkg-1.0.tbz2").exists());
+        assert!(!options
+            .pkgdir
+            .join("dev-libs/packagepkg/packagepkg-1.0-1.tbz2")
+            .exists());
+
+        // The `.xpak` file reads with the same reader as a `.tbz2`, and
+        // its own embedded `build-info/BUILD_ID` (written by real,
+        // unmodified `__dyn_package`) matches the filename suffix.
+        let meta = crate::binpkg::read_xpak_metadata(&xpak).expect("reads xpak metadata");
+        assert_eq!(meta.get("PF").map(String::as_str), Some("packagepkg-1.0"));
+        assert_eq!(meta.get("BUILD_ID").map(String::as_str), Some("1"));
+
+        // Drop the just-written index so the scan must parse the archive.
+        let _ = std::fs::remove_file(options.pkgdir.join("Packages"));
+        let scanned = crate::binpkg::populate_local_pkgdir(&options.pkgdir).expect("scan succeeds");
+        assert_eq!(scanned.len(), 1);
+        assert_eq!(
+            scanned[0].get("CPV").map(String::as_str),
+            Some("dev-libs/packagepkg-1.0")
+        );
+        assert_eq!(scanned[0].get("BUILD_ID").map(String::as_str), Some("1"));
+        assert_eq!(
+            scanned[0].get("PATH").map(String::as_str),
+            Some("dev-libs/packagepkg/packagepkg-1.0-1.xpak")
+        );
     }
 
     #[test]

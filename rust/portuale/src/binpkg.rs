@@ -740,21 +740,31 @@ fn extract_gpkg_member(gpkg_path: &Path, want: &str, dest: &Path) -> Result<(), 
 /// caller (`pretend.rs`'s own `--usepkg` CLI-boundary setup) now uses
 /// this function unconditionally, `Packages` present or not.
 ///
-/// `$PKGDIR` layout is `<pkgdir>/<category>/<pf>.{tbz2,gpkg.tar}` (one
-/// level deep). `CPV` is derived from the path (`<category>/<pf>` --
-/// authoritative for a `$PKGDIR`), `SIZE` from the file's own byte size
-/// (real `bintree`'s own `st_size`), `REPO` from the embedded
-/// `repository`, `PATH` from the relative path. Entries are `CPV`-sorted
-/// for a deterministic pool order.
+/// `$PKGDIR` layout is `<pkgdir>/<category>/<pf>.{tbz2,gpkg.tar}` for a
+/// single instance, and -- under real `FEATURES=binpkg-multi-instance`
+/// -- `<pkgdir>/<category>/<pn>/<pf>-<build_id>.{xpak,gpkg.tar}` (real
+/// `bintree._allocate_filename_multi`: a `<cat>/<pn>` subdir, a
+/// `-<build_id>` suffix, and the `.xpak` extension for the xpak format).
+/// A `.xpak` file is byte-format-identical to a `.tbz2`
+/// (`[image tarball][XPAK …STOP]` -- real `bin/misc-functions.sh` builds
+/// the same archive either way), so `read_xpak_metadata` reads it
+/// unchanged; the multi-instance `BUILD_ID` comes from the filename,
+/// validated against the archive's own embedded `PF`. `CPV` is
+/// `<category>/<pf>` (the `<pf>` from the embedded metadata for a
+/// multi-instance file, from the filename otherwise), `SIZE` from the
+/// file's own byte size (real `bintree`'s own `st_size`), `REPO` from
+/// the embedded `repository`, `PATH` from the relative path. Entries are
+/// `CPV`-sorted for a deterministic pool order.
 ///
-/// v1 cuts: bare `.xpak` files (real `binpkg-multi-instance`
-/// `<pkgdir>/<cat>/<pf>/<build_id>.xpak`) are skipped -- portuale has
-/// no multi-instance concept and a bare `.xpak` is a different on-disk
-/// shape (just the segment, no `[tarball]…STOP` trailer); a file that
+/// v1 cuts: the old flat `<pkgdir>/All/<pf>.tbz2` layout
+/// (real's own `mydir != "All"` fallback) is not walked; a file that
 /// fails to parse aborts the scan (rather than real portage's own
 /// skip-and-warn) -- a `$PKGDIR` full of unreadable binpkgs is a real
 /// problem worth surfacing, not silently resolving against a partial
-/// pool.
+/// pool -- but a *misnamed* multi-instance file (one whose `<pf>-<id>`
+/// stem disagrees with its embedded `PF`, or whose subdir isn't `<pn>`)
+/// is skipped, matching real's own `invalid_name`/`name_split`
+/// `continue`.
 pub fn populate_local_pkgdir(pkgdir: &Path) -> Result<Vec<HashMap<String, String>>, String> {
     let existing = portage_repo::read_packages_index(pkgdir);
     let mut by_basename: HashMap<&str, Vec<&HashMap<String, String>>> = HashMap::new();
@@ -781,87 +791,146 @@ pub fn populate_local_pkgdir(pkgdir: &Path) -> Result<Vec<HashMap<String, String
         let Some(category) = cat_path.file_name().and_then(|n| n.to_str()) else {
             continue;
         };
-        for file in read_dir_sorted(&cat_path)? {
-            let Some(name) = file.file_name().and_then(|n| n.to_str()) else {
+        for entry in read_dir_sorted(&cat_path)? {
+            let Some(name) = entry.file_name().and_then(|n| n.to_str()) else {
                 continue;
             };
-            let is_gpkg = name.ends_with(".gpkg.tar");
-            let is_xpak = !is_gpkg && name.ends_with(".tbz2");
-            if !is_gpkg && !is_xpak {
-                continue;
-            }
-            let Ok(st) = fs::metadata(&file) else {
-                continue;
-            };
-            let mtime = file_mtime(&st);
-            let size = st.len();
-            let path_field = format!("{category}/{name}");
-
-            if let Some(candidates) = by_basename.get(name) {
-                if let Some(&hit) = candidates.iter().find(|d| {
-                    d.get("_mtime_").and_then(|m| m.parse::<i64>().ok()) == Some(mtime)
-                        && d.get("SIZE").and_then(|s| s.parse::<u64>().ok()) == Some(size)
-                        && d.contains_key("CPV")
-                        && d.contains_key("SLOT")
-                }) {
-                    let mut entry = hit.clone();
-                    entry.insert("PATH".to_string(), path_field);
-                    out.push(entry);
-                    continue;
-                }
-            }
-
-            // Stale, moved, or unindexed -- re-derive fresh metadata
-            // from the file itself.
-            let (mut pf, mut meta) = if is_gpkg {
-                (
-                    name.strip_suffix(".gpkg.tar").unwrap().to_string(),
-                    read_gpkg_metadata(&file)?,
-                )
-            } else {
-                (
-                    name.strip_suffix(".tbz2").unwrap().to_string(),
-                    read_xpak_metadata(&file)?,
-                )
-            };
-            // Real `FEATURES=binpkg-multi-instance`'s own
-            // `{pf}-{build_id}.gpkg.tar` naming (`PackageOptions::
-            // binpkg_multi_instance`'s own doc comment): the archive's
-            // own embedded `PF` (always authoritative -- real build-info,
-            // read by `read_gpkg_metadata` above) is the ground truth, so
-            // a numeric filename suffix beyond it is unambiguously a
-            // `BUILD_ID`, not part of the version -- no PMS version-
-            // grammar guessing needed. xpak is never multi-instance here
-            // (see the same doc comment), so this is gpkg-only.
-            if is_gpkg {
-                if let Some(real_pf) = meta.get("PF").filter(|p| !p.is_empty()).cloned() {
-                    if real_pf != pf {
-                        if let Some(build_id) = pf
-                            .strip_prefix(&real_pf)
-                            .and_then(|s| s.strip_prefix('-'))
-                            .filter(|s| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit()))
-                        {
-                            meta.insert("BUILD_ID".to_string(), build_id.to_string());
-                            pf = real_pf;
-                        }
+            if entry.is_dir() {
+                // A `<cat>/<pn>` multi-instance package dir (real
+                // `bintree._allocate_filename_multi`): its files are
+                // `<pf>-<build_id>.{xpak,gpkg.tar}`.
+                for mfile in read_dir_sorted(&entry)? {
+                    let Some(mname) = mfile.file_name().and_then(|n| n.to_str()) else {
+                        continue;
+                    };
+                    let path_field = format!("{category}/{name}/{mname}");
+                    let Some(e) =
+                        scan_binpkg_file(&mfile, mname, category, path_field, &by_basename, true)?
+                    else {
+                        continue;
+                    };
+                    // Real's `tuple(catsplit(mydir)) == name_split[:2]`:
+                    // the containing subdir must be this package's own
+                    // `<pn>` (from its now-known `CPV`).
+                    let pn_ok = e
+                        .get("CPV")
+                        .and_then(|cpv| portage_dep::parse_candidate(cpv))
+                        .is_some_and(|c| c.package == name);
+                    if pn_ok {
+                        out.push(e);
                     }
                 }
+                continue;
             }
-            meta.insert("CPV".to_string(), format!("{category}/{pf}"));
-            meta.entry("CATEGORY".to_string())
-                .or_insert_with(|| category.to_string());
-            meta.entry("PF".to_string()).or_insert_with(|| pf.clone());
-            if let Some(repo) = meta.remove("repository") {
-                meta.entry("REPO".to_string()).or_insert(repo);
+            let path_field = format!("{category}/{name}");
+            if let Some(e) =
+                scan_binpkg_file(&entry, name, category, path_field, &by_basename, false)?
+            {
+                out.push(e);
             }
-            meta.insert("SIZE".to_string(), size.to_string());
-            meta.insert("PATH".to_string(), path_field);
-            meta.insert("_mtime_".to_string(), mtime.to_string());
-            out.push(meta);
         }
     }
     out.sort_by(|a, b| a.get("CPV").cmp(&b.get("CPV")));
     Ok(out)
+}
+
+/// One `$PKGDIR` binpkg file -> its synthesized `Packages`-style entry,
+/// or `None` if it isn't a binpkg or is a misnamed multi-instance file
+/// (real's own `invalid_name`/`name_split` `continue`). Reuses an
+/// unchanged `<pkgdir>/Packages` entry (matched by basename, with
+/// `_mtime_` and `SIZE` still agreeing -- real's "avoid reading the
+/// xpak if possible") when one exists, else parses the archive's own
+/// embedded metadata. `multi_instance` selects the naming contract: when set, the
+/// file is `<pf>-<build_id>.{xpak,gpkg.tar}` with `PF` taken from the
+/// archive and `BUILD_ID` from the filename; when clear, it is
+/// `<pf>.{tbz2,gpkg.tar}`.
+fn scan_binpkg_file(
+    file: &Path,
+    basename: &str,
+    category: &str,
+    path_field: String,
+    by_basename: &HashMap<&str, Vec<&HashMap<String, String>>>,
+    multi_instance: bool,
+) -> Result<Option<HashMap<String, String>>, String> {
+    let is_gpkg = basename.ends_with(".gpkg.tar");
+    let ext = if is_gpkg {
+        ".gpkg.tar"
+    } else if basename.ends_with(".xpak") {
+        ".xpak"
+    } else if basename.ends_with(".tbz2") {
+        ".tbz2"
+    } else {
+        return Ok(None);
+    };
+    let Ok(st) = fs::metadata(file) else {
+        return Ok(None);
+    };
+    let mtime = file_mtime(&st);
+    let size = st.len();
+
+    if let Some(candidates) = by_basename.get(basename) {
+        if let Some(&hit) = candidates.iter().find(|d| {
+            d.get("_mtime_").and_then(|m| m.parse::<i64>().ok()) == Some(mtime)
+                && d.get("SIZE").and_then(|s| s.parse::<u64>().ok()) == Some(size)
+                && d.contains_key("CPV")
+                && d.contains_key("SLOT")
+        }) {
+            let mut entry = hit.clone();
+            entry.insert("PATH".to_string(), path_field);
+            return Ok(Some(entry));
+        }
+    }
+
+    // Stale, moved, or unindexed -- re-derive from the file itself. A
+    // `.xpak` file is byte-format-identical to a `.tbz2`, so
+    // `read_xpak_metadata` reads both.
+    let mut meta = if is_gpkg {
+        read_gpkg_metadata(file)?
+    } else {
+        read_xpak_metadata(file)?
+    };
+    let stem = basename.strip_suffix(ext).unwrap();
+    let embedded_pf = meta.get("PF").filter(|p| !p.is_empty()).cloned();
+
+    let pf = if multi_instance {
+        // The archive's own embedded `PF` is the ground truth; the
+        // filename must be exactly `<PF>-<build_id>` (real
+        // `_parse_build_id` + `myfile != f"{mypf}-{build_id}.<ext>"`).
+        let Some(real_pf) = embedded_pf else {
+            return Ok(None);
+        };
+        let Some(build_id) = stem
+            .strip_prefix(&real_pf)
+            .and_then(|s| s.strip_prefix('-'))
+            .filter(|s| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit()))
+        else {
+            return Ok(None);
+        };
+        meta.insert("BUILD_ID".to_string(), build_id.to_string());
+        real_pf
+    } else {
+        // Real's `myfile != mypf + ".<ext>"` -> `invalid_name`: a
+        // category-level file whose stem disagrees with the archive's
+        // own `PF` (e.g. a misplaced `-<build_id>` file) is skipped.
+        if let Some(real_pf) = &embedded_pf {
+            if real_pf != stem {
+                return Ok(None);
+            }
+        }
+        stem.to_string()
+    };
+
+    meta.insert("CPV".to_string(), format!("{category}/{pf}"));
+    meta.entry("CATEGORY".to_string())
+        .or_insert_with(|| category.to_string());
+    meta.entry("PF".to_string()).or_insert_with(|| pf.clone());
+    if let Some(repo) = meta.remove("repository") {
+        meta.entry("REPO".to_string()).or_insert(repo);
+    }
+    meta.insert("SIZE".to_string(), size.to_string());
+    meta.insert("PATH".to_string(), path_field);
+    meta.insert("_mtime_".to_string(), mtime.to_string());
+    Ok(Some(meta))
 }
 
 /// Real `os.lstat(...)[stat.ST_MTIME]` -- whole seconds, the same

@@ -214,12 +214,18 @@ PKGDIR-index locking, `FEATURES=buildpkg-live`, real `EbuildBinpkg`
 failure semantics (2026-09-04), and the `BUILD_ID` env-var export that
 unblocked both the archive's own embedded `build-info/BUILD_ID` file
 and `FEATURES=packdebug` (2026-09-05, real `EbuildBinpkg._start`'s own
-`if "binpkg-multi-instance" in features` condition, exactly) all
+`if "binpkg-multi-instance" in features` condition, exactly), and
+`FEATURES=binpkg-multi-instance` writing/scanning for **both** formats
+(2026-09-05 — real `bintree._allocate_filename_multi`'s `<cat>/<pn>/
+<pf>-<build_id>.<suffix>` subdir layout, `.xpak` extension for xpak: an
+xpak multi-instance file turned out byte-format-identical to a `.tbz2`,
+not the "bare metadata segment" the earlier deferral assumed; the fix
+also corrected gpkg multi-instance, which portuale had been writing one
+directory level too shallow) all
 shipped — see `what-this-proves.md`'s "Binary packages / fetch" entry
 for the cited detail. Still open: `.sig` verification/signing
-(`FEATURES=binpkg-signing` — no crypto crate, a real cut) and bare
-`.xpak` multi-instance (a genuinely different on-disk shape than
-gpkg's); `identical_binary`, a `BUILD_TIME`-vs-installed reinstall
+(`FEATURES=binpkg-signing` — no crypto crate, a real cut);
+`identical_binary`, a `BUILD_TIME`-vs-installed reinstall
 trigger outside `--rebuilt-binaries`, `useoldpkg` multi-instance, and
 the explicit `--binpkg-changed-deps=y|n`/`--use-ebuild-visibility`
 overrides (a ~30-to-90-call-site plumbing job for a rarely-used

@@ -954,15 +954,77 @@ def _read_gpkg_metadata(path):
     return out
 
 
+def _scan_binpkg_file(path, name, category, path_field, multi_instance):
+    """One $PKGDIR binpkg file -> its synthesized Packages-style entry, or
+    None if it isn't a binpkg / is a misnamed multi-instance file (real's
+    own invalid_name / name_split `continue`). `multi_instance` selects
+    the naming contract: True = <pf>-<build_id>.{xpak,gpkg.tar} with PF
+    from the archive and BUILD_ID from the filename; False =
+    <pf>.{tbz2,gpkg.tar}. A .xpak file is byte-format-identical to a
+    .tbz2, so `tbz2()` reads both. Mirrors binpkg.rs::scan_binpkg_file."""
+    from portage.xpak import tbz2
+
+    if name.endswith(".gpkg.tar"):
+        ext = ".gpkg.tar"
+        meta = _read_gpkg_metadata(path)
+    elif name.endswith((".xpak", ".tbz2")):
+        ext = ".xpak" if name.endswith(".xpak") else ".tbz2"
+        meta = {
+            (k.decode("utf-8", "replace") if isinstance(k, bytes) else k): (
+                v.decode("utf-8", "replace") if isinstance(v, bytes) else v
+            ).strip()
+            for k, v in tbz2(path).get_data().items()
+        }
+    else:
+        return None
+
+    stem = name[: -len(ext)]
+    embedded_pf = meta.get("PF") or None
+
+    if multi_instance:
+        # The archive's own embedded PF is the ground truth; the filename
+        # must be exactly <PF>-<build_id> (real _parse_build_id +
+        # `myfile != f"{mypf}-{build_id}.<ext>"`).
+        if not embedded_pf or not stem.startswith(embedded_pf + "-"):
+            return None
+        build_id = stem[len(embedded_pf) + 1 :]
+        if not build_id or not build_id.isdigit():
+            return None
+        meta["BUILD_ID"] = build_id
+        pf = embedded_pf
+    else:
+        # Real's `myfile != mypf + ".<ext>"` -> invalid_name: a
+        # category-level file whose stem disagrees with the archive's own
+        # PF is skipped.
+        if embedded_pf is not None and embedded_pf != stem:
+            return None
+        pf = stem
+
+    meta["CPV"] = f"{category}/{pf}"
+    meta.setdefault("CATEGORY", category)
+    meta.setdefault("PF", pf)
+    if "repository" in meta:
+        meta.setdefault("REPO", meta.pop("repository"))
+    try:
+        meta["SIZE"] = str(os.path.getsize(path))
+    except OSError:
+        pass
+    meta["PATH"] = path_field
+    return meta
+
+
 def _scan_pkgdir(pkgdir):
     """Real bintree._populate_local, narrowed -- see
-    portuale/src/binpkg.rs::scan_pkgdir. Walks <pkgdir>/<cat>/<pf>.{tbz2,
-    gpkg.tar} (one level deep) and synthesizes one Packages-style entry
-    per file from its own embedded metadata. CPV from the path, SIZE from
-    the file, REPO from the embedded `repository`. Bare .xpak
-    (multi-instance) skipped; a parse failure aborts the scan (surfaced
-    by run()). Mirrors the Rust scan."""
-    from portage.xpak import tbz2
+    portuale/src/binpkg.rs::populate_local_pkgdir. Walks
+    <pkgdir>/<cat>/<pf>.{tbz2,gpkg.tar} for a single instance and, under
+    real FEATURES=binpkg-multi-instance,
+    <pkgdir>/<cat>/<pn>/<pf>-<build_id>.{xpak,gpkg.tar} (real
+    _allocate_filename_multi's <cat>/<pn> subdir + -<build_id> suffix +
+    .xpak extension for xpak). Synthesizes one Packages-style entry per
+    file from its own embedded metadata: CPV from <cat>/<pf>, SIZE from
+    the file, REPO from the embedded `repository`. A parse failure aborts
+    the scan (surfaced by run()). Mirrors the Rust scan."""
+    from portage.versions import catpkgsplit
 
     out = []
     try:
@@ -975,30 +1037,24 @@ def _scan_pkgdir(pkgdir):
             continue
         for name in sorted(os.listdir(cat_path)):
             path = os.path.join(cat_path, name)
-            if name.endswith(".gpkg.tar"):
-                pf = name[: -len(".gpkg.tar")]
-                meta = _read_gpkg_metadata(path)
-            elif name.endswith(".tbz2"):
-                pf = name[: -len(".tbz2")]
-                meta = {
-                    (k.decode("utf-8", "replace") if isinstance(k, bytes) else k): (
-                        v.decode("utf-8", "replace") if isinstance(v, bytes) else v
-                    ).strip()
-                    for k, v in tbz2(path).get_data().items()
-                }
-            else:
+            if os.path.isdir(path):
+                # A <cat>/<pn> multi-instance package dir.
+                for mname in sorted(os.listdir(path)):
+                    mpath = os.path.join(path, mname)
+                    entry = _scan_binpkg_file(
+                        mpath, mname, category, f"{category}/{name}/{mname}", True
+                    )
+                    if entry is None:
+                        continue
+                    # Real's `tuple(catsplit(mydir)) == name_split[:2]`:
+                    # the subdir must be this package's own <pn>.
+                    split = catpkgsplit(entry["CPV"])
+                    if split is not None and split[1] == name:
+                        out.append(entry)
                 continue
-            meta["CPV"] = f"{category}/{pf}"
-            meta.setdefault("CATEGORY", category)
-            meta.setdefault("PF", pf)
-            if "repository" in meta:
-                meta.setdefault("REPO", meta.pop("repository"))
-            try:
-                meta["SIZE"] = str(os.path.getsize(path))
-            except OSError:
-                pass
-            meta["PATH"] = f"{category}/{name}"
-            out.append(meta)
+            entry = _scan_binpkg_file(path, name, category, f"{category}/{name}", False)
+            if entry is not None:
+                out.append(entry)
     out.sort(key=lambda e: e.get("CPV") or "")
     return out
 

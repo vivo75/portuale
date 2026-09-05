@@ -445,7 +445,8 @@ def test_emerge_buildpkgonly_multi_instance_gpkg_exports_a_real_build_id(
     )
     assert ">>> Building binary for dev-libs/packagepkg-1.0..." in result.stdout
 
-    gpkg = Path(env["PKGDIR"]) / "dev-libs/packagepkg-1.0-1.gpkg.tar"
+    # Real `bintree._allocate_filename_multi`: `<cat>/<pn>/<pf>-<build_id>.gpkg.tar`.
+    gpkg = Path(env["PKGDIR"]) / "dev-libs/packagepkg/packagepkg-1.0-1.gpkg.tar"
     assert gpkg.is_file()
 
     with tarfile.open(gpkg, "r") as container:
@@ -457,6 +458,7 @@ def test_emerge_buildpkgonly_multi_instance_gpkg_exports_a_real_build_id(
 
     packages = (Path(env["PKGDIR"]) / "Packages").read_text()
     assert "BUILD_ID: 1" in packages
+    assert "PATH: dev-libs/packagepkg/packagepkg-1.0-1.gpkg.tar" in packages
 
 
 def test_emerge_buildpkgonly_with_pretend_stays_dry_run(emerge_binary, tmp_path):

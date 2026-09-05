@@ -4424,6 +4424,55 @@ def test_pkgdir_scan_finds_both_indexed_and_loose_binpkgs(
     ]
 
 
+def test_pkgdir_scan_reads_a_multi_instance_xpak_from_the_cat_pn_subdir(
+    emerge_binary, emerge_pretend_python, tmp_path, fixtures_root
+):
+    """Real `FEATURES=binpkg-multi-instance` writes an xpak binpkg to
+    `<pkgdir>/<cat>/<pn>/<pf>-<build_id>.xpak` (real
+    `bintree._allocate_filename_multi`: a `<cat>/<pn>` subdir, a
+    `-<build_id>` suffix, `.xpak` -- not `.tbz2` -- extension). A `.xpak`
+    file is byte-format-identical to a `.tbz2` (real `bin/misc-functions.
+    sh` builds `[image][XPAK]` regardless of `BUILD_ID`), so the
+    no-`Packages`-index scan reads it with the same reader, takes the
+    `BUILD_ID` from the filename, and the resolver renders the real
+    `_append_build_id` `-<build_id>` version suffix. Both implementations
+    must agree.
+
+    The fixture is the genuine `packagepkg-1.0.tbz2` (built by portuale's
+    own `ebuild <file> package`, real `xpak.py`) placed under the
+    multi-instance layout -- its embedded `PF` is what validates the
+    `<pf>-<build_id>` filename."""
+    cfg = tmp_path / "cfg"
+    repo = tmp_path / "repo"
+    pkgdir = tmp_path / "binpkgs"
+    (cfg / "etc/portage").mkdir(parents=True)
+    (repo / "profiles").mkdir(parents=True)
+    (repo / "profiles/repo_name").write_text("main\n")
+    (repo / "profiles/make.defaults").write_text('ACCEPT_KEYWORDS="amd64"\n')
+    (cfg / "etc/portage/repos.conf").write_text(
+        f"[DEFAULT]\nmain-repo = main\n\n[main]\nlocation = {repo}\n"
+    )
+    (cfg / "etc/portage/make.conf").write_text(f'PKGDIR="{pkgdir}"\n')
+    (cfg / "etc/portage/make.profile").symlink_to(repo / "profiles")
+    dest = pkgdir / "dev-libs/packagepkg/packagepkg-1.0-3.xpak"
+    dest.parent.mkdir(parents=True)
+    shutil.copy(fixtures_root / "pkgdir/dev-libs/packagepkg-1.0.tbz2", dest)
+    assert not (pkgdir / "Packages").exists()
+    env = {"PORTAGE_CONFIGROOT": str(cfg), "ROOT": str(cfg)}
+
+    args = ["--pretend", "--usepkgonly", "dev-libs/packagepkg"]
+    rust = _run([str(emerge_binary)], args, env)
+    py = _run(emerge_pretend_python, args, env)
+    assert rust.returncode == 0, (rust.stdout, rust.stderr)
+    assert rust.stdout == py.stdout
+    assert rust.stderr == py.stderr
+    # Real `output.py::_append_build_id`: the `-3` from the filename.
+    assert rust.stdout.splitlines()[0].startswith(
+        "[binary  N     ] dev-libs/packagepkg-1.0-3 "
+    ), rust.stdout
+    assert 'no visible ebuild for dependency "dev-libs/samepkg"' in rust.stderr
+
+
 def test_getbinpkg_makes_a_remote_binhost_binary_eligible(
     emerge_binary, emerge_pretend_python, fixture_env
 ):
