@@ -16,6 +16,186 @@ pub(crate) struct IndexVouch<'a> {
     pub(crate) vouched: &'a mut [bool],
 }
 
+/// Walk `pkgdir` for binpkg *files* and synthesize one `Packages`-style
+/// entry per file from its own embedded metadata, fast-pathed against
+/// already-parsed `<pkgdir>/Packages` entries first: a basename-matched
+/// candidate whose `_mtime_`/`SIZE` still agree with the live file and
+/// which carries [`PKGINDEX_MINIMUM_KEYS`] is reused verbatim (its `PATH`
+/// refreshed in case the file moved). A basename-matched entry whose
+/// `_mtime_`/`SIZE` no longer agree is *still* reused verbatim under the
+/// default `trust_index = true`: the file is first touched at merge, by
+/// digest verification, so only `CPV` is required of the vouched stanza.
+/// Only a file no stanza vouches for is freshly parsed, and gets a fresh
+/// `_mtime_`/`SIZE` so a later call can hit the fast path.
+///
+/// `$PKGDIR` layout is `<pkgdir>/<category>/<pf>.{tbz2,gpkg.tar}` for a
+/// single instance, and -- under `FEATURES=binpkg-multi-instance` --
+/// `<pkgdir>/<category>/<pn>/<pf>-<build_id>.{xpak,gpkg.tar}`. A `.xpak`
+/// file is byte-format-identical to a `.tbz2`, so `read_xpak_metadata`
+/// reads it unchanged; the multi-instance `BUILD_ID` comes from the
+/// filename, validated against the archive's own embedded `PF`. Entries
+/// are `CPV`-sorted for a deterministic pool order.
+///
+/// A file the reader rejects is split by class: an `Invalid` file is
+/// reported as `!!! Invalid binary package: '<path>', <reason>` and
+/// skipped; a `Fatal` one stops the whole scan. Reader messages embed the
+/// path already, so the reported reason strips the leading `'<path>: '`.
+///
+/// A `<pkgdir>/Packages` stanza no file on disk answers to is re-injected
+/// verbatim under `trust_index = true`, so the resolver still selects the
+/// binary and the merge aborts instead of silently falling back to the
+/// ebuild. Only stanzas whose `PATH` names no live file inject, and only
+/// stanzas carrying a `CPV`.
+///
+/// `trust_index = false` (`FEATURES=-pkgdir-index-trusted`) is the reindex
+/// mode: only the `_mtime_`/`SIZE` fast path is trusted, a changed file is
+/// re-parsed from disk, and a stanza with no live file is dropped. Files
+/// no stanza covers are parsed from disk in both modes, so a
+/// `Packages`-less `$PKGDIR` still resolves. The index is never written
+/// back (recomputed each run as `Config::scanned_binpkgs`).
+///
+/// Cut: the old flat `<pkgdir>/All/<pf>.tbz2` layout is not walked. A
+/// *misnamed* multi-instance file is skipped.
+// Portage: `bintree._populate_local`.
+pub fn populate_local_pkgdir(
+    pkgdir: &Path,
+    trust_index: bool,
+) -> Result<Vec<HashMap<String, String>>, String> {
+    let existing = portage_repo::read_packages_index(pkgdir);
+    let mut by_basename: HashMap<&str, Vec<usize>> = HashMap::new();
+    for (i, e) in existing.iter().enumerate() {
+        if let Some(path) = e.get("PATH")
+            && let Some(basename) = Path::new(path).file_name().and_then(|n| n.to_str())
+        {
+            by_basename.entry(basename).or_default().push(i);
+        }
+    }
+    // Which `existing` stanzas the walk consumes; the rest are orphan
+    // candidates for the stale-index re-injection.
+    let mut vouched = vec![false; existing.len()];
+    let mut vouch = IndexVouch {
+        by_basename,
+        stanzas: &existing,
+        vouched: &mut vouched,
+    };
+
+    // `Invalid` files are reported and skipped; `Fatal` ones propagate.
+    // Reader messages already carry `'<path>: '`, stripped here to keep
+    // the one-path warning shape.
+    let record = |file: &Path, scanned: Result<Option<HashMap<String, String>>, BinpkgError>| {
+        match scanned {
+            Ok(entry) => Ok(entry),
+            Err(BinpkgError::Invalid(message)) => {
+                let reason = message
+                    .strip_prefix(&format!("{}: ", file.display()))
+                    .unwrap_or(&message);
+                eprintln!("!!! Invalid binary package: '{}', {reason}", file.display());
+                Ok(None)
+            }
+            Err(BinpkgError::Fatal(message)) => Err(message),
+        }
+    };
+
+    let mut out: Vec<HashMap<String, String>> = Vec::new();
+    let Ok(cat_paths) = portage_util::read_dir_paths(pkgdir) else {
+        return Ok(out);
+    };
+    for cat_path in cat_paths {
+        if !cat_path.is_dir() {
+            continue;
+        }
+        let Some(category) = cat_path.file_name().and_then(|n| n.to_str()) else {
+            continue;
+        };
+        for entry in read_dir_sorted(&cat_path)? {
+            let Some(name) = entry.file_name().and_then(|n| n.to_str()) else {
+                continue;
+            };
+            if entry.is_dir() {
+                // A `<cat>/<pn>` multi-instance package dir: its files are
+                // `<pf>-<build_id>.{xpak,gpkg.tar}`.
+                for mfile in read_dir_sorted(&entry)? {
+                    let Some(mname) = mfile.file_name().and_then(|n| n.to_str()) else {
+                        continue;
+                    };
+                    let path_field = format!("{category}/{name}/{mname}");
+                    let Some(e) = record(
+                        &mfile,
+                        scan_binpkg_file(ScanBinpkgFileArgs {
+                            file: &mfile,
+                            basename: mname,
+                            category,
+                            path_field,
+                            vouch: &mut vouch,
+                            multi_instance: true,
+                            trust_index,
+                        }),
+                    )?
+                    else {
+                        continue;
+                    };
+                    // The containing subdir must be this package's own `<pn>`
+                    // (from its now-known `CPV`).
+                    let pn_ok = e
+                        .get("CPV")
+                        .and_then(|cpv| portage_dep::parse_candidate(cpv))
+                        .is_some_and(|c| c.package == name);
+                    if pn_ok {
+                        out.push(e);
+                    }
+                }
+                continue;
+            }
+            let path_field = format!("{category}/{name}");
+            if let Some(e) = record(
+                &entry,
+                scan_binpkg_file(ScanBinpkgFileArgs {
+                    file: &entry,
+                    basename: name,
+                    category,
+                    path_field,
+                    vouch: &mut vouch,
+                    multi_instance: false,
+                    trust_index,
+                }),
+            )? {
+                out.push(e);
+            }
+        }
+    }
+    // Stale-index re-injection: every never-vouched stanza whose `PATH`
+    // names no live file is a removed binpkg still selected, so it rejoins
+    // the pool verbatim. Skipped entirely when `trust_index` is false.
+    if trust_index {
+        for (i, stanza) in existing.iter().enumerate() {
+            if vouch.vouched[i] {
+                continue;
+            }
+            let Some(cpv) = stanza.get("CPV").filter(|c| !c.is_empty()) else {
+                continue;
+            };
+            // A PATH-less stanza defaults to `<cpv>.tbz2`; a live file there
+            // was already consumed by the walk, so only the missing half
+            // injects.
+            let rel = stanza
+                .get("PATH")
+                .filter(|p| !p.is_empty())
+                .cloned()
+                .unwrap_or_else(|| format!("{cpv}.tbz2"));
+            if pkgdir.join(&rel).is_file() {
+                continue;
+            }
+            let mut entry = stanza.clone();
+            entry
+                .entry("PATH".to_string())
+                .or_insert_with(|| rel.clone());
+            out.push(entry);
+        }
+    }
+    out.sort_by(|a, b| a.get("CPV").cmp(&b.get("CPV")));
+    Ok(out)
+}
+
 /// The fast-path key set: the `_aux_cache_keys` plus `CPV`/`SIZE`, minus
 /// the digest keys (digests are never computed at scan, so a stanza
 /// missing only digests must still hit the fast path). `CPV`/`SIZE`/`SLOT`/

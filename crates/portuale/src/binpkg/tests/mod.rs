@@ -324,5 +324,6 @@ fn inner_entry<'a>(name: &'a str, data: &'a [u8]) -> InnerTestEntry<'a> {
 mod digest;
 mod extract;
 mod inner;
+mod local_index;
 mod manifest;
 mod metadata;

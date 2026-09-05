@@ -1981,6 +1981,184 @@ mod tests {
         assert_eq!(meta.get("CATEGORY").map(String::as_str), Some("dev-libs"));
     }
 
+    #[test]
+    fn real_package_with_gpkg_format_builds_a_real_gpkg_tar_this_pilots_reader_round_trips() {
+        let tmp = tempdir();
+        let root = tmp.join("root");
+        let portage_tmpdir = tmp.join("tmp");
+        let options = PackageOptions {
+            debug: false,
+            pkgdir: tmp.join("pkgdir"),
+            distdir: tmp.join("distdir"),
+            shell: ebuild_phases::ShellBackend::default(),
+            binpkg_format: "gpkg".to_string(),
+            // Pinned to "bzip2" (not the default "zstd") so this test doesn't
+            // depend on `zstd` being installed.
+            binpkg_compress: "bzip2".to_string(),
+            ..PackageOptions::default()
+        };
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::create_dir_all(&portage_tmpdir).unwrap();
+
+        let repo_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/repo");
+        let ebuild = repo_root.join("dev-libs/packagepkg/packagepkg-1.0.ebuild");
+
+        let status = run_package(RunPackageArgs {
+            ebuild_path: &ebuild,
+            root: &root,
+            portage_tmpdir: &portage_tmpdir,
+            options: &options,
+            build_env: &[],
+            use_flags: "",
+        })
+        .expect("run_package succeeds");
+        assert_eq!(status, 0);
+
+        // A genuine `.gpkg.tar`: an outer tar of the `gpkg-1` marker, the
+        // compressed `metadata.tar`/`image.tar`, and a `Manifest`.
+        let binpkg_path = options.pkgdir.join("dev-libs/packagepkg-1.0.gpkg.tar");
+        assert!(
+            binpkg_path.is_file(),
+            "{} should exist",
+            binpkg_path.display()
+        );
+
+        // The round trip: portuale's own gpkg reader reads back what the helper wrote.
+        let scalar = crate::binpkg::read_gpkg_metadata(&binpkg_path)
+            .expect("portuale's gpkg reader parses the real writer's output");
+        assert_eq!(scalar.get("SLOT").map(String::as_str), Some("0"));
+        assert_eq!(scalar.get("CATEGORY").map(String::as_str), Some("dev-libs"));
+        assert_eq!(scalar.get("PF").map(String::as_str), Some("packagepkg-1.0"));
+        // The dep strings went from `build-info` into `metadata.tar`.
+        assert_eq!(
+            scalar.get("RDEPEND").map(|s| s.trim()),
+            Some("dev-libs/samepkg")
+        );
+
+        // A `Packages` entry was written with the gpkg `PATH` field, so
+        // `--pretend --usepkg` resolves it the same as an xpak binpkg.
+        let packages = std::fs::read_to_string(options.pkgdir.join("Packages")).unwrap();
+        assert!(
+            packages.contains("PATH: dev-libs/packagepkg-1.0.gpkg.tar"),
+            "gpkg entry needs a PATH field: {packages:?}"
+        );
+        let index = portage_repo::BinaryIndex::from_pkgdir(&options.pkgdir);
+        let candidates = portage_repo::list_binary_candidates(&index, "dev-libs", "packagepkg");
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0].version, "1.0");
+
+        // The directory scan reads the file directly: the just-written entry's
+        // `_mtime_`/`SIZE` still agree with the file, so this hits the
+        // mtime-staleness fast path rather than re-parsing the archive.
+        let scanned =
+            crate::binpkg::populate_local_pkgdir(&options.pkgdir, true).expect("scan succeeds");
+        assert_eq!(scanned.len(), 1);
+        assert_eq!(
+            scanned[0].get("CPV").map(String::as_str),
+            Some("dev-libs/packagepkg-1.0")
+        );
+    }
+
+    #[test]
+    fn real_package_with_binpkg_multi_instance_writes_the_cat_pn_subdir_layout() {
+        let tmp = tempdir();
+        let root = tmp.join("root");
+        let portage_tmpdir = tmp.join("tmp");
+        let options = PackageOptions {
+            debug: false,
+            pkgdir: tmp.join("pkgdir"),
+            distdir: tmp.join("distdir"),
+            shell: ebuild_phases::ShellBackend::default(),
+            binpkg_format: "gpkg".to_string(),
+            binpkg_compress: "bzip2".to_string(),
+            binpkg_multi_instance: true,
+            ..PackageOptions::default()
+        };
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::create_dir_all(&portage_tmpdir).unwrap();
+
+        let repo_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/repo");
+        let ebuild = repo_root.join("dev-libs/packagepkg/packagepkg-1.0.ebuild");
+
+        // Build it twice -- multi-instance keeps both builds under distinct
+        // `BUILD_ID`s instead of overwriting the same bare filename.
+        let status = run_package(RunPackageArgs {
+            ebuild_path: &ebuild,
+            root: &root,
+            portage_tmpdir: &portage_tmpdir,
+            options: &options,
+            build_env: &[],
+            use_flags: "",
+        })
+        .expect("run_package succeeds");
+        assert_eq!(status, 0);
+        let status = run_package(RunPackageArgs {
+            ebuild_path: &ebuild,
+            root: &root,
+            portage_tmpdir: &portage_tmpdir,
+            options: &options,
+            build_env: &[],
+            use_flags: "",
+        })
+        .expect("run_package succeeds");
+        assert_eq!(status, 0);
+
+        // `<pkgdir>/<cat>/<pn>/<pf>-<build_id>.gpkg.tar`, not a bare name.
+        let first = options
+            .pkgdir
+            .join("dev-libs/packagepkg/packagepkg-1.0-1.gpkg.tar");
+        let second = options
+            .pkgdir
+            .join("dev-libs/packagepkg/packagepkg-1.0-2.gpkg.tar");
+        assert!(first.is_file(), "{} should exist", first.display());
+        assert!(second.is_file(), "{} should exist", second.display());
+        // Neither the bare single-instance name nor the old (wrong)
+        // one-level multi-instance name was written.
+        assert!(
+            !options
+                .pkgdir
+                .join("dev-libs/packagepkg-1.0.gpkg.tar")
+                .exists()
+        );
+        assert!(
+            !options
+                .pkgdir
+                .join("dev-libs/packagepkg-1.0-1.gpkg.tar")
+                .exists()
+        );
+
+        // Each archive's embedded `build-info/BUILD_ID` must match its own
+        // filename suffix.
+        let first_meta = crate::binpkg::read_gpkg_metadata(&first).expect("reads metadata");
+        assert_eq!(first_meta.get("BUILD_ID").map(String::as_str), Some("1"));
+        let second_meta = crate::binpkg::read_gpkg_metadata(&second).expect("reads metadata");
+        assert_eq!(second_meta.get("BUILD_ID").map(String::as_str), Some("2"));
+
+        // Both builds' entries survive: PATH-keyed dedup, not CPV-keyed.
+        let packages = std::fs::read_to_string(options.pkgdir.join("Packages")).unwrap();
+        assert!(packages.contains("PATH: dev-libs/packagepkg/packagepkg-1.0-1.gpkg.tar"));
+        assert!(packages.contains("PATH: dev-libs/packagepkg/packagepkg-1.0-2.gpkg.tar"));
+        assert!(packages.contains("BUILD_ID: 1"));
+        assert!(packages.contains("BUILD_ID: 2"));
+
+        // The scan walks the subdir, keeps each build's BUILD_ID, and CPV stays
+        // the bare `cat/pf` (downstream splits `PF` from `CPV`, like Portage).
+        let scanned =
+            crate::binpkg::populate_local_pkgdir(&options.pkgdir, true).expect("scan succeeds");
+        assert_eq!(scanned.len(), 2);
+        let build_ids: std::collections::HashSet<&str> = scanned
+            .iter()
+            .map(|e| e.get("BUILD_ID").map(String::as_str).unwrap_or(""))
+            .collect();
+        assert_eq!(build_ids, std::collections::HashSet::from(["1", "2"]));
+        for entry in &scanned {
+            assert_eq!(
+                entry.get("CPV").map(String::as_str),
+                Some("dev-libs/packagepkg-1.0")
+            );
+        }
+    }
+
     /// Expected values from Portage: after a package step `build-info` holds
     /// `BINPKGMD5` and, when the archive carries one, `BUILD_ID`.
     #[test]
@@ -2041,6 +2219,75 @@ mod tests {
                 "multi={multi}"
             );
         }
+    }
+
+    #[test]
+    fn real_multi_instance_xpak_uses_the_dot_xpak_extension_and_scans_back() {
+        // An xpak multi-instance binpkg is `<pkgdir>/<cat>/<pn>/<pf>-<id>.xpak`:
+        // the `.xpak` extension, byte-identical to a `.tbz2`. The index-less
+        // scan must walk the subdir and carry `BUILD_ID` back.
+        let tmp = tempdir();
+        let root = tmp.join("root");
+        let portage_tmpdir = tmp.join("tmp");
+        let options = PackageOptions {
+            debug: false,
+            pkgdir: tmp.join("pkgdir"),
+            distdir: tmp.join("distdir"),
+            shell: ebuild_phases::ShellBackend::default(),
+            binpkg_format: "xpak".to_string(),
+            binpkg_multi_instance: true,
+            ..PackageOptions::default()
+        };
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::create_dir_all(&portage_tmpdir).unwrap();
+
+        let repo_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/repo");
+        let ebuild = repo_root.join("dev-libs/packagepkg/packagepkg-1.0.ebuild");
+
+        let status = run_package(RunPackageArgs {
+            ebuild_path: &ebuild,
+            root: &root,
+            portage_tmpdir: &portage_tmpdir,
+            options: &options,
+            build_env: &[],
+            use_flags: "",
+        })
+        .expect("run_package succeeds");
+        assert_eq!(status, 0);
+
+        let xpak = options
+            .pkgdir
+            .join("dev-libs/packagepkg/packagepkg-1.0-1.xpak");
+        assert!(xpak.is_file(), "{} should exist", xpak.display());
+        // Not a `.tbz2`, and not the wrong one-level name.
+        assert!(!options.pkgdir.join("dev-libs/packagepkg-1.0.tbz2").exists());
+        assert!(
+            !options
+                .pkgdir
+                .join("dev-libs/packagepkg/packagepkg-1.0-1.tbz2")
+                .exists()
+        );
+
+        // The `.xpak` file reads with the same reader as a `.tbz2`, and its
+        // embedded `build-info/BUILD_ID` matches the filename suffix.
+        let meta = crate::binpkg::read_xpak_metadata(&xpak).expect("reads xpak metadata");
+        assert_eq!(meta.get("PF").map(String::as_str), Some("packagepkg-1.0"));
+        assert_eq!(meta.get("BUILD_ID").map(String::as_str), Some("1"));
+
+        // Drop the just-written index so the scan must parse the archive.
+        let _ = std::fs::remove_file(options.pkgdir.join("Packages"));
+        let scanned =
+            crate::binpkg::populate_local_pkgdir(&options.pkgdir, true).expect("scan succeeds");
+        assert_eq!(scanned.len(), 1);
+        assert_eq!(
+            scanned[0].get("CPV").map(String::as_str),
+            Some("dev-libs/packagepkg-1.0")
+        );
+        assert_eq!(scanned[0].get("BUILD_ID").map(String::as_str), Some("1"));
+        assert_eq!(
+            scanned[0].get("PATH").map(String::as_str),
+            Some("dev-libs/packagepkg/packagepkg-1.0-1.xpak")
+        );
     }
 
     #[test]
