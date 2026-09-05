@@ -13314,4 +13314,444 @@ confirmed a non-issue for portuale's own architecture, and documented
 as such rather than either building a needless workaround or leaving
 the question unresolved.
 
+### Resolver backlog -- five points, three shapes of "done" (2026-09-05)
+
+Asked to implement "A. Resolver" (`docs/scope-backlog.md`), excluding
+the already-documented `--root-deps` non-goal, one commit per point.
+Unlike the sections closed the prior day (binary packages, sandbox,
+scheduler -- five or six genuinely tractable points apiece), this
+section split three ways: two points were real, bounded, dual-language
+features; one point needed a narrow fixture gap closed in already-
+correct code; two points, on investigation, turned out to be the same
+kind of deliberately-deferred architectural gap the section's own
+"Merge-list order" entry had already established a precedent for.
+
+**Bare command-line names, remaining shape.** Real `ambiguous_package_
+name`'s one call site (`depgraph.py:5318`) only takes the terse `!!!
+... one of the following ...` + sorted-list form under `--quiet`.
+Without it, real builds a `search` seeded via `addCP()` per candidate
+(so `_iter_search()`'s `"Searching...\n\n"` line never fires --
+`_results_specified` short-circuits it) and calls `search.output()`
+with `verbose=True` unconditionally in this branch: a `[ Results for
+search key : ... ]` header, one `* cat/pkg` block per match with
+Latest-version/installed-status/Homepage/Description/License, a `[
+Applications found : N ]` footer, then the `!!! ... one of the above
+...` trailer (different wording from the `--quiet` form, no leading
+blank line). Portuale previously emitted the terse form regardless of
+`--quiet`. Turned out to be far smaller than it looked: portuale's own
+pre-existing `emerge --search` implementation already had
+`search_best_candidate`/`search_candidate_visible` built and tested,
+so this was mostly extraction into a new small render function rather
+than new machinery. Both languages, full contract coverage including
+the previously-untested `--quiet` path.
+
+**`package.provided` depclean corner.** Real `_calc_depclean`/`_calc_
+prune` run the *full* depgraph resolver, which intercepts `package.
+provided` before ever creating a graph node: a `@world`/`@system` seed
+atom it covers never becomes a root (`_resolve`'s per-arg loop,
+`depgraph.py:5497-5503`, run *before* `_add_pkg`/`_select_package`),
+and a dependency atom it covers never gets an edge to a literal
+installed provider (`dep_check.py:1052` area) -- both matching the
+real `-pc` advisory's own "will be removed by depclean, even if they
+are part of the world set" wording verbatim. `portage-repo`'s
+`depclean_cleanlist`/`prune_cleanlist` are a separate, simplified BFS
+that never consulted `package.provided` at all, so a genuinely-
+installed provided CPV that was also a world member (or reachable only
+through a dependency edge `package.provided` also covered) was wrongly
+kept, and `unresolved_runtime_deps` could spuriously trip the "not
+being installed" safety halt for a dependency satisfied only via
+`package.provided` (no literal vdb entry). Fixed with the same
+`match_from_list`-against-`config.package_provided` check the main
+resolver's own `pprovided_refs` logic already performs, threaded
+through both cleanlist builders' root-seeding and dependency-walk
+loops plus the unresolved-deps check. New coverage at both layers: two
+`portage-repo` unit tests (isolated root/dependency interception, and
+the unresolved-halt suppression) and two contract tests reusing the
+existing `fixtures/repo/profiles/default/package.provided` fixture
+through the real CLI.
+
+**Circular-dep's grandparent-atom conflict path.** Not a missing
+feature -- `grandparent_use_conflict` (ported during the 2026-09-03
+find-suggestions work) was already correct, just never exercised by
+any fixture. New three-package cycle (`gpcyclea`/`gpcycleb`/`gpcyclec`,
+same USE-gated shape as the existing `usecyclea`/`usecycleb` pair, plus
+a "grandparent" that build-depends on `gpcyclea[x]` with a *hard*
+use-dep) drives the disqualification branch: the otherwise-viable
+"disable x" fix would violate the grandparent's own hard requirement,
+so real -- and, confirmed byte-identical, portuale -- falls back to the
+generic advisory instead of a specific `Change USE:` suggestion. No
+logic changed; only the gap in test coverage closed.
+
+**The two deferrals, and why they earned that treatment rather than an
+attempt.** "Slot-operator rebuild v1 cuts" turned out to be one
+architectural gap wearing four listed faces: real's slot-operator
+machinery is a *reconciliation* (`_slot_operator_update_probe`/`_
+backtrack`/`_check_reverse_dependencies`/`_unsatisfied_probe`/`_
+unsatisfied_backtrack`/`_trigger_reinstalls`, `depgraph.py:2400-3200`)
+that tentatively schedules a rebuild and can *undo* it later; `--
+changed-slot`'s only contact with that family is a `continue` inside
+the undo path (`depgraph.py:3898-3899`) that skips undoing when the
+package's own `SLOT` is independently stale. `slot_operator_rebuild_
+entries`'s fixpoint has no undo path at all -- it only ever adds to
+`scheduled` -- so "single-pass" and "no `--changed-slot` interaction"
+are the same missing piece, not two, and building it is the same shape
+of investment the "Merge-list order" full-tree-walk deferral already
+declined: real risk to a well-tested fixpoint, no concrete fixture
+demanding it. The remaining backtracking cluster (the slot-collision
+notice's `pkg_use_display`/`use`-`soname` reason keys/colorization/
+`need_rebuild` trailer, and circular-dep's `--tree` re-display / full
+elementary-cycle enumeration) turned out the same way on inspection --
+each needs new plumbing or a genuinely different graph representation,
+none of it changes an actual resolver *decision*, only how thoroughly
+a diagnostic explains one. One finding from that pass is worth keeping
+regardless of whether the feature ever gets built: real's own
+`highlight_violations` (`slot_collision.py:516-610`) colorizes an atom
+string *before* measuring where to put the `^` marker line under it,
+so the marker silently drifts out of alignment with the visible text
+whenever `--verbose-conflicts --color y` actually colors something --
+a genuine upstream bug, not a design choice a from-scratch port would
+naturally reproduce without being told to look for it.
+
+Both deferrals were investigated fresh (not just re-asserted) against
+current real source, with method-name and line-range citations added
+to `scope-backlog.md` so a future implementer inherits the trail
+instead of re-deriving it. Full contract suite green throughout (933 ->
+936 across the section), `portuale` and `portage-repo` unit suites
+green, `cargo fmt`/`clippy` clean at every commit.
+
+### Whole emerge actions backlog -- three points, one exclusion (2026-09-05)
+
+Asked to implement "F. Whole `emerge` actions" (`docs/scope-backlog.md`),
+excluding permanent non-goals. Of the five listed items, `--metadata`
+(an architectural no-op -- portuale reads `metadata/md5-cache` directly
+and models no `depcachedir` to transfer into) and `--sync` (points at
+`emaint sync`, GLSA/`@security` out of scope) are exactly that: nothing
+to build, nothing to defer. The other three each got real work.
+
+**`--regen`.** Two of its three documented cuts were genuine
+correctness gaps, not performance-only: real `MetadataRegen._cleanup`'s
+"global cleanse" (`MetadataRegen.py:142-189`) deletes a `metadata/
+md5-cache/<cat>/<pf>` entry whose ebuild has since vanished, which
+portuale's `--regen` never did (a removed ebuild's stale cache entry
+sat there forever); and real `eclass_cache.cache.update_eclasses`
+(`eclass_cache.py:108-148`) walks a repo's own `masters` chain, not
+just that repo's own `eclass/` dir, so an ebuild inheriting an eclass
+that only exists in a master got silently no `_eclasses_` field at all.
+Both fixed -- stale-entry pruning tracks every `(category, pf)` found
+per repo during the main loop and prunes anything else afterward; the
+masters-chain lookup searches `masters`-then-self, last location that
+has the file wins (a documented, behavior-preserving simplification of
+real's mtime-equality tie-break). `--jobs` threading stayed an
+explicit, *not-implemented* performance-only cut: the cache content a
+threaded run would write is byte-identical to a sequential one, so
+there was no correctness gap to close. Rust-only (execution code, like
+the binary-packages/sandbox/scheduler sections) -- 2 new subprocess
+tests in `test_portuale.py`.
+
+**`--check-news`.** Real `NewsManager.updateItems` (`news.py:112-190`)
+does two things `--check-news` only ever read: an item not already in
+`.skip` gets (re-)evaluated, and once valid+relevant it's added to
+*both* `.unread` and `.skip`, permanently; and real's printed count is
+`getUnreadItems`'s own `len(.unread)` (`news.py:234`), **not a live
+recompute** -- an item, once counted, stays counted on every future run
+until something actually removes it from `.unread`. The only thing real
+ever does that is the separate `eselect news read` tool; portuale's own
+`.read` file (a pre-existing, portuale-only stand-in, since real has no
+such file) now models that tool's effect, applied lazily on the next
+`--check-news` run. Wiring in the real write-back surfaced a genuine,
+separate correctness hazard in the *test harness*, not the feature: two
+existing contract tests ran Rust then Python sequentially against the
+same shared, git-tracked `fixtures/` `ROOT` -- once `--check-news`
+started writing files for real, Rust's own write-back silently leaked
+into what Python read back (wrong counts both ways) *and* left stray
+`.unread`/`.skip` files sitting in the committed fixtures tree after
+every run. Caught via a failing assertion, root-caused, and fixed with
+a `_check_news_isolated_root` helper (symlinks in the fixtures' own
+read-only vdb, keeps `var/lib` a fresh per-invocation directory) used
+with a *distinct* root per language -- the same principle a resolver
+contract test already follows (one side's execution must never mutate
+what the other side reads), just newly relevant here because this was
+the suite's first real *write* action compared side-by-side. Verified
+clean before committing (`git status` on `fixtures/` after every run).
+
+**`--info <atom>`.** The `( )` force/mask wrap and per-flag ANSI colour
+on the `USE=` line (real `pkg_use_display`'s `UseFlagDisplay.__str__`)
+shipped by reusing infrastructure the ebuild-candidate side of the same
+function already had: `forced_or_masked_flags` (previously only fed
+from a tree candidate, now also from the vdb's own recorded `IUSE`/
+`KEYWORDS`) and `colorize_use_token` (previously only used by the
+merge-list `USE="…"` column). The remaining two items -- the
+`(non-installed binary)` case and actually running `pkg_info()` -- were
+investigated here and shipped a few hours later; see the next section.
+
+Full contract suite green throughout (936 -> 938 across the section);
+`portuale` (342) and `portage-repo` (286 -> 290) unit suites green;
+`cargo fmt`/`clippy` clean at every commit.
+
+### `--info` (non-installed binary) + `pkg_info()` execution (2026-09-05)
+
+The two items the section above left "investigated, recorded, not
+built". On a closer look the "one gap wearing two faces" framing held,
+but each face was tractable:
+
+**`(non-installed binary)` selection.** Real `action_info`'s
+`(bindb, "binary")` search half (`actions.py:1876-1900`): reached only
+under `--usepkg`/`--usepkgonly`, only when the atom has no installed vdb
+match and no visible ebuild that defines `pkg_info()`. The highest-
+version local `$PKGDIR` binary whose EAPI is 4+ **and** whose
+`DEFINED_PHASES` names `info` is chosen (`resolve_info_binary_candidate`,
+reusing `list_binary_candidates` / `read_binary_metadata` /
+`candidate_iuse_and_use` / `forced_or_masked_flags` /
+`build_use_expand_display` -- all already there for the resolver's own
+binary path), and rendered `<cpv>::<repo> (non-installed binary) was
+built with the following:` + the binary's own baked `USE=` line. The
+"needs `--usepkg`/the scanned-binpkg index set up before `run_info`'s
+dispatch point" obstacle was real but small: `--info` now runs its own
+`populate_local_pkgdir` scan in its dispatch block (the ordinary
+`--usepkg` resolve path's identical scan happens further down the CLI
+flow), rather than reordering the whole standalone-action dispatch.
+
+**Running `pkg_info()`.** For every selected package that defines the
+phase -- the ebuild and binary halves always (they were *selected*
+because they define it), an installed match only when its vdb's own
+`DEFINED_PHASES` names `info` (new `InstalledInfo::defines_pkg_info`) --
+portuale prints the deterministic `>>> Attempting to run pkg_info() for
+'<cpv>'` and then actually runs the phase: `run_single_phase` for an
+ebuild candidate, `run_vdb_saved_env_phase` (the `--config` path) for an
+installed match, and for a binary, `extract_binpkg` + lay the embedded
+`<pf>.ebuild` out as `<cat>/<pn>/<pf>.ebuild` (so the phase driver
+derives `CATEGORY`/`PN` from the path, the way real
+`doebuild(tree="bintree")` gets them from the binpkg metadata) + a
+`run_single_phase` on it. The phase's own output is whatever the ebuild
+`einfo`s -- it lands on stderr, so the stdout contract is untouched.
+
+The test-architecture split is exactly `--config`/`--regen`'s: the
+Python reference gained the full binary selection + `(non-installed
+binary)` render + the `>>> Attempting` line, but **stops there** (no
+phase machinery). The deterministic stdout stays `rust == py` and is
+contract-tested (the existing exact-match test updated for the new
+trailing line, plus a new `--usepkg` binary test with a real committed
+`.tbz2` fixture built via `portage.xpak` -- `dev-libs/binaryinfopkg`,
+binary-only, `pkg_info()` as an `einfo`). The phase's real execution
+(ebuild + binary) is covered Rust-only in `test_portuale.py` with a
+writable `PORTAGE_TMPDIR`.
+
+Contract suite 938 -> 940; `portuale` 343, `portage-repo` 290 -> 292;
+`cargo fmt`/`clippy` clean.
+
+**Empty-`DEFINED_PHASES` falsy quirk (2026-09-06).** Real `action_info`
+gates the phase step on `if metadata["DEFINED_PHASES"]: if "info" not in
+....split(): continue` (`actions.py:2350`). For an installed match with
+**no `DEFINED_PHASES` file at all**, `vardb.aux_get` returns `""` ->
+falsy -> the `continue` is skipped -> `>>> Attempting to run pkg_info()`
+*does* fire. `"-"` (the modern "no phases" marker) is truthy and doesn't
+name `info`, so it does not. `resolve_installed_info`'s `defines_pkg_info`
+is now `DEFINED_PHASES.trim().is_empty() || names "info"` (dual-language).
+The existing `dev-libs/infoinstpkg` test (its vdb has no `DEFINED_PHASES`
+file) flipped to expect the `>>> Attempting` trailer; new
+`dev-libs/infodashphases` fixture (`DEFINED_PHASES="-"`) +
+`test_info_dash_defined_phases_does_not_attempt_pkg_info` pin the
+counter-case. Remaining `--info` cut: the installed block reads the
+individual vdb `CHOST`/`CFLAGS`/… files rather than `_aux_env_search`'s
+`environment.bz2` scan — identical for a real portage-written vdb entry,
+divergent only for one missing `environment.bz2`, and `portage-repo` is
+deliberately subprocess-free (no bzip2).
+
+### Slot-collision notice: real `pkg_use_display` for non-default USE (2026-09-05)
+
+The slice-4 / 2026-09-03 slot-collision notice appended a hardcoded
+`USE=""` to every instance header and every shown parent line -- correct
+only because every slot-conflict fixture happened to have empty `IUSE`.
+Real `get_conflict()` appends `str(pkg_use_display(pkg, myopts,
+modified_use=self.depgraph._pkg_use_enabled(pkg)))`
+(`_emerge/UseFlagDisplay.py:55`) -- the full `USE="…"` string (+ one
+`VAR="…"` per non-hidden `USE_EXPAND` group), every `IUSE` flag,
+enabled-first, `( )`-wrapped for profile force/mask -- for the
+scheduled-for-merge instance *and* for each `Package` parent that pulled
+it (a non-`Package` `(Argument)` parent still renders a bare `""`).
+
+`SlotConflictInstance` gained `use_display: Vec<(String, String)>` and
+its parents became `SlotConflictParent { parent_cpv, atom, use_display }`
+(was a bare `(String, String)`). `build_slot_conflict` computes each via
+a new `pkg_use_display_for(repos, config, cat, pkg, version)` --
+`list_candidates` → highest-`repo_priority` candidate at that version →
+`candidate_iuse_and_use` → `build_use_expand_display(disp, config, None,
+forced, all_flags=true, {})`, exactly the `--info` block's own pattern.
+A version gone from every repo → empty display → the line still renders
+`USE=""` (matching real's unconditional `var_order.insert(0, "USE")`).
+The `^` marker line still spans the full (now longer) `cur_line`. The
+flag-token colorization real does via `UseFlagDisplay.__str__`'s
+`red`/`blue` stays a documented cut -- it is a no-op under `emerge -p`
+without `--color=y` anyway (the remaining Part 2.A cuts: `use`/`soname`
+reason keys, that colorization, the `need_rebuild` trailer).
+
+Mirrored in `emerge_pretend_reference.py` (`_pkg_use_display_for` /
+`_render_pkg_use_display`); `--json` `slot_conflicts[]` instances and
+parents gain a `"use"` string. New fixture family `dev-libs/scusetarget`
+(`IUSE="+scuon scuoff"`, two versions) / `scusenewpin` (`IUSE="+scupin"`,
+`>=scusetarget-2.0`) / `scuseoldpin` (no IUSE, `<scusetarget-2.0`) /
+`scuseparent` -- an unsolvable conflict whose notice now shows
+`USE="scuon -scuoff"` on both instances, `USE="scupin"` on one parent
+line and `USE=""` on the other. 2 param CASES + 1 pinned-text contract
+test + 1 `portage-repo` unit test; the existing empty-IUSE slot-conflict
+tests are unchanged (still `USE=""`).
+
+Contract suite 940 -> 943; `portuale` 343, `portage-repo` 292 -> 293;
+`cargo fmt`/`clippy` clean.
+
+### os.lchown / merge ownership preservation (2026-09-05)
+
+Asked to implement `os.lchown` (`docs/scope-backlog.md`'s "H. Misc /
+cosmetic"), previously left cut on the assumption that it needs root
+and portuale's dev/test context never has it. The premise changed: this
+container has passwordless `sudo`, so the feature could actually be
+exercised as real root rather than left as an unverifiable "would only
+no-op" guess.
+
+Real `movefile()` (`movefile.py:255`, `_apply_stat`) `lchown`/`chown`s a
+merged symlink or regular file to the *source*'s own recorded uid/gid
+from `${D}`; real `mergeme()` (`vartree.py:5865-5867`) does the same
+chown+chmod for a directory it creates for the first time, but --
+critically -- never touches an already-existing directory's ownership
+(`vartree.py:5808-5810`'s "keep it" branch). Missing that last detail
+would have been a real bug: an already-installed shared directory like
+`/usr/lib` must not have its ownership clobbered by every subsequent
+package that also installs into it. Implemented via `lchown_or_chown`
+(raw `libc::lchown`/`libc::chown`, the same FFI pattern
+`create_special_node`'s pre-existing `mkfifo`/`mknod` calls already
+established), wired into all three `merge_tree` branches with that
+existing-directory exception preserved.
+
+Deliberately unconditional -- not gated on "am I root" -- matching
+real's own call site, which has no such check either: it succeeds as
+root, and also succeeds unprivileged whenever the source is already
+owned by the calling process (the overwhelmingly common single-user
+case, which is exactly why every pre-existing `merge_tree` test kept
+passing with zero changes needed), and fails with the same real `EPERM`
+a real non-root portage installation would hit otherwise -- propagated
+as an ordinary merge failure, never silently swallowed.
+
+Verification went further than a written-but-unexercised test: the new
+`merge_tree_preserves_ownership_from_the_source_when_root` test (gated
+on `geteuid() == 0`, skipping cleanly rather than failing when not
+root) was run for real via `sudo` directly against the compiled test
+binary, confirming actual cross-uid ownership preservation for a file,
+a symlink, and a freshly created directory, plus that a *second* merge
+with a different source owner does not reclaim an already-installed
+directory's ownership. Beyond that one test, the **entire** `portuale`
+unit suite (343) and `test_portuale.py` (73 passed, the same 5
+pre-existing TTY-only `--ask` failures) were run as actual root end to
+end -- confirming the whole real merge/unmerge/config path works
+correctly with live chown calls, not just the isolated new test. The
+one test that newly fails under root
+(`create_special_node_reports_a_permission_failure_cleanly_rather_than_
+panicking`) does so for the *expected*, unrelated reason: it
+specifically asserts `mknod` fails for a non-root caller, which stops
+being true once actually running as root -- not a regression, and left
+as a non-root-only test by design, the mirror image of the new
+ownership test's own root-only design.
+
+Rust-only (real filesystem mutation, no Python mirror -- same
+"execution code, not resolver" reasoning as `--regen`/`--config`/the
+sandbox and scheduler sections). Full contract suite (938) and
+`portage-repo` (290) unaffected and green; `cargo fmt`/`clippy` clean.
+
+### splitdebug/packdebug's missing link: BUILD_ID reaching the phase (2026-09-05)
+
+Asked to investigate `docs/scope-backlog.md`'s "E. Binary packages /
+fetch" `splitdebug`/`packdebug` item, previously scoped as "needs its
+own investigation pass" rather than attempted. The investigation turned
+out to land on a one-line fix once traced to its real source.
+
+Real `EbuildBinpkg._start` (`EbuildBinpkg.py:47-48`) exports `BUILD_ID`
+into the `package` phase's own settings with one exact condition: `if
+"binpkg-multi-instance" in self.settings.features`. Portuale's
+`invoke_dyn_package` (`ebuild_package.rs`) already *computed* a
+`build_id` under precisely that same condition (gpkg format + multi-
+instance -- xpak multi-instance stays a separate, already-documented
+non-goal, so `BUILD_ID` never needing to reach it either is consistent,
+not a new gap) -- it just never passed that value into the real,
+unmodified `__dyn_package` bash function's own environment. Real bash's
+own `if [[ ! -z "${BUILD_ID}" ]]` gate (`bin/misc-functions.sh:558`)
+was therefore always false, silently skipping two things every time,
+regardless of what was requested:
+
+1. Writing a real `build-info/BUILD_ID` file into the archive itself.
+   Only the `$PKGDIR/Packages` *index* entry ever carried the value --
+   `binpkg::populate_local_pkgdir`'s own filename-inference fallback
+   (comparing an archive's embedded `PF` against its filename suffix)
+   was quietly doing the archive's own job instead, a working but
+   not-quite-real substitute.
+2. `FEATURES=packdebug`'s `__generate_packdebug` (`bin/misc-functions.
+   sh:507-534`, needs `BUILD_ID` for the debug tarball's own filename)
+   never ran at all, independent of whether the feature was even
+   requested -- the backlog's "needs BUILD_ID" framing was exactly
+   right, just narrower than "needs an investigation pass" suggested.
+
+Fixed with a single `extra_env.push(("BUILD_ID", ...))` in
+`invoke_dyn_package`, gated on the exact same `Option<u64>` the caller
+already had in hand. Verified for real rather than assumed: a manual
+`ebuild <file> package` run with `BINPKG_FORMAT=gpkg FEATURES=
+binpkg-multi-instance`, followed by extracting the produced archive's
+own `metadata.tar.zst` by hand, showed a genuine `metadata/BUILD_ID`
+file with the correct value -- confirmed *before* writing the
+corresponding test, not after. A second manual run adding
+`FEATURES=packdebug splitdebug` on top confirmed the build still
+succeeds cleanly (`__generate_packdebug`'s own early-return guard
+correctly no-ops for a fixture with no compiled binaries to strip --
+real, unmodified bash, exercised, not touched).
+
+`splitdebug`/`packdebug`'s *other* half -- `bin/estrip` actually
+populating `/usr/lib/debug` when `FEATURES=splitdebug`/`installsources`
+is set during `install` -- already shipped in the 2026-09-04 sandbox/
+build-isolation pass (the real `FEATURES` passthrough to the phase env).
+This closes the remaining missing link between the two: the archive
+step can now actually see a `BUILD_ID` to build a debug tarball's
+filename from, whenever one exists to pack.
+
+New coverage: a `portage-repo`-side assertion added to the existing
+multi-instance unit test (reads each archive's own embedded `BUILD_ID`
+via `read_gpkg_metadata`, not just the `Packages` index -- the exact
+distinction this fix closes), plus a new `test_portuale.py` subprocess
+test building with `packdebug`/`splitdebug` also enabled and extracting
+`metadata/BUILD_ID` from the real produced archive's own nested tar.
+
+Full contract suite (938, unaffected) green; `portuale` (343) and
+`portage-repo` (290) unit suites green; `cargo fmt`/`clippy` clean.
+
+### check-news: full atom matching for Display-If-Installed (2026-09-05)
+
+`docs/scope-backlog.md`'s "F. Whole `emerge` actions" `--check-news`
+item -- "only bare `cat/pkg` `Display-If-Installed` atoms are matched
+(not `>=cat/pkg-1` etc.)".
+
+Real `DisplayInstalledRestriction.checkRestriction` (`news.py:444`) is
+one line: `kwargs["vardb"].match(self.atom)` -- a full atom match,
+version operators and slot/sub-slot and all. `news_item_relevant` /
+`_news_item_relevant` were doing `cat, pkg = atom.split("/")` then
+asking whether that `cat/pkg` had *any* installed version -- so
+`>=dev-libs/foo-1` split into a bogus category `>=dev-libs` that never
+matched a vdb directory, and `dev-libs/foo:2` into a bogus package
+`foo:2` the same way. The versioned/slotted case wasn't wrong-answered
+so much as silently unreachable.
+
+Fixed by `parse_atom` + one `cat/pkg-ver:slot/sub_slot` candidate per
+installed version (`installed_candidates`) + `match_from_list` -- the
+exact same pattern `depclean_cleanlist`'s own vdb atom matching already
+uses, both languages. New fixture items exercise a `>=` atom that
+matches the installed 1.0 and a `>` atom that (correctly) doesn't,
+proving the operator is evaluated rather than dropped.
+
+The remaining cuts are all narrow and all consistent with existing
+project stances: a `[use]`-dep in the atom isn't post-filtered (the
+`match_from_list` scope every portuale caller shares), a malformed atom
+is treated as an unsatisfied restriction rather than making the whole
+item invalid (real `DisplayInstalledRestriction.isValid`), and the
+`News-Item-Format` 1.x-vs-2.x EAPI gate on atom validity isn't applied
+-- `portage_dep` has no EAPI parametrization by design (the Part 3
+non-goal), so there's nothing to gate against.
+
+Full contract suite (939) green; `portuale` (343) and `portage-repo`
+(290) unaffected; `cargo fmt`/`clippy` clean.
+
 # # required by dev-libs/useflagpkg[-foo] (argument)

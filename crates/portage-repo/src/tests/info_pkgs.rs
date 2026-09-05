@@ -110,3 +110,54 @@ fn resolve_installed_info_wraps_a_globally_forced_flag() {
         )]
     );
 }
+
+#[test]
+fn resolve_installed_info_flags_a_vdb_recorded_pkg_info_phase() {
+    let root = fixtures_root();
+    // No DEFINED_PHASES file at all is falsy, so `pkg_info()` IS attempted.
+    let plain = resolve_installed_info(&root, "dev-libs/infoinstpkg", &test_config());
+    assert_eq!(plain.len(), 1);
+    assert!(plain[0].defines_pkg_info);
+    assert_eq!(plain[0].category, "dev-libs");
+    assert_eq!(plain[0].package, "infoinstpkg");
+    assert_eq!(plain[0].version, "1.0");
+
+    // `DEFINED_PHASES="-"` is truthy but names no `info` phase -> NOT attempted.
+    let dash = resolve_installed_info(&root, "dev-libs/infodashphases", &test_config());
+    assert_eq!(dash.len(), 1);
+    assert!(!dash[0].defines_pkg_info);
+}
+
+#[test]
+fn resolve_info_binary_candidate_picks_a_pkg_info_defining_local_binpkg() {
+    // A binary-only pkg with DEFINED_PHASES=info is a `--info` candidate.
+    let config = portage_profile::Config {
+        pkgdir: fixtures_root()
+            .join("pkgdir")
+            .to_string_lossy()
+            .into_owned(),
+        ..test_config()
+    };
+    let local_binpkg = build_local_binpkg_index(&config);
+    let got = resolve_info_binary_candidate(&config, "dev-libs/binaryinfopkg", &local_binpkg)
+        .expect("no error")
+        .expect("a candidate");
+    assert_eq!(got.cpv, "dev-libs/binaryinfopkg-1.0");
+    assert_eq!(got.repo_name, "testrepo");
+    assert_eq!(got.pf, "binaryinfopkg-1.0");
+    assert_eq!(
+        got.use_expand_display,
+        vec![("USE".to_string(), "alpha -beta".to_string())]
+    );
+
+    // A binary with DEFINED_PHASES="-" is not a pkg_info() candidate.
+    assert!(
+        resolve_info_binary_candidate(&config, "dev-libs/binaryonlypkg", &local_binpkg)
+            .expect("no error")
+            .is_none()
+    );
+    assert!(has_local_binary_candidate(
+        &local_binpkg,
+        "dev-libs/binaryonlypkg"
+    ));
+}
