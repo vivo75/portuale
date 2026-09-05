@@ -5510,11 +5510,43 @@ fn build_config_env(config: &portage_profile::Config) -> Vec<(String, String)> {
 /// of that is reproduced. Narrower than real for the installed block:
 /// the `CHOST`/`CFLAGS`/… values come only from the individual vdb
 /// `build-info` files (real `_aux_env_search` falls back to the
-/// package's `environment.bz2`), and the `USE` line skips the `( )`
-/// force/mask wrapping real `pkg_use_display` does. Also cut:
-/// `(non-installed binary)`, the `pkg_info()` phase run itself, and
-/// `_hide_url_passwd`. `FEATURES` reflects only `make.conf` (portuale
-/// parses no `make.globals` defaults).
+/// package's `environment.bz2`). The `USE` line's `( )` force/mask wrap
+/// and per-flag ANSI colour (real `pkg_use_display`'s own
+/// `UseFlagDisplay`) are shipped -- see `resolve_installed_info`/
+/// `resolve_info_candidate`'s own doc comments and `colorize_use_token`.
+///
+/// **Still cut, investigated 2026-09-05:** the `(non-installed binary)`
+/// case and the `pkg_info()` phase run itself are the same underlying
+/// gap wearing two faces, and neither is a bounded display tweak:
+/// - real only ever adds a binary candidate to `mypkgs` when it defines
+///   `pkg_info()` (`actions.py:1888-1900`) -- i.e. showing it is
+///   *inseparable* from being able to run its phase, unlike the ebuild
+///   candidate case (portuale already filters those on `defines_pkg_
+///   info` for *display*, independent of ever running anything). A
+///   binary candidate also needs `--usepkg`/`--usepkgonly` and the
+///   scanned-binpkg index, which today are only set up *after*
+///   `run_info`'s own dispatch point in the CLI's main flow -- reaching
+///   it here needs reordering that setup, not just a new branch.
+/// - actually running `pkg_info()` is real bash execution (via
+///   `ebuild_phases::run_single_phase` for the ebuild case,
+///   `ebuild_merge::run_vdb_saved_env_phase` for the installed case --
+///   both already exist and are reused by `--regen`/`--config`), but
+///   its output is *arbitrary*, whatever the ebuild's own `pkg_info()`
+///   happens to `einfo`/`echo`. Real `--config`/`--regen` solve this by
+///   having **no Python mirror at all** for their execution path
+///   (Rust-only, `test_portuale.py`-tested); `--info` is different --
+///   it already has extensive dual-language contract coverage for its
+///   deterministic text (including the exact-match
+///   `test_info_atom_prints_package_settings_for_a_pkg_info_package`,
+///   which asserts stdout ends immediately after the `USE="…"` line,
+///   with no further output). Shipping this needs the same test-
+///   architecture split `--config`/`--regen` already use -- the
+///   deterministic `>>> Attempting to run pkg_info() for '<cpv>'`
+///   message contract-tested on both sides, the phase's own real output
+///   Rust-only -- not a one-line addition to an existing test.
+///
+/// `_hide_url_passwd` is also cut. `FEATURES` reflects only `make.conf`
+/// (portuale parses no `make.globals` defaults).
 fn run_info(
     config: &portage_profile::Config,
     repos: &[portage_repo::RepoConfig],
@@ -5695,9 +5727,23 @@ fn run_info(
         Installed(portage_repo::InstalledInfo),
         Ebuild(portage_repo::InfoCandidate),
     }
+    // Real `pkg_use_display`'s own `UseFlagDisplay.__str__`: each flag
+    // token is coloured (the same `colorize_use_token` scheme the
+    // merge-list `USE="…"` column already uses), independent of
+    // `--quiet`/`--verbose` -- `--info`'s block always shows every flag.
     let use_line = |disp: &[(String, String)]| -> String {
         disp.iter()
-            .map(|(name, body)| format!("{name}=\"{body}\""))
+            .map(|(name, body)| {
+                let colored = if body.is_empty() {
+                    String::new()
+                } else {
+                    body.split(' ')
+                        .map(|t| colorize_use_token(t, color))
+                        .collect::<Vec<_>>()
+                        .join(" ")
+                };
+                format!("{name}=\"{colored}\"")
+            })
             .collect::<Vec<_>>()
             .join(" ")
     };

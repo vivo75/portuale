@@ -11164,7 +11164,7 @@ def _resolve_installed_info(root, atom_str, config):
     """Every installed vdb entry `atom_str` matches, with the data real
     action_info prints for an installed package. Mirrors
     portage-repo/src/lib.rs's resolve_installed_info (reads only the vdb
-    file, not environment.bz2; no ( ) force/mask wrapping)."""
+    file, not environment.bz2 -- a v1 cut)."""
     atom = _parse_atom(atom_str)
     if atom is None or "/" not in atom.cp:
         return []
@@ -11194,8 +11194,18 @@ def _resolve_installed_info(root, atom_str, config):
             },
             key=lambda p: _alnum_sort_key(p[0]),
         )
+        # Real pkg_use_display's ( ) force/mask wrap: same
+        # _forced_or_masked_flags the ebuild-candidate side already uses
+        # (_resolve_info_candidate), fed from the vdb's own recorded
+        # IUSE/KEYWORDS instead of a tree candidate's.
+        vdb_keywords = _read_vdb_string(
+            root, category, package, version, "KEYWORDS"
+        ).split()
+        forced = _forced_or_masked_flags(
+            vdb_iuse, vdb_keywords, m, category, package, config
+        )
         use_expand_display = _build_use_expand_display(
-            disp, config["use_expand"], config["use_expand_hidden"], None, None, True, None
+            disp, config["use_expand"], config["use_expand_hidden"], None, forced, True, None
         )
         differing, unset = [], []
         for var in _INFO_INSTALLED_VARS:
@@ -11352,7 +11362,21 @@ def _run_info(config, repos, root, atom_args, misspell_suggestions, color):
                 f"\n{color.c('INFORM', p['cpv'] + '::' + p['repo_name'])} "
                 f"{verb} built with the following:"
             )
-            print(" ".join(f'{name}="{body}"' for name, body in p["use_expand_display"]))
+            # Real pkg_use_display's own UseFlagDisplay.__str__: each
+            # flag token is coloured (the same _colorize_use_token
+            # scheme the merge-list USE="…" column already uses),
+            # independent of --quiet/--verbose.
+            def _colored_body(body):
+                if not body:
+                    return ""
+                return " ".join(_colorize_use_token(t, color) for t in body.split(" "))
+
+            print(
+                " ".join(
+                    f'{name}="{_colored_body(body)}"'
+                    for name, body in p["use_expand_display"]
+                )
+            )
             if kind == "installed":
                 for name, value in p["differing_vars"]:
                     print(f'{name}="{value}"')

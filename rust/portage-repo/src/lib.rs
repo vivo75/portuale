@@ -7003,8 +7003,10 @@ const INFO_INSTALLED_VARS: &[&str] = &["CHOST", "CFLAGS", "CXXFLAGS", "FEATURES"
 /// package's `environment.bz2` when the individual `build-info` file is
 /// absent -- portuale reads only the vdb file
 /// (`write_vdb_entry_from_dir` copies every `build-info` file, so a
-/// portuale-merged package has them all); the `USE` line skips the `( )`
-/// force/mask wrapping real `pkg_use_display` does.
+/// portuale-merged package has them all). The `USE` line's `( )`
+/// force/mask wrap (real `pkg_use_display`) is shipped, via the same
+/// `forced_or_masked_flags` the ebuild-candidate side
+/// (`resolve_info_candidate`) already uses.
 pub fn resolve_installed_info(
     root: &Path,
     atom_str: &str,
@@ -7050,8 +7052,25 @@ pub fn resolve_installed_info(
             .collect();
         disp.sort_by_key(|p| alnum_sort_key(&p.0));
         disp.dedup();
+        // Real `pkg_use_display`'s `( )` force/mask wrap: same
+        // `forced_or_masked_flags` the ebuild-candidate side already
+        // uses (`resolve_info_candidate`), fed from the vdb's own
+        // recorded `IUSE`/`KEYWORDS` instead of a tree candidate's.
+        let vdb_keywords: Vec<String> =
+            read_vdb_string(root, &atom.category, &atom.package, version, "KEYWORDS")
+                .split_whitespace()
+                .map(String::from)
+                .collect();
+        let forced = forced_or_masked_flags(
+            &vdb_iuse_raw,
+            &vdb_keywords,
+            m,
+            &atom.category,
+            &atom.package,
+            config,
+        );
         let use_expand_display =
-            build_use_expand_display(&disp, config, None, &HashSet::new(), true, &HashSet::new());
+            build_use_expand_display(&disp, config, None, &forced, true, &HashSet::new());
 
         let mut differing_vars = Vec::new();
         let mut unset_vars = Vec::new();
@@ -14652,6 +14671,30 @@ mod tests {
 
         // Not installed -> empty.
         assert!(resolve_installed_info(&root, "dev-libs/newpkg", &test_config()).is_empty());
+    }
+
+    #[test]
+    fn resolve_installed_info_wraps_a_globally_forced_flag() {
+        // dev-libs/infoforcedpkg-1.0: vdb IUSE="globalforceflag otherflag"
+        // USE="globalforceflag". `test_config()` is a minimal synthetic
+        // config (no profile actually read), so `use_force` is set
+        // directly here -- real `pkg_use_display` wraps a forced flag
+        // `(globalforceflag)` regardless of its own enabled state;
+        // otherflag renders plain `-otherflag`.
+        let root = fixtures_root();
+        let config = portage_profile::Config {
+            use_force: HashSet::from(["globalforceflag".to_string()]),
+            ..test_config()
+        };
+        let infos = resolve_installed_info(&root, "dev-libs/infoforcedpkg", &config);
+        assert_eq!(infos.len(), 1);
+        assert_eq!(
+            infos[0].use_expand_display,
+            vec![(
+                "USE".to_string(),
+                "(globalforceflag) -otherflag".to_string()
+            )]
+        );
     }
 
     #[test]

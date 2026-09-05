@@ -11793,6 +11793,39 @@ def test_info_atom_prints_package_settings_for_a_pkg_info_package(
     ).stdout
 
 
+def test_info_atom_wraps_a_forced_flag_and_colours_the_use_line(
+    emerge_binary, emerge_pretend_python, fixture_env
+):
+    """Real `pkg_use_display`'s `( )` force/mask wrap and per-flag ANSI
+    colour (`UseFlagDisplay.__str__`): `dev-libs/infoforcedpkg` is
+    installed with IUSE="globalforceflag otherflag", USE="globalforceflag"
+    -- `globalforceflag` is globally `use.force`d (fixtures/repo/profiles/
+    base/use.force), so real wraps it `(globalforceflag)` regardless of
+    the vdb-recorded enabled state, while the plain `otherflag` renders
+    unwrapped `-otherflag`. Under `--color y`, the forced flag's name
+    (not the parens) is red (enabled), the disabled flag is blue. Rust ==
+    Python."""
+    plain = _run([str(emerge_binary)], ["--info", "dev-libs/infoforcedpkg"], fixture_env)
+    py_plain = _run(
+        emerge_pretend_python, ["--info", "dev-libs/infoforcedpkg"], fixture_env
+    )
+    assert plain.returncode == 0
+    assert plain.stdout == py_plain.stdout
+    assert 'USE="(globalforceflag) -otherflag"' in plain.stdout
+
+    colored = _run(
+        [str(emerge_binary)], ["--info", "--color=y", "dev-libs/infoforcedpkg"], fixture_env
+    )
+    py_colored = _run(
+        emerge_pretend_python,
+        ["--info", "--color=y", "dev-libs/infoforcedpkg"],
+        fixture_env,
+    )
+    assert colored.returncode == 0
+    assert colored.stdout == py_colored.stdout
+    assert 'USE="(\x1b[31;01mglobalforceflag\x1b[39;49;00m) \x1b[34;01m-otherflag\x1b[39;49;00m"' in colored.stdout
+
+
 def test_info_atom_prints_the_installed_package_block(
     emerge_binary, emerge_pretend_python, fixture_env
 ):

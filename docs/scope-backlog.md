@@ -609,10 +609,26 @@ The action and modifier-flag surface is broadly complete. Remaining:
 
 - `--info`: the host-state half (version header, uname/mem, tool-version
   probes, `info_pkgs`, timestamps) is a documented cut. For `--info
-  <atom>`: the installed block reads the individual vdb `build-info`
-  files, not `environment.bz2`, and skips the `( )` force/mask wrapping;
-  the `(non-installed binary)` case, the `pkg_info()` phase run itself,
-  and ANSI colour on the `USE=` line are all cut;
+  <atom>`: the installed block still reads the individual vdb
+  `build-info` files, not `environment.bz2`. **The `( )` force/mask
+  wrapping and per-flag ANSI colour on the `USE=` line shipped
+  2026-09-05** — `resolve_installed_info` now computes the same
+  `forced_or_masked_flags` set the ebuild-candidate side already used,
+  and both package-block paths colour each flag token the same
+  `colorize_use_token` scheme the merge-list `USE="…"` column uses.
+  **Investigated the same day, still cut:** the `(non-installed binary)`
+  case and the `pkg_info()` phase run itself are one gap, not two — real
+  only ever lists a binary candidate for `--info` when it defines
+  `pkg_info()` (so showing it is inseparable from running it), a binary
+  candidate additionally needs `--usepkg`/the scanned-binpkg index set
+  up *before* `run_info`'s own dispatch point (today it runs after), and
+  actually running `pkg_info()` produces *arbitrary* ebuild-authored
+  output no Python mirror can replicate — unlike `--config`/`--regen`
+  (real execution, no Python mirror at all), `--info` already has
+  extensive dual-language contract coverage that assumes no execution
+  happens, so shipping this needs the same test-architecture split those
+  two use (a contract-tested deterministic "Attempting to run…" message,
+  Rust-only real output), not a one-line addition to an existing test;
 - `--regen`: sequential (no `--jobs` threading -- real's own scheduler
   parallelism only changes wall-clock time, not the cache content
   written, so this stays a documented performance cut, not implemented).
