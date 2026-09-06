@@ -1035,6 +1035,14 @@ mod tests {
         assert!(err.contains("gpkg-1"), "{err}");
     }
 
+    /// `usize -> u32` narrowing that panics (like Python's
+    /// `struct.pack(">I", n)` raising) instead of silently wrapping; the
+    /// fixture-making sizes are far below `u32::MAX`, so this only fires
+    /// when a test is corrupted by mistake.
+    fn xpak_u32(len: usize) -> u32 {
+        u32::try_from(len).expect("xpak length exceeds u32::MAX")
+    }
+
     /// Build a real XPAK segment (real `xpak.xpak_mem` layout) and append
     /// it to some prefix bytes, exactly the way a real `.tbz2` is
     /// `[tarball][XPAK trailer]`.
@@ -1042,23 +1050,23 @@ mod tests {
         let mut index = Vec::new();
         let mut data = Vec::new();
         for (name, value) in entries {
-            index.extend_from_slice(&(name.len() as u32).to_be_bytes());
+            index.extend_from_slice(&xpak_u32(name.len()).to_be_bytes());
             index.extend_from_slice(name.as_bytes());
-            index.extend_from_slice(&(data.len() as u32).to_be_bytes());
-            index.extend_from_slice(&(value.len() as u32).to_be_bytes());
+            index.extend_from_slice(&xpak_u32(data.len()).to_be_bytes());
+            index.extend_from_slice(&xpak_u32(value.len()).to_be_bytes());
             data.extend_from_slice(value);
         }
         let mut segment = Vec::new();
         segment.extend_from_slice(b"XPAKPACK");
-        segment.extend_from_slice(&(index.len() as u32).to_be_bytes());
-        segment.extend_from_slice(&(data.len() as u32).to_be_bytes());
+        segment.extend_from_slice(&xpak_u32(index.len()).to_be_bytes());
+        segment.extend_from_slice(&xpak_u32(data.len()).to_be_bytes());
         segment.extend_from_slice(&index);
         segment.extend_from_slice(&data);
         segment.extend_from_slice(b"XPAKSTOP");
 
         let mut out = prefix.to_vec();
         out.extend_from_slice(&segment);
-        out.extend_from_slice(&(segment.len() as u32).to_be_bytes());
+        out.extend_from_slice(&xpak_u32(segment.len()).to_be_bytes());
         out.extend_from_slice(b"STOP");
         out
     }
