@@ -50,6 +50,124 @@ pub(crate) struct ReplayCreateGraphArgs<'a> {
     pub(crate) use_of: &'a dyn Fn(usize) -> Option<ReplayUse>,
 }
 
+/// Portage's `_create_graph` walk replayed over a settled graph, stopping at the
+/// first failing dependency -- the fail-fast half the BFS pass does not have.
+///
+/// Walk order is `build_digraph`'s `.order` replay. Per popped node, each dep key
+/// is one `_add_pkg_dep_string` call; unresolvable atoms yield first, so a
+/// failing atom fails the key before any of its children is admitted.
+///
+/// USE: checked against the target's configured USE with the needed changes so
+/// far applied. With `allow_flips` a takable mismatch becomes a needed change,
+/// unless it contradicts one already needed (the failure); without it every
+/// mismatch fails. `needed_init` seeds changes from earlier passes.
+///
+/// Deliberately conservative: an edge counts as failing only when its `cat/pkg`
+/// has a `NoVisibleCandidate` entry naming this parent, or when the USE rule
+/// fails it; an edge with no entry to land on at all is skipped.
+/// Portage: depgraph.py, _create_graph
+pub(crate) fn replay_create_graph(args: ReplayCreateGraphArgs<'_>) -> WalkReplay {
+    let ReplayCreateGraphArgs {
+        entries,
+        top_level_atoms,
+        root,
+        allow_flips,
+        needed_init,
+        use_of,
+    } = args;
+    let n = entries.len();
+    let pre = digraph_prelude(entries, root);
+    let alt_suppressed = suppressed_alt_edges(entries, &pre, root, &HashMap::new());
+    let mut out = WalkReplay {
+        admitted_by: vec![None; n],
+        admitted_arg: vec![None; n],
+        needed: needed_init.clone(),
+        ..WalkReplay::default()
+    };
+    let mut discovered = vec![false; n];
+    let mut stack: Vec<usize> = Vec::new();
+    for (ai, atom_str) in top_level_atoms.iter().enumerate() {
+        let Some(atom) = portage_dep::parse_atom(atom_str) else {
+            continue;
+        };
+        if atom.blocker != portage_dep::Blocker::None {
+            continue;
+        }
+        if let Some(idxs) = pre
+            .cp_indices
+            .get(&(atom.category.as_str(), atom.package.as_str()))
+        {
+            for &i in idxs {
+                if pre.installed[i] || !pre.edge_matches(atom_str, i) || discovered[i] {
+                    continue;
+                }
+                discovered[i] = true;
+                out.admitted.push(i);
+                out.admitted_arg[i] = Some(ai);
+                stack.push(i);
+            }
+        }
+    }
+    let mut disjunctive_stack: Vec<(usize, u8)> = Vec::new();
+    loop {
+        while let Some(i) = stack.pop() {
+            let mut keys: Vec<u8> = entries[i]
+                .deps
+                .iter()
+                .filter(|e| e.disjunctive)
+                .map(|e| e.key)
+                .collect();
+            keys.dedup();
+            for k in keys {
+                disjunctive_stack.push((i, k));
+            }
+            let mut inline_keys: Vec<u8> = entries[i]
+                .deps
+                .iter()
+                .filter(|e| !e.disjunctive)
+                .map(|e| e.key)
+                .collect();
+            inline_keys.dedup();
+            for k in inline_keys {
+                if replay_key(ReplayKeyArgs {
+                    entries,
+                    pre: &pre,
+                    alt_suppressed: &alt_suppressed,
+                    i,
+                    disjunctive: false,
+                    key: k,
+                    allow_flips,
+                    use_of,
+                    discovered: &mut discovered,
+                    stack: &mut stack,
+                    out: &mut out,
+                }) {
+                    return out;
+                }
+            }
+        }
+        let Some((i, k)) = disjunctive_stack.pop() else {
+            break;
+        };
+        if replay_key(ReplayKeyArgs {
+            entries,
+            pre: &pre,
+            alt_suppressed: &alt_suppressed,
+            i,
+            disjunctive: true,
+            key: k,
+            allow_flips,
+            use_of,
+            discovered: &mut discovered,
+            stack: &mut stack,
+            out: &mut out,
+        }) {
+            return out;
+        }
+    }
+    out
+}
+
 /// Arguments of [`replay_key`].
 pub(crate) struct ReplayKeyArgs<'a> {
     pub(crate) entries: &'a [GraphEntry],

@@ -14,6 +14,23 @@ fn prio(word: u64) -> DepPriority {
     }
 }
 
+/// A `Digraph` over `0..n` with deduped edges, mirroring
+/// `Digraph::add_edge` semantics.
+fn test_graph(n: usize, edges: &[(usize, usize, DepPriority)]) -> Digraph {
+    let mut g = Digraph {
+        n,
+        children: vec![Vec::new(); n],
+        parents: vec![Vec::new(); n],
+        order: (0..n).collect(),
+        installed: vec![false; n],
+        alive: vec![true; n],
+    };
+    for &(p, c, pr) in edges {
+        g.add_edge(p, c, pr);
+    }
+    g
+}
+
 /// A minimal `New` `GraphEntry` for `build_digraph` tests --
 /// mirrors `synthetic_installed_entry`'s full field list.
 fn new_entry(category: &str, package: &str, version: &str, deps: Vec<DepEdge>) -> GraphEntry {
@@ -82,4 +99,18 @@ fn plain_edge(atom: &str, category: &str, package: &str, priority: DepPriority) 
 fn fixtures_vdb_root() -> std::path::PathBuf {
     std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures")
 }
+
+fn runtime_edge(atom: &str, cat: &str, pkg: &str) -> DepEdge {
+    plain_edge(
+        atom,
+        cat,
+        pkg,
+        DepPriority {
+            runtime: true,
+            ..DepPriority::default()
+        },
+    )
+}
+mod build;
 mod debug;
+mod priority;
