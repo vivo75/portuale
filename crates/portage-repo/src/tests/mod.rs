@@ -1602,6 +1602,7 @@ mod queue;
 mod rebuild_scan;
 mod reinstall;
 mod repo_config;
+mod rev_dep;
 mod updates;
 mod use_display;
 mod use_flags;
