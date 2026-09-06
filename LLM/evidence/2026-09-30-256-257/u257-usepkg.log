@@ -1,0 +1,128 @@
+
+
+myparams {'recurse': True, 'binpkg_respect_use': 'auto', 'autounmask': True, 'autounmask_keep_use': False, 'autounmask_keep_license': True, 'autounmask_keep_keywords': True, 'autounmask_keep_masks': True, 'ignore_soname_deps': 'y', 'dynamic_deps': True, 'implicit_system_deps': True, 'binpkg_changed_deps': 'auto'}
+
+
+
+      Arg: app-misc/u257par
+     Atom: app-misc/u257par
+   ebuild: app-misc/u257par-1::test_repo
+   binary: app-misc/u257par-1::test_repo
+
+Child:         (app-misc/u257par-1:0/0::test_repo, binary scheduled for merge) USE=""
+Parent Dep:    app-misc/u257par
+
+Parent:    (app-misc/u257par-1:0/0::test_repo, binary scheduled for merge)
+Depstring: app-misc/u257prov:0/1=
+Priority:  runtime
+
+Parent:    (app-misc/u257par-1:0/0::test_repo, binary scheduled for merge)
+Depstring: app-misc/u257prov:0/1=
+Priority:  runtime
+Candidates: ['app-misc/u257prov:0/1=']
+   ebuild: app-misc/u257prov-2::test_repo
+
+
+slot_operator_unsatisfied_probe:
+   existing parent package: (app-misc/u257par-1:0/0::test_repo, binary scheduled for merge)
+   existing parent atom: app-misc/u257prov:0/1=
+   new parent package: (app-misc/u257par-1:0/0::test_repo, ebuild scheduled for merge)
+   new child package:  (app-misc/u257prov-2:2/2::test_repo, ebuild scheduled for merge)
+
+
+backtracking due to unsatisfied built slot-operator dep:
+   parent package: (app-misc/u257par-1:0/0::test_repo, binary scheduled for merge)
+   atom: app-misc/u257prov:0/1=
+
+Exiting... (app-misc/u257par-1:0/0::test_repo, binary scheduled for merge)
+
+digraph:
+
+(app-misc/u257par-1:0/0::test_repo, binary scheduled for merge) (no children)
+app-misc/u257par depends on
+  (app-misc/u257par-1:0/0::test_repo, binary scheduled for merge) (soft)
+
+
+
+backtracking try 1 
+
+forced reinstall atoms:
+
+
+slot operator dependencies:
+
+
+forced rebuilds:
+
+
+
+emerge: there are no ebuilds to satisfy "app-misc/u257prov:0/1=".
+(dependency required by "app-misc/u257par-1::test_repo" [binary])
+(dependency required by "app-misc/u257par" [argument])
+
+
+runtime_pkg_mask: {<Package ('binary', '/tmp/tmp51mydpp4/', 'app-misc/u257par-1', 'merge', 'None', '20480', '0', '1790755646')>: {'slot_operator_mask_built': None}} 
+
+
+
+      Arg: app-misc/u257par
+     Atom: app-misc/u257par
+   ebuild: app-misc/u257par-1::test_repo
+
+Child:         (app-misc/u257par-1:0/0::test_repo, ebuild scheduled for merge) USE=""
+Parent Dep:    app-misc/u257par
+
+Parent:    (app-misc/u257par-1:0/0::test_repo, ebuild scheduled for merge)
+Depstring: app-misc/u257prov:=
+Priority:  runtime
+
+Parent:    (app-misc/u257par-1:0/0::test_repo, ebuild scheduled for merge)
+Depstring: app-misc/u257prov:=
+Priority:  runtime
+Candidates: ['app-misc/u257prov:=']
+   ebuild: app-misc/u257prov-2::test_repo
+
+Child:         (app-misc/u257prov-2:2/2::test_repo, ebuild scheduled for merge) USE=""
+Parent Dep:    app-misc/u257prov:= required by (app-misc/u257par-1:0/0::test_repo, ebuild scheduled for merge)
+
+Exiting... (app-misc/u257par-1:0/0::test_repo, ebuild scheduled for merge)
+
+digraph:
+
+(app-misc/u257par-1:0/0::test_repo, ebuild scheduled for merge) depends on
+  (app-misc/u257prov-2:2/2::test_repo, ebuild scheduled for merge) (runtime_slot_op)
+app-misc/u257par depends on
+  (app-misc/u257par-1:0/0::test_repo, ebuild scheduled for merge) (soft)
+(app-misc/u257prov-2:2/2::test_repo, ebuild scheduled for merge) (no children)
+
+[ebuild  N     ] app-misc/u257prov-2:2::test_repo  0 KiB
+[ebuild  N     ] app-misc/u257par-1::test_repo  0 KiB
+
+Total: 2 packages (2 new), Size of downloads: 0 KiB
+forced reinstall atoms:
+
+
+slot operator dependencies:
+   (/tmp/tmp51mydpp4/, app-misc/u257prov:2)
+      parent: (app-misc/u257par-1:0/0::test_repo, ebuild scheduled for merge)
+        child: (app-misc/u257prov-2:2/2::test_repo, ebuild scheduled for merge) (runtime_slot_op)
+
+
+forced rebuilds:
+
+
+### u257 ['app-misc/u257par'] {'--pretend': True, '--verbose': True, '--usepkg': True} success True mergelist ['app-misc/u257prov-2', 'app-misc/u257par-1']
+forced reinstall atoms:
+
+
+slot operator dependencies:
+   (/tmp/tmp51mydpp4/, app-misc/u257prov:2)
+      parent: (app-misc/u257par-1:0/0::test_repo, ebuild scheduled for merge)
+        child: (app-misc/u257prov-2:2/2::test_repo, ebuild scheduled for merge) (runtime_slot_op)
+
+
+forced rebuilds:
+
+
+
+EROOT=/tmp/tmp51mydpp4/
