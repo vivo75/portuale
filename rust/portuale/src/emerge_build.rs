@@ -896,14 +896,14 @@ fn scheduler_skip_dependents(
     let mut queue = vec![idx];
     while let Some(x) = queue.pop() {
         for r_cp in &entries[x].required_by {
-            if let Some(&r_idx) = cp_to_idx.get(r_cp) {
-                if skip.insert(r_idx) {
-                    skipped.push(format!(
-                        "{}/{}",
-                        entries[r_idx].category, entries[r_idx].package
-                    ));
-                    queue.push(r_idx);
-                }
+            if let Some(&r_idx) = cp_to_idx.get(r_cp)
+                && skip.insert(r_idx)
+            {
+                skipped.push(format!(
+                    "{}/{}",
+                    entries[r_idx].category, entries[r_idx].package
+                ));
+                queue.push(r_idx);
             }
         }
     }
@@ -1001,12 +1001,11 @@ fn run_build_scheduler(
                 // while the system is already loaded. Never blocks the
                 // first build (`in_flight >= 1`), so the scheduler always
                 // makes progress.
-                if in_flight >= 1 {
-                    if let Some(la) = load_average {
-                        if system_loadavg_1min() > la {
-                            break;
-                        }
-                    }
+                if in_flight >= 1
+                    && let Some(la) = load_average
+                    && system_loadavg_1min() > la
+                {
+                    break;
                 }
                 let next = (0..n).find(|&i| {
                     scheduler_needs_build(&entries[i])
@@ -1169,10 +1168,12 @@ mod tests {
         );
         // Real file untouched -- no PORTAGE_LOGDIR means no symlink.
         assert_eq!(fs::read_to_string(&log_path).unwrap(), "already here");
-        assert!(fs::symlink_metadata(&log_path)
-            .unwrap()
-            .file_type()
-            .is_file());
+        assert!(
+            fs::symlink_metadata(&log_path)
+                .unwrap()
+                .file_type()
+                .is_file()
+        );
     }
 
     #[test]
@@ -1790,9 +1791,10 @@ mod tests {
         )
         .expect("high --load-average must not stall the scheduler");
         for pkg in ["schedleaf-a-1.0", "schedleaf-b-1.0", "schedparent-1.0"] {
-            assert!(root
-                .join(format!("var/db/pkg/dev-libs/{pkg}/CONTENTS"))
-                .is_file());
+            assert!(
+                root.join(format!("var/db/pkg/dev-libs/{pkg}/CONTENTS"))
+                    .is_file()
+            );
         }
         let _ = fs::remove_dir_all(&root);
         let _ = fs::remove_dir_all(&portage_tmpdir);
@@ -2143,9 +2145,10 @@ mod tests {
         )
         .expect("2.0 upgrade merges");
 
-        assert!(root
-            .join("var/db/pkg/dev-libs/binpkgrmpkg-2.0/CONTENTS")
-            .is_file());
+        assert!(
+            root.join("var/db/pkg/dev-libs/binpkgrmpkg-2.0/CONTENTS")
+                .is_file()
+        );
         assert!(!root.join("var/db/pkg/dev-libs/binpkgrmpkg-1.0").exists());
         assert!(root.join("usr/share/binpkgrmpkg/payload-2.0.txt").is_file());
         assert!(!root.join("usr/share/binpkgrmpkg/payload-1.0.txt").exists());

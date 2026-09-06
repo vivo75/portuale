@@ -182,12 +182,11 @@ pub fn parse_updates_content(text: &str) -> Vec<UpdateCmd> {
 /// `(year, quarter)` from a `NQ-YYYY` updates-file name, for the quarter
 /// sort. A name that doesn't match sorts last (`year = i32::MAX`), by name.
 fn quarter_sort_key(name: &str) -> (i32, i32, String) {
-    if let Some((q, y)) = name.split_once("Q-") {
-        if let (Ok(q), Ok(y)) = (q.parse::<i32>(), y.parse::<i32>()) {
-            if (1..=4).contains(&q) {
-                return (y, q, name.to_string());
-            }
-        }
+    if let Some((q, y)) = name.split_once("Q-")
+        && let (Ok(q), Ok(y)) = (q.parse::<i32>(), y.parse::<i32>())
+        && (1..=4).contains(&q)
+    {
+        return (y, q, name.to_string());
     }
     (i32::MAX, 0, name.to_string())
 }
@@ -448,10 +447,10 @@ pub fn apply_updates_to_atom(atom: &str) -> String {
     }
     // Fast path: if the atom's own `cp` isn't the `old`/`cp` of any
     // command, nothing in the loop below can ever rewrite it.
-    if let Some(parsed) = portage_dep::parse_atom(atom.trim_start_matches('!')) {
-        if !targets.contains(&(parsed.category.clone(), parsed.package.clone())) {
-            return atom.to_string();
-        }
+    if let Some(parsed) = portage_dep::parse_atom(atom.trim_start_matches('!'))
+        && !targets.contains(&(parsed.category.clone(), parsed.package.clone()))
+    {
+        return atom.to_string();
     }
     let mut cur = atom.to_string();
     for cmd in global_package_updates() {
@@ -491,10 +490,10 @@ pub fn apply_updates_to_dep_string(dep: &str) -> String {
 pub fn apply_updates_to_cp(category: &str, package: &str) -> (String, String) {
     let mut cur = (category.to_string(), package.to_string());
     for cmd in global_package_updates() {
-        if let UpdateCmd::Move { old, new } = cmd {
-            if (cur.0.as_str(), cur.1.as_str()) == (old.0.as_str(), old.1.as_str()) {
-                cur = new.clone();
-            }
+        if let UpdateCmd::Move { old, new } = cmd
+            && (cur.0.as_str(), cur.1.as_str()) == (old.0.as_str(), old.1.as_str())
+        {
+            cur = new.clone();
         }
     }
     cur
@@ -537,13 +536,13 @@ pub fn apply_updates_to_slot(
             old_slot,
             new_slot,
         } = cmd
+            && (category, package) == (cp.0.as_str(), cp.1.as_str())
+            && s == *old_slot
         {
-            if (category, package) == (cp.0.as_str(), cp.1.as_str()) && s == *old_slot {
-                if ss == *old_slot {
-                    ss = new_slot.clone();
-                }
-                s = new_slot.clone();
+            if ss == *old_slot {
+                ss = new_slot.clone();
             }
+            s = new_slot.clone();
         }
     }
     (s, ss)
@@ -644,15 +643,15 @@ fn parse_ini(text: &str, sections: &mut HashMap<String, HashMap<String, String>>
             current = Some(name);
             continue;
         }
-        if let Some(section_name) = &current {
-            if let Some(eq) = line.find('=') {
-                let key = line[..eq].trim().to_string();
-                let value = line[eq + 1..].trim().to_string();
-                sections
-                    .get_mut(section_name)
-                    .expect("section was inserted when its header was parsed")
-                    .insert(key, value);
-            }
+        if let Some(section_name) = &current
+            && let Some(eq) = line.find('=')
+        {
+            let key = line[..eq].trim().to_string();
+            let value = line[eq + 1..].trim().to_string();
+            sections
+                .get_mut(section_name)
+                .expect("section was inserted when its header was parsed")
+                .insert(key, value);
         }
     }
 }
@@ -2671,11 +2670,7 @@ fn flatten_src_uri_with_use(
 ) -> Result<Vec<portage_fetch::SrcUriEntry>, String> {
     portage_fetch::flatten_src_uri(src_uri, |negated, flag| {
         let on = use_flags.contains(flag);
-        if negated {
-            !on
-        } else {
-            on
-        }
+        if negated { !on } else { on }
     })
 }
 
@@ -3785,20 +3780,17 @@ fn suggested_parent_use_candidate(
         return None;
     }
 
-    if let Some(required_use) = &parent_required_use {
-        if !required_use.trim().is_empty() {
-            let old_sat =
-                portage_required_use::check_required_use(required_use, &parent_use, &parent_iuse)
-                    .unwrap_or(false);
-            let new_sat = portage_required_use::check_required_use(
-                required_use,
-                &hypothetical_use,
-                &parent_iuse,
-            )
-            .unwrap_or(false);
-            if old_sat && !new_sat {
-                return None;
-            }
+    if let Some(required_use) = &parent_required_use
+        && !required_use.trim().is_empty()
+    {
+        let old_sat =
+            portage_required_use::check_required_use(required_use, &parent_use, &parent_iuse)
+                .unwrap_or(false);
+        let new_sat =
+            portage_required_use::check_required_use(required_use, &hypothetical_use, &parent_iuse)
+                .unwrap_or(false);
+        if old_sat && !new_sat {
+            return None;
         }
     }
 
@@ -6146,12 +6138,12 @@ fn canonical_dep_key(
             _ => {
                 let evaluated = portage_dep::evaluate_atom_conditionals(&tok, use_flags)?;
                 let stripped = strip_slot_operator_one(&evaluated);
-                if depth == 0 && !libc_cps.is_empty() {
-                    if let Some(atom) = portage_dep::parse_atom(&stripped) {
-                        if libc_cps.contains(&(atom.category, atom.package)) {
-                            continue;
-                        }
-                    }
+                if depth == 0
+                    && !libc_cps.is_empty()
+                    && let Some(atom) = portage_dep::parse_atom(&stripped)
+                    && libc_cps.contains(&(atom.category, atom.package))
+                {
+                    continue;
                 }
                 out.push(stripped);
             }
@@ -7653,27 +7645,26 @@ fn resolve_root_deps_build_entries(
         runtime_dep_order: Vec::new(),
     }];
 
-    if let Some(version) = recurse_version {
-        if let Some((metadata, use_flags)) =
+    if let Some(version) = recurse_version
+        && let Some((metadata, use_flags)) =
             resolved_version_meta_and_use(repos, &atom.category, &atom.package, &version, config)
-        {
-            for dep_atom in unsatisfied_root_deps_atoms(
-                &metadata,
-                &use_flags,
+    {
+        for dep_atom in unsatisfied_root_deps_atoms(
+            &metadata,
+            &use_flags,
+            repos,
+            config,
+            running_root,
+            &["DEPEND", "BDEPEND", "RDEPEND", "IDEPEND"],
+        ) {
+            result.extend(resolve_root_deps_build_entries(
                 repos,
-                config,
                 running_root,
-                &["DEPEND", "BDEPEND", "RDEPEND", "IDEPEND"],
-            ) {
-                result.extend(resolve_root_deps_build_entries(
-                    repos,
-                    running_root,
-                    &dep_atom,
-                    config,
-                    key.clone(),
-                    seen,
-                ));
-            }
+                &dep_atom,
+                config,
+                key.clone(),
+                seen,
+            ));
         }
     }
 
@@ -8353,11 +8344,7 @@ pub fn resolve_pretend(
                 })
             })
             .collect();
-        if oldpkg.is_empty() {
-            matched
-        } else {
-            oldpkg
-        }
+        if oldpkg.is_empty() { matched } else { oldpkg }
     };
 
     // `installed_pairs` carries each installed version's own main slot,
@@ -8384,32 +8371,31 @@ pub fn resolve_pretend(
     // left exactly as-is, unconditionally, before --update/--newuse/
     // --changed-use ever get a say -- see this function's own doc
     // comment.
-    if !excluded.is_empty() {
-        if let Some(installed_best) = matched
+    if !excluded.is_empty()
+        && let Some(installed_best) = matched
             .iter()
             .filter_map(|m| by_str.get(m).copied())
             .filter(|c| candidate_is_installed(c))
             .max_by(|a, b| {
                 vercmp_ordering(&a.version, &b.version).then(a.repo_priority.cmp(&b.repo_priority))
             })
+    {
+        let installed_str = format!(
+            "{}/{}-{}:{}/{}::{}",
+            atom.category,
+            atom.package,
+            installed_best.version,
+            installed_best.slot,
+            installed_best.sub_slot,
+            installed_best.repo_name
+        );
+        if excluded
+            .iter()
+            .any(|ex| matches_config_entry(ex, &installed_str, &atom.category, &atom.package))
         {
-            let installed_str = format!(
-                "{}/{}-{}:{}/{}::{}",
-                atom.category,
-                atom.package,
-                installed_best.version,
-                installed_best.slot,
-                installed_best.sub_slot,
-                installed_best.repo_name
-            );
-            if excluded
-                .iter()
-                .any(|ex| matches_config_entry(ex, &installed_str, &atom.category, &atom.package))
-            {
-                return Ok(PretendOutcome::AlreadyInstalled {
-                    version: installed_best.version.clone(),
-                });
-            }
+            return Ok(PretendOutcome::AlreadyInstalled {
+                version: installed_best.version.clone(),
+            });
         }
     }
 
@@ -9225,10 +9211,10 @@ pub fn required_set_reachable_cps(
     let mut reachable: HashSet<(String, String)> = HashSet::new();
     let mut queue: Vec<(String, String)> = Vec::new();
     for atom_str in world_selected_atoms.iter().chain(system_atoms) {
-        if let Some(cp) = matches_cp(atom_str) {
-            if reachable.insert(cp.clone()) {
-                queue.push(cp);
-            }
+        if let Some(cp) = matches_cp(atom_str)
+            && reachable.insert(cp.clone())
+        {
+            queue.push(cp);
         }
     }
     while let Some((cat, pkg)) = queue.pop() {
@@ -9245,10 +9231,10 @@ pub fn required_set_reachable_cps(
                 continue;
             };
             for atom_str in atoms {
-                if let Some(cp) = matches_cp(&atom_str) {
-                    if reachable.insert(cp.clone()) {
-                        queue.push(cp);
-                    }
+                if let Some(cp) = matches_cp(&atom_str)
+                    && reachable.insert(cp.clone())
+                {
+                    queue.push(cp);
                 }
             }
         }
@@ -9878,7 +9864,7 @@ fn merge_bound_cpv(entry: &GraphEntry) -> Option<String> {
         PretendOutcome::New { version } | PretendOutcome::Reinstall { version, .. } => version,
         PretendOutcome::Upgrade { to, .. } | PretendOutcome::Downgrade { to, .. } => to,
         PretendOutcome::AlreadyInstalled { .. } | PretendOutcome::NoVisibleCandidate => {
-            return None
+            return None;
         }
     };
     Some(format!("{}/{}-{version}", entry.category, entry.package))
@@ -9979,7 +9965,7 @@ fn find_hard_cycles(entries: &[GraphEntry], edge_kind_map: &EdgeKindMap) -> Vec<
             let min_pos = cycle
                 .iter()
                 .enumerate()
-                .min_by_key(|(_, &idx)| idx)
+                .min_by_key(|&(_, &idx)| idx)
                 .map(|(p, _)| p)
                 .unwrap_or(0);
             let rotated: Vec<String> = cycle[min_pos..]
@@ -10287,7 +10273,7 @@ fn grandparent_use_conflict(
                         }
                         match ud.op {
                             portage_dep::UseDepOp::Enabled | portage_dep::UseDepOp::Disabled => {
-                                return (true, followup)
+                                return (true, followup);
                             }
                             _ => followup = true,
                         }
@@ -11038,18 +11024,18 @@ fn enqueue_flat_deps(
             .unwrap_or_else(|| tok.clone());
         let unevaluated = if evaluated != tok { Some(tok) } else { None };
         let tok = evaluated;
-        if let Some(dep_atom) = portage_dep::parse_atom(&tok) {
-            if dep_atom.blocker != portage_dep::Blocker::None {
-                pending_blockers.push(PendingBlocker {
-                    atom_str: tok,
-                    strong: dep_atom.blocker == portage_dep::Blocker::Strong,
-                    target_category: dep_atom.category,
-                    target_package: dep_atom.package,
-                    owner_key: key.clone(),
-                    owner_version: version.to_string(),
-                });
-                continue;
-            }
+        if let Some(dep_atom) = portage_dep::parse_atom(&tok)
+            && dep_atom.blocker != portage_dep::Blocker::None
+        {
+            pending_blockers.push(PendingBlocker {
+                atom_str: tok,
+                strong: dep_atom.blocker == portage_dep::Blocker::Strong,
+                target_category: dep_atom.category,
+                target_package: dep_atom.package,
+                owner_key: key.clone(),
+                owner_version: version.to_string(),
+            });
+            continue;
         }
         queue.push_back(QueueItem {
             atom: tok,
@@ -12208,17 +12194,15 @@ fn backtracking_resolve(req: &ResolveRequest) -> Result<GraphResult, String> {
                     let dedup_key = (key.0.clone(), key.1.clone(), version.clone());
                     if changed_deps_report_seen.insert(dedup_key)
                         && deps_changed(root, &repos, &key.0, &key.1, &version, with_bdeps)
+                        && let Ok(repo_candidates) = list_candidates(&repos, &key.0, &key.1)
+                        && let Some(c) = repo_candidates.iter().find(|c| c.version == version)
                     {
-                        if let Ok(repo_candidates) = list_candidates(&repos, &key.0, &key.1) {
-                            if let Some(c) = repo_candidates.iter().find(|c| c.version == version) {
-                                changed_deps_report_entries.push(ChangedDepsReportEntry {
-                                    category: key.0.clone(),
-                                    package: key.1.clone(),
-                                    version,
-                                    repo_name: c.repo_name.clone(),
-                                });
-                            }
-                        }
+                        changed_deps_report_entries.push(ChangedDepsReportEntry {
+                            category: key.0.clone(),
+                            package: key.1.clone(),
+                            version,
+                            repo_name: c.repo_name.clone(),
+                        });
                     }
                 }
             }
@@ -12246,79 +12230,76 @@ fn backtracking_resolve(req: &ResolveRequest) -> Result<GraphResult, String> {
                 // suggest a change that would actually fix it" spirit,
                 // even though portuale doesn't yet combine multiple
                 // simultaneous suggestion kinds the way real portage can.
-                if autounmask_suggest_keywords {
-                    if let Some((version, keyword)) =
+                if autounmask_suggest_keywords
+                    && let Some((version, keyword)) =
                         suggested_keyword_candidate(&repos, &atom.category, &atom.package, config)
-                    {
-                        message.push_str(&format!(
-                            "\nnote: {}/{}-{version} exists but is masked by KEYWORDS; \
+                {
+                    message.push_str(&format!(
+                        "\nnote: {}/{}-{version} exists but is masked by KEYWORDS; \
                          --autounmask-keep-keywords=n suggests adding \"{}/{} {keyword}\" \
                          to package.accept_keywords",
-                            atom.category, atom.package, atom.category, atom.package,
-                        ));
-                    }
+                        atom.category, atom.package, atom.category, atom.package,
+                    ));
                 }
                 // `--autounmask-use`'s own suggestion sub-feature -- same
                 // gating/"only suggest a fix that would actually work"
                 // spirit as the keyword one just above. Message format
                 // mirrors real `package.use` suggestion syntax
                 // (`=category/package-version flag -flag`).
-                if autounmask_suggest_use {
-                    if let Some((version, flip)) = suggested_use_candidate(
+                if autounmask_suggest_use
+                    && let Some((version, flip)) = suggested_use_candidate(
                         &repos,
                         &atom.category,
                         &atom.package,
                         atom.use_deps.as_deref(),
                         config,
-                    ) {
-                        let adjustments: Vec<String> = flip
-                            .iter()
-                            .map(|(flag, enabled)| {
-                                if *enabled {
-                                    flag.clone()
-                                } else {
-                                    format!("-{flag}")
-                                }
-                            })
-                            .collect();
-                        message.push_str(&format!(
-                            "\nnote: {}/{}-{version} exists but its USE flags don't satisfy \
+                    )
+                {
+                    let adjustments: Vec<String> = flip
+                        .iter()
+                        .map(|(flag, enabled)| {
+                            if *enabled {
+                                flag.clone()
+                            } else {
+                                format!("-{flag}")
+                            }
+                        })
+                        .collect();
+                    message.push_str(&format!(
+                        "\nnote: {}/{}-{version} exists but its USE flags don't satisfy \
                          this atom; --autounmask-use suggests adding \"={}/{}-{version} {}\" \
                          to package.use",
-                            atom.category,
-                            atom.package,
-                            atom.category,
-                            atom.package,
-                            adjustments.join(" "),
-                        ));
-                    }
+                        atom.category,
+                        atom.package,
+                        atom.category,
+                        atom.package,
+                        adjustments.join(" "),
+                    ));
                 }
                 // `--autounmask-license`'s own suggestion sub-feature -- same
                 // "only suggest a fix that would actually work" gating.
-                if autounmask_suggest_license {
-                    if let Some((version, licenses)) =
+                if autounmask_suggest_license
+                    && let Some((version, licenses)) =
                         suggested_license_candidate(&repos, &atom.category, &atom.package, config)
-                    {
-                        message.push_str(&format!(
-                            "\nnote: {}/{}-{version} exists but its LICENSE is not accepted; \
+                {
+                    message.push_str(&format!(
+                        "\nnote: {}/{}-{version} exists but its LICENSE is not accepted; \
                          --autounmask-license suggests adding \"={}/{}-{version} {licenses}\" \
                          to package.license",
-                            atom.category, atom.package, atom.category, atom.package,
-                        ));
-                    }
+                        atom.category, atom.package, atom.category, atom.package,
+                    ));
                 }
                 // `--autounmask-keep-masks=n`'s own suggestion sub-feature.
-                if autounmask_suggest_masks {
-                    if let Some(version) =
+                if autounmask_suggest_masks
+                    && let Some(version) =
                         suggested_mask_candidate(&repos, &atom.category, &atom.package, config)
-                    {
-                        message.push_str(&format!(
-                            "\nnote: {}/{}-{version} exists but is package.mask'd; \
+                {
+                    message.push_str(&format!(
+                        "\nnote: {}/{}-{version} exists but is package.mask'd; \
                          --autounmask-keep-masks=n suggests adding \"={}/{}-{version}\" \
                          to package.unmask",
-                            atom.category, atom.package, atom.category, atom.package,
-                        ));
-                    }
+                        atom.category, atom.package, atom.category, atom.package,
+                    ));
                 }
                 return Err(message);
             }
@@ -12354,27 +12335,23 @@ fn backtracking_resolve(req: &ResolveRequest) -> Result<GraphResult, String> {
                     && mask_phase == MaskPhase::None
                     && missing_dep_trigger.is_none()
                     && !atom_currently_satisfiable(&repos, bare_atom, config, &[])
+                    && let Some((pc, pp)) = owner.clone()
+                    && !top_level_cps.contains(&(pc.clone(), pp.clone()))
                 {
-                    if let Some((pc, pp)) = owner.clone() {
-                        if !top_level_cps.contains(&(pc.clone(), pp.clone())) {
-                            let parent_cpv = entries
-                                .iter()
-                                .find(|e| e.category == pc && e.package == pp)
-                                .and_then(|e| match &e.outcome {
-                                    PretendOutcome::New { version }
-                                    | PretendOutcome::Reinstall { version, .. } => {
-                                        Some(version.clone())
-                                    }
-                                    PretendOutcome::Upgrade { to, .. }
-                                    | PretendOutcome::Downgrade { to, .. } => Some(to.clone()),
-                                    _ => None,
-                                });
-                            if let Some(pv) = parent_cpv {
-                                let neg = format!("!={pc}/{pp}-{pv}");
-                                if !missing_dep_masked.contains(&neg) {
-                                    missing_dep_trigger = Some(((pc, pp), neg));
-                                }
-                            }
+                    let parent_cpv = entries
+                        .iter()
+                        .find(|e| e.category == pc && e.package == pp)
+                        .and_then(|e| match &e.outcome {
+                            PretendOutcome::New { version }
+                            | PretendOutcome::Reinstall { version, .. } => Some(version.clone()),
+                            PretendOutcome::Upgrade { to, .. }
+                            | PretendOutcome::Downgrade { to, .. } => Some(to.clone()),
+                            _ => None,
+                        });
+                    if let Some(pv) = parent_cpv {
+                        let neg = format!("!={pc}/{pp}-{pv}");
+                        if !missing_dep_masked.contains(&neg) {
+                            missing_dep_trigger = Some(((pc, pp), neg));
                         }
                     }
                 }
@@ -12397,75 +12374,70 @@ fn backtracking_resolve(req: &ResolveRequest) -> Result<GraphResult, String> {
                 // computed under this identical condition.
                 let mut already_installed_dep_order: Vec<(String, String)> = Vec::new();
                 let mut already_installed_runtime_dep_order: Vec<(String, String)> = Vec::new();
-                if let PretendOutcome::AlreadyInstalled { version } = &outcome {
-                    if !nodeps && deep.recurses_at(depth) {
-                        // `GraphEntry::dep_order` for an AlreadyInstalled
-                        // entry: always the *current* tree ebuild's metadata
-                        // (real `--dynamic-deps`'s own default) -- ordering
-                        // is a display nicety, not resolution-critical, so
-                        // this doesn't also mirror `enqueue_dependencies`'
-                        // own `--dynamic-deps=n` vdb-snapshot branch.
-                        if let Some(resolved) =
-                            list_candidates(&repos, &key.0, &key.1).ok().and_then(|cs| {
-                                cs.into_iter()
-                                    .filter(|c| &c.version == version)
-                                    .max_by_key(|c| c.repo_priority)
-                            })
-                        {
-                            let pf = format!("{}-{version}", key.1);
-                            if let Ok(metadata) =
-                                read_md5_cache(&resolved.repo_location, &key.0, &pf)
-                            {
-                                let candidate_str = format!(
-                                    "{}/{}-{version}:{}/{}::{}",
-                                    key.0,
-                                    key.1,
-                                    resolved.slot,
-                                    resolved.sub_slot,
-                                    resolved.repo_name
-                                );
-                                let use_flags = effective_use_flags(
-                                    config,
-                                    metadata.get("IUSE").map(String::as_str).unwrap_or_default(),
-                                    &resolved.keywords,
-                                    &candidate_str,
-                                    &key.0,
-                                    &key.1,
-                                );
-                                let real_order_keys: &[&str] = if with_bdeps {
-                                    &["RDEPEND", "IDEPEND", "PDEPEND", "DEPEND", "BDEPEND"]
-                                } else {
-                                    &["RDEPEND", "IDEPEND", "PDEPEND"]
-                                };
-                                already_installed_dep_order =
-                                    dep_order_from_metadata(&metadata, &use_flags, real_order_keys);
-                                already_installed_runtime_dep_order = dep_order_from_metadata(
-                                    &metadata,
-                                    &use_flags,
-                                    &["RDEPEND", "IDEPEND", "PDEPEND"],
-                                );
-                            }
+                if let PretendOutcome::AlreadyInstalled { version } = &outcome
+                    && !nodeps
+                    && deep.recurses_at(depth)
+                {
+                    // `GraphEntry::dep_order` for an AlreadyInstalled
+                    // entry: always the *current* tree ebuild's metadata
+                    // (real `--dynamic-deps`'s own default) -- ordering
+                    // is a display nicety, not resolution-critical, so
+                    // this doesn't also mirror `enqueue_dependencies`'
+                    // own `--dynamic-deps=n` vdb-snapshot branch.
+                    if let Some(resolved) =
+                        list_candidates(&repos, &key.0, &key.1).ok().and_then(|cs| {
+                            cs.into_iter()
+                                .filter(|c| &c.version == version)
+                                .max_by_key(|c| c.repo_priority)
+                        })
+                    {
+                        let pf = format!("{}-{version}", key.1);
+                        if let Ok(metadata) = read_md5_cache(&resolved.repo_location, &key.0, &pf) {
+                            let candidate_str = format!(
+                                "{}/{}-{version}:{}/{}::{}",
+                                key.0, key.1, resolved.slot, resolved.sub_slot, resolved.repo_name
+                            );
+                            let use_flags = effective_use_flags(
+                                config,
+                                metadata.get("IUSE").map(String::as_str).unwrap_or_default(),
+                                &resolved.keywords,
+                                &candidate_str,
+                                &key.0,
+                                &key.1,
+                            );
+                            let real_order_keys: &[&str] = if with_bdeps {
+                                &["RDEPEND", "IDEPEND", "PDEPEND", "DEPEND", "BDEPEND"]
+                            } else {
+                                &["RDEPEND", "IDEPEND", "PDEPEND"]
+                            };
+                            already_installed_dep_order =
+                                dep_order_from_metadata(&metadata, &use_flags, real_order_keys);
+                            already_installed_runtime_dep_order = dep_order_from_metadata(
+                                &metadata,
+                                &use_flags,
+                                &["RDEPEND", "IDEPEND", "PDEPEND"],
+                            );
                         }
-                        enqueue_dependencies(
-                            &repos,
-                            root,
-                            dynamic_deps,
-                            &key.0,
-                            &key.1,
-                            version,
-                            config,
-                            depth + 1,
-                            &mut queue,
-                            &mut pending_blockers,
-                            key.clone(),
-                            version.clone(),
-                            with_bdeps,
-                            root_deps_running_root,
-                            &mut entries,
-                            &mut root_deps_build_seen,
-                            &slot_constraints,
-                        );
                     }
+                    enqueue_dependencies(
+                        &repos,
+                        root,
+                        dynamic_deps,
+                        &key.0,
+                        &key.1,
+                        version,
+                        config,
+                        depth + 1,
+                        &mut queue,
+                        &mut pending_blockers,
+                        key.clone(),
+                        version.clone(),
+                        with_bdeps,
+                        root_deps_running_root,
+                        &mut entries,
+                        &mut root_deps_build_seen,
+                        &slot_constraints,
+                    );
                 }
                 // `--autounmask`'s own keyword-suggestion sub-feature,
                 // extended here to a *dependency's* own `NoVisibleCandidate`
@@ -12722,115 +12694,100 @@ fn backtracking_resolve(req: &ResolveRequest) -> Result<GraphResult, String> {
                 // package is re-resolved with the flag and its `flag?`-gated
                 // deps appear (real `_need_restart` after
                 // `_needed_use_config_changes` grows).
-                if autounmask_suggest_use {
-                    if let Some(use_deps) = atom.use_deps.as_deref().filter(|d| !d.is_empty()) {
-                        let all_ebuild_cands =
-                            list_candidates(&repos, &key.0, &key.1).unwrap_or_default();
-                        if let Some(existing_cand) = all_ebuild_cands
-                            .iter()
-                            .find(|c| c.version == existing_version)
+                if autounmask_suggest_use
+                    && let Some(use_deps) = atom.use_deps.as_deref().filter(|d| !d.is_empty())
+                {
+                    let all_ebuild_cands =
+                        list_candidates(&repos, &key.0, &key.1).unwrap_or_default();
+                    if let Some(existing_cand) = all_ebuild_cands
+                        .iter()
+                        .find(|c| c.version == existing_version)
+                    {
+                        let declared: HashSet<String> = existing_cand
+                            .iuse
+                            .split_whitespace()
+                            .map(|t| t.trim_start_matches(['+', '-']).to_string())
+                            .collect();
+                        let iuse_set = valid_iuse(&declared, config);
+                        let existing_cand_str = format!(
+                            "{}/{}-{existing_version}:{}/{}::{}",
+                            key.0,
+                            key.1,
+                            existing_cand.slot,
+                            existing_cand.sub_slot,
+                            existing_cand.repo_name
+                        );
+                        let existing_use = effective_use_flags(
+                            config,
+                            &existing_cand.iuse,
+                            &existing_cand.keywords,
+                            &existing_cand_str,
+                            &key.0,
+                            &key.1,
+                        );
+                        if !portage_dep::use_deps_satisfied(use_deps, &iuse_set, &existing_use)
+                            && let Some(flip) =
+                                suggested_use_flip(existing_cand, &key.0, &key.1, use_deps, config)
                         {
-                            let declared: HashSet<String> = existing_cand
-                                .iuse
-                                .split_whitespace()
-                                .map(|t| t.trim_start_matches(['+', '-']).to_string())
-                                .collect();
-                            let iuse_set = valid_iuse(&declared, config);
-                            let existing_cand_str = format!(
-                                "{}/{}-{existing_version}:{}/{}::{}",
-                                key.0,
-                                key.1,
-                                existing_cand.slot,
-                                existing_cand.sub_slot,
-                                existing_cand.repo_name
-                            );
-                            let existing_use = effective_use_flags(
-                                config,
-                                &existing_cand.iuse,
-                                &existing_cand.keywords,
-                                &existing_cand_str,
-                                &key.0,
-                                &key.1,
-                            );
-                            if !portage_dep::use_deps_satisfied(use_deps, &iuse_set, &existing_use)
-                            {
-                                if let Some(flip) = suggested_use_flip(
+                            let bucket = autounmask_use_config.entry(key.clone()).or_default();
+                            let mut newly = false;
+                            for (f, on) in &flip {
+                                match bucket.get(f) {
+                                    Some(prev) if prev == on => {}
+                                    // The accumulator already wants this
+                                    // flag the *other* way for a different
+                                    // atom -- flipping it now would just
+                                    // re-break that one. Real
+                                    // `_autounmask_breakage`: give up on
+                                    // autounmask entirely (handled by the
+                                    // driver below).
+                                    Some(_) => autounmask_use_broke = true,
+                                    None => {
+                                        bucket.insert(f.clone(), *on);
+                                        newly = true;
+                                    }
+                                }
+                            }
+                            if newly {
+                                let token = flip
+                                    .iter()
+                                    .map(|(f, e)| if *e { f.clone() } else { format!("-{f}") })
+                                    .collect::<Vec<_>>()
+                                    .join(" ");
+                                let atom_form = autounmask_use_atom_form(
                                     existing_cand,
+                                    &all_ebuild_cands,
                                     &key.0,
                                     &key.1,
-                                    use_deps,
                                     config,
-                                ) {
-                                    let bucket =
-                                        autounmask_use_config.entry(key.clone()).or_default();
-                                    let mut newly = false;
-                                    for (f, on) in &flip {
-                                        match bucket.get(f) {
-                                            Some(prev) if prev == on => {}
-                                            // The accumulator already wants this
-                                            // flag the *other* way for a different
-                                            // atom -- flipping it now would just
-                                            // re-break that one. Real
-                                            // `_autounmask_breakage`: give up on
-                                            // autounmask entirely (handled by the
-                                            // driver below).
-                                            Some(_) => autounmask_use_broke = true,
-                                            None => {
-                                                bucket.insert(f.clone(), *on);
-                                                newly = true;
-                                            }
-                                        }
-                                    }
-                                    if newly {
-                                        let token = flip
-                                            .iter()
-                                            .map(
-                                                |(f, e)| {
-                                                    if *e {
-                                                        f.clone()
-                                                    } else {
-                                                        format!("-{f}")
-                                                    }
-                                                },
-                                            )
-                                            .collect::<Vec<_>>()
-                                            .join(" ");
-                                        let atom_form = autounmask_use_atom_form(
-                                            existing_cand,
-                                            &all_ebuild_cands,
-                                            &key.0,
-                                            &key.1,
-                                            config,
-                                        );
-                                        if !autounmask_use_change_records
-                                            .iter()
-                                            .any(|c| c.atom == atom_form && c.token == token)
-                                        {
-                                            autounmask_use_change_records.push(AutounmaskChange {
-                                                atom: atom_form,
-                                                token,
-                                                dep_chain: autounmask_dep_chain(
-                                                    &owner,
-                                                    &current_atom,
-                                                    &top_level,
-                                                    &entries,
-                                                ),
-                                            });
-                                        }
-                                        // Real `_backtrack_depgraph` finishes
-                                        // the attempt, then restarts with the
-                                        // grown config -- the driver at the
-                                        // bottom of `'backtrack` does the
-                                        // `continue`, not here. Only with
-                                        // `--autounmask-backtrack=y`; off (the
-                                        // default), the change is recorded and
-                                        // displayed but the graph is not
-                                        // re-driven (a post-loop pass refreshes
-                                        // this package's own USE line).
-                                        if autounmask_backtrack_enabled {
-                                            autounmask_grew = true;
-                                        }
-                                    }
+                                );
+                                if !autounmask_use_change_records
+                                    .iter()
+                                    .any(|c| c.atom == atom_form && c.token == token)
+                                {
+                                    autounmask_use_change_records.push(AutounmaskChange {
+                                        atom: atom_form,
+                                        token,
+                                        dep_chain: autounmask_dep_chain(
+                                            &owner,
+                                            &current_atom,
+                                            &top_level,
+                                            &entries,
+                                        ),
+                                    });
+                                }
+                                // Real `_backtrack_depgraph` finishes
+                                // the attempt, then restarts with the
+                                // grown config -- the driver at the
+                                // bottom of `'backtrack` does the
+                                // `continue`, not here. Only with
+                                // `--autounmask-backtrack=y`; off (the
+                                // default), the change is recorded and
+                                // displayed but the graph is not
+                                // re-driven (a post-loop pass refreshes
+                                // this package's own USE line).
+                                if autounmask_backtrack_enabled {
+                                    autounmask_grew = true;
                                 }
                             }
                         }
@@ -12875,19 +12832,13 @@ fn backtracking_resolve(req: &ResolveRequest) -> Result<GraphResult, String> {
                     &config.accept_keywords,
                     &config.package_accept_keywords,
                 )
+                && let Some(kw) = suggested_keyword(resolved)
             {
-                if let Some(kw) = suggested_keyword(resolved) {
-                    autounmask_keyword_changes.push(AutounmaskChange {
-                        atom: format!("={}/{}-{version}", key.0, key.1),
-                        token: kw.to_string(),
-                        dep_chain: autounmask_dep_chain(
-                            &owner,
-                            &current_atom,
-                            &top_level,
-                            &entries,
-                        ),
-                    });
-                }
+                autounmask_keyword_changes.push(AutounmaskChange {
+                    atom: format!("={}/{}-{version}", key.0, key.1),
+                    token: kw.to_string(),
+                    dep_chain: autounmask_dep_chain(&owner, &current_atom, &top_level, &entries),
+                });
             }
             // Real `--autounmask-license`: `resolve_pretend` accepted this
             // candidate over an unaccepted `LICENSE`. Record the missing
@@ -13041,50 +12992,49 @@ fn backtracking_resolve(req: &ResolveRequest) -> Result<GraphResult, String> {
             // -- and record the change (real `_display_autounmask`'s
             // `use_changes_msg` + `_get_dep_chain_as_comment(pkg,
             // unsatisfied_dependency=True)`).
-            if autounmask_suggest_use {
-                if let Some(use_deps) = atom.use_deps.as_deref().filter(|d| !d.is_empty()) {
-                    let iuse_declared: HashSet<String> = metadata
-                        .get("IUSE")
-                        .map(String::as_str)
-                        .unwrap_or_default()
-                        .split_whitespace()
-                        .map(|tok| tok.trim_start_matches(['+', '-']).to_string())
-                        .collect();
-                    let iuse_set = valid_iuse(&iuse_declared, config);
-                    if !portage_dep::use_deps_satisfied(use_deps, &iuse_set, &use_flags) {
-                        if let Some(flip) =
-                            suggested_use_flip(resolved, &key.0, &key.1, use_deps, config)
-                        {
-                            for (flag, enabled) in &flip {
-                                if *enabled {
-                                    use_flags.insert(flag.clone());
-                                } else {
-                                    use_flags.remove(flag);
-                                }
-                            }
-                            let token = flip
-                                .iter()
-                                .map(|(f, e)| if *e { f.clone() } else { format!("-{f}") })
-                                .collect::<Vec<_>>()
-                                .join(" ");
-                            autounmask_use_changes.push(AutounmaskChange {
-                                atom: autounmask_use_atom_form(
-                                    resolved,
-                                    &repo_candidates,
-                                    &key.0,
-                                    &key.1,
-                                    config,
-                                ),
-                                token,
-                                dep_chain: autounmask_dep_chain(
-                                    &owner,
-                                    &current_atom,
-                                    &top_level,
-                                    &entries,
-                                ),
-                            });
+            if autounmask_suggest_use
+                && let Some(use_deps) = atom.use_deps.as_deref().filter(|d| !d.is_empty())
+            {
+                let iuse_declared: HashSet<String> = metadata
+                    .get("IUSE")
+                    .map(String::as_str)
+                    .unwrap_or_default()
+                    .split_whitespace()
+                    .map(|tok| tok.trim_start_matches(['+', '-']).to_string())
+                    .collect();
+                let iuse_set = valid_iuse(&iuse_declared, config);
+                if !portage_dep::use_deps_satisfied(use_deps, &iuse_set, &use_flags)
+                    && let Some(flip) =
+                        suggested_use_flip(resolved, &key.0, &key.1, use_deps, config)
+                {
+                    for (flag, enabled) in &flip {
+                        if *enabled {
+                            use_flags.insert(flag.clone());
+                        } else {
+                            use_flags.remove(flag);
                         }
                     }
+                    let token = flip
+                        .iter()
+                        .map(|(f, e)| if *e { f.clone() } else { format!("-{f}") })
+                        .collect::<Vec<_>>()
+                        .join(" ");
+                    autounmask_use_changes.push(AutounmaskChange {
+                        atom: autounmask_use_atom_form(
+                            resolved,
+                            &repo_candidates,
+                            &key.0,
+                            &key.1,
+                            config,
+                        ),
+                        token,
+                        dep_chain: autounmask_dep_chain(
+                            &owner,
+                            &current_atom,
+                            &top_level,
+                            &entries,
+                        ),
+                    });
                 }
             }
 
@@ -13183,52 +13133,49 @@ fn backtracking_resolve(req: &ResolveRequest) -> Result<GraphResult, String> {
             // explicit `if not required_use_is_sat:` branch that the delayed
             // collection above lives in -- so portuale keeps that one
             // immediately fatal, same as before.
-            if let Some(required_use) = metadata.get("REQUIRED_USE") {
-                if !required_use.trim().is_empty() {
-                    // Real `check_required_use` validates a referenced flag
-                    // against `pkg.iuse.is_valid_flag`, not a package's own
-                    // literal IUSE alone -- real config.py's own
-                    // `_get_implicit_iuse()` folds `PORTAGE_ARCHLIST`
-                    // (profiles/arch.list), `use.mask ∪ use.force`, and
-                    // literal `build`/`bootstrap` into every package's
-                    // effective IUSE regardless of what that package's own
-                    // IUSE declares. Without this, a REQUIRED_USE referencing
-                    // an implicit flag never mentioned in a package's own
-                    // IUSE (e.g. real media-libs/mesa's own REQUIRED_USE
-                    // referencing "x86", a valid arch.list entry that isn't
-                    // the profile's own active arch) spuriously fails with
-                    // "USE flag ... is not in IUSE" -- confirmed live against
-                    // the real, installed system. See `portage_profile::
-                    // Config::archlist`'s own doc comment for the full
-                    // grounding and the deliberate USE_EXPAND_HIDDEN
-                    // (elibc_*/kernel_*/userland_*) simplification.
-                    let iuse_set = implicit_iuse_set(
-                        metadata.get("IUSE").map(String::as_str).unwrap_or_default(),
-                        config,
-                    );
-                    match portage_required_use::check_required_use(
-                        required_use,
-                        &use_flags,
-                        &iuse_set,
-                    ) {
-                        Ok(true) => {}
-                        Ok(false) => {
-                            let normalized = required_use
-                                .split_whitespace()
-                                .collect::<Vec<_>>()
-                                .join(" ");
-                            required_use_violations.push(format!(
-                                "REQUIRED_USE not satisfied for {}/{}-{version}: \"{normalized}\"",
-                                key.0, key.1
-                            ));
-                            continue;
-                        }
-                        Err(e) => {
-                            return Err(format!(
-                                "REQUIRED_USE for {}/{}-{version} is invalid: {e}",
-                                key.0, key.1
-                            ));
-                        }
+            if let Some(required_use) = metadata.get("REQUIRED_USE")
+                && !required_use.trim().is_empty()
+            {
+                // Real `check_required_use` validates a referenced flag
+                // against `pkg.iuse.is_valid_flag`, not a package's own
+                // literal IUSE alone -- real config.py's own
+                // `_get_implicit_iuse()` folds `PORTAGE_ARCHLIST`
+                // (profiles/arch.list), `use.mask ∪ use.force`, and
+                // literal `build`/`bootstrap` into every package's
+                // effective IUSE regardless of what that package's own
+                // IUSE declares. Without this, a REQUIRED_USE referencing
+                // an implicit flag never mentioned in a package's own
+                // IUSE (e.g. real media-libs/mesa's own REQUIRED_USE
+                // referencing "x86", a valid arch.list entry that isn't
+                // the profile's own active arch) spuriously fails with
+                // "USE flag ... is not in IUSE" -- confirmed live against
+                // the real, installed system. See `portage_profile::
+                // Config::archlist`'s own doc comment for the full
+                // grounding and the deliberate USE_EXPAND_HIDDEN
+                // (elibc_*/kernel_*/userland_*) simplification.
+                let iuse_set = implicit_iuse_set(
+                    metadata.get("IUSE").map(String::as_str).unwrap_or_default(),
+                    config,
+                );
+                match portage_required_use::check_required_use(required_use, &use_flags, &iuse_set)
+                {
+                    Ok(true) => {}
+                    Ok(false) => {
+                        let normalized = required_use
+                            .split_whitespace()
+                            .collect::<Vec<_>>()
+                            .join(" ");
+                        required_use_violations.push(format!(
+                            "REQUIRED_USE not satisfied for {}/{}-{version}: \"{normalized}\"",
+                            key.0, key.1
+                        ));
+                        continue;
+                    }
+                    Err(e) => {
+                        return Err(format!(
+                            "REQUIRED_USE for {}/{}-{version} is invalid: {e}",
+                            key.0, key.1
+                        ));
                     }
                 }
             }
@@ -13513,13 +13460,13 @@ fn backtracking_resolve(req: &ResolveRequest) -> Result<GraphResult, String> {
             // keeping the atom text for slice 4's `pulled in by` lines,
             // before `flat_deps` is consumed below.
             for tok in &flat_deps {
-                if let Some(dep_atom) = portage_dep::parse_atom(tok) {
-                    if dep_atom.blocker == portage_dep::Blocker::None {
-                        slot_pullers
-                            .entry((dep_atom.category.clone(), dep_atom.package.clone()))
-                            .or_default()
-                            .push((key.0.clone(), key.1.clone(), version.clone(), tok.clone()));
-                    }
+                if let Some(dep_atom) = portage_dep::parse_atom(tok)
+                    && dep_atom.blocker == portage_dep::Blocker::None
+                {
+                    slot_pullers
+                        .entry((dep_atom.category.clone(), dep_atom.package.clone()))
+                        .or_default()
+                        .push((key.0.clone(), key.1.clone(), version.clone(), tok.clone()));
                 }
             }
             enqueue_flat_deps(
@@ -13828,16 +13775,17 @@ fn backtracking_resolve(req: &ResolveRequest) -> Result<GraphResult, String> {
         // `a` has an unsatisfiable subtree now yields to `b`. When the
         // latch or `backtrack_max` blocks the retry, the pass's own
         // `NoVisibleCandidate` entry is reported, exactly as before.
-        if let Some(((pc, pp), neg)) = missing_dep_trigger.take() {
-            if mask_phase == MaskPhase::None && backtrack_iteration < backtrack_max {
-                slot_constraints
-                    .entry((pc, pp))
-                    .or_default()
-                    .push(neg.clone());
-                missing_dep_masked.insert(neg);
-                backtrack_iteration += 1;
-                continue 'backtrack;
-            }
+        if let Some(((pc, pp), neg)) = missing_dep_trigger.take()
+            && mask_phase == MaskPhase::None
+            && backtrack_iteration < backtrack_max
+        {
+            slot_constraints
+                .entry((pc, pp))
+                .or_default()
+                .push(neg.clone());
+            missing_dep_masked.insert(neg);
+            backtrack_iteration += 1;
+            continue 'backtrack;
         }
 
         // Real depgraph's slot-operator auto-rebuild: an installed consumer
@@ -14352,18 +14300,18 @@ fn enqueue_dependencies(
         if tok == "||" {
             continue;
         }
-        if let Some(dep_atom) = portage_dep::parse_atom(&tok) {
-            if dep_atom.blocker != portage_dep::Blocker::None {
-                pending_blockers.push(PendingBlocker {
-                    atom_str: tok,
-                    strong: dep_atom.blocker == portage_dep::Blocker::Strong,
-                    target_category: dep_atom.category,
-                    target_package: dep_atom.package,
-                    owner_key: owner_key.clone(),
-                    owner_version: owner_version.clone(),
-                });
-                continue;
-            }
+        if let Some(dep_atom) = portage_dep::parse_atom(&tok)
+            && dep_atom.blocker != portage_dep::Blocker::None
+        {
+            pending_blockers.push(PendingBlocker {
+                atom_str: tok,
+                strong: dep_atom.blocker == portage_dep::Blocker::Strong,
+                target_category: dep_atom.category,
+                target_package: dep_atom.package,
+                owner_key: owner_key.clone(),
+                owner_version: owner_version.clone(),
+            });
+            continue;
         }
         if root_deps_satisfied.contains(&tok) {
             // Real "no separate graph node needed for an
@@ -14511,14 +14459,10 @@ mod tests {
         assert!(none.is_empty());
 
         // No binrepos configured -> no remote candidates at all.
-        assert!(list_remote_binary_candidates(
-            &[],
-            Path::new("/"),
-            &local,
-            "dev-libs",
-            "remotebinpkg",
-        )
-        .is_empty());
+        assert!(
+            list_remote_binary_candidates(&[], Path::new("/"), &local, "dev-libs", "remotebinpkg",)
+                .is_empty()
+        );
     }
 
     #[test]
@@ -20198,15 +20142,10 @@ mod tests {
             ]
         );
         // No displayable flags -> no groups at all.
-        assert!(build_use_expand_display(
-            &[],
-            &config,
-            None,
-            &HashSet::new(),
-            true,
-            &HashSet::new()
-        )
-        .is_empty());
+        assert!(
+            build_use_expand_display(&[], &config, None, &HashSet::new(), true, &HashSet::new())
+                .is_empty()
+        );
     }
 
     #[test]
@@ -20484,9 +20423,11 @@ mod tests {
         .entries
         .remove(0);
         // cpu_flags_x86_sse2 is a real enabled flag...
-        assert!(entry
-            .use_flags_display
-            .contains(&("cpu_flags_x86_sse2".to_string(), true)));
+        assert!(
+            entry
+                .use_flags_display
+                .contains(&("cpu_flags_x86_sse2".to_string(), true))
+        );
         // ...but CPU_FLAGS_X86 is USE_EXPAND_HIDDEN, so it never reaches
         // the `-pv` display.
         assert!(entry.use_expand_display.is_empty());
@@ -20879,14 +20820,16 @@ mod tests {
         .expect("fixture config resolves");
         let repos = find_repos(&root).expect("repos");
         let result = graph_result_real("dev-libs/hardcyclea");
-        assert!(circular_dep_solutions(
-            &result.circular_deps[0],
-            &repos,
-            &config,
-            &result.autounmask_use_changes,
-            &result.entries,
-        )
-        .is_empty());
+        assert!(
+            circular_dep_solutions(
+                &result.circular_deps[0],
+                &repos,
+                &config,
+                &result.autounmask_use_changes,
+                &result.entries,
+            )
+            .is_empty()
+        );
     }
 
     #[test]
@@ -24319,18 +24262,22 @@ mod tests {
         assert!(!euf("foo", &md("foo"), &pu("-foo")).contains("foo"));
         // A named (overlay) entry only applies to a candidate from that
         // repo -- `candidate_str` here is `::testrepo`, so `::other` is inert.
-        assert!(!euf(
-            "foo",
-            &[("other".to_string(), vec!["foo".to_string()])],
-            &[]
-        )
-        .contains("foo"));
-        assert!(euf(
-            "foo",
-            &[("testrepo".to_string(), vec!["foo".to_string()])],
-            &[]
-        )
-        .contains("foo"));
+        assert!(
+            !euf(
+                "foo",
+                &[("other".to_string(), vec!["foo".to_string()])],
+                &[]
+            )
+            .contains("foo")
+        );
+        assert!(
+            euf(
+                "foo",
+                &[("testrepo".to_string(), vec!["foo".to_string()])],
+                &[]
+            )
+            .contains("foo")
+        );
     }
 
     #[test]

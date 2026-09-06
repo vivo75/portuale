@@ -1151,11 +1151,11 @@ fn aff_cond_flag(tok: &str) -> Option<String> {
 fn aff_special_append(stack: &mut [Vec<Aff>], lvl: usize, is_single: bool, l: &[Aff]) {
     let keep_flat = is_single && !stack[lvl].last().is_some_and(aff_ends_q);
     if keep_flat {
-        if l.len() == 1 {
-            if let Aff::Group(inner) = &l[0] {
-                stack[lvl].extend(inner.iter().cloned());
-                return;
-            }
+        if l.len() == 1
+            && let Aff::Group(inner) = &l[0]
+        {
+            stack[lvl].extend(inner.iter().cloned());
+            return;
         }
         stack[lvl].extend(l.iter().cloned());
     } else {
@@ -1249,12 +1249,12 @@ pub fn extract_affecting_use(dep: &str, atom: &str) -> Option<HashSet<String>> {
                     affecting.insert(aff_cond_flag(t)?);
                 }
             } else {
-                if let Some(last) = stack[lvl].last() {
-                    if aff_ends_q(last) {
-                        let Aff::Tok(t) = last else { return None };
-                        let f = aff_cond_flag(t)?;
-                        affecting.insert(f);
-                    }
+                if let Some(last) = stack[lvl].last()
+                    && aff_ends_q(last)
+                {
+                    let Aff::Tok(t) = last else { return None };
+                    let f = aff_cond_flag(t)?;
+                    affecting.insert(f);
                 }
                 aff_special_append(&mut stack, lvl, is_single, &l);
             }

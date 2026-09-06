@@ -319,11 +319,11 @@ pub fn run_env_update(root: &Path) -> Result<(), String> {
     );
     for key in &env_keys {
         let value = &env[key.as_str()];
-        if let Some(rest) = value.strip_prefix('$') {
-            if !value.starts_with("${") {
-                profile_env.push_str(&format!("export {key}=$'{rest}'\n"));
-                continue;
-            }
+        if let Some(rest) = value.strip_prefix('$')
+            && !value.starts_with("${")
+        {
+            profile_env.push_str(&format!("export {key}=$'{rest}'\n"));
+            continue;
         }
         profile_env.push_str(&format!("export {key}='{value}'\n"));
     }

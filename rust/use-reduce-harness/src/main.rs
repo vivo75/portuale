@@ -15,7 +15,7 @@
 //     -> reads "reduce <mode> <uselist> <token...>" lines from stdin, one
 //        result per line
 
-use portage_use_reduce::{use_reduce_flat, MatchMode};
+use portage_use_reduce::{MatchMode, use_reduce_flat};
 use std::collections::HashSet;
 use std::io::{self, BufRead, Write};
 use std::process::ExitCode;

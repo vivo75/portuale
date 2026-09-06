@@ -434,7 +434,7 @@ fn verify_gpkg_manifest(gpkg_path: &Path) -> Result<(), String> {
                 return Err(format!(
                     "{}: invalid Manifest line {line:?}",
                     gpkg_path.display()
-                ))
+                ));
             }
         }
         let name = parts
@@ -769,10 +769,10 @@ pub fn populate_local_pkgdir(pkgdir: &Path) -> Result<Vec<HashMap<String, String
     let existing = portage_repo::read_packages_index(pkgdir);
     let mut by_basename: HashMap<&str, Vec<&HashMap<String, String>>> = HashMap::new();
     for e in &existing {
-        if let Some(path) = e.get("PATH") {
-            if let Some(basename) = Path::new(path).file_name().and_then(|n| n.to_str()) {
-                by_basename.entry(basename).or_default().push(e);
-            }
+        if let Some(path) = e.get("PATH")
+            && let Some(basename) = Path::new(path).file_name().and_then(|n| n.to_str())
+        {
+            by_basename.entry(basename).or_default().push(e);
         }
     }
 
@@ -868,17 +868,17 @@ fn scan_binpkg_file(
     let mtime = file_mtime(&st);
     let size = st.len();
 
-    if let Some(candidates) = by_basename.get(basename) {
-        if let Some(&hit) = candidates.iter().find(|d| {
+    if let Some(candidates) = by_basename.get(basename)
+        && let Some(&hit) = candidates.iter().find(|d| {
             d.get("_mtime_").and_then(|m| m.parse::<i64>().ok()) == Some(mtime)
                 && d.get("SIZE").and_then(|s| s.parse::<u64>().ok()) == Some(size)
                 && d.contains_key("CPV")
                 && d.contains_key("SLOT")
-        }) {
-            let mut entry = hit.clone();
-            entry.insert("PATH".to_string(), path_field);
-            return Ok(Some(entry));
-        }
+        })
+    {
+        let mut entry = hit.clone();
+        entry.insert("PATH".to_string(), path_field);
+        return Ok(Some(entry));
     }
 
     // Stale, moved, or unindexed -- re-derive from the file itself. A
@@ -912,10 +912,10 @@ fn scan_binpkg_file(
         // Real's `myfile != mypf + ".<ext>"` -> `invalid_name`: a
         // category-level file whose stem disagrees with the archive's
         // own `PF` (e.g. a misplaced `-<build_id>` file) is skipped.
-        if let Some(real_pf) = &embedded_pf {
-            if real_pf != stem {
-                return Ok(None);
-            }
+        if let Some(real_pf) = &embedded_pf
+            && real_pf != stem
+        {
+            return Ok(None);
         }
         stem.to_string()
     };
@@ -1133,9 +1133,10 @@ mod tests {
             Some("dev-libs/samepkg")
         );
         // The bundled `<pf>.ebuild` source is a real member too.
-        assert!(m
-            .get("packagepkg-1.0.ebuild")
-            .is_some_and(|e| e.contains("EAPI=8")));
+        assert!(
+            m.get("packagepkg-1.0.ebuild")
+                .is_some_and(|e| e.contains("EAPI=8"))
+        );
         // A binary package's own xpak never carries CONTENTS (real
         // `xpak()` skips it -- generated at merge time).
         assert!(!m.contains_key("CONTENTS"));
@@ -1165,9 +1166,11 @@ mod tests {
         // stream (magic `BZh`) and the real ebuild source.
         let env_bz2 = fs::read(bi.join("environment.bz2")).expect("environment.bz2 kept");
         assert_eq!(&env_bz2[..3], b"BZh", "a real bzip2 stream, byte-exact");
-        assert!(fs::read_to_string(bi.join("packagepkg-1.0.ebuild"))
-            .unwrap()
-            .contains("EAPI=8"));
+        assert!(
+            fs::read_to_string(bi.join("packagepkg-1.0.ebuild"))
+                .unwrap()
+                .contains("EAPI=8")
+        );
         let _ = fs::remove_dir_all(&tmp);
     }
 
@@ -1358,9 +1361,10 @@ mod tests {
             Some("dev-libs/packagepkg-1.0.tbz2")
         );
         assert!(tbz2.get("SIZE").is_some_and(|s| s.parse::<u64>().is_ok()));
-        assert!(tbz2
-            .get("_mtime_")
-            .is_some_and(|m| m.parse::<i64>().is_ok()));
+        assert!(
+            tbz2.get("_mtime_")
+                .is_some_and(|m| m.parse::<i64>().is_ok())
+        );
 
         let gpkg = by_cpv["dev-libs/gpkgreadpkg-1.0"];
         assert_eq!(gpkg.get("KEYWORDS").map(String::as_str), Some("amd64"));
@@ -1384,9 +1388,11 @@ mod tests {
 
     #[test]
     fn populate_local_pkgdir_of_a_missing_or_empty_dir_is_empty() {
-        assert!(populate_local_pkgdir(Path::new("/nonexistent/pkgdir"))
-            .unwrap()
-            .is_empty());
+        assert!(
+            populate_local_pkgdir(Path::new("/nonexistent/pkgdir"))
+                .unwrap()
+                .is_empty()
+        );
         let scratch = ScratchDir::new("scan-empty").unwrap();
         assert!(populate_local_pkgdir(scratch.path()).unwrap().is_empty());
     }

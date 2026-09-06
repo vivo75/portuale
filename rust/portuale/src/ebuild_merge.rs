@@ -474,34 +474,33 @@ fn new_protect_filename(dest: &Path, newmd5: &str) -> Result<PathBuf, String> {
         for entry in entries.filter_map(|e| e.ok()) {
             let name = entry.file_name();
             let name = name.to_string_lossy();
-            if let Some(rest) = name.strip_prefix("._cfg") {
-                if rest.len() > 5 && rest.as_bytes()[4] == b'_' && &rest[5..] == basename {
-                    if let Ok(n) = rest[..4].parse::<i64>() {
-                        if n > max_num {
-                            max_num = n;
-                            last_pfile = Some(parent.join(entry.file_name()));
-                        }
-                    }
-                }
+            if let Some(rest) = name.strip_prefix("._cfg")
+                && rest.len() > 5
+                && rest.as_bytes()[4] == b'_'
+                && &rest[5..] == basename
+                && let Ok(n) = rest[..4].parse::<i64>()
+                && n > max_num
+            {
+                max_num = n;
+                last_pfile = Some(parent.join(entry.file_name()));
             }
         }
     }
 
-    if let Some(old_pfile) = &last_pfile {
-        if let Ok(meta) = std::fs::symlink_metadata(old_pfile) {
-            if meta.file_type().is_symlink() {
-                if let Ok(target) = std::fs::read_link(old_pfile) {
-                    if target.to_string_lossy() == newmd5 {
-                        return Ok(old_pfile.clone());
-                    }
-                }
-            } else if meta.is_file() {
-                if let Ok(md5) = md5_hex(old_pfile) {
-                    if md5 == newmd5 {
-                        return Ok(old_pfile.clone());
-                    }
-                }
+    if let Some(old_pfile) = &last_pfile
+        && let Ok(meta) = std::fs::symlink_metadata(old_pfile)
+    {
+        if meta.file_type().is_symlink() {
+            if let Ok(target) = std::fs::read_link(old_pfile)
+                && target.to_string_lossy() == newmd5
+            {
+                return Ok(old_pfile.clone());
             }
+        } else if meta.is_file()
+            && let Ok(md5) = md5_hex(old_pfile)
+            && md5 == newmd5
+        {
+            return Ok(old_pfile.clone());
         }
     }
     Ok(parent.join(format!("._cfg{:04}_{basename}", max_num + 1)))
@@ -613,16 +612,14 @@ fn protect_decision(
             (None, None)
         };
 
-    if protect_if_modified {
-        if let Some((node_type, value)) = &matched {
-            let unmodified_since_installed = match node_type.as_str() {
-                "obj" => dest_md5.as_deref() == Some(value.as_str()),
-                "sym" => dest_link.as_deref() == Some(value.as_str()),
-                _ => false,
-            };
-            if unmodified_since_installed {
-                return Ok((dest.to_path_buf(), true));
-            }
+    if protect_if_modified && let Some((node_type, value)) = &matched {
+        let unmodified_since_installed = match node_type.as_str() {
+            "obj" => dest_md5.as_deref() == Some(value.as_str()),
+            "sym" => dest_link.as_deref() == Some(value.as_str()),
+            _ => false,
+        };
+        if unmodified_since_installed {
+            return Ok((dest.to_path_buf(), true));
         }
     }
 
@@ -1048,10 +1045,11 @@ fn register_preserved_libs(
     let cps = format!("{category}/{pn}:{slot}");
     let counter = counter.trim();
     if paths.is_empty() {
-        if let Some((entry_cpv, entry_counter, _)) = registry.entries.get(&cps) {
-            if entry_cpv == cpv && entry_counter.trim() == counter {
-                registry.entries.remove(&cps);
-            }
+        if let Some((entry_cpv, entry_counter, _)) = registry.entries.get(&cps)
+            && entry_cpv == cpv
+            && entry_counter.trim() == counter
+        {
+            registry.entries.remove(&cps);
         }
     } else {
         registry
@@ -1735,11 +1733,11 @@ pub(crate) fn write_vdb_entry_from_dir(
     if let Ok(entries) = std::fs::read_dir(build_info_dir) {
         for entry in entries.flatten() {
             let src = entry.path();
-            if src.is_file() {
-                if let Some(name) = src.file_name() {
-                    std::fs::copy(&src, tmp_dir.join(name))
-                        .map_err(|e| format!("{}: {e}", src.display()))?;
-                }
+            if src.is_file()
+                && let Some(name) = src.file_name()
+            {
+                std::fs::copy(&src, tmp_dir.join(name))
+                    .map_err(|e| format!("{}: {e}", src.display()))?;
             }
         }
     }
@@ -2253,10 +2251,10 @@ fn find_owners(root: &Path, collisions: &[String]) -> BTreeMap<String, Vec<Strin
             for line in text.lines() {
                 let mut parts = line.split_whitespace();
                 parts.next();
-                if let Some(path) = parts.next() {
-                    if collisions.iter().any(|c| c == path) {
-                        claimed.push(path.to_string());
-                    }
+                if let Some(path) = parts.next()
+                    && collisions.iter().any(|c| c == path)
+                {
+                    claimed.push(path.to_string());
                 }
             }
             if !claimed.is_empty() {
@@ -2916,10 +2914,11 @@ pub fn merge_binpkg(
         .and_then(|(rest, last)| {
             // strip `-<version>` (and an optional `-r<rev>`)
             if last.starts_with(|c: char| c.is_ascii_digit()) {
-                if let Some((pn, v)) = rest.rsplit_once('-') {
-                    if v.starts_with('r') && v[1..].chars().all(|c| c.is_ascii_digit()) {
-                        return Some(pn.to_string());
-                    }
+                if let Some((pn, v)) = rest.rsplit_once('-')
+                    && v.starts_with('r')
+                    && v[1..].chars().all(|c| c.is_ascii_digit())
+                {
+                    return Some(pn.to_string());
                 }
                 Some(rest.to_string())
             } else {
@@ -3275,9 +3274,11 @@ mod tests {
         assert!(contents.contains("dir /usr\n"));
         assert!(contents.contains("dir /usr/share\n"));
         assert!(contents.contains("dir /usr/share/x\n"));
-        assert!(contents
-            .lines()
-            .any(|l| l.starts_with("obj /usr/share/x/hello.txt ")));
+        assert!(
+            contents
+                .lines()
+                .any(|l| l.starts_with("obj /usr/share/x/hello.txt "))
+        );
         assert!(contents.contains("sym /usr/share/x/link.txt -> hello.txt"));
     }
 
@@ -3625,15 +3626,17 @@ mod tests {
         // content's own MD5 (real dblink.mergeme()'s own behavior --
         // see merge_tree's own doc comment).
         let new_md5 = md5_hex(&d.join("etc/foo.conf")).unwrap();
-        assert!(contents
-            .lines()
-            .any(|l| l.starts_with(&format!("obj /etc/foo.conf {new_md5} "))));
+        assert!(
+            contents
+                .lines()
+                .any(|l| l.starts_with(&format!("obj /etc/foo.conf {new_md5} ")))
+        );
         assert_eq!(cfgfiledict.get("/etc/foo.conf"), Some(&new_md5));
     }
 
     #[test]
-    fn merge_tree_protect_if_modified_applies_directly_when_dest_still_matches_the_installed_instance(
-    ) {
+    fn merge_tree_protect_if_modified_applies_directly_when_dest_still_matches_the_installed_instance()
+     {
         // Real `_installed_instance`/`protect_if_modified`
         // (`vartree.py:5849-5866`): the live destination still holds
         // *exactly* what the previous same-slot instance's own real
@@ -3681,9 +3684,11 @@ mod tests {
         );
         assert!(!root.join("etc/._cfg0000_foo.conf").exists());
         let new_md5 = md5_hex(&d.join("etc/foo.conf")).unwrap();
-        assert!(contents
-            .lines()
-            .any(|l| l.starts_with(&format!("obj /etc/foo.conf {new_md5} "))));
+        assert!(
+            contents
+                .lines()
+                .any(|l| l.starts_with(&format!("obj /etc/foo.conf {new_md5} ")))
+        );
     }
 
     #[test]
@@ -3947,9 +3952,11 @@ mod tests {
             PathBuf::from("new-target")
         );
         // CONTENTS still records the logical path with the *new* target.
-        assert!(contents
-            .lines()
-            .any(|l| l.starts_with("sym /etc/link.conf -> new-target")));
+        assert!(
+            contents
+                .lines()
+                .any(|l| l.starts_with("sym /etc/link.conf -> new-target"))
+        );
     }
 
     #[test]
@@ -4023,9 +4030,11 @@ mod tests {
             std::fs::read_link(root.join("etc/._cfg0000_thing.conf")).unwrap(),
             PathBuf::from("new-target")
         );
-        assert!(contents
-            .lines()
-            .any(|l| l.starts_with("sym /etc/thing.conf -> new-target")));
+        assert!(
+            contents
+                .lines()
+                .any(|l| l.starts_with("sym /etc/thing.conf -> new-target"))
+        );
     }
 
     #[test]
@@ -4066,9 +4075,11 @@ mod tests {
             std::fs::read_to_string(root.join("etc/._cfg0000_thing.conf")).unwrap(),
             "new regular content"
         );
-        assert!(contents
-            .lines()
-            .any(|l| l.starts_with("obj /etc/thing.conf")));
+        assert!(
+            contents
+                .lines()
+                .any(|l| l.starts_with("obj /etc/thing.conf"))
+        );
     }
 
     fn tempdir() -> PathBuf {
@@ -4139,9 +4150,11 @@ mod tests {
             "testrepo"
         );
         let contents = std::fs::read_to_string(vdb_dir.join("CONTENTS")).unwrap();
-        assert!(contents
-            .lines()
-            .any(|l| l.starts_with("obj /usr/share/mergepkg/hello.txt ")));
+        assert!(
+            contents
+                .lines()
+                .any(|l| l.starts_with("obj /usr/share/mergepkg/hello.txt "))
+        );
         assert!(contents.contains("sym /usr/share/mergepkg/hello-link.txt -> hello.txt"));
 
         let counter: i64 = std::fs::read_to_string(vdb_dir.join("COUNTER"))
@@ -4153,9 +4166,11 @@ mod tests {
         // Real dblink.merge()'s own atomic dbtmpdir-then-rename: no
         // MERGING_IDENTIFIER-prefixed temp directory should survive a
         // successful merge.
-        assert!(!root
-            .join("var/db/pkg/dev-libs/-MERGING-mergepkg-1.0")
-            .exists());
+        assert!(
+            !root
+                .join("var/db/pkg/dev-libs/-MERGING-mergepkg-1.0")
+                .exists()
+        );
 
         // Real pkg_preinst/pkg_postinst ordering proof: the fixture's own
         // hooks only touch these markers if, respectively, the merged
@@ -4273,9 +4288,11 @@ mod tests {
         // this marker behind -- confirms the test's own setup is
         // faithful to what a real prior `ebuild <file> install` run
         // leaves for qmerge to find.
-        assert!(portage_tmpdir
-            .join("portage/dev-libs/mergepkg-1.0/.installed")
-            .exists());
+        assert!(
+            portage_tmpdir
+                .join("portage/dev-libs/mergepkg-1.0/.installed")
+                .exists()
+        );
 
         let status = run_qmerge(&ebuild, &root, &portage_tmpdir, &MergeOptions::default())
             .expect("run_qmerge succeeds");
@@ -4339,9 +4356,11 @@ mod tests {
         assert!(second_counter > first_counter);
         // Still a single, intact entry -- not a leftover-plus-new-copy.
         assert!(root.join("usr/share/mergepkg/hello.txt").is_file());
-        assert!(!root
-            .join("var/db/pkg/dev-libs/-MERGING-mergepkg-1.0")
-            .exists());
+        assert!(
+            !root
+                .join("var/db/pkg/dev-libs/-MERGING-mergepkg-1.0")
+                .exists()
+        );
     }
 
     #[test]
@@ -4387,9 +4406,11 @@ mod tests {
         let contents =
             std::fs::read_to_string(root.join("var/db/pkg/dev-libs/configpkg-1.0/CONTENTS"))
                 .unwrap();
-        assert!(contents
-            .lines()
-            .any(|l| l.starts_with("obj /etc/configpkg.conf ")));
+        assert!(
+            contents
+                .lines()
+                .any(|l| l.starts_with("obj /etc/configpkg.conf "))
+        );
         assert!(!contents.contains("._cfg0000_configpkg.conf"));
     }
 
@@ -4437,9 +4458,11 @@ mod tests {
         let contents =
             std::fs::read_to_string(root.join("var/db/pkg/dev-libs/configsympkg-1.0/CONTENTS"))
                 .unwrap();
-        assert!(contents
-            .lines()
-            .any(|l| l.starts_with("sym /etc/configsympkg.conf -> new-target")));
+        assert!(
+            contents
+                .lines()
+                .any(|l| l.starts_with("sym /etc/configsympkg.conf -> new-target"))
+        );
         assert!(!contents.contains("._cfg0000_configsympkg.conf"));
     }
 

@@ -126,14 +126,14 @@ fn portage_elog_classes() -> HashSet<String> {
 /// `PORTAGE_ELOG_CLASSES`.
 fn module_classes(name: &str) -> HashSet<String> {
     for t in elog_system_tokens() {
-        if let Some((m, levels)) = t.split_once(':') {
-            if m.replace('-', "_") == name {
-                return levels
-                    .split(',')
-                    .map(|l| l.trim().to_uppercase())
-                    .filter(|l| !l.is_empty())
-                    .collect();
-            }
+        if let Some((m, levels)) = t.split_once(':')
+            && m.replace('-', "_") == name
+        {
+            return levels
+                .split(',')
+                .map(|l| l.trim().to_uppercase())
+                .filter(|l| !l.is_empty())
+                .collect();
         }
     }
     portage_elog_classes()
@@ -927,15 +927,18 @@ mod tests {
             .collect();
         for (k, v) in vars {
             match v {
-                Some(v) => std::env::set_var(k, v),
-                None => std::env::remove_var(k),
+                // set_var/remove_var are `unsafe` on edition 2024 (env
+                // mutation is UB in the presence of other threads); these
+                // serial tests scope env access behind the LOCK mutex.
+                Some(v) => unsafe { std::env::set_var(k, v) },
+                None => unsafe { std::env::remove_var(k) },
             }
         }
         f();
         for (k, v) in saved {
             match v {
-                Some(v) => std::env::set_var(&k, v),
-                None => std::env::remove_var(&k),
+                Some(v) => unsafe { std::env::set_var(&k, v) },
+                None => unsafe { std::env::remove_var(&k) },
             }
         }
     }

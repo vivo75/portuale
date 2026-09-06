@@ -98,7 +98,9 @@ fn print_help() {
     println!("Options:");
     println!("   --force              regenerate digests (with the digest/manifest commands)");
     println!("   --color y|n          enable or disable color output");
-    println!("   --debug              show debug output (real: sets PORTAGE_DEBUG, so bin/ebuild.sh runs set -x)");
+    println!(
+        "   --debug              show debug output (real: sets PORTAGE_DEBUG, so bin/ebuild.sh runs set -x)"
+    );
     println!("   --ignore-default-opts  do not use the EBUILD_DEFAULT_OPTS environment variable");
     println!("   --skip-manifest      skip all manifest checks");
     println!(

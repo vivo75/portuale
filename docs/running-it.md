@@ -1869,3 +1869,8 @@ rust/target/release/portuale emerge -p nosuchpkgname ; echo "exit=$?"
 # emerge: there are no ebuilds to satisfy "nosuchpkgname".
 # exit=1
 ```
+
+Edition 2024 (2026-09-06): the workspace now builds on edition 2024 —
+the commands above are unchanged, the migration was behavior-identical
+(`cargo fmt --check` / `cargo clippy --release --all-targets` /
+`cargo test --release --workspace` all green).

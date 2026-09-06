@@ -1472,14 +1472,18 @@ mod tests {
         assert!(second.is_file(), "{} should exist", second.display());
         // Neither the bare single-instance name nor the old (wrong)
         // one-level multi-instance name was written.
-        assert!(!options
-            .pkgdir
-            .join("dev-libs/packagepkg-1.0.gpkg.tar")
-            .exists());
-        assert!(!options
-            .pkgdir
-            .join("dev-libs/packagepkg-1.0-1.gpkg.tar")
-            .exists());
+        assert!(
+            !options
+                .pkgdir
+                .join("dev-libs/packagepkg-1.0.gpkg.tar")
+                .exists()
+        );
+        assert!(
+            !options
+                .pkgdir
+                .join("dev-libs/packagepkg-1.0-1.gpkg.tar")
+                .exists()
+        );
 
         // Real `EbuildBinpkg._start`'s own `BUILD_ID` export
         // (`invoke_dyn_package`'s own doc comment): each archive's
@@ -1555,10 +1559,12 @@ mod tests {
         assert!(xpak.is_file(), "{} should exist", xpak.display());
         // Not a `.tbz2`, and not the wrong one-level name.
         assert!(!options.pkgdir.join("dev-libs/packagepkg-1.0.tbz2").exists());
-        assert!(!options
-            .pkgdir
-            .join("dev-libs/packagepkg/packagepkg-1.0-1.tbz2")
-            .exists());
+        assert!(
+            !options
+                .pkgdir
+                .join("dev-libs/packagepkg/packagepkg-1.0-1.tbz2")
+                .exists()
+        );
 
         // The `.xpak` file reads with the same reader as a `.tbz2`, and
         // its own embedded `build-info/BUILD_ID` (written by real,

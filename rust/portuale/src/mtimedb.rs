@@ -260,10 +260,10 @@ fn parse_section(object: &str) -> Option<Section> {
             ResumeEntryKind::Ebuild
         };
         let cpv = &cap[2];
-        if let Some((cp, ver)) = split_cpv(cpv) {
-            if let Some((cat, pkg)) = cp.split_once('/') {
-                mergelist.push((kind, cat.to_string(), pkg.to_string(), ver.to_string()));
-            }
+        if let Some((cp, ver)) = split_cpv(cpv)
+            && let Some((cat, pkg)) = cp.split_once('/')
+        {
+            mergelist.push((kind, cat.to_string(), pkg.to_string(), ver.to_string()));
         }
     }
     if mergelist.is_empty() {

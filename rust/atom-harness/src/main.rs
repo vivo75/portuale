@@ -15,7 +15,7 @@
 //                                              "affecting <atom> <dep...>" lines
 //                                              from stdin, one result per line
 
-use portage_dep::{parse_atom, Blocker, SlotOperator, UseDep, UseDepDefault, UseDepOp};
+use portage_dep::{Blocker, SlotOperator, UseDep, UseDepDefault, UseDepOp, parse_atom};
 use std::io::{self, BufRead, Write};
 use std::process::ExitCode;
 

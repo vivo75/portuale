@@ -139,6 +139,15 @@ Both major phases of portuale are live — re-verify against `git
 log`/`what-this-proves.md` before trusting this paragraph for long, since
 it decays fast.
 
+**Infrastructure (2026-09-06)**: the whole `rust/` workspace now builds
+on **edition 2024** (`[workspace.package] edition = "2024"`, one line;
+every crate inherits via `edition.workspace = true`). See
+`what-this-proves.md`'s "Edition 2024 migration" for the two real code
+edits it required (a `portage-repo` binding-mode pattern, `unsafe`
+wrapping of `set_var`/`remove_var` in `elog.rs`'s test helper) and why
+the clippy/fmt churn is behavior-preserving. The toolchain here is
+1.97.1 — comfortably past edition 2024's 1.85 floor.
+
 **Dry-run (`emerge --pretend`)**: full recursive DEPEND/RDEPEND/BDEPEND/
 PDEPEND/IDEPEND resolution; profile/make.conf-derived USE/ACCEPT_KEYWORDS
 with the real `USE_ORDER` precedence for the full

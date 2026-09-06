@@ -217,10 +217,10 @@ use crate::emerge_build;
 use crate::emerge_getbinpkg;
 use crate::emerge_options;
 use crate::needed_elf;
-use portage_dep::{match_from_list, parse_atom, Atom, Blocker, Operator, SlotOperator};
+use portage_dep::{Atom, Blocker, Operator, SlotOperator, match_from_list, parse_atom};
 use portage_repo::{
-    config_root_from_env, resolve_pretend_graph, root_from_env, ChangedDepsReportEntry, GraphEntry,
-    PretendOutcome, SlotConflict,
+    ChangedDepsReportEntry, GraphEntry, PretendOutcome, SlotConflict, config_root_from_env,
+    resolve_pretend_graph, root_from_env,
 };
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
@@ -2494,12 +2494,10 @@ fn run_deselect(
             {
                 let candidate_str = format!("{}/{}-{version}:{slot}", atom.category, atom.package);
                 if match_from_list(target, &[candidate_str.as_str()]).is_some_and(|m| !m.is_empty())
-                {
-                    if let Some(vardb_atom) =
+                    && let Some(vardb_atom) =
                         parse_atom(&format!("{}/{}:{slot}", atom.category, atom.package))
-                    {
-                        expanded.push(vardb_atom);
-                    }
+                {
+                    expanded.push(vardb_atom);
                 }
             }
         } else if !target.contains('/') {
@@ -3057,16 +3055,16 @@ fn run_unmerge_pretend(
 
     // `sys-apps/portage` self-protection: real portage moves it out of
     // `selected` into `protected` and prints the note.
-    if let Some((selected, protected)) = per_cp.get_mut(&portage_self) {
-        if !selected.is_empty() {
-            for v in selected.drain(..) {
-                eprintln!(
-                    "!!! Not unmerging package sys-apps/portage-{v} since there is no valid \
+    if let Some((selected, protected)) = per_cp.get_mut(&portage_self)
+        && !selected.is_empty()
+    {
+        for v in selected.drain(..) {
+            eprintln!(
+                "!!! Not unmerging package sys-apps/portage-{v} since there is no valid \
                      reason for Portage to {action} itself."
-                );
-                all_selected.remove(&(portage_self.0.clone(), portage_self.1.clone(), v.clone()));
-                protected.push(v);
-            }
+            );
+            all_selected.remove(&(portage_self.0.clone(), portage_self.1.clone(), v.clone()));
+            protected.push(v);
         }
     }
     // Recheck: the self-skip may have emptied the only selection.
@@ -4897,10 +4895,10 @@ fn defined_set_names(config_root: &Path) -> Vec<String> {
         for line in text.lines() {
             let line = line.trim();
             if let Some(name) = line.strip_prefix('[').and_then(|s| s.strip_suffix(']')) {
-                if let Some(prev) = section.take() {
-                    if !multiset {
-                        names.push(prev);
-                    }
+                if let Some(prev) = section.take()
+                    && !multiset
+                {
+                    names.push(prev);
                 }
                 section = Some(name.to_string());
                 multiset = false;
@@ -4912,18 +4910,18 @@ fn defined_set_names(config_root: &Path) -> Vec<String> {
                 multiset = true;
             }
         }
-        if let Some(prev) = section {
-            if !multiset {
-                names.push(prev);
-            }
+        if let Some(prev) = section
+            && !multiset
+        {
+            names.push(prev);
         }
     }
     if let Ok(entries) = std::fs::read_dir(config_root.join("etc/portage/sets")) {
         for e in entries.flatten() {
-            if e.path().is_file() {
-                if let Some(n) = e.file_name().to_str() {
-                    names.push(n.to_string());
-                }
+            if e.path().is_file()
+                && let Some(n) = e.file_name().to_str()
+            {
+                names.push(n.to_string());
             }
         }
     }
@@ -5097,39 +5095,37 @@ fn run_search(
             } else {
                 println!("{star}  {}", color.c("bold", cp));
             }
-            if verbose {
-                if let Some(c) = &best {
-                    let meta = portage_repo::read_md5_cache(
-                        &c.repo_location,
-                        cat,
-                        &format!("{pkg}-{}", c.version),
-                    )
-                    .unwrap_or_default();
-                    let g = |k: &str| color.c("darkgreen", k);
-                    let installed = portage_repo::installed_versions(root, cat, pkg);
-                    let inst = if installed.is_empty() {
-                        "[ Not Installed ]".to_string()
-                    } else {
-                        installed.join(" ")
-                    };
-                    println!("      {} {}", g("Latest version available:"), c.version);
-                    println!("      {} {inst}", g("Latest version installed:"));
-                    println!(
-                        "      {}      {}",
-                        g("Homepage:"),
-                        meta.get("HOMEPAGE").map(String::as_str).unwrap_or("")
-                    );
-                    println!(
-                        "      {}   {}",
-                        g("Description:"),
-                        meta.get("DESCRIPTION").map(String::as_str).unwrap_or("")
-                    );
-                    println!(
-                        "      {}       {}\n",
-                        g("License:"),
-                        meta.get("LICENSE").map(String::as_str).unwrap_or("")
-                    );
-                }
+            if verbose && let Some(c) = &best {
+                let meta = portage_repo::read_md5_cache(
+                    &c.repo_location,
+                    cat,
+                    &format!("{pkg}-{}", c.version),
+                )
+                .unwrap_or_default();
+                let g = |k: &str| color.c("darkgreen", k);
+                let installed = portage_repo::installed_versions(root, cat, pkg);
+                let inst = if installed.is_empty() {
+                    "[ Not Installed ]".to_string()
+                } else {
+                    installed.join(" ")
+                };
+                println!("      {} {}", g("Latest version available:"), c.version);
+                println!("      {} {inst}", g("Latest version installed:"));
+                println!(
+                    "      {}      {}",
+                    g("Homepage:"),
+                    meta.get("HOMEPAGE").map(String::as_str).unwrap_or("")
+                );
+                println!(
+                    "      {}   {}",
+                    g("Description:"),
+                    meta.get("DESCRIPTION").map(String::as_str).unwrap_or("")
+                );
+                println!(
+                    "      {}       {}\n",
+                    g("License:"),
+                    meta.get("LICENSE").map(String::as_str).unwrap_or("")
+                );
             }
         }
         println!(
@@ -5808,13 +5804,12 @@ fn run_info(
         }
         // Real `(bindb, "binary")`: only when `--usepkg` and the ebuild
         // half yielded nothing (`actions.py:1876`).
-        if usepkg {
-            if let Some(b) = portage_repo::resolve_info_binary_candidate(config, a)
+        if usepkg
+            && let Some(b) = portage_repo::resolve_info_binary_candidate(config, a)
                 .ok()
                 .flatten()
-            {
-                pkgs.push(InfoPkg::Binary(b));
-            }
+        {
+            pkgs.push(InfoPkg::Binary(b));
         }
     }
     if !pkgs.is_empty() {
@@ -6235,14 +6230,12 @@ fn slot_conflict_atom_string(atom: &Atom, include_slot: bool) -> String {
             s.push('*');
         }
     }
-    if include_slot {
-        if let Some(slot) = &atom.slot {
-            s.push(':');
-            s.push_str(slot);
-            if let Some(sub) = &atom.sub_slot {
-                s.push('/');
-                s.push_str(sub);
-            }
+    if include_slot && let Some(slot) = &atom.slot {
+        s.push(':');
+        s.push_str(slot);
+        if let Some(sub) = &atom.sub_slot {
+            s.push('/');
+            s.push_str(sub);
         }
     }
     s
@@ -6361,18 +6354,16 @@ fn slot_conflict_caret_idx(
             }
             s
         });
-        if let Some(ver) = &ver_str {
-            if let Some(start) = span(ver, true) {
-                mark(start, ver.chars().count());
-            }
+        if let Some(ver) = &ver_str
+            && let Some(start) = span(ver, true)
+        {
+            mark(start, ver.chars().count());
         }
         if let Some(start) = span(&slot_str, false) {
             mark(start, slot_str.chars().count());
         }
-    } else if slot_violated {
-        if let Some(start) = span(&slot_str, false) {
-            mark(start, slot_str.chars().count());
-        }
+    } else if slot_violated && let Some(start) = span(&slot_str, false) {
+        mark(start, slot_str.chars().count());
     }
     idx
 }
@@ -7390,7 +7381,9 @@ pub fn run(args: &[String]) -> ExitCode {
                     i += 2;
                 }
                 _ => {
-                    eprintln!("emerge: option \"--with-bdeps\": invalid choice: {value:?} (choose from \"y\", \"n\")");
+                    eprintln!(
+                        "emerge: option \"--with-bdeps\": invalid choice: {value:?} (choose from \"y\", \"n\")"
+                    );
                     return ExitCode::from(2);
                 }
             }
@@ -7407,7 +7400,9 @@ pub fn run(args: &[String]) -> ExitCode {
                     i += 1;
                 }
                 _ => {
-                    eprintln!("emerge: option \"--with-bdeps\": invalid choice: {value:?} (choose from \"y\", \"n\")");
+                    eprintln!(
+                        "emerge: option \"--with-bdeps\": invalid choice: {value:?} (choose from \"y\", \"n\")"
+                    );
                     return ExitCode::from(2);
                 }
             }
@@ -7431,7 +7426,9 @@ pub fn run(args: &[String]) -> ExitCode {
                     i += 2;
                 }
                 _ => {
-                    eprintln!("emerge: option \"--with-bdeps-auto\": invalid choice: {value:?} (choose from \"y\", \"n\")");
+                    eprintln!(
+                        "emerge: option \"--with-bdeps-auto\": invalid choice: {value:?} (choose from \"y\", \"n\")"
+                    );
                     return ExitCode::from(2);
                 }
             }
@@ -7446,7 +7443,9 @@ pub fn run(args: &[String]) -> ExitCode {
                     i += 1;
                 }
                 _ => {
-                    eprintln!("emerge: option \"--with-bdeps-auto\": invalid choice: {value:?} (choose from \"y\", \"n\")");
+                    eprintln!(
+                        "emerge: option \"--with-bdeps-auto\": invalid choice: {value:?} (choose from \"y\", \"n\")"
+                    );
                     return ExitCode::from(2);
                 }
             }
@@ -7978,14 +7977,18 @@ pub fn run(args: &[String]) -> ExitCode {
                 return ExitCode::from(2);
             };
             if !matches!(value.as_str(), "y" | "n") {
-                eprintln!("emerge: option \"--autounmask-backtrack\": invalid choice: {value:?} (choose from \"y\", \"n\")");
+                eprintln!(
+                    "emerge: option \"--autounmask-backtrack\": invalid choice: {value:?} (choose from \"y\", \"n\")"
+                );
                 return ExitCode::from(2);
             }
             autounmask_backtrack = Some(value == "y");
             i += 2;
         } else if let Some(value) = arg.strip_prefix("--autounmask-backtrack=") {
             if !matches!(value, "y" | "n") {
-                eprintln!("emerge: option \"--autounmask-backtrack\": invalid choice: {value:?} (choose from \"y\", \"n\")");
+                eprintln!(
+                    "emerge: option \"--autounmask-backtrack\": invalid choice: {value:?} (choose from \"y\", \"n\")"
+                );
                 return ExitCode::from(2);
             }
             autounmask_backtrack = Some(value == "y");
@@ -8009,7 +8012,9 @@ pub fn run(args: &[String]) -> ExitCode {
                     i += 2;
                 }
                 _ => {
-                    eprintln!("emerge: option \"--autounmask-keep-keywords\": invalid choice: {value:?} (choose from \"y\", \"n\")");
+                    eprintln!(
+                        "emerge: option \"--autounmask-keep-keywords\": invalid choice: {value:?} (choose from \"y\", \"n\")"
+                    );
                     return ExitCode::from(2);
                 }
             }
@@ -8024,7 +8029,9 @@ pub fn run(args: &[String]) -> ExitCode {
                     i += 1;
                 }
                 _ => {
-                    eprintln!("emerge: option \"--autounmask-keep-keywords\": invalid choice: {value:?} (choose from \"y\", \"n\")");
+                    eprintln!(
+                        "emerge: option \"--autounmask-keep-keywords\": invalid choice: {value:?} (choose from \"y\", \"n\")"
+                    );
                     return ExitCode::from(2);
                 }
             }
@@ -8047,7 +8054,9 @@ pub fn run(args: &[String]) -> ExitCode {
                     i += 2;
                 }
                 _ => {
-                    eprintln!("emerge: option \"--autounmask-use\": invalid choice: {value:?} (choose from \"y\", \"n\")");
+                    eprintln!(
+                        "emerge: option \"--autounmask-use\": invalid choice: {value:?} (choose from \"y\", \"n\")"
+                    );
                     return ExitCode::from(2);
                 }
             }
@@ -8062,7 +8071,9 @@ pub fn run(args: &[String]) -> ExitCode {
                     i += 1;
                 }
                 _ => {
-                    eprintln!("emerge: option \"--autounmask-use\": invalid choice: {value:?} (choose from \"y\", \"n\")");
+                    eprintln!(
+                        "emerge: option \"--autounmask-use\": invalid choice: {value:?} (choose from \"y\", \"n\")"
+                    );
                     return ExitCode::from(2);
                 }
             }
@@ -8083,7 +8094,9 @@ pub fn run(args: &[String]) -> ExitCode {
                     i += 2;
                 }
                 _ => {
-                    eprintln!("emerge: option \"--autounmask-license\": invalid choice: {value:?} (choose from \"y\", \"n\")");
+                    eprintln!(
+                        "emerge: option \"--autounmask-license\": invalid choice: {value:?} (choose from \"y\", \"n\")"
+                    );
                     return ExitCode::from(2);
                 }
             }
@@ -8098,7 +8111,9 @@ pub fn run(args: &[String]) -> ExitCode {
                     i += 1;
                 }
                 _ => {
-                    eprintln!("emerge: option \"--autounmask-license\": invalid choice: {value:?} (choose from \"y\", \"n\")");
+                    eprintln!(
+                        "emerge: option \"--autounmask-license\": invalid choice: {value:?} (choose from \"y\", \"n\")"
+                    );
                     return ExitCode::from(2);
                 }
             }
@@ -8117,7 +8132,9 @@ pub fn run(args: &[String]) -> ExitCode {
                     i += 2;
                 }
                 _ => {
-                    eprintln!("emerge: option \"--autounmask-keep-masks\": invalid choice: {value:?} (choose from \"y\", \"n\")");
+                    eprintln!(
+                        "emerge: option \"--autounmask-keep-masks\": invalid choice: {value:?} (choose from \"y\", \"n\")"
+                    );
                     return ExitCode::from(2);
                 }
             }
@@ -8132,7 +8149,9 @@ pub fn run(args: &[String]) -> ExitCode {
                     i += 1;
                 }
                 _ => {
-                    eprintln!("emerge: option \"--autounmask-keep-masks\": invalid choice: {value:?} (choose from \"y\", \"n\")");
+                    eprintln!(
+                        "emerge: option \"--autounmask-keep-masks\": invalid choice: {value:?} (choose from \"y\", \"n\")"
+                    );
                     return ExitCode::from(2);
                 }
             }
@@ -8308,7 +8327,9 @@ pub fn run(args: &[String]) -> ExitCode {
                 "y" => quickpkg_direct = Some(true),
                 "n" => quickpkg_direct = Some(false),
                 _ => {
-                    eprintln!("emerge: option \"--quickpkg-direct\": invalid choice: {value:?} (choose from \"y\", \"n\")");
+                    eprintln!(
+                        "emerge: option \"--quickpkg-direct\": invalid choice: {value:?} (choose from \"y\", \"n\")"
+                    );
                     return ExitCode::from(2);
                 }
             }
@@ -8318,7 +8339,9 @@ pub fn run(args: &[String]) -> ExitCode {
                 "y" => quickpkg_direct = Some(true),
                 "n" => quickpkg_direct = Some(false),
                 _ => {
-                    eprintln!("emerge: option \"--quickpkg-direct\": invalid choice: {value:?} (choose from \"y\", \"n\")");
+                    eprintln!(
+                        "emerge: option \"--quickpkg-direct\": invalid choice: {value:?} (choose from \"y\", \"n\")"
+                    );
                     return ExitCode::from(2);
                 }
             }
@@ -9140,11 +9163,12 @@ pub fn run(args: &[String]) -> ExitCode {
     // local edb cache *before* resolution, so the resolver picks up the
     // live pool. (`--pretend` deliberately never touches the network --
     // it resolves against whatever is already cached.)
-    if !pretend && getbinpkg {
-        if let Err(e) = emerge_getbinpkg::refresh_binhost_indexes(&config.binrepos, &root) {
-            eprintln!("emerge: {e}");
-            return ExitCode::from(1);
-        }
+    if !pretend
+        && getbinpkg
+        && let Err(e) = emerge_getbinpkg::refresh_binhost_indexes(&config.binrepos, &root)
+    {
+        eprintln!("emerge: {e}");
+        return ExitCode::from(1);
     }
 
     // Real `main.py:958-975` precedence for the `--rebuild-if-*` trio:

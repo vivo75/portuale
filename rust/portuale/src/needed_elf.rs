@@ -671,34 +671,34 @@ pub fn find_consumers(
     let defpath_keys: BTreeSet<ObjKey> = defpath.iter().map(|p| obj_key(root, p)).collect();
     let mut satisfied_consumer_keys: BTreeSet<ObjKey> = BTreeSet::new();
 
-    if let Some(soname_node) = soname_node {
-        if exclude_provider.is_some() || !greedy {
-            let mut relevant_dir_keys: BTreeSet<ObjKey> = BTreeSet::new();
-            for provider_key in &soname_node.providers {
-                if !greedy && *provider_key == obj_key_val {
-                    continue;
-                }
-                let Some(provider_props) = map.obj_properties.get(provider_key) else {
-                    continue;
-                };
-                for p in &provider_props.alt_paths {
-                    let excluded = exclude_provider.is_some_and(|f| f(p));
-                    if !excluded {
-                        relevant_dir_keys.insert(obj_key(root, &dirname(p)));
-                    }
+    if let Some(soname_node) = soname_node
+        && (exclude_provider.is_some() || !greedy)
+    {
+        let mut relevant_dir_keys: BTreeSet<ObjKey> = BTreeSet::new();
+        for provider_key in &soname_node.providers {
+            if !greedy && *provider_key == obj_key_val {
+                continue;
+            }
+            let Some(provider_props) = map.obj_properties.get(provider_key) else {
+                continue;
+            };
+            for p in &provider_props.alt_paths {
+                let excluded = exclude_provider.is_some_and(|f| f(p));
+                if !excluded {
+                    relevant_dir_keys.insert(obj_key(root, &dirname(p)));
                 }
             }
+        }
 
-            if !relevant_dir_keys.is_empty() {
-                for consumer_key in &soname_node.consumers {
-                    let Some(consumer_props) = map.obj_properties.get(consumer_key) else {
-                        continue;
-                    };
-                    let mut path_keys = defpath_keys.clone();
-                    path_keys.extend(consumer_props.runpaths.iter().map(|p| obj_key(root, p)));
-                    if relevant_dir_keys.intersection(&path_keys).next().is_some() {
-                        satisfied_consumer_keys.insert(consumer_key.clone());
-                    }
+        if !relevant_dir_keys.is_empty() {
+            for consumer_key in &soname_node.consumers {
+                let Some(consumer_props) = map.obj_properties.get(consumer_key) else {
+                    continue;
+                };
+                let mut path_keys = defpath_keys.clone();
+                path_keys.extend(consumer_props.runpaths.iter().map(|p| obj_key(root, p)));
+                if relevant_dir_keys.intersection(&path_keys).next().is_some() {
+                    satisfied_consumer_keys.insert(consumer_key.clone());
                 }
             }
         }

@@ -13865,3 +13865,49 @@ non-goal), so there's nothing to gate against.
 
 Full contract suite (939) green; `portuale` (343) and `portage-repo`
 (290) unaffected; `cargo fmt`/`clippy` clean.
+
+### Edition 2024 migration -- the whole `rust/` workspace (2026-09-06)
+
+The workspace's single `[workspace.package] edition` was bumped from
+`2021` to `2024`. Every crate uses `edition.workspace = true`, so this
+one-line change migrated all 12 crates at once (the workspace also
+declares `rust-version` implicitly via the toolchain in use -- 1.97.1
+here, comfortably past edition 2024's 1.85 floor).
+
+Two mechanical consequences needed real edits (not just `--release`
+recompiles), and this is the record of what they were so a future
+side-branch or a re-port knows where the migration touched code:
+
+1. **`portage-repo` binding-mode pattern.** `min_by_key(|(_, &idx)| idx)`
+   became an error: edition 2024 (RFC 3627) forbids the implicit
+   dereferential `&` in a non-reference pattern when the scrutinee is a
+   reference. Fixed to `|&(_, &idx)|`, the compiler-suggested reference
+   pattern.
+
+2. **`std::env::set_var`/`remove_var` are `unsafe` on edition 2024.**
+   The `temp_env` test helper in `portuale/src/elog.rs` mutates the
+   process-global environment; the calls are now wrapped in `unsafe`
+   blocks, gated by the helper's existing `LOCK` mutex (these are serial
+   tests, so the UB-prone multi-threaded mutation never happens).
+
+The bulk of the churn is non-semantic and came from edition 2024's new
+defaults: `cargo fix --edition` + `cargo clippy --release --all-targets
+--fix` collapsed every flagged nested `if let` into the new `let_chains`
+form (`if let ... && cond { }` -- clippy's `collapsible_if` now fires on
+the old shape), and `cargo fmt` re-sorted `use` imports / re-wrapped a
+few long `eprintln!`s under the edition's `style_edition`. All of these
+are behavior-preserving; the workspace's own unit suites (792 tests, incl.
+doctests) stayed green before/after.
+
+Verification: `cargo fmt --check` clean; `cargo clippy --release
+--all-targets` zero warnings; `cargo test --release --workspace` all
+792 unit tests pass; the Python contract suite is **unaffected** (the
+subprocess harness rebuilds the binary itself and drove the migrated
+binary through 1282 passing cases -- the 5 failures it reports are the
+same pre-existing non-TTY `--ask`/`--resume` environment failures that
+fail identically on the pre-migration 2021 build, confirmed by
+stash-and-rebuild). Caveat: the musl static-container smoke gate
+(`musl/smoke_test.sh`) couldn't be run locally (podman's registries.conf
+is in the stale v1 format in this environment); it should be re-run in
+CI once, since edition 2024 requires the container's `rust` apk to be
+≥ 1.85.

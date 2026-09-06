@@ -47,7 +47,7 @@
 
 use crate::ebuild_merge::{self, MergeOptions};
 use portage_profile::{BinRepo, Config};
-use portage_repo::{find_remote_binpkg, CandidateSource, GraphEntry, PretendOutcome, RepoConfig};
+use portage_repo::{CandidateSource, GraphEntry, PretendOutcome, RepoConfig, find_remote_binpkg};
 use std::path::Path;
 
 /// Real `bintree._populate_remote`: for each `http(s)` binrepo, download
@@ -419,9 +419,11 @@ mod tests {
         // binpkg's own RDEPEND copied through.
         let vdb = root.join("var/db/pkg/dev-libs/packagepkg-1.0");
         assert!(vdb.join("CONTENTS").is_file());
-        assert!(std::fs::read_to_string(vdb.join("CONTENTS"))
-            .unwrap()
-            .contains("/usr/share/packagepkg/hello.txt"));
+        assert!(
+            std::fs::read_to_string(vdb.join("CONTENTS"))
+                .unwrap()
+                .contains("/usr/share/packagepkg/hello.txt")
+        );
         assert_eq!(
             std::fs::read_to_string(vdb.join("RDEPEND")).unwrap().trim(),
             "dev-libs/samepkg"
@@ -502,9 +504,10 @@ mod tests {
 
         // The image landed, vdb entry written.
         assert!(root.join("usr/share/binpkgphasepkg/payload.txt").is_file());
-        assert!(root
-            .join("var/db/pkg/dev-libs/binpkgphasepkg-1.0/CONTENTS")
-            .is_file());
+        assert!(
+            root.join("var/db/pkg/dev-libs/binpkgphasepkg-1.0/CONTENTS")
+                .is_file()
+        );
 
         // The fixture's own pkg_preinst `die`s if the payload is already
         // merged and pkg_postinst `die`s if it is not -- so this file
@@ -567,9 +570,10 @@ mod tests {
         assert_eq!(status, 0);
 
         // 2.0 replaced 1.0 in the vdb; 1.0's own file is unmerged.
-        assert!(root
-            .join("var/db/pkg/dev-libs/binpkgrmpkg-2.0/CONTENTS")
-            .is_file());
+        assert!(
+            root.join("var/db/pkg/dev-libs/binpkgrmpkg-2.0/CONTENTS")
+                .is_file()
+        );
         assert!(!root.join("var/db/pkg/dev-libs/binpkgrmpkg-1.0").exists());
         assert!(root.join("usr/share/binpkgrmpkg/payload-2.0.txt").is_file());
         assert!(!root.join("usr/share/binpkgrmpkg/payload-1.0.txt").exists());
@@ -622,9 +626,10 @@ mod tests {
         assert_eq!(status, 0);
 
         // The new version is in the vdb; the old one is gone.
-        assert!(root
-            .join("var/db/pkg/dev-libs/packagepkg-1.0/CONTENTS")
-            .is_file());
+        assert!(
+            root.join("var/db/pkg/dev-libs/packagepkg-1.0/CONTENTS")
+                .is_file()
+        );
         assert!(
             !root.join("var/db/pkg/dev-libs/packagepkg-0.9").exists(),
             "the replaced version's vdb entry is removed"
@@ -822,9 +827,10 @@ mod tests {
             root.join("usr/share/packagepkg/hello.txt").is_file(),
             "the binpkg image was merged into ROOT"
         );
-        assert!(root
-            .join("var/db/pkg/dev-libs/packagepkg-1.0/CONTENTS")
-            .is_file());
+        assert!(
+            root.join("var/db/pkg/dev-libs/packagepkg-1.0/CONTENTS")
+                .is_file()
+        );
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
@@ -986,14 +992,16 @@ mod tests {
         .expect("mixed merge plan succeeds");
 
         // The Binary entry: merged from the local .tbz2.
-        assert!(root
-            .join("var/db/pkg/dev-libs/packagepkg-1.0/CONTENTS")
-            .is_file());
+        assert!(
+            root.join("var/db/pkg/dev-libs/packagepkg-1.0/CONTENTS")
+                .is_file()
+        );
         assert!(root.join("usr/share/packagepkg/hello.txt").is_file());
         // The Source entry: built + merged from its ebuild, hooks ran.
-        assert!(root
-            .join("var/db/pkg/dev-libs/binpkgphasepkg-1.0/CONTENTS")
-            .is_file());
+        assert!(
+            root.join("var/db/pkg/dev-libs/binpkgphasepkg-1.0/CONTENTS")
+                .is_file()
+        );
         assert!(root.join("usr/share/binpkgphasepkg/payload.txt").is_file());
         assert_eq!(
             std::fs::read_to_string(root.join("var/lib/binpkgphasepkg.phases")).unwrap(),

@@ -1120,10 +1120,10 @@ fn repo_profile_formats(repo_location: &Path) -> Vec<String> {
         if line.is_empty() || line.starts_with('#') {
             continue;
         }
-        if let Some((key, value)) = line.split_once('=') {
-            if key.trim() == "profile-formats" {
-                return value.split_whitespace().map(String::from).collect();
-            }
+        if let Some((key, value)) = line.split_once('=')
+            && key.trim() == "profile-formats"
+        {
+            return value.split_whitespace().map(String::from).collect();
         }
     }
     Vec::new()
@@ -1779,11 +1779,9 @@ fn parse_package_use_lines(
         let mut prefix = String::new();
         let mut tokens: Vec<String> = Vec::new();
         for tok in parts {
-            if use_expand_shorthand {
-                if let Some(name) = tok.strip_suffix(':') {
-                    prefix = format!("{}_", name.to_lowercase());
-                    continue;
-                }
+            if use_expand_shorthand && let Some(name) = tok.strip_suffix(':') {
+                prefix = format!("{}_", name.to_lowercase());
+                continue;
             }
             if prefix.is_empty() {
                 tokens.push(tok.to_string());
@@ -3590,12 +3588,16 @@ sync-uri = file:///srv/pkgs
         let repo_masters = HashMap::from([("downstream".to_string(), vec![overlay.clone()])]);
         let config = resolve_config(&root, &repo, &overlay_repos, &[], "testrepo", &repo_masters)
             .expect("config must resolve");
-        assert!(config
-            .package_mask
-            .contains(&"dev-libs/b::downstream".to_string()));
-        assert!(!config
-            .package_mask
-            .contains(&"dev-libs/a::downstream".to_string()));
+        assert!(
+            config
+                .package_mask
+                .contains(&"dev-libs/b::downstream".to_string())
+        );
+        assert!(
+            !config
+                .package_mask
+                .contains(&"dev-libs/a::downstream".to_string())
+        );
     }
 
     #[test]

@@ -265,30 +265,23 @@ fn remove_contents(
         // `sym` or `dir`, whose exact path another same-slot instance
         // now claims *as a literal `dir` entry* (not `sym`) -- see this
         // module's own doc comment for the full real grounding.
-        if is_owned && (entry.node_type == "sym" || entry.node_type == "dir") {
-            if let Ok(link_meta) = std::fs::symlink_metadata(&dest) {
-                if link_meta.file_type().is_symlink() {
-                    if let Ok(target_meta) = std::fs::metadata(&dest) {
-                        if target_meta.is_dir() {
-                            let symlink_orphan = others_in_slot.iter().any(|other_pf| {
-                                ebuild_merge::owned_node_type_pf(
-                                    root,
-                                    category,
-                                    other_pf,
-                                    &entry.abs_path,
-                                )
-                                .as_deref()
-                                    == Some("dir")
-                            });
-                            if symlink_orphan {
-                                protected_symlinks
-                                    .entry((target_meta.dev(), target_meta.ino()))
-                                    .or_default()
-                                    .push(entry.abs_path.clone());
-                            }
-                        }
-                    }
-                }
+        if is_owned
+            && (entry.node_type == "sym" || entry.node_type == "dir")
+            && let Ok(link_meta) = std::fs::symlink_metadata(&dest)
+            && link_meta.file_type().is_symlink()
+            && let Ok(target_meta) = std::fs::metadata(&dest)
+            && target_meta.is_dir()
+        {
+            let symlink_orphan = others_in_slot.iter().any(|other_pf| {
+                ebuild_merge::owned_node_type_pf(root, category, other_pf, &entry.abs_path)
+                    .as_deref()
+                    == Some("dir")
+            });
+            if symlink_orphan {
+                protected_symlinks
+                    .entry((target_meta.dev(), target_meta.ino()))
+                    .or_default()
+                    .push(entry.abs_path.clone());
             }
         }
 
@@ -325,10 +318,10 @@ fn remove_contents(
                     .map(|m| m.is_dir())
                     .unwrap_or(false);
             if !symlink_to_dir {
-                if let Err(e) = std::fs::remove_file(&dest) {
-                    if e.kind() != std::io::ErrorKind::NotFound {
-                        return Err(format!("{}: {e}", dest.display()));
-                    }
+                if let Err(e) = std::fs::remove_file(&dest)
+                    && e.kind() != std::io::ErrorKind::NotFound
+                {
+                    return Err(format!("{}: {e}", dest.display()));
                 }
                 continue;
             }
@@ -346,10 +339,10 @@ fn remove_contents(
                         continue;
                     }
                 }
-                if let Err(e) = std::fs::remove_file(&dest) {
-                    if e.kind() != std::io::ErrorKind::NotFound {
-                        return Err(format!("{}: {e}", dest.display()));
-                    }
+                if let Err(e) = std::fs::remove_file(&dest)
+                    && e.kind() != std::io::ErrorKind::NotFound
+                {
+                    return Err(format!("{}: {e}", dest.display()));
                 }
             }
             "dir" => {
@@ -474,10 +467,10 @@ fn remove_dirs(
                 let mut parents: BTreeSet<PathBuf> = BTreeSet::new();
                 for relative_path in &unmerge_syms {
                     let sym_dest = root.join(relative_path.trim_start_matches('/'));
-                    if std::fs::remove_file(&sym_dest).is_ok() {
-                        if let Some(parent) = sym_dest.parent() {
-                            parents.insert(parent.to_path_buf());
-                        }
+                    if std::fs::remove_file(&sym_dest).is_ok()
+                        && let Some(parent) = sym_dest.parent()
+                    {
+                        parents.insert(parent.to_path_buf());
                     }
                 }
                 // Real bug #640058: walk each newly-emptied symlink's
@@ -829,10 +822,11 @@ mod tests {
         .expect("remove_contents succeeds");
 
         assert!(!root.join("usr/share/x/hello.txt").exists());
-        assert!(root
-            .join("usr/share/x/link.txt")
-            .symlink_metadata()
-            .is_err());
+        assert!(
+            root.join("usr/share/x/link.txt")
+                .symlink_metadata()
+                .is_err()
+        );
         assert!(!root.join("usr/share/x").exists());
         assert!(!root.join("usr/share").exists());
         assert!(!root.join("usr").exists());
@@ -1221,8 +1215,8 @@ mod tests {
     }
 
     #[test]
-    fn remove_contents_deletes_an_orphaned_symlink_once_its_target_directory_empties_and_revisits_the_freed_parent(
-    ) {
+    fn remove_contents_deletes_an_orphaned_symlink_once_its_target_directory_empties_and_revisits_the_freed_parent()
+     {
         // Real bug #326685 + bug #640058 (see this module's own doc
         // comment): this time the symlink's own target directory *is*
         // one of this package's own `dir` entries -- once it's actually
@@ -1619,9 +1613,10 @@ mod tests {
                 .exists(),
             "only-in-v1.txt has no other owner -- the replace unmerges it"
         );
-        assert!(root
-            .join("usr/share/othersinslotpkg/only-in-v2.txt")
-            .is_file());
+        assert!(
+            root.join("usr/share/othersinslotpkg/only-in-v2.txt")
+                .is_file()
+        );
         assert!(
             !vdb_v1.exists(),
             "1.0's vdb entry is dropped by the replace"

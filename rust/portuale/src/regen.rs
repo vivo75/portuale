@@ -200,10 +200,10 @@ fn regen_one(
         if key == "_md5_" || key == "_eclasses_" {
             continue;
         }
-        if let Some(v) = md.get(key) {
-            if !v.is_empty() {
-                fields.insert(key, v.clone());
-            }
+        if let Some(v) = md.get(key)
+            && !v.is_empty()
+        {
+            fields.insert(key, v.clone());
         }
     }
     if let Some(ec) = eclasses_field(&md, repo_location, masters) {

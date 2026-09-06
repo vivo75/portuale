@@ -67,7 +67,9 @@ fn print_applets() {
     println!();
     println!("Usage:");
     println!("   portuale <applet> [args ...]   run an applet by name");
-    println!("   <applet> [args ...]            run via an 'emerge' / 'ebuild' symlink beside the binary");
+    println!(
+        "   <applet> [args ...]            run via an 'emerge' / 'ebuild' symlink beside the binary"
+    );
     println!("   portuale --help                show this message");
     println!();
     println!("Applets:");

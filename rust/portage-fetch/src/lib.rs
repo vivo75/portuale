@@ -519,11 +519,7 @@ mod tests {
         // always-empty USE set: every flag is unset.
         let is_set = |_flag: &str| false;
         let active = |negated: bool, flag: &str| {
-            if negated {
-                !is_set(flag)
-            } else {
-                is_set(flag)
-            }
+            if negated { !is_set(flag) } else { is_set(flag) }
         };
         let entries = flatten_src_uri("!test? ( a-1.0.tar.gz )", active).unwrap();
         assert_eq!(entries.len(), 1);

@@ -1913,8 +1913,8 @@ thread_local! {
 }
 
 /// A fresh, empty registry for one `run_build_scheduler` call.
-pub(crate) fn new_scheduler_registry(
-) -> std::sync::Arc<std::sync::Mutex<std::collections::HashSet<i32>>> {
+pub(crate) fn new_scheduler_registry()
+-> std::sync::Arc<std::sync::Mutex<std::collections::HashSet<i32>>> {
     std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashSet::new()))
 }
 
