@@ -8938,6 +8938,23 @@ with `BUILD_ID`; the gpkg multi-instance test now asserts the
 `<cat>/<pn>/` layout and that neither wrong name is written.
 `test_portuale.py`'s multi-instance gpkg test updated to the real path.
 
+**quickpkg follow-on (2026-09-06)**: the `FEATURES=unmerge-backup`
+`quickpkg_from_vdb` path honours `binpkg-multi-instance` too. Real
+`bin/quickpkg` writes to a bare `<cpv>.<ext>.<pid>` temp file, then
+`bintree.inject` -> `getname(cpv, allocate_new=True)` ->
+`_allocate_filename_multi` does the `<cat>/<pn>/<pf>-<build_id>.<suffix>`
+allocation + `_movefile`. Portuale computes the same target up front
+(`allocate_binpkg_build_id`), passes the `BUILD_ID` to
+`invoke_dyn_package` (so the archive's own `build-info/BUILD_ID` is
+written), and derives the `Packages` `PATH`/`BUILD_ID` from it. The
+idempotency check also moved from bare-filename existence to real
+`_quickpkg_dblink`'s own `for binpkg in ... bintree.dbapi.match(=cpv)
+if binpkg.build_time == build_time: return EX_OK` -- a `Packages`-index
+scan for an entry at this cpv with the vdb's recorded `BUILD_TIME`.
+`test_emerge_unmerge_backup_multi_instance_uses_the_subdir_layout`:
+`emerge -C` with `FEATURES="unmerge-backup binpkg-multi-instance"` lands
+the backup at `dev-libs/emergeconfigpkg/emergeconfigpkg-1.0-1.xpak`.
+
 ### bug #354441 (`identical_binary`): not a portuale bug
 
 Real portage's `identical_binary` check (`depgraph.py:8001-8014`) exists

@@ -271,12 +271,22 @@ match (real `depgraph.py:8027`'s `not use_ebuild_visibility and
 (usepkgonly or useoldpkg)` guard). Dual-language; 2 dedicated contract
 tests + 6 `CASES`.
 
+**quickpkg multi-instance shipped 2026-09-06**: the
+`FEATURES=unmerge-backup` `quickpkg_from_vdb` path now honours
+`FEATURES=binpkg-multi-instance` too — real `bin/quickpkg` -> `bintree.
+inject` -> `getname(..., allocate_new=True)` -> `_allocate_filename_multi`
+gives it the `<pkgdir>/<cat>/<pn>/<pf>-<build_id>.<suffix>` subdir path
+(reusing `allocate_binpkg_build_id` from the earlier multi-instance
+work), and the `BUILD_ID` env export + `Packages` field flow through.
+The idempotency check also moved from bare-filename existence to real
+`_quickpkg_dblink`'s own "any existing binpkg at this cpv+`BUILD_TIME`"
+(`Packages`-index scan). Rust-only (execution), `test_portuale.py`.
+
 Still open: `.sig` verification/signing
-(`FEATURES=binpkg-signing` — no crypto crate, a real cut); a
+(`FEATURES=binpkg-signing` — no crypto crate, a real cut); and a
 `BUILD_TIME`-vs-installed reinstall
-trigger outside `--rebuilt-binaries` (the residual divergence above);
-quickpkg multi-instance (`quickpkg_from_vdb` always writes the bare
-`<pf>.<ext>` name). Binpkg
+trigger outside `--rebuilt-binaries` (the residual divergence above).
+Binpkg
 `SHA1` (no sha1 crate) and fetch candidate ordering/`RESTRICT=
 primaryuri` (determinism > a non-observable mirror-selection detail)
 are deliberate, pre-existing cuts documented in their own module doc

@@ -790,8 +790,14 @@ fn invoke_dyn_package(
 /// left out of the image. fifo/device `CONTENTS` nodes are skipped -- a
 /// documented cut, the same `CAP_MKNOD` limitation the merge side's own
 /// `create_special_node` has. Returns `Ok(None)` when `$PKGDIR` already
-/// holds a binpkg for this cpv (real portage's own `BUILD_TIME`
-/// idempotency check, narrowed here to file existence).
+/// holds a binpkg for this cpv at the same `BUILD_TIME` (real
+/// `_quickpkg_dblink`'s own `for binpkg in ... bintree.dbapi.match(...)
+/// if binpkg.build_time == build_time: return os.EX_OK`).
+///
+/// Under `FEATURES=binpkg-multi-instance` the archive is written to real
+/// `_allocate_filename_multi`'s `<pkgdir>/<cat>/<pn>/<pf>-<build_id>.
+/// <suffix>` (real `bin/quickpkg` -> `bintree.inject` -> `getname(...,
+/// allocate_new=True)`); otherwise the bare `<cat>/<pf>.<ext>`.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn quickpkg_from_vdb(
     root: &Path,
@@ -805,12 +811,50 @@ pub(crate) fn quickpkg_from_vdb(
     config_protect_mask: &str,
 ) -> Result<Option<PathBuf>, String> {
     let ext = binpkg_extension(&options.binpkg_format)?;
-    let binpkg_path = options.pkgdir.join(category).join(format!("{pf}.{ext}"));
+    let vdb_dir = root.join("var/db/pkg").join(category).join(pf);
+    let vdb_build_time = std::fs::read_to_string(vdb_dir.join("BUILD_TIME"))
+        .unwrap_or_default()
+        .trim()
+        .to_string();
+
+    // Real `_quickpkg_dblink`'s `BUILD_TIME` idempotency check: skip if
+    // `$PKGDIR` already holds a binpkg for this exact cpv+`BUILD_TIME`
+    // (any instance, any format). Covers both the bare single-instance
+    // name and a prior multi-instance build.
+    let cpv = format!("{category}/{pf}");
+    if !vdb_build_time.is_empty()
+        && portage_repo::read_packages_index(&options.pkgdir)
+            .iter()
+            .any(|e| {
+                e.get("CPV").map(String::as_str) == Some(cpv.as_str())
+                    && e.get("BUILD_TIME").map(String::as_str) == Some(vdb_build_time.as_str())
+            })
+    {
+        return Ok(None);
+    }
+
+    let multi_instance_suffix = multi_instance_binpkg_suffix(&options.binpkg_format)?;
+    let build_id = options.binpkg_multi_instance.then(|| {
+        allocate_binpkg_build_id(
+            &options.pkgdir,
+            category,
+            package,
+            pf,
+            multi_instance_suffix,
+        )
+    });
+    let binpkg_path = match build_id {
+        Some(id) => options
+            .pkgdir
+            .join(category)
+            .join(package)
+            .join(format!("{pf}-{id}.{multi_instance_suffix}")),
+        None => options.pkgdir.join(category).join(format!("{pf}.{ext}")),
+    };
     if binpkg_path.exists() {
         return Ok(None);
     }
 
-    let vdb_dir = root.join("var/db/pkg").join(category).join(pf);
     let contents = std::fs::read_to_string(vdb_dir.join("CONTENTS"))
         .map_err(|e| format!("{}: {e}", vdb_dir.join("CONTENTS").display()))?;
     let vdb_ebuild = vdb_dir.join(format!("{pf}.ebuild"));
@@ -895,16 +939,13 @@ pub(crate) fn quickpkg_from_vdb(
             .unwrap_or_default(),
         std::process::id()
     ));
-    // `quickpkg` never allocates a multi-instance `BUILD_ID` in portuale
-    // today (`binpkg_path` above is always the bare `{pf}.{ext}` name,
-    // pre-existing and out of scope here) -- `None`, unaffected.
     let status = invoke_dyn_package(
         &scratch_ebuild,
         portage_tmpdir,
         root,
         options,
         &tmp_path,
-        None,
+        build_id,
     )?;
     if status != 0 {
         let _ = std::fs::remove_file(&tmp_path);
@@ -920,13 +961,20 @@ pub(crate) fn quickpkg_from_vdb(
             .trim()
             .to_string()
     };
-    let cpv = format!("{category}/{pf}");
-    let build_time = bi("BUILD_TIME");
+    let build_time = vdb_build_time.as_str();
+    let build_id_str = build_id.map(|id| id.to_string()).unwrap_or_default();
     // Real `_pkgindex_entry` always writes `PATH` -- see
     // `package_after_install`'s own identical fix for the full real
     // grounding (also needed for `populate_local_pkgdir`'s mtime-
-    // staleness fast path to find this entry at all).
-    let path_field = format!("{category}/{pf}.{ext}");
+    // staleness fast path to find this entry at all). Derived from
+    // `binpkg_path` relative to `$PKGDIR` so the multi-instance
+    // `<cat>/<pn>/<pf>-<id>.<suffix>` subdir path is carried through.
+    let path_field = binpkg_path
+        .strip_prefix(&options.pkgdir)
+        .ok()
+        .and_then(|rel| rel.to_str())
+        .map(str::to_string)
+        .unwrap_or_else(|| format!("{category}/{pf}.{ext}"));
     let size_str = std::fs::metadata(&binpkg_path)
         .map(|st| st.len().to_string())
         .unwrap_or_default();
@@ -955,7 +1003,8 @@ pub(crate) fn quickpkg_from_vdb(
             ("PDEPEND", &bi("PDEPEND")),
             ("IDEPEND", &bi("IDEPEND")),
             ("PATH", &path_field),
-            ("BUILD_TIME", &build_time),
+            ("BUILD_TIME", build_time),
+            ("BUILD_ID", &build_id_str),
             ("SIZE", &size_str),
             ("_mtime_", &mtime_str),
             ("MD5", &md5_str),

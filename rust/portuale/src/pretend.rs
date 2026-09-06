@@ -3274,10 +3274,11 @@ fn package_options_from_env(
         // doesn't mention it (`ebuild_package::PackageOptions::
         // buildpkg_live`'s own doc comment has the full real grounding).
         buildpkg_live: !feature_enabled("-buildpkg-live"),
-        // Real default is on, but this defaults off -- see
-        // `ebuild_package::PackageOptions::binpkg_multi_instance`'s own
-        // doc comment for why (xpak's own multi-instance shape isn't
-        // attempted). Explicit opt-in only.
+        // Real default is on, but this defaults off here (a deliberate
+        // conservatism -- see `ebuild_package::PackageOptions::
+        // binpkg_multi_instance`'s own doc comment). Explicit opt-in;
+        // honoured by both `package_after_install` and
+        // `quickpkg_from_vdb` (the `FEATURES=unmerge-backup` path).
         binpkg_multi_instance: feature_enabled("binpkg-multi-instance"),
     }
 }

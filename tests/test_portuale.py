@@ -2248,6 +2248,52 @@ def test_emerge_unmerge_backup_quickpkgs_before_removing(emerge_binary, tmp_path
     assert not (root / "usr/share/emergeconfigpkg/emergeconfigpkg.txt").exists()
 
 
+def test_emerge_unmerge_backup_multi_instance_uses_the_subdir_layout(
+    emerge_binary, tmp_path
+):
+    """`FEATURES="unmerge-backup binpkg-multi-instance"`: the quickpkg
+    backup lands at real `_allocate_filename_multi`'s
+    `<pkgdir>/<cat>/<pn>/<pf>-<build_id>.xpak` (real `bin/quickpkg` ->
+    `bintree.inject` -> `getname(..., allocate_new=True)`), not the bare
+    `<cat>/<pf>.tbz2` -- and the `Packages` entry carries `BUILD_ID`."""
+    root = tmp_path / "root"
+    (root / "var/lib/portage").mkdir(parents=True)
+    pkgdir = tmp_path / "pkgdir"
+    env = dict(os.environ)
+    env["PORTAGE_CONFIGROOT"] = FIXTURES_ROOT
+    env["ROOT"] = str(root)
+    env["PORTAGE_TMPDIR"] = str(tmp_path / "portage-tmpdir")
+    env["PKGDIR"] = str(pkgdir)
+
+    ebuild = str(
+        Path(FIXTURES_ROOT)
+        / "repo/dev-libs/emergeconfigpkg/emergeconfigpkg-1.0.ebuild"
+    )
+    link = tmp_path / "ebuild"
+    link.symlink_to(Path(emerge_binary).resolve())
+    r = subprocess.run(
+        [str(link), ebuild, "merge"], capture_output=True, text=True, check=False, env=env
+    )
+    assert r.returncode == 0, r.stderr
+
+    env["FEATURES"] = "unmerge-backup binpkg-multi-instance"
+    result = subprocess.run(
+        [str(emerge_binary), "-C", "dev-libs/emergeconfigpkg"],
+        capture_output=True, text=True, check=False, env=env,
+    )
+    assert result.returncode == 0, result.stderr
+
+    xpak = pkgdir / "dev-libs/emergeconfigpkg/emergeconfigpkg-1.0-1.xpak"
+    assert xpak.is_file(), sorted(p.name for p in pkgdir.rglob("*"))
+    assert not (pkgdir / "dev-libs/emergeconfigpkg-1.0.tbz2").exists()
+    assert b"XPAKSTOP" in xpak.read_bytes()[-4096:]
+
+    packages = (pkgdir / "Packages").read_text()
+    assert "CPV: dev-libs/emergeconfigpkg-1.0" in packages
+    assert "BUILD_ID: 1" in packages
+    assert "PATH: dev-libs/emergeconfigpkg/emergeconfigpkg-1.0-1.xpak" in packages
+
+
 def _merge_slotopdepspkg(emerge_binary, root, env):
     ebuild = str(
         Path(FIXTURES_ROOT)
