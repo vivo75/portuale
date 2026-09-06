@@ -175,7 +175,21 @@ bounded seam) now types only the CLI boundary (the `pretend.rs` resolve
 handle, kind `"resolve"`), while portuale's `Result<_, String>`
 internals and the harnesses stay `String` per §2.1's "not now". Zero
 behavior change; suite totals now 799/799 Rust and pytest 1292 passed /
-5 pre-existing non-TTY failures / 2 skipped.
+5 pre-existing non-TTY failures / 2 skipped. Same day, the **refactor-01
+HIGH audit doc** (`api-`/`async-`/`conc-`/`num-`, 44 rules) was written
+at `docs/refactor-HIGH.md` with the CRITICAL doc's constraints as
+backdrop: zero `fix-now` findings; deliberate deviations recorded (no
+builders, no newtypes, error enums trait-poor, blocking
+subprocess/`std::fs` inside the async tree — the latter documented
+in-repo at `ebuild_phases.rs:1833`); 10 N/A api- + 13 N/A async- rules
+documented as the internal-crate/single-task-runtime posture;
+`num-cast-try-from` closed compliant in production, and its one
+test-only hygiene note (`make_xpak_binpkg` `as u32` XPAK casts in
+`binpkg.rs`) was **fixed** the same day by routing the lengths through
+`u32::try_from` (`xpak_u32`, panics like Python's `struct.pack`; 799/799,
+clippy zero-warn, fmt clean). The
+`opt-` HIGH category is deferred to a later pass (including the
+`shared_runtime` multi_thread-vs-current_thread question).
 
 **Dry-run (`emerge --pretend`)**: full recursive DEPEND/RDEPEND/BDEPEND/
 PDEPEND/IDEPEND resolution; profile/make.conf-derived USE/ACCEPT_KEYWORDS
