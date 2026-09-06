@@ -1,0 +1,279 @@
+
+
+myparams {'recurse': True, 'binpkg_respect_use': 'auto', 'autounmask': True, 'autounmask_keep_use': False, 'autounmask_keep_license': True, 'autounmask_keep_keywords': True, 'autounmask_keep_masks': True, 'bdeps': 'auto', 'ignore_soname_deps': 'y', 'dynamic_deps': True, 'implicit_system_deps': True, 'selective': True, 'deep': True, 'binpkg_changed_deps': 'auto'}
+
+
+
+      Arg: @selected
+     Atom: dev-libs/consrdep
+   ebuild: dev-libs/consrdep-1.0::test_repo
+installed: dev-libs/consrdep-1.0::test_repo
+
+Child:         (dev-libs/consrdep-1.0:0/0::test_repo, installed) USE=""
+Parent Dep:    dev-libs/consrdep required by @selected
+
+      Arg: @selected
+     Atom: dev-libs/provpkg
+   ebuild: dev-libs/provpkg-2.0::test_repo
+installed: dev-libs/provpkg-1.0::test_repo
+
+Child:         (dev-libs/provpkg-2.0:0/2::test_repo, ebuild scheduled for merge) USE=""
+Parent Dep:    dev-libs/provpkg required by @selected
+
+Parent:    (dev-libs/consrdep-1.0:0/0::test_repo, installed)
+Depstring: dev-libs/provpkg:= >=dev-libs/provpkg-1.0:0/1=
+Priority:  runtime
+
+Parent:    (dev-libs/consrdep-1.0:0/0::test_repo, installed)
+Depstring: dev-libs/provpkg:= >=dev-libs/provpkg-1.0:0/1=
+Priority:  runtime
+Candidates: ['dev-libs/provpkg:=', '>=dev-libs/provpkg-1.0:0/1=']
+   ebuild: dev-libs/provpkg-2.0::test_repo
+   ebuild: dev-libs/provpkg-1.0::test_repo
+installed: dev-libs/provpkg-1.0::test_repo
+
+Child:         (dev-libs/provpkg-1.0:0/1::test_repo, installed) USE=""
+Parent Dep:    >=dev-libs/provpkg-1.0:0/1= required by (dev-libs/consrdep-1.0:0/0::test_repo, installed)
+Slot Conflict: (dev-libs/provpkg-2.0:0/2::test_repo, ebuild scheduled for merge) USE=""
+
+Child:         (dev-libs/provpkg-1.0:0/1::test_repo, installed) USE=""
+Parent Dep:    dev-libs/provpkg:= required by (dev-libs/consrdep-1.0:0/0::test_repo, installed)
+
+Exiting... (dev-libs/consrdep-1.0:0/0::test_repo, installed)
+
+Child:         (dev-libs/consrdep-1.0:0/0::test_repo, installed) USE=""
+Parent Dep:    dev-libs/consrdep required by @selected
+
+Child:         (dev-libs/provpkg-2.0:0/2::test_repo, ebuild scheduled for merge) USE=""
+Parent Dep:    dev-libs/provpkg required by @selected
+Re-used Child: (dev-libs/provpkg-1.0:0/1::test_repo, installed) USE=""
+
+!!! Slot conflict handler started.
+   conflict:
+      root: /tmp/tmptnket_v9/
+      atom: dev-libs/provpkg:0
+      pkg: (dev-libs/provpkg-2.0:0/2::test_repo, ebuild scheduled for merge)
+      pkg: (dev-libs/provpkg-1.0:0/1::test_repo, installed)
+      parent: (dev-libs/consrdep-1.0:0/0::test_repo, installed)
+      arg, non-conflict: False, True
+         atom: dev-libs/provpkg:=
+         match: (dev-libs/provpkg-2.0:0/2::test_repo, ebuild scheduled for merge)
+         match: (dev-libs/provpkg-1.0:0/1::test_repo, installed)
+      parent: @selected
+      arg, non-conflict: False, True
+         atom: dev-libs/provpkg
+         match: (dev-libs/provpkg-2.0:0/2::test_repo, ebuild scheduled for merge)
+         match: (dev-libs/provpkg-1.0:0/1::test_repo, installed)
+      parent: (dev-libs/consrdep-1.0:0/0::test_repo, installed)
+      arg, non-conflict: False, True
+         atom: >=dev-libs/provpkg-1.0:0/1=
+         match: (dev-libs/provpkg-1.0:0/1::test_repo, installed)
+
+!!! Slot conflict graph:
+(non-conflict package) depends on
+  ((dev-libs/provpkg-2.0:0/2::test_repo, ebuild scheduled for merge),(dev-libs/provpkg-1.0:0/1::test_repo, installed)) (0)
+  (dev-libs/provpkg-1.0:0/1::test_repo, installed) (0)
+(dev-libs/provpkg-2.0:0/2::test_repo, ebuild scheduled for merge) (no children)
+(dev-libs/provpkg-1.0:0/1::test_repo, installed) (no children)
+((dev-libs/provpkg-2.0:0/2::test_repo, ebuild scheduled for merge),(dev-libs/provpkg-1.0:0/1::test_repo, installed)) (no children)
+
+!!! Slot conflict solution:
+   Conflict: (/tmp/tmptnket_v9/, dev-libs/provpkg:0)
+      remove: (dev-libs/provpkg-2.0:0/2::test_repo, ebuild scheduled for merge)
+      keep:   (dev-libs/provpkg-1.0:0/1::test_repo, installed)
+Removing package: (dev-libs/provpkg-2.0:0/2::test_repo, ebuild scheduled for merge)
+
+
+slot_operator_update_probe:
+   existing child package:  (dev-libs/provpkg-1.0:0/1::test_repo, installed)
+   existing parent package: (dev-libs/consrdep-1.0:0/0::test_repo, installed)
+   new child package:  None
+   new parent package: None
+
+
+slot_operator_update_probe:
+   existing child package:  (dev-libs/provpkg-1.0:0/1::test_repo, installed)
+   existing parent package: (dev-libs/consrdep-1.0:0/0::test_repo, installed)
+   new child package:  (dev-libs/provpkg-2.0:0/2::test_repo, ebuild scheduled for merge)
+   new parent package: (dev-libs/consrdep-1.0:0/0::test_repo, ebuild scheduled for merge)
+
+
+backtracking due to missed slot abi update:
+   child package:  (dev-libs/provpkg-1.0:0/1::test_repo, installed)
+   parent package: (dev-libs/consrdep-1.0:0/0::test_repo, installed)
+   atom: >=dev-libs/provpkg-1.0:0/1=
+
+digraph:
+
+@world depends on
+  @profile (blocker)
+  @selected (blocker)
+  @system (blocker)
+@profile (no children)
+@selected depends on
+  (dev-libs/consrdep-1.0:0/0::test_repo, installed) (soft)
+  (dev-libs/provpkg-1.0:0/1::test_repo, installed) (runtime_slot_op)
+@system (no children)
+(dev-libs/consrdep-1.0:0/0::test_repo, installed) depends on
+  (dev-libs/provpkg-1.0:0/1::test_repo, installed) (runtime_slot_op)
+(dev-libs/provpkg-1.0:0/1::test_repo, installed) (no children)
+
+
+
+backtracking try 1 
+
+
+Total: 0 packages, Size of downloads: 0 KiB
+
+WARNING: One or more updates/rebuilds have been skipped due to a dependency conflict:
+
+dev-libs/provpkg:0
+
+  (dev-libs/provpkg-2.0:0/2::test_repo, ebuild scheduled for merge) USE="" conflicts with
+    >=dev-libs/provpkg-1.0:0/1= required by (dev-libs/consrdep-1.0:0/0::test_repo, installed) USE=""
+                          ^^^^^
+
+forced reinstall atoms:
+
+
+slot operator dependencies:
+   (/tmp/tmptnket_v9/, dev-libs/provpkg:0)
+      parent: (dev-libs/consrdep-1.0:0/0::test_repo, installed)
+        child: (dev-libs/provpkg-1.0:0/1::test_repo, installed) (runtime_slot_op)
+      parent: (dev-libs/consrdep-1.0:0/0::test_repo, installed)
+        child: (dev-libs/provpkg-1.0:0/1::test_repo, installed) (runtime_slot_op)
+
+
+forced rebuilds:
+
+
+
+
+      Arg: @selected
+     Atom: dev-libs/consrdep
+   ebuild: dev-libs/consrdep-1.0::test_repo
+
+Child:         (dev-libs/consrdep-1.0:0/0::test_repo, ebuild scheduled for merge) USE=""
+Parent Dep:    dev-libs/consrdep required by @selected
+
+      Arg: @selected
+     Atom: dev-libs/provpkg
+   ebuild: dev-libs/provpkg-2.0::test_repo
+
+Child:         (dev-libs/provpkg-2.0:0/2::test_repo, ebuild scheduled for merge) USE=""
+Parent Dep:    dev-libs/provpkg required by @selected
+
+      Arg: @__auto_slot_operator_replace_installed__
+     Atom: dev-libs/consrdep:0
+   ebuild: dev-libs/consrdep-1.0::test_repo
+
+Child:         (dev-libs/consrdep-1.0:0/0::test_repo, ebuild scheduled for merge) USE=""
+Parent Dep:    dev-libs/consrdep:0 required by @__auto_slot_operator_replace_installed__
+
+      Arg: @__auto_slot_operator_replace_installed__
+     Atom: dev-libs/provpkg:0
+   ebuild: dev-libs/provpkg-2.0::test_repo
+
+Child:         (dev-libs/provpkg-2.0:0/2::test_repo, ebuild scheduled for merge) USE=""
+Parent Dep:    dev-libs/provpkg:0 required by @__auto_slot_operator_replace_installed__
+
+Parent:    (dev-libs/consrdep-1.0:0/0::test_repo, ebuild scheduled for merge)
+Depstring: dev-libs/provpkg:=
+Priority:  runtime
+
+Parent:    (dev-libs/consrdep-1.0:0/0::test_repo, ebuild scheduled for merge)
+Depstring: dev-libs/provpkg:=
+Priority:  runtime
+Candidates: ['dev-libs/provpkg:=']
+   ebuild: dev-libs/provpkg-2.0::test_repo
+
+Child:         (dev-libs/provpkg-2.0:0/2::test_repo, ebuild scheduled for merge) USE=""
+Parent Dep:    dev-libs/provpkg:= required by (dev-libs/consrdep-1.0:0/0::test_repo, ebuild scheduled for merge)
+
+Exiting... (dev-libs/consrdep-1.0:0/0::test_repo, ebuild scheduled for merge)
+
+Child:         (dev-libs/consrdep-1.0:0/0::test_repo, ebuild scheduled for merge) USE=""
+Parent Dep:    dev-libs/consrdep required by @selected
+
+Child:         (dev-libs/provpkg-2.0:0/2::test_repo, ebuild scheduled for merge) USE=""
+Parent Dep:    dev-libs/provpkg required by @selected
+
+Child:         (dev-libs/consrdep-1.0:0/0::test_repo, ebuild scheduled for merge) USE=""
+Parent Dep:    dev-libs/consrdep:0 required by @__auto_slot_operator_replace_installed__
+
+Child:         (dev-libs/provpkg-2.0:0/2::test_repo, ebuild scheduled for merge) USE=""
+Parent Dep:    dev-libs/provpkg:0 required by @__auto_slot_operator_replace_installed__
+
+digraph:
+
+@world depends on
+  @profile (blocker)
+  @selected (blocker)
+  @system (blocker)
+@profile (no children)
+@selected depends on
+  (dev-libs/consrdep-1.0:0/0::test_repo, ebuild scheduled for merge) (soft)
+  (dev-libs/provpkg-2.0:0/2::test_repo, ebuild scheduled for merge) (runtime_slot_op)
+@system (no children)
+(dev-libs/consrdep-1.0:0/0::test_repo, ebuild scheduled for merge) depends on
+  (dev-libs/provpkg-2.0:0/2::test_repo, ebuild scheduled for merge) (runtime_slot_op)
+@__auto_slot_operator_replace_installed__ depends on
+  (dev-libs/consrdep-1.0:0/0::test_repo, ebuild scheduled for merge) (soft)
+  (dev-libs/provpkg-2.0:0/2::test_repo, ebuild scheduled for merge) (runtime_slot_op)
+(dev-libs/provpkg-2.0:0/2::test_repo, ebuild scheduled for merge) (no children)
+
+[ebuild  r  U  ] dev-libs/provpkg-2.0:0/2::test_repo [1.0:0/1::test_repo] 0 KiB
+[ebuild  rR    ] dev-libs/consrdep-1.0::test_repo  0 KiB
+
+Total: 2 packages (1 upgrade, 1 reinstall), Size of downloads: 0 KiB
+forced reinstall atoms:
+   root: /tmp/tmptnket_v9/
+      atom: dev-libs/consrdep:0
+      atom: dev-libs/provpkg:0
+
+
+slot operator dependencies:
+   (/tmp/tmptnket_v9/, dev-libs/provpkg:0)
+      parent: (dev-libs/consrdep-1.0:0/0::test_repo, ebuild scheduled for merge)
+        child: (dev-libs/provpkg-2.0:0/2::test_repo, ebuild scheduled for merge) (runtime_slot_op)
+
+
+forced rebuilds:
+   root: /tmp/tmptnket_v9/
+      child: (dev-libs/provpkg-2.0:0/2::test_repo, ebuild scheduled for merge)
+         parent: (dev-libs/consrdep-1.0:0/0::test_repo, ebuild scheduled for merge)
+
+
+
+The following packages are causing rebuilds:
+
+  (dev-libs/provpkg-2.0:0/2::test_repo, ebuild scheduled for merge) causes rebuilds for:
+    (dev-libs/consrdep-1.0:0/0::test_repo, ebuild scheduled for merge)
+### SHAPE slotopw success True mergelist ['dev-libs/provpkg-2.0', 'dev-libs/consrdep-1.0']
+backtrack_infos {}
+need_restart False
+forced reinstall atoms:
+   root: /tmp/tmptnket_v9/
+      atom: dev-libs/consrdep:0
+      atom: dev-libs/provpkg:0
+
+
+slot operator dependencies:
+   (/tmp/tmptnket_v9/, dev-libs/provpkg:0)
+      parent: (dev-libs/consrdep-1.0:0/0::test_repo, ebuild scheduled for merge)
+        child: (dev-libs/provpkg-2.0:0/2::test_repo, ebuild scheduled for merge) (runtime_slot_op)
+
+
+forced rebuilds:
+   root: /tmp/tmptnket_v9/
+      child: (dev-libs/provpkg-2.0:0/2::test_repo, ebuild scheduled for merge)
+         parent: (dev-libs/consrdep-1.0:0/0::test_repo, ebuild scheduled for merge)
+
+
+
+The following packages are causing rebuilds:
+
+  (dev-libs/provpkg-2.0:0/2::test_repo, ebuild scheduled for merge) causes rebuilds for:
+    (dev-libs/consrdep-1.0:0/0::test_repo, ebuild scheduled for merge)
+
+EROOT=/tmp/tmptnket_v9/

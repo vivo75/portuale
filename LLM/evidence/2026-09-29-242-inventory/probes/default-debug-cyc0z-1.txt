@@ -1,0 +1,220 @@
+[DEBUG] Using selector: EpollSelector
+Undefined license group 'FREE'
+myaction None
+myopts {'--debug': True, '--pretend': True, '--color': 'n', '--regex-search-auto': 'y'}
+
+
+myparams {'recurse': True, 'binpkg_respect_use': 'auto', 'autounmask': True, 'autounmask_keep_use': False, 'autounmask_keep_license': True, 'autounmask_keep_keywords': True, 'autounmask_keep_masks': True, 'bdeps': 'auto', 'ignore_soname_deps': 'y', 'dynamic_deps': True, 'implicit_system_deps': True, 'binpkg_changed_deps': 'auto'}
+
+
+These are the packages that would be merged, in order:
+
+
+
+      Arg: =dev-libs/cyc0z-1
+     Atom: =dev-libs/cyc0z-1
+   ebuild: dev-libs/cyc0z-1::testrepo
+
+Child:         (dev-libs/cyc0z-1:0/0::testrepo, ebuild scheduled for merge to '/tmp/xa-inv-fx/fixtures/') USE="foo -bar" ELIBC="glibc"
+Parent Dep:    =dev-libs/cyc0z-1
+
+Parent:    (dev-libs/cyc0z-1:0/0::testrepo, ebuild scheduled for merge to '/tmp/xa-inv-fx/fixtures/')
+Depstring: foo? ( !bar? ( dev-libs/cyc0y ) )
+Priority:  buildtime
+
+Parent:    (dev-libs/cyc0z-1:0/0::testrepo, ebuild scheduled for merge to '/tmp/xa-inv-fx/fixtures/')
+Depstring: dev-libs/cyc0y
+Priority:  buildtime
+Candidates: ['dev-libs/cyc0y']
+   ebuild: dev-libs/cyc0y-1::testrepo
+
+Child:         (dev-libs/cyc0y-1:0/0::testrepo, ebuild scheduled for merge) USE="" ABI_X86="(64)"
+Parent Dep:    dev-libs/cyc0y required by (dev-libs/cyc0z-1:0/0::testrepo, ebuild scheduled for merge to '/tmp/xa-inv-fx/fixtures/')
+
+Exiting... (dev-libs/cyc0z-1:0/0::testrepo, ebuild scheduled for merge to '/tmp/xa-inv-fx/fixtures/')
+
+Parent:    (dev-libs/cyc0y-1:0/0::testrepo, ebuild scheduled for merge)
+Depstring: dev-libs/cyc0z
+Priority:  buildtime
+
+Parent:    (dev-libs/cyc0y-1:0/0::testrepo, ebuild scheduled for merge)
+Depstring: dev-libs/cyc0z
+Priority:  buildtime
+Candidates: ['dev-libs/cyc0z']
+   ebuild: dev-libs/cyc0z-3::testrepo
+
+Child:         (dev-libs/cyc0z-3:0/0::testrepo, ebuild scheduled for merge) USE="foo -bar" ABI_X86="(64)"
+Parent Dep:    dev-libs/cyc0z required by (dev-libs/cyc0y-1:0/0::testrepo, ebuild scheduled for merge)
+
+Exiting... (dev-libs/cyc0y-1:0/0::testrepo, ebuild scheduled for merge)
+
+Parent:    (dev-libs/cyc0z-3:0/0::testrepo, ebuild scheduled for merge)
+Depstring: foo? ( !bar? ( dev-libs/cyc0y ) ) foo? ( dev-libs/cyc0y ) !bar? ( dev-libs/cyc0y )
+Priority:  buildtime
+
+Parent:    (dev-libs/cyc0z-3:0/0::testrepo, ebuild scheduled for merge)
+Depstring: dev-libs/cyc0y dev-libs/cyc0y dev-libs/cyc0y
+Priority:  buildtime
+Candidates: ['dev-libs/cyc0y', 'dev-libs/cyc0y', 'dev-libs/cyc0y']
+   ebuild: dev-libs/cyc0y-1::testrepo
+
+Child:         (dev-libs/cyc0y-1:0/0::testrepo, ebuild scheduled for merge) USE="" ABI_X86="(64)"
+Parent Dep:    dev-libs/cyc0y required by (dev-libs/cyc0z-3:0/0::testrepo, ebuild scheduled for merge)
+
+Exiting... (dev-libs/cyc0z-3:0/0::testrepo, ebuild scheduled for merge)
+
+digraph:
+
+(dev-libs/cyc0z-1:0/0::testrepo, ebuild scheduled for merge to '/tmp/xa-inv-fx/fixtures/') depends on
+  (dev-libs/cyc0y-1:0/0::testrepo, ebuild scheduled for merge) (buildtime)
+=dev-libs/cyc0z-1 depends on
+  (dev-libs/cyc0z-1:0/0::testrepo, ebuild scheduled for merge to '/tmp/xa-inv-fx/fixtures/') (soft)
+(dev-libs/cyc0y-1:0/0::testrepo, ebuild scheduled for merge) depends on
+  (dev-libs/cyc0z-3:0/0::testrepo, ebuild scheduled for merge) (buildtime)
+(dev-libs/cyc0z-3:0/0::testrepo, ebuild scheduled for merge) depends on
+  (dev-libs/cyc0y-1:0/0::testrepo, ebuild scheduled for merge) (buildtime)
+
+
+
+backtracking try 1 
+
+
+
+circular dependency graph:
+
+(dev-libs/cyc0y-1:0/0::testrepo, ebuild scheduled for merge) depends on
+  (dev-libs/cyc0z-3:0/0::testrepo, ebuild scheduled for merge) (buildtime)
+(dev-libs/cyc0z-3:0/0::testrepo, ebuild scheduled for merge) depends on
+  (dev-libs/cyc0y-1:0/0::testrepo, ebuild scheduled for merge) (buildtime)
+
+
+[ebuild  N     ] dev-libs/cyc0z-1::testrepo to /tmp/xa-inv-fx/fixtures/ USE="foo -bar" 0 KiB
+[nomerge       ]  dev-libs/cyc0y-1::testrepo 
+[ebuild  N     ]   dev-libs/cyc0z-3::testrepo  USE="foo -bar" 0 KiB
+[ebuild  N     ]    dev-libs/cyc0y-1::testrepo  0 KiB
+
+Total: 3 packages (3 new), Size of downloads: 0 KiB
+
+ * Error: circular dependencies:
+
+(dev-libs/cyc0z-3:0/0::testrepo, ebuild scheduled for merge) depends on
+ (dev-libs/cyc0y-1:0/0::testrepo, ebuild scheduled for merge) (buildtime)
+  (dev-libs/cyc0z-3:0/0::testrepo, ebuild scheduled for merge) (buildtime)
+
+It might be possible to break this cycle
+by applying the following change:
+- dev-libs/cyc0z-3 (Change USE: +bar -foo)
+
+Note that this change can be reverted, once the package has been installed.
+forced reinstall atoms:
+
+
+slot operator dependencies:
+
+
+forced rebuilds:
+
+
+
+
+      Arg: =dev-libs/cyc0z-1
+     Atom: =dev-libs/cyc0z-1
+   ebuild: dev-libs/cyc0z-1::testrepo
+
+Child:         (dev-libs/cyc0z-1:0/0::testrepo, ebuild scheduled for merge to '/tmp/xa-inv-fx/fixtures/') USE="foo -bar" ELIBC="glibc"
+Parent Dep:    =dev-libs/cyc0z-1
+
+Parent:    (dev-libs/cyc0z-1:0/0::testrepo, ebuild scheduled for merge to '/tmp/xa-inv-fx/fixtures/')
+Depstring: foo? ( !bar? ( dev-libs/cyc0y ) )
+Priority:  buildtime
+
+Parent:    (dev-libs/cyc0z-1:0/0::testrepo, ebuild scheduled for merge to '/tmp/xa-inv-fx/fixtures/')
+Depstring: dev-libs/cyc0y
+Priority:  buildtime
+Candidates: ['dev-libs/cyc0y']
+   ebuild: dev-libs/cyc0y-1::testrepo
+
+Child:         (dev-libs/cyc0y-1:0/0::testrepo, ebuild scheduled for merge) USE="" ABI_X86="(64)"
+Parent Dep:    dev-libs/cyc0y required by (dev-libs/cyc0z-1:0/0::testrepo, ebuild scheduled for merge to '/tmp/xa-inv-fx/fixtures/')
+
+Exiting... (dev-libs/cyc0z-1:0/0::testrepo, ebuild scheduled for merge to '/tmp/xa-inv-fx/fixtures/')
+
+Parent:    (dev-libs/cyc0y-1:0/0::testrepo, ebuild scheduled for merge)
+Depstring: dev-libs/cyc0z
+Priority:  buildtime
+
+Parent:    (dev-libs/cyc0y-1:0/0::testrepo, ebuild scheduled for merge)
+Depstring: dev-libs/cyc0z
+Priority:  buildtime
+Candidates: ['dev-libs/cyc0z']
+   ebuild: dev-libs/cyc0z-3::testrepo
+
+Child:         (dev-libs/cyc0z-3:0/0::testrepo, ebuild scheduled for merge) USE="foo -bar" ABI_X86="(64)"
+Parent Dep:    dev-libs/cyc0z required by (dev-libs/cyc0y-1:0/0::testrepo, ebuild scheduled for merge)
+
+Exiting... (dev-libs/cyc0y-1:0/0::testrepo, ebuild scheduled for merge)
+
+Parent:    (dev-libs/cyc0z-3:0/0::testrepo, ebuild scheduled for merge)
+Depstring: foo? ( !bar? ( dev-libs/cyc0y ) ) foo? ( dev-libs/cyc0y ) !bar? ( dev-libs/cyc0y )
+Priority:  buildtime
+
+Parent:    (dev-libs/cyc0z-3:0/0::testrepo, ebuild scheduled for merge)
+Depstring: dev-libs/cyc0y dev-libs/cyc0y dev-libs/cyc0y
+Priority:  buildtime
+Candidates: ['dev-libs/cyc0y', 'dev-libs/cyc0y', 'dev-libs/cyc0y']
+   ebuild: dev-libs/cyc0y-1::testrepo
+
+Child:         (dev-libs/cyc0y-1:0/0::testrepo, ebuild scheduled for merge) USE="" ABI_X86="(64)"
+Parent Dep:    dev-libs/cyc0y required by (dev-libs/cyc0z-3:0/0::testrepo, ebuild scheduled for merge)
+
+Exiting... (dev-libs/cyc0z-3:0/0::testrepo, ebuild scheduled for merge)
+
+digraph:
+
+(dev-libs/cyc0z-1:0/0::testrepo, ebuild scheduled for merge to '/tmp/xa-inv-fx/fixtures/') depends on
+  (dev-libs/cyc0y-1:0/0::testrepo, ebuild scheduled for merge) (buildtime)
+=dev-libs/cyc0z-1 depends on
+  (dev-libs/cyc0z-1:0/0::testrepo, ebuild scheduled for merge to '/tmp/xa-inv-fx/fixtures/') (soft)
+(dev-libs/cyc0y-1:0/0::testrepo, ebuild scheduled for merge) depends on
+  (dev-libs/cyc0z-3:0/0::testrepo, ebuild scheduled for merge) (buildtime)
+(dev-libs/cyc0z-3:0/0::testrepo, ebuild scheduled for merge) depends on
+  (dev-libs/cyc0y-1:0/0::testrepo, ebuild scheduled for merge) (buildtime)
+
+
+
+circular dependency graph:
+
+(dev-libs/cyc0y-1:0/0::testrepo, ebuild scheduled for merge) depends on
+  (dev-libs/cyc0z-3:0/0::testrepo, ebuild scheduled for merge) (buildtime)
+(dev-libs/cyc0z-3:0/0::testrepo, ebuild scheduled for merge) depends on
+  (dev-libs/cyc0y-1:0/0::testrepo, ebuild scheduled for merge) (buildtime)
+
+
+[ebuild  N     ] dev-libs/cyc0z-1::testrepo to /tmp/xa-inv-fx/fixtures/ USE="foo -bar" 0 KiB
+[nomerge       ]  dev-libs/cyc0y-1::testrepo 
+[ebuild  N     ]   dev-libs/cyc0z-3::testrepo  USE="foo -bar" 0 KiB
+[ebuild  N     ]    dev-libs/cyc0y-1::testrepo  0 KiB
+
+Total: 3 packages (3 new), Size of downloads: 0 KiB
+
+ * Error: circular dependencies:
+
+(dev-libs/cyc0z-3:0/0::testrepo, ebuild scheduled for merge) depends on
+ (dev-libs/cyc0y-1:0/0::testrepo, ebuild scheduled for merge) (buildtime)
+  (dev-libs/cyc0z-3:0/0::testrepo, ebuild scheduled for merge) (buildtime)
+
+It might be possible to break this cycle
+by applying the following change:
+- dev-libs/cyc0z-3 (Change USE: +bar -foo)
+
+Note that this change can be reverted, once the package has been installed.
+forced reinstall atoms:
+
+
+slot operator dependencies:
+
+
+forced rebuilds:
+
+
+rc=1

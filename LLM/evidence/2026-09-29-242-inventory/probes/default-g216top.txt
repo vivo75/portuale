@@ -1,0 +1,13 @@
+Undefined license group 'FREE'
+
+These are the packages that would be merged, in order:
+
+Calculating dependencies ... done!
+Dependency resolution took 0.13 s (backtrack: 1/20).
+
+[ebuild  N     ] dev-lang/g216boot-1.0 
+[ebuild  N     ] dev-lang/g216comp-1.0 
+[ebuild  N     ] dev-lang/g216comp-1.0 to /tmp/xa-inv-fx/fixtures/
+[ebuild  N     ] dev-libs/g216mid-1.0 to /tmp/xa-inv-fx/fixtures/
+[ebuild  N     ] app-misc/g216top-1.0 to /tmp/xa-inv-fx/fixtures/
+rc=0
