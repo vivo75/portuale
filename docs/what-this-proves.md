@@ -13946,7 +13946,7 @@ itself and reports the same 1282 passed / 5 pre-existing non-TTY
 
 The `rust-skills` skill's CRITICAL-impact `unsafe-safety-comment` rule
 requires a `// SAFETY:` marker directly above each `unsafe` block. The
-audit (`docs/refactor-01.md`) found the workspace's `unsafe` is
+audit (`docs/history/refactor-CRITICAL.md`) found the workspace's `unsafe` is
 entirely inside `portuale/src/` (the library crates are unsafe-free)
 and that 5 of its markers were missing or not in the `// SAFETY:` form.
 S1 is purely presentational: added the marker to `portage_lock.rs`'s
@@ -13995,7 +13995,7 @@ non-TTY failures / 2 skipped.
 
 ### refactor-01 S3: last `&String` param cleaned; test-clippy warnings fixed (2026-09-06)
 
-The ownership audit (`refactor-01.md` §3) tracked exactly one
+The ownership audit (`docs/history/refactor-CRITICAL.md` §3) tracked exactly one
 `&String`-typed parameter in the whole workspace: the `vercmp_key`
 sort comparator in `pretend.rs` (`|a: &String, b: &String|`). Since
 `sort_by` on a `Vec<String>` hands the comparator `&String` items, the
@@ -14014,7 +14014,7 @@ failures / 2 skipped.
 
 ### refactor-01 S4: hand-rolled `Error` enums in every lib crate + a `portuale::Error` boundary seam (2026-09-06)
 
-The error-model re-open (`refactor-01.md` §2.1/§2.4, judgment call (b))
+The error-model re-open (`docs/history/refactor-CRITICAL.md` §2.1/§2.4, judgment call (b))
 shipped the "option B" shape without a single new dependency: every
 library crate now has its own typed error instead of leaking
 `Result<_, String>`. `portage-use-reduce`, `portage-fetch`,

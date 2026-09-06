@@ -155,7 +155,7 @@ Same day, **refactor-01 S1** (the `rust-skills` skill's CRITICAL
 `unsafe-safety-comment` rule): `// SAFETY:` markers added above every
 `unsafe` block in `portuale/src` (the library crates contain no
 `unsafe` at all); see `what-this-proves.md`'s "refactor-01 S1" entry
-and the audit at `refactor-01.md`. Same day, **refactor-01 S2**: the
+and the audit at `docs/history/refactor-CRITICAL.md`. Same day, **refactor-01 S2**: the
 `portage-versions` overflow panics are gone — components, revisions,
 and suffix numerals wider than `i128` now fall back to an
 arbitrary-length decimal comparison (`Part::BigNum`), mirroring the
