@@ -9,6 +9,7 @@ members = [
     "portage-required-use",
     "portage-fetch",
     "harness-common",
+    "mrg-director",
     "versions-harness",
     "atom-harness",
     "use-reduce-harness",

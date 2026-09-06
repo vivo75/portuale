@@ -14500,3 +14500,93 @@ the bare `emerge` applet would treat `y` as an atom and fail with
 "there are no ebuilds to satisfy 'y'". That is the "relaxed
 requirements" licence, not a pretence of byte-parity with the hand-rolled
 `emerge` parser.
+
+### `mrg` director contracts: one trait per interchangeable piece (2026-09-06)
+
+`mrg` is more than a second front end over `pretend::run`: it is the
+**director** — it orchestrates a set of interchangeable,
+runtime-swappable components, one per part of portage, so a different
+algorithm can be dropped in wholesale without touching the director or
+any other component. The new `rust/mrg-director` crate is the contract
+layer for that: deliberately **no runtime behaviour**, only the traits,
+their single-implementation markers, the `Director` wiring struct, and
+seven tests pinning the contract *shape* (the algorithms already have
+their own suites). Every signature type is a `portage-*` crate type or a
+primitive, so an alternate implementation compiles against the traits
+without pulling in the code it replaces.
+
+Five slots, each named against its real source in
+`3rdparty/portage/lib`:
+
+- **Solver** — a re-export of `portage_repo::Resolver`, not a second
+  seam (`ResolveRequest` in, merge-ordered `GraphResult` out;
+  `active_resolver()` picks the implementation, today always
+  `BacktrackingResolver`). Grounding: `actions.py` building
+  `depgraph.py`'s `depgraph` from `create_depgraph_params(...)` and
+  reading the merged graph back out. A `portage_solver`-crate, `pubgrub`,
+  or `resolvo` backend is one `impl Resolver` plus an `active_resolver`
+  branch.
+- **PackagesDb** — the installed-db (vdb) read side: real
+  `dbapi/vartree.py`'s `vartree`/`vardbapi` (the 6,667-line merge-side
+  class narrowed to the three read queries resolution actually
+  consults: `installed_versions`, `contents_files`,
+  `reverse_dependents`, plus the `root` the database reads). Marker:
+  `VdbReader`, pending factoring the ad-hoc vdb reads out of
+  `portage-repo`/`pretend.rs`.
+- **RepoCache** — the repo-cache backend: real
+  `cache/template.py::database` narrowed to its read side (`metadata`
+  one aux dict, `category` one listing, `repo` provenance), with the
+  eclass-serialization/commit machinery (`_eclasses_` reconstruction,
+  `_mtime_`/`_md5_` validation) intentionally out of contract. Marker:
+  `Md5Cache` delegating to `portage_repo::read_md5_cache` — exactly
+  real `flat_hash.py`'s on-disk layout; `sqlite`/`anydbm`/`volatile`
+  are future backends behind the same two reads.
+- **Fetcher** — real `package/ebuild/fetch.py`'s per-file half:
+  flattened `portage_fetch::SrcUriEntry` in (mirror/override flags
+  already resolved by `flatten_src_uri`), manifested local path out.
+  Marker: `WgetFetcher` (the real `wget` transport lives in
+  `portuale::fetch::fetch_src_uri`, a binary crate not linkable from a
+  library, so the marker only exercises the seam).
+- **MergeEngine** — the ebuild merge method: real
+  `_emerge/MergeListItem.py::_start` dispatching on `pkg.type_name`
+  (source through the `EbuildBuild`+`EbuildMerge` chain, `"binary"`
+  through `_emerge/Binpkg.py`) narrowed to `execute(unit, ctx) -> outcome`.
+  `MergeUnit` is plain data derived from the solver's `GraphEntry`
+  (`cpv`, `Source`/`Binary` kind mirroring
+  `portage_repo::CandidateSource`, `repo`, `root`,
+  `replaces_same_slot` for the in-place same-slot unmerge);
+  `MergeContext` carries only the two scheduler knobs (`jobs`,
+  `keep_going`) plus paths; `MergeOutcome` (`Merged`/`Failed`/`Skipped`)
+  is the coarse `>>>`/`!!!` + `--keep-going` resume signal. The
+  director owns ordering and failure policy, the engine owns the
+  copy/install. Portuale's single implementations today are
+  `ebuild_merge::{run_merge, run_qmerge, merge_binpkg}`, dispatched per
+  entry by `emerge_getbinpkg::run_merge_plan` on exactly the
+  `CandidateSource` bit the contract mirrors.
+
+`Director<S, D, C, F, M>` holds one component per slot and exposes
+`plan()` (solver delegation: `ResolveRequest` in, `GraphResult` out —
+every later stage consumes that plan, none re-resolves; the shape mirrors
+real `actions.py::action_build`, which builds the depgraph from
+`create_depgraph_params(...)` (`actions.py:268`), resolves it, and hands
+the merge list to `_emerge/Scheduler.py` (`actions.py:679`)). Deliberate v1
+narrowness: the fetch→build→merge walk stays in `pretend.rs` /
+`emerge_build.rs` / `emerge_getbinpkg.rs`, and the `mrg` applet still
+calls `pretend::run` directly, until a second algorithm actually lands —
+growing the walk now, with one implementation per slot, would be the
+dead abstraction the crate's module doc comment refuses. Future slots
+are named so they need no renames later: a `BinpkgIndex` over
+`portage_repo::BinaryIndex` (the `$PKGDIR` scan + `PORTAGE_BINHOST`
+`Packages` index behind the `g` bracket column), a news/GLSA selector
+if `@security` ever enters scope, and a scheduler policy object if the
+`-jN` build DAG ever becomes swappable.
+
+Rust-only, like everything `mrg`: no Python reference, no fixtures —
+the portuale-only hard invariant (`scope-backlog.md` Part 2.H) extends
+to the contract crate. The seven tests never resolve, fetch, or merge
+anything real (a fake db/engine/solver, `Md5Cache` against
+`/nonexistent` reading empty); `plan()` is shape-pinned, never called,
+because building a real 40+-field `ResolveRequest` is portage-repo's
+fixture-driven business. `cargo test --release -p mrg-director`: 7
+passed; `cargo clippy --release -p mrg-director --all-targets` zero
+warnings; `cargo fmt --check` clean.

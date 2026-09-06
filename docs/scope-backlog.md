@@ -418,6 +418,23 @@ purpose). Current state and what's inside each of the following bullets:
   (see the other Part 2 sections) is open for `mrg` too, by
   definition.
 
+**Director contracts (2026-09-06)**: `mrg` is more than a front end —
+it is the **director**, orchestrating interchangeable components, one
+per part of portage. The `rust/mrg-director` crate is the contract
+layer (no runtime behaviour): `Resolver` (re-exported, never
+re-defined — a `portage_solver`/`pubgrub`/`resolvo` backend is one
+`impl` plus an `active_resolver` branch), `PackagesDb` (installed-db /
+vdb read side), `RepoCache` (`cache/template.py::database` read side;
+`sqlite`/`anydbm`/`volatile` are future backends), `Fetcher`
+(per-file `SRC_URI` materialization), `MergeEngine`
+(`MergeListItem`-dispatch-shaped `execute(unit, ctx) -> outcome`),
+plus the `Director` wiring struct (`plan()` = solver delegation).
+Each slot names its single current implementation as the marker to
+replace; future slots (`BinpkgIndex`, news/GLSA, scheduler policy)
+are named, not built. What remains is landing *second*
+implementations per slot — new-algorithm work, not new-seam work
+(see `what-this-proves.md`'s "`mrg` director contracts" entry).
+
 **Hard invariant: `mrg` is a portuale-only applet. There will never be
 a portage counterpart or Python reference implementation.** Only its
 own Rust code and CLI surface matter.

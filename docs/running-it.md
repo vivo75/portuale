@@ -1970,3 +1970,23 @@ localise a merge-order divergence, dump both portuale and real and diff
 in this order: node sets, then edge sets, then per-edge priorities, then
 `.order`. That sequence isolates whether the gap is graph construction or
 scheduling in one pass.
+
+`mrg` director contracts (2026-09-06): the interchangeable-component
+seams (`rust/mrg-director`: solver / installed-db / repo cache /
+fetcher / merge engine + the `Director` wiring struct) have no CLI
+surface — they are a Rust contract layer with shape-pinning unit tests,
+Rust-only like everything `mrg` (no Python reference, no fixtures).
+Live-verified exactly as run:
+
+```sh
+cargo test --release -p mrg-director
+# running 7 tests
+# test tests::director_holds_five_slots_and_plans_through_its_solver ... ok
+# test tests::fetcher_returns_a_manifested_path ... ok
+# test tests::merge_engine_executes_one_unit_to_one_outcome ... ok
+# test tests::packages_db_is_three_queries_plus_root ... ok
+# test tests::repo_cache_is_read_only_query_by_key ... ok
+# test tests::resolver_seam_is_the_single_re_export ... ok
+# test tests::resolver_speaks_graph_result ... ok
+# test result: ok. 7 passed; 0 failed
+```

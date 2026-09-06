@@ -1,0 +1,12 @@
+[package]
+name = "mrg-director"
+version = "0.1.0"
+edition.workspace = true
+
+[dependencies]
+# The contract-typed inputs/outputs (ResolveRequest/GraphResult/etc.) and
+# the re-export hooks (active_resolver) live in portage-repo. This crate
+# adds no runtime behaviour -- only the interchangeable-traits layer the
+# mrg director names so each component can be swapped independently.
+portage-repo = { path = "../portage-repo" }
+portage-fetch = { path = "../portage-fetch" }

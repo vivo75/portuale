@@ -447,6 +447,19 @@ flags so `-av pkg` never swallows the atom, and the `=y`/`=n` spellings
 are not parsed yet). `mrg` is registered in the `Applet` enum /
 `from_name` / `print_applets` / `run` dispatch like the other two.
 
+**`mrg` director contracts (2026-09-06)**: `mrg` is more than a second
+front end — it is the *director*, orchestrating interchangeable
+components (solver / installed-db / repo cache / fetcher / merge
+method), one per part of portage. The `rust/mrg-director` crate is the
+contract layer for that (traits + single-implementation markers + the
+`Director` wiring struct + shape-pinning tests, no runtime behaviour),
+each slot grounded in real `3rdparty/portage/lib` sources
+(`depgraph.py`, `dbapi/vartree.py`, `cache/template.py`,
+`package/ebuild/fetch.py`, `MergeListItem.py`/`PackageMerge.py`).
+`mrg` itself still calls `pretend::run` directly until a second
+algorithm per slot actually lands; see `what-this-proves.md`'s "`mrg`
+director contracts" entry and `scope-backlog.md` Part 2.H.
+
 `what-this-proves.md` is the incrementally-
 updated record of every shipped slice, each grounded in cited real Python
 source — read that, not this list, for current detail, and `git log` for
