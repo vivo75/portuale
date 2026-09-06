@@ -20,6 +20,7 @@ holds everything else.
 | [`running-it.md`](running-it.md) | Runnable, live-verified examples for every shipped slice. |
 | [`brush-pin.md`](brush-pin.md) | The `brush` (embedded bash) dependency pin, the two fixes it used to carry, and the re-pin checklist. |
 | [`operation-diagrams.md`](operation-diagrams.md) | Block diagrams tracing four representative `emerge` invocations through the code, plus per-operation detail pages. |
+| [`emerge-pretend-debug.md`](emerge-pretend-debug.md) | Design note (**not implemented**): real portage's `--debug` resolver trace — every message it emits with its upstream source, why it is the ground truth for graph/merge-order divergences, and a staged port plan. Distinguishes it from portuale's current `--debug`, which is only `PORTAGE_DEBUG=1`/`set -x`. |
 
 ## History
 

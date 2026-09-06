@@ -1897,7 +1897,12 @@ PORTUALE_DEBUG_MERGE_GRAPH=1 rust/target/release/portuale emerge \
 It is shaped to line up with real portage's own
 `emerge -p --debug` digraph dump (`digraph.debug_print()`, printed just
 before `_serialize_tasks` runs), which is the reference this port was
-validated against. To localise a merge-order divergence, dump both and
+validated against. Note that portuale's own `--debug` is *not* that:
+it only sets `PORTAGE_DEBUG=1` (so the embedded bash runs `set -x` in
+every phase), which makes `emerge -p --debug` byte-identical to
+`emerge -p`. Porting real's resolver trace -- of which this env var is a
+first, ad-hoc slice -- is designed out in
+[`emerge-pretend-debug.md`](emerge-pretend-debug.md). To localise a merge-order divergence, dump both and
 diff in this order: node sets, then edge sets, then per-edge priorities,
 then `.order`. That sequence isolates whether the gap is graph
 construction or scheduling in one pass.

@@ -133,6 +133,17 @@ can't grow into these incrementally:
   `--tree` renderer); the *conditional* `followup_change` grandparent
   variant has no fixture (the *hard*-clash grandparent case does,
   2026-09-05).
+- **`emerge --pretend --debug`: real's resolver trace.** Portuale's
+  `--debug` is only real's `PORTAGE_DEBUG=1`/`set -x` half, so
+  `emerge -p --debug` is byte-identical to `emerge -p`; real
+  additionally emits a full resolution trace on stderr (`Arg:`/`Atom:`,
+  the candidate list, `Parent:`/`Depstring:`/`Priority:`/`Candidates:`,
+  `Child:`/`Parent Dep:`, `Virtual Parent:`, and the `digraph:` dump).
+  That dump is the ground truth every remaining graph divergence is
+  diffed against — it is what landed the `_serialize_tasks` port — so
+  emitting the same shapes is high leverage, and ~90% of it is derivable
+  from data portuale already holds. Message inventory, upstream sources
+  and a staged plan: [`emerge-pretend-debug.md`](emerge-pretend-debug.md).
 - **Merge-list order, remaining cuts.** The `_serialize_tasks` port
   itself shipped 2026-09-06 (`portage-repo/src/merge_order.rs`): a typed
   `DepPriority` digraph, the `DepPriorityNormalRange`/
