@@ -1,0 +1,13 @@
+Undefined license group 'FREE'
+
+These are the packages that would be merged, in order:
+
+Calculating dependencies ... done!
+Dependency resolution took 0.11 s (backtrack: 0/20).
+
+
+emerge: there are no ebuilds built with USE flags to satisfy "dev-libs/aub0d[-foo]" for /tmp/l0-fixture-oracle/fixtures/.
+!!! One of the following packages is required to complete your request:
+- dev-libs/aub0d-0::testrepo (Change USE: -foo)
+(dependency required by "dev-libs/aub0a-0::testrepo" [ebuild])
+(dependency required by "dev-libs/aub0a" [argument])
