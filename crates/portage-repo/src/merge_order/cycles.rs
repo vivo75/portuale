@@ -2,6 +2,19 @@
 
 use crate::merge_order::*;
 
+/// Arguments of [`find_smallest_cycle`].
+pub(crate) struct FindSmallestCycleArgs<'a> {
+    pub(crate) g: &'a Digraph,
+    pub(crate) frontier: Option<&'a mut SerializeFrontier>,
+    pub(crate) entries: &'a [GraphEntry],
+    pub(crate) range: &'a PriorityRange,
+    pub(crate) asap: &'a [usize],
+    pub(crate) prefer_asap: bool,
+    /// Nodes temporarily ineligible for harvesting (owners waiting on their
+    /// unadmitted removal); empty everywhere else, including all unit tests.
+    pub(crate) ineligible: &'a HashSet<usize>,
+}
+
 /// The `--pretend` subset of Portage's `_serialize_tasks` leaf-selection loop:
 /// the `ignore_priority` ladder, `asap_nodes`, `find_smallest_cycle` and the
 /// `drop_satisfied` escalation.

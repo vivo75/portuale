@@ -176,3 +176,38 @@ impl SerializeFrontier {
 pub(crate) fn frontier_enabled() -> bool {
     std::env::var_os("PORTAGE_SERIALIZE_FRONTIER_DISABLE").is_none()
 }
+
+/// `leaf_nodes` through the frontier when built, plain scan otherwise.
+pub(crate) fn leaves_via(
+    frontier: Option<&mut SerializeFrontier>,
+    g: &Digraph,
+    ig: Option<Ignore>,
+) -> Vec<usize> {
+    match frontier {
+        Some(fr) => match fr.level_of(ig) {
+            Some(level) => fr
+                .ready_nodes(level, &g.alive)
+                .into_iter()
+                .filter(|&i| g.alive[i])
+                .collect(),
+            None => g.leaf_nodes(ig),
+        },
+        None => g.leaf_nodes(ig),
+    }
+}
+
+/// `is_leaf` through the frontier when built, direct check otherwise.
+pub(crate) fn is_leaf_via(
+    frontier: Option<&SerializeFrontier>,
+    g: &Digraph,
+    node: usize,
+    ig: Option<Ignore>,
+) -> bool {
+    match frontier {
+        Some(fr) => match fr.level_of(ig) {
+            Some(level) => fr.is_leaf(node, level),
+            None => g.is_leaf(node, ig),
+        },
+        None => g.is_leaf(node, ig),
+    }
+}

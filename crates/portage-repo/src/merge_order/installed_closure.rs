@@ -103,3 +103,13 @@ pub(crate) fn synthetic_installed_entry(
         deps,
     }
 }
+
+/// Arguments of [`add_installed_dependency_closure`].
+pub(crate) struct AddInstalledDependencyClosureArgs<'a> {
+    pub(crate) entries: &'a mut Vec<GraphEntry>,
+    pub(crate) root: &'a Path,
+    pub(crate) repos: &'a [RepoConfig],
+    pub(crate) system_atoms: &'a [String],
+    pub(crate) virtuals_only: bool,
+    pub(crate) dynamic_deps: bool,
+}
