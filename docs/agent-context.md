@@ -407,6 +407,36 @@ gating already ships), full elementary-cycle enumeration for the
 (`pkg_use_display` for non-default USE, `use`/`soname` reason keys,
 colorization, `need_rebuild`).
 
+**`mrg` applet (2026-09-06, first slice: a clap-based option parser)**: a
+new third applet `mrg` was added to the multicall binary — the deliberate
+counter-example to emerge/ebuild's near-zero-dependency, hand-rolled
+posture. `mrg` is allowed (and now does) lean on a major mainstream
+crate: `clap = "4"` (pure Rust, zero C linkage, so the musl-static story
+is untouched) builds the whole parser from one `OPTIONS` table carrying
+real emerge's own option surface — every action and option, short and
+long spelling as-is, the real `longopt_aliases` (`--cols`, `--skip-first`)
+and the real `actions`-with-shorts (`-c -C -P -s -V`, the `-X`/`-B`/`-U`
+`option` shorts), plus required-value choice options, and repeatable
+`action: "append"` options. `mrg` currently *parses and echoes* what it
+parsed (a deterministic report, options in definition order, atoms
+last); no resolution or filesystem work yet. **`mrg` is a portuale-only
+applet — there will never be a portage counterpart or Python reference
+implementation.** Only its CLI surface matters, and the black-box tests
+live in `tests/test_portuale.py`. Real-fidelity
+notes: the `--deep`/`-D`, `--jobs`/`-j`, `--load-average`/`-l`
+optional-value numerics mirror real `insert_optional_args` exactly —
+a following token is the value only when real emerge's own validator
+accepts it, otherwise the option is bare with real's literal `"True"`
+inserted (implemented via `require_equals` + a `join_optional_values`
+pre-pass and unit-tested for the `-D cat/a` atom and `-j 4`/`-j4`
+forms); usage errors exit 2, help exits 0, short flags bundle like
+real argparse (`-pv1`). See `what-this-proves.md`'s "`mrg` applet"
+entry and `mrg.rs`'s module doc comment (which records the
+deliberate cuts: the y/n optional-value *family* is modelled as plain
+flags so `-av pkg` never swallows the atom, and the `=y`/`=n` spellings
+are not parsed yet). `mrg` is registered in the `Applet` enum /
+`from_name` / `print_applets` / `run` dispatch like the other two.
+
 `what-this-proves.md` is the incrementally-
 updated record of every shipped slice, each grounded in cited real Python
 source — read that, not this list, for current detail, and `git log` for

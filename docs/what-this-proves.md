@@ -14369,3 +14369,87 @@ beta"`) with three new news items -- `[alpha]` (relevant), `[beta]`
 (`[[bad` -> invalid item, never counted, never added to `.skip`).
 Dual-language. The remaining cut is the `News-Item-Format` EAPI
 atom-validity gate (Part 3: no EAPI parametrization).
+
+### `mrg` applet: first slice — real emerge option surface via clap (2026-09-06)
+
+ A third applet, `mrg`, was added to the multicall binary — the *deliberate
+ counter-example* to emerge/ebuild's posture. Its requirements are not the
+ tight ones (no minimal static musl byte budget, and no Python reference
+ to stay lockstep with): **`mrg` may use major mainstream crates**, and this
+ first slice proves that headroom by building its whole CLI parser out of
+ `clap = "4"` (declared in `portuale/Cargo.toml`'s `[dependencies]` with
+ the waiver spelled out; pure-Rust, zero C linkage, so the musl-static
+ story is untouched).
+
+ **`mrg` is a portuale-only applet — it will never have a portage
+ counterpart or Python reference implementation.** Its CLI surface is
+ borrowed from real `emerge` (so `mrg` and `emerge` accept the same
+ spellings), but there is deliberately no Python mirror to keep in
+ lockstep with, and none will ever be added. Only `mrg.rs`'s own Rust
+ code and its black-box tests define the behavior.
+
+The option surface is real emerge's own — every action and option, short
+and long spelling kept as-is, from `lib/_emerge/main.py` (the `options`
+list, the `actions` frozenset, `shortmapping`, `longopt_aliases`, and
+`argument_options`'s `action: "append"`/`"store"` entries — `mrg.rs`'s
+module doc comment quotes every cut against those exact sources). A
+single `OPTIONS` table drives both the clap `Arg` build and the post-
+parse report, so the parser and the "here's what I parsed" echo cannot
+drift apart. Structure:
+
+- the real **`actions`** (with their real shorts: `-c -C -P -s -V`) and
+  the plain boolean options (real shorts incl. the numeric-looking
+  `-1`, `-B`, `-U`, `-N`, `-O`, `-W`) are `SetTrue` flags; clap's native
+  short bundling reproduces real argparse — `-pv1 pkg` parses exactly
+  like real emerge's;
+- the real **`longopt_aliases`** (`--cols` for `--columns`,
+  `--skip-first` for `--skipfirst`) are clap `alias`es;
+- required-value choice options (`--color`, `--with-bdeps`,
+  `--reinstall changed-use`, the `--autounmask-*` y/n pair, …) keep
+  their required value with real's `choices` via `PossibleValuesParser`;
+- the repeatable **`action: "append"`** options (`--exclude`/`-X`,
+  `--buildpkg-exclude`, the `--*binpkg-exclude`/`--*binpkg-include`
+  family, `--reinstall-atoms`, `--rebuild-exclude`/`-ignore`,
+  `--useoldpkg-atoms`, `--sync-submodule`) are `ArgAction::Append`;
+- the optional-value numerics **`--deep`/`-D`, `--jobs`/`-j`,
+  `--load-average`/`-l`** reproduce real `insert_optional_args`'s
+  conditional-consume semantics, not clap's eat-the-next-token behavior:
+  a following token is the value only when real emerge's own validator
+  accepts it (`int(s) >= 0` for `deep`/`jobs`, which for `jobs` also
+  accepts `y`/`n`, `float(s) >= 0` for `load-average`), otherwise the
+  option stays bare and gets real's *literal* inserted default `"True"`.
+  Implemented as `require_equals` (so `-D cat/pkg` keeps `cat/pkg` an
+  atom and `-D` `--deep=True`, exactly like real) + a
+  `join_optional_values` pre-pass that joins the separated valid-value
+  spellings into the explicit long form before clap sees them (`-j 4` →
+  `--jobs=4`, `-j4`/`-D2`/`-l2.5` → `--jobs=4`/…). Verified with unit
+  tests for the atom case, the y/n and float cases, and the attached
+  short forms.
+
+Exit-code conventions match real emerge: success and `-h`/`--help` exit
+0, any usage error exits 2 (clap's own) — `usage_errors_are_errors`,
+`help_is_ok`, `shorts_are_pairwise_distinct`, and ten other Rust unit
+tests in `mrg.rs` pin the surface. `mrg` now **echoes** what it parsed
+(a deterministic report, options in definition order, `--long=value` for
+value kinds, atoms last) — the honest first slice the applet was asked
+to start with; resolution and any real behavior are deliberately later
+slices. There is no Python mirror (its CLI-recognition surface is
+Rust-only like `ebuild`'s), so the black-box coverage lives in
+`tests/test_portuale.py` (a new `mrg_binary` symlink fixture + seven
+tests, reusing the same argv[0]-dispatch machinery `emerge`/`ebuild`
+use), and `main.rs` registers `mrg` in `Applet`/`from_name`/
+`print_applets`/`run` like the other two.
+
+Deliberate cuts (recorded in `mrg.rs`'s module doc comment and
+`scope-backlog.md` Part 2.H): the y/n optional-value *family*
+(`--ask`/`--verbose`/`--quiet`/`--autounmask`/`--buildpkg`/`--usepkg`
+and the rest of `insert_optional_args`'s `default_arg_opts` with `y_or_n`
+values) is modelled as plain `SetTrue` flags — that keeps the ubiquitous
+bare and bundled spellings (`-a`, `-av pkg`, `-pv pkg`) working like real
+emerge instead of letting clap greedily swallow the following atom — at
+the cost of the explicit `=y`/`=n` forms not being parsed yet; a repeated
+required-value option errors (clap's conflict) like optparse's own
+"specified twice" rejection. `what-this-proves.md`'s remaining entries
+are untouched by this (scoped to `emerge`/`ebuild`, where the same
+`scope-backlog.md` Part 3 entry explains why clap stays *out* of those
+two parsers).

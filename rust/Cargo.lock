@@ -1403,6 +1403,7 @@ dependencies = [
  "blake2",
  "brush-builtins",
  "brush-core",
+ "clap",
  "filetime",
  "libc",
  "md-5",

@@ -68,6 +68,14 @@ filetime = "0.2"
 # relying on that, the same "don't depend on an undeclared transitive"
 # reasoning that applies to any direct API use of another crate.
 libc = "0.2"
+# The `mrg` applet (module mrg.rs) is deliberately allowed to use major,
+# mainstream crates -- its requirements are NOT the tight emerge/ebuild
+# ones (see mrg.rs's own module doc comment for the full waiver): clap
+# gives it a real, conventional command-line option parser (the same
+# short/long option surface as real emerge) instead of portuale's
+# hand-rolled parser. Pure Rust, zero C linkage, so the musl-static
+# story is untouched.
+clap = "4"
 
 [dev-dependencies]
 # Test-only: assemble gpkg `Manifest` `DATA` lines with real BLAKE2B/

@@ -1808,10 +1808,11 @@ Applet listing and per-applet help:
 
 ```sh
 rust/target/release/portuale            # or `portuale --help` / `-h`
-# portuale: a multicall binary -- runs as `emerge` or `ebuild` ...
+# portuale: a multicall binary -- runs as `emerge`, `ebuild`, or `mrg` ...
 # Applets:
 #    emerge   resolve dependencies and build, merge, or unmerge packages ...
 #    ebuild   run individual build phases (unpack/compile/install/...) ...
+#    mrg      parse and echo the real emerge option surface via clap ...
 rust/target/release/portuale frobnicate ; echo "exit=$?"
 # portuale: unrecognized applet "frobnicate" ... -- run `portuale --help` ...
 # exit=1
@@ -1821,6 +1822,65 @@ rust/target/release/emerge --help   # grouped tour: Actions / Dependency
                                     # and target selection / Autounmask /
                                     # Binary packages / Build scheduling /
                                     # Output / Portuale extensions
+```
+
+The `mrg` applet: a clap-based re-take on the real emerge option
+surface, echoing what it parsed (no resolution or filesystem work yet):
+
+```sh
+rust/target/release/portuale mrg -pv1 dev-libs/newpkg
+# mrg: parsed command line:
+#   options:
+#     --oneshot
+#     --pretend
+#     --verbose
+#   packages:
+#     dev-libs/newpkg
+
+rust/target/release/portuale mrg --jobs=4 --exclude 'cat/a' --color n -D dev-libs/one dev-libs/two
+# mrg: parsed command line:
+#   options:
+#     --color=n
+#     --deep=True
+#     --jobs=4
+#     --exclude=cat/a
+#   packages:
+#     dev-libs/one
+#     dev-libs/two
+
+rust/target/release/portuale mrg --bogus ; echo "exit=$?"   # usage error
+# exit=2
+```
+
+Real `-j/--jobs`, `-D/--deep`, `-l/--load-average` semantics follow
+`insert_optional_args` on the real Python side, exactly: a following
+token is consumed only when real's own validator accepts it
+(`int(s) >= 0` for `--deep`/`--jobs` options, plus `y`/`n` for
+`--jobs`, `float(s) >= 0` for `--load-average`), and a bare option
+defaults to the real literal `--<opt>=True`:
+
+```sh
+rust/target/release/portuale mrg -D cat/a       # not an integer -> atom kept
+# mrg: parsed command line:
+#   options:
+#     --deep=True
+#   packages:
+#     cat/a
+
+rust/target/release/portuale mrg -D 2 -p cat/a
+# mrg: parsed command line:
+#   options:
+#     --pretend
+#     --deep=2
+#   packages:
+#     cat/a
+
+rust/target/release/portuale mrg -j 4 cat/a     # attached to --jobs, value skipped
+# mrg: parsed command line:
+#   options:
+#     --jobs=4
+#   packages:
+#     cat/a
 ```
 
 `env.d` USE tier (`/etc/profile.env`, the lowest `USE_ORDER` layer):

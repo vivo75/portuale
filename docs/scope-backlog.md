@@ -379,6 +379,38 @@ ANSI USE colour all shipped 2026-09-05, see `what-this-proves.md`'s
 - periodic re-pin to keep up with upstream `reubeno/brush` `main` (see
   `brush-pin.md`'s checklist).
 
+### H. The `mrg` applet
+
+`mrg` (shipped 2026-09-06, first slice: real emerge option surface via
+`clap`, parse + echo only) is the deliberate counter-example applet —
+its requirements are NOT emerge/ebuild's: it is allowed to lean on major
+mainstream crates (see Part 3's `clap` bullet, which applies only to
+the hand-rolled `emerge` parser — `mrg` is where clap lives on purpose).
+Current state and what's inside each of the following bullets:
+- the clap-backed parser covers the full real `lib/_emerge/main.py`
+  option surface (actions incl. shorts, `options` booleans, the real
+  `longopt_aliases`, required-value choice options, `append`
+  repeatables), with real `insert_optional_args` semantics for
+  `--deep`/`--jobs`/`--load-average` (`require_equals` +
+  `join_optional_values`) and real-emerge-style exit codes (0 success/
+  help, 2 usage error); it is Rust-only (no Python reference — the
+  black-box surface tests live in `tests/test_portuale.py` + Rust
+  unit tests in `mrg.rs`);
+- documented cuts (module doc comment + `what-this-proves.md`): the
+  y/n optional-value *family* (`--ask`/`--verbose`/`--quiet`/…,
+  `--buildpkg`, `--usepkg`, …) is modelled as plain flags so
+  `-av pkg`/`-pv pkg` never swallow the atom — the explicit
+  `=y`/`=n` spellings are not parsed yet; `--jobs`'s separate-value
+  y/n forms (`-j y`, `--jobs y` → value `y`) join like real's
+  `valid_integers_or_y_or_n`;
+- open: any real behavior `mrg` might eventually own — it currently
+  *echoes what it parsed* with no resolution or filesystem step, so
+  everything semantics-wise is still open by design.
+
+**Hard invariant: `mrg` is a portuale-only applet. There will never be
+a portage counterpart or Python reference implementation.** Only its
+own Rust code and CLI surface matter.
+
 ---
 
 ## Part 3 — explicit non-goals / architecture boundaries
@@ -421,7 +453,9 @@ Standing decisions, not oversights.
   "not yet implemented in portuale", not "unknown") and is kept
   structurally parallel to the Python reference so the two parsers can't
   drift. `clap` would fight every one of these; ~1500 lines across two
-  languages under ~1100 contract tests, near-zero payoff.
+  languages under ~1100 contract tests, near-zero payoff. This applies
+  to the **`emerge`/`ebuild` parsers only** — the new `mrg` applet
+  (Part 2.H) is the deliberate counter-example and *does* use clap.
 
 ---
 

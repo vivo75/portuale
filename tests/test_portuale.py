@@ -105,7 +105,7 @@ def test_no_applet_prints_the_applet_list(portuale_binary):
     assert result.stdout.startswith("portuale: a multicall binary")
     assert "Applets:" in result.stdout
     stripped = [line.strip() for line in result.stdout.splitlines()]
-    for name in ("emerge", "ebuild"):
+    for name in ("emerge", "ebuild", "mrg"):
         row = next(line for line in stripped if line.startswith(name + " "))
         description = row.split(None, 1)[1]
         assert len(description) < 120, (name, len(description))
@@ -120,6 +120,7 @@ def test_help_flag_prints_the_applet_list(portuale_binary, flag):
     assert result.stdout.startswith("portuale: a multicall binary")
     assert "   emerge   " in result.stdout
     assert "   ebuild   " in result.stdout
+    assert "   mrg      " in result.stdout
 
 
 def test_unrecognized_applet_fails_clearly(portuale_binary):
@@ -128,6 +129,114 @@ def test_unrecognized_applet_fails_clearly(portuale_binary):
     )
     assert result.returncode != 0
     assert 'unrecognized applet "frobnicate"' in result.stderr
+
+
+def test_mrg_dispatch_via_symlink(mrg_binary):
+    """`mrg -pv1 cat/pkg` dispatches through the same symlink machinery as
+    `emerge`/`ebuild`, then echoes back exactly what real emerge's own
+    spelling parsed: the bundled shorts become three real flags and the
+    atom lands in the right place."""
+    result = subprocess.run(
+        [str(mrg_binary), "-pv1", "cat/pkg"],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert result.returncode == 0
+    assert "--pretend" in result.stdout
+    assert "--verbose" in result.stdout
+    assert "--oneshot" in result.stdout
+    assert "    cat/pkg" in result.stdout
+
+
+def test_mrg_echoes_a_real_emerge_option_surface(mrg_binary):
+    """Real muddle-style invocations (bundled flags, a values option, a
+    repeatable exclude, and an atom) round-trip their exact spellings."""
+    result = subprocess.run(
+        [
+            str(mrg_binary),
+            "-k",
+            "--jobs=4",
+            "--color",
+            "n",
+            "--exclude",
+            "cat/a",
+            "--exclude",
+            "cat/b",
+            "--deep",
+            "app-crypt/secret",
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert result.returncode == 0
+    assert "--usepkg" in result.stdout
+    assert "--jobs=4" in result.stdout
+    assert "--color=n" in result.stdout
+    assert "--exclude=cat/a" in result.stdout
+    assert "--exclude=cat/b" in result.stdout
+    assert "--deep=True" in result.stdout
+    assert "    app-crypt/secret" in result.stdout
+
+
+def test_mrg_bare_deep_reports_the_true_default(mrg_binary):
+    """Bare `-D` followed by an atom: real emerge's insert_optional_args
+    does NOT swallow the atom (`cat/a` isn't a valid int), so `-D` stays
+    bare (real inserted default `True`) and `cat/a` is the target."""
+    result = subprocess.run(
+        [str(mrg_binary), "-D", "cat/a"],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert result.returncode == 0
+    assert "--deep=True" in result.stdout
+    assert "    cat/a" in result.stdout
+
+
+def test_mrg_deep_consumes_a_space_separated_integer(mrg_binary):
+    """`-D 2` is the real separate-valid-value spelling real emerge's
+    insert_optional_args consumes (`2` is a valid int), joined into the
+    explicit form before clap sees it."""
+    result = subprocess.run(
+        [str(mrg_binary), "-D", "2", "cat/a"],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert result.returncode == 0
+    assert "--deep=2" in result.stdout
+    assert "    cat/a" in result.stdout
+
+
+def test_mrg_rejects_an_unrecognized_short_option(mrg_binary):
+    result = subprocess.run(
+        [str(mrg_binary), "-I"], capture_output=True, text=True, check=False
+    )
+    assert result.returncode == 2
+    assert "unexpected argument '-I' found" in result.stderr
+
+
+def test_mrg_rejects_a_missing_required_value(mrg_binary):
+    result = subprocess.run(
+        [str(mrg_binary), "--color"], capture_output=True, text=True, check=False
+    )
+    assert result.returncode == 2
+    assert "a value is required for '--color <color>'" in result.stderr
+
+
+def test_mrg_help_exits_zero(mrg_binary):
+    """clap's own `-h`/`--help` are the real emerge spellings, render the
+    whole for-real option surface, and exit 0."""
+    for flag in ("-h", "--help"):
+        result = subprocess.run(
+            [str(mrg_binary), flag], capture_output=True, text=True, check=False
+        )
+        assert result.returncode == 0
+        assert "Usage:" in result.stdout
+        assert "--pretend" in result.stdout
+        assert "--unmerge" in result.stdout
 
 
 def test_ebuild_accepts_multiple_real_commands(ebuild_binary):

@@ -30,6 +30,7 @@ mod emerge_options;
 mod env_update;
 mod error;
 mod fetch;
+mod mrg;
 mod mtimedb;
 mod needed_elf;
 mod portage_lock;
@@ -41,6 +42,7 @@ use std::process::ExitCode;
 enum Applet {
     Emerge,
     Ebuild,
+    Mrg,
 }
 
 impl Applet {
@@ -48,6 +50,7 @@ impl Applet {
         match name {
             "emerge" => Some(Applet::Emerge),
             "ebuild" => Some(Applet::Ebuild),
+            "mrg" => Some(Applet::Mrg),
             _ => None,
         }
     }
@@ -63,13 +66,13 @@ fn basename(path: &str) -> &str {
 /// text is not a port of anything.
 fn print_applets() {
     println!(
-        "portuale: a multicall binary -- runs as `emerge` or `ebuild` depending on how it is invoked"
+        "portuale: a multicall binary -- runs as `emerge`, `ebuild`, or `mrg` depending on how it is invoked"
     );
     println!();
     println!("Usage:");
     println!("   portuale <applet> [args ...]   run an applet by name");
     println!(
-        "   <applet> [args ...]            run via an 'emerge' / 'ebuild' symlink beside the binary"
+        "   <applet> [args ...]            run via an 'emerge' / 'ebuild' / 'mrg' symlink beside the binary"
     );
     println!("   portuale --help                show this message");
     println!();
@@ -79,6 +82,9 @@ fn print_applets() {
     );
     println!(
         "   ebuild   run individual build phases (unpack/compile/install/merge/unmerge/...) on one ebuild file"
+    );
+    println!(
+        "   mrg      parse and echo the real emerge option surface via clap -- a modern re-take, relaxed requirements"
     );
     println!();
     println!("Run `portuale <applet> --help` for that applet's own options.");
@@ -92,10 +98,15 @@ fn run_ebuild(args: &[String]) -> ExitCode {
     ebuild::run(args)
 }
 
+fn run_mrg(args: &[String]) -> ExitCode {
+    mrg::run(args)
+}
+
 fn run(applet: Applet, args: &[String]) -> ExitCode {
     match applet {
         Applet::Emerge => run_emerge(args),
         Applet::Ebuild => run_ebuild(args),
+        Applet::Mrg => run_mrg(args),
     }
 }
 
@@ -123,8 +134,8 @@ fn main() -> ExitCode {
         Some(other) => {
             eprintln!(
                 "portuale: unrecognized applet {other:?} (invoked as {invoked_as:?}); \
-                 expected a symlink named 'emerge' or 'ebuild', or \
-                 `portuale <emerge|ebuild> ...` -- run `portuale --help` for the applet list"
+                 expected a symlink named 'emerge', 'ebuild', or 'mrg', or \
+                 `portuale <emerge|ebuild|mrg> ...` -- run `portuale --help` for the applet list"
             );
             ExitCode::from(1)
         }

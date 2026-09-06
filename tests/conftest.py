@@ -129,6 +129,16 @@ def ebuild_binary(portuale_binary: Path, tmp_path_factory: pytest.TempPathFactor
 
 
 @pytest.fixture(scope="session")
+def mrg_binary(portuale_binary: Path, tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """A real `mrg` symlink to the portuale binary, so tests exercise the
+    same argv[0]-dispatch path a real installation would use."""
+    link_dir = tmp_path_factory.mktemp("mrg-symlink")
+    link = link_dir / "mrg"
+    link.symlink_to(portuale_binary)
+    return link
+
+
+@pytest.fixture(scope="session")
 def emerge_pretend_python() -> list[str]:
     return [sys.executable, str(EMERGE_PRETEND_PYTHON_REFERENCE)]
 
