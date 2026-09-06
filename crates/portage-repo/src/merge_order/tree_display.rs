@@ -122,3 +122,31 @@ pub(crate) fn tree_note_selection(
         }
     }
 }
+
+/// The leftover weave-back [`serialize_merge_order`] and
+/// [`tree_display_order`] share: entries the scheduler never saw (pruned
+/// "nomerge" roots, entries with no node at all) rejoin on their unbiased
+/// discovery rank, so such an entry is never bias-promoted past a merge
+/// task it was behind in plain discovery order.
+pub(crate) fn weave_scheduled_leftovers(
+    scheduled: &[usize],
+    real_n: usize,
+    discovery_rank: &[usize],
+) -> Vec<usize> {
+    let placed: HashSet<usize> = scheduled.iter().copied().collect();
+    let mut leftover: Vec<usize> = (0..real_n).filter(|i| !placed.contains(i)).collect();
+    leftover.sort_by_key(|&i| discovery_rank[i]);
+
+    let mut out: Vec<usize> = Vec::with_capacity(real_n);
+    let mut ti = 0;
+    for &m in scheduled {
+        while ti < leftover.len() && discovery_rank[leftover[ti]] < discovery_rank[m] {
+            out.push(leftover[ti]);
+            ti += 1;
+        }
+        out.push(m);
+    }
+    out.extend(&leftover[ti..]);
+    debug_assert_eq!(out.len(), real_n);
+    out
+}

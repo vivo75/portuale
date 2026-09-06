@@ -24,6 +24,7 @@ mod installed_closure;
 mod prelude;
 mod priority;
 mod replay;
+mod select_nodes;
 mod tree_display;
 
 #[cfg(test)]
@@ -38,6 +39,7 @@ pub use installed_closure::*;
 pub(crate) use prelude::*;
 pub use priority::*;
 pub(crate) use replay::*;
+pub(crate) use select_nodes::*;
 pub use tree_display::*;
 
 use std::collections::{BinaryHeap, HashMap, HashSet};

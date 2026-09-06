@@ -405,6 +405,37 @@ fn resolve_blockers_ignores_an_installed_only_match_for_a_nomerge_owner() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
+/// A use-dep blocker is evaluated against the matched version's own
+/// entry: `targetA` (flag off) does not satisfy, `targetB` (flag
+/// on) does, so only the 2.0 row files.
+#[test]
+fn resolve_blockers_evaluates_use_deps_against_the_matched_versions_entry() {
+    let mut target_a = new_165("dev-libs", "target", "1.0");
+    target_a.use_flags_display = vec![("wantblock".to_string(), false)];
+    let mut target_b = upgrade_165("dev-libs", "target", "1.0", "2.0");
+    target_b.use_flags_display = vec![("wantblock".to_string(), true)];
+    let entries = vec![target_a, target_b, new_165("dev-libs", "owner", "1.0")];
+    let conflicts = resolve_blockers(
+        Path::new("/nonexistent-root-for-this-test"),
+        &[pending_165(Pending165Args {
+            atom: "!!dev-libs/target[wantblock]",
+            strong: true,
+            buildtime: true,
+            target: ("dev-libs", "target"),
+            owner: ("dev-libs", "owner"),
+            owner_version: "1.0",
+            owner_merging: true,
+            owner_installed: false,
+        })],
+        &entries,
+        &HashSet::new(),
+        false,
+    );
+    assert_eq!(conflicts.len(), 1);
+    assert_eq!(conflicts[0].conflict.matched_version, "2.0");
+    assert!(conflicts[0].conflict.unsolvable);
+}
+
 /// `merge_bound_match` needs the entry's slot and version: an
 /// installed 1.0 beside a slot-moved merge-bound 9.9 leaves the 1.0
 /// row solvable (removed by uninstall).
