@@ -367,6 +367,18 @@ pub(crate) struct PriorityRange {
     pub(crate) medium_post: usize,
 }
 
+pub(crate) static NORMAL: PriorityRange = PriorityRange {
+    ignore: &[
+        None,
+        Some(Ignore::NOptional),
+        Some(Ignore::NRuntimePost),
+        Some(Ignore::NRuntime),
+    ],
+    medium: 3,
+    medium_soft: 2,
+    medium_post: 2,
+};
+
 pub(crate) static SATISFIED: PriorityRange = PriorityRange {
     ignore: &[
         None,

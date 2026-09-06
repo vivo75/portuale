@@ -84,6 +84,70 @@ pub(crate) struct SerializeFrontier {
 }
 
 impl SerializeFrontier {
+    /// The filter union both ladders query: `None` first, then every rung of
+    /// `NORMAL` and `SATISFIED`, deduplicated.
+    pub(crate) fn build_levels() -> Vec<Option<Ignore>> {
+        let mut levels: Vec<Option<Ignore>> = vec![None];
+        for f in NORMAL
+            .ignore
+            .iter()
+            .chain(SATISFIED.ignore.iter())
+            .copied()
+            .flatten()
+        {
+            if !levels.contains(&Some(f)) {
+                levels.push(Some(f));
+            }
+        }
+        levels
+    }
+
+    pub(crate) fn build(g: &Digraph) -> Self {
+        let levels = Self::build_levels();
+        debug_assert!(levels.len() <= 64, "edge masks are u64");
+        let nlevels = levels.len();
+        let n = g.n;
+        let mut index = vec![0usize; n];
+        let mut by_index = vec![0usize; g.order.len()];
+        for (pos, &node) in g.order.iter().enumerate() {
+            index[node] = pos;
+            by_index[pos] = node;
+        }
+        let mut edge_mask: HashMap<(usize, usize), u64> = HashMap::new();
+        let mut surv = vec![vec![0u32; nlevels]; n];
+        for &node in &g.order {
+            for (child, prios) in &g.children[node] {
+                let mask = Self::compute_mask(&levels, prios);
+                edge_mask.insert((node, *child), mask);
+                let mut m = mask;
+                while m != 0 {
+                    let l = m.trailing_zeros() as usize;
+                    surv[node][l] += 1;
+                    m &= m - 1;
+                }
+            }
+        }
+        // Seed each level's ready heap with its initial leaves.
+        let mut ready: Vec<BinaryHeap<Reverse<usize>>> =
+            (0..nlevels).map(|_| BinaryHeap::new()).collect();
+        for &node in &g.order {
+            let idx = index[node];
+            for l in 0..nlevels {
+                if surv[node][l] == 0 {
+                    ready[l].push(Reverse(idx));
+                }
+            }
+        }
+        Self {
+            levels,
+            surv,
+            edge_mask,
+            index,
+            by_index,
+            ready,
+        }
+    }
+
     /// Bitmask of the levels whose filter an edge with `prios` survives.
     pub(crate) fn compute_mask(levels: &[Option<Ignore>], prios: &[DepPriority]) -> u64 {
         let mut mask = 1u64;

@@ -43,6 +43,29 @@ pub(crate) struct MoSelTraceLineArgs<'a> {
     pub(crate) pick: &'a [String],
 }
 
+/// One `MO_SEL ` line (`PORTUALE_MO_SEL`) -- pure so the format is unit-pinned.
+pub(crate) fn mo_sel_trace_line(args: MoSelTraceLineArgs<'_>) -> String {
+    let MoSelTraceLineArgs {
+        iter,
+        retlist,
+        alive,
+        asap,
+        prefer_asap,
+        drop_satisfied,
+        ig,
+        pick,
+    } = args;
+    format!(
+        "MO_SEL iter={iter} retlist={retlist} alive={alive} asap=[{}] \
+         prefer_asap={} drop_satisfied={} ig={} pick={}",
+        asap.join(" "),
+        prefer_asap as u8,
+        drop_satisfied as u8,
+        ignore_name(ig),
+        pick.join(" ")
+    )
+}
+
 /// Dumps the freshly-built digraph in Portage's `digraph.debug_print()` format,
 /// to stderr under `--pretend --debug` (or `PORTUALE_DEBUG_MERGE_GRAPH`).
 /// Portage: portage/util/digraph.py, debug_print
