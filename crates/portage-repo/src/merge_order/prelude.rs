@@ -10,6 +10,16 @@ pub(crate) struct DigraphPrelude<'a> {
     pub(crate) entry_candidate: Vec<Option<String>>,
 }
 
+/// Arguments of [`DigraphPrelude::select_dep_target`].
+pub(crate) struct SelectDepTargetArgs<'a> {
+    pub(crate) entries: &'a [GraphEntry],
+    pub(crate) from: usize,
+    pub(crate) from_deps: &'a [DepEdge],
+    pub(crate) ei: usize,
+    pub(crate) suppressed: &'a HashSet<usize>,
+    pub(crate) merge_bound_only: bool,
+}
+
 impl DigraphPrelude<'_> {
     /// Narrow every edge to the entries its atom actually matches (version /
     /// slot / repo); keep the edge when the match cannot be decided.
@@ -22,6 +32,103 @@ impl DigraphPrelude<'_> {
             Some(m) => !m.is_empty(),
             None => true,
         }
+    }
+
+    /// Resolve one dep atom to a single package: prefer a merge-bound entry,
+    /// then the highest version by `vercmp`; first on ties.
+    ///
+    /// `merge_bound_only` is the one difference between the two callers:
+    /// `false` for `build_digraph` (nomerge nodes are legitimate edges),
+    /// `true` for tree display (installed entries render no line).
+    /// Portage: depgraph.py, _create_graph (_select_pkg_highest_available,
+    /// _minimize_children)
+    pub(crate) fn select_dep_target(&self, args: SelectDepTargetArgs<'_>) -> Option<usize> {
+        let SelectDepTargetArgs {
+            entries,
+            from,
+            from_deps,
+            ei,
+            suppressed,
+            merge_bound_only,
+        } = args;
+        let edge = &from_deps[ei];
+        // Sibling edges selecting the same cp: the minimize universe.
+        let cp = (edge.category.as_str(), edge.package.as_str());
+        let sib_eis: Vec<usize> = from_deps
+            .iter()
+            .enumerate()
+            .filter(|(si, se)| {
+                (se.category.as_str(), se.package.as_str()) == cp && !suppressed.contains(si)
+            })
+            .map(|(si, _)| si)
+            .collect();
+        let sib_sets: Vec<Vec<usize>> = sib_eis
+            .iter()
+            .map(|&si| self.match_candidates(entries, from, &from_deps[si], merge_bound_only))
+            .collect();
+        let own = sib_eis
+            .iter()
+            .position(|&si| si == ei)
+            .map(|pos| &sib_sets[pos]);
+        let own = own?;
+        if own.len() < 2 {
+            return Self::rank_best(entries, &self.installed, own.iter().copied());
+        }
+        // A `NoVisibleCandidate` entry never eliminates and is never eliminated.
+        let is_nvc = |j: &usize| matches!(entries[*j].outcome, PretendOutcome::NoVisibleCandidate);
+        // Elimination order: installed first, then ascending version.
+        let mut union: Vec<usize> = Vec::new();
+        for set in &sib_sets {
+            for &j in set {
+                if !union.contains(&j) {
+                    union.push(j);
+                }
+            }
+        }
+        union.sort_by(|&a, &b| {
+            // Installed sorts before merge-bound so installed
+            // candidates are eliminated first, like Portage's.
+            match (self.installed[a], self.installed[b]) {
+                (true, false) => std::cmp::Ordering::Less,
+                (false, true) => std::cmp::Ordering::Greater,
+                _ => {
+                    let av = outcome_version(&entries[a]).unwrap_or("");
+                    let bv = outcome_version(&entries[b]).unwrap_or("");
+                    portage_versions::vercmp(av, bv)
+                        .map(|o| o.cmp(&0))
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                }
+            }
+        });
+        let mut alive: HashSet<usize> = union.iter().copied().collect();
+        for &p in &union {
+            if is_nvc(&p) || !alive.contains(&p) {
+                continue;
+            }
+            let mut shared_by_all = false;
+            for set in &sib_sets {
+                if set.contains(&p) {
+                    if set
+                        .iter()
+                        .filter(|q| alive.contains(q) && !is_nvc(q))
+                        .count()
+                        < 2
+                    {
+                        shared_by_all = false;
+                        break;
+                    }
+                    shared_by_all = true;
+                }
+            }
+            if shared_by_all {
+                alive.remove(&p);
+            }
+        }
+        Self::rank_best(
+            entries,
+            &self.installed,
+            own.iter().copied().filter(|j| alive.contains(j)),
+        )
     }
 
     /// The per-atom candidate entries: same-cp entries the atom matches, minus
