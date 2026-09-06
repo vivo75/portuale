@@ -3123,7 +3123,7 @@ fn run_unmerge_pretend(
         }
     }
 
-    let vercmp_key = |a: &String, b: &String| {
+    let vercmp_key = |a: &str, b: &str| {
         portage_versions::vercmp(a, b)
             .map(|c| c.cmp(&0))
             .unwrap_or_else(|| a.cmp(b))
@@ -3141,8 +3141,8 @@ fn run_unmerge_pretend(
         if selected.is_empty() {
             continue;
         }
-        selected.sort_by(vercmp_key);
-        protected.sort_by(vercmp_key);
+        selected.sort_by(|a, b| vercmp_key(a, b));
+        protected.sort_by(|a, b| vercmp_key(a, b));
         // `omitted` = every other installed version of this cp, real
         // `vartree.dep_match(cp)` minus selected/protected.
         let mut omitted: Vec<String> = portage_repo::installed_candidates(root, &cp.0, &cp.1)
@@ -3150,7 +3150,7 @@ fn run_unmerge_pretend(
             .map(|(v, _, _)| v)
             .filter(|v| !selected.contains(v) && !protected.contains(v))
             .collect();
-        omitted.sort_by(vercmp_key);
+        omitted.sort_by(|a, b| vercmp_key(a, b));
 
         // Real `_unmerge_display`: `if not (protected or omitted) and cp
         // in syslist` -- a cp that would be *fully* removed and is a

@@ -161,6 +161,10 @@ and suffix numerals wider than `i128` now fall back to an
 arbitrary-length decimal comparison (`Part::BigNum`), mirroring the
 Python reference's unbounded `int`; a previously-silent parity bug
 (huge suffix numerals coerced to `0`) was fixed in the same pass.
+Same day, **refactor-01 S3**: the workspace's only `&String`-typed
+parameter (`pretend.rs`'s `vercmp_key`) is now `&str`, and the 3
+`portage-versions` test-module clippy warnings from S2 were cleaned,
+restoring a genuinely zero-warn `--all-targets` build.
 
 **Dry-run (`emerge --pretend`)**: full recursive DEPEND/RDEPEND/BDEPEND/
 PDEPEND/IDEPEND resolution; profile/make.conf-derived USE/ACCEPT_KEYWORDS

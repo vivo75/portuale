@@ -241,14 +241,14 @@ ones (`Cow` in 1 file, `RefCell`/`Arc` appropriately, `RwLock` in
 | Rule | Verdict | Note |
 |---|---|---|
 | `own-borrow-over-clone` | deviating, isolated | one `.cloned().collect()` of a `&String` list in `pretend.rs` (bare-name candidate collection) — correct-API, fine to leave. Review only. |
-| `own-slice-over-vec` | deviating, isolated | `pretend.rs:3126` closure is `\|a: &String, b: &String\|` — the one `&String`-typed param in the workspace. Trivial `&str` fix (S3, optional). All function signatures already use `&str`/`&[T]`/`&Path`. |
+| `own-slice-over-vec` | deviating, isolated | `pretend.rs:3126` closure was `\|a: &String, b: &String\|` — the one `&String`-typed param in the workspace. ✅ fixed in S3 (`&str` + deref-coercing `sort_by` wrappers). All function signatures use `&str`/`&[T]`/`&Path`. |
 | `own-cow-conditional` | compliant | `Cow` used where conditional ownership applies. |
 | `own-arc-shared` | compliant | `Arc` for the shared scheduler state. |
 | `own-rc-single-thread` | N/A | no `Rc` — everything shared is cross-thread. |
 | `own-refcell-interior` / `own-mutex-interior` / `own-rwlock-readers` | compliant | read-heavy `RwLock` choice is right for `portage-repo`. |
 | `own-copy-small` / `own-clone-explicit` / `own-move-large` / `own-lifetime-elision` | compliant | no gratuitous `Copy`, clones are intentional, large structs moved, lifetimes elided. |
 
-Action: optional S3 micro-fix for `pretend.rs:3126`; otherwise no work.
+Action: ✅ done in S3 (`pretend.rs:3126`); otherwise no work.
 
 ---
 
@@ -273,8 +273,8 @@ No required mem work today.
 | Slice | Scope | Behavior delta | Verification |
 |---|---|---|---|
 | **S1** ✅ shipped | Add the ~10 `// SAFETY:` markers (1.1). No code change. | none | fmt + clippy clean, `cargo test` 792/792, pytest 1282 passed / 5 pre-existing non-TTY |
-| **S2** ✅ shipped | `portage-versions` overflow panics (2.2, 2.3) removed: `parse_component`, suffix numerals, and `rev` now fall back to an arbitrary-length `BigNum` decimal-string compare when the value outgrows `i128` — mirroring the Python reference's unbounded `int` (judgment call (a): `None` was rejected because Python compares, it doesn't fail). Also fixed a previously-silent parity bug: oversized *suffix* numerals were coerced to `0`; they now compare as bignums. | oversized components/revisions/suffix-numerals stop aborting (and match Python on inputs that previously miscompared); all in-range behavior byte-identical | fmt clean, clippy zero-warn, `cargo test` 797/797 (5 new `portage-versions` unit tests), pytest 1292 passed / 5 pre-existing non-TTY |
-| **S3** (optional) | `pretend.rs:3126` `&String`→`&str` closure params | none | fmt + clippy |
+| **S2** ✅ shipped | `portage-versions` overflow panics (2.2, 2.3) removed: `parse_component`, suffix numerals, and `rev` now fall back to an arbitrary-length `BigNum` decimal-string compare when the value outgrows `i128` — mirroring the Python reference's unbounded `int` (judgment call (a): `None` was rejected because Python compares, it doesn't fail). Also fixed a previously-silent parity bug: oversized *suffix* numerals were coerced to `0`; they now compare as bignums. | oversized components/revisions/suffix-numerals stop aborting (and match Python on inputs that previously miscompared); all in-range behavior byte-identical | fmt clean, `cargo test` 797/797 (5 new `portage-versions` unit tests), pytest 1292 passed / 5 pre-existing non-TTY. (3 test-module clippy warnings surfaced under `--all-targets`; cleaned up in S3.) |
+| **S3** ✅ shipped | `pretend.rs:3126` `&String`→`&str` `vercmp_key` closure params (the workspace's only `&String`-typed param), via deref-coercing `sort_by` wrappers at its 3 call sites. Also fixed the 3 `portage-versions` test-module clippy warnings found while re-running the full gate. | none | fmt clean, clippy `--all-targets` zero-warn (re-verified), `cargo test` 797/797, pytest 1292 passed / 5 pre-existing non-TTY |
 | **S4** (deferred, judgment) | `err-*` error-model migration (thiserror `Error` types) | none in behavior; big diff | gate on explicit user re-open |
 
 Info-only (record, don't act): the `err-` counts table in

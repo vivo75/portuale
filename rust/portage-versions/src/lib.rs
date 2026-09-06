@@ -296,7 +296,7 @@ mod tests {
             ),
             0
         );
-        assert_eq!(cmp(&"9".repeat(39), &"1".to_string()), 1);
+        assert_eq!(cmp(&"9".repeat(39), "1"), 1);
     }
 
     #[test]
@@ -311,7 +311,7 @@ mod tests {
         assert_eq!(
             cmp(
                 &format!("1.0-r{}", "9".repeat(30)),
-                &format!("1.0-r{}", &format!("{}8", "9".repeat(29)))
+                &format!("1.0-r{}", "9".repeat(29) + "8")
             ),
             1
         );
@@ -325,7 +325,7 @@ mod tests {
         assert_eq!(
             cmp(
                 &format!("1.0_p{}", "9".repeat(30)),
-                &format!("1.0_p{}", &format!("{}8", "9".repeat(29)))
+                &format!("1.0_p{}", "9".repeat(29) + "8")
             ),
             1
         );

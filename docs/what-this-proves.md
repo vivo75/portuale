@@ -13992,3 +13992,22 @@ reference and the rebuilt Rust harness — the Rust side now agrees with
 the reference on inputs the old code either aborted on or miscompared.
 Suite totals: 797/797 Rust, pytest 1292 passed / 5 pre-existing
 non-TTY failures / 2 skipped.
+
+### refactor-01 S3: last `&String` param cleaned; test-clippy warnings fixed (2026-09-06)
+
+The ownership audit (`refactor-01.md` §3) tracked exactly one
+`&String`-typed parameter in the whole workspace: the `vercmp_key`
+sort comparator in `pretend.rs` (`|a: &String, b: &String|`). Since
+`sort_by` on a `Vec<String>` hands the comparator `&String` items, the
+idiomatic `&str` form needs deref-coercing wrapper closures at the
+call sites, so the comparator now takes `&str` and the three
+`sort_by(vercmp_key)` calls became `sort_by(|a, b| vercmp_key(a, b))`.
+No behavior change.
+
+While re-running the full gate, `cargo clippy --release
+--all-targets` surfaced 3 warnings in the `portage-versions` unit-test
+module added in S2 (unnecessary `to_string`, redundant `format!`
+references, and `format!`-in-`format!`); they were fixed here so the
+workspace is genuinely zero-warn again. Suite totals unchanged:
+797/797 Rust, pytest 1292 passed / 5 pre-existing non-TTY --ask
+failures / 2 skipped.
