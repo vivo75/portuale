@@ -51,6 +51,6 @@ the next slice") and expects the same rhythm every time:
    later requests each time, never implied by finishing a slice. Commit
    title `<what changed>: <short description>`; wrapped body explaining
    the *why* and the real-source grounding; trailer
-   `Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>`.
+   `Co-Authored-By: …` replace `…` with actual model name
 10. **Track slices as tasks** — one per shipped slice, `completed` only
     once step 8 is green and the docs are updated.
