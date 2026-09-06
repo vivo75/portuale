@@ -70,3 +70,71 @@ struct ScheduleGraphArgs<'a> {
     dynamic_deps: bool,
     circular: &'a HashMap<RootCp, Vec<CircularDepChild>>,
 }
+
+/// Installed-dependency closure, `build_digraph`, the nomerge-root prune and
+/// `_merge_order_bias`. Diagnostics stay with the flat caller, not here.
+fn schedule_graph(args: ScheduleGraphArgs<'_>) -> (Vec<GraphEntry>, Digraph, usize, Vec<usize>) {
+    let ScheduleGraphArgs {
+        entries,
+        top_level_atoms,
+        config,
+        root,
+        implicit_system_deps,
+        repos,
+        dynamic_deps,
+        circular,
+    } = args;
+    let real_n = entries.len();
+    // Complete mode (a merge changes an installed package): supply installed trees.
+    // Synthetic nodes get indices `>= real_n` and are filtered out below.
+    let complete = entries.iter().any(|e| {
+        matches!(
+            e.outcome,
+            PretendOutcome::Reinstall { .. }
+                | PretendOutcome::Upgrade { .. }
+                | PretendOutcome::Downgrade { .. }
+        ) || (matches!(e.outcome, PretendOutcome::New { .. }) && e.new_slot)
+    });
+    let mut ext = entries.to_vec();
+    add_installed_dependency_closure(AddInstalledDependencyClosureArgs {
+        entries: &mut ext,
+        root,
+        repos,
+        system_atoms: &config.system_packages,
+        virtuals_only: !complete,
+        dynamic_deps,
+    });
+    let entries: &[GraphEntry] = &ext;
+    let n = entries.len();
+
+    let mut g = build_digraph(entries, top_level_atoms, root, circular);
+    // Unbiased discovery rank, kept before the bias re-sort.
+    let mut discovery_rank = vec![0usize; n];
+    for (pos, &i) in g.order.iter().enumerate() {
+        discovery_rank[i] = pos;
+    }
+
+    debug_dump_graph(&g, entries, top_level_atoms, root);
+
+    // Prune parentless synthetic installed roots to a fixpoint; restricted to
+    // `i >= real_n` so displayed top-level installed targets stay scheduled.
+    loop {
+        let mut removed = false;
+        for i in real_n..n {
+            if !g.alive[i] || !g.installed[i] {
+                continue;
+            }
+            if g.parents[i].iter().any(|&p| g.alive[p]) {
+                continue;
+            }
+            g.alive[i] = false;
+            removed = true;
+        }
+        if !removed {
+            break;
+        }
+    }
+    g.order.retain(|&i| g.alive[i]);
+    merge_order_bias(&mut g, entries, config, implicit_system_deps);
+    (ext, g, real_n, discovery_rank)
+}

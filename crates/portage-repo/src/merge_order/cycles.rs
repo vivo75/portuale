@@ -137,3 +137,41 @@ pub(crate) fn reduced_merge_order(
 pub(crate) fn satisfied_medium_soft_rung() -> Option<Ignore> {
     SATISFIED.ig_medium_soft()
 }
+
+/// All elementary cycles (entry indices) plus the reduced display order.
+///
+/// The drain set is the cycle members plus everything transitively requiring
+/// them. Built on demand: only the hard-cycle report consumes either number.
+pub(crate) fn cycle_report(
+    entries: &[GraphEntry],
+    top_level_atoms: &[String],
+    root: &Path,
+    circular: &HashMap<RootCp, Vec<CircularDepChild>>,
+) -> (Vec<Vec<usize>>, Vec<usize>) {
+    let g = build_digraph(entries, top_level_atoms, root, circular);
+    let cycles = elementary_cycles(&g, satisfied_medium_soft_rung());
+    let members: HashSet<usize> = cycles.iter().flatten().copied().collect();
+    let mut cp_indices: HashMap<(&str, &str), Vec<usize>> = HashMap::new();
+    for (i, e) in entries.iter().enumerate() {
+        cp_indices
+            .entry((e.category.as_str(), e.package.as_str()))
+            .or_default()
+            .push(i);
+    }
+    let mut drain: HashSet<usize> = members.clone();
+    let mut stack: Vec<usize> = members.iter().copied().collect();
+    while let Some(i) = stack.pop() {
+        for owner in &entries[i].required_by {
+            if let Some(idxs) = cp_indices.get(&(owner.0.as_str(), owner.1.as_str())) {
+                for &j in idxs {
+                    if drain.insert(j) {
+                        stack.push(j);
+                    }
+                }
+            }
+        }
+    }
+    let late: Vec<bool> = entries.iter().map(|e| e.targets_running_root).collect();
+    let display = reduced_merge_order(&g, &drain, &late);
+    (cycles, display)
+}

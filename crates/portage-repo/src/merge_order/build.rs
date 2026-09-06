@@ -2,6 +2,231 @@
 
 use crate::merge_order::*;
 
+/// Builds the merge-order digraph out of the resolved `entries`.
+///
+/// Nodes are the entries; edges come from `GraphEntry::deps`. `required_by`
+/// supplies fallback edges for owner relationships the forward walk missed.
+/// Portage: depgraph.py, _create_graph
+pub(crate) fn build_digraph(
+    entries: &[GraphEntry],
+    top_level_atoms: &[String],
+    root: &Path,
+    circular: &HashMap<RootCp, Vec<CircularDepChild>>,
+) -> Digraph {
+    let n = entries.len();
+    let pre = digraph_prelude(entries, root);
+    let cp_indices = &pre.cp_indices;
+    let installed = &pre.installed;
+
+    let mut g = Digraph {
+        n,
+        children: vec![Vec::new(); n],
+        parents: vec![Vec::new(); n],
+        order: Vec::new(),
+        installed: installed.clone(),
+        alive: vec![true; n],
+    };
+
+    // Installed match for the atom, via the shared `edge_satisfied_with` rule.
+    let installed_by_cp = installed_candidates_by_cp(root);
+    let satisfied = |edge: &DepEdge, child: Option<usize>| -> bool {
+        edge_satisfied_with(
+            &installed_by_cp,
+            edge,
+            child.and_then(|ci| {
+                entries[ci]
+                    .slot
+                    .as_deref()
+                    .zip(entries[ci].sub_slot.as_deref())
+            }),
+        )
+    };
+
+    let edge_matches = |atom: &str, j: usize| pre.edge_matches(atom, j);
+
+    // One `||` branch per group; shared with `kept_alt_branches`.
+    let alt_suppressed = suppressed_alt_edges(entries, &pre, root, circular);
+
+    // LIFO `dep_stack` seeded from the top-level atoms: a node is recorded
+    // into `.order` when its parent's dep string first names it.
+    let mut discovered = vec![false; n];
+    let mut stack: Vec<usize> = Vec::new();
+    let discover = |i: usize, discovered: &mut Vec<bool>, order: &mut Vec<usize>| -> bool {
+        if discovered[i] {
+            return false;
+        }
+        discovered[i] = true;
+        order.push(i);
+        true
+    };
+    for atom_str in top_level_atoms {
+        let Some(atom) = portage_dep::parse_atom(atom_str) else {
+            continue;
+        };
+        if atom.blocker != portage_dep::Blocker::None {
+            continue;
+        }
+        if let Some(idxs) = cp_indices.get(&(atom.category.as_str(), atom.package.as_str())) {
+            for &i in idxs {
+                if !edge_matches(atom_str, i) {
+                    continue;
+                }
+                if discover(i, &mut discovered, &mut g.order) {
+                    stack.push(i);
+                }
+            }
+        }
+    }
+    // Drain the ordinary stack, then pop one disjunctive bundle; repeat.
+    // Each bundle is one dep key's `||` / `virtual/*` atoms.
+    let mut disjunctive_stack: Vec<(usize, u8)> = Vec::new();
+    let expand = |i: usize,
+                  disjunctive: bool,
+                  key_filter: Option<u8>,
+                  discovered: &mut Vec<bool>,
+                  order: &mut Vec<usize>,
+                  stack: &mut Vec<usize>| {
+        for (ei, edge) in entries[i].deps.iter().enumerate() {
+            if edge.disjunctive != disjunctive {
+                continue;
+            }
+            if key_filter.is_some_and(|k| k != edge.key) {
+                continue;
+            }
+            if alt_suppressed[i].contains(&ei) {
+                continue;
+            }
+            let Some(idxs) = cp_indices.get(&(edge.category.as_str(), edge.package.as_str()))
+            else {
+                continue;
+            };
+            for &j in idxs {
+                if !edge_matches(&edge.atom, j) {
+                    continue;
+                }
+                if discover(j, discovered, order) {
+                    stack.push(j);
+                }
+            }
+        }
+    };
+    loop {
+        while let Some(i) = stack.pop() {
+            let mut keys: Vec<u8> = entries[i]
+                .deps
+                .iter()
+                .filter(|e| e.disjunctive)
+                .map(|e| e.key)
+                .collect();
+            keys.dedup();
+            for k in keys {
+                disjunctive_stack.push((i, k));
+            }
+            expand(i, false, None, &mut discovered, &mut g.order, &mut stack);
+        }
+        let Some((i, k)) = disjunctive_stack.pop() else {
+            break;
+        };
+        expand(i, true, Some(k), &mut discovered, &mut g.order, &mut stack);
+    }
+    // Unreached entries keep array position, appended after discovered nodes.
+    for (i, seen) in discovered.iter().enumerate() {
+        if !seen {
+            g.order.push(i);
+        }
+    }
+
+    // Edges, forward first so `children` keeps dep-key/atom order.
+    for (i, entry) in entries.iter().enumerate() {
+        for (ei, edge) in entry.deps.iter().enumerate() {
+            if alt_suppressed[i].contains(&ei) {
+                continue;
+            }
+            // The single package the atom resolves to (`merge_bound_only = false`:
+            // the scheduler digraph edges to nomerge nodes too).
+            if let Some(j) = pre.select_dep_target(SelectDepTargetArgs {
+                entries,
+                from: i,
+                from_deps: &entry.deps,
+                ei,
+                suppressed: &alt_suppressed[i],
+                merge_bound_only: false,
+            }) {
+                // Drop direct self-edges unless an unsatisfied build-time dep.
+                // Portage: depgraph.py, _add_pkg
+                let sat = satisfied(edge, Some(j));
+                if i == j && !(edge.priority.buildtime && !sat) {
+                    continue;
+                }
+                let mut priority = edge.priority;
+                priority.satisfied = sat;
+                g.add_edge(i, j, priority);
+            }
+        }
+    }
+    // Fallback edges from `required_by` for owner relationships with no `deps` entry.
+    for (j, e) in entries.iter().enumerate() {
+        // A removal's `required_by` names the blocker owner it removes for, which
+        // is ordered first: the dedicated pass adds the reversed edge instead.
+        if matches!(e.outcome, PretendOutcome::Uninstall { .. }) {
+            for owner in &e.required_by {
+                let Some(owner_indices) = cp_indices.get(&(owner.0.as_str(), owner.1.as_str()))
+                else {
+                    continue;
+                };
+                for &i in owner_indices {
+                    if i == j || g.children[i].iter().any(|(c, _)| *c == j) {
+                        continue;
+                    }
+                    // The owner is the removal's child, so the owner is selected first.
+                    g.add_edge(
+                        j,
+                        i,
+                        DepPriority {
+                            buildtime: true,
+                            runtime: true,
+                            satisfied: false,
+                            ..DepPriority::default()
+                        },
+                    );
+                }
+            }
+            continue;
+        }
+        for owner in &e.required_by {
+            let Some(owner_indices) = cp_indices.get(&(owner.0.as_str(), owner.1.as_str())) else {
+                continue;
+            };
+            for &i in owner_indices {
+                if i == j || g.children[i].iter().any(|(c, _)| *c == j) {
+                    continue;
+                }
+                // Same owner set for every slot of a multi-slot cp: skip when the
+                // owner already edges to another slot (one package per atom).
+                if g.children[i].iter().any(|(c, _)| {
+                    entries[*c].category == e.category && entries[*c].package == e.package
+                }) {
+                    continue;
+                }
+                // Never synthesise a two-cycle: the forward direction is authoritative.
+                if g.children[j].iter().any(|(c, _)| *c == i) {
+                    continue;
+                }
+                g.add_edge(
+                    i,
+                    j,
+                    DepPriority {
+                        runtime: true,
+                        satisfied: g.installed[j],
+                        ..DepPriority::default()
+                    },
+                );
+            }
+        }
+    }
+    g
+}
+
 /// The nomerge-root prune is deliberately not ported: this graph holds only the
 /// merge closure, which is exactly Portage's post-prune node set.
 /// Portage: depgraph.py, _serialize_tasks

@@ -351,6 +351,12 @@ pub(crate) fn s_ignore_runtime(p: &DepPriority) -> bool {
     (!p.runtime_slot_op || p.satisfied) && (p.satisfied || p.optional || !p.buildtime)
 }
 
+/// `ignore_priority.__name__` for the trace, so a portuale `MO_SEL` line lines up
+/// with the `RT_SEL` line the harness injects into Portage's loop.
+pub(crate) fn ignore_name(ig: Option<Ignore>) -> &'static str {
+    ig.map_or("none", Ignore::name)
+}
+
 /// The two `DepPriority*Range` ladders: an `ignore_priority` ladder plus the
 /// named rungs `_serialize_tasks` reaches for directly.
 /// Portage: _emerge/DepPriorityNormalRange.py, DepPrioritySatisfiedRange.py

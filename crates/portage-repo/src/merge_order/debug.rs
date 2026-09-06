@@ -91,6 +91,19 @@ pub(crate) fn debug_dump_cycle(
     }
 }
 
+/// Build the digraph and dump it -- for `topological_merge_order`'s
+/// single-package short-circuit, where `serialize_merge_order` (and thus
+/// the normal `debug_dump_graph` call) never runs.
+pub(crate) fn debug_dump_graph_only(
+    entries: &[GraphEntry],
+    top_level_atoms: &[String],
+    root: &Path,
+    circular: &HashMap<RootCp, Vec<CircularDepChild>>,
+) {
+    let g = build_digraph(entries, top_level_atoms, root, circular);
+    debug_dump_graph(&g, entries, top_level_atoms, root);
+}
+
 pub(crate) fn debug_dump_graph(
     g: &Digraph,
     entries: &[GraphEntry],

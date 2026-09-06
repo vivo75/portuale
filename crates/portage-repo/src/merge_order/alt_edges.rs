@@ -149,3 +149,41 @@ pub fn kept_alt_branches(
         })
         .collect()
 }
+
+/// For every entry, the entry index each `deps` edge resolves to (`None` when
+/// unresolvable, self-pointing, or on a suppressed `||` branch).
+///
+/// Shares `DigraphPrelude::select_dep_target` with `build_digraph` so the
+/// ranking cannot drift between the scheduling graph and the tree display.
+/// Portage: depgraph.py, _create_graph
+pub fn resolved_dep_targets(
+    entries: &[GraphEntry],
+    root: &Path,
+    circular: &HashMap<RootCp, Vec<CircularDepChild>>,
+) -> Vec<Vec<Option<usize>>> {
+    let pre = digraph_prelude(entries, root);
+    let suppressed = suppressed_alt_edges(entries, &pre, root, circular);
+    entries
+        .iter()
+        .enumerate()
+        .map(|(i, e)| {
+            e.deps
+                .iter()
+                .enumerate()
+                .map(|(ei, _edge)| {
+                    if suppressed[i].contains(&ei) {
+                        return None;
+                    }
+                    pre.select_dep_target(SelectDepTargetArgs {
+                        entries,
+                        from: i,
+                        from_deps: &e.deps,
+                        ei,
+                        suppressed: &suppressed[i],
+                        merge_bound_only: true,
+                    })
+                })
+                .collect()
+        })
+        .collect()
+}
