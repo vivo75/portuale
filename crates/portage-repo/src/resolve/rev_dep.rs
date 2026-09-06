@@ -83,6 +83,94 @@ pub(crate) struct RevDepPinHoldableArgs<'a> {
     pub(crate) hard_atoms: &'a [String],
 }
 
+/// Whether `pin` on `cp` still holds alongside every hard requirement. A
+/// jointly-unsatisfiable pin is DROPPED (Portage merges anyway). Per-slot;
+/// unparseable or candidate-less falls back to enforcing.
+// Portage: depgraph.py, _select_pkg_highest_available (whole atom set)
+pub(crate) fn rev_dep_pin_holdable(args: RevDepPinHoldableArgs<'_>) -> bool {
+    let RevDepPinHoldableArgs {
+        root,
+        repos,
+        cp,
+        pin,
+        pin_slot,
+        upgraded_slots,
+        hard_atoms,
+    } = args;
+    if portage_dep::parse_atom(pin).is_none() {
+        return true;
+    }
+    // An unparseable hard atom cannot constrain anything: enforce.
+    let mut hard_parsed: Vec<(&str, portage_dep::Atom)> = Vec::new();
+    for h in hard_atoms {
+        match portage_dep::parse_atom(h) {
+            Some(a) => hard_parsed.push((h.as_str(), a)),
+            None => return true,
+        }
+    }
+    let Ok(cands) = list_candidates(repos, &cp.0, &cp.1) else {
+        return true;
+    };
+    let constrained: Vec<&String> = upgraded_slots
+        .iter()
+        .filter(|s| pin_slot.is_none_or(|ps| ps == *s))
+        .collect();
+    if constrained.is_empty() {
+        return true;
+    }
+    // Installed instances count too (withholding keeps them).
+    let holds_for = |slot: &String, cands: &[String]| {
+        cands.iter().any(|s| {
+            let refs = [s.as_str()];
+            if portage_dep::match_from_list(pin, &refs).is_none_or(|m| m.is_empty()) {
+                return false;
+            }
+            hard_parsed.iter().all(|(text, h)| {
+                if h.slot.is_some() && h.slot.as_deref() != Some(slot.as_str()) {
+                    return true;
+                }
+                portage_dep::match_from_list(text, &refs).is_some_and(|m| !m.is_empty())
+            })
+        })
+    };
+    constrained.iter().any(|slot| {
+        let repo_cands: Vec<String> = cands
+            .iter()
+            .filter(|c| &c.slot == *slot)
+            .map(|c| {
+                format!(
+                    "{}/{}-{}:{}/{}::{}",
+                    cp.0, cp.1, c.version, c.slot, c.sub_slot, c.repo_name
+                )
+            })
+            .collect();
+        if holds_for(slot, &repo_cands) {
+            return true;
+        }
+        // Installed instances at this slot (withholding keeps them).
+        let inst_cands: Vec<String> = all_installed_packages(root)
+            .iter()
+            .filter(|p| p.category == cp.0 && p.package == cp.1)
+            .filter_map(|p| {
+                let (inst_slot, inst_sub) =
+                    read_vdb_slot(root, &p.category, &p.package, &p.version);
+                (inst_slot == **slot).then(|| {
+                    format!(
+                        "{}/{}-{}:{}/{}::{}",
+                        p.category,
+                        p.package,
+                        p.version,
+                        inst_slot,
+                        inst_sub,
+                        installed_pkg_repo(root, &p.category, &p.package, &p.version)
+                    )
+                })
+            })
+            .collect();
+        holds_for(slot, &inst_cands)
+    })
+}
+
 /// Whether a dep key is build-time: Portage empties those keys for built
 /// packages, so only build-time pins are unconditionally ignorable.
 pub(crate) fn is_build_time_dep_key(key: impl AsRef<str>) -> bool {
