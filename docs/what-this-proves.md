@@ -13648,12 +13648,26 @@ binary-only, `pkg_info()` as an `einfo`). The phase's real execution
 (ebuild + binary) is covered Rust-only in `test_portuale.py` with a
 writable `PORTAGE_TMPDIR`.
 
-v1 cut carried forward: an installed match with an entirely empty vdb
-`DEFINED_PHASES` is not attempted (real's `if metadata["DEFINED_PHASES"]`
-falsy-check still would).
-
 Contract suite 938 -> 940; `portuale` 343, `portage-repo` 290 -> 292;
 `cargo fmt`/`clippy` clean.
+
+**Empty-`DEFINED_PHASES` falsy quirk (2026-09-06).** Real `action_info`
+gates the phase step on `if metadata["DEFINED_PHASES"]: if "info" not in
+....split(): continue` (`actions.py:2350`). For an installed match with
+**no `DEFINED_PHASES` file at all**, `vardb.aux_get` returns `""` ->
+falsy -> the `continue` is skipped -> `>>> Attempting to run pkg_info()`
+*does* fire. `"-"` (the modern "no phases" marker) is truthy and doesn't
+name `info`, so it does not. `resolve_installed_info`'s `defines_pkg_info`
+is now `DEFINED_PHASES.trim().is_empty() || names "info"` (dual-language).
+The existing `dev-libs/infoinstpkg` test (its vdb has no `DEFINED_PHASES`
+file) flipped to expect the `>>> Attempting` trailer; new
+`dev-libs/infodashphases` fixture (`DEFINED_PHASES="-"`) +
+`test_info_dash_defined_phases_does_not_attempt_pkg_info` pin the
+counter-case. Remaining `--info` cut: the installed block reads the
+individual vdb `CHOST`/`CFLAGS`/… files rather than `_aux_env_search`'s
+`environment.bz2` scan — identical for a real portage-written vdb entry,
+divergent only for one missing `environment.bz2`, and `portage-repo` is
+deliberately subprocess-free (no bzip2).
 
 ### Slot-collision notice: real `pkg_use_display` for non-default USE (2026-09-05)
 

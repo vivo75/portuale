@@ -5561,12 +5561,13 @@ fn build_config_env(config: &portage_profile::Config) -> Vec<(String, String)> {
 /// `UseFlagDisplay`) are shipped -- see `resolve_installed_info`/
 /// `resolve_info_candidate`'s own doc comments and `colorize_use_token`.
 ///
-/// The binary half's own narrowing (v1): an installed match's
-/// `>>> Attempting` step is gated strictly on its vdb `DEFINED_PHASES`
-/// naming `info` -- real also *still attempts* when `DEFINED_PHASES` is
-/// entirely empty (a falsy-check quirk, `actions.py:2350`), not modelled
-/// here (portuale's own merged packages always record it, and no fixture
-/// has an installed empty-`DEFINED_PHASES` `pkg_info()` package). The
+/// An installed match's `>>> Attempting` step follows real's own
+/// `if metadata["DEFINED_PHASES"]: if "info" not in ...: continue`
+/// (`actions.py:2350`): it fires when the vdb `DEFINED_PHASES` names
+/// `info`, and also when `DEFINED_PHASES` is entirely empty (real's
+/// falsy-check quirk -- an old / hand-written vdb entry with no
+/// `DEFINED_PHASES` file). `"-"` (the modern "no phases" marker) is
+/// truthy and does not fire. The
 /// binary's ebuild is extracted from the archive and laid out as
 /// `<cat>/<pn>/<pf>.ebuild` so the phase driver derives `CATEGORY`/`PN`
 /// from the path (real `doebuild(tree="bintree")` gets them from the

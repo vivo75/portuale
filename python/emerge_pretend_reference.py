@@ -11388,9 +11388,14 @@ def _resolve_installed_info(root, atom_str, config):
             current = config["other_vars"].get(var, "")
             if stored.split() != current.split():
                 differing.append((var, stored))
-        defines_pkg_info = "info" in _read_vdb_string(
+        # Real action_info's `if metadata["DEFINED_PHASES"]: if "info" not
+        # in ...: continue` -- names `info`, OR is entirely empty (falsy
+        # quirk). "-" (the modern "no phases" marker) is truthy and does
+        # not name info, so it does not fire.
+        _vdb_dp = _read_vdb_string(
             root, category, package, version, "DEFINED_PHASES"
-        ).split()
+        ).strip()
+        defines_pkg_info = _vdb_dp == "" or "info" in _vdb_dp.split()
         out.append(
             {
                 "cpv": f"{category}/{package}-{version}",

@@ -12155,7 +12155,14 @@ def test_info_atom_prints_the_installed_package_block(
     from the current config, then an `Unset:` line for the ones with no
     stored value. `dev-libs/infoinstpkg` is installed with
     IUSE="alpha beta" USE="alpha", CFLAGS/CHOST recorded, the make.conf
-    setting neither. Rust == Python."""
+    setting neither. Rust == Python.
+
+    infoinstpkg's vdb has NO `DEFINED_PHASES` file at all -> real
+    `action_info`'s `if metadata["DEFINED_PHASES"]:` is falsy -> the
+    `continue` is skipped -> `>>> Attempting to run pkg_info()` DOES fire
+    (real's falsy-check quirk, `actions.py:2350`). See
+    `test_info_dash_defined_phases_does_not_attempt_pkg_info` for the
+    `DEFINED_PHASES="-"` counter-case."""
     rust = _run([str(emerge_binary)], ["--info", "dev-libs/infoinstpkg"], fixture_env)
     py = _run(emerge_pretend_python, ["--info", "dev-libs/infoinstpkg"], fixture_env)
     assert rust.returncode == 0
@@ -12168,8 +12175,30 @@ def test_info_atom_prints_the_installed_package_block(
         "Unset: CXXFLAGS, FEATURES, LDFLAGS\n"
         "\n"
         "\n"
+        ">>> Attempting to run pkg_info() for 'dev-libs/infoinstpkg-1.0'\n"
     )
-    # infoinstpkg's vdb has no DEFINED_PHASES entry -> no pkg_info() step.
+
+
+def test_info_dash_defined_phases_does_not_attempt_pkg_info(
+    emerge_binary, emerge_pretend_python, fixture_env
+):
+    """Counter-case to the empty-`DEFINED_PHASES` quirk: `dev-libs/
+    infodashphases` is installed with `DEFINED_PHASES="-"` (the modern
+    "no phases" marker). Real `action_info`'s `if metadata["DEFINED_
+    PHASES"]:` is truthy for `"-"`, and `"info" not in ["-"]`, so the
+    `continue` fires -> NO `>>> Attempting to run pkg_info()`. Rust ==
+    Python."""
+    rust = _run([str(emerge_binary)], ["--info", "dev-libs/infodashphases"], fixture_env)
+    py = _run(emerge_pretend_python, ["--info", "dev-libs/infodashphases"], fixture_env)
+    assert rust.returncode == 0
+    assert rust.stdout == py.stdout
+    assert rust.stdout.endswith(
+        "dev-libs/infodashphases-1.0::testrepo was built with the following:\n"
+        'USE="gamma"\n'
+        "Unset: CHOST, CFLAGS, CXXFLAGS, FEATURES, LDFLAGS\n"
+        "\n"
+        "\n"
+    )
     assert "Attempting to run pkg_info()" not in rust.stdout
 
 

@@ -7282,15 +7282,19 @@ pub fn resolve_installed_info(
             }
         }
 
-        let defines_pkg_info = read_vdb_string(
+        // Real `action_info`'s `if metadata["DEFINED_PHASES"]: if "info"
+        // not in ...: continue` -- names `info`, OR is entirely empty
+        // (falsy-check quirk).
+        let vdb_defined_phases = read_vdb_string(
             root,
             &atom.category,
             &atom.package,
             version,
             "DEFINED_PHASES",
-        )
-        .split_whitespace()
-        .any(|p| p == "info");
+        );
+        let vdb_defined_phases = vdb_defined_phases.trim();
+        let defines_pkg_info = vdb_defined_phases.is_empty()
+            || vdb_defined_phases.split_whitespace().any(|p| p == "info");
 
         out.push(InstalledInfo {
             cpv: format!("{}/{}-{version}", atom.category, atom.package),
@@ -7321,14 +7325,16 @@ pub struct InstalledInfo {
     pub differing_vars: Vec<(String, String)>,
     /// `INFO_INSTALLED_VARS` with no vdb value -- the `Unset: …` line.
     pub unset_vars: Vec<String>,
-    /// Whether the vdb's own `DEFINED_PHASES` names `info`. Unlike the
-    /// ebuild-candidate path, an installed package is listed in
-    /// `action_info`'s `mypkgs` regardless -- this only gates the
-    /// `>>> Attempting to run pkg_info()` step (`actions.py:2350-2356`).
-    /// Real's `if metadata["DEFINED_PHASES"]:` also *skips* the gate
-    /// (i.e. still attempts) when `DEFINED_PHASES` is empty -- a v1 cut
-    /// here: portuale's own merged packages always record it, and no
-    /// fixture has an installed `pkg_info()` package with an empty one.
+    /// Whether `action_info` attempts `>>> Attempting to run pkg_info()`
+    /// for this installed match (`actions.py:2350-2356`). Unlike the
+    /// ebuild-candidate path, an installed package is listed in `mypkgs`
+    /// regardless; the phase step is gated on real's own
+    /// `if metadata["DEFINED_PHASES"]: if "info" not in ...split(): continue`
+    /// -- so it fires when `DEFINED_PHASES` *names* `info`, **and also**
+    /// when `DEFINED_PHASES` is entirely empty (real's falsy-check quirk
+    /// -- an old / hand-written vdb entry with no `DEFINED_PHASES` file at
+    /// all). A `DEFINED_PHASES` of `"-"` (the modern "no phases" marker)
+    /// is truthy and does not name `info`, so it does *not* fire.
     pub defines_pkg_info: bool,
     /// `category`, `package`, `version` of this vdb entry -- real
     /// `vardb.findname(pkg.cpv)` locates `<pf>.ebuild`; portuale runs the
@@ -15034,13 +15040,21 @@ mod tests {
     #[test]
     fn resolve_installed_info_flags_a_vdb_recorded_pkg_info_phase() {
         let root = fixtures_root();
-        // infoinstpkg's vdb has no DEFINED_PHASES file -> not flagged.
+        // infoinstpkg's vdb has NO DEFINED_PHASES file at all -> real's
+        // `if metadata["DEFINED_PHASES"]:` is falsy -> `pkg_info()` IS
+        // attempted (the falsy-check quirk, `actions.py:2350`).
         let plain = resolve_installed_info(&root, "dev-libs/infoinstpkg", &test_config());
         assert_eq!(plain.len(), 1);
-        assert!(!plain[0].defines_pkg_info);
+        assert!(plain[0].defines_pkg_info);
         assert_eq!(plain[0].category, "dev-libs");
         assert_eq!(plain[0].package, "infoinstpkg");
         assert_eq!(plain[0].version, "1.0");
+
+        // infodashphases records `DEFINED_PHASES="-"` (truthy, doesn't
+        // name `info`) -> NOT attempted.
+        let dash = resolve_installed_info(&root, "dev-libs/infodashphases", &test_config());
+        assert_eq!(dash.len(), 1);
+        assert!(!dash[0].defines_pkg_info);
     }
 
     #[test]
