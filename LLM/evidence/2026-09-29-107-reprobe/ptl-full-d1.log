@@ -1,0 +1,19 @@
+[ebuild     U  ] dev-libs/md4c-0.6.0 [0.5.3]
+[ebuild  N     ] net-libs/rest-0.10.2  USE="introspection -gtk-doc -test -vala"
+WARNING: One or more updates/rebuilds have been skipped due to a dependency conflict:
+
+media-libs/libdisplay-info:0
+
+  (media-libs/libdisplay-info-0.4.0:0/4::gentoo, ebuild scheduled for merge) USE="-verify-sig" ABI_X86="32 (64) (-x32)" conflicts with
+    <media-libs/libdisplay-info-0.4.0 required by (dev-libs/weston-16.0.0:0/0::gentoo, installed in '/') USE="X desktop drm gles2 jpeg lcms pipewire resize-optimization suid systemd vnc vulkan wayland-compositor webp xwayland -editor -examples -headless -ivi -kiosk -lua -rdp -test" ABI_X86="64" LUA_SINGLE_TARGET="lua5-4"
+    ^                           ^^^^^
+    <media-libs/libdisplay-info-0.4.0:0/3= required by (dev-libs/weston-16.0.0:0/0::gentoo, installed in '/') USE="X desktop drm gles2 jpeg lcms pipewire resize-optimization suid systemd vnc vulkan wayland-compositor webp xwayland -editor -examples -headless -ivi -kiosk -lua -rdp -test" ABI_X86="64" LUA_SINGLE_TARGET="lua5-4"
+    ^                           ^^^^^^^^^^
+    <media-libs/libdisplay-info-0.4.0:= required by (dev-libs/weston-16.0.0:0/0::gentoo, installed in '/') USE="X desktop drm gles2 jpeg lcms pipewire resize-optimization suid systemd vnc vulkan wayland-compositor webp xwayland -editor -examples -headless -ivi -kiosk -lua -rdp -test" ABI_X86="64" LUA_SINGLE_TARGET="lua5-4"
+    ^                           ^^^^^
+
+
+ * IMPORTANT: 20 news items need reading for repository 'gentoo'.
+ * Use eselect news read to view new items.
+
+ptl rc=0

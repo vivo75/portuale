@@ -1,0 +1,11 @@
+[ebuild  N     ] dev-libs/slotconflicttarget-1.0 to /tmp/root-B-pprov-notreq-bt0
+[ebuild  N     ] dev-libs/slotconflictoldconsumer-1.0 to /tmp/root-B-pprov-notreq-bt0
+[ebuild  N     ] dev-libs/slotconflictnewconsumer-1.0 to /tmp/root-B-pprov-notreq-bt0
+WARNING: One or more updates/rebuilds have been skipped due to a dependency conflict:
+
+dev-libs/slotconflicttarget:0
+
+  (dev-libs/slotconflicttarget-2.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/root-B-pprov-notreq-bt0') USE="" ELIBC="glibc" conflicts with
+    <dev-libs/slotconflicttarget-2.0 required by (dev-libs/slotconflictoldconsumer-1.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/root-B-pprov-notreq-bt0') USE="" ELIBC="glibc"
+    ^                            ^^^
+

@@ -11,6 +11,15 @@ pub(crate) fn is_built_slot_op(atom: &portage_dep::Atom) -> bool {
         && atom.sub_slot.is_some()
 }
 
+pub(crate) fn reverse_dep_constraint_atom(atom_str: &str, atom: &portage_dep::Atom) -> String {
+    let head = atom_str.split('[').next().unwrap_or(atom_str);
+    if is_built_slot_op(atom) {
+        head.split(':').next().unwrap_or(head).to_string()
+    } else {
+        head.to_string()
+    }
+}
+
 /// Portage `Atom.with_slot("=")`: a built atom's `:S/SS=` binding relaxes to
 /// bare `:=` (rebuild, never withhold). Non-built/unparseable returns verbatim.
 // Portage: depgraph.py, _slot_operator_check_reverse_dependencies
@@ -61,6 +70,23 @@ pub(crate) struct RevDepPin {
     pub(crate) raw_atom: String,
     /// The installed consumer `(category, package, version)`.
     pub(crate) consumer: (String, String, String),
+}
+
+/// Arguments of [`rev_dep_pin_holdable`].
+pub(crate) struct RevDepPinHoldableArgs<'a> {
+    pub(crate) root: &'a Path,
+    pub(crate) repos: &'a [RepoConfig],
+    pub(crate) cp: &'a (String, String),
+    pub(crate) pin: &'a str,
+    pub(crate) pin_slot: Option<&'a str>,
+    pub(crate) upgraded_slots: &'a std::collections::HashSet<String>,
+    pub(crate) hard_atoms: &'a [String],
+}
+
+/// Whether a dep key is build-time: Portage empties those keys for built
+/// packages, so only build-time pins are unconditionally ignorable.
+pub(crate) fn is_build_time_dep_key(key: impl AsRef<str>) -> bool {
+    matches!(key.as_ref(), "DEPEND" | "BDEPEND")
 }
 
 /// The decided merge USE/IUSE for `category/package-version`. `None` when no

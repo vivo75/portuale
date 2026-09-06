@@ -1,0 +1,22 @@
+
+These are the packages that would be merged, in order:
+
+Calculating dependencies ... done!
+Dependency resolution took 0.07 s (backtrack: 0/0).
+
+[ebuild  N     ] dev-libs/blk0x-1 
+[uninstall     ] dev-libs/blk0y-1 
+[blocks b      ] =dev-libs/blk0y-1 ("=dev-libs/blk0y-1" is soft blocking dev-libs/blk0x-1)
+[ebuild  N     ] dev-libs/blk0b-1 
+[ebuild  N     ] dev-libs/blk0a-1 
+[ebuild  N     ] dev-libs/blk0c-1 
+
+WARNING: One or more updates/rebuilds have been skipped due to a dependency conflict:
+
+dev-libs/blk0x:0
+
+  (dev-libs/blk0x-2:0/0::testrepo, ebuild scheduled for merge) USE="" ELIBC="glibc" conflicts with
+    <dev-libs/blk0x-2 required by (dev-libs/blk0b-1:0/0::testrepo, ebuild scheduled for merge) USE="" ELIBC="glibc"
+    ^               ^
+
+rc=0
