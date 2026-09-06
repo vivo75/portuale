@@ -1,0 +1,453 @@
+
+
+myparams {'recurse': True, 'binpkg_respect_use': 'auto', 'autounmask': True, 'autounmask_keep_use': False, 'autounmask_keep_license': True, 'autounmask_keep_keywords': True, 'autounmask_keep_masks': True, 'bdeps': 'auto', 'ignore_soname_deps': 'y', 'dynamic_deps': True, 'implicit_system_deps': True, 'binpkg_changed_deps': 'auto'}
+
+
+
+      Arg: app-misc/C
+     Atom: app-misc/C
+   ebuild: app-misc/C-0::test_repo
+
+Child:         (app-misc/C-0:0/0::test_repo, ebuild scheduled for merge) USE=""
+Parent Dep:    app-misc/C
+
+      Arg: app-misc/A
+     Atom: app-misc/A
+   ebuild: app-misc/A-0::test_repo
+
+Child:         (app-misc/A-0:0/0::test_repo, ebuild scheduled for merge) USE=""
+Parent Dep:    app-misc/A
+
+      Arg: app-misc/B
+     Atom: app-misc/B
+   ebuild: app-misc/B-0::test_repo
+
+Child:         (app-misc/B-0:0/0::test_repo, ebuild scheduled for merge) USE=""
+Parent Dep:    app-misc/B
+
+Parent:    (app-misc/B-0:0/0::test_repo, ebuild scheduled for merge)
+Depstring: app-misc/D[foo]
+Priority:  runtime
+
+Parent:    (app-misc/B-0:0/0::test_repo, ebuild scheduled for merge)
+Depstring: app-misc/D[foo]
+Priority:  runtime
+Candidates: ['app-misc/D[foo]']
+   ebuild: app-misc/D-0::test_repo
+
+Child:         (app-misc/D-0:0/0::test_repo, ebuild scheduled for merge) USE="foo"
+Parent Dep:    app-misc/D[foo] required by (app-misc/B-0:0/0::test_repo, ebuild scheduled for merge)
+
+Exiting... (app-misc/B-0:0/0::test_repo, ebuild scheduled for merge)
+
+Parent:    (app-misc/A-0:0/0::test_repo, ebuild scheduled for merge)
+Depstring: app-misc/D[-foo]
+Priority:  runtime
+
+Parent:    (app-misc/A-0:0/0::test_repo, ebuild scheduled for merge)
+Depstring: app-misc/D[-foo]
+Priority:  runtime
+Candidates: ['app-misc/D[-foo]']
+   ebuild: app-misc/D-0::test_repo
+   ebuild: app-misc/D-0::test_repo
+
+Child:         (app-misc/D-0:0/0::test_repo, ebuild scheduled for merge) USE="-foo"
+Parent Dep:    app-misc/D[-foo] required by (app-misc/A-0:0/0::test_repo, ebuild scheduled for merge)
+
+Exiting... (app-misc/A-0:0/0::test_repo, ebuild scheduled for merge)
+
+Parent:    (app-misc/C-0:0/0::test_repo, ebuild scheduled for merge)
+Depstring: >=app-misc/D-1
+Priority:  runtime
+
+Parent:    (app-misc/C-0:0/0::test_repo, ebuild scheduled for merge)
+Depstring: >=app-misc/D-1
+Priority:  runtime
+Candidates: ['>=app-misc/D-1']
+   ebuild: app-misc/D-1::test_repo
+
+Child:         (app-misc/D-1:0/0::test_repo, ebuild scheduled for merge) USE="-bar"
+Parent Dep:    >=app-misc/D-1 required by (app-misc/C-0:0/0::test_repo, ebuild scheduled for merge)
+Slot Conflict: (app-misc/D-0:0/0::test_repo, ebuild scheduled for merge) USE="-foo"
+
+Exiting... (app-misc/C-0:0/0::test_repo, ebuild scheduled for merge)
+
+Child:         (app-misc/C-0:0/0::test_repo, ebuild scheduled for merge) USE=""
+Parent Dep:    app-misc/C
+
+Child:         (app-misc/A-0:0/0::test_repo, ebuild scheduled for merge) USE=""
+Parent Dep:    app-misc/A
+
+Child:         (app-misc/B-0:0/0::test_repo, ebuild scheduled for merge) USE=""
+Parent Dep:    app-misc/B
+
+!!! Slot conflict handler started.
+   conflict:
+      root: /tmp/tmptcg38qcu/
+      atom: app-misc/D:0
+      pkg: (app-misc/D-0:0/0::test_repo, ebuild scheduled for merge)
+      pkg: (app-misc/D-1:0/0::test_repo, ebuild scheduled for merge)
+      parent: (app-misc/A-0:0/0::test_repo, ebuild scheduled for merge)
+      arg, non-conflict: False, True
+         atom: app-misc/D[-foo]
+         non-match: (app-misc/D-0:0/0::test_repo, ebuild scheduled for merge)
+         non-match: (app-misc/D-1:0/0::test_repo, ebuild scheduled for merge)
+      parent: (app-misc/C-0:0/0::test_repo, ebuild scheduled for merge)
+      arg, non-conflict: False, True
+         atom: >=app-misc/D-1
+         match: (app-misc/D-1:0/0::test_repo, ebuild scheduled for merge)
+      parent: (app-misc/B-0:0/0::test_repo, ebuild scheduled for merge)
+      arg, non-conflict: False, True
+         atom: app-misc/D[foo]
+         match: (app-misc/D-0:0/0::test_repo, ebuild scheduled for merge)
+
+!!! Slot conflict graph:
+(non-conflict package) depends on
+  (app-misc/D-1:0/0::test_repo, ebuild scheduled for merge) (0)
+  (app-misc/D-0:0/0::test_repo, ebuild scheduled for merge) (0)
+(app-misc/D-0:0/0::test_repo, ebuild scheduled for merge) (no children)
+(app-misc/D-1:0/0::test_repo, ebuild scheduled for merge) (no children)
+
+!!! Slot conflict solution:
+   Conflict: (/tmp/tmptcg38qcu/, app-misc/D:0)
+      keep:   (app-misc/D-0:0/0::test_repo, ebuild scheduled for merge)
+      keep:   (app-misc/D-1:0/0::test_repo, ebuild scheduled for merge)
+
+
+backtracking due to slot conflict:
+   first package:  (app-misc/D-0:0/0::test_repo, ebuild scheduled for merge)
+  package(s) to mask: [<Package ('ebuild', '/tmp/tmptcg38qcu/', 'app-misc/D-1', 'merge', 'test_repo')>]
+      slot: app-misc/D:0
+   parents: ((app-misc/A-0:0/0::test_repo, ebuild scheduled for merge), 'app-misc/D[-foo]'), ((app-misc/C-0:0/0::test_repo, ebuild scheduled for merge), '>=app-misc/D-1'), ((app-misc/B-0:0/0::test_repo, ebuild scheduled for merge), 'app-misc/D[foo]')
+
+
+digraph:
+
+(app-misc/C-0:0/0::test_repo, ebuild scheduled for merge) depends on
+  (app-misc/D-1:0/0::test_repo, ebuild scheduled for merge) (runtime)
+app-misc/C depends on
+  (app-misc/C-0:0/0::test_repo, ebuild scheduled for merge) (soft)
+(app-misc/A-0:0/0::test_repo, ebuild scheduled for merge) depends on
+  (app-misc/D-0:0/0::test_repo, ebuild scheduled for merge) (runtime)
+app-misc/A depends on
+  (app-misc/A-0:0/0::test_repo, ebuild scheduled for merge) (soft)
+(app-misc/B-0:0/0::test_repo, ebuild scheduled for merge) depends on
+  (app-misc/D-0:0/0::test_repo, ebuild scheduled for merge) (runtime)
+app-misc/B depends on
+  (app-misc/B-0:0/0::test_repo, ebuild scheduled for merge) (soft)
+(app-misc/D-0:0/0::test_repo, ebuild scheduled for merge) (no children)
+(app-misc/D-1:0/0::test_repo, ebuild scheduled for merge) (no children)
+@world depends on
+  @profile (blocker)
+  @selected (blocker)
+  @system (blocker)
+@profile (no children)
+@selected (no children)
+@system (no children)
+
+Starting slot conflict handler
+
+New configuration:
+   (app-misc/D-0:0/0::test_repo, ebuild scheduled for merge)
+
+(app-misc/D-0:0/0::test_repo, ebuild scheduled for merge) does not satify all version requirements. Rejecting configuration.
+
+New configuration:
+   (app-misc/D-1:0/0::test_repo, ebuild scheduled for merge)
+
+(app-misc/D-1:0/0::test_repo, ebuild scheduled for merge) misses needed flags from IUSE. Rejecting configuration.
+
+
+backtracking try 1 
+
+[ebuild  N     ] app-misc/D-0  USE="-foo" 
+[ebuild  N     ] app-misc/D-1  USE="-bar" 
+[ebuild  N     ] app-misc/C-0 
+[ebuild  N     ] app-misc/A-0 
+[ebuild  N     ] app-misc/B-0 
+
+!!! Multiple package instances within a single package slot have been pulled
+!!! into the dependency graph, resulting in a slot conflict:
+
+app-misc/D:0
+
+  (app-misc/D-0:0/0::test_repo, ebuild scheduled for merge) USE="-foo" pulled in by
+    app-misc/D[-foo] required by (app-misc/A-0:0/0::test_repo, ebuild scheduled for merge) USE=""
+               ^^^^                                                                                                                  
+    app-misc/D[foo] required by (app-misc/B-0:0/0::test_repo, ebuild scheduled for merge) USE=""
+               ^^^                                                                                                                  
+
+  (app-misc/D-1:0/0::test_repo, ebuild scheduled for merge) USE="-bar" pulled in by
+    >=app-misc/D-1 required by (app-misc/C-0:0/0::test_repo, ebuild scheduled for merge) USE=""
+    ^^           ^                                                                                                                                    
+
+
+It may be possible to solve this problem by using package.mask to
+prevent one of those packages from being selected. However, it is also
+possible that conflicting dependencies exist such that they are
+impossible to satisfy simultaneously.  If such a conflict exists in
+the dependencies of two different packages, then those packages can
+not be installed simultaneously.
+
+For more information, see MASKED PACKAGES section in the emerge man
+page or refer to the Gentoo Handbook.
+
+forced reinstall atoms:
+
+
+slot operator dependencies:
+
+
+forced rebuilds:
+
+
+
+The following USE changes are necessary to proceed:
+ (see "package.use" in the portage(5) man page for more details)
+# required by app-misc/A-0::test_repo
+# required by app-misc/A (argument)
+=app-misc/D-0 -foo
+
+
+runtime_pkg_mask: {<Package ('ebuild', '/tmp/tmptcg38qcu/', 'app-misc/D-1', 'merge', 'test_repo')>: {'slot conflict': {(<Package ('ebuild', '/tmp/tmptcg38qcu/', 'app-misc/A-0', 'merge', 'test_repo')>, Atom('app-misc/D[-foo]')), (<Package ('ebuild', '/tmp/tmptcg38qcu/', 'app-misc/B-0', 'merge', 'test_repo')>, Atom('app-misc/D[foo]'))}}} 
+
+
+
+      Arg: app-misc/C
+     Atom: app-misc/C
+   ebuild: app-misc/C-0::test_repo
+
+Child:         (app-misc/C-0:0/0::test_repo, ebuild scheduled for merge) USE=""
+Parent Dep:    app-misc/C
+
+      Arg: app-misc/A
+     Atom: app-misc/A
+   ebuild: app-misc/A-0::test_repo
+
+Child:         (app-misc/A-0:0/0::test_repo, ebuild scheduled for merge) USE=""
+Parent Dep:    app-misc/A
+
+      Arg: app-misc/B
+     Atom: app-misc/B
+   ebuild: app-misc/B-0::test_repo
+
+Child:         (app-misc/B-0:0/0::test_repo, ebuild scheduled for merge) USE=""
+Parent Dep:    app-misc/B
+
+Parent:    (app-misc/B-0:0/0::test_repo, ebuild scheduled for merge)
+Depstring: app-misc/D[foo]
+Priority:  runtime
+
+Parent:    (app-misc/B-0:0/0::test_repo, ebuild scheduled for merge)
+Depstring: app-misc/D[foo]
+Priority:  runtime
+Candidates: ['app-misc/D[foo]']
+   ebuild: app-misc/D-0::test_repo
+
+
+backtracking try 2 
+
+forced reinstall atoms:
+
+
+slot operator dependencies:
+
+
+forced rebuilds:
+
+
+
+emerge: there are no ebuilds built with USE flags to satisfy "app-misc/D[foo]".
+!!! One of the following packages is required to complete your request:
+- app-misc/D-0::test_repo (Change USE: +foo)
+(dependency required by "app-misc/B-0::test_repo" [ebuild])
+(dependency required by "app-misc/B" [argument])
+
+
+runtime_pkg_mask: {<Package ('ebuild', '/tmp/tmptcg38qcu/', 'app-misc/D-0', 'merge', 'test_repo')>: {'slot conflict': {(<Package ('ebuild', '/tmp/tmptcg38qcu/', 'app-misc/C-0', 'merge', 'test_repo')>, Atom('>=app-misc/D-1'))}}} 
+
+
+
+      Arg: app-misc/C
+     Atom: app-misc/C
+   ebuild: app-misc/C-0::test_repo
+
+Child:         (app-misc/C-0:0/0::test_repo, ebuild scheduled for merge) USE=""
+Parent Dep:    app-misc/C
+
+      Arg: app-misc/A
+     Atom: app-misc/A
+   ebuild: app-misc/A-0::test_repo
+
+Child:         (app-misc/A-0:0/0::test_repo, ebuild scheduled for merge) USE=""
+Parent Dep:    app-misc/A
+
+      Arg: app-misc/B
+     Atom: app-misc/B
+   ebuild: app-misc/B-0::test_repo
+
+Child:         (app-misc/B-0:0/0::test_repo, ebuild scheduled for merge) USE=""
+Parent Dep:    app-misc/B
+
+Parent:    (app-misc/B-0:0/0::test_repo, ebuild scheduled for merge)
+Depstring: app-misc/D[foo]
+Priority:  runtime
+
+Parent:    (app-misc/B-0:0/0::test_repo, ebuild scheduled for merge)
+Depstring: app-misc/D[foo]
+Priority:  runtime
+Candidates: ['app-misc/D[foo]']
+   ebuild: app-misc/D-1::test_repo
+
+
+backtracking aborted after 2 tries
+
+forced reinstall atoms:
+
+
+slot operator dependencies:
+
+
+forced rebuilds:
+
+
+
+!!! All ebuilds that could satisfy "app-misc/D[foo]" have been masked.
+!!! One of the following masked packages is required to complete your request:
+- app-misc/D-0::test_repo (masked by: backtracking: slot conflict)
+
+(dependency required by "app-misc/B-0::test_repo" [ebuild])
+(dependency required by "app-misc/B" [argument])
+For more information, see the MASKED PACKAGES section in the emerge
+man page or refer to the Gentoo Handbook.
+
+
+
+      Arg: app-misc/C
+     Atom: app-misc/C
+   ebuild: app-misc/C-0::test_repo
+
+Child:         (app-misc/C-0:0/0::test_repo, ebuild scheduled for merge) USE=""
+Parent Dep:    app-misc/C
+
+      Arg: app-misc/A
+     Atom: app-misc/A
+   ebuild: app-misc/A-0::test_repo
+
+Child:         (app-misc/A-0:0/0::test_repo, ebuild scheduled for merge) USE=""
+Parent Dep:    app-misc/A
+
+      Arg: app-misc/B
+     Atom: app-misc/B
+   ebuild: app-misc/B-0::test_repo
+
+Child:         (app-misc/B-0:0/0::test_repo, ebuild scheduled for merge) USE=""
+Parent Dep:    app-misc/B
+
+Parent:    (app-misc/B-0:0/0::test_repo, ebuild scheduled for merge)
+Depstring: app-misc/D[foo]
+Priority:  runtime
+
+Parent:    (app-misc/B-0:0/0::test_repo, ebuild scheduled for merge)
+Depstring: app-misc/D[foo]
+Priority:  runtime
+Candidates: ['app-misc/D[foo]']
+
+
+autounmask breakage detected
+
+forced reinstall atoms:
+
+
+slot operator dependencies:
+
+
+forced rebuilds:
+
+
+
+emerge: there are no ebuilds built with USE flags to satisfy "app-misc/D[foo]".
+!!! One of the following packages is required to complete your request:
+- app-misc/D-0::test_repo (Change USE: +foo)
+(dependency required by "app-misc/B-0::test_repo" [ebuild])
+(dependency required by "app-misc/B" [argument])
+
+
+      Arg: app-misc/C
+     Atom: app-misc/C
+   ebuild: app-misc/C-0::test_repo
+
+Child:         (app-misc/C-0:0/0::test_repo, ebuild scheduled for merge) USE=""
+Parent Dep:    app-misc/C
+
+      Arg: app-misc/A
+     Atom: app-misc/A
+   ebuild: app-misc/A-0::test_repo
+
+Child:         (app-misc/A-0:0/0::test_repo, ebuild scheduled for merge) USE=""
+Parent Dep:    app-misc/A
+
+      Arg: app-misc/B
+     Atom: app-misc/B
+   ebuild: app-misc/B-0::test_repo
+
+Child:         (app-misc/B-0:0/0::test_repo, ebuild scheduled for merge) USE=""
+Parent Dep:    app-misc/B
+
+Parent:    (app-misc/B-0:0/0::test_repo, ebuild scheduled for merge)
+Depstring: app-misc/D[foo]
+Priority:  runtime
+
+Parent:    (app-misc/B-0:0/0::test_repo, ebuild scheduled for merge)
+Depstring: app-misc/D[foo]
+Priority:  runtime
+Candidates: ['app-misc/D[foo]']
+   ebuild: app-misc/D-0::test_repo
+
+Child:         (app-misc/D-0:0/0::test_repo, ebuild scheduled for merge) USE="foo"
+Parent Dep:    app-misc/D[foo] required by (app-misc/B-0:0/0::test_repo, ebuild scheduled for merge)
+
+Exiting... (app-misc/B-0:0/0::test_repo, ebuild scheduled for merge)
+
+Parent:    (app-misc/A-0:0/0::test_repo, ebuild scheduled for merge)
+Depstring: app-misc/D[-foo]
+Priority:  runtime
+
+Parent:    (app-misc/A-0:0/0::test_repo, ebuild scheduled for merge)
+Depstring: app-misc/D[-foo]
+Priority:  runtime
+Candidates: ['app-misc/D[-foo]']
+forced reinstall atoms:
+
+
+slot operator dependencies:
+
+
+forced rebuilds:
+
+
+
+emerge: there are no ebuilds built with USE flags to satisfy "app-misc/D[-foo]".
+!!! One of the following packages is required to complete your request:
+- app-misc/D-0::test_repo (Change USE: -foo)
+(dependency required by "app-misc/A-0::test_repo" [ebuild])
+(dependency required by "app-misc/A" [argument])
+### ORDER C/A/B {'--pretend': True, '--autounmask-backtrack': 'y', '--debug': True} success 0 mergelist None use_changes None
+backtrack {}
+forced reinstall atoms:
+
+
+slot operator dependencies:
+
+
+forced rebuilds:
+
+
+
+emerge: there are no ebuilds built with USE flags to satisfy "app-misc/D[-foo]".
+!!! One of the following packages is required to complete your request:
+- app-misc/D-0::test_repo (Change USE: -foo)
+(dependency required by "app-misc/A-0::test_repo" [ebuild])
+(dependency required by "app-misc/A" [argument])
+
+EROOT=/tmp/tmptcg38qcu/
