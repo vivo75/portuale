@@ -13936,4 +13936,139 @@ is in the stale v1 format in this environment); it should be re-run in
 CI once, since edition 2024 requires the container's `rust` apk to be
 ≥ 1.85.
 
+### Harness-scaffolding dedup (`harness-common` crate) (2026-09-06)
+
+`cargo dupes --format json --min-lines 20` reported 41 duplicate
+"units" across the workspace, but its "exact duplicate / similarity
+1.0" heading is misleading: the metric normalizes literals, so bodies
+differing only by a `false↔true` flag or a package-name string score as
+identical. Diffing every flagged function against the source showed
+that only **one** family is genuinely byte-identical: the `run_batch`
+stdin loop (`versions-harness`, `atom-harness`, `use-reduce-harness`,
+`required-use-harness`) plus the `main` argv dispatch scaffolding —
+~21 identical lines each, exercising the harness architecture's two
+modes (correctness = one op per invocation, benchmark = batch loop over
+stdin). The `portage-repo` `resolve_real*`/`graph_real*` families and
+every other flagged group are either flag-variant test helpers (43/45+
+common lines differing in a single boolean) or same-shape distinct test
+*cases* (same temp-dir scaffold, differing pinned assertions) that must
+not be merged — that would collapse distinct coverage.
+
+The dedup extracted the scaffolding into a new `harness-common` library
+crate (`run_batch` + `main_dispatch(usage, dispatch)`), and each harness
+binary now keeps only its `dispatch(op, args)` surface plus a one-line
+`main`. Verified behaviorally, not just by tests: the refactored
+binaries were re-built and driven against the Python-side harnesses over
+a 440-op battery (309 verbcmp/ververify lines, 54 atom lines, 34
+use_reduce lines, 7 required_use lines, plus standalone no-arg/bad-op
+exit codes) — all byte-identical output. The Python harnesses are
+untouched; the pytest contract suite still rebuilds the Rust binaries
+itself and reports the same 1282 passed / 5 pre-existing non-TTY
+`--ask` failures.
+
+### refactor-01 S1: `// SAFETY:` markers on every `unsafe` block (2026-09-06)
+
+The `rust-skills` skill's CRITICAL-impact `unsafe-safety-comment` rule
+requires a `// SAFETY:` marker directly above each `unsafe` block. The
+audit (`docs/history/refactor-CRITICAL.md`) found the workspace's `unsafe` is
+entirely inside `portuale/src/` (the library crates are unsafe-free)
+and that 5 of its markers were missing or not in the `// SAFETY:` form.
+S1 is purely presentational: added the marker to `portage_lock.rs`'s
+`flock`, `ebuild_phases.rs`'s `kill`, `ebuild_merge.rs`'s
+`mkfifo`/`mknod`/`chmod`/`lchown`/`chown` (production) plus the three
+test-only blocks, and `elog.rs`'s `closelog` + the `set_var`/
+`remove_var` env-scoped test helper. The markers state the real
+invariant each block relies on (the `CString` outlives the syscall; the
+integer args are plain scalars; the env writes are mutex-scoped).
+No behavior change: the crate suite stays at 792 passing unit tests, the
+Python contract suite reports the same 1282 passed / 5 pre-existing
+non-TTY failures.
+
+### refactor-01 S2: `portage-versions` overflow panics removed via bignum fallback (2026-09-06)
+
+The audit's one real data-dependent panic was `portage-versions`'s
+`i128` component parse: a `\d+`-wide numeric component, revision, or
+suffix numeral can exceed ~38 digits and previously
+panic'd. The audit's proposed "overflow-to-`None`" semantics is wrong
+for this project: the Python reference (`lib/portage/versions.py`
+`vercmp`) wraps every numeral in an unbounded `int`, so a huge
+component *does not* fail there — it compares. Returning `None` would
+have broken the byte-parity contract the suite enforces.
+
+S2 instead makes comparison always total by giving
+`portage-versions` a `Part` component type: in-range values stay
+`Num(i128)` (the hot path, no new allocations), and off-width digit
+strings become `BigNum(String)` compared by trimmed-length then digit
+order — exactly Python's bignum ordering. Verified empirically: Rust's
+`parse::<i128>` accepts arbitrary leading zeros, so an `Err` implies
+true overflow, which makes `BigNum > i128::MAX >= any Num` a sound
+invariant. The same mechanism fixed a previously-silent parity bug:
+oversized suffix numerals (`.parse().unwrap_or(0)`) used to be coerced
+to `0` while the reference compared them as bignums — now they compare
+correctly.
+
+Behavior on every in-range input is byte-identical (all 1282 pinned
+pytest cases unchanged). New numbers: 5 new `portage-versions` unit
+tests, 5 new oversized pairs (39/40-digit components, huge `-r`
+revisions, huge `-pN` suffix numerals) added to
+`tests/test_versions_contract.py` that drive **both** the Python
+reference and the rebuilt Rust harness — the Rust side now agrees with
+the reference on inputs the old code either aborted on or miscompared.
+Suite totals: 797/797 Rust, pytest 1292 passed / 5 pre-existing
+non-TTY failures / 2 skipped.
+
+### refactor-01 S3: last `&String` param cleaned; test-clippy warnings fixed (2026-09-06)
+
+The ownership audit (`docs/history/refactor-CRITICAL.md` §3) tracked exactly one
+`&String`-typed parameter in the whole workspace: the `vercmp_key`
+sort comparator in `pretend.rs` (`|a: &String, b: &String|`). Since
+`sort_by` on a `Vec<String>` hands the comparator `&String` items, the
+idiomatic `&str` form needs deref-coercing wrapper closures at the
+call sites, so the comparator now takes `&str` and the three
+`sort_by(vercmp_key)` calls became `sort_by(|a, b| vercmp_key(a, b))`.
+No behavior change.
+
+While re-running the full gate, `cargo clippy --release
+--all-targets` surfaced 3 warnings in the `portage-versions` unit-test
+module added in S2 (unnecessary `to_string`, redundant `format!`
+references, and `format!`-in-`format!`); they were fixed here so the
+workspace is genuinely zero-warn again. Suite totals unchanged:
+797/797 Rust, pytest 1292 passed / 5 pre-existing non-TTY --ask
+failures / 2 skipped.
+
+### refactor-01 S4: hand-rolled `Error` enums in every lib crate + a `portuale::Error` boundary seam (2026-09-06)
+
+The error-model re-open (`docs/history/refactor-CRITICAL.md` §2.1/§2.4, judgment call (b))
+shipped the "option B" shape without a single new dependency: every
+library crate now has its own typed error instead of leaking
+`Result<_, String>`. `portage-use-reduce`, `portage-fetch`,
+`portage-required-use`, `portage-repo`, and `portage-profile` each got a
+hand-rolled `pub enum Error` whose `Display` reproduces every prior
+`format!` message byte-for-byte (so all contract-pinned CLI strings are
+untouched), plus `impl From<Error> for String` so downstream
+`Result<_, String>` crossing sites compile unchanged. `portage-repo`'s
+error composes the three it forwards (`InvalidRequiredUse`, `UseReduce`,
+`Fetch`); the two `parent not found` profile resolutions became typed
+variants rather than `ok_or_else(format!...)`. Every fallible function
+in those crates was re-typed (`Result<_, Error>`) and every
+construction site converted; the earlier `portage_repo::Error`
+annotation on `pretend.rs`'s resolution handle is now the audit §2.1
+seam `portuale::Error { kind, detail: Vec<String> }` (`Display` joins
+detail with `\n`; kind `"resolve"` for the depgraph step via
+`From<portage_repo::Error>`).
+
+The line portuale itself draws is exactly the audit's "not now":
+`portuale`'s internals remain `Result<_, String>`, and only the
+CLI-visible boundary wears the typed seam — that is the whole point of
+the `kind`-shaped design (error-CLI-formatting can now branch on kind
+without touching 115 internals). Harnesses stay on `String` too
+(`harness-common`'s `DispatchResult`), so the contract suite still
+measures identical prose.
+
+Zero behavior change, verified the same way every refactor slice is:
+`cargo fmt --check` clean, `cargo clippy --release --all-targets` zero
+warnings, suite totals now 799/799 Rust (2 new `error.rs` unit tests)
+and pytest 1292 passed / 5 pre-existing non-TTY --ask/--resume
+failures / 2 skipped — byte-identical on all pinned inputs.
+
 # # required by dev-libs/useflagpkg[-foo] (argument)
