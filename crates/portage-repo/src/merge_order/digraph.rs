@@ -83,6 +83,93 @@ pub(crate) struct SerializeFrontier {
     pub(crate) ready: Vec<BinaryHeap<Reverse<usize>>>,
 }
 
+impl SerializeFrontier {
+    /// Bitmask of the levels whose filter an edge with `prios` survives.
+    pub(crate) fn compute_mask(levels: &[Option<Ignore>], prios: &[DepPriority]) -> u64 {
+        let mut mask = 1u64;
+        for (l, f) in levels.iter().enumerate().skip(1) {
+            let f = f.expect("levels past 0 always hold a filter");
+            if prios.iter().any(|p| !f.ignores(p)) {
+                mask |= 1 << l;
+            }
+        }
+        mask
+    }
+
+    /// Level index for a filter, or `None` if untracked (defensive fallback).
+    pub(crate) fn level_of(&self, ig: Option<Ignore>) -> Option<usize> {
+        self.levels.iter().position(|&f| f == ig)
+    }
+
+    pub(crate) fn is_leaf(&self, node: usize, level: usize) -> bool {
+        self.surv.get(node).is_some_and(|counts| counts[level] == 0)
+    }
+
+    /// The alive leaves under `level`, in `order` sequence.
+    pub(crate) fn ready_nodes(&mut self, level: usize, alive: &[bool]) -> Vec<usize> {
+        let mut result: Vec<usize> = Vec::new();
+        let mut seen: HashSet<usize> = HashSet::new();
+        while let Some(Reverse(idx)) = self.ready[level].pop() {
+            if !seen.insert(idx) {
+                continue;
+            }
+            let Some(&node) = self.by_index.get(idx) else {
+                continue;
+            };
+            if !alive.get(node).copied().unwrap_or(false) {
+                continue;
+            }
+            if !self.is_leaf(node, level) {
+                continue;
+            }
+            result.push(node);
+        }
+        self.ready[level] = BinaryHeap::from(
+            result
+                .iter()
+                .map(|&node| Reverse(self.index[node]))
+                .collect::<Vec<_>>(),
+        );
+        result
+    }
+
+    /// Account for `node` leaving the graph; counts/edges are read off the
+    /// adjacency as it stands.
+    pub(crate) fn remove(
+        &mut self,
+        node: usize,
+        children: &[(usize, Vec<DepPriority>)],
+        parents: &[usize],
+    ) {
+        for &parent in parents {
+            let Some(mask) = self.edge_mask.remove(&(parent, node)) else {
+                continue;
+            };
+            let Some(pcounts) = self.surv.get_mut(parent) else {
+                continue;
+            };
+            let Some(&pidx) = self.index.get(parent) else {
+                continue;
+            };
+            let mut m = mask;
+            while m != 0 {
+                let l = m.trailing_zeros() as usize;
+                pcounts[l] = pcounts[l].saturating_sub(1);
+                if pcounts[l] == 0 {
+                    self.ready[l].push(Reverse(pidx));
+                }
+                m &= m - 1;
+            }
+        }
+        for (child, _) in children {
+            self.edge_mask.remove(&(node, *child));
+        }
+        if let Some(counts) = self.surv.get_mut(node) {
+            counts.fill(u32::MAX);
+        }
+    }
+}
+
 /// Fall back to plain `leaf_nodes()`/`is_leaf()` scans when
 /// `PORTAGE_SERIALIZE_FRONTIER_DISABLE` is set (debugging escape hatch).
 /// Portage: _serialize_frontier.py
