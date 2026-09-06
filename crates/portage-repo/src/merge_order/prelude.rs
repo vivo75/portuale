@@ -23,6 +23,131 @@ impl DigraphPrelude<'_> {
             None => true,
         }
     }
+
+    /// The per-atom candidate entries: same-cp entries the atom matches, minus
+    /// removals (and, under `merge_bound_only`, the parent and installed nodes).
+    pub(crate) fn match_candidates(
+        &self,
+        entries: &[GraphEntry],
+        from: usize,
+        edge: &DepEdge,
+        merge_bound_only: bool,
+    ) -> Vec<usize> {
+        let Some(idxs) = self
+            .cp_indices
+            .get(&(edge.category.as_str(), edge.package.as_str()))
+        else {
+            return Vec::new();
+        };
+        // Uninstall entries are skipped, so "merge-bound" is "not installed".
+        let merge_bound = |j: usize| !self.installed[j];
+        let cands: Vec<usize> = idxs
+            .iter()
+            .copied()
+            .filter(|&j| {
+                if !self.edge_matches(&edge.atom, j) {
+                    return false;
+                }
+                if matches!(entries[j].outcome, PretendOutcome::Uninstall { .. }) {
+                    return false;
+                }
+                if merge_bound_only && (j == from || !merge_bound(j)) {
+                    return false;
+                }
+                true
+            })
+            .collect();
+        // Edges land on the resolving-root instance, never a same-cp other-root sibling.
+        let want = crate::dep_child_root(entries[from].targets_running_root, edge.key);
+        let rooted: Vec<usize> = cands
+            .iter()
+            .copied()
+            .filter(|&j| entries[j].targets_running_root == want)
+            .collect();
+        let cands = if rooted.is_empty() { cands } else { rooted };
+        self.narrow_by_use(entries, &edge.atom, cands)
+    }
+
+    /// USE-aware narrowing of multi-instance matches: an atom with use-deps never
+    /// edges to an instance that cannot satisfy them. Only ever removes a
+    /// provably-wrong edge; anything undecidable keeps the unfiltered set.
+    pub(crate) fn narrow_by_use(
+        &self,
+        entries: &[GraphEntry],
+        atom: &str,
+        cands: Vec<usize>,
+    ) -> Vec<usize> {
+        if cands.len() < 2 {
+            return cands;
+        }
+        let Some(parsed) = portage_dep::parse_atom(atom) else {
+            return cands;
+        };
+        let use_deps = parsed.use_deps.unwrap_or_default();
+        if use_deps.is_empty() {
+            return cands;
+        }
+        let mut kept = Vec::new();
+        let mut carriers = Vec::new();
+        for &j in &cands {
+            let display = &entries[j].use_flags_display;
+            if display.is_empty() {
+                return cands;
+            }
+            let declared: HashSet<String> = display.iter().map(|(flag, _)| flag.clone()).collect();
+            let enabled: HashSet<String> = display
+                .iter()
+                .filter(|(_, on)| *on)
+                .map(|(flag, _)| flag.clone())
+                .collect();
+            if portage_dep::use_deps_satisfied(&use_deps, &declared, &enabled) {
+                kept.push(j);
+            }
+            // An instance declaring every named flag keeps the edge even when the
+            // current USE mismatches (the walk may have landed the atom there).
+            if use_deps
+                .iter()
+                .all(|d| d.default.is_some() || declared.contains(&d.flag))
+            {
+                carriers.push(j);
+            }
+        }
+        if !kept.is_empty() {
+            kept
+        } else if !carriers.is_empty() {
+            carriers
+        } else {
+            cands
+        }
+    }
+
+    /// Ranking over a fixed candidate set: merge-bound first, then highest version.
+    pub(crate) fn rank_best(
+        entries: &[GraphEntry],
+        installed: &[bool],
+        cands: impl Iterator<Item = usize>,
+    ) -> Option<usize> {
+        let merge_bound = |j: usize| !installed[j];
+        let mut best: Option<usize> = None;
+        for j in cands {
+            best = Some(match best {
+                None => j,
+                Some(b) => {
+                    let better = match (merge_bound(j), merge_bound(b)) {
+                        (true, false) => true,
+                        (false, true) => false,
+                        _ => {
+                            let bv = outcome_version(&entries[b]).unwrap_or("");
+                            let jv = outcome_version(&entries[j]).unwrap_or("");
+                            portage_versions::vercmp(jv, bv).is_some_and(|o| o > 0)
+                        }
+                    };
+                    if better { j } else { b }
+                }
+            });
+        }
+        best
+    }
 }
 
 pub(crate) fn digraph_prelude<'a>(entries: &'a [GraphEntry], root: &Path) -> DigraphPrelude<'a> {

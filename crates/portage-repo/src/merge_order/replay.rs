@@ -11,3 +11,28 @@ pub(crate) struct ReplayUse {
     pub enabled: HashSet<String>,
     pub fixed: HashSet<String>,
 }
+
+/// The first dependency the replayed walk fails on, as `(parent entry, dep index)`.
+/// `contradiction` marks the autounmask shape (a flip Portage rejects).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ReplayFailure {
+    pub parent: usize,
+    pub edge: usize,
+    pub contradiction: bool,
+}
+
+/// What `replay_create_graph` saw: admission order, the edge admitting each entry,
+/// the first failing dependency, and the needed USE changes per `cat/pkg`.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct WalkReplay {
+    pub admitted: Vec<usize>,
+    pub admitted_by: Vec<Option<(usize, usize)>>,
+    /// For an argument entry: the index into `top_level_atoms` of the adding atom.
+    pub admitted_arg: Vec<Option<usize>>,
+    /// Every resolved `(parent, dep index, target)` edge, in walk order.
+    pub edges: Vec<(usize, usize, usize)>,
+    /// Per `cat/pkg`, the `(parent, dep index)` first needing each USE change.
+    pub flip_origin: HashMap<(String, String), (usize, usize)>,
+    pub failure: Option<ReplayFailure>,
+    pub needed: HashMap<(String, String), HashMap<String, bool>>,
+}

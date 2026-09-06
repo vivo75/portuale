@@ -2,6 +2,18 @@ use super::*;
 
 use portage_util::TempDir;
 
+fn prio(word: u64) -> DepPriority {
+    DepPriority {
+        buildtime: word & 1 != 0,
+        runtime: word & 2 != 0,
+        runtime_post: word & 4 != 0,
+        buildtime_slot_op: word & 8 != 0,
+        runtime_slot_op: word & 16 != 0,
+        optional: word & 32 != 0,
+        satisfied: word & 64 != 0,
+    }
+}
+
 /// A minimal `New` `GraphEntry` for `build_digraph` tests --
 /// mirrors `synthetic_installed_entry`'s full field list.
 fn new_entry(category: &str, package: &str, version: &str, deps: Vec<DepEdge>) -> GraphEntry {

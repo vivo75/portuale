@@ -146,6 +146,20 @@ fn prune_cleanlist_protects_the_highest_regardless_of_install_order() {
     );
     let _ = std::fs::remove_dir_all(&root);
 }
+
+// ---- `resolve_blockers` (Portage `_validate_blockers`). ----
+
+fn upgrade_165(cat: &str, pkg: &str, from: &str, to: &str) -> GraphEntry {
+    entry_165(
+        cat,
+        pkg,
+        PretendOutcome::Upgrade {
+            from: from.to_string(),
+            to: to.to_string(),
+        },
+        Some("0"),
+    )
+}
 /// Arguments of [`pending_165`].
 struct Pending165Args<'a> {
     atom: &'a str,

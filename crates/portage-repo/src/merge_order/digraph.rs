@@ -20,3 +20,10 @@ pub(crate) struct Digraph {
     pub(crate) installed: Vec<bool>,
     pub(crate) alive: Vec<bool>,
 }
+
+/// Fall back to plain `leaf_nodes()`/`is_leaf()` scans when
+/// `PORTAGE_SERIALIZE_FRONTIER_DISABLE` is set (debugging escape hatch).
+/// Portage: _serialize_frontier.py
+pub(crate) fn frontier_enabled() -> bool {
+    std::env::var_os("PORTAGE_SERIALIZE_FRONTIER_DISABLE").is_none()
+}
