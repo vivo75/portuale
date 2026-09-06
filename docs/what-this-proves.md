@@ -13911,3 +13911,33 @@ stash-and-rebuild). Caveat: the musl static-container smoke gate
 is in the stale v1 format in this environment); it should be re-run in
 CI once, since edition 2024 requires the container's `rust` apk to be
 ≥ 1.85.
+
+### Harness-scaffolding dedup (`harness-common` crate) (2026-09-06)
+
+`cargo dupes --format json --min-lines 20` reported 41 duplicate
+"units" across the workspace, but its "exact duplicate / similarity
+1.0" heading is misleading: the metric normalizes literals, so bodies
+differing only by a `false↔true` flag or a package-name string score as
+identical. Diffing every flagged function against the source showed
+that only **one** family is genuinely byte-identical: the `run_batch`
+stdin loop (`versions-harness`, `atom-harness`, `use-reduce-harness`,
+`required-use-harness`) plus the `main` argv dispatch scaffolding —
+~21 identical lines each, exercising the harness architecture's two
+modes (correctness = one op per invocation, benchmark = batch loop over
+stdin). The `portage-repo` `resolve_real*`/`graph_real*` families and
+every other flagged group are either flag-variant test helpers (43/45+
+common lines differing in a single boolean) or same-shape distinct test
+*cases* (same temp-dir scaffold, differing pinned assertions) that must
+not be merged — that would collapse distinct coverage.
+
+The dedup extracted the scaffolding into a new `harness-common` library
+crate (`run_batch` + `main_dispatch(usage, dispatch)`), and each harness
+binary now keeps only its `dispatch(op, args)` surface plus a one-line
+`main`. Verified behaviorally, not just by tests: the refactored
+binaries were re-built and driven against the Python-side harnesses over
+a 440-op battery (309 verbcmp/ververify lines, 54 atom lines, 34
+use_reduce lines, 7 required_use lines, plus standalone no-arg/bad-op
+exit codes) — all byte-identical output. The Python harnesses are
+untouched; the pytest contract suite still rebuilds the Rust binaries
+itself and reports the same 1282 passed / 5 pre-existing non-TTY
+`--ask` failures.

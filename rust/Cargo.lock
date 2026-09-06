@@ -135,6 +135,7 @@ dependencies = [
 name = "atom-harness"
 version = "0.1.0"
 dependencies = [
+ "harness-common",
  "portage-dep",
 ]
 
@@ -842,6 +843,10 @@ name = "glob"
 version = "0.3.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e4eba85ea1d0a966a983acd07deee566e67395d2d96b6fb39e62b5a833f1eb0b"
+
+[[package]]
+name = "harness-common"
+version = "0.1.0"
 
 [[package]]
 name = "hashbrown"
@@ -1555,6 +1560,7 @@ checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
 name = "required-use-harness"
 version = "0.1.0"
 dependencies = [
+ "harness-common",
  "portage-required-use",
 ]
 
@@ -1946,6 +1952,7 @@ checksum = "81e544489bf3d8ef66c953931f56617f423cd4b5494be343d9b9d3dda037b9a3"
 name = "use-reduce-harness"
 version = "0.1.0"
 dependencies = [
+ "harness-common",
  "portage-use-reduce",
 ]
 
@@ -2035,6 +2042,7 @@ checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 name = "versions-harness"
 version = "0.1.0"
 dependencies = [
+ "harness-common",
  "portage-versions",
 ]
 

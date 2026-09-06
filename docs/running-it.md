@@ -1874,3 +1874,9 @@ Edition 2024 (2026-09-06): the workspace now builds on edition 2024 —
 the commands above are unchanged, the migration was behavior-identical
 (`cargo fmt --check` / `cargo clippy --release --all-targets` /
 `cargo test --release --workspace` all green).
+
+Harness-shell dedup (2026-09-06): the `run_batch` stdin loop and
+`main` argv dispatch shared by all four harness binaries now live in
+the `harness-common` crate. The CLI surface is unchanged — the harness
+commands above work exactly as documented, and a `printf ... | <harness>
+batch` pipe is still the benchmark-mode entry point.

@@ -12,7 +12,6 @@
 //                                               mode: avoids per-op
 //                                               fork/exec overhead)
 
-use std::io::{self, BufRead, Write};
 use std::process::ExitCode;
 
 fn dispatch(op: &str, args: &[&str]) -> Result<String, String> {
@@ -41,47 +40,9 @@ fn dispatch(op: &str, args: &[&str]) -> Result<String, String> {
     }
 }
 
-fn run_batch() -> ExitCode {
-    let stdin = io::stdin();
-    let stdout = io::stdout();
-    let mut out = stdout.lock();
-    for line in stdin.lock().lines() {
-        let line = line.expect("failed to read stdin");
-        let line = line.trim();
-        if line.is_empty() {
-            continue;
-        }
-        let parts: Vec<&str> = line.split_whitespace().collect();
-        match dispatch(parts[0], &parts[1..]) {
-            Ok(result) => writeln!(out, "{result}").expect("failed to write stdout"),
-            Err(e) => {
-                eprintln!("error: {e}");
-                return ExitCode::FAILURE;
-            }
-        }
-    }
-    ExitCode::SUCCESS
-}
-
 fn main() -> ExitCode {
-    let argv: Vec<String> = std::env::args().collect();
-    let args: Vec<&str> = argv.iter().skip(1).map(String::as_str).collect();
-
-    match args.as_slice() {
-        [] => {
-            eprintln!("usage: versions-harness <vercmp v1 v2 | ververify v | batch>");
-            ExitCode::from(2)
-        }
-        ["batch"] => run_batch(),
-        [op, rest @ ..] => match dispatch(op, rest) {
-            Ok(result) => {
-                println!("{result}");
-                ExitCode::SUCCESS
-            }
-            Err(e) => {
-                eprintln!("error: {e}");
-                ExitCode::from(2)
-            }
-        },
-    }
+    harness_common::main_dispatch(
+        "versions-harness <vercmp v1 v2 | ververify v | batch>",
+        dispatch,
+    )
 }

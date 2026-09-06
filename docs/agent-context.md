@@ -146,7 +146,11 @@ every crate inherits via `edition.workspace = true`). See
 edits it required (a `portage-repo` binding-mode pattern, `unsafe`
 wrapping of `set_var`/`remove_var` in `elog.rs`'s test helper) and why
 the clippy/fmt churn is behavior-preserving. The toolchain here is
-1.97.1 — comfortably past edition 2024's 1.85 floor.
+1.97.1 — comfortably past edition 2024's 1.85 floor. The four harness
+binaries' shared `run_batch`/`main` scaffolding now also lives in a
+small `harness-common` crate (same day) — a behavior-preserving dedup
+of the only genuinely byte-identical duplication a `cargo dupes` scan
+found; see `what-this-proves.md`'s "Harness-scaffolding dedup" entry.
 
 **Dry-run (`emerge --pretend`)**: full recursive DEPEND/RDEPEND/BDEPEND/
 PDEPEND/IDEPEND resolution; profile/make.conf-derived USE/ACCEPT_KEYWORDS
