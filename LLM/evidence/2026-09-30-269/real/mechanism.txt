@@ -1,0 +1,179 @@
+--- out:141 ---
+slot_operator_update_probe:
+   existing child package:  (app-misc/mmprov-1:0/1::testrepo, installed in '/tmp/r269root/')
+   existing parent package: (app-misc/mmcons-1:0/0::testrepo, installed in '/tmp/r269root/')
+   new child package:  (app-misc/mmprov-3:1/2::testrepo, ebuild scheduled for merge to '/tmp/r269root/')
+   new parent package: (app-misc/mmcons-1:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/')
+
+
+backtracking due to missed slot abi update:
+   child package:  (app-misc/mmprov-3:1/2::testrepo, ebuild scheduled for merge to '/tmp/r269root/')
+--- out:148 ---
+backtracking due to missed slot abi update:
+   child package:  (app-misc/mmprov-3:1/2::testrepo, ebuild scheduled for merge to '/tmp/r269root/')
+   new child slot package:  (app-misc/mmprov-3:1/2::testrepo, ebuild scheduled for merge to '/tmp/r269root/')
+   parent package: (app-misc/mmcons-1:0/0::testrepo, installed in '/tmp/r269root/')
+   atom: app-misc/mmprov:0/1=
+
+
+slot_operator_update_probe:
+   existing child package:  (app-misc/mmprov-1:0/1::testrepo, installed in '/tmp/r269root/')
+--- out:155 ---
+slot_operator_update_probe:
+   existing child package:  (app-misc/mmprov-1:0/1::testrepo, installed in '/tmp/r269root/')
+   existing parent package: (app-misc/mmcons-1:0/0::testrepo, installed in '/tmp/r269root/')
+   new child package:  None
+   new parent package: None
+
+
+backtracking try 1 
+
+--- out:434 ---
+slot_operator_update_probe:
+   existing child package:  (app-misc/mmprov-1:0/1::testrepo, installed in '/tmp/r269root/')
+   existing parent package: (app-misc/mmcons-1:0/0::testrepo, installed in '/tmp/r269root/')
+   new child package:  (app-misc/mmprov-3:1/2::testrepo, ebuild scheduled for merge to '/tmp/r269root/')
+   new parent package: (app-misc/mmcons-1:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/')
+
+
+backtracking due to missed slot abi update:
+   child package:  (app-misc/mmprov-3:1/2::testrepo, ebuild scheduled for merge to '/tmp/r269root/')
+--- out:441 ---
+backtracking due to missed slot abi update:
+   child package:  (app-misc/mmprov-3:1/2::testrepo, ebuild scheduled for merge to '/tmp/r269root/')
+   new child slot package:  (app-misc/mmprov-3:1/2::testrepo, ebuild scheduled for merge to '/tmp/r269root/')
+   parent package: (app-misc/mmcons-1:0/0::testrepo, installed in '/tmp/r269root/')
+   atom: app-misc/mmprov:0/1=
+
+
+slot_operator_update_probe:
+   existing child package:  (app-misc/mmprov-1:0/1::testrepo, installed in '/tmp/r269root/')
+--- out:448 ---
+slot_operator_update_probe:
+   existing child package:  (app-misc/mmprov-1:0/1::testrepo, installed in '/tmp/r269root/')
+   existing parent package: (app-misc/mmcons-1:0/0::testrepo, installed in '/tmp/r269root/')
+   new child package:  None
+   new parent package: None
+
+
+backtracking try 3 
+
+--- out:162 ---
+backtracking try 1 
+
+[ebuild  N     ] dev-libs/slotconflicttarget-1.0 to /tmp/r269root/
+[ebuild  N     ] dev-libs/slotconflictoldconsumer-1.0 to /tmp/r269root/
+[ebuild  N     ] dev-libs/slotconflictnewconsumer-1.0 to /tmp/r269root/
+forced reinstall atoms:
+
+
+slot operator dependencies:
+   (/tmp/r269root/, app-misc/mmprov:0)
+      parent: (app-misc/mmcons-1:0/0::testrepo, installed in '/tmp/r269root/')
+        child: (app-misc/mmprov-1:0/1::testrepo, installed in '/tmp/r269root/') (runtime_slot_op)
+--- out:167 ---
+forced reinstall atoms:
+
+
+slot operator dependencies:
+   (/tmp/r269root/, app-misc/mmprov:0)
+      parent: (app-misc/mmcons-1:0/0::testrepo, installed in '/tmp/r269root/')
+        child: (app-misc/mmprov-1:0/1::testrepo, installed in '/tmp/r269root/') (runtime_slot_op)
+      parent: (app-misc/mmcons-1:0/0::testrepo, installed in '/tmp/r269root/')
+        child: (app-misc/mmprov-1:0/1::testrepo, installed in '/tmp/r269root/') (runtime_slot_op)
+
+
+forced rebuilds:
+--- out:300 ---
+backtracking try 2 
+
+[ebuild  N     ] dev-libs/slotconflicttarget-1.0 to /tmp/r269root/
+[ebuild     U  ] app-misc/mmprov-3 [2] to /tmp/r269root/
+[ebuild  rR    ] app-misc/mmcons-1 to /tmp/r269root/
+[ebuild  N     ] dev-libs/slotconflictoldconsumer-1.0 to /tmp/r269root/
+[ebuild  N     ] dev-libs/slotconflictnewconsumer-1.0 to /tmp/r269root/
+forced reinstall atoms:
+   root: /tmp/r269root/
+      atom: app-misc/mmcons:0
+
+
+--- out:307 ---
+forced reinstall atoms:
+   root: /tmp/r269root/
+      atom: app-misc/mmcons:0
+
+
+slot operator dependencies:
+   (/tmp/r269root/, app-misc/mmprov:1)
+      parent: (app-misc/mmcons-1:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/')
+        child: (app-misc/mmprov-3:1/2::testrepo, ebuild scheduled for merge to '/tmp/r269root/') (runtime_slot_op)
+
+
+forced rebuilds:
+--- out:455 ---
+backtracking try 3 
+
+[ebuild  N     ] dev-libs/slotconflicttarget-1.0 to /tmp/r269root/
+[ebuild  N     ] dev-libs/slotconflictoldconsumer-1.0 to /tmp/r269root/
+[ebuild  N     ] dev-libs/slotconflictnewconsumer-1.0 to /tmp/r269root/
+forced reinstall atoms:
+
+
+slot operator dependencies:
+   (/tmp/r269root/, app-misc/mmprov:0)
+      parent: (app-misc/mmcons-1:0/0::testrepo, installed in '/tmp/r269root/')
+        child: (app-misc/mmprov-1:0/1::testrepo, installed in '/tmp/r269root/') (runtime_slot_op)
+--- out:460 ---
+forced reinstall atoms:
+
+
+slot operator dependencies:
+   (/tmp/r269root/, app-misc/mmprov:0)
+      parent: (app-misc/mmcons-1:0/0::testrepo, installed in '/tmp/r269root/')
+        child: (app-misc/mmprov-1:0/1::testrepo, installed in '/tmp/r269root/') (runtime_slot_op)
+      parent: (app-misc/mmcons-1:0/0::testrepo, installed in '/tmp/r269root/')
+        child: (app-misc/mmprov-1:0/1::testrepo, installed in '/tmp/r269root/') (runtime_slot_op)
+
+
+forced rebuilds:
+--- out:596 ---
+forced reinstall atoms:
+   root: /tmp/r269root/
+      atom: app-misc/mmcons:0
+
+
+slot operator dependencies:
+   (/tmp/r269root/, app-misc/mmprov:1)
+      parent: (app-misc/mmcons-1:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/')
+        child: (app-misc/mmprov-3:1/2::testrepo, ebuild scheduled for merge to '/tmp/r269root/') (runtime_slot_op)
+
+
+forced rebuilds:
+--- out:178 (forced rebuilds dump, 6 lines follow) ---
+forced rebuilds:
+
+
+
+      Arg: app-misc/mmcons
+     Atom: app-misc/mmcons
+
+--- out:318 (forced rebuilds dump, 6 lines follow) ---
+forced rebuilds:
+
+
+
+      Arg: app-misc/mmcons
+     Atom: app-misc/mmcons
+
+--- out:471 (forced rebuilds dump, 6 lines follow) ---
+forced rebuilds:
+
+
+
+      Arg: app-misc/mmcons
+     Atom: app-misc/mmcons
+
+--- out:607 (forced rebuilds dump, 6 lines follow) ---
+forced rebuilds:
+
+

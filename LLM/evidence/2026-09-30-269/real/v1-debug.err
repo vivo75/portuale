@@ -1,0 +1,268 @@
+[DEBUG] Using selector: EpollSelector
+Undefined license group 'FREE'
+Undefined license group 'FREE'
+Undefined license group 'FREE'
+   ebuild: app-misc/mmcons-1::testrepo
+installed: app-misc/mmcons-1::testrepo
+   ebuild: dev-libs/slotconflictoldconsumer-1.0::testrepo
+   ebuild: dev-libs/slotconflictnewconsumer-1.0::testrepo
+   ebuild: app-misc/mmcons-1::testrepo
+installed: app-misc/mmcons-1::testrepo
+   ebuild: dev-libs/slotconflictoldconsumer-1.0::testrepo
+   ebuild: dev-libs/slotconflictnewconsumer-1.0::testrepo
+
+   ebuild: app-misc/mmcons-1::testrepo
+installed: app-misc/mmcons-1::testrepo
+   ebuild: dev-libs/slotconflictoldconsumer-1.0::testrepo
+   ebuild: dev-libs/slotconflictnewconsumer-1.0::testrepo
+   ebuild: dev-libs/slotconflicttarget-2.0::testrepo
+   ebuild: dev-libs/slotconflicttarget-1.0::testrepo
+   ebuild: app-misc/mmprov-3::testrepo
+installed: app-misc/mmprov-2::testrepo
+   ebuild: app-misc/mmprov-1::testrepo
+installed: app-misc/mmprov-1::testrepo
+(non-conflict package) depends on
+  ((dev-libs/slotconflicttarget-2.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/'),(dev-libs/slotconflicttarget-1.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/')) (0)
+  (dev-libs/slotconflicttarget-1.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/') (0)
+(dev-libs/slotconflicttarget-2.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/') (no children)
+(dev-libs/slotconflicttarget-1.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/') (no children)
+((dev-libs/slotconflicttarget-2.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/'),(dev-libs/slotconflicttarget-1.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/')) (no children)
+
+digraph:
+
+(app-misc/mmcons-1:0/0::testrepo, installed in '/tmp/r269root/') depends on
+  (app-misc/mmprov-1:0/1::testrepo, installed in '/tmp/r269root/') (runtime_slot_op)
+app-misc/mmcons depends on
+  (app-misc/mmcons-1:0/0::testrepo, installed in '/tmp/r269root/') (soft)
+(dev-libs/slotconflictoldconsumer-1.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/') depends on
+  (dev-libs/slotconflicttarget-1.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/') (runtime)
+dev-libs/slotconflictoldconsumer depends on
+  (dev-libs/slotconflictoldconsumer-1.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/') (soft)
+(dev-libs/slotconflictnewconsumer-1.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/') depends on
+  (dev-libs/slotconflicttarget-1.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/') (runtime)
+dev-libs/slotconflictnewconsumer depends on
+  (dev-libs/slotconflictnewconsumer-1.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/') (soft)
+(dev-libs/slotconflicttarget-1.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/') (no children)
+(app-misc/mmprov-1:0/1::testrepo, installed in '/tmp/r269root/') (no children)
+@world depends on
+  @profile (blocker)
+  @selected (blocker)
+  @system (blocker)
+@profile (no children)
+@selected (no children)
+@system (no children)
+@world depends on
+  @profile (blocker)
+  @selected (blocker)
+  @system (blocker)
+@profile (no children)
+@selected (no children)
+@system (no children)
+
+
+WARNING: One or more updates/rebuilds have been skipped due to a dependency conflict:
+
+dev-libs/slotconflicttarget:0 for /tmp/r269root/
+
+  (dev-libs/slotconflicttarget-2.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/') USE="" ELIBC="glibc" conflicts with
+    <dev-libs/slotconflicttarget-2.0 required by (dev-libs/slotconflictoldconsumer-1.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/') USE="" ELIBC="glibc"
+    ^                            ^^^
+
+   ebuild: app-misc/mmcons-1::testrepo
+installed: app-misc/mmcons-1::testrepo
+   ebuild: dev-libs/slotconflictoldconsumer-1.0::testrepo
+   ebuild: dev-libs/slotconflictnewconsumer-1.0::testrepo
+   ebuild: app-misc/mmcons-1::testrepo
+installed: app-misc/mmcons-1::testrepo
+   ebuild: dev-libs/slotconflictoldconsumer-1.0::testrepo
+   ebuild: dev-libs/slotconflictnewconsumer-1.0::testrepo
+
+   ebuild: app-misc/mmcons-1::testrepo
+   ebuild: dev-libs/slotconflictoldconsumer-1.0::testrepo
+   ebuild: dev-libs/slotconflictnewconsumer-1.0::testrepo
+   ebuild: app-misc/mmcons-1::testrepo
+   ebuild: dev-libs/slotconflicttarget-2.0::testrepo
+   ebuild: dev-libs/slotconflicttarget-1.0::testrepo
+   ebuild: app-misc/mmprov-3::testrepo
+installed: app-misc/mmprov-2::testrepo
+(non-conflict package) depends on
+  ((dev-libs/slotconflicttarget-2.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/'),(dev-libs/slotconflicttarget-1.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/')) (0)
+  (dev-libs/slotconflicttarget-1.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/') (0)
+(dev-libs/slotconflicttarget-2.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/') (no children)
+(dev-libs/slotconflicttarget-1.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/') (no children)
+((dev-libs/slotconflicttarget-2.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/'),(dev-libs/slotconflicttarget-1.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/')) (no children)
+
+digraph:
+
+(app-misc/mmcons-1:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/') depends on
+  (app-misc/mmprov-3:1/2::testrepo, ebuild scheduled for merge to '/tmp/r269root/') (runtime_slot_op)
+app-misc/mmcons depends on
+  (app-misc/mmcons-1:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/') (soft)
+@__auto_slot_operator_replace_installed__ depends on
+  (app-misc/mmcons-1:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/') (soft)
+(dev-libs/slotconflictoldconsumer-1.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/') depends on
+  (dev-libs/slotconflicttarget-1.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/') (runtime)
+dev-libs/slotconflictoldconsumer depends on
+  (dev-libs/slotconflictoldconsumer-1.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/') (soft)
+(dev-libs/slotconflictnewconsumer-1.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/') depends on
+  (dev-libs/slotconflicttarget-1.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/') (runtime)
+dev-libs/slotconflictnewconsumer depends on
+  (dev-libs/slotconflictnewconsumer-1.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/') (soft)
+(dev-libs/slotconflicttarget-1.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/') (no children)
+(app-misc/mmprov-3:1/2::testrepo, ebuild scheduled for merge to '/tmp/r269root/') (no children)
+@world depends on
+  @profile (blocker)
+  @selected (blocker)
+  @system (blocker)
+@profile (no children)
+@selected (no children)
+@system (no children)
+@world depends on
+  @profile (blocker)
+  @selected (blocker)
+  @system (blocker)
+@profile (no children)
+@selected (no children)
+@system (no children)
+
+
+WARNING: One or more updates/rebuilds have been skipped due to a dependency conflict:
+
+dev-libs/slotconflicttarget:0 for /tmp/r269root/
+
+  (dev-libs/slotconflicttarget-2.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/') USE="" ELIBC="glibc" conflicts with
+    <dev-libs/slotconflicttarget-2.0 required by (dev-libs/slotconflictoldconsumer-1.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/') USE="" ELIBC="glibc"
+    ^                            ^^^
+
+   ebuild: app-misc/mmcons-1::testrepo
+installed: app-misc/mmcons-1::testrepo
+   ebuild: dev-libs/slotconflictoldconsumer-1.0::testrepo
+   ebuild: dev-libs/slotconflictnewconsumer-1.0::testrepo
+   ebuild: app-misc/mmcons-1::testrepo
+installed: app-misc/mmcons-1::testrepo
+   ebuild: dev-libs/slotconflictoldconsumer-1.0::testrepo
+   ebuild: dev-libs/slotconflictnewconsumer-1.0::testrepo
+
+   ebuild: app-misc/mmcons-1::testrepo
+installed: app-misc/mmcons-1::testrepo
+   ebuild: dev-libs/slotconflictoldconsumer-1.0::testrepo
+   ebuild: dev-libs/slotconflictnewconsumer-1.0::testrepo
+   ebuild: dev-libs/slotconflicttarget-2.0::testrepo
+   ebuild: dev-libs/slotconflicttarget-1.0::testrepo
+   ebuild: app-misc/mmprov-3::testrepo
+installed: app-misc/mmprov-2::testrepo
+   ebuild: app-misc/mmprov-1::testrepo
+installed: app-misc/mmprov-1::testrepo
+(non-conflict package) depends on
+  ((dev-libs/slotconflicttarget-2.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/'),(dev-libs/slotconflicttarget-1.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/')) (0)
+  (dev-libs/slotconflicttarget-1.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/') (0)
+(dev-libs/slotconflicttarget-2.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/') (no children)
+(dev-libs/slotconflicttarget-1.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/') (no children)
+((dev-libs/slotconflicttarget-2.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/'),(dev-libs/slotconflicttarget-1.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/')) (no children)
+
+digraph:
+
+(app-misc/mmcons-1:0/0::testrepo, installed in '/tmp/r269root/') depends on
+  (app-misc/mmprov-1:0/1::testrepo, installed in '/tmp/r269root/') (runtime_slot_op)
+app-misc/mmcons depends on
+  (app-misc/mmcons-1:0/0::testrepo, installed in '/tmp/r269root/') (soft)
+(dev-libs/slotconflictoldconsumer-1.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/') depends on
+  (dev-libs/slotconflicttarget-1.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/') (runtime)
+dev-libs/slotconflictoldconsumer depends on
+  (dev-libs/slotconflictoldconsumer-1.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/') (soft)
+(dev-libs/slotconflictnewconsumer-1.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/') depends on
+  (dev-libs/slotconflicttarget-1.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/') (runtime)
+dev-libs/slotconflictnewconsumer depends on
+  (dev-libs/slotconflictnewconsumer-1.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/') (soft)
+(dev-libs/slotconflicttarget-1.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/') (no children)
+(app-misc/mmprov-1:0/1::testrepo, installed in '/tmp/r269root/') (no children)
+@world depends on
+  @profile (blocker)
+  @selected (blocker)
+  @system (blocker)
+@profile (no children)
+@selected (no children)
+@system (no children)
+@world depends on
+  @profile (blocker)
+  @selected (blocker)
+  @system (blocker)
+@profile (no children)
+@selected (no children)
+@system (no children)
+
+
+WARNING: One or more updates/rebuilds have been skipped due to a dependency conflict:
+
+dev-libs/slotconflicttarget:0 for /tmp/r269root/
+
+  (dev-libs/slotconflicttarget-2.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/') USE="" ELIBC="glibc" conflicts with
+    <dev-libs/slotconflicttarget-2.0 required by (dev-libs/slotconflictoldconsumer-1.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/') USE="" ELIBC="glibc"
+    ^                            ^^^
+
+   ebuild: app-misc/mmcons-1::testrepo
+installed: app-misc/mmcons-1::testrepo
+   ebuild: dev-libs/slotconflictoldconsumer-1.0::testrepo
+   ebuild: dev-libs/slotconflictnewconsumer-1.0::testrepo
+   ebuild: app-misc/mmcons-1::testrepo
+installed: app-misc/mmcons-1::testrepo
+   ebuild: dev-libs/slotconflictoldconsumer-1.0::testrepo
+   ebuild: dev-libs/slotconflictnewconsumer-1.0::testrepo
+
+   ebuild: app-misc/mmcons-1::testrepo
+   ebuild: dev-libs/slotconflictoldconsumer-1.0::testrepo
+   ebuild: dev-libs/slotconflictnewconsumer-1.0::testrepo
+   ebuild: app-misc/mmcons-1::testrepo
+   ebuild: dev-libs/slotconflicttarget-2.0::testrepo
+   ebuild: dev-libs/slotconflicttarget-1.0::testrepo
+   ebuild: app-misc/mmprov-3::testrepo
+installed: app-misc/mmprov-2::testrepo
+(non-conflict package) depends on
+  ((dev-libs/slotconflicttarget-2.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/'),(dev-libs/slotconflicttarget-1.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/')) (0)
+  (dev-libs/slotconflicttarget-1.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/') (0)
+(dev-libs/slotconflicttarget-2.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/') (no children)
+(dev-libs/slotconflicttarget-1.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/') (no children)
+((dev-libs/slotconflicttarget-2.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/'),(dev-libs/slotconflicttarget-1.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/')) (no children)
+
+digraph:
+
+(app-misc/mmcons-1:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/') depends on
+  (app-misc/mmprov-3:1/2::testrepo, ebuild scheduled for merge to '/tmp/r269root/') (runtime_slot_op)
+app-misc/mmcons depends on
+  (app-misc/mmcons-1:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/') (soft)
+@__auto_slot_operator_replace_installed__ depends on
+  (app-misc/mmcons-1:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/') (soft)
+(dev-libs/slotconflictoldconsumer-1.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/') depends on
+  (dev-libs/slotconflicttarget-1.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/') (runtime)
+dev-libs/slotconflictoldconsumer depends on
+  (dev-libs/slotconflictoldconsumer-1.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/') (soft)
+(dev-libs/slotconflictnewconsumer-1.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/') depends on
+  (dev-libs/slotconflicttarget-1.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/') (runtime)
+dev-libs/slotconflictnewconsumer depends on
+  (dev-libs/slotconflictnewconsumer-1.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/') (soft)
+(dev-libs/slotconflicttarget-1.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/') (no children)
+(app-misc/mmprov-3:1/2::testrepo, ebuild scheduled for merge to '/tmp/r269root/') (no children)
+@world depends on
+  @profile (blocker)
+  @selected (blocker)
+  @system (blocker)
+@profile (no children)
+@selected (no children)
+@system (no children)
+@world depends on
+  @profile (blocker)
+  @selected (blocker)
+  @system (blocker)
+@profile (no children)
+@selected (no children)
+@system (no children)
+
+
+WARNING: One or more updates/rebuilds have been skipped due to a dependency conflict:
+
+dev-libs/slotconflicttarget:0 for /tmp/r269root/
+
+  (dev-libs/slotconflicttarget-2.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/') USE="" ELIBC="glibc" conflicts with
+    <dev-libs/slotconflicttarget-2.0 required by (dev-libs/slotconflictoldconsumer-1.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/') USE="" ELIBC="glibc"
+    ^                            ^^^
+

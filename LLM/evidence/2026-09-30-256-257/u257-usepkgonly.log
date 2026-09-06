@@ -1,0 +1,128 @@
+
+
+myparams {'recurse': True, 'autounmask': True, 'autounmask_keep_use': False, 'autounmask_keep_license': True, 'autounmask_keep_keywords': True, 'autounmask_keep_masks': True, 'ignore_soname_deps': 'y', 'dynamic_deps': True, 'implicit_system_deps': True}
+
+
+
+      Arg: app-misc/u257par
+     Atom: app-misc/u257par
+   binary: app-misc/u257par-1::test_repo
+
+Child:         (app-misc/u257par-1:0/0::test_repo, binary scheduled for merge) USE=""
+Parent Dep:    app-misc/u257par
+
+Parent:    (app-misc/u257par-1:0/0::test_repo, binary scheduled for merge)
+Depstring: app-misc/u257prov:0/1=
+Priority:  runtime
+
+Parent:    (app-misc/u257par-1:0/0::test_repo, binary scheduled for merge)
+Depstring: app-misc/u257prov:0/1=
+Priority:  runtime
+Candidates: ['app-misc/u257prov:0/1=']
+
+
+slot_operator_unsatisfied_probe:
+   existing parent package: (app-misc/u257par-1:0/0::test_repo, binary scheduled for merge)
+   existing parent atom: app-misc/u257prov:0/1=
+   new parent package: None
+   new child package:  None
+
+
+backtracking due to unsatisfied dep:
+    parent: (app-misc/u257par-1:0/0::test_repo, binary scheduled for merge)
+  priority: runtime_slot_op
+      root: /tmp/tmppizec5x6/
+      atom: app-misc/u257prov:0/1=
+
+
+
+backtracking try 1 
+
+forced reinstall atoms:
+
+
+slot operator dependencies:
+
+
+forced rebuilds:
+
+
+
+emerge: there are no binary packages to satisfy "app-misc/u257prov:0/1=".
+(dependency required by "app-misc/u257par-1::test_repo" [binary])
+(dependency required by "app-misc/u257par" [argument])
+
+
+runtime_pkg_mask: {<Package ('binary', '/tmp/tmppizec5x6/', 'app-misc/u257par-1', 'merge', 'None', '20480', '0', '1790755647')>: {'missing dependency': {(<Package ('binary', '/tmp/tmppizec5x6/', 'app-misc/u257par-1', 'merge', 'None', '20480', '0', '1790755647')>, '/tmp/tmppizec5x6/', Atom('app-misc/u257prov:0/1='))}}} 
+
+
+
+      Arg: app-misc/u257par
+     Atom: app-misc/u257par
+
+
+backtracking aborted after 1 tries
+
+forced reinstall atoms:
+
+
+slot operator dependencies:
+
+
+forced rebuilds:
+
+
+
+!!! All ebuilds that could satisfy "app-misc/u257par" have been masked.
+!!! One of the following masked packages is required to complete your request:
+- app-misc/u257par-1::test_repo (masked by: backtracking: missing dependency)
+
+For more information, see the MASKED PACKAGES section in the emerge
+man page or refer to the Gentoo Handbook.
+
+
+
+      Arg: app-misc/u257par
+     Atom: app-misc/u257par
+   binary: app-misc/u257par-1::test_repo
+
+Child:         (app-misc/u257par-1:0/0::test_repo, binary scheduled for merge) USE=""
+Parent Dep:    app-misc/u257par
+
+Parent:    (app-misc/u257par-1:0/0::test_repo, binary scheduled for merge)
+Depstring: app-misc/u257prov:0/1=
+Priority:  runtime
+
+Parent:    (app-misc/u257par-1:0/0::test_repo, binary scheduled for merge)
+Depstring: app-misc/u257prov:0/1=
+Priority:  runtime
+Candidates: ['app-misc/u257prov:0/1=']
+forced reinstall atoms:
+
+
+slot operator dependencies:
+
+
+forced rebuilds:
+
+
+
+emerge: there are no binary packages to satisfy "app-misc/u257prov:0/1=".
+(dependency required by "app-misc/u257par-1::test_repo" [binary])
+(dependency required by "app-misc/u257par" [argument])
+### u257 ['app-misc/u257par'] {'--pretend': True, '--verbose': True, '--usepkgonly': True} success 0 mergelist None
+forced reinstall atoms:
+
+
+slot operator dependencies:
+
+
+forced rebuilds:
+
+
+
+emerge: there are no binary packages to satisfy "app-misc/u257prov:0/1=".
+(dependency required by "app-misc/u257par-1::test_repo" [binary])
+(dependency required by "app-misc/u257par" [argument])
+
+EROOT=/tmp/tmppizec5x6/
