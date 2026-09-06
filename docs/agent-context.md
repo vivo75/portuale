@@ -151,6 +151,11 @@ binaries' shared `run_batch`/`main` scaffolding now also lives in a
 small `harness-common` crate (same day) — a behavior-preserving dedup
 of the only genuinely byte-identical duplication a `cargo dupes` scan
 found; see `what-this-proves.md`'s "Harness-scaffolding dedup" entry.
+Same day, **refactor-01 S1** (the `rust-skills` skill's CRITICAL
+`unsafe-safety-comment` rule): `// SAFETY:` markers added above every
+`unsafe` block in `portuale/src` (the library crates contain no
+`unsafe` at all); see `what-this-proves.md`'s "refactor-01 S1" entry
+and the audit at `refactor-01.md`.
 
 **Dry-run (`emerge --pretend`)**: full recursive DEPEND/RDEPEND/BDEPEND/
 PDEPEND/IDEPEND resolution; profile/make.conf-derived USE/ACCEPT_KEYWORDS

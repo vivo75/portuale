@@ -40,6 +40,9 @@ impl PortageLockfile {
             .map_err(|e| format!("{}: {e}", lock_path.display()))?;
         // Real default (no `os.O_NONBLOCK`): block until the lock is
         // available.
+        // SAFETY: `flock` takes only the fd's own raw handle (no
+        // pointers); `file` outlives the call and its fd is guaranteed
+        // valid by `OpenOptions::open` above.
         if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX) } != 0 {
             return Err(format!(
                 "{}: {}",

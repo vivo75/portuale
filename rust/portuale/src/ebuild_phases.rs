@@ -1950,6 +1950,9 @@ pub(crate) fn kill_registered_children(
 ) {
     let pgids: Vec<i32> = registry.lock().unwrap().iter().copied().collect();
     for pgid in pgids {
+        // SAFETY: `kill` takes only plain ints (no pointers); `pgid` is a
+        // process-group id recorded by this process itself, so negating it
+        // cannot overflow and names a group we legitimately own.
         unsafe {
             libc::kill(-pgid, libc::SIGTERM);
         }

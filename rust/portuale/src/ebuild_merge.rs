@@ -1559,6 +1559,8 @@ fn create_special_node(
         .map_err(|e| format!("{}: {e}", dest.display()))?;
 
     let ret = if file_type.is_fifo() {
+        // SAFETY: `dest_c` is a CString that outlives the call; takes a
+        // NUL-terminated path pointer plus a plain mode int.
         unsafe { libc::mkfifo(dest_c.as_ptr(), mode) }
     } else {
         let type_bit = if file_type.is_char_device() {
@@ -1566,6 +1568,8 @@ fn create_special_node(
         } else {
             libc::S_IFBLK
         };
+        // SAFETY: `dest_c` is a CString that outlives the call; takes a
+        // NUL-terminated path pointer plus plain mode/dev ints.
         unsafe {
             libc::mknod(
                 dest_c.as_ptr(),
@@ -1581,6 +1585,8 @@ fn create_special_node(
             std::io::Error::last_os_error()
         ));
     }
+    // SAFETY: `dest_c` is a CString that outlives the call; takes a
+    // NUL-terminated path pointer plus a plain mode int.
     if unsafe { libc::chmod(dest_c.as_ptr(), mode) } != 0 {
         return Err(format!(
             "{}: {}",
@@ -1615,8 +1621,12 @@ fn lchown_or_chown(dest: &Path, uid: u32, gid: u32, is_symlink: bool) -> Result<
     let dest_c = std::ffi::CString::new(dest.as_os_str().as_bytes())
         .map_err(|e| format!("{}: {e}", dest.display()))?;
     let ret = if is_symlink {
+        // SAFETY: `dest_c` is a CString that outlives the call; takes a
+        // NUL-terminated path pointer plus plain uid/gid ints.
         unsafe { libc::lchown(dest_c.as_ptr(), uid, gid) }
     } else {
+        // SAFETY: `dest_c` is a CString that outlives the call; takes a
+        // NUL-terminated path pointer plus plain uid/gid ints.
         unsafe { libc::chown(dest_c.as_ptr(), uid, gid) }
     };
     if ret != 0 {
@@ -3290,8 +3300,12 @@ mod tests {
         use std::os::unix::ffi::OsStrExt;
         let c = std::ffi::CString::new(path.as_os_str().as_bytes()).unwrap();
         let ret = if is_symlink {
+            // SAFETY: `c` is a CString that outlives the call; takes a
+            // NUL-terminated path pointer plus plain uid/gid ints.
             unsafe { libc::lchown(c.as_ptr(), uid, gid) }
         } else {
+            // SAFETY: `c` is a CString that outlives the call; takes a
+            // NUL-terminated path pointer plus plain uid/gid ints.
             unsafe { libc::chown(c.as_ptr(), uid, gid) }
         };
         assert_eq!(
@@ -3316,6 +3330,7 @@ mod tests {
         // skipped (not failed) otherwise, matching that real
         // precondition rather than asserting something no local
         // environment could ever satisfy.
+        // SAFETY: `geteuid` takes no arguments and returns a plain int.
         if unsafe { libc::geteuid() } != 0 {
             eprintln!(
                 "skipping merge_tree_preserves_ownership_from_the_source_when_root: not root"
@@ -5214,6 +5229,9 @@ mod tests {
         // Restore a real FIFO before unmerging, so the "leave it in
         // place" assertion below is actually meaningful.
         std::fs::remove_file(&fifo_path).unwrap();
+        // SAFETY: `c_path` is a CString that outlives the `mkfifo`
+        // call; the call itself takes only the NUL-terminated pointer
+        // plus a plain mode int.
         unsafe {
             use std::os::unix::ffi::OsStrExt;
             let c_path = std::ffi::CString::new(fifo_path.as_os_str().as_bytes()).unwrap();

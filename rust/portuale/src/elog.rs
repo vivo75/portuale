@@ -381,6 +381,8 @@ pub fn syslog_process(key: &str, msgs: &[&ElogMessage]) {
             libc::syslog(priority, c"%s".as_ptr(), c_line.as_ptr());
         }
     }
+    // SAFETY: `closelog` takes no arguments; it is always paired with
+    // the `openlog` above, so `ident` is never accessed after close.
     unsafe {
         libc::closelog();
     }
@@ -927,17 +929,23 @@ mod tests {
             .collect();
         for (k, v) in vars {
             match v {
-                // set_var/remove_var are `unsafe` on edition 2024 (env
-                // mutation is UB in the presence of other threads); these
-                // serial tests scope env access behind the LOCK mutex.
+                // SAFETY: env mutation is unsafe on edition 2024 (UB in
+                // the presence of other threads); these serial tests
+                // scope every env write behind `LOCK` (held by `_g`).
                 Some(v) => unsafe { std::env::set_var(k, v) },
+                // SAFETY: same serial-`LOCK`-scoped env mutation as the
+                // `Some` arm above (removing a var).
                 None => unsafe { std::env::remove_var(k) },
             }
         }
         f();
         for (k, v) in saved {
             match v {
+                // SAFETY: same serial-`LOCK`-scoped env mutation as
+                // above; `_g` still holds `LOCK` here.
                 Some(v) => unsafe { std::env::set_var(&k, v) },
+                // SAFETY: same serial-`LOCK`-scoped env mutation as
+                // above (removing a var).
                 None => unsafe { std::env::remove_var(&k) },
             }
         }

@@ -13941,3 +13941,21 @@ exit codes) — all byte-identical output. The Python harnesses are
 untouched; the pytest contract suite still rebuilds the Rust binaries
 itself and reports the same 1282 passed / 5 pre-existing non-TTY
 `--ask` failures.
+
+### refactor-01 S1: `// SAFETY:` markers on every `unsafe` block (2026-09-06)
+
+The `rust-skills` skill's CRITICAL-impact `unsafe-safety-comment` rule
+requires a `// SAFETY:` marker directly above each `unsafe` block. The
+audit (`docs/refactor-01.md`) found the workspace's `unsafe` is
+entirely inside `portuale/src/` (the library crates are unsafe-free)
+and that 5 of its markers were missing or not in the `// SAFETY:` form.
+S1 is purely presentational: added the marker to `portage_lock.rs`'s
+`flock`, `ebuild_phases.rs`'s `kill`, `ebuild_merge.rs`'s
+`mkfifo`/`mknod`/`chmod`/`lchown`/`chown` (production) plus the three
+test-only blocks, and `elog.rs`'s `closelog` + the `set_var`/
+`remove_var` env-scoped test helper. The markers state the real
+invariant each block relies on (the `CString` outlives the syscall; the
+integer args are plain scalars; the env writes are mutex-scoped).
+No behavior change: the crate suite stays at 792 passing unit tests, the
+Python contract suite reports the same 1282 passed / 5 pre-existing
+non-TTY failures.
