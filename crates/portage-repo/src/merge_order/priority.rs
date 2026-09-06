@@ -396,6 +396,12 @@ pub(crate) static SATISFIED: PriorityRange = PriorityRange {
 };
 
 impl PriorityRange {
+    pub(crate) fn ig(&self, i: usize) -> Option<Ignore> {
+        self.ignore[i]
+    }
+    pub(crate) fn ig_medium(&self) -> Option<Ignore> {
+        self.ignore[self.medium]
+    }
     pub(crate) fn ig_medium_soft(&self) -> Option<Ignore> {
         self.ignore[self.medium_soft]
     }

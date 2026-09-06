@@ -15,6 +15,120 @@ pub(crate) struct FindSmallestCycleArgs<'a> {
     pub(crate) ineligible: &'a HashSet<usize>,
 }
 
+/// The smallest `gather_deps` closure among the currently-mergeable nodes,
+/// searched from the lowest `ignore_priority` rung upward.
+/// Portage: depgraph.py, find_smallest_cycle
+pub(crate) fn find_smallest_cycle(
+    args: FindSmallestCycleArgs<'_>,
+) -> Option<(HashSet<usize>, Option<Ignore>)> {
+    let FindSmallestCycleArgs {
+        g,
+        frontier,
+        entries,
+        range,
+        asap,
+        prefer_asap,
+        ineligible,
+    } = args;
+    let mergeable: HashSet<usize> = leaves_via(frontier, g, range.ig_medium())
+        .into_iter()
+        .filter(|i| !ineligible.contains(i))
+        .collect();
+    if mergeable.is_empty() {
+        return None;
+    }
+    let mut cand: Vec<usize> = if prefer_asap && !asap.is_empty() {
+        asap.iter()
+            .copied()
+            .filter(|i| mergeable.contains(i))
+            .collect()
+    } else {
+        mergeable.iter().copied().collect()
+    };
+    // Sort nodes for deterministic results (cp, then version).
+    cand.sort_by(|&a, &b| {
+        (entries[a].category.as_str(), entries[a].package.as_str())
+            .cmp(&(entries[b].category.as_str(), entries[b].package.as_str()))
+            .then_with(|| {
+                let ver = |i: usize| entry_version(&entries[i]).unwrap_or_default().to_string();
+                portage_versions::vercmp(&ver(a), &ver(b))
+                    .unwrap_or(0)
+                    .cmp(&0)
+            })
+    });
+    let mut best: Option<(HashSet<usize>, Option<Ignore>)> = None;
+    for i in range.medium_post..=range.medium_soft {
+        let ig = range.ig(i);
+        for &node in &cand {
+            if !g.has_parents(node) {
+                continue;
+            }
+            let Some(cl) = gather_deps(g, node, ig, &mergeable) else {
+                continue;
+            };
+            if best.as_ref().is_none_or(|(b, _)| cl.len() < b.len()) {
+                best = Some((cl, ig));
+            }
+        }
+        // Exit with the lowest possible priority.
+        if best.is_some() {
+            break;
+        }
+    }
+    best
+}
+
+/// Harvest one node at a time from the induced subgraph, always taking a leaf
+/// at the lowest `ignore_priority` that produces one, preferring an installed leaf.
+/// Portage: depgraph.py, _serialize_tasks
+pub(crate) fn harvest_cycle(g: &Digraph, sub: &HashSet<usize>) -> Vec<usize> {
+    let ladder: Vec<Option<Ignore>> = NORMAL
+        .ignore
+        .iter()
+        .chain(SATISFIED.ignore.iter())
+        .filter(|f| f.is_some())
+        .copied()
+        .collect();
+    let mut remaining = sub.clone();
+    let mut out: Vec<usize> = Vec::new();
+    while !remaining.is_empty() {
+        let mut leaves: Vec<usize> = Vec::new();
+        for ig in &ladder {
+            leaves = g
+                .order
+                .iter()
+                .copied()
+                .filter(|i| {
+                    remaining.contains(i)
+                        && !g.children[*i].iter().any(|(c, prios)| {
+                            remaining.contains(c)
+                                && ig.is_none_or(|f| prios.iter().any(|p| !f.ignores(p)))
+                        })
+                })
+                .collect();
+            if !leaves.is_empty() {
+                break;
+            }
+        }
+        if leaves.is_empty() {
+            // Fall back to the last node in `.order` within the subgraph.
+            leaves = vec![
+                *g.order
+                    .iter()
+                    .rev()
+                    .find(|i| remaining.contains(i))
+                    .expect("remaining is non-empty"),
+            ];
+        }
+        let installed_leaves: Vec<usize> =
+            leaves.iter().copied().filter(|&i| g.installed[i]).collect();
+        let pick = *installed_leaves.first().unwrap_or(&leaves[0]);
+        remaining.remove(&pick);
+        out.push(pick);
+    }
+    out
+}
+
 /// The `--pretend` subset of Portage's `_serialize_tasks` leaf-selection loop:
 /// the `ignore_priority` ladder, `asap_nodes`, `find_smallest_cycle` and the
 /// `drop_satisfied` escalation.

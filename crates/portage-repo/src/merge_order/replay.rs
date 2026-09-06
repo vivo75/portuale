@@ -2,6 +2,9 @@
 
 use crate::merge_order::*;
 
+/// A `(category, package)` key.
+pub(crate) type Cp = (String, String);
+
 /// The USE state `replay_create_graph` needs for one entry: declared `IUSE`, the
 /// enabled flags before any autounmask change, and the flags no change can
 /// touch. `None` for entries whose USE cannot change (installed, binary, missing).
@@ -35,4 +38,29 @@ pub(crate) struct WalkReplay {
     pub flip_origin: HashMap<(String, String), (usize, usize)>,
     pub failure: Option<ReplayFailure>,
     pub needed: HashMap<(String, String), HashMap<String, bool>>,
+}
+
+/// Arguments of [`replay_create_graph`].
+pub(crate) struct ReplayCreateGraphArgs<'a> {
+    pub(crate) entries: &'a [GraphEntry],
+    pub(crate) top_level_atoms: &'a [String],
+    pub(crate) root: &'a Path,
+    pub(crate) allow_flips: bool,
+    pub(crate) needed_init: &'a HashMap<(String, String), HashMap<String, bool>>,
+    pub(crate) use_of: &'a dyn Fn(usize) -> Option<ReplayUse>,
+}
+
+/// Arguments of [`replay_key`].
+pub(crate) struct ReplayKeyArgs<'a> {
+    pub(crate) entries: &'a [GraphEntry],
+    pub(crate) pre: &'a DigraphPrelude<'a>,
+    pub(crate) alt_suppressed: &'a [HashSet<usize>],
+    pub(crate) i: usize,
+    pub(crate) disjunctive: bool,
+    pub(crate) key: u8,
+    pub(crate) allow_flips: bool,
+    pub(crate) use_of: &'a dyn Fn(usize) -> Option<ReplayUse>,
+    pub(crate) discovered: &'a mut [bool],
+    pub(crate) stack: &'a mut Vec<usize>,
+    pub(crate) out: &'a mut WalkReplay,
 }
