@@ -1,0 +1,167 @@
+
+
+myparams {'recurse': True, 'binpkg_respect_use': 'auto', 'autounmask': True, 'autounmask_keep_use': False, 'autounmask_keep_license': True, 'autounmask_keep_keywords': True, 'autounmask_keep_masks': True, 'bdeps': 'auto', 'ignore_soname_deps': 'y', 'dynamic_deps': True, 'implicit_system_deps': True, 'selective': True, 'deep': True, 'binpkg_changed_deps': 'auto'}
+
+   ebuild: dev-libs/r25target-1.0::test_repo
+   ebuild: dev-libs/r25target-1.0::test_repo
+
+
+      Arg: dev-libs/r25target
+     Atom: dev-libs/r25target
+   ebuild: dev-libs/r25target-1.0::test_repo
+
+Child:         (dev-libs/r25target-1.0:0/0::test_repo, ebuild scheduled for merge) USE=""
+Parent Dep:    dev-libs/r25target
+
+Parent:    (dev-libs/r25target-1.0:0/0::test_repo, ebuild scheduled for merge)
+Depstring: >=dev-libs/r25mid-1.0 >=dev-libs/r25up-1.0
+Priority:  runtime
+
+Parent:    (dev-libs/r25target-1.0:0/0::test_repo, ebuild scheduled for merge)
+Depstring: >=dev-libs/r25mid-1.0 >=dev-libs/r25up-1.0
+Priority:  runtime
+Candidates: ['>=dev-libs/r25mid-1.0', '>=dev-libs/r25up-1.0']
+   ebuild: dev-libs/r25mid-1.0::test_repo
+installed: dev-libs/r25mid-1.0::test_repo
+   ebuild: dev-libs/r25up-2.0::test_repo
+installed: dev-libs/r25up-1.0::test_repo
+
+Child:         (dev-libs/r25mid-1.0:0/0::test_repo, installed) USE=""
+Parent Dep:    >=dev-libs/r25mid-1.0 required by (dev-libs/r25target-1.0:0/0::test_repo, ebuild scheduled for merge)
+
+Child:         (dev-libs/r25up-2.0:0/0::test_repo, ebuild scheduled for merge) USE=""
+Parent Dep:    >=dev-libs/r25up-1.0 required by (dev-libs/r25target-1.0:0/0::test_repo, ebuild scheduled for merge)
+
+Exiting... (dev-libs/r25target-1.0:0/0::test_repo, ebuild scheduled for merge)
+
+Parent:    (dev-libs/r25mid-1.0:0/0::test_repo, installed)
+Depstring: dev-libs/r25lib:= >=dev-libs/r25lib-1.0:0/1=
+Priority:  runtime
+
+Parent:    (dev-libs/r25mid-1.0:0/0::test_repo, installed)
+Depstring: dev-libs/r25lib:= >=dev-libs/r25lib-1.0:0/1=
+Priority:  runtime
+Candidates: ['dev-libs/r25lib:=', '>=dev-libs/r25lib-1.0:0/1=']
+   ebuild: dev-libs/r25lib-2.0::test_repo
+installed: dev-libs/r25lib-1.0::test_repo
+   ebuild: dev-libs/r25lib-1.0::test_repo
+installed: dev-libs/r25lib-1.0::test_repo
+
+Child:         (dev-libs/r25lib-1.0:0/1::test_repo, installed) USE=""
+Parent Dep:    >=dev-libs/r25lib-1.0:0/1= required by (dev-libs/r25mid-1.0:0/0::test_repo, installed)
+
+Child:         (dev-libs/r25lib-1.0:0/1::test_repo, installed) USE=""
+Parent Dep:    dev-libs/r25lib:= required by (dev-libs/r25mid-1.0:0/0::test_repo, installed)
+
+Exiting... (dev-libs/r25mid-1.0:0/0::test_repo, installed)
+
+Child:         (dev-libs/r25target-1.0:0/0::test_repo, ebuild scheduled for merge) USE=""
+Parent Dep:    dev-libs/r25target
+
+Child:         (dev-libs/r25consumer-1.0:0/0::test_repo, installed) USE=""
+Parent Dep:    dev-libs/r25consumer required by @selected
+
+Parent:    (dev-libs/r25consumer-1.0:0/0::test_repo, installed)
+Depstring: <dev-libs/r25lib-2.0:= <dev-libs/r25lib-2.0:0/1=
+Priority:  runtime
+
+Parent:    (dev-libs/r25consumer-1.0:0/0::test_repo, installed)
+Depstring: <dev-libs/r25lib-2.0:= <dev-libs/r25lib-2.0:0/1=
+Priority:  runtime
+Candidates: ['<dev-libs/r25lib-2.0:=', '<dev-libs/r25lib-2.0:0/1=']
+
+Child:         (dev-libs/r25lib-1.0:0/1::test_repo, installed) USE=""
+Parent Dep:    <dev-libs/r25lib-2.0:0/1= required by (dev-libs/r25consumer-1.0:0/0::test_repo, installed)
+
+Child:         (dev-libs/r25lib-1.0:0/1::test_repo, installed) USE=""
+Parent Dep:    <dev-libs/r25lib-2.0:= required by (dev-libs/r25consumer-1.0:0/0::test_repo, installed)
+
+Exiting... (dev-libs/r25consumer-1.0:0/0::test_repo, installed)
+
+
+slot_operator_update_probe:
+   existing child package:  (dev-libs/r25lib-1.0:0/1::test_repo, installed)
+   existing parent package: (dev-libs/r25mid-1.0:0/0::test_repo, installed)
+   new child package:  None
+   new parent package: None
+
+
+_slot_operator_check_reverse_dependencies:
+   candidate package does not match atom '<dev-libs/r25lib-2.0:=': (dev-libs/r25lib-2.0:0/2::test_repo, ebuild scheduled for merge)
+   parent: (dev-libs/r25consumer-1.0:0/0::test_repo, installed)
+   parent atoms: <dev-libs/r25lib-2.0:0/1= <dev-libs/r25lib-2.0:=
+
+
+slot_operator_update_probe:
+   existing child package:  (dev-libs/r25lib-1.0:0/1::test_repo, installed)
+   existing parent package: (dev-libs/r25mid-1.0:0/0::test_repo, installed)
+   new child package:  None
+   new parent package: None
+
+digraph:
+
+(dev-libs/r25target-1.0:0/0::test_repo, ebuild scheduled for merge) depends on
+  (dev-libs/r25mid-1.0:0/0::test_repo, installed) (runtime)
+  (dev-libs/r25up-2.0:0/0::test_repo, ebuild scheduled for merge) (runtime)
+dev-libs/r25target depends on
+  (dev-libs/r25target-1.0:0/0::test_repo, ebuild scheduled for merge) (soft)
+(dev-libs/r25mid-1.0:0/0::test_repo, installed) depends on
+  (dev-libs/r25lib-1.0:0/1::test_repo, installed) (runtime_slot_op)
+(dev-libs/r25up-2.0:0/0::test_repo, ebuild scheduled for merge) (no children)
+(dev-libs/r25lib-1.0:0/1::test_repo, installed) (no children)
+@world depends on
+  @profile (blocker)
+  @selected (blocker)
+  @system (blocker)
+@profile (no children)
+@selected depends on
+  (dev-libs/r25consumer-1.0:0/0::test_repo, installed) (soft)
+@system (no children)
+(dev-libs/r25consumer-1.0:0/0::test_repo, installed) depends on
+  (dev-libs/r25lib-1.0:0/1::test_repo, installed) (runtime_slot_op)
+
+[ebuild     U  ] dev-libs/r25up-2.0::test_repo [1.0::test_repo] 0 KiB
+[ebuild  N     ] dev-libs/r25target-1.0::test_repo  0 KiB
+
+Total: 2 packages (1 upgrade, 1 new), Size of downloads: 0 KiB
+forced reinstall atoms:
+
+
+slot operator dependencies:
+   (/tmp/tmpvhm2umr3/, dev-libs/r25lib:0)
+      parent: (dev-libs/r25mid-1.0:0/0::test_repo, installed)
+        child: (dev-libs/r25lib-1.0:0/1::test_repo, installed) (runtime_slot_op)
+      parent: (dev-libs/r25mid-1.0:0/0::test_repo, installed)
+        child: (dev-libs/r25lib-1.0:0/1::test_repo, installed) (runtime_slot_op)
+      parent: (dev-libs/r25consumer-1.0:0/0::test_repo, installed)
+        child: (dev-libs/r25lib-1.0:0/1::test_repo, installed) (runtime_slot_op)
+      parent: (dev-libs/r25consumer-1.0:0/0::test_repo, installed)
+        child: (dev-libs/r25lib-1.0:0/1::test_repo, installed) (runtime_slot_op)
+
+
+forced rebuilds:
+
+
+### SHAPE r25 success True mergelist ['dev-libs/r25up-2.0', 'dev-libs/r25target-1.0']
+backtrack_infos {}
+need_restart False
+forced reinstall atoms:
+
+
+slot operator dependencies:
+   (/tmp/tmpvhm2umr3/, dev-libs/r25lib:0)
+      parent: (dev-libs/r25mid-1.0:0/0::test_repo, installed)
+        child: (dev-libs/r25lib-1.0:0/1::test_repo, installed) (runtime_slot_op)
+      parent: (dev-libs/r25mid-1.0:0/0::test_repo, installed)
+        child: (dev-libs/r25lib-1.0:0/1::test_repo, installed) (runtime_slot_op)
+      parent: (dev-libs/r25consumer-1.0:0/0::test_repo, installed)
+        child: (dev-libs/r25lib-1.0:0/1::test_repo, installed) (runtime_slot_op)
+      parent: (dev-libs/r25consumer-1.0:0/0::test_repo, installed)
+        child: (dev-libs/r25lib-1.0:0/1::test_repo, installed) (runtime_slot_op)
+
+
+forced rebuilds:
+
+
+
+EROOT=/tmp/tmpvhm2umr3/

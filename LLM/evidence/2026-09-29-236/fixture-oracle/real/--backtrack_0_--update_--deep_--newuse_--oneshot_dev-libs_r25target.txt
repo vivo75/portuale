@@ -1,0 +1,9 @@
+Undefined license group 'FREE'
+
+These are the packages that would be merged, in order:
+
+Calculating dependencies ... done!
+Dependency resolution took 0.12 s (backtrack: 0/0).
+
+[ebuild     U  ] dev-libs/r25up-2.0 [1.0] to /tmp/l0-fixture-oracle/fixtures/
+[ebuild  N     ] dev-libs/r25target-1.0 to /tmp/l0-fixture-oracle/fixtures/
