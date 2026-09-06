@@ -173,13 +173,13 @@ Production `panic!`/`unreachable!`/`unimplemented!` sites:
 `version component too wide for i128`. `portage-versions` is a library
 returning `Option<Ordering>`/`bool`; its caller-side convention is
 `None` for incomparable. The panic is reachable from *hostile* version
-strings. Fix slice (S2): make `parse_component` fallible
-(`checked`/`try_into`) and propagate to a `None` compare result (or a
-dedicated sentinel) instead of panicking. This changes no pinned output
-— malformed oversized input today panics (undefined); after the fix it
-compares as `None`/fails `ververify`. Any test that pinned the panic
-should be re-examined (there is a Rust unit test asserting the i128
-simplification — update it to the new behavior).
+strings. **Resolved in S2** (see "Closed / open judgment calls", item
+(a)): because the Python reference's `int()` is arbitrary-precision and
+*never* fails on these strings, returning `None` would break the parity
+contract. Instead `parse_component` became a `Part` enum whose `BigNum`
+variant compares the overflowed digit string by length-then-digits —
+exactly Python's bignum ordering, with no panic and no behavior change
+on any in-range input.
 
 ### 2.3 `err-no-unwrap-prod` (`anti-unwrap-abuse`) — **mostly invariant, 2 data-dependent**
 
@@ -197,8 +197,8 @@ sites already use — convert lazily, only when touched).
 
 | Site | Why it can panic | Fix |
 |---|---|---|
-| `portage-versions/src/lib.rs:216,221` | `rev1.parse().unwrap()` (i64) — the `-r<digits>` regex (`(\d+)` unbounded) allows giant revision numbers → `parse` fails on overflow | fold into S2: checked parse → `None` |
-| `portage-versions/src/lib.rs:52` (see 2.2) | i128 overflow on huge components | fold into S2 |
+| `portage-versions/src/lib.rs:216,221` | `rev1.parse().unwrap()` (i64) — the `-r<digits>` regex (`(\d+)` unbounded) allows giant revision numbers → `parse` fails on overflow | fixed in S2: bignum string compare (same `Part` mechanism) |
+| `portage-versions/src/lib.rs:52` (see 2.2) | i128 overflow on huge components | fixed in S2: bignum string compare |
 
 Everything else in the production counts is guarded or invariant (e.g.
 `portage-repo/src/lib.rs:5545,5604` `versions.pop().unwrap()` are
@@ -273,8 +273,7 @@ No required mem work today.
 | Slice | Scope | Behavior delta | Verification |
 |---|---|---|---|
 | **S1** ✅ shipped | Add the ~10 `// SAFETY:` markers (1.1). No code change. | none | fmt + clippy clean, `cargo test` 792/792, pytest 1282 passed / 5 pre-existing non-TTY |
-
-**S2** | `portage-versions` overflow-to-`None` (2.2, 2.3): `parse_component` + `rev1`/`rev2` checked parses, panic replaced by `None`-compare result. Easiest as one focused change to `vercmp` internals. | the oversized-input panic stops aborting; normal behavior identical | `cargo test` versions crate + full suite; add a Rust unit test + a parametrized `CASES` entry (huge numeric component / huge `-r` revision → not-a-crash) in the contract harnesses if the Python side defines the same behavior |
+| **S2** ✅ shipped | `portage-versions` overflow panics (2.2, 2.3) removed: `parse_component`, suffix numerals, and `rev` now fall back to an arbitrary-length `BigNum` decimal-string compare when the value outgrows `i128` — mirroring the Python reference's unbounded `int` (judgment call (a): `None` was rejected because Python compares, it doesn't fail). Also fixed a previously-silent parity bug: oversized *suffix* numerals were coerced to `0`; they now compare as bignums. | oversized components/revisions/suffix-numerals stop aborting (and match Python on inputs that previously miscompared); all in-range behavior byte-identical | fmt clean, clippy zero-warn, `cargo test` 797/797 (5 new `portage-versions` unit tests), pytest 1292 passed / 5 pre-existing non-TTY |
 | **S3** (optional) | `pretend.rs:3126` `&String`→`&str` closure params | none | fmt + clippy |
 | **S4** (deferred, judgment) | `err-*` error-model migration (thiserror `Error` types) | none in behavior; big diff | gate on explicit user re-open |
 
@@ -289,7 +288,8 @@ future `unsafe-` work is `portuale`-only.
 2. `cargo clippy --release --all-targets` — zero warnings (S1/S3 must not
    add any; S2 must not)
 3. `cargo test --release` — whole workspace (S2 especially; the
-   `portage-versions` unit tests assert the current i128 behavior)
+   `portage-versions` unit tests plus the contract pairs pin the new
+   oversized-input behavior)
 4. `python3 -m pytest tests -q` — whole contract suite (S2 must stay
    byte-identical on all pinned inputs)
 5. musl static smoke in CI
@@ -301,9 +301,10 @@ future `unsafe-` work is `portuale`-only.
   `unsafe-miri-ci` = documented cut (Miri can't run the syscall FFI);
   invariant unreachable/unwrap sites are acceptable and must not be
   churned; pinned error strings keep their casing.
-- **Open, flag before acting:** (a) S2's oversized-input semantics — the
-  Python reference (`lib/portage/versions.py` `vercmp`) uses
-  arbitrary-precision ints, so a huge component *does not* fail there;
-  confirm the reference's `[>=30-digit]` test expectation before
-  choosing `None`-vs-fail, to keep the harness parity contract true.
-  (b) any future `perm-add` to the error model (S4).
+- **Open, flag before acting:** (b) any future `perm-add` to the error model (S4).
+- **Closed by S2 (was open (a)):** oversized-input semantics — the Python
+  reference (`lib/portage/versions.py` `vercmp`) uses arbitrary-precision
+  `int`, so a huge component *does not* fail there; it compares. `None`
+  would break parity, so S2 mirrors the bignum with a decimal-string
+  fallback (`Part::BigNum`), verified against the reference on 39/40-digit,
+  huge-revision, and huge-suffix-numeral pairs in the contract suite.

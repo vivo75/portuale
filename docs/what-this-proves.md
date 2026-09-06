@@ -13959,3 +13959,36 @@ integer args are plain scalars; the env writes are mutex-scoped).
 No behavior change: the crate suite stays at 792 passing unit tests, the
 Python contract suite reports the same 1282 passed / 5 pre-existing
 non-TTY failures.
+
+### refactor-01 S2: `portage-versions` overflow panics removed via bignum fallback (2026-09-06)
+
+The audit's one real data-dependent panic was `portage-versions`'s
+`i128` component parse: a `\d+`-wide numeric component, revision, or
+suffix numeral can exceed ~38 digits and previously
+panic'd. The audit's proposed "overflow-to-`None`" semantics is wrong
+for this project: the Python reference (`lib/portage/versions.py`
+`vercmp`) wraps every numeral in an unbounded `int`, so a huge
+component *does not* fail there — it compares. Returning `None` would
+have broken the byte-parity contract the suite enforces.
+
+S2 instead makes comparison always total by giving
+`portage-versions` a `Part` component type: in-range values stay
+`Num(i128)` (the hot path, no new allocations), and off-width digit
+strings become `BigNum(String)` compared by trimmed-length then digit
+order — exactly Python's bignum ordering. Verified empirically: Rust's
+`parse::<i128>` accepts arbitrary leading zeros, so an `Err` implies
+true overflow, which makes `BigNum > i128::MAX >= any Num` a sound
+invariant. The same mechanism fixed a previously-silent parity bug:
+oversized suffix numerals (`.parse().unwrap_or(0)`) used to be coerced
+to `0` while the reference compared them as bignums — now they compare
+correctly.
+
+Behavior on every in-range input is byte-identical (all 1282 pinned
+pytest cases unchanged). New numbers: 5 new `portage-versions` unit
+tests, 5 new oversized pairs (39/40-digit components, huge `-r`
+revisions, huge `-pN` suffix numerals) added to
+`tests/test_versions_contract.py` that drive **both** the Python
+reference and the rebuilt Rust harness — the Rust side now agrees with
+the reference on inputs the old code either aborted on or miscompared.
+Suite totals: 797/797 Rust, pytest 1292 passed / 5 pre-existing
+non-TTY failures / 2 skipped.

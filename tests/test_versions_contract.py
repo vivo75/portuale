@@ -28,6 +28,14 @@ VERCMP_GREATER_CASES = [
     ("1b_p1", "1_p1"),
     ("1.1b", "1.1"),
     ("12.2.5", "12.2b"),
+    # Components wider than i128/u64 (the Rust side must fall back to an
+    # arbitrary-length decimal comparison, matching Python's unbounded int
+    # rather than panicking or turning the pair into `None`).
+    ("999999999999999999999999999999999999999", "999999999999999999999999999999999999998"),
+    ("1000000000000000000000000000000000000000", "999999999999999999999999999999999999999"),
+    ("1.0-r99999999999999999999999999", "1.0-r99999999999999999999999998"),
+    ("1.0-r99999999999999999999999999", "1.0"),
+    ("1.0_p99999999999999999999999999", "1.0_p99999999999999999999999998"),
 ]
 
 # Mirrors testVerCmpEqual.

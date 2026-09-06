@@ -4,11 +4,10 @@
 // original so it stays easy to diff against on future changes -- this is
 // a portuale artifact, not yet idiomatic-first Rust; see docs/agent-context.md.
 //
-// Known simplification vs. Python: version components are parsed as
-// `i128` rather than arbitrary-precision integers. This covers every
-// practical Gentoo version string (and the >=30-digit case in Python's own
-// test suite) but will panic on a component wider than ~38 decimal digits.
-// A real port should use a bignum type or string-based comparison instead.
+// Version components are parsed as `i128`, but any component too wide for
+// `i128` is compared as an arbitrary-length decimal string instead of
+// panicking. That mirrors the Python original's unbounded `int` exactly, so
+// no width of numeric component can crash or miscompare a version.
 
 use regex::Regex;
 use std::cmp::Ordering;
@@ -28,9 +27,47 @@ fn suffix_regexp() -> &'static Regex {
 }
 
 /// Sentinel for an implicit missing dotted-version component (e.g. the
-/// missing third component of "1.0" compared against "1.0.0"), defined to
-/// be less than any explicit component so that "1.0.0" > "1.0".
-const IMPLICIT_ZERO: i128 = -1;
+/// missing third component of "1.0" compared against "1.0.0"), comparing
+/// less than any explicit component so that "1.0.0" > "1.0".
+///
+/// A single numeric component is either an in-range `i128` (`Num`) or, when
+/// the digit string is wider than `i128` can hold, a `BigNum` decimal
+/// string compared by length-then-digits. Components are non-negative
+/// (`\d+` in the grammar) and `BigNum` only ever arises from genuine
+/// overflow (verified: Rust's `parse` accepts arbitrary leading zeros), so
+/// any `BigNum` exceeds `i128::MAX` and therefore any `Num`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Part {
+    ImplicitZero,
+    Num(i128),
+    BigNum(String),
+}
+
+fn cmp_bignum(a: &str, b: &str) -> Ordering {
+    let a = a.trim_start_matches('0');
+    let b = b.trim_start_matches('0');
+    a.len().cmp(&b.len()).then_with(|| a.cmp(b))
+}
+
+impl Ord for Part {
+    fn cmp(&self, other: &Self) -> Ordering {
+        match (self, other) {
+            (Part::ImplicitZero, Part::ImplicitZero) => Ordering::Equal,
+            (Part::ImplicitZero, _) => Ordering::Less,
+            (_, Part::ImplicitZero) => Ordering::Greater,
+            (Part::Num(a), Part::Num(b)) => a.cmp(b),
+            (Part::BigNum(a), Part::BigNum(b)) => cmp_bignum(a, b),
+            (Part::BigNum(_), Part::Num(_)) => Ordering::Greater,
+            (Part::Num(_), Part::BigNum(_)) => Ordering::Less,
+        }
+    }
+}
+
+impl PartialOrd for Part {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
 
 pub fn ververify(myver: &str) -> bool {
     ver_regexp().is_match(myver)
@@ -47,16 +84,28 @@ fn suffix_value(name: &str) -> i32 {
     }
 }
 
-fn parse_component(s: &str) -> i128 {
-    s.parse()
-        .unwrap_or_else(|_| panic!("version component too wide for i128: {s:?}"))
+fn parse_component(s: &str) -> Part {
+    match s.parse::<i128>() {
+        Ok(v) => Part::Num(v),
+        Err(_) => Part::BigNum(s.to_string()),
+    }
+}
+
+/// Revision and suffix numbers may be absent, in which case Python treats
+/// the implicit value as zero (`int("")` would raise, so it fudges to 0).
+fn parse_uint_or_zero(s: &str) -> Part {
+    if s.is_empty() {
+        Part::Num(0)
+    } else {
+        parse_component(s)
+    }
 }
 
 /// Builds the paired dotted-component lists (the parts after the first
 /// integer, e.g. the ".2.3" in "1.2.3"), applying Portage's implicit-zero
 /// and leading-zero ("float-like") comparison rules. Must be built jointly
 /// because both rules compare same-index components across both versions.
-fn build_dotted_lists(dotted1: &str, dotted2: &str) -> (Vec<i128>, Vec<i128>) {
+fn build_dotted_lists(dotted1: &str, dotted2: &str) -> (Vec<Part>, Vec<Part>) {
     let vlist1: Vec<&str> = if dotted1.is_empty() {
         Vec::new()
     } else {
@@ -74,11 +123,11 @@ fn build_dotted_lists(dotted1: &str, dotted2: &str) -> (Vec<i128>, Vec<i128>) {
         let a = vlist1.get(i).copied().unwrap_or("");
         let b = vlist2.get(i).copied().unwrap_or("");
         if a.is_empty() {
-            list1.push(IMPLICIT_ZERO);
+            list1.push(Part::ImplicitZero);
             list2.push(parse_component(b));
         } else if b.is_empty() {
             list1.push(parse_component(a));
-            list2.push(IMPLICIT_ZERO);
+            list2.push(Part::ImplicitZero);
         } else if !a.starts_with('0') && !b.starts_with('0') {
             list1.push(parse_component(a));
             list2.push(parse_component(b));
@@ -95,14 +144,18 @@ fn build_dotted_lists(dotted1: &str, dotted2: &str) -> (Vec<i128>, Vec<i128>) {
     (list1, list2)
 }
 
-fn cmp_lists(list1: &[i128], list2: &[i128]) -> Ordering {
+fn cmp_parts(list1: &[Part], list2: &[Part]) -> Ordering {
     let max_len = list1.len().max(list2.len());
     for i in 0..max_len {
         match (list1.get(i), list2.get(i)) {
             (None, _) => return Ordering::Less,
             (_, None) => return Ordering::Greater,
-            (Some(a), Some(b)) if a != b => return a.cmp(b),
-            _ => {}
+            (Some(a), Some(b)) => {
+                let ord = a.cmp(b);
+                if ord != Ordering::Equal {
+                    return ord;
+                }
+            }
         }
     }
     Ordering::Equal
@@ -143,10 +196,11 @@ fn cmp_suffixes(chain1: &str, chain2: &str) -> Ordering {
         if name1 != name2 {
             return suffix_value(&name1).cmp(&suffix_value(&name2));
         }
-        let r1: i64 = num1.parse().unwrap_or(0);
-        let r2: i64 = num2.parse().unwrap_or(0);
-        if r1 != r2 {
-            return r1.cmp(&r2);
+        let r1 = parse_uint_or_zero(&num1);
+        let r2 = parse_uint_or_zero(&num2);
+        let ord = r1.cmp(&r2);
+        if ord != Ordering::Equal {
+            return ord;
         }
     }
     Ordering::Equal
@@ -194,13 +248,13 @@ pub fn vercmp(ver1: &str, ver2: &str) -> Option<i32> {
     // "12.2.5" > "12.2b"), because it's appended to the same comparison
     // list rather than compared as its own component.
     if let Some(c) = letter1.chars().next() {
-        list1.push(c as i128);
+        list1.push(Part::Num(c as i128));
     }
     if let Some(c) = letter2.chars().next() {
-        list2.push(c as i128);
+        list2.push(Part::Num(c as i128));
     }
 
-    let ord = cmp_lists(&list1, &list2);
+    let ord = cmp_parts(&list1, &list2);
     if ord != Ordering::Equal {
         return Some(ordering_to_i32(ord));
     }
@@ -210,15 +264,80 @@ pub fn vercmp(ver1: &str, ver2: &str) -> Option<i32> {
         return Some(ordering_to_i32(ord));
     }
 
-    let r1: i64 = if rev1.is_empty() {
-        0
-    } else {
-        rev1.parse().unwrap()
-    };
-    let r2: i64 = if rev2.is_empty() {
-        0
-    } else {
-        rev2.parse().unwrap()
-    };
+    let r1 = parse_uint_or_zero(rev1);
+    let r2 = parse_uint_or_zero(rev2);
     Some(ordering_to_i32(r1.cmp(&r2)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::vercmp;
+
+    fn cmp(a: &str, b: &str) -> i32 {
+        vercmp(a, b).expect("valid versions")
+    }
+
+    #[test]
+    fn oversized_main_components_do_not_panic() {
+        assert_eq!(cmp(&"9".repeat(39), &"9".repeat(39)), 0);
+        assert_eq!(cmp(&"9".repeat(39), &format!("{}8", "9".repeat(38))), 1);
+        // 1e39 (40 digits) beats the 39-digit ~9.99e38.
+        assert_eq!(cmp(&format!("1{}", "0".repeat(39)), &"9".repeat(39)), 1);
+    }
+
+    #[test]
+    fn oversized_leading_zero_components_still_compare_by_value() {
+        // Leading zeros must not count toward width: value is 1, so this is
+        // `BigNum` on the overflowing side but still equal to "1".
+        assert_eq!(
+            cmp(
+                &format!("0{}", "9".repeat(39)),
+                &format!("0{}", "9".repeat(39))
+            ),
+            0
+        );
+        assert_eq!(cmp(&"9".repeat(39), &"1".to_string()), 1);
+    }
+
+    #[test]
+    fn oversized_revisions_do_not_panic() {
+        assert_eq!(
+            cmp(
+                &format!("1.0-r{}", "9".repeat(30)),
+                &format!("1.0-r{}", "9".repeat(30))
+            ),
+            0
+        );
+        assert_eq!(
+            cmp(
+                &format!("1.0-r{}", "9".repeat(30)),
+                &format!("1.0-r{}", &format!("{}8", "9".repeat(29)))
+            ),
+            1
+        );
+        assert_eq!(cmp(&format!("1.0-r{}", "9".repeat(30)), "1.0"), 1);
+    }
+
+    #[test]
+    fn oversized_suffix_numbers_match_python_bignum() {
+        // Python wraps these in `int()` (unbounded) when the suffix numeral
+        // is not empty, so a huge suffix digit outranks the smaller one.
+        assert_eq!(
+            cmp(
+                &format!("1.0_p{}", "9".repeat(30)),
+                &format!("1.0_p{}", &format!("{}8", "9".repeat(29)))
+            ),
+            1
+        );
+        assert_eq!(cmp(&format!("1.0_p{}", "9".repeat(30)), "1.0"), 1);
+    }
+
+    #[test]
+    fn ordinary_pairs_unchanged() {
+        assert_eq!(cmp("6.0", "5.0"), 1);
+        assert_eq!(cmp("1.0-r1", "1.0"), 1);
+        assert_eq!(cmp("1.0.0", "1.0"), 1);
+        assert_eq!(cmp("12.2.5", "12.2b"), 1);
+        assert_eq!(cmp("1.0", "1.0-r0"), 0);
+    }
 }
