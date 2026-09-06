@@ -1,0 +1,609 @@
+
+Performing Global Updates
+(Could take a couple of minutes if you have a lot of binary packages.)
+  .='update pass'  *='binary update'  #='/var/db update'  @='/var/db move'
+  s='/var/db SLOT move'  %='binary move'  S='binary SLOT move'
+  p='update /etc/portage/package.*'
+/tmp/r269stage/fixtures/repo/profiles/updates/2Q-2024..
+
+
+
+Performing Global Updates
+(Could take a couple of minutes if you have a lot of binary packages.)
+  .='update pass'  *='binary update'  #='/var/db update'  @='/var/db move'
+  s='/var/db SLOT move'  %='binary move'  S='binary SLOT move'
+  p='update /etc/portage/package.*'
+/tmp/r269stage/fixtures/repo/profiles/updates/2Q-2024..
+
+
+myaction None
+myopts {'--debug': True, '--ignore-default-opts': True, '--pretend': True, '--update': True, '--backtrack': 20, '--color': 'n', '--deep': True, '--regex-search-auto': 'y'}
+
+
+myparams {'recurse': True, 'binpkg_respect_use': 'auto', 'autounmask': True, 'autounmask_keep_use': False, 'autounmask_keep_license': True, 'autounmask_keep_keywords': True, 'autounmask_keep_masks': True, 'bdeps': 'auto', 'ignore_soname_deps': 'y', 'dynamic_deps': True, 'implicit_system_deps': True, 'selective': True, 'deep': True, 'binpkg_changed_deps': 'auto'}
+
+
+These are the packages that would be merged, in order:
+
+
+      Arg: app-misc/mmcons
+     Atom: app-misc/mmcons
+
+Child:         (app-misc/mmcons-1:0/0::testrepo, installed in '/tmp/r269root/') USE=""
+Parent Dep:    app-misc/mmcons
+
+      Arg: dev-libs/slotconflictoldconsumer
+     Atom: dev-libs/slotconflictoldconsumer
+
+Child:         (dev-libs/slotconflictoldconsumer-1.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/') USE="" ELIBC="glibc"
+Parent Dep:    dev-libs/slotconflictoldconsumer
+
+      Arg: dev-libs/slotconflictnewconsumer
+     Atom: dev-libs/slotconflictnewconsumer
+
+Child:         (dev-libs/slotconflictnewconsumer-1.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/') USE="" ELIBC="glibc"
+Parent Dep:    dev-libs/slotconflictnewconsumer
+
+Parent:    (dev-libs/slotconflictnewconsumer-1.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/')
+Depstring: dev-libs/slotconflicttarget
+Priority:  runtime
+
+Parent:    (dev-libs/slotconflictnewconsumer-1.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/')
+Depstring: dev-libs/slotconflicttarget
+Priority:  runtime
+Candidates: ['dev-libs/slotconflicttarget']
+
+Child:         (dev-libs/slotconflicttarget-2.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/') USE="" ELIBC="glibc"
+Parent Dep:    dev-libs/slotconflicttarget required by (dev-libs/slotconflictnewconsumer-1.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/')
+
+Exiting... (dev-libs/slotconflictnewconsumer-1.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/')
+
+Parent:    (dev-libs/slotconflictoldconsumer-1.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/')
+Depstring: <dev-libs/slotconflicttarget-2.0
+Priority:  runtime
+
+Parent:    (dev-libs/slotconflictoldconsumer-1.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/')
+Depstring: <dev-libs/slotconflicttarget-2.0
+Priority:  runtime
+Candidates: ['<dev-libs/slotconflicttarget-2.0']
+
+Child:         (dev-libs/slotconflicttarget-1.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/') USE="" ELIBC="glibc"
+Parent Dep:    <dev-libs/slotconflicttarget-2.0 required by (dev-libs/slotconflictoldconsumer-1.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/')
+Slot Conflict: (dev-libs/slotconflicttarget-2.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/') USE="" ELIBC="glibc"
+
+Exiting... (dev-libs/slotconflictoldconsumer-1.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/')
+
+Parent:    (app-misc/mmcons-1:0/0::testrepo, installed in '/tmp/r269root/')
+Depstring: app-misc/mmprov:= app-misc/mmprov:0/1=
+Priority:  runtime
+
+Parent:    (app-misc/mmcons-1:0/0::testrepo, installed in '/tmp/r269root/')
+Depstring: app-misc/mmprov:= app-misc/mmprov:0/1=
+Priority:  runtime
+Candidates: ['app-misc/mmprov:=', 'app-misc/mmprov:0/1=']
+
+Child:         (app-misc/mmprov-1:0/1::testrepo, installed in '/tmp/r269root/') USE=""
+Parent Dep:    app-misc/mmprov:0/1= required by (app-misc/mmcons-1:0/0::testrepo, installed in '/tmp/r269root/')
+
+Child:         (app-misc/mmprov-1:0/1::testrepo, installed in '/tmp/r269root/') USE=""
+Parent Dep:    app-misc/mmprov:= required by (app-misc/mmcons-1:0/0::testrepo, installed in '/tmp/r269root/')
+
+Exiting... (app-misc/mmcons-1:0/0::testrepo, installed in '/tmp/r269root/')
+
+Child:         (app-misc/mmcons-1:0/0::testrepo, installed in '/tmp/r269root/') USE=""
+Parent Dep:    app-misc/mmcons
+
+Child:         (dev-libs/slotconflictoldconsumer-1.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/') USE="" ELIBC="glibc"
+Parent Dep:    dev-libs/slotconflictoldconsumer
+
+Child:         (dev-libs/slotconflictnewconsumer-1.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/') USE="" ELIBC="glibc"
+Parent Dep:    dev-libs/slotconflictnewconsumer
+
+!!! Slot conflict handler started.
+   conflict:
+      root: /tmp/r269root/
+      atom: dev-libs/slotconflicttarget:0
+      pkg: (dev-libs/slotconflicttarget-2.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/')
+      pkg: (dev-libs/slotconflicttarget-1.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/')
+      parent: (dev-libs/slotconflictnewconsumer-1.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/')
+      arg, non-conflict: False, True
+         atom: dev-libs/slotconflicttarget
+         match: (dev-libs/slotconflicttarget-2.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/')
+         match: (dev-libs/slotconflicttarget-1.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/')
+      parent: (dev-libs/slotconflictoldconsumer-1.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/')
+      arg, non-conflict: False, True
+         atom: <dev-libs/slotconflicttarget-2.0
+         match: (dev-libs/slotconflicttarget-1.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/')
+
+!!! Slot conflict graph:
+
+!!! Slot conflict solution:
+   Conflict: (/tmp/r269root/, dev-libs/slotconflicttarget:0)
+      remove: (dev-libs/slotconflicttarget-2.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/')
+      keep:   (dev-libs/slotconflicttarget-1.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/')
+Removing package: (dev-libs/slotconflicttarget-2.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/')
+
+Parent:    (dev-libs/slotconflictnewconsumer-1.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/')
+Depstring: dev-libs/slotconflicttarget
+Priority:  runtime
+
+Parent:    (dev-libs/slotconflictnewconsumer-1.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/')
+Depstring: dev-libs/slotconflicttarget
+Priority:  runtime
+Candidates: ['dev-libs/slotconflicttarget']
+
+Child:         (dev-libs/slotconflicttarget-1.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/') USE="" ELIBC="glibc"
+Parent Dep:    dev-libs/slotconflicttarget required by (dev-libs/slotconflictnewconsumer-1.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/')
+
+Exiting... (dev-libs/slotconflictnewconsumer-1.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/')
+
+
+slot_operator_update_probe:
+   existing child package:  (app-misc/mmprov-1:0/1::testrepo, installed in '/tmp/r269root/')
+   existing parent package: (app-misc/mmcons-1:0/0::testrepo, installed in '/tmp/r269root/')
+   new child package:  (app-misc/mmprov-3:1/2::testrepo, ebuild scheduled for merge to '/tmp/r269root/')
+   new parent package: (app-misc/mmcons-1:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/')
+
+
+backtracking due to missed slot abi update:
+   child package:  (app-misc/mmprov-3:1/2::testrepo, ebuild scheduled for merge to '/tmp/r269root/')
+   new child slot package:  (app-misc/mmprov-3:1/2::testrepo, ebuild scheduled for merge to '/tmp/r269root/')
+   parent package: (app-misc/mmcons-1:0/0::testrepo, installed in '/tmp/r269root/')
+   atom: app-misc/mmprov:0/1=
+
+
+slot_operator_update_probe:
+   existing child package:  (app-misc/mmprov-1:0/1::testrepo, installed in '/tmp/r269root/')
+   existing parent package: (app-misc/mmcons-1:0/0::testrepo, installed in '/tmp/r269root/')
+   new child package:  None
+   new parent package: None
+
+
+backtracking try 1 
+
+[ebuild  N     ] dev-libs/slotconflicttarget-1.0 to /tmp/r269root/
+[ebuild  N     ] dev-libs/slotconflictoldconsumer-1.0 to /tmp/r269root/
+[ebuild  N     ] dev-libs/slotconflictnewconsumer-1.0 to /tmp/r269root/
+forced reinstall atoms:
+
+
+slot operator dependencies:
+   (/tmp/r269root/, app-misc/mmprov:0)
+      parent: (app-misc/mmcons-1:0/0::testrepo, installed in '/tmp/r269root/')
+        child: (app-misc/mmprov-1:0/1::testrepo, installed in '/tmp/r269root/') (runtime_slot_op)
+      parent: (app-misc/mmcons-1:0/0::testrepo, installed in '/tmp/r269root/')
+        child: (app-misc/mmprov-1:0/1::testrepo, installed in '/tmp/r269root/') (runtime_slot_op)
+
+
+forced rebuilds:
+
+
+
+      Arg: app-misc/mmcons
+     Atom: app-misc/mmcons
+
+Child:         (app-misc/mmcons-1:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/') USE="" ELIBC="glibc"
+Parent Dep:    app-misc/mmcons
+
+      Arg: dev-libs/slotconflictoldconsumer
+     Atom: dev-libs/slotconflictoldconsumer
+
+Child:         (dev-libs/slotconflictoldconsumer-1.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/') USE="" ELIBC="glibc"
+Parent Dep:    dev-libs/slotconflictoldconsumer
+
+      Arg: dev-libs/slotconflictnewconsumer
+     Atom: dev-libs/slotconflictnewconsumer
+
+Child:         (dev-libs/slotconflictnewconsumer-1.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/') USE="" ELIBC="glibc"
+Parent Dep:    dev-libs/slotconflictnewconsumer
+
+      Arg: @__auto_slot_operator_replace_installed__
+     Atom: app-misc/mmcons:0
+
+Child:         (app-misc/mmcons-1:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/') USE="" ELIBC="glibc"
+Parent Dep:    app-misc/mmcons:0 required by @__auto_slot_operator_replace_installed__
+
+Parent:    (dev-libs/slotconflictnewconsumer-1.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/')
+Depstring: dev-libs/slotconflicttarget
+Priority:  runtime
+
+Parent:    (dev-libs/slotconflictnewconsumer-1.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/')
+Depstring: dev-libs/slotconflicttarget
+Priority:  runtime
+Candidates: ['dev-libs/slotconflicttarget']
+
+Child:         (dev-libs/slotconflicttarget-2.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/') USE="" ELIBC="glibc"
+Parent Dep:    dev-libs/slotconflicttarget required by (dev-libs/slotconflictnewconsumer-1.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/')
+
+Exiting... (dev-libs/slotconflictnewconsumer-1.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/')
+
+Parent:    (dev-libs/slotconflictoldconsumer-1.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/')
+Depstring: <dev-libs/slotconflicttarget-2.0
+Priority:  runtime
+
+Parent:    (dev-libs/slotconflictoldconsumer-1.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/')
+Depstring: <dev-libs/slotconflicttarget-2.0
+Priority:  runtime
+Candidates: ['<dev-libs/slotconflicttarget-2.0']
+
+Child:         (dev-libs/slotconflicttarget-1.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/') USE="" ELIBC="glibc"
+Parent Dep:    <dev-libs/slotconflicttarget-2.0 required by (dev-libs/slotconflictoldconsumer-1.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/')
+Slot Conflict: (dev-libs/slotconflicttarget-2.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/') USE="" ELIBC="glibc"
+
+Exiting... (dev-libs/slotconflictoldconsumer-1.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/')
+
+Parent:    (app-misc/mmcons-1:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/')
+Depstring: app-misc/mmprov:=
+Priority:  runtime
+
+Parent:    (app-misc/mmcons-1:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/')
+Depstring: app-misc/mmprov:=
+Priority:  runtime
+Candidates: ['app-misc/mmprov:=']
+
+Child:         (app-misc/mmprov-3:1/2::testrepo, ebuild scheduled for merge to '/tmp/r269root/') USE="" ELIBC="glibc"
+Parent Dep:    app-misc/mmprov:= required by (app-misc/mmcons-1:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/')
+
+Exiting... (app-misc/mmcons-1:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/')
+
+Child:         (app-misc/mmcons-1:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/') USE="" ELIBC="glibc"
+Parent Dep:    app-misc/mmcons
+
+Child:         (dev-libs/slotconflictoldconsumer-1.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/') USE="" ELIBC="glibc"
+Parent Dep:    dev-libs/slotconflictoldconsumer
+
+Child:         (dev-libs/slotconflictnewconsumer-1.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/') USE="" ELIBC="glibc"
+Parent Dep:    dev-libs/slotconflictnewconsumer
+
+Child:         (app-misc/mmcons-1:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/') USE="" ELIBC="glibc"
+Parent Dep:    app-misc/mmcons:0 required by @__auto_slot_operator_replace_installed__
+
+!!! Slot conflict handler started.
+   conflict:
+      root: /tmp/r269root/
+      atom: dev-libs/slotconflicttarget:0
+      pkg: (dev-libs/slotconflicttarget-2.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/')
+      pkg: (dev-libs/slotconflicttarget-1.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/')
+      parent: (dev-libs/slotconflictnewconsumer-1.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/')
+      arg, non-conflict: False, True
+         atom: dev-libs/slotconflicttarget
+         match: (dev-libs/slotconflicttarget-2.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/')
+         match: (dev-libs/slotconflicttarget-1.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/')
+      parent: (dev-libs/slotconflictoldconsumer-1.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/')
+      arg, non-conflict: False, True
+         atom: <dev-libs/slotconflicttarget-2.0
+         match: (dev-libs/slotconflicttarget-1.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/')
+
+!!! Slot conflict graph:
+
+!!! Slot conflict solution:
+   Conflict: (/tmp/r269root/, dev-libs/slotconflicttarget:0)
+      remove: (dev-libs/slotconflicttarget-2.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/')
+      keep:   (dev-libs/slotconflicttarget-1.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/')
+Removing package: (dev-libs/slotconflicttarget-2.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/')
+
+Parent:    (dev-libs/slotconflictnewconsumer-1.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/')
+Depstring: dev-libs/slotconflicttarget
+Priority:  runtime
+
+Parent:    (dev-libs/slotconflictnewconsumer-1.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/')
+Depstring: dev-libs/slotconflicttarget
+Priority:  runtime
+Candidates: ['dev-libs/slotconflicttarget']
+
+Child:         (dev-libs/slotconflicttarget-1.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/') USE="" ELIBC="glibc"
+Parent Dep:    dev-libs/slotconflicttarget required by (dev-libs/slotconflictnewconsumer-1.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/')
+
+Exiting... (dev-libs/slotconflictnewconsumer-1.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/')
+
+
+backtracking try 2 
+
+[ebuild  N     ] dev-libs/slotconflicttarget-1.0 to /tmp/r269root/
+[ebuild     U  ] app-misc/mmprov-3 [2] to /tmp/r269root/
+[ebuild  rR    ] app-misc/mmcons-1 to /tmp/r269root/
+[ebuild  N     ] dev-libs/slotconflictoldconsumer-1.0 to /tmp/r269root/
+[ebuild  N     ] dev-libs/slotconflictnewconsumer-1.0 to /tmp/r269root/
+forced reinstall atoms:
+   root: /tmp/r269root/
+      atom: app-misc/mmcons:0
+
+
+slot operator dependencies:
+   (/tmp/r269root/, app-misc/mmprov:1)
+      parent: (app-misc/mmcons-1:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/')
+        child: (app-misc/mmprov-3:1/2::testrepo, ebuild scheduled for merge to '/tmp/r269root/') (runtime_slot_op)
+
+
+forced rebuilds:
+
+
+
+      Arg: app-misc/mmcons
+     Atom: app-misc/mmcons
+
+Child:         (app-misc/mmcons-1:0/0::testrepo, installed in '/tmp/r269root/') USE=""
+Parent Dep:    app-misc/mmcons
+
+      Arg: dev-libs/slotconflictoldconsumer
+     Atom: dev-libs/slotconflictoldconsumer
+
+Child:         (dev-libs/slotconflictoldconsumer-1.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/') USE="" ELIBC="glibc"
+Parent Dep:    dev-libs/slotconflictoldconsumer
+
+      Arg: dev-libs/slotconflictnewconsumer
+     Atom: dev-libs/slotconflictnewconsumer
+
+Child:         (dev-libs/slotconflictnewconsumer-1.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/') USE="" ELIBC="glibc"
+Parent Dep:    dev-libs/slotconflictnewconsumer
+
+Parent:    (dev-libs/slotconflictnewconsumer-1.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/')
+Depstring: dev-libs/slotconflicttarget
+Priority:  runtime
+
+Parent:    (dev-libs/slotconflictnewconsumer-1.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/')
+Depstring: dev-libs/slotconflicttarget
+Priority:  runtime
+Candidates: ['dev-libs/slotconflicttarget']
+
+Child:         (dev-libs/slotconflicttarget-2.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/') USE="" ELIBC="glibc"
+Parent Dep:    dev-libs/slotconflicttarget required by (dev-libs/slotconflictnewconsumer-1.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/')
+
+Exiting... (dev-libs/slotconflictnewconsumer-1.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/')
+
+Parent:    (dev-libs/slotconflictoldconsumer-1.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/')
+Depstring: <dev-libs/slotconflicttarget-2.0
+Priority:  runtime
+
+Parent:    (dev-libs/slotconflictoldconsumer-1.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/')
+Depstring: <dev-libs/slotconflicttarget-2.0
+Priority:  runtime
+Candidates: ['<dev-libs/slotconflicttarget-2.0']
+
+Child:         (dev-libs/slotconflicttarget-1.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/') USE="" ELIBC="glibc"
+Parent Dep:    <dev-libs/slotconflicttarget-2.0 required by (dev-libs/slotconflictoldconsumer-1.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/')
+Slot Conflict: (dev-libs/slotconflicttarget-2.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/') USE="" ELIBC="glibc"
+
+Exiting... (dev-libs/slotconflictoldconsumer-1.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/')
+
+Parent:    (app-misc/mmcons-1:0/0::testrepo, installed in '/tmp/r269root/')
+Depstring: app-misc/mmprov:= app-misc/mmprov:0/1=
+Priority:  runtime
+
+Parent:    (app-misc/mmcons-1:0/0::testrepo, installed in '/tmp/r269root/')
+Depstring: app-misc/mmprov:= app-misc/mmprov:0/1=
+Priority:  runtime
+Candidates: ['app-misc/mmprov:=', 'app-misc/mmprov:0/1=']
+
+Child:         (app-misc/mmprov-1:0/1::testrepo, installed in '/tmp/r269root/') USE=""
+Parent Dep:    app-misc/mmprov:0/1= required by (app-misc/mmcons-1:0/0::testrepo, installed in '/tmp/r269root/')
+
+Child:         (app-misc/mmprov-1:0/1::testrepo, installed in '/tmp/r269root/') USE=""
+Parent Dep:    app-misc/mmprov:= required by (app-misc/mmcons-1:0/0::testrepo, installed in '/tmp/r269root/')
+
+Exiting... (app-misc/mmcons-1:0/0::testrepo, installed in '/tmp/r269root/')
+
+Child:         (app-misc/mmcons-1:0/0::testrepo, installed in '/tmp/r269root/') USE=""
+Parent Dep:    app-misc/mmcons
+
+Child:         (dev-libs/slotconflictoldconsumer-1.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/') USE="" ELIBC="glibc"
+Parent Dep:    dev-libs/slotconflictoldconsumer
+
+Child:         (dev-libs/slotconflictnewconsumer-1.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/') USE="" ELIBC="glibc"
+Parent Dep:    dev-libs/slotconflictnewconsumer
+
+!!! Slot conflict handler started.
+   conflict:
+      root: /tmp/r269root/
+      atom: dev-libs/slotconflicttarget:0
+      pkg: (dev-libs/slotconflicttarget-2.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/')
+      pkg: (dev-libs/slotconflicttarget-1.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/')
+      parent: (dev-libs/slotconflictnewconsumer-1.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/')
+      arg, non-conflict: False, True
+         atom: dev-libs/slotconflicttarget
+         match: (dev-libs/slotconflicttarget-2.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/')
+         match: (dev-libs/slotconflicttarget-1.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/')
+      parent: (dev-libs/slotconflictoldconsumer-1.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/')
+      arg, non-conflict: False, True
+         atom: <dev-libs/slotconflicttarget-2.0
+         match: (dev-libs/slotconflicttarget-1.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/')
+
+!!! Slot conflict graph:
+
+!!! Slot conflict solution:
+   Conflict: (/tmp/r269root/, dev-libs/slotconflicttarget:0)
+      remove: (dev-libs/slotconflicttarget-2.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/')
+      keep:   (dev-libs/slotconflicttarget-1.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/')
+Removing package: (dev-libs/slotconflicttarget-2.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/')
+
+Parent:    (dev-libs/slotconflictnewconsumer-1.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/')
+Depstring: dev-libs/slotconflicttarget
+Priority:  runtime
+
+Parent:    (dev-libs/slotconflictnewconsumer-1.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/')
+Depstring: dev-libs/slotconflicttarget
+Priority:  runtime
+Candidates: ['dev-libs/slotconflicttarget']
+
+Child:         (dev-libs/slotconflicttarget-1.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/') USE="" ELIBC="glibc"
+Parent Dep:    dev-libs/slotconflicttarget required by (dev-libs/slotconflictnewconsumer-1.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/')
+
+Exiting... (dev-libs/slotconflictnewconsumer-1.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/')
+
+
+slot_operator_update_probe:
+   existing child package:  (app-misc/mmprov-1:0/1::testrepo, installed in '/tmp/r269root/')
+   existing parent package: (app-misc/mmcons-1:0/0::testrepo, installed in '/tmp/r269root/')
+   new child package:  (app-misc/mmprov-3:1/2::testrepo, ebuild scheduled for merge to '/tmp/r269root/')
+   new parent package: (app-misc/mmcons-1:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/')
+
+
+backtracking due to missed slot abi update:
+   child package:  (app-misc/mmprov-3:1/2::testrepo, ebuild scheduled for merge to '/tmp/r269root/')
+   new child slot package:  (app-misc/mmprov-3:1/2::testrepo, ebuild scheduled for merge to '/tmp/r269root/')
+   parent package: (app-misc/mmcons-1:0/0::testrepo, installed in '/tmp/r269root/')
+   atom: app-misc/mmprov:0/1=
+
+
+slot_operator_update_probe:
+   existing child package:  (app-misc/mmprov-1:0/1::testrepo, installed in '/tmp/r269root/')
+   existing parent package: (app-misc/mmcons-1:0/0::testrepo, installed in '/tmp/r269root/')
+   new child package:  None
+   new parent package: None
+
+
+backtracking try 3 
+
+[ebuild  N     ] dev-libs/slotconflicttarget-1.0 to /tmp/r269root/
+[ebuild  N     ] dev-libs/slotconflictoldconsumer-1.0 to /tmp/r269root/
+[ebuild  N     ] dev-libs/slotconflictnewconsumer-1.0 to /tmp/r269root/
+forced reinstall atoms:
+
+
+slot operator dependencies:
+   (/tmp/r269root/, app-misc/mmprov:0)
+      parent: (app-misc/mmcons-1:0/0::testrepo, installed in '/tmp/r269root/')
+        child: (app-misc/mmprov-1:0/1::testrepo, installed in '/tmp/r269root/') (runtime_slot_op)
+      parent: (app-misc/mmcons-1:0/0::testrepo, installed in '/tmp/r269root/')
+        child: (app-misc/mmprov-1:0/1::testrepo, installed in '/tmp/r269root/') (runtime_slot_op)
+
+
+forced rebuilds:
+
+
+
+      Arg: app-misc/mmcons
+     Atom: app-misc/mmcons
+
+Child:         (app-misc/mmcons-1:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/') USE="" ELIBC="glibc"
+Parent Dep:    app-misc/mmcons
+
+      Arg: dev-libs/slotconflictoldconsumer
+     Atom: dev-libs/slotconflictoldconsumer
+
+Child:         (dev-libs/slotconflictoldconsumer-1.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/') USE="" ELIBC="glibc"
+Parent Dep:    dev-libs/slotconflictoldconsumer
+
+      Arg: dev-libs/slotconflictnewconsumer
+     Atom: dev-libs/slotconflictnewconsumer
+
+Child:         (dev-libs/slotconflictnewconsumer-1.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/') USE="" ELIBC="glibc"
+Parent Dep:    dev-libs/slotconflictnewconsumer
+
+      Arg: @__auto_slot_operator_replace_installed__
+     Atom: app-misc/mmcons:0
+
+Child:         (app-misc/mmcons-1:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/') USE="" ELIBC="glibc"
+Parent Dep:    app-misc/mmcons:0 required by @__auto_slot_operator_replace_installed__
+
+Parent:    (dev-libs/slotconflictnewconsumer-1.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/')
+Depstring: dev-libs/slotconflicttarget
+Priority:  runtime
+
+Parent:    (dev-libs/slotconflictnewconsumer-1.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/')
+Depstring: dev-libs/slotconflicttarget
+Priority:  runtime
+Candidates: ['dev-libs/slotconflicttarget']
+
+Child:         (dev-libs/slotconflicttarget-2.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/') USE="" ELIBC="glibc"
+Parent Dep:    dev-libs/slotconflicttarget required by (dev-libs/slotconflictnewconsumer-1.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/')
+
+Exiting... (dev-libs/slotconflictnewconsumer-1.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/')
+
+Parent:    (dev-libs/slotconflictoldconsumer-1.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/')
+Depstring: <dev-libs/slotconflicttarget-2.0
+Priority:  runtime
+
+Parent:    (dev-libs/slotconflictoldconsumer-1.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/')
+Depstring: <dev-libs/slotconflicttarget-2.0
+Priority:  runtime
+Candidates: ['<dev-libs/slotconflicttarget-2.0']
+
+Child:         (dev-libs/slotconflicttarget-1.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/') USE="" ELIBC="glibc"
+Parent Dep:    <dev-libs/slotconflicttarget-2.0 required by (dev-libs/slotconflictoldconsumer-1.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/')
+Slot Conflict: (dev-libs/slotconflicttarget-2.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/') USE="" ELIBC="glibc"
+
+Exiting... (dev-libs/slotconflictoldconsumer-1.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/')
+
+Parent:    (app-misc/mmcons-1:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/')
+Depstring: app-misc/mmprov:=
+Priority:  runtime
+
+Parent:    (app-misc/mmcons-1:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/')
+Depstring: app-misc/mmprov:=
+Priority:  runtime
+Candidates: ['app-misc/mmprov:=']
+
+Child:         (app-misc/mmprov-3:1/2::testrepo, ebuild scheduled for merge to '/tmp/r269root/') USE="" ELIBC="glibc"
+Parent Dep:    app-misc/mmprov:= required by (app-misc/mmcons-1:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/')
+
+Exiting... (app-misc/mmcons-1:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/')
+
+Child:         (app-misc/mmcons-1:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/') USE="" ELIBC="glibc"
+Parent Dep:    app-misc/mmcons
+
+Child:         (dev-libs/slotconflictoldconsumer-1.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/') USE="" ELIBC="glibc"
+Parent Dep:    dev-libs/slotconflictoldconsumer
+
+Child:         (dev-libs/slotconflictnewconsumer-1.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/') USE="" ELIBC="glibc"
+Parent Dep:    dev-libs/slotconflictnewconsumer
+
+Child:         (app-misc/mmcons-1:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/') USE="" ELIBC="glibc"
+Parent Dep:    app-misc/mmcons:0 required by @__auto_slot_operator_replace_installed__
+
+!!! Slot conflict handler started.
+   conflict:
+      root: /tmp/r269root/
+      atom: dev-libs/slotconflicttarget:0
+      pkg: (dev-libs/slotconflicttarget-2.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/')
+      pkg: (dev-libs/slotconflicttarget-1.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/')
+      parent: (dev-libs/slotconflictnewconsumer-1.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/')
+      arg, non-conflict: False, True
+         atom: dev-libs/slotconflicttarget
+         match: (dev-libs/slotconflicttarget-2.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/')
+         match: (dev-libs/slotconflicttarget-1.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/')
+      parent: (dev-libs/slotconflictoldconsumer-1.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/')
+      arg, non-conflict: False, True
+         atom: <dev-libs/slotconflicttarget-2.0
+         match: (dev-libs/slotconflicttarget-1.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/')
+
+!!! Slot conflict graph:
+
+!!! Slot conflict solution:
+   Conflict: (/tmp/r269root/, dev-libs/slotconflicttarget:0)
+      remove: (dev-libs/slotconflicttarget-2.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/')
+      keep:   (dev-libs/slotconflicttarget-1.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/')
+Removing package: (dev-libs/slotconflicttarget-2.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/')
+
+Parent:    (dev-libs/slotconflictnewconsumer-1.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/')
+Depstring: dev-libs/slotconflicttarget
+Priority:  runtime
+
+Parent:    (dev-libs/slotconflictnewconsumer-1.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/')
+Depstring: dev-libs/slotconflicttarget
+Priority:  runtime
+Candidates: ['dev-libs/slotconflicttarget']
+
+Child:         (dev-libs/slotconflicttarget-1.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/') USE="" ELIBC="glibc"
+Parent Dep:    dev-libs/slotconflicttarget required by (dev-libs/slotconflictnewconsumer-1.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/')
+
+Exiting... (dev-libs/slotconflictnewconsumer-1.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/')
+[ebuild  N     ] dev-libs/slotconflicttarget-1.0 to /tmp/r269root/
+[ebuild     U  ] app-misc/mmprov-3 [2] to /tmp/r269root/
+[ebuild  rR    ] app-misc/mmcons-1 to /tmp/r269root/
+[ebuild  N     ] dev-libs/slotconflictoldconsumer-1.0 to /tmp/r269root/
+[ebuild  N     ] dev-libs/slotconflictnewconsumer-1.0 to /tmp/r269root/
+forced reinstall atoms:
+   root: /tmp/r269root/
+      atom: app-misc/mmcons:0
+
+
+slot operator dependencies:
+   (/tmp/r269root/, app-misc/mmprov:1)
+      parent: (app-misc/mmcons-1:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/')
+        child: (app-misc/mmprov-3:1/2::testrepo, ebuild scheduled for merge to '/tmp/r269root/') (runtime_slot_op)
+
+
+forced rebuilds:
+
+
