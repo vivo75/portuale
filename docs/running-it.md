@@ -1812,7 +1812,7 @@ rust/target/release/portuale            # or `portuale --help` / `-h`
 # Applets:
 #    emerge   resolve dependencies and build, merge, or unmerge packages ...
 #    ebuild   run individual build phases (unpack/compile/install/...) ...
-#    mrg      parse and echo the real emerge option surface via clap ...
+#    mrg      the real emerge option surface via clap, driving portuale's emerge codepath -- a relaxed re-take ...
 rust/target/release/portuale frobnicate ; echo "exit=$?"
 # portuale: unrecognized applet "frobnicate" ... -- run `portuale --help` ...
 # exit=1
@@ -1824,64 +1824,66 @@ rust/target/release/emerge --help   # grouped tour: Actions / Dependency
                                     # Output / Portuale extensions
 ```
 
-The `mrg` applet: a clap-based re-take on the real emerge option
-surface, echoing what it parsed (no resolution or filesystem work yet):
+The `mrg` applet: a clap front end over portuale's own emerge codepath.
+It parses the real emerge option surface, translates the match into a
+canonical long-form argv (`--long=value` for value kinds, bare flags,
+atoms last), and hands it to the exact function the `emerge` applet runs
+-- so resolution output, error messages, and exit codes are literally
+emerge's. All live-verified with the same fixture env the `emerge`
+examples use:
 
 ```sh
-rust/target/release/portuale mrg -pv1 dev-libs/newpkg
-# mrg: parsed command line:
-#   options:
-#     --oneshot
-#     --pretend
-#     --verbose
-#   packages:
-#     dev-libs/newpkg
-
-rust/target/release/portuale mrg --jobs=4 --exclude 'cat/a' --color n -D dev-libs/one dev-libs/two
-# mrg: parsed command line:
-#   options:
-#     --color=n
-#     --deep=True
-#     --jobs=4
-#     --exclude=cat/a
-#   packages:
-#     dev-libs/one
-#     dev-libs/two
-
-rust/target/release/portuale mrg --bogus ; echo "exit=$?"   # usage error
+ln -sf "$(realpath rust/target/release/portuale)" rust/target/release/mrg
+export PORTAGE_CONFIGROOT="$PWD/fixtures" ROOT="$PWD/fixtures" PORTAGE_RUNNING_ROOT="$PWD/fixtures" DISTDIR="$PWD/fixtures/distfiles" NO_COLOR=1
+rust/target/release/mrg --pretend dev-libs/newpkg
+# [ebuild  N     ] dev-libs/newpkg-1.0
+rust/target/release/mrg -pv dev-libs/newpkg
+# [ebuild  N     ] dev-libs/newpkg-1.0::testrepo
+# (blank)
+# Total: 1 package (1 new), Size of downloads: 0 KiB
+rust/target/release/mrg -D 2 -j 4 -p dev-libs/newpkg   # -D/-j values forwarded
+# [ebuild  N     ] dev-libs/newpkg-1.0
+rust/target/release/mrg -j y -p dev-libs/newpkg         # -j y = unlimited jobs, forwarded BARE
+# [ebuild  N     ] dev-libs/newpkg-1.0
+rust/target/release/mrg -D cat/a ; echo "exit=$?"       # -D stays bare (True), cat/a an atom
+# emerge: there are no ebuilds to satisfy "cat/a".
+# exit=1
+rust/target/release/mrg --root=/x -p dev-libs/newpkg ; echo "exit=$?"
+# emerge: option "--root" is a real emerge option, but is not yet implemented in portuale ...
 # exit=2
+rust/target/release/mrg --bogus ; echo "exit=$?"        # clap usage error
+# exit=2
+rust/target/release/mrg --help                          # clap's own help; exit=0
 ```
+
+`-k --jobs=4 --color n --exclude cat/a --exclude cat/b -p dev-libs/newpkg`
+produces output byte-identical to the same invocation through the
+`emerge` applet.
 
 Real `-j/--jobs`, `-D/--deep`, `-l/--load-average` semantics follow
 `insert_optional_args` on the real Python side, exactly: a following
 token is consumed only when real's own validator accepts it
 (`int(s) >= 0` for `--deep`/`--jobs` options, plus `y`/`n` for
-`--jobs`, `float(s) >= 0` for `--load-average`), and a bare option
-defaults to the real literal `--<opt>=True`:
+`--jobs`, `float(s) >= 0` for `--load-average`). The bare form carries
+real's literal `"True"` internally and is forwarded BARE (the emerge
+codepath's own strict `=` validation would reject `--deep=True`), which
+is precisely what the bare form means on the real side; the separate
+valid-value forms join to `--long=N` before clap sees them:
 
 ```sh
-rust/target/release/portuale mrg -D cat/a       # not an integer -> atom kept
-# mrg: parsed command line:
-#   options:
-#     --deep=True
-#   packages:
-#     cat/a
-
-rust/target/release/portuale mrg -D 2 -p cat/a
-# mrg: parsed command line:
-#   options:
-#     --pretend
-#     --deep=2
-#   packages:
-#     cat/a
-
-rust/target/release/portuale mrg -j 4 cat/a     # attached to --jobs, value skipped
-# mrg: parsed command line:
-#   options:
-#     --jobs=4
-#   packages:
-#     cat/a
+rust/target/release/mrg -D cat/a     # not an integer -> -D stays bare (True), cat/a an atom
+rust/target/release/mrg -D 2 -p cat/a
+# [ebuild  N     ] dev-libs/newpkg-1.0     (or whatever cat/a resolves to)
+rust/target/release/mrg -j 4 -p cat/a  # attached to --jobs, value kept
 ```
+
+Options real emerge has but the portuale codepath does not implement yet
+(`--root`, `--fetchonly`, `--version`, `--status`, the `--*binpkg-*`
+appends, ...) are forwarded BARE so the codepath names them honestly:
+`emerge: option "--root" is a real emerge option, but is not yet
+implemented in portuale -- run "emerge --help" for the options and
+actions that are.` (exit 2), just as `portuale emerge --root=...`
+reports.
 
 `env.d` USE tier (`/etc/profile.env`, the lowest `USE_ORDER` layer):
 

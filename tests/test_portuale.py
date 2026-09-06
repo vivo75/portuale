@@ -131,83 +131,87 @@ def test_unrecognized_applet_fails_clearly(portuale_binary):
     assert 'unrecognized applet "frobnicate"' in result.stderr
 
 
-def test_mrg_dispatch_via_symlink(mrg_binary):
-    """`mrg -pv1 cat/pkg` dispatches through the same symlink machinery as
-    `emerge`/`ebuild`, then echoes back exactly what real emerge's own
-    spelling parsed: the bundled shorts become three real flags and the
-    atom lands in the right place."""
+def test_mrg_dispatch_via_symlink(mrg_binary, fixture_env):
+    """`mrg` dispatches through the same symlink machinery as
+    `emerge`/`ebuild`, then hands its parsed/translated argv to portuale's
+    own emerge codepath: `--pretend dev-libs/newpkg` resolves and prints
+    the exact `[ebuild  N     ] ...` line real pretend emits."""
     result = subprocess.run(
-        [str(mrg_binary), "-pv1", "cat/pkg"],
+        [str(mrg_binary), "--pretend", "dev-libs/newpkg"],
         capture_output=True,
         text=True,
         check=True,
+        env=fixture_env,
     )
     assert result.returncode == 0
-    assert "--pretend" in result.stdout
-    assert "--verbose" in result.stdout
-    assert "--oneshot" in result.stdout
-    assert "    cat/pkg" in result.stdout
+    assert "[ebuild  N     ] dev-libs/newpkg-1.0" in result.stdout
 
 
-def test_mrg_echoes_a_real_emerge_option_surface(mrg_binary):
-    """Real muddle-style invocations (bundled flags, a values option, a
-    repeatable exclude, and an atom) round-trip their exact spellings."""
-    result = subprocess.run(
-        [
-            str(mrg_binary),
-            "-k",
-            "--jobs=4",
-            "--color",
-            "n",
-            "--exclude",
-            "cat/a",
-            "--exclude",
-            "cat/b",
-            "--deep",
-            "app-crypt/secret",
-        ],
+def test_mrg_runs_the_emerge_codepath(mrg_binary, emerge_binary, fixture_env):
+    """A real muddle-style invocation (bundled flag, value option,
+    repeatable exclude, atom) is byte-identical through the `mrg` and
+    `emerge` applets: clap translates to canonical long-form argv, the
+    emerge codepath resolves, and the two cannot drift."""
+    args = [
+        "-k",
+        "--jobs=4",
+        "--color",
+        "n",
+        "--exclude",
+        "cat/a",
+        "--exclude",
+        "cat/b",
+        "-p",
+        "dev-libs/newpkg",
+    ]
+    mrg = subprocess.run(
+        [str(mrg_binary), *args],
         capture_output=True,
         text=True,
-        check=True,
+        check=False,
+        env=fixture_env,
     )
-    assert result.returncode == 0
-    assert "--usepkg" in result.stdout
-    assert "--jobs=4" in result.stdout
-    assert "--color=n" in result.stdout
-    assert "--exclude=cat/a" in result.stdout
-    assert "--exclude=cat/b" in result.stdout
-    assert "--deep=True" in result.stdout
-    assert "    app-crypt/secret" in result.stdout
+    emerge = subprocess.run(
+        [str(emerge_binary), *args],
+        capture_output=True,
+        text=True,
+        check=False,
+        env=fixture_env,
+    )
+    assert mrg.returncode == emerge.returncode == 0
+    assert mrg.stdout == emerge.stdout
+    assert "[ebuild  N     ] dev-libs/newpkg-1.0" in mrg.stdout
 
 
-def test_mrg_bare_deep_reports_the_true_default(mrg_binary):
+def test_mrg_bare_deep_keeps_the_atom(mrg_binary, fixture_env):
     """Bare `-D` followed by an atom: real emerge's insert_optional_args
     does NOT swallow the atom (`cat/a` isn't a valid int), so `-D` stays
-    bare (real inserted default `True`) and `cat/a` is the target."""
+    bare (real inserted default `True`) and `cat/a` is forwarded as the
+    target atom -- portuale's emerge then reports no ebuild for it."""
     result = subprocess.run(
         [str(mrg_binary), "-D", "cat/a"],
         capture_output=True,
         text=True,
-        check=True,
+        check=False,
+        env=fixture_env,
     )
-    assert result.returncode == 0
-    assert "--deep=True" in result.stdout
-    assert "    cat/a" in result.stdout
+    assert result.returncode == 1
+    assert 'there are no ebuilds to satisfy "cat/a"' in result.stderr
 
 
-def test_mrg_deep_consumes_a_space_separated_integer(mrg_binary):
+def test_mrg_deep_consumes_a_space_separated_integer(mrg_binary, fixture_env):
     """`-D 2` is the real separate-valid-value spelling real emerge's
     insert_optional_args consumes (`2` is a valid int), joined into the
-    explicit form before clap sees it."""
+    explicit form before clap sees it and forwarded as `--deep=2`."""
     result = subprocess.run(
-        [str(mrg_binary), "-D", "2", "cat/a"],
+        [str(mrg_binary), "-D", "2", "-p", "dev-libs/newpkg"],
         capture_output=True,
         text=True,
-        check=True,
+        check=False,
+        env=fixture_env,
     )
     assert result.returncode == 0
-    assert "--deep=2" in result.stdout
-    assert "    cat/a" in result.stdout
+    assert "[ebuild  N     ] dev-libs/newpkg-1.0" in result.stdout
 
 
 def test_mrg_rejects_an_unrecognized_short_option(mrg_binary):

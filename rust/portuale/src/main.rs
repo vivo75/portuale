@@ -84,7 +84,7 @@ fn print_applets() {
         "   ebuild   run individual build phases (unpack/compile/install/merge/unmerge/...) on one ebuild file"
     );
     println!(
-        "   mrg      parse and echo the real emerge option surface via clap -- a modern re-take, relaxed requirements"
+        "   mrg      the real emerge option surface via clap, driving portuale's emerge codepath -- a relaxed re-take"
     );
     println!();
     println!("Run `portuale <applet> --help` for that applet's own options.");

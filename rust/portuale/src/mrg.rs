@@ -17,13 +17,34 @@
 // the names (and even those mostly line up, where clap lets them
 // cheaply).
 //
-// This first slice is deliberately just the parser: `mrg` accepts the
-// real emerge option surface via `clap`, and reports exactly what it
-// parsed (options, values, and the target package atoms) -- a
-// transparent, deterministic echo that the clap parser is the thing
-// being exercised. No resolution, no merge, no world-file writes. That
-// is the "simple command-line option parser" step the applet was asked
-// to start with.
+// `mrg` is a clap front end over portuale's OWN emerge codepath: it
+// parses the real emerge option surface, translates the match into a
+// canonical long-form argv (options in definition order,
+// `--long=value` for value kinds, the target package atoms last -- see
+// `to_emerge_argv`), and hands it to `pretend::run`, the exact function
+// the `emerge` applet runs. So `portuale mrg --pretend
+// app-portage/eix` resolves and prints exactly what
+// `portuale emerge --pretend app-portage/eix` does -- the same engine
+// behind a clap front end, keeping clap's parser, help, and exit
+// behaviour. The rules `to_emerge_argv` folds into that canonical form:
+//
+//   - Every `Flag` goes BARE (`--pretend`), never `--pretend=y` -- the
+//     emerge codepath's peek-based parser treats a plain Boolean flag
+//     and a following (unrelated) token correctly on its own.
+//   - `Value` and `Append` options the codepath implements go
+//     `--long=<value>` (per occurrence for `Append`); ones it does NOT
+//     implement yet are forwarded BARE (`--fetchonly`, `--root`, ...)
+//     so `pretend::run` names them honestly ("a real emerge option, but
+//     is not yet implemented in portuale...") instead of rejecting a
+//     `--long=value` spelling it never heard of. `emerge_handles`
+//     encodes the implemented surface, keyed to the parse-loop section
+//     in `pretend.rs`.
+//   - `OptionalValue`s mirror real argparse's inserted literals: the
+//     bare forms (`-D`, `-j`, `-l`) carry value `"True"` internally and
+//     forward BARE (the codepath's own strict `=` validation would
+//     reject `--deep=True`); `--jobs`'s separate-value `y`/`n` unlimited
+//     forms also forward BARE (that is their real meaning); any numeric
+//     value forwards `--long=N`.
 //
 // FULL option-surface fidelity notes (grounded in main.py, read before
 // deviating):
@@ -31,7 +52,7 @@
 //   - Every plain boolean from `options` + `actions` becomes a clap
 //     `ArgAction::SetTrue` flag with its real short alias (from
 //     `shortmapping`) attached. clap's native short-flag bundling
-//     (`-pv`, `-pv1`, ...) therefore behaves like real `argparse`.
+//     (`-pv`, `-aN`, ...) therefore behaves like real `argparse`.
 //     `--cols`/`--skip-first` are real `longopt_aliases` secondary
 //     names for `--columns`/`--skipfirst`, modelled as clap `alias`es.
 //   - `-h`/`--help` is clap's own (real emerge declares `help` in its
@@ -41,10 +62,10 @@
 //     keep short and long options as-is" licence:
 //       * The y/n/`True` *optional-value* options (main.py's own
 //         `insert_optional_args`/`default_arg_opts`: `--ask`, `--verbose`,
-//         `--quiet`, `--autounmask`, `--buildpkg`, `--usepkg`, ...) are
+//         `--quiet`, `--buildpkg`, `--usepkg`, ...) are
 //         modelled as plain `SetTrue` flags. That keeps the
-//         overwhelmingly common bare forms (`-a`, `-v`, `-k`,
-//         `--autounmask`) AND the `-av <pkg>` / `-pv <pkg>`
+//         overwhelmingly common bare forms (`-a`, `-v`, `-k`) AND the
+//         `-av <pkg>` / `-pv <pkg>`
 //         atom-after-flag spellings working exactly like real emerge,
 //         instead of clap greedily swallowing the following atom as an
 //         (invalid) value -- which is the one real failure mode a
@@ -63,16 +84,16 @@
 //         atom) plus a small pre-pass (`join_optional_values`) that
 //         joins the space-separated valid-value forms (e.g. `-j 4`) into
 //         the explicit `--jobs=4` spelling before clap sees them.
-//       * `--with-bdeps`, `--color`, `--reinstall changed-use`, the
-//         `--autounmask-*` y/n pair, and the other real *required*-value
+//       * `--with-bdeps`, `--color`, the y/n choice
+//         options, and the other real *required*-value
 //         choice options keep their required value (with the real
 //         possible values). A bare `--color` is as much an error here as
 //         in real argparse.
 //       * `action: "append"` options (`--exclude`/`-X`,
 //         `--buildpkg-exclude`, the `--*binpkg-exclude` /
 //         `--*binpkg-include` family, `--reinstall-atoms`,
-//         `--rebuild-exclude`/`-ignore`, `--useoldpkg-atoms`,
-//         `--sync-submodule`) are clap `Append` args, repeatable per the
+//         `--useoldpkg-atoms`, `--usepkg-include`) are
+//         clap `Append` args, repeatable per the
 //         real `"append"` action.
 //
 // Exit code conventions match real emerge/argparse: 0 for success and
@@ -81,12 +102,11 @@
 
 use clap::builder::PossibleValuesParser;
 use clap::{Arg, ArgAction, ArgMatches, Command};
-use std::fmt::Write as _;
 use std::process::ExitCode;
 
-/// How one emerge option is modelled. Drives both the clap `Arg` build
-/// (in `command()`) and the post-parse report (in `render_report()`), so
-/// the two can never drift apart.
+/// How one emerge option is modelled. Drives the clap `Arg` build (in
+/// `command()`) and the `to_emerge_argv` forward translation, so the two
+/// can never drift apart.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Kind {
     /// Real plain boolean (`options`/`actions`, plus the y/n optional-
@@ -105,7 +125,7 @@ enum Kind {
 }
 
 struct Opt {
-    /// clap arg id (the dest), also the `render_report` lookup key.
+    /// clap arg id (the dest), also the `to_emerge_argv` lookup key.
     id: &'static str,
     /// Canonical long option, exactly as real emerge spells it.
     long: &'static str,
@@ -130,15 +150,10 @@ struct Opt {
 /// everything else, for clap's help headings.
 const ACTION_IDS: &[&str] = &[
     "clean",
-    "check_news",
     "config",
     "depclean",
     "info",
     "list_sets",
-    "metadata",
-    "moo",
-    "prune",
-    "rage_clean",
     "regen",
     "search",
     "status",
@@ -161,16 +176,6 @@ const OPTIONS: &[Opt] = &[
         choices: &[],
         missing: "",
         help: "remove all objects from the package cache (dangerous)",
-    },
-    Opt {
-        id: "check_news",
-        long: "--check-news",
-        alias: None,
-        short: None,
-        kind: Kind::Flag,
-        choices: &[],
-        missing: "",
-        help: "perform a news check",
     },
     Opt {
         id: "config",
@@ -211,46 +216,6 @@ const OPTIONS: &[Opt] = &[
         choices: &[],
         missing: "",
         help: "show all sets",
-    },
-    Opt {
-        id: "metadata",
-        long: "--metadata",
-        alias: None,
-        short: None,
-        kind: Kind::Flag,
-        choices: &[],
-        missing: "",
-        help: "regenerate metadata cache and then exit",
-    },
-    Opt {
-        id: "moo",
-        long: "--moo",
-        alias: None,
-        short: None,
-        kind: Kind::Flag,
-        choices: &[],
-        missing: "",
-        help: "print the Gentoo cow",
-    },
-    Opt {
-        id: "prune",
-        long: "--prune",
-        alias: None,
-        short: Some('P'),
-        kind: Kind::Flag,
-        choices: &[],
-        missing: "",
-        help: "remove older versions of slotted packages",
-    },
-    Opt {
-        id: "rage_clean",
-        long: "--rage-clean",
-        alias: None,
-        short: None,
-        kind: Kind::Flag,
-        choices: &[],
-        missing: "",
-        help: "remove all objects from the package cache, without mercy",
     },
     Opt {
         id: "regen",
@@ -315,26 +280,6 @@ const OPTIONS: &[Opt] = &[
     // --- The real `options` list (plain boolean store_true options),
     // with `shortmapping` shorts where real emerge defines one.
     Opt {
-        id: "alphabetical",
-        long: "--alphabetical",
-        alias: None,
-        short: None,
-        kind: Kind::Flag,
-        choices: &[],
-        missing: "",
-        help: "list USE flags alphabetically in the verbose output",
-    },
-    Opt {
-        id: "ask_enter_invalid",
-        long: "--ask-enter-invalid",
-        alias: None,
-        short: None,
-        kind: Kind::Flag,
-        choices: &[],
-        missing: "",
-        help: "accept stderr/stdin on --ask, in case it's invalid",
-    },
-    Opt {
         id: "buildpkgonly",
         long: "--buildpkgonly",
         alias: None,
@@ -343,16 +288,6 @@ const OPTIONS: &[Opt] = &[
         choices: &[],
         missing: "",
         help: "build binary packages only (never merge)",
-    },
-    Opt {
-        id: "changed_use",
-        long: "--changed-use",
-        alias: None,
-        short: Some('U'),
-        kind: Kind::Flag,
-        choices: &[],
-        missing: "",
-        help: "reinstall packages whose USE have changed",
     },
     Opt {
         id: "columns",
@@ -375,16 +310,6 @@ const OPTIONS: &[Opt] = &[
         help: "enable debug output",
     },
     Opt {
-        id: "digest",
-        long: "--digest",
-        alias: None,
-        short: None,
-        kind: Kind::Flag,
-        choices: &[],
-        missing: "",
-        help: "regenerate digests (with the digest/manifest commands)",
-    },
-    Opt {
         id: "emptytree",
         long: "--emptytree",
         alias: None,
@@ -395,16 +320,6 @@ const OPTIONS: &[Opt] = &[
         help: "reinstall every atom in the resolved set, deep",
     },
     Opt {
-        id: "verbose_conflicts",
-        long: "--verbose-conflicts",
-        alias: None,
-        short: None,
-        kind: Kind::Flag,
-        choices: &[],
-        missing: "",
-        help: "verbose output about conflicts",
-    },
-    Opt {
         id: "fetchonly",
         long: "--fetchonly",
         alias: None,
@@ -413,26 +328,6 @@ const OPTIONS: &[Opt] = &[
         choices: &[],
         missing: "",
         help: "only fetch the distribution files",
-    },
-    Opt {
-        id: "fetch_all_uri",
-        long: "--fetch-all-uri",
-        alias: None,
-        short: Some('F'),
-        kind: Kind::Flag,
-        choices: &[],
-        missing: "",
-        help: "fetch every URI recorded in SRC_URI",
-    },
-    Opt {
-        id: "ignore_default_opts",
-        long: "--ignore-default-opts",
-        alias: None,
-        short: None,
-        kind: Kind::Flag,
-        choices: &[],
-        missing: "",
-        help: "do not use the EMERGE_DEFAULT_OPTS variable",
     },
     Opt {
         id: "noconfmem",
@@ -465,16 +360,6 @@ const OPTIONS: &[Opt] = &[
         help: "reinstall packages whose USE have changed",
     },
     Opt {
-        id: "nobindeps",
-        long: "--nobindeps",
-        alias: None,
-        short: None,
-        kind: Kind::Flag,
-        choices: &[],
-        missing: "",
-        help: "ignore binary package dependencies",
-    },
-    Opt {
         id: "nodeps",
         long: "--nodeps",
         alias: None,
@@ -505,16 +390,6 @@ const OPTIONS: &[Opt] = &[
         help: "suppress the spinner",
     },
     Opt {
-        id: "oneshot",
-        long: "--oneshot",
-        alias: None,
-        short: Some('1'),
-        kind: Kind::Flag,
-        choices: &[],
-        missing: "",
-        help: "do not add the packages to the world file",
-    },
-    Opt {
         id: "onlydeps",
         long: "--onlydeps",
         alias: None,
@@ -533,26 +408,6 @@ const OPTIONS: &[Opt] = &[
         choices: &[],
         missing: "",
         help: "only show what would be done (dry run)",
-    },
-    Opt {
-        id: "quiet_repo_display",
-        long: "--quiet-repo-display",
-        alias: None,
-        short: None,
-        kind: Kind::Flag,
-        choices: &[],
-        missing: "",
-        help: "do not display repository name in output",
-    },
-    Opt {
-        id: "quiet_unmerge_warn",
-        long: "--quiet-unmerge-warn",
-        alias: None,
-        short: None,
-        kind: Kind::Flag,
-        choices: &[],
-        missing: "",
-        help: "suppress the unmerge warnings",
     },
     Opt {
         id: "resume",
@@ -595,16 +450,6 @@ const OPTIONS: &[Opt] = &[
         help: "display the dependency tree",
     },
     Opt {
-        id: "unordered_display",
-        long: "--unordered-display",
-        alias: None,
-        short: None,
-        kind: Kind::Flag,
-        choices: &[],
-        missing: "",
-        help: "display the merge list in unsorted order",
-    },
-    Opt {
         id: "update",
         long: "--update",
         alias: None,
@@ -614,29 +459,9 @@ const OPTIONS: &[Opt] = &[
         missing: "",
         help: "update packages to the best available version",
     },
-    Opt {
-        id: "update_if_installed",
-        long: "--update-if-installed",
-        alias: None,
-        short: None,
-        kind: Kind::Flag,
-        choices: &[],
-        missing: "",
-        help: "update packages that are already installed",
-    },
     // --- The real y/n/True optional-value family (insert_optional_args'
     // `default_arg_opts`), modelled as plain flags -- see the module
     // doc comment's cut for why. Short aliases are real main.py's own.
-    Opt {
-        id: "alert",
-        long: "--alert",
-        alias: None,
-        short: Some('A'),
-        kind: Kind::Flag,
-        choices: &[],
-        missing: "",
-        help: "alert (terminal bell) on prompts",
-    },
     Opt {
         id: "ask",
         long: "--ask",
@@ -646,86 +471,6 @@ const OPTIONS: &[Opt] = &[
         choices: &[],
         missing: "",
         help: "prompt before performing any actions",
-    },
-    Opt {
-        id: "autounmask",
-        long: "--autounmask",
-        alias: None,
-        short: None,
-        kind: Kind::Flag,
-        choices: &[],
-        missing: "",
-        help: "automatically unmask packages",
-    },
-    Opt {
-        id: "autounmask_continue",
-        long: "--autounmask-continue",
-        alias: None,
-        short: None,
-        kind: Kind::Flag,
-        choices: &[],
-        missing: "",
-        help: "write autounmask changes and continue",
-    },
-    Opt {
-        id: "autounmask_only",
-        long: "--autounmask-only",
-        alias: None,
-        short: None,
-        kind: Kind::Flag,
-        choices: &[],
-        missing: "",
-        help: "only perform --autounmask",
-    },
-    Opt {
-        id: "autounmask_unrestricted_atoms",
-        long: "--autounmask-unrestricted-atoms",
-        alias: None,
-        short: None,
-        kind: Kind::Flag,
-        choices: &[],
-        missing: "",
-        help: "write autounmask changes with >= atoms if possible",
-    },
-    Opt {
-        id: "autounmask_keep_keywords",
-        long: "--autounmask-keep-keywords",
-        alias: None,
-        short: None,
-        kind: Kind::Flag,
-        choices: &[],
-        missing: "",
-        help: "do not add package.accept_keywords entries",
-    },
-    Opt {
-        id: "autounmask_keep_masks",
-        long: "--autounmask-keep-masks",
-        alias: None,
-        short: None,
-        kind: Kind::Flag,
-        choices: &[],
-        missing: "",
-        help: "do not add package.unmask entries",
-    },
-    Opt {
-        id: "autounmask_write",
-        long: "--autounmask-write",
-        alias: None,
-        short: None,
-        kind: Kind::Flag,
-        choices: &[],
-        missing: "",
-        help: "write changes made by --autounmask to disk",
-    },
-    Opt {
-        id: "binpkg_changed_deps",
-        long: "--binpkg-changed-deps",
-        alias: None,
-        short: None,
-        kind: Kind::Flag,
-        choices: &[],
-        missing: "",
-        help: "reject binary packages with outdated dependencies",
     },
     Opt {
         id: "buildpkg",
@@ -738,56 +483,6 @@ const OPTIONS: &[Opt] = &[
         help: "build binary packages",
     },
     Opt {
-        id: "changed_deps",
-        long: "--changed-deps",
-        alias: None,
-        short: None,
-        kind: Kind::Flag,
-        choices: &[],
-        missing: "",
-        help: "replace installed packages with outdated dependencies",
-    },
-    Opt {
-        id: "changed_deps_report",
-        long: "--changed-deps-report",
-        alias: None,
-        short: None,
-        kind: Kind::Flag,
-        choices: &[],
-        missing: "",
-        help: "report installed packages with outdated dependencies",
-    },
-    Opt {
-        id: "changed_slot",
-        long: "--changed-slot",
-        alias: None,
-        short: None,
-        kind: Kind::Flag,
-        choices: &[],
-        missing: "",
-        help: "replace installed packages with outdated SLOT metadata",
-    },
-    Opt {
-        id: "complete_graph",
-        long: "--complete-graph",
-        alias: None,
-        short: None,
-        kind: Kind::Flag,
-        choices: &[],
-        missing: "",
-        help: "completely account for all known dependencies",
-    },
-    Opt {
-        id: "depclean_lib_check",
-        long: "--depclean-lib-check",
-        alias: None,
-        short: None,
-        kind: Kind::Flag,
-        choices: &[],
-        missing: "",
-        help: "check for consumers of libraries before removing them",
-    },
-    Opt {
         id: "deselect",
         long: "--deselect",
         alias: None,
@@ -796,16 +491,6 @@ const OPTIONS: &[Opt] = &[
         choices: &[],
         missing: "",
         help: "remove atoms/sets from the world file",
-    },
-    Opt {
-        id: "binpkg_respect_use",
-        long: "--binpkg-respect-use",
-        alias: None,
-        short: None,
-        kind: Kind::Flag,
-        choices: &[],
-        missing: "",
-        help: "discard binary packages whose USE don't match",
     },
     Opt {
         id: "fail_clean",
@@ -868,36 +553,6 @@ const OPTIONS: &[Opt] = &[
         help: "continue as much as possible after an error",
     },
     Opt {
-        id: "onlydeps_with_ideps",
-        long: "--onlydeps-with-ideps",
-        alias: None,
-        short: None,
-        kind: Kind::Flag,
-        choices: &[],
-        missing: "",
-        help: "include IDEPEND in --onlydeps",
-    },
-    Opt {
-        id: "onlydeps_with_rdeps",
-        long: "--onlydeps-with-rdeps",
-        alias: None,
-        short: None,
-        kind: Kind::Flag,
-        choices: &[],
-        missing: "",
-        help: "include RDEPEND in --onlydeps",
-    },
-    Opt {
-        id: "package_moves",
-        long: "--package-moves",
-        alias: None,
-        short: None,
-        kind: Kind::Flag,
-        choices: &[],
-        missing: "",
-        help: "perform package moves when necessary",
-    },
-    Opt {
         id: "quiet",
         long: "--quiet",
         alias: None,
@@ -928,66 +583,6 @@ const OPTIONS: &[Opt] = &[
         help: "suppress display of the build log on stdout",
     },
     Opt {
-        id: "read_news",
-        long: "--read-news",
-        alias: None,
-        short: None,
-        kind: Kind::Flag,
-        choices: &[],
-        missing: "",
-        help: "offer to read unread news via eselect",
-    },
-    Opt {
-        id: "rebuild_if_new_slot",
-        long: "--rebuild-if-new-slot",
-        alias: None,
-        short: None,
-        kind: Kind::Flag,
-        choices: &[],
-        missing: "",
-        help: "rebuild when a := dependency moves to a new slot",
-    },
-    Opt {
-        id: "rebuild_if_new_rev",
-        long: "--rebuild-if-new-rev",
-        alias: None,
-        short: None,
-        kind: Kind::Flag,
-        choices: &[],
-        missing: "",
-        help: "rebuild when a build+run dep gets a new revision",
-    },
-    Opt {
-        id: "rebuild_if_new_ver",
-        long: "--rebuild-if-new-ver",
-        alias: None,
-        short: None,
-        kind: Kind::Flag,
-        choices: &[],
-        missing: "",
-        help: "rebuild when a build+run dep gets a new version",
-    },
-    Opt {
-        id: "rebuild_if_unbuilt",
-        long: "--rebuild-if-unbuilt",
-        alias: None,
-        short: None,
-        kind: Kind::Flag,
-        choices: &[],
-        missing: "",
-        help: "rebuild when a build+run dep is built",
-    },
-    Opt {
-        id: "rebuilt_binaries",
-        long: "--rebuilt-binaries",
-        alias: None,
-        short: None,
-        kind: Kind::Flag,
-        choices: &[],
-        missing: "",
-        help: "replace installed packages with rebuilt binaries",
-    },
-    Opt {
         id: "select",
         long: "--select",
         alias: None,
@@ -996,16 +591,6 @@ const OPTIONS: &[Opt] = &[
         choices: &[],
         missing: "",
         help: "add specified packages to the world set",
-    },
-    Opt {
-        id: "selective",
-        long: "--selective",
-        alias: None,
-        short: None,
-        kind: Kind::Flag,
-        choices: &[],
-        missing: "",
-        help: "identical to --noreplace",
     },
     Opt {
         id: "use_ebuild_visibility",
@@ -1058,26 +643,6 @@ const OPTIONS: &[Opt] = &[
         help: "verbose output",
     },
     Opt {
-        id: "verbose_missing_ebuilds",
-        long: "--verbose-missing-ebuilds",
-        alias: None,
-        short: None,
-        kind: Kind::Flag,
-        choices: &[],
-        missing: "",
-        help: "verbose missing ebuild output",
-    },
-    Opt {
-        id: "verbose_slot_rebuilds",
-        long: "--verbose-slot-rebuilds",
-        alias: None,
-        short: None,
-        kind: Kind::Flag,
-        choices: &[],
-        missing: "",
-        help: "verbose slot rebuild output",
-    },
-    Opt {
         id: "with_test_deps",
         long: "--with-test-deps",
         alias: None,
@@ -1090,36 +655,6 @@ const OPTIONS: &[Opt] = &[
     // --- Required-value options. `choices` non-empty = the real closed
     // choice set; empty = accept any store value like the real action.
     Opt {
-        id: "autounmask_backtrack",
-        long: "--autounmask-backtrack",
-        alias: None,
-        short: None,
-        kind: Kind::Value,
-        choices: &["y", "n"],
-        missing: "",
-        help: "continue backtracking on autounmask changes",
-    },
-    Opt {
-        id: "autounmask_license",
-        long: "--autounmask-license",
-        alias: None,
-        short: None,
-        kind: Kind::Value,
-        choices: &["y", "n"],
-        missing: "",
-        help: "allow autounmask to change package.license",
-    },
-    Opt {
-        id: "autounmask_use",
-        long: "--autounmask-use",
-        alias: None,
-        short: None,
-        kind: Kind::Value,
-        choices: &["y", "n"],
-        missing: "",
-        help: "allow autounmask to change package.use",
-    },
-    Opt {
         id: "color",
         long: "--color",
         alias: None,
@@ -1128,66 +663,6 @@ const OPTIONS: &[Opt] = &[
         choices: &["y", "n"],
         missing: "",
         help: "enable or disable color output",
-    },
-    Opt {
-        id: "complete_graph_if_new_use",
-        long: "--complete-graph-if-new-use",
-        alias: None,
-        short: None,
-        kind: Kind::Value,
-        choices: &["y", "n"],
-        missing: "",
-        help: "trigger --complete-graph if USE/IUSE changes",
-    },
-    Opt {
-        id: "complete_graph_if_new_ver",
-        long: "--complete-graph-if-new-ver",
-        alias: None,
-        short: None,
-        kind: Kind::Value,
-        choices: &["y", "n"],
-        missing: "",
-        help: "trigger --complete-graph if a version changes",
-    },
-    Opt {
-        id: "dynamic_deps",
-        long: "--dynamic-deps",
-        alias: None,
-        short: None,
-        kind: Kind::Value,
-        choices: &["y", "n"],
-        missing: "",
-        help: "substitute installed deps with unbuilt ebuild deps",
-    },
-    Opt {
-        id: "ignore_built_slot_operator_deps",
-        long: "--ignore-built-slot-operator-deps",
-        alias: None,
-        short: None,
-        kind: Kind::Value,
-        choices: &["y", "n"],
-        missing: "",
-        help: "ignore the := operator parts of recorded deps",
-    },
-    Opt {
-        id: "ignore_soname_deps",
-        long: "--ignore-soname-deps",
-        alias: None,
-        short: None,
-        kind: Kind::Value,
-        choices: &["y", "n"],
-        missing: "",
-        help: "ignore soname dependencies",
-    },
-    Opt {
-        id: "implicit_system_deps",
-        long: "--implicit-system-deps",
-        alias: None,
-        short: None,
-        kind: Kind::Value,
-        choices: &["y", "n"],
-        missing: "",
-        help: "assume implicit deps on @system packages",
     },
     Opt {
         id: "misspell_suggestions",
@@ -1220,16 +695,6 @@ const OPTIONS: &[Opt] = &[
         help: "automatically enable --with-bdeps (unless --usepkg)",
     },
     Opt {
-        id: "regex_search_auto",
-        long: "--regex-search-auto",
-        alias: None,
-        short: None,
-        kind: Kind::Value,
-        choices: &["y", "n"],
-        missing: "",
-        help: "automatic regex detection for search actions",
-    },
-    Opt {
         id: "search_index",
         long: "--search-index",
         alias: None,
@@ -1238,36 +703,6 @@ const OPTIONS: &[Opt] = &[
         choices: &["y", "n"],
         missing: "",
         help: "enable or disable indexed search",
-    },
-    Opt {
-        id: "reinstall",
-        long: "--reinstall",
-        alias: None,
-        short: None,
-        kind: Kind::Value,
-        choices: &["changed-use"],
-        missing: "",
-        help: "specify conditions to trigger reinstallation",
-    },
-    Opt {
-        id: "accept_properties",
-        long: "--accept-properties",
-        alias: None,
-        short: None,
-        kind: Kind::Value,
-        choices: &[],
-        missing: "",
-        help: "temporarily override ACCEPT_PROPERTIES",
-    },
-    Opt {
-        id: "accept_restrict",
-        long: "--accept-restrict",
-        alias: None,
-        short: None,
-        kind: Kind::Value,
-        choices: &[],
-        missing: "",
-        help: "temporarily override ACCEPT_RESTRICT",
     },
     Opt {
         id: "backtrack",
@@ -1290,16 +725,6 @@ const OPTIONS: &[Opt] = &[
         help: "specify the portage configuration location",
     },
     Opt {
-        id: "jobs_tmpdir_require_free_gb",
-        long: "--jobs-tmpdir-require-free-gb",
-        alias: None,
-        short: None,
-        kind: Kind::Value,
-        choices: &[],
-        missing: "",
-        help: "required free GiB of PORTAGE_TMPDIR before a new job",
-    },
-    Opt {
         id: "prefix",
         long: "--prefix",
         alias: None,
@@ -1310,16 +735,6 @@ const OPTIONS: &[Opt] = &[
         help: "specify the installation prefix",
     },
     Opt {
-        id: "pkg_format",
-        long: "--pkg-format",
-        alias: None,
-        short: None,
-        kind: Kind::Value,
-        choices: &[],
-        missing: "",
-        help: "format of the resulting binary package",
-    },
-    Opt {
         id: "quickpkg_direct_root",
         long: "--quickpkg-direct-root",
         alias: None,
@@ -1328,16 +743,6 @@ const OPTIONS: &[Opt] = &[
         choices: &[],
         missing: "",
         help: "root to use as the quickpkg-direct source",
-    },
-    Opt {
-        id: "rebuilt_binaries_timestamp",
-        long: "--rebuilt-binaries-timestamp",
-        alias: None,
-        short: None,
-        kind: Kind::Value,
-        choices: &[],
-        missing: "",
-        help: "only use binaries newer than this timestamp",
     },
     Opt {
         id: "root",
@@ -1455,46 +860,6 @@ const OPTIONS: &[Opt] = &[
         help: "atoms to treat as if they were not installed",
     },
     Opt {
-        id: "rebuild_exclude",
-        long: "--rebuild-exclude",
-        alias: None,
-        short: None,
-        kind: Kind::Append,
-        choices: &[],
-        missing: "",
-        help: "atoms to never rebuild due to the --rebuild flag",
-    },
-    Opt {
-        id: "rebuild_ignore",
-        long: "--rebuild-ignore",
-        alias: None,
-        short: None,
-        kind: Kind::Append,
-        choices: &[],
-        missing: "",
-        help: "atoms whose dependents are not rebuilt by --rebuild",
-    },
-    Opt {
-        id: "sync_submodule",
-        long: "--sync-submodule",
-        alias: None,
-        short: None,
-        kind: Kind::Append,
-        choices: &[],
-        missing: "",
-        help: "restrict sync to this submodule (--sync only)",
-    },
-    Opt {
-        id: "usepkg_exclude",
-        long: "--usepkg-exclude",
-        alias: None,
-        short: None,
-        kind: Kind::Append,
-        choices: &[],
-        missing: "",
-        help: "atoms to ignore in binary packages",
-    },
-    Opt {
         id: "usepkg_include",
         long: "--usepkg-include",
         alias: None,
@@ -1569,57 +934,144 @@ pub fn command() -> Command {
     cmd
 }
 
-/// Renders the parsed result: every option the run actually used (in the
-/// stable definition order above, canonical long name, `=value` for the
-/// value/append kinds) and the target atoms, each on its own line. The
-/// echo makes optional-value defaults (`--deep=unlimited` and friends)
-/// explicit rather than silently swallowed.
-fn render_report(matches: &ArgMatches) -> String {
-    let mut out = String::new();
-    let _ = writeln!(out, "mrg: parsed command line:");
-    let _ = writeln!(out, "  options:");
-    let mut any = false;
+/// Whether the emerge codepath (`pretend::run`, the parse loop in
+/// `pretend.rs`) has a branch for `long`. Options it handles are
+/// forwarded with their value (`--long=<value>`); the rest go BARE so
+/// `pretend::run`'s `report_option` names them by their real spelling
+/// ("a real emerge action/option, but is not yet implemented in
+/// portuale") rather than rejecting a `--long=value` form it never saw.
+/// The list is keyed to the parse-loop sections in `pretend.rs` and the
+/// real `lib/_emerge/main.py` option table that `emerge_options.rs` pins.
+fn emerge_handles(long: &str) -> bool {
+    matches!(
+        long,
+        // actions -- pretend.rs:7267-7820
+        "--clean"
+            | "--config"
+            | "--depclean"
+            | "--info"
+            | "--list-sets"
+            | "--regen"
+            | "--search"
+            | "--sync"
+            | "--unmerge"
+            // flags -- pretend.rs:7240-7920
+            | "--buildpkgonly"
+            | "--columns"
+            | "--debug"
+            | "--emptytree"
+            | "--newrepo"
+            | "--newuse"
+            | "--nodeps"
+            | "--noreplace"
+            | "--onlydeps"
+            | "--pretend"
+            | "--resume"
+            | "--searchdesc"
+            | "--skipfirst"
+            | "--tree"
+            | "--update"
+            | "--ask"
+            | "--buildpkg"
+            | "--deselect"
+            | "--fuzzy-search"
+            | "--getbinpkg"
+            | "--getbinpkgonly"
+            | "--keep-going"
+            | "--quiet"
+            | "--quiet-build"
+            | "--use-ebuild-visibility"
+            | "--usepkg"
+            | "--usepkgonly"
+            | "--verbose"
+            | "--with-test-deps"
+            // value options -- pretend.rs:6835-7888
+            | "--color"
+            | "--misspell-suggestions"
+            | "--with-bdeps"
+            | "--with-bdeps-auto"
+            | "--backtrack"
+            | "--quickpkg-direct-root"
+            | "--search-similarity"
+            // optional-value numerics -- pretend.rs:6886-7875
+            | "--deep"
+            | "--jobs"
+            | "--load-average"
+            // append options -- pretend.rs:7170-7218, 7660-7690
+            | "--buildpkg-exclude"
+            | "--exclude"
+            | "--reinstall-atoms"
+            | "--usepkg-include"
+            | "--useoldpkg-atoms"
+    )
+}
+
+/// Translates a clap match into the canonical long-form argv the emerge
+/// codepath (`pretend::run`) parses. Options are emitted in OPTIONS-table
+/// definition order (the codepath is order-independent; a canonical order
+/// keeps the result deterministic), then the target atoms last. Every
+/// emitted token either starts with `--` or is an atom, so the codepath's
+/// `-x y` optional-value peek can never consume an unrelated token.
+fn to_emerge_argv(matches: &ArgMatches) -> Vec<String> {
+    let mut argv = Vec::new();
     for opt in OPTIONS {
-        let name = opt.long;
+        let long = opt.long;
         match opt.kind {
             Kind::Flag => {
                 if matches.get_flag(opt.id) {
-                    let _ = writeln!(out, "    {name}");
-                    any = true;
+                    argv.push(long.to_string());
                 }
             }
-            Kind::Value | Kind::OptionalValue => {
+            Kind::Value => {
                 if let Some(v) = matches.get_one::<String>(opt.id) {
-                    let _ = writeln!(out, "    {name}={v}");
-                    any = true;
+                    if emerge_handles(long) {
+                        argv.push(format!("{long}={v}"));
+                    } else {
+                        argv.push(long.to_string());
+                    }
+                }
+            }
+            Kind::OptionalValue => {
+                if let Some(v) = matches.get_one::<String>(opt.id) {
+                    if emerge_handles(long)
+                        && (v == "True" || (long == "--jobs" && matches!(v.as_str(), "y" | "n")))
+                    {
+                        // The bare/inserted-literal and `-j y|n` unlimited
+                        // forms forward BARE: the codepath's strict `=`
+                        // validation would reject `"--deep=True"` /
+                        // `"--jobs=y"`, and bare `--jobs` is precisely
+                        // what `-j y` means on the real side.
+                        argv.push(long.to_string());
+                    } else if emerge_handles(long) {
+                        argv.push(format!("{long}={v}"));
+                    } else {
+                        // Not implemented by the codepath (unreachable for
+                        // the three current optionals, but keep the rule
+                        // uniform): report the option under its real name.
+                        argv.push(long.to_string());
+                    }
                 }
             }
             Kind::Append => {
-                if let Some(vals) = matches.get_many::<String>(opt.id) {
-                    for v in vals {
-                        let _ = writeln!(out, "    {name}={v}");
-                    }
-                    any = true;
+                let vals: Vec<&String> = matches
+                    .get_many::<String>(opt.id)
+                    .map(|iter| iter.collect())
+                    .unwrap_or_default();
+                if vals.is_empty() {
+                    continue;
+                }
+                if emerge_handles(long) {
+                    argv.extend(vals.iter().map(|v| format!("{long}={v}")));
+                } else {
+                    argv.push(long.to_string());
                 }
             }
         }
     }
-    if !any {
-        let _ = writeln!(out, "    (none)");
+    if let Some(atoms) = matches.get_many::<String>("package") {
+        argv.extend(atoms.map(String::clone));
     }
-    let _ = writeln!(out, "  packages:");
-    let atoms: Vec<&String> = matches
-        .get_many::<String>("package")
-        .map(|iter| iter.collect())
-        .unwrap_or_default();
-    if atoms.is_empty() {
-        let _ = writeln!(out, "    (none)");
-    } else {
-        for atom in atoms {
-            let _ = writeln!(out, "    {atom}");
-        }
-    }
-    out
+    argv
 }
 
 /// Real emerge's own `valid_integers` (`int(s) >= 0`), matching main.py's
@@ -1701,18 +1153,17 @@ fn join_optional_values(args: &[String]) -> Vec<String> {
 
 /// `mrg`'s entry point, dispatched from main.rs's multicall `run`. Parses
 /// `args` (already stripped of the applet name) with the clap command,
-/// echoes the result, and maps clap errors to real-emerge-style exit
-/// codes (help -> 0, usage error -> 2).
+/// translates the match into canonical long-form argv, and hands it to
+/// the emerge codepath -- `pretend::run`, the exact function the `emerge`
+/// applet runs, so resolution output and exit codes are literally
+/// emerge's. clap keeps its own parser, help, and exit behaviour (help ->
+/// 0, usage error -> 2); everything else is the emerge codepath's.
 pub fn run(args: &[String]) -> ExitCode {
     let bin = "mrg";
     let joined = join_optional_values(args);
     let argv = std::iter::once(bin).chain(joined.iter().map(String::as_str));
-    let run = || command().try_get_matches_from(argv.clone());
-    match run() {
-        Ok(matches) => {
-            print!("{}", render_report(&matches));
-            ExitCode::SUCCESS
-        }
+    match command().try_get_matches_from(argv) {
+        Ok(matches) => crate::pretend::run(&to_emerge_argv(&matches)),
         Err(err) => {
             let code = err.exit_code() as u8;
             let _ = err.print();
@@ -1747,21 +1198,17 @@ mod tests {
         }
     }
 
-    /// `-pv1 pkg` bundles a flag, another flag, and its attached value
-    /// exactly like real argparse does.
+    /// `-pv pkg` bundles two flags exactly like real argparse does, and
+    /// forwards independently to the emerge codepath.
     #[test]
     fn bundled_shorts_parse_independently() {
-        let m = parse(&["-pv1", "cat/pkg"]).unwrap();
+        let m = parse(&["-pv", "cat/pkg"]).unwrap();
         assert!(m.get_flag("pretend"));
         assert!(m.get_flag("verbose"));
-        assert!(m.get_flag("oneshot"));
         let atoms: Vec<_> = m.get_many::<String>("package").unwrap().collect();
         assert_eq!(atoms, vec!["cat/pkg"]);
-        let report = render_report(&m);
-        assert!(report.contains("--pretend"));
-        assert!(report.contains("--verbose"));
-        assert!(report.contains("--oneshot"));
-        assert!(report.contains("    cat/pkg"));
+        let argv = to_emerge_argv(&m);
+        assert_eq!(argv, ["--pretend", "--verbose", "cat/pkg"]);
     }
 
     /// `-j4` (attached), `-j 4`/`--jobs=4` (separate) all carry the
@@ -1829,12 +1276,6 @@ mod tests {
         }
     }
 
-    /// `-1` is the real "add to world" negation (oneshot), not a value.
-    #[test]
-    fn oneshot_short() {
-        assert!(parse(&["-1"]).unwrap().get_flag("oneshot"));
-    }
-
     /// A required value missing (bare `--color`) is a clap usage error,
     /// and so is any short spelling real emerge never defined.
     #[test]
@@ -1843,13 +1284,6 @@ mod tests {
             let err = parse(args).unwrap_err();
             assert_eq!(err.exit_code(), 2, "{args:?}");
         }
-    }
-
-    /// `--reinstall` keeps its real single "changed-use" choice.
-    #[test]
-    fn reinstall_choices() {
-        assert!(parse(&["--reinstall", "changed-use"]).is_ok());
-        assert!(parse(&["--reinstall", "everything"]).is_err());
     }
 
     /// A repeatable option collects its real `action: "append"` list.
@@ -1873,11 +1307,69 @@ mod tests {
         assert_eq!(err.exit_code(), 0);
     }
 
-    /// Nothing is required: real emerge `--pretend` with no atoms still
-    /// runs, and `mrg` with nothing at all prints an empty report.
+    /// Nothing is required: `mrg` with no args parses cleanly and
+    /// forwards an empty argv (the emerge codepath then reports "no
+    /// targets given", exactly like `emerge` with no args).
     #[test]
-    fn empty_invocation_reports_none() {
+    fn empty_invocation_forwards_nothing() {
         let m = parse(&[]).unwrap();
-        assert!(render_report(&m).contains("(none)"));
+        assert!(to_emerge_argv(&m).is_empty());
+    }
+
+    /// A `Flag` or toothless option forwards BARE: no `=y` / `=True`
+    /// spelling is ever invented for the emerge codepath.
+    #[test]
+    fn flags_forward_bare() {
+        let m = parse(&["-pv", "--update", "cat/pkg"]).unwrap();
+        assert_eq!(
+            to_emerge_argv(&m),
+            ["--pretend", "--update", "--verbose", "cat/pkg"]
+        );
+    }
+
+    /// Implemented `Value` options forward `--long=<value>`; ones the
+    /// emerge codepath does not implement yet forward BARE so it can name
+    /// them honestly ("a real emerge option, but is not yet implemented").
+    #[test]
+    fn value_options_carry_or_shed_their_value() {
+        let m = parse(&["--color", "n", "--with-bdeps", "y", "cat/pkg"]).unwrap();
+        assert_eq!(
+            to_emerge_argv(&m),
+            ["--color=n", "--with-bdeps=y", "cat/pkg"]
+        );
+
+        let m = parse(&["--root=/x", "--fetchonly", "cat/a"]).unwrap();
+        assert_eq!(to_emerge_argv(&m), ["--fetchonly", "--root", "cat/a"]);
+    }
+
+    /// Implemented `Append` options forward one `--long=<value>` per
+    /// occurrence; unimplemented ones forward BARE exactly once.
+    #[test]
+    fn append_repeats_per_occurrence() {
+        let m = parse(&["-X", "cat/a", "--exclude", "cat/b", "cat/pkg"]).unwrap();
+        assert_eq!(
+            to_emerge_argv(&m),
+            ["--exclude=cat/a", "--exclude=cat/b", "cat/pkg"]
+        );
+
+        let m = parse(&["--getbinpkg-exclude", "cat/a", "cat/b"]).unwrap();
+        assert_eq!(to_emerge_argv(&m), ["--getbinpkg-exclude", "cat/b"]);
+    }
+
+    /// The `OptionalValue` bare/inserted-literal and `-j y|n` unlimited
+    /// forms forward BARE (the emerge codepath's strict `=` validation
+    /// would reject `--deep=True` / `--jobs=y`); numeric values forward
+    /// `--long=N`. This makes `-D`/`-j`/`-j y` mean what real emerge
+    /// means, and `-D 2`/`-j 4` explicit.
+    #[test]
+    fn optional_values_bare_or_numeric() {
+        let m = parse(&["-D", "-j", "y", "-l", "2.5", "cat/pkg"]).unwrap();
+        assert_eq!(
+            to_emerge_argv(&m),
+            ["--deep", "--jobs", "--load-average=2.5", "cat/pkg"]
+        );
+
+        let m = parse(&["-D", "2", "-j", "4", "cat/pkg"]).unwrap();
+        assert_eq!(to_emerge_argv(&m), ["--deep=2", "--jobs=4", "cat/pkg"]);
     }
 }

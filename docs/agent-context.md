@@ -407,31 +407,41 @@ gating already ships), full elementary-cycle enumeration for the
 (`pkg_use_display` for non-default USE, `use`/`soname` reason keys,
 colorization, `need_rebuild`).
 
-**`mrg` applet (2026-09-06, first slice: a clap-based option parser)**: a
-new third applet `mrg` was added to the multicall binary — the deliberate
-counter-example to emerge/ebuild's near-zero-dependency, hand-rolled
-posture. `mrg` is allowed (and now does) lean on a major mainstream
-crate: `clap = "4"` (pure Rust, zero C linkage, so the musl-static story
-is untouched) builds the whole parser from one `OPTIONS` table carrying
-real emerge's own option surface — every action and option, short and
-long spelling as-is, the real `longopt_aliases` (`--cols`, `--skip-first`)
-and the real `actions`-with-shorts (`-c -C -P -s -V`, the `-X`/`-B`/`-U`
-`option` shorts), plus required-value choice options, and repeatable
-`action: "append"` options. `mrg` currently *parses and echoes* what it
-parsed (a deterministic report, options in definition order, atoms
-last); no resolution or filesystem work yet. **`mrg` is a portuale-only
+**`mrg` applet (2026-09-06: a clap front end over portuale's own emerge
+codepath)**: a new third applet `mrg` was added to the multicall
+binary — the deliberate counter-example to emerge/ebuild's
+near-zero-dependency, hand-rolled posture. `mrg` is allowed (and now
+does) lean on a major mainstream crate: `clap = "4"` (pure Rust, zero C
+linkage, so the musl-static story is untouched) builds the whole parser
+from one `OPTIONS` table carrying real emerge's own option surface —
+every action and option, short and long spelling as-is, the real
+`longopt_aliases` (`--cols`, `--skip-first`) and the real
+`actions`-with-shorts (`-c -C -P -s -V`, the `-X`/`-B`/`-U` `option`
+shorts), plus required-value choice options, and repeatable
+`action: "append"` options. `mrg` **parses with clap, translates the
+match into canonical long-form argv (`to_emerge_argv`), and hands it to
+`pretend::run`** — the exact function the `emerge` applet runs — so
+resolution output, error messages, and exit codes are literally
+emerge's. **`mrg` is a portuale-only
 applet — there will never be a portage counterpart or Python reference
 implementation.** Only its CLI surface matters, and the black-box tests
-live in `tests/test_portuale.py`. Real-fidelity
+live in `tests/test_portuale.py` (including a byte-identical-output
+assertion against the `emerge` applet). Real-fidelity
 notes: the `--deep`/`-D`, `--jobs`/`-j`, `--load-average`/`-l`
 optional-value numerics mirror real `insert_optional_args` exactly —
 a following token is the value only when real emerge's own validator
-accepts it, otherwise the option is bare with real's literal `"True"`
-inserted (implemented via `require_equals` + a `join_optional_values`
-pre-pass and unit-tested for the `-D cat/a` atom and `-j 4`/`-j4`
-forms); usage errors exit 2, help exits 0, short flags bundle like
-real argparse (`-pv1`). See `what-this-proves.md`'s "`mrg` applet"
-entry and `mrg.rs`'s module doc comment (which records the
+accepts it, the bare form carries real's literal `"True"` and is
+forwarded BARE (the codepath's strict `=` validation rejects
+`--deep=True`), and `-j y`/`-j n` forward BARE = unlimited jobs (implemented
+via `require_equals` + a `join_optional_values` pre-pass and unit-tested
+for the `-D cat/a` atom, `-j 4`/`-j4`, and `-j y` forms); options the
+codepath does not implement yet are forwarded BARE so they are reported
+by their real spelling (`emerge: option "--root" is a real emerge
+option, but is not yet implemented in portuale ...`, exit 2). Usage
+errors exit 2, help exits 0, short flags bundle like real argparse
+(`-pv`). See `what-this-proves.md`'s "`mrg` applet" entries
+(the second one is "the clap front end now runs portuale's emerge
+codepath") and `mrg.rs`'s module doc comment (which records the
 deliberate cuts: the y/n optional-value *family* is modelled as plain
 flags so `-av pkg` never swallows the atom, and the `=y`/`=n` spellings
 are not parsed yet). `mrg` is registered in the `Applet` enum /

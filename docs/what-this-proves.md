@@ -14393,14 +14393,14 @@ and long spelling kept as-is, from `lib/_emerge/main.py` (the `options`
 list, the `actions` frozenset, `shortmapping`, `longopt_aliases`, and
 `argument_options`'s `action: "append"`/`"store"` entries — `mrg.rs`'s
 module doc comment quotes every cut against those exact sources). A
-single `OPTIONS` table drives both the clap `Arg` build and the post-
-parse report, so the parser and the "here's what I parsed" echo cannot
-drift apart. Structure:
+single `OPTIONS` table drives both the clap `Arg` build and the
+`to_emerge_argv` forward translation, so the parser and the emerge
+codepath cannot drift apart. Structure:
 
 - the real **`actions`** (with their real shorts: `-c -C -P -s -V`) and
   the plain boolean options (real shorts incl. the numeric-looking
-  `-1`, `-B`, `-U`, `-N`, `-O`, `-W`) are `SetTrue` flags; clap's native
-  short bundling reproduces real argparse — `-pv1 pkg` parses exactly
+  `-B`, `-U`, `-N`, `-O`, `-W`) are `SetTrue` flags; clap's native
+  short bundling reproduces real argparse — `-pv pkg` parses exactly
   like real emerge's;
 - the real **`longopt_aliases`** (`--cols` for `--columns`,
   `--skip-first` for `--skipfirst`) are clap `alias`es;
@@ -14429,11 +14429,11 @@ drift apart. Structure:
 Exit-code conventions match real emerge: success and `-h`/`--help` exit
 0, any usage error exits 2 (clap's own) — `usage_errors_are_errors`,
 `help_is_ok`, `shorts_are_pairwise_distinct`, and ten other Rust unit
-tests in `mrg.rs` pin the surface. `mrg` now **echoes** what it parsed
-(a deterministic report, options in definition order, `--long=value` for
-value kinds, atoms last) — the honest first slice the applet was asked
-to start with; resolution and any real behavior are deliberately later
-slices. There is no Python mirror (its CLI-recognition surface is
+tests in `mrg.rs` pin the surface. `mrg`'s first slice **echoed** what it
+parsed (a deterministic report, options in definition order,
+`--long=value` for value kinds, atoms last) — superseded by the "second
+slice" entry below, which wires the same parser to portuale's emerge
+codepath. There is no Python mirror (its CLI-recognition surface is
 Rust-only like `ebuild`'s), so the black-box coverage lives in
 `tests/test_portuale.py` (a new `mrg_binary` symlink fixture + seven
 tests, reusing the same argv[0]-dispatch machinery `emerge`/`ebuild`
@@ -14442,7 +14442,7 @@ use), and `main.rs` registers `mrg` in `Applet`/`from_name`/
 
 Deliberate cuts (recorded in `mrg.rs`'s module doc comment and
 `scope-backlog.md` Part 2.H): the y/n optional-value *family*
-(`--ask`/`--verbose`/`--quiet`/`--autounmask`/`--buildpkg`/`--usepkg`
+(`--ask`/`--verbose`/`--quiet`/`--buildpkg`/`--usepkg`
 and the rest of `insert_optional_args`'s `default_arg_opts` with `y_or_n`
 values) is modelled as plain `SetTrue` flags — that keeps the ubiquitous
 bare and bundled spellings (`-a`, `-av pkg`, `-pv pkg`) working like real
@@ -14453,3 +14453,50 @@ required-value option errors (clap's conflict) like optparse's own
 are untouched by this (scoped to `emerge`/`ebuild`, where the same
 `scope-backlog.md` Part 3 entry explains why clap stays *out* of those
 two parsers).
+
+### `mrg` applet: second slice — the clap front end now runs portuale's emerge codepath (2026-09-06)
+
+`mrg` no longer echoes. `run()` parses with clap, then
+`to_emerge_argv()` translates the match into a canonical long-form argv
+(options in definition order, `--long=value` for value kinds, bare
+flags, the target atoms last) and hands it to `pretend::run` — the exact
+function the `emerge` applet runs. So `portuale mrg --pretend
+dev-libs/newpkg` resolves and prints `[ebuild  N     ]
+dev-libs/newpkg-1.0`, byte-identical to `portuale emerge --pretend
+dev-libs/newpkg` (a black-box test asserts the two applets' stdout is
+identical across a muddle-style invocation: `-k --jobs=4 --color n
+--exclude cat/a --exclude cat/b -p dev-libs/newpkg`). clap keeps its own
+help/usage-error rendering (help exits 0, usage error 2); everything
+after a successful parse is portuale's emerge semantics, exit codes
+included.
+
+The translation rules are grounded in the same real sources quoted
+above (`main.py`'s argument kinds + `pretend.rs`'s parse loop):
+- `Flag`s forward BARE — the codepath's own peek-based parser treats a
+  following token correctly, and a `--long=y` spelling the codepath
+  never defined must not be invented;
+- `Value`/`Append` options the codepath implements go `--long=<value>`
+  (per occurrence for appends); ones it does not implement yet are
+  forwarded BARE so `report_option` names them by their real spelling —
+  `emerge: option "--root" is a real emerge option, but is not yet
+  implemented in portuale ...` (exit 2) — instead of rejecting an
+  unrecognized `--long=value` form. `emerge_handles()` encodes the
+  implemented surface, with each group keyed to the `pretend.rs` parse
+  loop;
+- the `OptionalValue`s mirror real inserted-literal semantics: bare
+  `-D`/`-j`/`-l` (internal `"True"`) and the `-j y`/`-j n` unlimited
+  spellings forward BARE (the codepath's strict `=` validation would
+  reject `--deep=True`/`--jobs=y`, and on the real side a bare `--jobs`
+  IS what `-j y` means), while numeric values forward `--long=N`. Real
+  `main.py` grounds this: `--deep`/`--jobs`/`--load-average` are
+  `action: "store"` with no type, storing the `"True"` literal
+  `insert_optional_args` inserts, and the post-parse validation turns
+  `True`/`y`/`n` jobs into unlimited.
+
+One deliberate divergence is recorded in `mrg.rs`'s module doc comment:
+`mrg` is a front end, so what clap accepted is trusted — e.g.
+`portuale mrg -j y` means unlimited jobs (real emerge's intent), where
+the bare `emerge` applet would treat `y` as an atom and fail with
+"there are no ebuilds to satisfy 'y'". That is the "relaxed
+requirements" licence, not a pretence of byte-parity with the hand-rolled
+`emerge` parser.

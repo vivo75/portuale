@@ -381,12 +381,12 @@ ANSI USE colour all shipped 2026-09-05, see `what-this-proves.md`'s
 
 ### H. The `mrg` applet
 
-`mrg` (shipped 2026-09-06, first slice: real emerge option surface via
-`clap`, parse + echo only) is the deliberate counter-example applet —
-its requirements are NOT emerge/ebuild's: it is allowed to lean on major
-mainstream crates (see Part 3's `clap` bullet, which applies only to
-the hand-rolled `emerge` parser — `mrg` is where clap lives on purpose).
-Current state and what's inside each of the following bullets:
+`mrg` (2026-09-06: a clap front end over portuale's own emerge codepath;
+started as a parse-only first slice) is the deliberate counter-example
+applet — its requirements are NOT emerge/ebuild's: it is allowed to lean
+on major mainstream crates (see Part 3's `clap` bullet, which applies
+only to the hand-rolled `emerge` parser — `mrg` is where clap lives on
+purpose). Current state and what's inside each of the following bullets:
 - the clap-backed parser covers the full real `lib/_emerge/main.py`
   option surface (actions incl. shorts, `options` booleans, the real
   `longopt_aliases`, required-value choice options, `append`
@@ -396,16 +396,27 @@ Current state and what's inside each of the following bullets:
   help, 2 usage error); it is Rust-only (no Python reference — the
   black-box surface tests live in `tests/test_portuale.py` + Rust
   unit tests in `mrg.rs`);
+- on a successful parse `to_emerge_argv` translates the match into
+  canonical long-form argv and hands it to `pretend::run` (the exact
+  function the `emerge` applet runs): resolution output and exit codes
+  are literally emerge's, byte-identical for the same invocation.
+  `Flag`s forward BARE; implemented `Value`/`Append` options forward
+  `--long=<value>` (per occurrence); options the codepath does not
+  implement yet forward BARE so `report_option` reports them by their
+  real spelling ("a real emerge option, but is not yet implemented",
+  exit 2); the optional-value bare forms (`"True"`) and `-j y`/`-j n`
+  forward BARE too (that is their real unlimited meaning);
 - documented cuts (module doc comment + `what-this-proves.md`): the
   y/n optional-value *family* (`--ask`/`--verbose`/`--quiet`/…,
   `--buildpkg`, `--usepkg`, …) is modelled as plain flags so
   `-av pkg`/`-pv pkg` never swallow the atom — the explicit
   `=y`/`=n` spellings are not parsed yet; `--jobs`'s separate-value
   y/n forms (`-j y`, `--jobs y` → value `y`) join like real's
-  `valid_integers_or_y_or_n`;
-- open: any real behavior `mrg` might eventually own — it currently
-  *echoes what it parsed* with no resolution or filesystem step, so
-  everything semantics-wise is still open by design.
+  `valid_integers_or_y_or_n` and forward BARE;
+- open: nothing — `mrg` already runs the emerge codepath's real
+  resolution. Everything globally still open for that codepath
+  (see the other Part 2 sections) is open for `mrg` too, by
+  definition.
 
 **Hard invariant: `mrg` is a portuale-only applet. There will never be
 a portage counterpart or Python reference implementation.** Only its
