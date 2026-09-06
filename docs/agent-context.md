@@ -164,7 +164,18 @@ Python reference's unbounded `int`; a previously-silent parity bug
 Same day, **refactor-01 S3**: the workspace's only `&String`-typed
 parameter (`pretend.rs`'s `vercmp_key`) is now `&str`, and the 3
 `portage-versions` test-module clippy warnings from S2 were cleaned,
-restoring a genuinely zero-warn `--all-targets` build.
+restoring a genuinely zero-warn `--all-targets` build. Same day,
+**refactor-01 S4** (the `err-*` error model, option B): every library
+crate — `portage-use-reduce`, `portage-fetch`, `portage-required-use`,
+`portage-repo`, `portage-profile` — now has its own hand-rolled
+`pub enum Error` (byte-identical `Display`, `From<Error> for String`
+for crossing sites, `portage_repo::Error` composing the two/three it
+forwards); `portuale::Error { kind, detail: Vec<String> }` (§2.1's
+bounded seam) now types only the CLI boundary (the `pretend.rs` resolve
+handle, kind `"resolve"`), while portuale's `Result<_, String>`
+internals and the harnesses stay `String` per §2.1's "not now". Zero
+behavior change; suite totals now 799/799 Rust and pytest 1292 passed /
+5 pre-existing non-TTY failures / 2 skipped.
 
 **Dry-run (`emerge --pretend`)**: full recursive DEPEND/RDEPEND/BDEPEND/
 PDEPEND/IDEPEND resolution; profile/make.conf-derived USE/ACCEPT_KEYWORDS

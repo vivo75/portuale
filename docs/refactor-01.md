@@ -145,13 +145,15 @@ design, and on every CLI-visible path the strings are pinned by the
 contract suite. Consequences:
 
 - `err-thiserror-lib` / `err-custom-type` / `err-anyhow-app` —
-  **deviating by design**. Converting is a large, all-crater refactor
-  with real parity risk and no external benefit to a tool with no
-  downstream library consumers. **Judgment call: keep `Result<_, String>`
-  unless the user explicitly re-opens it.** The one defensible, bounded
-  improvement is an internal `Error { kind, detail: Vec<String> }` in
-  `portuale` if error-CLI-formatting ever needs to change shape — not
-  now.
+  **deviating by design, and that deviation is now the shipped model**
+  (S4, option B, 2026-09-06 — reopened and resolved without thiserror):
+  every library crate has its own hand-rolled `pub enum Error` with
+  byte-identical `Display` and `From<Error> for String` for crossing
+  sites; `portuale` carries the bounded internal
+  `Error { kind, detail: Vec<String> }` seam (see below) on its
+  CLI-visible boundary, while its `Result<_, String>` internals are
+  deliberately left alone ("not now"). No new dependencies; the contract
+  suite stays byte-identical.
 - `err-from-impl` / `err-source-chain` / `err-question-mark` — **late**
   for the `?`-only parts (plain `?` is used), but no `From`/`#[source]`
   chain machinery exists; not applicable to the String-error design.
@@ -208,10 +210,15 @@ resolve). Review-not-fix.
 
 ### 2.4 `err-thiserror-lib` / `err-custom-type` / `err-anyhow-app`
 
-See 2.1. Keep the String design. If the user re-opens: prefer per-crate
-`derive(thiserror::Error)` in the library crates, a hand-rolled
-`portuale::Error`, and **never** `anyhow` (dynamic error, and it would
-be dead weight given the CLI's column-pinned formatting).
+**Resolved in S4 (option B, 2026-09-06)**: hand-rolled `Error` enums in
+`portage-use-reduce`, `portage-fetch`, `portage-required-use`,
+`portage-repo`, `portage-profile` — each `Display` byte-reproduces the
+prior `format!` messages and `From<Error> for String` lets crossing
+sites compile unchanged. `portuale` itself wraps only its CLI boundary
+in the §2.1 `{ kind, detail: Vec<String> }` seam (`pretend.rs` resolve
+handle, kind `"resolve"`); internals and harnesses stay `String`.
+`anyhow` remains banned: dynamic error, dead weight next to the
+CLI's column-pinned formatting.
 
 ### 2.5 `err-lowercase-msg` — **column-pinned; deviate only on un-pinned paths**
 
@@ -275,7 +282,7 @@ No required mem work today.
 | **S1** ✅ shipped | Add the ~10 `// SAFETY:` markers (1.1). No code change. | none | fmt + clippy clean, `cargo test` 792/792, pytest 1282 passed / 5 pre-existing non-TTY |
 | **S2** ✅ shipped | `portage-versions` overflow panics (2.2, 2.3) removed: `parse_component`, suffix numerals, and `rev` now fall back to an arbitrary-length `BigNum` decimal-string compare when the value outgrows `i128` — mirroring the Python reference's unbounded `int` (judgment call (a): `None` was rejected because Python compares, it doesn't fail). Also fixed a previously-silent parity bug: oversized *suffix* numerals were coerced to `0`; they now compare as bignums. | oversized components/revisions/suffix-numerals stop aborting (and match Python on inputs that previously miscompared); all in-range behavior byte-identical | fmt clean, `cargo test` 797/797 (5 new `portage-versions` unit tests), pytest 1292 passed / 5 pre-existing non-TTY. (3 test-module clippy warnings surfaced under `--all-targets`; cleaned up in S3.) |
 | **S3** ✅ shipped | `pretend.rs:3126` `&String`→`&str` `vercmp_key` closure params (the workspace's only `&String`-typed param), via deref-coercing `sort_by` wrappers at its 3 call sites. Also fixed the 3 `portage-versions` test-module clippy warnings found while re-running the full gate. | none | fmt clean, clippy `--all-targets` zero-warn (re-verified), `cargo test` 797/797, pytest 1292 passed / 5 pre-existing non-TTY |
-| **S4** (deferred, judgment) | `err-*` error-model migration (thiserror `Error` types) | none in behavior; big diff | gate on explicit user re-open |
+| **S4** ✅ shipped | `err-*` error-model migration (**option B**: hand-rolled `Error` enums, no thiserror) — typed errors in `portage-use-reduce`/`portage-fetch`/`portage-required-use`/`portage-repo`/`portage-profile` with byte-identical `Display` + `From<Error> for String`; `portuale::Error { kind, detail: Vec<String> }` seam on the CLI boundary only (§2.1's "not now" keeps portuale's 115 `Result<_, String>` sites). | none in behavior; every pinned CLI string byte-identical | fmt clean, clippy `--all-targets` zero-warn, `cargo test` 799/799 (+2 new `error.rs` unit tests), pytest 1292 passed / 5 pre-existing non-TTY |
 
 Info-only (record, don't act): the `err-` counts table in
 `docs/refactor-01.md` doubles as the canonical production-panic/unwrap
@@ -296,12 +303,14 @@ future `unsafe-` work is `portuale`-only.
 
 ## Closed / open judgment calls
 
-- **Closed by this audit:** keep `Result<_, String>` (no thiserror/anyhow
-  migration without explicit ask); lib-crate no-unsafe fact;
+- **Closed by this audit:** lib-crate no-unsafe fact;
   `unsafe-miri-ci` = documented cut (Miri can't run the syscall FFI);
   invariant unreachable/unwrap sites are acceptable and must not be
   churned; pinned error strings keep their casing.
-- **Open, flag before acting:** (b) any future `perm-add` to the error model (S4).
+- **Closed by S4 (was open (b)):** the `err-` error-model re-open —
+  shipped as option B (hand-rolled per-crate `Error` enums +
+  boundary-only `portuale::Error`), **not** thiserror (zero new
+  dependencies, constraint #3 preserved) and **not** anyhow.
 - **Closed by S2 (was open (a)):** oversized-input semantics — the Python
   reference (`lib/portage/versions.py` `vercmp`) uses arbitrary-precision
   `int`, so a huge component *does not* fail there; it compares. `None`

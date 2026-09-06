@@ -52,12 +52,48 @@
 //   - A referenced flag that isn't a real, declared IUSE flag on the
 //     package is an error here, exactly like real `is_active`'s own
 //     `iuse_match` check (`InvalidDependString`) -- ported as
-//     `Err(String)`, propagated by `portage-repo` as a fatal error for
+//     `Err(Error)`, propagated by `portage-repo` as a fatal error for
 //     the whole `--pretend` run, matching real depgraph.py's own
 //     REQUIRED_USE-violation severity (see that crate's own doc comment
 //     for exactly where and why).
 
 use std::collections::HashSet;
+
+/// Error evaluating a REQUIRED_USE string. Distinct variants mirror the
+/// real `lib/portage/package/ebuild/dochat.py` / `is_active` error
+/// messages so `Display` reproduces them byte-for-byte.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Error {
+    /// `USE flag '{flag}' is not in IUSE`
+    UndeclaredFlag { flag: String },
+    /// `malformed syntax: operator/conditional not followed by '('`
+    MissingOpenParen,
+    /// `malformed syntax: unbalanced parentheses`
+    UnbalancedParens,
+}
+
+impl std::fmt::Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Error::UndeclaredFlag { flag } => write!(f, "USE flag '{flag}' is not in IUSE"),
+            Error::MissingOpenParen => {
+                write!(
+                    f,
+                    "malformed syntax: operator/conditional not followed by '('"
+                )
+            }
+            Error::UnbalancedParens => write!(f, "malformed syntax: unbalanced parentheses"),
+        }
+    }
+}
+
+impl std::error::Error for Error {}
+
+impl From<Error> for String {
+    fn from(e: Error) -> String {
+        e.to_string()
+    }
+}
 
 /// Whether a REQUIRED_USE leaf token (`flag`, or `!flag` for negation --
 /// real `is_active`) is satisfied against `enabled` (the package's own
@@ -68,13 +104,15 @@ fn is_active(
     token: &str,
     enabled: &HashSet<String>,
     iuse: &HashSet<String>,
-) -> Result<bool, String> {
+) -> Result<bool, Error> {
     let (flag, negated) = match token.strip_prefix('!') {
         Some(rest) => (rest, true),
         None => (token, false),
     };
     if flag.is_empty() || !iuse.contains(flag) {
-        return Err(format!("USE flag '{flag}' is not in IUSE"));
+        return Err(Error::UndeclaredFlag {
+            flag: flag.to_string(),
+        });
     }
     Ok(enabled.contains(flag) != negated)
 }
@@ -88,7 +126,7 @@ fn parse_items(
     pos: &mut usize,
     enabled: &HashSet<String>,
     iuse: &HashSet<String>,
-) -> Result<Vec<bool>, String> {
+) -> Result<Vec<bool>, Error> {
     let mut results = Vec::new();
     while *pos < tokens.len() && tokens[*pos] != ")" {
         let tok = tokens[*pos];
@@ -130,17 +168,17 @@ fn parse_items(
     Ok(results)
 }
 
-fn expect_open_paren(tokens: &[&str], pos: &mut usize) -> Result<(), String> {
+fn expect_open_paren(tokens: &[&str], pos: &mut usize) -> Result<(), Error> {
     if tokens.get(*pos) != Some(&"(") {
-        return Err("malformed syntax: operator/conditional not followed by '('".to_string());
+        return Err(Error::MissingOpenParen);
     }
     *pos += 1;
     Ok(())
 }
 
-fn expect_close_paren(tokens: &[&str], pos: &mut usize) -> Result<(), String> {
+fn expect_close_paren(tokens: &[&str], pos: &mut usize) -> Result<(), Error> {
     if tokens.get(*pos) != Some(&")") {
-        return Err("malformed syntax: unbalanced parentheses".to_string());
+        return Err(Error::UnbalancedParens);
     }
     *pos += 1;
     Ok(())
@@ -157,12 +195,12 @@ pub fn check_required_use(
     required_use: &str,
     enabled: &HashSet<String>,
     iuse: &HashSet<String>,
-) -> Result<bool, String> {
+) -> Result<bool, Error> {
     let tokens: Vec<&str> = required_use.split_whitespace().collect();
     let mut pos = 0;
     let results = parse_items(&tokens, &mut pos, enabled, iuse)?;
     if pos != tokens.len() {
-        return Err("malformed syntax: unbalanced parentheses".to_string());
+        return Err(Error::UnbalancedParens);
     }
     Ok(!results.contains(&false))
 }

@@ -9267,11 +9267,13 @@ pub fn run(args: &[String]) -> ExitCode {
             complete,
         )
     };
-    let handle = |r: Result<portage_repo::GraphResult, String>| match r {
+    let handle = |r: Result<portage_repo::GraphResult, crate::error::Error>| match r {
         Ok(result) => Ok(result),
         Err(e) => {
             eprint!("emerge: {e}");
-            if let Some(extra) = misspell_suggestion_block(&e, &repos, misspell_suggestions) {
+            if let Some(extra) =
+                misspell_suggestion_block(&e.to_string(), &repos, misspell_suggestions)
+            {
                 eprint!("{extra}");
             }
             eprintln!();
@@ -9283,7 +9285,7 @@ pub fn run(args: &[String]) -> ExitCode {
     // list. Real `_complete_graph` runs *after* the normal graph is
     // built and only extends it (graph-or-installed selection, never a
     // new merge).
-    let result = match handle(run_resolve(false, &[])) {
+    let result = match handle(run_resolve(false, &[]).map_err(crate::error::Error::from)) {
         Ok(result) => result,
         Err(code) => return code,
     };
@@ -9323,7 +9325,7 @@ pub fn run(args: &[String]) -> ExitCode {
                 rebuild_if_new_slot,
             ));
     let result = if want_complete {
-        match handle(run_resolve(true, &locked_merges)) {
+        match handle(run_resolve(true, &locked_merges).map_err(crate::error::Error::from)) {
             Ok(result) => result,
             Err(code) => return code,
         }

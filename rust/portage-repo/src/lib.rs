@@ -62,6 +62,116 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
 use std::sync::{OnceLock, RwLock};
 
+/// Error from repo/config/metadata/resolver handling. Distinct variants
+/// mirror the real `lib/portage` error message shapes so `Display`
+/// reproduces them byte-for-byte (the contract suite pins the
+/// CLI-visible strings). `Detail` carries an already-fully-formatted
+/// message whose assembly spans multiple conditional appends upstream
+/// (real resolver conflict/`REQUIRED_USE`-violation reporting).
+#[derive(Debug)]
+pub enum Error {
+    /// `reading {path}: {source}` -- an `io::Error` on a repo/config file.
+    ReadFile {
+        path: String,
+        source: std::io::Error,
+    },
+    /// `{source}` -- an `io::Error` reading a single directory entry.
+    ReadEntry { source: std::io::Error },
+    /// `no repos.conf found at {path}`
+    NoReposConf { path: String },
+    /// `no [DEFAULT] main-repo in repos.conf`
+    NoMainRepo,
+    /// `no location for repo {repo:?} in repos.conf`
+    NoRepoLocation { repo: String },
+    /// `invalid atom {atom:?}`
+    InvalidAtom { atom: String },
+    /// `expected: dependency string, got: ')', token {token}`
+    LicenseExpectedDepString { token: usize },
+    /// `expected: '(', got: ')', token {token}`
+    LicenseExpectedOpen { token: usize },
+    /// `no matching '(' for ')', token {token}`
+    LicenseNoMatchingOpen { token: usize },
+    /// `expected: '(', got: '||', token {token}`
+    LicenseExpectedOpenGotOr { token: usize },
+    /// `expected: '(', got: '{token}', token {at}`
+    LicenseExpectedOpenGotToken { token: String, at: usize },
+    /// `Missing ')' at end of string`
+    LicenseMissingCloseParen,
+    /// `Missing '(' at end of string`
+    LicenseMissingOpenParen,
+    /// `REQUIRED_USE for {package} is invalid: {source}` where `package`
+    /// is the `category/package-version` prefix and `source` the
+    /// `portage_required_use::Error` `Display`.
+    InvalidRequiredUse {
+        package: String,
+        source: portage_required_use::Error,
+    },
+    /// An already-fully-formatted, multi-line message (`Detail`).
+    Detail(String),
+    /// An error bubbled up from `portage_use_reduce`.
+    UseReduce(portage_use_reduce::Error),
+    /// An error bubbled up from `portage_fetch`.
+    Fetch(portage_fetch::Error),
+}
+
+impl std::fmt::Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Error::ReadFile { path, source } => write!(f, "reading {path}: {source}"),
+            Error::ReadEntry { source } => write!(f, "{source}"),
+            Error::NoReposConf { path } => write!(f, "no repos.conf found at {path}"),
+            Error::NoMainRepo => write!(f, "no [DEFAULT] main-repo in repos.conf"),
+            Error::NoRepoLocation { repo } => {
+                write!(f, "no location for repo {repo:?} in repos.conf")
+            }
+            Error::InvalidAtom { atom } => write!(f, "invalid atom {atom:?}"),
+            Error::LicenseExpectedDepString { token } => {
+                write!(f, "expected: dependency string, got: ')', token {token}")
+            }
+            Error::LicenseExpectedOpen { token } => {
+                write!(f, "expected: '(', got: ')', token {token}")
+            }
+            Error::LicenseNoMatchingOpen { token } => {
+                write!(f, "no matching '(' for ')', token {token}")
+            }
+            Error::LicenseExpectedOpenGotOr { token } => {
+                write!(f, "expected: '(', got: '||', token {token}")
+            }
+            Error::LicenseExpectedOpenGotToken { token, at } => {
+                write!(f, "expected: '(', got: '{token}', token {at}")
+            }
+            Error::LicenseMissingCloseParen => write!(f, "Missing ')' at end of string"),
+            Error::LicenseMissingOpenParen => write!(f, "Missing '(' at end of string"),
+            Error::InvalidRequiredUse { package, source } => {
+                write!(f, "REQUIRED_USE for {package} is invalid: {source}")
+            }
+            Error::Detail(message) => write!(f, "{message}"),
+            Error::UseReduce(e) => write!(f, "{e}"),
+            Error::Fetch(e) => write!(f, "{e}"),
+        }
+    }
+}
+
+impl std::error::Error for Error {}
+
+impl From<Error> for String {
+    fn from(e: Error) -> String {
+        e.to_string()
+    }
+}
+
+impl From<portage_use_reduce::Error> for Error {
+    fn from(e: portage_use_reduce::Error) -> Error {
+        Error::UseReduce(e)
+    }
+}
+
+impl From<portage_fetch::Error> for Error {
+    fn from(e: portage_fetch::Error) -> Error {
+        Error::Fetch(e)
+    }
+}
+
 pub fn config_root_from_env() -> PathBuf {
     std::env::var_os("PORTAGE_CONFIGROOT")
         .map(PathBuf::from)
@@ -705,37 +815,43 @@ fn read_repo_name_file(repo_location: &Path) -> Option<String> {
 /// `list_candidates` below iterates them in, so a tie between two repos
 /// providing the identical version is broken toward the higher-priority
 /// one.
-pub fn find_repos(config_root: &Path) -> Result<Vec<RepoConfig>, String> {
+pub fn find_repos(config_root: &Path) -> Result<Vec<RepoConfig>, Error> {
     let repos_conf_path = config_root.join("etc/portage/repos.conf");
     let mut sections: HashMap<String, HashMap<String, String>> = HashMap::new();
 
     if repos_conf_path.is_dir() {
         let mut entries: Vec<PathBuf> = fs::read_dir(&repos_conf_path)
-            .map_err(|e| format!("reading {}: {e}", repos_conf_path.display()))?
+            .map_err(|e| Error::ReadFile {
+                path: repos_conf_path.display().to_string(),
+                source: e,
+            })?
             .filter_map(|e| e.ok().map(|e| e.path()))
             .filter(|p| p.is_file())
             .collect();
         entries.sort();
         for path in entries {
-            let text = fs::read_to_string(&path)
-                .map_err(|e| format!("reading {}: {e}", path.display()))?;
+            let text = fs::read_to_string(&path).map_err(|e| Error::ReadFile {
+                path: path.display().to_string(),
+                source: e,
+            })?;
             parse_ini(&text, &mut sections);
         }
     } else if repos_conf_path.is_file() {
-        let text = fs::read_to_string(&repos_conf_path)
-            .map_err(|e| format!("reading {}: {e}", repos_conf_path.display()))?;
+        let text = fs::read_to_string(&repos_conf_path).map_err(|e| Error::ReadFile {
+            path: repos_conf_path.display().to_string(),
+            source: e,
+        })?;
         parse_ini(&text, &mut sections);
     } else {
-        return Err(format!(
-            "no repos.conf found at {}",
-            repos_conf_path.display()
-        ));
+        return Err(Error::NoReposConf {
+            path: repos_conf_path.display().to_string(),
+        });
     }
 
     let main_repo = sections
         .get("DEFAULT")
         .and_then(|d| d.get("main-repo"))
-        .ok_or("no [DEFAULT] main-repo in repos.conf")?
+        .ok_or(Error::NoMainRepo)?
         .clone();
 
     // First pass: one entry per `[section]` with a `location`. `name` is
@@ -868,7 +984,9 @@ pub fn find_repos(config_root: &Path) -> Result<Vec<RepoConfig>, String> {
     }
 
     if !repos.iter().any(|r| r.name == main_repo) {
-        return Err(format!("no location for repo {main_repo:?} in repos.conf"));
+        return Err(Error::NoRepoLocation {
+            repo: main_repo.clone(),
+        });
     }
 
     // `masters` resolution (real three-tier, `config.py:237-245`/
@@ -916,13 +1034,16 @@ pub fn read_md5_cache(
     repo_location: &Path,
     category: &str,
     pf: &str,
-) -> Result<HashMap<String, String>, String> {
+) -> Result<HashMap<String, String>, Error> {
     let path = repo_location
         .join("metadata")
         .join("md5-cache")
         .join(category)
         .join(pf);
-    let text = fs::read_to_string(&path).map_err(|e| format!("reading {}: {e}", path.display()))?;
+    let text = fs::read_to_string(&path).map_err(|e| Error::ReadFile {
+        path: path.display().to_string(),
+        source: e,
+    })?;
     let mut map = HashMap::new();
     for line in text.lines() {
         if let Some(eq) = line.find('=') {
@@ -1093,18 +1214,20 @@ pub fn list_candidates(
     repos: &[RepoConfig],
     category: &str,
     package: &str,
-) -> Result<Vec<Candidate>, String> {
+) -> Result<Vec<Candidate>, Error> {
     let mut candidates = Vec::new();
     for repo in repos {
         let pkg_dir = repo.location.join(category).join(package);
         if !pkg_dir.is_dir() {
             continue;
         }
-        let entries =
-            fs::read_dir(&pkg_dir).map_err(|e| format!("reading {}: {e}", pkg_dir.display()))?;
+        let entries = fs::read_dir(&pkg_dir).map_err(|e| Error::ReadFile {
+            path: pkg_dir.display().to_string(),
+            source: e,
+        })?;
 
         for entry in entries {
-            let entry = entry.map_err(|e| e.to_string())?;
+            let entry = entry.map_err(|e| Error::ReadEntry { source: e })?;
             let file_name = entry.file_name();
             let file_name = file_name.to_string_lossy();
             let Some(stem) = file_name.strip_suffix(".ebuild") else {
@@ -2339,7 +2462,7 @@ enum PendingBracket {
 fn parse_license_tree(
     tokens: &[String],
     use_flags: &HashSet<String>,
-) -> Result<Vec<LicenseNode>, String> {
+) -> Result<Vec<LicenseNode>, Error> {
     let mut stack: Vec<Vec<LicenseNode>> = vec![Vec::new()];
     let mut bracket_stack: Vec<PendingBracket> = Vec::new();
     let mut pending = PendingBracket::None;
@@ -2349,10 +2472,7 @@ fn parse_license_tree(
         match token.as_str() {
             "(" => {
                 if tokens.get(pos + 1).map(String::as_str) == Some(")") {
-                    return Err(format!(
-                        "expected: dependency string, got: ')', token {}",
-                        pos + 2
-                    ));
+                    return Err(Error::LicenseExpectedDepString { token: pos + 2 });
                 }
                 need_bracket = false;
                 stack.push(Vec::new());
@@ -2360,10 +2480,10 @@ fn parse_license_tree(
             }
             ")" => {
                 if need_bracket {
-                    return Err(format!("expected: '(', got: ')', token {}", pos + 1));
+                    return Err(Error::LicenseExpectedOpen { token: pos + 1 });
                 }
                 if stack.len() <= 1 {
-                    return Err(format!("no matching '(' for ')', token {}", pos + 1));
+                    return Err(Error::LicenseNoMatchingOpen { token: pos + 1 });
                 }
                 let collected = stack.pop().unwrap();
                 let opened_by = bracket_stack.pop().unwrap();
@@ -2409,14 +2529,17 @@ fn parse_license_tree(
             }
             "||" => {
                 if need_bracket {
-                    return Err(format!("expected: '(', got: '||', token {}", pos + 1));
+                    return Err(Error::LicenseExpectedOpenGotOr { token: pos + 1 });
                 }
                 need_bracket = true;
                 pending = PendingBracket::AnyOf;
             }
             _ => {
                 if need_bracket {
-                    return Err(format!("expected: '(', got: '{token}', token {}", pos + 1));
+                    return Err(Error::LicenseExpectedOpenGotToken {
+                        token: token.to_string(),
+                        at: pos + 1,
+                    });
                 }
                 if token.ends_with('?') {
                     need_bracket = true;
@@ -2432,10 +2555,10 @@ fn parse_license_tree(
     }
 
     if stack.len() != 1 {
-        return Err("Missing ')' at end of string".to_string());
+        return Err(Error::LicenseMissingCloseParen);
     }
     if need_bracket {
-        return Err("Missing '(' at end of string".to_string());
+        return Err(Error::LicenseMissingOpenParen);
     }
     Ok(stack.pop().unwrap())
 }
@@ -2517,7 +2640,7 @@ fn has_masked_license(
     license_str: &str,
     use_flags: &HashSet<String>,
     acceptable: &HashSet<String>,
-) -> Result<bool, String> {
+) -> Result<bool, Error> {
     if license_str.trim().is_empty() {
         return Ok(false);
     }
@@ -2667,11 +2790,12 @@ fn fetch_restrict_files_all_present(
 fn flatten_src_uri_with_use(
     src_uri: &str,
     use_flags: &HashSet<String>,
-) -> Result<Vec<portage_fetch::SrcUriEntry>, String> {
+) -> Result<Vec<portage_fetch::SrcUriEntry>, Error> {
     portage_fetch::flatten_src_uri(src_uri, |negated, flag| {
         let on = use_flags.contains(flag);
         if negated { !on } else { on }
     })
+    .map_err(Error::Fetch)
 }
 
 /// Real `output.py:300-332`'s own per-package `_calc_size` contribution
@@ -2754,7 +2878,7 @@ fn resolve_accept_tokens(
 /// directly: group boundaries (`||`) don't matter for this flat "what
 /// token names exist at all" question, unlike the real masking check
 /// itself for `LICENSE` (see `has_masked_license`'s own doc comment).
-fn all_mentioned_tokens(value_str: &str) -> Result<HashSet<String>, String> {
+fn all_mentioned_tokens(value_str: &str) -> Result<HashSet<String>, Error> {
     let tokens: Vec<String> = value_str.split_whitespace().map(String::from).collect();
     let flat = portage_use_reduce::use_reduce_flat(
         &tokens,
@@ -6899,9 +7023,10 @@ pub fn resolve_info_candidate(
     repos: &[RepoConfig],
     atom_str: &str,
     config: &portage_profile::Config,
-) -> Result<Option<InfoCandidate>, String> {
-    let atom =
-        portage_dep::parse_atom(atom_str).ok_or_else(|| format!("invalid atom {atom_str:?}"))?;
+) -> Result<Option<InfoCandidate>, Error> {
+    let atom = portage_dep::parse_atom(atom_str).ok_or_else(|| Error::InvalidAtom {
+        atom: atom_str.to_string(),
+    })?;
     let candidates = list_candidates(repos, &atom.category, &atom.package)?;
     let visible: Vec<&Candidate> = candidates
         .iter()
@@ -7081,9 +7206,10 @@ pub fn has_local_binary_candidate(config: &portage_profile::Config, atom_str: &s
 pub fn resolve_info_binary_candidate(
     config: &portage_profile::Config,
     atom_str: &str,
-) -> Result<Option<InfoBinaryCandidate>, String> {
-    let atom =
-        portage_dep::parse_atom(atom_str).ok_or_else(|| format!("invalid atom {atom_str:?}"))?;
+) -> Result<Option<InfoBinaryCandidate>, Error> {
+    let atom = portage_dep::parse_atom(atom_str).ok_or_else(|| Error::InvalidAtom {
+        atom: atom_str.to_string(),
+    })?;
     let index = local_binpkg_index(config);
     let candidates = list_binary_candidates(&index, &atom.category, &atom.package);
     if candidates.is_empty() {
@@ -7802,7 +7928,7 @@ fn already_installed_or_reinstall(
     // `vardb.cpv_exists`, no `[oldver]`, no reason -- exactly the
     // portuale's own reasonless `[ebuild R]`).
     empty: bool,
-) -> Result<PretendOutcome, String> {
+) -> Result<PretendOutcome, Error> {
     let changed_flags = if newuse || changed_use {
         reinstall_flags_for_use_change(
             root,
@@ -7962,12 +8088,13 @@ pub fn resolve_pretend(
     // candidate must NOT match the atom after the `!`. Empty (`&[]`) at
     // every ordinary call site.
     extra_constraints: &[String],
-) -> Result<PretendOutcome, String> {
+) -> Result<PretendOutcome, Error> {
     // Real `create_depgraph_params.py:179`: `--emptytree` does
     // `myparams.pop("selective", None)`.
     let selective = selective && !empty;
-    let atom =
-        portage_dep::parse_atom(atom_str).ok_or_else(|| format!("invalid atom {atom_str:?}"))?;
+    let atom = portage_dep::parse_atom(atom_str).ok_or_else(|| Error::InvalidAtom {
+        atom: atom_str.to_string(),
+    })?;
 
     // --usepkg/--usepkgonly (real depgraph.py's own `dbs` candidate-pool
     // construction, `if "--usepkgonly" not in myopts: dbs.append(("ebuild"
@@ -8227,8 +8354,11 @@ pub fn resolve_pretend(
         })
         .collect();
     let candidate_str_refs: Vec<&str> = candidate_strs.iter().map(String::as_str).collect();
-    let matched = portage_dep::match_from_list(atom_str, &candidate_str_refs)
-        .ok_or_else(|| format!("invalid atom {atom_str:?}"))?;
+    let matched = portage_dep::match_from_list(atom_str, &candidate_str_refs).ok_or_else(|| {
+        Error::InvalidAtom {
+            atom: atom_str.to_string(),
+        }
+    })?;
 
     // Slot-conflict reconciliation (real `_process_slot_conflicts` /
     // `_select_pkg`'s "all the atoms pulling this slot", not just the
@@ -11155,7 +11285,7 @@ pub struct ResolveRequest {
 /// different resolver architecture can be swapped in wholesale via
 /// [`active_resolver`] without touching a call site.
 pub trait Resolver {
-    fn resolve(&self, req: &ResolveRequest) -> Result<GraphResult, String>;
+    fn resolve(&self, req: &ResolveRequest) -> Result<GraphResult, Error>;
 }
 
 /// The default resolver: a single-pass BFS graph walk wrapped in real
@@ -11163,7 +11293,7 @@ pub trait Resolver {
 pub struct BacktrackingResolver;
 
 impl Resolver for BacktrackingResolver {
-    fn resolve(&self, req: &ResolveRequest) -> Result<GraphResult, String> {
+    fn resolve(&self, req: &ResolveRequest) -> Result<GraphResult, Error> {
         backtracking_resolve(req)
     }
 }
@@ -11462,7 +11592,7 @@ pub fn active_resolver() -> Box<dyn Resolver> {
 /// so the ~1700-line body below keeps its original indentation. The `let`
 /// block re-binds each field to the exact borrowed type the walk expects;
 /// everything past it is unchanged.)
-fn backtracking_resolve(req: &ResolveRequest) -> Result<GraphResult, String> {
+fn backtracking_resolve(req: &ResolveRequest) -> Result<GraphResult, Error> {
     let config_root: &Path = &req.config_root;
     let root: &Path = &req.root;
     let atoms: &[String] = &req.atoms;
@@ -12301,7 +12431,7 @@ fn backtracking_resolve(req: &ResolveRequest) -> Result<GraphResult, String> {
                         atom.category, atom.package, atom.category, atom.package,
                     ));
                 }
-                return Err(message);
+                return Err(Error::Detail(message));
             }
 
             let resolved_version = match &outcome {
@@ -13172,10 +13302,10 @@ fn backtracking_resolve(req: &ResolveRequest) -> Result<GraphResult, String> {
                         continue;
                     }
                     Err(e) => {
-                        return Err(format!(
-                            "REQUIRED_USE for {}/{}-{version} is invalid: {e}",
-                            key.0, key.1
-                        ));
+                        return Err(Error::InvalidRequiredUse {
+                            package: format!("{}/{}-{version}", key.0, key.1),
+                            source: e,
+                        });
                     }
                 }
             }
@@ -13566,7 +13696,7 @@ fn backtracking_resolve(req: &ResolveRequest) -> Result<GraphResult, String> {
             });
 
         if !required_use_violations.is_empty() {
-            return Err(required_use_violations.join("\n"));
+            return Err(Error::Detail(required_use_violations.join("\n")));
         }
 
         let nvc_count = |entries: &[GraphEntry]| {
@@ -14039,7 +14169,7 @@ pub fn resolve_pretend_graph(
     // behaviour, and complete mode's stricter installed-/graph-only
     // selection is already a documented `excluded_pkgs` scope cut.
     complete: bool,
-) -> Result<GraphResult, String> {
+) -> Result<GraphResult, Error> {
     let req = ResolveRequest {
         config_root: config_root.to_path_buf(),
         root: root.to_path_buf(),
@@ -21350,6 +21480,7 @@ mod tests {
         .expect_err(&format!(
             "resolve_pretend_graph({atom_str}) should have failed"
         ))
+        .to_string()
     }
 
     /// Like `graph_real`, but with `--newuse` enabled.
@@ -21825,7 +21956,7 @@ mod tests {
         )
         .expect_err("both atoms should fail their own REQUIRED_USE");
         assert_eq!(
-            err,
+            err.to_string(),
             "REQUIRED_USE not satisfied for dev-libs/requiredusebadpkg-1.0: \"foo? ( bar )\"\n\
              REQUIRED_USE not satisfied for dev-libs/requiredusebadpkg2-1.0: \"baz? ( qux )\""
         );
@@ -21902,7 +22033,7 @@ mod tests {
         )
         .expect_err("no visible candidate at all");
         assert_eq!(
-            err_without_suggestion,
+            err_without_suggestion.to_string(),
             "there are no ebuilds to satisfy \"dev-libs/autounmaskkeywordpkg\"."
         );
 
@@ -22091,7 +22222,7 @@ mod tests {
         )
         .expect_err("no visible candidate at all");
         assert_eq!(
-            err_without_suggestion,
+            err_without_suggestion.to_string(),
             "there are no ebuilds to satisfy \"dev-libs/useflagpkg[-foo]\"."
         );
 

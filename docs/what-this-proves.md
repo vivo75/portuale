@@ -14011,3 +14011,38 @@ references, and `format!`-in-`format!`); they were fixed here so the
 workspace is genuinely zero-warn again. Suite totals unchanged:
 797/797 Rust, pytest 1292 passed / 5 pre-existing non-TTY --ask
 failures / 2 skipped.
+
+### refactor-01 S4: hand-rolled `Error` enums in every lib crate + a `portuale::Error` boundary seam (2026-09-06)
+
+The error-model re-open (`refactor-01.md` §2.1/§2.4, judgment call (b))
+shipped the "option B" shape without a single new dependency: every
+library crate now has its own typed error instead of leaking
+`Result<_, String>`. `portage-use-reduce`, `portage-fetch`,
+`portage-required-use`, `portage-repo`, and `portage-profile` each got a
+hand-rolled `pub enum Error` whose `Display` reproduces every prior
+`format!` message byte-for-byte (so all contract-pinned CLI strings are
+untouched), plus `impl From<Error> for String` so downstream
+`Result<_, String>` crossing sites compile unchanged. `portage-repo`'s
+error composes the three it forwards (`InvalidRequiredUse`, `UseReduce`,
+`Fetch`); the two `parent not found` profile resolutions became typed
+variants rather than `ok_or_else(format!...)`. Every fallible function
+in those crates was re-typed (`Result<_, Error>`) and every
+construction site converted; the earlier `portage_repo::Error`
+annotation on `pretend.rs`'s resolution handle is now the audit §2.1
+seam `portuale::Error { kind, detail: Vec<String> }` (`Display` joins
+detail with `\n`; kind `"resolve"` for the depgraph step via
+`From<portage_repo::Error>`).
+
+The line portuale itself draws is exactly the audit's "not now":
+`portuale`'s internals remain `Result<_, String>`, and only the
+CLI-visible boundary wears the typed seam — that is the whole point of
+the `kind`-shaped design (error-CLI-formatting can now branch on kind
+without touching 115 internals). Harnesses stay on `String` too
+(`harness-common`'s `DispatchResult`), so the contract suite still
+measures identical prose.
+
+Zero behavior change, verified the same way every refactor slice is:
+`cargo fmt --check` clean, `cargo clippy --release --all-targets` zero
+warnings, suite totals now 799/799 Rust (2 new `error.rs` unit tests)
+and pytest 1292 passed / 5 pre-existing non-TTY --ask/--resume
+failures / 2 skipped — byte-identical on all pinned inputs.

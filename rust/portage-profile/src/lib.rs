@@ -290,6 +290,69 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
+/// Error resolving profile/config files. Distinct variants mirror the
+/// real message shapes so `Display` reproduces them byte-for-byte.
+#[derive(Debug)]
+pub enum Error {
+    /// `reading {path}: {source}`
+    ReadFile {
+        path: String,
+        source: std::io::Error,
+    },
+    /// `resolving profile {path}: {source}`
+    ResolveProfile {
+        path: String,
+        source: std::io::Error,
+    },
+    /// `parent {parent:?} not found: {parents_file} (not inside any known repo)`
+    ParentNotFoundOutsideRepos {
+        parent: String,
+        parents_file: String,
+    },
+    /// `parent {parent:?} not found: {parents_file} (no repo named {repo_name:?})`
+    ParentNotFoundUnknownRepo {
+        parent: String,
+        parents_file: String,
+        repo_name: String,
+    },
+}
+
+impl std::fmt::Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Error::ReadFile { path, source } => write!(f, "reading {path}: {source}"),
+            Error::ResolveProfile { path, source } => {
+                write!(f, "resolving profile {path}: {source}")
+            }
+            Error::ParentNotFoundOutsideRepos {
+                parent,
+                parents_file,
+            } => {
+                write!(
+                    f,
+                    "parent {parent:?} not found: {parents_file} (not inside any known repo)"
+                )
+            }
+            Error::ParentNotFoundUnknownRepo {
+                parent,
+                parents_file,
+                repo_name,
+            } => write!(
+                f,
+                "parent {parent:?} not found: {parents_file} (no repo named {repo_name:?})"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for Error {}
+
+impl From<Error> for String {
+    fn from(e: Error) -> String {
+        e.to_string()
+    }
+}
+
 /// One profile chain level's `defaults`-tier USE contribution -- its
 /// `make.defaults` `USE=` value strings (in file order), then its own
 /// `package.use` entries. See [`Config::profile_use_layers`].
@@ -1079,13 +1142,15 @@ fn process_lines(text: &str, scalars: &mut HashMap<String, String>, config: &mut
     }
 }
 
-fn read_parent_lines(profile_dir: &Path) -> Result<Vec<String>, String> {
+fn read_parent_lines(profile_dir: &Path) -> Result<Vec<String>, Error> {
     let parent_path = profile_dir.join("parent");
     if !parent_path.is_file() {
         return Ok(Vec::new());
     }
-    let text = fs::read_to_string(&parent_path)
-        .map_err(|e| format!("reading {}: {e}", parent_path.display()))?;
+    let text = fs::read_to_string(&parent_path).map_err(|e| Error::ReadFile {
+        path: parent_path.display().to_string(),
+        source: e,
+    })?;
     Ok(text
         .lines()
         .map(str::trim)
@@ -1163,7 +1228,7 @@ fn expand_parent_colon(
     repo_aliases: &[(String, PathBuf)],
     parents_file: &Path,
     parent_colon_repos: &HashSet<String>,
-) -> Result<String, String> {
+) -> Result<String, Error> {
     let Some(colon) = parent.find(':') else {
         return Ok(parent.to_string());
     };
@@ -1182,11 +1247,9 @@ fn expand_parent_colon(
     }
     let repo_loc = if colon == 0 {
         &current_repo
-            .ok_or_else(|| {
-                format!(
-                    "parent {parent:?} not found: {} (not inside any known repo)",
-                    parents_file.display()
-                )
+            .ok_or_else(|| Error::ParentNotFoundOutsideRepos {
+                parent: parent.to_string(),
+                parents_file: parents_file.display().to_string(),
             })?
             .1
     } else {
@@ -1201,11 +1264,10 @@ fn expand_parent_colon(
             .chain(repo_aliases.iter())
             .find(|(name, _)| name == repo_name)
             .map(|(_, loc)| loc)
-            .ok_or_else(|| {
-                format!(
-                    "parent {parent:?} not found: {} (no repo named {repo_name:?})",
-                    parents_file.display()
-                )
+            .ok_or_else(|| Error::ParentNotFoundUnknownRepo {
+                parent: parent.to_string(),
+                parents_file: parents_file.display().to_string(),
+                repo_name: repo_name.to_string(),
             })?
     };
     Ok(repo_loc
@@ -1227,7 +1289,7 @@ fn resolve_profile_chain(
     repos: &[(String, PathBuf)],
     repo_aliases: &[(String, PathBuf)],
     parent_colon_repos: &HashSet<String>,
-) -> Result<Vec<PathBuf>, String> {
+) -> Result<Vec<PathBuf>, Error> {
     let mut visited: HashSet<PathBuf> = HashSet::new();
     let mut chain: Vec<PathBuf> = Vec::new();
     visit_profile(
@@ -1248,10 +1310,11 @@ fn visit_profile(
     parent_colon_repos: &HashSet<String>,
     visited: &mut HashSet<PathBuf>,
     chain: &mut Vec<PathBuf>,
-) -> Result<(), String> {
-    let canon = dir
-        .canonicalize()
-        .map_err(|e| format!("resolving profile {}: {e}", dir.display()))?;
+) -> Result<(), Error> {
+    let canon = dir.canonicalize().map_err(|e| Error::ResolveProfile {
+        path: dir.display().to_string(),
+        source: e,
+    })?;
     if !visited.insert(canon.clone()) {
         return Ok(());
     }
@@ -1291,7 +1354,7 @@ fn process_make_conf_file(
     scalars: &mut HashMap<String, String>,
     config: &mut Config,
     visited_sources: &mut HashSet<PathBuf>,
-) -> Result<(), String> {
+) -> Result<(), Error> {
     let canon = match path.canonicalize() {
         Ok(c) => c,
         Err(_) => return Ok(()), // missing file: lenient no-op, see doc comment
@@ -1299,8 +1362,10 @@ fn process_make_conf_file(
     if !visited_sources.insert(canon.clone()) {
         return Ok(());
     }
-    let text =
-        fs::read_to_string(&canon).map_err(|e| format!("reading {}: {e}", canon.display()))?;
+    let text = fs::read_to_string(&canon).map_err(|e| Error::ReadFile {
+        path: canon.display().to_string(),
+        source: e,
+    })?;
     for line in text.lines() {
         let trimmed = line.trim();
         if let Some(rest) = trimmed.strip_prefix("source ") {
@@ -1457,10 +1522,12 @@ fn read_envd_use_tokens(config_root: &Path) -> Vec<String> {
 /// may be a single file or (like `repos.conf` elsewhere in portuale) a
 /// directory of files merged in sorted-filename order. A missing path
 /// yields an empty list, not an error.
-fn read_config_lines(path: &Path) -> Result<Vec<String>, String> {
-    fn read_file_lines(path: &Path) -> Result<Vec<String>, String> {
-        let text =
-            fs::read_to_string(path).map_err(|e| format!("reading {}: {e}", path.display()))?;
+fn read_config_lines(path: &Path) -> Result<Vec<String>, Error> {
+    fn read_file_lines(path: &Path) -> Result<Vec<String>, Error> {
+        let text = fs::read_to_string(path).map_err(|e| Error::ReadFile {
+            path: path.display().to_string(),
+            source: e,
+        })?;
         Ok(text
             .lines()
             .map(str::trim)
@@ -1472,7 +1539,10 @@ fn read_config_lines(path: &Path) -> Result<Vec<String>, String> {
     let mut lines = Vec::new();
     if path.is_dir() {
         let mut entries: Vec<PathBuf> = fs::read_dir(path)
-            .map_err(|e| format!("reading {}: {e}", path.display()))?
+            .map_err(|e| Error::ReadFile {
+                path: path.display().to_string(),
+                source: e,
+            })?
             .filter_map(|e| e.ok().map(|e| e.path()))
             .filter(|p| p.is_file())
             .collect();
@@ -1889,7 +1959,7 @@ pub fn resolve_config(
     repo_aliases: &[(String, PathBuf)],
     main_repo_name: &str,
     repo_masters: &HashMap<String, Vec<PathBuf>>,
-) -> Result<Config, String> {
+) -> Result<Config, Error> {
     let mut config = Config::default();
     let mut scalars: HashMap<String, String> = HashMap::new();
 
@@ -1931,8 +2001,10 @@ pub fn resolve_config(
             // Real config.py quirk: USE is excluded from cross-level
             // substitution -- see the module doc comment.
             scalars.remove("USE");
-            let text = fs::read_to_string(&make_defaults)
-                .map_err(|e| format!("reading {}: {e}", make_defaults.display()))?;
+            let text = fs::read_to_string(&make_defaults).map_err(|e| Error::ReadFile {
+                path: make_defaults.display().to_string(),
+                source: e,
+            })?;
             process_lines(&text, &mut scalars, &mut config);
         }
         let level_make_defaults_use = config.use_tokens[before..].to_vec();
@@ -3124,7 +3196,7 @@ sync-uri = file:///srv/pkgs
             &HashMap::new(),
         )
         .unwrap_err();
-        assert!(err.contains("no repo named \"ovl\""), "{err}");
+        assert!(err.to_string().contains("no repo named \"ovl\""), "{err}");
     }
 
     #[test]
@@ -3149,7 +3221,10 @@ sync-uri = file:///srv/pkgs
             &HashMap::new(),
         )
         .expect_err("unknown repo name must be rejected");
-        assert!(err.contains("no repo named"), "unexpected error: {err}");
+        assert!(
+            err.to_string().contains("no repo named"),
+            "unexpected error: {err}"
+        );
     }
 
     #[test]
@@ -3215,7 +3290,7 @@ sync-uri = file:///srv/pkgs
 
         let err = resolve_config(&root, &main_repo, &[], &[], "testrepo", &HashMap::new())
             .expect_err("a colon parent in a non-portage-2 repo must not resolve");
-        assert!(err.contains(":base"), "unexpected error: {err}");
+        assert!(err.to_string().contains(":base"), "unexpected error: {err}");
     }
 
     #[test]
@@ -3241,7 +3316,7 @@ sync-uri = file:///srv/pkgs
         )
         .expect_err("same-repo colon outside any known repo must be rejected");
         assert!(
-            err.contains("not inside any known repo"),
+            err.to_string().contains("not inside any known repo"),
             "unexpected error: {err}"
         );
     }

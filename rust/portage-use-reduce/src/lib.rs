@@ -65,6 +65,82 @@ pub enum MatchMode {
     None,
 }
 
+/// Parse/reduce error from a USE dependency string. Distinct variants
+/// mirror the real `portage.dep.use_reduce` error messages so `Display`
+/// reproduces them byte-for-byte (the contract suite pins these strings).
+#[derive(Debug)]
+pub enum Error {
+    /// `invalid use flag '{flag}' in conditional '{conditional}'`
+    InvalidUseFlag { flag: String, conditional: String },
+    /// `expected: {expected}, got: ')', token {token}` where `expected`
+    /// is either `dependency string` or `'('` at the call site.
+    ExpectedCloseParen {
+        expected: &'static str,
+        token: usize,
+    },
+    /// `no matching '(' for ')', token {token}`
+    NoMatchingOpen { token: usize },
+    /// `expected: '(', got: '||', token {token}`
+    ExpectedOpenGotOr { token: usize },
+    /// `expected: '(', got: '{token}', token {at}`
+    ExpectedOpenGotToken { token: String, at: usize },
+    /// `SRC_URI arrow are only allowed in SRC_URI: token {token}`
+    SrcUriArrow { token: usize },
+    /// `conditional '{s}' not followed by a group`
+    ConditionalNotFollowedByGroup { s: String },
+    /// `'||' not followed by a group`
+    OrNotFollowedByGroup,
+    /// `Missing ')' at end of string`
+    MissingCloseParen,
+    /// `Missing '(' at end of string`
+    MissingOpenParen,
+}
+
+impl std::fmt::Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Error::InvalidUseFlag { flag, conditional } => {
+                write!(
+                    f,
+                    "invalid use flag '{flag}' in conditional '{conditional}'"
+                )
+            }
+            Error::ExpectedCloseParen { expected, token } => {
+                write!(f, "expected: {expected}, got: ')', token {token}")
+            }
+            Error::NoMatchingOpen { token } => {
+                write!(f, "no matching '(' for ')', token {token}")
+            }
+            Error::ExpectedOpenGotOr { token } => {
+                write!(f, "expected: '(', got: '||', token {token}")
+            }
+            Error::ExpectedOpenGotToken { token, at } => {
+                write!(f, "expected: '(', got: '{token}', token {at}")
+            }
+            Error::SrcUriArrow { token } => {
+                write!(
+                    f,
+                    "SRC_URI arrow are only allowed in SRC_URI: token {token}"
+                )
+            }
+            Error::ConditionalNotFollowedByGroup { s } => {
+                write!(f, "conditional '{s}' not followed by a group")
+            }
+            Error::OrNotFollowedByGroup => write!(f, "'||' not followed by a group"),
+            Error::MissingCloseParen => write!(f, "Missing ')' at end of string"),
+            Error::MissingOpenParen => write!(f, "Missing '(' at end of string"),
+        }
+    }
+}
+
+impl std::error::Error for Error {}
+
+impl From<Error> for String {
+    fn from(e: Error) -> String {
+        e.to_string()
+    }
+}
+
 fn useflag_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| Regex::new(r"^[A-Za-z0-9][A-Za-z0-9+_@-]*$").unwrap())
@@ -84,15 +160,16 @@ pub fn is_active(
     conditional: &str,
     uselist: &HashSet<String>,
     mode: MatchMode,
-) -> Result<bool, String> {
+) -> Result<bool, Error> {
     let (flag, negated) = match conditional.strip_prefix('!') {
         Some(rest) => (&rest[..rest.len() - 1], true),
         None => (&conditional[..conditional.len() - 1], false),
     };
     if !useflag_re().is_match(flag) {
-        return Err(format!(
-            "invalid use flag '{flag}' in conditional '{conditional}'"
-        ));
+        return Err(Error::InvalidUseFlag {
+            flag: flag.to_string(),
+            conditional: conditional.to_string(),
+        });
     }
     Ok(match mode {
         MatchMode::All => true,
@@ -111,7 +188,7 @@ pub fn use_reduce_flat(
     tokens: &[String],
     uselist: &HashSet<String>,
     mode: MatchMode,
-) -> Result<Vec<String>, String> {
+) -> Result<Vec<String>, Error> {
     let mut stack: Vec<Vec<String>> = vec![Vec::new()];
     let mut need_bracket = false;
 
@@ -119,10 +196,10 @@ pub fn use_reduce_flat(
         match token.as_str() {
             "(" => {
                 if tokens.get(pos + 1).map(String::as_str) == Some(")") {
-                    return Err(format!(
-                        "expected: dependency string, got: ')', token {}",
-                        pos + 2
-                    ));
+                    return Err(Error::ExpectedCloseParen {
+                        expected: "dependency string",
+                        token: pos + 2,
+                    });
                 }
                 // "(" always satisfies a pending "||"/"flag?" requirement,
                 // regardless of need_bracket's prior state.
@@ -131,10 +208,13 @@ pub fn use_reduce_flat(
             }
             ")" => {
                 if need_bracket {
-                    return Err(format!("expected: '(', got: ')', token {}", pos + 1));
+                    return Err(Error::ExpectedCloseParen {
+                        expected: "'('",
+                        token: pos + 1,
+                    });
                 }
                 if stack.len() <= 1 {
-                    return Err(format!("no matching '(' for ')', token {}", pos + 1));
+                    return Err(Error::NoMatchingOpen { token: pos + 1 });
                 }
                 let l = stack.pop().unwrap();
                 let top = stack.last_mut().unwrap();
@@ -153,7 +233,7 @@ pub fn use_reduce_flat(
             }
             "||" => {
                 if need_bracket {
-                    return Err(format!("expected: '(', got: '||', token {}", pos + 1));
+                    return Err(Error::ExpectedOpenGotOr { token: pos + 1 });
                 }
                 need_bracket = true;
                 stack.last_mut().unwrap().push("||".to_string());
@@ -162,14 +242,14 @@ pub fn use_reduce_flat(
                 // is_src_uri is always false for this harness (SRC_URI
                 // arrows are out of v1 scope), matching real use_reduce's
                 // behavior when is_src_uri=False.
-                return Err(format!(
-                    "SRC_URI arrow are only allowed in SRC_URI: token {}",
-                    pos + 1
-                ));
+                return Err(Error::SrcUriArrow { token: pos + 1 });
             }
             _ => {
                 if need_bracket {
-                    return Err(format!("expected: '(', got: '{token}', token {}", pos + 1));
+                    return Err(Error::ExpectedOpenGotToken {
+                        token: token.to_string(),
+                        at: pos + 1,
+                    });
                 }
                 if token.ends_with('?') {
                     need_bracket = true;
@@ -180,10 +260,10 @@ pub fn use_reduce_flat(
     }
 
     if stack.len() != 1 {
-        return Err("Missing ')' at end of string".to_string());
+        return Err(Error::MissingCloseParen);
     }
     if need_bracket {
-        return Err("Missing '(' at end of string".to_string());
+        return Err(Error::MissingOpenParen);
     }
 
     Ok(stack.pop().unwrap())
@@ -208,7 +288,7 @@ enum DepNode {
 /// error messages too), just building a tree instead of eagerly
 /// flattening, so a `subset` filter (`select_subset` below) has real
 /// group boundaries to walk before flattening happens at all.
-fn build_dep_tree(tokens: &[String]) -> Result<Vec<DepNode>, String> {
+fn build_dep_tree(tokens: &[String]) -> Result<Vec<DepNode>, Error> {
     let mut stack: Vec<Vec<DepNode>> = vec![Vec::new()];
     let mut need_bracket = false;
 
@@ -216,27 +296,30 @@ fn build_dep_tree(tokens: &[String]) -> Result<Vec<DepNode>, String> {
         match token.as_str() {
             "(" => {
                 if tokens.get(pos + 1).map(String::as_str) == Some(")") {
-                    return Err(format!(
-                        "expected: dependency string, got: ')', token {}",
-                        pos + 2
-                    ));
+                    return Err(Error::ExpectedCloseParen {
+                        expected: "dependency string",
+                        token: pos + 2,
+                    });
                 }
                 need_bracket = false;
                 stack.push(Vec::new());
             }
             ")" => {
                 if need_bracket {
-                    return Err(format!("expected: '(', got: ')', token {}", pos + 1));
+                    return Err(Error::ExpectedCloseParen {
+                        expected: "'('",
+                        token: pos + 1,
+                    });
                 }
                 if stack.len() <= 1 {
-                    return Err(format!("no matching '(' for ')', token {}", pos + 1));
+                    return Err(Error::NoMatchingOpen { token: pos + 1 });
                 }
                 let l = stack.pop().unwrap();
                 stack.last_mut().unwrap().push(DepNode::Group(l));
             }
             "||" => {
                 if need_bracket {
-                    return Err(format!("expected: '(', got: '||', token {}", pos + 1));
+                    return Err(Error::ExpectedOpenGotOr { token: pos + 1 });
                 }
                 need_bracket = true;
                 stack
@@ -245,14 +328,14 @@ fn build_dep_tree(tokens: &[String]) -> Result<Vec<DepNode>, String> {
                     .push(DepNode::Str("||".to_string()));
             }
             "->" => {
-                return Err(format!(
-                    "SRC_URI arrow are only allowed in SRC_URI: token {}",
-                    pos + 1
-                ));
+                return Err(Error::SrcUriArrow { token: pos + 1 });
             }
             _ => {
                 if need_bracket {
-                    return Err(format!("expected: '(', got: '{token}', token {}", pos + 1));
+                    return Err(Error::ExpectedOpenGotToken {
+                        token: token.to_string(),
+                        at: pos + 1,
+                    });
                 }
                 if token.ends_with('?') {
                     need_bracket = true;
@@ -263,10 +346,10 @@ fn build_dep_tree(tokens: &[String]) -> Result<Vec<DepNode>, String> {
     }
 
     if stack.len() != 1 {
-        return Err("Missing ')' at end of string".to_string());
+        return Err(Error::MissingCloseParen);
     }
     if need_bracket {
-        return Err("Missing '(' at end of string".to_string());
+        return Err(Error::MissingOpenParen);
     }
 
     Ok(stack.pop().unwrap())
@@ -292,7 +375,7 @@ fn select_subset(
     subset: &HashSet<String>,
     uselist: &HashSet<String>,
     mode: MatchMode,
-) -> Result<Vec<DepNode>, String> {
+) -> Result<Vec<DepNode>, Error> {
     let mut result: Vec<DepNode> = Vec::new();
     let mut iter = nodes.iter();
     while let Some(node) = iter.next() {
@@ -313,7 +396,7 @@ fn select_subset(
             }
             DepNode::Str(s) if s.ends_with('?') => {
                 let Some(DepNode::Group(children)) = iter.next() else {
-                    return Err(format!("conditional '{s}' not followed by a group"));
+                    return Err(Error::ConditionalNotFollowedByGroup { s: s.to_string() });
                 };
                 if is_active(s, uselist, mode)? {
                     let flag = &s[..s.len() - 1];
@@ -330,7 +413,7 @@ fn select_subset(
             }
             DepNode::Str(s) if s == "||" => {
                 let Some(DepNode::Group(children)) = iter.next() else {
-                    return Err("'||' not followed by a group".to_string());
+                    return Err(Error::OrNotFollowedByGroup);
                 };
                 let sub = select_subset(children, true, selected, subset, uselist, mode)?;
                 if !sub.is_empty() {
@@ -454,7 +537,7 @@ pub fn use_reduce_structured(
     tokens: &[String],
     uselist: &HashSet<String>,
     mode: MatchMode,
-) -> Result<Vec<String>, String> {
+) -> Result<Vec<String>, Error> {
     let mut stack: Vec<Vec<DepNode>> = vec![Vec::new()];
     let mut need_bracket = false;
 
@@ -462,20 +545,23 @@ pub fn use_reduce_structured(
         match token.as_str() {
             "(" => {
                 if tokens.get(pos + 1).map(String::as_str) == Some(")") {
-                    return Err(format!(
-                        "expected: dependency string, got: ')', token {}",
-                        pos + 1
-                    ));
+                    return Err(Error::ExpectedCloseParen {
+                        expected: "dependency string",
+                        token: pos + 1,
+                    });
                 }
                 need_bracket = false;
                 stack.push(Vec::new());
             }
             ")" => {
                 if need_bracket {
-                    return Err(format!("expected: '(', got: ')', token {}", pos + 1));
+                    return Err(Error::ExpectedCloseParen {
+                        expected: "'('",
+                        token: pos + 1,
+                    });
                 }
                 if stack.len() <= 1 {
-                    return Err(format!("no matching '(' for ')', token {}", pos + 1));
+                    return Err(Error::NoMatchingOpen { token: pos + 1 });
                 }
                 let mut l = stack.pop().unwrap();
                 let level = stack.len() - 1;
@@ -517,7 +603,7 @@ pub fn use_reduce_structured(
             }
             "||" => {
                 if need_bracket {
-                    return Err(format!("expected: '(', got: '||', token {}", pos + 1));
+                    return Err(Error::ExpectedOpenGotOr { token: pos + 1 });
                 }
                 need_bracket = true;
                 stack
@@ -526,14 +612,14 @@ pub fn use_reduce_structured(
                     .push(DepNode::Str("||".to_string()));
             }
             "->" => {
-                return Err(format!(
-                    "SRC_URI arrow are only allowed in SRC_URI: token {}",
-                    pos + 1
-                ));
+                return Err(Error::SrcUriArrow { token: pos + 1 });
             }
             _ => {
                 if need_bracket {
-                    return Err(format!("expected: '(', got: '{token}', token {}", pos + 1));
+                    return Err(Error::ExpectedOpenGotToken {
+                        token: token.to_string(),
+                        at: pos + 1,
+                    });
                 }
                 if token.ends_with('?') {
                     need_bracket = true;
@@ -544,10 +630,10 @@ pub fn use_reduce_structured(
     }
 
     if stack.len() != 1 {
-        return Err("Missing ')' at end of string".to_string());
+        return Err(Error::MissingCloseParen);
     }
     if need_bracket {
-        return Err("Missing '(' at end of string".to_string());
+        return Err(Error::MissingOpenParen);
     }
 
     let mut out = Vec::new();
@@ -578,7 +664,7 @@ pub fn use_reduce_flat_subset(
     uselist: &HashSet<String>,
     mode: MatchMode,
     subset: &HashSet<String>,
-) -> Result<Vec<String>, String> {
+) -> Result<Vec<String>, Error> {
     let tree = build_dep_tree(tokens)?;
     let filtered = select_subset(&tree, false, false, subset, uselist, mode)?;
     let mut reserialized = Vec::new();
@@ -594,12 +680,12 @@ pub fn use_reduce_flat_subset(
 /// conditional directly as a `"||"` alternative, not just atoms/groups.
 fn next_alternative<'a>(
     iter: &mut std::slice::Iter<'a, DepNode>,
-) -> Option<Result<Vec<DepNode>, String>> {
+) -> Option<Result<Vec<DepNode>, Error>> {
     let node = iter.next()?;
     Some(match node {
         DepNode::Str(s) if s.ends_with('?') => match iter.next() {
             Some(group @ DepNode::Group(_)) => Ok(vec![node.clone(), group.clone()]),
-            _ => Err(format!("conditional '{s}' not followed by a group")),
+            _ => Err(Error::ConditionalNotFollowedByGroup { s: s.to_string() }),
         },
         other => Ok(vec![other.clone()]),
     })
@@ -634,7 +720,7 @@ pub fn use_reduce_flat_disjunctive(
     uselist: &HashSet<String>,
     mode: MatchMode,
     alternative_satisfiable: &mut impl FnMut(&[String]) -> bool,
-) -> Result<Vec<String>, String> {
+) -> Result<Vec<String>, Error> {
     let tree = build_dep_tree(tokens)?;
     let resolved = resolve_disjunctions(&tree, uselist, mode, alternative_satisfiable)?;
     let mut reserialized = Vec::new();
@@ -647,7 +733,7 @@ fn resolve_disjunctions(
     uselist: &HashSet<String>,
     mode: MatchMode,
     alternative_satisfiable: &mut impl FnMut(&[String]) -> bool,
-) -> Result<Vec<DepNode>, String> {
+) -> Result<Vec<DepNode>, Error> {
     let mut result: Vec<DepNode> = Vec::new();
     // Real `_create_graph` fully drains the plain `dep_stack` before
     // popping a single entry off `_dep_disjunctive_stack`
@@ -671,7 +757,7 @@ fn resolve_disjunctions(
             }
             DepNode::Str(s) if s.ends_with('?') => {
                 let Some(DepNode::Group(children)) = iter.next() else {
-                    return Err(format!("conditional '{s}' not followed by a group"));
+                    return Err(Error::ConditionalNotFollowedByGroup { s: s.to_string() });
                 };
                 let resolved =
                     resolve_disjunctions(children, uselist, mode, alternative_satisfiable)?;
@@ -680,7 +766,7 @@ fn resolve_disjunctions(
             }
             DepNode::Str(s) if s == "||" => {
                 let Some(DepNode::Group(alternatives)) = iter.next() else {
-                    return Err("'||' not followed by a group".to_string());
+                    return Err(Error::OrNotFollowedByGroup);
                 };
                 let mut chosen: Option<Vec<DepNode>> = None;
                 let mut alt_iter = alternatives.iter();

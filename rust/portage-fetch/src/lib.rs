@@ -105,16 +105,100 @@ pub struct DistfileDigests {
     pub hashes: HashMap<String, String>,
 }
 
+/// Error from Manifest/SRC_URI/digest handling. Distinct variants mirror
+/// the real `lib/portage/manifest.py` / `fetch.py` error message shapes
+/// so `Display` reproduces them byte-for-byte (the contract suite pins
+/// the CLI-visible strings).
+#[derive(Debug)]
+pub enum Error {
+    /// `{path}: {source}` -- an `io::Error` while reading a real file.
+    Io {
+        path: String,
+        source: std::io::Error,
+    },
+    /// `SRC_URI: expected "(" after {tok:?}`
+    SrcUriExpectedOpenAfter { tok: String },
+    /// `SRC_URI: unterminated {tok:?} group`
+    SrcUriUnterminated { tok: String },
+    /// `SRC_URI: unexpected {tok:?}`
+    SrcUriUnexpected { tok: String },
+    /// `SRC_URI: missing filename after "->"`
+    SrcUriMissingFilename,
+    /// `SRC_URI: unexpected token {tok:?}`
+    SrcUriUnexpectedToken { tok: String },
+    /// `{path}: size mismatch (expected {expected}, got {got})`
+    SizeMismatch {
+        path: String,
+        expected: u64,
+        got: usize,
+    },
+    /// `{path}: {algo} mismatch (expected {expected}, got {actual})`
+    HashMismatch {
+        path: String,
+        algo: String,
+        expected: String,
+        actual: String,
+    },
+}
+
+impl std::fmt::Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Error::Io { path, source } => write!(f, "{path}: {source}"),
+            Error::SrcUriExpectedOpenAfter { tok } => {
+                write!(f, "SRC_URI: expected \"(\" after {tok:?}")
+            }
+            Error::SrcUriUnterminated { tok } => {
+                write!(f, "SRC_URI: unterminated {tok:?} group")
+            }
+            Error::SrcUriUnexpected { tok } => write!(f, "SRC_URI: unexpected {tok:?}"),
+            Error::SrcUriMissingFilename => {
+                write!(f, "SRC_URI: missing filename after \"->\"")
+            }
+            Error::SrcUriUnexpectedToken { tok } => {
+                write!(f, "SRC_URI: unexpected token {tok:?}")
+            }
+            Error::SizeMismatch {
+                path,
+                expected,
+                got,
+            } => write!(f, "{path}: size mismatch (expected {expected}, got {got})"),
+            Error::HashMismatch {
+                path,
+                algo,
+                expected,
+                actual,
+            } => write!(
+                f,
+                "{path}: {algo} mismatch (expected {expected}, got {actual})"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for Error {}
+
+impl From<Error> for String {
+    fn from(e: Error) -> String {
+        e.to_string()
+    }
+}
+
 /// Real `Manifest.parseManifest2`, narrowed to `DIST` lines only (see
 /// the module doc comment). A missing `Manifest` file is an empty map,
 /// not an error -- same "nothing recorded yet" tolerance
 /// `portage_repo::list_candidates` already gives a missing repo
 /// directory.
-pub fn parse_manifest(manifest_path: &Path) -> Result<HashMap<String, DistfileDigests>, String> {
+pub fn parse_manifest(manifest_path: &Path) -> Result<HashMap<String, DistfileDigests>, Error> {
     let text = match std::fs::read_to_string(manifest_path) {
         Ok(text) => text,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(HashMap::new()),
-        Err(e) => return Err(format!("{}: {e}", manifest_path.display())),
+        Err(e) => {
+            return Err(Error::Io {
+                path: manifest_path.display().to_string(),
+                source: e,
+            });
+        }
     };
 
     let mut out = HashMap::new();
@@ -179,14 +263,16 @@ fn parse_list(
     tokens: &[&str],
     pos: &mut usize,
     active: &impl Fn(bool, &str) -> bool,
-) -> Result<Vec<SrcUriEntry>, String> {
+) -> Result<Vec<SrcUriEntry>, Error> {
     let mut out = Vec::new();
     while *pos < tokens.len() && tokens[*pos] != ")" {
         let tok = tokens[*pos];
         if let Some(flag) = tok.strip_suffix('?') {
             *pos += 1;
             if tokens.get(*pos) != Some(&"(") {
-                return Err(format!("SRC_URI: expected \"(\" after {tok:?}"));
+                return Err(Error::SrcUriExpectedOpenAfter {
+                    tok: tok.to_string(),
+                });
             }
             *pos += 1;
             let (negated, flag) = match flag.strip_prefix('!') {
@@ -195,14 +281,18 @@ fn parse_list(
             };
             let inner = parse_list(tokens, pos, active)?;
             if tokens.get(*pos) != Some(&")") {
-                return Err(format!("SRC_URI: unterminated {tok:?} group"));
+                return Err(Error::SrcUriUnterminated {
+                    tok: tok.to_string(),
+                });
             }
             *pos += 1;
             if active(negated, flag) {
                 out.extend(inner);
             }
         } else if tok == "(" || tok == ")" {
-            return Err(format!("SRC_URI: unexpected {tok:?}"));
+            return Err(Error::SrcUriUnexpected {
+                tok: tok.to_string(),
+            });
         } else {
             *pos += 1;
             // Real `fetch.py:1103-1106`: strip a `mirror+`/`fetch+`
@@ -220,7 +310,7 @@ fn parse_list(
             let filename = if tokens.get(*pos) == Some(&"->") {
                 *pos += 1;
                 let Some(name) = tokens.get(*pos) else {
-                    return Err("SRC_URI: missing filename after \"->\"".to_string());
+                    return Err(Error::SrcUriMissingFilename);
                 };
                 *pos += 1;
                 name.to_string()
@@ -244,15 +334,14 @@ fn parse_list(
 pub fn flatten_src_uri(
     src_uri: &str,
     active: impl Fn(bool, &str) -> bool,
-) -> Result<Vec<SrcUriEntry>, String> {
+) -> Result<Vec<SrcUriEntry>, Error> {
     let tokens: Vec<&str> = src_uri.split_whitespace().collect();
     let mut pos = 0;
     let entries = parse_list(&tokens, &mut pos, &active)?;
     if pos != tokens.len() {
-        return Err(format!(
-            "SRC_URI: unexpected token {:?}",
-            tokens.get(pos).copied().unwrap_or("")
-        ));
+        return Err(Error::SrcUriUnexpectedToken {
+            tok: tokens.get(pos).copied().unwrap_or("").to_string(),
+        });
     }
     Ok(entries)
 }
@@ -267,11 +356,16 @@ pub fn flatten_src_uri(
 /// `grabdict`'s own `empty=0` default). A missing file is an empty
 /// map, not an error -- the same tolerance `parse_manifest` already
 /// gives a missing `Manifest`.
-pub fn parse_thirdpartymirrors(path: &Path) -> Result<HashMap<String, Vec<String>>, String> {
+pub fn parse_thirdpartymirrors(path: &Path) -> Result<HashMap<String, Vec<String>>, Error> {
     let text = match std::fs::read_to_string(path) {
         Ok(text) => text,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(HashMap::new()),
-        Err(e) => return Err(format!("{}: {e}", path.display())),
+        Err(e) => {
+            return Err(Error::Io {
+                path: path.display().to_string(),
+                source: e,
+            });
+        }
     };
 
     let mut out = HashMap::new();
@@ -372,20 +466,22 @@ fn to_hex(bytes: &[u8]) -> String {
 /// entry with no recognized hash at all) still passes once the size
 /// matches, the same "size alone is still something" tolerance real
 /// `_check_distfile` gives.
-pub fn verify_digests(path: &Path, digests: &DistfileDigests) -> Result<(), String> {
+pub fn verify_digests(path: &Path, digests: &DistfileDigests) -> Result<(), Error> {
     // `blake2`/`sha2` both re-export the same underlying `digest::Digest`
     // trait under their own name -- importing it once is enough for
     // both `Blake2b512::digest`/`Sha512::digest` below.
     use blake2::Digest as _;
 
-    let bytes = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let bytes = std::fs::read(path).map_err(|e| Error::Io {
+        path: path.display().to_string(),
+        source: e,
+    })?;
     if bytes.len() as u64 != digests.size {
-        return Err(format!(
-            "{}: size mismatch (expected {}, got {})",
-            path.display(),
-            digests.size,
-            bytes.len()
-        ));
+        return Err(Error::SizeMismatch {
+            path: path.display().to_string(),
+            expected: digests.size,
+            got: bytes.len(),
+        });
     }
     for (algo, expected) in &digests.hashes {
         let actual = match algo.as_str() {
@@ -394,10 +490,12 @@ pub fn verify_digests(path: &Path, digests: &DistfileDigests) -> Result<(), Stri
             _ => continue,
         };
         if !actual.eq_ignore_ascii_case(expected) {
-            return Err(format!(
-                "{}: {algo} mismatch (expected {expected}, got {actual})",
-                path.display()
-            ));
+            return Err(Error::HashMismatch {
+                path: path.display().to_string(),
+                algo: algo.to_string(),
+                expected: expected.to_string(),
+                actual,
+            });
         }
     }
     Ok(())
@@ -598,7 +696,7 @@ mod tests {
             hashes: HashMap::new(),
         };
         let err = verify_digests(&path, &digests).unwrap_err();
-        assert!(err.contains("size mismatch"), "{err}");
+        assert!(err.to_string().contains("size mismatch"), "{err}");
     }
 
     #[test]
@@ -610,7 +708,7 @@ mod tests {
         hashes.insert("SHA512".to_string(), "0".repeat(128));
         let digests = DistfileDigests { size: 11, hashes };
         let err = verify_digests(&path, &digests).unwrap_err();
-        assert!(err.contains("SHA512 mismatch"), "{err}");
+        assert!(err.to_string().contains("SHA512 mismatch"), "{err}");
     }
 
     #[test]
