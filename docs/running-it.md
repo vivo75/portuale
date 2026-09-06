@@ -1880,3 +1880,24 @@ Harness-shell dedup (2026-09-06): the `run_batch` stdin loop and
 the `harness-common` crate. The CLI surface is unchanged — the harness
 commands above work exactly as documented, and a `printf ... | <harness>
 batch` pipe is still the benchmark-mode entry point.
+
+Merge-order debugging (2026-09-06): `PORTUALE_DEBUG_MERGE_GRAPH=1` makes
+`emerge -p` dump the dependency digraph the `_serialize_tasks` port
+schedules from, on stderr, in `.order` sequence:
+
+```bash
+PORTUALE_DEBUG_MERGE_GRAPH=1 rust/target/release/portuale emerge \
+    -puD --getbinpkg net-libs/rest 2>graph.txt >/dev/null
+# NODE 0 net-libs/rest nomerge=false
+# EDGE net-libs/rest -> dev-libs/glib runtime+sat
+# EDGE net-libs/rest -> dev-libs/libxml2 runtime_slot_op+sat
+# ...
+```
+
+It is shaped to line up with real portage's own
+`emerge -p --debug` digraph dump (`digraph.debug_print()`, printed just
+before `_serialize_tasks` runs), which is the reference this port was
+validated against. To localise a merge-order divergence, dump both and
+diff in this order: node sets, then edge sets, then per-edge priorities,
+then `.order`. That sequence isolates whether the gap is graph
+construction or scheduling in one pass.

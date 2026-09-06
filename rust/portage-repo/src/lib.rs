@@ -54,6 +54,10 @@
 // what lets tests point at a fixture tree without needing anything
 // portuale-specific.
 
+mod merge_order;
+
+pub use merge_order::{DepEdge, DepPriority};
+
 use portage_versions::vercmp;
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -7767,8 +7771,7 @@ fn resolve_root_deps_build_entries(
         targets_running_root: true,
         remote_binary: false,
         build_id: None,
-        dep_order: Vec::new(),
-        runtime_dep_order: Vec::new(),
+        deps: Vec::new(),
     }];
 
     if let Some(version) = recurse_version
@@ -9000,33 +9003,26 @@ pub struct GraphEntry {
     /// the `-pv` `:slot` / `::repo` decoration. `None` for an ebuild
     /// entry or `AlreadyInstalled`/`NoVisibleCandidate`.
     pub build_id: Option<String>,
-    /// This entry's own direct dependency `(category, package)`s, in real
-    /// portage's own graph-*discovery* order -- `RDEPEND`, `IDEPEND`,
-    /// `PDEPEND`, `DEPEND`, `BDEPEND` (real `_add_pkg_dep_string`'s own
-    /// `deps` tuple, `depgraph.py:4253-4289`), each key's own atom list
-    /// left in written/`use_reduce`d token order, first occurrence only
-    /// (a later repeat of the same cp is a no-op, matching real
-    /// `digraph.add`'s own idempotency). Feeds `real_discovery_order`,
-    /// which `topological_merge_order` uses to break ties among several
-    /// simultaneously-runnable leaves the same way real's own `.order`
-    /// does. Populated for a New/Upgrade/Downgrade/Reinstall entry and
-    /// for an `AlreadyInstalled` entry that `--deep` actually recurses
-    /// into (real's own `_add_pkg` gate: an installed package whose deps
+    /// This entry's own direct dependencies, in real portage's own
+    /// graph-*discovery* order -- `RDEPEND`, `IDEPEND`, `PDEPEND`,
+    /// `DEPEND`, `BDEPEND` (real `_add_pkg_dep_string`'s own `deps`
+    /// tuple, `depgraph.py:4253-4289`), each key's own atom list left in
+    /// written/`use_reduce`d token order -- each carrying the real
+    /// `DepPriority` its originating key (and the atom's own slot
+    /// operator) implies. This is the entire input to
+    /// `merge_order::serialize_merge_order`, portuale's port of real
+    /// `_serialize_tasks`: it supplies both the digraph's edges and, via
+    /// first-occurrence order, real's own `.order`.
+    ///
+    /// Populated for a New/Upgrade/Downgrade/Reinstall entry and for an
+    /// `AlreadyInstalled` entry that `--deep` actually recurses into
+    /// (real's own `_add_pkg` gate: an installed package whose deps
     /// aren't recursed into is pushed onto `_ignored_deps`, never
     /// `.order`); empty for `NoVisibleCandidate` and for the handful of
     /// entry-construction sites that don't populate it (slot-operator-
     /// rebuild/`--rebuild-if-*` synthetic entries, `--nodeps`) -- those
-    /// fall back to array position, same as before this field existed.
-    pub dep_order: Vec<(String, String)>,
-    /// The `RDEPEND`/`IDEPEND`/`PDEPEND` (runtime-priority-carrying keys
-    /// only -- real `_priority(runtime=True)`/`(installtime=True,
-    /// runtime=True)`/`(runtime_post=True)`) subset of `dep_order`, same
-    /// first-occurrence-only rule. Feeds `deep_system_deps`, which walks
-    /// exactly this edge set (real `_find_deep_system_runtime_deps`'s own
-    /// `ignore_priority` drops any non-runtime, i.e. `DEPEND`/`BDEPEND`,
-    /// edge). Order doesn't matter here (only membership), so it's simply
-    /// a subsequence of `dep_order`.
-    pub runtime_dep_order: Vec<(String, String)>,
+    /// fall back to array position plus their `required_by` edges.
+    pub deps: Vec<DepEdge>,
 }
 
 /// `(target cp, owner cp) -> (has_hard, has_soft)`: for each dependency
@@ -9040,33 +9036,21 @@ type EdgeKindMap = HashMap<((String, String), (String, String)), (bool, bool)>;
 /// Put `entries` in real portage's dependency-first *merge* order.
 ///
 /// Real portage's `mylist` (`Display.__call__`'s input) is a genuine
-/// topological merge schedule -- its `Scheduler` runs every install
-/// after the installs it depends on. Portuale has no scheduler, but
-/// every entry already carries `required_by` (the `(category, package)`
-/// of each entry that pulled it in), which is exactly the reverse of a
-/// dependency edge -- enough to order the list.
+/// merge schedule -- its `Scheduler` runs every install after the
+/// installs it depends on. `merge_order::serialize_merge_order` is a
+/// port of the function that produces it, real
+/// `depgraph._serialize_tasks`, run over a typed digraph built from
+/// every entry's own `GraphEntry::deps` (which carry real's per-key
+/// `DepPriority`) plus its `required_by` edges as a fallback. See that
+/// module's own header for what the port does and does not cover, and
+/// for how it was validated against real portage's `--debug` digraph
+/// dump on a live system.
 ///
-/// A **stable** topological sort: an entry is emitted only once every
-/// other entry it requires (within this set) has already been emitted;
-/// among the entries that are all currently emittable, the one with the
-/// earliest original (BFS-discovery, i.e. argv) position goes first. So
-/// two packages with no dependency relationship keep their discovery
-/// order, and a dependency always precedes the packages that pull it in.
-///
-/// A genuine dependency **cycle** is broken the way real portage's
-/// `_serialize_tasks` does -- at a run-time edge. When no unplaced entry
-/// has all its in-set dependencies placed, the walk prefers an entry
-/// whose every still-unplaced dependency is a *soft* (run-time /
-/// optional) edge (`edge_kind_map` says `!has_hard || has_soft`); real
-/// portage's `DepPrioritySatisfiedRange` `ignore_priority` scan can drop
-/// an unsatisfied run-time edge but never an unsatisfied build-time one.
-/// Only if every remaining entry still has an unplaced *hard* build-time
-/// dependency (an unbreakable cycle -- Commit 2's `* Error: circular
-/// dependencies:`) does it fall back to emitting the earliest unplaced
-/// entry in discovery order.
-///
-/// `edge_kind_map` is keyed `(target cp, owner cp) -> (has_hard,
-/// has_soft)`; see its build site in `resolve_pretend_graph`.
+/// `edge_kind_map` no longer feeds the ordering itself (the digraph's
+/// own `DepPriority` edges are strictly richer than its
+/// `(has_hard, has_soft)` summary); it stays a parameter because
+/// `find_hard_cycles` -- the `* Error: circular dependencies:` reporter
+/// -- still reads it from the same call site.
 ///
 /// `--json`'s `merge_order` field and `emerge --buildpkgonly`'s build
 /// loop both read this order directly; `--tree` re-derives its own
@@ -9074,11 +9058,19 @@ type EdgeKindMap = HashMap<((String, String), (String, String)), (bool, bool)>;
 /// `pretend.rs::print_tree`).
 fn topological_merge_order(
     entries: Vec<GraphEntry>,
-    edge_kind_map: &EdgeKindMap,
     top_level_atoms: &[String],
     config: &portage_profile::Config,
+    root: &Path,
 ) -> Vec<GraphEntry> {
-    topological_merge_order_impl(entries, edge_kind_map, top_level_atoms, config)
+    if entries.len() < 2 {
+        return entries;
+    }
+    let order = merge_order::serialize_merge_order(&entries, top_level_atoms, config, root);
+    let mut slots: Vec<Option<GraphEntry>> = entries.into_iter().map(Some).collect();
+    order
+        .into_iter()
+        .map(|i| slots[i].take().expect("each index emitted once"))
+        .collect()
 }
 
 /// Real depgraph's `_slot_operator_trigger_reinstalls` +
@@ -9291,8 +9283,7 @@ fn slot_operator_rebuild_entries(
             targets_running_root: false,
             remote_binary: false,
             build_id: None,
-            dep_order: Vec::new(),
-            runtime_dep_order: Vec::new(),
+            deps: Vec::new(),
         });
     }
     out.sort_by(|a, b| (a.category.as_str(), a.package.as_str()).cmp(&(&b.category, &b.package)));
@@ -9549,441 +9540,11 @@ fn rebuild_if_entries(
             targets_running_root: false,
             remote_binary: false,
             build_id: None,
-            dep_order: Vec::new(),
-            runtime_dep_order: Vec::new(),
+            deps: Vec::new(),
         });
     }
     out.sort_by(|a, b| (a.category.as_str(), a.package.as_str()).cmp(&(&b.category, &b.package)));
     out
-}
-
-/// `GraphEntry::dep_order` itself: flattens `metadata`'s own dep-key
-/// strings, one key at a time in `real_order_keys`' given order (so
-/// cross-key token order can't leak in), with `use_flags`
-/// (`use_reduce_flat` transparently drops `||`/`(`/`)` markers, listing
-/// every branch's atoms in written order -- the *other* branches simply
-/// never correspond to a real entry, so `real_discovery_order`'s own
-/// lookup skips them for free), first occurrence per `(category,
-/// package)` only. Shared by the main New/Upgrade/Downgrade/Reinstall
-/// walk and the `AlreadyInstalled` entry construction (`enqueue_
-/// dependencies`'s own dynamic-deps-aware metadata/`use_flags` derivation
-/// feeds this the same way).
-fn dep_order_from_metadata(
-    metadata: &HashMap<String, String>,
-    use_flags: &HashSet<String>,
-    real_order_keys: &[&str],
-) -> Vec<(String, String)> {
-    let mut dep_order: Vec<(String, String)> = Vec::new();
-    let mut seen: HashSet<(String, String)> = HashSet::new();
-    for dep_key in real_order_keys {
-        let Some(d) = metadata.get(*dep_key) else {
-            continue;
-        };
-        let toks: Vec<String> = d.split_whitespace().map(String::from).collect();
-        let Ok(flat) = portage_use_reduce::use_reduce_flat(
-            &toks,
-            use_flags,
-            portage_use_reduce::MatchMode::Normal,
-        ) else {
-            continue;
-        };
-        for t in flat {
-            if t == "||" {
-                continue;
-            }
-            let Some(dep_atom) = portage_dep::parse_atom(&t) else {
-                continue;
-            };
-            if dep_atom.blocker != portage_dep::Blocker::None {
-                continue;
-            }
-            let cp = (dep_atom.category, dep_atom.package);
-            if seen.insert(cp.clone()) {
-                dep_order.push(cp);
-            }
-        }
-    }
-    dep_order
-}
-
-/// Real portage's own dependency-graph *discovery* order -- real
-/// `digraph.order`, the sequence nodes are first added to the digraph.
-/// `_serialize_tasks`' `leaf_nodes()` walks nodes in `.order`, so this is
-/// exactly the tie-break real portage itself uses among several
-/// simultaneously-runnable leaves (`topological_merge_order_impl`'s own
-/// consumer).
-///
-/// Real seeds this from one arg's own top-level atoms, iterated
-/// `sorted(atoms, key=str)` (`depgraph.py:5500`) -- alphabetical *within
-/// that one arg's own pset*, but args themselves (a bare atom, `@world`,
-/// `@system`, a nested custom set -- each its own `SetArg`/`PackageArg`)
-/// are processed in the order given, and each arg's own pset can itself
-/// recursively expand nested sets whose members interleave with the
-/// parent's own in a way that isn't a flat alphabetical merge either
-/// (confirmed empirically: real's `@world`-with-a-nested-custom-set
-/// fixture output isn't alphabetical across the whole expansion, only
-/// within narrower groupings this flattened `top_level_atoms` list has
-/// already lost the boundaries for). Portuale's own set-expansion
-/// machinery flattens every arg into one `Vec<String>` before this
-/// function ever sees it, with no arg/pset boundary left to sort within
-/// -- alphabetizing the *whole* flattened list was tried and broke
-/// multiple already-verified fixtures (`@world`/`@system` combined with
-/// an explicit atom, a nested custom set). So this deliberately uses
-/// `top_level_atoms` in the given order instead -- the same order the
-/// pre-existing (already real-verified) set-expansion code already
-/// produces -- and leaves real's intra-arg alphabetization as a known,
-/// unreproduced cut. Each seed is immediately `digraph.add`ed (recorded
-/// into `.order` right away) and pushed onto a LIFO `dep_stack`
-/// (`_add_pkg`, `depgraph.py:3827`). `_create_graph`'s own outer loop
-/// (`depgraph.py:3257-3269`) then repeatedly `dep_stack.pop()`s the
-/// *last*-pushed node and walks its own dependency keys (real
-/// `_add_pkg_dep_string`'s `deps` tuple order -- see `GraphEntry::
-/// dep_order`'s own doc comment), recording each of *its* children
-/// immediately, forward, before recursing into any of them. So a node's
-/// direct children always land in `.order` as one contiguous forward-order
-/// run -- but the run belonging to whichever child was declared *last*
-/// gets its own children recorded (and so on, recursively) before any
-/// earlier sibling's, since the stack pops last-in-first-out. Net effect:
-/// a plain recursive DFS that visits each node's children in *reverse*
-/// declared order, numbering every node (this node included) at the
-/// moment it's first reached -- exactly what this function computes,
-/// with an explicit stack instead of native recursion (same reason
-/// `topological_removal_order` uses one: no recursion-depth surprises on
-/// a large graph).
-///
-/// Returns `rank[i]` = `entries[i]`'s own discovery position (smaller is
-/// earlier). An entry this walk never reaches at all -- a gap in
-/// `dep_order`'s own coverage (`slot_operator_rebuild_entries`/
-/// `rebuild_if_entries`' synthetic entries carry no `dep_order`, nor does
-/// an `--nodeps` run) -- keeps its original array position, appended
-/// after every genuinely-discovered entry; multiple such gaps stay in
-/// their own relative array order among themselves.
-fn real_discovery_order(entries: &[GraphEntry], top_level_atoms: &[String]) -> Vec<usize> {
-    let n = entries.len();
-    let mut cp_indices: HashMap<(&str, &str), Vec<usize>> = HashMap::new();
-    for (i, e) in entries.iter().enumerate() {
-        cp_indices
-            .entry((e.category.as_str(), e.package.as_str()))
-            .or_default()
-            .push(i);
-    }
-    let mut rank: Vec<Option<usize>> = vec![None; n];
-    let mut next_rank: usize = 0;
-    let mut stack: Vec<usize> = Vec::new();
-
-    let discover = |i: usize, rank: &mut Vec<Option<usize>>, next_rank: &mut usize| -> bool {
-        if rank[i].is_some() {
-            return false;
-        }
-        rank[i] = Some(*next_rank);
-        *next_rank += 1;
-        true
-    };
-
-    for atom_str in top_level_atoms {
-        let Some(atom) = portage_dep::parse_atom(atom_str) else {
-            continue;
-        };
-        if atom.blocker != portage_dep::Blocker::None {
-            continue;
-        }
-        if let Some(idxs) = cp_indices.get(&(atom.category.as_str(), atom.package.as_str())) {
-            for &i in idxs {
-                if discover(i, &mut rank, &mut next_rank) {
-                    stack.push(i);
-                }
-            }
-        }
-    }
-    while let Some(i) = stack.pop() {
-        for (cat, pkg) in &entries[i].dep_order {
-            if let Some(idxs) = cp_indices.get(&(cat.as_str(), pkg.as_str())) {
-                for &j in idxs {
-                    if discover(j, &mut rank, &mut next_rank) {
-                        stack.push(j);
-                    }
-                }
-            }
-        }
-    }
-    (0..n)
-        .map(|i| {
-            rank[i].unwrap_or_else(|| {
-                let r = next_rank;
-                next_rank += 1;
-                r
-            })
-        })
-        .collect()
-}
-
-/// Real `_find_deep_system_runtime_deps`: every entry that's an
-/// `@system`-set member (`config.system_packages`), plus every entry
-/// reachable from one by following only *runtime*-priority edges
-/// (`GraphEntry::runtime_dep_order` -- real's own `ignore_priority`
-/// keeps `RDEPEND`/`IDEPEND`/`PDEPEND`, i.e. `priority.runtime or
-/// priority.runtime_post`, and drops `DEPEND`/`BDEPEND`). Feeds
-/// `merge_order_bias`'s own "system deps first" tier -- real: "promote
-/// deep system runtime deps... for optimal leaf node selection".
-fn deep_system_deps(entries: &[GraphEntry], config: &portage_profile::Config) -> Vec<bool> {
-    let n = entries.len();
-    let mut cp_indices: HashMap<(&str, &str), Vec<usize>> = HashMap::new();
-    for (i, e) in entries.iter().enumerate() {
-        cp_indices
-            .entry((e.category.as_str(), e.package.as_str()))
-            .or_default()
-            .push(i);
-    }
-    // `@system`-set membership: real `root_config.sets["system"].
-    // findAtomForPackage(node)` -- cp-level, same as `required_
-    // set_reachable_cps`'s own `system_atoms` handling (its own doc
-    // comment).
-    let system_cps: HashSet<(String, String)> = config
-        .system_packages
-        .iter()
-        .filter_map(|a| portage_dep::parse_atom(a))
-        .map(|a| (a.category, a.package))
-        .collect();
-    let mut is_deep_sys = vec![false; n];
-    let mut stack: Vec<usize> = Vec::new();
-    for (i, e) in entries.iter().enumerate() {
-        if system_cps.contains(&(e.category.clone(), e.package.clone())) {
-            is_deep_sys[i] = true;
-            stack.push(i);
-        }
-    }
-    while let Some(i) = stack.pop() {
-        for (cat, pkg) in &entries[i].runtime_dep_order {
-            if let Some(idxs) = cp_indices.get(&(cat.as_str(), pkg.as_str())) {
-                for &j in idxs {
-                    if !is_deep_sys[j] {
-                        is_deep_sys[j] = true;
-                        stack.push(j);
-                    }
-                }
-            }
-        }
-    }
-    is_deep_sys
-}
-
-/// Real `_merge_order_bias` (`depgraph.py:9274-9307`, `implicit_system_
-/// deps` -- default on, no `--implicit-system-deps=n` support here, a
-/// documented cut) only ever reorders real's own *merge* digraph, which
-/// -- crucially -- has already had every "nomerge" (`AlreadyInstalled`)
-/// root node pruned from it (`_serialize_tasks`'s own "Prune 'nomerge'
-/// root nodes if nothing depends on them" loop, `depgraph.py:9505-9518`,
-/// which runs BEFORE `self._merge_order_bias(mygraph)` at line 9519): a
-/// trivial top-level target with nothing depending on it never enters
-/// scheduling at all -- confirmed live (`emerge -p --noreplace
-/// <already-installed pkg>` prints nothing whatsoever for it, not even a
-/// notice). Portuale shows a "package is already installed; nothing to
-/// do" notice for a top-level `AlreadyInstalled`/`NoVisibleCandidate`
-/// entry anyway (a portuale-only UX nicety with no real precedent to
-/// order against) -- so this bias only ever compares *merge-bound*
-/// entries (`merge_bound_cpv(entry).is_some()`, i.e.
-/// New/Upgrade/Downgrade/Reinstall) against each other, exactly
-/// mirroring real's pruned-graph scope. A trivial entry is woven back
-/// into the resulting preference order by simple insertion on its own
-/// (unbiased) `discovery_rank`, relative to each merge-bound entry's own
-/// *original* (also unbiased) `discovery_rank` -- i.e. bias only ever
-/// reorders merge-bound entries *among themselves*; a trivial entry
-/// never gets bias-promoted ahead of (or demoted behind) a merge-bound
-/// entry it wasn't already ahead of (or behind) in plain discovery
-/// order. Caught by a fixture (`@system`, one of whose three top-level
-/// members -- `withdeps` -- RDEPENDs on `newpkg` and `upgradepkg`,
-/// combined with an unrelated already-installed top-level `samepkg`):
-/// biasing `samepkg` against the `@system` members promoted every
-/// `@system` member ahead of it, when real would never even schedule
-/// `samepkg` (or bias against it) in the first place.
-///
-/// Real's own comparator, restricted this way: (1) an `@system`-deep
-/// entry before a non-`@system` one; (2) among entries tied on (1),
-/// *descending* reference count (real `len(mygraph.parent_nodes(node))`
-/// -- how many other packages in the graph depend on this one); (3)
-/// original discovery order breaks any remaining tie. Portuale has no
-/// uninstall-operation nodes in this list at all (a merge-only
-/// `--pretend` graph), so real's own uninstalls-last rule has nothing
-/// to apply to. Returns a rank array (`rank[i]`, smaller = merges
-/// earlier) for `topological_merge_order_impl`'s own tie-break,
-/// replacing the plain `discovery_rank`.
-///
-/// Reference count is NOT simply `GraphEntry::required_by.len()`: real
-/// `_add_pkg(pkg, dep)` calls `digraph.add(pkg, dep.parent, ...)` for
-/// *every* package, including a top-level one, where `dep.parent` is
-/// the originating `Arg` (`SetArg`/`PackageArg`) itself, not `None` --
-/// `digraph.add`'s own `if not parent: return` only skips a genuinely
-/// falsy parent. So a top-level target's own `parent_nodes` count
-/// always includes that `Arg`, on top of any package that also depends
-/// on it -- `required_by` (populated only from dependency-string
-/// owners, `owner is not None`) misses this "requested at all" edge
-/// entirely.
-fn merge_order_bias(
-    entries: &[GraphEntry],
-    discovery_rank: &[usize],
-    config: &portage_profile::Config,
-    top_level_atoms: &[String],
-) -> Vec<usize> {
-    let n = entries.len();
-    let is_deep_sys = deep_system_deps(entries, config);
-    let top_level_cps: HashSet<(String, String)> = top_level_atoms
-        .iter()
-        .filter_map(|a| portage_dep::parse_atom(a))
-        .filter(|a| a.blocker == portage_dep::Blocker::None)
-        .map(|a| (a.category, a.package))
-        .collect();
-
-    let mut merge_bound: Vec<usize> = (0..n)
-        .filter(|&i| merge_bound_cpv(&entries[i]).is_some())
-        .collect();
-    merge_bound.sort_by_key(|&i| {
-        let is_top_level =
-            top_level_cps.contains(&(entries[i].category.clone(), entries[i].package.clone()));
-        let ref_count = entries[i].required_by.len() + usize::from(is_top_level);
-        (
-            !is_deep_sys[i],
-            std::cmp::Reverse(ref_count),
-            discovery_rank[i],
-        )
-    });
-
-    let mut trivial: Vec<usize> = (0..n)
-        .filter(|&i| merge_bound_cpv(&entries[i]).is_none())
-        .collect();
-    trivial.sort_by_key(|&i| discovery_rank[i]);
-
-    // Weave `trivial` back in: before each merge-bound entry, insert
-    // every trivial entry whose own (unbiased) discovery_rank still
-    // precedes that merge-bound entry's own (unbiased) discovery_rank --
-    // i.e. bias reorders `merge_bound` among itself only; a trivial
-    // entry's position relative to any merge-bound entry never changes
-    // from what plain discovery order already had.
-    let mut order: Vec<usize> = Vec::with_capacity(n);
-    let mut ti = 0;
-    for &m in &merge_bound {
-        while ti < trivial.len() && discovery_rank[trivial[ti]] < discovery_rank[m] {
-            order.push(trivial[ti]);
-            ti += 1;
-        }
-        order.push(m);
-    }
-    order.extend(&trivial[ti..]);
-
-    let mut rank = vec![0usize; n];
-    for (pos, &i) in order.iter().enumerate() {
-        rank[i] = pos;
-    }
-    rank
-}
-
-fn topological_merge_order_impl(
-    entries: Vec<GraphEntry>,
-    edge_kind_map: &EdgeKindMap,
-    top_level_atoms: &[String],
-    config: &portage_profile::Config,
-) -> Vec<GraphEntry> {
-    let n = entries.len();
-    if n < 2 {
-        return entries;
-    }
-    // (category, package) -> every entry index with that cp (a
-    // multi-slot package has one entry per resolved slot).
-    let mut cp_indices: HashMap<(&str, &str), Vec<usize>> = HashMap::new();
-    for (i, e) in entries.iter().enumerate() {
-        cp_indices
-            .entry((e.category.as_str(), e.package.as_str()))
-            .or_default()
-            .push(i);
-    }
-    // `requires[i]` = the entries `i` depends on, i.e. every `j` whose
-    // `required_by` names `i`'s own cp. `j` must be emitted before `i`.
-    // `requires_hard[i]` holds the same `j`s but only for edges that are
-    // an unsatisfied build-time dep with no run-time alternative
-    // (`edge_kind_map[(j cp, i cp)] == (true, false)`) -- the edges real
-    // portage's `ignore_priority` scan can never drop.
-    let mut requires: Vec<Vec<usize>> = vec![Vec::new(); n];
-    let mut requires_hard: Vec<Vec<usize>> = vec![Vec::new(); n];
-    for (j, e) in entries.iter().enumerate() {
-        let target_cp = (e.category.clone(), e.package.clone());
-        for owner in &e.required_by {
-            if let Some(owner_indices) = cp_indices.get(&(owner.0.as_str(), owner.1.as_str())) {
-                let hard = matches!(
-                    edge_kind_map.get(&(target_cp.clone(), owner.clone())),
-                    Some((true, false))
-                );
-                for &i in owner_indices {
-                    if i != j {
-                        requires[i].push(j);
-                        if hard {
-                            requires_hard[i].push(j);
-                        }
-                    }
-                }
-            }
-        }
-    }
-    // Tie-break among several currently-emittable entries: real's own
-    // `mygraph.order` discovery position (`real_discovery_order`), not
-    // raw array index -- see this function's own doc comment.
-    let discovery_rank = real_discovery_order(&entries, top_level_atoms);
-    let discovery_rank = merge_order_bias(&entries, &discovery_rank, config, top_level_atoms);
-    let mut placed = vec![false; n];
-    let mut order: Vec<usize> = Vec::with_capacity(n);
-    while order.len() < n {
-        // Real `_serialize_tasks`' own "Greedily pop all of these nodes
-        // since no relationship has been ignored" optimization
-        // (`depgraph.py:9764-9777`, the `ignore_priority is None`
-        // branch of its priority-ranged scan): every entry that's a
-        // *genuine* leaf right now -- no unplaced dependency of any
-        // kind, hard or soft -- gets emitted together, in one batch, in
-        // `.order` (bias-adjusted discovery rank) sequence, before the
-        // next round even looks at what that batch's placements just
-        // freed up. A one-at-a-time walk here would let a freshly-freed
-        // entry (say, one whose only blocker was `A` in this same
-        // batch) jump ahead of an already-available sibling with a
-        // higher discovery rank that real would have already committed
-        // to this round -- exactly the gap a live `gnome-base/gnome-
-        // control-center` comparison caught (`net-libs/rest` /
-        // `net-libs/gnome-online-accounts`, both available from round
-        // one, were landing after entries only *they* would go on to
-        // free up).
-        let mut batch: Vec<usize> = (0..n)
-            .filter(|&i| !placed[i] && requires[i].iter().all(|&d| placed[d]))
-            .collect();
-        if !batch.is_empty() {
-            batch.sort_by_key(|&i| discovery_rank[i]);
-            for i in batch {
-                placed[i] = true;
-                order.push(i);
-            }
-            continue;
-        }
-        // Cycle: no entry is fully satisfied via an ordinary edge. Real's
-        // own priority-relaxation scan drops down to one-at-a-time
-        // selection past this point (an asap/parent-preference heuristic
-        // portuale approximates with the same discovery-rank tie-break) --
-        // break it at a run-time edge, picking an entry whose every
-        // *unplaced* dependency is a soft edge (real `_serialize_tasks`'
-        // `ignore_priority`).
-        let next = (0..n)
-            .filter(|&i| !placed[i] && requires_hard[i].iter().all(|&d| placed[d]))
-            .min_by_key(|&i| discovery_rank[i])
-            // Unbreakable cycle (all remaining have an unplaced hard dep):
-            // emit the earliest-discovered unplaced entry and continue.
-            .unwrap_or_else(|| {
-                (0..n)
-                    .filter(|&i| !placed[i])
-                    .min_by_key(|&i| discovery_rank[i])
-                    .expect("n entries unplaced")
-            });
-        placed[next] = true;
-        order.push(next);
-    }
-    let mut slots: Vec<Option<GraphEntry>> = entries.into_iter().map(Some).collect();
-    order
-        .into_iter()
-        .map(|i| slots[i].take().expect("each index emitted once"))
-        .collect()
 }
 
 /// The `category/package-version` a merge-bound `GraphEntry` would
@@ -12500,15 +12061,14 @@ fn backtracking_resolve(req: &ResolveRequest) -> Result<GraphResult, Error> {
                 // own `nodeps` handling further below. Real's own `_add_pkg`
                 // gate is the same: an installed package whose deps aren't
                 // recursed into gets pushed onto `_ignored_deps`, never
-                // `.order`, so `dep_order` (below) is likewise only ever
+                // `.order`, so `deps` (below) is likewise only ever
                 // computed under this identical condition.
-                let mut already_installed_dep_order: Vec<(String, String)> = Vec::new();
-                let mut already_installed_runtime_dep_order: Vec<(String, String)> = Vec::new();
+                let mut already_installed_deps: Vec<DepEdge> = Vec::new();
                 if let PretendOutcome::AlreadyInstalled { version } = &outcome
                     && !nodeps
                     && deep.recurses_at(depth)
                 {
-                    // `GraphEntry::dep_order` for an AlreadyInstalled
+                    // `GraphEntry::deps` for an AlreadyInstalled
                     // entry: always the *current* tree ebuild's metadata
                     // (real `--dynamic-deps`'s own default) -- ordering
                     // is a display nicety, not resolution-critical, so
@@ -12540,12 +12100,13 @@ fn backtracking_resolve(req: &ResolveRequest) -> Result<GraphResult, Error> {
                             } else {
                                 &["RDEPEND", "IDEPEND", "PDEPEND"]
                             };
-                            already_installed_dep_order =
-                                dep_order_from_metadata(&metadata, &use_flags, real_order_keys);
-                            already_installed_runtime_dep_order = dep_order_from_metadata(
+                            // An installed package is `pkg.built`, so
+                            // real marks its build-time deps `optional`.
+                            already_installed_deps = merge_order::dep_edges_from_metadata(
                                 &metadata,
                                 &use_flags,
-                                &["RDEPEND", "IDEPEND", "PDEPEND"],
+                                real_order_keys,
+                                true,
                             );
                         }
                     }
@@ -12652,8 +12213,7 @@ fn backtracking_resolve(req: &ResolveRequest) -> Result<GraphResult, Error> {
                     targets_running_root: false,
                     remote_binary: false,
                     build_id: None,
-                    dep_order: already_installed_dep_order,
-                    runtime_dep_order: already_installed_runtime_dep_order,
+                    deps: already_installed_deps,
                 });
                 continue;
             };
@@ -13086,8 +12646,7 @@ fn backtracking_resolve(req: &ResolveRequest) -> Result<GraphResult, Error> {
                 targets_running_root: false,
                 remote_binary: candidate_remote,
                 build_id: candidate_build_id,
-                dep_order: Vec::new(),
-                runtime_dep_order: Vec::new(),
+                deps: Vec::new(),
             });
 
             let metadata = if candidate_source == CandidateSource::Binary {
@@ -13423,7 +12982,7 @@ fn backtracking_resolve(req: &ResolveRequest) -> Result<GraphResult, Error> {
             }
             let tokens: Vec<String> = depstr.split_whitespace().map(String::from).collect();
 
-            // Real graph *discovery* order (`GraphEntry::dep_order`, see
+            // Real graph *discovery* order (`GraphEntry::deps`, see
             // its own doc comment): real `_add_pkg_dep_string` walks
             // `RDEPEND`, `IDEPEND`, `PDEPEND`, `DEPEND`, `BDEPEND` in that
             // exact order (`depgraph.py:4253-4289`'s own `deps` tuple) --
@@ -13433,17 +12992,19 @@ fn backtracking_resolve(req: &ResolveRequest) -> Result<GraphResult, Error> {
             // `use_reduce_flat` transparently drops `||`/`(`/`)` markers,
             // listing every branch's atoms in written order (the *other*
             // branches are simply never a real entry, so they contribute
-            // no edge once `real_discovery_order` looks them up).
+            // no edge once the merge-order digraph looks them up).
             let real_order_keys: &[&str] =
                 if candidate_source == CandidateSource::Binary && !with_bdeps {
                     &["RDEPEND", "PDEPEND", "IDEPEND"]
                 } else {
                     &["RDEPEND", "IDEPEND", "PDEPEND", "DEPEND", "BDEPEND"]
                 };
-            entries[entry_idx].dep_order =
-                dep_order_from_metadata(&metadata, &use_flags, real_order_keys);
-            entries[entry_idx].runtime_dep_order =
-                dep_order_from_metadata(&metadata, &use_flags, &["RDEPEND", "IDEPEND", "PDEPEND"]);
+            entries[entry_idx].deps = merge_order::dep_edges_from_metadata(
+                &metadata,
+                &use_flags,
+                real_order_keys,
+                candidate_source == CandidateSource::Binary,
+            );
 
             // Per-edge build-time/run-time classification for the
             // merge-order sort + circular-dependency detection (real
@@ -13952,7 +13513,7 @@ fn backtracking_resolve(req: &ResolveRequest) -> Result<GraphResult, Error> {
         // its dependencies are ever queued). Re-sort into merge order now
         // that every `required_by` edge is known -- see
         // `topological_merge_order`.
-        entries = topological_merge_order(entries, &edge_kind_map, atoms, config);
+        entries = topological_merge_order(entries, atoms, config, root);
 
         // Real depgraph.py:5706-5717 -- see GraphResult::
         // buildpkgonly_deps_unsatisfied's own doc comment.
@@ -20774,53 +20335,61 @@ mod tests {
 
     #[test]
     fn topological_order_breaks_a_cycle_at_its_run_time_edge() {
-        // Two packages in a cycle: a's DEPEND (build-time, no run-time
-        // alternative -- a hard edge) names b, b's RDEPEND (a soft edge)
-        // names a. Real portage's `ignore_priority` scan drops the
-        // unsatisfied run-time edge, so b (which a must build against)
-        // is merged first regardless of discovery order.
+        // Two packages in a cycle: a's DEPEND (an unsatisfied build-time
+        // edge, the one kind real's `ignore_priority` ladder can never
+        // relax) names b, b's RDEPEND (a run-time edge) names a. Real
+        // itself gives up on this shape and raises its internal
+        // circular-dependency error; portuale still has to emit a list,
+        // and `select_nodes`' own fallback prefers the node whose every
+        // remaining dependency the widest filter would drop -- b, which
+        // a must build against.
+        let dep = |pkg: &str, priority: DepPriority| DepEdge {
+            atom: format!("dev-libs/{pkg}"),
+            category: "dev-libs".to_string(),
+            package: pkg.to_string(),
+            priority,
+            disjunctive: false,
+            key: if priority.buildtime { 3 } else { 0 },
+        };
+        let buildtime = DepPriority {
+            buildtime: true,
+            ..DepPriority::default()
+        };
+        let runtime = DepPriority {
+            runtime: true,
+            ..DepPriority::default()
+        };
         let mut a = graph_entry("dev-libs", "cyc-a", "1.0");
         let mut b = graph_entry("dev-libs", "cyc-b", "1.0");
+        a.deps = vec![dep("cyc-b", buildtime)];
+        b.deps = vec![dep("cyc-a", runtime)];
         a.required_by = vec![("dev-libs".to_string(), "cyc-b".to_string())];
         b.required_by = vec![("dev-libs".to_string(), "cyc-a".to_string())];
-        let mut edge_kind_map: EdgeKindMap = HashMap::new();
-        // a -> b is build-time-only (hard); b -> a is run-time (soft).
-        edge_kind_map.insert(
-            (
-                ("dev-libs".to_string(), "cyc-b".to_string()),
-                ("dev-libs".to_string(), "cyc-a".to_string()),
-            ),
-            (true, false),
+        let ordered = topological_merge_order(
+            vec![a, b],
+            &["dev-libs/cyc-a".to_string()],
+            &test_config(),
+            Path::new("/nonexistent-root"),
         );
-        edge_kind_map.insert(
-            (
-                ("dev-libs".to_string(), "cyc-a".to_string()),
-                ("dev-libs".to_string(), "cyc-b".to_string()),
-            ),
-            (false, true),
-        );
-        let ordered = topological_merge_order_impl(vec![a, b], &edge_kind_map, &[], &test_config());
         let names: Vec<&str> = ordered.iter().map(|e| e.package.as_str()).collect();
         assert_eq!(names, vec!["cyc-b", "cyc-a"]);
 
-        // A cycle made entirely of hard build-time edges can't be
-        // broken -- the walk falls back to discovery order (Commit 2
-        // renders the `* Error: circular dependencies:` block for it).
+        // A cycle made entirely of unsatisfied build-time edges can't be
+        // broken at all -- the walk falls back to bias order (and
+        // `find_hard_cycles` renders the `* Error: circular
+        // dependencies:` block for it).
         let mut a = graph_entry("dev-libs", "cyc-a", "1.0");
         let mut b = graph_entry("dev-libs", "cyc-b", "1.0");
+        a.deps = vec![dep("cyc-b", buildtime)];
+        b.deps = vec![dep("cyc-a", buildtime)];
         a.required_by = vec![("dev-libs".to_string(), "cyc-b".to_string())];
         b.required_by = vec![("dev-libs".to_string(), "cyc-a".to_string())];
-        let mut hard_map: EdgeKindMap = HashMap::new();
-        for (t, o) in [("cyc-b", "cyc-a"), ("cyc-a", "cyc-b")] {
-            hard_map.insert(
-                (
-                    ("dev-libs".to_string(), t.to_string()),
-                    ("dev-libs".to_string(), o.to_string()),
-                ),
-                (true, false),
-            );
-        }
-        let ordered = topological_merge_order_impl(vec![a, b], &hard_map, &[], &test_config());
+        let ordered = topological_merge_order(
+            vec![a, b],
+            &["dev-libs/cyc-a".to_string()],
+            &test_config(),
+            Path::new("/nonexistent-root"),
+        );
         let names: Vec<&str> = ordered.iter().map(|e| e.package.as_str()).collect();
         assert_eq!(names, vec!["cyc-a", "cyc-b"]);
     }
@@ -24963,8 +24532,7 @@ mod tests {
             targets_running_root: false,
             remote_binary: false,
             build_id: None,
-            dep_order: Vec::new(),
-            runtime_dep_order: Vec::new(),
+            deps: Vec::new(),
         }
     }
 

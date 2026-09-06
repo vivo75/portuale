@@ -8277,16 +8277,26 @@ def test_world_expands_to_the_fixture_world_files_own_atoms(emerge_binary, fixtu
     (which needs newpkg *and* upgradepkg placed first) becomes available
     at all; withdeps therefore lands last, after innernestedsetpkg, even
     though upgradepkg is withdeps' own RDEPEND target. Same real-grounded
-    bias + batching documented on portage-repo::merge_order_bias /
-    topological_merge_order_impl."""
+    bias + batching documented on portage-repo::merge_order (the
+    _serialize_tasks port).
+
+    The two "already installed" notices sit where the scheduler itself
+    placed those nodes: since the 2026-09-06 _serialize_tasks port they
+    are genuine graph nodes rather than entries woven back in on raw
+    discovery rank, so they are ordered by the same _merge_order_bias
+    (@system-deep first, then descending reference count) as everything
+    else in their round. Real portage never displays such an entry at all
+    -- these notices are a portuale-only nicety with no real ordering to
+    match -- and the merge-bound sequence itself (newpkg, upgradepkg,
+    innernestedsetpkg, withdeps) is unchanged by the port."""
     result = _run([str(emerge_binary)], ["--pretend", "--update", "@world"], fixture_env)
     assert result.returncode == 0
     assert result.stdout.splitlines() == [
         '[ebuild  N     ] dev-libs/newpkg-1.0 ',
-        'dev-libs/nestedsetpkg-1.0 is already installed; nothing to do',
-        'dev-libs/dualslotpkg-2.0 is already installed; nothing to do',
         '[ebuild     U  ] dev-libs/upgradepkg-2.0 [1.0]',
+        'dev-libs/nestedsetpkg-1.0 is already installed; nothing to do',
         '[ebuild  N     ] dev-libs/innernestedsetpkg-1.0 ',
+        'dev-libs/dualslotpkg-2.0 is already installed; nothing to do',
         '[ebuild  N     ] dev-libs/withdeps-1.0 ',
     ]
 
@@ -8297,7 +8307,14 @@ def test_world_combines_with_an_explicit_atom(emerge_binary, fixture_env):
     real portage's own most common combined usage shape. --update is
     added for the same reason as the plain @world test above. Merge
     order: see test_world_expands_to_the_fixture_world_files_own_atoms's
-    own doc comment for why withdeps lands last, after innernestedsetpkg."""
+    own doc comment for why withdeps lands last, after innernestedsetpkg.
+
+    The "already installed" notices sit where the scheduler itself placed
+    those nodes -- see test_world_expands_to_the_fixture_world_files_own_
+    atoms's own doc comment for why (the 2026-09-06 _serialize_tasks
+    port). Real portage never displays such an entry at all, so there is
+    no real ordering for them to match; the merge-bound sequence is
+    unchanged."""
     result = _run(
         [str(emerge_binary)],
         ["--pretend", "--update", "dev-libs/samepkg", "@world"],
@@ -8305,12 +8322,12 @@ def test_world_combines_with_an_explicit_atom(emerge_binary, fixture_env):
     )
     assert result.returncode == 0
     assert result.stdout.splitlines() == [
-        'dev-libs/samepkg-1.0 is already installed; nothing to do',
         '[ebuild  N     ] dev-libs/newpkg-1.0 ',
-        'dev-libs/nestedsetpkg-1.0 is already installed; nothing to do',
-        'dev-libs/dualslotpkg-2.0 is already installed; nothing to do',
         '[ebuild     U  ] dev-libs/upgradepkg-2.0 [1.0]',
+        'dev-libs/samepkg-1.0 is already installed; nothing to do',
+        'dev-libs/nestedsetpkg-1.0 is already installed; nothing to do',
         '[ebuild  N     ] dev-libs/innernestedsetpkg-1.0 ',
+        'dev-libs/dualslotpkg-2.0 is already installed; nothing to do',
         '[ebuild  N     ] dev-libs/withdeps-1.0 ',
     ]
 
@@ -9954,13 +9971,20 @@ def test_system_expands_to_the_fixture_profile_chains_own_packages_files(
     --update is added purely so upgradepkg's own dependency-level entry
     actually upgrades (see the --update contract tests) rather than
     staying silently AlreadyInstalled -- unrelated to what this test
-    itself is about."""
+    itself is about.
+
+    The "already installed" notice sits where the scheduler itself placed
+    that node -- see test_world_expands_to_the_fixture_world_files_own_
+    atoms's own doc comment for why (the 2026-09-06 _serialize_tasks
+    port). Real portage never displays such an entry at all, so there is
+    no real ordering for it to match; the merge-bound sequence is
+    unchanged."""
     result = _run([str(emerge_binary)], ["--pretend", "--update", "@system"], fixture_env)
     assert result.returncode == 0
     assert result.stdout.splitlines() == [
         '[ebuild  N     ] dev-libs/newpkg-1.0 ',
-        'dev-libs/systempkg-1.0 is already installed; nothing to do',
         '[ebuild     U  ] dev-libs/upgradepkg-2.0 [1.0]',
+        'dev-libs/systempkg-1.0 is already installed; nothing to do',
         '[ebuild  N     ] dev-libs/withdeps-1.0 ',
     ]
 
@@ -9969,7 +9993,14 @@ def test_system_combines_with_an_explicit_atom(emerge_binary, fixture_env):
     """@system can appear alongside an explicit atom in the same
     invocation, expanding in place at whatever position it's given, same
     as @world. --update is added for the same reason as the plain
-    @system test above."""
+    @system test above.
+
+    The "already installed" notices sit where the scheduler itself placed
+    those nodes -- see test_world_expands_to_the_fixture_world_files_own_
+    atoms's own doc comment for why (the 2026-09-06 _serialize_tasks
+    port). Real portage never displays such an entry at all, so there is
+    no real ordering for them to match; the merge-bound sequence is
+    unchanged."""
     result = _run(
         [str(emerge_binary)],
         ["--pretend", "--update", "dev-libs/samepkg", "@system"],
@@ -9977,10 +10008,10 @@ def test_system_combines_with_an_explicit_atom(emerge_binary, fixture_env):
     )
     assert result.returncode == 0
     assert result.stdout.splitlines() == [
-        'dev-libs/samepkg-1.0 is already installed; nothing to do',
         '[ebuild  N     ] dev-libs/newpkg-1.0 ',
-        'dev-libs/systempkg-1.0 is already installed; nothing to do',
         '[ebuild     U  ] dev-libs/upgradepkg-2.0 [1.0]',
+        'dev-libs/systempkg-1.0 is already installed; nothing to do',
+        'dev-libs/samepkg-1.0 is already installed; nothing to do',
         '[ebuild  N     ] dev-libs/withdeps-1.0 ',
     ]
 

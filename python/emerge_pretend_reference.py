@@ -6835,88 +6835,364 @@ def _rebuild_if_entries(
     return out
 
 
-def _dep_order_from_metadata(metadata, use_flags, real_order_keys):
-    """An entry's own direct dependency `(category, package)`s, in real
-    portage's own graph-*discovery* order -- flattens `metadata`'s dep-key
-    strings one key at a time, in `real_order_keys`' given order (so
-    cross-key token order can't leak in), first occurrence per
-    (category, package) only (a later repeat of the same cp is a no-op,
-    matching real `digraph.add`'s own idempotency). Mirrors
-    portage-repo/src/lib.rs's dep_order_from_metadata exactly."""
-    dep_order = []
+def _split_disjunctive(dep_struct, _disjunctions=None):
+    """Real depgraph._queue_disjunctive_deps, run over one USE-reduced
+    (opconvert=True) dep key: returns (inline, disjunctive) atom lists.
+
+    Real walks the struct and, for each element: a `|| ( ... )` group goes
+    wholesale into the deferred bundle; a plain all-of group recurses
+    (contributing to that same bundle); a bare atom is deferred too when
+    its category is `virtual` ("Eventually this will check for
+    PROPERTIES=virtual"), and yielded inline otherwise.
+
+    This reference keeps every branch of a `||` group rather than
+    resolving one (real's dep_zapdeps picks a branch; here the branches
+    that don't correspond to a resolved entry simply never match a graph
+    node), so the disjunctive list is the flattened contents of each `||`
+    group plus the virtual/* atoms. Mirrors
+    portage-repo/src/merge_order.rs's split_disjunctive exactly."""
+    inline = []
+    disjunctions = [] if _disjunctions is None else _disjunctions
+
+    def flatten(node, out):
+        if isinstance(node, list):
+            for x in node:
+                if x != "||":
+                    flatten(x, out)
+        else:
+            out.append(str(node))
+
+    for x in dep_struct:
+        if isinstance(x, list):
+            if x and x[0] == "||":
+                flatten(x, disjunctions)
+            else:
+                sub_inline, _ = _split_disjunctive(x, disjunctions)
+                inline.extend(sub_inline)
+        else:
+            tok = str(x)
+            parsed = _parse_atom(tok)
+            if parsed is not None and parsed.cp.split("/", 1)[0] == "virtual":
+                disjunctions.append(tok)
+            else:
+                inline.append(tok)
+    return inline, disjunctions
+
+
+# Real depgraph.py:4253-4289's own `deps` tuple: which DepPriority each
+# dependency key contributes. `optional` is pkg.built for the two
+# build-time keys (a built package's build deps are informational only);
+# IDEPEND is a runtime priority like RDEPEND (real also sets installtime,
+# which no ignore_priority predicate reads).
+_DEP_KEY_INDEX = {"RDEPEND": 0, "IDEPEND": 1, "PDEPEND": 2, "DEPEND": 3, "BDEPEND": 4}
+
+
+def _new_priority(**kwargs):
+    p = {
+        "buildtime": False,
+        "runtime": False,
+        "runtime_post": False,
+        "buildtime_slot_op": False,
+        "runtime_slot_op": False,
+        "optional": False,
+        "satisfied": False,
+    }
+    p.update(kwargs)
+    return p
+
+
+def _key_priority(dep_key, built):
+    if dep_key in ("RDEPEND", "IDEPEND"):
+        return _new_priority(runtime=True)
+    if dep_key == "PDEPEND":
+        return _new_priority(runtime_post=True)
+    return _new_priority(buildtime=True, optional=built)
+
+
+def _dep_edges_from_metadata(metadata, use_flags, real_order_keys, built):
+    """An entry's own direct dependencies, in real portage's own
+    graph-*discovery* order -- flattens metadata's dep-key strings one key
+    at a time, in real_order_keys' given order (so cross-key token order
+    can't leak in), each carrying the real DepPriority its originating key
+    (and the atom's own slot operator) implies, plus real
+    _queue_disjunctive_deps' inline-vs-deferred split.
+
+    One edge per distinct (category, package, priority): real records a
+    *list* of priorities per digraph edge (digraph.add's bisect.insort)
+    and leaf_nodes/child_nodes need every one of them, so an atom named by
+    both RDEPEND and DEPEND contributes two edges rather than being
+    deduped to the first. Mirrors portage-repo/src/merge_order.rs's
+    dep_edges_from_metadata exactly."""
+    edges = []
     seen = set()
     for dep_key in real_order_keys:
         depstr = metadata.get(dep_key)
         if not depstr:
             continue
+        base = _key_priority(dep_key, built)
+        key_index = _DEP_KEY_INDEX.get(dep_key, 4)
         try:
-            flat = use_reduce(depstr, uselist=use_flags, flat=True)
+            struct = use_reduce(depstr, uselist=use_flags, opconvert=True)
         except (InvalidDependString, InvalidAtom):
             continue
-        for tok in flat:
+        inline, deferred = _split_disjunctive(struct)
+        for tok, disjunctive in [(t, False) for t in inline] + [
+            (t, True) for t in deferred
+        ]:
             if tok == "||":
                 continue
             dep_atom = _parse_atom(tok)
             if dep_atom is None or dep_atom.blocker:
                 continue
+            # Real _wrapped_add_pkg_dep_string: a `:=`/`:slot=` atom
+            # promotes its own key's priority to the slot-operator
+            # variant, which the ignore_priority ladder refuses to relax
+            # as readily as a plain one.
+            priority = dict(base)
+            if getattr(dep_atom, "slot_operator", None) == "=":
+                if priority["buildtime"]:
+                    priority["buildtime_slot_op"] = True
+                if priority["runtime"]:
+                    priority["runtime_slot_op"] = True
             cp = tuple(dep_atom.cp.split("/", 1))
-            if cp not in seen:
-                seen.add(cp)
-                dep_order.append(cp)
-    return dep_order
+            dedup = (cp, tuple(sorted(priority.items())))
+            if dedup in seen:
+                continue
+            seen.add(dedup)
+            edges.append(
+                {
+                    "atom": tok,
+                    "cp": cp,
+                    "priority": priority,
+                    "disjunctive": disjunctive,
+                    "key": key_index,
+                }
+            )
+    return edges
 
 
-def _real_discovery_order(entries, top_level_atoms):
-    """Simulates real depgraph's own `.order` discovery position -- an
-    explicit-stack DFS, not the BFS `queue` this reference's own graph
-    walk actually uses (portuale's BFS exists for correctness/dedup
-    determinism, unrelated to real's own merge-order mechanics).
+# ---------------------------------------------------------------------
+# ignore_priority predicates -- _emerge/DepPriorityNormalRange.py and
+# _emerge/DepPrioritySatisfiedRange.py.
+#
+# `cross` (a dependency crossing into a different ROOT) is always False
+# here: this reference resolves one root at a time, so real's
+# self._cross(pkg.root) is constantly false and the two
+# "runtime_slot_op and not priority.cross" guards collapse to plain
+# runtime_slot_op.
+# ---------------------------------------------------------------------
 
-    Real `_resolve` seeds the walk with `for atom in
-    sorted(arg.pset.getAtoms(), key=str)` -- alphabetical *within that
-    one arg's own pset*, but args themselves (a bare atom, @world,
-    @system, a nested custom set -- each its own SetArg/PackageArg) are
-    processed in the order given, and each arg's own pset can itself
-    recursively expand nested sets whose members interleave with the
-    parent's own in a way that isn't a flat alphabetical merge either
-    (confirmed empirically: real's @world-with-a-nested-custom-set
-    fixture output isn't alphabetical across the whole expansion, only
-    within narrower groupings this flattened top_level_atoms list has
-    already lost the boundaries for). This reference's own set-expansion
-    code flattens every arg into one list before this function ever sees
-    it, with no arg/pset boundary left to sort within -- alphabetizing
-    the *whole* flattened list was tried and broke multiple
-    already-verified fixtures (@world/@system combined with an explicit
-    atom, a nested custom set). So this deliberately uses
-    top_level_atoms in the given order instead -- the same order the
-    pre-existing (already real-verified) set-expansion code already
-    produces -- and leaves real's intra-arg alphabetization as a known,
-    unreproduced cut. Each seed is then `_create_graph()`-walked once:
-    real `_create_graph` (depgraph.py:3254-3269) is `while dep_stack:
-    dep = dep_stack.pop()` -- a genuine LIFO stack. Real `_add_pkg`
-    (depgraph.py:3550-3828) calls `digraph.add(pkg, dep.parent, ...)`
-    EARLY (records this entry's `.order` position at discovery time) but
-    only `dep_stack.append(pkg)`s (defers recursion into it) near the
-    end -- so popping a parent discovers ALL its direct children (via
-    its own `dep_order`, real `_add_pkg_dep_string`'s own `deps` tuple
-    order, depgraph.py:4253-4291) in one forward pass, but then dives
-    into the LAST-discovered child first (LIFO) before any earlier
-    sibling's own children are ever discovered. Mirrors
-    portage-repo/src/lib.rs's real_discovery_order exactly."""
+
+def _n_ignore_optional(p):
+    return p["optional"]
+
+
+def _n_ignore_runtime_post(p):
+    return p["optional"] or p["runtime_post"]
+
+
+def _n_ignore_runtime(p):
+    return (not p["runtime_slot_op"]) and (p["optional"] or not p["buildtime"])
+
+
+def _s_ignore_optional(p):
+    return p["optional"]
+
+
+def _s_ignore_satisfied_runtime_post(p):
+    if p["optional"]:
+        return True
+    if not p["satisfied"]:
+        return False
+    if p["buildtime"] or p["runtime"]:
+        return False
+    return p["runtime_post"]
+
+
+def _s_ignore_runtime_post(p):
+    if p["optional"]:
+        return True
+    if p["buildtime"] or p["runtime"]:
+        return False
+    return p["runtime_post"]
+
+
+def _s_ignore_satisfied_runtime(p):
+    if p["optional"]:
+        return True
+    if p["buildtime"]:
+        return False
+    if not p["runtime"]:
+        return True
+    return p["satisfied"]
+
+
+def _s_ignore_satisfied_buildtime(p):
+    if p["optional"]:
+        return True
+    if p["buildtime_slot_op"]:
+        return False
+    return p["satisfied"]
+
+
+def _s_ignore_satisfied_buildtime_slot_op(p):
+    if p["optional"]:
+        return True
+    if p["satisfied"]:
+        return True
+    return not p["buildtime"] and not p["runtime"]
+
+
+def _s_ignore_runtime(p):
+    return ((not p["runtime_slot_op"]) or p["satisfied"]) and (
+        p["satisfied"] or p["optional"] or not p["buildtime"]
+    )
+
+
+_NORMAL_RANGE = {
+    "ignore": [None, _n_ignore_optional, _n_ignore_runtime_post, _n_ignore_runtime],
+    "medium": 3,
+    "medium_soft": 2,
+    "medium_post": 2,
+}
+
+_SATISFIED_RANGE = {
+    "ignore": [
+        None,
+        _s_ignore_optional,
+        _s_ignore_satisfied_runtime_post,
+        _s_ignore_runtime_post,
+        _s_ignore_satisfied_runtime,
+        _s_ignore_satisfied_buildtime,
+        _s_ignore_satisfied_buildtime_slot_op,
+        _s_ignore_runtime,
+    ],
+    "medium": 7,
+    "medium_soft": 6,
+    "medium_post": 3,
+}
+
+
+class _MergeDigraph:
+    """A portage.util.digraph restricted to what _serialize_tasks reads:
+    per-node child/parent adjacency with a priority *list* per edge, plus
+    `order` (the sequence nodes were added in, which real's own
+    leaf_nodes() iterates and _merge_order_bias re-sorts in place).
+    Mirrors portage-repo/src/merge_order.rs's Digraph exactly."""
+
+    def __init__(self, n):
+        self.n = n
+        self.children = [[] for _ in range(n)]
+        self.parents = [[] for _ in range(n)]
+        self.order = []
+        self.installed = [False] * n
+        self.alive = [True] * n
+
+    def add_edge(self, parent, child, priority):
+        for slot in self.children[parent]:
+            if slot[0] == child:
+                if priority not in slot[1]:
+                    slot[1].append(priority)
+                return
+        self.children[parent].append((child, [priority]))
+        self.parents[child].append(parent)
+
+    def child_nodes(self, i, ig):
+        return [
+            c
+            for c, prios in self.children[i]
+            if self.alive[c] and (ig is None or any(not ig(p) for p in prios))
+        ]
+
+    def is_leaf(self, i, ig):
+        return not any(
+            self.alive[c] and (ig is None or any(not ig(p) for p in prios))
+            for c, prios in self.children[i]
+        )
+
+    def has_parents(self, i):
+        return any(self.alive[p] for p in self.parents[i])
+
+    def leaf_nodes(self, ig):
+        return [i for i in self.order if self.alive[i] and self.is_leaf(i, ig)]
+
+
+def _installed_candidates_by_cp(root):
+    """Every installed package's cat/pkg-version:slot/sub_slot candidate
+    string, grouped by cat/pkg -- the input DepPriority.satisfied needs
+    (real vardb.match_pkgs(atom))."""
+    by_cp = {}
+    for category, package, version, _slot in _all_installed_packages(root):
+        slot, sub_slot = _read_vdb_slot(root, category, package, version)
+        by_cp.setdefault((category, package), []).append(
+            f"{category}/{package}-{version}:{slot}/{sub_slot}"
+        )
+    return by_cp
+
+
+def _build_merge_digraph(entries, top_level_atoms, root):
+    """Builds the merge-order digraph out of the resolved `entries`.
+
+    Nodes are the entries themselves (this reference's graph is already
+    one node per resolved cat/pkg slot); edges come from each entry's own
+    `deps` provenance, which carries real's per-key DepPriority.
+    required_by supplies a fallback edge for any owner relationship the
+    forward deps walk didn't record (a diamond dependency's second owner,
+    a synthetic rebuild entry, an entry whose metadata was unreadable) so
+    the scheduler is never *less* constrained than a required_by-only one.
+    Mirrors portage-repo/src/merge_order.rs's build_digraph exactly."""
     n = len(entries)
     cp_indices = {}
     for i, e in enumerate(entries):
         cp_indices.setdefault((e[0], e[1]), []).append(i)
-    rank = [None] * n
-    next_rank = 0
+    g = _MergeDigraph(n)
+    for i, e in enumerate(entries):
+        g.installed[i] = e[2][0] in ("already_installed", "no_visible_candidate")
+
+    installed_by_cp = _installed_candidates_by_cp(root)
+
+    def _entry_deps(i):
+        prov = entries[i][8] if isinstance(entries[i][8], dict) else {}
+        return prov.get("deps") or []
+
+    def satisfied(edge, child):
+        cands = installed_by_cp.get(edge["cp"])
+        if not cands:
+            return False
+        try:
+            matched = match_from_list(edge["atom"], cands)
+        except (InvalidAtom, InvalidDependString):
+            return False
+        if not matched:
+            return False
+        p = edge["priority"]
+        if p["buildtime_slot_op"] or p["runtime_slot_op"]:
+            if child is None:
+                return True
+            prov = entries[child][8] if isinstance(entries[child][8], dict) else {}
+            slot = entries[child][4]
+            sub_slot = prov.get("sub_slot")
+            if not slot or not sub_slot:
+                return True
+            want = f":{slot}/{sub_slot}"
+            return any(str(m).endswith(want) for m in matched)
+        return True
+
+    # Real _create_graph: an explicit LIFO dep_stack seeded from the
+    # top-level atoms. A node is recorded into .order the moment its
+    # parent's dep string first names it (forward, before any recursion),
+    # then the *last*-pushed node is expanded first -- so each node's own
+    # direct children land as one contiguous forward-order run, but the
+    # deepest-declared sibling's subtree is numbered before its earlier
+    # siblings'.
+    discovered = [False] * n
     stack = []
 
     def discover(i):
-        nonlocal next_rank
-        if rank[i] is not None:
+        if discovered[i]:
             return False
-        rank[i] = next_rank
-        next_rank += 1
+        discovered[i] = True
+        g.order.append(i)
         return True
 
     for atom_str in top_level_atoms:
@@ -6926,255 +7202,455 @@ def _real_discovery_order(entries, top_level_atoms):
         for i in cp_indices.get(tuple(atom.cp.split("/", 1)), ()):
             if discover(i):
                 stack.append(i)
-    while stack:
-        i = stack.pop()
-        dep_order = entries[i][8].get("dep_order", []) if entries[i][8] else []
-        for cp in dep_order:
-            for j in cp_indices.get(tuple(cp), ()):
+
+    # Real _create_graph's own two-stack outer loop (depgraph.py:3254-3269):
+    # the ordinary _dep_stack is drained completely, and only then is the
+    # *last*-queued disjunctive bundle popped off _dep_disjunctive_stack
+    # and expanded -- which pushes fresh nodes back onto _dep_stack, so the
+    # whole thing repeats. Each bundle is one dep key's worth of
+    # `|| ( ... )` / virtual/* atoms (_queue_disjunctive_deps queues at
+    # most one per key, before that key's inline atoms are added).
+    disjunctive_stack = []
+
+    def expand(i, disjunctive, key_filter):
+        for edge in _entry_deps(i):
+            if edge["disjunctive"] != disjunctive:
+                continue
+            if key_filter is not None and edge["key"] != key_filter:
+                continue
+            for j in cp_indices.get(edge["cp"], ()):
                 if discover(j):
                     stack.append(j)
+
+    while True:
+        while stack:
+            i = stack.pop()
+            keys = []
+            for edge in _entry_deps(i):
+                if edge["disjunctive"] and (not keys or keys[-1] != edge["key"]):
+                    keys.append(edge["key"])
+            for k in keys:
+                disjunctive_stack.append((i, k))
+            expand(i, False, None)
+        if not disjunctive_stack:
+            break
+        i, k = disjunctive_stack.pop()
+        expand(i, True, k)
+
+    # An entry this walk never reaches -- a synthetic slot-operator /
+    # --rebuild-if-* entry (no deps of its own), or an --nodeps run --
+    # keeps its original array position, appended after every
+    # genuinely-discovered node.
     for i in range(n):
-        if rank[i] is None:
-            rank[i] = next_rank
-            next_rank += 1
-    return rank
+        if not discovered[i]:
+            g.order.append(i)
+
+    # Edges. Forward first, so `children` keeps real's own dep-key/atom
+    # order (which asap_nodes and the cycle harvester both read).
+    for i in range(n):
+        for edge in _entry_deps(i):
+            for j in cp_indices.get(edge["cp"], ()):
+                # Real _add_pkg: a direct self-edge is dropped unless it is
+                # an unsatisfied build-time dependency, "since otherwise it
+                # can skew the merge order calculation in an unwanted way"
+                # (depgraph.py:3765-3770).
+                sat = satisfied(edge, j)
+                if i == j and not (edge["priority"]["buildtime"] and not sat):
+                    continue
+                priority = dict(edge["priority"])
+                priority["satisfied"] = sat
+                g.add_edge(i, j, priority)
+    # Fallback edges from required_by for owner relationships the forward
+    # walk has no deps entry for.
+    for j, e in enumerate(entries):
+        for owner in e[6]:
+            for i in cp_indices.get(tuple(owner), ()):
+                if i == j or any(c == j for c, _ in g.children[i]):
+                    continue
+                g.add_edge(i, j, _new_priority(runtime=True, satisfied=g.installed[j]))
+    return g
 
 
-def _deep_system_deps(entries, config):
-    """Which `entries` real `_find_deep_system_runtime_deps` reaches by
-    BFS from every `@system`-set package, following only RDEPEND/IDEPEND/
-    PDEPEND (runtime-priority) edges -- never DEPEND/BDEPEND. Mirrors
-    portage-repo/src/lib.rs's deep_system_deps exactly."""
-    n = len(entries)
-    cp_indices = {}
-    for i, e in enumerate(entries):
-        cp_indices.setdefault((e[0], e[1]), []).append(i)
+def _deep_system_deps(g, entries, config):
+    """Real _emerge/_find_deep_system_runtime_deps.py: every @system-set
+    member in the graph, plus everything reachable from one by following
+    only *runtime*-priority edges (RDEPEND/IDEPEND/PDEPEND; DEPEND/BDEPEND
+    are dropped). Feeds _merge_order_bias's own "system deps first" tier
+    -- real: "promote deep system runtime deps... for optimal leaf node
+    selection"."""
     system_cps = set()
-    for atom_str in config["system_packages"]:
-        atom = _parse_atom(atom_str)
-        if atom is not None:
-            system_cps.add(tuple(atom.cp.split("/", 1)))
-    is_deep_sys = [False] * n
-    stack = []
-    for i, e in enumerate(entries):
-        if (e[0], e[1]) in system_cps:
-            is_deep_sys[i] = True
-            stack.append(i)
+    for a in config.get("system_packages", []):
+        parsed = _parse_atom(a)
+        if parsed is not None:
+            system_cps.add(tuple(parsed.cp.split("/", 1)))
+    deep = [False] * g.n
+    stack = [i for i in g.order if (entries[i][0], entries[i][1]) in system_cps]
     while stack:
         i = stack.pop()
-        runtime_dep_order = entries[i][8].get("runtime_dep_order", []) if entries[i][8] else []
-        for cp in runtime_dep_order:
-            for j in cp_indices.get(tuple(cp), ()):
-                if not is_deep_sys[j]:
-                    is_deep_sys[j] = True
-                    stack.append(j)
-    return is_deep_sys
+        if deep[i]:
+            continue
+        deep[i] = True
+        for c, prios in g.children[i]:
+            if g.alive[c] and any(p["runtime"] or p["runtime_post"] for p in prios):
+                stack.append(c)
+    return deep
 
 
-def _merge_order_bias(entries, discovery_rank, config, top_level_atoms):
-    """Real `_merge_order_bias` (depgraph.py:9274-9307, `implicit_system_
-    deps` -- default on, no `--implicit-system-deps=n` support here, a
-    documented cut) only ever reorders real's own *merge* digraph, which
-    -- crucially -- has already had every "nomerge" (already_installed)
-    root node pruned from it (`_serialize_tasks`'s own "Prune 'nomerge'
-    root nodes if nothing depends on them" loop, depgraph.py:9505-9518,
-    which runs BEFORE `self._merge_order_bias(mygraph)` at line 9519): a
-    trivial top-level target with nothing depending on it never enters
-    scheduling at all -- confirmed live (`emerge -p --noreplace
-    <already-installed pkg>` prints nothing whatsoever for it, not even a
-    notice). This reference shows a "package is already installed;
-    nothing to do" notice for a top-level already_installed/
-    no_visible_candidate entry anyway (a portuale-only UX nicety with no
-    real precedent to order against) -- so this bias only ever compares
-    *merge-bound* entries (`_merge_bound_cpv(entry) is not None`, i.e.
-    new/upgrade/downgrade/reinstall) against each other, exactly
-    mirroring real's pruned-graph scope. A trivial entry is woven back
-    into the resulting preference order by simple insertion on its own
-    (unbiased) discovery_rank, relative to each merge-bound entry's own
-    *original* (also unbiased) discovery_rank -- i.e. bias only ever
-    reorders merge-bound entries *among themselves*; a trivial entry
-    never gets bias-promoted ahead of (or demoted behind) a merge-bound
-    entry it wasn't already ahead of (or behind) in plain discovery
-    order. Caught by a fixture (@system, one of whose three top-level
-    members -- withdeps -- RDEPENDs on newpkg and upgradepkg, combined
-    with an unrelated already-installed top-level samepkg): biasing
-    samepkg against the @system members promoted every @system member
-    ahead of it, when real would never even schedule samepkg (or bias
-    against it) in the first place.
+def _merge_order_bias(g, entries, config):
+    """Real depgraph._merge_order_bias (depgraph.py:9274-9307): re-sorts
+    mygraph.order in place so that, among simultaneously-eligible leaves,
+    @system-deep runtime deps come first and the rest go from highest to
+    lowest reference count. Real's own uninstalls-last rule has nothing to
+    apply to here (a --pretend merge graph has no uninstall nodes).
 
-    Real's own comparator, restricted this way: (1) an @system-deep
-    entry before a non-@system one; (2) among entries tied on (1),
-    *descending* reference count (real `len(mygraph.parent_nodes(node))`
-    -- how many other packages in the graph depend on this one); (3)
-    original discovery order breaks any remaining tie. Mirrors
-    portage-repo/src/lib.rs's merge_order_bias exactly.
-
-    Reference count is NOT simply `len(entry[6])` (required_by): real
-    `_add_pkg(pkg, dep)` calls `digraph.add(pkg, dep.parent, ...)` for
-    *every* package, including a top-level one, where `dep.parent` is
-    the originating `Arg` (`SetArg`/`PackageArg`) itself, not `None` --
-    `digraph.add`'s own `if not parent: return` only skips a genuinely
-    falsy parent. So a top-level target's own `parent_nodes` count
-    always includes that `Arg`, on top of any package that also depends
-    on it -- required_by (populated only from dependency-string owners,
-    `owner is not None`) misses this "requested at all" edge entirely."""
-    n = len(entries)
-    is_deep_sys = _deep_system_deps(entries, config)
-    top_level_cps = set()
-    for atom_str in top_level_atoms:
-        atom = _parse_atom(atom_str)
-        if atom is not None and not atom.blocker:
-            top_level_cps.add(tuple(atom.cp.split("/", 1)))
-
-    def _ref_count(i):
-        e = entries[i]
-        return len(e[6]) + (1 if (e[0], e[1]) in top_level_cps else 0)
-
-    merge_bound = [i for i in range(n) if _merge_bound_cpv(entries[i]) is not None]
-    merge_bound.sort(key=lambda i: (not is_deep_sys[i], -_ref_count(i), discovery_rank[i]))
-
-    trivial = [i for i in range(n) if _merge_bound_cpv(entries[i]) is None]
-    trivial.sort(key=lambda i: discovery_rank[i])
-
-    # Weave `trivial` back in: before each merge-bound entry, insert
-    # every trivial entry whose own (unbiased) discovery_rank still
-    # precedes that merge-bound entry's own (unbiased) discovery_rank --
-    # i.e. bias reorders `merge_bound` among itself only; a trivial
-    # entry's position relative to any merge-bound entry never changes
-    # from what plain discovery order already had.
-    order = []
-    ti = 0
-    for m in merge_bound:
-        while ti < len(trivial) and discovery_rank[trivial[ti]] < discovery_rank[m]:
-            order.append(trivial[ti])
-            ti += 1
-        order.append(m)
-    order.extend(trivial[ti:])
-
-    rank = [0] * n
-    for pos, i in enumerate(order):
-        rank[i] = pos
-    return rank
+    implicit_system_deps is default-on and this reference has no
+    --implicit-system-deps=n, a documented cut -- so the bias always runs.
+    The sort is stable, so a tie keeps discovery order (real's own
+    cmp_sort_key comparator returns 0 for a tie and list.sort is stable
+    too)."""
+    deep = _deep_system_deps(g, entries, config)
+    parent_count = [
+        sum(1 for p in g.parents[i] if g.alive[p]) for i in range(g.n)
+    ]
+    g.order.sort(key=lambda i: (not deep[i], -parent_count[i]))
 
 
-def _topological_merge_order(entries, edge_kind_map=None, top_level_atoms=(), config=None):
+def _gather_deps(g, node, ig, mergeable):
+    """Real _serialize_tasks' gather_deps: the closure of `node` under
+    `ig`, or None when it escapes `mergeable`. "Recursively gather a group
+    of nodes that RDEPEND on eachother. This ensures that they are merged
+    as a group and get their RDEPENDs satisfied as soon as possible.\""""
+    sel = set()
+    stack = [node]
+    while stack:
+        x = stack.pop()
+        if x in sel:
+            continue
+        if x not in mergeable:
+            return None
+        sel.add(x)
+        stack.extend(g.child_nodes(x, ig))
+    return sel
+
+
+def _entry_version(entry):
+    """The version a graph entry resolves to, whatever its outcome -- real
+    Package.version, which find_smallest_cycle's sorted(nodes) compares
+    after cp."""
+    outcome = entry[2]
+    tag = outcome[0]
+    if tag in ("new", "reinstall", "already_installed"):
+        return outcome[1]
+    if tag in ("upgrade", "downgrade"):
+        return outcome[2]
+    return ""
+
+
+def _find_smallest_cycle(g, entries, prange, asap, prefer_asap):
+    """Real find_smallest_cycle: the smallest gather_deps closure among the
+    currently-mergeable nodes, searched from the lowest ignore_priority
+    rung upward so as few dependencies as possible are relaxed. "In the
+    case of multiple runtime cycles, where some cycles may depend on
+    smaller independent cycles, it's optimal to merge smaller independent
+    cycles before other cycles that depend on them.\""""
+    mergeable = set(g.leaf_nodes(prange["ignore"][prange["medium"]]))
+    if not mergeable:
+        return None
+    if prefer_asap and asap:
+        cand = [i for i in asap if i in mergeable]
+    else:
+        cand = list(mergeable)
+    # Real "Sort nodes for deterministic results" -- sorted(nodes), i.e.
+    # Package.__lt__: cp then version.
+    cand.sort(
+        key=lambda i: (
+            entries[i][0],
+            entries[i][1],
+            _VerKey(_entry_version(entries[i])),
+        )
+    )
+    best = None
+    for idx in range(prange["medium_post"], prange["medium_soft"] + 1):
+        ig = prange["ignore"][idx]
+        for node in cand:
+            if not g.has_parents(node):
+                continue
+            cl = _gather_deps(g, node, ig, mergeable)
+            if cl is None:
+                continue
+            if best is None or len(cl) < len(best[0]):
+                best = (cl, ig)
+        # "Exit this loop with the lowest possible priority, which
+        # minimizes the use of installed packages to break cycles."
+        if best is not None:
+            break
+    return best
+
+
+class _VerKey:
+    """vercmp as a sort key."""
+
+    __slots__ = ("v",)
+
+    def __init__(self, v):
+        self.v = v
+
+    def __lt__(self, other):
+        c = vercmp(self.v, other.v)
+        return bool(c is not None and c < 0)
+
+
+def _harvest_cycle(g, sub):
+    """Real _serialize_tasks' own final block for a multi-node cycle:
+    harvest one node at a time from the induced subgraph, always taking a
+    leaf at the lowest ignore_priority that produces one, and preferring an
+    installed leaf "in order to avoid merging something too early as in bug
+    917259.\""""
+    ladder = [f for f in _NORMAL_RANGE["ignore"] + _SATISFIED_RANGE["ignore"] if f]
+    remaining = set(sub)
+    out = []
+    while remaining:
+        leaves = []
+        for ig in ladder:
+            leaves = [
+                i
+                for i in g.order
+                if i in remaining
+                and not any(
+                    c in remaining and any(not ig(p) for p in prios)
+                    for c, prios in g.children[i]
+                )
+            ]
+            if leaves:
+                break
+        if not leaves:
+            # Real leaves = [cycle_digraph.order[-1]].
+            leaves = [next(i for i in reversed(g.order) if i in remaining)]
+        installed_leaves = [i for i in leaves if g.installed[i]]
+        pick = installed_leaves[0] if installed_leaves else leaves[0]
+        remaining.discard(pick)
+        out.append(pick)
+    return out
+
+
+def _select_nodes(g, entries):
+    """Real depgraph._serialize_tasks' own selection loop, restricted to
+    what a --pretend merge graph contains: no Uninstall tasks, no blocker
+    nodes (blockers are rendered separately), and therefore none of real's
+    myblocker_uninstalls scheduling. What remains is the whole of real's
+    leaf-selection machinery: the NONE..MEDIUM_SOFT ignore_priority ladder
+    with real's "greedily pop all of these nodes since no relationship has
+    been ignored" batch at rung NONE; asap_nodes, real's PDEPEND-promotion
+    path (bug #180045); and find_smallest_cycle with the drop_satisfied
+    escalation to DepPrioritySatisfiedRange. Mirrors
+    portage-repo/src/merge_order.rs's select_nodes exactly."""
+    retlist = []
+    asap = []
+    prefer_asap = True
+    drop_satisfied = False
+
+    while any(g.alive[i] for i in g.order):
+        selected = None
+        used_ig = None
+        asap_active = prefer_asap and bool(asap)
+        prange = _SATISFIED_RANGE if asap_active else _NORMAL_RANGE
+
+        if asap_active:
+            asap = [i for i in asap if g.alive[i]]
+            for idx in range(1, prange["medium_soft"] + 1):
+                ig = prange["ignore"][idx]
+                for pos, node in enumerate(asap):
+                    if g.is_leaf(node, ig):
+                        selected = [node]
+                        used_ig = ig
+                        del asap[pos]
+                        break
+                if selected:
+                    break
+
+        if selected is None and not (prefer_asap and asap):
+            for idx in range(0, prange["medium_soft"] + 1):
+                ig = prange["ignore"][idx]
+                nodes = g.leaf_nodes(ig)
+                if not nodes:
+                    continue
+                # Real: "Greedily pop all of these nodes since no
+                # relationship has been ignored." Real additionally gates
+                # this on `not tree_mode`, because the batch "destroys
+                # --tree output" -- this reference's --tree re-derives its
+                # own nesting from required_by top-down instead of
+                # consuming the serialized list, so that gate has nothing
+                # to protect here and is deliberately not ported.
+                if len(nodes) == 1 or (ig is None and not asap):
+                    selected = nodes
+                else:
+                    # "For optimal merge order: only pop one node;
+                    # removing a root node (node without a parent) will
+                    # not produce a leaf node, so avoid it." Real first
+                    # prefers a node whose parent is itself an asap node.
+                    picked = None
+                    if asap:
+                        ig_ms = prange["ignore"][prange["medium_soft"]]
+                        for node in nodes:
+                            if any(
+                                g.alive[p]
+                                and p in asap
+                                and any(
+                                    c == node
+                                    and (ig_ms is None or any(not ig_ms(q) for q in prios))
+                                    for c, prios in g.children[p]
+                                )
+                                for p in g.parents[node]
+                            ):
+                                picked = node
+                                break
+                    if picked is None:
+                        picked = next(
+                            (node for node in nodes if g.has_parents(node)), None
+                        )
+                    selected = [picked] if picked is not None else None
+                if selected:
+                    used_ig = ig
+                    break
+
+        if selected is None:
+            ranges = []
+            if prange is not _NORMAL_RANGE:
+                ranges.append(_NORMAL_RANGE)
+            ranges.append(prange)
+            if drop_satisfied and prange is not _SATISFIED_RANGE:
+                ranges.append(_SATISFIED_RANGE)
+            for lr in ranges:
+                found = _find_smallest_cycle(g, entries, lr, asap, prefer_asap)
+                if found is None:
+                    continue
+                sub, used_ig = found
+                # "NOTE: This case should only be triggered when
+                # prefer_asap is True... select only one node here, so
+                # that merge order accounts for as many dependencies as
+                # possible."
+                sub_leaves = [
+                    i
+                    for i in g.order
+                    if i in sub and not any(c in sub for c, _ in g.children[i])
+                ]
+                if sub_leaves:
+                    selected = [sub_leaves[0]]
+                elif len(sub) > 1:
+                    selected = _harvest_cycle(g, sub)
+                else:
+                    selected = list(sub)
+                break
+            if selected is None and prefer_asap and asap:
+                # "We failed to find any asap nodes to merge, so ignore
+                # them for the next iteration."
+                prefer_asap = False
+                continue
+
+        # "Try to merge neglected medium_post deps as soon as possible if
+        # they're not satisfied by installed packages." -- real's
+        # PDEPEND-asap promotion, bug #180045.
+        if selected is not None and used_ig is not None:
+            promoted = []
+            for node in selected:
+                for c, prios in g.children[node]:
+                    if not g.alive[c]:
+                        continue
+                    is_medium_post = not any(
+                        not _s_ignore_runtime_post(p) for p in prios
+                    )
+                    is_satisfied_medium_post = not any(
+                        not _s_ignore_satisfied_runtime_post(p) for p in prios
+                    )
+                    if is_medium_post and not is_satisfied_medium_post:
+                        promoted.append(c)
+            for c in promoted:
+                if c in selected or c in asap:
+                    continue
+                asap.append(c)
+
+        if selected is None and not drop_satisfied:
+            drop_satisfied = True
+            continue
+        if selected is None:
+            # Real raises _unknown_internal_error here (an unresolved
+            # blocker, or a cycle none of the ignore_priority rungs could
+            # break). This reference reports a genuinely unbreakable cycle
+            # separately via _find_hard_cycles and still has to produce a
+            # list either way, so it keeps going instead: prefer a node
+            # whose every remaining dependency is one the *widest* filter
+            # (DepPrioritySatisfiedRange.ignore_medium, i.e. everything
+            # except an unsatisfied build-time dep) would drop, and only
+            # fall back to plain bias order when even that finds nothing.
+            ig_med = _SATISFIED_RANGE["ignore"][_SATISFIED_RANGE["medium"]]
+            selected = [
+                next(
+                    (i for i in g.order if g.alive[i] and g.is_leaf(i, ig_med)),
+                    next(i for i in g.order if g.alive[i]),
+                )
+            ]
+
+        prefer_asap = True
+        drop_satisfied = False
+        for i in selected:
+            if not g.alive[i]:
+                continue
+            g.alive[i] = False
+            retlist.append(i)
+        g.order = [i for i in g.order if g.alive[i]]
+    return retlist
+
+
+def _topological_merge_order(entries, top_level_atoms=(), config=None, root="/"):
     """Put `entries` in real portage's dependency-first *merge* order.
 
-    Real portage's `mylist` is a genuine topological merge schedule (its
-    Scheduler runs every install after the installs it depends on). This
-    reference has no scheduler, but each entry carries required_by (the
-    (category, package) of every entry that pulled it in) -- the reverse
-    of a dependency edge -- which is enough to order the list.
+    Real portage's mylist (Display.__call__'s input) is a genuine merge
+    schedule -- its Scheduler runs every install after the installs it
+    depends on. This is a port of the function that produces it, real
+    depgraph._serialize_tasks, run over a typed digraph built from every
+    entry's own `deps` provenance (which carries real's per-key
+    DepPriority) plus its required_by edges as a fallback.
 
-    A stable topological sort: an entry is emitted only once every other
-    entry it requires (within this set) has already been emitted; among
-    the entries that are all currently emittable, real's own discovery
-    position -- `_real_discovery_order`, biased by `_merge_order_bias` --
-    goes first (see both functions' own doc comments), not raw array
-    position. Two packages with no dependency relationship keep this
-    discovery order; a dependency always precedes the packages that pull
-    it in.
+    Real's own "Prune 'nomerge' root nodes if nothing depends on them"
+    loop (depgraph.py:9509-9518) is deliberately not ported: real's graph
+    is seeded from DependencyArg nodes and so carries the whole installed
+    universe those sets reach, which is what the prune removes. This
+    reference's graph is built from resolved entries instead -- no arg
+    nodes, and never that universe. What the prune would still remove here
+    is a top-level already-installed entry, which real drops because it
+    never displays one; this reference does display them, ordered after
+    the dependencies they pull in, which is what leaving them in the
+    scheduler produces.
 
-    A genuine dependency cycle is broken the way real portage's
-    _serialize_tasks does -- at a run-time edge. When no unplaced entry
-    has all its dependencies placed, the walk prefers an entry whose
-    every still-unplaced dependency is a *soft* (run-time / optional)
-    edge (edge_kind_map[(target cp, owner cp)] != [True, False]); real
-    portage's DepPrioritySatisfiedRange ignore_priority scan can drop an
-    unsatisfied run-time edge but never an unsatisfied build-time one.
-    Only if every remaining entry still has an unplaced *hard*
-    build-time dependency (an unbreakable cycle -- Commit 2's
-    `* Error: circular dependencies:`) does it fall back to the
-    earliest-discovered unplaced entry. Mirrors
-    portage-repo/src/lib.rs's topological_merge_order exactly.
-    """
+    Mirrors portage-repo/src/merge_order.rs's serialize_merge_order
+    exactly."""
     n = len(entries)
     if n < 2:
         return entries
-    edge_kind_map = edge_kind_map or {}
     config = config or {"system_packages": []}
-    # (category, package) -> every entry index with that cp (a multi-slot
-    # package has one entry per resolved slot).
-    cp_indices = {}
-    for i, e in enumerate(entries):
-        cp_indices.setdefault((e[0], e[1]), []).append(i)
-    # requires[i] = the entries i depends on, i.e. every j whose
-    # required_by (tuple index 6) names i's own cp. j precedes i.
-    # requires_hard[i] holds the same j's but only for edges that are an
-    # unsatisfied build-time dep with no run-time alternative
-    # (edge_kind_map[(j cp, i cp)] == [True, False]).
-    requires = [set() for _ in range(n)]
-    requires_hard = [set() for _ in range(n)]
-    for j, e in enumerate(entries):
-        target_cp = (e[0], e[1])
-        for owner in e[6]:
-            owner_cp = tuple(owner)
-            kinds = edge_kind_map.get((target_cp, owner_cp))
-            hard = bool(kinds) and kinds[0] and not kinds[1]
-            for i in cp_indices.get(owner_cp, ()):
-                if i != j:
-                    requires[i].add(j)
-                    if hard:
-                        requires_hard[i].add(j)
-    # Tie-break among several currently-emittable entries: real's own
-    # `mygraph.order` discovery position (`_real_discovery_order`), not
-    # raw array index -- see this function's own doc comment.
-    discovery_rank = _real_discovery_order(entries, top_level_atoms)
-    discovery_rank = _merge_order_bias(entries, discovery_rank, config, top_level_atoms)
-    placed = [False] * n
-    order = []
-    while len(order) < n:
-        # Real _serialize_tasks' own "Greedily pop all of these nodes
-        # since no relationship has been ignored" optimization
-        # (depgraph.py:9764-9777, the ignore_priority is None branch of
-        # its priority-ranged scan): every entry that's a *genuine* leaf
-        # right now -- no unplaced dependency of any kind, hard or soft
-        # -- gets emitted together, in one batch, in .order (bias-
-        # adjusted discovery rank) sequence, before the next round even
-        # looks at what that batch's placements just freed up. A
-        # one-at-a-time walk here would let a freshly-freed entry (say,
-        # one whose only blocker was A in this same batch) jump ahead of
-        # an already-available sibling with a higher discovery rank that
-        # real would have already committed to this round -- exactly the
-        # gap a live gnome-base/gnome-control-center comparison caught
-        # (net-libs/rest / net-libs/gnome-online-accounts, both
-        # available from round one, were landing after entries only
-        # *they* would go on to free up). Mirrors portage-repo/src/
-        # lib.rs's topological_merge_order_impl exactly.
-        batch = sorted(
-            (i for i in range(n) if not placed[i] and all(placed[d] for d in requires[i])),
-            key=lambda i: discovery_rank[i],
-        )
-        if batch:
-            for i in batch:
-                placed[i] = True
-                order.append(i)
-            continue
-        # Cycle: no entry is fully satisfied via an ordinary edge. Real's
-        # own priority-relaxation scan drops down to one-at-a-time
-        # selection past this point (an asap/parent-preference heuristic
-        # this reference approximates with the same discovery-rank
-        # tie-break) -- break it at a run-time edge, picking an entry
-        # whose every unplaced dependency is a soft edge.
-        nxt = min(
-            (
-                i
-                for i in range(n)
-                if not placed[i] and all(placed[d] for d in requires_hard[i])
-            ),
-            key=lambda i: discovery_rank[i],
-            default=None,
-        )
-        if nxt is None:
-            # Unbreakable cycle: emit the earliest-discovered unplaced
-            # entry.
-            nxt = min(
-                (i for i in range(n) if not placed[i]),
-                key=lambda i: discovery_rank[i],
-            )
-        placed[nxt] = True
-        order.append(nxt)
-    return [entries[i] for i in order]
+    g = _build_merge_digraph(entries, top_level_atoms, root)
+    # Unbiased discovery rank, kept before the bias re-sorts g.order -- it
+    # is what the entries the scheduler never saw are woven back in on.
+    discovery_rank = [0] * n
+    for pos, i in enumerate(g.order):
+        discovery_rank[i] = pos
+
+    _merge_order_bias(g, entries, config)
+    scheduled = _select_nodes(g, entries)
+
+    placed = set(scheduled)
+    leftover = sorted(
+        (i for i in range(n) if i not in placed), key=lambda i: discovery_rank[i]
+    )
+    out = []
+    ti = 0
+    for m in scheduled:
+        while ti < len(leftover) and discovery_rank[leftover[ti]] < discovery_rank[m]:
+            out.append(leftover[ti])
+            ti += 1
+        out.append(m)
+    out.extend(leftover[ti:])
+    return [entries[i] for i in out]
 
 
 def _merge_bound_cpv(entry):
@@ -8337,10 +8813,9 @@ def resolve_pretend_graph(
                 # up by), and never when `nodeps` disables the dependency
                 # walk entirely, matching every other outcome's own `nodeps`
                 # handling further below.
-                already_installed_dep_order = []
-                already_installed_runtime_dep_order = []
+                already_installed_deps = []
                 if outcome[0] == "already_installed" and not nodeps and _deep_recurses_at(deep, depth):
-                    # GraphEntry::dep_order for an AlreadyInstalled entry:
+                    # GraphEntry::deps for an AlreadyInstalled entry:
                     # always the *current* tree ebuild's metadata (real
                     # --dynamic-deps's own default) -- ordering is a
                     # display nicety, not resolution-critical, so this
@@ -8348,7 +8823,7 @@ def resolve_pretend_graph(
                     # --dynamic-deps=n vdb-snapshot branch. Real's own
                     # _add_pkg gate is the same: an installed package
                     # whose deps aren't recursed into gets pushed onto
-                    # _ignored_deps, never .order, so dep_order is
+                    # _ignored_deps, never .order, so `deps` is
                     # likewise only ever computed under this identical
                     # condition. Mirrors portage-repo/src/lib.rs exactly.
                     _ai_candidates = [
@@ -8381,11 +8856,10 @@ def resolve_pretend_graph(
                                 if with_bdeps
                                 else ("RDEPEND", "IDEPEND", "PDEPEND")
                             )
-                            already_installed_dep_order = _dep_order_from_metadata(
-                                _ai_metadata, _ai_use_flags, _ai_real_order_keys
-                            )
-                            already_installed_runtime_dep_order = _dep_order_from_metadata(
-                                _ai_metadata, _ai_use_flags, ("RDEPEND", "IDEPEND", "PDEPEND")
+                            # An installed package is pkg.built, so real
+                            # marks its build-time deps optional.
+                            already_installed_deps = _dep_edges_from_metadata(
+                                _ai_metadata, _ai_use_flags, _ai_real_order_keys, True
                             )
                     _enqueue_dependencies(
                         repos,
@@ -8456,8 +8930,7 @@ def resolve_pretend_graph(
                             "mask_entry": None,
                             "unmask_entry": None,
                             "keyword_entry": None,
-                            "dep_order": already_installed_dep_order,
-                            "runtime_dep_order": already_installed_runtime_dep_order,
+                            "deps": already_installed_deps,
                         },
                         keyword_suggestion,
                         use_suggestion,
@@ -9053,7 +9526,7 @@ def resolve_pretend_graph(
             depstr = " ".join(metadata[k] for k in _dep_keys if metadata.get(k))
 
             # Real graph *discovery* order (see this file's own
-            # _real_discovery_order doc comment): real _add_pkg_dep_string
+            # _build_merge_digraph doc comment): real _add_pkg_dep_string
             # walks RDEPEND, IDEPEND, PDEPEND, DEPEND, BDEPEND in that
             # exact order (depgraph.py:4253-4289's own deps tuple) -- a
             # different order than _dep_keys above (which only cares
@@ -9065,9 +9538,8 @@ def resolve_pretend_graph(
                 if candidate_source == "binary" and not with_bdeps
                 else ("RDEPEND", "IDEPEND", "PDEPEND", "DEPEND", "BDEPEND")
             )
-            provenance["dep_order"] = _dep_order_from_metadata(metadata, use_flags, _real_order_keys)
-            provenance["runtime_dep_order"] = _dep_order_from_metadata(
-                metadata, use_flags, ("RDEPEND", "IDEPEND", "PDEPEND")
+            provenance["deps"] = _dep_edges_from_metadata(
+                metadata, use_flags, _real_order_keys, candidate_source == "binary"
             )
 
             # Per-edge build-time/run-time classification for the
@@ -9577,7 +10049,7 @@ def resolve_pretend_graph(
     # dependencies are ever queued). Re-sort into merge order now that
     # every required_by edge is known. Mirrors portage-repo/src/lib.rs's
     # topological_merge_order exactly.
-    entries = _topological_merge_order(entries, edge_kind_map, atoms, config)
+    entries = _topological_merge_order(entries, atoms, config, root)
 
     # Real depgraph.py:5706-5717 -- see the Rust side's own
     # GraphResult::buildpkgonly_deps_unsatisfied doc comment.

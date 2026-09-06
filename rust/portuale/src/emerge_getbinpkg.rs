@@ -389,8 +389,7 @@ mod tests {
             targets_running_root: false,
             remote_binary: false,
             build_id: None,
-            dep_order: Vec::new(),
-            runtime_dep_order: Vec::new(),
+            deps: Vec::new(),
         }
     }
 
@@ -801,8 +800,7 @@ mod tests {
             targets_running_root: false,
             remote_binary: true,
             build_id: None,
-            dep_order: Vec::new(),
-            runtime_dep_order: Vec::new(),
+            deps: Vec::new(),
         };
 
         run_merge_plan(
@@ -913,8 +911,7 @@ mod tests {
             targets_running_root: false,
             remote_binary: true,
             build_id: None,
-            dep_order: Vec::new(),
-            runtime_dep_order: Vec::new(),
+            deps: Vec::new(),
         };
 
         run_merge_plan(

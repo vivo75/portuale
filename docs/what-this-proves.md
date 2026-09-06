@@ -14046,3 +14046,119 @@ Zero behavior change, verified the same way every refactor slice is:
 warnings, suite totals now 799/799 Rust (2 new `error.rs` unit tests)
 and pytest 1292 passed / 5 pre-existing non-TTY --ask/--resume
 failures / 2 skipped — byte-identical on all pinned inputs.
+
+### Merge-list order: the full `_serialize_tasks` port (2026-09-06)
+
+Every earlier merge-order slice (`real_discovery_order`,
+`merge_order_bias`, batched leaf selection — 2026-09-04) reproduced the
+right *set* of merge tasks but plateaued at **4/15** exact positions on
+the live case `emerge -puD --getbinpkg net-libs/rest`. A 2026-09-06
+prototype of the last named remaining cause — the full-transitive-tree
+discovery walk — moved that number by exactly zero, which finally forced
+the right conclusion: real's scheduler is not a topological sort with a
+tie-break at all, and no single piece of it does anything on its own.
+
+**Real `depgraph._serialize_tasks` is a repeated "pop every currently
+eligible leaf" loop over a digraph whose edges carry a `DepPriority`**
+(build-time / run-time / run-time-post / slot-operator / optional /
+already-satisfied). Around that loop sit four things that all have to be
+present together:
+
+* the `DepPriorityNormalRange` / `DepPrioritySatisfiedRange`
+  `ignore_priority` ladder — which decides *which* nodes are eligible in
+  a round, with real's own "greedily pop all of these nodes since no
+  relationship has been ignored" batch at the unrelaxed rung and
+  one-node-at-a-time selection (preferring a node that actually has a
+  parent) at every relaxed rung;
+* `_merge_order_bias` + `_find_deep_system_runtime_deps` — which decides
+  the sequence *within* a round (`@system`-deep runtime deps first, then
+  descending reference count, then discovery order);
+* `find_smallest_cycle` / `gather_deps` with the `drop_satisfied`
+  escalation — which breaks a genuine runtime cycle at the cheapest
+  possible edge;
+* `asap_nodes` — which overrides *both* of the first two for a `PDEPEND`
+  child freed by a relaxed-rung selection (real's bug #180045 fix).
+
+**How it was validated.** Real portage's `emerge -p --debug` prints its
+entire digraph (`digraph.debug_print()`: 1854 nodes, every edge, every
+edge's top priority) in `.order` sequence. Parsing that dump and running
+a from-scratch port of `_serialize_tasks` *on real's own graph*
+reproduced real's 15-package merge list **exactly**, 15/15 — which
+proved the algorithm before a line of it was written into portuale, and
+localised everything afterwards to graph fidelity rather than scheduling.
+
+That experiment also produced the scope reduction the port relies on:
+real prunes its own graph before scheduling ("Prune 'nomerge' root nodes
+if nothing depends on them", `depgraph.py:9509-9518`), and re-running the
+algorithm on **just the forward transitive dependency closure of the
+merge-bound packages** — 461 of those 1854 nodes — gives the identical
+merge list. Portuale's own entry set already *is* that closure (462
+nodes for the same case), so the "full-transitive-tree walk" the backlog
+had listed as the blocker turned out not to be needed at all.
+
+**The one genuinely new mechanism the port needed** is real's
+`_dep_disjunctive_stack`. `_queue_disjunctive_deps` does not walk a
+`|| ( … )` group — or **any `virtual/*` atom**, which real's `dep_check`
+expands into one — inline. It collects each dep key's whole disjunctive
+set into a bundle and pushes it onto a *second* stack, which
+`_create_graph`'s outer loop only pops once the ordinary `_dep_stack`
+has drained completely. That deferral is load-bearing: it is why
+`sys-libs/timezone-data`'s `virtual/libintl` lands at `.order` position
+391 in real's graph rather than 11, next to the siblings declared
+alongside it. Portuale's discovery order matched real's at 15/461
+positions without it and 347/461 with it.
+
+**Result**, live against real portage 3.0.82.2 on a ~1570-package
+system, exact-position matches:
+
+| case | before | after |
+| --- | --- | --- |
+| `emerge -puD --getbinpkg net-libs/rest` | 4/15 | **15/15** |
+| `emerge -puD --getbinpkg sys-devel/gcc` | 8/26-era | **14/14** |
+| `emerge -puD --getbinpkg app-crypt/gnupg` | — | **14/14** |
+
+Any of the three can *also* report two positions off on a given run, and
+it is always the same pair: `llvm-core/llvmgold` and
+`llvm-core/llvm-toolchain-symlinks`, whose relative order **real portage
+itself flips between runs**. Real's `asap_nodes` promotion iterates a
+Python `set` of `Package` objects, so `PYTHONHASHSEED` randomisation
+decides which of the two goes first — confirmed by running
+`emerge -p -uD sys-devel/gcc` four times and watching the pair swap.
+Portuale picks one of the two valid orders deterministically, so a
+comparison run scores 14/14 or 12/14 depending on which order real
+happened to produce that time.
+
+The `net-libs/rest` case needs `--exclude media-libs/libdisplay-info` to
+reach 15/15 — not an ordering issue but the known, separately-tracked
+*membership* divergence (`dev-libs/weston`'s `<media-libs/libdisplay-
+info-0.4.0` upper bound, which real sees via its `_complete_graph`
+re-walk of `@world` and portuale does not); the extra node and its four
+build-dep nodes perturb the bias ties around it. Without the exclusion
+the same run is 10/15, still up from 4/15.
+
+Implementation: new `rust/portage-repo/src/merge_order.rs` (`DepPriority`,
+`DepEdge`, `split_disjunctive`, `build_digraph`, `merge_order_bias`,
+`find_smallest_cycle`, `harvest_cycle`, `select_nodes`,
+`serialize_merge_order`), mirrored in the Python reference
+(`_split_disjunctive`, `_dep_edges_from_metadata`, `_MergeDigraph`,
+`_build_merge_digraph`, `_select_nodes`, `_topological_merge_order`).
+`GraphEntry::dep_order`/`runtime_dep_order` are replaced by a single
+`deps: Vec<DepEdge>` carrying each dependency's real `DepPriority`, its
+atom (so `satisfied` can be decided against the vdb once the whole graph
+is known), its `disjunctive` flag and its originating dep key.
+
+Two deliberate divergences from real, both documented at their site:
+real's nomerge-root prune is **not** ported (portuale's graph has no
+`DependencyArg` nodes and never contains the installed universe the
+prune exists to remove; what it would still remove is a top-level
+already-installed entry, which real never displays and portuale does),
+and where real raises its internal circular-dependency error portuale
+keeps scheduling — preferring a node whose every remaining dependency
+the widest filter would drop — because it still has to print a list, and
+reports the unbreakable cycle separately via `find_hard_cycles`.
+
+`PORTUALE_DEBUG_MERGE_GRAPH=1` dumps portuale's digraph in the same
+`NODE`/`EDGE` shape, for diffing against real's `--debug` dump: node
+sets first, then edge sets, then priorities, then `.order`. That diff
+localised every remaining gap in minutes; reasoning about the scheduler
+in the abstract had not, across three prior sessions.

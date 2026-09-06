@@ -133,19 +133,24 @@ can't grow into these incrementally:
   `--tree` renderer); the *conditional* `followup_change` grandparent
   variant has no fixture (the *hard*-clash grandparent case does,
   2026-09-05).
-- **Merge-list order, remaining sub-algorithms** — `real_discovery_order`/
-  `merge_order_bias`/batched leaf selection are shipped and match real
-  exactly over long contiguous runs; still open: the full-transitive-tree
-  discovery-order walk (real ranks discovery across its *entire*
-  already-installed transitive graph, portuale only tracks what it
-  needs — the confirmed remaining cause of the one known live gap,
-  `docs/what-this-proves.md`'s "Merge-list order" entries have the full
-  empirical trail), real's fuller `DepPriorityNormalRange` ladder (cited
-  behavior for genuinely circular graphs, confirmed not the cause of any
-  observed gap), `asap_nodes`/libc-first, the `_FrontierDigraph` perf
-  layer, blocker/uninstall interleaving, a full `gather_deps` port
-  (researched — only reachable via a genuine unresolved runtime cycle,
-  which no current fixture has).
+- **Merge-list order, remaining cuts.** The `_serialize_tasks` port
+  itself shipped 2026-09-06 (`portage-repo/src/merge_order.rs`): a typed
+  `DepPriority` digraph, the `DepPriorityNormalRange`/
+  `DepPrioritySatisfiedRange` `ignore_priority` ladder, `_merge_order_bias`
+  + `_find_deep_system_runtime_deps`, `find_smallest_cycle`/`gather_deps`,
+  `asap_nodes` (`PDEPEND` promotion), and real's own
+  `_dep_disjunctive_stack` deferral of `||`/`virtual` deps. Verified
+  live against real portage: `net-libs/rest` 15/15, `sys-devel/gcc`
+  14/14, `app-crypt/gnupg` 14/14 exact-position. Still open: the
+  `asap_nodes` *libc-first* seeding (real merges `sys-libs/glibc` /
+  `virtual/os-headers` asap, bug #303567 — portuale only seeds
+  `asap_nodes` from the `PDEPEND` promotion path), the `_FrontierDigraph`
+  perf layer, blocker/uninstall interleaving (a `--pretend` merge graph
+  has no uninstall nodes to interleave), `--implicit-system-deps=n`, and
+  real's `_complete_graph` re-walk of `@world`/`@system` — the last of
+  which is a *membership* gap (see `media-libs/libdisplay-info` in
+  `what-this-proves.md`), not an ordering one, but it perturbs order by
+  adding graph nodes real doesn't have.
 - **`--root-deps` / multi-root, remaining edges.** *Mostly a non-gap for
   this fork* — the ebuilds are all EAPI 7+, where `--root-deps=rdeps` is
   a complete no-op and `BDEPEND`/`IDEPEND` always resolve against the
