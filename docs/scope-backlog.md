@@ -157,11 +157,18 @@ can't grow into these incrementally:
   `virtual/os-headers` asap, bug #303567 — portuale only seeds
   `asap_nodes` from the `PDEPEND` promotion path), the `_FrontierDigraph`
   perf layer, blocker/uninstall interleaving (a `--pretend` merge graph
-  has no uninstall nodes to interleave), `--implicit-system-deps=n`, and
-  real's `_complete_graph` re-walk of `@world`/`@system` — the last of
-  which is a *membership* gap (see `media-libs/libdisplay-info` in
-  `what-this-proves.md`), not an ordering one, but it perturbs order by
-  adding graph nodes real doesn't have.
+  has no uninstall nodes to interleave), and `--implicit-system-deps=n`.
+- **`_complete_graph` as graph *nodes*.** Its reverse-dependency
+  **atoms** shipped 2026-09-07 (`reverse_dependency_constraints` — a vdb
+  reverse scan fed into the `'backtrack` loop's `slot_constraints`,
+  closing the `media-libs/libdisplay-info` membership divergence; see
+  `what-this-proves.md`). What is still not ported is real's actual
+  re-walk, which carries every installed package `@world`/`@system`
+  reaches as a nomerge graph *node* — 1854 for a case whose own closure
+  is 461. The `_serialize_tasks` validation showed those nodes are not
+  needed for ordering, and nothing observed now needs them for membership
+  either; they would matter for a divergence that depends on an installed
+  package's *position* in the graph rather than on its recorded atoms.
 - **`--root-deps` / multi-root, remaining edges.** *Mostly a non-gap for
   this fork* — the ebuilds are all EAPI 7+, where `--root-deps=rdeps` is
   a complete no-op and `BDEPEND`/`IDEPEND` always resolve against the

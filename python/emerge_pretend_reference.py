@@ -6581,6 +6581,145 @@ def _autounmask_use_atom_form(resolved, all_candidates, category, package, confi
     )
 
 
+def _reverse_dep_constraint_atom(atom_str, atom):
+    """Real _slot_operator_check_reverse_dependencies' own atom
+    normalisation, applied to one atom an *installed* consumer records
+    against a package this run wants to upgrade.
+
+    Real keeps the recorded atom as written, with one exception: a parent
+    whose atom is a *built* slot-operator atom (cat/pkg:S/SS= -- operator
+    "=" with both slot and sub-slot present, real Atom.slot_operator_built)
+    "may need to be rebuilt, therefore discard its soname and built slot
+    operator dependency components which are not necessarily relevant"
+    (depgraph.py:2494-2502), which it does with atom.with_slot("=") --
+    keeping the version bound and dropping the slot/sub-slot. That
+    distinction is the whole difference between "this upgrade needs a
+    consumer rebuild" (fine, and what _slot_operator_rebuild_entries
+    already schedules) and "this upgrade breaks a consumer outright".
+
+    The slot component is dropped textually rather than rewritten to ":=",
+    which is equivalent for matching, and [use-dep] components are dropped
+    too -- a documented cut (this vdb-only check has no resolved USE to
+    evaluate them against) that can only allow an upgrade real would
+    block, never the reverse. Mirrors portage-repo/src/lib.rs's
+    reverse_dep_constraint_atom exactly."""
+    head = atom_str.split("[", 1)[0]
+    built_slot_op = (
+        getattr(atom, "slot_operator", None) == "="
+        and getattr(atom, "slot", None)
+        and getattr(atom, "sub_slot", None)
+    )
+    if built_slot_op:
+        return head.split(":", 1)[0]
+    return head
+
+
+def _reverse_dependency_constraints(root, entries, with_bdeps, excluded):
+    """Real depgraph._complete_graph reaching
+    _slot_operator_check_reverse_dependencies: the dependency atoms an
+    *installed* package records against a package this run wants to
+    upgrade, which that upgrade would break.
+
+    Real's graph does not stop at the packages its arguments reach. Once
+    any installed package would change version, slot or USE,
+    _complete_graph auto-enables complete mode (depgraph.py:8592-8648) and
+    re-seeds the walk from @world/@selected/@system, pulling the *whole*
+    installed universe in as nomerge nodes. Each of those contributes its
+    recorded *DEPEND atoms to _parent_atoms, and a candidate has to satisfy
+    every parent atom on its package -- so an installed consumer nowhere
+    near the requested atom's own dependency tree can still veto an
+    upgrade. Live example this exists for: net-libs/rest does not reach
+    dev-libs/weston, but weston's recorded
+    <media-libs/libdisplay-info-0.4.0:0/3= is why real leaves
+    media-libs/libdisplay-info at 0.3.0.
+
+    This reference reaches the same answer without carrying the extra
+    ~1400 installed nodes: it scans the vdb for the consumers of each
+    upgrade-bound cat/pkg directly and hands the surviving atoms back to
+    the backtrack loop as ordinary slot_constraints -- which is precisely
+    what those parent atoms are.
+
+    Only upgrade/downgrade entries are checked; a "new" into a fresh slot
+    leaves the old slot's consumers alone and a reinstall keeps the
+    version. Consumers real would not enforce are skipped: one whose own
+    cat/pkg this run is already replacing (depgraph.py:2512-2522) and one
+    matched by --exclude. Real's further _upgrade_available / direct-cycle
+    escapes sit behind "if not self._too_deep(parent.depth)", and a
+    consumer that only entered via _complete_graph carries
+    _UNREACHABLE_DEPTH, for which _too_deep is unconditionally true
+    (depgraph.py:7369) -- so for exactly the consumers this function
+    finds, real skips those escapes too.
+
+    Returns sorted (cp, atom) pairs to add to slot_constraints; empty (and
+    the vdb scan skipped entirely) when nothing is being upgraded. Mirrors
+    portage-repo/src/lib.rs's reverse_dependency_constraints exactly."""
+    upgrading = {}
+    being_replaced = set()
+    for e in entries:
+        cp = (e[0], e[1])
+        if _merge_bound_cpv(e) is not None:
+            being_replaced.add(cp)
+        outcome = e[2]
+        if outcome[0] not in ("upgrade", "downgrade"):
+            continue
+        to = outcome[2]
+        prov = e[8] if isinstance(e[8], dict) else {}
+        upgrading[cp] = "{}/{}-{}:{}/{}::{}".format(
+            e[0],
+            e[1],
+            to,
+            e[4] or "0",
+            prov.get("sub_slot") or "0",
+            prov.get("repo_name") or "",
+        )
+    if not upgrading:
+        return []
+
+    # Real _add_pkg_dep_string empties DEPEND/BDEPEND for a *built* package
+    # (an installed one always is) unless --with-bdeps asks for them, so
+    # those keys contribute no parent atom either.
+    dep_keys = (
+        ("RDEPEND", "IDEPEND", "PDEPEND", "DEPEND", "BDEPEND")
+        if with_bdeps
+        else ("RDEPEND", "IDEPEND", "PDEPEND")
+    )
+
+    out = set()
+    for category, package, version, _slot in _all_installed_packages(root):
+        consumer_cp = (category, package)
+        if consumer_cp in being_replaced:
+            continue
+        consumer_str = f"{category}/{package}-{version}"
+        if any(
+            _matches_config_entry(ex, consumer_str, category, package) for ex in excluded
+        ):
+            continue
+        use_flags = _read_vdb_flag_set(root, category, package, version, "USE")
+        for dep_key in dep_keys:
+            depstr = _read_vdb_string(root, category, package, version, dep_key)
+            if not depstr.strip():
+                continue
+            atoms = _flat_dep_atoms(depstr, use_flags)
+            if atoms is None:
+                continue
+            for atom_str in atoms:
+                atom = _parse_atom(atom_str)
+                if atom is None or atom.blocker:
+                    continue
+                cp = tuple(atom.cp.split("/", 1))
+                candidate = upgrading.get(cp)
+                if candidate is None:
+                    continue
+                constraint = _reverse_dep_constraint_atom(atom_str, atom)
+                try:
+                    satisfied = bool(match_from_list(constraint, [candidate]))
+                except (InvalidAtom, InvalidDependString):
+                    continue
+                if not satisfied:
+                    out.add((cp, constraint))
+    return sorted(out)
+
+
 def _slot_operator_rebuild_entries(root, repos, entries, reachable):
     """Real depgraph's _slot_operator_trigger_reinstalls +
     _slot_operator_replace_installed (the
@@ -8209,6 +8348,12 @@ def resolve_pretend_graph(
     # "dep.parent not in _runtime_pkg_mask") holds every "!=parent-cpv"
     # already tried. Mirrors portage-repo/src/lib.rs.
     missing_dep_masked = set()
+    # Real _complete_graph's own parent atoms, discovered by vdb reverse
+    # scan -- see _reverse_dependency_constraints. Latches every
+    # (cat/pkg, atom) already folded into slot_constraints so a constraint
+    # is never re-added and the backtrack loop converges. Mirrors
+    # portage-repo/src/lib.rs.
+    reverse_dep_masked = set()
     _missing_dep_trigger = None
     # Backtracking slice 3 (unsolvable conflict -> runtime_pkg_mask): a
     # small state machine across passes. "none" = ordinary pass; "trying" =
@@ -9973,6 +10118,37 @@ def resolve_pretend_graph(
             missing_dep_masked.add(_mdp_neg)
             backtrack_iteration += 1
             continue
+
+        # Real _complete_graph's installed-universe walk reaching
+        # _slot_operator_check_reverse_dependencies: an upgrade this pass
+        # picked breaks a dependency an *installed* package -- one nowhere
+        # near the requested atom's own tree -- already records against it.
+        # Real sees such an atom because complete mode (auto-enabled by any
+        # installed-package version/USE change) pulls every installed
+        # package into the graph as a nomerge node, contributing its
+        # recorded atoms to _parent_atoms; this reference finds them with a
+        # direct vdb reverse scan instead and feeds them back here as
+        # ordinary slot_constraints, which is precisely what parent atoms
+        # are. The re-resolve then picks the highest candidate satisfying
+        # them -- normally the installed version, so the entry settles as
+        # already_installed -- and drops whatever the rejected version had
+        # dragged into the graph. reverse_dep_masked latches every
+        # constraint already added, so a pass that finds nothing new falls
+        # through and the loop terminates. Mirrors
+        # portage-repo/src/lib.rs.
+        if mask_phase == "none" and backtrack_iteration < backtrack_max:
+            _rdc_added = False
+            for _rdc_cp, _rdc_atom in _reverse_dependency_constraints(
+                root, entries, with_bdeps, excluded
+            ):
+                if (_rdc_cp, _rdc_atom) in reverse_dep_masked:
+                    continue
+                reverse_dep_masked.add((_rdc_cp, _rdc_atom))
+                slot_constraints.setdefault(_rdc_cp, []).append(_rdc_atom)
+                _rdc_added = True
+            if _rdc_added:
+                backtrack_iteration += 1
+                continue
         break
 
     # Backtracking slice: surface the --autounmask-use changes recorded
@@ -13084,7 +13260,15 @@ def _unresolved_runtime_deps(root, kept, installed, libc_cps, package_provided=(
     satisfies. Mirrors portage-repo's unresolved_runtime_deps -- see its
     docstring for the narrowings (|| groups skipped, libc-provider atoms
     skipped, the unevaluated-atom readability case not reproduced)."""
-    cand = [(c, p, f"{c}/{p}-{v}:{s}") for (c, p, v, s) in installed]
+    # Include the sub-slot (real _match_slot checks it whenever the atom
+    # specifies one, slot operator or not -- a built "foo:2/3=" dep is
+    # only satisfied by an installed foo at slot 2 sub-slot 3). The main
+    # slot comes from `installed` (updates already applied); the sub-slot
+    # is read from the vdb SLOT file, same as the Rust side.
+    cand = [
+        (c, p, f"{c}/{p}-{v}:{s}/{_read_vdb_slot(root, c, p, v)[1]}")
+        for (c, p, v, s) in installed
+    ]
 
     def matches_any(atom_str, atom):
         cat, pn = atom.cp.split("/", 1)

@@ -37,6 +37,16 @@ import pytest
 # convention, not real emerge's own exit codes).
 CASES = [
     ("new install", ["--pretend", "dev-libs/newpkg"], 0),
+    (
+        "an installed consumer's version bound blocks an upgrade",
+        ["--pretend", "--update", "dev-libs/revdeptarget"],
+        0,
+    ),
+    (
+        "an installed consumer's built slot-operator atom does not block one",
+        ["--pretend", "--update", "dev-libs/revdepslottarget"],
+        0,
+    ),
     ("already installed", ["--pretend", "dev-libs/samepkg"], 0),
     (
         "a New package shows its full USE=\"...\" list at plain -p (verbosity 2)",
@@ -10894,6 +10904,71 @@ def test_emptytree_reinstalls_the_whole_deep_dependency_tree(
 
     # -e without -p is still refused (portuale never really merges).
     assert _run([str(emerge_binary)], ["-e", "dev-libs/deeppkg"], fixture_env).returncode != 0
+
+
+def test_installed_consumer_version_bound_blocks_an_upgrade(
+    emerge_binary, emerge_pretend_python, fixture_env
+):
+    """Real depgraph._complete_graph reaching
+    _slot_operator_check_reverse_dependencies: an upgrade has to satisfy
+    every atom recorded against it, including one recorded by an
+    *installed* package that is nowhere in the requested atom's own
+    dependency tree.
+
+    Real reaches those atoms because complete mode -- auto-enabled by any
+    installed-package version/USE change (depgraph.py:8592-8648) --
+    re-seeds the walk from @world/@selected/@system and pulls the whole
+    installed universe into the graph as nomerge nodes, each contributing
+    its recorded *DEPEND to _parent_atoms. portuale/the reference find
+    the same atoms with a direct vdb reverse scan and feed them into the
+    backtrack loop's slot_constraints, which is what parent atoms are.
+
+    dev-libs/revdeptarget is installed at 1.0 with 2.0 visible, so a bare
+    --update would upgrade it -- except dev-libs/revdepconsumer-1.0
+    (installed, and not otherwise part of this resolve) records
+    RDEPEND="<dev-libs/revdeptarget-2.0". The upgrade is therefore
+    rejected and the entry settles as already-installed, exactly as real
+    leaves media-libs/libdisplay-info at 0.3.0 because of
+    dev-libs/weston's own <media-libs/libdisplay-info-0.4.0 bound (the
+    live divergence this was written for)."""
+    args = ["--pretend", "--update", "dev-libs/revdeptarget"]
+    rust = _run([str(emerge_binary)], args, fixture_env)
+    python = _run(emerge_pretend_python, args, fixture_env)
+    assert rust.returncode == 0
+    assert rust.stdout == python.stdout
+    assert rust.stderr == python.stderr
+    assert rust.stdout.splitlines() == [
+        "dev-libs/revdeptarget-1.0 is already installed; nothing to do",
+    ]
+
+
+def test_installed_consumers_built_slot_operator_atom_does_not_block_an_upgrade(
+    emerge_binary, emerge_pretend_python, fixture_env
+):
+    """The other half of the same real rule
+    (_slot_operator_check_reverse_dependencies, depgraph.py:2494-2502): a
+    parent whose recorded atom is a *built* slot-operator atom
+    (cat/pkg:S/SS=) "may need to be rebuilt, therefore discard its ...
+    built slot operator dependency components which are not necessarily
+    relevant" -- real strips the slot/sub-slot with atom.with_slot("=")
+    before checking. So a sub-slot bump is a *rebuild* trigger, never an
+    upgrade blocker.
+
+    dev-libs/revdepslottarget goes 1.0 (SLOT="0/1") -> 2.0 (SLOT="0/2"),
+    and dev-libs/revdepslotconsumer-1.0 (installed) records
+    RDEPEND="dev-libs/revdepslottarget:0/1=". Enforced literally that
+    atom would veto the upgrade; stripped as real strips it, the upgrade
+    goes ahead. Same fixture shape as the blocking case above, differing
+    only in the recorded atom -- which is the whole distinction."""
+    args = ["--pretend", "--update", "dev-libs/revdepslottarget"]
+    rust = _run([str(emerge_binary)], args, fixture_env)
+    python = _run(emerge_pretend_python, args, fixture_env)
+    assert rust.returncode == 0
+    assert rust.stdout == python.stdout
+    assert rust.stderr == python.stderr
+    assert rust.stdout.splitlines() == [
+        "[ebuild     U  ] dev-libs/revdepslottarget-2.0 [1.0]",
+    ]
 
 
 def test_reinstall_atoms_forces_one_deep_dependency_to_reinstall(

@@ -14162,3 +14162,101 @@ reports the unbreakable cycle separately via `find_hard_cycles`.
 sets first, then edge sets, then priorities, then `.order`. That diff
 localised every remaining gap in minutes; reasoning about the scheduler
 in the abstract had not, across three prior sessions.
+
+### `_complete_graph`'s reverse dependencies: the last membership divergence (2026-09-07)
+
+The `_serialize_tasks` port left one known gap on the live system:
+`emerge -puD --getbinpkg net-libs/rest` listed 16 packages where real
+listed 15, the extra one being `[ebuild U] media-libs/libdisplay-info-0.4.0`
+(plus the four `dev-build/meson` / `dev-build/ninja` nodes its source
+build dragged in). Real leaves it at `0.3.0`, and says why when asked
+directly:
+
+```
+$ emerge -pu media-libs/libdisplay-info
+WARNING: One or more updates/rebuilds have been skipped due to a dependency conflict:
+media-libs/libdisplay-info:0
+  (media-libs/libdisplay-info-0.4.0:0/4::gentoo, ebuild scheduled for merge) conflicts with
+    <media-libs/libdisplay-info-0.4.0:0/3= required by (dev-libs/weston-16.0.0-1:0/0::gentoo, installed)
+```
+
+`dev-libs/weston` is nowhere in `net-libs/rest`'s dependency tree. Real
+sees its atom anyway because of `_complete_graph`
+(`depgraph.py:8562-8794`): the moment *any* installed package would
+change version, slot or USE — i.e. on essentially every `--update` run —
+complete mode auto-enables, re-seeds the walk from
+`@world`/`@selected`/`@system`, and pulls the entire installed universe
+into the graph as nomerge nodes. Each of those contributes its recorded
+`*DEPEND` to `_parent_atoms`, and a candidate has to satisfy every parent
+atom on its package. That is 1854 graph nodes where the requested atom's
+own closure is 461 — carrying them was the thing the `_serialize_tasks`
+port had deliberately shown to be unnecessary *for ordering*, but their
+**atoms** are load-bearing for membership.
+
+Portuale gets the same atoms without the nodes: new
+`reverse_dependency_constraints` scans the vdb for the consumers of each
+`Upgrade`/`Downgrade`-bound `cat/pkg` directly and hands the atoms that
+the new version fails back to the `'backtrack` loop as ordinary
+`slot_constraints` — which is exactly what parent atoms are. The
+re-resolve then picks the highest candidate satisfying them (here the
+installed `0.3.0`, so the entry settles as `AlreadyInstalled`) and drops
+whatever the rejected version had dragged in. Same shape as the
+`_feedback_missing_dep` path already next to it, latched in
+`reverse_dep_masked` so the loop converges.
+
+**The distinction that makes it correct** is real
+`_slot_operator_check_reverse_dependencies`' own atom normalisation
+(`depgraph.py:2494-2502`): a parent whose recorded atom is a *built*
+slot-operator atom (`cat/pkg:S/SS=`) "may need to be rebuilt, therefore
+discard its ... built slot operator dependency components which are not
+necessarily relevant" — real strips the slot/sub-slot with
+`atom.with_slot("=")` and keeps only the version bound. Without that,
+`media-libs/mesa`'s `media-libs/libdisplay-info:0/3=` and
+`kde-plasma/kwin`'s `>=media-libs/libdisplay-info-0.2.0:0/3=` would both
+veto the upgrade on the sub-slot alone, when what they actually want is a
+*rebuild* — which `slot_operator_rebuild_entries` already schedules. Only
+weston's `<media-libs/libdisplay-info-0.4.0` genuinely blocks. Both
+halves are contract-tested (`dev-libs/revdeptarget` blocks,
+`dev-libs/revdepslottarget` does not).
+
+Real's further `_upgrade_available` / direct-cycle escapes are not
+ported, and deliberately so: they sit behind
+`if not self._too_deep(parent.depth)`, and a consumer that only entered
+the graph via `_complete_graph` carries `_UNREACHABLE_DEPTH`, for which
+`_too_deep` is unconditionally true (`depgraph.py:7369`) — so for exactly
+the consumers this scan finds, real skips those escapes too. A consumer
+whose own `cat/pkg` this run is already replacing is skipped (real's
+"this parent may need to be eliminated due to a slot conflict"), as is
+one matched by `--exclude`. `[use-dep]` components are dropped, since
+this vdb-only check has no resolved USE to evaluate them against — a cut
+that can only *allow* an upgrade real would block, never the reverse.
+
+**Result**, live, exact-position *and* exact membership against real
+portage 3.0.82.2, with no `--exclude` workaround:
+
+| case | before | after |
+| --- | --- | --- |
+| `emerge -puD --getbinpkg net-libs/rest` | 10/15, 16 listed | **15/15, membership identical** |
+| `emerge -puD --getbinpkg sys-devel/gcc` | 14/14 | **14/14, membership identical** |
+| `emerge -puD --getbinpkg app-crypt/gnupg` | 14/14 | **14/14, membership identical** |
+
+(`gcc` scores 12/14 on a given run when real's own
+`llvmgold`/`llvm-toolchain-symlinks` pair comes out the other way — see
+the `_serialize_tasks` entry above for why that pair is nondeterministic
+in real.)
+
+**Cost:** when an upgrade actually is blocked, the run takes one extra
+resolve pass — that is inherent, since the rejected version's whole
+subtree has to come back out of the graph, and it is what real's own
+mask-and-re-resolve does too. A run with nothing blocked is unchanged
+(`emerge -p --getbinpkg net-libs/rest` stays at ~1.9 s); the live `-uD`
+cases go from ~38 s to ~77 s on a 1570-package vdb. The vdb reverse scan
+itself is negligible next to a resolve pass.
+
+**Found along the way**, and fixed in the same commit: the Python
+reference's own `--depclean`/`--prune` unresolved-dependency check built
+its installed-candidate strings as `cat/pkg-ver:slot`, dropping the
+sub-slot, so a built slot-operator atom (`foo:0/1=`) never matched an
+installed package and tripped the safety halt. The Rust side had already
+been carrying the sub-slot, with a comment saying why; this was a
+straight mirror gap, invisible until a fixture with such an atom existed.

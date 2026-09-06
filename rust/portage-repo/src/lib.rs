@@ -9073,6 +9073,196 @@ fn topological_merge_order(
         .collect()
 }
 
+/// Real `_slot_operator_check_reverse_dependencies`'s own atom
+/// normalisation, applied to one atom an *installed* consumer records
+/// against a package this run wants to upgrade.
+///
+/// Real keeps the recorded atom as written, with one exception: a parent
+/// whose atom is a **built** slot-operator atom (`cat/pkg:S/SS=` --
+/// operator `=` with both slot and sub-slot present, real
+/// `Atom.slot_operator_built`) "may need to be rebuilt, therefore
+/// discard its soname and built slot operator dependency components
+/// which are not necessarily relevant" (`depgraph.py:2494-2502`), which
+/// it does with `atom.with_slot("=")` -- keeping the version bound and
+/// dropping the slot/sub-slot. That distinction is the whole difference
+/// between "this upgrade needs a consumer rebuild" (fine, and what
+/// `slot_operator_rebuild_entries` already schedules) and "this upgrade
+/// breaks a consumer outright" (not fine).
+///
+/// Portuale drops the slot component textually rather than rewriting it
+/// to `:=`, which is equivalent for matching: `portage_dep`'s matcher
+/// ignores a bare `:=` (no slot named) exactly as real does. `[use-dep]`
+/// components are dropped too -- real evaluates them against the
+/// candidate's own USE, which this vdb-only check has no resolved USE
+/// for; a documented cut, and one that can only *allow* an upgrade real
+/// would block, never the reverse.
+fn reverse_dep_constraint_atom(atom_str: &str, atom: &portage_dep::Atom) -> String {
+    let head = atom_str.split('[').next().unwrap_or(atom_str);
+    let built_slot_op = atom.slot_operator == Some(portage_dep::SlotOperator::Equals)
+        && atom.slot.is_some()
+        && atom.sub_slot.is_some();
+    if built_slot_op {
+        head.split(':').next().unwrap_or(head).to_string()
+    } else {
+        head.to_string()
+    }
+}
+
+/// Real `depgraph._complete_graph` reaching
+/// `_slot_operator_check_reverse_dependencies`: the dependency atoms an
+/// **installed** package records against a package this run wants to
+/// upgrade, which that upgrade would break.
+///
+/// Real's graph does not stop at the packages its arguments reach. Once
+/// any installed package would change version, slot or USE,
+/// `_complete_graph` auto-enables complete mode
+/// (`depgraph.py:8592-8648`) and re-seeds the walk from
+/// `@world`/`@selected`/`@system`, pulling the *whole* installed
+/// universe in as nomerge nodes. Each of those contributes its recorded
+/// `*DEPEND` atoms to `_parent_atoms`, and a candidate has to satisfy
+/// every parent atom on its package -- so an installed consumer nowhere
+/// near the requested atom's own dependency tree can still veto an
+/// upgrade. Live example this exists for: `net-libs/rest` does not
+/// reach `dev-libs/weston`, but weston's recorded
+/// `<media-libs/libdisplay-info-0.4.0:0/3=` is why real leaves
+/// `media-libs/libdisplay-info` at `0.3.0` while portuale used to
+/// upgrade it to `0.4.0`.
+///
+/// Portuale reaches the same answer without carrying the extra ~1400
+/// installed nodes: it scans the vdb for the consumers of each
+/// upgrade-bound `cat/pkg` directly and hands the surviving atoms back
+/// to the `'backtrack` loop as ordinary `slot_constraints` -- which is
+/// exactly what those parent atoms are. The re-resolve then picks the
+/// highest candidate that satisfies them (here: the installed `0.3.0`,
+/// so the entry settles as `AlreadyInstalled`), and drops whatever the
+/// rejected version had dragged in.
+///
+/// Only `Upgrade`/`Downgrade` entries are checked -- those are the only
+/// ones that move a package's version out from under an existing
+/// consumer. A `New` into a fresh slot leaves the old slot's consumers
+/// alone, and a `Reinstall` keeps the version.
+///
+/// Consumers real would not enforce are skipped: one whose own `cat/pkg`
+/// this run is already replacing (real's "this parent may need to be
+/// eliminated due to a slot conflict, so its dependencies aren't
+/// necessarily relevant", `depgraph.py:2512-2522`) and one matched by
+/// `--exclude`. Real's further `_upgrade_available` / direct-cycle
+/// escapes sit behind `if not self._too_deep(parent.depth)`, and a
+/// consumer that only entered via `_complete_graph` carries
+/// `_UNREACHABLE_DEPTH`, for which `_too_deep` is unconditionally true
+/// (`depgraph.py:7369`) -- so for exactly the consumers this function
+/// finds, real skips those escapes too.
+///
+/// Returns `(cat/pkg, atom)` pairs to add to `slot_constraints`; empty
+/// (and the vdb scan skipped entirely) when nothing is being upgraded.
+fn reverse_dependency_constraints(
+    root: &Path,
+    entries: &[GraphEntry],
+    with_bdeps: bool,
+    excluded: &[String],
+) -> Vec<((String, String), String)> {
+    // `cat/pkg` -> the candidate string this run would install, for every
+    // entry that replaces an installed version in its own slot.
+    let mut upgrading: HashMap<(String, String), String> = HashMap::new();
+    let mut being_replaced: HashSet<(String, String)> = HashSet::new();
+    for e in entries {
+        let cp = (e.category.clone(), e.package.clone());
+        if merge_bound_cpv(e).is_some() {
+            being_replaced.insert(cp.clone());
+        }
+        let to = match &e.outcome {
+            PretendOutcome::Upgrade { to, .. } | PretendOutcome::Downgrade { to, .. } => to,
+            _ => continue,
+        };
+        upgrading.insert(
+            cp,
+            format!(
+                "{}/{}-{to}:{}/{}::{}",
+                e.category,
+                e.package,
+                e.slot.as_deref().unwrap_or("0"),
+                e.sub_slot.as_deref().unwrap_or("0"),
+                e.repo_name.as_deref().unwrap_or_default()
+            ),
+        );
+    }
+    if upgrading.is_empty() {
+        return Vec::new();
+    }
+
+    // Real `_add_pkg_dep_string` empties `DEPEND`/`BDEPEND` for a *built*
+    // package (an installed one always is) unless `--with-bdeps` asks for
+    // them, so those keys contribute no parent atom either.
+    let dep_keys: &[&str] = if with_bdeps {
+        &["RDEPEND", "IDEPEND", "PDEPEND", "DEPEND", "BDEPEND"]
+    } else {
+        &["RDEPEND", "IDEPEND", "PDEPEND"]
+    };
+
+    let mut out: Vec<((String, String), String)> = Vec::new();
+    let mut seen: HashSet<((String, String), String)> = HashSet::new();
+    for consumer in all_installed_packages(root) {
+        let consumer_cp = (consumer.category.clone(), consumer.package.clone());
+        if being_replaced.contains(&consumer_cp) {
+            continue;
+        }
+        let consumer_str = format!(
+            "{}/{}-{}",
+            consumer.category, consumer.package, consumer.version
+        );
+        if excluded.iter().any(|ex| {
+            matches_config_entry(ex, &consumer_str, &consumer.category, &consumer.package)
+        }) {
+            continue;
+        }
+        let use_flags = read_vdb_flag_set(
+            root,
+            &consumer.category,
+            &consumer.package,
+            &consumer.version,
+            "USE",
+        );
+        for dep_key in dep_keys {
+            let depstr = read_vdb_string(
+                root,
+                &consumer.category,
+                &consumer.package,
+                &consumer.version,
+                dep_key,
+            );
+            if depstr.trim().is_empty() {
+                continue;
+            }
+            let Some(atoms) = flat_dep_atoms(&depstr, &use_flags) else {
+                continue;
+            };
+            for atom_str in atoms {
+                let Some(atom) = portage_dep::parse_atom(&atom_str) else {
+                    continue;
+                };
+                if atom.blocker != portage_dep::Blocker::None {
+                    continue;
+                }
+                let cp = (atom.category.clone(), atom.package.clone());
+                let Some(candidate) = upgrading.get(&cp) else {
+                    continue;
+                };
+                let constraint = reverse_dep_constraint_atom(&atom_str, &atom);
+                let satisfied = portage_dep::match_from_list(&constraint, &[candidate.as_str()])
+                    .is_some_and(|m| !m.is_empty());
+                if !satisfied {
+                    let key = (cp, constraint);
+                    if seen.insert(key.clone()) {
+                        out.push(key);
+                    }
+                }
+            }
+        }
+    }
+    out.sort();
+    out
+}
+
 /// Real depgraph's `_slot_operator_trigger_reinstalls` +
 /// `_slot_operator_replace_installed` (the
 /// `@__auto_slot_operator_replace_installed__` set), run once every
@@ -11278,6 +11468,11 @@ fn backtracking_resolve(req: &ResolveRequest) -> Result<GraphResult, Error> {
     // (real's `dep.parent not in _runtime_pkg_mask` check) holds every
     // `!=parent-cpv` already tried, guaranteeing termination.
     let mut missing_dep_masked: HashSet<String> = HashSet::new();
+    // Real `_complete_graph`'s own parent atoms, discovered by vdb
+    // reverse scan -- see `reverse_dependency_constraints`. Latches every
+    // `(cat/pkg, atom)` already folded into `slot_constraints` so a
+    // constraint is never re-added and the `'backtrack` loop converges.
+    let mut reverse_dep_masked: HashSet<((String, String), String)> = HashSet::new();
 
     // The local `$PKGDIR` binary index, built once for the whole walk
     // (either the CLI layer's `$PKGDIR` directory scan or the parsed
@@ -13477,6 +13672,39 @@ fn backtracking_resolve(req: &ResolveRequest) -> Result<GraphResult, Error> {
             missing_dep_masked.insert(neg);
             backtrack_iteration += 1;
             continue 'backtrack;
+        }
+
+        // Real `_complete_graph`'s installed-universe walk reaching
+        // `_slot_operator_check_reverse_dependencies`: an upgrade this
+        // pass picked breaks a dependency an *installed* package -- one
+        // nowhere near the requested atom's own tree -- already records
+        // against it. Real sees such an atom because complete mode
+        // (auto-enabled by any installed-package version/USE change)
+        // pulls every installed package into the graph as a nomerge
+        // node, contributing its recorded atoms to `_parent_atoms`;
+        // portuale finds them with a direct vdb reverse scan instead and
+        // feeds them back here as ordinary `slot_constraints`, which is
+        // precisely what parent atoms are. The re-resolve then picks the
+        // highest candidate satisfying them -- normally the installed
+        // version, so the entry settles as `AlreadyInstalled` -- and
+        // drops whatever the rejected version had dragged into the
+        // graph. `reverse_dep_masked` latches every constraint already
+        // added, so a pass that finds nothing new falls through and the
+        // loop terminates.
+        if mask_phase == MaskPhase::None && backtrack_iteration < backtrack_max {
+            let mut added = false;
+            for (cp, constraint) in
+                reverse_dependency_constraints(root, &entries, with_bdeps, excluded)
+            {
+                if reverse_dep_masked.insert((cp.clone(), constraint.clone())) {
+                    slot_constraints.entry(cp).or_default().push(constraint);
+                    added = true;
+                }
+            }
+            if added {
+                backtrack_iteration += 1;
+                continue 'backtrack;
+            }
         }
 
         // Real depgraph's slot-operator auto-rebuild: an installed consumer
