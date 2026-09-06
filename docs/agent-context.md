@@ -176,10 +176,16 @@ handle, kind `"resolve"`), while portuale's `Result<_, String>`
 internals and the harnesses stay `String` per §2.1's "not now". Zero
 behavior change; suite totals now 799/799 Rust and pytest 1292 passed /
 5 pre-existing non-TTY failures / 2 skipped. Same day, the **refactor-01
-HIGH audit doc** (`api-`/`async-`/`conc-`/`num-`, 44 rules) was written
-at `docs/refactor-HIGH.md` with the CRITICAL doc's constraints as
-backdrop: zero `fix-now` findings; deliberate deviations recorded (no
-builders, no newtypes, error enums trait-poor, blocking
+HIGH audit doc** (`api-`/`async-`/`conc-`/`num-`/`opt-`, 56 rules) was
+written at `docs/refactor-HIGH.md` with the CRITICAL doc's constraints
+as backdrop: 2 actionable findings (`opt-lto-release` and
+`opt-codegen-units` — a recommended `lto = "thin"` + `codegen-units = 1`
+release-profile change, gated on the user/CI's call), 4 compliant + 3
+compliant-profiling-gated `opt-` inline/cold/SIMD notes (all gated on
+the in-flight `perf`/`flamegraph` write-up), 1 deliberate
+`opt-target-cpu` rejection (portability-first static musl binary), 2
+`opt-` N/A verdicts (PGO and SIMD both rejected), deliberate deviations
+recorded (no builders, no newtypes, error enums trait-poor, blocking
 subprocess/`std::fs` inside the async tree — the latter documented
 in-repo at `ebuild_phases.rs:1833`); 10 N/A api- + 13 N/A async- rules
 documented as the internal-crate/single-task-runtime posture;
@@ -187,9 +193,11 @@ documented as the internal-crate/single-task-runtime posture;
 test-only hygiene note (`make_xpak_binpkg` `as u32` XPAK casts in
 `binpkg.rs`) was **fixed** the same day by routing the lengths through
 `u32::try_from` (`xpak_u32`, panics like Python's `struct.pack`; 799/799,
-clippy zero-warn, fmt clean). The
-`opt-` HIGH category is deferred to a later pass (including the
-`shared_runtime` multi_thread-vs-current_thread question).
+clippy zero-warn, fmt clean). The `shared_runtime` worker-count question
+(should it be `new_current_thread()` given exactly one buffered future?)
+is parked open in the doc's judgment-calls section, tied to the pending
+profiling write-up. All 56 HIGH rules audited; `opt-` category resolved
+(what remains is build-config work, not code).
 
 **Dry-run (`emerge --pretend`)**: full recursive DEPEND/RDEPEND/BDEPEND/
 PDEPEND/IDEPEND resolution; profile/make.conf-derived USE/ACCEPT_KEYWORDS

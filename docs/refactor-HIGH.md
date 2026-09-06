@@ -5,9 +5,12 @@ A source-grounded audit of the whole `rust/` workspace — every crate
 `portage-profile`, `portage-repo`, `portage-required-use`,
 `portage-fetch`, `portuale`, plus the `*-harness` mains) — against the
 **HIGH**-impact rule categories of the `rust-skills` skill. This pass
-covers `api-` (17), `async-` (18), `conc-` (4), and `num-` (5) — 44
-rules total. The `opt-` (12) HIGH category is **explicitly deferred**
-from this document (see "[Open — deferred categories](#open--deferred-categories)").
+covers all five HIGH categories: `api-` (17), `async-` (18), `conc-`
+(4), `num-` (5), and `opt-` (12) — 56 rules total. `opt-` was the last
+category added. The only deferred item left is the compiler-
+optimization *work*, not the audit itself (see
+"[Prioritized fix plan](#prioritized-fix-plan)" and "[Closed/open
+judgment calls](#closedopen-judgment-calls)").
 
 The companion **CRITICAL** audit (own-/err-/mem-/unsafe-) lives in
 [`docs/history/refactor-CRITICAL.md`](history/refactor-CRITICAL.md); read
@@ -16,8 +19,8 @@ constraints applies here too.
 
 ## Method
 
-- Rule sources: `3rdparty/rust-skills/rules/{api,async,conc,num}-*.md`
-  (all 44 HIGH files, byte-identical to `.claude/skills/rust-skills/`) and
+- Rule sources: `3rdparty/rust-skills/rules/{api,async,conc,num,opt}-*.md`
+  (all 56 HIGH files, byte-identical to `.claude/skills/rust-skills/`) and
   `3rdparty/rust-skills/SKILL.md` priority table (HIGH < CRITICAL).
 - Audit was grounded in mechanical greps over `rust/`:
   `rg`/`grep` for `#[must_use]`, `impl Into`/`impl From`/`impl AsRef`,
@@ -27,9 +30,12 @@ constraints applies here too.
   `serde`, `Default` (derived + manual impls), `Atomic*`, `.await` /
   `async fn` / `tokio::spawn` / `spawn_blocking` / `async move` /
   tokio feature flags / `join!`/`try_join!`/`select!`/`JoinSet`/
-  cancellation types, and per-site reads of the "action" column hits
-  (e.g. every `as u32` in `binpkg.rs`, every subprocess spawn inside the
-  async call tree in `ebuild_phases.rs`).
+  cancellation types, `#[inline*]` / `#[cold]` / `likely!`/`unlikely!`,
+  `[profile.*]` settings, `lto`/`codegen-units`/`strip`/`target-cpu`/
+  `rustflags`, `get_unchecked`/unsafe indexing, SIMD/target_feature
+  hints, benchmark/bencher presence, and per-site reads of the "action"
+  column hits (e.g. every `as u32` in `binpkg.rs`, every subprocess
+  spawn inside the async call tree in `ebuild_phases.rs`).
 - Verdict labels: **compliant** (rule holds), **deviating-isolated**
   (deliberate deviation, documented so nobody "fixes" it blind),
   **fix-now** (real defect found), **N/A** (rule does not apply here;
@@ -64,9 +70,13 @@ constraints applies here too.
 | `async-` (18) | 2 compliant, 1 compliant-with-note, 2 deviating-isolated, 13 N/A | None; 2 deviations recorded as deliberate (blocking subprocess + blocking `std::fs` inside the async tree) |
 | `conc-` (4) | 4 compliant | None |
 | `num-` (5) | 3 compliant, 1 N/A, 1 compliant-with-note | **Fixed**: test-only `make_xpak_binpkg` `as u32` narrowing → `u32::try_from` (panics like Python's `struct.pack`) |
+| `opt-` (12) | 4 compliant, 3 compliant-profiling-gated, 1 deviating-isolated, 2 N/A | **2 actionable**: enable `lto` + `codegen-units = 1` in `[profile.release]` (gated on user/CI call) |
 
-Net: **zero `fix-now` items in this pass.** All findings are deliberate
-deviations to record or latent-hygiene notes for future code.
+Net: **one actionable change** (`lto`/`codegen-units` in the release
+profile) plus the already-fixed `num-` item. The rest are deliberate
+deviations to record (incl. `target-cpu=native` rejected on
+portability grounds) or profiling-gated hints to consider only after
+the in-flight `perf`/`flamegraph` work is written up.
 
 ---
 
@@ -182,11 +192,11 @@ never migrated to a worker -- decides most of this category.
   `Builder::new_multi_thread()` setup/teardown once per phase per
   package. `enable_all()` drives brush's fd- and timer-based awaits
   correctly, and never tearing it down is right for a CLI process.
-  Open item (deferred to `opt-`): with exactly one future driven
-  synchronously, the default worker count (CPU count) is
-  over-provisioned; `new_current_thread()` may be the correct fit, but
-  brush's own internals are not known to never spawn, so this is a
-  perf/profiling question, not a correctness one.
+   Open item (recorded below in the judgment-calls section): with exactly
+   one future driven synchronously, the default worker count (CPU count) is
+   over-provisioned; `new_current_thread()` may be the correct fit, but
+   brush's own internals are not known to never spawn, so this is a
+   perf/profiling question, not a correctness one.
 
 ### deviating-isolated (2 — both deliberate, both documented at the site)
 
@@ -303,12 +313,128 @@ parallel kernel to get wrong.
 
 ---
 
+## `opt-` compiler optimization (12 rules)
+
+The workspace's release configuration is a single line:
+`[profile.release] panic = "abort"` (`rust/Cargo.toml:22`). Everything
+else (`opt-level`, `lto`, `codegen-units`, `strip`, PGO, `target-cpu`)
+is at toolchain defaults. There are **zero** explicit
+`#[inline]`/`#[inline(always)]`/`#[inline(never)]`/`#[cold]`/
+`likely!`/`unlikely!` attributes or intrinsics in the whole workspace
+(grep), zero `get_unchecked`/unsafe-indexing sites, zero SIMD or
+`target_feature` hints, and no `criterion`/`benches/` harness. Profiling
+is **in progress but not yet written up**: `docs/perf.data*` and
+`docs/flamegraph.svg` exist (untracked), with no analysis note in `docs/`
+yet. That matters: several of these rules are only sensibly applied to
+*proven* hot paths (`anti-premature-optimize` is itself a rule), so the
+inline/cold/SIMD family stays shut until the profile lands.
+
+### actionable (2 — the only real opt- work)
+
+- **`opt-lto-release`** — **recommended fix.** Release builds ship with
+  no LTO, so cross-crate (and cross-module, given default
+  `codegen-units = 16`) inlining is anaemic for an 8-lib + bin workspace.
+  Candidate change: `lto = "thin"` in `[profile.release]`
+  (`rust/Cargo.toml:22`). Zero behavior risk for this project: LTO is
+  LLVM in-process work, the workspace is pure Rust (no C objects to
+  conflict with the musl/static link), `panic = "abort"` is orthogonal,
+  and the pinned contract suite plus the musl smoke gate are the
+  verification. Cost is link time only. `lto = "fat"` is the maximum
+  but materially slower to link for marginal extra win; `thin` is the
+  sensible default.
+- **`opt-codegen-units`** — **recommended fix (paired with the above).**
+  Default `codegen-units = 16` limits per-CGU inlining even inside a
+  single crate. Setting `codegen-units = 1` maximizes intra-crate
+  optimization; with `lto = "thin"` the cross-crate side is covered at
+  final codegen. Trade-off is a slower incremental/initial build — the
+  right call for a release-only profile where the binary *is* the
+  product. Both settings are gated on the user's/CI's word: they change
+  the release build config, so they go in as their own slice and must
+  pass fmt/clippy/`cargo test --release`/pytest + the musl smoke.
+
+### deviating-isolated (1 — deliberate, constrained)
+
+- **`opt-target-cpu`** — **rejected on purpose.** The rule's own clause
+  is "on *known* deployment targets"; the deployment target here is
+  deliberately *unknown* — the whole point of the musl static binary is
+  portability ("zero dynamic runtime deps" is a hard goal, and the
+  binary is built to run on whatever host, copied around like real
+  portage binaries). `-C target-cpu=native` would pin codegen to the
+  build host's ISA and can crash on older CPUs. Not used; recorded so
+  nobody "fixes" it in.
+
+### compliant (4)
+
+- **`opt-inline-always-rare`** — Zero `#[inline(always)]` sites; the
+  "rarely/literally-never" end of the rule is honored by using none.
+  (If LTO + small-codegen-unit work lands, hand-inlining becomes noise.)
+- **`opt-likely-hint`** — Stable Rust has no branch-hint intrinsic
+  (nightly `core::hint::likely`/`unlikely`); the codebase expresses
+  likelihood through ordinary code structure — early-return guards in
+  the resolver/visibility checks (`portage-repo`'s `is_visible` family,
+  `atom_specificity`, etc.) let the compiler keep the hot path straight.
+  Compliant within what stable offers.
+- **`opt-bounds-check`** — The codebase is iterator-based and has zero
+  `get_unchecked`/unsafe-indexing sites (grep). Residual explicit
+  indexing lives in tiny boundary tokenizers (Atom/version parsers in
+  `portage-dep`/`portage-versions`), where a bounds check is O(n)-once
+  and cold relative to the resolution/formatting work. No hot loop
+  relies on unchecked indexing.
+- **`opt-cache-friendly`** — No pathological or pointer-chasing layouts:
+  graph/resolver data are contiguous `Vec`/boxed-slice structs + `HashMap`
+  (no `LinkedList` anywhere — confirmed under `coll-*`). One accepted
+  cost: `Atom` and friends are String-heavy (12 fields,
+  `portage-dep/src/lib.rs:240-258`) — inherent to the portage
+  format-string parity model, so cache density there is deliberately
+  traded away.
+
+### compliant-profiling-gated (3 — revisit only after the perf pass is written up)
+
+- **`opt-inline-small`** — No `#[inline]`. Right call pre-profile: the
+  candidates (small helpers like `xpak_u32`, version-part "bignum"
+  compares) should be annotated only once the in-flight
+  `perf.data`/`flamegraph` shows they matter.
+- **`opt-inline-never-cold`** — No `#[inline(never)]`/`#[cold]`. The
+  CLI's canned portage error/exit prints are cold by construction and
+  `panic = "abort"` already skips unwinding; `#[cold]` gains are
+  marginal. Re-assess post-profile.
+- **`opt-cold-unlikely`** — No `#[cold]`; same reasoning; stable has no
+  `unlikely!` anyway (the `opt-likely-hint` note applies).
+
+### N/A (2)
+
+- **`opt-pgo-profile`** — **Not adopted, recorded.** PGO needs a
+  multi-phase build with a representative workload in CI; this project's
+  hot work is config parse + graph resolution + pinned formatting, and
+  build complexity is a real cost for a musl static artifact. Re-slice
+  only if the profiling pass isolates a specific kernel worth a doubled
+  build pipeline for.
+- **`opt-simd-portable`** — **N/A.** `std::simd` is still nightly;
+  a portable-SIMD crate would violate the near-zero-dependency ethos,
+  and the workload (string/config/format, IO/process dominated) has no
+  numeric kernel to vectorize. Re-audit only if a profiled, genuinely
+  vectorizable loop ever appears.
+
+---
+
 ## Prioritized fix plan
 
-Nothing further in this pass is a required fix. The one carried-over
-item — `make_xpak_binpkg`'s `as u32` narrowing (the `num-cast-try-from`
-finding) — is **done** (see the `num-` section above). The rest are
-**re-audit-on-event** triggers, not actions:
+One area of this pass has **candidate, user-gated work**:
+
+1. *(recommended)* Enable **`lto = "thin"`** in `[profile.release]`
+   (`rust/Cargo.toml:22`), paired with **`codegen-units = 1`** — the
+   two `opt-` findings marked actionable above. Both are release-build
+   config changes, not code changes, so they go in as their own slice
+   once the user/CI signs off, and must pass all four gates (fmt,
+   clippy zero-warn, `cargo test --release` 799/799, pytest 1292) plus
+   the musl static-binary smoke test.
+
+Everything else in this pass is a **re-audit-on-event** trigger, not a
+required fix. The `make_xpak_binpkg` `as u32` narrowing (the
+`num-cast-try-from` finding) is **done** (see the `num-` section
+above). The `#[inline]`/`#[cold]`/SIMD family is gated on the
+in-flight `perf`/`flamegraph` profiling being written up (see
+`opt-`). Remaining triggers:
 
 1. Publish any crate → re-run `api-non-exhaustive`, `api-common-traits`
    (add Clone/PartialEq to error enums), `api-sealed-trait`.
@@ -324,22 +450,30 @@ finding) — is **done** (see the `num-` section above). The rest are
 - **Closed — deliberate N/A/deviating verdicts above** (10 N/A api-
   rules, 13 N/A async- rules, no builder pattern, no newtypes, error
   enums trait-poor, blocking subprocess/`std::fs` inside the async
-  tree): no rule conflicts a hard constraint, and the
-  staggeringly-large-N/A tail is the *documented internal-crate
-  posture*, not neglect. In particular the `async-spawn-blocking`
-  question that surfaced during the earlier async investigation is now
-  **closed**: blocking `child.wait()` inside the async tree is a
-  deliberate, documented deviation (`ebuild_phases.rs:1833`) with zero
-  impact under the single-task-buffered `block_on` discipline
-  (:1894-1898).
-- **Open — deferred category:** `opt-` (12 rules; release-profile
-  `lto`/`codegen-units`, `#[inline]` inventory, PGO/target-cpu status
-  vs the static-musl goal, and the in-progress `perf`/`flamegraph`
-  profiling work in `docs/`). It also inherits one question from this
-  pass: whether `shared_runtime`'s worker count (`Builder::new_multi_
-  thread()` default, CPU-count) should be `new_current_thread()`, given
-  exactly one future is driven synchronously — a perf/profiling call,
-  gated on brush internals not spawning.
+  tree, plus the two opt- N/A/deviating calls — PGO and `target-cpu=
+  native` rejected on build-simplicity/portability grounds): no rule
+  conflicts a hard constraint, and the staggeringly-large-N/A tail is
+  the *documented internal-crate posture* plus the *documented
+  static-musl portability goal*, not neglect. In particular the
+  `async-spawn-blocking` question that surfaced during the earlier
+  async investigation is now **closed**: blocking `child.wait()` inside
+  the async tree is a deliberate, documented deviation
+  (`ebuild_phases.rs:1833`) with zero impact under the
+  single-task-buffered `block_on` discipline (:1894-1898).
+- **Closed — the `opt-` deferred category.** All 56 HIGH rules are now
+  audited: the release profile's missing `lto`/`codegen-units` is
+  *recommended work* (above), the `#[inline]` inventory is
+  *profiling-gated* (the in-progress `perf`/`flamegraph` in `docs/`,
+  artifacts untracked by design), and PGO/target-cpu are *recorded
+  rejections*. Resolution of this category is complete; what remains is
+  the user's build-config decision and a future perf write-up.
+- **Open — `shared_runtime` worker count.** Inherited from the async-
+  pass and still open: whether `shared_runtime`'s worker count
+  (`Builder::new_multi_thread()` default, CPU-count) should be
+  `new_current_thread()`, given exactly one future is driven
+  synchronously — a perf/profiling call, gated on brush internals not
+  spawning. It is deliberately parked here (not in an opt- rule) and
+  will be decided when the profiling write-up lands.
 
 ## Verification
 
@@ -351,6 +485,9 @@ finding) — is **done** (see the `num-` section above). The rest are
   `cargo clippy --release --all-targets` (zero warnings), and `cargo
   test --release` (799/799). pytest was not re-run: the change is
   confined to `#[cfg(test)]` fixture-building code and cannot touch
-  pinned CLI output. Any future fix from this document must pass the
-  four gates in the CRITICAL doc (fmt, clippy zero-warn, `cargo test
-  --release` 799 tests, pytest 1292).
+  pinned CLI output. The opt- section's actionable recommendation
+  (`lto`/`codegen-units`) has *not* been applied — it is gated on the
+  user's build-config call and will get the same four-gate verification
+  plus the musl smoke test. Any future fix from this document must pass
+  the four gates in the CRITICAL doc (fmt, clippy zero-warn, `cargo
+  test --release` 799 tests, pytest 1292).
