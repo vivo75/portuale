@@ -76,6 +76,50 @@ pub(crate) fn elementary_cycles(g: &Digraph, ig: Option<Ignore>) -> Vec<Vec<usiz
     all
 }
 
+/// Leaf-drain over an explicit drain set, falling back to the lowest-order
+/// remaining node when nothing is a leaf.
+/// Portage: circular_dependency_handler, _prepare_reduced_merge_list
+pub(crate) fn reduced_merge_order(
+    g: &Digraph,
+    drain: &HashSet<usize>,
+    late: &[bool],
+) -> Vec<usize> {
+    // A node is a leaf when it has no still-remaining child in the drain set.
+    let mut remaining: HashSet<usize> = drain.clone();
+    let mut out: Vec<usize> = Vec::new();
+    while !remaining.is_empty() {
+        let mut leaves: Vec<usize> = g
+            .order
+            .iter()
+            .copied()
+            .filter(|i| {
+                remaining.contains(i) && !g.children[*i].iter().any(|(c, _)| remaining.contains(c))
+            })
+            .collect();
+        if leaves.is_empty() {
+            // Lowest-order remaining node; target-rooted instances go first.
+            let pos: HashMap<usize, usize> =
+                g.order.iter().enumerate().map(|(p, &i)| (i, p)).collect();
+            leaves = remaining
+                .iter()
+                .copied()
+                .min_by_key(|&i| {
+                    (
+                        late.get(i).copied().unwrap_or(false),
+                        pos.get(&i).copied().unwrap_or(usize::MAX),
+                    )
+                })
+                .into_iter()
+                .collect();
+        }
+        for i in leaves {
+            remaining.remove(&i);
+            out.push(i);
+        }
+    }
+    out
+}
+
 /// The `medium_soft` rung of the satisfied range (the cycle handler's filter).
 pub(crate) fn satisfied_medium_soft_rung() -> Option<Ignore> {
     SATISFIED.ig_medium_soft()

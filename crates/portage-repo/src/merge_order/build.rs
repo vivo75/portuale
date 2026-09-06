@@ -39,6 +39,27 @@ pub(crate) fn deep_system_deps(
     deep
 }
 
+/// Re-sorts `mygraph.order` so `@system`-deep runtime deps come first, then
+/// highest to lowest reference count. `false` leaves discovery order alone.
+/// Portage: depgraph.py, _merge_order_bias
+pub(crate) fn merge_order_bias(
+    g: &mut Digraph,
+    entries: &[GraphEntry],
+    config: &portage_profile::Config,
+    implicit_system_deps: bool,
+) {
+    if !implicit_system_deps {
+        return;
+    }
+    let deep = deep_system_deps(g, entries, config);
+    let parent_count: Vec<usize> = (0..g.n)
+        .map(|i| g.parents[i].iter().filter(|&&p| g.alive[p]).count())
+        .collect();
+    // Stable, so a tie keeps discovery order.
+    g.order
+        .sort_by_key(|&i| (!deep[i], std::cmp::Reverse(parent_count[i])));
+}
+
 // ---------------------------------------------------------------------
 // the scheduler
 // ---------------------------------------------------------------------
@@ -88,4 +109,27 @@ pub(crate) fn seed_toolchain_asap(entries: &[GraphEntry]) -> Vec<usize> {
         }
     }
     asap
+}
+
+/// The closure of `node` under `ig`, or `None` when it escapes `mergeable`.
+/// Portage: depgraph.py, _serialize_tasks (gather_deps)
+pub(crate) fn gather_deps(
+    g: &Digraph,
+    node: usize,
+    ig: Option<Ignore>,
+    mergeable: &HashSet<usize>,
+) -> Option<HashSet<usize>> {
+    let mut sel: HashSet<usize> = HashSet::new();
+    let mut stack = vec![node];
+    while let Some(x) = stack.pop() {
+        if sel.contains(&x) {
+            continue;
+        }
+        if !mergeable.contains(&x) {
+            return None;
+        }
+        sel.insert(x);
+        stack.extend(g.child_nodes(x, ig));
+    }
+    Some(sel)
 }

@@ -31,6 +31,18 @@ pub(crate) fn mo_sel_cpv(e: &GraphEntry, installed: bool) -> String {
     }
 }
 
+/// Arguments of [`mo_sel_trace_line`].
+pub(crate) struct MoSelTraceLineArgs<'a> {
+    pub(crate) iter: usize,
+    pub(crate) retlist: usize,
+    pub(crate) alive: usize,
+    pub(crate) asap: &'a [String],
+    pub(crate) prefer_asap: bool,
+    pub(crate) drop_satisfied: bool,
+    pub(crate) ig: Option<Ignore>,
+    pub(crate) pick: &'a [String],
+}
+
 /// Dumps the freshly-built digraph in Portage's `digraph.debug_print()` format,
 /// to stderr under `--pretend --debug` (or `PORTUALE_DEBUG_MERGE_GRAPH`).
 /// Portage: portage/util/digraph.py, debug_print
