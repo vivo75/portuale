@@ -261,6 +261,133 @@ pub(crate) fn record_slot_conflict(slot_conflicts: &mut Vec<SlotConflict>, sc: S
     }
 }
 
+/// Arguments of [`merge_same_slot_conflicts`].
+pub(crate) struct MergeSameSlotConflictsArgs<'a> {
+    pub(crate) conflicts: &'a [SlotConflict],
+    pub(crate) pullers: &'a SlotPullers,
+    pub(crate) repos: &'a [RepoConfig],
+    pub(crate) config: &'a portage_profile::Config,
+    pub(crate) root: &'a Path,
+    pub(crate) refile_singletons: bool,
+}
+
+/// Merges records sharing one `(category, package, slot)` into a single joint
+/// record before the direct solve, so the solver sees the whole contention at
+/// once. Parents re-file from the live pullers under *every* instance the atom
+/// fully satisfies. Singleton groups pass through untouched (unless
+/// `refile_singletons`); a merged record inherits the first record's display
+/// fields.
+// Portage: depgraph.py, slot_collision_handler (per-slot handler)
+pub(crate) fn merge_same_slot_conflicts(args: MergeSameSlotConflictsArgs<'_>) -> Vec<SlotConflict> {
+    let MergeSameSlotConflictsArgs {
+        conflicts,
+        pullers,
+        repos,
+        config,
+        root,
+        refile_singletons,
+    } = args;
+    let mut order: Vec<(String, String, String)> = Vec::new();
+    let mut groups: HashMap<(String, String, String), Vec<usize>> = HashMap::new();
+    for (idx, c) in conflicts.iter().enumerate() {
+        let key = (c.category.clone(), c.package.clone(), c.slot.clone());
+        groups
+            .entry(key.clone())
+            .or_insert_with(|| {
+                order.push(key.clone());
+                Vec::new()
+            })
+            .push(idx);
+    }
+    let mut merged = Vec::with_capacity(conflicts.len());
+    for key in order {
+        let idxs = &groups[&key];
+        if idxs.len() == 1 && !refile_singletons {
+            merged.push(conflicts[idxs[0]].clone());
+            continue;
+        }
+        // Ordered instance union by (version, installed); the first
+        // record's display payload wins per instance.
+        let mut instances: Vec<SlotConflictInstance> = Vec::new();
+        for &idx in idxs {
+            for inst in &conflicts[idx].instances {
+                if !instances
+                    .iter()
+                    .any(|e| e.version == inst.version && e.installed == inst.installed)
+                {
+                    instances.push(inst.clone());
+                }
+            }
+        }
+        let (category, package, slot) = (key.0.as_str(), key.1.as_str(), key.2.as_str());
+        let mut parents_per_inst: Vec<Vec<SlotConflictParent>> = vec![Vec::new(); instances.len()];
+        if let Some(cp_pullers) = pullers.get(&(key.0.clone(), key.1.clone())) {
+            for (pc, pp, pv, atom) in cp_pullers {
+                let parsed = portage_dep::parse_atom(atom);
+                for (ii, inst) in instances.iter().enumerate() {
+                    // Same probe as `direct_solve_atom_matches` (tree slot/sub-slot,
+                    // USE against resolved flags); installed instances use vdb.
+                    let sub = if inst.installed {
+                        inst.sub_slot.clone()
+                    } else {
+                        slot_conflict_meta(repos, category, package, &inst.version).0
+                    };
+                    let match_str = if sub.is_empty() {
+                        format!("{category}/{package}-{}:{slot}", inst.version)
+                    } else {
+                        format!("{category}/{package}-{}:{slot}/{sub}", inst.version)
+                    };
+                    let (iuse, use_) = if inst.installed {
+                        installed_pkg_iuse_and_use(root, category, package, &inst.version)
+                    } else {
+                        slot_conflict_flag_sets(repos, config, category, package, &inst.version)
+                    };
+                    // A puller files under the instance its atom *fully* satisfies.
+                    let use_ok = match &parsed {
+                        Some(a) => match &a.use_deps {
+                            Some(ud) => portage_dep::use_deps_satisfied(ud, &iuse, &use_),
+                            None => true,
+                        },
+                        None => true,
+                    };
+                    if !use_ok {
+                        continue;
+                    }
+                    if portage_dep::match_from_list(atom, &[match_str.as_str()])
+                        .is_some_and(|m| !m.is_empty())
+                    {
+                        let entry = SlotConflictParent {
+                            parent_cpv: slot_conflict_puller_cpv(repos, pc, pp, pv),
+                            atom: atom.clone(),
+                            use_display: if pc.is_empty() {
+                                Vec::new()
+                            } else {
+                                pkg_use_display_for(repos, config, pc, pp, pv)
+                            },
+                            installed: false,
+                        };
+                        if !parents_per_inst[ii].contains(&entry) {
+                            parents_per_inst[ii].push(entry);
+                        }
+                    }
+                }
+            }
+        }
+        for (ii, inst) in instances.iter_mut().enumerate() {
+            inst.parents = std::mem::take(&mut parents_per_inst[ii]);
+        }
+        merged.push(SlotConflict {
+            category: key.0.clone(),
+            package: key.1.clone(),
+            slot: key.2.clone(),
+            resolved_version: conflicts[idxs[0]].resolved_version.clone(),
+            conflicting_atom: conflicts[idxs[0]].conflicting_atom.clone(),
+            instances,
+        });
+    }
+    merged
+}
+
 /// Arguments of [`synthesize_surviving_conflict_entries`].
 pub(crate) struct SynthesizeSurvivingConflictEntriesArgs<'a> {
     pub(crate) entries: &'a mut Vec<GraphEntry>,
