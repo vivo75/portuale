@@ -105,6 +105,51 @@ struct LazyRepo {
 }
 
 impl LazyRepo {
+    /// Build the closure from `seeds` (target CPNs, fully expanded) and `shallow`
+    /// (installed CPNs: loaded but not expanded): BFS over parsed dep trees.
+    fn build(
+        req: &ResolveRequest,
+        repos: Vec<RepoConfig>,
+        seeds: &[String],
+        shallow: &[String],
+    ) -> Result<Self, super::Error> {
+        let mut repo = Self {
+            repos,
+            config: req.config.clone(),
+            closure: HashSet::new(),
+            loaded: RefCell::new(HashMap::new()),
+            uses: RefCell::new(HashMap::new()),
+        };
+        // `(cp, expand)`: targets expand, installed only load.
+        let mut queue: Vec<(String, bool)> = seeds
+            .iter()
+            .map(|cp| (cp.clone(), true))
+            .chain(shallow.iter().map(|cp| (cp.clone(), false)))
+            .collect();
+        while let Some((cp, expand)) = queue.pop() {
+            if !repo.closure.insert(cp.clone()) {
+                continue;
+            }
+            if !expand {
+                repo.load_versions(&cp)?;
+                continue;
+            }
+            let versions = repo.load_versions(&cp)?;
+            let mut refs = Vec::new();
+            for version in &versions {
+                for class in &version.deps {
+                    referenced_cpns(class, &mut refs);
+                }
+            }
+            for dep_cp in refs {
+                if !repo.closure.contains(&dep_cp) && cp_exists(&repo.repos, &dep_cp) {
+                    queue.push((dep_cp, true));
+                }
+            }
+        }
+        Ok(repo)
+    }
+
     /// Read + parse every version of one `cat/pkg` (no USE), memoized.
     fn load_versions(&self, cp: &str) -> Result<Vec<LoadedVersion>, super::Error> {
         if let Some(cached) = self.loaded.borrow().get(cp) {
@@ -159,6 +204,12 @@ impl LazyRepo {
             .borrow_mut()
             .insert(cp.to_string(), versions.clone());
         Ok(versions)
+    }
+
+    /// One memoized record by `cat/pkg-version`.
+    fn record(&self, cp: &str, version: &str) -> Option<LoadedVersion> {
+        let versions = self.load_versions(cp).ok()?;
+        versions.into_iter().find(|v| v.version == version)
     }
 
     /// Resolved USE for one loaded version, memoized per cpv.
