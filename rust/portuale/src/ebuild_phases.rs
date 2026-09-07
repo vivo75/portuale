@@ -2686,7 +2686,22 @@ pub(crate) fn run_phase_from_saved_env(
         std::fs::write(env.t().join("environment.raw"), [])
             .map_err(|e| format!("{}: {e}", env.t().join("environment.raw").display()))?;
 
-        let extra_env = [("EMERGE_FROM".to_string(), "binary".to_string())];
+        // `MERGE_TYPE=binary` (real `_emerge/Binpkg.py:92` +
+        // `doebuild.py:1288` for `tree == "bintree"`): a
+        // `portage_readonly_vars` entry, so it's stripped from the saved
+        // env and must be re-supplied here. Load-bearing for eclasses
+        // that gate build-time work on it -- e.g.
+        // `python-any-r1_pkg_setup` is `[[ ${MERGE_TYPE} != binary ]] &&
+        // python_setup`, so without this a binpkg merge runs
+        // `python_setup` -> `python_check_deps` against BDEPEND that was
+        // never installed (a `--getbinpkg` binary needs no build deps)
+        // and `die`s "No supported Python implementation installed".
+        // `EMERGE_FROM` alone doesn't cover it -- the eclasses check
+        // `MERGE_TYPE`.
+        let extra_env = [
+            ("EMERGE_FROM".to_string(), "binary".to_string()),
+            ("MERGE_TYPE".to_string(), "binary".to_string()),
+        ];
         run_one_phase(
             &env,
             root,
