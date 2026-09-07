@@ -250,3 +250,88 @@ fn installed_use_str(root: &Path, cat: &str, pkg: &str, ver: &str) -> String {
         .collect::<Vec<_>>()
         .join(" ")
 }
+
+/// The `Child:` row's `USE="…"` column: an installed keep renders its
+/// vdb-recorded USE, every other row the entry's own display flags.
+pub(crate) fn child_use_str(e: &GraphEntry, root: &Path) -> String {
+    if is_nomerge(e) {
+        let ver = entry_version(e).unwrap_or("");
+        installed_use_str(root, &e.category, &e.package, ver)
+    } else {
+        use_str(e)
+    }
+}
+
+/// Emission order for the bounded inner-ring re-narration (see
+/// [`dump_resolution_walk`]): for every recorded `(parent, child, atom)` edge
+/// whose child stanza was already emitted (a back edge, i.e. a revisit or cycle
+/// step), the compact two-line re-narration Portage prints there.
+/// Returns `(parent_entry_idx, parent_atom_idx)` pairs in emission order.
+/// Pure and total: re-visits never re-expand, so no visited set is needed;
+/// `budget` caps the volume instead.
+pub(crate) fn renarration_order(
+    entry_cps: &[(String, String)],
+    entry_keys: &[(String, String, String, bool)],
+    parent_atoms: &[ParentAtom],
+    budget: usize,
+) -> Vec<(usize, usize)> {
+    let mut out: Vec<(usize, usize)> = Vec::new();
+    let mut remaining = budget;
+    if remaining == 0 {
+        return out;
+    }
+    for (pi, pa) in parent_atoms.iter().enumerate() {
+        let Some((pc, pp)) = pa.parent.as_ref() else {
+            continue;
+        };
+        // The walk records the parent without a version, so a cp with two
+        // entries hosts under the first.
+        let Some(i) = entry_cps.iter().position(|(c, p)| c == pc && p == pp) else {
+            continue;
+        };
+        // Only back edges re-narrate: forward edges are covered by the
+        // child's own later stanza, so DAG walks schedule nothing.
+        let child_key = (
+            pa.child_category.clone(),
+            pa.child_package.clone(),
+            pa.child_version.clone(),
+            pa.child_installed,
+        );
+        if !entry_keys[..=i].contains(&child_key) {
+            continue;
+        }
+        out.push((i, pi));
+        remaining -= 1;
+        if remaining == 0 {
+            break;
+        }
+    }
+    // Emission order: hosts in entries order, each host's edges in walk
+    // order. The caller re-sorts each host's edges into dependency-text
+    // order.
+    out.sort_by_key(|(i, _)| *i);
+    out
+}
+
+/// Re-sorts one host's scheduled re-narration edges into the host's
+/// dependency-text order. Edges matching no dep keep walk order at the end
+/// (stable). Pure.
+pub(crate) fn sort_by_dep_position(
+    deps: &[(String, String)],
+    order: Vec<usize>,
+    atom_of: impl Fn(usize) -> String,
+) -> Vec<usize> {
+    let mut indexed: Vec<(usize, usize)> = order
+        .into_iter()
+        .map(|pi| {
+            let atom = atom_of(pi);
+            let pos = deps
+                .iter()
+                .position(|(raw, evaluated)| *raw == atom || *evaluated == atom)
+                .unwrap_or(usize::MAX);
+            (pos, pi)
+        })
+        .collect();
+    indexed.sort_by_key(|(pos, _)| *pos);
+    indexed.into_iter().map(|(_, pi)| pi).collect()
+}

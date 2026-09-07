@@ -11,6 +11,26 @@ pub(crate) fn is_built_slot_op(atom: &portage_dep::Atom) -> bool {
         && atom.sub_slot.is_some()
 }
 
+/// Whether a new miss atom supersedes the disclosed one for the same `cat/pkg`:
+/// a live slot-operator atom wins over a recorded built one. Scoped to that
+/// pair; every other combination keeps first-wins.
+pub(crate) fn live_miss_atom_supersedes(recorded: &str, candidate: &str) -> bool {
+    let recorded_built = portage_dep::parse_atom(recorded).is_some_and(|a| is_built_slot_op(&a));
+    if !recorded_built {
+        return false;
+    }
+    if let Some(new) = portage_dep::parse_atom(candidate) {
+        return new.slot_operator.is_some() && !is_built_slot_op(&new);
+    }
+    // The bare suffix form (`<cat/pkg-2:=`) never parses here but is always
+    // live; strip a trailing `[use]` group first.
+    let bare = match candidate.rfind('[') {
+        Some(i) if candidate.ends_with(']') => &candidate[..i],
+        _ => candidate,
+    };
+    bare.ends_with(":=")
+}
+
 pub(crate) fn reverse_dep_constraint_atom(atom_str: &str, atom: &portage_dep::Atom) -> String {
     let head = atom_str.split('[').next().unwrap_or(atom_str);
     if is_built_slot_op(atom) {
