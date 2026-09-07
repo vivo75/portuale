@@ -176,34 +176,45 @@ fn merge_one_binary_entry(
         }
     };
 
-    // A remote candidate must be fetched; a local `$PKGDIR` binpkg
-    // (`remote_binary == false`) is already on disk.
-    let binpkg_path = if entry.remote_binary {
-        let (sync_uri, record) = find_remote_binpkg(
-            &config.binrepos,
-            root,
-            &entry.category,
-            &entry.package,
-            &version,
-        )
-        .ok_or_else(|| format!("{cp}-{version}: not found in any binhost `Packages` index"))?;
-        download_and_verify(
-            &sync_uri,
-            &record,
-            &entry.category,
-            &entry.package,
-            &version,
-            pkgdir,
-        )?
-    } else {
-        resolve_local_binpkg(
-            pkgdir,
-            &entry.category,
-            &entry.package,
-            &version,
-            entry.build_id.as_deref(),
-        )
-        .ok_or_else(|| format!("{cp}-{version}: no binpkg file under {}", pkgdir.display()))?
+    let local = resolve_local_binpkg(
+        pkgdir,
+        &entry.category,
+        &entry.package,
+        &version,
+        entry.build_id.as_deref(),
+    );
+    // Prefer a `$PKGDIR` file already on disk; otherwise fetch it from a
+    // binhost. `entry.remote_binary` is the resolver's hint, but it isn't
+    // always available -- an `emerge --resume` list only records
+    // `cat/pkg-ver` (`resume_entry` -> `remote_binary: false`,
+    // `build_id: None`), so a resumed binhost binary that was never
+    // downloaded would otherwise fail here with "no binpkg file". Trying
+    // the binhosts whenever the local file is missing covers both.
+    let binpkg_path = match local {
+        Some(path) => path,
+        None => {
+            let (sync_uri, record) = find_remote_binpkg(
+                &config.binrepos,
+                root,
+                &entry.category,
+                &entry.package,
+                &version,
+            )
+            .ok_or_else(|| {
+                format!(
+                    "{cp}-{version}: no binpkg file under {} and not in any binhost `Packages` index",
+                    pkgdir.display()
+                )
+            })?;
+            download_and_verify(
+                &sync_uri,
+                &record,
+                &entry.category,
+                &entry.package,
+                &version,
+                pkgdir,
+            )?
+        }
     };
 
     println!(">>> Merging binary package {cp}-{version}...");
