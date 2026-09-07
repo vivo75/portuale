@@ -862,6 +862,48 @@ pub fn wildcard_atom_matches(atom: &WildcardAtom, category: &str, package: &str)
 }
 
 #[cfg(test)]
+mod parse_cache_tests {
+    use super::*;
+
+    // The memo cache must be transparent: cached calls equal the uncached body, hit or miss.
+    const ATOM_CASES: &[&str] = &[
+        ">=dev-libs/foo-1.2.3-r1:2/3=[bar,-baz]",
+        "!!sys-apps/portage",
+        "dev-libs/foo",
+        "=cat/pkg-1*",
+        "net-libs/rest:0/0::gentoo",
+        "this is not an atom",
+        "dev-libs/foo:",
+        "",
+    ];
+    const CANDIDATE_CASES: &[&str] = &[
+        "dev-libs/foo-1.2.3-r1:2/3::gentoo",
+        "net-libs/rest-0.10.2",
+        "sys-apps/portage-3.0.0:0",
+        "not a candidate",
+        "",
+    ];
+
+    #[test]
+    fn cached_parse_atom_matches_uncached_and_is_stable_across_calls() {
+        for &s in ATOM_CASES {
+            let want = parse_atom_uncached(s);
+            assert_eq!(parse_atom(s), want, "first cached call for {s:?}");
+            assert_eq!(parse_atom(s), want, "second cached call for {s:?}");
+        }
+    }
+
+    #[test]
+    fn cached_parse_candidate_matches_uncached_and_is_stable_across_calls() {
+        for &s in CANDIDATE_CASES {
+            let want = parse_candidate_uncached(s);
+            assert_eq!(parse_candidate(s), want, "first cached call for {s:?}");
+            assert_eq!(parse_candidate(s), want, "second cached call for {s:?}");
+        }
+    }
+}
+
+#[cfg(test)]
 mod wildcard_tests {
     use super::*;
 
