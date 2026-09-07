@@ -15,13 +15,14 @@
 | real `emerge` | ~16 s | — |
 | portuale, original | **~77 s** | 1.0× |
 | + `parse_atom` / `parse_candidate` memoised | **~20.6 s** | 3.7× |
-| + `package.*` config bucketed by `cp` (this doc's item 1) | **~9.5 s** | **8.1×** |
+| + `package.*` config bucketed by `cp` | **~9.5 s** | 8.1× |
+| + `profiles/updates/` move chains precomputed | **~6.9 s** | **11×** |
 
-Both changes are **shipped** and keep byte-identical output with the full
+All three changes are **shipped** and keep byte-identical output with the full
 suite green (`portage-dep` / `portage-repo` / `portuale` unit tests + 1107
-contract tests). portuale is now **faster than real `emerge`** on this
-workload. Neither change alters the resolver algorithm — they remove
-redundant work the algorithm was doing.
+contract tests). portuale is now **~2× faster than real `emerge`** on this
+workload. None of them alters the resolver algorithm — they remove redundant
+work the algorithm was doing.
 
 1. **`parse_atom` / `parse_candidate` memo cache** (`rust/portage-dep/src/
    lib.rs`): a `thread_local!` `HashMap<String, Option<…>>` in front of each
@@ -33,12 +34,22 @@ redundant work the algorithm was doing.
    list is bucketed by `cat/pkg` once (memoised), so a per-package lookup
    visits the ~0–5 entries that name that `cp` (plus the wildcard tail)
    instead of linearly scanning all ~1,900. 20.6 s → 9.5 s.
+3. **precomputed package-move chains** (`rust/portage-repo/src/lib.rs`,
+   `move_chain_map` / `slot_move_map`): `apply_updates_to_cp` /
+   `apply_updates_to_slot` replayed all ~530 `profiles/updates/` `move`
+   commands on every call (once per installed package × ~10 resolver call
+   sites). Now a single `HashMap` lookup against the fully-resolved chain,
+   built once — real portage's model, which bakes moves into the vdb/cache at
+   sync. `all_installed_packages` is also memoised per `root` (fingerprinted
+   by vdb dir mtimes) so the ~2,000-`SLOT`-file scan runs once, not ~10×.
+   9.5 s → 6.9 s (`apply_updates_to_cp` 15 % → 1.4 % of the run).
 
-The next bottleneck is now `apply_updates_to_cp` (profile package-move
-replay, ~15 % of the 9.5 s run) — the same "no memoisation" pattern as Cause 2
-below: `all_installed_packages` rebuilds the ~2,000-entry installed list (with
-a 531-command move replay per entry) from scratch at ~10 call sites. See
-item 1 in "What to change next".
+The remaining time is spread thin across string allocation + hashing in
+`effective_use_flags` (fresh `HashSet<String>` of ~200 USE flags built 20 k
+times) and `read_md5_cache` (35 k calls, each re-reading + re-parsing a file
+and cloning the resulting map) — the "no memoisation" pattern of
+[Cause 2](#cause-2--no-memoization-the-same-package-is-recomputed-10-per-resolve),
+now items 2 and 3 below.
 
 ## The symptom (original, 77 s)
 
@@ -214,27 +225,7 @@ smaller blast radius.
 
 ## What to change next, in priority order
 
-### 1. Cache `all_installed_packages` + collapse `apply_updates_to_cp` — new #1
-
-`all_installed_packages` (`:5061`) rebuilds the entire installed set —
-`read_dir` over `var/db/pkg`, a `SLOT` file read per package, and
-`apply_updates_to_cp` + `apply_updates_to_slot` (each a linear replay of all
-~531 `profiles/updates/` `move` commands) per package — and it's called from
-~10 resolver sites, several inside loops. It's now ~15 % of the run
-(`apply_updates_to_cp` alone) plus most of the remaining malloc traffic.
-
-Two parts:
-- Memoise the whole `Vec<InstalledPackage>` per `root` (process-global
-  `OnceLock<RwLock<HashMap<PathBuf, Arc<Vec<InstalledPackage>>>>>`, or thread
-  it through the resolver). The vdb doesn't change mid-resolve.
-- Precompute the forward-move chain once: `apply_updates_to_cp` /
-  `apply_updates_to_slot` should consult a `HashMap<(cp), (cp)>` built from
-  `global_package_updates()` (like `update_move_targets()` at `:572` already
-  does for the atom fast-path), not walk all 531 commands per call. This is
-  real portage's model exactly — it bakes moves into the vdb/cache once at
-  sync.
-
-### 2. Add an in-process metadata cache for `read_md5_cache`
+### 1. In-process metadata cache for `read_md5_cache` — new #1
 
 `read_md5_cache` (`:1184`) re-reads the file, re-splits every line, and
 re-runs `apply_updates_to_dep_string` over 5 keys on every call. Wrap it in a
@@ -243,14 +234,14 @@ process-global `OnceLock<RwLock<HashMap<PathBuf, Arc<HashMap<String,String>>>>>`
 immutable for the life of the process. Fold the `updates/` application into
 the cached value so it happens once per file, not once per read.
 
-### 3. Cache `list_candidates` per `(repo-set, cp)`
+### 2. Cache `list_candidates` per `(repo-set, cp)`
 
 Same shape — the ebuild directory listing + per-version metadata for a `cp`
 does not change during a resolve. Key by `(category, package)`; the value is
 `Arc<Vec<Candidate>>`. Removes the ~4× redundancy and all the `read_dir`
 syscalls behind it.
 
-### 4. Memoize `effective_use_flags` per package
+### 3. Memoize `effective_use_flags` per package
 
 Key on `(candidate_str, is_stable-relevant inputs)` — or, better, compute it
 once per `Candidate` when the candidate is first materialised and store the
@@ -259,7 +250,7 @@ once per `Candidate` when the candidate is first materialised and store the
 pass; invalidate the memo when the `'backtrack` loop folds in a new
 `--autounmask-use` flip (rare).
 
-### 5. Cheaper cache, or a hand-written parser
+### 4. Cheaper parse cache, or a hand-written parser
 
 With the memo cache in place the regex only runs on cache *misses* (once per
 distinct string). Two follow-ups, in increasing effort:
@@ -275,10 +266,9 @@ distinct string). Two follow-ups, in increasing effort:
   named-group lookup (`get_group_by_name`, 8 % of the *old* run) is ~10×
   slower than a direct scan. The grammar is simple and fully specified
   (PMS 8.3; the crate already has hand-written helpers like
-  `strip_version_prefix`). Only matters for the miss path once 1 and the
-  cache are both in; low priority now.
+  `strip_version_prefix`). Only matters for the miss path; low priority now.
 
-### 6. Reduce redundant whole-graph passes
+### 5. Reduce redundant whole-graph passes
 
 The `'backtrack` loop re-ran the entire BFS for a case that produced no
 backtracking-relevant change on pass 2. Confirm each pass is genuinely needed
@@ -309,9 +299,9 @@ counts.
 
 ## Target
 
-The two shipped fixes reached ~9.5 s — already under real `emerge` (~16 s) on
-this workload. Item 1 above (installed-set + move-chain memoisation) is the
-next clear win; beyond that the run is bounded by string allocation in the
-`*DEPEND` / candidate-string plumbing rather than any single hot loop, and the
-per-node recomputation pattern (items 2–4) is what remains of the "different
-algorithm" gap. The Rust graph walk itself was never the bottleneck.
+The three shipped fixes reached ~6.9 s — about 2× faster than real `emerge`
+(~16 s) on this workload. Beyond this the run is bounded by string allocation
+and hashing spread across `effective_use_flags` and `read_md5_cache` rather
+than any single hot loop; items 1–3 above (caching the per-package
+recomputation) are what remains of the "different algorithm" gap. The Rust
+graph walk itself was never the bottleneck.

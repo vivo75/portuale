@@ -629,18 +629,54 @@ pub fn apply_updates_to_dep_string(dep: &str) -> String {
         .collect()
 }
 
-/// The forward `move` destination for a `cat/pkg` (chains applied), for an
-/// installed package's identity as the resolver should see it.
-pub fn apply_updates_to_cp(category: &str, package: &str) -> (String, String) {
-    let mut cur = (category.to_string(), package.to_string());
-    for cmd in global_package_updates() {
-        if let UpdateCmd::Move { old, new } = cmd
-            && (cur.0.as_str(), cur.1.as_str()) == (old.0.as_str(), old.1.as_str())
-        {
-            cur = new.clone();
+/// Every `move` chain fully resolved once: `old cat/pkg` -> final
+/// `cat/pkg`. Real portage bakes package moves into the vdb + metadata
+/// cache at sync time; portuale applies them at read time instead, but a
+/// linear replay of all ~500 `profiles/updates/` `move` commands *per
+/// lookup* -- and `apply_updates_to_cp` runs once per installed package at
+/// ~10 resolver call sites -- was ~15% of a deep `emerge -pu`. Built by
+/// replaying the command list once per distinct `old` cp, so a chain
+/// (`a/x -> b/x -> c/x`) resolves exactly as the old per-cp loop did.
+/// Same `OnceLock`-over-`global_package_updates()` shape as
+/// `update_move_targets` (so `--package-moves=n` -> empty list -> empty
+/// map -> identity, matching the old loop's no-op).
+fn move_chain_map() -> &'static HashMap<(String, String), (String, String)> {
+    static MAP: OnceLock<HashMap<(String, String), (String, String)>> = OnceLock::new();
+    MAP.get_or_init(|| {
+        let cmds = global_package_updates();
+        let olds: HashSet<&(String, String)> = cmds
+            .iter()
+            .filter_map(|c| match c {
+                UpdateCmd::Move { old, .. } => Some(old),
+                UpdateCmd::SlotMove { .. } => None,
+            })
+            .collect();
+        let mut map = HashMap::new();
+        for old in olds {
+            let mut cur = old.clone();
+            for cmd in cmds {
+                if let UpdateCmd::Move { old: cmd_old, new } = cmd
+                    && cur == *cmd_old
+                {
+                    cur = new.clone();
+                }
+            }
+            if cur != *old {
+                map.insert(old.clone(), cur);
+            }
         }
+        map
+    })
+}
+
+/// The forward `move` destination for a `cat/pkg` (chains applied), for an
+/// installed package's identity as the resolver should see it -- one
+/// [`move_chain_map`] lookup, identity when nothing moved it.
+pub fn apply_updates_to_cp(category: &str, package: &str) -> (String, String) {
+    match move_chain_map().get(&(category.to_string(), package.to_string())) {
+        Some(dest) => dest.clone(),
+        None => (category.to_string(), package.to_string()),
     }
-    cur
 }
 
 /// Every `cat/pkg` whose forward-`move` chain lands on `(category,
@@ -664,6 +700,33 @@ pub fn installed_cp_sources(category: &str, package: &str) -> Vec<(String, Strin
     out
 }
 
+/// `cat/pkg` -> its `slotmove`s (`old_slot`, `new_slot`), in command order.
+type SlotMoveMap = HashMap<(String, String), Vec<(String, String)>>;
+
+/// Every `slotmove` grouped by its `cat/pkg`, in command order -- the
+/// `slotmove` counterpart to [`move_chain_map`], so `apply_updates_to_slot`
+/// is a single `HashMap` lookup plus a walk of just that package's own
+/// handful of slot moves rather than the whole `profiles/updates/` list.
+fn slot_move_map() -> &'static SlotMoveMap {
+    static MAP: OnceLock<SlotMoveMap> = OnceLock::new();
+    MAP.get_or_init(|| {
+        let mut map: SlotMoveMap = HashMap::new();
+        for cmd in global_package_updates() {
+            if let UpdateCmd::SlotMove {
+                cp,
+                old_slot,
+                new_slot,
+            } = cmd
+            {
+                map.entry(cp.clone())
+                    .or_default()
+                    .push((old_slot.clone(), new_slot.clone()));
+            }
+        }
+        map
+    })
+}
+
 /// Apply `slotmove` to an installed package's `(slot, sub_slot)` given its
 /// (already forward-moved) `cat/pkg`.
 pub fn apply_updates_to_slot(
@@ -672,17 +735,13 @@ pub fn apply_updates_to_slot(
     slot: &str,
     sub_slot: &str,
 ) -> (String, String) {
+    let Some(moves) = slot_move_map().get(&(category.to_string(), package.to_string())) else {
+        return (slot.to_string(), sub_slot.to_string());
+    };
     let mut s = slot.to_string();
     let mut ss = sub_slot.to_string();
-    for cmd in global_package_updates() {
-        if let UpdateCmd::SlotMove {
-            cp,
-            old_slot,
-            new_slot,
-        } = cmd
-            && (category, package) == (cp.0.as_str(), cp.1.as_str())
-            && s == *old_slot
-        {
+    for (old_slot, new_slot) in moves {
+        if s == *old_slot {
             if ss == *old_slot {
                 ss = new_slot.clone();
             }
@@ -5066,6 +5125,33 @@ impl InstalledPackage {
     }
 }
 
+/// A cheap fingerprint of `<root>/var/db/pkg`'s directory structure: the
+/// vdb dir's own mtime plus every category dir's mtime, xor-folded with a
+/// count. Any package merge/unmerge changes the mtime of `var/db/pkg` (new
+/// category) or of a category dir (new/removed package dir), so a matching
+/// fingerprint means the installed set is unchanged -- enough to reuse a
+/// memoised [`all_installed_packages`] result. ~30 `stat`s vs the ~2000
+/// `SLOT` file reads a full scan does.
+fn vdb_fingerprint(vdb: &Path) -> u64 {
+    fn mtime_nanos(p: &Path) -> u64 {
+        fs::metadata(p)
+            .and_then(|m| m.modified())
+            .ok()
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map_or(0, |d| d.as_nanos() as u64)
+    }
+    let Ok(cats) = fs::read_dir(vdb) else {
+        return 0;
+    };
+    let mut acc = mtime_nanos(vdb);
+    let mut count: u64 = 0;
+    for cat in cats.filter_map(Result::ok).filter(|e| e.path().is_dir()) {
+        acc ^= mtime_nanos(&cat.path()).rotate_left((count % 61) as u32 + 1);
+        count += 1;
+    }
+    acc ^ count.wrapping_mul(0x9E37_79B9_7F4A_7C15)
+}
+
 /// Every package recorded under `<root>/var/db/pkg` (real
 /// `vartree.dbapi.cpv_all()`), each with its own main slot. Directory
 /// names are split into `package`/`version` by finding the last
@@ -5073,10 +5159,39 @@ impl InstalledPackage {
 /// "a version always starts like a version, a package-name word may
 /// not" disambiguation `strip_version_prefix` already makes, generalised
 /// to a name whose own package isn't known ahead of time.
+///
+/// Memoised per `root`: a deep `emerge -pu` reads the whole installed set
+/// (~2000 `SLOT` files) at ~10 resolver call sites, several inside loops,
+/// and the vdb never changes mid-resolve. Keyed by `root` + a
+/// [`vdb_fingerprint`] so a merge/unmerge earlier in the same process
+/// (test suites do this) is picked up -- real `vardbapi` invalidates its
+/// own `cp_all` cache on category-dir mtime the same way.
 pub fn all_installed_packages(root: &Path) -> Vec<InstalledPackage> {
-    let mut out = Vec::new();
+    // root -> (vdb fingerprint at scan time, scanned set)
+    type InstalledCache = HashMap<PathBuf, (u64, std::sync::Arc<Vec<InstalledPackage>>)>;
+    static CACHE: OnceLock<RwLock<InstalledCache>> = OnceLock::new();
+    let cache = CACHE.get_or_init(|| RwLock::new(HashMap::new()));
     let vdb = root.join("var/db/pkg");
-    let Ok(cats) = fs::read_dir(&vdb) else {
+    let fingerprint = vdb_fingerprint(&vdb);
+    if let Ok(guard) = cache.read()
+        && let Some((fp, packages)) = guard.get(root)
+        && *fp == fingerprint
+    {
+        return packages.as_ref().clone();
+    }
+    let packages = std::sync::Arc::new(all_installed_packages_uncached(&vdb));
+    if let Ok(mut guard) = cache.write() {
+        guard.insert(
+            root.to_path_buf(),
+            (fingerprint, std::sync::Arc::clone(&packages)),
+        );
+    }
+    packages.as_ref().clone()
+}
+
+fn all_installed_packages_uncached(vdb: &Path) -> Vec<InstalledPackage> {
+    let mut out = Vec::new();
+    let Ok(cats) = fs::read_dir(vdb) else {
         return out;
     };
     for cat in cats.filter_map(Result::ok).filter(|e| e.path().is_dir()) {
