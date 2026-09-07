@@ -683,6 +683,41 @@ fn file_blocker_conflicts_files_an_owned_row_on_its_entry_and_removal() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
+/// An already-walked cp is never scanned, and with nothing
+/// merge-bound the scan is a no-op.
+#[test]
+fn collect_unwalked_installed_blockers_skips_walked_cps_and_nomerge_runs() {
+    let root = dir_165("scan-skip");
+    install_165(
+        &root,
+        "dev-libs",
+        "blk-1.0",
+        "0",
+        &[("RDEPEND", "!!dev-libs/victim")],
+    );
+    // `blk` itself walked: its blocker is the walk's own business.
+    let entries = vec![
+        new_165("dev-libs", "victim", "2.0"),
+        new_165("dev-libs", "blk", "1.0"),
+    ];
+    let mut pending = Vec::new();
+    let mut memo = HashMap::new();
+    collect_unwalked_installed_blockers(CollectUnwalkedInstalledBlockersArgs {
+        repos: &[],
+        root: &root,
+        config: &cfg_165(),
+        dynamic_deps: false,
+        ignore_built_slot_operator_deps: false,
+        disj_constraints: &HashMap::new(),
+        root_deps_running_root: None,
+        entries: &entries,
+        pending_blockers: &mut pending,
+        installed_meta_memo: &mut memo,
+    });
+    assert!(pending.is_empty());
+    let _ = std::fs::remove_dir_all(&root);
+}
+
 // ---- `enqueue_dependencies` (`--deep` AlreadyInstalled recursion). ----
 /// Arguments of [`enqueue_165`].
 struct Enqueue165Args<'a> {

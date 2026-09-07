@@ -415,6 +415,36 @@ struct Disj162CircArgs<'a> {
     circular_dependency: &'a HashMap<RootCp, Vec<CircularDepChild>>,
 }
 
+/// `disj_162` with an explicit `circular_dependency` map: owner cp
+/// to circular-child records, like the backtrack loop carries.
+fn disj_162_circ(args: Disj162CircArgs<'_>) -> portage_use_reduce::AltPreference {
+    let Disj162CircArgs {
+        repos,
+        config,
+        root,
+        entries,
+        self_cp,
+        atoms,
+        queued,
+        circular_dependency,
+    } = args;
+    disjunction_preference(DisjunctionPreferenceArgs {
+        repos,
+        config,
+        root,
+        entries,
+        self_cp,
+        constraints: &HashMap::new(),
+        circular_dependency,
+        root_deps_running_root: None,
+        atoms: &atoms_162(atoms),
+        queued,
+        update: false,
+        gate_entries: entries,
+        gate_queued: queued,
+    })
+}
+
 // ---- S5b: `disjunction_preference`'s `circular_atom` demotion. ---- (Portage `dep_zapdeps`) /// Arguments of [`disj_circ_162`].
 struct DisjCirc162Args<'a> {
     repos: &'a [RepoConfig],
@@ -425,6 +455,34 @@ struct DisjCirc162Args<'a> {
     atoms: &'a [&'a str],
     queued: &'a [QueueItem],
     circular: &'a HashMap<RootCp, Vec<CircularDepChild>>,
+}
+
+fn disj_circ_162(args: DisjCirc162Args<'_>) -> portage_use_reduce::AltPreference {
+    let DisjCirc162Args {
+        repos,
+        config,
+        root,
+        entries,
+        self_cp,
+        atoms,
+        queued,
+        circular,
+    } = args;
+    disjunction_preference(DisjunctionPreferenceArgs {
+        repos,
+        config,
+        root,
+        entries,
+        self_cp,
+        constraints: &HashMap::new(),
+        circular_dependency: circular,
+        root_deps_running_root: None,
+        atoms: &atoms_162(atoms),
+        queued,
+        update: false,
+        gate_entries: entries,
+        gate_queued: queued,
+    })
 }
 /// Arguments of [`promote_162`].
 struct Promote162Args<'a> {

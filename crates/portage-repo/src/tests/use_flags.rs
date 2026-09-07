@@ -837,3 +837,44 @@ fn atom_specificity_ranks_exact_version_above_bare_above_wildcard() {
     assert!(atom_specificity("dev-libs/bar:0") > atom_specificity("dev-libs/bar"));
     assert!(atom_specificity("dev-libs/bar") > atom_specificity("*/*"));
 }
+
+#[test]
+fn effective_use_flags_memo_does_not_leak_between_differing_configs() {
+    // The fingerprint must see a differing middle `package_use`
+    // entry (same length, same first + last).
+    let base = |mid_flag: &str| portage_profile::Config {
+        package_use: vec![
+            ("dev-libs/other".to_string(), vec!["x".to_string()]),
+            ("dev-libs/pkg".to_string(), vec![mid_flag.to_string()]),
+            ("dev-libs/last".to_string(), vec!["z".to_string()]),
+        ],
+        accept_keywords: HashSet::from(["amd64".to_string()]),
+        ..Default::default()
+    };
+    let call = |cfg: &portage_profile::Config| {
+        effective_use_flags(EffectiveUseFlagsArgs {
+            config: cfg,
+            iuse: "foo bar",
+            keywords: &["amd64".to_string()],
+            candidate_str: "dev-libs/pkg-1.0:0/0::testrepo",
+            category: "dev-libs",
+            package: "pkg",
+        })
+    };
+    let with_foo = call(&base("foo"));
+    let with_bar = call(&base("bar"));
+    assert!(with_foo.contains("foo") && !with_foo.contains("bar"));
+    assert!(with_bar.contains("bar") && !with_bar.contains("foo"));
+    // And the memo is transparent: a second call matches the uncached body.
+    assert_eq!(
+        call(&base("foo")).as_ref(),
+        &effective_use_flags_uncached(EffectiveUseFlagsUncachedArgs {
+            config: &base("foo"),
+            iuse: "foo bar",
+            keywords: &["amd64".to_string()],
+            candidate_str: "dev-libs/pkg-1.0:0/0::testrepo",
+            category: "dev-libs",
+            package: "pkg"
+        })
+    );
+}
