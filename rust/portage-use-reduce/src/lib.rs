@@ -40,15 +40,16 @@
 // `use_reduce_flat_disjunctive` (the real "||"-group resolution follow-up)
 // reuses the exact same DepNode/build_dep_tree/serialize_dep_tree
 // machinery `use_reduce_flat_subset` already needed, extended with a new
-// `resolve_disjunctions` walk: picks the first alternative of every "||"
-// group a caller-supplied satisfiability closure accepts, instead of
-// flattening every alternative the way `use_reduce_flat` alone always
-// has -- see its own doc comment for the full grounding (real
-// `_add_pkg_dep_string`'s own considerably richer preference order isn't
-// ported; portuale has no backtracking architecture at all). This
-// crate stays atom-agnostic throughout, matching its own established
-// "tokens stay opaque strings" architecture -- portage-repo supplies the
-// actual visibility-checking closure.
+// `resolve_disjunctions` walk: of every "||" alternative, picks the first
+// with the highest `AltPreference` a caller-supplied closure reports
+// (`Installed` > `Available` > `Unsatisfiable`) -- portuale's cut of real
+// `dep_zapdeps`'s `choice_bins`, enough to make `|| ( wine-vanilla
+// wine-staging … )` pick the installed `wine-staging` rather than the
+// first-listed one. The finer bins (`in_graph`/`any_slot`/`unsat_use_*`/
+// `other_*`) and full backtracking still aren't ported. This crate stays
+// atom-agnostic throughout, matching its own established "tokens stay
+// opaque strings" architecture -- portage-repo supplies the actual
+// installed/visibility-checking closure.
 
 use std::collections::HashSet;
 use std::sync::OnceLock;
@@ -691,17 +692,44 @@ fn next_alternative<'a>(
     })
 }
 
+/// How much a caller prefers one `"||"` alternative -- portuale's cut of
+/// real `dep_zapdeps`'s `choice_bins` (`lib/portage/dep/dep_check.py`).
+/// Real has nine bins; portuale models the two that decide the common
+/// case (an alternative already satisfied by an installed package beats
+/// one that would need a new merge) plus the "can't resolve it at all"
+/// fallback. Higher is more preferred.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default)]
+pub enum AltPreference {
+    /// No atom in this alternative resolves to anything -- the old
+    /// `false`. `resolve_disjunctions` only falls back to the literal
+    /// `"||"` group when *every* alternative is this.
+    #[default]
+    Unsatisfiable,
+    /// Resolvable, but at least one atom's `cat/pkg` is not installed --
+    /// real `preferred_non_installed` (choice bin 1).
+    Available,
+    /// Every non-blocker atom's `cat/pkg` is already installed (real
+    /// `all_installed` over `Atom(atom.cp)`) and the alternative is
+    /// otherwise satisfiable -- real `preferred_installed` (choice bin 0,
+    /// the alias `preferred_in_graph`/`preferred_any_slot` all collapse
+    /// to when `graph_db is None`). This is what makes `virtual/wine`'s
+    /// `|| ( wine-vanilla wine-staging … )` pick the installed
+    /// `wine-staging` instead of trying (and failing REQUIRED_USE on) the
+    /// first-listed `wine-vanilla`.
+    Installed,
+}
+
 /// Real `_add_pkg_dep_string`'s own `"||"` resolution, considerably
-/// simplified: picks the first alternative every one of whose own atoms
-/// `alternative_satisfiable` accepts (a caller-supplied probe -- this
-/// crate stays atom-agnostic, matching its own existing "tokens stay
-/// opaque strings" architecture, see the module doc comment), instead
-/// of flattening every alternative into the result the way plain
+/// simplified: of every alternative, picks the **first one with the
+/// highest [`AltPreference`]** the caller-supplied probe reports (this
+/// crate stays atom-agnostic, matching its own "tokens stay opaque
+/// strings" architecture -- see the module doc comment), instead of
+/// flattening every alternative into the result the way plain
 /// `use_reduce_flat` always has. An alternative that resolves to zero
 /// atoms at all (every token inside it gated by an inactive conditional)
 /// counts as trivially satisfiable -- `alternative_satisfiable` is
-/// expected to return `true` for an empty slice, the same vacuous-truth
-/// real portage itself gives a no-cost alternative.
+/// expected to return a non-`Unsatisfiable` rank for an empty slice, the
+/// same vacuous-truth real portage gives a no-cost alternative.
 ///
 /// Falls back to keeping the *whole* `"||"` group exactly as
 /// `use_reduce_flat` would have flattened it (literal `"||"` marker,
@@ -711,15 +739,16 @@ fn next_alternative<'a>(
 /// exact "never silently wrong about whether a dependency exists"
 /// invariant `resolve_pretend_graph`'s own doc comment (portage-repo)
 /// already established for the unconditional-flatten v1 this replaces.
-/// Real portage's own considerably richer preference order (installed
-/// packages first, backtracking on a later constraint failure, etc.)
-/// isn't ported -- portuale has no backtracking architecture at all --
-/// just the single "first currently-resolvable alternative wins" rule.
+/// Real portage's own richer preference order (the `in_graph` /
+/// `any_slot` / `unsat_use_*` / `other_*` bins, backtracking on a later
+/// constraint failure) still isn't fully ported -- just the
+/// installed-vs-not split that decides the overwhelming majority of real
+/// `||` groups.
 pub fn use_reduce_flat_disjunctive(
     tokens: &[String],
     uselist: &HashSet<String>,
     mode: MatchMode,
-    alternative_satisfiable: &mut impl FnMut(&[String]) -> bool,
+    alternative_satisfiable: &mut impl FnMut(&[String]) -> AltPreference,
 ) -> Result<Vec<String>, Error> {
     let tree = build_dep_tree(tokens)?;
     let resolved = resolve_disjunctions(&tree, uselist, mode, alternative_satisfiable)?;
@@ -732,7 +761,7 @@ fn resolve_disjunctions(
     nodes: &[DepNode],
     uselist: &HashSet<String>,
     mode: MatchMode,
-    alternative_satisfiable: &mut impl FnMut(&[String]) -> bool,
+    alternative_satisfiable: &mut impl FnMut(&[String]) -> AltPreference,
 ) -> Result<Vec<DepNode>, Error> {
     let mut result: Vec<DepNode> = Vec::new();
     // Real `_create_graph` fully drains the plain `dep_stack` before
@@ -768,7 +797,13 @@ fn resolve_disjunctions(
                 let Some(DepNode::Group(alternatives)) = iter.next() else {
                     return Err(Error::OrNotFollowedByGroup);
                 };
-                let mut chosen: Option<Vec<DepNode>> = None;
+                // Real `dep_zapdeps` classifies every alternative into a
+                // `choice_bin` and takes the first entry of the
+                // best-ranked non-empty bin -- not the first *satisfiable*
+                // one. Mirror that: rank all alternatives, keep the first
+                // at the best rank seen (ties -> earlier-listed wins,
+                // which is real's within-bin order).
+                let mut best: Option<(AltPreference, Vec<DepNode>)> = None;
                 let mut alt_iter = alternatives.iter();
                 while let Some(alt) = next_alternative(&mut alt_iter) {
                     let alt_nodes = alt?;
@@ -777,16 +812,28 @@ fn resolve_disjunctions(
                     let Ok(flat_atoms) = use_reduce_flat(&flat, uselist, mode) else {
                         continue;
                     };
-                    if alternative_satisfiable(&flat_atoms) {
-                        chosen = Some(resolve_disjunctions(
-                            &alt_nodes,
-                            uselist,
-                            mode,
-                            alternative_satisfiable,
-                        )?);
+                    let rank = alternative_satisfiable(&flat_atoms);
+                    if rank == AltPreference::Unsatisfiable {
+                        continue;
+                    }
+                    if best.as_ref().is_none_or(|(b, _)| rank > *b) {
+                        best = Some((rank, alt_nodes));
+                    }
+                    if rank == AltPreference::Installed {
+                        // Can't beat the top rank -- stop early, matching
+                        // "first entry of the best bin".
                         break;
                     }
                 }
+                let chosen = match best {
+                    Some((_, alt_nodes)) => Some(resolve_disjunctions(
+                        &alt_nodes,
+                        uselist,
+                        mode,
+                        alternative_satisfiable,
+                    )?),
+                    None => None,
+                };
                 match chosen {
                     Some(alt_nodes) => deferred.extend(alt_nodes),
                     None => {
@@ -814,6 +861,18 @@ mod tests {
 
     fn set(items: &[&str]) -> HashSet<String> {
         items.iter().map(|s| s.to_string()).collect()
+    }
+
+    /// These tests only exercise the satisfiable-or-not split, so map the
+    /// old `bool` probe onto `Available` / `Unsatisfiable`. The
+    /// `Installed` preference is covered by the `portage-repo`
+    /// integration tests and the contract suite.
+    fn pref(satisfiable: bool) -> AltPreference {
+        if satisfiable {
+            AltPreference::Available
+        } else {
+            AltPreference::Unsatisfiable
+        }
     }
 
     #[test]
@@ -917,7 +976,7 @@ mod tests {
             &toks("|| ( dev-libs/a dev-libs/b dev-libs/c )"),
             &HashSet::new(),
             MatchMode::Normal,
-            &mut |atoms| atoms == ["dev-libs/b"],
+            &mut |atoms| pref(atoms == ["dev-libs/b"]),
         )
         .unwrap();
         assert_eq!(result, vec!["dev-libs/b"]);
@@ -932,7 +991,7 @@ mod tests {
             &toks("|| ( dev-libs/a dev-libs/b )"),
             &HashSet::new(),
             MatchMode::Normal,
-            &mut |_| false,
+            &mut |_| AltPreference::Unsatisfiable,
         )
         .unwrap();
         assert_eq!(result, vec!["||", "dev-libs/a", "dev-libs/b"]);
@@ -947,7 +1006,7 @@ mod tests {
             &toks("|| ( ( dev-libs/a dev-libs/b ) dev-libs/c )"),
             &HashSet::new(),
             MatchMode::Normal,
-            &mut |atoms| atoms == ["dev-libs/a", "dev-libs/b"],
+            &mut |atoms| pref(atoms == ["dev-libs/a", "dev-libs/b"]),
         )
         .unwrap();
         assert_eq!(result, vec!["dev-libs/a", "dev-libs/b"]);
@@ -962,7 +1021,7 @@ mod tests {
             &toks("|| ( ( dev-libs/a dev-libs/b ) dev-libs/c )"),
             &HashSet::new(),
             MatchMode::Normal,
-            &mut |atoms| atoms == ["dev-libs/c"],
+            &mut |atoms| pref(atoms == ["dev-libs/c"]),
         )
         .unwrap();
         assert_eq!(result, vec!["dev-libs/c"]);
@@ -978,10 +1037,48 @@ mod tests {
             &toks("|| ( foo? ( dev-libs/a ) dev-libs/b )"),
             &HashSet::new(),
             MatchMode::Normal,
-            &mut |atoms: &[String]| atoms.is_empty(),
+            &mut |atoms: &[String]| pref(atoms.is_empty()),
         )
         .unwrap();
         assert!(result.is_empty());
+    }
+
+    #[test]
+    fn disjunctive_prefers_an_installed_alternative_over_an_earlier_available_one() {
+        // Real `dep_zapdeps`'s `preferred_installed` (choice bin 0) beats
+        // `preferred_non_installed` (bin 1): of `|| ( a b )` where `a`
+        // would need a merge and `b` is already installed, `b` wins even
+        // though `a` is listed first. (This is the `virtual/wine` ->
+        // `wine-staging` case.)
+        let result = use_reduce_flat_disjunctive(
+            &toks("|| ( dev-libs/a dev-libs/b )"),
+            &HashSet::new(),
+            MatchMode::Normal,
+            &mut |atoms: &[String]| {
+                if atoms == ["dev-libs/b"] {
+                    AltPreference::Installed
+                } else {
+                    AltPreference::Available
+                }
+            },
+        )
+        .unwrap();
+        assert_eq!(result, vec!["dev-libs/b"]);
+    }
+
+    #[test]
+    fn disjunctive_keeps_the_first_alternative_when_ranks_are_equal() {
+        // Ties stay first-listed (real's within-bin order): both `a` and
+        // `b` `Available` -> `a` wins, unchanged from the pre-rank
+        // "first satisfiable" behaviour.
+        let result = use_reduce_flat_disjunctive(
+            &toks("|| ( dev-libs/a dev-libs/b )"),
+            &HashSet::new(),
+            MatchMode::Normal,
+            &mut |_| AltPreference::Available,
+        )
+        .unwrap();
+        assert_eq!(result, vec!["dev-libs/a"]);
     }
 
     #[test]
@@ -990,7 +1087,7 @@ mod tests {
             &toks("dev-libs/a foo? ( dev-libs/b )"),
             &set(&["foo"]),
             MatchMode::Normal,
-            &mut |_| false,
+            &mut |_| AltPreference::Unsatisfiable,
         )
         .unwrap();
         assert_eq!(result, vec!["dev-libs/a", "dev-libs/b"]);

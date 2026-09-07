@@ -1,0 +1,8 @@
+DEFINED_PHASES=-
+DESCRIPTION=fixture package: REQUIRED_USE is unconditionally unsatisfiable
+EAPI=8
+IUSE=+brokenflag
+KEYWORDS=amd64
+REQUIRED_USE=brokenflag? ( !brokenflag )
+SLOT=0
+_md5_=0000000000000000000000000000000

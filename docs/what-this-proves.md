@@ -14769,3 +14769,55 @@ structure + the deterministic config block. New Rust unit test
 `info_pkgs_table_expands_a_virtual_and_renders_versions_with_repo`; the
 stacks-test asserts the header shape. The 1-byte trailing-newline
 mismatch is fixed too (real ends `Unset: …\n\n`).
+
+### `||` group resolution: prefer an already-installed alternative (`dep_zapdeps`'s `preferred_installed`) (2026-09-07)
+
+Found by running `portuale emerge -puD @world` on a live desktop: it
+**aborted** with `REQUIRED_USE not satisfied for
+app-emulation/wine-vanilla-11.17`, where real `emerge -puD @world`
+succeeds. `virtual/wine` (a `@world` member) has
+`RDEPEND="|| ( app-emulation/wine-vanilla[…] app-emulation/wine-staging[…]
+app-emulation/wine-proton[…] … )"`. `wine-staging` is installed;
+`wine-vanilla` is not, and its only visible version fails `REQUIRED_USE`
+(`wow64? ( !arm64? ( !abi_x86_32 ) )` on that box — real agrees for the
+single atom: `emerge -p app-emulation/wine-vanilla` also reports it
+unsatisfied). Real `dep_zapdeps` (`lib/portage/dep/dep_check.py`) files an
+alternative whose every atom's `cat/pkg` is installed into choice bin 0
+(`preferred_installed`, aliased to `preferred_in_graph`/`preferred_any_slot`)
+and one that would need a merge into bin 1 (`preferred_non_installed`), then
+takes the **first entry of the best non-empty bin** — so `wine-staging` wins
+even though `wine-vanilla` is listed first, and `wine-vanilla`'s
+`REQUIRED_USE` is never evaluated at all. portuale's `use_reduce_flat_
+disjunctive` (portage-use-reduce) had only "first currently-satisfiable
+alternative wins", with no installed preference, so it picked `wine-vanilla`
+and hard-failed the whole resolve.
+
+Ported the installed-vs-not split: `use_reduce_flat_disjunctive`'s probe
+closure now returns an ordered `AltPreference` (`Installed` > `Available` >
+`Unsatisfiable`) instead of a `bool`, and `resolve_disjunctions` ranks every
+alternative and keeps the first at the best rank (ties → earlier-listed,
+real's within-bin order; an `Installed` hit stops the scan early). The
+`portage-repo` closure bumps an alternative to `Installed` via
+`atom_cp_installed` — real's `Atom(atom.cp)` cp-level `vardb.match` (version,
+slot and use-deps all stripped), plus real's `atom.category == "virtual"`
+"zero cost to install" exemption. Applied at both `||` selection sites
+(`resolve_pretend_graph`'s main New/Upgrade walk and `enqueue_dependencies`'
+AlreadyInstalled recursion). The finer real bins
+(`in_graph`/`any_slot`/`unsat_use_*`/`other_*`) and full backtracking still
+aren't ported — this is just the split that decides the overwhelming
+majority of real `||` groups.
+
+Dual-language (Rust `AltPreference` + the Python mirror's int rank).
+`emerge -puD @world` now succeeds, byte-for-byte matching real's
+`virtual/wine → wine-staging` resolution. New fixture
+(`dev-libs/orrequseprefer` → `|| ( dev-libs/requsefail dev-libs/samepkg )`,
+`requsefail`'s `REQUIRED_USE` unconditionally unsatisfiable, `samepkg`
+installed) + contract test
+`test_or_group_installed_preference_skips_a_required_use_broken_first_alternative`
+(Rust == Python). Three existing tests
+(`test_any_of_group_*`, `test_virtual_is_resolved_*`, the Rust
+`recursion_*` / `fixture_virtual_*`) were pinned to the old wrong behavior
+— their `newpkg`-first expectations flipped to `samepkg` (installed), which
+is what real portage actually does. New portage-use-reduce unit tests
+`disjunctive_prefers_an_installed_alternative_over_an_earlier_available_one`
++ `disjunctive_keeps_the_first_alternative_when_ranks_are_equal`.

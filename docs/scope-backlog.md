@@ -569,11 +569,15 @@ item, with a short incremental tail:
    `runtime_pkg_mask` feedback paths — `_feedback_slot_conflict` and
    `_feedback_missing_dep` — into `||` alternative re-selection
    (2026-09-03, container-verified —
-   `docs/history/or-preference-backtrack-plan.md`). What is left here is
+   `docs/history/or-preference-backtrack-plan.md`), and (2026-09-07)
+   prefers an already-installed `||` alternative (real `dep_zapdeps`'s
+   `preferred_installed` choice bin — fixes the live `emerge -puD @world`
+   abort on `virtual/wine` → `wine-vanilla`). What is left here is
    depth/fidelity work on the pieces already built (richer
-   `_slot_conflict_backtrack` mask-target analysis, `dep_zapdeps`'
-   full preference bins, deeper multi-constraint interplay), not a
-   missing mechanism.
+   `_slot_conflict_backtrack` mask-target analysis, the *finer*
+   `dep_zapdeps` bins — `in_graph`/`any_slot`/`unsat_use_*`/`other_*` —
+   and its full `all_use_satisfied` computation, deeper multi-constraint
+   interplay), not a missing mechanism.
 
 2. **The rest of Part 2** — the remaining gpkg-signing/xpak-multi-instance
    gaps (2.E), the `--info` host-state half (2.F, a fixture-driven test

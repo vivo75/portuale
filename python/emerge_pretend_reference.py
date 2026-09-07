@@ -5391,16 +5391,32 @@ def _resolve_disjunctions(nodes, uselist, alternative_satisfiable):
         node = nodes[i]
         if node == "||":
             alternatives = nodes[i + 1]
-            chosen = None
+            # Real dep_zapdeps classifies every alternative into a
+            # choice_bin and takes the first entry of the best-ranked
+            # non-empty bin -- not the first *satisfiable* one. Mirror
+            # that: rank all alternatives (0 = unsatisfiable, 1 =
+            # AltPreference.Available, 2 = AltPreference.Installed), keep
+            # the first at the best rank (ties -> earlier-listed, real's
+            # within-bin order). See portage-use-reduce's AltPreference.
+            best = None  # (rank, alt_nodes)
             for alt in alternatives:
                 alt_nodes = alt if isinstance(alt, list) else [alt]
                 try:
                     flat_atoms = use_reduce(paren_enclose(alt_nodes), flat=True, uselist=uselist)
                 except InvalidDependString:
                     continue
-                if alternative_satisfiable(flat_atoms):
-                    chosen = _resolve_disjunctions(alt_nodes, uselist, alternative_satisfiable)
+                rank = alternative_satisfiable(flat_atoms)
+                if not rank:
+                    continue
+                if best is None or rank > best[0]:
+                    best = (rank, alt_nodes)
+                if rank >= 2:
                     break
+            chosen = (
+                _resolve_disjunctions(best[1], uselist, alternative_satisfiable)
+                if best is not None
+                else None
+            )
             if chosen is not None:
                 deferred.extend(chosen)
             else:
@@ -5419,14 +5435,15 @@ def _resolve_disjunctions(nodes, uselist, alternative_satisfiable):
 
 def _use_reduce_flat_disjunctive(depstr, uselist, alternative_satisfiable):
     """Real _add_pkg_dep_string's own "||" resolution, considerably
-    simplified: picks the first alternative every one of whose own
-    atoms `alternative_satisfiable` accepts, instead of flattening
-    every alternative into the result the way plain
-    use_reduce(flat=True) always has. An alternative that resolves to
-    zero atoms at all (every token inside it gated by an inactive
-    conditional) counts as trivially satisfiable -- `alternative_
-    satisfiable` is expected to return True for an empty list, the
-    same vacuous-truth real portage itself gives a no-cost alternative.
+    simplified: of every alternative, picks the first with the highest
+    rank `alternative_satisfiable` reports (2 = AltPreference.Installed,
+    1 = Available, 0 = Unsatisfiable), instead of flattening every
+    alternative into the result the way plain use_reduce(flat=True)
+    always has. An alternative that resolves to zero atoms at all (every
+    token inside it gated by an inactive conditional) counts as trivially
+    satisfiable -- `alternative_satisfiable` is expected to return a
+    non-zero rank for an empty list, the same vacuous-truth real portage
+    gives a no-cost alternative.
 
     Falls back to keeping the *whole* "||" group exactly as
     use_reduce(flat=True) would have flattened it (literal "||" marker,
@@ -5435,11 +5452,11 @@ def _use_reduce_flat_disjunctive(depstr, uselist, alternative_satisfiable):
     can't currently resolve is never silently dropped, preserving the
     exact "never silently wrong about whether a dependency exists"
     invariant resolve_pretend_graph's own docstring already established
-    for the unconditional-flatten v1 this replaces. Real portage's own
-    considerably richer preference order (installed packages first,
-    backtracking on a later constraint failure, etc.) isn't ported --
-    portuale has no backtracking architecture at all -- just the
-    single "first currently-resolvable alternative wins" rule. Mirrors
+    for the unconditional-flatten v1 this replaces. Real portage's richer
+    preference order (the in_graph / any_slot / unsat_use_* / other_*
+    bins, backtracking on a later constraint failure) still isn't fully
+    ported -- just the installed-vs-not split that decides the
+    overwhelming majority of real "||" groups. Mirrors
     portage-repo/src/lib.rs's use_reduce_flat_disjunctive exactly."""
     tree = use_reduce(depstr, flat=False, uselist=uselist)
     resolved = _resolve_disjunctions(tree, uselist, alternative_satisfiable)
@@ -5448,9 +5465,10 @@ def _use_reduce_flat_disjunctive(depstr, uselist, alternative_satisfiable):
 
 def _atom_currently_satisfiable(repos, atom_str, config, extra_constraints=()):
     """Whether every atom in `atoms` currently has a satisfying
-    candidate -- the probe _use_reduce_flat_disjunctive needs to pick a
-    "||" group's own first currently-resolvable alternative. A blocker
-    atom is always satisfiable here, vacuously -- it isn't a dependency
+    candidate -- one input to the rank _use_reduce_flat_disjunctive uses
+    to pick a "||" group's alternative (the `all_available` half; the
+    installed-vs-not half is _atom_cp_installed). A blocker atom is
+    always satisfiable here, vacuously -- it isn't a dependency
     to *resolve* at all, just a conflict to report (_enqueue_flat_deps
     handles that separately, unaffected by which "||" alternative was
     chosen), so it never disqualifies an otherwise-fine alternative.
@@ -5517,6 +5535,23 @@ def _candidate_use_deps_satisfied(atom, c, category, package, config):
     helper for the two tree-candidate USE-dep filters below."""
     iuse, use_flags = _candidate_iuse_and_use(c, category, package, config)
     return _use_deps_satisfied(atom, _valid_iuse(iuse, config), use_flags)
+
+
+def _atom_cp_installed(root, atom_str):
+    """Real dep_zapdeps' all_installed predicate for one "||" alternative
+    atom (dep_check.py:603-607): Atom(atom.cp) -- cp level, version/slot/
+    use stripped -- is matched by the vdb, or the atom targets a
+    "virtual/" (real's "new-style virtuals have zero cost to install"
+    exemption). A blocker is vacuously satisfied. Bumps a "||" alternative
+    into AltPreference.Installed (real's preferred_installed choice bin 0).
+    Mirrors portage-repo/src/lib.rs's atom_cp_installed."""
+    atom = _parse_atom(atom_str)
+    if atom is None:
+        return False
+    category, package = atom.cp.split("/", 1)
+    if atom.blocker or category == "virtual":
+        return True
+    return bool(installed_candidates(root, category, package))
 
 
 def _root_deps_satisfied_atoms(
@@ -10367,21 +10402,28 @@ def resolve_pretend_graph(
                     return ()
                 return slot_constraints.get(tuple(_pa.cp.split("/", 1)), ())
 
-            try:
-                flat_deps = _use_reduce_flat_disjunctive(
-                    depstr,
-                    use_flags,
-                    lambda atoms: all(
-                        _atom_currently_satisfiable(
-                            repos, a, config, _disj_constraints(a)
-                        )
-                        or (
-                            root_deps_running_root is not None
-                            and _running_root_satisfies_atom(a, root_deps_running_root)
-                        )
-                        for a in atoms
-                    ),
+            def _disj_pref(atoms):
+                all_available = all(
+                    _atom_currently_satisfiable(repos, a, config, _disj_constraints(a))
+                    or (
+                        root_deps_running_root is not None
+                        and _running_root_satisfies_atom(a, root_deps_running_root)
+                    )
+                    for a in atoms
                 )
+                if not all_available:
+                    return 0
+                # Real dep_zapdeps preferred_installed (choice bin 0):
+                # every atom's cp is already installed -> beat a first-
+                # listed alternative that would need a merge (virtual/wine
+                # -> the installed wine-staging). Mirrors portage-repo's
+                # atom_cp_installed / AltPreference.
+                if all(_atom_cp_installed(root, a) for a in atoms):
+                    return 2
+                return 1
+
+            try:
+                flat_deps = _use_reduce_flat_disjunctive(depstr, use_flags, _disj_pref)
             except InvalidDependString:
                 continue
             # --root-deps: real ESYSROOT-vs-ROOT distinction (see
@@ -11013,19 +11055,25 @@ def _enqueue_dependencies(
             return ()
         return _dc.get(tuple(_pa.cp.split("/", 1)), ())
 
-    try:
-        flat_deps = _use_reduce_flat_disjunctive(
-            depstr,
-            use_flags,
-            lambda atoms: all(
-                _atom_currently_satisfiable(repos, a, config, _disj_c(a))
-                or (
-                    root_deps_running_root is not None
-                    and _running_root_satisfies_atom(a, root_deps_running_root)
-                )
-                for a in atoms
-            ),
+    def _disj_pref(atoms):
+        all_available = all(
+            _atom_currently_satisfiable(repos, a, config, _disj_c(a))
+            or (
+                root_deps_running_root is not None
+                and _running_root_satisfies_atom(a, root_deps_running_root)
+            )
+            for a in atoms
         )
+        if not all_available:
+            return 0
+        # Real dep_zapdeps preferred_installed -- see the identical check
+        # in resolve_pretend_graph's main "||" closure.
+        if all(_atom_cp_installed(root, a) for a in atoms):
+            return 2
+        return 1
+
+    try:
+        flat_deps = _use_reduce_flat_disjunctive(depstr, use_flags, _disj_pref)
     except InvalidDependString:
         return
 

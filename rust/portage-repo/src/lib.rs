@@ -7678,10 +7678,11 @@ fn reinstall_flags_for_use_change(
 /// `--deep` never touch it") and the New/Upgrade selection case, not
 /// every real edge case.
 /// Whether every atom in `atoms` currently has a satisfying candidate --
-/// the probe `use_reduce_flat_disjunctive` (portage-use-reduce) needs to
-/// pick a `"||"` group's own first currently-resolvable alternative
-/// (see `resolve_pretend_graph`'s own doc comment for the full
-/// grounding). A blocker atom (`!foo/bar`/`!!foo/bar`) is always
+/// one input to the [`AltPreference`](portage_use_reduce::AltPreference)
+/// rank `use_reduce_flat_disjunctive` uses to pick a `"||"` group's
+/// alternative (the `Available` half; `atom_cp_installed` is the
+/// installed-vs-not half). See `resolve_pretend_graph`'s own doc comment
+/// for the full grounding. A blocker atom (`!foo/bar`/`!!foo/bar`) is always
 /// satisfiable here, vacuously -- it isn't a dependency to *resolve* at
 /// all, just a conflict to report (`enqueue_flat_deps` handles that
 /// separately, unaffected by which `"||"` alternative was chosen), so
@@ -7782,6 +7783,32 @@ fn atom_currently_satisfiable(
         };
         portage_dep::use_deps_satisfied(use_deps, &valid_iuse(&iuse, config), &use_flags)
     })
+}
+
+/// Real `dep_zapdeps`'s `all_installed` predicate for one `||` alternative
+/// atom (`dep_check.py:603-607`): `Atom(atom.cp)` -- **cp level**, with
+/// version, slot and use-deps all stripped -- is matched by the vdb, OR
+/// the atom targets a `virtual/` (real's explicit "new-style virtuals
+/// have zero cost to install" exemption). A blocker atom is vacuously
+/// satisfied (it's a conflict to report, not a dependency to resolve).
+/// Used to bump a `||` alternative into `AltPreference::Installed`
+/// (real's `preferred_installed` choice bin) so an already-installed
+/// branch wins over a first-listed one that would need a new merge.
+///
+/// Deliberately does NOT re-check the atom's own use-deps against the
+/// installed package's recorded `USE` -- real folds that into a separate
+/// `all_use_satisfied` flag, and portuale's `atom_currently_satisfiable`
+/// gate (checked by the caller before this) already rejects an
+/// alternative whose use-deps can't hold against the *tree* candidate,
+/// which is a close enough proxy for the cases that matter.
+fn atom_cp_installed(root: &Path, atom_str: &str) -> bool {
+    let Some(atom) = portage_dep::parse_atom(atom_str) else {
+        return false;
+    };
+    if atom.blocker != portage_dep::Blocker::None || atom.category == "virtual" {
+        return true;
+    }
+    !installed_candidates(root, &atom.category, &atom.package).is_empty()
 }
 
 /// The best visible candidate for `atom_str` plus its `-pv`-style USE
@@ -8292,10 +8319,17 @@ fn root_deps_satisfied_atoms(
         use_flags,
         portage_use_reduce::MatchMode::Normal,
         &mut |atoms: &[String]| {
-            atoms.iter().all(|a| {
+            // `--root-deps` only needs the satisfiable-or-not split here
+            // (there's no "prefer the installed branch" question for a
+            // build-time `||` group resolved against the running root).
+            if atoms.iter().all(|a| {
                 atom_currently_satisfiable(repos, a, config, &[])
                     || running_root_satisfies_atom(a, running_root)
-            })
+            }) {
+                portage_use_reduce::AltPreference::Available
+            } else {
+                portage_use_reduce::AltPreference::Unsatisfiable
+            }
         },
     )
     .map(|flat| {
@@ -8351,10 +8385,17 @@ fn unsatisfied_root_deps_atoms(
         use_flags,
         portage_use_reduce::MatchMode::Normal,
         &mut |atoms: &[String]| {
-            atoms.iter().all(|a| {
+            // `--root-deps` only needs the satisfiable-or-not split here
+            // (there's no "prefer the installed branch" question for a
+            // build-time `||` group resolved against the running root).
+            if atoms.iter().all(|a| {
                 atom_currently_satisfiable(repos, a, config, &[])
                     || running_root_satisfies_atom(a, running_root)
-            })
+            }) {
+                portage_use_reduce::AltPreference::Available
+            } else {
+                portage_use_reduce::AltPreference::Unsatisfiable
+            }
         },
     )
     .map(|flat| {
@@ -11990,11 +12031,12 @@ pub fn active_resolver_for(kind: SolverKind) -> Box<dyn Resolver> {
 ///     behavior when *none* is currently satisfiable, so the same
 ///     "never silently wrong about whether a dependency exists"
 ///     invariant still holds -- nothing regresses for a dependency this
-///     portuale genuinely can't resolve either way. Real portage's own
-///     considerably richer preference order (installed packages first,
-///     backtracking on a later constraint failure) isn't ported -- this
-///     portuale has no backtracking architecture at all -- just the single
-///     "first currently-resolvable alternative wins" rule.
+///     portuale genuinely can't resolve either way. Among the satisfiable
+///     alternatives, an already-installed one (real `dep_zapdeps`
+///     `preferred_installed`, choice bin 0) beats a first-listed one that
+///     would need a merge -- `AltPreference` / `atom_cp_installed`. The
+///     finer bins (`in_graph`/`any_slot`/`unsat_use_*`/`other_*`) and full
+///     backtracking still aren't ported.
 ///   - A dependency atom with no visible candidate does not fail the
 ///     whole graph: it still gets a `GraphEntry` with
 ///     `PretendOutcome::NoVisibleCandidate` (so it's visible in the
@@ -14139,11 +14181,27 @@ fn backtracking_resolve(req: &ResolveRequest) -> Result<GraphResult, Error> {
                 &use_flags,
                 portage_use_reduce::MatchMode::Normal,
                 &mut |atoms: &[String]| {
-                    atoms.iter().all(|a| {
+                    let all_available = atoms.iter().all(|a| {
                         atom_currently_satisfiable(&repos, a, config, disj_constraints(a))
                             || root_deps_running_root
                                 .is_some_and(|root| running_root_satisfies_atom(a, root))
-                    })
+                    });
+                    if !all_available {
+                        return portage_use_reduce::AltPreference::Unsatisfiable;
+                    }
+                    // Real `dep_zapdeps` `preferred_installed` (choice bin
+                    // 0): every non-blocker atom's `cat/pkg` is already
+                    // installed (real's check is `Atom(atom.cp)` -- cp
+                    // level, no version/slot/use). Makes `virtual/wine`'s
+                    // `|| ( wine-vanilla wine-staging … )` pick the
+                    // installed `wine-staging` instead of the first-listed
+                    // `wine-vanilla` (whose only visible version fails
+                    // REQUIRED_USE).
+                    if atoms.iter().all(|a| atom_cp_installed(root, a)) {
+                        portage_use_reduce::AltPreference::Installed
+                    } else {
+                        portage_use_reduce::AltPreference::Available
+                    }
                 },
             ) else {
                 continue;
@@ -15033,11 +15091,20 @@ fn enqueue_dependencies(
         &use_flags,
         portage_use_reduce::MatchMode::Normal,
         &mut |atoms: &[String]| {
-            atoms.iter().all(|a| {
+            let all_available = atoms.iter().all(|a| {
                 atom_currently_satisfiable(repos, a, config, disj_c(a))
                     || root_deps_running_root
                         .is_some_and(|root| running_root_satisfies_atom(a, root))
-            })
+            });
+            if !all_available {
+                portage_use_reduce::AltPreference::Unsatisfiable
+            } else if atoms.iter().all(|a| atom_cp_installed(root, a)) {
+                // Real `dep_zapdeps` `preferred_installed` -- see the
+                // identical check in the main New/Upgrade `||` closure.
+                portage_use_reduce::AltPreference::Installed
+            } else {
+                portage_use_reduce::AltPreference::Available
+            }
         },
     ) else {
         return;
@@ -18554,27 +18621,26 @@ mod tests {
         // inspection): an ordinary ebuild whose RDEPEND is a
         // "|| ( dev-libs/newpkg dev-libs/samepkg )" any-of group of real
         // providers -- no PROVIDE mechanism, no dedicated virtuals
-        // resolution code anywhere in portuale. Real "||" semantics
-        // (see use_reduce_flat_disjunctive, portage-use-reduce): the
-        // first alternative with a currently-satisfiable candidate wins
-        // -- dev-libs/newpkg (listed first, and visible) -- so
-        // dev-libs/samepkg (second, and already installed -- also
-        // satisfiable, but never even reached) is correctly never
-        // enqueued at all, unlike portuale's own earlier "resolve
-        // every alternative" v1.
+        // resolution code anywhere in portuale. Real `dep_zapdeps`
+        // preference (see `use_reduce_flat_disjunctive`'s `AltPreference`,
+        // portage-use-reduce): dev-libs/samepkg is already installed
+        // (choice bin 0, `preferred_installed`) so it wins over the
+        // first-listed dev-libs/newpkg (bin 1, needs a merge) -- exactly
+        // how real portage resolves `virtual/wine` -> the installed
+        // `wine-staging` instead of the first-listed `wine-vanilla`.
         let entries = graph_entries_real("virtual/texteditor");
         let full_names: Vec<String> = entries
             .iter()
             .map(|e| format!("{}/{}", e.category, e.package))
             .collect();
-        assert_eq!(full_names, vec!["dev-libs/newpkg", "virtual/texteditor"]);
+        assert_eq!(full_names, vec!["dev-libs/samepkg", "virtual/texteditor"]);
         assert_eq!(
             entries
                 .iter()
-                .find(|e| e.package == "newpkg")
-                .expect("newpkg entry")
+                .find(|e| e.package == "samepkg")
+                .expect("samepkg entry")
                 .outcome,
-            PretendOutcome::New {
+            PretendOutcome::AlreadyInstalled {
                 version: "1.0".to_string()
             }
         );
@@ -21738,19 +21804,20 @@ mod tests {
     }
 
     #[test]
-    fn recursion_resolves_only_the_first_satisfiable_any_of_alternative() {
+    fn recursion_prefers_the_installed_any_of_alternative_over_an_earlier_uninstalled_one() {
         // dev-libs/anyof's own RDEPEND is
-        // "|| ( dev-libs/newpkg dev-libs/samepkg )" -- dev-libs/newpkg
-        // (listed first) has a visible candidate, so it wins outright;
-        // dev-libs/samepkg (second, already installed -- also
-        // satisfiable) is never even reached. See
-        // use_reduce_flat_disjunctive's own doc comment
-        // (portage-use-reduce) for the full "first satisfiable
-        // alternative wins" grounding this replaced portuale's
-        // earlier "resolve every alternative" v1 with.
+        // "|| ( dev-libs/newpkg dev-libs/samepkg )". dev-libs/newpkg
+        // (listed first) would need a merge; dev-libs/samepkg (second) is
+        // already installed. Real `dep_zapdeps` files samepkg in choice
+        // bin 0 (`preferred_installed`, aliased to `preferred_in_graph`)
+        // and newpkg in bin 1 (`preferred_non_installed`), and takes the
+        // first entry of the best non-empty bin -- so `samepkg` wins even
+        // though it's listed second, and `newpkg` is never merged. See
+        // `use_reduce_flat_disjunctive`'s `AltPreference` (portage-use-
+        // reduce) and `atom_cp_installed`.
         let entries = graph("dev-libs/anyof");
         let names: Vec<&str> = entries.iter().map(|(n, _)| n.as_str()).collect();
-        assert_eq!(names, vec!["dev-libs/newpkg", "dev-libs/anyof"]);
+        assert_eq!(names, vec!["dev-libs/samepkg", "dev-libs/anyof"]);
     }
 
     #[test]

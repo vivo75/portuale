@@ -380,7 +380,7 @@ CASES = [
         1,
     ),
     (
-        "recursion: any-of group resolves only the first satisfiable alternative",
+        "recursion: any-of group prefers the installed alternative over an earlier uninstalled one",
         ["--pretend", "dev-libs/anyof"],
         0,
     ),
@@ -2647,24 +2647,48 @@ def test_json_entries_are_merge_ordered_with_an_explicit_index(
     assert [e["merge_order"] for e in entries] == [0, 1, 2, 3]
 
 
-def test_any_of_group_resolves_only_the_first_satisfiable_alternative(
-    emerge_binary, fixture_env
-):
-    """Real "||" semantics (see use_reduce_flat_disjunctive's own doc
-    comment, portage-use-reduce): of `|| ( dev-libs/newpkg
-    dev-libs/samepkg )`, only dev-libs/newpkg (listed first, and
-    visible) is even enqueued -- dev-libs/samepkg (already installed,
-    also satisfiable, but never reached) doesn't show up at all. Same
-    displayed stdout either way samepkg would have been silent anyway
-    (an AlreadyInstalled dependency never prints under plain --pretend),
-    but the underlying resolution now genuinely stops at the first
-    satisfiable alternative instead of walking every one."""
+def test_any_of_group_prefers_the_installed_alternative(emerge_binary, fixture_env):
+    """Real `dep_zapdeps` preference order (see use_reduce_flat_
+    disjunctive's `AltPreference`, portage-use-reduce): of
+    `|| ( dev-libs/newpkg dev-libs/samepkg )`, dev-libs/samepkg is
+    already installed, so real files it in choice bin 0
+    (`preferred_installed`) and dev-libs/newpkg -- which would need a
+    merge -- in bin 1 (`preferred_non_installed`). The first entry of the
+    best non-empty bin wins, so `samepkg` is chosen even though it's
+    listed second, and `newpkg` is never merged. Under plain --pretend an
+    AlreadyInstalled dependency is silent, so stdout is just anyof itself.
+    (This is the same rule that makes real portage resolve `virtual/wine`
+    to the installed `wine-staging` instead of the first-listed
+    `wine-vanilla`, whose only visible version fails REQUIRED_USE.)"""
     result = _run([str(emerge_binary)], ["--pretend", "dev-libs/anyof"], fixture_env)
     assert result.returncode == 0
     assert result.stdout.splitlines() == [
-        '[ebuild  N     ] dev-libs/newpkg-1.0 ',
         '[ebuild  N     ] dev-libs/anyof-1.0 ',
     ]
+
+
+def test_or_group_installed_preference_skips_a_required_use_broken_first_alternative(
+    emerge_binary, emerge_pretend_python, fixture_env
+):
+    """Regression for the live `emerge -puD @world` abort on
+    `app-emulation/wine-vanilla`. dev-libs/orrequseprefer's RDEPEND is
+    `|| ( dev-libs/requsefail dev-libs/samepkg )`. requsefail is
+    first-listed and has a visible ebuild, but its only version fails
+    REQUIRED_USE (`brokenflag? ( !brokenflag )` with `+brokenflag`);
+    samepkg is already installed. Real `dep_zapdeps` files samepkg in
+    choice bin 0 (`preferred_installed`) and picks it -- requsefail is
+    never enqueued, so its REQUIRED_USE is never evaluated and the
+    resolve succeeds. Before the `AltPreference` change portuale took the
+    first satisfiable alternative (requsefail) and aborted the whole run
+    with `REQUIRED_USE not satisfied for dev-libs/requsefail-1.0`. This
+    is exactly `virtual/wine` -> `wine-staging` on a real system."""
+    args = ["--pretend", "dev-libs/orrequseprefer"]
+    rust = _run([str(emerge_binary)], args, fixture_env)
+    py = _run(emerge_pretend_python, args, fixture_env)
+    assert rust.returncode == 0, rust.stdout + rust.stderr
+    assert rust.stdout.splitlines() == ['[ebuild  N     ] dev-libs/orrequseprefer-1.0 ']
+    assert rust.stdout == py.stdout
+    assert rust.returncode == py.returncode
 
 
 def test_or_group_alternative_yields_to_the_next_when_backtracking_masks_it(
@@ -11769,13 +11793,14 @@ def test_virtual_is_resolved_directly(emerge_binary, fixture_env):
     ordinary ebuild whose RDEPEND is a "|| ( ... )" any-of group of real
     providers, no PROVIDE mechanism or special resolution involved. It
     must resolve through the exact same category + any-of-group
-    machinery as any other package -- real "||" semantics pick only
-    dev-libs/newpkg (listed first, visible); dev-libs/samepkg (second,
-    already installed -- also satisfiable, but never reached at all)."""
+    machinery as any other package -- and real `dep_zapdeps` prefers the
+    already-installed provider (dev-libs/samepkg, choice bin 0) over the
+    first-listed dev-libs/newpkg (bin 1, needs a merge), so samepkg is
+    chosen (silent, AlreadyInstalled) and only virtual/texteditor merges.
+    """
     result = _run([str(emerge_binary)], ["--pretend", "virtual/texteditor"], fixture_env)
     assert result.returncode == 0
     assert result.stdout.splitlines() == [
-        '[ebuild  N     ] dev-libs/newpkg-1.0 ',
         '[ebuild  N     ] virtual/texteditor-0 ',
     ]
 
@@ -11790,7 +11815,6 @@ def test_virtual_is_resolved_as_a_dependency(emerge_binary, fixture_env):
     )
     assert result.returncode == 0
     assert result.stdout.splitlines() == [
-        '[ebuild  N     ] dev-libs/newpkg-1.0 ',
         '[ebuild  N     ] virtual/texteditor-0 ',
         '[ebuild  N     ] dev-libs/virtualconsumerpkg-1.0 ',
     ]

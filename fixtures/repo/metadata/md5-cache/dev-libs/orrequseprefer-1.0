@@ -1,0 +1,8 @@
+DEFINED_PHASES=-
+DESCRIPTION=fixture package: || group whose first alternative fails REQUIRED_USE, second is installed
+EAPI=8
+IUSE=
+KEYWORDS=amd64
+RDEPEND=|| ( dev-libs/requsefail dev-libs/samepkg )
+SLOT=0
+_md5_=0000000000000000000000000000000
