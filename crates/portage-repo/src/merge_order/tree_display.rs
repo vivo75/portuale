@@ -199,6 +199,52 @@ pub(crate) struct TreeSolvedReplacementsArgs<'a> {
     pub(crate) circular: &'a HashMap<RootCp, Vec<CircularDepChild>>,
 }
 
+/// Which satisfied Replacement rows tree-mode serialization solves.
+///
+/// Runs the shared scheduler loop in tree mode (greedy pop disabled, one
+/// non-root leaf per round) with the stuck branch enabled, and returns
+/// the solved `(owner entry, blocker index)` rows. Returns empty without
+/// running the loop when no Replacement row is pending.
+pub(crate) fn tree_solved_replacements(
+    args: TreeSolvedReplacementsArgs<'_>,
+) -> Vec<(usize, usize)> {
+    let TreeSolvedReplacementsArgs {
+        entries,
+        top_level_atoms,
+        config,
+        root,
+        implicit_system_deps,
+        repos,
+        dynamic_deps,
+        circular,
+    } = args;
+    let pending = tree_stuck_pending(entries);
+    if pending.is_empty() {
+        return Vec::new();
+    }
+    let (ext, mut g, _real_n, _discovery_rank) = schedule_graph(ScheduleGraphArgs {
+        entries,
+        top_level_atoms,
+        config,
+        root,
+        implicit_system_deps,
+        repos,
+        dynamic_deps,
+        circular,
+    });
+    // `pending` addresses resolver indexing, which is a prefix of `ext`
+    // (the closure only appends), so indices stay valid.
+    let _ = &ext;
+    let mut ts = TreeStuck {
+        pending,
+        scheduled: HashSet::new(),
+        solved: Vec::new(),
+        progressed: false,
+    };
+    select_nodes(&mut g, &ext, root, Some(&mut ts));
+    ts.solved
+}
+
 /// Arguments of [`tree_display_order`].
 pub struct TreeDisplayOrderArgs<'a> {
     pub entries: &'a [GraphEntry],

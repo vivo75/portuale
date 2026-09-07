@@ -5,6 +5,7 @@ use std::ops::ControlFlow;
 
 mod assemble_pass;
 mod candidate_pool;
+mod collect_pass_blockers;
 mod enqueue_deps;
 mod entry_fetch;
 mod entry_use_display;
@@ -23,6 +24,7 @@ mod slot_conflicts;
 mod unresolved_dep;
 pub(crate) use assemble_pass::*;
 pub(crate) use candidate_pool::*;
+pub(crate) use collect_pass_blockers::*;
 pub(crate) use enqueue_deps::*;
 pub(crate) use entry_fetch::*;
 pub(crate) use entry_use_display::*;
