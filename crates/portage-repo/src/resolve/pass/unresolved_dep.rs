@@ -218,6 +218,104 @@ pub(crate) struct DedupRepeatVisitArgs<'a> {
     pub(crate) owner: Option<&'a (String, String)>,
 }
 
+/// Drop repeat visits: repeats key by the installed instance's own slot, so a
+/// second installed instance in another slot is a distinct node whose deps
+/// still walk. `Break` when this visit was already recorded.
+pub(crate) fn dedup_repeat_visit(args: DedupRepeatVisitArgs<'_>) -> ControlFlow<()> {
+    let DedupRepeatVisitArgs {
+        key,
+        installed_node_slot,
+        item_targets_running_root,
+        state,
+        outcome,
+        bp,
+        unevaluated_atom,
+        current_atom,
+        ctx,
+        config,
+        owner,
+    } = args;
+    // Repeats key by the installed instance's own slot (Portage's
+    // `pkg.slot_atom` identity): a second installed instance in another slot is
+    // a distinct node whose deps still walk. Misses keep cp-scoped dedup.
+    let other_key = (
+        key.0.clone(),
+        key.1.clone(),
+        installed_node_slot,
+        item_targets_running_root,
+    );
+    if !state.other_outcomes.insert(other_key) {
+        // A deduped miss gets no entry, so under an active mask the pass must
+        // still read as a dead end (Portage abandons the attempt for
+        // `get_best_run`). Gated on an active mask.
+        if matches!(outcome, PretendOutcome::NoVisibleCandidate) && !bp.runtime_pkg_mask.is_empty()
+        {
+            state.suppressed_nvc = true;
+        }
+        // A deduped miss still refreshes the disclosure when its atom is the
+        // live one Portage reports (see `live_miss_atom_supersedes`).
+        if matches!(outcome, PretendOutcome::NoVisibleCandidate) {
+            let display_atom = unevaluated_atom.as_deref().unwrap_or(current_atom);
+            if state
+                .nvc_dep_atoms
+                .get(key)
+                .is_some_and(|old| live_miss_atom_supersedes(old, display_atom))
+            {
+                let masked_rows = masked_candidates_for_atom(&ctx.repos, display_atom, config);
+                let use_rows = use_unsat_candidates_for_atom(UseUnsatCandidatesForAtomArgs {
+                    repos: &ctx.repos,
+                    root: ctx.root,
+                    entries: &state.entries,
+                    display_atom,
+                    evaluated_atom: current_atom,
+                    owner,
+                    config,
+                });
+                state.nvc_dep_atoms.entry((*key).clone()).and_modify(|old| {
+                    if live_miss_atom_supersedes(old, display_atom) {
+                        *old = display_atom.to_string();
+                    }
+                });
+                for rep in state
+                    .masked_deps
+                    .iter_mut()
+                    .filter(|r| r.category == key.0 && r.package == key.1)
+                {
+                    if live_miss_atom_supersedes(&rep.atom, display_atom) {
+                        rep.atom = display_atom.to_string();
+                        if let Some(masked) = masked_rows.clone() {
+                            rep.masked = masked;
+                        }
+                    }
+                }
+                for rep in state
+                    .use_unsat_deps
+                    .iter_mut()
+                    .filter(|r| r.category == key.0 && r.package == key.1)
+                {
+                    if live_miss_atom_supersedes(&rep.atom, display_atom) {
+                        rep.atom = display_atom.to_string();
+                        if let Some(rows) = use_rows.clone() {
+                            rep.rows = rows;
+                        }
+                    }
+                }
+                for rep in state
+                    .plain_miss_deps
+                    .iter_mut()
+                    .filter(|r| r.category == key.0 && r.package == key.1)
+                {
+                    if live_miss_atom_supersedes(&rep.atom, display_atom) {
+                        rep.atom = display_atom.to_string();
+                    }
+                }
+            }
+        }
+        return ControlFlow::Break(());
+    }
+    ControlFlow::Continue(())
+}
+
 /// The values [`enqueue_installed_deps`] reads from its caller.
 pub(crate) struct EnqueueInstalledDepsArgs<'a> {
     pub(crate) outcome: &'a PretendOutcome,
@@ -408,6 +506,131 @@ pub(crate) struct RecordMissDisclosureArgs<'a> {
     pub(crate) ctx: &'a ResolveCtx<'a>,
     pub(crate) config: &'a Config,
     pub(crate) owner: Option<&'a (String, String)>,
+}
+
+/// Record the masked / USE-unsatisfied / plain-miss disclosure for a
+/// dependency `NoVisibleCandidate` (one per `cat/pkg`). A parent-flip rescue
+/// records no disclosure at all.
+pub(crate) fn record_miss_disclosure(args: RecordMissDisclosureArgs<'_>) {
+    let RecordMissDisclosureArgs {
+        outcome,
+        unevaluated_atom,
+        current_atom,
+        key,
+        state,
+        ctx,
+        config,
+        owner,
+    } = args;
+    // Masked-dependency disclosure: a miss matching only masked ebuilds records
+    // the "all masked" block (one per `cat/pkg`) instead of the bare line. The
+    // display atom is the unevaluated form, so conditional deps show as written.
+    // Computed every pass; only the final pass renders. Portage:
+    // _show_unsatisfied_dep.
+    if matches!(outcome, PretendOutcome::NoVisibleCandidate) {
+        let display_atom = unevaluated_atom.as_deref().unwrap_or(current_atom);
+        state
+            .nvc_dep_atoms
+            .entry((*key).clone())
+            .and_modify(|old| {
+                // A live slot-operator miss supersedes a built one.
+                if live_miss_atom_supersedes(old, display_atom) {
+                    *old = display_atom.to_string();
+                }
+            })
+            .or_insert_with(|| display_atom.to_string());
+        // A parent-flip rescue records no disclosure at all (Portage drops the
+        // item from display); the change block is its whole output.
+        // `nvc_dep_atoms` is still kept for the abort reason.
+        if !state.parent_flip_recorded.contains(key) {
+            if let Some(masked) = masked_candidates_for_atom(&ctx.repos, display_atom, config) {
+                // A supersede refreshes the just-computed rows too.
+                match state
+                    .masked_deps
+                    .iter_mut()
+                    .find(|r| r.category == key.0 && r.package == key.1)
+                {
+                    Some(r) if live_miss_atom_supersedes(&r.atom, display_atom) => {
+                        r.atom = display_atom.to_string();
+                        r.masked = masked;
+                    }
+                    Some(_) => {}
+                    None => state.masked_deps.push(MaskedDepReport {
+                        category: key.0.clone(),
+                        package: key.1.clone(),
+                        atom: display_atom.to_string(),
+                        masked,
+                        // Chains walk post-loop out of the final entries.
+                        chain: Vec::new(),
+                    }),
+                }
+            }
+            // USE-unsatisfied disclosure: visible ebuilds that can't satisfy the
+            // atom's `[use]` deps. Portage renders this block before the masked
+            // one (`show_missing_use` wins).
+            if let Some(rows) = use_unsat_candidates_for_atom(UseUnsatCandidatesForAtomArgs {
+                repos: &ctx.repos,
+                root: ctx.root,
+                entries: &state.entries,
+                display_atom,
+                evaluated_atom: current_atom,
+                owner,
+                config,
+            }) {
+                // A supersede refreshes the just-computed rows too.
+                match state
+                    .use_unsat_deps
+                    .iter_mut()
+                    .find(|r| r.category == key.0 && r.package == key.1)
+                {
+                    Some(r) if live_miss_atom_supersedes(&r.atom, display_atom) => {
+                        r.atom = display_atom.to_string();
+                        r.rows = rows;
+                    }
+                    Some(_) => {}
+                    None => state.use_unsat_deps.push(UseUnsatDepReport {
+                        category: key.0.clone(),
+                        package: key.1.clone(),
+                        atom: display_atom.to_string(),
+                        rows,
+                        chain: Vec::new(),
+                    }),
+                }
+            } else if !state
+                .masked_deps
+                .iter()
+                .any(|r: &MaskedDepReport| r.category == key.0 && r.package == key.1)
+                && !state
+                    .use_unsat_deps
+                    .iter()
+                    .any(|r: &UseUnsatDepReport| r.category == key.0 && r.package == key.1)
+                && !state
+                    .plain_miss_deps
+                    .iter()
+                    .any(|r: &PlainMissDepReport| r.category == key.0 && r.package == key.1)
+            {
+                // Neither sibling claimed the miss: nothing version-matches, or no
+                // failure is a USE one (e.g. a profile-forced flag). Portage's
+                // `there are no ebuilds to satisfy` block.
+                match state
+                    .plain_miss_deps
+                    .iter_mut()
+                    .find(|r| r.category == key.0 && r.package == key.1)
+                {
+                    Some(r) if live_miss_atom_supersedes(&r.atom, display_atom) => {
+                        r.atom = display_atom.to_string();
+                    }
+                    Some(_) => {}
+                    None => state.plain_miss_deps.push(PlainMissDepReport {
+                        category: key.0.clone(),
+                        package: key.1.clone(),
+                        atom: display_atom.to_string(),
+                        chain: Vec::new(),
+                    }),
+                }
+            }
+        }
+    }
 }
 
 /// The values [`push_unresolved_entry`] reads from its caller.
