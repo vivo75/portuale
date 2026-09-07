@@ -812,6 +812,50 @@ struct Run161Args<'a> {
     with_bdeps: bool,
 }
 
+/// One full BFS walk per leg over the fixture tree.
+fn run_161(args: Run161Args<'_>) -> PassResult {
+    let Run161Args {
+        dir,
+        atoms,
+        update,
+        installed,
+        newuse,
+        usepkgonly,
+        nodeps,
+        selective,
+        usepkg,
+        deep,
+        with_bdeps,
+    } = args;
+    for (name, version, slot) in installed {
+        let d = dir
+            .join("var/db/pkg/dev-libs")
+            .join(format!("{name}-{version}"));
+        fs::create_dir_all(&d).unwrap();
+        fs::write(d.join("CATEGORY"), "dev-libs\n").unwrap();
+        fs::write(d.join("SLOT"), format!("{slot}\n")).unwrap();
+        fs::write(d.join("repository"), "testrepo\n").unwrap();
+        fs::write(d.join("USE"), "\n").unwrap();
+    }
+    let config = test_config();
+    let repos = find_repos(&fixtures_root()).expect("fixture repos");
+    let opts = CtxOpts161 {
+        backtrack_max: 10,
+        atoms: atoms.to_vec(),
+        update,
+        newuse,
+        usepkg,
+        usepkgonly,
+        nodeps,
+        selective,
+        deep,
+        with_bdeps,
+        ..Default::default()
+    };
+    let ctx = ctx_161(dir, &config, repos, &opts);
+    run_pass(&ctx, &BacktrackParams::default(), true).expect("walk settles")
+}
+
 /// Arguments of [`blocker_161_write_pkg_full`].
 struct Blocker161WritePkgFullArgs<'a> {
     repo: &'a Path,
@@ -1598,6 +1642,7 @@ mod installed;
 mod license;
 mod masked_deps;
 mod metadata_cache;
+mod pass;
 mod pretend;
 mod queue;
 mod rebuild_scan;
