@@ -15348,3 +15348,29 @@ for the slice-4 merge). Pinned by `select_phases` + `split_pf` units, a
 synthetic-pretend driver test through the real `bin/`, and two
 hook-order black-box tests.
 
+
+`mrg --remote-binpkg` client merge (2026-09-08, remote-merge slice 4):
+after the phases, one merge driver runs old-prerm → collision gate →
+copy+vdb → old-postrm on the client, then new-postinst (non-fatal,
+local `_postinst_failure` rule) and a best-effort `ldconfig -r`. The
+copy walks the shipped `filemeta` (type/md5/mtime per path -- the
+client never hashes): fail-closed on foreign-owned or type-clashing
+destinations, `._cfgNNNN` divert on protected-and-differing
+(`cmp`/`readlink` compare; no cfgfiledict memory, no content-reuse),
+`cp -p`/`chmod --reference`/root-only `chown`, CONTENTS in the real
+`obj/dir/sym` shape. The vdb entry mirrors the local writer
+(build-info copies, CATEGORY/SLOT/repository/CONTENTS/COUNTER with
+edb-max+1, the plain hook `environment` for bzip2-less future hooks,
+sorted `metadata` file) under a `-MERGING-` tmp dir + rename. The
+same-slot replace discovers the max-COUNTER installed version and
+replays the real interleave (new preinst, old prerm, copy, old postrm,
+new postinst); removal is mtime-guarded (modified files kept with a
+warning). Old hooks run from the replaced vdb's own files, warn-and-
+skip without a readable env (never silently vacuous), warn-only on
+failure -- matching the local unmerge, which likewise only warns.
+Trial-verified local + loopback-ssh: fresh merge, and 1.0→2.0 replace
+with the byte-identical local hook order
+(`setup/preinst/postinst-1.0, setup/preinst-2.0, prerm/postrm-1.0,
+postinst-2.0`), old payload + vdb gone. Pinned by synthetic-merge
+driver tests (protect rename + reinstall-in-place + foreign abort) and
+three black-box tests (fresh, replace, ssh).

@@ -2136,3 +2136,33 @@ Deterministic slice tests: the hook order is pinned by two black-box
 tests (local + loopback ssh) and `PHASE_<name>=<rc>` markers;
 `cargo test -p portuale remote` covers `select_phases`, the
 `_pkgsplit`, and a synthetic-pretend run through the real `bin/`.
+
+`mrg --remote-binpkg` client merge (2026-09-08, remote-merge slice 4):
+copy + vdb + same-slot replace happen on the client after the phases.
+Live-verified exactly as run (local transport; the ssh variant prints
+the same markers):
+
+```sh
+portuale mrg --remote-transport local --remote-hostname x \
+  --remote-root /tmp/root --remote-workdir /tmp/work \
+  --remote-binpkg fixtures/pkgdir/dev-libs/binpkgrmpkg-1.0.tbz2
+# >>> Remote merge dev-libs/binpkgrmpkg-1.0: MERGE_PRERM=skip:none-installed
+# >>> Remote merge dev-libs/binpkgrmpkg-1.0: MERGE_COPY=ok
+# >>> Remote merge dev-libs/binpkgrmpkg-1.0: MERGE_VDB=ok
+# >>> Remote merge dev-libs/binpkgrmpkg-1.0: MERGE_REMOVE=skip:none-installed
+# >>> Remote merge dev-libs/binpkgrmpkg-1.0: MERGE_POSTRM=skip:none-installed
+# >>> Remote postinst dev-libs/binpkgrmpkg-1.0: ok
+# >>> Remote merged dev-libs/binpkgrmpkg-1.0
+portuale mrg --remote-transport local --remote-hostname x \
+  --remote-root /tmp/root --remote-workdir /tmp/work2 \
+  --remote-binpkg fixtures/pkgdir/dev-libs/binpkgrmpkg-2.0.tbz2
+# >>> Remote merge dev-libs/binpkgrmpkg-2.0: MERGE_PRERM=ok binpkgrmpkg-1.0
+# >>> Remote merge dev-libs/binpkgrmpkg-2.0: MERGE_REMOVE=ok binpkgrmpkg-1.0
+# (/tmp/root/var/lib/binpkgrmpkg.log ends with
+#  "prerm-1.0\npostrm-1.0\npostinst-2.0\n"; only 2.0 stays installed)
+```
+
+Deterministic slice tests: `pytest tests/test_portuale.py -k
+"remote_merge"` (fresh, replace with the real interleave, ssh) and
+`cargo test -p portuale remote` (protect rename, reinstall-in-place,
+foreign-owner abort).

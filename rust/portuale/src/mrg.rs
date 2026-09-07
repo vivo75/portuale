@@ -1016,6 +1016,26 @@ const OPTIONS: &[Opt] = &[
         missing: "",
         help: "bundle, stream and unpack one explicit binpkg file (bypasses resolution)",
     },
+    Opt {
+        id: "remote_config_protect",
+        long: "--remote-config-protect",
+        alias: None,
+        short: None,
+        kind: Kind::Value,
+        choices: &[],
+        missing: "",
+        help: "space-separated CONFIG_PROTECT list for the client merge (default /etc)",
+    },
+    Opt {
+        id: "remote_config_protect_mask",
+        long: "--remote-config-protect-mask",
+        alias: None,
+        short: None,
+        kind: Kind::Value,
+        choices: &[],
+        missing: "",
+        help: "space-separated CONFIG_PROTECT_MASK list for the client merge (default /etc/env.d)",
+    },
 ];
 
 /// Builds the clap `Arg` for one `Opt` entry, keeping real emerge's

@@ -491,10 +491,11 @@ def _remote_rmpkg_args(sshd_client):
 def test_mrg_remote_phases_run_setup_then_preinst_on_the_client(
     mrg_binary, fixture_env, loopback_sshd
 ):
-    """Slice-3 hooks over loopback ssh: the fixture's pkg_setup +
-    pkg_preinst run on the client in order (its log reads exactly
-    `setup-1.0\\npreinst-1.0\\n` -- postinst waits for the slice-4
-    merge), DEFINED_PHASES-gated, exit 0 with the phase report."""
+    """Slice-3 hooks over loopback ssh, now followed by the slice-4
+    merge: the fixture's pkg_setup + pkg_preinst run on the client in
+    order, then postinst after the merge (its log reads exactly
+    `setup-1.0\\npreinst-1.0\\npostinst-1.0\\n`), DEFINED_PHASES-gated,
+    exit 0 with the phase report."""
     result = subprocess.run(
         [str(mrg_binary), *_remote_rmpkg_args(loopback_sshd)],
         capture_output=True, text=True, check=False,
@@ -504,7 +505,7 @@ def test_mrg_remote_phases_run_setup_then_preinst_on_the_client(
     assert ">>> Remote phases dev-libs/binpkgrmpkg-1.0: setup ok, preinst ok" \
         in result.stdout
     log = Path(loopback_sshd["root"]) / "var/lib/binpkgrmpkg.log"
-    assert log.read_text() == "setup-1.0\npreinst-1.0\n"
+    assert log.read_text() == "setup-1.0\npreinst-1.0\npostinst-1.0\n"
 
 
 def test_mrg_remote_phases_run_over_local_transport(
@@ -530,8 +531,108 @@ def test_mrg_remote_phases_run_over_local_transport(
     assert result.returncode == 0, result.stderr
     assert ">>> Remote phases dev-libs/binpkgrmpkg-1.0: setup ok, preinst ok" \
         in result.stdout
-    assert (root / "var/lib/binpkgrmpkg.log").read_text() == \
-        "setup-1.0\npreinst-1.0\n"
+    assert ">>> Remote merged dev-libs/binpkgrmpkg-1.0" in result.stdout
+    assert (root / "var/lib/binpkgrmpkg.log").read_text() == (
+        "setup-1.0\npreinst-1.0\npostinst-1.0\n"
+    )
+
+
+def _remote_rmpkg_args(sshd_client):
+    """`--remote-binpkg` trial argv for the hook-ordering fixture."""
+    return _remote_binpkg_args(
+        sshd_client,
+        str(Path(FIXTURES_ROOT) / "pkgdir/dev-libs/binpkgrmpkg-1.0.tbz2"),
+    )
+
+
+def test_mrg_remote_merge_installs_a_fresh_package(
+    mrg_binary, fixture_env, tmp_path
+):
+    """Slice-4 fresh merge over local transport: image copied to ROOT,
+    real CONTENTS + vdb entry written, no replace (nothing installed),
+    postinst ran (non-fatal rule needs no failure here)."""
+    root = tmp_path / "root"
+    (root / "var" / "db" / "pkg").mkdir(parents=True)
+    binpkg = (
+        Path(fixture_env["PORTAGE_CONFIGROOT"])
+        / "pkgdir/dev-libs/binpkgrmpkg-1.0.tbz2"
+    )
+    result = subprocess.run(
+        [str(mrg_binary),
+         "--remote-hostname", "localtest",
+         "--remote-transport", "local",
+         "--remote-root", str(root),
+         "--remote-workdir", str(tmp_path / "work"),
+         "--remote-binpkg", str(binpkg)],
+        capture_output=True, text=True, check=False,
+        env=fixture_env,
+    )
+    assert result.returncode == 0, result.stderr
+    assert ">>> Remote merged dev-libs/binpkgrmpkg-1.0" in result.stdout
+    assert (root / "usr/share/binpkgrmpkg/payload-1.0.txt").is_file()
+    contents = (root / "var/db/pkg/dev-libs/binpkgrmpkg-1.0/CONTENTS").read_text()
+    assert "obj /usr/share/binpkgrmpkg/payload-1.0.txt " in contents
+    assert (root / "var/lib/binpkgrmpkg.log").read_text() == (
+        "setup-1.0\npreinst-1.0\npostinst-1.0\n"
+    )
+
+
+def test_mrg_remote_merge_replaces_a_same_slot_version(
+    mrg_binary, fixture_env, tmp_path
+):
+    """Slice-4 replace over local transport: merge 1.0, then 2.0. The
+    old hooks run from the old vdb env in real interleave order
+    (setup/preinst new, prerm/postrm old, postinst new), the old payload
+    and vdb entry are gone, and only 2.0 remains installed."""
+    root = tmp_path / "root"
+    (root / "var" / "db" / "pkg").mkdir(parents=True)
+    pkgdir = Path(fixture_env["PORTAGE_CONFIGROOT"]) / "pkgdir/dev-libs"
+    base = [str(mrg_binary),
+            "--remote-hostname", "localtest",
+            "--remote-transport", "local",
+            "--remote-root", str(root)]
+    first = subprocess.run(
+        [*base, "--remote-workdir", str(tmp_path / "work1"),
+         "--remote-binpkg", str(pkgdir / "binpkgrmpkg-1.0.tbz2")],
+        capture_output=True, text=True, check=False,
+        env=fixture_env,
+    )
+    assert first.returncode == 0, first.stderr
+    second = subprocess.run(
+        [*base, "--remote-workdir", str(tmp_path / "work2"),
+         "--remote-binpkg", str(pkgdir / "binpkgrmpkg-2.0.tbz2")],
+        capture_output=True, text=True, check=False,
+        env=fixture_env,
+    )
+    assert second.returncode == 0, second.stderr
+    assert ">>> Remote merged dev-libs/binpkgrmpkg-2.0" in second.stdout
+    assert "MERGE_PRERM=ok binpkgrmpkg-1.0" in second.stdout
+    assert (root / "var/lib/binpkgrmpkg.log").read_text() == (
+        "setup-1.0\npreinst-1.0\npostinst-1.0\n"
+        "setup-2.0\npreinst-2.0\nprerm-1.0\npostrm-1.0\npostinst-2.0\n"
+    )
+    assert (root / "usr/share/binpkgrmpkg/payload-2.0.txt").is_file()
+    assert not (root / "usr/share/binpkgrmpkg/payload-1.0.txt").exists()
+    assert (root / "var/db/pkg/dev-libs/binpkgrmpkg-2.0/CONTENTS").is_file()
+    assert not (root / "var/db/pkg/dev-libs/binpkgrmpkg-1.0").exists()
+
+
+def test_mrg_remote_merge_installs_over_loopback_ssh(
+    mrg_binary, fixture_env, loopback_sshd
+):
+    """Slice-4 fresh merge over real SSH (light: unpack + phases + merge
+    + vdb, no replace)."""
+    binpkg = str(Path(FIXTURES_ROOT) / "pkgdir/dev-libs/binpkgrmpkg-1.0.tbz2")
+    result = subprocess.run(
+        [str(mrg_binary), *_remote_binpkg_args(loopback_sshd, binpkg)],
+        capture_output=True, text=True, check=False,
+        env=_remote_env(fixture_env, loopback_sshd),
+    )
+    assert result.returncode == 0, result.stderr
+    assert ">>> Remote merged dev-libs/binpkgrmpkg-1.0" in result.stdout
+    root = Path(loopback_sshd["root"])
+    assert (root / "usr/share/binpkgrmpkg/payload-1.0.txt").is_file()
+    assert (root / "var/db/pkg/dev-libs/binpkgrmpkg-1.0/CONTENTS").is_file()
 
 
 def test_mrg_remote_bundle_missing_file_is_exit_1(mrg_binary, fixture_env, tmp_path):

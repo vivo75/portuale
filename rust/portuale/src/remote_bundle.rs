@@ -112,6 +112,10 @@ pub struct StagedBundle {
     /// both the ebuild file and the hook environment shipped (the local
     /// `merge_binpkg` degrade, mirrored).
     pub phases: Vec<String>,
+    /// Whether the client may run `postinst` after the merge (same gate
+    /// as `phases`, checked against the `postinst` word). Non-fatal on
+    /// failure, like the local merge.
+    pub postinst_defined: bool,
 }
 
 /// Split `package-version` (`PF` without category) into `(PN, PVR)`
@@ -171,6 +175,118 @@ pub fn read_eapi(build_info: &Path, ebuild_file: &Path) -> Option<String> {
         }
     }
     None
+}
+
+/// One image entry for the client's merge: type, content hash (files
+/// only), source mtime, and `/`-rooted relative path. The client joins on
+/// the path to write CONTENTS lines and make protect decisions -- it never
+/// hashes (no md5sum on the client) and only stats for the mtime check on
+/// paths the *old* version owned.
+pub struct FileMeta {
+    /// `obj`, `dir` or `sym`.
+    pub kind: &'static str,
+    /// Hex MD5 of file bytes (`obj`), `-` otherwise.
+    pub md5: String,
+    /// Source mtime seconds (recorded verbatim into CONTENTS; the client
+    /// reproduces it with `cp -p` / `touch -h -r`, best-effort).
+    pub mtime: i64,
+    /// Path relative to the image root, `/`-separated, no leading `/`.
+    pub rel: String,
+    /// Symlink target (`sym` only).
+    pub target: Option<String>,
+}
+
+/// Render `filemeta` lines: `<kind> <md5|-> <mtime> <relpath>[ <target>]`.
+/// Paths with whitespace or newlines are rejected at build time
+/// (fail-early: the line format cannot carry them).
+pub fn render_filemeta(entries: &[FileMeta]) -> Result<String, String> {
+    let mut out = String::new();
+    for entry in entries {
+        if entry.rel.chars().any(|c| c.is_whitespace()) {
+            return Err(format!("image path {:?} has whitespace", entry.rel));
+        }
+        out.push_str(&format!(
+            "{} {} {} {}",
+            entry.kind, entry.md5, entry.mtime, entry.rel
+        ));
+        if let Some(target) = &entry.target {
+            if target.chars().any(|c| c.is_whitespace()) {
+                return Err(format!("symlink target {:?} has whitespace", target));
+            }
+            out.push_str(&format!(" {target}"));
+        }
+        out.push('\n');
+    }
+    Ok(out)
+}
+
+/// Walk `image/` (sorted, like local `merge_tree`) recording type, MD5
+/// and mtime per entry. Symlink targets read via `read_link`; anything
+/// else (fifo/socket/device) is an error -- real binpkgs never carry
+/// those (block/char devices are v1 cuts documented in the merge
+/// modules, and the client could not create them portably anyway).
+pub fn collect_filemeta(image: &Path) -> Result<Vec<FileMeta>, String> {
+    use std::os::unix::fs::MetadataExt as _;
+    fn md5_file(path: &Path) -> Result<String, String> {
+        use md5::Digest as _;
+        let bytes = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
+        Ok(format!("{:x}", md5::Md5::digest(&bytes)))
+    }
+    let mut out = Vec::new();
+    let mut stack = vec![PathBuf::new()];
+    while let Some(relative_dir) = stack.pop() {
+        let src_dir = image.join(&relative_dir);
+        let mut children: Vec<PathBuf> = std::fs::read_dir(&src_dir)
+            .map_err(|e| format!("{}: {e}", src_dir.display()))?
+            .filter_map(|e| e.ok())
+            .map(|e| relative_dir.join(e.file_name()))
+            .collect();
+        children.sort();
+        for relative_path in children {
+            let src = image.join(&relative_path);
+            let meta =
+                std::fs::symlink_metadata(&src).map_err(|e| format!("{}: {e}", src.display()))?;
+            let file_type = meta.file_type();
+            let rel = relative_path.to_string_lossy().replace('\\', "/");
+            let mtime = meta.mtime();
+            if file_type.is_symlink() {
+                let target = std::fs::read_link(&src)
+                    .map_err(|e| format!("{}: {e}", src.display()))?
+                    .to_string_lossy()
+                    .to_string();
+                out.push(FileMeta {
+                    kind: "sym",
+                    md5: "-".to_string(),
+                    mtime,
+                    rel,
+                    target: Some(target),
+                });
+            } else if file_type.is_dir() {
+                stack.push(relative_path);
+                out.push(FileMeta {
+                    kind: "dir",
+                    md5: "-".to_string(),
+                    mtime,
+                    rel,
+                    target: None,
+                });
+            } else if file_type.is_file() {
+                out.push(FileMeta {
+                    kind: "obj",
+                    md5: md5_file(&src)?,
+                    mtime,
+                    rel,
+                    target: None,
+                });
+            } else {
+                return Err(format!(
+                    "{}: special file in image (only obj/dir/sym supported)",
+                    src.display()
+                ));
+            }
+        }
+    }
+    Ok(out)
 }
 
 /// Which of the slice-3 client phases (`pretend`/`setup`/`preinst`) a
@@ -283,11 +399,17 @@ pub fn build_bundle(binpkg_path: &Path, staging_tmp: &Path) -> Result<StagedBund
     }
 
     let ebuild_file = build_info.join(format!("{pf}.ebuild"));
-    let phases = select_phases(
-        &std::fs::read_to_string(build_info.join("DEFINED_PHASES")).unwrap_or_default(),
-        ebuild_file.is_file(),
-        has_environment,
-    );
+    let defined = std::fs::read_to_string(build_info.join("DEFINED_PHASES")).unwrap_or_default();
+    let phases = select_phases(&defined, ebuild_file.is_file(), has_environment);
+    let postinst_defined = has_environment
+        && ebuild_file.is_file()
+        && defined.split_whitespace().any(|word| word == "postinst");
+
+    // Uncompressed tar of `<pf>/` (wire compression is a future slice).
+    // Per-file type/hash/mtime for the client's merge (CONTENTS lines,
+    // protect decisions) -- the client never hashes.
+    let filemeta = render_filemeta(&collect_filemeta(&image)?)?;
+    std::fs::write(unit.join("filemeta"), &filemeta).map_err(|e| format!("filemeta: {e}"))?;
 
     // Uncompressed tar of `<pf>/` (wire compression is a future slice).
     let tarball = staging_tmp.join("bundle.tar");
@@ -316,6 +438,7 @@ pub fn build_bundle(binpkg_path: &Path, staging_tmp: &Path) -> Result<StagedBund
         tarball,
         byte_count,
         manifest,
+        postinst_defined,
         eapi,
         category,
         pn,

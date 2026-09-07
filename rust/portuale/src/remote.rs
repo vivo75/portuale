@@ -104,6 +104,12 @@ pub struct RemoteContext {
     /// One explicit binpkg file to bundle, stream and unpack (bypasses
     /// resolution; slices 2-4 trials, later an escape hatch).
     pub binpkg: Option<String>,
+    /// Space-separated CONFIG_PROTECT list for the client merge (real
+    /// default `/etc`; slice 5 derives it from pulled client config).
+    pub config_protect: String,
+    /// Space-separated CONFIG_PROTECT_MASK list (real default
+    /// `/etc/env.d`).
+    pub config_protect_mask: String,
 }
 
 /// `--remote-*` ids besides `remote_hostname`, in OPTIONS-table order --
@@ -120,6 +126,8 @@ const REMOTE_OPTION_IDS: &[&str] = &[
     "remote_workdir",
     "remote_transport",
     "remote_binpkg",
+    "remote_config_protect",
+    "remote_config_protect_mask",
 ];
 
 fn get(matches: &ArgMatches, id: &str) -> Option<String> {
@@ -191,6 +199,9 @@ pub fn check_remote(matches: &ArgMatches) -> Result<Option<RemoteContext>, Strin
             .unwrap_or_else(|| "/var/tmp/portage-remote".to_string()),
         transport,
         binpkg: get(matches, "remote_binpkg").filter(|b| !b.is_empty()),
+        config_protect: get(matches, "remote_config_protect").unwrap_or_else(|| "/etc".to_string()),
+        config_protect_mask: get(matches, "remote_config_protect_mask")
+            .unwrap_or_else(|| "/etc/env.d".to_string()),
     }))
 }
 
@@ -429,7 +440,7 @@ fn preflight_script(root: &str, workdir: &str) -> String {
         r#"echo "PREFLIGHT=1"
 echo "BASH_MAJOR=${{BASH_VERSINFO[0]}}"
 echo "BASH_MINOR=${{BASH_VERSINFO[1]}}"
-for t in tar mkdir rm cat chmod ln; do
+for t in tar mkdir rm cat chmod ln find grep sed cmp stat readlink id; do
   if command -v "$t" >/dev/null 2>&1; then echo "TOOL_$t=yes"; else echo "TOOL_$t=no"; fi
 done
 ROOT={root}
@@ -484,7 +495,10 @@ fn preflight_gates(values: &HashMap<String, String>) -> (Vec<String>, Vec<String
             "client bash is {major}.{minor}, need 5.3 or better"
         ));
     }
-    for tool in ["tar", "mkdir", "rm", "cat", "chmod", "ln"] {
+    for tool in [
+        "tar", "mkdir", "rm", "cat", "chmod", "ln", "find", "grep", "sed", "cmp", "stat",
+        "readlink", "id",
+    ] {
         if values
             .get(format!("TOOL_{tool}").as_str())
             .map(String::as_str)
@@ -896,13 +910,139 @@ fn run_bundle_stage(
                 staged.manifest.cpv,
                 done.join(", ")
             );
-            ExitCode::from(0)
         }
         Err(message) => {
             eprintln!("{message}");
-            ExitCode::from(1)
+            return ExitCode::from(1);
         }
     }
+    // Slice-4 merge (copy+vdb+replace) then new-postinst, non-fatal like
+    // the local merge's own `_postinst_failure` rule.
+    match run_merge_stage(ctx, control, &unit_dir, &staged) {
+        Ok(markers) => {
+            for marker in &markers {
+                println!(">>> Remote merge {}: {marker}", staged.manifest.cpv);
+            }
+        }
+        Err(message) => {
+            eprintln!("{message}");
+            return ExitCode::from(1);
+        }
+    }
+    if staged.postinst_defined {
+        let colormap = crate::color::phase_colormap_export();
+        let workdir_parent = std::path::Path::new(&ctx.workdir)
+            .parent()
+            .map(|p| p.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "/var/tmp".to_string());
+        let script = phase_script(
+            &unit_dir,
+            &staged,
+            "postinst",
+            &ctx.root,
+            &workdir_parent,
+            &colormap,
+        );
+        match run_script_stdin(ctx, control, &script) {
+            Ok(output) => {
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                for line in stderr.lines().chain(stdout.lines()) {
+                    println!("{line}");
+                }
+                let rc: i32 = parse_kv(&stdout)
+                    .get("PHASE_postinst")
+                    .and_then(|rc| rc.parse().ok())
+                    .unwrap_or(-1);
+                if output.status.success() && rc == 0 {
+                    println!(">>> Remote postinst {}: ok", staged.manifest.cpv);
+                } else {
+                    println!(
+                        ">>> Remote postinst {}: FAILED (exit {}) -- merge kept (real _postinst_failure)",
+                        staged.manifest.cpv,
+                        output.status.code().unwrap_or(-1)
+                    );
+                }
+            }
+            Err(message) => {
+                println!(
+                    ">>> Remote postinst {}: transport failed, merge kept: {message}",
+                    staged.manifest.cpv
+                );
+            }
+        }
+    } else {
+        println!(
+            ">>> Remote postinst {}: none defined, skipped",
+            staged.manifest.cpv
+        );
+    }
+    println!(">>> Remote merged {}", staged.manifest.cpv);
+    ExitCode::from(0)
+}
+
+// --- Client merge (slice 4) ----------------------------------------------------
+
+/// Shared `export` block for any hook run (new phases in `phase_script`,
+/// old prerm/postrm inside the merge driver): path overrides with
+/// caller-side values, everything else from the sourced saved env.
+/// `unit_bin` is the shipped runtime dir (`$UNIT/bin`,
+/// `$OLD_TMP/bin` symlink or copy -- callers decide).
+#[allow(clippy::too_many_arguments)]
+fn phase_exports(
+    ebuild: &str,
+    build_dir: &str,
+    root: &str,
+    image_dir: &str,
+    temp_dir: &str,
+    work_subdir: &str,
+    home_dir: &str,
+    files_dir: &str,
+    bin_dir: &str,
+    tmpdir: &str,
+    colormap: &str,
+    staged: &crate::remote_bundle::StagedBundle,
+    phase: &str,
+) -> String {
+    format!(
+        concat!(
+            "export EAPI={eapi} CATEGORY={category} PN={pn} PV={pv} PR={pr} PVR={pvr} P={p} PF={pf}\n",
+            "export EBUILD={ebuild} O={obuild}\n",
+            "export ROOT={root} EROOT={root}\n",
+            "export PORTAGE_BUILDDIR={builddir}\n",
+            "export WORKDIR={workdir}\n",
+            "export D={imaged}/ ED={imaged}/\n",
+            "export T={temp} HOME={home} FILESDIR={filesdir}\n",
+            "export PORTAGE_BIN_PATH={bindir}\n",
+            "export PORTAGE_ECLASS_LOCATIONS=\"\"\n",
+            "export PORTAGE_PYTHON=/usr/bin/python\n",
+            "export PORTAGE_COLORMAP={colormap}\n",
+            "export PORTAGE_TMPDIR={tmpdir}\n",
+            "export SANDBOX_LOG={temp}/sandbox.log\n",
+            "export EBUILD_PHASE={phase} EMERGE_FROM=binary\n",
+        ),
+        eapi = sh_quote(&staged.eapi),
+        category = sh_quote(&staged.category),
+        pn = sh_quote(&staged.pn),
+        pv = sh_quote(&staged.pv),
+        pr = sh_quote(&staged.pr),
+        pvr = sh_quote(&staged.pvr),
+        p = sh_quote(&staged.p),
+        pf = sh_quote(&staged.pf),
+        ebuild = sh_quote(ebuild),
+        obuild = sh_quote(&format!("{build_dir}/build-info")),
+        root = sh_quote(root),
+        builddir = sh_quote(build_dir),
+        workdir = sh_quote(work_subdir),
+        imaged = sh_quote(image_dir),
+        temp = sh_quote(temp_dir),
+        home = sh_quote(home_dir),
+        filesdir = sh_quote(files_dir),
+        bindir = sh_quote(bin_dir),
+        tmpdir = sh_quote(tmpdir),
+        colormap = sh_quote(colormap),
+        phase = phase,
+    )
 }
 
 // --- Client phases (slice 3) -------------------------------------------------
@@ -928,46 +1068,440 @@ fn phase_script(
 ) -> String {
     // D keeps local's trailing slash.
     format!(
-        r#"UNIT={unit}
-T="$UNIT/temp"
-mkdir -p "$T" "$UNIT/work" "$UNIT/homedir" "$UNIT/files" "$UNIT/empty"
-cp "$UNIT/environment" "$T/environment"
-: > "$T/environment.raw"
-export EAPI={eapi} CATEGORY={category} PN={pn} PV={pv} PR={pr} PVR={pvr} P={p} PF={pf}
-export EBUILD="$UNIT/build-info/{pf}.ebuild"
-export O="$UNIT/build-info"
-export ROOT={root} EROOT={root}
-export PORTAGE_BUILDDIR="$UNIT"
-export WORKDIR="$UNIT/work"
-export D="$UNIT/image/" ED="$UNIT/image/"
-export T="$T" HOME="$UNIT/homedir" FILESDIR="$UNIT/files"
-export PORTAGE_BIN_PATH="$UNIT/bin"
-export PORTAGE_ECLASS_LOCATIONS=""
-export PORTAGE_PYTHON=/usr/bin/python
-export PORTAGE_COLORMAP={colormap}
-export PORTAGE_TMPDIR={tmpdir}
-export SANDBOX_LOG="$T/sandbox.log"
-export EBUILD_PHASE={phase} EMERGE_FROM=binary
-export PATH="$UNIT/bin/ebuild-helpers:$PATH"
-bash "$UNIT/bin/ebuild.sh" {phase}
-rc=$?
-echo "PHASE_{phase}=$rc"
-exit $rc
-"#,
+        concat!(
+            "UNIT={unit}\n",
+            "T=\"$UNIT/temp\"\n",
+            "mkdir -p \"$T\" \"$UNIT/work\" \"$UNIT/homedir\" \"$UNIT/files\" \"$UNIT/empty\"\n",
+            "cp \"$UNIT/environment\" \"$T/environment\"\n",
+            ": > \"$T/environment.raw\"\n",
+            "{exports}",
+            "export PATH=\"$UNIT/bin/ebuild-helpers:$PATH\"\n",
+            "bash \"$UNIT/bin/ebuild.sh\" {phase}\n",
+            "rc=$?\n",
+            "echo \"PHASE_{phase}=$rc\"\n",
+            "exit $rc\n",
+        ),
+        unit = sh_quote(unit_dir),
+        exports = phase_exports(
+            &format!("{unit_dir}/build-info/{}.ebuild", staged.pf),
+            unit_dir,
+            root,
+            &format!("{unit_dir}/image"),
+            &format!("{unit_dir}/temp"),
+            &format!("{unit_dir}/work"),
+            &format!("{unit_dir}/homedir"),
+            &format!("{unit_dir}/files"),
+            &format!("{unit_dir}/bin"),
+            workdir_parent,
+            colormap,
+            staged,
+            phase,
+        ),
+        phase = phase,
+    )
+}
+
+// --- Client merge driver (slice 4): helpers ----------------------------------
+
+/// Longest-prefix `is_protected` + `alloc_cfg` + `env_val` + `run_old_hook`
+/// helpers shared by the merge flow. Pure bash, no placeholders except
+/// the colormap/PATH roots baked by the caller template below.
+const MERGE_HELPERS: &str = r#"mfail() { echo "MERGE_FAIL=$1 $2"; exit 1; }
+warn() { echo "MERGE_WARN=$1 $2"; }
+env_val() {
+  sed -n "s/^declare -x $2=\"\\(.*\\)\"$/\\1/p" "$1" | head -n 1
+}
+is_protected() {
+  dest=$1; best_p=0; best_m=0
+  for e in $PROTECT; do
+    pp="$ROOT/${e#/}"
+    if [ -d "$pp" ]; then
+      case "$dest" in "$pp"|"$pp"/*)
+        len=${#pp}; [ "$len" -gt "$best_p" ] && best_p=$len ;;
+      esac
+    else
+      [ "$dest" = "$pp" ] && { len=${#pp}; [ "$len" -gt "$best_p" ] && best_p=$len; }
+    fi
+  done
+  for e in $MASK; do
+    pp="$ROOT/${e#/}"
+    if [ -d "$pp" ]; then
+      case "$dest" in "$pp"|"$pp"/*)
+        len=${#pp}; [ "$len" -gt "$best_m" ] && best_m=$len ;;
+      esac
+    else
+      [ "$dest" = "$pp" ] && { len=${#pp}; [ "$len" -gt "$best_m" ] && best_m=$len; }
+    fi
+  done
+  [ "$best_p" -gt 0 ] && [ "$best_p" -gt "$best_m" ] && echo yes || echo no
+}
+alloc_cfg() {
+  dir=$(dirname "$1"); base=$(basename "$1"); n=0
+  while [ -e "$dir/._cfg$(printf '%04d' $n)_$base" ]; do n=$((n + 1)); done
+  echo "$dir/._cfg$(printf '%04d' $n)_$base"
+}
+run_old_hook() {
+  vdbdir=$1; phase=$2
+  set -- "$vdbdir"/*.ebuild
+  [ -f "$1" ] || { echo "OLDHOOK=missing-ebuild"; return 2; }
+  ebuild=$1
+  OTMP="$WORKDIR/oldtmp"
+  rm -rf "$OTMP"
+  mkdir -p "$OTMP/temp" "$OTMP/work" "$OTMP/homedir" "$OTMP/files" "$OTMP/empty" "$OTMP/image" || return 1
+  if [ -f "$vdbdir/environment" ]; then
+    cp "$vdbdir/environment" "$OTMP/temp/environment" || return 1
+  elif [ -f "$vdbdir/environment.bz2" ] && command -v bzip2 >/dev/null 2>&1; then
+    bzip2 -dc -- "$vdbdir/environment.bz2" > "$OTMP/temp/environment" || return 1
+  else
+    echo "OLDHOOK=no-env-bzip2-missing"; return 2
+  fi
+  : > "$OTMP/temp/environment.raw"
+  EAPI=$(env_val "$OTMP/temp/environment" EAPI)
+  [ -n "$EAPI" ] || { echo "OLDHOOK=no-eapi"; return 2; }
+  export EAPI
+  for v in CATEGORY PN PV PR PVR P PF; do
+    val=$(env_val "$OTMP/temp/environment" "$v")
+    [ -n "$val" ] || { echo "OLDHOOK=no-$v"; return 2; }
+    export "$v=$val"
+  done
+  export EBUILD="$ebuild" O="$vdbdir"
+  export ROOT="$ROOT" EROOT="$ROOT"
+  export PORTAGE_BUILDDIR="$OTMP"
+  export WORKDIR="$OTMP/work"
+  export D="$OTMP/image/" ED="$OTMP/image/"
+  export T="$OTMP/temp" HOME="$OTMP/homedir" FILESDIR="$OTMP/files"
+  export PORTAGE_BIN_PATH="$UNITBIN"
+  export PORTAGE_ECLASS_LOCATIONS=""
+  export PORTAGE_PYTHON=/usr/bin/python
+  export PORTAGE_COLORMAP="$COLORMAP"
+  export PORTAGE_TMPDIR="$WORKDIR"
+  export SANDBOX_LOG="$OTMP/temp/sandbox.log"
+  export EBUILD_PHASE="$phase" EMERGE_FROM=binary
+  export PATH="$UNITBIN/ebuild-helpers:$PATH"
+  bash "$UNITBIN/ebuild.sh" "$phase"
+  rc=$?
+  echo "OLDHOOK_$phase=$rc"
+  return $rc
+}
+"#;
+
+// --- Client merge flow (slice 4) -----------------------------------------------
+
+/// Merge flow: old-prerm → ownership scan → gate+copy → vdb → remove-old
+/// → old-postrm → env-update, appended after `MERGE_HELPERS`. Shell vars
+/// (`UNIT`, `ROOT`, `VDBROOT`, `NEWPF`, `PKG`, `MAINS`, `PROTECT`,
+/// `MASK`, …) come from `merge_script`'s header. Machine lines
+/// `MERGE_<STEP>=…`; any `mfail` prints `MERGE_FAIL=<step> <detail>` and
+/// exits 1. New-postinst runs separately afterwards (see
+/// `run_bundle_stage`).
+const MERGE_FLOW: &str = r##"OLD_PF=""; OLD_COUNTER=-1
+for d in "$VDBROOT"/"$PKG"-*/; do
+
+  [ -d "$d" ] || continue
+  cpf=$(basename "$d")
+  [ "$cpf" = "$NEWPF" ] && continue
+  rest=${cpf#"$PKG"-}
+  case "$rest" in [0-9]*) ;; *) continue;; esac
+  slot=$(cat "$d/SLOT" 2>/dev/null | cut -d/ -f1)
+  [ "$slot" = "$MAINS" ] || continue
+  c=$(cat "$d/COUNTER" 2>/dev/null | tr -d ' \t\n'); case "$c" in ''|*[!0-9]*) c=-1;; esac
+  if [ "$c" -gt "$OLD_COUNTER" ]; then OLD_COUNTER=$c; OLD_PF=$cpf; fi
+done
+if [ -n "$OLD_PF" ]; then OLDVDB="$VDBROOT/$OLD_PF"; else OLDVDB=""; fi
+if [ -n "$OLD_PF" ]; then
+  if run_old_hook "$OLDVDB" prerm; then
+    echo "MERGE_PRERM=ok $OLD_PF"
+  else
+    rc=$?
+    if [ "$rc" = 2 ]; then echo "MERGE_PRERM=skip $OLD_PF"; else echo "MERGE_PRERM=warn $OLD_PF"; fi
+  fi
+else
+  echo "MERGE_PRERM=skip:none-installed"
+fi
+: > "$REPLACED_OWN"; : > "$OTHERS_OWN"
+for c in "$ROOT"/var/db/pkg/*/*/CONTENTS; do
+  [ -f "$c" ] || continue
+  pfdir=$(basename "$(dirname "$c")")
+  awk '$1=="obj"||$1=="sym"{print $2}' "$c" > "$UNIT/scan.list"
+  if [ "$pfdir" = "$NEWPF" ] || { [ -n "$OLD_PF" ] && [ "$pfdir" = "$OLD_PF" ]; }; then
+    cat "$UNIT/scan.list" >> "$REPLACED_OWN"
+  else
+    cat "$UNIT/scan.list" >> "$OTHERS_OWN"
+  fi
+done
+rm -f "$UNIT/scan.list"
+: > "$NEWCONTENTS"; : > "$NEWPATHS"
+ROOTUID=$(id -u)
+while read -r line; do
+  [ -n "$line" ] || continue
+  set -f; set -- $line; set +f; kind=$1
+  case "$kind" in
+    dir) rel=$4 ;;
+    obj) rel=$4; md5=$2; mtime=$3 ;;
+    sym) rel=$4; mtime=$3; target=$5 ;;
+    *) mfail copy "unknown filemeta kind $kind" ;;
+  esac
+  src="$IMAGE/$rel"; dest="$ROOT/$rel"; apath="/$rel"
+  if [ -e "$dest" ] || [ -L "$dest" ]; then
+    if grep -Fxq "$apath" "$REPLACED_OWN"; then :;
+    elif grep -Fxq "$apath" "$OTHERS_OWN"; then mfail collision "$apath owned by another package";
+    elif [ -d "$dest" ] && [ ! -L "$dest" ]; then
+      [ "$kind" = dir ] || mfail collision "file over directory at $apath";
+    elif [ "$kind" = dir ]; then
+      mfail collision "directory over file at $apath";
+    else :; fi
+  fi
+  case "$kind" in
+    dir)
+      if [ ! -d "$dest" ]; then
+        mkdir -p "$dest" || mfail copy "mkdir $apath"
+        chmod --reference "$src" "$dest" || mfail copy "chmod $apath"
+        [ "$ROOTUID" = 0 ] && chown --reference "$src" "$dest" || true
+      fi
+      echo "dir $apath" >> "$NEWCONTENTS"
+      ;;
+    obj)
+      if [ "$(is_protected "$dest")" = yes ] && { [ -f "$dest" ] || [ -L "$dest" ]; }; then
+        if cmp -s "$src" "$dest"; then :;
+        else dest=$(alloc_cfg "$dest"); fi
+      fi
+      mkdir -p "$(dirname "$dest")" || mfail copy "mkdir parent of $apath"
+      # A symlink at dest would make `cp` follow it and clobber the
+      # target: drop the link first (local removes before writing too).
+      [ -L "$dest" ] && rm -f "$dest"
+      cp -p "$src" "$dest" || mfail copy "$apath"
+      chmod --reference "$src" "$dest" || mfail copy "chmod $apath"
+      [ "$ROOTUID" = 0 ] && chown --reference "$src" "$dest" || true
+      echo "obj $apath $md5 $mtime" >> "$NEWCONTENTS"
+      ;;
+    sym)
+      if [ "$(is_protected "$dest")" = yes ] && { [ -f "$dest" ] || [ -L "$dest" ]; }; then
+        cur=""; [ -L "$dest" ] && cur=$(readlink "$dest")
+        [ "$cur" = "$target" ] || dest=$(alloc_cfg "$dest")
+      fi
+      mkdir -p "$(dirname "$dest")" || mfail copy "mkdir parent of $apath"
+      rm -f "$dest"
+      ln -s "$target" "$dest" || mfail copy "symlink $apath"
+      touch -h -r "$src" "$dest" 2>/dev/null || true
+      if [ "$ROOTUID" = 0 ]; then chown -h --reference "$src" "$dest" 2>/dev/null || true; fi
+      echo "sym $apath -> $target $mtime" >> "$NEWCONTENTS"
+      ;;
+  esac
+  echo "$apath" >> "$NEWPATHS"
+done < "$UNIT/filemeta"
+echo "MERGE_COPY=ok"
+rm -rf "$TMPVDB"; mkdir -p "$TMPVDB" || mfail vdb "mkdir tmp"
+for f in "$UNIT/build-info"/*; do
+  # NOTE: `cond && action || fail` misfires when cond is false -- always
+  # an explicit if for fallible steps.
+  if [ -f "$f" ]; then cp "$f" "$TMPVDB"/ || mfail vdb "copy build-info"; fi
+done
+# The plain hook environment ships only when the binpkg carried an
+# `environment.bz2` (else there is nothing future hooks could source;
+# the verbatim `build-info/*` copies above already kept the original).
+if [ -f "$UNIT/environment" ]; then
+  cp "$UNIT/environment" "$TMPVDB/environment" || mfail vdb "copy environment"
+fi
+printf '%s\n' "$CAT" > "$TMPVDB/CATEGORY"
+printf '%s\n' "$FULLSLOT" > "$TMPVDB/SLOT"
+printf '%s\n' "$REPO" > "$TMPVDB/repository"
+cp "$NEWCONTENTS" "$TMPVDB/CONTENTS" || mfail vdb "write CONTENTS"
+max_c=-1
+for f in "$VDBROOT"/*/COUNTER "$ROOT/var/cache/edb/counter"; do
+  [ -f "$f" ] || continue
+  c=$(cat "$f" 2>/dev/null | tr -d ' \t\n'); case "$c" in ''|*[!0-9]*) continue;; esac
+  [ "$c" -gt "$max_c" ] && max_c=$c
+done
+NEXT=$((max_c + 1))
+printf '%s' "$NEXT" > "$TMPVDB/COUNTER"
+mkdir -p "$ROOT/var/cache/edb" && printf '%s' "$NEXT" > "$ROOT/var/cache/edb/counter"
+tmpmeta="$TMPVDB/metadata.tmp"
+: > "$tmpmeta"
+for f in BDEPEND BUILD_ID BUILD_TIME CHOST COUNTER DEFINED_PHASES DEPEND DESCRIPTION EAPI HOMEPAGE IDEPEND IUSE KEYWORDS LICENSE PDEPEND PROPERTIES PROVIDES RDEPEND REQUIRES RESTRICT SLOT USE repository; do
+  [ -f "$TMPVDB/$f" ] || continue
+  printf '%s=%s\n' "$f" "$(tr -s '[:space:]' ' ' < "$TMPVDB/$f" | sed -e 's/^ *//' -e 's/ *$//')" >> "$tmpmeta"
+done
+if [ -s "$tmpmeta" ]; then
+  { echo "#format=1"; LC_ALL=C sort "$tmpmeta"; } > "$TMPVDB/metadata"
+  printf '#dir_mtime=%s\n' "$(stat -c %Y "$TMPVDB")" >> "$TMPVDB/metadata"
+  rm -f "$tmpmeta"
+fi
+rm -rf "$NEWVDB"
+mv "$TMPVDB" "$NEWVDB" || mfail vdb "rename into place"
+echo "MERGE_VDB=ok"
+if [ -n "$OLD_PF" ]; then
+  if [ -f "$OLDVDB/CONTENTS" ]; then
+    : > "$UNIT/olddirs.list"
+    while read -r line; do
+      [ -n "$line" ] || continue
+      set -f; set -- $line; set +f; kind=$1
+      case "$kind" in
+        obj|sym)
+          apath=$2; recorded=${line##* }
+          grep -Fxq "$apath" "$NEWPATHS" && continue
+          if [ ! -e "$ROOT$apath" ] && [ ! -L "$ROOT$apath" ]; then continue; fi
+          if [ "$(stat -c %Y "$ROOT$apath" 2>/dev/null)" = "$recorded" ]; then
+            rm -f "$ROOT$apath" || warn remove "cannot remove $apath"
+          else
+            warn remove "modified-kept $apath"
+          fi
+          ;;
+        dir) echo "$2" >> "$UNIT/olddirs.list" ;;
+        *) warn remove "unmerge-skip $line" ;;
+      esac
+    done < "$OLDVDB/CONTENTS"
+    sort -r "$UNIT/olddirs.list" | while read -r d; do
+      [ -n "$d" ] && rmdir "$ROOT$d" 2>/dev/null || true
+    done
+    rm -f "$UNIT/olddirs.list"
+  else
+    warn remove "no CONTENTS in $OLD_PF, files kept"
+  fi
+  echo "MERGE_REMOVE=ok $OLD_PF"
+else
+  echo "MERGE_REMOVE=skip:none-installed"
+fi
+if [ -n "$OLD_PF" ]; then
+  if run_old_hook "$OLDVDB" postrm; then echo "MERGE_POSTRM=ok $OLD_PF"; else
+    rc=$?
+    if [ "$rc" = 2 ]; then echo "MERGE_POSTRM=skip $OLD_PF"; else echo "MERGE_POSTRM=warn $OLD_PF"; fi
+  fi
+  rm -rf "$OLDVDB"
+else
+  echo "MERGE_POSTRM=skip:none-installed"
+fi
+if command -v ldconfig >/dev/null 2>&1; then
+  if ldconfig -r "$ROOT" 2>/dev/null; then echo "MERGE_ENVUPDATE=ok ldconfig"; else echo "MERGE_ENVUPDATE=skip:ldconfig-failed"; fi
+else
+  echo "MERGE_ENVUPDATE=skip:no-ldconfig"
+fi
+echo "MERGE_DONE=ok"
+"##;
+
+/// Merge header: all values the flow needs, pre-quoted. The unit layout
+/// mirrors the local merge (`image/`, `build-info/`, shipped `bin/`).
+fn merge_script(
+    unit_dir: &str,
+    staged: &crate::remote_bundle::StagedBundle,
+    root: &str,
+    protect_list: &str,
+    mask_list: &str,
+) -> String {
+    format!(
+        concat!(
+            "UNIT={unit}\n",
+            "IMAGE=\"$UNIT/image\"\n",
+            "VDBROOT={root}/var/db/pkg/{category}\n",
+            "CAT={category}\n",
+            "PKG={pkg}\n",
+            "NEWPF={pf}\n",
+            "NEWVDB=\"$VDBROOT/$NEWPF\"\n",
+            "TMPVDB=\"$VDBROOT/-MERGING-$NEWPF\"\n",
+            "FULLSLOT={slot}\n",
+            "MAINS={mainslot}\n",
+            "REPO={repo}\n",
+            "ROOT={root}\n",
+            "WORKDIR={workdir}\n",
+            "UNITBIN=\"$UNIT/bin\"\n",
+            "COLORMAP={colormap}\n",
+            "PROTECT={protect}\n",
+            "MASK={mask}\n",
+            "NEWCONTENTS=\"$UNIT/CONTENTS.new\"\n",
+            "NEWPATHS=\"$UNIT/paths.new\"\n",
+            "REPLACED_OWN=\"$UNIT/replaced.own\"\n",
+            "OTHERS_OWN=\"$UNIT/others.own\"\n",
+            "{helpers}",
+            "{flow}",
+        ),
         unit = sh_quote(unit_dir),
         root = sh_quote(root),
-        colormap = sh_quote(colormap),
-        tmpdir = sh_quote(workdir_parent),
-        phase = phase,
-        eapi = sh_quote(&staged.eapi),
         category = sh_quote(&staged.category),
-        pn = sh_quote(&staged.pn),
-        pv = sh_quote(&staged.pv),
-        pr = sh_quote(&staged.pr),
-        pvr = sh_quote(&staged.pvr),
-        p = sh_quote(&staged.p),
+        pkg = sh_quote(&staged.pn),
         pf = sh_quote(&staged.pf),
+        slot = sh_quote(&staged.manifest.slot),
+        mainslot = sh_quote(staged.manifest.slot.split('/').next().unwrap_or("0")),
+        repo = sh_quote(&staged.manifest.repo),
+        workdir = sh_quote(
+            &std::path::Path::new(unit_dir)
+                .parent()
+                .map(|p| p.to_string_lossy().into_owned())
+                .unwrap_or_else(|| "/var/tmp".to_string())
+        ),
+        colormap = sh_quote(&crate::color::phase_colormap_export()),
+        protect = sh_quote(protect_list),
+        mask = sh_quote(mask_list),
+        helpers = MERGE_HELPERS,
+        flow = MERGE_FLOW,
     )
+}
+
+/// Human tail of a merge failure: the `MERGE_FAIL` line plus a few log
+/// lines, prefixed for the report.
+fn merge_failure_tail(stdout: &str, stderr: &str, code: Option<i32>) -> String {
+    let mut message = format!("mrg: client merge failed (exit {}):", code.unwrap_or(-1));
+    let mut shown = 0;
+    for line in stdout
+        .lines()
+        .filter(|l| l.starts_with("MERGE_FAIL=") || l.starts_with("MERGE_WARN="))
+        .chain(stderr.lines())
+        .take(6)
+    {
+        message.push_str(&format!("\nmrg:   {line}"));
+        shown += 1;
+        if shown >= 6 {
+            break;
+        }
+    }
+    message
+}
+
+/// Run the merge driver; `Ok(markers)` are the `MERGE_<STEP>=ok` lines
+/// for the report, `Err(message)` the failure tail.
+fn run_merge_stage(
+    ctx: &RemoteContext,
+    control: Option<&std::path::Path>,
+    unit_dir: &str,
+    staged: &crate::remote_bundle::StagedBundle,
+) -> Result<Vec<String>, String> {
+    let script = merge_script(
+        unit_dir,
+        staged,
+        &ctx.root,
+        &ctx.config_protect,
+        &ctx.config_protect_mask,
+    );
+    let output = run_script_stdin(ctx, control, &script).map_err(|message| {
+        if ctx.transport == RemoteTransport::Local {
+            format!("mrg: local merge command failed: {message}")
+        } else {
+            message
+        }
+    })?;
+    let code = output.status.code();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    for line in stderr.lines().chain(stdout.lines()) {
+        println!("{line}");
+    }
+    let values = parse_kv(&stdout);
+    if output.status.success() && values.get("MERGE_DONE").map(String::as_str) == Some("ok") {
+        let mut markers = Vec::new();
+        for step in [
+            "MERGE_PRERM",
+            "MERGE_COPY",
+            "MERGE_VDB",
+            "MERGE_REMOVE",
+            "MERGE_POSTRM",
+            "MERGE_ENVUPDATE",
+        ] {
+            if let Some(value) = values.get(step) {
+                markers.push(format!("{step}={value}"));
+            }
+        }
+        Ok(markers)
+    } else {
+        Err(merge_failure_tail(&stdout, &stderr, code))
+    }
 }
 
 /// Run the staged phases in order, stopping at the first non-zero
@@ -1089,6 +1623,13 @@ mod tests {
             ("TOOL_cat", "yes"),
             ("TOOL_chmod", "yes"),
             ("TOOL_ln", "yes"),
+            ("TOOL_find", "yes"),
+            ("TOOL_grep", "yes"),
+            ("TOOL_sed", "yes"),
+            ("TOOL_cmp", "yes"),
+            ("TOOL_stat", "yes"),
+            ("TOOL_readlink", "yes"),
+            ("TOOL_id", "yes"),
             ("ROOT_WRITABLE", "yes"),
             ("VDB_DIR", "yes"),
             ("WORKDIR", "writable"),
@@ -1161,6 +1702,8 @@ mod tests {
             workdir: "/var/tmp/portage-remote".to_string(),
             transport: RemoteTransport::Ssh,
             binpkg: None,
+            config_protect: "/etc".to_string(),
+            config_protect_mask: "/etc/env.d".to_string(),
         }
     }
 
@@ -1250,6 +1793,192 @@ mod tests {
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
+    /// Synthetic merge through the real driver: protect rename and
+    /// fail-closed collision, no binpkg needed (unit staged by hand,
+    /// `filemeta` via the real collector).
+    fn synthetic_unit(
+        tmp: &std::path::Path,
+        files: &[(&str, &str)],
+    ) -> (String, crate::remote_bundle::StagedBundle) {
+        let unit = tmp.join("work/probe-1.0");
+        let image = unit.join("image");
+        let build_info = unit.join("build-info");
+        std::fs::create_dir_all(&build_info).unwrap();
+        for (rel, content) in files {
+            let path = image.join(rel);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(&path, content).unwrap();
+        }
+        for (name, content) in [
+            ("PF", "probe-1.0"),
+            ("CATEGORY", "dev-libs"),
+            ("SLOT", "0"),
+            ("DEFINED_PHASES", "-"),
+        ] {
+            std::fs::write(build_info.join(name), content).unwrap();
+        }
+        let entries = crate::remote_bundle::collect_filemeta(&image).unwrap();
+        let filemeta = crate::remote_bundle::render_filemeta(&entries).unwrap();
+        std::fs::write(unit.join("filemeta"), &filemeta).unwrap();
+        let staged = crate::remote_bundle::StagedBundle {
+            tarball: tmp.join("bundle.tar"),
+            byte_count: 0,
+            manifest: crate::remote_bundle::BundleManifest {
+                format: 1,
+                cpv: "dev-libs/probe-1.0".to_string(),
+                slot: "0".to_string(),
+                repo: "test".to_string(),
+                has_environment: false,
+            },
+            eapi: "8".to_string(),
+            category: "dev-libs".to_string(),
+            pn: "probe".to_string(),
+            pv: "1.0".to_string(),
+            pr: "r0".to_string(),
+            pvr: "1.0".to_string(),
+            p: "probe-1.0".to_string(),
+            pf: "probe-1.0".to_string(),
+            phases: Vec::new(),
+            postinst_defined: false,
+        };
+        (unit.to_str().unwrap().to_string(), staged)
+    }
+
+    fn local_ctx(root: &str, workdir: &str) -> RemoteContext {
+        RemoteContext {
+            hostname: "localtest".to_string(),
+            user: None,
+            port: 22,
+            key_file: None,
+            timeout_secs: 10,
+            ssh_args: None,
+            strict_host_key_checking: StrictHostKeyChecking::AcceptNew,
+            max_clock_skew_secs: 0,
+            root: root.to_string(),
+            workdir: workdir.to_string(),
+            transport: RemoteTransport::Local,
+            binpkg: None,
+            config_protect: "/etc".to_string(),
+            config_protect_mask: "/etc/env.d".to_string(),
+        }
+    }
+
+    #[test]
+    fn merge_driver_protects_a_modified_config() {
+        let tmp = std::env::temp_dir().join(format!(
+            "portuale-remote-protect-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let root = tmp.join("root");
+        std::fs::create_dir_all(root.join("etc")).unwrap();
+        std::fs::create_dir_all(root.join("var/db/pkg")).unwrap();
+        // Live config differs from the incoming image version.
+        std::fs::write(
+            root.join("etc/probe.conf"),
+            "live
+",
+        )
+        .unwrap();
+        let (unit, staged) = synthetic_unit(
+            &tmp,
+            &[(
+                "etc/probe.conf",
+                "incoming
+",
+            )],
+        );
+        let ctx = local_ctx(root.to_str().unwrap(), tmp.join("work").to_str().unwrap());
+        let markers = run_merge_stage(&ctx, None, &unit, &staged).expect("merge succeeds");
+        assert!(markers.iter().any(|m| m == "MERGE_COPY=ok"), "{markers:?}");
+        // Original untouched, update diverted to a `._cfg` sibling...
+        assert_eq!(
+            std::fs::read_to_string(root.join("etc/probe.conf")).unwrap(),
+            "live
+"
+        );
+        let cfg = root.join("etc/._cfg0000_probe.conf");
+        assert_eq!(
+            std::fs::read_to_string(&cfg).unwrap(),
+            "incoming
+"
+        );
+        // ...while CONTENTS records the logical path (like the local merge).
+        let contents =
+            std::fs::read_to_string(root.join("var/db/pkg/dev-libs/probe-1.0/CONTENTS")).unwrap();
+        assert!(
+            contents.contains("obj /etc/probe.conf "),
+            "unexpected CONTENTS:\n{contents}"
+        );
+        // Identical content merges in place (no `._cfg` spam): the
+        // live file now matches the image, so reinstalling overwrites.
+        std::fs::write(root.join("etc/probe.conf"), "incoming\n").unwrap();
+        let markers = run_merge_stage(&ctx, None, &unit, &staged).expect("remerge succeeds");
+        assert!(markers.iter().any(|m| m == "MERGE_COPY=ok"), "{markers:?}");
+        assert!(!root.join("etc/._cfg0001_probe.conf").exists());
+        assert_eq!(
+            std::fs::read_to_string(root.join("etc/probe.conf")).unwrap(),
+            "incoming\n"
+        );
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn merge_driver_aborts_on_unowned_collision() {
+        let tmp = std::env::temp_dir().join(format!(
+            "portuale-remote-collide-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let root = tmp.join("root");
+        std::fs::create_dir_all(root.join("usr/share")).unwrap();
+        std::fs::create_dir_all(root.join("var/db/pkg")).unwrap();
+        // A file another installed package owns: fail-closed (no
+        // protect-owned nuance in v1). An unowned orphan would simply
+        // be overwritten -- only foreign ownership aborts.
+        std::fs::write(
+            root.join("usr/share/foreign.txt"),
+            "mine
+",
+        )
+        .unwrap();
+        let (unit, staged) = synthetic_unit(
+            &tmp,
+            &[(
+                "usr/share/foreign.txt",
+                "theirs
+",
+            )],
+        );
+        let owner = root.join("var/db/pkg/dev-libs/owner-1.0");
+        std::fs::create_dir_all(&owner).unwrap();
+        std::fs::write(owner.join("SLOT"), "0\n").unwrap();
+        std::fs::write(
+            owner.join("CONTENTS"),
+            "obj /usr/share/foreign.txt deadbeef 100\n",
+        )
+        .unwrap();
+        let ctx = local_ctx(root.to_str().unwrap(), tmp.join("work").to_str().unwrap());
+        let err = run_merge_stage(&ctx, None, &unit, &staged).unwrap_err();
+        assert!(err.contains("collision"), "{err}");
+        // Nothing was written: no vdb for the new package (the other
+        // owner's entry stays), foreign file untouched.
+        assert!(!root.join("var/db/pkg/dev-libs/probe-1.0").exists());
+        assert!(root.join("var/db/pkg/dev-libs/owner-1.0").exists());
+        assert_eq!(
+            std::fs::read_to_string(root.join("usr/share/foreign.txt")).unwrap(),
+            "mine
+"
+        );
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
     /// Positive pretend dispatch through the real stack: a synthetic unit
     /// (hand-written ebuild + environment carrying `pkg_pretend`, the real
     /// shipped `bin/`) runs the generated phase script under local bash.
@@ -1308,6 +2037,7 @@ mod tests {
             p: "probe-1.0".to_string(),
             pf: "probe-1.0".to_string(),
             phases: vec!["pretend".to_string()],
+            postinst_defined: false,
         };
         let script = phase_script(
             unit.to_str().unwrap(),

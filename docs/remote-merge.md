@@ -316,6 +316,8 @@ Required values are clap-required; unknown values exit 2 via clap.
 | `--remote-ssh-args` | Value | `-o ControlMaster=auto -o ControlPersist=60s` | passthrough (ansible `ssh_args`). |
 | `--remote-strict-host-key-checking` | Value `accept-new\|yes\|no` | `accept-new` | TOFU by default (new key added + fingerprint printed, changed key aborts); `yes` for locked-down fleets, `no` only for throwaway labs (§9). |
 | `--remote-jobs` | Value | `1` | units in flight (v1: sequential only; the knob exists so the future parallel slice needs no CLI change). |
+| `--remote-config-protect` | Value | `/etc` | space-separated CONFIG_PROTECT list for the client merge (slice 5 derives it from pulled client config). |
+| `--remote-config-protect-mask` | Value | `/etc/env.d` | space-separated CONFIG_PROTECT_MASK list. |
 | `--remote-transport` | Value `ssh\|local` | `ssh` | how driver scripts and files reach the client; `local` runs the identical generated driver against local paths (offline debugging, SSH-free driver tests). |
 | `--remote-binpkg` | Value | — | bundle, stream and unpack one explicit binpkg file, bypassing resolution (slices 2-4 trials; later an escape hatch). |
 
@@ -424,7 +426,11 @@ disables -- only for labs with no NTP).
    unset for ebuild.sh's own default)
 4. **Merge + vdb on client**: collision check, CONFIG_PROTECT copy,
    CONTENTS/vdb write, same-slot replace with old hooks, postinst,
-   env_update equivalent.
+   env_update equivalent. (shipped 2026-09-08; fail-closed collisions,
+   always-protect-on-differ without cfgfiledict memory, no preserve-libs,
+   old hooks warn-and-skip without readable env, prerm/postrm failures
+   warn like the local unmerge, postinst non-fatal, `ldconfig -r`
+   best-effort)
 5. **Placement + ledger**: `server:`/`client:` matrix, vdb shadow,
    stateless degrade, last-10 ledger both sides, `--getbinpkgonly`
    enforcement.
