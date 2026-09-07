@@ -27,6 +27,7 @@ mod merge_script;
 mod plan;
 mod preflight;
 mod ssh;
+mod stages;
 
 #[cfg(test)]
 pub(crate) mod tests;
@@ -40,6 +41,7 @@ pub(crate) use merge_script::*;
 pub use plan::*;
 pub(crate) use preflight::*;
 pub use ssh::*;
+pub(crate) use stages::*;
 
 use portage_util::TempDir;
 

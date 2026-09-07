@@ -1,6 +1,27 @@
 use super::*;
 
 #[test]
+fn sh_quote_wraps_and_escapes() {
+    assert_eq!(sh_quote("/"), "'/'");
+    assert_eq!(sh_quote("/var/tmp/a b"), "'/var/tmp/a b'");
+    assert_eq!(sh_quote("o'clock"), "'o'\\''clock'");
+    assert_eq!(sh_quote(""), "''");
+    assert_eq!(sh_quote("a'b'c"), "'a'\\''b'\\''c'");
+}
+
+#[test]
+fn transport_errors_are_not_remote_failures() {
+    assert!(is_transport_error(Some(255), ""));
+    assert!(is_transport_error(
+        None,
+        "ssh: Could not resolve hostname badhost"
+    ));
+    assert!(is_transport_error(None, "Connection refused"));
+    assert!(!is_transport_error(Some(1), "some remote error"));
+    assert!(!is_transport_error(Some(0), ""));
+}
+
+#[test]
 fn control_dir_prefers_short_dirs_and_skips_unfitting_ones() {
     use std::path::PathBuf;
     // A deep base cannot fit `%C` + suffix under 108 bytes.

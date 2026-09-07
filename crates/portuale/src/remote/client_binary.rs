@@ -127,6 +127,28 @@ pub(crate) fn bin_preflight(ctx: &RemoteContext) -> Result<Option<BinPreflight>,
     }))
 }
 
+/// Run the install stage when the plan says so: `Use`/`Local` are
+/// no-ops (no status line -- a reuse prints nothing); `Unresolved`
+/// is an internal error (preflight never ran).
+pub(crate) fn ensure_client_binary(
+    ctx: &RemoteContext,
+    control: Option<&std::path::Path>,
+) -> Result<(), String> {
+    match &ctx.bin_plan {
+        ClientBinPlan::Install(target) => {
+            let pre = bin_preflight(ctx)?.ok_or_else(|| {
+                "mrg: internal error: the client binary plan needs an install but preflight skipped the binary gates".to_string()
+            })?;
+            install_client_binary(ctx, control, target, &pre.digest, &pre.bin_path)
+        }
+        ClientBinPlan::Use(_) | ClientBinPlan::Local(_) => Ok(()),
+        ClientBinPlan::Unresolved => Err(
+            "mrg: internal error: the client binary was never resolved (preflight did not run)"
+                .to_string(),
+        ),
+    }
+}
+
 /// Digest of a client path, if it exists: `None` when missing. Only a
 /// transport failure is an `Err`; a missing file is not one.
 pub(crate) fn client_file_digest(

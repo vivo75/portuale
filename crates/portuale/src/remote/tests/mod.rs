@@ -2,6 +2,35 @@ use super::*;
 
 use portage_util::TempDir;
 
+fn ctx_with_args(hostname: &str, ssh_args: Option<&str>) -> RemoteContext {
+    RemoteContext {
+        hostname: hostname.to_string(),
+        user: None,
+        port: 22222,
+        key_file: None,
+        timeout_secs: 10,
+        ssh_args: ssh_args.map(String::from),
+        strict_host_key_checking: StrictHostKeyChecking::AcceptNew,
+        max_clock_skew_secs: 900,
+        root: "/".to_string(),
+        workdir: "/var/tmp/portage-remote".to_string(),
+        transport: RemoteTransport::Ssh,
+        binpkg: None,
+        config_protect: "/etc".to_string(),
+        config_protect_explicit: false,
+        config_protect_mask: "/etc/env.d".to_string(),
+        config_protect_mask_explicit: false,
+        etc_portage: ConfigPlacement::Client("/etc/portage".to_string()),
+        vdb: ConfigPlacement::Client("/var/db/pkg".to_string()),
+        edb: ConfigPlacement::Server("/var/cache/edb".to_string()),
+        ledger_dir: None,
+        require_ledger_match: false,
+        portuale_binary: None,
+        portuale_dir: None,
+        bin_plan: ClientBinPlan::Unresolved,
+    }
+}
+
 fn binary_entry(package: &str, binary: bool) -> portage_repo::GraphEntry {
     use portage_repo::{CandidateSource, PretendOutcome, VisibilityProvenance};
     portage_repo::GraphEntry {
@@ -78,4 +107,7 @@ fn s8_sha256(path: &std::path::Path) -> String {
         sha2::Sha256::digest(std::fs::read(path).expect("test file reads"))
     )
 }
+mod context;
+mod host_keys;
+mod preflight;
 mod ssh;

@@ -266,6 +266,19 @@ pub(crate) fn pull_dir(
     Ok(())
 }
 
+/// Ship local file bytes to `<workdir>/<name>` on the client: `sh -c
+/// 'cat > …'` over ssh (the `>` must be remote-side, hence the explicit
+/// `sh -c` with one pre-quoted word), plain `fs::copy` for local.
+pub(crate) fn send_file(
+    ctx: &RemoteContext,
+    control: Option<&std::path::Path>,
+    local_path: &std::path::Path,
+    dest: &str,
+) -> Result<(), String> {
+    let bytes = std::fs::read(local_path).map_err(|e| format!("{}: {e}", local_path.display()))?;
+    send_bytes(ctx, control, &bytes, dest)
+}
+
 /// Ship in-memory bytes to a client path: the `send_file` transport
 /// for bytes the server never wrote to disk (old-hook envs staged
 /// for the merge driver).
