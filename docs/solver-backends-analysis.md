@@ -210,3 +210,89 @@ Pins: exact crate versions in `Cargo.toml` (do not float `0.x`), default
 features audited for `resolvo`, `cargo fmt --check` / `cargo clippy
 --release --all-targets` zero-warn / `cargo test --release` /
 `python3 -m pytest tests -q` per slice.
+
+## 6. Direct `pubgrub 0.4` / `resolvo 0.12` vs. reusing lu-zero's bridges
+
+Grounded in the pinned checkout (`3rdparty/portage-cli` @ `a0465cd`,
+`repos.toml` `[portage-cli]`). Line counts via `wc -l` on that checkout.
+
+**Verdict: reuse lu-zero's bridges. The direct route requires strictly more
+plumbing and more effort — everything the direct route needs, plus a
+~10k-line rewrite of what the bridges already implement.**
+
+### What the direct route would force us to write
+
+`pubgrub` and `resolvo` are generic engines with no Portage knowledge. Using
+them directly means implementing their provider traits from scratch **and**
+every Portage semantic on top:
+
+- `pubgrub`: `Package` + `VersionSet` + `DependencyProvider`
+  (`choose_package_version`, prioritization, `get_dependencies`, ...).
+- `resolvo`: `Interner` + `DependencyProvider` (pool interning,
+  `filter_candidates`, `get_dependencies`, `sort_candidates`, ... —
+  see `portage-atom-resolvo/src/provider.rs`, 1541 lines just for this trait).
+
+Then the Portage semantics neither engine owns: PMS version ranges (`~`,
+`=*`, slot/sub-slot), all five `*DEPEND` classes, `||`/`^^`/`??` as virtual
+choice packages, hybrid USE-conditionals (eager + solver-decided virtual
+nodes), all six USE-dep variants, `::repo`, weak/strong blockers, installed
+favored/locked, multi-slot coexistence, `:=` rebuild tracking +
+`upgrade_to` re-solve fixpoint, Level-C `REQUIRED_USE`, post-solve validation
+(`validate.rs`: 1978 lines), labeled graph + PDEPEND-relaxed toposort
+(`graph.rs`: 1527 lines). That is exactly what the two bridges contain:
+
+- `portage-atom-pubgrub/src`: ~6.3k lines (`convert.rs` 1625, `graph.rs`
+  1527, `validate.rs` 1978, `package.rs` 395, `version_set.rs` 374,
+  `provider/` 2.5k incl. 73 tests, `solver_impl.rs` 388).
+- `portage-atom-resolvo/src`: ~4.3k lines (`provider.rs` 1541, `pool.rs`
+  568, `version_match.rs` 316, 49 solver tests).
+
+The direct route re-types all of it, plus a new test suite proving PMS
+parity — the most error-prone part, and the part lu-zero already debugged
+(incl. a post-solve ordering nondeterminism fix recorded in
+`portage-atom-pubgrub/docs/use-and-solver-boundary.md`).
+
+### What reusing lu-zero still leaves us (unavoidable in both routes)
+
+The caller-side plumbing is identical either way, because the engines never
+speak Portage policy (their documented boundary: the solver is "a solver over
+facts"; resolved USE, masking, notices all stay with the caller):
+
+- `ResolveRequest` (40+ fields) → bridge `PackageRepository` + per-version
+  `desired_use` + installed packages — same input mapping whether the
+  provider underneath is theirs or ours.
+- `Plan` → `GraphResult` (merge order via `merge_order.rs`, slot-conflict /
+  autounmask / abi / circular notices reconstructed) — same output mapping.
+- `portage-atom` ↔ `portage-dep`/`portage-versions` translation at the seam
+  (do not swap parsers wholesale).
+
+So the comparison is: **lu-zero route = caller adapter + audit** vs.
+**direct route = caller adapter + ~10k-line bridge rewrite + test suite**.
+The adapter cost is fixed; the bridge cost is saved in full.
+
+### Bonus reference: `portage-resolve` (18.5k lines, do not depend on)
+
+`portage-cli/portage-resolve/src` (lib + 19 modules) is lu-zero's own
+caller-side adapter: `repo.rs` (3822 lines: `PackageRepository` impl +
+keyword/mask/license acceptance), `conflicts.rs` (1432: post-solve
+reverse-dep conflicts vs. installed), `effective_use.rs`, `force_mask.rs`,
+`package_use.rs`, `roots.rs`, `root_closure.rs`, ... — i.e. a worked example
+of the exact `ResolveRequest`-equivalent → facts mapping we must build
+against our own config/vdb types. It is explicitly unpublishable past
+`v0.0.1` (depends on their `portage-repo` → brush fork via git), so **copy
+ideas, never add a Cargo dependency on it**.
+
+### Caveats of the lu-zero route (audit list, not blockers)
+
+- Self-declared unaudited/AI-generated bridges: pin exact versions, review
+  `convert.rs` + `validate.rs` + ordering-sensitive paths, run their 120+
+  tests plus our fixture suite before trusting output.
+- Asymmetry: only the pubgrub bridge implements `portage_solver::Solver`
+  (`solver_impl.rs`, 388 lines, thin translation — `grep "impl Solver"`
+  finds no counterpart in the resolvo crate). `--solver=resolvo` needs either
+  that same thin impl written once, or driving `PortageDependencyProvider`
+  directly. Small, bounded work — not a reason to go direct.
+- Their `use-and-solver-boundary.md` confirms the policy split we rely on:
+  profile/make.conf/package.use/ACCEPT_* resolution lives in the caller, the
+  bridge only consumes per-version `desired` sets. Our `effective_use_flags`
+  already computes exactly that — the feed exists.
