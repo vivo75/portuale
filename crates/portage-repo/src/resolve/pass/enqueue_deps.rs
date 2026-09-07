@@ -30,6 +30,74 @@ pub(crate) struct SelectDepTokensOut {
     pub(crate) tokens: Vec<String>,
 }
 
+/// Pick the dep keys this entry walks and flatten them to tokens.
+///
+/// A built package under `--usepkg`/`--getbinpkg` walks without
+/// `DEPEND`/`BDEPEND`; `--buildpkgonly` without `--deep` blanks the
+/// runtime keys of a non-built package instead.
+pub(crate) fn select_dep_tokens(
+    ctx: &ResolveCtx<'_>,
+    depth: u32,
+    metadata: &Arc<HashMap<String, String>>,
+    candidate_source: CandidateSource,
+) -> SelectDepTokensOut {
+    // A built package (binary) under `--usepkg`/`--getbinpkg` walks without
+    // `DEPEND`/`BDEPEND`; `--buildpkgonly` without `--deep` blanks the
+    // runtime keys of a non-built package instead. Binaries keep theirs.
+    // Portage: depgraph.py, _add_pkg_dep_string; `with_bdeps` carries the bit
+    //
+    // An `--onlydeps` root blanks `RDEPEND`/`PDEPEND` (and `IDEPEND` unless
+    // kept) when the matching off-flags are given; build-time keys always
+    // stay. Inert without `--onlydeps`. Portage: depgraph.py, _add_pkg_deps
+    let onlydeps_blanks_runtime = ctx.onlydeps && depth == 0 && !ctx.onlydeps_with_rdeps;
+    let onlydeps_blanks_idepend = onlydeps_blanks_runtime && !ctx.onlydeps_with_ideps;
+    // Below EAPI 8 `IDEPEND` never reaches metadata, for ebuild and binary
+    // alike (missing `EAPI` defaults to `"0"`).
+    // Portage: bin/ebuild.sh (depend phase), eapi.py
+    let eapi_has_idepend =
+        md5_dict::eapi_has_idepend(metadata.get("EAPI").map(String::as_str).unwrap_or("0"));
+    let keep_key = |key: &&str| {
+        onlydeps_walk_dep_key(OnlydepsWalkDepKeyArgs {
+            key,
+            eapi_has_idepend,
+            onlydeps_blanks_runtime,
+            onlydeps_blanks_idepend,
+        })
+    };
+    let base_keys: &[&str] = if candidate_source == CandidateSource::Binary && !ctx.with_bdeps {
+        &["RDEPEND", "PDEPEND", "IDEPEND"]
+    } else if ctx.buildpkgonly
+        && candidate_source != CandidateSource::Binary
+        && matches!(ctx.deep, Deep::NotRequested)
+    {
+        &["DEPEND", "BDEPEND"]
+    } else {
+        &["DEPEND", "RDEPEND", "BDEPEND", "PDEPEND", "IDEPEND"]
+    };
+    // No per-package alloc on the hot path when nothing is blanked.
+    let filtered_keys: Vec<&str>;
+    let dep_keys: &[&str] = if onlydeps_blanks_runtime || !eapi_has_idepend {
+        filtered_keys = base_keys.iter().copied().filter(keep_key).collect();
+        &filtered_keys
+    } else {
+        base_keys
+    };
+    let mut depstr = String::new();
+    for dep_key in dep_keys {
+        if let Some(d) = metadata.get(*dep_key) {
+            depstr.push_str(d);
+            depstr.push(' ');
+        }
+    }
+    let tokens: Vec<String> = depstr.split_whitespace().map(String::from).collect();
+    SelectDepTokensOut {
+        onlydeps_blanks_runtime,
+        onlydeps_blanks_idepend,
+        eapi_has_idepend,
+        tokens,
+    }
+}
+
 /// The values [`record_merge_order_deps`] reads from its caller.
 pub(crate) struct RecordMergeOrderDepsArgs<'a> {
     pub(crate) ctx: &'a ResolveCtx<'a>,
@@ -41,6 +109,89 @@ pub(crate) struct RecordMergeOrderDepsArgs<'a> {
     pub(crate) onlydeps_blanks_runtime: bool,
     pub(crate) onlydeps_blanks_idepend: bool,
     pub(crate) eapi_has_idepend: bool,
+}
+
+/// Record the entry's merge-order dep edges, cut to the running-root scope.
+///
+/// Discovery order is per-key, flattened separately so cross-key order can't
+/// leak in. Blanked keys stay out of the digraph too.
+pub(crate) fn record_merge_order_deps(args: RecordMergeOrderDepsArgs<'_>) {
+    let RecordMergeOrderDepsArgs {
+        ctx,
+        candidate_source,
+        metadata,
+        use_flags,
+        state,
+        entry_idx,
+        onlydeps_blanks_runtime,
+        onlydeps_blanks_idepend,
+        eapi_has_idepend,
+    } = args;
+    let keep_key = |key: &&str| {
+        onlydeps_walk_dep_key(OnlydepsWalkDepKeyArgs {
+            key,
+            eapi_has_idepend,
+            onlydeps_blanks_runtime,
+            onlydeps_blanks_idepend,
+        })
+    };
+    // Discovery order is per-key (`RDEPEND`, `IDEPEND`, `PDEPEND`, `DEPEND`,
+    // `BDEPEND`), flattened separately so cross-key order can't leak in.
+    // Portage: depgraph.py, _add_pkg_dep_string (deps tuple)
+    let base_order_keys: &[&str] = if candidate_source == CandidateSource::Binary && !ctx.with_bdeps
+    {
+        &["RDEPEND", "PDEPEND", "IDEPEND"]
+    } else if ctx.buildpkgonly
+        && candidate_source != CandidateSource::Binary
+        && matches!(ctx.deep, Deep::NotRequested)
+    {
+        // Same runtime-key blanking as `dep_keys` above.
+        &["DEPEND", "BDEPEND"]
+    } else if state.entries[entry_idx].targets_running_root {
+        // A running-root build entry keeps `BDEPEND`-before-`RDEPEND` insertion
+        // order; single-key running entries read the same either way.
+        &["DEPEND", "BDEPEND", "RDEPEND", "IDEPEND", "PDEPEND"]
+    } else {
+        &["RDEPEND", "IDEPEND", "PDEPEND", "DEPEND", "BDEPEND"]
+    };
+    // Blanked keys stay out of the merge-order digraph too.
+    let filtered_order_keys: Vec<&str>;
+    let portage_order_keys: &[&str] = if onlydeps_blanks_runtime || !eapi_has_idepend {
+        filtered_order_keys = base_order_keys.iter().copied().filter(keep_key).collect();
+        &filtered_order_keys
+    } else {
+        base_order_keys
+    };
+    state.entries[entry_idx].deps = merge_order::dep_edges_from_metadata(
+        metadata,
+        use_flags,
+        portage_order_keys,
+        candidate_source == CandidateSource::Binary,
+    );
+    // The running-root subgraph's own cycle scope, for the merge-order digraph
+    // too: a running `BDEPEND` edge back into a visited package is dropped,
+    // like the old sidecar `seen` guard. Running `DEPEND` edges back are kept
+    // so the cross-root cycle still reports, as is every first-visit edge.
+    // Key 4 is `BDEPEND`; visited compares by `cat/pkg`, like `required_by_map`.
+    if state.entries[entry_idx].targets_running_root {
+        let mut visited_cps: HashSet<(String, String)> = HashSet::new();
+        for v in state.visited_atoms.iter() {
+            if let Some(a) = portage_dep::parse_atom(v) {
+                visited_cps.insert((a.category, a.package));
+            }
+        }
+        // Portage drops a direct self-edge unless it is an unsatisfied build-time
+        // dependency; without the exemption the cut deletes the true self-loop
+        // with the bootstrap-ring closers. Satisfied self-edges still drop
+        // downstream. Portage: depgraph.py, _add_pkg; _serialize_tasks
+        let own_category = state.entries[entry_idx].category.clone();
+        let own_package = state.entries[entry_idx].package.clone();
+        state.entries[entry_idx].deps.retain(|d| {
+            !(d.key == 4
+                && !(d.category == own_category && d.package == own_package)
+                && visited_cps.contains(&(d.category.clone(), d.package.clone())))
+        });
+    }
 }
 
 /// What [`classify_dep_atoms`] hands back to its caller.

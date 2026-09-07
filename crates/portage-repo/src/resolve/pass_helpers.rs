@@ -27,6 +27,27 @@ pub(crate) struct OnlydepsWalkDepKeyArgs<'a> {
     pub(crate) onlydeps_blanks_idepend: bool,
 }
 
+/// Whether one dep key is walked for this package. The read-time gate drops a
+/// stale `IDEPEND` under EAPI 8, and blanks an `--onlydeps` root's `RDEPEND`/
+/// `PDEPEND` (plus `IDEPEND` unless kept) the same way. Extracted so the
+/// adversarial-cache path stays pinned.
+// Portage: eapi.py; depgraph.py
+pub(crate) fn onlydeps_walk_dep_key(args: OnlydepsWalkDepKeyArgs<'_>) -> bool {
+    let OnlydepsWalkDepKeyArgs {
+        key,
+        eapi_has_idepend,
+        onlydeps_blanks_runtime,
+        onlydeps_blanks_idepend,
+    } = args;
+    if key == "IDEPEND" && (!eapi_has_idepend || onlydeps_blanks_idepend) {
+        return false;
+    }
+    if onlydeps_blanks_runtime && (key == "RDEPEND" || key == "PDEPEND") {
+        return false;
+    }
+    true
+}
+
 /// Arguments of [`onlydeps_runtime_keys`].
 pub(crate) struct OnlydepsRuntimeKeysArgs {
     pub(crate) onlydeps_blanks_runtime: bool,
