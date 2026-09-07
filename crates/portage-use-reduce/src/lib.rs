@@ -1154,6 +1154,82 @@ mod tests {
     }
 
     #[test]
+    fn disjunctive_defers_a_tie_to_tie_break_and_keeps_first_when_it_says_zero() {
+        // A tie: `tie_break` decides; `&mut |_| 0` keeps the first.
+        let result = use_reduce_flat_disjunctive(
+            UseReduceFlatDisjunctiveArgs {
+                tokens: &toks("|| ( dev-libs/a dev-libs/b )"),
+                uselist: &HashSet::new(),
+                mode: MatchMode::Normal,
+                empty_groups_always_true: true,
+                tie_break: &mut |_| 0,
+            },
+            &mut |_| AltPreference::Available,
+        )
+        .unwrap();
+        assert_eq!(result, vec!["dev-libs/a"]);
+    }
+
+    #[test]
+    fn disjunctive_ties_call_tie_break_with_every_tied_alternatives_own_flat_atoms() {
+        // `tie_break` gets the tied alternatives' flat atoms, in order.
+        let mut seen: Vec<Vec<String>> = Vec::new();
+        let result = use_reduce_flat_disjunctive(
+            UseReduceFlatDisjunctiveArgs {
+                tokens: &toks("|| ( dev-libs/a dev-libs/b )"),
+                uselist: &HashSet::new(),
+                mode: MatchMode::Normal,
+                empty_groups_always_true: true,
+                tie_break: &mut |alts: &[Vec<String>]| {
+                    seen = alts.to_vec();
+                    1
+                },
+            },
+            &mut |_| AltPreference::Available,
+        )
+        .unwrap();
+        assert_eq!(result, vec!["dev-libs/b"]);
+        assert_eq!(
+            seen,
+            vec![
+                vec!["dev-libs/a".to_string()],
+                vec!["dev-libs/b".to_string()]
+            ]
+        );
+    }
+
+    #[test]
+    fn disjunctive_never_calls_tie_break_for_a_single_alternative_at_the_best_rank() {
+        // No tie, so `tie_break` must not run at all.
+        let mut called = false;
+        let result = use_reduce_flat_disjunctive(
+            UseReduceFlatDisjunctiveArgs {
+                tokens: &toks("|| ( dev-libs/a dev-libs/b )"),
+                uselist: &HashSet::new(),
+                mode: MatchMode::Normal,
+                empty_groups_always_true: true,
+                tie_break: &mut |_| {
+                    called = true;
+                    0
+                },
+            },
+            &mut |atoms: &[String]| {
+                if atoms == ["dev-libs/b"] {
+                    AltPreference::Installed
+                } else {
+                    AltPreference::Available
+                }
+            },
+        )
+        .unwrap();
+        assert_eq!(result, vec!["dev-libs/b"]);
+        assert!(
+            !called,
+            "a single best-rank alternative must skip tie_break"
+        );
+    }
+
+    #[test]
     fn disjunctive_leaves_non_disjunctive_deps_untouched() {
         let result = use_reduce_flat_disjunctive(
             UseReduceFlatDisjunctiveArgs {
