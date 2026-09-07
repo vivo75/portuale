@@ -15047,3 +15047,51 @@ e.g. `libgcrypt-1.12.3-r1` then made the extracted-ebuild dir
 `.ebuild` ("filename doesn't start with the parent directory's own
 name"). Now uses `portage_dep::parse_candidate` (the canonical
 `catpkgsplit` regex).
+
+### `--getbinpkg @world` merge: three fixes to actually finish the merge (2026-09-08)
+
+With the resolver-side `plasma-meta` fix in place, a live
+`portuale emerge --getbinpkg -uDvN --ask @world` on a systemd desktop
+profile got through resolution but then failed three more ways, one per
+fix:
+
+- **bundled `-a` rejected.** `--ask` (long form) and standalone `-a`
+  worked, but every bundled form (`-pa`, `-1a`, `-avuDN`, `--getbinpkg
+  -a`) hit `pretend.rs::run()`'s short-flag-bundle decomposition loop,
+  whose hardcoded `match c` never listed `'a'` -> exit 2. Added `'a' =>
+  ask = true` (a bundled `-a` never consumes a `y`/`n` value, same rule
+  as bundled `-v`/`-D`/`-W`). The Python `--pretend` reference had the
+  same bundle gap *and* no standalone `--ask`/`-a` handler at all
+  (untested) -- both added. `--ask` is inert under `--pretend` (real
+  `main.py` drops it), so all forms produce identical output. 4 contract
+  CASES.
+
+- **`llvm-core/llvm-23.1.0` binpkg merge died in `pkg_setup`** with `No
+  supported Python implementation installed`. `python-any-r1.eclass:342`
+  is `[[ ${MERGE_TYPE} != binary ]] && python_setup`, and `python_setup`
+  runs `python_check_deps` against `BDEPEND` (`dev-python/myst-parser`
+  ...) that a `--getbinpkg` binary never installs. Real portage sets
+  `configdict["pkg"]["MERGE_TYPE"] = "binary"` for a binpkg merge
+  (`_emerge/Binpkg.py:92`); `MERGE_TYPE` is a `portage_readonly_vars`
+  entry (`bin/phase-functions.sh:34`), so it's stripped from the saved
+  `environment.bz2` and must be re-supplied.
+  `ebuild_phases::run_phase_from_saved_env` exported `EMERGE_FROM=binary`
+  but not `MERGE_TYPE` -- now both.
+
+- **`emerge --resume` died `no binpkg file under <pkgdir>`** on the first
+  binhost binary that hadn't been downloaded yet
+  (`llvm-core/llvm-toolchain-symlinks-23`). `merge_one_binary_entry`
+  branched hard on `entry.remote_binary`, but an `emerge --resume` list
+  is rebuilt from `mtimedb` which only records `cat/pkg-ver`
+  (`resume_entry` -> `remote_binary: false`, `build_id: None`).
+  `merge_one_binary_entry` now tries the `$PKGDIR` file first (any
+  layout, honouring `build_id`) and falls back to `find_remote_binpkg` +
+  `download_and_verify` whenever it's missing -- real `bintree`'s "merge
+  local if present, else fetch" model; `remote_binary` was only ever a
+  display hint.
+
+All three verified against the live system: `@world` resolves (58
+packages), `llvm-23.1.0` merges from its binhost gpkg, `emerge --resume`
+then downloads and merges the remaining binhost binaries (`util-linux`,
+`clang-runtime`, `nftables`, ...). The last two are Rust-only
+real-execution code with no `--pretend` mirror.
