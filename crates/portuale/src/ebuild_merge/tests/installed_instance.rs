@@ -100,3 +100,42 @@ fn owned_node_value_pf_reads_an_obj_and_a_sym_entrys_own_value() {
         None
     );
 }
+
+#[test]
+fn apply_install_mask_deletes_matched_paths_and_records_the_mask() {
+    let tmp = tempdir();
+    let image = tmp.join("image");
+    let build_info = tmp.join("build-info");
+    std::fs::create_dir_all(image.join("usr/share/info")).unwrap();
+    std::fs::create_dir_all(image.join("usr/bin")).unwrap();
+    std::fs::create_dir_all(&build_info).unwrap();
+    std::fs::write(image.join("usr/share/info/foo.info"), b"x").unwrap();
+    std::fs::write(image.join("usr/bin/foo"), b"x").unwrap();
+
+    let options = MergeOptions {
+        install_mask: "/usr/share/info".to_string(),
+        install_mask_prunes_usr_share: true,
+        ..MergeOptions::default()
+    };
+    apply_install_mask(&image, &build_info, &options).unwrap();
+
+    assert!(!image.join("usr/share/info").exists(), "masked dir removed");
+    assert!(
+        !image.join("usr/share").exists(),
+        "emptied usr/share pruned"
+    );
+    assert!(image.join("usr/bin/foo").is_file(), "unmasked file kept");
+    assert_eq!(
+        std::fs::read_to_string(build_info.join("INSTALL_MASK"))
+            .unwrap()
+            .trim(),
+        "/usr/share/info"
+    );
+
+    // Empty mask: no-op, no INSTALL_MASK file.
+    let bi2 = tmp.join("bi2");
+    std::fs::create_dir_all(&bi2).unwrap();
+    apply_install_mask(&image, &bi2, &MergeOptions::default()).unwrap();
+    assert!(!bi2.join("INSTALL_MASK").exists());
+    let _ = std::fs::remove_dir_all(&tmp);
+}

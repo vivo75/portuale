@@ -194,3 +194,75 @@ fn fnmatch_to_regex(pattern: &str) -> String {
     out.push('$');
     out
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use portage_util::TempDir;
+
+    #[test]
+    fn resolve_folds_no_star_features_in_portage_order() {
+        let (mask, prune) = resolve("", &["noinfo", "noman"]);
+        assert_eq!(mask, "/usr/share/man /usr/share/info");
+        assert!(prune);
+
+        let (mask, prune) = resolve("/opt/foo", &["nodoc"]);
+        assert_eq!(mask, "/opt/foo /usr/share/doc");
+        assert!(prune);
+
+        let (mask, prune) = resolve("", &[] as &[&str]);
+        assert_eq!(mask, "");
+        assert!(!prune);
+    }
+
+    #[test]
+    fn anchored_pattern_matches_the_dir_and_everything_under_it() {
+        let mask = InstallMask::new("/usr/share/info");
+        assert!(mask.matches("usr/share/info"));
+        assert!(mask.matches("usr/share/info/"));
+        assert!(mask.matches("usr/share/info/dir"));
+        assert!(mask.matches("usr/share/info/foo/bar.info"));
+        assert!(!mask.matches("usr/share/information"));
+        assert!(!mask.matches("usr/share/doc/x"));
+        assert!(!mask.matches("usr/bin/info"));
+    }
+
+    #[test]
+    fn unanchored_pattern_matches_basename_anywhere() {
+        let mask = InstallMask::new("*.la");
+        assert!(mask.matches("usr/lib64/libfoo.la"));
+        assert!(mask.matches("libfoo.la"));
+        assert!(!mask.matches("usr/lib64/libfoo.so"));
+    }
+
+    #[test]
+    fn exclusion_pattern_re_includes_a_path_a_later_lower_index_rule_masked() {
+        // A `-` after a broad mask rescues the path.
+        let mask = InstallMask::new("/usr/share/doc -/usr/share/doc/keepme");
+        assert!(mask.matches("usr/share/doc/gone/readme"));
+        assert!(!mask.matches("usr/share/doc/keepme"));
+        assert!(!mask.matches("usr/share/doc/keepme/NEWS"));
+    }
+
+    #[test]
+    fn install_mask_dir_removes_matched_files_and_empty_dirs_only() {
+        let tmp = TempDir::new("im-test").keep();
+        let ed = tmp.join("image");
+        std::fs::create_dir_all(ed.join("usr/share/info")).unwrap();
+        std::fs::create_dir_all(ed.join("usr/share/fonts/noto")).unwrap();
+        std::fs::write(ed.join("usr/share/info/foo.info"), b"x").unwrap();
+        std::fs::write(ed.join("usr/share/info/dir"), b"x").unwrap();
+        std::fs::write(ed.join("usr/share/fonts/noto/a.ttf"), b"x").unwrap();
+
+        let mask = InstallMask::new("/usr/share/info");
+        install_mask_dir(&ed, &mask).unwrap();
+
+        assert!(!ed.join("usr/share/info").exists(), "empty masked dir gone");
+        assert!(
+            ed.join("usr/share/fonts/noto/a.ttf").exists(),
+            "unmasked content untouched"
+        );
+        assert!(ed.join("usr/share").exists(), "still non-empty, kept");
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+}

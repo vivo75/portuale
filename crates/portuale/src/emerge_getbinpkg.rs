@@ -807,6 +807,54 @@ mod tests {
     }
 
     #[test]
+    fn resolve_local_binpkg_finds_the_multi_instance_layout() {
+        let tmp = tempdir();
+        let pkgdir = tmp.join("pkgdir");
+
+        // Single-instance: `<cat>/<pf>.gpkg.tar`.
+        std::fs::create_dir_all(pkgdir.join("media-fonts")).unwrap();
+        let single = pkgdir.join("media-fonts/plain-1.gpkg.tar");
+        std::fs::write(&single, b"x").unwrap();
+        assert_eq!(
+            resolve_local_binpkg(&pkgdir, "media-fonts", "plain", "1", None).as_deref(),
+            Some(single.as_path())
+        );
+
+        // Multi-instance: `<cat>/<pn>/<pf>-<build_id>.gpkg.tar`. This is the
+        // layout the lookup used to miss entirely.
+        std::fs::create_dir_all(pkgdir.join("media-fonts/noto")).unwrap();
+        let mi = pkgdir.join("media-fonts/noto/noto-20260901-1.gpkg.tar");
+        std::fs::write(&mi, b"x").unwrap();
+        assert_eq!(
+            resolve_local_binpkg(&pkgdir, "media-fonts", "noto", "20260901", Some("1")).as_deref(),
+            Some(mi.as_path()),
+            "exact build_id"
+        );
+        assert_eq!(
+            resolve_local_binpkg(&pkgdir, "media-fonts", "noto", "20260901", None).as_deref(),
+            Some(mi.as_path()),
+            "no build_id -> scan the <pn>/ subdir"
+        );
+
+        // Highest build_id wins when several instances are present.
+        std::fs::write(
+            pkgdir.join("media-fonts/noto/noto-20260901-4.gpkg.tar"),
+            b"x",
+        )
+        .unwrap();
+        assert_eq!(
+            resolve_local_binpkg(&pkgdir, "media-fonts", "noto", "20260901", None)
+                .unwrap()
+                .file_name()
+                .unwrap(),
+            "noto-20260901-4.gpkg.tar"
+        );
+
+        assert!(resolve_local_binpkg(&pkgdir, "media-fonts", "absent", "1", Some("1")).is_none());
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
     fn merge_one_binary_entry_merges_a_multi_instance_local_gpkg() {
         let tmp = tempdir();
         let root = tmp.join("root");

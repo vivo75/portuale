@@ -1708,6 +1708,126 @@ mod tests {
     }
 
     #[test]
+    fn quickpkg_from_vdb_writes_portage_ordered_stanza_with_eapi_and_repo_revisions() {
+        // Expected values from Portage (container probe): vdb `EAPI`/`REPO_REVISIONS`
+        // carried verbatim, `repository` as last key `REPO`, sorted key order,
+        // no `PF`/`CATEGORY`/`SLOT` lines.
+        let tmp = tempdir();
+        let root = tmp.join("root");
+        let portage_tmpdir = tmp.join("tmp");
+        let scratch = tmp.join("scratch");
+        let options = PackageOptions {
+            debug: false,
+            pkgdir: tmp.join("pkgdir"),
+            distdir: tmp.join("distdir"),
+            shell: ebuild_phases::ShellBackend::default(),
+            binpkg_compress: "bzip2".to_string(),
+            binpkg_format: "xpak".to_string(),
+            ..PackageOptions::default()
+        };
+        std::fs::create_dir_all(root.join("etc")).unwrap();
+        std::fs::create_dir_all(&portage_tmpdir).unwrap();
+        std::fs::write(root.join("etc/probe.conf"), "probe\n").unwrap();
+
+        let vdb_dir = root.join("var/db/pkg/dev-libs/probe-1.0");
+        std::fs::create_dir_all(&vdb_dir).unwrap();
+        let repo_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/repo");
+        std::fs::copy(
+            repo_root.join("dev-libs/packagepkg/packagepkg-1.0.ebuild"),
+            vdb_dir.join("probe-1.0.ebuild"),
+        )
+        .unwrap();
+        for (name, content) in [
+            ("EAPI", "8\n"),
+            ("SLOT", "0\n"),
+            ("CATEGORY", "dev-libs\n"),
+            ("PF", "probe-1.0\n"),
+            ("KEYWORDS", "amd64\n"),
+            ("LICENSE", "GPL-2\n"),
+            ("USE", "amd64\n"),
+            ("BUILD_TIME", "1790541998\n"),
+            ("REPO_REVISIONS", "{}\n"),
+            ("repository", "testrepo\n"),
+            ("CONTENTS", "obj /etc/probe.conf\n"),
+        ] {
+            std::fs::write(vdb_dir.join(name), content).unwrap();
+        }
+
+        let built = quickpkg_from_vdb(QuickpkgFromVdbArgs {
+            root: &root,
+            category: "dev-libs",
+            package: "probe",
+            pf: "probe-1.0",
+            scratch_ebuild_dir: &scratch,
+            portage_tmpdir: &portage_tmpdir,
+            options: &options,
+            config_protect: "",
+            config_protect_mask: "",
+        })
+        .expect("quickpkg_from_vdb succeeds")
+        .expect("archive built");
+        assert_eq!(built, options.pkgdir.join("dev-libs/probe-1.0.tbz2"));
+
+        let packages = std::fs::read_to_string(options.pkgdir.join("Packages")).unwrap();
+        let stanza: Vec<&str> = packages
+            .split("\n\n")
+            .map(str::trim)
+            .find(|block| block.lines().any(|l| l == "CPV: dev-libs/probe-1.0"))
+            .expect("quickpkg stanza present")
+            .lines()
+            .collect();
+        let keys: Vec<&str> = stanza
+            .iter()
+            .map(|l| l.split_once(": ").map(|(k, _)| k).unwrap_or(""))
+            .collect();
+        assert_eq!(
+            keys,
+            vec![
+                "BUILD_TIME",
+                "CPV",
+                "EAPI",
+                "KEYWORDS",
+                "LICENSE",
+                "MD5",
+                "PATH",
+                "REPO_REVISIONS",
+                "SHA1",
+                "SIZE",
+                "USE",
+                "MTIME",
+                "REPO",
+            ],
+            "quickpkg stanza keys must be real's sorted order: {stanza:?}"
+        );
+        assert!(
+            stanza.contains(&"EAPI: 8"),
+            "vdb EAPI must be carried like real's: {stanza:?}"
+        );
+        assert!(
+            stanza.contains(&"REPO: testrepo"),
+            "vdb repository must be carried as REPO last like real's: {stanza:?}"
+        );
+        assert!(
+            stanza.contains(&"REPO_REVISIONS: {}"),
+            "vdb REPO_REVISIONS must be carried verbatim: {stanza:?}"
+        );
+        assert!(
+            stanza.contains(&"PATH: dev-libs/probe-1.0.tbz2"),
+            "PATH must be relative to PKGDIR: {stanza:?}"
+        );
+        assert!(
+            !stanza.iter().any(|l| l.starts_with("SLOT:")),
+            "default SLOT must be omitted like real's: {stanza:?}"
+        );
+        assert!(
+            !stanza
+                .iter()
+                .any(|l| l.starts_with("PF:") || l.starts_with("CATEGORY:")),
+            "PF/CATEGORY are not stanza keys in real's: {stanza:?}"
+        );
+    }
+
+    #[test]
     fn real_package_builds_a_real_xpak_tbz2_and_a_real_packages_entry() {
         let tmp = tempdir();
         let root = tmp.join("root");

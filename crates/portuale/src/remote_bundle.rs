@@ -488,4 +488,43 @@ mod tests {
             .join("../../fixtures")
             .join(name)
     }
+
+    fn tempdir(tag: &str) -> std::path::PathBuf {
+        TempDir::new(&format!(
+            "portuale-remote-bundle-{}-{}",
+            std::process::id(),
+            tag
+        ))
+        .keep()
+    }
+
+    #[test]
+    fn bundle_repo_falls_back_to_resolver_override() {
+        // The fixture carries no `repository`/`REPO` key, so the
+        // resolver-known repo fills the manifest.
+        let tmp = tempdir("repo-override");
+        let staged = build_bundle(BuildBundleArgs {
+            binpkg_path: &fixture("pkgdir/dev-libs/packagepkg-1.0.tbz2"),
+            staging_tmp: &tmp,
+            repo_override: Some("testrepo"),
+            gpg: &crate::binpkg::GpgVerify::default(),
+            install_mask: "",
+            install_mask_prunes_usr_share: false,
+        })
+        .expect("fixture tbz2 stages");
+        assert_eq!(staged.manifest.repo, "testrepo");
+        let _ = std::fs::remove_dir_all(&tmp);
+        let tmp = tempdir("repo-unknown");
+        let staged = build_bundle(BuildBundleArgs {
+            binpkg_path: &fixture("pkgdir/dev-libs/packagepkg-1.0.tbz2"),
+            staging_tmp: &tmp,
+            repo_override: Some("__unknown__"),
+            gpg: &crate::binpkg::GpgVerify::default(),
+            install_mask: "",
+            install_mask_prunes_usr_share: false,
+        })
+        .expect("fixture tbz2 stages");
+        assert_eq!(staged.manifest.repo, "__unknown__");
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
 }

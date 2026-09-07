@@ -13,6 +13,7 @@ mod doins;
 #[cfg(test)]
 pub(crate) use doins::xattr_set;
 pub(crate) use doins::{copy_xattr, xattr_excluded, xattr_get, xattr_list};
+mod filter_env;
 mod gpkg;
 mod xattr;
 mod xpak;
