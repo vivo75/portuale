@@ -110,8 +110,28 @@
 
 use portage_versions::vercmp;
 use regex::Regex;
+use std::cell::RefCell;
+use std::collections::HashMap;
 use std::collections::HashSet;
 use std::sync::OnceLock;
+
+// A single `emerge -puD` on a live tree calls `parse_atom` /
+// `parse_candidate` tens of millions of times, almost always on a string
+// it has already parsed (the same handful of `package.*` config atoms and
+// candidate `cat/pkg-ver:slot::repo` strings, re-checked once per package
+// per graph-walk visit). Both parsers run a ~15-group backtracking regex,
+// which `perf` puts at ~65% of the whole run. A plain thread-local
+// memo table collapses the repeats: a hit is one hash lookup + one clone
+// of the (small) parsed struct. Thread-local rather than a locked global
+// so the parse path stays lock-free -- the resolver is single-threaded,
+// and any other thread just gets its own table. Never invalidated: a
+// parse result is a pure function of the input string for the life of the
+// process. See docs/performances-tuning.md.
+thread_local! {
+    static ATOM_CACHE: RefCell<HashMap<String, Option<Atom>>> = RefCell::new(HashMap::new());
+    static CANDIDATE_CACHE: RefCell<HashMap<String, Option<Candidate>>> =
+        RefCell::new(HashMap::new());
+}
 
 const CAT: &str = r"[A-Za-z0-9_][A-Za-z0-9+_.-]*";
 // Non-greedy, like Python's `_pkg` in lib/portage/versions.py: lets the
@@ -378,6 +398,17 @@ fn parse_use_deps(raw: &str) -> Option<Vec<UseDep>> {
 }
 
 pub fn parse_atom(s: &str) -> Option<Atom> {
+    if let Some(hit) = ATOM_CACHE.with(|c| c.borrow().get(s).cloned()) {
+        return hit;
+    }
+    let parsed = parse_atom_uncached(s);
+    ATOM_CACHE.with(|c| {
+        c.borrow_mut().insert(s.to_string(), parsed.clone());
+    });
+    parsed
+}
+
+fn parse_atom_uncached(s: &str) -> Option<Atom> {
     let caps = atom_regex().captures(s)?;
 
     let blocker = match caps.name("blocker").map(|m| m.as_str()) {
@@ -503,6 +534,17 @@ fn candidate_regex() -> &'static Regex {
 }
 
 pub fn parse_candidate(s: &str) -> Option<Candidate> {
+    if let Some(hit) = CANDIDATE_CACHE.with(|c| c.borrow().get(s).cloned()) {
+        return hit;
+    }
+    let parsed = parse_candidate_uncached(s);
+    CANDIDATE_CACHE.with(|c| {
+        c.borrow_mut().insert(s.to_string(), parsed.clone());
+    });
+    parsed
+}
+
+fn parse_candidate_uncached(s: &str) -> Option<Candidate> {
     let caps = candidate_regex().captures(s)?;
     Some(Candidate {
         category: caps.name("cat").unwrap().as_str().to_string(),
@@ -1056,6 +1098,51 @@ pub fn parse_wildcard_atom(s: &str) -> Option<WildcardAtom> {
 pub fn wildcard_atom_matches(atom: &WildcardAtom, category: &str, package: &str) -> bool {
     atom.category.as_deref().is_none_or(|c| c == category)
         && atom.package.as_deref().is_none_or(|p| p == package)
+}
+
+#[cfg(test)]
+mod parse_cache_tests {
+    use super::*;
+
+    // The memo cache on `parse_atom` / `parse_candidate` must be
+    // transparent: a cached call returns exactly what the uncached body
+    // would, hit or miss, valid or invalid. Guards against a future
+    // cache-key bug (e.g. keying on a trimmed/normalised string).
+    const ATOM_CASES: &[&str] = &[
+        ">=dev-libs/foo-1.2.3-r1:2/3=[bar,-baz]",
+        "!!sys-apps/portage",
+        "dev-libs/foo",
+        "=cat/pkg-1*",
+        "net-libs/rest:0/0::gentoo",
+        "this is not an atom",
+        "dev-libs/foo:",
+        "",
+    ];
+    const CANDIDATE_CASES: &[&str] = &[
+        "dev-libs/foo-1.2.3-r1:2/3::gentoo",
+        "net-libs/rest-0.10.2",
+        "sys-apps/portage-3.0.0:0",
+        "not a candidate",
+        "",
+    ];
+
+    #[test]
+    fn cached_parse_atom_matches_uncached_and_is_stable_across_calls() {
+        for &s in ATOM_CASES {
+            let want = parse_atom_uncached(s);
+            assert_eq!(parse_atom(s), want, "first cached call for {s:?}");
+            assert_eq!(parse_atom(s), want, "second cached call for {s:?}");
+        }
+    }
+
+    #[test]
+    fn cached_parse_candidate_matches_uncached_and_is_stable_across_calls() {
+        for &s in CANDIDATE_CASES {
+            let want = parse_candidate_uncached(s);
+            assert_eq!(parse_candidate(s), want, "first cached call for {s:?}");
+            assert_eq!(parse_candidate(s), want, "second cached call for {s:?}");
+        }
+    }
 }
 
 #[cfg(test)]
