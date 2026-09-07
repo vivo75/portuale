@@ -219,8 +219,8 @@ use crate::emerge_options;
 use crate::needed_elf;
 use portage_dep::{Atom, Blocker, Operator, SlotOperator, match_from_list, parse_atom};
 use portage_repo::{
-    ChangedDepsReportEntry, GraphEntry, PretendOutcome, SlotConflict, config_root_from_env,
-    resolve_pretend_graph, root_from_env,
+    ChangedDepsReportEntry, GraphEntry, PretendOutcome, ResolveRequest, SlotConflict,
+    active_resolver_for, config_root_from_env, root_from_env,
 };
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
@@ -1989,6 +1989,7 @@ Output:
 Portuale extensions (not real emerge options):
       --json                dump the resolved graph as one JSON line instead of the display
       --shell <bash|brush>  which real shell runs a merge / unmerge / --config phase chain (default bash)
+      --solver <solver>     which dependency solver resolves the graph: portage (default), pubgrub or resolvo
 
 emerge --sync is a permanent non-goal: it prints
 "Functionality has moved to `emaint sync`." and exits 1.
@@ -7086,6 +7087,13 @@ pub fn run(args: &[String]) -> ExitCode {
     // portage's default (flag absent) is 10, `--backtrack=0` disables
     // backtracking. Threaded into `resolve_pretend_graph`.
     let mut backtrack_max: u32 = 10;
+    // --solver=<portage|pubgrub|resolvo>: portuale-only (real `emerge`
+    // has no `--solver`), same "special-cased, not in emerge_options.rs"
+    // treatment `--shell`/`--json` get. Picks the dependency-solving
+    // algorithm: the backtracking walk (default, the only solver with a
+    // Python reference) or lu-zero's PubGrub / resolvo bridges over the
+    // same repo facts (Rust-only -- see `solver_bridge.rs`).
+    let mut solver = portage_repo::SolverKind::Portage;
     // --verbose-conflicts: real bare boolean (`main.py`'s `y_or_n` group,
     // so `--verbose-conflicts` / `=y` / `=n`). Pure display: real
     // `_prepare_conflict_msg_and_check_for_specificity` shows *every*
@@ -7644,6 +7652,30 @@ pub fn run(args: &[String]) -> ExitCode {
                 other => {
                     eprintln!("emerge: --shell: {other:?} is not \"bash\" or \"brush\"");
                     return ExitCode::from(1);
+                }
+            };
+        } else if arg == "--solver" || arg.starts_with("--solver=") {
+            // Portuale-only (real `emerge` has no `--solver`), same
+            // `=`/space handling as `--shell` above.
+            let value = if let Some(v) = arg.strip_prefix("--solver=") {
+                i += 1;
+                v.to_string()
+            } else if let Some(v) = args.get(i + 1) {
+                i += 2;
+                v.clone()
+            } else {
+                eprintln!(
+                    "emerge: option '--solver' requires a value (portage, pubgrub or resolvo)"
+                );
+                return ExitCode::from(2);
+            };
+            solver = match portage_repo::SolverKind::parse(&value) {
+                Some(kind) => kind,
+                None => {
+                    eprintln!(
+                        "emerge: --solver: {value:?} is not \"portage\", \"pubgrub\" or \"resolvo\""
+                    );
+                    return ExitCode::from(2);
                 }
             };
         } else if arg == "--json" {
@@ -9638,17 +9670,20 @@ pub fn run(args: &[String]) -> ExitCode {
             } else {
                 std::borrow::Cow::Borrowed(&config)
             };
-        resolve_pretend_graph(
-            &config_root,
-            &root,
-            &expanded_atoms,
-            &cfg,
+        // New code builds a `ResolveRequest` and calls the runtime-selected
+        // `Resolver` directly (see `resolve_pretend_graph`'s doc comment) --
+        // this is the one production call site that carries `--solver=`.
+        let req = ResolveRequest {
+            config_root: config_root.clone(),
+            root: root.clone(),
+            atoms: expanded_atoms.clone(),
+            config: cfg.into_owned(),
             newuse,
             changed_use,
             nodeps,
             update,
             deep,
-            &excluded,
+            excluded: excluded.clone(),
             with_bdeps,
             changed_deps,
             changed_slot,
@@ -9662,28 +9697,30 @@ pub fn run(args: &[String]) -> ExitCode {
             usepkg,
             usepkgonly,
             binpkg_respect_use,
-            &usepkg_exclude,
-            &usepkg_include,
+            usepkg_exclude: usepkg_exclude.clone(),
+            usepkg_include: usepkg_include.clone(),
             rebuilt_binaries,
             rebuilt_binaries_timestamp,
             newrepo,
             buildpkgonly,
-            root_deps_running_root.as_deref(),
-            &distdir,
-            emptytree,
+            root_deps_running_root: root_deps_running_root.clone(),
+            distdir: distdir.clone(),
+            empty: emptytree,
             getbinpkg,
             ignore_built_slot_operator_deps,
             backtrack_max,
-            &reinstall_atoms,
+            reinstall_atoms: reinstall_atoms.clone(),
             rebuild_if_new_slot,
             rebuild_if_unbuilt,
             rebuild_if_new_rev,
             rebuild_if_new_ver,
-            &rebuild_exclude,
-            &rebuild_ignore,
+            rebuild_exclude: rebuild_exclude.clone(),
+            rebuild_ignore: rebuild_ignore.clone(),
             dynamic_deps,
             complete,
-        )
+            solver,
+        };
+        active_resolver_for(solver).resolve(&req)
     };
     let handle = |r: Result<portage_repo::GraphResult, crate::error::Error>| match r {
         Ok(result) => Ok(result),

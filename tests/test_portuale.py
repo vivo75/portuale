@@ -183,6 +183,40 @@ def test_mrg_runs_the_emerge_codepath(mrg_binary, emerge_binary, fixture_env):
     assert "[ebuild  N     ] dev-libs/newpkg-1.0" in mrg.stdout
 
 
+def test_mrg_solver_selects_the_resolution_backend(mrg_binary, emerge_binary, fixture_env):
+    """`--solver=` is portuale-only (real emerge has none): `mrg` parses
+    exactly portage/pubgrub/resolvo and forwards `--solver=<value>` to the
+    emerge codepath, which resolves with that backend. All three agree on
+    the trivial fixture; anything else is a clap usage error (exit 2)."""
+    for solver in ("portage", "pubgrub", "resolvo"):
+        args = ["--pretend", f"--solver={solver}", "dev-libs/newpkg"]
+        mrg = subprocess.run(
+            [str(mrg_binary), *args],
+            capture_output=True,
+            text=True,
+            check=False,
+            env=fixture_env,
+        )
+        emerge = subprocess.run(
+            [str(emerge_binary), *args],
+            capture_output=True,
+            text=True,
+            check=False,
+            env=fixture_env,
+        )
+        assert mrg.returncode == emerge.returncode == 0, solver
+        assert mrg.stdout == emerge.stdout, solver
+        assert "[ebuild  N     ] dev-libs/newpkg-1.0" in mrg.stdout, solver
+    bad = subprocess.run(
+        [str(mrg_binary), "--pretend", "--solver=sat", "dev-libs/newpkg"],
+        capture_output=True,
+        text=True,
+        check=False,
+        env=fixture_env,
+    )
+    assert bad.returncode == 2
+
+
 def test_mrg_bare_deep_keeps_the_atom(mrg_binary, fixture_env):
     """Bare `-D` followed by an atom: real emerge's insert_optional_args
     does NOT swallow the atom (`cat/a` isn't a valid int), so `-D` stays

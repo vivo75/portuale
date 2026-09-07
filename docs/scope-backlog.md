@@ -481,6 +481,19 @@ are named, not built. What remains is landing *second*
 implementations per slot — new-algorithm work, not new-seam work
 (see `what-this-proves.md`'s "`mrg` director contracts" entry).
 
+**`--solver=` alternate backends (2026-09-07)**: the solver slot's
+second and third implementations have landed — `active_resolver_for`
+selects `BacktrackingResolver` (portage, default) or lu-zero's PubGrub /
+resolvo bridges (`portage-repo/src/solver_bridge.rs`) at runtime via the
+portuale-only `--solver=<portage|pubgrub|resolvo>` on `emerge`/`mrg`
+(parsing mirrored in `emerge_pretend_reference.py`; non-portage values
+are Rust-only there). V1 depth cuts, each a future slice: visibility
+filtering (bridges get the unfiltered pool), slot-conflict/autounmask/
+`:=`-rebuild/blocker/circular notices, engine-native failure text,
+merge-order fidelity beyond plan install order
+(see `what-this-proves.md`'s "`--solver=` runtime solver selection"
+entry).
+
 **Hard invariant: `mrg` is a portuale-only applet. There will never be
 a portage counterpart or Python reference implementation.** Only its
 own Rust code and CLI surface matter.

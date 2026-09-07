@@ -16,3 +16,19 @@ portage-required-use = { path = "../portage-required-use" }
 # `Manifest` size lookup `portage-fetch` already implements (and the
 # same layering real `output.py` uses, calling `portdb.getfetchsizes`).
 portage-fetch = { path = "../portage-fetch" }
+# Alternate dependency solvers behind `--solver=` (see `solver_bridge.rs`):
+# `portage-solver` is the shared vocabulary + `Solver` trait, and the two
+# `portage-atom-*` crates map Portage atoms onto the PubGrub (`pubgrub`)
+# and resolvo SAT engines. A deliberate, documented waiver of this
+# workspace's near-zero-dependency discipline for the `emerge` path (same
+# class as `portuale`'s `brush`/`regex` waivers, and `mrg`'s `clap` one):
+# the engines plus their Portage mappings are ~10 pure-Rust crates with
+# zero C linkage, so the musl-static story is untouched. Pinned to exact
+# crates.io releases (tracked in `docs/solver-backends-analysis.md`; the
+# reference checkout lives at `3rdparty/portage-cli`).
+portage-solver = "=0.3.0"
+portage-atom-pubgrub = "=0.8.0"
+portage-atom-resolvo = "=0.8.1"
+# Direct (not just transitive via `portage-atom-resolvo`): the resolvo
+# backend drives `resolvo::Problem`/`Solver` itself.
+resolvo = "=0.12.1"

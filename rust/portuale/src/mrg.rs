@@ -714,6 +714,19 @@ const OPTIONS: &[Opt] = &[
         missing: "",
         help: "how many times to backtrack if dep calculation fails",
     },
+    // Portuale-only (real emerge has no `--solver`): which dependency
+    // solver resolves the graph. Forwarded `--solver=<value>` to the
+    // emerge codepath, which parses and validates it.
+    Opt {
+        id: "solver",
+        long: "--solver",
+        alias: None,
+        short: None,
+        kind: Kind::Value,
+        choices: &["portage", "pubgrub", "resolvo"],
+        missing: "",
+        help: "which dependency solver resolves the graph (default portage)",
+    },
     Opt {
         id: "config_root",
         long: "--config-root",
@@ -991,6 +1004,7 @@ fn emerge_handles(long: &str) -> bool {
             | "--with-bdeps"
             | "--with-bdeps-auto"
             | "--backtrack"
+            | "--solver"
             | "--quickpkg-direct-root"
             | "--search-similarity"
             // optional-value numerics -- pretend.rs:6886-7875
@@ -1274,6 +1288,28 @@ mod tests {
             let m = parse(args).unwrap();
             assert!(m.get_flag("columns"), "{args:?}");
         }
+    }
+
+    /// `--solver=` (portuale-only) accepts exactly the three solvers and
+    /// forwards `--solver=<value>` to the emerge codepath; anything else
+    /// is a clap usage error, and omitting it forwards nothing (the
+    /// codepath defaults to portage).
+    #[test]
+    fn solver_value_forwards_to_the_emerge_codepath() {
+        for value in ["portage", "pubgrub", "resolvo"] {
+            let m = parse(&["--pretend", &format!("--solver={value}"), "cat/pkg"]).unwrap();
+            assert_eq!(
+                m.get_one::<String>("solver").map(String::as_str),
+                Some(value)
+            );
+            let argv = to_emerge_argv(&m);
+            assert_eq!(argv, ["--pretend", &format!("--solver={value}"), "cat/pkg"]);
+        }
+        assert!(parse(&["--pretend", "--solver=sat", "cat/pkg"]).is_err());
+        let m = parse(&["--pretend", "cat/pkg"]).unwrap();
+        assert_eq!(m.get_one::<String>("solver"), None);
+        let argv = to_emerge_argv(&m);
+        assert_eq!(argv, ["--pretend", "cat/pkg"]);
     }
 
     /// A required value missing (bare `--color`) is a clap usage error,

@@ -748,6 +748,26 @@ CASES = [
         2,
     ),
     (
+        "--solver=portage matches the default solver",
+        ["--pretend", "--solver=portage", "dev-libs/newpkg"],
+        0,
+    ),
+    (
+        "--solver space form",
+        ["--pretend", "--solver", "portage", "dev-libs/newpkg"],
+        0,
+    ),
+    (
+        "--solver rejects an unknown solver",
+        ["--pretend", "--solver=sat", "dev-libs/newpkg"],
+        2,
+    ),
+    (
+        "--solver with no argument is a usage error",
+        ["--pretend", "dev-libs/newpkg", "--solver"],
+        2,
+    ),
+    (
         "--usepkg: a binary-only package is invisible without it",
         ["--pretend", "dev-libs/binaryonlypkg"],
         1,
@@ -7317,6 +7337,42 @@ def test_columns_and_tree_together_is_a_usage_error(emerge_binary, fixture_env):
     )
 
 
+def test_solver_portage_matches_the_default_resolution(
+    emerge_binary, emerge_pretend_python, fixture_env
+):
+    """`--solver=portage` resolves exactly like the default (no `--solver`
+    at all): same merge list, same exit code, on both implementations.
+    The unknown-solver and missing-value usage errors are pinned byte for
+    byte too (both exit 2)."""
+    args = ["--pretend", "dev-libs/newpkg"]
+    plain_rust = _run([str(emerge_binary)], args, fixture_env)
+    plain_python = _run(emerge_pretend_python, args, fixture_env)
+    flagged_rust = _run(
+        [str(emerge_binary)], ["--pretend", "--solver=portage", "dev-libs/newpkg"], fixture_env
+    )
+    flagged_python = _run(
+        emerge_pretend_python,
+        ["--pretend", "--solver=portage", "dev-libs/newpkg"],
+        fixture_env,
+    )
+    assert flagged_rust.returncode == 0 and flagged_python.returncode == 0
+    assert flagged_rust.stdout == plain_rust.stdout == plain_python.stdout == flagged_python.stdout
+    assert flagged_rust.stderr == plain_rust.stderr == plain_python.stderr == flagged_python.stderr
+    bad_rust = _run(
+        [str(emerge_binary)], ["--pretend", "--solver=sat", "dev-libs/newpkg"], fixture_env
+    )
+    bad_python = _run(
+        emerge_pretend_python, ["--pretend", "--solver=sat", "dev-libs/newpkg"], fixture_env
+    )
+    assert bad_rust.returncode == 2 and bad_python.returncode == 2
+    assert bad_rust.stdout == bad_python.stdout == ""
+    assert (
+        bad_rust.stderr
+        == bad_python.stderr
+        == 'emerge: --solver: "sat" is not "portage", "pubgrub" or "resolvo"\n'
+    )
+
+
 def test_columns_columnwidth_falls_back_to_default_on_an_unparsable_value(
     emerge_binary, fixture_env
 ):
@@ -8375,6 +8431,7 @@ Output:
 Portuale extensions (not real emerge options):
       --json                dump the resolved graph as one JSON line instead of the display
       --shell <bash|brush>  which real shell runs a merge / unmerge / --config phase chain (default bash)
+      --solver <solver>     which dependency solver resolves the graph: portage (default), pubgrub or resolvo
 
 emerge --sync is a permanent non-goal: it prints
 "Functionality has moved to `emaint sync`." and exits 1.

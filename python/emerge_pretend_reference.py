@@ -11750,6 +11750,7 @@ Output:
 Portuale extensions (not real emerge options):
       --json                dump the resolved graph as one JSON line instead of the display
       --shell <bash|brush>  which real shell runs a merge / unmerge / --config phase chain (default bash)
+      --solver <solver>     which dependency solver resolves the graph: portage (default), pubgrub or resolvo
 
 emerge --sync is a permanent non-goal: it prints
 "Functionality has moved to `emaint sync`." and exits 1.
@@ -15881,6 +15882,12 @@ def run(args):
     # resolver's retry ceiling after a solvable slot conflict; default
     # (flag absent) is 10, `--backtrack=0` disables backtracking.
     backtrack_max = 10
+    # --solver=<portage|pubgrub|resolvo>: portuale-only (real emerge has
+    # no --solver). Mirrors pretend.rs: parsed and validated so the CLI
+    # surface matches the Rust side. Only "portage" resolves here -- the
+    # PubGrub/resolvo bridges are Rust-only (see solver_bridge.rs), so a
+    # non-portage value exits 2 honestly just before resolving.
+    solver = "portage"
     # --verbose-conflicts: real bare boolean; pure display (show every
     # slot-conflict parent instead of one representative per collision
     # reason, and drop the "(and N more ...)" / NOTE trailer). Mirrors
@@ -16313,6 +16320,31 @@ def run(args):
                     file=sys.stderr,
                 )
                 return 1
+        elif arg == "--solver" or arg.startswith("--solver="):
+            # Portuale-only (real emerge has no --solver), same `=`/space
+            # handling as --shell above. Mirrors pretend.rs exactly
+            # (missing value -> 2, unknown value -> 2).
+            if arg.startswith("--solver="):
+                value = arg[len("--solver=") :]
+                i += 1
+            elif i + 1 < len(args):
+                value = args[i + 1]
+                i += 2
+            else:
+                print(
+                    "emerge: option '--solver' requires a value "
+                    "(portage, pubgrub or resolvo)",
+                    file=sys.stderr,
+                )
+                return 2
+            if value not in ("portage", "pubgrub", "resolvo"):
+                print(
+                    f'emerge: --solver: "{value}" is not "portage", '
+                    '"pubgrub" or "resolvo"',
+                    file=sys.stderr,
+                )
+                return 2
+            solver = value
         elif arg in ("--verbose", "-v"):
             # Peeks at the next token, consuming it only if it's exactly
             # "y"/"n" -- see pretend.rs's module doc comment on why (real
@@ -17864,6 +17896,16 @@ def run(args):
     try:
         # Phase 1 is always non-complete -- the authoritative merge list
         # (real _complete_graph runs *after* the normal graph is built).
+        # Only "portage" resolves in this reference: the PubGrub/resolvo
+        # bridges are Rust-only (see solver_bridge.rs), so those values
+        # exit 2 here while the Rust binary resolves them for real.
+        if solver != "portage":
+            print(
+                f'emerge: --solver="{solver}" has no Python reference '
+                "implementation (Rust-only)",
+                file=sys.stderr,
+            )
+            return 2
         result = _run_resolve(False)
         _locked = [
             f"{e[0]}/{e[1]}"

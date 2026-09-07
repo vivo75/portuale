@@ -1991,6 +1991,29 @@ cargo test --release -p mrg-director
 # test result: ok. 7 passed; 0 failed
 ```
 
+`--solver=` alternate backends (2026-09-07): the director's solver slot
+has its second and third algorithms — `emerge`/`mrg --pretend
+--solver=pubgrub|resolvo` resolves through lu-zero's bridges over the
+same md5-cache facts (`portage-repo/src/solver_bridge.rs`), default stays
+`--solver=portage`. Live-verified exactly as run (fixture env:
+`PORTAGE_CONFIGROOT=ROOT=PORTAGE_RUNNING_ROOT=fixtures`,
+`DISTDIR=fixtures/distfiles`):
+
+```sh
+for s in portage pubgrub resolvo; do
+  portuale emerge --pretend --solver=$s dev-libs/newpkg
+done
+# [ebuild  N     ] dev-libs/newpkg-1.0   (all three)
+portuale emerge --pretend --solver=pubgrub dev-libs/diamond
+# [ebuild  N     ] dev-libs/common-1.0
+# [ebuild  N     ] dev-libs/shared-b-1.0
+# [ebuild  N     ] dev-libs/shared-a-1.0
+# [ebuild  N     ] dev-libs/diamond-1.0
+# (same set as --solver=portage, plan order may differ)
+portuale mrg --pretend --solver=resolvo dev-libs/newpkg
+# [ebuild  N     ] dev-libs/newpkg-1.0   (mrg forwards to the same codepath)
+```
+
 `emerge --info`: the real config-layer stack (2026-09-07). `--info`'s
 `VAR="value"` dump now reads the same five dbs real portage stacks —
 `/etc/profile.env` (env.d), `cnf/make.globals`, the profile chain,

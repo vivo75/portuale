@@ -14649,7 +14649,43 @@ contained `PORTAGE_CONFIGROOT` with its own `make.globals` /
 `logical_lines` and `resolved_incremental`. Deliberately still out:
 real `--info`'s host-state header (Portage-version line, `System uname`,
 `KiB Mem`, repo `Timestamp`/`Head commit`, `sh`/`ld`/`coreutils`
-probes, the `info_pkgs` table).
+probes, the `info_pkgs` table), the `Repositories:` block's own
+`info_string()` fields (`sync-type`/`sync-uri`/`volatile`/module opts —
+needs `repos.conf` field parsing + the global-`repos.conf` merge), and
+the resolved base `USE` set, which still diverges from real on a handful
+of flags (a separate profile USE force/mask/expand slice).
+
+`--solver=` runtime solver selection (2026-09-07): `emerge`/`mrg --pretend`
+accept a portuale-only `--solver=<portage|pubgrub|resolvo>` (default
+`portage`, real emerge has no such flag), parsed the `--shell` way
+(`--solver=` or space form, missing/unknown value exits 2) and carried on
+`ResolveRequest::solver` into `active_resolver_for(kind)` -- the one
+production call site builds the request and calls the selected `Resolver`
+directly, so `resolve_pretend_graph`'s 44-arg signature and its ~55 test
+call sites are untouched. The alternate backends live in
+`portage-repo/src/solver_bridge.rs` (new `portage-solver =0.3.0` /
+`portage-atom-pubgrub =0.8.0` / `portage-atom-resolvo =0.8.1` /
+`resolvo =0.12.1` dependencies, pure Rust, musl-safe, waiver in
+`portage-repo/Cargo.toml`): each populates the bridge's repository shape
+from `list_candidates` + `read_md5_cache` (dep strings parsed with
+`portage_atom::DepEntry::parse`, per-version resolved USE from
+`effective_use_flags`, installed packages as favored, unslotted targets
+expanded via `packages_for_cpn` exactly like the bridge's own `Solver`
+impl) and translates the plan back to `GraphEntry`s in install order with
+real `New`/`Upgrade`/`Downgrade`/`AlreadyInstalled` outcomes, `oldbest`,
+`USE=` display and `required_by`. The `mrg` clap table carries the same
+choice option and forwards `--solver=<value>`; the Python reference
+mirrors the parsing (`--solver=portage` resolves identically, other values
+exit 2 as Rust-only). Trial-verified on fixtures: all three agree on
+`dev-libs/newpkg`, `>=dev-libs/newpkg-1.0` and the `dev-libs/diamond` set
+(order may differ); an unsatisfiable graph fails honestly with the
+engine's own explanation. Deliberate v1 cuts: no keyword/license/mask
+filtering, no slot-conflict/autounmask/`:=`-rebuild/blocker/circular
+notices, empty `deps` (plan order is the merge order). Contract-pinned by
+4 new `CASES` + `test_solver_portage_matches_the_default_resolution` +
+`mrg.rs::solver_value_forwards_to_the_emerge_codepath` +
+`solver_bridge` unit tests, plus the Rust-only
+`test_mrg_solver_selects_the_resolution_backend`.
 
 ### `emerge --info`: global USE resolution + `Repositories:` fields (2026-09-07)
 

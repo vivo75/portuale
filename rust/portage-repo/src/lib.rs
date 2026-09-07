@@ -56,6 +56,7 @@
 
 mod merge_order;
 mod resolver_trace;
+mod solver_bridge;
 
 pub use merge_order::{DepEdge, DepPriority};
 
@@ -11599,13 +11600,65 @@ pub struct ResolveRequest {
     pub rebuild_ignore: Vec<String>,
     pub dynamic_deps: bool,
     pub complete: bool,
+    /// Portuale-only `--solver=` selection (see [`SolverKind`]): which
+    /// algorithm answers this request. `Portage` (the default) runs the
+    /// backtracking walk; the other two run lu-zero's bridges over the
+    /// same repo facts (see `solver_bridge.rs`).
+    pub solver: SolverKind,
+}
+
+/// Which dependency-solving algorithm answers a [`ResolveRequest`].
+///
+/// Portuale-only (real `emerge` has no `--solver`): `Portage` is the
+/// default and the only solver with a Python reference implementation;
+/// `PubGrub`/`Resolvo` drive lu-zero's `portage-atom-pubgrub` /
+/// `portage-atom-resolvo` bridges (see `solver_bridge.rs`) and are
+/// Rust-only. The selection rides inside [`ResolveRequest`] so a
+/// [`Resolver`] stays a `Box<dyn Resolver>` picked at runtime.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SolverKind {
+    /// Portuale's own backtracking graph walk (`BacktrackingResolver`).
+    #[default]
+    Portage,
+    /// PubGrub version solving over the same repo facts.
+    PubGrub,
+    /// resolvo CDCL SAT solving over the same repo facts.
+    Resolvo,
+}
+
+impl SolverKind {
+    /// Parse a `--solver=<value>` token. `None` for anything outside the
+    /// three accepted values (the caller reports the usage error).
+    pub fn parse(value: &str) -> Option<SolverKind> {
+        match value {
+            "portage" => Some(SolverKind::Portage),
+            "pubgrub" => Some(SolverKind::PubGrub),
+            "resolvo" => Some(SolverKind::Resolvo),
+            _ => None,
+        }
+    }
+
+    /// The canonical `--solver=<value>` spelling, for help text and argv
+    /// forwarding.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            SolverKind::Portage => "portage",
+            SolverKind::PubGrub => "pubgrub",
+            SolverKind::Resolvo => "resolvo",
+        }
+    }
+}
+
+impl std::fmt::Display for SolverKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
 }
 
 /// A dependency-resolution strategy: [`ResolveRequest`] in, merge-ordered
-/// [`GraphResult`] out (or a hard-error string). The current and only
-/// implementation is [`BacktrackingResolver`]; the trait exists so a
-/// different resolver architecture can be swapped in wholesale via
-/// [`active_resolver`] without touching a call site.
+/// [`GraphResult`] out (or a hard-error string). The default implementation
+/// is [`BacktrackingResolver`]; alternate architectures plug in wholesale
+/// via [`active_resolver_for`] without touching a call site.
 pub trait Resolver {
     fn resolve(&self, req: &ResolveRequest) -> Result<GraphResult, Error>;
 }
@@ -11623,7 +11676,18 @@ impl Resolver for BacktrackingResolver {
 /// The resolver portuale uses -- a hook for runtime selection between
 /// resolver implementations, currently always [`BacktrackingResolver`].
 pub fn active_resolver() -> Box<dyn Resolver> {
-    Box::new(BacktrackingResolver)
+    active_resolver_for(SolverKind::Portage)
+}
+
+/// Pick the [`Resolver`] for one [`SolverKind`] (`--solver=`): the
+/// backtracking walk for `Portage`, lu-zero's PubGrub / resolvo bridges
+/// (see `solver_bridge.rs`) for the other two.
+pub fn active_resolver_for(kind: SolverKind) -> Box<dyn Resolver> {
+    match kind {
+        SolverKind::Portage => Box::new(BacktrackingResolver),
+        SolverKind::PubGrub => Box::new(solver_bridge::PubGrubResolver),
+        SolverKind::Resolvo => Box::new(solver_bridge::ResolvoResolver),
+    }
 }
 
 /// Recursively resolves every atom in `atoms` and -- for packages that
@@ -14601,6 +14665,11 @@ pub fn resolve_pretend_graph(
         rebuild_ignore: rebuild_ignore.to_vec(),
         dynamic_deps,
         complete,
+        // `resolve_pretend_graph` is the legacy 44-arg marshaller: it only
+        // ever answers with the default solver. New code builds a
+        // `ResolveRequest` (setting `solver`) and calls
+        // `active_resolver_for` directly.
+        solver: SolverKind::Portage,
     };
     active_resolver().resolve(&req)
 }
