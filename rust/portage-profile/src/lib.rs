@@ -1128,17 +1128,34 @@ fn parse_kv_line(line: &str) -> Option<(&str, &str)> {
 /// base USE set -- see the module doc comment.
 pub fn apply_incremental(tokens: &str, set: &mut HashSet<String>) {
     for tok in tokens.split_whitespace() {
-        if tok == "-*" {
-            set.clear();
-        } else if let Some(rest) = tok.strip_prefix('-') {
-            set.remove(rest);
-        } else if let Some(rest) = tok.strip_prefix('+') {
-            if !rest.is_empty() {
-                set.insert(rest.to_string());
-            }
-        } else {
-            set.insert(tok.to_string());
+        apply_incremental_token(tok, set);
+    }
+}
+
+/// Like [`apply_incremental`], but over an already-split token slice --
+/// skips the `Vec::join(" ")` + re-`split_whitespace()` round-trip that
+/// `effective_use_flags` / `specificity_ordered_flags` would otherwise do
+/// for every matching `package.use` entry per candidate (a hot path on a
+/// deep `emerge -pu`).
+pub fn apply_incremental_iter<S: AsRef<str>>(tokens: &[S], set: &mut HashSet<String>) {
+    for tok in tokens {
+        for t in tok.as_ref().split_whitespace() {
+            apply_incremental_token(t, set);
         }
+    }
+}
+
+fn apply_incremental_token(tok: &str, set: &mut HashSet<String>) {
+    if tok == "-*" {
+        set.clear();
+    } else if let Some(rest) = tok.strip_prefix('-') {
+        set.remove(rest);
+    } else if let Some(rest) = tok.strip_prefix('+') {
+        if !rest.is_empty() {
+            set.insert(rest.to_string());
+        }
+    } else {
+        set.insert(tok.to_string());
     }
 }
 

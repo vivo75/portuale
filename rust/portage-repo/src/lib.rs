@@ -2448,6 +2448,149 @@ pub fn effective_use_flags(
     category: &str,
     package: &str,
 ) -> HashSet<String> {
+    // Memoise per (config USE context, candidate). A deep `emerge -pu`
+    // calls this ~20k times for a few hundred distinct candidates -- once
+    // in `is_visible`, then again for `keywords_accepted`, `is_stable`,
+    // `binpkg_respect_use_ok`, `use_flags_if_conditional`, the slot-op and
+    // changed-deps scans... -- each time rebuilding a ~200-entry
+    // `HashSet<String>` from scratch (the largest remaining cost after the
+    // `parse_atom` / config-bucket / move-chain / md5-cache fixes).
+    //
+    // The result is a pure function of the six args. `category`/`package`
+    // and (in production) `iuse`/`keywords` are all implied by
+    // `candidate_str`, but `--dynamic-deps=n` can pass vdb-built
+    // `iuse`/`keywords` for a cpv that also exists in the tree, so all
+    // three go in the key. `config` is captured by
+    // `use_context_fingerprint` -- a sampled hash (len + first/mid/last of
+    // every USE-relevant field, `autounmask_use` hashed in full since the
+    // `'backtrack` loop mutates just that one). Two genuinely different
+    // configs colliding needs identical length + identical first/mid/last
+    // entries in ~20 fields: impossible in production (one config per
+    // process) and not hit by any test. Thread-local so the lookup stays
+    // lock-free.
+    // key: (hash of config USE context + iuse + keywords, candidate_str)
+    type EufCache = HashMap<(u64, String), Rc<HashSet<String>>>;
+    thread_local! {
+        static EUF_CACHE: RefCell<EufCache> = RefCell::new(HashMap::new());
+    }
+    let key = {
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        use_context_fingerprint(config).hash(&mut h);
+        iuse.hash(&mut h);
+        keywords.hash(&mut h);
+        (h.finish(), candidate_str.to_string())
+    };
+    if let Some(hit) = EUF_CACHE.with(|c| c.borrow().get(&key).cloned()) {
+        return hit.as_ref().clone();
+    }
+    let result = Rc::new(effective_use_flags_uncached(
+        config,
+        iuse,
+        keywords,
+        candidate_str,
+        category,
+        package,
+    ));
+    EUF_CACHE.with(|c| {
+        c.borrow_mut().insert(key, Rc::clone(&result));
+    });
+    result.as_ref().clone()
+}
+
+/// A cheap content fingerprint of every `Config` field
+/// [`effective_use_flags`] reads -- see its cache comment for why sampling
+/// (not a full hash) is sound here.
+fn use_context_fingerprint(config: &portage_profile::Config) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+
+    // Order-independent digest of a `HashSet<String>` (its iteration order
+    // is not stable): count + xor-fold of per-element hashes.
+    let hash_set = |s: &HashSet<String>, h: &mut std::collections::hash_map::DefaultHasher| {
+        s.len().hash(h);
+        let mut acc: u64 = 0;
+        for v in s {
+            let mut e = std::collections::hash_map::DefaultHasher::new();
+            v.hash(&mut e);
+            acc ^= e.finish();
+        }
+        acc.hash(h);
+    };
+    // Sample a slice: length + first/middle/last element.
+    fn hash_sampled<T: Hash>(items: &[T], h: &mut std::collections::hash_map::DefaultHasher) {
+        items.len().hash(h);
+        if let Some(f) = items.first() {
+            f.hash(h);
+        }
+        if items.len() > 2 {
+            items[items.len() / 2].hash(h);
+        }
+        if let Some(l) = items.last() {
+            l.hash(h);
+        }
+    }
+
+    hash_set(&config.accept_keywords, &mut h);
+    hash_set(&config.use_force, &mut h);
+    hash_set(&config.use_mask, &mut h);
+    hash_set(&config.use_stable_force, &mut h);
+    hash_set(&config.use_stable_mask, &mut h);
+
+    hash_sampled(&config.use_tokens, &mut h);
+    hash_sampled(&config.conf_use_tokens, &mut h);
+    hash_sampled(&config.env_use_tokens, &mut h);
+    hash_sampled(&config.envd_use_tokens, &mut h);
+    hash_sampled(&config.features_use, &mut h);
+
+    hash_sampled(&config.package_use, &mut h);
+    hash_sampled(&config.package_use_user, &mut h);
+    hash_sampled(&config.package_use_repo, &mut h);
+    hash_sampled(&config.package_env_use, &mut h);
+    hash_sampled(&config.package_use_force, &mut h);
+    hash_sampled(&config.package_use_mask, &mut h);
+    hash_sampled(&config.package_use_stable_force, &mut h);
+    hash_sampled(&config.package_use_stable_mask, &mut h);
+    hash_sampled(&config.package_accept_keywords, &mut h);
+    hash_sampled(&config.repo_make_defaults_use, &mut h);
+
+    // `autounmask_use` is the one field the `'backtrack` loop mutates
+    // (each tier / `flag_is_settable` probe adds an entry) -- hash it in
+    // full, not sampled, so a single added entry always changes the key.
+    config.autounmask_use.hash(&mut h);
+
+    // `profile_use_layers` -- sample the outer Vec, and within the
+    // sampled layers sample each inner list.
+    config.profile_use_layers.len().hash(&mut h);
+    let sample_layer = |l: &portage_profile::ProfileUseLayer,
+                        h: &mut std::collections::hash_map::DefaultHasher| {
+        hash_sampled(&l.make_defaults_use, h);
+        hash_sampled(&l.package_use, h);
+    };
+    if let Some(f) = config.profile_use_layers.first() {
+        sample_layer(f, &mut h);
+    }
+    if config.profile_use_layers.len() > 2 {
+        sample_layer(
+            &config.profile_use_layers[config.profile_use_layers.len() / 2],
+            &mut h,
+        );
+    }
+    if let Some(l) = config.profile_use_layers.last() {
+        sample_layer(l, &mut h);
+    }
+
+    h.finish()
+}
+
+fn effective_use_flags_uncached(
+    config: &portage_profile::Config,
+    iuse: &str,
+    keywords: &[String],
+    candidate_str: &str,
+    category: &str,
+    package: &str,
+) -> HashSet<String> {
     // The per-package `USE_ORDER` walk, low priority -> high (real
     // `regenerate()` over the reversed `uvlist`; see this function's own
     // doc comment for the full grounding). Portuale models, in order:
@@ -2483,7 +2626,7 @@ pub fn effective_use_flags(
     }
     let apply_matching = |flags: &mut HashSet<String>, entries: &[(String, Vec<String>)]| {
         for (_, tokens) in config_entries_matching(entries, candidate_str, category, package) {
-            portage_profile::apply_incremental(&tokens.join(" "), flags);
+            portage_profile::apply_incremental_iter(tokens, flags);
         }
     };
     apply_matching(&mut use_flags, &config.package_use_repo);
@@ -2718,7 +2861,7 @@ fn specificity_ordered_flags(
     // (`config_entries_matching` returns them in it).
     matching.sort_by_key(|(entry, _)| atom_specificity(entry));
     for (_, tokens) in matching {
-        portage_profile::apply_incremental(&tokens.join(" "), &mut seed);
+        portage_profile::apply_incremental_iter(tokens, &mut seed);
     }
     seed
 }
@@ -4415,7 +4558,7 @@ fn keyword_provenance(
     matching.sort_by_key(|(entry, _)| atom_specificity(entry));
     let mut seed = accept_keywords.clone();
     for (entry, tokens) in matching {
-        portage_profile::apply_incremental(&tokens.join(" "), &mut seed);
+        portage_profile::apply_incremental_iter(tokens, &mut seed);
         if keywords_accepted(keywords, candidate_str, category, package, &seed, &[]) {
             return Some(entry.clone());
         }
@@ -25553,6 +25696,51 @@ mod tests {
             let bucketed = config_entries_matching(&entries, cand, cat, pkg);
             assert_eq!(flat, bucketed, "candidate {cand}");
         }
+    }
+
+    #[test]
+    fn effective_use_flags_memo_does_not_leak_between_differing_configs() {
+        // The `use_context_fingerprint` cache key must distinguish two
+        // configs that differ only in a *middle* `package_use` entry
+        // (same length, same first + last) -- the case the sampled hash
+        // could miss without the mid-point sample. Same candidate / iuse /
+        // keywords, so only the config content can produce a different
+        // answer.
+        let base = |mid_flag: &str| portage_profile::Config {
+            package_use: vec![
+                ("dev-libs/other".to_string(), vec!["x".to_string()]),
+                ("dev-libs/pkg".to_string(), vec![mid_flag.to_string()]),
+                ("dev-libs/last".to_string(), vec!["z".to_string()]),
+            ],
+            accept_keywords: HashSet::from(["amd64".to_string()]),
+            ..Default::default()
+        };
+        let call = |cfg: &portage_profile::Config| {
+            effective_use_flags(
+                cfg,
+                "foo bar",
+                &["amd64".to_string()],
+                "dev-libs/pkg-1.0:0/0::testrepo",
+                "dev-libs",
+                "pkg",
+            )
+        };
+        let with_foo = call(&base("foo"));
+        let with_bar = call(&base("bar"));
+        assert!(with_foo.contains("foo") && !with_foo.contains("bar"));
+        assert!(with_bar.contains("bar") && !with_bar.contains("foo"));
+        // And the memo is transparent: a second call matches the uncached body.
+        assert_eq!(
+            call(&base("foo")),
+            effective_use_flags_uncached(
+                &base("foo"),
+                "foo bar",
+                &["amd64".to_string()],
+                "dev-libs/pkg-1.0:0/0::testrepo",
+                "dev-libs",
+                "pkg",
+            )
+        );
     }
 
     fn graph_entry(category: &str, package: &str, version: &str) -> GraphEntry {
