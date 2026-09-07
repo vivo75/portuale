@@ -20,7 +20,10 @@ holds everything else.
 | [`running-it.md`](running-it.md) | Runnable, live-verified examples for every shipped slice. |
 | [`brush-pin.md`](brush-pin.md) | The `brush` (embedded bash) dependency pin, the two fixes it used to carry, and the re-pin checklist. |
 | [`operation-diagrams.md`](operation-diagrams.md) | Block diagrams tracing four representative `emerge` invocations through the code, plus per-operation detail pages. |
-| [`emerge-pretend-debug.md`](emerge-pretend-debug.md) | Design note (**not implemented**): real portage's `--debug` resolver trace — every message it emits with its upstream source, why it is the ground truth for graph/merge-order divergences, and a staged port plan. Distinguishes it from portuale's current `--debug`, which is only `PORTAGE_DEBUG=1`/`set -x`. |
+| [`emerge-pretend-debug.md`](emerge-pretend-debug.md) | Real portage's `emerge --pretend --debug` resolver trace — every message with its upstream source, the deliberate divergences, and the six-stage port (**implemented 2026-09-07**). |
+| [`performances-tuning.md`](performances-tuning.md) | The `perf` + call-counter investigation of a live `emerge -puD --getbinpkg` and the six memoisation fixes that took it from 77 s to 4.5 s (17×, ~3.5× faster than real `emerge`), with the remaining ~1–2 % items. |
+| [`refactor-HIGH.md`](refactor-HIGH.md) | Source-grounded audit of the whole `rust/` workspace against the 56 HIGH `rust-skills` rules — mostly deliberate-N/A verdicts; the one live recommendation is `lto = "thin"` + `codegen-units = 1`. |
+| [`solver-backends-analysis.md`](solver-backends-analysis.md) | Comparison of resolution backends (portuale's own, pubgrub, resolvo) behind the `--solver=` switch, and why the lu-zero bridges are reused. |
 
 ## History
 

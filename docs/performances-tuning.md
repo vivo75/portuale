@@ -110,6 +110,10 @@ most of the difference.
 
 ## Where the time goes (`perf record`, release + line tables)
 
+> This section and the two below record the **original 77 s investigation**.
+> `file:line` references are as of that tree (commit `5a8f3f5`); the functions
+> named still exist but have since moved and been split — grep the name.
+
 Flat profile, self time:
 
 | % | symbol | meaning |

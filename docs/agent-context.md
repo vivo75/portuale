@@ -181,8 +181,8 @@ written at `docs/refactor-HIGH.md` with the CRITICAL doc's constraints
 as backdrop: 2 actionable findings (`opt-lto-release` and
 `opt-codegen-units` — a recommended `lto = "thin"` + `codegen-units = 1`
 release-profile change, gated on the user/CI's call), 4 compliant + 3
-compliant-profiling-gated `opt-` inline/cold/SIMD notes (all gated on
-the in-flight `perf`/`flamegraph` write-up), 1 deliberate
+compliant-profiling-gated `opt-` inline/cold/SIMD notes (gated on the
+`perf` write-up — now `docs/performances-tuning.md`, see below), 1 deliberate
 `opt-target-cpu` rejection (portability-first static musl binary), 2
 `opt-` N/A verdicts (PGO and SIMD both rejected), deliberate deviations
 recorded (no builders, no newtypes, error enums trait-poor, blocking
@@ -195,9 +195,25 @@ test-only hygiene note (`make_xpak_binpkg` `as u32` XPAK casts in
 `u32::try_from` (`xpak_u32`, panics like Python's `struct.pack`; 799/799,
 clippy zero-warn, fmt clean). The `shared_runtime` worker-count question
 (should it be `new_current_thread()` given exactly one buffered future?)
-is parked open in the doc's judgment-calls section, tied to the pending
+is parked open in the doc's judgment-calls section, tied to the
 profiling write-up. All 56 HIGH rules audited; `opt-` category resolved
 (what remains is build-config work, not code).
+
+**Performance (2026-09-07)**: `docs/performances-tuning.md` is the
+profiling write-up the `opt-` notes above were gated on. A `perf` +
+call-counter investigation of a live `emerge -puD --getbinpkg` found the
+resolver was doing ~2 orders of magnitude more work than real portage —
+34 M backtracking-regex atom parses for a 15-package result — because
+every per-package computation re-scanned the whole `package.*` config
+and nothing was memoised. Six commits (`67af529`..`8c5ea9c`) took the
+run **77 s → 4.5 s** (17×, now ~3.5× faster than a real `emerge`), all
+byte-identical: `parse_atom`/`parse_candidate` memo, cp-bucketed
+`package.*` config (portuale's `ExtendedAtomDict`), precomputed
+`profiles/updates/` move chains + memoised `all_installed_packages`,
+memoised `read_md5_cache` / `effective_use_flags` / `list_candidates`.
+The remaining `opt-lto-release` + `opt-codegen-units` recommendation
+(`lto = "thin"` + `codegen-units = 1`) measures a further ~7 % off CPU
+time and is still user/CI-gated.
 
 **Dry-run (`emerge --pretend`)**: full recursive DEPEND/RDEPEND/BDEPEND/
 PDEPEND/IDEPEND resolution; profile/make.conf-derived USE/ACCEPT_KEYWORDS
