@@ -665,7 +665,6 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --update @world
 
 # @world combines with an explicit atom in the same invocation
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --update dev-libs/samepkg @world
-# dev-libs/samepkg-1.0 is already installed; nothing to do
 # [ebuild  N    ] dev-libs/newpkg-1.0
 # [ebuild  N    ] dev-libs/withdeps-1.0
 # [ebuild  N    ] dev-libs/nestedsetpkg-1.0
@@ -735,19 +734,19 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --newuse dev-libs/rein
 # --noreplace isolates this from real portage's own separate "selective"
 # default for a bare top-level atom (see --noreplace/--selective below)
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --noreplace dev-libs/reinstallpkg
-# dev-libs/reinstallpkg-1.0 is already installed; nothing to do
+# (no output — already installed, omitted from the merge list)
 
 # --newuse is a no-op when USE hasn't changed -- samepkg has no IUSE at
 # all (declared or in the vdb), so there's nothing to detect a change in
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --newuse dev-libs/samepkg
-# dev-libs/samepkg-1.0 is already installed; nothing to do
+# (no output — already installed, omitted from the merge list)
 
 # --newuse's forced_flags subtraction: usemaskreinstallpkg's newly
 # IUSE-declared flag is masked off by use.mask, so it never actually
 # changed enablement -- without forced_flags this would spuriously
 # report a Reinstall just because the flag now exists in IUSE at all
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --newuse dev-libs/usemaskreinstallpkg
-# dev-libs/usemaskreinstallpkg-1.0 is already installed; nothing to do
+# (no output — already installed, omitted from the merge list)
 
 # --changed-use/-U is real and implemented too, a narrower sibling of
 # --newuse: changedusepkg's newly IUSE-declared "brandnewflag" is real
@@ -758,7 +757,7 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --newuse dev-libs/chan
 # ...but --changed-use never even looks at IUSE presence, only at
 # enablement -- and that flag's own enablement never changed
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --changed-use dev-libs/changedusepkg
-# dev-libs/changedusepkg-1.0 is already installed; nothing to do
+# (no output — already installed, omitted from the merge list)
 # --changed-use still catches an ENABLEMENT change on a flag shared by
 # both IUSE sets, same as reinstallpkg's own --newuse example above
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --changed-use dev-libs/reinstallpkg
@@ -772,7 +771,7 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --changed-use dev-libs
 # dev-libs/upgradepkg" leaves it alone (real depgraph.py's own
 # avoid_update, lines 7814/8448)
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --noreplace dev-libs/upgradepkg
-# dev-libs/upgradepkg-1.0 is already installed; nothing to do
+# (no output — already installed, omitted from the merge list)
 # --update (or its short alias -u) is what makes the newer version show up
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --update dev-libs/upgradepkg
 # [ebuild     U ] dev-libs/upgradepkg-2.0 [1.0]
@@ -798,15 +797,15 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/samepkg
 # [ebuild   R   ] dev-libs/samepkg-1.0
 # --noreplace (or its real synonym --selective) restores "nothing to do"
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --noreplace dev-libs/samepkg
-# dev-libs/samepkg-1.0 is already installed; nothing to do
+# (no output — already installed, omitted from the merge list)
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --selective dev-libs/samepkg
-# dev-libs/samepkg-1.0 is already installed; nothing to do
+# (no output — already installed, omitted from the merge list)
 # --selective=n explicitly cancels selective even if another flag (here,
 # --update) would otherwise have set it -- unlike the upgradepkg example
 # above, samepkg has nothing newer, so --update alone still leaves it
 # alone; --selective=n forces the bare reinstall anyway
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --update dev-libs/samepkg
-# dev-libs/samepkg-1.0 is already installed; nothing to do
+# (no output — already installed, omitted from the merge list)
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --update --selective=n dev-libs/samepkg
 # [ebuild   R   ] dev-libs/samepkg-1.0
 
@@ -819,19 +818,17 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --update --selective=n
 # gating from real portage's own separate "selective" default for a bare
 # top-level atom
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --noreplace dev-libs/deeppkg
-# dev-libs/deeppkg-1.0 is already installed; nothing to do
+# (no output — already installed, omitted from the merge list)
 # a bare --deep (unlimited depth) walks the whole already-installed
 # chain -- deeppkg2 itself stays silent (already installed, not a
 # top-level atom), but newpkg's own [ebuild N] line now appears
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --noreplace --deep dev-libs/deeppkg
-# dev-libs/deeppkg-1.0 is already installed; nothing to do
 # [ebuild  N    ] dev-libs/newpkg-1.0
 # --deep=N bounds the depth: 1 level reaches deeppkg2 but not newpkg
 # (identical output to no --deep at all); 2 levels reaches all the way
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --noreplace --deep=1 dev-libs/deeppkg
-# dev-libs/deeppkg-1.0 is already installed; nothing to do
+# (no output — already installed, omitted from the merge list)
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --noreplace --deep=2 dev-libs/deeppkg
-# dev-libs/deeppkg-1.0 is already installed; nothing to do
 # [ebuild  N    ] dev-libs/newpkg-1.0
 
 # --emptytree/-e reinstalls the whole deep dependency tree as though
@@ -851,7 +848,7 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --update dev-libs/upgr
 # it's checked first, unconditionally, before --update/--newuse/
 # --changed-use ever get a say
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --update --exclude dev-libs/upgradepkg dev-libs/upgradepkg
-# dev-libs/upgradepkg-1.0 is already installed; nothing to do
+# (no output — already installed, omitted from the merge list)
 # excluding a package that isn't installed at all means there's no
 # eligible candidate left -- the same fatal "no ebuilds to satisfy"
 # outcome any other unsatisfiable top-level atom already gets
@@ -860,7 +857,7 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --exclude dev-libs/new
 # real "action": "append" -- repeatable, and each occurrence's own value
 # is itself a space-separated atom list, so both accumulate
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --update --exclude "dev-libs/does-not-exist dev-libs/upgradepkg" dev-libs/upgradepkg
-# dev-libs/upgradepkg-1.0 is already installed; nothing to do
+# (no output — already installed, omitted from the merge list)
 
 # --json is a portuale extension (NOT a real emerge option): the whole
 # resolved graph as one line of JSON instead of the plain-text lines
@@ -1071,26 +1068,22 @@ ROOT="/tmp/deselect-demo-root" /tmp/emerge --pretend --deselect dev-libs/foo @my
 # Reinstall entry's own dependencies are always walked), so --deep's own
 # gating couldn't be demonstrated otherwise
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --noreplace --deep dev-libs/withbdepspkg
-# dev-libs/withbdepspkg-1.0 is already installed; nothing to do
 # [ebuild  N    ] dev-libs/builddeponlypkg-1.0
 # [ebuild  N    ] dev-libs/newpkg-1.0
 # [ebuild  N    ] dev-libs/hostdeponlypkg-1.0
 
 # --with-bdeps=n: DEPEND/BDEPEND are skipped, but RDEPEND is unaffected
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --noreplace --deep --with-bdeps n dev-libs/withbdepspkg
-# dev-libs/withbdepspkg-1.0 is already installed; nothing to do
 # [ebuild  N    ] dev-libs/newpkg-1.0
 
 # --with-bdeps-auto n: with no explicit --with-bdeps given, changes the
 # *default* from "auto" (walk all three) down to "n" -- same effect as
 # --with-bdeps n above, but via the default instead of an explicit value
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --noreplace --deep --with-bdeps-auto n dev-libs/withbdepspkg
-# dev-libs/withbdepspkg-1.0 is already installed; nothing to do
 # [ebuild  N    ] dev-libs/newpkg-1.0
 
 # an explicit --with-bdeps always wins over --with-bdeps-auto regardless
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --noreplace --deep --with-bdeps y --with-bdeps-auto n dev-libs/withbdepspkg
-# dev-libs/withbdepspkg-1.0 is already installed; nothing to do
 # [ebuild  N    ] dev-libs/builddeponlypkg-1.0
 # [ebuild  N    ] dev-libs/newpkg-1.0
 # [ebuild  N    ] dev-libs/hostdeponlypkg-1.0
@@ -1107,7 +1100,7 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --changed-deps dev-lib
 # ebuild names sys-libs/musl -- both are real virtual/libc providers per
 # the fixture vdb's own virtual/libc entry, so no reinstall fires
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --changed-deps dev-libs/libcnoisepkg
-# dev-libs/libcnoisepkg-1.0 is already installed; nothing to do
+# (no output — already installed, omitted from the merge list)
 
 # --changed-deps-report: same stale RDEPEND as the --changed-deps example
 # above, but reported (to stderr) instead of reinstalled -- stdout still
@@ -1120,7 +1113,7 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --changed-deps dev-lib
 # suffix below only appears because ROOT isn't "/" here, like every
 # other example in this section -- real portage's own condition exactly
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --noreplace --changed-deps-report dev-libs/changeddepspkg
-# dev-libs/changeddepspkg-1.0 is already installed; nothing to do
+# (no output — already installed, omitted from the merge list)
 #
 # !!! Detected ebuild dependency change(s) without revision bump:
 #
@@ -1216,14 +1209,14 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --usepkg --usepkg-incl
 # BUILD_TIME 2000 -- off by default (--selective avoids the unrelated
 # "bare top-level atom always reinstalls" behavior muddying this)
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --usepkg --selective dev-libs/rebuiltbinarypkg
-# dev-libs/rebuiltbinarypkg-1.0 is already installed; nothing to do
+# (no output — already installed, omitted from the merge list)
 # given explicitly, the differing BUILD_TIME triggers a reinstall
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --usepkg --selective --rebuilt-binaries dev-libs/rebuiltbinarypkg
 # [binary   R   ] dev-libs/rebuiltbinarypkg-1.0
 # --rebuilt-binaries-timestamp narrows it to "newer AND at/above this
 # cutoff" -- 2000 is below 3000, so no reinstall; 2000 clears 1500
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --usepkg --selective --rebuilt-binaries --rebuilt-binaries-timestamp 3000 dev-libs/rebuiltbinarypkg
-# dev-libs/rebuiltbinarypkg-1.0 is already installed; nothing to do
+# (no output — already installed, omitted from the merge list)
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --usepkg --selective --rebuilt-binaries --rebuilt-binaries-timestamp 1500 dev-libs/rebuiltbinarypkg
 # [binary   R   ] dev-libs/rebuiltbinarypkg-1.0
 # the real, non-obvious default: --usepkgonly + bare --deep + --update
@@ -1277,14 +1270,14 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --getbinpkgonly --use-
 # recording "oldrepo", but the current best candidate for this exact
 # version lives in "testrepo" instead -- off by default...
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --selective dev-libs/newrepopkg
-# dev-libs/newrepopkg-1.0 is already installed; nothing to do
+# (no output — already installed, omitted from the merge list)
 # ...fires once given explicitly
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --selective --newrepo dev-libs/newrepopkg
 # [ebuild   R   ] dev-libs/newrepopkg-1.0
 # a vdb repository file that DOES match the current provider never
 # triggers a reinstall
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --selective --newrepo dev-libs/samerepopkg
-# dev-libs/samerepopkg-1.0 is already installed; nothing to do
+# (no output — already installed, omitted from the merge list)
 # samepkg has no vdb repository file at all -- real portage's own
 # "__unknown__" sentinel applies, which never matches a real repo name,
 # so --newrepo fires here too even though nothing really changed

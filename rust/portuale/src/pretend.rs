@@ -1147,21 +1147,17 @@ fn print_entry_line(
             emit(&field(false, false, true, false, false), version);
             blocker_lines.extend(format_blocker_lines(entry, version, !quiet, color));
         }
-        PretendOutcome::AlreadyInstalled { version } => {
-            // Already-satisfied dependencies aren't shown, matching
-            // real emerge's usual "don't clutter the list with what's
-            // already there" behavior -- only a directly-requested
-            // (top-level) atom gets its own "nothing to do" line, and
-            // --onlydeps suppresses that too, same as every other
-            // outcome above.
-            if top_level_pkgs.contains(&(entry.category.clone(), entry.package.clone()))
-                && !onlydeps_suppressed
-            {
-                println!(
-                    "{indent}{}/{}-{version} is already installed; nothing to do",
-                    entry.category, entry.package
-                );
-            }
+        PretendOutcome::AlreadyInstalled { version: _ } => {
+            // Nothing on stdout: real `emerge -p` / `-pu` simply omits an
+            // already-satisfied package from the merge list, whether it
+            // was reached as a dependency or requested directly (and
+            // whether or not `@world`/`@system` pulled it in) -- it never
+            // prints a per-package "is already installed" notice. Portuale
+            // used to print one for a top-level atom; it polluted
+            // `emerge -puD @world` (one line per up-to-date world member)
+            // and matched nothing in real, so it was dropped. The
+            // `already_installed` JSON status still carries the outcome
+            // for `--json` consumers.
         }
         PretendOutcome::NoVisibleCandidate => {
             eprintln!(

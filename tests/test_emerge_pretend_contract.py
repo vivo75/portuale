@@ -6953,7 +6953,7 @@ def test_newrepo_off_by_default_stays_already_installed(emerge_binary, fixture_e
         fixture_env,
     )
     assert result.returncode == 0
-    assert result.stdout.strip() == "dev-libs/newrepopkg-1.0 is already installed; nothing to do"
+    assert result.stdout.strip() == ""
 
 
 def test_newrepo_triggers_a_reinstall_for_a_differing_recorded_repository(
@@ -6986,7 +6986,7 @@ def test_newrepo_does_not_fire_when_the_recorded_repository_matches(
         fixture_env,
     )
     assert result.returncode == 0
-    assert result.stdout.strip() == "dev-libs/samerepopkg-1.0 is already installed; nothing to do"
+    assert result.stdout.strip() == ""
 
 
 def test_newrepo_fires_via_the_unknown_repo_sentinel_when_unrecorded(
@@ -7082,7 +7082,7 @@ def test_rebuilt_binaries_off_by_default_stays_already_installed(emerge_binary, 
         fixture_env,
     )
     assert result.returncode == 0
-    assert result.stdout.strip() == "dev-libs/rebuiltbinarypkg-1.0 is already installed; nothing to do"
+    assert result.stdout.strip() == ""
 
 
 def test_rebuilt_binaries_triggers_a_reinstall_for_a_differing_build_time(
@@ -7126,9 +7126,7 @@ def test_rebuilt_binaries_timestamp_gates_the_reinstall(emerge_binary, fixture_e
         fixture_env,
     )
     assert too_high.returncode == 0
-    assert (
-        too_high.stdout.strip() == 'dev-libs/rebuiltbinarypkg-1.0 is already installed; nothing to do'
-    )
+    assert too_high.stdout.strip() == ""
 
     low_enough = _run(
         [str(emerge_binary)],
@@ -7187,10 +7185,7 @@ def test_rebuilt_binaries_auto_enables_under_usepkgonly_deep_update(emerge_binar
         fixture_env,
     )
     assert bounded_deep.returncode == 0
-    assert (
-        bounded_deep.stdout.strip()
-        == 'dev-libs/rebuiltbinarypkg-1.0 is already installed; nothing to do'
-    )
+    assert bounded_deep.stdout.strip() == ""
 
 
 def test_use_dep_equal_parent_matches_when_parent_flag_is_enabled(emerge_binary, fixture_env):
@@ -7932,21 +7927,19 @@ def test_multiple_top_level_atoms_dedupe_a_literal_duplicate(emerge_binary, fixt
 
 
 def test_multiple_top_level_atoms_all_already_installed(emerge_binary, fixture_env):
-    """Generalizes the old single-atom "already installed; nothing to do"
-    shortcut: every requested top-level atom that resolves
-    AlreadyInstalled gets its own such line (there's no longer a
-    len(entries) == 1 special case). --noreplace restores "already
-    installed" for a bare top-level atom (see resolve_pretend's own
-    doc comment, portage-repo, on real portage's own "selective" gap --
-    without it, a bare top-level atom reports a plain reinstall
-    instead)."""
+    """When every requested top-level atom resolves AlreadyInstalled the
+    merge list is empty and `emerge -p` prints nothing at all -- matching
+    real, which likewise omits an already-satisfied package. --noreplace
+    keeps a bare top-level atom AlreadyInstalled rather than a plain
+    reinstall (see resolve_pretend's own doc comment, portage-repo, on
+    real portage's own "selective" gap)."""
     result = _run(
         [str(emerge_binary)],
         ["--pretend", "--noreplace", "dev-libs/samepkg", "dev-libs/samepkg"],
         fixture_env,
     )
     assert result.returncode == 0
-    assert result.stdout.splitlines() == ["dev-libs/samepkg-1.0 is already installed; nothing to do"]
+    assert result.stdout.splitlines() == []
 
 
 def test_bad_top_level_atom_aborts_the_whole_run_in_argv_order(emerge_binary, fixture_env):
@@ -8499,9 +8492,10 @@ def test_world_expands_to_the_fixture_world_files_own_atoms(emerge_binary, fixtu
     separate code path. fixtures/var/lib/portage/world_sets
     lists "@nestedtestset" (fixtures/etc/portage/sets/
     nestedtestset), which itself contributes dev-libs/nestedsetpkg
-    directly (installed since the `-pC` set-protection slice, so it
-    shows as "already installed; nothing to do" here rather than
-    "[ebuild N]") and nests a further "@innernestedset" reference
+    directly (installed since the `-pC` set-protection slice, so it is
+    omitted from the merge list here -- an already-satisfied package
+    doesn't show under `emerge -p`, matching real) and nests a further
+    "@innernestedset" reference
     (contributing dev-libs/innernestedsetpkg, and -- proving the cycle
     guard -- referencing "@nestedtestset" right back without looping
     forever or erroring). --update is added purely so upgradepkg's own
@@ -8524,23 +8518,18 @@ def test_world_expands_to_the_fixture_world_files_own_atoms(emerge_binary, fixtu
     bias + batching documented on portage-repo::merge_order (the
     _serialize_tasks port).
 
-    The two "already installed" notices sit where the scheduler itself
-    placed those nodes: since the 2026-09-06 _serialize_tasks port they
-    are genuine graph nodes rather than entries woven back in on raw
-    discovery rank, so they are ordered by the same _merge_order_bias
-    (@system-deep first, then descending reference count) as everything
-    else in their round. Real portage never displays such an entry at all
-    -- these notices are a portuale-only nicety with no real ordering to
-    match -- and the merge-bound sequence itself (newpkg, upgradepkg,
-    innernestedsetpkg, withdeps) is unchanged by the port."""
+    An already-installed package (nestedsetpkg, dualslotpkg) is omitted
+    from the merge list entirely, matching real `emerge -p` -- portuale
+    used to print a per-package "is already installed" notice, dropped
+    because it polluted `emerge -puD @world` and matched nothing in real.
+    The merge-bound sequence (newpkg, upgradepkg, innernestedsetpkg,
+    withdeps) is unaffected."""
     result = _run([str(emerge_binary)], ["--pretend", "--update", "@world"], fixture_env)
     assert result.returncode == 0
     assert result.stdout.splitlines() == [
         '[ebuild  N     ] dev-libs/newpkg-1.0 ',
         '[ebuild     U  ] dev-libs/upgradepkg-2.0 [1.0]',
-        'dev-libs/nestedsetpkg-1.0 is already installed; nothing to do',
         '[ebuild  N     ] dev-libs/innernestedsetpkg-1.0 ',
-        'dev-libs/dualslotpkg-2.0 is already installed; nothing to do',
         '[ebuild  N     ] dev-libs/withdeps-1.0 ',
     ]
 
@@ -8553,12 +8542,8 @@ def test_world_combines_with_an_explicit_atom(emerge_binary, fixture_env):
     order: see test_world_expands_to_the_fixture_world_files_own_atoms's
     own doc comment for why withdeps lands last, after innernestedsetpkg.
 
-    The "already installed" notices sit where the scheduler itself placed
-    those nodes -- see test_world_expands_to_the_fixture_world_files_own_
-    atoms's own doc comment for why (the 2026-09-06 _serialize_tasks
-    port). Real portage never displays such an entry at all, so there is
-    no real ordering for them to match; the merge-bound sequence is
-    unchanged."""
+    An already-installed package is omitted from the merge list, matching
+    real `emerge -p`; the merge-bound sequence is unaffected."""
     result = _run(
         [str(emerge_binary)],
         ["--pretend", "--update", "dev-libs/samepkg", "@world"],
@@ -8568,10 +8553,7 @@ def test_world_combines_with_an_explicit_atom(emerge_binary, fixture_env):
     assert result.stdout.splitlines() == [
         '[ebuild  N     ] dev-libs/newpkg-1.0 ',
         '[ebuild     U  ] dev-libs/upgradepkg-2.0 [1.0]',
-        'dev-libs/samepkg-1.0 is already installed; nothing to do',
-        'dev-libs/nestedsetpkg-1.0 is already installed; nothing to do',
         '[ebuild  N     ] dev-libs/innernestedsetpkg-1.0 ',
-        'dev-libs/dualslotpkg-2.0 is already installed; nothing to do',
         '[ebuild  N     ] dev-libs/withdeps-1.0 ',
     ]
 
@@ -10217,18 +10199,14 @@ def test_system_expands_to_the_fixture_profile_chains_own_packages_files(
     staying silently AlreadyInstalled -- unrelated to what this test
     itself is about.
 
-    The "already installed" notice sits where the scheduler itself placed
-    that node -- see test_world_expands_to_the_fixture_world_files_own_
-    atoms's own doc comment for why (the 2026-09-06 _serialize_tasks
-    port). Real portage never displays such an entry at all, so there is
-    no real ordering for it to match; the merge-bound sequence is
-    unchanged."""
+    An already-installed package (systempkg) is omitted from the merge
+    list, matching real `emerge -p`; the merge-bound sequence is
+    unaffected."""
     result = _run([str(emerge_binary)], ["--pretend", "--update", "@system"], fixture_env)
     assert result.returncode == 0
     assert result.stdout.splitlines() == [
         '[ebuild  N     ] dev-libs/newpkg-1.0 ',
         '[ebuild     U  ] dev-libs/upgradepkg-2.0 [1.0]',
-        'dev-libs/systempkg-1.0 is already installed; nothing to do',
         '[ebuild  N     ] dev-libs/withdeps-1.0 ',
     ]
 
@@ -10239,12 +10217,8 @@ def test_system_combines_with_an_explicit_atom(emerge_binary, fixture_env):
     as @world. --update is added for the same reason as the plain
     @system test above.
 
-    The "already installed" notices sit where the scheduler itself placed
-    those nodes -- see test_world_expands_to_the_fixture_world_files_own_
-    atoms's own doc comment for why (the 2026-09-06 _serialize_tasks
-    port). Real portage never displays such an entry at all, so there is
-    no real ordering for them to match; the merge-bound sequence is
-    unchanged."""
+    An already-installed package is omitted from the merge list, matching
+    real `emerge -p`; the merge-bound sequence is unaffected."""
     result = _run(
         [str(emerge_binary)],
         ["--pretend", "--update", "dev-libs/samepkg", "@system"],
@@ -10254,8 +10228,6 @@ def test_system_combines_with_an_explicit_atom(emerge_binary, fixture_env):
     assert result.stdout.splitlines() == [
         '[ebuild  N     ] dev-libs/newpkg-1.0 ',
         '[ebuild     U  ] dev-libs/upgradepkg-2.0 [1.0]',
-        'dev-libs/systempkg-1.0 is already installed; nothing to do',
-        'dev-libs/samepkg-1.0 is already installed; nothing to do',
         '[ebuild  N     ] dev-libs/withdeps-1.0 ',
     ]
 
@@ -10336,7 +10308,7 @@ def test_without_newuse_a_use_changed_package_stays_already_installed(
         [str(emerge_binary)], ["--pretend", "--noreplace", "dev-libs/reinstallpkg"], fixture_env
     )
     assert result.returncode == 0
-    assert result.stdout == "dev-libs/reinstallpkg-1.0 is already installed; nothing to do\n"
+    assert result.stdout == ""
 
 
 def test_newuse_is_a_noop_when_use_has_not_changed(emerge_binary, fixture_env):
@@ -10348,7 +10320,7 @@ def test_newuse_is_a_noop_when_use_has_not_changed(emerge_binary, fixture_env):
         [str(emerge_binary)], ["--pretend", "--newuse", "dev-libs/samepkg"], fixture_env
     )
     assert result.returncode == 0
-    assert result.stdout == "dev-libs/samepkg-1.0 is already installed; nothing to do\n"
+    assert result.stdout == ""
 
 
 def test_newuse_forced_flags_suppresses_a_spurious_reinstall(emerge_binary, fixture_env):
@@ -10366,7 +10338,7 @@ def test_newuse_forced_flags_suppresses_a_spurious_reinstall(emerge_binary, fixt
         fixture_env,
     )
     assert result.returncode == 0
-    assert result.stdout == "dev-libs/usemaskreinstallpkg-1.0 is already installed; nothing to do\n"
+    assert result.stdout == ""
 
 
 def test_newuse_vs_changed_use_diverge_on_a_newly_added_iuse_flag(emerge_binary, fixture_env):
@@ -10396,9 +10368,7 @@ def test_newuse_vs_changed_use_diverge_on_a_newly_added_iuse_flag(emerge_binary,
         fixture_env,
     )
     assert changed_use_result.returncode == 0
-    assert changed_use_result.stdout == (
-        'dev-libs/changedusepkg-1.0 is already installed; nothing to do\n'
-    )
+    assert changed_use_result.stdout == ""
 
 
 def test_changed_use_short_alias_bundled_with_pretend(emerge_binary, fixture_env):
@@ -10407,7 +10377,7 @@ def test_changed_use_short_alias_bundled_with_pretend(emerge_binary, fixture_env
     the long-flag invocation above."""
     result = _run([str(emerge_binary)], ["-pU", "dev-libs/changedusepkg"], fixture_env)
     assert result.returncode == 0
-    assert result.stdout == "dev-libs/changedusepkg-1.0 is already installed; nothing to do\n"
+    assert result.stdout == ""
 
 
 def test_changed_use_still_catches_an_enablement_change_on_a_shared_flag(
@@ -10468,7 +10438,7 @@ def test_changed_deps_ignores_a_libc_only_dependency_change(emerge_binary, fixtu
     )
     assert result.returncode == 0
     assert (
-        result.stdout.strip() == "dev-libs/libcnoisepkg-1.0 is already installed; nothing to do"
+        result.stdout.strip() == ""
     )
 
 
@@ -10511,10 +10481,7 @@ def test_changed_deps_ignores_a_built_slot_operators_resolved_slot(
     assert python.returncode == 0
     assert rust.stdout == python.stdout
     assert rust.stderr == python.stderr
-    assert (
-        rust.stdout.strip()
-        == "dev-libs/slotopdepspkg-1.0 is already installed; nothing to do"
-    )
+    assert rust.stdout.strip() == ""
 
 
 def test_changed_deps_structured_comparison(
@@ -10554,10 +10521,7 @@ def test_changed_deps_structured_comparison(
     assert python.returncode == 0
     assert rust.stdout == python.stdout
     assert rust.stderr == python.stderr
-    assert (
-        rust.stdout.strip()
-        == "dev-libs/redundantbracketdepspkg-1.0 is already installed; nothing to do"
-    )
+    assert rust.stdout.strip() == ""
 
 
 def test_changed_deps_json_includes_the_changed_deps_field(emerge_binary, fixture_env):
@@ -10588,7 +10552,7 @@ def test_without_changed_deps_a_dependency_change_is_never_detected(emerge_binar
         fixture_env,
     )
     assert result.returncode == 0
-    assert result.stdout.strip() == "dev-libs/changeddepspkg-1.0 is already installed; nothing to do"
+    assert result.stdout.strip() == ""
 
 
 def test_changed_slot_reinstalls_a_package_whose_vdb_slot_differs_from_the_current_ebuild(
@@ -10662,7 +10626,7 @@ def test_without_changed_slot_a_slot_change_is_never_detected(emerge_binary, fix
         fixture_env,
     )
     assert result.returncode == 0
-    assert result.stdout.strip() == "dev-libs/changedslotpkg-1.0 is already installed; nothing to do"
+    assert result.stdout.strip() == ""
 
 
 def test_without_with_test_deps_a_test_gated_dependency_is_never_pulled_in(
@@ -10810,9 +10774,8 @@ def test_onlydeps_on_an_already_installed_atom_prints_nothing(emerge_binary, fix
     """dev-libs/samepkg is already installed, so it has no dependencies
     ever walked regardless of --onlydeps (unaffected: an AlreadyInstalled
     package's own dependencies are already presumed satisfied, same as
-    without --onlydeps) -- and --onlydeps suppresses its own "already
-    installed; nothing to do" line too, so the whole run prints nothing
-    at all, distinct from a genuine no-op."""
+    without --onlydeps). An already-satisfied package is omitted from the
+    merge list, so `emerge -p` prints nothing at all."""
     result = _run(
         [str(emerge_binary)], ["--pretend", "--onlydeps", "dev-libs/samepkg"], fixture_env
     )
@@ -10855,7 +10818,7 @@ def test_noreplace_restores_the_real_avoid_update_shortcut(emerge_binary, fixtur
         [str(emerge_binary)], ["--pretend", "--noreplace", "dev-libs/upgradepkg"], fixture_env
     )
     assert result.returncode == 0
-    assert result.stdout == "dev-libs/upgradepkg-1.0 is already installed; nothing to do\n"
+    assert result.stdout == ""
 
 
 def test_selective_n_cancels_selective_even_when_update_would_have_set_it(
@@ -10877,7 +10840,7 @@ def test_selective_n_cancels_selective_even_when_update_would_have_set_it(
         [str(emerge_binary)], ["--pretend", "--update", "dev-libs/samepkg"], fixture_env
     )
     assert with_update_alone.returncode == 0
-    assert with_update_alone.stdout == 'dev-libs/samepkg-1.0 is already installed; nothing to do\n'
+    assert with_update_alone.stdout == ''
 
     with_selective_cancelled = _run(
         [str(emerge_binary)],
@@ -10936,7 +10899,8 @@ def test_without_deep_an_already_installed_packages_own_deps_stay_unwalked(
     dev-libs/newpkg (New) -- without --deep, real portage's own default
     (deep=0) never walks an already-installed package's own further
     dependencies, at any depth, so neither deeppkg2 nor newpkg ever
-    appears here, only deeppkg's own top-level "nothing to do" line.
+    appears here, and deeppkg itself (AlreadyInstalled) is omitted, so
+    `emerge -p` prints nothing.
     --noreplace keeps deeppkg itself AlreadyInstalled (see
     resolve_pretend's own doc comment, portage-repo, on real portage's
     own "selective" gap for a bare top-level atom) -- --deep's own
@@ -10947,7 +10911,7 @@ def test_without_deep_an_already_installed_packages_own_deps_stay_unwalked(
         [str(emerge_binary)], ["--pretend", "--noreplace", "dev-libs/deeppkg"], fixture_env
     )
     assert result.returncode == 0
-    assert result.stdout == "dev-libs/deeppkg-1.0 is already installed; nothing to do\n"
+    assert result.stdout == ""
 
 
 def test_deep_walks_the_whole_already_installed_chain(emerge_binary, fixture_env):
@@ -10968,7 +10932,6 @@ def test_deep_walks_the_whole_already_installed_chain(emerge_binary, fixture_env
     assert result.returncode == 0
     assert result.stdout.splitlines() == [
         '[ebuild  N     ] dev-libs/newpkg-1.0 ',
-        'dev-libs/deeppkg-1.0 is already installed; nothing to do',
     ]
 
 
@@ -10984,7 +10947,6 @@ def test_deep_short_alias_bundled_with_pretend(emerge_binary, fixture_env):
     assert result.returncode == 0
     assert result.stdout.splitlines() == [
         '[ebuild  N     ] dev-libs/newpkg-1.0 ',
-        'dev-libs/deeppkg-1.0 is already installed; nothing to do',
     ]
 
 
@@ -11005,7 +10967,7 @@ def test_deep_bounded_depth_stops_short_of_the_full_chain(emerge_binary, fixture
         fixture_env,
     )
     assert bounded_one.returncode == 0
-    assert bounded_one.stdout == 'dev-libs/deeppkg-1.0 is already installed; nothing to do\n'
+    assert bounded_one.stdout == ''
 
     bounded_two = _run(
         [str(emerge_binary)],
@@ -11015,7 +10977,6 @@ def test_deep_bounded_depth_stops_short_of_the_full_chain(emerge_binary, fixture
     assert bounded_two.returncode == 0
     assert bounded_two.stdout.splitlines() == [
         '[ebuild  N     ] dev-libs/newpkg-1.0 ',
-        'dev-libs/deeppkg-1.0 is already installed; nothing to do',
     ]
 
 
@@ -11172,7 +11133,6 @@ def test_installed_consumer_version_bound_blocks_an_upgrade(
     assert rust.stdout == python.stdout
     assert rust.stderr == python.stderr
     assert rust.stdout.splitlines() == [
-        "dev-libs/revdeptarget-1.0 is already installed; nothing to do",
     ]
 
 
@@ -11388,7 +11348,7 @@ def test_deep_equals_zero_matches_not_passing_deep_at_all(emerge_binary, fixture
         fixture_env,
     )
     assert result.returncode == 0
-    assert result.stdout == "dev-libs/deeppkg-1.0 is already installed; nothing to do\n"
+    assert result.stdout == ""
 
 
 def test_deep_rejects_a_negative_inline_value(emerge_binary, fixture_env):
@@ -11422,7 +11382,7 @@ def test_deep_is_ignored_when_nodeps_disables_the_dependency_walk_entirely(
         fixture_env,
     )
     assert result.returncode == 0
-    assert result.stdout == "dev-libs/deeppkg-1.0 is already installed; nothing to do\n"
+    assert result.stdout == ""
 
 
 def test_exclude_leaves_an_already_installed_package_alone_even_with_update(
@@ -11439,7 +11399,7 @@ def test_exclude_leaves_an_already_installed_package_alone_even_with_update(
         fixture_env,
     )
     assert result.returncode == 0
-    assert result.stdout == "dev-libs/upgradepkg-1.0 is already installed; nothing to do\n"
+    assert result.stdout == ""
 
 
 def test_exclude_matches_via_a_wildcard_atom_too(emerge_binary, fixture_env):
@@ -11452,7 +11412,7 @@ def test_exclude_matches_via_a_wildcard_atom_too(emerge_binary, fixture_env):
         fixture_env,
     )
     assert result.returncode == 0
-    assert result.stdout == "dev-libs/upgradepkg-1.0 is already installed; nothing to do\n"
+    assert result.stdout == ""
 
 
 def test_exclude_short_alias_bundled_with_pretend(emerge_binary, fixture_env):
@@ -11466,7 +11426,7 @@ def test_exclude_short_alias_bundled_with_pretend(emerge_binary, fixture_env):
         fixture_env,
     )
     assert result.returncode == 0
-    assert result.stdout == "dev-libs/upgradepkg-1.0 is already installed; nothing to do\n"
+    assert result.stdout == ""
 
 
 def test_exclude_does_not_affect_a_non_matching_package(emerge_binary, fixture_env):
@@ -11539,7 +11499,7 @@ def test_exclude_repeated_occurrences_and_space_separated_values_both_accumulate
         fixture_env,
     )
     assert repeated.returncode == 0
-    assert repeated.stdout == "dev-libs/upgradepkg-1.0 is already installed; nothing to do\n"
+    assert repeated.stdout == ""
 
     space_separated = _run(
         [str(emerge_binary)],
@@ -11553,7 +11513,7 @@ def test_exclude_repeated_occurrences_and_space_separated_values_both_accumulate
         fixture_env,
     )
     assert space_separated.returncode == 0
-    assert space_separated.stdout == "dev-libs/upgradepkg-1.0 is already installed; nothing to do\n"
+    assert space_separated.stdout == ""
 
 
 def test_exclude_inline_equals_form_and_missing_argument(emerge_binary, fixture_env):
@@ -11563,7 +11523,7 @@ def test_exclude_inline_equals_form_and_missing_argument(emerge_binary, fixture_
         fixture_env,
     )
     assert result.returncode == 0
-    assert result.stdout == "dev-libs/upgradepkg-1.0 is already installed; nothing to do\n"
+    assert result.stdout == ""
 
     missing_arg = _run([str(emerge_binary)], ["--pretend", "--exclude"], fixture_env)
     assert missing_arg.returncode == 2
@@ -11686,9 +11646,9 @@ def test_json_provenance_is_all_null_when_nothing_special_was_needed(emerge_bina
 
 
 def test_json_requested_reflects_top_level_vs_dependency(emerge_binary, fixture_env):
-    """--json's own "requested" field, unlike the plain-text loop's
-    "already installed; nothing to do" line, is available for every
-    entry regardless of outcome -- true only for dev-libs/withdeps
+    """--json's own "requested" field is available for every entry
+    regardless of outcome (including AlreadyInstalled, which the
+    plain-text merge list omits) -- true only for dev-libs/withdeps
     itself, false for everything it pulls in."""
     result = _run(
         [str(emerge_binary)], ["--pretend", "--json", "dev-libs/withdeps"], fixture_env

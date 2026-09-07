@@ -18459,15 +18459,13 @@ def run(args):
             emit(field(replace=True), outcome[1])
             print_blockers(category, package, outcome[1], blockers)
         elif tag == "already_installed":
-            # Already-satisfied dependencies aren't shown, matching real
-            # emerge's usual "don't clutter the list" behavior -- only a
-            # directly-requested (top-level) atom gets its own
-            # "is already installed; nothing to do" line, and --onlydeps
-            # suppresses that too, same as every other outcome above.
-            if (category, package) in top_level_pkgs and not onlydeps_suppressed:
-                print(
-                    f"{indent}{category}/{package}-{outcome[1]} is already installed; nothing to do"
-                )
+            # Nothing on stdout: real emerge -p / -pu simply omits an
+            # already-satisfied package from the merge list, whether it
+            # was reached as a dependency or requested directly. Portuale
+            # used to print a per-package "is already installed" notice
+            # for a top-level atom; it polluted `emerge -puD @world` and
+            # matched nothing in real, so it was dropped.
+            pass
         else:
             print(
                 f'!!! no visible ebuild for dependency "{category}/{package}"',
