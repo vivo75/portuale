@@ -203,6 +203,33 @@ pub(crate) fn record_installed_slot_collision(
     installed_node_slot
 }
 
+/// The values [`dedup_repeat_visit`] reads from its caller.
+pub(crate) struct DedupRepeatVisitArgs<'a> {
+    pub(crate) key: &'a (String, String),
+    pub(crate) installed_node_slot: Option<String>,
+    pub(crate) item_targets_running_root: bool,
+    pub(crate) state: &'a mut PassState,
+    pub(crate) outcome: &'a PretendOutcome,
+    pub(crate) bp: &'a BacktrackParams,
+    pub(crate) unevaluated_atom: &'a Option<String>,
+    pub(crate) current_atom: &'a str,
+    pub(crate) ctx: &'a ResolveCtx<'a>,
+    pub(crate) config: &'a Config,
+    pub(crate) owner: Option<&'a (String, String)>,
+}
+
+/// The values [`enqueue_installed_deps`] reads from its caller.
+pub(crate) struct EnqueueInstalledDepsArgs<'a> {
+    pub(crate) outcome: &'a PretendOutcome,
+    pub(crate) ctx: &'a ResolveCtx<'a>,
+    pub(crate) depth: u32,
+    pub(crate) atom_root: &'a Path,
+    pub(crate) key: &'a (String, String),
+    pub(crate) state: &'a mut PassState,
+    pub(crate) config: &'a Config,
+    pub(crate) union_constraints: &'a HashMap<(String, String), Vec<String>>,
+}
+
 /// What [`compute_nvc_suggestions`] hands back to its caller.
 pub(crate) struct NvcSuggestionsOut {
     pub(crate) keyword_suggestion: Option<(String, String)>,
@@ -272,6 +299,18 @@ pub(crate) fn compute_nvc_suggestions(args: ComputeNvcSuggestionsArgs<'_>) -> Nv
         use_suggestion,
         parent_use_suggestion,
     }
+}
+
+/// The values [`record_miss_disclosure`] reads from its caller.
+pub(crate) struct RecordMissDisclosureArgs<'a> {
+    pub(crate) outcome: &'a PretendOutcome,
+    pub(crate) unevaluated_atom: &'a Option<String>,
+    pub(crate) current_atom: &'a str,
+    pub(crate) key: &'a (String, String),
+    pub(crate) state: &'a mut PassState,
+    pub(crate) ctx: &'a ResolveCtx<'a>,
+    pub(crate) config: &'a Config,
+    pub(crate) owner: Option<&'a (String, String)>,
 }
 
 /// The values [`push_unresolved_entry`] reads from its caller.
