@@ -555,51 +555,35 @@ pub fn extract_binpkg(
         .file_name()
         .and_then(|n| n.to_str())
         .unwrap_or_default();
-    let is_gpkg = name.ends_with(".gpkg.tar");
-    let metadata = if is_gpkg {
+    if name.ends_with(".gpkg.tar") {
         // Real `_verify_binpkg`: the Manifest digest check runs before
         // anything is unpacked for the merge.
         verify_gpkg_manifest(binpkg_path)?;
         extract_gpkg_member(binpkg_path, "image", image_dest)?;
-        read_gpkg_metadata(binpkg_path)?
-    } else {
-        extract_xpak_image(binpkg_path, image_dest)?;
-        read_xpak_metadata(binpkg_path)?
-    };
+        // Real `bintree.dbapi.unpack_metadata` -> `gpkg().unpack_metadata`:
+        // every `metadata/` member extracted **verbatim** into build-info.
+        // Not a scalar parse + reserialize -- that lost `environment.bz2`
+        // entirely (`read_gpkg_metadata` skips a non-UTF-8 member) and
+        // turned every empty field (`DEBUGBUILD`) into a stray `"\n"`.
+        extract_gpkg_member(binpkg_path, "metadata", build_info_dest)?;
+        return Ok(());
+    }
 
-    let mut non_scalar: Vec<String> = Vec::new();
+    // xpak (`.tbz2`/`.xpak`): the image tarball prefix, then the XPAK
+    // trailer's scalar segments + the two raw members.
+    extract_xpak_image(binpkg_path, image_dest)?;
+    let metadata = read_xpak_metadata(binpkg_path)?;
     for (key, value) in &metadata {
         if key == "environment.bz2" || key.ends_with(".ebuild") {
-            non_scalar.push(key.clone());
+            if let Some(bytes) = read_xpak_member_raw(binpkg_path, key)? {
+                fs::write(build_info_dest.join(key), bytes)
+                    .map_err(|e| format!("{}: {e}", build_info_dest.join(key).display()))?;
+            }
             continue;
         }
         let dest = build_info_dest.join(key);
         fs::write(&dest, format!("{}\n", value.trim()))
             .map_err(|e| format!("{}: {e}", dest.display()))?;
-    }
-
-    // The raw bytes of the two non-scalar members (verbatim, no trim / no
-    // lossy UTF-8 round-trip). gpkg carries them as real files inside the
-    // `metadata.tar`; xpak needs a targeted segment read.
-    if !non_scalar.is_empty() {
-        if is_gpkg {
-            let md = ScratchDir::new("gpkg-nonscalar")?;
-            extract_gpkg_member(binpkg_path, "metadata", md.path())?;
-            for key in &non_scalar {
-                let src = md.path().join("metadata").join(key);
-                if src.is_file() {
-                    fs::copy(&src, build_info_dest.join(key))
-                        .map_err(|e| format!("{}: {e}", src.display()))?;
-                }
-            }
-        } else {
-            for key in &non_scalar {
-                if let Some(bytes) = read_xpak_member_raw(binpkg_path, key)? {
-                    fs::write(build_info_dest.join(key), bytes)
-                        .map_err(|e| format!("{}: {e}", build_info_dest.join(key).display()))?;
-                }
-            }
-        }
     }
     Ok(())
 }
@@ -714,7 +698,22 @@ fn extract_gpkg_member(gpkg_path: &Path, want: &str, dest: &Path) -> Result<(), 
             }
         }
     }
-    run_tar(&["-xpf", &lossy(&inner_tar), "-C", &lossy(dest)])
+    // Real `gpkg.tar_safe_extract.extractall(dest)`: the inner tarball's
+    // members all live under a single `<want>/` top-level directory
+    // (real `gpkg._add_data`: `image_tar.add(root_dir, "image",
+    // recursive=True)`), and portage strips it -- it extracts to a temp
+    // dir and moves `<want>/*` into `dest`. `--strip-components=1` is the
+    // same strip: the format guarantees the one prefix component, so the
+    // members become `usr/...` / `environment.bz2` directly. Without it
+    // every path in the merged package's vdb `CONTENTS` was recorded as
+    // `/image/...`, which breaks unmerge (portuale's and real portage's).
+    run_tar(&[
+        "-xpf",
+        &lossy(&inner_tar),
+        "-C",
+        &lossy(dest),
+        "--strip-components=1",
+    ])
 }
 
 /// Real `bintree._populate_local`'s own default (non-`FEATURES=
@@ -1193,10 +1192,14 @@ mod tests {
             &bi,
         )
         .expect("gpkg extract succeeds");
-        // The gpkg fixture's image is non-empty and its metadata carries
-        // the same scalar keys as any binpkg.
-        assert!(image.is_dir());
-        assert!(bi.join("SLOT").is_file());
+        // The inner `image/` and `metadata/` top-level dirs real's
+        // `tar_safe_extract` strips are stripped here too -- members land
+        // directly, not one level deep. A missing strip is what made the
+        // merged vdb `CONTENTS` record every path as `/image/...`.
+        assert!(image.join("hello.txt").is_file(), "image prefix stripped");
+        assert!(!image.join("image").exists(), "no leftover image/ dir");
+        assert!(bi.join("SLOT").is_file(), "metadata prefix stripped");
+        assert!(!bi.join("metadata").exists(), "no leftover metadata/ dir");
         let _ = fs::remove_dir_all(&tmp);
     }
 

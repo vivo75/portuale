@@ -3750,7 +3750,15 @@ fn run_resume(
     }
 
     println!(">>> Resuming merge of {} package(s)...", entries.len());
-    let merge_options = ebuild_merge::MergeOptions::from_env(shell, debug);
+    let mut merge_options = ebuild_merge::MergeOptions::from_env(shell, debug);
+    // Real `preinst_mask()`: config-resolved `INSTALL_MASK` + the
+    // `no{man,info,doc}` `FEATURES` fold (the env read `from_env` did is
+    // the `ebuild <file> merge` fallback -- override it here like the
+    // non-resume `emerge` path does).
+    (
+        merge_options.install_mask,
+        merge_options.install_mask_prunes_usr_share,
+    ) = config_install_mask(config);
     // An all-source resume list keeps going through `run_source_merge`
     // (full `--jobs`/`--load-average` scheduler support); a mergelist
     // with at least one resumed binary entry (real portage's own resume
@@ -5528,6 +5536,30 @@ pub(crate) const BUILD_VARS: &[&str] = &[
 /// `make.defaults` + the `env` layer, all folded into
 /// `Config::other_vars`). An unset var contributes nothing, so
 /// `phase_env_vars`' own absence stands.
+/// Real `preinst_mask()` (`bin/misc-functions.sh`) driven by the
+/// resolved config rather than the process env: `make.conf`/profile
+/// `INSTALL_MASK` folded with the `no{man,info,doc}` `FEATURES` tokens.
+/// `MergeOptions::from_env` reads the same two from the environment as
+/// its `ebuild <file> merge` fallback; the `emerge <atom>` production
+/// paths call this to override both fields with the real config values.
+fn config_install_mask(config: &portage_profile::Config) -> (String, bool) {
+    let features: Vec<String> = config
+        .resolved_incremental("FEATURES")
+        .or_else(|| {
+            config
+                .other_vars
+                .get("FEATURES")
+                .map(|f| f.split_whitespace().map(String::from).collect())
+        })
+        .unwrap_or_default();
+    let configured = config
+        .other_vars
+        .get("INSTALL_MASK")
+        .cloned()
+        .unwrap_or_default();
+    crate::install_mask::resolve(&configured, &features)
+}
+
 fn build_config_env(config: &portage_profile::Config) -> Vec<(String, String)> {
     BUILD_VARS
         .iter()
@@ -10534,6 +10566,14 @@ pub fn run(args: &[String]) -> ExitCode {
         // `phase_env_vars` itself), and `FEATURES` stays out (portuale
         // models it via its own `feature_enabled`, forcing `""` here).
         merge_options.build_env = build_config_env(&config);
+        // Real `preinst_mask()`: `INSTALL_MASK` + the `no{man,info,doc}`
+        // `FEATURES` fold, from the resolved config (not the process
+        // env). Applied to every merged image before `CONTENTS` is
+        // recorded -- see `ebuild_merge::apply_install_mask`.
+        (
+            merge_options.install_mask,
+            merge_options.install_mask_prunes_usr_share,
+        ) = config_install_mask(&config);
         // Real `_grab_pkg_env` into `configdict["pkg"]`: a `package.env`
         // entry matching a build-bound package layers its env file's
         // build vars over the run-wide set above.

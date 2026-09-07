@@ -328,6 +328,24 @@ pub struct MergeOptions {
     /// `unmerge`, `emerge -C`, and every test -- terminal output there
     /// already matches what real portage's own foreground run does.
     pub log_file: Option<PathBuf>,
+    /// Real `INSTALL_MASK` as `preinst_mask()` (`bin/misc-functions.sh`)
+    /// resolves it: the configured `INSTALL_MASK` (`make.conf`/profile/
+    /// bashrc) with the `no{man,info,doc}` `FEATURES` tokens folded in
+    /// (each appends `/usr/share/<man|info|doc>`). Real `dblink.
+    /// treewalk()` applies this to the staged image -- deleting every
+    /// matched path -- *before* `CONTENTS` is recorded and before
+    /// collision-protect, so a masked file never lands in `${ROOT}` nor
+    /// in the vdb `CONTENTS`. Written verbatim into the vdb entry's own
+    /// `INSTALL_MASK` file too (real copies `build-info/INSTALL_MASK`
+    /// wholesale). Empty (`Default`) = nothing masked, no `INSTALL_MASK`
+    /// file written. See [`crate::install_mask`].
+    pub install_mask: String,
+    /// Whether any of `nodoc`/`noman`/`noinfo` is in `FEATURES` -- real
+    /// `dblink.treewalk()` then also `rmdir`s a now-empty `ED/usr/share`
+    /// after applying the mask. `false` (`Default`) leaves an emptied
+    /// `usr/share` in place, exactly as real does when the mask emptied
+    /// it for some other reason.
+    pub install_mask_prunes_usr_share: bool,
 }
 
 impl Default for MergeOptions {
@@ -350,6 +368,8 @@ impl Default for MergeOptions {
             build_env: Vec::new(),
             package_env_vars: Vec::new(),
             log_file: None,
+            install_mask: String::new(),
+            install_mask_prunes_usr_share: false,
         }
     }
 }
@@ -372,6 +392,13 @@ impl MergeOptions {
                 .map(|f| f.split_whitespace().any(|t| t == tok))
                 .unwrap_or(false)
         };
+        let env_features: Vec<String> = std::env::var("FEATURES")
+            .map(|f| f.split_whitespace().map(String::from).collect())
+            .unwrap_or_default();
+        let (install_mask, install_mask_prunes_usr_share) = crate::install_mask::resolve(
+            &std::env::var("INSTALL_MASK").unwrap_or_default(),
+            &env_features,
+        );
         Self {
             debug,
             shell,
@@ -396,6 +423,14 @@ impl MergeOptions {
             build_env: Vec::new(),
             package_env_vars: Vec::new(),
             log_file: d.log_file,
+            // Real `preinst_mask()`: configured `INSTALL_MASK` + the
+            // `no{man,info,doc}` `FEATURES` fold. The `emerge <atom>`
+            // production path overrides both fields from the resolved
+            // `Config` (make.conf `INSTALL_MASK`/`FEATURES`) right after
+            // this; the env read is the `ebuild <file> merge`/`qmerge`
+            // fallback, matching every other var here.
+            install_mask,
+            install_mask_prunes_usr_share,
         }
     }
 }
@@ -1717,6 +1752,118 @@ fn write_vdb_entry(
     )
 }
 
+/// Real `dblink.treewalk()`'s `preinst_mask` + `install_mask_dir` step
+/// (`vartree.py:4581-4610`, run before `_collision_protect` and before a
+/// single file is copied to `${ROOT}`): apply `options.install_mask` to
+/// the staged image `d`, deleting every matched path, then -- when a
+/// `no{man,info,doc}` `FEATURE` folded a `/usr/share/*` entry in --
+/// `rmdir` a now-empty `<d>/usr/share`. The resolved mask is also
+/// written to `<build_info>/INSTALL_MASK` (real `preinst_mask` writes it
+/// there; `write_vdb_entry_from_dir` then copies it into the vdb
+/// wholesale like every other build-info file). A no-op with an empty
+/// mask -- and then no `INSTALL_MASK` file, matching real's own
+/// `[[ -n ${x} ]] && echo … > INSTALL_MASK`.
+fn apply_install_mask(d: &Path, build_info: &Path, options: &MergeOptions) -> Result<(), String> {
+    let value = options.install_mask.trim();
+    if value.is_empty() {
+        return Ok(());
+    }
+    if build_info.is_dir() {
+        std::fs::write(build_info.join("INSTALL_MASK"), format!("{value}\n"))
+            .map_err(|e| format!("{}: {e}", build_info.join("INSTALL_MASK").display()))?;
+    }
+    let mask = crate::install_mask::InstallMask::new(value);
+    if mask.is_empty() {
+        return Ok(());
+    }
+    crate::install_mask::install_mask_dir(d, &mask)
+        .map_err(|e| format!("{}: install_mask_dir: {e}", d.display()))?;
+    if options.install_mask_prunes_usr_share {
+        let _ = std::fs::remove_dir(d.join("usr/share"));
+    }
+    Ok(())
+}
+
+/// Real `vartree.py`'s `_METADATA_FILE_FIELDS` (`lib/portage/dbapi/
+/// vartree.py:78-104`): the single-line vdb fields real folds into the
+/// consolidated `metadata` file. `CONTENTS`/`NEEDED*` are line-oriented
+/// and deliberately excluded (real `_in_metadata_file()`).
+const METADATA_FILE_FIELDS: &[&str] = &[
+    "BDEPEND",
+    "BUILD_ID",
+    "BUILD_TIME",
+    "CHOST",
+    "COUNTER",
+    "DEFINED_PHASES",
+    "DEPEND",
+    "DESCRIPTION",
+    "EAPI",
+    "HOMEPAGE",
+    "IDEPEND",
+    "IUSE",
+    "KEYWORDS",
+    "LICENSE",
+    "PDEPEND",
+    "PROPERTIES",
+    "PROVIDES",
+    "RDEPEND",
+    "REQUIRES",
+    "RESTRICT",
+    "SLOT",
+    "USE",
+    "repository",
+];
+
+/// Real `_write_metadata_file` + `_stamp_metadata_file` (`vartree.py:
+/// 188-229`), driven by `_consolidate_to_metadata_file`'s own
+/// `not delete_individual` path (portuale always keeps the per-field
+/// files, matching real's default): every [`METADATA_FILE_FIELDS`] file
+/// present in `dbdir`, whitespace-normalized (`" ".join(v.split())`),
+/// sorted, under a `#format=1` header, then a `#dir_mtime=<st_mtime_ns>`
+/// line **appended** last so it records the directory's mtime *after*
+/// the body write (real's reader validates the two against each other).
+/// A no-op when `dbdir` holds none of the fields.
+fn write_consolidated_metadata_file(dbdir: &Path) -> Result<(), String> {
+    let mut data: Vec<(String, String)> = Vec::new();
+    for &field in METADATA_FILE_FIELDS {
+        let path = dbdir.join(field);
+        let Ok(raw) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        data.push((
+            field.to_string(),
+            raw.split_whitespace().collect::<Vec<_>>().join(" "),
+        ));
+    }
+    if data.is_empty() {
+        return Ok(());
+    }
+    data.sort();
+
+    let metadata_path = dbdir.join("metadata");
+    let mut body = String::from("#format=1\n");
+    for (k, v) in &data {
+        body.push_str(&format!("{k}={v}\n"));
+    }
+    std::fs::write(&metadata_path, &body)
+        .map_err(|e| format!("{}: {e}", metadata_path.display()))?;
+
+    // Real appends `#dir_mtime=` in a separate `open(..., "a")` step,
+    // *after* the body is on disk, so `st_mtime_ns` reflects the body
+    // write (the last dir change) and the append itself -- no new dir
+    // entry -- leaves it untouched.
+    let st = std::fs::metadata(dbdir).map_err(|e| format!("{}: {e}", dbdir.display()))?;
+    let dir_mtime_ns = st.mtime() as i128 * 1_000_000_000 + st.mtime_nsec() as i128;
+    let mut f = std::fs::OpenOptions::new()
+        .append(true)
+        .open(&metadata_path)
+        .map_err(|e| format!("{}: {e}", metadata_path.display()))?;
+    use std::io::Write as _;
+    writeln!(f, "#dir_mtime={dir_mtime_ns}")
+        .map_err(|e| format!("{}: {e}", metadata_path.display()))?;
+    Ok(())
+}
+
 /// The `env`-free core of `write_vdb_entry`: `category`/`pf` name the
 /// entry, `build_info_dir` holds the files to copy wholesale. Shared with
 /// `emerge_binmerge` (a binpkg merge has no `Environment`).
@@ -1768,6 +1915,17 @@ pub(crate) fn write_vdb_entry_from_dir(
         .map_err(|e| format!("{}: {e}", tmp_dir.join("CONTENTS").display()))?;
     std::fs::write(tmp_dir.join("COUNTER"), counter.to_string())
         .map_err(|e| format!("{}: {e}", tmp_dir.join("COUNTER").display()))?;
+
+    // Real `_consolidate_to_metadata_file(self.dbtmpdir)` (`vartree.py:
+    // 5231`): the last write into the temp vdb dir before the rename --
+    // fold every per-field file real's `_in_metadata_file()` accepts
+    // into one `metadata` file. Its `#dir_mtime=` trailer records the
+    // dir's `st_mtime_ns` and real's reader rejects the file if the dir
+    // changed afterwards, so it must come after CONTENTS/COUNTER above
+    // and the `#dir_mtime=` line must be *appended* (a plain write, no
+    // new dir entry) after the body is on disk. The rename below does
+    // not touch the dir's own mtime, so the value survives the move.
+    write_consolidated_metadata_file(&tmp_dir)?;
 
     if final_dir.exists() {
         std::fs::remove_dir_all(&final_dir).map_err(|e| format!("{}: {e}", final_dir.display()))?;
@@ -2445,6 +2603,12 @@ fn merge_after_install(
     // own doc comment.
     let installed_instance_pf = installed_instance_pf(root, &env.category, &env.split.pn, &slot);
 
+    // Real `dblink.treewalk()`'s `preinst_mask` + `install_mask_dir`
+    // step, run before `_collision_protect` and before any file is
+    // copied -- a masked path never reaches `${ROOT}` nor the vdb
+    // `CONTENTS`. See `apply_install_mask`.
+    apply_install_mask(&env.d(), &env.build_info(), options)?;
+
     // Real `merge()`'s own ordering: the collision-protect abort check
     // (`_collision_protect`) happens before `pkg_preinst` ever runs, not
     // after -- confirmed by reading it, the real `EbuildPhase(phase=
@@ -2956,6 +3120,18 @@ pub fn merge_binpkg(
     let build_info = builddir.join("build-info");
     crate::binpkg::extract_binpkg(binpkg_path, &image, &build_info)?;
 
+    // Real `_emerge/Binpkg._start_task`: "Store the md5sum in the vdb."
+    // It prefers the `MD5` field from the package index, else
+    // `perform_md5(pkg_path)`. Neither xpak nor gpkg carries `BINPKGMD5`
+    // inside itself -- it's the digest of the *whole* binpkg file, which
+    // real records so a later `emerge -k` / index rebuild can tell a
+    // still-current instance from a rebuilt one. Written into build-info
+    // so `write_vdb_entry_from_dir` copies it into the vdb like every
+    // other build-info file.
+    let binpkg_md5 = md5_hex(binpkg_path)?;
+    std::fs::write(build_info.join("BINPKGMD5"), format!("{binpkg_md5}\n"))
+        .map_err(|e| format!("{}: {e}", build_info.join("BINPKGMD5").display()))?;
+
     // Real `_emerge/Binpkg`: `pkg_setup`/`pkg_preinst`/`pkg_postinst`
     // run from the extracted `<pf>.ebuild` + the `bunzip2`'d
     // `environment.bz2` (see `ebuild_phases::run_phase_from_saved_env`).
@@ -3002,6 +3178,14 @@ pub fn merge_binpkg(
     if setup_status != 0 {
         return Ok(setup_status);
     }
+
+    // Real `dblink.treewalk()`: `preinst_mask` + `install_mask_dir` run
+    // before `_collision_protect` and before any file is copied -- so a
+    // masked path (e.g. `/usr/share/info` under `FEATURES=noinfo`) never
+    // reaches `${ROOT}` and never shows up in the vdb `CONTENTS`. The
+    // resolved `INSTALL_MASK` also lands in `build-info`, so
+    // `write_vdb_entry_from_dir` copies it into the vdb entry.
+    apply_install_mask(&image, &build_info, options)?;
 
     // Real `dblink.merge()`'s own `_collision_protect` check, run before
     // `pkg_preinst` and the file copy (real `treewalk()` ordering) --
@@ -4108,6 +4292,45 @@ mod tests {
         ));
         std::fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    #[test]
+    fn apply_install_mask_deletes_matched_paths_and_records_the_mask() {
+        let tmp = tempdir();
+        let image = tmp.join("image");
+        let build_info = tmp.join("build-info");
+        std::fs::create_dir_all(image.join("usr/share/info")).unwrap();
+        std::fs::create_dir_all(image.join("usr/bin")).unwrap();
+        std::fs::create_dir_all(&build_info).unwrap();
+        std::fs::write(image.join("usr/share/info/foo.info"), b"x").unwrap();
+        std::fs::write(image.join("usr/bin/foo"), b"x").unwrap();
+
+        let options = MergeOptions {
+            install_mask: "/usr/share/info".to_string(),
+            install_mask_prunes_usr_share: true,
+            ..MergeOptions::default()
+        };
+        apply_install_mask(&image, &build_info, &options).unwrap();
+
+        assert!(!image.join("usr/share/info").exists(), "masked dir removed");
+        assert!(
+            !image.join("usr/share").exists(),
+            "emptied usr/share pruned"
+        );
+        assert!(image.join("usr/bin/foo").is_file(), "unmasked file kept");
+        assert_eq!(
+            std::fs::read_to_string(build_info.join("INSTALL_MASK"))
+                .unwrap()
+                .trim(),
+            "/usr/share/info"
+        );
+
+        // Empty mask: no-op, no INSTALL_MASK file.
+        let bi2 = tmp.join("bi2");
+        std::fs::create_dir_all(&bi2).unwrap();
+        apply_install_mask(&image, &bi2, &MergeOptions::default()).unwrap();
+        assert!(!bi2.join("INSTALL_MASK").exists());
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 
     #[test]

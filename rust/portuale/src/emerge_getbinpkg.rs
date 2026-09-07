@@ -196,8 +196,14 @@ fn merge_one_binary_entry(
             pkgdir,
         )?
     } else {
-        resolve_local_binpkg(pkgdir, &entry.category, &entry.package, &version)
-            .ok_or_else(|| format!("{cp}-{version}: no binpkg file under {}", pkgdir.display()))?
+        resolve_local_binpkg(
+            pkgdir,
+            &entry.category,
+            &entry.package,
+            &version,
+            entry.build_id.as_deref(),
+        )
+        .ok_or_else(|| format!("{cp}-{version}: no binpkg file under {}", pkgdir.display()))?
     };
 
     println!(">>> Merging binary package {cp}-{version}...");
@@ -208,22 +214,62 @@ fn merge_one_binary_entry(
     Ok(())
 }
 
-/// `<pkgdir>/<cat>/<pf>.{tbz2,gpkg.tar}`, whichever exists.
+/// The on-disk binpkg for `<cat>/<package>-<version>` in `$PKGDIR`.
+///
+/// Two real naming contracts (real `bintree.getname` /
+/// `_allocate_filename` vs `_allocate_filename_multi`):
+///  - single instance: `<pkgdir>/<cat>/<pf>.{tbz2,gpkg.tar}`
+///  - `FEATURES=binpkg-multi-instance`: `<pkgdir>/<cat>/<pn>/<pf>-<build_id>.{xpak,gpkg.tar}`
+///    -- a `<pn>/` subdir and a `-<build_id>` suffix.
+///
+/// A `build_id` (from the resolved candidate / `Packages` index) picks
+/// the exact multi-instance file; without one, the `<pn>/` subdir is
+/// still scanned for a `<pf>-<id>` file (an older index with no
+/// `BUILD_ID` field), preferring the highest `<id>`.
 fn resolve_local_binpkg(
     pkgdir: &Path,
     category: &str,
     package: &str,
     version: &str,
+    build_id: Option<&str>,
 ) -> Option<std::path::PathBuf> {
+    let pf = format!("{package}-{version}");
+
+    // Single-instance layout.
     for ext in ["tbz2", "gpkg.tar"] {
-        let p = pkgdir
-            .join(category)
-            .join(format!("{package}-{version}.{ext}"));
+        let p = pkgdir.join(category).join(format!("{pf}.{ext}"));
         if p.is_file() {
             return Some(p);
         }
     }
-    None
+
+    // Multi-instance layout: `<cat>/<pn>/<pf>-<build_id>.<ext>`.
+    let instance_dir = pkgdir.join(category).join(package);
+    if let Some(build_id) = build_id.filter(|s| !s.is_empty()) {
+        for ext in ["gpkg.tar", "xpak"] {
+            let p = instance_dir.join(format!("{pf}-{build_id}.{ext}"));
+            if p.is_file() {
+                return Some(p);
+            }
+        }
+    }
+
+    // Fallback: any `<pf>-<id>.{gpkg.tar,xpak}` in the instance dir,
+    // highest numeric `<id>` first.
+    let mut candidates: Vec<(u64, std::path::PathBuf)> = std::fs::read_dir(&instance_dir)
+        .ok()?
+        .flatten()
+        .filter_map(|e| {
+            let name = e.file_name().into_string().ok()?;
+            let stem = name
+                .strip_suffix(".gpkg.tar")
+                .or_else(|| name.strip_suffix(".xpak"))?;
+            let id = stem.strip_prefix(&format!("{pf}-"))?;
+            Some((id.parse::<u64>().ok()?, e.path()))
+        })
+        .collect();
+    candidates.sort_by_key(|(id, _)| std::cmp::Reverse(*id));
+    candidates.into_iter().map(|(_, p)| p).next()
 }
 
 /// Fetch `<sync_uri>/<PATH>` (or the default `<cat>/<pf>.tbz2`) into
@@ -394,6 +440,89 @@ mod tests {
     }
 
     #[test]
+    fn resolve_local_binpkg_finds_the_multi_instance_layout() {
+        let tmp = tempdir();
+        let pkgdir = tmp.join("pkgdir");
+
+        // Single-instance: `<cat>/<pf>.gpkg.tar`.
+        std::fs::create_dir_all(pkgdir.join("media-fonts")).unwrap();
+        let single = pkgdir.join("media-fonts/plain-1.gpkg.tar");
+        std::fs::write(&single, b"x").unwrap();
+        assert_eq!(
+            resolve_local_binpkg(&pkgdir, "media-fonts", "plain", "1", None).as_deref(),
+            Some(single.as_path())
+        );
+
+        // Multi-instance: `<cat>/<pn>/<pf>-<build_id>.gpkg.tar` (real
+        // `_allocate_filename_multi`). This is the `noto-20260901-1.gpkg.tar`
+        // layout `resolve_local_binpkg` used to miss entirely.
+        std::fs::create_dir_all(pkgdir.join("media-fonts/noto")).unwrap();
+        let mi = pkgdir.join("media-fonts/noto/noto-20260901-1.gpkg.tar");
+        std::fs::write(&mi, b"x").unwrap();
+        assert_eq!(
+            resolve_local_binpkg(&pkgdir, "media-fonts", "noto", "20260901", Some("1")).as_deref(),
+            Some(mi.as_path()),
+            "exact build_id"
+        );
+        assert_eq!(
+            resolve_local_binpkg(&pkgdir, "media-fonts", "noto", "20260901", None).as_deref(),
+            Some(mi.as_path()),
+            "no build_id -> scan the <pn>/ subdir"
+        );
+
+        // Highest build_id wins when several instances are present.
+        std::fs::write(
+            pkgdir.join("media-fonts/noto/noto-20260901-4.gpkg.tar"),
+            b"x",
+        )
+        .unwrap();
+        assert_eq!(
+            resolve_local_binpkg(&pkgdir, "media-fonts", "noto", "20260901", None)
+                .unwrap()
+                .file_name()
+                .unwrap(),
+            "noto-20260901-4.gpkg.tar"
+        );
+
+        assert!(resolve_local_binpkg(&pkgdir, "media-fonts", "absent", "1", Some("1")).is_none());
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn merge_one_binary_entry_merges_a_multi_instance_local_gpkg() {
+        let tmp = tempdir();
+        let root = tmp.join("root");
+        let pkgdir = tmp.join("pkgdir");
+        std::fs::create_dir_all(&root).unwrap();
+        // The real gpkg fixture, placed in the multi-instance layout.
+        std::fs::create_dir_all(pkgdir.join("dev-libs/gpkgreadpkg")).unwrap();
+        std::fs::copy(
+            fixtures_root().join("pkgdir/dev-libs/gpkgreadpkg-1.0.gpkg.tar"),
+            pkgdir.join("dev-libs/gpkgreadpkg/gpkgreadpkg-1.0-1.gpkg.tar"),
+        )
+        .unwrap();
+
+        let mut entry = graph_entry("gpkgreadpkg", CandidateSource::Binary, "1.0");
+        entry.build_id = Some("1".into());
+
+        merge_one_binary_entry(
+            &entry,
+            &Config::default(),
+            &root,
+            &pkgdir,
+            &tmp.join("pt"),
+            &MergeOptions::default(),
+        )
+        .expect("multi-instance local gpkg merges");
+
+        assert!(
+            root.join("var/db/pkg/dev-libs/gpkgreadpkg-1.0/CONTENTS")
+                .is_file()
+        );
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
     fn merge_binpkg_installs_a_real_tbz2_into_the_vdb() {
         let tmp = tempdir();
         let root = tmp.join("root");
@@ -436,6 +565,98 @@ mod tests {
         // fixture's DEFINED_PHASES is `install` only, so no hook ran.
         assert!(vdb.join("environment.bz2").is_file());
         assert!(vdb.join("packagepkg-1.0.ebuild").is_file());
+
+        // Real `_consolidate_to_metadata_file`: the vdb entry carries a
+        // consolidated `metadata` file -- `#format=1` header, sorted
+        // `KEY=value` lines for the per-field files, `#dir_mtime=` last
+        // and matching the entry dir's own `st_mtime_ns` (real's reader
+        // rejects a stale value, which is what broke `emerge -C`).
+        let metadata = std::fs::read_to_string(vdb.join("metadata")).expect("metadata file");
+        assert!(metadata.starts_with("#format=1\n"), "{metadata}");
+        assert!(metadata.contains("\nSLOT=0\n"), "{metadata}");
+        assert!(
+            metadata.contains("\nRDEPEND=dev-libs/samepkg\n"),
+            "{metadata}"
+        );
+        let dir_mtime_line = metadata
+            .lines()
+            .find_map(|l| l.strip_prefix("#dir_mtime="))
+            .expect("#dir_mtime= line");
+        assert_eq!(
+            metadata.lines().last(),
+            Some(format!("#dir_mtime={dir_mtime_line}").as_str()),
+            "#dir_mtime= must be the final line"
+        );
+        {
+            use std::os::unix::fs::MetadataExt as _;
+            let st = std::fs::metadata(&vdb).unwrap();
+            let ns = st.mtime() as i128 * 1_000_000_000 + st.mtime_nsec() as i128;
+            assert_eq!(
+                dir_mtime_line,
+                ns.to_string(),
+                "recorded #dir_mtime= must equal the entry dir's st_mtime_ns"
+            );
+        }
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn merge_binpkg_gpkg_strips_the_image_prefix_and_records_binpkgmd5_and_metadata() {
+        // Regression for the broken `/var/db/pkg/<cat>/<pf>` a gpkg merge
+        // used to write: `CONTENTS` prefixed with `/image`, no
+        // `BINPKGMD5`, no consolidated `metadata` file -- all of which
+        // blocked `emerge -C` (real portage's and portuale's).
+        let tmp = tempdir();
+        let root = tmp.join("root");
+        std::fs::create_dir_all(&root).unwrap();
+        let binpkg = fixtures_root().join("pkgdir/dev-libs/gpkgreadpkg-1.0.gpkg.tar");
+
+        let status = ebuild_merge::merge_binpkg(
+            &binpkg,
+            &root,
+            &tmp.join("portage_tmpdir"),
+            &MergeOptions::default(),
+        )
+        .expect("gpkg merge succeeds");
+        assert_eq!(status, 0);
+
+        let vdb = root.join("var/db/pkg/dev-libs/gpkgreadpkg-1.0");
+        let contents = std::fs::read_to_string(vdb.join("CONTENTS")).unwrap();
+        assert!(
+            !contents.contains("/image"),
+            "CONTENTS must not carry the gpkg `image/` prefix: {contents}"
+        );
+        assert!(contents.contains(" /hello.txt "), "{contents}");
+        assert!(
+            root.join("hello.txt").is_file(),
+            "the image file merged at the real path, not under /image"
+        );
+
+        // Real `_emerge/Binpkg._start_task`: BINPKGMD5 = md5 of the whole
+        // binpkg file.
+        let want_md5 = {
+            use md5::Digest as _;
+            let mut h = md5::Md5::new();
+            h.update(std::fs::read(&binpkg).unwrap());
+            h.finalize()
+                .iter()
+                .map(|b| format!("{b:02x}"))
+                .collect::<String>()
+        };
+        assert_eq!(
+            std::fs::read_to_string(vdb.join("BINPKGMD5"))
+                .unwrap()
+                .trim(),
+            want_md5
+        );
+
+        // Consolidated metadata file present and stamped.
+        let metadata = std::fs::read_to_string(vdb.join("metadata")).expect("metadata file");
+        assert!(metadata.starts_with("#format=1\n"), "{metadata}");
+        assert!(
+            metadata.lines().last().unwrap().starts_with("#dir_mtime="),
+            "{metadata}"
+        );
         let _ = std::fs::remove_dir_all(&tmp);
     }
 

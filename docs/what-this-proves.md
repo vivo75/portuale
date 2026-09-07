@@ -14871,3 +14871,96 @@ language. ~40 contract-test assertions that used the line as a
 (`emerge -p X` on an up-to-date `X` prints nothing, exactly like real);
 the `@world`/`@system`/`--deep`/nested-set tests dropped the line from
 their expected merge-list order. `docs/running-it.md` examples updated.
+
+### gpkg binpkg merge: the vdb entry real portage's `emerge -C` accepts (2026-09-07)
+
+Reported from a live install: `portuale emerge --getbinpkg media-fonts/
+noto` wrote a `/var/db/pkg/media-fonts/noto-20260901` that real portage
+then refused to unmerge. Four fields diverged from what a real
+`emerge -k` writes (`helpers/var--db--pkg--media-fonts--noto-20260901.{ok,
+broken}` capture both):
+
+- **`CONTENTS` every line prefixed `/image`.** `extract_gpkg_member`
+  extracted the inner `image.tar` verbatim, but real `gpkg.
+  tar_safe_extract.extractall(dest)` **strips** the single `image/`
+  top-level directory the format guarantees (real `gpkg._add_data`:
+  `tar.add(root_dir, "image", recursive=True)`) — it extracts to a temp
+  dir and moves `image/*` into place. Without the strip, `merge_tree`
+  walked `<dest>/image/usr/...` and recorded `/image/usr/...` for every
+  path — which is exactly what makes real's `dblink.getcontents()` +
+  every unmerge fail to find the files. Fixed with
+  `tar --strip-components=1` (the format's one guaranteed prefix
+  component). Same strip now applied to the `metadata/` member.
+
+- **`environment.bz2` missing; `DEBUGBUILD` was a stray `"\n"`; `BUILD_ID`
+  had a trailing newline.** The gpkg merge path round-tripped metadata
+  through `read_gpkg_metadata` (a *scalar* parser that skips any non-UTF-8
+  member — i.e. `environment.bz2` — and re-serialises `""` as `"\n"`).
+  Real `bintree.dbapi.unpack_metadata` → `gpkg().unpack_metadata`
+  extracts every `metadata/` member **verbatim** into `build-info`.
+  `extract_binpkg`'s gpkg branch now does the same (`extract_gpkg_member(
+  …, "metadata", build_info)` + `return`), so `build-info` — and the vdb
+  entry `write_vdb_entry_from_dir` copies it into — is byte-identical to
+  the archive.
+
+- **`BINPKGMD5` empty.** Real `_emerge/Binpkg._start_task` ("Store the
+  md5sum in the vdb") writes `build-info/BINPKGMD5` = the md5 of the
+  *whole binpkg file* (index `MD5` field, else `perform_md5(pkg_path)`) —
+  it's never carried inside the archive. `merge_binpkg` now computes it
+  (`md5_hex(binpkg_path)`) right after extraction.
+
+- **no consolidated `metadata` file.** Real `_consolidate_to_metadata_
+  file(self.dbtmpdir)` (`vartree.py:5231`) is the *last* write into the
+  temp vdb dir before the rename: `#format=1` header, sorted
+  `KEY=value` lines for every `_METADATA_FILE_FIELDS` member (whitespace-
+  normalised), then a `#dir_mtime=<st_mtime_ns>` line **appended** last —
+  real's `_read_metadata_file` rejects the file (and every reader falls
+  back to the slow per-field scan, or in some paths errors) when the
+  recorded mtime doesn't match the directory's. `write_vdb_entry_from_
+  dir` now emits it: body written first (bumping the dir mtime), the
+  `#dir_mtime=` line appended after (a plain write — no new dir entry —
+  so the value stays true), the entry then renamed into place (a rename
+  leaves the moved dir's own mtime alone).
+
+**`INSTALL_MASK` (`/usr/share/info` for `FEATURES=noinfo`) was also
+empty**, and the masked files were merged. Real `dblink.treewalk()`
+(`vartree.py:4581-4610`) runs the `preinst_mask` misc-function (folds
+`no{man,info,doc}` into `INSTALL_MASK`, writes `build-info/INSTALL_MASK`),
+then — *before* collision-protect and before a single file is copied —
+`install_mask_dir(ED, InstallMask(...))` deletes every matched image path
+and `rmdir`s a now-empty `ED/usr/share`. New `install_mask` module ports
+`InstallMask` + `install_mask_dir` (fnmatch→regex; `*`/`?`/`[...]`), and
+`ebuild_merge::apply_install_mask` runs the step for both the binary
+(`merge_binpkg`) and source (`merge_after_install`) merge paths. The mask
+is resolved from the real config (`make.conf` `INSTALL_MASK` +
+`FEATURES`) at the `emerge` production call sites — `MergeOptions::
+from_env`'s env read is the `ebuild <file> merge` fallback.
+
+All Rust-only real-execution code — no `emerge --pretend` behaviour
+changes, so no contract-reference mirror (the `--config`/`--regen`
+precedent). New unit tests: `install_mask` module (5), `apply_install_
+mask` (1), `merge_binpkg_gpkg_strips_the_image_prefix_and_records_
+binpkgmd5_and_metadata` (1), plus the consolidated-`metadata` assertion
+folded into `merge_binpkg_installs_a_real_tbz2_into_the_vdb` and the
+prefix-strip assertions into `extract_binpkg_unpacks_a_real_gpkg_image_
+and_build_info`.
+
+**Follow-up, same day: the multi-instance `$PKGDIR` file was then not
+found.** With the vdb write fixed, `portuale emerge --getbinpkg
+media-fonts/noto` failed with `no binpkg file under /var/cache/binpkgs`
+even though `/var/cache/binpkgs/media-fonts/noto/noto-20260901-1.gpkg.tar`
+was right there. `resolve_local_binpkg` (the local-`$PKGDIR` branch of
+`merge_one_binary_entry`) only ever tried the single-instance layout
+`<cat>/<pf>.{tbz2,gpkg.tar}` — it never knew about real's
+`_allocate_filename_multi` layout `<cat>/<pn>/<pf>-<build_id>.<ext>` (a
+`<pn>/` subdir + a `-<build_id>` suffix) that `FEATURES=binpkg-multi-
+instance` writes — even though `binpkg::scan_pkgdir` has walked that
+layout for a while. Fixed: `resolve_local_binpkg` now also takes the
+resolved candidate's `build_id` (`GraphEntry::build_id`, already plumbed
+through from the `Packages` index / local scan) and checks
+`<cat>/<pn>/<pf>-<build_id>.{gpkg.tar,xpak}`, with a `<pn>/`-subdir scan
+(highest numeric `<id>` wins) as the fallback for an index with no
+`BUILD_ID` field. The remote-download branch was already correct (it uses
+the index record's `PATH`). New tests: `resolve_local_binpkg_finds_the_
+multi_instance_layout`, `merge_one_binary_entry_merges_a_multi_instance_
+local_gpkg`.
