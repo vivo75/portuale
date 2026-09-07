@@ -63,6 +63,70 @@ pub(crate) fn entry_version(e: &GraphEntry) -> Option<&str> {
     }
 }
 
+/// Arguments of [`serialize_merge_order`].
+pub(crate) struct SerializeMergeOrderArgs<'a> {
+    pub(crate) entries: &'a [GraphEntry],
+    pub(crate) top_level_atoms: &'a [String],
+    pub(crate) config: &'a portage_profile::Config,
+    pub(crate) root: &'a Path,
+    pub(crate) implicit_system_deps: bool,
+    pub(crate) repos: &'a [RepoConfig],
+    pub(crate) dynamic_deps: bool,
+    pub(crate) circular: &'a HashMap<RootCp, Vec<CircularDepChild>>,
+}
+
+/// Build the digraph, prune and bias it, schedule it, and weave portuale's own
+/// non-merge-bound entries back in. Returns a permutation of `0..entries.len()`.
+/// `implicit_system_deps` gates the bias re-sort only.
+pub(crate) fn serialize_merge_order(args: SerializeMergeOrderArgs<'_>) -> (Vec<usize>, Vec<usize>) {
+    let SerializeMergeOrderArgs {
+        entries,
+        top_level_atoms,
+        config,
+        root,
+        implicit_system_deps,
+        repos,
+        dynamic_deps,
+        circular,
+    } = args;
+    let (ext, mut g, real_n, discovery_rank) = schedule_graph(ScheduleGraphArgs {
+        entries,
+        top_level_atoms,
+        config,
+        root,
+        implicit_system_deps,
+        repos,
+        dynamic_deps,
+        circular,
+    });
+    let entries: &[GraphEntry] = &ext;
+
+    debug_dump_graph(&g, entries, top_level_atoms, root);
+
+    // Post-prune, pre-bias insertion order: the stable-sort tie-break.
+    if mo_sel_enabled() {
+        let nodes: Vec<String> = g
+            .order
+            .iter()
+            .map(|&i| mo_sel_cpv(&entries[i], g.installed[i]))
+            .collect();
+        eprintln!("MO_ORDER count={} {}", nodes.len(), nodes.join(" "));
+    }
+
+    merge_order_bias(&mut g, entries, config, implicit_system_deps);
+    let scheduled: Vec<usize> = select_nodes(&mut g, entries, root, None)
+        .into_iter()
+        .filter(|&i| i < real_n)
+        .collect();
+
+    // Nomerge nodes keep their scheduled position (portuale displays them);
+    // only entries the scheduler never saw are woven back in, each on its own
+    // unbiased discovery rank.
+    let scheduled = weave_scheduled_leftovers(&scheduled, real_n, &discovery_rank);
+    // Pre-bias insertion order over the caller's indices (synthetics filtered above).
+    (scheduled, discovery_rank[..real_n].to_vec())
+}
+
 /// Arguments of [`schedule_graph`].
 struct ScheduleGraphArgs<'a> {
     entries: &'a [GraphEntry],

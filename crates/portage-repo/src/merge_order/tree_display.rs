@@ -187,6 +187,18 @@ pub(crate) fn weave_scheduled_leftovers(
     out
 }
 
+/// Arguments of [`tree_solved_replacements`].
+pub(crate) struct TreeSolvedReplacementsArgs<'a> {
+    pub(crate) entries: &'a [GraphEntry],
+    pub(crate) top_level_atoms: &'a [String],
+    pub(crate) config: &'a portage_profile::Config,
+    pub(crate) root: &'a Path,
+    pub(crate) implicit_system_deps: bool,
+    pub(crate) repos: &'a [RepoConfig],
+    pub(crate) dynamic_deps: bool,
+    pub(crate) circular: &'a HashMap<RootCp, Vec<CircularDepChild>>,
+}
+
 /// Arguments of [`tree_display_order`].
 pub struct TreeDisplayOrderArgs<'a> {
     pub entries: &'a [GraphEntry],

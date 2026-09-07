@@ -72,6 +72,17 @@ this precedent is invoked.)
   forecloses either: subprocess/CLI-based testing keeps both open,
   in-process FFI embedding (e.g. PyO3) would not — avoid it.
 
+## Scope
+
+1. **Core library**: version comparison (`portage.versions`), atom/dep
+   parsing and matching, config resolution, dependency graph (depgraph).
+2. **`emerge` and `ebuild` executables** — both dry-run resolution
+   (`--pretend`, `--json`) and real execution: ebuild-phase execution,
+   filesystem-mutating merge / unmerge / package / config, binpkg
+   build+merge, the parallel build scheduler, world-file management. See
+   "Real ebuild phase execution + filesystem merge" below and
+   `what-this-proves.md`.
+
 ### `emerge`/`ebuild` binary shape
 
 Ship `emerge` and `ebuild` as **one multicall binary** (busybox-style),
