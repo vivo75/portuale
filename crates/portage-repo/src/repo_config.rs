@@ -78,6 +78,11 @@ pub(crate) fn path_owned_by_root_or_portage(path: &Path) -> bool {
         .unwrap_or(false)
 }
 
+#[cfg(not(unix))]
+pub(crate) fn path_owned_by_root_or_portage(_path: &Path) -> bool {
+    false
+}
+
 /// The sync-module-specific option keys recognized for a given
 /// `sync-type`, in a fixed order so `emerge --info`'s `Repositories:`
 /// output is deterministic (Portage iterates a set).

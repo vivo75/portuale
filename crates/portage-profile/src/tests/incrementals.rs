@@ -56,3 +56,42 @@ fn apply_incremental_is_reusable_for_per_package_use_overrides() {
         HashSet::from(["flag1".to_string(), "flag2".to_string()])
     );
 }
+
+#[test]
+fn resolved_incremental_folds_stacked_sources_with_negation_and_sorts() {
+    let mut config = Config::default();
+    note_incremental(&mut config, "FEATURES", "b a merge-sync");
+    note_incremental(&mut config, "FEATURES", "c -merge-sync");
+    note_incremental(&mut config, "FEATURES", "-a d");
+    assert_eq!(
+        config.resolved_incremental("FEATURES"),
+        Some(vec!["b".to_string(), "c".to_string(), "d".to_string()])
+    );
+    assert_eq!(config.resolved_incremental("CONFIG_PROTECT"), None);
+}
+
+/// A file's incremental layer is its final assignment: a second `FEATURES=`
+/// line replaces the first, while earlier files' layers still stack.
+/// Expected value from Portage's sourced-file semantics.
+#[test]
+fn a_files_incremental_layer_is_its_final_assignment() {
+    let mut config = Config::default();
+    note_incremental(&mut config, "FEATURES", "a b");
+    let snapshot = IncrementalSnapshot::take(&config);
+    note_incremental(&mut config, "FEATURES", "c");
+    note_incremental(&mut config, "FEATURES", "-a d");
+    snapshot.restore(&mut config);
+    // The second file contributed only its final "-a d"; the first
+    // file's "a b" still stacks first -> b d.
+    assert_eq!(
+        config.resolved_incremental("FEATURES"),
+        Some(vec!["b".to_string(), "d".to_string()])
+    );
+    // A file that assigned nothing leaves the previous layers alone.
+    let snapshot = IncrementalSnapshot::take(&config);
+    snapshot.restore(&mut config);
+    assert_eq!(
+        config.resolved_incremental("FEATURES"),
+        Some(vec!["b".to_string(), "d".to_string()])
+    );
+}

@@ -17,6 +17,31 @@ use portage_profile::{BinRepo, Config};
 use portage_repo::{GraphEntry, PretendOutcome, RepoConfig};
 use std::path::Path;
 
+/// The cache file `<EROOT>/var/cache/edb/binhost/<host>/<url-path>/Packages`.
+/// For `http(s)`/`ssh` that is [`BinRepo::packages_dir`]; for `file://` the
+/// EROOT-side copy (Portage caches even local indexes).
+// Portage: lib/portage/dbapi/bintree.py, _populate_remote_repo
+fn edb_cache_packages_file(root: &Path, sync_uri: &str) -> std::path::PathBuf {
+    let uri = sync_uri.trim_end_matches('/');
+    if let Some(rest) = uri.strip_prefix("file://") {
+        return root
+            .join("var/cache/edb/binhost")
+            .join(rest.trim_start_matches('/'))
+            .join("Packages");
+    }
+    // Single mapping, so the cache is always written where the resolver reads.
+    BinRepo {
+        name: String::new(),
+        sync_uri: uri.to_string(),
+        priority: 0,
+        location: None,
+        verify_signature: true,
+        frozen: false,
+    }
+    .packages_dir(root)
+    .join("Packages")
+}
+
 /// Seconds since the epoch as `f64` (Portage's `time.time()`).
 fn unix_now() -> f64 {
     std::time::SystemTime::now()

@@ -1,6 +1,52 @@
 use super::*;
 
 #[test]
+fn info_pkgs_table_expands_a_virtual_and_renders_versions_with_repo() {
+    let root = masters_test_root("info-pkgs");
+    let repo = root.join("repo");
+    std::fs::create_dir_all(repo.join("profiles")).unwrap();
+    // profiles/info_pkgs adds one extra atom.
+    std::fs::write(repo.join("profiles/info_pkgs"), "# hdr\nsys-libs/glibc\n").unwrap();
+    let mkpkg = |cat: &str, pf: &str, rdepend: &str, repo_name: &str| {
+        let d = root.join("var/db/pkg").join(cat).join(pf);
+        std::fs::create_dir_all(&d).unwrap();
+        std::fs::write(d.join("SLOT"), "0\n").unwrap();
+        std::fs::write(d.join("USE"), "\n").unwrap();
+        std::fs::write(d.join("RDEPEND"), format!("{rdepend}\n")).unwrap();
+        std::fs::write(d.join("repository"), format!("{repo_name}\n")).unwrap();
+    };
+    mkpkg(
+        "virtual",
+        "os-headers-1",
+        "sys-kernel/linux-headers",
+        "gentoo",
+    );
+    mkpkg("sys-kernel", "linux-headers-7.1", "", "gentoo");
+    mkpkg("dev-lang", "python-3.14.7", "", "gentoo");
+    mkpkg("sys-libs", "glibc-2.43-r4", "", "gentoo");
+
+    let rows = info_pkgs_table(&root, &repo);
+    let by_cp: std::collections::HashMap<&str, &Vec<String>> =
+        rows.iter().map(|r| (r.cp.as_str(), &r.versions)).collect();
+    // virtual/os-headers -> sys-kernel/linux-headers, with the
+    // ` (virtual/os-headers)` provide-suffix.
+    assert_eq!(
+        by_cp.get("sys-kernel/linux-headers").map(|v| v.as_slice()),
+        Some(["7.1::gentoo (virtual/os-headers)".to_string()].as_slice())
+    );
+    // A plain (non-virtual) atom: no suffix.
+    assert_eq!(
+        by_cp.get("dev-lang/python").map(|v| v.as_slice()),
+        Some(["3.14.7::gentoo".to_string()].as_slice())
+    );
+    // The info_pkgs-file atom is included.
+    assert_eq!(
+        by_cp.get("sys-libs/glibc").map(|v| v.as_slice()),
+        Some(["2.43-r4::gentoo".to_string()].as_slice())
+    );
+}
+
+#[test]
 fn resolve_info_candidate_reports_the_best_visible_ebuild_and_its_use_display() {
     let repos = find_repos(&fixtures_root()).expect("fixture repos.conf must resolve");
     // dev-libs/pkginfopkg: IUSE="+alpha beta", DEFINED_PHASES=info.

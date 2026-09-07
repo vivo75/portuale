@@ -87,5 +87,6 @@ mod binrepo;
 mod env_layer;
 mod graph;
 mod incrementals;
+mod make_conf;
 mod package_files;
 mod resolve;

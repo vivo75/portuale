@@ -14621,5 +14621,163 @@ implementations per director slot" slice): `BinpkgIndex`, `NewsSet`, and
 `Director<S, D, C, F, M>` wiring struct is `Director<S, D, C, F, M, B,
 N, P>` — eight slots, ten shape-pin tests (the three new ones added).
 
+### `emerge --info`: the real config-layer stack (2026-09-07)
+
+`emerge --info`'s variable dump was previously computed from the profile
+chain + `make.conf` only. Real portage stacks five dbs — `env.d`,
+`globals`, `defaults` (the profile chain), `conf` (`make.conf`), `env` —
+and `--info` was missing the first two entirely, so `FEATURES` was a
+partial unsorted list with literal `-collision-protect` tokens,
+`CONFIG_PROTECT` was just `/etc`, `PORTAGE_TMPDIR` showed as `Unset:`,
+and ~13 `info_vars` names (`CBUILD`, `LDFLAGS`, `MAKEOPTS`, `RUSTFLAGS`,
+`SHELL`, `LANG`, …) never appeared. This slice closes that:
+
+- **`cnf/make.globals`** is now read as the base db, `config_root`-relative
+  (`/usr/share/portage/config/make.globals` for a live `PORTAGE_CONFIGROOT=/`
+  run, absent under a fixture root so it contributes nothing
+  deterministically). Its multi-line quoted `FEATURES=` needed a new
+  `logical_lines` splitter that joins physical lines across an open
+  `'`/`"` quote or a trailing `\` — and, critically, skips a `#` comment
+  line *before* quote-scanning it, because `make.globals` has comment
+  prose containing a lone `'` (`Don't`) that a naïve scanner treats as an
+  unterminated string swallowing the rest of the file.
+- **`/etc/profile.env`** (the compiled `env-update` output, real
+  `_get_env_d`) is read as the lowest-priority db: its `CONFIG_PROTECT` /
+  `CONFIG_PROTECT_MASK` fragments (written there by packages' `env.d`
+  files) and its scalars (`LANG`, `LEX`).
+- The `const.INCREMENTALS` displays (`FEATURES`, `CONFIG_PROTECT`,
+  `CONFIG_PROTECT_MASK`, `ENV_UNSET`) are now folded exactly as real
+  `config.regenerate()` does — every source's tokens stacked in db order,
+  `-*` clears, `-tok` discards, then `" ".join(sorted(...))`
+  (`Config::resolved_incremental`).
+- `myvars` = real's hardcoded list **+** `<PORTDIR>/profiles/info_vars`,
+  minus the deprecated names (`PORTDIR`, `PORTDIR_OVERLAY`, `SYNC`,
+  `PORTAGE_REPOSITORIES`), de-duped and sorted. An `info_vars` name only
+  ever set in the process environment (`SHELL`) falls through to
+  `os.environ`.
+- Each `USE_EXPAND` variable's display value is regenerated to be
+  USE-consistent (real `config.regenerate()`'s "Generate global
+  USE_EXPAND variables settings" tail): the flags actually enabled for
+  that prefix, in the raw value's order, then extras sorted — resolving
+  `VIDEO_CARDS="-* intel …"` → `intel …` and filling `GRUB_PLATFORMS`
+  from the profile-enabled `grub_platforms_*` flags. An empty result is
+  omitted from the `USE=` line, matching real's `if myval`.
+- `CBUILD` defaults to `CHOST`, `PORTAGE_CONFIGROOT` is stamped in — both
+  real `config.py.__init__` behaviours.
+- `Binary Repositories:` gained `location` + `verify-signature` (default
+  `true`, a section's own `verify-signature = false` overriding) in real
+  `BinRepoConfig.info_string()` field order.
+
+Verified **byte-exact against a live `emerge --info`** for every
+`VAR="value"` line and both the `Repositories:` and `Binary
+Repositories:` blocks (`diff` of the two outputs is empty across that
+range). Dual-language — the same layering is mirrored in
+`emerge_pretend_reference.py` — and contract-pinned by
+`test_info_stacks_make_globals_profile_env_and_info_vars` (a self-
+contained `PORTAGE_CONFIGROOT` with its own `make.globals` /
+`profile.env` / `info_vars` / `binrepos.conf`), plus Rust unit tests for
+`logical_lines` and `resolved_incremental`. Deliberately still out:
+real `--info`'s host-state header (Portage-version line, `System uname`,
+`KiB Mem`, repo `Timestamp`/`Head commit`, `sh`/`ld`/`coreutils`
+probes, the `info_pkgs` table), the `Repositories:` block's own
+`info_string()` fields (`sync-type`/`sync-uri`/`volatile`/module opts —
+needs `repos.conf` field parsing + the global-`repos.conf` merge), and
+the resolved base `USE` set, which still diverges from real on a handful
+of flags (a separate profile USE force/mask/expand slice).
+
+### `emerge --info`: global USE resolution + `Repositories:` fields (2026-09-07)
+
+Follow-on to the config-layer slice. The `USE=` line still diverged from
+a live `emerge --info` on ~25 flags (`blake2`/`bpf`/`lto`/`http2`/…
+missing, `consolekit`/`elogind`/`split-usr` extra, `LLVM_SLOT`/
+`LUA_SINGLE_TARGET` off), and the `Repositories:` block was missing every
+`info_string()` field past `location`/`priority`. Both closed:
+
+- **`UseManager.extract_global_USE_changes`** (real `config.py:832`): the
+  `*/*` package atom's own `*/*` entry in the **user** `package.use`
+  (`_pusedict` is user-files-only — never profile/repo) is popped out of
+  the per-package dict and stacked onto the global USE like `make.conf`
+  `USE=`. This is how a real system's `*/* lto blake2 …` /
+  `*/* GRUB_PLATFORMS: efi-64 pc` / `*/* LLVM_SLOT: 22 -21` lines reach
+  `emerge --info`. Folded after the USE_EXPAND value loops, so a
+  `*/* -lua_single_target_lua5-1` really removes a value the profile
+  scalar folded in.
+- **Global `use.force` / `use.mask`** are now applied to the one display
+  that needs them — `emerge --info`'s USE line and its `USE_EXPAND`
+  variable values — matching real `config.regenerate()`'s trailing
+  `myflags.update(self.useforce); myflags.difference_update(self.usemask)`
+  (`resolved_global_use`). Portuale still keeps them *out* of
+  `Config::use_flags` (they are applied per-candidate in
+  `effective_use_flags`); this reunites them only for the global view.
+- **`Repositories:` `info_string()` fields**: `RepoConfig` gained
+  `sync_type`, `sync_uri`, `volatile` and `module_specific_options`. The
+  global `/usr/share/portage/config/repos.conf` is now merged under the
+  user's (so the shipped `[gentoo] sync-git-verify-commit-signature =
+  true` shows), `volatile` ports real's heuristic (`True` unless the tree
+  is under `/var/db/repos` owned by `root`/`portage`), and the block
+  prints `location`, `sync-type`, `sync-uri`, `masters`, `priority`,
+  `aliases`, `volatile`, then any set sync-module option — real
+  `RepoConfig.info_string()` field order.
+
+After this, `diff <(emerge --info) <(portuale emerge --info)` is empty
+for the **entire** variable block **and both repository blocks** — every
+`USE=` flag, every `USE_EXPAND` value, `Repositories:` and `Binary
+Repositories:` match a live run exactly (only real's host-state header
+and a 1-byte trailing newline remain). Dual-language; contract test
+`test_info_stacks_make_globals_profile_env_and_info_vars` extended to
+cover the `*/*` fold, `use.mask` drop and the repo fields; new Rust unit
+tests `user_package_use_star_atom_folds_onto_the_global_use`,
+`find_repos_reads_sync_fields_volatile_and_git_module_options`,
+`find_repos_explicit_volatile_key_wins_over_the_heuristic`.
+
+### `emerge --info`: the host-state header (2026-09-07)
+
+The last piece: the block real `action_info` prints *before*
+`Repositories:` — previously the one deliberate `--info` cut, on the
+grounds that a fixture can't verify host state. Now implemented in both
+languages (`print_info_header` / `_print_info_header`):
+
+- **`Portage <ver> (python <v>, <profile>, <gcc>, <libc>, <kernel>)`** —
+  `<ver>` from the installed `sys-apps/portage` vdb entry; `<v>` from
+  `python3 -c`; `<profile>` a faithful port of real `get_profile_version`
+  (the `make.profile` target relative to the main repo's `profiles/`,
+  else its first `parent` entry resolved that way, else `!<symlink>`);
+  `<gcc>` from `gcc -dumpversion`; `<libc>` from the `sys-libs/glibc`
+  (or `musl`) vdb entry; `<kernel>` from `uname -r` + `-m`.
+- **65-char rule**, with the centred `System Settings` title inserted
+  above it under `--info <atom>` (real `if myfiles:`).
+- **`System uname:`** — real `platform.platform(aliased=1)`, rebuilt
+  from `uname -s/-r/-m` + `/proc/cpuinfo` "model name" + the glibc
+  version, spaces → `_`.
+- **`KiB Mem:` / `KiB Swap:`** — `/proc/meminfo` `MemTotal`/`MemFree` /
+  `SwapTotal`/`SwapFree`, real's `%10d` columns.
+- **`Timestamp of repository <n>:`** — `<loc>/metadata/timestamp.chk`
+  line 1; **`Head commit of repository <n>:`** — `git -C <loc> rev-parse
+  HEAD` for a `sync-type = git` repo, with real's baked-in trailing
+  blank line.
+- **`sh:`** — the `/bin/sh` realpath basename matched against the
+  `app-shells`/`sys-apps`/`dev-lang` vdb; **`coreutils:`** — `install
+  --version` after `install `; **`ld:`** — `[<chost>-]ld --version`.
+- **`info_pkgs` version table** — the six hardcoded atoms +
+  `<main_repo>/profiles/info_pkgs`, each run through a one-level
+  `expand_new_virt` (`virtual/os-headers` → `sys-kernel/linux-headers`
+  with the ` (virtual/os-headers)` suffix), one `cat/pkg:` row per
+  installed match, versions `vercmp`-sorted `<ver>::<repo>`, `cp` padded
+  to the widest.
+
+**`diff <(emerge --info) <(portuale emerge --info)` is now a single
+line** — the `KiB Mem` *free* value, which genuinely changes between the
+two process spawns. Everything else — the whole header, every repo
+`Timestamp`/`Head commit`, the `sh`/`coreutils`/`ld` strings and the
+entire `info_pkgs` table — is byte-identical to a live run. The
+contract's `--info` `rust == python` checks run through a new
+`_normalize_info` regex filter that blanks the host-state values
+(`Portage …`, `System uname:`, `KiB …`, `Timestamp`/`Head commit`,
+`sh`/`coreutils`/`ld`, `info_pkgs` rows) to `XXX` first, pinning line
+structure + the deterministic config block. New Rust unit test
+`info_pkgs_table_expands_a_virtual_and_renders_versions_with_repo`; the
+stacks-test asserts the header shape. The 1-byte trailing-newline
+mismatch is fixed too (real ends `Unset: …\n\n`).
+
 # # required by dev-libs/useflagpkg[-foo] (argument)
 # == sqlite
