@@ -763,3 +763,117 @@ pub(crate) fn enqueue_test_deps(args: EnqueueTestDepsArgs<'_>) {
         }
     }
 }
+
+/// Fold the entry's dependency keys and queue the atoms they name.
+pub(crate) fn enqueue_entry_deps(args: EnqueueEntryDepsArgs<'_>) {
+    let EnqueueEntryDepsArgs {
+        ctx,
+        depth,
+        metadata,
+        candidate_source,
+        state,
+        entry_idx,
+        use_flags,
+        bp,
+        config,
+        union_constraints,
+        key,
+        version,
+        candidate_str,
+    } = args;
+    let SelectDepTokensOut {
+        onlydeps_blanks_runtime,
+        onlydeps_blanks_idepend,
+        eapi_has_idepend,
+        tokens,
+    } = select_dep_tokens(ctx, depth, metadata, candidate_source);
+    record_merge_order_deps(RecordMergeOrderDepsArgs {
+        ctx,
+        candidate_source,
+        metadata,
+        use_flags,
+        state: &mut *state,
+        entry_idx,
+        onlydeps_blanks_runtime,
+        onlydeps_blanks_idepend,
+        eapi_has_idepend,
+    });
+    let ClassifyDepAtomsOut {
+        buildtime_atoms,
+        runtime_atoms,
+        bdepend_atoms,
+    } = classify_dep_atoms(ClassifyDepAtomsArgs {
+        ctx,
+        candidate_source,
+        metadata,
+        use_flags,
+        onlydeps_blanks_runtime,
+        onlydeps_blanks_idepend,
+        eapi_has_idepend,
+    });
+    let scope = prepare_disjunction_scope(PrepareDisjunctionScopeArgs {
+        ctx,
+        metadata,
+        use_flags,
+        state: &mut *state,
+        entry_idx,
+        bp,
+    });
+    let circular_view = scope
+        .circ_with_pullers
+        .as_ref()
+        .unwrap_or(&bp.circular_dependency);
+    let ControlFlow::Continue(flat_deps) = flatten_dep_string(FlattenDepStringArgs {
+        tokens: &tokens,
+        use_flags,
+        metadata,
+        cross_running_root: scope.cross_running_root,
+        running_tags: &scope.running_tags,
+        ctx,
+        config,
+        entries: &state.entries,
+        self_node: &scope.self_node,
+        union_constraints,
+        circular_view,
+        queued: &scope.queued,
+    }) else {
+        return;
+    };
+    let flat_deps = filter_root_deps(FilterRootDepsArgs {
+        flat_deps,
+        ctx,
+        config,
+        metadata,
+        use_flags,
+        key,
+        state: &mut *state,
+        cross_running_root: scope.cross_running_root,
+    });
+    record_slot_pullers_and_enqueue(RecordSlotPullersAndEnqueueArgs {
+        flat_deps,
+        key,
+        version,
+        depth,
+        parent_use: use_flags,
+        state: &mut *state,
+        entry_idx,
+        buildtime_atoms: &buildtime_atoms,
+        runtime_atoms: &runtime_atoms,
+        bdepend_atoms: &bdepend_atoms,
+        tokens: &tokens,
+        running_tags: &scope.running_tags,
+    });
+    enqueue_test_deps(EnqueueTestDepsArgs {
+        ctx,
+        depth,
+        use_flags,
+        metadata,
+        config,
+        candidate_str,
+        key,
+        version,
+        tokens: &tokens,
+        state: &mut *state,
+        entry_idx,
+    });
+}

@@ -323,6 +323,20 @@ impl Default for SelectOptions<'_> {
 }
 
 impl ResolveCtx<'_> {
+    /// The selection options this walk passes for every atom, with
+    /// `bp`'s autounmask switches; callers set `is_top_level` and
+    /// `extra_constraints` per atom.
+    /// The options [`enqueue_dependencies`] reads from this walk.
+    pub(crate) fn enqueue_options(&self) -> EnqueueOptions<'_> {
+        EnqueueOptions {
+            dynamic_deps: self.dynamic_deps,
+            ignore_built_slot_operator_deps: self.ignore_built_slot_operator_deps,
+            with_bdeps: self.with_bdeps,
+            root_deps_running_root: self.root_deps_running_root,
+            update: self.update,
+        }
+    }
+
     pub(crate) fn select_options(&self, bp: &BacktrackParams) -> SelectOptions<'_> {
         SelectOptions {
             newuse: self.newuse,
