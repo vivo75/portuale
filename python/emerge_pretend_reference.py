@@ -3849,6 +3849,99 @@ def _parse_kv_line(line):
     return key, value
 
 
+def _logical_lines(text):
+    """Splits text into logical assignment lines, joining physical lines
+    continued by a trailing unescaped "\\" or an unclosed '/" quote --
+    real getconfig()'s shlex reads across newlines inside quotes, which
+    cnf/make.globals relies on for its multi-line FEATURES=. Full-line
+    "#" comments outside a continuation are skipped whole (shlex
+    commenters="#"), as is an inline unquoted " #..." tail. Mirrors
+    portage-profile/src/lib.rs's logical_lines."""
+    out = []
+    cur = ""
+    quote = None
+    for raw in text.splitlines():
+        if quote is None and not cur and raw.lstrip().startswith("#"):
+            continue
+        line = raw
+        cont = False
+        if quote is None and line.endswith("\\") and not line.endswith("\\\\"):
+            line = line[:-1]
+            cont = True
+        if cur:
+            cur += " "
+        prev = " "
+        escaped = False
+        cut = None
+        for i, c in enumerate(line):
+            if quote == '"' and not escaped and c == "\\":
+                escaped = True
+                prev = c
+                continue
+            if quote == '"' and escaped:
+                escaped = False
+                prev = c
+                continue
+            if quote is not None:
+                if c == quote:
+                    quote = None
+            else:
+                if c in ('"', "'"):
+                    quote = c
+                elif c == "#" and prev.isspace():
+                    cut = i
+                    break
+            prev = c
+        if cut is not None:
+            cur += line[:cut].rstrip()
+            line = ""
+        cur += line
+        if quote is None and not cont:
+            out.append(cur)
+            cur = ""
+    if cur:
+        out.append(cur)
+    return out
+
+
+_TRACKED_INCREMENTALS = (
+    "CONFIG_PROTECT",
+    "CONFIG_PROTECT_MASK",
+    "ENV_UNSET",
+    "FEATURES",
+)
+
+
+def _note_incremental(sources, key, value):
+    """Records one already-${VAR}-substituted assignment against the
+    per-source token lists for the const.INCREMENTALS variables
+    emerge --info displays (real config.regenerate() stacks these and
+    stores " ".join(sorted(...))). Mirrors portage-profile's
+    note_incremental."""
+    if key in _TRACKED_INCREMENTALS:
+        sources.setdefault(key, []).append(value.split())
+
+
+def _resolved_incremental(config, key):
+    """Real config.regenerate()'s incremental fold for one INCREMENTALS
+    variable: stack every source's tokens in db order ("-*" clears, "-tok"
+    discards, bare/"+tok" adds), then sorted(). None when never set.
+    Mirrors portage-profile's Config::resolved_incremental."""
+    sources = config.get("incremental_sources", {}).get(key)
+    if sources is None:
+        return None
+    flags = set()
+    for tokens in sources:
+        for tok in tokens:
+            if tok == "-*":
+                flags.clear()
+            elif tok.startswith("-"):
+                flags.discard(tok[1:])
+            else:
+                flags.add(tok[1:] if tok.startswith("+") else tok)
+    return sorted(flags)
+
+
 def _apply_incremental(tokens, target_set):
     """Applies real incremental-variable token semantics: "-*" clears
     everything accumulated so far, "-flag" removes, "flag"/"+flag" adds."""
@@ -3933,13 +4026,16 @@ def _process_config_lines(
     use_expand_implicit,
     iuse_implicit,
     use_expand_hidden,
+    incremental_sources=None,
 ):
-    for line in text.splitlines():
+    for line in _logical_lines(text):
         parsed = _parse_kv_line(line)
         if parsed is None:
             continue
         key, raw_value = parsed
         value = _substitute(raw_value, scalars)
+        if incremental_sources is not None:
+            _note_incremental(incremental_sources, key, value)
         if key == "USE":
             _apply_incremental(value, use_flags)
             use_tokens.append(value)
@@ -4070,6 +4166,7 @@ def _process_make_conf_file(
     iuse_implicit,
     use_expand_hidden,
     visited_sources,
+    incremental_sources=None,
 ):
     """Resolves "source <path>" against config_root as if it were "/"
     (chroot-style), matching PORTAGE_CONFIGROOT/ROOT semantics elsewhere
@@ -4082,7 +4179,7 @@ def _process_make_conf_file(
     visited_sources.add(canon)
     with open(canon) as f:
         text = f.read()
-    for line in text.splitlines():
+    for line in _logical_lines(text):
         trimmed = line.strip()
         if trimmed.startswith("source "):
             sourced = trimmed[len("source ") :].strip()
@@ -4103,6 +4200,7 @@ def _process_make_conf_file(
                 iuse_implicit,
                 use_expand_hidden,
                 visited_sources,
+                incremental_sources,
             )
             continue
         parsed = _parse_kv_line(trimmed)
@@ -4110,6 +4208,8 @@ def _process_make_conf_file(
             continue
         key, raw_value = parsed
         value = _substitute(raw_value, scalars)
+        if incremental_sources is not None:
+            _note_incremental(incremental_sources, key, value)
         if key == "USE":
             _apply_incremental(value, use_flags)
             conf_use_tokens.append(value)
@@ -4311,6 +4411,7 @@ def resolve_config(
     iuse_implicit = set()
     use_expand_hidden = set()
     scalars = {}
+    incremental_sources = {}
 
     all_repos = [(main_repo_name, main_repo_location)] + list(overlay_repos)
 
@@ -4325,6 +4426,55 @@ def resolve_config(
         for name, loc in all_repos
         if "portage-2" in _parse_layout_conf(loc).get("profile-formats", "").split()
     }
+
+    # Real regenerate() stacks its dbs env.d, globals, defaults (the
+    # profile chain), conf (make.conf), env -- in that order (real
+    # config.py:531). Portuale reads them here in the same order so the
+    # const.INCREMENTALS fold in _resolved_incremental matches.
+    #
+    # env.d: real _get_env_d -> <EROOT>/etc/profile.env. Only its
+    # incremental entries (CONFIG_PROTECT / CONFIG_PROTECT_MASK, written
+    # there by packages' /etc/env.d/* fragments) feed emerge --info; its
+    # LANG / LEX / ... land as lowest-priority scalars.
+    profile_env_path = os.path.join(config_root, "etc", "profile.env")
+    if os.path.isfile(profile_env_path):
+        with open(profile_env_path) as f:
+            for line in _logical_lines(f.read()):
+                t = line.strip()
+                if t.startswith("export "):
+                    t = t[len("export ") :]
+                parsed = _parse_kv_line(t)
+                if parsed is not None:
+                    key, raw_value = parsed
+                    value = _substitute(raw_value, scalars)
+                    _note_incremental(incremental_sources, key, value)
+                    scalars[key] = value
+
+    # globals: cnf/make.globals, always sourced -- the base layer under
+    # the profile chain (real config.py:532). Read config_root-relative,
+    # which resolves to the real /usr/share/portage/config/make.globals
+    # for a live PORTAGE_CONFIGROOT=/ run and stays absent (contributes
+    # nothing, deterministically) under a test / fixture config_root.
+    make_globals = os.path.join(
+        config_root, "usr", "share", "portage", "config", "make.globals"
+    )
+    if os.path.isfile(make_globals):
+        with open(make_globals) as f:
+            text = f.read()
+        scalars.pop("USE", None)
+        _process_config_lines(
+            text,
+            scalars,
+            use_flags,
+            use_tokens,
+            accept_keywords,
+            use_expand,
+            use_expand_unprefixed,
+            use_expand_implicit,
+            iuse_implicit,
+            use_expand_hidden,
+            incremental_sources,
+        )
 
     make_profile = os.path.join(config_root, "etc", "portage", "make.profile")
     chain = (
@@ -4358,6 +4508,7 @@ def resolve_config(
                 use_expand_implicit,
                 iuse_implicit,
                 use_expand_hidden,
+                incremental_sources,
             )
         profile_use_layers.append(
             {
@@ -4383,6 +4534,7 @@ def resolve_config(
             iuse_implicit,
             use_expand_hidden,
             set(),
+            incremental_sources,
         )
 
     # Real config.regenerate()'s `env` USE_ORDER layer -- the process
@@ -4878,6 +5030,13 @@ def resolve_config(
         for atom, keywords in _parse_package_accept_keywords_lines(accept_keywords_lines)
     ]
 
+    # Real config.py.__init__: PORTAGE_CONFIGROOT is stamped into the
+    # settings, and CBUILD defaults to CHOST when unset anywhere. Both
+    # surface in emerge --info.
+    scalars.setdefault("PORTAGE_CONFIGROOT", config_root or "/")
+    if "CBUILD" not in scalars and scalars.get("CHOST"):
+        scalars["CBUILD"] = scalars["CHOST"]
+
     return {
         "use_flags": use_flags,
         "use_tokens": use_tokens,
@@ -4976,6 +5135,11 @@ def resolve_config(
         # the `scalars` map, exposed for `emerge --info`. Mirrors
         # portage-profile/src/lib.rs's Config::other_vars.
         "other_vars": dict(scalars),
+        # Per-source token lists for the const.INCREMENTALS variables
+        # emerge --info displays (CONFIG_PROTECT / CONFIG_PROTECT_MASK /
+        # ENV_UNSET / FEATURES), folded by _resolved_incremental. Mirrors
+        # portage-profile's Config::incremental_sources.
+        "incremental_sources": incremental_sources,
     }
 
 
@@ -4994,14 +5158,24 @@ def _parse_binrepos(binrepos_conf, portage_binhost):
     section = None
     sync_uri = None
     priority = 0
+    location = None
+    verify_signature = True
 
     def flush():
-        nonlocal section, sync_uri, priority
+        nonlocal section, sync_uri, priority, location, verify_signature
         if section is not None and sync_uri is not None:
             uri = sync_uri.rstrip("/")
             seen_uris.add(uri)
-            repos.append({"name": section, "sync_uri": uri, "priority": priority})
-        section, sync_uri, priority = None, None, 0
+            repos.append(
+                {
+                    "name": section,
+                    "sync_uri": uri,
+                    "priority": priority,
+                    "location": location,
+                    "verify_signature": verify_signature,
+                }
+            )
+        section, sync_uri, priority, location, verify_signature = None, None, 0, None, True
 
     for line in binrepos_conf.splitlines():
         line = line.strip()
@@ -5025,6 +5199,10 @@ def _parse_binrepos(binrepos_conf, portage_binhost):
                     priority = int(v)
                 except ValueError:
                     priority = 0
+            elif k == "location":
+                location = _substitute(v, {})
+            elif k == "verify-signature":
+                verify_signature = v.strip().lower() in ("true", "yes", "1", "on")
     flush()
     repos = [r for r in repos if r["name"] != "DEFAULT"]
 
@@ -5036,7 +5214,13 @@ def _parse_binrepos(binrepos_conf, portage_binhost):
             current_priority += 1
             name = uri.split("://", 1)[1] if "://" in uri else uri
             repos.append(
-                {"name": name, "sync_uri": uri, "priority": current_priority}
+                {
+                    "name": name,
+                    "sync_uri": uri,
+                    "priority": current_priority,
+                    "location": None,
+                    "verify_signature": True,
+                }
             )
 
     repos.sort(key=lambda r: (r["priority"], r["name"]))
@@ -12480,6 +12664,30 @@ def _resolve_info_binary_candidate(config, atom_str):
     return None
 
 
+def _use_expand_display_value(var, config):
+    """One USE_EXPAND variable's emerge --info display value, real
+    config.regenerate()'s "Generate global USE_EXPAND variables settings
+    that are consistent with USE" tail (guarded on self.mycpv is None):
+    the flags actually enabled for that prefix in the final USE set, in
+    the raw value's own order, then any extra enabled flags sorted. This
+    resolves "-*" / "-flag" / VIDEO_CARDS="-* intel ...". None when
+    nothing is enabled (real appends VAR="..." to the USE= line only
+    `if myval`). Mirrors pretend.rs's use_expand_display_value."""
+    prefix = var.lower() + "_"
+    enabled = sorted(
+        f[len(prefix):] for f in config["use_flags"] if f.startswith(prefix)
+    )
+    if not enabled:
+        return None
+    raw = config["other_vars"].get(var, "")
+    enabled_set = set(enabled)
+    out = [t for t in raw.split() if t in enabled_set]
+    for f in enabled:
+        if f not in out:
+            out.append(f)
+    return " ".join(out)
+
+
 def _run_info(config, repos, root, atom_args, misspell_suggestions, usepkg, color):
     """Real `emerge --info` (action_info), narrowed to its deterministic
     config/repository block plus, with atom args, the `myfiles`-loop
@@ -12542,9 +12750,14 @@ def _run_info(config, repos, root, atom_args, misspell_suggestions, usepkg, colo
         for br in reversed(binrepos):
             if not br["name"]:
                 continue
+            # Real BinRepoConfig.info_string() field order: name,
+            # location (if set), priority, sync-uri, verify-signature.
             print(br["name"])
-            print(f"    sync-uri: {br['sync_uri']}")
+            if br.get("location"):
+                print(f"    location: {br['location']}")
             print(f"    priority: {br['priority']}")
+            print(f"    sync-uri: {br['sync_uri']}")
+            print(f"    verify-signature: {bool(br.get('verify_signature', True))}")
             print()
 
     sets = sorted(f"@{s}" for s in _read_world_sets(root))
@@ -12552,31 +12765,52 @@ def _run_info(config, repos, root, atom_args, misspell_suggestions, usepkg, colo
         print(f"Installed sets: {', '.join(sets)}")
 
     use_expand = sorted(config["use_expand"])
-    unset = []
-    for k in [
-        "ACCEPT_KEYWORDS",
-        "ACCEPT_LICENSE",
-        "CFLAGS",
-        "CHOST",
+    # Real action_info's hardcoded myvars list + <PORTDIR>/profiles/
+    # info_vars (actions.py:2221), minus the deprecated/skipped ones,
+    # de-duplicated and sorted. The const.INCREMENTALS members
+    # (CONFIG_PROTECT / CONFIG_PROTECT_MASK / ENV_UNSET / FEATURES, plus
+    # ACCEPT_KEYWORDS) are shown as real stores them: "-*"/"-tok"
+    # resolved, then " ".join(sorted(...)).
+    myvars = [
+        "GENTOO_MIRRORS",
         "CONFIG_PROTECT",
         "CONFIG_PROTECT_MASK",
-        "CXXFLAGS",
         "DISTDIR",
-        "EMERGE_DEFAULT_OPTS",
         "ENV_UNSET",
-        "FEATURES",
-        "GENTOO_MIRRORS",
         "PKGDIR",
+        "PORTAGE_TMPDIR",
         "PORTAGE_BINHOST",
         "PORTAGE_BUNZIP2_COMMAND",
         "PORTAGE_BZIP2_COMMAND",
-        "PORTAGE_TMPDIR",
         "USE",
-    ]:
+        "CHOST",
+        "CFLAGS",
+        "CXXFLAGS",
+        "ACCEPT_KEYWORDS",
+        "ACCEPT_LICENSE",
+        "FEATURES",
+        "EMERGE_DEFAULT_OPTS",
+    ]
+    main_repo = next((r for r in repos if r.get("is_main")), None)
+    if main_repo is not None:
+        info_vars_path = os.path.join(main_repo["location"], "profiles", "info_vars")
+        if os.path.isfile(info_vars_path):
+            with open(info_vars_path) as f:
+                for line in f:
+                    line = line.strip()
+                    if line and not line.startswith("#"):
+                        myvars.append(line)
+    skipped = {"PORTAGE_REPOSITORIES", "PORTDIR", "PORTDIR_OVERLAY", "SYNC"}
+    myvars = sorted({v for v in myvars if v not in skipped})
+    unset = []
+    for k in myvars:
         if k == "ACCEPT_KEYWORDS":
             v = " ".join(sorted(config["accept_keywords"])) or None
         elif k == "ACCEPT_LICENSE":
             v = " ".join(config["accept_license"]) or None
+        elif k in ("CONFIG_PROTECT", "CONFIG_PROTECT_MASK", "ENV_UNSET", "FEATURES"):
+            resolved = _resolved_incremental(config, k)
+            v = " ".join(resolved) if resolved else config["other_vars"].get(k)
         elif k == "USE":
             prefixes = tuple(f"{ve.lower()}_" for ve in use_expand)
             flags = sorted(
@@ -12584,7 +12818,12 @@ def _run_info(config, repos, root, atom_args, misspell_suggestions, usepkg, colo
             )
             v = " ".join(flags)
         else:
+            # Real settings.get(k) bottoms out in configdict["env"]
+            # (os.environ): a curated info_vars entry that is only ever an
+            # environment variable (SHELL, LC_ALL, ...) still shows.
             v = config["other_vars"].get(k)
+            if v is None:
+                v = os.environ.get(k)
 
         if v is None:
             unset.append(k)
@@ -12593,7 +12832,7 @@ def _run_info(config, repos, root, atom_args, misspell_suggestions, usepkg, colo
         elif k == "USE":
             line = f'USE="{v}"'
             for ve in use_expand:
-                val = config["other_vars"].get(ve)
+                val = _use_expand_display_value(ve, config)
                 if val:
                     line += f' {ve}="{val}"'
             print(line)

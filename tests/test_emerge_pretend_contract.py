@@ -12290,6 +12290,99 @@ def test_info_prints_the_deterministic_config_block(
     assert "\nUnset:  " in rust.stdout
 
 
+def test_info_stacks_make_globals_profile_env_and_info_vars(
+    emerge_binary, emerge_pretend_python, tmp_path
+):
+    """emerge --info reads the same config layers real portage does:
+    cnf/make.globals (the base db, with its multi-line quoted FEATURES=
+    and its `#`-comment-containing-an-apostrophe lines), /etc/profile.env
+    (the env.d db -- CONFIG_PROTECT fragments + scalars like LANG), and
+    <PORTDIR>/profiles/info_vars (the extra myvars names). The
+    const.INCREMENTALS variables (FEATURES / CONFIG_PROTECT /
+    CONFIG_PROTECT_MASK / ENV_UNSET) are shown "-*"/"-tok"-resolved then
+    sorted, exactly as real config.regenerate() stores them. Binary
+    Repositories show location + verify-signature. Rust == Python."""
+    cfg = tmp_path / "cfg"
+    repo = tmp_path / "repo"
+    binhost = tmp_path / "binhost"
+    (repo / "profiles/pfx").mkdir(parents=True)
+    (repo / "profiles/repo_name").write_text("main\n")
+    (repo / "profiles/info_vars").write_text(
+        "# curated\nLANG\nMAKEOPTS\nSYNC\nUSE\n"
+    )
+    (repo / "profiles/pfx/make.defaults").write_text(
+        'ARCH="amd64"\nACCEPT_KEYWORDS="amd64"\n'
+        'USE_EXPAND="VIDEO_CARDS"\n'
+        'FEATURES="${FEATURES} sandbox -merge-sync userfetch"\n'
+        'MAKEOPTS="-j4"\n'
+        'VIDEO_CARDS="-* nouveau"\n'
+    )
+    (repo / "profiles/pfx/parent").write_text("")
+    (cfg / "etc/portage").mkdir(parents=True)
+    (cfg / "etc/portage/make.profile").symlink_to(repo / "profiles/pfx")
+    (cfg / "etc/portage/repos.conf").write_text(
+        f"[DEFAULT]\nmain-repo = main\n\n[main]\nlocation = {repo}\n"
+    )
+    (cfg / "etc/portage/make.conf").write_text(
+        f'PKGDIR="{tmp_path / "pkgdir"}"\n'
+        'FEATURES="${FEATURES} -userfetch splitdebug"\n'
+    )
+    globals_dir = cfg / "usr/share/portage/config"
+    globals_dir.mkdir(parents=True)
+    (globals_dir / "make.globals").write_text(
+        "# Number of times 'emerge --sync' will run before giving up.\n"
+        "# Don't edit this.\n"
+        'PORTAGE_TMPDIR="/var/tmp"\n'
+        'CONFIG_PROTECT="/etc"\n'
+        'CONFIG_PROTECT_MASK="/etc/env.d"\n'
+        'FEATURES="assume-digests distlocks merge-sync\n'
+        '          network-sandbox sandbox userfetch"\n'
+        'FEATURES="${FEATURES} -binpkg-multi-instance"\n'
+    )
+    (cfg / "etc/profile.env").write_text(
+        "export CONFIG_PROTECT='/usr/share/config /var/bind'\n"
+        "export LANG='C.utf8'\n"
+    )
+    (cfg / "etc/portage/binrepos.conf").write_text(
+        f"[bh]\nsync-uri = file://{binhost}\npriority = 7\n"
+        f"location = {binhost}\nverify-signature = false\n"
+    )
+    binhost.mkdir()
+    env = {"PORTAGE_CONFIGROOT": str(cfg), "ROOT": str(cfg)}
+
+    rust = _run([str(emerge_binary)], ["--info"], env)
+    py = _run(emerge_pretend_python, ["--info"], env)
+    assert rust.returncode == 0
+    assert rust.stdout == py.stdout
+    # make.globals base + profile + make.conf, "-tok" resolved, sorted:
+    # merge-sync (globals) stays until profile -merge-sync; userfetch
+    # added by globals+profile, removed by make.conf; -binpkg-multi-
+    # instance never present.
+    assert (
+        '\nFEATURES="assume-digests distlocks network-sandbox sandbox '
+        'splitdebug"\n' in rust.stdout
+    )
+    # CONFIG_PROTECT: env.d + globals, union, sorted.
+    assert (
+        '\nCONFIG_PROTECT="/etc /usr/share/config /var/bind"\n' in rust.stdout
+    )
+    assert '\nCONFIG_PROTECT_MASK="/etc/env.d"\n' in rust.stdout
+    # profile.env scalar surfaces; info_vars added MAKEOPTS; SYNC skipped.
+    assert '\nLANG="C.utf8"\n' in rust.stdout
+    assert '\nMAKEOPTS="-j4"\n' in rust.stdout
+    assert "SYNC" not in rust.stdout
+    # USE_EXPAND "-*" resolved in the VIDEO_CARDS display value.
+    assert 'VIDEO_CARDS="nouveau"' in rust.stdout
+    # Binary Repositories: location + verify-signature.
+    assert (
+        "\nbh\n"
+        f"    location: {binhost}\n"
+        "    priority: 7\n"
+        f"    sync-uri: file://{binhost}\n"
+        "    verify-signature: False\n" in rust.stdout
+    )
+
+
 def test_info_atom_that_does_not_exist_errors_with_misspell_suggestions(
     emerge_binary, emerge_pretend_python, fixture_env
 ):

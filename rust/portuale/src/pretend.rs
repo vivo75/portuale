@@ -5492,7 +5492,8 @@ fn news_item_relevant(text: &str, root: &Path) -> bool {
                     "{}/{}-{version}:{slot}/{sub_slot}",
                     atom.category, atom.package
                 );
-                if !match_from_list(atom_str, &[candidate.as_str()]).is_some_and(|m| !m.is_empty()) {
+                if !match_from_list(atom_str, &[candidate.as_str()]).is_some_and(|m| !m.is_empty())
+                {
                     return false;
                 }
                 // Real `vardb.match` also enforces the atom's use-deps
@@ -5606,8 +5607,42 @@ fn build_config_env(config: &portage_profile::Config) -> Vec<(String, String)> {
 /// dispatching (the ordinary `--usepkg` resolve path's scan runs later
 /// in the CLI flow).
 ///
-/// `_hide_url_passwd` is also cut. `FEATURES` reflects only `make.conf`
-/// (portuale parses no `make.globals` defaults).
+/// `_hide_url_passwd` is also cut.
+///
+/// One `USE_EXPAND` variable's `emerge --info` display value, real
+/// `config.regenerate()`'s "Generate global USE_EXPAND variables
+/// settings that are consistent with USE" tail (`config.py`, guarded on
+/// `self.mycpv is None`): the flags actually enabled for that prefix in
+/// the final USE set, in the raw value's own order, followed by any
+/// extra enabled flags sorted. This resolves `-*` / `-flag` /
+/// `VIDEO_CARDS="-* intel …"`. `None` when nothing is enabled (real
+/// appends the `VAR="…"` token to the `USE=` line only `if myval`, so an
+/// empty value is simply omitted).
+fn use_expand_display_value(var: &str, config: &portage_profile::Config) -> Option<String> {
+    let prefix = format!("{}_", var.to_lowercase());
+    let enabled: std::collections::BTreeSet<&str> = config
+        .use_flags
+        .iter()
+        .filter_map(|f| f.strip_prefix(&prefix))
+        .collect();
+    if enabled.is_empty() {
+        return None;
+    }
+    let raw = config.other_vars.get(var).map(String::as_str).unwrap_or("");
+    let mut out: Vec<&str> = raw
+        .split_whitespace()
+        .filter(|t| enabled.contains(t))
+        .collect();
+    for f in &enabled {
+        if !out.contains(f) {
+            out.push(f);
+        }
+    }
+    // `out` is now raw-order kept + the rest appended; the appended tail
+    // is already sorted because `enabled` is a `BTreeSet`.
+    Some(out.join(" "))
+}
+
 #[allow(clippy::too_many_arguments)]
 fn run_info(
     config: &portage_profile::Config,
@@ -5687,9 +5722,18 @@ fn run_info(
             if br.name.is_empty() {
                 continue;
             }
+            // Real `BinRepoConfig.info_string()` field order: name,
+            // location (if set), priority, sync-uri, verify-signature.
             println!("{}", br.name);
-            println!("    sync-uri: {}", br.sync_uri);
+            if let Some(loc) = &br.location {
+                println!("    location: {loc}");
+            }
             println!("    priority: {}", br.priority);
+            println!("    sync-uri: {}", br.sync_uri);
+            println!(
+                "    verify-signature: {}",
+                if br.verify_signature { "True" } else { "False" }
+            );
             println!();
         }
     }
@@ -5706,35 +5750,59 @@ fn run_info(
         println!("Installed sets: {}", sets.join(", "));
     }
 
-    // The variable dump (real `myvars`, minus the deprecated/skipped
-    // ones), sorted, `VAR="value"` -- or `Unset:` when portuale's
-    // config carries no value.
+    // The variable dump: real `action_info`'s hardcoded `myvars` list
+    // plus `<PORTDIR>/profiles/info_vars` (real `actions.py:2221`), minus
+    // the deprecated/skipped ones (`PORTAGE_REPOSITORIES`, `PORTDIR`,
+    // `PORTDIR_OVERLAY`, `SYNC`), de-duplicated and sorted. Each is
+    // `VAR="value"`, or listed on the trailing `Unset:` line when the
+    // config carries no value. The `const.INCREMENTALS` members
+    // (`CONFIG_PROTECT`/`CONFIG_PROTECT_MASK`/`ENV_UNSET`/`FEATURES`, plus
+    // `ACCEPT_KEYWORDS`) are shown as real stores them: `-*`/`-tok`
+    // resolved, then `" ".join(sorted(...))`.
     let use_expand: Vec<String> = {
         let mut v: Vec<String> = config.use_expand.iter().cloned().collect();
         v.sort();
         v
     };
-    let mut unset: Vec<&str> = Vec::new();
-    for &k in &[
-        "ACCEPT_KEYWORDS",
-        "ACCEPT_LICENSE",
-        "CFLAGS",
-        "CHOST",
+    let mut myvars: Vec<String> = [
+        "GENTOO_MIRRORS",
         "CONFIG_PROTECT",
         "CONFIG_PROTECT_MASK",
-        "CXXFLAGS",
         "DISTDIR",
-        "EMERGE_DEFAULT_OPTS",
         "ENV_UNSET",
-        "FEATURES",
-        "GENTOO_MIRRORS",
         "PKGDIR",
+        "PORTAGE_TMPDIR",
         "PORTAGE_BINHOST",
         "PORTAGE_BUNZIP2_COMMAND",
         "PORTAGE_BZIP2_COMMAND",
-        "PORTAGE_TMPDIR",
         "USE",
-    ] {
+        "CHOST",
+        "CFLAGS",
+        "CXXFLAGS",
+        "ACCEPT_KEYWORDS",
+        "ACCEPT_LICENSE",
+        "FEATURES",
+        "EMERGE_DEFAULT_OPTS",
+    ]
+    .map(String::from)
+    .to_vec();
+    if let Some(main) = repos.iter().find(|r| r.is_main)
+        && let Ok(text) = std::fs::read_to_string(main.location.join("profiles/info_vars"))
+    {
+        for line in text.lines() {
+            let l = line.trim();
+            if !l.is_empty() && !l.starts_with('#') {
+                myvars.push(l.to_string());
+            }
+        }
+    }
+    let skipped = ["PORTAGE_REPOSITORIES", "PORTDIR", "PORTDIR_OVERLAY", "SYNC"];
+    myvars.retain(|v| !skipped.contains(&v.as_str()));
+    myvars.sort();
+    myvars.dedup();
+    let mut unset: Vec<String> = Vec::new();
+    for k in &myvars {
+        let k = k.as_str();
         let value: Option<String> = match k {
             "ACCEPT_KEYWORDS" => {
                 let mut kw: Vec<&String> = config.accept_keywords.iter().collect();
@@ -5745,6 +5813,11 @@ fn run_info(
             "ACCEPT_LICENSE" => {
                 (!config.accept_license.is_empty()).then(|| config.accept_license.join(" "))
             }
+            "CONFIG_PROTECT" | "CONFIG_PROTECT_MASK" | "ENV_UNSET" | "FEATURES" => config
+                .resolved_incremental(k)
+                .filter(|v| !v.is_empty())
+                .map(|v| v.join(" "))
+                .or_else(|| config.other_vars.get(k).cloned()),
             "USE" => {
                 let mut flags: Vec<&String> = config
                     .use_flags
@@ -5764,21 +5837,29 @@ fn run_info(
                         .join(" "),
                 )
             }
-            _ => config.other_vars.get(k).cloned(),
+            // Real `settings.get(k)` bottoms out in `configdict["env"]`
+            // (`os.environ`), so a curated `info_vars` entry that is only
+            // ever an environment variable (`SHELL`, `LC_ALL`, …) still
+            // shows. Config sources win; the process env is the fallback.
+            _ => config
+                .other_vars
+                .get(k)
+                .cloned()
+                .or_else(|| std::env::var(k).ok()),
         };
         match value {
             Some(v) if k == "PORTAGE_BZIP2_COMMAND" && v == "bzip2" => {}
             Some(v) if k == "USE" => {
                 let mut line = format!("USE=\"{v}\"");
                 for var in &use_expand {
-                    if let Some(val) = config.other_vars.get(var) {
+                    if let Some(val) = use_expand_display_value(var, config) {
                         line.push_str(&format!(" {var}=\"{val}\""));
                     }
                 }
                 println!("{line}");
             }
             Some(v) => println!("{k}=\"{v}\""),
-            None => unset.push(k),
+            None => unset.push(k.to_string()),
         }
     }
     if !unset.is_empty() {

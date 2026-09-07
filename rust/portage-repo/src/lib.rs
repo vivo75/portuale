@@ -14394,6 +14394,8 @@ mod tests {
                 .to_string_lossy()
                 .into_owned(),
             priority: 1,
+            location: None,
+            verify_signature: true,
         }
     }
 

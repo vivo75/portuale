@@ -331,8 +331,36 @@ stale-entry pruning + eclass masters-chain lookup, `--check-news` real
 ANSI USE colour all shipped 2026-09-05, see `what-this-proves.md`'s
 "Whole emerge actions backlog" entry for the cited detail. Remaining:
 
-- `--info`: the host-state half (version header, uname/mem, tool-version
-  probes, `info_pkgs`, timestamps) is a documented cut. The
+- `--info` **config-layer completeness shipped 2026-09-07**: portuale now
+  reads `cnf/make.globals` (the base db, via a new multi-line-quote /
+  apostrophe-comment-safe `logical_lines`), `/etc/profile.env` (the
+  `env.d` db — `CONFIG_PROTECT*` fragments + scalars like `LANG`/`LEX`),
+  and `<PORTDIR>/profiles/info_vars` (the extra `myvars` names). The
+  `const.INCREMENTALS` displays (`FEATURES`, `CONFIG_PROTECT`,
+  `CONFIG_PROTECT_MASK`, `ENV_UNSET`) are `-*`/`-tok`-resolved then
+  sorted, exactly as real `config.regenerate()` stores them
+  (`Config::resolved_incremental`); `USE_EXPAND` variable display values
+  are USE-consistent-resolved (`-* intel …` → `intel …`,
+  `GRUB_PLATFORMS`); `CBUILD` defaults to `CHOST`, `PORTAGE_CONFIGROOT`
+  is stamped; env-only `info_vars` (`SHELL`) fall through to the process
+  env. `Binary Repositories:` now shows `location` + `verify-signature`
+  in real `BinRepoConfig.info_string()` field order. Verified
+  byte-exact against a live `emerge --info` for **every** `VAR="…"` line
+  + both repo blocks. Dual-language, contract-pinned
+  (`test_info_stacks_make_globals_profile_env_and_info_vars`). Still open:
+  (a) the host-state header half (Portage-version line, `System uname`,
+  `KiB Mem`, `Timestamp`/`Head commit of repository`, `sh`/`ld`/
+  `coreutils` probes, the `info_pkgs` version table) — a fixture-driven
+  test can't verify real host state; (b) the `Repositories:` block's
+  `info_string()` fields (`sync-type`, `sync-uri`, `volatile`,
+  `sync-git-verify-commit-signature`) — needs `repos.conf` field parsing
+  + the global `repos.conf` `[DEFAULT]` merge + a `volatile` fs-writability
+  probe threaded through `portage_repo::find_repos`; (c) the resolved base
+  `USE` set still diverges from real (`consolekit`/`elogind`/`split-usr`
+  extra, `blake2`/`bpf`/`lto`/… missing, `LLVM_SLOT`/`PERL_FEATURES`/
+  `LUA_SINGLE_TARGET` off) — a profile USE force/mask/expand resolution
+  gap, its own slice.
+- `--info`: the
   `(non-installed binary)` candidate path and the `pkg_info()` phase run
   itself both shipped 2026-09-05: `--usepkg --info` now selects the
   highest local `$PKGDIR` binary that defines `pkg_info()` and renders

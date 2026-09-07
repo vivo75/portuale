@@ -880,6 +880,136 @@ pub struct Config {
     /// already builds for `${VAR}` substitution, exposed for
     /// `emerge --info`'s own variable dump.
     pub other_vars: HashMap<String, String>,
+    /// Per-source token lists for the `const.INCREMENTALS` variables real
+    /// portage stacks in `config.regenerate()` and stores as
+    /// `" ".join(sorted(myflags))`, narrowed to the four `emerge --info`
+    /// displays: `CONFIG_PROTECT`, `CONFIG_PROTECT_MASK`, `ENV_UNSET`,
+    /// `FEATURES`. One `Vec<String>` per assignment seen, appended in
+    /// real's own db-stack order (`env.d` / `/etc/profile.env`, then
+    /// `make.globals`, then the profile chain, then `make.conf`, then the
+    /// process env). [`Config::resolved_incremental`] folds them with
+    /// `-*` / `-tok` semantics and sorts. `ACCEPT_KEYWORDS` (also an
+    /// incremental) keeps its own dedicated `accept_keywords` set.
+    pub incremental_sources: HashMap<String, Vec<Vec<String>>>,
+}
+
+impl Config {
+    /// Real `config.regenerate()`'s incremental fold for one
+    /// `const.INCREMENTALS` variable: stack every source's tokens in db
+    /// order, `-*` clears everything so far, `-tok` discards, a bare (or
+    /// `+`-prefixed) token adds, then `sorted(myflags)` (real
+    /// `self.configlist[-1][mykey] = " ".join(sorted(myflags))`). Returns
+    /// `None` only when the variable was never assigned anywhere.
+    pub fn resolved_incremental(&self, key: &str) -> Option<Vec<String>> {
+        let sources = self.incremental_sources.get(key)?;
+        let mut set: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+        for tokens in sources {
+            for tok in tokens {
+                if tok == "-*" {
+                    set.clear();
+                } else if let Some(rest) = tok.strip_prefix('-') {
+                    set.remove(rest);
+                } else {
+                    set.insert(tok.strip_prefix('+').unwrap_or(tok).to_string());
+                }
+            }
+        }
+        Some(set.into_iter().collect())
+    }
+}
+
+/// The `const.INCREMENTALS` variables [`Config::incremental_sources`]
+/// tracks for `emerge --info` (the rest of real's tuple is either
+/// USE-related -- handled separately -- or never displayed).
+const TRACKED_INCREMENTALS: [&str; 4] = [
+    "CONFIG_PROTECT",
+    "CONFIG_PROTECT_MASK",
+    "ENV_UNSET",
+    "FEATURES",
+];
+
+/// Splits `text` into logical assignment lines, joining physical lines
+/// continued either by a trailing unescaped `\` or by an unclosed
+/// `'`/`"` quote -- real `getconfig`'s `shlex` reads across newlines
+/// inside quotes, which `cnf/make.globals` relies on for its multi-line
+/// `FEATURES=`. Quote characters are kept; `parse_kv_line` strips the
+/// outer pair. Joined physical lines are separated by a single space.
+fn logical_lines(text: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    let mut cur = String::new();
+    let mut quote: Option<char> = None;
+    for raw in text.lines() {
+        // A full-line comment outside any continuation is skipped whole
+        // (real `getconfig`'s `shlex` sets `commenters = "#"`) -- without
+        // this a `#` inside comment prose, e.g. `Don't`, would open a
+        // bogus quote that swallows the rest of the file.
+        if quote.is_none() && cur.is_empty() && raw.trim_start().starts_with('#') {
+            continue;
+        }
+        let mut line = raw;
+        let mut cont = false;
+        if quote.is_none() && line.ends_with('\\') && !line.ends_with("\\\\") {
+            line = &line[..line.len() - 1];
+            cont = true;
+        }
+        if !cur.is_empty() {
+            cur.push(' ');
+        }
+        let mut prev = ' ';
+        let mut escaped = false;
+        for (idx, c) in line.char_indices() {
+            match quote {
+                Some('"') if !escaped && c == '\\' => {
+                    escaped = true;
+                    prev = c;
+                    continue;
+                }
+                Some('"') if escaped => {
+                    escaped = false;
+                    prev = c;
+                    continue;
+                }
+                Some(q) => {
+                    if c == q {
+                        quote = None;
+                    }
+                }
+                None => {
+                    if c == '"' || c == '\'' {
+                        quote = Some(c);
+                    } else if c == '#' && prev.is_whitespace() {
+                        // Inline comment: drop from here to end of line.
+                        cur.push_str(line[..idx].trim_end());
+                        line = "";
+                        break;
+                    }
+                }
+            }
+            prev = c;
+        }
+        cur.push_str(line);
+        if quote.is_none() && !cont {
+            out.push(std::mem::take(&mut cur));
+        }
+    }
+    if !cur.is_empty() {
+        out.push(cur);
+    }
+    out
+}
+
+/// Records one `key=value` assignment against [`Config::incremental_sources`]
+/// when `key` is a [`TRACKED_INCREMENTALS`] variable. `value` is the
+/// already-`${VAR}`-substituted string (matching real, whose per-db
+/// value is what `getconfig` expanded it to).
+fn note_incremental(config: &mut Config, key: &str, value: &str) {
+    if TRACKED_INCREMENTALS.contains(&key) {
+        config
+            .incremental_sources
+            .entry(key.to_string())
+            .or_default()
+            .push(value.split_whitespace().map(String::from).collect());
+    }
 }
 
 /// One `--getbinpkg` binary-package repository (real
@@ -897,6 +1027,18 @@ pub struct BinRepo {
     /// `priority` (real `int(priority)`, or `0` on parse failure /
     /// absence -- real sorts a `None` priority as `0`).
     pub priority: i32,
+    /// `location` (real `BinRepoConfig.location`): the explicit
+    /// `binrepos.conf` value, or `None`. Real fills a
+    /// `<EPREFIX>/var/cache/binhost/<name>` fallback only when
+    /// `PORTAGE_BINHOST` is unset; portuale mirrors that. Display-only
+    /// (surfaced by `emerge --info`'s `Binary Repositories:` block).
+    pub location: Option<String>,
+    /// `verify-signature` (real `BinRepoConfig.verify_signature`, a
+    /// `_bool_opts` member). Real's shipped `cnf/binrepos.conf` sets
+    /// `[DEFAULT] verify-signature = true`, so portuale defaults to
+    /// `true` (it does not parse that global `[DEFAULT]` itself) and lets
+    /// a section's own `verify-signature = false` override.
+    pub verify_signature: bool,
 }
 
 impl BinRepo {
@@ -1120,11 +1262,12 @@ fn apply_env_layer(scalars: &mut HashMap<String, String>, config: &mut Config) {
 /// state, without any `source` support (used for make.defaults; make.conf
 /// wraps this with `source` handling -- see `process_make_conf_file`).
 fn process_lines(text: &str, scalars: &mut HashMap<String, String>, config: &mut Config) {
-    for line in text.lines() {
-        let Some((key, raw_value)) = parse_kv_line(line) else {
+    for line in logical_lines(text) {
+        let Some((key, raw_value)) = parse_kv_line(&line) else {
             continue;
         };
         let value = substitute(raw_value, scalars);
+        note_incremental(config, key, &value);
         match key {
             "USE" => {
                 apply_incremental(&value, &mut config.use_flags);
@@ -1366,7 +1509,7 @@ fn process_make_conf_file(
         path: canon.display().to_string(),
         source: e,
     })?;
-    for line in text.lines() {
+    for line in logical_lines(&text) {
         let trimmed = line.trim();
         if let Some(rest) = trimmed.strip_prefix("source ") {
             let sourced = rest.trim();
@@ -1386,6 +1529,7 @@ fn process_make_conf_file(
             continue;
         };
         let value = substitute(raw_value, scalars);
+        note_incremental(config, key, &value);
         match key {
             "USE" => {
                 apply_incremental(&value, &mut config.use_flags);
@@ -1981,6 +2125,50 @@ pub fn resolve_config(
         .filter(|(_, loc)| repo_profile_formats(loc).iter().any(|f| f == "portage-2"))
         .map(|(name, _)| name.clone())
         .collect();
+
+    // Real `regenerate()` stacks its dbs `env.d`, `globals`, `defaults`
+    // (the profile chain), `conf` (`make.conf`), `env` -- in that order
+    // (real config.py:531 + `mydbs = self.configlist[:-1]` in
+    // `regenerate`). Portuale reads them here in the same order so the
+    // `const.INCREMENTALS` fold in `resolved_incremental` matches.
+    //
+    // `env.d`: real `_get_env_d` -> `<EROOT>/etc/profile.env` (the
+    // compiled `env-update` output). Only its incremental entries
+    // (`CONFIG_PROTECT` / `CONFIG_PROTECT_MASK`, written there by
+    // packages' `/etc/env.d/*` fragments) feed `emerge --info`; the rest
+    // is build-phase env portuale doesn't model.
+    if let Ok(text) = fs::read_to_string(config_root.join("etc/profile.env")) {
+        for line in logical_lines(&text) {
+            let t = line.trim();
+            let l = t.strip_prefix("export ").unwrap_or(t);
+            if let Some((key, raw_value)) = parse_kv_line(l) {
+                let value = substitute(raw_value, &scalars);
+                note_incremental(&mut config, key, &value);
+                // env.d is a real scalar db too (real `configdict["env.d"]`):
+                // its `LANG` / `LEX` / … surface in `emerge --info`. Lowest
+                // priority -- `make.globals`, the profile chain and
+                // `make.conf` all override.
+                scalars.insert(key.to_string(), value);
+            }
+        }
+    }
+
+    // `globals`: `cnf/make.globals`, always sourced -- the base layer
+    // under the profile chain (real config.py:532). Real portage ships it
+    // at `portage.const.GLOBAL_CONFIG_PATH` (`/usr/share/portage/config`);
+    // portuale reads it `config_root`-relative, which resolves to that
+    // same absolute path for a live `PORTAGE_CONFIGROOT=/` run and stays
+    // absent (so contributes nothing, deterministically) under a test /
+    // fixture `config_root`.
+    let globals_path = config_root.join("usr/share/portage/config/make.globals");
+    if globals_path.is_file() {
+        let text = fs::read_to_string(&globals_path).map_err(|e| Error::ReadFile {
+            path: globals_path.display().to_string(),
+            source: e,
+        })?;
+        scalars.remove("USE");
+        process_lines(&text, &mut scalars, &mut config);
+    }
 
     let make_profile = config_root.join("etc/portage/make.profile");
     let chain: Vec<PathBuf> = if make_profile.exists() {
@@ -2694,6 +2882,26 @@ pub fn resolve_config(
             .unwrap_or(""),
     );
 
+    // Real `config.py.__init__`: `PORTAGE_CONFIGROOT` is stamped into the
+    // settings, and `CBUILD` defaults to `CHOST` when unset anywhere
+    // (`config.py`'s own `if self.get("CBUILD") is None and
+    // self.get("CHOST")`). Both surface in `emerge --info`.
+    scalars
+        .entry("PORTAGE_CONFIGROOT".to_string())
+        .or_insert_with(|| {
+            let s = config_root.to_string_lossy();
+            if s.is_empty() {
+                "/".to_string()
+            } else {
+                s.into_owned()
+            }
+        });
+    if !scalars.contains_key("CBUILD")
+        && let Some(chost) = scalars.get("CHOST").cloned()
+    {
+        scalars.insert("CBUILD".to_string(), chost);
+    }
+
     config.other_vars = scalars;
 
     Ok(config)
@@ -2726,9 +2934,14 @@ fn parse_binrepos(binrepos_conf: &str, portage_binhost: &str) -> Vec<BinRepo> {
     let mut section: Option<String> = None;
     let mut sync_uri: Option<String> = None;
     let mut priority: i32 = 0;
+    let mut location: Option<String> = None;
+    let mut verify_signature = true;
+    #[allow(clippy::type_complexity)]
     let flush = |section: &mut Option<String>,
                  sync_uri: &mut Option<String>,
                  priority: &mut i32,
+                 location: &mut Option<String>,
+                 verify_signature: &mut bool,
                  repos: &mut Vec<BinRepo>,
                  seen: &mut std::collections::HashSet<String>| {
         if let (Some(name), Some(uri)) = (section.take(), sync_uri.take()) {
@@ -2738,9 +2951,13 @@ fn parse_binrepos(binrepos_conf: &str, portage_binhost: &str) -> Vec<BinRepo> {
                 name,
                 sync_uri: uri,
                 priority: *priority,
+                location: location.take(),
+                verify_signature: *verify_signature,
             });
         }
         *priority = 0;
+        *location = None;
+        *verify_signature = true;
     };
     for line in binrepos_conf.lines() {
         let line = line.trim();
@@ -2752,6 +2969,8 @@ fn parse_binrepos(binrepos_conf: &str, portage_binhost: &str) -> Vec<BinRepo> {
                 &mut section,
                 &mut sync_uri,
                 &mut priority,
+                &mut location,
+                &mut verify_signature,
                 &mut repos,
                 &mut seen_uris,
             );
@@ -2766,6 +2985,13 @@ fn parse_binrepos(binrepos_conf: &str, portage_binhost: &str) -> Vec<BinRepo> {
                 // instead of an absolute, non-relocatable path).
                 "sync-uri" => sync_uri = Some(substitute(v.trim(), &HashMap::new())),
                 "priority" => priority = v.trim().parse().unwrap_or(0),
+                "location" => location = Some(substitute(v.trim(), &HashMap::new())),
+                "verify-signature" => {
+                    verify_signature = matches!(
+                        v.trim().to_ascii_lowercase().as_str(),
+                        "true" | "yes" | "1" | "on"
+                    )
+                }
                 _ => {}
             }
         }
@@ -2774,6 +3000,8 @@ fn parse_binrepos(binrepos_conf: &str, portage_binhost: &str) -> Vec<BinRepo> {
         &mut section,
         &mut sync_uri,
         &mut priority,
+        &mut location,
+        &mut verify_signature,
         &mut repos,
         &mut seen_uris,
     );
@@ -2793,6 +3021,11 @@ fn parse_binrepos(binrepos_conf: &str, portage_binhost: &str) -> Vec<BinRepo> {
                 name,
                 sync_uri: uri,
                 priority: current_priority,
+                // Real: with `PORTAGE_BINHOST` set, the
+                // `<EPREFIX>/var/cache/binhost/<name>` location fallback
+                // is skipped -- an implicit entry keeps `location = None`.
+                location: None,
+                verify_signature: true,
             });
         }
     }
@@ -2841,6 +3074,8 @@ sync-uri = file:///srv/pkgs
             name: "h".into(),
             sync_uri: "https://gpkg.example.org/seed-desk".into(),
             priority: 0,
+            location: None,
+            verify_signature: true,
         };
         assert_eq!(
             http.packages_dir(root),
@@ -2850,6 +3085,8 @@ sync-uri = file:///srv/pkgs
             name: "f".into(),
             sync_uri: "file:///srv/pkgs".into(),
             priority: 0,
+            location: None,
+            verify_signature: true,
         };
         assert_eq!(file.packages_dir(root), Path::new("/srv/pkgs"));
     }
@@ -4901,5 +5138,32 @@ sync-uri = file:///srv/pkgs
             set,
             HashSet::from(["flag1".to_string(), "flag2".to_string()])
         );
+    }
+
+    #[test]
+    fn logical_lines_joins_multiline_quotes_and_skips_apostrophe_comments() {
+        // A `#` comment containing a lone `'` must not open a quote that
+        // swallows the rest of the file (the real cnf/make.globals bug).
+        let text = "# Don't edit this\n\
+                    FEATURES=\"a b\n\
+                    c d\"\n\
+                    # it's fine\n\
+                    X=\"y\" # trailing note\n\
+                    Z=1\n";
+        let lines = logical_lines(text);
+        assert_eq!(lines, vec!["FEATURES=\"a b c d\"", "X=\"y\"", "Z=1"]);
+    }
+
+    #[test]
+    fn resolved_incremental_folds_stacked_sources_with_negation_and_sorts() {
+        let mut config = Config::default();
+        note_incremental(&mut config, "FEATURES", "b a merge-sync");
+        note_incremental(&mut config, "FEATURES", "c -merge-sync");
+        note_incremental(&mut config, "FEATURES", "-a d");
+        assert_eq!(
+            config.resolved_incremental("FEATURES"),
+            Some(vec!["b".to_string(), "c".to_string(), "d".to_string()])
+        );
+        assert_eq!(config.resolved_incremental("CONFIG_PROTECT"), None);
     }
 }

@@ -14590,3 +14590,67 @@ because building a real 40+-field `ResolveRequest` is portage-repo's
 fixture-driven business. `cargo test --release -p mrg-director`: 7
 passed; `cargo clippy --release -p mrg-director --all-targets` zero
 warnings; `cargo fmt --check` clean.
+
+### `emerge --info`: the real config-layer stack (2026-09-07)
+
+`emerge --info`'s variable dump was previously computed from the profile
+chain + `make.conf` only. Real portage stacks five dbs — `env.d`,
+`globals`, `defaults` (the profile chain), `conf` (`make.conf`), `env` —
+and `--info` was missing the first two entirely, so `FEATURES` was a
+partial unsorted list with literal `-collision-protect` tokens,
+`CONFIG_PROTECT` was just `/etc`, `PORTAGE_TMPDIR` showed as `Unset:`,
+and ~13 `info_vars` names (`CBUILD`, `LDFLAGS`, `MAKEOPTS`, `RUSTFLAGS`,
+`SHELL`, `LANG`, …) never appeared. This slice closes that:
+
+- **`cnf/make.globals`** is now read as the base db, `config_root`-relative
+  (`/usr/share/portage/config/make.globals` for a live `PORTAGE_CONFIGROOT=/`
+  run, absent under a fixture root so it contributes nothing
+  deterministically). Its multi-line quoted `FEATURES=` needed a new
+  `logical_lines` splitter that joins physical lines across an open
+  `'`/`"` quote or a trailing `\` — and, critically, skips a `#` comment
+  line *before* quote-scanning it, because `make.globals` has comment
+  prose containing a lone `'` (`Don't`) that a naïve scanner treats as an
+  unterminated string swallowing the rest of the file.
+- **`/etc/profile.env`** (the compiled `env-update` output, real
+  `_get_env_d`) is read as the lowest-priority db: its `CONFIG_PROTECT` /
+  `CONFIG_PROTECT_MASK` fragments (written there by packages' `env.d`
+  files) and its scalars (`LANG`, `LEX`).
+- The `const.INCREMENTALS` displays (`FEATURES`, `CONFIG_PROTECT`,
+  `CONFIG_PROTECT_MASK`, `ENV_UNSET`) are now folded exactly as real
+  `config.regenerate()` does — every source's tokens stacked in db order,
+  `-*` clears, `-tok` discards, then `" ".join(sorted(...))`
+  (`Config::resolved_incremental`).
+- `myvars` = real's hardcoded list **+** `<PORTDIR>/profiles/info_vars`,
+  minus the deprecated names (`PORTDIR`, `PORTDIR_OVERLAY`, `SYNC`,
+  `PORTAGE_REPOSITORIES`), de-duped and sorted. An `info_vars` name only
+  ever set in the process environment (`SHELL`) falls through to
+  `os.environ`.
+- Each `USE_EXPAND` variable's display value is regenerated to be
+  USE-consistent (real `config.regenerate()`'s "Generate global
+  USE_EXPAND variables settings" tail): the flags actually enabled for
+  that prefix, in the raw value's order, then extras sorted — resolving
+  `VIDEO_CARDS="-* intel …"` → `intel …` and filling `GRUB_PLATFORMS`
+  from the profile-enabled `grub_platforms_*` flags. An empty result is
+  omitted from the `USE=` line, matching real's `if myval`.
+- `CBUILD` defaults to `CHOST`, `PORTAGE_CONFIGROOT` is stamped in — both
+  real `config.py.__init__` behaviours.
+- `Binary Repositories:` gained `location` + `verify-signature` (default
+  `true`, a section's own `verify-signature = false` overriding) in real
+  `BinRepoConfig.info_string()` field order.
+
+Verified **byte-exact against a live `emerge --info`** for every
+`VAR="value"` line and both the `Repositories:` and `Binary
+Repositories:` blocks (`diff` of the two outputs is empty across that
+range). Dual-language — the same layering is mirrored in
+`emerge_pretend_reference.py` — and contract-pinned by
+`test_info_stacks_make_globals_profile_env_and_info_vars` (a self-
+contained `PORTAGE_CONFIGROOT` with its own `make.globals` /
+`profile.env` / `info_vars` / `binrepos.conf`), plus Rust unit tests for
+`logical_lines` and `resolved_incremental`. Deliberately still out:
+real `--info`'s host-state header (Portage-version line, `System uname`,
+`KiB Mem`, repo `Timestamp`/`Head commit`, `sh`/`ld`/`coreutils`
+probes, the `info_pkgs` table), the `Repositories:` block's own
+`info_string()` fields (`sync-type`/`sync-uri`/`volatile`/module opts —
+needs `repos.conf` field parsing + the global-`repos.conf` merge), and
+the resolved base `USE` set, which still diverges from real on a handful
+of flags (a separate profile USE force/mask/expand slice).

@@ -1990,3 +1990,29 @@ cargo test --release -p mrg-director
 # test tests::resolver_speaks_graph_result ... ok
 # test result: ok. 7 passed; 0 failed
 ```
+
+`emerge --info`: the real config-layer stack (2026-09-07). `--info`'s
+`VAR="value"` dump now reads the same five dbs real portage stacks —
+`/etc/profile.env` (env.d), `cnf/make.globals`, the profile chain,
+`make.conf`, the process env — so `FEATURES` / `CONFIG_PROTECT` /
+`CONFIG_PROTECT_MASK` / `ENV_UNSET` come out `-*`/`-tok`-resolved and
+sorted (real `config.regenerate()`), the `<PORTDIR>/profiles/info_vars`
+names (`CBUILD`, `LDFLAGS`, `MAKEOPTS`, `RUSTFLAGS`, `SHELL`, `LANG`, …)
+all appear, `USE_EXPAND` values are USE-consistent (`VIDEO_CARDS="-* intel
+…"` → `intel …`), and `Binary Repositories:` shows `location` +
+`verify-signature`. Verified byte-exact against a live run over the whole
+variable block and both repo blocks:
+
+```sh
+diff <(emerge --info) <(rust/target/release/portuale emerge --info) \
+  | grep -vE '^(<|[0-9])' | sed -n '/Repositories:/,/^Unset/p'
+# (empty for every VAR="value" line, the Repositories: and Binary
+#  Repositories: blocks -- only real's host-state header, the extra
+#  Repositories: info_string() fields, and a handful of base USE flags
+#  still differ; see scope-backlog.md 2.F.)
+```
+
+Deterministic slice test:
+`pytest tests/test_emerge_pretend_contract.py -k stacks_make_globals`
+builds a self-contained `PORTAGE_CONFIGROOT` (its own `make.globals` /
+`profile.env` / `info_vars` / `binrepos.conf`) and pins Rust == Python.

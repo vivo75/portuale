@@ -725,6 +725,8 @@ mod tests {
             name: "test".to_string(),
             sync_uri: base.clone(),
             priority: 1,
+            location: None,
+            verify_signature: true,
         };
         refresh_binhost_indexes(std::slice::from_ref(&binrepo), &root).unwrap();
         let cached = binrepo.packages_dir(&root).join("Packages");
@@ -758,6 +760,8 @@ mod tests {
             name: "test".into(),
             sync_uri: base.clone(),
             priority: 1,
+            location: None,
+            verify_signature: true,
         }];
         refresh_binhost_indexes(&binrepos, &root).expect("index refresh");
         assert!(
@@ -873,6 +877,8 @@ mod tests {
             name: "test".into(),
             sync_uri: base.clone(),
             priority: 1,
+            location: None,
+            verify_signature: true,
         }];
         refresh_binhost_indexes(&binrepos, &root).expect("index refresh");
 
