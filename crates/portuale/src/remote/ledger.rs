@@ -96,3 +96,65 @@ pub(crate) fn ledger_lines_match(client: Option<&str>, server: Option<&str>) -> 
         _ => false,
     }
 }
+
+/// Read the client ledger's newest line over the transport.
+/// Missing/empty reads as `None`; only a transport or command
+/// failure is an `Err`.
+pub(crate) fn read_client_latest_ledger(
+    ctx: &RemoteContext,
+    control: Option<&std::path::Path>,
+) -> Result<Option<String>, String> {
+    let file = client_ledger_file(ctx);
+    let script = format!(
+        "f={};\nif [ -f \"$f\" ]; then tail -n 1 \"$f\"; fi\n",
+        sh_quote(&file)
+    );
+    let output = run_script_stdin(ctx, control, &script).map_err(|message| {
+        if ctx.transport == RemoteTransport::Local {
+            format!("mrg: local ledger read failed: {message}")
+        } else {
+            message
+        }
+    })?;
+    let code = output.status.code();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    if !output.status.success() {
+        if ctx.transport == RemoteTransport::Ssh && is_transport_error(code, &stderr) {
+            let mut message = format!("mrg: client {} unreachable:", ctx.hostname);
+            for line in stderr.lines().take(5) {
+                message.push_str(&format!("\nmrg:   {line}"));
+            }
+            return Err(message);
+        }
+        let mut message = format!(
+            "mrg: reading the client ledger failed (exit {}):",
+            code.unwrap_or(-1)
+        );
+        for line in stderr.lines().take(5) {
+            message.push_str(&format!("\nmrg:   {line}"));
+        }
+        return Err(message);
+    }
+    Ok(newest_ledger_line(&String::from_utf8_lossy(&output.stdout)))
+}
+
+/// The strict-mode gate: abort with no client writes unless the client's
+/// and server's newest ledger line agree (both-absent = fresh = ok).
+pub(crate) fn check_ledger_match(
+    ctx: &RemoteContext,
+    control: Option<&std::path::Path>,
+    server_ledger_base: &std::path::Path,
+) -> Result<(), String> {
+    let client = read_client_latest_ledger(ctx, control)?;
+    let server = server_latest_ledger(server_ledger_base, &ctx.hostname);
+    if ledger_lines_match(client.as_deref(), server.as_deref()) {
+        return Ok(());
+    }
+    let show = |line: Option<&str>| line.unwrap_or("(no ledger)").to_string();
+    Err(format!(
+        "mrg: --remote-require-ledger-match: the client ledger provenance disagrees with the server record for {}:\nmrg:   client: {}\nmrg:   server: {}",
+        ctx.hostname,
+        show(client.as_deref()),
+        show(server.as_deref()),
+    ))
+}

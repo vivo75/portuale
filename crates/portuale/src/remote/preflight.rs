@@ -168,6 +168,54 @@ pub(crate) fn clock_gate(
     }
 }
 
+/// Connect and run the preflight script: parsed `KEY=VALUE` gates on
+/// success, `mrg: …`-prefixed message on transport or command failure.
+/// Human log lines (client stderr) print straight through on success.
+/// The binary facts (`bin_preflight`) are computed before the first
+/// connection, so an unreadable `--remote-portuale-binary` fails fast.
+/// Returns the parsed values plus the binary facts the client-binary
+/// gates decide on (`None` when the run skips those gates by design).
+pub(crate) fn run_preflight_inner(
+    ctx: &RemoteContext,
+    control: Option<&std::path::Path>,
+) -> Result<(HashMap<String, String>, Option<BinPreflight>), String> {
+    let bin = bin_preflight(ctx)?;
+    let script = match &bin {
+        Some(pre) => preflight_script(&ctx.root, &ctx.workdir, Some((&pre.dirs, &pre.candidates))),
+        None => preflight_script(&ctx.root, &ctx.workdir, None),
+    };
+    let output = run_script_stdin(ctx, control, &script).map_err(|message| {
+        if ctx.transport == RemoteTransport::Local {
+            format!("mrg: local preflight command failed: {message}")
+        } else {
+            message
+        }
+    })?;
+    let code = output.status.code();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    if !output.status.success() {
+        if ctx.transport == RemoteTransport::Ssh && is_transport_error(code, &stderr) {
+            let mut message = format!("mrg: client {} unreachable:", ctx.hostname);
+            for line in stderr.lines().take(5) {
+                message.push_str(&format!("\nmrg:   {line}"));
+            }
+            return Err(message);
+        }
+        let mut message = format!(
+            "mrg: client preflight command failed (exit {}):",
+            code.unwrap_or(-1)
+        );
+        for line in stderr.lines().take(5) {
+            message.push_str(&format!("\nmrg:   {line}"));
+        }
+        return Err(message);
+    }
+    for line in stderr.lines() {
+        println!("{line}");
+    }
+    Ok((parse_kv(&String::from_utf8_lossy(&output.stdout)), bin))
+}
+
 /// Gates + clock over parsed preflight values. Pure (unit-tested).
 pub(crate) fn evaluate_preflight(
     ctx: &RemoteContext,

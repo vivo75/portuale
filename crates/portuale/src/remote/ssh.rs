@@ -21,6 +21,19 @@ pub fn sh_quote(word: &str) -> String {
     out
 }
 
+// --- SSH transport ---------------------------------------------------------
+
+/// Directory for ControlPersist sockets (`0700`). Candidates are
+/// tried shortest-first and a base that cannot fit the ~108-byte
+/// socket cap is skipped; `None` disables multiplexing (slower,
+/// still correct).
+pub(crate) fn control_dir() -> Option<std::path::PathBuf> {
+    control_dir_for(
+        std::env::var_os("XDG_RUNTIME_DIR").map(std::path::PathBuf::from),
+        std::env::var_os("HOME").map(std::path::PathBuf::from),
+    )
+}
+
 /// Worst-case `%C` expansion plus ssh's own multiplex suffix, with
 /// margin under the 108-byte `sun_path` cap.
 pub(crate) const CONTROL_PATH_BUDGET: usize = 64;
@@ -52,6 +65,60 @@ pub(crate) fn control_dir_for(
     })
 }
 
+/// Build the `ssh` argv (without the remote command): multiplexed,
+/// non-interactive (`BatchMode=yes` fails fast instead of prompting).
+pub(crate) fn ssh_argv(ctx: &RemoteContext, control: Option<&std::path::Path>) -> Vec<String> {
+    let mut argv = vec!["ssh".to_string(), "-p".to_string(), ctx.port.to_string()];
+    if let Some(key) = &ctx.key_file {
+        argv.push("-i".to_string());
+        argv.push(key.clone());
+    }
+    argv.push("-o".to_string());
+    argv.push("BatchMode=yes".to_string());
+    argv.push("-o".to_string());
+    argv.push(format!("ConnectTimeout={}", ctx.timeout_secs));
+    argv.push("-o".to_string());
+    argv.push(format!(
+        "StrictHostKeyChecking={}",
+        ctx.strict_host_key_checking.as_ssh_value()
+    ));
+    if let Some(dir) = control {
+        // `%C` hashes %l%h%p%r -- safe under the ~108-byte unix-socket
+        // limit no matter how long the hostname is.
+        let socket = dir.join("%C");
+        argv.push("-o".to_string());
+        argv.push("ControlMaster=auto".to_string());
+        argv.push("-o".to_string());
+        argv.push("ControlPersist=60s".to_string());
+        argv.push("-o".to_string());
+        argv.push(format!("ControlPath={}", socket.display()));
+    }
+    if let Some(extra) = &ctx.ssh_args {
+        argv.extend(extra.split_whitespace().map(String::from));
+    }
+    if let Some(user) = &ctx.user {
+        argv.push("-l".to_string());
+        argv.push(user.clone());
+    }
+    argv.push(ctx.hostname.clone());
+    argv
+}
+
+/// True when an ssh failure is a *transport* problem rather than a
+/// remote command failure: exit 255, spawn failure, or classic
+/// fatal signatures on stderr.
+pub(crate) fn is_transport_error(code: Option<i32>, stderr: &str) -> bool {
+    if code == Some(255) {
+        return true;
+    }
+    code.is_none()
+        && (stderr.contains("Connection refused")
+            || stderr.contains("Connection timed out")
+            || stderr.contains("No route to host")
+            || stderr.contains("Could not resolve hostname")
+            || stderr.contains("Permission denied"))
+}
+
 /// The local transport's `bash -s`: the child would inherit the
 /// server process's environment, so the server's own VDB selection
 /// (the `PORTUALE_VDB_*` vars and the VDB IPC var) is removed and
@@ -70,4 +137,80 @@ pub(crate) fn local_client_bash() -> std::process::Command {
     }
     cmd.env("PORTUALE_BIN", crate::self_exe::self_exe());
     cmd
+}
+
+/// Run `bash -s` with `script` on stdin; stdout/stderr captured
+/// separately (machine log vs. human log). Over ssh, or as a local
+/// subprocess when the transport is `local` (same driver, no network).
+pub(crate) fn run_script_stdin(
+    ctx: &RemoteContext,
+    control: Option<&std::path::Path>,
+    script: &str,
+) -> Result<std::process::Output, String> {
+    use std::io::Write as _;
+    let mut child = match ctx.transport {
+        RemoteTransport::Ssh => {
+            let mut argv = ssh_argv(ctx, control);
+            argv.push("bash".to_string());
+            argv.push("-s".to_string());
+            std::process::Command::new(&argv[0])
+                .args(&argv[1..])
+                .stdin(std::process::Stdio::piped())
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped())
+                .spawn()
+                .map_err(|e| format!("mrg: cannot spawn ssh: {e}"))?
+        }
+        RemoteTransport::Local => local_client_bash()
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .map_err(|e| format!("mrg: cannot spawn local bash: {e}"))?,
+    };
+    child
+        .stdin
+        .take()
+        .ok_or_else(|| "mrg: child stdin unavailable".to_string())?
+        .write_all(script.as_bytes())
+        .map_err(|e| format!("mrg: writing to child stdin: {e}"))?;
+    child
+        .wait_with_output()
+        .map_err(|e| format!("mrg: waiting for child: {e}"))
+}
+
+/// Run an arbitrary remote command (`tar`, …), not just `bash -s`.
+/// stdout bytes come back to the caller (used by the config pull).
+/// `remote_argv` is an argv, never shell text: over ssh each word is
+/// `sh_quote`d, so a client path with spaces stays one word.
+pub(crate) fn run_raw_command(
+    ctx: &RemoteContext,
+    control: Option<&std::path::Path>,
+    remote_argv: &[String],
+) -> Result<std::process::Output, String> {
+    match ctx.transport {
+        RemoteTransport::Local => {
+            let (head, tail) = remote_argv
+                .split_first()
+                .ok_or_else(|| "mrg: empty remote command".to_string())?;
+            std::process::Command::new(head)
+                .args(tail)
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped())
+                .output()
+                .map_err(|e| format!("mrg: cannot spawn local command: {e}"))
+        }
+        RemoteTransport::Ssh => {
+            let mut argv = ssh_argv(ctx, control);
+            argv.extend(remote_argv.iter().map(|word| sh_quote(word)));
+            std::process::Command::new(&argv[0])
+                .args(&argv[1..])
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped())
+                .output()
+                .map_err(|e| format!("mrg: cannot spawn ssh: {e}"))
+        }
+    }
 }
