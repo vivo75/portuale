@@ -15095,3 +15095,20 @@ packages), `llvm-23.1.0` merges from its binhost gpkg, `emerge --resume`
 then downloads and merges the remaining binhost binaries (`util-linux`,
 `clang-runtime`, `nftables`, ...). The last two are Rust-only
 real-execution code with no `--pretend` mirror.
+
+**Follow-up: `emerge --resume` then died building the first source
+package** (`dev-python/astroid-4.3.1`): `_python_validate_useflags` ->
+`die "No supported Python implementation in PYTHON_TARGETS"`, with
+`USE=""` in the phase environment. The `mtimedb` resume list records only
+`cat/pkg-ver`, so `emerge_build::resume_entry` builds a `GraphEntry` with
+`use_flags_display: Vec::new()` -- and `build_use_env` turns that into an
+empty `USE=`, so `python-r1` / `distutils-r1` (and any USE-conditional
+ebuild) can't find an enabled `python_targets_*` flag. New
+`portage_repo::candidate_use_flags_display` re-derives the
+`(iuse_flag, enabled)` list for a `cat/pkg-ver` the same way the resolver
+loop does (`effective_use_flags` over the candidate's `IUSE`); `run_resume`
+calls it for every `Ebuild` entry. Verified: `emerge --resume` now builds
+`astroid-4.3.1` with `python3_14`. Fresh `--getbinpkg @world` source
+builds were already fine (`test_emerge_atom_source_build_sees_the_
+resolved_use_and_build_flags`) -- only `--resume` reconstructs entries
+without USE.
