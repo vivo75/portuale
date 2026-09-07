@@ -578,6 +578,46 @@ fn uninstall_165(cpv: &str, anchor: (&str, &str)) -> BlockerSatisfiedBy {
     }
 }
 
+/// An owned conflict lands on its entry *and* spawns the removal
+/// its `Uninstall` tag names.
+#[test]
+fn file_blocker_conflicts_files_an_owned_row_on_its_entry_and_removal() {
+    let root = dir_165("file-owned");
+    install_165(&root, "dev-libs", "victim-1.0", "0", &[]);
+    let mut entries = vec![new_165("dev-libs", "owner", "1.0")];
+    let mut orphans = Vec::new();
+    file_blocker_conflicts(
+        &mut entries,
+        &root,
+        vec![filed_165(Filed165Args {
+            owner: ("dev-libs", "owner"),
+            owner_version: "1.0",
+            atom: "!!dev-libs/victim",
+            strong: true,
+            target: ("dev-libs", "victim", "1.0"),
+            unsolvable: false,
+            satisfied_by: Some(uninstall_165("dev-libs/victim-1.0", ("dev-libs", "owner"))),
+        })],
+        &mut orphans,
+    );
+    assert!(orphans.is_empty());
+    assert_eq!(entries.len(), 2);
+    assert_eq!(entries[0].blockers.len(), 1);
+    assert_eq!(entries[0].blockers[0].atom_str, "!!dev-libs/victim");
+    assert!(matches!(
+        entries[1].outcome,
+        PretendOutcome::Uninstall { .. }
+    ));
+    assert_eq!(entries[1].category, "dev-libs");
+    assert_eq!(entries[1].package, "victim");
+    assert!(entries[1].blockers.is_empty());
+    assert_eq!(
+        entries[1].required_by,
+        vec![("dev-libs".to_string(), "owner".to_string())]
+    );
+    let _ = std::fs::remove_dir_all(&root);
+}
+
 // ---- `enqueue_dependencies` (`--deep` AlreadyInstalled recursion). ----
 /// Arguments of [`enqueue_165`].
 struct Enqueue165Args<'a> {

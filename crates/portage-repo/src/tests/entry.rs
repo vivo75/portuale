@@ -1,5 +1,104 @@
 use super::*;
 
+#[test]
+fn topological_order_breaks_a_cycle_at_its_run_time_edge() {
+    // a's unsatisfied DEPEND names b, b's RDEPEND names a: the cycle breaks at
+    // the run-time edge, so b merges first (a must build against it).
+    let dep = |pkg: &str, priority: DepPriority| DepEdge {
+        atom: format!("dev-libs/{pkg}"),
+        evaluated: format!("dev-libs/{pkg}").clone(),
+        category: "dev-libs".to_string(),
+        package: pkg.to_string(),
+        priority,
+        disjunctive: false,
+        alt: None,
+        key: if priority.buildtime { 3 } else { 0 },
+    };
+    let buildtime = DepPriority {
+        buildtime: true,
+        ..DepPriority::default()
+    };
+    let runtime = DepPriority {
+        runtime: true,
+        ..DepPriority::default()
+    };
+    let mut a = graph_entry("dev-libs", "cyc-a", "1.0");
+    let mut b = graph_entry("dev-libs", "cyc-b", "1.0");
+    a.deps = vec![dep("cyc-b", buildtime)];
+    b.deps = vec![dep("cyc-a", runtime)];
+    a.required_by = vec![("dev-libs".to_string(), "cyc-b".to_string())];
+    b.required_by = vec![("dev-libs".to_string(), "cyc-a".to_string())];
+    let (ordered, _) = topological_merge_order(TopologicalMergeOrderArgs {
+        entries: vec![a, b],
+        top_level_atoms: &["dev-libs/cyc-a".to_string()],
+        config: &test_config(),
+        root: Path::new("/nonexistent-root"),
+        implicit_system_deps: true,
+        repos: &[],
+        dynamic_deps: true,
+        circular: &HashMap::new(),
+    });
+    let names: Vec<&str> = ordered.iter().map(|e| e.package.as_str()).collect();
+    assert_eq!(names, vec!["cyc-b", "cyc-a"]);
+
+    // All-buildtime cycle: unbreakable, falls back to bias order.
+    let mut a = graph_entry("dev-libs", "cyc-a", "1.0");
+    let mut b = graph_entry("dev-libs", "cyc-b", "1.0");
+    a.deps = vec![dep("cyc-b", buildtime)];
+    b.deps = vec![dep("cyc-a", buildtime)];
+    a.required_by = vec![("dev-libs".to_string(), "cyc-b".to_string())];
+    b.required_by = vec![("dev-libs".to_string(), "cyc-a".to_string())];
+    let (ordered, _) = topological_merge_order(TopologicalMergeOrderArgs {
+        entries: vec![a, b],
+        top_level_atoms: &["dev-libs/cyc-a".to_string()],
+        config: &test_config(),
+        root: Path::new("/nonexistent-root"),
+        implicit_system_deps: true,
+        repos: &[],
+        dynamic_deps: true,
+        circular: &HashMap::new(),
+    });
+    let names: Vec<&str> = ordered.iter().map(|e| e.package.as_str()).collect();
+    assert_eq!(names, vec!["cyc-a", "cyc-b"]);
+}
+
+#[test]
+fn topological_merge_order_stamps_discovery_before_sorting() {
+    // `discovery` is the pre-sort BFS position: ranks track input slots.
+    let dep = |pkg: &str, priority: DepPriority| DepEdge {
+        atom: format!("dev-libs/{pkg}"),
+        evaluated: format!("dev-libs/{pkg}").clone(),
+        category: "dev-libs".to_string(),
+        package: pkg.to_string(),
+        priority,
+        disjunctive: false,
+        alt: None,
+        key: 0,
+    };
+    let runtime = DepPriority {
+        runtime: true,
+        ..DepPriority::default()
+    };
+    let mut a = graph_entry("dev-libs", "a", "1.0");
+    let b = graph_entry("dev-libs", "b", "1.0");
+    a.deps = vec![dep("b", runtime)];
+    let (ordered, _) = topological_merge_order(TopologicalMergeOrderArgs {
+        entries: vec![a, b],
+        top_level_atoms: &["dev-libs/a".to_string()],
+        config: &test_config(),
+        root: Path::new("/nonexistent-root"),
+        implicit_system_deps: true,
+        repos: &[],
+        dynamic_deps: true,
+        circular: &HashMap::new(),
+    });
+    let ranks: Vec<(&str, usize)> = ordered
+        .iter()
+        .map(|e| (e.package.as_str(), e.discovery))
+        .collect();
+    assert_eq!(ranks, vec![("b", 1), ("a", 0)]);
+}
+
 /// `skipped_update_roots` attributes the miss to the root the rejecting edge
 /// points at, and a merge parent to its entry's root.
 #[test]

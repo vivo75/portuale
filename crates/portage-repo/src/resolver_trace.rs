@@ -22,6 +22,14 @@ use crate::{
     installed_pkg_repo, list_candidates, read_vdb_slot,
 };
 
+/// Emit `args` to stdout only when the trace is active (the per-package
+/// narration).
+pub(crate) fn out(args: fmt::Arguments) {
+    if crate::resolver_debug() {
+        print!("{args}");
+    }
+}
+
 /// Emit `args` to stderr only when the trace is active (the `digraph:` /
 /// candidate-list dumps).
 pub(crate) fn err(args: fmt::Arguments) {
@@ -29,6 +37,12 @@ pub(crate) fn err(args: fmt::Arguments) {
         eprint!("{args}");
     }
 }
+
+/// `tr!(...)` -> stdout narration, no-op unless `--pretend --debug` is active.
+macro_rules! tr {
+    ($($arg:tt)*) => { $crate::resolver_trace::out(format_args!($($arg)*)) };
+}
+pub(crate) use tr;
 
 /// The single highest priority classification, for `Priority:` lines and
 /// `digraph:` edge labels.
@@ -334,4 +348,331 @@ pub(crate) fn sort_by_dep_position(
         .collect();
     indexed.sort_by_key(|(pos, _)| *pos);
     indexed.into_iter().map(|(_, pi)| pi).collect()
+}
+
+/// Stages 2 / 4 / 6: the per-package resolution narration (`Child:` /
+/// `Parent Dep:`, `Parent:` / `Depstring:` / `Priority:` / `Candidates:`,
+/// virtual recursion, `\nExiting...`), emitted in one pass over the final
+/// `entries` on the successful backtracking pass only. The Stage 1 `digraph:`
+/// dump (emitted from `.order`) is the authoritative diff surface.
+/// After an entry's own groups, the bounded inner-ring re-narration re-prints
+/// the compact pair for every already-emitted dependency child (at most
+/// `entries.len()` pairs per dump; DAG walks schedule none).
+// Portage: _emerge/depgraph.py (_add_pkg, _add_pkg_deps), dep/dep_check.py
+pub(crate) fn dump_resolution_walk(
+    entries: &[GraphEntry],
+    root: &Path,
+    parent_atoms: &[ParentAtom],
+    repos: &[RepoConfig],
+) {
+    if !crate::resolver_debug() {
+        return;
+    }
+    const KEYS: [&str; 5] = ["RDEPEND", "IDEPEND", "PDEPEND", "DEPEND", "BDEPEND"];
+    // A withheld (never merged) entry carries no slot/sub-slot or repo, which
+    // would render as `:0/0::__unknown__`; resolve the display triple from
+    // the candidate list instead (trace-only; the resolver record is untouched).
+    let enriched = |e: &GraphEntry| -> GraphEntry {
+        if e.repo_name.is_some() {
+            return e.clone();
+        }
+        let ver = entry_version(e).unwrap_or("").to_string();
+        if ver.is_empty() {
+            return e.clone();
+        }
+        if let Ok(cands) = list_candidates(repos, &e.category, &e.package)
+            && let Some(c) = cands.iter().find(|c| c.version == ver)
+        {
+            let mut filled = e.clone();
+            if filled.slot.is_none() {
+                filled.slot = Some(c.slot.clone());
+            }
+            if filled.sub_slot.is_none() {
+                filled.sub_slot = Some(c.sub_slot.clone());
+            }
+            filled.repo_name = Some(c.repo_name.clone());
+            return filled;
+        }
+        e.clone()
+    };
+    let label_of = |cat: &str, pkg: &str| -> String {
+        entries
+            .iter()
+            .find(|e| e.category == cat && e.package == pkg)
+            .map(|e| {
+                let filled = enriched(e);
+                node_label(&filled, root, is_nomerge(e))
+            })
+            .unwrap_or_else(|| format!("({cat}/{pkg})"))
+    };
+    let label_of_key = |key: &(String, String, String, bool)| -> (String, String) {
+        let (cat, pkg, ver, installed) = key;
+        let found = entries.iter().find(|e| {
+            e.category == *cat
+                && e.package == *pkg
+                && entry_version(e).unwrap_or("") == ver
+                && is_nomerge(e) == *installed
+        });
+        let entry = found.or_else(|| {
+            entries
+                .iter()
+                .find(|e| e.category == *cat && e.package == *pkg)
+        });
+        match entry {
+            Some(e) => {
+                let filled = enriched(e);
+                (
+                    node_label(&filled, root, is_nomerge(e)),
+                    child_use_str(e, root),
+                )
+            }
+            None => (format!("({cat}/{pkg})"), String::new()),
+        }
+    };
+    // Per-instance rows, keyed by `(cat, pkg, version, installed)`; dedup by
+    // `(child, parent, atom, unevaluated)`.
+    let mut rows: std::collections::BTreeMap<(String, String, String, bool), Vec<&ParentAtom>> =
+        std::collections::BTreeMap::new();
+    for pa in parent_atoms {
+        let list = rows
+            .entry((
+                pa.child_category.clone(),
+                pa.child_package.clone(),
+                pa.child_version.clone(),
+                pa.child_installed,
+            ))
+            .or_default();
+        if !list.contains(&pa) {
+            list.push(pa);
+        }
+    }
+    let render_rows = |child_cat: &str,
+                       child_pkg: &str,
+                       child_ver: &str,
+                       child_installed: bool,
+                       fallback: &dyn Fn()| {
+        match rows.get(&(
+            child_cat.to_string(),
+            child_pkg.to_string(),
+            child_ver.to_string(),
+            child_installed,
+        )) {
+            Some(list) if !list.is_empty() => {
+                for pa in list {
+                    match &pa.parent {
+                        None => out(format_args!("Parent Dep:    {}\n", pa.atom)),
+                        Some((pc, pp)) => {
+                            let unevaluated = pa
+                                .unevaluated
+                                .as_deref()
+                                .map(|u| format!(" ({u})"))
+                                .unwrap_or_default();
+                            out(format_args!(
+                                "Parent Dep:    {}{unevaluated} required by {}\n",
+                                pa.atom,
+                                label_of(pc, pp)
+                            ));
+                        }
+                    }
+                }
+            }
+            _ => fallback(),
+        }
+    };
+    out(format_args!(
+        "\n# resolution walk (portuale BFS order, not Portage's LIFO _create_graph order)\n"
+    ));
+    let mut consumed: std::collections::BTreeSet<(String, String, String, bool)> =
+        std::collections::BTreeSet::new();
+    // Schedule the bounded inner-ring re-narration before emitting anything
+    // (at most `entries.len()` edges per dump; DAG walks schedule none).
+    let entry_cps: Vec<(String, String)> = entries
+        .iter()
+        .map(|e| (e.category.clone(), e.package.clone()))
+        .collect();
+    let entry_keys: Vec<(String, String, String, bool)> = entries
+        .iter()
+        .map(|e| {
+            (
+                e.category.clone(),
+                e.package.clone(),
+                entry_version(e).unwrap_or("").to_string(),
+                is_nomerge(e),
+            )
+        })
+        .collect();
+    let plan = renarration_order(&entry_cps, &entry_keys, parent_atoms, entries.len());
+    let mut renarrate_at: Vec<Vec<usize>> = vec![Vec::new(); entries.len()];
+    for (host, pi) in plan {
+        renarrate_at[host].push(pi);
+    }
+    // Read each host's ring in dependency-text order, not BFS visit order.
+    for (host, list) in renarrate_at.iter_mut().enumerate() {
+        let deps: Vec<(String, String)> = entries[host]
+            .deps
+            .iter()
+            .map(|d| (d.atom.clone(), d.evaluated.clone()))
+            .collect();
+        let sorted = sort_by_dep_position(&deps, std::mem::take(list), |pi| {
+            parent_atoms[pi].atom.clone()
+        });
+        *list = sorted;
+    }
+    for (idx, e) in entries.iter().enumerate() {
+        let filled = enriched(e);
+        let node = node_label(&filled, root, is_nomerge(e));
+        out(format_args!(
+            "\nChild:         {node} USE=\"{}\"\n",
+            child_use_str(e, root)
+        ));
+        let ver = entry_version(e).unwrap_or("").to_string();
+        let installed = is_nomerge(e);
+        consumed.insert((
+            e.category.clone(),
+            e.package.clone(),
+            ver.clone(),
+            installed,
+        ));
+        render_rows(&e.category, &e.package, &ver, installed, &|| {
+            if e.required_by.is_empty() {
+                out(format_args!(
+                    "Parent Dep:    {}/{} (Argument)\n",
+                    e.category, e.package
+                ));
+            } else {
+                for (pc, pp) in &e.required_by {
+                    out(format_args!(
+                        "Parent Dep:    {}/{} required by {}\n",
+                        e.category,
+                        e.package,
+                        label_of(pc, pp)
+                    ));
+                }
+            }
+        });
+        // Stage 6: a new-style virtual's own RDEPEND recursion, traced as a
+        // distinct step. Portuale walks a `virtual/*` entry like any other,
+        // so synthesise the pair.
+        if e.category == "virtual" && !is_nomerge(e) {
+            let rdep: Vec<&str> = e
+                .deps
+                .iter()
+                .filter(|d| d.key == 0)
+                .map(|d| d.atom.as_str())
+                .collect();
+            out(format_args!(
+                "Virtual Parent:      {node}\nVirtual Depstring:   {}\n",
+                rdep.join(" ")
+            ));
+        }
+        for (ki, kname) in KEYS.iter().enumerate() {
+            let atoms: Vec<&str> = e
+                .deps
+                .iter()
+                .filter(|d| d.key as usize == ki)
+                .map(|d| d.atom.as_str())
+                .collect();
+            if atoms.is_empty() {
+                continue;
+            }
+            let prio = e
+                .deps
+                .iter()
+                .find(|d| d.key as usize == ki)
+                .map(|d| d.priority)
+                .unwrap_or_default();
+            out(format_args!(
+                "\nParent:    {node}\nDepstring: {} ({kname})\nPriority:  {}\n",
+                atoms.join(" "),
+                dep_priority_str(&prio)
+            ));
+            // `Depstring:` prints raw, `Candidates:` evaluated; the evaluated
+            // form rides `DepEdge` beside the token, so the walk itself is
+            // untouched.
+            let evaluated: Vec<&str> = e
+                .deps
+                .iter()
+                .filter(|d| d.key as usize == ki)
+                .map(|d| d.evaluated.as_str())
+                .collect();
+            out(format_args!(
+                "Candidates: [{}]\n",
+                evaluated
+                    .iter()
+                    .map(|a| format!("'{a}'"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ));
+        }
+        // The bounded inner-ring re-narration: only back edges were scheduled,
+        // so DAG traces emit nothing new here.
+        for pi in &renarrate_at[idx] {
+            let pa = &parent_atoms[*pi];
+            let child_key = (
+                pa.child_category.clone(),
+                pa.child_package.clone(),
+                pa.child_version.clone(),
+                pa.child_installed,
+            );
+            let (child_label, child_use) = label_of_key(&child_key);
+            out(format_args!(
+                "\nChild:         {child_label} USE=\"{child_use}\"\n"
+            ));
+            let unevaluated = pa
+                .unevaluated
+                .as_deref()
+                .map(|u| format!(" ({u})"))
+                .unwrap_or_default();
+            out(format_args!(
+                "Parent Dep:    {}{unevaluated} required by {node}\n",
+                pa.atom,
+            ));
+        }
+        out(format_args!("\nExiting... {node}\n"));
+    }
+    // Installed children the walk created but `entries` no longer holds (a
+    // same-slot merge shadows them): reproduce the one lost block.
+    for (key, list) in &rows {
+        if consumed.contains(key) {
+            continue;
+        }
+        let (cat, pkg, ver, installed) = key;
+        let (slot, sub_slot, repo) = if *installed {
+            let (s, ss) = crate::read_vdb_slot(root, cat, pkg, ver);
+            (s, ss, installed_pkg_repo(root, cat, pkg, ver))
+        } else if let Ok(cands) = list_candidates(repos, cat, pkg)
+            && let Some(c) = cands.iter().find(|c| c.version == *ver)
+        {
+            (c.slot.clone(), c.sub_slot.clone(), c.repo_name.clone())
+        } else {
+            ("0".to_string(), "0".to_string(), "__unknown__".to_string())
+        };
+        let state = if *installed {
+            "installed".to_string()
+        } else {
+            "ebuild scheduled for merge".to_string()
+        };
+        out(format_args!(
+            "\nChild:         ({cat}/{pkg}-{ver}:{slot}/{sub_slot}::{repo}, {state}) USE=\"{}\"\n",
+            installed_use_str(root, cat, pkg, ver)
+        ));
+        for pa in list {
+            match &pa.parent {
+                None => out(format_args!("Parent Dep:    {}\n", pa.atom)),
+                Some((pc, pp)) => {
+                    let unevaluated = pa
+                        .unevaluated
+                        .as_deref()
+                        .map(|u| format!(" ({u})"))
+                        .unwrap_or_default();
+                    out(format_args!(
+                        "Parent Dep:    {}{unevaluated} required by {}\n",
+                        pa.atom,
+                        label_of(pc, pp)
+                    ));
+                }
+            }
+        }
+        out(format_args!("\nExiting... ({cat}/{pkg}-{ver})\n"));
+    }
 }

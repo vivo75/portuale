@@ -101,3 +101,13 @@ pub(crate) fn use_unsat_parent_row(
         vec![reason],
     ))
 }
+
+pub(crate) struct UseUnsatCandidatesForAtomArgs<'a> {
+    pub(crate) repos: &'a [RepoConfig],
+    pub(crate) root: &'a Path,
+    pub(crate) entries: &'a [GraphEntry],
+    pub(crate) display_atom: &'a str,
+    pub(crate) evaluated_atom: &'a str,
+    pub(crate) owner: Option<&'a (String, String)>,
+    pub(crate) config: &'a portage_profile::Config,
+}
