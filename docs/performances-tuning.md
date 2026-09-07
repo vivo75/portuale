@@ -16,13 +16,14 @@
 | portuale, original | **~77 s** | 1.0× |
 | + `parse_atom` / `parse_candidate` memoised | **~20.6 s** | 3.7× |
 | + `package.*` config bucketed by `cp` | **~9.5 s** | 8.1× |
-| + `profiles/updates/` move chains precomputed | **~6.9 s** | **11×** |
+| + `profiles/updates/` move chains precomputed | **~6.9 s** | 11× |
+| + `read_md5_cache` memoised per path | **~5.9 s** | **13×** |
 
-All three changes are **shipped** and keep byte-identical output with the full
-suite green (`portage-dep` / `portage-repo` / `portuale` unit tests + 1107
-contract tests). portuale is now **~2× faster than real `emerge`** on this
-workload. None of them alters the resolver algorithm — they remove redundant
-work the algorithm was doing.
+All four changes are **shipped** and keep byte-identical output with the full
+suite green (`portage-dep` / `portage-repo` / `portuale` unit tests + contract
+tests). portuale is now **~3× faster than real `emerge`** on this workload.
+None of them alters the resolver algorithm — they remove redundant work the
+algorithm was doing.
 
 1. **`parse_atom` / `parse_candidate` memo cache** (`rust/portage-dep/src/
    lib.rs`): a `thread_local!` `HashMap<String, Option<…>>` in front of each
@@ -43,13 +44,23 @@ work the algorithm was doing.
    sync. `all_installed_packages` is also memoised per `root` (fingerprinted
    by vdb dir mtimes) so the ~2,000-`SLOT`-file scan runs once, not ~10×.
    9.5 s → 6.9 s (`apply_updates_to_cp` 15 % → 1.4 % of the run).
+4. **`read_md5_cache` memoised per file path** (`rust/portage-repo/src/
+   lib.rs`): the resolver reads the same md5-cache entry many times over one
+   `emerge -pu` (`list_candidates`, then every visibility / USE / slot-op /
+   changed-deps check for the candidate), each doing a file open + line parse
+   + `apply_updates_to_dep_string` over 5 keys. The tree's md5-cache is
+   immutable for the process (real `portdbapi` keeps the same entries in its
+   `_aux_cache`); `--regen`, portuale's only writer, is a separate process.
+   `OnceLock<RwLock<HashMap<PathBuf, Arc<…>>>>` keyed by full path; the
+   `pub` signature still returns an owned `HashMap` (a clone of the cached
+   `Arc`). 6.9 s → 5.9 s.
 
-The remaining time is spread thin across string allocation + hashing in
-`effective_use_flags` (fresh `HashSet<String>` of ~200 USE flags built 20 k
-times) and `read_md5_cache` (35 k calls, each re-reading + re-parsing a file
-and cloning the resulting map) — the "no memoisation" pattern of
-[Cause 2](#cause-2--no-memoization-the-same-package-is-recomputed-10-per-resolve),
-now items 2 and 3 below.
+At 5.9 s the profile is ~16 % SipHash + ~7 % `HashSet<String>` insert/rehash +
+~6 % `split_whitespace` + ~2.4 % `apply_incremental` — that cluster is
+`effective_use_flags` building a fresh ~200-flag `HashSet<String>` ~20 k times
+(item 1 below) — plus ~30 % malloc/free spread across it and the
+candidate-string plumbing. `installed_candidates` (a per-cp vdb scan, ~3 %)
+and `list_candidates` are the other repeat-work targets (item 2).
 
 ## The symptom (original, 77 s)
 
@@ -171,7 +182,7 @@ Real portage reads `metadata/md5-cache` through `portdbapi` with an in-process
 LRU (`self._aux_cache`), builds each `Package` once, and the depgraph keeps a
 single `Package` instance per cpv for the life of the resolve.
 
-## The two shipped fixes
+## The shipped fixes
 
 ### `parse_atom` / `parse_candidate` memo cache
 
@@ -197,7 +208,7 @@ new cost was the ~34 M cache lookups themselves — `__memmove` 15 %,
 6 %, malloc/free ~16 %. Almost all of that traced back to the linear config
 scan below.
 
-### cp-bucketed `package.*` config (this doc's item 1, done)
+### cp-bucketed `package.*` config
 
 `CpBucketIndex` in `rust/portage-repo/src/lib.rs` is portuale's
 `ExtendedAtomDict`. For one config list it holds `by_cp: HashMap<String,
@@ -225,32 +236,49 @@ smaller blast radius.
 
 ## What to change next, in priority order
 
-### 1. In-process metadata cache for `read_md5_cache` — new #1
+### 1. Memoize `effective_use_flags` — new #1 (needs care)
 
-`read_md5_cache` (`:1184`) re-reads the file, re-splits every line, and
-re-runs `apply_updates_to_dep_string` over 5 keys on every call. Wrap it in a
-process-global `OnceLock<RwLock<HashMap<PathBuf, Arc<HashMap<String,String>>>>>`
-(the pattern already used for the binary index at `:1555`). The md5-cache is
-immutable for the life of the process. Fold the `updates/` application into
-the cached value so it happens once per file, not once per read.
+Now the biggest cluster (~20–25 % of the 5.9 s run): a fresh
+`HashSet<String>` of ~200 USE flags built by `apply_incremental`
+token-splitting, ~20 k times, for ~few-hundred distinct candidates.
 
-### 2. Cache `list_candidates` per `(repo-set, cp)`
+The catch is the cache key. `effective_use_flags` is a pure function of
+`(candidate_str, whole Config)`, and every `Config` in one resolve is
+`req.config` **or a `.clone()` of it with only `autounmask_use` replaced**
+(`backtracking_resolve`'s `backtrack_config` at `:14329`, the autounmask tier
+loop at `:14487`, `flag_is_settable`'s `probe` at `:3971` — verified, that's
+the complete list). So *within* a resolve, `(config_ptr, hash(autounmask_use),
+candidate_str)` is a sound key. It is **not** sound across resolves: a
+sequential resolve's `req.config` (stack-allocated in the caller) can reuse
+the same address with the same (empty) `autounmask_use`, and the test suite
+runs many resolves + ~30 direct `effective_use_flags` calls in one process.
 
-Same shape — the ebuild directory listing + per-version metadata for a `cp`
-does not change during a resolve. Key by `(category, package)`; the value is
-`Arc<Vec<Candidate>>`. Removes the ~4× redundancy and all the `read_dir`
-syscalls behind it.
+Two ways to make it safe, pick one:
+- A `RESOLVE_GENERATION: AtomicU64` bumped at each resolve entry point
+  (`backtracking_resolve`, `resolve_pretend`, `resolve_pretend_graph`); key on
+  `(generation, hash(autounmask_use), candidate_str)`. Direct unit-test calls
+  share one generation but use distinct enough configs+candidate_strs — still,
+  audit those ~30 tests.
+- A cheap `Config` fingerprint: `(len, first, last)` of each of the ~20 USE
+  fields `effective_use_flags` reads. Sub-µs, collision only if two configs
+  match on all 20 — never in practice. More robust, more code, must track
+  which fields the function reads.
 
-### 3. Memoize `effective_use_flags` per package
+Cheaper independent win, no cache: `apply_matching` / `specificity_ordered_
+flags` call `apply_incremental(&tokens.join(" "), …)` — a `Vec<String>` joined
+into a `String` that `apply_incremental` immediately splits again. An
+`apply_incremental_iter(&[S], …)` that skips the round-trip is ~3–5 %.
 
-Key on `(candidate_str, is_stable-relevant inputs)` — or, better, compute it
-once per `Candidate` when the candidate is first materialised and store the
-`HashSet<String>` on the `Candidate` (portage's `pkg.use`). The USE context
-(make.conf, `$USE`, autounmask accumulator) is constant within a backtrack
-pass; invalidate the memo when the `'backtrack` loop folds in a new
-`--autounmask-use` flip (rare).
+### 2. Cache `list_candidates` / `installed_candidates` per `(repo-set, cp)`
 
-### 4. Cheaper parse cache, or a hand-written parser
+`list_candidates` (ebuild dir listing + per-version md5-cache) and
+`installed_candidates` (a `var/db/pkg` scan, ~3 % of the run) are re-run per
+cp per graph-walk visit. Key by `(category, package)`; value `Arc<Vec<…>>`.
+Safe like `all_installed_packages` — fingerprint by dir mtime if a test could
+mutate mid-process, otherwise a plain per-process cache. Removes the remaining
+`read_dir` traffic.
+
+### 3. Cheaper parse cache, or a hand-written parser
 
 With the memo cache in place the regex only runs on cache *misses* (once per
 distinct string). Two follow-ups, in increasing effort:
@@ -268,7 +296,7 @@ distinct string). Two follow-ups, in increasing effort:
   (PMS 8.3; the crate already has hand-written helpers like
   `strip_version_prefix`). Only matters for the miss path; low priority now.
 
-### 5. Reduce redundant whole-graph passes
+### 4. Reduce redundant whole-graph passes
 
 The `'backtrack` loop re-ran the entire BFS for a case that produced no
 backtracking-relevant change on pass 2. Confirm each pass is genuinely needed
@@ -299,9 +327,9 @@ counts.
 
 ## Target
 
-The three shipped fixes reached ~6.9 s — about 2× faster than real `emerge`
-(~16 s) on this workload. Beyond this the run is bounded by string allocation
-and hashing spread across `effective_use_flags` and `read_md5_cache` rather
-than any single hot loop; items 1–3 above (caching the per-package
+The four shipped fixes reached ~5.9 s — about 3× faster than real `emerge`
+(~16 s) on this workload. Beyond this the run is bounded by `HashSet<String>`
+building + hashing in `effective_use_flags` and general string allocation
+rather than any single hot loop; items 1–2 above (memoising the per-package
 recomputation) are what remains of the "different algorithm" gap. The Rust
 graph walk itself was never the bottleneck.

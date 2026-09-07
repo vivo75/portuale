@@ -1243,16 +1243,37 @@ pub fn find_repos(config_root: &Path) -> Result<Vec<RepoConfig>, Error> {
 
 /// Reads `metadata/md5-cache/<category>/<pf>` (`pf` = "package-version",
 /// e.g. "foo-1.2.3-r1") as a plain `KEY=value` map.
+///
+/// Memoised per file path: the resolver reads the same md5-cache entry
+/// many times over one `emerge -pu` (`list_candidates`, every visibility /
+/// USE / slot-op / changed-deps check for a candidate), each read doing a
+/// file open + line parse + `apply_updates_to_dep_string` over 5 keys.
+/// The tree's md5-cache is immutable for the process lifetime -- real
+/// portage's `portdbapi` keeps the same entries in its own `_aux_cache`.
+/// A `--regen` run (portuale's only md5-cache writer) is a separate
+/// process. Returns a clone of the cached map so the `pub` signature and
+/// every caller are unchanged.
 pub fn read_md5_cache(
     repo_location: &Path,
     category: &str,
     pf: &str,
 ) -> Result<HashMap<String, String>, Error> {
+    type Md5CacheMap = HashMap<PathBuf, std::sync::Arc<HashMap<String, String>>>;
+    static CACHE: OnceLock<RwLock<Md5CacheMap>> = OnceLock::new();
+    let cache = CACHE.get_or_init(|| RwLock::new(HashMap::new()));
+
     let path = repo_location
         .join("metadata")
         .join("md5-cache")
         .join(category)
         .join(pf);
+
+    if let Ok(guard) = cache.read()
+        && let Some(map) = guard.get(&path)
+    {
+        return Ok(map.as_ref().clone());
+    }
+
     let text = fs::read_to_string(&path).map_err(|e| Error::ReadFile {
         path: path.display().to_string(),
         source: e,
@@ -1276,7 +1297,12 @@ pub fn read_md5_cache(
             }
         }
     }
-    Ok(map)
+
+    let map = std::sync::Arc::new(map);
+    if let Ok(mut guard) = cache.write() {
+        guard.insert(path, std::sync::Arc::clone(&map));
+    }
+    Ok(map.as_ref().clone())
 }
 
 /// Which kind of package this `Candidate` actually is -- real portage's
