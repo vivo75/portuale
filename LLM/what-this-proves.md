@@ -14478,5 +14478,52 @@ are untouched by this (scoped to `emerge`/`ebuild`, where the same
 `scope-backlog.md` Part 3 entry explains why clap stays *out* of those
 two parsers).
 
+### `mrg` applet: second slice — the clap front end now runs portuale's emerge codepath (2026-09-06)
+
+`mrg` no longer echoes. `run()` parses with clap, then
+`to_emerge_argv()` translates the match into a canonical long-form argv
+(options in definition order, `--long=value` for value kinds, bare
+flags, the target atoms last) and hands it to `pretend::run` — the exact
+function the `emerge` applet runs. So `portuale mrg --pretend
+dev-libs/newpkg` resolves and prints `[ebuild  N     ]
+dev-libs/newpkg-1.0`, byte-identical to `portuale emerge --pretend
+dev-libs/newpkg` (a black-box test asserts the two applets' stdout is
+identical across a muddle-style invocation: `-k --jobs=4 --color n
+--exclude cat/a --exclude cat/b -p dev-libs/newpkg`). clap keeps its own
+help/usage-error rendering (help exits 0, usage error 2); everything
+after a successful parse is portuale's emerge semantics, exit codes
+included.
+
+The translation rules are grounded in the same real sources quoted
+above (`main.py`'s argument kinds + `pretend.rs`'s parse loop):
+- `Flag`s forward BARE — the codepath's own peek-based parser treats a
+  following token correctly, and a `--long=y` spelling the codepath
+  never defined must not be invented;
+- `Value`/`Append` options the codepath implements go `--long=<value>`
+  (per occurrence for appends); ones it does not implement yet are
+  forwarded BARE so `report_option` names them by their real spelling —
+  `emerge: option "--root" is a real emerge option, but is not yet
+  implemented in portuale ...` (exit 2) — instead of rejecting an
+  unrecognized `--long=value` form. `emerge_handles()` encodes the
+  implemented surface, with each group keyed to the `pretend.rs` parse
+  loop;
+- the `OptionalValue`s mirror real inserted-literal semantics: bare
+  `-D`/`-j`/`-l` (internal `"True"`) and the `-j y`/`-j n` unlimited
+  spellings forward BARE (the codepath's strict `=` validation would
+  reject `--deep=True`/`--jobs=y`, and on the real side a bare `--jobs`
+  IS what `-j y` means), while numeric values forward `--long=N`. Real
+  `main.py` grounds this: `--deep`/`--jobs`/`--load-average` are
+  `action: "store"` with no type, storing the `"True"` literal
+  `insert_optional_args` inserts, and the post-parse validation turns
+  `True`/`y`/`n` jobs into unlimited.
+
+One deliberate divergence is recorded in `mrg.rs`'s module doc comment:
+`mrg` is a front end, so what clap accepted is trusted — e.g.
+`portuale mrg -j y` means unlimited jobs (real emerge's intent), where
+the bare `emerge` applet would treat `y` as an atom and fail with
+"there are no ebuilds to satisfy 'y'". That is the "relaxed
+requirements" licence, not a pretence of byte-parity with the hand-rolled
+`emerge` parser.
+
 # # required by dev-libs/useflagpkg[-foo] (argument)
 # == sqlite

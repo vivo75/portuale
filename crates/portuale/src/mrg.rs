@@ -1098,6 +1098,156 @@ pub fn command() -> Command {
     cmd
 }
 
+/// Whether the emerge codepath (`pretend::run`, the parse loop in
+/// `pretend.rs`) has a branch for `long`. Options it handles are forwarded
+/// with their value (`--long=<value>`); the rest go BARE so `pretend::run`
+/// names them honestly instead of rejecting a `--long=value` form it never
+/// saw. The list is keyed to the parse-loop sections in `pretend.rs` and the
+/// `lib/_emerge/main.py` option table that `emerge_options.rs` pins.
+fn emerge_handles(long: &str) -> bool {
+    matches!(
+        long,
+        // actions -- pretend.rs:7267-7820
+        "--clean"
+            | "--config"
+            | "--depclean"
+            | "--info"
+            | "--list-sets"
+            | "--regen"
+            | "--search"
+            | "--sync"
+            | "--unmerge"
+            // flags -- pretend.rs:7240-7920
+            | "--buildpkgonly"
+            | "--columns"
+            | "--debug"
+            | "--emptytree"
+            | "--newrepo"
+            | "--newuse"
+            | "--nodeps"
+            | "--noreplace"
+            | "--onlydeps"
+            | "--pretend"
+            | "--resume"
+            | "--searchdesc"
+            | "--skipfirst"
+            | "--tree"
+            | "--update"
+            | "--ask"
+            | "--buildpkg"
+            | "--deselect"
+            | "--fuzzy-search"
+            | "--getbinpkg"
+            | "--getbinpkgonly"
+            | "--keep-going"
+            | "--quiet"
+            | "--quiet-build"
+            | "--read-news"
+            | "--use-ebuild-visibility"
+            | "--usepkg"
+            | "--usepkgonly"
+            | "--verbose"
+            | "--with-test-deps"
+            // value options -- pretend.rs:6835-7888
+            | "--color"
+            | "--misspell-suggestions"
+            | "--with-bdeps"
+            | "--with-bdeps-auto"
+            | "--backtrack"
+            | "--solver"
+            | "--quickpkg-direct-root"
+            | "--search-similarity"
+            // optional-value numerics -- pretend.rs:6886-7875
+            | "--deep"
+            | "--jobs"
+            | "--load-average"
+            // append options -- pretend.rs:7170-7218, 7660-7690
+            | "--buildpkg-exclude"
+            | "--exclude"
+            | "--reinstall-atoms"
+            | "--usepkg-include"
+            | "--useoldpkg-atoms"
+    )
+}
+
+/// Translates a clap match into the canonical long-form argv the emerge
+/// codepath (`pretend::run`) parses. Options are emitted in OPTIONS-table
+/// definition order (the codepath is order-independent; a canonical order
+/// keeps the result deterministic), then the target atoms last. Every
+/// emitted token either starts with `--` or is an atom, so the codepath's
+/// `-x y` optional-value peek can never consume an unrelated token.
+fn to_emerge_argv(matches: &ArgMatches) -> Vec<String> {
+    let mut argv = Vec::new();
+    for opt in OPTIONS {
+        // Remote options never reach the emerge codepath (remote mode
+        // runs its own executor; `--pretend` drops them silently -- plan
+        // docs/remote-merge.md says pretend ignores `--remote-*`).
+        if opt.id.starts_with("remote_") {
+            continue;
+        }
+        // `--vdb-backend` / `--vdb-path` are mrg-only: `setup_vdb`
+        // consumes them before `pretend::run`, which never sees them.
+        if opt.id.starts_with("vdb_") {
+            continue;
+        }
+        let long = opt.long;
+        match opt.kind {
+            Kind::Flag => {
+                if matches.get_flag(opt.id) {
+                    argv.push(long.to_string());
+                }
+            }
+            Kind::Value => {
+                if let Some(v) = matches.get_one::<String>(opt.id) {
+                    if emerge_handles(long) {
+                        argv.push(format!("{long}={v}"));
+                    } else {
+                        argv.push(long.to_string());
+                    }
+                }
+            }
+            Kind::OptionalValue => {
+                if let Some(v) = matches.get_one::<String>(opt.id) {
+                    if emerge_handles(long)
+                        && (v == "True" || (long == "--jobs" && matches!(v.as_str(), "y" | "n")))
+                    {
+                        // The bare/inserted-literal and `-j y|n` unlimited
+                        // forms forward BARE (the codepath's strict `=`
+                        // validation would reject them, and bare `--jobs`
+                        // is what `-j y` means on the Portage side).
+                        argv.push(long.to_string());
+                    } else if emerge_handles(long) {
+                        argv.push(format!("{long}={v}"));
+                    } else {
+                        // Not implemented by the codepath (unreachable for
+                        // the three current optionals, but keep the rule
+                        // uniform): report the option under its own name.
+                        argv.push(long.to_string());
+                    }
+                }
+            }
+            Kind::Append => {
+                let vals: Vec<&String> = matches
+                    .get_many::<String>(opt.id)
+                    .map(|iter| iter.collect())
+                    .unwrap_or_default();
+                if vals.is_empty() {
+                    continue;
+                }
+                if emerge_handles(long) {
+                    argv.extend(vals.iter().map(|v| format!("{long}={v}")));
+                } else {
+                    argv.push(long.to_string());
+                }
+            }
+        }
+    }
+    if let Some(atoms) = matches.get_many::<String>("package") {
+        argv.extend(atoms.map(String::clone));
+    }
+    argv
+}
+
 /// Portage's `valid_integers` (`int(s) >= 0`).
 fn valid_integer(s: &str) -> bool {
     let Ok(v) = s.parse::<i128>() else {
@@ -1222,6 +1372,19 @@ mod tests {
         }
     }
 
+    /// `-pv pkg` bundles two flags exactly like argparse does, and forwards
+    /// independently to the emerge codepath.
+    #[test]
+    fn bundled_shorts_parse_independently() {
+        let m = parse(&["-pv", "cat/pkg"]).unwrap();
+        assert!(m.get_flag("pretend"));
+        assert!(m.get_flag("verbose"));
+        let atoms: Vec<_> = m.get_many::<String>("package").unwrap().collect();
+        assert_eq!(atoms, vec!["cat/pkg"]);
+        let argv = to_emerge_argv(&m);
+        assert_eq!(argv, ["--pretend", "--verbose", "cat/pkg"]);
+    }
+
     /// `-j4` (attached), `-j 4`/`--jobs=4` (separate) all carry the value;
     /// a bare `-j` falls back to the inserted "True".
     #[test]
@@ -1316,5 +1479,71 @@ mod tests {
         let err = parse(&["--help"]).unwrap_err();
         assert_eq!(err.kind(), clap::error::ErrorKind::DisplayHelp);
         assert_eq!(err.exit_code(), 0);
+    }
+
+    /// Nothing is required: `mrg` with no args parses cleanly and
+    /// forwards an empty argv (the emerge codepath then reports "no
+    /// targets given", exactly like `emerge` with no args).
+    #[test]
+    fn empty_invocation_forwards_nothing() {
+        let m = parse(&[]).unwrap();
+        assert!(to_emerge_argv(&m).is_empty());
+    }
+
+    /// A `Flag` or toothless option forwards BARE: no `=y` / `=True`
+    /// spelling is ever invented for the emerge codepath.
+    #[test]
+    fn flags_forward_bare() {
+        let m = parse(&["-pv", "--update", "cat/pkg"]).unwrap();
+        assert_eq!(
+            to_emerge_argv(&m),
+            ["--pretend", "--update", "--verbose", "cat/pkg"]
+        );
+    }
+
+    /// Implemented `Value` options forward `--long=<value>`; ones the
+    /// emerge codepath does not implement yet forward BARE so it can name
+    /// them honestly.
+    #[test]
+    fn value_options_carry_or_shed_their_value() {
+        let m = parse(&["--color", "n", "--with-bdeps", "y", "cat/pkg"]).unwrap();
+        assert_eq!(
+            to_emerge_argv(&m),
+            ["--color=n", "--with-bdeps=y", "cat/pkg"]
+        );
+
+        let m = parse(&["--root=/x", "--fetchonly", "cat/a"]).unwrap();
+        assert_eq!(to_emerge_argv(&m), ["--fetchonly", "--root", "cat/a"]);
+    }
+
+    /// Implemented `Append` options forward one `--long=<value>` per
+    /// occurrence; unimplemented ones forward BARE exactly once.
+    #[test]
+    fn append_repeats_per_occurrence() {
+        let m = parse(&["-X", "cat/a", "--exclude", "cat/b", "cat/pkg"]).unwrap();
+        assert_eq!(
+            to_emerge_argv(&m),
+            ["--exclude=cat/a", "--exclude=cat/b", "cat/pkg"]
+        );
+
+        let m = parse(&["--getbinpkg-exclude", "cat/a", "cat/b"]).unwrap();
+        assert_eq!(to_emerge_argv(&m), ["--getbinpkg-exclude", "cat/b"]);
+    }
+
+    /// The `OptionalValue` bare/inserted-literal and `-j y|n` unlimited
+    /// forms forward BARE (the emerge codepath's strict `=` validation
+    /// would reject `--deep=True` / `--jobs=y`); numeric values forward
+    /// `--long=N`. This makes `-D`/`-j`/`-j y` mean what Portage means, and
+    /// `-D 2`/`-j 4` explicit.
+    #[test]
+    fn optional_values_bare_or_numeric() {
+        let m = parse(&["-D", "-j", "y", "-l", "2.5", "cat/pkg"]).unwrap();
+        assert_eq!(
+            to_emerge_argv(&m),
+            ["--deep", "--jobs", "--load-average=2.5", "cat/pkg"]
+        );
+
+        let m = parse(&["-D", "2", "-j", "4", "cat/pkg"]).unwrap();
+        assert_eq!(to_emerge_argv(&m), ["--deep=2", "--jobs=4", "cat/pkg"]);
     }
 }
