@@ -82,7 +82,8 @@ algorithm was doing.
    `apply_matching` / `specificity_ordered_flags` / `keyword_provenance`.
 
 At 4.5 s the profile is ~35 % raw malloc/free spread across the whole run,
-~9 % SipHash, ~2.4 % `apply_updates_to_cp`, ~1 % the `--getbinpkg`
+~7 % SipHash (almost all of it *building* maps/sets, not probing the caches —
+see item 3), ~2.4 % `apply_updates_to_cp`, ~1 % the `--getbinpkg`
 binpkg-index parse, and a long tail of sub-2 % items — no hot loop, no single
 function above ~3 %. The per-node recomputation that made portuale a slower
 *algorithm* than portage is gone; what remains is ordinary allocation
@@ -283,23 +284,29 @@ cloning candidates out.
 (`list_candidates` and `all_installed_packages` are already cached). Same
 shape — per-process cache keyed by `(category, package)`.
 
-### 3. Cheaper parse cache, or a hand-written parser
+### 3. Parse cache — remaining options (both low-yield)
 
-With the memo cache in place the regex only runs on cache *misses* (once per
-distinct string). Two follow-ups, in increasing effort:
-
-- **Faster hasher for the cache** — the cache keys are long
-  `cat/pkg-ver:slot::repo` strings and SipHash is ~12 % of the post-cache run.
-  An FxHash/ahash-style hasher (either a small vendored implementation or the
-  `rustc-hash` crate) on just these two `HashMap`s reclaims most of it.
-- **`Rc<Atom>` / `Rc<Candidate>` return** — the hit path currently clones the
-  struct (~10 %). Returning a shared handle avoids it, at the cost of
-  threading `Rc` through the ~40 call sites.
-- **Hand-written parser** — the 15-group backtracking regex plus linear-scan
-  named-group lookup (`get_group_by_name`, 8 % of the *old* run) is ~10×
-  slower than a direct scan. The grammar is simple and fully specified
-  (PMS 8.3; the crate already has hand-written helpers like
-  `strip_version_prefix`). Only matters for the miss path; low priority now.
+- **FxHash instead of SipHash on the memo `HashMap`s — measured, ~1 %,
+  not worth it.** Prototyped a vendored `FxHasher` (`rustc-hash`'s classic
+  algorithm) on `ATOM_CACHE` / `CANDIDATE_CACHE` / `EUF_CACHE` / the
+  `CpBucketIndex` cache / `use_context_fingerprint`. User time 2.79 s →
+  2.77 s (within run-to-run noise). SipHash still shows ~7 % in `perf`
+  afterward — but almost none of it is *cache lookups* (a probe on a
+  ~50-char key is ~40 ns × ~50 k = 2 ms). It's map/set **construction**:
+  `read_md5_cache` building its ~20-key map on each of ~4 k cold misses,
+  `effective_use_flags_uncached`'s `HashSet<String>` on misses,
+  `Candidate.binary_deps`, and the slot-conflict / `USE_EXPAND` display
+  maps. Converting *those* to Fx is a much wider change, and some feed
+  ordered output (`HashSet` iteration order → display order), so it's
+  higher-risk for ~3–4 %. Not pursued.
+- **`Rc<Atom>` / `Rc<Candidate>` return from the parse cache** — the hit
+  path clones the struct. After the config-bucketing change the parsers
+  are called far less, so this is now ~1 % and needs `Rc` threaded through
+  ~40 call sites. Skip.
+- **Hand-written parser** replacing the 15-group backtracking regex — only
+  runs on cache *misses* now (once per distinct string); the regex is
+  <1 % of the current run. Not worth it unless a workload with far more
+  distinct atoms appears.
 
 ### 4. Reduce redundant whole-graph passes
 
