@@ -1568,4 +1568,243 @@ mod tests {
         let m = parse(&["-D", "2", "-j", "4", "cat/pkg"]).unwrap();
         assert_eq!(to_emerge_argv(&m), ["--deep=2", "--jobs=4", "cat/pkg"]);
     }
+
+    /// `--remote-*` parses into `ArgMatches` the remote executor reads:
+    /// hostname alone selects remote mode, every companion option rides
+    /// along, and the choice option rejects anything outside its set.
+    #[test]
+    fn remote_options_parse_for_the_remote_executor() {
+        let m = parse(&[
+            "--remote-hostname",
+            "client.invalid",
+            "--remote-user",
+            "root",
+            "--remote-port",
+            "2222",
+            "--remote-key-file",
+            "/tmp/key",
+            "--remote-timeout",
+            "5",
+            // A value starting with `-` needs the `=` form (same rule as
+            // every other `Value` option: clap never swallows a following
+            // flag-looking token).
+            "--remote-ssh-args=-o Foo=yes",
+            "--remote-strict-host-key-checking=no",
+            "--remote-max-clock-skew=60",
+            "--remote-root",
+            "/target",
+            "--remote-workdir",
+            "/tmp/work",
+            "--remote-portuale-binary",
+            "/tmp/static-portuale",
+            "--remote-portuale-dir",
+            "/srv/bin",
+        ])
+        .unwrap();
+        let get = |id: &str| m.get_one::<String>(id).map(String::as_str);
+        assert_eq!(get("remote_hostname"), Some("client.invalid"));
+        assert_eq!(get("remote_user"), Some("root"));
+        assert_eq!(get("remote_port"), Some("2222"));
+        assert_eq!(get("remote_key_file"), Some("/tmp/key"));
+        assert_eq!(get("remote_timeout"), Some("5"));
+        assert_eq!(get("remote_ssh_args"), Some("-o Foo=yes"));
+        assert_eq!(get("remote_strict_host_key_checking"), Some("no"));
+        assert_eq!(get("remote_max_clock_skew"), Some("60"));
+        assert_eq!(get("remote_root"), Some("/target"));
+        assert_eq!(get("remote_workdir"), Some("/tmp/work"));
+        assert_eq!(get("remote_portuale_binary"), Some("/tmp/static-portuale"));
+        assert_eq!(get("remote_portuale_dir"), Some("/srv/bin"));
+        assert_eq!(get("remote_transport"), None);
+        assert_eq!(get("remote_binpkg"), None);
+
+        // The choice option rejects anything outside accept-new/yes/no.
+        assert!(
+            parse(&[
+                "--remote-hostname",
+                "h",
+                "--remote-strict-host-key-checking=sometimes"
+            ])
+            .is_err()
+        );
+        use crate::remote::check_remote;
+        // Same for the transport choice; the valid spellings parse.
+        let m = parse(&["--remote-hostname", "h", "--remote-transport=local"]).unwrap();
+        assert_eq!(
+            m.get_one::<String>("remote_transport").map(String::as_str),
+            Some("local")
+        );
+        assert!(parse(&["--remote-hostname", "h", "--remote-transport=pigeon"]).is_err());
+        let m = parse(&[
+            "--remote-hostname",
+            "h",
+            "--remote-etc-portage=server:/tmp/etc",
+        ])
+        .unwrap();
+        let ctx = check_remote(&m).unwrap().expect("remote mode");
+        assert_eq!(
+            ctx.etc_portage,
+            crate::remote::ConfigPlacement::Server("/tmp/etc".to_string())
+        );
+        let m = parse(&["--remote-hostname", "h", "--remote-etc-portage=bogus"]).unwrap();
+        assert!(check_remote(&m).unwrap_err().contains("server:<path>"));
+        // Absent entirely: local mode, no remote keys set.
+        let m = parse(&["--pretend", "cat/pkg"]).unwrap();
+        assert_eq!(m.get_one::<String>("remote_hostname"), None);
+    }
+
+    /// Remote options never reach the emerge codepath's argv: remote mode
+    /// runs the remote executor, not `pretend::run` (so `emerge_handles`
+    /// needs no `--remote-*` arm and `emerge --remote-hostname` stays an
+    /// unknown-option error on that applet).
+    #[test]
+    fn remote_options_are_never_emerge_argv() {
+        assert!(!emerge_handles("--remote-hostname"));
+        assert!(!emerge_handles("--remote-user"));
+        assert!(!emerge_handles("--remote-vdb"));
+        assert!(!emerge_handles("--remote-edb"));
+        assert!(!emerge_handles("--remote-ledger-dir"));
+        assert!(!emerge_handles("--remote-require-ledger-match"));
+        assert!(!emerge_handles("--remote-portuale-binary"));
+        assert!(!emerge_handles("--remote-portuale-dir"));
+    }
+
+    /// `check_remote` validation: hostname selects remote mode with
+    /// documented defaults; companions without it, `user@host`, an empty
+    /// hostname, and unparsable numerics are usage errors.
+    #[test]
+    fn remote_consistency_and_defaults() {
+        use crate::remote::{StrictHostKeyChecking, check_remote};
+
+        let m = parse(&["--remote-hostname", "client.invalid"]).unwrap();
+        let ctx = check_remote(&m).unwrap().expect("remote mode");
+        assert_eq!(ctx.hostname, "client.invalid");
+        assert_eq!(ctx.user, None);
+        assert_eq!(ctx.port, 22);
+        assert_eq!(ctx.timeout_secs, 10);
+        assert_eq!(
+            ctx.strict_host_key_checking,
+            StrictHostKeyChecking::AcceptNew
+        );
+        assert_eq!(ctx.max_clock_skew_secs, 900);
+        assert_eq!(ctx.root, "/");
+        assert_eq!(ctx.workdir, "/var/tmp/portage-remote");
+        assert_eq!(ctx.transport, crate::remote::RemoteTransport::Ssh);
+        assert_eq!(ctx.binpkg, None);
+        assert_eq!(
+            ctx.etc_portage,
+            crate::remote::ConfigPlacement::Client("/etc/portage".to_string())
+        );
+        // vdb/edb default off the (default) root, no ledger override,
+        // protect lists unflagged.
+        assert_eq!(
+            ctx.vdb,
+            crate::remote::ConfigPlacement::Client("/var/db/pkg".to_string())
+        );
+        assert_eq!(
+            ctx.edb,
+            crate::remote::ConfigPlacement::Server("/var/cache/edb".to_string())
+        );
+        assert_eq!(ctx.ledger_dir, None);
+        assert!(!ctx.require_ledger_match);
+        assert!(!ctx.config_protect_explicit);
+        assert!(!ctx.config_protect_mask_explicit);
+        // Binary placement: ship this binary, default dirs, unresolved until
+        // preflight.
+        assert_eq!(ctx.portuale_binary, None);
+        assert_eq!(ctx.portuale_dir, None);
+        assert_eq!(ctx.bin_plan, crate::remote::ClientBinPlan::Unresolved);
+
+        let m = parse(&["--pretend", "cat/pkg"]).unwrap();
+        assert!(check_remote(&m).unwrap().is_none());
+
+        let m = parse(&["--remote-user", "root"]).unwrap();
+        assert!(check_remote(&m).unwrap_err().contains("--remote-hostname"));
+
+        let m = parse(&["--remote-hostname", "root@client.invalid"]).unwrap();
+        assert!(check_remote(&m).unwrap_err().contains("--remote-user"));
+
+        let m = parse(&["--remote-hostname", "h", "--remote-port", "99999"]).unwrap();
+        assert!(check_remote(&m).unwrap_err().contains("--remote-port"));
+
+        let m = parse(&["--remote-hostname", "h", "--remote-timeout", "soon"]).unwrap();
+        assert!(check_remote(&m).unwrap_err().contains("--remote-timeout"));
+
+        let m = parse(&["--remote-hostname", "h", "--remote-max-clock-skew", "x"]).unwrap();
+        assert!(
+            check_remote(&m)
+                .unwrap_err()
+                .contains("--remote-max-clock-skew")
+        );
+
+        // vdb takes either side, edb only server:, ledger-dir is a plain
+        // path, protect flags mark explicitness.
+        let m = parse(&[
+            "--remote-hostname",
+            "h",
+            "--remote-root",
+            "/client-root",
+            "--remote-vdb=server:/srv/vdb",
+            "--remote-ledger-dir=/srv/ledgers",
+            "--remote-config-protect=/custom",
+        ])
+        .unwrap();
+        let ctx = check_remote(&m).unwrap().expect("remote mode");
+        assert_eq!(
+            ctx.vdb,
+            crate::remote::ConfigPlacement::Server("/srv/vdb".to_string())
+        );
+        assert_eq!(
+            ctx.edb,
+            crate::remote::ConfigPlacement::Server("/client-root/var/cache/edb".to_string())
+        );
+        assert_eq!(ctx.ledger_dir.as_deref(), Some("/srv/ledgers"));
+        assert_eq!(ctx.config_protect, "/custom");
+        assert!(ctx.config_protect_explicit);
+        assert!(!ctx.config_protect_mask_explicit);
+
+        let m = parse(&["--remote-hostname", "h", "--remote-require-ledger-match"]).unwrap();
+        let ctx = check_remote(&m).unwrap().expect("remote mode");
+        assert!(ctx.require_ledger_match);
+
+        // Binary placement: the shipped file rides along, the dir must be
+        // absolute, and both options require the hostname.
+        let m = parse(&[
+            "--remote-hostname",
+            "h",
+            "--remote-portuale-binary=/tmp/static-portuale",
+            "--remote-portuale-dir=/srv/bin",
+        ])
+        .unwrap();
+        let ctx = check_remote(&m).unwrap().expect("remote mode");
+        assert_eq!(ctx.portuale_binary.as_deref(), Some("/tmp/static-portuale"));
+        assert_eq!(ctx.portuale_dir.as_deref(), Some("/srv/bin"));
+
+        let m = parse(&[
+            "--remote-hostname",
+            "h",
+            "--remote-portuale-dir=relative/bin",
+        ])
+        .unwrap();
+        assert!(
+            check_remote(&m)
+                .unwrap_err()
+                .contains("--remote-portuale-dir")
+        );
+        let m = parse(&["--remote-portuale-binary", "/tmp/x"]).unwrap();
+        assert!(check_remote(&m).unwrap_err().contains("--remote-hostname"));
+        let m = parse(&["--remote-portuale-dir", "/srv/bin"]).unwrap();
+        assert!(check_remote(&m).unwrap_err().contains("--remote-hostname"));
+
+        let m = parse(&["--remote-require-ledger-match"]).unwrap();
+        assert!(check_remote(&m).unwrap_err().contains("--remote-hostname"));
+
+        let m = parse(&["--remote-hostname", "h", "--remote-vdb=bogus"]).unwrap();
+        assert!(check_remote(&m).unwrap_err().contains("server:<path>"));
+        let m = parse(&["--remote-hostname", "h", "--remote-edb=client:/x"]).unwrap();
+        assert!(check_remote(&m).unwrap_err().contains("no binhosts"));
+        let m = parse(&["--remote-vdb", "server:/srv/vdb"]).unwrap();
+        assert!(check_remote(&m).unwrap_err().contains("--remote-hostname"));
+        let m = parse(&["--remote-ledger-dir", "/srv/ledgers"]).unwrap();
+        assert!(check_remote(&m).unwrap_err().contains("--remote-hostname"));
+    }
 }

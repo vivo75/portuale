@@ -21,6 +21,7 @@ use clap::ArgMatches;
 mod binpkg_flow;
 mod client_binary;
 mod config_place;
+mod host_keys;
 mod ledger;
 mod merge_script;
 mod plan;
@@ -33,6 +34,7 @@ pub(crate) mod tests;
 pub(crate) use binpkg_flow::*;
 pub(crate) use client_binary::*;
 pub(crate) use config_place::*;
+pub(crate) use host_keys::*;
 pub(crate) use ledger::*;
 pub(crate) use merge_script::*;
 pub use plan::*;
@@ -63,6 +65,25 @@ pub enum StrictHostKeyChecking {
     No,
 }
 
+impl StrictHostKeyChecking {
+    fn parse(value: &str) -> Option<Self> {
+        match value {
+            "accept-new" => Some(Self::AcceptNew),
+            "yes" => Some(Self::Yes),
+            "no" => Some(Self::No),
+            _ => None,
+        }
+    }
+
+    fn as_ssh_value(self) -> &'static str {
+        match self {
+            Self::AcceptNew => "accept-new",
+            Self::Yes => "yes",
+            Self::No => "no",
+        }
+    }
+}
+
 /// How driver scripts and files reach the client (`--remote-transport`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RemoteTransport {
@@ -72,6 +93,16 @@ pub enum RemoteTransport {
     /// offline debugging and SSH-free driver tests. The hostname stays a
     /// label; key/port/user/timeout/host-key options are inert.
     Local,
+}
+
+impl RemoteTransport {
+    fn parse(value: &str) -> Option<Self> {
+        match value {
+            "ssh" => Some(Self::Ssh),
+            "local" => Some(Self::Local),
+            _ => None,
+        }
+    }
 }
 
 /// Where a config tree lives (`--remote-etc-portage server:<path>` /
@@ -199,6 +230,35 @@ impl ClientBinPlan {
     }
 }
 
+/// `--remote-*` ids besides `remote_hostname`, in OPTIONS-table order --
+/// any of these without `--remote-hostname` is a usage error.
+const REMOTE_OPTION_IDS: &[&str] = &[
+    "remote_user",
+    "remote_port",
+    "remote_key_file",
+    "remote_timeout",
+    "remote_ssh_args",
+    "remote_strict_host_key_checking",
+    "remote_max_clock_skew",
+    "remote_root",
+    "remote_workdir",
+    "remote_transport",
+    "remote_binpkg",
+    "remote_config_protect",
+    "remote_config_protect_mask",
+    "remote_etc_portage",
+    "remote_vdb",
+    "remote_edb",
+    "remote_ledger_dir",
+    "remote_require_ledger_match",
+    "remote_portuale_binary",
+    "remote_portuale_dir",
+];
+
+fn get(matches: &ArgMatches, id: &str) -> Option<String> {
+    matches.get_one::<String>(id).cloned()
+}
+
 /// Whether `id` was provided on the command line, type-agnostic -- the
 /// presence check must see both `Value` string options and `Flag` bools.
 fn provided(matches: &ArgMatches, id: &str) -> bool {
@@ -206,4 +266,121 @@ fn provided(matches: &ArgMatches, id: &str) -> bool {
         && matches
             .value_source(id)
             .is_some_and(|src| src == clap::parser::ValueSource::CommandLine)
+}
+
+/// Validate the `--remote-*` surface: `Ok(None)` = local mode,
+/// `Ok(Some(ctx))` = remote mode, `Err(message)` = usage error (exit 2).
+pub fn check_remote(matches: &ArgMatches) -> Result<Option<RemoteContext>, String> {
+    let hostname = get(matches, "remote_hostname");
+    let Some(hostname) = hostname else {
+        if let Some(offender) = REMOTE_OPTION_IDS.iter().find(|id| provided(matches, id)) {
+            let long = format!("--{}", offender.replace('_', "-"));
+            return Err(format!("mrg: {long} requires --remote-hostname"));
+        }
+        return Ok(None);
+    };
+    if hostname.is_empty() {
+        return Err("mrg: --remote-hostname requires a non-empty value".to_string());
+    }
+    if hostname.contains('@') {
+        return Err("mrg: put the login user in --remote-user, not --remote-hostname".to_string());
+    }
+    let port = match get(matches, "remote_port") {
+        None => 22,
+        Some(raw) => raw.parse::<u16>().ok().filter(|p| *p > 0).ok_or_else(|| {
+            format!("mrg: --remote-port: {raw:?} is not a valid TCP port (1-65535)")
+        })?,
+    };
+    let timeout_secs = match get(matches, "remote_timeout") {
+        None => 10,
+        Some(raw) => raw.parse::<u64>().ok().ok_or_else(|| {
+            format!("mrg: --remote-timeout: {raw:?} is not a non-negative integer")
+        })?,
+    };
+    let max_clock_skew_secs = match get(matches, "remote_max_clock_skew") {
+        None => 900,
+        Some(raw) => raw.parse::<u64>().ok().ok_or_else(|| {
+            format!("mrg: --remote-max-clock-skew: {raw:?} is not a non-negative integer")
+        })?,
+    };
+    // Clap's `choices` already restrict these; the fallbacks keep the
+    // validation total if the table ever drifts.
+    let strict_host_key_checking = match get(matches, "remote_strict_host_key_checking") {
+        None => StrictHostKeyChecking::AcceptNew,
+        Some(raw) => StrictHostKeyChecking::parse(&raw).ok_or_else(|| {
+            format!("mrg: --remote-strict-host-key-checking: {raw:?} is not accept-new, yes or no")
+        })?,
+    };
+    let transport = match get(matches, "remote_transport") {
+        None => RemoteTransport::Ssh,
+        Some(raw) => RemoteTransport::parse(&raw)
+            .ok_or_else(|| format!("mrg: --remote-transport: {raw:?} is not ssh or local"))?,
+    };
+    let root = get(matches, "remote_root").unwrap_or_else(|| "/".to_string());
+    let vdb = match get(matches, "remote_vdb") {
+        None => ConfigPlacement::Client(format!("{}/var/db/pkg", root.trim_end_matches('/'))),
+        Some(raw) => ConfigPlacement::parse("--remote-vdb", &raw)?,
+    };
+    // Informational: the client has no binhosts, so only `server:`
+    // parses; the resolve reads its own cache.
+    let edb = match get(matches, "remote_edb") {
+        None => ConfigPlacement::Server(format!("{}/var/cache/edb", root.trim_end_matches('/'))),
+        Some(raw) => match ConfigPlacement::parse("--remote-edb", &raw)? {
+            placement @ ConfigPlacement::Server(_) => placement,
+            ConfigPlacement::Client(_) => {
+                return Err(
+                    "mrg: --remote-edb must be server:<path> (the client has no binhosts)"
+                        .to_string(),
+                );
+            }
+        },
+    };
+    let (config_protect, config_protect_explicit) = match get(matches, "remote_config_protect") {
+        Some(raw) => (raw, true),
+        None => ("/etc".to_string(), false),
+    };
+    let (config_protect_mask, config_protect_mask_explicit) =
+        match get(matches, "remote_config_protect_mask") {
+            Some(raw) => (raw, true),
+            None => ("/etc/env.d".to_string(), false),
+        };
+    let portuale_binary = get(matches, "remote_portuale_binary").filter(|b| !b.is_empty());
+    let portuale_dir = match get(matches, "remote_portuale_dir").filter(|d| !d.is_empty()) {
+        Some(raw) if !raw.starts_with('/') => {
+            return Err(format!(
+                "mrg: --remote-portuale-dir must be an absolute client path, got {raw:?}"
+            ));
+        }
+        other => other,
+    };
+    Ok(Some(RemoteContext {
+        hostname,
+        user: get(matches, "remote_user").filter(|u| !u.is_empty()),
+        port,
+        key_file: get(matches, "remote_key_file").filter(|k| !k.is_empty()),
+        timeout_secs,
+        ssh_args: get(matches, "remote_ssh_args").filter(|a| !a.is_empty()),
+        strict_host_key_checking,
+        max_clock_skew_secs,
+        root,
+        workdir: get(matches, "remote_workdir")
+            .unwrap_or_else(|| "/var/tmp/portage-remote".to_string()),
+        transport,
+        binpkg: get(matches, "remote_binpkg").filter(|b| !b.is_empty()),
+        etc_portage: match get(matches, "remote_etc_portage") {
+            None => ConfigPlacement::Client("/etc/portage".to_string()),
+            Some(raw) => ConfigPlacement::parse("--remote-etc-portage", &raw)?,
+        },
+        vdb,
+        edb,
+        ledger_dir: get(matches, "remote_ledger_dir").filter(|d| !d.is_empty()),
+        require_ledger_match: matches.get_flag("remote_require_ledger_match"),
+        config_protect,
+        config_protect_explicit,
+        config_protect_mask,
+        config_protect_mask_explicit,
+        portuale_binary,
+        portuale_dir,
+        bin_plan: ClientBinPlan::Unresolved,
+    }))
 }
