@@ -1,0 +1,9 @@
+Title: Portuale news: 2026-09-06-portuale-use-match
+Author: Portuale Test <portuale@example.org>
+Content-Type: text/plain
+Posted: 2026-09-06
+Revision: 1
+News-Item-Format: 2.0
+Display-If-Installed: dev-libs/infoinstpkg[alpha]
+
+infoinstpkg-1.0 has USE=alpha (IUSE alpha beta), so [alpha] is satisfied -- relevant, counted. Real vardb.match honours the atom's use-deps.

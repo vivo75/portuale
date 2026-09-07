@@ -5427,11 +5427,24 @@ fn write_news_state_if_changed(
 /// Real `NewsItem.isValid`: a `News-Item-Format:` header whose value
 /// `fnmatch`es `[12].*` (i.e. starts `1.` or `2.`).
 fn news_item_valid(text: &str) -> bool {
-    text.lines().any(|l| {
+    let format_ok = text.lines().any(|l| {
         l.strip_prefix("News-Item-Format:")
             .map(str::trim)
             .is_some_and(|v| v.starts_with("1.") || v.starts_with("2.") || v == "1" || v == "2")
-    })
+    });
+    if !format_ok {
+        return false;
+    }
+    // Real `NewsItem.isValid` also fails the whole item when any
+    // `Display-If-Installed:` restriction's own atom is malformed
+    // (`DisplayInstalledRestriction.__init__` -> `Atom(...)` ->
+    // `InvalidAtom` -> `self._valid = False`). Portuale's `parse_atom`
+    // has no EAPI parametrization (Part 3), so the 1.x/2.x `eapi="0"`
+    // vs `"5"` gate on which atom forms are legal isn't applied -- only
+    // "does it parse at all".
+    text.lines()
+        .filter_map(|l| l.strip_prefix("Display-If-Installed:").map(str::trim))
+        .all(|atom| parse_atom(atom).is_some())
 }
 
 /// Real `NewsItem.isRelevant`: no restriction → relevant; otherwise each
@@ -5444,14 +5457,19 @@ fn news_item_valid(text: &str) -> bool {
 /// slot/sub-slot (`cat/pkg:2/3`) and all, against every installed
 /// version of the atom's `cat/pkg`.
 ///
-/// **v1 cuts:** a `[use]`-dep in the atom is not post-filtered (the same
-/// `match_from_list` scope every other portuale caller has); a
-/// malformed atom (`parse_atom` → `None`) is treated as an unsatisfied
-/// restriction rather than making the whole item *invalid* (real
-/// `DisplayInstalledRestriction.isValid`); the `News-Item-Format` 1.x
-/// vs 2.x EAPI gate on atom validity (real `isValid`'s own `eapi="0"`/
-/// `"5"` split) is not applied -- `portage_dep` has no EAPI
-/// parametrization by design (Part 3 non-goal).
+/// A `[use]`-dep in the atom **is** post-filtered now (2026-09-07):
+/// real `DisplayInstalledRestriction.checkRestriction` is
+/// `vardb.match(atom)`, which honours a `cat/pkg[flag]` atom against the
+/// installed package's own recorded (vdb) `USE`. Portuale's
+/// `match_from_list` ignores use-deps like every other caller, so this
+/// re-checks `atom.use_deps` against the matched version's vdb
+/// `IUSE`/`USE` via `use_deps_satisfied`. A malformed atom now makes the
+/// whole item *invalid* (see `news_item_valid`), not merely unsatisfied.
+///
+/// **v1 cut:** the `News-Item-Format` 1.x vs 2.x EAPI gate on which atom
+/// forms are legal (real `isValid`'s own `eapi="0"`/`"5"` split) is not
+/// applied -- `portage_dep` has no EAPI parametrization by design
+/// (Part 3 non-goal).
 fn news_item_relevant(text: &str, root: &Path) -> bool {
     let mut installed_atoms: Vec<&str> = Vec::new();
     for line in text.lines() {
@@ -5466,6 +5484,7 @@ fn news_item_relevant(text: &str, root: &Path) -> bool {
         let Some(atom) = parse_atom(atom_str) else {
             return false;
         };
+        let use_deps = atom.use_deps.as_deref().filter(|d| !d.is_empty());
         portage_repo::installed_candidates(root, &atom.category, &atom.package)
             .iter()
             .any(|(version, slot, sub_slot)| {
@@ -5473,7 +5492,23 @@ fn news_item_relevant(text: &str, root: &Path) -> bool {
                     "{}/{}-{version}:{slot}/{sub_slot}",
                     atom.category, atom.package
                 );
-                match_from_list(atom_str, &[candidate.as_str()]).is_some_and(|m| !m.is_empty())
+                if !match_from_list(atom_str, &[candidate.as_str()]).is_some_and(|m| !m.is_empty()) {
+                    return false;
+                }
+                // Real `vardb.match` also enforces the atom's use-deps
+                // against this version's own recorded USE.
+                match use_deps {
+                    None => true,
+                    Some(uds) => {
+                        let (iuse, use_flags) = portage_repo::installed_pkg_iuse_and_use(
+                            root,
+                            &atom.category,
+                            &atom.package,
+                            version,
+                        );
+                        portage_dep::use_deps_satisfied(uds, &iuse, &use_flags)
+                    }
+                }
             })
     })
 }

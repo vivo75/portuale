@@ -357,14 +357,15 @@ ANSI USE colour all shipped 2026-09-05, see `what-this-proves.md`'s
 - `--regen`: `--jobs` threading stays unimplemented on purpose — real's
   scheduler parallelism only changes wall-clock time, not the cache
   content written, so there's no correctness gap to close;
-- `--check-news`: versioned/slotted `Display-If-Installed` atoms are
-  matched in full now (2026-09-05, real `DisplayInstalledRestriction.
-  checkRestriction` → `vardb.match`); remaining v1 cuts are narrow — a
-  `[use]`-dep in the atom isn't post-filtered (the same `match_from_list`
-  scope every portuale caller has), a malformed atom is an unsatisfied
-  restriction rather than an invalid item, and the `News-Item-Format`
-  1.x/2.x EAPI atom-validity gate isn't applied (`portage_dep` has no
-  EAPI parametrization, Part 3);
+- `--check-news`: versioned/slotted `Display-If-Installed` atoms
+  (2026-09-05), a `[use]`-dep in the atom (2026-09-07, checked against
+  the matched version's vdb `IUSE`/`USE` via `use_deps_satisfied` —
+  `portage_repo::installed_pkg_iuse_and_use`), and a malformed atom
+  making the whole item invalid (2026-09-07, moved into
+  `news_item_valid`) are all handled now. The only remaining v1 cut is
+  the `News-Item-Format` 1.x/2.x EAPI atom-validity gate (real
+  `isValid`'s `eapi="0"`/`"5"` split — `portage_dep` has no EAPI
+  parametrization, Part 3);
 - `--metadata` is an architectural no-op (portuale reads
   `metadata/md5-cache` directly, models no `depcachedir`);
 - `--sync` is a permanent non-goal (points at `emaint sync`); GLSA /

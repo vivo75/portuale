@@ -12024,18 +12024,23 @@ def test_check_news_counts_unread_relevant_items(
     emerge_binary, emerge_pretend_python, fixture_env, tmp_path
 ):
     """emerge --check-news (real actions.py:3844 -> count_unread_news):
-    the fixture testrepo has five GLEP 42 news items -- one unrestricted,
+    the fixture testrepo has eight GLEP 42 news items -- one unrestricted,
     one `Display-If-Installed: dev-libs/samepkg` (in the vdb at 1.0), one
     `>=dev-libs/samepkg-1.0` (1.0 satisfies it), one `>dev-libs/samepkg-
-    1.0` (1.0 does NOT), and one on an uninstalled package. Three are
-    relevant, so the count is 3. Rust == Python."""
+    1.0` (1.0 does NOT), one on an uninstalled package, one
+    `dev-libs/infoinstpkg[alpha]` (installed with alpha enabled -> its
+    use-dep is satisfied), one `dev-libs/infoinstpkg[beta]` (beta
+    declared but disabled -> not satisfied), and one whose
+    Display-If-Installed atom is malformed (real NewsItem.isValid rejects
+    the whole item). Four are relevant, so the count is 4. Rust ==
+    Python."""
     rust_env = _check_news_isolated_root(fixture_env, tmp_path, "root-rust")
     py_env = _check_news_isolated_root(fixture_env, tmp_path, "root-py")
     rust = _run([str(emerge_binary)], ["--check-news"], rust_env)
     py = _run(emerge_pretend_python, ["--check-news"], py_env)
     assert rust.returncode == 0
     assert rust.stdout == py.stdout
-    assert "3 news items need reading for repository 'testrepo'." in rust.stdout
+    assert "4 news items need reading for repository 'testrepo'." in rust.stdout
     assert "eselect news read" in rust.stdout
     env = rust_env
 
@@ -12046,12 +12051,18 @@ def test_check_news_counts_unread_relevant_items(
     news_dir = Path(env["ROOT"]) / "var" / "lib" / "gentoo" / "news"
     unread = (news_dir / "news-testrepo.unread").read_text().splitlines()
     skip = (news_dir / "news-testrepo.skip").read_text().splitlines()
-    assert unread == sorted(unread) and len(unread) == 3
-    assert skip == sorted(skip) and len(skip) == 3
+    assert unread == sorted(unread) and len(unread) == 4
+    assert skip == sorted(skip) and len(skip) == 4
     assert set(unread) == set(skip)
+    # The [beta] non-match and the malformed item are neither counted nor
+    # added to .skip (a malformed item stays out of .skip so real would
+    # re-evaluate it; here it just never becomes valid).
+    assert "2026-09-06-portuale-use-match" in unread
+    assert "2026-09-07-portuale-use-nomatch" not in skip
+    assert "2026-09-08-portuale-malformed" not in skip
 
     again = _run([str(emerge_binary)], ["--check-news"], env)
-    assert "3 news items need reading for repository 'testrepo'." in again.stdout
+    assert "4 news items need reading for repository 'testrepo'." in again.stdout
 
 
 @pytest.mark.parametrize(
@@ -12549,9 +12560,10 @@ def test_check_news_matches_a_versioned_display_if_installed_atom(
     existence check. `dev-libs/samepkg-1.0` is in the fixture vdb:
     `>=dev-libs/samepkg-1.0` (2026-09-04-portuale-versioned-match) is
     relevant, `>dev-libs/samepkg-1.0` (2026-09-05-portuale-versioned-
-    nomatch) is not. Pre-seed `.read` with only the three relevant ids
-    (the unrestricted one, the bare `samepkg` one, and the `>=` one) and
-    the count must drop to 0 -- the `>` item was never counted, and no
+    nomatch) is not. Pre-seed `.read` with only the four relevant ids
+    (the unrestricted one, the bare `samepkg` one, the `>=` one, and the
+    `infoinstpkg[alpha]` use-dep one) and the count must drop to 0 -- the
+    `>` item and the `[beta]`/malformed items were never counted, and no
     other item is left. Rust == Python."""
     rust_env = _check_news_isolated_root(fixture_env, tmp_path, "root-rust")
     py_env = _check_news_isolated_root(fixture_env, tmp_path, "root-py")
@@ -12559,6 +12571,7 @@ def test_check_news_matches_a_versioned_display_if_installed_atom(
         "2026-09-01-portuale-general\n"
         "2026-09-02-portuale-samepkg\n"
         "2026-09-04-portuale-versioned-match\n"
+        "2026-09-06-portuale-use-match\n"
     )
     for env in (rust_env, py_env):
         news_dir = Path(env["ROOT"]) / "var" / "lib" / "gentoo" / "news"

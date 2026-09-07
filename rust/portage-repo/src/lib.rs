@@ -4538,6 +4538,25 @@ fn read_vdb_flag_set(
         .collect()
 }
 
+/// `(IUSE, USE)` bare-name flag sets from an installed package's vdb --
+/// its declared flags and its recorded enabled set. For a use-dep check
+/// against an already-merged package (real `vardb.match` honouring a
+/// `cat/pkg[flag]` atom): the recorded `USE` is already the final
+/// resolved state, so `[flag]` is satisfied iff `flag ∈ USE`,
+/// `[flag(+)]`/`[flag(-)]` fall back to the default only when
+/// `flag ∉ IUSE`.
+pub fn installed_pkg_iuse_and_use(
+    root: &Path,
+    category: &str,
+    package: &str,
+    version: &str,
+) -> (HashSet<String>, HashSet<String>) {
+    (
+        read_vdb_flag_set(root, category, package, version, "IUSE"),
+        read_vdb_flag_set(root, category, package, version, "USE"),
+    )
+}
+
 /// The on-disk vdb directory for `<category>/<package>-<version>`. Real
 /// global-updates renames a moved package's vdb dir; portuale never
 /// writes, so when the direct path is absent it falls back to every

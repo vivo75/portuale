@@ -1,0 +1,9 @@
+Title: Portuale news: 2026-09-08-portuale-malformed
+Author: Portuale Test <portuale@example.org>
+Content-Type: text/plain
+Posted: 2026-09-08
+Revision: 1
+News-Item-Format: 2.0
+Display-If-Installed: dev-libs/infoinstpkg[[bad
+
+The Display-If-Installed atom is malformed, so real NewsItem.isValid rejects the whole item -- it is neither counted nor added to .skip.

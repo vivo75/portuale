@@ -12076,22 +12076,32 @@ def _run_search(
 
 
 def _news_item_valid(text):
+    format_ok = False
     for line in text.splitlines():
         if line.startswith("News-Item-Format:"):
             v = line[len("News-Item-Format:") :].strip()
             if v.startswith(("1.", "2.")) or v in ("1", "2"):
-                return True
-    return False
+                format_ok = True
+    if not format_ok:
+        return False
+    # Real NewsItem.isValid also fails the whole item when a
+    # Display-If-Installed atom is malformed (DisplayInstalledRestriction
+    # -> Atom(...) -> InvalidAtom -> _valid = False). Mirrors pretend.rs.
+    for line in text.splitlines():
+        if line.startswith("Display-If-Installed:"):
+            if _parse_atom(line[len("Display-If-Installed:") :].strip()) is None:
+                return False
+    return True
 
 
 def _news_item_relevant(text, root):
     """Real DisplayInstalledRestriction.checkRestriction: `vardb.match(
-    self.atom)` -- a full atom match (version operators, slot/sub-slot)
-    against every installed version of the atom's cat/pkg. Mirrors
-    pretend.rs's news_item_relevant -- see its doc comment for the same
-    narrow v1 cuts ([use]-dep not post-filtered, a malformed atom is an
-    unsatisfied restriction rather than an invalid item, no format-1.x/
-    2.x EAPI atom-validity gate)."""
+    self.atom)` -- a full atom match (version operators, slot/sub-slot,
+    and the atom's own use-deps against the installed version's recorded
+    USE) against every installed version of the atom's cat/pkg. Mirrors
+    pretend.rs's news_item_relevant. A malformed atom now makes the whole
+    item invalid (see _news_item_valid); the only remaining v1 cut is the
+    format-1.x/2.x EAPI atom-validity gate (no EAPI parametrization)."""
     installed_atoms = [
         line[len("Display-If-Installed:") :].strip()
         for line in text.splitlines()
@@ -12106,8 +12116,14 @@ def _news_item_relevant(text, root):
         cat, _, pkg = parsed.cp.partition("/")
         for version, slot, sub_slot in installed_candidates(root, cat, pkg):
             candidate = f"{cat}/{pkg}-{version}:{slot}/{sub_slot}"
-            if match_from_list(atom_str, [candidate]):
-                return True
+            if not match_from_list(atom_str, [candidate]):
+                continue
+            if getattr(parsed, "use", None):
+                iuse = _read_vdb_flag_set(root, cat, pkg, version, "IUSE")
+                use_flags = _read_vdb_flag_set(root, cat, pkg, version, "USE")
+                if not _use_deps_satisfied(parsed, iuse, use_flags):
+                    continue
+            return True
     return False
 
 

@@ -1,0 +1,9 @@
+Title: Portuale news: 2026-09-07-portuale-use-nomatch
+Author: Portuale Test <portuale@example.org>
+Content-Type: text/plain
+Posted: 2026-09-07
+Revision: 1
+News-Item-Format: 2.0
+Display-If-Installed: dev-libs/infoinstpkg[beta]
+
+infoinstpkg-1.0 declares beta in IUSE but does not enable it, so [beta] is NOT satisfied -- not relevant, not counted.

@@ -14344,3 +14344,28 @@ the seeding the merge list was `plainleaf, fakeglibc, virtual/libc,
 toolchainroot` (plainleaf first, by discovery order); with it
 `fakeglibc, virtual/libc, plainleaf, toolchainroot`. Contract-tested
 (`test_libc_merges_asap_in_merge_order` + a CASES entry).
+
+### `--check-news`: use-dep post-filter + malformed-atom rejection (2026-09-07)
+
+Two of the three narrow `--check-news` v1 cuts closed:
+
+- A `[use]`-dep in a `Display-If-Installed` atom is now enforced. Real
+  `DisplayInstalledRestriction.checkRestriction` is `vardb.match(atom)`,
+  which honours a `cat/pkg[flag]` atom against the installed version's
+  own recorded `USE`; portuale's `match_from_list` ignores use-deps like
+  every caller, so `news_item_relevant` re-checks `atom.use_deps` against
+  the matched version's vdb `IUSE`/`USE`
+  (`portage_repo::installed_pkg_iuse_and_use` +
+  `portage_dep::use_deps_satisfied`, the same pair the resolver's own
+  candidate USE-dep check uses).
+- A malformed `Display-If-Installed` atom now makes the whole news item
+  *invalid* (real `NewsItem.isValid` -> `DisplayInstalledRestriction`
+  -> `Atom(...)` -> `InvalidAtom`), moved into `news_item_valid`, rather
+  than being silently one unsatisfied restriction OR'd with the others.
+
+Fixtures: `dev-libs/infoinstpkg` (vdb `USE="alpha"`, `IUSE="alpha
+beta"`) with three new news items -- `[alpha]` (relevant), `[beta]`
+(declared but disabled -> not relevant), and one with a malformed atom
+(`[[bad` -> invalid item, never counted, never added to `.skip`).
+Dual-language. The remaining cut is the `News-Item-Format` EAPI
+atom-validity gate (Part 3: no EAPI parametrization).
