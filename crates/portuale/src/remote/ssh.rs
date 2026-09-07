@@ -214,3 +214,113 @@ pub(crate) fn run_raw_command(
         }
     }
 }
+
+/// Pull a remote directory to a local one (`tar -c` remotely, `tar -x`
+/// locally). Used for `/etc/portage` under the `client:` placement.
+pub(crate) fn pull_dir(
+    ctx: &RemoteContext,
+    control: Option<&std::path::Path>,
+    remote_dir: &str,
+    local_dir: &std::path::Path,
+) -> Result<(), String> {
+    let output = run_raw_command(
+        ctx,
+        control,
+        &[
+            "tar".to_string(),
+            "-c".to_string(),
+            "-C".to_string(),
+            remote_dir.to_string(),
+            ".".to_string(),
+        ],
+    )?;
+    if !output.status.success() {
+        return Err(format!(
+            "mrg: pulling {remote_dir} from {} failed (exit {})",
+            ctx.hostname,
+            output.status.code().unwrap_or(-1)
+        ));
+    }
+    std::fs::create_dir_all(local_dir).map_err(|e| format!("{}: {e}", local_dir.display()))?;
+    let mut child = std::process::Command::new("tar")
+        .args(["-xf", "-", "-C"])
+        .arg(local_dir)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("mrg: cannot spawn local tar: {e}"))?;
+    use std::io::Write as _;
+    child
+        .stdin
+        .take()
+        .ok_or_else(|| "mrg: tar stdin unavailable".to_string())?
+        .write_all(&output.stdout)
+        .map_err(|e| format!("mrg: feeding local tar: {e}"))?;
+    let unpack = child
+        .wait_with_output()
+        .map_err(|e| format!("mrg: waiting for local tar: {e}"))?;
+    if !unpack.status.success() {
+        return Err("mrg: unpacking pulled config failed".to_string());
+    }
+    Ok(())
+}
+
+/// Ship in-memory bytes to a client path: the `send_file` transport
+/// for bytes the server never wrote to disk (old-hook envs staged
+/// for the merge driver).
+pub(crate) fn send_bytes(
+    ctx: &RemoteContext,
+    control: Option<&std::path::Path>,
+    bytes: &[u8],
+    dest: &str,
+) -> Result<(), String> {
+    match ctx.transport {
+        RemoteTransport::Local => {
+            if let Some(parent) = std::path::Path::new(dest).parent() {
+                std::fs::create_dir_all(parent)
+                    .map_err(|e| format!("{}: {e}", parent.display()))?;
+            }
+            std::fs::write(dest, bytes).map_err(|e| format!("mrg: writing {dest} failed: {e}"))?;
+            Ok(())
+        }
+        RemoteTransport::Ssh => {
+            use std::io::Write as _;
+            let mut argv = ssh_argv(ctx, control);
+            argv.push("sh".to_string());
+            argv.push("-c".to_string());
+            argv.push(format!("cat > {}", sh_quote(dest)));
+            let mut child = std::process::Command::new(&argv[0])
+                .args(&argv[1..])
+                .stdin(std::process::Stdio::piped())
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped())
+                .spawn()
+                .map_err(|e| format!("mrg: cannot spawn ssh: {e}"))?;
+            child
+                .stdin
+                .take()
+                .ok_or_else(|| "mrg: ssh stdin unavailable".to_string())?
+                .write_all(bytes)
+                .map_err(|e| format!("mrg: writing to ssh stdin: {e}"))?;
+            let output = child
+                .wait_with_output()
+                .map_err(|e| format!("mrg: waiting for ssh: {e}"))?;
+            let code = output.status.code();
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            if !output.status.success() && is_transport_error(code, &stderr) {
+                return Err(format!(
+                    "mrg: client {} unreachable:\n{stderr}",
+                    ctx.hostname
+                ));
+            }
+            if !output.status.success() {
+                return Err(format!(
+                    "mrg: sending {dest} failed (exit {}):\n{stderr}",
+                    code.unwrap_or(-1)
+                ));
+            }
+            Ok(())
+        }
+    }
+}

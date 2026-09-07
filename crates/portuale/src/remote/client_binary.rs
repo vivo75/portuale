@@ -126,3 +126,115 @@ pub(crate) fn bin_preflight(ctx: &RemoteContext) -> Result<Option<BinPreflight>,
         machine: info.machine,
     }))
 }
+
+/// Digest of a client path, if it exists: `None` when missing. Only a
+/// transport failure is an `Err`; a missing file is not one.
+pub(crate) fn client_file_digest(
+    ctx: &RemoteContext,
+    control: Option<&std::path::Path>,
+    path: &str,
+) -> Result<Option<String>, String> {
+    match ctx.transport {
+        RemoteTransport::Local => {
+            let bytes = match std::fs::read(path) {
+                Ok(bytes) => bytes,
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+                Err(e) => return Err(format!("mrg: reading {path}: {e}")),
+            };
+            use sha2::Digest as _;
+            Ok(Some(format!("{:x}", sha2::Sha256::digest(&bytes))))
+        }
+        RemoteTransport::Ssh => {
+            let output = run_raw_command(
+                ctx,
+                control,
+                &["sha256sum".to_string(), "--".to_string(), path.to_string()],
+            )?;
+            let code = output.status.code();
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            if !output.status.success() {
+                if is_transport_error(code, &stderr) {
+                    return Err(format!(
+                        "mrg: client {} unreachable:\n{stderr}",
+                        ctx.hostname
+                    ));
+                }
+                return Ok(None);
+            }
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            Ok(stdout
+                .split_whitespace()
+                .next()
+                .map(String::from)
+                .filter(|hex| hex.len() == 64))
+        }
+    }
+}
+
+/// Best-effort removal of a client temp path (the install's failure
+/// cleanup).
+pub(crate) fn remove_client_path(
+    ctx: &RemoteContext,
+    control: Option<&std::path::Path>,
+    path: &str,
+) {
+    match ctx.transport {
+        RemoteTransport::Local => {
+            let _ = std::fs::remove_file(path);
+        }
+        RemoteTransport::Ssh => {
+            let _ = run_raw_command(
+                ctx,
+                control,
+                &[
+                    "rm".to_string(),
+                    "-f".to_string(),
+                    "--".to_string(),
+                    path.to_string(),
+                ],
+            );
+        }
+    }
+}
+
+/// Run `"<abs>" __helper ping` on the client and require the D8 token on
+/// stdout: the installed binary really executes there.
+pub(crate) fn ping_client_binary(
+    ctx: &RemoteContext,
+    control: Option<&std::path::Path>,
+    abs: &str,
+) -> Result<(), String> {
+    let output = run_raw_command(
+        ctx,
+        control,
+        &[abs.to_string(), "__helper".to_string(), "ping".to_string()],
+    )
+    .map_err(|message| {
+        if ctx.transport == RemoteTransport::Local {
+            format!("mrg: local client binary ping failed: {message}")
+        } else {
+            message
+        }
+    })?;
+    let code = output.status.code();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    if !output.status.success() {
+        if ctx.transport == RemoteTransport::Ssh && is_transport_error(code, &stderr) {
+            return Err(format!(
+                "mrg: client {} unreachable:\n{stderr}",
+                ctx.hostname
+            ));
+        }
+        return Err(format!(
+            "mrg: client binary {abs} failed its __helper ping (exit {}):\n{stderr}",
+            code.unwrap_or(-1)
+        ));
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    if stdout.trim() != crate::helpers::PING_TOKEN {
+        return Err(format!(
+            "mrg: client binary {abs} did not answer the __helper ping (no D8 token)"
+        ));
+    }
+    Ok(())
+}
