@@ -19,6 +19,8 @@
 use clap::ArgMatches;
 
 mod binpkg_flow;
+mod client_binary;
+mod config_place;
 mod ledger;
 mod merge_script;
 mod plan;
@@ -29,6 +31,8 @@ mod ssh;
 pub(crate) mod tests;
 
 pub(crate) use binpkg_flow::*;
+pub(crate) use client_binary::*;
+pub(crate) use config_place::*;
 pub(crate) use ledger::*;
 pub(crate) use merge_script::*;
 pub use plan::*;
@@ -78,6 +82,20 @@ pub enum ConfigPlacement {
     Server(String),
     /// Pulled once over the multiplexed connection at plan start.
     Client(String),
+}
+
+impl ConfigPlacement {
+    /// Parse `server:<path>` / `client:<path>`; anything else is a usage
+    /// error naming the option.
+    pub fn parse(option: &str, value: &str) -> Result<Self, String> {
+        match value.split_once(':') {
+            Some(("server", path)) if !path.is_empty() => Ok(Self::Server(path.to_string())),
+            Some(("client", path)) if !path.is_empty() => Ok(Self::Client(path.to_string())),
+            _ => Err(format!(
+                "mrg: {option} must be server:<path> or client:<path>, got {value:?}"
+            )),
+        }
+    }
 }
 
 /// Validated remote target: Ansible's `play_context` split -- connection
@@ -179,4 +197,13 @@ impl ClientBinPlan {
             Self::Local(path) | Self::Use(path) | Self::Install(path) => Some(path),
         }
     }
+}
+
+/// Whether `id` was provided on the command line, type-agnostic -- the
+/// presence check must see both `Value` string options and `Flag` bools.
+fn provided(matches: &ArgMatches, id: &str) -> bool {
+    matches.contains_id(id)
+        && matches
+            .value_source(id)
+            .is_some_and(|src| src == clap::parser::ValueSource::CommandLine)
 }

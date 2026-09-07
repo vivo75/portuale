@@ -346,6 +346,17 @@ pub(crate) fn config_install_mask(config: &portage_profile::Config) -> (String, 
     crate::install_mask::resolve(&configured, &features)
 }
 
+/// `repos.conf` repos + resolved config for one root (`run()`'s preamble; shared
+/// with `mrg --remote-binpkg`). `Err` is bare text; the caller prefixes it.
+pub(crate) fn load_repos_and_config(
+    config_root: &std::path::Path,
+    root: &std::path::Path,
+) -> Result<(Vec<portage_repo::RepoConfig>, portage_profile::Config), String> {
+    let repos = portage_repo::find_repos(config_root).map_err(|e| e.to_string())?;
+    let config = resolve_config_for_root(config_root, &repos, root)?;
+    Ok((repos, config))
+}
+
 /// Profile half over a loaded repo list: both roots resolve the same trees.
 /// Portage: create_trees (running tree inherits `PORTAGE_REPOSITORIES`)
 pub(crate) fn resolve_config_for_root(

@@ -78,3 +78,21 @@ pub(crate) fn newest_ledger_line(text: &str) -> Option<String> {
         .rfind(|line| !line.is_empty())
         .map(String::from)
 }
+
+/// The server-side ledger record for one hostname:
+/// `<base>/<hostname>` (last 10 kept). `None` when absent/empty.
+pub(crate) fn server_latest_ledger(base: &std::path::Path, hostname: &str) -> Option<String> {
+    std::fs::read_to_string(base.join(sanitize_hostname(hostname)))
+        .ok()
+        .and_then(|text| newest_ledger_line(&text))
+}
+
+/// Strict-mode provenance comparison: the client's and server's
+/// *newest* ledger line must agree (both absent counts as agreeing).
+pub(crate) fn ledger_lines_match(client: Option<&str>, server: Option<&str>) -> bool {
+    match (client, server) {
+        (None, None) => true,
+        (Some(c), Some(s)) => c == s,
+        _ => false,
+    }
+}

@@ -16,3 +16,7 @@ pub(crate) use doins::{copy_xattr, xattr_excluded, xattr_get, xattr_list};
 mod gpkg;
 mod xattr;
 mod xpak;
+
+/// The fixed answer of the `ping` helper (D8: proves `$PORTUALE_BIN`
+/// reaches a phase as a working binary, never the libtest harness).
+pub(crate) const PING_TOKEN: &str = "portuale-helper-ping-1";
