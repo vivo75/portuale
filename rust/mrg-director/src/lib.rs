@@ -357,7 +357,9 @@ impl RepoCache for Md5Cache<'_> {
         category: &str,
         pf: &str,
     ) -> Result<std::collections::HashMap<String, String>, String> {
-        portage_repo::read_md5_cache(self.repo_location, category, pf).map_err(|e| e.to_string())
+        portage_repo::read_md5_cache(self.repo_location, category, pf)
+            .map(|m| (*m).clone())
+            .map_err(|e| e.to_string())
     }
     fn category(&self, category: &str) -> Vec<String> {
         let dir = self
