@@ -109,6 +109,13 @@ fn print_applets() {
     println!("Run `portuale <applet> --help` for that applet's own options.");
 }
 
+/// `--help` / `--version` (any spelling) never touch the installed
+/// database, so they must not fail on a missing one.
+fn is_help_or_version(args: &[String]) -> bool {
+    args.iter()
+        .any(|a| matches!(a.as_str(), "--help" | "-h" | "--version" | "-V"))
+}
+
 /// `emerge --pretend` in any spelling: `--pretend` or a short-option
 /// cluster holding `p` (`-p`, `-pv`, `-uDNp`).
 fn emerge_is_pretend(args: &[String]) -> bool {

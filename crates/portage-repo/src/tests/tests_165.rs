@@ -45,6 +45,18 @@ fn find_repos_impl_defaults_the_main_repo_to_priority_minus_1000() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
+/// Arguments of [`write_pkg_165`].
+struct WritePkg165Args<'a> {
+    repo: &'a Path,
+    cp: &'a str,
+    pv: &'a str,
+    slot: &'a str,
+    iuse: &'a str,
+    depend: &'a str,
+    rdepend: &'a str,
+    bdepend: &'a str,
+}
+
 fn cfg_165() -> portage_profile::Config {
     portage_profile::Config {
         accept_keywords: HashSet::from(["amd64".to_string()]),

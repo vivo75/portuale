@@ -44,6 +44,31 @@ use std::time::Duration;
 /// The variable that carries the socket path to the children.
 pub(crate) const IPC_VAR: &str = "PORTUALE_VDB_IPC";
 
+/// A running server. Dropping it stops the accept thread and removes the
+/// socket and its directory.
+#[derive(Debug)]
+pub(crate) struct Server {
+    dir: PathBuf,
+    socket: PathBuf,
+    stop: Arc<AtomicBool>,
+    thread: Option<std::thread::JoinHandle<()>>,
+}
+
+impl Drop for Server {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::SeqCst);
+        // Wake the blocking `accept`; it sees the flag and returns.
+        if UnixStream::connect(&self.socket).is_ok()
+            && let Some(t) = self.thread.take()
+        {
+            let _ = t.join();
+        }
+        let _ = std::fs::remove_file(&self.socket);
+        let _ = std::fs::remove_dir(&self.dir);
+        cleanup::unregister(&self.dir);
+    }
+}
+
 // ---------------------------------------------------------------------
 // Cleanup on panic (release builds abort, so `Drop` never runs)
 // ---------------------------------------------------------------------
@@ -51,6 +76,14 @@ pub(crate) const IPC_VAR: &str = "PORTUALE_VDB_IPC";
 mod cleanup {
     use std::path::{Path, PathBuf};
     use std::sync::Mutex;
+
+    static LIVE: Mutex<Vec<PathBuf>> = Mutex::new(Vec::new());
+
+    pub(super) fn unregister(dir: &Path) {
+        if let Ok(mut live) = LIVE.lock() {
+            live.retain(|d| d != dir);
+        }
+    }
 
     #[cfg(test)]
     fn install_hook() {}
