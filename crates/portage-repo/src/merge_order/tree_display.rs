@@ -256,3 +256,49 @@ pub struct TreeDisplayOrderArgs<'a> {
     pub dynamic_deps: bool,
     pub circular: &'a HashMap<RootCp, Vec<CircularDepChild>>,
 }
+
+/// The tree-mode serialization order for `--tree` display.
+///
+/// Returns the merge-direction entry order (resolver indexing, like
+/// [`serialize_merge_order`]); the display layer reverses it before
+/// walking, exactly like Portage.
+/// Portage: depgraph.py, _ordered_tree_display.
+///
+/// Unlike [`tree_solved_replacements`], the loop always runs but only the
+/// order is kept -- verdicts stay that function's sole source.
+pub fn tree_display_order(args: TreeDisplayOrderArgs<'_>) -> Vec<usize> {
+    let TreeDisplayOrderArgs {
+        entries,
+        top_level_atoms,
+        config,
+        root,
+        implicit_system_deps,
+        repos,
+        dynamic_deps,
+        circular,
+    } = args;
+    let pending = tree_stuck_pending(entries);
+    let (ext, mut g, real_n, discovery_rank) = schedule_graph(ScheduleGraphArgs {
+        entries,
+        top_level_atoms,
+        config,
+        root,
+        implicit_system_deps,
+        repos,
+        dynamic_deps,
+        circular,
+    });
+    // `pending` addresses resolver indexing, which is a prefix of `ext`
+    // (the closure only appends), so indices stay valid.
+    let mut ts = TreeStuck {
+        pending,
+        scheduled: HashSet::new(),
+        solved: Vec::new(),
+        progressed: false,
+    };
+    let scheduled: Vec<usize> = select_nodes(&mut g, &ext, root, Some(&mut ts))
+        .into_iter()
+        .filter(|&i| i < real_n)
+        .collect();
+    weave_scheduled_leftovers(&scheduled, real_n, &discovery_rank)
+}

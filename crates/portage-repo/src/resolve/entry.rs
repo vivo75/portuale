@@ -213,3 +213,73 @@ pub(crate) fn skipped_update_roots(
     };
     (missed_running, consumer_running)
 }
+
+/// Arguments of [`topological_merge_order`].
+pub(crate) struct TopologicalMergeOrderArgs<'a> {
+    pub(crate) entries: Vec<GraphEntry>,
+    pub(crate) top_level_atoms: &'a [String],
+    pub(crate) config: &'a portage_profile::Config,
+    pub(crate) root: &'a Path,
+    pub(crate) implicit_system_deps: bool,
+    pub(crate) repos: &'a [RepoConfig],
+    pub(crate) dynamic_deps: bool,
+    pub(crate) circular: &'a HashMap<RootCp, Vec<CircularDepChild>>,
+}
+
+/// Put `entries` in Portage's dependency-first *merge* order, over a digraph built from
+/// each entry's `deps` plus `required_by` fallback edges. See the merge-order module
+/// header for coverage. Portage: depgraph.py, _serialize_tasks.
+///
+/// Cycle reporting still reads `edge_kind_map` from this call site; `--json` and
+/// `--buildpkgonly` read this order directly; `--tree` seeds its discovery from it.
+/// `circular` must demote exactly like the walk did, or a phantom edge re-closes it.
+///
+/// Returns the sorted entries plus per-position pre-bias insertion ranks for the cycle
+/// reporter. Inputs under 2 entries short-circuit with plain array positions.
+pub(crate) fn topological_merge_order(
+    args: TopologicalMergeOrderArgs<'_>,
+) -> (Vec<GraphEntry>, Vec<usize>) {
+    let TopologicalMergeOrderArgs {
+        entries,
+        top_level_atoms,
+        config,
+        root,
+        implicit_system_deps,
+        repos,
+        dynamic_deps,
+        circular,
+    } = args;
+    // Stamp BFS discovery order before the merge sort consumes it: the input vec IS
+    // discovery order, and the `--tree` walk orders display parents by it.
+    let mut entries = entries;
+    for (seq, entry) in entries.iter_mut().enumerate() {
+        entry.discovery = seq;
+    }
+    if entries.len() < 2 {
+        // Portage still dumps `digraph:` for a single-package merge; portuale
+        // short-circuits the scheduler, so dump explicitly under `--debug`.
+        if entries.len() == 1 && resolver_debug() {
+            merge_order::debug_dump_graph_only(&entries, top_level_atoms, root, circular);
+        }
+        let rank: Vec<usize> = (0..entries.len()).collect();
+        return (entries, rank);
+    }
+    let (order, insertion_rank) =
+        merge_order::serialize_merge_order(merge_order::SerializeMergeOrderArgs {
+            entries: &entries,
+            top_level_atoms,
+            config,
+            root,
+            implicit_system_deps,
+            repos,
+            dynamic_deps,
+            circular,
+        });
+    let mut slots: Vec<Option<GraphEntry>> = entries.into_iter().map(Some).collect();
+    let rank: Vec<usize> = order.iter().map(|&i| insertion_rank[i]).collect();
+    let entries = order
+        .into_iter()
+        .map(|i| slots[i].take().expect("each index emitted once"))
+        .collect();
+    (entries, rank)
+}

@@ -5,6 +5,44 @@ use portage_profile::Config;
 use std::ops::ControlFlow;
 use std::sync::Arc;
 
+/// The values [`enqueue_entry_deps`] reads from its caller.
+pub(crate) struct EnqueueEntryDepsArgs<'a> {
+    pub(crate) ctx: &'a ResolveCtx<'a>,
+    pub(crate) depth: u32,
+    pub(crate) metadata: &'a Arc<HashMap<String, String>>,
+    pub(crate) candidate_source: CandidateSource,
+    pub(crate) state: &'a mut PassState,
+    pub(crate) entry_idx: usize,
+    pub(crate) use_flags: &'a HashSet<String>,
+    pub(crate) bp: &'a BacktrackParams,
+    pub(crate) config: &'a Config,
+    pub(crate) union_constraints: &'a HashMap<(String, String), Vec<String>>,
+    pub(crate) key: &'a (String, String),
+    pub(crate) version: &'a str,
+    pub(crate) candidate_str: &'a str,
+}
+
+/// What [`select_dep_tokens`] hands back to its caller.
+pub(crate) struct SelectDepTokensOut {
+    pub(crate) onlydeps_blanks_runtime: bool,
+    pub(crate) onlydeps_blanks_idepend: bool,
+    pub(crate) eapi_has_idepend: bool,
+    pub(crate) tokens: Vec<String>,
+}
+
+/// The values [`record_merge_order_deps`] reads from its caller.
+pub(crate) struct RecordMergeOrderDepsArgs<'a> {
+    pub(crate) ctx: &'a ResolveCtx<'a>,
+    pub(crate) candidate_source: CandidateSource,
+    pub(crate) metadata: &'a Arc<HashMap<String, String>>,
+    pub(crate) use_flags: &'a HashSet<String>,
+    pub(crate) state: &'a mut PassState,
+    pub(crate) entry_idx: usize,
+    pub(crate) onlydeps_blanks_runtime: bool,
+    pub(crate) onlydeps_blanks_idepend: bool,
+    pub(crate) eapi_has_idepend: bool,
+}
+
 /// What [`classify_dep_atoms`] hands back to its caller.
 pub(crate) struct ClassifyDepAtomsOut {
     pub(crate) buildtime_atoms: HashSet<String>,
