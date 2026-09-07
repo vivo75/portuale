@@ -13770,14 +13770,33 @@ fn backtracking_resolve(req: &ResolveRequest) -> Result<GraphResult, Error> {
                 };
                 metadata
             };
-            let mut use_flags = effective_use_flags(
-                config,
-                metadata.get("IUSE").map(String::as_str).unwrap_or_default(),
-                &keywords,
-                &candidate_str,
-                &key.0,
-                &key.1,
-            );
+            // A *built* package (a `--getbinpkg` binary candidate) carries
+            // the USE flags it was actually built with (`Packages` `USE:`
+            // field / `Candidate::binary_use`) -- real `_pkg_use_enabled`
+            // returns `pkg.use.enabled` (= the baked set) for a
+            // `pkg.built` package, never a fresh profile recomputation.
+            // This is what the REQUIRED_USE check (PMS 7.3.4), the `-pv`
+            // `USE="…"` line and the USE-conditional dependency walk below
+            // must all see -- identical to what `candidate_iuse_and_use`
+            // already does everywhere else. Recomputing from the profile
+            // (`effective_use_flags`) would e.g. spuriously fail a
+            // `^^ ( elogind systemd )` REQUIRED_USE whenever the profile
+            // forces neither flag but the binary was built with exactly
+            // one. (`--newuse`/`-N` rebuild-vs-reuse is a *selection*
+            // decision made upstream; if it stays `Binary` here, the baked
+            // USE is authoritative.)
+            let mut use_flags = if candidate_source == CandidateSource::Binary {
+                resolved.binary_use.clone().unwrap_or_default()
+            } else {
+                effective_use_flags(
+                    config,
+                    metadata.get("IUSE").map(String::as_str).unwrap_or_default(),
+                    &keywords,
+                    &candidate_str,
+                    &key.0,
+                    &key.1,
+                )
+            };
 
             // Real `--autounmask-use` USE resolution: `resolve_pretend` kept
             // this candidate despite an atom use-dep mismatch because a

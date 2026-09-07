@@ -1091,6 +1091,12 @@ CASES = [
         0,
     ),
     (
+        "--getbinpkgonly: a binary's REQUIRED_USE is checked against its baked USE, "
+        "not a profile recompute (^^ ( rqa rqb ) satisfied by the binpkg's USE=rqa)",
+        ["--pretend", "--getbinpkgonly", "dev-libs/binrequsepkg"],
+        0,
+    ),
+    (
         "--newrepo: off by default, stays already-installed",
         ["--pretend", "--selective", "dev-libs/newrepopkg"],
         0,
@@ -4388,7 +4394,11 @@ def test_usepkgonly_defaults_binpkg_respect_use_off(emerge_binary, fixture_env):
     --binpkg-respect-use to off once --usepkgonly is given (no ebuild
     fallback exists to reject *to*, so real portage doesn't bother
     rejecting). The same USE-mismatched binary from the sibling test
-    above is accepted here."""
+    above is accepted here -- and its USE line shows the flags it was
+    *built* with (`USE="-foo"`: IUSE `foo`, baked USE empty), not a
+    fresh profile recompute (which would enable `foo`). Real `-p` for a
+    `[binary]` line renders `pkg.use.enabled`, = the baked set for a
+    built package."""
     result = _run(
         [str(emerge_binary)],
         ["--pretend", "--usepkgonly", "dev-libs/binaryusemismatchpkg"],
@@ -4396,7 +4406,7 @@ def test_usepkgonly_defaults_binpkg_respect_use_off(emerge_binary, fixture_env):
     )
     assert result.returncode == 0
     assert result.stdout.splitlines() == [
-                                             '[binary  N     ] dev-libs/binaryusemismatchpkg-1.0-1  USE="foo"',
+                                             '[binary  N     ] dev-libs/binaryusemismatchpkg-1.0-1  USE="-foo"',
                                          ]
     assert result.stderr == ""
 

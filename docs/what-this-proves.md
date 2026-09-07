@@ -14964,3 +14964,36 @@ through from the `Packages` index / local scan) and checks
 the index record's `PATH`). New tests: `resolve_local_binpkg_finds_the_
 multi_instance_layout`, `merge_one_binary_entry_merges_a_multi_instance_
 local_gpkg`.
+
+### A binary candidate's REQUIRED_USE is checked against its baked USE, not a profile recompute (2026-09-07)
+
+`portuale emerge --getbinpkg -uDvN @world` aborted with `REQUIRED_USE not
+satisfied for kde-plasma/plasma-meta-6.7.4-r1: "^^ ( elogind systemd )
+firewall? ( systemd )"` where real portage resolved the same `@world`
+cleanly.
+
+The graph-building loop (`resolve_pretend_graph`) computed every
+candidate's `use_flags` via `effective_use_flags(...)` -- a fresh
+profile/`package.use` recomputation -- **including for `--getbinpkg`
+binary candidates**, then fed that set to the REQUIRED_USE check
+(PMS 7.3.4), the `-pv` `USE="…"` line, and the USE-conditional dependency
+walk. A *built* package carries the USE flags it was actually built with
+(the `Packages` index `USE:` field / `Candidate::binary_use`); real
+`_pkg_use_enabled` returns `pkg.use.enabled` (= that baked set) for any
+`pkg.built` package and never recomputes. So a binary built with exactly
+one of `elogind`/`systemd` -- which its own binhost necessarily built to
+satisfy `^^ ( elogind systemd )` -- was re-tested against a profile set
+that enabled neither, and spuriously failed.
+
+Fixed: the loop now uses `resolved.binary_use` for a `CandidateSource::
+Binary` candidate and only calls `effective_use_flags` for an ebuild --
+identical to what `candidate_iuse_and_use` (the atom-matching /
+use-dep path) has always done. Dual-language (`portage-repo/src/lib.rs` +
+`python/emerge_pretend_reference.py`). One existing contract expectation
+flipped (`test_usepkgonly_defaults_binpkg_respect_use_off`: a
+USE-mismatched binary's `-p` line now shows `USE="-foo"`, the flags it
+was built with, not the profile's `USE="foo"` -- which is what real `-p`
+renders for a `[binary]` line). New fixture `dev-libs/binrequsepkg` (a
+remote-only binhost binary whose `REQUIRED_USE="^^ ( rqa rqb )"` is
+satisfied only by its baked `USE="rqa"`) + a `--getbinpkgonly` CASE.
+972 contract green.

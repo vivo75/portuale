@@ -1,5 +1,5 @@
 TIMESTAMP: 0
-PACKAGES: 12
+PACKAGES: 13
 
 BUILD_ID: 1
 CPV: dev-libs/remotebinpkg-1.0
@@ -148,3 +148,17 @@ REPO: gentoo
 SIZE: 4096
 SLOT: 0
 USE:
+
+BUILD_ID: 1
+BUILD_TIME: 100
+CPV: dev-libs/binrequsepkg-1.0
+DEFINED_PHASES: -
+DESCRIPTION: fixture: remote-only binhost binary whose REQUIRED_USE "^^ ( rqa rqb )" is satisfied ONLY by its baked USE ("rqa") -- the profile forces neither flag, so recomputing USE from the profile would spuriously fail the check
+EAPI: 8
+IUSE: rqa rqb
+KEYWORDS: amd64
+REPO: gentoo
+REQUIRED_USE: ^^ ( rqa rqb )
+SIZE: 4096
+SLOT: 0
+USE: rqa

@@ -10130,14 +10130,29 @@ def resolve_pretend_graph(
                 except OSError:
                     continue
             candidate_str = f"{category}/{package}-{version}:{slot}/{sub_slot}::{repo_name}"
-            use_flags = effective_use_flags(
-                config,
-                metadata.get("IUSE", ""),
-                resolved["keywords"],
-                candidate_str,
-                category,
-                package,
-            )
+            # A *built* package (a --getbinpkg binary candidate) carries the
+            # USE flags it was actually built with (Packages `USE:` field /
+            # candidate["binary_use"]) -- real _pkg_use_enabled returns
+            # pkg.use.enabled (= the baked set) for a pkg.built package,
+            # never a fresh profile recomputation. This is what the
+            # REQUIRED_USE check, the -pv USE="..." line and the
+            # USE-conditional dependency walk below must all see -- identical
+            # to _candidate_iuse_and_use everywhere else. Recomputing from
+            # the profile (effective_use_flags) would e.g. spuriously fail a
+            # `^^ ( elogind systemd )` REQUIRED_USE whenever the profile
+            # forces neither flag but the binary was built with exactly one.
+            # Mirrors portage-repo/src/lib.rs.
+            if candidate_source == "binary":
+                use_flags = set(resolved.get("binary_use") or set())
+            else:
+                use_flags = effective_use_flags(
+                    config,
+                    metadata.get("IUSE", ""),
+                    resolved["keywords"],
+                    candidate_str,
+                    category,
+                    package,
+                )
 
             # Real --autounmask-use USE resolution: resolve_pretend kept this
             # candidate despite an atom use-dep mismatch because a
