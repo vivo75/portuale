@@ -689,3 +689,105 @@ pub(crate) fn push_unresolved_entry(args: PushUnresolvedEntryArgs<'_>) {
         deps: already_installed_deps,
     });
 }
+
+/// A dependency with no version to merge: feedback for backtracking, and its unsatisfied entry.
+pub(crate) fn record_unresolved_dep(args: RecordUnresolvedDepArgs<'_>) {
+    let RecordUnresolvedDepArgs {
+        current_atom,
+        bp,
+        key,
+        outcome,
+        ctx,
+        state,
+        config,
+        owner,
+        atom_root,
+        item_targets_running_root,
+        unevaluated_atom,
+        depth,
+        union_constraints,
+        atom,
+    } = args;
+    maybe_missing_dep_backtrack(MaybeMissingDepBacktrackArgs {
+        current_atom,
+        outcome: &outcome,
+        ctx,
+        bp,
+        key: &key,
+        state: &mut *state,
+        config,
+        owner,
+    });
+    let installed_node_slot = record_installed_slot_collision(RecordInstalledSlotCollisionArgs {
+        outcome: &outcome,
+        atom_root,
+        key: &key,
+        item_targets_running_root,
+        state: &mut *state,
+        ctx,
+        config,
+        current_atom,
+    });
+    if dedup_repeat_visit(DedupRepeatVisitArgs {
+        key: &key,
+        installed_node_slot,
+        item_targets_running_root,
+        state: &mut *state,
+        outcome: &outcome,
+        bp,
+        unevaluated_atom,
+        current_atom,
+        ctx,
+        config,
+        owner: owner.as_ref(),
+    })
+    .is_break()
+    {
+        return;
+    }
+    let already_installed_deps = enqueue_installed_deps(EnqueueInstalledDepsArgs {
+        outcome: &outcome,
+        ctx,
+        depth,
+        atom_root,
+        key: &key,
+        state: &mut *state,
+        config,
+        union_constraints,
+    });
+    let NvcSuggestionsOut {
+        keyword_suggestion,
+        use_suggestion,
+        parent_use_suggestion,
+    } = compute_nvc_suggestions(ComputeNvcSuggestionsArgs {
+        outcome: &outcome,
+        bp,
+        ctx,
+        key: &key,
+        atom,
+        config,
+        owner: owner.as_ref(),
+        unevaluated_atom,
+        entries: &state.entries,
+    });
+    record_miss_disclosure(RecordMissDisclosureArgs {
+        outcome: &outcome,
+        unevaluated_atom,
+        current_atom,
+        key: &key,
+        state: &mut *state,
+        ctx,
+        config,
+        owner: owner.as_ref(),
+    });
+    push_unresolved_entry(PushUnresolvedEntryArgs {
+        key,
+        outcome,
+        already_installed_deps,
+        keyword_suggestion,
+        use_suggestion,
+        parent_use_suggestion,
+        item_targets_running_root,
+        state: &mut *state,
+    });
+}
