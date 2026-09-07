@@ -164,6 +164,58 @@ def _parse_layout_conf(repo_location):
     return out
 
 
+_MODULE_SPECIFIC_KEYS = {
+    "git": (
+        "sync-git-clone-env",
+        "sync-git-clone-extra-opts",
+        "sync-git-env",
+        "sync-git-pull-env",
+        "sync-git-pull-extra-opts",
+        "sync-git-verify-commit-signature",
+        "sync-git-verify-max-age-days",
+    ),
+    "rsync": (
+        "sync-rsync-extra-opts",
+        "sync-rsync-vcs-ignore",
+        "sync-rsync-verify-jobs",
+        "sync-rsync-verify-max-age",
+        "sync-rsync-verify-metamanifest",
+    ),
+    "webrsync": ("sync-webrsync-verify-signature",),
+}
+
+
+def _module_specific_keys(sync_type):
+    """The sync-module-specific repos.conf option keys real portage
+    recognizes for a sync-type (portage.sync.module_specific_options), in
+    a fixed order for deterministic emerge --info output. Mirrors
+    portage-repo/src/lib.rs's module_specific_keys."""
+    return _MODULE_SPECIFIC_KEYS.get(sync_type or "", ())
+
+
+def _path_owned_by_root_or_portage(path):
+    """The ownership half of real RepoConfig's `volatile` heuristic
+    (config.py:445): whether `path`'s owning uid is root (0) or portage.
+    An unreadable path or passwd yields False (real's fail-safe ->
+    volatile). Mirrors portage-repo/src/lib.rs's
+    path_owned_by_root_or_portage."""
+    try:
+        uid = os.stat(path).st_uid
+    except OSError:
+        return False
+    if uid == 0:
+        return True
+    try:
+        with open("/etc/passwd") as f:
+            for line in f:
+                fields = line.split(":")
+                if fields[0] == "portage":
+                    return int(fields[2]) == uid
+    except (OSError, ValueError, IndexError):
+        pass
+    return False
+
+
 def find_repos(config_root):
     """Parses repos.conf and returns every [reponame] section that has a
     location (the main repo plus any overlays) as a list of dicts with
@@ -186,6 +238,20 @@ def find_repos(config_root):
         files = [repos_conf]
     else:
         raise ResolutionError(f"no repos.conf found at {repos_conf}")
+
+    # Real RepoConfigLoader reads the global
+    # <PORTAGE_BASE_PATH>/cnf/repos.conf (installed at
+    # /usr/share/portage/config/repos.conf) *before* the user's, so a
+    # user [section] key overrides the global one and unset keys fall
+    # through (e.g. the shipped [gentoo] sync-git-verify-commit-signature
+    # = true). config_root-relative -> the real absolute path for a live
+    # PORTAGE_CONFIGROOT=/ run, absent under a fixture root. Mirrors
+    # portage-repo/src/lib.rs's find_repos.
+    global_repos_conf = os.path.join(
+        config_root, "usr", "share", "portage", "config", "repos.conf"
+    )
+    if os.path.isfile(global_repos_conf):
+        files = [global_repos_conf] + list(files)
 
     parser = configparser.ConfigParser()
     parser.read(files)
@@ -222,12 +288,33 @@ def find_repos(config_root):
                 repo_name_file = f.readline().strip()
         except OSError:
             repo_name_file = ""
+        sync_type = parser.get(name, "sync-type", fallback=None) or None
+        sync_uri = parser.get(name, "sync-uri", fallback=None) or None
+        # Real RepoConfig.volatile (config.py:423): explicit true/yes,
+        # else the heuristic -- volatile unless the tree is under
+        # /var/db/repos and owned by root/portage.
+        volatile_str = parser.get(name, "volatile", fallback=None)
+        if volatile_str is not None:
+            volatile = volatile_str in ("true", "yes")
+        else:
+            volatile = not location.startswith(
+                "/var/db/repos"
+            ) or not _path_owned_by_root_or_portage(location)
+        module_specific_options = [
+            (k, parser.get(name, k))
+            for k in _module_specific_keys(sync_type)
+            if parser.has_option(name, k)
+        ]
         repos.append(
             {
                 "name": repo_name_file or name,
                 "location": location,
                 "priority": priority,
                 "is_main": name == main_repo,
+                "sync_type": sync_type,
+                "sync_uri": sync_uri,
+                "volatile": volatile,
+                "module_specific_options": module_specific_options,
                 "_section_name": name,
                 # None = repos.conf key absent (fall through to layout.conf
                 # tier); a list (possibly empty) = explicit.
@@ -4790,6 +4877,33 @@ def resolve_config(
         os.path.join(config_root, "etc", "portage", "package.use")
     )
 
+    # Real UseManager.extract_global_USE_changes (config.py:832): the "*/*"
+    # package atom's own "*/*" entry in the USER package.use
+    # (configdict["pkg"] only -- real's _pusedict is user-files-only, never
+    # profile/repo) is popped out of the per-package dict and appended to
+    # configdict["conf"]["USE"], so it stacks on the global USE like
+    # make.conf USE= would. USE_EXPAND shorthand (GRUB_PLATFORMS: efi-64
+    # pc) is already prefix-expanded by _parse_package_use_lines(...,
+    # use_expand_shorthand=True). Folded here, after the USE_EXPAND
+    # loops, so "*/* -lua_single_target_lua5-1" removes the value the
+    # profile's LUA_SINGLE_TARGET= scalar just folded in. Popped from
+    # package_use_user too, so it is not also re-applied per-candidate.
+    package_use_user = _parse_package_use_lines(
+        user_use_lines, use_expand_shorthand=True
+    )
+    _global_user_tokens = []
+    _package_use_user_kept = []
+    for atom, tokens in package_use_user:
+        if atom == "*/*":
+            _global_user_tokens.extend(tokens)
+        else:
+            _package_use_user_kept.append((atom, tokens))
+    package_use_user = _package_use_user_kept
+    if _global_user_tokens:
+        joined = " ".join(_global_user_tokens)
+        _apply_incremental(joined, use_flags)
+        conf_use_tokens.append(joined)
+
     # package.env (real config.py:894 grabdict_package + _grab_pkg_env):
     # /etc/portage/package.env maps an atom to one or more env-file names
     # under /etc/portage/env/; each file is a make.conf-style KEY=value
@@ -5084,9 +5198,7 @@ def resolve_config(
         "profile_use_layers": profile_use_layers,
         "package_env": package_env,
         "package_env_use": package_env_use,
-        "package_use_user": _parse_package_use_lines(
-            user_use_lines, use_expand_shorthand=True
-        ),
+        "package_use_user": package_use_user,
         "system_packages": system_packages,
         "package_provided": package_provided,
         "use_force": use_force,
@@ -12664,7 +12776,22 @@ def _resolve_info_binary_candidate(config, atom_str):
     return None
 
 
-def _use_expand_display_value(var, config):
+def _resolved_global_use(config):
+    """The resolved global USE set real emerge --info prints -- real
+    config.regenerate()'s last two lines before the USE_EXPAND display
+    pass: myflags.update(self.useforce) then
+    myflags.difference_update(self.usemask) (the mycpv is None case).
+    ARCH is already in use_flags via USE_EXPAND_UNPREFIXED. Portuale keeps
+    use_force/use_mask out of use_flags on purpose (applied per-candidate
+    in effective_use_flags); this reunites them for the one global
+    display that needs it. Mirrors pretend.rs's resolved_global_use."""
+    s = set(config["use_flags"])
+    s.update(config.get("use_force", ()))
+    s.difference_update(config.get("use_mask", ()))
+    return s
+
+
+def _use_expand_display_value(var, resolved_use, config):
     """One USE_EXPAND variable's emerge --info display value, real
     config.regenerate()'s "Generate global USE_EXPAND variables settings
     that are consistent with USE" tail (guarded on self.mycpv is None):
@@ -12675,7 +12802,7 @@ def _use_expand_display_value(var, config):
     `if myval`). Mirrors pretend.rs's use_expand_display_value."""
     prefix = var.lower() + "_"
     enabled = sorted(
-        f[len(prefix):] for f in config["use_flags"] if f.startswith(prefix)
+        f[len(prefix):] for f in resolved_use if f.startswith(prefix)
     )
     if not enabled:
         return None
@@ -12733,8 +12860,15 @@ def _run_info(config, repos, root, atom_args, misspell_suggestions, usepkg, colo
     print("Repositories:\n")
     name_of = {r["location"]: r["name"] for r in repos}
     for repo in repos:
+        # Real RepoConfig.info_string() field order (the subset portuale
+        # models): name, location, sync-type, sync-uri, masters, priority,
+        # aliases, volatile, then any set module-specific opts.
         print(repo["name"])
         print(f"    location: {repo['location']}")
+        if repo.get("sync_type"):
+            print(f"    sync-type: {repo['sync_type']}")
+        if repo.get("sync_uri"):
+            print(f"    sync-uri: {repo['sync_uri']}")
         if repo["masters"]:
             ms = [name_of[m] for m in repo["masters"] if m in name_of]
             if ms:
@@ -12742,6 +12876,9 @@ def _run_info(config, repos, root, atom_args, misspell_suggestions, usepkg, colo
         print(f"    priority: {repo['priority']}")
         if repo.get("aliases"):
             print(f"    aliases: {' '.join(repo['aliases'])}")
+        print(f"    volatile: {bool(repo.get('volatile', True))}")
+        for k, v in repo.get("module_specific_options", ()):
+            print(f"    {k}: {v}")
         print()
 
     binrepos = config.get("binrepos", [])
@@ -12765,6 +12902,7 @@ def _run_info(config, repos, root, atom_args, misspell_suggestions, usepkg, colo
         print(f"Installed sets: {', '.join(sets)}")
 
     use_expand = sorted(config["use_expand"])
+    resolved_use = _resolved_global_use(config)
     # Real action_info's hardcoded myvars list + <PORTDIR>/profiles/
     # info_vars (actions.py:2221), minus the deprecated/skipped ones,
     # de-duplicated and sorted. The const.INCREMENTALS members
@@ -12812,9 +12950,12 @@ def _run_info(config, repos, root, atom_args, misspell_suggestions, usepkg, colo
             resolved = _resolved_incremental(config, k)
             v = " ".join(resolved) if resolved else config["other_vars"].get(k)
         elif k == "USE":
+            # Real config.regenerate()'s global USE = use_flags with
+            # useforce folded in and usemask removed, minus the
+            # USE_EXPAND-prefixed pseudo-flags (their own VAR="..." tokens).
             prefixes = tuple(f"{ve.lower()}_" for ve in use_expand)
             flags = sorted(
-                f for f in config["use_flags"] if not f.startswith(prefixes)
+                f for f in resolved_use if not f.startswith(prefixes)
             )
             v = " ".join(flags)
         else:
@@ -12832,7 +12973,7 @@ def _run_info(config, repos, root, atom_args, misspell_suggestions, usepkg, colo
         elif k == "USE":
             line = f'USE="{v}"'
             for ve in use_expand:
-                val = _use_expand_display_value(ve, config)
+                val = _use_expand_display_value(ve, resolved_use, config)
                 if val:
                     line += f' {ve}="{val}"'
             print(line)

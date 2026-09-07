@@ -2012,7 +2012,26 @@ diff <(emerge --info) <(rust/target/release/portuale emerge --info) \
 #  still differ; see scope-backlog.md 2.F.)
 ```
 
+Follow-on same day: the `USE=` line and the `Repositories:` block now
+also match a live run byte-for-byte. Real portage folds a `*/*` entry in
+`/etc/portage/package.use` onto the global USE
+(`UseManager.extract_global_USE_changes`) — that is where a real system's
+`*/* lto blake2 …` / `*/* GRUB_PLATFORMS: efi-64 pc` lines come from —
+and applies global `use.force`/`use.mask` to the displayed USE; portuale
+does both now (`resolved_global_use`). `RepoConfig` gained
+`sync-type`/`sync-uri`/`volatile`/sync-module options, with the global
+`/usr/share/portage/config/repos.conf` merged under the user's.
+
+```sh
+diff <(emerge --info) <(rust/target/release/portuale emerge --info) \
+  | sed -n '/^Repositories:/,/^Unset/p'
+# empty across every USE= flag, every USE_EXPAND value, and both the
+# Repositories: and Binary Repositories: blocks. Only real's host-state
+# HEADER (above "Repositories:") and a 1-byte trailing newline differ.
+```
+
 Deterministic slice test:
 `pytest tests/test_emerge_pretend_contract.py -k stacks_make_globals`
 builds a self-contained `PORTAGE_CONFIGROOT` (its own `make.globals` /
-`profile.env` / `info_vars` / `binrepos.conf`) and pins Rust == Python.
+`profile.env` / `info_vars` / `package.use` `*/*` / `use.mask` /
+`repos.conf` sync fields / `binrepos.conf`) and pins Rust == Python.

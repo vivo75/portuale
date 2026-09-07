@@ -5618,10 +5618,13 @@ fn build_config_env(config: &portage_profile::Config) -> Vec<(String, String)> {
 /// `VIDEO_CARDS="-* intel …"`. `None` when nothing is enabled (real
 /// appends the `VAR="…"` token to the `USE=` line only `if myval`, so an
 /// empty value is simply omitted).
-fn use_expand_display_value(var: &str, config: &portage_profile::Config) -> Option<String> {
+fn use_expand_display_value(
+    var: &str,
+    resolved_use: &std::collections::BTreeSet<String>,
+    config: &portage_profile::Config,
+) -> Option<String> {
     let prefix = format!("{}_", var.to_lowercase());
-    let enabled: std::collections::BTreeSet<&str> = config
-        .use_flags
+    let enabled: std::collections::BTreeSet<&str> = resolved_use
         .iter()
         .filter_map(|f| f.strip_prefix(&prefix))
         .collect();
@@ -5641,6 +5644,24 @@ fn use_expand_display_value(var: &str, config: &portage_profile::Config) -> Opti
     // `out` is now raw-order kept + the rest appended; the appended tail
     // is already sorted because `enabled` is a `BTreeSet`.
     Some(out.join(" "))
+}
+
+/// The resolved global USE set real `emerge --info` prints -- real
+/// `config.regenerate()`'s last two lines before the USE_EXPAND display
+/// pass: `myflags.update(self.useforce)` then
+/// `myflags.difference_update(self.usemask)` (the `mycpv is None` /
+/// global `getUseForce()` / `getUseMask()` case). `ARCH` is already in
+/// `use_flags` via `USE_EXPAND_UNPREFIXED`. Portuale keeps
+/// `use_force`/`use_mask` *out* of `Config::use_flags` on purpose (they
+/// are applied per-candidate in `effective_use_flags`); this reunites
+/// them for the one global display that needs it.
+fn resolved_global_use(config: &portage_profile::Config) -> std::collections::BTreeSet<String> {
+    let mut set: std::collections::BTreeSet<String> = config.use_flags.iter().cloned().collect();
+    set.extend(config.use_force.iter().cloned());
+    for m in &config.use_mask {
+        set.remove(m);
+    }
+    set
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -5696,8 +5717,17 @@ fn run_info(
         .map(|r| (r.location.as_path(), r.name.as_str()))
         .collect();
     for repo in repos {
+        // Real `RepoConfig.info_string()` field order (the subset
+        // portuale models): name, location, sync-type, sync-uri, masters,
+        // priority, aliases, volatile, then any set module-specific opts.
         println!("{}", repo.name);
         println!("    location: {}", repo.location.display());
+        if let Some(t) = &repo.sync_type {
+            println!("    sync-type: {t}");
+        }
+        if let Some(u) = &repo.sync_uri {
+            println!("    sync-uri: {u}");
+        }
         if !repo.masters.is_empty() {
             let ms: Vec<&str> = repo
                 .masters
@@ -5711,6 +5741,13 @@ fn run_info(
         println!("    priority: {}", repo.priority);
         if !repo.aliases.is_empty() {
             println!("    aliases: {}", repo.aliases.join(" "));
+        }
+        println!(
+            "    volatile: {}",
+            if repo.volatile { "True" } else { "False" }
+        );
+        for (k, v) in &repo.module_specific_options {
+            println!("    {k}: {v}");
         }
         println!();
     }
@@ -5764,6 +5801,7 @@ fn run_info(
         v.sort();
         v
     };
+    let resolved_use = resolved_global_use(config);
     let mut myvars: Vec<String> = [
         "GENTOO_MIRRORS",
         "CONFIG_PROTECT",
@@ -5819,23 +5857,20 @@ fn run_info(
                 .map(|v| v.join(" "))
                 .or_else(|| config.other_vars.get(k).cloned()),
             "USE" => {
-                let mut flags: Vec<&String> = config
-                    .use_flags
+                // Real `config.regenerate()`'s global USE = `use_flags`
+                // with `useforce` folded in and `usemask` removed, minus
+                // the `USE_EXPAND`-prefixed pseudo-flags (shown as their
+                // own `VAR="…"` tokens).
+                let flags: Vec<&str> = resolved_use
                     .iter()
+                    .map(String::as_str)
                     .filter(|f| {
                         !use_expand
                             .iter()
                             .any(|v| f.starts_with(&format!("{}_", v.to_lowercase())))
                     })
                     .collect();
-                flags.sort();
-                Some(
-                    flags
-                        .iter()
-                        .map(|s| s.as_str())
-                        .collect::<Vec<_>>()
-                        .join(" "),
-                )
+                Some(flags.join(" "))
             }
             // Real `settings.get(k)` bottoms out in `configdict["env"]`
             // (`os.environ`), so a curated `info_vars` entry that is only
@@ -5852,7 +5887,7 @@ fn run_info(
             Some(v) if k == "USE" => {
                 let mut line = format!("USE=\"{v}\"");
                 for var in &use_expand {
-                    if let Some(val) = use_expand_display_value(var, config) {
+                    if let Some(val) = use_expand_display_value(var, &resolved_use, config) {
                         line.push_str(&format!(" {var}=\"{val}\""));
                     }
                 }

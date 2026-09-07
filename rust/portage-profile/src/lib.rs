@@ -2619,6 +2619,36 @@ pub fn resolve_config(
     config.package_use = parse_package_use_lines(&profile_use_lines, false);
     config.package_use_user = parse_package_use_lines(&user_use_lines, true);
 
+    // Real `UseManager.extract_global_USE_changes` (`config.py:832`): the
+    // `*/*` package atom's own `*/*` entry in the **user** `package.use`
+    // (`configdict["pkg"]` only -- real's `_pusedict` is built from user
+    // files alone, never profile/repo `package.use`) is *popped out* of
+    // the per-package dict and appended to `configdict["conf"]["USE"]`,
+    // so it stacks on the global USE exactly like `make.conf` `USE=`
+    // would. USE_EXPAND shorthand (`GRUB_PLATFORMS: efi-64 pc`) is
+    // already prefix-expanded by `parse_package_use_lines(.., true)`.
+    // Folded here -- after the USE_EXPAND / USE_EXPAND_UNPREFIXED loops
+    // above -- so a `*/* -lua_single_target_lua5-1` really removes the
+    // value the profile's own `LUA_SINGLE_TARGET=` scalar just folded in.
+    // Popped from `package_use_user` too (real deletes the `*/*` key), so
+    // it is not *also* re-applied per-candidate in `effective_use_flags`.
+    let global_user_use: String = {
+        let mut toks: Vec<String> = Vec::new();
+        config.package_use_user.retain(|(atom, tokens)| {
+            if atom == "*/*" {
+                toks.extend(tokens.iter().cloned());
+                false
+            } else {
+                true
+            }
+        });
+        toks.join(" ")
+    };
+    if !global_user_use.is_empty() {
+        apply_incremental(&global_user_use, &mut config.use_flags);
+        config.conf_use_tokens.push(global_user_use);
+    }
+
     // package.env (real config.py:894 `grabdict_package` +
     // `_grab_pkg_env`): `/etc/portage/package.env` maps an atom to one or
     // more env-file names under `/etc/portage/env/`; each file is a
@@ -4659,6 +4689,48 @@ sync-uri = file:///srv/pkgs
                 assert_eq!(c.other_vars.get("CFLAGS").map(String::as_str), Some("-O3"));
             },
         );
+    }
+
+    #[test]
+    fn user_package_use_star_atom_folds_onto_the_global_use() {
+        // Real UseManager.extract_global_USE_changes: a "*/*" entry in the
+        // USER package.use is popped out of the per-package dict and
+        // stacked onto the global USE like make.conf USE= would --
+        // USE_EXPAND-prefix shorthand included.
+        let root = std::env::temp_dir().join("portage-profile-test-global-puse");
+        let repo = root.join("repo");
+        let prof = repo.join("profiles/default");
+        let portage_dir = root.join("etc/portage/package.use");
+        fs::create_dir_all(&prof).unwrap();
+        fs::create_dir_all(&portage_dir).unwrap();
+        fs::write(
+            prof.join("make.defaults"),
+            "ARCH=\"amd64\"\nUSE_EXPAND_UNPREFIXED=\"ARCH\"\n\
+             USE_EXPAND=\"VIDEO_CARDS\"\nVIDEO_CARDS=\"nvidia\"\n\
+             USE=\"profileflag\"\n",
+        )
+        .unwrap();
+        let make_profile = root.join("etc/portage/make.profile");
+        let _ = fs::remove_file(&make_profile);
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&prof, &make_profile).unwrap();
+        fs::write(
+            portage_dir.join("00-global"),
+            "*/* globalflag -profileflag\n*/* VIDEO_CARDS: -nvidia nouveau\ndev-libs/x perpkgflag\n",
+        )
+        .unwrap();
+
+        with_test_env(&[], || {
+            let c = resolve_config(&root, &repo, &[], &[], "testrepo", &HashMap::new())
+                .expect("resolves");
+            assert!(c.use_flags.contains("globalflag"));
+            assert!(!c.use_flags.contains("profileflag"));
+            assert!(c.use_flags.contains("video_cards_nouveau"));
+            assert!(!c.use_flags.contains("video_cards_nvidia"));
+            // The "*/*" entry is popped; only the real per-package one stays.
+            assert!(!c.package_use_user.iter().any(|(a, _)| a == "*/*"));
+            assert!(c.package_use_user.iter().any(|(a, _)| a == "dev-libs/x"));
+        });
     }
 
     #[test]

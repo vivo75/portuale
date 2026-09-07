@@ -770,6 +770,87 @@ pub struct RepoConfig {
     /// parents -- a documented cut; `::`-constrained atoms and
     /// cross-repo parents both use the canonical name only.
     pub aliases: Vec<String>,
+    /// `repos.conf`'s `sync-type` (real `RepoConfig.sync_type`) -- the
+    /// merged value across the global `/usr/share/portage/config/repos.conf`
+    /// and the user `<config_root>/etc/portage/repos.conf` (user wins).
+    /// Display-only (surfaced by `emerge --info`'s `Repositories:` block).
+    pub sync_type: Option<String>,
+    /// `repos.conf`'s `sync-uri` (real `RepoConfig.sync_uri`), merged the
+    /// same way. Display-only.
+    pub sync_uri: Option<String>,
+    /// `repos.conf`'s `volatile` (real `RepoConfig.volatile`): the
+    /// explicit `true`/`yes` value, else real's heuristic -- `True`
+    /// unless the location is under `/var/db/repos` and owned by
+    /// `root`/`portage` (a repo the user is likely to hand-edit is
+    /// "volatile"). Display-only.
+    pub volatile: bool,
+    /// Sync-module-specific `repos.conf` options that are set (real
+    /// `RepoConfig.module_specific_options`, populated from
+    /// `portage.sync.module_specific_options(repo)` filtered to keys the
+    /// section actually carries), as ordered `(key, value)` pairs.
+    /// Display-only.
+    pub module_specific_options: Vec<(String, String)>,
+}
+
+/// Whether `path`'s owning uid is `root` (0) or the `portage` user --
+/// the ownership half of real `RepoConfig`'s `volatile` heuristic
+/// (`config.py:445`). Best-effort: `portage`'s uid is looked up from
+/// `/etc/passwd` (no libc dependency); an unreadable path or passwd
+/// yields `false`, matching real's own "fail safe -> volatile" default.
+#[cfg(unix)]
+fn path_owned_by_root_or_portage(path: &Path) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    let Ok(meta) = fs::metadata(path) else {
+        return false;
+    };
+    let uid = meta.uid();
+    if uid == 0 {
+        return true;
+    }
+    fs::read_to_string("/etc/passwd")
+        .ok()
+        .and_then(|passwd| {
+            passwd.lines().find_map(|line| {
+                let mut f = line.split(':');
+                (f.next() == Some("portage"))
+                    .then(|| f.nth(1).and_then(|u| u.parse::<u32>().ok()))
+                    .flatten()
+            })
+        })
+        .map(|portage_uid| portage_uid == uid)
+        .unwrap_or(false)
+}
+
+#[cfg(not(unix))]
+fn path_owned_by_root_or_portage(_path: &Path) -> bool {
+    false
+}
+
+/// The sync-module-specific `repos.conf` option keys real portage
+/// recognizes for a given `sync-type` (`portage.sync.module_specific_
+/// options`), in a fixed order so `emerge --info`'s `Repositories:`
+/// output is deterministic (real iterates a set).
+fn module_specific_keys(sync_type: &str) -> &'static [&'static str] {
+    match sync_type {
+        "git" => &[
+            "sync-git-clone-env",
+            "sync-git-clone-extra-opts",
+            "sync-git-env",
+            "sync-git-pull-env",
+            "sync-git-pull-extra-opts",
+            "sync-git-verify-commit-signature",
+            "sync-git-verify-max-age-days",
+        ],
+        "rsync" => &[
+            "sync-rsync-extra-opts",
+            "sync-rsync-vcs-ignore",
+            "sync-rsync-verify-jobs",
+            "sync-rsync-verify-max-age",
+            "sync-rsync-verify-metamanifest",
+        ],
+        "webrsync" => &["sync-webrsync-verify-signature"],
+        _ => &[],
+    }
 }
 
 fn parse_ini(text: &str, sections: &mut HashMap<String, HashMap<String, String>>) {
@@ -851,6 +932,21 @@ pub fn find_repos(config_root: &Path) -> Result<Vec<RepoConfig>, Error> {
     let repos_conf_path = config_root.join("etc/portage/repos.conf");
     let mut sections: HashMap<String, HashMap<String, String>> = HashMap::new();
 
+    // Real `RepoConfigLoader` reads the global
+    // `<PORTAGE_BASE_PATH>/cnf/repos.conf` (installed at
+    // `/usr/share/portage/config/repos.conf`) *before* the user's, so a
+    // user `[section]` key overrides the global one and unset keys fall
+    // through (e.g. the shipped `[gentoo]` `sync-git-verify-commit-
+    // signature = true`). Read `config_root`-relative, which resolves to
+    // that absolute path for a live `PORTAGE_CONFIGROOT=/` run and stays
+    // absent under a test / fixture `config_root`.
+    let global_repos_conf = config_root.join("usr/share/portage/config/repos.conf");
+    if global_repos_conf.is_file()
+        && let Ok(text) = fs::read_to_string(&global_repos_conf)
+    {
+        parse_ini(&text, &mut sections);
+    }
+
     if repos_conf_path.is_dir() {
         let mut entries: Vec<PathBuf> = fs::read_dir(&repos_conf_path)
             .map_err(|e| Error::ReadFile {
@@ -923,6 +1019,25 @@ pub fn find_repos(config_root: &Path) -> Result<Vec<RepoConfig>, Error> {
         // Real name resolution: `profiles/repo_name` file first, else
         // the section name.
         let resolved_name = read_repo_name_file(&location).unwrap_or_else(|| name.clone());
+        let sync_type = kv.get("sync-type").filter(|s| !s.is_empty()).cloned();
+        let sync_uri = kv.get("sync-uri").filter(|s| !s.is_empty()).cloned();
+        // Real `RepoConfig.volatile` (config.py:423): explicit `true`/
+        // `yes`, else the heuristic -- volatile unless the tree is under
+        // `/var/db/repos` and owned by `root`/`portage`.
+        let volatile = match kv.get("volatile").map(String::as_str) {
+            Some("true") | Some("yes") => true,
+            Some(_) => false,
+            None => {
+                !location.starts_with("/var/db/repos") || !path_owned_by_root_or_portage(&location)
+            }
+        };
+        let module_specific_options: Vec<(String, String)> = sync_type
+            .as_deref()
+            .map(module_specific_keys)
+            .unwrap_or(&[])
+            .iter()
+            .filter_map(|k| kv.get(*k).map(|v| (k.to_string(), v.clone())))
+            .collect();
         repos.push(RepoConfig {
             name: resolved_name,
             location,
@@ -931,6 +1046,10 @@ pub fn find_repos(config_root: &Path) -> Result<Vec<RepoConfig>, Error> {
             masters: Vec::new(),
             profile_formats: Vec::new(),
             aliases: Vec::new(),
+            sync_type,
+            sync_uri,
+            volatile,
+            module_specific_options,
         });
         sect.push(SectionInfo {
             section_name: name.clone(),
@@ -14667,6 +14786,53 @@ mod tests {
         let overlay = repos.iter().find(|r| r.name == "overlay").unwrap();
         assert_eq!(main.masters, Vec::<PathBuf>::new());
         assert_eq!(overlay.masters, vec![main.location.clone()]);
+    }
+
+    #[test]
+    fn find_repos_reads_sync_fields_volatile_and_git_module_options() {
+        let root = masters_test_root("sync-fields");
+        std::fs::create_dir_all(root.join("etc/portage")).unwrap();
+        std::fs::write(
+            root.join("etc/portage/repos.conf"),
+            "[DEFAULT]\nmain-repo = main\n\n\
+             [main]\nlocation = main\nsync-type = git\n\
+             sync-uri = https://example.invalid/main.git\n\
+             sync-git-verify-commit-signature = true\n\
+             sync-rsync-verify-jobs = 9\n",
+        )
+        .unwrap();
+
+        let repos = find_repos(&root).expect("repos.conf resolves");
+        let main = repos.iter().find(|r| r.name == "main").unwrap();
+        assert_eq!(main.sync_type.as_deref(), Some("git"));
+        assert_eq!(
+            main.sync_uri.as_deref(),
+            Some("https://example.invalid/main.git")
+        );
+        // Not under /var/db/repos -> volatile heuristic yields true.
+        assert!(main.volatile);
+        // Only the git-module keys are picked up for sync-type = git; the
+        // stray rsync key is ignored.
+        assert_eq!(
+            main.module_specific_options,
+            vec![(
+                "sync-git-verify-commit-signature".to_string(),
+                "true".to_string()
+            )]
+        );
+    }
+
+    #[test]
+    fn find_repos_explicit_volatile_key_wins_over_the_heuristic() {
+        let root = masters_test_root("volatile-explicit");
+        std::fs::create_dir_all(root.join("etc/portage")).unwrap();
+        std::fs::write(
+            root.join("etc/portage/repos.conf"),
+            "[DEFAULT]\nmain-repo = main\n\n[main]\nlocation = main\nvolatile = no\n",
+        )
+        .unwrap();
+        let repos = find_repos(&root).expect("repos.conf resolves");
+        assert!(!repos.iter().find(|r| r.name == "main").unwrap().volatile);
     }
 
     #[test]

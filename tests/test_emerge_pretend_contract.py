@@ -12312,16 +12312,31 @@ def test_info_stacks_make_globals_profile_env_and_info_vars(
     )
     (repo / "profiles/pfx/make.defaults").write_text(
         'ARCH="amd64"\nACCEPT_KEYWORDS="amd64"\n'
-        'USE_EXPAND="VIDEO_CARDS"\n'
+        'USE_EXPAND="VIDEO_CARDS LUA_SINGLE_TARGET"\n'
         'FEATURES="${FEATURES} sandbox -merge-sync userfetch"\n'
         'MAKEOPTS="-j4"\n'
         'VIDEO_CARDS="-* nouveau"\n'
+        'LUA_SINGLE_TARGET="lua5-1"\n'
+        'USE="profileflag maskedflag"\n'
     )
+    # A profile use.mask -> the masked flag is dropped from the global
+    # emerge --info USE display (real regenerate()'s
+    # myflags.difference_update(self.usemask)).
+    (repo / "profiles/pfx/use.mask").write_text("maskedflag\n")
     (repo / "profiles/pfx/parent").write_text("")
     (cfg / "etc/portage").mkdir(parents=True)
     (cfg / "etc/portage/make.profile").symlink_to(repo / "profiles/pfx")
     (cfg / "etc/portage/repos.conf").write_text(
         f"[DEFAULT]\nmain-repo = main\n\n[main]\nlocation = {repo}\n"
+        "sync-type = git\nsync-uri = https://example.invalid/main.git\n"
+    )
+    # Real UseManager.extract_global_USE_changes: a "*/*" entry in the
+    # user package.use folds onto the global USE like make.conf USE=,
+    # including the USE_EXPAND-prefix shorthand.
+    (cfg / "etc/portage/package.use").mkdir(parents=True)
+    (cfg / "etc/portage/package.use/00-global").write_text(
+        "*/* globalflag -profileflag\n"
+        "*/* LUA_SINGLE_TARGET: -lua5-1 lua5-4\n"
     )
     (cfg / "etc/portage/make.conf").write_text(
         f'PKGDIR="{tmp_path / "pkgdir"}"\n'
@@ -12373,6 +12388,21 @@ def test_info_stacks_make_globals_profile_env_and_info_vars(
     assert "SYNC" not in rust.stdout
     # USE_EXPAND "-*" resolved in the VIDEO_CARDS display value.
     assert 'VIDEO_CARDS="nouveau"' in rust.stdout
+    # "*/*" user package.use folds onto the global USE: globalflag added,
+    # profileflag removed; the profile use.mask drops maskedflag; the
+    # "*/*" USE_EXPAND shorthand flips LUA_SINGLE_TARGET to lua5-4.
+    use_line = next(ln for ln in rust.stdout.splitlines() if ln.startswith('USE="'))
+    assert use_line.split('"')[1].split() == ["globalflag"]
+    assert 'LUA_SINGLE_TARGET="lua5-4"' in use_line
+    # Repositories: block shows sync-type / sync-uri / volatile.
+    assert (
+        "\nmain\n"
+        f"    location: {repo}\n"
+        "    sync-type: git\n"
+        "    sync-uri: https://example.invalid/main.git\n"
+        "    priority: -1000\n"
+        "    volatile: True\n" in rust.stdout
+    )
     # Binary Repositories: location + verify-signature.
     assert (
         "\nbh\n"

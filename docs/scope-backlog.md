@@ -347,19 +347,24 @@ ANSI USE colour all shipped 2026-09-05, see `what-this-proves.md`'s
   in real `BinRepoConfig.info_string()` field order. Verified
   byte-exact against a live `emerge --info` for **every** `VAR="…"` line
   + both repo blocks. Dual-language, contract-pinned
-  (`test_info_stacks_make_globals_profile_env_and_info_vars`). Still open:
-  (a) the host-state header half (Portage-version line, `System uname`,
+  (`test_info_stacks_make_globals_profile_env_and_info_vars`).
+  **Follow-on shipped same day**: (b) and (c) below are now closed —
+  `UseManager.extract_global_USE_changes` (the `*/*` user-`package.use`
+  fold onto global USE, USE_EXPAND shorthand included) + global
+  `use.force`/`use.mask` applied to the `--info` USE line and USE_EXPAND
+  values (`resolved_global_use`, real `regenerate()`'s trailing
+  `myflags.update(useforce); difference_update(usemask)`); and
+  `RepoConfig` gained `sync_type`/`sync_uri`/`volatile`/
+  `module_specific_options` with the global `/usr/share/portage/config/
+  repos.conf` merged under the user's, so the `Repositories:` block
+  prints real `info_string()`'s fields. The `USE=` line and both repo
+  blocks now `diff`-clean against a live run. Still open: (a) the
+  host-state header half (Portage-version line, `System uname`,
   `KiB Mem`, `Timestamp`/`Head commit of repository`, `sh`/`ld`/
   `coreutils` probes, the `info_pkgs` version table) — a fixture-driven
-  test can't verify real host state; (b) the `Repositories:` block's
-  `info_string()` fields (`sync-type`, `sync-uri`, `volatile`,
-  `sync-git-verify-commit-signature`) — needs `repos.conf` field parsing
-  + the global `repos.conf` `[DEFAULT]` merge + a `volatile` fs-writability
-  probe threaded through `portage_repo::find_repos`; (c) the resolved base
-  `USE` set still diverges from real (`consolekit`/`elogind`/`split-usr`
-  extra, `blake2`/`bpf`/`lto`/… missing, `LLVM_SLOT`/`PERL_FEATURES`/
-  `LUA_SINGLE_TARGET` off) — a profile USE force/mask/expand resolution
-  gap, its own slice.
+  test can't verify real host state; and a 1-byte trailing-newline
+  difference in the no-atom case (real ends `Unset: …\n\n`, portuale
+  `…\n\n\n`; Rust==Python so contract-invisible).
 - `--info`: the
   `(non-installed binary)` candidate path and the `pkg_info()` phase run
   itself both shipped 2026-09-05: `--usepkg --info` now selects the

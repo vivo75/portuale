@@ -14649,8 +14649,51 @@ contained `PORTAGE_CONFIGROOT` with its own `make.globals` /
 `logical_lines` and `resolved_incremental`. Deliberately still out:
 real `--info`'s host-state header (Portage-version line, `System uname`,
 `KiB Mem`, repo `Timestamp`/`Head commit`, `sh`/`ld`/`coreutils`
-probes, the `info_pkgs` table), the `Repositories:` block's own
-`info_string()` fields (`sync-type`/`sync-uri`/`volatile`/module opts —
-needs `repos.conf` field parsing + the global-`repos.conf` merge), and
-the resolved base `USE` set, which still diverges from real on a handful
-of flags (a separate profile USE force/mask/expand slice).
+probes, the `info_pkgs` table).
+
+### `emerge --info`: global USE resolution + `Repositories:` fields (2026-09-07)
+
+Follow-on to the config-layer slice. The `USE=` line still diverged from
+a live `emerge --info` on ~25 flags (`blake2`/`bpf`/`lto`/`http2`/…
+missing, `consolekit`/`elogind`/`split-usr` extra, `LLVM_SLOT`/
+`LUA_SINGLE_TARGET` off), and the `Repositories:` block was missing every
+`info_string()` field past `location`/`priority`. Both closed:
+
+- **`UseManager.extract_global_USE_changes`** (real `config.py:832`): the
+  `*/*` package atom's own `*/*` entry in the **user** `package.use`
+  (`_pusedict` is user-files-only — never profile/repo) is popped out of
+  the per-package dict and stacked onto the global USE like `make.conf`
+  `USE=`. This is how a real system's `*/* lto blake2 …` /
+  `*/* GRUB_PLATFORMS: efi-64 pc` / `*/* LLVM_SLOT: 22 -21` lines reach
+  `emerge --info`. Folded after the USE_EXPAND value loops, so a
+  `*/* -lua_single_target_lua5-1` really removes a value the profile
+  scalar folded in.
+- **Global `use.force` / `use.mask`** are now applied to the one display
+  that needs them — `emerge --info`'s USE line and its `USE_EXPAND`
+  variable values — matching real `config.regenerate()`'s trailing
+  `myflags.update(self.useforce); myflags.difference_update(self.usemask)`
+  (`resolved_global_use`). Portuale still keeps them *out* of
+  `Config::use_flags` (they are applied per-candidate in
+  `effective_use_flags`); this reunites them only for the global view.
+- **`Repositories:` `info_string()` fields**: `RepoConfig` gained
+  `sync_type`, `sync_uri`, `volatile` and `module_specific_options`. The
+  global `/usr/share/portage/config/repos.conf` is now merged under the
+  user's (so the shipped `[gentoo] sync-git-verify-commit-signature =
+  true` shows), `volatile` ports real's heuristic (`True` unless the tree
+  is under `/var/db/repos` owned by `root`/`portage`), and the block
+  prints `location`, `sync-type`, `sync-uri`, `masters`, `priority`,
+  `aliases`, `volatile`, then any set sync-module option — real
+  `RepoConfig.info_string()` field order.
+
+After this, `diff <(emerge --info) <(portuale emerge --info)` is empty
+for the **entire** variable block **and both repository blocks** — every
+`USE=` flag, every `USE_EXPAND` value, `Repositories:` and `Binary
+Repositories:` match a live run exactly (only real's host-state header
+and a 1-byte trailing newline remain). Dual-language; contract test
+`test_info_stacks_make_globals_profile_env_and_info_vars` extended to
+cover the `*/*` fold, `use.mask` drop and the repo fields; new Rust unit
+tests `user_package_use_star_atom_folds_onto_the_global_use`,
+`find_repos_reads_sync_fields_volatile_and_git_module_options`,
+`find_repos_explicit_volatile_key_wins_over_the_heuristic`. Still out:
+the host-state header (fixture-unverifiable) and its 1-byte trailing
+newline.
