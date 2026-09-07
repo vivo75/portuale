@@ -5,6 +5,24 @@ use portage_dep::Atom;
 use portage_profile::Config;
 use std::ops::ControlFlow;
 
+/// The values [`record_unresolved_dep`] reads from its caller.
+pub(crate) struct RecordUnresolvedDepArgs<'a> {
+    pub(crate) current_atom: &'a str,
+    pub(crate) bp: &'a BacktrackParams,
+    pub(crate) key: (String, String),
+    pub(crate) outcome: PretendOutcome,
+    pub(crate) ctx: &'a ResolveCtx<'a>,
+    pub(crate) state: &'a mut PassState,
+    pub(crate) config: &'a Config,
+    pub(crate) owner: &'a Option<(String, String)>,
+    pub(crate) atom_root: &'a Path,
+    pub(crate) item_targets_running_root: bool,
+    pub(crate) unevaluated_atom: &'a Option<String>,
+    pub(crate) depth: u32,
+    pub(crate) union_constraints: &'a HashMap<(String, String), Vec<String>>,
+    pub(crate) atom: &'a Atom,
+}
+
 /// The values [`maybe_missing_dep_backtrack`] reads from its caller.
 pub(crate) struct MaybeMissingDepBacktrackArgs<'a> {
     pub(crate) current_atom: &'a str,
@@ -81,6 +99,18 @@ pub(crate) fn maybe_missing_dep_backtrack(args: MaybeMissingDepBacktrackArgs<'_>
             }
         }
     }
+}
+
+/// The values [`record_installed_slot_collision`] reads from its caller.
+pub(crate) struct RecordInstalledSlotCollisionArgs<'a> {
+    pub(crate) outcome: &'a PretendOutcome,
+    pub(crate) atom_root: &'a Path,
+    pub(crate) key: &'a (String, String),
+    pub(crate) item_targets_running_root: bool,
+    pub(crate) state: &'a mut PassState,
+    pub(crate) ctx: &'a ResolveCtx<'a>,
+    pub(crate) config: &'a Config,
+    pub(crate) current_atom: &'a str,
 }
 
 /// What [`compute_nvc_suggestions`] hands back to its caller.
