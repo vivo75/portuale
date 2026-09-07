@@ -96,6 +96,10 @@ CASES = [
     ),
     ("-n short alias for --noreplace", ["--pretend", "-n", "dev-libs/samepkg"], 0),
     ("-n bundled with -p", ["-pn", "dev-libs/samepkg"], 0),
+    ("-a short alias for --ask (inert under --pretend)", ["--pretend", "-a", "dev-libs/newpkg"], 0),
+    ("-a bundled with -p", ["-pa", "dev-libs/newpkg"], 0),
+    ("-a bundled deep in a short-flag run", ["-pauvDN", "dev-libs/newpkg"], 0),
+    ("--ask=n inline form", ["--pretend", "--ask=n", "dev-libs/newpkg"], 0),
     ("--selective bare form, same as --noreplace", ["--pretend", "--selective", "dev-libs/samepkg"], 0),
     ("--selective=y inline form", ["--pretend", "--selective=y", "dev-libs/samepkg"], 0),
     (

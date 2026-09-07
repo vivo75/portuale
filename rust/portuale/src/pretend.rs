@@ -8838,6 +8838,12 @@ pub fn run(args: &[String]) -> ExitCode {
             for c in arg[1..].chars() {
                 match c {
                     'p' => pretend = true,
+                    // A bundled `-a` (e.g. `-pa`, `-1a`, `-avuDN`) never
+                    // consumes a `y`/`n` value -- same "no ambiguity with
+                    // another bundled flag character" reasoning as a
+                    // bundled `-v`/`-D`/`-W`. The standalone `-a`/`--ask`
+                    // handler still accepts the optional `-a y` / `-a n`.
+                    'a' => ask = true,
                     'v' => verbose = true,
                     'q' => quiet = true,
                     'N' => newuse = true,

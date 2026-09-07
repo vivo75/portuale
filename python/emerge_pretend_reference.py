@@ -15816,6 +15816,11 @@ def run(args):
     pretend = False
     verbose = False
     quiet = False
+    # --ask/-a: real main.py drops --ask entirely under --pretend (no
+    # real merge to confirm), so this reference just recognises the flag
+    # (standalone, --ask=y/=n, or as a bundled `-a`) and otherwise
+    # ignores it -- mirrors pretend.rs.
+    ask = False
     newuse = False
     changed_use = False
     nodeps = False
@@ -15991,6 +15996,20 @@ def run(args):
         arg = args[i]
         if arg in ("--pretend", "-p"):
             pretend = True
+            i += 1
+        elif arg in ("--ask", "-a"):
+            # Real true_y_or_n: a bare flag, or `--ask y` / `--ask n`.
+            if i + 1 < len(args) and args[i + 1] in ("y", "n"):
+                ask = args[i + 1] == "y"
+                i += 2
+            else:
+                ask = True
+                i += 1
+        elif arg == "--ask=y":
+            ask = True
+            i += 1
+        elif arg == "--ask=n":
+            ask = False
             i += 1
         elif arg in ("--newuse", "-N"):
             newuse = True
@@ -17265,6 +17284,10 @@ def run(args):
             for c in arg[1:]:
                 if c == "p":
                     pretend = True
+                elif c == "a":
+                    # A bundled -a (e.g. -pa, -1a, -avuDN) never consumes
+                    # a y/n value -- same reasoning as a bundled -v/-D/-W.
+                    ask = True
                 elif c == "v":
                     verbose = True
                 elif c == "q":
