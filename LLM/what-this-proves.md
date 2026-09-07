@@ -14852,5 +14852,32 @@ is what real portage actually does. New portage-use-reduce unit tests
 `disjunctive_prefers_an_installed_alternative_over_an_earlier_available_one`
 + `disjunctive_keeps_the_first_alternative_when_ranks_are_equal`.
 
+### `emerge -p`: drop the portuale-only "is already installed; nothing to do" line (2026-09-07)
+
+Noticed on a live `portuale emerge -puD @world` (which only started
+completing at all after the `||` installed-preference fix above): the
+output carried one `X-<ver> is already installed; nothing to do` line per
+up-to-date `@world` member — dozens of them — burying the actual merge
+list. Real `emerge -p` / `-pu` prints **no such line**: an already-
+satisfied package is simply omitted from the merge list, whether it was
+reached as a dependency or requested directly, whether or not
+`@world`/`@system` pulled it in. (Real's only "nothing" message is
+`Nothing to merge; quitting.` in `_emerge/actions.py`, printed once when
+the *entire* list is empty and the run is non-selective — a different
+thing, and portuale already omits the `These are the packages that would
+be merged, in order:` header that real always prints, so its empty-result
+output is just empty.)
+
+The line was a portuale-only "nicety" from the very first `emerge`
+slice — its own contract-test docstrings already said "Real portage never
+displays such an entry at all". It's gone now: `PretendOutcome::
+AlreadyInstalled` produces nothing on stdout (the `already_installed`
+JSON status still carries the outcome for `--json` consumers). Dual-
+language. ~40 contract-test assertions that used the line as a
+"resolves to a no-op" sentinel now assert an empty merge list instead
+(`emerge -p X` on an up-to-date `X` prints nothing, exactly like real);
+the `@world`/`@system`/`--deep`/nested-set tests dropped the line from
+their expected merge-list order. `docs/running-it.md` examples updated.
+
 # # required by dev-libs/useflagpkg[-foo] (argument)
 # == sqlite
