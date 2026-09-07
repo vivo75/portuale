@@ -111,3 +111,74 @@ pub struct ResolveRequest {
     /// Portuale-only `--solver=` selection (see [`SolverKind`]).
     pub solver: SolverKind,
 }
+
+impl ResolveRequest {
+    /// A request to resolve `atoms` as `emerge` does with no options:
+    /// `--with-bdeps`, `--selective`, `--rebuild-if-new-slot` and
+    /// `--dynamic-deps` on, `--backtrack=10`, everything else off. Set fields
+    /// with struct-update syntax:
+    ///
+    /// ```ignore
+    /// ResolveRequest { update: true, deep: Deep::Unlimited, ..ResolveRequest::new(..) }
+    /// ```
+    pub fn new(
+        config_root: &Path,
+        root: &Path,
+        atoms: &[String],
+        config: &portage_profile::Config,
+        distdir: &Path,
+    ) -> Self {
+        Self {
+            config_root: config_root.to_path_buf(),
+            root: root.to_path_buf(),
+            atoms: atoms.to_vec(),
+            config: config.clone(),
+            newuse: false,
+            changed_use: false,
+            nodeps: false,
+            onlydeps: false,
+            onlydeps_with_rdeps: true,
+            onlydeps_with_ideps: false,
+            update: false,
+            deep: Deep::NotRequested,
+            excluded: Vec::new(),
+            with_bdeps: true,
+            changed_deps: false,
+            changed_slot: false,
+            with_test_deps: false,
+            changed_deps_report: false,
+            selective: true,
+            autounmask_suggest_keywords: false,
+            autounmask_suggest_use: false,
+            autounmask_suggest_license: false,
+            autounmask_suggest_masks: false,
+            usepkg: false,
+            usepkgonly: false,
+            binpkg_respect_use: false,
+            usepkg_exclude: Vec::new(),
+            usepkg_include: Vec::new(),
+            rebuilt_binaries: false,
+            rebuilt_binaries_timestamp: None,
+            newrepo: false,
+            buildpkgonly: false,
+            root_deps_running_root: None,
+            distdir: distdir.to_path_buf(),
+            empty: false,
+            getbinpkg: false,
+            ignore_built_slot_operator_deps: false,
+            backtrack_max: 10,
+            reinstall_atoms: Vec::new(),
+            rebuild_if_new_slot: true,
+            rebuild_if_unbuilt: false,
+            rebuild_if_new_rev: false,
+            rebuild_if_new_ver: false,
+            rebuild_exclude: Vec::new(),
+            rebuild_ignore: Vec::new(),
+            dynamic_deps: true,
+            implicit_system_deps: true,
+            complete: false,
+            set_args: std::collections::HashSet::new(),
+            solver: SolverKind::Portage,
+        }
+    }
+}

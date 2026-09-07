@@ -14,6 +14,10 @@ fn install_162(root: &Path, cat: &str, pf: &str, slot: &str, files: &[(&str, &[u
     }
 }
 
+fn atoms_162(atoms: &[&str]) -> Vec<String> {
+    atoms.iter().map(|a| a.to_string()).collect()
+}
+
 /// Minimal merge-bound `GraphEntry` for the predicate legs (slot
 /// and `new_slot` as the leg needs; everything display-side left
 /// at its empty default).

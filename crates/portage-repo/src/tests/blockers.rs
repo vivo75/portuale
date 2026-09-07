@@ -224,6 +224,87 @@ fn resolve_blockers_keeps_an_installed_match_replaced_in_its_slot_as_satisfied()
 }
 
 #[test]
+fn unwalked_scan_skips_without_merge_bound_entries_and_blocker_free_owners() {
+    // Two cheap guards: nothing merge-bound means a no-op scan, and a blocker-free
+    // owner never reaches USE reduction.
+    let dir = slotundo_temp_dir("blocker-83-scan");
+    slotundo_vdb(SlotundoVdbArgs {
+        dir: &dir,
+        name: "bparent",
+        version: "1.0",
+        slot: "0",
+        rdepend: "!<dev-libs/blocked-2.0",
+        installed_use: "",
+    });
+    slotundo_vdb(SlotundoVdbArgs {
+        dir: &dir,
+        name: "plain",
+        version: "1.0",
+        slot: "0",
+        rdepend: "dev-libs/blocked",
+        installed_use: "",
+    });
+    let config = portage_profile::Config::default();
+    let constraints: HashMap<(String, String), Vec<String>> = HashMap::new();
+    let mut memo: HashMap<(String, String, String, String), String> = HashMap::new();
+
+    // (a): installed-only entry, so the scan returns before the vdb.
+    let mut installed = graph_entry("dev-libs", "blocked", "1.0");
+    installed.outcome = PretendOutcome::AlreadyInstalled {
+        version: "1.0".into(),
+    };
+    let mut pending = Vec::new();
+    collect_unwalked_installed_blockers(CollectUnwalkedInstalledBlockersArgs {
+        repos: &[],
+        root: &dir,
+        config: &config,
+        dynamic_deps: false,
+        ignore_built_slot_operator_deps: false,
+        disj_constraints: &constraints,
+        root_deps_running_root: None,
+        entries: &[installed],
+        pending_blockers: &mut pending,
+        installed_meta_memo: &mut memo,
+    });
+    assert!(
+        pending.is_empty(),
+        "nothing merge-bound means nothing to satisfy"
+    );
+
+    // (b): only the blocker-recorded owner is collected.
+    let mut upgrade = graph_entry("dev-libs", "blocked", "1.5");
+    upgrade.outcome = PretendOutcome::Upgrade {
+        from: "1.0".into(),
+        to: "1.5".into(),
+    };
+    let mut pending = Vec::new();
+    collect_unwalked_installed_blockers(CollectUnwalkedInstalledBlockersArgs {
+        repos: &[],
+        root: &dir,
+        config: &config,
+        dynamic_deps: false,
+        ignore_built_slot_operator_deps: false,
+        disj_constraints: &constraints,
+        root_deps_running_root: None,
+        entries: &[upgrade],
+        pending_blockers: &mut pending,
+        installed_meta_memo: &mut memo,
+    });
+    assert_eq!(
+        pending.len(),
+        1,
+        "only the blocker-recorded owner is collected"
+    );
+    assert_eq!(
+        pending[0].owner_key,
+        ("dev-libs".to_string(), "bparent".to_string())
+    );
+    assert_eq!(pending[0].atom_str, "!<dev-libs/blocked-2.0");
+    assert!(pending[0].owner_installed);
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn resolve_blockers_returns_nothing_when_the_target_matches_nothing() {
     let entries = vec![graph_entry("dev-libs", "owner", "1.0")];
     let pending = vec![PendingBlocker {

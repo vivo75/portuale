@@ -83,3 +83,34 @@ fn run_pass_deep_walk_recurses_into_installed_deps() {
     );
     let _ = fs::remove_dir_all(&dir);
 }
+
+/// An auto-replace seed is not a top-level argument: it walks ownerless at
+/// depth 1 and never files an `(Argument)` puller row.
+#[test]
+fn run_pass_replace_seed_files_no_argument_puller() {
+    let dir = slotundo_temp_dir("161-run-seed");
+    let d = dir.join("var/db/pkg/dev-libs/sounneed-1.0");
+    fs::create_dir_all(&d).unwrap();
+    fs::write(d.join("CATEGORY"), "dev-libs\n").unwrap();
+    fs::write(d.join("SLOT"), "0/1\n").unwrap();
+    fs::write(d.join("repository"), "testrepo\n").unwrap();
+    fs::write(d.join("USE"), "\n").unwrap();
+    let config = test_config();
+    let repos = find_repos(&fixtures_root()).expect("fixture repos");
+    let atoms: Vec<String> = Vec::new();
+    let mut bp = BacktrackParams::default();
+    bp.slot_operator_replace_installed
+        .insert(("dev-libs".to_string(), "sounneed".to_string()));
+    let opts = CtxOpts161 {
+        backtrack_max: 10,
+        atoms: atoms.clone(),
+        ..Default::default()
+    };
+    let ctx = ctx_161(&dir, &config, repos, &opts);
+    let pass = run_pass(&ctx, &bp, true).expect("walk settles");
+    assert!(
+        pass.slot_pullers.is_empty(),
+        "a lone seed files no Argument pullers"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}

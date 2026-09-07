@@ -1101,4 +1101,137 @@ mod tests {
         assert_eq!(format!("{}", SolverKind::Resolvo), "resolvo");
         assert_eq!(SolverKind::default(), SolverKind::Portage);
     }
+
+    fn fixture_request(atoms: &[&str]) -> super::super::ResolveRequest {
+        use super::super::{Deep, ResolveRequest, SolverKind};
+        use std::path::PathBuf;
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../fixtures")
+            .canonicalize()
+            .expect("fixtures/ does not resolve: it is a symlink to ../pmtest/fixtures, so the sibling pmtest repo has to be checked out next to this one");
+        // Same keyword set a Portage resolve sees.
+        let mut config = portage_profile::Config::default();
+        config.accept_keywords.insert("amd64".to_string());
+        ResolveRequest {
+            config_root: root.to_path_buf(),
+            root,
+            atoms: atoms.iter().map(|s| s.to_string()).collect(),
+            config,
+            newuse: false,
+            changed_use: false,
+            nodeps: false,
+            // The parked engines do not implement `--onlydeps` root filtering.
+            onlydeps: false,
+            onlydeps_with_rdeps: true,
+            onlydeps_with_ideps: false,
+            update: false,
+            deep: Deep::NotRequested,
+            excluded: Vec::new(),
+            with_bdeps: false,
+            changed_deps: false,
+            changed_slot: false,
+            with_test_deps: false,
+            changed_deps_report: false,
+            selective: false,
+            autounmask_suggest_keywords: false,
+            autounmask_suggest_use: false,
+            autounmask_suggest_license: false,
+            autounmask_suggest_masks: false,
+            usepkg: false,
+            usepkgonly: false,
+            binpkg_respect_use: false,
+            usepkg_exclude: Vec::new(),
+            usepkg_include: Vec::new(),
+            rebuilt_binaries: false,
+            rebuilt_binaries_timestamp: None,
+            newrepo: false,
+            buildpkgonly: false,
+            root_deps_running_root: None,
+            distdir: PathBuf::from("/tmp"),
+            empty: false,
+            getbinpkg: false,
+            ignore_built_slot_operator_deps: false,
+            backtrack_max: 10,
+            reinstall_atoms: Vec::new(),
+            rebuild_if_new_slot: false,
+            rebuild_if_unbuilt: false,
+            rebuild_if_new_rev: false,
+            rebuild_if_new_ver: false,
+            rebuild_exclude: Vec::new(),
+            rebuild_ignore: Vec::new(),
+            dynamic_deps: false,
+            implicit_system_deps: true,
+            complete: false,
+            set_args: std::collections::HashSet::new(),
+            solver: SolverKind::Portage,
+        }
+    }
+
+    /// The closure covers only the requested reachability: md5 reads, dep parses
+    /// and USE runs scale with the request, never the tree.
+    #[test]
+    fn closure_covers_only_the_requested_reachability() {
+        use super::super::find_repos;
+        let req = fixture_request(&["dev-libs/newpkg"]);
+        let repos = find_repos(&req.config_root).expect("fixture repos.conf must resolve");
+        let (seeds, shallow) = super::closure_seeds(&req).expect("seeds parse");
+        assert!(seeds.contains(&"dev-libs/newpkg".to_string()));
+        let lazy = super::LazyRepo::build(&req, repos, &seeds, &shallow).expect("closure builds");
+        let closure: std::collections::HashSet<String> = lazy
+            .closure_cpns()
+            .into_iter()
+            .map(|cpn| format!("{cpn}"))
+            .collect();
+        assert!(closure.contains("dev-libs/newpkg"));
+        // No other fixture package is reachable from newpkg.
+        assert!(
+            !closure.contains("dev-libs/diamond"),
+            "closure leaked: {closure:?}"
+        );
+        // The diamond target pulls its whole over-approximated cone.
+        let req = fixture_request(&["dev-libs/diamond"]);
+        let repos = find_repos(&req.config_root).expect("fixture repos.conf must resolve");
+        let (seeds, shallow) = super::closure_seeds(&req).expect("seeds parse");
+        let lazy = super::LazyRepo::build(&req, repos, &seeds, &shallow).expect("closure builds");
+        let closure: std::collections::HashSet<String> = lazy
+            .closure_cpns()
+            .into_iter()
+            .map(|cpn| format!("{cpn}"))
+            .collect();
+        for expected in [
+            "dev-libs/diamond",
+            "dev-libs/shared-a",
+            "dev-libs/shared-b",
+            "dev-libs/common",
+        ] {
+            assert!(
+                closure.contains(expected),
+                "missing {expected}: {closure:?}"
+            );
+        }
+        assert!(
+            !closure.contains("dev-libs/newpkg"),
+            "closure leaked: {closure:?}"
+        );
+    }
+
+    /// The pool is visibility-filtered: `~amd64`-only offers nothing while `amd64`
+    /// keeps its version.
+    #[test]
+    fn load_versions_filters_invisible_candidates() {
+        use super::super::find_repos;
+        let req = fixture_request(&["dev-libs/maskedpkg"]);
+        let repos = find_repos(&req.config_root).expect("fixture repos.conf must resolve");
+        let (seeds, shallow) = super::closure_seeds(&req).expect("seeds parse");
+        let lazy = super::LazyRepo::build(&req, repos, &seeds, &shallow).expect("closure builds");
+        assert!(
+            lazy.load_versions("dev-libs/maskedpkg")
+                .expect("loads maskedpkg")
+                .is_empty(),
+            "the ~amd64-only version must be filtered out of the pool"
+        );
+        let newpkg = lazy.load_versions("dev-libs/newpkg").expect("loads newpkg");
+        assert_eq!(newpkg.len(), 1);
+        assert_eq!(newpkg[0].version, "1.0");
+    }
 }

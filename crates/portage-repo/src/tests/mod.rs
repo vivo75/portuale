@@ -925,6 +925,16 @@ fn blocker_161_write_pkg_full(args: Blocker161WritePkgFullArgs<'_>) {
     std::fs::write(cachedir.join(format!("{pkg}-{pv}")), entry).unwrap();
 }
 
+/// Arguments of [`blocker_161_scratch_repo`].
+struct Blocker161ScratchRepoArgs<'a> {
+    base: &'a Path,
+    cp: &'a str,
+    pv: &'a str,
+    slot: &'a str,
+    depend: &'a str,
+    rdepend: &'a str,
+}
+
 /// Arguments of [`slotundo_vdb`].
 struct SlotundoVdbArgs<'a> {
     dir: &'a Path,
@@ -1664,6 +1674,7 @@ mod reinstall;
 mod repo_config;
 mod resolver_trace;
 mod rev_dep;
+mod slot_undo;
 mod updates;
 mod use_display;
 mod use_flags;

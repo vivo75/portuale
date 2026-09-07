@@ -14621,6 +14621,27 @@ implementations per director slot" slice): `BinpkgIndex`, `NewsSet`, and
 `Director<S, D, C, F, M>` wiring struct is `Director<S, D, C, F, M, B,
 N, P>` — eight slots, ten shape-pin tests (the three new ones added).
 
+### `solver`: load bridge facts lazily over the request closure (2026-09-07)
+
+`--solver=` lazy closure loading (2026-09-07): the first bridge cut fed
+every md5-cache version through `effective_use_flags` (~1ms each --
+measured 86% of a 380ms fixture resolve while the engines took ~20ms),
+so `--solver=pubgrub|resolvo -p eix` scaled with the tree where the
+backtracking walk scales with the request's closure. `LazyRepo`
+(`solver_bridge.rs`) now BFS-seeds reachable `cat/pkg`s from the target
+atoms (installed CPNs load shallowly: versions present for favored
+registration, dep cones unexpanded), loads md5 + parses dep strings per
+visited CPN memoized, and resolves USE only for versions the solver
+queries; the PubGrub provider builds with `new_for_targets` (reachable
+conversion) and the resolvo pool populates from closure records only
+(its construction is inherently whole-input). Fixture timing fell from
+~410ms to ~100ms per bridge resolve (~2.3x over the walk, down from ~9x);
+outputs are byte-identical (the full 970-case contract file is green).
+Pinned by `closure_covers_only_the_requested_reachability` (newpkg loads
+only itself; diamond pulls exactly its cone). Remaining per-unit cost is
+`effective_use_flags` itself (~1ms/version in larger closures) --
+shared-code surgery, a future slice.
+
 ### `emerge --info`: the real config-layer stack (2026-09-07)
 
 `emerge --info`'s variable dump was previously computed from the profile

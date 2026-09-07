@@ -566,3 +566,17 @@ fn resolve_pretend_rebuilt_binaries_reinstalls_on_newer_build() {
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
+
+/// Arguments of [`ctx_163`].
+struct Ctx163Args<'a> {
+    root: &'a Path,
+    config: &'a portage_profile::Config,
+    repos: Vec<RepoConfig>,
+    atoms: &'a [String],
+    no_strings: &'a [String],
+    buildpkgonly: bool,
+    backtrack_enabled: bool,
+    ignore_slot_op: bool,
+    rebuild_new_slot: bool,
+    reachable: HashSet<(String, String)>,
+}
