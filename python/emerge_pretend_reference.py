@@ -2634,20 +2634,16 @@ def _keyword_provenance(
     keyword_provenance exactly. None if the plain global accept_keywords
     set alone already accepts it (checked via _keywords_accepted with no
     package entries at all); otherwise walks package_accept_keywords in
-    the same least-to-most-specific order _specificity_ordered_flags
-    itself applies them in, accumulating onto a copy of the global set,
-    and reports the first entry whose own addition flips
-    _keywords_accepted from false to true."""
+    the same file / source order _specificity_ordered_flags itself folds
+    them in, accumulating onto a copy of the global set, and reports the
+    first entry whose own addition flips _keywords_accepted from false to
+    true."""
     if _keywords_accepted(keywords, candidate_str, category, package, accept_keywords, []):
         return None
-    matching = [
-        (entry, tokens)
-        for entry, tokens in package_accept_keywords
-        if _matches_config_entry(entry, candidate_str, category, package)
-    ]
-    matching.sort(key=lambda et: _atom_specificity(et[0]))
     seed = set(accept_keywords)
-    for entry, tokens in matching:
+    for entry, tokens in package_accept_keywords:
+        if not _matches_config_entry(entry, candidate_str, category, package):
+            continue
         _apply_incremental(" ".join(tokens), seed)
         if _keywords_accepted(keywords, candidate_str, category, package, seed, []):
             return entry
@@ -3051,32 +3047,26 @@ def _atom_specificity(entry):
 
 def _specificity_ordered_flags(entries, candidate_str, category, package, seed=None):
     """Computes the final per-candidate flag set from `entries` (raw
-    package.use.mask/.force/package.accept_keywords (atom, tokens)
-    pairs): filters to entries whose atom actually matches
-    `candidate_str`, orders the matches from least to most specific
-    (_atom_specificity), then applies each one's own tokens via the same
-    incremental semantics package.use itself uses, onto `seed` (an empty
-    set if not given) -- so a more-specific atom's own "-flag" can
-    cancel a less-specific atom's own mask/force (or, for
-    _keywords_accepted's own use below, even a keyword `seed` itself
-    already contains). Mirrors portage-repo/src/lib.rs's
-    specificity_ordered_flags exactly (Python's own list.sort() is
-    stable, matching Rust's sort_by_key, so ties keep their original
-    file/stacking order). `seed` is empty for every package.use.mask/
-    .force caller -- _keywords_accepted is the one caller that seeds it
-    with something real, mirroring real KeywordsManager.
-    getMissingKeywords's own "pgroups = global_accept_keywords.split();
-    pgroups.extend(unmaskgroups)" (seed first, then fold in
-    package-specific contributions) exactly."""
-    matching = [
-        (entry, tokens)
-        for entry, tokens in entries
-        if _matches_config_entry(entry, candidate_str, category, package)
-    ]
-    matching.sort(key=lambda et: _atom_specificity(et[0]))
+    package.use.mask/.force/package.accept_keywords (atom, tokens) pairs,
+    already in profile-chain / source order): filters to entries whose
+    atom matches `candidate_str`, then applies each match's tokens in
+    **source order** via the same incremental semantics package.use uses,
+    onto `seed` (empty if not given) -- so a "-flag" in a *later* (child)
+    profile cancels a "flag" mask/force from an *earlier* (parent) one,
+    mirroring real portage's stack_lists(incremental=True) over
+    [src0, src1, ...] (getUseMask/getUseForce/getPKeywords).
+
+    Real runs ordered_by_atom_specificity within each source before
+    stacking; this uses plain file order instead (the same shortcut
+    _apply_matching/package.use already takes) -- correct for every real
+    profile (general-before-specific by convention) and crucially correct
+    for the targets/* pattern (a broad child "cat/pkg -flag" un-masking a
+    narrow ">=cat/pkg-N flag" from base), which a global specificity sort
+    gets backwards. Mirrors portage-repo/src/lib.rs."""
     flags = set() if seed is None else set(seed)
-    for _entry, tokens in matching:
-        _apply_incremental(" ".join(tokens), flags)
+    for _entry, tokens in entries:
+        if _matches_config_entry(_entry, candidate_str, category, package):
+            _apply_incremental(" ".join(tokens), flags)
     return flags
 
 

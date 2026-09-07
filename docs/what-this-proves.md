@@ -14997,3 +14997,53 @@ renders for a `[binary]` line). New fixture `dev-libs/binrequsepkg` (a
 remote-only binhost binary whose `REQUIRED_USE="^^ ( rqa rqb )"` is
 satisfied only by its baked `USE="rqa"`) + a `--getbinpkgonly` CASE.
 972 contract green.
+
+### package.use.mask/.force fold in profile-chain order, not a global atom-specificity sort (2026-09-07)
+
+`portuale emerge --getbinpkg -uDvN @world` aborted with `REQUIRED_USE not
+satisfied for kde-plasma/plasma-meta-6.7.4-r1: "^^ ( elogind systemd )
+firewall? ( systemd )"` where real portage resolved `@world` fine. The
+user is on a `systemd` desktop profile: `systemd` is a global `USE` flag,
+`elogind` is masked by `targets/systemd/use.mask`. So real computes
+`{systemd}` for plasma-meta -> `^^` satisfied.
+
+Portuale computed **neither** flag. `systemd` was being dropped by a
+`package.use.mask` interaction:
+  - `base/package.use.mask`: `>=kde-plasma/plasma-meta-6.3.90 systemd`
+    (masks `systemd`)
+  - `targets/systemd/package.use.mask`: `kde-plasma/plasma-meta -systemd`
+    (un-masks it -- the whole point of the systemd target)
+
+Real `getUseMask(pkg)` = `stack_lists([src0_entries, src1_entries, ...],
+incremental=True)` -- **profile-chain order**, so `base`'s mask then
+`targets/systemd`'s `-systemd` cancel out. `elogind` is `+`-default in
+IUSE but `use.mask`ed -> off. Net: `{systemd}`.
+
+Portuale's `specificity_ordered_flags` flattened every `package.use.mask`
+entry across every profile level into one list, then **re-sorted the
+whole thing by atom specificity** -- putting the parent's versioned
+`>=…-6.3.90 systemd` *after* the child's bare `plasma-meta -systemd`, so
+the mask won and `systemd` was forced off. The `targets/*` un-mask
+pattern (broad child atom overriding a narrow parent one) is exactly what
+a global specificity sort gets backwards.
+
+Fixed: `specificity_ordered_flags` (and `keyword_provenance`) now fold
+matches in plain file / profile-chain order -- the same shortcut
+`apply_matching` / `package.use` already takes. Real runs
+`ordered_by_atom_specificity` *within* each source before stacking;
+portuale skips that intra-source refinement (real profiles list
+general-before-specific by convention, and the existing
+`pkgusemaskforcepkg` fixture -- parent-general / child-specific -- still
+resolves correctly). Dual-language. Two unit tests reframed
+(`specificity_ordered_flags_processes_entries_in_source_order`,
+`package_accept_keywords_entries_fold_in_source_order`). 972 contract
+green.
+
+**Also fixed in the same pass** (`merge_binpkg`): the `PF` -> `PN` split
+was a hand-rolled `rsplit_once('-')` that fell through to `package = pf`
+for any `-r<rev>` package (last token `r1`, not a digit). A gpkg merge of
+e.g. `libgcrypt-1.12.3-r1` then made the extracted-ebuild dir
+`ebuild-src/<cat>/libgcrypt-1.12.3-r1/` and `split_package` rejected the
+`.ebuild` ("filename doesn't start with the parent directory's own
+name"). Now uses `portage_dep::parse_candidate` (the canonical
+`catpkgsplit` regex).

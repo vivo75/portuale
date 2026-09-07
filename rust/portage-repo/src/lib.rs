@@ -2868,25 +2868,29 @@ fn effective_use_flags_uncached(
 }
 
 /// Computes the final per-candidate flag set from `entries` (raw
-/// `package.use.mask`/`.force`/`package.accept_keywords` `(atom,
-/// tokens)` pairs): filters to entries whose atom actually matches
-/// `candidate_str`, orders the matches from least to most specific (see
-/// `atom_specificity`, a simplified port of real `best_match_to_list`'s
-/// own ranking table, used by `ordered_by_atom_specificity`), then
-/// applies each one's own tokens via the same incremental
+/// `package.use.mask`/`.force`/`package.accept_keywords` `(atom, tokens)`
+/// pairs, already in profile-chain / source order): filters to entries
+/// whose atom matches `candidate_str`, then applies each match's own
+/// tokens in **source order** via the same incremental
 /// `-flag`/`flag`/`+flag` semantics `package.use` itself uses
-/// (`apply_incremental`), onto `seed` -- so a more-specific atom's own
-/// `-flag` can cancel a less-specific atom's own mask/force (or, for
-/// `keywords_accepted`'s own use below, even a keyword `seed` itself
-/// already contains), exactly mirroring real portage's own
-/// `stack_lists(incremental=True)` applied to the specificity-ordered
-/// entry list. `seed` is empty for every `package.use.mask`/`.force`
-/// caller (real `MaskManager`'s own equivalent stack has no comparable
-/// "start from something already accepted" step) -- `keywords_accepted`
-/// is the one caller that seeds it with something real, mirroring real
-/// `KeywordsManager.getMissingKeywords`'s own `pgroups = global_accept_
-/// keywords.split(); pgroups.extend(unmaskgroups)` (seed first, then
-/// fold in package-specific contributions) exactly.
+/// (`apply_incremental`), onto `seed` -- so a `-flag` in a *later*
+/// (child) profile cancels a `flag` mask/force from an *earlier* (parent)
+/// one, mirroring real portage's own `stack_lists(incremental=True)` over
+/// `[src0, src1, ...]` (`getUseMask`/`getUseForce`/`getPKeywords`).
+///
+/// Real `stack_lists` runs `ordered_by_atom_specificity` **within each
+/// source** before stacking, so two atoms of differing specificity *in
+/// the same file* listed specific-before-general would be reordered.
+/// portuale processes plain file order instead (the same shortcut
+/// `apply_matching`/`package.use` already takes) -- correct for every
+/// real profile, which lists general-before-specific by convention, and
+/// crucially correct for the `targets/*` pattern (a broad `cat/pkg
+/// -flag` in a child target un-masking a narrow `>=cat/pkg-N flag` from
+/// `base`), which a global specificity sort gets backwards.
+///
+/// `seed` is empty for every `package.use.mask`/`.force` caller;
+/// `keywords_accepted` seeds it with `ACCEPT_KEYWORDS` (real
+/// `KeywordsManager.getMissingKeywords`'s `pgroups`).
 fn specificity_ordered_flags(
     entries: &[(String, Vec<String>)],
     candidate_str: &str,
@@ -2894,13 +2898,7 @@ fn specificity_ordered_flags(
     package: &str,
     mut seed: HashSet<String>,
 ) -> HashSet<String> {
-    let mut matching = config_entries_matching(entries, candidate_str, category, package);
-    // Stable sort: ties (including every comparison-operator atom, which
-    // portuale deliberately doesn't further distinguish -- see the
-    // module doc comment) keep their original file/stacking order
-    // (`config_entries_matching` returns them in it).
-    matching.sort_by_key(|(entry, _)| atom_specificity(entry));
-    for (_, tokens) in matching {
+    for (_, tokens) in config_entries_matching(entries, candidate_str, category, package) {
         portage_profile::apply_incremental_iter(tokens, &mut seed);
     }
     seed
@@ -3434,9 +3432,12 @@ fn fetch_bytes_to_download(
 /// in atom-specificity order -- real `_getPkgAcceptLicense`'s own
 /// `accept_license.extend(x)` loop over `ordered_by_atom_specificity`
 /// matches (and its `_getMissingProperties`/`_getMissingRestrict`
-/// siblings, which do the identical thing for their own accept lists),
-/// ported the same way `package.use.mask`/`.force` already order
-/// multiple matches in portuale (see `effective_use_flags`).
+/// siblings, which do the identical thing for their own accept lists).
+/// These accept lists only ever *extend* (no `-token` cancellation
+/// across sources), so a global atom-specificity sort here is harmless --
+/// unlike `package.use.mask`/`.force` (see `specificity_ordered_flags`),
+/// which must stay in profile-chain order so a child `-flag` can cancel
+/// a parent mask.
 fn resolve_accept_tokens(
     global_accept: &[String],
     package_accept: &[(String, Vec<String>)],
@@ -4593,9 +4594,12 @@ fn keyword_provenance(
     ) {
         return None;
     }
-    let mut matching =
+    // Same source-order fold `keywords_accepted` -> `specificity_ordered_
+    // flags` itself uses (see its doc comment): walk matches in file
+    // order and report the first entry whose own contribution flips
+    // visibility on.
+    let matching =
         config_entries_matching(package_accept_keywords, candidate_str, category, package);
-    matching.sort_by_key(|(entry, _)| atom_specificity(entry));
     let mut seed = accept_keywords.clone();
     for (entry, tokens) in matching {
         portage_profile::apply_incremental_iter(tokens, &mut seed);
@@ -24884,11 +24888,14 @@ mod tests {
     }
 
     #[test]
-    fn package_accept_keywords_more_specific_entry_re_grants_after_a_less_specific_revoke() {
-        // A bare-package "-amd64" revokes it, but a more specific
-        // exact-version entry re-adds "amd64" -- specificity ordering
-        // applies to package.accept_keywords the same way it already
-        // does for package.use.mask/.force (specificity_ordered_flags).
+    fn package_accept_keywords_entries_fold_in_source_order() {
+        // `package.accept_keywords` entries fold in file / profile-chain
+        // order (real `stack_lists(incremental=True)` over the per-source
+        // lists) -- a later `-amd64` revoke wins over an earlier exact-
+        // version `amd64` grant, whichever atom is "more specific". See
+        // `specificity_ordered_flags`'s own doc comment for the
+        // deliberate "plain source order, not a global specificity sort"
+        // choice.
         let config = portage_profile::Config {
             accept_keywords: HashSet::from(["amd64".to_string()]),
             package_accept_keywords: vec![
@@ -24900,17 +24907,30 @@ mod tests {
             ],
             ..Default::default()
         };
+        // Both entries match 2.0; the later `-amd64` wins -> revoked.
         assert!(!is_visible(
-            &candidate("1.0", &["amd64"]),
-            "dev-libs",
-            "regrant",
-            &config
-        ));
-        assert!(is_visible(
             &candidate("2.0", &["amd64"]),
             "dev-libs",
             "regrant",
             &config
+        ));
+        // Reverse the order: the later `amd64` grant wins -> visible.
+        let config_rev = portage_profile::Config {
+            accept_keywords: HashSet::from(["amd64".to_string()]),
+            package_accept_keywords: vec![
+                ("dev-libs/regrant".to_string(), vec!["-amd64".to_string()]),
+                (
+                    "=dev-libs/regrant-2.0".to_string(),
+                    vec!["amd64".to_string()],
+                ),
+            ],
+            ..Default::default()
+        };
+        assert!(is_visible(
+            &candidate("2.0", &["amd64"]),
+            "dev-libs",
+            "regrant",
+            &config_rev
         ));
     }
 
@@ -25767,24 +25787,44 @@ mod tests {
     }
 
     #[test]
-    fn specificity_ordered_flags_lets_a_more_specific_entry_override_a_less_specific_one() {
-        // A bare atom masks "flag", a more specific exact-version atom
-        // un-masks it again ("-flag") -- the more specific entry must
-        // win regardless of which order the two entries appear in the
-        // input list, proving this is genuine specificity-based
-        // reordering, not just "last entry wins".
-        let entries = vec![
-            ("=dev-libs/bar-1.0".to_string(), vec!["-flag".to_string()]),
-            ("dev-libs/bar".to_string(), vec!["flag".to_string()]),
+    fn specificity_ordered_flags_processes_entries_in_source_order() {
+        // Entries arrive already in profile-chain / source order. A
+        // `-flag` in a *later* source cancels a `flag` from an *earlier*
+        // one, regardless of the two atoms' relative specificity -- this
+        // is the real `stack_lists(incremental=True)` over `[src0, src1]`
+        // and the `targets/*` un-mask pattern (a broad child `cat/pkg
+        // -flag` overriding a narrow parent `>=cat/pkg-N flag`).
+        let parent_masks_child_unmasks = vec![
+            (">=dev-libs/bar-1".to_string(), vec!["flag".to_string()]),
+            ("dev-libs/bar".to_string(), vec!["-flag".to_string()]),
         ];
-        let flags = specificity_ordered_flags(
-            &entries,
-            "dev-libs/bar-1.0:0",
-            "dev-libs",
-            "bar",
-            HashSet::new(),
+        assert!(
+            !specificity_ordered_flags(
+                &parent_masks_child_unmasks,
+                "dev-libs/bar-1.0:0",
+                "dev-libs",
+                "bar",
+                HashSet::new(),
+            )
+            .contains("flag"),
+            "a later `-flag` cancels an earlier mask"
         );
-        assert!(!flags.contains("flag"));
+
+        // ...and the reverse order keeps the flag (last source wins).
+        let child_masks = vec![
+            ("dev-libs/bar".to_string(), vec!["-flag".to_string()]),
+            (">=dev-libs/bar-1".to_string(), vec!["flag".to_string()]),
+        ];
+        assert!(
+            specificity_ordered_flags(
+                &child_masks,
+                "dev-libs/bar-1.0:0",
+                "dev-libs",
+                "bar",
+                HashSet::new(),
+            )
+            .contains("flag")
+        );
     }
 
     #[test]

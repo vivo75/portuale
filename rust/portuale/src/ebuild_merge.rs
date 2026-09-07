@@ -3083,22 +3083,17 @@ pub fn merge_binpkg(
         .ok_or_else(|| format!("{}: binpkg has no CATEGORY", binpkg_path.display()))?;
     let pf =
         meta_get("PF").ok_or_else(|| format!("{}: binpkg has no PF", binpkg_path.display()))?;
-    let package = pf
-        .rsplit_once('-')
-        .and_then(|(rest, last)| {
-            // strip `-<version>` (and an optional `-r<rev>`)
-            if last.starts_with(|c: char| c.is_ascii_digit()) {
-                if let Some((pn, v)) = rest.rsplit_once('-')
-                    && v.starts_with('r')
-                    && v[1..].chars().all(|c| c.is_ascii_digit())
-                {
-                    return Some(pn.to_string());
-                }
-                Some(rest.to_string())
-            } else {
-                None
-            }
-        })
+    // `PF` -> `PN`: real `catpkgsplit` (`portage_dep::parse_candidate`'s
+    // own regex, the canonical PMS `<pkg>-<version>[-r<rev>]` split).
+    // The earlier hand-rolled `rsplit_once('-')` only recognised a
+    // version-final `PF` (`foo-1.2`) or `foo-1.2-r3` where the split
+    // happened to land a digit last -- it fell through to `package = pf`
+    // for `libgcrypt-1.12.3-r1` (last token `r1`), which then made the
+    // extracted-ebuild dir `ebuild-src/<cat>/libgcrypt-1.12.3-r1/` and
+    // `split_package` reject `libgcrypt-1.12.3-r1.ebuild` ("filename
+    // doesn't start with the parent directory's own name").
+    let package = portage_dep::parse_candidate(&format!("{category}/{pf}"))
+        .map(|c| c.package)
         .unwrap_or_else(|| pf.clone());
     // Real vdb `SLOT` keeps the full `slot/sub_slot`; `merge_tree` only
     // wants the main slot for the installed-instance lookup.
