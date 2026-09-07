@@ -758,6 +758,25 @@ impl BinpkgIndex for RemoteBinhostIndex<'_> {
     }
 }
 
+/// The current `NewsSelector`: Portage `--check-news` relevance over the
+/// repo's `metadata/news` items. The evaluation lives in the `portuale`
+/// binary crate's `run_check_news` (not linkable from a library); this
+/// marker pins the seam. A GLSA `@security` selector would satisfy the
+/// same trait once `@security` enters scope.
+pub struct MetadataNews;
+impl NewsSelector for MetadataNews {
+    fn unread_ids(&self) -> Vec<String> {
+        // The accumulation lives in `pretend.rs::run_check_news`
+        // (binary crate). A no-state marker: the seam, not the algorithm.
+        Vec::new()
+    }
+    fn repo_name(&self) -> String {
+        // One selector is built per repo by the CLI layer; the marker
+        // owns none.
+        String::new()
+    }
+}
+
 /// The capped-jobs `SchedulerPolicy`: start another build while
 /// `running < jobs` and under the `--load-average` ceiling (never gating
 /// the first build). One of two implementations (the other is
@@ -978,6 +997,19 @@ mod tests {
         }
     }
 
+    /// `RepoCache` is read-only: one aux dict per package plus a category
+    /// listing. A non-existent location reads as empty (see notes).
+    #[test]
+    fn repo_cache_is_read_only_query_by_key() {
+        let cache = Md5Cache {
+            repo_location: Path::new("/nonexistent"),
+            repo_name: "main",
+        };
+        assert_eq!(cache.repo(), "main");
+        assert!(cache.category("dev-libs").is_empty());
+        assert!(cache.metadata("dev-libs", "example-1.0").is_err());
+    }
+
     /// `MergeEngine::execute` takes one [`MergeUnit`] under a
     /// [`MergeContext`]; a fake engine pins the seam.
     #[test]
@@ -1085,5 +1117,60 @@ mod tests {
             BinaryMergeEngine.execute(&source_unit, &ctx),
             MergeOutcome::Failed(_)
         ));
+    }
+
+    /// The [`Director`] holds one component per slot and `plan()` runs
+    /// through its solver; it never *calls* `plan` here (building a
+    /// `ResolveRequest` is portage-repo's business, not a shape test's).
+    #[test]
+    fn director_holds_eight_slots_and_plans_through_its_solver() {
+        struct FakeSolver;
+        impl Resolver for FakeSolver {
+            fn resolve(&self, _req: &ResolveRequest) -> Result<GraphResult, portage_repo::Error> {
+                Err(portage_repo::Error::Detail("inert pin".into()))
+            }
+        }
+        struct FakeEngine;
+        impl MergeEngine for FakeEngine {
+            fn execute(&self, _unit: &MergeUnit, _ctx: &MergeContext) -> MergeOutcome {
+                MergeOutcome::Skipped("inert pin".to_string())
+            }
+        }
+        type Wiring<'a> = Director<
+            FakeSolver,
+            FakeDb<'a>,
+            Md5Cache<'a>,
+            WgetFetcher,
+            FakeEngine,
+            PkgdirBinIndex<'a>,
+            MetadataNews,
+            LoadAwarePolicy,
+        >;
+        let idx = portage_repo::BinaryIndex::from_entries(vec![]);
+        let director = Wiring {
+            solver: FakeSolver,
+            packages_db: FakeDb {
+                root: Path::new("/root"),
+            },
+            repo_cache: Md5Cache {
+                repo_location: Path::new("/nonexistent"),
+                repo_name: "main",
+            },
+            fetcher: WgetFetcher,
+            merge_engine: FakeEngine,
+            binpkg_index: PkgdirBinIndex {
+                index: &idx,
+                pkgdir: Path::new("/var/cache/binpkgs"),
+            },
+            news_selector: MetadataNews,
+            scheduler_policy: LoadAwarePolicy::default(),
+        };
+        assert_eq!(director.packages_db.root().to_str(), Some("/root"));
+        assert_eq!(director.repo_cache.repo(), "main");
+        assert_eq!(director.binpkg_index.source_name(), "/var/cache/binpkgs");
+        assert!(director.news_selector.unread_ids().is_empty());
+        assert!(director.scheduler_policy.should_start(0, 99.0));
+        fn assert_resolver<T: Resolver>() {}
+        assert_resolver::<FakeSolver>();
     }
 }
