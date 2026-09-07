@@ -14772,6 +14772,27 @@ structure + the deterministic config block. New Rust unit test
 stacks-test asserts the header shape. The 1-byte trailing-newline
 mismatch is fixed too (real ends `Unset: …\n\n`).
 
+### mrg: remote-merge slice 1 -- transport plus preflight
+
+`mrg --remote-*` transport + preflight (2026-09-07, remote-merge slice
+1): `--remote-hostname` selects a new remote executor instead of the
+emerge codepath (any other `--remote-*` without it exits 2;
+`user@host` is rejected in favor of `--remote-user`; dash-led values
+need the `=` form, like every clap `Value` option). `remote.rs`
+(`RemoteContext` validation + multiplexed system-`ssh` transport +
+generated-bash preflight, zero new dependencies) gates read-only:
+bash ≥ 5.3, six POSIX tools, writable ROOT + workdir, vdb presence
+(warning only), server/client clock within `--remote-max-clock-skew`
+(default 900s), trust-on-first-use host keys (`accept-new` default with
+fingerprint receipt, alias- and port-aware lookups following a custom
+`UserKnownHostsFile`; `yes`/`no` available), rc 255 mapped to
+`unreachable` (exit 1), multiplex sockets prefer `$XDG_RUNTIME_DIR`
+with a sun_path length gate. No payload streams yet. Pinned by
+`remote.rs` unit tests (`sh_quote`, gates, clock, TOFU ids, transport
+classification), `mrg.rs` parse/consistency tests, and five loopback-
+sshd black-box tests in `tests/test_portuale.py` (hermetic
+known-hosts, isolated HOME).
+
 ### `||` group resolution: prefer an already-installed alternative (`dep_zapdeps`'s `preferred_installed`) (2026-09-07)
 
 Found by running `portuale emerge -puD @world` on a live desktop: it

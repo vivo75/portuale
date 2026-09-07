@@ -36,6 +36,7 @@ mod needed_elf;
 mod portage_lock;
 mod pretend;
 mod regen;
+mod remote;
 
 use std::process::ExitCode;
 

@@ -2062,3 +2062,31 @@ builds a self-contained `PORTAGE_CONFIGROOT` (its own `make.globals` /
 `repos.conf` sync fields / `binrepos.conf`) and pins Rust == Python —
 `--info`'s host-state lines are XXX-normalized by `_normalize_info`
 before the comparison.
+
+`mrg --remote-*` preflight against a loopback client (2026-09-07,
+remote-merge slice 1): with a throwaway sshd on 127.0.0.1 (fresh
+ed25519 host + client keys, empty ROOT with `var/db/pkg`,
+`StrictModes no`), the read-only preflight passes end to end over real
+SSH. Live-verified exactly as run:
+
+```sh
+portuale mrg --remote-hostname 127.0.0.1 --remote-port 22222 \
+  --remote-key-file /tmp/client --remote-user vivo \
+  --remote-root /tmp/root --remote-workdir /tmp/work
+# Warning: Permanently added '[127.0.0.1]:22222' (ED25519) to the list of known hosts.
+# mrg: added new host key for 127.0.0.1:
+# mrg:   [127.0.0.1]:22222 ED25519 SHA256:...
+# >>> Remote preflight 127.0.0.1: ok
+portuale mrg --remote-hostname 127.0.0.1 --remote-port 1 [...]
+# mrg: client 127.0.0.1 unreachable:
+# mrg:   ssh: connect to host 127.0.0.1 port 1: Connection refused
+portuale mrg --remote-hostname 127.0.0.1 ... --remote-root /proc
+# mrg: remote preflight 127.0.0.1 failed:
+# mrg:   client target ROOT is not writable
+```
+
+The pytest suite boots the same fixture automatically
+(`loopback_sshd` in `tests/test_portuale.py`, skip-gated on
+ssh/sshd/ssh-keygen): `pytest tests/test_portuale.py -k remote`
+covers first-contact TOFU, known-host quietness, unreachable (exit 1),
+unwritable ROOT (exit 1), and missing-hostname usage error (exit 2).

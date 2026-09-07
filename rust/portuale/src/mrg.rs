@@ -892,6 +892,110 @@ const OPTIONS: &[Opt] = &[
         missing: "",
         help: "atoms to prefer old binpkgs over newer ebuilds",
     },
+    // --- Portuale-only remote options (see docs/remote-merge.md). Never
+    // forwarded to the emerge codepath: `--remote-hostname` selects the
+    // remote executor instead of `to_emerge_argv` + `pretend::run`, and
+    // any other `--remote-*` without it is a usage error.
+    Opt {
+        id: "remote_hostname",
+        long: "--remote-hostname",
+        alias: None,
+        short: None,
+        kind: Kind::Value,
+        choices: &[],
+        missing: "",
+        help: "remote client hostname for binary-package install (selects remote execution)",
+    },
+    Opt {
+        id: "remote_user",
+        long: "--remote-user",
+        alias: None,
+        short: None,
+        kind: Kind::Value,
+        choices: &[],
+        missing: "",
+        help: "SSH login user on the client (must own the target ROOT)",
+    },
+    Opt {
+        id: "remote_port",
+        long: "--remote-port",
+        alias: None,
+        short: None,
+        kind: Kind::Value,
+        choices: &[],
+        missing: "",
+        help: "SSH port on the client (default 22)",
+    },
+    Opt {
+        id: "remote_key_file",
+        long: "--remote-key-file",
+        alias: None,
+        short: None,
+        kind: Kind::Value,
+        choices: &[],
+        missing: "",
+        help: "private key file for client authentication (ssh-agent recommended)",
+    },
+    Opt {
+        id: "remote_timeout",
+        long: "--remote-timeout",
+        alias: None,
+        short: None,
+        kind: Kind::Value,
+        choices: &[],
+        missing: "",
+        help: "seconds to wait when establishing the SSH connection (default 10)",
+    },
+    Opt {
+        id: "remote_ssh_args",
+        long: "--remote-ssh-args",
+        alias: None,
+        short: None,
+        kind: Kind::Value,
+        choices: &[],
+        missing: "",
+        help: "extra arguments passed to every ssh invocation",
+    },
+    Opt {
+        id: "remote_strict_host_key_checking",
+        long: "--remote-strict-host-key-checking",
+        alias: None,
+        short: None,
+        kind: Kind::Value,
+        choices: &["accept-new", "yes", "no"],
+        missing: "",
+        help: "host-key policy: trust-on-first-use (default), strict, or off",
+    },
+    Opt {
+        id: "remote_max_clock_skew",
+        long: "--remote-max-clock-skew",
+        alias: None,
+        short: None,
+        kind: Kind::Value,
+        choices: &[],
+        missing: "",
+        help: "abort if client/server clocks differ by more seconds (default 900, 0 disables)",
+    },
+    Opt {
+        id: "remote_root",
+        long: "--remote-root",
+        alias: None,
+        short: None,
+        kind: Kind::Value,
+        choices: &[],
+        missing: "",
+        help: "target ROOT on the client (default /)",
+    },
+    Opt {
+        id: "remote_workdir",
+        long: "--remote-workdir",
+        alias: None,
+        short: None,
+        kind: Kind::Value,
+        choices: &[],
+        missing: "",
+        help: "per-unit work area on the client (default /var/tmp/portage-remote)",
+    },
 ];
 
 /// Builds the clap `Arg` for one `Opt` entry, keeping real emerge's
@@ -1167,17 +1271,26 @@ fn join_optional_values(args: &[String]) -> Vec<String> {
 
 /// `mrg`'s entry point, dispatched from main.rs's multicall `run`. Parses
 /// `args` (already stripped of the applet name) with the clap command,
-/// translates the match into canonical long-form argv, and hands it to
-/// the emerge codepath -- `pretend::run`, the exact function the `emerge`
-/// applet runs, so resolution output and exit codes are literally
-/// emerge's. clap keeps its own parser, help, and exit behaviour (help ->
-/// 0, usage error -> 2); everything else is the emerge codepath's.
+/// then either runs the remote preflight/executor (`--remote-hostname`
+/// present -- see `remote.rs`, docs/remote-merge.md) or translates the
+/// match into canonical long-form argv and hands it to the emerge
+/// codepath -- `pretend::run`, the exact function the `emerge` applet
+/// runs, so resolution output and exit codes are literally emerge's.
+/// clap keeps its own parser, help, and exit behaviour (help -> 0, usage
+/// error -> 2); everything else is the emerge codepath's.
 pub fn run(args: &[String]) -> ExitCode {
     let bin = "mrg";
     let joined = join_optional_values(args);
     let argv = std::iter::once(bin).chain(joined.iter().map(String::as_str));
     match command().try_get_matches_from(argv) {
-        Ok(matches) => crate::pretend::run(&to_emerge_argv(&matches)),
+        Ok(matches) => match crate::remote::check_remote(&matches) {
+            Ok(Some(ctx)) => crate::remote::run_preflight(&ctx),
+            Ok(None) => crate::pretend::run(&to_emerge_argv(&matches)),
+            Err(message) => {
+                eprintln!("{message}");
+                ExitCode::from(2)
+            }
+        },
         Err(err) => {
             let code = err.exit_code() as u8;
             let _ = err.print();
@@ -1407,5 +1520,113 @@ mod tests {
 
         let m = parse(&["-D", "2", "-j", "4", "cat/pkg"]).unwrap();
         assert_eq!(to_emerge_argv(&m), ["--deep=2", "--jobs=4", "cat/pkg"]);
+    }
+
+    /// `--remote-*` parses into `ArgMatches` the remote executor reads:
+    /// hostname alone selects remote mode, every companion option rides
+    /// along, and the choice option rejects anything outside its set.
+    #[test]
+    fn remote_options_parse_for_the_remote_executor() {
+        let m = parse(&[
+            "--remote-hostname",
+            "client.invalid",
+            "--remote-user",
+            "root",
+            "--remote-port",
+            "2222",
+            "--remote-key-file",
+            "/tmp/key",
+            "--remote-timeout",
+            "5",
+            // A value starting with `-` needs the `=` form (same rule as
+            // every other `Value` option: clap never swallows a following
+            // flag-looking token).
+            "--remote-ssh-args=-o Foo=yes",
+            "--remote-strict-host-key-checking=no",
+            "--remote-max-clock-skew=60",
+            "--remote-root",
+            "/target",
+            "--remote-workdir",
+            "/tmp/work",
+        ])
+        .unwrap();
+        let get = |id: &str| m.get_one::<String>(id).map(String::as_str);
+        assert_eq!(get("remote_hostname"), Some("client.invalid"));
+        assert_eq!(get("remote_user"), Some("root"));
+        assert_eq!(get("remote_port"), Some("2222"));
+        assert_eq!(get("remote_key_file"), Some("/tmp/key"));
+        assert_eq!(get("remote_timeout"), Some("5"));
+        assert_eq!(get("remote_ssh_args"), Some("-o Foo=yes"));
+        assert_eq!(get("remote_strict_host_key_checking"), Some("no"));
+        assert_eq!(get("remote_max_clock_skew"), Some("60"));
+        assert_eq!(get("remote_root"), Some("/target"));
+        assert_eq!(get("remote_workdir"), Some("/tmp/work"));
+
+        // The choice option rejects anything outside accept-new/yes/no.
+        assert!(
+            parse(&[
+                "--remote-hostname",
+                "h",
+                "--remote-strict-host-key-checking=sometimes"
+            ])
+            .is_err()
+        );
+        // Absent entirely: local mode, no remote keys set.
+        let m = parse(&["--pretend", "cat/pkg"]).unwrap();
+        assert_eq!(m.get_one::<String>("remote_hostname"), None);
+    }
+
+    /// Remote options never reach the emerge codepath's argv: remote mode
+    /// runs the remote executor, not `pretend::run` (so `emerge_handles`
+    /// needs no `--remote-*` arm and `emerge --remote-hostname` stays an
+    /// unknown-option error on that applet).
+    #[test]
+    fn remote_options_are_never_emerge_argv() {
+        assert!(!emerge_handles("--remote-hostname"));
+        assert!(!emerge_handles("--remote-user"));
+    }
+
+    /// `check_remote` validation: hostname selects remote mode with
+    /// documented defaults; companions without it, `user@host`, an empty
+    /// hostname, and unparsable numerics are usage errors.
+    #[test]
+    fn remote_consistency_and_defaults() {
+        use crate::remote::{StrictHostKeyChecking, check_remote};
+
+        let m = parse(&["--remote-hostname", "client.invalid"]).unwrap();
+        let ctx = check_remote(&m).unwrap().expect("remote mode");
+        assert_eq!(ctx.hostname, "client.invalid");
+        assert_eq!(ctx.user, None);
+        assert_eq!(ctx.port, 22);
+        assert_eq!(ctx.timeout_secs, 10);
+        assert_eq!(
+            ctx.strict_host_key_checking,
+            StrictHostKeyChecking::AcceptNew
+        );
+        assert_eq!(ctx.max_clock_skew_secs, 900);
+        assert_eq!(ctx.root, "/");
+        assert_eq!(ctx.workdir, "/var/tmp/portage-remote");
+
+        let m = parse(&["--pretend", "cat/pkg"]).unwrap();
+        assert!(check_remote(&m).unwrap().is_none());
+
+        let m = parse(&["--remote-user", "root"]).unwrap();
+        assert!(check_remote(&m).unwrap_err().contains("--remote-hostname"));
+
+        let m = parse(&["--remote-hostname", "root@client.invalid"]).unwrap();
+        assert!(check_remote(&m).unwrap_err().contains("--remote-user"));
+
+        let m = parse(&["--remote-hostname", "h", "--remote-port", "99999"]).unwrap();
+        assert!(check_remote(&m).unwrap_err().contains("--remote-port"));
+
+        let m = parse(&["--remote-hostname", "h", "--remote-timeout", "soon"]).unwrap();
+        assert!(check_remote(&m).unwrap_err().contains("--remote-timeout"));
+
+        let m = parse(&["--remote-hostname", "h", "--remote-max-clock-skew", "x"]).unwrap();
+        assert!(
+            check_remote(&m)
+                .unwrap_err()
+                .contains("--remote-max-clock-skew")
+        );
     }
 }

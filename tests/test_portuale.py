@@ -16,7 +16,9 @@ real behavior to keep in sync between two implementations; this file
 is the only test surface for it.
 """
 
+import getpass
 import os
+import shutil
 import subprocess
 import tarfile
 from pathlib import Path
@@ -215,6 +217,203 @@ def test_mrg_solver_selects_the_resolution_backend(mrg_binary, emerge_binary, fi
         env=fixture_env,
     )
     assert bad.returncode == 2
+
+
+def _free_loopback_port():
+    """An unused 127.0.0.1 TCP port for the fixture sshd (TOCTOU-racy by
+    nature, fine for a test fixture)."""
+    import socket
+
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind(("127.0.0.1", 0))
+        return sock.getsockname()[1]
+
+
+@pytest.fixture(scope="module")
+def loopback_sshd(tmp_path_factory):
+    """A throwaway OpenSSH server on 127.0.0.1 as the remote-merge
+    "client": fresh ed25519 client + host keys, an empty client ROOT
+    with `var/db/pkg`, `StrictModes no` (the tmp dir lives under
+    world-writable `/tmp`). Skip-gated on ssh/sshd/ssh-keygen presence.
+    Yields a dict with the mrg argv fragment + paths. The daemon is
+    killed on teardown."""
+    for tool in ("ssh", "sshd", "ssh-keygen"):
+        if shutil.which(tool) is None:
+            pytest.skip(f"{tool} not available for the loopback-sshd fixture")
+    sshd_bin = shutil.which("sshd")
+    import time as _time
+
+    work = tmp_path_factory.mktemp("loopback-sshd")
+    subprocess.run(
+        ["ssh-keygen", "-t", "ed25519", "-N", "", "-f", str(work / "client"), "-q"],
+        check=True,
+    )
+    subprocess.run(
+        ["ssh-keygen", "-t", "ed25519", "-N", "", "-f", str(work / "host"), "-q"],
+        check=True,
+    )
+    shutil.copy(work / "client.pub", work / "auth")
+    root = work / "root"
+    (root / "var" / "db" / "pkg").mkdir(parents=True)
+    port = _free_loopback_port()
+    cfg = work / "sshd_config"
+    cfg.write_text(
+        f"Port {port}\n"
+        f"HostKey {work / 'host'}\n"
+        f"PidFile {work / 'pid'}\n"
+        f"AuthorizedKeysFile {work / 'auth'}\n"
+        "PasswordAuthentication no\n"
+        "PubkeyAuthentication yes\n"
+        "UsePAM no\n"
+        "StrictModes no\n"
+    )
+    # NOTE: this OpenSSH build refuses a PATH-resolved launch
+    # ("sshd requires execution with an absolute path").
+    daemon = subprocess.Popen(
+        [sshd_bin, "-f", str(cfg), "-E", str(work / "log")],
+    )
+    try:
+        deadline = _time.time() + 15
+        # NOTE: the probe uses its own throwaway known-hosts file, so the
+        # test file stays fresh -- the first mrg run is then a genuine
+        # trust-on-first-use (both ssh's "Permanently added" and mrg's
+        # own "added new host key" receipt must appear).
+        while _time.time() < deadline:
+            probe = subprocess.run(
+                ["ssh", "-p", str(port), "-i", str(work / "client"),
+                 "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=accept-new",
+                 "-o", f"UserKnownHostsFile={work / 'probe_known_hosts'}",
+                 "127.0.0.1", "true"],
+                capture_output=True,
+            )
+            if probe.returncode == 0:
+                break
+            _time.sleep(0.2)
+        else:
+            pytest.skip("loopback sshd never accepted a connection")
+        yield {
+            "host": "127.0.0.1",
+            "port": str(port),
+            "key": str(work / "client"),
+            "user": getpass.getuser(),
+            "root": str(root),
+            "work": str(work / "client-workdir"),
+            "home": str(work / "home"),
+            "known_hosts": str(work / "known_hosts"),
+        }
+    finally:
+        daemon.terminate()
+        daemon.wait(timeout=10)
+
+
+def _remote_base(sshd_client, extra=(), port=None):
+    """Shared `mrg --remote-*` argv: hermetic known-hosts file (never
+    touches the developer's `~/.ssh`) plus an isolated HOME (multiplex
+    sockets stay inside the tmp dir). Dash-led values use the `=` form
+    (clap never swallows a flag-looking token as a spaced value)."""
+    return [
+        "--remote-hostname", sshd_client["host"],
+        "--remote-port", port or sshd_client["port"],
+        "--remote-key-file", sshd_client["key"],
+        "--remote-user", sshd_client["user"],
+        f"--remote-ssh-args=-o UserKnownHostsFile={sshd_client['known_hosts']}",
+        *extra,
+    ]
+
+
+def _remote_env(fixture_env, sshd_client):
+    env = dict(fixture_env)
+    home = sshd_client["home"]
+    os.makedirs(home, exist_ok=True)
+    env["HOME"] = home
+    return env
+
+
+def test_mrg_remote_preflight_ok_against_loopback_sshd(
+    mrg_binary, fixture_env, loopback_sshd
+):
+    """Slice-1 remote transport over a real loopback sshd: preflight
+    passes (bash ≥ 5.3, tools, writable ROOT, vdb present, clocks agree),
+    exit 0, with ssh's own trust-on-first-use line proving the key was
+    freshly accepted."""
+    result = subprocess.run(
+        [str(mrg_binary), *_remote_base(loopback_sshd, [
+            "--remote-root", loopback_sshd["root"],
+            "--remote-workdir", loopback_sshd["work"],
+        ])],
+        capture_output=True,
+        text=True,
+        check=False,
+        env=_remote_env(fixture_env, loopback_sshd),
+    )
+    assert result.returncode == 0, result.stderr
+    assert ">>> Remote preflight 127.0.0.1: ok" in result.stdout
+    assert "Permanently added" in result.stdout
+    assert "mrg: added new host key for 127.0.0.1:" in result.stdout
+
+
+def test_mrg_remote_preflight_known_host_stays_quiet(
+    mrg_binary, fixture_env, loopback_sshd
+):
+    """Second run against the same client: the key is already known, so
+    no trust-on-first-use output appears, and preflight still passes."""
+    args = _remote_base(loopback_sshd, [
+        "--remote-root", loopback_sshd["root"],
+        "--remote-workdir", loopback_sshd["work"],
+    ])
+    first = subprocess.run(
+        [str(mrg_binary), *args],
+        capture_output=True, text=True, check=False,
+        env=_remote_env(fixture_env, loopback_sshd),
+    )
+    assert first.returncode == 0, first.stderr
+    second = subprocess.run(
+        [str(mrg_binary), *args],
+        capture_output=True, text=True, check=False,
+        env=_remote_env(fixture_env, loopback_sshd),
+    )
+    assert second.returncode == 0, second.stderr
+    assert ">>> Remote preflight 127.0.0.1: ok" in second.stdout
+    assert "Permanently added" not in second.stdout
+
+
+def test_mrg_remote_unreachable_client_is_exit_1(mrg_binary, fixture_env, loopback_sshd):
+    """A closed port is a *transport* failure (ansible's rc-255 rule):
+    exit 1 with an `unreachable` message, never a traceback."""
+    closed = _remote_base(loopback_sshd, port="1")
+    result = subprocess.run(
+        [str(mrg_binary), *closed],
+        capture_output=True, text=True, check=False,
+        env=_remote_env(fixture_env, loopback_sshd),
+    )
+    assert result.returncode == 1
+    assert "unreachable" in result.stderr
+
+
+def test_mrg_remote_unwritable_root_fails_preflight(
+    mrg_binary, fixture_env, loopback_sshd
+):
+    """Preflight gates run before any mutation: an unwritable ROOT
+    (`/proc` is never writable) fails with exit 1 and names the gate."""
+    result = subprocess.run(
+        [str(mrg_binary), *_remote_base(loopback_sshd, ["--remote-root", "/proc"])],
+        capture_output=True, text=True, check=False,
+        env=_remote_env(fixture_env, loopback_sshd),
+    )
+    assert result.returncode == 1
+    assert "not writable" in result.stderr
+
+
+def test_mrg_remote_option_without_hostname_is_usage_error(mrg_binary, fixture_env):
+    """Any `--remote-*` companion without `--remote-hostname` exits 2
+    without touching the network."""
+    result = subprocess.run(
+        [str(mrg_binary), "--remote-user", "root"],
+        capture_output=True, text=True, check=False,
+        env=fixture_env,
+    )
+    assert result.returncode == 2
+    assert "--remote-user requires --remote-hostname" in result.stderr
 
 
 def test_mrg_bare_deep_keeps_the_atom(mrg_binary, fixture_env):
