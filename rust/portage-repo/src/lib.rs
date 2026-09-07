@@ -5233,6 +5233,67 @@ pub fn installed_pkg_iuse_and_use(
     )
 }
 
+/// The `GraphEntry::use_flags_display` list (`(iuse_flag, enabled)`
+/// pairs, `_alnum_sort_key`-sorted) for a tree ebuild
+/// `<category>/<package>-<version>` -- the same per-flag resolution
+/// `resolve_pretend_graph`'s own display loop does
+/// (`effective_use_flags` over the candidate's `IUSE`).
+///
+/// Pulled out so `emerge --resume` can populate it on each reconstructed
+/// source `GraphEntry`: the `mtimedb` resume list records only
+/// `cat/pkg-ver`, so the resolver-loop population is skipped -- and
+/// without it `emerge_build::build_use_env` produces an empty `USE=`,
+/// which makes a `python-r1` / `distutils-r1` (or any USE-conditional)
+/// ebuild `die` in `src_compile`. Empty when the candidate can't be
+/// located or declares no `IUSE`. The `USE_EXPAND` re-grouping
+/// (`use_expand_display`) is deliberately not recomputed -- `--resume
+/// --pretend`'s bracket/USE line is already a documented divergence.
+pub fn candidate_use_flags_display(
+    repos: &[RepoConfig],
+    config: &portage_profile::Config,
+    category: &str,
+    package: &str,
+    version: &str,
+) -> Vec<(String, bool)> {
+    let Some(candidate) = list_candidates(repos, category, package)
+        .ok()
+        .and_then(|cs| cs.iter().find(|c| c.version == version).cloned())
+    else {
+        return Vec::new();
+    };
+    let pf = format!("{package}-{version}");
+    let Ok(metadata) = read_md5_cache(&candidate.repo_location, category, &pf) else {
+        return Vec::new();
+    };
+    let Some(iuse) = metadata.get("IUSE") else {
+        return Vec::new();
+    };
+    let candidate_str = format!(
+        "{category}/{package}-{version}:{}/{}::{}",
+        candidate.slot, candidate.sub_slot, candidate.repo_name
+    );
+    let use_flags = effective_use_flags(
+        config,
+        iuse,
+        &candidate.keywords,
+        &candidate_str,
+        category,
+        package,
+    );
+    let mut seen: HashSet<String> = HashSet::new();
+    let mut display: Vec<(String, bool)> = iuse
+        .split_whitespace()
+        .map(|tok| tok.trim_start_matches(['+', '-']).to_string())
+        .filter(|flag| seen.insert(flag.clone()))
+        .map(|flag| {
+            let on = use_flags.contains(&flag);
+            (flag, on)
+        })
+        .collect();
+    display.sort_by_key(|p| alnum_sort_key(&p.0));
+    display
+}
+
 /// The on-disk vdb directory for `<category>/<package>-<version>`. Real
 /// global-updates renames a moved package's vdb dir; portuale never
 /// writes, so when the direct path is absent it falls back to every
@@ -16513,6 +16574,40 @@ mod tests {
         assert_eq!(
             resolve("dev-libs", "does-not-exist"),
             PretendOutcome::NoVisibleCandidate
+        );
+    }
+
+    #[test]
+    fn candidate_use_flags_display_resolves_use_expand_flags_for_a_resume_entry() {
+        // `emerge --resume` rebuilds each `GraphEntry` from a bare
+        // `cat/pkg-ver`; this is how it re-derives `use_flags_display` so
+        // a source build gets a real `USE=`. `dev-libs/useexpandpkg`'s
+        // own `IUSE="video_cards_nvidia video_cards_amdgpu"` + the
+        // fixture's `VIDEO_CARDS="nvidia"` -> `video_cards_nvidia` on.
+        let root = fixtures_root();
+        let repos = find_repos(&root).expect("fixture repos.conf resolves");
+        let config = portage_profile::resolve_config(
+            &root,
+            &root.join("repo"),
+            &[("overlay".to_string(), root.join("overlay"))],
+            &[],
+            "testrepo",
+            &HashMap::new(),
+        )
+        .expect("fixture config resolves");
+        let display =
+            candidate_use_flags_display(&repos, &config, "dev-libs", "useexpandpkg", "1.0");
+        assert_eq!(
+            display,
+            vec![
+                ("video_cards_amdgpu".to_string(), false),
+                ("video_cards_nvidia".to_string(), true),
+            ]
+        );
+        // An unlocatable candidate is an empty list, never a panic.
+        assert!(
+            candidate_use_flags_display(&repos, &config, "dev-libs", "nope-does-not-exist", "9")
+                .is_empty()
         );
     }
 

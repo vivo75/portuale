@@ -3708,7 +3708,20 @@ fn run_resume(
                 crate::mtimedb::ResumeEntryKind::Ebuild => portage_repo::CandidateSource::Ebuild,
                 crate::mtimedb::ResumeEntryKind::Binary => portage_repo::CandidateSource::Binary,
             };
-            emerge_build::resume_entry(c, p, v, source)
+            let mut entry = emerge_build::resume_entry(c, p, v, source);
+            // The `mtimedb` resume list records only `cat/pkg-ver`, so the
+            // resolver's own `use_flags_display` population is skipped.
+            // Recompute it for a source build -- `emerge_build::
+            // build_use_env` turns it into the phase `USE=`, and an empty
+            // one makes a `python-r1`/`distutils-r1` (or any
+            // USE-conditional) ebuild `die` in `src_compile`. A binary
+            // entry carries its own baked USE (`merge_binpkg`), so it
+            // needs nothing here.
+            if source == portage_repo::CandidateSource::Ebuild {
+                entry.use_flags_display =
+                    portage_repo::candidate_use_flags_display(&repos, config, c, p, v);
+            }
+            entry
         })
         .collect();
 
