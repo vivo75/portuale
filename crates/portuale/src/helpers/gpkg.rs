@@ -20,6 +20,12 @@ use std::process::{ChildStdin, Command, Stdio};
 use blake2::Blake2b512;
 use sha2::{Digest, Sha512};
 
+/// `gpkg.checksums` and `_record_checksum`.
+#[derive(Default)]
+struct Checksums {
+    records: Vec<Vec<String>>,
+}
+
 // ---------------------------------------------------------------------
 // The container and the stream writer
 // ---------------------------------------------------------------------

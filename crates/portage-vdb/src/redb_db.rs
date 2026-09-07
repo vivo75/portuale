@@ -113,6 +113,13 @@ use redb::{
     ReadableDatabase, ReadableTable, TableDefinition,
 };
 
+// ---------------------------------------------------------------------
+// Value encodings.
+
+/// Little-endian writer for the record encodings.
+#[derive(Default)]
+struct Enc(Vec<u8>);
+
 /// The `entry_file_meta` value.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct FileRec {

@@ -1642,6 +1642,7 @@ mod binpkg_use;
 mod blockers;
 mod candidates;
 mod complete_graph;
+mod config_match;
 mod conflict_use_display;
 mod cycles;
 mod depclean;
