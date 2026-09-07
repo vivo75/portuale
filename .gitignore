@@ -18,6 +18,7 @@ MANIFEST
 rust/target
 .pytest_cache/
 .claude/settings.local.json
+helpers
 
 # ...but the vendored Portage helpers named `*.so` are shell scripts /
 # symlinks (dolib.so, newlib.so), not compiled objects.
