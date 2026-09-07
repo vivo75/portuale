@@ -113,6 +113,96 @@ pub(crate) struct RecordInstalledSlotCollisionArgs<'a> {
     pub(crate) current_atom: &'a str,
 }
 
+/// Record the installed-vs-merge slot collision for an `AlreadyInstalled`
+/// atom beside a merge-bound one in the same slot.
+///
+/// Returns the installed node's slot for the repeat-dedup key below; the vdb
+/// `SLOT` read is reused there.
+pub(crate) fn record_installed_slot_collision(
+    args: RecordInstalledSlotCollisionArgs<'_>,
+) -> Option<String> {
+    let RecordInstalledSlotCollisionArgs {
+        outcome,
+        atom_root,
+        key,
+        item_targets_running_root,
+        state,
+        ctx,
+        config,
+        current_atom,
+    } = args;
+    // An installed instance beside a merge-bound one in the same slot that this
+    // atom rejects is a slot collision (Portage's `_package_tracker` holds both
+    // nodes). Recorded before the `other_outcomes` dedup, since a repeat visit
+    // under a different atom text is how the second constraint arrives. No
+    // `continue`: the solvable/unsolvable split is the backtracker's
+    // (`collect_feedback` reconciles a jointly-satisfiable slot on retry).
+    // The vdb `SLOT` file only (one read per installed node); the fuller lookup
+    // is deferred to the rare branches that build a record.
+    let installed_node_slot = match outcome {
+        PretendOutcome::AlreadyInstalled { version } => {
+            // The instance lives in this atom's own resolving root.
+            Some(read_vdb_slot(atom_root, &key.0, &key.1, version).0)
+        }
+        _ => None,
+    };
+    if let PretendOutcome::AlreadyInstalled { version } = outcome {
+        let inst_slot = installed_node_slot.clone().unwrap_or_default();
+        let slot_key = (
+            key.0.clone(),
+            key.1.clone(),
+            inst_slot.clone(),
+            item_targets_running_root,
+        );
+        if let Some(&existing_idx) = state.resolved_slots.get(&slot_key)
+            && let Some(existing_version) =
+                merge_bound_version(&state.entries[existing_idx].outcome).cloned()
+        {
+            // Same sub-slot-carrying match string as the merge-outcome check
+            // (a built `cat/pkg:0/2=` puller matches no `:slot`-only string).
+            let existing_sub = slot_conflict_meta(&ctx.repos, &key.0, &key.1, &existing_version).0;
+            let existing_str = if existing_sub.is_empty() {
+                format!("{}/{}-{existing_version}:{inst_slot}", key.0, key.1)
+            } else {
+                format!(
+                    "{}/{}-{existing_version}:{inst_slot}/{existing_sub}",
+                    key.0, key.1
+                )
+            };
+            if portage_dep::match_from_list(current_atom, &[existing_str.as_str()])
+                        .is_none_or(|m| m.is_empty())
+                        // Rebuild-trigger forgiveness needs a backtrack budget (the scan
+                        // schedules the consumer); at `--backtrack=0` Portage's in-pass
+                        // solver sees the conflict and withholds the update.
+                        && !(ctx.backtrack_max > 0
+                            && built_slot_operator_rebuild_trigger(current_atom, &existing_str))
+            {
+                record_slot_conflict(
+                    &mut state.slot_conflicts,
+                    build_slot_conflict(BuildSlotConflictArgs {
+                        repos: &ctx.repos,
+                        config,
+                        root: ctx.root,
+                        category: &key.0,
+                        package: &key.1,
+                        slot: &inst_slot,
+                        existing_version: &existing_version,
+                        current_atom,
+                        current_version: version,
+                        slot_pullers: &state.slot_pullers,
+                        installed_side: Some(InstalledSide::Current),
+                    }),
+                );
+            }
+        }
+        state
+            .installed_slots
+            .entry(slot_key)
+            .or_insert_with(|| version.clone());
+    }
+    installed_node_slot
+}
+
 /// What [`compute_nvc_suggestions`] hands back to its caller.
 pub(crate) struct NvcSuggestionsOut {
     pub(crate) keyword_suggestion: Option<(String, String)>,
