@@ -219,6 +219,7 @@ fn entry_with_use(outcome: PretendOutcome, pv_use: &str, p_use: &str) -> GraphEn
 
 mod atoms;
 mod attrs;
+mod conflicts;
 mod env_config;
 mod prompt;
 mod resume;

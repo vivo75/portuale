@@ -1450,6 +1450,28 @@ mod tests {
         }
     }
 
+    /// `--solver=` (portuale-only) accepts exactly the three solvers and
+    /// forwards `--solver=<value>` to the emerge codepath; anything else
+    /// is a clap usage error, and omitting it forwards nothing (the
+    /// codepath defaults to portage).
+    #[test]
+    fn solver_value_forwards_to_the_emerge_codepath() {
+        for value in ["portage", "pubgrub", "resolvo"] {
+            let m = parse(&["--pretend", &format!("--solver={value}"), "cat/pkg"]).unwrap();
+            assert_eq!(
+                m.get_one::<String>("solver").map(String::as_str),
+                Some(value)
+            );
+            let argv = to_emerge_argv(&m);
+            assert_eq!(argv, ["--pretend", &format!("--solver={value}"), "cat/pkg"]);
+        }
+        assert!(parse(&["--pretend", "--solver=sat", "cat/pkg"]).is_err());
+        let m = parse(&["--pretend", "cat/pkg"]).unwrap();
+        assert_eq!(m.get_one::<String>("solver"), None);
+        let argv = to_emerge_argv(&m);
+        assert_eq!(argv, ["--pretend", "cat/pkg"]);
+    }
+
     /// A required value missing (bare `--color`) is a clap usage error, and
     /// so is any short spelling Portage never defined.
     #[test]
