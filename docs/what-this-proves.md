@@ -14317,3 +14317,30 @@ both streams, never portuale == real:
 Contract-tested per stage (`test_debug_resolver_trace_stage1_digraph_dump`
 and siblings), plus the four existing `--debug` CASES retargeted from
 "byte-for-byte no-op" to asserting the trace.
+
+### Merge-list order: libc-first `asap_nodes` seeding (2026-09-07)
+
+Real `_serialize_tasks` seeds `asap_nodes` with the `virtual/libc` (and,
+first, any `virtual/os-headers` upgrade) provider being merged, so libc
+lands as early as possible in the merge list -- bug #303567 / #328317:
+practically every ebuild has an implicit build-time dependency on libc
+that real strips out of the declared deps (`strip_libc_deps`) and
+re-expresses purely as this ordering preference, so without the seeding
+libc has no edge forcing it before an unrelated leaf.
+
+Portuale's `_serialize_tasks` port (2026-09-06) only seeded `asap_nodes`
+from the `PDEPEND`-promotion path. `merge_order::seed_toolchain_asap` now
+also does the toolchain seeding: it finds the graphed `virtual/libc` /
+`virtual/os-headers` entry, takes its `RDEPEND` (`key == 0`) provider
+`cat/pkg`s, and returns the merge-bound entries with those `cp`s
+(os-headers providers first) as the initial `asap` list -- real's
+`_expand_virt_from_graph(virtual/libc)` -> provider-atom ->
+`_package_tracker.match` -> merging provider, in portuale's own graph
+terms. Dual-language (`_seed_toolchain_asap` mirror).
+
+Fixture `dev-libs/toolchainroot` (RDEPEND `dev-libs/plainleaf
+virtual/libc`, `sys-libs/fakeglibc` providing `virtual/libc`): without
+the seeding the merge list was `plainleaf, fakeglibc, virtual/libc,
+toolchainroot` (plainleaf first, by discovery order); with it
+`fakeglibc, virtual/libc, plainleaf, toolchainroot`. Contract-tested
+(`test_libc_merges_asap_in_merge_order` + a CASES entry).

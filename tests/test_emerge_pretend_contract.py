@@ -69,6 +69,11 @@ CASES = [
         0,
     ),
     (
+        "libc merges asap even without an edge forcing it (bug #303567)",
+        ["--pretend", "dev-libs/toolchainroot"],
+        0,
+    ),
+    (
         "merge order threads through --tree too (roots re-derived from required_by)",
         ["--pretend", "--tree", "dev-libs/diamond"],
         0,
@@ -2549,6 +2554,25 @@ def test_diamond_dependency_is_deduped_and_ordered(emerge_binary, fixture_env):
         "[ebuild  N     ] dev-libs/shared-a-1.0 ",
         "[ebuild  N     ] dev-libs/shared-b-1.0 ",
         "[ebuild  N     ] dev-libs/diamond-1.0 ",
+    ]
+
+
+def test_libc_merges_asap_in_merge_order(emerge_binary, fixture_env):
+    """Real `_serialize_tasks`' libc/os-headers `asap_nodes` seeding (bug
+    #303567): `sys-libs/fakeglibc` provides `virtual/libc`, and nothing
+    in the merge set has a dependency edge that forces it before the
+    unrelated leaf `dev-libs/plainleaf`. Real merges libc first anyway
+    (almost every ebuild has an implicit build-time dep on it), by
+    seeding `asap_nodes` from the graphed `virtual/libc`'s providers.
+    Without the seeding portuale emitted `plainleaf, fakeglibc,
+    virtual/libc, toolchainroot` (plainleaf first, by discovery order)."""
+    result = _run([str(emerge_binary)], ["--pretend", "dev-libs/toolchainroot"], fixture_env)
+    assert result.returncode == 0
+    assert result.stdout.splitlines() == [
+        "[ebuild  N     ] sys-libs/fakeglibc-2.0 ",
+        "[ebuild     U  ] virtual/libc-2.0 [1.0]",
+        "[ebuild  N     ] dev-libs/plainleaf-1.0 ",
+        "[ebuild  N     ] dev-libs/toolchainroot-1.0 ",
     ]
 
 

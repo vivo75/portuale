@@ -7800,6 +7800,47 @@ class _VerKey:
         return bool(c is not None and c < 0)
 
 
+def _seed_toolchain_asap(g, entries):
+    """Real _serialize_tasks' libc / os-headers asap_nodes seeding
+    (depgraph.py:9608-9638, bug #303567 / #328317): merge libc as early
+    as possible (implicit build-time dep real strips + re-expresses as
+    ordering), os-headers upgrade first. Real walks
+    _expand_virt_from_graph(virtual/libc) -> the graphed virtual's RDEPEND
+    provider atoms -> the merge-bound provider package. Mirrors
+    merge_order.rs::seed_toolchain_asap."""
+
+    def providers(virt_pkg):
+        vi = next(
+            (i for i, e in enumerate(entries) if e[0] == "virtual" and e[1] == virt_pkg),
+            None,
+        )
+        if vi is None:
+            return []
+        out = []
+        if not g.installed[vi]:
+            out.append(vi)
+        prov = entries[vi][8] if isinstance(entries[vi][8], dict) else {}
+        for edge in prov.get("deps") or []:
+            if edge["key"] != 0:
+                continue
+            pi = next(
+                (i for i, e in enumerate(entries) if (e[0], e[1]) == edge["cp"]),
+                None,
+            )
+            if pi is not None and not g.installed[pi] and pi not in out:
+                out.append(pi)
+        return out
+
+    asap = []
+    for i in providers("os-headers"):
+        if i not in asap:
+            asap.append(i)
+    for i in providers("libc"):
+        if i not in asap:
+            asap.append(i)
+    return asap
+
+
 def _harvest_cycle(g, sub):
     """Real _serialize_tasks' own final block for a multi-node cycle:
     harvest one node at a time from the induced subgraph, always taking a
@@ -7845,7 +7886,7 @@ def _select_nodes(g, entries, root="/"):
     escalation to DepPrioritySatisfiedRange. Mirrors
     portage-repo/src/merge_order.rs's select_nodes exactly."""
     retlist = []
-    asap = []
+    asap = _seed_toolchain_asap(g, entries)
     prefer_asap = True
     drop_satisfied = False
 

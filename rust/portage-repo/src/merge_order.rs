@@ -786,6 +786,56 @@ fn merge_order_bias(g: &mut Digraph, entries: &[GraphEntry], config: &portage_pr
 // the scheduler
 // ---------------------------------------------------------------------
 
+/// Real `_serialize_tasks`' own libc / os-headers `asap_nodes` seeding
+/// (`depgraph.py:9608-9638`, bug #303567 / #328317): merge libc as early
+/// as possible -- almost every ebuild has an implicit build-time
+/// dependency on it that real strips (`strip_libc_deps`) and re-expresses
+/// as this ordering preference -- and pull an `os-headers` upgrade in
+/// first when there is one.
+///
+/// Real walks `_expand_virt_from_graph(root, virtual/libc)` -> the
+/// graphed `virtual/libc`'s own `RDEPEND` provider atoms ->
+/// `_package_tracker.match` -> the provider package, keeping only
+/// `pkg.operation == "merge"` (not already installed at that cpv).
+/// Portuale's equivalent: find the graphed `virtual/libc` /
+/// `virtual/os-headers` entry, take its `RDEPEND` (`key == 0`) provider
+/// `cat/pkg`s, and return the merge-bound entries with those `cp`s.
+/// `os-headers` providers first (bug #328317), then libc.
+fn seed_toolchain_asap(g: &Digraph, entries: &[GraphEntry]) -> Vec<usize> {
+    let providers = |virt_pkg: &str| -> Vec<usize> {
+        let Some(vi) = entries
+            .iter()
+            .position(|e| e.category == "virtual" && e.package == virt_pkg)
+        else {
+            return Vec::new();
+        };
+        let mut out: Vec<usize> = Vec::new();
+        // The virtual itself, if it is merge-bound (real
+        // `_package_tracker.match` returns it too).
+        if !g.installed[vi] {
+            out.push(vi);
+        }
+        for edge in entries[vi].deps.iter().filter(|d| d.key == 0) {
+            if let Some(pi) = entries
+                .iter()
+                .position(|e| e.category == edge.category && e.package == edge.package)
+                && !g.installed[pi]
+                && !out.contains(&pi)
+            {
+                out.push(pi);
+            }
+        }
+        out
+    };
+    let mut asap: Vec<usize> = Vec::new();
+    for i in providers("os-headers").into_iter().chain(providers("libc")) {
+        if !asap.contains(&i) {
+            asap.push(i);
+        }
+    }
+    asap
+}
+
 /// The version a `GraphEntry` resolves to, whatever its outcome -- real
 /// `Package.version`, which `find_smallest_cycle`'s `sorted(nodes)`
 /// compares after `cp`.
@@ -959,7 +1009,7 @@ fn harvest_cycle(g: &Digraph, sub: &HashSet<usize>) -> Vec<usize> {
 /// nodes included -- the caller drops them).
 fn select_nodes(g: &mut Digraph, entries: &[GraphEntry], root: &Path) -> Vec<usize> {
     let mut retlist: Vec<usize> = Vec::new();
-    let mut asap: Vec<usize> = Vec::new();
+    let mut asap: Vec<usize> = seed_toolchain_asap(g, entries);
     let mut prefer_asap = true;
     let mut drop_satisfied = false;
 

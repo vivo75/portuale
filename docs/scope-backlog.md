@@ -157,12 +157,15 @@ can't grow into these incrementally:
   `asap_nodes` (`PDEPEND` promotion), and real's own
   `_dep_disjunctive_stack` deferral of `||`/`virtual` deps. Verified
   live against real portage: `net-libs/rest` 15/15, `sys-devel/gcc`
-  14/14, `app-crypt/gnupg` 14/14 exact-position. Still open: the
-  `asap_nodes` *libc-first* seeding (real merges `sys-libs/glibc` /
-  `virtual/os-headers` asap, bug #303567 — portuale only seeds
-  `asap_nodes` from the `PDEPEND` promotion path), the `_FrontierDigraph`
-  perf layer, blocker/uninstall interleaving (a `--pretend` merge graph
-  has no uninstall nodes to interleave), and `--implicit-system-deps=n`.
+  14/14, `app-crypt/gnupg` 14/14 exact-position. The `asap_nodes`
+  *libc-first* seeding (real merges the `virtual/libc` / `virtual/os-headers`
+  provider asap, bug #303567 / #328317) **shipped 2026-09-07**
+  (`merge_order::seed_toolchain_asap`: the graphed `virtual/libc` /
+  `virtual/os-headers` entry's `RDEPEND` providers seed `asap_nodes`
+  before the selection loop, os-headers first). Still open: the
+  `_FrontierDigraph` perf layer, blocker/uninstall interleaving (a
+  `--pretend` merge graph has no uninstall nodes to interleave), and
+  `--implicit-system-deps=n`.
 - **`_complete_graph` as graph *nodes*.** Its reverse-dependency
   **atoms** shipped 2026-09-07 (`reverse_dependency_constraints` — a vdb
   reverse scan fed into the `'backtrack` loop's `slot_constraints`,
