@@ -50,3 +50,13 @@ tracking_doc = "docs/brush-pin.md"
 # 3rdparty/brush checkout is for hacking/reference. Re-pin periodically --
 # see docs/brush-pin.md's checklist.
 notes = "Back to vivo75/brush (a fork) Operator will manually follow upstream at reubeno/brush"
+
+[portage-cli]
+description = "Upstream Rust Portage CLI (lu-zero/portage-cli). Home of the portage-solver / portage-atom-pubgrub / portage-atom-resolvo crates analyzed in docs/solver-backends-analysis.md. Reference checkout only -- no Cargo dependency yet; a future solver bridge would fetch the crates via crates.io independently."
+url = "https://github.com/lu-zero/portage-cli"
+kind = "reference-checkout"
+checkout_path = "3rdparty/portage-cli"
+ref = "master"
+commit = "a0465cd9c34ee9ce6490f1ff09ac39597abc90ac"
+pinned_at = "2026-09-07"
+tracking_doc = "docs/solver-backends-analysis.md"

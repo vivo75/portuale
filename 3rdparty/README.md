@@ -20,6 +20,7 @@ changes.
 |---|---|---|
 | `portage/` | the `.py` ebuild helpers that `import portage` (`doins.py`, `xpak-helper.py`, …), their `lib/portage` import path, `cnf/sets/portage.conf`, and the real `portage.*` modules the Python reference (`python/emerge_pretend_reference.py`) mirrors | `repos.toml` `[portage]` |
 | `brush/` | reference/hacking checkout of the bash interpreter `portuale` embeds; `rust/portuale/Cargo.toml` fetches it via git independently | `repos.toml` `[brush]` |
+| `portage-cli/` | reference checkout of upstream Rust Portage CLI (`portage-solver` / `portage-atom-pubgrub` / `portage-atom-resolvo`); analysis in `docs/solver-backends-analysis.md`. No Cargo dependency yet | `repos.toml` `[portage-cli]` |
 
 The **bash phase runtime** (`ebuild.sh` and friends) is *not* here — it's
 vendored into the tree at `bin/` so `emerge` runs with no Portage
