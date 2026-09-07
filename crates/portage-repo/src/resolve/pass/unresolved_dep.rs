@@ -230,6 +230,103 @@ pub(crate) struct EnqueueInstalledDepsArgs<'a> {
     pub(crate) union_constraints: &'a HashMap<(String, String), Vec<String>>,
 }
 
+/// Queue an installed package's own deps too once `deep` allows recursion at
+/// this depth (never for a miss, never under `nodeps`).
+///
+/// Returns the `deps` display list, computed under the same condition.
+pub(crate) fn enqueue_installed_deps(args: EnqueueInstalledDepsArgs<'_>) -> Vec<DepEdge> {
+    let EnqueueInstalledDepsArgs {
+        outcome,
+        ctx,
+        depth,
+        atom_root,
+        key,
+        state,
+        config,
+        union_constraints,
+    } = args;
+    // An installed package's own deps walk too once `deep` allows recursion at
+    // this depth (never for a miss, never under `nodeps`); `deps` below is
+    // computed under the same condition. Portage: _add_pkg
+    // (_ignored_deps vs order).
+    let mut already_installed_deps: Vec<DepEdge> = Vec::new();
+    if let PretendOutcome::AlreadyInstalled { version } = outcome
+        && !ctx.nodeps
+        && ctx.deep.recurses_at(depth)
+    {
+        // `deps` reads the same installed-metadata view the recursion walks, so
+        // `--debug`/`--tree` can't contradict the queued child.
+        if let Some(metadata) =
+            live_metadata_for_installed(&ctx.repos, atom_root, &key.0, &key.1, version)
+        {
+            // Installed recorded USE, not effective profile USE, so a `flag?`-gated
+            // dep shown here matches what the recursion queued.
+            let use_flags = read_vdb_flag_set(atom_root, &key.0, &key.1, version, "USE");
+            let portage_order_keys: &[&str] = if ctx.with_bdeps {
+                &["RDEPEND", "IDEPEND", "PDEPEND", "DEPEND", "BDEPEND"]
+            } else {
+                &["RDEPEND", "IDEPEND", "PDEPEND"]
+            };
+            let layer = if ctx.dynamic_deps {
+                InstalledMetaLayer::Effective
+            } else {
+                InstalledMetaLayer::Raw
+            };
+            let mut effective: HashMap<String, String> = HashMap::new();
+            for k in portage_order_keys {
+                let s = installed_dep_string(InstalledDepStringArgs {
+                    root: atom_root,
+                    dynamic_deps: ctx.dynamic_deps,
+                    ignore_built_slot_operator_deps: ctx.ignore_built_slot_operator_deps,
+                    category: &key.0,
+                    package: &key.1,
+                    version,
+                    live: Some(&metadata),
+                    key: k,
+                    layer,
+                    memo: &mut state.installed_meta_memo,
+                });
+                if !s.trim().is_empty() {
+                    effective.insert((*k).to_string(), s);
+                }
+            }
+            // An installed package is `pkg.built`: build-time deps are `optional`.
+            already_installed_deps = merge_order::dep_edges_from_metadata(
+                &effective,
+                &use_flags,
+                portage_order_keys,
+                true,
+            );
+        }
+        enqueue_dependencies(
+            &SelectSource {
+                repos: &ctx.repos,
+                root: atom_root,
+                config,
+                local_binpkg: &ctx.local_binpkg,
+            },
+            &DepOwner {
+                target_root: ctx.root,
+                category: &key.0,
+                package: &key.1,
+                version,
+                child_depth: depth + 1,
+            },
+            &ctx.enqueue_options(),
+            EnqueueSinks {
+                queue: &mut state.queue,
+                pending_blockers: &mut state.pending_blockers,
+                entries: &mut state.entries,
+                root_deps_build_seen: &mut state.root_deps_build_seen,
+                installed_meta_memo: &mut state.installed_meta_memo,
+                slot_pullers: &mut state.slot_pullers,
+            },
+            union_constraints,
+        );
+    }
+    already_installed_deps
+}
+
 /// What [`compute_nvc_suggestions`] hands back to its caller.
 pub(crate) struct NvcSuggestionsOut {
     pub(crate) keyword_suggestion: Option<(String, String)>,
