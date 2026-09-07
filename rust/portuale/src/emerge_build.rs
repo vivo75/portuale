@@ -81,9 +81,10 @@ fn locate_candidate(
 ) -> Option<Candidate> {
     let candidates = portage_repo::list_candidates(repos, category, package).ok()?;
     candidates
-        .into_iter()
+        .iter()
         .filter(|c| c.version == version)
         .max_by_key(|c| c.repo_priority)
+        .cloned()
 }
 
 /// Real doebuild()'s own `<repo>/<category>/<package>/<package>-<version>.ebuild`

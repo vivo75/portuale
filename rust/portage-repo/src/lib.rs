@@ -1244,20 +1244,20 @@ pub fn find_repos(config_root: &Path) -> Result<Vec<RepoConfig>, Error> {
 /// Reads `metadata/md5-cache/<category>/<pf>` (`pf` = "package-version",
 /// e.g. "foo-1.2.3-r1") as a plain `KEY=value` map.
 ///
-/// Memoised per file path: the resolver reads the same md5-cache entry
-/// many times over one `emerge -pu` (`list_candidates`, every visibility /
-/// USE / slot-op / changed-deps check for a candidate), each read doing a
-/// file open + line parse + `apply_updates_to_dep_string` over 5 keys.
-/// The tree's md5-cache is immutable for the process lifetime -- real
-/// portage's `portdbapi` keeps the same entries in its own `_aux_cache`.
-/// A `--regen` run (portuale's only md5-cache writer) is a separate
-/// process. Returns a clone of the cached map so the `pub` signature and
-/// every caller are unchanged.
+/// Memoised per file path and returned as a shared `Arc`: the resolver
+/// reads the same md5-cache entry many times over one `emerge -pu`
+/// (`list_candidates`, then every visibility / USE / slot-op /
+/// changed-deps check for a candidate), and the first cut of this cache
+/// -- which `clone()`d the map on every hit -- still showed ~10% of the
+/// run in `HashMap<String,String>` copies. The tree's md5-cache is
+/// immutable for the process lifetime (real portage's `portdbapi` keeps
+/// the same entries in its own `_aux_cache`); `--regen`, portuale's only
+/// md5-cache writer, is a separate process. No caller mutates the map.
 pub fn read_md5_cache(
     repo_location: &Path,
     category: &str,
     pf: &str,
-) -> Result<HashMap<String, String>, Error> {
+) -> Result<std::sync::Arc<HashMap<String, String>>, Error> {
     type Md5CacheMap = HashMap<PathBuf, std::sync::Arc<HashMap<String, String>>>;
     static CACHE: OnceLock<RwLock<Md5CacheMap>> = OnceLock::new();
     let cache = CACHE.get_or_init(|| RwLock::new(HashMap::new()));
@@ -1271,7 +1271,7 @@ pub fn read_md5_cache(
     if let Ok(guard) = cache.read()
         && let Some(map) = guard.get(&path)
     {
-        return Ok(map.as_ref().clone());
+        return Ok(std::sync::Arc::clone(map));
     }
 
     let text = fs::read_to_string(&path).map_err(|e| Error::ReadFile {
@@ -1302,7 +1302,7 @@ pub fn read_md5_cache(
     if let Ok(mut guard) = cache.write() {
         guard.insert(path, std::sync::Arc::clone(&map));
     }
-    Ok(map.as_ref().clone())
+    Ok(map)
 }
 
 /// Which kind of package this `Candidate` actually is -- real portage's
@@ -1449,7 +1449,47 @@ fn strip_version_prefix<'a>(dir_name: &'a str, package: &str) -> Option<&'a str>
 /// distinguish "stale cache" from "doesn't exist" -- both just mean "not
 /// visible"); a repo with no directory at all for this category/package
 /// simply contributes nothing, same as before.
+/// Every version of `category/package` with an ebuild in any of `repos`,
+/// memoised per `(repo set, cp)` and returned as a shared `Arc`. The
+/// resolver calls this per cp per graph-walk visit -- visibility,
+/// keyword, slot-operator, changed-deps and parent-scan checks all
+/// re-list the same `cp` -- and each build is a `read_dir` plus a
+/// `Candidate` (a dozen owned strings) per version. Ebuild trees are
+/// immutable for the life of any portuale run (nothing here ever writes a
+/// `.ebuild`; `--regen` only touches `metadata/md5-cache`, in a separate
+/// process), so a plain per-process cache is sound -- same reasoning as
+/// [`read_md5_cache`]. Keyed by a hash of the repo locations + `cp`.
 pub fn list_candidates(
+    repos: &[RepoConfig],
+    category: &str,
+    package: &str,
+) -> Result<std::sync::Arc<Vec<Candidate>>, Error> {
+    use std::hash::{Hash, Hasher};
+    type Cache = HashMap<(u64, String, String), std::sync::Arc<Vec<Candidate>>>;
+    static CACHE: OnceLock<RwLock<Cache>> = OnceLock::new();
+    let cache = CACHE.get_or_init(|| RwLock::new(HashMap::new()));
+
+    let mut fp = std::collections::hash_map::DefaultHasher::new();
+    for repo in repos {
+        repo.location.hash(&mut fp);
+        repo.priority.hash(&mut fp);
+    }
+    let key = (fp.finish(), category.to_string(), package.to_string());
+
+    if let Ok(guard) = cache.read()
+        && let Some(v) = guard.get(&key)
+    {
+        return Ok(std::sync::Arc::clone(v));
+    }
+
+    let result = std::sync::Arc::new(list_candidates_uncached(repos, category, package)?);
+    if let Ok(mut guard) = cache.write() {
+        guard.insert(key, std::sync::Arc::clone(&result));
+    }
+    Ok(result)
+}
+
+fn list_candidates_uncached(
     repos: &[RepoConfig],
     category: &str,
     package: &str,
@@ -8355,7 +8395,9 @@ fn resolved_version_meta_and_use(
     let pf = format!("{package}-{version}");
     let metadata = read_md5_cache(&resolved.repo_location, category, &pf).ok()?;
     let (_iuse, use_flags) = candidate_iuse_and_use(resolved, category, package, config)?;
-    Some((metadata, use_flags))
+    // Cold path (`--root-deps` only); the shared `Arc` isn't worth
+    // threading through `unsatisfied_root_deps_atoms`'s `&HashMap`.
+    Some(((*metadata).clone(), use_flags))
 }
 
 /// Real "recursively pull in and build new packages against the running
@@ -8852,7 +8894,10 @@ pub fn resolve_pretend(
     let mut candidates = if usepkgonly {
         Vec::new()
     } else {
-        list_candidates(repos, &atom.category, &atom.package)?
+        // Owned copy: this is the resolver's mutable candidate pool
+        // (binaries are `extend`ed in and `retain`ed below). One clone
+        // per resolved atom -- cheap next to the graph walk.
+        list_candidates(repos, &atom.category, &atom.package)?.to_vec()
     };
     if usepkg || usepkgonly {
         let local_binpkg = local_binpkg_index(config);
@@ -10130,9 +10175,9 @@ fn slot_operator_rebuild_entries(
                 .ok()
                 .and_then(|cands| {
                     cands
-                        .into_iter()
+                        .iter()
                         .find(|c| c.version == pkg.version)
-                        .map(|c| (c.slot, c.sub_slot))
+                        .map(|c| (c.slot.clone(), c.sub_slot.clone()))
                 })
                 .unwrap_or((v_slot, v_sub));
             new_slot.insert(cp.clone(), (pkg.version.clone(), slot, sub_slot));
@@ -11093,9 +11138,10 @@ fn slot_conflict_meta(
     match list_candidates(repos, category, package)
         .ok()
         .and_then(|cs| {
-            cs.into_iter()
+            cs.iter()
                 .filter(|c| c.version == version)
                 .max_by_key(|c| c.repo_priority)
+                .cloned()
         }) {
         Some(c) => (c.sub_slot, c.repo_name, c.slot),
         None => (String::new(), String::new(), String::new()),
@@ -11123,9 +11169,10 @@ fn pkg_use_display_for(
     let Some(cand) = list_candidates(repos, category, package)
         .ok()
         .and_then(|cs| {
-            cs.into_iter()
+            cs.iter()
                 .filter(|c| c.version == version)
                 .max_by_key(|c| c.repo_priority)
+                .cloned()
         })
     else {
         return Vec::new();
@@ -13093,9 +13140,10 @@ fn backtracking_resolve(req: &ResolveRequest) -> Result<GraphResult, Error> {
                     // own `--dynamic-deps=n` vdb-snapshot branch.
                     if let Some(resolved) =
                         list_candidates(&repos, &key.0, &key.1).ok().and_then(|cs| {
-                            cs.into_iter()
+                            cs.iter()
                                 .filter(|c| &c.version == version)
                                 .max_by_key(|c| c.repo_priority)
+                                .cloned()
                         })
                     {
                         let pf = format!("{}-{version}", key.1);
@@ -13256,7 +13304,7 @@ fn backtracking_resolve(req: &ResolveRequest) -> Result<GraphResult, Error> {
                 let Ok(c) = list_candidates(&repos, &key.0, &key.1) else {
                     continue;
                 };
-                c
+                c.to_vec()
             };
             if usepkg || usepkgonly {
                 let mut binary_candidates = list_binary_candidates(&local_binpkg, &key.0, &key.1);
@@ -13672,7 +13720,7 @@ fn backtracking_resolve(req: &ResolveRequest) -> Result<GraphResult, Error> {
                 else {
                     continue;
                 };
-                metadata
+                std::sync::Arc::new(metadata)
             } else {
                 let pf = format!("{}-{version}", key.1);
                 let Ok(metadata) = read_md5_cache(&repo_location, &key.0, &pf) else {

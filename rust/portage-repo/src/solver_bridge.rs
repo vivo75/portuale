@@ -196,7 +196,7 @@ impl LazyRepo {
         let mut versions = Vec::new();
         if let Some((category, package)) = cp.split_once('/') {
             let candidates = list_candidates(&self.repos, category, package)?;
-            for candidate in candidates {
+            for candidate in candidates.iter() {
                 let pf = format!("{package}-{}", candidate.version);
                 let Ok(metadata) = read_md5_cache(&candidate.repo_location, category, &pf) else {
                     continue;

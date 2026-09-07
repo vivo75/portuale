@@ -227,7 +227,7 @@ pub(crate) fn dump_atom_candidates(
             .collect();
         let refs: Vec<&str> = strs.iter().map(String::as_str).collect();
         let matched = portage_dep::match_from_list(atom, &refs).unwrap_or_default();
-        for c in &cands {
+        for c in cands.iter() {
             let s = format!(
                 "{category}/{package}-{}:{}/{}::{}",
                 c.version, c.slot, c.sub_slot, c.repo_name

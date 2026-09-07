@@ -86,7 +86,6 @@
 use crate::binpkg;
 use crate::ebuild_merge;
 use crate::ebuild_phases;
-use std::collections::HashMap;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -502,7 +501,7 @@ pub(crate) fn package_after_install(
         .map_err(|e| format!("{} -> {}: {e}", tmp_path.display(), binpkg_path.display()))?;
 
     let cpv = format!("{}/{}", env.category, env.split.pf);
-    let metadata: HashMap<String, String> = ebuild_phases::repo_root_for(&env.pkg_dir)
+    let metadata = ebuild_phases::repo_root_for(&env.pkg_dir)
         .and_then(|repo_root| {
             portage_repo::read_md5_cache(&repo_root, &env.category, &env.split.pf).ok()
         })

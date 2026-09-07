@@ -18,9 +18,10 @@
 | + `package.*` config bucketed by `cp` | **~9.5 s** | 8.1× |
 | + `profiles/updates/` move chains precomputed | **~6.9 s** | 11× |
 | + `read_md5_cache` memoised per path | **~5.9 s** | 13× |
-| + `effective_use_flags` memoised per (config, candidate) | **~4.6 s** | **17×** |
+| + `effective_use_flags` memoised per (config, candidate) | **~4.6 s** | 17× |
+| + `read_md5_cache` / `list_candidates` return shared `Arc` | **~4.5 s** | **17×** |
 
-All five changes are **shipped** and keep byte-identical output with the full
+All six changes are **shipped** and keep byte-identical output with the full
 suite green (`portage-dep` / `portage-repo` / `portuale` unit tests + contract
 tests). portuale is now **~3.5× faster than real `emerge`** on this workload.
 None of them alters the resolver algorithm — they remove redundant work the
@@ -52,9 +53,8 @@ algorithm was doing.
    + `apply_updates_to_dep_string` over 5 keys. The tree's md5-cache is
    immutable for the process (real `portdbapi` keeps the same entries in its
    `_aux_cache`); `--regen`, portuale's only writer, is a separate process.
-   `OnceLock<RwLock<HashMap<PathBuf, Arc<…>>>>` keyed by full path; the
-   `pub` signature still returns an owned `HashMap` (a clone of the cached
-   `Arc`). 6.9 s → 5.9 s.
+   `OnceLock<RwLock<HashMap<PathBuf, Arc<…>>>>` keyed by full path.
+   6.9 s → 5.9 s.
 5. **`effective_use_flags` memoised** (`rust/portage-repo/src/lib.rs`,
    `effective_use_flags_uncached` + `use_context_fingerprint`): it was called
    ~20 k times for a few hundred distinct candidates — `is_visible`, then
@@ -69,19 +69,24 @@ algorithm was doing.
    those inputs and two genuinely different configs can't match a ~20-field
    sample in production (one config per process). 5.9 s → 4.6 s
    (`effective_use_flags` drops out of the profile entirely).
+6. **`read_md5_cache` and `list_candidates` return `Arc`** — both were
+   handing back a full clone of a cached structure on every call.
+   `read_md5_cache` now returns `Arc<HashMap<String,String>>` (~24 call
+   sites, almost all unchanged via `Deref`). `list_candidates` gained the same
+   per-process cache (ebuild trees never change during a portuale run) and
+   returns `Arc<Vec<Candidate>>`; the ~10 sites that consumed the `Vec` by
+   value take a `.to_vec()` / `.cloned()` where they genuinely need ownership
+   (the resolver's mutable candidate pool, one clone per resolved atom). 4.6 s
+   → 4.5 s. Also folded in: `apply_incremental_iter(&[S], …)` replacing
+   `apply_incremental(&tokens.join(" "), …)`'s join-then-resplit in
+   `apply_matching` / `specificity_ordered_flags` / `keyword_provenance`.
 
-At 4.6 s the profile is ~35 % raw malloc/free spread across the whole run,
-~9 % SipHash, and a long tail of ~2 % items: `read_md5_cache`'s per-hit map
-clone (returning `Arc` would remove it, ~24 call sites), `Candidate.
-binary_deps` (`HashMap<String,String>`) deep-cloned with every `Candidate`
-clone, `apply_updates_to_cp`, the `--getbinpkg` binpkg-index parse. No single
-hot loop remains — further wins are incremental.
-
-A small independent cleanup went in alongside: `apply_matching` /
-`specificity_ordered_flags` / `keyword_provenance` called
-`apply_incremental(&tokens.join(" "), …)` — a `Vec<String>` joined then
-re-split; `portage_profile::apply_incremental_iter(&[S], …)` skips the
-round-trip.
+At 4.5 s the profile is ~35 % raw malloc/free spread across the whole run,
+~9 % SipHash, ~2.4 % `apply_updates_to_cp`, ~1 % the `--getbinpkg`
+binpkg-index parse, and a long tail of sub-2 % items — no hot loop, no single
+function above ~3 %. The per-node recomputation that made portuale a slower
+*algorithm* than portage is gone; what remains is ordinary allocation
+overhead.
 
 ## The symptom (original, 77 s)
 
@@ -257,28 +262,22 @@ smaller blast radius.
 
 ## What to change next, in priority order
 
-Nothing left is a single hot loop — the 4.6 s run is ~35 % raw malloc/free
-spread everywhere. The items below are ~2–5 % each.
+Diminishing returns — the 4.5 s run is ~35 % raw malloc/free with nothing
+above ~3 %. The items below are ~1–2 % each and increasingly invasive.
 
-### 1. Return `Arc` from `read_md5_cache` (and stop deep-cloning `Candidate`)
+### 1. Stop deep-cloning `Candidate`
 
-`read_md5_cache` now returns a *clone* of its cached map on every hit
-(~2.7 % + drop). Change the `pub` signature to `Result<Arc<HashMap<String,
-String>>, Error>` — most of the ~24 call sites just `.get(…)` through the
-`Deref` and need no change. Similarly `Candidate` carries `binary_deps:
-HashMap<String,String>` (and other owned strings) that get deep-copied every
-time a `Candidate` or a `Vec<Candidate>` is cloned in the resolver's `retain`
-/ filter passes — `Arc`-wrapping the heavy fields, or not cloning the vectors,
-removes another ~2 %.
+`Candidate` carries `binary_deps: HashMap<String,String>` plus a dozen owned
+strings, deep-copied every time a `Candidate` or a `Vec<Candidate>` is cloned
+in the resolver's `retain` / filter passes (~2–3 %). `Arc`-wrap the heavy
+fields, or restructure so the pool filters in place / by index instead of
+cloning candidates out.
 
-### 2. Cache `list_candidates` / `installed_candidates` per `(repo-set, cp)`
+### 2. Cache `installed_candidates` per cp
 
-`list_candidates` (ebuild dir listing + per-version md5-cache) and
-`installed_candidates` (a `var/db/pkg` scan) are re-run per cp per graph-walk
-visit. Key by `(category, package)`; value `Arc<Vec<…>>`. Safe like
-`all_installed_packages` — fingerprint by dir mtime if a test could mutate
-mid-process, otherwise a plain per-process cache. Removes the remaining
-`read_dir` traffic.
+`installed_candidates` re-scans `var/db/pkg` per cp per graph-walk visit
+(`list_candidates` and `all_installed_packages` are already cached). Same
+shape — per-process cache keyed by `(category, package)`.
 
 ### 3. Cheaper parse cache, or a hand-written parser
 
@@ -329,9 +328,9 @@ counts.
 
 ## Target
 
-The five shipped fixes reached ~4.6 s — about 3.5× faster than real `emerge`
+The six shipped fixes reached ~4.5 s — about 3.5× faster than real `emerge`
 (~16 s) on this workload. The per-node recomputation that made portuale a
 different, slower algorithm is now all memoised; what's left is ordinary
-string-allocation overhead with no hot loop, so further work is incremental
-(items 1–3, ~2–5 % each). The Rust graph walk itself was never the
+allocation overhead with no hot loop, so further work is incremental
+(items 1–3, ~1–2 % each). The Rust graph walk itself was never the
 bottleneck.
