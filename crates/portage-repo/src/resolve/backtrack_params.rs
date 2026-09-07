@@ -221,6 +221,21 @@ pub(crate) fn circular_child_candidate(child: &CircularDepChild) -> String {
 }
 
 impl BacktrackParams {
+    /// Effective per-`cat/pkg` constraint bucket for readers: the
+    /// solvable-conflict positives plus the rendered `runtime_pkg_mask`
+    /// negatives (applied as an order-independent conjunction). Built once
+    /// per pass in `run_pass` -- `bp` is never mutated mid-walk, so the
+    /// union is pass-constant.
+    pub(crate) fn union_constraints(&self) -> HashMap<(String, String), Vec<String>> {
+        let mut out = self.slot_constraints.clone();
+        for (cp, masks) in &self.runtime_pkg_mask {
+            out.entry(cp.clone())
+                .or_default()
+                .extend(masks.iter().map(|m| m.neg.clone()));
+        }
+        out
+    }
+
     /// Just the `runtime_pkg_mask` negatives for one `cat/pkg` (no
     /// positives): tells mask-induced unsatisfiability (retry with the
     /// parent masked) from genuine absence and USE-only failure.

@@ -123,6 +123,42 @@ pub(crate) fn tree_note_selection(
     }
 }
 
+/// The pending-`Replacement`-row scan [`tree_solved_replacements`] and
+/// [`tree_display_order`] share: unsatisfied `Replacement` arms paired
+/// with the merge-bound replacement entry that solves them.
+pub(crate) fn tree_stuck_pending(entries: &[GraphEntry]) -> Vec<PendingUninstall> {
+    let mut pending = Vec::new();
+    for (owner, entry) in entries.iter().enumerate() {
+        for (blocker, b) in entry.blockers.iter().enumerate() {
+            if b.unsolvable {
+                continue;
+            }
+            let Some(crate::BlockerSatisfiedBy::Replacement { cp, slot }) = &b.satisfied_by else {
+                continue;
+            };
+            let Some(repl) = entries.iter().position(|e| {
+                (e.category.as_str(), e.package.as_str()) == (cp.0.as_str(), cp.1.as_str())
+                    && e.slot.as_deref() == Some(slot.as_str())
+                    && crate::merge_bound_version(&e.outcome)
+                        .is_some_and(|v| v != b.matched_version.as_str())
+            }) else {
+                continue;
+            };
+            pending.push(PendingUninstall {
+                repl,
+                inst_cp: (b.matched_category.clone(), b.matched_package.clone()),
+                inst_slot: slot.clone(),
+                inst_version: b.matched_version.clone(),
+                owner,
+                blocker,
+                strong: b.strong,
+                node: None,
+            });
+        }
+    }
+    pending
+}
+
 /// The leftover weave-back [`serialize_merge_order`] and
 /// [`tree_display_order`] share: entries the scheduler never saw (pruned
 /// "nomerge" roots, entries with no node at all) rejoin on their unbiased
@@ -149,4 +185,16 @@ pub(crate) fn weave_scheduled_leftovers(
     out.extend(&leftover[ti..]);
     debug_assert_eq!(out.len(), real_n);
     out
+}
+
+/// Arguments of [`tree_display_order`].
+pub struct TreeDisplayOrderArgs<'a> {
+    pub entries: &'a [GraphEntry],
+    pub top_level_atoms: &'a [String],
+    pub config: &'a portage_profile::Config,
+    pub root: &'a Path,
+    pub implicit_system_deps: bool,
+    pub repos: &'a [RepoConfig],
+    pub dynamic_deps: bool,
+    pub circular: &'a HashMap<RootCp, Vec<CircularDepChild>>,
 }

@@ -2,6 +2,8 @@
 
 use crate::*;
 use std::ops::ControlFlow;
+
+mod assemble_pass;
 mod candidate_pool;
 mod enqueue_deps;
 mod entry_fetch;
@@ -13,10 +15,12 @@ mod graph_entry;
 mod graph_resolved;
 mod outcome_fallbacks;
 mod parent_use_flip;
+mod pop_queue_item;
 mod prepare_atom;
 mod resolve_outcome;
 mod seed_queue;
 mod unresolved_dep;
+pub(crate) use assemble_pass::*;
 pub(crate) use candidate_pool::*;
 pub(crate) use enqueue_deps::*;
 pub(crate) use entry_fetch::*;
@@ -28,6 +32,7 @@ pub(crate) use graph_entry::*;
 pub(crate) use graph_resolved::*;
 pub(crate) use outcome_fallbacks::*;
 pub(crate) use parent_use_flip::*;
+pub(crate) use pop_queue_item::*;
 pub(crate) use prepare_atom::*;
 pub(crate) use resolve_outcome::*;
 pub(crate) use seed_queue::*;

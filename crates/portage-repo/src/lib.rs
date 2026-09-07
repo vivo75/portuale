@@ -71,7 +71,8 @@ pub use visibility::*;
 pub use visibility_use_flip::*;
 
 pub use merge_order::{
-    DepEdge, DepPriority, dep_edge_satisfied_by_installed, kept_alt_branches, resolved_dep_targets,
+    DepEdge, DepPriority, TreeDisplayOrderArgs, dep_edge_satisfied_by_installed, kept_alt_branches,
+    resolved_dep_targets,
 };
 
 use portage_versions::vercmp;

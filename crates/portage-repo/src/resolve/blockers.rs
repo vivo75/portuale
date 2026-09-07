@@ -246,6 +246,98 @@ pub(crate) struct PendingRemoval {
     pub(crate) blockers: Vec<BlockerConflict>,
 }
 
+/// Files each blocker conflict on its owner entry and appends the `Uninstall`
+/// removal entries the satisfied rows describe. One removal entry per removed
+/// `cpv`. A conflict whose absent owner resolves by no removal is filed as an
+/// orphan; any other absent-owner row is still dropped.
+pub(crate) fn file_blocker_conflicts(
+    entries: &mut Vec<GraphEntry>,
+    root: &Path,
+    conflicts: Vec<FiledBlocker>,
+    orphans: &mut Vec<OrphanBlocker>,
+) {
+    let mut removals: Vec<PendingRemoval> = Vec::new();
+    for filed in conflicts {
+        let FiledBlocker {
+            owner: owner_key,
+            owner_version,
+            conflict,
+        } = filed;
+        let removal = match &conflict.satisfied_by {
+            Some(BlockerSatisfiedBy::Uninstall { cpv, anchor }) => {
+                Some((cpv.clone(), anchor.clone()))
+            }
+            _ => None,
+        };
+        if let Some(entry) = entries
+            .iter_mut()
+            .find(|e| (e.category.clone(), e.package.clone()) == owner_key)
+        {
+            entry.blockers.push(conflict);
+        } else if let Some((cpv, _)) = &removal {
+            // No owner entry -- attach the row to its removal.
+            let Some((category, package, version)) = split_cpv(cpv) else {
+                continue;
+            };
+            if let Some(removal) = removals
+                .iter_mut()
+                .find(|r| r.category == category && r.package == package && r.version == version)
+            {
+                removal.blockers.push(conflict);
+            } else {
+                removals.push(PendingRemoval {
+                    category,
+                    package,
+                    version,
+                    anchors: Vec::new(),
+                    blockers: vec![conflict],
+                });
+            }
+        } else if conflict.unsolvable {
+            // No owner entry and no removal: an unresolved row of a
+            // scan-collected owner. Portage still reports it; a `Replacement`
+            // row can never land here since it always carries `satisfied_by`.
+            orphans.push(OrphanBlocker {
+                owner_category: owner_key.0.clone(),
+                owner_package: owner_key.1.clone(),
+                owner_version,
+                conflict,
+            });
+            continue;
+        } else {
+            continue;
+        }
+        let Some((cpv, anchor)) = removal else {
+            continue;
+        };
+        let Some((category, package, version)) = split_cpv(&cpv) else {
+            continue;
+        };
+        match removals
+            .iter_mut()
+            .find(|r| r.category == category && r.package == package && r.version == version)
+        {
+            Some(removal) => {
+                if !removal.anchors.contains(&anchor) {
+                    removal.anchors.push(anchor);
+                }
+            }
+            None => removals.push(PendingRemoval {
+                category,
+                package,
+                version,
+                anchors: vec![anchor],
+                blockers: Vec::new(),
+            }),
+        }
+    }
+    entries.extend(removals.into_iter().map(|r| {
+        let mut entry = uninstall_entry(root, r.category, r.package, r.version, r.anchors);
+        entry.blockers = r.blockers;
+        entry
+    }));
+}
+
 /// Arguments of [`collect_unwalked_installed_blockers`].
 pub(crate) struct CollectUnwalkedInstalledBlockersArgs<'a> {
     pub(crate) repos: &'a [RepoConfig],
