@@ -12,6 +12,7 @@
 pub mod md5_dict;
 mod merge_order;
 mod resolver_trace;
+mod solver_bridge;
 
 mod binary_index;
 mod binpkg_use;
