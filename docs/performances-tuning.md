@@ -10,22 +10,37 @@
 
 ## Status
 
-| build | `-puD --getbinpkg net-libs/rest` wall time |
-|---|---|
-| real `emerge` | ~16 s |
-| portuale, before | **~77 s** |
-| portuale, with `parse_atom` / `parse_candidate` memoised | **~20.6 s** |
+| build | `-puD --getbinpkg net-libs/rest` | vs before |
+|---|---|---|
+| real `emerge` | ~16 s | — |
+| portuale, original | **~77 s** | 1.0× |
+| + `parse_atom` / `parse_candidate` memoised | **~20.6 s** | 3.7× |
+| + `package.*` config bucketed by `cp` (this doc's item 1) | **~9.5 s** | **8.1×** |
 
-**Shipped: a thread-local memo cache on `parse_atom` and `parse_candidate`**
-(`rust/portage-dep/src/lib.rs`). It does not touch the resolver algorithm at
-all — it just stops re-running the backtracking regex on strings already
-parsed. That single change took the run from 77 s to 20.6 s (3.7×), close to
-real-portage parity, with byte-identical output and the full suite
-(`portage-dep` / `portage-repo` / `portuale` unit tests + 1107 contract
-tests) green. The rest of this document is the original analysis and the
-options for closing the last ~4 s and going further.
+Both changes are **shipped** and keep byte-identical output with the full
+suite green (`portage-dep` / `portage-repo` / `portuale` unit tests + 1107
+contract tests). portuale is now **faster than real `emerge`** on this
+workload. Neither change alters the resolver algorithm — they remove
+redundant work the algorithm was doing.
 
-## The symptom (before the cache)
+1. **`parse_atom` / `parse_candidate` memo cache** (`rust/portage-dep/src/
+   lib.rs`): a `thread_local!` `HashMap<String, Option<…>>` in front of each
+   parser, so the ~15-group backtracking regex runs once per distinct string
+   instead of 34 M times. 77 s → 20.6 s.
+2. **cp-bucketed `package.*` config** (`rust/portage-repo/src/lib.rs`,
+   `CpBucketIndex` + `config_entries_matching` / `any_config_entry_matches`):
+   portuale's stand-in for real portage's `ExtendedAtomDict`. Each config
+   list is bucketed by `cat/pkg` once (memoised), so a per-package lookup
+   visits the ~0–5 entries that name that `cp` (plus the wildcard tail)
+   instead of linearly scanning all ~1,900. 20.6 s → 9.5 s.
+
+The next bottleneck is now `apply_updates_to_cp` (profile package-move
+replay, ~15 % of the 9.5 s run) — the same "no memoisation" pattern as Cause 2
+below: `all_installed_packages` rebuilds the ~2,000-entry installed list (with
+a 531-command move replay per entry) from scratch at ~10 call sites. See
+item 1 in "What to change next".
+
+## The symptom (original, 77 s)
 
 | command | real `emerge` | `portuale emerge` |
 |---|---|---|
@@ -145,7 +160,9 @@ Real portage reads `metadata/md5-cache` through `portdbapi` with an in-process
 LRU (`self._aux_cache`), builds each `Package` once, and the depgraph keeps a
 single `Package` instance per cpv for the life of the resolve.
 
-## The memo cache (shipped)
+## The two shipped fixes
+
+### `parse_atom` / `parse_candidate` memo cache
 
 `parse_atom` / `parse_candidate` each gained a `thread_local!`
 `RefCell<HashMap<String, Option<…>>>` front. A hit is one hash lookup plus one
@@ -162,46 +179,60 @@ its dependency surface deliberately small, and a bare `HashMap` behind a
 table size ever becomes a concern, swapping in `quick_cache` or an `lru` bound
 is a local change.
 
-### Post-cache profile
+Profile after this change (20.6 s run): the regex is gone from the top; the
+new cost was the ~34 M cache lookups themselves — `__memmove` 15 %,
+`__memcmp` 13 %, SipHash of the long candidate cache-keys ~12 %,
+`Atom`/`Candidate`/`String` clone on the hit path ~10 %, `apply_updates_to_cp`
+6 %, malloc/free ~16 %. Almost all of that traced back to the linear config
+scan below.
 
-`perf` on the 20.6 s run — the regex is gone from the top; the new cost is the
-cache machinery itself plus string churn that was always there:
+### cp-bucketed `package.*` config (this doc's item 1, done)
 
-| % | symbol | meaning |
-|---:|---|---|
-| 15 % | `__memmove_avx` | copying strings (HashMap resize, `String` clones, `apply_updates` splits) |
-| 13 % | `__memcmp_avx2` | comparing cache keys and config-atom strings |
-| ~12 % | SipHash (`sip::Hasher::write`, `hash_one::<&str>`) | hashing the (long) candidate strings used as cache keys |
-| ~10 % | `LocalKey::with` + `Atom`/`Candidate`/`String` clone | the cache's own hit path |
-| 6 % | `apply_updates_to_cp` | profile package-move application (pure string scan in a loop) |
-| ~16 % | malloc/free | still per-call `Vec`/`HashSet`/`String` |
+`CpBucketIndex` in `rust/portage-repo/src/lib.rs` is portuale's
+`ExtendedAtomDict`. For one config list it holds `by_cp: HashMap<String,
+Vec<u32>>` (`"cat/pkg"` → file-order positions of the plain-atom entries for
+that exact `cp`) and `other: Vec<u32>` (wildcard / unparseable atoms, always
+re-checked — a handful of `*/*` lines on a real tree). It's built once per
+distinct list and memoised in a `thread_local!` keyed by the list's
+`(as_ptr, len)` with the first/last atom strings as a fingerprint.
 
-So the remaining opportunities are: a faster hasher for the cache keys
-(SipHash → FxHash/ahash would reclaim most of the 12 %), returning
-`Rc<Atom>` / `Rc<Candidate>` from the cache to skip the hit-path clone, and —
-the real fix — not calling the parsers 34 M times in the first place (below).
+`config_entries_matching(entries, candidate_str, cat, pkg)` and
+`any_config_entry_matches(...)` replace the
+`entries.iter().filter(|e| matches_config_entry(...))` /
+`.any(...)` scans in `effective_use_flags`, `specificity_ordered_flags`,
+`resolve_accept_tokens`, `keyword_provenance`, and the `package.mask` /
+`package.unmask` checks. They return entries in original file order, so the
+downstream stable `sort_by_key(atom_specificity)` is unaffected — output is
+byte-identical. A per-package lookup now visits ~0–5 entries instead of
+~1,900. 20.6 s → 9.5 s.
+
+The `Config` field types were left as `Vec<(String, Vec<String>)>` — the index
+lives in `portage-repo` (which owns `portage_dep`), keyed by the vec's
+identity, rather than moving atom parsing into `portage-profile` (which has no
+`portage-dep` dependency and ~60 struct-literal test call sites). Same effect,
+smaller blast radius.
 
 ## What to change next, in priority order
 
-### 1. Bucket `package.*` config by `cp`, and pre-parse the atoms once  — biggest structural win
+### 1. Cache `all_installed_packages` + collapse `apply_updates_to_cp` — new #1
 
-In `portage_profile::Config`, replace each `Vec<(String, Vec<String>)>`
-(`package_use`, `package_use_user`, `package_env_use`, `package_use_force`,
-`package_use_mask`, `package_use_stable_*`, `package_accept_keywords`,
-`package_mask`, …) with a struct that:
+`all_installed_packages` (`:5061`) rebuilds the entire installed set —
+`read_dir` over `var/db/pkg`, a `SLOT` file read per package, and
+`apply_updates_to_cp` + `apply_updates_to_slot` (each a linear replay of all
+~531 `profiles/updates/` `move` commands) per package — and it's called from
+~10 resolver sites, several inside loops. It's now ~15 % of the run
+(`apply_updates_to_cp` alone) plus most of the remaining malloc traffic.
 
-- parses every entry's atom string into `portage_dep::Atom` **at load time**, and
-- indexes entries in a `HashMap<(String,String), Vec<Entry>>` keyed by
-  `(category, package)`, plus a `Vec<Entry>` for `*/*` and a
-  `HashMap<String, Vec<Entry>>` for `cat/*` (portage's `ExtendedAtomDict`).
-
-`matches_config_entry` / `specificity_ordered_flags` then iterate only
-`bucket.get(&(cat,pkg))` ∪ `cat_star.get(cat)` ∪ `star_star` — typically < 10
-entries — and match against the pre-parsed `Atom` (no `parse_atom`, no
-`parse_candidate` on the config side). This alone should remove ~90 % of the
-34 M `match_from_list` calls — which the memo cache currently absorbs at a
-cost of ~35 % of the post-cache run (hash + compare + clone). Doing both is
-strictly better; if only one is done, this is the more principled one.
+Two parts:
+- Memoise the whole `Vec<InstalledPackage>` per `root` (process-global
+  `OnceLock<RwLock<HashMap<PathBuf, Arc<Vec<InstalledPackage>>>>>`, or thread
+  it through the resolver). The vdb doesn't change mid-resolve.
+- Precompute the forward-move chain once: `apply_updates_to_cp` /
+  `apply_updates_to_slot` should consult a `HashMap<(cp), (cp)>` built from
+  `global_package_updates()` (like `update_move_targets()` at `:572` already
+  does for the atom fast-path), not walk all 531 commands per call. This is
+  real portage's model exactly — it bakes moves into the vdb/cache once at
+  sync.
 
 ### 2. Add an in-process metadata cache for `read_md5_cache`
 
@@ -267,19 +298,20 @@ perf record -F 400 -g --call-graph dwarf,16384 -- \
 perf report --stdio --no-children | head -40
 ```
 
-Call counts were obtained by adding `AtomicU64` counters to `parse_atom`,
-`parse_candidate`, `match_from_list`, `read_md5_cache`, `effective_use_flags`,
-`list_candidates`, and `apply_updates_to_dep_string`, dumped from `main` when
-`PORTUALE_PERF_COUNT` is set. That instrumentation was reverted after the
-investigation; re-add it the same way to check progress against the numbers in
-this document. Note the memo cache means `parse_atom` / `parse_candidate` now
-count *calls*, not regex runs — add the counter inside `*_uncached` to see
-miss counts.
+The original call counts (77 s run) were obtained by adding `AtomicU64`
+counters to `parse_atom`, `parse_candidate`, `match_from_list`,
+`read_md5_cache`, `effective_use_flags`, `list_candidates`, and
+`apply_updates_to_dep_string`, dumped from `main` when `PORTUALE_PERF_COUNT`
+is set. That instrumentation was reverted; re-add it the same way to check
+progress. Note the memo cache means `parse_atom` / `parse_candidate` now count
+*calls*, not regex runs — put the counter inside `*_uncached` to see miss
+counts.
 
 ## Target
 
-The memo cache already reached ~20.6 s (real `emerge` ≈ 16 s). Item 1
-(cp-bucketed config) plus a cheaper cache should take the 34 M
-`match_from_list` calls well under 1 M and leave the run I/O- and
-graph-walk-bound rather than string-bound. The Rust graph walk itself is not
-the bottleneck — the per-node recomputation is.
+The two shipped fixes reached ~9.5 s — already under real `emerge` (~16 s) on
+this workload. Item 1 above (installed-set + move-chain memoisation) is the
+next clear win; beyond that the run is bounded by string allocation in the
+`*DEPEND` / candidate-string plumbing rather than any single hot loop, and the
+per-node recomputation pattern (items 2–4) is what remains of the "different
+algorithm" gap. The Rust graph walk itself was never the bottleneck.

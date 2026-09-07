@@ -60,10 +60,12 @@ mod resolver_trace;
 pub use merge_order::{DepEdge, DepPriority};
 
 use portage_versions::vercmp;
+use std::cell::RefCell;
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
 use std::sync::{OnceLock, RwLock};
 
@@ -2072,6 +2074,175 @@ fn matches_config_entry(entry: &str, candidate_str: &str, category: &str, packag
     }
 }
 
+/// One `package.*` config list's atoms bucketed by `cat/pkg` -- portuale's
+/// stand-in for real portage's `ExtendedAtomDict`
+/// (`lib/portage/dep/__init__.py`), which every `UseManager` /
+/// `MaskManager` / `KeywordsManager` / `LicenseManager` builds once at
+/// config load. During a deep `emerge -pu` these lists are scanned per
+/// package per graph-walk visit -- tens of thousands of times -- but only
+/// the handful of entries whose atom names *this* `cp` (or a `*/*` /
+/// `cat/*` / `*/pkg` wildcard) can ever match. A flat `Vec` scan with a
+/// per-entry match was ~half of the post-`parse_atom`-cache run; this
+/// narrows it to a `HashMap` lookup plus the wildcard tail.
+#[derive(Default)]
+struct CpBucketIndex {
+    /// `"cat/pkg"` -> positions (in original file/stacking order) of every
+    /// plain-atom entry for that exact `cp`.
+    by_cp: HashMap<String, Vec<u32>>,
+    /// Positions of every entry whose atom is a bounded wildcard (`*/*`,
+    /// `cat/*`, `*/pkg`) or didn't parse at all -- always re-checked, kept
+    /// in file order. Small on a real tree (a few `*/*` lines).
+    other: Vec<u32>,
+}
+
+impl CpBucketIndex {
+    fn build<T: ConfigAtomEntry>(entries: &[T]) -> Self {
+        let mut by_cp: HashMap<String, Vec<u32>> = HashMap::new();
+        let mut other = Vec::new();
+        for (i, e) in entries.iter().enumerate() {
+            // `parse_atom` handles a leading `!`/`!!` blocker itself; the
+            // `package.*` lists carry none, but `--exclude` reuses this.
+            match portage_dep::parse_atom(e.config_atom()) {
+                Some(atom) => by_cp
+                    .entry(format!("{}/{}", atom.category, atom.package))
+                    .or_default()
+                    .push(i as u32),
+                None => other.push(i as u32),
+            }
+        }
+        CpBucketIndex { by_cp, other }
+    }
+
+    /// Positions of every entry that could match `category/package`, in
+    /// original file order (`by_cp` hit ∪ `other`, sorted).
+    fn candidate_positions(&self, category: &str, package: &str) -> Vec<u32> {
+        let mut positions = match self.by_cp.get(&format!("{category}/{package}")) {
+            Some(v) => v.clone(),
+            None => Vec::new(),
+        };
+        positions.extend_from_slice(&self.other);
+        positions.sort_unstable();
+        positions
+    }
+}
+
+/// An entry in a `package.*` config list, exposing just its atom string --
+/// `(atom, tokens)` for the value-carrying lists (`package.use`,
+/// `package.accept_keywords`, ...) and a bare `atom` for
+/// `package.mask` / `package.unmask`.
+trait ConfigAtomEntry {
+    fn config_atom(&self) -> &str;
+}
+
+impl ConfigAtomEntry for (String, Vec<String>) {
+    fn config_atom(&self) -> &str {
+        &self.0
+    }
+}
+
+impl ConfigAtomEntry for String {
+    fn config_atom(&self) -> &str {
+        self.as_str()
+    }
+}
+
+/// One memoised [`CpBucketIndex`]: the built index plus the first/last
+/// atom strings of the list it was built from, kept as a fingerprint (see
+/// [`cp_bucket_index`]).
+struct CachedBucketIndex {
+    first_atom: String,
+    last_atom: String,
+    index: Rc<CpBucketIndex>,
+}
+
+/// The [`CpBucketIndex`] for one config list, built once and memoised for
+/// the life of the process. Keyed by the list's backing-storage identity
+/// (`as_ptr`, `len`) with the first and last atom strings kept as a
+/// fingerprint so a freed-then-reused allocation can't hand back a stale
+/// index (in practice every bucketed list is a clone of stable
+/// profile/user data, so a `(ptr, len)` collision already implies
+/// identical content -- the fingerprint just makes that guaranteed).
+/// Thread-local so the lookup stays lock-free, like the `parse_atom`
+/// cache in `portage-dep`.
+fn cp_bucket_index<T: ConfigAtomEntry>(entries: &[T]) -> Rc<CpBucketIndex> {
+    thread_local! {
+        static EMPTY: Rc<CpBucketIndex> = Rc::new(CpBucketIndex::default());
+        static CACHE: RefCell<HashMap<(usize, usize), CachedBucketIndex>> =
+            RefCell::new(HashMap::new());
+    }
+    if entries.is_empty() {
+        return EMPTY.with(Rc::clone);
+    }
+    let key = (entries.as_ptr() as usize, entries.len());
+    let first = entries.first().unwrap().config_atom();
+    let last = entries.last().unwrap().config_atom();
+    CACHE.with(|c| {
+        if let Some(cached) = c.borrow().get(&key)
+            && cached.first_atom == first
+            && cached.last_atom == last
+        {
+            return Rc::clone(&cached.index);
+        }
+        let index = Rc::new(CpBucketIndex::build(entries));
+        c.borrow_mut().insert(
+            key,
+            CachedBucketIndex {
+                first_atom: first.to_string(),
+                last_atom: last.to_string(),
+                index: Rc::clone(&index),
+            },
+        );
+        index
+    })
+}
+
+/// Every entry in `entries` that matches this candidate, in original file
+/// order -- the bucketed replacement for
+/// `entries.iter().filter(|e| matches_config_entry(...))`. Callers that
+/// then sort by [`atom_specificity`] get an identical result to the old
+/// flat scan (the sort is stable and file order is preserved here).
+fn config_entries_matching<'a, T: ConfigAtomEntry>(
+    entries: &'a [T],
+    candidate_str: &str,
+    category: &str,
+    package: &str,
+) -> Vec<&'a T> {
+    let idx = cp_bucket_index(entries);
+    idx.candidate_positions(category, package)
+        .into_iter()
+        .filter(|&i| {
+            matches_config_entry(
+                entries[i as usize].config_atom(),
+                candidate_str,
+                category,
+                package,
+            )
+        })
+        .map(|i| &entries[i as usize])
+        .collect()
+}
+
+/// Whether any entry in `entries` matches -- the bucketed replacement for
+/// `entries.iter().any(|e| matches_config_entry(...))`.
+fn any_config_entry_matches<T: ConfigAtomEntry>(
+    entries: &[T],
+    candidate_str: &str,
+    category: &str,
+    package: &str,
+) -> bool {
+    let idx = cp_bucket_index(entries);
+    idx.candidate_positions(category, package)
+        .into_iter()
+        .any(|i| {
+            matches_config_entry(
+                entries[i as usize].config_atom(),
+                candidate_str,
+                category,
+                package,
+            )
+        })
+}
+
 /// The USE flags in effect for one specific package -- one continuous
 /// incremental walk over the real `USE_ORDER` layers portuale models,
 /// low priority to high (real `config.py::regenerate()` over the
@@ -2225,10 +2396,8 @@ pub fn effective_use_flags(
         }
     }
     let apply_matching = |flags: &mut HashSet<String>, entries: &[(String, Vec<String>)]| {
-        for (entry, tokens) in entries {
-            if matches_config_entry(entry, candidate_str, category, package) {
-                portage_profile::apply_incremental(&tokens.join(" "), flags);
-            }
+        for (_, tokens) in config_entries_matching(entries, candidate_str, category, package) {
+            portage_profile::apply_incremental(&tokens.join(" "), flags);
         }
     };
     apply_matching(&mut use_flags, &config.package_use_repo);
@@ -2456,13 +2625,11 @@ fn specificity_ordered_flags(
     package: &str,
     mut seed: HashSet<String>,
 ) -> HashSet<String> {
-    let mut matching: Vec<&(String, Vec<String>)> = entries
-        .iter()
-        .filter(|(entry, _)| matches_config_entry(entry, candidate_str, category, package))
-        .collect();
+    let mut matching = config_entries_matching(entries, candidate_str, category, package);
     // Stable sort: ties (including every comparison-operator atom, which
     // portuale deliberately doesn't further distinguish -- see the
-    // module doc comment) keep their original file/stacking order.
+    // module doc comment) keep their original file/stacking order
+    // (`config_entries_matching` returns them in it).
     matching.sort_by_key(|(entry, _)| atom_specificity(entry));
     for (_, tokens) in matching {
         portage_profile::apply_incremental(&tokens.join(" "), &mut seed);
@@ -3008,10 +3175,7 @@ fn resolve_accept_tokens(
     category: &str,
     package: &str,
 ) -> Vec<String> {
-    let mut matching: Vec<&(String, Vec<String>)> = package_accept
-        .iter()
-        .filter(|(atom, _)| matches_config_entry(atom, candidate_str, category, package))
-        .collect();
+    let mut matching = config_entries_matching(package_accept, candidate_str, category, package);
     matching.sort_by_key(|(atom, _)| atom_specificity(atom));
 
     let mut accept_tokens = global_accept.to_vec();
@@ -3225,14 +3389,8 @@ pub fn is_visible(
         candidate.version, candidate.slot, candidate.sub_slot, candidate.repo_name
     );
 
-    let masked = config
-        .package_mask
-        .iter()
-        .any(|m| matches_config_entry(m, &candidate_str, category, package))
-        && !config
-            .package_unmask
-            .iter()
-            .any(|u| matches_config_entry(u, &candidate_str, category, package));
+    let masked = any_config_entry_matches(&config.package_mask, &candidate_str, category, package)
+        && !any_config_entry_matches(&config.package_unmask, &candidate_str, category, package);
     if masked {
         return false;
     }
@@ -3303,14 +3461,14 @@ fn visible_with_relax(
     );
 
     if !relax_masks {
-        let masked = config
-            .package_mask
-            .iter()
-            .any(|m| matches_config_entry(m, &candidate_str, category, package))
-            && !config
-                .package_unmask
-                .iter()
-                .any(|u| matches_config_entry(u, &candidate_str, category, package));
+        let masked =
+            any_config_entry_matches(&config.package_mask, &candidate_str, category, package)
+                && !any_config_entry_matches(
+                    &config.package_unmask,
+                    &candidate_str,
+                    category,
+                    package,
+                );
         if masked {
             return false;
         }
@@ -3384,14 +3542,8 @@ fn keyword_masked_only(
         candidate.version, candidate.slot, candidate.sub_slot, candidate.repo_name
     );
 
-    let masked = config
-        .package_mask
-        .iter()
-        .any(|m| matches_config_entry(m, &candidate_str, category, package))
-        && !config
-            .package_unmask
-            .iter()
-            .any(|u| matches_config_entry(u, &candidate_str, category, package));
+    let masked = any_config_entry_matches(&config.package_mask, &candidate_str, category, package)
+        && !any_config_entry_matches(&config.package_unmask, &candidate_str, category, package);
     if masked {
         return false;
     }
@@ -3455,14 +3607,8 @@ fn mask_masked_only(
         "{category}/{package}-{}:{}/{}::{}",
         candidate.version, candidate.slot, candidate.sub_slot, candidate.repo_name
     );
-    let masked = config
-        .package_mask
-        .iter()
-        .any(|m| matches_config_entry(m, &candidate_str, category, package))
-        && !config
-            .package_unmask
-            .iter()
-            .any(|u| matches_config_entry(u, &candidate_str, category, package));
+    let masked = any_config_entry_matches(&config.package_mask, &candidate_str, category, package)
+        && !any_config_entry_matches(&config.package_unmask, &candidate_str, category, package);
     if !masked {
         return false;
     }
@@ -3539,14 +3685,8 @@ fn license_masked_only(
         candidate.version, candidate.slot, candidate.sub_slot, candidate.repo_name
     );
 
-    let masked = config
-        .package_mask
-        .iter()
-        .any(|m| matches_config_entry(m, &candidate_str, category, package))
-        && !config
-            .package_unmask
-            .iter()
-            .any(|u| matches_config_entry(u, &candidate_str, category, package));
+    let masked = any_config_entry_matches(&config.package_mask, &candidate_str, category, package)
+        && !any_config_entry_matches(&config.package_unmask, &candidate_str, category, package);
     if masked {
         return false;
     }
@@ -4121,16 +4261,15 @@ fn visibility_provenance(
         candidate.version, candidate.slot, candidate.sub_slot, candidate.repo_name
     );
 
-    let mask_entry = config
-        .package_mask
-        .iter()
-        .find(|m| matches_config_entry(m, &candidate_str, category, package))
-        .cloned();
+    let mask_entry =
+        config_entries_matching(&config.package_mask, &candidate_str, category, package)
+            .into_iter()
+            .next()
+            .cloned();
     let unmask_entry = if mask_entry.is_some() {
-        config
-            .package_unmask
-            .iter()
-            .find(|u| matches_config_entry(u, &candidate_str, category, package))
+        config_entries_matching(&config.package_unmask, &candidate_str, category, package)
+            .into_iter()
+            .next()
             .cloned()
     } else {
         None
@@ -4185,10 +4324,8 @@ fn keyword_provenance(
     ) {
         return None;
     }
-    let mut matching: Vec<&(String, Vec<String>)> = package_accept_keywords
-        .iter()
-        .filter(|(entry, _)| matches_config_entry(entry, candidate_str, category, package))
-        .collect();
+    let mut matching =
+        config_entries_matching(package_accept_keywords, candidate_str, category, package);
     matching.sort_by_key(|(entry, _)| atom_specificity(entry));
     let mut seed = accept_keywords.clone();
     for (entry, tokens) in matching {
@@ -25168,6 +25305,44 @@ mod tests {
         assert!(atom_specificity("=dev-libs/bar-1.0") > atom_specificity("dev-libs/bar:0"));
         assert!(atom_specificity("dev-libs/bar:0") > atom_specificity("dev-libs/bar"));
         assert!(atom_specificity("dev-libs/bar") > atom_specificity("*/*"));
+    }
+
+    #[test]
+    fn config_entries_matching_equals_a_flat_scan_and_keeps_file_order() {
+        // The cp-bucketed lookup (`CpBucketIndex`, portuale's
+        // `ExtendedAtomDict`) must return exactly the same entries, in the
+        // same file order, as the naive `iter().filter(matches_config_entry)`
+        // it replaced -- across an exact cp, a `cat/*`, a `*/*`, an
+        // unrelated cp, a versioned constraint that fails, and a repo
+        // constraint.
+        let entries: Vec<(String, Vec<String>)> = [
+            ("*/*", "a"),
+            ("dev-libs/bar", "b"),
+            ("dev-libs/*", "c"),
+            ("app-misc/other", "d"),
+            (">=dev-libs/bar-2.0", "e"),
+            ("dev-libs/bar::other", "f"),
+            ("=dev-libs/bar-1.0", "g"),
+        ]
+        .iter()
+        .map(|(a, t)| (a.to_string(), vec![t.to_string()]))
+        .collect();
+
+        for cand in [
+            "dev-libs/bar-1.0:0/0::gentoo",
+            "dev-libs/bar-3.0:0/0::gentoo",
+            "dev-libs/baz-1.0:0/0::gentoo",
+            "app-misc/other-1.0:0/0::gentoo",
+        ] {
+            let parsed = portage_dep::parse_candidate(cand).unwrap();
+            let (cat, pkg) = (parsed.category.as_str(), parsed.package.as_str());
+            let flat: Vec<&(String, Vec<String>)> = entries
+                .iter()
+                .filter(|(e, _)| matches_config_entry(e, cand, cat, pkg))
+                .collect();
+            let bucketed = config_entries_matching(&entries, cand, cat, pkg);
+            assert_eq!(flat, bucketed, "candidate {cand}");
+        }
     }
 
     fn graph_entry(category: &str, package: &str, version: &str) -> GraphEntry {
