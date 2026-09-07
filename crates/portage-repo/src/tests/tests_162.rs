@@ -386,6 +386,51 @@ fn qatom_162(atom: &str) -> QueueItem {
         from_disjunction: false,
     }
 }
+
+// ---- `disjunction_preference` (Portage `dep_zapdeps` choice bins). ----
+/// Arguments of [`disj_162`].
+struct Disj162Args<'a> {
+    repos: &'a [RepoConfig],
+    config: &'a portage_profile::Config,
+    root: &'a Path,
+    entries: &'a [GraphEntry],
+    self_cp: &'a RootCp,
+    atoms: &'a [&'a str],
+    queued: &'a [QueueItem],
+}
+
+/// Arguments of [`disj_162_circ`].
+struct Disj162CircArgs<'a> {
+    repos: &'a [RepoConfig],
+    config: &'a portage_profile::Config,
+    root: &'a Path,
+    entries: &'a [GraphEntry],
+    self_cp: &'a RootCp,
+    atoms: &'a [&'a str],
+    queued: &'a [QueueItem],
+    circular_dependency: &'a HashMap<RootCp, Vec<CircularDepChild>>,
+}
+
+// ---- S5b: `disjunction_preference`'s `circular_atom` demotion. ---- (Portage `dep_zapdeps`) /// Arguments of [`disj_circ_162`].
+struct DisjCirc162Args<'a> {
+    repos: &'a [RepoConfig],
+    config: &'a portage_profile::Config,
+    root: &'a Path,
+    entries: &'a [GraphEntry],
+    self_cp: &'a RootCp,
+    atoms: &'a [&'a str],
+    queued: &'a [QueueItem],
+    circular: &'a HashMap<RootCp, Vec<CircularDepChild>>,
+}
+/// Arguments of [`promote_162`].
+struct Promote162Args<'a> {
+    repos: &'a [RepoConfig],
+    config: &'a portage_profile::Config,
+    root: &'a Path,
+    entries: &'a [GraphEntry],
+    alts: &'a [&'a [&'a str]],
+    queued: &'a [QueueItem],
+}
 /// Arguments of [`demote_162`].
 struct Demote162Args<'a> {
     repos: &'a [RepoConfig],

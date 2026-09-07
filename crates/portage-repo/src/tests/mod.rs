@@ -797,6 +797,19 @@ fn souprov_conflict_161() -> SlotConflict {
     }
 }
 
+/// Arguments of [`ds_input_161`].
+struct DsInput161Args<'a> {
+    conflicts: &'a [SlotConflict],
+    entries: &'a [GraphEntry],
+    top_level: &'a HashSet<(String, String)>,
+    excluded: &'a [String],
+    selective: bool,
+    replace_cps: &'a BTreeSet<(String, String)>,
+    root: &'a Path,
+    repos: &'a [RepoConfig],
+    config: &'a portage_profile::Config,
+}
+
 /// Arguments of [`run_161`].
 struct Run161Args<'a> {
     dir: &'a Path,

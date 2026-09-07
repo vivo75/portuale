@@ -229,6 +229,14 @@ impl MergeUnit {
             progress: MergeProgress::single(),
         }
     }
+
+    /// A binary-unpack unit for `cpv` into `root` (same defaults).
+    pub fn binary(cpv: &str, root: &Path) -> Self {
+        Self {
+            kind: MergeKind::Binary,
+            ..Self::source(cpv, root)
+        }
+    }
 }
 
 /// The execution context a merge engine runs under: Portage
@@ -268,6 +276,48 @@ pub trait MergeEngine {
     /// Execute `unit` under `ctx`. Safe to call concurrently up to
     /// `ctx.jobs` for the *build* half; the vdb-write half is serialized.
     fn execute(&self, unit: &MergeUnit, ctx: &MergeContext) -> MergeOutcome;
+}
+
+/// The source-build `MergeEngine`: Portage `_emerge/MergeListItem.py`'s
+/// `"ebuild"` arm. The phase chain lives in the `portuale` binary crate;
+/// this marker pins the kind dispatch (own kind `Skipped`, other kind
+/// `Failed`).
+pub struct SourceMergeEngine;
+impl MergeEngine for SourceMergeEngine {
+    fn execute(&self, unit: &MergeUnit, _ctx: &MergeContext) -> MergeOutcome {
+        if unit.kind == MergeKind::Source {
+            MergeOutcome::Skipped(
+                "SourceMergeEngine marker: source merges execute in portuale::emerge_build"
+                    .to_string(),
+            )
+        } else {
+            MergeOutcome::Failed(format!(
+                "SourceMergeEngine cannot merge binary unit {}",
+                unit.cpv
+            ))
+        }
+    }
+}
+
+/// The binary-unpack `MergeEngine`: Portage `_emerge/MergeListItem.py`'s
+/// `"binary"` arm. Mirrors [`SourceMergeEngine`] for the other kind: a
+/// [`MergeKind::Binary`] unit is declined as [`MergeOutcome::Skipped`],
+/// a [`MergeKind::Source`] unit refused as [`MergeOutcome::Failed`].
+pub struct BinaryMergeEngine;
+impl MergeEngine for BinaryMergeEngine {
+    fn execute(&self, unit: &MergeUnit, _ctx: &MergeContext) -> MergeOutcome {
+        if unit.kind == MergeKind::Binary {
+            MergeOutcome::Skipped(
+                "BinaryMergeEngine marker: binary merges execute in portuale::emerge_getbinpkg"
+                    .to_string(),
+            )
+        } else {
+            MergeOutcome::Failed(format!(
+                "BinaryMergeEngine cannot merge source unit {}",
+                unit.cpv
+            ))
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -406,6 +456,60 @@ impl PackagesDb for VdbReader<'_> {
     }
 }
 
+/// The in-memory `PackagesDb`: the "second implementation per slot",
+/// holding a recorded snapshot instead of reading `<root>/var/db/pkg`.
+/// Portage: `_emerge/FakeVartree.py::FakeVartree` (see notes for the two
+/// deliberate narrowings).
+#[derive(Debug, Clone, Default)]
+pub struct MemoryDb {
+    /// The single `root` this snapshot stands in for (owned, so a
+    /// snapshot value is portable as one unit).
+    root: PathBuf,
+    /// `(category, package) → installed versions`, recorded order.
+    versions: std::collections::HashMap<(String, String), Vec<String>>,
+    /// `(category, package, version) → CONTENTS-files list`.
+    contents: std::collections::HashMap<(String, String, String), Vec<String>>,
+    /// `(category, package, version) → direct dependents` (CPVs).
+    dependents: std::collections::HashMap<(String, String, String), Vec<String>>,
+}
+
+impl PackagesDb for MemoryDb {
+    fn installed_versions(&self, category: &str, package: &str) -> Vec<String> {
+        self.versions
+            .get(&(category.to_string(), package.to_string()))
+            .cloned()
+            .unwrap_or_default()
+    }
+    fn contents_files(&self, category: &str, package: &str, version: &str) -> Vec<String> {
+        self.contents
+            .get(&(
+                category.to_string(),
+                package.to_string(),
+                version.to_string(),
+            ))
+            .cloned()
+            .unwrap_or_default()
+    }
+    fn reverse_dependents(
+        &self,
+        consumer_category: &str,
+        consumer_package: &str,
+        consumer_version: &str,
+    ) -> Vec<String> {
+        self.dependents
+            .get(&(
+                consumer_category.to_string(),
+                consumer_package.to_string(),
+                consumer_version.to_string(),
+            ))
+            .cloned()
+            .unwrap_or_default()
+    }
+    fn root(&self) -> &Path {
+        &self.root
+    }
+}
+
 /// The filesystem-backed `RepoCache`: the flat md5-cache directory
 /// (Portage `flat_hash.py`'s layout), with an ebuild-tree fallback when
 /// the repo has no usable cache (see notes).
@@ -481,6 +585,46 @@ impl RepoCache for Md5Cache<'_> {
     }
     fn repo(&self) -> &str {
         self.repo_name
+    }
+}
+
+/// The in-memory `RepoCache` backend: the "second implementation per
+/// slot", holding `Md5Cache`'s flat aux dicts in an owned map.
+/// Portage: `portage/cache/volatile.py::database` (`deepcopy` on read and
+/// write: `insert` clones in, [`RepoCache::metadata`] clones out).
+#[derive(Debug, Clone, Default)]
+pub struct VolatileCache {
+    /// `(category, pf) → aux dict`, the `volatile._data` dict.
+    entries: std::collections::HashMap<(String, String), std::collections::HashMap<String, String>>,
+    /// The repo this cache stands in for (`::reponame`), for provenance.
+    repo_name: String,
+}
+
+impl RepoCache for VolatileCache {
+    fn metadata(
+        &self,
+        category: &str,
+        pf: &str,
+    ) -> Result<std::collections::HashMap<String, String>, String> {
+        // A copy out, never a borrow of the store -- Portage
+        // `volatile.__getitem__`'s `deepcopy`.
+        self.entries
+            .get(&(category.to_string(), pf.to_string()))
+            .cloned()
+            .ok_or_else(|| format!("volatile cache has no entry for {category}/{pf}"))
+    }
+    fn category(&self, category: &str) -> Vec<String> {
+        let mut pfs: Vec<String> = self
+            .entries
+            .keys()
+            .filter(|(c, _)| c == category)
+            .map(|(_, pf)| pf.clone())
+            .collect();
+        pfs.sort();
+        pfs
+    }
+    fn repo(&self) -> &str {
+        &self.repo_name
     }
 }
 
@@ -679,6 +823,78 @@ impl SchedulerPolicy for UnlimitedPolicy {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Director
+// ---------------------------------------------------------------------------
+
+/// The `mrg` **director**: one solver, one installed-db, one repo cache,
+/// one fetcher, one merge engine, one binary-package index, one news
+/// selector, one scheduler policy -- held together, never implemented here.
+/// Portage: `actions.py::action_build` (resolve, then hand the merge list
+/// to the scheduler). V1 narrowness (see notes): the `-jN` DAG walk stays
+/// in `emerge_build.rs`; the `mrg` applet still calls `pretend::run` directly.
+pub struct Director<S, D, C, F, M, B, N, P> {
+    /// Dependency-resolution strategy (the only slot used by `plan()`).
+    pub solver: S,
+    /// Already-installed packages (`/var/db/pkg` read side).
+    pub packages_db: D,
+    /// Repository metadata cache backend.
+    pub repo_cache: C,
+    /// `SRC_URI` materialization.
+    pub fetcher: F,
+    /// Copy/install execution.
+    pub merge_engine: M,
+    /// Binary-package candidate store (`$PKGDIR` / `PORTAGE_BINHOST`).
+    pub binpkg_index: B,
+    /// News-item (and future GLSA) relevance selector.
+    pub news_selector: N,
+    /// `-jN` build dispatch policy.
+    pub scheduler_policy: P,
+}
+
+impl<S, D, C, F, M, B, N, P> Director<S, D, C, F, M, B, N, P>
+where
+    S: Resolver,
+{
+    /// Resolve `req` through the director's solver. Every later stage
+    /// (fetch, merge) consumes that plan; none of them re-resolves.
+    pub fn plan(
+        &self,
+        req: &portage_repo::ResolveRequest,
+    ) -> Result<portage_repo::GraphResult, portage_repo::Error> {
+        self.solver.resolve(req)
+    }
+}
+
+impl<S, D, C, F, M, B, N, P> Director<S, D, C, F, M, B, N, P>
+where
+    C: RepoCache,
+{
+    /// One package's aux dict through the director's repo cache.
+    pub fn repo_metadata(
+        &self,
+        category: &str,
+        pf: &str,
+    ) -> Result<std::collections::HashMap<String, String>, String> {
+        self.repo_cache.metadata(category, pf)
+    }
+}
+
+impl<S, D, C, F, M, B, N, P> Director<S, D, C, F, M, B, N, P>
+where
+    B: BinpkgIndex,
+{
+    /// One binary candidate's aux record through the director's index.
+    pub fn binpkg_metadata(
+        &self,
+        category: &str,
+        package: &str,
+        version: &str,
+    ) -> Option<std::collections::HashMap<String, String>> {
+        self.binpkg_index.metadata(category, package, version)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -715,5 +931,159 @@ mod tests {
         for (name, content) in files {
             std::fs::write(dir.join(name), content).unwrap();
         }
+    }
+
+    /// `Resolver::resolve` returns portage-repo's plan type, so an
+    /// alternate solver must speak Portage-facing data.
+    #[test]
+    fn resolver_speaks_graph_result() {
+        let _plan: &dyn Fn(&ResolveRequest) -> Result<GraphResult, portage_repo::Error> =
+            &|_req| Err(portage_repo::Error::Detail("inert pin".into()));
+    }
+
+    /// `PackagesDb` is three read queries plus root; a fake proves the
+    /// director never reaches past them.
+    #[test]
+    fn packages_db_is_three_queries_plus_root() {
+        let db = FakeDb {
+            root: Path::new("/root"),
+        };
+        assert_eq!(db.installed_versions("dev-libs", "example"), vec!["1.0"]);
+        assert_eq!(
+            db.contents_files("dev-libs", "example", "1.0"),
+            vec!["usr/lib/libx.a"]
+        );
+        assert_eq!(
+            db.reverse_dependents("dev-libs", "example", "1.0"),
+            vec!["app/other-1.0"]
+        );
+        assert_eq!(db.root().to_str(), Some("/root"));
+    }
+
+    struct FakeDb<'a> {
+        root: &'a Path,
+    }
+    impl<'a> PackagesDb for FakeDb<'a> {
+        fn installed_versions(&self, _c: &str, _p: &str) -> Vec<String> {
+            vec!["1.0".to_string()]
+        }
+        fn contents_files(&self, _c: &str, _p: &str, _v: &str) -> Vec<String> {
+            vec!["usr/lib/libx.a".to_string()]
+        }
+        fn reverse_dependents(&self, _c: &str, _p: &str, _v: &str) -> Vec<String> {
+            vec!["app/other-1.0".to_string()]
+        }
+        fn root(&self) -> &Path {
+            self.root
+        }
+    }
+
+    /// `MergeEngine::execute` takes one [`MergeUnit`] under a
+    /// [`MergeContext`]; a fake engine pins the seam.
+    #[test]
+    fn merge_engine_executes_one_unit_to_one_outcome() {
+        struct FakeEngine;
+        impl MergeEngine for FakeEngine {
+            fn execute(&self, unit: &MergeUnit, _ctx: &MergeContext) -> MergeOutcome {
+                if unit.cpv == "dev-libs/broken-1.0" {
+                    MergeOutcome::Failed("compile failed".to_string())
+                } else {
+                    MergeOutcome::Merged
+                }
+            }
+        }
+        let ctx = MergeContext {
+            root: PathBuf::from("/root"),
+            builddir: PathBuf::from("/var/tmp/portage"),
+            jobs: 1,
+            keep_going: false,
+        };
+        let engine = FakeEngine;
+        let unit = MergeUnit {
+            cpv: "dev-libs/example-1.0".to_string(),
+            kind: MergeKind::Source,
+            repo: Some("main".to_string()),
+            root: PathBuf::from("/root"),
+            replaces_same_slot: Some("0".to_string()),
+            remote_binary: false,
+            build_id: None,
+            slot: Some("0".to_string()),
+            sub_slot: None,
+            use_flags: vec![("flag".to_string(), true)],
+            progress: MergeProgress::single(),
+        };
+        assert_eq!(unit.kind, MergeKind::Source);
+        assert_eq!(engine.execute(&unit, &ctx), MergeOutcome::Merged);
+        let broken = MergeUnit {
+            cpv: "dev-libs/broken-1.0".to_string(),
+            kind: MergeKind::Binary,
+            repo: None,
+            root: PathBuf::from("/root"),
+            replaces_same_slot: None,
+            remote_binary: true,
+            build_id: Some("1".to_string()),
+            slot: None,
+            sub_slot: None,
+            use_flags: Vec::new(),
+            progress: MergeProgress::single(),
+        };
+        assert!(matches!(
+            engine.execute(&broken, &ctx),
+            MergeOutcome::Failed(_)
+        ));
+    }
+
+    /// The two engines split on the unit kind, exactly Portage
+    /// `MergeListItem._start`'s dispatch (own kind `Skipped`, other `Failed`).
+    #[test]
+    fn merge_engine_source_and_binary_split_by_unit_kind() {
+        let ctx = MergeContext {
+            root: PathBuf::from("/root"),
+            builddir: PathBuf::from("/var/tmp/portage"),
+            jobs: 1,
+            keep_going: false,
+        };
+        let source_unit = MergeUnit {
+            cpv: "dev-libs/example-1.0".to_string(),
+            kind: MergeKind::Source,
+            repo: Some("main".to_string()),
+            root: PathBuf::from("/root"),
+            replaces_same_slot: None,
+            remote_binary: false,
+            build_id: None,
+            slot: None,
+            sub_slot: None,
+            use_flags: Vec::new(),
+            progress: MergeProgress::single(),
+        };
+        let binary_unit = MergeUnit {
+            cpv: "dev-libs/example-1.0".to_string(),
+            kind: MergeKind::Binary,
+            repo: Some("main".to_string()),
+            root: PathBuf::from("/root"),
+            replaces_same_slot: None,
+            remote_binary: false,
+            build_id: None,
+            slot: None,
+            sub_slot: None,
+            use_flags: Vec::new(),
+            progress: MergeProgress::single(),
+        };
+        assert!(matches!(
+            SourceMergeEngine.execute(&source_unit, &ctx),
+            MergeOutcome::Skipped(_)
+        ));
+        assert!(matches!(
+            SourceMergeEngine.execute(&binary_unit, &ctx),
+            MergeOutcome::Failed(_)
+        ));
+        assert!(matches!(
+            BinaryMergeEngine.execute(&binary_unit, &ctx),
+            MergeOutcome::Skipped(_)
+        ));
+        assert!(matches!(
+            BinaryMergeEngine.execute(&source_unit, &ctx),
+            MergeOutcome::Failed(_)
+        ));
     }
 }

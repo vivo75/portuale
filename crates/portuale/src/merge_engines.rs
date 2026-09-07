@@ -255,4 +255,53 @@ mod tests {
             deps: Vec::new(),
         }
     }
+
+    /// The adapters refuse the other kind, and report an unparseable unit
+    /// as failed rather than panicking.
+    #[test]
+    fn engines_refuse_the_other_kind_and_a_bad_cpv() {
+        let ctx = MergeContext {
+            root: PathBuf::from("/root"),
+            builddir: PathBuf::from("/var/tmp/portage"),
+            jobs: 1,
+            keep_going: false,
+        };
+        let repos: Vec<RepoConfig> = Vec::new();
+        let options = crate::ebuild_merge::MergeOptions::default();
+        let display = crate::emerge_build::StatusDisplay::for_tests();
+        let source = SourceEngine {
+            repos: &repos,
+            root: Path::new("/root"),
+            portage_tmpdir: Path::new("/var/tmp/portage"),
+            options: &options,
+            buildpkg: None,
+            buildpkg_exclude: &[],
+            display: &display,
+        };
+        let binary_unit = MergeUnit::binary("dev-libs/example-1.0", Path::new("/root"));
+        assert!(matches!(
+            source.execute(&binary_unit, &ctx),
+            MergeOutcome::Failed(_)
+        ));
+        let bad = MergeUnit::source("not-a-cpv", Path::new("/root"));
+        assert!(matches!(
+            source.execute(&bad, &ctx),
+            MergeOutcome::Failed(_)
+        ));
+
+        let config = portage_profile::Config::default();
+        let binary = BinaryEngine {
+            config: &config,
+            root: Path::new("/root"),
+            pkgdir: Path::new("/var/cache/binpkgs"),
+            portage_tmpdir: Path::new("/var/tmp/portage"),
+            options: &options,
+            display: &display,
+        };
+        let source_unit = MergeUnit::source("dev-libs/example-1.0", Path::new("/root"));
+        assert!(matches!(
+            binary.execute(&source_unit, &ctx),
+            MergeOutcome::Failed(_)
+        ));
+    }
 }
