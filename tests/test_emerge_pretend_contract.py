@@ -26,6 +26,7 @@ stdout, stderr, and exit codes all match exactly.
 
 import json
 import os
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -1882,6 +1883,36 @@ def _run(cmd: list[str], args: list[str], env: dict[str, str]) -> subprocess.Com
     return subprocess.run(
         [*cmd, *args], capture_output=True, text=True, env=env, check=False
     )
+
+
+# `emerge --info`'s host-state header (`Portage <ver> (…)`, `System
+# uname:`, `KiB Mem/Swap:`, repo `Timestamp`/`Head commit`, the
+# `sh:`/`coreutils:`/`ld:` probes and the `info_pkgs` table) is host
+# state a fixture cannot reproduce -- free-memory KiB even changes
+# between the Rust and Python process spawns. Both sides run the *same*
+# probes on the *same* host, so `_normalize_info` blanks every volatile
+# value to `XXX` before a Rust == Python comparison. What stays pinned is
+# the line structure, the labels, and the deterministic config block.
+_INFO_VOLATILE = [
+    (re.compile(r"^Portage .*", re.M), "Portage XXX"),
+    (re.compile(r"^System uname: .*", re.M), "System uname: XXX"),
+    (re.compile(r"^KiB (Mem|Swap): .*", re.M), r"KiB \1: XXX"),
+    (
+        re.compile(r"^(Timestamp|Head commit) of repository (\S+):.*", re.M),
+        r"\1 of repository \2: XXX",
+    ),
+    (re.compile(r"^(sh|coreutils|ld): .*", re.M), r"\1: XXX"),
+    (
+        re.compile(r"^([\w.+-]+/[\w.+-]+:)[ ]+\S[^\n]*::[^\n]*", re.M),
+        r"\1 XXX",
+    ),
+]
+
+
+def _normalize_info(text: str) -> str:
+    for rx, sub in _INFO_VOLATILE:
+        text = rx.sub(sub, text)
+    return text
 
 
 _SLOT_COLLISION_PREAMBLE = (
@@ -5146,7 +5177,12 @@ def test_env_config_vars_override_the_profile_and_make_conf(
         env = {**fixture_env, **extra_env}
         rust = _run([str(emerge_binary)], args, env)
         py = _run(emerge_pretend_python, args, env)
-        assert rust.stdout == py.stdout, (args, extra_env)
+        # --info's host-state header has genuinely-volatile values
+        # (free-memory KiB changes between the two spawns) -> normalize.
+        assert _normalize_info(rust.stdout) == _normalize_info(py.stdout), (
+            args,
+            extra_env,
+        )
         assert rust.returncode == py.returncode
         return rust
 
@@ -12273,17 +12309,21 @@ def test_package_moves_n_disables_profiles_updates(emerge_binary, emerge_pretend
 def test_info_prints_the_deterministic_config_block(
     emerge_binary, emerge_pretend_python, fixture_env
 ):
-    """emerge --info (real action_info), narrowed to its deterministic
-    config/repository block: the `Repositories:` list, `Binary
-    Repositories:`, `Installed sets:`, the sorted VAR="value" dump, the
-    `Unset:` line. The host-state half of real --info (Portage version
-    header, uname/mem, tool version probes, info_pkgs, timestamps) is a
-    documented cut. Rust == Python."""
+    """emerge --info (real action_info): the host-state header (Portage
+    version line, `System uname:`, `KiB Mem/Swap:`, repo `Timestamp`/
+    `Head commit`, `sh:`/`coreutils:`/`ld:` probes, `info_pkgs` table),
+    then `Repositories:`, `Binary Repositories:`, `Installed sets:`, the
+    sorted VAR="value" dump and the `Unset:` line. Rust == Python once
+    the volatile header values are XXX-normalized (`_normalize_info`)."""
     rust = _run([str(emerge_binary)], ["--info"], fixture_env)
     py = _run(emerge_pretend_python, ["--info"], fixture_env)
     assert rust.returncode == 0
-    assert rust.stdout == py.stdout
-    assert rust.stdout.startswith("Repositories:\n")
+    assert _normalize_info(rust.stdout) == _normalize_info(py.stdout)
+    # Header first, then the config block.
+    assert rust.stdout.startswith("Portage ")
+    assert "\n" + "=" * 65 + "\n" in rust.stdout
+    assert "\nSystem uname: " in rust.stdout
+    assert "\nRepositories:\n" in rust.stdout
     assert "\ntestrepo\n    location: " in rust.stdout
     assert "\nBinary Repositories:\n" in rust.stdout
     assert '\nACCEPT_KEYWORDS="amd64"\n' in rust.stdout
@@ -12368,7 +12408,15 @@ def test_info_stacks_make_globals_profile_env_and_info_vars(
     rust = _run([str(emerge_binary)], ["--info"], env)
     py = _run(emerge_pretend_python, ["--info"], env)
     assert rust.returncode == 0
-    assert rust.stdout == py.stdout
+    assert _normalize_info(rust.stdout) == _normalize_info(py.stdout)
+    # Host-state header structure (values are host-specific -> normalized):
+    lines = rust.stdout.splitlines()
+    assert lines[0].startswith("Portage ") and lines[0].endswith(")")
+    assert lines[1] == "=" * 65
+    assert lines[2].startswith("System uname: ")
+    assert any(ln.startswith("KiB Mem:") for ln in lines)
+    assert any(ln.startswith("KiB Swap:") for ln in lines)
+    assert lines.index("Repositories:") > 2
     # make.globals base + profile + make.conf, "-tok" resolved, sorted:
     # merge-sync (globals) stays until profile -merge-sync; userfetch
     # added by globals+profile, removed by make.conf; -binpkg-multi-
@@ -12444,7 +12492,7 @@ def test_info_atom_prints_package_settings_for_a_pkg_info_package(
     rust = _run([str(emerge_binary)], ["--info", "dev-libs/pkginfopkg"], fixture_env)
     py = _run(emerge_pretend_python, ["--info", "dev-libs/pkginfopkg"], fixture_env)
     assert rust.returncode == 0
-    assert rust.stdout == py.stdout
+    assert _normalize_info(rust.stdout) == _normalize_info(py.stdout)
     assert rust.stdout.endswith(
         "=================================================================\n"
         "                        Package Settings\n"
@@ -12464,9 +12512,9 @@ def test_info_atom_prints_package_settings_for_a_pkg_info_package(
 
     plain = _run([str(emerge_binary)], ["--info", "dev-libs/newpkg"], fixture_env)
     assert "Package Settings" not in plain.stdout
-    assert plain.stdout == _run(
-        emerge_pretend_python, ["--info", "dev-libs/newpkg"], fixture_env
-    ).stdout
+    assert _normalize_info(plain.stdout) == _normalize_info(
+        _run(emerge_pretend_python, ["--info", "dev-libs/newpkg"], fixture_env).stdout
+    )
 
 
 def test_info_atom_wraps_a_forced_flag_and_colours_the_use_line(
@@ -12486,7 +12534,7 @@ def test_info_atom_wraps_a_forced_flag_and_colours_the_use_line(
         emerge_pretend_python, ["--info", "dev-libs/infoforcedpkg"], fixture_env
     )
     assert plain.returncode == 0
-    assert plain.stdout == py_plain.stdout
+    assert _normalize_info(plain.stdout) == _normalize_info(py_plain.stdout)
     assert 'USE="(globalforceflag) -otherflag"' in plain.stdout
 
     colored = _run(
@@ -12498,7 +12546,7 @@ def test_info_atom_wraps_a_forced_flag_and_colours_the_use_line(
         fixture_env,
     )
     assert colored.returncode == 0
-    assert colored.stdout == py_colored.stdout
+    assert _normalize_info(colored.stdout) == _normalize_info(py_colored.stdout)
     assert 'USE="(\x1b[31;01mglobalforceflag\x1b[39;49;00m) \x1b[34;01m-otherflag\x1b[39;49;00m"' in colored.stdout
 
 
@@ -12523,7 +12571,7 @@ def test_info_atom_prints_the_installed_package_block(
     rust = _run([str(emerge_binary)], ["--info", "dev-libs/infoinstpkg"], fixture_env)
     py = _run(emerge_pretend_python, ["--info", "dev-libs/infoinstpkg"], fixture_env)
     assert rust.returncode == 0
-    assert rust.stdout == py.stdout
+    assert _normalize_info(rust.stdout) == _normalize_info(py.stdout)
     assert rust.stdout.endswith(
         "dev-libs/infoinstpkg-1.0::testrepo was built with the following:\n"
         'USE="alpha -beta"\n'
@@ -12548,7 +12596,7 @@ def test_info_dash_defined_phases_does_not_attempt_pkg_info(
     rust = _run([str(emerge_binary)], ["--info", "dev-libs/infodashphases"], fixture_env)
     py = _run(emerge_pretend_python, ["--info", "dev-libs/infodashphases"], fixture_env)
     assert rust.returncode == 0
-    assert rust.stdout == py.stdout
+    assert _normalize_info(rust.stdout) == _normalize_info(py.stdout)
     assert rust.stdout.endswith(
         "dev-libs/infodashphases-1.0::testrepo was built with the following:\n"
         'USE="gamma"\n'
@@ -12578,7 +12626,7 @@ def test_info_usepkg_atom_selects_a_non_installed_binary_and_attempts_pkg_info(
         emerge_pretend_python, ["--info", "--usepkg", "dev-libs/binaryinfopkg"], fixture_env
     )
     assert rust.returncode == 0
-    assert rust.stdout == py.stdout
+    assert _normalize_info(rust.stdout) == _normalize_info(py.stdout)
     assert rust.stdout.endswith(
         "dev-libs/binaryinfopkg-1.0::testrepo (non-installed binary) was built with the following:\n"
         'USE="alpha -beta"\n'

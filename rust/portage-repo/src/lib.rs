@@ -4490,6 +4490,153 @@ pub fn installed_refs(root: &Path, category: &str, package: &str) -> Vec<Install
         .collect()
 }
 
+/// One row of `emerge --info`'s `info_pkgs` version table (real
+/// `action_info`'s second `myvars` loop): a resolved `cat/pkg` and its
+/// installed versions, each already rendered `<ver>::<repo>` with the
+/// ` (virtual/foo)` suffix appended when the row was reached by
+/// expanding a `virtual/*` atom.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InfoPkgRow {
+    pub cp: String,
+    pub versions: Vec<String>,
+}
+
+/// One level of real `expand_new_virt` (`portage.dbapi._expand_new_virt`):
+/// a non-`virtual/*` `(cat, pkg)` yields itself (with no provide-suffix);
+/// a `virtual/*` yields the `(cat, pkg)` of every atom in its highest
+/// installed version's vdb `RDEPEND`, flattened against that version's
+/// own installed `USE`, that is itself installed -- each tagged with the
+/// originating `virtual/foo` string. A `virtual/*` that isn't installed,
+/// or whose `RDEPEND` names nothing installed, yields itself unexpanded.
+/// Real recurses into a second virtual reached this way; portuale does
+/// not (real's standard `info` list only ever hits `virtual/os-headers`,
+/// which resolves in one hop).
+fn expand_new_virt(
+    root: &Path,
+    category: &str,
+    package: &str,
+) -> Vec<(String, String, Option<String>)> {
+    if category != "virtual" {
+        return vec![(category.to_string(), package.to_string(), None)];
+    }
+    let orig = format!("{category}/{package}");
+    let Some(version) = installed_candidates(root, category, package)
+        .into_iter()
+        .map(|(v, _, _)| v)
+        .max_by(|a, b| vercmp_ordering(a, b))
+    else {
+        return vec![(category.to_string(), package.to_string(), None)];
+    };
+    let use_flags = read_vdb_flag_set(root, category, package, &version, "USE");
+    let rdepend = read_vdb_string(root, category, package, &version, "RDEPEND");
+    let mut out: Vec<(String, String, Option<String>)> = Vec::new();
+    if let Some(atoms) = flat_dep_atoms(&rdepend, &use_flags) {
+        let mut sorted: Vec<String> = atoms.into_iter().collect();
+        sorted.sort();
+        for atom_str in sorted {
+            if let Some(atom) = portage_dep::parse_atom(&atom_str)
+                && atom.category != "virtual"
+                && !installed_candidates(root, &atom.category, &atom.package).is_empty()
+            {
+                out.push((atom.category, atom.package, Some(orig.clone())));
+            }
+        }
+    }
+    if out.is_empty() {
+        vec![(category.to_string(), package.to_string(), None)]
+    } else {
+        out
+    }
+}
+
+/// The `info_pkgs` version table `emerge --info` prints (real
+/// `action_info`, `actions.py:2109-2165`): the six hardcoded atoms plus
+/// `<main_repo>/profiles/info_pkgs`, each `expand_new_virt`'d, then one
+/// row per resolved `cat/pkg` that has an installed version -- versions
+/// `vercmp`-sorted, `<ver>::<repo>` (real `_unknown_repo` ->
+/// `<unknown repository>`), with ` (virtual/foo)` on a virtual-provided
+/// row. Rows are returned `cat/pkg`-sorted; the caller pads `cp` to the
+/// widest one.
+pub fn info_pkgs_table(root: &Path, main_repo_location: &Path) -> Vec<InfoPkgRow> {
+    let mut atoms: Vec<String> = [
+        "dev-build/autoconf",
+        "dev-build/automake",
+        "virtual/os-headers",
+        "sys-devel/binutils",
+        "dev-build/libtool",
+        "dev-lang/python",
+    ]
+    .map(String::from)
+    .to_vec();
+    let extra =
+        fs::read_to_string(main_repo_location.join("profiles/info_pkgs")).unwrap_or_default();
+    for line in extra.lines() {
+        let l = line.trim();
+        if !l.is_empty() && !l.starts_with('#') {
+            atoms.push(l.to_string());
+        }
+    }
+
+    // (orig cp string, resolved cat, resolved pkg, provide_suffix)
+    let mut resolved: Vec<(String, String, String, Option<String>)> = Vec::new();
+    for a in &atoms {
+        // Strip an operator / version / slot / use-dep down to `cat/pkg`
+        // (real builds an `Atom`, then only uses `atom.cp` + `vardb.match`).
+        let Some(atom) = portage_dep::parse_atom(a) else {
+            continue;
+        };
+        let orig_cp = format!("{}/{}", atom.category, atom.package);
+        for (cat, pkg, provide) in expand_new_virt(root, &atom.category, &atom.package) {
+            resolved.push((orig_cp.clone(), cat, pkg, provide));
+        }
+    }
+    resolved.sort();
+    resolved.dedup();
+
+    use std::collections::BTreeMap;
+    // matched_cp -> ver -> "ver::repo (suffix)"
+    let mut cp_map: BTreeMap<String, BTreeMap<String, String>> = BTreeMap::new();
+    for (orig_cp, cat, pkg, _provide) in &resolved {
+        let matched_cp = format!("{cat}/{pkg}");
+        for r in installed_refs(root, cat, pkg) {
+            let repo = if r.repo == "__unknown__" {
+                "<unknown repository>".to_string()
+            } else {
+                r.repo.clone()
+            };
+            let provide_suffix = if &matched_cp != orig_cp {
+                format!(" ({orig_cp})")
+            } else {
+                String::new()
+            };
+            let entry = cp_map.entry(matched_cp.clone()).or_default();
+            // Prefer a duplicate match that carries provider info (real
+            // `if prev_match.provide_suffix: continue`).
+            if let Some(existing) = entry.get(&r.version)
+                && existing.contains(" (")
+            {
+                continue;
+            }
+            entry.insert(
+                r.version.clone(),
+                format!("{}::{}{}", r.version, repo, provide_suffix),
+            );
+        }
+    }
+
+    cp_map
+        .into_iter()
+        .map(|(cp, ver_map)| {
+            let mut versions: Vec<(String, String)> = ver_map.into_iter().collect();
+            versions.sort_by(|a, b| vercmp_ordering(&a.0, &b.0));
+            InfoPkgRow {
+                cp,
+                versions: versions.into_iter().map(|(_, s)| s).collect(),
+            }
+        })
+        .collect()
+}
+
 /// Lists every installed version of `category/package` found in the vdb
 /// under `root` (`<root>/var/db/pkg/<category>/<package>-<version>/`).
 pub fn installed_versions(root: &Path, category: &str, package: &str) -> Vec<String> {
@@ -14833,6 +14980,52 @@ mod tests {
         .unwrap();
         let repos = find_repos(&root).expect("repos.conf resolves");
         assert!(!repos.iter().find(|r| r.name == "main").unwrap().volatile);
+    }
+
+    #[test]
+    fn info_pkgs_table_expands_a_virtual_and_renders_versions_with_repo() {
+        let root = masters_test_root("info-pkgs");
+        let repo = root.join("repo");
+        std::fs::create_dir_all(repo.join("profiles")).unwrap();
+        // profiles/info_pkgs adds one extra atom.
+        std::fs::write(repo.join("profiles/info_pkgs"), "# hdr\nsys-libs/glibc\n").unwrap();
+        let mkpkg = |cat: &str, pf: &str, rdepend: &str, repo_name: &str| {
+            let d = root.join("var/db/pkg").join(cat).join(pf);
+            std::fs::create_dir_all(&d).unwrap();
+            std::fs::write(d.join("SLOT"), "0\n").unwrap();
+            std::fs::write(d.join("USE"), "\n").unwrap();
+            std::fs::write(d.join("RDEPEND"), format!("{rdepend}\n")).unwrap();
+            std::fs::write(d.join("repository"), format!("{repo_name}\n")).unwrap();
+        };
+        mkpkg(
+            "virtual",
+            "os-headers-1",
+            "sys-kernel/linux-headers",
+            "gentoo",
+        );
+        mkpkg("sys-kernel", "linux-headers-7.1", "", "gentoo");
+        mkpkg("dev-lang", "python-3.14.7", "", "gentoo");
+        mkpkg("sys-libs", "glibc-2.43-r4", "", "gentoo");
+
+        let rows = info_pkgs_table(&root, &repo);
+        let by_cp: std::collections::HashMap<&str, &Vec<String>> =
+            rows.iter().map(|r| (r.cp.as_str(), &r.versions)).collect();
+        // virtual/os-headers -> sys-kernel/linux-headers, with the
+        // ` (virtual/os-headers)` provide-suffix.
+        assert_eq!(
+            by_cp.get("sys-kernel/linux-headers").map(|v| v.as_slice()),
+            Some(["7.1::gentoo (virtual/os-headers)".to_string()].as_slice())
+        );
+        // A plain (non-virtual) atom: no suffix.
+        assert_eq!(
+            by_cp.get("dev-lang/python").map(|v| v.as_slice()),
+            Some(["3.14.7::gentoo".to_string()].as_slice())
+        );
+        // The info_pkgs-file atom is included.
+        assert_eq!(
+            by_cp.get("sys-libs/glibc").map(|v| v.as_slice()),
+            Some(["2.43-r4::gentoo".to_string()].as_slice())
+        );
     }
 
     #[test]

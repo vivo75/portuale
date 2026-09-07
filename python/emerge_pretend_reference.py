@@ -12815,6 +12815,327 @@ def _use_expand_display_value(var, resolved_use, config):
     return " ".join(out)
 
 
+def _tool_first_line(cmd, *args):
+    """First line of `<cmd> <args>` output, trimmed -- None if the command
+    isn't found or exits non-zero. Mirrors pretend.rs's tool_first_line."""
+    import subprocess
+
+    try:
+        proc = subprocess.run(
+            [cmd, *args], capture_output=True, text=True, check=False
+        )
+    except OSError:
+        return None
+    if proc.returncode != 0:
+        return None
+    first = (proc.stdout.splitlines() or [""])[0].strip()
+    return first or None
+
+
+def _highest_installed_pvr(root, category, package):
+    """The highest installed version of cat/pkg, `<pv>-<pr>` with a "-r0"
+    revision dropped -- None when nothing is installed. Mirrors
+    pretend.rs's highest_installed_pvr."""
+    versions = installed_versions(root, category, package)
+    if not versions:
+        return None
+    best = versions[0]
+    for v in versions[1:]:
+        if vercmp(v, best) > 0:
+            best = v
+    return best[: -len("-r0")] if best.endswith("-r0") else best
+
+
+def _expand_new_virt(root, category, package):
+    """One level of real expand_new_virt: a non-virtual (cat, pkg) yields
+    itself (no provide-suffix); a virtual/* yields the (cat, pkg) of each
+    atom in its highest installed version's vdb RDEPEND, flattened
+    against that version's installed USE, that is itself installed.
+    Mirrors portage-repo/src/lib.rs's expand_new_virt."""
+    if category != "virtual":
+        return [(category, package, None)]
+    orig = f"{category}/{package}"
+    versions = [v for (v, _s, _ss) in installed_candidates(root, category, package)]
+    if not versions:
+        return [(category, package, None)]
+    version = versions[0]
+    for v in versions[1:]:
+        if vercmp(v, version) > 0:
+            version = v
+    use_flags = _read_vdb_flag_set(root, category, package, version, "USE")
+    rdepend = _read_vdb_string(root, category, package, version, "RDEPEND")
+    out = []
+    atoms = _flat_dep_atoms(rdepend, use_flags)
+    if atoms:
+        for atom_str in sorted(atoms):
+            atom = _parse_atom(atom_str)
+            if (
+                atom is not None
+                and atom.cp.split("/", 1)[0] != "virtual"
+                and installed_candidates(root, *atom.cp.split("/", 1))
+            ):
+                cat, pkg = atom.cp.split("/", 1)
+                out.append((cat, pkg, orig))
+    return out or [(category, package, None)]
+
+
+def _info_pkgs_table(root, main_repo_location):
+    """The info_pkgs version table emerge --info prints (real action_info,
+    actions.py:2109-2165). Returns a list of {cp, versions} dicts,
+    cp-sorted. Mirrors portage-repo/src/lib.rs's info_pkgs_table."""
+    atoms = [
+        "dev-build/autoconf",
+        "dev-build/automake",
+        "virtual/os-headers",
+        "sys-devel/binutils",
+        "dev-build/libtool",
+        "dev-lang/python",
+    ]
+    try:
+        with open(os.path.join(main_repo_location, "profiles", "info_pkgs")) as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith("#"):
+                    atoms.append(line)
+    except OSError:
+        pass
+
+    resolved = set()
+    for a in atoms:
+        atom = _parse_atom(a)
+        if atom is None:
+            continue
+        orig_cp = atom.cp
+        cat, pkg = orig_cp.split("/", 1)
+        for r_cat, r_pkg, provide in _expand_new_virt(root, cat, pkg):
+            resolved.add((orig_cp, r_cat, r_pkg, provide))
+
+    cp_map = {}
+    for orig_cp, cat, pkg, _provide in sorted(resolved):
+        matched_cp = f"{cat}/{pkg}"
+        for r in _installed_refs(root, cat, pkg):
+            repo = (
+                "<unknown repository>" if r["repo"] == "__unknown__" else r["repo"]
+            )
+            provide_suffix = f" ({orig_cp})" if matched_cp != orig_cp else ""
+            ver_map = cp_map.setdefault(matched_cp, {})
+            existing = ver_map.get(r["version"])
+            if existing is not None and " (" in existing:
+                continue
+            ver_map[r["version"]] = f"{r['version']}::{repo}{provide_suffix}"
+
+    rows = []
+    for cp in sorted(cp_map):
+        vers = sorted(cp_map[cp].items(), key=functools.cmp_to_key(
+            lambda a, b: vercmp(a[0], b[0]) or 0
+        ))
+        rows.append({"cp": cp, "versions": [s for _v, s in vers]})
+    return rows
+
+
+def _info_profile_version(config_root, main_repo_loc):
+    """Real get_profile_version: the active profile path relative to the
+    main repo's profiles/ dir (else its first `parent` entry resolved
+    that way, else "!"+symlink, else "unavailable"). Mirrors pretend.rs's
+    info_profile_version."""
+    base = os.path.realpath(os.path.join(main_repo_loc, "profiles"))
+
+    def rel(p):
+        c = os.path.realpath(p)
+        if c.startswith(base + os.sep):
+            return c[len(base) + 1:]
+        return None
+
+    make_profile = os.path.join(config_root, "etc", "portage", "make.profile")
+    v = rel(make_profile)
+    if v is not None:
+        return v
+    if os.path.exists(make_profile):
+        target = os.path.realpath(make_profile)
+        try:
+            with open(os.path.join(target, "parent")) as f:
+                parent_lines = [ln.strip() for ln in f]
+        except OSError:
+            parent_lines = []
+        for line in parent_lines:
+            if not line or line.startswith("#"):
+                continue
+            if ":" in line:
+                _repo, _, path = line.partition(":")
+                v = rel(os.path.join(base, path))
+            else:
+                v = rel(os.path.join(target, line))
+            if v is not None:
+                return v
+        if os.path.islink(make_profile):
+            return "!" + os.readlink(make_profile)
+    return "unavailable"
+
+
+def _print_info_header(config, repos, root, has_atoms):
+    """Real action_info's host-state header (actions.py:1946-2165):
+    the `Portage <ver> (...)` line, the 65-char rule, System uname:,
+    KiB Mem:/KiB Swap:, per-repo Timestamp/Head commit of repository,
+    the sh:/coreutils:/ld: probes and the info_pkgs table. Mirrors
+    pretend.rs's print_info_header -- see its docstring."""
+    import subprocess
+
+    main_repo_loc = next(
+        (r["location"] for r in repos if r.get("is_main")), ""
+    )
+    config_root = config["other_vars"].get("PORTAGE_CONFIGROOT", "/")
+
+    portage_ver = _highest_installed_pvr(root, "sys-apps", "portage") or "unavailable"
+    try:
+        proc = subprocess.run(
+            [
+                "python3",
+                "-c",
+                "import sys;v=sys.version_info;print(f'{v[0]}.{v[1]}.{v[2]}-{v[3]}-{v[4]}')",
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        pyver = proc.stdout.strip() if proc.returncode == 0 else "unavailable"
+    except OSError:
+        pyver = "unavailable"
+    profile_ver = _info_profile_version(config_root, main_repo_loc)
+    dumpver = _tool_first_line("gcc", "-dumpversion")
+    gccver = f"gcc-{dumpver}" if dumpver else "[unavailable]"
+    glibc = _highest_installed_pvr(root, "sys-libs", "glibc")
+    musl = _highest_installed_pvr(root, "sys-libs", "musl")
+    if glibc:
+        libcver = f"glibc-{glibc}"
+    elif musl:
+        libcver = f"musl-{musl}"
+    else:
+        libcver = "unavailable"
+    krel = _tool_first_line("uname", "-r") or ""
+    kmach = _tool_first_line("uname", "-m") or ""
+    print(
+        f"Portage {portage_ver} (python {pyver}, {profile_ver}, {gccver}, "
+        f"{libcver}, {krel} {kmach})"
+    )
+    if has_atoms:
+        title = "System Settings"
+        print("=" * 65)
+        print(title.rjust(65 // 2 + len(title) // 2))
+    print("=" * 65)
+
+    # System uname: -- real platform.platform(aliased=1)
+    ksys = _tool_first_line("uname", "-s") or "Linux"
+    processor = kmach
+    try:
+        with open("/proc/cpuinfo") as f:
+            for line in f:
+                k, _, v = line.partition(":")
+                if k.strip() == "model name":
+                    processor = v.strip()
+                    break
+    except OSError:
+        pass
+    libc_short = f"glibc{glibc.split('-')[0]}" if glibc else ""
+    uname_str = (
+        f"{ksys}-{krel}-{kmach}-{processor}-with-{libc_short}".replace(" ", "_")
+    )
+    print(f"System uname: {uname_str}")
+
+    # KiB Mem: / KiB Swap: -- real get_vm_info (free)
+    try:
+        with open("/proc/meminfo") as f:
+            meminfo = f.read()
+    except OSError:
+        meminfo = ""
+
+    def _kb(key):
+        for line in meminfo.splitlines():
+            if line.startswith(key):
+                try:
+                    return int(line[len(key):].strip().rstrip(" kB").strip())
+                except ValueError:
+                    return None
+        return None
+
+    mt = _kb("MemTotal:")
+    if mt is not None:
+        line = f"KiB Mem:  {mt:>10d} total"
+        mf = _kb("MemFree:")
+        if mf is not None:
+            line += f",{mf:>10d} free"
+        print(line)
+    st = _kb("SwapTotal:")
+    if st is not None:
+        line = f"KiB Swap: {st:>10d} total"
+        sf = _kb("SwapFree:")
+        if sf is not None:
+            line += f",{sf:>10d} free"
+        print(line)
+
+    # per-repo Timestamp / Head commit of repository
+    for repo in repos:
+        try:
+            with open(
+                os.path.join(repo["location"], "metadata", "timestamp.chk")
+            ) as f:
+                first = f.readline().strip()
+            if first:
+                print(f"Timestamp of repository {repo['name']}: {first}")
+        except OSError:
+            pass
+        if repo.get("sync_type") == "git":
+            try:
+                proc = subprocess.run(
+                    ["git", "-C", repo["location"], "rev-parse", "HEAD"],
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+            except OSError:
+                proc = None
+            if proc is not None and proc.returncode == 0 and proc.stdout.strip():
+                print(
+                    f"Head commit of repository {repo['name']}: "
+                    f"{proc.stdout.strip()}"
+                )
+                print()
+
+    # sh: -- the /bin/sh provider
+    for cand in (os.path.join(config_root, "bin", "sh"), "/bin/sh"):
+        try:
+            sh_base = os.path.basename(os.path.realpath(cand))
+            break
+        except OSError:
+            sh_base = "sh"
+    sh_str = sh_base
+    for cat in ("app-shells", "sys-apps", "dev-lang"):
+        v = _highest_installed_pvr(root, cat, sh_base)
+        if v:
+            name = sh_base if cat == "app-shells" else f"{cat}/{sh_base}"
+            sh_str = f"{name} {v}"
+            break
+    print(f"sh: {sh_str}")
+
+    # coreutils: / ld: version probes
+    inst = _tool_first_line("install", "--version")
+    if inst:
+        pos = inst.find("install ")
+        print(f"coreutils: {inst[pos + 8:] if pos != -1 else inst}")
+    chost = config["other_vars"].get("CHOST")
+    ld_names = [f"{chost}-ld", "ld"] if chost else ["ld"]
+    for name in ld_names:
+        line = _tool_first_line(name, "--version")
+        if line:
+            print(f"ld: {line}")
+            break
+
+    # info_pkgs version table
+    rows = _info_pkgs_table(root, main_repo_loc)
+    cp_max = max((len(r["cp"]) for r in rows), default=0)
+    for r in rows:
+        print(f"{(r['cp'] + ':').ljust(cp_max + 1)} {', '.join(r['versions'])}")
+
+
 def _run_info(config, repos, root, atom_args, misspell_suggestions, usepkg, color):
     """Real `emerge --info` (action_info), narrowed to its deterministic
     config/repository block plus, with atom args, the `myfiles`-loop
@@ -12856,6 +13177,12 @@ def _run_info(config, repos, root, atom_args, misspell_suggestions, usepkg, colo
             if extra is not None:
                 sys.stderr.write(extra + "\n")
             return 1
+
+    # Real action_info's host-state header (actions.py:1946-2165),
+    # printed before Repositories:. Everything here is host-state a
+    # fixture cannot reproduce -- the contract normalizes the volatile
+    # values to XXX and checks structure + Rust == Python.
+    _print_info_header(config, repos, root, bool(atom_args))
 
     print("Repositories:\n")
     name_of = {r["location"]: r["name"] for r in repos}
@@ -12981,7 +13308,9 @@ def _run_info(config, repos, root, atom_args, misspell_suggestions, usepkg, colo
             print(f'{k}="{v}"')
     if unset:
         print(f"Unset:  {', '.join(unset)}")
-    print()
+    # Real ends the buffer with two append("") -> a single trailing blank
+    # line; the Package Settings block below starts with its own leading
+    # newline.
     print()
 
     # Real action_info's `Package Settings` section (real `mypkgs`): per

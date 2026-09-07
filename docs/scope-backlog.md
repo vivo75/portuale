@@ -358,13 +358,26 @@ ANSI USE colour all shipped 2026-09-05, see `what-this-proves.md`'s
   `module_specific_options` with the global `/usr/share/portage/config/
   repos.conf` merged under the user's, so the `Repositories:` block
   prints real `info_string()`'s fields. The `USE=` line and both repo
-  blocks now `diff`-clean against a live run. Still open: (a) the
-  host-state header half (Portage-version line, `System uname`,
-  `KiB Mem`, `Timestamp`/`Head commit of repository`, `sh`/`ld`/
-  `coreutils` probes, the `info_pkgs` version table) — a fixture-driven
-  test can't verify real host state; and a 1-byte trailing-newline
-  difference in the no-atom case (real ends `Unset: …\n\n`, portuale
-  `…\n\n\n`; Rust==Python so contract-invisible).
+  blocks now `diff`-clean against a live run.
+  **Host-state header shipped 2026-09-07** (the last `--info` piece):
+  the `Portage <ver> (python…, <profile>, <gcc>, <libc>, <kernel>)` line
+  (portage/glibc from vdb, gcc from `gcc -dumpversion`, profile a
+  faithful `get_profile_version` port, kernel from `uname`), the
+  65-char rule (+ centred `System Settings` title under `--info <atom>`),
+  `System uname:` (real `platform.platform(aliased=1)` rebuilt from
+  `uname` + `/proc/cpuinfo` + glibc), `KiB Mem:`/`KiB Swap:`
+  (`/proc/meminfo`), per-repo `Timestamp of repository`
+  (`metadata/timestamp.chk`) + `Head commit of repository` (`git
+  rev-parse HEAD` for a git repo), the `sh:`/`coreutils:`/`ld:` probes,
+  and the `info_pkgs` version table (six hardcoded atoms +
+  `profiles/info_pkgs`, one-level `expand_new_virt` for
+  `virtual/os-headers`, `<ver>::<repo>` rows). `diff <(emerge --info)
+  <(portuale emerge --info)` is now a **single line** — the `KiB Mem`
+  free value, which changes between the two process spawns. The
+  contract's `--info` `rust==python` checks run through a
+  `_normalize_info` regex filter that blanks the host-state values to
+  `XXX` first. The 1-byte trailing-newline mismatch is fixed. `--info`
+  is now byte-for-byte parity with real modulo genuinely-live memory.
 - `--info`: the
   `(non-installed binary)` candidate path and the `pkg_info()` phase run
   itself both shipped 2026-09-05: `--usepkg --info` now selects the

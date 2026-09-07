@@ -2023,15 +2023,26 @@ does both now (`resolved_global_use`). `RepoConfig` gained
 `/usr/share/portage/config/repos.conf` merged under the user's.
 
 ```sh
-diff <(emerge --info) <(rust/target/release/portuale emerge --info) \
-  | sed -n '/^Repositories:/,/^Unset/p'
-# empty across every USE= flag, every USE_EXPAND value, and both the
-# Repositories: and Binary Repositories: blocks. Only real's host-state
-# HEADER (above "Repositories:") and a 1-byte trailing newline differ.
+diff <(emerge --info) <(rust/target/release/portuale emerge --info)
+# 4c4
+# < KiB Mem:    65745972 total,   8845444 free
+# ---
+# > KiB Mem:    65745972 total,   8847928 free
 ```
+
+The host-state header (2026-09-07) closes the last gap: the `Portage
+<ver> (python…, <profile>, <gcc>, <libc>, <kernel>)` line, the 65-char
+rule, `System uname:`, `KiB Mem/Swap:`, per-repo `Timestamp` / `Head
+commit of repository`, the `sh:`/`coreutils:`/`ld:` probes and the
+`info_pkgs` version table are all produced now, from the vdb + `/proc` +
+`uname`/`gcc`/`git` + `install --version`. The **only** line that still
+differs from a live `emerge --info` is the `KiB Mem` *free* value, which
+genuinely changes between the two process spawns.
 
 Deterministic slice test:
 `pytest tests/test_emerge_pretend_contract.py -k stacks_make_globals`
 builds a self-contained `PORTAGE_CONFIGROOT` (its own `make.globals` /
 `profile.env` / `info_vars` / `package.use` `*/*` / `use.mask` /
-`repos.conf` sync fields / `binrepos.conf`) and pins Rust == Python.
+`repos.conf` sync fields / `binrepos.conf`) and pins Rust == Python —
+`--info`'s host-state lines are XXX-normalized by `_normalize_info`
+before the comparison.

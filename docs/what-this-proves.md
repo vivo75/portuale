@@ -14694,6 +14694,53 @@ and a 1-byte trailing newline remain). Dual-language; contract test
 cover the `*/*` fold, `use.mask` drop and the repo fields; new Rust unit
 tests `user_package_use_star_atom_folds_onto_the_global_use`,
 `find_repos_reads_sync_fields_volatile_and_git_module_options`,
-`find_repos_explicit_volatile_key_wins_over_the_heuristic`. Still out:
-the host-state header (fixture-unverifiable) and its 1-byte trailing
-newline.
+`find_repos_explicit_volatile_key_wins_over_the_heuristic`.
+
+### `emerge --info`: the host-state header (2026-09-07)
+
+The last piece: the block real `action_info` prints *before*
+`Repositories:` — previously the one deliberate `--info` cut, on the
+grounds that a fixture can't verify host state. Now implemented in both
+languages (`print_info_header` / `_print_info_header`):
+
+- **`Portage <ver> (python <v>, <profile>, <gcc>, <libc>, <kernel>)`** —
+  `<ver>` from the installed `sys-apps/portage` vdb entry; `<v>` from
+  `python3 -c`; `<profile>` a faithful port of real `get_profile_version`
+  (the `make.profile` target relative to the main repo's `profiles/`,
+  else its first `parent` entry resolved that way, else `!<symlink>`);
+  `<gcc>` from `gcc -dumpversion`; `<libc>` from the `sys-libs/glibc`
+  (or `musl`) vdb entry; `<kernel>` from `uname -r` + `-m`.
+- **65-char rule**, with the centred `System Settings` title inserted
+  above it under `--info <atom>` (real `if myfiles:`).
+- **`System uname:`** — real `platform.platform(aliased=1)`, rebuilt
+  from `uname -s/-r/-m` + `/proc/cpuinfo` "model name" + the glibc
+  version, spaces → `_`.
+- **`KiB Mem:` / `KiB Swap:`** — `/proc/meminfo` `MemTotal`/`MemFree` /
+  `SwapTotal`/`SwapFree`, real's `%10d` columns.
+- **`Timestamp of repository <n>:`** — `<loc>/metadata/timestamp.chk`
+  line 1; **`Head commit of repository <n>:`** — `git -C <loc> rev-parse
+  HEAD` for a `sync-type = git` repo, with real's baked-in trailing
+  blank line.
+- **`sh:`** — the `/bin/sh` realpath basename matched against the
+  `app-shells`/`sys-apps`/`dev-lang` vdb; **`coreutils:`** — `install
+  --version` after `install `; **`ld:`** — `[<chost>-]ld --version`.
+- **`info_pkgs` version table** — the six hardcoded atoms +
+  `<main_repo>/profiles/info_pkgs`, each run through a one-level
+  `expand_new_virt` (`virtual/os-headers` → `sys-kernel/linux-headers`
+  with the ` (virtual/os-headers)` suffix), one `cat/pkg:` row per
+  installed match, versions `vercmp`-sorted `<ver>::<repo>`, `cp` padded
+  to the widest.
+
+**`diff <(emerge --info) <(portuale emerge --info)` is now a single
+line** — the `KiB Mem` *free* value, which genuinely changes between the
+two process spawns. Everything else — the whole header, every repo
+`Timestamp`/`Head commit`, the `sh`/`coreutils`/`ld` strings and the
+entire `info_pkgs` table — is byte-identical to a live run. The
+contract's `--info` `rust == python` checks run through a new
+`_normalize_info` regex filter that blanks the host-state values
+(`Portage …`, `System uname:`, `KiB …`, `Timestamp`/`Head commit`,
+`sh`/`coreutils`/`ld`, `info_pkgs` rows) to `XXX` first, pinning line
+structure + the deterministic config block. New Rust unit test
+`info_pkgs_table_expands_a_virtual_and_renders_versions_with_repo`; the
+stacks-test asserts the header shape. The 1-byte trailing-newline
+mismatch is fixed too (real ends `Unset: …\n\n`).
