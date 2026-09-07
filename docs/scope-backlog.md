@@ -133,17 +133,22 @@ can't grow into these incrementally:
   `--tree` renderer); the *conditional* `followup_change` grandparent
   variant has no fixture (the *hard*-clash grandparent case does,
   2026-09-05).
-- **`emerge --pretend --debug`: real's resolver trace.** Portuale's
-  `--debug` is only real's `PORTAGE_DEBUG=1`/`set -x` half, so
-  `emerge -p --debug` is byte-identical to `emerge -p`; real
-  additionally emits a full resolution trace on stderr (`Arg:`/`Atom:`,
-  the candidate list, `Parent:`/`Depstring:`/`Priority:`/`Candidates:`,
-  `Child:`/`Parent Dep:`, `Virtual Parent:`, and the `digraph:` dump).
-  That dump is the ground truth every remaining graph divergence is
-  diffed against — it is what landed the `_serialize_tasks` port — so
-  emitting the same shapes is high leverage, and ~90% of it is derivable
-  from data portuale already holds. Message inventory, upstream sources
-  and a staged plan: [`emerge-pretend-debug.md`](emerge-pretend-debug.md).
+- **`emerge --pretend --debug`: real's resolver trace — shipped
+  2026-09-07.** All six stages plus the header/cycle dumps, dual-language
+  (`portage-repo/src/resolver_trace.rs` + the `emerge_pretend_reference.py`
+  mirror), on real's own stdout/stderr split: `Arg:`/`Atom:`, the
+  per-atom `ebuild:`/`installed:` candidate list, the per-package
+  `Parent:`/`Depstring:`/`Priority:`/`Candidates:` / `Child:`/`Parent
+  Dep:` / `Virtual Parent:` / `Exiting...` narration, the `forced
+  reinstall atoms:` / `slot operator dependencies:` / `forced rebuilds:`
+  summaries, and the `\ndigraph:\n\n` + `debug_print()` merge-digraph
+  dump + `runtime cycle digraph` dumps. Deliberate divergences (goal is
+  duplicated info, not a byte-copy of real; contract pins Rust==Python):
+  plain-text node labels, portuale's post-prune closure + pseudo-arg
+  nodes as the node set, BFS-ordered narration (successful pass only),
+  ebuild+installed candidates only, `abi_rebuilds`-only slot-op dump.
+  See [`emerge-pretend-debug.md`](emerge-pretend-debug.md) and
+  `what-this-proves.md`.
 - **Merge-list order, remaining cuts.** The `_serialize_tasks` port
   itself shipped 2026-09-06 (`portage-repo/src/merge_order.rs`): a typed
   `DepPriority` digraph, the `DepPriorityNormalRange`/

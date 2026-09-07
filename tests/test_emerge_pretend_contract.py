@@ -1261,10 +1261,10 @@ CASES = [
     ("--misspell-suggestions: a near-miss package name gets suggestions", ["--pretend", "dev-libs/newpgk"], 1),
     ("--misspell-suggestions=n: no suggestions", ["--pretend", "--misspell-suggestions=n", "dev-libs/newpgk"], 1),
     ("--misspell-suggestions: a masked (existing) cp gets no name suggestions", ["--pretend", "dev-libs/autounmaskkeywordpkg"], 1),
-    ("--debug: recognized, byte-for-byte no-op under --pretend", ["--pretend", "--debug", "dev-libs/newpkg"], 0),
-    ("-d: --debug short alias, recognized", ["--pretend", "-d", "dev-libs/newpkg"], 0),
+    ("--debug: resolver trace, Rust==Python on both streams", ["--pretend", "--debug", "dev-libs/newpkg"], 0),
+    ("-d: --debug short alias, resolver trace", ["--pretend", "-d", "dev-libs/newpkg"], 0),
     ("-pd: --debug bundles with -p", ["-pd", "dev-libs/newpkg"], 0),
-    ("--debug + a slot conflict: still no resolver debug trace", ["--pretend", "--debug", "dev-libs/slotconfgroup"], 0),
+    ("--debug + a slot conflict: resolver trace survives backtracking", ["--pretend", "--debug", "dev-libs/slotconfgroup"], 0),
     ("--verbose is now implemented, not rejected", ["--pretend", "--verbose", "dev-libs/newpkg"], 0),
     ("-v short alias is now implemented, not rejected", ["--pretend", "-v", "dev-libs/newpkg"], 0),
     ("without --verbose, USE= is never shown even for a package with IUSE", ["--pretend", "dev-libs/useflagpkg"], 0),
@@ -1936,6 +1936,99 @@ def test_pretend_matches_between_implementations(
     )
     assert rust_result.stdout == python_result.stdout, description
     assert rust_result.stderr == python_result.stderr, description
+
+
+def test_debug_resolver_trace_stage1_digraph_dump(
+    emerge_binary, emerge_pretend_python, fixture_env
+):
+    """`emerge --pretend --debug` Stage 1: the `\\ndigraph:\\n\\n` +
+    `debug_print()` dump on stderr (real depgraph.py:9461), in real's
+    node/edge format -- plain-text node labels, top-level atoms as
+    pseudo-arg nodes. Diamond: a leaf with `(no children)`, two
+    consumers, the root, then the `dev-libs/diamond depends on` arg
+    node."""
+    args = ["--pretend", "--debug", "dev-libs/diamond"]
+    rust = _run([str(emerge_binary)], args, fixture_env)
+    python = _run(emerge_pretend_python, args, fixture_env)
+    assert rust.returncode == 0 and python.returncode == 0
+    assert rust.stdout == python.stdout
+    assert rust.stderr == python.stderr
+    # plain-p merge list on stdout is unchanged by --debug (trace is
+    # stdout-narration + stderr-dumps, never the bracket lines).
+    plain = _run([str(emerge_binary)], ["--pretend", "dev-libs/diamond"], fixture_env)
+    assert [l for l in rust.stdout.splitlines() if l.startswith("[ebuild")] == \
+        plain.stdout.splitlines()
+    dg = rust.stderr.split("\ndigraph:\n\n", 1)[1]
+    assert "(dev-libs/common-1.0:0/0::testrepo, ebuild scheduled for merge) (no children)\n" in dg
+    assert (
+        "(dev-libs/diamond-1.0:0/0::testrepo, ebuild scheduled for merge) depends on\n"
+        "  (dev-libs/shared-a-1.0:0/0::testrepo, ebuild scheduled for merge) (runtime)\n"
+        "  (dev-libs/shared-b-1.0:0/0::testrepo, ebuild scheduled for merge) (runtime)\n"
+    ) in dg
+    assert dg.rstrip().endswith(
+        "dev-libs/diamond depends on\n"
+        "  (dev-libs/diamond-1.0:0/0::testrepo, ebuild scheduled for merge) (soft)"
+    )
+
+
+def test_debug_resolver_trace_stage3_candidate_list(
+    emerge_binary, emerge_pretend_python, fixture_env
+):
+    """Stage 3: `Arg:`/`Atom:` on stdout, the width-10 `   ebuild:` /
+    `installed:` candidate list on stderr (real depgraph.py:8347)."""
+    args = ["--pretend", "--debug", "dev-libs/diamond"]
+    rust = _run([str(emerge_binary)], args, fixture_env)
+    python = _run(emerge_pretend_python, args, fixture_env)
+    assert rust.stdout == python.stdout
+    assert rust.stderr == python.stderr
+    assert "\n      Arg: dev-libs/diamond\n     Atom: dev-libs/diamond\n" in rust.stdout
+    assert "   ebuild: dev-libs/diamond-1.0::testrepo\n" in rust.stderr
+
+
+def test_debug_resolver_trace_stages_2_4_walk(
+    emerge_binary, emerge_pretend_python, fixture_env
+):
+    """Stages 2/4: the per-package `Child:` / `Parent Dep:` /
+    `Parent:` / `Depstring:` / `Priority:` / `Candidates:` / `Exiting...`
+    narration on stdout."""
+    args = ["--pretend", "--debug", "dev-libs/diamond"]
+    rust = _run([str(emerge_binary)], args, fixture_env)
+    python = _run(emerge_pretend_python, args, fixture_env)
+    assert rust.stdout == python.stdout
+    assert rust.stderr == python.stderr
+    assert (
+        'Child:         (dev-libs/shared-a-1.0:0/0::testrepo, ebuild scheduled for merge) USE=""\n'
+        "Parent Dep:    dev-libs/shared-a required by "
+        "(dev-libs/diamond-1.0:0/0::testrepo, ebuild scheduled for merge)\n"
+    ) in rust.stdout
+    assert (
+        "Depstring: dev-libs/shared-a dev-libs/shared-b (RDEPEND)\n"
+        "Priority:  runtime\n"
+    ) in rust.stdout
+    assert "\nExiting... (dev-libs/common-1.0:0/0::testrepo, ebuild scheduled for merge)\n" in rust.stdout
+
+
+def test_debug_resolver_trace_stage5_rebuild_summaries(
+    emerge_binary, emerge_pretend_python, fixture_env, tmp_path
+):
+    """Stage 5: `forced reinstall atoms:` / `slot operator dependencies:`
+    / `forced rebuilds:` on stdout (real depgraph.py:1011-1206), driven
+    off portuale's `abi_rebuilds` set."""
+    env = dict(fixture_env)
+    env["ROOT"] = str(_slotbind_root(tmp_path))
+    args = ["--pretend", "--debug", "dev-libs/slotbindtarget"]
+    rust = _run([str(emerge_binary)], args, env)
+    python = _run(emerge_pretend_python, args, env)
+    assert rust.stdout == python.stdout
+    assert rust.stderr == python.stderr
+    assert "forced reinstall atoms:\n\n\n" in rust.stdout
+    assert (
+        "slot operator dependencies:\n"
+        f"   ({env['ROOT']}, dev-libs/slotbindtarget:2)\n"
+        "      parent: (dev-libs/slotbindconsumer-1.0:0/0::testrepo, ebuild scheduled for merge)\n"
+        "        child: (dev-libs/slotbindtarget-2.0:2/9::testrepo, ebuild scheduled for merge) (runtime_slot_op)\n"
+    ) in rust.stdout
+    assert "forced rebuilds:\n" in rust.stdout
 
 
 def test_missing_repos_conf_matches_between_implementations(
@@ -8217,7 +8310,7 @@ Output:
       --verbose-conflicts   list every parent of a slot conflict, not one per collision reason
       --ignore-built-slot-operator-deps[=y|n]  ignore recorded := slot-operator dependencies
       --depclean-lib-check[=y|n]  with --depclean/--prune: scan for soname breakage (default y)
-  -d, --debug               run ebuild phases under `set -x` (PORTAGE_DEBUG=1); no effect under --pretend
+  -d, --debug               PORTAGE_DEBUG=1 in ebuild phases; resolver trace under --pretend
 
 Portuale extensions (not real emerge options):
       --json                dump the resolved graph as one JSON line instead of the display

@@ -55,6 +55,7 @@
 // portuale-specific.
 
 mod merge_order;
+mod resolver_trace;
 
 pub use merge_order::{DepEdge, DepPriority};
 
@@ -454,6 +455,33 @@ pub fn set_use_ebuild_visibility(enabled: bool) {
 
 fn use_ebuild_visibility() -> bool {
     USE_EBUILD_VISIBILITY.load(AtomicOrdering::Relaxed)
+}
+
+/// `--debug` / `-d` (real `main.py:1235`): besides `PORTAGE_DEBUG=1` in
+/// the ebuild phase env (`set -x`), real also calls
+/// `initialize_logger(logging.DEBUG)`, which turns on `depgraph.py`'s
+/// `writemsg_level(..., level=logging.DEBUG)` resolver trace -- the
+/// `Arg:`/`Atom:` / `Parent:`/`Depstring:`/`Priority:`/`Candidates:` /
+/// `Child:`/`Parent Dep:`/`Exiting...` per-package narration on stdout,
+/// and the `\ndigraph:\n\n` + `debug_print()` graph dump plus the
+/// per-atom `ebuild:`/`binary:`/`installed:` candidate list on stderr.
+/// Portuale emits the same shapes (see `resolver_trace`), gated on this
+/// flag. Process-global, env-free -- same pattern as
+/// `USE_EBUILD_VISIBILITY` above -- so it needn't thread through
+/// `resolve_pretend_graph`'s ~60-arg signature. The CLI layer
+/// (`pretend.rs`) sets it once, on the `--pretend` path only, before any
+/// resolution. Default (never called) is `false`.
+static RESOLVER_DEBUG: AtomicBool = AtomicBool::new(false);
+
+/// Set by `pretend.rs` from `--debug`/`-d` on the `--pretend` path,
+/// before resolution.
+pub fn set_resolver_debug(enabled: bool) {
+    RESOLVER_DEBUG.store(enabled, AtomicOrdering::Relaxed);
+}
+
+/// Whether the `emerge --pretend --debug` resolver trace is active.
+pub fn resolver_debug() -> bool {
+    RESOLVER_DEBUG.load(AtomicOrdering::Relaxed)
 }
 
 /// Real `update_dbentry` for a single `move`, applied to one atom token:
@@ -9063,6 +9091,12 @@ fn topological_merge_order(
     root: &Path,
 ) -> Vec<GraphEntry> {
     if entries.len() < 2 {
+        // Real still emits the `digraph:` dump for a single-package merge
+        // (its scheduler runs regardless); portuale short-circuits the
+        // scheduler, so dump here explicitly under `--pretend --debug`.
+        if entries.len() == 1 && resolver_debug() {
+            merge_order::debug_dump_graph_only(&entries, top_level_atoms, root);
+        }
         return entries;
     }
     let order = merge_order::serialize_merge_order(&entries, top_level_atoms, config, root);
@@ -11640,6 +11674,15 @@ fn backtracking_resolve(req: &ResolveRequest) -> Result<GraphResult, Error> {
         // atom), only consulted by `required_by_map` below, for `GraphEntry`'s
         // own `required_by` field.
         let mut queue: VecDeque<QueueItem> = VecDeque::new();
+        // `emerge --pretend --debug` Stage 3: real `_resolve`'s own
+        // `\n      Arg: <arg>\n     Atom: <atom>\n` (`depgraph.py:5521`),
+        // once per top-level arg atom. First pass only (real's `_resolve`
+        // arg loop runs once; only `_create_graph` re-runs on backtrack).
+        if resolver_debug() && backtrack_iteration == 0 {
+            for a in atoms {
+                resolver_trace::tr!("\n      Arg: {a}\n     Atom: {a}\n");
+            }
+        }
         for a in atoms {
             // A top-level atom has no "unevaluated" form distinct from
             // itself (no parent to ever flip a flag on), matching real
@@ -11730,6 +11773,15 @@ fn backtracking_resolve(req: &ResolveRequest) -> Result<GraphResult, Error> {
             }
             if !visited_atoms.insert(current_atom.clone()) {
                 continue;
+            }
+            // `emerge --pretend --debug` Stage 3: real
+            // `_wrapped_select_pkg_highest_available_imp`'s own
+            // `f"{type_name + ':':>10} {cpv}::{repo}\n"` candidate list
+            // (`depgraph.py:8347`) -- every candidate that matched this
+            // atom, in real's `dbs` order (ebuild, then binary, then
+            // installed), to stderr. First pass only.
+            if resolver_debug() && backtrack_iteration == 0 {
+                resolver_trace::dump_atom_candidates(&repos, root, &current_atom, &key.0, &key.1);
             }
             // Backtracking: record this atom as one of the constraints pulling
             // `cat/pkg` (real `_select_pkg_highest_available` sees the whole
@@ -13734,6 +13786,14 @@ fn backtracking_resolve(req: &ResolveRequest) -> Result<GraphResult, Error> {
             rebuild_exclude,
             rebuild_ignore,
         ));
+
+        // `emerge --pretend --debug` stages 2/4/6: the per-package
+        // resolution narration, emitted here (final `entries`, successful
+        // pass) rather than threaded through the BFS -- see
+        // `resolver_trace::dump_resolution_walk`. Before the merge-order
+        // sort / `digraph:` dump, matching real's order (walk, then
+        // graph).
+        resolver_trace::dump_resolution_walk(&entries, root);
 
         // Real portage's `mylist` is dependency-first (its Scheduler installs
         // a package only after everything it depends on); portuale's BFS

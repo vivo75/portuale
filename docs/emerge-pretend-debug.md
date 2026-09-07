@@ -1,7 +1,54 @@
 # `emerge --pretend --debug`: real portage's resolver trace
 
-**Status: not implemented.** This is a design note — what real portage
-emits, why it is worth having, and a staged plan for porting it.
+**Status: implemented (2026-09-07).** `emerge --pretend --debug` (and
+`-pd`) now emits a resolver trace on both streams, dual-language
+(`rust/portage-repo/src/resolver_trace.rs` + the mirror in
+`python/emerge_pretend_reference.py`), gated on the process-global
+`portage_repo::set_resolver_debug()` that `pretend.rs` sets from
+`--debug && --pretend`. `--debug` still also means `PORTAGE_DEBUG=1` in
+any ebuild phase (real `main.py:1235` does both).
+
+What it emits, matching real's own stream split
+(`writemsg_level(level=DEBUG)` → stdout, plain `writemsg` → stderr):
+
+- **stdout:** `\n      Arg:`/`     Atom:` per top-level atom; a
+  per-package `Child:`/`Parent Dep:` / `Parent:`/`Depstring:`/`Priority:`
+  /`Candidates:` / `Virtual Parent:`/`Virtual Depstring:` / `Exiting...`
+  narration; the `forced reinstall atoms:` / `slot operator
+  dependencies:` / `forced rebuilds:` summaries after the merge list.
+- **stderr:** the per-atom `   ebuild:` / `installed:` candidate list;
+  `\ndigraph:\n\n` + `debug_print()` of the merge digraph; `runtime
+  cycle digraph (N nodes):` dumps.
+
+**Deliberate divergences from real** (the goal is duplicated
+functionality/information, not a byte-identical copy — and the contract
+suite pins Rust == Python on both streams, not portuale == real):
+
+- **plain-text node labels** — `(cat/pkg-ver:slot/sub_slot::repo,
+  state)` with no ANSI colour (portuale is deterministic; colour is a
+  documented cut elsewhere too). Diffs against real cleanly after an
+  escape-strip.
+- **node set** — portuale's post-prune merge closure, with the
+  top-level atoms printed as pseudo-`DependencyArg` nodes, not real's
+  full `@world`/`@system` universe (the `_serialize_tasks` port proved
+  the extra installed-universe nodes unnecessary for ordering).
+- **narration interleaving** — the `Child:`/`Parent:` blocks are emitted
+  in one pass over the final `entries` (portuale BFS-push order, roots
+  before dependencies), on the successful backtracking pass only. Real
+  interleaves them as a LIFO `_create_graph` walk. Same information,
+  different order — which is exactly why the `digraph:` dump (emitted
+  from `.order`) is the authoritative diff surface.
+- **candidate list** — ebuild + installed only; a binary (`$PKGDIR` /
+  binhost) candidate would need a `BinaryIndex` the resolver's per-atom
+  call site doesn't hold.
+- `slot operator dependencies:` lists only the `:=` edges that actually
+  forced a rebuild this run (portuale's `abi_rebuilds`), not real's
+  every-installed-`:=`-edge dump (real's `_slot_operator_deps`).
+
+The rest of this file is the original design note — kept for the message
+inventory and upstream source cross-reference.
+
+---
 
 ## What portuale's `--debug` is today
 

@@ -1984,7 +1984,7 @@ Output:
       --verbose-conflicts   list every parent of a slot conflict, not one per collision reason
       --ignore-built-slot-operator-deps[=y|n]  ignore recorded := slot-operator dependencies
       --depclean-lib-check[=y|n]  with --depclean/--prune: scan for soname breakage (default y)
-  -d, --debug               run ebuild phases under `set -x` (PORTAGE_DEBUG=1); no effect under --pretend
+  -d, --debug               PORTAGE_DEBUG=1 in ebuild phases; resolver trace under --pretend
 
 Portuale extensions (not real emerge options):
       --json                dump the resolved graph as one JSON line instead of the display
@@ -8438,6 +8438,15 @@ pub fn run(args: &[String]) -> ExitCode {
     portage_repo::set_binpkg_changed_deps_override(binpkg_changed_deps_override);
     portage_repo::set_use_ebuild_visibility(use_ebuild_visibility);
 
+    // `--debug`/`-d` under `--pretend`: besides `PORTAGE_DEBUG=1` in the
+    // phase env (a no-op when nothing is built), real also turns on the
+    // full resolver trace (`initialize_logger(logging.DEBUG)`). Portuale
+    // emits the same shapes -- see `portage_repo::resolver_trace`. Gated
+    // to `--pretend` only (portuale's build path doesn't route through
+    // the traced resolver the way real's does). Process-global, set once
+    // before any `resolve_pretend_graph` call.
+    portage_repo::set_resolver_debug(debug && pretend);
+
     // Real actions.py: "if '--tree' in emerge_config.opts and '--columns'
     // in emerge_config.opts: print(...); return 1" -- checked once
     // parsing finishes (order-independent: works whichever flag came
@@ -9752,6 +9761,104 @@ pub fn run(args: &[String]) -> ExitCode {
     // changed-deps report, and any real merge) runs.
     if autounmask_only {
         return ExitCode::SUCCESS;
+    }
+
+    // `emerge --pretend --debug` Stage 5: real
+    // `_compute_abi_rebuild_info`'s own DEBUG-level dump (real
+    // `depgraph.py:1011-1206`), on stdout, right before the
+    // `_show_abi_rebuild_info` "causing rebuilds" block. Real's
+    // `_slot_operator_deps` / `_forced_rebuilds` are richer dicts than
+    // portuale's flat `abi_rebuilds` `(provider-cpv, consumer-cpv)`
+    // list -- portuale emits the same shapes from what it has (a
+    // documented fidelity gap: real's `slot operator dependencies:`
+    // lists *every* installed `:=` edge, portuale only the ones that
+    // actually forced a rebuild this run).
+    if portage_repo::resolver_debug() {
+        let root_str = root.display().to_string();
+        // cpv -> (cp, slot, sub_slot, repo, type_name) for every
+        // merge-bound entry (both ends of each abi-rebuild edge are
+        // Reinstall/Upgrade). Same shape the "causing rebuilds" block
+        // below builds.
+        let mut by_cpv: HashMap<String, (String, String, String, String, &str)> = HashMap::new();
+        for e in entries {
+            let version = match &e.outcome {
+                portage_repo::PretendOutcome::New { version }
+                | portage_repo::PretendOutcome::Reinstall { version, .. } => version.clone(),
+                portage_repo::PretendOutcome::Upgrade { to, .. }
+                | portage_repo::PretendOutcome::Downgrade { to, .. } => to.clone(),
+                _ => continue,
+            };
+            let ty = match e.source {
+                portage_repo::CandidateSource::Binary => "binary",
+                portage_repo::CandidateSource::Ebuild => "ebuild",
+            };
+            by_cpv.insert(
+                format!("{}/{}-{version}", e.category, e.package),
+                (
+                    format!("{}/{}", e.category, e.package),
+                    e.slot.clone().unwrap_or_else(|| "0".to_string()),
+                    e.sub_slot.clone().unwrap_or_else(|| "0".to_string()),
+                    e.repo_name
+                        .clone()
+                        .unwrap_or_else(|| "__unknown__".to_string()),
+                    ty,
+                ),
+            );
+        }
+        let label = |cpv: &str| -> String {
+            match by_cpv.get(cpv) {
+                Some((_, slot, sub_slot, repo, ty)) => {
+                    format!("({cpv}:{slot}/{sub_slot}::{repo}, {ty} scheduled for merge)")
+                }
+                None => format!("({cpv}, installed)"),
+            }
+        };
+
+        println!("forced reinstall atoms:");
+        if !reinstall_atoms.is_empty() {
+            println!("   root: {root_str}");
+            for atom in &reinstall_atoms {
+                println!("      atom: {atom}");
+            }
+        }
+        print!("\n\n");
+
+        println!("slot operator dependencies:");
+        // Group abi-rebuild pairs by the provider's `cp:slot` slot-atom.
+        let mut by_slot_atom: std::collections::BTreeMap<String, Vec<&(String, String)>> =
+            std::collections::BTreeMap::new();
+        for pair in &result.abi_rebuilds {
+            let slot_atom = match by_cpv.get(&pair.0) {
+                Some((cp, slot, ..)) => format!("{cp}:{slot}"),
+                None => pair.0.clone(),
+            };
+            by_slot_atom.entry(slot_atom).or_default().push(pair);
+        }
+        for (slot_atom, pairs) in &by_slot_atom {
+            println!("   ({root_str}, {slot_atom})");
+            for (provider, consumer) in pairs {
+                println!("      parent: {}", label(consumer));
+                println!("        child: {} (runtime_slot_op)", label(provider));
+            }
+        }
+        print!("\n\n");
+
+        println!("forced rebuilds:");
+        let mut by_child: std::collections::BTreeMap<&str, Vec<&str>> =
+            std::collections::BTreeMap::new();
+        for (provider, consumer) in &result.abi_rebuilds {
+            by_child.entry(provider).or_default().push(consumer);
+        }
+        if !by_child.is_empty() {
+            println!("   root: {root_str}");
+            for (child, parents) in &by_child {
+                println!("      child: {}", label(child));
+                for parent in parents {
+                    println!("         parent: {}", label(parent));
+                }
+            }
+        }
+        print!("\n\n");
     }
 
     // Real `_show_abi_rebuild_info` (`depgraph.py:1210`), gated on

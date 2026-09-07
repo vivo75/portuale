@@ -14260,3 +14260,60 @@ sub-slot, so a built slot-operator atom (`foo:0/1=`) never matched an
 installed package and tripped the safety halt. The Rust side had already
 been carrying the sub-slot, with a comment saying why; this was a
 straight mirror gap, invisible until a fixture with such an atom existed.
+
+### `emerge --pretend --debug`: real portage's resolver trace (2026-09-07)
+
+`--debug` under `--pretend` was a documented byte-for-byte no-op
+(`PORTAGE_DEBUG=1` only shows during a real build). Real portage
+additionally calls `initialize_logger(logging.DEBUG)`, turning on a full
+trace of dependency resolution — the artifact the 2026-09-06
+`_serialize_tasks` port was validated against, and the ground truth every
+remaining graph divergence is diffed against. Portuale now emits the same
+shapes, dual-language (`rust/portage-repo/src/resolver_trace.rs` + the
+`python/emerge_pretend_reference.py` mirror), on real's own stream split
+(`writemsg_level(level=logging.DEBUG)` → stdout, plain `writemsg` →
+stderr; `portage/util/__init__.py:119`):
+
+- **stdout:** `\n      Arg:`/`     Atom:` per top-level atom
+  (`depgraph.py:5521`); a per-package `Child:`/`Parent Dep:` /
+  `Parent:`/`Depstring:`/`Priority:`/`Candidates:` / `Virtual Parent:` /
+  `Exiting...` narration (`:3568`/`:4298`/`:4747`, `dep_check.py:225`);
+  the `forced reinstall atoms:` / `slot operator dependencies:` /
+  `forced rebuilds:` summaries after the merge list (`:1011-1206`).
+- **stderr:** the per-atom `   ebuild:` / `installed:` candidate list
+  (`:8347`); `\ndigraph:\n\n` + `digraph.debug_print()` of the merge
+  digraph (`:9461`, `util/digraph.py:349`); `runtime cycle digraph (N
+  nodes):` dumps (`:9917`).
+
+Plumbing is the established env-free process-global
+(`portage_repo::set_resolver_debug()`, set by `pretend.rs` from `--debug
+&& --pretend`), so nothing threads through `resolve_pretend_graph`'s
+~60-arg signature. `DepPriority` gained a `Display` (real
+`DepPriority.__str__`) and a rank helper (real `__int__`), so a
+`digraph:` edge label is real's own `priorities[-1]`. The legacy
+`PORTUALE_DEBUG_MERGE_GRAPH=1` env var still dumps just the `digraph:`
+block.
+
+**Deliberate divergences from real** — the goal is duplicated
+functionality/information, and the contract suite pins Rust == Python on
+both streams, never portuale == real:
+
+- plain-text node labels (no ANSI colour — deterministic tool);
+- portuale's post-prune merge closure as the node set, top-level atoms
+  printed as pseudo-`DependencyArg` nodes, not real's full
+  `@world`/`@system` universe (proven unnecessary for ordering by the
+  `_serialize_tasks` port);
+- the `Child:`/`Parent:` narration is one pass over the final `entries`
+  (portuale BFS-push order), successful backtracking pass only — real
+  interleaves it as a LIFO `_create_graph` walk. Same information,
+  different order, which is why the `digraph:` dump (from `.order`) is
+  the authoritative diff surface;
+- candidate list is ebuild + installed only (a binary candidate needs a
+  `BinaryIndex` the per-atom call site doesn't hold);
+- `slot operator dependencies:` lists only the `:=` edges that forced a
+  rebuild this run (portuale's `abi_rebuilds`), not real's
+  every-installed-`:=`-edge dump.
+
+Contract-tested per stage (`test_debug_resolver_trace_stage1_digraph_dump`
+and siblings), plus the four existing `--debug` CASES retargeted from
+"byte-for-byte no-op" to asserting the trace.

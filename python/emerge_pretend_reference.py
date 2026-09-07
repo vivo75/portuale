@@ -7212,6 +7212,97 @@ _SATISFIED_RANGE = {
 }
 
 
+# -------------------------------------------------------------------------
+# emerge --pretend --debug resolver trace -- mirrors
+# rust/portage-repo/src/resolver_trace.rs. See docs/emerge-pretend-debug.md
+# for the message inventory and the deliberate divergences from real
+# portage (plain-text node labels; portuale's post-prune merge closure +
+# pseudo-arg nodes as the node set; BFS-ordered narration).
+#
+# Stream split, matching real writemsg_level (portage/util/__init__.py:119:
+# level >= WARNING -> stderr, else stdout): _tr() -> stdout narration,
+# _tr_err() -> stderr dumps (digraph / runtime cycle / candidate list).
+# -------------------------------------------------------------------------
+_RESOLVER_DEBUG = False
+
+
+def _set_resolver_debug(on):
+    global _RESOLVER_DEBUG
+    _RESOLVER_DEBUG = bool(on)
+
+
+def _tr(msg):
+    if _RESOLVER_DEBUG:
+        sys.stdout.write(msg)
+
+
+def _tr_err(msg):
+    if _RESOLVER_DEBUG:
+        sys.stderr.write(msg)
+
+
+def _dep_priority_str(p):
+    """Real _emerge/DepPriority.py::DepPriority.__str__ -- the single
+    highest classification on the priority."""
+    if p["optional"]:
+        return "optional"
+    if p["buildtime_slot_op"]:
+        return "buildtime_slot_op"
+    if p["buildtime"]:
+        return "buildtime"
+    if p["runtime_slot_op"]:
+        return "runtime_slot_op"
+    if p["runtime"]:
+        return "runtime"
+    if p["runtime_post"]:
+        return "runtime_post"
+    return "soft"
+
+
+def _dep_priority_rank(p):
+    """Real DepPriority.__int__ -- the hardness bisect.insort orders a
+    per-edge priority list by, so the label is the max."""
+    if p["optional"]:
+        return -5
+    if p["buildtime_slot_op"]:
+        return 0
+    if p["buildtime"]:
+        return -1
+    if p["runtime_slot_op"]:
+        return -2
+    if p["runtime"]:
+        return -3
+    if p["runtime_post"]:
+        return -4
+    return -6
+
+
+def _max_priority(prios):
+    return max(prios, key=_dep_priority_rank)
+
+
+def _node_label(entry, root, installed):
+    """Real _emerge.Package.__str__ (Package.py:568) minus the ANSI colour:
+    (cat/pkg-ver[-build_id]:slot/sub_slot::repo, <state>)."""
+    category, package = entry[0], entry[1]
+    ver = _entry_version(entry)
+    prov = entry[8] if isinstance(entry[8], dict) else {}
+    if installed:
+        slot, sub_slot = _read_vdb_slot(root, category, package, ver)
+        repo = _installed_pkg_repo(root, category, package, ver)
+        build_id_str = ""
+    else:
+        slot = entry[4] or "0"
+        sub_slot = prov.get("sub_slot") or "0"
+        repo = prov.get("repo_name") or "__unknown__"
+        build_id_str = f"-{prov['build_id']}" if prov.get("build_id") else ""
+    if installed:
+        state = "installed"
+    else:
+        state = f"{entry[7]} scheduled for merge"
+    return f"({category}/{package}-{ver}{build_id_str}:{slot}/{sub_slot}::{repo}, {state})"
+
+
 class _MergeDigraph:
     """A portage.util.digraph restricted to what _serialize_tasks reads:
     per-node child/parent adjacency with a priority *list* per edge, plus
@@ -7410,6 +7501,176 @@ def _build_merge_digraph(entries, top_level_atoms, root):
     return g
 
 
+def _debug_dump_graph(g, entries, top_level_atoms, root):
+    """Real portage's `\\ndigraph:\\n\\n` + digraph.debug_print()
+    (portage/util/digraph.py:349) -- to stderr, under
+    `emerge --pretend --debug`. Iterates g.order (insertion order, before
+    _merge_order_bias re-sorts it -- real debug_print iterates self.nodes,
+    not .order). Mirrors merge_order.rs::debug_dump_graph. Divergences from
+    real: plain-text node labels; portuale's post-prune merge closure as
+    the node set, with the top-level atoms appended as pseudo-DependencyArg
+    nodes."""
+    if not _RESOLVER_DEBUG:
+        return
+    _tr_err("\ndigraph:\n\n")
+
+    def label(i):
+        return _node_label(entries[i], root, g.installed[i])
+
+    for i in g.order:
+        if not g.children[i]:
+            _tr_err(f"{label(i)} (no children)\n")
+            continue
+        _tr_err(f"{label(i)} depends on\n")
+        for c, prios in g.children[i]:
+            _tr_err(f"  {label(c)} ({_dep_priority_str(_max_priority(prios))})\n")
+
+    cp_idx = {}
+    for j, e in enumerate(entries):
+        cp_idx.setdefault((e[0], e[1]), []).append(j)
+    for atom_str in top_level_atoms:
+        atom = _parse_atom(atom_str)
+        if atom is None or atom.blocker:
+            continue
+        idxs = cp_idx.get(tuple(atom.cp.split("/", 1)))
+        if idxs:
+            _tr_err(f"{atom_str} depends on\n")
+            for j in idxs:
+                _tr_err(f"  {label(j)} (soft)\n")
+        else:
+            _tr_err(f"{atom_str} (no children)\n")
+
+
+def _dump_atom_candidates(repos, root, atom, category, package):
+    """emerge --pretend --debug Stage 3: real
+    _wrapped_select_pkg_highest_available_imp's candidate list
+    (depgraph.py:8347) -- f"{type_name + ':':>10} {cpv}::{repo}\\n" for
+    every candidate that matched `atom`, in real's dbs order (ebuild,
+    then binary, then installed), to stderr. Portuale lists ebuild and
+    installed only (see resolver_trace.rs::dump_atom_candidates). Mirrors
+    that function."""
+    if not _RESOLVER_DEBUG:
+        return
+
+    def line(ty, cpv, repo):
+        _tr_err(f"{ty + ':':>10} {cpv}::{repo}\n")
+
+    try:
+        cands = list_candidates(repos, category, package)
+    except OSError:
+        cands = []
+    strs = [
+        f"{category}/{package}-{c['version']}:{c['slot']}/{c['sub_slot']}::{c['repo_name']}"
+        for c in cands
+    ]
+    try:
+        matched = set(match_from_list(atom, strs))
+    except (InvalidAtom, InvalidDependString):
+        matched = set()
+    for c, s in zip(cands, strs):
+        if s in matched:
+            line("ebuild", f"{category}/{package}-{c['version']}", c["repo_name"])
+
+    inst = installed_candidates(root, category, package)
+    istrs = [f"{category}/{package}-{v}:{s}/{ss}" for (v, s, ss) in inst]
+    try:
+        imatched = set(match_from_list(atom, istrs))
+    except (InvalidAtom, InvalidDependString):
+        imatched = set()
+    for (v, s, ss), key in zip(inst, istrs):
+        if key in imatched:
+            line(
+                "installed",
+                f"{category}/{package}-{v}",
+                _installed_pkg_repo(root, category, package, v),
+            )
+
+
+def _dump_resolution_walk(entries, root):
+    """emerge --pretend --debug stages 2/4/6: the per-package resolution
+    narration -- real _add_pkg (Child:/Parent Dep:), _add_pkg_deps
+    (Parent:/Depstring:/Priority:/Candidates:), dep_check
+    (Virtual Parent:/Virtual Depstring:) and the "\\nExiting... <pkg>\\n"
+    end marker. Emitted in one pass over the final `entries` (BFS-push
+    order), on the successful backtracking pass only -- real interleaves
+    them as a LIFO walk; the information is the same, the interleaving is
+    not (the Stage 1 digraph: dump is the authoritative diff surface).
+    Mirrors resolver_trace.rs::dump_resolution_walk."""
+    if not _RESOLVER_DEBUG:
+        return
+    keys = ("RDEPEND", "IDEPEND", "PDEPEND", "DEPEND", "BDEPEND")
+
+    def _label_of(cat, pkg):
+        for e in entries:
+            if e[0] == cat and e[1] == pkg:
+                return _node_label(
+                    e,
+                    root,
+                    e[2][0] in ("already_installed", "no_visible_candidate"),
+                )
+        return f"({cat}/{pkg})"
+
+    def _use_str(e):
+        disp = e[5] if isinstance(e[5], list) else []
+        return " ".join(f if on else f"-{f}" for f, on in disp)
+
+    _tr(
+        "\n# resolution walk (portuale BFS order, not real's LIFO"
+        " _create_graph order)\n"
+    )
+    for e in entries:
+        installed = e[2][0] in ("already_installed", "no_visible_candidate")
+        node = _node_label(e, root, installed)
+        _tr(f'\nChild:         {node} USE="{_use_str(e)}"\n')
+        req = e[6] if isinstance(e[6], list) else []
+        if not req:
+            _tr(f"Parent Dep:    {e[0]}/{e[1]} (Argument)\n")
+        else:
+            for pc, pp in req:
+                _tr(f"Parent Dep:    {e[0]}/{e[1]} required by {_label_of(pc, pp)}\n")
+        prov = e[8] if isinstance(e[8], dict) else {}
+        deps = prov.get("deps") or []
+        if e[0] == "virtual" and not installed:
+            rdep = " ".join(d["atom"] for d in deps if d["key"] == 0)
+            _tr(f"Virtual Parent:      {node}\nVirtual Depstring:   {rdep}\n")
+        for ki, kname in enumerate(keys):
+            atoms = [d["atom"] for d in deps if d["key"] == ki]
+            if not atoms:
+                continue
+            prio = next((d["priority"] for d in deps if d["key"] == ki), _new_priority())
+            _tr(
+                f"\nParent:    {node}\nDepstring: {' '.join(atoms)} ({kname})\n"
+                f"Priority:  {_dep_priority_str(prio)}\n"
+            )
+            _tr("Candidates: [%s]\n" % ", ".join(f"'{a}'" for a in atoms))
+        _tr(f"\nExiting... {node}\n")
+
+
+def _debug_dump_cycle(g, entries, sub, root):
+    """Real depgraph.py:9917-9930's "\\nruntime cycle digraph (<n>
+    nodes):\\n\\n" + debug_print() of the cycle's induced subgraph +
+    "runtime cycle leaf: <pkg>\\n\\n" -- stderr, per relaxed runtime
+    cycle. Mirrors merge_order.rs::debug_dump_cycle."""
+
+    def label(i):
+        return _node_label(entries[i], root, g.installed[i])
+
+    _tr_err(f"\nruntime cycle digraph ({len(sub)} nodes):\n\n")
+    for i in g.order:
+        if i not in sub:
+            continue
+        kids = [(c, prios) for c, prios in g.children[i] if c in sub]
+        if not kids:
+            _tr_err(f"{label(i)} (no children)\n")
+            continue
+        _tr_err(f"{label(i)} depends on\n")
+        for c, prios in kids:
+            _tr_err(f"  {label(c)} ({_dep_priority_str(_max_priority(prios))})\n")
+    leaf = next((i for i in reversed(g.order) if i in sub), None)
+    if leaf is not None:
+        _tr_err(f"runtime cycle leaf: {label(leaf)}\n\n")
+
+
 def _deep_system_deps(g, entries, config):
     """Real _emerge/_find_deep_system_runtime_deps.py: every @system-set
     member in the graph, plus everything reachable from one by following
@@ -7572,7 +7833,7 @@ def _harvest_cycle(g, sub):
     return out
 
 
-def _select_nodes(g, entries):
+def _select_nodes(g, entries, root="/"):
     """Real depgraph._serialize_tasks' own selection loop, restricted to
     what a --pretend merge graph contains: no Uninstall tasks, no blocker
     nodes (blockers are rendered separately), and therefore none of real's
@@ -7664,6 +7925,12 @@ def _select_nodes(g, entries):
                 if found is None:
                     continue
                 sub, used_ig = found
+                # emerge --pretend --debug: real depgraph.py:9917-9930's
+                # "\nruntime cycle digraph (<n> nodes):\n\n" + debug_print()
+                # of the induced subgraph + "runtime cycle leaf: <pkg>".
+                # Mirrors merge_order.rs::debug_dump_cycle.
+                if _RESOLVER_DEBUG and len(sub) > 1:
+                    _debug_dump_cycle(g, entries, sub, root)
                 # "NOTE: This case should only be triggered when
                 # prefer_asap is True... select only one node here, so
                 # that merge order accounts for as many dependencies as
@@ -7764,9 +8031,19 @@ def _topological_merge_order(entries, top_level_atoms=(), config=None, root="/")
     Mirrors portage-repo/src/merge_order.rs's serialize_merge_order
     exactly."""
     n = len(entries)
-    if n < 2:
-        return entries
     config = config or {"system_packages": []}
+    if n < 2:
+        # Real still emits the `digraph:` dump for a single-package merge
+        # (its scheduler runs regardless). Portuale short-circuits the
+        # scheduler here, so build the graph once just for the dump.
+        if n == 1 and _RESOLVER_DEBUG:
+            _debug_dump_graph(
+                _build_merge_digraph(entries, top_level_atoms, root),
+                entries,
+                top_level_atoms,
+                root,
+            )
+        return entries
     g = _build_merge_digraph(entries, top_level_atoms, root)
     # Unbiased discovery rank, kept before the bias re-sorts g.order -- it
     # is what the entries the scheduler never saw are woven back in on.
@@ -7774,8 +8051,9 @@ def _topological_merge_order(entries, top_level_atoms=(), config=None, root="/")
     for pos, i in enumerate(g.order):
         discovery_rank[i] = pos
 
+    _debug_dump_graph(g, entries, top_level_atoms, root)
     _merge_order_bias(g, entries, config)
-    scheduled = _select_nodes(g, entries)
+    scheduled = _select_nodes(g, entries, root)
 
     placed = set(scheduled)
     leftover = sorted(
@@ -8468,6 +8746,12 @@ def resolve_pretend_graph(
         # required_by_map below, for each entry's own required_by.
         # A top-level atom has no "unevaluated" form distinct from itself (no
         # parent to ever flip a flag on).
+        # emerge --pretend --debug Stage 3: real _resolve's own
+        # "\n      Arg: <arg>\n     Atom: <atom>\n" (depgraph.py:5521),
+        # once per top-level arg atom, first pass only. Mirrors lib.rs.
+        if _RESOLVER_DEBUG and backtrack_iteration == 0:
+            for a in atoms:
+                _tr(f"\n      Arg: {a}\n     Atom: {a}\n")
         queue = deque((a, 0, None, None, False) for a in atoms)
         pending_blockers = []
         # Top-level atoms matched by package.provided -- see
@@ -8543,6 +8827,12 @@ def resolve_pretend_graph(
             if current_atom_str in visited_atoms:
                 continue
             visited_atoms.add(current_atom_str)
+            # emerge --pretend --debug Stage 3: real
+            # _wrapped_select_pkg_highest_available_imp's candidate list
+            # (depgraph.py:8347), to stderr, first pass only. Mirrors
+            # resolver_trace.rs::dump_atom_candidates.
+            if _RESOLVER_DEBUG and backtrack_iteration == 0:
+                _dump_atom_candidates(repos, root, current_atom_str, key[0], key[1])
             # Backtracking: record this atom as one of the constraints
             # pulling `cat/pkg` (real `_select_pkg_highest_available` sees
             # the whole atom set for a package, not just the first).
@@ -10225,6 +10515,7 @@ def resolve_pretend_graph(
     # dependencies are ever queued). Re-sort into merge order now that
     # every required_by edge is known. Mirrors portage-repo/src/lib.rs's
     # topological_merge_order exactly.
+    _dump_resolution_walk(entries, root)
     entries = _topological_merge_order(entries, atoms, config, root)
 
     # Real depgraph.py:5706-5717 -- see the Rust side's own
@@ -11117,7 +11408,7 @@ Output:
       --verbose-conflicts   list every parent of a slot conflict, not one per collision reason
       --ignore-built-slot-operator-deps[=y|n]  ignore recorded := slot-operator dependencies
       --depclean-lib-check[=y|n]  with --depclean/--prune: scan for soname breakage (default y)
-  -d, --debug               run ebuild phases under `set -x` (PORTAGE_DEBUG=1); no effect under --pretend
+  -d, --debug               PORTAGE_DEBUG=1 in ebuild phases; resolver trace under --pretend
 
 Portuale extensions (not real emerge options):
       --json                dump the resolved graph as one JSON line instead of the display
@@ -16223,6 +16514,14 @@ def run(args):
         print('emerge: can\'t specify both of "--tree" and "--columns".', file=sys.stderr)
         return 2
 
+    # --debug/-d under --pretend: besides PORTAGE_DEBUG=1 in the phase env
+    # (a no-op when nothing is built), real also turns on the full
+    # resolver trace (initialize_logger(logging.DEBUG)). Portuale emits
+    # the same shapes -- see _debug_dump_graph / _tr / _tr_err. Gated to
+    # --pretend only, set once before any resolution. Mirrors pretend.rs's
+    # `portage_repo::set_resolver_debug(debug && pretend)`.
+    _set_resolver_debug(debug and pretend)
+
     # --sync: repo syncing is a permanent non-goal in portuale.
     # Mirrors pretend.rs.
     if sync_action:
@@ -17708,6 +18007,71 @@ def run(args):
     # below do not run. Mirrors pretend.rs.
     if autounmask_only:
         return 0
+
+    # emerge --pretend --debug Stage 5: real _compute_abi_rebuild_info's
+    # own DEBUG-level dump (real depgraph.py:1011-1206), on stdout, right
+    # before the _show_abi_rebuild_info "causing rebuilds" block. Real's
+    # _slot_operator_deps / _forced_rebuilds are richer dicts than
+    # portuale's flat abi_rebuilds (provider-cpv, consumer-cpv) list --
+    # portuale emits the same shapes from what it has. Mirrors pretend.rs.
+    if _RESOLVER_DEBUG:
+        _root_str = _root()
+        _by_cpv = {}
+        for e in entries:
+            _oc, _tag = e[2], e[2][0]
+            if _tag in ("new", "reinstall"):
+                _ver = _oc[1]
+            elif _tag in ("upgrade", "downgrade"):
+                _ver = _oc[2]
+            else:
+                continue
+            _prov = e[8] if isinstance(e[8], dict) else {}
+            _by_cpv[f"{e[0]}/{e[1]}-{_ver}"] = (
+                f"{e[0]}/{e[1]}",
+                e[4] or "0",
+                _prov.get("sub_slot") or "0",
+                _prov.get("repo_name") or "__unknown__",
+                "binary" if e[7] == "binary" else "ebuild",
+            )
+
+        def _s5_label(cpv):
+            info = _by_cpv.get(cpv)
+            if info is None:
+                return f"({cpv}, installed)"
+            _cp, slot, sub_slot, repo, ty = info
+            return f"({cpv}:{slot}/{sub_slot}::{repo}, {ty} scheduled for merge)"
+
+        sys.stdout.write("forced reinstall atoms:\n")
+        if reinstall_atoms:
+            sys.stdout.write(f"   root: {_root_str}\n")
+            for _atom in reinstall_atoms:
+                sys.stdout.write(f"      atom: {_atom}\n")
+        sys.stdout.write("\n\n")
+
+        sys.stdout.write("slot operator dependencies:\n")
+        _by_slot_atom = {}
+        for _pair in result["abi_rebuilds"]:
+            _info = _by_cpv.get(_pair[0])
+            _slot_atom = f"{_info[0]}:{_info[1]}" if _info else _pair[0]
+            _by_slot_atom.setdefault(_slot_atom, []).append(_pair)
+        for _slot_atom in sorted(_by_slot_atom):
+            sys.stdout.write(f"   ({_root_str}, {_slot_atom})\n")
+            for _provider, _consumer in _by_slot_atom[_slot_atom]:
+                sys.stdout.write(f"      parent: {_s5_label(_consumer)}\n")
+                sys.stdout.write(f"        child: {_s5_label(_provider)} (runtime_slot_op)\n")
+        sys.stdout.write("\n\n")
+
+        sys.stdout.write("forced rebuilds:\n")
+        _by_child = {}
+        for _provider, _consumer in result["abi_rebuilds"]:
+            _by_child.setdefault(_provider, []).append(_consumer)
+        if _by_child:
+            sys.stdout.write(f"   root: {_root_str}\n")
+            for _child in sorted(_by_child):
+                sys.stdout.write(f"      child: {_s5_label(_child)}\n")
+                for _parent in _by_child[_child]:
+                    sys.stdout.write(f"         parent: {_s5_label(_parent)}\n")
+        sys.stdout.write("\n\n")
 
     # Real _show_abi_rebuild_info (depgraph.py:1210), gated on
     # --verbose-slot-rebuilds != "n" (default on, NOT --verbose), after

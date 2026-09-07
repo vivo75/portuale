@@ -1881,28 +1881,30 @@ the `harness-common` crate. The CLI surface is unchanged — the harness
 commands above work exactly as documented, and a `printf ... | <harness>
 batch` pipe is still the benchmark-mode entry point.
 
-Merge-order debugging (2026-09-06): `PORTUALE_DEBUG_MERGE_GRAPH=1` makes
-`emerge -p` dump the dependency digraph the `_serialize_tasks` port
-schedules from, on stderr, in `.order` sequence:
+Resolver-trace debugging (2026-09-07): `emerge --pretend --debug` now
+emits real portage's resolver trace -- `Arg:`/`Atom:`, the per-package
+`Child:`/`Parent:`/`Depstring:`/`Priority:`/`Exiting...` narration and
+the `forced reinstall atoms:` / `slot operator dependencies:` / `forced
+rebuilds:` summaries on stdout; the per-atom `ebuild:`/`installed:`
+candidate list, the `\ndigraph:\n\n` + `debug_print()` merge-digraph
+dump and the `runtime cycle digraph` dumps on stderr. See
+[`emerge-pretend-debug.md`](emerge-pretend-debug.md) for the full shape
+and the deliberate divergences from real (plain-text node labels,
+BFS-ordered narration, ebuild+installed candidates only). `--debug` also
+still means `PORTAGE_DEBUG=1` in any ebuild phase (`set -x`).
 
 ```bash
-PORTUALE_DEBUG_MERGE_GRAPH=1 rust/target/release/portuale emerge \
-    -puD --getbinpkg net-libs/rest 2>graph.txt >/dev/null
-# NODE 0 net-libs/rest nomerge=false
-# EDGE net-libs/rest -> dev-libs/glib runtime+sat
-# EDGE net-libs/rest -> dev-libs/libxml2 runtime_slot_op+sat
-# ...
+rust/target/release/portuale emerge --pretend --debug \
+    -uD --getbinpkg net-libs/rest 2>graph.txt >/dev/null
+sed -n '/^digraph:/,$p' graph.txt
+# (net-libs/rest-…:0/0::gentoo, ebuild scheduled for merge) depends on
+#   (dev-libs/glib-…:2/2::gentoo, installed) (runtime)
+#   ...
 ```
 
-It is shaped to line up with real portage's own
-`emerge -p --debug` digraph dump (`digraph.debug_print()`, printed just
-before `_serialize_tasks` runs), which is the reference this port was
-validated against. Note that portuale's own `--debug` is *not* that:
-it only sets `PORTAGE_DEBUG=1` (so the embedded bash runs `set -x` in
-every phase), which makes `emerge -p --debug` byte-identical to
-`emerge -p`. Porting real's resolver trace -- of which this env var is a
-first, ad-hoc slice -- is designed out in
-[`emerge-pretend-debug.md`](emerge-pretend-debug.md). To localise a merge-order divergence, dump both and
-diff in this order: node sets, then edge sets, then per-edge priorities,
-then `.order`. That sequence isolates whether the gap is graph
-construction or scheduling in one pass.
+The legacy `PORTUALE_DEBUG_MERGE_GRAPH=1` env var still works (dumps the
+same `digraph:` block on `emerge -p` without the rest of the trace). To
+localise a merge-order divergence, dump both portuale and real and diff
+in this order: node sets, then edge sets, then per-edge priorities, then
+`.order`. That sequence isolates whether the gap is graph construction or
+scheduling in one pass.

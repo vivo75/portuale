@@ -789,7 +789,7 @@ fn merge_order_bias(g: &mut Digraph, entries: &[GraphEntry], config: &portage_pr
 /// The version a `GraphEntry` resolves to, whatever its outcome -- real
 /// `Package.version`, which `find_smallest_cycle`'s `sorted(nodes)`
 /// compares after `cp`.
-fn entry_version(e: &GraphEntry) -> Option<&str> {
+pub(crate) fn entry_version(e: &GraphEntry) -> Option<&str> {
     match &e.outcome {
         PretendOutcome::New { version }
         | PretendOutcome::Reinstall { version, .. }
@@ -957,7 +957,7 @@ fn harvest_cycle(g: &Digraph, sub: &HashSet<usize>) -> Vec<usize> {
 ///
 /// Returns the alive nodes in scheduling order (installed "nomerge"
 /// nodes included -- the caller drops them).
-fn select_nodes(g: &mut Digraph, entries: &[GraphEntry]) -> Vec<usize> {
+fn select_nodes(g: &mut Digraph, entries: &[GraphEntry], root: &Path) -> Vec<usize> {
     let mut retlist: Vec<usize> = Vec::new();
     let mut asap: Vec<usize> = Vec::new();
     let mut prefer_asap = true;
@@ -1045,6 +1045,14 @@ fn select_nodes(g: &mut Digraph, entries: &[GraphEntry]) -> Vec<usize> {
             for lr in ranges {
                 if let Some((sub, ig)) = find_smallest_cycle(g, entries, lr, &asap, prefer_asap) {
                     used_ig = ig;
+                    // `emerge --pretend --debug`: real
+                    // `depgraph.py:9917-9930`'s `\nruntime cycle digraph
+                    // (<n> nodes):\n\n` + `debug_print()` of the induced
+                    // subgraph, then `runtime cycle leaf: <pkg>` -- to
+                    // stderr, once per relaxed cycle.
+                    if crate::resolver_debug() && sub.len() > 1 {
+                        debug_dump_cycle(g, entries, &sub, root);
+                    }
                     // "NOTE: This case should only be triggered when
                     // prefer_asap is True... select only one node here,
                     // so that merge order accounts for as many
@@ -1142,55 +1150,141 @@ fn select_nodes(g: &mut Digraph, entries: &[GraphEntry]) -> Vec<usize> {
     retlist
 }
 
-/// Dumps the freshly-built digraph -- `.order` sequence, every edge and
-/// its priority set -- when `PORTUALE_DEBUG_MERGE_GRAPH` is set in the
-/// environment. Deliberately shaped to line up with real portage's own
-/// `emerge -p --debug` digraph dump, which is how this module was
-/// validated and is the fastest way to localise any future merge-order
-/// divergence: dump both, diff the node sets, then the edge sets, then
-/// the priorities, then `.order`. Reasoning about the scheduler in the
-/// abstract is much slower than that diff.
-fn debug_dump_graph(g: &Digraph, entries: &[GraphEntry]) {
-    if std::env::var_os("PORTUALE_DEBUG_MERGE_GRAPH").is_none() {
+impl std::fmt::Display for DepPriority {
+    /// Real `_emerge/DepPriority.py::DepPriority.__str__` -- the single
+    /// highest classification. `Priority:` lines and `digraph:` edge
+    /// labels both use it.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(crate::resolver_trace::dep_priority_str(self))
+    }
+}
+
+/// Dumps the freshly-built digraph in real portage's own
+/// `digraph.debug_print()` format (`portage/util/digraph.py:349`),
+/// preceded by the `\ndigraph:\n\n` header -- to **stderr**, under
+/// `emerge --pretend --debug` (or the legacy `PORTUALE_DEBUG_MERGE_GRAPH`
+/// env var). This is how the module was validated and the fastest way to
+/// localise a merge-order divergence: dump both, diff the node sets, then
+/// the edge sets, then the priorities, then `.order` (per this module's
+/// header).
+///
+/// Real's format, per node in insertion order (`g.order` before
+/// `merge_order_bias` re-sorts it -- real `debug_print` iterates
+/// `self.nodes`, not `.order`):
+///
+/// ```text
+/// (cat/pkg-ver:slot/sub_slot::repo, <state>) depends on
+///   (child..., <state>) (<max-priority>)
+/// (leaf..., <state>) (no children)
+/// ```
+///
+/// **Divergences from real** (see `resolver_trace`'s header):
+/// plain-text node labels; portuale's post-prune merge closure as the
+/// node set, with the top-level atoms appended as pseudo-`DependencyArg`
+/// nodes (`<atom> depends on` / `  <resolved-node> (soft)`) so a diff
+/// against real still lines up, rather than real's full `@world`/
+/// `@system` universe (proven unnecessary for ordering by the
+/// `_serialize_tasks` port).
+/// Real `depgraph.py:9917-9930`'s `\nruntime cycle digraph (<n> nodes):
+/// \n\n` + `debug_print()` of the cycle's induced subgraph + `runtime
+/// cycle leaf: <pkg>\n\n` -- to stderr, under `--pretend --debug`, once
+/// per relaxed runtime cycle. Same node/edge formatting as
+/// `debug_dump_graph`.
+fn debug_dump_cycle(g: &Digraph, entries: &[GraphEntry], sub: &HashSet<usize>, root: &Path) {
+    let label = |i: usize| crate::resolver_trace::node_label(&entries[i], root, g.installed[i]);
+    crate::resolver_trace::err(format_args!(
+        "\nruntime cycle digraph ({} nodes):\n\n",
+        sub.len()
+    ));
+    for &i in g.order.iter().filter(|i| sub.contains(i)) {
+        let kids: Vec<&(usize, Vec<DepPriority>)> = g.children[i]
+            .iter()
+            .filter(|(c, _)| sub.contains(c))
+            .collect();
+        if kids.is_empty() {
+            crate::resolver_trace::err(format_args!("{} (no children)\n", label(i)));
+        } else {
+            crate::resolver_trace::err(format_args!("{} depends on\n", label(i)));
+            for (c, prios) in kids {
+                let max = crate::resolver_trace::max_priority(prios);
+                crate::resolver_trace::err(format_args!("  {} ({})\n", label(*c), max));
+            }
+        }
+    }
+    // Real `cycle_digraph.order[-1]` -- the last node in `.order` within
+    // the subgraph is the leaf real reports.
+    if let Some(&leaf) = g.order.iter().rev().find(|i| sub.contains(i)) {
+        crate::resolver_trace::err(format_args!("runtime cycle leaf: {}\n\n", label(leaf)));
+    }
+}
+
+/// Build the digraph and dump it -- for `topological_merge_order`'s
+/// single-package short-circuit, where `serialize_merge_order` (and thus
+/// the normal `debug_dump_graph` call) never runs.
+pub(crate) fn debug_dump_graph_only(
+    entries: &[GraphEntry],
+    top_level_atoms: &[String],
+    root: &Path,
+) {
+    let g = build_digraph(entries, top_level_atoms, root);
+    debug_dump_graph(&g, entries, top_level_atoms, root);
+}
+
+fn debug_dump_graph(g: &Digraph, entries: &[GraphEntry], top_level_atoms: &[String], root: &Path) {
+    let env = std::env::var_os("PORTUALE_DEBUG_MERGE_GRAPH").is_some();
+    if !env && !crate::resolver_debug() {
         return;
     }
-    let label = |p: &DepPriority| {
-        let mut v: Vec<&str> = Vec::new();
-        if p.buildtime_slot_op {
-            v.push("buildtime_slot_op");
-        } else if p.buildtime {
-            v.push("buildtime");
+    // The env var predates the `--debug` wiring and went to stderr
+    // directly; keep it working even without `--debug`.
+    let emit = |s: String| {
+        if crate::resolver_debug() {
+            crate::resolver_trace::err(format_args!("{s}"));
+        } else {
+            eprint!("{s}");
         }
-        if p.runtime_slot_op {
-            v.push("runtime_slot_op");
-        } else if p.runtime {
-            v.push("runtime");
-        }
-        if p.runtime_post {
-            v.push("runtime_post");
-        }
-        if p.optional {
-            v.push("optional");
-        }
-        if p.satisfied {
-            v.push("sat");
-        }
-        v.join("+")
     };
-    for (pos, &i) in g.order.iter().enumerate() {
-        eprintln!(
-            "NODE {pos} {}/{} nomerge={}",
-            entries[i].category, entries[i].package, g.installed[i]
-        );
-        for (c, prios) in &g.children[i] {
-            eprintln!(
-                "EDGE {}/{} -> {}/{} {}",
-                entries[i].category,
-                entries[i].package,
-                entries[*c].category,
-                entries[*c].package,
-                prios.iter().map(label).collect::<Vec<_>>().join(",")
-            );
+    emit("\ndigraph:\n\n".to_string());
+
+    let label = |i: usize| crate::resolver_trace::node_label(&entries[i], root, g.installed[i]);
+
+    for &i in &g.order {
+        if g.children[i].is_empty() {
+            emit(format!("{} (no children)\n", label(i)));
+        } else {
+            emit(format!("{} depends on\n", label(i)));
+            for (c, prios) in &g.children[i] {
+                let max = crate::resolver_trace::max_priority(prios);
+                emit(format!("  {} ({})\n", label(*c), max));
+            }
+        }
+    }
+
+    // Pseudo-`DependencyArg` nodes for the top-level atoms, appended
+    // after the real graph (real interleaves them; portuale flattens set
+    // expansion before the resolver, so it only has the concrete atoms).
+    let mut cp_idx: HashMap<(&str, &str), Vec<usize>> = HashMap::new();
+    for (j, e) in entries.iter().enumerate() {
+        cp_idx
+            .entry((e.category.as_str(), e.package.as_str()))
+            .or_default()
+            .push(j);
+    }
+    for atom_str in top_level_atoms {
+        let Some(atom) = portage_dep::parse_atom(atom_str) else {
+            continue;
+        };
+        if atom.blocker != portage_dep::Blocker::None {
+            continue;
+        }
+        match cp_idx.get(&(atom.category.as_str(), atom.package.as_str())) {
+            Some(idxs) if !idxs.is_empty() => {
+                emit(format!("{atom_str} depends on\n"));
+                for &j in idxs {
+                    emit(format!("  {} (soft)\n", label(j)));
+                }
+            }
+            _ => emit(format!("{atom_str} (no children)\n")),
         }
     }
 }
@@ -1218,9 +1312,9 @@ pub(crate) fn serialize_merge_order(
         discovery_rank[i] = pos;
     }
 
-    debug_dump_graph(&g, entries);
+    debug_dump_graph(&g, entries, top_level_atoms, root);
     merge_order_bias(&mut g, entries, config);
-    let scheduled = select_nodes(&mut g, entries);
+    let scheduled = select_nodes(&mut g, entries, root);
 
     // Real's own retlist skips every "nomerge" node (`if node.operation
     // == "nomerge": continue`), because real never displays one. Portuale
