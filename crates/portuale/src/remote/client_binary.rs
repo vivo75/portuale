@@ -238,3 +238,173 @@ pub(crate) fn ping_client_binary(
     }
     Ok(())
 }
+
+/// The install: `mktemp <dir>/.portuale.XXXXXX`, stream the server
+/// binary over the existing connection (the way bundles stream), `chmod
+/// 0755`, re-check the digest, `mv` to `<dir>/portuale-<hash>`, then
+/// `"<abs>" __helper ping` (which must print the ping token). On any
+/// failure the temp file is removed and the run fails before any unit
+/// is consumed. Prints the status line `portuale-remote: install-bin
+/// <rc>`.
+pub(crate) fn install_client_binary(
+    ctx: &RemoteContext,
+    control: Option<&std::path::Path>,
+    target: &str,
+    expected: &str,
+    bin_path: &str,
+) -> Result<(), String> {
+    // Idempotent: a matching target only needs its ping (a reuse, so no
+    // status line -- the second run reports no `install-bin` line).
+    match client_file_digest(ctx, control, target)? {
+        Some(digest) if digest == expected => {
+            ping_client_binary(ctx, control, target)?;
+            return Ok(());
+        }
+        _ => {}
+    }
+    let bytes = std::fs::read(bin_path)
+        .map_err(|e| format!("mrg: reading the shipped binary {bin_path}: {e}"))?;
+    let dir = std::path::Path::new(target)
+        .parent()
+        .map(|p| p.to_string_lossy().into_owned())
+        .filter(|p| !p.is_empty())
+        .ok_or_else(|| format!("mrg: install target {target} has no parent directory"))?;
+    // `mktemp <dir>/.portuale.XXXXXX`.
+    let tmp: String = match ctx.transport {
+        RemoteTransport::Local => {
+            let mut attempt = 0;
+            loop {
+                let nanos = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|t| t.as_nanos())
+                    .unwrap_or(0);
+                let candidate = format!(
+                    "{dir}/.portuale.{}.{attempt}.{nanos}.tmp",
+                    std::process::id()
+                );
+                match std::fs::OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .open(&candidate)
+                {
+                    Ok(_) => break candidate,
+                    Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists && attempt < 8 => {
+                        attempt += 1;
+                    }
+                    Err(e) => {
+                        return Err(format!("mrg: creating the client temp file: {e}"));
+                    }
+                }
+            }
+        }
+        RemoteTransport::Ssh => {
+            let output = run_raw_command(
+                ctx,
+                control,
+                &["mktemp".to_string(), format!("{dir}/.portuale.XXXXXX")],
+            )?;
+            let code = output.status.code();
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            if !output.status.success() {
+                if is_transport_error(code, &stderr) {
+                    return Err(format!(
+                        "mrg: client {} unreachable:\n{stderr}",
+                        ctx.hostname
+                    ));
+                }
+                return Err(format!(
+                    "mrg: client mktemp in {dir} failed (exit {}):\n{stderr}",
+                    code.unwrap_or(-1)
+                ));
+            }
+            let name = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if name.is_empty() || !name.starts_with(&dir) {
+                remove_client_path(ctx, control, &name);
+                return Err(format!(
+                    "mrg: client mktemp answered unexpectedly: {name:?}"
+                ));
+            }
+            name
+        }
+    };
+    let fail = |step: &str, detail: String| {
+        remove_client_path(ctx, control, &tmp);
+        format!("mrg: client binary install failed at {step}: {detail}")
+    };
+    // Write from stdin (streamed over the existing connection).
+    if let Err(message) = send_bytes(ctx, control, &bytes, &tmp) {
+        return Err(fail("stream", message));
+    }
+    match ctx.transport {
+        RemoteTransport::Local => {
+            use std::os::unix::fs::PermissionsExt as _;
+            if let Err(e) = std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o755)) {
+                return Err(fail("chmod", e.to_string()));
+            }
+        }
+        RemoteTransport::Ssh => {
+            let output = run_raw_command(
+                ctx,
+                control,
+                &[
+                    "chmod".to_string(),
+                    "0755".to_string(),
+                    "--".to_string(),
+                    tmp.clone(),
+                ],
+            )
+            .map_err(|message| fail("chmod", message))?;
+            if !output.status.success() {
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                return Err(fail(
+                    "chmod",
+                    format!("exit {}:\n{stderr}", output.status.code().unwrap_or(-1)),
+                ));
+            }
+        }
+    }
+    // Re-check the digest before the rename (never an in-place write).
+    match client_file_digest(ctx, control, &tmp)? {
+        Some(digest) if digest == expected => {}
+        other => {
+            return Err(fail(
+                "digest",
+                format!("the streamed bytes do not match (got {other:?})"),
+            ));
+        }
+    }
+    match ctx.transport {
+        RemoteTransport::Local => {
+            if let Err(e) = std::fs::rename(&tmp, target) {
+                return Err(fail("mv", e.to_string()));
+            }
+        }
+        RemoteTransport::Ssh => {
+            let output = run_raw_command(
+                ctx,
+                control,
+                &[
+                    "mv".to_string(),
+                    "--".to_string(),
+                    tmp.clone(),
+                    target.to_string(),
+                ],
+            )
+            .map_err(|message| fail("mv", message))?;
+            if !output.status.success() {
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                return Err(fail(
+                    "mv",
+                    format!("exit {}:\n{stderr}", output.status.code().unwrap_or(-1)),
+                ));
+            }
+        }
+    }
+    // The install must execute: `"<abs>" __helper ping` must print the ping token.
+    if let Err(message) = ping_client_binary(ctx, control, target) {
+        remove_client_path(ctx, control, target);
+        return Err(message);
+    }
+    println!("portuale-remote: install-bin 0");
+    Ok(())
+}
