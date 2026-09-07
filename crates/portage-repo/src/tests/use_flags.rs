@@ -762,6 +762,43 @@ fn effective_use_flags_skips_stable_force_and_mask_when_not_stable() {
 }
 
 #[test]
+fn specificity_ordered_flags_processes_entries_in_source_order() {
+    // Entries fold in source order: a later `-flag` cancels an
+    // earlier `flag`, regardless of relative specificity.
+    let parent_masks_child_unmasks = vec![
+        (">=dev-libs/bar-1".to_string(), vec!["flag".to_string()]),
+        ("dev-libs/bar".to_string(), vec!["-flag".to_string()]),
+    ];
+    assert!(
+        !specificity_ordered_flags(
+            &parent_masks_child_unmasks,
+            "dev-libs/bar-1.0:0",
+            "dev-libs",
+            "bar",
+            HashSet::new(),
+        )
+        .contains("flag"),
+        "a later `-flag` cancels an earlier mask"
+    );
+
+    // ...and the reverse order keeps the flag (last source wins).
+    let child_masks = vec![
+        ("dev-libs/bar".to_string(), vec!["-flag".to_string()]),
+        (">=dev-libs/bar-1".to_string(), vec!["flag".to_string()]),
+    ];
+    assert!(
+        specificity_ordered_flags(
+            &child_masks,
+            "dev-libs/bar-1.0:0",
+            "dev-libs",
+            "bar",
+            HashSet::new(),
+        )
+        .contains("flag")
+    );
+}
+
+#[test]
 fn resolved_use_mask_interleaves_per_level_across_sources() {
     use portage_profile::UseMaskForceLevel;
     // Per-level interleave: a later level's global `-xmc` cancels an
