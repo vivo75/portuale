@@ -57,6 +57,59 @@ struct WritePkg165Args<'a> {
     bdepend: &'a str,
 }
 
+/// One scratch ebuild plus its md5-cache entry, with optional
+/// dependency keys.
+fn write_pkg_165(args: WritePkg165Args<'_>) {
+    let WritePkg165Args {
+        repo,
+        cp,
+        pv,
+        slot,
+        iuse,
+        depend,
+        rdepend,
+        bdepend,
+    } = args;
+    use md5::Digest as _;
+    use std::fmt::Write as _;
+    let (cat, pkg) = cp.split_once('/').expect("category/package");
+    let dir = repo.join(cat).join(pkg);
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut body =
+        format!("EAPI=8\nDESCRIPTION=\"165 graph inputs\"\nSLOT=\"{slot}\"\nKEYWORDS=\"amd64\"\n");
+    if !iuse.is_empty() {
+        writeln!(body, "IUSE=\"{iuse}\"").unwrap();
+    }
+    if !depend.is_empty() {
+        writeln!(body, "DEPEND=\"{depend}\"").unwrap();
+    }
+    if !rdepend.is_empty() {
+        writeln!(body, "RDEPEND=\"{rdepend}\"").unwrap();
+    }
+    if !bdepend.is_empty() {
+        writeln!(body, "BDEPEND=\"{bdepend}\"").unwrap();
+    }
+    std::fs::write(dir.join(format!("{pkg}-{pv}.ebuild")), &body).unwrap();
+    let md5 = format!("{:x}", md5::Md5::digest(body.as_bytes()));
+    let mut entry = "DEFINED_PHASES=-\nDESCRIPTION=165 graph inputs\nEAPI=8\n".to_string();
+    if !iuse.is_empty() {
+        writeln!(entry, "IUSE={iuse}").unwrap();
+    }
+    if !depend.is_empty() {
+        writeln!(entry, "DEPEND={depend}").unwrap();
+    }
+    if !rdepend.is_empty() {
+        writeln!(entry, "RDEPEND={rdepend}").unwrap();
+    }
+    if !bdepend.is_empty() {
+        writeln!(entry, "BDEPEND={bdepend}").unwrap();
+    }
+    writeln!(entry, "KEYWORDS=amd64\nSLOT={slot}\n_md5_={md5}").unwrap();
+    let cachedir = repo.join("metadata/md5-cache").join(cat);
+    std::fs::create_dir_all(&cachedir).unwrap();
+    std::fs::write(cachedir.join(format!("{pkg}-{pv}")), entry).unwrap();
+}
+
 fn cfg_165() -> portage_profile::Config {
     portage_profile::Config {
         accept_keywords: HashSet::from(["amd64".to_string()]),
