@@ -6403,6 +6403,76 @@ cat "${VDB}/NEEDED.ELF.2"
 # -- the taken-over libfoo.so.1 entry is gone, the unrelated one survives
 ```
 
+### `preserve-libs`: orphaned preserved libs are deleted once nothing links them (`_prune_plib_registry`'s tail)
+
+The half of the preserve-libs safeguard that *clears* it is real now.
+Previously portuale would preserve a still-needed library on unmerge and
+register it, but never remove it again -- so once the user rebuilt the
+consumers (real `emerge @preserved-rebuild`) the stale library and its
+registry entry lingered on disk forever. Real `dblink._prune_plib_
+registry()`'s own tail (`_find_unused_preserved_libs` +
+`_remove_preserved_libs` + `pruneNonExisting`, `vartree.py:2295-2314`/
+`3880-3990`) runs at the end of **both** a merge (`treewalk`,
+`vartree.py:5378` -- *"For gcc upgrades, preserved libs have to be
+removed after the library path has been updated"*) and an unmerge.
+
+New `ebuild_merge::find_unused_preserved_libs` rebuilds the system-wide
+`LinkageMap` from every installed `NEEDED.ELF.2` and, for each
+registered preserved path still on disk, collects its consumers: from
+the linkage map when the path is still an indexed object, else via a
+`basename == soname` reverse lookup (`needed_elf::soname_consumers`) for
+a library whose owning package has already left the vdb (portuale never
+ported real `LinkageMapELF.rebuild()`'s `scanelf`-for-orphaned-libs
+branch, `LinkageMapELF.py:233-324`). The consumer/preserved graph is
+reduced by `needed_elf::find_unneeded_preserved` -- a faithful port of
+real `_find_unneeded_preserved_nodes` (`vartree.py:1899-1943`),
+cycle-aware (bug 652382: a group of preserved libs that only consume
+each other, with no outside consumer, is entirely unneeded). On a plain
+unmerge (`unmerge_no_replacement=true`, always the shape portuale
+reaches -- its `merge`/`unmerge` are separate invocations) a consumer
+entirely owned by the package now being removed does not keep a library
+alive. `ebuild_merge::prune_unused_preserved_libs` then deletes each
+unneeded file (real `<<< !needed  {obj|sym} <path>`), removes empty
+parent dirs, strips the paths from each still-installed owner's
+`CONTENTS`/`NEEDED.ELF.2` (`remove_from_contents`), and rewrites the
+registry with those paths gone (dropping any entry whose paths no longer
+exist -- real `pruneNonExisting`).
+
+Wired into `merge_after_install` / `merge_binpkg` (right after
+`env_update`) and `ebuild_unmerge::unmerge_pkgfiles` (after
+`remove_contents`). The `plib_dict.is_empty()` guard reads only the
+small registry file first, so the common empty-registry case adds one
+`read_to_string` per merge, not a full linkmap rebuild.
+
+**Deliberate narrowing** vs. real: the per-consumer "an alternative,
+non-preserved provider of the same soname is installed" edge removal
+(real *"erroneously preserved due to a move from one directory to
+another"*) is not reproduced -- portuale has never had a preserved-lib
+directory-move path, and collision-protect takeover
+(`unregister_preserved_libs`) already covers the same-path case.
+
+Proven end to end (`ebuild_merge.rs` `real_unmerge_preserves_a_still_
+needed_shared_library`, extended): merge `dev-libs/libpreservetest` +
+`dev-libs/consumepreservetest` (real `gcc`-baked `DT_NEEDED`), unmerge
+the library -> preserved + registered; then unmerge the consumer too ->
+`/usr/lib/libpreservetest.so.1` is deleted and the registry empties. A
+`find_unneeded_preserved` unit test covers the cycle case both ways.
+
+```sh
+cd rust && cargo build --release && cd ../..
+export ROOT="$(mktemp -d)" PORTAGE_TMPDIR="$(mktemp -d)"
+BIN=rust/target/release/portuale
+FIX=fixtures/repo/dev-libs
+"$BIN" ebuild "$FIX/libpreservetest/libpreservetest-1.0.ebuild" merge
+"$BIN" ebuild "$FIX/consumepreservetest/consumepreservetest-1.0.ebuild" merge
+"$BIN" ebuild "$FIX/libpreservetest/libpreservetest-1.0.ebuild" unmerge
+ls "${ROOT}"/usr/lib/libpreservetest.so.1          # preserved
+"$BIN" ebuild "$FIX/consumepreservetest/consumepreservetest-1.0.ebuild" unmerge
+# <<< !needed  obj .../usr/lib/libpreservetest.so.1
+ls "${ROOT}"/usr/lib/libpreservetest.so.1          # gone
+cat "${ROOT}"/var/lib/portage/preserved_libs_registry   # {}
+```
+
 ### `env_update()`/`ldconfig` triggering: a merge regenerates `/etc/profile.env`/`/etc/csh.env`/`/etc/ld.so.conf` and runs real `ldconfig`
 
 The last item on `ebuild_merge.rs`'s own gap list from the "Real merge/

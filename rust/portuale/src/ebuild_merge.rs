@@ -1191,6 +1191,188 @@ pub(crate) fn preserve_libs_on_unmerge(
     Ok(preserved)
 }
 
+/// Every currently-registered preserved-library path, keyed by the cpv
+/// that owns it (real `PreservedLibsRegistry.getPreservedLibs()`). A thin
+/// `pub(crate)` reader for the resolver-side `@preserved-rebuild` set and
+/// the `display_preserved_libs` advisory, both of which live outside this
+/// module.
+// First consumer lands in the following slice (`@preserved-rebuild`).
+#[allow(dead_code)]
+pub(crate) fn preserved_lib_paths(root: &Path) -> BTreeMap<String, Vec<String>> {
+    read_plib_registry(root).preserved_libs()
+}
+
+/// Real `dblink._find_unused_preserved_libs()` (`vartree.py:3880-3948`):
+/// the registered preserved libraries that no installed package links
+/// against any more, keyed by the cpv that owns them (so the caller can
+/// prune each owner's `CONTENTS`). Rebuilds the system-wide `LinkageMap`
+/// from every installed `NEEDED.ELF.2` and, for each registered path
+/// that still exists on disk, collects its consumers -- from the linkage
+/// map when the path is still an indexed object, otherwise via a
+/// basename==soname reverse lookup (`needed_elf::soname_consumers`) for a
+/// library whose owning package has already left the vdb. The
+/// consumer/preserved graph is then reduced by
+/// `needed_elf::find_unneeded_preserved` (real
+/// `_find_unneeded_preserved_nodes`, cycle-aware).
+///
+/// `unmerge_no_replacement` + `being_unmerged`: real "also eliminate
+/// consumers that are going to be unmerged if unmerge_no_replacement is
+/// True" -- on a plain unmerge with no replacement, a consumer that is
+/// itself entirely owned by the package now being removed does not keep
+/// a library alive. `being_unmerged` returns true for such a path.
+///
+/// Deliberate narrowing vs. real: the per-consumer "an alternative,
+/// non-preserved provider of the same soname is installed" edge removal
+/// (real "erroneously preserved due to a move from one directory to
+/// another") is not reproduced -- portuale has never had a preserved-lib
+/// directory-move path, and the collision-protect takeover
+/// (`unregister_preserved_libs`) already covers the same-path case.
+pub(crate) fn find_unused_preserved_libs(
+    root: &Path,
+    unmerge_no_replacement: bool,
+    being_unmerged: &dyn Fn(&str) -> bool,
+) -> BTreeMap<String, BTreeSet<String>> {
+    let registry = read_plib_registry(root);
+    let plib_dict = registry.preserved_libs();
+    if plib_dict.is_empty() {
+        return BTreeMap::new();
+    }
+
+    let owner_entries = crate::needed_elf::read_all_needed_entries(root);
+    let map = crate::needed_elf::rebuild(root, &owner_entries);
+    let defpath =
+        crate::needed_elf::getlibpaths(root, std::env::var("LD_LIBRARY_PATH").ok().as_deref());
+
+    let all_preserved: BTreeSet<String> = plib_dict.values().flatten().cloned().collect();
+    let mut path_cpv: BTreeMap<String, String> = BTreeMap::new();
+    for (cpv, paths) in &plib_dict {
+        for p in paths {
+            path_cpv.insert(p.clone(), cpv.clone());
+        }
+    }
+
+    let exists = |p: &str| std::fs::symlink_metadata(root.join(p.trim_start_matches('/'))).is_ok();
+
+    let mut consumers_by_preserved: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    for path in &all_preserved {
+        if !exists(path) {
+            continue;
+        }
+        let indexed = crate::needed_elf::find_consumers(root, &map, &defpath, path, None, true);
+        let mut consumers: BTreeSet<String> = match indexed {
+            Ok(set) => set,
+            // Not an indexed object (owning package gone) -- fall back to
+            // "does any installed object still need this soname".
+            Err(_) => {
+                let soname = path.rsplit('/').next().unwrap_or(path);
+                crate::needed_elf::soname_consumers(&map, soname)
+            }
+        };
+        if unmerge_no_replacement {
+            consumers.retain(|c| !being_unmerged(c));
+        }
+        consumers_by_preserved.insert(path.clone(), consumers);
+    }
+
+    let unneeded =
+        crate::needed_elf::find_unneeded_preserved(root, &consumers_by_preserved, &all_preserved);
+
+    let mut cpv_lib_map: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    for path in unneeded {
+        if let Some(cpv) = path_cpv.get(&path) {
+            cpv_lib_map.entry(cpv.clone()).or_default().insert(path);
+        }
+    }
+    cpv_lib_map
+}
+
+/// Real `dblink._prune_plib_registry()`'s own tail
+/// (`_remove_preserved_libs` + the `removeFromContents` loop +
+/// `pruneNonExisting`, `vartree.py:2295-2314`/`3950-3990`), which real
+/// portage runs at the end of **both** a merge (`treewalk`,
+/// `vartree.py:5378` -- "For gcc upgrades, preserved libs have to be
+/// removed after the library path has been updated") and an unmerge.
+///
+/// Deletes every preserved-library file `find_unused_preserved_libs`
+/// reports as unneeded (tolerating an already-gone file), removes empty
+/// parent directories, strips the paths from each still-installed
+/// owner's `CONTENTS`/`NEEDED.ELF.2` (`remove_from_contents`), rewrites
+/// the registry with those paths gone (and drops any entry whose paths
+/// no longer exist on disk -- real `pruneNonExisting`). Prints real
+/// `<<< !needed  {obj|sym} <path>` per removed file. Returns the removed
+/// `ROOT`-relative paths.
+pub(crate) fn prune_unused_preserved_libs(
+    root: &Path,
+    unmerge_no_replacement: bool,
+    being_unmerged: &dyn Fn(&str) -> bool,
+) -> Result<Vec<String>, String> {
+    let cpv_lib_map = find_unused_preserved_libs(root, unmerge_no_replacement, being_unmerged);
+
+    let mut removed: Vec<String> = Vec::new();
+    let mut parent_dirs: BTreeSet<PathBuf> = BTreeSet::new();
+    let all_removed: BTreeSet<String> = cpv_lib_map.values().flatten().cloned().collect();
+    for path in &all_removed {
+        let abs = root.join(path.trim_start_matches('/'));
+        let obj_type = match std::fs::symlink_metadata(&abs) {
+            Ok(m) if m.file_type().is_symlink() => "sym",
+            _ => "obj",
+        };
+        match std::fs::remove_file(&abs) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(format!("{}: {e}", abs.display())),
+        }
+        if let Some(parent) = abs.parent() {
+            parent_dirs.insert(parent.to_path_buf());
+        }
+        println!("<<< !needed  {obj_type} {}", abs.display());
+        removed.push(path.clone());
+    }
+
+    // Real "Remove empty parent directories if possible" -- walk upward
+    // from each, stopping at the first non-empty one.
+    for mut dir in parent_dirs {
+        while dir.starts_with(root) && dir != root {
+            if std::fs::remove_dir(&dir).is_err() {
+                break;
+            }
+            match dir.parent() {
+                Some(p) => dir = p.to_path_buf(),
+                None => break,
+            }
+        }
+    }
+
+    // Strip the removed paths from every still-installed owner's vdb
+    // CONTENTS/NEEDED.ELF.2, then rewrite the registry.
+    let mut registry = read_plib_registry(root);
+    for (cpv, paths) in &cpv_lib_map {
+        let cat_pf = cpv.split_once('/');
+        let still_installed = cat_pf
+            .map(|(cat, pf)| root.join("var/db/pkg").join(cat).join(pf).is_dir())
+            .unwrap_or(false);
+        if still_installed {
+            remove_from_contents(root, cpv, paths)?;
+        }
+        for (entry_cpv, _counter, entry_paths) in registry.entries.values_mut() {
+            if entry_cpv == cpv {
+                entry_paths.retain(|p| !paths.contains(p));
+            }
+        }
+    }
+
+    // Real `pruneNonExisting`: drop a registry entry once none of its
+    // recorded paths exist on disk any more.
+    registry.entries.retain(|_key, (_cpv, _counter, paths)| {
+        paths
+            .iter()
+            .any(|p| std::fs::symlink_metadata(root.join(p.trim_start_matches('/'))).is_ok())
+    });
+    write_plib_registry(root, &registry)?;
+
+    Ok(removed)
+}
+
 /// Real PMS: unlike `EAPI` (restricted to the ebuild's own first real
 /// line), `SLOT` may appear anywhere among an ebuild's own top-level
 /// variable assignments -- this scans every line for the first literal
@@ -2740,6 +2922,11 @@ fn merge_after_install(
 
     if !contents.is_empty() || !replaced.is_empty() {
         env_update::run_env_update(root)?;
+        // Real `treewalk()`: "For gcc upgrades, preserved libs have to be
+        // removed after the library path has been updated" -- a preserved
+        // lib whose last consumer this merge just rebuilt is now orphaned
+        // and gets deleted + unregistered (real `_prune_plib_registry()`).
+        prune_unused_preserved_libs(root, false, &|_| false)?;
     }
 
     Ok(postinst_status)
@@ -3295,6 +3482,9 @@ pub fn merge_binpkg(
 
     if !contents.is_empty() || !replaced_same_slot.is_empty() {
         env_update::run_env_update(root)?;
+        // Real `treewalk()`: prune preserved libs orphaned by this merge
+        // (identical to `merge_after_install`).
+        prune_unused_preserved_libs(root, false, &|_| false)?;
     }
 
     let _ = std::fs::remove_dir_all(&builddir);
@@ -5780,6 +5970,67 @@ mod tests {
             paths.iter().any(|p| p == "/usr/lib/libpreservetest.so.1"),
             "{paths:?}"
         );
+
+        // Real `_prune_plib_registry()`'s tail: once the last consumer is
+        // gone too, the preserved library is orphaned and the next
+        // merge/unmerge deletes it and clears the registry (here: the
+        // consumer's own unmerge does it, `unmerge_no_replacement=True`).
+        let consumer_unmerge = crate::ebuild_unmerge::run_unmerge(
+            &consumer_ebuild,
+            &root,
+            &portage_tmpdir,
+            &crate::ebuild_unmerge::UnmergeOptions::default(),
+        )
+        .expect("run_unmerge (consumer) succeeds");
+        assert_eq!(consumer_unmerge, 0);
+
+        assert!(
+            !lib_path.exists(),
+            "the preserved library must be removed once nothing links it any more"
+        );
+        assert!(
+            read_plib_registry(&root).entries.is_empty(),
+            "the registry must be empty after the last consumer is unmerged"
+        );
+    }
+
+    /// Real `_find_unneeded_preserved_nodes` cycle handling (bug 652382):
+    /// two preserved libraries that only consume each other, with nothing
+    /// outside the pair consuming either, are both unneeded.
+    #[test]
+    fn find_unneeded_preserved_drops_a_self_contained_cycle() {
+        let tmp = tempdir();
+        let root = tmp.join("root");
+        for p in ["usr/lib/liba.so.1", "usr/lib/libb.so.1"] {
+            std::fs::create_dir_all(root.join("usr/lib")).unwrap();
+            std::fs::write(root.join(p), b"x").unwrap();
+        }
+        let preserved: BTreeSet<String> = ["/usr/lib/liba.so.1", "/usr/lib/libb.so.1"]
+            .into_iter()
+            .map(String::from)
+            .collect();
+        let mut edges: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+        edges.insert(
+            "/usr/lib/liba.so.1".into(),
+            BTreeSet::from(["/usr/lib/libb.so.1".to_string()]),
+        );
+        edges.insert(
+            "/usr/lib/libb.so.1".into(),
+            BTreeSet::from(["/usr/lib/liba.so.1".to_string()]),
+        );
+        let unneeded = crate::needed_elf::find_unneeded_preserved(&root, &edges, &preserved);
+        assert_eq!(unneeded, preserved);
+
+        // But an outside (non-preserved) consumer of one keeps that one --
+        // and, transitively, the other it depends on.
+        std::fs::create_dir_all(root.join("usr/bin")).unwrap();
+        std::fs::write(root.join("usr/bin/app"), b"x").unwrap();
+        edges
+            .get_mut("/usr/lib/liba.so.1")
+            .unwrap()
+            .insert("/usr/bin/app".to_string());
+        let unneeded = crate::needed_elf::find_unneeded_preserved(&root, &edges, &preserved);
+        assert!(unneeded.is_empty(), "{unneeded:?}");
     }
 
     fn fixtures_root() -> PathBuf {

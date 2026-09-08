@@ -856,6 +856,114 @@ pub fn find_libs_to_preserve(
     preserve_paths
 }
 
+/// Every recorded path of every object that lists `soname` in its own
+/// `DT_NEEDED` -- a soname-keyed reverse lookup across all multilib
+/// categories. Used by `ebuild_merge::find_unused_preserved_libs` as the
+/// fallback consumer scan for a preserved library whose owning package
+/// has already left the vdb (so the library itself is no longer an
+/// indexed object -- real portage's own `scanelf`-for-orphaned-
+/// preserved-libs `rebuild()` branch, `LinkageMapELF.py:233-324`, keeps
+/// such a library in the map; portuale deliberately never ported that
+/// branch, so this basename==soname reverse lookup stands in for it).
+pub fn soname_consumers(map: &LinkageMap, soname: &str) -> BTreeSet<String> {
+    let mut out = BTreeSet::new();
+    for arch_map in map.libs.values() {
+        let Some(node) = arch_map.get(soname) else {
+            continue;
+        };
+        for consumer_key in &node.consumers {
+            if let Some(props) = map.obj_properties.get(consumer_key) {
+                out.extend(props.alt_paths.iter().cloned());
+            }
+        }
+    }
+    out
+}
+
+/// Real `_find_unneeded_preserved_nodes()` (`vartree.py:1899-1943`):
+/// given `consumers_by_preserved` (a registered preserved-library path
+/// -> the paths that link against it, both sides already filtered to
+/// files that exist on disk -- a preserved consumer is kept in the map
+/// so cycle propagation works), return the subset of `preserved_paths`
+/// that nothing needs.
+///
+/// A preserved library is *needed* iff it has a consumer that is not
+/// itself a preserved library, or a consumer that is a preserved library
+/// which is itself needed (transitively). Everything else is unneeded --
+/// including a group of preserved libraries that only consume each other
+/// in a cycle with no outside consumer (real bug 652382). Paths are
+/// deduplicated by real `_obj_key` (dev/inode) so a hardlink alias
+/// counts once.
+pub fn find_unneeded_preserved(
+    root: &Path,
+    consumers_by_preserved: &BTreeMap<String, BTreeSet<String>>,
+    preserved_paths: &BTreeSet<String>,
+) -> BTreeSet<String> {
+    let exists = |p: &str| std::fs::symlink_metadata(root.join(p.trim_start_matches('/'))).is_ok();
+
+    let mut alt_paths: BTreeMap<ObjKey, BTreeSet<String>> = BTreeMap::new();
+    let mut preserved_nodes: BTreeSet<ObjKey> = BTreeSet::new();
+    for p in preserved_paths {
+        if !exists(p) {
+            continue;
+        }
+        let key = obj_key(root, p);
+        alt_paths.entry(key.clone()).or_default().insert(p.clone());
+        preserved_nodes.insert(key);
+    }
+
+    // `children[c]` = preserved libs consumed by `c`; `parents[p]` = the
+    // consumers of preserved lib `p`.
+    let mut children: BTreeMap<ObjKey, BTreeSet<ObjKey>> = BTreeMap::new();
+    let mut parents: BTreeMap<ObjKey, BTreeSet<ObjKey>> = BTreeMap::new();
+    for (pres, consumers) in consumers_by_preserved {
+        let pk = obj_key(root, pres);
+        if !preserved_nodes.contains(&pk) {
+            continue;
+        }
+        for c in consumers {
+            if !exists(c) {
+                continue;
+            }
+            let ck = obj_key(root, c);
+            alt_paths.entry(ck.clone()).or_default().insert(c.clone());
+            children.entry(ck.clone()).or_default().insert(pk.clone());
+            parents.entry(pk.clone()).or_default().insert(ck.clone());
+        }
+    }
+
+    let mut needed: BTreeSet<ObjKey> = BTreeSet::new();
+    let mut stack: Vec<ObjKey> = Vec::new();
+    for pn in &preserved_nodes {
+        let has_outside_consumer = parents
+            .get(pn)
+            .into_iter()
+            .flatten()
+            .any(|c| !preserved_nodes.contains(c));
+        if has_outside_consumer {
+            needed.insert(pn.clone());
+            stack.push(pn.clone());
+        }
+    }
+    while let Some(node) = stack.pop() {
+        for child in children.get(&node).into_iter().flatten() {
+            if preserved_nodes.contains(child) && needed.insert(child.clone()) {
+                stack.push(child.clone());
+            }
+        }
+    }
+
+    let mut out = BTreeSet::new();
+    for pn in &preserved_nodes {
+        if !needed.contains(pn)
+            && let Some(paths) = alt_paths.get(pn)
+        {
+            out.extend(paths.iter().cloned());
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

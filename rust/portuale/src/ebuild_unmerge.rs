@@ -664,6 +664,20 @@ pub(crate) fn unmerge_pkgfiles(
         }
         ebuild_merge::write_cfgfiledict(root, &updated)?;
     }
+
+    // Real `_prune_plib_registry()`'s own tail (`vartree.py:2295-2314`),
+    // which runs on unmerge too, not only on merge: a preserved library
+    // whose last surviving consumer is the package now being removed is
+    // orphaned -- delete it and drop it from the registry. `unmerge_no_
+    // replacement=true` (portuale's `merge`/`unmerge` are always separate
+    // invocations, real `unmerge_with_replacement=False`), so a consumer
+    // entirely owned by this same package doesn't keep a library alive.
+    let being_unmerged: std::collections::BTreeSet<String> = contents_text
+        .lines()
+        .filter_map(|line| line.split_whitespace().nth(1).map(String::from))
+        .collect();
+    ebuild_merge::prune_unused_preserved_libs(root, true, &|p| being_unmerged.contains(p))?;
+
     Ok(())
 }
 
