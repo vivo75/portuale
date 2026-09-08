@@ -3,6 +3,25 @@
 use crate::*;
 use portage_util::TempDir;
 
+/// `bare_cp` rejects each non-bare form individually.
+#[test]
+fn bare_cp_rejects_every_non_bare_form() {
+    for rejected in [
+        "!dev-libs/foo",
+        "!!dev-libs/foo",
+        ">=dev-libs/foo-1.0",
+        "=dev-libs/foo-1.0",
+        "dev-libs/foo-1.0",
+        "dev-libs/foo:0",
+        "dev-libs/foo:=",
+        "dev-libs/foo[bar]",
+        "dev-libs/foo::gentoo",
+        "not an atom at all !!!",
+    ] {
+        assert_eq!(bare_cp(rejected), None, "{rejected}");
+    }
+}
+
 /// One installed instance under `<root>/var/db/pkg` with the given
 /// `SLOT` plus caller-supplied field files (`USE`, `IUSE`, ...).
 fn install_162(root: &Path, cat: &str, pf: &str, slot: &str, files: &[(&str, &[u8])]) {

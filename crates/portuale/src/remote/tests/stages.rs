@@ -101,6 +101,62 @@ fn merge_driver_aborts_on_unowned_collision() {
     let _ = std::fs::remove_dir_all(&tmp);
 }
 
+/// A regen run with only `LC_ALL=C.UTF-8` forwarded records `LANG` plus
+/// all twelve categories as `C.UTF-8`, and no `LC_ALL`.
+#[test]
+fn regen_splits_lc_all_like_portage() {
+    let tmp = regen_tmp("lc-all-split");
+    let root = tmp.join("root");
+    std::fs::create_dir_all(root.join("var/db/pkg")).unwrap();
+    let (unit, staged) = regen_unit(
+        &tmp,
+        "EAPI=8\nDESCRIPTION=\"synthetic regen probe\"\nSLOT=\"0\"\nKEYWORDS=\"amd64\"\npkg_postinst() {\n\texport PT_MERGE_MARKER=\"merge-time\"\n}\n",
+        "postinst",
+    );
+    let ctx = local_ctx(root.to_str().unwrap(), tmp.join("work").to_str().unwrap());
+    let locale = vec![("LC_ALL".to_string(), "C.UTF-8".to_string())];
+    let report = run_postinst_regen_stage(RunPostinstRegenStageArgs {
+        ctx: &ctx,
+        control: None,
+        unit_dir: &unit,
+        staged: &staged,
+        features: Some("sandbox"),
+        locale: &locale,
+    })
+    .expect("regen phase runs");
+    assert_eq!(report.phase_rc, 0);
+    assert!(report.regen_present);
+    let regen = std::fs::read_to_string(format!("{unit}/environment.regen")).expect("regen file");
+    assert!(
+        regen.contains("declare -x LANG=\"C.UTF-8\""),
+        "split LANG missing:\n{regen}"
+    );
+    for name in [
+        "LC_COLLATE",
+        "LC_CTYPE",
+        "LC_MESSAGES",
+        "LC_MONETARY",
+        "LC_NUMERIC",
+        "LC_TIME",
+        "LC_ADDRESS",
+        "LC_IDENTIFICATION",
+        "LC_MEASUREMENT",
+        "LC_NAME",
+        "LC_PAPER",
+        "LC_TELEPHONE",
+    ] {
+        assert!(
+            regen.contains(&format!("declare -x {name}=\"C.UTF-8\"")),
+            "split {name} missing:\n{regen}"
+        );
+    }
+    assert!(
+        !regen.lines().any(|line| line.contains("LC_ALL")),
+        "LC_ALL leaked into the regen'd env:\n{regen}"
+    );
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
 /// With only `environment.bz2` in the old entry and no client `bzip2` on
 /// `PATH`, the hook still gets a sourceable env via the staged
 /// server-side decompress.
