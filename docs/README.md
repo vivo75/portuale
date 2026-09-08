@@ -19,6 +19,8 @@ holds everything else.
 | [`what-this-proves.md`](what-this-proves.md) | The living, append-only per-slice record — every shipped feature with its real-portage source grounding. |
 | [`running-it.md`](running-it.md) | Runnable, live-verified examples for every shipped slice. |
 | [`brush-pin.md`](brush-pin.md) | The `brush` (embedded bash) dependency pin, the two fixes it used to carry, and the re-pin checklist. |
+| [`real-world-testing.md`](real-world-testing.md) | Plan for the container-based differential test bed (Portuale vs Portage: build / package / binhost / merge / unmerge / `mrg` remote), the normalised-comparison methodology, the L0–L5 test layers, and an honest critique of the "byte-diff everything" approach. **Planning only.** |
+| [`remote-merge.md`](remote-merge.md) | The `mrg`-only remote binary-package merge over SSH: design, grounding in real code, the six-slice plan (5 shipped), and open questions. |
 | [`operation-diagrams.md`](operation-diagrams.md) | Block diagrams tracing four representative `emerge` invocations through the code, plus per-operation detail pages. |
 | [`emerge-pretend-debug.md`](emerge-pretend-debug.md) | Real portage's `emerge --pretend --debug` resolver trace — every message with its upstream source, the deliberate divergences, and the six-stage port (**implemented 2026-09-07**). |
 | [`performances-tuning.md`](performances-tuning.md) | The `perf` + call-counter investigation of a live `emerge -puD --getbinpkg` and the six memoisation fixes that took it from 77 s to 4.5 s (17×, ~3.5× faster than real `emerge`), with the remaining ~1–2 % items. |
