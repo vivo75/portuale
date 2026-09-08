@@ -43,6 +43,54 @@ fn versioned_fixture(name: &str, version: &str) -> PathBuf {
         .join(format!("{name}-{version}.ebuild"))
 }
 
+/// Seeds a root where preserved `/usr/lib/keepA.so` has exactly one
+/// consumer, `/usr/bin/cprog`, owned by `oldapp-1.0`; returns the root
+/// and the `being_unmerged` set an unmerge of the old instance takes.
+fn seed_old_owned_consumer_root(tmp: &std::path::Path) -> (PathBuf, BTreeSet<String>) {
+    let root = tmp.join("root");
+    std::fs::create_dir_all(root.join("usr/lib")).unwrap();
+    std::fs::create_dir_all(root.join("usr/bin")).unwrap();
+    std::fs::write(root.join("usr/lib/keepA.so"), b"fake elf").unwrap();
+    std::fs::write(root.join("usr/bin/cprog"), b"fake elf").unwrap();
+    for (pf, contents, needed) in [
+        (
+            "provider-1.0",
+            "obj /usr/lib/keepA.so def 1\n",
+            "X86_64;/usr/lib/keepA.so;libkeep.so.1;;\n",
+        ),
+        (
+            "oldapp-1.0",
+            "obj /usr/bin/cprog abc 1\n",
+            "X86_64;/usr/bin/cprog;;;libkeep.so.1\n",
+        ),
+    ] {
+        let vdb = root.join("var/db/pkg/dev-libs").join(pf);
+        std::fs::create_dir_all(&vdb).unwrap();
+        std::fs::write(vdb.join("CONTENTS"), contents).unwrap();
+        std::fs::write(vdb.join("NEEDED.ELF.2"), needed).unwrap();
+    }
+    std::fs::write(root.join("var/db/pkg/dev-libs/oldapp-1.0/COUNTER"), "7\n").unwrap();
+    let mut entries = BTreeMap::new();
+    entries.insert(
+        "dev-libs/provider:0".to_string(),
+        (
+            "dev-libs/provider-1.0".to_string(),
+            "4".to_string(),
+            vec!["/usr/lib/keepA.so".to_string()],
+        ),
+    );
+    write_plib_registry(
+        &root,
+        &PlibRegistry {
+            entries,
+            orig_entries: BTreeMap::new(),
+        },
+    )
+    .expect("seeding the registry succeeds");
+    let being: BTreeSet<String> = ["/usr/bin/cprog".to_string()].into_iter().collect();
+    (root, being)
+}
+
 /// Compiles a linked `libA`/`libB` pair with the host `cc` under the
 /// synthetic root, so `scanelf` sees genuine ELF headers.
 fn compile_linked_pair(tmp: &std::path::Path, root: &std::path::Path) {
