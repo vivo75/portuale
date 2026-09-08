@@ -25,6 +25,16 @@ fn single_resume_root(tag: &str) -> std::path::PathBuf {
     root
 }
 
+/// `fixture_resolve_env` with `FEATURES="news"` opted in.
+fn news_resolve_env(
+    root: &std::path::Path,
+    portage_tmpdir: &std::path::Path,
+) -> Vec<(String, String)> {
+    let mut env = fixture_resolve_env(root, portage_tmpdir);
+    env.push(("FEATURES".to_string(), "news".to_string()));
+    env
+}
+
 /// A stub `eselect` on `PATH`, logging its argv to a marker file. Returns the
 /// stub dir (to prepend to `PATH`) and the marker path.
 #[cfg(unix)]
@@ -110,6 +120,42 @@ fn fixture_resolve_env(
             portage_tmpdir.display().to_string(),
         ),
     ]
+}
+
+/// The slave path of `master`, through the reentrant `ptsname_r`: plain
+/// `ptsname` shares one static buffer across threads.
+#[cfg(unix)]
+fn pty_slave_path(master: libc::c_int) -> std::ffi::CString {
+    let mut buf = [0 as libc::c_char; 128];
+    // SAFETY: `buf` is a valid writable buffer of the stated length.
+    let rc = unsafe { libc::ptsname_r(master, buf.as_mut_ptr(), buf.len()) };
+    assert_eq!(rc, 0, "ptsname_r failed");
+    // SAFETY: `ptsname_r` nul-terminated `buf` on success.
+    unsafe { std::ffi::CStr::from_ptr(buf.as_ptr()) }.to_owned()
+}
+
+/// A pty pair: the child answers `--ask` through the slave (its stdin), while
+/// the test writes the answer into the master.
+#[cfg(unix)]
+fn pty_pair() -> (std::fs::File, std::process::Stdio) {
+    use std::os::fd::FromRawFd;
+    unsafe {
+        let master = libc::posix_openpt(libc::O_RDWR | libc::O_NOCTTY | libc::O_CLOEXEC);
+        assert!(master >= 0, "posix_openpt failed");
+        assert_eq!(libc::grantpt(master), 0, "grantpt failed");
+        assert_eq!(libc::unlockpt(master), 0, "unlockpt failed");
+        let cname = pty_slave_path(master);
+        let slave = libc::open(
+            cname.as_ptr(),
+            libc::O_RDWR | libc::O_NOCTTY | libc::O_CLOEXEC,
+        );
+        assert!(slave >= 0, "pty slave open failed");
+        // Both ends are `O_CLOEXEC` at open time, so a forked sibling never holds
+        // the pty open past its exec (the stdio dup onto fd 0 clears the flag).
+        let master_file = std::fs::File::from_raw_fd(master);
+        let slave_stdio = std::process::Stdio::from(std::os::fd::OwnedFd::from_raw_fd(slave));
+        (master_file, slave_stdio)
+    }
 }
 
 /// Bound every wait on a pty-driven child (default 60 s, overridable); on expiry

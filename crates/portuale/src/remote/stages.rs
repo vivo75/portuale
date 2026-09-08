@@ -2,6 +2,41 @@
 
 use crate::remote::*;
 
+/// Client vdb destination for this run: the placed path, plus whether
+/// the driver runs stateless (server-side vdb placement -- the driver
+/// merges files only: no vdb entry, no old hooks, fail-closed
+/// collisions). A stateless merge has no vdb entry to attach the regen'd
+/// env to, so the install is skipped while postinst still runs.
+pub(crate) fn client_vdb_placement(ctx: &RemoteContext) -> (String, bool) {
+    match &ctx.vdb {
+        ConfigPlacement::Client(path) => (path.clone(), false),
+        ConfigPlacement::Server(_) => (
+            format!("{}/var/db/pkg", ctx.root.trim_end_matches('/')),
+            true,
+        ),
+    }
+}
+
+/// Human tail of a merge failure: the `MERGE_FAIL` line plus a few log
+/// lines, prefixed for the report.
+pub(crate) fn merge_failure_tail(stdout: &str, stderr: &str, code: Option<i32>) -> String {
+    let mut message = format!("mrg: client merge failed (exit {}):", code.unwrap_or(-1));
+    let mut shown = 0;
+    for line in stdout
+        .lines()
+        .filter(|l| l.starts_with("MERGE_FAIL=") || l.starts_with("MERGE_WARN="))
+        .chain(stderr.lines())
+        .take(6)
+    {
+        message.push_str(&format!("\nmrg:   {line}"));
+        shown += 1;
+        if shown >= 6 {
+            break;
+        }
+    }
+    message
+}
+
 /// Pull one remote file's bytes to the server (`cat` remotely; a plain
 /// read for the `local` transport, where client paths are server
 /// paths). `Err` is the pull failure.
@@ -69,6 +104,62 @@ pub(crate) fn bzip2_pipe(args: &[&str], bytes: &[u8]) -> Result<Vec<u8>, String>
     Ok(output.stdout)
 }
 
+/// Server-side compression for the pulled regen'd env: `bzip2 -9`, the
+/// same level Portage's `PORTAGE_UPDATE_ENV` block uses.
+pub(crate) fn bzip2_compress(bytes: &[u8]) -> Result<Vec<u8>, String> {
+    bzip2_pipe(&["-c", "-f9"], bytes)
+}
+
+/// Server-side decompression for an old instance's `environment.bz2`.
+pub(crate) fn bzip2_decompress(bytes: &[u8]) -> Result<Vec<u8>, String> {
+    bzip2_pipe(&["-d", "-c", "--"], bytes)
+}
+
+/// Rewrite the `${PORTAGE_BZIP2_COMMAND}` line in a pulled regen'd
+/// environment **only** when its value is the unit-local
+/// `bzip2-passthrough` stand-in, replacing it with the resolved client
+/// command. Any other value is copied verbatim; a missing line stays
+/// missing (never invent it).
+pub(crate) fn scrub_bzip2_command(bytes: &[u8], bzip2_command: &str) -> Vec<u8> {
+    let mut out = Vec::new();
+    for line in bytes.split_inclusive(|b| *b == b'\n') {
+        let is_passthrough = match line.iter().position(|b| *b == b'=') {
+            Some(eq) => {
+                let mut name = &line[..eq];
+                for prefix in ["declare -x ".as_bytes(), "declare -- ".as_bytes()] {
+                    if let Some(rest) = name.strip_prefix(prefix) {
+                        name = rest;
+                        break;
+                    }
+                }
+                name == b"PORTAGE_BZIP2_COMMAND"
+                    && line
+                        .windows(b"bzip2-passthrough".len())
+                        .any(|w| w == b"bzip2-passthrough")
+            }
+            None => false,
+        };
+        if is_passthrough {
+            let escaped = bzip2_command.replace('\\', "\\\\").replace('"', "\\\"");
+            out.extend_from_slice(
+                format!("declare -x PORTAGE_BZIP2_COMMAND=\"{escaped}\"\n").as_bytes(),
+            );
+        } else {
+            out.extend_from_slice(line);
+        }
+    }
+    out
+}
+
+/// The failure line: names the package and the failing step (`postinst`,
+/// `pull`, `compress`, `install`); the vdb keeps the build-time
+/// `environment.bz2` and the merge continues.
+pub(crate) fn regen_warn_message(cpv: &str, step: &str) -> String {
+    format!(
+        "!!! Remote {cpv}: merge-time environment regen failed at {step}, keeping build-time environment.bz2"
+    )
+}
+
 /// `OLDPF=<pf> SLOT=<slot>` lines out of the old-version probe
 /// (anything else ignored -- the driver owns discovery, this only
 /// stages envs).
@@ -89,6 +180,14 @@ pub(crate) fn parse_oldpf_probe(stdout: &str) -> Vec<(String, String)> {
         out.push((pf.to_string(), slot.to_string()));
     }
     out
+}
+
+/// The old-hook staging warning: names the package and the failing
+/// detail; old hooks for that pf fall back to the client vdb.
+pub(crate) fn old_hook_warn_message(cpv: &str, detail: &str) -> String {
+    format!(
+        "!!! Remote {cpv}: could not stage the saved env for an old instance ({detail}); old hooks fall back to the client vdb"
+    )
 }
 
 /// The resolved absolute client binary for generated scripts:

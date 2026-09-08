@@ -44,6 +44,16 @@ impl FilesDb {
         }
     }
 
+    /// A read-only view of a bare VDB directory with no root around it.
+    /// Not registered anywhere. The D4 stores are absent: their reads
+    /// return empty values and every write fails.
+    pub fn open_vdb_dir(vdb_dir: &Path) -> Self {
+        FilesDb {
+            root: None,
+            vdb: vdb_dir.to_path_buf(),
+        }
+    }
+
     /// The root given to [`FilesDb::new`]; `None` for a bare VDB directory.
     pub fn root(&self) -> Option<&Path> {
         self.root.as_deref()

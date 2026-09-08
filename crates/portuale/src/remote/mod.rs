@@ -131,6 +131,18 @@ impl ConfigPlacement {
     }
 }
 
+/// mrg -> pretend handoff for remote resolve runs: `mrg` sets it from the
+/// validated CLI surface, `pretend::run`'s getbinpkg dispatch takes it.
+/// Set immediately before the in-process `pretend::run` call, taken
+/// (cleared) at the dispatch site, so nothing leaks across calls. Only
+/// `mrg` remote-with-atoms ever sets it; the `emerge` applet never does.
+static REMOTE_EXEC: std::sync::RwLock<Option<RemoteContext>> = std::sync::RwLock::new(None);
+
+/// Take a published remote execution, if any (clears the slot).
+pub fn take_remote_exec() -> Option<RemoteContext> {
+    REMOTE_EXEC.write().unwrap().take()
+}
+
 /// Validated remote target: Ansible's `play_context` split -- connection
 /// parameters in one struct, validated once, threaded through.
 #[derive(Debug, Clone, PartialEq, Eq)]
