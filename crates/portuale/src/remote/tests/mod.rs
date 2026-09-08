@@ -109,6 +109,33 @@ fn local_ctx(root: &str, workdir: &str) -> RemoteContext {
     }
 }
 
+/// Build-time hook env mimicking `__save_ebuild_env` output, with a stray
+/// build-host local and build-time `FEATURES` (with `buildpkg`).
+fn build_time_environment(with_postinst: bool) -> String {
+    let mut lines = vec![
+        "declare -x EAPI=\"8\"",
+        "declare -x CATEGORY=\"dev-libs\"",
+        "declare -x PN=\"regen\"",
+        "declare -x PV=\"1.0\"",
+        "declare -x PR=\"r0\"",
+        "declare -x PVR=\"1.0\"",
+        "declare -x P=\"regen-1.0\"",
+        "declare -x PF=\"regen-1.0\"",
+        "declare -- x=\"\"",
+        "declare -x FEATURES=\"buildpkg sandbox\"",
+        "declare -x PORTAGE_FEATURES=\"buildpkg sandbox\"",
+        "declare -x USE=\"amd64\"",
+    ];
+    if with_postinst {
+        lines.push("pkg_postinst() {\n\texport PT_MERGE_MARKER=\"merge-time\"\n}");
+    }
+    lines.join("\n") + "\n"
+}
+
+fn regen_tmp(tag: &str) -> std::path::PathBuf {
+    TempDir::new(&format!("portuale-remote-regen-{tag}")).keep()
+}
+
 /// Decompress a vdb `environment.bz2` for content assertions.
 fn read_vdb_env(vdb_env_bz2: &std::path::Path) -> String {
     let bytes = std::fs::read(vdb_env_bz2).unwrap();
@@ -125,6 +152,113 @@ fn read_vdb_env(vdb_env_bz2: &std::path::Path) -> String {
         .expect("server bzip2 decompresses");
     assert!(output.status.success());
     String::from_utf8(output.stdout).unwrap()
+}
+
+/// Saved env for an old instance: `declare -x` lines (the
+/// `env_val` form `run_old_hook` greps) plus hook functions writing
+/// to a client log.
+fn old_hook_environment() -> String {
+    [
+        "declare -x EAPI=\"8\"",
+        "declare -x CATEGORY=\"dev-libs\"",
+        "declare -x PN=\"oldhook\"",
+        "declare -x PV=\"1.0\"",
+        "declare -x PR=\"r0\"",
+        "declare -x PVR=\"1.0\"",
+        "declare -x P=\"oldhook-1.0\"",
+        "declare -x PF=\"oldhook-1.0\"",
+        "pkg_prerm() {",
+        "\techo prerm-ok >> \"${EROOT}/var/lib/oldhook.log\"",
+        "}",
+        "pkg_postrm() {",
+        "\techo postrm-ok >> \"${EROOT}/var/lib/oldhook.log\"",
+        "}",
+    ]
+    .join("\n")
+        + "\n"
+}
+
+/// PATH farm: symlinks to every `/usr/bin` + `/bin` entry except
+/// `bzip2`, so `command -v bzip2` fails exactly like a bzip2-less client.
+fn farm_path_without_bzip2(dir: &std::path::Path) -> String {
+    let farm = dir.join("farm");
+    std::fs::create_dir_all(&farm).unwrap();
+    for bindir in ["/usr/bin", "/bin"] {
+        let Ok(entries) = std::fs::read_dir(bindir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if name == "bzip2" {
+                continue;
+            }
+            let link = farm.join(&name);
+            if !link.exists() {
+                let _ = std::os::unix::fs::symlink(entry.path(), &link);
+            }
+        }
+    }
+    assert!(!farm.join("bzip2").exists());
+    assert!(farm.join("bash").exists(), "the farm must resolve bash");
+    farm.to_str().unwrap().to_string()
+}
+
+/// Drive `run_old_hook` straight through local bash under a PATH with no
+/// `bzip2`. Returns stdout.
+fn run_old_hook_snippet(
+    unit: &str,
+    root: &str,
+    work: &str,
+    farm_path: &str,
+    oldvdb: &str,
+) -> String {
+    // The old hooks resolve `PORTAGE_PYTHON` through
+    // `$UNITBIN/portuale-python`, whose shim execs `$PORTUALE_BIN` --
+    // export the built binary directly (never the libtest harness).
+    let exe = crate::self_exe::built_portuale_bin();
+    let script = format!(
+        concat!(
+            "export PATH={farm}\n",
+            "export PORTUALE_BIN={bin}\n",
+            "command -v bzip2 >/dev/null 2>&1 && echo BZIP2-PRESENT || echo BZIP2-ABSENT\n",
+            "UNIT={unit}\n",
+            "ROOT={root}\n",
+            "WORKDIR={work}\n",
+            "UNITBIN=\"$UNIT/bin\"\n",
+            "COLORMAP=''\n",
+            "{helpers}\n",
+            "run_old_hook {oldvdb} prerm\n",
+            "echo \"RC=$?\"\n",
+            "run_old_hook {oldvdb} postrm\n",
+            "echo \"RC=$?\"\n",
+        ),
+        farm = sh_quote(farm_path),
+        bin = sh_quote(exe.to_str().unwrap()),
+        unit = sh_quote(unit),
+        root = sh_quote(root),
+        work = sh_quote(work),
+        helpers = MERGE_HELPERS,
+        oldvdb = sh_quote(oldvdb),
+    );
+    let output = std::process::Command::new("bash")
+        .args(["-s"])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .and_then(|mut child| {
+            use std::io::Write as _;
+            child.stdin.take().unwrap().write_all(script.as_bytes())?;
+            child.wait_with_output()
+        })
+        .expect("local bash runs run_old_hook");
+    let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+    let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+    assert!(
+        stdout.contains("BZIP2-ABSENT"),
+        "bzip2 must be shadowed away:\n{stdout}\n{stderr}"
+    );
+    stdout
 }
 
 // --- Client-binary install e2e over local transport --------------------------------
