@@ -216,3 +216,19 @@ pub(crate) fn chain_node_line(
         ty,
     ))
 }
+
+/// `masked_dep_chain`'s argument lines: the top-level atom texts
+/// targeting `cp`, in request order.
+pub(crate) fn chain_arg_lines(atoms: &[String], cp: &(String, String)) -> Vec<(String, String)> {
+    atoms
+        .iter()
+        .filter(|a| {
+            portage_dep::parse_atom(a).is_some_and(|at| {
+                at.blocker == portage_dep::Blocker::None
+                    && at.category == cp.0
+                    && at.package == cp.1
+            })
+        })
+        .map(|a| (a.clone(), "argument".to_string()))
+        .collect()
+}
