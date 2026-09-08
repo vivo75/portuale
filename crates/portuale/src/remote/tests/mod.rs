@@ -77,6 +77,38 @@ fn fixture(name: &str) -> std::path::PathBuf {
         .join(name)
 }
 
+fn local_ctx(root: &str, workdir: &str) -> RemoteContext {
+    // Direct stage runs (no preflight) still need a resolved absolute
+    // path in the fixture context: the built `portuale` binary.
+    let abs = crate::self_exe::built_portuale_bin().display().to_string();
+    RemoteContext {
+        hostname: "localtest".to_string(),
+        user: None,
+        port: 22,
+        key_file: None,
+        timeout_secs: 10,
+        ssh_args: None,
+        strict_host_key_checking: StrictHostKeyChecking::AcceptNew,
+        max_clock_skew_secs: 0,
+        root: root.to_string(),
+        workdir: workdir.to_string(),
+        transport: RemoteTransport::Local,
+        binpkg: None,
+        config_protect: "/etc".to_string(),
+        config_protect_explicit: false,
+        config_protect_mask: "/etc/env.d".to_string(),
+        config_protect_mask_explicit: false,
+        etc_portage: ConfigPlacement::Client("/etc/portage".to_string()),
+        vdb: ConfigPlacement::Client(format!("{root}/var/db/pkg")),
+        edb: ConfigPlacement::Server(format!("{root}/var/cache/edb")),
+        ledger_dir: None,
+        require_ledger_match: false,
+        portuale_binary: None,
+        portuale_dir: None,
+        bin_plan: ClientBinPlan::Local(abs),
+    }
+}
+
 /// Decompress a vdb `environment.bz2` for content assertions.
 fn read_vdb_env(vdb_env_bz2: &std::path::Path) -> String {
     let bytes = std::fs::read(vdb_env_bz2).unwrap();
@@ -93,6 +125,18 @@ fn read_vdb_env(vdb_env_bz2: &std::path::Path) -> String {
         .expect("server bzip2 decompresses");
     assert!(output.status.success());
     String::from_utf8(output.stdout).unwrap()
+}
+
+// --- Client-binary install e2e over local transport --------------------------------
+//
+// Local transport installs nothing by design -- except through
+// `--remote-portuale-dir`, which names local paths the test owns, so
+// the ssh-shaped install path (mktemp, stream, chmod, digest, mv,
+// ping) runs without sshd.
+
+/// The `portuale` binary next to the current test executable.
+fn s8_portuale_bin() -> std::path::PathBuf {
+    crate::self_exe::built_portuale_bin()
 }
 
 fn s8_fixtures() -> std::path::PathBuf {
