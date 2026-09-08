@@ -8641,6 +8641,65 @@ def test_installed_set_expands_to_a_slot_atom_per_vdb_package(
     assert _run(emerge_pretend_python, args, env).stdout == result.stdout
 
 
+def test_preserved_rebuild_set_expands_to_the_consumers_of_registered_preserved_libs(
+    emerge_binary, emerge_pretend_python, fixture_env, tmp_path
+):
+    """Real @preserved-rebuild (PreservedLibraryConsumerSet): the
+    installed packages that still link a library kept alive only by
+    FEATURES=preserve-libs. A test-local ROOT with dev-libs/nestedsetpkg
+    installed and a NEEDED.ELF.2 saying its binary links libpreserved.so.1;
+    the preserved_libs_registry records that soname under a
+    now-uninstalled provider (dev-libs/goneprovider). @preserved-rebuild
+    must resolve to nestedsetpkg (the surviving consumer), and Rust must
+    match the Python reference byte for byte."""
+    vdb = tmp_path / "var" / "db" / "pkg" / "dev-libs" / "nestedsetpkg-1.0"
+    vdb.mkdir(parents=True)
+    (vdb / "CATEGORY").write_text("dev-libs\n")
+    (vdb / "SLOT").write_text("0\n")
+    (vdb / "repository").write_text("testrepo\n")
+    (vdb / "NEEDED.ELF.2").write_text(
+        "X86_64;/usr/bin/nestedsetpkg;;;libpreserved.so.1\n"
+    )
+    (vdb / "CONTENTS").write_text("obj /usr/bin/nestedsetpkg abc 1\n")
+
+    lib_dir = tmp_path / "usr" / "lib"
+    lib_dir.mkdir(parents=True)
+    (lib_dir / "libpreserved.so.1").write_text("x")
+
+    reg = tmp_path / "var" / "lib" / "portage"
+    reg.mkdir(parents=True)
+    (reg / "preserved_libs_registry").write_text(
+        '{\n\t"dev-libs/goneprovider:0": [\n'
+        '\t\t"dev-libs/goneprovider-1.0",\n\t\t"0",\n'
+        '\t\t[\n\t\t\t"/usr/lib/libpreserved.so.1"\n\t\t]\n\t]\n}\n'
+    )
+
+    env = dict(fixture_env)
+    env["ROOT"] = str(tmp_path)
+    args = ["--pretend", "@preserved-rebuild"]
+    result = _run([str(emerge_binary)], args, env)
+    assert result.returncode == 0
+    assert result.stdout.splitlines() == [
+        "[ebuild   R    ] dev-libs/nestedsetpkg-1.0 ",
+    ]
+    assert _run(emerge_pretend_python, args, env).stdout == result.stdout
+
+
+def test_preserved_rebuild_set_is_empty_when_the_registry_is_empty(
+    emerge_binary, emerge_pretend_python, fixture_env, tmp_path
+):
+    """No preserved_libs_registry (or an empty one) -> @preserved-rebuild
+    expands to nothing, which hits the same "nothing to resolve" error an
+    empty target list from any other source would."""
+    env = dict(fixture_env)
+    env["ROOT"] = str(tmp_path)
+    args = ["--pretend", "@preserved-rebuild"]
+    result = _run([str(emerge_binary)], args, env)
+    assert result.returncode == 2
+    assert result.stdout == ""
+    assert _run(emerge_pretend_python, args, env).returncode == 2
+
+
 def test_world_missing_file_expands_to_nothing_not_an_error(
     emerge_binary, fixture_env, tmp_path
 ):

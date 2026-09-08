@@ -1196,8 +1196,6 @@ pub(crate) fn preserve_libs_on_unmerge(
 /// `pub(crate)` reader for the resolver-side `@preserved-rebuild` set and
 /// the `display_preserved_libs` advisory, both of which live outside this
 /// module.
-// First consumer lands in the following slice (`@preserved-rebuild`).
-#[allow(dead_code)]
 pub(crate) fn preserved_lib_paths(root: &Path) -> BTreeMap<String, Vec<String>> {
     read_plib_registry(root).preserved_libs()
 }

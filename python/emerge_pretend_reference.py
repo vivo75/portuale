@@ -87,6 +87,7 @@ variables, defaulting to "/" -- see lib/portage/const.py.
 
 import configparser
 import functools
+import json
 import os
 import re
 import sys
@@ -11957,6 +11958,83 @@ def _installed_set_atoms(root):
     return sorted(atoms)
 
 
+def _read_plib_registry(root):
+    """Real PreservedLibsRegistry.getPreservedLibs(): the
+    var/lib/portage/preserved_libs_registry JSON
+    ({"cp:slot": [cpv, counter, [paths]]}) as {cpv: [paths]}. A missing or
+    unparseable file degrades to {} (real load()). Mirrors
+    ebuild_merge.rs's read_plib_registry + preserved_libs()."""
+    path = os.path.join(root, "var", "lib", "portage", "preserved_libs_registry")
+    try:
+        with open(path) as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        return {}
+    out = {}
+    if isinstance(data, dict):
+        for value in data.values():
+            if isinstance(value, list) and len(value) == 3:
+                cpv, _counter, paths = value
+                out[cpv] = list(paths)
+    return out
+
+
+def _preserved_rebuild_atoms(root):
+    """Real @preserved-rebuild (PreservedLibraryConsumerSet.load,
+    lib/portage/_sets/libs.py): the installed packages that still link a
+    library only kept alive by FEATURES=preserve-libs. For every
+    registered preserved path, consumers |= findConsumers(path,
+    greedy=False); then consumers -= <every preserved path>; then each
+    surviving consumer path maps to "{cp}:{slot}" of its owning installed
+    package. Slot-qualified like @installed, sorted + deduplicated. Empty
+    registry -> []. Mirrors pretend.rs's preserved_rebuild_atoms."""
+    plib_dict = _read_plib_registry(root)
+    if not plib_dict:
+        return []
+    all_preserved = {p for paths in plib_dict.values() for p in paths}
+
+    libs, obj_properties = _linkage_rebuild(root, _read_all_needed_entries(root))
+    defpath = _getlibpaths(root)
+    slot_of = {
+        f"{c}/{p}-{v}": slot for (c, p, v, slot) in _all_installed_packages(root)
+    }
+
+    atoms = set()
+    for lib in all_preserved:
+        if _obj_key(root, lib) in obj_properties:
+            consumers = _find_consumers(
+                root, libs, obj_properties, defpath, lib, False
+            )
+        else:
+            # Owning package already gone -- the library is no longer an
+            # indexed object. Fall back to "does any installed object
+            # still need this soname" (basename == soname). Mirrors
+            # needed_elf::soname_consumers.
+            soname = lib.rsplit("/", 1)[-1]
+            consumers = set()
+            for arch_map in libs.values():
+                node = arch_map.get(soname)
+                if node is None:
+                    continue
+                for ckey in node["consumers"]:
+                    cprops = obj_properties.get(ckey)
+                    if cprops is not None:
+                        consumers.update(cprops["alt_paths"])
+        for consumer in consumers:
+            if consumer in all_preserved:
+                continue
+            cprops = obj_properties.get(_obj_key(root, consumer))
+            if cprops is None or not cprops["owner"]:
+                continue
+            split = _split_cpv(cprops["owner"])
+            if split is None:
+                continue
+            cat, pn, _version = split
+            slot = slot_of.get(cprops["owner"], "0")
+            atoms.add(f"{cat}/{pn}:{slot}")
+    return sorted(atoms)
+
+
 def _collect_installed_sets(config_root, root):
     """Real _unmerge_display's own `installed_sets` -- every custom set
     directly/indirectly selected via world_sets, paired with its DIRECT
@@ -13691,6 +13769,8 @@ def _run_unmerge_pretend(targets, root, config_root, config, preserve_order=Fals
             expanded.extend(config["system_packages"])
         elif target == "@installed":
             expanded.extend(_installed_set_atoms(root))
+        elif target == "@preserved-rebuild":
+            expanded.extend(_preserved_rebuild_atoms(root))
         elif target.startswith("@"):
             try:
                 seen = set()
@@ -17646,6 +17726,8 @@ def run(args):
                 expanded_atoms.extend(config["system_packages"])
             elif atom_arg == "@installed":
                 expanded_atoms.extend(_installed_set_atoms(_root()))
+            elif atom_arg == "@preserved-rebuild":
+                expanded_atoms.extend(_preserved_rebuild_atoms(_root()))
             elif atom_arg.startswith("@"):
                 expanded_atoms.extend(
                     _resolve_custom_set(_config_root(), atom_arg[1:], set())

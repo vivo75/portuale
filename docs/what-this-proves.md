@@ -10683,6 +10683,37 @@ expansion sites — the build/`--pretend` path and the
 byte-identical to `@world`; `@installed` against a test-local vdb, both
 impls in lockstep) + an `installed_set_atoms` unit test.
 
+**`@preserved-rebuild` built-in set.** Real
+`cnf/sets/portage.conf`: `[preserved-rebuild]` ->
+`PreservedLibraryConsumerSet` (`lib/portage/_sets/libs.py`) -- the
+installed packages that still link a library only kept alive by
+`FEATURES=preserve-libs`, i.e. the exact set the user is told to
+`emerge @preserved-rebuild` after a preserved-lib warning. New
+`preserved_rebuild_atoms` (`pretend.rs`) / `_preserved_rebuild_atoms`
+(Python mirror): for every path in the `preserved_libs_registry`,
+`consumers |= findConsumers(path, greedy=False)` (`needed_elf::find_
+consumers` / `_find_consumers`); then `consumers -= <every preserved
+path>` (real *"Don't rebuild packages just because they contain
+preserved libs that happen to be consumers of other preserved libs"*);
+then each surviving consumer path maps to `{cp}:{slot}` of its owning
+installed package (real `mapPathsToAtoms` -- here the linkmap object's
+own recorded `owner`). A preserved library whose owning package has
+already left the vdb (the common upgrade case) is no longer an indexed
+object, so the same `basename == soname` reverse lookup
+(`needed_elf::soname_consumers`) that `ebuild_merge::find_unused_
+preserved_libs` uses stands in for real `LinkageMapELF.rebuild()`'s
+`scanelf`-of-the-registry branch (`LinkageMapELF.py:233-324`, never
+ported). Slot-qualified + sorted + deduped like `@installed`; empty
+registry -> empty list -> the ordinary "nothing to resolve" path. Wired
+into both expansion sites in each language; `--list-sets` already named
+it (it is a `cnf/sets/portage.conf` section). Contract-tested against a
+test-local ROOT with a seeded registry + a surviving consumer, both
+impls in lockstep, plus an empty-registry case. Live-verified: on a box
+whose `preserved_libs_registry` holds `dev-libs/simdjson` ->
+`libsimdjson.so.33`, `portuale emerge -p @preserved-rebuild` and the
+Python reference both resolve to `net-libs/nodejs`, matching real
+`emerge -p @preserved-rebuild`.
+
 ### `emerge --getbinpkgonly`/`--getbinpkg`: collision-protect / blocker exclusion / preserve-libs parity
 
 `merge_binpkg` was the one merge path still lighter than the source

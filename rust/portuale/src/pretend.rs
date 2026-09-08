@@ -2063,6 +2063,68 @@ fn installed_set_atoms(root: &Path) -> Vec<String> {
     atoms
 }
 
+/// Real `@preserved-rebuild` (`PreservedLibraryConsumerSet.load`,
+/// `lib/portage/_sets/libs.py`): the installed packages that still link
+/// against a library only kept alive by `FEATURES=preserve-libs`. For
+/// every path in the `preserved_libs_registry`,
+/// `consumers |= linkmap.findConsumers(path, greedy=False)`; then
+/// `consumers -= <every preserved path>` ("Don't rebuild packages just
+/// because they contain preserved libs that happen to be consumers of
+/// other preserved libs"); then each surviving consumer path maps to
+/// `{cp}:{slot}` of its owning installed package (real
+/// `mapPathsToAtoms` via `linkmap.getOwners` -- here the linkmap object's
+/// own recorded `owner`, since every consumer is itself an indexed
+/// `NEEDED.ELF.2` object). A consumer path with no indexed owner is
+/// skipped (real: a preserved lib of an already-uninstalled package).
+/// Slot-qualified like `@installed`, sorted + deduplicated for
+/// deterministic output. Empty registry -> empty list.
+///
+/// A preserved library whose owning package has already left the vdb is
+/// no longer an indexed object, so `find_consumers` can't look it up --
+/// the same `basename == soname` fallback `ebuild_merge::find_unused_
+/// preserved_libs` uses (`needed_elf::soname_consumers`) stands in for
+/// real `LinkageMapELF.rebuild()`'s `scanelf`-of-the-registry branch.
+fn preserved_rebuild_atoms(root: &Path) -> Vec<String> {
+    let plib_dict = ebuild_merge::preserved_lib_paths(root);
+    if plib_dict.is_empty() {
+        return Vec::new();
+    }
+    let all_preserved: HashSet<String> = plib_dict.values().flatten().cloned().collect();
+
+    let owner_entries = needed_elf::read_all_needed_entries(root);
+    let map = needed_elf::rebuild(root, &owner_entries);
+    let defpath = needed_elf::getlibpaths(root, None);
+
+    let mut atoms: Vec<String> = Vec::new();
+    for lib in &all_preserved {
+        let consumers = match needed_elf::find_consumers(root, &map, &defpath, lib, None, false) {
+            Ok(set) => set,
+            Err(_) => {
+                let soname = lib.rsplit('/').next().unwrap_or(lib);
+                needed_elf::soname_consumers(&map, soname)
+            }
+        };
+        for consumer in consumers {
+            if all_preserved.contains(&consumer) {
+                continue;
+            }
+            let ckey = needed_elf::obj_key(root, &consumer);
+            let Some(owner) = map.obj_properties.get(&ckey).map(|p| p.owner.as_str()) else {
+                continue;
+            };
+            let Some((cat, pn, version)) = portage_repo::split_cpv(owner) else {
+                continue;
+            };
+            let slot = ebuild_merge::read_installed_slot(root, &cat, &pn, &version)
+                .unwrap_or_else(|| "0".to_string());
+            atoms.push(format!("{cat}/{pn}:{slot}"));
+        }
+    }
+    atoms.sort();
+    atoms.dedup();
+    atoms
+}
+
 /// Real `Scheduler._world_atom` + `depgraph.saveNomergeFavorites`: after
 /// a successful non-`--pretend` `emerge <atom>`, each directly-requested
 /// **plain** target atom (not a dependency, not a `@set`) is recorded in
@@ -2934,6 +2996,7 @@ fn run_unmerge_pretend(
             },
             "@system" => expanded.extend(config.system_packages.iter().cloned()),
             "@installed" => expanded.extend(installed_set_atoms(root)),
+            "@preserved-rebuild" => expanded.extend(preserved_rebuild_atoms(root)),
             other if other.starts_with('@') => {
                 let mut seen = HashSet::new();
                 match resolve_custom_set(config_root, &other[1..], &mut seen) {
@@ -9374,6 +9437,8 @@ pub fn run(args: &[String]) -> ExitCode {
             expanded_atoms.extend(config.system_packages.iter().cloned());
         } else if *atom_str == "@installed" {
             expanded_atoms.extend(installed_set_atoms(&root));
+        } else if *atom_str == "@preserved-rebuild" {
+            expanded_atoms.extend(preserved_rebuild_atoms(&root));
         } else if let Some(name) = atom_str.strip_prefix('@') {
             let mut seen = HashSet::new();
             match resolve_custom_set(&config_root, name, &mut seen) {
