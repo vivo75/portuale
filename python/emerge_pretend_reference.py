@@ -19483,6 +19483,22 @@ def run(args):
         or result["autounmask_use_changes"]
         or result["autounmask_license_changes"]
     )
+
+    # Real _display_autounmask's tail (gated on
+    # _dynamic_config._autounmask_backtrack_disabled): with
+    # --autounmask-backtrack off (default) the resolver stops after the
+    # first autounmask batch and says so, --pretend included. Mirrors
+    # pretend.rs.
+    if _has_autounmask_changes and not config.get("autounmask_backtrack", False):
+        sys.stderr.write("\n")
+        for line in (
+            "In order to avoid wasting time, backtracking has terminated early",
+            "due to the above autounmask change(s). The --autounmask-backtrack=y",
+            "option can be used to force further backtracking, but there is no",
+            "guarantee that it will produce a solution.",
+        ):
+            sys.stderr.write(f" {color.c('WARN', '*')} {line}\n")
+
     if _has_autounmask_changes and not (not pretend and autounmask_continue is True):
         return 1
 

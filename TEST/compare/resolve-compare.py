@@ -108,23 +108,32 @@ MASKED = re.compile(r'have been masked|is required to complete your request')
 REQUSE = re.compile(r'REQUIRED_USE (?:flag constraints are unsatisfied|not satisfied)')
 
 
-def parse(path: Path) -> tuple[list[Pkg], list[str], int | None, set[str]]:
-    """Return (merge-list, error lines, Total-or-None, advice set).
+def parse(path: Path) -> tuple[list[Pkg], list[str], int | None, set[str], bool]:
+    """Return (merge-list, error lines, Total-or-None, advice set,
+    backtracking-terminated-early flag).
 
     The *advice set* is the actionable "you must change something"
     diagnostics -- needed USE-flag changes, masked-package requirements,
     unsatisfied REQUIRED_USE -- normalised so real and portuale can be
     compared even when one truncates its merge list and the other does
     not (the autounmask exit-code divergence).
+
+    *backtracking-terminated-early* is real's own marker that it stopped
+    after the first autounmask batch (`--autounmask-backtrack=n`); when
+    it fires and the two Total counts are far apart, the merge lists are
+    a truncated-vs-complete pair and set/order comparison is meaningless.
     """
     pkgs: list[Pkg] = []
     errs: list[str] = []
     total: int | None = None
     advice: set[str] = set()
+    terminated_early = False
     if not path.exists():
-        return pkgs, ["<no output file>"], None, advice
+        return pkgs, ["<no output file>"], None, advice, terminated_early
     in_use_block = False
     for line in path.read_text(errors="replace").splitlines():
+        if "backtracking has terminated early" in line:
+            terminated_early = True
         line = strip_ansi(line).rstrip()
         if not line:
             continue
@@ -182,13 +191,13 @@ def parse(path: Path) -> tuple[list[Pkg], list[str], int | None, set[str]]:
             n = re.sub(r"\b\d{4}-\d\d-\d\d\b", "<date>", n)
             n = re.sub(r"\s+", " ", n).strip()
             errs.append(n)
-    return pkgs, errs, total, advice
+    return pkgs, errs, total, advice, terminated_early
 
 
 def compare(slug: str, kind: str, rrc: int, prc: int, rp: Path, pp: Path) -> Probe:
     pr = Probe(slug=slug, kind=kind, real_rc=rrc, ptl_rc=prc)
-    rpk, rerr, rtot, radv = parse(rp)
-    ppk, perr, ptot, padv = parse(pp)
+    rpk, rerr, rtot, radv, r_trunc = parse(rp)
+    ppk, perr, ptot, padv, p_trunc = parse(pp)
 
     def add(cat: str, detail: str) -> None:
         pr.findings.append({"category": cat, "detail": detail})
@@ -199,6 +208,34 @@ def compare(slug: str, kind: str, rrc: int, prc: int, rp: Path, pp: Path) -> Pro
         add("advice", f"real-only: {a}")
     for a in sorted(padv - radv):
         add("advice", f"portuale-only: {a}")
+
+    # -- autounmask merge-list truncation --------------------------------
+    # Real, with `--autounmask-backtrack=n` (the default), can stop the
+    # resolve at the first autounmask-blocked node and emit only a
+    # partial merge list (`* backtracking has terminated early`). When it
+    # does AND the two Total counts are far apart, portuale's fuller list
+    # is not "extra packages" -- it is what real *would* have shown had it
+    # kept going. Comparing set/order/totals then is truncated-vs-complete
+    # noise (the same reason the `rrc != prc` branch above bails). Compare
+    # advice + errors and report the shape. `known-divergences.yaml` can
+    # still adjudicate the one residual "portuale does not truncate"
+    # divergence; this keeps it from fanning out to ~500 findings.
+    def _far_apart(a: int | None, b: int | None) -> bool:
+        return a is not None and b is not None and min(a, b) * 2 < max(a, b)
+
+    if (r_trunc or p_trunc) and _far_apart(rtot, ptot):
+        add(
+            "truncated",
+            f"autounmask backtracking terminated early (real Total {rtot} / "
+            f"{len(rpk)} lines, portuale Total {ptot} / {len(ppk)} lines) -- "
+            "merge-list set/order/totals comparison suppressed",
+        )
+        rset, pset = set(rerr), set(perr)
+        for e in sorted(rset - pset):
+            add("error", f"real-only message: {e}")
+        for e in sorted(pset - rset):
+            add("error", f"portuale-only message: {e}")
+        return pr
 
     if rrc != prc:
         add("exit", f"real rc={rrc} portuale rc={prc}")

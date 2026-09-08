@@ -1958,6 +1958,18 @@ def _run(cmd: list[str], args: list[str], env: dict[str, str]) -> subprocess.Com
     )
 
 
+# Real `_display_autounmask`'s tail, emitted on stderr after every
+# autounmask change block when `--autounmask-backtrack` is off (the
+# default) -- `--pretend` included. Appended to the pinned stderr of
+# every autounmask-abort test below.
+BACKTRACK_TERMINATED_EARLY = (
+    "\n * In order to avoid wasting time, backtracking has terminated early\n"
+    " * due to the above autounmask change(s). The --autounmask-backtrack=y\n"
+    " * option can be used to force further backtracking, but there is no\n"
+    " * guarantee that it will produce a solution.\n"
+)
+
+
 # `emerge --info`'s host-state header (`Portage <ver> (…)`, `System
 # uname:`, `KiB Mem/Swap:`, repo `Timestamp`/`Head commit`, the
 # `sh:`/`coreutils:`/`ld:` probes and the `info_pkgs` table) is host
@@ -3177,6 +3189,7 @@ def test_autounmask_use_resolves_a_dependency_use_dep_mismatch(
         "# required by dev-libs/usedeprejectedpkg-1.0::testrepo\n"
         "# required by dev-libs/usedeprejectedpkg (argument)\n"
         ">=dev-libs/useflagpkg-1.0 -foo\n"
+        + BACKTRACK_TERMINATED_EARLY
     )
 
 
@@ -3213,6 +3226,7 @@ def test_autounmask_backward_cascade_re_resolves_an_already_resolved_slot(
         ' (see "package.use" in the portage(5) man page for more details)\n'
         "# required by dev-libs/aucasclate-1.0::testrepo\n"
         ">=dev-libs/aucascmid-1.0 cascade\n"
+        + BACKTRACK_TERMINATED_EARLY
     )
 
     # --autounmask-backtrack=y: the whole graph is re-driven, aucascleaf appears
@@ -3292,6 +3306,7 @@ def test_autounmask_breakage_abandons_autounmask_when_a_flag_is_wanted_both_ways
         ' (see "package.use" in the portage(5) man page for more details)\n'
         "# required by dev-libs/aubreakwant-1.0::testrepo\n"
         ">=dev-libs/aubreaksub-1.0 brk\n"
+        + BACKTRACK_TERMINATED_EARLY
     )
 
     # --autounmask-backtrack=y: the contradiction is detected, autounmask abandoned
@@ -3349,6 +3364,7 @@ def test_autounmask_keyword_backward_cascade_re_resolves_a_slot_to_a_masked_vers
         "# required by dev-libs/kwbacktop-1.0::testrepo\n"
         "# required by dev-libs/kwbacktop (argument)\n"
         "=dev-libs/kwbackmid-2.0 ~amd64\n"
+        + BACKTRACK_TERMINATED_EARLY
     )
 
 
@@ -3385,6 +3401,7 @@ def test_autounmask_levels_unmask_two_categories_at_once_on_the_same_version(
         "# required by dev-libs/multimaskconsumer-1.0::testrepo\n"
         "# required by dev-libs/multimaskconsumer (argument)\n"
         ">=dev-libs/multimaskdep-2.0 SomeEula\n"
+        + BACKTRACK_TERMINATED_EARLY
     )
 
     # default (no keyword suggestions): the dep stays unresolvable
@@ -3505,6 +3522,7 @@ def test_autounmask_use_resolves_a_top_level_use_dep_mismatch(emerge_binary, fix
         ' (see "package.use" in the portage(5) man page for more details)\n'
         "# required by dev-libs/useflagpkg[-foo] (argument)\n"
         ">=dev-libs/useflagpkg-1.0 -foo\n"
+        + BACKTRACK_TERMINATED_EARLY
     )
 
 
@@ -3895,6 +3913,7 @@ def test_autounmask_suggests_a_keyword_once_explicitly_enabled(emerge_binary, fi
         ' (see "package.accept_keywords" in the portage(5) man page for more details)\n'
         "# required by dev-libs/autounmaskkeywordpkg (argument)\n"
         "=dev-libs/autounmaskkeywordpkg-1.0 ~amd64\n"
+        + BACKTRACK_TERMINATED_EARLY
     )
 
 
@@ -4018,6 +4037,7 @@ def test_autounmask_dependency_gets_a_keyword_suggestion_once_enabled(emerge_bin
         "# required by dev-libs/autounmaskdepconsumer-1.0::testrepo\n"
         "# required by dev-libs/autounmaskdepconsumer (argument)\n"
         "=dev-libs/autounmaskkeywordpkg-1.0 ~amd64\n"
+        + BACKTRACK_TERMINATED_EARLY
     )
 
 
@@ -4086,6 +4106,7 @@ def test_autounmask_license_resolves_a_eula_masked_dependency(emerge_binary, fix
         "# required by dev-libs/licensemaskedconsumer-1.0::testrepo\n"
         "# required by dev-libs/licensemaskedconsumer (argument)\n"
         ">=dev-libs/licensemaskedpkg-1.0 SomeEula\n"
+        + BACKTRACK_TERMINATED_EARLY
     )
 
     # --autounmask-license=y alone enables it; --autounmask-license=n over
@@ -4162,6 +4183,7 @@ def test_autounmask_keep_masks_n_unmasks_a_package_mask(emerge_binary, fixture_e
         "# required by dev-libs/maskmaskedconsumer-1.0::testrepo\n"
         "# required by dev-libs/maskmaskedconsumer (argument)\n"
         "=dev-libs/hardmaskedpkg-1.0\n"
+        + BACKTRACK_TERMINATED_EARLY
     )
 
     j = _run(
@@ -4319,6 +4341,7 @@ def test_autounmask_use_parent_flip_resolves_when_the_child_flag_is_masked(
         "# required by dev-libs/parentflipeqpkg-1.0::testrepo\n"
         "# required by dev-libs/parentflipeqpkg (argument)\n"
         ">=dev-libs/parentflipeqpkg-1.0 -feat\n"
+        + BACKTRACK_TERMINATED_EARLY
     )
 
     # --autounmask-use=n: the shared gate is off -> the dep stays
@@ -4368,6 +4391,7 @@ def test_autounmask_use_parent_flip_re_resolves_the_whole_graph(
         "# required by dev-libs/pfgraphparent-1.0::testrepo\n"
         "# required by dev-libs/pfgraphparent (argument)\n"
         ">=dev-libs/pfgraphparent-1.0 -pf\n"
+        + BACKTRACK_TERMINATED_EARLY
     )
 
     # --autounmask-backtrack=y: the whole graph re-resolves, pfgraphextra drops

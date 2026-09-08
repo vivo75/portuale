@@ -10468,6 +10468,25 @@ pub fn run(args: &[String]) -> ExitCode {
         || !result.autounmask_use_changes.is_empty()
         || !result.autounmask_license_changes.is_empty();
     let autounmask_continue_active = !pretend && autounmask_continue == Some(true);
+
+    // Real `_display_autounmask`'s tail (`depgraph.py`, gated on
+    // `_dynamic_config._autounmask_backtrack_disabled`): with
+    // `--autounmask-backtrack` off (the default), the resolver stops
+    // after the first autounmask batch instead of re-driving, and says
+    // so -- `--pretend` included. `--autounmask-continue` implies
+    // backtrack=y, so the notice is suppressed there.
+    if has_autounmask_changes && !config.autounmask_backtrack {
+        eprintln!();
+        for line in [
+            "In order to avoid wasting time, backtracking has terminated early",
+            "due to the above autounmask change(s). The --autounmask-backtrack=y",
+            "option can be used to force further backtracking, but there is no",
+            "guarantee that it will produce a solution.",
+        ] {
+            eprintln!(" {} {line}", color.c("WARN", "*"));
+        }
+    }
+
     if has_autounmask_changes && !autounmask_continue_active {
         return ExitCode::from(1);
     }
