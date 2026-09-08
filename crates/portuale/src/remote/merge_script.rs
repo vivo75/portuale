@@ -272,6 +272,121 @@ pub(crate) fn split_server_locale(
     out
 }
 
+/// Arguments of [`postinst_regen_script`].
+pub(crate) struct PostinstRegenScriptArgs<'a> {
+    pub(crate) unit_dir: &'a str,
+    pub(crate) staged: &'a crate::remote_bundle::StagedBundle,
+    pub(crate) root: &'a str,
+    pub(crate) workdir_parent: &'a str,
+    pub(crate) colormap: &'a str,
+    pub(crate) features: Option<&'a str>,
+    pub(crate) locale: &'a [(String, String)],
+    pub(crate) portuale_bin: &'a str,
+}
+
+/// The merge-time environment-regeneration postinst run: `mrg` runs this
+/// phase on the client for every merged unit, **whether or not
+/// `pkg_postinst` is defined** (an undefined function is a no-op that
+/// still regenerates the env).
+///
+/// `PORTAGE_UPDATE_ENV` points at a unit-local file and
+/// `PORTAGE_BZIP2_COMMAND` at the bundle's `bzip2-passthrough` (plain
+/// text out; the server compresses -- the client must have no `bzip2`).
+/// `FEATURES` / `PORTAGE_FEATURES` carry the resolved client list, and
+/// `locale` re-exports the server's own values (split per
+/// `split_server_locale` on posixish EAPIs). The script exits with the
+/// phase rc (a non-zero postinst is non-fatal); `PHASE_postinst=<rc>`
+/// plus `REGEN_ENV=ok|missing|skip:no-hooks` come back on stdout.
+///
+/// `O` and `SHELL` are unset before the phase runs, like Portage's phase
+/// shell; `LC_ALL` is unset on posixish EAPIs (also killing leaks from
+/// the sourced build-time environment).
+// Portage: vartree.py, PORTAGE_UPDATE_ENV; phase-functions.sh, PORTAGE_UPDATE_ENV block
+pub(crate) fn postinst_regen_script(args: PostinstRegenScriptArgs<'_>) -> String {
+    let PostinstRegenScriptArgs {
+        unit_dir,
+        staged,
+        root,
+        workdir_parent,
+        colormap,
+        features,
+        locale,
+        portuale_bin,
+    } = args;
+    let mut extra = String::new();
+    if let Some(list) = features.filter(|f| !f.is_empty()) {
+        extra.push_str(&format!(
+            "export FEATURES={features} PORTAGE_FEATURES={features}\n",
+            features = sh_quote(list),
+        ));
+    }
+    extra.push_str(&format!(
+        "export PORTAGE_UPDATE_ENV={regen} PORTAGE_BZIP2_COMMAND={passthrough}\n",
+        regen = sh_quote(&format!("{unit_dir}/environment.regen")),
+        passthrough = sh_quote(&format!("{unit_dir}/bin/bzip2-passthrough")),
+    ));
+    // Match Portage's phase shell (see the fn doc comment) so the
+    // `PORTAGE_UPDATE_ENV` save matches Portage's saved env.
+    extra.push_str("unset O\n");
+    // `unset` (not `export -n`) reproduces Portage exactly: bash
+    // self-initializes an unexported `SHELL`.
+    extra.push_str("unset SHELL\n");
+    // Posixish phases never see `LC_ALL`; the unset also covers an
+    // `LC_ALL` leaking in from the sourced build-time environment.
+    let posixish = eapi_is_posixish(&staged.eapi);
+    if posixish {
+        extra.push_str("unset LC_ALL\n");
+    }
+    for (name, value) in split_server_locale(locale, &staged.eapi).iter() {
+        extra.push_str(&format!(
+            "export {name}={quoted}\n",
+            quoted = sh_quote(value)
+        ));
+    }
+    format!(
+        concat!(
+            "UNIT={unit}\n",
+            "UNITBIN=\"$UNIT/bin\"\n",
+            "T=\"$UNIT/temp\"\n",
+            "mkdir -p \"$T\" \"$UNIT/work\" \"$UNIT/homedir\" \"$UNIT/files\" \"$UNIT/empty\"\n",
+            "if [ ! -f \"$UNIT/build-info/{pf}.ebuild\" ] || [ ! -f \"$UNIT/environment\" ]; then\n",
+            "  echo \"REGEN_ENV=skip:no-hooks\"\n",
+            "  echo \"PHASE_postinst=0\"\n",
+            "  exit 0\n",
+            "fi\n",
+            "cp \"$UNIT/environment\" \"$T/environment\"\n",
+            ": > \"$T/environment.raw\"\n",
+            "{exports}",
+            "{extra}",
+            "export PATH=\"$UNIT/bin/ebuild-helpers:$PATH\"\n",
+            "bash \"$UNIT/bin/ebuild.sh\" postinst\n",
+            "rc=$?\n",
+            "echo \"PHASE_postinst=$rc\"\n",
+            "if [ -s \"$UNIT/environment.regen\" ]; then echo \"REGEN_ENV=ok\"; else echo \"REGEN_ENV=missing\"; fi\n",
+            "exit $rc\n",
+        ),
+        unit = sh_quote(unit_dir),
+        pf = staged.pf,
+        exports = phase_exports(PhaseExportsArgs {
+            ebuild: &format!("{unit_dir}/build-info/{}.ebuild", staged.pf),
+            build_dir: unit_dir,
+            root,
+            image_dir: &format!("{unit_dir}/image"),
+            temp_dir: &format!("{unit_dir}/temp"),
+            work_subdir: &format!("{unit_dir}/work"),
+            home_dir: &format!("{unit_dir}/homedir"),
+            files_dir: &format!("{unit_dir}/files"),
+            bin_dir: &format!("{unit_dir}/bin"),
+            tmpdir: workdir_parent,
+            colormap,
+            staged,
+            phase: "postinst",
+            portuale_bin
+        }),
+        extra = extra,
+    )
+}
+
 /// Merge header: all values the flow needs, pre-quoted. The unit layout
 /// mirrors the local merge (`image/`, `build-info/`, shipped `bin/`).
 /// Client ledger destination + line baked into the merge driver; `None`
