@@ -905,6 +905,39 @@ fn run_161(args: Run161Args<'_>) -> PassResult {
     run_pass(&ctx, &BacktrackParams::default(), true).expect("walk settles")
 }
 
+/// Arguments of [`blocker_161_write_pkg`].
+struct Blocker161WritePkgArgs<'a> {
+    repo: &'a Path,
+    cp: &'a str,
+    pv: &'a str,
+    slot: &'a str,
+    depend: &'a str,
+    rdepend: &'a str,
+}
+
+/// Scratch-repo package writer shared by the blocker legs: `blockerparent-1.0`
+/// merges `victim-1.0` through `RDEPEND` while softly blocking it (a runtime
+/// key, always walked; `DEPEND` would need `--with-bdeps`).
+fn blocker_161_write_pkg(args: Blocker161WritePkgArgs<'_>) {
+    let Blocker161WritePkgArgs {
+        repo,
+        cp,
+        pv,
+        slot,
+        depend,
+        rdepend,
+    } = args;
+    blocker_161_write_pkg_full(Blocker161WritePkgFullArgs {
+        repo,
+        cp,
+        pv,
+        slot,
+        depend,
+        rdepend,
+        bdepend: "",
+    });
+}
+
 /// Arguments of [`blocker_161_write_pkg_full`].
 struct Blocker161WritePkgFullArgs<'a> {
     repo: &'a Path,
@@ -961,6 +994,23 @@ fn blocker_161_write_pkg_full(args: Blocker161WritePkgFullArgs<'_>) {
     std::fs::write(cachedir.join(format!("{pkg}-{pv}")), entry).unwrap();
 }
 
+fn blocker_161_repo_config(repo: PathBuf) -> RepoConfig {
+    RepoConfig {
+        name: "testrepo".to_string(),
+        location: repo,
+        priority: 0,
+        is_main: true,
+        masters: vec![],
+        profile_formats: vec![],
+        cache_formats: vec![],
+        aliases: vec![],
+        sync_type: None,
+        sync_uri: None,
+        volatile: false,
+        module_specific_options: vec![],
+    }
+}
+
 /// Arguments of [`blocker_161_scratch_repo`].
 struct Blocker161ScratchRepoArgs<'a> {
     base: &'a Path,
@@ -969,6 +1019,29 @@ struct Blocker161ScratchRepoArgs<'a> {
     slot: &'a str,
     depend: &'a str,
     rdepend: &'a str,
+}
+
+/// One scratch package in its own repo: for legs needing tree
+/// versions the fixtures do not carry.
+fn blocker_161_scratch_repo(args: Blocker161ScratchRepoArgs<'_>) -> RepoConfig {
+    let Blocker161ScratchRepoArgs {
+        base,
+        cp,
+        pv,
+        slot,
+        depend,
+        rdepend,
+    } = args;
+    let repo = base.join("scratchrepo");
+    blocker_161_write_pkg(Blocker161WritePkgArgs {
+        repo: &repo,
+        cp,
+        pv,
+        slot,
+        depend,
+        rdepend,
+    });
+    blocker_161_repo_config(repo)
 }
 
 /// Arguments of [`slotundo_vdb`].
