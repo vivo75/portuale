@@ -1665,7 +1665,12 @@ fn run_binpkg_flow(
     if let Err(message) = std::fs::create_dir_all(&staging) {
         return Err(format!("mrg: staging dir {}: {message}", staging.display()));
     }
-    let staged = match crate::remote_bundle::build_bundle(binpkg_path, &staging, repo_override) {
+    let staged = match crate::remote_bundle::build_bundle(
+        binpkg_path,
+        &staging,
+        repo_override,
+        &crate::binpkg::GpgVerify::from_env(),
+    ) {
         Ok(staged) => staged,
         Err(message) => {
             let _ = std::fs::remove_dir_all(&staging);
@@ -2966,6 +2971,7 @@ mod tests {
             &fixture("pkgdir/dev-libs/packagepkg-1.0.tbz2"),
             &staging,
             None,
+            &crate::binpkg::GpgVerify::default(),
         )
         .expect("fixture tbz2 stages");
         // Simulate the streamed file, truncated to half its bytes.

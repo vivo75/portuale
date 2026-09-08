@@ -310,10 +310,14 @@ pub fn select_phases(defined_phases: &str, has_ebuild: bool, has_environment: bo
 /// `repo_position`): used only when the binpkg's own embedded metadata
 /// carries no `repository`/`REPO` key (the `--remote-binpkg` trial path
 /// passes `None`, honestly reporting the bytes as-is).
+/// `gpg` is the same merge-time signature policy `merge_binpkg` runs
+/// (see `crate::binpkg::GpgVerify`) -- the bundle stages exactly what
+/// the merge would see, verified the same way.
 pub fn build_bundle(
     binpkg_path: &Path,
     staging_tmp: &Path,
     repo_override: Option<&str>,
+    gpg: &crate::binpkg::GpgVerify,
 ) -> Result<StagedBundle, String> {
     let name = binpkg_path
         .file_name()
@@ -355,7 +359,7 @@ pub fn build_bundle(
     let unit = staging_tmp.join(&pf);
     let image = unit.join("image");
     let build_info = unit.join("build-info");
-    crate::binpkg::extract_binpkg(binpkg_path, &image, &build_info)?;
+    crate::binpkg::extract_binpkg(binpkg_path, &image, &build_info, gpg)?;
 
     // Server-side `bzip2 -dc`: the client never needs bzip2 (plan §6).
     let saved_env = build_info.join("environment.bz2");
@@ -531,8 +535,13 @@ mod tests {
     #[test]
     fn bundle_stages_image_build_info_environment_and_manifest() {
         let tmp = tempdir("stage");
-        let staged = build_bundle(&fixture("pkgdir/dev-libs/packagepkg-1.0.tbz2"), &tmp, None)
-            .expect("fixture tbz2 stages");
+        let staged = build_bundle(
+            &fixture("pkgdir/dev-libs/packagepkg-1.0.tbz2"),
+            &tmp,
+            None,
+            &crate::binpkg::GpgVerify::default(),
+        )
+        .expect("fixture tbz2 stages");
         assert_eq!(staged.manifest.cpv, "dev-libs/packagepkg-1.0");
         assert!(staged.byte_count > 0);
         assert_eq!(
@@ -572,6 +581,7 @@ mod tests {
             &fixture("pkgdir/dev-libs/packagepkg-1.0.tbz2"),
             &tmp,
             Some("testrepo"),
+            &crate::binpkg::GpgVerify::default(),
         )
         .expect("fixture tbz2 stages");
         assert_eq!(staged.manifest.repo, "testrepo");
@@ -581,6 +591,7 @@ mod tests {
             &fixture("pkgdir/dev-libs/packagepkg-1.0.tbz2"),
             &tmp,
             Some("__unknown__"),
+            &crate::binpkg::GpgVerify::default(),
         )
         .expect("fixture tbz2 stages");
         assert_eq!(staged.manifest.repo, "__unknown__");

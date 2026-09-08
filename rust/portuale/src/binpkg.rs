@@ -119,10 +119,18 @@ impl Drop for ScratchDir {
 /// version marker's *presence* (real `_get_inner_tarinfo`'s own
 /// `InvalidBinaryPackageFormat` guard).
 ///
-/// **v1 cut, documented**: NO GPG `.sig` signature check anywhere -- this
-/// portuale has no crypto; a container that carries `.sig` members still
-/// has its cleartext `DATA` digests verified (real portage's own
-/// `binpkg-ignore-signature` behaviour).
+/// **Deliberate cut**: NO GPG `.sig` check on this populate path --
+/// a container that carries `.sig` members still has its cleartext
+/// `DATA` digests verified at *merge* time (real portage's own
+/// `binpkg-ignore-signature` behaviour is what an unverified read
+/// amounts to), and the merge (`extract_binpkg` ->
+/// `verify_gpkg_manifest`) enforces the real `request_signature` /
+/// `verify_signature` policy via the system `gpg` (see [`GpgVerify`]).
+/// Real `unpack_metadata`/`get_metadata` verify
+/// (`_verify_binpkg(metadata_only=True)` still checks the metadata
+/// `.sig` + Manifest), so a corrupt-or-foreign-signed binpkg resolves
+/// in portuale's pool but fails at merge; the resolve side stays
+/// deterministic and `gpg`-free on purpose.
 pub fn read_gpkg_metadata(gpkg_path: &Path) -> Result<HashMap<String, String>, String> {
     if !gpkg_path.is_file() {
         return Err(format!("{}: not a file", gpkg_path.display()));
@@ -352,27 +360,43 @@ fn be32(b: &[u8]) -> u32 {
 }
 
 /// Real `portage.gpkg.gpkg._verify_binpkg` (`lib/portage/gpkg.py:1626`),
-/// narrowed to its checksum layer. A `.gpkg.tar` is a plain (outer) tar
-/// whose members are every one exactly one level deep under a single
-/// shared prefix directory (real "gpkg file structure" guard); the
-/// `<prefix>/Manifest` member records one
+/// checksum layer + GPG signature layer. A `.gpkg.tar` is a plain
+/// (outer) tar whose members are every one exactly one level deep under
+/// a single shared prefix directory (real "gpkg file structure" guard);
+/// the `<prefix>/Manifest` member records one
 /// `DATA <basename> <size> BLAKE2B <hex> SHA512 <hex>` line per other
 /// member (real `_record_checksum` / `_add_manifest`, and
 /// `MANIFEST2_HASH_DEFAULTS = {BLAKE2B, SHA512}`). This checks:
 ///   - a `Manifest` member exists (real `MissingSignature` otherwise);
-///   - every non-`Manifest`, non-`.sig` member has a `DATA` record whose
-///     `size` and *every* recognised hash match -- reusing
-///     `portage_fetch::verify_digests` (size first, then BLAKE2B/SHA512),
-///     with real's "at least one supported checksum" floor;
+///   - the GPG layer (real `request_signature` / `signature_exist` /
+///     `verify_signature`): when the container carries any `.sig`
+///     member or an inline-signed Manifest -- or `gpg.request_signature`
+///     (`FEATURES=binpkg-request-signature`) says signatures are
+///     mandatory -- the Manifest is verified as a clear-signed message
+///     and every other member against its detached `.sig` sidecar, via
+///     the system `gpg` (see [`GpgVerify`]). A failed Manifest check is
+///     fatal only when `gpg.verify_signature` (real's own
+///     `if self.verify_signature: raise` -- `binpkg-ignore-signature`
+///     falls back to the raw Manifest bytes); a missing sidecar is
+///     always fatal under `request_signature` (real `MissingSignature`),
+///     except for the never-signed `gpkg-1` version marker. `.sig`
+///     members themselves are digest-checked against their own Manifest
+///     records, exactly like every other member (real's loop verifies
+///     the `.sig` file bytes too -- `f_signature` is only `None` for
+///     choosing *plain* over *GPG* verification, not for skipping).
+///   - every member has a `DATA` record whose `size` and *every*
+///     recognised hash match -- reusing `portage_fetch::verify_digests`
+///     (size first, then BLAKE2B/SHA512), with real's "at least one
+///     supported checksum" floor;
 ///   - the member set and the record set match exactly (real's
 ///     `unverified_files` / `unverified_manifest` leftovers checks).
 ///
-/// **v1 cut** (see [`read_gpkg_metadata`]): the GPG `.sig` / inline-PGP
-/// signature layer is not verified -- `.sig` members are accounted for
-/// (so the set check still passes) but not cryptographically checked,
-/// and an inline-signed `Manifest`'s cleartext `DATA` lines are read
-/// straight through.
-fn verify_gpkg_manifest(gpkg_path: &Path) -> Result<(), String> {
+/// Deliberate cuts: no dropped-privilege (`nobody`/`nogroup`) `gpg`
+/// spawn when root (real `checksum_helper`'s own `GPG_VERIFY_USER_DROP`;
+/// tests run unprivileged and production merges already run as root
+/// throughout); `[PORTAGE_CONFIG]`/`[SIGNATURE]` substitution is plain
+/// whitespace splitting, not real's `shlex` + `varexpand`.
+fn verify_gpkg_manifest(gpkg_path: &Path, gpg: &GpgVerify) -> Result<(), String> {
     if !gpkg_path.is_file() {
         return Err(format!("{}: not a file", gpkg_path.display()));
     }
@@ -412,12 +436,47 @@ fn verify_gpkg_manifest(gpkg_path: &Path) -> Result<(), String> {
             gpkg_path.display()
         ));
     }
-    let manifest_text = fs::read_to_string(&manifest_path)
-        .map_err(|e| format!("{}: {e}", manifest_path.display()))?;
+    let manifest_bytes =
+        fs::read(&manifest_path).map_err(|e| format!("{}: {e}", manifest_path.display()))?;
+    let manifest_text = String::from_utf8_lossy(&manifest_bytes);
 
-    // Parse the `DATA` lines. PGP-armor lines (an inline-signed
-    // Manifest) are skipped -- portuale has no crypto and reads the
-    // cleartext body straight through.
+    // Real `_verify_binpkg`'s own GPG trigger (`gpkg.py:1682-1686` +
+    // `:1711-1712`): "if any signature exists, we assume all files have
+    // signature" -- any `.sig` sidecar member, or an inline PGP block in
+    // the Manifest itself.
+    let member_names: Vec<String> = read_dir_sorted(&prefix_dir)?
+        .iter()
+        .filter_map(|m| m.file_name().and_then(|n| n.to_str()).map(String::from))
+        .collect();
+    let signature_exist = member_names.iter().any(|n| n.ends_with(".sig"))
+        || manifest_text.contains("-----BEGIN PGP SIGNATURE-----");
+
+    // Real Manifest-signature branch (`gpkg.py:1714-1731`): verify the
+    // clear-signed Manifest and parse the cleartext. A failure is fatal
+    // only under `verify_signature` -- with `binpkg-ignore-signature`
+    // real falls back to the raw bytes (and the armor-skipping parse
+    // below reads the cleartext body straight through, as portuale
+    // always used to).
+    let manifest_text: std::borrow::Cow<'_, str> = if gpg.request_signature || signature_exist {
+        match verify_clearsigned_manifest(&manifest_bytes, gpg, gpkg_path) {
+            Ok(cleartext) => {
+                std::borrow::Cow::Owned(String::from_utf8_lossy(&cleartext).into_owned())
+            }
+            Err(e) => {
+                if gpg.verify_signature {
+                    return Err(e);
+                }
+                std::borrow::Cow::Borrowed(manifest_text.as_ref())
+            }
+        }
+    } else {
+        std::borrow::Cow::Borrowed(manifest_text.as_ref())
+    };
+
+    // Parse the `DATA` lines. When signature checking is off
+    // (`binpkg-ignore-signature`) a clear-signed Manifest is still
+    // parsed raw, so PGP-armor lines are skipped and the cleartext body
+    // read straight through; a verified cleartext has no armor left.
     let mut records: HashMap<String, portage_fetch::DistfileDigests> = HashMap::new();
     for line in manifest_text.lines() {
         let line = line.trim();
@@ -471,24 +530,12 @@ fn verify_gpkg_manifest(gpkg_path: &Path) -> Result<(), String> {
     }
 
     let mut unmatched: std::collections::BTreeSet<String> = records.keys().cloned().collect();
-    for member in read_dir_sorted(&prefix_dir)? {
-        let Some(name) = member
-            .file_name()
-            .and_then(|n| n.to_str())
-            .map(String::from)
-        else {
-            continue;
-        };
+    for name in &member_names {
+        let member = prefix_dir.join(name);
         if name == "Manifest" {
             continue;
         }
-        if name.ends_with(".sig") {
-            // Signature member: accounted for, not cryptographically
-            // checked (documented cut).
-            unmatched.remove(&name);
-            continue;
-        }
-        let record = records.get(&name).ok_or_else(|| {
+        let record = records.get(name).ok_or_else(|| {
             format!(
                 "{}: container member {name:?} is not listed in the Manifest",
                 gpkg_path.display()
@@ -504,13 +551,41 @@ fn verify_gpkg_manifest(gpkg_path: &Path) -> Result<(), String> {
                 gpkg_path.display()
             ));
         }
+        if !name.ends_with(".sig")
+            && (gpg.request_signature || signature_exist)
+            && gpg.verify_signature
+        {
+            // Real per-file GPG branch (`gpkg.py:1764-1788`): a member
+            // whose `.sig` sidecar exists is verified detached before
+            // its digests are compared; the never-signed `gpkg-1`
+            // version marker is digest-only; anything else is
+            // `MissingSignature`.
+            let sidecar = format!("{name}.sig");
+            if member_names.iter().any(|n| n == &sidecar) {
+                let member_bytes =
+                    fs::read(&member).map_err(|e| format!("{}: {e}", member.display()))?;
+                let sig_bytes = fs::read(prefix_dir.join(&sidecar))
+                    .map_err(|e| format!("{}: {e}", prefix_dir.join(&sidecar).display()))?;
+                verify_detached_signature(
+                    &member_bytes,
+                    &sig_bytes,
+                    gpg,
+                    &format!("{}: container member {name:?}", gpkg_path.display()),
+                )?;
+            } else if name != "gpkg-1" {
+                return Err(format!(
+                    "{}: container member {name:?} signature not found in the gpkg container",
+                    gpkg_path.display()
+                ));
+            }
+        }
         portage_fetch::verify_digests(&member, record).map_err(|e| {
             format!(
                 "{}: gpkg Manifest verification failed: {e}",
                 gpkg_path.display()
             )
         })?;
-        unmatched.remove(&name);
+        unmatched.remove(name);
     }
 
     if !unmatched.is_empty() {
@@ -542,10 +617,14 @@ fn verify_gpkg_manifest(gpkg_path: &Path) -> Result<(), String> {
 /// binpkg merge runs real `pkg_preinst`/`pkg_postinst` by `bunzip2`'ing
 /// `environment.bz2` into `${T}/environment` (real `BinpkgEnvExtractor`
 /// -> `bin/ebuild.sh`'s own saved-env source path).
+///
+/// `gpg` is the merge-time signature policy (see [`GpgVerify`]) -- real
+/// `_verify_binpkg` runs before anything is unpacked for the merge.
 pub fn extract_binpkg(
     binpkg_path: &Path,
     image_dest: &Path,
     build_info_dest: &Path,
+    gpg: &GpgVerify,
 ) -> Result<(), String> {
     fs::create_dir_all(image_dest).map_err(|e| format!("{}: {e}", image_dest.display()))?;
     fs::create_dir_all(build_info_dest)
@@ -556,9 +635,9 @@ pub fn extract_binpkg(
         .and_then(|n| n.to_str())
         .unwrap_or_default();
     if name.ends_with(".gpkg.tar") {
-        // Real `_verify_binpkg`: the Manifest digest check runs before
-        // anything is unpacked for the merge.
-        verify_gpkg_manifest(binpkg_path)?;
+        // Real `_verify_binpkg`: the Manifest digest + signature checks
+        // run before anything is unpacked for the merge.
+        verify_gpkg_manifest(binpkg_path, gpg)?;
         extract_gpkg_member(binpkg_path, "image", image_dest)?;
         // Real `bintree.dbapi.unpack_metadata` -> `gpkg().unpack_metadata`:
         // every `metadata/` member extracted **verbatim** into build-info.
@@ -964,6 +1043,227 @@ fn read_dir_sorted(dir: &Path) -> Result<Vec<PathBuf>, String> {
     Ok(entries)
 }
 
+/// Real GPG binpkg signature policy + verification (real
+/// `lib/portage/gpkg.py`'s `checksum_helper(VERIFY)` and
+/// `gpkg._verify_binpkg`'s own GPG layer), via the system `gpg`
+/// subprocess -- the same "shell out to the real tool" stance `tar` /
+/// the compressors / `wget` already take, which keeps the musl-static
+/// story (zero linked crypto) intact.
+///
+/// Real `BINPKG_GPG_VERIFY_BASE_COMMAND` (`cnf/make.globals:53`) is a
+/// template: `[PORTAGE_CONFIG]` -> `--homedir <BINPKG_GPG_VERIFY_GPG_HOME>`
+/// and `[SIGNATURE]` -> `<detached-.sig-file> -` for a detached `.sig`
+/// member, or `--output - -` for an inline clear-signed `Manifest`. The
+/// verified bytes go on `gpg`'s stdin; for clear-sign its stdout is the
+/// cleartext (what real parses as the Manifest afterwards).
+///
+/// Policy mirrors real `gpkg.__init__` (`gpkg.py:792-819`) with no
+/// per-binrepo override (that override is display/parse-only in
+/// portuale -- see `GpgVerify::from_env`): `binpkg-request-signature`
+/// forces both flags on (it beats `binpkg-ignore-signature`, real's own
+/// `if`/`elif` order), `binpkg-ignore-signature` forces both off,
+/// otherwise signatures are verified when present but not required.
+#[derive(Clone, Debug)]
+pub struct GpgVerify {
+    /// Real `gpkg.verify_signature`: a failed or missing cryptographic
+    /// check is fatal.
+    pub verify_signature: bool,
+    /// Real `gpkg.request_signature`: signature files are mandatory --
+    /// a member without its `.sig` sidecar (other than the unsigned
+    /// `gpkg-1` version marker) is rejected even if its digests match.
+    pub request_signature: bool,
+    /// Real `BINPKG_GPG_VERIFY_BASE_COMMAND`.
+    pub base_command: String,
+    /// Real `BINPKG_GPG_VERIFY_GPG_HOME`.
+    pub gpg_home: String,
+}
+
+/// Real `cnf/make.globals:53`'s own default verify command.
+pub const DEFAULT_GPG_VERIFY_BASE_COMMAND: &str = "/usr/bin/gpg --verify --batch --no-tty --yes --no-auto-check-trustdb --status-fd 2 [PORTAGE_CONFIG] [SIGNATURE]";
+
+/// Real `cnf/make.globals:56`'s own default verify keyring.
+pub const DEFAULT_GPG_VERIFY_GPG_HOME: &str = "/etc/portage/gnupg";
+
+impl Default for GpgVerify {
+    fn default() -> Self {
+        let (verify_signature, request_signature) =
+            gpg_policy_for_features(&std::env::var("FEATURES").unwrap_or_default());
+        Self {
+            verify_signature,
+            request_signature,
+            base_command: std::env::var("BINPKG_GPG_VERIFY_BASE_COMMAND")
+                .unwrap_or_else(|_| DEFAULT_GPG_VERIFY_BASE_COMMAND.to_string()),
+            gpg_home: std::env::var("BINPKG_GPG_VERIFY_GPG_HOME")
+                .unwrap_or_else(|_| DEFAULT_GPG_VERIFY_GPG_HOME.to_string()),
+        }
+    }
+}
+
+impl GpgVerify {
+    /// Real portage's own `settings`-derived verify configuration, via
+    /// the same "read the env var, fall back to `make.globals`'s own
+    /// default" shortcut every other real-execution CLI boundary in this
+    /// portuale already takes: `FEATURES` (`binpkg-request-signature` /
+    /// `binpkg-ignore-signature`), `BINPKG_GPG_VERIFY_BASE_COMMAND`,
+    /// `BINPKG_GPG_VERIFY_GPG_HOME`. A per-binrepo
+    /// `verify-signature = false` (`binrepos.conf`) is a deliberate cut
+    /// here -- portuale parses and displays it (see `BinRepo`), but the
+    /// merge path has no binrepo at hand for a local `$PKGDIR` file, so
+    /// `FEATURES` alone decides. Observable divergence is narrow: an
+    /// outright-bad signature from such a repo fails here where real
+    /// would skip the check; unsigned packages merge identically either
+    /// way.
+    pub fn from_env() -> Self {
+        Self::default()
+    }
+}
+
+/// Real `gpkg.__init__`'s own `request_signature` / `verify_signature`
+/// derivation (`gpkg.py:798-819`), as a pure function of the `FEATURES`
+/// string so it can be unit-tested without mutating the process
+/// environment. Returns `(verify_signature, request_signature)`.
+pub fn gpg_policy_for_features(features: &str) -> (bool, bool) {
+    let has = |tok: &str| features.split_whitespace().any(|t| t == tok);
+    // Real's own `if`/`elif` order: a request beats an ignore.
+    if has("binpkg-request-signature") {
+        (true, true)
+    } else if has("binpkg-ignore-signature") {
+        (false, false)
+    } else {
+        (true, false)
+    }
+}
+
+/// Fill real `BINPKG_GPG_VERIFY_BASE_COMMAND`'s own two placeholders
+/// (`gpkg.py:500-525`): `[PORTAGE_CONFIG]` -> `--homedir <gpg_home>`,
+/// `[SIGNATURE]` -> `signature_arg` (either `<sig-file> -` for a
+/// detached `.sig`, or `--output - -` for a clear-signed Manifest).
+/// Split on whitespace -- a deliberate narrowing of real's
+/// `shlex.split` + `varexpand` (real's own default template and every
+/// test command split cleanly; a path with spaces would not).
+fn gpg_verify_argv(template: &str, gpg_home: &str, signature_arg: &str) -> Vec<String> {
+    template
+        .replace("[PORTAGE_CONFIG]", &format!("--homedir {gpg_home} "))
+        .replace("[SIGNATURE]", signature_arg)
+        .split_whitespace()
+        .map(str::to_string)
+        .collect()
+}
+
+/// Run one `gpg --verify` argv with `stdin_data` on its stdin, mirroring
+/// real `checksum_helper.finish` + `_check_gpg_status`
+/// (`gpkg.py:624-659` + `:590-612`): exit-status 0 is not enough --
+/// GnuPG returns OK even for an untrusted signer, so the `--status-fd`
+/// lines must carry both `GOODSIG` and `TRUST_ULTIMATE`/`TRUST_FULLY`,
+/// else `InvalidSignature`. Returns gpg's stdout (the cleartext for a
+/// clear-signed Manifest; empty for a detached `.sig`).
+fn run_gpg_verify(argv: &[String], stdin_data: &[u8]) -> Result<Vec<u8>, String> {
+    use std::io::Write;
+    let mut child = Command::new(&argv[0])
+        .args(&argv[1..])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("spawning {}: {e}", argv[0]))?;
+    // A write failure here (EPIPE -- gpg already exited on bad input)
+    // carries no signal of its own; gpg's exit status + status lines
+    // below are the verdict, so it is deliberately ignored.
+    if let Some(mut stdin) = child.stdin.take() {
+        let _ = stdin.write_all(stdin_data);
+    }
+    let output = child
+        .wait_with_output()
+        .map_err(|e| format!("waiting for {}: {e}", argv[0]))?;
+    let status_lines = String::from_utf8_lossy(&output.stderr);
+    let good_sig = status_lines
+        .lines()
+        .any(|l| l.starts_with("[GNUPG:] GOODSIG"));
+    let trusted = status_lines
+        .lines()
+        .any(|l| l.starts_with("[GNUPG:] TRUST_ULTIMATE") || l.starts_with("[GNUPG:] TRUST_FULLY"));
+    if output.status.success() && good_sig && trusted {
+        return Ok(output.stdout);
+    }
+    // Real `show_gpg_error`'s own single-cause summaries
+    // (`gpkg.py:563-579`): only when exactly one cause matches, else
+    // "(none available)" -- a malformed signature must not get a
+    // confident-sounding diagnosis.
+    let mut causes = 0;
+    let mut summary = "(none available)";
+    if status_lines
+        .lines()
+        .any(|l| l.starts_with("[GNUPG:] NODATA"))
+    {
+        causes += 1;
+        summary = "binpkg appears unsigned (missing any signature)";
+    }
+    if status_lines
+        .lines()
+        .any(|l| l.starts_with("[GNUPG:] NO_PUBKEY"))
+    {
+        causes += 1;
+        summary = "binpkg signed with at least one unknown key.";
+    }
+    if status_lines
+        .lines()
+        .any(|l| l.starts_with("[GNUPG:] TRUST_UNDEFINED"))
+    {
+        causes += 1;
+        summary = "binpkg signed with a known key of undefined trust.";
+    }
+    if causes != 1 {
+        summary = "(none available)";
+    }
+    Err(format!(
+        "GnuPG verification failed: {summary}\n{}",
+        status_lines.trim_end()
+    ))
+}
+
+/// Real per-file detached verification (`_verify_binpkg`'s own
+/// `f_signature` branch, `gpkg.py:1764-1788`): the `.sig` sidecar goes
+/// to a temp file named in `[SIGNATURE]`, the member bytes on stdin.
+/// `what` names the member for the error (real reports per-file).
+fn verify_detached_signature(
+    member_bytes: &[u8],
+    sig_bytes: &[u8],
+    gpg: &GpgVerify,
+    what: &str,
+) -> Result<(), String> {
+    let sig_path = std::env::temp_dir().join(format!(
+        "portuale-sign-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0)
+    ));
+    fs::write(&sig_path, sig_bytes).map_err(|e| format!("{}: {e}", sig_path.display()))?;
+    let argv = gpg_verify_argv(
+        &gpg.base_command,
+        &gpg.gpg_home,
+        &format!("{} -", sig_path.display()),
+    );
+    let result = run_gpg_verify(&argv, member_bytes).map(|_| ());
+    let _ = fs::remove_file(&sig_path);
+    result.map_err(|e| format!("{what}: {e}"))
+}
+
+/// Real clear-signed-`Manifest` verification (`_verify_binpkg`'s own
+/// Manifest branch, `gpkg.py:1714-1731`): `[SIGNATURE]` -> `--output -
+/// -`, the whole signed Manifest on stdin, gpg's stdout (the
+/// cleartext `DATA` lines) back for Manifest parsing.
+fn verify_clearsigned_manifest(
+    signed_manifest: &[u8],
+    gpg: &GpgVerify,
+    gpkg_path: &Path,
+) -> Result<Vec<u8>, String> {
+    let argv = gpg_verify_argv(&gpg.base_command, &gpg.gpg_home, "--output - -");
+    run_gpg_verify(&argv, signed_manifest)
+        .map_err(|e| format!("{}: Manifest {e}", gpkg_path.display()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1157,8 +1457,13 @@ mod tests {
         let tmp = std::env::temp_dir().join(format!("binpkg-xpak-{}", std::process::id()));
         let image = tmp.join("image");
         let bi = tmp.join("build-info");
-        extract_binpkg(&fixture("pkgdir/dev-libs/packagepkg-1.0.tbz2"), &image, &bi)
-            .expect("extract succeeds");
+        extract_binpkg(
+            &fixture("pkgdir/dev-libs/packagepkg-1.0.tbz2"),
+            &image,
+            &bi,
+            &GpgVerify::default(),
+        )
+        .expect("extract succeeds");
 
         let hello = image.join("usr/share/packagepkg/hello.txt");
         assert!(hello.is_file(), "the image tarball was unpacked");
@@ -1190,6 +1495,7 @@ mod tests {
             &fixture("pkgdir/dev-libs/gpkgreadpkg-1.0.gpkg.tar"),
             &image,
             &bi,
+            &GpgVerify::default(),
         )
         .expect("gpkg extract succeeds");
         // The inner `image/` and `metadata/` top-level dirs real's
@@ -1257,14 +1563,17 @@ mod tests {
 
     #[test]
     fn verify_gpkg_manifest_accepts_the_real_fixture() {
-        verify_gpkg_manifest(&fixture("pkgdir/dev-libs/gpkgreadpkg-1.0.gpkg.tar"))
-            .expect("the committed fixture's Manifest verifies");
+        verify_gpkg_manifest(
+            &fixture("pkgdir/dev-libs/gpkgreadpkg-1.0.gpkg.tar"),
+            &GpgVerify::default(),
+        )
+        .expect("the committed fixture's Manifest verifies");
     }
 
     #[test]
     fn verify_gpkg_manifest_rejects_a_missing_manifest() {
         let g = build_gpkg("foo-1.0", &[("gpkg-1", b""), ("image.tar", b"img")], None);
-        let err = verify_gpkg_manifest(&g).unwrap_err();
+        let err = verify_gpkg_manifest(&g, &GpgVerify::default()).unwrap_err();
         assert!(err.contains("Manifest not found"), "{err}");
     }
 
@@ -1282,7 +1591,7 @@ mod tests {
             &[("gpkg-1", b""), ("image.tar", img)],
             Some(&manifest),
         );
-        let err = verify_gpkg_manifest(&g).unwrap_err();
+        let err = verify_gpkg_manifest(&g, &GpgVerify::default()).unwrap_err();
         assert!(err.contains("size mismatch"), "{err}");
     }
 
@@ -1300,7 +1609,7 @@ mod tests {
             &[("gpkg-1", b""), ("image.tar", img)],
             Some(&manifest),
         );
-        let err = verify_gpkg_manifest(&g).unwrap_err();
+        let err = verify_gpkg_manifest(&g, &GpgVerify::default()).unwrap_err();
         assert!(err.contains("mismatch"), "{err}");
     }
 
@@ -1312,7 +1621,7 @@ mod tests {
             &[("gpkg-1", b""), ("image.tar", b"img")],
             Some(&manifest),
         );
-        let err = verify_gpkg_manifest(&g).unwrap_err();
+        let err = verify_gpkg_manifest(&g, &GpgVerify::default()).unwrap_err();
         assert!(err.contains("not listed in the Manifest"), "{err}");
     }
 
@@ -1324,7 +1633,7 @@ mod tests {
             data_line("image.tar", b"img"),
         );
         let g = build_gpkg("foo-1.0", &[("gpkg-1", b"")], Some(&manifest));
-        let err = verify_gpkg_manifest(&g).unwrap_err();
+        let err = verify_gpkg_manifest(&g, &GpgVerify::default()).unwrap_err();
         assert!(err.contains("not present in the container"), "{err}");
     }
 
@@ -1342,7 +1651,13 @@ mod tests {
             Some(&manifest),
         );
         let tmp = std::env::temp_dir().join(format!("binpkg-gpkg-bad-{}", std::process::id()));
-        let err = extract_binpkg(&g, &tmp.join("image"), &tmp.join("build-info")).unwrap_err();
+        let err = extract_binpkg(
+            &g,
+            &tmp.join("image"),
+            &tmp.join("build-info"),
+            &GpgVerify::default(),
+        )
+        .unwrap_err();
         assert!(err.contains("size mismatch"), "{err}");
         let _ = fs::remove_dir_all(&tmp);
     }
@@ -1406,6 +1721,370 @@ mod tests {
         );
         let scratch = ScratchDir::new("scan-empty").unwrap();
         assert!(populate_local_pkgdir(scratch.path()).unwrap().is_empty());
+    }
+
+    // ---- GPG binpkg signatures (`FEATURES=binpkg-signing`) ----
+
+    /// Portage's own committed GnuPG test keyring
+    /// (`3rdparty/portage/lib/portage/tests/.gnupg` -- the same keys
+    /// real's own `test_gpkg_gpg.py` signs with): trusted
+    /// `0x5D90EA06352177F6`, untrusted `0x8812797DDF1DD192`, both with
+    /// passphrase `GentooTest`. Neither key expires, so a container
+    /// signed with them verifies deterministically for the life of the
+    /// fixture.
+    const GPG_TRUSTED_KEY: &str = "0x5D90EA06352177F6";
+    const GPG_UNTRUSTED_KEY: &str = "0x8812797DDF1DD192";
+    const GPG_PASSPHRASE: &str = "GentooTest";
+
+    /// A writable copy of the committed keyring under a fresh tempdir
+    /// (`gpg` refuses a homedir it doesn't own outright, and signs /
+    /// verifies with lock files inside it -- the committed tree itself
+    /// must stay read-only). `chmod 700`, real's own requirement.
+    fn test_gpg_home(tag: &str) -> PathBuf {
+        fn copy_dir(src: &Path, dest: &Path) {
+            fs::create_dir_all(dest).unwrap();
+            for entry in fs::read_dir(src).unwrap() {
+                let entry = entry.unwrap();
+                let to = dest.join(entry.file_name());
+                if entry.file_type().unwrap().is_dir() {
+                    copy_dir(&entry.path(), &to);
+                } else {
+                    fs::copy(entry.path(), &to).unwrap();
+                }
+            }
+        }
+        let dest = std::env::temp_dir().join(format!(
+            "portuale-gpg-{tag}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        copy_dir(
+            &PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("../../3rdparty/portage/lib/portage/tests/.gnupg"),
+            &dest,
+        );
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&dest, fs::Permissions::from_mode(0o700)).unwrap();
+        dest
+    }
+
+    /// Best-effort `gpg-agent` shutdown for a test homedir (a signing
+    /// `gpg` daemonizes its agent, which would otherwise outlive the
+    /// test session -- real portage's own `conftest.py` does the same).
+    /// Verify-only tests never start an agent and don't need this.
+    fn kill_gpg_agent(home: &Path) {
+        let _ = Command::new("gpgconf")
+            .args(["--homedir"])
+            .arg(home)
+            .args(["--kill", "all"])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status();
+    }
+
+    fn test_gpg_verify(home: &Path, request: bool, verify: bool) -> GpgVerify {
+        GpgVerify {
+            verify_signature: verify,
+            request_signature: request,
+            base_command: DEFAULT_GPG_VERIFY_BASE_COMMAND.to_string(),
+            gpg_home: home.display().to_string(),
+        }
+    }
+
+    /// Clear-sign `data` exactly the way real `checksum_helper(SIGNING,
+    /// detached=False)` does for the `Manifest` (`gpkg.py:1552-1560`):
+    /// `gpg --clearsign` over stdin. Detached-signs `data` the way real
+    /// signs each member (`--detach-sig`, `gpkg.py:1031-1058`).
+    fn gpg_sign(home: &Path, key: &str, data: &[u8], clearsign: bool) -> Vec<u8> {
+        use std::io::Write;
+        let mut cmd = Command::new("/usr/bin/gpg");
+        cmd.args(["--homedir"])
+            .arg(home)
+            .args([
+                "--batch",
+                "--no-tty",
+                "--yes",
+                "--pinentry-mode",
+                "loopback",
+                "--passphrase",
+                GPG_PASSPHRASE,
+                "--digest-algo",
+                "SHA512",
+                "--local-user",
+                key,
+            ])
+            .args(if clearsign {
+                &["--clearsign"][..]
+            } else {
+                &["--armor", "--detach-sig"][..]
+            })
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped());
+        let mut child = cmd.spawn().expect("gpg signs");
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(data)
+            .expect("gpg stdin");
+        let output = child.wait_with_output().expect("gpg runs");
+        assert!(
+            output.status.success(),
+            "gpg sign failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        output.stdout
+    }
+
+    #[test]
+    fn gpg_policy_for_features_matches_real_gpkg_init_precedence() {
+        // Real `gpkg.__init__` (`gpkg.py:798-819`): default is
+        // verify-when-present, request off.
+        assert_eq!(gpg_policy_for_features(""), (true, false));
+        assert_eq!(
+            gpg_policy_for_features("sandbox binpkg-signing"),
+            (true, false)
+        );
+        assert_eq!(
+            gpg_policy_for_features("binpkg-request-signature"),
+            (true, true)
+        );
+        assert_eq!(
+            gpg_policy_for_features("binpkg-ignore-signature"),
+            (false, false)
+        );
+        // Real's own `if`/`elif` order: a request beats an ignore.
+        assert_eq!(
+            gpg_policy_for_features("binpkg-request-signature binpkg-ignore-signature"),
+            (true, true)
+        );
+    }
+
+    #[test]
+    fn gpg_verify_argv_substitutes_both_placeholders() {
+        let argv = gpg_verify_argv(
+            DEFAULT_GPG_VERIFY_BASE_COMMAND,
+            "/tmp/test-home",
+            "/tmp/x.sig -",
+        );
+        assert_eq!(
+            argv,
+            vec![
+                "/usr/bin/gpg",
+                "--verify",
+                "--batch",
+                "--no-tty",
+                "--yes",
+                "--no-auto-check-trustdb",
+                "--status-fd",
+                "2",
+                "--homedir",
+                "/tmp/test-home",
+                "/tmp/x.sig",
+                "-",
+            ]
+        );
+        let argv = gpg_verify_argv(DEFAULT_GPG_VERIFY_BASE_COMMAND, "/tmp/h", "--output - -");
+        assert!(argv.ends_with(&["--output".to_string(), "-".to_string(), "-".to_string()]));
+    }
+
+    #[test]
+    fn verify_gpkg_manifest_accepts_a_real_signed_container() {
+        let home = test_gpg_home("signed-ok");
+        let g = fixture("pkgdir/dev-libs/gpgsignedpkg-1.0.gpkg.tar");
+        // The committed fixture was signed by real, unmodified
+        // `bin/gpkg-helper.py compress` with the trusted test key: the
+        // Manifest clear-sign + both detached `.sig` sidecars verify.
+        verify_gpkg_manifest(&g, &test_gpg_verify(&home, false, true))
+            .expect("signed fixture verifies");
+        // `binpkg-request-signature` on a fully-signed container.
+        verify_gpkg_manifest(&g, &test_gpg_verify(&home, true, true))
+            .expect("signed fixture verifies under request-signature");
+        let _ = fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn verify_gpkg_manifest_skips_gpg_entirely_under_ignore_signature() {
+        // `binpkg-ignore-signature`: even a garbage `gpg` binary path
+        // succeeds -- proving no subprocess runs at all (the cleartext
+        // `DATA` body is read straight through the armor, the standing
+        // unsigned-container behaviour).
+        let gpg = GpgVerify {
+            verify_signature: false,
+            request_signature: false,
+            base_command: "/does/not/exist-gpg".to_string(),
+            gpg_home: "/does/not/exist".to_string(),
+        };
+        verify_gpkg_manifest(&fixture("pkgdir/dev-libs/gpgsignedpkg-1.0.gpkg.tar"), &gpg)
+            .expect("ignore-signature never invokes gpg");
+    }
+
+    #[test]
+    fn verify_gpkg_manifest_rejects_an_unsigned_container_under_request_signature() {
+        let home = test_gpg_home("unsigned-request");
+        // The unsigned fixture has no `.sig` members and a plain
+        // Manifest: real `_verify_binpkg` tries the clear-sign verify
+        // first and reports the NODATA cause (real `show_gpg_error`'s
+        // own "binpkg appears unsigned" summary).
+        let err = verify_gpkg_manifest(
+            &fixture("pkgdir/dev-libs/gpkgreadpkg-1.0.gpkg.tar"),
+            &test_gpg_verify(&home, true, true),
+        )
+        .unwrap_err();
+        assert!(err.contains("GnuPG verification failed"), "{err}");
+        assert!(err.contains("binpkg appears unsigned"), "{err}");
+        let _ = fs::remove_dir_all(&home);
+    }
+
+    /// Copy a `.gpkg.tar` fixture to a tempdir, unpack its outer tar,
+    /// let `mutate` alter the unpacked `<prefix>/` tree, and repack --
+    /// for tamper tests that must keep a parseable container (flipping
+    /// bytes in the packed tar directly would just corrupt the tar
+    /// framing instead of failing the signature).
+    fn repack_gpkg_with_mutation(src: &Path, tag: &str, mutate: impl Fn(&Path)) -> PathBuf {
+        let root = std::env::temp_dir().join(format!(
+            "portuale-gpg-{tag}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        let outer = root.join("outer");
+        fs::create_dir_all(&outer).unwrap();
+        run_tar(&["-xf", &lossy(src), "-C", &lossy(&outer)]).unwrap();
+        mutate(&outer);
+        let mut argv: Vec<String> = vec![
+            "-cf".into(),
+            lossy(&root.join("out.gpkg.tar")),
+            "-C".into(),
+            lossy(&outer),
+        ];
+        for entry in read_dir_sorted(&outer).unwrap() {
+            argv.push(entry.file_name().unwrap().to_string_lossy().into_owned());
+        }
+        let refs: Vec<&str> = argv.iter().map(String::as_str).collect();
+        run_tar(&refs).unwrap();
+        root.join("out.gpkg.tar")
+    }
+
+    #[test]
+    fn verify_gpkg_manifest_rejects_a_tampered_signed_member() {
+        let home = test_gpg_home("tampered");
+        // Flip a byte of the signed `image.tar.gz`: the detached `.sig`
+        // no longer matches, before digests are even compared.
+        let g = repack_gpkg_with_mutation(
+            &fixture("pkgdir/dev-libs/gpgsignedpkg-1.0.gpkg.tar"),
+            "tampered",
+            |outer| {
+                let member = outer.join("gpgsignedpkg-1.0/image.tar.gz");
+                let mut bytes = fs::read(&member).unwrap();
+                let mid = bytes.len() / 2;
+                bytes[mid] ^= 0xff;
+                fs::write(&member, bytes).unwrap();
+            },
+        );
+        let err = verify_gpkg_manifest(&g, &test_gpg_verify(&home, false, true)).unwrap_err();
+        assert!(err.contains("GnuPG verification failed"), "{err}");
+        let _ = fs::remove_dir_all(&home);
+        let _ = fs::remove_dir_all(g.parent().unwrap());
+    }
+
+    /// Build a signed container around a fixed payload whose Manifest
+    /// is clear-signed with `manifest_key`, and whose payload `.sig`
+    /// sidecar is present only when `with_sidecar` (signed with
+    /// `member_key`, defaulting to the manifest key).
+    fn build_signed_gpkg(
+        home: &Path,
+        manifest_key: &str,
+        with_sidecar: bool,
+        member_key: Option<&str>,
+    ) -> PathBuf {
+        let payload: &[u8] = b"signed payload bytes";
+        let manifest = format!(
+            "{}{}",
+            data_line("gpkg-1", b""),
+            data_line("payload.bin", payload)
+        );
+        let signed_manifest = gpg_sign(home, manifest_key, manifest.as_bytes(), true);
+        let mut members: Vec<(&str, Vec<u8>)> =
+            vec![("gpkg-1", b"".to_vec()), ("payload.bin", payload.to_vec())];
+        if with_sidecar {
+            let sig = gpg_sign(home, member_key.unwrap_or(manifest_key), payload, false);
+            members.push(("payload.bin.sig", sig));
+        }
+        let scratch = ScratchDir::new("gpkg-signed-build").unwrap();
+        let root = scratch.path().to_path_buf();
+        std::mem::forget(scratch);
+        let prefix = "sigtest-1.0";
+        let pkgdir = root.join(prefix);
+        fs::create_dir_all(&pkgdir).unwrap();
+        let mut argv: Vec<String> = vec![
+            "-cf".into(),
+            lossy(&root.join("out.gpkg.tar")),
+            "-C".into(),
+            lossy(&root),
+        ];
+        let member_refs: Vec<(String, Vec<u8>)> = members
+            .into_iter()
+            .map(|(n, b)| (format!("{prefix}/{n}"), b))
+            .collect();
+        for (name, bytes) in &member_refs {
+            fs::write(root.join(name), bytes).unwrap();
+            argv.push(name.clone());
+        }
+        fs::write(pkgdir.join("Manifest"), &signed_manifest).unwrap();
+        argv.push(format!("{prefix}/Manifest"));
+        let refs: Vec<&str> = argv.iter().map(String::as_str).collect();
+        run_tar(&refs).unwrap();
+        root.join("out.gpkg.tar")
+    }
+
+    #[test]
+    fn verify_gpkg_manifest_rejects_a_member_without_its_sig_sidecar() {
+        let home = test_gpg_home("missing-sidecar");
+        // Validly clear-signed Manifest, but no `payload.bin.sig`:
+        // real `MissingSignature` (`gpkg.py:1783-1786`).
+        let g = build_signed_gpkg(&home, GPG_TRUSTED_KEY, false, None);
+        let err = verify_gpkg_manifest(&g, &test_gpg_verify(&home, false, true)).unwrap_err();
+        assert!(err.contains("signature not found"), "{err}");
+        kill_gpg_agent(&home);
+        let _ = fs::remove_dir_all(&home);
+        let _ = fs::remove_dir_all(g.parent().unwrap());
+    }
+
+    #[test]
+    fn verify_gpkg_manifest_rejects_a_signature_from_an_untrusted_key() {
+        let home = test_gpg_home("untrusted");
+        // Signed end-to-end with the committed *untrusted* test key:
+        // the cryptography is valid, but real `_check_gpg_status`
+        // demands `TRUST_ULTIMATE`/`TRUST_FULLY`, so this is real's own
+        // "signed with a known key of undefined trust" failure.
+        let g = build_signed_gpkg(&home, GPG_UNTRUSTED_KEY, true, None);
+        let err = verify_gpkg_manifest(&g, &test_gpg_verify(&home, false, true)).unwrap_err();
+        assert!(err.contains("GnuPG verification failed"), "{err}");
+        assert!(err.contains("undefined trust"), "{err}");
+        kill_gpg_agent(&home);
+        let _ = fs::remove_dir_all(&home);
+        let _ = fs::remove_dir_all(g.parent().unwrap());
+    }
+
+    #[test]
+    fn verify_gpkg_manifest_rejects_a_sidecar_from_an_untrusted_key() {
+        let home = test_gpg_home("untrusted-sidecar");
+        // Manifest signed by the trusted key, member sidecar by the
+        // untrusted one -- the Manifest passes, the member fails.
+        let g = build_signed_gpkg(&home, GPG_TRUSTED_KEY, true, Some(GPG_UNTRUSTED_KEY));
+        let err = verify_gpkg_manifest(&g, &test_gpg_verify(&home, false, true)).unwrap_err();
+        assert!(err.contains("GnuPG verification failed"), "{err}");
+        assert!(err.contains("undefined trust"), "{err}");
+        kill_gpg_agent(&home);
+        let _ = fs::remove_dir_all(&home);
+        let _ = fs::remove_dir_all(g.parent().unwrap());
     }
 
     #[test]

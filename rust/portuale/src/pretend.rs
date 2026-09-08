@@ -3338,6 +3338,13 @@ fn package_options_from_env(
         // honoured by both `package_after_install` and
         // `quickpkg_from_vdb` (the `FEATURES=unmerge-backup` path).
         binpkg_multi_instance: feature_enabled("binpkg-multi-instance"),
+        binpkg_signing: feature_enabled("binpkg-signing"),
+        binpkg_gpg_signing_base_command: std::env::var("BINPKG_GPG_SIGNING_BASE_COMMAND")
+            .unwrap_or_default(),
+        binpkg_gpg_signing_digest: std::env::var("BINPKG_GPG_SIGNING_DIGEST").unwrap_or_default(),
+        binpkg_gpg_signing_gpg_home: std::env::var("BINPKG_GPG_SIGNING_GPG_HOME")
+            .unwrap_or_default(),
+        binpkg_gpg_signing_key: std::env::var("BINPKG_GPG_SIGNING_KEY").unwrap_or_default(),
     }
 }
 
@@ -6452,7 +6459,12 @@ fn run_info(
                             None,
                         )
                     };
-                    match crate::binpkg::extract_binpkg(&b.archive_path, &image, &build_info) {
+                    match crate::binpkg::extract_binpkg(
+                        &b.archive_path,
+                        &image,
+                        &build_info,
+                        &crate::binpkg::GpgVerify::from_env(),
+                    ) {
                         Ok(()) => {
                             let extracted = std::fs::read_dir(&build_info)
                                 .ok()

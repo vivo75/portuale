@@ -346,6 +346,13 @@ pub struct MergeOptions {
     /// `usr/share` in place, exactly as real does when the mask emptied
     /// it for some other reason.
     pub install_mask_prunes_usr_share: bool,
+    /// Merge-time gpkg signature policy (real `gpkg._verify_binpkg`'s
+    /// own GPG layer -- see `crate::binpkg::GpgVerify`): enforced by
+    /// `merge_binpkg` (via `extract_binpkg`) before anything is
+    /// unpacked. `from_env` resolves it from `FEATURES` /
+    /// `BINPKG_GPG_VERIFY_*`; `Default` is the same resolution (these
+    /// are env reads either way -- the struct carries no other state).
+    pub gpg_verify: crate::binpkg::GpgVerify,
 }
 
 impl Default for MergeOptions {
@@ -370,6 +377,7 @@ impl Default for MergeOptions {
             log_file: None,
             install_mask: String::new(),
             install_mask_prunes_usr_share: false,
+            gpg_verify: crate::binpkg::GpgVerify::default(),
         }
     }
 }
@@ -431,6 +439,7 @@ impl MergeOptions {
             // fallback, matching every other var here.
             install_mask,
             install_mask_prunes_usr_share,
+            gpg_verify: crate::binpkg::GpgVerify::from_env(),
         }
     }
 }
@@ -3298,7 +3307,7 @@ pub fn merge_binpkg(
     }
     let image = builddir.join("image");
     let build_info = builddir.join("build-info");
-    crate::binpkg::extract_binpkg(binpkg_path, &image, &build_info)?;
+    crate::binpkg::extract_binpkg(binpkg_path, &image, &build_info, &options.gpg_verify)?;
 
     // Real `_emerge/Binpkg._start_task`: "Store the md5sum in the vdb."
     // It prefers the `MD5` field from the package index, else

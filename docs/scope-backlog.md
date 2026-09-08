@@ -81,7 +81,8 @@ detail of each):
   modifier flag from the 2026-09-02 batches.
 - **Binary packages** — xpak + gpkg readers/writers, `$PKGDIR` scan,
   `--usepkg` family, all six compressors, `build-info`-into-vdb metadata
-  + `:=` binding, gpkg internal `Manifest` digest check.
+  + `:=` binding, gpkg internal `Manifest` digest check, gpkg `.sig`
+  signing (`FEATURES=binpkg-signing`) + merge-time GPG verification.
 - **Sandbox / build isolation** — `sandbox` / `usersandbox` +
   `network` / `ipc` / `mount` / `pid`-sandbox all wrap the `src_*`
   phases; the build-phase env carries the resolved `USE` + compiler/make
@@ -313,9 +314,18 @@ The idempotency check also moved from bare-filename existence to real
 `_quickpkg_dblink`'s own "any existing binpkg at this cpv+`BUILD_TIME`"
 (`Packages`-index scan). Rust-only (execution), `test_portuale.py`.
 
-Still open: `.sig` verification/signing
-(`FEATURES=binpkg-signing` — no crypto crate, a real cut); and a
-`BUILD_TIME`-vs-installed reinstall
+**`.sig` signing/verification shipped 2026-09-08**
+(`FEATURES=binpkg-signing` via the system `gpg` subprocess — no crypto
+crate needed, the musl-static story untouched; see `what-this-proves.md`):
+the real helper signs at package time (detached `.sig` sidecars +
+clear-signed `Manifest`, real `BINPKG_GPG_SIGNING_*` passthrough, real
+`!!! {var} is not set` pre-check), and every merge verifies
+(`GOODSIG` + ultimate/full trust required, `request`/`ignore`-signature
+`FEATURES` honored). Deliberate residual cuts: no dropped-privilege
+`gpg` spawn when root, no `shlex`/`varexpand` for the command template,
+no per-binrepo `verify-signature = false` at merge time, no GPG on the
+pool-populate read (merge-time enforcement only).
+Still open: a `BUILD_TIME`-vs-installed reinstall
 trigger outside `--rebuilt-binaries` (the residual divergence above).
 Binpkg
 `SHA1` (no sha1 crate) and fetch candidate ordering/`RESTRICT=
@@ -517,8 +527,11 @@ Standing decisions, not oversights.
   EAPI parametrization at all within the 5+ floor.
 - **`bsd_chflags`** — `None` on non-BSD; portuale is Linux-only/musl-static.
 - **RPM binary packages, repo syncing (`emerge --sync`), news items,
-  GLSA/`@security`, GPG signing/verification, Prefix/cross-`ROOT` beyond
-  the `ESYSROOT` distinction** — not in scope.
+  GLSA/`@security`, GPG for sync/webrsync (`sync-*-verify-signature`)
+  and for xpak (which has no signature mechanism at all),
+  Prefix/cross-`ROOT` beyond
+  the `ESYSROOT` distinction** — not in scope. (gpkg binpkg
+  `.sig` signing/verification itself is shipped — see Part 2.E.)
 - **`equery` / `portageq` / `etc-update` / `dispatch-conf`** — separate
   tools, separate binaries.
 - **Directory merge traversal order** — sorted by filename for test
@@ -579,11 +592,12 @@ item, with a short incremental tail:
    and its full `all_use_satisfied` computation, deeper multi-constraint
    interplay), not a missing mechanism.
 
-2. **The rest of Part 2** — the remaining gpkg-signing/xpak-multi-instance
-   gaps (2.E), the `--info` host-state half (2.F, a fixture-driven test
-   can't verify real host state anyway), the brush `declare -f` upstream
-   fix (2.G). Each is one focused slice, the rhythm portuale already
-   runs at.
+2. **The rest of Part 2** — the remaining 2.E tail (the
+   `BUILD_TIME`-vs-installed reinstall trigger, `SHA1`, fetch
+   candidate ordering), the `--info` host-state half (2.F, a
+   fixture-driven test can't verify real host state anyway), the brush
+   `declare -f` upstream fix (2.G). Each is one focused slice, the
+   rhythm portuale already runs at.
 
 Config-resolution depth (2.C), sandbox isolation (2.D), and scheduler /
 build orchestration (2.B) are complete; the action/flag surface (2.F)

@@ -319,6 +319,16 @@ pub fn run(args: &[String]) -> ExitCode {
             binpkg_multi_instance: std::env::var("FEATURES")
                 .map(|f| f.split_whitespace().any(|t| t == "binpkg-multi-instance"))
                 .unwrap_or(false),
+            binpkg_signing: std::env::var("FEATURES")
+                .map(|f| f.split_whitespace().any(|t| t == "binpkg-signing"))
+                .unwrap_or(false),
+            binpkg_gpg_signing_base_command: std::env::var("BINPKG_GPG_SIGNING_BASE_COMMAND")
+                .unwrap_or_default(),
+            binpkg_gpg_signing_digest: std::env::var("BINPKG_GPG_SIGNING_DIGEST")
+                .unwrap_or_default(),
+            binpkg_gpg_signing_gpg_home: std::env::var("BINPKG_GPG_SIGNING_GPG_HOME")
+                .unwrap_or_default(),
+            binpkg_gpg_signing_key: std::env::var("BINPKG_GPG_SIGNING_KEY").unwrap_or_default(),
         };
         let ebuild_path = std::path::Path::new(ebuild_file);
 

@@ -30,8 +30,10 @@ client has no toolchain by design), multi-client fan-out in one
 invocation (one `--remote-hostname` per run; orchestration loops in
 shell), privilege escalation on the client beyond the SSH login user
 (no sudo/become layer -- the remote user must own the target ROOT),
-gpkg `.sig` verification on the client (server verifies at download
-time; the SSH channel is the integrity boundary -- see §9).
+gpkg `.sig` verification on the client (the server verifies at
+bundle-build time -- `build_bundle` runs the same merge-time
+`GpgVerify` policy `merge_binpkg` does -- and the SSH channel is the
+integrity boundary -- see §9).
 
 ## 2. Terminology
 

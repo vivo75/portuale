@@ -42,8 +42,10 @@
 //     Real portage also checks `SHA1` -- portuale has no sha1 crate, and
 //     `MD5` is always present in a real `Packages`. A downloaded gpkg
 //     additionally has its internal `Manifest` (`DATA` BLAKE2B/SHA512
-//     lines) verified at merge time (`binpkg::extract_binpkg` ->
-//     `verify_gpkg_manifest`); only the GPG `.sig` layer stays a cut.
+//     lines) *and* its GPG signature layer (detached `.sig` sidecars +
+//     clear-signed `Manifest`, real `_verify_binpkg` -- see
+//     `binpkg::GpgVerify`) verified at merge time
+//     (`binpkg::extract_binpkg` -> `verify_gpkg_manifest`).
 
 use crate::ebuild_merge::{self, MergeOptions};
 use portage_profile::{BinRepo, Config};
@@ -529,6 +531,132 @@ mod tests {
         assert!(
             root.join("var/db/pkg/dev-libs/gpkgreadpkg-1.0/CONTENTS")
                 .is_file()
+        );
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// A writable copy of portage's own committed GnuPG test keyring
+    /// (see `binpkg.rs`'s own `test_gpg_home` doc comment), for the
+    /// merge-time signature tests below. `gpg` refuses a homedir it
+    /// doesn't own outright, so the committed tree itself is never used
+    /// directly.
+    fn test_gpg_home() -> std::path::PathBuf {
+        fn copy_dir(src: &std::path::Path, dest: &std::path::Path) {
+            std::fs::create_dir_all(dest).unwrap();
+            for entry in std::fs::read_dir(src).unwrap() {
+                let entry = entry.unwrap();
+                let to = dest.join(entry.file_name());
+                if entry.file_type().unwrap().is_dir() {
+                    copy_dir(&entry.path(), &to);
+                } else {
+                    std::fs::copy(entry.path(), &to).unwrap();
+                }
+            }
+        }
+        let dest = tempdir().join("gpg-home");
+        copy_dir(
+            &std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("../../3rdparty/portage/lib/portage/tests/.gnupg"),
+            &dest,
+        );
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&dest, std::fs::Permissions::from_mode(0o700)).unwrap();
+        dest
+    }
+
+    fn test_gpg_verify(home: &std::path::Path) -> crate::binpkg::GpgVerify {
+        crate::binpkg::GpgVerify {
+            verify_signature: true,
+            request_signature: false,
+            base_command: crate::binpkg::DEFAULT_GPG_VERIFY_BASE_COMMAND.to_string(),
+            gpg_home: home.display().to_string(),
+        }
+    }
+
+    #[test]
+    fn merge_binpkg_verifies_a_signed_gpkg_against_the_test_keyring() {
+        // The committed signed fixture (`binpkg.rs`'s own verify tests
+        // cover the container layer) merges end to end with the test
+        // keyring: signature policy enforced, image + metadata land in
+        // the vdb like any other binpkg merge.
+        let tmp = tempdir();
+        let root = tmp.join("root");
+        std::fs::create_dir_all(&root).unwrap();
+        let home = test_gpg_home();
+        let options = MergeOptions {
+            gpg_verify: test_gpg_verify(&home),
+            ..MergeOptions::default()
+        };
+
+        let status = ebuild_merge::merge_binpkg(
+            &fixtures_root().join("pkgdir/dev-libs/gpgsignedpkg-1.0.gpkg.tar"),
+            &root,
+            &tmp.join("portage_tmpdir"),
+            &options,
+        )
+        .expect("signed gpkg merge succeeds");
+        assert_eq!(status, 0);
+
+        let vdb = root.join("var/db/pkg/dev-libs/gpgsignedpkg-1.0");
+        assert!(vdb.join("CONTENTS").is_file());
+        assert!(
+            std::fs::read_to_string(vdb.join("CONTENTS"))
+                .unwrap()
+                .contains(" /hello.txt "),
+            "the image file merged"
+        );
+        assert!(root.join("hello.txt").is_file());
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn merge_binpkg_rejects_a_tampered_signed_gpkg() {
+        // Flip a byte of the signed container's `image.tar.gz` (via an
+        // unpack-mutate-repack, so the tar framing stays parseable):
+        // the merge must fail on the detached `.sig` before anything
+        // is unpacked -- no vdb entry, no image file under ROOT.
+        let tmp = tempdir();
+        let outer = tmp.join("outer");
+        std::fs::create_dir_all(&outer).unwrap();
+        let src = fixtures_root().join("pkgdir/dev-libs/gpgsignedpkg-1.0.gpkg.tar");
+        let status = std::process::Command::new("tar")
+            .args(["-xf"])
+            .arg(&src)
+            .args(["-C"])
+            .arg(&outer)
+            .status()
+            .unwrap();
+        assert!(status.success());
+        let member = outer.join("gpgsignedpkg-1.0/image.tar.gz");
+        let mut bytes = std::fs::read(&member).unwrap();
+        let mid = bytes.len() / 2;
+        bytes[mid] ^= 0xff;
+        std::fs::write(&member, bytes).unwrap();
+        let tampered = tmp.join("tampered.gpkg.tar");
+        let status = std::process::Command::new("tar")
+            .args(["-cf"])
+            .arg(&tampered)
+            .args(["-C"])
+            .arg(&outer)
+            .arg("gpgsignedpkg-1.0")
+            .status()
+            .unwrap();
+        assert!(status.success());
+
+        let root = tmp.join("root");
+        std::fs::create_dir_all(&root).unwrap();
+        let home = test_gpg_home();
+        let options = MergeOptions {
+            gpg_verify: test_gpg_verify(&home),
+            ..MergeOptions::default()
+        };
+        let err =
+            ebuild_merge::merge_binpkg(&tampered, &root, &tmp.join("portage_tmpdir"), &options)
+                .unwrap_err();
+        assert!(err.contains("GnuPG verification failed"), "{err}");
+        assert!(
+            !root.join("var/db/pkg/dev-libs/gpgsignedpkg-1.0").exists(),
+            "nothing is merged on a signature failure"
         );
         let _ = std::fs::remove_dir_all(&tmp);
     }

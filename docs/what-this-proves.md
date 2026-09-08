@@ -15615,3 +15615,57 @@ the phase). `compare/snapshot.sh` was also hardened: a dangling symlink
 in the walk made `getfattr` fail and, under `set -o pipefail`, silently
 abort the whole snapshot before the VDB tar -- now `getfattr -h` plus
 `set -e`-safe `stat`/`readlink`.
+
+**gpkg `.sig` signing + verification (`FEATURES=binpkg-signing`).**
+The last open item of the binary-packages backlog (Part 2.E's own
+"still open" line) is closed, both halves, grounded in real
+`lib/portage/gpkg.py` throughout. *Sign half:* `FEATURES=binpkg-signing`
+sets real `gpkg.create_signature` (`gpkg.py:790`) inside the real,
+unmodified `bin/gpkg-helper.py compress` portuale already shells out
+to -- the work is env passthrough, not reimplementation:
+`PackageOptions` gained `binpkg_signing` (from `FEATURES`, both the
+`ebuild.rs` and the `pretend.rs` CLI boundaries) plus the four real
+`BINPKG_GPG_SIGNING_*` vars, exported to `__dyn_package` only when
+non-empty so an unset var falls back to the helper's own
+`make.globals` default exactly as a real unset `make.conf` would; the
+helper then detaches-signs `metadata.tar`/`image.tar` (`.sig`
+sidecars) and clear-signs the `Manifest` via real
+`checksum_helper(SIGNING)`. Real `_emerge/actions.py:623-646`'s own
+`!!! {var} is not set` pre-build gate is mirrored (shared
+`require_signing_config`, covering `ebuild package`,
+`--buildpkgonly`, and the `FEATURES=buildpkg` side-effect path).
+*Verify half:* `binpkg::GpgVerify` (`verify_signature` /
+`request_signature` / base command / homedir, resolved from `FEATURES`
++ `BINPKG_GPG_VERIFY_*` with real `make.globals` defaults) drives a
+real `_verify_binpkg` transcription in `verify_gpkg_manifest`: any
+`.sig` member or inline PGP block (real's own "assume all files have
+signature" trigger) -- or `binpkg-request-signature` -- clear-sign-
+verifies the Manifest and detached-verifies every other member against
+its `.sig` sidecar, via the system `gpg` subprocess (musl-static story
+untouched: zero linked crypto, the same stance as `tar`/`wget`/the
+compressors). Real's own details kept: `request_signature` beats
+`binpkg-ignore-signature` (real's `if`/`elif` order), a failed Manifest
+check is fatal only under `verify_signature` (ignore falls back to the
+raw bytes), a missing sidecar is `MissingSignature` except for the
+never-signed `gpkg-1` marker, `.sig` members are digest-checked against
+their own Manifest records like every other member, exit-0 is not
+enough (`GOODSIG` + `TRUST_ULTIMATE`/`TRUST_FULLY` required, real
+`_check_gpg_status`), and the single-cause `show_gpg_error` summaries
+(unsigned / unknown key / undefined trust) are reproduced. Enforced at
+every merge (`merge_binpkg` via a new `MergeOptions::gpg_verify`,
+`--info`'s binary path, the `mrg --remote-binpkg` bundle build);
+deliberately not on the pool-populate read (`read_gpkg_metadata`
+trusts the container like `pkgdir-index-trusted`, keeping resolve
+deterministic and `gpg`-free) nor per-binrepo (`verify-signature =
+false` stays parse-and-display-only). No Python mirror: both halves
+are real-execution paths (the tests live in `binpkg.rs` /
+`emerge_getbinpkg.rs` / `test_portuale.py`). New committed fixture
+`fixtures/pkgdir/dev-libs/gpgsignedpkg-1.0.gpkg.tar` (built by the
+real helper with portage's own committed test keyring,
+`3rdparty/portage/lib/portage/tests/.gnupg`, whose keys never expire)
+plus a full black-box round trip (`--buildpkgonly` signs,
+`--getbinpkgonly` from a `file://` binhost verifies-then-merges, an
+empty keyring fails the merge with "unknown key" and merges nothing).
+Deliberate cuts: no dropped-privilege `gpg` spawn when root (real's
+`GPG_VERIFY_USER_DROP`), no `shlex`/`varexpand` for the command
+template (whitespace split -- real's default splits cleanly).

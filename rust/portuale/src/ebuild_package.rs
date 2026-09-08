@@ -27,10 +27,13 @@
 //     `${PKGDIR}/${CATEGORY}/${PF}.gpkg.tar` portuale's own
 //     `binpkg::read_gpkg_metadata` reader round-trips. Anything other
 //     than those two values is `Err("Unknown BINPKG_FORMAT ...")`, real
-//     `__dyn_package`'s own `die`. Cut: no gpkg signing
-//     (`FEATURES=binpkg-signing`/`binpkg-request-signature` -- the same
-//     "portuale has no crypto" cut the reader's `Manifest`/`.sig`
-//     verification already documents). `FEATURES=binpkg-multi-instance`
+//     `__dyn_package`'s own `die`. `FEATURES=binpkg-signing` IS real now
+//     for gpkg (`PackageOptions::binpkg_signing`'s own doc comment):
+//     the real, unmodified helper signs the members (detached `.sig`
+//     sidecars) and clear-signs the `Manifest`, configured via the real
+//     `BINPKG_GPG_SIGNING_*` env passthrough, with real
+//     `_emerge/actions.py`'s own `!!! {var} is not set` pre-check.
+//     `FEATURES=binpkg-multi-instance`
 //     IS real now for both formats, opt-in (`PackageOptions::
 //     binpkg_multi_instance`'s own doc comment) -- the `<cat>/<pn>/<pf>-
 //     <build_id>.<suffix>` subdir layout real `_allocate_filename_multi`
@@ -161,6 +164,37 @@ pub struct PackageOptions {
     /// `invoke_dyn_package` already does. `binpkg::populate_local_pkgdir`
     /// walks that subdir layout back on the no-`Packages`-index scan.
     pub binpkg_multi_instance: bool,
+    /// Real `FEATURES=binpkg-signing` (`gpkg.gpkg.create_signature`,
+    /// `gpkg.py:790`): the `__dyn_package` helper subprocess signs the
+    /// gpkg's `metadata.tar`/`image.tar` members (detached `.sig`
+    /// sidecars) and clear-signs the `Manifest` itself, via real
+    /// `checksum_helper(SIGNING)` spawning `binpkg_gpg_signing_base_
+    /// command` below. Sourced from `FEATURES` at the CLI boundary like
+    /// `buildpkg_live`/`binpkg_multi_instance`. xpak has no signature
+    /// mechanism (real `binpkg-request-signature` *ignores* xpak) -- the
+    /// flag is inert unless `binpkg_format == "gpkg"`.
+    pub binpkg_signing: bool,
+    /// Real `BINPKG_GPG_SIGNING_BASE_COMMAND` (real `make.globals`'s own
+    /// default: `"/usr/bin/flock /run/lock/portage-binpkg-gpg.lock
+    /// /usr/bin/gpg --sign --armor [PORTAGE_CONFIG]"`). Only exported to
+    /// the `__dyn_package` helper when non-empty -- an empty value means
+    /// "not set", letting the helper fall back to its own
+    /// `make.globals` default exactly as a real unset `make.conf` would
+    /// (rather than overriding the default with `""`, which real's own
+    /// env layer would otherwise do).
+    pub binpkg_gpg_signing_base_command: String,
+    /// Real `BINPKG_GPG_SIGNING_DIGEST` (real `make.globals`'s own
+    /// default: `"SHA512"`).
+    pub binpkg_gpg_signing_digest: String,
+    /// Real `BINPKG_GPG_SIGNING_GPG_HOME` (no `make.globals` default --
+    /// real `_emerge/actions.py:632-646` refuses to build with
+    /// `binpkg-signing` when this or the key below is unset:
+    /// `!!! {var} is not set`, exit 1 -- mirrored by `run_package`'s
+    /// own pre-check).
+    pub binpkg_gpg_signing_gpg_home: String,
+    /// Real `BINPKG_GPG_SIGNING_KEY` (likewise unset by default, same
+    /// pre-check).
+    pub binpkg_gpg_signing_key: String,
 }
 
 impl Default for PackageOptions {
@@ -177,6 +211,11 @@ impl Default for PackageOptions {
             config_root: PathBuf::from("/dev/null/no-config-root-configured"),
             buildpkg_live: true,
             binpkg_multi_instance: false,
+            binpkg_signing: false,
+            binpkg_gpg_signing_base_command: String::new(),
+            binpkg_gpg_signing_digest: String::new(),
+            binpkg_gpg_signing_gpg_home: String::new(),
+            binpkg_gpg_signing_key: String::new(),
         }
     }
 }
@@ -371,12 +410,39 @@ fn write_packages_index_entry(
 /// "run it myself, don't require the caller to" shape `ebuild_merge::
 /// run_merge` already established for its own `["install"]`
 /// prerequisite.
+/// Real `_emerge/actions.py:623-646`'s own "not set" gate, shared by
+/// `run_package` (before the `install` chain -- real refuses before
+/// building anything) and `package_after_install` (which the
+/// `FEATURES=buildpkg` side-effect path reaches directly): with
+/// `FEATURES=binpkg-signing` on a gpkg build, the signing keyring and
+/// key must be configured, else `!!! {var} is not set`.
+fn require_signing_config(options: &PackageOptions) -> Result<(), String> {
+    if options.binpkg_signing && options.binpkg_format == "gpkg" {
+        for (var, value) in [
+            (
+                "BINPKG_GPG_SIGNING_GPG_HOME",
+                options.binpkg_gpg_signing_gpg_home.as_str(),
+            ),
+            (
+                "BINPKG_GPG_SIGNING_KEY",
+                options.binpkg_gpg_signing_key.as_str(),
+            ),
+        ] {
+            if value.is_empty() {
+                return Err(format!("!!! {var} is not set"));
+            }
+        }
+    }
+    Ok(())
+}
+
 pub fn run_package(
     ebuild_path: &Path,
     root: &Path,
     portage_tmpdir: &Path,
     options: &PackageOptions,
 ) -> Result<i32, String> {
+    require_signing_config(options)?;
     let status = ebuild_phases::run_commands(
         ebuild_path,
         &["install"],
@@ -416,6 +482,11 @@ pub(crate) fn package_after_install(
     options: &PackageOptions,
     use_flags: &str,
 ) -> Result<i32, String> {
+    // Same real gate as `run_package`'s (which already ran for the
+    // `ebuild package` / `--buildpkgonly` paths) -- repeated here so
+    // the `FEATURES=buildpkg` side-effect path through
+    // `ebuild_merge::run_merge` hits it too.
+    require_signing_config(options)?;
     let binpkg_extension = binpkg_extension(&options.binpkg_format)?;
 
     let env = ebuild_phases::compute_environment(ebuild_path, portage_tmpdir)?;
@@ -747,6 +818,41 @@ fn invoke_dyn_package(
             "PORTAGE_BZIP2_COMMAND".to_string(),
             options.portage_bzip2_command.clone(),
         ));
+        // Real `FEATURES=binpkg-signing` (`gpkg.gpkg.create_signature`,
+        // `gpkg.py:790`): the real, unmodified helper signs the
+        // `metadata.tar`/`image.tar` members (detached `.sig` sidecars)
+        // and clear-signs the `Manifest` itself, via real
+        // `checksum_helper(SIGNING)` spawning
+        // `BINPKG_GPG_SIGNING_BASE_COMMAND` with real's own
+        // `[PORTAGE_CONFIG]` substitution. `FEATURES` itself already
+        // flows through (`phase_env_vars` passes it straight through);
+        // only non-empty values are exported here, so an unset var falls
+        // back to the helper's own `make.globals` default exactly as a
+        // real unset `make.conf` would. A signing request with no
+        // keyring/key never reaches this far -- `package_after_install`'s
+        // own pre-check (real `_emerge/actions.py:623-646`) rejects it.
+        for (key, value) in [
+            (
+                "BINPKG_GPG_SIGNING_BASE_COMMAND",
+                options.binpkg_gpg_signing_base_command.as_str(),
+            ),
+            (
+                "BINPKG_GPG_SIGNING_DIGEST",
+                options.binpkg_gpg_signing_digest.as_str(),
+            ),
+            (
+                "BINPKG_GPG_SIGNING_GPG_HOME",
+                options.binpkg_gpg_signing_gpg_home.as_str(),
+            ),
+            (
+                "BINPKG_GPG_SIGNING_KEY",
+                options.binpkg_gpg_signing_key.as_str(),
+            ),
+        ] {
+            if !value.is_empty() {
+                extra_env.push((key.to_string(), value.to_string()));
+            }
+        }
     } else if let Some(compression_command) = resolve_compression_command(
         &options.binpkg_compress,
         &options.binpkg_compress_flags,

@@ -1532,6 +1532,235 @@ def test_emerge_buildpkgonly_with_binpkg_format_gpkg_builds_a_real_gpkg_tar(
     assert "PATH: dev-libs/packagepkg-1.0.gpkg.tar" in packages
 
 
+# Portage's own committed GnuPG test keyring
+# (`3rdparty/portage/lib/portage/tests/.gnupg` -- the same keys real's
+# own `test_gpkg_gpg.py` signs with): trusted `0x5D90EA06352177F6`,
+# untrusted `0x8812797DDF1DD192`, both with passphrase `GentooTest`.
+_GNUPG_FIXTURE_HOME = (
+    Path(FIXTURES_ROOT).parent / "3rdparty/portage/lib/portage/tests/.gnupg"
+)
+_GPG_TRUSTED_KEY = "0x5D90EA06352177F6"
+
+
+def _copy_gnupg_home(dest):
+    """A writable copy of the committed test keyring (`gpg` refuses a
+    homedir it doesn't own outright, and signs/verifies with lock files
+    inside it -- the committed tree itself must stay read-only)."""
+    shutil.copytree(_GNUPG_FIXTURE_HOME, dest)
+    os.chmod(dest, 0o700)
+
+
+def _kill_gpg_agent(home):
+    """Best-effort `gpg-agent` shutdown (a signing `gpg` daemonizes its
+    agent, which would otherwise outlive the test session -- real
+    portage's own `conftest.py` does the same)."""
+    subprocess.run(
+        ["gpgconf", "--homedir", str(home), "--kill", "all"],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        check=False,
+    )
+
+
+def _signing_env(env, home):
+    """Real `BINPKG_GPG_SIGNING_*` configuration against a test keyring
+    (mirroring real's own `ResolverPlayground` test setup, minus the
+    `flock` wrapper -- no `/run/lock` dependency)."""
+    gpg = shutil.which("gpg") or "/usr/bin/gpg"
+    env["BINPKG_GPG_SIGNING_BASE_COMMAND"] = (
+        f"{gpg} --sign --armor --batch --no-tty --yes "
+        "--pinentry-mode loopback --passphrase GentooTest [PORTAGE_CONFIG]"
+    )
+    env["BINPKG_GPG_SIGNING_DIGEST"] = "SHA512"
+    env["BINPKG_GPG_SIGNING_GPG_HOME"] = str(home)
+    env["BINPKG_GPG_SIGNING_KEY"] = _GPG_TRUSTED_KEY
+    return env
+
+
+def test_emerge_buildpkgonly_with_binpkg_signing_builds_a_signed_gpkg(
+    emerge_binary, tmp_path
+):
+    """Real `FEATURES=binpkg-signing` (`gpkg.gpkg.create_signature`,
+    `gpkg.py:790`): the real, unmodified `bin/gpkg-helper.py compress`
+    signs the `metadata.tar`/`image.tar` members (detached `.sig`
+    sidecars) and clear-signs the `Manifest` itself, configured via the
+    real `BINPKG_GPG_SIGNING_*` env passthrough
+    (`ebuild_package::invoke_dyn_package`). `BINPKG_COMPRESS=gzip` keeps
+    this off `zstd` like the unsigned gpkg test above."""
+    if shutil.which("gpg") is None:
+        pytest.skip("gpg not available")
+    home = tmp_path / "gnupg"
+    _copy_gnupg_home(home)
+    try:
+        env = _real_build_env(tmp_path)
+        env["BINPKG_FORMAT"] = "gpkg"
+        env["BINPKG_COMPRESS"] = "gzip"
+        env["FEATURES"] = "binpkg-signing"
+        _signing_env(env, home)
+        result = subprocess.run(
+            [str(emerge_binary), "--buildpkgonly", "dev-libs/packagepkg"],
+            capture_output=True,
+            text=True,
+            check=True,
+            env=env,
+        )
+        assert ">>> Building binary for dev-libs/packagepkg-1.0..." in result.stdout
+
+        gpkg = Path(env["PKGDIR"]) / "dev-libs/packagepkg-1.0.gpkg.tar"
+        assert gpkg.is_file()
+        with tarfile.open(gpkg, "r") as container:
+            names = {Path(n).name for n in container.getnames()}
+            assert "metadata.tar.gz.sig" in names
+            assert "image.tar.gz.sig" in names
+            manifest = container.extractfile("packagepkg-1.0/Manifest").read()
+        assert b"-----BEGIN PGP SIGNED MESSAGE-----" in manifest
+        assert b"DATA metadata.tar.gz " in manifest
+    finally:
+        _kill_gpg_agent(home)
+
+
+def test_emerge_buildpkgonly_with_binpkg_signing_but_no_key_is_rejected(
+    emerge_binary, tmp_path
+):
+    """Real `_emerge/actions.py:623-646`'s own pre-build gate: with
+    `FEATURES=binpkg-signing` but no `BINPKG_GPG_SIGNING_GPG_HOME`/`KEY`
+    configured, real prints `!!! {var} is not set` and exits 1 *before*
+    building anything."""
+    env = _real_build_env(tmp_path)
+    env["BINPKG_FORMAT"] = "gpkg"
+    env["BINPKG_COMPRESS"] = "gzip"
+    env["FEATURES"] = "binpkg-signing"
+    result = subprocess.run(
+        [str(emerge_binary), "--buildpkgonly", "dev-libs/packagepkg"],
+        capture_output=True,
+        text=True,
+        check=False,
+        env=env,
+    )
+    assert result.returncode != 0
+    assert "!!! BINPKG_GPG_SIGNING_GPG_HOME is not set" in (
+        result.stderr + result.stdout
+    )
+    assert not (Path(env["PKGDIR"]) / "dev-libs").exists()
+
+
+def _signed_binhost_env(tmp_path, home):
+    """An ad-hoc config: a `file://` binhost serving the committed
+    *signed* `gpgsignedpkg` fixture (copied in with a matching `Packages`
+    index entry, mirroring the `remotebinpkg` fixture entry's shape),
+    and a tmp `ROOT` to merge into. Returns the env dict."""
+    import hashlib
+
+    cfg = tmp_path / "cfg"
+    repo = tmp_path / "repo"
+    binhost = tmp_path / "binhost"
+    pkgdir = tmp_path / "pkgdir"
+    root = tmp_path / "root"
+    (cfg / "etc/portage").mkdir(parents=True)
+    (repo / "profiles").mkdir(parents=True)
+    (repo / "profiles/repo_name").write_text("main\n")
+    (repo / "profiles/make.defaults").write_text('ACCEPT_KEYWORDS="amd64"\n')
+    (cfg / "etc/portage/repos.conf").write_text(
+        "[DEFAULT]\nmain-repo = main\n\n[main]\nlocation = " + str(repo) + "\n"
+    )
+    (cfg / "etc/portage/binrepos.conf").write_text(
+        "[signedhost]\nsync-uri = file://" + str(binhost) + "\npriority = 1\n"
+    )
+    (cfg / "etc/portage/make.conf").write_text('PKGDIR="' + str(pkgdir) + '"\n')
+    (cfg / "etc/portage/make.profile").symlink_to(repo / "profiles")
+
+    src = Path(FIXTURES_ROOT) / "pkgdir/dev-libs/gpgsignedpkg-1.0.gpkg.tar"
+    (binhost / "dev-libs").mkdir(parents=True)
+    shutil.copy(src, binhost / "dev-libs/gpgsignedpkg-1.0.gpkg.tar")
+    body = (binhost / "dev-libs/gpgsignedpkg-1.0.gpkg.tar").read_bytes()
+    (binhost / "Packages").write_text(
+        "TIMESTAMP: 0\n\n"
+        "CPV: dev-libs/gpgsignedpkg-1.0\n"
+        "DEFINED_PHASES: -\n"
+        "DESCRIPTION: signed test package\n"
+        "EAPI: 8\n"
+        "IUSE:\n"
+        "KEYWORDS: amd64\n"
+        "REPO: gentoo\n"
+        f"SIZE: {len(body)}\n"
+        f"MD5: {hashlib.md5(body).hexdigest()}\n"
+        "SLOT: 0\n"
+        "USE:\n"
+        "PATH: dev-libs/gpgsignedpkg-1.0.gpkg.tar\n"
+    )
+
+    env = dict(os.environ)
+    env["PORTAGE_CONFIGROOT"] = str(cfg)
+    env["ROOT"] = str(root)
+    env["PORTAGE_RUNNING_ROOT"] = str(root)
+    env["PORTAGE_TMPDIR"] = str(tmp_path / "portage-tmpdir")
+    # `PKGDIR` is env-var-sourced at portuale's CLI boundary (not read
+    # from `make.conf`), so it must be set explicitly -- otherwise the
+    # download lands in the real default `/var/cache/binpkgs`.
+    env["PKGDIR"] = str(pkgdir)
+    env["BINPKG_GPG_VERIFY_GPG_HOME"] = str(home)
+    return env
+
+
+def test_emerge_getbinpkgonly_merges_a_signed_gpkg_after_verifying(
+    emerge_binary, tmp_path
+):
+    """The full round trip: a `file://` binhost serves the committed
+    signed fixture; `emerge --getbinpkgonly` (no `--pretend`)
+    downloads it, verifies the Manifest clear-sign + detached `.sig`
+    sidecars against the test keyring (real `_verify_binpkg`'s own GPG
+    layer), and merges it -- image file under `ROOT`, real vdb entry."""
+    if shutil.which("gpg") is None:
+        pytest.skip("gpg not available")
+    home = tmp_path / "gnupg"
+    _copy_gnupg_home(home)
+    env = _signed_binhost_env(tmp_path, home)
+    result = subprocess.run(
+        [str(emerge_binary), "--getbinpkgonly", "dev-libs/gpgsignedpkg"],
+        capture_output=True,
+        text=True,
+        check=False,
+        env=env,
+    )
+    assert result.returncode == 0, (result.stdout, result.stderr)
+    assert ">>> Merging binary package dev-libs/gpgsignedpkg-1.0" in result.stdout
+    root = Path(env["ROOT"])
+    assert (root / "hello.txt").is_file()
+    assert "signed hello" in (root / "hello.txt").read_text()
+    assert (root / "var/db/pkg/dev-libs/gpgsignedpkg-1.0/CONTENTS").is_file()
+
+
+def test_emerge_getbinpkgonly_rejects_a_signed_gpkg_from_an_unknown_key(
+    emerge_binary, tmp_path
+):
+    """Same round trip, but the verify keyring is empty: no `GOODSIG`
+    from a trusted key is possible, so the merge fails with real's own
+    "signed with at least one unknown key" failure -- and nothing is
+    merged. Proves verification is enforced, not merely attempted."""
+    if shutil.which("gpg") is None:
+        pytest.skip("gpg not available")
+    home = tmp_path / "gnupg-empty"
+    home.mkdir()
+    os.chmod(home, 0o700)
+    try:
+        env = _signed_binhost_env(tmp_path, home)
+        result = subprocess.run(
+            [str(emerge_binary), "--getbinpkgonly", "dev-libs/gpgsignedpkg"],
+            capture_output=True,
+            text=True,
+            check=False,
+            env=env,
+        )
+        assert result.returncode != 0
+        assert "GnuPG verification failed" in (result.stderr + result.stdout)
+        assert "unknown key" in (result.stderr + result.stdout)
+        root = Path(env["ROOT"])
+        assert not (root / "var/db/pkg/dev-libs/gpgsignedpkg-1.0").exists()
+        assert not (root / "hello.txt").exists()
+    finally:
+        _kill_gpg_agent(home)
+
+
 def test_emerge_buildpkgonly_multi_instance_gpkg_exports_a_real_build_id(
     emerge_binary, tmp_path
 ):

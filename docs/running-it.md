@@ -1672,6 +1672,42 @@ tar -tf "${PKGDIR}"/dev-libs/packagepkg-1.0.gpkg.tar
 grep PATH "${PKGDIR}"/Packages
 # PATH: dev-libs/packagepkg-1.0.gpkg.tar
 
+# FEATURES=binpkg-signing signs that same gpkg build: the real,
+# unmodified helper detaches-signs metadata.tar/image.tar (`.sig`
+# sidecars) and clear-signs the Manifest itself, configured via the
+# real BINPKG_GPG_SIGNING_* vars (keyring/key below are portage's own
+# committed test keys, 3rdparty/portage/lib/portage/tests/.gnupg):
+export GNUPGHOME="$(mktemp -d)"
+cp -r 3rdparty/portage/lib/portage/tests/.gnupg/* "${GNUPGHOME}"/ && chmod 700 "${GNUPGHOME}"
+BINPKG_FORMAT=gpkg BINPKG_COMPRESS=gzip FEATURES=binpkg-signing \
+  BINPKG_GPG_SIGNING_BASE_COMMAND="/usr/bin/gpg --sign --armor --batch --no-tty --yes --pinentry-mode loopback --passphrase GentooTest [PORTAGE_CONFIG]" \
+  BINPKG_GPG_SIGNING_DIGEST=SHA512 BINPKG_GPG_SIGNING_GPG_HOME="${GNUPGHOME}" \
+  BINPKG_GPG_SIGNING_KEY=0x5D90EA06352177F6 \
+  /tmp/emerge --buildpkgonly dev-libs/packagepkg
+tar -tf "${PKGDIR}"/dev-libs/packagepkg-1.0.gpkg.tar
+# packagepkg-1.0/gpkg-1
+# packagepkg-1.0/metadata.tar.gz
+# packagepkg-1.0/metadata.tar.gz.sig
+# packagepkg-1.0/image.tar.gz
+# packagepkg-1.0/image.tar.gz.sig
+# packagepkg-1.0/Manifest
+tar -xOf "${PKGDIR}"/dev-libs/packagepkg-1.0.gpkg.tar packagepkg-1.0/Manifest | head -2
+# -----BEGIN PGP SIGNED MESSAGE-----
+# Hash: SHA512
+gpgconf --homedir "${GNUPGHOME}" --kill all  # a signing gpg daemonizes its agent
+
+# ...and the merge side verifies: real _verify_binpkg's own GPG layer
+# (detached .sigs + clear-signed Manifest, via the system gpg against
+# BINPKG_GPG_VERIFY_GPG_HOME) runs before anything is unpacked, so a
+# tampered member fails the merge instead of landing in ${ROOT}.
+# Without a keyring/key configured the build is refused up front,
+# real _emerge/actions.py's own gate (after the resolve display, before
+# anything is built):
+FEATURES=binpkg-signing BINPKG_FORMAT=gpkg /tmp/emerge --buildpkgonly dev-libs/packagepkg
+# [ebuild  N    ] dev-libs/packagepkg-1.0
+# >>> Building binary for dev-libs/packagepkg-1.0...
+# emerge: dev-libs/packagepkg-1.0: !!! BINPKG_GPG_SIGNING_GPG_HOME is not set  (exit 1)
+
 # a real, nonempty SRC_URI with no Manifest entry at all is refused
 # outright, rather than fetched unverified (dev-libs/fetchpkg has one
 # and nothing else -- see "What this proves" above for why):
