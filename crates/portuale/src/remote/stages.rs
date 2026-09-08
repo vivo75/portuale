@@ -98,6 +98,31 @@ pub(crate) fn run_merge_stage(
     }
 }
 
+// --- Merge-time vdb environment regeneration ---------------------------------------
+//
+// The client regenerates uncompressed (no `bzip2` on the client) and the
+// server compresses + installs; old-instance hooks get their env
+// server-decompressed the same way.
+
+/// Outcome of the regen postinst run: the phase rc (non-zero is
+/// non-fatal, like Portage's `_postinst_failure`) plus whether the
+/// client left a fresh `$UNIT/environment.regen` behind.
+pub(crate) struct RegenReport {
+    pub(crate) phase_rc: i32,
+    pub(crate) regen_present: bool,
+    pub(crate) skipped_no_hooks: bool,
+}
+
+/// Arguments of [`run_postinst_regen_stage`].
+pub(crate) struct RunPostinstRegenStageArgs<'a> {
+    pub(crate) ctx: &'a RemoteContext,
+    pub(crate) control: Option<&'a std::path::Path>,
+    pub(crate) unit_dir: &'a str,
+    pub(crate) staged: &'a crate::remote_bundle::StagedBundle,
+    pub(crate) features: Option<&'a str>,
+    pub(crate) locale: &'a [(String, String)],
+}
+
 /// Pull one remote file's bytes to the server (`cat` remotely; a plain
 /// read for the `local` transport, where client paths are server
 /// paths). `Err` is the pull failure.

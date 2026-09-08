@@ -270,3 +270,34 @@ pub(crate) fn print_preflight_report(
         ExitCode::from(1)
     }
 }
+
+// --- Bundle streaming --------------------------------------------------------
+
+/// Unpack driver: byte-count gate, `tar -xpf`, member + manifest sanity.
+/// Values baked in server-side, pre-quoted. The tarball itself arrived
+/// earlier via `send_file` (`$WORKDIR/<pf>/bundle.tar`). `UNPACK=...` on
+/// stdout, log on stderr; any gate prints its reason and exits 1.
+pub(crate) fn unpack_script(workdir: &str, pf: &str, expected_bytes: u64) -> String {
+    format!(
+        r#"UNIT_DIR={unit}
+BUNDLE="$UNIT_DIR/bundle.tar"
+if [ ! -f "$BUNDLE" ]; then echo "UNPACK=missing-bundle"; exit 1; fi
+ACTUAL=$(wc -c < "$BUNDLE")
+if [ "$ACTUAL" != "{expected}" ]; then echo "UNPACK=byte-count-mismatch expected={expected} actual=$ACTUAL"; exit 1; fi
+if ! tar -xpf "$BUNDLE" -C {workdir}; then echo "UNPACK=tar-failed"; exit 1; fi
+rm -f "$BUNDLE"
+for member in "$UNIT_DIR/image" "$UNIT_DIR/build-info" "$UNIT_DIR/remote-manifest"; do
+  if [ ! -e "$member" ]; then echo "UNPACK=missing-member member=$member"; exit 1; fi
+done
+# NOTE: build-info/CONTENTS is NOT gated here (fixture binpkgs lack it;
+# real ones carry it) -- slice 4's merge owns that check, where a
+# missing CONTENTS is genuinely unmergeable.
+FORMAT=$(sed -n 's/^FORMAT=//p' "$UNIT_DIR/remote-manifest" | head -n 1)
+if [ "$FORMAT" != "1" ]; then echo "UNPACK=bad-manifest format=$FORMAT"; exit 1; fi
+echo "UNPACK=ok"
+"#,
+        unit = sh_quote(&format!("{workdir}/{pf}")),
+        workdir = sh_quote(workdir),
+        expected = expected_bytes,
+    )
+}
