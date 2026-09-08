@@ -132,3 +132,36 @@ fn resolve_pretend_rejects_a_sub_slot_restricted_atom_that_does_not_match() {
     .expect("resolve_pretend must succeed");
     assert_eq!(outcome, PretendOutcome::NoVisibleCandidate);
 }
+
+/// A stale built slot-operator dep with no ebuild reports
+/// `NoVisibleCandidate` at this level; the walk rewrites the
+/// dependency case one layer up.
+#[test]
+fn stale_built_slot_operator_dep_with_no_ebuild_reports_at_this_level() {
+    // The L1-a gate stands here: no usable ebuild means
+    // `NoVisibleCandidate` even when the vdb could satisfy it.
+    let root = fixtures_root();
+    let repos = find_repos(&root).expect("fixture repos.conf must resolve");
+    let call = |is_top_level: bool| {
+        resolve_pretend(
+            &SelectSource {
+                repos: &repos,
+                root: &root,
+                config: &test_config(),
+                local_binpkg: &build_local_binpkg_index(&test_config()),
+            },
+            "dev-libs/reinstslottarget:0/1=",
+            &SelectOptions {
+                newuse: true,
+                update: true,
+                with_bdeps: false,
+                changed_slot: true,
+                is_top_level,
+                ..SelectOptions::default()
+            },
+        )
+        .expect("resolve_pretend(dev-libs/reinstslottarget:0/1=) failed")
+    };
+    assert_eq!(call(false), PretendOutcome::NoVisibleCandidate);
+    assert_eq!(call(true), PretendOutcome::NoVisibleCandidate);
+}

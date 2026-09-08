@@ -831,3 +831,17 @@ pub fn format_preserved_libs(entries: &BTreeMap<String, PreservedLibsEntry>) -> 
     out.push('}');
     out
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::InstalledDb;
+
+    fn put_live(root: &Path, cat: &str, pf: &str, files: &[(&str, &str)]) {
+        let dir = root.join("var/db/pkg").join(cat).join(pf);
+        fs::create_dir_all(&dir).unwrap();
+        for (name, body) in files {
+            fs::write(dir.join(name), body).unwrap();
+        }
+    }
+}

@@ -110,6 +110,63 @@ fn resolve_installed_info_reads_the_vdb_use_line_and_the_differing_vars() {
 }
 
 #[test]
+fn parse_env_assignments_matches_portage_aux_env_search_forms() {
+    // Portage: dbapi/vartree.py, _aux_env_search.
+    let wanted = &[
+        "PLAIN", "DECL", "EXP", "MULTI", "EMPTY", "ESC", "DUP", "TAB",
+    ];
+    let text = concat!(
+        "PLAIN=x86_64-pc-linux-gnu\n",
+        "declare -x DECL=\"-O2 -march=native\"\n",
+        "export EXP='single'\n",
+        "MULTI=\"line1\n",
+        "line2\n",
+        "line3\"\n",
+        "EMPTY=\"\"\n",
+        "ESC=\"v\\\"\n",
+        "DUP=1\n",
+        "DUP=2\n",
+        "export\tTAB=tabbed\n",
+        "NOEQUALS\n",
+        "=nokey\n",
+        "UNWANTED=zzz\n",
+    );
+    let got = parse_env_assignments(text, wanted);
+    assert_eq!(
+        got.get("PLAIN").map(String::as_str),
+        Some("x86_64-pc-linux-gnu")
+    );
+    assert_eq!(
+        got.get("DECL").map(String::as_str),
+        Some("-O2 -march=native")
+    );
+    assert_eq!(got.get("EXP").map(String::as_str), Some("single"));
+    assert_eq!(
+        got.get("MULTI").map(String::as_str),
+        Some("line1line2\nline3")
+    );
+    assert_eq!(got.get("EMPTY").map(String::as_str), Some(""));
+    // The escaped `\"` does NOT close: following lines are swallowed through EOF
+    // (Portage's own EOF-without-closer path).
+    assert_eq!(
+        got.get("ESC").map(String::as_str),
+        Some("v\\\"DUP=1\nDUP=2\nexport\tTAB=tabbed\nNOEQUALS\n=nokey\nUNWANTED=zz")
+    );
+    assert!(!got.contains_key("DUP"), "swallowed by ESC's continuation");
+    assert!(!got.contains_key("TAB"), "swallowed by ESC's continuation");
+    assert!(!got.contains_key("UNWANTED"));
+}
+
+#[test]
+fn parse_env_assignments_skips_continuations_of_unwanted_keys() {
+    // Portage builds the value before its key check, so a skipped multi-line
+    // value must not leak its body lines as fresh assignments.
+    let text = "SKIP=\"a\nB=1\n\"\nB=real\n";
+    let got = parse_env_assignments(text, &["B"]);
+    assert_eq!(got.get("B").map(String::as_str), Some("real"));
+}
+
+#[test]
 fn resolve_installed_info_unsets_everything_without_environment_bz2() {
     // With no `environment.bz2` Portage returns {}: all five vars are `Unset:`,
     // even when a same-named individual vdb file exists.
@@ -125,6 +182,39 @@ fn resolve_installed_info_unsets_everything_without_environment_bz2() {
         infos[0].unset_vars,
         vec![
             "CHOST".to_string(),
+            "CFLAGS".to_string(),
+            "CXXFLAGS".to_string(),
+            "FEATURES".to_string(),
+            "LDFLAGS".to_string()
+        ]
+    );
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn resolve_installed_info_reads_mydesiredvars_only_from_the_saved_env() {
+    // Only `mydesiredvars` come from the saved env; stray individual files are
+    // ignored (Portage's `_aux_env_search`).
+    let env = bz2(b"declare -x CHOST=\"x86_64-pc-linux-gnu\"\n");
+    let root = tmp_vdb(
+        "dev-libs",
+        "tmpenvpkg-1.0",
+        &[
+            ("CFLAGS", b"-O2 -stray\n"),
+            ("USE", b""),
+            ("IUSE", b""),
+            ("environment.bz2", &env),
+        ],
+    );
+    let infos = resolve_installed_info(&root, "dev-libs/tmpenvpkg", &test_config());
+    assert_eq!(infos.len(), 1);
+    assert_eq!(
+        infos[0].differing_vars,
+        vec![("CHOST".to_string(), "x86_64-pc-linux-gnu".to_string())]
+    );
+    assert_eq!(
+        infos[0].unset_vars,
+        vec![
             "CFLAGS".to_string(),
             "CXXFLAGS".to_string(),
             "FEATURES".to_string(),

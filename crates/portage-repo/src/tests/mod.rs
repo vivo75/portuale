@@ -121,6 +121,14 @@ fn tmp_vdb(cat: &str, pf: &str, files: &[(&str, &[u8])]) -> std::path::PathBuf {
     root
 }
 
+fn bz2(bytes: &[u8]) -> Vec<u8> {
+    use bzip2::write::BzEncoder;
+    use std::io::Write as _;
+    let mut enc = BzEncoder::new(Vec::new(), bzip2::Compression::best());
+    enc.write_all(bytes).unwrap();
+    enc.finish().unwrap()
+}
+
 /// Like `resolve`, but with `--update` enabled.
 fn resolve_update(category: &str, package: &str) -> PretendOutcome {
     let root = fixtures_root();
