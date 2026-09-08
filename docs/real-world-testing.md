@@ -825,10 +825,36 @@ run. Committed only when asked.
    `@system` set expansion is short (H); merge order still diverges at
    real-tree scale (I, 25 — the known `_serialize_tasks` problem, now
    with a regression surface).
-2. **L1 merge parity.** `builder-portage` build script, `consumer-*`
-   merge scripts, the L1 package list, snapshot/diff wiring, the
-   reinstall + upgrade sub-cases. Deliverable: L1 report; every diff
-   either fixed in Portuale or allowlisted with a reason.
+2. **L1 merge parity.** — *shipped 2026-09-08.*
+   `TEST/run/l1-merge-from-binpkg.sh`: Portage builds
+   `atomlists/l1-merge.txt` (10 all-stable packages + deps) from source
+   once with `FEATURES=buildpkg` into a persistent
+   `TEST/logs/_l1-pkgcache/` `$PKGDIR` (`layers/l1/build.sh`); then
+   Portage and portuale each `-k --getbinpkg --oneshot` that identical
+   `$PKGDIR` into their own fresh container's `/` (`layers/l1/consume.sh`
+   — both first upgrade portage to 3.0.82.2 with `-1` so the base `/` is
+   identical). `compare/snapshot.sh` gained `--paths <file>` (trailing
+   `/` recurses, else stat-only) and `--vdb-list <file>`;
+   `compare/normalize.py` + `compare/diff.py` (skeletons → implemented)
+   do the normalised comparison per `normalize.md`; typed findings
+   (`MISSING`/`MODE`/`OWNER`/`XATTR`/`SIZE`/`CONTENT`/`SYMLINK`/
+   `VDB:<file>`/`CONTENTS`, non-fatal `MTIME` count),
+   `known-divergences.yaml`-gated.
+   First run (5-package smoke set): after the methodology +
+   normalisation fixes, **5 findings, one root cause, allowlisted; 0
+   unexplained** — portuale's binpkg merge produces a byte-identical
+   `$ROOT` and a VDB differing only in the tracked `environment`
+   refilter and mtimes. Triaged in
+   [`TEST/findings/l1.md`](../TEST/findings/l1.md): **L1-a**
+   `--usepkgonly` (`-K`) doesn't treat an installed dep with no binpkg
+   as satisfied (blocks `-K`; real does — workaround `-k --getbinpkg`);
+   **L1-b** portuale needs `--getbinpkg` to *execute* a local-`$PKGDIR`
+   binary merge where real merges on `-k` alone; **L1-c** the vdb
+   `environment` isn't re-filtered on a binpkg merge (`declare -- x=""`,
+   missing `SKIP_KERNEL_BINPKG_ENV_RESET`) — the one allowlisted entry,
+   `owner: portuale-bug`, to be deleted when fixed on `main`.
+   The reinstall + upgrade sub-cases and the full 10-package set are a
+   slice-2 follow-up.
 3. **`porttest` overlay — real ebuilds.** Fill in the §7 table (start
    with `cfgprotect`, `setuid`, `hardlinks`, `symfarm`, `emptydirs`,
    `installmask`, `splitdebug`, `phases`). Wire into L1. Deliverable:

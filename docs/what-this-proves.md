@@ -15545,3 +15545,47 @@ also the underlying cause of L0's cluster C (`app-crypt/gcr[gtk]`
 "masked"): real stops backtracking after the first autounmask batch
 (default `--autounmask-backtrack=n`), portuale keeps re-resolving --
 the merge-list *truncation* half of that divergence is a follow-up.
+
+L1 merge parity (slice 2 of [`docs/real-world-testing.md`](real-world-testing.md)),
+branch `real-world-testing`:
+
+`TEST/run/l1-merge-from-binpkg.sh` -- Portage builds the
+`TEST/atomlists/l1-merge.txt` set (10 all-stable packages + deps: `tree`,
+`pv`, `lsb-release`, `libbsd`, `oniguruma`, `jq`, `htop`,
+`bash-completion`, `sudo`, `dmidecode`) from source once with
+`FEATURES=buildpkg` into a persistent `$PKGDIR` cache; then Portage and
+portuale each `-k --getbinpkg --oneshot` that identical `$PKGDIR` into
+their own fresh container's `/` (both first upgrade portage to 3.0.82.2
+with `-1` so the base `/` is identical) -- the *only* variable is the
+merge path, so every `$ROOT`/VDB diff is a portuale merge bug (real
+`docs/real-world-testing.md` §1.2). `snapshot.sh` captures the union of
+the merged packages' installed files + a few `/etc` targets + the merged
+packages' vdb; `normalize.py` strips the legitimately-volatile bits
+(`BUILD_TIME`/`BUILD_ID`/`COUNTER`/`INSTALL_TIME` standalone *and* inside
+the consolidated `metadata` file, `#dir_mtime`, `env_update` output,
+`environment` volatiles + builddir paths + `FEATURES`,
+`NEEDED`/`REQUIRES`/`PROVIDES` ordering, `.pyc` + regenerated caches, the
+`CONTENTS` mtime column, directory `st_size` -- `normalize.md` is the
+spec); `diff.py` emits typed findings (`MISSING`/`MODE`/`OWNER`/`XATTR`/
+`SIZE`/`CONTENT`/`SYMLINK`/`VDB:<file>`/`CONTENTS`, and a non-fatal
+`MTIME` count), applies `known-divergences.yaml`, exits non-zero on any
+unexplained hard finding.
+
+First run (5-package smoke set `tree pv lsb-release oniguruma jq`, both
+PMs at portage 3.0.82.2, identical fresh containers): **5 hard findings,
+all one root cause, allowlisted; 0 unexplained; 54 non-fatal mtime-only
+diffs.** portuale's binpkg merge produced a byte-identical `$ROOT` and a
+VDB differing only in the vdb `environment` (a stray `declare -- x=""`,
+a missing `SKIP_KERNEL_BINPKG_ENV_RESET="1"` -- real portage re-filters
+the binpkg's `build-info/environment` through `save-ebuild-env.sh` on
+the way to the vdb, portuale stores it closer to verbatim; tracked as
+`TEST/findings/l1.md` L1-c, the one `owner: portuale-bug` allowlist
+entry). Two further findings blocked the comparison until worked around
+and are tracked but not yet fixed: **L1-a** `--usepkgonly` (`-K`)
+doesn't treat an already-installed dependency with no binpkg as
+satisfied (real portage does -- `--usepkgonly` restricts what may be
+*merged*, not what counts as *satisfied*); **L1-b** portuale requires
+`--getbinpkg` to *execute* a purely-local `$PKGDIR` binary merge where
+real portage merges on `-k` alone. `compare/snapshot.sh` also gained a
+`--paths` (recurse `dir/` vs stat-only) and `--vdb-list` mode so the L1
+snapshot stays scoped to what the merge touched.

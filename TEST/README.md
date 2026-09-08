@@ -53,23 +53,50 @@ Env: `L0_SKIP_PORTAGE_UPGRADE=1` (skip the `=sys-apps/portage-3.0.82.2`
 step), `L0_SKIP_MULTI=1` (skip the `@system`/`@world` whole-graph runs),
 `L0_EMERGE_OPTS`, `PORTTEST_IMAGE`, `PORTTEST_PODMAN`.
 
-### L1+ (not yet implemented)
+### L1 — merge parity from an identical prebuilt binpkg set
 
-`net/up.sh` / `net/down.sh` (shared network + volumes), `compare/snapshot.sh`
-(filesystem/VDB manifest — done), `compare/normalize.py` + `compare/diff.py`
-(skeletons, slice 2). See the doc's slice plan (§14).
+```sh
+TEST/run/l1-merge-from-binpkg.sh                     # the default set
+TEST/run/l1-merge-from-binpkg.sh TEST/atomlists/foo.txt
+```
+
+Portage builds `atomlists/l1-merge.txt` (+ deps) from source **once**,
+into a persistent `TEST/logs/_l1-pkgcache/` `$PKGDIR`. Then Portage and
+portuale each `emerge -K --oneshot` that same `$PKGDIR` into their own
+fresh container's `/`; `compare/snapshot.sh` captures exactly the merged
+files + `/etc` + the VDB; `compare/normalize.py` strips the legitimately-
+volatile bits (`BUILD_TIME`/`COUNTER`, `env_update` output, `.pyc`,
+regenerated caches — see `normalize.md`); `compare/diff.py` emits typed
+findings (`MISSING`/`MODE`/`OWNER`/`XATTR`/`SIZE`/`CONTENT`/`SYMLINK`/
+`VDB:<file>`/`CONTENTS`, plus a non-fatal `MTIME` count). Green iff every
+hard finding matches `known-divergences.yaml`.
+
+Output: `TEST/logs/l1-<timestamp>/` (`portage.*` / `portuale.*` snapshots
++ merge logs, `l1-report.txt`, `l1-report.json`);
+`TEST/logs/l1-report.txt` symlinks the latest.
+
+Env: `L1_REBUILD=1` (wipe the pkgcache), `L1_SKIP_BUILD=1` (reuse it),
+`L1_JOBS`, `L1_SKIP_PORTAGE_UPGRADE`, `PORTTEST_IMAGE`, `PORTTEST_PODMAN`.
+
+The reinstall + upgrade sub-cases are a slice-2 follow-up.
+
+### L2+ (not yet implemented)
+
+`net/up.sh` / `net/down.sh` (shared network + volumes) for the HTTP
+binhost / `mrg` client; `compare/gpkg-{structure,diff}.sh`. See §14.
 
 ### Layout
 
 ```
-run/          host orchestrators (l0-resolver.sh, lib.sh)
+run/          host orchestrators (l0-resolver.sh, l1-merge-from-binpkg.sh, lib.sh)
 layers/l0/    in-container.sh — the per-atom probe driver
-atomlists/    curated atom lists
-compare/      resolve-compare.py, snapshot.sh, normalize.{py,md}, diff.py,
-              known-divergences.yaml
+layers/l1/    build.sh (Portage, from source) + consume.sh (one PM, merge + snapshot)
+atomlists/    curated atom / package lists
+compare/      resolve-compare.py (L0), snapshot.sh + normalize.py + diff.py (L1),
+              normalize.md, known-divergences.yaml
 net/          up.sh / down.sh
 images/       Containerfile material + overlay/porttest/
-logs/         run output (git-ignored)
+logs/         run output (git-ignored)  — incl. _l1-pkgcache/ (the binpkg cache)
 ```
 
 ---

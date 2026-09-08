@@ -1,8 +1,15 @@
 #!/bin/bash
 # Capture a deterministic manifest of an installed system, for L1+
-# filesystem/VDB parity comparison.  (Consumed by diff.py -- slice 2.)
+# filesystem/VDB parity comparison.  (Consumed by diff.py.)
 #
-#   snapshot.sh <root> <out-prefix>
+#   snapshot.sh [--paths <file>] <root> <out-prefix>
+#
+# --paths <file>: restrict the walk to the newline-separated ROOT-
+# relative paths in <file>. An entry ending in `/` is a directory to
+# **recurse**; every other entry is stat'd alone (`-maxdepth 0` -- a
+# file, or a directory whose own mode/owner we want but not its
+# contents, since CONTENTS `dir` lines include shared parents like
+# /usr/lib64). Without --paths the whole tree under <root> is walked.
 #
 # Produces:
 #   <out-prefix>.files.tsv   one line per path, sorted:
@@ -15,6 +22,17 @@
 # mtimes are deliberately NOT in files.tsv (see docs/real-world-testing.md §4.3).
 
 set -euo pipefail
+PATHS_FILE=""
+VDB_LIST=""
+while true; do
+  case ${1:-} in
+    --paths)    PATHS_FILE=${2:?--paths needs a file}; shift 2 ;;
+    # --vdb-list <file>: only tar these `cat/pf` vdb dirs (one per line),
+    # not all of /var/db/pkg. L1 passes just the merged packages.
+    --vdb-list) VDB_LIST=${2:?--vdb-list needs a file}; shift 2 ;;
+    *) break ;;
+  esac
+done
 ROOT=${1:?root dir}
 OUT=${2:?output prefix}
 ROOT=${ROOT%/}
@@ -26,6 +44,10 @@ PRUNE=(
   "$ROOT/var/tmp" "$ROOT/var/cache" "$ROOT/var/log"
   "$ROOT/var/lib/portage/home" "$ROOT/var/db/repos" "$ROOT/usr/src"
   "$ROOT/root/.cache" "$ROOT/home"
+  # /var/db/pkg is compared via the vdb.tar (norm_vdb / diff_vdb), never
+  # the files manifest -- otherwise every BUILD_TIME/COUNTER shows up
+  # twice, once un-normalised as a CONTENT diff.
+  "$ROOT/var/db/pkg"
 )
 
 prune_expr=()
@@ -34,13 +56,33 @@ for p in "${PRUNE[@]}"; do prune_expr+=( -path "$p" -prune -o ); done
 : > "$OUT.files.tsv"
 : > "$OUT.mtimes.tsv"
 
+emit_null() {  # feed to the stat loop below
+  if [ -z "$PATHS_FILE" ]; then
+    find "$ROOT" "${prune_expr[@]}" -print0 2>/dev/null
+    return
+  fi
+  local recurse=() single=()
+  while IFS= read -r p; do
+    [ -n "$p" ] || continue
+    local rec=0
+    case $p in */) rec=1; p=${p%/} ;; esac
+    case $p in /*) : ;; *) p=/$p ;; esac
+    if [ -e "$ROOT$p" ] || [ -L "$ROOT$p" ]; then
+      if [ "$rec" = 1 ]; then recurse+=("$ROOT$p"); else single+=("$ROOT$p"); fi
+    fi
+  done < "$PATHS_FILE"
+  [ ${#recurse[@]} -gt 0 ] && find "${recurse[@]}" "${prune_expr[@]}" -print0 2>/dev/null
+  [ ${#single[@]}  -gt 0 ] && find "${single[@]}" -maxdepth 0 -print0 2>/dev/null
+}
+
 # find + stat; sha256 only for regular files; xattrs sorted & base64'd.
-find "$ROOT" "${prune_expr[@]}" -print0 2>/dev/null |
-LC_ALL=C sort -z |
+emit_null |
+LC_ALL=C sort -z -u |
 while IFS= read -r -d '' f; do
   rel=${f#"$ROOT"}; rel=${rel:-/}
-  # %F kind, %f mode(hex->we take octal via %a), %u %g %s %n %N
-  read -r kind mode uid gid size <<<"$(stat -c '%F %a %u %g %s' "$f")"
+  # `%F` is multi-word ("regular file", "symbolic link") -- use a `|`
+  # delimiter, not whitespace. %a octal mode, %u %g %s %Y.
+  IFS='|' read -r kind mode uid gid size mtime <<<"$(stat -c '%F|%a|%u|%g|%s|%Y' "$f")"
   case $kind in
     "regular file"|"regular empty file") t=f ;;
     "directory") t=d ;;
@@ -61,12 +103,26 @@ while IFS= read -r -d '' f; do
   xa=${xa:--}
   printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
     "$rel" "$t" "$mode" "$uid" "$gid" "$size" "$sha" "$link" "$xa" >> "$OUT.files.tsv"
-  printf '%s\t%s\n' "$rel" "$(stat -c '%Y' "$f")" >> "$OUT.mtimes.tsv"
+  printf '%s\t%s\n' "$rel" "$mtime" >> "$OUT.mtimes.tsv"
 done
 
+# --paths can list a dir and a file inside it -> dedup.
+LC_ALL=C sort -u -o "$OUT.files.tsv" "$OUT.files.tsv"
+LC_ALL=C sort -u -o "$OUT.mtimes.tsv" "$OUT.mtimes.tsv"
+
 if [ -d "$ROOT/var/db/pkg" ]; then
-  tar -C "$ROOT/var/db" --sort=name --numeric-owner \
-      --mtime='@0' -cf "$OUT.vdb.tar" pkg
+  if [ -n "$VDB_LIST" ]; then
+    members=()
+    while IFS= read -r cp; do
+      [ -n "$cp" ] && [ -d "$ROOT/var/db/pkg/$cp" ] && members+=("pkg/$cp")
+    done < "$VDB_LIST"
+    [ ${#members[@]} -gt 0 ] || members=(--files-from /dev/null)
+    tar -C "$ROOT/var/db" --sort=name --numeric-owner --mtime='@0' \
+        -cf "$OUT.vdb.tar" "${members[@]}"
+  else
+    tar -C "$ROOT/var/db" --sort=name --numeric-owner \
+        --mtime='@0' -cf "$OUT.vdb.tar" pkg
+  fi
 fi
 
 {

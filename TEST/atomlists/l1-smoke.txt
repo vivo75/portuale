@@ -1,0 +1,8 @@
+# L1 quick smoke set -- 5 fast packages, a subset of l1-merge.txt, for
+# iterating on the L1 pipeline without the full 10-package build.
+#   TEST/run/l1-merge-from-binpkg.sh TEST/atomlists/l1-smoke.txt
+app-text/tree
+sys-apps/pv
+sys-apps/lsb-release
+dev-libs/oniguruma
+app-misc/jq

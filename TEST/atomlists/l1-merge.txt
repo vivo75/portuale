@@ -1,0 +1,43 @@
+# L1 merge-parity package set.
+#
+# One atom per line; blank / `#` lines ignored. `TEST/layers/l1/build.sh`
+# builds every entry (+ its deps) from source with Portage and
+# `FEATURES=buildpkg`, populating a shared `$PKGDIR`. Then
+# `TEST/layers/l1/consume.sh` merges the whole `$PKGDIR` set with Portage
+# once and with portuale once, into two identical containers, and
+# `TEST/compare/diff.py` compares the resulting `$ROOT` + VDB.
+#
+# Chosen: all NOT installed in the pinned stage3 (so every merge is a
+# clean New, not a reinstall -- the reinstall / upgrade sub-cases are
+# separate, see l1-merge-from-binpkg.sh), all present in the pinned
+# gentoo tree, all fast to build, together covering the merge-path edge
+# cases most likely to diverge:
+#
+#   app-text/tree           trivial: one binary + one man page
+#   sys-apps/pv             binary + man + nls (.mo files)
+#   sys-apps/lsb-release    a script + /etc/lsb-release  (CONFIG_PROTECT)
+#   dev-libs/libbsd         shared lib: libbsd.so.0.* + .so.0 + .so
+#                           symlinks + .pc + headers  (soname / symlink chain)
+#   dev-libs/oniguruma      shared lib + .pc + headers   (jq's dep -- a
+#                           two-package lib->consumer chain in one graph)
+#   app-misc/jq             binary linked against oniguruma + .pc
+#   sys-process/htop        ncurses binary + man + a .desktop file +
+#                           hicolor icons  (freedesktop install dirs)
+#   app-shells/bash-completion   hundreds of small data files under
+#                           /usr/share/bash-completion + /etc/profile.d +
+#                           /etc/bash_completion.d symlinks
+#   app-admin/sudo          setuid 4111 root binary (mode+owner), 0440
+#                           /etc/sudoers (CONFIG_PROTECT), pam.d, an
+#                           IDEPEND-created state dir
+#   sys-apps/dmidecode      /usr/sbin binaries + man
+
+app-text/tree
+sys-apps/pv
+sys-apps/lsb-release
+dev-libs/libbsd
+dev-libs/oniguruma
+app-misc/jq
+sys-process/htop
+app-shells/bash-completion
+app-admin/sudo
+sys-apps/dmidecode
