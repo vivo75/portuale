@@ -11,6 +11,13 @@
 //! needs only bash ≥ 5.3 and POSIX `/bin` -- generated bash goes over
 //! `ssh … bash -s` (stdin), machine-readable `KEY=VALUE` lines come back
 //! on stdout, human log on stderr. No Python anywhere near the client.
+//!
+//! Binary-format scope: gpkg (`.gpkg.tar`) only. xpak (`.tbz2`) is out of
+//! scope for `mrg` -- it is the old format and `mrg` does not target full
+//! binary-format compatibility (the shared server-side `binpkg` reader may
+//! open `.tbz2` incidentally, but that is never a tested or guaranteed
+//! `mrg` path; `emerge`/`ebuild` keep their own local xpak support, see
+//! `docs/remote-merge.md` §1 / §14).
 
 use clap::ArgMatches;
 use std::collections::HashMap;

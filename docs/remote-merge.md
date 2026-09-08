@@ -2,15 +2,21 @@
 
 Standalone planning document (deliberately **not** an edit to
 `agent-context.md` / `scope-backlog.md` / `what-this-proves.md`, to avoid
-rebase conflicts with `main`). Slices 1-5 are implemented (the slice
-lines below say so); slice 6 remains.
+rebase conflicts with `main`). All six slices are implemented (the slice
+lines below say so).
 
 ## 1. Goal and non-goals
 
-Install portuale-built binary packages (`*.gpkg.tar`, and later `.tbz2`)
-on a **client** machine over SSH from the **server** machine running
+Install portuale-built **gpkg** binary packages (`*.gpkg.tar`) on a
+**client** machine over SSH from the **server** machine running
 portuale, with **no Portage (and no portuale binary) on the client** and
 **no internet on the client** — its only remote contact is the server.
+**xpak (`.tbz2`) is out of scope for `mrg`**: it is the old format, and
+`mrg` targets the modern gpkg format, not full binary-format
+compatibility. (The shared server-side binpkg reader happens to open
+`.tbz2` too, so it may work incidentally -- but it is never a tested or
+guaranteed `mrg` path; `emerge`/`ebuild` keep their own local xpak
+support.)
 
 - Resolution always happens on the **server** (repositories live only
   there), binary-only: `--getbinpkgonly` is mandatory, never a source
@@ -464,9 +470,12 @@ disables -- only for labs with no NTP).
    (the `bzip2 -dc` step it already runs), bundle ships a plain
    `environment` file; no `bzip2` on the client (§6). Wire compression
    (zstd) only if bundle sizes ever justify it.
-2. gpkg-only v1, or `.tbz2` (xpak) from the start? The merge code
-   handles both locally; remote manifest should too -- but each format
-   doubles driver test paths. Lean: gpkg first, xpak second slice.
+2. ~~gpkg-only v1, or `.tbz2` (xpak) from the start?~~ **Resolved: xpak
+   is out of scope.** `mrg` targets gpkg only -- xpak is the old format
+   and `mrg` does not need full binary-format compatibility (the shared
+   server-side reader may open `.tbz2` incidentally, but that is never a
+   tested or guaranteed `mrg` path; `emerge`/`ebuild` keep their own
+   local xpak support).
 3. Same-slot replace when the old version's vdb env is missing
    client-side: fail the unit, or merge without old hooks (local code
    degrades)? Lean: fail-closed (matches collision stance).

@@ -564,6 +564,13 @@ Standing decisions, not oversights.
   Prefix/cross-`ROOT` beyond
   the `ESYSROOT` distinction** — not in scope. (gpkg binpkg
   `.sig` signing/verification itself is shipped — see Part 2.E.)
+- **xpak (`.tbz2`) binary packages for `mrg`** — out of scope. `mrg`
+  targets the modern gpkg format, not full binary-format compatibility;
+  xpak is the old format. The shared server-side binpkg reader happens to
+  open `.tbz2`, so it may work incidentally on `mrg`, but it is never a
+  tested or guaranteed `mrg` path (`emerge`/`ebuild` keep their own local
+  xpak support, which is fully in scope and tested). See
+  `docs/remote-merge.md` §1 / §14.
 - **`equery` / `portageq` / `etc-update` / `dispatch-conf`** — separate
   tools, separate binaries.
 - **Directory merge traversal order** — sorted by filename for test
