@@ -297,6 +297,86 @@ pub(crate) fn scrub_bzip2_command(bytes: &[u8], bzip2_command: &str) -> Vec<u8> 
     out
 }
 
+/// Install `bytes` at `dest` on the client atomically (temp name +
+/// `mv`, so a concurrent unmerge never reads a half-written env). A
+/// failed `mv` best-effort removes the remote temp name.
+pub(crate) fn install_file_atomic(
+    ctx: &RemoteContext,
+    control: Option<&std::path::Path>,
+    bytes: &[u8],
+    dest: &str,
+) -> Result<(), String> {
+    let tmp = format!("{dest}.portuale-regen-tmp");
+    match ctx.transport {
+        RemoteTransport::Local => {
+            if let Some(parent) = std::path::Path::new(&tmp).parent() {
+                std::fs::create_dir_all(parent)
+                    .map_err(|e| format!("{}: {e}", parent.display()))?;
+            }
+            std::fs::write(&tmp, bytes).map_err(|e| format!("mrg: writing {tmp} failed: {e}"))?;
+            std::fs::rename(&tmp, dest).map_err(|e| {
+                let _ = std::fs::remove_file(&tmp);
+                format!("mrg: installing {dest} failed: {e}")
+            })?;
+            Ok(())
+        }
+        RemoteTransport::Ssh => {
+            // `TempDir::new` creates a directory, so the bytes must ride
+            // a file *inside* it -- staging straight into its path fails
+            // every ssh install with `Is a directory`.
+            let server_dir = TempDir::new("portuale-regen-install").keep();
+            let server_tmp = server_dir.join("regen.env");
+            std::fs::write(&server_tmp, bytes)
+                .map_err(|e| format!("mrg: staging the regen install failed: {e}"))?;
+            let result = send_file(ctx, control, &server_tmp, &tmp).and_then(|()| {
+                let output = run_raw_command(
+                    ctx,
+                    control,
+                    &["mv".to_string(), tmp.clone(), dest.to_string()],
+                )?;
+                if output.status.success() {
+                    Ok(())
+                } else {
+                    // Best-effort: don't litter the client tmp name.
+                    let _ = run_raw_command(
+                        ctx,
+                        control,
+                        &["rm".to_string(), "-f".to_string(), tmp.clone()],
+                    );
+                    Err(format!(
+                        "mrg: moving {tmp} into place failed (exit {})",
+                        output.status.code().unwrap_or(-1)
+                    ))
+                }
+            });
+            let _ = std::fs::remove_dir_all(&server_dir);
+            result
+        }
+    }
+}
+
+/// Pull the regen'd env, scrub it, compress it server-side and install
+/// it over the vdb's build-time `environment.bz2`. `Err` is
+/// `(failing step, detail)` -- `pull`, `compress` or `install` -- for
+/// the caller's warn-and-continue line. `regen_bzip2` is the resolved
+/// client `PORTAGE_BZIP2_COMMAND` used by the scrub.
+pub(crate) fn install_regenerated_env(
+    ctx: &RemoteContext,
+    control: Option<&std::path::Path>,
+    unit_dir: &str,
+    vdb_env_bz2: &str,
+    regen_bzip2: Option<&str>,
+) -> Result<(), (String, String)> {
+    let regen = format!("{unit_dir}/environment.regen");
+    let bytes = pull_file(ctx, control, &regen).map_err(|message| ("pull".to_string(), message))?;
+    let scrubbed = scrub_bzip2_command(&bytes, regen_bzip2.unwrap_or("bzip2"));
+    let compressed =
+        bzip2_compress(&scrubbed).map_err(|message| ("compress".to_string(), message))?;
+    install_file_atomic(ctx, control, &compressed, vdb_env_bz2)
+        .map_err(|message| ("install".to_string(), message))?;
+    Ok(())
+}
+
 /// The failure line: names the package and the failing step (`postinst`,
 /// `pull`, `compress`, `install`); the vdb keeps the build-time
 /// `environment.bz2` and the merge continues.
@@ -304,6 +384,15 @@ pub(crate) fn regen_warn_message(cpv: &str, step: &str) -> String {
     format!(
         "!!! Remote {cpv}: merge-time environment regen failed at {step}, keeping build-time environment.bz2"
     )
+}
+
+/// A staged old-hook environment: which replaced-version pfs got a
+/// server-decompressed env under `$UNIT/old-env/`, plus per-pf failure
+/// details for the report (the driver falls back to the client vdb for
+/// those -- the legacy plain file, then client `bzip2`).
+pub(crate) struct OldHookShipment {
+    pub(crate) shipped: Vec<String>,
+    pub(crate) warnings: Vec<String>,
 }
 
 /// `OLDPF=<pf> SLOT=<slot>` lines out of the old-version probe
@@ -334,6 +423,18 @@ pub(crate) fn old_hook_warn_message(cpv: &str, detail: &str) -> String {
     format!(
         "!!! Remote {cpv}: could not stage the saved env for an old instance ({detail}); old hooks fall back to the client vdb"
     )
+}
+
+/// Arguments of [`ship_old_hook_envs`].
+pub(crate) struct ShipOldHookEnvsArgs<'a> {
+    pub(crate) ctx: &'a RemoteContext,
+    pub(crate) control: Option<&'a std::path::Path>,
+    pub(crate) unit_dir: &'a str,
+    pub(crate) vdb: &'a str,
+    pub(crate) category: &'a str,
+    pub(crate) pn: &'a str,
+    pub(crate) new_pf: &'a str,
+    pub(crate) new_mainslot: &'a str,
 }
 
 /// The resolved absolute client binary for generated scripts:
