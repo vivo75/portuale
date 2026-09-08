@@ -2056,6 +2056,18 @@ portuale mrg --pretend --solver=resolvo dev-libs/newpkg
 # [ebuild  N     ] dev-libs/newpkg-1.0   (mrg forwards to the same codepath)
 ```
 
+Visibility filtering (2026-09-08): the bridges now resolve from the same
+`is_visible`-filtered pool as the walk, so an invisible version is never
+offered to either engine -- all three solvers refuse a `~amd64`-only
+target identically:
+
+```sh
+portuale emerge --pretend --solver=portage dev-libs/maskedpkg   # exit 1
+portuale emerge --pretend --solver=pubgrub dev-libs/maskedpkg   # exit 1
+portuale emerge --pretend --solver=resolvo dev-libs/maskedpkg   # exit 1
+portuale emerge --pretend --solver=pubgrub dev-libs/newpkg      # [ebuild  N     ] dev-libs/newpkg-1.0
+```
+
 `emerge --info`: the real config-layer stack (2026-09-07). `--info`'s
 `VAR="value"` dump now reads the same five dbs real portage stacks —
 `/etc/profile.env` (env.d), `cnf/make.globals`, the profile chain,

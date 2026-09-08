@@ -14849,6 +14849,44 @@ only itself; diamond pulls exactly its cone). Remaining per-unit cost is
 `effective_use_flags` itself (~1ms/version in larger closures) --
 shared-code surgery, a future slice.
 
+### `--solver=`: the bridges resolve from a visibility-filtered pool (2026-09-08)
+
+The pubgrub/resolvo bridges previously fed the engines the **unfiltered**
+`list_candidates` pool -- every closure version, keyword/license/mask
+acceptance unscreened -- so an invisible version the backtracking walk
+would reject still resolved as a fresh `[ebuild N]` for
+`--solver=pubgrub|resolvo` (`dev-libs/maskedpkg` is `~amd64`-only, so
+`-p dev-libs/maskedpkg` exits 1 under the fixture's
+`ACCEPT_KEYWORDS=amd64` on the walk, yet printed
+`[ebuild N] dev-libs/maskedpkg-1.0` on both bridges). That was the
+"no visibility filtering" v1 cut (the module doc comment's first
+bullet). This slice closes it: `LazyRepo::load_versions`
+(`solver_bridge.rs`) now drops any candidate the walk's own
+`is_visible` (`lib.rs`, grounded in real `Package.py`'s `_masks` --
+`package.mask`/`package.unmask`, `LICENSE`, `PROPERTIES`, `RESTRICT`,
+`KEYWORDS`) rejects, *before* the md5-cache read. Both engines are then
+fed only the filtered pool, so neither can select an invisible version;
+and the closure BFS likewise no longer expands an invisible version's
+dep cone (a package reachable only through an invisible version is now
+genuinely absent, exactly as the walk leaves it).
+
+The result: `--solver=portage|pubgrub|resolvo -p dev-libs/maskedpkg` all
+fail (exit 1, no `[ebuild]` line) and a visible target
+(`dev-libs/newpkg`) still resolves under all three. Pinned by the Rust
+unit test `load_versions_filters_invisible_candidates` (the `~amd64`
+version is filtered, the `amd64` one survives -- the module's test
+`fixture_request` now carries the fixture profile's real
+`ACCEPT_KEYWORDS=amd64` so `is_visible` sees the same keyword set a real
+resolve does) and the black-box
+`test_solver_backends_share_the_visibility_filter`
+(`tests/test_portuale.py`, all three solvers, Rust-only since
+`--solver=pubgrub|resolvo` is portuale-only). The module doc comment's
+first bullet is rewritten to the still-open cut: **no `--autounmask*`
+relaxation levels** -- a candidate that *would* need a `~arch`/license/
+mask flip now simply fails to resolve rather than producing the walk's
+suggested change, and the failure text stays engine-native (the
+remaining cuts are unchanged).
+
 ### `emerge --info`: the real config-layer stack (2026-09-07)
 
 `emerge --info`'s variable dump was previously computed from the profile

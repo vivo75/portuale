@@ -29,9 +29,12 @@
 //! is inherently whole-input).
 //!
 //! Deliberate v1 cuts (each would be its own slice):
-//! - No visibility filtering: every closure version is offered
-//!   (keyword/license/mask/`package.*` acceptance is the backtracking
-//!   walk's own `is_visible`; the bridges get the unfiltered pool).
+//! - No autounmask relaxation levels: the pool *is* visibility-filtered
+//!   with the walk's own `is_visible` (keyword/license/mask/PROPERTIES/
+//!   RESTRICT acceptance), so an invisible version is never offered --
+//!   but unlike the walk, a candidate that would need a `--autounmask*`
+//!   flip (a `~arch` keyword, a license, a `package.mask`) simply fails
+//!   to resolve rather than producing the flip suggestion.
 //! - No notices: slot conflicts, autounmask change lists, `:=` rebuilds,
 //!   blockers and circular deps come back empty -- a bridge failure is
 //!   one `Error::Detail` line, not a real `depgraph.py` notice.
@@ -51,7 +54,7 @@ use std::collections::{HashMap, HashSet};
 use super::{
     GraphEntry, GraphResult, InstalledRef, PretendOutcome, RepoConfig, ResolveRequest,
     Resolver as PortualeResolver, all_installed_packages, effective_use_flags, find_repos,
-    installed_pkg_iuse_and_use, list_candidates, read_md5_cache,
+    installed_pkg_iuse_and_use, is_visible, list_candidates, read_md5_cache,
 };
 
 // --- Lazy fact loading -----------------------------------------------------
@@ -197,6 +200,13 @@ impl LazyRepo {
         if let Some((category, package)) = cp.split_once('/') {
             let candidates = list_candidates(&self.repos, category, package)?;
             for candidate in candidates.iter() {
+                // The walk resolves from a visibility-filtered pool; the
+                // bridges get the same pool (keyword/license/mask/PROPERTIES/
+                // RESTRICT acceptance via the walk's own `is_visible`), so an
+                // invisible version is never offered to either engine.
+                if !is_visible(candidate, category, package, &self.config) {
+                    continue;
+                }
                 let pf = format!("{package}-{}", candidate.version);
                 let Ok(metadata) = read_md5_cache(&candidate.repo_location, category, &pf) else {
                     continue;
@@ -921,11 +931,16 @@ mod tests {
             .join("../../fixtures")
             .canonicalize()
             .expect("fixtures must exist");
+        // The fixture profile's own ACCEPT_KEYWORDS (arch/amd64/make.defaults
+        // `ACCEPT_KEYWORDS="${ARCH}"` -> amd64), so `is_visible` in the pool
+        // sees the same keyword set a real resolve does.
+        let mut config = portage_profile::Config::default();
+        config.accept_keywords.insert("amd64".to_string());
         ResolveRequest {
             config_root: root.clone(),
             root,
             atoms: atoms.iter().map(|s| s.to_string()).collect(),
-            config: portage_profile::Config::default(),
+            config,
             newuse: false,
             changed_use: false,
             nodeps: false,
@@ -1019,5 +1034,27 @@ mod tests {
             !closure.contains("dev-libs/newpkg"),
             "closure leaked: {closure:?}"
         );
+    }
+
+    /// The bridges resolve from a visibility-filtered pool: `dev-libs/
+    /// maskedpkg` is `~amd64`-only (invisible under `ACCEPT_KEYWORDS=amd64`)
+    /// so `load_versions` offers it nothing, while `dev-libs/newpkg`
+    /// (`amd64`) keeps its one visible version.
+    #[test]
+    fn load_versions_filters_invisible_candidates() {
+        use super::super::find_repos;
+        let req = fixture_request(&["dev-libs/maskedpkg"]);
+        let repos = find_repos(&req.config_root).expect("fixture repos.conf must resolve");
+        let (seeds, shallow) = super::closure_seeds(&req).expect("seeds parse");
+        let lazy = super::LazyRepo::build(&req, repos, &seeds, &shallow).expect("closure builds");
+        assert!(
+            lazy.load_versions("dev-libs/maskedpkg")
+                .expect("loads maskedpkg")
+                .is_empty(),
+            "the ~amd64-only version must be filtered out of the pool"
+        );
+        let newpkg = lazy.load_versions("dev-libs/newpkg").expect("loads newpkg");
+        assert_eq!(newpkg.len(), 1);
+        assert_eq!(newpkg[0].version, "1.0");
     }
 }

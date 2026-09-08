@@ -219,6 +219,33 @@ def test_mrg_solver_selects_the_resolution_backend(mrg_binary, emerge_binary, fi
     assert bad.returncode == 2
 
 
+def test_solver_backends_share_the_visibility_filter(emerge_binary, fixture_env):
+    """The PubGrub/resolvo bridges resolve from the same visibility-filtered
+    pool as the backtracking walk: `dev-libs/maskedpkg` is `~amd64`-only
+    (invisible under the fixture's `ACCEPT_KEYWORDS=amd64`), so every
+    backend refuses it with no `[ebuild` line, while a visible package
+    still resolves everywhere."""
+    for solver in ("portage", "pubgrub", "resolvo"):
+        masked = subprocess.run(
+            [str(emerge_binary), "--pretend", f"--solver={solver}", "dev-libs/maskedpkg"],
+            capture_output=True,
+            text=True,
+            check=False,
+            env=fixture_env,
+        )
+        assert masked.returncode != 0, solver
+        assert "[ebuild" not in masked.stdout, solver
+        visible = subprocess.run(
+            [str(emerge_binary), "--pretend", f"--solver={solver}", "dev-libs/newpkg"],
+            capture_output=True,
+            text=True,
+            check=False,
+            env=fixture_env,
+        )
+        assert visible.returncode == 0, solver
+        assert "[ebuild  N     ] dev-libs/newpkg-1.0" in visible.stdout, solver
+
+
 def _free_loopback_port():
     """An unused 127.0.0.1 TCP port for the fixture sshd (TOCTOU-racy by
     nature, fine for a test fixture)."""

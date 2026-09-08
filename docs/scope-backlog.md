@@ -521,18 +521,20 @@ pins to ten. What remains is landing further *second* implementations
 per slot — new-algorithm work, not new-seam work
 (see `what-this-proves.md`'s "`mrg` director contracts" entry).
 
-**`--solver=` alternate backends (2026-09-07)**: the solver slot's
+**`--solver=` alternate backends**: the solver slot's
 second and third implementations have landed — `active_resolver_for`
 selects `BacktrackingResolver` (portage, default) or lu-zero's PubGrub /
 resolvo bridges (`portage-repo/src/solver_bridge.rs`) at runtime via the
 portuale-only `--solver=<portage|pubgrub|resolvo>` on `emerge`/`mrg`
 (parsing mirrored in `emerge_pretend_reference.py`; non-portage values
-are Rust-only there). V1 depth cuts, each a future slice: visibility
-filtering (bridges get the unfiltered pool), slot-conflict/autounmask/
-`:=`-rebuild/blocker/circular notices, engine-native failure text,
-merge-order fidelity beyond plan install order
-(see `what-this-proves.md`'s "`--solver=` runtime solver selection"
-entry).
+are Rust-only there). **Visibility filtering shipped 2026-09-08**: the
+bridges now resolve from the same `is_visible`-filtered pool as the walk
+(`LazyRepo::load_versions` drops keyword/license/mask/PROPERTIES/RESTRICT-
+invisible candidates before the md5 read), so an invisible version is
+never offered to either engine. Remaining V1 depth cuts, each a future
+slice: slot-conflict/autounmask/`:=`-rebuild/blocker/circular notices,
+engine-native failure text, merge-order fidelity beyond plan install
+order.
 
 **Hard invariant: `mrg` is a portuale-only applet. There will never be
 a portage counterpart or Python reference implementation.** Only its
