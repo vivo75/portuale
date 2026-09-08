@@ -2311,3 +2311,26 @@ without it, stateless fresh + fail-closed collision, shadow
 pre-ship gate, ledger-dir override, PROTECT derivation with control)
 and `cargo test -p portuale remote` (shadow parsers + pre-check,
 dependent-drop diamond, placement/option parsing).
+
+`--check-news` `News-Item-Format` 1.x/2.x atom gate (2026-09-08): a
+1.x item validates its `Display-If-Installed` atom under EAPI 0 (no
+slot/use deps), a 2.x item under the permissive EAPI 5+ grammar --
+`…-format1-slotatom` (`dev-libs/samepkg:1`) and `…-format1-useatom`
+(`dev-libs/infoinstpkg[alpha]`) are both rejected (not counted, not in
+`.skip`); `…-format1-plain` (`dev-libs/samepkg`) stays valid + relevant:
+
+```sh
+export FX="$(pwd)/fixtures" PORTAGE_CONFIGROOT="$FX" ROOT="$FX"
+rm -rf /tmp/newsroot && mkdir -p /tmp/newsroot/var/lib
+ln -s "$FX/var/db" /tmp/newsroot/var/db
+ROOT=/tmp/newsroot rust/target/release/portuale emerge --check-news
+#  * IMPORTANT: 5 news items need reading for repository 'testrepo'.
+#  * Use eselect news read to view new items.
+sort /tmp/newsroot/var/lib/gentoo/news/news-testrepo.skip
+# 2026-09-01-portuale-general
+# 2026-09-02-portuale-samepkg
+# 2026-09-04-portuale-versioned-match
+# 2026-09-06-portuale-use-match
+# 2026-09-11-portuale-format1-plain
+# (…-slotatom / …-useatom are absent: invalid under 1.x)
+```

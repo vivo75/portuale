@@ -12240,23 +12240,26 @@ def test_check_news_counts_unread_relevant_items(
     emerge_binary, emerge_pretend_python, fixture_env, tmp_path
 ):
     """emerge --check-news (real actions.py:3844 -> count_unread_news):
-    the fixture testrepo has eight GLEP 42 news items -- one unrestricted,
-    one `Display-If-Installed: dev-libs/samepkg` (in the vdb at 1.0), one
-    `>=dev-libs/samepkg-1.0` (1.0 satisfies it), one `>dev-libs/samepkg-
-    1.0` (1.0 does NOT), one on an uninstalled package, one
-    `dev-libs/infoinstpkg[alpha]` (installed with alpha enabled -> its
-    use-dep is satisfied), one `dev-libs/infoinstpkg[beta]` (beta
-    declared but disabled -> not satisfied), and one whose
+    the fixture testrepo has eleven GLEP 42 news items -- one
+    unrestricted, one `Display-If-Installed: dev-libs/samepkg` (in the
+    vdb at 1.0), one `>=dev-libs/samepkg-1.0` (1.0 satisfies it), one
+    `>dev-libs/samepkg-1.0` (1.0 does NOT), one on an uninstalled
+    package, one `dev-libs/infoinstpkg[alpha]` (installed with alpha
+    enabled -> its use-dep is satisfied), one `dev-libs/infoinstpkg[beta]`
+    (beta declared but disabled -> not satisfied), one whose
     Display-If-Installed atom is malformed (real NewsItem.isValid rejects
-    the whole item). Four are relevant, so the count is 4. Rust ==
-    Python."""
+    the whole item), and three News-Item-Format 1.x items -- one with a
+    `:slot` atom, one with a `[use]` atom (both invalid under 1.x's EAPI
+    0 atom grammar), and one with a plain atom relative to the installed
+    samepkg (valid AND relevant). Five are relevant, so the count is 5.
+    Rust == Python."""
     rust_env = _check_news_isolated_root(fixture_env, tmp_path, "root-rust")
     py_env = _check_news_isolated_root(fixture_env, tmp_path, "root-py")
     rust = _run([str(emerge_binary)], ["--check-news"], rust_env)
     py = _run(emerge_pretend_python, ["--check-news"], py_env)
     assert rust.returncode == 0
     assert rust.stdout == py.stdout
-    assert "4 news items need reading for repository 'testrepo'." in rust.stdout
+    assert "5 news items need reading for repository 'testrepo'." in rust.stdout
     assert "eselect news read" in rust.stdout
     env = rust_env
 
@@ -12267,18 +12270,24 @@ def test_check_news_counts_unread_relevant_items(
     news_dir = Path(env["ROOT"]) / "var" / "lib" / "gentoo" / "news"
     unread = (news_dir / "news-testrepo.unread").read_text().splitlines()
     skip = (news_dir / "news-testrepo.skip").read_text().splitlines()
-    assert unread == sorted(unread) and len(unread) == 4
-    assert skip == sorted(skip) and len(skip) == 4
+    assert unread == sorted(unread) and len(unread) == 5
+    assert skip == sorted(skip) and len(skip) == 5
     assert set(unread) == set(skip)
     # The [beta] non-match and the malformed item are neither counted nor
     # added to .skip (a malformed item stays out of .skip so real would
-    # re-evaluate it; here it just never becomes valid).
+    # re-evaluate it; here it just never becomes valid). The two 1.x
+    # items with a :slot / [use] atom are rejected the same way (EAPI 0
+    # has no slot/use deps); the 1.x item with a plain atom stays valid
+    # and IS counted.
     assert "2026-09-06-portuale-use-match" in unread
+    assert "2026-09-11-portuale-format1-plain" in unread
     assert "2026-09-07-portuale-use-nomatch" not in skip
     assert "2026-09-08-portuale-malformed" not in skip
+    assert "2026-09-09-portuale-format1-slotatom" not in skip
+    assert "2026-09-10-portuale-format1-useatom" not in skip
 
     again = _run([str(emerge_binary)], ["--check-news"], env)
-    assert "4 news items need reading for repository 'testrepo'." in again.stdout
+    assert "5 news items need reading for repository 'testrepo'." in again.stdout
 
 
 @pytest.mark.parametrize(
@@ -12949,6 +12958,7 @@ def test_check_news_matches_a_versioned_display_if_installed_atom(
         "2026-09-02-portuale-samepkg\n"
         "2026-09-04-portuale-versioned-match\n"
         "2026-09-06-portuale-use-match\n"
+        "2026-09-11-portuale-format1-plain\n"
     )
     for env in (rust_env, py_env):
         news_dir = Path(env["ROOT"]) / "var" / "lib" / "gentoo" / "news"

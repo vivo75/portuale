@@ -15703,3 +15703,31 @@ pins `Unset: CFLAGS, ...` black-box in
 `test_info_installed_block_reads_mydesiredvars_from_environment_bz2`;
 Rust unit tests cover the parser table plus tmp-vdb env-only/missing
 cases (the encoder half of the same crate builds the test archives).
+
+**`--check-news` `News-Item-Format` 1.x/2.x atom-validity gate.** The
+last `--check-news` v1 cut (Part 2.F): real
+`DisplayInstalledRestriction.isValid` (`news.py:396-407`) validates the
+`Display-If-Installed` atom under `isvalidatom(atom, eapi="0")` for a
+`1.*` item and `isvalidatom(atom, eapi="5")` for a `2.*` item. The
+earlier backlog premise ("needs `portage_dep` EAPI parametrization, a
+Part 3 non-goal") turned out stale: the split reduces to a *field*
+gate, not crate parametrization -- real EAPI 0 lacks slot deps
+(`slot_deps` is EAPI >= 1) and USE deps (`use_deps` is EAPI >= 2), so a
+1.x atom is legal only when it carries no `:slot`/`:slot/sub`, no
+`:=`/`:*` slot operator, and no `[use]` (the EAPI >= 5 superset
+`parse_atom` already implements is exactly the 2.x grammar). No
+EAPI-conditional logic is added to `portage_dep`, preserving the
+"no EAPI parametrization at all within the 5+ floor" decision (and this
+gate is about the *deprecated* EAPI 0 anyway -- a one-off legacy
+news-format rule, not ebuild-conditional behavior). `news_item_valid`
++ the Python mirror `_news_item_valid` now split out
+`news_item_format` (real `NewsItem.parse`'s break-on-first-match
+`fnmatch("[12].*")`) and gate per-format; 2.x keeps parse-at-all.
+Three new 1.x fixtures pin it black-box:
+`…-format1-slotatom` (`:slot`), `…-format1-useatom` (`[use]`) -- both
+rejected, neither counted nor in `.skip` -- and `…-format1-plain`
+(`dev-libs/samepkg`, valid + relevant, counted), bumping the check-news
+count 4 -> 5 (`test_check_news_counts_unread_relevant_items` +
+`test_check_news_matches_a_versioned_display_if_installed_atom` updated).
+Rust unit test covers the format extraction and the full accept/reject
+matrix; dual-language, all five check-news tests green and byte-identical.

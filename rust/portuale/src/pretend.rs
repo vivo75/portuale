@@ -5524,26 +5524,59 @@ fn write_news_state_if_changed(
 }
 
 /// Real `NewsItem.isValid`: a `News-Item-Format:` header whose value
-/// `fnmatch`es `[12].*` (i.e. starts `1.` or `2.`).
-fn news_item_valid(text: &str) -> bool {
-    let format_ok = text.lines().any(|l| {
-        l.strip_prefix("News-Item-Format:")
-            .map(str::trim)
-            .is_some_and(|v| v.starts_with("1.") || v.starts_with("2.") || v == "1" || v == "2")
-    });
-    if !format_ok {
-        return false;
+/// `fnmatch`es `[12].*` (i.e. starts `1.` or `2.`), and each
+/// `Display-If-Installed` atom passes the format-bound `isvalidatom`
+/// gate. Returns the format version as `Some(true)` for a 1.x item and
+/// `Some(false)` for 2.x -- real `NewsItem.parse`'s own
+/// `fnmatch.fnmatch(news_format, "[12].*")` break-on-first-match is
+/// mirrored (the first `1.*`/`2.*` header line wins). `None` carries
+/// "no valid format header" (real `_formatRE` miss -> invalid).
+fn news_item_format(text: &str) -> Option<bool> {
+    for line in text.lines() {
+        if let Some(v) = line.strip_prefix("News-Item-Format:").map(str::trim) {
+            if v.starts_with("1.") || v == "1" {
+                return Some(true);
+            }
+            if v.starts_with("2.") || v == "2" {
+                return Some(false);
+            }
+        }
     }
+    None
+}
+
+fn news_item_valid(text: &str) -> bool {
+    let Some(is_1x) = news_item_format(text) else {
+        return false;
+    };
     // Real `NewsItem.isValid` also fails the whole item when any
     // `Display-If-Installed:` restriction's own atom is malformed
-    // (`DisplayInstalledRestriction.__init__` -> `Atom(...)` ->
-    // `InvalidAtom` -> `self._valid = False`). Portuale's `parse_atom`
-    // has no EAPI parametrization (Part 3), so the 1.x/2.x `eapi="0"`
-    // vs `"5"` gate on which atom forms are legal isn't applied -- only
-    // "does it parse at all".
+    // (`DisplayInstalledRestriction.isValid` -> `isvalidatom(atom,
+    // eapi=…)` -> `InvalidAtom` -> `self._valid = False`).
+    //
+    // The `eapi="0"` (1.x) vs `eapi="5"` (2.x) split is *not* a
+    // `portage_dep` EAPI parametrization -- it is a narrow field gate,
+    // "does it parse at all" untouched: real EAPI 0 lacks slot deps
+    // (`slot_deps` is EAPI >= 1) and USE deps (`use_deps` is EAPI >= 2),
+    // so a 1.x Display-If-Installed atom is legal only when it carries
+    // no `:slot`/`:slot/sub` (also no `:=`/`:*` slot operator) and no
+    // `[use]`. A 2.x atom keeps the permissive parse-at-all check (its
+    // own grammar is exactly the EAPI-5+ superset `parse_atom` already
+    // implements). No crate EAPI parameterization is added -- Part 3's
+    // non-goal is about ebuild-conditional EAPI logic, not this
+    // one-off legacy news-format rule.
     text.lines()
         .filter_map(|l| l.strip_prefix("Display-If-Installed:").map(str::trim))
-        .all(|atom| parse_atom(atom).is_some())
+        .all(|atom| match parse_atom(atom) {
+            Some(a) => {
+                !is_1x
+                    || (a.slot.is_none()
+                        && a.sub_slot.is_none()
+                        && a.slot_operator.is_none()
+                        && a.use_deps.is_none())
+            }
+            None => false,
+        })
 }
 
 /// Real `NewsItem.isRelevant`: no restriction → relevant; otherwise each
@@ -5564,11 +5597,6 @@ fn news_item_valid(text: &str) -> bool {
 /// re-checks `atom.use_deps` against the matched version's vdb
 /// `IUSE`/`USE` via `use_deps_satisfied`. A malformed atom now makes the
 /// whole item *invalid* (see `news_item_valid`), not merely unsatisfied.
-///
-/// **v1 cut:** the `News-Item-Format` 1.x vs 2.x EAPI gate on which atom
-/// forms are legal (real `isValid`'s own `eapi="0"`/`"5"` split) is not
-/// applied -- `portage_dep` has no EAPI parametrization by design
-/// (Part 3 non-goal).
 fn news_item_relevant(text: &str, root: &Path) -> bool {
     let mut installed_atoms: Vec<&str> = Vec::new();
     for line in text.lines() {
@@ -10998,6 +11026,55 @@ mod tests {
 
     fn fixtures_root() -> std::path::PathBuf {
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures")
+    }
+
+    #[test]
+    fn news_item_format_and_valid_gate_the_1x_vs_2x_atom_split() {
+        // Real `DisplayInstalledRestriction.isValid`'s own
+        // `eapi="0"`/`eapi="5"` split, as a field-level (not crate EAPI
+        // parametrization) gate: 1.x rejects `:slot`/`:sub`/`:=`/`:*`/
+        // `[use]`, 2.x accepts them.
+        let item = |fmt: &str, atom: &str| {
+            format!("News-Item-Format: {fmt}\nDisplay-If-Installed: {atom}\n")
+        };
+        // Format extraction.
+        assert_eq!(news_item_format("x"), None);
+        assert_eq!(news_item_format("News-Item-Format: 1.0\n"), Some(true));
+        assert_eq!(news_item_format("News-Item-Format: 2.13\n"), Some(false));
+        // First matching header wins (real's break-on-first-match).
+        assert_eq!(
+            news_item_format("News-Item-Format: 2.0\nNews-Item-Format: 1.0\n"),
+            Some(false)
+        );
+
+        // 2.x: everything portuale parses is legal (superset grammar).
+        for a in [
+            "dev-libs/foo",
+            "dev-libs/foo:2",
+            "dev-libs/foo:2/3",
+            "dev-libs/foo:=",
+            "dev-libs/foo:*",
+            "dev-libs/foo[bar]",
+            "dev-libs/foo[bar(+)]",
+        ] {
+            assert!(news_item_valid(&item("2.0", a)), "2.x {a} valid");
+        }
+        // 1.x: plain only -- every slot / slot-op / use form is invalid.
+        assert!(news_item_valid(&item("1.0", "dev-libs/foo")));
+        for a in [
+            "dev-libs/foo:2",
+            "dev-libs/foo:2/3",
+            "dev-libs/foo:=",
+            "dev-libs/foo:*",
+            "dev-libs/foo[bar]",
+            "dev-libs/foo[bar(+)]",
+        ] {
+            assert!(!news_item_valid(&item("1.0", a)), "1.x {a} invalid");
+        }
+        // Both formats reject a malformed atom; a missing format header
+        // rejects too.
+        assert!(!news_item_valid(&item("2.0", "dev-libs/foo[[bad")));
+        assert!(!news_item_valid("Display-If-Installed: dev-libs/foo\n"));
     }
 
     #[test]

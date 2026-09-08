@@ -1,0 +1,9 @@
+Title: Portuale news: 2026-09-10-portuale-format1-useatom
+Author: Portuale Test <portuale@example.org>
+Content-Type: text/plain
+Posted: 2026-09-10
+Revision: 1
+News-Item-Format: 1.0
+Display-If-Installed: dev-libs/infoinstpkg[alpha]
+
+News-Item-Format 1.x evaluates Display-If-Installed under EAPI 0, which has no USE deps -- a [flag] atom is invalid, so real NewsItem.isValid rejects the whole item (neither counted nor added to .skip).

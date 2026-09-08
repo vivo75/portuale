@@ -12611,21 +12611,43 @@ def _run_search(
     return 0
 
 
-def _news_item_valid(text):
-    format_ok = False
+def _news_item_format(text):
+    """The `News-Item-Format` header's version: `True` for a 1.x item,
+    `False` for 2.x, `None` when no valid header is present (real
+    `NewsItem.parse`'s own `fnmatch(news_format, "[12].*")`). The first
+    `1.*`/`2.*` line wins. Mirrors pretend.rs's news_item_format."""
     for line in text.splitlines():
         if line.startswith("News-Item-Format:"):
             v = line[len("News-Item-Format:") :].strip()
-            if v.startswith(("1.", "2.")) or v in ("1", "2"):
-                format_ok = True
-    if not format_ok:
+            if v.startswith("1.") or v == "1":
+                return True
+            if v.startswith("2.") or v == "2":
+                return False
+    return None
+
+
+def _news_item_valid(text):
+    format_1x = _news_item_format(text)
+    if format_1x is None:
         return False
     # Real NewsItem.isValid also fails the whole item when a
     # Display-If-Installed atom is malformed (DisplayInstalledRestriction
-    # -> Atom(...) -> InvalidAtom -> _valid = False). Mirrors pretend.rs.
+    # .isValid -> isvalidatom(atom, eapi=...) -> InvalidAtom ->
+    # _valid = False). Mirrors pretend.rs's news_item_valid: the 1.x/2.x
+    # split is a narrow field gate (real EAPI 0 has no slot deps -- EAPI
+    # >= 1 -- and no USE deps -- EAPI >= 2), NOT a portage_dep EAPI
+    # parametrization, so no Part 3 non-goal is crossed.
     for line in text.splitlines():
         if line.startswith("Display-If-Installed:"):
-            if _parse_atom(line[len("Display-If-Installed:") :].strip()) is None:
+            atom = _parse_atom(line[len("Display-If-Installed:") :].strip())
+            if atom is None:
+                return False
+            if format_1x and not (
+                atom.slot is None
+                and atom.sub_slot is None
+                and atom.slot_operator is None
+                and atom.use is None
+            ):
                 return False
     return True
 
@@ -12633,11 +12655,10 @@ def _news_item_valid(text):
 def _news_item_relevant(text, root):
     """Real DisplayInstalledRestriction.checkRestriction: `vardb.match(
     self.atom)` -- a full atom match (version operators, slot/sub-slot,
-    and the atom's own use-deps against the installed version's recorded
-    USE) against every installed version of the atom's cat/pkg. Mirrors
-    pretend.rs's news_item_relevant. A malformed atom now makes the whole
-    item invalid (see _news_item_valid); the only remaining v1 cut is the
-    format-1.x/2.x EAPI atom-validity gate (no EAPI parametrization)."""
+     and the atom's own use-deps against the installed version's recorded
+     USE) against every installed version of the atom's cat/pkg. Mirrors
+     pretend.rs's news_item_relevant. A malformed atom now makes the whole
+     item invalid (see _news_item_valid)."""
     installed_atoms = [
         line[len("Display-If-Installed:") :].strip()
         for line in text.splitlines()
