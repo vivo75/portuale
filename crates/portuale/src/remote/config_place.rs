@@ -14,6 +14,17 @@ pub(crate) struct ConfigRootOverride {
     pub(crate) previous: Option<std::ffi::OsString>,
 }
 
+impl ConfigRootOverride {
+    pub(crate) fn set(dir: &std::path::Path) -> Self {
+        let previous = std::env::var_os("PORTAGE_CONFIGROOT");
+        // SAFETY: see the struct doc comment.
+        unsafe {
+            std::env::set_var("PORTAGE_CONFIGROOT", dir);
+        }
+        Self { previous }
+    }
+}
+
 impl Drop for ConfigRootOverride {
     fn drop(&mut self) {
         // SAFETY: see the struct doc comment.
@@ -173,4 +184,89 @@ pub(crate) fn remap_client_make_profile(
         "mrg: !!! the pulled client make.profile points at {target_text}: no server repo provides profiles/{rel}{name_note} ({} server repo(s) checked)",
         server_repos.len()
     ))
+}
+
+/// Place `/etc/portage` per `ConfigPlacement` (see `PlacedConfig`).
+/// `Err` is a pull failure (already a full `mrg: …` line); callers
+/// print it and exit 1, like the resolve path's own errors.
+pub(crate) fn place_config_root(
+    ctx: &RemoteContext,
+    control: Option<&std::path::Path>,
+) -> Result<PlacedConfig, String> {
+    // The server's own `make.globals`, located the way the local path
+    // locates it; read before the override below repoints
+    // `PORTAGE_CONFIGROOT` at the placed dir. `Server` placements need
+    // no seed; the pulled `Client` tree gets it as the resolve's bottom
+    // layer. Absent on the server (tests): contributes nothing.
+    // Portage: config.py, global_config_path
+    let server_config_root = portage_repo::config_root_from_env();
+    let server_globals = server_config_root.join("usr/share/portage/config/make.globals");
+    let (dir, tmp): (std::path::PathBuf, Option<std::path::PathBuf>) = match &ctx.etc_portage {
+        ConfigPlacement::Server(path) => (std::path::PathBuf::from(path), None),
+        ConfigPlacement::Client(path) => {
+            let tmp = TempDir::new("portuale-remote-etc").keep();
+            // The pulled tree is the *contents* of the client's
+            // `/etc/portage`; re-root it as `<tmp>/etc/portage`.
+            let pulled_portage = tmp.join("etc/portage");
+            if let Err(message) = pull_dir(ctx, control, path, &pulled_portage) {
+                // Best-effort: don't leave a partial pull behind.
+                let _ = std::fs::remove_dir_all(&tmp);
+                return Err(message);
+            }
+            if server_globals.is_file() {
+                let dest = tmp.join("usr/share/portage/config/make.globals");
+                if let Some(parent) = dest.parent()
+                    && let Err(e) = std::fs::create_dir_all(parent)
+                {
+                    let _ = std::fs::remove_dir_all(&tmp);
+                    return Err(format!(
+                        "mrg: staging the server make.globals under {}: {e}",
+                        tmp.display()
+                    ));
+                }
+                if let Err(e) = std::fs::copy(&server_globals, &dest) {
+                    let _ = std::fs::remove_dir_all(&tmp);
+                    return Err(format!(
+                        "mrg: staging the server make.globals under {}: {e}",
+                        tmp.display()
+                    ));
+                }
+            }
+            // A pulled `make.profile` may dangle when the client holds
+            // its repos elsewhere: remap its target text against the
+            // server's repos before the override below (server repos
+            // must be listed from the server root).
+            if let Err(message) = remap_client_make_profile(&tmp, path, &server_config_root) {
+                let _ = std::fs::remove_dir_all(&tmp);
+                return Err(message);
+            }
+            // The pulled tree may hold no `repos.conf` at all while the
+            // server holds the repos: seed the server's own global
+            // `repos.conf`, but only when the pulled tree has none -- a
+            // client file, if present, still wins. The loud `NoReposConf`
+            // error is kept otherwise, never a silent empty repo set.
+            let server_repos_conf = server_config_root.join("usr/share/portage/config/repos.conf");
+            if tmp
+                .join("etc/portage/repos.conf")
+                .symlink_metadata()
+                .is_err()
+                && server_repos_conf.is_file()
+                && let Err(e) =
+                    std::fs::copy(&server_repos_conf, tmp.join("etc/portage/repos.conf"))
+            {
+                let _ = std::fs::remove_dir_all(&tmp);
+                return Err(format!(
+                    "mrg: staging the server repos.conf under {}: {e}",
+                    tmp.display()
+                ));
+            }
+            (tmp.clone(), Some(tmp.clone()))
+        }
+    };
+    let guard = ConfigRootOverride::set(&dir);
+    Ok(PlacedConfig {
+        dir,
+        _config_guard: guard,
+        tmp,
+    })
 }

@@ -111,6 +111,8 @@ fn runtime_edge(atom: &str, cat: &str, pkg: &str) -> DepEdge {
         },
     )
 }
+
+mod alt_edges;
 mod build;
 mod debug;
 mod priority;

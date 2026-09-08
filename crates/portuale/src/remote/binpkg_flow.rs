@@ -448,3 +448,64 @@ pub(crate) fn run_binpkg_flow(args: RunBinpkgFlowArgs<'_>) -> Result<String, Str
     println!(">>> Remote merged {cpv}");
     Ok(cpv)
 }
+
+pub(crate) fn run_bundle_stage(
+    ctx: &RemoteContext,
+    control: Option<&std::path::Path>,
+    binpkg_path: &Path,
+) -> ExitCode {
+    if !binpkg_path.is_file() {
+        eprintln!("mrg: --remote-binpkg {}: not found", binpkg_path.display());
+        return ExitCode::from(1);
+    }
+    // The trial path resolves the client config exactly like the plan
+    // path: place `/etc/portage` through the shared `place_config_root`
+    // helper, then load the same repos + resolved config. Both placements
+    // always name a path; a pull or resolve failure is a hard error.
+    // `_placed` stays alive across the flow; its temp pull is removed
+    // best-effort on drop.
+    let _placed = match place_config_root(ctx, control) {
+        Ok(placed) => placed,
+        Err(message) => {
+            eprintln!("{message}");
+            return ExitCode::from(1);
+        }
+    };
+    let config_dir = _placed.dir.to_path_buf();
+    let (_repos, config) =
+        match crate::pretend::load_repos_and_config(&config_dir, &portage_repo::root_from_env()) {
+            Ok(loaded) => loaded,
+            Err(message) => {
+                eprintln!("mrg: --remote-binpkg: cannot resolve the client config: {message}");
+                return ExitCode::from(1);
+            }
+        };
+    let (install_mask, install_mask_prunes_usr_share) =
+        crate::pretend::config_install_mask(&config);
+    let regen_features = crate::pretend::config_features_string(&config);
+    let regen_bzip2 = crate::pretend::config_bzip2_command(&config);
+    // The trial ships exactly one unit, so the install stage always runs
+    // here (never under `--pretend`, which never reaches this executor).
+    if let Err(message) = ensure_client_binary(ctx, control) {
+        eprintln!("{message}");
+        return ExitCode::from(1);
+    }
+    match run_binpkg_flow(RunBinpkgFlowArgs {
+        ctx,
+        control,
+        binpkg_path,
+        ledger: None,
+        repo_override: None,
+        shadow: None,
+        install_mask: &install_mask,
+        install_mask_prunes_usr_share,
+        regen_features: Some(&regen_features),
+        regen_bzip2: Some(&regen_bzip2),
+    }) {
+        Ok(_) => ExitCode::from(0),
+        Err(message) => {
+            eprintln!("{message}");
+            ExitCode::from(1)
+        }
+    }
+}

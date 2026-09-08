@@ -1098,6 +1098,14 @@ pub fn command() -> Command {
     cmd
 }
 
+/// The action flag set on this invocation, if any (the `actions` frozenset
+/// members that select something other than a merge). Remote execution only
+/// runs installs: any action with `--remote-hostname` is a usage error
+/// (checked in `remote.rs`).
+pub(crate) fn action_selected(matches: &ArgMatches) -> Option<&'static str> {
+    ACTION_IDS.iter().find(|id| matches.get_flag(id)).copied()
+}
+
 /// Whether the emerge codepath (`pretend::run`, the parse loop in
 /// `pretend.rs`) has a branch for `long`. Options it handles are forwarded
 /// with their value (`--long=<value>`); the rest go BARE so `pretend::run`

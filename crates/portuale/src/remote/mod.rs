@@ -138,6 +138,11 @@ impl ConfigPlacement {
 /// `mrg` remote-with-atoms ever sets it; the `emerge` applet never does.
 static REMOTE_EXEC: std::sync::RwLock<Option<RemoteContext>> = std::sync::RwLock::new(None);
 
+/// Publish a remote execution for the upcoming `pretend::run` call.
+pub fn set_remote_exec(ctx: RemoteContext) {
+    *REMOTE_EXEC.write().unwrap() = Some(ctx);
+}
+
 /// Take a published remote execution, if any (clears the slot).
 pub fn take_remote_exec() -> Option<RemoteContext> {
     REMOTE_EXEC.write().unwrap().take()

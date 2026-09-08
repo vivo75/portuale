@@ -451,8 +451,11 @@ fn s8_sha256(path: &std::path::Path) -> String {
         sha2::Sha256::digest(std::fs::read(path).expect("test file reads"))
     )
 }
+
+mod binpkg_flow;
 mod context;
 mod host_keys;
+mod ledger;
 mod merge_script;
 mod preflight;
 mod ssh;

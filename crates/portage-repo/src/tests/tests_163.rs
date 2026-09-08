@@ -476,6 +476,63 @@ fn resolve_pretend_each_reinstall_trigger_fires_on_its_own() {
     }
 }
 
+/// The `Reinstall` disjunction fires on each arm alone: `--emptytree`
+/// and a non-selective top-level atom each reinstall a changeless
+/// installed version where a plain dependency keeps it.
+#[test]
+fn resolve_pretend_reinstall_disjunction_fires_on_each_arm_alone() {
+    // Baseline: plain dependency keeps the installed version.
+    let dir = dir_163("rp-rcond-base");
+    let repos = repo_pkgs_163(&dir, &[("dev-libs/rp", "1.0", "0", "", "", "amd64")]);
+    install_163(&dir, "dev-libs", "rp-1.0", "0", &[]);
+    let config = cfg_163();
+    let mut o = RpOpts163::dep();
+    o.selective = false;
+    assert_eq!(
+        resolve_163(&repos, &dir, &config, "dev-libs/rp", &o),
+        installed_163("1.0")
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+    // Each arm reinstalls bare.
+    let bare = PretendOutcome::Reinstall {
+        version: "1.0".to_string(),
+        changed_flags: Vec::new(),
+        deps_changed: false,
+        slot_changed: false,
+        rebuilt_binary: false,
+        new_repo: false,
+        slot_operator_rebuild: false,
+    };
+    for (tag, o) in [
+        (
+            "empty",
+            RpOpts163 {
+                empty: true,
+                ..RpOpts163::dep()
+            },
+        ),
+        (
+            "top",
+            RpOpts163 {
+                is_top_level: true,
+                selective: false,
+                ..RpOpts163::dep()
+            },
+        ),
+    ] {
+        let dir = dir_163(&format!("rp-rcond-{tag}"));
+        let repos = repo_pkgs_163(&dir, &[("dev-libs/rp", "1.0", "0", "", "", "amd64")]);
+        install_163(&dir, "dev-libs", "rp-1.0", "0", &[]);
+        let config = cfg_163();
+        assert_eq!(
+            resolve_163(&repos, &dir, &config, "dev-libs/rp", &o),
+            bare.clone(),
+            "{tag}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
 /// `--binpkg-changed-deps` drops a binary built against different
 /// dependencies: the stale binary must not win over the installed
 /// ebuild.
