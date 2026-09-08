@@ -153,5 +153,6 @@ fn s8_sha256(path: &std::path::Path) -> String {
 }
 mod context;
 mod host_keys;
+mod merge_script;
 mod preflight;
 mod ssh;

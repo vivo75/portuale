@@ -69,3 +69,195 @@ fn preflight_gates_catch_old_bash_missing_tools_and_roots() {
     assert!(failures.is_empty());
     assert_eq!(warnings.len(), 1);
 }
+
+#[test]
+fn preflight_script_reports_candidates_dirs_and_uname() {
+    // Render level with temp dirs: the script's candidate digests,
+    // writability and mode facts must match `sha256sum` / `stat` run
+    // directly.
+    let tmp = TempDir::new("portuale-remote-binscript").keep();
+    let dir = tmp.join("bin");
+    std::fs::create_dir_all(&dir).unwrap();
+    let present = dir.join("portuale");
+    std::fs::write(&present, b"client binary bytes").unwrap();
+    let missing = dir.join("portuale-0123456789abcdef");
+    assert!(!missing.exists());
+    let dirs = vec![dir.to_string_lossy().into_owned()];
+    let candidates = vec![
+        present.to_string_lossy().into_owned(),
+        missing.to_string_lossy().into_owned(),
+    ];
+    let script = preflight_script(
+        tmp.join("root").to_str().unwrap(),
+        tmp.join("work").to_str().unwrap(),
+        Some((&dirs, &candidates)),
+    );
+    assert!(script.contains("sha256sum"), "tool floor:\n{script}");
+    assert!(script.contains("UNAME_M"), "uname fact:\n{script}");
+    let output = std::process::Command::new("bash")
+        .args(["-s"])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .and_then(|mut child| {
+            use std::io::Write as _;
+            child.stdin.take().unwrap().write_all(script.as_bytes())?;
+            child.wait_with_output()
+        })
+        .expect("local bash runs the preflight script");
+    assert!(output.status.success());
+    let values = parse_kv(&String::from_utf8_lossy(&output.stdout));
+    use sha2::Digest as _;
+    let expected = format!("{:x}", sha2::Sha256::digest(b"client binary bytes"));
+    assert_eq!(
+        values.get("CAND_0_SHA").map(String::as_str),
+        Some(expected.as_str())
+    );
+    assert_eq!(
+        values.get("CAND_1_SHA").map(String::as_str),
+        Some("missing")
+    );
+    assert!(
+        values.get("UNAME_M").is_some_and(|m| !m.is_empty()),
+        "{values:?}"
+    );
+    assert_eq!(values.get("DIR_0_EXISTS").map(String::as_str), Some("yes"));
+    assert_eq!(
+        values.get("DIR_0_WRITABLE").map(String::as_str),
+        Some("yes")
+    );
+    let mode = values.get("DIR_0_MODE").map(String::as_str).unwrap_or("?");
+    assert!(
+        u32::from_str_radix(mode.trim(), 8).is_ok(),
+        "DIR_0_MODE must be octal: {values:?}"
+    );
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+/// The unpack driver rejects a truncated stream before touching
+/// anything: byte-count gate first, tar never runs on short input.
+#[test]
+fn unpack_script_rejects_a_truncated_bundle() {
+    let tmp = TempDir::new("portuale-remote-trunc").keep();
+    let staging = tmp.join("staging");
+    std::fs::create_dir_all(&staging).unwrap();
+    let staged = crate::remote_bundle::build_bundle(crate::remote_bundle::BuildBundleArgs {
+        binpkg_path: &fixture("pkgdir/dev-libs/packagepkg-1.0.tbz2"),
+        staging_tmp: &staging,
+        repo_override: None,
+        gpg: &crate::binpkg::GpgVerify::default(),
+        install_mask: "",
+        install_mask_prunes_usr_share: false,
+    })
+    .expect("fixture tbz2 stages");
+    // Simulate the streamed file, truncated to half its bytes.
+    let unit = tmp.join("work/packagepkg-1.0");
+    std::fs::create_dir_all(&unit).unwrap();
+    let bytes = std::fs::read(&staged.tarball).unwrap();
+    std::fs::write(unit.join("bundle.tar"), &bytes[..bytes.len() / 2]).unwrap();
+
+    let script = unpack_script(
+        tmp.join("work").to_str().unwrap(),
+        "packagepkg-1.0",
+        staged.byte_count,
+    );
+    let output = std::process::Command::new("bash")
+        .args(["-s"])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .and_then(|mut child| {
+            use std::io::Write as _;
+            child.stdin.take().unwrap().write_all(script.as_bytes())?;
+            child.wait_with_output()
+        })
+        .expect("local bash runs the driver");
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+    assert!(
+        stdout.contains("UNPACK=byte-count-mismatch"),
+        "unexpected driver output:\n{stdout}"
+    );
+    // Nothing unpacked: the gate runs before tar.
+    assert!(!unit.join("image").exists());
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+/// End to end through the merge driver (expected value from Portage): a
+/// bundle built with a non-empty mask merges without the masked files
+/// (not on the root, not in CONTENTS), while the merge-time aux files
+/// land in the vdb entry.
+#[test]
+fn remote_merge_masks_image_and_lands_aux_files_in_vdb() {
+    use md5::Digest as _;
+
+    let tmp = TempDir::new("portuale-remote-mask").keep();
+    let binpkg = fixture("pkgdir/dev-libs/packagepkg-1.0.tbz2");
+    let staging = tmp.join("staging");
+    std::fs::create_dir_all(&staging).unwrap();
+    let staged = crate::remote_bundle::build_bundle(crate::remote_bundle::BuildBundleArgs {
+        binpkg_path: &binpkg,
+        staging_tmp: &staging,
+        repo_override: None,
+        gpg: &crate::binpkg::GpgVerify::default(),
+        install_mask: "/usr/share/packagepkg",
+        install_mask_prunes_usr_share: false,
+    })
+    .expect("fixture tbz2 stages");
+    // Deliver the bundle the way the stream would, then run the unpack
+    // driver.
+    let work = tmp.join("work");
+    let unit = work.join("packagepkg-1.0");
+    std::fs::create_dir_all(&unit).unwrap();
+    std::fs::copy(&staged.tarball, unit.join("bundle.tar")).unwrap();
+    let script = unpack_script(work.to_str().unwrap(), "packagepkg-1.0", staged.byte_count);
+    let output = std::process::Command::new("bash")
+        .args(["-s"])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .and_then(|mut child| {
+            use std::io::Write as _;
+            child.stdin.take().unwrap().write_all(script.as_bytes())?;
+            child.wait_with_output()
+        })
+        .expect("local bash runs the driver");
+    let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+    assert!(
+        output.status.success() && stdout.contains("UNPACK=ok"),
+        "unpack driver failed:\n{stdout}"
+    );
+    // Run the merge driver against a scratch root.
+    let root = tmp.join("root");
+    std::fs::create_dir_all(root.join("var/db/pkg")).unwrap();
+    let ctx = local_ctx(root.to_str().unwrap(), work.to_str().unwrap());
+    let markers =
+        run_merge_stage(&ctx, None, unit.to_str().unwrap(), &staged, None).expect("merge succeeds");
+    assert!(markers.iter().any(|m| m == "MERGE_COPY=ok"), "{markers:?}");
+    assert!(markers.iter().any(|m| m == "MERGE_VDB=ok"), "{markers:?}");
+    // The masked file merged nowhere: not on the root, not in CONTENTS.
+    assert!(
+        !root.join("usr/share/packagepkg/hello.txt").exists(),
+        "masked file must not reach the merged root"
+    );
+    let vdb = root.join("var/db/pkg/dev-libs/packagepkg-1.0");
+    let contents = std::fs::read_to_string(vdb.join("CONTENTS")).unwrap();
+    assert!(
+        !contents.contains("hello.txt"),
+        "masked file must not reach CONTENTS:\n{contents}"
+    );
+    // The merge-time aux files land in the vdb entry verbatim.
+    let bytes = std::fs::read(&binpkg).unwrap();
+    assert_eq!(
+        std::fs::read_to_string(vdb.join("BINPKGMD5")).unwrap(),
+        format!("{:x}\n", md5::Md5::digest(&bytes)),
+    );
+    assert_eq!(
+        std::fs::read_to_string(vdb.join("INSTALL_MASK")).unwrap(),
+        "/usr/share/packagepkg\n",
+    );
+    let _ = std::fs::remove_dir_all(&tmp);
+}

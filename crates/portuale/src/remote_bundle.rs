@@ -499,6 +499,63 @@ mod tests {
     }
 
     #[test]
+    fn manifest_round_trips_and_rejects_garbage() {
+        let manifest = BundleManifest {
+            format: 1,
+            cpv: "dev-libs/packagepkg-1.0".to_string(),
+            slot: "0".to_string(),
+            repo: "testrepo".to_string(),
+            has_environment: true,
+        };
+        assert_eq!(BundleManifest::parse(&manifest.render()), Some(manifest));
+        assert_eq!(BundleManifest::parse("FORMAT=2\nCPV=x\n"), None);
+        assert_eq!(BundleManifest::parse("CPV=x\n"), None);
+        assert_eq!(
+            BundleManifest::parse("FORMAT=1\nCPV=x\nSLOT=0\nREPO=r\nHAS_ENVIRONMENT=maybe\n"),
+            None
+        );
+        assert_eq!(BundleManifest::parse("lowercase=1\n"), None);
+    }
+
+    #[test]
+    fn bundle_stages_image_build_info_environment_and_manifest() {
+        let tmp = tempdir("stage");
+        let staged = build_bundle(BuildBundleArgs {
+            binpkg_path: &fixture("pkgdir/dev-libs/packagepkg-1.0.tbz2"),
+            staging_tmp: &tmp,
+            repo_override: None,
+            gpg: &crate::binpkg::GpgVerify::default(),
+            install_mask: "",
+            install_mask_prunes_usr_share: false,
+        })
+        .expect("fixture tbz2 stages");
+        assert_eq!(staged.manifest.cpv, "dev-libs/packagepkg-1.0");
+        assert!(staged.byte_count > 0);
+        assert_eq!(
+            std::fs::metadata(&staged.tarball).unwrap().len(),
+            staged.byte_count
+        );
+        // The tar lists one top-level unit dir with the four members below.
+        let listing = std::process::Command::new("tar")
+            .args(["-tf"])
+            .arg(&staged.tarball)
+            .output()
+            .expect("tar -tf runs");
+        assert!(listing.status.success());
+        // `environment` rides along because this fixture carries one.
+        let listing = String::from_utf8_lossy(&listing.stdout).into_owned();
+        for member in [
+            "packagepkg-1.0/image/",
+            "packagepkg-1.0/build-info/",
+            "packagepkg-1.0/remote-manifest",
+            "packagepkg-1.0/environment",
+        ] {
+            assert!(listing.contains(member), "{member} missing:\n{listing}");
+        }
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
     fn bundle_repo_falls_back_to_resolver_override() {
         // The fixture carries no `repository`/`REPO` key, so the
         // resolver-known repo fills the manifest.
@@ -525,6 +582,147 @@ mod tests {
         })
         .expect("fixture tbz2 stages");
         assert_eq!(staged.manifest.repo, "__unknown__");
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// The bundle carries `build-info/BINPKGMD5` into the vdb verbatim,
+    /// and the tar carries it too.
+    #[test]
+    fn bundle_writes_binpkgmd5_of_the_shipped_binpkg() {
+        use md5::Digest as _;
+        let tmp = tempdir("binpkgmd5");
+        let binpkg = fixture("pkgdir/dev-libs/packagepkg-1.0.tbz2");
+        let staged = build_bundle(BuildBundleArgs {
+            binpkg_path: &binpkg,
+            staging_tmp: &tmp,
+            repo_override: None,
+            gpg: &crate::binpkg::GpgVerify::default(),
+            install_mask: "",
+            install_mask_prunes_usr_share: false,
+        })
+        .expect("fixture tbz2 stages");
+        let bytes = std::fs::read(&binpkg).unwrap();
+        let expected = format!("{:x}\n", md5::Md5::digest(&bytes));
+        assert_eq!(expected.len(), 33, "real BINPKGMD5 is 33 B");
+        assert_eq!(
+            std::fs::read_to_string(tmp.join("packagepkg-1.0/build-info/BINPKGMD5")).unwrap(),
+            expected,
+        );
+        let listing = std::process::Command::new("tar")
+            .args(["-tf"])
+            .arg(&staged.tarball)
+            .output()
+            .expect("tar -tf runs");
+        assert!(listing.status.success());
+        let listing = String::from_utf8_lossy(&listing.stdout).into_owned();
+        assert!(
+            listing.contains("packagepkg-1.0/build-info/BINPKGMD5"),
+            "BINPKGMD5 must ride the bundle:\n{listing}"
+        );
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// With a non-empty mask the bundle prunes the staged image before
+    /// `collect_filemeta` and ships `build-info/INSTALL_MASK`.
+    #[test]
+    fn bundle_applies_install_mask_before_filemeta() {
+        let tmp = tempdir("mask");
+        let staged = build_bundle(BuildBundleArgs {
+            binpkg_path: &fixture("pkgdir/dev-libs/packagepkg-1.0.tbz2"),
+            staging_tmp: &tmp,
+            repo_override: None,
+            gpg: &crate::binpkg::GpgVerify::default(),
+            install_mask: "/usr/share/packagepkg",
+            install_mask_prunes_usr_share: false,
+        })
+        .expect("fixture tbz2 stages");
+        assert_eq!(
+            std::fs::read_to_string(tmp.join("packagepkg-1.0/build-info/INSTALL_MASK")).unwrap(),
+            "/usr/share/packagepkg\n",
+        );
+        assert!(
+            !tmp.join("packagepkg-1.0/image/usr/share/packagepkg/hello.txt")
+                .exists(),
+            "masked file must be pruned from the staged image"
+        );
+        let filemeta = std::fs::read_to_string(tmp.join("packagepkg-1.0/filemeta")).unwrap();
+        assert!(
+            !filemeta.contains("hello.txt"),
+            "masked file must not reach filemeta:\n{filemeta}"
+        );
+        let listing = std::process::Command::new("tar")
+            .args(["-tf"])
+            .arg(&staged.tarball)
+            .output()
+            .expect("tar -tf runs");
+        assert!(listing.status.success());
+        let listing = String::from_utf8_lossy(&listing.stdout).into_owned();
+        assert!(
+            listing.contains("packagepkg-1.0/build-info/INSTALL_MASK"),
+            "INSTALL_MASK must ride the bundle:\n{listing}"
+        );
+        assert!(
+            !listing.contains("hello.txt"),
+            "masked file must not ride the bundle:\n{listing}"
+        );
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// The bundle ships an executable `bin/bzip2-passthrough` that ignores
+    /// compression flags while passing stdin through.
+    #[test]
+    fn bundle_ships_bzip2_passthrough_for_regen() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let tmp = tempdir("passthrough");
+        let _staged = build_bundle(BuildBundleArgs {
+            binpkg_path: &fixture("pkgdir/dev-libs/packagepkg-1.0.tbz2"),
+            staging_tmp: &tmp,
+            repo_override: None,
+            gpg: &crate::binpkg::GpgVerify::default(),
+            install_mask: "",
+            install_mask_prunes_usr_share: false,
+        })
+        .expect("fixture tbz2 stages");
+        let passthrough = tmp.join("packagepkg-1.0/bin/bzip2-passthrough");
+        assert_eq!(
+            std::fs::read_to_string(&passthrough).unwrap(),
+            BZIP2_PASSTHROUGH,
+        );
+        assert_eq!(
+            std::fs::metadata(&passthrough)
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o755,
+            "the client must execute it through ${{PORTAGE_BZIP2_COMMAND}}"
+        );
+        let listing = std::process::Command::new("tar")
+            .args(["-tf"])
+            .arg(tmp.join("bundle.tar"))
+            .output()
+            .expect("tar -tf runs");
+        assert!(listing.status.success());
+        let listing = String::from_utf8_lossy(&listing.stdout).into_owned();
+        assert!(
+            listing.contains("packagepkg-1.0/bin/bzip2-passthrough"),
+            "passthrough must ride the bundle:\n{listing}"
+        );
+        // Ignores Portage's `-c -f9`, copies stdin to stdout.
+        let output = std::process::Command::new("sh")
+            .arg(&passthrough)
+            .args(["-c", "-f9"])
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .spawn()
+            .and_then(|mut child| {
+                use std::io::Write as _;
+                child.stdin.take().unwrap().write_all(b"regen-bytes\n")?;
+                child.wait_with_output()
+            })
+            .expect("passthrough runs");
+        assert!(output.status.success());
+        assert_eq!(output.stdout, b"regen-bytes\n");
         let _ = std::fs::remove_dir_all(&tmp);
     }
 }
