@@ -51,6 +51,68 @@ fn eselect_stub(tag: &str) -> (std::path::PathBuf, std::path::PathBuf) {
     (dir, marker)
 }
 
+/// Runs `emerge <ask_flags> --oneshot dev-libs/schedok` on a pty, declining both
+/// the news prompt and the merge prompt. Returns stdout for the caller's checks.
+#[cfg(unix)]
+fn ask_read_news_declined(label: &str, ask_flags: [&str; 2]) -> String {
+    use std::io::Write;
+    let portuale_bin = built_portuale_bin();
+    let (stubdir, marker) = eselect_stub(label);
+    let path = format!(
+        "{}:{}",
+        stubdir.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    let base = TempDir::new(&format!("ask_read_news_{label}")).keep();
+    let root = base.join("root");
+    std::fs::create_dir_all(&root).unwrap();
+    let mut env = news_resolve_env(&root, &base.join("pt"));
+    env.push(("PATH".to_string(), path));
+    let (mut master, slave_stdio) = pty_pair();
+    let child = std::process::Command::new(&portuale_bin)
+        .args([
+            "emerge",
+            ask_flags[0],
+            ask_flags[1],
+            "--oneshot",
+            "dev-libs/schedok",
+        ])
+        .stdin(slave_stdio)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .envs(env)
+        .spawn()
+        .expect("portuale emerge spawns");
+    master.write_all(b"No\n").expect("decline the news prompt");
+    master.write_all(b"No\n").expect("decline the merge prompt");
+    let output = wait_pty_output(child);
+    drop(master);
+    assert_eq!(
+        output.status.code(),
+        Some(130),
+        "stdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("Would you like to read the news items while calculating dependencies?"),
+        "{stdout}"
+    );
+    assert_eq!(
+        stdout.matches("news items need reading").count(),
+        1,
+        "{stdout}"
+    );
+    assert!(
+        !marker.exists(),
+        "a declined news prompt must not spawn eselect"
+    );
+    let _ = std::fs::remove_dir_all(&base);
+    let _ = std::fs::remove_dir_all(stubdir);
+    stdout.into_owned()
+}
+
 /// An unowned ROOT for the privilege tests; `None` for a root caller, whose test
 /// returns early.
 #[cfg(unix)]
@@ -267,6 +329,7 @@ mod atoms;
 mod attrs;
 mod conflicts;
 mod env_config;
+mod news;
 mod prompt;
 mod resume;
 mod unmerge;

@@ -177,3 +177,17 @@ pub(crate) fn check_binary_plan(entries: &[portage_repo::GraphEntry]) -> Result<
         ))
     }
 }
+
+/// Arguments of [`run_binpkg_flow`].
+pub(crate) struct RunBinpkgFlowArgs<'a> {
+    pub(crate) ctx: &'a RemoteContext,
+    pub(crate) control: Option<&'a std::path::Path>,
+    pub(crate) binpkg_path: &'a Path,
+    pub(crate) ledger: Option<&'a LedgerSpec>,
+    pub(crate) repo_override: Option<&'a str>,
+    pub(crate) shadow: Option<&'a VdbShadow>,
+    pub(crate) install_mask: &'a str,
+    pub(crate) install_mask_prunes_usr_share: bool,
+    pub(crate) regen_features: Option<&'a str>,
+    pub(crate) regen_bzip2: Option<&'a str>,
+}

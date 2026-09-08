@@ -99,3 +99,18 @@ pub(crate) fn run_source_merge_plan(args: RunSourceMergePlanArgs<'_>) -> Option<
     }
     None
 }
+
+/// The values [`run_binary_merge_plan`] reads from its caller.
+pub(crate) struct RunBinaryMergePlanArgs<'a> {
+    pub(crate) opts: &'a EmergeOpts<'a>,
+    pub(crate) entries: &'a Vec<GraphEntry>,
+    pub(crate) config: &'a Config,
+    pub(crate) repos: &'a [RepoConfig],
+    pub(crate) root: &'a Path,
+    pub(crate) portage_tmpdir: &'a Path,
+    pub(crate) package_options: &'a PackageOptions,
+    pub(crate) merge_options: &'a MergeOptions,
+    pub(crate) buildpkg: Option<&'a PackageOptions>,
+    pub(crate) status_mode: StatusMode,
+    pub(crate) color: Colorizer,
+}

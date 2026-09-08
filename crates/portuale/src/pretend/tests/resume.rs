@@ -1,6 +1,69 @@
 use super::*;
 
 #[test]
+fn resume_pretend_end_notice_prints_once_like_portage() {
+    // Portage: actions.py, post_emerge.py. `--resume --pretend` prints the end notice exactly once.
+    let portuale_bin = built_portuale_bin();
+    let (root, _) = stale_resume_root("news_pretend");
+    let tmp = TempDir::new("resume_news_pretend").keep();
+    let output = std::process::Command::new(&portuale_bin)
+        .args(["emerge", "--resume", "--pretend"])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .envs(news_resolve_env(&root, &tmp.join("pt-resume-news")))
+        .output()
+        .expect("portuale emerge spawns");
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("dev-libs/stale-a-1"), "{stdout}");
+    assert_eq!(
+        stdout.matches("news items need reading").count(),
+        1,
+        "{stdout}"
+    );
+    let _ = std::fs::remove_dir_all(&tmp);
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn resume_skipfirst_empty_list_prints_only_the_pre_notice_like_portage() {
+    // Portage: actions.py. The pre-resolution notice precedes resume handling;
+    // the post notice needs a changed vdb.
+    let portuale_bin = built_portuale_bin();
+    let root = single_resume_root("news_empty");
+    let tmp = TempDir::new("resume_news_empty").keep();
+    let output = std::process::Command::new(&portuale_bin)
+        .args(["emerge", "--resume", "--skipfirst"])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .envs(news_resolve_env(&root, &tmp.join("pt-resume-empty")))
+        .output()
+        .expect("portuale emerge spawns");
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("nothing to do"), "{stdout}");
+    assert_eq!(
+        stdout.matches("news items need reading").count(),
+        1,
+        "{stdout}"
+    );
+    let _ = std::fs::remove_dir_all(&tmp);
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
 fn pretend_writes_no_resume_list_even_with_a_stale_list_present() {
     // Portage: actions.py. `--pretend` returns before the scheduler, so it
     // never touches the resume list.

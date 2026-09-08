@@ -127,6 +127,35 @@ pub(crate) fn bin_preflight(ctx: &RemoteContext) -> Result<Option<BinPreflight>,
     }))
 }
 
+/// Whether `dir` (preflight index `j`) may receive the install: it must
+/// exist and be writable, and a world-writable directory without the
+/// sticky bit is refused. `Err` names the reason for the report.
+pub(crate) fn dir_writable_for_install(
+    values: &HashMap<String, String>,
+    j: usize,
+    dir: &str,
+) -> Result<(), String> {
+    let yes = "yes".to_string();
+    if values.get(&format!("DIR_{j}_EXISTS")) != Some(&yes) {
+        return Err(format!("client directory {dir} does not exist"));
+    }
+    if values.get(&format!("DIR_{j}_WRITABLE")) != Some(&yes) {
+        return Err(format!("client directory {dir} is not writable"));
+    }
+    let mode_text = values
+        .get(&format!("DIR_{j}_MODE"))
+        .map(String::as_str)
+        .unwrap_or("");
+    let mode = u32::from_str_radix(mode_text.trim(), 8)
+        .map_err(|_| format!("client directory {dir}: cannot read its mode ({mode_text:?})"))?;
+    if mode & 0o002 != 0 && mode & 0o1000 == 0 {
+        return Err(format!(
+            "client directory {dir} is world-writable without the sticky bit (refused)"
+        ));
+    }
+    Ok(())
+}
+
 /// Run the install stage when the plan says so: `Use`/`Local` are
 /// no-ops (no status line -- a reuse prints nothing); `Unresolved`
 /// is an internal error (preflight never ran).

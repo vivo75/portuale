@@ -17,6 +17,24 @@ pub(crate) fn eapi_exports_merge_type(eapi: &str) -> bool {
     }
 }
 
+/// Arguments of [`phase_exports`].
+pub(crate) struct PhaseExportsArgs<'a> {
+    pub(crate) ebuild: &'a str,
+    pub(crate) build_dir: &'a str,
+    pub(crate) root: &'a str,
+    pub(crate) image_dir: &'a str,
+    pub(crate) temp_dir: &'a str,
+    pub(crate) work_subdir: &'a str,
+    pub(crate) home_dir: &'a str,
+    pub(crate) files_dir: &'a str,
+    pub(crate) bin_dir: &'a str,
+    pub(crate) tmpdir: &'a str,
+    pub(crate) colormap: &'a str,
+    pub(crate) staged: &'a crate::remote_bundle::StagedBundle,
+    pub(crate) phase: &'a str,
+    pub(crate) portuale_bin: &'a str,
+}
+
 /// Locale variables the regen postinst run re-exports into the client
 /// phase env. Only set variables are ever forwarded (never invented
 /// defaults). `LANGUAGE` is not in Portage's whitelist -- it rides along
