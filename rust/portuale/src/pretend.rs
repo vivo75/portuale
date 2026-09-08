@@ -9051,6 +9051,26 @@ pub fn run(args: &[String]) -> ExitCode {
         return ExitCode::from(1);
     }
 
+    // Real `actions.py:3964-4012`: an action that writes into a
+    // root-owned filesystem -- any real merge, plus `--unmerge`/-C,
+    // `--depclean`/-c, `--prune`/-P, `--deselect`/-W (world-file
+    // rewrite), `--config`, `--clean` -- requires `secpass == 2`
+    // (`uid == 0`, or non-root ownership of the target root; see
+    // `privileges::is_privileged`). `--pretend` and the read-only query
+    // actions are exempt. `--regen` rewrites the repo cache, not the
+    // root, so it is not gated here.
+    let write_action = !pretend
+        && !search_action
+        && !info_action
+        && !list_sets
+        && !check_news
+        && !regen_action
+        && !metadata_action;
+    if write_action && !crate::privileges::is_privileged(&root_from_env()) {
+        crate::privileges::deny_superuser("emerge");
+        return ExitCode::from(1);
+    }
+
     // Real `actions.py:4106-4111`: the `config`, `metadata` and `regen`
     // actions reject `--pretend` outright (they only ever do real work,
     // so a dry run is meaningless). `--config` already runs ignoring

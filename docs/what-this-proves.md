@@ -4668,6 +4668,47 @@ sorted by filename for deterministic tests, rather than real
 `os.listdir()`'s own arbitrary/OS-dependent order (`CONTENTS` line order
 has no real semantic meaning portage itself relies on).
 
+### `emerge` / `ebuild`: install and uninstall require privilege (`secpass == 2`)
+
+Real `_emerge/actions.py:3964-4012`: before running any action that
+writes into a root-owned filesystem, `emerge` checks
+`portage.data.secpass`. A real merge -- plus `--unmerge`/`-C`,
+`--depclean`/`-c`, `--prune`/`-P`, `--deselect`/`-W` (world-file
+rewrite), `--config`, `--clean` -- needs `secpass == 2`, and exits `1`
+with `emerge: superuser access is required` otherwise. `secpass == 2`
+means `uid == 0` **or** real "unprivileged mode" (`data.py:111-114`):
+the caller is not root but *owns* the target root -- can write to it,
+and it is not writable merely because of the world-writable bit -- which
+covers a prefix / chroot / staging tree the user set up themselves.
+
+Portuale has no `portage`-group tier (real `secpass == 1`, which only
+ever grants `--fetchonly`/`--buildpkgonly`), so this collapses to a
+single check, `privileges::is_privileged(root)`: `geteuid() == 0`, or a
+non-root caller who owns `$ROOT` (or its nearest existing ancestor, real
+`first_existing`) and it is not world-writable. The gate lives once in
+`pretend::run` (right after the `--sync`/`--ask` guards), exempting
+`--pretend` and the read-only query actions (`--search`, `--info`,
+`--list-sets`, `--check-news`) and `--regen`/`--metadata` (which write
+the repo cache, not the root). `mrg` routes through `pretend::run` so it
+is covered for free.
+
+Real `bin/ebuild` has *no* such upfront guard -- it just fails
+mid-phase with a permissions error. Portuale adds the same clear check
+for `ebuild <file> merge|qmerge|unmerge` (`ebuild.rs`), the commands
+that mutate the live root and vdb; every other `ebuild` phase
+(`unpack`/`compile`/`install`/...) writes only into `${WORKDIR}`/`${D}`
+under `PORTAGE_TMPDIR` and is left ungated.
+
+The escape hatch is what keeps the whole test suite working: every
+real-merge test in `test_portuale.py` merges into a `tmp_path` root the
+test user just created, so `is_privileged` returns `true` in unprivileged
+mode. `test_emerge_and_ebuild_refuse_to_merge_into_a_root_owned_tree`
+(skipped when the suite itself runs as root) points `$ROOT` at a
+non-existent child of `/usr` and asserts `emerge -C` / `--depclean` /
+a plain merge / `ebuild ... merge` are all refused, while `--pretend`
+and `--info` still run. Four `privileges` unit tests cover the
+ownership / world-writable / unreachable-parent branches.
+
 ### Real package removal: `unmerge` (task #55's own natural complement)
 
 `ebuild <file> unmerge` (`portuale/src/ebuild_unmerge.rs`) really

@@ -321,6 +321,23 @@ pub fn run(args: &[String]) -> ExitCode {
                 .unwrap_or(false),
         };
         let ebuild_path = std::path::Path::new(ebuild_file);
+
+        // `merge` / `qmerge` / `unmerge` write into a root-owned
+        // filesystem and the vdb -- refuse them up front for an
+        // unprivileged caller (real `bin/ebuild` has no such guard and
+        // just fails mid-phase; portuale gives the same clear error
+        // `emerge` does -- see `privileges::is_privileged`). Non-root
+        // ownership of `$ROOT` (a prefix / staging tree) is still allowed.
+        if commands.iter().any(|&c| {
+            ebuild_merge::is_real_merge_command(c)
+                || ebuild_merge::is_real_qmerge_command(c)
+                || ebuild_unmerge::is_real_unmerge_command(c)
+        }) && !crate::privileges::is_privileged(&root)
+        {
+            crate::privileges::deny_superuser("ebuild");
+            return ExitCode::from(1);
+        }
+
         // One command at a time here, not the whole slice at once --
         // neither `merge`/`unmerge` nor `package` is itself an
         // ebuild_phases-recognized phase (real `doebuild()` handles them

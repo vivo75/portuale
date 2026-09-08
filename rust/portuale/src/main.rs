@@ -37,6 +37,7 @@ mod needed_elf;
 mod portage_lock;
 mod preserved_libs;
 mod pretend;
+mod privileges;
 mod regen;
 mod remote;
 

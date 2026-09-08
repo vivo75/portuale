@@ -1694,6 +1694,49 @@ def test_emerge_unmerge_without_pretend_really_removes_and_deselects(
     assert (root / "var/lib/portage/world").read_text() == "dev-libs/keepme\n"
 
 
+@pytest.mark.skipif(
+    os.geteuid() == 0, reason="the privilege gate only fires for a non-root caller"
+)
+def test_emerge_and_ebuild_refuse_to_merge_into_a_root_owned_tree(emerge_binary, tmp_path):
+    """Real `actions.py:3964-4012`: an install/uninstall operation into a
+    filesystem the caller does not own needs superuser access. Portuale
+    checks this up front for `emerge` (merge / -C / --depclean / --prune /
+    --deselect / --config) and for `ebuild ... merge|qmerge|unmerge`.
+    `--pretend` and the read-only query actions are exempt, and non-root
+    ownership of $ROOT (a prefix / staging tree) is still allowed -- every
+    other real-merge test in this file relies on that escape hatch."""
+    ebuild_link = tmp_path / "ebuild"
+    ebuild_link.symlink_to(Path(emerge_binary).resolve())
+    # /usr reliably exists, is root-owned and not world-writable, so its
+    # non-existent child is an unowned target for a non-root caller.
+    denied_root = "/usr/portuale-privilege-test-does-not-exist"
+    env = dict(os.environ)
+    env["PORTAGE_CONFIGROOT"] = FIXTURES_ROOT
+    env["ROOT"] = denied_root
+
+    for cmd in (
+        [str(emerge_binary), "-C", "dev-libs/anything"],
+        [str(emerge_binary), "--depclean"],
+        [str(emerge_binary), "dev-libs/newpkg"],
+        [
+            str(ebuild_link),
+            str(Path(FIXTURES_ROOT) / "repo/dev-libs/newpkg/newpkg-1.0.ebuild"),
+            "merge",
+        ],
+    ):
+        r = subprocess.run(cmd, capture_output=True, text=True, check=False, env=env)
+        assert r.returncode == 1, (cmd, r.stdout, r.stderr)
+        assert "superuser access is required" in r.stderr, (cmd, r.stderr)
+
+    # --pretend and --info are exempt (no write, so no privilege needed).
+    for cmd in (
+        [str(emerge_binary), "--pretend", "dev-libs/newpkg"],
+        [str(emerge_binary), "--info"],
+    ):
+        r = subprocess.run(cmd, capture_output=True, text=True, check=False, env=env)
+        assert "superuser access is required" not in r.stderr, (cmd, r.stderr)
+
+
 def test_emerge_preserved_libs_advisory_and_rebuild_set(emerge_binary, tmp_path):
     """Real `post_emerge()` + `display_preserved_libs()`
     (`post_emerge.py:141-152`): after `emerge -C` preserves a still-linked
