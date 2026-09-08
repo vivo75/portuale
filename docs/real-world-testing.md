@@ -55,6 +55,17 @@ So: reframe "binary comparison" as **"normalised filesystem + VDB +
 metadata comparison against a documented normalisation ruleset, plus a
 checked-in allowlist of justified divergences."**
 
+A raw `cmp` is noise, but a *normalised* archive comparison is still
+worth having as a distinct, cheap check — see §4.7: a small
+`TEST/compare/gpkg-diff.sh` that unpacks two `.gpkg.tar` (or `.tbz2`)
+into scratch dirs, drops the volatile fields (`BUILD_TIME`, `BUILD_ID`,
+`COUNTER`, mtimes, `Manifest` hashes), and diffs the trees + `build-info/`.
+For deep structural insight into *why* two archives differ, use
+[`diffoscope`](https://diffoscope.org/) — it already recurses into tar,
+gzip/zstd, ELF, and ar members and renders a readable nested diff; run it
+builder-side (it is Python, so not on the `mrg` client) as the
+investigation tool once `gpkg-diff.sh` flags a mismatch.
+
 ### 1.2 Compiler nondeterminism will swamp a build-vs-build diff
 
 If the Portage builder and the Portuale builder each *compile* the same
@@ -132,7 +143,10 @@ sub-uid range. Expect to need `--security-opt seccomp=unconfined`
 (already in the example), possibly `FEATURES="-network-sandbox"` in the
 rootless variant, and an explicit `RESTRICT=network-sandbox` fallback.
 This is a known risk, not a blocker (memory:
-`sandbox-build-isolation-complete`).
+`sandbox-build-isolation-complete`). **Decision (§1.10): use root
+containers wherever they give a cleaner test** — the builder and
+source-parity roles run rootless only if it turns out to be
+frictionless, else `sudo podman` with the full `FEATURES` set intact.
 
 ### 1.9 Minor
 
@@ -142,6 +156,25 @@ This is a known risk, not a blocker (memory:
   symlinks next to `portuale` (README). The images mount
   `rust/target/release` on `/usr/local/bin` and rely on those symlinks
   existing.
+
+### 1.10 Decisions taken (2026-09-08 review)
+
+The user reviewed §1.1–§1.9 and settled:
+
+1. **§1.1** — accepted. *Additionally*: build small purpose utilities for
+   comparing like resources (the `gpkg-diff.sh` "unpack both, strip
+   `BUILD_TIME`/`BUILD_ID`, diff trees" tool), and lean on the existing
+   [`diffoscope`](https://diffoscope.org/) for deep structural
+   investigation. Both fold into §4 (the normalised `$ROOT`+VDB
+   comparison stays the primary gate; `gpkg-diff.sh` + `diffoscope` are
+   the archive-level check and the drill-down tool).
+2. **§1.2 / §1.3 / §1.4** — accepted as written. One image was always a
+   possibility, never a requirement, so the two-image split is fine.
+3. **§1.5 / §1.8** — **root containers are acceptable** if they produce a
+   better test. No need to bend the design around rootless podman;
+   prefer the configuration that keeps `FEATURES` / sandboxing / uid
+   mapping realistic and comparable.
+4. **§1.9** — `mrg` typo confirmed.
 
 ---
 
@@ -180,7 +213,10 @@ Extends today's `TEST/create-container.bash` output:
   `/TEST/scripts/NN-*.sh` in lexicographic order.
 - Adds: `app-misc/jq` or a static `busybox` for the snapshot tooling;
   `dev-vcs/git` already present; a small static `sha256`/`tar` is
-  guaranteed by coreutils.
+  guaranteed by coreutils. Also `dev-util/diffoscope` (and its optional
+  deps that matter here: `binutils`, `zstd`, `gzip`) for archive
+  drill-down (§4.7) — builder/analysis roles only, irrelevant to the
+  `mrg` client image.
 
 Used for roles: **builder-portage**, **builder-portuale**,
 **consumer-portage**, **consumer-portuale**, **mrg-server**,
@@ -330,6 +366,30 @@ exercise.
 - Symmetric diff that flips when you swap which PM goes first → order
   dependence / global state leak.
 
+### 4.7 Archive-level comparison — `gpkg-diff.sh` + `diffoscope`
+
+Complements the `$ROOT`+VDB diff; used in L2 (Portuale-built archives)
+and any time two `.gpkg.tar` / `.tbz2` need comparing.
+
+`TEST/compare/gpkg-diff.sh <a> <b>`:
+
+1. Unpack both archives into scratch dirs (handles gpkg's nested
+   `image.tar` + `metadata.tar` and xpak's trailing-segment layout).
+2. Strip the volatile set: `build-info/BUILD_TIME`, `build-info/BUILD_ID`,
+   `build-info/COUNTER`, `build-info/environment` (through §4.3
+   normalisation), the embedded `Manifest` hash lines, and all mtimes.
+3. `diff -r` the normalised trees; categorise like §4.4
+   (`build-info/<file>` mismatches are their own bucket).
+4. Exit non-zero on any hard diff not in `known-divergences.yaml`.
+
+When `gpkg-diff.sh` flags something, run
+[`diffoscope`](https://diffoscope.org/) `<a> <b>` for the readable
+nested diff — it already recurses tar → gzip/zstd → ELF/ar and shows
+exactly which member and which bytes differ. `diffoscope` is Python, so
+it runs builder-side only, never on the `mrg` client; it is an
+investigation aid, not a gate (its output is not stable enough to
+allowlist against).
+
 ---
 
 ## 5. Test layers
@@ -388,13 +448,19 @@ Gate: `diff.py` clean modulo allowlist.
 
 ### L2 — Portuale as builder, structural + cross-install (tens of minutes)
 
-1. `builder-portuale`: `emerge -b` the L1 set from source.
+1. `builder-portuale`: `emerge -b` the L1 set from source. For a subset
+   also have `builder-portage` build the *same* atoms with
+   `SOURCE_DATE_EPOCH` + `-j1` pinned (§8) so the two archives are as
+   close to comparable as the toolchain allows.
 2. Structural check of each `.gpkg.tar` Portuale produced:
    `TEST/compare/gpkg-structure.sh` — member list, path prefixes
    (`image/` handling — memory: `gpkg-vdb-entry-fix`), `build-info/`
    file set, `metadata` consolidation, embedded `Manifest`, MD5 in the
    `Packages` index, multi-instance `<cat>/<pn>/<pf>-<BUILD_ID>.gpkg.tar`
    layout (memory: `binpkg-multi-instance-both-formats`).
+   Then `TEST/compare/gpkg-diff.sh` (§4.7) against the paired
+   Portage-built archive where one exists; `diffoscope` on any
+   `build-info/` or metadata-segment mismatch it reports.
 3. **Cross-install**: `consumer-portage` merges the Portuale-built
    archive. It must merge cleanly and produce a VDB/`$ROOT` that
    matches a Portage-built-then-Portage-installed reference (modulo
@@ -595,7 +661,8 @@ TEST/
     diff.py
     normalize.md               # the §4.3 ruleset, prose
     normalize.py               # its implementation
-    gpkg-structure.sh
+    gpkg-structure.sh          # §4.7 archive structural validation
+    gpkg-diff.sh               # §4.7 normalised archive-vs-archive diff
     known-divergences.yaml
   atomlists/
     l0-resolve.txt
@@ -666,11 +733,11 @@ L0–L2 for N consecutive weeks with a stable allowlist, plus a clean L3
 
 ## 12. Risks & open questions (re-open, don't silently default)
 
-1. **Rootless sandbox** (§1.8): does `FEATURES=network-sandbox` /
-   `userpriv` / `usersandbox` work under `vivo`'s
-   `100000:65536` mapping, or do we need a root container for L1–L3?
-   *Lean: try rootless, fall back to root containers for the builder
-   role only, keep consumers rootless.*
+1. **Sandbox** (§1.8) — **resolved**: root containers are acceptable.
+   Run whichever roles need it (builder, source-parity) under
+   `sudo podman` with the full `FEATURES` set; use rootless only where
+   it is frictionless. Still verify `network-sandbox` / `userpriv`
+   actually engage inside the container and note where they do not.
 2. **Which HTTP server** for the binhost — `busybox httpd`, `thttpd`,
    or (builder-side only) `python3 -m http.server`? Must do `HEAD` +
    correct `Content-Length` + range requests (Portage resume).
@@ -743,8 +810,10 @@ run. Committed only when asked.
    with `cfgprotect`, `setuid`, `hardlinks`, `symfarm`, `emptydirs`,
    `installmask`, `splitdebug`, `phases`). Wire into L1. Deliverable:
    per-behaviour parity.
-4. **L2 Portuale-as-builder + `gpkg-structure.sh`.** Structural
-   validation + cross-install both directions. Deliverable: L2 report.
+4. **L2 Portuale-as-builder + `gpkg-structure.sh` + `gpkg-diff.sh`.**
+   Structural validation, normalised archive-vs-archive diff (§4.7),
+   `diffoscope` wired as the drill-down aid, cross-install both
+   directions. Deliverable: L2 report.
 5. **L5 lifecycle.** unmerge / depclean / preserve-libs (needs
    `porttest/soname-{1,2}`) / CONFIG_PROTECT / `--resume` / news.
    Deliverable: L5 report.
