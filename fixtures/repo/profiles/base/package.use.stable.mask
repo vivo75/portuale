@@ -1,0 +1,6 @@
+# fixture: mask "xmc" for dev-libs/crossmaskcancelpkg at the *base* level.
+# arch/amd64/use.mask (a LATER chain level) then un-masks it globally with
+# "-xmc" -- real UseManager.getUseMask interleaves the sources per profile
+# level, so the later global -xmc wins. The old flat use_mask union could
+# not express that cross-source cancellation.
+dev-libs/crossmaskcancelpkg xmc

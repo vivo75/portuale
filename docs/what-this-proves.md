@@ -15461,3 +15461,62 @@ dependent-drop diamond, vdb/edb/ledger-dir/explicitness parsing).
 Deliberate deviations recorded: stateless writes no vdb entry at all
 (single-writer principle -- the server owns installed-db state), and
 the pre-check is lenient on same-package ownership by design.
+
+L0-found resolver fixes (2026-09-08, triaged from
+`TEST/run/l0-resolver.sh`'s first real-tree run against a live 3.0.82.2
+`emerge -pv`):
+
+**Per-profile-level `use.mask`/`use.force` interleave.** Real
+`UseManager.getUseMask(pkg)` / `getUseForce(pkg)` stack the four sources
+(`use.mask`, `use.stable.mask`, `package.use.mask`,
+`package.use.stable.mask`) **interleaved per profile level** --
+`for i: append usemask[i], usestablemask[i], pusemask[i][cp],
+pusestablemask[i][cp]` -- and only then collapse with one
+`stack_lists(incremental=True)`. So a *global* `use.mask` `-flag` line
+at a *later* profile level cancels an *earlier* level's
+`package.use.mask` entry (and vice-versa). Portuale modelled the four
+sources as flat collections and unioned them in `forced_or_masked_flags`
+/ `effective_use_flags`, which structurally could not express that
+cross-source cancellation: `dev-libs/glib`'s `sysprof` is masked by
+`base/package.use.stable.mask` and then un-masked by
+`arch/amd64/use.mask`'s `-sysprof`, so real renders `USE="… -sysprof …"`
+(plain, user-changeable) where portuale rendered `(-sysprof)` (forced)
+-- and the same on `dev-util/mesa_clc`'s `VIDEO_CARDS`. Fixed:
+`portage_profile::Config` now also carries `use_mask_force_levels` (the
+eight sources per chain level + a synthetic repo-level entry);
+`portage_repo::resolved_use_mask_or_force` replays real's per-level
+interleave and both `effective_use_flags` and `forced_or_masked_flags`
+use it. The flat fields stay for the global-only readers (`emerge
+--info`'s `USE=` line -- real `getUseMask(None)`, the REQUIRED_USE
+valid-IUSE domain, `--newuse`'s forced-flags filter). Dual-language; new
+fixture `dev-libs/crossmaskcancelpkg` mirrors the glib case exactly
+(`base/package.use.stable.mask` masks `xmc`, `arch/amd64/use.mask`
+un-masks it, IUSE `+xmc`, so `USE="xmc"`);
+`test_later_level_global_use_mask_cancels_earlier_package_use_stable_mask`
++ a `CASES` entry + a Rust unit test; six existing Rust tests updated
+for the new field.
+
+**`emerge --pretend` exits non-zero when autounmask changed the
+config.** Real `action_build`: `backtrack_depgraph` returns
+`success=False` whenever `_have_autounmask_changes()` (autounmask had to
+touch `package.use`/`.accept_keywords`/`.unmask`/`.license` for the
+graph to resolve), then `if not success:
+mydepgraph.display_problems(); return 1` -- *before* any merge, and
+`--pretend` does not exempt it. Verified against a live `emerge -pv
+www-client/firefox` (USE changes needed -> the full merge list + the
+change block + `backtracking has terminated early` + **exit 1**) and
+`emerge -p --autounmask sys-kernel/linux-firmware` (license change ->
+**exit 1**). Portuale printed the same output but exited 0, so a
+caller's `$?` check read "you must still edit package.use" as success.
+Fixed: exit 1 whenever any
+`autounmask_{keyword,mask,use,license}_changes` is non-empty, except
+`--autounmask-only` (stays 0 -- its whole purpose) and a real
+non-`--pretend` `--autounmask-continue` (writes the changes and
+proceeds). Text and `--json` paths both. Dual-language; ~46 contract
+`CASES` / pinned assertions that had encoded the old exit-0 behaviour
+flipped to exit 1 with their rationale corrected (the `--autounmask-*=n`
+/ "fatal by default" / `--autounmask-only` controls stay 0). This is
+also the underlying cause of L0's cluster C (`app-crypt/gcr[gtk]`
+"masked"): real stops backtracking after the first autounmask batch
+(default `--autounmask-backtrack=n`), portuale keeps re-resolving --
+the merge-list *truncation* half of that divergence is a follow-up.

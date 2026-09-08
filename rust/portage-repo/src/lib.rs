@@ -2591,6 +2591,26 @@ fn use_context_fingerprint(config: &portage_profile::Config) -> u64 {
     hash_sampled(&config.package_use_mask, &mut h);
     hash_sampled(&config.package_use_stable_force, &mut h);
     hash_sampled(&config.package_use_stable_mask, &mut h);
+    // Per-level view drives `effective_use_flags`/`forced_or_masked_flags`;
+    // two configs could share a flat `use_mask` set yet differ in the
+    // interleaving, so hash the ordered structure too. Level count +
+    // per-level line/entry counts are a cheap, order-sensitive digest.
+    config.use_mask_force_levels.len().hash(&mut h);
+    for lvl in &config.use_mask_force_levels {
+        (
+            lvl.use_mask.len(),
+            lvl.use_force.len(),
+            lvl.use_stable_mask.len(),
+            lvl.use_stable_force.len(),
+            lvl.package_use_mask.len(),
+            lvl.package_use_force.len(),
+            lvl.package_use_stable_mask.len(),
+            lvl.package_use_stable_force.len(),
+        )
+            .hash(&mut h);
+        hash_sampled(&lvl.use_mask, &mut h);
+        hash_sampled(&lvl.package_use_mask, &mut h);
+    }
     hash_sampled(&config.package_accept_keywords, &mut h);
     hash_sampled(&config.repo_make_defaults_use, &mut h);
 
@@ -2790,75 +2810,36 @@ fn effective_use_flags_uncached(
         &config.package_accept_keywords,
     );
 
-    // use.mask/use.force (global) and package.use.mask/.force (atom-
-    // scoped), layered on top of package.use, force winning first then
-    // mask -- see specificity_ordered_flags's own doc comment for how a
-    // conflict between multiple matching package.use.mask/.force entries
-    // is resolved, and the module doc comment's own `package.use.mask`/
-    // `.force` bullet for the full scope writeup. use.stable.force/
-    // package.use.stable.force (when stable) join the force tier;
-    // use.stable.mask/package.use.stable.mask (when stable) join the
-    // mask tier -- see this function's own doc comment. `config.use_force`/
-    // `config.use_mask` (global) are applied at this exact position -- not
-    // folded into `base` early the way an earlier version of portuale
-    // did -- matching real `regenerate()`'s own `self.useforce`/
-    // `self.usemask` (which `setcpv()` sets to the *per-package*
-    // `getUseForce(pkg)`/`getUseMask(pkg)`, i.e. global force/mask
-    // combined with the atom-scoped variant) applied as the literal last
-    // step of its incremental USE walk, strictly after `package.use` --
-    // see `portage_profile::Config::config.use_force`'s own doc comment for the
-    // full grounding.
-    for flag in &config.use_force {
-        use_flags.insert(flag.clone());
-    }
-    for flag in specificity_ordered_flags(
-        &config.package_use_force,
+    // use.force/use.mask (+ .stable. variants when the candidate is
+    // stable) layered on top of package.use as the literal last step of
+    // the incremental walk, `myflags.update(useforce)` then
+    // `myflags.difference_update(usemask)` -- real `regenerate()`'s own
+    // final two lines, where `setcpv()` set `self.useforce`/`self.usemask`
+    // to the *per-package* `getUseForce(pkg)`/`getUseMask(pkg)`.
+    // `resolved_use_mask_or_force` reproduces each of those as its own
+    // per-profile-level *interleaved* stack (see its doc comment): a
+    // global `use.mask` `-flag` at a later profile level cancels an
+    // earlier level's `package.use.mask` entry, which the old flat
+    // `config.use_mask` ∪ `package_use_mask` application could not.
+    for flag in resolved_use_mask_or_force(
+        MaskOrForce::Force,
+        config,
         candidate_str,
         category,
         package,
-        HashSet::new(),
+        stable,
     ) {
         use_flags.insert(flag);
     }
-    if stable {
-        for flag in &config.use_stable_force {
-            use_flags.insert(flag.clone());
-        }
-        for flag in specificity_ordered_flags(
-            &config.package_use_stable_force,
-            candidate_str,
-            category,
-            package,
-            HashSet::new(),
-        ) {
-            use_flags.insert(flag);
-        }
-    }
-    for flag in &config.use_mask {
-        use_flags.remove(flag);
-    }
-    for flag in specificity_ordered_flags(
-        &config.package_use_mask,
+    for flag in resolved_use_mask_or_force(
+        MaskOrForce::Mask,
+        config,
         candidate_str,
         category,
         package,
-        HashSet::new(),
+        stable,
     ) {
         use_flags.remove(&flag);
-    }
-    if stable {
-        for flag in &config.use_stable_mask {
-            use_flags.remove(flag);
-        }
-        for flag in specificity_ordered_flags(
-            &config.package_use_stable_mask,
-            candidate_str,
-            category,
-            package,
-            HashSet::new(),
-        ) {
-            use_flags.remove(&flag);
-        }
     }
     // The `k_*` pseudo-flags themselves are not real USE flags -- real
     // portage strips every `_*`-suffixed token from `PORTAGE_USE`
@@ -2904,6 +2885,61 @@ fn specificity_ordered_flags(
     seed
 }
 
+/// Whether `mask` (rather than `force`) sources are being resolved --
+/// picks the file set inside `resolved_use_mask_or_force`.
+#[derive(Clone, Copy, PartialEq)]
+enum MaskOrForce {
+    Mask,
+    Force,
+}
+
+/// Real `UseManager.getUseMask(pkg)` / `getUseForce(pkg)`: the four
+/// (or, for a non-stable candidate, two) sources stacked **interleaved
+/// per profile level** and then collapsed with one incremental
+/// `stack_lists` -- so a global `use.mask` `-flag` line at a later
+/// profile level cancels an earlier level's `package.use.mask` entry
+/// (the `dev-libs/glib sysprof` / `arch/amd64 -sysprof` case), which the
+/// flat `Config::use_mask` ∪ `package_use_mask` union structurally
+/// cannot. Per level, in real's own order: global `use.mask`, global
+/// `use.stable.mask` (stable only), `package.use.mask` (atom-specificity
+/// ordered within the level via `specificity_ordered_flags`),
+/// `package.use.stable.mask` (stable only).
+fn resolved_use_mask_or_force(
+    which: MaskOrForce,
+    config: &portage_profile::Config,
+    candidate_str: &str,
+    category: &str,
+    package: &str,
+    stable: bool,
+) -> HashSet<String> {
+    let mut acc: HashSet<String> = HashSet::new();
+    for level in &config.use_mask_force_levels {
+        let (global, global_stable, pkg, pkg_stable) = match which {
+            MaskOrForce::Mask => (
+                &level.use_mask,
+                &level.use_stable_mask,
+                &level.package_use_mask,
+                &level.package_use_stable_mask,
+            ),
+            MaskOrForce::Force => (
+                &level.use_force,
+                &level.use_stable_force,
+                &level.package_use_force,
+                &level.package_use_stable_force,
+            ),
+        };
+        portage_profile::apply_incremental_iter(global, &mut acc);
+        if stable {
+            portage_profile::apply_incremental_iter(global_stable, &mut acc);
+        }
+        acc = specificity_ordered_flags(pkg, candidate_str, category, package, acc);
+        if stable {
+            acc = specificity_ordered_flags(pkg_stable, candidate_str, category, package, acc);
+        }
+    }
+    acc
+}
+
 /// Real `_display_use`'s own `self.forced_flags = pkg.use.force |
 /// pkg.use.mask` (fed to `map_to_use_expand(..., forced_flags=True)`),
 /// restricted to `iuse`'s own declared flags: the set of this candidate's
@@ -2926,48 +2962,32 @@ pub fn forced_or_masked_flags(
         .split_whitespace()
         .map(|tok| tok.trim_start_matches(['+', '-']).to_string())
         .collect();
-    let mut result: HashSet<String> = HashSet::new();
-    result.extend(config.use_force.iter().cloned());
-    result.extend(config.use_mask.iter().cloned());
-    result.extend(specificity_ordered_flags(
-        &config.package_use_force,
-        candidate_str,
-        category,
-        package,
-        HashSet::new(),
-    ));
-    result.extend(specificity_ordered_flags(
-        &config.package_use_mask,
-        candidate_str,
-        category,
-        package,
-        HashSet::new(),
-    ));
-    if is_stable(
+    let stable = is_stable(
         keywords,
         candidate_str,
         category,
         package,
         &config.accept_keywords,
         &config.package_accept_keywords,
-    ) {
-        result.extend(config.use_stable_force.iter().cloned());
-        result.extend(config.use_stable_mask.iter().cloned());
-        result.extend(specificity_ordered_flags(
-            &config.package_use_stable_force,
-            candidate_str,
-            category,
-            package,
-            HashSet::new(),
-        ));
-        result.extend(specificity_ordered_flags(
-            &config.package_use_stable_mask,
-            candidate_str,
-            category,
-            package,
-            HashSet::new(),
-        ));
-    }
+    );
+    // Real `pkg.use.force | pkg.use.mask` -- each an independent
+    // per-level interleaved stack (`getUseForce(pkg)` / `getUseMask(pkg)`).
+    let mut result = resolved_use_mask_or_force(
+        MaskOrForce::Force,
+        config,
+        candidate_str,
+        category,
+        package,
+        stable,
+    );
+    result.extend(resolved_use_mask_or_force(
+        MaskOrForce::Mask,
+        config,
+        candidate_str,
+        category,
+        package,
+        stable,
+    ));
     result.retain(|f| iuse_names.contains(f));
     result
 }
@@ -16016,6 +16036,10 @@ mod tests {
         let root = fixtures_root();
         let config = portage_profile::Config {
             use_force: HashSet::from(["globalforceflag".to_string()]),
+            use_mask_force_levels: vec![portage_profile::UseMaskForceLevel {
+                use_force: vec!["globalforceflag".to_string()],
+                ..Default::default()
+            }],
             ..test_config()
         };
         let infos = resolve_installed_info(&root, "dev-libs/infoforcedpkg", &config);
@@ -24452,6 +24476,20 @@ mod tests {
             package_use_stable_mask: package_use_stable_mask.to_vec(),
             accept_keywords: accept_keywords.clone(),
             package_accept_keywords: package_accept_keywords.to_vec(),
+            // `effective_use_flags`/`forced_or_masked_flags` now read the
+            // per-level view; collapse every flat input into one
+            // synthetic level (global-then-package, same as the old flat
+            // application).
+            use_mask_force_levels: vec![portage_profile::UseMaskForceLevel {
+                use_mask: use_mask.iter().cloned().collect(),
+                use_force: use_force.iter().cloned().collect(),
+                use_stable_mask: use_stable_mask.iter().cloned().collect(),
+                use_stable_force: use_stable_force.iter().cloned().collect(),
+                package_use_mask: package_use_mask.to_vec(),
+                package_use_force: package_use_force.to_vec(),
+                package_use_stable_mask: package_use_stable_mask.to_vec(),
+                package_use_stable_force: package_use_stable_force.to_vec(),
+            }],
             ..Default::default()
         };
         effective_use_flags(&config, iuse, keywords, candidate_str, category, package)
@@ -25417,6 +25455,10 @@ mod tests {
             let cfg = portage_profile::Config {
                 features_use: test_on.to_vec(),
                 use_mask: HashSet::from(["test".to_string()]),
+                use_mask_force_levels: vec![portage_profile::UseMaskForceLevel {
+                    use_mask: vec!["test".to_string()],
+                    ..Default::default()
+                }],
                 accept_keywords: HashSet::from(["amd64".to_string()]),
                 ..Default::default()
             };
@@ -25919,6 +25961,79 @@ mod tests {
                 HashSet::new(),
             )
             .contains("flag")
+        );
+    }
+
+    #[test]
+    fn resolved_use_mask_interleaves_per_level_across_sources() {
+        use portage_profile::UseMaskForceLevel;
+        // Real `getUseMask`'s per-level interleave: level 0's
+        // `package.use.mask` masks `xmc` for the candidate, a *later*
+        // level's *global* `use.mask` un-masks it with `-xmc`. The flat
+        // union (global stack {} ∪ per-package {xmc}) would keep it
+        // masked; the interleave must not.
+        let config = portage_profile::Config {
+            accept_keywords: HashSet::from(["amd64".to_string()]),
+            use_mask_force_levels: vec![
+                UseMaskForceLevel {
+                    package_use_mask: vec![("dev-libs/bar".to_string(), vec!["xmc".to_string()])],
+                    ..Default::default()
+                },
+                UseMaskForceLevel {
+                    use_mask: vec!["-xmc".to_string()],
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+        assert!(
+            !resolved_use_mask_or_force(
+                MaskOrForce::Mask,
+                &config,
+                "dev-libs/bar-1.0:0/0::testrepo",
+                "dev-libs",
+                "bar",
+                true,
+            )
+            .contains("xmc"),
+            "a later level's global -xmc must cancel an earlier level's package.use.mask xmc"
+        );
+        assert!(
+            !forced_or_masked_flags(
+                "xmc",
+                &["amd64".to_string()],
+                "dev-libs/bar-1.0:0/0::testrepo",
+                "dev-libs",
+                "bar",
+                &config,
+            )
+            .contains("xmc")
+        );
+        // Reverse level order keeps it masked (last level wins).
+        let config_rev = portage_profile::Config {
+            accept_keywords: HashSet::from(["amd64".to_string()]),
+            use_mask_force_levels: vec![
+                UseMaskForceLevel {
+                    use_mask: vec!["-xmc".to_string()],
+                    ..Default::default()
+                },
+                UseMaskForceLevel {
+                    package_use_mask: vec![("dev-libs/bar".to_string(), vec!["xmc".to_string()])],
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+        assert!(
+            resolved_use_mask_or_force(
+                MaskOrForce::Mask,
+                &config_rev,
+                "dev-libs/bar-1.0:0/0::testrepo",
+                "dev-libs",
+                "bar",
+                true,
+            )
+            .contains("xmc")
         );
     }
 

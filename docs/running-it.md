@@ -269,14 +269,17 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/autounmaskkey
 # ...but once --autounmask is explicitly given, real portage RESOLVES the
 # graph with the implicit `=cpv ~arch` change applied (real
 # _display_autounmask) -- normal merge list on stdout, the "necessary to
-# proceed" block on stderr, exit 0 (real actions.py:563)
+# proceed" block on stderr, and **exit 1**: real `action_build` returns
+# 1 for any autounmask config change (`--pretend` included -- verified
+# against a live `emerge -pv www-client/firefox`), so a `$?` check still
+# sees "config needs editing"
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --autounmask dev-libs/autounmaskkeywordpkg
 # [ebuild  N    ] dev-libs/autounmaskkeywordpkg-1.0          (stdout)
 #                                                            (stderr:)
 # The following keyword changes are necessary to proceed:
 #  (see "package.accept_keywords" in the portage(5) man page for more details)
 # # required by dev-libs/autounmaskkeywordpkg (argument)
-# =dev-libs/autounmaskkeywordpkg-1.0 ~amd64                  (exit 0)
+# =dev-libs/autounmaskkeywordpkg-1.0 ~amd64                  (exit 1)
 # the same, now for a *dependency's* own keyword-masked-only candidate
 # (dev-libs/autounmaskdepconsumer RDEPENDs on the fixture above) -- quiet
 # by default (just the "no visible ebuild" line), exit 0
@@ -293,8 +296,8 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --autounmask dev-libs/
 #  (see "package.accept_keywords" in the portage(5) man page for more details)
 # # required by dev-libs/autounmaskdepconsumer-1.0::testrepo
 # # required by dev-libs/autounmaskdepconsumer (argument)
-# =dev-libs/autounmaskkeywordpkg-1.0 ~amd64                  (exit 0)
-# --json exposes the change as a top-level array
+# =dev-libs/autounmaskkeywordpkg-1.0 ~amd64                  (exit 1)
+# --json exposes the change as a top-level array (still exit 1)
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --autounmask --json dev-libs/autounmaskdepconsumer | python3 -c 'import json,sys; print(json.load(sys.stdin)["autounmask_keyword_changes"])'
 # [{'cpv': 'dev-libs/autounmaskkeywordpkg-1.0', 'token': '~amd64', 'dep_chain': ['required by dev-libs/autounmaskdepconsumer-1.0::testrepo', 'required by dev-libs/autounmaskdepconsumer (argument)']}]
 
@@ -308,7 +311,7 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend "dev-libs/useflagpkg[-
 # The following USE changes are necessary to proceed:
 #  (see "package.use" in the portage(5) man page for more details)
 # # required by dev-libs/useflagpkg[-foo] (argument)
-# >=dev-libs/useflagpkg-1.0 -foo                              (exit 0)
+# >=dev-libs/useflagpkg-1.0 -foo                              (exit 1)
 # --autounmask-use=n restores the strict "USE-dep mismatch -> no visible
 # candidate" behaviour
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --autounmask-use=n "dev-libs/useflagpkg[-foo]"
@@ -323,7 +326,7 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/usedeprejecte
 #  (see "package.use" in the portage(5) man page for more details)
 # # required by dev-libs/usedeprejectedpkg-1.0::testrepo
 # # required by dev-libs/usedeprejectedpkg (argument)
-# >=dev-libs/useflagpkg-1.0 -foo                             (exit 0)
+# >=dev-libs/useflagpkg-1.0 -foo                             (exit 1)
 # --json exposes the change as a top-level array
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --json dev-libs/useeqparentoffpkg | python3 -c 'import json,sys; print(json.load(sys.stdin)["autounmask_use_changes"])'
 # [{'atom': '>=dev-libs/useeqchildpkg-1.0', 'token': '-eqflag', 'dep_chain': ['required by dev-libs/useeqparentoffpkg-1.0::testrepo', 'required by dev-libs/useeqparentoffpkg (argument)']}]
@@ -942,6 +945,16 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/restrictedpkg
 # while maskflag stays masked (nothing un-masks it)
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend -v dev-libs/pkgusemaskforcepkg
 # [ebuild  N     ] dev-libs/pkgusemaskforcepkg-1.0  USE="forceflag -maskflag -specflag"
+
+# the four use.*mask/*force sources stack INTERLEAVED per profile level
+# (real UseManager.getUseMask's own per-i loop), so a global use.mask
+# "-flag" line at a *later* level cancels an *earlier* level's
+# package.use.mask entry: crossmaskcancelpkg's "xmc" is masked by
+# base/package.use.stable.mask, then un-masked by arch/amd64/use.mask's
+# "-xmc" (a later chain level). IUSE is "+xmc", so it renders on and
+# UNparenthesised (the flat use_mask union used to force it "(-xmc)")
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend -v dev-libs/crossmaskcancelpkg
+# [ebuild  N     ] dev-libs/crossmaskcancelpkg-1.0  USE="xmc"
 
 # --nodeps/-O is real and implemented: withdeps' own RDEPEND (which
 # would otherwise pull in newpkg and upgradepkg -- see the plain

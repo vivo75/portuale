@@ -1,0 +1,5 @@
+# fixture: global un-mask of "xmc" at the arch/amd64 level (later in the
+# chain than base). Cancels base/package.use.stable.mask
+# "dev-libs/crossmaskcancelpkg xmc". "-xmc" against no other package is a
+# no-op, so this has zero effect on any other fixture test.
+-xmc

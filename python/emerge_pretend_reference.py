@@ -2966,24 +2966,18 @@ def effective_use_flags(config, iuse, keywords, candidate_str, category, package
         keywords, candidate_str, category, package, config["accept_keywords"], config["package_accept_keywords"]
     )
 
-    use_flags |= config["use_force"]
-    use_flags |= _specificity_ordered_flags(
-        config["package_use_force"], candidate_str, category, package
+    # use.force/use.mask (+ .stable. variants when stable) as the literal
+    # last step, myflags.update(useforce) then difference_update(usemask)
+    # -- each an independent per-profile-level *interleaved* stack (see
+    # _resolved_use_mask_or_force): a global use.mask "-flag" at a later
+    # profile level cancels an earlier level's package.use.mask entry,
+    # which the old flat config["use_mask"] | package_use_mask could not.
+    use_flags |= _resolved_use_mask_or_force(
+        "force", config, candidate_str, category, package, stable
     )
-    if stable:
-        use_flags |= config["use_stable_force"]
-        use_flags |= _specificity_ordered_flags(
-            config["package_use_stable_force"], candidate_str, category, package
-        )
-    use_flags -= config["use_mask"]
-    use_flags -= _specificity_ordered_flags(
-        config["package_use_mask"], candidate_str, category, package
+    use_flags -= _resolved_use_mask_or_force(
+        "mask", config, candidate_str, category, package, stable
     )
-    if stable:
-        use_flags -= config["use_stable_mask"]
-        use_flags -= _specificity_ordered_flags(
-            config["package_use_stable_mask"], candidate_str, category, package
-        )
     # The "k_*" pseudo-flags themselves are not real USE flags -- real
     # portage strips every "_*"-suffixed token from PORTAGE_USE
     # (config.py ~2260) once they've done their expansion job above.
@@ -3000,29 +2994,64 @@ def _forced_or_masked_flags(iuse, keywords, candidate_str, category, package, co
     stable variants when stable) layering effective_use_flags applies.
     Mirrors portage-repo/src/lib.rs's forced_or_masked_flags exactly."""
     iuse_names = {tok.lstrip("+-") for tok in iuse.split()}
-    result = set(config["use_force"]) | set(config["use_mask"])
-    result |= _specificity_ordered_flags(
-        config["package_use_force"], candidate_str, category, package
-    )
-    result |= _specificity_ordered_flags(
-        config["package_use_mask"], candidate_str, category, package
-    )
-    if _is_stable(
+    stable = _is_stable(
         keywords,
         candidate_str,
         category,
         package,
         config["accept_keywords"],
         config["package_accept_keywords"],
-    ):
-        result |= set(config["use_stable_force"]) | set(config["use_stable_mask"])
-        result |= _specificity_ordered_flags(
-            config["package_use_stable_force"], candidate_str, category, package
-        )
-        result |= _specificity_ordered_flags(
-            config["package_use_stable_mask"], candidate_str, category, package
-        )
+    )
+    # Real pkg.use.force | pkg.use.mask -- each an independent per-level
+    # interleaved stack (getUseForce(pkg) / getUseMask(pkg)).
+    result = _resolved_use_mask_or_force(
+        "force", config, candidate_str, category, package, stable
+    ) | _resolved_use_mask_or_force(
+        "mask", config, candidate_str, category, package, stable
+    )
     return result & iuse_names
+
+
+def _resolved_use_mask_or_force(which, config, candidate_str, category, package, stable):
+    """Real UseManager.getUseMask(pkg) / getUseForce(pkg): the four (or,
+    for a non-stable candidate, two) sources stacked **interleaved per
+    profile level** and then collapsed with one incremental stack_lists
+    -- so a global use.mask "-flag" line at a later profile level cancels
+    an earlier level's package.use.mask entry (the "dev-libs/glib
+    sysprof" / "arch/amd64 -sysprof" case), which the flat
+    config["use_mask"] | package_use_mask union structurally cannot. Per
+    level, in real's order: global use.mask, global use.stable.mask
+    (stable only), package.use.mask (atom-specificity ordered within the
+    level), package.use.stable.mask (stable only). `which` is "mask" or
+    "force". Mirrors portage-repo/src/lib.rs's resolved_use_mask_or_force
+    exactly."""
+    acc = set()
+    for level in config["use_mask_force_levels"]:
+        if which == "mask":
+            g, gs, p, ps = (
+                "use_mask",
+                "use_stable_mask",
+                "package_use_mask",
+                "package_use_stable_mask",
+            )
+        else:
+            g, gs, p, ps = (
+                "use_force",
+                "use_stable_force",
+                "package_use_force",
+                "package_use_stable_force",
+            )
+        _apply_incremental(" ".join(level[g]), acc)
+        if stable:
+            _apply_incremental(" ".join(level[gs]), acc)
+        acc = _specificity_ordered_flags(
+            level[p], candidate_str, category, package, seed=acc
+        )
+        if stable:
+            acc = _specificity_ordered_flags(
+                level[ps], candidate_str, category, package, seed=acc
+            )
+    return acc
 
 
 def _atom_specificity(entry):
@@ -5016,6 +5045,66 @@ def resolve_config(
             _read_config_lines(os.path.join(level, "package.use.stable.mask"))
         )
 
+    # Per-level view of the eight sources just parsed flat above, so
+    # effective_use_flags / forced_or_masked_flags can replay real
+    # UseManager.getUseMask/getUseForce's *interleaved* per-level stacking
+    # (for i,_ in enumerate(...): append usemask[i], usestablemask[i],
+    # pusemask[i][cp], pusestablemask[i][cp] -> one stack_lists(incr=1)).
+    # Level 0 is synthetic: the repo-level package.use.* (main, then each
+    # overlay ::repo-scoped) real prepends before the profile loop.
+    # Levels 1.. are the profile chain. Mirrors
+    # portage-profile/src/lib.rs's resolve_config exactly.
+    def _repo_pkg_use(fname):
+        lines = _read_config_lines(
+            os.path.join(main_repo_location, "profiles", fname)
+        )
+        for repo_name, repo_location in overlay_repos:
+            lines.extend(
+                _scope_repo_package_use_lines(
+                    _read_config_lines(os.path.join(repo_location, "profiles", fname)),
+                    repo_name,
+                )
+            )
+        return _parse_package_use_lines(lines)
+
+    use_mask_force_levels = [
+        {
+            "use_mask": [],
+            "use_force": [],
+            "use_stable_mask": [],
+            "use_stable_force": [],
+            "package_use_mask": _repo_pkg_use("package.use.mask"),
+            "package_use_force": _repo_pkg_use("package.use.force"),
+            "package_use_stable_mask": _repo_pkg_use("package.use.stable.mask"),
+            "package_use_stable_force": _repo_pkg_use("package.use.stable.force"),
+        }
+    ]
+    for level in chain:
+        use_mask_force_levels.append(
+            {
+                "use_mask": _read_config_lines(os.path.join(level, "use.mask")),
+                "use_force": _read_config_lines(os.path.join(level, "use.force")),
+                "use_stable_mask": _read_config_lines(
+                    os.path.join(level, "use.stable.mask")
+                ),
+                "use_stable_force": _read_config_lines(
+                    os.path.join(level, "use.stable.force")
+                ),
+                "package_use_mask": _parse_package_use_lines(
+                    _read_config_lines(os.path.join(level, "package.use.mask"))
+                ),
+                "package_use_force": _parse_package_use_lines(
+                    _read_config_lines(os.path.join(level, "package.use.force"))
+                ),
+                "package_use_stable_mask": _parse_package_use_lines(
+                    _read_config_lines(os.path.join(level, "package.use.stable.mask"))
+                ),
+                "package_use_stable_force": _parse_package_use_lines(
+                    _read_config_lines(os.path.join(level, "package.use.stable.force"))
+                ),
+            }
+        )
+
     # packages (@system): every profile level's own file, in chain order,
     # stacked with the same "-atom" removal semantics package.mask uses
     # (see _stack_mask_lines) -- mirrors portage-profile/src/lib.rs's
@@ -5207,6 +5296,7 @@ def resolve_config(
         "use_stable_mask": use_stable_mask,
         "package_use_stable_force": _parse_package_use_lines(use_stable_force_lines),
         "package_use_stable_mask": _parse_package_use_lines(use_stable_mask_lines),
+        "use_mask_force_levels": use_mask_force_levels,
         "license_groups": license_groups,
         "accept_license": accept_license,
         "package_license": package_license,
@@ -18302,6 +18392,20 @@ def run(args):
             verbose,
             root_deps_running_root,
         )
+        # Same non-zero-on-autounmask-changes contract as the text path;
+        # --autounmask-only stays exit 0. Mirrors pretend.rs.
+        _has_autounmask_changes = (
+            result["autounmask_keyword_changes"]
+            or result["autounmask_mask_changes"]
+            or result["autounmask_use_changes"]
+            or result["autounmask_license_changes"]
+        )
+        if (
+            _has_autounmask_changes
+            and not autounmask_only
+            and not (not pretend and autounmask_continue is True)
+        ):
+            return 1
         return 0
 
     # Real PkgAttrDisplay.force_reinstall (the red `r` bracket column):
@@ -18971,6 +19075,23 @@ def run(args):
     # below do not run. Mirrors pretend.rs.
     if autounmask_only:
         return 0
+
+    # Real action_build: backtrack_depgraph returns success=False
+    # whenever _have_autounmask_changes() (autounmask had to touch
+    # package.use/.accept_keywords/.unmask/.license), then `if not
+    # success: display_problems(); return 1` -- before any merge, under
+    # --pretend too. The merge list + change blocks above ARE
+    # display_problems()'s output; the run then fails. Only a real (non
+    # --pretend) --autounmask-continue writes the changes and proceeds.
+    # Mirrors pretend.rs.
+    _has_autounmask_changes = (
+        result["autounmask_keyword_changes"]
+        or result["autounmask_mask_changes"]
+        or result["autounmask_use_changes"]
+        or result["autounmask_license_changes"]
+    )
+    if _has_autounmask_changes and not (not pretend and autounmask_continue is True):
+        return 1
 
     # emerge --pretend --debug Stage 5: real _compute_abi_rebuild_info's
     # own DEBUG-level dump (real depgraph.py:1011-1206), on stdout, right

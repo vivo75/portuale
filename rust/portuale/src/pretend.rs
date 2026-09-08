@@ -9985,6 +9985,20 @@ pub fn run(args: &[String]) -> ExitCode {
             verbose,
             root_deps_running_root.as_deref(),
         );
+        // Same non-zero-on-autounmask-changes contract as the text path
+        // below (a `--json` consumer's exit-code check must see the
+        // "config still needs editing" signal too). `--autounmask-only`
+        // stays exit 0 (its whole point is "just show the changes").
+        let has_autounmask_changes = !result.autounmask_keyword_changes.is_empty()
+            || !result.autounmask_mask_changes.is_empty()
+            || !result.autounmask_use_changes.is_empty()
+            || !result.autounmask_license_changes.is_empty();
+        if has_autounmask_changes
+            && !autounmask_only
+            && !(!pretend && autounmask_continue == Some(true))
+        {
+            return ExitCode::from(1);
+        }
         return ExitCode::SUCCESS;
     }
 
@@ -10350,6 +10364,26 @@ pub fn run(args: &[String]) -> ExitCode {
     // changed-deps report, and any real merge) runs.
     if autounmask_only {
         return ExitCode::SUCCESS;
+    }
+
+    // Real `action_build`: `backtrack_depgraph` returns `success=False`
+    // whenever `_have_autounmask_changes()` (i.e. autounmask had to
+    // touch `package.use`/`.accept_keywords`/`.unmask`/`.license` to make
+    // the graph resolve), and then `if not success:
+    // mydepgraph.display_problems(); return 1` -- BEFORE any merge, and
+    // under `--pretend` too (`--pretend` does not exempt it). The merge
+    // list and the change blocks just printed ARE `display_problems()`'s
+    // output; the run then fails so a caller's `$?` check sees that the
+    // config still needs editing. The one exception is a real (non-
+    // `--pretend`) `--autounmask-continue`, which writes the changes and
+    // proceeds (real `_resolve`'s own `'--pretend' not in myopts` guard).
+    let has_autounmask_changes = !result.autounmask_keyword_changes.is_empty()
+        || !result.autounmask_mask_changes.is_empty()
+        || !result.autounmask_use_changes.is_empty()
+        || !result.autounmask_license_changes.is_empty();
+    let autounmask_continue_active = !pretend && autounmask_continue == Some(true);
+    if has_autounmask_changes && !autounmask_continue_active {
+        return ExitCode::from(1);
     }
 
     // `emerge --pretend --debug` Stage 5: real

@@ -34,8 +34,11 @@ from pathlib import Path
 import pytest
 
 # (description, args, expected_exit_code) -- exit codes: 0 success,
-# 1 resolution/parse error, 2 CLI-usage error (mirrors both sides' shared
-# convention, not real emerge's own exit codes).
+# 1 resolution/parse error OR autounmask config change still needed
+# (real `action_build`: `if not success: return 1` fires for any
+# autounmask keyword/mask/use/license change, `--pretend` included --
+# `--autounmask-only` is the one exception), 2 CLI-usage error (mirrors
+# both sides' shared convention, not real emerge's own exit codes).
 CASES = [
     ("new install", ["--pretend", "dev-libs/newpkg"], 0),
     (
@@ -348,6 +351,12 @@ CASES = [
         ["--pretend", "-v", "dev-libs/pkgusemaskforcepkg"],
         0,
     ),
+    (
+        "a later profile level's global use.mask -flag cancels an earlier "
+        "level's package.use.stable.mask (real getUseMask per-level interleave)",
+        ["--pretend", "-v", "dev-libs/crossmaskcancelpkg"],
+        0,
+    ),
     ("slot-operator top-level atom: now in v1 grammar, resolves New", ["--pretend", "dev-libs/foo:0="], 0),
     ("slot-operator top-level atom, no explicit slot: resolves New", ["--pretend", "dev-libs/foo:="], 0),
     ("bare trailing colon top-level atom: still invalid", ["--pretend", "dev-libs/foo:"], 1),
@@ -409,22 +418,22 @@ CASES = [
     (
         "recursion: a genuinely unsatisfied USE-dep dependency atom is rejected",
         ["--pretend", "dev-libs/usedeprejectedpkg"],
-        0,
+        1,
     ),
     (
         "autounmask backward cascade: [flag] on an already-resolved slot re-resolves the whole graph",
         ["--pretend", "dev-libs/aucasctop"],
-        0,
+        1,
     ),
     (
         "autounmask levels: a lower license-masked version beats a higher ~arch one",
         ["--pretend", "--autounmask", "dev-libs/levelconsumer"],
-        0,
+        1,
     ),
     (
         "autounmask backward cascade, -v: the flipped-in dep and the counters line",
         ["--pretend", "-v", "dev-libs/aucasctop"],
-        0,
+        1,
     ),
     (
         "autounmask backward cascade, --autounmask-use=n: no flip, dep stays unresolvable",
@@ -434,12 +443,12 @@ CASES = [
     (
         "autounmask backward cascade, --json: the change in autounmask_use_changes",
         ["--pretend", "--json", "dev-libs/aucasctop"],
-        0,
+        1,
     ),
     (
         "autounmask breakage: default (no --autounmask-backtrack) collects the change",
         ["--pretend", "dev-libs/aubreaktop"],
-        0,
+        1,
     ),
     (
         "autounmask breakage, --autounmask-backtrack=y: flag wanted both ways -> abandon",
@@ -449,7 +458,7 @@ CASES = [
     (
         "autounmask breakage, -v",
         ["--pretend", "-v", "dev-libs/aubreaktop"],
-        0,
+        1,
     ),
     (
         "autounmask breakage, --autounmask --autounmask-backtrack=y",
@@ -459,12 +468,12 @@ CASES = [
     (
         "autounmask backward cascade, --autounmask-backtrack=y: aucascleaf appears",
         ["--pretend", "--autounmask-backtrack=y", "dev-libs/aucasctop"],
-        0,
+        1,
     ),
     (
         "autounmask backward cascade, --autounmask-backtrack=n is the default",
         ["--pretend", "--autounmask-backtrack=n", "dev-libs/aucasctop"],
-        0,
+        1,
     ),
     (
         "autounmask keyword backward cascade: slot narrowed to a ~arch version, default",
@@ -474,12 +483,12 @@ CASES = [
     (
         "autounmask keyword backward cascade, --autounmask: the slot re-resolves to 2.0",
         ["--pretend", "--autounmask", "dev-libs/kwbacktop"],
-        0,
+        1,
     ),
     (
         "autounmask keyword backward cascade, -pv --autounmask",
         ["--pretend", "-v", "--autounmask", "dev-libs/kwbacktop"],
-        0,
+        1,
     ),
     (
         "autounmask per-level re-scan: ~arch + license unmasked on one version, default",
@@ -489,12 +498,12 @@ CASES = [
     (
         "autounmask per-level re-scan, --autounmask: two categories on the same version",
         ["--pretend", "--autounmask", "dev-libs/multimaskconsumer"],
-        0,
+        1,
     ),
     (
         "autounmask per-level re-scan, -pv --autounmask",
         ["--pretend", "-v", "--autounmask", "dev-libs/multimaskconsumer"],
-        0,
+        1,
     ),
     (
         "USE-dep enforcement: plain flag declared and enabled matches",
@@ -514,17 +523,17 @@ CASES = [
     (
         "--autounmask-use: a top-level [-flag] mismatch resolves + prints the USE changes block",
         ["--pretend", "dev-libs/useflagpkg[-foo]"],
-        0,
+        1,
     ),
     (
         "--autounmask-use: a top-level [flag] mismatch (flag in IUSE) resolves too",
         ["--pretend", "dev-libs/useflagpkg[missingflag]"],
-        0,
+        1,
     ),
     (
-        "--autounmask-use: an opt= dep whose child flag is masked flips the parent instead, exit 0",
+        "--autounmask-use: an opt= dep whose child flag is masked flips the parent instead, exit 1",
         ["--pretend", "dev-libs/parentflipeqpkg"],
-        0,
+        1,
     ),
     (
         "--autounmask-use=n: the masked-child opt= dep stays unresolvable (top-level still merges)",
@@ -534,17 +543,17 @@ CASES = [
     (
         "--autounmask-use parent flip, default: single-dep re-resolve, pf? dep stays",
         ["--pretend", "dev-libs/pfgraphparent"],
-        0,
+        1,
     ),
     (
         "--autounmask-use parent flip, --autounmask-backtrack=y: whole-graph, pf? dep drops",
         ["--pretend", "--autounmask-backtrack=y", "dev-libs/pfgraphparent"],
-        0,
+        1,
     ),
     (
         "--autounmask-use parent flip, -pv",
         ["--pretend", "-v", "dev-libs/pfgraphparent"],
-        0,
+        1,
     ),
     (
         "--autounmask-use parent flip, --autounmask-use=n",
@@ -629,7 +638,7 @@ CASES = [
     (
         "--autounmask: keyword-masked target resolves + prints the changes block once enabled",
         ["--pretend", "--autounmask", "dev-libs/autounmaskkeywordpkg"],
-        0,
+        1,
     ),
     (
         "--autounmask: a dependency's own no-visible-candidate gets no suggestion by default",
@@ -639,12 +648,12 @@ CASES = [
     (
         "--autounmask: a keyword-masked dependency resolves + prints the changes block once enabled",
         ["--pretend", "--autounmask", "dev-libs/autounmaskdepconsumer"],
-        0,
+        1,
     ),
     (
         "--autounmask: keyword changes also appear in --json",
         ["--pretend", "--autounmask", "--json", "dev-libs/autounmaskdepconsumer"],
-        0,
+        1,
     ),
     (
         "--autounmask-license: a EULA-masked top-level target is fatal by default",
@@ -654,12 +663,12 @@ CASES = [
     (
         "--autounmask-license: --autounmask resolves it + prints the license block",
         ["--pretend", "--autounmask", "dev-libs/licensemaskedconsumer"],
-        0,
+        1,
     ),
     (
         "--autounmask-license=y alone enables the license block",
         ["--pretend", "--autounmask-license=y", "dev-libs/licensemaskedpkg"],
-        0,
+        1,
     ),
     (
         "--autounmask-license=n over --autounmask suppresses it",
@@ -669,7 +678,7 @@ CASES = [
     (
         "--autounmask-license: change also appears in --json",
         ["--pretend", "--autounmask", "--json", "dev-libs/licensemaskedconsumer"],
-        0,
+        1,
     ),
     (
         "--autounmask-keep-masks: a package.mask'd top-level target is fatal by default",
@@ -679,12 +688,12 @@ CASES = [
     (
         "--autounmask-keep-masks=n resolves a package.mask'd target + prints the mask block",
         ["--pretend", "--autounmask-keep-masks=n", "dev-libs/hardmaskedpkg"],
-        0,
+        1,
     ),
     (
         "--autounmask-keep-masks=n on a package.mask'd dependency",
         ["--pretend", "--autounmask-keep-masks=n", "dev-libs/maskmaskedconsumer"],
-        0,
+        1,
     ),
     (
         "--autounmask alone does NOT unmask package.mask (masks kept by default)",
@@ -694,7 +703,7 @@ CASES = [
     (
         "--autounmask-keep-masks: change also appears in --json",
         ["--pretend", "--autounmask-keep-masks=n", "--json", "dev-libs/maskmaskedconsumer"],
-        0,
+        1,
     ),
     (
         "--autounmask-only: only the changes block, no merge list",
@@ -1148,7 +1157,7 @@ CASES = [
     (
         "opt= USE-dep: parent flag OFF evaluates to [-flag], mismatches the child's default-on flag",
         ["--pretend", "dev-libs/useeqparentoffpkg"],
-        0,
+        1,
     ),
     (
         "--tree: indents a diamond dependency, shown once",
@@ -3123,7 +3132,7 @@ def test_autounmask_use_resolves_a_dependency_use_dep_mismatch(
     result = _run(
         [str(emerge_binary)], ["--pretend", "dev-libs/usedeprejectedpkg"], fixture_env
     )
-    assert result.returncode == 0
+    assert result.returncode == 1
     assert result.stdout.splitlines() == [
                                              '[ebuild  N     ] dev-libs/useflagpkg-1.0  USE="-foo -missingflag"',
                                              '[ebuild  N     ] dev-libs/usedeprejectedpkg-1.0 ',
@@ -3157,7 +3166,7 @@ def test_autounmask_backward_cascade_re_resolves_an_already_resolved_slot(
     base = ["--pretend", "dev-libs/aucasctop"]
     rust = _run([str(emerge_binary)], base, fixture_env)
     py = _run(emerge_pretend_python, base, fixture_env)
-    assert rust.returncode == 0
+    assert rust.returncode == 1
     assert rust.stdout == py.stdout and rust.stderr == py.stderr
     assert rust.stdout.splitlines() == [
         '[ebuild  N     ] dev-libs/aucascmid-1.0  USE="cascade"',
@@ -3236,7 +3245,7 @@ def test_autounmask_breakage_abandons_autounmask_when_a_flag_is_wanted_both_ways
     args = ["--pretend", "dev-libs/aubreaktop"]
     rust = _run([str(emerge_binary)], args, fixture_env)
     py = _run(emerge_pretend_python, args, fixture_env)
-    assert rust.returncode == 0 and py.returncode == 0
+    assert rust.returncode == 1 and py.returncode == 1
     assert rust.stdout == py.stdout and rust.stderr == py.stderr
     assert rust.stdout.splitlines() == [
         '[ebuild  N     ] dev-libs/aubreaksub-1.0  USE="brk"',
@@ -3294,7 +3303,7 @@ def test_autounmask_keyword_backward_cascade_re_resolves_a_slot_to_a_masked_vers
     a = ["--pretend", "--autounmask", "dev-libs/kwbacktop"]
     rust = _run([str(emerge_binary)], a, fixture_env)
     py = _run(emerge_pretend_python, a, fixture_env)
-    assert rust.returncode == 0
+    assert rust.returncode == 1
     assert rust.stdout == py.stdout and rust.stderr == py.stderr
     assert rust.stdout.splitlines() == [
         "[ebuild  N    ~] dev-libs/kwbackmid-2.0 ",
@@ -3325,7 +3334,7 @@ def test_autounmask_levels_unmask_two_categories_at_once_on_the_same_version(
     a = ["--pretend", "--autounmask", "dev-libs/multimaskconsumer"]
     rust = _run([str(emerge_binary)], a, fixture_env)
     py = _run(emerge_pretend_python, a, fixture_env)
-    assert rust.returncode == 0
+    assert rust.returncode == 1
     assert rust.stdout == py.stdout and rust.stderr == py.stderr
     assert rust.stdout.splitlines() == [
         "[ebuild  N    ~] dev-libs/multimaskdep-2.0 ",
@@ -3370,7 +3379,7 @@ def test_autounmask_levels_prefer_license_over_a_higher_keyword_masked_version(
     args = ["--pretend", "--autounmask", "dev-libs/levelconsumer"]
     rust = _run([str(emerge_binary)], args, fixture_env)
     py = _run(emerge_pretend_python, args, fixture_env)
-    assert rust.returncode == 0
+    assert rust.returncode == 1
     assert rust.stdout == py.stdout and rust.stderr == py.stderr
     assert rust.stdout.splitlines() == [
         "[ebuild  N     ] dev-libs/levelpkg-1.0 ",
@@ -3443,13 +3452,16 @@ def test_autounmask_use_resolves_a_top_level_use_dep_mismatch(emerge_binary, fix
     off; `-v` shows the adjusted `USE="-foo …"`, the `The following USE
     changes are necessary to proceed:` block (real _display_autounmask's
     use_changes_msg -- `>=<cpv>` form via check_if_latest, `(see
-    "package.use" …)`) goes to stderr, exit 0."""
+    "package.use" …)`) goes to stderr, and the run exits **1** -- real
+    `action_build`'s `if not success: display_problems(); return 1`
+    fires for any autounmask config change, `--pretend` included
+    (verified against a live `emerge -pv www-client/firefox`)."""
     result = _run(
         [str(emerge_binary)],
         ["--pretend", "-v", "dev-libs/useflagpkg[-foo]"],
         fixture_env,
     )
-    assert result.returncode == 0
+    assert result.returncode == 1
     assert result.stdout.splitlines()[0].startswith(
         "[ebuild  N     ] dev-libs/useflagpkg-1.0"
     )
@@ -3644,6 +3656,40 @@ def test_global_use_force_and_use_mask_win_over_a_contradicting_package_use_entr
     )
 
 
+def test_later_level_global_use_mask_cancels_earlier_package_use_stable_mask(
+    emerge_binary, fixture_env
+):
+    """Found by reading real UseManager.getUseMask end to end
+    (lib/portage/package/ebuild/_config/UseManager.py): the four sources
+    (use.mask, use.stable.mask, package.use.mask, package.use.stable.mask)
+    are stacked *interleaved per profile level* --
+    `for i, _ in enumerate(...): append usemask[i], usestablemask[i],
+    pusemask[i][cp], pusestablemask[i][cp]` -- and only THEN collapsed
+    with one `stack_lists(incremental=True)`. So a global `use.mask`
+    `-flag` line at a *later* profile level cancels an *earlier* level's
+    `package.use.mask` entry, a cross-source cancellation the old flat
+    `config.use_mask | package_use_mask` union structurally could not
+    express (it re-added the per-package entry unconditionally).
+
+    This is the real `dev-libs/glib`/`sysprof` case: `base/
+    package.use.stable.mask` masks `sysprof` for glib, then `arch/amd64/
+    use.mask` un-masks it globally with `-sysprof` -- real portage shows
+    `-sysprof` (plain, changeable), portuale used to show `(-sysprof)`
+    (forced). The fixture mirrors it exactly:
+    `base/package.use.stable.mask` = `dev-libs/crossmaskcancelpkg xmc`,
+    `arch/amd64/use.mask` (a later chain level) = `-xmc`; the pkg's own
+    IUSE is `+xmc`. Interleaved -> `xmc` not masked -> `USE="xmc"`."""
+    result = _run(
+        [str(emerge_binary)],
+        ["--pretend", "-v", "dev-libs/crossmaskcancelpkg"],
+        fixture_env,
+    )
+    assert result.returncode == 0
+    assert result.stdout == (
+        '[ebuild  N     ] dev-libs/crossmaskcancelpkg-1.0::testrepo  USE="xmc"\n\nTotal: 1 package (1 new), Size of downloads: 0 KiB\n'
+    )
+
+
 def test_profile_level_minus_flag_genuinely_cancels_an_iuse_plus_default(
     emerge_binary, fixture_env
 ):
@@ -3775,15 +3821,15 @@ def test_autounmask_suggests_a_keyword_once_explicitly_enabled(emerge_binary, fi
     on stdout, real depgraph.py::_display_autounmask's `The following
     keyword changes are necessary to proceed:` block goes to stderr
     (real _writemsg + _get_dep_chain_as_comment: the `#required by ...`
-    dep chain, then `=<cpv> <kw>`), and `emerge --pretend` still exits 0
-    (real actions.py:563). v1 covers the "masked by KEYWORDS alone" case
-    only."""
+    dep chain, then `=<cpv> <kw>`), and the run exits **1** -- real
+    `action_build` returns 1 for any autounmask change under `--pretend`
+    too. v1 covers the "masked by KEYWORDS alone" case only."""
     result = _run(
         [str(emerge_binary)],
         ["--pretend", "--autounmask", "dev-libs/autounmaskkeywordpkg"],
         fixture_env,
     )
-    assert result.returncode == 0
+    assert result.returncode == 1
     assert result.stdout == "[ebuild  N    ~] dev-libs/autounmaskkeywordpkg-1.0 \n"
     assert result.stderr == (
         "\nThe following keyword changes are necessary to proceed:\n"
@@ -3900,7 +3946,7 @@ def test_autounmask_dependency_gets_a_keyword_suggestion_once_enabled(emerge_bin
         ["--pretend", "--autounmask", "dev-libs/autounmaskdepconsumer"],
         fixture_env,
     )
-    assert result.returncode == 0
+    assert result.returncode == 1
     assert result.stdout == (
         (
         '[ebuild  N    ~] dev-libs/autounmaskkeywordpkg-1.0 \n'
@@ -3928,7 +3974,7 @@ def test_autounmask_keyword_changes_appear_in_json(emerge_binary, fixture_env):
         ["--pretend", "--autounmask", "--json", "dev-libs/autounmaskdepconsumer"],
         fixture_env,
     )
-    assert result.returncode == 0
+    assert result.returncode == 1
     payload = json.loads(result.stdout)
     dep = next(e for e in payload["entries"] if e["package"] == "autounmaskkeywordpkg")
     assert dep["outcome"] == "new"
@@ -3970,7 +4016,7 @@ def test_autounmask_license_resolves_a_eula_masked_dependency(emerge_binary, fix
         ["--pretend", "--autounmask", "dev-libs/licensemaskedconsumer"],
         fixture_env,
     )
-    assert result.returncode == 0
+    assert result.returncode == 1
     assert result.stdout == (
         "[ebuild  N     ] dev-libs/licensemaskedpkg-1.0 \n"
         "[ebuild  N     ] dev-libs/licensemaskedconsumer-1.0 \n"
@@ -3990,7 +4036,7 @@ def test_autounmask_license_resolves_a_eula_masked_dependency(emerge_binary, fix
         ["--pretend", "--autounmask-license=y", "dev-libs/licensemaskedpkg"],
         fixture_env,
     )
-    assert y.returncode == 0
+    assert y.returncode == 1
     assert ">=dev-libs/licensemaskedpkg-1.0 SomeEula" in y.stderr
     n = _run(
         [str(emerge_binary)],
@@ -4046,7 +4092,7 @@ def test_autounmask_keep_masks_n_unmasks_a_package_mask(emerge_binary, fixture_e
         ["--pretend", "--autounmask-keep-masks=n", "dev-libs/maskmaskedconsumer"],
         fixture_env,
     )
-    assert result.returncode == 0
+    assert result.returncode == 1
     assert result.stdout == (
         "[ebuild  N    #] dev-libs/hardmaskedpkg-1.0 \n"
         "[ebuild  N     ] dev-libs/maskmaskedconsumer-1.0 \n"
@@ -4114,7 +4160,7 @@ def test_autounmask_use_changes_appear_in_json(emerge_binary, fixture_env):
         ["--pretend", "--json", "dev-libs/usedeprejectedpkg"],
         fixture_env,
     )
-    assert result.returncode == 0
+    assert result.returncode == 1
     payload = json.loads(result.stdout)
     dep = next(e for e in payload["entries"] if e["package"] == "useflagpkg")
     assert dep["outcome"] == "new"
@@ -4149,7 +4195,7 @@ def test_autounmask_use_resolves_the_opt_conditional_dependency_via_the_child_fl
         ["--pretend", "--json", "dev-libs/useeqparentoffpkg"],
         fixture_env,
     )
-    assert result.returncode == 0
+    assert result.returncode == 1
     payload = json.loads(result.stdout)
     dep = next(e for e in payload["entries"] if e["package"] == "useeqchildpkg")
     assert dep["outcome"] == "new"
@@ -4195,12 +4241,13 @@ def test_autounmask_use_parent_flip_resolves_when_the_child_flag_is_masked(
     can enable it. Real portage flips the *parent's* `feat` off instead
     (dropping the conditional constraint), re-resolves, and prints
     `>=dev-libs/parentflipeqpkg-1.0 -feat` in the "necessary to proceed"
-    USE block -- exit 0. The parent's own USE line reads `-feat`; the
-    freed child resolves as a normal New."""
+    USE block -- exit 1 (an autounmask config change; real `action_build`
+    returns 1). The parent's own USE line reads `-feat`; the freed child
+    resolves as a normal New."""
     args = ["--pretend", "dev-libs/parentflipeqpkg"]
     rust = _run([str(emerge_binary)], args, fixture_env)
     py = _run(emerge_pretend_python, args, fixture_env)
-    assert rust.returncode == 0
+    assert rust.returncode == 1
     assert rust.stdout == py.stdout
     assert rust.stderr == py.stderr
     assert rust.stdout.splitlines() == [
@@ -4249,7 +4296,7 @@ def test_autounmask_use_parent_flip_re_resolves_the_whole_graph(
     args = ["--pretend", "dev-libs/pfgraphparent"]
     rust = _run([str(emerge_binary)], args, fixture_env)
     py = _run(emerge_pretend_python, args, fixture_env)
-    assert rust.returncode == 0 and py.returncode == 0
+    assert rust.returncode == 1 and py.returncode == 1
     assert rust.stdout == py.stdout and rust.stderr == py.stderr
     assert rust.stdout.splitlines() == [
         '[ebuild  N     ] dev-libs/pfgraphchild-1.0  USE="(-pf)"',

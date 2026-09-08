@@ -362,6 +362,25 @@ pub struct ProfileUseLayer {
     pub package_use: Vec<(String, Vec<String>)>,
 }
 
+/// One profile chain level's contribution to the `use.force`/`use.mask`
+/// (+ `.stable.` variants) stacking, in file order -- see
+/// [`Config::use_mask_force_levels`]. `use_*` fields hold raw
+/// `flag`/`-flag` line tokens (global `use.mask`/`use.force`); the
+/// `package_use_*` fields hold `(atom, flag-tokens)` pairs
+/// (`package.use.mask` etc.). A `Default` (all-empty) level is a valid,
+/// common state.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct UseMaskForceLevel {
+    pub use_mask: Vec<String>,
+    pub use_force: Vec<String>,
+    pub use_stable_mask: Vec<String>,
+    pub use_stable_force: Vec<String>,
+    pub package_use_mask: Vec<(String, Vec<String>)>,
+    pub package_use_force: Vec<(String, Vec<String>)>,
+    pub package_use_stable_mask: Vec<(String, Vec<String>)>,
+    pub package_use_stable_force: Vec<(String, Vec<String>)>,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct Config {
     pub use_flags: HashSet<String>,
@@ -757,6 +776,19 @@ pub struct Config {
     /// `package.use.stable.mask`. See `package_use_stable_force`'s own
     /// doc comment.
     pub package_use_stable_mask: Vec<(String, Vec<String>)>,
+    /// The same eight `use.*mask`/`use.*force` sources as the flat fields
+    /// above, but kept **per profile level in chain order** (with the
+    /// repo-level `package.use.*` entries as a synthetic leading level),
+    /// so `portage-repo` can reproduce real `UseManager.getUseMask`/
+    /// `getUseForce`'s per-level *interleaved* `stack_lists(incremental=1)`:
+    /// a global `use.mask` `-flag` line at a later profile level cancels
+    /// an earlier level's `package.use.mask` entry (and vice-versa), a
+    /// cross-source cancellation the flat-union fields above structurally
+    /// cannot express. The flat fields stay for the readers that only
+    /// need the global-only / approximate result (`emerge --info`'s
+    /// global `USE=`, the REQUIRED_USE valid-IUSE domain, `--newuse`'s
+    /// forced-flags filter). See `portage-repo`'s `resolved_use_mask`.
+    pub use_mask_force_levels: Vec<UseMaskForceLevel>,
     /// `license_groups` (PMS-adjacent; real `LicenseManager.
     /// _read_license_groups`): every profile level's own file plus the
     /// user-level `/etc/portage/license_groups`, each `<name> <license
@@ -2797,6 +2829,67 @@ pub fn resolve_config(
     }
     config.package_use_stable_force = parse_package_use_lines(&use_stable_force_lines, false);
     config.package_use_stable_mask = parse_package_use_lines(&use_stable_mask_lines, false);
+
+    // Per-level view of the eight sources just parsed flat above, so
+    // `portage-repo` can replay real `UseManager.getUseMask`/`getUseForce`'s
+    // *interleaved* per-level stacking (`for i, _ in enumerate(...):
+    // append usemask[i], usestablemask[i], pusemask[i][cp],
+    // pusestablemask[i][cp]` -> one `stack_lists(incremental=1)`). Level
+    // 0 is synthetic: the repo-level `package.use.*` (main repo, then
+    // each overlay `::repo`-scoped) that real prepends before the
+    // profile loop. Levels 1.. are the profile chain, in order. The
+    // global `use.mask`/`use.force` files read per level again here (the
+    // flat fields stacked them into a single set); a re-read of a
+    // handful of usually-absent small files, once per (memoised)
+    // `resolve_config`.
+    let mut levels: Vec<UseMaskForceLevel> = Vec::new();
+    {
+        // Level 0 (synthetic): repo-level `package.use.*` -- main repo,
+        // then each overlay `::repo`-scoped, exactly the concatenation
+        // the flat fields' repo-level prefix already uses.
+        let repo_pkg = |file: &str| -> Result<Vec<(String, Vec<String>)>, Error> {
+            let mut l = read_config_lines(&main_repo_location.join("profiles").join(file))?;
+            for (repo_name, repo_location) in overlay_repos {
+                l.extend(scope_repo_package_use_lines(
+                    &read_config_lines(&repo_location.join("profiles").join(file))?,
+                    repo_name,
+                ));
+            }
+            Ok(parse_package_use_lines(&l, false))
+        };
+        levels.push(UseMaskForceLevel {
+            package_use_mask: repo_pkg("package.use.mask")?,
+            package_use_force: repo_pkg("package.use.force")?,
+            package_use_stable_mask: repo_pkg("package.use.stable.mask")?,
+            package_use_stable_force: repo_pkg("package.use.stable.force")?,
+            ..Default::default()
+        });
+    }
+    for level in &chain {
+        levels.push(UseMaskForceLevel {
+            use_mask: read_config_lines(&level.join("use.mask"))?,
+            use_force: read_config_lines(&level.join("use.force"))?,
+            use_stable_mask: read_config_lines(&level.join("use.stable.mask"))?,
+            use_stable_force: read_config_lines(&level.join("use.stable.force"))?,
+            package_use_mask: parse_package_use_lines(
+                &read_config_lines(&level.join("package.use.mask"))?,
+                false,
+            ),
+            package_use_force: parse_package_use_lines(
+                &read_config_lines(&level.join("package.use.force"))?,
+                false,
+            ),
+            package_use_stable_mask: parse_package_use_lines(
+                &read_config_lines(&level.join("package.use.stable.mask"))?,
+                false,
+            ),
+            package_use_stable_force: parse_package_use_lines(
+                &read_config_lines(&level.join("package.use.stable.force"))?,
+                false,
+            ),
+        });
+    }
+    config.use_mask_force_levels = levels;
 
     // packages (@system): every profile level's own file, in chain
     // order, stacked with the same -atom removal semantics package.mask

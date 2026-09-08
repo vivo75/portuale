@@ -1,0 +1,7 @@
+DEFINED_PHASES=-
+DESCRIPTION=fixture: a later profile level's global use.mask -flag cancels an earlier level's package.use.stable.mask
+EAPI=8
+IUSE=+xmc
+KEYWORDS=amd64
+SLOT=0
+_md5_=0000000000000000000000000000000
