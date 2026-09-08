@@ -1,5 +1,106 @@
 use super::*;
 
+#[test]
+fn merge_driver_protects_a_modified_config() {
+    let tmp = TempDir::new("portuale-remote-protect").keep();
+    let root = tmp.join("root");
+    std::fs::create_dir_all(root.join("etc")).unwrap();
+    std::fs::create_dir_all(root.join("var/db/pkg")).unwrap();
+    // Live config differs from the incoming image version.
+    std::fs::write(
+        root.join("etc/probe.conf"),
+        "live
+",
+    )
+    .unwrap();
+    let (unit, staged) = synthetic_unit(
+        &tmp,
+        &[(
+            "etc/probe.conf",
+            "incoming
+",
+        )],
+    );
+    let ctx = local_ctx(root.to_str().unwrap(), tmp.join("work").to_str().unwrap());
+    let markers = run_merge_stage(&ctx, None, &unit, &staged, None).expect("merge succeeds");
+    assert!(markers.iter().any(|m| m == "MERGE_COPY=ok"), "{markers:?}");
+    // Original untouched, update diverted to a `._cfg` sibling...
+    assert_eq!(
+        std::fs::read_to_string(root.join("etc/probe.conf")).unwrap(),
+        "live
+"
+    );
+    let cfg = root.join("etc/._cfg0000_probe.conf");
+    assert_eq!(
+        std::fs::read_to_string(&cfg).unwrap(),
+        "incoming
+"
+    );
+    // ...while CONTENTS records the logical path (like the local merge).
+    let contents =
+        std::fs::read_to_string(root.join("var/db/pkg/dev-libs/probe-1.0/CONTENTS")).unwrap();
+    assert!(
+        contents.contains("obj /etc/probe.conf "),
+        "unexpected CONTENTS:\n{contents}"
+    );
+    // Identical content merges in place (no `._cfg` spam): the
+    // live file now matches the image, so reinstalling overwrites.
+    std::fs::write(root.join("etc/probe.conf"), "incoming\n").unwrap();
+    let markers = run_merge_stage(&ctx, None, &unit, &staged, None).expect("remerge succeeds");
+    assert!(markers.iter().any(|m| m == "MERGE_COPY=ok"), "{markers:?}");
+    assert!(!root.join("etc/._cfg0001_probe.conf").exists());
+    assert_eq!(
+        std::fs::read_to_string(root.join("etc/probe.conf")).unwrap(),
+        "incoming\n"
+    );
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+#[test]
+fn merge_driver_aborts_on_unowned_collision() {
+    let tmp = TempDir::new("portuale-remote-collide").keep();
+    let root = tmp.join("root");
+    std::fs::create_dir_all(root.join("usr/share")).unwrap();
+    std::fs::create_dir_all(root.join("var/db/pkg")).unwrap();
+    // A file another installed package owns: fail-closed. An unowned
+    // orphan is simply overwritten -- only foreign ownership aborts.
+    std::fs::write(
+        root.join("usr/share/foreign.txt"),
+        "mine
+",
+    )
+    .unwrap();
+    let (unit, staged) = synthetic_unit(
+        &tmp,
+        &[(
+            "usr/share/foreign.txt",
+            "theirs
+",
+        )],
+    );
+    let owner = root.join("var/db/pkg/dev-libs/owner-1.0");
+    std::fs::create_dir_all(&owner).unwrap();
+    std::fs::write(owner.join("SLOT"), "0\n").unwrap();
+    std::fs::write(
+        owner.join("CONTENTS"),
+        "obj /usr/share/foreign.txt deadbeef 100\n",
+    )
+    .unwrap();
+    let ctx = local_ctx(root.to_str().unwrap(), tmp.join("work").to_str().unwrap());
+    let err = run_merge_stage(&ctx, None, &unit, &staged, None).unwrap_err();
+    assert!(err.contains("collision"), "{err}");
+    // Nothing was written: no vdb for the new package (the other
+    // owner's entry stays), foreign file untouched.
+    assert!(!root.join("var/db/pkg/dev-libs/probe-1.0").exists());
+    assert!(root.join("var/db/pkg/dev-libs/owner-1.0").exists());
+    assert_eq!(
+        std::fs::read_to_string(root.join("usr/share/foreign.txt")).unwrap(),
+        "mine
+"
+    );
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
 /// With only `environment.bz2` in the old entry and no client `bzip2` on
 /// `PATH`, the hook still gets a sourceable env via the staged
 /// server-side decompress.

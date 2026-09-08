@@ -77,6 +77,16 @@ fn fixture(name: &str) -> std::path::PathBuf {
         .join(name)
 }
 
+/// Synthetic merge through the driver: protect rename and fail-closed
+/// collision, no binpkg needed.
+fn synthetic_unit(
+    tmp: &std::path::Path,
+    files: &[(&str, &str)],
+) -> (String, crate::remote_bundle::StagedBundle) {
+    let bytes: Vec<(&str, &[u8])> = files.iter().map(|(r, c)| (*r, c.as_bytes())).collect();
+    synthetic_unit_bytes(tmp, &bytes)
+}
+
 /// [`synthetic_unit`] with binary payloads.
 fn synthetic_unit_bytes(
     tmp: &std::path::Path,
