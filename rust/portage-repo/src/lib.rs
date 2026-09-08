@@ -9809,36 +9809,34 @@ pub fn resolve_pretend(
         } else {
             Vec::new()
         };
-        // Real: a dependency atom `foo[bar]` whose already-installed `foo`
-        // does NOT have `bar` (and its default profile USE wouldn't
-        // either) is not "already installed" -- real reinstalls `foo`
-        // with `bar` and, if `bar` needs `package.use`, autounmasks it
-        // (`[ebuild R] … bar*`, exit 1). portuale kept this candidate via
-        // `suggested_use_flip` at the `matched` filter above; forcing a
-        // `Reinstall` here (rather than `AlreadyInstalled`) is what makes
-        // the graph layer's own child-flip block record + apply the
-        // autounmask USE change and walk the newly-USE-gated deps
-        // (`net-misc/curl[http2]` -> `nghttp2`; `sys-apps/systemd
-        // [policykit]`; `mime-types[nginx]`). Gated on `autounmask_use`
-        // -- without it the earlier `matched` filter would have dropped
-        // the candidate entirely (`NoVisibleCandidate`), so this only
-        // ever fires for a genuinely-flippable mismatch.
-        let use_dep_needs_flip = autounmask_use
-            && atom
-                .use_deps
-                .as_deref()
-                .filter(|d| !d.is_empty())
-                .is_some_and(|use_deps| {
-                    candidate_iuse_and_use(best, &atom.category, &atom.package, config).is_some_and(
-                        |(iuse, use_flags)| {
-                            !portage_dep::use_deps_satisfied(
-                                use_deps,
-                                &valid_iuse(&iuse, config),
-                                &use_flags,
-                            )
-                        },
-                    )
-                });
+        // Real: a dependency atom `foo[bar]` whose already-installed
+        // `foo` was built WITHOUT `bar` is not "already installed" --
+        // real reinstalls `foo` to satisfy the atom, whatever `foo`'s
+        // current effective USE happens to be. The check is against the
+        // *vdb-recorded* USE, not the profile-resolved one: `policykit`
+        // (a global flag `systemd`'s ebuild now defaults on) shows
+        // `[ebuild R] … policykit*` at rc 0 -- the graph layer's own
+        // child-flip block records an autounmask change only when the
+        // *effective* USE still can't satisfy the atom (`mime-types
+        // [nginx]` -> rc 1). Forcing a `Reinstall` here (rather than
+        // `AlreadyInstalled`) is what routes the entry through that
+        // block at all. `dependency_avoid_update_candidate` above already
+        // made the same vdb-USE check and returned `None`, so a `best`
+        // that reaches here really is a same-version installed one the
+        // atom's `[flag]` isn't satisfied by.
+        let use_dep_needs_flip = atom
+            .use_deps
+            .as_deref()
+            .filter(|d| !d.is_empty())
+            .is_some_and(|use_deps| {
+                let vdb_iuse =
+                    read_vdb_flag_set(root, &atom.category, &atom.package, &best.version, "IUSE");
+                let vdb_use =
+                    read_vdb_flag_set(root, &atom.category, &atom.package, &best.version, "USE");
+                let mut valid = valid_iuse(&vdb_iuse, config);
+                valid.extend(vdb_use.iter().cloned());
+                !portage_dep::use_deps_satisfied(use_deps, &valid, &vdb_use)
+            });
         let deps_changed_flag = changed_deps
             && deps_changed(
                 root,

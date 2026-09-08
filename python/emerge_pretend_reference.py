@@ -6782,18 +6782,20 @@ def resolve_pretend(
             root, category, package, best["version"], best["repo_name"]
         )
         # Real: a dependency atom `foo[bar]` whose already-installed `foo`
-        # lacks `bar` is not "already installed" -- real reinstalls `foo`
-        # with `bar` and autounmasks it if needed. Forcing a reinstall
-        # here (rather than already_installed) lets the graph layer's own
-        # child-flip block record + apply the autounmask USE change and
-        # walk the newly-USE-gated deps. Gated on autounmask_use.
-        # Mirrors portage-repo/src/lib.rs.
+        # was BUILT without `bar` is not "already installed" -- real
+        # reinstalls `foo` to satisfy the atom (whatever `foo`'s current
+        # effective USE is). Checked against the vdb-recorded USE, not the
+        # profile-resolved one: a global flag `foo`'s ebuild now defaults
+        # on shows `[ebuild R] … bar*` at rc 0, autounmask only when the
+        # effective USE still can't satisfy it (graph child-flip block).
+        # Forcing a reinstall here (not already_installed) routes the
+        # entry through that block. Mirrors portage-repo/src/lib.rs.
         use_dep_needs_flip = False
-        if autounmask_use and atom.use is not None:
-            _iu, _uf = _candidate_iuse_and_use(best, category, package, config)
-            use_dep_needs_flip = not _use_deps_satisfied(
-                atom, _valid_iuse(_iu, config), _uf
-            )
+        if atom.use is not None:
+            _vi = _read_vdb_flag_set(root, category, package, best["version"], "IUSE")
+            _vu = _read_vdb_flag_set(root, category, package, best["version"], "USE")
+            _valid = _valid_iuse(_vi, config) | set(_vu)
+            use_dep_needs_flip = not _use_deps_satisfied(atom, _valid, _vu)
         # is_top_level and not selective: real portage's own bare,
         # reasonless "[ebuild R]" -- see this function's own docstring's
         # selective/is_top_level paragraph. changed_flags/
