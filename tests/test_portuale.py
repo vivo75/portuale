@@ -404,6 +404,212 @@ def test_mrg_remote_unwritable_root_fails_preflight(
     assert "not writable" in result.stderr
 
 
+def _remote_resolve_env(fixture_env, root, config_root):
+    """Resolve-against-this-config env: fresh client ROOT, config root
+    override left to the RAII guard (PORTAGE_CONFIGROOT initial value is
+    irrelevant, but keep it sane)."""
+    env = dict(fixture_env)
+    env["ROOT"] = str(root)
+    env["PORTAGE_CONFIGROOT"] = str(config_root)
+    return env
+
+
+def _write_tmp_binhost(tmp_path):
+    """A `file://` binhost serving the hook-ordering fixture binary, with
+    a minimal `Packages` index (mirrors the on-disk format the
+    `refresh_binhost_indexes` test serves over HTTP). Returns
+    (binhost_dir, size)."""
+    import shutil as _shutil
+
+    binhost = tmp_path / "binhost"
+    (binhost / "dev-libs").mkdir(parents=True)
+    src = (
+        Path(FIXTURES_ROOT)
+        / "pkgdir/dev-libs/binpkgrmpkg-1.0.tbz2"
+    )
+    _shutil.copy(src, binhost / "dev-libs/binpkgrmpkg-1.0.tbz2")
+    size = (binhost / "dev-libs/binpkgrmpkg-1.0.tbz2").stat().st_size
+    (binhost / "Packages").write_text(
+        "TIMESTAMP: 0\n"
+        "PACKAGES: 1\n"
+        "\n"
+        "BUILD_ID: 1\n"
+        "CPV: dev-libs/binpkgrmpkg-1.0\n"
+        "DEFINED_PHASES: -\n"
+        "EAPI: 8\n"
+        "KEYWORDS: amd64\n"
+        "PATH: dev-libs/binpkgrmpkg-1.0.tbz2\n"
+        "REPO: testrepo\n"
+        f"SIZE: {size}\n"
+        "SLOT: 0\n"
+        "USE:\n"
+    )
+    return binhost
+
+
+def _write_tmp_clientetc(tmp_path, binhost):
+    """A client `/etc/portage` copy of the fixture config, repointed at
+    the tmp binhost (absolute repo locations so the copy resolves
+    anywhere). Returns the config-root dir."""
+    import shutil as _shutil
+
+    clientetc = tmp_path / "clientetc"
+    _shutil.copytree(
+        Path(FIXTURES_ROOT) / "etc/portage",
+        clientetc / "etc/portage",
+        symlinks=True,
+    )
+    # The copied tree keeps `make.profile` as a relative symlink into the
+    # fixture repo -- repoint it absolutely so the copy resolves anywhere.
+    profile_link = clientetc / "etc/portage/make.profile"
+    profile_link.unlink(missing_ok=True)
+    profile_link.symlink_to(Path(FIXTURES_ROOT) / "repo/profiles/default")
+    (clientetc / "etc/portage/binrepos.conf").write_text(
+        "[tmpbinhost]\n"
+        f"sync-uri = file://{binhost}\n"
+        "priority = 1\n"
+    )
+    repos_conf = clientetc / "etc/portage/repos.conf"
+    for conf in repos_conf.iterdir():
+        if not conf.is_file():
+            continue
+        lines = []
+        for line in conf.read_text().splitlines():
+            stripped = line.strip()
+            if stripped.startswith("location") and "=" in line:
+                _, _, value = line.partition("=")
+                value = value.strip()
+                if value and not value.startswith("/"):
+                    line = line.replace(value, str(Path(FIXTURES_ROOT) / value))
+            lines.append(line)
+        conf.write_text("\n".join(lines) + "\n")
+    return clientetc
+
+
+def test_mrg_remote_resolve_merges_a_binhost_binary(
+    mrg_binary, fixture_env, tmp_path
+):
+    """Slice-5 resolve path over local transport: `--getbinpkgonly`
+    resolves the hook-ordering fixture against a tmp `file://` binhost
+    (server-side `/etc/portage` placement), then the unit ships and
+    merges into a fresh client ROOT. Both ledgers record the install."""
+    binhost = _write_tmp_binhost(tmp_path)
+    clientetc = _write_tmp_clientetc(tmp_path, binhost)
+    root = tmp_path / "root"
+    (root / "var" / "db" / "pkg").mkdir(parents=True)
+    env = _remote_resolve_env(fixture_env, root, clientetc)
+    result = subprocess.run(
+        [str(mrg_binary),
+         "--getbinpkgonly",
+         "--remote-hostname", "localtest",
+         "--remote-transport", "local",
+         "--remote-root", str(root),
+         "--remote-workdir", str(tmp_path / "work"),
+         "--remote-etc-portage", f"server:{clientetc}",
+         "dev-libs/binpkgrmpkg"],
+        capture_output=True, text=True, check=False,
+        env=env,
+    )
+    assert result.returncode == 0, result.stderr
+    assert ">>> Remote merged dev-libs/binpkgrmpkg-1.0" in result.stdout
+    assert (root / "usr/share/binpkgrmpkg/payload-1.0.txt").is_file()
+    assert (root / "var/db/pkg/dev-libs/binpkgrmpkg-1.0/CONTENTS").is_file()
+    assert (root / "var/lib/binpkgrmpkg.log").read_text() == (
+        "setup-1.0\npreinst-1.0\npostinst-1.0\n"
+    )
+    client_ledger = (root / "var/db/remote-repos").read_text()
+    assert "dev-libs/binpkgrmpkg-1.0" in client_ledger
+    server_ledger = (
+        clientetc / "pkgdir/remote-ledger/localtest"
+    ).read_text()
+    assert "dev-libs/binpkgrmpkg-1.0" in server_ledger
+    assert "testrepo" in server_ledger
+
+
+def test_mrg_remote_client_etc_placement_pulls_before_resolving(
+    mrg_binary, fixture_env, tmp_path
+):
+    """Slice-5 `client:` placement over local transport: the same
+    `/etc/portage` tree served from a client path is pulled once, then
+    the resolve + merge behave exactly like the `server:` twin (same
+    merge marker, same hook order, same dual ledgers)."""
+    binhost = _write_tmp_binhost(tmp_path)
+    clientetc = _write_tmp_clientetc(tmp_path, binhost)
+    client_portage = clientetc / "etc/portage"
+    root = tmp_path / "croot"
+    (root / "var" / "db" / "pkg").mkdir(parents=True)
+    env = _remote_resolve_env(fixture_env, root, clientetc)
+    result = subprocess.run(
+        [str(mrg_binary),
+         "--getbinpkgonly",
+         "--remote-hostname", "localtest",
+         "--remote-transport", "local",
+         "--remote-root", str(root),
+         "--remote-workdir", str(tmp_path / "cwork"),
+         "--remote-etc-portage", f"client:{client_portage}",
+         "dev-libs/binpkgrmpkg"],
+        capture_output=True, text=True, check=False,
+        env=env,
+    )
+    assert result.returncode == 0, result.stderr
+    assert ">>> Remote merged dev-libs/binpkgrmpkg-1.0" in result.stdout
+    assert (root / "usr/share/binpkgrmpkg/payload-1.0.txt").is_file()
+    assert (root / "var/lib/binpkgrmpkg.log").read_text() == (
+        "setup-1.0\npreinst-1.0\npostinst-1.0\n"
+    )
+    assert "dev-libs/binpkgrmpkg-1.0" in (root / "var/db/remote-repos").read_text()
+    # The server ledger for a `client:` run lives under the pulled copy's
+    # PKGDIR (a pid-stamped $TMPDIR dir), so only the client ledger is
+    # pinned here -- exit 0 plus the merge above already prove the pull
+    # fed the resolve.
+
+
+def test_mrg_remote_without_getbinpkgonly_is_usage_error(mrg_binary, fixture_env):
+    """Remote resolve without `--getbinpkgonly` exits 2 before any
+    connection: no source build on the client, enforced at the CLI."""
+    result = subprocess.run(
+        [str(mrg_binary),
+         "--remote-hostname", "client.invalid",
+         "dev-libs/binpkgrmpkg"],
+        capture_output=True, text=True, check=False,
+        env=fixture_env,
+    )
+    assert result.returncode == 2
+    assert "--getbinpkgonly" in result.stderr
+
+
+def test_mrg_remote_with_buildpkgonly_is_usage_error(mrg_binary, fixture_env):
+    """Remote runs install, not build."""
+    result = subprocess.run(
+        [str(mrg_binary),
+         "--getbinpkgonly", "--buildpkgonly",
+         "--remote-hostname", "client.invalid",
+         "dev-libs/binpkgrmpkg"],
+        capture_output=True, text=True, check=False,
+        env=fixture_env,
+    )
+    assert result.returncode == 2
+    assert "--buildpkgonly" in result.stderr
+
+
+def test_mrg_remote_pretend_stays_local(mrg_binary, fixture_env):
+    """`--pretend` with a bogus `--remote-hostname` still resolves
+    locally: remote options drop out, no connection is attempted.
+    (`binpkgrmpkg`, not `newpkg`: an earlier suite test really installs
+    `newpkg` into the fixture vdb, which would flip the pinned `N` to
+    `R` -- this test pins locality, not the fixture's install state.)"""
+    result = subprocess.run(
+        [str(mrg_binary),
+         "--pretend",
+         "--remote-hostname", "bogus.invalid",
+         "dev-libs/binpkgrmpkg"],
+        capture_output=True, text=True, check=False,
+        env=fixture_env,
+    )
+    assert result.returncode == 0, result.stderr
+    assert "[ebuild  N     ] dev-libs/binpkgrmpkg-2.0" in result.stdout
+
+
 def test_mrg_remote_option_without_hostname_is_usage_error(mrg_binary, fixture_env):
     """Any `--remote-*` companion without `--remote-hostname` exits 2
     without touching the network."""

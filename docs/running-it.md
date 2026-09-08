@@ -2166,3 +2166,50 @@ Deterministic slice tests: `pytest tests/test_portuale.py -k
 "remote_merge"` (fresh, replace with the real interleave, ssh) and
 `cargo test -p portuale remote` (protect rename, reinstall-in-place,
 foreign-owner abort).
+
+`mrg` remote resolve (2026-09-08, remote-merge slice 5): with
+`--getbinpkgonly`, target atoms resolve on the server against the
+placed `/etc/portage` and each binary unit ships + merges on the
+client, with a repo ledger entry on both sides. Live-verified exactly
+as run (local transport; setup builds a tmp `file://` binhost and a
+relocated config copy -- the same shape the black-box test builds):
+
+```sh
+T=/tmp/rmdemo; mkdir -p $T/binhost/dev-libs $T/root/var/db/pkg $T/cfgroot
+cp fixtures/pkgdir/dev-libs/binpkgrmpkg-1.0.tbz2 $T/binhost/dev-libs/
+SZ=$(stat -c%s $T/binhost/dev-libs/binpkgrmpkg-1.0.tbz2)
+printf 'TIMESTAMP: 0\nPACKAGES: 1\n\nBUILD_ID: 1\nCPV: dev-libs/binpkgrmpkg-1.0\nDEFINED_PHASES: -\nEAPI: 8\nKEYWORDS: amd64\nPATH: dev-libs/binpkgrmpkg-1.0.tbz2\nREPO: testrepo\nSIZE: %s\nSLOT: 0\nUSE:\n' "$SZ" > $T/binhost/Packages
+cp -r fixtures/etc/portage $T/cfgroot/etc-portage-tmp
+mkdir -p $T/cfgroot/etc && mv $T/cfgroot/etc-portage-tmp $T/cfgroot/etc/portage
+rm $T/cfgroot/etc/portage/make.profile
+ln -s $PWD/fixtures/repo/profiles/default $T/cfgroot/etc/portage/make.profile
+printf '[tmpbinhost]\nsync-uri = file://%s/binhost\npriority = 1\n' "$T" > $T/cfgroot/etc/portage/binrepos.conf
+# (+ repoint the relative `location = ...` lines under
+#  $T/cfgroot/etc/portage/repos.conf/ at $PWD/fixtures/...)
+PORTAGE_CONFIGROOT=$T/cfgroot ROOT=$T/root \
+portuale mrg --getbinpkgonly --remote-transport local --remote-hostname x \
+  --remote-root $T/root --remote-workdir $T/work \
+  --remote-etc-portage server:$T/cfgroot dev-libs/binpkgrmpkg
+# >>> Remote preflight x: ok
+# >>> Remote bundle dev-libs/binpkgrmpkg-1.0: unpacked (71680 bytes, slot 0, repo testrepo)
+# >>> Remote phases dev-libs/binpkgrmpkg-1.0: setup ok, preinst ok
+# >>> Remote merge dev-libs/binpkgrmpkg-1.0: MERGE_PRERM=skip:none-installed
+# >>> Remote merge dev-libs/binpkgrmpkg-1.0: MERGE_COPY=ok
+# >>> Remote merge dev-libs/binpkgrmpkg-1.0: MERGE_VDB=ok
+# >>> Remote merge dev-libs/binpkgrmpkg-1.0: MERGE_REMOVE=skip:none-installed
+# >>> Remote merge dev-libs/binpkgrmpkg-1.0: MERGE_POSTRM=skip:none-installed
+# >>> Remote postinst dev-libs/binpkgrmpkg-1.0: ok
+# >>> Remote merged dev-libs/binpkgrmpkg-1.0
+# ($T/root/var/lib/binpkgrmpkg.log reads "setup-1.0\npreinst-1.0\npostinst-1.0\n";
+#  $T/cfgroot/pkgdir/remote-ledger/x and $T/root/var/db/remote-repos each hold
+#  one `<ts> testrepo <commit> dev-libs/binpkgrmpkg-1.0` line)
+portuale mrg --remote-hostname x dev-libs/binpkgrmpkg
+# mrg: remote execution requires --getbinpkgonly (no source build on client)  (exit 2)
+```
+
+Deterministic slice tests: `pytest tests/test_portuale.py -k
+"remote_resolve or remote_client_etc or without_getbinpkgonly or
+with_buildpkgonly or pretend_stays_local"` (server: + client:
+placements, the two usage errors, `--pretend` staying local) and
+`cargo test -p portuale remote` (last-10 ledger rotation, the manifest
+repo override).

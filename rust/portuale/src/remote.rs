@@ -73,6 +73,51 @@ impl RemoteTransport {
     }
 }
 
+/// Where a config tree lives (`--remote-etc-portage server:<path>` /
+/// `client:<path>`). The vdb/edb placements of the plan table land in
+/// slice 6 with the vdb shadow; only etc-portage is placed here.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ConfigPlacement {
+    /// Read directly off the server filesystem.
+    Server(String),
+    /// Pulled once over the multiplexed connection at plan start.
+    Client(String),
+}
+
+impl ConfigPlacement {
+    /// Parse `server:<path>` / `client:<path>`; anything else is a usage
+    /// error naming the option.
+    pub fn parse(option: &str, value: &str) -> Result<Self, String> {
+        match value.split_once(':') {
+            Some(("server", path)) if !path.is_empty() => Ok(Self::Server(path.to_string())),
+            Some(("client", path)) if !path.is_empty() => Ok(Self::Client(path.to_string())),
+            _ => Err(format!(
+                "mrg: {option} must be server:<path> or client:<path>, got {value:?}"
+            )),
+        }
+    }
+}
+
+/// mrg -> pretend handoff for remote resolve runs: `mrg` sets it from the
+/// validated CLI surface, `pretend::run`'s getbinpkg dispatch takes it.
+/// Same process-global-options precedent as portage-repo's own
+/// `USEOLDPKG_ATOMS`/`BINPKG_CHANGED_DEPS_OVERRIDE` statics (plain
+/// `RwLock`, `unwrap()` like theirs): set immediately before the
+/// in-process `pretend::run` call, taken (cleared) at the dispatch site,
+/// so nothing leaks across calls. Only `mrg` remote-with-atoms ever sets
+/// it; the `emerge` applet never does.
+static REMOTE_EXEC: std::sync::RwLock<Option<RemoteContext>> = std::sync::RwLock::new(None);
+
+/// Publish a remote execution for the upcoming `pretend::run` call.
+pub fn set_remote_exec(ctx: RemoteContext) {
+    *REMOTE_EXEC.write().unwrap() = Some(ctx);
+}
+
+/// Take a published remote execution, if any (clears the slot).
+pub fn take_remote_exec() -> Option<RemoteContext> {
+    REMOTE_EXEC.write().unwrap().take()
+}
+
 /// Validated remote target: Ansible's `play_context` split -- connection
 /// parameters in one struct, validated once, threaded through.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -104,6 +149,9 @@ pub struct RemoteContext {
     /// One explicit binpkg file to bundle, stream and unpack (bypasses
     /// resolution; slices 2-4 trials, later an escape hatch).
     pub binpkg: Option<String>,
+    /// Where `/etc/portage` resolves from (default
+    /// `client:/etc/portage`).
+    pub etc_portage: ConfigPlacement,
     /// Space-separated CONFIG_PROTECT list for the client merge (real
     /// default `/etc`; slice 5 derives it from pulled client config).
     pub config_protect: String,
@@ -128,6 +176,7 @@ const REMOTE_OPTION_IDS: &[&str] = &[
     "remote_binpkg",
     "remote_config_protect",
     "remote_config_protect_mask",
+    "remote_etc_portage",
 ];
 
 fn get(matches: &ArgMatches, id: &str) -> Option<String> {
@@ -199,6 +248,10 @@ pub fn check_remote(matches: &ArgMatches) -> Result<Option<RemoteContext>, Strin
             .unwrap_or_else(|| "/var/tmp/portage-remote".to_string()),
         transport,
         binpkg: get(matches, "remote_binpkg").filter(|b| !b.is_empty()),
+        etc_portage: match get(matches, "remote_etc_portage") {
+            None => ConfigPlacement::Client("/etc/portage".to_string()),
+            Some(raw) => ConfigPlacement::parse("--remote-etc-portage", &raw)?,
+        },
         config_protect: get(matches, "remote_config_protect").unwrap_or_else(|| "/etc".to_string()),
         config_protect_mask: get(matches, "remote_config_protect_mask")
             .unwrap_or_else(|| "/etc/env.d".to_string()),
@@ -368,6 +421,127 @@ fn run_script_stdin(
         .map_err(|e| format!("mrg: waiting for child: {e}"))
 }
 
+// --- Resolve-path support (slice 5) --------------------------------------------
+
+/// Temporarily point `PORTAGE_CONFIGROOT` at `dir` (pulled client config
+/// or an explicit server path) for a resolve run, restoring the previous
+/// value on drop. `unsafe` because `std::env::set_var` is (edition 2024):
+/// SAFETY: the guarded region is `mrg`'s synchronous resolve path --
+/// binary-only, so no build threads spawn, and every env read inside
+/// observes one constant value; nothing else in the process writes this
+/// variable concurrently.
+pub(crate) struct ConfigRootOverride {
+    previous: Option<std::ffi::OsString>,
+}
+
+impl ConfigRootOverride {
+    pub(crate) fn set(dir: &std::path::Path) -> Self {
+        let previous = std::env::var_os("PORTAGE_CONFIGROOT");
+        // SAFETY: see the struct doc comment.
+        unsafe {
+            std::env::set_var("PORTAGE_CONFIGROOT", dir);
+        }
+        Self { previous }
+    }
+}
+
+impl Drop for ConfigRootOverride {
+    fn drop(&mut self) {
+        // SAFETY: see the struct doc comment.
+        unsafe {
+            match &self.previous {
+                Some(value) => std::env::set_var("PORTAGE_CONFIGROOT", value),
+                None => std::env::remove_var("PORTAGE_CONFIGROOT"),
+            }
+        }
+    }
+}
+
+/// Run an arbitrary remote command (`tar`, …), not just `bash -s`.
+/// stdout bytes come back to the caller (used by the config pull).
+fn run_raw_command(
+    ctx: &RemoteContext,
+    control: Option<&std::path::Path>,
+    remote_argv: &[String],
+) -> Result<std::process::Output, String> {
+    match ctx.transport {
+        RemoteTransport::Local => {
+            let (head, tail) = remote_argv
+                .split_first()
+                .ok_or_else(|| "mrg: empty remote command".to_string())?;
+            std::process::Command::new(head)
+                .args(tail)
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped())
+                .output()
+                .map_err(|e| format!("mrg: cannot spawn local command: {e}"))
+        }
+        RemoteTransport::Ssh => {
+            let mut argv = ssh_argv(ctx, control);
+            argv.extend(remote_argv.iter().cloned());
+            std::process::Command::new(&argv[0])
+                .args(&argv[1..])
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped())
+                .output()
+                .map_err(|e| format!("mrg: cannot spawn ssh: {e}"))
+        }
+    }
+}
+
+/// Pull a remote directory to a local one (`tar -c` remotely, `tar -x`
+/// locally). Used for `/etc/portage` under the `client:` placement.
+fn pull_dir(
+    ctx: &RemoteContext,
+    control: Option<&std::path::Path>,
+    remote_dir: &str,
+    local_dir: &std::path::Path,
+) -> Result<(), String> {
+    let output = run_raw_command(
+        ctx,
+        control,
+        &[
+            "tar".to_string(),
+            "-c".to_string(),
+            "-C".to_string(),
+            remote_dir.to_string(),
+            ".".to_string(),
+        ],
+    )?;
+    if !output.status.success() {
+        return Err(format!(
+            "mrg: pulling {remote_dir} from {} failed (exit {})",
+            ctx.hostname,
+            output.status.code().unwrap_or(-1)
+        ));
+    }
+    std::fs::create_dir_all(local_dir).map_err(|e| format!("{}: {e}", local_dir.display()))?;
+    let mut child = std::process::Command::new("tar")
+        .args(["-xf", "-", "-C"])
+        .arg(local_dir)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("mrg: cannot spawn local tar: {e}"))?;
+    use std::io::Write as _;
+    child
+        .stdin
+        .take()
+        .ok_or_else(|| "mrg: tar stdin unavailable".to_string())?
+        .write_all(&output.stdout)
+        .map_err(|e| format!("mrg: feeding local tar: {e}"))?;
+    let unpack = child
+        .wait_with_output()
+        .map_err(|e| format!("mrg: waiting for local tar: {e}"))?;
+    if !unpack.status.success() {
+        return Err("mrg: unpacking pulled config failed".to_string());
+    }
+    Ok(())
+}
+
 /// Ship local file bytes to `<workdir>/<name>` on the client: `sh -c
 /// 'cat > …'` over ssh (the `>` must be remote-side, hence the explicit
 /// `sh -c` with one pre-quoted word), plain `fs::copy` for local.
@@ -440,7 +614,7 @@ fn preflight_script(root: &str, workdir: &str) -> String {
         r#"echo "PREFLIGHT=1"
 echo "BASH_MAJOR=${{BASH_VERSINFO[0]}}"
 echo "BASH_MINOR=${{BASH_VERSINFO[1]}}"
-for t in tar mkdir rm cat chmod ln find grep sed cmp stat readlink id; do
+for t in tar mkdir rm cat chmod ln find grep sed cmp stat readlink id tail; do
   if command -v "$t" >/dev/null 2>&1; then echo "TOOL_$t=yes"; else echo "TOOL_$t=no"; fi
 done
 ROOT={root}
@@ -497,7 +671,7 @@ fn preflight_gates(values: &HashMap<String, String>) -> (Vec<String>, Vec<String
     }
     for tool in [
         "tar", "mkdir", "rm", "cat", "chmod", "ln", "find", "grep", "sed", "cmp", "stat",
-        "readlink", "id",
+        "readlink", "id", "tail",
     ] {
         if values
             .get(format!("TOOL_{tool}").as_str())
@@ -635,6 +809,225 @@ fn connection_fingerprint(ctx: &RemoteContext) -> Option<String> {
     lookup_ids(ctx)
         .iter()
         .find_map(|id| host_fingerprint(ctx, id))
+}
+
+/// mrg entry point for remote mode: `--remote-binpkg` runs the
+/// single-file flow, target atoms run the resolve flow (which enforces
+/// `--getbinpkgonly`). `--pretend` never reaches here (mrg routes it
+/// locally with the remote options dropped).
+pub fn run_remote_cli(matches: &ArgMatches, ctx: RemoteContext, argv: Vec<String>) -> ExitCode {
+    if ctx.binpkg.is_some() {
+        if matches.get_many::<String>("package").is_some() {
+            eprintln!("mrg: --remote-binpkg cannot be combined with target atoms");
+            return ExitCode::from(2);
+        }
+        return run_remote(&ctx);
+    }
+    // No binpkg and no atoms: the slice-1 preflight-only run (no payload,
+    // no resolve) -- `--getbinpkgonly` is only forced once targets exist.
+    if matches.get_many::<String>("package").is_none() {
+        return run_remote(&ctx);
+    }
+    run_remote_resolve(matches, ctx, argv)
+}
+
+// --- Resolve-path support (slice 5) --------------------------------------------
+
+/// Repo position for one merged entry: `(repo name, commit hash)` from
+/// the repo checkout the entry resolved from (`unknown` when the repo is
+/// not git or git is unavailable -- same honesty rule as elsewhere).
+fn repo_position(
+    repos: &[portage_repo::RepoConfig],
+    repo_name: &Option<String>,
+) -> (String, String) {
+    let name = repo_name
+        .clone()
+        .unwrap_or_else(|| "__unknown__".to_string());
+    let commit = repos
+        .iter()
+        .find(|repo| repo.name == name)
+        .and_then(|repo| {
+            std::process::Command::new("git")
+                .args(["-C"])
+                .arg(&repo.location)
+                .args(["rev-parse", "HEAD"])
+                .output()
+                .ok()
+                .filter(|out| out.status.success())
+                .and_then(|out| String::from_utf8(out.stdout).ok())
+                .map(|hash| hash.trim().to_string())
+                .filter(|hash| !hash.is_empty())
+        })
+        .unwrap_or_else(|| "unknown".to_string());
+    (name, commit)
+}
+
+/// mrg atoms-mode entry point: enforce `--getbinpkgonly`, place
+/// `/etc/portage`, hand the resolve to `pretend::run` with the remote
+/// execution published. Exit 2 = usage error, else pretend's own code.
+pub fn run_remote_resolve(matches: &ArgMatches, ctx: RemoteContext, argv: Vec<String>) -> ExitCode {
+    if !matches.get_flag("getbinpkgonly") {
+        eprintln!("mrg: remote execution requires --getbinpkgonly (no source build on client)");
+        return ExitCode::from(2);
+    }
+    if matches.get_flag("buildpkgonly") {
+        eprintln!(
+            "mrg: --remote-* cannot be combined with --buildpkgonly (remote runs install, not build)"
+        );
+        return ExitCode::from(2);
+    }
+    if let Some(action) = crate::mrg::action_selected(matches) {
+        eprintln!(
+            "mrg: --remote-hostname cannot be combined with --{action} (remote runs install, not actions)"
+        );
+        return ExitCode::from(2);
+    }
+    let control_dir = control_dir();
+    let control = control_dir.as_deref();
+    // Fail-early stage 2 (plan §5.5): client sanity before resolving.
+    let values = match run_preflight_inner(&ctx, control) {
+        Ok(values) => values,
+        Err(message) => {
+            eprintln!("{message}");
+            return ExitCode::from(1);
+        }
+    };
+    let (failures, warnings) = evaluate_preflight(&ctx, &values);
+    let first_contact =
+        ctx.strict_host_key_checking == StrictHostKeyChecking::AcceptNew && is_first_contact(&ctx);
+    if !failures.is_empty() {
+        return print_preflight_report(&ctx, &failures, &warnings, first_contact);
+    }
+    print_preflight_report(&ctx, &failures, &warnings, first_contact);
+    // etc-portage placement → config root for the resolve.
+    let pull_tmp;
+    let config_dir: std::path::PathBuf = match &ctx.etc_portage {
+        ConfigPlacement::Server(path) => std::path::PathBuf::from(path),
+        ConfigPlacement::Client(path) => {
+            pull_tmp = std::env::temp_dir().join(format!(
+                "portuale-remote-etc-{}-{}",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_nanos())
+                    .unwrap_or(0)
+            ));
+            // The pulled tree is the *contents* of the client's
+            // `/etc/portage`; re-root it as `<tmp>/etc/portage` so the
+            // dir is a valid `PORTAGE_CONFIGROOT` (real-root layout).
+            let pulled_portage = pull_tmp.join("etc/portage");
+            if let Err(message) = pull_dir(&ctx, control, path, &pulled_portage) {
+                eprintln!("{message}");
+                return ExitCode::from(1);
+            }
+            pull_tmp.clone()
+        }
+    };
+    let _config_guard = ConfigRootOverride::set(&config_dir);
+    set_remote_exec(ctx);
+    let code = crate::pretend::run(&argv);
+    // Defensive: the dispatch site takes the handoff, but an early return
+    // (resolve error, unexpected action) must not leak it in-process.
+    let _ = take_remote_exec();
+    code
+}
+
+/// One resolved binary plan, executed remotely entry by entry in merge
+/// order (sequential; `--keep-going` is slice 6). `AlreadyInstalled` is
+/// a silent no-op like the local plan. Anything else non-`Binary` cannot
+/// occur (`check_binary_plan` gates first) and fails loudly.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn run_remote_plan(
+    entries: &[portage_repo::GraphEntry],
+    config: &portage_profile::Config,
+    repos: &[portage_repo::RepoConfig],
+    root: &std::path::Path,
+    pkgdir: &std::path::Path,
+    portage_tmpdir: &std::path::Path,
+    ctx: &RemoteContext,
+) -> Result<(), String> {
+    use portage_repo::PretendOutcome;
+    let control_dir = control_dir();
+    let control = control_dir.as_deref();
+    for entry in entries {
+        let version = match &entry.outcome {
+            PretendOutcome::AlreadyInstalled { .. } => continue,
+            PretendOutcome::New { version } | PretendOutcome::Reinstall { version, .. } => {
+                version.clone()
+            }
+            PretendOutcome::Upgrade { to, .. } | PretendOutcome::Downgrade { to, .. } => to.clone(),
+            PretendOutcome::NoVisibleCandidate => {
+                return Err(format!(
+                    "no binary package available for {}/{}",
+                    entry.category, entry.package
+                ));
+            }
+        };
+        let binpkg_path = if entry.remote_binary {
+            let (sync_uri, record) = portage_repo::find_remote_binpkg(
+                &config.binrepos,
+                root,
+                &entry.category,
+                &entry.package,
+                &version,
+            )
+            .ok_or_else(|| {
+                format!(
+                    "{}/{}-{version}: not found in any binhost `Packages` index",
+                    entry.category, entry.package
+                )
+            })?;
+            crate::emerge_getbinpkg::download_and_verify(
+                &sync_uri,
+                &record,
+                &entry.category,
+                &entry.package,
+                &version,
+                pkgdir,
+            )?
+        } else {
+            crate::emerge_getbinpkg::resolve_local_binpkg(
+                pkgdir,
+                &entry.category,
+                &entry.package,
+                &version,
+                entry.build_id.as_deref(),
+            )
+            .ok_or_else(|| {
+                format!(
+                    "{}/{}-{version}: no binpkg file under {}",
+                    entry.category,
+                    entry.package,
+                    pkgdir.display()
+                )
+            })?
+        };
+        let ts = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|t| t.as_secs())
+            .unwrap_or(0);
+        let (repo, commit) = repo_position(repos, &entry.repo_name);
+        let ledger_entry = LedgerEntry {
+            ts,
+            repo,
+            commit,
+            cpv: format!("{}/{}-{version}", entry.category, entry.package),
+        };
+        let ledger = LedgerSpec {
+            file: client_ledger_file(ctx),
+            line: ledger_entry.line(),
+        };
+        run_binpkg_flow(
+            ctx,
+            control,
+            &binpkg_path,
+            Some(&ledger),
+            Some(&ledger_entry.repo),
+        )?;
+        record_server_ledger(pkgdir, &ctx.hostname, &ledger_entry)?;
+    }
+    let _ = (config, portage_tmpdir);
+    Ok(())
 }
 
 /// Slice-1 entry point: connect, preflight, report. Exit 0 = every hard
@@ -795,15 +1188,123 @@ echo "UNPACK=ok"
 /// Slice-2 stage for `--remote-binpkg <file>`: build the bundle
 /// (server-side, `remote_bundle`), stream it to
 /// `$WORKDIR/<pf>/bundle.tar`, unpack + verify there. Exit 0 = `UNPACK=ok`.
-fn run_bundle_stage(
+/// One repo-ledger line, shared by both sides: `<unix-ts> <repo> <commit> <cpv>`
+/// (docs/remote-merge.md §8).
+pub(crate) struct LedgerEntry {
+    pub ts: u64,
+    pub repo: String,
+    pub commit: String,
+    pub cpv: String,
+}
+
+impl LedgerEntry {
+    fn line(&self) -> String {
+        format!("{} {} {} {}", self.ts, self.repo, self.commit, self.cpv)
+    }
+}
+
+/// Append one line, keeping the last 10 (rotation both sides share).
+fn ledger_append(path: &std::path::Path, line: &str) -> Result<(), String> {
+    use std::io::Write as _;
+    let mut lines: Vec<String> = std::fs::read_to_string(path)
+        .unwrap_or_default()
+        .lines()
+        .map(String::from)
+        .collect();
+    lines.push(line.to_string());
+    while lines.len() > 10 {
+        lines.remove(0);
+    }
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
+    }
+    let mut file = std::fs::File::create(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    for kept in &lines {
+        writeln!(file, "{kept}").map_err(|e| format!("{}: {e}", path.display()))?;
+    }
+    Ok(())
+}
+
+/// Hostname made filename-safe for the server ledger file.
+fn sanitize_hostname(hostname: &str) -> String {
+    hostname
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '.' || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect()
+}
+
+/// Server-side ledger record after one merged entry:
+/// `<pkgdir>/remote-ledger/<hostname>`, last 10 kept.
+pub(crate) fn record_server_ledger(
+    pkgdir: &std::path::Path,
+    hostname: &str,
+    entry: &LedgerEntry,
+) -> Result<(), String> {
+    ledger_append(
+        &pkgdir
+            .join("remote-ledger")
+            .join(sanitize_hostname(hostname)),
+        &entry.line(),
+    )
+}
+
+/// The client-side ledger destination baked into the merge driver:
+/// `<ctx.root>/var/db/remote-repos` (a plain file, not the vdb).
+fn client_ledger_file(ctx: &RemoteContext) -> String {
+    format!("{}/var/db/remote-repos", ctx.root.trim_end_matches('/'))
+}
+
+/// Every merge-bound entry must be `Binary` in a remote plan (the
+/// `--getbinpkgonly` resolve guarantees it); anything else is a usage
+/// error naming the offenders (exit 2 at the call site).
+pub(crate) fn check_binary_plan(entries: &[portage_repo::GraphEntry]) -> Result<(), String> {
+    use portage_repo::{CandidateSource, PretendOutcome};
+    let mut offenders = Vec::new();
+    for entry in entries {
+        let merge_bound = !matches!(
+            entry.outcome,
+            PretendOutcome::AlreadyInstalled { .. } | PretendOutcome::NoVisibleCandidate
+        );
+        if merge_bound && entry.source != CandidateSource::Binary {
+            let version = match &entry.outcome {
+                PretendOutcome::New { version } | PretendOutcome::Reinstall { version, .. } => {
+                    version.clone()
+                }
+                PretendOutcome::Upgrade { to, .. } | PretendOutcome::Downgrade { to, .. } => {
+                    to.clone()
+                }
+                _ => String::new(),
+            };
+            offenders.push(format!("{}/{}-{version}", entry.category, entry.package));
+        }
+    }
+    if offenders.is_empty() {
+        Ok(())
+    } else {
+        Err(format!(
+            "remote plan is not binary-only (needs --getbinpkgonly): {}",
+            offenders.join(" ")
+        ))
+    }
+}
+
+/// One binpkg end to end (bundle, stream, unpack, phases, merge,
+/// postinst): shared by the `--remote-binpkg` path (no ledger) and the
+/// resolve path (ledger per merged entry). Prints the stage report lines;
+/// `Ok(cpv)` is the merged `category/package-version`.
+fn run_binpkg_flow(
     ctx: &RemoteContext,
     control: Option<&std::path::Path>,
     binpkg_path: &Path,
-) -> ExitCode {
-    if !binpkg_path.is_file() {
-        eprintln!("mrg: --remote-binpkg {}: not found", binpkg_path.display());
-        return ExitCode::from(1);
-    }
+    ledger: Option<&LedgerSpec>,
+    repo_override: Option<&str>,
+) -> Result<String, String> {
     let staging = std::env::temp_dir().join(format!(
         "portuale-remote-bundle-{}-{}",
         std::process::id(),
@@ -813,15 +1314,13 @@ fn run_bundle_stage(
             .unwrap_or(0)
     ));
     if let Err(message) = std::fs::create_dir_all(&staging) {
-        eprintln!("mrg: staging dir {}: {message}", staging.display());
-        return ExitCode::from(1);
+        return Err(format!("mrg: staging dir {}: {message}", staging.display()));
     }
-    let staged = match crate::remote_bundle::build_bundle(binpkg_path, &staging) {
+    let staged = match crate::remote_bundle::build_bundle(binpkg_path, &staging, repo_override) {
         Ok(staged) => staged,
         Err(message) => {
-            eprintln!("mrg: bundle build failed: {message}");
             let _ = std::fs::remove_dir_all(&staging);
-            return ExitCode::from(1);
+            return Err(format!("mrg: bundle build failed: {message}"));
         }
     };
     let pf = staged
@@ -841,32 +1340,28 @@ fn run_bundle_stage(
             Ok(output) if output.status.success() => {}
             Ok(output) => {
                 let stderr = String::from_utf8_lossy(&output.stderr);
-                eprintln!(
+                let _ = std::fs::remove_dir_all(&staging);
+                return Err(format!(
                     "mrg: creating unit dir failed (exit {}):\n{stderr}",
                     output.status.code().unwrap_or(-1)
-                );
-                let _ = std::fs::remove_dir_all(&staging);
-                return ExitCode::from(1);
+                ));
             }
             Err(message) => {
-                eprintln!("{message}");
                 let _ = std::fs::remove_dir_all(&staging);
-                return ExitCode::from(1);
+                return Err(message);
             }
         }
     }
     if let Err(message) = send_file(ctx, control, &staged.tarball, &dest_tar) {
-        eprintln!("{message}");
         let _ = std::fs::remove_dir_all(&staging);
-        return ExitCode::from(1);
+        return Err(message);
     }
     let script = unpack_script(&ctx.workdir, &pf, staged.byte_count);
     let output = match run_script_stdin(ctx, control, &script) {
         Ok(output) => output,
         Err(message) => {
-            eprintln!("{message}");
             let _ = std::fs::remove_dir_all(&staging);
-            return ExitCode::from(1);
+            return Err(message);
         }
     };
     let _ = std::fs::remove_dir_all(&staging);
@@ -878,14 +1373,14 @@ fn run_bundle_stage(
     let stdout = String::from_utf8_lossy(&output.stdout);
     let unpack = parse_kv(&stdout).get("UNPACK").cloned().unwrap_or_default();
     if !(output.status.success() && unpack == "ok") {
-        eprintln!(
+        let mut message = format!(
             "mrg: bundle unpack failed (exit {}, UNPACK={unpack}):",
             code.unwrap_or(-1)
         );
         for line in stderr.lines().take(5) {
-            eprintln!("mrg:   {line}");
+            message.push_str(&format!("\nmrg:   {line}"));
         }
-        return ExitCode::from(1);
+        return Err(message);
     }
     println!(
         ">>> Remote bundle {}: unpacked ({} bytes, slot {}, repo {})",
@@ -900,7 +1395,7 @@ fn run_bundle_stage(
             ">>> Remote phases {}: none defined, skipped",
             staged.manifest.cpv
         );
-        return ExitCode::from(0);
+        return Ok(staged.manifest.cpv.clone());
     }
     let unit_dir = format!("{}/{pf}", ctx.workdir);
     match run_phases_stage(ctx, control, &unit_dir, &staged) {
@@ -912,21 +1407,19 @@ fn run_bundle_stage(
             );
         }
         Err(message) => {
-            eprintln!("{message}");
-            return ExitCode::from(1);
+            return Err(message);
         }
     }
     // Slice-4 merge (copy+vdb+replace) then new-postinst, non-fatal like
     // the local merge's own `_postinst_failure` rule.
-    match run_merge_stage(ctx, control, &unit_dir, &staged) {
+    match run_merge_stage(ctx, control, &unit_dir, &staged, ledger) {
         Ok(markers) => {
             for marker in &markers {
                 println!(">>> Remote merge {}: {marker}", staged.manifest.cpv);
             }
         }
         Err(message) => {
-            eprintln!("{message}");
-            return ExitCode::from(1);
+            return Err(message);
         }
     }
     if staged.postinst_defined {
@@ -978,7 +1471,24 @@ fn run_bundle_stage(
         );
     }
     println!(">>> Remote merged {}", staged.manifest.cpv);
-    ExitCode::from(0)
+    Ok(staged.manifest.cpv.clone())
+}
+fn run_bundle_stage(
+    ctx: &RemoteContext,
+    control: Option<&std::path::Path>,
+    binpkg_path: &Path,
+) -> ExitCode {
+    if !binpkg_path.is_file() {
+        eprintln!("mrg: --remote-binpkg {}: not found", binpkg_path.display());
+        return ExitCode::from(1);
+    }
+    match run_binpkg_flow(ctx, control, binpkg_path, None, None) {
+        Ok(_) => ExitCode::from(0),
+        Err(message) => {
+            eprintln!("{message}");
+            ExitCode::from(1)
+        }
+    }
 }
 
 // --- Client merge (slice 4) ----------------------------------------------------
@@ -1136,7 +1646,7 @@ is_protected() {
   [ "$best_p" -gt 0 ] && [ "$best_p" -gt "$best_m" ] && echo yes || echo no
 }
 alloc_cfg() {
-  dir=$(dirname "$1"); base=$(basename "$1"); n=0
+  dir=${1%/*}; base=${1##*/}; n=0
   while [ -e "$dir/._cfg$(printf '%04d' $n)_$base" ]; do n=$((n + 1)); done
   echo "$dir/._cfg$(printf '%04d' $n)_$base"
 }
@@ -1198,7 +1708,7 @@ const MERGE_FLOW: &str = r##"OLD_PF=""; OLD_COUNTER=-1
 for d in "$VDBROOT"/"$PKG"-*/; do
 
   [ -d "$d" ] || continue
-  cpf=$(basename "$d")
+  cpf=${d%/}; cpf=${cpf##*/}
   [ "$cpf" = "$NEWPF" ] && continue
   rest=${cpf#"$PKG"-}
   case "$rest" in [0-9]*) ;; *) continue;; esac
@@ -1221,7 +1731,7 @@ fi
 : > "$REPLACED_OWN"; : > "$OTHERS_OWN"
 for c in "$ROOT"/var/db/pkg/*/*/CONTENTS; do
   [ -f "$c" ] || continue
-  pfdir=$(basename "$(dirname "$c")")
+  pfdir=${c%/*}; pfdir=${pfdir##*/}
   awk '$1=="obj"||$1=="sym"{print $2}' "$c" > "$UNIT/scan.list"
   if [ "$pfdir" = "$NEWPF" ] || { [ -n "$OLD_PF" ] && [ "$pfdir" = "$OLD_PF" ]; }; then
     cat "$UNIT/scan.list" >> "$REPLACED_OWN"
@@ -1265,7 +1775,7 @@ while read -r line; do
         if cmp -s "$src" "$dest"; then :;
         else dest=$(alloc_cfg "$dest"); fi
       fi
-      mkdir -p "$(dirname "$dest")" || mfail copy "mkdir parent of $apath"
+      mkdir -p "${dest%/*}" || mfail copy "mkdir parent of $apath"
       # A symlink at dest would make `cp` follow it and clobber the
       # target: drop the link first (local removes before writing too).
       [ -L "$dest" ] && rm -f "$dest"
@@ -1279,7 +1789,7 @@ while read -r line; do
         cur=""; [ -L "$dest" ] && cur=$(readlink "$dest")
         [ "$cur" = "$target" ] || dest=$(alloc_cfg "$dest")
       fi
-      mkdir -p "$(dirname "$dest")" || mfail copy "mkdir parent of $apath"
+      mkdir -p "${dest%/*}" || mfail copy "mkdir parent of $apath"
       rm -f "$dest"
       ln -s "$target" "$dest" || mfail copy "symlink $apath"
       touch -h -r "$src" "$dest" 2>/dev/null || true
@@ -1375,17 +1885,38 @@ if command -v ldconfig >/dev/null 2>&1; then
 else
   echo "MERGE_ENVUPDATE=skip:no-ldconfig"
 fi
+if [ -n "$LEDGER_FILE" ]; then
+  mkdir -p "${LEDGER_FILE%/*}" 2>/dev/null || warn ledger "mkdir for $LEDGER_FILE"
+  if printf '%s\n' "$LEDGER_LINE" >> "$LEDGER_FILE" 2>/dev/null; then
+    tail -n 10 "$LEDGER_FILE" > "$LEDGER_FILE.tmp" 2>/dev/null && mv "$LEDGER_FILE.tmp" "$LEDGER_FILE" 2>/dev/null || warn ledger "rotate $LEDGER_FILE"
+    echo "MERGE_LEDGER=ok"
+  else
+    warn ledger "append $LEDGER_FILE"
+  fi
+else
+  echo "MERGE_LEDGER=skip:none-requested"
+fi
 echo "MERGE_DONE=ok"
 "##;
 
 /// Merge header: all values the flow needs, pre-quoted. The unit layout
 /// mirrors the local merge (`image/`, `build-info/`, shipped `bin/`).
+/// Client ledger destination + line baked into the merge driver.
+/// `None` file skips the client record (the `--remote-binpkg` trial path
+/// keeps no ledger; the resolve path always records).
+#[derive(Debug, Clone)]
+pub(crate) struct LedgerSpec {
+    pub file: String,
+    pub line: String,
+}
+
 fn merge_script(
     unit_dir: &str,
     staged: &crate::remote_bundle::StagedBundle,
     root: &str,
     protect_list: &str,
     mask_list: &str,
+    ledger: Option<&LedgerSpec>,
 ) -> String {
     format!(
         concat!(
@@ -1406,6 +1937,8 @@ fn merge_script(
             "COLORMAP={colormap}\n",
             "PROTECT={protect}\n",
             "MASK={mask}\n",
+            "LEDGER_FILE={ledger_file}\n",
+            "LEDGER_LINE={ledger_line}\n",
             "NEWCONTENTS=\"$UNIT/CONTENTS.new\"\n",
             "NEWPATHS=\"$UNIT/paths.new\"\n",
             "REPLACED_OWN=\"$UNIT/replaced.own\"\n",
@@ -1430,6 +1963,8 @@ fn merge_script(
         colormap = sh_quote(&crate::color::phase_colormap_export()),
         protect = sh_quote(protect_list),
         mask = sh_quote(mask_list),
+        ledger_file = sh_quote(&ledger.map(|l| l.file.clone()).unwrap_or_default()),
+        ledger_line = sh_quote(&ledger.map(|l| l.line.clone()).unwrap_or_default()),
         helpers = MERGE_HELPERS,
         flow = MERGE_FLOW,
     )
@@ -1462,6 +1997,7 @@ fn run_merge_stage(
     control: Option<&std::path::Path>,
     unit_dir: &str,
     staged: &crate::remote_bundle::StagedBundle,
+    ledger: Option<&LedgerSpec>,
 ) -> Result<Vec<String>, String> {
     let script = merge_script(
         unit_dir,
@@ -1469,6 +2005,7 @@ fn run_merge_stage(
         &ctx.root,
         &ctx.config_protect,
         &ctx.config_protect_mask,
+        ledger,
     );
     let output = run_script_stdin(ctx, control, &script).map_err(|message| {
         if ctx.transport == RemoteTransport::Local {
@@ -1630,6 +2167,7 @@ mod tests {
             ("TOOL_stat", "yes"),
             ("TOOL_readlink", "yes"),
             ("TOOL_id", "yes"),
+            ("TOOL_tail", "yes"),
             ("ROOT_WRITABLE", "yes"),
             ("VDB_DIR", "yes"),
             ("WORKDIR", "writable"),
@@ -1645,10 +2183,11 @@ mod tests {
 
         let mut missing = ok.clone();
         missing.insert("TOOL_tar".to_string(), "no".to_string());
+        missing.insert("TOOL_tail".to_string(), "no".to_string());
         missing.insert("ROOT_WRITABLE".to_string(), "no".to_string());
         missing.insert("WORKDIR".to_string(), "uncreatable".to_string());
         let (failures, _) = preflight_gates(&missing);
-        assert_eq!(failures.len(), 3, "{failures:?}");
+        assert_eq!(failures.len(), 4, "{failures:?}");
 
         // A missing vdb warns (slice-5 placement matrix owns the degrade),
         // never fails.
@@ -1704,7 +2243,112 @@ mod tests {
             binpkg: None,
             config_protect: "/etc".to_string(),
             config_protect_mask: "/etc/env.d".to_string(),
+            etc_portage: ConfigPlacement::Client("/etc/portage".to_string()),
         }
+    }
+
+    #[test]
+    fn etc_placement_parses_server_and_client_forms() {
+        assert_eq!(
+            ConfigPlacement::parse("--remote-etc-portage", "server:/etc/portage"),
+            Ok(ConfigPlacement::Server("/etc/portage".to_string()))
+        );
+        assert_eq!(
+            ConfigPlacement::parse("--remote-etc-portage", "client:/etc/portage"),
+            Ok(ConfigPlacement::Client("/etc/portage".to_string()))
+        );
+        assert!(ConfigPlacement::parse("--remote-etc-portage", "/etc/portage").is_err());
+        assert!(ConfigPlacement::parse("--remote-etc-portage", "server:").is_err());
+        assert!(ConfigPlacement::parse("--remote-etc-portage", "bizarre").is_err());
+    }
+
+    #[test]
+    fn remote_exec_handoff_sets_and_takes() {
+        assert!(take_remote_exec().is_none());
+        let ctx = ctx_with_args("h", None);
+        set_remote_exec(ctx.clone());
+        assert_eq!(take_remote_exec(), Some(ctx));
+        // Taking clears the slot: no leakage across calls.
+        assert!(take_remote_exec().is_none());
+    }
+
+    #[test]
+    fn ledger_append_keeps_the_last_ten_lines() {
+        let dir = std::env::temp_dir().join(format!(
+            "portuale-remote-ledger-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let path = dir.join("ledger");
+        for n in 0..14 {
+            ledger_append(&path, &format!("line{n}")).unwrap();
+        }
+        let kept: Vec<String> = std::fs::read_to_string(&path)
+            .unwrap()
+            .lines()
+            .map(String::from)
+            .collect();
+        assert_eq!(kept.len(), 10);
+        assert_eq!(kept[0], "line4");
+        assert_eq!(kept[9], "line13");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn binary_entry(package: &str, binary: bool) -> portage_repo::GraphEntry {
+        use portage_repo::{CandidateSource, PretendOutcome, VisibilityProvenance};
+        portage_repo::GraphEntry {
+            category: "dev-libs".to_string(),
+            package: package.to_string(),
+            outcome: PretendOutcome::New {
+                version: "1.0".to_string(),
+            },
+            blockers: Vec::new(),
+            slot: Some("0".to_string()),
+            sub_slot: Some("0".to_string()),
+            repo_name: Some("testrepo".to_string()),
+            oldbest: Vec::new(),
+            use_flags_display: Vec::new(),
+            use_expand_display: Vec::new(),
+            use_expand_display_p: Vec::new(),
+            keyword_mask: None,
+            new_slot: false,
+            interactive: false,
+            fetch_restrict: false,
+            fetch_restrict_satisfied: false,
+            download_files: Vec::new(),
+            required_by: Vec::new(),
+            source: if binary {
+                CandidateSource::Binary
+            } else {
+                CandidateSource::Ebuild
+            },
+            provenance: VisibilityProvenance::default(),
+            keyword_suggestion: None,
+            use_suggestion: None,
+            parent_use_suggestion: None,
+            targets_running_root: false,
+            remote_binary: false,
+            build_id: None,
+            deps: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn binary_plan_check_accepts_binaries_and_names_sources() {
+        use portage_repo::PretendOutcome;
+        assert!(check_binary_plan(&[binary_entry("a", true)]).is_ok());
+        assert!(check_binary_plan(&[]).is_ok());
+        let mut installed = binary_entry("b", true);
+        installed.outcome = PretendOutcome::AlreadyInstalled {
+            version: "1.0".to_string(),
+        };
+        installed.source = portage_repo::CandidateSource::Ebuild;
+        assert!(check_binary_plan(&[installed]).is_ok());
+        let err = check_binary_plan(&[binary_entry("c", false)]).unwrap_err();
+        assert!(err.contains("dev-libs/c-1.0"), "{err}");
     }
 
     #[test]
@@ -1757,6 +2401,7 @@ mod tests {
         let staged = crate::remote_bundle::build_bundle(
             &fixture("pkgdir/dev-libs/packagepkg-1.0.tbz2"),
             &staging,
+            None,
         )
         .expect("fixture tbz2 stages");
         // Simulate the streamed file, truncated to half its bytes.
@@ -1860,6 +2505,7 @@ mod tests {
             binpkg: None,
             config_protect: "/etc".to_string(),
             config_protect_mask: "/etc/env.d".to_string(),
+            etc_portage: ConfigPlacement::Client("/etc/portage".to_string()),
         }
     }
 
@@ -1892,7 +2538,7 @@ mod tests {
             )],
         );
         let ctx = local_ctx(root.to_str().unwrap(), tmp.join("work").to_str().unwrap());
-        let markers = run_merge_stage(&ctx, None, &unit, &staged).expect("merge succeeds");
+        let markers = run_merge_stage(&ctx, None, &unit, &staged, None).expect("merge succeeds");
         assert!(markers.iter().any(|m| m == "MERGE_COPY=ok"), "{markers:?}");
         // Original untouched, update diverted to a `._cfg` sibling...
         assert_eq!(
@@ -1916,7 +2562,7 @@ mod tests {
         // Identical content merges in place (no `._cfg` spam): the
         // live file now matches the image, so reinstalling overwrites.
         std::fs::write(root.join("etc/probe.conf"), "incoming\n").unwrap();
-        let markers = run_merge_stage(&ctx, None, &unit, &staged).expect("remerge succeeds");
+        let markers = run_merge_stage(&ctx, None, &unit, &staged, None).expect("remerge succeeds");
         assert!(markers.iter().any(|m| m == "MERGE_COPY=ok"), "{markers:?}");
         assert!(!root.join("etc/._cfg0001_probe.conf").exists());
         assert_eq!(
@@ -1965,7 +2611,7 @@ mod tests {
         )
         .unwrap();
         let ctx = local_ctx(root.to_str().unwrap(), tmp.join("work").to_str().unwrap());
-        let err = run_merge_stage(&ctx, None, &unit, &staged).unwrap_err();
+        let err = run_merge_stage(&ctx, None, &unit, &staged, None).unwrap_err();
         assert!(err.contains("collision"), "{err}");
         // Nothing was written: no vdb for the new package (the other
         // owner's entry stays), foreign file untouched.

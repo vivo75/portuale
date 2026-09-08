@@ -10724,6 +10724,38 @@ pub fn run(args: &[String]) -> ExitCode {
                 return ExitCode::from(1);
             }
         } else if getbinpkg {
+            // Remote execution (`mrg --remote-hostname` + `--getbinpkgonly`,
+            // published via the `REMOTE_EXEC` handoff): the same resolved
+            // entries run through the remote plan instead. Binary-only is
+            // enforced (usage error, exit 2); resume/world bookkeeping is
+            // skipped (the client owns that state -- see remote.rs).
+            // The download/ledger `$PKGDIR` is the placed config's own
+            // `PKGDIR` (`config.pkgdir`, honouring the resolve's
+            // `ConfigRootOverride`), not the process `$PKGDIR` env the
+            // local plan uses -- the server stores against the config it
+            // resolved against (plan §7/§8).
+            if let Some(rctx) = crate::remote::take_remote_exec() {
+                if let Err(e) = crate::remote::check_binary_plan(entries) {
+                    eprintln!("emerge: {e}");
+                    return ExitCode::from(2);
+                }
+                if keep_going {
+                    eprintln!("mrg: warning: remote plan ignores --keep-going (slice 6)");
+                }
+                if let Err(e) = crate::remote::run_remote_plan(
+                    entries,
+                    &config,
+                    &repos,
+                    &root,
+                    &std::path::PathBuf::from(&config.pkgdir),
+                    &portage_tmpdir,
+                    &rctx,
+                ) {
+                    eprintln!("emerge: {e}");
+                    return ExitCode::from(1);
+                }
+                return ExitCode::from(0);
+            }
             // `emerge --getbinpkg`/`-g` (and `-G`, binary-only): merge
             // every resolved entry, per-entry `Binary` vs `Source` --
             // see `emerge_getbinpkg::run_merge_plan`.

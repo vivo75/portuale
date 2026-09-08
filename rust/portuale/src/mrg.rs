@@ -1036,6 +1036,16 @@ const OPTIONS: &[Opt] = &[
         missing: "",
         help: "space-separated CONFIG_PROTECT_MASK list for the client merge (default /etc/env.d)",
     },
+    Opt {
+        id: "remote_etc_portage",
+        long: "--remote-etc-portage",
+        alias: None,
+        short: None,
+        kind: Kind::Value,
+        choices: &[],
+        missing: "",
+        help: "where /etc/portage resolves from: server:<path> or client:<path> (default client:/etc/portage)",
+    },
 ];
 
 /// Builds the clap `Arg` for one `Opt` entry, keeping real emerge's
@@ -1089,6 +1099,14 @@ pub fn command() -> Command {
         cmd = cmd.arg(build_arg(opt).help_heading(heading));
     }
     cmd
+}
+
+/// The action flag set on this invocation, if any (real `actions`
+/// frozenset members that select something other than a merge).
+/// Remote execution only runs installs: any action with
+/// `--remote-hostname` is a usage error (checked in `remote.rs`).
+pub(crate) fn action_selected(matches: &ArgMatches) -> Option<&'static str> {
+    ACTION_IDS.iter().find(|id| matches.get_flag(id)).copied()
 }
 
 /// Whether the emerge codepath (`pretend::run`, the parse loop in
@@ -1173,6 +1191,12 @@ fn emerge_handles(long: &str) -> bool {
 fn to_emerge_argv(matches: &ArgMatches) -> Vec<String> {
     let mut argv = Vec::new();
     for opt in OPTIONS {
+        // Remote options never reach the emerge codepath (remote mode
+        // runs its own executor; `--pretend` drops them silently -- plan
+        // docs/remote-merge.md says pretend ignores `--remote-*`).
+        if opt.id.starts_with("remote_") {
+            continue;
+        }
         let long = opt.long;
         match opt.kind {
             Kind::Flag => {
@@ -1324,7 +1348,15 @@ pub fn run(args: &[String]) -> ExitCode {
     let argv = std::iter::once(bin).chain(joined.iter().map(String::as_str));
     match command().try_get_matches_from(argv) {
         Ok(matches) => match crate::remote::check_remote(&matches) {
-            Ok(Some(ctx)) => crate::remote::run_remote(&ctx),
+            // `--pretend` stays local: the remote options drop out in
+            // `to_emerge_argv` and the shared plan prints as usual.
+            Ok(Some(_)) if matches.get_flag("pretend") => {
+                crate::pretend::run(&to_emerge_argv(&matches))
+            }
+            Ok(Some(ctx)) => {
+                let argv = to_emerge_argv(&matches);
+                crate::remote::run_remote_cli(&matches, ctx, argv)
+            }
             Ok(None) => crate::pretend::run(&to_emerge_argv(&matches)),
             Err(message) => {
                 eprintln!("{message}");
@@ -1613,13 +1645,27 @@ mod tests {
             ])
             .is_err()
         );
+        use crate::remote::check_remote;
         // Same for the transport choice; the valid spellings parse.
-        assert!(parse(&["--remote-hostname", "h", "--remote-transport=pigeon"]).is_err());
         let m = parse(&["--remote-hostname", "h", "--remote-transport=local"]).unwrap();
         assert_eq!(
             m.get_one::<String>("remote_transport").map(String::as_str),
             Some("local")
         );
+        assert!(parse(&["--remote-hostname", "h", "--remote-transport=pigeon"]).is_err());
+        let m = parse(&[
+            "--remote-hostname",
+            "h",
+            "--remote-etc-portage=server:/tmp/etc",
+        ])
+        .unwrap();
+        let ctx = check_remote(&m).unwrap().expect("remote mode");
+        assert_eq!(
+            ctx.etc_portage,
+            crate::remote::ConfigPlacement::Server("/tmp/etc".to_string())
+        );
+        let m = parse(&["--remote-hostname", "h", "--remote-etc-portage=bogus"]).unwrap();
+        assert!(check_remote(&m).unwrap_err().contains("server:<path>"));
         // Absent entirely: local mode, no remote keys set.
         let m = parse(&["--pretend", "cat/pkg"]).unwrap();
         assert_eq!(m.get_one::<String>("remote_hostname"), None);
@@ -1657,6 +1703,10 @@ mod tests {
         assert_eq!(ctx.workdir, "/var/tmp/portage-remote");
         assert_eq!(ctx.transport, crate::remote::RemoteTransport::Ssh);
         assert_eq!(ctx.binpkg, None);
+        assert_eq!(
+            ctx.etc_portage,
+            crate::remote::ConfigPlacement::Client("/etc/portage".to_string())
+        );
 
         let m = parse(&["--pretend", "cat/pkg"]).unwrap();
         assert!(check_remote(&m).unwrap().is_none());

@@ -306,7 +306,15 @@ pub fn select_phases(defined_phases: &str, has_ebuild: bool, has_environment: bo
 
 /// Stage one binpkg file (`.gpkg.tar` or `.tbz2`) into a wire bundle
 /// under `staging_tmp` (a fresh temp dir per call; caller removes it).
-pub fn build_bundle(binpkg_path: &Path, staging_tmp: &Path) -> Result<StagedBundle, String> {
+/// `repo_override` is the resolver-known repo name (the resolve flow's
+/// `repo_position`): used only when the binpkg's own embedded metadata
+/// carries no `repository`/`REPO` key (the `--remote-binpkg` trial path
+/// passes `None`, honestly reporting the bytes as-is).
+pub fn build_bundle(
+    binpkg_path: &Path,
+    staging_tmp: &Path,
+    repo_override: Option<&str>,
+) -> Result<StagedBundle, String> {
     let name = binpkg_path
         .file_name()
         .and_then(|n| n.to_str())
@@ -335,6 +343,11 @@ pub fn build_bundle(binpkg_path: &Path, staging_tmp: &Path) -> Result<StagedBund
     let slot = meta_get("SLOT").unwrap_or_else(|| "0".to_string());
     let repo = meta_get("repository")
         .or_else(|| meta_get("REPO"))
+        .or_else(|| {
+            repo_override
+                .map(str::to_string)
+                .filter(|s| !s.is_empty() && s != "__unknown__")
+        })
         .unwrap_or_else(|| "__unknown__".to_string());
 
     // Same extraction the local merge runs: image/ + build-info/ land
@@ -518,7 +531,7 @@ mod tests {
     #[test]
     fn bundle_stages_image_build_info_environment_and_manifest() {
         let tmp = tempdir("stage");
-        let staged = build_bundle(&fixture("pkgdir/dev-libs/packagepkg-1.0.tbz2"), &tmp)
+        let staged = build_bundle(&fixture("pkgdir/dev-libs/packagepkg-1.0.tbz2"), &tmp, None)
             .expect("fixture tbz2 stages");
         assert_eq!(staged.manifest.cpv, "dev-libs/packagepkg-1.0");
         assert!(staged.byte_count > 0);
@@ -546,6 +559,31 @@ mod tests {
         ] {
             assert!(listing.contains(member), "{member} missing:\n{listing}");
         }
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn bundle_repo_falls_back_to_resolver_override() {
+        // The fixture tbz2 carries no `repository`/`REPO` key, so the
+        // resolver-known repo fills the manifest; an explicit override
+        // of `"__unknown__"` (a vdb-less resolve) stays unknown.
+        let tmp = tempdir("repo-override");
+        let staged = build_bundle(
+            &fixture("pkgdir/dev-libs/packagepkg-1.0.tbz2"),
+            &tmp,
+            Some("testrepo"),
+        )
+        .expect("fixture tbz2 stages");
+        assert_eq!(staged.manifest.repo, "testrepo");
+        let _ = std::fs::remove_dir_all(&tmp);
+        let tmp = tempdir("repo-unknown");
+        let staged = build_bundle(
+            &fixture("pkgdir/dev-libs/packagepkg-1.0.tbz2"),
+            &tmp,
+            Some("__unknown__"),
+        )
+        .expect("fixture tbz2 stages");
+        assert_eq!(staged.manifest.repo, "__unknown__");
         let _ = std::fs::remove_dir_all(&tmp);
     }
 }

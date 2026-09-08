@@ -15348,7 +15348,6 @@ for the slice-4 merge). Pinned by `select_phases` + `split_pf` units, a
 synthetic-pretend driver test through the real `bin/`, and two
 hook-order black-box tests.
 
-
 `mrg --remote-binpkg` client merge (2026-09-08, remote-merge slice 4):
 after the phases, one merge driver runs old-prerm → collision gate →
 copy+vdb → old-postrm on the client, then new-postinst (non-fatal,
@@ -15374,3 +15373,48 @@ with the byte-identical local hook order
 postinst-2.0`), old payload + vdb gone. Pinned by synthetic-merge
 driver tests (protect rename + reinstall-in-place + foreign abort) and
 three black-box tests (fresh, replace, ssh).
+
+`mrg --getbinpkgonly --remote-hostname` resolve path (2026-09-08,
+remote-merge slice 5): target atoms resolve on the server and merge on
+the client. `mrg` publishes the validated `RemoteContext` through a
+process-global handoff (`REMOTE_EXEC`, the same `RwLock` statics
+precedent `portage-repo` uses for `USEOLDPKG_ATOMS`) and calls the
+shared `pretend::run`; the `--getbinpkgonly` dispatch takes the
+handoff and runs the resolved `Binary` entries through the new
+`run_remote_plan` instead of the local merge loop
+(`check_binary_plan` rejects anything non-`Binary`; without
+`--getbinpkgonly` -- or with `--buildpkgonly`/any action -- the run is
+a usage error, exit 2; `--pretend` never reaches the handoff, staying
+local with the `--remote-*` flags dropped, and a bare
+`--remote-hostname` with no atoms stays the slice-1 preflight-only
+run). `/etc/portage` placement (`--remote-etc-portage
+server:<path>|client:<path>`, default `client:/etc/portage`) selects
+the resolve's config root: `server:` reads directly, `client:` pulls
+once via `tar -c`/`tar -x` and re-roots as `<tmp>/etc/portage` (a
+missing `repos.conf` aborts before resolving -- the pull proved the
+tree, the parse still gates). The resolve runs under a
+`ConfigRootOverride` RAII guard, and -- the point of placing the
+config -- downloads + the server ledger use the *placed* config's own
+`config.pkgdir` (make.conf `PKGDIR`, `${PORTAGE_CONFIGROOT}`-expanded),
+never the process `$PKGDIR` env the local plan uses. Each merged entry
+appends `<unix-ts> <repo> <commit> <cpv>` (`git rev-parse HEAD` of the
+entry's repo, `unknown` for non-git -- the plan's honesty rule) to the
+server ledger (`<pkgdir>/remote-ledger/<hostname>`) and bakes the same
+line into the merge driver for the client ledger
+(`<root>/var/db/remote-repos`); both rotate at the last 10 lines.
+The bundle manifest's `repo` prefers the binpkg's embedded
+`repository`/`REPO` key and falls back to the resolver-known repo
+(`build_bundle`'s new `repo_override`; the `--remote-binpkg` path
+passes `None`). Trial-verified over local transport
+(`dev-libs/binpkgrmpkg-1.0` from a tmp `file://` binhost:
+`>>> Remote merged ...` plus `setup/preinst/postinst-1.0` hook order
+and identical ledger lines both sides). Pinned by five black-box tests
+(`server:` resolve+merge, `client:` pull+resolve+merge, the two usage
+errors, `--pretend`-stays-local) and Rust units (last-10 rotation,
+manifest repo override, `server:`/`client:` placement parsing).
+Deliberately deferred: deriving `CONFIG_PROTECT`/`MASK` from the
+placed config (`Config` doesn't model them yet -- the merge still uses
+the flags or the `/etc`+`/etc/env.d` defaults), the vdb shadow +
+stateless-client degrade and `--remote-vdb`/`--remote-edb` (slice 6
+with keep-going per the code's own re-scope note), and
+`--remote-ledger-dir` (plan §8 names it; no such option yet).

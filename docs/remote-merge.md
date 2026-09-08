@@ -2,7 +2,8 @@
 
 Standalone planning document (deliberately **not** an edit to
 `agent-context.md` / `scope-backlog.md` / `what-this-proves.md`, to avoid
-rebase conflicts with `main`). Nothing here is implemented yet.
+rebase conflicts with `main`). Slices 1-5 are implemented (the slice
+lines below say so); slice 6 remains.
 
 ## 1. Goal and non-goals
 
@@ -316,7 +317,7 @@ Required values are clap-required; unknown values exit 2 via clap.
 | `--remote-ssh-args` | Value | `-o ControlMaster=auto -o ControlPersist=60s` | passthrough (ansible `ssh_args`). |
 | `--remote-strict-host-key-checking` | Value `accept-new\|yes\|no` | `accept-new` | TOFU by default (new key added + fingerprint printed, changed key aborts); `yes` for locked-down fleets, `no` only for throwaway labs (§9). |
 | `--remote-jobs` | Value | `1` | units in flight (v1: sequential only; the knob exists so the future parallel slice needs no CLI change). |
-| `--remote-config-protect` | Value | `/etc` | space-separated CONFIG_PROTECT list for the client merge (slice 5 derives it from pulled client config). |
+| `--remote-config-protect` | Value | `/etc` | space-separated CONFIG_PROTECT list for the client merge (deriving it from the placed client config is deferred -- `Config` doesn't model it yet; the flags or the real defaults rule). |
 | `--remote-config-protect-mask` | Value | `/etc/env.d` | space-separated CONFIG_PROTECT_MASK list. |
 | `--remote-transport` | Value `ssh\|local` | `ssh` | how driver scripts and files reach the client; `local` runs the identical generated driver against local paths (offline debugging, SSH-free driver tests). |
 | `--remote-binpkg` | Value | — | bundle, stream and unpack one explicit binpkg file, bypassing resolution (slices 2-4 trials; later an escape hatch). |
@@ -433,9 +434,15 @@ disables -- only for labs with no NTP).
    best-effort)
 5. **Placement + ledger**: `server:`/`client:` matrix, vdb shadow,
    stateless degrade, last-10 ledger both sides, `--getbinpkgonly`
-   enforcement.
+   enforcement. (shipped 2026-09-08 except the re-scoped cuts: the
+   etc-portage matrix, both ledgers with last-10 rotation, and the
+   enforcement are in; the vdb shadow + stateless degrade +
+   `--remote-vdb`/`--remote-edb` moved to slice 6 with keep-going, and
+   CONFIG_PROTECT derivation is deferred -- `Config` doesn't model it.
+   Downloads + server ledger use the placed config's own `PKGDIR`.)
 6. **Report + keep-going**: per-unit trailers, merged/failed/skipped
-   summary, `--remote-jobs` still sequential (knob reserved).
+   summary, `--remote-jobs` still sequential (knob reserved). Plus the
+   slice-5 re-scope: vdb shadow + stateless degrade.
 
 ## 14. Open questions (re-open, don't silently default)
 

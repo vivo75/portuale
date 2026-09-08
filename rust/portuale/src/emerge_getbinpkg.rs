@@ -237,7 +237,7 @@ fn merge_one_binary_entry(
 /// the exact multi-instance file; without one, the `<pn>/` subdir is
 /// still scanned for a `<pf>-<id>` file (an older index with no
 /// `BUILD_ID` field), preferring the highest `<id>`.
-fn resolve_local_binpkg(
+pub(crate) fn resolve_local_binpkg(
     pkgdir: &Path,
     category: &str,
     package: &str,
@@ -286,7 +286,7 @@ fn resolve_local_binpkg(
 /// Fetch `<sync_uri>/<PATH>` (or the default `<cat>/<pf>.tbz2`) into
 /// `$PKGDIR`, then verify it against the index `SIZE` and, if present,
 /// the `MD5` field. A mismatch removes the file and fails.
-fn download_and_verify(
+pub(crate) fn download_and_verify(
     sync_uri: &str,
     record: &std::collections::HashMap<String, String>,
     category: &str,
