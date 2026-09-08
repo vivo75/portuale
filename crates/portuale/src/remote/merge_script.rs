@@ -35,6 +35,146 @@ pub(crate) struct PhaseExportsArgs<'a> {
     pub(crate) portuale_bin: &'a str,
 }
 
+/// `export` block for the new instance's phase script: path overrides
+/// with caller-side values, everything else from the sourced saved env.
+/// `MERGE_TYPE=binary` rides the same line as `EMERGE_FROM` (only binpkgs
+/// merge here), gated on [`eapi_exports_merge_type`]. `portuale_bin` is
+/// the resolved absolute client path: every client call uses it, never
+/// `$PATH`.
+pub(crate) fn phase_exports(args: PhaseExportsArgs<'_>) -> String {
+    let PhaseExportsArgs {
+        ebuild,
+        build_dir,
+        root,
+        image_dir,
+        temp_dir,
+        work_subdir,
+        home_dir,
+        files_dir,
+        bin_dir,
+        tmpdir,
+        colormap,
+        staged,
+        phase,
+        portuale_bin,
+    } = args;
+    format!(
+        concat!(
+            "export EAPI={eapi} CATEGORY={category} PN={pn} PV={pv} PR={pr} PVR={pvr} P={p} PF={pf}\n",
+            "export EBUILD={ebuild} O={obuild}\n",
+            "export ROOT={root} EROOT={root}\n",
+            "export PORTAGE_BUILDDIR={builddir}\n",
+            "export WORKDIR={workdir}\n",
+            "export D={imaged}/ ED={imaged}/\n",
+            "export T={temp} HOME={home} FILESDIR={filesdir}\n",
+            "export PORTAGE_BIN_PATH={bindir}\n",
+            "export PORTAGE_ECLASS_LOCATIONS=\"\"\n",
+            "export PORTUALE_BIN={portuale_bin}\n",
+            "export PORTAGE_PYM_PATH=/\n",
+            "unset PORTAGE_IPC_DAEMON\n",
+            "export PORTAGE_PYTHON=\"$UNITBIN/portuale-python\"\n",
+            "export PORTAGE_COLORMAP={colormap}\n",
+            "export PORTAGE_TMPDIR={tmpdir}\n",
+            "export SANDBOX_LOG={temp}/sandbox.log\n",
+            "export EBUILD_PHASE={phase} EMERGE_FROM=binary{merge_type}\n",
+        ),
+        merge_type = if eapi_exports_merge_type(&staged.eapi) {
+            " MERGE_TYPE=binary"
+        } else {
+            ""
+        },
+        eapi = sh_quote(&staged.eapi),
+        category = sh_quote(&staged.category),
+        pn = sh_quote(&staged.pn),
+        pv = sh_quote(&staged.pv),
+        pr = sh_quote(&staged.pr),
+        pvr = sh_quote(&staged.pvr),
+        p = sh_quote(&staged.p),
+        pf = sh_quote(&staged.pf),
+        ebuild = sh_quote(ebuild),
+        obuild = sh_quote(&format!("{build_dir}/build-info")),
+        root = sh_quote(root),
+        builddir = sh_quote(build_dir),
+        workdir = sh_quote(work_subdir),
+        imaged = sh_quote(image_dir),
+        temp = sh_quote(temp_dir),
+        home = sh_quote(home_dir),
+        filesdir = sh_quote(files_dir),
+        bindir = sh_quote(bin_dir),
+        tmpdir = sh_quote(tmpdir),
+        colormap = sh_quote(colormap),
+        phase = phase,
+        portuale_bin = sh_quote(portuale_bin),
+    )
+}
+
+// --- Client phases -----------------------------------------------------------------
+
+/// Arguments of [`phase_script`].
+pub(crate) struct PhaseScriptArgs<'a> {
+    pub(crate) unit_dir: &'a str,
+    pub(crate) staged: &'a crate::remote_bundle::StagedBundle,
+    pub(crate) phase: &'a str,
+    pub(crate) root: &'a str,
+    pub(crate) workdir_parent: &'a str,
+    pub(crate) colormap: &'a str,
+    pub(crate) portuale_bin: &'a str,
+}
+
+/// One phase invocation, generated bash: recreate the local phase setup
+/// client-side (fresh `bash bin/ebuild.sh <phase>` process per phase --
+/// the readonly `EBUILD_PHASE` semantics demand it, exactly like local
+/// `spawnebuild`). `S` is deliberately *not* exported: ebuild.sh
+/// defaults it to `${WORKDIR}/${P}` (exact local behavior). Reports
+/// `PHASE_<phase>=<rc>` on stdout, phase log raw on stdout/stderr.
+pub(crate) fn phase_script(args: PhaseScriptArgs<'_>) -> String {
+    let PhaseScriptArgs {
+        unit_dir,
+        staged,
+        phase,
+        root,
+        workdir_parent,
+        colormap,
+        portuale_bin,
+    } = args;
+    // `UNITBIN` is the shipped runtime dir: `PORTAGE_PYTHON` resolves
+    // through it, so no shim falls back to `PATH`.
+    format!(
+        concat!(
+            "UNIT={unit}\n",
+            "UNITBIN=\"$UNIT/bin\"\n",
+            "T=\"$UNIT/temp\"\n",
+            "mkdir -p \"$T\" \"$UNIT/work\" \"$UNIT/homedir\" \"$UNIT/files\" \"$UNIT/empty\"\n",
+            "cp \"$UNIT/environment\" \"$T/environment\"\n",
+            ": > \"$T/environment.raw\"\n",
+            "{exports}",
+            "export PATH=\"$UNIT/bin/ebuild-helpers:$PATH\"\n",
+            "bash \"$UNIT/bin/ebuild.sh\" {phase}\n",
+            "rc=$?\n",
+            "echo \"PHASE_{phase}=$rc\"\n",
+            "exit $rc\n",
+        ),
+        unit = sh_quote(unit_dir),
+        exports = phase_exports(PhaseExportsArgs {
+            ebuild: &format!("{unit_dir}/build-info/{}.ebuild", staged.pf),
+            build_dir: unit_dir,
+            root,
+            image_dir: &format!("{unit_dir}/image"),
+            temp_dir: &format!("{unit_dir}/temp"),
+            work_subdir: &format!("{unit_dir}/work"),
+            home_dir: &format!("{unit_dir}/homedir"),
+            files_dir: &format!("{unit_dir}/files"),
+            bin_dir: &format!("{unit_dir}/bin"),
+            tmpdir: workdir_parent,
+            colormap,
+            staged,
+            phase,
+            portuale_bin
+        }),
+        phase = phase,
+    )
+}
+
 /// Locale variables the regen postinst run re-exports into the client
 /// phase env. Only set variables are ever forwarded (never invented
 /// defaults). `LANGUAGE` is not in Portage's whitelist -- it rides along
