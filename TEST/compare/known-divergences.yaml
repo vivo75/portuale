@@ -30,17 +30,6 @@
 # suppressed only so the layer can still gate *other* changes -- it must
 # be deleted the moment the bug is fixed (see the finding it names).
 
-- id: l1-env-binpkg-not-refiltered
-  layer: l1
-  category: VDB
-  path_glob: ["*/environment"]
-  owner: portuale-bug
-  reason: >-
-    portuale's binpkg-merge vdb `environment` keeps a stray
-    `declare -- x=""` and is missing portage's
-    `SKIP_KERNEL_BINPKG_ENV_RESET="1"` -- real portage re-filters the
-    binpkg's build-info/environment through save-ebuild-env.sh on the
-    way to the vdb, portuale stores it closer to verbatim. Small, real,
-    tracked as L1-c in TEST/findings/l1.md. TEMPORARY -- delete this
-    entry when L1-c is fixed on `main`.
-  ticket: null
+# (empty -- L1-c fixed on `main`; the `l1-env-binpkg-not-refiltered`
+#  entry that stood here is gone. The L1-f phase-env-inheritance residue
+#  is handled by normalize.py's ENV_DROP, not an allowlist entry.)

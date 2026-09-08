@@ -3842,6 +3842,7 @@ fn run_resume(
         merge_options.install_mask,
         merge_options.install_mask_prunes_usr_share,
     ) = config_install_mask(config);
+    merge_options.features = config_features_string(config);
     // An all-source resume list keeps going through `run_source_merge`
     // (full `--jobs`/`--load-average` scheduler support); a mergelist
     // with at least one resumed binary entry (real portage's own resume
@@ -5673,8 +5674,8 @@ pub(crate) const BUILD_VARS: &[&str] = &[
 /// resolved config value stands. (An explicit empty `INSTALL_MASK=""`
 /// blanking the config value is a corner real handles but we do not --
 /// unset and empty behave the same, matching `MergeOptions::from_env`.)
-fn config_install_mask(config: &portage_profile::Config) -> (String, bool) {
-    let features: Vec<String> = config
+fn config_features_list(config: &portage_profile::Config) -> Vec<String> {
+    config
         .resolved_incremental("FEATURES")
         .or_else(|| {
             config
@@ -5682,7 +5683,18 @@ fn config_install_mask(config: &portage_profile::Config) -> (String, bool) {
                 .get("FEATURES")
                 .map(|f| f.split_whitespace().map(String::from).collect())
         })
-        .unwrap_or_default();
+        .unwrap_or_default()
+}
+
+/// The resolved, merge-time `FEATURES` incremental list, space-joined --
+/// for `MergeOptions::features` (`merge_binpkg`'s `PORTAGE_UPDATE_ENV`
+/// vdb-environment regeneration).
+fn config_features_string(config: &portage_profile::Config) -> String {
+    config_features_list(config).join(" ")
+}
+
+fn config_install_mask(config: &portage_profile::Config) -> (String, bool) {
+    let features = config_features_list(config);
     let configured = std::env::var("INSTALL_MASK")
         .ok()
         .filter(|v| !v.is_empty())
@@ -10772,6 +10784,7 @@ pub fn run(args: &[String]) -> ExitCode {
             merge_options.install_mask,
             merge_options.install_mask_prunes_usr_share,
         ) = config_install_mask(&config);
+        merge_options.features = config_features_string(&config);
         // Real `_grab_pkg_env` into `configdict["pkg"]`: a `package.env`
         // entry matching a build-bound package layers its env file's
         // build vars over the run-wide set above.

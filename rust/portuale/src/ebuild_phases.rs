@@ -2661,6 +2661,21 @@ pub(crate) fn run_phase_from_saved_env(
     // log_file`'s own doc comment. `None` for a standalone/foreground
     // run.
     log_file: Option<&Path>,
+    // Real `dblink.treewalk`'s `PORTAGE_UPDATE_ENV` (`vartree.py:5334`,
+    // set around the merge's `postinst` phase to
+    // `<dbpkgdir>/environment.bz2`): `bin/phase-functions.sh`'s
+    // `prerm|postrm|preinst|postinst|config|info` case regenerates that
+    // file from the *live* phase environment
+    // (`___save_and_filter_ebuild_env … | bzip2 -9 > $PORTAGE_UPDATE_ENV`)
+    // -- so the vdb env carries the merge-time config, not the binpkg's
+    // build-time one, and stale locals a different build host baked in
+    // are filtered out. `None` for every hook that must not touch the
+    // vdb env. `refresh_features`, when `Some` and non-empty, overrides
+    // `FEATURES`/`PORTAGE_FEATURES` in the phase env for exactly that
+    // regeneration -- real portage's vdb env carries the resolved
+    // incremental list.
+    update_env: Option<&Path>,
+    refresh_features: Option<&str>,
 ) -> Result<i32, String> {
     let runtime = shared_runtime()?;
     runtime.block_on(async {
@@ -2698,10 +2713,17 @@ pub(crate) fn run_phase_from_saved_env(
         // and `die`s "No supported Python implementation installed".
         // `EMERGE_FROM` alone doesn't cover it -- the eclasses check
         // `MERGE_TYPE`.
-        let extra_env = [
+        let mut extra_env = vec![
             ("EMERGE_FROM".to_string(), "binary".to_string()),
             ("MERGE_TYPE".to_string(), "binary".to_string()),
         ];
+        if let Some(p) = update_env {
+            extra_env.push(("PORTAGE_UPDATE_ENV".to_string(), p.display().to_string()));
+            if let Some(features) = refresh_features.filter(|f| !f.is_empty()) {
+                extra_env.push(("FEATURES".to_string(), features.to_string()));
+                extra_env.push(("PORTAGE_FEATURES".to_string(), features.to_string()));
+            }
+        }
         run_one_phase(
             &env,
             root,

@@ -11,7 +11,7 @@
 # Portage installed). Re-sync from upstream by copying the file over and
 # re-applying the one local change below.
 #
-# LOCAL CHANGE (brush strategy #2): __save_and_filter_ebuild_env stages
+# LOCAL CHANGE (brush strategy #2): ___save_and_filter_ebuild_env stages
 # __save_ebuild_env | __filter_readonly_variables through a ${T} temp file so
 # neither shell function is a pipeline stage -- a shell that runs a non-last
 # function pipeline stage inline deadlocks once it writes past the OS pipe
@@ -200,7 +200,7 @@ __filter_readonly_variables() {
 	|| die "filter-bash-environment.py failed"
 }
 
-# @FUNCTION: __save_and_filter_ebuild_env
+# @FUNCTION: ___save_and_filter_ebuild_env
 # @USAGE: <output file> [--exclude-init-phases] [__filter_readonly_variables opts]
 # @DESCRIPTION:
 # Runs __save_ebuild_env, passes its output through __filter_readonly_variables
@@ -217,27 +217,35 @@ __filter_readonly_variables() {
 # regular file, which always accepts the write, sidesteps it and is
 # behaviourally identical for bash. Only ${T} is used for the scratch file
 # (always present and writable during a phase).
-__save_and_filter_ebuild_env() {
-	local __sfe_out=$1
+#
+# The `___`-prefix on this function and its locals is load-bearing:
+# __save_ebuild_env is a `( ... )` subshell that inherits this function's
+# scope, so anything visible here lands in its `declare -p` dump. The
+# triple-underscore namespace is exactly what save-ebuild-env.sh's own
+# `unset -f ___*` / `unset -v "${!___@}"` cleanup clears before that dump
+# (real portage runs `__save_ebuild_env | __filter_readonly_variables`
+# directly, with no wrapper, so it has nothing extra to strip).
+___save_and_filter_ebuild_env() {
+	local ___sfe_out=$1
 	shift
-	local -a __sfe_save_args=()
+	local -a ___sfe_save_args=()
 	if [[ $1 == --exclude-init-phases ]]; then
-		__sfe_save_args=( "$1" )
+		___sfe_save_args=( "$1" )
 		shift
 	fi
 
-	local __sfe_tmp="${T}/.save-ebuild-env.${BASHPID:-$$}"
-	local __sfe_ret
+	local ___sfe_tmp="${T}/.save-ebuild-env.${BASHPID:-$$}"
+	local ___sfe_ret
 
-	__save_ebuild_env "${__sfe_save_args[@]}" > "${__sfe_tmp}"
-	__sfe_ret=$?
-	if [[ ${__sfe_ret} -eq 0 ]]; then
-		__filter_readonly_variables "$@" < "${__sfe_tmp}" > "${__sfe_out}"
-		__sfe_ret=$?
+	__save_ebuild_env "${___sfe_save_args[@]}" > "${___sfe_tmp}"
+	___sfe_ret=$?
+	if [[ ${___sfe_ret} -eq 0 ]]; then
+		__filter_readonly_variables "$@" < "${___sfe_tmp}" > "${___sfe_out}"
+		___sfe_ret=$?
 	fi
 
-	rm -f "${__sfe_tmp}"
-	return ${__sfe_ret}
+	rm -f "${___sfe_tmp}"
+	return ${___sfe_ret}
 }
 
 # @FUNCTION: __preprocess_ebuild_env
@@ -811,7 +819,7 @@ __dyn_install() {
 
 	# Use safe cwd, avoiding unsafe import for bug #469338.
 	cd "${PORTAGE_PYM_PATH}"
-	__save_and_filter_ebuild_env "${PORTAGE_BUILDDIR}/build-info/environment" \
+	___save_and_filter_ebuild_env "${PORTAGE_BUILDDIR}/build-info/environment" \
 		--exclude-init-phases --filter-path --filter-sandbox --allow-extra-vars \
 		|| die "__save_ebuild_env failed"
 	cd "${PORTAGE_BUILDDIR}"/build-info || die
@@ -1128,13 +1136,13 @@ __ebuild_main() {
 			# need to pass some variables to uninstallation phases.
 			# Use safe cwd, avoiding unsafe import for bug #469338.
 			cd "${PORTAGE_PYM_PATH}"
-			local __update_env_tmp="${T}/.update-env.${BASHPID:-$$}"
-			__save_and_filter_ebuild_env "${__update_env_tmp}" \
+			local ___update_env_tmp="${T}/.update-env.${BASHPID:-$$}"
+			___save_and_filter_ebuild_env "${___update_env_tmp}" \
 				--exclude-init-phases --filter-path --filter-sandbox --allow-extra-vars \
 				|| die "__save_ebuild_env failed"
-			${PORTAGE_BZIP2_COMMAND} -c -f9 < "${__update_env_tmp}" > "${PORTAGE_UPDATE_ENV}" \
+			${PORTAGE_BZIP2_COMMAND} -c -f9 < "${___update_env_tmp}" > "${PORTAGE_UPDATE_ENV}" \
 				|| die "__save_ebuild_env failed"
-			rm -f "${__update_env_tmp}"
+			rm -f "${___update_env_tmp}"
 		fi
 		;;
 	unpack|prepare|configure|compile|test|clean|install)
@@ -1243,7 +1251,7 @@ __ebuild_main() {
 
 		# Use safe cwd, avoiding unsafe import for bug #469338.
 		cd "${PORTAGE_PYM_PATH}"
-		__save_and_filter_ebuild_env "${T}/environment" --filter-features \
+		___save_and_filter_ebuild_env "${T}/environment" --filter-features \
 			|| die "__save_ebuild_env failed"
 
 		chgrp "${PORTAGE_GRPNAME:-portage}" "${T}/environment"

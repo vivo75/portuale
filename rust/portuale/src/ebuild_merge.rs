@@ -353,6 +353,15 @@ pub struct MergeOptions {
     /// `BINPKG_GPG_VERIFY_*`; `Default` is the same resolution (these
     /// are env reads either way -- the struct carries no other state).
     pub gpg_verify: crate::binpkg::GpgVerify,
+    /// The resolved, merge-time `FEATURES` incremental list (space-
+    /// joined), for `merge_binpkg`'s `PORTAGE_UPDATE_ENV` vdb-environment
+    /// regeneration -- real portage's stored vdb env carries the fully-
+    /// resolved list, not the binpkg's build-time one. The `emerge`
+    /// production paths set this from `Config::resolved_incremental`
+    /// ("FEATURES"); `from_env` / `Default` fall back to the raw
+    /// `$FEATURES` string (all `ebuild <file> merge` has), and an empty
+    /// value leaves the phase env's own `FEATURES` in place.
+    pub features: String,
 }
 
 impl Default for MergeOptions {
@@ -378,6 +387,7 @@ impl Default for MergeOptions {
             install_mask: String::new(),
             install_mask_prunes_usr_share: false,
             gpg_verify: crate::binpkg::GpgVerify::default(),
+            features: String::new(),
         }
     }
 }
@@ -440,6 +450,10 @@ impl MergeOptions {
             install_mask,
             install_mask_prunes_usr_share,
             gpg_verify: crate::binpkg::GpgVerify::from_env(),
+            // `ebuild <file> merge` fallback: the raw `$FEATURES` string
+            // (the `emerge` paths overwrite this with the resolved
+            // incremental list right after, as with `install_mask`).
+            features: std::env::var("FEATURES").unwrap_or_default(),
         }
     }
 }
@@ -3204,6 +3218,10 @@ pub(crate) fn run_vdb_saved_env_phase(
         &options.config_root,
         options.shell,
         options.log_file.as_deref(),
+        // An unmerge's `prerm`/`postrm` never rewrites a vdb env (the
+        // entry is on its way out).
+        None,
+        None,
     )
 }
 
@@ -3343,22 +3361,31 @@ pub fn merge_binpkg(
             None
         }
     };
-    let run_hook = |phase: &str| -> Result<i32, String> {
-        match &extracted_ebuild {
-            Some(ebuild) if phase_defined(phase) => crate::ebuild_phases::run_phase_from_saved_env(
-                ebuild,
-                &saved_env,
-                phase,
-                root,
-                portage_tmpdir,
-                options.debug,
-                &options.config_root,
-                options.shell,
-                options.log_file.as_deref(),
-            ),
-            _ => Ok(0),
-        }
-    };
+    // `always`: run the phase even when the ebuild does not define it --
+    // real portage's `postinst` `EbuildPhase` always starts (`pkg_postinst`
+    // defined or not) so its post-hook `PORTAGE_UPDATE_ENV` block can run.
+    let run_hook_ex =
+        |phase: &str, always: bool, update_env: Option<&Path>| -> Result<i32, String> {
+            match &extracted_ebuild {
+                Some(ebuild) if always || phase_defined(phase) => {
+                    crate::ebuild_phases::run_phase_from_saved_env(
+                        ebuild,
+                        &saved_env,
+                        phase,
+                        root,
+                        portage_tmpdir,
+                        options.debug,
+                        &options.config_root,
+                        options.shell,
+                        options.log_file.as_deref(),
+                        update_env,
+                        update_env.map(|_| options.features.as_str()),
+                    )
+                }
+                _ => Ok(0),
+            }
+        };
+    let run_hook = |phase: &str| run_hook_ex(phase, false, None);
 
     // Real `Scheduler._run_pkg_pretend` runs `pkg_pretend` for every
     // package in the merge list -- a binary package included: only the
@@ -3496,7 +3523,24 @@ pub fn merge_binpkg(
     // is live *and* every replaced same-slot version is gone, but before
     // `env_update()`. Its own non-zero exit is logged, never fatal (real
     // `_postinst_failure` -- "It's stupid to bail out here").
-    let postinst_status = run_hook("postinst")?;
+    //
+    // `PORTAGE_UPDATE_ENV` -> the vdb entry's own `environment.bz2` (just
+    // written, verbatim from the binpkg): `phase-functions.sh`
+    // regenerates it from the live, merge-time environment (real
+    // `vartree.py:5334`), so the vdb env carries the resolved merge-time
+    // `FEATURES` and drops stale build-host locals -- see
+    // `ebuild_phases::run_phase_from_saved_env`. `always` so it runs even
+    // with no `pkg_postinst`. No-op when the binpkg carries no saved env.
+    let vdb_env_bz2 = root
+        .join("var/db/pkg")
+        .join(&category)
+        .join(&pf)
+        .join("environment.bz2");
+    let postinst_status = run_hook_ex(
+        "postinst",
+        true,
+        vdb_env_bz2.is_file().then_some(vdb_env_bz2.as_path()),
+    )?;
     if postinst_status != 0 {
         eprintln!(
             "{category}/{pf}: FAILED postinst ({postinst_status}) -- merge kept (real _postinst_failure)"

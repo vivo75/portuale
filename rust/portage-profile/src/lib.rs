@@ -1302,6 +1302,16 @@ fn apply_env_layer(scalars: &mut HashMap<String, String>, config: &mut Config) {
     }
     for &name in ENV_SCALAR_VARS {
         if let Some(value) = config_env_var(name) {
+            // `FEATURES` is in real `const.INCREMENTALS`: a process-env
+            // value stacks incrementally on the profile + `make.conf`
+            // fold (`-tok` removes, bare adds), it does not replace it.
+            // `config_env_var` returns it here as a plain scalar for
+            // `other_vars`, but `resolved_incremental` must also see it
+            // as the final (highest-priority) source. Other
+            // `ENV_SCALAR_VARS` entries are genuine last-wins scalars.
+            if TRACKED_INCREMENTALS.contains(&name) {
+                note_incremental(config, name, &value);
+            }
             scalars.insert(name.to_string(), value);
         }
     }

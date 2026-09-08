@@ -935,6 +935,54 @@ mod tests {
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
+    /// L1-c: real `dblink.treewalk` regenerates the vdb `environment.bz2`
+    /// from the *live* merge-time environment (`PORTAGE_UPDATE_ENV`
+    /// around the `postinst` phase), so it carries the merge-time
+    /// `FEATURES`, not the binpkg's build-time one. `merge_binpkg` runs
+    /// that regeneration unconditionally now.
+    #[test]
+    fn merge_binpkg_regenerates_the_vdb_environment_with_merge_time_features() {
+        let tmp = tempdir();
+        let root = tmp.join("root");
+        std::fs::create_dir_all(&root).unwrap();
+
+        let opts = MergeOptions {
+            features: "mergetimefeat splitdebug".to_string(),
+            ..MergeOptions::default()
+        };
+        let status = ebuild_merge::merge_binpkg(
+            &fixtures_root().join("pkgdir/dev-libs/binpkgpretendpkg-1.0.tbz2"),
+            &root,
+            &tmp.join("portage_tmpdir"),
+            &opts,
+        )
+        .expect("merge succeeds");
+        assert_eq!(status, 0);
+
+        let env_bz2 = root.join("var/db/pkg/dev-libs/binpkgpretendpkg-1.0/environment.bz2");
+        let out = std::process::Command::new("bzip2")
+            .args(["-dc", "--"])
+            .arg(&env_bz2)
+            .output()
+            .expect("bunzip2 the vdb environment");
+        let env = String::from_utf8_lossy(&out.stdout);
+
+        assert!(
+            env.contains(r#"FEATURES="mergetimefeat splitdebug""#),
+            "vdb environment must carry the merge-time FEATURES, got:\n{}",
+            env.lines()
+                .filter(|l| l.contains("FEATURES="))
+                .collect::<Vec<_>>()
+                .join("\n")
+        );
+        // The brush-wrapper's own `___`-prefixed locals must not leak.
+        assert!(
+            !env.contains("___sfe_") && !env.contains("___save_and_filter_ebuild_env"),
+            "the env-regeneration wrapper's internals leaked into the vdb env"
+        );
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
     #[test]
     fn merge_binpkg_replace_runs_the_replaced_versions_pkg_prerm_and_pkg_postrm() {
         let tmp = tempdir();

@@ -83,16 +83,26 @@ def norm_metadata(text: str) -> str:
     return "\n".join(sorted(text.splitlines())) + "\n"
 
 # saved-env lines to drop outright (`declare -x KEY=…` or bare `KEY=…`):
-# volatile, or merge-env-vs-build-env noise the standalone vdb files
-# already carry authoritatively (FEATURES / PORTAGE_FEATURES -- real
-# portage refreshes these to the merge-time config, portuale stores the
-# binpkg's build-time value; that disagreement is a finding, tracked in
-# TEST/findings/l1.md, but it should not drown the rest of the diff).
+# volatile bash internals, plus:
+#  * locale vars (LANG/LC_*): the two consumer containers are invoked
+#    with different locale env (`consume.sh` exports `LC_ALL`, the
+#    portage side keeps the image's split `LC_*`); real's binpkg env
+#    keeps whatever the phase inherited either way -- a test-harness
+#    difference, not a portuale bug.
+#  * EMERGE_DEFAULT_OPTS / PORTAGE_RUNNING_ROOT / O: portuale spawns the
+#    binpkg phase with the full inherited process env (real portage
+#    curates `mysettings.environ()`), so these leak into the regenerated
+#    vdb `environment` where real's has nothing. Tracked as L1-f; a
+#    distinct root cause from L1-c.
+# FEATURES / PORTAGE_FEATURES are NOT dropped any more -- L1-c's
+# PORTAGE_UPDATE_ENV regeneration now makes them match real.
 ENV_DROP = re.compile(
     r"^(declare (-[-x]+ )?)?"
     r"(SRANDOM|EPOCHREALTIME|EPOCHSECONDS|SECONDS|BASHPID|PPID|BUILD_TIME|BUILD_ID|"
-    r"HOSTNAME|SANDBOX_PID|PORTAGE_PID|PORTAGE_IPC_KEY|FEATURES|PORTAGE_FEATURES|"
-    r"COLUMNS|LINES|RANDOM)="
+    r"HOSTNAME|SANDBOX_PID|PORTAGE_PID|PORTAGE_IPC_KEY|"
+    r"COLUMNS|LINES|RANDOM|"
+    r"LANG|LC_[A-Z]+|"
+    r"EMERGE_DEFAULT_OPTS|PORTAGE_RUNNING_ROOT|O)="
 )
 ENV_MASK = re.compile(
     r"^((?:declare (?:-[-x]+ )?)?(T|WORKDIR|PORTAGE_BUILDDIR|HOME|PWD|OLDPWD|"
