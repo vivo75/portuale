@@ -4964,29 +4964,25 @@ def test_getbinpkg_equiv_ebuild_visible_rejects_an_orphaned_binary(
     assert exact.stdout.splitlines() == ["[binary  N g   ] dev-libs/eqebvispkg-2.0-1 "]
 
 
-def test_usepkg_binary_of_a_since_removed_ebuild_is_not_reinstalled(
+def test_usepkg_binary_of_a_since_removed_ebuild_is_reinstalled_only_when_it_differs(
     emerge_binary, emerge_pretend_python, tmp_path
 ):
-    """Real bug #354441 / `identical_binary` (`depgraph.py:8001-8014`):
-    when a package's ebuild has since been removed (or its keywords
-    dropped), real portage rejects the *installed* built instance for
-    ebuild-invisibility and would merge the available binary in its
-    place -- even when that binary is byte-identical to what's installed.
-    `identical_binary` suppresses that needless reinstall.
+    """Real bug #354441 / `identical_binary` (`depgraph.py:8001-8014`)
+    plus `_equiv_ebuild_visible` (`depgraph.py:7399`): when a package's
+    ebuild has since been removed, real rejects the *installed* built
+    instance for ebuild-invisibility and merges the available binary in
+    its place -- `identical_binary` suppresses that reinstall only when
+    the binary carries the *same* BUILD_TIME as what's installed.
 
-    Portuale's resolver has no "installed package" candidate that can be
-    rejected for ebuild-invisibility: `_equiv_ebuild_visible` only ever
-    filters *binary* candidates (and only when a visible ebuild matches
-    the atom at some version), while "already installed" is a pure vdb
-    membership check (`candidate_is_installed`). So the binary at the
-    installed version is classified `AlreadyInstalled` directly, no
-    `identical_binary` special-case needed -- this pins that, for both a
-    matching and a differing `BUILD_TIME`.
+    So for an ebuild-gone binary at the installed version:
+      - identical BUILD_TIME -> still `AlreadyInstalled` (no reinstall);
+      - differing BUILD_TIME -> `[binary R]` reinstall, even without
+        `--rebuilt-binaries` (that option is the "even when the ebuild IS
+        visible / either direction" escalation).
 
-    (`scope-backlog.md` E documents the one narrow residual real
-    divergence: with the ebuild gone AND a differing-`BUILD_TIME` binary
-    at the installed version, real reinstalls it -- portuale keeps the
-    installed version, which is what `--rebuilt-binaries` opts into.)"""
+    (This closes scope-backlog's 2.E residual: the differing-BUILD_TIME
+    half used to be a deliberate cut -- portuale kept the installed
+    version.)"""
     cfg = tmp_path / "cfg"
     repo = tmp_path / "repo"
     pkgdir = tmp_path / "binpkgs"
@@ -5013,24 +5009,36 @@ def test_usepkg_binary_of_a_since_removed_ebuild_is_not_reinstalled(
     pkgdir.mkdir()
     env = {"PORTAGE_CONFIGROOT": str(cfg), "ROOT": str(cfg)}
 
-    for binary_build_time in ("1000", "2000"):  # identical, then differing
-        (pkgdir / "Packages").write_text(
-            "TIMESTAMP: 0\nPACKAGES: 1\n\n"
-            f"CPV: dev-libs/idbinpkg-1.0\nBUILD_TIME: {binary_build_time}\n"
-            "DEFINED_PHASES: -\nEAPI: 8\nIUSE:\nKEYWORDS: amd64\n"
-            "PATH: dev-libs/idbinpkg-1.0.tbz2\nREPO: main\nSIZE: 4096\nSLOT: 0\nUSE:\n"
-        )
-        args = [
-            "--pretend", "--usepkg", "--update", "--deep", "--selective",
-            "dev-libs/idbinpkg",
-        ]
-        rust = _run([str(emerge_binary)], args, env)
-        py = _run(emerge_pretend_python, args, env)
-        assert rust.returncode == 0, (binary_build_time, rust.stdout, rust.stderr)
-        assert rust.stdout == py.stdout, binary_build_time
-        assert rust.stderr == py.stderr, binary_build_time
-        assert "[binary" not in rust.stdout, binary_build_time
-        assert "[ebuild" not in rust.stdout, binary_build_time
+    # Identical BUILD_TIME -> identical_binary suppresses the reinstall.
+    (pkgdir / "Packages").write_text(
+        "TIMESTAMP: 0\nPACKAGES: 1\n\n"
+        "CPV: dev-libs/idbinpkg-1.0\nBUILD_TIME: 1000\n"
+        "DEFINED_PHASES: -\nEAPI: 8\nIUSE:\nKEYWORDS: amd64\n"
+        "PATH: dev-libs/idbinpkg-1.0.tbz2\nREPO: main\nSIZE: 4096\nSLOT: 0\nUSE:\n"
+    )
+    args = ["--pretend", "--usepkg", "--update", "--deep", "--selective", "dev-libs/idbinpkg"]
+    rust = _run([str(emerge_binary)], args, env)
+    py = _run(emerge_pretend_python, args, env)
+    assert rust.returncode == 0, (rust.stdout, rust.stderr)
+    assert rust.stdout == py.stdout
+    assert rust.stderr == py.stderr
+    assert "[binary" not in rust.stdout
+    assert "[ebuild" not in rust.stdout
+
+    # Differing BUILD_TIME -> the ebuild gone, the binary replaces the
+    # installed version (reinstall) even without --rebuilt-binaries.
+    (pkgdir / "Packages").write_text(
+        "TIMESTAMP: 0\nPACKAGES: 1\n\n"
+        "CPV: dev-libs/idbinpkg-1.0\nBUILD_TIME: 2000\n"
+        "DEFINED_PHASES: -\nEAPI: 8\nIUSE:\nKEYWORDS: amd64\n"
+        "PATH: dev-libs/idbinpkg-1.0.tbz2\nREPO: main\nSIZE: 4096\nSLOT: 0\nUSE:\n"
+    )
+    rust = _run([str(emerge_binary)], args, env)
+    py = _run(emerge_pretend_python, args, env)
+    assert rust.returncode == 0, (rust.stdout, rust.stderr)
+    assert rust.stdout == py.stdout
+    assert rust.stderr == py.stderr
+    assert rust.stdout.splitlines() == ["[binary   R    ] dev-libs/idbinpkg-1.0 "]
 
     # A bare top-level atom still reinstalls (matches real -- `emerge foo`
     # always replaces), so this isn't a "never reinstall" regression.
@@ -7142,12 +7150,12 @@ def test_buildpkgonly_does_not_fire_when_the_dependency_is_already_installed(
 def test_rebuilt_binaries_off_by_default_stays_already_installed(emerge_binary, fixture_env):
     """dev-libs/rebuiltbinarypkg is installed at 1.0 with its own vdb-
     recorded BUILD_TIME=1000; the binary index's own copy at the same
-    version has BUILD_TIME=2000. Without --rebuilt-binaries at all (and
-    with none of --usepkgonly/--deep/--update present to trigger the
-    real auto-on default -- create_depgraph_params.py:185-193), the
-    differing BUILD_TIME is never even checked, so a --selective query
-    (avoiding the unrelated "always reinstall a bare top-level atom"
-    behavior) stays already-installed."""
+    version has BUILD_TIME=2000, and no tree ebuild exists. Without
+    --rebuilt-binaries (and without --update -- the identical_binary /
+    _equiv_ebuild_visible reinstall only fires under --update, real's
+    `not avoid_update`), a --selective query still stays
+    already-installed: real's `_select_pkg_highest_available` final
+    `if avoid_update:` step keeps the installed package."""
     result = _run(
         [str(emerge_binary)],
         ["--pretend", "--usepkg", "--selective", "dev-libs/rebuiltbinarypkg"],
@@ -7223,9 +7231,16 @@ def test_rebuilt_binaries_auto_enables_under_usepkgonly_deep_update(emerge_binar
     """The real, non-obvious default-resolution asymmetry
     (create_depgraph_params.py:185-193): --rebuilt-binaries auto-enables
     even with no explicit flag at all, but only when --usepkgonly, bare
-    --deep (no explicit number), and --update are ALL given together. A
-    bounded --deep 3 does NOT count as the real "deep is True" bare
-    form, so it must NOT auto-enable."""
+    --deep (no explicit number), and --update are ALL given together.
+
+    `rebuiltbinarypkg` is an ebuild-*gone* bolt (no tree ebuild, only the
+    vdb install + a binary with a differing BUILD_TIME), so `--update`
+    alone already reinstalls it via the identical_binary /
+    _equiv_ebuild_visible rejection (see
+    test_usepkg_binary_of_a_since_removed_ebuild_is_reinstalled_only_when
+    _it_differs) -- the bounded --deep 3 form, which does NOT auto-enable
+    --rebuilt-binaries, still reinstalls here, for that reason rather
+    than the auto-enabled one."""
     auto_on = _run(
         [str(emerge_binary)],
         [
@@ -7257,7 +7272,9 @@ def test_rebuilt_binaries_auto_enables_under_usepkgonly_deep_update(emerge_binar
         fixture_env,
     )
     assert bounded_deep.returncode == 0
-    assert bounded_deep.stdout.strip() == ""
+    assert bounded_deep.stdout.splitlines() == [
+        '[binary   R    ] dev-libs/rebuiltbinarypkg-1.0-1 ',
+    ]
 
 
 def test_use_dep_equal_parent_matches_when_parent_flag_is_enabled(emerge_binary, fixture_env):

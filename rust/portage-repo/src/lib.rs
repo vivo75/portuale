@@ -7474,6 +7474,75 @@ fn best_binary_build_time(candidates: &[Candidate], version: &str) -> Option<i64
         .max()
 }
 
+/// Real `_equiv_ebuild_visible(pkg)` (`depgraph.py:7399`) at a bare
+/// version: whether a *visible* ebuild still exists in the tree at
+/// `version` (no slot comparison -- real queries `=cat/pkg-ver`). Queried
+/// from the tree via `list_candidates` (memoized), independent of the
+/// resolver's own candidate pool, so it stays meaningful under
+/// `--usepkgonly` (where the pool excludes ebuilds but real still asks
+/// the tree whether the installed built instance's ebuild remains).
+fn ebuild_visible_at(
+    repos: &[RepoConfig],
+    category: &str,
+    package: &str,
+    version: &str,
+    config: &portage_profile::Config,
+) -> bool {
+    list_candidates(repos, category, package)
+        .map(|tree| {
+            tree.iter()
+                .any(|c| c.version == version && is_visible(c, category, package, config))
+        })
+        .unwrap_or(false)
+}
+
+/// Whether a binary at the installed `version` warrants a reinstall, real
+/// `depgraph.py`'s two independent `rebuilt_binary` triggers folded into
+/// one:
+///   - `--rebuilt-binaries`: any `BUILD_TIME` difference (or a strictly-
+///     newer one past `--rebuilt-binaries-timestamp`) -- the "closely
+///     tracking a binhost" escalation, ebuild-visibility notwithstanding.
+///   - without it: the `identical_binary` + `_equiv_ebuild_visible`
+///     rejection of an *installed* built instance (`depgraph.py:7999-8030`)
+///     -- a binary at the installed version whose `BUILD_TIME` differs
+///     *and* whose ebuild is no longer visible is merged over the
+///     installed package. Real only rejects the installed instance this
+///     way when `not avoid_update` (`avoid_update = "--update" not in
+///     myopts`, `depgraph.py:7826`); without `--update` real's own
+///     `_select_pkg_highest_available` final `if avoid_update:` step
+///     keeps the installed package, so `update` gates this branch. (With
+///     an identical `BUILD_TIME` -- `identical_binary` -- or a
+///     still-visible ebuild, the installed instance is left alone.) The
+///     `update`-less "bare top-level always replaces" case is a separate
+///     mechanism (`is_top_level && !selective`), not this one.
+#[allow(clippy::too_many_arguments)]
+fn binary_reinstall_warranted(
+    root: &Path,
+    repos: &[RepoConfig],
+    config: &portage_profile::Config,
+    category: &str,
+    package: &str,
+    version: &str,
+    binary_build_time: Option<i64>,
+    rebuilt_binaries: bool,
+    rebuilt_binaries_timestamp: Option<u64>,
+    update: bool,
+) -> bool {
+    if rebuilt_binaries {
+        return rebuilt_binary_changed(
+            root,
+            binary_build_time,
+            category,
+            package,
+            version,
+            rebuilt_binaries_timestamp,
+        );
+    }
+    update
+        && !ebuild_visible_at(repos, category, package, version, config)
+        && rebuilt_binary_changed(root, binary_build_time, category, package, version, None)
+}
+
 /// A candidate's own `is_valid_flag` domain: its declared `IUSE`
 /// (`declared`) unioned with the profile's real EAPI 5+ `IUSE_EFFECTIVE`
 /// (`config.iuse_effective` -- `USE_EXPAND_IMPLICIT`-derived `elibc_*`/
@@ -9752,14 +9821,17 @@ pub fn resolve_pretend(
         let slot_changed_flag =
             changed_slot && slot_changed(root, repos, &atom.category, &atom.package, &best.version);
         let rebuilt_binary_flag = (usepkg || usepkgonly)
-            && rebuilt_binaries
-            && rebuilt_binary_changed(
+            && binary_reinstall_warranted(
                 root,
-                best_binary_build_time(&candidates, &best.version),
+                repos,
+                config,
                 &atom.category,
                 &atom.package,
                 &best.version,
+                best_binary_build_time(&candidates, &best.version),
+                rebuilt_binaries,
                 rebuilt_binaries_timestamp,
+                update,
             );
         let new_repo_flag = newrepo
             && new_repo_changed(
@@ -15746,6 +15818,127 @@ mod tests {
         ];
         assert_eq!(best_binary_build_time(&cands, "1.0"), Some(300));
         assert_eq!(best_binary_build_time(&cands, "3.0"), None);
+    }
+
+    #[test]
+    fn ebuild_visible_at_and_binary_reinstall_warranted_match_real_identical_binary() {
+        // `ebuild_visible_at` asks the TREE (not the pool): `newpkg` has
+        // a visible ebuild, `rebuiltbinarypkg` does not (it is the
+        // ebuild-gone bolt).
+        let repos = find_repos(&fixtures_root()).expect("fixture repos.conf resolves");
+        let config = test_config();
+        assert!(
+            ebuild_visible_at(&repos, "dev-libs", "newpkg", "1.0", &config),
+            "newpkg's ebuild is visible"
+        );
+        assert!(
+            !ebuild_visible_at(&repos, "dev-libs", "rebuiltbinarypkg", "1.0", &config),
+            "rebuiltbinarypkg has no ebuild"
+        );
+
+        // real `identical_binary` (same BUILD_TIME) vs
+        // `identical_binary`+`_equiv_ebuild_visible` (differing, ebuild
+        // gone, --update): the latter only fires under `--update`
+        // (real's `not avoid_update`).
+        let root = std::env::temp_dir().join(format!(
+            "portuale-btre-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let vdb = root.join("var/db/pkg/dev-libs/rebuiltbinarypkg-1.0");
+        std::fs::create_dir_all(&vdb).unwrap();
+        std::fs::write(vdb.join("BUILD_TIME"), "1000\n").unwrap();
+        let newpkg_vdb = root.join("var/db/pkg/dev-libs/newpkg-1.0");
+        std::fs::create_dir_all(&newpkg_vdb).unwrap();
+        std::fs::write(newpkg_vdb.join("BUILD_TIME"), "1000\n").unwrap();
+
+        // Identical build time -> never reinstalls, --update or not.
+        assert!(
+            !binary_reinstall_warranted(
+                &root,
+                &repos,
+                &config,
+                "dev-libs",
+                "rebuiltbinarypkg",
+                "1.0",
+                Some(1000),
+                false,
+                None,
+                true,
+            ),
+            "identical BUILD_TIME is identical_binary"
+        );
+        // Differing, ebuild gone, but no --update -> avoid_update keeps
+        // the installed package.
+        assert!(
+            !binary_reinstall_warranted(
+                &root,
+                &repos,
+                &config,
+                "dev-libs",
+                "rebuiltbinarypkg",
+                "1.0",
+                Some(2000),
+                false,
+                None,
+                false,
+            ),
+            "without --update the installed instance is kept"
+        );
+        // Differing, ebuild gone, --update -> reinstall.
+        assert!(
+            binary_reinstall_warranted(
+                &root,
+                &repos,
+                &config,
+                "dev-libs",
+                "rebuiltbinarypkg",
+                "1.0",
+                Some(2000),
+                false,
+                None,
+                true,
+            ),
+            "differing BUILD_TIME + ebuild gone + --update reinstalls"
+        );
+        // Differing but the ebuild IS visible (newpkg) -> no reinstall
+        // without --rebuilt-binaries, regardless of --update.
+        assert!(
+            !binary_reinstall_warranted(
+                &root,
+                &repos,
+                &config,
+                "dev-libs",
+                "newpkg",
+                "1.0",
+                Some(2000),
+                false,
+                None,
+                true,
+            ),
+            "a visible ebuild keeps the installed instance"
+        );
+        // --rebuilt-binaries escalates: reinstall for a differing
+        // BUILD_TIME even when the ebuild is visible.
+        assert!(
+            binary_reinstall_warranted(
+                &root,
+                &repos,
+                &config,
+                "dev-libs",
+                "newpkg",
+                "1.0",
+                Some(2000),
+                true,
+                None,
+                true,
+            ),
+            "--rebuilt-binaries reinstalls regardless of ebuild visibility"
+        );
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]

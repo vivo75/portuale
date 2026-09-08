@@ -3651,6 +3651,57 @@ def _rebuilt_binary_changed(root, binary_build_time, category, package, version,
     return built_timestamp != installed_timestamp
 
 
+def _ebuild_visible_at(repos, category, package, version, config):
+    """Real `_equiv_ebuild_visible(pkg)` (depgraph.py:7399) at a bare
+    version: whether a *visible* ebuild still exists in the tree at
+    `version` (no slot comparison -- real queries `=cat/pkg-ver`).
+    Queried from the tree, independent of the resolver's candidate pool,
+    so it stays meaningful under --usepkgonly (real still asks the tree
+    whether the installed built instance's ebuild remains). Mirrors
+    portage-repo/src/lib.rs's ebuild_visible_at."""
+    return any(
+        c["version"] == version and is_visible(c, category, package, config)
+        for c in list_candidates(repos, category, package)
+    )
+
+
+def _binary_reinstall_warranted(
+    root,
+    repos,
+    config,
+    category,
+    package,
+    version,
+    binary_build_time,
+    rebuilt_binaries,
+    rebuilt_binaries_timestamp,
+    update,
+):
+    """Real depgraph.py's two independent `rebuilt_binary` reinstall
+    triggers folded into one:
+      - --rebuilt-binaries: any BUILD_TIME difference (or a strictly-
+        newer one past --rebuilt-binaries-timestamp).
+      - without it: the identical_binary + _equiv_ebuild_visible
+        rejection of an *installed* built instance (depgraph.py:7999-8030)
+        -- a binary at the installed version whose BUILD_TIME differs and
+        whose ebuild is no longer visible is merged over the installed
+        package. Real only rejects the installed instance this way when
+        not avoid_update (avoid_update = "--update" not in myopts,
+        depgraph.py:7826); without --update real's own
+        _select_pkg_highest_available final `if avoid_update:` step keeps
+        the installed package, so `update` gates this branch. Mirrors
+        portage-repo/src/lib.rs's binary_reinstall_warranted."""
+    if rebuilt_binaries:
+        return _rebuilt_binary_changed(
+            root, binary_build_time, category, package, version, rebuilt_binaries_timestamp
+        )
+    return (
+        update
+        and not _ebuild_visible_at(repos, category, package, version, config)
+        and _rebuilt_binary_changed(root, binary_build_time, category, package, version, None)
+    )
+
+
 def _new_repo_changed(root, category, package, version, current_repo_name):
     """--newrepo: whether version's own vdb-recorded "repository" file
     differs from current_repo_name (the repo the caller has already
@@ -6715,13 +6766,17 @@ def resolve_pretend(
         slot_changed_flag = changed_slot and _slot_changed(
             root, repos, category, package, best["version"]
         )
-        rebuilt_binary_flag = (usepkg or usepkgonly) and rebuilt_binaries and _rebuilt_binary_changed(
+        rebuilt_binary_flag = (usepkg or usepkgonly) and _binary_reinstall_warranted(
             root,
-            _best_binary_build_time(candidates, best["version"]),
+            repos,
+            config,
             category,
             package,
             best["version"],
+            _best_binary_build_time(candidates, best["version"]),
+            rebuilt_binaries,
             rebuilt_binaries_timestamp,
+            update,
         )
         new_repo_flag = newrepo and _new_repo_changed(
             root, category, package, best["version"], best["repo_name"]

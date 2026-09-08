@@ -264,15 +264,16 @@ instance* for ebuild-invisibility and then merging the available binary
 in its place. Portuale's resolver has no rejectable "installed package"
 candidate — `_equiv_ebuild_visible` only ever filters *binary*
 candidates, and "already installed" is a pure vdb-membership check
-(`candidate_is_installed`) — so a binary at the installed version is
+(`candidate_is_installed`) — so a binary at the installed version was
 classified `AlreadyInstalled` directly, for a matching *or* differing
 `BUILD_TIME`. Verified empirically (ebuild removed / keyword-dropped /
-package.mask'd, `--selective` vs bare top-level) — pinned by
-`test_usepkg_binary_of_a_since_removed_ebuild_is_not_reinstalled`. The
-one narrow residual real-divergence: ebuild gone **and** a
-differing-`BUILD_TIME` binary at the installed version — real reinstalls
-it, portuale keeps installed (which is exactly what `--rebuilt-binaries`
-opts into); left as a deliberate cut.
+package.mask'd, `--selective` vs bare top-level). The one narrow
+residual real-divergence — ebuild gone **and** a differing-`BUILD_TIME`
+binary at the installed version → real reinstalls it — **shipped
+2026-09-08** (see the 2.E entry above): the matching-`BUILD_TIME` half
+stays `AlreadyInstalled` (`identical_binary`), the differing half now
+reinstalls under `--update`, pinned by
+`test_usepkg_binary_of_a_since_removed_ebuild_is_reinstalled_only_when_it_differs`.
 
 `--useoldpkg-atoms` + `binpkg-multi-instance` was likewise
 **investigated 2026-09-05 and found already correct**: `dedup_binary_
@@ -325,8 +326,19 @@ clear-signed `Manifest`, real `BINPKG_GPG_SIGNING_*` passthrough, real
 `gpg` spawn when root, no `shlex`/`varexpand` for the command template,
 no per-binrepo `verify-signature = false` at merge time, no GPG on the
 pool-populate read (merge-time enforcement only).
-Still open: a `BUILD_TIME`-vs-installed reinstall
-trigger outside `--rebuilt-binaries` (the residual divergence above).
+**`BUILD_TIME`-vs-installed reinstall shipped 2026-09-08** (the 2.E
+residual, closing the `identical_binary` del: 2560): with the ebuild
+gone from the tree, `_equiv_ebuild_visible` (`depgraph.py:7399`) +
+the `identical_binary` gate (`depgraph.py:7999-8030`) make real reject
+the installed built instance and merge a binary at the installed
+version over it when that binary's `BUILD_TIME` differs -- gated by
+`--update` (real's `avoid_update = "--update" not in myopts`;
+`depgraph.py:7826`; without `--update`, real's final
+`if avoid_update:` keeps the installed package). Ported as
+`binary_reinstall_warranted` (Rust) / `_binary_reinstall_warranted`
+(Python), wired into the main `--update` already-installed path only,
+with `ebuild_visible_at` querying the *tree* (not the pool, so it stays
+correct under `--usepkgonly`). See `what-this-proves.md`.
 Binpkg
 `SHA1` (no sha1 crate) and fetch candidate ordering/`RESTRICT=
 primaryuri` (determinism > a non-observable mirror-selection detail)
@@ -596,8 +608,7 @@ item, with a short incremental tail:
    and its full `all_use_satisfied` computation, deeper multi-constraint
    interplay), not a missing mechanism.
 
-2. **The rest of Part 2** — the remaining 2.E tail (the
-   `BUILD_TIME`-vs-installed reinstall trigger, `SHA1`, fetch
+2. **The rest of Part 2** — the remaining 2.E tail (`SHA1`, fetch
    candidate ordering), the `--info` host-state half (2.F, a
    fixture-driven test can't verify real host state anyway), the brush
    `declare -f` upstream fix (2.G). Each is one focused slice, the

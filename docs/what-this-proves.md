@@ -15744,3 +15744,36 @@ count 4 -> 5 (`test_check_news_counts_unread_relevant_items` +
 `test_check_news_matches_a_versioned_display_if_installed_atom` updated).
 Rust unit test covers the format extraction and the full accept/reject
 matrix; dual-language, all five check-news tests green and byte-identical.
+
+**`BUILD_TIME`-vs-installed reinstall outside `--rebuilt-binaries`.** The
+last 2.E residual is closed: when a package's ebuild has since been
+removed from the tree and a binary package at the *installed* version
+carries a differing `BUILD_TIME`, real portage reinstalls the binary even
+without `--rebuilt-binaries` -- grounded in `_equiv_ebuild_visible`
+(`depgraph.py:7399`) combined with the `identical_binary` gate
+(`depgraph.py:7999-8030`):  a built candidate whose `BUILD_TIME` differs
+from what's installed is not `identical_binary`, so the *installed*
+built instance is rejected for ebuild-invisibility and only the binary
+remains → reinstall. Two real guards portuale now reproduces exactly:
+(i) `identical_binary` -- an *equal* `BUILD_TIME` leaves the installed
+instance alone (no needless reinstall, bug #354441); and (ii)
+`avoid_update = "--update" not in myopts` (`depgraph.py:7826`) -- the
+rejection only applies to an installed instance reached under
+`not avoid_update`, since without `--update` real's own
+`_select_pkg_highest_available` final `if avoid_update:` step returns the
+installed package anyway. `binary_reinstall_warranted` (Rust) /
+`_binary_reinstall_warranted` (Python) folds `--rebuilt-binaries` (any
+difference, or newer-than-cutoff past `--rebuilt-binaries-timestamp`,
+ebuild-visibility notwithstanding) with the new ebuild-gone trigger
+(gated on `update`, plus `ebuild_visible_at` querying the *tree* via the
+memoized `list_candidates` rather than the pool, so `--usepkgonly` stays
+correct), wired only into the main `--update` already-installed path.
+Pinned: `test_usepkg_binary_of_a_since_removed_ebuild_is_reinstalled_only
+_when_it_differs` (rename+behaviour flip of the old cut-pinning test:
+identical → `AlreadyInstalled`, differing → `[binary R]`),
+`test_rebuilt_binaries_off_by_default_stays_already_installed` and
+`test_rebuilt_binaries_auto_enables_under_usepkgonly_deep_update`
+updated to the corrected semantics (the `--selective`-without-`--update`
+case still stays installed; `--deep 3` no longer implies "no reinstall"
+for an ebuild-gone package); Rust unit test
+`ebuild_visible_at_and_binary_reinstall_warranted_match_real_identical_binary`.
