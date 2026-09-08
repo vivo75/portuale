@@ -15674,3 +15674,32 @@ empty keyring fails the merge with "unknown key" and merges nothing).
 Deliberate cuts: no dropped-privilege `gpg` spawn when root (real's
 `GPG_VERIFY_USER_DROP`), no `shlex`/`varexpand` for the command
 template (whitespace split -- real's default splits cleanly).
+
+**`--info` installed block reads `environment.bz2` (real
+`_aux_env_search`).** The last `--info` v1 cut (Part 2.F): the five
+`mydesiredvars` (`CHOST`/`CFLAGS`/`CXXFLAGS`/`FEATURES`/`LDFLAGS`,
+`actions.py:2278`) now come from the vdb `environment.bz2` via a
+transcription of real `vartree._aux_env_search`
+(`dbapi/vartree.py:1059-1126`) -- including its `var_assign_re` /
+`close_quote_re` assignment scanner with multi-line-quote
+continuations (joined with `\n` separators, last char dropped even at
+EOF, last assignment wins, unwanted keys' continuations still
+consumed), the missing-or-corrupt-file-means-all-`Unset:` rule, and
+the present-but-empty-matches-empty-prints-nowhere rule (real's own
+`None` vs `split()`-equal branches). Real decompresses by spawning
+`bzip2 -d -c`; `portage-repo` stays subprocess-free, so it
+decompresses in-process with `bzip2` 0.6's default pure-Rust backend
+(trifectatechfoundation libbz2-rs-sys -- the C `bzip2-sys` backend
+stays off, verified `bzip2-sys`-free in `Cargo.lock`, so the
+musl-static story holds; the pre-approved dependency question).
+Semantics are env-search-*only*, like real: a same-named individual
+vdb file is never consulted. Dual-language (`parse_env_assignments`
++ `_parse_env_assignments` with identical edge behavior, verified
+byte-identical on all four info fixtures after normalization):
+`fixtures/var/db/pkg/dev-libs/infoinstpkg-1.0/environment.bz2` keeps
+the existing pin green through the new path, and new
+`dev-libs/infoenvpkg-1.0` (stray `CFLAGS` file, env without it)
+pins `Unset: CFLAGS, ...` black-box in
+`test_info_installed_block_reads_mydesiredvars_from_environment_bz2`;
+Rust unit tests cover the parser table plus tmp-vdb env-only/missing
+cases (the encoder half of the same crate builds the test archives).

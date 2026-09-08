@@ -2104,6 +2104,20 @@ commit of repository`, the `sh:`/`coreutils:`/`ld:` probes and the
 differs from a live `emerge --info` is the `KiB Mem` *free* value, which
 genuinely changes between the two process spawns.
 
+The installed `--info <atom>` block reads its `CHOST`/`CFLAGS`/
+`CXXFLAGS`/`FEATURES`/`LDFLAGS` from the vdb `environment.bz2` (real
+`_aux_env_search`), never the individual files -- `dev-libs/
+infoenvpkg`'s vdb carries a stray `CFLAGS` file the env lacks, so it
+is `Unset:`, while the env's `declare -x CHOST` prints (tail of a live
+`PORTAGE_CONFIGROOT=$FX ROOT=$FX ... emerge --info` run):
+
+```sh
+# dev-libs/infoenvpkg-1.0::testrepo was built with the following:
+# USE="alpha -beta"
+# CHOST="x86_64-pc-linux-gnu"
+# Unset: CFLAGS, CXXFLAGS, FEATURES, LDFLAGS
+```
+
 Deterministic slice test:
 `pytest tests/test_emerge_pretend_contract.py -k stacks_make_globals`
 builds a self-contained `PORTAGE_CONFIGROOT` (its own `make.globals` /

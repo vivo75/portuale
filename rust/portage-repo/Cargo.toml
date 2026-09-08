@@ -16,6 +16,17 @@ portage-required-use = { path = "../portage-required-use" }
 # `Manifest` size lookup `portage-fetch` already implements (and the
 # same layering real `output.py` uses, calling `portdb.getfetchsizes`).
 portage-fetch = { path = "../portage-fetch" }
+# Real `vartree._aux_env_search` (`dbapi/vartree.py:1059`): `emerge
+# --info <atom>`'s installed block reads CHOST/CFLAGS/CXXFLAGS/
+# FEATURES/LDFLAGS from the vdb's `environment.bz2`, which real
+# decompresses by spawning `bzip2 -d -c`. This crate stays
+# subprocess-free, so it decompresses in-process instead -- but with
+# the same zero-C-linkage discipline as the solver-backend waiver
+# below: `bzip2` 0.6's default backend is trifectatechfoundation's
+# pure-Rust libbz2-rs-sys (the C `bzip2-sys` backend is opt-in and NOT
+# enabled), so the musl-static story is untouched. Verify with
+# `grep -c bzip2-sys Cargo.lock` == 0 after any bump.
+bzip2 = "0.6"
 # Alternate dependency solvers behind `--solver=` (see `solver_bridge.rs`):
 # `portage-solver` is the shared vocabulary + `Solver` trait, and the two
 # `portage-atom-*` crates map Portage atoms onto the PubGrub (`pubgrub`)

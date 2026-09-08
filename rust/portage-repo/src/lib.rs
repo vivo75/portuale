@@ -8194,6 +8194,143 @@ pub fn resolve_info_binary_candidate(
 /// with no recorded value (`actions.py:2333-2344`).
 const INFO_INSTALLED_VARS: &[&str] = &["CHOST", "CFLAGS", "CXXFLAGS", "FEATURES", "LDFLAGS"];
 
+/// Real `vartree._aux_env_search` (`dbapi/vartree.py:1059-1126`): the
+/// saved build-time environment of an installed package, read from its
+/// vdb `environment.bz2` -- a bzip2-compressed bash `set`-style env
+/// dump. Real decompresses by spawning `bzip2 -d -c` (or
+/// `PORTAGE_BUNZIP2_COMMAND -c`); this crate is subprocess-free, so it
+/// decompresses in-process with the pure-Rust `bzip2` backend instead
+/// (see this crate's `Cargo.toml` -- zero C linkage, musl story
+/// untouched). Returns the present `wanted` vars only; a missing or
+/// unreadable `environment.bz2` yields an empty map (real's own
+/// `if not os.path.isfile(env_file): return {}` -- and a corrupt
+/// archive breaks real's pipe the same effective way), which the caller
+/// reports as all-`Unset:`, exactly like real.
+pub fn read_vdb_env_vars(
+    root: &Path,
+    category: &str,
+    package: &str,
+    version: &str,
+    wanted: &[&str],
+) -> HashMap<String, String> {
+    use std::io::Read as _;
+    let Ok(compressed) =
+        fs::read(vdb_pkg_dir(root, category, package, version).join("environment.bz2"))
+    else {
+        return HashMap::new();
+    };
+    let mut decoder = bzip2::read::BzDecoder::new(&compressed[..]);
+    let mut text = String::new();
+    if decoder.read_to_string(&mut text).is_err() {
+        return HashMap::new();
+    }
+    parse_env_assignments(&text, wanted)
+}
+
+/// Real `_aux_env_search`'s own assignment scanner
+/// (`vartree.py:1082-1123`, "borrowed from
+/// `filter-bash-environment.py`"): `var_assign_re =
+/// (^|^declare\s+-\S+\s+|^declare\s+|^export\s+)([^=\s]+)=("|\')?(.*)$`
+/// with `close_quote_re = (\\"|"|\')\s*$`. A quoted value whose closer
+/// is not on the same line consumes following lines verbatim until the
+/// closer (or EOF); the value is then right-stripped with the closing
+/// quote dropped -- even at EOF without a closer, real still drops the
+/// last char. Later assignments overwrite earlier ones. Only `wanted`
+/// keys are returned, but continuation lines are consumed regardless
+/// (real builds the value before its `if key in variables` check, so a
+/// skipped multi-line value must not leak its body lines as fresh
+/// assignments).
+fn parse_env_assignments(text: &str, wanted: &[&str]) -> HashMap<String, String> {
+    fn strip_prefix(line: &str) -> &str {
+        // Real alternation order, longest first (regex backtracking
+        // reaches the same): `declare -FLAGS<ws>`, `declare<ws>`,
+        // `export<ws>`, plain. `<ws>` is any whitespace run (real
+        // `\s+`), and a failed dash-form backtracks to the plain
+        // `declare<ws>` form.
+        for word in ["declare", "export"] {
+            if let Some(rest) = line.strip_prefix(word)
+                && rest.starts_with(|c: char| c.is_whitespace())
+            {
+                let after_ws = rest.trim_start();
+                if word == "declare"
+                    && let Some(flags) = after_ws.strip_prefix('-')
+                {
+                    // `-\S+\s+`: dash, non-empty non-whitespace token,
+                    // then whitespace.
+                    let token_len = flags
+                        .bytes()
+                        .take_while(|b| !b.is_ascii_whitespace())
+                        .count();
+                    if token_len > 0 && flags[token_len..].starts_with(|c: char| c.is_whitespace())
+                    {
+                        return after_ws[1 + token_len..].trim_start();
+                    }
+                }
+                return after_ws;
+            }
+        }
+        line
+    }
+    fn closer_at_end(s: &str, quote: char) -> bool {
+        // Real `have_end_quote`: one leftmost `close_quote_re` search;
+        // an escaped `\"` (backslash + quote) at the very end does NOT
+        // close, a bare trailing quote does.
+        let t = s.trim_end();
+        let mut chars = t.chars().rev();
+        if chars.next() != Some(quote) {
+            return false;
+        }
+        chars.next() != Some('\\')
+    }
+    let mut out = HashMap::new();
+    let mut lines = text.lines();
+    while let Some(line) = lines.next() {
+        // `([^=\s]+)=`: non-empty key of non-`=`/non-whitespace,
+        // immediately followed by `=`.
+        let body = strip_prefix(line);
+        let eq = body
+            .bytes()
+            .take_while(|b| *b != b'=' && !b.is_ascii_whitespace())
+            .count();
+        if eq == 0 || body.as_bytes().get(eq) != Some(&b'=') {
+            continue;
+        }
+        let (key, after_eq) = (&body[..eq], &body[eq + 1..]);
+        let (quote, rest) = match after_eq.chars().next() {
+            Some(q @ ('"' | '\'')) => (Some(q), &after_eq[q.len_utf8()..]),
+            _ => (None, after_eq),
+        };
+        let value = match quote {
+            None => after_eq.trim_end().to_string(),
+            Some(q) => {
+                if closer_at_end(rest, q) {
+                    let t = rest.trim_end();
+                    t[..t.len() - 1].to_string()
+                } else {
+                    // Real appends each raw stdout line *with* its
+                    // `\n` (only the first fragment, real's regex
+                    // group, has none) -- `lines()` stripped them, so
+                    // the non-closing ones are restored.
+                    let mut joined = rest.to_string();
+                    for next in lines.by_ref() {
+                        joined.push_str(next);
+                        if closer_at_end(next, q) {
+                            break;
+                        }
+                        joined.push('\n');
+                    }
+                    let t = joined.trim_end();
+                    t[..t.len().saturating_sub(1)].to_string()
+                }
+            }
+        };
+        if wanted.contains(&key) {
+            out.insert(key.to_string(), value);
+        }
+    }
+    out
+}
+
 /// Every installed vdb entry `atom_str` matches, with the data real
 /// `action_info` prints for an installed package: `<cpv>::<repo> was
 /// built with the following:` + its `USE="…"` line (from the vdb `USE`/
@@ -8203,11 +8340,15 @@ const INFO_INSTALLED_VARS: &[&str] = &["CHOST", "CFLAGS", "CXXFLAGS", "FEATURES"
 /// installed match short-circuits the ebuild/binary lookup
 /// (`actions.py:1869-1875`).
 ///
-/// Narrowing vs real: `_aux_env_search` reads the value from the
-/// package's `environment.bz2` when the individual `build-info` file is
-/// absent -- portuale reads only the vdb file
-/// (`write_vdb_entry_from_dir` copies every `build-info` file, so a
-/// portuale-merged package has them all). The `USE` line's `( )`
+/// The `mydesiredvars` values come from the package's vdb
+/// `environment.bz2` via [`read_vdb_env_vars`] -- real
+/// `_aux_env_search`, and *only* from there (real never consults the
+/// individual `build-info` files for these five). A var absent from the
+/// saved env -- including a vdb entry with no `environment.bz2` at
+/// all -- is `Unset:`, even if a same-named individual file exists; a
+/// present-but-empty value that matches the (empty) current config
+/// prints nowhere at all (real's own `None` vs `split()`-equal
+/// branches, `actions.py:2336-2342`). The `USE` line's `( )`
 /// force/mask wrap (real `pkg_use_display`) is shipped, via the same
 /// `forced_or_masked_flags` the ebuild-candidate side
 /// (`resolve_info_candidate`) already uses.
@@ -8276,18 +8417,28 @@ pub fn resolve_installed_info(
         let use_expand_display =
             build_use_expand_display(&disp, config, None, &forced, true, &HashSet::new());
 
+        // Real `mydesiredvars` sourcing (`actions.py:2335-2342` over
+        // `_aux_env_search`): the saved env, or nothing -- a var the
+        // env lacks is `Unset:`, and a present value that matches the
+        // current config (including empty-equals-empty) prints nowhere.
+        // The printed value is real's raw `myval`, untrimmed.
+        let env_vars = read_vdb_env_vars(
+            root,
+            &atom.category,
+            &atom.package,
+            version,
+            INFO_INSTALLED_VARS,
+        );
         let mut differing_vars = Vec::new();
         let mut unset_vars = Vec::new();
         for &var in INFO_INSTALLED_VARS {
-            let stored = read_vdb_string(root, &atom.category, &atom.package, version, var);
-            let stored = stored.trim();
-            if stored.is_empty() {
+            let Some(stored) = env_vars.get(var) else {
                 unset_vars.push(var.to_string());
                 continue;
-            }
+            };
             let current = config.other_vars.get(var).map(String::as_str).unwrap_or("");
             if stored.split_whitespace().ne(current.split_whitespace()) {
-                differing_vars.push((var.to_string(), stored.to_string()));
+                differing_vars.push((var.to_string(), stored.clone()));
             }
         }
 
@@ -16023,6 +16174,160 @@ mod tests {
 
         // Not installed -> empty.
         assert!(resolve_installed_info(&root, "dev-libs/newpkg", &test_config()).is_empty());
+    }
+
+    #[test]
+    fn parse_env_assignments_matches_real_aux_env_search_forms() {
+        // Real `vartree._aux_env_search` (`dbapi/vartree.py:1082-1123`):
+        // plain, `declare -FLAGS`, `declare`, and `export` prefixes;
+        // single-line quoted values; multi-line continuations joined
+        // with `\n` separators (only the first fragment has none);
+        // last assignment wins; an escaped trailing `\"` does NOT
+        // close (it swallows following lines instead).
+        let wanted = &[
+            "PLAIN", "DECL", "EXP", "MULTI", "EMPTY", "ESC", "DUP", "TAB",
+        ];
+        let text = concat!(
+            "PLAIN=x86_64-pc-linux-gnu\n",
+            "declare -x DECL=\"-O2 -march=native\"\n",
+            "export EXP='single'\n",
+            "MULTI=\"line1\n",
+            "line2\n",
+            "line3\"\n",
+            "EMPTY=\"\"\n",
+            "ESC=\"v\\\"\n",
+            "DUP=1\n",
+            "DUP=2\n",
+            "export\tTAB=tabbed\n",
+            "NOEQUALS\n",
+            "=nokey\n",
+            "UNWANTED=zzz\n",
+        );
+        let got = parse_env_assignments(text, wanted);
+        assert_eq!(
+            got.get("PLAIN").map(String::as_str),
+            Some("x86_64-pc-linux-gnu")
+        );
+        assert_eq!(
+            got.get("DECL").map(String::as_str),
+            Some("-O2 -march=native")
+        );
+        assert_eq!(got.get("EXP").map(String::as_str), Some("single"));
+        assert_eq!(
+            got.get("MULTI").map(String::as_str),
+            Some("line1line2\nline3")
+        );
+        assert_eq!(got.get("EMPTY").map(String::as_str), Some(""));
+        // `ESC`'s `\"` is not a closer: every following line through
+        // EOF is swallowed, then the trailing char dropped -- real's
+        // own EOF-without-closer path, verbatim (`UNWANTED=zz`, not
+        // `zzz`).
+        assert_eq!(
+            got.get("ESC").map(String::as_str),
+            Some("v\\\"DUP=1\nDUP=2\nexport\tTAB=tabbed\nNOEQUALS\n=nokey\nUNWANTED=zz")
+        );
+        assert!(!got.contains_key("DUP"), "swallowed by ESC's continuation");
+        assert!(!got.contains_key("TAB"), "swallowed by ESC's continuation");
+        assert!(!got.contains_key("UNWANTED"));
+    }
+
+    #[test]
+    fn parse_env_assignments_skips_continuations_of_unwanted_keys() {
+        // Real builds the value (consuming lines) before its `if key in
+        // variables` check, so a skipped multi-line value must not leak
+        // its body lines as fresh assignments.
+        let text = "SKIP=\"a\nB=1\n\"\nB=real\n";
+        let got = parse_env_assignments(text, &["B"]);
+        assert_eq!(got.get("B").map(String::as_str), Some("real"));
+    }
+
+    /// A minimal ad-hoc vdb entry: `var/db/pkg/<cat>/<pf>/` with a
+    /// `SLOT` file plus whatever extra files the test writes.
+    fn tmp_vdb(cat: &str, pf: &str, files: &[(&str, &[u8])]) -> PathBuf {
+        let root = std::env::temp_dir().join(format!(
+            "portuale-vdb-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        let dir = root.join("var/db/pkg").join(cat).join(pf);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("SLOT"), "0\n").unwrap();
+        for (name, bytes) in files {
+            std::fs::write(dir.join(name), bytes).unwrap();
+        }
+        root
+    }
+
+    fn bz2(bytes: &[u8]) -> Vec<u8> {
+        use bzip2::write::BzEncoder;
+        use std::io::Write as _;
+        let mut enc = BzEncoder::new(Vec::new(), bzip2::Compression::best());
+        enc.write_all(bytes).unwrap();
+        enc.finish().unwrap()
+    }
+
+    #[test]
+    fn resolve_installed_info_unsets_everything_without_environment_bz2() {
+        // Real `_aux_env_search` with no `environment.bz2` returns {} --
+        // all five `mydesiredvars` are `Unset:`, even when a same-named
+        // individual vdb file exists (real never opens it for this
+        // block). The stray `CFLAGS` file pins exactly that.
+        let root = tmp_vdb(
+            "dev-libs",
+            "tmpenvpkg-1.0",
+            &[("CFLAGS", b"-O2 -stray\n"), ("USE", b""), ("IUSE", b"")],
+        );
+        let infos = resolve_installed_info(&root, "dev-libs/tmpenvpkg", &test_config());
+        assert_eq!(infos.len(), 1);
+        assert!(infos[0].differing_vars.is_empty());
+        assert_eq!(
+            infos[0].unset_vars,
+            vec![
+                "CHOST".to_string(),
+                "CFLAGS".to_string(),
+                "CXXFLAGS".to_string(),
+                "FEATURES".to_string(),
+                "LDFLAGS".to_string()
+            ]
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn resolve_installed_info_reads_mydesiredvars_only_from_the_saved_env() {
+        // `environment.bz2` carries CHOST; the stray individual CFLAGS
+        // file is ignored (real `_aux_env_search`); CXXFLAGS/FEATURES/
+        // LDFLAGS are in neither, so `Unset:`.
+        let env = bz2(b"declare -x CHOST=\"x86_64-pc-linux-gnu\"\n");
+        let root = tmp_vdb(
+            "dev-libs",
+            "tmpenvpkg-1.0",
+            &[
+                ("CFLAGS", b"-O2 -stray\n"),
+                ("USE", b""),
+                ("IUSE", b""),
+                ("environment.bz2", &env),
+            ],
+        );
+        let infos = resolve_installed_info(&root, "dev-libs/tmpenvpkg", &test_config());
+        assert_eq!(infos.len(), 1);
+        assert_eq!(
+            infos[0].differing_vars,
+            vec![("CHOST".to_string(), "x86_64-pc-linux-gnu".to_string())]
+        );
+        assert_eq!(
+            infos[0].unset_vars,
+            vec![
+                "CFLAGS".to_string(),
+                "CXXFLAGS".to_string(),
+                "FEATURES".to_string(),
+                "LDFLAGS".to_string()
+            ]
+        );
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]

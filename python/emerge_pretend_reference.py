@@ -12846,11 +12846,87 @@ def _resolve_info_candidate(repos, atom_str, config):
 _INFO_INSTALLED_VARS = ("CHOST", "CFLAGS", "CXXFLAGS", "FEATURES", "LDFLAGS")
 
 
+def _parse_env_assignments(text, wanted):
+    """Real `vartree._aux_env_search`'s own assignment scanner
+    (`dbapi/vartree.py:1082-1123`): `var_assign_re =
+    (^|^declare\\s+-\\S+\\s+|^declare\\s+|^export\\s+)([^=\\s]+)=("|\\')?(.*)$`
+    with `close_quote_re = (\\\\"|"|\\')\\s*$`. Mirrors
+    portage-repo/src/lib.rs's parse_env_assignments exactly (same
+    prefix order, same continuation-line joining with `\\n` separators,
+    same drop-last-char even at EOF, last assignment wins). Only
+    `wanted` keys are returned."""
+    import re
+
+    var_assign_re = re.compile(
+        r'(^|^declare\s+-\S+\s+|^declare\s+|^export\s+)([^=\s]+)=("|\')?(.*)$'
+    )
+    close_quote_re = re.compile(r'(\\"|"|\')\s*$')
+
+    def have_end_quote(quote, line):
+        m = close_quote_re.search(line)
+        return m is not None and m.group(1) == quote
+
+    wanted = frozenset(wanted)
+    results = {}
+    lines = iter(text.splitlines())
+    for line in lines:
+        var_assign_match = var_assign_re.match(line)
+        if var_assign_match is None:
+            continue
+        key = var_assign_match.group(2)
+        quote = var_assign_match.group(3)
+        if quote is None:
+            value = var_assign_match.group(4).rstrip()
+        elif have_end_quote(quote, line[var_assign_match.end(2) + 2 :]):
+            value = var_assign_match.group(4).rstrip()[:-1]
+        else:
+            # Continuation lines keep their `\n` separators (only the
+            # first fragment, real's regex group, has none) --
+            # `splitlines()` stripped them, so the non-closing ones are
+            # restored. `[:-1]` is saturation-safe in Python.
+            parts = [var_assign_match.group(4)]
+            for line in lines:
+                parts.append(line)
+                if have_end_quote(quote, line):
+                    break
+                parts.append("\n")
+            value = "".join(parts).rstrip()[:-1]
+        if key in wanted:
+            results[key] = value
+    return results
+
+
+def _read_vdb_env_vars(root, category, package, version, wanted):
+    """Real `vartree._aux_env_search`: the saved build-time env from the
+    vdb `environment.bz2` (bz2 stdlib here; the Rust side uses the
+    pure-Rust `bzip2` crate). Missing/unreadable file -> {} (real's own
+    guard), which the caller reports as all-`Unset:`."""
+    import bz2
+    import os
+
+    path = os.path.join(
+        root, "var", "db", "pkg", category, f"{package}-{version}", "environment.bz2"
+    )
+    try:
+        with open(path, "rb") as f:
+            raw = f.read()
+    except OSError:
+        return {}
+    try:
+        text = bz2.decompress(raw).decode("utf-8", "replace")
+    except (OSError, ValueError):
+        return {}
+    return _parse_env_assignments(text, wanted)
+
+
 def _resolve_installed_info(root, atom_str, config):
     """Every installed vdb entry `atom_str` matches, with the data real
     action_info prints for an installed package. Mirrors
-    portage-repo/src/lib.rs's resolve_installed_info (reads only the vdb
-    file, not environment.bz2 -- a v1 cut)."""
+    portage-repo/src/lib.rs's resolve_installed_info: the
+    `mydesiredvars` values come from the vdb `environment.bz2` via
+    `_read_vdb_env_vars` (real `_aux_env_search`) and *only* from
+    there -- a var the saved env lacks is `Unset:`, even if a
+    same-named individual file exists."""
     atom = _parse_atom(atom_str)
     if atom is None or "/" not in atom.cp:
         return []
@@ -12893,12 +12969,20 @@ def _resolve_installed_info(root, atom_str, config):
         use_expand_display = _build_use_expand_display(
             disp, config["use_expand"], config["use_expand_hidden"], None, forced, True, None
         )
+        # Real `mydesiredvars` sourcing over `_aux_env_search`: the
+        # saved env, or nothing -- a var the env lacks is `Unset:`, and
+        # a present value matching the current config (including
+        # empty-equals-empty) prints nowhere. The printed value is
+        # real's raw `myval`, untrimmed.
+        env_vars = _read_vdb_env_vars(
+            root, category, package, version, _INFO_INSTALLED_VARS
+        )
         differing, unset = [], []
         for var in _INFO_INSTALLED_VARS:
-            stored = _read_vdb_string(root, category, package, version, var).strip()
-            if not stored:
+            if var not in env_vars:
                 unset.append(var)
                 continue
+            stored = env_vars[var]
             current = config["other_vars"].get(var, "")
             if stored.split() != current.split():
                 differing.append((var, stored))

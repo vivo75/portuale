@@ -401,15 +401,16 @@ ANSI USE colour all shipped 2026-09-05, see `what-this-proves.md`'s
   `--config`/`--regen` use. The empty-`DEFINED_PHASES` falsy-check quirk
   (real `actions.py:2350`: an installed match with no `DEFINED_PHASES`
   file at all still gets `pkg_info()` attempted, while `"-"` does not) is
-  matched now too (2026-09-06). Remaining v1 cut: the installed block's
-  `CHOST`/`CFLAGS`/… come from the individual vdb `build-info` files,
-  not `_aux_env_search`'s `environment.bz2` scan — for a real
-  portage-written vdb entry the two agree (portage writes all five as
-  individual files); they diverge only for a vdb entry missing
-  `environment.bz2` (which real then treats as all-`Unset:`).
-  `portage-repo` is deliberately subprocess-free, so decompressing
-  `environment.bz2` there would need a bzip2 crate or a signature-
-  threading exercise for that one edge — deferred;
+  matched now too (2026-09-06). The installed block's `CHOST`/
+  `CFLAGS`/… **shipped 2026-09-08**: read from the vdb
+  `environment.bz2` via real `_aux_env_search` (a pure-Rust `bzip2`
+  backend in `portage-repo` -- default `bzip2` 0.6 over
+  trifectatechfoundation's libbz2-rs-sys, zero C linkage, so the
+  musl-static story and the subprocess-free boundary both hold; the
+  C `bzip2-sys` backend stays off), including the `var_assign_re` /
+  multi-line-continuation parser, the missing-file-means-all-`Unset:`
+  rule, and the present-but-empty-matches-empty-prints-nowhere rule
+  (see `what-this-proves.md`);
 - `--regen`: `--jobs` threading stays unimplemented on purpose — real's
   scheduler parallelism only changes wall-clock time, not the cache
   content written, so there's no correctness gap to close;

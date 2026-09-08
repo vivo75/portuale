@@ -12753,6 +12753,32 @@ def test_info_atom_prints_the_installed_package_block(
     )
 
 
+def test_info_installed_block_reads_mydesiredvars_from_environment_bz2(
+    emerge_binary, emerge_pretend_python, fixture_env
+):
+    """Real `mydesiredvars` sourcing is `_aux_env_search` and *only*
+    that: `dev-libs/infoenvpkg`'s vdb carries a `CFLAGS` individual
+    file (a stray `-O2 -bogus`) but its `environment.bz2` has no
+    `CFLAGS` -- so `CFLAGS` is `Unset:`, while the env's `CHOST`
+    (in `declare -x` form) prints. `dev-libs/infoinstpkg` covers the
+    complementary half (env values present, output unchanged). Rust ==
+    Python."""
+    rust = _run([str(emerge_binary)], ["--info", "dev-libs/infoenvpkg"], fixture_env)
+    py = _run(emerge_pretend_python, ["--info", "dev-libs/infoenvpkg"], fixture_env)
+    assert rust.returncode == 0
+    assert _normalize_info(rust.stdout) == _normalize_info(py.stdout)
+    assert rust.stdout.endswith(
+        "dev-libs/infoenvpkg-1.0::testrepo was built with the following:\n"
+        'USE="alpha -beta"\n'
+        'CHOST="x86_64-pc-linux-gnu"\n'
+        "Unset: CFLAGS, CXXFLAGS, FEATURES, LDFLAGS\n"
+        "\n"
+        "\n"
+        ">>> Attempting to run pkg_info() for 'dev-libs/infoenvpkg-1.0'\n"
+    )
+    assert "-O2 -bogus" not in rust.stdout
+
+
 def test_info_dash_defined_phases_does_not_attempt_pkg_info(
     emerge_binary, emerge_pretend_python, fixture_env
 ):
