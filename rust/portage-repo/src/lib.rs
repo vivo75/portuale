@@ -9829,14 +9829,15 @@ pub fn resolve_pretend(
                 .as_deref()
                 .filter(|d| !d.is_empty())
                 .is_some_and(|use_deps| {
-                    candidate_iuse_and_use(best, &atom.category, &atom.package, config)
-                        .is_some_and(|(iuse, use_flags)| {
+                    candidate_iuse_and_use(best, &atom.category, &atom.package, config).is_some_and(
+                        |(iuse, use_flags)| {
                             !portage_dep::use_deps_satisfied(
                                 use_deps,
                                 &valid_iuse(&iuse, config),
                                 &use_flags,
                             )
-                        })
+                        },
+                    )
                 });
         let deps_changed_flag = changed_deps
             && deps_changed(
@@ -14593,13 +14594,9 @@ fn backtracking_resolve(req: &ResolveRequest) -> Result<GraphResult, Error> {
                                 && !atom_cp_installed(root, a)
                         });
                         !circular_self
-                            && (atom_currently_satisfiable(
-                                &repos,
-                                a,
-                                config,
-                                disj_constraints(a),
-                            ) || root_deps_running_root
-                                .is_some_and(|root| running_root_satisfies_atom(a, root)))
+                            && (atom_currently_satisfiable(&repos, a, config, disj_constraints(a))
+                                || root_deps_running_root
+                                    .is_some_and(|root| running_root_satisfies_atom(a, root)))
                     });
                     if !all_available {
                         return portage_use_reduce::AltPreference::Unsatisfiable;
@@ -16485,15 +16482,30 @@ mod tests {
                 &root,
                 "dev-libs/flipinstdep[wantflag]",
                 &test_config(),
-                false, false, false, &[], false, true, false,
+                false,
+                false,
+                false,
+                &[],
+                false,
+                true,
+                false,
                 false, // selective
                 false, // is_top_level (a dependency)
                 false, // usepkg
                 false, // usepkgonly
-                false, &[], &[], false, None, false, false, false,
+                false,
+                &[],
+                &[],
+                false,
+                None,
+                false,
+                false,
+                false,
                 false, // autounmask_keywords
                 autounmask_use,
-                false, false, &[],
+                false,
+                false,
+                &[],
             )
             .expect("resolve_pretend(flipinstdep[wantflag]) failed")
         };
