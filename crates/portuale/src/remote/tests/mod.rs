@@ -457,6 +457,7 @@ mod context;
 mod host_keys;
 mod ledger;
 mod merge_script;
+mod plan;
 mod preflight;
 mod ssh;
 mod stages;
