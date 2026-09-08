@@ -3904,6 +3904,12 @@ fn run_resume(
         eprintln!("emerge: {e}");
         return ExitCode::from(1);
     }
+
+    // Real `post_emerge()`: the preserved-libs advisory fires after a
+    // `--resume` too (the vdb changed).
+    let color = Colorizer::new(color::resolve_havecolor(None));
+    crate::preserved_libs::show_preserved_libs_notice(root, &color, false, false);
+
     ExitCode::SUCCESS
 }
 
@@ -3984,6 +3990,11 @@ fn execute_unmerge(
         Some(&["prerm", "postrm"]),
         color,
     );
+
+    // Real `post_emerge()`: after `emerge -C` / `--depclean` / `--prune`
+    // removed something, warn about any library the removal preserved.
+    crate::preserved_libs::show_preserved_libs_notice(root, color, false, false);
+
     ExitCode::SUCCESS
 }
 
@@ -10835,6 +10846,12 @@ pub fn run(args: &[String]) -> ExitCode {
                 None,
                 &color,
             );
+
+            // Real `post_emerge()` (`post_emerge.py:141-152`): once the
+            // merge changed the vdb, warn about any library the merge/
+            // unmerge just preserved and point the user at
+            // `emerge @preserved-rebuild`.
+            crate::preserved_libs::show_preserved_libs_notice(&root, &color, quiet, verbose);
         }
     }
 

@@ -1694,6 +1694,74 @@ def test_emerge_unmerge_without_pretend_really_removes_and_deselects(
     assert (root / "var/lib/portage/world").read_text() == "dev-libs/keepme\n"
 
 
+def test_emerge_preserved_libs_advisory_and_rebuild_set(emerge_binary, tmp_path):
+    """Real `post_emerge()` + `display_preserved_libs()`
+    (`post_emerge.py:141-152`): after `emerge -C` preserves a still-linked
+    library, emerge prints `!!! existing preserved libs:` with the
+    consumer and tells the user to run `emerge @preserved-rebuild` -- and
+    that set really resolves to the consumer. Then unmerging the consumer
+    too removes the orphan and the advisory stops
+    (`_prune_plib_registry`'s tail, `prune_unused_preserved_libs`)."""
+    import shutil
+
+    root = tmp_path / "root"
+    shutil.copytree(Path(FIXTURES_ROOT) / "var", root / "var")
+    env = dict(os.environ)
+    env["PORTAGE_CONFIGROOT"] = FIXTURES_ROOT
+    env["ROOT"] = str(root)
+    env["PORTAGE_TMPDIR"] = str(tmp_path / "portage-tmpdir")
+
+    ebuild_link = tmp_path / "ebuild"
+    ebuild_link.symlink_to(Path(emerge_binary).resolve())
+    fix = Path(FIXTURES_ROOT) / "repo/dev-libs"
+    for name in ("libpreservetest", "consumepreservetest"):
+        r = subprocess.run(
+            [str(ebuild_link), str(fix / name / f"{name}-1.0.ebuild"), "merge"],
+            capture_output=True, text=True, check=False, env=env,
+        )
+        assert r.returncode == 0, r.stderr
+
+    removed = subprocess.run(
+        [str(emerge_binary), "-C", "dev-libs/libpreservetest"],
+        capture_output=True, text=True, check=False, env=env,
+    )
+    assert removed.returncode == 0, removed.stderr
+    assert "!!! existing preserved libs:" in removed.stdout
+    assert ">>> package: dev-libs/libpreservetest-1.0" in removed.stdout
+    assert "/usr/lib/libpreservetest.so.1" in removed.stdout
+    assert (
+        "used by /usr/bin/consumepreservetest (dev-libs/consumepreservetest-1.0)"
+        in removed.stdout
+    )
+    assert "Use emerge @preserved-rebuild" in removed.stdout
+    # The library survived, preserved on disk.
+    assert (root / "usr/lib/libpreservetest.so.1").is_file()
+
+    # @preserved-rebuild expands to the surviving consumer. (These
+    # gcc-built fixtures have no repo metadata cache, so the resolver
+    # can't build them -- the "dev-libs/consumepreservetest:0" atom in the
+    # unsatisfiable message is proof the set expanded. Resolution proper
+    # is covered by the contract suite's nestedsetpkg case.)
+    rebuild = subprocess.run(
+        [str(emerge_binary), "--pretend", "@preserved-rebuild"],
+        capture_output=True, text=True, check=False, env=env,
+    )
+    assert "dev-libs/consumepreservetest" in (rebuild.stdout + rebuild.stderr)
+
+    # Unmerge the consumer too -> the orphaned library is deleted and the
+    # advisory no longer fires.
+    done = subprocess.run(
+        [str(emerge_binary), "-C", "dev-libs/consumepreservetest"],
+        capture_output=True, text=True, check=False, env=env,
+    )
+    assert done.returncode == 0, done.stderr
+    assert "existing preserved libs" not in done.stdout
+    assert not (root / "usr/lib/libpreservetest.so.1").exists()
+    assert (
+        root / "var/lib/portage/preserved_libs_registry"
+    ).read_text().strip() in ("{}", "{\n}")
+
+
 def test_emerge_resume_replays_the_saved_mergelist(emerge_binary, tmp_path):
     """Real `_emerge/Scheduler.py::_save_resume_list` + `--resume`: a
     failed `emerge <atoms>` writes the still-unmerged packages to

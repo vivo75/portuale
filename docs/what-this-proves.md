@@ -6473,6 +6473,53 @@ ls "${ROOT}"/usr/lib/libpreservetest.so.1          # gone
 cat "${ROOT}"/var/lib/portage/preserved_libs_registry   # {}
 ```
 
+### `preserve-libs`: the `!!! existing preserved libs:` advisory (`emerge @preserved-rebuild` prompt)
+
+The user-facing half is real now. Real `post_emerge()`
+(`lib/_emerge/post_emerge.py:141-152`): after any `emerge` run that
+changed the vdb, if the `preserved_libs_registry` still has entries,
+print
+
+```
+!!! existing preserved libs:
+>>> package: <cpv>
+ *  - <path>
+ *      used by <consumer-path> (<consumer-cpv>)
+Use emerge @preserved-rebuild to rebuild packages using these libraries
+```
+
+New `preserved_libs.rs` (`show_preserved_libs_notice` +
+`display_preserved_libs`) ports real `post_emerge`'s gate/banner/trailer
+and real `display_preserved_libs(vardb, verbose)`
+(`lib/portage/util/_dyn_libs/display_preserved_libs.py`): the per-`cpv`
+`>>> package:` blocks, `MAX_DISPLAY = 3` consumers each (`--verbose`
+shows all, `used by N other files` past the cap), hardlink aliases
+grouped and listed together (real `samefile_map`), a consumer that is
+itself one of the *same* provider's own preserved libs filtered out
+(real `internal_plib_keys`), a consumer that is a preserved lib of
+*another* package labelled `(preserved)` (real bug #461908), and
+`--quiet` collapsing the whole thing to `!!! existing preserved libs
+found`. Colours via the existing `crate::color` (`!!!`/`>>>`/` * ` are
+WARN, `emerge @preserved-rebuild` is GOOD), matching real `colorize()`.
+
+Wired into every `emerge` action that changes the vdb: the merge action
+(after the elog batch -- plain `emerge` and `--getbinpkg`, not
+`--buildpkgonly`), `--resume`, and the shared real-removal path
+`execute_unmerge` (`emerge -C` / `--depclean` / `--prune`). Real
+`post_emerge` reloads + prunes the registry first "to ensure that we do
+not display stale data"; portuale already prunes during the merge/unmerge
+itself (previous section), so the read here is current. A preserved lib
+whose owning package already left the vdb uses the same `soname_consumers`
+fallback as the rest of this subsystem.
+
+Verified for real (`test_portuale.py`
+`test_emerge_preserved_libs_advisory_and_rebuild_set`): merge
+`dev-libs/libpreservetest` + `dev-libs/consumepreservetest`, `emerge -C
+dev-libs/libpreservetest` -> the advisory block prints naming
+`consumepreservetest` as the consumer, `emerge -p @preserved-rebuild`
+expands to it, then `emerge -C dev-libs/consumepreservetest` -> the
+library is deleted and the advisory stops.
+
 ### `env_update()`/`ldconfig` triggering: a merge regenerates `/etc/profile.env`/`/etc/csh.env`/`/etc/ld.so.conf` and runs real `ldconfig`
 
 The last item on `ebuild_merge.rs`'s own gap list from the "Real merge/
