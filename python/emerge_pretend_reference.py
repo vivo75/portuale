@@ -6781,6 +6781,19 @@ def resolve_pretend(
         new_repo_flag = newrepo and _new_repo_changed(
             root, category, package, best["version"], best["repo_name"]
         )
+        # Real: a dependency atom `foo[bar]` whose already-installed `foo`
+        # lacks `bar` is not "already installed" -- real reinstalls `foo`
+        # with `bar` and autounmasks it if needed. Forcing a reinstall
+        # here (rather than already_installed) lets the graph layer's own
+        # child-flip block record + apply the autounmask USE change and
+        # walk the newly-USE-gated deps. Gated on autounmask_use.
+        # Mirrors portage-repo/src/lib.rs.
+        use_dep_needs_flip = False
+        if autounmask_use and atom.use is not None:
+            _iu, _uf = _candidate_iuse_and_use(best, category, package, config)
+            use_dep_needs_flip = not _use_deps_satisfied(
+                atom, _valid_iuse(_iu, config), _uf
+            )
         # is_top_level and not selective: real portage's own bare,
         # reasonless "[ebuild R]" -- see this function's own docstring's
         # selective/is_top_level paragraph. changed_flags/
@@ -6794,6 +6807,7 @@ def resolve_pretend(
             or slot_changed_flag
             or rebuilt_binary_flag
             or new_repo_flag
+            or use_dep_needs_flip
             or (is_top_level and not selective)
         ):
             return (

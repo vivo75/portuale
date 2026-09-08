@@ -1378,6 +1378,17 @@ CASES = [
         ["--pretend", "-v", "dev-lang/selfbootpkg"],
         0,
     ),
+    (
+        "a `[flag]` dep on an already-installed package that lacks the "
+        "flag reinstalls it + autounmasks (L0 nginx/systemd/curl root cause)",
+        ["--pretend", "dev-libs/flipinstconsumer"],
+        1,
+    ),
+    (
+        "-v form of the installed-dep-missing-flag reinstall",
+        ["--pretend", "-v", "dev-libs/flipinstconsumer"],
+        1,
+    ),
     ("@selected combined with an explicit atom too", ["--pretend", "--update", "dev-libs/samepkg", "@selected"], 0),
     ("an unknown @set name is a real error", ["--pretend", "@some-other-set"], 1),
     (

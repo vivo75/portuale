@@ -9809,6 +9809,35 @@ pub fn resolve_pretend(
         } else {
             Vec::new()
         };
+        // Real: a dependency atom `foo[bar]` whose already-installed `foo`
+        // does NOT have `bar` (and its default profile USE wouldn't
+        // either) is not "already installed" -- real reinstalls `foo`
+        // with `bar` and, if `bar` needs `package.use`, autounmasks it
+        // (`[ebuild R] … bar*`, exit 1). portuale kept this candidate via
+        // `suggested_use_flip` at the `matched` filter above; forcing a
+        // `Reinstall` here (rather than `AlreadyInstalled`) is what makes
+        // the graph layer's own child-flip block record + apply the
+        // autounmask USE change and walk the newly-USE-gated deps
+        // (`net-misc/curl[http2]` -> `nghttp2`; `sys-apps/systemd
+        // [policykit]`; `mime-types[nginx]`). Gated on `autounmask_use`
+        // -- without it the earlier `matched` filter would have dropped
+        // the candidate entirely (`NoVisibleCandidate`), so this only
+        // ever fires for a genuinely-flippable mismatch.
+        let use_dep_needs_flip = autounmask_use
+            && atom
+                .use_deps
+                .as_deref()
+                .filter(|d| !d.is_empty())
+                .is_some_and(|use_deps| {
+                    candidate_iuse_and_use(best, &atom.category, &atom.package, config)
+                        .is_some_and(|(iuse, use_flags)| {
+                            !portage_dep::use_deps_satisfied(
+                                use_deps,
+                                &valid_iuse(&iuse, config),
+                                &use_flags,
+                            )
+                        })
+                });
         let deps_changed_flag = changed_deps
             && deps_changed(
                 root,
@@ -9853,6 +9882,7 @@ pub fn resolve_pretend(
             || slot_changed_flag
             || rebuilt_binary_flag
             || new_repo_flag
+            || use_dep_needs_flip
             || (is_top_level && !selective)
         {
             return Ok(PretendOutcome::Reinstall {
@@ -16436,6 +16466,52 @@ mod tests {
                 version: "1.0".to_string()
             }
         );
+    }
+
+    /// L0 finding L: a dependency atom `foo[bar]` whose already-installed
+    /// `foo` lacks `bar` must not resolve `AlreadyInstalled` -- real
+    /// portage reinstalls `foo` with `bar` (and autounmasks it). Gated
+    /// on `autounmask_use`.
+    #[test]
+    fn installed_dep_missing_a_use_flag_reinstalls_not_already_installed() {
+        let root = fixtures_root();
+        let repos = find_repos(&root).expect("fixture repos.conf must resolve");
+        // dev-libs/flipinstdep: installed at 1.0 without `wantflag`
+        // (in IUSE, default-off); `dev-libs/flipinstconsumer` RDEPENDs
+        // `dev-libs/flipinstdep[wantflag]`.
+        let call = |autounmask_use: bool| {
+            resolve_pretend(
+                &repos,
+                &root,
+                "dev-libs/flipinstdep[wantflag]",
+                &test_config(),
+                false, false, false, &[], false, true, false,
+                false, // selective
+                false, // is_top_level (a dependency)
+                false, // usepkg
+                false, // usepkgonly
+                false, &[], &[], false, None, false, false, false,
+                false, // autounmask_keywords
+                autounmask_use,
+                false, false, &[],
+            )
+            .expect("resolve_pretend(flipinstdep[wantflag]) failed")
+        };
+        assert_eq!(
+            call(true),
+            PretendOutcome::Reinstall {
+                version: "1.0".to_string(),
+                changed_flags: Vec::new(),
+                deps_changed: false,
+                slot_changed: false,
+                rebuilt_binary: false,
+                new_repo: false,
+                slot_operator_rebuild: false,
+            }
+        );
+        // `--autounmask-use=n`: the earlier `matched` filter drops the
+        // candidate entirely instead (no flip allowed).
+        assert_eq!(call(false), PretendOutcome::NoVisibleCandidate);
     }
 
     #[test]
