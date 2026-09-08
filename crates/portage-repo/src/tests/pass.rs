@@ -84,6 +84,65 @@ fn run_pass_deep_walk_recurses_into_installed_deps() {
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Two owners blocking the same package file two rows: the dedup keys on the
+/// full triple, so a second owner is never swallowed.
+#[test]
+fn run_pass_files_one_row_per_blocker_owner() {
+    let dir = slotundo_temp_dir("161-run-blk2");
+    let repo = blocker_161_scratch_repo(Blocker161ScratchRepoArgs {
+        base: &dir,
+        cp: "dev-libs/blockerparent",
+        pv: "1.0",
+        slot: "0",
+        depend: "",
+        rdepend: "dev-libs/victim !dev-libs/victim",
+    });
+    blocker_161_write_pkg(Blocker161WritePkgArgs {
+        repo: &repo.location,
+        cp: "dev-libs/victim",
+        pv: "1.0",
+        slot: "0",
+        depend: "",
+        rdepend: "",
+    });
+    blocker_161_write_pkg(Blocker161WritePkgArgs {
+        repo: &repo.location,
+        cp: "dev-libs/blockerparent2",
+        pv: "1.0",
+        slot: "0",
+        depend: "",
+        rdepend: "dev-libs/victim !dev-libs/victim",
+    });
+    let d = dir.join("var/db/pkg/dev-libs/victim-1.0");
+    fs::create_dir_all(&d).unwrap();
+    fs::write(d.join("CATEGORY"), "dev-libs\n").unwrap();
+    fs::write(d.join("SLOT"), "0\n").unwrap();
+    fs::write(d.join("repository"), "testrepo\n").unwrap();
+    fs::write(d.join("USE"), "\n").unwrap();
+    let config = test_config();
+    let atoms = vec![
+        "dev-libs/blockerparent".to_string(),
+        "dev-libs/blockerparent2".to_string(),
+    ];
+    let repos = vec![repo];
+    let opts = CtxOpts161 {
+        backtrack_max: 0,
+        atoms: atoms.clone(),
+        ..Default::default()
+    };
+    let ctx = ctx_161(&dir, &config, repos, &opts);
+    let pass = run_pass(&ctx, &BacktrackParams::default(), true).expect("walk settles");
+    let rows: Vec<&str> = pass
+        .entries
+        .iter()
+        .filter(|e| e.package == "blockerparent" || e.package == "blockerparent2")
+        .filter(|e| !e.blockers.is_empty())
+        .map(|e| e.package.as_str())
+        .collect();
+    assert_eq!(rows.len(), 2);
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// An auto-replace seed is not a top-level argument: it walks ownerless at
 /// depth 1 and never files an `(Argument)` puller row.
 #[test]

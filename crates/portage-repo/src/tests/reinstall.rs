@@ -63,6 +63,116 @@ fn best_binary_build_time_is_the_newest_binary_of_the_version() {
 }
 
 #[test]
+fn ebuild_visible_at_and_binary_reinstall_warranted_match_portage_identical_binary() {
+    // `ebuild_visible_at` asks the tree: `newpkg` is visible, `rebuiltbinarypkg` is not.
+    let repos = find_repos(&fixtures_root()).expect("fixture repos.conf resolves");
+    let config = test_config();
+    assert!(
+        ebuild_visible_at(&repos, "dev-libs", "newpkg", "1.0", &config),
+        "newpkg's ebuild is visible"
+    );
+    assert!(
+        !ebuild_visible_at(&repos, "dev-libs", "rebuiltbinarypkg", "1.0", &config),
+        "rebuiltbinarypkg has no ebuild"
+    );
+
+    // Portage `identical_binary` vs `identical_binary`+`_equiv_ebuild_visible`:
+    // the latter only fires under `--update`.
+    let root = TempDir::new("portuale-btre").keep();
+    let vdb = root.join("var/db/pkg/dev-libs/rebuiltbinarypkg-1.0");
+    std::fs::create_dir_all(&vdb).unwrap();
+    std::fs::write(vdb.join("BUILD_TIME"), "1000\n").unwrap();
+    let newpkg_vdb = root.join("var/db/pkg/dev-libs/newpkg-1.0");
+    std::fs::create_dir_all(&newpkg_vdb).unwrap();
+    std::fs::write(newpkg_vdb.join("BUILD_TIME"), "1000\n").unwrap();
+
+    // Identical build time -> never reinstalls, --update or not.
+    assert!(
+        !binary_reinstall_warranted(BinaryReinstallWarrantedArgs {
+            root: &root,
+            repos: &repos,
+            config: &config,
+            category: "dev-libs",
+            package: "rebuiltbinarypkg",
+            version: "1.0",
+            binary_build_time: Some(1000),
+            rebuilt_binaries: false,
+            rebuilt_binaries_timestamp: None,
+            update: true
+        }),
+        "identical BUILD_TIME is identical_binary"
+    );
+    // Differing, ebuild gone, but no --update -> avoid_update keeps
+    // the installed package.
+    assert!(
+        !binary_reinstall_warranted(BinaryReinstallWarrantedArgs {
+            root: &root,
+            repos: &repos,
+            config: &config,
+            category: "dev-libs",
+            package: "rebuiltbinarypkg",
+            version: "1.0",
+            binary_build_time: Some(2000),
+            rebuilt_binaries: false,
+            rebuilt_binaries_timestamp: None,
+            update: false
+        }),
+        "without --update the installed instance is kept"
+    );
+    // Differing, ebuild gone, --update -> reinstall.
+    assert!(
+        binary_reinstall_warranted(BinaryReinstallWarrantedArgs {
+            root: &root,
+            repos: &repos,
+            config: &config,
+            category: "dev-libs",
+            package: "rebuiltbinarypkg",
+            version: "1.0",
+            binary_build_time: Some(2000),
+            rebuilt_binaries: false,
+            rebuilt_binaries_timestamp: None,
+            update: true
+        }),
+        "differing BUILD_TIME + ebuild gone + --update reinstalls"
+    );
+    // Differing but the ebuild IS visible (newpkg) -> no reinstall
+    // without --rebuilt-binaries, regardless of --update.
+    assert!(
+        !binary_reinstall_warranted(BinaryReinstallWarrantedArgs {
+            root: &root,
+            repos: &repos,
+            config: &config,
+            category: "dev-libs",
+            package: "newpkg",
+            version: "1.0",
+            binary_build_time: Some(2000),
+            rebuilt_binaries: false,
+            rebuilt_binaries_timestamp: None,
+            update: true
+        }),
+        "a visible ebuild keeps the installed instance"
+    );
+    // --rebuilt-binaries escalates: reinstall for a differing
+    // BUILD_TIME even when the ebuild is visible.
+    assert!(
+        binary_reinstall_warranted(BinaryReinstallWarrantedArgs {
+            root: &root,
+            repos: &repos,
+            config: &config,
+            category: "dev-libs",
+            package: "newpkg",
+            version: "1.0",
+            binary_build_time: Some(2000),
+            rebuilt_binaries: true,
+            rebuilt_binaries_timestamp: None,
+            update: true
+        }),
+        "--rebuilt-binaries reinstalls regardless of ebuild visibility"
+    );
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
 fn newuse_reinstalls_when_vdb_use_differs_from_current_use() {
     // reinstallpkg installed with foo off; the profile enables foo now,
     // so --newuse reports a Reinstall for the changed flag.
