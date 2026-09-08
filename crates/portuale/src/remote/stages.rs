@@ -37,6 +37,67 @@ pub(crate) fn merge_failure_tail(stdout: &str, stderr: &str, code: Option<i32>) 
     message
 }
 
+/// Run the merge driver; `Ok(markers)` are the `MERGE_<STEP>=ok` lines
+/// for the report, `Err(message)` the failure tail. The success gate is
+/// the driver's own `STATUS=merged` trailer, with exit 0 +
+/// `MERGE_DONE=ok` kept as the backstop.
+pub(crate) fn run_merge_stage(
+    ctx: &RemoteContext,
+    control: Option<&std::path::Path>,
+    unit_dir: &str,
+    staged: &crate::remote_bundle::StagedBundle,
+    ledger: Option<&LedgerSpec>,
+) -> Result<Vec<String>, String> {
+    let (vdb, stateless) = client_vdb_placement(ctx);
+    let portuale_bin = client_bin_abs(ctx)?.to_string();
+    let script = merge_script(MergeScriptArgs {
+        unit_dir,
+        staged,
+        root: &ctx.root,
+        vdb: &vdb,
+        stateless,
+        protect_list: &ctx.config_protect,
+        mask_list: &ctx.config_protect_mask,
+        ledger,
+        portuale_bin: &portuale_bin,
+    })?;
+    let output = run_script_stdin(ctx, control, &script).map_err(|message| {
+        if ctx.transport == RemoteTransport::Local {
+            format!("mrg: local merge command failed: {message}")
+        } else {
+            message
+        }
+    })?;
+    let code = output.status.code();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    for line in stderr.lines().chain(stdout.lines()) {
+        println!("{line}");
+    }
+    let values = parse_kv(&stdout);
+    if output.status.success()
+        && values.get("MERGE_DONE").map(String::as_str) == Some("ok")
+        && values.get("STATUS").map(String::as_str) == Some("merged")
+    {
+        let mut markers = Vec::new();
+        for step in [
+            "MERGE_PRERM",
+            "MERGE_COPY",
+            "MERGE_VDB",
+            "MERGE_REMOVE",
+            "MERGE_POSTRM",
+            "MERGE_ENVUPDATE",
+        ] {
+            if let Some(value) = values.get(step) {
+                markers.push(format!("{step}={value}"));
+            }
+        }
+        Ok(markers)
+    } else {
+        Err(merge_failure_tail(&stdout, &stderr, code))
+    }
+}
+
 /// Pull one remote file's bytes to the server (`cat` remotely; a plain
 /// read for the `local` transport, where client paths are server
 /// paths). `Err` is the pull failure.

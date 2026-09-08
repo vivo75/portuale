@@ -387,6 +387,23 @@ pub(crate) fn postinst_regen_script(args: PostinstRegenScriptArgs<'_>) -> String
     )
 }
 
+// --- Client merge driver: helpers --------------------------------------------------
+
+/// `is_protected` + `alloc_cfg` + `env_val` + `run_old_hook` helpers,
+/// shared by the merge flow.
+pub(crate) const MERGE_HELPERS: &str = include_str!("merge_helpers.sh");
+
+// --- Client merge flow -------------------------------------------------------------
+
+/// Merge flow: old-prerm → ownership scan → gate+copy → vdb → remove-old
+/// → old-postrm → env-update, appended after `MERGE_HELPERS`. Machine
+/// lines `MERGE_<STEP>=…` plus a final `STATUS=merged` (or
+/// `STATUS=failed:<step>` from `mfail`); any `mfail` prints
+/// `MERGE_FAIL=<step> <detail>` and exits 1. `STATELESS=1` (server-side
+/// vdb placement) skips old-version discovery and the ownership scan.
+/// New-postinst runs separately afterwards.
+pub(crate) const MERGE_FLOW: &str = include_str!("merge_flow.sh");
+
 /// Merge header: all values the flow needs, pre-quoted. The unit layout
 /// mirrors the local merge (`image/`, `build-info/`, shipped `bin/`).
 /// Client ledger destination + line baked into the merge driver; `None`
@@ -396,4 +413,93 @@ pub(crate) fn postinst_regen_script(args: PostinstRegenScriptArgs<'_>) -> String
 pub(crate) struct LedgerSpec {
     pub file: String,
     pub line: String,
+}
+/// Arguments of [`merge_script()`].
+pub(crate) struct MergeScriptArgs<'a> {
+    pub(crate) unit_dir: &'a str,
+    pub(crate) staged: &'a crate::remote_bundle::StagedBundle,
+    pub(crate) root: &'a str,
+    pub(crate) vdb: &'a str,
+    pub(crate) stateless: bool,
+    pub(crate) protect_list: &'a str,
+    pub(crate) mask_list: &'a str,
+    pub(crate) ledger: Option<&'a LedgerSpec>,
+    pub(crate) portuale_bin: &'a str,
+}
+
+pub(crate) fn merge_script(args: MergeScriptArgs<'_>) -> Result<String, String> {
+    let MergeScriptArgs {
+        unit_dir,
+        staged,
+        root,
+        vdb,
+        stateless,
+        protect_list,
+        mask_list,
+        ledger,
+        portuale_bin,
+    } = args;
+    // A placed client vdb must stay inside the unit's world: reject the
+    // degenerate empty path before it becomes `//var/db/pkg`.
+    if vdb.trim().is_empty() {
+        return Err("mrg: empty client vdb path".to_string());
+    }
+    Ok(format!(
+        concat!(
+            "UNIT={unit}\n",
+            "IMAGE=\"$UNIT/image\"\n",
+            "VDB={vdb}\n",
+            "VDBROOT={vdb}/{category}\n",
+            "STATELESS={stateless}\n",
+            "CAT={category}\n",
+            "PKG={pkg}\n",
+            "NEWPF={pf}\n",
+            "NEWVDB=\"$VDBROOT/$NEWPF\"\n",
+            "TMPVDB=\"$VDBROOT/-MERGING-$NEWPF\"\n",
+            "FULLSLOT={slot}\n",
+            "MAINS={mainslot}\n",
+            "REPO={repo}\n",
+            "ROOT={root}\n",
+            "WORKDIR={workdir}\n",
+            "UNITBIN=\"$UNIT/bin\"\n",
+            "export PORTUALE_BIN={portuale_bin}\n",
+            "export PORTAGE_PYM_PATH=/\n",
+            "unset PORTAGE_IPC_DAEMON\n",
+            "COLORMAP={colormap}\n",
+            "PROTECT={protect}\n",
+            "MASK={mask}\n",
+            "LEDGER_FILE={ledger_file}\n",
+            "LEDGER_LINE={ledger_line}\n",
+            "NEWCONTENTS=\"$UNIT/CONTENTS.new\"\n",
+            "NEWPATHS=\"$UNIT/paths.new\"\n",
+            "REPLACED_OWN=\"$UNIT/replaced.own\"\n",
+            "OTHERS_OWN=\"$UNIT/others.own\"\n",
+            "{helpers}",
+            "{flow}",
+        ),
+        unit = sh_quote(unit_dir),
+        root = sh_quote(root),
+        vdb = sh_quote(vdb),
+        stateless = if stateless { "1" } else { "0" },
+        category = sh_quote(&staged.category),
+        pkg = sh_quote(&staged.pn),
+        pf = sh_quote(&staged.pf),
+        slot = sh_quote(&staged.manifest.slot),
+        mainslot = sh_quote(staged.manifest.slot.split('/').next().unwrap_or("0")),
+        repo = sh_quote(&staged.manifest.repo),
+        workdir = sh_quote(
+            &std::path::Path::new(unit_dir)
+                .parent()
+                .map(|p| p.to_string_lossy().into_owned())
+                .unwrap_or_else(|| "/var/tmp".to_string())
+        ),
+        colormap = sh_quote(&crate::color::phase_colormap_export()),
+        protect = sh_quote(protect_list),
+        mask = sh_quote(mask_list),
+        ledger_file = sh_quote(&ledger.map(|l| l.file.clone()).unwrap_or_default()),
+        ledger_line = sh_quote(&ledger.map(|l| l.line.clone()).unwrap_or_default()),
+        helpers = MERGE_HELPERS,
+        flow = MERGE_FLOW,
+        portuale_bin = sh_quote(portuale_bin),
+    ))
 }
