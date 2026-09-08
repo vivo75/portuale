@@ -46,3 +46,96 @@ fn atom_all_use_unmasked_is_false_when_the_violated_flag_is_in_use_mask() {
     assert!(!masked, "mask-affected x on 2.0 must demote to other");
     assert!(unmasked, "x default-enabled on 1.0 stays selectable");
 }
+
+#[test]
+fn highest_available_candidate_ignoring_use_picks_the_use_unsatisfiable_ebuild() {
+    // Portage's `mydbapi_match_pkgs(atom.without_use)[-1]`: the `[...]` block is
+    // stripped for the seed probe.
+    let root = fixtures_root();
+    let config = portage_profile::resolve_config(portage_profile::ResolveConfigArgs {
+        config_root: &root,
+        main_repo_location: &root.join("repo"),
+        overlay_repos: &[("overlay".to_string(), root.join("overlay"))],
+        repo_aliases: &[],
+        main_repo_name: "testrepo",
+        repo_masters: &HashMap::new(),
+        eroot: &root,
+    })
+    .expect("fixture config resolves");
+    let repos = find_repos(&root).expect("fixture repos.conf resolves");
+    let (candidate_str, keywords, iuse, use_flags, slot) =
+        highest_available_candidate_ignoring_use(HighestAvailableCandidateIgnoringUseArgs {
+            repos: &repos,
+            atom_str: "dev-libs/unsatusealt[unsatuseorflag]",
+            category: "dev-libs",
+            package: "unsatusealt",
+            config: &config,
+            extra_constraints: &[],
+        })
+        .expect("an ignoring-use candidate exists");
+    assert_eq!(
+        candidate_str, "dev-libs/unsatusealt-1.0:0/0::testrepo",
+        "the sole visible version is found"
+    );
+    assert!(keywords.contains(&"amd64".to_string()));
+    assert!(iuse.contains("unsatuseorflag"));
+    assert!(!use_flags.contains("unsatuseorflag"), "off by default");
+    assert_eq!(slot, "0");
+
+    assert!(
+        highest_available_candidate_ignoring_use(HighestAvailableCandidateIgnoringUseArgs {
+            repos: &repos,
+            atom_str: "dev-libs/doesnotexist-unsatuseor",
+            category: "dev-libs",
+            package: "doesnotexist-unsatuseor",
+            config: &config,
+            extra_constraints: &[]
+        })
+        .is_none()
+    );
+}
+
+#[test]
+fn highest_available_candidate_ignoring_use_honours_extra_constraints() {
+    // Portage's `dep_zapdeps` composite db honours the backtrack
+    // `runtime_pkg_mask`, so the probe seeds from the highest unmasked version.
+    let root = fixtures_root();
+    let config = portage_profile::resolve_config(portage_profile::ResolveConfigArgs {
+        config_root: &root,
+        main_repo_location: &root.join("repo"),
+        overlay_repos: &[("overlay".to_string(), root.join("overlay"))],
+        repo_aliases: &[],
+        main_repo_name: "testrepo",
+        repo_masters: &HashMap::new(),
+        eroot: &root,
+    })
+    .expect("fixture config resolves");
+    let repos = find_repos(&root).expect("fixture repos.conf resolves");
+    let (unconstrained, ..) =
+        highest_available_candidate_ignoring_use(HighestAvailableCandidateIgnoringUseArgs {
+            repos: &repos,
+            atom_str: "dev-libs/slotusetarget[x]",
+            category: "dev-libs",
+            package: "slotusetarget",
+            config: &config,
+            extra_constraints: &[],
+        })
+        .expect("an ignoring-use candidate exists");
+    assert_eq!(unconstrained, "dev-libs/slotusetarget-2.0:0/0::testrepo");
+
+    let constraints = vec!["!=dev-libs/slotusetarget-2.0".to_string()];
+    let (constrained, ..) =
+        highest_available_candidate_ignoring_use(HighestAvailableCandidateIgnoringUseArgs {
+            repos: &repos,
+            atom_str: "dev-libs/slotusetarget[x]",
+            category: "dev-libs",
+            package: "slotusetarget",
+            config: &config,
+            extra_constraints: &constraints,
+        })
+        .expect("an ignoring-use candidate exists under the constraint");
+    assert_eq!(
+        constrained, "dev-libs/slotusetarget-1.0:0/0::testrepo",
+        "the highest UNMASKED candidate is returned once backtracking excludes 2.0"
+    );
+}

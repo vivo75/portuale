@@ -1864,4 +1864,5 @@ mod slot_undo;
 mod updates;
 mod use_display;
 mod use_flags;
+mod use_unsat;
 mod visibility;

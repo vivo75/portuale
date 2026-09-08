@@ -121,6 +121,7 @@ fn buildpkgonly_entry(category: &str, package: &str, version: &str) -> GraphEntr
 
 mod buildpkgonly;
 mod entries;
+mod entry_env;
 mod logs;
 mod resume;
 mod scheduler;

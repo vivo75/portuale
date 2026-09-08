@@ -578,6 +578,69 @@ fn effective_use_flags_matches_a_wildcard_package_use_entry() {
     assert_eq!(use_flags, HashSet::from(["baz".to_string()]));
 }
 
+/// The `resolved_use_mask_or_force` memo is transparent: a second
+/// identical call shares the allocation.
+#[test]
+fn resolved_use_mask_or_force_memo_shares_the_allocation() {
+    let config = portage_profile::Config::default();
+    let a = resolved_use_mask_or_force(ResolvedUseMaskOrForceArgs {
+        which: MaskOrForce::Mask,
+        config: &config,
+        candidate_str: "dev-libs/pkg-1.0:0/0::testrepo",
+        category: "dev-libs",
+        package: "pkg",
+        stable: true,
+    });
+    let b = resolved_use_mask_or_force(ResolvedUseMaskOrForceArgs {
+        which: MaskOrForce::Mask,
+        config: &config,
+        candidate_str: "dev-libs/pkg-1.0:0/0::testrepo",
+        category: "dev-libs",
+        package: "pkg",
+        stable: true,
+    });
+    assert!(Rc::ptr_eq(&a, &b));
+    // A different `which` is a different entry.
+    let c = resolved_use_mask_or_force(ResolvedUseMaskOrForceArgs {
+        which: MaskOrForce::Force,
+        config: &config,
+        candidate_str: "dev-libs/pkg-1.0:0/0::testrepo",
+        category: "dev-libs",
+        package: "pkg",
+        stable: true,
+    });
+    assert!(!Rc::ptr_eq(&a, &c));
+    // `category`/`package` are key components on their own, not
+    // merely implied by `candidate_str`.
+    let config = portage_profile::Config {
+        use_mask_force_levels: vec![portage_profile::UseMaskForceLevel {
+            package_use_mask: vec![("dev-libs/pkg".to_string(), vec!["special".to_string()])],
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    let s = "dev-libs/pkg-1.0:0/0::testrepo";
+    let for_pkg = resolved_use_mask_or_force(ResolvedUseMaskOrForceArgs {
+        which: MaskOrForce::Mask,
+        config: &config,
+        candidate_str: s,
+        category: "dev-libs",
+        package: "pkg",
+        stable: false,
+    });
+    assert!(for_pkg.contains("special"));
+    let for_other = resolved_use_mask_or_force(ResolvedUseMaskOrForceArgs {
+        which: MaskOrForce::Mask,
+        config: &config,
+        candidate_str: s,
+        category: "dev-libs",
+        package: "other",
+        stable: false,
+    });
+    assert!(!for_other.contains("special"));
+    assert!(!Rc::ptr_eq(&for_pkg, &for_other));
+}
+
 #[test]
 fn effective_use_flags_applies_package_use_force_and_mask() {
     let base: Vec<String> = Vec::new();
