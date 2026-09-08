@@ -2322,6 +2322,103 @@ def test_emerge_atom_with_buildpkg_writes_a_binpkg_and_still_merges(
     assert (root / "pkgdir/dev-libs/packagepkg-1.0.tbz2").is_file()
 
 
+def test_emerge_usepkg_merges_a_local_pkgdir_binary_without_getbinpkg(
+    emerge_binary, tmp_path
+):
+    """Real portage merges a local `$PKGDIR` binary on `-k`/`--usepkg`
+    (or `-K`) alone -- `--getbinpkg` is only about *also* consulting a
+    remote binhost. Regression test for L1-b (portuale gated binary-merge
+    *execution* on `--getbinpkg` even for a purely local `$PKGDIR`,
+    aborting with `resolved to a binary package -- pass --getbinpkg`)."""
+    import shutil
+
+    root = tmp_path / "root"
+    shutil.copytree(Path(FIXTURES_ROOT) / "var", root / "var")
+    env = dict(os.environ)
+    env["PORTAGE_CONFIGROOT"] = FIXTURES_ROOT
+    env["ROOT"] = str(root)
+    env["PORTAGE_RUNNING_ROOT"] = FIXTURES_ROOT
+    env["DISTDIR"] = str(Path(FIXTURES_ROOT) / "distfiles")
+    env["PORTAGE_TMPDIR"] = str(root / "portage-tmpdir")
+    env["PKGDIR"] = str(root / "pkgdir")
+    env.pop("FEATURES", None)
+
+    subprocess.run(
+        [str(emerge_binary), "--buildpkgonly", "dev-libs/packagepkg"],
+        capture_output=True, text=True, check=True, env=env,
+    )
+    assert (root / "pkgdir/dev-libs/packagepkg-1.0.tbz2").is_file()
+
+    env["PORTAGE_TMPDIR"] = str(tmp_path / "ptmp-merge")
+    r = subprocess.run(
+        [str(emerge_binary), "-k", "--oneshot", "dev-libs/packagepkg"],
+        capture_output=True, text=True, check=False, env=env,
+    )
+    assert r.returncode == 0, r.stderr
+    assert "--getbinpkg" not in r.stderr
+    assert ">>> Merging binary package dev-libs/packagepkg-1.0..." in r.stdout
+    assert (root / "var/db/pkg/dev-libs/packagepkg-1.0/CONTENTS").is_file()
+    assert (root / "usr/share/packagepkg/hello.txt").is_file()
+
+
+def test_getbinpkg_merge_honours_env_install_mask(emerge_binary, tmp_path):
+    """`INSTALL_MASK` is in real portage's `environ_whitelist` and is
+    non-incremental, so an `INSTALL_MASK="…" emerge -k --getbinpkg <atom>`
+    from the calling environment overrides make.conf and is applied to
+    the binary merge. Regression test for L1-d (the `--getbinpkg` merge
+    read only the resolved make.conf/profile `INSTALL_MASK`, discarding
+    the env value)."""
+    import shutil
+
+    def _fresh_root(n):
+        root = tmp_path / f"root{n}"
+        shutil.copytree(Path(FIXTURES_ROOT) / "var", root / "var")
+        env = dict(os.environ)
+        env["PORTAGE_CONFIGROOT"] = FIXTURES_ROOT
+        env["ROOT"] = str(root)
+        env["PORTAGE_RUNNING_ROOT"] = FIXTURES_ROOT
+        env["DISTDIR"] = str(Path(FIXTURES_ROOT) / "distfiles")
+        env["PORTAGE_TMPDIR"] = str(root / "portage-tmpdir")
+        env["PKGDIR"] = str(root / "pkgdir")
+        env.pop("FEATURES", None)
+        env.pop("INSTALL_MASK", None)
+        return root, env
+
+    # Build the binpkg into $PKGDIR once, then merge it from there.
+    root, env = _fresh_root(0)
+    subprocess.run(
+        [str(emerge_binary), "--buildpkgonly", "dev-libs/packagepkg"],
+        capture_output=True, text=True, check=True, env=env,
+    )
+    tbz2 = root / "pkgdir/dev-libs/packagepkg-1.0.tbz2"
+    assert tbz2.is_file()
+
+    # Control: no INSTALL_MASK -> the file merges.
+    env2 = dict(env)
+    env2["PORTAGE_TMPDIR"] = str(tmp_path / "ptmp-control")
+    r = subprocess.run(
+        [str(emerge_binary), "-k", "--getbinpkg", "--oneshot", "dev-libs/packagepkg"],
+        capture_output=True, text=True, check=False, env=env2,
+    )
+    assert r.returncode == 0, r.stderr
+    assert (root / "usr/share/packagepkg/hello.txt").is_file()
+
+    # Env INSTALL_MASK on a *fresh* root -> the file is masked out, but
+    # the package still merges.
+    root2, env3 = _fresh_root(1)
+    shutil.copytree(root / "pkgdir", root2 / "pkgdir", dirs_exist_ok=True)
+    env3["INSTALL_MASK"] = "/usr/share/packagepkg/hello.txt"
+    r = subprocess.run(
+        [str(emerge_binary), "-k", "--getbinpkg", "--oneshot", "dev-libs/packagepkg"],
+        capture_output=True, text=True, check=False, env=env3,
+    )
+    assert r.returncode == 0, r.stderr
+    assert (root2 / "var/db/pkg/dev-libs/packagepkg-1.0/CONTENTS").is_file()
+    assert not (root2 / "usr/share/packagepkg/hello.txt").exists()
+    contents = (root2 / "var/db/pkg/dev-libs/packagepkg-1.0/CONTENTS").read_text()
+    assert "hello.txt" not in contents
+
+
 def test_emerge_atom_oneshot_does_not_touch_the_world_file(emerge_binary, tmp_path):
     """--oneshot/-1 (real Scheduler._world_atom's own suppression set):
     the package still merges, but its atom is NOT recorded in world."""

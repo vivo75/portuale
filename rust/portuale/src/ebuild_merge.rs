@@ -3360,6 +3360,22 @@ pub fn merge_binpkg(
         }
     };
 
+    // Real `Scheduler._run_pkg_pretend` runs `pkg_pretend` for every
+    // package in the merge list -- a binary package included: only the
+    // `SRC_URI` fetch inside it is guarded by `if not x.built`, and the
+    // status line even switches colour to `PKG_BINARY_MERGE` for the
+    // built case. It skips EAPI 0-3 (where `pkg_pretend` does not
+    // exist, so `DEFINED_PHASES` cannot list it anyway -- the
+    // `phase_defined` gate in `run_hook` already covers that) and
+    // anything not defining the phase. Real runs this as an up-front
+    // pass over the whole list; portuale folds it into the per-package
+    // flow here, exactly as the source path runs `pretend` inline
+    // before each build rather than as a separate scheduler stage.
+    let pretend_status = run_hook("pretend")?;
+    if pretend_status != 0 {
+        return Ok(pretend_status);
+    }
+
     // Real `_emerge/Binpkg` order: `pkg_setup` (an `EbuildPhase`) runs
     // right after the metadata is extracted, before `unpack_contents` /
     // the merge.

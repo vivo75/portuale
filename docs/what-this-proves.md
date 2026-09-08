@@ -15605,16 +15605,21 @@ file level** -- 108/108 paths matching on mode (incl.
 symlink target (incl. the dangling and chained links), unicode names,
 the `splitdebug` split objects, the masked-file drops, the `keepdir`
 markers -- and VDB `CONTENTS`/`metadata`/`NEEDED` matching for all nine.
-**10 hard findings, all explained; 0 unexplained; 70 non-fatal mtime
-diffs.** Two allowlisted portuale bugs: L1-c again (vdb `environment`
-not refiltered, x9) and, newly surfaced by the phase-marker fixture,
+First run: **10 hard findings** -- L1-c again (vdb `environment` not
+refiltered, x9) and, newly surfaced by the phase-marker fixture,
 **L1-e -- portuale does not run `pkg_pretend` on a `-k`/`--getbinpkg`
 binary merge** (real portage's `Scheduler._run_pkg_pretend` runs it for
 every mergelist `Package`, binary included, that is EAPI>=4 and defines
-the phase). `compare/snapshot.sh` was also hardened: a dangling symlink
-in the walk made `getfattr` fail and, under `set -o pipefail`, silently
-abort the whole snapshot before the VDB tar -- now `getfattr -h` plus
-`set -e`-safe `stat`/`readlink`.
+the phase). **L1-b/d/e were then fixed on `main`** (`config_install_mask`
+prefers the env `INSTALL_MASK`; the merge dispatch routes any `Binary`
+entry through `run_merge_plan`, not only under `--getbinpkg`;
+`merge_binpkg` runs a `DEFINED_PHASES`-gated `pretend` hook before
+`pkg_setup`) -- the re-run is **9 hard findings, all L1-c, 0
+unexplained**. L1-a (`--usepkgonly` installed-dep satisfaction) and L1-c
+(`environment` refilter) remain open. `compare/snapshot.sh` was also
+hardened: a dangling symlink in the walk made `getfattr` fail and, under
+`set -o pipefail`, silently abort the whole snapshot before the VDB tar
+-- now `getfattr -h` plus `set -e`-safe `stat`/`readlink`.
 
 **gpkg `.sig` signing + verification (`FEATURES=binpkg-signing`).**
 The last open item of the binary-packages backlog (Part 2.E's own

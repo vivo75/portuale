@@ -904,6 +904,37 @@ mod tests {
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
+    /// Real `Scheduler._run_pkg_pretend` runs `pkg_pretend` for a binary
+    /// package too -- portuale folds it into `merge_binpkg`'s hook chain,
+    /// before `pkg_setup`. The fixture's `pkg_pretend` `die`s if its own
+    /// payload is already merged, so a `pretend` line landing first (and
+    /// the merge still succeeding) proves it ran at the right point.
+    #[test]
+    fn merge_binpkg_runs_pkg_pretend_before_pkg_setup() {
+        let tmp = tempdir();
+        let root = tmp.join("root");
+        std::fs::create_dir_all(&root).unwrap();
+
+        let status = ebuild_merge::merge_binpkg(
+            &fixtures_root().join("pkgdir/dev-libs/binpkgpretendpkg-1.0.tbz2"),
+            &root,
+            &tmp.join("portage_tmpdir"),
+            &MergeOptions::default(),
+        )
+        .expect("merge succeeds");
+        assert_eq!(status, 0);
+
+        assert!(
+            root.join("usr/share/binpkgpretendpkg/payload.txt")
+                .is_file()
+        );
+        assert_eq!(
+            std::fs::read_to_string(root.join("var/lib/binpkgpretendpkg.log")).unwrap(),
+            "pretend\nsetup\npreinst\npostinst\n"
+        );
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
     #[test]
     fn merge_binpkg_replace_runs_the_replaced_versions_pkg_prerm_and_pkg_postrm() {
         let tmp = tempdir();

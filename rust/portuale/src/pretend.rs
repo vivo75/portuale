@@ -5636,6 +5636,15 @@ pub(crate) const BUILD_VARS: &[&str] = &[
 /// `MergeOptions::from_env` reads the same two from the environment as
 /// its `ebuild <file> merge` fallback; the `emerge <atom>` production
 /// paths call this to override both fields with the real config values.
+///
+/// `INSTALL_MASK` is in real portage's `environ_whitelist` and is
+/// non-incremental, so the `env` configdict (highest-priority layer)
+/// overrides `make.conf`'s value when it is set in the calling
+/// environment -- an `emerge INSTALL_MASK="…" -k …` invocation. A
+/// non-empty process-env value therefore wins here; otherwise the
+/// resolved config value stands. (An explicit empty `INSTALL_MASK=""`
+/// blanking the config value is a corner real handles but we do not --
+/// unset and empty behave the same, matching `MergeOptions::from_env`.)
 fn config_install_mask(config: &portage_profile::Config) -> (String, bool) {
     let features: Vec<String> = config
         .resolved_incremental("FEATURES")
@@ -5646,10 +5655,10 @@ fn config_install_mask(config: &portage_profile::Config) -> (String, bool) {
                 .map(|f| f.split_whitespace().map(String::from).collect())
         })
         .unwrap_or_default();
-    let configured = config
-        .other_vars
-        .get("INSTALL_MASK")
-        .cloned()
+    let configured = std::env::var("INSTALL_MASK")
+        .ok()
+        .filter(|v| !v.is_empty())
+        .or_else(|| config.other_vars.get("INSTALL_MASK").cloned())
         .unwrap_or_default();
     crate::install_mask::resolve(&configured, &features)
 }
@@ -10757,6 +10766,18 @@ pub fn run(args: &[String]) -> ExitCode {
         // `--buildpkg=n` wins over the FEATURE.
         let buildpkg_on = buildpkg_opt.unwrap_or_else(|| feature_enabled("buildpkg"));
         let buildpkg = buildpkg_on.then_some(&package_options);
+        // `emerge -k <atom>` (`--usepkg`, no `--getbinpkg`): the resolver
+        // put a local-`$PKGDIR` binary on the plan. Real portage merges a
+        // local `$PKGDIR` binary on `-k`/`-K` alone -- `--getbinpkg` is
+        // only about *also* consulting a remote binhost -- so the
+        // per-entry binary-vs-source executor (`run_merge_plan`) must run
+        // here too, not just under `getbinpkg`. `merge_one_binary_entry`
+        // prefers the on-disk `$PKGDIR` file and only touches a binhost
+        // when it is missing, so this stays offline for a pure local
+        // merge. (L1-b.)
+        let has_binary_entry = entries
+            .iter()
+            .any(|e| e.source == portage_repo::CandidateSource::Binary);
         if buildpkgonly {
             if let Err(e) = emerge_build::run_buildpkgonly(
                 entries,
@@ -10769,7 +10790,7 @@ pub fn run(args: &[String]) -> ExitCode {
                 eprintln!("emerge: {e}");
                 return ExitCode::from(1);
             }
-        } else if getbinpkg {
+        } else if getbinpkg || has_binary_entry {
             // Remote execution (`mrg --remote-hostname` + `--getbinpkgonly`,
             // published via the `REMOTE_EXEC` handoff): the same resolved
             // entries run through the remote plan instead. Binary-only is

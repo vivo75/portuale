@@ -876,12 +876,13 @@ run. Committed only when asked.
    symlink targets incl. the dangling/chained ones, unicode names, the
    `splitdebug` `.debug`/`.build-id`, the `INSTALL_MASK`/`.la` drops, the
    `keepdir` `.keep` files); VDB `CONTENTS`/`metadata`/`NEEDED` match for
-   all 9. **10 hard findings, all explained; 0 unexplained; 70 non-fatal
-   mtime diffs.** Two allowlisted portuale bugs: L1-c (vdb `environment`
-   not refiltered, ×9) and **L1-e (new) — `pkg_pretend` is not run on a
-   `-k`/`--getbinpkg` binary merge** (the `phases` fixture's phase.log has
-   `setup preinst postinst` where portage's has `pretend setup preinst
-   postinst`). Triage in `TEST/findings/l1.md`.
+   all 9. First run: **10 hard findings** — L1-c (vdb `environment` not
+   refiltered, ×9) and **L1-e (new) — `pkg_pretend` not run on a
+   `-k`/`--getbinpkg` binary merge** (the `phases` fixture's phase.log
+   had `setup preinst postinst` where portage's has `pretend setup
+   preinst postinst`). **L1-b/d/e then fixed on `main`** (see
+   `TEST/findings/l1.md`); the re-run is **9 hard findings, all L1-c, 0
+   unexplained**. L1-a and L1-c remain open.
    Also fixed here: `snapshot.sh` aborted the whole walk (silently, under
    `set -o pipefail`) when `getfattr` dereferenced a dangling symlink —
    now `getfattr -h` + `set -e`-safe `stat`/`readlink`/`getfattr`.
