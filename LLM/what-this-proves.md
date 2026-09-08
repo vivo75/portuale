@@ -15322,5 +15322,829 @@ bytes, slot 0, repo __unknown__)`); truncation is rejected pre-tar
 test, and three black-box tests (ssh unpack, local unpack, missing
 file exit 1).
 
+### mrg: remote-merge slice 3 -- client phases
+
+`mrg --remote-binpkg` client phases (2026-09-07, remote-merge slice 3):
+after unpack, the driver runs `pretend` → `setup` → `preinst` from the
+bundle's own ebuild + saved environment through the shipped `bin/`
+runtime (fresh `bash bin/ebuild.sh <phase>` per phase -- the readonly
+`EBUILD_PHASE` semantics demand it, like local `spawnebuild`), gated on
+the binpkg's `DEFINED_PHASES` (empty list = note, not failure, mirroring
+the local degrade). Path overrides (`EBUILD`/`O`/`ROOT`/`D`/`T`/… with
+client-side values, `D` trailing-slash intact) are exported while
+EAPI/PN/PV/… ride the sourced saved environment -- required, not
+optional: the binary-branch load filter strips exactly those vars from
+the file (package-rename rule), so the driver re-exports them from a
+server-side `_pkgsplit` (`split_pf` over `ververify` + `split_pvr`,
+`S` deliberately unset for ebuild.sh's `${WORKDIR}/${P}` default);
+`PORTAGE_ECLASS_LOCATIONS` ships empty, `PORTAGE_PYTHON` stays the
+literal `/usr/bin/python` (documented cut: no python on clients).
+Trial-verified local + loopback-ssh (`dev-libs/binpkgrmpkg-1.0` writes
+exactly `setup-1.0\npreinst-1.0\n` to the client ROOT; postinst waits
+for the slice-4 merge). Pinned by `select_phases` + `split_pf` units, a
+synthetic-pretend driver test through the real `bin/`, and two
+hook-order black-box tests.
+
+`mrg --remote-binpkg` client merge (2026-09-08, remote-merge slice 4):
+after the phases, one merge driver runs old-prerm → collision gate →
+copy+vdb → old-postrm on the client, then new-postinst (non-fatal,
+local `_postinst_failure` rule) and a best-effort `ldconfig -r`. The
+copy walks the shipped `filemeta` (type/md5/mtime per path -- the
+client never hashes): fail-closed on foreign-owned or type-clashing
+destinations, `._cfgNNNN` divert on protected-and-differing
+(`cmp`/`readlink` compare; no cfgfiledict memory, no content-reuse),
+`cp -p`/`chmod --reference`/root-only `chown`, CONTENTS in the real
+`obj/dir/sym` shape. The vdb entry mirrors the local writer
+(build-info copies, CATEGORY/SLOT/repository/CONTENTS/COUNTER with
+edb-max+1, the plain hook `environment` for bzip2-less future hooks,
+sorted `metadata` file) under a `-MERGING-` tmp dir + rename. The
+same-slot replace discovers the max-COUNTER installed version and
+replays the real interleave (new preinst, old prerm, copy, old postrm,
+new postinst); removal is mtime-guarded (modified files kept with a
+warning). Old hooks run from the replaced vdb's own files, warn-and-
+skip without a readable env (never silently vacuous), warn-only on
+failure -- matching the local unmerge, which likewise only warns.
+Trial-verified local + loopback-ssh: fresh merge, and 1.0→2.0 replace
+with the byte-identical local hook order
+(`setup/preinst/postinst-1.0, setup/preinst-2.0, prerm/postrm-1.0,
+postinst-2.0`), old payload + vdb gone. Pinned by synthetic-merge
+driver tests (protect rename + reinstall-in-place + foreign abort) and
+three black-box tests (fresh, replace, ssh).
+
+`mrg --getbinpkgonly --remote-hostname` resolve path (2026-09-08,
+remote-merge slice 5): target atoms resolve on the server and merge on
+the client. `mrg` publishes the validated `RemoteContext` through a
+process-global handoff (`REMOTE_EXEC`, the same `RwLock` statics
+precedent `portage-repo` uses for `USEOLDPKG_ATOMS`) and calls the
+shared `pretend::run`; the `--getbinpkgonly` dispatch takes the
+handoff and runs the resolved `Binary` entries through the new
+`run_remote_plan` instead of the local merge loop
+(`check_binary_plan` rejects anything non-`Binary`; without
+`--getbinpkgonly` -- or with `--buildpkgonly`/any action -- the run is
+a usage error, exit 2; `--pretend` never reaches the handoff, staying
+local with the `--remote-*` flags dropped, and a bare
+`--remote-hostname` with no atoms stays the slice-1 preflight-only
+run). `/etc/portage` placement (`--remote-etc-portage
+server:<path>|client:<path>`, default `client:/etc/portage`) selects
+the resolve's config root: `server:` reads directly, `client:` pulls
+once via `tar -c`/`tar -x` and re-roots as `<tmp>/etc/portage` (a
+missing `repos.conf` aborts before resolving -- the pull proved the
+tree, the parse still gates). The resolve runs under a
+`ConfigRootOverride` RAII guard, and -- the point of placing the
+config -- downloads + the server ledger use the *placed* config's own
+`config.pkgdir` (make.conf `PKGDIR`, `${PORTAGE_CONFIGROOT}`-expanded),
+never the process `$PKGDIR` env the local plan uses. Each merged entry
+appends `<unix-ts> <repo> <commit> <cpv>` (`git rev-parse HEAD` of the
+entry's repo, `unknown` for non-git -- the plan's honesty rule) to the
+server ledger (`<pkgdir>/remote-ledger/<hostname>`) and bakes the same
+line into the merge driver for the client ledger
+(`<root>/var/db/remote-repos`); both rotate at the last 10 lines.
+The bundle manifest's `repo` prefers the binpkg's embedded
+`repository`/`REPO` key and falls back to the resolver-known repo
+(`build_bundle`'s new `repo_override`; the `--remote-binpkg` path
+passes `None`). Trial-verified over local transport
+(`dev-libs/binpkgrmpkg-1.0` from a tmp `file://` binhost:
+`>>> Remote merged ...` plus `setup/preinst/postinst-1.0` hook order
+and identical ledger lines both sides). Pinned by five black-box tests
+(`server:` resolve+merge, `client:` pull+resolve+merge, the two usage
+errors, `--pretend`-stays-local) and Rust units (last-10 rotation,
+manifest repo override, `server:`/`client:` placement parsing).
+Deliberately deferred: deriving `CONFIG_PROTECT`/`MASK` from the
+placed config (`Config` doesn't model them yet -- the merge still uses
+the flags or the `/etc`+`/etc/env.d` defaults), the vdb shadow +
+stateless-client degrade and `--remote-vdb`/`--remote-edb` (slice 6
+with keep-going per the code's own re-scope note), and
+`--remote-ledger-dir` (plan §8 names it; no such option yet).
+
+`mrg` remote report + keep-going + vdb shadow (2026-09-08,
+remote-merge slice 6, closing the plan's slice list): the driver ends
+every merge with a `STATUS=merged` trailer (`mfail` prints
+`STATUS=failed:<step>`), and the server gates success on it alongside
+exit 0 + `MERGE_DONE=ok`. The resolve loop prints per-unit trailers --
+the flow's own `>>> Remote merged <cpv>` line, `!!! Remote <cpv>:
+failed: <first-line>` on errors (always, abort or keep-going), and
+`>>> Remote <cpv>: skipped (<failed-cpv> failed)` for dropped
+dependents -- plus a closing `>>> Remote summary: <m> merged, <f>
+failed, <s> skipped` line. `--keep-going` is real now (the slice-5
+warn-and-ignore is gone): a unit error fails just that unit and
+BFS-drops its transitive dependents over the entries' own
+`required_by` edges (the `run_merge_loop` `_calc_resume_list` policy,
+factored as `drop_dependents`), merging the rest and returning a
+combined failed+skipped report (exit 1); without it the first unit
+error aborts as before. New surface: `--remote-vdb server:<path> |
+client:<path>` (default `client:<root>/var/db/pkg`),
+`--remote-edb` (validated informational -- `server:` only, the client
+has no binhosts, exactly the plan's row), `--remote-ledger-dir`
+(server ledger base override), and CONFIG_PROTECT/MASK derivation from
+the placed config (`resolved_incremental`, unless explicitly flagged)
+-- the client merge now protects what the client config protects. The
+vdb shadow (pulled once for `client:`, read directly for `server:`)
+fails a foreign-owned unit with `not shipping <cpv>: <path> owned by
+…` before its tarball streams (same-package ownership passes for the
+client driver to refine; an empty/missing shadow pre-checks nothing).
+`server:` vdb is the stateless degrade: the driver merges files with
+no vdb entry, no old hooks (`skip:stateless-no-vdb` markers), and
+fail-closed collisions (any existing file/symlink outside
+CONFIG_PROTECT divert refuses), announced by an `mrg: note:` line.
+Riding along is a real slice-2/3/4 bug the new fixtures exposed:
+hookless units returned after the phases note and reported "merged"
+while writing nothing -- the merge now runs regardless of hooks.
+Trial-verified over local transport (hand-built `rmkga/b/c-1.0`
+fixtures: forged SIZE fails A, B skips as its dependent, C merges;
+stateless fresh + fail-closed collision; shadow pre-ship gate;
+ledger-dir override; PROTECT divert vs. clobber control). Pinned by
+eight black-box tests and Rust units (shadow parsers + pre-check,
+dependent-drop diamond, vdb/edb/ledger-dir/explicitness parsing).
+Deliberate deviations recorded: stateless writes no vdb entry at all
+(single-writer principle -- the server owns installed-db state), and
+the pre-check is lenient on same-package ownership by design.
+
+`mrg --remote-require-ledger-match` strict provenance (2026-09-09,
+remote-merge plan §8 / open question 4): the ledger pins the *provenance
+story* (which server repos + commits a client state came from), but v1
+left mismatch informational. This closes the "later" cut with a Flag
+that turns mismatch into a fail-early gate: before any unit ships, the
+server reads the client's newest ledger line (`<root>/var/db/remote-repos`,
+over the same transport) and its own record for that hostname
+(`<ledger-dir>/<hostname>`, last-10), and the two newest lines must
+agree -- both absent (a fresh client with no server record) or
+byte-identical. Any asymmetry (the client lost its ledger, was reimaged
+or hand-edited, or was last merged by a different server) aborts with
+both lines named, exit 1, zero client writes. `RemoteContext` gains
+`require_ledger_match`, parsed from the new `mrg` flag (type-agnostic
+`provided()` presence check joins `REMOTE_OPTION_IDS` so the bool flag
+and the string-valued `--remote-*` options share one "requires
+--remote-hostname" path); the gate runs in `run_remote_plan` right after
+the vdb-shadow load, before the merge loop -- pure `ledger_lines_match`
+comparison unit-tested, plus black-box tests
+(`test_mrg_remote_require_ledger_match_aborts_on_mismatch`,
+`..._passes_when_records_agree` -- the latter pins both the
+byte-identical and the both-fresh cases over local transport).
+
+Contract-suite hermeticity (2026-09-08, test-only slice): the suite
+never writes under `fixtures/` anymore. Bisecting order-dependent
+failures (inotify correlation + chunk runs) found the single polluter:
+`test_emptytree_reinstalls_the_whole_deep_dependency_tree` ended with
+a bare `emerge -e dev-libs/deeppkg` probe against fixture ROOT that
+really merged newpkg/deeppkg2/deeppkg there (vdb entries, world
+rewrite, conf-mem `config` file), breaking every later test whose
+resolve assumed the fixture vdb. The probe's own comment dated it --
+`-e without -p is still refused (this pilot never really merges)`,
+written when the dry-run restriction still held; the other
+`requires --pretend` gates have since been deliberately removed
+(`emerge <atom>`, `-C`, depclean, prune, deselect all act without
+pretend now), and real portage merges on `emerge -e` too, so refusal
+would contradict both. The probe now uses a non-matching atom like
+the sibling gate-gone probes (nothing to merge, nothing written), and
+the real `-e` merge is pinned hermetically in `test_portuale.py`
+(`test_emerge_emptytree_without_pretend_really_merges`: tmp ROOT over
+a copied fixture `var`, exit 0, merged markers, vdb + world in tmp).
+Killing the polluter fixed all 10 contract-file failures with it
+(978/978) -- they were downstream victims of the mid-run pollution,
+not independent breaks. Remaining suite failures are environmental
+(no-TTY `--ask` tests etc.), identical before and after. Rule going
+forward, now enforced by example: no-pretend probes use non-matching
+atoms or tmp ROOTs, never fixture ROOT.
+
+L0-found resolver fixes (2026-09-08, triaged from
+`TEST/run/l0-resolver.sh`'s first real-tree run against a live 3.0.82.2
+`emerge -pv`):
+
+**Per-profile-level `use.mask`/`use.force` interleave.** Real
+`UseManager.getUseMask(pkg)` / `getUseForce(pkg)` stack the four sources
+(`use.mask`, `use.stable.mask`, `package.use.mask`,
+`package.use.stable.mask`) **interleaved per profile level** --
+`for i: append usemask[i], usestablemask[i], pusemask[i][cp],
+pusestablemask[i][cp]` -- and only then collapse with one
+`stack_lists(incremental=True)`. So a *global* `use.mask` `-flag` line
+at a *later* profile level cancels an *earlier* level's
+`package.use.mask` entry (and vice-versa). Portuale modelled the four
+sources as flat collections and unioned them in `forced_or_masked_flags`
+/ `effective_use_flags`, which structurally could not express that
+cross-source cancellation: `dev-libs/glib`'s `sysprof` is masked by
+`base/package.use.stable.mask` and then un-masked by
+`arch/amd64/use.mask`'s `-sysprof`, so real renders `USE="… -sysprof …"`
+(plain, user-changeable) where portuale rendered `(-sysprof)` (forced)
+-- and the same on `dev-util/mesa_clc`'s `VIDEO_CARDS`. Fixed:
+`portage_profile::Config` now also carries `use_mask_force_levels` (the
+eight sources per chain level + a synthetic repo-level entry);
+`portage_repo::resolved_use_mask_or_force` replays real's per-level
+interleave and both `effective_use_flags` and `forced_or_masked_flags`
+use it. The flat fields stay for the global-only readers (`emerge
+--info`'s `USE=` line -- real `getUseMask(None)`, the REQUIRED_USE
+valid-IUSE domain, `--newuse`'s forced-flags filter). Dual-language; new
+fixture `dev-libs/crossmaskcancelpkg` mirrors the glib case exactly
+(`base/package.use.stable.mask` masks `xmc`, `arch/amd64/use.mask`
+un-masks it, IUSE `+xmc`, so `USE="xmc"`);
+`test_later_level_global_use_mask_cancels_earlier_package_use_stable_mask`
++ a `CASES` entry + a Rust unit test; six existing Rust tests updated
+for the new field.
+
+**`emerge --pretend` exits non-zero when autounmask changed the
+config.** Real `action_build`: `backtrack_depgraph` returns
+`success=False` whenever `_have_autounmask_changes()` (autounmask had to
+touch `package.use`/`.accept_keywords`/`.unmask`/`.license` for the
+graph to resolve), then `if not success:
+mydepgraph.display_problems(); return 1` -- *before* any merge, and
+`--pretend` does not exempt it. Verified against a live `emerge -pv
+www-client/firefox` (USE changes needed -> the full merge list + the
+change block + `backtracking has terminated early` + **exit 1**) and
+`emerge -p --autounmask sys-kernel/linux-firmware` (license change ->
+**exit 1**). Portuale printed the same output but exited 0, so a
+caller's `$?` check read "you must still edit package.use" as success.
+Fixed: exit 1 whenever any
+`autounmask_{keyword,mask,use,license}_changes` is non-empty, except
+`--autounmask-only` (stays 0 -- its whole purpose) and a real
+non-`--pretend` `--autounmask-continue` (writes the changes and
+proceeds). Text and `--json` paths both. Dual-language; ~46 contract
+`CASES` / pinned assertions that had encoded the old exit-0 behaviour
+flipped to exit 1 with their rationale corrected (the `--autounmask-*=n`
+/ "fatal by default" / `--autounmask-only` controls stay 0). This is
+also the underlying cause of L0's cluster C (`app-crypt/gcr[gtk]`
+"masked"): real stops backtracking after the first autounmask batch
+(default `--autounmask-backtrack=n`), portuale keeps re-resolving --
+the merge-list *truncation* half of that divergence is a follow-up.
+
+L1 merge parity (slice 2 of [`docs/real-world-testing.md`](real-world-testing.md)),
+branch `real-world-testing`:
+
+`TEST/run/l1-merge-from-binpkg.sh` -- Portage builds the
+`TEST/atomlists/l1-merge.txt` set (10 all-stable packages + deps: `tree`,
+`pv`, `lsb-release`, `libbsd`, `oniguruma`, `jq`, `htop`,
+`bash-completion`, `sudo`, `dmidecode`) from source once with
+`FEATURES=buildpkg` into a persistent `$PKGDIR` cache; then Portage and
+portuale each `-k --getbinpkg --oneshot` that identical `$PKGDIR` into
+their own fresh container's `/` (both first upgrade portage to 3.0.82.2
+with `-1` so the base `/` is identical) -- the *only* variable is the
+merge path, so every `$ROOT`/VDB diff is a portuale merge bug (real
+`docs/real-world-testing.md` §1.2). `snapshot.sh` captures the union of
+the merged packages' installed files + a few `/etc` targets + the merged
+packages' vdb; `normalize.py` strips the legitimately-volatile bits
+(`BUILD_TIME`/`BUILD_ID`/`COUNTER`/`INSTALL_TIME` standalone *and* inside
+the consolidated `metadata` file, `#dir_mtime`, `env_update` output,
+`environment` volatiles + builddir paths + `FEATURES`,
+`NEEDED`/`REQUIRES`/`PROVIDES` ordering, `.pyc` + regenerated caches, the
+`CONTENTS` mtime column, directory `st_size` -- `normalize.md` is the
+spec); `diff.py` emits typed findings (`MISSING`/`MODE`/`OWNER`/`XATTR`/
+`SIZE`/`CONTENT`/`SYMLINK`/`VDB:<file>`/`CONTENTS`, and a non-fatal
+`MTIME` count), applies `known-divergences.yaml`, exits non-zero on any
+unexplained hard finding.
+
+First run (5-package smoke set `tree pv lsb-release oniguruma jq`, both
+PMs at portage 3.0.82.2, identical fresh containers): **5 hard findings,
+all one root cause, allowlisted; 0 unexplained; 54 non-fatal mtime-only
+diffs.** portuale's binpkg merge produced a byte-identical `$ROOT` and a
+VDB differing only in the vdb `environment` (a stray `declare -- x=""`,
+a missing `SKIP_KERNEL_BINPKG_ENV_RESET="1"` -- real portage re-filters
+the binpkg's `build-info/environment` through `save-ebuild-env.sh` on
+the way to the vdb, portuale stores it closer to verbatim; tracked as
+`TEST/findings/l1.md` L1-c, the one `owner: portuale-bug` allowlist
+entry). Two further findings blocked the comparison until worked around
+and are tracked but not yet fixed: **L1-a** `--usepkgonly` (`-K`)
+doesn't treat an already-installed dependency with no binpkg as
+satisfied (real portage does -- `--usepkgonly` restricts what may be
+*merged*, not what counts as *satisfied*); **L1-b** portuale requires
+`--getbinpkg` to *execute* a purely-local `$PKGDIR` binary merge where
+real portage merges on `-k` alone. `compare/snapshot.sh` also gained a
+`--paths` (recurse `dir/` vs stat-only) and `--vdb-list` mode so the L1
+snapshot stays scoped to what the merge touched.
+
+Slice 3 -- `porttest` synthetic edge-case set
+(`TEST/atomlists/l1-porttest.txt`, nine `EAPI=8` fixtures under
+`TEST/images/overlay/porttest/`, one merge-path behaviour each: setuid /
+filecaps modes, hardlinks, a symlink farm incl. dangling+chained,
+`keepdir`/`.keep`, `dodoc`/`doman`/`doinfo`, `INSTALL_MASK`/`.la` drops,
+a fixture whose every `pkg_*` phase appends a marker to
+`/var/lib/porttest/phase.log`, `splitdebug` `.debug`+`.build-id`,
+filenames with spaces/tabs/UTF-8/shell metacharacters). First run
+(2026-09-08, both PMs at portage 3.0.82.2, identical fresh containers,
+same Portage-built `$PKGDIR`): **all nine fixtures byte-identical at the
+file level** -- 108/108 paths matching on mode (incl.
+`4711`/`2755`/`1750`/`0600`), ownership, xattrs/filecaps, sha256,
+symlink target (incl. the dangling and chained links), unicode names,
+the `splitdebug` split objects, the masked-file drops, the `keepdir`
+markers -- and VDB `CONTENTS`/`metadata`/`NEEDED` matching for all nine.
+First run: **10 hard findings** -- L1-c again (vdb `environment` not
+refiltered, x9) and, newly surfaced by the phase-marker fixture,
+**L1-e -- portuale does not run `pkg_pretend` on a `-k`/`--getbinpkg`
+binary merge** (real portage's `Scheduler._run_pkg_pretend` runs it for
+every mergelist `Package`, binary included, that is EAPI>=4 and defines
+the phase). **L1-b/d/e were then fixed on `main`** (`config_install_mask`
+prefers the env `INSTALL_MASK`; the merge dispatch routes any `Binary`
+entry through `run_merge_plan`, not only under `--getbinpkg`;
+`merge_binpkg` runs a `DEFINED_PHASES`-gated `pretend` hook before
+`pkg_setup`). **L1-a, L1-c and L1-f then followed**, so the re-run is **0
+hard findings, 0 unexplained** and `known-divergences.yaml` is empty.
+L1-a: `resolve_pretend` (+ py mirror) falls back to
+`best_installed_for_atom` before `NoVisibleCandidate` under
+`--usepkg`/`--usepkgonly` -- an installed dep with no binpkg is
+satisfied, not reported missing. L1-c: `merge_binpkg` now regenerates the
+vdb `environment.bz2` from the live merge-time environment (real
+`PORTAGE_UPDATE_ENV` around `postinst`), so `FEATURES` and stray
+build-host locals match real -- which also needed a `FEATURES`-is-
+incremental fix in `portage-profile` and a `___`-prefix rename of the
+brush save-env wrapper's locals so `__filter_readonly_variables` strips
+them. L1-f (found in the process): the binpkg phase env inherited the
+whole process env (`EMERGE_DEFAULT_OPTS`, a portuale-only
+`PORTAGE_RUNNING_ROOT`, `O`) -- now filtered to real's
+`environ_whitelist` in `run_one_phase_bash` / the brush setup script.
+`compare/snapshot.sh` was also
+hardened: a dangling symlink in the walk made `getfattr` fail and, under
+`set -o pipefail`, silently abort the whole snapshot before the VDB tar
+-- now `getfattr -h` plus `set -e`-safe `stat`/`readlink`.
+
+**gpkg `.sig` signing + verification (`FEATURES=binpkg-signing`).**
+The last open item of the binary-packages backlog (Part 2.E's own
+"still open" line) is closed, both halves, grounded in real
+`lib/portage/gpkg.py` throughout. *Sign half:* `FEATURES=binpkg-signing`
+sets real `gpkg.create_signature` (`gpkg.py:790`) inside the real,
+unmodified `bin/gpkg-helper.py compress` portuale already shells out
+to -- the work is env passthrough, not reimplementation:
+`PackageOptions` gained `binpkg_signing` (from `FEATURES`, both the
+`ebuild.rs` and the `pretend.rs` CLI boundaries) plus the four real
+`BINPKG_GPG_SIGNING_*` vars, exported to `__dyn_package` only when
+non-empty so an unset var falls back to the helper's own
+`make.globals` default exactly as a real unset `make.conf` would; the
+helper then detaches-signs `metadata.tar`/`image.tar` (`.sig`
+sidecars) and clear-signs the `Manifest` via real
+`checksum_helper(SIGNING)`. Real `_emerge/actions.py:623-646`'s own
+`!!! {var} is not set` pre-build gate is mirrored (shared
+`require_signing_config`, covering `ebuild package`,
+`--buildpkgonly`, and the `FEATURES=buildpkg` side-effect path).
+*Verify half:* `binpkg::GpgVerify` (`verify_signature` /
+`request_signature` / base command / homedir, resolved from `FEATURES`
++ `BINPKG_GPG_VERIFY_*` with real `make.globals` defaults) drives a
+real `_verify_binpkg` transcription in `verify_gpkg_manifest`: any
+`.sig` member or inline PGP block (real's own "assume all files have
+signature" trigger) -- or `binpkg-request-signature` -- clear-sign-
+verifies the Manifest and detached-verifies every other member against
+its `.sig` sidecar, via the system `gpg` subprocess (musl-static story
+untouched: zero linked crypto, the same stance as `tar`/`wget`/the
+compressors). Real's own details kept: `request_signature` beats
+`binpkg-ignore-signature` (real's `if`/`elif` order), a failed Manifest
+check is fatal only under `verify_signature` (ignore falls back to the
+raw bytes), a missing sidecar is `MissingSignature` except for the
+never-signed `gpkg-1` marker, `.sig` members are digest-checked against
+their own Manifest records like every other member, exit-0 is not
+enough (`GOODSIG` + `TRUST_ULTIMATE`/`TRUST_FULLY` required, real
+`_check_gpg_status`), and the single-cause `show_gpg_error` summaries
+(unsigned / unknown key / undefined trust) are reproduced. Enforced at
+every merge (`merge_binpkg` via a new `MergeOptions::gpg_verify`,
+`--info`'s binary path, the `mrg --remote-binpkg` bundle build);
+deliberately not on the pool-populate read (`read_gpkg_metadata`
+trusts the container like `pkgdir-index-trusted`, keeping resolve
+deterministic and `gpg`-free) nor per-binrepo (`verify-signature =
+false` stays parse-and-display-only). No Python mirror: both halves
+are real-execution paths (the tests live in `binpkg.rs` /
+`emerge_getbinpkg.rs` / `test_portuale.py`). New committed fixture
+`fixtures/pkgdir/dev-libs/gpgsignedpkg-1.0.gpkg.tar` (built by the
+real helper with portage's own committed test keyring,
+`3rdparty/portage/lib/portage/tests/.gnupg`, whose keys never expire)
+plus a full black-box round trip (`--buildpkgonly` signs,
+`--getbinpkgonly` from a `file://` binhost verifies-then-merges, an
+empty keyring fails the merge with "unknown key" and merges nothing).
+Deliberate cuts: no dropped-privilege `gpg` spawn when root (real's
+`GPG_VERIFY_USER_DROP`), no `shlex`/`varexpand` for the command
+template (whitespace split -- real's default splits cleanly).
+
+**`--info` installed block reads `environment.bz2` (real
+`_aux_env_search`).** The last `--info` v1 cut (Part 2.F): the five
+`mydesiredvars` (`CHOST`/`CFLAGS`/`CXXFLAGS`/`FEATURES`/`LDFLAGS`,
+`actions.py:2278`) now come from the vdb `environment.bz2` via a
+transcription of real `vartree._aux_env_search`
+(`dbapi/vartree.py:1059-1126`) -- including its `var_assign_re` /
+`close_quote_re` assignment scanner with multi-line-quote
+continuations (joined with `\n` separators, last char dropped even at
+EOF, last assignment wins, unwanted keys' continuations still
+consumed), the missing-or-corrupt-file-means-all-`Unset:` rule, and
+the present-but-empty-matches-empty-prints-nowhere rule (real's own
+`None` vs `split()`-equal branches). Real decompresses by spawning
+`bzip2 -d -c`; `portage-repo` stays subprocess-free, so it
+decompresses in-process with `bzip2` 0.6's default pure-Rust backend
+(trifectatechfoundation libbz2-rs-sys -- the C `bzip2-sys` backend
+stays off, verified `bzip2-sys`-free in `Cargo.lock`, so the
+musl-static story holds; the pre-approved dependency question).
+Semantics are env-search-*only*, like real: a same-named individual
+vdb file is never consulted. Dual-language (`parse_env_assignments`
++ `_parse_env_assignments` with identical edge behavior, verified
+byte-identical on all four info fixtures after normalization):
+`fixtures/var/db/pkg/dev-libs/infoinstpkg-1.0/environment.bz2` keeps
+the existing pin green through the new path, and new
+`dev-libs/infoenvpkg-1.0` (stray `CFLAGS` file, env without it)
+pins `Unset: CFLAGS, ...` black-box in
+`test_info_installed_block_reads_mydesiredvars_from_environment_bz2`;
+Rust unit tests cover the parser table plus tmp-vdb env-only/missing
+cases (the encoder half of the same crate builds the test archives).
+
+**`--check-news` `News-Item-Format` 1.x/2.x atom-validity gate.** The
+last `--check-news` v1 cut (Part 2.F): real
+`DisplayInstalledRestriction.isValid` (`news.py:396-407`) validates the
+`Display-If-Installed` atom under `isvalidatom(atom, eapi="0")` for a
+`1.*` item and `isvalidatom(atom, eapi="5")` for a `2.*` item. The
+earlier backlog premise ("needs `portage_dep` EAPI parametrization, a
+Part 3 non-goal") turned out stale: the split reduces to a *field*
+gate, not crate parametrization -- real EAPI 0 lacks slot deps
+(`slot_deps` is EAPI >= 1) and USE deps (`use_deps` is EAPI >= 2), so a
+1.x atom is legal only when it carries no `:slot`/`:slot/sub`, no
+`:=`/`:*` slot operator, and no `[use]` (the EAPI >= 5 superset
+`parse_atom` already implements is exactly the 2.x grammar). No
+EAPI-conditional logic is added to `portage_dep`, preserving the
+"no EAPI parametrization at all within the 5+ floor" decision (and this
+gate is about the *deprecated* EAPI 0 anyway -- a one-off legacy
+news-format rule, not ebuild-conditional behavior). `news_item_valid`
++ the Python mirror `_news_item_valid` now split out
+`news_item_format` (real `NewsItem.parse`'s break-on-first-match
+`fnmatch("[12].*")`) and gate per-format; 2.x keeps parse-at-all.
+Three new 1.x fixtures pin it black-box:
+`…-format1-slotatom` (`:slot`), `…-format1-useatom` (`[use]`) -- both
+rejected, neither counted nor in `.skip` -- and `…-format1-plain`
+(`dev-libs/samepkg`, valid + relevant, counted), bumping the check-news
+count 4 -> 5 (`test_check_news_counts_unread_relevant_items` +
+`test_check_news_matches_a_versioned_display_if_installed_atom` updated).
+Rust unit test covers the format extraction and the full accept/reject
+matrix; dual-language, all five check-news tests green and byte-identical.
+
+**`BUILD_TIME`-vs-installed reinstall outside `--rebuilt-binaries`.** The
+last 2.E residual is closed: when a package's ebuild has since been
+removed from the tree and a binary package at the *installed* version
+carries a differing `BUILD_TIME`, real portage reinstalls the binary even
+without `--rebuilt-binaries` -- grounded in `_equiv_ebuild_visible`
+(`depgraph.py:7399`) combined with the `identical_binary` gate
+(`depgraph.py:7999-8030`):  a built candidate whose `BUILD_TIME` differs
+from what's installed is not `identical_binary`, so the *installed*
+built instance is rejected for ebuild-invisibility and only the binary
+remains → reinstall. Two real guards portuale now reproduces exactly:
+(i) `identical_binary` -- an *equal* `BUILD_TIME` leaves the installed
+instance alone (no needless reinstall, bug #354441); and (ii)
+`avoid_update = "--update" not in myopts` (`depgraph.py:7826`) -- the
+rejection only applies to an installed instance reached under
+`not avoid_update`, since without `--update` real's own
+`_select_pkg_highest_available` final `if avoid_update:` step returns the
+installed package anyway. `binary_reinstall_warranted` (Rust) /
+`_binary_reinstall_warranted` (Python) folds `--rebuilt-binaries` (any
+difference, or newer-than-cutoff past `--rebuilt-binaries-timestamp`,
+ebuild-visibility notwithstanding) with the new ebuild-gone trigger
+(gated on `update`, plus `ebuild_visible_at` querying the *tree* via the
+memoized `list_candidates` rather than the pool, so `--usepkgonly` stays
+correct), wired only into the main `--update` already-installed path.
+Pinned: `test_usepkg_binary_of_a_since_removed_ebuild_is_reinstalled_only
+_when_it_differs` (rename+behaviour flip of the old cut-pinning test:
+identical → `AlreadyInstalled`, differing → `[binary R]`),
+`test_rebuilt_binaries_off_by_default_stays_already_installed` and
+`test_rebuilt_binaries_auto_enables_under_usepkgonly_deep_update`
+updated to the corrected semantics (the `--selective`-without-`--update`
+case still stays installed; `--deep 3` no longer implies "no reinstall"
+for an ebuild-gone package); Rust unit test
+`ebuild_visible_at_and_binary_reinstall_warranted_match_real_identical_binary`.
+
+**`emerge --regen --jobs` threading.** The last `--regen` cut is closed:
+`--jobs`/`--load-average` now thread from the CLI into `regen::run`
+(real `actions.py:4123-4128`: `action_regen(settings, portdb,
+max_jobs, max_load)` with `opts.get("--jobs")` /
+`opts.get("--load-average")`), and the per-ebuild `depend`+write work
+list runs through a `std::thread::scope` dispatch loop with real
+`AsyncScheduler`/`PollScheduler._can_add_job` semantics -- at most
+`jobs` phases in flight, no *additional* worker while the 1-minute load
+is at or above the limit (the first always runs, so no deadlock; shared
+`emerge_build::system_loadavg_1min`), a bare `--jobs` meaning unlimited
+and an explicit `--jobs=0` meaning the CPU count (real
+`main.py:1023-1041`, now honored on every path, not just regen). Three
+deliberate, documented determinism divergences: `Processing <cp>` lines
+print up front in `cp` order (real prints them from its `_process_iter`
+generator mid-schedule), failure lines report in work-list order after
+every worker joins (real `_task_exit` reports in completion order), and
+same-`(category, pf)` items never run concurrently -- the builddir
+(`${PORTAGE_TMPDIR}/portage/<cat>/<pf>`, incl. `temp/.depend-metadata`)
+is shared per cpv across repos, which real serializes the other way
+(real `doebuild()` takes a per-builddir `EbuildBuildDir` lock); portuale
+holds the second item at dispatch instead. Net effect: `--regen
+--jobs=4` writes byte-identical cache files *and* byte-identical stdout
+to a serial `--regen` for the same tree. The Python reference mirrors
+the newly-accepted surface (`--jobs`/`-j` bare/`=N`/separate/`-jN`,
+`--load-average`/`-l` separate/`=`/`-lLA`, with real's own error
+strings) and stays inert under `--pretend`/`--regen` -- closing a
+latent Rust-vs-Python gap where Rust accepted `--jobs` and the
+reference reported it not-implemented. Pinned: CASES entries for every
+accepted spelling plus the three error spellings, the
+`test_jobs_and_load_average_are_scheduling_only_under_pretend`
+contract test, the `test_emerge_regen_jobs_parallel_matches_serial_cache_bytes`
+black-box test (serial vs `--jobs=4 --load-average=1000000` vs
+`--jobs=0`: identical bytes, identical stdout), and the Rust
+`dispatch_takes_the_first_item_whose_key_is_not_running` unit test.
+
+**`--implicit-system-deps=n` (merge-order bias gate).** The remaining
+`_serialize_tasks` cut is closed: the flag (real `y_or_n`,
+`main.py:490`, default `y`; only `=n` disables, per real
+`create_depgraph_params.py:120`) threads from the CLI through
+`ResolveRequest` into `topological_merge_order` →
+`serialize_merge_order` → `merge_order_bias`, whose `false` arm is
+real `depgraph._merge_order_bias`'s own early return
+(`depgraph.py:9279`): the @system-first / reference-count re-sort is
+skipped and the list stays in scheduler-over-discovery order. Bare
+counts as `y` (portuale leniency, same as `--package-moves`); the
+legacy 44-arg `resolve_pretend_graph` marshaller keeps the default
+`true`. Dual-language, verified empirically (`emerge -pu @world`:
+biased `newpkg, upgradepkg, innernestedsetpkg, withdeps` vs `=n`
+`newpkg, innernestedsetpkg, upgradepkg, withdeps`, byte-identical
+Rust == Python). Pinned: three CASES entries, the
+`test_implicit_system_deps_n_skips_the_system_first_merge_order_bias`
+contract test, the Rust
+`implicit_system_deps_n_skips_the_merge_order_bias` unit test (three
+independent leaves, `@system` member promoted only with the bias on),
+and a `--help` line on both sides. This finished another session's
+half-landed slice (field + CLI parsing without the resolver threading,
+which left the tree non-compiling); the compile repair is part of this
+entry. Still open in Part 2.A: the `_FrontierDigraph` perf layer and
+blocker/uninstall interleaving.
+
+**Slot-collision `use` keys (observable) + `need_rebuild` trailer
+(dormant).** The render side ported earlier (`use_mismatch_flags`,
+`Use(flag)` reasons, unconditional-first ordering, USE-token `^` spans
+without colorization, `slot_conflict_need_rebuild` + trailer) is now
+triggered for real: slot-reuse re-verifies USE-deps (a `>=T-1.0[x]`
+parent no longer silently reuses a resolved x-off instance -- it pulls a
+second instance and reports the conflict, falling through to the
+autounmask flip suggestion exactly like real shows both), the
+backtracking solvability pre-check is USE-aware (no more swallowed
+"no visible ebuild" retries), same-slot records merge per (slot,
+existing, current) triple (real keeps one handler per slot), and
+puller filing is USE-aware with subslot-carrying match strings
+(built-`:=` parents no longer vanish). New `dev-libs/slotuse*` fixture
+(`slotusetarget` 1.0 `+x +y` / 2.0 `-x`, versioned `package.use.mask`
+blocking the x flip -- a repo-level file, user config has no such
+file): `emerge -p dev-libs/slotusegroup` renders the version-keyed
+parent plus unconditional `[y]` before violated `[x]`, byte-identical
+Rust == Python and matching live real portage's `--color=n` shape
+(modulo the standing divergences: resolved-first instance order vs
+real's arbitrary set order, no `to <root>` suffixes, rc 0). The
+`need_rebuild` trailer code stays dormant (no vdb-recorded bound-`:=`
+fixture reachable until `--dynamic-deps=n` switches the walk source
+via the CLI -- open mystery, both languages agree). Also noted along
+the way: literal bound `:=` in ebuilds is accepted by portuale but
+masked-invalid by real (atom validation gap). Pinned: five
+`portage-dep::use_mismatch_tests` unit tests, the extended
+`slot_conflict_reason_and_caret_span` render test (use keys + caret
+spans), `record_slot_conflict_merges_same_triple_and_appends_new`, a
+CASES entry, and
+`test_slot_conflict_use_reason_keys_unconditional_before_violated`
+(full stdout pinned, Rust == Python).
+
+**Circular `followup_change` fixture.** `docs/history/find-suggestions-
+plan.md` left exactly one `_find_suggestions` variant without a fixture:
+the *conditional*-grandparent arm of step 9 (the hard-clash `ignore`
+arm had one since 2026-09-05). New `dev-libs/fucyclea`/`fucycleb` (the
+same `x?`-gated build cycle as `usecyclea`/`gpcyclea`) plus
+`dev-libs/fucyclec`, whose `DEPEND="dev-libs/fucyclea[x?]"` constrains
+the solution flag only conditionally: the "disable x on fucyclea" fix
+survives, flagged `followup_change`, so both sides print the
+`Change USE:` line *plus* the ` (This change might require USE changes
+on parent packages.)` trailer (byte-identical, exit 1). Same slice also
+repairs two stale comments the shipped heuristic left behind: the
+`pretend.rs` circular block claimed portuale "always hits the `else`
+branch" (false since the 2026-09-03 Slice 2 -- `usecyclea` renders a
+suggestion), and `circular_dep_solutions` cited
+`docs/find-suggestions-plan.md` after the plan moved to `docs/history/`.
+Pinned: a CASES entry, the
+`test_circular_dep_conditional_grandparent_keeps_the_suggestion_with_followup`
+contract test (full stderr pinned), and the Rust
+`circular_dep_solutions_conditional_grandparent_keeps_the_suggestion_with_followup`
+unit test.
+
+**Binpkg `SHA1` (closing the 2.E tail).** Two module doc comments --
+`ebuild_package.rs`'s `binpkg_md5_hex` and `emerge_getbinpkg.rs`'s
+`download_and_verify` -- carried the same cut: "portuale has no sha1
+crate". The crate exists (`sha1`, RustCrypto, pure Rust, zero C linkage,
+so the musl-static story is untouched -- same waiver class as the
+pre-existing `md-5`), and it is now depended on (`sha1 = "0.10"`,
+matching the `md-5`/`sha2`/`blake2` 0.10 family so all four hashers share
+one `digest::Digest`). Real ground: `bintree.py:548`'s `_pkgindex_hashes
+= ["MD5", "SHA1"]`, written by `_pkgindex_entry` (`bintree.py:2302`) via
+`perform_multiple_checksums`, and verified on fetch by `_get_digests`
+(every valid checksum key present) + `digestCheck`. Ported both halves:
+`binpkg_checksums` computes MD5+SHA1 in a single read at both Packages
+writers (`package_after_install` and `quickpkg_from_vdb`), and
+`download_and_verify` verifies each digest field present -- a `SHA1`
+mismatch removes the file and fails, exactly like `MD5`. Real-execution-
+only, so no Python mirror (only CLI-recognition surface is mirrored for
+such paths). Pinned: the extended
+`download_and_verify_fetches_then_size_and_md5_checks` (real `sha1sum`
+of the committed fixture `.tbz2`, plus a wrong-`SHA1` rejection case)
+and the `SHA1` assertion in
+`real_package_builds_a_real_xpak_tbz2_and_a_real_packages_entry`.
+Live-verified (`docs/running-it.md`): a real `ebuild ... install
+package` build's `Packages` `MD5`/`SHA1` both match system
+`md5sum`/`sha1sum` of the built `.tbz2`.
+
+**`--regen` `_pull_valid_cache` skip (closing half of the 2.F `--regen` tail).** Real `MetadataRegen._iter_metadata_processes` calls `portdb._pull_valid_cache(cpv, ebuild_path, repo_path)` (`porttree.py:603-658`) before spawning each `EbuildMetadataPhase`: when an auxdb already holds a valid entry -- `_md5_` matches the ebuild file, `EAPI` supported (`porttree.py:644-653`), `validate_entry` (`cache/template.py:233-261`, `md5_database`, `store_eclass_paths = False`) passing including every `_eclasses_` md5 via `eclass_cache.validate_and_rewrite_cache` -- the `depend` phase is skipped entirely. Ported as `regen.rs::cache_entry_is_valid` (same three checks against the single on-disk `md5-cache` portuale models, same masters-then-self last-wins eclass lookup `eclasses_field` documents, corrupt lines and odd-count `_eclasses_` treated as `CacheCorruption`-invalid), called at the top of `regen_one`: a valid entry returns `Ok(())` without touching the file (mtime preserved). Performance only -- the skipped rewrite would be byte-identical, and stdout (`Processing <cp>` up front, `done!`) is unchanged. Real-execution-only, so no Python mirror (only CLI-recognition surface is mirrored for such paths). Pinned: six `portuale` `cache_valid` unit tests (valid / stale-md5 / missing-file / corrupt-line + unsupported-EAPI / eclass-mismatch-missing-malformed / `eapi_is_supported`) plus `test_emerge_regen_skips_the_depend_phase_when_the_cache_entry_is_valid` (second regen leaves bytes *and* mtime untouched, an edited ebuild rewrites, an edited eclass refreshes `_eclasses_`). Live-verified (`docs/running-it.md`). What remains of the `--regen` tail is now just `metadata_regen_retry`'s `cp_retry`.
+
+**`--regen` `cp_retry` (closing the 2.F `--regen` tail -- `--regen` is now complete).** Real `metadata_regen_retry` (`_emerge/MetadataRegen.py:15-52`, the path `egencache` runs its regen through) re-runs a whole cp whose `depend` phase died with an *unexpected* returncode (real `_task_exit`: `returncode != 1` marks `cp_retry`; returncode 1 -- invalid metadata, pre-spawn `doebuild` failure -- never retries), up to `max_tries=3` passes total. Ported: `ebuild_phases::run_depend_phase` now returns a `DependError { code, message }` (the phase's own exit code verbatim -- the `depend` phase is never sandboxed so real's sandbox-log rewrite to 2 has no equivalent; setup/spawn/metadata-read failures are code 1, real's pre-spawn int retval and metadata-invalid arms), `regen_one` maps every failure to a `RegenFailure` with that code, and `run()` loops up to `MAX_TRIES = 3` passes over the unexpectedly-failed cps (first-seen cp order, not real's set order -- determinism; the retried set is identical), each pass reprinting `Regenerating cache entries...` + its `Processing <cp>` lines like one real `MetadataRegen` instance each. A finally-failed cpv is dropped from the valid set before pruning (real `_task_exit`'s `_valid_pkgs.discard`), so a failed ebuild never leaves a stale cache entry behind. One deliberate divergence, documented in `regen.rs`: real `emerge --regen`'s own `action_regen` runs a single `MetadataRegen` with *no* retry -- the loop is `egencache`'s path, folded into portuale's single regen tool (there is no egencache here); a persistently-broken tree ends failed with exit 1 either way. Real-execution-only, so no Python mirror. Pinned: `retry_decision_matches_real_task_exit` + `retry_set_is_the_unexpectedly_failed_cps_in_first_seen_order` (+ a pass-subset case on the dispatch rule) and `test_emerge_regen_retries_a_cp_on_an_unexpected_returncode` (exit-2 cp `Processing`-printed 3x, exit-1 cp once, both returncodes in stderr, stale entry of the failed ebuild pruned, exit 1). Live-verified (`docs/running-it.md`).
+
+**Director `RepoCache` second backend (H.14, first slot after `BinpkgIndex`).** The repo-cache slot's contract (`mrg-director::RepoCache`: one aux dict per package + a sorted category listing) has its second algorithm: `VolatileCache`, the in-memory dict backend grounded in real `portage/cache/volatile.py::database` (`self._data = {}` with `deepcopy` on every read and write, so callers can never alias the store -- `insert` clones in, `metadata` clones out; real's `serialize_eclasses = False` needs no port since the read-only trait surface already narrows that machinery out). It sits next to `Md5Cache` (real `flat_hash.py`) behind the same three methods -- a pre-loaded snapshot cache for benchmarks and tests, with no filesystem involved. The matrix table in the crate docs now names both backends. Pinned: `repo_cache_volatile_is_the_in_memory_second_backend` (entries read back whole, sorted `category`, missing entry is `Err` never a panic, mutating a returned dict leaves the store intact). Live-verified (`docs/running-it.md`: the `cargo test -p mrg-director` block, now 11 tests). Remaining H.14 slots -- PackagesDb, Fetcher, MergeEngine, NewsSet, SchedulerPolicy -- stay new-algorithm work, one slice each.
+
+**Director `PackagesDb` second backend (H.14, second slot after `BinpkgIndex`/`RepoCache`).** The installed-db slot's contract (`mrg-director::PackagesDb`: installed versions + CONTENTS files + reverse dependents, all read-only) has its second algorithm: `MemoryDb`, an owned in-memory snapshot grounded in real `_emerge/FakeVartree.py::FakeVartree` ("an in-memory copy of a vartree instance ... for use by the depgraph", so calculations run without holding a lock on the vardb). Two documented narrowings: versions come back in recorded order (callers provide highest-first, real `dbapi.cp_list` order; the snapshot preserves), and reverse dependents are recorded edges rather than recomputed atom matches (recomputation would need `portage_dep`, a dependency the contract crate deliberately does not take). Unknown packages/versions read as empty, never a panic; the snapshot owns its root so the value is portable as one unit. Pinned: `packages_db_memory_is_the_snapshot_second_backend`. Live-verified (`docs/running-it.md`: the `cargo test -p mrg-director` block, now 12 tests). Remaining H.14 slots -- Fetcher, MergeEngine, NewsSet, SchedulerPolicy -- stay one-slice-each new-algorithm work.
+
+**Director `MergeEngine` source/binary split (H.14, third slot after `BinpkgIndex`/`RepoCache`/`PackagesDb`).** The merge-engine slot's contract (`mrg-director::MergeEngine::execute`: one `MergeUnit` under a `MergeContext` to one `MergeOutcome`) has its two implementations, split on the unit kind exactly like real `MergeListItem._start`'s `type_name` dispatch (`"ebuild"` → `EbuildBuild`, `MergeListItem.py:87-106`; `"binary"` → `Binpkg`, `MergeListItem.py:108+`): `SourceMergeEngine` declines `MergeKind::Source` as `Skipped` and refuses `Binary` as `Failed`, `BinaryMergeEngine` mirrors it. The real phase chains live in the `portuale` binary crate (`ebuild_merge::{run_merge, run_qmerge}` / `emerge_getbinpkg::merge_binpkg`, not linkable from a library -- the standing pattern), so the markers pin the routing, never the merge. Pinned: `merge_engine_source_and_binary_split_by_unit_kind`. Live-verified (`docs/running-it.md`: the `cargo test -p mrg-director` block, now 13 tests). Remaining H.14 slots -- Fetcher, NewsSet, SchedulerPolicy -- stay one-slice-each new-algorithm work.
+
+**Solver V1 depth H.15a: engine-native failure text for resolvo.** The bridges' failure paths were asymmetric: pubgrub renders its `NoSolution` derivation tree (`portage-atom-pubgrub::format_solve_error`), but resolvo stringified the whole `UnsolvableOrCancelled` enum with `{:?}` -- `emerge: Unsolvable(Conflict { clauses: [ClauseId(2)] })`, naming no package at all. `resolve_resolvo` now matches on the outcome and renders `Conflict::display_user_friendly(&solver)` (resolvo's own "The following packages are incompatible" plus the conflict chains, named through the portage provider's solvable display); only the unreachable-here `Cancelled` arm stays a plain message. Live-verified against the fixture tree (`emerge --pretend --solver=resolvo dev-libs/slotconfgroup` prints the full slot-conflict chain down to `slotconflicttarget-2.0:0, which conflicts with the versions reported above`, exit 1). Pinned: the `resolvo_failure_text_is_engine_native_not_a_debug_dump` fixture test and `test_solver_backends_report_engine_native_conflicts` (both backends name the conflicted packages, no `ClauseId(`/`Unsolvable(` leaks). Remaining H.15 depth: notices parity (H.15c) and merge-order fidelity (H.15b), each its own slice.
+
+**Solver V1 depth H.15b: merge-order fidelity for the bridges.** Bridge plans displayed in raw engine install order (pubgrub printed `shared-b` before `shared-a` for `dev-libs/diamond`; the walk prints the reverse) because bridge `GraphEntry`s carried `deps: vec![]` and never touched the merge-order sort. `LoadedVersion` now retains the raw md5-cache dep strings alongside the parsed trees, `graph_result_from_order` rebuilds each entry's edges with the exact walk-path helper (`merge_order::dep_edges_from_metadata` over the real `RDEPEND`/`IDEPEND`/`PDEPEND`/`DEPEND`/`BDEPEND` key order plus that version's resolved USE, ebuild keys, `built = false`), and the entries run through the same `topological_merge_order` (real `_serialize_tasks`) the walk resolves under -- same top-level atoms, profile config, root, and `--implicit-system-deps` bias. Verified live: all three backends print one identical dependency-first list for `diamond`, `btparent`, `withdeps` (modulo the known H.15c autounmask gap on `aucasctop`/`aubreaktop`). Pinned: `bridge_entries_carry_merge_order_dep_edges` (both engines; diamond names `shared-a`+`shared-b`) and `test_solver_backends_share_the_walk_merge_order` (byte-identical stdout across backends, exact order). The `running-it.md` pubgrub diamond example is corrected to the new order. Only H.15c (notices parity) remains of the solver V1 depth.
+
+**Solver V1 depth H.15c, first half: blocker reporting for the bridges.** Bridge plans silently dropped every blocker atom (and `entry.blockers` stayed empty), so `--solver=pubgrub` printed no `[blocks B]` line where the walk does. `graph_result_from_order` now collects blocker atoms from each plan entry's raw dep strings -- flattened per key with that version's resolved USE (`use_reduce_flat`, the walk's own parent-USE evaluation), diverted out of the graph exactly like the walk's queue -- and matches them through the shared walk-path `resolve_blockers` (same installed-db + plan-entry candidates, same USE-aware `[use]` gating), filing each conflict on its owner entry before the merge-order sort, mirroring the walk's resolve-then-sort order. Verified live: pubgrub prints the walk's byte-identical soft-block line for `graphblockerparent` and the hard-block line for `blockerpkg` (installed `samepkg`), and resolvo prints the hard-block line too. Pinned: `bridge_entries_report_matched_blockers` (exact `BlockerConflict` shapes, both engines) and `test_solver_backends_report_matched_blockers` (full-stdout equality with the walk for the pubgrub cases). Deliberate cuts, documented: resolvo reads weak blockers as hard conflicts and refuses `graphblockerparent` outright (an engine-model divergence, not a notice gap -- its H.15a text renders the refusal readably); slot-conflict/autounmask/circular notices stay unported because they are unreachable for solved engine plans (an engine solves cleanly or fails with H.15a text -- resolvo even errors on dependency cycles), so porting them would be dead code. What remains of H.15 is ABI rebuilds (`:=`), its own slice.
+
+**Solver V1 depth H.15, last slice: ABI rebuilds (`:=`) for the bridges.** A bridge plan that moves a slot's sub-slot now schedules installed `:=`-bound consumers for reinstall through the walk's own `slot_operator_rebuild_entries` fixpoint -- same gate (`rebuild_if_new_slot`, not `ignore_built_slot_operator_deps`), same complete-mode `required_set_reachable_cps` reachability (empty outside complete mode suppresses the scan, exactly like a non-complete walk), entries extended before the merge-order sort, `(provider, consumer)` pairs into `GraphResult.abi_rebuilds` for `_show_abi_rebuild_info`. Verified live against a slotbind root (target 1.0@SLOT=2 installed, stale `:2/2=` + fresh `:2/9=` consumers in @world): pubgrub prints the walk's byte-identical upgrade + `[ebuild rR]` consumer reinstall + "The following packages are causing rebuilds:" block, exit 0; the fresh consumer is never rebuilt. Pinned: `bridge_plans_schedule_stale_equals_consumer_reinstalls` (throwaway vdb, PubGrub) and `test_solver_backends_schedule_stale_equals_consumer_reinstalls` (full-stdout equality walk-vs-pubgrub). Deliberate cut, documented: resolvo favors the installed 1.0 on this scenario and reports an empty plan (a pre-existing engine-policy divergence, verified on the pristine tree -- fixing upgrade preference is solver-model work, not notices). H.15 is now complete: failure text (H.15a), merge order (H.15b), blockers + ABI rebuilds (H.15c); slot-conflict/autounmask/circular stay deliberate non-gaps (unreachable for solved engine plans).
+
+**Director `SchedulerPolicy` second backend + live wiring (H.14, next slot).** The scheduler slot's contract (`mrg-director::SchedulerPolicy`: `max_jobs` ceiling + `should_start` per-step gate) has its second algorithm: `UnlimitedPolicy`, real's `max_jobs is True` branch for a bare `--jobs`/`-j` (no concurrency ceiling -- the value the CLI already maps bare `-j` to -- while the `--load-average` gate still holds off additional builds, exactly real `PollScheduler._can_add_job`'s `max_jobs is True or max_jobs > 1` load check). And the seam is now live, not just pinned: `run_build_scheduler` takes `&dyn SchedulerPolicy` instead of its old inline `in_flight < jobs` + load-average gate, with `run_source_merge` selecting `UnlimitedPolicy` for bare `-j` and `LoadAwarePolicy::new(jobs, load_average)` otherwise (a new constructor; fields stay private). Decision-equivalent by construction for the capped policy, and the existing `run_build_scheduler_*` tests (real parallel builds through `run_source_merge`) pass unchanged through the rewired path. Pinned: `scheduler_policy_unlimited_never_caps_but_still_load_gates`. Live-verified (`docs/running-it.md`: the `cargo test -p mrg-director` block, now 14 tests). Remaining H.14 slots -- Fetcher, NewsSet -- stay as assessed (a second fetch transport is un-linkable from a library crate; GLSA is a Part 3 non-goal).
+
+**Section H closure: Fetcher and NewsSet are permanent singles.** With six slots multi-implemented, the last two were re-examined instead of assumed open. Fetcher: real does have a second fetch method (the local-`fsmirror` copy of `/`-rooted `custommirrors["local"]`/`GENTOO_MIRRORS` dirs, `fetch.py:1503`, tried via `shutil.copyfile` before any `FETCHCOMMAND`), but it verifies against Manifest digests resolved outside the `Fetcher` seam -- which deliberately passes only `entry` + `distdir` -- so no second transport can satisfy the verification clause from inside a library crate, and the optimization itself is already out of scope in portuale (`resolve_mirror_candidates` documents the cut). NewsSet: `Display-If-Keyword`/`Display-If-Profile` are branches within the one `Item.isRelevant` model, not separate implementations, and the only genuine second selector (GLSA `@security`) is a Part 3 non-goal. Both verdicts are recorded on the `Fetcher` trait and in `scope-backlog.md`, which now marks section H complete: six of eight slots multi-implemented, two single by design.
+
+**Resume builds see the resolved build flags.** `run_resume` built its `MergeOptions` without `build_env` or `package_env_vars` (the fresh `emerge <atom>` path sets both from the resolved config), so a resumed `src_install` saw `CFLAGS=""` even though the per-entry resolved `USE` already flowed (commit `491bbd0`, `candidate_use_flags_display`). Two lines mirroring the fresh path -- `build_env = build_config_env(config)`, `package_env_vars = config.package_env_vars.clone()` -- and resumed builds get the real `CFLAGS`/`MAKEOPTS` plus per-package `package.env` overrides. Pinned: `test_emerge_resume_builds_see_the_resolved_build_flags` (a failed `schedbad` run seeds the resume list; `--resume --skipfirst` merges `usebuildpkg`, recording the run-wide flags, and `penvbuildpkg`, recording its override; verified to fail without the fix). Live-verified (`docs/running-it.md`). This also corrects a stale backlog claim: `scope-backlog.md`'s D-section gap sentence still listed resume USE as missing, though `491bbd0` had shipped it -- only standalone `ebuild <file> <phase>` (USE and flags) remains open there.
+
+**Standalone phases see config-derived USE.** A standalone `ebuild <file> <phase>` has no resolved graph entry, but real `doebuild_environment()` still exports the package's effective `USE` from the resolved config -- portuale left `USE=""`, so `use()` conditionals in a standalone build always took the off branch. `phase_env_vars` now defaults `USE` to the config-derived value (same standalone resolution as `blocked_installed_packages`: `find_repos` + `resolve_config` + md5-cache `IUSE` + `effective_use_flags`, `""` on any failure), still overridden downstream by merge builds' `extra_env` USE. Two load-bearing gates: `extra_env`-carried USE skips the computation entirely (zero cost, zero behavior change for merge builds), and the `depend` phase keeps `USE=""` (metadata extraction stays config-independent -- config USE there would rewrite `--regen` cache bytes and reload the profile per ebuild). Pinned: `test_ebuild_install_phase_sees_config_derived_use` (standalone `install` of `usebuildpkg` records `on`; verified to fail without the fix). Live-verified (`docs/running-it.md`). What stays open on this axis: standalone *compiler flags* -- phases inherit the calling env only (verified: no inherited `CFLAGS` means empty flags), make.conf `CFLAGS`/`MAKEOPTS` are never loaded at phase depth; and `PORTAGE_RESTRICT`/`PROPERTIES` reduction stays on the empty USE set (its own documented narrowing).
+
+**Standalone phases see resolved compiler flags.** The same single config load behind standalone `USE` now also feeds `pretend::build_config_env`, so `CFLAGS`/`MAKEOPTS`/… reach standalone phases as base vars -- still ordered ahead of merge builds' `extra_env` override, still skipped entirely for merge builds and `depend`, still `""`-tolerant on any resolution failure. Pinned by the extended `test_ebuild_install_phase_sees_config_derived_use` (env-layer flags recorded by the standalone `install`). What stays open on this axis: per-package `package.env` on standalone runs (needs a resolved graph entry to match atoms against) and `PORTAGE_RESTRICT`/`PROPERTIES` reduction on the empty USE set (its own documented narrowing).
+
+**Release-profile `lto`/`codegen-units` (Tier 1).** `rust/Cargo.toml` `[profile.release]` now sets `lto = "thin"` + `codegen-units = 1` alongside the existing `panic = "abort"` (the `rust-skills` `opt-` audit's one broadly-applicable release-build win -- cross-crate inlining across the ~10 workspace crates). Measured here, not on the live tree (`performances-tuning.md` §5's `-puD --getbinpkg` workload needs a real system, which this environment is not): release `portuale` shrinks 15.5 MB → 13.2 MB (-15%), and a 30× fixture-resolve loop is identical within noise (0.27-0.30 s both ways -- fixture runs are startup-dominated, too small to discriminate). Kept for the size win with no regression; the live-tree timing stays a re-run item. No behavior change, so no fixtures/tests on either side -- verified by the suite passing on the rebuilt release binary.
+
+**`--solver=` module-doc refresh (Tier 1, doc-only).** The "v1 cuts" list in `rust/portage-repo/src/solver_bridge.rs` still claimed bridge notices (blockers, `:=` rebuilds, circular deps) come back empty and merge order is raw engine install order -- all stale after the H.15b/H.15c slices wired blockers, ABI rebuilds, and the topological sort. The doc now names what's wired (with slice tags) and what stays empty on purpose (`slot_conflicts` + `autounmask_*`: an engine solution picks one version per CPN, so a successful plan admits no same-slot divergence, and no relaxation loop ran). The stale `graph_result_from_order` comment (plan order *is* merge order) is corrected the same way.
+
+**`--solver=` forced-flag markers (Tier 1).** Bridge entries built their USE display with an empty forced set, so real `pkg_use_display`'s `( )` wraps for profile-forced/masked flags never rendered under `--solver=pubgrub|resolvo`. `graph_result_from_order` now calls the walk's own `forced_or_masked_flags` (same `cat/pkg-ver:slot/sub::repo` candidate spelling `refresh_entry_use_display` uses) and feeds it to both `all_flags` forms. Live-verified: `emerge --pretend -v --solver={pubgrub,resolvo} dev-libs/pkgusemaskforcepkg` prints the walk's byte-identical `USE="(forceflag) (-maskflag) -specflag"`. Pinned: `bridge_use_display_wraps_forced_and_masked_flags` (both engines, synthetic force/mask level) and `test_solver_backends_render_forced_flag_markers` (full-output equality with the walk). Rust-only (the bridges have no Python mirror -- the reference rejects non-`portage` solvers the same as before).
+
+**`--solver=` circular-dep notice (Tier 1).** The bridge rebuilt entry `deps` edges (H.15b) but left `GraphResult::circular_deps` hard-coded empty, so an unbreakable build-time cycle under `--solver=` silently succeeded. `graph_result_from_order` now rebuilds the walk's own hard/soft edge-kind map over those edges (build-time + unsatisfied-by-installed via `best_installed_for_atom`, blockers excluded on both sides) and reports `find_hard_cycles` -- `pretend.rs` renders the fatal `* Error: circular dependencies:` block (exit 1) exactly like the walk. Live-verified: `--solver=pubgrub dev-libs/hardcyclea` prints the walk's byte-identical merge list + circular block. `slot_conflicts` and `autounmask_*` stay empty by construction (see the module-doc slice above). Pinned: `bridge_plan_reports_the_unbreakable_build_time_cycle` (pubgrub reports the `hardcyclea`/`hardcycleb` pair; resolvo still errors in its own `install_order` -- Tier-4 cycle linearization, explicitly out of scope) and `test_solver_pubgrub_reports_the_unbreakable_build_time_cycle` (byte-equality with the walk). Rust-only, same mirror note as above.
+
+**`FEATURES=compress-build-logs` (Tier 1).** Real `prepare_build_dirs.py` suffixes the log paths with `.gz` and `EbuildPhase._open_log` gzip-appends every phase's output (one member per open, readers gunzip on the way back). Ported: `build_log_path`/`ensure_portage_logdir_symlink` take the `.gz` names (both `${T}` and `PORTAGE_LOG_FILE`, both layouts), `ebuild_phases::open_log_file` returns pipe write-ends plus a pump thread gzip-encoding into the file for `.gz` paths (one member per call, like real; silent phases append nothing, like real's deferred header), and the failure tail gunzips before printing. Pure-Rust `flate2` over `miniz_oxide` (already in the lock via brush; zero C linkage, musl story untouched). Two lifetime rules fell out of a real hang found live (a pump guard scoped to the `if let` block joined before the child was spawned -- every guard now outlives its writer holder: `drop(cmd)`/`drop(shell)` before the join, on success and `?` paths alike). Adjacent fix in the same path: the stale-log truncation deleted the `PORTAGE_LOGDIR` symlink instead of truncating through it, stranding logs in `${T}` -- now `set_len(0)` through the link. Live-verified: a `--quiet-build=y` build leaves `${T}/build.log.gz` linking to `<logdir>/dev-libs:packagepkg-1.0:<stamp>.log.gz` whose gunzipped bytes are the phase output, and a failing build's report names `build.log.gz` with the decoded tail. Pinned: `ensure_portage_logdir_symlink_gains_the_gz_suffix_when_compressed`, `tail_of_gunzips_a_compressed_build_log`, `open_log_file_gzip_pump_round_trips`, and `test_emerge_compress_build_logs_gzips_the_build_log` (logdir + T-local + failure paths). Real-execution-only, so no Python mirror.
+
+**elog `mail` / `mail_summary` (Tier 1).** Real `mod_mail` (one MIME mail per package, immediately) and `mod_mail_summary` (one multipart mail for the whole run at exit) plus `portage.mail` composition/delivery, with zero new dependencies: hand-rolled MIME (single text part / `multipart/mixed`, UTF-8 bodies base64-wrapped at 76 columns like Python's `email` with an explicit charset, `From `/`To`/`From`/`Subject`/`Date`, per-package attachments), `${PACKAGE}`/`${HOST}`/`${ACTION}` substitution with real's merged/unmerged/unknown call and real's `${ACTION}`-stays-literal summary quirk, delivery via a sendmail binary (`<sendmail> -f <from> <recipient>`, real `os.popen` shape over argv) or hand-rolled plain SMTP (EHLO extensions, `AUTH LOGIN` then `PLAIN`, dot-stuffing, 60 s timeouts; real's `PortageException` texts preserved verbatim). Deliberate cuts, documented: STARTTLS (no TLS stack -- skip notice, other modules unaffected) and `${HOST}` via `gethostname` (no DNS lookup). The summary accumulator is process-lifetime with a real-atexit `finalize` (armed once, always clears). The old one-line "unsupported" notice is gone; delivery failures print real's own `!!!` lines and never fail the merge. Pinned: `base64_encode_matches_the_standard_vectors`, `parse_mailuri_covers_recipient_only_sendmail_and_smtp`, `create_message_renders_headers_and_base64_body`, `mail_modules_deliver_through_a_sendmail_binary` (argv + MIME + multipart + clear-on-finalize), and in `test_portuale.py`: sendmail delivery parsed with Python's own `email` package, one-multipart-mail summary over two packages, a fake-127.0.0.1 SMTP server asserting the AUTH/envelope/DATA sequence, and the unreachable-host warning (merge still succeeds). The `save`-test that pinned the old notice drops `mail` from its `PORTAGE_ELOG_SYSTEM`. New fixture `dev-libs/elogsecondpkg` (second merge-time elog emitter). Real-execution-only, so no Python mirror (the reference has no elog surface at all).
+
+**`env.d` from `eroot` (Tier 1).** `resolve_config` reads `etc/profile.env` from a new `eroot` parameter (real `EROOT`, the target `ROOT`) instead of `config_root` (real `PORTAGE_CONFIGROOT`) -- threaded from `root` at all three production call sites (`pretend.rs`, `ebuild_merge.rs`, and `ebuild_phases.rs` via `phase_standalone_base_env`), and from `_root()` at both Python call sites. The two coincide everywhere typical (and in every fixture test); they differ only on a split `--config-root`/`--root` setup. Deliberate cut inside the cut, documented: real `_get_env_d` merges *two* files (broot's for `PATH`-class vars, eroot's for everything else); portuale reads eroot's file only -- it has no distinct `BROOT`, and reading the host's `/etc/profile.env` would leak host state into deterministic resolution. Live-verified: with `PORTAGE_CONFIGROOT` on the fixtures but `ROOT` on a bare tree, `dev-libs/envdusepkg` loses `envdusetestflag` (no `newpkg` pull-in, `USE="-envdusetestflag -other"`), byte-identical both languages. Pinned: `envd_use_tokens_follow_eroot_not_config_root` (portage-profile) and `test_envd_use_read_from_eroot_not_config_root` (contract, Rust==Python).
+
+**`package.env` / `env.d` `${VAR}` expansion (Tier 1).** Real `_grab_pkg_env` copies the global expand map once per package and reads each env file with `getconfig(..., expand=that map)` -- which feeds every assignment back, so later lines (and later files of one entry) see earlier ones. Portuale read env files raw. New `expand_package_env_files` (Rust) / `_expand_package_env_files` (Python): one map copy per `package.env` entry, ordered substitution with chaining, `USE=` tokens split after substitution, per-package values never flowing back to the globals. For `env.d` itself the investigation closed the other way: real reads `profile.env` with `expand=False` (literal), which portuale's `read_envd_use_tokens` already matches, and the scalar seeding order (env.d first into the map) already matches -- verified, documented, unchanged. Live-verified: new fixture `dev-libs/penvexppkg` (`penv-expand`: `PENVSCOPE` chained within the file, `${ARCH}` from the profile map) resolves `USE="amd64-penvexp penvexp-penvexpscope -penvexpother"` with the `newpkg` pull-in, byte-identical both languages; `package.env` gains the `dev-libs/penvexppkg penv-expand` line. Pinned: `package_env_expands_dollar_vars_against_the_global_map_with_chaining` (global + within-file + cross-file + scalar half), the `penvexppkg` CASES entry, and `test_package_env_env_file_use_expands_dollar_vars`.
+
+**`depend`-phase `RESTRICT`/`PROPERTIES` reduction (Tier 1).** `phase_env_vars` reduced on the empty set for every phase, including `depend` -- but real `doebuild(mydo="depend")` runs with the `setcpv` config `USE`, and `ebuild.sh`'s own `contains_word … "${PORTAGE_RESTRICT}"` checks (notably the `strip`/`nostrip` `DEBUGBUILD` gate, which runs before the `depend` branch) see the configured tokens. `restrict_and_properties` now takes the reduction set: empty everywhere except `depend`, which reduces on `depend_use_set` (one `resolve_config` load, `Config::use_flags`, empty on any failure -- the pre-existing tolerance). Atom-matched `package.use`/`package.env` for the depend target stay out (matching needs the target identity the depend path deliberately doesn't resolve). No fixture isolates this (the only in-`depend` consumer is `DEBUGBUILD`, invisible downstream -- and a fixture that "passes" without isolating is worse than none), so this slice is unit-pinned only: `depend_phase_reduces_restrict_on_the_config_use_set` (conditional `RESTRICT` drops on empty, keeps `strip` on the fixture config's `confflag`), with the `phase_isolation` call site and both old tests held on the empty set. Regen/depend suites green.
+
+**Standalone `package.env` (Tier 1).** `ebuild <file> <phase>` applied no per-package `package.env`: the merge path needed a resolved graph entry to atom-match. The `USE=` half already flowed (`candidate_use_flags_display` → `effective_use_flags` atom-matches `package_env_use` itself); the gap was only the build-vars half. New shared matcher `match_package_env_vars` (same `cat/pkg-ver:slot/sub` string, same `match_from_list` loop, same `BUILD_VARS` narrowing as the merge path -- which now calls it too): the standalone path builds that string from the ebuild's own md5-cache identity (`SLOT` field, `0` fallback mirroring the entry fallbacks) and layers matches after the base flags. Still skipped for `depend` (empty base deliberate) and for merge builds (`extra_env` USE gate). Live-verified: standalone `ebuild …/penvbuildpkg-1.0.ebuild merge` writes `CFLAGS=-Os -march=fixturepkgenv` / `MAKEOPTS=-j7` into the merged flags file. Pinned: `standalone_phase_env_layers_matching_package_env_build_vars` (override present, unmapped package absent, `depend` absent) and `test_standalone_ebuild_merge_applies_package_env_build_vars` (Rust e2e; real-execution, so no Python mirror).
+
+**Resumed binaries resolve from local `$PKGDIR` (Tier 1).** `merge_one_binary_entry` re-hit the binhost whenever the local file was missing -- including for resumed entries, which real replays against its *local* bintree only (matched by the recorded `mtimedb["resume"]["binpkgs"]` build metadata; a never-downloaded binary isn't resumable -- real `PackageNotFound`). The binhost fallback is now gated on `entry.remote_binary` (set by the resolver for binhost-sourced candidates; resumed entries always land with `false`): otherwise a missing file is `no binpkg file under <pkgdir>` (the mrg/remote path's own message shape), never a refetch. The `resume_entry` doc comment already claimed local-only -- the code now matches it. Pinned: `merge_one_binary_entry_never_refetches_for_a_non_remote_entry` (a serving `file://` binhost proves a fetch *would* have succeeded pre-fix -- verified the test fails with the gate forced open -- post-fix the pkgdir stays empty and the error is the local-only one). Real-execution-only, so no Python mirror.
+
+**`RESTRICT=primaryuri` / fetch order (Tier 1).** `fetch_src_uri` tried the most-specific candidate first (expansions/literal, `GENTOO_MIRRORS` last) -- real `fetch.py:1112-1192` leads with the local flat-layout mirrors, then public `GENTOO_MIRRORS`, then inline `mirror://` expansions, then literals (appended, or prepended with the third-party expansions under `RESTRICT=primaryuri`, including real's own double listing of the third-party group). New pure `assemble_candidates` builds exactly that per-entry order (exact for single-URI files; a documented per-entry approximation for multi-URI ones), with `custommirrors["local"]` non-`/` entries as flat-layout URLs (always tried, like real's `location_lists`), the `mirror+` public re-permit, and the `RESTRICT=fetch`/`force-mirror` literal bars (the latter is new too: `FEATURES=force-mirror` skips even re-permitted literals). `FetchOptions` gains `restrict_primaryuri` (md5 `RESTRICT` via `ebuild_phases::fetch_sources`) and `force_mirror` (`FEATURES` env shortcut). Still cut, documented: third-party shuffle (determinism), live `layout.conf` negotiation (flat only), on-filesystem `fsmirrors` copies. Pinned: three `assemble_candidates_*` order/barring tests, `fetch_src_uri_tries_candidates_in_assembled_order` (closed-port failure text proves the tried order end to end, both `primaryuri` positions), with all 13 pre-existing fetch tests green. Real-execution-only, so no Python mirror. The `portage-fetch` module doc's ordering cut is rewritten as shipped-with-subcuts.
+
+**Slot-conflict `--color y` marker alignment (Tier 1, decided).** Real `highlight_violations` wraps violated operator/version/slot/USE-token spans in red and then marks the *pre-color* indices, so its `^` line drifts once ANSI codes lengthen the line -- a genuine upstream bug, and real's own red varies by terminal colormap, so byte-parity with the drift is unachievable anyway. Decision, implemented on both sides: wrap the same spans (`colorize_marked_spans`, one wrap per char via a new `wrap_codes` accessor so caret positions are exact by construction) but mark the *displayed* string, so color and carets agree (strictly more informative than both real and the old uncolored rendering; zero impact with color off, where the whole existing suite pins the plain output). Live-verified: `--color=y dev-libs/slotconfgroup` colors `>=`/`2.0` (and `[y]`/`[x]` on `slotusegroup`), carets under exactly those visible characters, byte-identical both languages. Pinned: the `--color=y` CASES entry, `test_slot_conflict_color_y_colours_violated_spans_with_aligned_markers` (exact colored bytes + caret-to-visible mapping), and `slot_conflict_colorized_spans_keep_markers_aligned` (identity when off, `>=2.0` spelled back when on). The renderer and module docs no longer call colorization a cut -- only the drift itself stays a deliberate divergence.
+
+**Bound-`:=` atom validation (Tier 1, investigated -- premise contradicted, no code change).** The item claimed real masks a bound `:=` atom (`:slot/sub=`) written in an ebuild ("improper context for slot-operator built atom syntax") and asked for the validation in `portage-dep`. Grounded against four independent real sources -- the vendored `3rdparty/portage` checkout, the system site-packages portage (3.0.82.2), PyPI portage 3.0.82.2, and upstream `gentoo/portage` main -- none contains that message or any equivalent masking: every one parses `dev-libs/foo:0/0=` successfully (`slot_operator_built == True`) and matches it structurally, exactly like portuale's `portage-dep` already does. The cited behavior does not exist to port; implementing the "validation" would have meant fabricating a divergence from real, not closing one. No fixtures, no tests, no code -- and the `scope-backlog.md` §A entry carrying the claim is corrected to record this finding (which also lifts its "rules out ebuild-carried `:=` fixtures" corollary).
+
+**Brush re-pin to upstream main (Tier 1).** The thin `vivo75/brush` fork re-merged `reubeno/brush` `main` (`a250b84e` → `812336dd`, ~13 upstream commits incl. builtins/regex fixes and for-loop perf) and pushed; portuale's pin moved `5af3f6c1` → `67c301a7` (`Cargo.toml` + `Cargo.lock`, `brush-pin.md`, `3rdparty/repos.toml`). The three staged `brush-pr/` fixes are cherry-picked on top as before (verified still unmerged upstream, so the fork stays; per-bug branches untouched). One upstream API break on the way: `Shell::invoke_function` now returns `ExecutionResult` instead of `u8` (mapped via `result.exit_code`, the shape the misc-functions brush path already used). Verified per the re-pin checklist: brush's own `brush-compat-tests` 2015 succeeded / 0 failed, `cargo test --release -p portuale` 442/0. The three upstream PRs themselves stay unopened (needs the user's GitHub auth -- Tier-1 item still open).
+
+**`mrg-director`: wire the six scaffolded slots into real paths (Tier 2, H).** The director's eight slots were contracts with conformance markers: only `Resolver` (via `--solver=`) and `SchedulerPolicy` (via `run_build_scheduler`) carried production traffic, while `PackagesDb`, `RepoCache`, `Fetcher`, `MergeEngine`, `BinpkgIndex`, and `NewsSet` were pinned shapes nothing called. Six of the eight are now live (the remaining two, `RepoCache`/`BinpkgIndex`, were already real delegations to `portage_repo` reads and gain director-level entry points here; their resolve-path call sites stay direct since the trait lives above the crate that resolves -- a documented boundary, not a gap):
+- **`PackagesDb` is real.** New `portage_repo::{installed_contents_files, installed_reverse_dependents}` (vdb `CONTENTS` owned-path read with one-leading-slash-stripped `${ROOT}`-relative convention, and a vdb `DEPEND`/`RDEPEND`/`BDEPEND`/`PDEPEND`-flattened reverse scan matched via `match_from_list` against the consumer's `cat/pkg-ver:slot/sub`, blockers excluded) back `VdbReader`'s three queries (`VdbReader::new`; versions sorted highest-first via `vercmp`, real `dbapi.cp_list` order). Pinned: `packages_db_vdb_reader_reads_a_real_vdb_tree` (temp vdb: sorted versions, CONTENTS paths, one recomputed dependent, unknown reads empty).
+- **`Fetcher` is real.** The `wget` transport moves into `portage_fetch::download_via_wget` (byte-identical `FETCHCOMMAND`/`RESUMECOMMAND`); `portuale::fetch::{wget_fetch, wget_resume}` delegate to it, and `WgetFetcher::fetch` runs it (already-materialized `distdir/<filename>` short-circuits like real `_check_distfile`; Manifest digest verification stays at the `fetch_src_uri` call site, which holds the `Manifest` entry -- the seam's documented narrowing). Pinned: `fetcher_returns_a_manifested_path` (unfetchable host errors with no partial left; pre-materialized file returns without network).
+- **`MergeEngine` executes.** New binary-crate `merge_engines::{SourceEngine, BinaryEngine}` implement the seam: `merge_unit_for_entry` derives the unit from the resolved entry (version out of the outcome, kind out of `source`, slot/sub-slot + resolved USE for the build-phase env, `remote_binary`/`build_id` for binpkg location; `MergeUnit` gains those five fields plus `source()`/`binary()` constructors), and `execute` rebuilds the entry (`New { version }` -- the merge functions only ever read the version arm -- plus the carried fields; `-rN` revisions round-trip) and runs the real merge. `run_merge_plan` dispatches every unit through its engine (real `MergeListItem._start` kind routing) and `run_source_merge`'s serial loop merges through `SourceEngine::merge_entry`; the `-jN` scheduler keeps its build-then-merge split (DAG machinery, not per-unit execution). Pinned: `merge_unit_for_entry_carries_everything_the_merge_reads` (upgrade `to`, installed/unresolvable none, remote+build-id, `-r1` round-trip) and `engines_refuse_the_other_kind_and_a_bad_cpv`; the existing `run_merge_plan_*` end-to-end tests pass unchanged through the rewired path.
+- **`NewsSelector` evaluates.** New binary-crate `pretend.rs::FilesystemNews` (one per repo: `repo_location`/`repo_name`/`root`) implements the seam over the existing `news_item_valid`/`news_item_relevant`; `run_check_news` reads each repo's `NewsEvaluation` (orig + re-evaluated `unread`/`skip` sets) through it and keeps only the state-file write-back itself -- byte-identical behavior, trait-carried reads. Pinned: `filesystem_news_selector_evaluates_one_repo_through_the_seam` (relevant in/out of `unread`+`skip`, missing news dir is `None`/empty).
+- **`Director` delegates.** Every slot gains a one-line delegation method (`installed_versions`/`contents_files`/`reverse_dependents`, `repo_metadata`/`repo_category`, `fetch`, `execute`, `binpkg_candidates`/`binpkg_metadata`, `unread_news`, `should_start`/`max_jobs`) so later paths call through the director instead of past it. Pinned: `director_delegates_every_stage_through_its_slots` (every method answers from its held component, including a network-free director `fetch`).
+`cargo test --release -p mrg-director`: 16 passed (was 14); clippy zero-warn; fmt clean. Rust-only throughout (the `mrg` hard invariant -- no Python mirror, no fixtures).
+
+**`_complete_graph` installed nomerge nodes: soft pins + residual installed-instance conflicts (Tier 2, A).** Real `_complete_graph` re-seeds from `@world`/`@selected`/`@system` and pulls every reached installed package in as a nomerge node; its end-of-walk unsatisfied-dep loop (`depgraph.py:8770+`) adds an installed satisfier of a broken deep dependency to the graph so the run reports it as a slot collision against the merged version. Portuale's atoms-half (`reverse_dependency_constraints`) enforced those pins unconditionally -- and probing real 3.0.82.2 live turned up three shapes where that is wrong, all with an installed `keeper-1.0` recording `=paired-1.0` outside every target closure: an explicit `=paired-2.0` request (real: `U 2.0` + conflict block pairing merge-2.0 against installed-1.0 with keeper as parent, exit 1; portuale: fatal "no ebuilds"), a `>=paired-2.0` dependency via `needer` (real: `N needer` + `U 2.0` + block; portuale: needer alone with `!!! no visible ebuild`), and the needer/othermod triangle (real: all three merge + block with othermod *and* keeper parents under installed-1.0; portuale: paired missing entirely). Two changes, both languages in lockstep: (1) pins jointly unsatisfiable with the pass's hard puller atoms (`slot_want`, top-level arguments included) are *dropped* instead of enforced -- checked per upgraded slot over the unfiltered candidate list, so a pin on one slot never vetoes another and anything unparseable falls back to enforcing; satisfiable pins (weston/`--update paired`) enforce exactly as before; (2) dropped pins accumulate and, once the graph settles, build residual conflict records pairing the merge instance (hard pullers as parents, `(Argument)` shown exactly when the other side is installed, per real's rule) against the installed instance (highest installed version matching the pin, `installed in '<root>'` + vdb repo/`USE`, hard pullers matching it plus every dropped consumer pin). The existing classify/group/marker/`need_rebuild` pipeline renders both sides unchanged; `--json` gains `"installed"` flags (structurally asserted, no pinned bytes change). Reported conflicts stay informational, exit 0, by the standing convention (real exits 1). New fixtures `dev-libs/paired` (1.0 installed, 2.0 visible), `keeper`/`needer`/`othermod` + vdb; four CASES entries and four pinned-output tests (three residual shapes + the still-holding `--update` case); Rust unit test on the record shape. Deliberate edges, documented: `--backtrack=0` skips the feed loop entirely (real still completes its graph -- the satisfiable-pin enforcement gap there predates this slice and needs within-pass enforcement, its own slice); reinstall-with-slot-change stays outside the scan gate; multi-slot soft corners keep today's enforce behavior. No Python-mirror gap: resolver behavior ships on both sides, byte-identical, verified empirically on the probe shapes before fixture work began.
+
+**`_FrontierDigraph` perf layer (Tier 2).** Real `_emerge/_serialize_frontier.py` (2026, vendored): the `select_nodes` loop asked `digraph.leaf_nodes()` for the leaves under an `ignore_priority` filter on every ladder rung of every iteration -- one O(V) scan per query -- so real maintains the leaf frontier incrementally instead (per-node, per-filter surviving-child counts; per-filter ready heaps with lazy deletion; order-indices for heap order). Ported as `merge_order.rs::SerializeFrontier`, wired into the selection loop's hot queries (main-ladder leaf scans, asap `is_leaf` checks, the root fallback, `find_smallest_cycle`'s mergeable set -- the same sites real routes through `frontier_leaves`/`is_leaf`), with `PORTAGE_SERIALIZE_FRONTIER_DISABLE` falling back to the plain scans (real's own escape hatch, and the A/B switch below). Two deliberate narrowings, both forced by portuale's model: nodes are dense `usize` (counts/index maps are `Vec`s) and nothing is ever re-added mid-loop (no uninstall/blocker nodes in a `--pretend` graph), so there is no fresh-index path; `add_edge` is ported for surface parity and pinned by unit test only. No behaviour change by construction and by proof: leaf sets, order, and every downstream decision are identical with the frontier on or off -- pinned by equivalence tests (scripted diamond plus 50 deterministic-random graphs drained in random order, comparing every level after every mutation; disabled-path and `add_edge` units) and by the whole contract suite passing byte-identical on both paths. Measured here (best-of-5 `select_nodes` on synthetic 1500-node graphs, same binary both ways): deep chains win -- 1.23ms vs 4.03ms at 1500x1 (~3.3x), 1.47ms vs 2.03ms at 375x4 (~1.4x) -- while wide/shallow fan-out loses on overhead (0.99ms vs 0.46ms mixed-1500, ~110us vs ~12us at n=200): the build (edge masks plus 10 heap seedings, ~0.5ms at 1500) dominates when the loop drains in few batch iterations. Rust scans are ~50x cheaper than Python's while heap/HashMap constants are only ~5-10x cheaper, so the crossover sits higher than upstream's -- but absolute deltas are sub-millisecond worst-measured, noise inside any real resolve (file I/O dominates), fixture-scale impact nil, and the always-on default matches upstream. Rust-only, no Python mirror (perf plumbing with identical output; the reference keeps its own merge-order implementation).
+
+**Masked-dependency disclosure on backtracking (Tier 2).** Real `_show_unsatisfied_dep` reports a *dependency* atom matching masked-only ebuilds with the "All ebuilds that could satisfy … have been masked" block plus its `(dependency required by …)` chain (verified live against real 3.0.82.2 on three probe shapes: a `package.mask`'d dep, a `~amd64`-only dep, and a chain through an installed intermediate rendering `[installed]` with a `__unknown__` repo -- plus the USE-dep shape, which takes real's separate autounmask-use path instead); portuale printed the bare `!!! no visible ebuild for dependency` line for all of them (the L0 `gcr[gtk]` / `xwayland[libei]` residue of finding S's top-level fix). Both languages in lockstep: the shared `masked_candidates_for_atom` core (factored out of `all_masked_report`, whose top-level output is byte-unchanged) feeds a pass-local `masked_deps` report list (atom in unevaluated-as-queued form, masked list, chain walked post-loop out of the final entries: merge parents as `ebuild`/`binary`, installed ones via the vdb repo, tops as `argument`, cycles guarded, ascent stopping at arg-targeted nodes), rendered in place of the bare line with the docs footer. USE-mismatch-only deps still take the autounmask-use path (the core returns None when anything is visible, like the top-level rule); truly-missing deps keep the bare line. New fixtures `dev-libs/maskeddep` (package.mask'd) + `maskneedpkg`, `kwmaskeddep` (`~amd64`) + `kwneedpkg`; two CASES entries and two pinned-output tests; three existing pins flipped bare-to-block (license/autounmask-keyword/multimask), each verified correct-per-real; two Rust unit tests (core shapes + end-to-end report chain). Deliberate edges, documented: no merge-list abandon and no exit-1 (real drops the whole list and exits 1 -- the same gated-abort gap as #19, parked there); no `for <root>` xinfo suffix (the top-level block omits it too); no affecting-USE `pkg[flag]` chain suffix; `--root-deps` running-root NVC entries keep the bare line.
+
+**Elementary-cycle enumeration + cycle `--tree` re-display (Tier 2).** Real `circular_dependency_handler` runs `digraph.get_cycles` (per-node shortest child→node paths, ties kept -- rotations of one ring count separately) over the stuck remainder and, past three records, appends the "dependency graph contains a lot of cycles" trailer (with suggestions only); on the way out it re-displays the remainder via `display(handler.merge_list)` with `--tree` forced. Ported dual-language against live 3.0.82.2 probes (2-cycle, triangle, USE-square, square-plus-downstream-outsider): `merge_order.rs::elementary_cycles` (+`_reduced_merge_order`, the leaf-drain) over the scheduling graph with the `medium_soft` rung (rung indices verified aligned against real's `DepPrioritySatisfiedRange`), also mirrored in the reference over its own digraph; the driver records `large_cycle_count` (> 3) and the `cycle_display` member list only when a hard cycle was already reported (zero-cost otherwise), and the renderer prints the re-display as flat merge lines between the merge list and the error block plus the trailer on the suggestions branch. New fixture `dev-libs/cyc4a`–`cyc4d` (four-ring with a `+x`-gated edge: four rotations trip the trailer, `-x` suggested, exit 1, both sides byte-identical including the re-display); triangle/two-ring fixtures verified trailer-free. Deliberate cuts, all documented: no tree nesting, `[nomerge]` marking, or node duplication (portuale's tree model dedups by design); no partial flat list, cumulative counters, or backtrack-masking (needs #19's abandon path -- real emits one member flat and masks the rest, portuale merges all and reports); re-display members are merge-bound only; `--json` carries no cycle fields (as before). The existing hardcyclea pin now includes the re-display; the `--solver=` bridge computes the same fields (pubgrub cycle output covered).
+
+**`||` group resolution: the `unsat_use_*` fine bins, wired (2026-09-11).** The 2026-09-07 slice above shipped the `AltPreference` enum with `unsat_use_in_graph`/`unsat_use_installed`/`unsat_use_non_installed` as declared, selectable variants -- but its `portage-repo` probe only ever returned `Installed`/`Available`/`Unsatisfiable`, so the `unsat_use_*` bins were dead code: any `||` alternative that was `all_available` (a candidate matching its `[...]`-stripped atom) but whose `[use]` deps NO candidate satisfied ranked `Unsatisfiable`, and the group fell back to the literal `||` (enqueuing every alternative, `!!! no visible ebuild` for each genuinely-missing one). That is real `dep_zapdeps`'s `other`-demotion path misapplied: real (`lib/portage/dep/dep_check.py`) keeps such an alternative *selectable* on its first (unmasked) pass unless bug-515584's gate fails -- a `[use]` flag that would have to change sitting in the candidate's own `use.mask` (enabled-flag) or `use.force`-without-`use.mask` (disabled-flag) demotes the whole choice to `other` (soft 497-523, 705). Wired both languages to real:
+- `portage-dep::without_use` -- real `Atom.without_use`, the string with its trailing `[...]` block spliced off (dep_check.py soft 469 uses it for `mydbapi.match_pkgs(atom.without_use)`, the `all_available` probe).
+- `portage-repo::atom_all_use_unmasked` -- real `violated_conditionals(pkg_use_enabled(avail_pkg), avail_pkg.iuse.is_valid_flag)`, per-single-use-dep (default-marker/missing-IUSE semantics via `portage_dep::use_deps_satisfied`, exactly like whole-atom matching), against the best candidate from `highest_available_candidate_ignoring_use` (real `avail_pkg = match_pkgs(atom.without_use)[-1]`), checking the violated enabled/disabled flags against the candidate's own `resolved_use_mask_or_force` mask/force sets. Python mirror `_atom_all_use_unmasked` / `_highest_available_candidate_ignoring_use` evaluate the same via a synthetic single-token real `Atom` (so `_use_deps_satisfied`'s marker semantics are reused exactly), and both `_disj_pref` closures now split `all_available` (stripped probe) from `all_use_satisfied` (full probe) and gate the three `unsat_use_*` bins on the unmask oracle -- same ranks as the Rust `AltPreference` (`unsat_use_non_installed` 5 < `installed` 6 < `in_graph` 7 < `available` 8 < `installed` 9), the mirror's `_resolve_disjunctions` early-breaks on `>= 9`.
+- Live-verified, new fixture `dev-libs/unsatuseor` (`|| ( dev-libs/unsatusealt[unsatuseorflag] dev-libs/doesnotexist-unsatuseor )`): with default `--autounmask-use` the group resolves to `unsatusealt` (merges `USE="unsatuseorflag"` + the USE-changes block, exit 1) and the dead alternative is never enqueued -- pre-fix stderr carried `!!! no visible ebuild for dependency "dev-libs/doesnotexist-unsatuseor"`. With `--autounmask-use=n` the group still resolves to `unsatusealt`, which now reports a single `!!! no visible ebuild for dependency "dev-libs/unsatusealt"` -- pre-fix there were TWO (`unsatusealt` and `doesnotexist-unsatuseor`), the literal-fallback fingerprint. Rust == Python byte-for-byte both ways, plus the `=dev-libs/slotusetarget-2.0[x]` mask side (bug-515584 demotes to `other`, `[x]` default-enabled 1.0 stays selectable). Two CASES entries + two pinned tests; Rust unit tests `atom_all_use_unmasked_{true/false}` and `highest_available_candidate_ignoring_use_picks_the_use_unsatisfiable_ebuild`; `without_use` unit tests in portage-dep. The deliberate never-selectable line stays exactly where the earlier slice put it -- `other_*`/`Unsatisfiable` still fall back to the literal `||` (real's masked second pass is still out of scope).
+
+**`||` group resolution: one shared probe, F1-F5 review fixes (2026-09-11).** The 2026-09-11 slice above wired the `unsat_use_*` fine bins into `resolve_pretend_graph`'s main New/Upgrade/Reinstall `||` closure, but its own review turned up five follow-on findings, all fixed here in one shared helper (`portage-repo::disjunction_preference` / `emerge_pretend_reference._disjunction_preference`, both languages byte-identical):
+- **F1/F2 — the two `||` probe closures were never actually one.** `enqueue_dependencies` (the `--deep` recursion into an AlreadyInstalled package) had kept its own, hand-maintained copy of the pre-`unsat_use_*` closure, and never got the fine-bin fix at all -- worse, it checked `all_available` against the atom's own `[use]` block still attached (never stripping to `.without_use`), so every `||` group with a USE-unsatisfiable alternative it touched ranked `Unsatisfiable` and fell back to the literal `||`, enqueuing every alternative including genuinely dead ones. Reproduced live before the fix: `dev-libs/unsatuseinst` (installed, RDEPENDs the same `unsatuseor` `||` group) reached only via `dev-libs/unsatuseinstconsumer`'s `-D` walk --
+  ```
+  PORTAGE_CONFIGROOT=$PWD/fixtures ROOT=$PWD/fixtures PORTAGE_RUNNING_ROOT=$PWD/fixtures DISTDIR=$PWD/fixtures/distfiles \
+    rust/target/release/portuale emerge --pretend -D dev-libs/unsatuseinstconsumer
+  ```
+  pre-fix Rust stderr carried `!!! no visible ebuild for dependency "dev-libs/doesnotexist-unsatuseor"` (the dead alternative) where Python had none; with `--autounmask-use=n` Rust printed the no-visible-ebuild line twice where Python printed it once (the literal-fallback fingerprint, same shape as the original `unsatuseor` bug). Fixed by extracting one shared function both call sites forward to -- a single-line closure at each -- so a future fix to the classification can no longer miss one of the two.
+- **F3 — halved candidate-listing work per atom.** Real's per-atom loop probes availability once and short-circuits (`dep_check.py` soft 469 `if not avail_pkg: ... break`); for an atom with no `[use]` block (the overwhelming majority of dependency atoms in any real tree), `atom.without_use` and `atom` are the same string, so the old two-separate-`.all()`-passes shape called `atom_currently_satisfiable` on byte-identical inputs twice. The shared helper's single per-atom loop computes availability once and reuses it for `all_use_satisfied` whenever there is no `[use]` block to strip.
+- **F4 — `unsat_use_installed` now keys on the targeted SLOT, not just the cp.** Real's `unsat_use_installed` choice bin requires `all_installed_slots` (`dep_check.py` soft 599-607): every `slot_map` entry (`cat/pkg:<slot of the best USE-ignoring candidate>`) must match the vdb, not merely `Atom(atom.cp)`. New `atom_installed_in_slot_of`/`_atom_installed_in_slot_of` (both languages) checks the *slot* the best USE-ignoring candidate would pull in against `installed_candidates`' own slots. Fixture `dev-libs/unsatuseslot`: `unsatuseslotalt` is installed in slot 1 only but the `||` alternative explicitly targets `:2` (visible, flag off) -- cp-installed but not slot-installed, so it now correctly demotes to `unsat_use_non_installed` (bin 4) instead of tying for `unsat_use_installed` (bin 3) with `unsatuseslotother` (installed AND visible in its own slot 0) and winning on the first-listed tiebreak. Verified live before/after:
+  ```
+  PORTAGE_CONFIGROOT=$PWD/fixtures ROOT=$PWD/fixtures PORTAGE_RUNNING_ROOT=$PWD/fixtures DISTDIR=$PWD/fixtures/distfiles \
+    rust/target/release/portuale emerge --pretend dev-libs/unsatuseslot
+  ```
+  now merges `unsatuseslotother` (not `unsatuseslotalt`), Rust == Python.
+- **F5 — the bug-515584 probe now honours the `'backtrack` loop's `runtime_pkg_mask`.** Real's `mydbapi` in `dep_zapdeps` is `_dep_check_composite_db`, which applies backtracking's accumulated per-`cat/pkg` negatives/positives the same way `atom_currently_satisfiable` already did; `highest_available_candidate_ignoring_use`/`_highest_available_candidate_ignoring_use` gained the same `extra_constraints` parameter and filter, threaded through from `atom_all_use_unmasked` and the new `atom_installed_in_slot_of`. Rust unit test `highest_available_candidate_ignoring_use_honours_extra_constraints`: excluding `dev-libs/slotusetarget-2.0` via a negative constraint falls back to the highest *unmasked* version, 1.0.
+- **F8 — three new contract fixtures close the gaps the fine bins never had dedicated coverage for**: the `--deep` divergence above (`unsatuseinstconsumer`, closes F1); the real-source rule "`unsat_use_*` must come after `preferred_non_installed`, for correct ordering in cases like `|| ( foo[a] foo[b] )`" (`dev-libs/unsatuseorder`, target `IUSE="unsatuseorflag +unsatuseotherflag"` -- the on-by-default alternative wins outright, exit 0, no autounmask change at all); and the bug-515584 masked-demotion path at the contract level, not just a Rust-only unit test (`dev-libs/unsatusemasked`, `unsatusemaskedflag` use.mask'd in `profiles/package.use.mask` -- alternative 1 demotes to `other` and is never selected, alternative 2 wins with an autounmask flip proposed). All three: two CASES entries plus a pinned-output test each, Rust == Python byte-for-byte.
+
+Also fixed as part of the same review: F6, the `atom_cp_installed`/`_atom_cp_installed` doc comment's stale claim that the caller's `atom_currently_satisfiable` gate already rejects a USE-unsatisfiable alternative before this predicate runs (false since the 2026-09-11 `unsat_use_*` wiring, which consults it for exactly those atoms) -- corrected to point at `disjunction_preference`/`_disjunction_preference` combining the cp-level and USE-level facts itself. `docs/backlog-tasks.md` #22 and `docs/scope-backlog.md` Part 4 updated to match (F7); #20 gained one sentence noting the still-open, narrower `--autounmask-use=n` USE-dep-shape gap (real's "there are no ebuilds built with USE flags to satisfy …" block + exit 1, portuale's bare no-visible-ebuild line + exit 0) so it isn't lost. Full verification: `cargo fmt --check`, `cargo clippy --release --all-targets` zero warnings, `cargo test --release` (whole workspace) and `python3 -m pytest tests -q` (whole suite) green. `TEST/run/l0-resolver.sh` re-run as a follow-up once the `localhost/test-portuale:latest` image was rebuilt (see `docs/history/real-world-testing.md`'s own container-setup notes): 96/120 clean, parity 0.800 -- identical to the pre-existing documented baseline, and every one of the 24 non-clean probes matches an already-known, already-documented gap (cluster I merge-order timing, the parked circular-dep-backtracking truncation, the masked-dependency-disclosure-during-backtracking residue, the `samba[client]` cluster A truncation, the `MULTI_emptytree-system` portage-version-pin artifact) -- none touch `||`/`unsat_use_*` resolution. Building the container surfaced two genuine, unrelated `TEST/create-container.bash` bugs (fixed separately, not part of this slice): a swapped stage3 download URL path (`<stageid>/<ts>-<ts>` instead of real's `<ts>/<stageid>-<ts>`, compounded by `wget` not saving to the path the cache-check/`tar -x` steps actually looked at) and a `repos.conf/porttest.conf` missing `sync-uri` (real portage warns on every invocation once `sync-type` is set without it, which -- before the fix -- broke *every* L0 probe's "clean" status via a spurious real-only stderr line, independent of any resolver behavior).
+
+**`||` group resolution: slice 2, in-bin upgrade-preference ordering (2026-09-11).** Backlog #22's design brief (`docs/022-agent-task-22-zapdeps.fable.md` §4, slice 2) flags that real `dep_zapdeps` never just takes the first-listed alternative of the best-ranked bin: `resolve_disjunctions`'s old early-`break`-on-`Installed` made a real tie between two `Installed`-ranked alternatives structurally impossible to see, let alone resolve the way real does. Real's own comment nails the motivating case: "this helps for deps such as `|| ( foo:1 foo:2 )`, where we want to prefer the atom which matches the higher version rather than the atom furthest to the left" (`dep_check.py` soft 738-741).
+- `portage-use-reduce::use_reduce_flat_disjunctive` gained a `tie_break: &mut dyn FnMut(&[Vec<String>]) -> usize` parameter (Python: `tie_break=None`, defaulting to "always index 0"). `resolve_disjunctions` no longer breaks early: it ranks every alternative, collects every one tied at the best selectable rank (in original order), and -- only when there are 2+ -- hands their own flattened atom lists to `tie_break`, which returns the winning original index. A single tied alternative never calls it at all (crate stays atom-agnostic per design rule 2: the tie-break logic itself, `vercmp`, `cp` parsing, all live in the caller). The two `--root-deps` call sites (`root_deps_satisfied_atoms`/`unsatisfied_root_deps_atoms`), which only ever need Available-vs-Unsatisfiable, pass a trivial `&mut |_| 0` -- an exact no-op, proven by 4 new/renamed unit tests (`disjunctive_defers_a_tie_to_tie_break_and_keeps_first_when_it_says_zero`, `disjunctive_ties_call_tie_break_with_every_tied_alternatives_own_flat_atoms`, `disjunctive_never_calls_tie_break_for_a_single_alternative_at_the_best_rank`).
+- `portage-repo::promote_tied_alternative` / `_promote_tied_alternative` (Python) port real's exact remove+insert bubbling algorithm (`dep_check.py` soft 743-802) over an `id`-tagged list -- not simplified to a stable sort, since the promotion isn't transitive: for each alternative but the first (by original identity), scan the current list from the front and promote it in front of the first alternative it beats, stopping the instant the scan would reach its own position. Two promotion rules, checked in real's own order: (1) `all_installed_slots` (every atom's chosen candidate's slot is itself installed -- reusing `atom_cp_installed`/`atom_installed_in_slot_of` from the 2026-09-11 F4 fix) beats a same-cp alternative that isn't, unconditionally overriding the version-upgrade rule below it; (2) an upgrade via `vercmp` over the alternative's own `cp_map` (built from `highest_available_candidate_ignoring_use`, one entry per distinct `cp` among the alternative's atoms, keeping the higher version when an alternative names the same cp twice) beats a downgrade, and `all_in_graph` beats not-in-graph unless that would sacrifice an upgrade.
+- Two of real's per-choice facts are deliberate, documented cuts, not silently dropped: `minimize_slots` (only applies after `_overlap_dnf`'s DNF rewrite, which portuale's dep-tree model doesn't do -- skipped per the brief's own "cut it and document" fallback) and `want_update` (`graph_interface.want_update_pkg`, needing the `--update`/`--newuse` "wanted" set threaded to this call depth -- pinned to real's own default `false`, which only ever widens when the `all_installed_slots` rule fires, never picks a different winner for a fixture where `want_update` is genuinely false). The `cp_map` construction is also a documented, narrower simplification vs real's own bug-600346 internal-consistency re-check (dep_check.py soft 552-568): it always keeps the higher version for a repeated cp within one alternative, without re-verifying every atom still matches it -- differs from real only when a single alternative's atoms target the identical package and the higher version satisfies one atom but not the other, which none of these fixtures exercise.
+- Three new fixtures, one rule each (brief's own prescription), all `--pretend`-observable without relying on `--debug` trace stability (checked live: the resolver debug trace for this exact shape is NOT byte-identical between Rust and Python in section ordering, an unrelated pre-existing gap -- not chased here): `dev-libs/orupgrade` (`|| ( orupgradealt:1 orupgradealt:2 )`, both slots installed, each RDEPENDing its own marker so a `--deep` walk reveals slot 2 -- the upgrade -- was chosen, not the first-listed slot 1); `dev-libs/oringraph` (a plain sibling RDEPEND graphs `oringraphpulled` before `oringraphtie`'s own `|| ( oringraphinstalled oringraphpulled )` ties against it -- the in-graph one, listed second, wins over the merely-installed one listed first); `dev-libs/oranyslot` (`|| ( oranyslotalt:2 oranyslotalt:1 )`, slot 1 installed and slot 2 -- the higher version -- not: real avoids the unwanted new-slot merge, picking slot 1 despite it being both lower-version and second-listed). Three CASES entries + three pinned tests, Rust == Python byte-for-byte on all three; whole contract suite re-run clean at 1058/1058 (no regressions from removing the early-break optimization). `TEST/run/l0-resolver.sh` re-run against the real ~120-atom corpus: 96/120 clean, parity 0.800, identical finding breakdown to the pre-slice-2 baseline -- no real-tree regression, and none of the corpus atoms happen to exercise a genuine same-bin tie (unsurprising; real ties are rare in practice, which is also why this went unnoticed for as long as the `unsat_use_*` bins did). `docs/backlog-tasks.md` #22 and `docs/scope-backlog.md` Part 4 updated.
+
+**`||` group resolution: slice 4, the `other_*` bins and the `allow_masked` two-pass return (2026-09-11).** Backlog #22's design brief (`docs/022-agent-task-22-zapdeps.fable.md` §4, slice 4): when NO alternative of a `||` group is `all_available` anywhere (real's `choice.all_available` gate fails for every alternative in every bin), real `dep_zapdeps` does not give up -- its selection loop runs a SECOND pass (`allow_masked = True`, `dep_check.py` soft 812-816) that still picks the best of a bad lot, preferring an alternative satisfied by something installed over one that resolves to nothing at all. Before this slice, portuale's own documented invariant was stricter: a `||` group with no `all_available` alternative always fell back to the literal `"||"` group (every alternative's own atoms flattened and separately reported), on the reasoning that portuale should "never silently resolve a dependency to a masked/forced choice it can't ground." Real doesn't share that caution, and the difference is observable: a genuinely-dead alternative (no ebuild, no vdb entry, nothing) was getting reported as a spurious `!!! no visible ebuild for dependency` error right alongside an alternative that was, in fact, already satisfied by an installed package.
+- Real's four `other_*` bins, in preference order: `other_installed` (bin 5, every non-blocker atom's FULL vdb match -- version/slot/`[use]` all checked -- succeeds), `other_installed_some` (bin 6, at least one atom's full match succeeds but not all, real's own multi-atom bracketed-alternative case), `other_installed_any_slot` (bin 7, bug 522652's fuzzy fallback: no atom's full match succeeds, but some atom's bare `cat/pkg` is installed in *some* version/slot), `other` (bin 8, none of the above). `portage-repo::atom_matches_installed` / `_atom_matches_installed` (Python) is the new predicate this needed: real `vardb.match(atom)`, the FULL atom including `[use]` checked against the matching installed version's own recorded vdb `USE` (same `_iuse_implicit_built`/bug #640318 semantics `dependency_avoid_update_candidate`'s own USE-dep filter already established) -- deliberately NOT `atom_cp_installed` (that helper's `virtual/` zero-cost exemption doesn't apply to this real code path, confirmed by re-reading `dep_check.py` soft 715-724 directly).
+- `AltPreference` gained the four variants (`Other`, `OtherInstalledAnySlot`, `OtherInstalledSome`, `OtherInstalled`) as genuinely-produced ranks for the first time -- they existed in the enum since the 2026-09-07 slice (reserved, "never selected in portuale") but `disjunction_preference` always collapsed the `!all_available` case to hard `Unsatisfiable` before this. `resolve_disjunctions`/`_resolve_disjunctions` now rank every alternative unconditionally and run a real two-pass selection: pass 1 considers only `is_selectable()` ranks (unchanged from slice 2/3); pass 2, entered only when pass 1 finds NOTHING at all, considers the `other_*` bins too. Portuale's own circular-self-dep guard (no real equivalent) is excluded from both passes -- selecting it even as a last resort could let a package self-satisfy its own not-yet-resolved atom, so it keeps its own reserved `Unsatisfiable` rank 0, never promoted.
+- Fixing this correctly required updating two EXISTING tests whose assumptions predate slice 4: `root_deps_feeds_running_root_satisfiability_into_disjunctive_branch_selection` (a Rust unit test) and `test_any_of_group_falls_back_to_every_alternative_when_none_satisfiable` (a contract test) both asserted "both branches get reported" for a `||` group where one branch turned out to be genuinely `other_installed`-preferred over the other's plain `other` -- both now assert the single, real-correct selection instead, with the reasoning spelled out in the updated docstrings.
+- Slice 4 also surfaced one genuine, independent Python-only robustness bug: `_entry_version` returned `""` (not `None`) for a `PretendOutcome`-equivalent "no visible candidate" graph entry, so `_build_merge_digraph`'s `_entry_candidate` built a malformed `"cat/pkg-"` cpv string once a `||` group could select an alternative with literally no candidate anywhere (via `other_installed_any_slot`) -- a scenario slice 4 made reachable for the first time. Fixed to mirror `portage-repo/src/merge_order.rs::entry_version`'s `Option<&str>` exactly (its own docstring already claimed to mirror real `Package.version`, but silently diverged for this one outcome).
+- Three new fixtures, one bin each (isolating `other_installed`, `other_installed_some`, `other_installed_any_slot` respectively against a plain-`other` sibling): `dev-libs/omasked` (`package.mask`'d-but-installed vs. genuinely nowhere), `dev-libs/opartly` (a bracketed AND-alternative, one atom installed one not, vs. genuinely nowhere), `dev-libs/ofuzzy` (`=pkg-2.0` demanded but only `1.0` installed, the bug-522652 fuzzy cp match, vs. genuinely nowhere). Three CASES entries + three pinned tests, Rust == Python byte-for-byte on all three. Whole contract suite re-run clean at 1064/1064 (including the two updated pre-existing tests); `cargo fmt`/`clippy --release --all-targets` clean; `TEST/run/l0-resolver.sh` re-run against the real ~120-atom corpus (this is now the second resolver-architecture change in the same session after slice 2, both re-verified there per the standing "always after a change to the resolver" guidance): 96/120 clean, parity 0.800, identical finding breakdown to the pre-slice-4 baseline -- no real-tree regression from lifting the never-select-masked invariant. `docs/backlog-tasks.md` #22 and `docs/scope-backlog.md` Part 4 updated; the design brief's remaining scope for #22 is now just `minimize_slots` and the downgrade/circular guards (slice 5).
+
+**Abort-path data model + rollout gate (Slice 2, backlog #19 — behaviour-neutral).** The oracle slice (Slice 1: `docs/history/abort-path-spec.md`, ten `dev-libs/abort-*` fixtures, 98 live captures in `fixtures/abort-captures/`, 24 strict-xfail contract tests) proved real abandons the resolve on an unfixable masked/unsat/cycle dep — no merge list (masked/unsat) or the stuck remainder only (cycle), exit 1 — while portuale reports and enforces nothing. This slice lays the typed plumbing both languages will wire in Slice 5, changing zero behavior: `portage-repo` gains `AbortReason` (`MaskedDep` / `UnsatisfiedAtom` / `UnserializableCycle` / `AutounmaskPartial` — the fourth covers Gate G0.3's all-four decision, the plasma-meta pass-1 partial shape, whose fixture is still a Slice 3 prerequisite) and `ResolveOutcome::{Complete, Aborted { reason, partial }}` (partial is the owned entry list Slice 4 renders *instead of* `entries`; empty for masked/unsat, remainder for cycle, pass-1 list for autounmask), with a new `outcome` field on `GraphResult` (always `Complete` today — the sole production literal plus the `--solver=` bridge's, which is `Complete` by construction since a solved plan admits no abort). `abort_path_enabled()` reads `PORTUALE_ABORT_PATH` off the environment at the use site (Gate G0.4 flag-gated: `=0` keeps legacy report-don't-enforce; unset/anything-else enables — same direct-read pattern as `PORTAGE_SERIALIZE_FRONTIER_DISABLE`, so neither `ResolveRequest` nor the 60-arg marshaller grows). `pretend::run` maps a gated `Aborted` to exit 1 next to the circular-deps exit (real `actions.py:460-462`); `mrg` needs nothing (`to_emerge_argv` reuses `pretend::run`). Python mirrors all three pieces (`abort_path_enabled()`, the `("complete",)` / `("aborted", reason, partial)` outcome key with the four reason shapes documented, the gated exit arm). Pinned: `abort_path_gate_truth_table` + `abort_outcome_is_complete_until_slice_5` (Rust — the latter flips in Slice 5), `test_abort_path_gate_is_behaviour_neutral` (contract: gate on/off byte-identical on both implementations over the six abort atoms plus diamond/hardcyclea/maskneedpkg/newpkg — the standing merge-order-unchanged guard), with the 24 Slice-1 xfails still xfailing. `cargo fmt`/`clippy` clean, `cargo test` + full `pytest` green modulo the five pre-existing `test_portuale.py` sandbox/TTY failures (verified on the clean tree).
+
+**Abort-path membership and order (Slice 3, backlog #19).** Both resolvers now produce the abort outcome from the settled graph — `portage_repo::abort_outcome` / `_abort_outcome` — instead of always `Complete`: a `NoVisibleCandidate` *dependency* whose requirer is merge-bound becomes `Aborted { MaskedDep | UnsatisfiedAtom, partial: [] }` (real `_add_dep` returns 0, `depgraph.py:3483-3522`, `_resolve` returns before `altlist()`, `:5676-5681` — no list at all), otherwise a hard cycle becomes `Aborted { UnserializableCycle { members }, partial }` with `members`/`partial` in `cycle_display`'s leaf-drain order (real `_prepare_reduced_merge_list`, `circular_dependency.py:58-74`); walk-time beats serialize-time because `_create_graph`'s 0 precedes `altlist()`. The Gate-0 "fourth shape" was oracled live in the TEST container (`TEST/run/abort-capture.sh`, five new fixtures, 20 captures under `fixtures/abort-captures/`): autounmask changes coinciding with a cycle display **the same reduced tree as the plain cycle** — the change only breaks `_backtrack_depgraph` at try 0 via `need_config_change()` (`:12228-12234`, `:11736-11760`) and the USE block follows the circular block (`display_problems()`, `:11113` then `:11140`) — so `AbortReason::AutounmaskPartial` was removed, and `abort-masked-cycle` pins the precedence (masked block, no list, no circular block). Runnable: `PORTUALE_ABORT_PATH=0 emerge --pretend dev-libs/abort-masked-mid` exits 0 with the legacy full list, the same command without the variable exits 1 with byte-identical output (`test_abort_path_gate_off_restores_legacy_exit_code`); `emerge --pretend dev-libs/abort-cycle-mid` still prints the circular block (the Slice 2 arm moved after it). Rust unit pin `abort_outcome_membership_and_order` covers all eleven abort/non-abort fixtures; the Slice 1 xfails stay strict-xfail (list suppression is Slice 4). Two oracle-backed side findings outside #19 are pinned as strict xfails (`abort-au-plain`: no "terminated early" notice when the autounmask change is the only problem; `aucasctop`: real lists `aucascleaf`) and recorded in `docs/scope-backlog.md` §A. Fourteen CASES entries and twenty-five pinned assertions flipped exit 0→1 — each an unsatisfiable dependency of a to-be-merged package, the shape real aborts on. Verification counts are in the commit message.
+
+**`||` group resolution: slice 5, closing backlog #22 (2026-09-11).** The design brief's last slice (`docs/022-agent-task-22-zapdeps.fable.md` §4, slice 5) is explicitly "frontier for the cuts, mid-tier for the code": `minimize_slots`, `conflict_downgrade`, `installed_downgrade`, and `circular_atom` all demote or reorder an otherwise-selectable `||` alternative on inputs the brief's own §2 already named as ones "portuale does not have" (`want_update_pkg`, `downgrade_probe`, `circular_dependency`, `will_replace_child`, a `graph_db` that mutates mid-pass) -- pending slice 0's design mapping, which was never produced. Rather than bolt on a guess at these without the inputs to ground them, this slice closes the item honestly: `minimize_slots` and `want_update` were already cut-and-documented in `promote_tied_alternative`'s own doc comment (slice 2); `disjunction_preference`/`_disjunction_preference` (both languages) now carry the equivalent doc comment for `conflict_downgrade`/`installed_downgrade`/`circular_atom`, right at the point in the classification (`if all_use_satisfied:`) where real would have already demoted the choice to `other` on one of these three, naming the exact real-source lines (`dep_check.py` soft 476-521 for the downgrade guards, 649-682 for `circular_atom`) and the specific missing input for each. No functional change (doc-only); confirmed via the full contract suite unchanged at 1078/1078 passed + 38 xfailed and `cargo fmt`/`clippy --release --all-targets` clean.
+
+`conflict_downgrade`/`installed_downgrade` are folded into backlog #23's own scope (`_slot_conflict_backtrack` mask-target analysis), which already owns the live backtrack-loop state these two would need; `circular_atom` and `minimize_slots` stay bare cuts with no better home yet. `docs/backlog-tasks.md` #22 marked DONE (all shippable pieces landed 2026-09-11: the facts-first split, the fine `unsat_use_*` bins, in-bin upgrade-preference ordering, and the `other_*`/`allow_masked` two-pass return); #23 updated to note what it inherits. This closes out backlog #22 as a working item -- everything the brief scoped is either shipped, or a documented, source-cited non-goal.
+
+**Abort-path rendering: partial list + cumulative counters + `--json` provenance (Slice 4, backlog #19).** Slice 3 produced the outcome and the exit code but still printed the full list; now the renderer consumes it: with the gate on, an aborted resolve displays the outcome's partial list *instead of* `entries` across `-p`/`-pv`/`-pvt`/`--columns`/`--debug` (masked/unsat partials are empty, so no list and no `Total:` line at all -- real never calls `display()` there, `actions.py:460-462`; the cycle remainder renders as flat lines with `Total:` over its own rows). The cycle re-display is skipped on a gated cycle abort (the partial *is* the remainder -- real's single `display(handler.merge_list)` shows it exactly once; gate off keeps the legacy list-plus-redisplay). The masked/unsat disclosure and bare-unsat lines still print -- re-emitted in full-entries order after the (empty) list, stderr sequence unchanged, since they already go to stderr while the list goes to stdout; Slice 5 reshapes them into the `AbortReason` error block. `--json` gains the `aborted` provenance field (`null` on complete; `{"reason":"masked-dep"|"unsatisfied-atom","atom","parent"}` or `{"reason":"unserializable-cycle","members"}` -- reason spellings pinned by the `abort_outcome_to_json_spells_reasons_like_the_python_mirror` unit test and byte-identical both languages), the `entries` array is the partial list, and the exit is 1 in every format. Deliberate G0.2 cut, documented: counters count unique packages (`Total: 3 packages (3 new)` on `abort-cycle-mid`) where real counts tree-duplicated display rows (`Total: 4`) -- byte-parity of the counter would need real's tree duplication, which the dedup-by-design rule forbids. Pinned: the 24 Slice-1 xfails flipped to passing one shape at a time (masked-cycle, the au-ordering, and two pre-existing `--debug` dump-order cases stay strict-xfail with narrowed reasons), the gate tests narrowed to the new on/off contract (legacy full list + exit 0 off, partial + exit 1 on, stderr identical), `--json` partial+aborted pins for all three shapes plus the `null` complete case, and ~20 collateral re-pins where a newly-aborting atom (missingdep, maskneedpkg, anyofunresolvable, subslotmismatch, use-eq parents, binpkg scans) lost its list. `cargo fmt`/`clippy` clean; contract file 1087 passed + 16 xfailed.
+
+**Abort-path error-block wiring + item closure (Slice 5, backlog #19).** Slices 1–4 produced the outcome, the exit code, and the partial-list rendering; this slice wires the three consumers and closes the item. The `* Error: circular dependencies:` block (+ `Change USE:` suggestions + `large_cycle_count` trailer) is now a callable unit (`print_circular_block` / `_print_circular_block`) with real `display_problems()` routing: on a gated cycle abort it prints *before* the autounmask section (use block, notice, exit 1 -- the fourth-shape oracle `abort-au-cycle`/`abort-au-restart-cycle`), on a masked/unsat abort it is suppressed entirely (real abandons the walk before serialization ever runs -- oracle `abort-masked-cycle`), and gate-off/complete paths keep the legacy print-and-exit-1 site byte-identical. Masked/unsat disclosures re-emit unchanged (stderr sequence identical; their reshape into the `AbortReason` block is deferred). Pinned: the masked-cycle and au-order strict xfails flipped to passing; two pre-existing gaps found hiding in the old xfails were closed or re-pinned with standing reasons -- the `--debug` installed-node label rendered `"None"` on the Python side vs `""` on Rust (one-line fix to match `unwrap_or("")`; the rumored NVC admission-order gap never existed -- `--json` merge_order is byte-identical, verified after ruling out a stale-binary artifact) -- while the Python trace's pre-flip USE on a backward-cascade `Child:` line (real+Rust show post-flip) and the two spec-§4e autounmask findings stay strict-xfail as non-#19 items. Gate G0.1 reconciliation: exit 1 for the three unfixable abandons; slot conflicts keep informational exit 0 (6 CASES entries pin it; the backtrack loop reconciles solvable ones and residuals print with suggestions -- a completed resolve with diagnostics, not an abandonment), recorded in `scope-backlog.md` §A alongside the item's closure (masked-abort and circular-partial entries marked shipped, Part 4 item 1's truncation tail removed). `cargo fmt`/`clippy` clean; full suite green modulo the five pre-existing `test_portuale.py` sandbox/TTY failures.
+
+**Abort-path L0 real-tree validation (Slice 6, backlog #19).** `TEST/run/l0-resolver.sh` on the branch (`354274e`, atop the dep_zapdeps merge), same pinned tree as baseline: **120 probes, 96 clean, parity 0.800** — identical topline and divergent set to the Slice-4 confirmation. Triaged per probe in `TEST/findings/l0.md` (new dated section): all 24 divergences sit in recorded clusters (order → I, podman/plasma-meta truncation → A suppression, xwayland/gcr masked disclosures → `||`/USE-selection residue, gnome-shell nasm/totals/samba bundle → recorded cluster-A deferral, MULTI_emptytree version skew → environmental pin-upgrade miss). Nothing moved in either direction: no regressions, no new known-divergences. In particular the abort path neither fixes nor breaks real-tree probes — the remaining disclosure gaps are branch-selection causes (portuale never encounters the masked dep), not rendering causes. L1 not run: only `pretend.rs` changed in the binary crate (no merge-path code).
+
+**`backtracking_resolve` refactor, Phase A (023, slices A0–A3 + A5; A4 skipped as explicitly optional).** Backlog #23 needs a node stack where portuale has a linear retry loop, so before any behaviour change the ~2900-line `backtracking_resolve` (`rust/portage-repo/src/lib.rs`) was restructured into real's `_backtrack_depgraph` ↔ `_create_graph` shape, Rust-only, zero behaviour change: `ResolveCtx` (every read-only pre-loop value, built once per call; `config_root` dropped as a field -- it was read exactly once, to build `repos`), `BacktrackParams` (the 15 cross-pass `let mut`s, `Clone`+`Debug`, with the real-`BacktrackParameter` mapping in its doc comment; `MaskPhase` moved to module level), `run_pass(&ctx, &bp) -> Result<PassResult, Error>` (one full BFS walk; takes `&bp`, never `&mut bp` -- `clippy` enforces the invariant), `next_step(&ctx, &mut bp, &mut pass, config) -> Step` (the 7-step post-walk decision chain in exact source order, each old `continue 'backtrack` a `return Step::Retry`), `assemble_result(&ctx, &bp, pass, config) -> GraphResult` (rebuild passes, trace dump, merge-order sort, residuals, `abort_outcome`, the literal). The walk's three in-pass cross-pass writes became a pass-local overlay (`PassState::{use_overlay, use_change_overlay, use_broke}`, read back overlay-then-`bp` via `overlay_use_want`), folded into `bp` by a no-op union at the top of `next_step` -- placed before the chain rather than in the growth step because a solvable-growth/mask/breakage retry on the same pass must already see the flips, as the old direct writes guaranteed. Two deliberate signature deviations from the plan sketch, both borrow-forced: `&mut pass` (step 6 `take()`s the missing-dep trigger) and the extra `config` param (step 2's USE-aware solvability check and the assembly read the per-pass `backtrack_config` shadow, not `ctx.config`; fed by a free `None`-cloned `config_owned` since the dispatch holds `&mut bp` while `config` is live). A4 (per-item split) skipped: explicitly optional in the plan and unneeded for the C2 seam. Verified per the plan's §1.1 bar after every slice: `cargo fmt`/`clippy --release --all-targets` clean, `cargo test --release` green, contract suite pinned at 1112 passed + 3 xfailed with zero pin moves (including the `--backtrack=0/30`, slot-conflict, and autounmask-breakage pins), L0 raw portuale output byte-identical to the `TEST/logs/l0-baseline-023-A0/` archive after each slice, versions bench unaffected. Each slice got a second-instance review (A1/A2 diff review, A3 adversarial overlay-equivalence review: no counter-example -- same-pass two-site interplay is first-writer-wins + broke-latch in both versions, re-encountered flips never re-fire `autounmask_grew`, empty flip buckets are unconstructible on both sides). Maps: `docs/023-refactor-inventory.md` (every binding's scope + write sites + the 7-site decision order), `# phase:` markers in `emerge_pretend_reference.py::resolve_pretend_graph` (comment-only; the Python mirror does not move in Phase A).
+
+**Backtracking resolver, Phase C slice C1: `BacktrackParams` ↔ real `BacktrackParameter` alignment (2026-09-11).** Dual-language, zero behaviour change: `slot_constraints` now holds only the positive atom sets (solvable-conflict wants + enforced reverse-dep pins, which are positive enforcement atoms, not masks); every `!=cpv` negative moved into `runtime_pkg_mask: {cat/pkg: [MaskEntry{neg, reason}]}` with `MaskReason::{SlotConflict{parents}, MissingDependency{parent, atom}}` mirroring real's `runtime_pkg_mask[pkg][reason]` dict (child-mask parents are the pulling `((cat,pkg,ver),atom)` triples whose atom does not match the masked version -- real's `conflict_atoms`, version-stored because C2's bug-375573 check tests versioned parents; puller-version masks carry an empty set until C3; the subslot is approximated by the main slot, disclosed in the comment). Readers see the union via a once-per-pass `union_constraints` map (pass-constant: `bp` is never mutated mid-walk), so `disjunction_preference` / `promote_tied_alternative` / `enqueue_dependencies` signatures are untouched. Write-only `mask_steps` (mask-producing retries) and `depth` (every retry) counters ride alongside `backtrack_iteration`; C2 switches the gating to them. Judgement calls: enforced pins stay positives (real has no `runtime_pkg_mask` counterpart for them); the trial-revert now removes all copies of a neg string like Rust's `retain` always did (the old Python `list.remove` first-only asymmetry was unreachable via the latches, and is now a parity fix); Python's outer counter is `backtrack_depth` (its `_graph_pass` owns a colliding per-atom loop var). Verified: contract suite pinned at 1122 passed + 3 xfailed with zero moves, L0 raw portuale output byte-identical to the A0 archive, full suite green modulo the five pre-existing `test_portuale.py` sandbox/TTY failures, plus a second-instance review (neutrality + C2-fitness APPROVE-WITH-NOTES, all notes folded in).
+
+**Backtracking resolver, Phase C slice C2: the node-stack search (2026-09-11).** Dual-language: `backtracking_resolve` is now real's `_backtrack_depgraph` -- a `Backtracker` (`nodes`/`unexplored` DFS stack/`current`/`max_depth`, `Backtracker` class mirrored in `emerge_pretend_reference.py`) pops a node, runs one pass, and settles, feeds back, or abandons it; exhaustion re-runs the deepest terminal params (`get_best_run`, so users never see a masked graph unless nothing better exists). Feedback mirrors real's three paths (`Config` preserves terminal and costs no budget; slot-conflict/missing-dep merge into the carried working copy, cost one `mask_steps`, never terminal) with first-hit-wins ordering (the combined config+conflict exploration real does is a deliberate cut), the bug-375573 discard check, param-only dedup, and `--backtrack=N` bounding `mask_steps` (config retries free). Two behaviours the linear loop cannot express fell out along the way: `DeadEnd` (an unfixable-NVC pass is abandoned like real's `_create_graph` returning 0 instead of settling into the abort path -- this fixed four unit tests that the bare trial-deletion broke, with zero re-pins), and `Settle`/mask arms carrying the overlay-merged working copy (a pass folding flips AND hitting a conflict no longer drops them -- this fixed the dropped-pin residual and the au-cycle USE block the first cut lost). Deliberate deviations, all documented at the code: `--backtrack=N` budgets N mask steps directly rather than real's `max(1, (N+1)//2)` depth + total-restart cap (same depth-10 at default; real's exact stopping rule deferred); the 375573 parent test is exact-`!=cpv`-string rather than package-key presence (safe direction, tightened in C3); bundled child+puller masks can self-discard on intra-bundle parentage (gone in C3 with puller-masking); `--backtrack=0` settles the root pass (real's `_allow_backtracking` gate). Verified: contract suite pinned at 1122 passed + 3 xfailed with zero moves (all `--backtrack=0/1/30`, trial, `||`-feedback, autounmask-breakage, and abort pins hold), all 347 `portage-repo` unit tests unmodified, full suite green modulo the five pre-existing `test_portuale.py` sandbox/TTY failures, L0 raw portuale output byte-identical to the A0 archive, plus a second-instance review (APPROVE-WITH-NOTES; notes folded in: `DeadEnd` now carries the merged copy into the adopted node, Python `--backtrack=0` settles once without a best-run re-walk, budget-formula and granularity deviations documented). The B1 btnr case stays divergent as pinned: second-opinion review confirmed its conflict is residual (installed `btra-1` never becomes a slot instance), so no mask node can form with or without the stack -- it needs installed-nomerge instances (backlog #25) before the discard/ranking machinery has anything to work on (`docs/023-oracle.md` re-scoped accordingly).
+
+**Backtracking resolver, Phase C slice C3: real mask-choice generation (2026-09-11).** Dual-language: `slot_conflict_mask_choices` ports real `_slot_confict_backtrack` (existing-node always included per bug 692746, version-desc sort, per-candidate `conflict_atoms` = parents minus matching, stable ascending-length sort; first conflicting slot only, mirroring real's `conflicts_data[0]`), and the feedback emits one node per choice with real's assign-overwrites reason semantics (DFS pops the longest-conflict choice first, like real's sort-then-`pop()`). The old bundled trial's puller pre-masking is gone; the parent downgrade now arrives through a mask-aware missing-dep probe at the trigger site (it consults the negatives, not the bare tree -- real's "no matching package" is mask-aware -- so a dependency unsatisfiable only under masks retries with its parent masked; USE-only failures and positives stay out exactly as before). Matching uses the step-2 candidate-string form (main slot only, same documented subslot approximation as C1); the helper takes no `ctx` (nothing in it needs the repo). Verified: contract suite pinned at 1123 passed + 3 xfailed with zero moves (`btparent` reconciles via mask-child-then-missing-dep-masks-parent in 3-4 passes instead of one bundled trial, `mgf`/`orbt`/`unsolvable` unchanged, `btnr` still divergent pending #25), all `portage-repo` unit tests unmodified plus one new direct truth-table test for the 375573 discard predicate (no fixture reaches its 3-pass chain end to end yet) and one new two-simultaneous-conflicts fixture (`mg2top`, guarding the first-only deferral), full suite green modulo the five pre-existing `test_portuale.py` sandbox/TTY failures, L0 raw portuale output byte-identical to the A0 archive, plus a second-instance review (APPROVE-WITH-NOTES; folded in: five stale comments fixed, the ≤2-candidate ceiling and USE-blind `conflict_atoms` disclosed, novelty/dedup granularity aligned to full entries, the mg2 + 375573-unit oracles added, the ctx-less signature recorded).
+
+**Backtracking resolver, Phase C slices C3+C4: ranked choices + similar grouping, closing backlog #23 (2026-09-11).** Dual-language: `slot_conflict_mask_choices` ports real `_slot_confict_backtrack` (692746 existing-node append, version-desc sort, per-candidate `conflict_atoms`, stable ascending-length sort, first-conflicting-slot-only mirroring real's `conflicts_data[0]`, one node per choice with real's assign-overwrites reason semantics) plus the `_iter_similar_available` grouping (same cp/slot, visible under the effective config, not excluded/masked/already-party, non-empty shared subset; missed-update siblings masked in the same node). The old bundled trial's puller pre-masking is gone; parent downgrades arrive through a mask-aware missing-dep probe (it consults the negatives, not the bare tree -- USE-only failures and positives stay out exactly as before). Documented ceilings: ≤2 recorded instances per conflict (real ranks every pulled version), version+slot-only `conflict_atoms` (no USE), main-slot-only candidate strings, `--backtrack=N` budgeting N mask steps directly rather than real's depth formula + total cap, first-hit-wins (no combined config+conflict exploration). Verified: contract suite pinned at 1124 passed + 3 xfailed with zero moves from C2 (`btparent`/`mgf`/`orbt` reconcile, `unsolvable` reports, `btnr` still divergent pending #25, `mgfa --backtrack=1` still reports pending #36), all `portage-repo` unit tests (new direct truth-table test for the 375573 discard + group-contents test for the helper), two new oracle fixtures (`mg2top` two-simultaneous-conflicts deferral, `mgfc-3.0` missed-update sibling), full suite green modulo the five pre-existing `test_portuale.py` sandbox/TTY failures, L0 raw portuale output byte-identical to the A0 archive post-grouping, plus second-instance reviews on every slice (all findings folded). Live check: `mgfa` settles all-`1.0` at default budget on both languages; `--backtrack=1` reports (real settles -- needs mask-aware selection fallback, backlog #36).
+
+**Slot-operator rebuild as a walked graph node (backlog #24, slice S3, 2026-09-12).** Portuale's slot-operator auto-rebuild was a post-pass *entry synthesiser*: `assemble_result` scanned the vdb after the search had settled and pushed `Reinstall { slot_operator_rebuild: true }` rows with `deps: []` and `required_by: []`, so a rebuilt consumer never had its tree `RDEPEND` re-walked, never re-bound its own `:=`, and fell back to array position in merge order. Real never synthesises anything: every slot-operator detector writes `backtrack_infos["config"]["slot_operator_replace_installed"]` (`depgraph.py:2400`/`2361`/`2881`) and restarts, `resolver/backtracking.py::_feedback_config` (237-257) carries the set into the next node, and `_gen_reinstall_sets` (5457-5480) turns it into the pseudo `SetArg` `@__auto_slot_operator_replace_installed__` with `force_reinstall=True`, `reset_depth=False` -- so the consumer is walked as an ordinary graph node and the cascade, the re-bind and the merge order all fall out of that one move. S3 ports that shape, dual-language: `slot_operator_rebuild_entries` is split into `slot_operator_rebuild_scan`, which returns only the consumer `(cat, pkg)` set plus the `(provider_cpv, consumer_cpv)` display pairs; the scan runs last in `collect_feedback` on the settled graph (real calls the trigger from `_process_slot_conflicts`, 2131-2132) and a grown set becomes a budget-free `Config` feedback node carried on `BacktrackParams::slot_operator_replace_installed` (`BTreeSet`, in `params_equal`; narrowing real's `(root, slot_atom)` to `(cat, pkg)` is documented on the field, since portuale resolves one instance per cp). The next pass seeds the walk with a bare `cat/pkg` atom per member -- appended *after* the user's args like real's arg list (`select_files` 5430), `owner = None` (the set arg has no package parent; real's `_eliminate_rebuilds` rule 5 exists precisely to exclude it) and `depth = 1` for `reset_depth=False` -- and flips that package's `AlreadyInstalled` outcome at the same point `--reinstall-atoms` flips, keyed on the `cat/pkg` so whichever visit comes first is the one that flips. The internal fixpoint is deleted: a rebuilt consumer is a provider at its *tree* sub-slot on the next pass, which is the cascade.
+
+Live on the a522084/bug-522652 shape (`emerge -p --dynamic-deps=n app-misc/A`, installed `A-1` `0/1` with `B-0` bound `A:0/1=` and `C-0` bound `|| ( X A:0/1= )`): portuale printed `[B-0, C-0, A-2]` before and prints `[A-2, B-0, C-0]` now -- real's `[A-2, (B-0, C-0)]` (`test_slot_operator_rebuild.py` case 1), byte-identical Rust and Python, with `--tree` showing the real edges. Two more divergences closed as side effects of the walked node, both re-pinned with their upstream oracle: the `slotundo-rebind` synthetic now yields exactly one `--json` `reinstall` row instead of an `already_installed` + `reinstall` duplicate, and `test_slot_operator_required_use.py` (bug 523048) now fails the resolve with real's `!!! … has unmet requirements` + rc 1 instead of merging a package whose tree `REQUIRED_USE` is unsatisfied -- the synthesiser had built that entry without ever consulting `REQUIRED_USE`, and the v2 item the plan reserved for it is not needed. Two deliberate behaviour changes: `--backtrack=0` (and `--nodeps`) now suppress the rebuild entirely, matching real's `allow_backtracking = max_retries > 0` (`_backtrack_depgraph` 12190) gating the trigger at `depgraph.py:2131` -- with no search there is no restart to apply the replace set on, so `_forced_rebuilds` stays empty and no "causing rebuilds" block prints; and `slot_op_reachable` is seeded from `complete_seed_atoms ∪ atoms`, because real's `_complete_graph` starts its required-set walk from `_initial_arg_list` (8677) and *appends* the set args (8723-8731). One display rule moved with the node: a walked `Reinstall` of an installed cpv now carries `oldbest = [installed]` exactly when its `(slot, sub_slot)` moved (real `output.py::_get_installed_best` 721-727) -- the rule the synthesiser already applied to its own entries, which is why `app-arch/libarchive-3.1.1` in the bug-456208 case-4 pin and `dev-libs/changedslotpkg-1.0` in the two `--changed-slot` pins gained their `[oldver]` brackets (`convert_myoldbest` does not suppress a same-version one). That bracket made one real-renderer branch reachable for the first time and it was missing, so it was ported with the pin: `convert_myoldbest`'s non-`new_slot` arm appends the *old* instance's sub-slot on a second disjunct the entry's own `_append_slot` does not have (`old.slot == pkg.slot and old.sub_slot != pkg.sub_slot`), so `decorate_version`/`_decorate_version` gained a `force_sub_slot` argument passed only from the `oldbest` caller -- `emerge -pv --changed-slot dev-libs/changedslotpkg` now prints `[1.0:0/0::testrepo]`, not `[1.0:0::testrepo]`. The `--solver=pubgrub`/`--solver=resolvo` bridges have no `Backtracker` and keep the synthesiser as a documented legacy wrapper around the scan; the default path has none left. Gate G0.2 was answered "unconditional" -- no rollback flag. S3 does not implement the undo (`_eliminate_rebuilds`): every scheduled consumer is still kept, which is S4, and the `slotundo-unnecessary` / bug-614390 `complete` xfails stay strict. Verified: all 585 shared-fixture `CASES` byte-identical to the pre-slice baseline, the slot-operator contract subset 38 passed + 9 xfailed, `cargo fmt`/`clippy --release --all-targets` clean. Detail and the full verdict table: `docs/024-oracle.md` §S3.
+
+**Slot-operator rebuild undo path (backlog #24, slice S4, 2026-09-12).** S3 made the rebuild a walked graph node; S4 ports the retraction real always had beside it: `_eliminate_rebuilds` (`depgraph.py:3859-4000`) demotes a forced consumer rebuild when the re-evaluated tree deps equal the installed instance's, i.e. when nothing actually changed under the consumer. The nine rules of `docs/024-slot-operator-plan.md` §1.2 are implemented in real's order, dual-language (`portage-repo::slot_operator_eliminate_rebuilds` / `_slot_operator_eliminate_rebuilds`), called from `collect_feedback` on the settle-eligible pass whose S3 scan did not grow the replace set -- real runs it in `_resolve` after `_process_slot_conflicts` (5771-5779). Rule 8 is the load-bearing one and needed real's graph-aware `:=` binder: `bind_slot_operator_deps` (real `portage/dep/_slot_operator.py::_eval_deps` over `evaluate_slot_operator_equal_deps`'s `_graph_trees`) rewrites every `cat/pkg:=` / `cat/pkg:S=` atom to the `slot/sub_slot` of the package *as this pass leaves it* -- merge-bound entry first, else the installed vdb -- and both sides are then `use_reduce`d against the scheduled node's enabled USE and compared as flat atom sets with libc providers stripped (real `strip_libc_deps`). Rule 8 is why the a522084 shape stays correct in both directions: `B-0`'s tree `app-misc/A:=` binds to the graph's `A:0/2=` while its vdb records `A:0/1=`, so the rebuild is kept; but `sounneed-1.0`'s `soflag? ( souprov:0/1= )` records a stale binding whose whole conditional use-reduces away under the new node's disabled flag, so the rebuild is demoted. Demotion drops the cp from `BacktrackParams::slot_operator_replace_installed`, latches it in the new `slot_operator_undone` (in `params_equal`), and feeds back a budget-free `Config` node; the S3 scan takes the latch (real mutates the settled graph in place and never sets `_need_restart`, so it cannot re-fire; portuale re-runs the scan every pass, hence the latch), so the still-stale vdb binding cannot re-add it. `--emptytree` and any live slot conflict skip the whole undo (real bug 922038). Rule 7 (`provides`/`requires` soname equality for built packages) is unreachable in the ebuild-only v1 -- a binary entry keeps its rebuild (v2 `#24c`) -- and rule 3 (`--changed-slot`, 3898-3899) is S5's line; rule 6 subsumes it for ebuilds, so the no-flag `slotundo-changed-slot` guard still keeps its slot-moved consumer (rule 6) and the flag's display flip stays S5.
+
+Live, on the committed `dev-libs/souprov` (tree `1.0` `0/1` → `2.0` `0/2`) with an installed `sounneed-1.0` recording `soflag? ( dev-libs/souprov:0/1= )`, flag off:
+
+```
+python3 -m pytest tests/test_emerge_pretend_contract.py -q -k test_oracle_slotop_undo_unnecessary
+```
+
+passes pinned to `[ebuild     U  ] dev-libs/souprov-2.0 [1.0]` with no `sounneed` row, no "causing rebuilds" block and `abi_rebuilds: []`, Rust == Python byte-for-byte; the neighbouring `test_oracle_slotop_undo_changed_slot_guard` and every S3 pin (`test_slot_operator_rebuild_reinstalls_a_stale_equals_consumer`, the cascade, rebuild-1's `[A-2, B-0, C-0]`, `parentdown`'s `[]`) are unchanged, each keeping its rebuild through rule 6 or rule 8. Rust unit coverage: `bind_slot_operator_deps_binds_against_entries_then_installed` and `slot_operator_eliminate_rebuilds_applies_the_eight_rules_in_order` (rules 0,1,2,4,5,6,7,8, the non-slot-op entry, and the latch preventing a scan re-add), both built on the shared fixture pair. One acceptance mismatch was surfaced rather than papered over: `test_slot_operator_complete_graph.py` (bug 614390), which the plan called the S4 bar, is blocked by a *selection* gap (a bare named atom resolving to `socc-2` first, then meta's `=socc-1` landing through the already-installed fast path, which never consults `resolved_slots` where real's `_add_pkg` slot-parent check does) -- the undo rules themselves are correct on that shape, and the case stays strict-xfail with the selection reason (backlog #36 overlap, see `docs/024-oracle.md` §S4). One display judgment call is pinned with its reasoning: the triggering provider keeps only a plain `U` when the sole rebuild edge is demoted, because portuale's `r` marker comes from the surviving `abi_rebuilds` pairs (real's separate auto-set bookkeeping is not oracle-pinned by upstream mergelist tests). Verified: `cargo fmt --check`, `cargo clippy --release --all-targets` zero warnings, `cargo test --release` 997 passed / 0 failed, `python3 -m pytest tests -q` 1554 passed, 10 expected-fail with only the four pre-existing no-TTY `--ask`/`pkg_config` failures. Detail and the full verdict table: `docs/024-oracle.md` §S4.
+
+**Slot-operator `_slot_change_probe` + the `--changed-slot` contact (backlog #24, slice S5, 2026-09-12).** The last detector of the family: real `_slot_change_probe` (`depgraph.py:2317-2359`), the first arm of `_slot_operator_trigger_reinstalls` (3103-3107). For an *unbuilt* slot-operator dep (`:=` / `:S=`, real's `not (atom.soname or atom.slot_operator_built)`) whose parent is an ebuild scheduled for merge and whose child the graph resolved to an installed instance, the tree ebuild at the child's own cpv may carry a different `(slot, sub_slot)` than the vdb record -- a slot move without a revbump (bug 456208). Real sees the dep through `_slot_operator_deps` (registered when the parent's dep was walked); portuale re-reads the parent entry's tree metadata, use-reduces it against the node's enabled USE (`flat_dep_atoms`), requires the pass to have resolved the child to the installed instance (`AlreadyInstalled`, real's `dep.child.built`), and calls the existing `slot_changed` for the tree-ebuild-at-cpv lookup; a hit joins the S3 replace set, exactly real's `_slot_change_backtrack` (2361-2399) writing `slot_operator_replace_installed` + `_need_restart`. The probe runs from the tail of `slot_operator_rebuild_scan` (`slot_operator_slot_change_probe` / `_slot_operator_slot_change_probe`) and is deliberately **outside** the `reachable` gate -- real's first trigger arm is not complete-mode gated, and both new oracle commands (`--oneshot`, no sets at all) have an empty `slot_op_reachable`; the vdb half of the scan stays gated exactly as before. Real's rule 3 (`--changed-slot`, 3898-3899) also landed in its position in `slot_operator_eliminate_rebuilds`, behaviour-neutral for ebuilds as the S2 correction predicted (rule 6 already keeps every consumer whose tree ebuild moved -- the flag's demote-vs-keep flip needs binaries, v2 `#24c`).
+
+Live, on the committed `_b1_root` shape of `test_slot_change_without_revbump.py` case 1 (installed `libarchive-3.1.1` vdb `SLOT 0`, tree `SLOT 0/13`, `ark-4.10.0` bound `libarchive:0/0=`):
+
+```
+python3 -m pytest tests/test_emerge_pretend_contract.py -q -k 'slotop_slotchange or slotop_regslotchange'
+```
+
+passes with `[ebuild  rR    ] app-arch/libarchive-3.1.1 [3.1.1]` then `[ebuild   R    ] kde-base/ark-4.10.0`, no "causing rebuilds" block, Rust == Python byte-for-byte; `regslotchange` (main-slot move `0/1.52` -> `0/0`) pins `[rR] dev-libs/soslotlib-1.52.0 [1.52.0]` then `[N] dev-libs/soslotconsumer-4.0.0.2` the same way. The scheduled package is the *child*, so real's `_compute_abi_rebuild_info` yields no `_forced_rebuilds` pair and the `r` marker sits only on it -- exactly what both implementations print. Two S2 expectations were corrected rather than chased: `test_oracle_slotop_undo_changed_slot_flag` was pinned strict-xfail to an `r`+edge shape that live `ResolverPlayground` showed real does *not* produce (with `--changed-slot` the consumer's own slot move makes it a plain reinstall; `_eliminate_rebuilds` never runs, `_forced_rebuilds` empty) -- it now passes pinned to real's actual `[U]`+`[R]`, no block; and `test_oracle_slotop_conflict_mass_rebuild` (bug 486580) keeps its strict-xfail but with the correct owner: the live trace shows every leaf firing `_slot_operator_update_backtrack` against its recorded *built* dep, i.e. v2 `#24b`'s update probe, not `_slot_change_probe`. Every other slot-op pin is unchanged (a522084, rebuild-1's `[A-2, B-0, C-0]`, cascade, slotbind, bdeps, revdeps, `parentdown` `[]`, the libgit2 guard, conflict-rebuild, runtime_pkg_mask, autounmask, required_use, undo-unnecessary, undo-rebind). Rust unit coverage: `slot_operator_slot_change_probe_schedules_a_moved_installed_child` (fixture `ark` -> installed `libarchive-3.1.1` schedules; a merge-bound child, the `slot_operator_undone` latch, and an unmoved child stay unscheduled), plus rule-3 assertions in `slot_operator_eliminate_rebuilds_applies_the_eight_rules_in_order`. Verified: `cargo fmt --check`, `cargo clippy --release --all-targets` zero warnings, `cargo test --release` 998 passed / 0 failed, `python3 -m pytest tests -q` 1557 passed, 7 expected-fail with only the four pre-existing no-TTY `--ask`/`pkg_config` failures. Detail and the full verdict table: `docs/024-oracle.md` §S5.
+
+**Slot-operator complete-mode gate under `--deep` (backlog #24, slice S1, 2026-09-12).** The a522084 `B-0` miss was never the undo path: real's `_complete_graph` (`depgraph.py:8562-8648`) has no `--deep` condition, but portuale skipped the auto-enabled complete pass whenever `--deep` was in force (`rust/portuale/src/pretend.rs` `want_complete`: `deep == Deep::NotRequested`; Python mirror `not deep`), so `complete_seed_atoms` stayed empty and `slot_op_reachable` suppressed the slot-operator scan wholesale. S1 (plan §S1 option (b)) keeps phase 2 skipped under `--deep`, but whenever `complete_graph_auto_enable` fires on the phase-1 entries the phase-1 walk is re-run with only `complete_seed_atoms` fed in -- they feed `slot_op_reachable` and nothing else (`ResolveCtx::new`, `solver_bridge.rs:657`), and the deterministic input means the walk is identical, only the scan now sees reachability. Live: `emerge -p -uD @world` on the a522084 fixture prints `[ebuild  r  U  ] app-misc/A-2 [1]` + `[ebuild  rR    ] app-misc/B-0` + the "causing rebuilds" block, byte-identical to `-uD --complete-graph @world` and to real's `[A-2, B-0]` (`test_solve_non_slot_operator_slot_conflicts.py`, bug 522084; the `docs/023-oracle.md` row flips PARTIAL → MATCH). The third arm was checked against real: `complete_if_new_slot = rebuild_if_new_slot` (8590-8592). Two latent divergences the new gate exposed were closed the same way (`dev-libs/boost`/`libcmis`, `virtual/libmysqlclient`/`DBD-mysql` -- both now print the full upstream lists). One plan cell was corrected: `test_slot_operator_unsatisfied.py` case 1 does not flip here -- with no version change nothing fires auto-enable, and real reaches `[B-0]` through the in-walk `_slot_operator_unsatisfied_probe` (3447-3454), filed as v2 candidate `#24f` and pinned strict-xfail. L0 stop-condition check: raw `portuale/` outputs byte-identical to the S0 archive, findings JSON identical, parity 0.800 both. Detail: `docs/024-oracle.md` §S1.
+
+**Slot-operator oracle fixtures for the whole family (backlog #24, slice S2, 2026-09-12).** The oracle slice: upstream `ResolverPlayground` mergelists as the expected value, one `_b1_root` + `fixtures/repo/` case per mechanism (`docs/023-oracle.md` method), Rust == Python asserted at pin time, strict-xfail where portuale diverges. It translated the `test_slot_operator_*` family into 22 pinned rows (`docs/024-oracle.md` S2 table): a522084, `test_slot_operator_rebuild.py` cases 1-2, `unsatisfied`, `test_slot_change_without_revbump.py` cases 1/2/4, `regular_slot_change_without_revbump`, `complete`, `reverse_deps` (+libgit2 guard), `update_probe_parent_downgrade`, `missed_update`, `autounmask`, `exclusive`, `runtime_pkg_mask`, `unsolved`, `bdeps`, `required_use`, `conflict_rebuild`, `conflict-mass`, plus the four synthetic `slotundo-*` shapes. Four cases were labelled not-translatable rather than approximated (needs a binpkg with built metadata, needs `[uninstall]` display, needs USE-gated cycle solutions), and the slice surfaced the S2 corrections that later slices acted on: named atoms are not CLI seeds, rule 6 subsumes rule 3 for ebuilds, and (S5, live-verified) conflict-mass is the update-probe family, not `_slot_change_probe`. Predecessor: `docs/history/slot-op-rebuild-cascade-plan.md` shipped the reachability gate, the tree-`SLOT` cascade and the `r`/`rR`/block render; its one documented cut -- a rebuild's own `RDEPEND` is never re-walked -- is what S3 closed.
+
+**Slot-operator L0 real-tree validation (backlog #24, slice S6, 2026-09-12).** `TEST/run/l0-resolver.sh` at the default budget on the branch after S5, same pinned tree as the S0 archive: **120 probes, 96 clean, parity 0.800**, `UNEXPLAINED: 46` -- byte-identical topline and `l0-report.json` to both the S0 archive and S1's run. Stronger than the stop condition (which allowed added `rR` rows under `-uD` probes moving to real's position): `portuale/` raw outputs are `diff -rq` clean against both archives -- none of the 120 real-tree probes has a stale `:=` consumer, so the scan, the probe and the undo do not fire on the corpus at all. The `real/` outputs differ only in the `Dependency resolution took` timing line; the merge-order timing cluster is untouched. Nothing to adjudicate (`known-divergences.yaml` stays empty), no S3 flag to remove (G0.2 "unconditional"), L1 not run (only `pretend.rs` and the resolver changed). Log: `TEST/findings/l0.md` new dated section; detail: `docs/024-oracle.md` §S6.
+
+**Tier-2 close-out B-series: a merged-order trace harness plus two real
+fixes (#17, 2026-09-12).** `TEST/scripts/mo-trace/` is now the committed
+tool that three sessions had prototyped and reverted: `real-trace.py`
+injects one `RT_SEL` line per real `_serialize_tasks` iteration (plus a
+one-time `MO_NODES` graph snapshot and an `MO_ORDER` post-prune/pre-bias
+snapshot; idempotent, `--unpatch` byte-identical on 3.0.81.3 and
+3.0.82.2), `PORTUALE_MO_SEL=1` emits the same `MO_SEL` shape from
+`merge_order::select_nodes` (`iter/retlist/alive/asap/prefer_asap/
+drop_satisfied/ig/pick`, picks marked `m:`/`n:`), and `align-traces.py`
+reports the first divergence by iteration, by node set, or
+`--merge-only` by merge sequence. Unset, portuale's output is
+byte-identical (unit-pinned formatter).
+
+```sh
+# real side (throwaway container): patch, run, extract
+podman run --rm -v "$PWD:$PWD:ro" -v "$PWD/rust/target/release:/usr/local/bin:ro" \
+  --entrypoint /bin/bash localhost/test-portuale:latest -c '
+    python3 '$PWD'/TEST/scripts/mo-trace/real-trace.py
+    /usr/sbin/emerge --pretend --debug gui-libs/gtk:4 2>real.err >/dev/null
+    grep -E "^(RT_SEL|MO_NODES|MO_ORDER) " real.err > real.trace'
+# portuale side
+TEST/scripts/mo-trace/ptl-trace.sh /tmp/ff -- --pretend gui-libs/gtk:4
+python3 TEST/scripts/mo-trace/align-traces.py --merge-only real.trace /tmp/ff.portuale.trace
+```
+
+Two fixes landed from it. (1) `add_installed_dependency_closure` kept
+one `InstalledPackage` per cp and keyed its dedup on `(category,
+package)`, silently dropping every installed slot but the first --
+gtk:4's real scheduler graph carried `docbook-xml-dtd-{4.2,4.4,4.5}`
+that portuale lacked. It now keeps every version and selects the one an
+edge's atom names: node sets 395 -> 398 == real, `texlive-core` and
+`texlive-latex` flipped clean. (2) `build_digraph`'s forward-edge loop
+edged a bare multi-slot atom (`llvm-runtimes/clang-runtime[...]` in
+clang-common's PDEPEND) to every scheduled slot, giving
+`clang-runtime-21` an extra `runtime_post` parent that promoted it into
+`asap` and split the drain; the loop now resolves a multi-match atom to
+one entry (merge-bound first, then highest version), moving
+firefox/thunderbird's first divergence from #29/#30 to #37/#38. L0
+(`TEST/logs/l0-20260912T205626Z`): clean 96 -> 98, parity 0.800 ->
+0.817, order 22 -> 20 raw (19 after B5 explains gnome-shell's `order #0`
+as the cluster-A abort bundle via `known-divergences.yaml`). The
+residue is adjudicated, not chased: B1's frontier drain timing (578 vs
+290 iterations on gtk:4), B3's `_create_graph` pre-bias insertion order,
+and B4's superseded installed in-edges (both moved to #25) -- see
+`docs/025-tier2-closeout.deepseek.md` §11.
+
 # # required by dev-libs/useflagpkg[-foo] (argument)
 # == sqlite
