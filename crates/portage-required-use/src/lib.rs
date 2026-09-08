@@ -658,8 +658,69 @@ mod tests {
     }
 
     #[test]
+    fn human_readable_rewrites_the_three_operators() {
+        assert_eq!(
+            human_readable("^^ ( a b ) || ( c d ) ?? ( e f )"),
+            "exactly-one-of ( a b ) any-of ( c d ) at-most-one-of ( e f )"
+        );
+    }
+
+    #[test]
     fn reduced_is_none_when_satisfied() {
         let (enabled, iuse) = sets(&["a"], &["a", "b"]);
         assert_eq!(unsatisfied_reduced("|| ( a b )", &enabled, &iuse), Ok(None));
+    }
+
+    #[test]
+    fn reduced_keeps_only_the_unsatisfied_conditional() {
+        let ru = "alsa? ( sound ) haptic? ( joystick ) opengl? ( video ) \
+                  wayland? ( gles2 ) xscreensaver? ( X )";
+        let (enabled, _) = sets(
+            &[
+                "alsa", "sound", "haptic", "joystick", "opengl", "video", "wayland",
+            ],
+            &[],
+        );
+        let iuse: HashSet<String> = [
+            "alsa",
+            "sound",
+            "haptic",
+            "joystick",
+            "opengl",
+            "video",
+            "wayland",
+            "gles2",
+            "xscreensaver",
+            "X",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+        assert_eq!(
+            unsatisfied_reduced(ru, &enabled, &iuse),
+            Ok(Some("wayland? ( gles2 )".to_string()))
+        );
+    }
+
+    #[test]
+    fn reduced_top_level_all_of_drops_satisfied_leaves() {
+        let (enabled, iuse) = sets(&["a"], &["a", "b", "c"]);
+        assert_eq!(
+            unsatisfied_reduced("a b c", &enabled, &iuse),
+            Ok(Some("b c".to_string()))
+        );
+    }
+
+    #[test]
+    fn reduced_inside_an_operator_keeps_all_children() {
+        // Under a ||/^^/??, every child is kept so the operator still
+        // reads correctly.
+        let (enabled, iuse) = sets(&[], &["a", "b"]);
+        assert_eq!(
+            unsatisfied_reduced("^^ ( a b )", &enabled, &iuse),
+            Ok(Some(
+                "exactly-one-of ( a b )".replace("exactly-one-of", "^^")
+            ))
+        );
     }
 }
