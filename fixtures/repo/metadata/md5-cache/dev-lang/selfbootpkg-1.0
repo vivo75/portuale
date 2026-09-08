@@ -1,0 +1,8 @@
+BDEPEND=|| ( >=dev-lang/selfbootpkg-2.0 dev-lang/selfbootbootstrap )
+DEFINED_PHASES=-
+DESCRIPTION=fixture: BDEPEND || self-or-bootstrap; fresh resolve must pick bootstrap (L0 finding D)
+EAPI=8
+IUSE=
+KEYWORDS=amd64
+SLOT=0
+_md5_=0000000000000000000000000000000

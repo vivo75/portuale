@@ -1366,7 +1366,18 @@ CASES = [
     ("@system combined with an explicit atom too", ["--pretend", "dev-libs/samepkg", "@system"], 0),
     ("a user-defined set given directly expands to its members", ["--pretend", "@nestedtestset"], 0),
     ("a user-defined set combined with an explicit atom too", ["--pretend", "dev-libs/samepkg", "@nestedtestset"], 0),
-    ("@selected expands like portuale's @world", ["--pretend", "--update", "@selected"], 0),
+    ("@selected expands to the world file (not @system, unlike @world)", ["--pretend", "--update", "@selected"], 0),
+    (
+        "a `|| ( >=self-N self-bootstrap )` BDEPEND with nothing installed "
+        "picks the non-circular bootstrap branch (L0 finding D)",
+        ["--pretend", "dev-lang/selfbootpkg"],
+        0,
+    ),
+    (
+        "-v form of the go-bootstrap `||` pattern",
+        ["--pretend", "-v", "dev-lang/selfbootpkg"],
+        0,
+    ),
     ("@selected combined with an explicit atom too", ["--pretend", "--update", "dev-libs/samepkg", "@selected"], 0),
     ("an unknown @set name is a real error", ["--pretend", "@some-other-set"], 1),
     (

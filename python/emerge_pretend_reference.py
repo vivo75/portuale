@@ -10571,12 +10571,32 @@ def resolve_pretend_graph(
                     return ()
                 return slot_constraints.get(tuple(_pa.cp.split("/", 1)), ())
 
+            # Real dep_zapdeps skips a "||" alternative satisfied only by
+            # the package currently being resolved (a circular self-dep)
+            # -- dev-lang/go's BDEPEND `|| ( >=dev-lang/go-<min>
+            # >=dev-lang/go-bootstrap-<min> )` with nothing installed
+            # falls through to the go-bootstrap branch. Mirrors
+            # portage-repo/src/lib.rs.
+            _self_cp = (category, package)
+
             def _disj_pref(atoms):
+                def _circular_self(a):
+                    _pa = _parse_atom(a)
+                    return (
+                        _pa is not None
+                        and not _pa.blocker
+                        and tuple(_pa.cp.split("/", 1)) == _self_cp
+                        and not _atom_cp_installed(root, a)
+                    )
+
                 all_available = all(
-                    _atom_currently_satisfiable(repos, a, config, _disj_constraints(a))
-                    or (
-                        root_deps_running_root is not None
-                        and _running_root_satisfies_atom(a, root_deps_running_root)
+                    (not _circular_self(a))
+                    and (
+                        _atom_currently_satisfiable(repos, a, config, _disj_constraints(a))
+                        or (
+                            root_deps_running_root is not None
+                            and _running_root_satisfies_atom(a, root_deps_running_root)
+                        )
                     )
                     for a in atoms
                 )
@@ -11224,12 +11244,29 @@ def _enqueue_dependencies(
             return ()
         return _dc.get(tuple(_pa.cp.split("/", 1)), ())
 
+    # Real dep_zapdeps skips a "||" alternative satisfied only by the
+    # package currently being resolved (circular self-dep) -- see the
+    # main "||" closure. Mirrors portage-repo/src/lib.rs.
+    _self_cp = (category, package)
+
     def _disj_pref(atoms):
+        def _circular_self(a):
+            _pa = _parse_atom(a)
+            return (
+                _pa is not None
+                and not _pa.blocker
+                and tuple(_pa.cp.split("/", 1)) == _self_cp
+                and not _atom_cp_installed(root, a)
+            )
+
         all_available = all(
-            _atom_currently_satisfiable(repos, a, config, _disj_c(a))
-            or (
-                root_deps_running_root is not None
-                and _running_root_satisfies_atom(a, root_deps_running_root)
+            (not _circular_self(a))
+            and (
+                _atom_currently_satisfiable(repos, a, config, _disj_c(a))
+                or (
+                    root_deps_running_root is not None
+                    and _running_root_satisfies_atom(a, root_deps_running_root)
+                )
             )
             for a in atoms
         )

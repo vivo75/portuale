@@ -14538,15 +14538,38 @@ fn backtracking_resolve(req: &ResolveRequest) -> Result<GraphResult, Error> {
                     .and_then(|at| slot_constraints.get(&(at.category, at.package)))
                     .map_or(&[][..], Vec::as_slice)
             };
+            // Real `dep_zapdeps` skips a `||` alternative that would only
+            // be satisfied by the package currently being resolved (a
+            // circular self-dep) -- e.g. `dev-lang/go`'s BDEPEND
+            // `|| ( >=dev-lang/go-<min> >=dev-lang/go-bootstrap-<min> )`
+            // with nothing installed: the first branch's only tree match
+            // *is* `dev-lang/go`, so real falls through to the
+            // `go-bootstrap` branch. An atom whose `cat/pkg` is this
+            // entry's own and which nothing installed satisfies counts
+            // as unavailable here.
+            let self_cp = (
+                entries[entry_idx].category.clone(),
+                entries[entry_idx].package.clone(),
+            );
             let Ok(flat_deps) = portage_use_reduce::use_reduce_flat_disjunctive(
                 &tokens,
                 &use_flags,
                 portage_use_reduce::MatchMode::Normal,
                 &mut |atoms: &[String]| {
                     let all_available = atoms.iter().all(|a| {
-                        atom_currently_satisfiable(&repos, a, config, disj_constraints(a))
-                            || root_deps_running_root
-                                .is_some_and(|root| running_root_satisfies_atom(a, root))
+                        let circular_self = portage_dep::parse_atom(a).is_some_and(|at| {
+                            at.blocker == portage_dep::Blocker::None
+                                && (at.category.clone(), at.package.clone()) == self_cp
+                                && !atom_cp_installed(root, a)
+                        });
+                        !circular_self
+                            && (atom_currently_satisfiable(
+                                &repos,
+                                a,
+                                config,
+                                disj_constraints(a),
+                            ) || root_deps_running_root
+                                .is_some_and(|root| running_root_satisfies_atom(a, root)))
                     });
                     if !all_available {
                         return portage_use_reduce::AltPreference::Unsatisfiable;
@@ -15448,15 +15471,25 @@ fn enqueue_dependencies(
             .and_then(|at| disj_constraints.get(&(at.category, at.package)))
             .map_or(&[][..], Vec::as_slice)
     };
+    // Real `dep_zapdeps` skips a `||` alternative satisfied only by the
+    // package currently being resolved (circular self-dep) -- see the
+    // main New/Upgrade `||` closure's identical `self_cp` check.
+    let self_cp = (category.to_string(), package.to_string());
     let Ok(flat_deps) = portage_use_reduce::use_reduce_flat_disjunctive(
         &tokens,
         &use_flags,
         portage_use_reduce::MatchMode::Normal,
         &mut |atoms: &[String]| {
             let all_available = atoms.iter().all(|a| {
-                atom_currently_satisfiable(repos, a, config, disj_c(a))
-                    || root_deps_running_root
-                        .is_some_and(|root| running_root_satisfies_atom(a, root))
+                let circular_self = portage_dep::parse_atom(a).is_some_and(|at| {
+                    at.blocker == portage_dep::Blocker::None
+                        && (at.category.clone(), at.package.clone()) == self_cp
+                        && !atom_cp_installed(root, a)
+                });
+                !circular_self
+                    && (atom_currently_satisfiable(repos, a, config, disj_c(a))
+                        || root_deps_running_root
+                            .is_some_and(|root| running_root_satisfies_atom(a, root)))
             });
             if !all_available {
                 portage_use_reduce::AltPreference::Unsatisfiable
