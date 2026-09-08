@@ -473,6 +473,18 @@ pub struct MemoryDb {
     dependents: std::collections::HashMap<(String, String, String), Vec<String>>,
 }
 
+impl MemoryDb {
+    /// An empty snapshot standing in for `root`.
+    pub fn new(root: &Path) -> Self {
+        Self {
+            root: root.to_path_buf(),
+            versions: std::collections::HashMap::new(),
+            contents: std::collections::HashMap::new(),
+            dependents: std::collections::HashMap::new(),
+        }
+    }
+}
+
 impl PackagesDb for MemoryDb {
     fn installed_versions(&self, category: &str, package: &str) -> Vec<String> {
         self.versions
@@ -598,6 +610,41 @@ pub struct VolatileCache {
     entries: std::collections::HashMap<(String, String), std::collections::HashMap<String, String>>,
     /// The repo this cache stands in for (`::reponame`), for provenance.
     repo_name: String,
+}
+
+impl VolatileCache {
+    /// An empty cache standing in for `repo_name`.
+    pub fn new(repo_name: &str) -> Self {
+        Self {
+            entries: std::collections::HashMap::new(),
+            repo_name: repo_name.to_string(),
+        }
+    }
+
+    /// A cache pre-loaded from `(category, pf, aux dict)` triples (a
+    /// snapshot read, or a generated cache not yet flushed to disk).
+    pub fn from_entries(
+        entries: Vec<(String, String, std::collections::HashMap<String, String>)>,
+        repo_name: &str,
+    ) -> Self {
+        let mut cache = Self::new(repo_name);
+        for (category, pf, metadata) in entries {
+            cache.insert(&category, &pf, metadata);
+        }
+        cache
+    }
+
+    /// Store (a copy of) `metadata` under `category/pf` -- Portage
+    /// `volatile._setitem`'s `deepcopy` in.
+    pub fn insert(
+        &mut self,
+        category: &str,
+        pf: &str,
+        metadata: std::collections::HashMap<String, String>,
+    ) {
+        self.entries
+            .insert((category.to_string(), pf.to_string()), metadata);
+    }
 }
 
 impl RepoCache for VolatileCache {
@@ -887,6 +934,30 @@ where
 
 impl<S, D, C, F, M, B, N, P> Director<S, D, C, F, M, B, N, P>
 where
+    D: PackagesDb,
+{
+    /// The installed versions of `category/package` through the
+    /// director's installed-db.
+    pub fn installed_versions(&self, category: &str, package: &str) -> Vec<String> {
+        self.packages_db.installed_versions(category, package)
+    }
+
+    /// The `CONTENTS` paths one installed CPV owns, through the
+    /// director's installed-db.
+    pub fn contents_files(&self, category: &str, package: &str, version: &str) -> Vec<String> {
+        self.packages_db.contents_files(category, package, version)
+    }
+
+    /// The installed packages directly depending on one installed CPV,
+    /// through the director's installed-db.
+    pub fn reverse_dependents(&self, category: &str, package: &str, version: &str) -> Vec<String> {
+        self.packages_db
+            .reverse_dependents(category, package, version)
+    }
+}
+
+impl<S, D, C, F, M, B, N, P> Director<S, D, C, F, M, B, N, P>
+where
     C: RepoCache,
 {
     /// One package's aux dict through the director's repo cache.
@@ -897,12 +968,64 @@ where
     ) -> Result<std::collections::HashMap<String, String>, String> {
         self.repo_cache.metadata(category, pf)
     }
+
+    /// One category's `pf` listing through the director's repo cache.
+    pub fn repo_category(&self, category: &str) -> Vec<String> {
+        self.repo_cache.category(category)
+    }
+}
+
+impl<S, D, C, F, M, B, N, P> Director<S, D, C, F, M, B, N, P>
+where
+    F: Fetcher,
+{
+    /// Materialize one `SRC_URI` file through the director's fetcher: an
+    /// already-materialized `distdir/<filename>` is returned as-is
+    /// (Portage `_check_distfile`), else the entry's `uri` is downloaded
+    /// fresh (non-resume).
+    pub fn fetch(
+        &self,
+        entry: &portage_fetch::SrcUriEntry,
+        distdir: &Path,
+        commands: Option<&portage_fetch::FetchCommands>,
+    ) -> Result<PathBuf, String> {
+        std::fs::create_dir_all(distdir).map_err(|e| format!("{}: {e}", distdir.display()))?;
+        let dest = distdir.join(&entry.filename);
+        if dest.is_file() {
+            return Ok(dest);
+        }
+        self.fetcher.fetch(&FetchRequest {
+            filename: &entry.filename,
+            uri: &entry.uri,
+            dest: &dest,
+            resume: false,
+            commands,
+            vars: Default::default(),
+        })?;
+        Ok(dest)
+    }
+}
+
+impl<S, D, C, F, M, B, N, P> Director<S, D, C, F, M, B, N, P>
+where
+    M: MergeEngine,
+{
+    /// Execute one merge unit through the director's merge engine.
+    pub fn execute(&self, unit: &MergeUnit, ctx: &MergeContext) -> MergeOutcome {
+        self.merge_engine.execute(unit, ctx)
+    }
 }
 
 impl<S, D, C, F, M, B, N, P> Director<S, D, C, F, M, B, N, P>
 where
     B: BinpkgIndex,
 {
+    /// The binary candidates for `category/package` through the
+    /// director's binary-package index.
+    pub fn binpkg_candidates(&self, category: &str, package: &str) -> Vec<portage_repo::Candidate> {
+        self.binpkg_index.candidates(category, package)
+    }
+
     /// One binary candidate's aux record through the director's index.
     pub fn binpkg_metadata(
         &self,
@@ -914,11 +1037,44 @@ where
     }
 }
 
+impl<S, D, C, F, M, B, N, P> Director<S, D, C, F, M, B, N, P>
+where
+    N: NewsSelector,
+{
+    /// The valid, relevant, unread news ids through the director's news
+    /// selector.
+    pub fn unread_news(&self) -> Vec<String> {
+        self.news_selector.unread_ids()
+    }
+}
+
+impl<S, D, C, F, M, B, N, P> Director<S, D, C, F, M, B, N, P>
+where
+    P: SchedulerPolicy,
+{
+    /// Whether the `-jN` DAG may start another build now, through the
+    /// director's scheduler policy.
+    pub fn should_start(&self, running: usize, loadavg_1min: f64) -> bool {
+        self.scheduler_policy.should_start(running, loadavg_1min)
+    }
+
+    /// The hard concurrency ceiling through the director's policy.
+    pub fn max_jobs(&self) -> usize {
+        self.scheduler_policy.max_jobs()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use portage_repo::{GraphResult, ResolveRequest};
     use portage_util::TempDir;
+
+    /// A fresh scratch dir per test (process id + nanos, so parallel
+    /// `cargo test` workers never share one).
+    fn tempdir(prefix: &str) -> std::path::PathBuf {
+        TempDir::new(prefix).keep()
+    }
 
     /// Arguments of [`write_vdb_entry`].
     struct WriteVdbEntryArgs<'a> {

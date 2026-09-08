@@ -680,6 +680,21 @@ fn residual_161_setup(dir: &Path) -> (Vec<RepoConfig>, portage_profile::Config, 
     (repos, config, upgrade)
 }
 
+/// The `souprov` dropped pin: broken by the 2.0 merge, preserved by
+/// installed 1.0, owned by `conpkg-1.0`.
+fn residual_161_pin() -> RevDepPin {
+    RevDepPin {
+        cp: ("dev-libs".to_string(), "souprov".to_string()),
+        atom: "=dev-libs/souprov-1.0:0/1".to_string(),
+        raw_atom: "=dev-libs/souprov-1.0:0/1".to_string(),
+        consumer: (
+            "dev-libs".to_string(),
+            "conpkg".to_string(),
+            "1.0".to_string(),
+        ),
+    }
+}
+
 /// Shared harness for the `collect_feedback` legs: a minimal `ResolveCtx` plus
 /// an empty `PassResult` each leg fills in.
 static NO_STRINGS_161: Vec<String> = Vec::new();
@@ -844,6 +859,68 @@ struct DsInput161Args<'a> {
     root: &'a Path,
     repos: &'a [RepoConfig],
     config: &'a portage_profile::Config,
+}
+
+/// `direct_solve` legs over the `slotconflict*` fixtures.
+fn ds_input_161<'a>(args: DsInput161Args<'a>) -> DirectSolveInput<'a> {
+    let DsInput161Args {
+        conflicts,
+        entries,
+        top_level,
+        excluded,
+        selective,
+        replace_cps,
+        root,
+        repos,
+        config,
+    } = args;
+    DirectSolveInput {
+        conflicts,
+        entries,
+        top_level,
+        excluded,
+        selective,
+        replace_cps,
+        root,
+        repos,
+        config,
+    }
+}
+
+/// The old/new shape with top-level args: `oldconsumer`'s
+/// `<2.0` forces 1.0 to stay, so the bare `newconsumer` tuple drops
+/// 2.0 with a skip row -- the baseline every leg below varies.
+fn ds_s0_161() -> (
+    [SlotConflict; 1],
+    Vec<GraphEntry>,
+    HashSet<(String, String)>,
+) {
+    let new_cpv = "dev-libs/slotconflictnewconsumer-1.0:0/0::testrepo";
+    let old_cpv = "dev-libs/slotconflictoldconsumer-1.0:0/0::testrepo";
+    let conflicts = [s2_conflict(vec![
+        (
+            "2.0",
+            false,
+            vec![(new_cpv, "dev-libs/slotconflicttarget", false)],
+        ),
+        (
+            "1.0",
+            false,
+            vec![(old_cpv, "<dev-libs/slotconflicttarget-2.0", false)],
+        ),
+    ])];
+    let entries = s2_entries(vec!["2.0", "1.0"]);
+    let top: HashSet<(String, String)> = HashSet::from([
+        (
+            "dev-libs".to_string(),
+            "slotconflictnewconsumer".to_string(),
+        ),
+        (
+            "dev-libs".to_string(),
+            "slotconflictoldconsumer".to_string(),
+        ),
+    ]);
+    (conflicts, entries, top)
 }
 
 /// Arguments of [`run_161`].

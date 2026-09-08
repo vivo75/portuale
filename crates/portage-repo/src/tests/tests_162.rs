@@ -22,6 +22,12 @@ fn bare_cp_rejects_every_non_bare_form() {
     }
 }
 
+/// Fresh unique scratch dir per test (vdb + repo live under it, so
+/// the per-root memo caches never see a reused path).
+fn dir_162(tag: &str) -> std::path::PathBuf {
+    TempDir::new(&format!("portuale-162-{tag}")).keep()
+}
+
 /// One installed instance under `<root>/var/db/pkg` with the given
 /// `SLOT` plus caller-supplied field files (`USE`, `IUSE`, ...).
 fn install_162(root: &Path, cat: &str, pf: &str, slot: &str, files: &[(&str, &[u8])]) {
@@ -410,6 +416,10 @@ fn qatom_162(atom: &str) -> QueueItem {
     }
 }
 
+fn self_162(cat: &str, pkg: &str) -> RootCp {
+    (false, cat.to_string(), pkg.to_string())
+}
+
 // ---- `disjunction_preference` (Portage `dep_zapdeps` choice bins). ----
 /// Arguments of [`disj_162`].
 struct Disj162Args<'a> {
@@ -502,6 +512,15 @@ fn disj_circ_162(args: DisjCirc162Args<'_>) -> portage_use_reduce::AltPreference
         gate_entries: entries,
         gate_queued: queued,
     })
+}
+
+fn circ_map_162(
+    parent: &RootCp,
+    children: Vec<CircularDepChild>,
+) -> HashMap<RootCp, Vec<CircularDepChild>> {
+    let mut map = HashMap::new();
+    map.insert(parent.clone(), children);
+    map
 }
 /// Arguments of [`promote_162`].
 struct Promote162Args<'a> {
