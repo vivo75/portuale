@@ -158,7 +158,42 @@ fn data_line(name: &str, bytes: &[u8]) -> String {
     )
 }
 
+// GPG binpkg signatures (`FEATURES=binpkg-signing`).
+
+/// Portage's committed GnuPG test keyring, copied into pmtest
+/// (`fixtures/helpers/gpg-keyring/`): trusted `0x5D90EA06352177F6`,
+/// untrusted `0x8812797DDF1DD192`, passphrase `GentooTest`. Neither
+/// key expires.
+const GPG_TRUSTED_KEY: &str = "0x5D90EA06352177F6";
+
+const GPG_UNTRUSTED_KEY: &str = "0x8812797DDF1DD192";
+
 const GPG_PASSPHRASE: &str = "GentooTest";
+
+/// A writable copy of the committed keyring under a fresh tempdir
+/// (`gpg` refuses a homedir it doesn't own; the committed tree stays
+/// read-only). `chmod 700`.
+fn test_gpg_home(tag: &str) -> std::path::PathBuf {
+    fn copy_dir(src: &Path, dest: &Path) {
+        fs::create_dir_all(dest).unwrap();
+        for entry in portage_util::read_dir_entries(src).unwrap() {
+            let to = dest.join(entry.file_name());
+            if entry.file_type().unwrap().is_dir() {
+                copy_dir(&entry.path(), &to);
+            } else {
+                fs::copy(entry.path(), &to).unwrap();
+            }
+        }
+    }
+    let dest = TempDir::new(&format!("portuale-gpg-{tag}")).keep();
+    copy_dir(
+        &PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/helpers/gpg-keyring"),
+        &dest,
+    );
+    use std::os::unix::fs::PermissionsExt;
+    fs::set_permissions(&dest, fs::Permissions::from_mode(0o700)).unwrap();
+    dest
+}
 
 /// Best-effort `gpg-agent` shutdown for a test homedir.
 /// Verify-only tests never start an agent and don't need this.
@@ -170,6 +205,15 @@ fn kill_gpg_agent(home: &Path) {
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .status();
+}
+
+fn test_gpg_verify(home: &Path, request: bool, verify: bool) -> GpgVerify {
+    GpgVerify {
+        verify_signature: verify,
+        request_signature: request,
+        base_command: DEFAULT_GPG_VERIFY_BASE_COMMAND.to_string(),
+        gpg_home: home.display().to_string(),
+    }
 }
 
 /// Clear-sign `data` for the `Manifest`; detached-sign it for a member.
@@ -323,6 +367,7 @@ fn inner_entry<'a>(name: &'a str, data: &'a [u8]) -> InnerTestEntry<'a> {
 
 mod digest;
 mod extract;
+mod gpg;
 mod inner;
 mod local_index;
 mod manifest;

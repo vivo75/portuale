@@ -38,6 +38,34 @@ fn fixture_binhost() -> portage_profile::BinRepo {
     }
 }
 
+/// A binrepo whose `Packages` index lives only in the in-memory override
+/// table, under a pid+nanos-unique `sync_uri` so parallel tests never collide.
+fn in_memory_binhost_1010(
+    tag: &str,
+    entries: Vec<HashMap<String, String>>,
+) -> portage_profile::BinRepo {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let binrepo = portage_profile::BinRepo {
+        name: format!("multiinst-{tag}"),
+        sync_uri: format!(
+            "https://binhost.invalid/{tag}-{}-{nanos}",
+            std::process::id()
+        ),
+        priority: 1,
+        location: None,
+        verify_signature: false,
+        frozen: false,
+    };
+    set_remote_binary_index_override(
+        &binrepo.packages_dir(Path::new("/")),
+        Some(std::sync::Arc::new(BinaryIndex::from_entries(entries))),
+    );
+    binrepo
+}
+
 fn resolve(category: &str, package: &str) -> PretendOutcome {
     let root = fixtures_root();
     let repos = find_repos(&root).expect("fixture repos.conf must resolve");

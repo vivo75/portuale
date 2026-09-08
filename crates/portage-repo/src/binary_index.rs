@@ -128,6 +128,17 @@ pub(crate) static REMOTE_INDEX_OVERRIDE: OnceLock<
     RwLock<HashMap<PathBuf, Option<std::sync::Arc<BinaryIndex>>>>,
 > = OnceLock::new();
 
+/// Installs (or replaces) the in-memory index for `pkgdir` (Portage `bintree`'s
+/// fetched-then-maybe-cached `pkgindex`): `Some` resolves from it, `None`
+/// resolves nothing (a failed non-`--pretend` refresh drops even a stale cache).
+pub fn set_remote_binary_index_override(pkgdir: &Path, index: Option<std::sync::Arc<BinaryIndex>>) {
+    REMOTE_INDEX_OVERRIDE
+        .get_or_init(|| RwLock::new(HashMap::new()))
+        .write()
+        .unwrap()
+        .insert(pkgdir.to_path_buf(), index);
+}
+
 pub(crate) fn remote_binary_index_override(
     pkgdir: &Path,
 ) -> Option<Option<std::sync::Arc<BinaryIndex>>> {

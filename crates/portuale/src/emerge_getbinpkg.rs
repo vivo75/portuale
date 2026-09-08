@@ -1843,4 +1843,89 @@ mod tests {
         );
         let _ = std::fs::remove_dir_all(&tmp);
     }
+
+    /// A resumed binary entry (`remote_binary: false` -- all `resume_entry`
+    /// records) with no local `$PKGDIR` file must FAIL with the local-only
+    /// error, never re-hit the binhost: Portage replays a resumed binary
+    /// against its local bintree only (a never-downloaded binary isn't
+    /// resumable at all).
+    #[test]
+    fn merge_one_binary_entry_never_refetches_for_a_non_remote_entry() {
+        let tmp = tempdir();
+        let root = tmp.join("root");
+        let pkgdir = tmp.join("pkgdir");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::create_dir_all(&pkgdir).unwrap();
+        let binhost = tmp.join("binhost");
+        std::fs::create_dir_all(binhost.join("dev-libs")).unwrap();
+        std::fs::copy(
+            fixtures_root().join("pkgdir/dev-libs/binpkgrmpkg-1.0.tbz2"),
+            binhost.join("dev-libs/binpkgrmpkg-1.0.tbz2"),
+        )
+        .unwrap();
+        let size = std::fs::metadata(binhost.join("dev-libs/binpkgrmpkg-1.0.tbz2"))
+            .unwrap()
+            .len();
+        std::fs::write(
+            binhost.join("Packages"),
+            format!(
+                "TIMESTAMP: 0\nPACKAGES: 1\n\nBUILD_ID: 1\nCPV: dev-libs/binpkgrmpkg-1.0\n\
+                 DEFINED_PHASES: -\nEAPI: 8\nKEYWORDS: amd64\nPATH: dev-libs/binpkgrmpkg-1.0.tbz2\n\
+                 REPO: testrepo\nSIZE: {size}\nSLOT: 0\nUSE:\n"
+            ),
+        )
+        .unwrap();
+        let config = Config {
+            binrepos: vec![BinRepo {
+                name: "test".into(),
+                sync_uri: format!("file://{}", binhost.display()),
+                priority: 1,
+                location: None,
+                verify_signature: false,
+                frozen: false,
+            }],
+            ..Default::default()
+        };
+        // Sanity: the binhost serves this cpv (a fetch WOULD succeed) -- so the
+        // failure below proves no fetch was tried.
+        assert!(
+            find_remote_binpkg(&config.binrepos, &root, "dev-libs", "binpkgrmpkg", "1.0").is_some()
+        );
+
+        // Resumed shape: `graph_entry` defaults match `resume_entry`
+        // (`remote_binary: false`, `build_id: None`).
+        let entry = graph_entry("binpkgrmpkg", CandidateSource::Binary, "1.0");
+        assert!(!entry.remote_binary);
+        // No local stanza vouches for it (empty `$PKGDIR`), so the failure is
+        // Portage's `!!! Fetching Binary failed` arm -- never a refetch, and
+        // never portuale's old `no binpkg file under ...` text.
+        let err = merge_one_binary_entry(MergeOneBinaryEntryArgs {
+            entry: &entry,
+            config: &config,
+            root: &root,
+            pkgdir: &pkgdir,
+            portage_tmpdir: &tmp.join("pt"),
+            merge_options: &MergeOptions::default(),
+            progress: mrg_director::MergeProgress::single(),
+            display: &crate::emerge_build::StatusDisplay::for_tests(),
+        })
+        .expect_err("a resumed binary with no local file must fail, not refetch");
+        assert!(
+            is_binpkg_missing_failure(&err),
+            "silent missing-file sentinel, got: {err}"
+        );
+        assert!(
+            !err.contains("no binpkg file under"),
+            "portuale's own wording is gone, got: {err}"
+        );
+        assert!(
+            !err.contains("binhost"),
+            "must not mention the index, got: {err}"
+        );
+        assert!(
+            portage_util::read_dir_entries(&pkgdir).unwrap().is_empty(),
+            "nothing may be downloaded into $PKGDIR"
+        );
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
 }

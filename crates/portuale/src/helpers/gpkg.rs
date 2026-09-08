@@ -42,3 +42,23 @@ enum NameKind {
     User,
     Group,
 }
+
+// ---------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use portage_util::TempDir;
+    use std::os::unix::fs::PermissionsExt;
+
+    fn unsigned_verify() -> crate::binpkg::GpgVerify {
+        crate::binpkg::GpgVerify {
+            verify_signature: true,
+            request_signature: false,
+            base_command: crate::binpkg::DEFAULT_GPG_VERIFY_BASE_COMMAND.to_string(),
+            gpg_home: "/nonexistent-gnupg".to_string(),
+        }
+    }
+}
