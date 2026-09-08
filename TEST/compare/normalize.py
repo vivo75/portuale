@@ -83,26 +83,20 @@ def norm_metadata(text: str) -> str:
     return "\n".join(sorted(text.splitlines())) + "\n"
 
 # saved-env lines to drop outright (`declare -x KEY=…` or bare `KEY=…`):
-# volatile bash internals, plus:
-#  * locale vars (LANG/LC_*): the two consumer containers are invoked
-#    with different locale env (`consume.sh` exports `LC_ALL`, the
-#    portage side keeps the image's split `LC_*`); real's binpkg env
-#    keeps whatever the phase inherited either way -- a test-harness
-#    difference, not a portuale bug.
-#  * EMERGE_DEFAULT_OPTS / PORTAGE_RUNNING_ROOT / O: portuale spawns the
-#    binpkg phase with the full inherited process env (real portage
-#    curates `mysettings.environ()`), so these leak into the regenerated
-#    vdb `environment` where real's has nothing. Tracked as L1-f; a
-#    distinct root cause from L1-c.
-# FEATURES / PORTAGE_FEATURES are NOT dropped any more -- L1-c's
-# PORTAGE_UPDATE_ENV regeneration now makes them match real.
+# volatile bash internals, plus the locale vars (LANG/LC_*): the two
+# consumer containers are invoked with different locale env (`consume.sh`
+# exports `LC_ALL`; the portage side ends up with a bare `LANG`), and the
+# regenerated binpkg env keeps whatever the phase inherited -- a
+# test-harness difference, not a portuale bug.
+# FEATURES / PORTAGE_FEATURES are NOT dropped -- L1-c's PORTAGE_UPDATE_ENV
+# regeneration makes them match real. Nor are EMERGE_DEFAULT_OPTS /
+# PORTAGE_RUNNING_ROOT / O -- L1-f's phase-env whitelist keeps them out.
 ENV_DROP = re.compile(
     r"^(declare (-[-x]+ )?)?"
     r"(SRANDOM|EPOCHREALTIME|EPOCHSECONDS|SECONDS|BASHPID|PPID|BUILD_TIME|BUILD_ID|"
     r"HOSTNAME|SANDBOX_PID|PORTAGE_PID|PORTAGE_IPC_KEY|"
     r"COLUMNS|LINES|RANDOM|"
-    r"LANG|LC_[A-Z]+|"
-    r"EMERGE_DEFAULT_OPTS|PORTAGE_RUNNING_ROOT|O)="
+    r"LANG|LC_[A-Z]+)="
 )
 ENV_MASK = re.compile(
     r"^((?:declare (?:-[-x]+ )?)?(T|WORKDIR|PORTAGE_BUILDDIR|HOME|PWD|OLDPWD|"

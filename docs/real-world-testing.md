@@ -880,13 +880,13 @@ run. Committed only when asked.
    refiltered, ×9) and **L1-e (new) — `pkg_pretend` not run on a
    `-k`/`--getbinpkg` binary merge** (the `phases` fixture's phase.log
    had `setup preinst postinst` where portage's has `pretend setup
-   preinst postinst`). **All of L1-a…L1-e then fixed on `main`** (see
+   preinst postinst`). **All of L1-a…L1-f then fixed on `main`** (see
    `TEST/findings/l1.md`); the re-run is **0 hard findings, 0
-   unexplained**, `known-divergences.yaml` empty. L1-c's fix
-   (`PORTAGE_UPDATE_ENV` vdb-env regeneration + a `FEATURES`-is-
-   incremental fix in `portage-profile` + a brush-wrapper local-leak
-   fix) also turned up a LOW residual L1-f (binpkg phase env inherits
-   the full process env), handled in `normalize.py`.
+   unexplained**, `known-divergences.yaml` empty. L1-c: `PORTAGE_UPDATE_
+   ENV` vdb-env regeneration + a `FEATURES`-is-incremental fix in
+   `portage-profile` + a brush save-env-wrapper local-leak fix. L1-f
+   (found while fixing L1-c): the binpkg phase env inherited the whole
+   process env — now filtered to real's `environ_whitelist`.
    Also fixed here: `snapshot.sh` aborted the whole walk (silently, under
    `set -o pipefail`) when `getfattr` dereferenced a dangling symlink —
    now `getfattr -h` + `set -e`-safe `stat`/`readlink`/`getfattr`.

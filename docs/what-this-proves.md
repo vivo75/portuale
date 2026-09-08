@@ -15614,17 +15614,22 @@ the phase). **L1-b/d/e were then fixed on `main`** (`config_install_mask`
 prefers the env `INSTALL_MASK`; the merge dispatch routes any `Binary`
 entry through `run_merge_plan`, not only under `--getbinpkg`;
 `merge_binpkg` runs a `DEFINED_PHASES`-gated `pretend` hook before
-`pkg_setup`). **L1-a and L1-c then followed**, so the re-run is **0 hard
-findings, 0 unexplained** and `known-divergences.yaml` is empty. L1-a:
-`resolve_pretend` (+ py mirror) falls back to `best_installed_for_atom`
-before `NoVisibleCandidate` under `--usepkg`/`--usepkgonly` -- an
-installed dep with no binpkg is satisfied, not reported missing. L1-c:
-`merge_binpkg` now regenerates the vdb `environment.bz2` from the live
-merge-time environment (real `PORTAGE_UPDATE_ENV` around `postinst`), so
-`FEATURES` and stray build-host locals match real -- which also needed a
-`FEATURES`-is-incremental fix in `portage-profile` and a `___`-prefix
-rename of the brush save-env wrapper's locals so
-`__filter_readonly_variables` strips them. `compare/snapshot.sh` was also
+`pkg_setup`). **L1-a, L1-c and L1-f then followed**, so the re-run is **0
+hard findings, 0 unexplained** and `known-divergences.yaml` is empty.
+L1-a: `resolve_pretend` (+ py mirror) falls back to
+`best_installed_for_atom` before `NoVisibleCandidate` under
+`--usepkg`/`--usepkgonly` -- an installed dep with no binpkg is
+satisfied, not reported missing. L1-c: `merge_binpkg` now regenerates the
+vdb `environment.bz2` from the live merge-time environment (real
+`PORTAGE_UPDATE_ENV` around `postinst`), so `FEATURES` and stray
+build-host locals match real -- which also needed a `FEATURES`-is-
+incremental fix in `portage-profile` and a `___`-prefix rename of the
+brush save-env wrapper's locals so `__filter_readonly_variables` strips
+them. L1-f (found in the process): the binpkg phase env inherited the
+whole process env (`EMERGE_DEFAULT_OPTS`, a portuale-only
+`PORTAGE_RUNNING_ROOT`, `O`) -- now filtered to real's
+`environ_whitelist` in `run_one_phase_bash` / the brush setup script.
+`compare/snapshot.sh` was also
 hardened: a dangling symlink in the walk made `getfattr` fail and, under
 `set -o pipefail`, silently abort the whole snapshot before the VDB tar
 -- now `getfattr -h` plus `set -e`-safe `stat`/`readlink`.

@@ -1100,6 +1100,180 @@ const SANDBOXED_SRC_PHASES: &[&str] = &[
     "install",
 ];
 
+/// Real `special_env_vars.environ_whitelist` + its `environ_whitelist_re`
+/// (`^(CCACHE_|DISTCC_).*`): the calling-environment variables real
+/// portage's `config.environ()` carries into a phase's environment.
+/// portuale spawns phases with the full inherited process env plus its
+/// `phase_env_vars` overrides; real never inherits wholesale, so vars
+/// like `EMERGE_DEFAULT_OPTS` (an `emerge` CLI option, not a build var)
+/// or a portuale-only `PORTAGE_RUNNING_ROOT` leaked through and, once
+/// L1-c started regenerating the vdb `environment` from the live phase
+/// env, into the vdb where real's has nothing (L1-f). `run_one_phase_*`
+/// now filters the inherited env to this list; `phase_env_vars` still
+/// sets everything portuale actually needs on top. Copied verbatim from
+/// a live `special_env_vars.environ_whitelist` -- entries portuale never
+/// sets simply won't be present to pass through.
+const ENVIRON_WHITELIST: &[&str] = &[
+    "A",
+    "AA",
+    "ACCEPT_LICENSE",
+    "BASH_ENV",
+    "BINPKG_FORMAT",
+    "BROOT",
+    "BUILD_ID",
+    "BUILD_PREFIX",
+    "CATEGORY",
+    "COLORTERM",
+    "COLUMNS",
+    "CVS_RSH",
+    "D",
+    "DISPLAY",
+    "DISTDIR",
+    "DOC_SYMLINKS_DIR",
+    "EAPI",
+    "EBUILD",
+    "EBUILD_FORCE_TEST",
+    "EBUILD_PHASE",
+    "EBUILD_PHASE_FUNC",
+    "ECHANGELOG_USER",
+    "ECLASSDIR",
+    "ECLASS_DEPTH",
+    "ED",
+    "EDITOR",
+    "EMERGE_FROM",
+    "ENV_UNSET",
+    "EPREFIX",
+    "EROOT",
+    "ESYSROOT",
+    "FEATURES",
+    "FILESDIR",
+    "GPG_AGENT_INFO",
+    "HOME",
+    "INSTALL_MASK",
+    "LANG",
+    "LC_ALL",
+    "LC_COLLATE",
+    "LC_CTYPE",
+    "LC_MESSAGES",
+    "LC_MONETARY",
+    "LC_NUMERIC",
+    "LC_PAPER",
+    "LC_TIME",
+    "LD_PRELOAD",
+    "LESS",
+    "LESSOPEN",
+    "LOGNAME",
+    "LS_COLORS",
+    "MAKEFLAGS",
+    "MAKEOPTS",
+    "MERGE_TYPE",
+    "NINJAOPTS",
+    "NOCOLOR",
+    "NO_COLOR",
+    "P",
+    "PAGER",
+    "PATH",
+    "PF",
+    "PKGDIR",
+    "PKGUSE",
+    "PKG_INSTALL_MASK",
+    "PKG_LOGDIR",
+    "PKG_TMPDIR",
+    "PM_EBUILD_HOOK_DIR",
+    "PN",
+    "PORTAGE_ACTUAL_DISTDIR",
+    "PORTAGE_ARCHLIST",
+    "PORTAGE_BASHRC",
+    "PORTAGE_BASHRC_FILES",
+    "PORTAGE_BINPKG_FILE",
+    "PORTAGE_BINPKG_TAR_OPTS",
+    "PORTAGE_BINPKG_TMPFILE",
+    "PORTAGE_BIN_PATH",
+    "PORTAGE_BUILDDIR",
+    "PORTAGE_BUILD_GROUP",
+    "PORTAGE_BUILD_USER",
+    "PORTAGE_BUNZIP2_COMMAND",
+    "PORTAGE_BZIP2_COMMAND",
+    "PORTAGE_COLORMAP",
+    "PORTAGE_COMPRESS",
+    "PORTAGE_COMPRESSION_COMMAND",
+    "PORTAGE_COMPRESS_EXCLUDE_SUFFIXES",
+    "PORTAGE_CONFIGROOT",
+    "PORTAGE_DEBUG",
+    "PORTAGE_DEPCACHEDIR",
+    "PORTAGE_DOHTML_UNWARNED_SKIPPED_EXTENSIONS",
+    "PORTAGE_DOHTML_UNWARNED_SKIPPED_FILES",
+    "PORTAGE_DOHTML_WARN_ON_SKIPPED_FILES",
+    "PORTAGE_EBUILD_EXIT_FILE",
+    "PORTAGE_ECLASS_LOCATIONS",
+    "PORTAGE_FEATURES",
+    "PORTAGE_GID",
+    "PORTAGE_GRPNAME",
+    "PORTAGE_INST_GID",
+    "PORTAGE_INST_UID",
+    "PORTAGE_INTERNAL_CALLER",
+    "PORTAGE_IPC_DAEMON",
+    "PORTAGE_IUSE",
+    "PORTAGE_LOG_FILE",
+    "PORTAGE_OVERRIDE_EPREFIX",
+    "PORTAGE_PIPE_FD",
+    "PORTAGE_PROPERTIES",
+    "PORTAGE_PYM_PATH",
+    "PORTAGE_PYTHON",
+    "PORTAGE_PYTHONPATH",
+    "PORTAGE_QUIET",
+    "PORTAGE_REPOSITORIES",
+    "PORTAGE_REPO_NAME",
+    "PORTAGE_REPO_REVISIONS",
+    "PORTAGE_RESTRICT",
+    "PORTAGE_SOCKS5_PROXY",
+    "PORTAGE_TMPDIR",
+    "PORTAGE_UPDATE_ENV",
+    "PORTAGE_USERNAME",
+    "PORTAGE_VERBOSE",
+    "PORTAGE_WORKDIR_MODE",
+    "PORTAGE_XATTR_EXCLUDE",
+    "PORTDIR",
+    "PORTDIR_OVERLAY",
+    "PR",
+    "PREROOTPATH",
+    "PV",
+    "PVR",
+    "PYTHONDONTWRITEBYTECODE",
+    "REPLACED_BY_VERSION",
+    "REPLACING_VERSIONS",
+    "ROOT",
+    "ROOTPATH",
+    "SANDBOX_LOG",
+    "SSH_AGENT_PID",
+    "SSH_AUTH_SOCK",
+    "STY",
+    "SYSROOT",
+    "T",
+    "TEMP",
+    "TERM",
+    "TERMCAP",
+    "TMP",
+    "TMPDIR",
+    "USER",
+    "USE_EXPAND",
+    "USE_ORDER",
+    "WINDOW",
+    "WORKDIR",
+    "XARGS",
+    "XAUTHORITY",
+    "__PORTAGE_TEST_HARDLINK_LOCKS",
+    "ftp_proxy",
+    "http_proxy",
+    "https_proxy",
+    "no_proxy",
+];
+
+/// `key` survives real portage's `config.environ()` calling-env filter.
+pub(crate) fn environ_whitelisted(key: &str) -> bool {
+    ENVIRON_WHITELIST.contains(&key) || key.starts_with("CCACHE_") || key.starts_with("DISTCC_")
+}
+
 /// A `FEATURES` token check, the same one `pretend.rs`/`ebuild_merge.rs`
 /// already do -- read straight from the process environment.
 fn feature_token_present(token: &str) -> bool {
@@ -1646,6 +1820,16 @@ fn phase_env_vars(
     }
 
     vars.extend(extra_env.iter().cloned());
+
+    // A binary-merge phase (`run_phase_from_saved_env`, which stamps
+    // `MERGE_TYPE=binary`) runs from the package's saved bash env, not a
+    // re-sourced ebuild -- real portage never sets `O` (the ebuild's
+    // source dir, not in `environ_whitelist`) for it, and it is
+    // meaningless there anyway (no source repo). Dropping it keeps the
+    // regenerated vdb `environment` matching real (L1-f).
+    if vars.iter().any(|(k, v)| k == "MERGE_TYPE" && v == "binary") {
+        vars.retain(|(k, _)| k != "O");
+    }
     vars
 }
 
@@ -1669,8 +1853,7 @@ fn phase_setup_script(
     config_root: &Path,
     extra_env: &[(String, String)],
 ) -> String {
-    let mut script = String::new();
-    for (name, value) in phase_env_vars(
+    let vars = phase_env_vars(
         env,
         root,
         ebuild_phase_value,
@@ -1679,7 +1862,25 @@ fn phase_setup_script(
         helpers_dir,
         config_root,
         extra_env,
-    ) {
+    );
+    let mut script = String::new();
+    // The embedded brush shell starts from the inherited process env
+    // (like the bash backend's subprocess). Real `doebuild` never
+    // inherits wholesale -- drop every calling-env var real's
+    // `environ_whitelist` wouldn't keep, before the `phase_env_vars`
+    // exports set what portuale needs (L1-f, mirrors `run_one_phase_bash`).
+    let set_here: std::collections::HashSet<&str> = vars.iter().map(|(k, _)| k.as_str()).collect();
+    for (name, _) in std::env::vars() {
+        if !environ_whitelisted(&name)
+            && !set_here.contains(name.as_str())
+            && name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
+            && !name.is_empty()
+            && !name.as_bytes()[0].is_ascii_digit()
+        {
+            script.push_str(&format!("unset {name}\n"));
+        }
+    }
+    for (name, value) in vars {
         script.push_str(&format!("export {name}={value:?}\n"));
     }
     script
@@ -1856,6 +2057,14 @@ fn run_one_phase_bash(
         extra_env,
     );
     let mut cmd = sandbox_wrapped_command(&bin_dir.join("ebuild.sh"), phase, iso);
+    // Real `doebuild` spawns a phase with a curated `config.environ()`,
+    // never the inherited process env wholesale -- so `EMERGE_DEFAULT_OPTS`
+    // and portuale-only vars don't leak into the phase (and, since L1-c,
+    // into the regenerated vdb `environment`). Keep only the calling-env
+    // vars real's `environ_whitelist` keeps; `phase_env_vars` sets the
+    // rest on top. (L1-f.)
+    cmd.env_clear();
+    cmd.envs(std::env::vars().filter(|(k, _)| environ_whitelisted(k)));
     cmd.envs(vars);
     if let Some(path) = log_file {
         let (out, err) = open_log_file(path)?;

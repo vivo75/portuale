@@ -941,7 +941,7 @@ mod tests {
     /// `FEATURES`, not the binpkg's build-time one. `merge_binpkg` runs
     /// that regeneration unconditionally now.
     #[test]
-    fn merge_binpkg_regenerates_the_vdb_environment_with_merge_time_features() {
+    fn merge_binpkg_regenerates_a_curated_merge_time_vdb_environment() {
         let tmp = tempdir();
         let root = tmp.join("root");
         std::fs::create_dir_all(&root).unwrap();
@@ -979,6 +979,17 @@ mod tests {
         assert!(
             !env.contains("___sfe_") && !env.contains("___save_and_filter_ebuild_env"),
             "the env-regeneration wrapper's internals leaked into the vdb env"
+        );
+        // L1-f: the phase env is filtered to real's `environ_whitelist`,
+        // so a non-whitelisted process-env var (`cargo test` always sets
+        // `CARGO_MANIFEST_DIR`) never reaches the regenerated vdb env.
+        assert!(
+            std::env::var_os("CARGO_MANIFEST_DIR").is_some(),
+            "test precondition: CARGO_MANIFEST_DIR is set under `cargo test`"
+        );
+        assert!(
+            !env.contains("CARGO_MANIFEST_DIR"),
+            "a non-whitelisted process-env var leaked into the vdb environment"
         );
         let _ = std::fs::remove_dir_all(&tmp);
     }
