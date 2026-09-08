@@ -4657,6 +4657,47 @@ sorted by filename for deterministic tests, rather than real
 `os.listdir()`'s own arbitrary/OS-dependent order (`CONTENTS` line order
 has no real semantic meaning portage itself relies on).
 
+### `emerge` / `ebuild`: install and uninstall require privilege (`secpass == 2`)
+
+Real `_emerge/actions.py:3964-4012`: before running any action that
+writes into a root-owned filesystem, `emerge` checks
+`portage.data.secpass`. A real merge -- plus `--unmerge`/`-C`,
+`--depclean`/`-c`, `--prune`/`-P`, `--deselect`/`-W` (world-file
+rewrite), `--config`, `--clean` -- needs `secpass == 2`, and exits `1`
+with `emerge: superuser access is required` otherwise. `secpass == 2`
+means `uid == 0` **or** real "unprivileged mode" (`data.py:111-114`):
+the caller is not root but *owns* the target root -- can write to it,
+and it is not writable merely because of the world-writable bit -- which
+covers a prefix / chroot / staging tree the user set up themselves.
+
+Portuale has no `portage`-group tier (real `secpass == 1`, which only
+ever grants `--fetchonly`/`--buildpkgonly`), so this collapses to a
+single check, `privileges::is_privileged(root)`: `geteuid() == 0`, or a
+non-root caller who owns `$ROOT` (or its nearest existing ancestor, real
+`first_existing`) and it is not world-writable. The gate lives once in
+`pretend::run` (right after the `--sync`/`--ask` guards), exempting
+`--pretend` and the read-only query actions (`--search`, `--info`,
+`--list-sets`, `--check-news`) and `--regen`/`--metadata` (which write
+the repo cache, not the root). `mrg` routes through `pretend::run` so it
+is covered for free.
+
+Real `bin/ebuild` has *no* such upfront guard -- it just fails
+mid-phase with a permissions error. Portuale adds the same clear check
+for `ebuild <file> merge|qmerge|unmerge` (`ebuild.rs`), the commands
+that mutate the live root and vdb; every other `ebuild` phase
+(`unpack`/`compile`/`install`/...) writes only into `${WORKDIR}`/`${D}`
+under `PORTAGE_TMPDIR` and is left ungated.
+
+The escape hatch is what keeps the whole test suite working: every
+real-merge test in `test_portuale.py` merges into a `tmp_path` root the
+test user just created, so `is_privileged` returns `true` in unprivileged
+mode. `test_emerge_and_ebuild_refuse_to_merge_into_a_root_owned_tree`
+(skipped when the suite itself runs as root) points `$ROOT` at a
+non-existent child of `/usr` and asserts `emerge -C` / `--depclean` /
+a plain merge / `ebuild ... merge` are all refused, while `--pretend`
+and `--info` still run. Four `privileges` unit tests cover the
+ownership / world-writable / unreachable-parent branches.
+
 ### Real package removal: `unmerge` (task #55's own natural complement)
 
 `ebuild <file> unmerge` (`portuale/src/ebuild_unmerge.rs`) really
@@ -6461,6 +6502,53 @@ ls "${ROOT}"/usr/lib/libpreservetest.so.1          # preserved
 ls "${ROOT}"/usr/lib/libpreservetest.so.1          # gone
 cat "${ROOT}"/var/lib/portage/preserved_libs_registry   # {}
 ```
+
+### `preserve-libs`: the `!!! existing preserved libs:` advisory (`emerge @preserved-rebuild` prompt)
+
+The user-facing half is real now. Real `post_emerge()`
+(`lib/_emerge/post_emerge.py:141-152`): after any `emerge` run that
+changed the vdb, if the `preserved_libs_registry` still has entries,
+print
+
+```
+!!! existing preserved libs:
+>>> package: <cpv>
+ *  - <path>
+ *      used by <consumer-path> (<consumer-cpv>)
+Use emerge @preserved-rebuild to rebuild packages using these libraries
+```
+
+New `preserved_libs.rs` (`show_preserved_libs_notice` +
+`display_preserved_libs`) ports real `post_emerge`'s gate/banner/trailer
+and real `display_preserved_libs(vardb, verbose)`
+(`lib/portage/util/_dyn_libs/display_preserved_libs.py`): the per-`cpv`
+`>>> package:` blocks, `MAX_DISPLAY = 3` consumers each (`--verbose`
+shows all, `used by N other files` past the cap), hardlink aliases
+grouped and listed together (real `samefile_map`), a consumer that is
+itself one of the *same* provider's own preserved libs filtered out
+(real `internal_plib_keys`), a consumer that is a preserved lib of
+*another* package labelled `(preserved)` (real bug #461908), and
+`--quiet` collapsing the whole thing to `!!! existing preserved libs
+found`. Colours via the existing `crate::color` (`!!!`/`>>>`/` * ` are
+WARN, `emerge @preserved-rebuild` is GOOD), matching real `colorize()`.
+
+Wired into every `emerge` action that changes the vdb: the merge action
+(after the elog batch -- plain `emerge` and `--getbinpkg`, not
+`--buildpkgonly`), `--resume`, and the shared real-removal path
+`execute_unmerge` (`emerge -C` / `--depclean` / `--prune`). Real
+`post_emerge` reloads + prunes the registry first "to ensure that we do
+not display stale data"; portuale already prunes during the merge/unmerge
+itself (previous section), so the read here is current. A preserved lib
+whose owning package already left the vdb uses the same `soname_consumers`
+fallback as the rest of this subsystem.
+
+Verified for real (`test_portuale.py`
+`test_emerge_preserved_libs_advisory_and_rebuild_set`): merge
+`dev-libs/libpreservetest` + `dev-libs/consumepreservetest`, `emerge -C
+dev-libs/libpreservetest` -> the advisory block prints naming
+`consumepreservetest` as the consumer, `emerge -p @preserved-rebuild`
+expands to it, then `emerge -C dev-libs/consumepreservetest` -> the
+library is deleted and the advisory stops.
 
 ### `env_update()`/`ldconfig` triggering: a merge regenerates `/etc/profile.env`/`/etc/csh.env`/`/etc/ld.so.conf` and runs real `ldconfig`
 

@@ -63,11 +63,43 @@ mod tests {
     }
 
     #[test]
+    fn root_is_always_privileged() {
+        // SAFETY: `geteuid` takes no arguments.
+        if unsafe { libc::geteuid() } == 0 {
+            assert!(is_privileged(std::path::Path::new("/usr/nonexistent-xyz")));
+        }
+    }
+
+    #[test]
     fn a_dir_the_caller_owns_is_unprivileged_mode() {
         let dir = tempdir();
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
         assert!(is_privileged(&dir));
         assert!(is_privileged(&dir.join("root/deeper")));
+    }
+
+    #[test]
+    fn a_world_writable_dir_is_not_ownership() {
+        // SAFETY: `geteuid` takes no arguments.
+        if unsafe { libc::geteuid() } == 0 {
+            return; // root passes the early return before the mode check
+        }
+        let dir = tempdir();
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o777)).unwrap();
+        assert!(!is_privileged(&dir));
+    }
+
+    #[test]
+    fn a_dir_the_caller_cannot_write_is_not_privileged() {
+        // SAFETY: `geteuid` takes no arguments.
+        if unsafe { libc::geteuid() } == 0 {
+            return;
+        }
+        // /usr exists everywhere, is root-owned and not world-writable.
+        assert!(!is_privileged(std::path::Path::new(
+            "/usr/portuale-privileges-test-xyz"
+        )));
     }
 }
