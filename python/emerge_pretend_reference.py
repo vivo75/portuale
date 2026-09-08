@@ -107,6 +107,7 @@ from portage.dep import (
     Atom,
     check_required_use,
     extract_affecting_use,
+    human_readable_required_use,
     match_from_list,
     paren_enclose,
     use_reduce,
@@ -7095,6 +7096,73 @@ def _autounmask_dep_chain(owner, current_atom, top_level, entries):
     return chain
 
 
+def _render_use_display_pairs(disp):
+    """Real pkg_use_display(pkg, opts) return string -- USE="..." then one
+    ` VAR="..."` per non-hidden USE_EXPAND group. Mirrors
+    portage-repo/src/lib.rs's render_use_display_pairs (== _render_pkg_use_
+    display, kept separate for the REQUIRED_USE block's own call site)."""
+    return _render_pkg_use_display(disp)
+
+
+def _required_use_dep_chain(owner, top_level, entries):
+    """(node, node_type) pairs for real _show_unsatisfied_dep's trailing
+    `(dependency required by "<node>" [<node_type>])` lines -- narrowed to
+    portuale's one-level-parent tracking. Empty when the failing package
+    IS the top-level atom (real skips the block: the atom is already
+    xinfo). Mirrors portage-repo/src/lib.rs's required_use_dep_chain."""
+    if owner is None:
+        return []
+    oc, op = owner
+    chain = []
+    parent = next((e for e in entries if e[0] == oc and e[1] == op), None)
+    if parent is not None:
+        po = parent[2]
+        pv = None
+        if po[0] in ("new", "reinstall"):
+            pv = po[1]
+        elif po[0] in ("upgrade", "downgrade"):
+            pv = po[2]
+        if pv is not None:
+            prepo = parent[8].get("repo_name") if isinstance(parent[8], dict) else None
+            node = f"{oc}/{op}-{pv}::{prepo}" if prepo else f"{oc}/{op}-{pv}"
+            node_type = "binary" if parent[7] == "binary" else "ebuild"
+            chain.append((node, node_type))
+    arg = next(
+        (
+            t
+            for t in top_level
+            if (_parse_atom(t) is not None and _parse_atom(t).cp == f"{oc}/{op}")
+        ),
+        None,
+    )
+    if arg is not None:
+        chain.append((arg, "argument"))
+    return chain
+
+
+def _render_required_use_block(xinfo, cpv_repo, use_display, reduced_human, full_human, dep_chain):
+    """Real depgraph.py::_show_unsatisfied_dep's REQUIRED_USE block
+    (:6763-6799 + the :6899-6912 dep-chain tail). reduced_human /
+    full_human are already human_readable_required_use-rewritten. Mirrors
+    portage-repo/src/lib.rs's render_required_use_block."""
+    out = f'\n!!! The ebuild selected to satisfy "{xinfo}" has unmet requirements.\n'
+    out += f"- {cpv_repo} {_render_use_display_pairs(use_display)}\n"
+    out += "\n  The following REQUIRED_USE flag constraints are unsatisfied:\n"
+    out += f"    {reduced_human}\n"
+    if reduced_human != full_human:
+        out += (
+            "\n  The above constraints are a subset of the following complete expression:\n"
+        )
+        out += f"    {full_human}\n"
+    out += "\n"
+    if dep_chain:
+        out += "\n".join(
+            f'(dependency required by "{node}" [{ty}])' for node, ty in dep_chain
+        )
+        out += "\n"
+    return out
+
+
 def _check_if_latest_atom_form(
     resolved, all_candidates, category, package, config, check_visibility
 ):
@@ -10498,9 +10566,34 @@ def resolve_pretend_graph(
                     ) from e
                 if not satisfied:
                     normalized = " ".join(required_use.split())
+                    # Real _show_unsatisfied_dep's REQUIRED_USE block.
+                    result_tree = check_required_use(
+                        required_use, use_flags, lambda flag: flag in iuse_set, eapi="8"
+                    )
+                    reduced = human_readable_required_use(
+                        result_tree.tounicode() if not bool(result_tree) else normalized
+                    )
+                    full = human_readable_required_use(normalized)
+                    use_display = _pkg_use_display_for(
+                        repos, config, category, package, version
+                    )
+                    cpv_repo = (
+                        f"{category}/{package}-{version}::{repo_name}"
+                        if repo_name
+                        else f"{category}/{package}-{version}"
+                    )
+                    dep_chain = _required_use_dep_chain(owner, top_level, entries)
                     required_use_violations.append(
-                        f'REQUIRED_USE not satisfied for {category}/{package}-{version}: '
-                        f'"{normalized}"'
+                        _render_required_use_block(
+                            unevaluated_atom
+                            if unevaluated_atom is not None
+                            else current_atom_str,
+                            cpv_repo,
+                            use_display,
+                            reduced,
+                            full,
+                            dep_chain,
+                        )
                     )
                     continue
 
@@ -10871,7 +10964,7 @@ def resolve_pretend_graph(
         ) = _graph_pass()
 
         if required_use_violations:
-            raise ResolutionError("\n".join(required_use_violations))
+            raise ResolutionError("".join(required_use_violations))
 
         # Backtracking slice 3: judge a pending runtime_pkg_mask trial.
         if mask_phase == "trying":
@@ -11101,7 +11194,7 @@ def resolve_pretend_graph(
             _refresh_entry_use_display(entries, repos, _cp, _tier_cfg)
 
     if required_use_violations:
-        raise ResolutionError("\n".join(required_use_violations))
+        raise ResolutionError("".join(required_use_violations))
 
     # Real depgraph's slot-operator auto-rebuild -- see
     # portage-repo/src/lib.rs's slot_operator_rebuild_entries.
@@ -18470,9 +18563,17 @@ def run(args):
         ):
             result = _run_resolve(True, _locked)
     except ResolutionError as e:
-        sys.stderr.write(f"emerge: {e}")
+        msg = str(e)
+        # Real never prefixes a `!!!`-headed report (masked packages, the
+        # REQUIRED_USE "has unmet requirements" block) with `emerge: ` --
+        # `_show_unsatisfied_dep` writemsg's it verbatim. Mirrors
+        # portage-repo/pretend.rs's own handler.
+        if msg.lstrip().startswith("!!!"):
+            sys.stderr.write(msg)
+        else:
+            sys.stderr.write(f"emerge: {msg}")
         extra = _misspell_suggestion_block(
-            str(e), find_repos(_config_root()), misspell_suggestions
+            msg, find_repos(_config_root()), misspell_suggestions
         )
         if extra:
             sys.stderr.write(extra)

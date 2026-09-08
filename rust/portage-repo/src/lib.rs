@@ -11892,6 +11892,119 @@ fn autounmask_dep_chain(
     chain
 }
 
+/// Real `pkg_use_display(pkg, opts)`'s own return string -- `USE="…"`
+/// then one ` VAR="…"` per non-hidden `USE_EXPAND` group -- from the
+/// `(name, body)` pairs [`pkg_use_display_for`] produces. Mirrors
+/// `portuale::pretend::render_pkg_use_display`.
+fn render_use_display_pairs(disp: &[(String, String)]) -> String {
+    let use_body = disp
+        .iter()
+        .find(|(name, _)| name == "USE")
+        .map(|(_, body)| body.as_str())
+        .unwrap_or("");
+    let mut out = format!("USE=\"{use_body}\"");
+    for (name, body) in disp {
+        if name != "USE" {
+            out.push_str(&format!(" {name}=\"{body}\""));
+        }
+    }
+    out
+}
+
+/// The `(node, node_type)` pairs for real `_show_unsatisfied_dep`'s own
+/// trailing `(dependency required by "<node>" [<node_type>])` lines,
+/// narrowed to portuale's one-level-parent tracking (`_get_dep_chain`
+/// with `target_atom` set: first the failing package's direct parent,
+/// then that parent's own command-line argument when it is one). Empty
+/// when the failing package IS the top-level atom -- real skips the whole
+/// block then (`if not isinstance(myparent, AtomArg)`), since the atom is
+/// already the `xinfo` shown above.
+fn required_use_dep_chain(
+    owner: &Option<(String, String)>,
+    top_level: &std::collections::HashSet<&str>,
+    entries: &[GraphEntry],
+) -> Vec<(String, String)> {
+    let Some((oc, op)) = owner else {
+        return Vec::new();
+    };
+    let mut chain: Vec<(String, String)> = Vec::new();
+    if let Some(parent) = entries
+        .iter()
+        .find(|e| &e.category == oc && &e.package == op)
+    {
+        let parent_version = match &parent.outcome {
+            PretendOutcome::New { version } | PretendOutcome::Reinstall { version, .. } => {
+                Some(version.as_str())
+            }
+            PretendOutcome::Upgrade { to, .. } | PretendOutcome::Downgrade { to, .. } => {
+                Some(to.as_str())
+            }
+            _ => None,
+        };
+        if let Some(v) = parent_version {
+            let node = match &parent.repo_name {
+                Some(repo) => format!("{oc}/{op}-{v}::{repo}"),
+                None => format!("{oc}/{op}-{v}"),
+            };
+            let node_type = match parent.source {
+                CandidateSource::Binary => "binary",
+                CandidateSource::Ebuild => "ebuild",
+            };
+            chain.push((node, node_type.to_string()));
+        }
+    }
+    if let Some(arg) = top_level
+        .iter()
+        .find(|t| portage_dep::parse_atom(t).is_some_and(|a| a.category == *oc && a.package == *op))
+    {
+        chain.push(((*arg).to_string(), "argument".to_string()));
+    }
+    chain
+}
+
+/// Real `depgraph.py::_show_unsatisfied_dep`'s own REQUIRED_USE block
+/// (`:6763-6799` + the `:6899-6912` dep-chain tail): the `!!! The ebuild
+/// selected to satisfy "<atom>" has unmet requirements.` header, the
+/// `- <cpv>::<repo> USE="…"` line, the minimal still-unsatisfied
+/// sub-expression, the complete expression (only when it differs), then
+/// the `(dependency required by "…" [ebuild])` chain. `reduced_human` /
+/// `full_human` are already [`portage_required_use::human_readable`]-
+/// rewritten. Colorization is a documented no-op (matches `emerge -p`
+/// without `--color=y`).
+fn render_required_use_block(
+    xinfo: &str,
+    cpv_repo: &str,
+    use_display: &[(String, String)],
+    reduced_human: &str,
+    full_human: &str,
+    dep_chain: &[(String, String)],
+) -> String {
+    let mut out =
+        format!("\n!!! The ebuild selected to satisfy \"{xinfo}\" has unmet requirements.\n");
+    out.push_str(&format!(
+        "- {cpv_repo} {}\n",
+        render_use_display_pairs(use_display)
+    ));
+    out.push_str("\n  The following REQUIRED_USE flag constraints are unsatisfied:\n");
+    out.push_str(&format!("    {reduced_human}\n"));
+    if reduced_human != full_human {
+        out.push_str(
+            "\n  The above constraints are a subset of the following complete expression:\n",
+        );
+        out.push_str(&format!("    {full_human}\n"));
+    }
+    out.push('\n');
+    if !dep_chain.is_empty() {
+        let lines: Vec<String> = dep_chain
+            .iter()
+            .map(|(node, ty)| format!("(dependency required by \"{node}\" [{ty}])"))
+            .collect();
+        out.push_str(&lines.join("\n"));
+        out.push('\n');
+    }
+    out
+}
+
 /// Real `_display_autounmask`'s own `check_if_latest(pkg,
 /// check_visibility=...)` (`depgraph.py:10649`), for an autounmask
 /// change's left-hand atom: `>=<cpv>` when `resolved` is the highest
@@ -14352,9 +14465,39 @@ fn backtracking_resolve(req: &ResolveRequest) -> Result<GraphResult, Error> {
                             .split_whitespace()
                             .collect::<Vec<_>>()
                             .join(" ");
-                        required_use_violations.push(format!(
-                            "REQUIRED_USE not satisfied for {}/{}-{version}: \"{normalized}\"",
-                            key.0, key.1
+                        // Real `_show_unsatisfied_dep`'s REQUIRED_USE block:
+                        // the failing atom as `xinfo` (real's own
+                        // `atom.unevaluated_atom`), the candidate + its
+                        // `pkg_use_display`, the minimal unsatisfied
+                        // sub-expression (real `check_required_use(...).
+                        // tounicode()`), the complete expression when it
+                        // differs, then the `(dependency required by …)`
+                        // chain.
+                        let reduced = match portage_required_use::unsatisfied_reduced(
+                            required_use,
+                            &use_flags,
+                            &iuse_set,
+                        ) {
+                            Ok(Some(r)) => portage_required_use::human_readable(&r),
+                            _ => portage_required_use::human_readable(&normalized),
+                        };
+                        let full = portage_required_use::human_readable(&normalized);
+                        let use_display =
+                            pkg_use_display_for(&repos, config, &key.0, &key.1, &version);
+                        let cpv_repo = match &resolved.repo_name {
+                            repo if !repo.is_empty() => {
+                                format!("{}/{}-{version}::{repo}", key.0, key.1)
+                            }
+                            _ => format!("{}/{}-{version}", key.0, key.1),
+                        };
+                        let dep_chain = required_use_dep_chain(&owner, &top_level, &entries);
+                        required_use_violations.push(render_required_use_block(
+                            unevaluated_atom.as_deref().unwrap_or(&current_atom),
+                            &cpv_repo,
+                            &use_display,
+                            &reduced,
+                            &full,
+                            &dep_chain,
                         ));
                         continue;
                     }
@@ -14790,7 +14933,8 @@ fn backtracking_resolve(req: &ResolveRequest) -> Result<GraphResult, Error> {
             });
 
         if !required_use_violations.is_empty() {
-            return Err(Error::Detail(required_use_violations.join("\n")));
+            // Each block is self-delimiting (leading + trailing newline).
+            return Err(Error::Detail(required_use_violations.join("")));
         }
 
         let nvc_count = |entries: &[GraphEntry]| {
@@ -23563,10 +23707,17 @@ mod tests {
         // right after package selection and aborts the whole run on
         // failure -- a materially different severity than a merely
         // unresolvable dependency (report, don't fail).
+        // Real `_show_unsatisfied_dep`'s REQUIRED_USE block -- the whole
+        // one-clause expression is the minimal unsatisfied one (no
+        // "complete expression" line); top-level atom -> no dep chain.
         let err = graph_real_err("dev-libs/requiredusebadpkg");
         assert_eq!(
             err,
-            "REQUIRED_USE not satisfied for dev-libs/requiredusebadpkg-1.0: \"foo? ( bar )\""
+            "\n!!! The ebuild selected to satisfy \"dev-libs/requiredusebadpkg\" \
+             has unmet requirements.\n\
+             - dev-libs/requiredusebadpkg-1.0::testrepo USE=\"foo -bar\"\n\
+             \n  The following REQUIRED_USE flag constraints are unsatisfied:\n\
+             \x20   foo? ( bar )\n\n"
         );
     }
 
@@ -23576,10 +23727,19 @@ mod tests {
         // dev-libs/requiredusebadpkg -- proving the same fatal severity
         // applies regardless of whether the violating package was
         // reached as a top-level atom or a dependency.
+        // Reached as a dependency -> the block gains the `(dependency
+        // required by "..." [ebuild])` chain, plus a trailing
+        // `[argument]` line since the parent is itself the CLI argument.
         let err = graph_real_err("dev-libs/requiredusebadparentpkg");
         assert_eq!(
             err,
-            "REQUIRED_USE not satisfied for dev-libs/requiredusebadpkg-1.0: \"foo? ( bar )\""
+            "\n!!! The ebuild selected to satisfy \"dev-libs/requiredusebadpkg\" \
+             has unmet requirements.\n\
+             - dev-libs/requiredusebadpkg-1.0::testrepo USE=\"foo -bar\"\n\
+             \n  The following REQUIRED_USE flag constraints are unsatisfied:\n\
+             \x20   foo? ( bar )\n\n\
+             (dependency required by \"dev-libs/requiredusebadparentpkg-1.0::testrepo\" [ebuild])\n\
+             (dependency required by \"dev-libs/requiredusebadparentpkg\" [argument])\n"
         );
     }
 
@@ -23657,8 +23817,16 @@ mod tests {
         .expect_err("both atoms should fail their own REQUIRED_USE");
         assert_eq!(
             err.to_string(),
-            "REQUIRED_USE not satisfied for dev-libs/requiredusebadpkg-1.0: \"foo? ( bar )\"\n\
-             REQUIRED_USE not satisfied for dev-libs/requiredusebadpkg2-1.0: \"baz? ( qux )\""
+            "\n!!! The ebuild selected to satisfy \"dev-libs/requiredusebadpkg\" \
+             has unmet requirements.\n\
+             - dev-libs/requiredusebadpkg-1.0::testrepo USE=\"foo -bar\"\n\
+             \n  The following REQUIRED_USE flag constraints are unsatisfied:\n\
+             \x20   foo? ( bar )\n\n\
+             \n!!! The ebuild selected to satisfy \"dev-libs/requiredusebadpkg2\" \
+             has unmet requirements.\n\
+             - dev-libs/requiredusebadpkg2-1.0::testrepo USE=\"baz -qux\"\n\
+             \n  The following REQUIRED_USE flag constraints are unsatisfied:\n\
+             \x20   baz? ( qux )\n\n"
         );
     }
 

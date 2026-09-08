@@ -9947,10 +9947,17 @@ pub fn run(args: &[String]) -> ExitCode {
     let handle = |r: Result<portage_repo::GraphResult, crate::error::Error>| match r {
         Ok(result) => Ok(result),
         Err(e) => {
-            eprint!("emerge: {e}");
-            if let Some(extra) =
-                misspell_suggestion_block(&e.to_string(), &repos, misspell_suggestions)
-            {
+            let msg = e.to_string();
+            // Real never prefixes a `!!!`-headed report (masked packages,
+            // the REQUIRED_USE "has unmet requirements" block) with
+            // `emerge: ` -- it is `writemsg`-emitted verbatim by
+            // `_show_unsatisfied_dep`.
+            if msg.trim_start().starts_with("!!!") {
+                eprint!("{msg}");
+            } else {
+                eprint!("emerge: {msg}");
+            }
+            if let Some(extra) = misspell_suggestion_block(&msg, &repos, misspell_suggestions) {
                 eprint!("{extra}");
             }
             eprintln!();

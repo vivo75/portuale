@@ -3757,16 +3757,23 @@ def test_required_use_violated_top_level_aborts_the_whole_run(emerge_binary, fix
     depgraph.py: "REQUIRED_USE checks are delayed until after package
     selection") -- a materially different severity than a merely
     unresolvable dependency (report, don't fail): here nothing is
-    printed to stdout at all, and the run exits nonzero."""
+    printed to stdout at all, and the run exits nonzero.
+
+    Real `_show_unsatisfied_dep`'s REQUIRED_USE block: the atom as
+    `xinfo`, the candidate + `pkg_use_display`, and the minimal
+    unsatisfied sub-expression (here the whole one-clause expression, so
+    no "complete expression" line; top-level atom, so no dep chain)."""
     result = _run(
         [str(emerge_binary)], ["--pretend", "dev-libs/requiredusebadpkg"], fixture_env
     )
     assert result.returncode == 1
     assert result.stdout == ""
-    assert (
-        result.stderr.strip()
-        == 'emerge: REQUIRED_USE not satisfied for dev-libs/requiredusebadpkg-1.0: '
-        '"foo? ( bar )"'
+    assert result.stderr.strip() == (
+        '!!! The ebuild selected to satisfy "dev-libs/requiredusebadpkg" has '
+        "unmet requirements.\n"
+        '- dev-libs/requiredusebadpkg-1.0::testrepo USE="foo -bar"\n'
+        "\n  The following REQUIRED_USE flag constraints are unsatisfied:\n"
+        "    foo? ( bar )"
     )
 
 
@@ -3777,7 +3784,12 @@ def test_required_use_violated_dependency_still_aborts_the_whole_run(
     (see the top-level REQUIRED_USE violation test above) -- proving the
     same fatal-abort severity applies regardless of whether the
     violating package was reached as a top-level atom or a dependency
-    deep in the graph, unlike a dependency's own NoVisibleCandidate."""
+    deep in the graph, unlike a dependency's own NoVisibleCandidate.
+
+    Reached as a dependency -> the block gains the `(dependency required
+    by "..." [ebuild])` chain (real `_get_dep_chain`), and since the
+    parent is itself the command-line argument, a trailing
+    `[argument]` line."""
     result = _run(
         [str(emerge_binary)],
         ["--pretend", "dev-libs/requiredusebadparentpkg"],
@@ -3785,10 +3797,16 @@ def test_required_use_violated_dependency_still_aborts_the_whole_run(
     )
     assert result.returncode == 1
     assert result.stdout == ""
-    assert (
-        result.stderr.strip()
-        == 'emerge: REQUIRED_USE not satisfied for dev-libs/requiredusebadpkg-1.0: '
-        '"foo? ( bar )"'
+    assert result.stderr.strip() == (
+        '!!! The ebuild selected to satisfy "dev-libs/requiredusebadpkg" has '
+        "unmet requirements.\n"
+        '- dev-libs/requiredusebadpkg-1.0::testrepo USE="foo -bar"\n'
+        "\n  The following REQUIRED_USE flag constraints are unsatisfied:\n"
+        "    foo? ( bar )\n"
+        "\n"
+        '(dependency required by "dev-libs/requiredusebadparentpkg-1.0::testrepo" '
+        "[ebuild])\n"
+        '(dependency required by "dev-libs/requiredusebadparentpkg" [argument])'
     )
 
 
@@ -3815,10 +3833,17 @@ def test_required_use_violations_are_collected_across_the_whole_walk_not_just_th
     assert result.returncode == 1
     assert result.stdout == ""
     assert result.stderr.strip() == (
-        'emerge: REQUIRED_USE not satisfied for dev-libs/requiredusebadpkg-1.0: '
-        '"foo? ( bar )"\n'
-        'REQUIRED_USE not satisfied for dev-libs/requiredusebadpkg2-1.0: '
-        '"baz? ( qux )"'
+        '!!! The ebuild selected to satisfy "dev-libs/requiredusebadpkg" has '
+        "unmet requirements.\n"
+        '- dev-libs/requiredusebadpkg-1.0::testrepo USE="foo -bar"\n'
+        "\n  The following REQUIRED_USE flag constraints are unsatisfied:\n"
+        "    foo? ( bar )\n"
+        "\n\n"
+        '!!! The ebuild selected to satisfy "dev-libs/requiredusebadpkg2" has '
+        "unmet requirements.\n"
+        '- dev-libs/requiredusebadpkg2-1.0::testrepo USE="baz -qux"\n'
+        "\n  The following REQUIRED_USE flag constraints are unsatisfied:\n"
+        "    baz? ( qux )"
     )
 
 
