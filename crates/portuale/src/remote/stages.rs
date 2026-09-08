@@ -123,6 +123,66 @@ pub(crate) struct RunPostinstRegenStageArgs<'a> {
     pub(crate) locale: &'a [(String, String)],
 }
 
+/// Run the regen postinst script and print its log straight through.
+/// `Err` is a transport/command failure only -- a non-zero phase rc or
+/// a missing regen file is a warn-and-continue `RegenReport`, never a
+/// unit failure (like Portage's `_postinst_failure`). `locale` is the
+/// server's own locale pairs for the client phase env.
+pub(crate) fn run_postinst_regen_stage(
+    args: RunPostinstRegenStageArgs<'_>,
+) -> Result<RegenReport, String> {
+    let RunPostinstRegenStageArgs {
+        ctx,
+        control,
+        unit_dir,
+        staged,
+        features,
+        locale,
+    } = args;
+    let colormap = crate::color::phase_colormap_export();
+    let workdir_parent = std::path::Path::new(&ctx.workdir)
+        .parent()
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "/var/tmp".to_string());
+    let portuale_bin = client_bin_abs(ctx)?.to_string();
+    let script = postinst_regen_script(PostinstRegenScriptArgs {
+        unit_dir,
+        staged,
+        root: &ctx.root,
+        workdir_parent: &workdir_parent,
+        colormap: &colormap,
+        features,
+        locale,
+        portuale_bin: &portuale_bin,
+    });
+    let output = run_script_stdin(ctx, control, &script).map_err(|message| {
+        if ctx.transport == RemoteTransport::Local {
+            format!("mrg: local postinst regen command failed: {message}")
+        } else {
+            message
+        }
+    })?;
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    for line in stderr.lines().chain(stdout.lines()) {
+        println!("{line}");
+    }
+    let values = parse_kv(&stdout);
+    let phase_rc: i32 = values
+        .get("PHASE_postinst")
+        .and_then(|rc| rc.parse().ok())
+        .unwrap_or(-1);
+    let regen = values
+        .get("REGEN_ENV")
+        .map(String::as_str)
+        .unwrap_or("missing");
+    Ok(RegenReport {
+        phase_rc,
+        regen_present: regen == "ok",
+        skipped_no_hooks: regen == "skip:no-hooks",
+    })
+}
+
 /// Pull one remote file's bytes to the server (`cat` remotely; a plain
 /// read for the `local` transport, where client paths are server
 /// paths). `Err` is the pull failure.
