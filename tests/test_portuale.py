@@ -416,6 +416,89 @@ def test_mrg_remote_option_without_hostname_is_usage_error(mrg_binary, fixture_e
     assert "--remote-user requires --remote-hostname" in result.stderr
 
 
+def _remote_binpkg_args(sshd_client, binpkg):
+    """`--remote-binpkg` trial argv over the loopback client."""
+    return _remote_base(sshd_client, [
+        "--remote-root", sshd_client["root"],
+        "--remote-workdir", sshd_client["work"],
+        "--remote-binpkg", binpkg,
+    ])
+
+
+def test_mrg_remote_bundle_unpacks_over_loopback_ssh(
+    mrg_binary, fixture_env, loopback_sshd, fixtures_root
+):
+    """Slice-2 wire, ssh transport: the fixture tbz2 is bundled
+    server-side, streamed over stdin, unpacked and verified client-side
+    (byte-count gate, member + manifest sanity). Exit 0 with the unpack
+    report; the unit dir holds image/, build-info/, environment and the
+    manifest, and the streamed tarball is removed afterwards."""
+    binpkg = str(fixtures_root / "pkgdir/dev-libs/packagepkg-1.0.tbz2")
+    result = subprocess.run(
+        [str(mrg_binary), *_remote_binpkg_args(loopback_sshd, binpkg)],
+        capture_output=True, text=True, check=False,
+        env=_remote_env(fixture_env, loopback_sshd),
+    )
+    assert result.returncode == 0, result.stderr
+    assert ">>> Remote bundle dev-libs/packagepkg-1.0: unpacked" in result.stdout
+    unit = Path(loopback_sshd["work"]) / "packagepkg-1.0"
+    assert (unit / "image").is_dir()
+    assert (unit / "build-info").is_dir()
+    assert (unit / "environment").is_file()
+    manifest = (unit / "remote-manifest").read_text()
+    assert "CPV=dev-libs/packagepkg-1.0" in manifest
+    assert not (unit / "bundle.tar").exists()
+
+
+def test_mrg_remote_bundle_unpacks_over_local_transport(
+    mrg_binary, fixture_env, tmp_path
+):
+    """Same unpack through `--remote-transport local`: the identical
+    generated driver runs against local paths, no sshd involved (offline
+    debugging story and SSH-free driver coverage)."""
+    root = tmp_path / "root"
+    (root / "var" / "db" / "pkg").mkdir(parents=True)
+    work = tmp_path / "work"
+    binpkg = (
+        Path(fixture_env["PORTAGE_CONFIGROOT"])
+        / "pkgdir/dev-libs/packagepkg-1.0.tbz2"
+    )
+    result = subprocess.run(
+        [str(mrg_binary),
+         "--remote-hostname", "localtest",
+         "--remote-transport", "local",
+         "--remote-root", str(root),
+         "--remote-workdir", str(work),
+         "--remote-binpkg", str(binpkg)],
+        capture_output=True, text=True, check=False,
+        env=fixture_env,
+    )
+    assert result.returncode == 0, result.stderr
+    assert ">>> Remote bundle dev-libs/packagepkg-1.0: unpacked" in result.stdout
+    unit = work / "packagepkg-1.0"
+    assert (unit / "image").is_dir()
+    assert "CPV=dev-libs/packagepkg-1.0" in (unit / "remote-manifest").read_text()
+
+
+def test_mrg_remote_bundle_missing_file_is_exit_1(mrg_binary, fixture_env, tmp_path):
+    """Fail-early: a nonexistent `--remote-binpkg` fails after preflight
+    setup but before any streaming, exit 1 with the path named."""
+    root = tmp_path / "root"
+    (root / "var" / "db" / "pkg").mkdir(parents=True)
+    result = subprocess.run(
+        [str(mrg_binary),
+         "--remote-hostname", "localtest",
+         "--remote-transport", "local",
+         "--remote-root", str(root),
+         "--remote-workdir", str(tmp_path / "work"),
+         "--remote-binpkg", str(tmp_path / "nope.tbz2")],
+        capture_output=True, text=True, check=False,
+        env=fixture_env,
+    )
+    assert result.returncode == 1
+    assert "not found" in result.stderr
+
+
 def test_mrg_bare_deep_keeps_the_atom(mrg_binary, fixture_env):
     """Bare `-D` followed by an atom: real emerge's insert_optional_args
     does NOT swallow the atom (`cat/a` isn't a valid int), so `-D` stays

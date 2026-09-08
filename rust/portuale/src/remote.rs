@@ -14,6 +14,7 @@
 
 use clap::ArgMatches;
 use std::collections::HashMap;
+use std::path::Path;
 use std::process::ExitCode;
 
 // --- Option validation -----------------------------------------------------
@@ -51,6 +52,27 @@ impl StrictHostKeyChecking {
     }
 }
 
+/// How driver scripts and files reach the client (`--remote-transport`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RemoteTransport {
+    /// Real SSH client (default).
+    Ssh,
+    /// Execute the *same generated driver* against local paths (no ssh):
+    /// offline debugging and SSH-free driver tests. The hostname stays a
+    /// label; key/port/user/timeout/host-key options are inert.
+    Local,
+}
+
+impl RemoteTransport {
+    fn parse(value: &str) -> Option<Self> {
+        match value {
+            "ssh" => Some(Self::Ssh),
+            "local" => Some(Self::Local),
+            _ => None,
+        }
+    }
+}
+
 /// Validated remote target: Ansible's `play_context` split -- connection
 /// parameters in one struct, validated once, threaded through.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -77,6 +99,11 @@ pub struct RemoteContext {
     pub root: String,
     /// Per-unit work area on the client.
     pub workdir: String,
+    /// How driver scripts + files reach the client.
+    pub transport: RemoteTransport,
+    /// One explicit binpkg file to bundle, stream and unpack (bypasses
+    /// resolution; slices 2-4 trials, later an escape hatch).
+    pub binpkg: Option<String>,
 }
 
 /// `--remote-*` ids besides `remote_hostname`, in OPTIONS-table order --
@@ -91,6 +118,8 @@ const REMOTE_OPTION_IDS: &[&str] = &[
     "remote_max_clock_skew",
     "remote_root",
     "remote_workdir",
+    "remote_transport",
+    "remote_binpkg",
 ];
 
 fn get(matches: &ArgMatches, id: &str) -> Option<String> {
@@ -135,13 +164,18 @@ pub fn check_remote(matches: &ArgMatches) -> Result<Option<RemoteContext>, Strin
             format!("mrg: --remote-max-clock-skew: {raw:?} is not a non-negative integer")
         })?,
     };
-    // Clap's `choices` already restrict this; the fallback keeps the
+    // Clap's `choices` already restrict these; the fallbacks keep the
     // validation total if the table ever drifts.
     let strict_host_key_checking = match get(matches, "remote_strict_host_key_checking") {
         None => StrictHostKeyChecking::AcceptNew,
         Some(raw) => StrictHostKeyChecking::parse(&raw).ok_or_else(|| {
             format!("mrg: --remote-strict-host-key-checking: {raw:?} is not accept-new, yes or no")
         })?,
+    };
+    let transport = match get(matches, "remote_transport") {
+        None => RemoteTransport::Ssh,
+        Some(raw) => RemoteTransport::parse(&raw)
+            .ok_or_else(|| format!("mrg: --remote-transport: {raw:?} is not ssh or local"))?,
     };
     Ok(Some(RemoteContext {
         hostname,
@@ -155,6 +189,8 @@ pub fn check_remote(matches: &ArgMatches) -> Result<Option<RemoteContext>, Strin
         root: get(matches, "remote_root").unwrap_or_else(|| "/".to_string()),
         workdir: get(matches, "remote_workdir")
             .unwrap_or_else(|| "/var/tmp/portage-remote".to_string()),
+        transport,
+        binpkg: get(matches, "remote_binpkg").filter(|b| !b.is_empty()),
     }))
 }
 
@@ -280,33 +316,107 @@ fn is_transport_error(code: Option<i32>, stderr: &str) -> bool {
             || stderr.contains("Permission denied"))
 }
 
-/// Run `bash -s` on the client with `script` on stdin; stdout/stderr
-/// captured separately (machine log vs. human log).
-fn ssh_bash_stdin(
+/// Run `bash -s` with `script` on stdin; stdout/stderr captured
+/// separately (machine log vs. human log). Over ssh, or as a local
+/// subprocess when the transport is `local` (same driver, no network).
+fn run_script_stdin(
     ctx: &RemoteContext,
     control: Option<&std::path::Path>,
     script: &str,
 ) -> Result<std::process::Output, String> {
-    let mut argv = ssh_argv(ctx, control);
-    argv.push("bash".to_string());
-    argv.push("-s".to_string());
-    let mut child = std::process::Command::new(&argv[0])
-        .args(&argv[1..])
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .spawn()
-        .map_err(|e| format!("mrg: cannot spawn ssh: {e}"))?;
     use std::io::Write as _;
+    let mut child = match ctx.transport {
+        RemoteTransport::Ssh => {
+            let mut argv = ssh_argv(ctx, control);
+            argv.push("bash".to_string());
+            argv.push("-s".to_string());
+            std::process::Command::new(&argv[0])
+                .args(&argv[1..])
+                .stdin(std::process::Stdio::piped())
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped())
+                .spawn()
+                .map_err(|e| format!("mrg: cannot spawn ssh: {e}"))?
+        }
+        RemoteTransport::Local => std::process::Command::new("bash")
+            .args(["-s"])
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .map_err(|e| format!("mrg: cannot spawn local bash: {e}"))?,
+    };
     child
         .stdin
         .take()
-        .ok_or_else(|| "mrg: ssh stdin unavailable".to_string())?
+        .ok_or_else(|| "mrg: child stdin unavailable".to_string())?
         .write_all(script.as_bytes())
-        .map_err(|e| format!("mrg: writing to ssh stdin: {e}"))?;
+        .map_err(|e| format!("mrg: writing to child stdin: {e}"))?;
     child
         .wait_with_output()
-        .map_err(|e| format!("mrg: waiting for ssh: {e}"))
+        .map_err(|e| format!("mrg: waiting for child: {e}"))
+}
+
+/// Ship local file bytes to `<workdir>/<name>` on the client: `sh -c
+/// 'cat > …'` over ssh (the `>` must be remote-side, hence the explicit
+/// `sh -c` with one pre-quoted word), plain `fs::copy` for local.
+fn send_file(
+    ctx: &RemoteContext,
+    control: Option<&std::path::Path>,
+    local_path: &std::path::Path,
+    dest: &str,
+) -> Result<(), String> {
+    match ctx.transport {
+        RemoteTransport::Local => {
+            if let Some(parent) = std::path::Path::new(dest).parent() {
+                std::fs::create_dir_all(parent)
+                    .map_err(|e| format!("{}: {e}", parent.display()))?;
+            }
+            std::fs::copy(local_path, dest)
+                .map_err(|e| format!("{}: {e}", local_path.display()))?;
+            Ok(())
+        }
+        RemoteTransport::Ssh => {
+            use std::io::Write as _;
+            let bytes =
+                std::fs::read(local_path).map_err(|e| format!("{}: {e}", local_path.display()))?;
+            let mut argv = ssh_argv(ctx, control);
+            argv.push("sh".to_string());
+            argv.push("-c".to_string());
+            argv.push(format!("cat > {}", sh_quote(dest)));
+            let mut child = std::process::Command::new(&argv[0])
+                .args(&argv[1..])
+                .stdin(std::process::Stdio::piped())
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped())
+                .spawn()
+                .map_err(|e| format!("mrg: cannot spawn ssh: {e}"))?;
+            child
+                .stdin
+                .take()
+                .ok_or_else(|| "mrg: ssh stdin unavailable".to_string())?
+                .write_all(&bytes)
+                .map_err(|e| format!("mrg: writing to ssh stdin: {e}"))?;
+            let output = child
+                .wait_with_output()
+                .map_err(|e| format!("mrg: waiting for ssh: {e}"))?;
+            let code = output.status.code();
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            if !output.status.success() && is_transport_error(code, &stderr) {
+                return Err(format!(
+                    "mrg: client {} unreachable:\n{stderr}",
+                    ctx.hostname
+                ));
+            }
+            if !output.status.success() {
+                return Err(format!(
+                    "mrg: sending {dest} failed (exit {}):\n{stderr}",
+                    code.unwrap_or(-1)
+                ));
+            }
+            Ok(())
+        }
+    }
 }
 
 // --- Preflight -------------------------------------------------------------
@@ -515,44 +625,79 @@ fn connection_fingerprint(ctx: &RemoteContext) -> Option<String> {
 
 /// Slice-1 entry point: connect, preflight, report. Exit 0 = every hard
 /// gate passed; 1 = a gate failed or the client is unreachable.
-pub fn run_preflight(ctx: &RemoteContext) -> ExitCode {
+/// Slice 2+ entry point with `--remote-binpkg`: preflight, then bundle,
+/// stream, unpack and verify one explicit binpkg file.
+pub fn run_remote(ctx: &RemoteContext) -> ExitCode {
     let control_dir = control_dir();
     let control = control_dir.as_deref();
+    // Before the first connection: afterwards the key is present even on
+    // first contact, so this decision cannot be made later.
     let first_contact =
         ctx.strict_host_key_checking == StrictHostKeyChecking::AcceptNew && is_first_contact(ctx);
-
-    let script = preflight_script(&ctx.root, &ctx.workdir);
-    let output = match ssh_bash_stdin(ctx, control, &script) {
-        Ok(output) => output,
+    let values = match run_preflight_inner(ctx, control) {
+        Ok(values) => values,
         Err(message) => {
-            eprintln!("mrg: {message}");
+            eprintln!("{message}");
             return ExitCode::from(1);
         }
     };
+    let (failures, warnings) = evaluate_preflight(ctx, &values);
+    if !failures.is_empty() {
+        return print_preflight_report(ctx, &failures, &warnings, first_contact);
+    }
+    print_preflight_report(ctx, &failures, &warnings, first_contact);
+    match &ctx.binpkg {
+        None => ExitCode::from(0),
+        Some(path) => run_bundle_stage(ctx, control, Path::new(path)),
+    }
+}
+
+/// Connect and run the preflight script: parsed `KEY=VALUE` gates on
+/// success, `mrg: …`-prefixed message on transport or command failure.
+/// Human log lines (client stderr) print straight through on success.
+fn run_preflight_inner(
+    ctx: &RemoteContext,
+    control: Option<&std::path::Path>,
+) -> Result<HashMap<String, String>, String> {
+    let script = preflight_script(&ctx.root, &ctx.workdir);
+    let output = run_script_stdin(ctx, control, &script).map_err(|message| {
+        if ctx.transport == RemoteTransport::Local {
+            format!("mrg: local preflight command failed: {message}")
+        } else {
+            message
+        }
+    })?;
     let code = output.status.code();
     let stderr = String::from_utf8_lossy(&output.stderr);
-    if !output.status.success() && is_transport_error(code, &stderr) {
-        eprintln!("mrg: client {} unreachable:", ctx.hostname);
-        for line in stderr.lines().take(5) {
-            eprintln!("mrg:   {line}");
-        }
-        return ExitCode::from(1);
-    }
     if !output.status.success() {
-        eprintln!(
+        if ctx.transport == RemoteTransport::Ssh && is_transport_error(code, &stderr) {
+            let mut message = format!("mrg: client {} unreachable:", ctx.hostname);
+            for line in stderr.lines().take(5) {
+                message.push_str(&format!("\nmrg:   {line}"));
+            }
+            return Err(message);
+        }
+        let mut message = format!(
             "mrg: client preflight command failed (exit {}):",
             code.unwrap_or(-1)
         );
         for line in stderr.lines().take(5) {
-            eprintln!("mrg:   {line}");
+            message.push_str(&format!("\nmrg:   {line}"));
         }
-        return ExitCode::from(1);
+        return Err(message);
     }
     for line in stderr.lines() {
         println!("{line}");
     }
-    let values = parse_kv(&String::from_utf8_lossy(&output.stdout));
-    let (mut failures, warnings) = preflight_gates(&values);
+    Ok(parse_kv(&String::from_utf8_lossy(&output.stdout)))
+}
+
+/// Gates + clock over parsed preflight values. Pure (unit-tested).
+fn evaluate_preflight(
+    ctx: &RemoteContext,
+    values: &HashMap<String, String>,
+) -> (Vec<String>, Vec<String>) {
+    let (mut failures, warnings) = preflight_gates(values);
     let server_time = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
@@ -564,17 +709,30 @@ pub fn run_preflight(ctx: &RemoteContext) -> ExitCode {
     ) {
         failures.push(message);
     }
+    (failures, warnings)
+}
 
+/// TOFU receipt + warnings + ok/failed report. Returns the exit code.
+fn print_preflight_report(
+    ctx: &RemoteContext,
+    failures: &[String],
+    warnings: &[String],
+    first_contact: bool,
+) -> ExitCode {
     // Trust-on-first-use receipt: the key was added during this very
-    // connection -- print its fingerprint.
-    if first_contact && let Some(fingerprint) = connection_fingerprint(ctx) {
+    // connection -- print its fingerprint. SSH-only: local transport
+    // never touches known_hosts.
+    if first_contact
+        && ctx.transport == RemoteTransport::Ssh
+        && let Some(fingerprint) = connection_fingerprint(ctx)
+    {
         println!("mrg: added new host key for {}:", ctx.hostname);
         for line in fingerprint.lines() {
             println!("mrg:   {line}");
         }
     }
 
-    for warning in &warnings {
+    for warning in warnings {
         println!("mrg: warning: {warning}");
     }
     if failures.is_empty() {
@@ -582,8 +740,142 @@ pub fn run_preflight(ctx: &RemoteContext) -> ExitCode {
         ExitCode::from(0)
     } else {
         eprintln!("mrg: remote preflight {} failed:", ctx.hostname);
-        for failure in &failures {
+        for failure in failures {
             eprintln!("mrg:   {failure}");
+        }
+        ExitCode::from(1)
+    }
+}
+
+// --- Bundle streaming (slice 2) --------------------------------------------
+
+/// Unpack driver: byte-count gate, `tar -xf`, member + manifest sanity.
+/// Values baked in server-side, pre-quoted. The tarball itself arrived
+/// earlier via `send_file` (`$WORKDIR/<pf>/bundle.tar`). `UNPACK=...` on
+/// stdout, log on stderr; any gate prints its reason and exits 1.
+fn unpack_script(workdir: &str, pf: &str, expected_bytes: u64) -> String {
+    format!(
+        r#"UNIT_DIR={unit}
+BUNDLE="$UNIT_DIR/bundle.tar"
+if [ ! -f "$BUNDLE" ]; then echo "UNPACK=missing-bundle"; exit 1; fi
+ACTUAL=$(wc -c < "$BUNDLE")
+if [ "$ACTUAL" != "{expected}" ]; then echo "UNPACK=byte-count-mismatch expected={expected} actual=$ACTUAL"; exit 1; fi
+if ! tar -xf "$BUNDLE" -C {workdir}; then echo "UNPACK=tar-failed"; exit 1; fi
+rm -f "$BUNDLE"
+for member in "$UNIT_DIR/image" "$UNIT_DIR/build-info" "$UNIT_DIR/remote-manifest"; do
+  if [ ! -e "$member" ]; then echo "UNPACK=missing-member member=$member"; exit 1; fi
+done
+# NOTE: build-info/CONTENTS is NOT gated here (fixture binpkgs lack it;
+# real ones carry it) -- slice 4's merge owns that check, where a
+# missing CONTENTS is genuinely unmergeable.
+FORMAT=$(sed -n 's/^FORMAT=//p' "$UNIT_DIR/remote-manifest" | head -n 1)
+if [ "$FORMAT" != "1" ]; then echo "UNPACK=bad-manifest format=$FORMAT"; exit 1; fi
+echo "UNPACK=ok"
+"#,
+        unit = sh_quote(&format!("{workdir}/{pf}")),
+        workdir = sh_quote(workdir),
+        expected = expected_bytes,
+    )
+}
+
+/// Slice-2 stage for `--remote-binpkg <file>`: build the bundle
+/// (server-side, `remote_bundle`), stream it to
+/// `$WORKDIR/<pf>/bundle.tar`, unpack + verify there. Exit 0 = `UNPACK=ok`.
+fn run_bundle_stage(
+    ctx: &RemoteContext,
+    control: Option<&std::path::Path>,
+    binpkg_path: &Path,
+) -> ExitCode {
+    if !binpkg_path.is_file() {
+        eprintln!("mrg: --remote-binpkg {}: not found", binpkg_path.display());
+        return ExitCode::from(1);
+    }
+    let staging = std::env::temp_dir().join(format!(
+        "portuale-remote-bundle-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0)
+    ));
+    if let Err(message) = std::fs::create_dir_all(&staging) {
+        eprintln!("mrg: staging dir {}: {message}", staging.display());
+        return ExitCode::from(1);
+    }
+    let staged = match crate::remote_bundle::build_bundle(binpkg_path, &staging) {
+        Ok(staged) => staged,
+        Err(message) => {
+            eprintln!("mrg: bundle build failed: {message}");
+            let _ = std::fs::remove_dir_all(&staging);
+            return ExitCode::from(1);
+        }
+    };
+    let pf = staged
+        .manifest
+        .cpv
+        .rsplit('/')
+        .next()
+        .unwrap_or_default()
+        .to_string();
+    let dest_tar = format!("{}/{pf}/bundle.tar", ctx.workdir);
+    // Fail-early: the stream lands (or fails) before the driver runs.
+    if ctx.transport == RemoteTransport::Ssh {
+        // The unit dir must exist for `cat >` (no `mkdir -p` hiding a
+        // wrong workdir -- preflight already proved creatability).
+        let mkdir = format!("mkdir -p {}", sh_quote(&format!("{}/{pf}", ctx.workdir)));
+        match run_script_stdin(ctx, control, &mkdir) {
+            Ok(output) if output.status.success() => {}
+            Ok(output) => {
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                eprintln!(
+                    "mrg: creating unit dir failed (exit {}):\n{stderr}",
+                    output.status.code().unwrap_or(-1)
+                );
+                let _ = std::fs::remove_dir_all(&staging);
+                return ExitCode::from(1);
+            }
+            Err(message) => {
+                eprintln!("{message}");
+                let _ = std::fs::remove_dir_all(&staging);
+                return ExitCode::from(1);
+            }
+        }
+    }
+    if let Err(message) = send_file(ctx, control, &staged.tarball, &dest_tar) {
+        eprintln!("{message}");
+        let _ = std::fs::remove_dir_all(&staging);
+        return ExitCode::from(1);
+    }
+    let script = unpack_script(&ctx.workdir, &pf, staged.byte_count);
+    let output = match run_script_stdin(ctx, control, &script) {
+        Ok(output) => output,
+        Err(message) => {
+            eprintln!("{message}");
+            let _ = std::fs::remove_dir_all(&staging);
+            return ExitCode::from(1);
+        }
+    };
+    let _ = std::fs::remove_dir_all(&staging);
+    let code = output.status.code();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    for line in stderr.lines() {
+        println!("{line}");
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let unpack = parse_kv(&stdout).get("UNPACK").cloned().unwrap_or_default();
+    if output.status.success() && unpack == "ok" {
+        println!(
+            ">>> Remote bundle {}: unpacked ({} bytes, slot {}, repo {})",
+            staged.manifest.cpv, staged.byte_count, staged.manifest.slot, staged.manifest.repo,
+        );
+        ExitCode::from(0)
+    } else {
+        eprintln!(
+            "mrg: bundle unpack failed (exit {}, UNPACK={unpack}):",
+            code.unwrap_or(-1)
+        );
+        for line in stderr.lines().take(5) {
+            eprintln!("mrg:   {line}");
         }
         ExitCode::from(1)
     }
@@ -721,6 +1013,8 @@ mod tests {
             max_clock_skew_secs: 900,
             root: "/".to_string(),
             workdir: "/var/tmp/portage-remote".to_string(),
+            transport: RemoteTransport::Ssh,
+            binpkg: None,
         }
     }
 
@@ -749,5 +1043,64 @@ mod tests {
             lookup_ids(&ctx_with_args("h", Some("-o Foo=yes")))[0],
             "h".to_string()
         );
+    }
+
+    fn fixture(name: &str) -> std::path::PathBuf {
+        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../fixtures")
+            .join(name)
+    }
+
+    /// The unpack driver rejects a truncated stream before touching
+    /// anything: byte-count gate first, tar never runs on short input.
+    #[test]
+    fn unpack_script_rejects_a_truncated_bundle() {
+        let tmp = std::env::temp_dir().join(format!(
+            "portuale-remote-trunc-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let staging = tmp.join("staging");
+        std::fs::create_dir_all(&staging).unwrap();
+        let staged = crate::remote_bundle::build_bundle(
+            &fixture("pkgdir/dev-libs/packagepkg-1.0.tbz2"),
+            &staging,
+        )
+        .expect("fixture tbz2 stages");
+        // Simulate the streamed file, truncated to half its bytes.
+        let unit = tmp.join("work/packagepkg-1.0");
+        std::fs::create_dir_all(&unit).unwrap();
+        let bytes = std::fs::read(&staged.tarball).unwrap();
+        std::fs::write(unit.join("bundle.tar"), &bytes[..bytes.len() / 2]).unwrap();
+
+        let script = unpack_script(
+            tmp.join("work").to_str().unwrap(),
+            "packagepkg-1.0",
+            staged.byte_count,
+        );
+        let output = std::process::Command::new("bash")
+            .args(["-s"])
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .and_then(|mut child| {
+                use std::io::Write as _;
+                child.stdin.take().unwrap().write_all(script.as_bytes())?;
+                child.wait_with_output()
+            })
+            .expect("local bash runs the driver");
+        assert!(!output.status.success());
+        let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+        assert!(
+            stdout.contains("UNPACK=byte-count-mismatch"),
+            "unexpected driver output:\n{stdout}"
+        );
+        // Nothing unpacked: the gate runs before tar.
+        assert!(!unit.join("image").exists());
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 }

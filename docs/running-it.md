@@ -2090,3 +2090,27 @@ The pytest suite boots the same fixture automatically
 ssh/sshd/ssh-keygen): `pytest tests/test_portuale.py -k remote`
 covers first-contact TOFU, known-host quietness, unreachable (exit 1),
 unwritable ROOT (exit 1), and missing-hostname usage error (exit 2).
+
+`mrg --remote-binpkg` bundle streaming (2026-09-07, remote-merge slice
+2): one explicit binpkg is bundled server-side, streamed over stdin,
+and unpacked + verified client-side. Live-verified exactly as run
+(same loopback client as the preflight example):
+
+```sh
+portuale mrg --remote-hostname 127.0.0.1 --remote-port 22222 \
+  --remote-key-file /tmp/client --remote-user vivo \
+  --remote-root /tmp/root --remote-workdir /tmp/work \
+  --remote-binpkg fixtures/pkgdir/dev-libs/packagepkg-1.0.tbz2
+# >>> Remote preflight 127.0.0.1: ok
+# >>> Remote bundle dev-libs/packagepkg-1.0: unpacked (40960 bytes, slot 0, repo __unknown__)
+# ($WORKDIR/packagepkg-1.0/ holds image/, build-info/, environment, remote-manifest)
+portuale mrg --remote-transport local --remote-hostname localtest \
+  --remote-root /tmp/root --remote-workdir /tmp/work \
+  --remote-binpkg fixtures/pkgdir/dev-libs/packagepkg-1.0.tbz2
+# (identical output, no sshd involved)
+```
+
+Deterministic slice tests: `pytest tests/test_portuale.py -k remote`
+boots the loopback fixture for the ssh unpack and runs the local
+transport inline; `cargo test -p portuale remote` covers the manifest
+round-trip, bundle layout, and truncation rejection.

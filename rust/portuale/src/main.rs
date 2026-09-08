@@ -40,6 +40,7 @@ mod pretend;
 mod privileges;
 mod regen;
 mod remote;
+mod remote_bundle;
 
 use std::process::ExitCode;
 

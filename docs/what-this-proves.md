@@ -15301,3 +15301,25 @@ calls it for every `Ebuild` entry. Verified: `emerge --resume` now builds
 builds were already fine (`test_emerge_atom_source_build_sees_the_
 resolved_use_and_build_flags`) -- only `--resume` reconstructs entries
 without USE.
+
+### mrg: remote-merge slice 3 -- client phases
+
+`mrg --remote-binpkg` client phases (2026-09-07, remote-merge slice 3):
+after unpack, the driver runs `pretend` → `setup` → `preinst` from the
+bundle's own ebuild + saved environment through the shipped `bin/`
+runtime (fresh `bash bin/ebuild.sh <phase>` per phase -- the readonly
+`EBUILD_PHASE` semantics demand it, like local `spawnebuild`), gated on
+the binpkg's `DEFINED_PHASES` (empty list = note, not failure, mirroring
+the local degrade). Path overrides (`EBUILD`/`O`/`ROOT`/`D`/`T`/… with
+client-side values, `D` trailing-slash intact) are exported while
+EAPI/PN/PV/… ride the sourced saved environment -- required, not
+optional: the binary-branch load filter strips exactly those vars from
+the file (package-rename rule), so the driver re-exports them from a
+server-side `_pkgsplit` (`split_pf` over `ververify` + `split_pvr`,
+`S` deliberately unset for ebuild.sh's `${WORKDIR}/${P}` default);
+`PORTAGE_ECLASS_LOCATIONS` ships empty, `PORTAGE_PYTHON` stays the
+literal `/usr/bin/python` (documented cut: no python on clients).
+Trial-verified local + loopback-ssh (`dev-libs/binpkgrmpkg-1.0` writes
+exactly `setup-1.0\npreinst-1.0\n` to the client ROOT; postinst waits
+for the slice-4 merge). Pinned by `select_phases` + `split_pf` units, a
+synthetic-pretend driver test through the real `bin/`, and two

@@ -316,6 +316,8 @@ Required values are clap-required; unknown values exit 2 via clap.
 | `--remote-ssh-args` | Value | `-o ControlMaster=auto -o ControlPersist=60s` | passthrough (ansible `ssh_args`). |
 | `--remote-strict-host-key-checking` | Value `accept-new\|yes\|no` | `accept-new` | TOFU by default (new key added + fingerprint printed, changed key aborts); `yes` for locked-down fleets, `no` only for throwaway labs (§9). |
 | `--remote-jobs` | Value | `1` | units in flight (v1: sequential only; the knob exists so the future parallel slice needs no CLI change). |
+| `--remote-transport` | Value `ssh\|local` | `ssh` | how driver scripts and files reach the client; `local` runs the identical generated driver against local paths (offline debugging, SSH-free driver tests). |
+| `--remote-binpkg` | Value | — | bundle, stream and unpack one explicit binpkg file, bypassing resolution (slices 2-4 trials; later an escape hatch). |
 
 `--getbinpkgonly` is **forced**: a remote run without it (or with a
 plan containing any non-`Binary` entry) is a usage error, exit 2 --
@@ -405,10 +407,14 @@ disables -- only for labs with no NTP).
    (choices/required/exit-2), `RemoteContext`, multiplexed `ssh`
    spawn, preflight-only run (`bash ≥ 5.3`, tool checks, clock skew,
    TOFU host-key path), rc-255 mapping, server-side option/config
-   sanity gates (§5.5 stages 1-2). No payload yet.
+   sanity gates (§5.5 stages 1-2). No payload yet. (shipped 2026-09-07,
+   commit `mrg: remote-merge slice 1 -- transport plus preflight`)
 2. **Streaming**: bundle build (image.tar + build-info/ +
    remote-manifest) + stdin transfer + client unpack + byte-count
-   check, `--remote-transport=local` for tests.
+   check, `--remote-transport=local` for tests. (shipped 2026-09-07;
+   uncompressed tar, pre-decompressed `environment`, byte-count gate
+   before unpack, `bundle.tar` removed after; `--remote-binpkg` trials
+   bypass resolution)
 3. **Phases on client**: pretend → setup → preinst from the bundle's
    own files, `DEFINED_PHASES`-gated, log streaming.
 4. **Merge + vdb on client**: collision check, CONFIG_PROTECT copy,

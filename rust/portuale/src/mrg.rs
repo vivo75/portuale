@@ -996,6 +996,26 @@ const OPTIONS: &[Opt] = &[
         missing: "",
         help: "per-unit work area on the client (default /var/tmp/portage-remote)",
     },
+    Opt {
+        id: "remote_transport",
+        long: "--remote-transport",
+        alias: None,
+        short: None,
+        kind: Kind::Value,
+        choices: &["ssh", "local"],
+        missing: "",
+        help: "how driver scripts and files reach the client (default ssh)",
+    },
+    Opt {
+        id: "remote_binpkg",
+        long: "--remote-binpkg",
+        alias: None,
+        short: None,
+        kind: Kind::Value,
+        choices: &[],
+        missing: "",
+        help: "bundle, stream and unpack one explicit binpkg file (bypasses resolution)",
+    },
 ];
 
 /// Builds the clap `Arg` for one `Opt` entry, keeping real emerge's
@@ -1284,7 +1304,7 @@ pub fn run(args: &[String]) -> ExitCode {
     let argv = std::iter::once(bin).chain(joined.iter().map(String::as_str));
     match command().try_get_matches_from(argv) {
         Ok(matches) => match crate::remote::check_remote(&matches) {
-            Ok(Some(ctx)) => crate::remote::run_preflight(&ctx),
+            Ok(Some(ctx)) => crate::remote::run_remote(&ctx),
             Ok(None) => crate::pretend::run(&to_emerge_argv(&matches)),
             Err(message) => {
                 eprintln!("{message}");
@@ -1561,6 +1581,8 @@ mod tests {
         assert_eq!(get("remote_max_clock_skew"), Some("60"));
         assert_eq!(get("remote_root"), Some("/target"));
         assert_eq!(get("remote_workdir"), Some("/tmp/work"));
+        assert_eq!(get("remote_transport"), None);
+        assert_eq!(get("remote_binpkg"), None);
 
         // The choice option rejects anything outside accept-new/yes/no.
         assert!(
@@ -1570,6 +1592,13 @@ mod tests {
                 "--remote-strict-host-key-checking=sometimes"
             ])
             .is_err()
+        );
+        // Same for the transport choice; the valid spellings parse.
+        assert!(parse(&["--remote-hostname", "h", "--remote-transport=pigeon"]).is_err());
+        let m = parse(&["--remote-hostname", "h", "--remote-transport=local"]).unwrap();
+        assert_eq!(
+            m.get_one::<String>("remote_transport").map(String::as_str),
+            Some("local")
         );
         // Absent entirely: local mode, no remote keys set.
         let m = parse(&["--pretend", "cat/pkg"]).unwrap();
@@ -1606,6 +1635,8 @@ mod tests {
         assert_eq!(ctx.max_clock_skew_secs, 900);
         assert_eq!(ctx.root, "/");
         assert_eq!(ctx.workdir, "/var/tmp/portage-remote");
+        assert_eq!(ctx.transport, crate::remote::RemoteTransport::Ssh);
+        assert_eq!(ctx.binpkg, None);
 
         let m = parse(&["--pretend", "cat/pkg"]).unwrap();
         assert!(check_remote(&m).unwrap().is_none());
