@@ -52,3 +52,13 @@ KEYWORDS: amd64
 SLOT: 0
 USE:
 BUILD_ID: 1
+
+CPV: dev-libs/usepkgonlydeppkg-1.0
+DEFINED_PHASES: -
+DESCRIPTION: fixture: a binary package whose RDEPEND (dev-libs/samepkg) is installed but has no binpkg -- --usepkgonly must treat it as satisfied
+EAPI: 8
+IUSE:
+KEYWORDS: amd64
+RDEPEND: dev-libs/samepkg
+SLOT: 0
+USE:

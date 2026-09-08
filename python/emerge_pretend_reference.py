@@ -6500,6 +6500,24 @@ def resolve_pretend(
             if _visible_with_relax(c, category, package, config, _rl, _rk, _rm)
         ]
     if _need_fallback(visible):
+        # Real _select_pkg_highest_available_imp's installed fallback
+        # (depgraph.py _iter_match_pkgs(root_config, "installed", atom)
+        # after the merge-candidate search comes up empty): in `selective`
+        # mode (the default -- --emptytree clears it) an already-installed
+        # version that satisfies the atom is accepted as-is
+        # (operation="nomerge"). Scoped to --usepkg/--usepkgonly and a
+        # dependency (not --emptytree): --usepkgonly empties the ebuild
+        # candidate pool wholesale, so a dependency whose only satisfier
+        # is an installed version with no binary package would otherwise
+        # wrongly go no_visible_candidate and, in a real -K merge, land
+        # on the resume list. Real --usepkgonly restricts the *merge*
+        # pool, not installed-satisfaction. A top-level atom still
+        # reports the missing candidate. Mirrors
+        # portage-repo/src/lib.rs (L1-a).
+        if not empty and not is_top_level and (usepkg or usepkgonly):
+            _iv = _best_installed_for_atom(root, atom_str, category, package)
+            if _iv is not None:
+                return ("already_installed", _iv)
         return ("no_visible_candidate",)
 
     # Reuses the real match_from_list rather than re-deriving

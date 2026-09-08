@@ -9398,6 +9398,41 @@ pub fn resolve_pretend(
             .collect();
     }
     if need_fallback(&visible) {
+        // Real `_select_pkg_highest_available_imp`'s installed fallback
+        // (`depgraph.py` `_iter_match_pkgs(root_config, "installed", atom)`
+        // after the merge-candidate search comes up empty): in `selective`
+        // mode (the default -- `--emptytree` clears it) an already-
+        // installed version that satisfies the atom is accepted as-is
+        // (`operation="nomerge"`). `dependency_avoid_update_candidate`
+        // above only reaches atoms that still have *some* repo candidate
+        // (e.g. keyword-masked-but-present); this vdb-only check also
+        // covers a dependency whose ebuild has left the tree and -- the
+        // common case -- `--usepkgonly` with no binary package for an
+        // installed dependency (real `--usepkgonly` restricts what may be
+        // newly *merged*, not what counts as already *satisfied*). A
+        // top-level atom still reports the missing candidate: real
+        // requires something mergeable for a package named on the command
+        // line.
+        //
+        // Scoped to `--usepkg`/`--usepkgonly` and a dependency (not
+        // `--emptytree`, which must rebuild everything): `--usepkgonly`
+        // empties the ebuild candidate pool wholesale (above), so a
+        // dependency whose only satisfier is an installed version with no
+        // binary package would otherwise wrongly go `NoVisibleCandidate`
+        // and, in a real `-K` merge, land on the resume list ("no visible
+        // ebuild to merge"). Real `--usepkgonly` restricts the *merge*
+        // pool, not installed-satisfaction. The non-`--usepkg` path keeps
+        // its existing behaviour here (a dependency whose ebuild left the
+        // tree entirely is still reported) -- narrowing this fix to the
+        // case the L1 test bed actually turned up (L1-a).
+        if !empty
+            && !is_top_level
+            && (usepkg || usepkgonly)
+            && let Some(version) =
+                best_installed_for_atom(root, atom_str, &atom.category, &atom.package)
+        {
+            return Ok(PretendOutcome::AlreadyInstalled { version });
+        }
         return Ok(PretendOutcome::NoVisibleCandidate);
     }
 
@@ -16111,6 +16146,70 @@ mod tests {
             &[],
         )
         .unwrap_or_else(|e| panic!("resolve_pretend({atom_str}) failed: {e}"))
+    }
+
+    /// L1-a: under `--usepkgonly` the ebuild candidate pool is emptied
+    /// wholesale, so a dependency whose only satisfier is an installed
+    /// version with no binary package must still resolve `AlreadyInstalled`
+    /// (real `--usepkgonly` restricts the *merge* pool, not installed-
+    /// satisfaction) -- not `NoVisibleCandidate`, which in a real `-K`
+    /// merge lands on the resume list ("no visible ebuild to merge").
+    #[test]
+    fn usepkgonly_dependency_satisfied_by_an_installed_version_with_no_binpkg() {
+        let root = fixtures_root();
+        let repos = find_repos(&root).expect("fixture repos.conf must resolve");
+        // dev-libs/samepkg: installed (vdb), has an ebuild, has no binpkg.
+        let call = |usepkgonly: bool, is_top_level: bool| {
+            resolve_pretend(
+                &repos,
+                &root,
+                "dev-libs/samepkg",
+                &test_config(),
+                false,
+                false,
+                false,
+                &[],
+                false,
+                true,
+                false,
+                false, // selective
+                is_top_level,
+                false, // usepkg
+                usepkgonly,
+                false,
+                &[],
+                &[],
+                false,
+                None,
+                false,
+                false,
+                false,
+                false,
+                false,
+                false,
+                false,
+                &[],
+            )
+            .expect("resolve_pretend(dev-libs/samepkg) failed")
+        };
+        // As a dependency under --usepkgonly: satisfied by the vdb.
+        assert_eq!(
+            call(true, false),
+            PretendOutcome::AlreadyInstalled {
+                version: "1.0".to_string()
+            }
+        );
+        // A top-level --usepkgonly atom still reports the missing binary
+        // (real requires something mergeable for a named package).
+        assert_eq!(call(true, true), PretendOutcome::NoVisibleCandidate);
+        // Without --usepkg the ebuild pool is intact -> the ordinary
+        // installed-vs-ebuild path already handled it (unchanged).
+        assert_eq!(
+            call(false, false),
+            PretendOutcome::AlreadyInstalled {
+                version: "1.0".to_string()
+            }
+        );
     }
 
     #[test]

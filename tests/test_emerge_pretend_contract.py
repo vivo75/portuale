@@ -801,6 +801,17 @@ CASES = [
         1,
     ),
     (
+        "--usepkgonly: a dependency satisfied only by an installed version "
+        "with no binpkg is not reported missing (L1-a)",
+        ["--pretend", "--usepkgonly", "dev-libs/usepkgonlydeppkg"],
+        0,
+    ),
+    (
+        "--usepkgonly: -v form of the same",
+        ["--pretend", "-v", "--usepkgonly", "dev-libs/usepkgonlydeppkg"],
+        0,
+    ),
+    (
         "downgrade: installed version has no visible candidate of its own",
         ["--pretend", "dev-libs/downgradepkg"],
         0,
