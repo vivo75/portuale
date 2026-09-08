@@ -863,13 +863,7 @@ fn run_bundle_stage(
     }
     let stdout = String::from_utf8_lossy(&output.stdout);
     let unpack = parse_kv(&stdout).get("UNPACK").cloned().unwrap_or_default();
-    if output.status.success() && unpack == "ok" {
-        println!(
-            ">>> Remote bundle {}: unpacked ({} bytes, slot {}, repo {})",
-            staged.manifest.cpv, staged.byte_count, staged.manifest.slot, staged.manifest.repo,
-        );
-        ExitCode::from(0)
-    } else {
+    if !(output.status.success() && unpack == "ok") {
         eprintln!(
             "mrg: bundle unpack failed (exit {}, UNPACK={unpack}):",
             code.unwrap_or(-1)
@@ -877,8 +871,160 @@ fn run_bundle_stage(
         for line in stderr.lines().take(5) {
             eprintln!("mrg:   {line}");
         }
-        ExitCode::from(1)
+        return ExitCode::from(1);
     }
+    println!(
+        ">>> Remote bundle {}: unpacked ({} bytes, slot {}, repo {})",
+        staged.manifest.cpv, staged.byte_count, staged.manifest.slot, staged.manifest.repo,
+    );
+    // Slice-3 phases (pretend/setup/preinst, DEFINED_PHASES-gated at
+    // bundle time). Postinst waits for the slice-4 merge; an empty phase
+    // list (no hooks, or no ebuild/env shipped) is a note, not a failure
+    // -- same degrade as the local merge.
+    if staged.phases.is_empty() {
+        println!(
+            ">>> Remote phases {}: none defined, skipped",
+            staged.manifest.cpv
+        );
+        return ExitCode::from(0);
+    }
+    let unit_dir = format!("{}/{pf}", ctx.workdir);
+    match run_phases_stage(ctx, control, &unit_dir, &staged) {
+        Ok(done) => {
+            println!(
+                ">>> Remote phases {}: {}",
+                staged.manifest.cpv,
+                done.join(", ")
+            );
+            ExitCode::from(0)
+        }
+        Err(message) => {
+            eprintln!("{message}");
+            ExitCode::from(1)
+        }
+    }
+}
+
+// --- Client phases (slice 3) -------------------------------------------------
+
+/// One phase invocation, generated bash: recreate the local
+/// `run_phase_from_saved_env` + `run_one_phase_bash` setup client-side
+/// (fresh `bash bin/ebuild.sh <phase>` process per phase -- the readonly
+/// `EBUILD_PHASE` semantics demand it, exactly like local `spawnebuild`).
+/// Path overrides are exported with client-side values; everything else
+/// (EAPI, PN/PV/…, USE) rides the sourced saved environment, whose stale
+/// path copies ebuild.sh's own `__preprocess_ebuild_env` strips (the
+/// `environment.raw` marker enables that filtering, mirroring local).
+/// `S` is deliberately *not* exported: ebuild.sh defaults it to
+/// `${WORKDIR}/${P}` with `P` from the saved env (exact local behavior).
+/// `PHASE_<phase>=<rc>` on stdout, phase log raw on stdout/stderr.
+fn phase_script(
+    unit_dir: &str,
+    staged: &crate::remote_bundle::StagedBundle,
+    phase: &str,
+    root: &str,
+    workdir_parent: &str,
+    colormap: &str,
+) -> String {
+    // D keeps local's trailing slash.
+    format!(
+        r#"UNIT={unit}
+T="$UNIT/temp"
+mkdir -p "$T" "$UNIT/work" "$UNIT/homedir" "$UNIT/files" "$UNIT/empty"
+cp "$UNIT/environment" "$T/environment"
+: > "$T/environment.raw"
+export EAPI={eapi} CATEGORY={category} PN={pn} PV={pv} PR={pr} PVR={pvr} P={p} PF={pf}
+export EBUILD="$UNIT/build-info/{pf}.ebuild"
+export O="$UNIT/build-info"
+export ROOT={root} EROOT={root}
+export PORTAGE_BUILDDIR="$UNIT"
+export WORKDIR="$UNIT/work"
+export D="$UNIT/image/" ED="$UNIT/image/"
+export T="$T" HOME="$UNIT/homedir" FILESDIR="$UNIT/files"
+export PORTAGE_BIN_PATH="$UNIT/bin"
+export PORTAGE_ECLASS_LOCATIONS=""
+export PORTAGE_PYTHON=/usr/bin/python
+export PORTAGE_COLORMAP={colormap}
+export PORTAGE_TMPDIR={tmpdir}
+export SANDBOX_LOG="$T/sandbox.log"
+export EBUILD_PHASE={phase} EMERGE_FROM=binary
+export PATH="$UNIT/bin/ebuild-helpers:$PATH"
+bash "$UNIT/bin/ebuild.sh" {phase}
+rc=$?
+echo "PHASE_{phase}=$rc"
+exit $rc
+"#,
+        unit = sh_quote(unit_dir),
+        root = sh_quote(root),
+        colormap = sh_quote(colormap),
+        tmpdir = sh_quote(workdir_parent),
+        phase = phase,
+        eapi = sh_quote(&staged.eapi),
+        category = sh_quote(&staged.category),
+        pn = sh_quote(&staged.pn),
+        pv = sh_quote(&staged.pv),
+        pr = sh_quote(&staged.pr),
+        pvr = sh_quote(&staged.pvr),
+        p = sh_quote(&staged.p),
+        pf = sh_quote(&staged.pf),
+    )
+}
+
+/// Run the staged phases in order, stopping at the first non-zero
+/// (pretend/setup/preinst are all fatal -- local rule kept). Returns the
+/// per-phase `ok` markers for the report line.
+fn run_phases_stage(
+    ctx: &RemoteContext,
+    control: Option<&std::path::Path>,
+    unit_dir: &str,
+    staged: &crate::remote_bundle::StagedBundle,
+) -> Result<Vec<String>, String> {
+    let colormap = crate::color::phase_colormap_export();
+    let workdir_parent = std::path::Path::new(&ctx.workdir)
+        .parent()
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "/var/tmp".to_string());
+    let mut done = Vec::new();
+    for phase in &staged.phases {
+        let script = phase_script(
+            unit_dir,
+            staged,
+            phase,
+            &ctx.root,
+            &workdir_parent,
+            &colormap,
+        );
+        let output = run_script_stdin(ctx, control, &script).map_err(|message| {
+            if ctx.transport == RemoteTransport::Local {
+                format!("mrg: local phase {phase} command failed: {message}")
+            } else {
+                message
+            }
+        })?;
+        let code = output.status.code();
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        for line in stderr.lines().chain(stdout.lines()) {
+            println!("{line}");
+        }
+        let reported: i32 = parse_kv(&stdout)
+            .get(&format!("PHASE_{phase}"))
+            .and_then(|rc| rc.parse().ok())
+            .unwrap_or(-1);
+        if output.status.success() && reported == 0 {
+            done.push(format!("{phase} ok"));
+        } else {
+            let mut message = format!(
+                "mrg: client phase {phase} failed (exit {}, PHASE_{phase}={reported}):",
+                code.unwrap_or(-1)
+            );
+            for line in stderr.lines().chain(stdout.lines()).take(5) {
+                message.push_str(&format!("\nmrg:   {line}"));
+            }
+            return Err(message);
+        }
+    }
+    Ok(done)
 }
 
 #[cfg(test)]
@@ -1101,6 +1247,97 @@ mod tests {
         );
         // Nothing unpacked: the gate runs before tar.
         assert!(!unit.join("image").exists());
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// Positive pretend dispatch through the real stack: a synthetic unit
+    /// (hand-written ebuild + environment carrying `pkg_pretend`, the real
+    /// shipped `bin/`) runs the generated phase script under local bash.
+    /// Proves template + `ebuild.sh` + DEFINED_PHASES-agnostic dispatch;
+    /// the ebuild/env being synthetic is the only unreal part.
+    #[test]
+    fn phase_script_runs_pkg_pretend_from_saved_env() {
+        let tmp = std::env::temp_dir().join(format!(
+            "portuale-remote-pretend-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let unit = tmp.join("work/probe-1.0");
+        let build_info = unit.join("build-info");
+        std::fs::create_dir_all(&build_info).unwrap();
+        std::fs::write(
+            build_info.join("probe-1.0.ebuild"),
+            "EAPI=8\nDESCRIPTION=\"synthetic pretend probe\"\nSLOT=\"0\"\nKEYWORDS=\"amd64\"\n",
+        )
+        .unwrap();
+        std::fs::write(
+            unit.join("environment"),
+            "EAPI=8\npkg_pretend() {\n\techo pretend-ok >> \"${EROOT}/var/lib/probe.log\"\n}\n",
+        )
+        .unwrap();
+        // The real runtime, as shipped in bundles.
+        let status = std::process::Command::new("cp")
+            .args(["-a"])
+            .arg(crate::ebuild_phases::bin_dir())
+            .arg(unit.join("bin"))
+            .status()
+            .expect("cp -a bin");
+        assert!(status.success());
+        let root = tmp.join("root");
+        std::fs::create_dir_all(root.join("var/lib")).unwrap();
+
+        let staged = crate::remote_bundle::StagedBundle {
+            tarball: tmp.join("bundle.tar"),
+            byte_count: 0,
+            manifest: crate::remote_bundle::BundleManifest {
+                format: 1,
+                cpv: "dev-libs/probe-1.0".to_string(),
+                slot: "0".to_string(),
+                repo: "test".to_string(),
+                has_environment: true,
+            },
+            eapi: "8".to_string(),
+            category: "dev-libs".to_string(),
+            pn: "probe".to_string(),
+            pv: "1.0".to_string(),
+            pr: "r0".to_string(),
+            pvr: "1.0".to_string(),
+            p: "probe-1.0".to_string(),
+            pf: "probe-1.0".to_string(),
+            phases: vec!["pretend".to_string()],
+        };
+        let script = phase_script(
+            unit.to_str().unwrap(),
+            &staged,
+            "pretend",
+            root.to_str().unwrap(),
+            tmp.to_str().unwrap(),
+            "",
+        );
+        let output = std::process::Command::new("bash")
+            .args(["-s"])
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .and_then(|mut child| {
+                use std::io::Write as _;
+                child.stdin.take().unwrap().write_all(script.as_bytes())?;
+                child.wait_with_output()
+            })
+            .expect("local bash runs the phase script");
+        let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+        assert!(
+            stdout.contains("PHASE_pretend=0"),
+            "phase marker missing:\n{stdout}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(root.join("var/lib/probe.log")).unwrap(),
+            "pretend-ok\n"
+        );
         let _ = std::fs::remove_dir_all(&tmp);
     }
 }

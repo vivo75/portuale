@@ -90,11 +90,102 @@ impl BundleManifest {
 pub struct StagedBundle {
     /// `bundle.tar` bytes, ready for stdin streaming.
     pub tarball: PathBuf,
+    /// Server-side `_pkgsplit` values, re-exported by the phase driver:
+    /// the binary-branch load filter strips `CATEGORY/PVR/PF/PN/PR/PV/P`
+    /// from the saved environment (see `split_pf`), so -- like local
+    /// `phase_env_vars` -- these travel outside the file.
+    pub eapi: String,
+    pub category: String,
+    pub pn: String,
+    pub pv: String,
+    pub pr: String,
+    pub pvr: String,
+    pub p: String,
+    pub pf: String,
     /// Byte count the client must observe (`wc -c` equality gate).
     pub byte_count: u64,
     /// The manifest shipped inside (and parsed back here for the
     /// server-side report line).
     pub manifest: BundleManifest,
+    /// Phases the client may run, in order: `pretend`/`setup`/`preinst`
+    /// intersected with the binpkg's own `DEFINED_PHASES`, and only when
+    /// both the ebuild file and the hook environment shipped (the local
+    /// `merge_binpkg` degrade, mirrored).
+    pub phases: Vec<String>,
+}
+
+/// Split `package-version` (`PF` without category) into `(PN, PVR)`
+/// the way real `_pkgsplit` does: the version is the longest trailing
+/// `-`-separated suffix that `ververify` accepts, so a package name may
+/// itself contain digit-led words (`foo-1bar-2.0` -> `foo-1bar`).
+/// Needed because the binary-branch load filter strips
+/// `CATEGORY/PVR/PF/PN/PR/PV/P` from the saved environment (package
+/// renames must not leak across), so the driver re-exports them from
+/// server-side values -- mirroring local `phase_env_vars`.
+pub fn split_pf(pf: &str) -> Option<(String, String)> {
+    let words: Vec<&str> = pf.split('-').collect();
+    for i in 1..words.len() {
+        let candidate = words[i..].join("-");
+        // A `-r<digits>` revision belongs to the version, not the name --
+        // but only when the rest still verifies (else `foo-r1-2.0` would
+        // mis-split; real `_pkgsplit` has the same shape).
+        if portage_versions::ververify(&candidate) {
+            return Some((words[..i].join("-"), candidate));
+        }
+    }
+    None
+}
+
+/// Split `PVR` into `(PV, PR)`: trailing `-r<digits>` is the revision,
+/// else `PR` is real portage's own `"r0"` default.
+pub fn split_pvr(pvr: &str) -> (String, String) {
+    if let Some((stem, rev)) = pvr.rsplit_once('-')
+        && rev.starts_with('r')
+        && rev[1..].chars().all(|c| c.is_ascii_digit())
+        && !rev[1..].is_empty()
+        && !stem.is_empty()
+    {
+        return (stem.to_string(), rev.to_string());
+    }
+    (pvr.to_string(), "r0".to_string())
+}
+
+/// EAPI for the driver exports: `build-info/EAPI` first, else the
+/// `EAPI=` line of the ebuild itself (PMS 7.3.1 rule). `None` when
+/// neither exists (fail-early: real binpkgs always carry it).
+pub fn read_eapi(build_info: &Path, ebuild_file: &Path) -> Option<String> {
+    if let Ok(text) = std::fs::read_to_string(build_info.join("EAPI")) {
+        let value = text.trim().to_string();
+        if !value.is_empty() {
+            return Some(value);
+        }
+    }
+    let text = std::fs::read_to_string(ebuild_file).ok()?;
+    for line in text.lines() {
+        let line = line.trim();
+        if let Some(value) = line.strip_prefix("EAPI=") {
+            let value = value.trim().trim_matches('"').trim().to_string();
+            if !value.is_empty() {
+                return Some(value);
+            }
+        }
+    }
+    None
+}
+
+/// Which of the slice-3 client phases (`pretend`/`setup`/`preinst`) a
+/// binpkg's `DEFINED_PHASES` actually defines -- and only when the ebuild
+/// file plus the hook environment are present to run them from (same
+/// gate as the local merge's `extracted_ebuild` + `phase_defined`).
+pub fn select_phases(defined_phases: &str, has_ebuild: bool, has_environment: bool) -> Vec<String> {
+    if !(has_ebuild && has_environment) {
+        return Vec::new();
+    }
+    ["pretend", "setup", "preinst"]
+        .into_iter()
+        .filter(|phase| defined_phases.split_whitespace().any(|word| word == *phase))
+        .map(String::from)
+        .collect()
 }
 
 /// Stage one binpkg file (`.gpkg.tar` or `.tbz2`) into a wire bundle
@@ -176,6 +267,28 @@ pub fn build_bundle(binpkg_path: &Path, staging_tmp: &Path) -> Result<StagedBund
     std::fs::write(unit.join("remote-manifest"), manifest_text)
         .map_err(|e| format!("remote-manifest: {e}"))?;
 
+    // The ebuild runtime the client phases run under (`bash bin/ebuild.sh
+    // <phase>`, same files the local merge drives). Per unit for now; a
+    // per-session ship is the obvious later optimization (note the ~500K
+    // in the trial logs if it ever matters).
+    let bin_dir = crate::ebuild_phases::bin_dir();
+    let status = std::process::Command::new("cp")
+        .args(["-a"])
+        .arg(bin_dir)
+        .arg(unit.join("bin"))
+        .status()
+        .map_err(|e| format!("failed to spawn cp: {e}"))?;
+    if !status.success() {
+        return Err(format!("cp -a {} failed ({status})", bin_dir.display()));
+    }
+
+    let ebuild_file = build_info.join(format!("{pf}.ebuild"));
+    let phases = select_phases(
+        &std::fs::read_to_string(build_info.join("DEFINED_PHASES")).unwrap_or_default(),
+        ebuild_file.is_file(),
+        has_environment,
+    );
+
     // Uncompressed tar of `<pf>/` (wire compression is a future slice).
     let tarball = staging_tmp.join("bundle.tar");
     let status = std::process::Command::new("tar")
@@ -192,10 +305,26 @@ pub fn build_bundle(binpkg_path: &Path, staging_tmp: &Path) -> Result<StagedBund
     let byte_count = std::fs::metadata(&tarball)
         .map_err(|e| format!("{}: {e}", tarball.display()))?
         .len();
+    let (pn, pvr) =
+        split_pf(&pf).ok_or_else(|| format!("{}: cannot split package name from version", pf))?;
+    let (pv, pr) = split_pvr(&pvr);
+    let p = format!("{pn}-{pv}");
+    let ebuild_file = build_info.join(format!("{pf}.ebuild"));
+    let eapi = read_eapi(&build_info, &ebuild_file)
+        .ok_or_else(|| format!("{}: no EAPI in build-info nor ebuild", pf))?;
     Ok(StagedBundle {
         tarball,
         byte_count,
         manifest,
+        eapi,
+        category,
+        pn,
+        pv,
+        pr,
+        pvr,
+        p,
+        pf,
+        phases,
     })
 }
 
@@ -240,6 +369,27 @@ mod tests {
             None
         );
         assert_eq!(BundleManifest::parse("lowercase=1\n"), None);
+    }
+
+    #[test]
+    fn select_phases_intersects_defined_words_in_order() {
+        assert_eq!(
+            select_phases("install postinst postrm preinst prerm setup", true, true),
+            vec!["setup".to_string(), "preinst".to_string(),]
+        );
+        assert_eq!(
+            select_phases("pretend setup preinst postinst", true, true),
+            vec![
+                "pretend".to_string(),
+                "setup".to_string(),
+                "preinst".to_string(),
+            ]
+        );
+        // Missing ebuild or environment degrades to no phases (the local
+        // merge's extracted_ebuild gate, mirrored).
+        assert!(select_phases("pretend setup preinst", false, true).is_empty());
+        assert!(select_phases("pretend setup preinst", true, false).is_empty());
+        assert!(select_phases("-", true, true).is_empty());
     }
 
     #[test]

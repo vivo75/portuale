@@ -2114,3 +2114,25 @@ Deterministic slice tests: `pytest tests/test_portuale.py -k remote`
 boots the loopback fixture for the ssh unpack and runs the local
 transport inline; `cargo test -p portuale remote` covers the manifest
 round-trip, bundle layout, and truncation rejection.
+
+`mrg --remote-binpkg` client phases (2026-09-07, remote-merge slice 3):
+`pretend`/`setup`/`preinst` run on the client from the bundle's own
+files through the shipped `bin/` runtime. Live-verified exactly as run
+(local transport; the ssh variant prints the same lines):
+
+```sh
+portuale mrg --remote-transport local --remote-hostname x \
+  --remote-root /tmp/root --remote-workdir /tmp/work \
+  --remote-binpkg fixtures/pkgdir/dev-libs/binpkgrmpkg-1.0.tbz2
+# >>> Remote preflight x: ok
+# >>> Remote bundle dev-libs/binpkgrmpkg-1.0: unpacked (71680 bytes, slot 0, repo __unknown__)
+# PHASE_setup=0
+# PHASE_preinst=0
+# >>> Remote phases dev-libs/binpkgrmpkg-1.0: setup ok, preinst ok
+# (/tmp/root/var/lib/binpkgrmpkg.log reads exactly "setup-1.0\npreinst-1.0\n")
+```
+
+Deterministic slice tests: the hook order is pinned by two black-box
+tests (local + loopback ssh) and `PHASE_<name>=<rc>` markers;
+`cargo test -p portuale remote` covers `select_phases`, the
+`_pkgsplit`, and a synthetic-pretend run through the real `bin/`.

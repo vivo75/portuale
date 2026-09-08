@@ -15302,6 +15302,29 @@ builds were already fine (`test_emerge_atom_source_build_sees_the_
 resolved_use_and_build_flags`) -- only `--resume` reconstructs entries
 without USE.
 
+### mrg: remote-merge slice 2
+
+`mrg --remote-binpkg` bundle streaming (2026-09-07, remote-merge slice
+2): `remote_bundle.rs` stages one binpkg file (`.gpkg.tar`/`.tbz2`) via
+the same `extract_binpkg` the local merge runs, pre-decompresses
+`environment.bz2` server-side (the client never needs `bzip2`), writes
+a `remote-manifest` (`FORMAT=1`, CPV/SLOT/REPO/HAS_ENVIRONMENT,
+parse-back-verified before shipping), and tars the unit uncompressed.
+The stream lands as `$WORKDIR/<pf>/bundle.tar` (`cat >` over ssh,
+`fs::copy` for `--remote-transport local`, which runs the identical
+generated driver against local paths with no sshd), then the unpack
+driver gates byte-count equality, unpacks, checks members + manifest,
+and removes the tarball. `--remote-binpkg` bypasses resolution (slices
+2-4 trials, later an escape hatch); `--remote-transport` is
+`ssh|local`. Trial-verified over loopback sshd and local transport
+(`dev-libs/packagepkg-1.0`: `>>> Remote bundle ...: unpacked (40960
+bytes, slot 0, repo __unknown__)`); truncation is rejected pre-tar
+(`UNPACK=byte-count-mismatch`); a CONTENT-less fixture bundle unpacks
+(CONTENTS becomes slice 4's merge-time gate). Pinned by
+`remote_bundle` layout/manifest tests, an unpack-script truncation
+test, and three black-box tests (ssh unpack, local unpack, missing
+file exit 1).
+
 ### mrg: remote-merge slice 3 -- client phases
 
 `mrg --remote-binpkg` client phases (2026-09-07, remote-merge slice 3):
@@ -15323,3 +15346,5 @@ Trial-verified local + loopback-ssh (`dev-libs/binpkgrmpkg-1.0` writes
 exactly `setup-1.0\npreinst-1.0\n` to the client ROOT; postinst waits
 for the slice-4 merge). Pinned by `select_phases` + `split_pf` units, a
 synthetic-pretend driver test through the real `bin/`, and two
+hook-order black-box tests.
+

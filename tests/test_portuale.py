@@ -480,6 +480,60 @@ def test_mrg_remote_bundle_unpacks_over_local_transport(
     assert "CPV=dev-libs/packagepkg-1.0" in (unit / "remote-manifest").read_text()
 
 
+def _remote_rmpkg_args(sshd_client):
+    """`--remote-binpkg` trial argv for the hook-ordering fixture."""
+    return _remote_binpkg_args(
+        sshd_client,
+        str(Path(FIXTURES_ROOT) / "pkgdir/dev-libs/binpkgrmpkg-1.0.tbz2"),
+    )
+
+
+def test_mrg_remote_phases_run_setup_then_preinst_on_the_client(
+    mrg_binary, fixture_env, loopback_sshd
+):
+    """Slice-3 hooks over loopback ssh: the fixture's pkg_setup +
+    pkg_preinst run on the client in order (its log reads exactly
+    `setup-1.0\\npreinst-1.0\\n` -- postinst waits for the slice-4
+    merge), DEFINED_PHASES-gated, exit 0 with the phase report."""
+    result = subprocess.run(
+        [str(mrg_binary), *_remote_rmpkg_args(loopback_sshd)],
+        capture_output=True, text=True, check=False,
+        env=_remote_env(fixture_env, loopback_sshd),
+    )
+    assert result.returncode == 0, result.stderr
+    assert ">>> Remote phases dev-libs/binpkgrmpkg-1.0: setup ok, preinst ok" \
+        in result.stdout
+    log = Path(loopback_sshd["root"]) / "var/lib/binpkgrmpkg.log"
+    assert log.read_text() == "setup-1.0\npreinst-1.0\n"
+
+
+def test_mrg_remote_phases_run_over_local_transport(
+    mrg_binary, fixture_env, tmp_path
+):
+    """Same hook order through `--remote-transport local` (no sshd)."""
+    root = tmp_path / "root"
+    (root / "var" / "db" / "pkg").mkdir(parents=True)
+    binpkg = (
+        Path(fixture_env["PORTAGE_CONFIGROOT"])
+        / "pkgdir/dev-libs/binpkgrmpkg-1.0.tbz2"
+    )
+    result = subprocess.run(
+        [str(mrg_binary),
+         "--remote-hostname", "localtest",
+         "--remote-transport", "local",
+         "--remote-root", str(root),
+         "--remote-workdir", str(tmp_path / "work"),
+         "--remote-binpkg", str(binpkg)],
+        capture_output=True, text=True, check=False,
+        env=fixture_env,
+    )
+    assert result.returncode == 0, result.stderr
+    assert ">>> Remote phases dev-libs/binpkgrmpkg-1.0: setup ok, preinst ok" \
+        in result.stdout
+    assert (root / "var/lib/binpkgrmpkg.log").read_text() == \
+        "setup-1.0\npreinst-1.0\n"
+
+
 def test_mrg_remote_bundle_missing_file_is_exit_1(mrg_binary, fixture_env, tmp_path):
     """Fail-early: a nonexistent `--remote-binpkg` fails after preflight
     setup but before any streaming, exit 1 with the path named."""

@@ -416,7 +416,12 @@ disables -- only for labs with no NTP).
    before unpack, `bundle.tar` removed after; `--remote-binpkg` trials
    bypass resolution)
 3. **Phases on client**: pretend → setup → preinst from the bundle's
-   own files, `DEFINED_PHASES`-gated, log streaming.
+   own files, `DEFINED_PHASES`-gated, log streaming. (shipped 2026-09-07;
+   `bin/` ships per unit, fresh `bash bin/ebuild.sh <phase>` per phase,
+   path overrides exported client-side while EAPI/PN/PV/… ride the saved
+   env -- the binary-branch load filter strips them from the file, so the
+   driver re-exports them from server-side `_pkgsplit`; `S` intentionally
+   unset for ebuild.sh's own default)
 4. **Merge + vdb on client**: collision check, CONFIG_PROTECT copy,
    CONTENTS/vdb write, same-slot replace with old hooks, postinst,
    env_update equivalent.
