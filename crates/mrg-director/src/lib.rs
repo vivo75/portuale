@@ -497,6 +497,39 @@ impl MemoryDb {
             dependents: std::collections::HashMap::new(),
         }
     }
+
+    /// Record one installed package: CONTENTS-files plus direct
+    /// dependents. Repeat calls accumulate versions in call order --
+    /// provide highest-first, Portage `dbapi.cp_list` order.
+    pub fn add_package(&mut self, args: AddPackageArgs<'_>) {
+        let AddPackageArgs {
+            category,
+            package,
+            version,
+            contents_files,
+            depended_on_by,
+        } = args;
+        self.versions
+            .entry((category.to_string(), package.to_string()))
+            .or_default()
+            .push(version.to_string());
+        self.contents.insert(
+            (
+                category.to_string(),
+                package.to_string(),
+                version.to_string(),
+            ),
+            contents_files,
+        );
+        self.dependents.insert(
+            (
+                category.to_string(),
+                package.to_string(),
+                version.to_string(),
+            ),
+            depended_on_by,
+        );
+    }
 }
 
 impl PackagesDb for MemoryDb {
@@ -1342,5 +1375,260 @@ mod tests {
         assert!(director.scheduler_policy.should_start(0, 99.0));
         fn assert_resolver<T: Resolver>() {}
         assert_resolver::<FakeSolver>();
+    }
+
+    /// Every `Director` delegation method routes through its slot; this
+    /// pins that the director is live wiring, not a field bag.
+    #[test]
+    fn director_delegates_every_stage_through_its_slots() {
+        struct FakeSolver;
+        impl Resolver for FakeSolver {
+            fn resolve(&self, _req: &ResolveRequest) -> Result<GraphResult, portage_repo::Error> {
+                Err(portage_repo::Error::Detail("inert pin".into()))
+            }
+        }
+        struct RoutingEngine;
+        impl MergeEngine for RoutingEngine {
+            fn execute(&self, unit: &MergeUnit, _ctx: &MergeContext) -> MergeOutcome {
+                if unit.cpv.contains("example") {
+                    MergeOutcome::Merged
+                } else {
+                    MergeOutcome::Failed("unknown unit".to_string())
+                }
+            }
+        }
+        struct FakeNews;
+        impl NewsSelector for FakeNews {
+            fn unread_ids(&self) -> Vec<String> {
+                vec!["2026-09-01-wired".to_string()]
+            }
+            fn repo_name(&self) -> String {
+                "wired".to_string()
+            }
+        }
+        let aux = std::collections::HashMap::from([("SLOT".to_string(), "0".to_string())]);
+        let cache = VolatileCache::from_entries(
+            vec![("dev-libs".to_string(), "a-1.0".to_string(), aux)],
+            "wired",
+        );
+        let entries = vec![std::collections::HashMap::from([
+            ("CPV".to_string(), "dev-libs/wired-1.0".to_string()),
+            ("SLOT".to_string(), "0".to_string()),
+        ])];
+        let idx = portage_repo::BinaryIndex::from_entries(entries);
+        let mut db = MemoryDb::new(Path::new("/root"));
+        db.add_package(AddPackageArgs {
+            category: "dev-libs",
+            package: "wired",
+            version: "1.0",
+            contents_files: vec!["usr/lib/libw.a".to_string()],
+            depended_on_by: vec!["app/dep-1.0".to_string()],
+        });
+        type Wiring = Director<
+            FakeSolver,
+            MemoryDb,
+            VolatileCache,
+            WgetFetcher,
+            RoutingEngine,
+            PkgdirBinIndex<'static>,
+            FakeNews,
+            UnlimitedPolicy,
+        >;
+        // `PkgdirBinIndex` borrows its index and pkgdir; leak both so the
+        // director can own a `'static` view in this shape test.
+        let idx: &'static portage_repo::BinaryIndex = Box::leak(Box::new(idx));
+        let pkgdir: &'static Path = Box::leak(Box::new(PathBuf::from("/var/cache/binpkgs")));
+        let director = Wiring {
+            solver: FakeSolver,
+            packages_db: db,
+            repo_cache: cache,
+            fetcher: WgetFetcher,
+            merge_engine: RoutingEngine,
+            binpkg_index: PkgdirBinIndex { index: idx, pkgdir },
+            news_selector: FakeNews,
+            scheduler_policy: UnlimitedPolicy::new(None),
+        };
+        assert_eq!(
+            director.installed_versions("dev-libs", "wired"),
+            vec!["1.0"]
+        );
+        assert_eq!(
+            director.contents_files("dev-libs", "wired", "1.0"),
+            vec!["usr/lib/libw.a"]
+        );
+        assert_eq!(
+            director.reverse_dependents("dev-libs", "wired", "1.0"),
+            vec!["app/dep-1.0"]
+        );
+        assert_eq!(
+            director
+                .repo_metadata("dev-libs", "a-1.0")
+                .unwrap()
+                .get("SLOT"),
+            Some(&"0".to_string())
+        );
+        assert_eq!(director.repo_category("dev-libs"), vec!["a-1.0"]);
+        assert_eq!(
+            director
+                .binpkg_candidates("dev-libs", "wired")
+                .iter()
+                .map(|c| c.version.clone())
+                .collect::<Vec<_>>(),
+            vec!["1.0"]
+        );
+        assert!(
+            director
+                .binpkg_metadata("dev-libs", "wired", "1.0")
+                .is_some()
+        );
+        let ctx = MergeContext {
+            root: PathBuf::from("/root"),
+            builddir: PathBuf::from("/var/tmp/portage"),
+            jobs: 1,
+            keep_going: false,
+        };
+        assert_eq!(
+            director.execute(
+                &MergeUnit::source("dev-libs/example-1.0", Path::new("/root")),
+                &ctx
+            ),
+            MergeOutcome::Merged
+        );
+        assert!(matches!(
+            director.execute(
+                &MergeUnit::source("dev-libs/other-1.0", Path::new("/root")),
+                &ctx
+            ),
+            MergeOutcome::Failed(_)
+        ));
+        assert_eq!(director.unread_news(), vec!["2026-09-01-wired"]);
+        assert!(director.should_start(64, 0.0));
+        assert_eq!(director.max_jobs(), usize::MAX);
+        // A fetch through the director's fetcher against a
+        // pre-materialized distdir file never touches the network.
+        let distdir = tempdir("mrg_director_delegation");
+        std::fs::write(distdir.join("w.tgz"), b"pre-materialized").unwrap();
+        let entry = portage_fetch::SrcUriEntry {
+            uri: "https://example.invalid/w.tgz".to_string(),
+            filename: "w.tgz".to_string(),
+            override_mirror: false,
+            override_fetch: false,
+        };
+        assert_eq!(
+            director.fetch(&entry, &distdir, None).unwrap(),
+            distdir.join("w.tgz")
+        );
+    }
+
+    /// `BinpkgIndex` admits both Portage backends (local `$PKGDIR` and
+    /// remote `PORTAGE_BINHOST`) behind the same methods (see notes).
+    #[test]
+    fn binpkg_index_admits_both_local_and_remote_backends() {
+        let entries = vec![std::collections::HashMap::from([
+            ("CPV".to_string(), "dev-libs/localbin-1.0".to_string()),
+            ("SLOT".to_string(), "0".to_string()),
+            ("USE".to_string(), "flag1".to_string()),
+        ])];
+        let idx = portage_repo::BinaryIndex::from_entries(entries);
+        let local = PkgdirBinIndex {
+            index: &idx,
+            pkgdir: Path::new("/var/cache/binpkgs"),
+        };
+        assert_eq!(local.source_name(), "/var/cache/binpkgs");
+        assert_eq!(
+            local
+                .candidates("dev-libs", "localbin")
+                .iter()
+                .map(|c| c.version.clone())
+                .collect::<Vec<_>>(),
+            vec!["1.0".to_string()]
+        );
+        assert_eq!(
+            local
+                .metadata("dev-libs", "localbin", "1.0")
+                .and_then(|m| m.get("USE").cloned()),
+            Some("flag1".to_string())
+        );
+        assert!(local.metadata("dev-libs", "localbin", "9.9").is_none());
+        // `metadata_with_source` carries the store identity (the local
+        // backend names its `$PKGDIR`).
+        assert_eq!(
+            local
+                .metadata_with_source("dev-libs", "localbin", "1.0")
+                .map(|(src, m)| (src, m.get("USE").cloned())),
+            Some(("/var/cache/binpkgs".to_string(), Some("flag1".to_string())))
+        );
+        assert!(
+            local
+                .metadata_with_source("dev-libs", "localbin", "9.9")
+                .is_none()
+        );
+
+        // The remote backend delegates to the whole-binrepos scan; with
+        // no binrepos the *candidate* scan is empty but metadata still
+        // falls back to the local store (Portage's local-wins read path).
+        let config = portage_profile::Config {
+            ..Default::default()
+        };
+        let remote = RemoteBinhostIndex {
+            config: &config,
+            root: Path::new("/"),
+            local: &idx,
+        };
+        assert!(remote.candidates("dev-libs", "localbin").is_empty());
+        assert_eq!(
+            remote
+                .metadata("dev-libs", "localbin", "1.0")
+                .and_then(|m| m.get("USE").cloned()),
+            Some("flag1".to_string())
+        );
+        assert!(remote.metadata("dev-libs", "localbin", "9.9").is_none());
+        assert_eq!(remote.source_name(), "");
+        // The download-side lookup is remote-**only**: it must not fall
+        // back to the local store, so with no binrepos it reports nothing.
+        assert!(
+            remote
+                .metadata_with_source("dev-libs", "localbin", "1.0")
+                .is_none()
+        );
+    }
+
+    /// `NewsSelector` is the pure relevance seam behind `--check-news`.
+    /// The marker is state-free; the actual evaluation is `pretend.rs`'s.
+    #[test]
+    fn news_selector_is_unread_ids_plus_repo() {
+        struct FakeNews;
+        impl NewsSelector for FakeNews {
+            fn unread_ids(&self) -> Vec<String> {
+                vec!["2026-09-01-portuale".to_string()]
+            }
+            fn repo_name(&self) -> String {
+                "gentoo".to_string()
+            }
+        }
+        let n = FakeNews;
+        assert_eq!(n.unread_ids(), vec!["2026-09-01-portuale"]);
+        assert_eq!(n.repo_name(), "gentoo");
+        assert!(MetadataNews.unread_ids().is_empty());
+    }
+
+    /// `SchedulerPolicy` is the `-jN` DAG's one decision: the first build
+    /// is always admitted, then `--jobs`/`--load-average` cap the rest.
+    #[test]
+    fn scheduler_policy_gates_by_jobs_and_load_average() {
+        let serial = LoadAwarePolicy::default();
+        assert_eq!(serial.max_jobs(), 1);
+        assert!(serial.should_start(0, 1.0));
+        assert!(!serial.should_start(1, 0.0));
+
+        let capped = LoadAwarePolicy {
+            jobs: 4,
+            load_average: Some(2.0),
+        };
+        assert_eq!(capped.max_jobs(), 4);
+        assert!(capped.should_start(3, 1.5));
+        assert!(!capped.should_start(3, 2.5));
+        assert!(!capped.should_start(4, 1.5));
+        assert!(capped.should_start(0, 99.0));
     }
 }

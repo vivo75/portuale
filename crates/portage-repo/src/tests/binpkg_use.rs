@@ -154,6 +154,93 @@ fn binpkg_respect_use_checks_the_ebuild_at_the_same_version() {
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// A profile forced/masked flag never rejects through the IUSE presence
+/// difference alone: masked keeps, forced rejects on enabled state.
+#[test]
+fn binpkg_respect_use_subtracts_forced_and_masked_flags_like_portage() {
+    let dir = slotundo_temp_dir("binpkg-respect-use-forced");
+    let binary = || {
+        let mut c = candidate("1.0", &["amd64"]);
+        c.source = CandidateSource::Binary;
+        c.iuse = "foo".to_string();
+        c.binary_use = Some(HashSet::from(["foo".to_string()]));
+        c
+    };
+    let ebuild_at = |tag: &str, iuse: &str| {
+        let repo = dir.join(format!("repo-{tag}"));
+        fs::create_dir_all(repo.join("metadata/md5-cache/dev-libs")).unwrap();
+        fs::write(
+            repo.join("metadata/md5-cache/dev-libs/x-1.0"),
+            format!("EAPI=8\nIUSE={iuse}\nKEYWORDS=amd64\nSLOT=0\n"),
+        )
+        .unwrap();
+        let mut c = candidate("1.0", &["amd64"]);
+        c.repo_location = repo;
+        c.iuse = iuse.to_string();
+        c
+    };
+    let mut config = test_config();
+    config.conf_use_tokens = vec!["foo".to_string()];
+    config.use_mask_force_levels = vec![portage_profile::UseMaskForceLevel {
+        use_mask: vec!["mflag".to_string()],
+        use_force: vec!["fflag".to_string()],
+        ..Default::default()
+    }];
+
+    // Masked flag: presence subtracted, states agree (disabled both sides).
+    let ebuild = ebuild_at("masked", "foo mflag");
+    assert!(binpkg_respect_use_ok(BinpkgRespectUseOkArgs {
+        candidate: &binary(),
+        ebuild_at_version: Some(&ebuild),
+        category: "dev-libs",
+        package: "x",
+        config: &config,
+        newuse: true,
+        changed_use: false,
+        respect_use: false
+    }));
+    assert!(binpkg_respect_use_ok(BinpkgRespectUseOkArgs {
+        candidate: &binary(),
+        ebuild_at_version: Some(&ebuild),
+        category: "dev-libs",
+        package: "x",
+        config: &config,
+        newuse: false,
+        changed_use: false,
+        respect_use: true
+    }));
+
+    // Forced flag: subtracted too, but the ebuild enables it, so the enabled
+    // term rejects.
+    let ebuild = ebuild_at("forced", "foo fflag");
+    assert!(!binpkg_respect_use_ok(BinpkgRespectUseOkArgs {
+        candidate: &binary(),
+        ebuild_at_version: Some(&ebuild),
+        category: "dev-libs",
+        package: "x",
+        config: &config,
+        newuse: true,
+        changed_use: false,
+        respect_use: false
+    }));
+
+    // No-ebuild arm: the binary's own force/mask set (Portage `useforce ∪ usemask`).
+    let mut masked_binary = binary();
+    masked_binary.iuse = "foo mflag".to_string();
+    masked_binary.binary_use = Some(HashSet::from(["foo".to_string()]));
+    assert!(binpkg_respect_use_ok(BinpkgRespectUseOkArgs {
+        candidate: &masked_binary,
+        ebuild_at_version: None,
+        category: "dev-libs",
+        package: "x",
+        config: &config,
+        newuse: true,
+        changed_use: false,
+        respect_use: false
+    }));
+    let _ = fs::remove_dir_all(&dir);
+}
+
 #[test]
 fn read_binary_metadata_any_falls_back_to_a_binrepo_index() {
     let config = portage_profile::Config {
