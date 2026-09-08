@@ -473,6 +473,20 @@ pub struct MemoryDb {
     dependents: std::collections::HashMap<(String, String, String), Vec<String>>,
 }
 
+/// Arguments of [`MemoryDb::add_package`].
+pub struct AddPackageArgs<'a> {
+    /// The package's category.
+    pub category: &'a str,
+    /// The package name.
+    pub package: &'a str,
+    /// The installed version.
+    pub version: &'a str,
+    /// Its CONTENTS-files list.
+    pub contents_files: Vec<String>,
+    /// The CPVs that directly depend on it.
+    pub depended_on_by: Vec<String>,
+}
+
 impl MemoryDb {
     /// An empty snapshot standing in for `root`.
     pub fn new(root: &Path) -> Self {
