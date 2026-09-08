@@ -437,6 +437,112 @@ pub(crate) struct ShipOldHookEnvsArgs<'a> {
     pub(crate) new_mainslot: &'a str,
 }
 
+/// Stage every same-slot installed version's saved env for the merge
+/// driver's `run_old_hook`: probe the client vdb for same-package
+/// versions, pull each `environment.bz2`, decompress it **server-side**,
+/// and ship the plain text to `$UNIT/old-env/<pf>`. Best-effort
+/// throughout: every failure lands in `warnings` and the merge continues.
+pub(crate) fn ship_old_hook_envs(args: ShipOldHookEnvsArgs<'_>) -> OldHookShipment {
+    let ShipOldHookEnvsArgs {
+        ctx,
+        control,
+        unit_dir,
+        vdb,
+        category,
+        pn,
+        new_pf,
+        new_mainslot,
+    } = args;
+    let mut shipment = OldHookShipment {
+        shipped: Vec::new(),
+        warnings: Vec::new(),
+    };
+    let vdbroot = format!("{vdb}/{category}");
+    // Same discovery shape as the driver's own replace loop
+    // (`$PKG-<digit...>` names, SLOT first field); the driver still
+    // decides, this only stages envs.
+    let script = format!(
+        concat!(
+            "UNIT={unit}\n",
+            "VDBROOT={vdbroot}\n",
+            "PKG={pkg}\n",
+            "mkdir -p \"$UNIT/old-env\" 2>/dev/null || true\n",
+            "for d in \"$VDBROOT/\"$PKG-*/; do\n",
+            "  [ -d \"$d\" ] || continue\n",
+            "  cpf=${{d%/}}; cpf=${{cpf##*/}}\n",
+            "  rest=${{cpf#\"$PKG-\"}}\n",
+            "  case \"$rest\" in [0-9]*) ;; *) continue;; esac\n",
+            "  [ \"$cpf\" = {newpf} ] && continue\n",
+            "  slot=$(cat \"$d/SLOT\" 2>/dev/null | cut -d/ -f1)\n",
+            "  echo \"OLDPF=$cpf SLOT=${{slot:-unknown}}\"\n",
+            "done\n",
+        ),
+        unit = sh_quote(unit_dir),
+        vdbroot = sh_quote(&vdbroot),
+        pkg = sh_quote(pn),
+        newpf = sh_quote(new_pf),
+    );
+    let output = match run_script_stdin(ctx, control, &script) {
+        Ok(output) => output,
+        Err(message) => {
+            shipment.warnings.push(format!("probe: {message}"));
+            return shipment;
+        }
+    };
+    if !output.status.success() {
+        shipment.warnings.push(format!(
+            "probe exited {}",
+            output.status.code().unwrap_or(-1)
+        ));
+        return shipment;
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+    for (pf, slot) in parse_oldpf_probe(&stdout) {
+        if pf == new_pf {
+            continue;
+        }
+        // Unknown slots ship anyway (fail-open toward staging; the
+        // driver decides what to replace).
+        if slot != "unknown" && slot != new_mainslot {
+            continue;
+        }
+        let old_bz2 = format!("{vdbroot}/{pf}/environment.bz2");
+        match pull_file(ctx, control, &old_bz2) {
+            Ok(compressed) => match bzip2_decompress(&compressed) {
+                Ok(plain) => {
+                    let dest = format!("{unit_dir}/old-env/{pf}");
+                    match send_bytes(ctx, control, &plain, &dest) {
+                        Ok(()) => shipment.shipped.push(pf),
+                        Err(message) => shipment.warnings.push(format!("{pf}: send: {message}")),
+                    }
+                }
+                Err(message) => shipment
+                    .warnings
+                    .push(format!("{pf}: decompress: {message}")),
+            },
+            Err(bz2_message) => {
+                // No bz2: ship the plain file as-is; when the plain pull
+                // fails too, warn with both pull errors.
+                let old_plain = format!("{vdbroot}/{pf}/environment");
+                match pull_file(ctx, control, &old_plain) {
+                    Ok(plain) => {
+                        let dest = format!("{unit_dir}/old-env/{pf}");
+                        if let Err(message) = send_bytes(ctx, control, &plain, &dest) {
+                            shipment.warnings.push(format!("{pf}: send: {message}"));
+                        } else {
+                            shipment.shipped.push(pf);
+                        }
+                    }
+                    Err(plain_message) => shipment.warnings.push(format!(
+                        "{pf}: env pull: {bz2_message}; plain fallback: {plain_message}"
+                    )),
+                }
+            }
+        }
+    }
+    shipment
+}
+
 /// The resolved absolute client binary for generated scripts:
 /// every script exports this as `PORTUALE_BIN`.
 pub(crate) fn client_bin_abs(ctx: &RemoteContext) -> Result<&str, String> {
