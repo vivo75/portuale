@@ -57,6 +57,28 @@ for repo in ${REPOS[@]} ; do
   git reset --hard FETCH_HEAD
   popd # ${repo}
 done
+
+# porttest -- synthetic merge/packaging test overlay for L1/L5
+# (source of truth: TEST/images/overlay/porttest/; ebuilds land in slice 3).
+OVERLAY_SRC=""
+for cand in \
+  "${BASEDIR}/images/overlay/porttest" \
+  "${BASEDIR}/../TEST/images/overlay/porttest" \
+  "${BASEDIR}/../../TEST/images/overlay/porttest" ; do
+  if [[ -d ${cand} ]] ; then OVERLAY_SRC=$( realpath "${cand}" ) ; break ; fi
+done
+if [[ -n ${OVERLAY_SRC} ]] ; then
+  mkdir porttest
+  cp -a "${OVERLAY_SRC}/." porttest/
+  pushd porttest
+  git init -q
+  git add -A
+  git -c user.email=porttest@localhost -c user.name=porttest \
+      commit -qm "porttest overlay ($(date -u +%F))" || true
+  popd # porttest
+else
+  echo "WARNING: porttest overlay source not found -- skipping (L1/L5 need it)" >&2
+fi
 popd # ./var/db/repos/
 
 # Make internet available
@@ -98,6 +120,12 @@ location = /var/db/repos/buildovl
 sync-type = git
 sync-uri = https://github.com/vivo75/buildovl.git
 priority = 10
+EOF
+cat << 'EOF' > repos.conf/porttest.conf
+[porttest]
+location = /var/db/repos/porttest
+sync-type = git
+priority = 20
 EOF
 popd # ./etc/portage/
 popd # WORKDIR

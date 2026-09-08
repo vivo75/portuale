@@ -796,12 +796,35 @@ Beyond this test bed:
 Each slice: scripts + `compare/` code + docs paragraph here + a green
 run. Committed only when asked.
 
-1. **Infra + L0.** Extend `create-container.bash` for Image A (with the
-   `porttest` overlay skeleton), `TEST/net/{up,down}.sh`, the binhost
-   container, `compare/snapshot.sh` + `compare/diff.py` +
-   `normalize.py` + empty `known-divergences.yaml`, and `run/l0-*.sh`
-   with a 200-atom list. Deliverable: L0 resolver parity report, green
-   or with triaged diffs.
+1. **Infra + L0.** — *shipped 2026-09-08.* `create-container.bash` bakes
+   the `porttest` overlay skeleton (`TEST/images/overlay/porttest/` +
+   `repos.conf/porttest.conf`); `TEST/net/{up,down}.sh` (network +
+   `porttest-{pkgdir,distfiles,bincache,snapshots}` volumes);
+   `TEST/compare/` — `snapshot.sh` (filesystem+VDB manifest, complete),
+   `normalize.md` (the §4.3/§4.7 ruleset, complete), `normalize.py` +
+   `diff.py` (slice-2 skeletons), `resolve-compare.py` (the L0 engine —
+   typed findings, allowlist, JSON+text report), empty
+   `known-divergences.yaml`; `TEST/atomlists/l0-resolve.txt` (~150
+   atoms + `@system`/`@world`); `TEST/layers/l0/in-container.sh` +
+   `TEST/run/{lib.sh,l0-resolver.sh}`.
+   The binhost container is deferred to slice 2 — L0 is single-container
+   and has no use for it.
+   Repo-root note: portuale's `ebuild_phases::repo_root()` is a
+   compile-time `CARGO_MANIFEST_DIR/../..` path; the orchestrator
+   bind-mounts the host checkout at that same absolute path so it
+   resolves inside the container (needed from L1 on; L0 never runs
+   phases).
+   First baseline run (120 probes, 69 clean, parity 0.575): 11 distinct
+   divergence clusters, triaged in
+   [`TEST/findings/l0.md`](../TEST/findings/l0.md)
+   — none allowlisted (all are portuale bugs / backlog, to be fixed on
+   `main`). Highlights: autounmask-required resolves exit 0 + disclose
+   the full merge list where real exits 1 + withholds it (cluster A,
+   ~15 probes); spurious `use.force` `( )` parens on `dev-libs/glib`
+   `sysprof` etc. (B, ~13); `app-crypt/gcr[gtk]` mask not enforced (C);
+   `@system` set expansion is short (H); merge order still diverges at
+   real-tree scale (I, 25 — the known `_serialize_tasks` problem, now
+   with a regression surface).
 2. **L1 merge parity.** `builder-portage` build script, `consumer-*`
    merge scripts, the L1 package list, snapshot/diff wiring, the
    reinstall + upgrade sub-cases. Deliverable: L1 report; every diff

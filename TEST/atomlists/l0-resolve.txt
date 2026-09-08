@@ -1,0 +1,163 @@
+# L0 resolver-parity atom list.
+#
+# One atom (or set) per line; blank lines and `#` comments ignored.
+# `TEST/layers/l0/in-container.sh` runs `emerge -pv --color=n <line>` with
+# both real portage and portuale for every entry and
+# `TEST/compare/resolve-compare.py` diffs the merge lists + errors + exit
+# codes. Curated for breadth of resolver machinery, not for a specific
+# bug -- keep it that way; edge-case reproducers belong in `fixtures/`
+# and the `porttest` overlay.
+#
+# Entries are chosen to be present in the pinned 2026-08-23 gentoo tree.
+# If a line stops resolving under *both* PMs (tree moved, package gone),
+# fix or drop the line -- a line that only one PM can resolve is exactly
+# what L0 exists to catch, so do not drop those.
+
+## --- toolchain / core ---
+sys-apps/portage
+sys-devel/gcc
+sys-libs/glibc
+sys-devel/binutils
+dev-build/make
+dev-build/cmake
+dev-build/meson
+dev-build/autoconf
+dev-build/automake
+dev-build/libtool
+sys-apps/coreutils
+sys-apps/util-linux
+sys-apps/systemd
+sys-apps/systemd-utils
+app-shells/bash
+sys-libs/ncurses
+sys-libs/readline
+sys-libs/zlib
+dev-libs/openssl
+
+## --- python eclasses (python-r1 / python-single-r1 / distutils-r1 / python-any-r1) ---
+dev-lang/python:3.14
+dev-python/setuptools
+dev-python/pip
+dev-python/cython
+dev-python/jinja2
+dev-python/lxml
+dev-python/pyyaml
+dev-python/certifi
+app-portage/gentoolkit
+app-portage/eix
+dev-build/ninja
+dev-python/pygments
+
+## --- perl / perl-module ---
+dev-lang/perl
+dev-perl/XML-Parser
+dev-perl/Locale-gettext
+app-admin/perl-cleaner
+virtual/perl-ExtUtils-MakeMaker
+
+## --- ruby ---
+dev-lang/ruby
+dev-ruby/rake
+app-admin/sudo
+
+## --- go / go-module ---
+dev-lang/go
+app-containers/podman
+app-containers/runc
+sys-cluster/nerdctl
+
+## --- rust / cargo ---
+dev-lang/rust
+dev-lang/rust-bin
+app-shells/starship
+sys-apps/ripgrep
+sys-apps/bat
+sys-apps/fd
+
+## --- cmake / kde / qt ---
+dev-qt/qtbase:6
+dev-qt/qtcore:5
+kde-frameworks/kcoreaddons
+kde-plasma/plasma-meta
+kde-apps/kdecore-meta
+media-libs/phonon
+
+## --- gnome / gtk / meson ---
+gui-libs/gtk:4
+x11-libs/gtk+:3
+gnome-base/gnome-shell
+gnome-base/nautilus
+app-editors/gedit
+media-libs/gstreamer
+
+## --- multilib (ABI_X86) ---
+media-libs/mesa
+sys-libs/glibc[multilib]
+dev-libs/glib
+media-libs/libpng
+media-libs/freetype
+app-emulation/wine-vanilla
+app-emulation/wine-staging
+
+## --- systemd units / udev ---
+sys-apps/dbus
+net-misc/networkmanager
+sys-fs/lvm2
+sys-auth/polkit
+app-crypt/gnupg
+
+## --- texlive (huge USE_EXPAND, collections) ---
+app-text/texlive
+app-text/texlive-core
+dev-texlive/texlive-latex
+
+## --- virtuals / || deps / providers ---
+virtual/libc
+virtual/editor
+virtual/pager
+virtual/mta
+virtual/cron
+app-alternatives/awk
+virtual/jpeg
+virtual/libudev
+virtual/rust
+virtual/pkgconfig
+
+## --- slot operators / subslot rebuilds ---
+dev-libs/icu
+dev-libs/boost
+net-libs/nodejs
+media-video/ffmpeg
+dev-db/sqlite
+
+## --- misc real-world desktop / server ---
+www-client/firefox
+mail-client/thunderbird
+app-office/libreoffice
+media-gfx/gimp
+net-misc/openssh
+www-servers/nginx
+www-servers/apache
+dev-db/postgresql
+dev-db/mariadb
+app-misc/tmux
+app-editors/vim
+app-editors/neovim
+app-editors/emacs
+sys-process/htop
+sys-apps/pciutils
+net-analyzer/wireshark
+media-sound/pulseaudio
+media-video/vlc
+x11-base/xorg-server
+x11-wm/i3
+
+## --- version-operator / revision atoms ---
+>=app-shells/bash-5.2
+=sys-apps/coreutils-9.7*
+<dev-lang/python-3.15
+~dev-libs/libevent-2.1.12
+
+## --- sets ---
+@system
+@world

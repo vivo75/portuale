@@ -1,0 +1,31 @@
+# Known, justified Portuale-vs-Portage divergences.
+#
+# A finding produced by a comparator (resolve-compare.py for L0; diff.py
+# for L1+) is *explained* when it matches an entry here; a run is GREEN
+# iff every finding is explained. New unexplained findings must be
+# triaged into one of:
+#   * Portuale bug   -> fix it, do not add an entry
+#   * Portage bug    -> add an entry with a `ticket:`, report upstream
+#   * environmental  -> add an entry with a `reason:` (nondeterminism,
+#                       host state, a deliberate Portuale design cut)
+#
+# Entry schema (all keys optional except that an entry must constrain
+# *something* -- an entry that constrains nothing matches nothing):
+#
+#   id:         short kebab-case handle (shown in reports)
+#   layer:      l0 | l1 | l2 | l3 | l4 | l5   (default l0)
+#   categories: [missing, extra, version, flags, use, order, error,
+#                exit, totals, advice]  -- or `category:` for a single one
+#                (`advice` = a needed USE change / mask / REQUIRED_USE
+#                 diagnostic that only one side emits)
+#   slugs:      list of probe-slug globs (e.g. "app-editors_vim",
+#               "MULTI_*"); '*' is the only wildcard
+#   match:      substring that must appear in the finding detail
+#   reason:     why this is not a Portuale bug   (required in spirit)
+#   ticket:     upstream/issue reference, if any
+#   owner:      who adjudicated it
+#
+# Keep this file sorted by id. Empty to start -- every entry is a
+# deliberate, reviewed decision.
+
+[]

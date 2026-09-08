@@ -1,1 +1,4 @@
-*.log
+# Everything in TEST/logs/ is run output -- generated, never committed.
+*
+!.gitignore
+!.gitkeep
