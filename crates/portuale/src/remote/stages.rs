@@ -551,3 +551,62 @@ pub(crate) fn client_bin_abs(ctx: &RemoteContext) -> Result<&str, String> {
             .to_string()
     })
 }
+
+/// Run the staged phases in order, stopping at the first non-zero
+/// (pretend/setup/preinst are all fatal -- local rule kept). Returns the
+/// per-phase `ok` markers for the report line.
+pub(crate) fn run_phases_stage(
+    ctx: &RemoteContext,
+    control: Option<&std::path::Path>,
+    unit_dir: &str,
+    staged: &crate::remote_bundle::StagedBundle,
+) -> Result<Vec<String>, String> {
+    let portuale_bin = client_bin_abs(ctx)?.to_string();
+    let colormap = crate::color::phase_colormap_export();
+    let workdir_parent = std::path::Path::new(&ctx.workdir)
+        .parent()
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "/var/tmp".to_string());
+    let mut done = Vec::new();
+    for phase in &staged.phases {
+        let script = phase_script(PhaseScriptArgs {
+            unit_dir,
+            staged,
+            phase,
+            root: &ctx.root,
+            workdir_parent: &workdir_parent,
+            colormap: &colormap,
+            portuale_bin: &portuale_bin,
+        });
+        let output = run_script_stdin(ctx, control, &script).map_err(|message| {
+            if ctx.transport == RemoteTransport::Local {
+                format!("mrg: local phase {phase} command failed: {message}")
+            } else {
+                message
+            }
+        })?;
+        let code = output.status.code();
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        for line in stderr.lines().chain(stdout.lines()) {
+            println!("{line}");
+        }
+        let reported: i32 = parse_kv(&stdout)
+            .get(&format!("PHASE_{phase}"))
+            .and_then(|rc| rc.parse().ok())
+            .unwrap_or(-1);
+        if output.status.success() && reported == 0 {
+            done.push(format!("{phase} ok"));
+        } else {
+            let mut message = format!(
+                "mrg: client phase {phase} failed (exit {}, PHASE_{phase}={reported}):",
+                code.unwrap_or(-1)
+            );
+            for line in stderr.lines().chain(stdout.lines()).take(5) {
+                message.push_str(&format!("\nmrg:   {line}"));
+            }
+            return Err(message);
+        }
+    }
+    Ok(done)
+}

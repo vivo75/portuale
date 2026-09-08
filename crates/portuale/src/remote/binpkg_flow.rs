@@ -191,3 +191,260 @@ pub(crate) struct RunBinpkgFlowArgs<'a> {
     pub(crate) regen_features: Option<&'a str>,
     pub(crate) regen_bzip2: Option<&'a str>,
 }
+
+/// One binpkg end to end (bundle, stream, unpack, phases, merge,
+/// postinst): shared by the `--remote-binpkg` path (no ledger, no
+/// shadow) and the resolve path (ledger per merged entry, shadow
+/// pre-check before anything ships). Prints the stage report lines;
+/// `Ok(cpv)` is the merged `category/package-version`.
+pub(crate) fn run_binpkg_flow(args: RunBinpkgFlowArgs<'_>) -> Result<String, String> {
+    let RunBinpkgFlowArgs {
+        ctx,
+        control,
+        binpkg_path,
+        ledger,
+        repo_override,
+        shadow,
+        install_mask,
+        install_mask_prunes_usr_share,
+        regen_features,
+        regen_bzip2,
+    } = args;
+    let staging = TempDir::new("portuale-remote-bundle").keep();
+    if let Err(message) = std::fs::create_dir_all(&staging) {
+        return Err(format!("mrg: staging dir {}: {message}", staging.display()));
+    }
+    let staged = match crate::remote_bundle::build_bundle(crate::remote_bundle::BuildBundleArgs {
+        binpkg_path,
+        staging_tmp: &staging,
+        repo_override,
+        gpg: &crate::binpkg::GpgVerify::from_env(),
+        install_mask,
+        install_mask_prunes_usr_share,
+    }) {
+        Ok(staged) => staged,
+        Err(message) => {
+            let _ = std::fs::remove_dir_all(&staging);
+            return Err(format!("mrg: bundle build failed: {message}"));
+        }
+    };
+    let pf = staged
+        .manifest
+        .cpv
+        .rsplit('/')
+        .next()
+        .unwrap_or_default()
+        .to_string();
+    // Pre-ship gate: fail a foreign-owned unit before its tarball
+    // streams anywhere (the staged `filemeta` is what the client gates on).
+    if let Some(shadow) = shadow {
+        let filemeta_path = staging.join(&pf).join("filemeta");
+        match std::fs::read_to_string(&filemeta_path) {
+            Ok(text) => {
+                if let Err(message) = shadow_precheck(
+                    shadow,
+                    &staged.manifest.cpv,
+                    &staged.category,
+                    &staged.pn,
+                    &text,
+                ) {
+                    let _ = std::fs::remove_dir_all(&staging);
+                    return Err(message);
+                }
+            }
+            Err(e) => {
+                let _ = std::fs::remove_dir_all(&staging);
+                return Err(format!("mrg: reading staged filemeta: {e}"));
+            }
+        }
+    }
+    let dest_tar = format!("{}/{pf}/bundle.tar", ctx.workdir);
+    // Fail-early: the stream lands (or fails) before the driver runs.
+    if ctx.transport == RemoteTransport::Ssh {
+        // The unit dir must exist for `cat >` (no `mkdir -p` hiding a
+        // wrong workdir -- preflight already proved creatability).
+        let mkdir = format!("mkdir -p {}", sh_quote(&format!("{}/{pf}", ctx.workdir)));
+        match run_script_stdin(ctx, control, &mkdir) {
+            Ok(output) if output.status.success() => {}
+            Ok(output) => {
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                let _ = std::fs::remove_dir_all(&staging);
+                return Err(format!(
+                    "mrg: creating unit dir failed (exit {}):\n{stderr}",
+                    output.status.code().unwrap_or(-1)
+                ));
+            }
+            Err(message) => {
+                let _ = std::fs::remove_dir_all(&staging);
+                return Err(message);
+            }
+        }
+    }
+    if let Err(message) = send_file(ctx, control, &staged.tarball, &dest_tar) {
+        let _ = std::fs::remove_dir_all(&staging);
+        return Err(message);
+    }
+    let script = unpack_script(&ctx.workdir, &pf, staged.byte_count);
+    let output = match run_script_stdin(ctx, control, &script) {
+        Ok(output) => output,
+        Err(message) => {
+            let _ = std::fs::remove_dir_all(&staging);
+            return Err(message);
+        }
+    };
+    let _ = std::fs::remove_dir_all(&staging);
+    let code = output.status.code();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    for line in stderr.lines() {
+        println!("{line}");
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let unpack = parse_kv(&stdout).get("UNPACK").cloned().unwrap_or_default();
+    if !(output.status.success() && unpack == "ok") {
+        let mut message = format!(
+            "mrg: bundle unpack failed (exit {}, UNPACK={unpack}):",
+            code.unwrap_or(-1)
+        );
+        for line in stderr.lines().take(5) {
+            message.push_str(&format!("\nmrg:   {line}"));
+        }
+        return Err(message);
+    }
+    println!(
+        ">>> Remote bundle {}: unpacked ({} bytes, slot {}, repo {})",
+        staged.manifest.cpv, staged.byte_count, staged.manifest.slot, staged.manifest.repo,
+    );
+    let (vdb, stateless) = client_vdb_placement(ctx);
+    // Stage the replaced instance's saved env for the merge driver's
+    // old hooks (server-decompressed, so the client needs no bzip2).
+    // Best-effort: failures warn and the driver falls back to the
+    // client vdb. Stateless merges run no old hooks.
+    if !stateless {
+        let unit_dir = format!("{}/{pf}", ctx.workdir);
+        let mainslot = staged.manifest.slot.split('/').next().unwrap_or("0");
+        let shipment = ship_old_hook_envs(ShipOldHookEnvsArgs {
+            ctx,
+            control,
+            unit_dir: &unit_dir,
+            vdb: &vdb,
+            category: &staged.category,
+            pn: &staged.pn,
+            new_pf: &staged.pf,
+            new_mainslot: mainslot,
+        });
+        for pf in &shipment.shipped {
+            println!(
+                ">>> Remote old-env {}: staged for {pf}",
+                staged.manifest.cpv
+            );
+        }
+        for warning in &shipment.warnings {
+            println!("{}", old_hook_warn_message(&staged.manifest.cpv, warning));
+        }
+    }
+    // An empty phase list (no hooks, or no ebuild/env shipped) is a note,
+    // not a failure -- and not a skip: the copy+vdb merge below runs
+    // regardless (a hookless binpkg still installs files).
+    if staged.phases.is_empty() {
+        println!(
+            ">>> Remote phases {}: none defined, skipped",
+            staged.manifest.cpv
+        );
+    } else {
+        let unit_dir = format!("{}/{pf}", ctx.workdir);
+        match run_phases_stage(ctx, control, &unit_dir, &staged) {
+            Ok(done) => {
+                println!(
+                    ">>> Remote phases {}: {}",
+                    staged.manifest.cpv,
+                    done.join(", ")
+                );
+            }
+            Err(message) => {
+                return Err(message);
+            }
+        }
+    }
+    let unit_dir = format!("{}/{pf}", ctx.workdir);
+    // The regen postinst below stays non-fatal, like the local merge's
+    // own `_postinst_failure` rule.
+    match run_merge_stage(ctx, control, &unit_dir, &staged, ledger) {
+        Ok(markers) => {
+            for marker in &markers {
+                println!(">>> Remote merge {}: {marker}", staged.manifest.cpv);
+            }
+        }
+        Err(message) => {
+            return Err(message);
+        }
+    }
+    // The postinst phase runs for every merged unit -- defined or not --
+    // as the merge-time environment regeneration. Any regen/pull/compress
+    // failure keeps the build-time env already in the vdb with one `!!!`
+    // warning and continues.
+    // Portage: vartree.py, PORTAGE_UPDATE_ENV; phase-functions.sh, postinst block
+    let cpv = staged.manifest.cpv.clone();
+    // The calling environment for the client phase is the server
+    // process, so forward its set locale variables (never invented
+    // defaults).
+    let server_locale = collect_server_locale(|name| std::env::var(name).ok());
+    match run_postinst_regen_stage(RunPostinstRegenStageArgs {
+        ctx,
+        control,
+        unit_dir: &unit_dir,
+        staged: &staged,
+        features: regen_features,
+        locale: &server_locale,
+    }) {
+        Ok(report) => {
+            if report.skipped_no_hooks {
+                println!(">>> Remote postinst {cpv}: none to run from, skipped");
+            } else {
+                if !staged.postinst_defined {
+                    println!(">>> Remote postinst {cpv}: no pkg_postinst defined, regen only");
+                }
+                if report.phase_rc == 0 {
+                    println!(">>> Remote postinst {cpv}: ok");
+                } else {
+                    println!(
+                        ">>> Remote postinst {cpv}: FAILED (exit {}) -- merge kept (as Portage's _postinst_failure)",
+                        report.phase_rc
+                    );
+                }
+                if report.regen_present {
+                    if stateless {
+                        println!(">>> Remote env-regen {cpv}: skipped (stateless, no client vdb)");
+                    } else {
+                        let vdb_env =
+                            format!("{vdb}/{}/{}/environment.bz2", staged.category, staged.pf);
+                        match install_regenerated_env(
+                            ctx,
+                            control,
+                            &unit_dir,
+                            &vdb_env,
+                            regen_bzip2,
+                        ) {
+                            Ok(()) => println!(
+                                ">>> Remote env-regen {cpv}: vdb environment.bz2 regenerated"
+                            ),
+                            Err((step, detail)) => {
+                                println!("{}", regen_warn_message(&cpv, &step));
+                                for line in detail.lines().take(3) {
+                                    println!("mrg:   {line}");
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    println!("{}", regen_warn_message(&cpv, "postinst"));
+                }
+            }
+        }
+        Err(message) => {
+            println!(">>> Remote postinst {cpv}: transport failed, merge kept: {message}");
+            println!("{}", regen_warn_message(&cpv, "postinst"));
+        }
+    }
+    println!(">>> Remote merged {cpv}");
+    Ok(cpv)
+}
