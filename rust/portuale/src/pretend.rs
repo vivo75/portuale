@@ -9525,6 +9525,15 @@ pub fn run(args: &[String]) -> ExitCode {
                     return ExitCode::from(1);
                 }
             }
+            // Real `@world` (`_sets/base.py::WorldSet`) is
+            // `@selected ∪ @system ∪ @profile` -- not just the world
+            // file. `emerge @world` / `-uD @world` re-emerges / updates
+            // every `@system` member too; on an empty world it is still
+            // non-empty (`@world` == `@system`). `@selected` alone stays
+            // the world file.
+            if *atom_str == "@world" {
+                expanded_atoms.extend(config.system_packages.iter().cloned());
+            }
         } else if *atom_str == "@system" {
             expanded_atoms.extend(config.system_packages.iter().cloned());
         } else if *atom_str == "@installed" {
@@ -9557,6 +9566,15 @@ pub fn run(args: &[String]) -> ExitCode {
     // `portage_repo::apply_updates_to_atom`).
     for atom in &mut expanded_atoms {
         *atom = portage_repo::apply_updates_to_atom(atom);
+    }
+
+    // A real package set is an unordered *set* -- and `@world` now folds
+    // `@system` in, which overlaps the world file for anyone who ran
+    // `emerge --noreplace @system`. Drop later duplicates, keeping first
+    // position (portuale's merge order is position-sensitive).
+    {
+        let mut seen: HashSet<String> = HashSet::new();
+        expanded_atoms.retain(|a| seen.insert(a.clone()));
     }
 
     // Real `dep_expand()` / `cpv_expand()` (`lib/portage/dbapi/`): a

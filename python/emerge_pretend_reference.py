@@ -17990,6 +17990,13 @@ def run(args):
         for atom_arg in atom_args:
             if atom_arg in ("@world", "@selected"):
                 expanded_atoms.extend(_expand_selected(_config_root(), _root()))
+                # Real @world (_sets/base.py::WorldSet) is
+                # @selected u @system u @profile -- not just the world
+                # file. `emerge @world` re-emerges every @system member;
+                # on an empty world it is still non-empty. @selected
+                # alone stays the world file. Mirrors pretend.rs.
+                if atom_arg == "@world":
+                    expanded_atoms.extend(config["system_packages"])
             elif atom_arg == "@system":
                 expanded_atoms.extend(config["system_packages"])
             elif atom_arg == "@installed":
@@ -18010,6 +18017,12 @@ def run(args):
     # before it is resolved or used as a display "requested" key. Mirrors
     # pretend.rs.
     atom_args = [apply_updates_to_atom(a) for a in expanded_atoms]
+
+    # A real package set is an unordered set; @world now folds @system
+    # in, which overlaps the world file. Drop later duplicates, keeping
+    # first position. Mirrors pretend.rs.
+    _seen = set()
+    atom_args = [a for a in atom_args if not (a in _seen or _seen.add(a))]
 
     # Real dep_expand() / cpv_expand() (lib/portage/dbapi/): a
     # command-line target with no category (`emerge eix`, `emerge

@@ -67,6 +67,24 @@ if [ "${L0_SKIP_PORTAGE_UPGRADE:-0}" != 1 ]; then
 fi
 "$REAL" --version 2>/dev/null | head -1 >> "$OUTDIR/fingerprint.tsv"
 
+# -- seed a realistic @world -------------------------------------------
+# The image ships an empty /var/lib/portage/world, so `@world` collapses
+# to `@system` and the `@world` probes test nothing `@system` doesn't
+# (L0 finding H). Seed a handful of common, dependency-rich leaf
+# packages -- none installed, so `emerge -pv @world` proposes each plus
+# its full closure, exercising far more of the resolver. Both PMs read
+# the same file, so it stays a fair comparison.
+WORLD=/var/lib/portage/world
+mkdir -p "$(dirname "$WORLD")"
+cat > "$WORLD" <<-'EOF'
+	app-misc/tmux
+	app-portage/eix
+	app-portage/gentoolkit
+	dev-libs/blake3
+	EOF
+log "seeded @world:"; sed 's/^/  /' "$WORLD" | tee -a "$OUTDIR/run.log"
+cp "$WORLD" "$OUTDIR/world.txt"
+
 slug() { printf '%s' "$1" | tr -c 'A-Za-z0-9._-' '_' ; }
 
 probe() {

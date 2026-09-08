@@ -8775,24 +8775,33 @@ def test_preserved_rebuild_set_is_empty_when_the_registry_is_empty(
     assert _run(emerge_pretend_python, args, env).returncode == 2
 
 
-def test_world_missing_file_expands_to_nothing_not_an_error(
-    emerge_binary, fixture_env, tmp_path
+def test_world_missing_file_expands_to_system_not_an_error(
+    emerge_binary, emerge_pretend_python, fixture_env, tmp_path
 ):
-    """A missing WORLD_FILE (e.g. a fresh ROOT that's never had anything
-    merged into it) is a real, valid state, not a mistake -- @world
-    expands to an empty list, which then hits the same "nothing to
-    resolve" error an empty target list from any other source would,
-    not a crash or a silent no-op. PORTAGE_CONFIGROOT stays pointed at
-    the real fixtures (for a valid repos.conf/profile); only ROOT is
-    redirected to an empty tmp_path with no var/lib/portage/world at
-    all."""
+    """A missing WORLD_FILE (a fresh ROOT that's never had anything merged
+    into it) is a real, valid state. Real `@world` is
+    `@selected u @system` (`_sets/base.py::WorldSet`), so with no world
+    file it collapses to `@system` -- a non-empty list -- not an empty
+    one. `@selected` alone stays just the world file, so *it* still hits
+    the "nothing to resolve" empty-target error. PORTAGE_CONFIGROOT stays
+    pointed at the real fixtures (valid repos.conf/profile); only ROOT is
+    an empty tmp_path with no var/lib/portage/world."""
     env = dict(fixture_env)
     env["ROOT"] = str(tmp_path)
-    result = _run([str(emerge_binary)], ["--pretend", "@world"], env)
-    assert result.returncode == 2
-    assert result.stdout == ""
+
+    # @world -> @system: resolves, rc 0, and Rust == Python.
+    w_rust = _run([str(emerge_binary)], ["--pretend", "@world"], env)
+    w_py = _run(emerge_pretend_python, ["--pretend", "@world"], env)
+    assert w_rust.returncode == 0, w_rust.stderr
+    assert w_rust.stdout == w_py.stdout
+    assert w_rust.stdout != ""
+
+    # @selected alone -> empty -> the same "nothing to resolve" error.
+    s = _run([str(emerge_binary)], ["--pretend", "@selected"], env)
+    assert s.returncode == 2
+    assert s.stdout == ""
     assert (
-        result.stderr.strip()
+        s.stderr.strip()
         == "emerge: no package atoms to resolve (the target list, "
         "after expanding any @world/@selected/@system/@installed/@<set>, is empty)"
     )
