@@ -15418,3 +15418,46 @@ the flags or the `/etc`+`/etc/env.d` defaults), the vdb shadow +
 stateless-client degrade and `--remote-vdb`/`--remote-edb` (slice 6
 with keep-going per the code's own re-scope note), and
 `--remote-ledger-dir` (plan §8 names it; no such option yet).
+
+`mrg` remote report + keep-going + vdb shadow (2026-09-08,
+remote-merge slice 6, closing the plan's slice list): the driver ends
+every merge with a `STATUS=merged` trailer (`mfail` prints
+`STATUS=failed:<step>`), and the server gates success on it alongside
+exit 0 + `MERGE_DONE=ok`. The resolve loop prints per-unit trailers --
+the flow's own `>>> Remote merged <cpv>` line, `!!! Remote <cpv>:
+failed: <first-line>` on errors (always, abort or keep-going), and
+`>>> Remote <cpv>: skipped (<failed-cpv> failed)` for dropped
+dependents -- plus a closing `>>> Remote summary: <m> merged, <f>
+failed, <s> skipped` line. `--keep-going` is real now (the slice-5
+warn-and-ignore is gone): a unit error fails just that unit and
+BFS-drops its transitive dependents over the entries' own
+`required_by` edges (the `run_merge_loop` `_calc_resume_list` policy,
+factored as `drop_dependents`), merging the rest and returning a
+combined failed+skipped report (exit 1); without it the first unit
+error aborts as before. New surface: `--remote-vdb server:<path> |
+client:<path>` (default `client:<root>/var/db/pkg`),
+`--remote-edb` (validated informational -- `server:` only, the client
+has no binhosts, exactly the plan's row), `--remote-ledger-dir`
+(server ledger base override), and CONFIG_PROTECT/MASK derivation from
+the placed config (`resolved_incremental`, unless explicitly flagged)
+-- the client merge now protects what the client config protects. The
+vdb shadow (pulled once for `client:`, read directly for `server:`)
+fails a foreign-owned unit with `not shipping <cpv>: <path> owned by
+…` before its tarball streams (same-package ownership passes for the
+client driver to refine; an empty/missing shadow pre-checks nothing).
+`server:` vdb is the stateless degrade: the driver merges files with
+no vdb entry, no old hooks (`skip:stateless-no-vdb` markers), and
+fail-closed collisions (any existing file/symlink outside
+CONFIG_PROTECT divert refuses), announced by an `mrg: note:` line.
+Riding along is a real slice-2/3/4 bug the new fixtures exposed:
+hookless units returned after the phases note and reported "merged"
+while writing nothing -- the merge now runs regardless of hooks.
+Trial-verified over local transport (hand-built `rmkga/b/c-1.0`
+fixtures: forged SIZE fails A, B skips as its dependent, C merges;
+stateless fresh + fail-closed collision; shadow pre-ship gate;
+ledger-dir override; PROTECT divert vs. clobber control). Pinned by
+eight black-box tests and Rust units (shadow parsers + pre-check,
+dependent-drop diamond, vdb/edb/ledger-dir/explicitness parsing).
+Deliberate deviations recorded: stateless writes no vdb entry at all
+(single-writer principle -- the server owns installed-db state), and
+the pre-check is lenient on same-package ownership by design.

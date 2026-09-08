@@ -1,0 +1,7 @@
+DEFINED_PHASES=install
+DESCRIPTION=remote keep-going fixture A (no hooks; the test forges its index SIZE so the download fails)
+EAPI=8
+IUSE=
+KEYWORDS=amd64
+SLOT=0
+_md5_=0000000000000000000000000000000

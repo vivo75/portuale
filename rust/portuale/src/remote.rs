@@ -152,12 +152,29 @@ pub struct RemoteContext {
     /// Where `/etc/portage` resolves from (default
     /// `client:/etc/portage`).
     pub etc_portage: ConfigPlacement,
+    /// Where the client installed-db lives (default
+    /// `client:<root>/var/db/pkg`). `server:` = stateless client: files
+    /// merge with no vdb entry, no old hooks, and fail-closed collisions
+    /// (slice 6).
+    pub vdb: ConfigPlacement,
+    /// Binhost-index cache side, informational (default
+    /// `server:<root>/var/cache/edb`): the client has no binhosts, so
+    /// only `server:` parses -- the resolve reads its own cache.
+    pub edb: ConfigPlacement,
+    /// Server ledger directory override (`None` =
+    /// `<placed-PKGDIR>/remote-ledger`).
+    pub ledger_dir: Option<String>,
     /// Space-separated CONFIG_PROTECT list for the client merge (real
-    /// default `/etc`; slice 5 derives it from pulled client config).
+    /// default `/etc`; the resolve path derives it from the placed
+    /// config unless explicitly flagged -- slice 6).
     pub config_protect: String,
+    /// Whether `--remote-config-protect` was passed explicitly.
+    pub config_protect_explicit: bool,
     /// Space-separated CONFIG_PROTECT_MASK list (real default
     /// `/etc/env.d`).
     pub config_protect_mask: String,
+    /// Whether `--remote-config-protect-mask` was passed explicitly.
+    pub config_protect_mask_explicit: bool,
 }
 
 /// `--remote-*` ids besides `remote_hostname`, in OPTIONS-table order --
@@ -177,6 +194,9 @@ const REMOTE_OPTION_IDS: &[&str] = &[
     "remote_config_protect",
     "remote_config_protect_mask",
     "remote_etc_portage",
+    "remote_vdb",
+    "remote_edb",
+    "remote_ledger_dir",
 ];
 
 fn get(matches: &ArgMatches, id: &str) -> Option<String> {
@@ -234,6 +254,35 @@ pub fn check_remote(matches: &ArgMatches) -> Result<Option<RemoteContext>, Strin
         Some(raw) => RemoteTransport::parse(&raw)
             .ok_or_else(|| format!("mrg: --remote-transport: {raw:?} is not ssh or local"))?,
     };
+    let root = get(matches, "remote_root").unwrap_or_else(|| "/".to_string());
+    let vdb = match get(matches, "remote_vdb") {
+        None => ConfigPlacement::Client(format!("{}/var/db/pkg", root.trim_end_matches('/'))),
+        Some(raw) => ConfigPlacement::parse("--remote-vdb", &raw)?,
+    };
+    // Informational (plan §7/§10): the client has no binhosts -- only
+    // `server:` parses. The resolve reads its own cache; this records
+    // intent for a future slice that threads it through.
+    let edb = match get(matches, "remote_edb") {
+        None => ConfigPlacement::Server(format!("{}/var/cache/edb", root.trim_end_matches('/'))),
+        Some(raw) => match ConfigPlacement::parse("--remote-edb", &raw)? {
+            placement @ ConfigPlacement::Server(_) => placement,
+            ConfigPlacement::Client(_) => {
+                return Err(
+                    "mrg: --remote-edb must be server:<path> (the client has no binhosts)"
+                        .to_string(),
+                );
+            }
+        },
+    };
+    let (config_protect, config_protect_explicit) = match get(matches, "remote_config_protect") {
+        Some(raw) => (raw, true),
+        None => ("/etc".to_string(), false),
+    };
+    let (config_protect_mask, config_protect_mask_explicit) =
+        match get(matches, "remote_config_protect_mask") {
+            Some(raw) => (raw, true),
+            None => ("/etc/env.d".to_string(), false),
+        };
     Ok(Some(RemoteContext {
         hostname,
         user: get(matches, "remote_user").filter(|u| !u.is_empty()),
@@ -243,7 +292,7 @@ pub fn check_remote(matches: &ArgMatches) -> Result<Option<RemoteContext>, Strin
         ssh_args: get(matches, "remote_ssh_args").filter(|a| !a.is_empty()),
         strict_host_key_checking,
         max_clock_skew_secs,
-        root: get(matches, "remote_root").unwrap_or_else(|| "/".to_string()),
+        root,
         workdir: get(matches, "remote_workdir")
             .unwrap_or_else(|| "/var/tmp/portage-remote".to_string()),
         transport,
@@ -252,9 +301,13 @@ pub fn check_remote(matches: &ArgMatches) -> Result<Option<RemoteContext>, Strin
             None => ConfigPlacement::Client("/etc/portage".to_string()),
             Some(raw) => ConfigPlacement::parse("--remote-etc-portage", &raw)?,
         },
-        config_protect: get(matches, "remote_config_protect").unwrap_or_else(|| "/etc".to_string()),
-        config_protect_mask: get(matches, "remote_config_protect_mask")
-            .unwrap_or_else(|| "/etc/env.d".to_string()),
+        vdb,
+        edb,
+        ledger_dir: get(matches, "remote_ledger_dir").filter(|d| !d.is_empty()),
+        config_protect,
+        config_protect_explicit,
+        config_protect_mask,
+        config_protect_mask_explicit,
     }))
 }
 
@@ -932,10 +985,38 @@ pub fn run_remote_resolve(matches: &ArgMatches, ctx: RemoteContext, argv: Vec<St
     code
 }
 
+/// BFS-drop the transitive dependents of a failed package (real
+/// `_calc_resume_list`): every skipped cp records the failed cpv that
+/// doomed it, for the `skipped (… failed)` trailer.
+fn drop_dependents(
+    dependents: &std::collections::HashMap<(String, String), Vec<(String, String)>>,
+    skip: &mut std::collections::HashMap<(String, String), String>,
+    failed_cp: (String, String),
+    failed_cpv: &str,
+) {
+    let mut queue = vec![failed_cp];
+    while let Some(x) = queue.pop() {
+        if let Some(deps) = dependents.get(&x) {
+            for p in deps {
+                if skip.insert(p.clone(), failed_cpv.to_string()).is_none() {
+                    queue.push(p.clone());
+                }
+            }
+        }
+    }
+}
+
 /// One resolved binary plan, executed remotely entry by entry in merge
-/// order (sequential; `--keep-going` is slice 6). `AlreadyInstalled` is
-/// a silent no-op like the local plan. Anything else non-`Binary` cannot
-/// occur (`check_binary_plan` gates first) and fails loudly.
+/// order (sequential; `--remote-jobs` stays a reserved knob). Report is
+/// per-unit trailers (the flow's `>>> Remote merged <cpv>` line, plus
+/// `!!! Remote <cpv>: failed: …` and `>>> Remote <cpv>: skipped (…)` from
+/// the loop) with a closing `>>> Remote summary: …` line (plan §11). Without `--keep-going` the
+/// first unit error aborts the plan; with it, the error fails just that
+/// unit and BFS-drops its transitive dependents (the `run_merge_loop`
+/// `_calc_resume_list` policy), merging the rest and returning a
+/// combined failed+skipped report. `AlreadyInstalled` stays a silent
+/// no-op like the local plan. Anything else non-`Binary` cannot occur
+/// (`check_binary_plan` gates first) and fails loudly.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn run_remote_plan(
     entries: &[portage_repo::GraphEntry],
@@ -945,10 +1026,42 @@ pub(crate) fn run_remote_plan(
     pkgdir: &std::path::Path,
     portage_tmpdir: &std::path::Path,
     ctx: &RemoteContext,
+    keep_going: bool,
 ) -> Result<(), String> {
     use portage_repo::PretendOutcome;
+    use std::collections::HashMap;
     let control_dir = control_dir();
     let control = control_dir.as_deref();
+    // Vdb shadow for the pre-ship pre-check (plan §7): pulled once for
+    // client placement, read directly for server placement.
+    let shadow = load_vdb_shadow(ctx, control)?;
+    if matches!(ctx.vdb, ConfigPlacement::Server(_)) {
+        println!(
+            "mrg: note: --remote-vdb is server-side: client merges run stateless (no old hooks, fail-closed collisions)"
+        );
+    }
+    // Server ledger base: `--remote-ledger-dir` wins, else the placed
+    // config's own `<PKGDIR>/remote-ledger` (plan §8).
+    let server_ledger_base: std::path::PathBuf = match &ctx.ledger_dir {
+        Some(dir) => std::path::PathBuf::from(dir),
+        None => pkgdir.join("remote-ledger"),
+    };
+    // cp -> the cps that depend on it (each entry's own `required_by`),
+    // the same edge set `run_merge_loop` drops on.
+    let dependents: HashMap<(String, String), Vec<(String, String)>> = entries
+        .iter()
+        .map(|e| {
+            (
+                (e.category.clone(), e.package.clone()),
+                e.required_by.clone(),
+            )
+        })
+        .collect();
+    // Skipped cp -> the failed cpv that doomed it (for the trailer).
+    let mut skip: HashMap<(String, String), String> = HashMap::new();
+    let mut failures: Vec<(String, String)> = Vec::new();
+    let mut skipped: Vec<String> = Vec::new();
+    let mut merged: u32 = 0;
     for entry in entries {
         let version = match &entry.outcome {
             PretendOutcome::AlreadyInstalled { .. } => continue,
@@ -963,70 +1076,158 @@ pub(crate) fn run_remote_plan(
                 ));
             }
         };
-        let binpkg_path = if entry.remote_binary {
-            let (sync_uri, record) = portage_repo::find_remote_binpkg(
-                &config.binrepos,
-                root,
-                &entry.category,
-                &entry.package,
-                &version,
-            )
-            .ok_or_else(|| {
-                format!(
-                    "{}/{}-{version}: not found in any binhost `Packages` index",
-                    entry.category, entry.package
-                )
-            })?;
-            crate::emerge_getbinpkg::download_and_verify(
-                &sync_uri,
-                &record,
-                &entry.category,
-                &entry.package,
-                &version,
-                pkgdir,
-            )?
-        } else {
-            crate::emerge_getbinpkg::resolve_local_binpkg(
-                pkgdir,
-                &entry.category,
-                &entry.package,
-                &version,
-                entry.build_id.as_deref(),
-            )
-            .ok_or_else(|| {
-                format!(
-                    "{}/{}-{version}: no binpkg file under {}",
-                    entry.category,
-                    entry.package,
-                    pkgdir.display()
-                )
-            })?
-        };
-        let ts = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|t| t.as_secs())
-            .unwrap_or(0);
-        let (repo, commit) = repo_position(repos, &entry.repo_name);
-        let ledger_entry = LedgerEntry {
-            ts,
-            repo,
-            commit,
-            cpv: format!("{}/{}-{version}", entry.category, entry.package),
-        };
-        let ledger = LedgerSpec {
-            file: client_ledger_file(ctx),
-            line: ledger_entry.line(),
-        };
-        run_binpkg_flow(
+        let cpv = format!("{}/{}-{version}", entry.category, entry.package);
+        let cp = (entry.category.clone(), entry.package.clone());
+        if let Some(culprit) = skip.get(&cp) {
+            skipped.push(cpv.clone());
+            println!(">>> Remote {cpv}: skipped ({culprit} failed)");
+            continue;
+        }
+        let unit = run_one_remote_unit(
+            entry,
+            &version,
+            &cpv,
+            config,
+            repos,
+            root,
+            pkgdir,
             ctx,
             control,
-            &binpkg_path,
-            Some(&ledger),
-            Some(&ledger_entry.repo),
-        )?;
-        record_server_ledger(pkgdir, &ctx.hostname, &ledger_entry)?;
+            &shadow,
+            &server_ledger_base,
+        );
+        match unit {
+            Ok(()) => {
+                // The flow's own `>>> Remote merged <cpv>` line is this
+                // unit's trailer; only failed/skipped need plan-level
+                // trailers here.
+                merged += 1;
+            }
+            Err(message) => {
+                let short = message.lines().next().unwrap_or(&message).to_string();
+                println!("!!! Remote {cpv}: failed: {short}");
+                if !keep_going {
+                    return Err(message);
+                }
+                failures.push((cpv.clone(), message));
+                drop_dependents(&dependents, &mut skip, cp, &cpv);
+            }
+        }
     }
-    let _ = (config, portage_tmpdir);
+    println!(
+        ">>> Remote summary: {merged} merged, {} failed, {} skipped",
+        failures.len(),
+        skipped.len()
+    );
+    let _ = portage_tmpdir;
+    if failures.is_empty() {
+        return Ok(());
+    }
+    let mut msg = format!(
+        "Remote plan finished with {} failed unit(s) (--keep-going):\n{}",
+        failures.len(),
+        failures
+            .iter()
+            .map(|(cpv, e)| format!("  {cpv}: {}", e.lines().next().unwrap_or(e)))
+            .collect::<Vec<_>>()
+            .join("\n")
+    );
+    if !skipped.is_empty() {
+        msg.push_str(&format!(
+            "\n{} dependent package(s) not merged:\n{}",
+            skipped.len(),
+            skipped
+                .iter()
+                .map(|s| format!("  {s}"))
+                .collect::<Vec<_>>()
+                .join("\n")
+        ));
+    }
+    Err(msg)
+}
+
+/// One merge-bound plan entry end to end: locate the binpkg (binhost
+/// download or local `$PKGDIR`), run it through the client
+/// (bundle → unpack → phases → merge → postinst, shadow pre-check
+/// before anything ships), then record the server ledger. `Err` is the
+/// unit's failure; the caller decides abort vs. keep-going.
+#[allow(clippy::too_many_arguments)]
+fn run_one_remote_unit(
+    entry: &portage_repo::GraphEntry,
+    version: &str,
+    cpv: &str,
+    config: &portage_profile::Config,
+    repos: &[portage_repo::RepoConfig],
+    root: &std::path::Path,
+    pkgdir: &std::path::Path,
+    ctx: &RemoteContext,
+    control: Option<&std::path::Path>,
+    shadow: &VdbShadow,
+    server_ledger_base: &std::path::Path,
+) -> Result<(), String> {
+    let binpkg_path = if entry.remote_binary {
+        let (sync_uri, record) = portage_repo::find_remote_binpkg(
+            &config.binrepos,
+            root,
+            &entry.category,
+            &entry.package,
+            version,
+        )
+        .ok_or_else(|| {
+            format!(
+                "{}/{}-{version}: not found in any binhost `Packages` index",
+                entry.category, entry.package
+            )
+        })?;
+        crate::emerge_getbinpkg::download_and_verify(
+            &sync_uri,
+            &record,
+            &entry.category,
+            &entry.package,
+            version,
+            pkgdir,
+        )?
+    } else {
+        crate::emerge_getbinpkg::resolve_local_binpkg(
+            pkgdir,
+            &entry.category,
+            &entry.package,
+            version,
+            entry.build_id.as_deref(),
+        )
+        .ok_or_else(|| {
+            format!(
+                "{}/{}-{version}: no binpkg file under {}",
+                entry.category,
+                entry.package,
+                pkgdir.display()
+            )
+        })?
+    };
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|t| t.as_secs())
+        .unwrap_or(0);
+    let (repo, commit) = repo_position(repos, &entry.repo_name);
+    let ledger_entry = LedgerEntry {
+        ts,
+        repo,
+        commit,
+        cpv: cpv.to_string(),
+    };
+    let ledger = LedgerSpec {
+        file: client_ledger_file(ctx),
+        line: ledger_entry.line(),
+    };
+    run_binpkg_flow(
+        ctx,
+        control,
+        &binpkg_path,
+        Some(&ledger),
+        Some(&ledger_entry.repo),
+        Some(shadow),
+    )?;
+    record_server_ledger(server_ledger_base, &ctx.hostname, &ledger_entry)?;
     Ok(())
 }
 
@@ -1240,24 +1441,170 @@ fn sanitize_hostname(hostname: &str) -> String {
 }
 
 /// Server-side ledger record after one merged entry:
-/// `<pkgdir>/remote-ledger/<hostname>`, last 10 kept.
+/// `<pkgdir>/remote-ledger/<hostname>`, last 10 kept. Pass the ledger
+/// *directory* (`<placed-PKGDIR>/remote-ledger`, or `--remote-ledger-dir`
+/// when set) -- the hostname file hangs off it.
 pub(crate) fn record_server_ledger(
-    pkgdir: &std::path::Path,
+    ledger_dir: &std::path::Path,
     hostname: &str,
     entry: &LedgerEntry,
 ) -> Result<(), String> {
-    ledger_append(
-        &pkgdir
-            .join("remote-ledger")
-            .join(sanitize_hostname(hostname)),
-        &entry.line(),
-    )
+    ledger_append(&ledger_dir.join(sanitize_hostname(hostname)), &entry.line())
 }
 
 /// The client-side ledger destination baked into the merge driver:
 /// `<ctx.root>/var/db/remote-repos` (a plain file, not the vdb).
 fn client_ledger_file(ctx: &RemoteContext) -> String {
     format!("{}/var/db/remote-repos", ctx.root.trim_end_matches('/'))
+}
+
+// --- Vdb shadow + pre-ship collision pre-check (slice 6) ----------------------
+///
+/// The server reasons about installed-file ownership *before* shipping a
+/// unit's tarball (plan §7): a unit doomed by a foreign-owned collision
+/// fails here, with zero client writes. The shadow is the placed vdb
+/// read directly (`server:`) or pulled once at plan start (`client:`,
+/// same `tar -c`/`tar -x` shape as the etc-portage pull).
+///
+/// Deliberately lenient: only ownership by a *different* package fails
+/// the pre-check. Same-package ownership (any version/slot) passes --
+/// the client driver refines those (same-slot replace vs. collision)
+/// against the live vdb, or fail-closed without one. A passed pre-check
+/// is therefore necessary but not sufficient; a failed one is final.
+///
+// Installed-file ownership: absolute path -> owning `(category, pf)`.
+pub(crate) struct VdbShadow {
+    owners: std::collections::HashMap<String, (String, String)>,
+}
+
+/// `obj`/`sym` paths out of one vdb `CONTENTS` file (real
+/// `dblink`/`vartree` shape: `obj <path> <md5> <mtime>`,
+/// `sym <path> -> <target> <mtime>`). `dir` lines merge freely
+/// client-side (`mkdir -p`), so they never gate a pre-check.
+fn contents_owned_paths(text: &str) -> Vec<String> {
+    text.lines()
+        .filter_map(|line| {
+            let mut words = line.split_whitespace();
+            match (words.next(), words.next()) {
+                (Some("obj"), Some(path)) | (Some("sym"), Some(path)) => Some(path.to_string()),
+                _ => None,
+            }
+        })
+        .collect()
+}
+
+impl VdbShadow {
+    /// Read `<dir>/<cat>/<pf>/CONTENTS` (two-level walk, no new
+    /// dependencies -- the vdb is exactly that deep). Missing/unreadable
+    /// files are skipped, not fatal: an empty shadow pre-checks nothing,
+    /// and the client driver still gates every collision for real.
+    fn load(dir: &std::path::Path) -> Self {
+        let mut owners = std::collections::HashMap::new();
+        let Ok(cats) = std::fs::read_dir(dir) else {
+            return Self { owners };
+        };
+        for cat in cats.filter_map(|e| e.ok()) {
+            let category = cat.file_name().to_string_lossy().into_owned();
+            let Ok(pfs) = std::fs::read_dir(cat.path()) else {
+                continue;
+            };
+            for pf in pfs.filter_map(|e| e.ok()) {
+                let pfname = pf.file_name().to_string_lossy().into_owned();
+                let contents = pf.path().join("CONTENTS");
+                let Ok(text) = std::fs::read_to_string(&contents) else {
+                    continue;
+                };
+                for path in contents_owned_paths(&text) {
+                    owners
+                        .entry(path)
+                        .or_insert_with(|| (category.clone(), pfname.clone()));
+                }
+            }
+        }
+        Self { owners }
+    }
+
+    /// Owner `(category, pf)` of an absolute image path, if recorded.
+    fn owner(&self, abspath: &str) -> Option<&(String, String)> {
+        self.owners.get(abspath)
+    }
+
+    /// True when `pf` belongs to package `pn` (real `_pkgsplit`
+    /// longest-trailing-version rule via `split_pf`).
+    fn same_package(pf: &str, pn: &str) -> bool {
+        crate::remote_bundle::split_pf(pf).is_some_and(|(name, _)| name == pn)
+    }
+}
+
+/// `(kind, rel)` image paths out of a staged `filemeta` file (the exact
+/// bytes the client will gate on: `<kind> <md5> <mtime> <rel>
+/// [<target>]`, whitespace-free by bundle-build construction).
+fn parse_filemeta_paths(text: &str) -> Vec<(String, String)> {
+    text.lines()
+        .filter_map(|line| {
+            let mut words = line.split_whitespace();
+            let kind = words.next()?.to_string();
+            if !matches!(kind.as_str(), "obj" | "sym" | "dir") {
+                return None;
+            }
+            words.next()?;
+            words.next()?;
+            let rel = words.next()?.to_string();
+            Some((kind, rel))
+        })
+        .collect()
+}
+
+/// Pre-ship gate for one unit: every `obj`/`sym` image path owned in the
+/// shadow by a *different* package fails with a `not shipping` error
+/// (zero client writes so far). Same-package ownership passes for the
+/// client driver to refine.
+fn shadow_precheck(
+    shadow: &VdbShadow,
+    cpv: &str,
+    category: &str,
+    pn: &str,
+    staged_filemeta: &str,
+) -> Result<(), String> {
+    for (kind, rel) in parse_filemeta_paths(staged_filemeta) {
+        if kind == "dir" {
+            continue;
+        }
+        let abspath = format!("/{rel}");
+        if let Some((cat, pf)) = shadow.owner(&abspath)
+            && (cat != category || !VdbShadow::same_package(pf, pn))
+        {
+            return Err(format!(
+                "mrg: not shipping {cpv}: {abspath} owned by {cat}/{pf} (vdb shadow)"
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Load the shadow for this run: read directly for `server:` placement,
+/// pull once for `client:` placement (plan §7's pull-once-per-run).
+fn load_vdb_shadow(
+    ctx: &RemoteContext,
+    control: Option<&std::path::Path>,
+) -> Result<VdbShadow, String> {
+    match &ctx.vdb {
+        ConfigPlacement::Server(path) => Ok(VdbShadow::load(std::path::Path::new(path))),
+        ConfigPlacement::Client(path) => {
+            let tmp = std::env::temp_dir().join(format!(
+                "portuale-remote-vdb-{}-{}",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_nanos())
+                    .unwrap_or(0)
+            ));
+            // Like the etc-portage pull, the tmp dir is left for
+            // forensics; it carries no secrets beyond file lists.
+            pull_dir(ctx, control, path, &tmp)?;
+            Ok(VdbShadow::load(&tmp))
+        }
+    }
 }
 
 /// Every merge-bound entry must be `Binary` in a remote plan (the
@@ -1295,8 +1642,9 @@ pub(crate) fn check_binary_plan(entries: &[portage_repo::GraphEntry]) -> Result<
 }
 
 /// One binpkg end to end (bundle, stream, unpack, phases, merge,
-/// postinst): shared by the `--remote-binpkg` path (no ledger) and the
-/// resolve path (ledger per merged entry). Prints the stage report lines;
+/// postinst): shared by the `--remote-binpkg` path (no ledger, no
+/// shadow) and the resolve path (ledger per merged entry, shadow
+/// pre-check before anything ships). Prints the stage report lines;
 /// `Ok(cpv)` is the merged `category/package-version`.
 fn run_binpkg_flow(
     ctx: &RemoteContext,
@@ -1304,6 +1652,7 @@ fn run_binpkg_flow(
     binpkg_path: &Path,
     ledger: Option<&LedgerSpec>,
     repo_override: Option<&str>,
+    shadow: Option<&VdbShadow>,
 ) -> Result<String, String> {
     let staging = std::env::temp_dir().join(format!(
         "portuale-remote-bundle-{}-{}",
@@ -1330,6 +1679,30 @@ fn run_binpkg_flow(
         .next()
         .unwrap_or_default()
         .to_string();
+    // Pre-ship gate (slice 6): the shadow fails a foreign-owned unit
+    // before its tarball streams anywhere -- zero client writes so far.
+    // The staged `filemeta` is the exact bytes the client will gate on.
+    if let Some(shadow) = shadow {
+        let filemeta_path = staging.join(&pf).join("filemeta");
+        match std::fs::read_to_string(&filemeta_path) {
+            Ok(text) => {
+                if let Err(message) = shadow_precheck(
+                    shadow,
+                    &staged.manifest.cpv,
+                    &staged.category,
+                    &staged.pn,
+                    &text,
+                ) {
+                    let _ = std::fs::remove_dir_all(&staging);
+                    return Err(message);
+                }
+            }
+            Err(e) => {
+                let _ = std::fs::remove_dir_all(&staging);
+                return Err(format!("mrg: reading staged filemeta: {e}"));
+            }
+        }
+    }
     let dest_tar = format!("{}/{pf}/bundle.tar", ctx.workdir);
     // Fail-early: the stream lands (or fails) before the driver runs.
     if ctx.transport == RemoteTransport::Ssh {
@@ -1387,29 +1760,32 @@ fn run_binpkg_flow(
         staged.manifest.cpv, staged.byte_count, staged.manifest.slot, staged.manifest.repo,
     );
     // Slice-3 phases (pretend/setup/preinst, DEFINED_PHASES-gated at
-    // bundle time). Postinst waits for the slice-4 merge; an empty phase
+    // bundle time). Postinst waits for the slice-4 merge. An empty phase
     // list (no hooks, or no ebuild/env shipped) is a note, not a failure
-    // -- same degrade as the local merge.
+    // -- same degrade as the local merge -- and, crucially, not a skip:
+    // the copy+vdb merge below runs regardless (a hookless binpkg still
+    // installs files; returning early here silently unmerged it).
     if staged.phases.is_empty() {
         println!(
             ">>> Remote phases {}: none defined, skipped",
             staged.manifest.cpv
         );
-        return Ok(staged.manifest.cpv.clone());
+    } else {
+        let unit_dir = format!("{}/{pf}", ctx.workdir);
+        match run_phases_stage(ctx, control, &unit_dir, &staged) {
+            Ok(done) => {
+                println!(
+                    ">>> Remote phases {}: {}",
+                    staged.manifest.cpv,
+                    done.join(", ")
+                );
+            }
+            Err(message) => {
+                return Err(message);
+            }
+        }
     }
     let unit_dir = format!("{}/{pf}", ctx.workdir);
-    match run_phases_stage(ctx, control, &unit_dir, &staged) {
-        Ok(done) => {
-            println!(
-                ">>> Remote phases {}: {}",
-                staged.manifest.cpv,
-                done.join(", ")
-            );
-        }
-        Err(message) => {
-            return Err(message);
-        }
-    }
     // Slice-4 merge (copy+vdb+replace) then new-postinst, non-fatal like
     // the local merge's own `_postinst_failure` rule.
     match run_merge_stage(ctx, control, &unit_dir, &staged, ledger) {
@@ -1482,7 +1858,7 @@ fn run_bundle_stage(
         eprintln!("mrg: --remote-binpkg {}: not found", binpkg_path.display());
         return ExitCode::from(1);
     }
-    match run_binpkg_flow(ctx, control, binpkg_path, None, None) {
+    match run_binpkg_flow(ctx, control, binpkg_path, None, None, None) {
         Ok(_) => ExitCode::from(0),
         Err(message) => {
             eprintln!("{message}");
@@ -1616,7 +1992,7 @@ fn phase_script(
 /// Longest-prefix `is_protected` + `alloc_cfg` + `env_val` + `run_old_hook`
 /// helpers shared by the merge flow. Pure bash, no placeholders except
 /// the colormap/PATH roots baked by the caller template below.
-const MERGE_HELPERS: &str = r#"mfail() { echo "MERGE_FAIL=$1 $2"; exit 1; }
+const MERGE_HELPERS: &str = r#"mfail() { echo "MERGE_FAIL=$1 $2"; echo "STATUS=failed:$1"; exit 1; }
 warn() { echo "MERGE_WARN=$1 $2"; }
 env_val() {
   sed -n "s/^declare -x $2=\"\\(.*\\)\"$/\\1/p" "$1" | head -n 1
@@ -1699,12 +2075,17 @@ run_old_hook() {
 
 /// Merge flow: old-prerm → ownership scan → gate+copy → vdb → remove-old
 /// → old-postrm → env-update, appended after `MERGE_HELPERS`. Shell vars
-/// (`UNIT`, `ROOT`, `VDBROOT`, `NEWPF`, `PKG`, `MAINS`, `PROTECT`,
-/// `MASK`, …) come from `merge_script`'s header. Machine lines
-/// `MERGE_<STEP>=…`; any `mfail` prints `MERGE_FAIL=<step> <detail>` and
-/// exits 1. New-postinst runs separately afterwards (see
-/// `run_bundle_stage`).
+/// (`UNIT`, `ROOT`, `VDB`, `VDBROOT`, `NEWPF`, `PKG`, `MAINS`, `PROTECT`,
+/// `MASK`, `STATELESS`, …) come from `merge_script`'s header. Machine
+/// lines `MERGE_<STEP>=…` plus a final `STATUS=merged` (or
+/// `STATUS=failed:<step>` from `mfail`); any `mfail` prints
+/// `MERGE_FAIL=<step> <detail>` and exits 1. `STATELESS=1` (server-side
+/// vdb placement) skips old-version discovery and the ownership scan --
+/// any existing file/symlink destination (outside CONFIG_PROTECT
+/// divert) is a fail-closed collision, and old hooks never run.
+/// New-postinst runs separately afterwards (see `run_bundle_stage`).
 const MERGE_FLOW: &str = r##"OLD_PF=""; OLD_COUNTER=-1
+if [ "$STATELESS" = 1 ]; then :; else
 for d in "$VDBROOT"/"$PKG"-*/; do
 
   [ -d "$d" ] || continue
@@ -1717,8 +2098,11 @@ for d in "$VDBROOT"/"$PKG"-*/; do
   c=$(cat "$d/COUNTER" 2>/dev/null | tr -d ' \t\n'); case "$c" in ''|*[!0-9]*) c=-1;; esac
   if [ "$c" -gt "$OLD_COUNTER" ]; then OLD_COUNTER=$c; OLD_PF=$cpf; fi
 done
+fi
 if [ -n "$OLD_PF" ]; then OLDVDB="$VDBROOT/$OLD_PF"; else OLDVDB=""; fi
-if [ -n "$OLD_PF" ]; then
+if [ "$STATELESS" = 1 ]; then
+  echo "MERGE_PRERM=skip:stateless-no-vdb"
+elif [ -n "$OLD_PF" ]; then
   if run_old_hook "$OLDVDB" prerm; then
     echo "MERGE_PRERM=ok $OLD_PF"
   else
@@ -1729,7 +2113,8 @@ else
   echo "MERGE_PRERM=skip:none-installed"
 fi
 : > "$REPLACED_OWN"; : > "$OTHERS_OWN"
-for c in "$ROOT"/var/db/pkg/*/*/CONTENTS; do
+if [ "$STATELESS" != 1 ]; then
+for c in "$VDB"/*/*/CONTENTS; do
   [ -f "$c" ] || continue
   pfdir=${c%/*}; pfdir=${pfdir##*/}
   awk '$1=="obj"||$1=="sym"{print $2}' "$c" > "$UNIT/scan.list"
@@ -1740,6 +2125,7 @@ for c in "$ROOT"/var/db/pkg/*/*/CONTENTS; do
   fi
 done
 rm -f "$UNIT/scan.list"
+fi
 : > "$NEWCONTENTS"; : > "$NEWPATHS"
 ROOTUID=$(id -u)
 while read -r line; do
@@ -1753,7 +2139,18 @@ while read -r line; do
   esac
   src="$IMAGE/$rel"; dest="$ROOT/$rel"; apath="/$rel"
   if [ -e "$dest" ] || [ -L "$dest" ]; then
-    if grep -Fxq "$apath" "$REPLACED_OWN"; then :;
+    if [ "$STATELESS" = 1 ]; then
+      # No ownership proof without a client vdb: the shape rules still
+      # apply, but any existing file/symlink destination outside
+      # CONFIG_PROTECT divert is a fail-closed collision (merging
+      # directories and the divert itself need no ownership).
+      if [ -d "$dest" ] && [ ! -L "$dest" ]; then
+        [ "$kind" = dir ] || mfail collision "file over directory at $apath (stateless)";
+      elif [ "$kind" = dir ]; then
+        mfail collision "directory over file at $apath (stateless)";
+      elif [ "$(is_protected "$dest")" = yes ]; then :;
+      else mfail collision "stateless refusing to overwrite $apath"; fi
+    elif grep -Fxq "$apath" "$REPLACED_OWN"; then :;
     elif grep -Fxq "$apath" "$OTHERS_OWN"; then mfail collision "$apath owned by another package";
     elif [ -d "$dest" ] && [ ! -L "$dest" ]; then
       [ "$kind" = dir ] || mfail collision "file over directory at $apath";
@@ -1800,6 +2197,12 @@ while read -r line; do
   echo "$apath" >> "$NEWPATHS"
 done < "$UNIT/filemeta"
 echo "MERGE_COPY=ok"
+# Stateless clients keep no vdb at all (plan §7: the server owns
+# installed-db state) -- files merge, but no entry, COUNTER, or
+# edb-counter is recorded.
+if [ "$STATELESS" = 1 ]; then
+  echo "MERGE_VDB=skip:stateless-no-vdb"
+else
 rm -rf "$TMPVDB"; mkdir -p "$TMPVDB" || mfail vdb "mkdir tmp"
 for f in "$UNIT/build-info"/*; do
   # NOTE: `cond && action || fail` misfires when cond is false -- always
@@ -1839,6 +2242,7 @@ fi
 rm -rf "$NEWVDB"
 mv "$TMPVDB" "$NEWVDB" || mfail vdb "rename into place"
 echo "MERGE_VDB=ok"
+fi
 if [ -n "$OLD_PF" ]; then
   if [ -f "$OLDVDB/CONTENTS" ]; then
     : > "$UNIT/olddirs.list"
@@ -1868,10 +2272,14 @@ if [ -n "$OLD_PF" ]; then
     warn remove "no CONTENTS in $OLD_PF, files kept"
   fi
   echo "MERGE_REMOVE=ok $OLD_PF"
+elif [ "$STATELESS" = 1 ]; then
+  echo "MERGE_REMOVE=skip:stateless-no-vdb"
 else
   echo "MERGE_REMOVE=skip:none-installed"
 fi
-if [ -n "$OLD_PF" ]; then
+if [ "$STATELESS" = 1 ]; then
+  echo "MERGE_POSTRM=skip:stateless-no-vdb"
+elif [ -n "$OLD_PF" ]; then
   if run_old_hook "$OLDVDB" postrm; then echo "MERGE_POSTRM=ok $OLD_PF"; else
     rc=$?
     if [ "$rc" = 2 ]; then echo "MERGE_POSTRM=skip $OLD_PF"; else echo "MERGE_POSTRM=warn $OLD_PF"; fi
@@ -1897,6 +2305,7 @@ else
   echo "MERGE_LEDGER=skip:none-requested"
 fi
 echo "MERGE_DONE=ok"
+echo "STATUS=merged"
 "##;
 
 /// Merge header: all values the flow needs, pre-quoted. The unit layout
@@ -1910,19 +2319,29 @@ pub(crate) struct LedgerSpec {
     pub line: String,
 }
 
+#[allow(clippy::too_many_arguments)]
 fn merge_script(
     unit_dir: &str,
     staged: &crate::remote_bundle::StagedBundle,
     root: &str,
+    vdb: &str,
+    stateless: bool,
     protect_list: &str,
     mask_list: &str,
     ledger: Option<&LedgerSpec>,
-) -> String {
-    format!(
+) -> Result<String, String> {
+    // A placed client vdb must stay inside the unit's world: reject the
+    // degenerate empty path before it becomes `//var/db/pkg`.
+    if vdb.trim().is_empty() {
+        return Err("mrg: empty client vdb path".to_string());
+    }
+    Ok(format!(
         concat!(
             "UNIT={unit}\n",
             "IMAGE=\"$UNIT/image\"\n",
-            "VDBROOT={root}/var/db/pkg/{category}\n",
+            "VDB={vdb}\n",
+            "VDBROOT={vdb}/{category}\n",
+            "STATELESS={stateless}\n",
             "CAT={category}\n",
             "PKG={pkg}\n",
             "NEWPF={pf}\n",
@@ -1948,6 +2367,8 @@ fn merge_script(
         ),
         unit = sh_quote(unit_dir),
         root = sh_quote(root),
+        vdb = sh_quote(vdb),
+        stateless = if stateless { "1" } else { "0" },
         category = sh_quote(&staged.category),
         pkg = sh_quote(&staged.pn),
         pf = sh_quote(&staged.pf),
@@ -1967,7 +2388,7 @@ fn merge_script(
         ledger_line = sh_quote(&ledger.map(|l| l.line.clone()).unwrap_or_default()),
         helpers = MERGE_HELPERS,
         flow = MERGE_FLOW,
-    )
+    ))
 }
 
 /// Human tail of a merge failure: the `MERGE_FAIL` line plus a few log
@@ -1991,7 +2412,9 @@ fn merge_failure_tail(stdout: &str, stderr: &str, code: Option<i32>) -> String {
 }
 
 /// Run the merge driver; `Ok(markers)` are the `MERGE_<STEP>=ok` lines
-/// for the report, `Err(message)` the failure tail.
+/// for the report, `Err(message)` the failure tail. The success gate is
+/// the driver's own `STATUS=merged` trailer (plan §11), with exit 0 +
+/// `MERGE_DONE=ok` kept as the backstop.
 fn run_merge_stage(
     ctx: &RemoteContext,
     control: Option<&std::path::Path>,
@@ -1999,14 +2422,26 @@ fn run_merge_stage(
     staged: &crate::remote_bundle::StagedBundle,
     ledger: Option<&LedgerSpec>,
 ) -> Result<Vec<String>, String> {
+    // Server-side vdb placement is the stateless degrade (plan §7): the
+    // driver merges files only -- no vdb entry, no old hooks, and
+    // fail-closed collisions.
+    let (vdb, stateless) = match &ctx.vdb {
+        ConfigPlacement::Client(path) => (path.clone(), false),
+        ConfigPlacement::Server(_) => (
+            format!("{}/var/db/pkg", ctx.root.trim_end_matches('/')),
+            true,
+        ),
+    };
     let script = merge_script(
         unit_dir,
         staged,
         &ctx.root,
+        &vdb,
+        stateless,
         &ctx.config_protect,
         &ctx.config_protect_mask,
         ledger,
-    );
+    )?;
     let output = run_script_stdin(ctx, control, &script).map_err(|message| {
         if ctx.transport == RemoteTransport::Local {
             format!("mrg: local merge command failed: {message}")
@@ -2021,7 +2456,10 @@ fn run_merge_stage(
         println!("{line}");
     }
     let values = parse_kv(&stdout);
-    if output.status.success() && values.get("MERGE_DONE").map(String::as_str) == Some("ok") {
+    if output.status.success()
+        && values.get("MERGE_DONE").map(String::as_str) == Some("ok")
+        && values.get("STATUS").map(String::as_str) == Some("merged")
+    {
         let mut markers = Vec::new();
         for step in [
             "MERGE_PRERM",
@@ -2242,8 +2680,13 @@ mod tests {
             transport: RemoteTransport::Ssh,
             binpkg: None,
             config_protect: "/etc".to_string(),
+            config_protect_explicit: false,
             config_protect_mask: "/etc/env.d".to_string(),
+            config_protect_mask_explicit: false,
             etc_portage: ConfigPlacement::Client("/etc/portage".to_string()),
+            vdb: ConfigPlacement::Client("/var/db/pkg".to_string()),
+            edb: ConfigPlacement::Server("/var/cache/edb".to_string()),
+            ledger_dir: None,
         }
     }
 
@@ -2295,6 +2738,127 @@ mod tests {
         assert_eq!(kept[0], "line4");
         assert_eq!(kept[9], "line13");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn shadow_parsers_read_contents_and_filemeta_shapes() {
+        // Only obj/sym lines own paths; dir lines merge freely.
+        assert_eq!(
+            contents_owned_paths("obj /a/b 0123 456\ndir /a\nsym /c -> /d 789\njunk\n"),
+            vec!["/a/b".to_string(), "/c".to_string()]
+        );
+        // filemeta keeps kind + rel; garbage lines drop out.
+        assert_eq!(
+            parse_filemeta_paths(
+                "obj abc 123 usr/bin/x\nsym def 456 etc/link tgt\ndir ghi 789 usr/share\nbogus\n"
+            ),
+            vec![
+                ("obj".to_string(), "usr/bin/x".to_string()),
+                ("sym".to_string(), "etc/link".to_string()),
+                ("dir".to_string(), "usr/share".to_string()),
+            ]
+        );
+        // `_pkgsplit` longest-version rule for the same-package check.
+        assert!(VdbShadow::same_package("foo-1bar-2.0", "foo-1bar"));
+        assert!(!VdbShadow::same_package("foo-2.0", "foo-1bar"));
+        assert!(!VdbShadow::same_package("noversion", "noversion"));
+    }
+
+    #[test]
+    fn shadow_precheck_fails_only_foreign_owners() {
+        let dir = std::env::temp_dir().join(format!(
+            "portuale-remote-shadow-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let vdb = dir.join("vdb");
+        std::fs::create_dir_all(vdb.join("dev-libs/oldpkg-1.0")).unwrap();
+        std::fs::write(
+            vdb.join("dev-libs/oldpkg-1.0/CONTENTS"),
+            "obj /usr/bin/foreign abc 1\nsym /usr/bin/shared -> /x 2\n",
+        )
+        .unwrap();
+        std::fs::create_dir_all(vdb.join("dev-libs/newpkg-2.0")).unwrap();
+        std::fs::write(
+            vdb.join("dev-libs/newpkg-2.0/CONTENTS"),
+            "obj /usr/bin/own def 3\n",
+        )
+        .unwrap();
+        let shadow = VdbShadow::load(&vdb);
+        // Same package, any version: passes for the driver to refine.
+        assert!(
+            shadow_precheck(
+                &shadow,
+                "dev-libs/newpkg-1.0",
+                "dev-libs",
+                "newpkg",
+                "obj m 1 usr/bin/own\n",
+            )
+            .is_ok()
+        );
+        // Foreign owner: fails before shipping.
+        let err = shadow_precheck(
+            &shadow,
+            "dev-libs/newpkg-1.0",
+            "dev-libs",
+            "newpkg",
+            "obj m 1 usr/bin/foreign\n",
+        )
+        .unwrap_err();
+        assert!(err.contains("not shipping"), "{err}");
+        assert!(err.contains("oldpkg-1.0"), "{err}");
+        // Unowned path: passes.
+        assert!(
+            shadow_precheck(
+                &shadow,
+                "dev-libs/newpkg-1.0",
+                "dev-libs",
+                "newpkg",
+                "obj m 1 usr/bin/fresh\ndir m 1 usr/share\n",
+            )
+            .is_ok()
+        );
+        // Missing vdb dir: empty shadow, everything passes.
+        let empty = VdbShadow::load(&dir.join("absent"));
+        assert!(
+            shadow_precheck(
+                &empty,
+                "dev-libs/newpkg-1.0",
+                "dev-libs",
+                "newpkg",
+                "obj m 1 usr/bin/foreign\n",
+            )
+            .is_ok()
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn drop_dependents_covers_diamonds_transitively() {
+        use std::collections::{HashMap, HashSet};
+        let cp = |p: &str| ("dev-libs".to_string(), p.to_string());
+        // a <- b <- d, a <- c <- d (diamond): failing a drops b, c, d.
+        let dependents: HashMap<(String, String), Vec<(String, String)>> = HashMap::from([
+            (cp("a"), vec![cp("b"), cp("c")]),
+            (cp("b"), vec![cp("d")]),
+            (cp("c"), vec![cp("d")]),
+            (cp("d"), vec![]),
+        ]);
+        let mut skip = HashMap::new();
+        drop_dependents(&dependents, &mut skip, cp("a"), "dev-libs/a-1.0");
+        assert_eq!(
+            skip.keys().collect::<HashSet<_>>(),
+            [cp("b"), cp("c"), cp("d")].iter().collect::<HashSet<_>>()
+        );
+        assert_eq!(skip[&cp("d")], "dev-libs/a-1.0");
+        // Unrelated roots never join.
+        let mut skip = HashMap::new();
+        drop_dependents(&dependents, &mut skip, cp("b"), "dev-libs/b-1.0");
+        assert!(skip.contains_key(&cp("d")));
+        assert!(!skip.contains_key(&cp("c")));
     }
 
     fn binary_entry(package: &str, binary: bool) -> portage_repo::GraphEntry {
@@ -2504,8 +3068,13 @@ mod tests {
             transport: RemoteTransport::Local,
             binpkg: None,
             config_protect: "/etc".to_string(),
+            config_protect_explicit: false,
             config_protect_mask: "/etc/env.d".to_string(),
+            config_protect_mask_explicit: false,
             etc_portage: ConfigPlacement::Client("/etc/portage".to_string()),
+            vdb: ConfigPlacement::Client(format!("{root}/var/db/pkg")),
+            edb: ConfigPlacement::Server(format!("{root}/var/cache/edb")),
+            ledger_dir: None,
         }
     }
 

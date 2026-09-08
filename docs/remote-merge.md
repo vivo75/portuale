@@ -317,8 +317,9 @@ Required values are clap-required; unknown values exit 2 via clap.
 | `--remote-ssh-args` | Value | `-o ControlMaster=auto -o ControlPersist=60s` | passthrough (ansible `ssh_args`). |
 | `--remote-strict-host-key-checking` | Value `accept-new\|yes\|no` | `accept-new` | TOFU by default (new key added + fingerprint printed, changed key aborts); `yes` for locked-down fleets, `no` only for throwaway labs (§9). |
 | `--remote-jobs` | Value | `1` | units in flight (v1: sequential only; the knob exists so the future parallel slice needs no CLI change). |
-| `--remote-config-protect` | Value | `/etc` | space-separated CONFIG_PROTECT list for the client merge (deriving it from the placed client config is deferred -- `Config` doesn't model it yet; the flags or the real defaults rule). |
-| `--remote-config-protect-mask` | Value | `/etc/env.d` | space-separated CONFIG_PROTECT_MASK list. |
+| `--remote-config-protect` | Value | `/etc` | space-separated CONFIG_PROTECT list for the client merge (the placed config's own value wins unless flagged -- slice 6 derives it via `resolved_incremental`). |
+| `--remote-config-protect-mask` | Value | `/etc/env.d` | space-separated CONFIG_PROTECT_MASK list (same derivation rule). |
+| `--remote-ledger-dir` | Value | `<placed-PKGDIR>/remote-ledger` | server ledger directory override (slice 6). |
 | `--remote-transport` | Value `ssh\|local` | `ssh` | how driver scripts and files reach the client; `local` runs the identical generated driver against local paths (offline debugging, SSH-free driver tests). |
 | `--remote-binpkg` | Value | — | bundle, stream and unpack one explicit binpkg file, bypassing resolution (slices 2-4 trials; later an escape hatch). |
 
@@ -442,7 +443,16 @@ disables -- only for labs with no NTP).
    Downloads + server ledger use the placed config's own `PKGDIR`.)
 6. **Report + keep-going**: per-unit trailers, merged/failed/skipped
    summary, `--remote-jobs` still sequential (knob reserved). Plus the
-   slice-5 re-scope: vdb shadow + stateless degrade.
+   slice-5 re-scope: vdb shadow + stateless degrade. (shipped 2026-09-08:
+   `STATUS=merged|failed:<step>` driver trailers gated server-side,
+   `>>> Remote …: failed/skipped` loop trailers + `>>> Remote summary`
+   line, real `--keep-going` with the `run_merge_loop` dependent-drop
+   policy, `--remote-vdb`/`--remote-edb`/`--remote-ledger-dir`,
+   CONFIG_PROTECT derivation from the placed config, the vdb shadow with
+   a pre-ship foreign-owner gate, and the stateless degrade -- files
+   merge with no vdb entry, no old hooks, fail-closed collisions. The
+   hookless-merge fix below rode along: hookless units returned before
+   the merge and reported "merged" while writing nothing.)
 
 ## 14. Open questions (re-open, don't silently default)
 

@@ -2213,3 +2213,38 @@ with_buildpkgonly or pretend_stays_local"` (server: + client:
 placements, the two usage errors, `--pretend` staying local) and
 `cargo test -p portuale remote` (last-10 ledger rotation, the manifest
 repo override).
+
+`mrg` remote report + keep-going (2026-09-08, remote-merge slice 6):
+per-unit trailers, a closing summary, and a real `--keep-going` that
+merges around failures. Live-verified exactly as run (local transport;
+setup = the black-box test's shape: a tmp `file://` binhost serving
+three hand-built fixtures, `dev-libs/rmkga` with a forged index SIZE,
+`dev-libs/rmkgb` with `RDEPEND: dev-libs/rmkga`, independent
+`dev-libs/rmkgc`):
+
+```sh
+portuale mrg --getbinpkgonly --keep-going --remote-transport local \
+  --remote-hostname x --remote-root $T/root --remote-workdir $T/work \
+  --remote-etc-portage server:$T/cfgroot \
+  dev-libs/rmkga dev-libs/rmkgb dev-libs/rmkgc
+# >>> Remote preflight x: ok
+# [binary  N g   ] dev-libs/rmkga-1.0-1
+# [binary  N g   ] dev-libs/rmkgc-1.0-1
+# [binary  N g   ] dev-libs/rmkgb-1.0-1
+# !!! Remote dev-libs/rmkga-1.0: failed: .../rmkga-1.0.tbz2: downloaded size 3961 != index SIZE 4061
+# >>> Remote bundle dev-libs/rmkgc-1.0: unpacked (61440 bytes, slot 0, repo testrepo)
+# >>> Remote phases dev-libs/rmkgc-1.0: none defined, skipped
+# (... MERGE_* markers, STATUS=merged ...)
+# >>> Remote merged dev-libs/rmkgc-1.0
+# >>> Remote dev-libs/rmkgb-1.0: skipped (dev-libs/rmkga-1.0 failed)
+# >>> Remote summary: 1 merged, 1 failed, 1 skipped
+# (exit 1, stderr carries the combined failed+skipped report)
+```
+
+Deterministic slice tests: `pytest tests/test_portuale.py -k
+"keep_going or aborts_on_first or stateless or shadow_prefails or
+ledger_dir or protect_comes"` (keep-going merge/skip/report, abort
+without it, stateless fresh + fail-closed collision, shadow
+pre-ship gate, ledger-dir override, PROTECT derivation with control)
+and `cargo test -p portuale remote` (shadow parsers + pre-check,
+dependent-drop diamond, placement/option parsing).

@@ -1046,6 +1046,36 @@ const OPTIONS: &[Opt] = &[
         missing: "",
         help: "where /etc/portage resolves from: server:<path> or client:<path> (default client:/etc/portage)",
     },
+    Opt {
+        id: "remote_vdb",
+        long: "--remote-vdb",
+        alias: None,
+        short: None,
+        kind: Kind::Value,
+        choices: &[],
+        missing: "",
+        help: "where the client installed-db lives: server:<path> (stateless: no old hooks, fail-closed collisions) or client:<path> (default client:<root>/var/db/pkg)",
+    },
+    Opt {
+        id: "remote_edb",
+        long: "--remote-edb",
+        alias: None,
+        short: None,
+        kind: Kind::Value,
+        choices: &[],
+        missing: "",
+        help: "binhost-index cache side, informational: server:<path> only (default server:<root>/var/cache/edb); the client has no binhosts",
+    },
+    Opt {
+        id: "remote_ledger_dir",
+        long: "--remote-ledger-dir",
+        alias: None,
+        short: None,
+        kind: Kind::Value,
+        choices: &[],
+        missing: "",
+        help: "server ledger directory override (default <placed-PKGDIR>/remote-ledger)",
+    },
 ];
 
 /// Builds the clap `Arg` for one `Opt` entry, keeping real emerge's
@@ -1679,6 +1709,9 @@ mod tests {
     fn remote_options_are_never_emerge_argv() {
         assert!(!emerge_handles("--remote-hostname"));
         assert!(!emerge_handles("--remote-user"));
+        assert!(!emerge_handles("--remote-vdb"));
+        assert!(!emerge_handles("--remote-edb"));
+        assert!(!emerge_handles("--remote-ledger-dir"));
     }
 
     /// `check_remote` validation: hostname selects remote mode with
@@ -1707,6 +1740,19 @@ mod tests {
             ctx.etc_portage,
             crate::remote::ConfigPlacement::Client("/etc/portage".to_string())
         );
+        // Slice-6 placements: vdb/edb default off the (default) root,
+        // no ledger override, protect lists unflagged.
+        assert_eq!(
+            ctx.vdb,
+            crate::remote::ConfigPlacement::Client("/var/db/pkg".to_string())
+        );
+        assert_eq!(
+            ctx.edb,
+            crate::remote::ConfigPlacement::Server("/var/cache/edb".to_string())
+        );
+        assert_eq!(ctx.ledger_dir, None);
+        assert!(!ctx.config_protect_explicit);
+        assert!(!ctx.config_protect_mask_explicit);
 
         let m = parse(&["--pretend", "cat/pkg"]).unwrap();
         assert!(check_remote(&m).unwrap().is_none());
@@ -1729,5 +1775,40 @@ mod tests {
                 .unwrap_err()
                 .contains("--remote-max-clock-skew")
         );
+
+        // Slice-6 placements: vdb takes either side, edb only server:,
+        // ledger-dir is a plain path, protect flags mark explicitness.
+        let m = parse(&[
+            "--remote-hostname",
+            "h",
+            "--remote-root",
+            "/client-root",
+            "--remote-vdb=server:/srv/vdb",
+            "--remote-ledger-dir=/srv/ledgers",
+            "--remote-config-protect=/custom",
+        ])
+        .unwrap();
+        let ctx = check_remote(&m).unwrap().expect("remote mode");
+        assert_eq!(
+            ctx.vdb,
+            crate::remote::ConfigPlacement::Server("/srv/vdb".to_string())
+        );
+        assert_eq!(
+            ctx.edb,
+            crate::remote::ConfigPlacement::Server("/client-root/var/cache/edb".to_string())
+        );
+        assert_eq!(ctx.ledger_dir.as_deref(), Some("/srv/ledgers"));
+        assert_eq!(ctx.config_protect, "/custom");
+        assert!(ctx.config_protect_explicit);
+        assert!(!ctx.config_protect_mask_explicit);
+
+        let m = parse(&["--remote-hostname", "h", "--remote-vdb=bogus"]).unwrap();
+        assert!(check_remote(&m).unwrap_err().contains("server:<path>"));
+        let m = parse(&["--remote-hostname", "h", "--remote-edb=client:/x"]).unwrap();
+        assert!(check_remote(&m).unwrap_err().contains("no binhosts"));
+        let m = parse(&["--remote-vdb", "server:/srv/vdb"]).unwrap();
+        assert!(check_remote(&m).unwrap_err().contains("--remote-hostname"));
+        let m = parse(&["--remote-ledger-dir", "/srv/ledgers"]).unwrap();
+        assert!(check_remote(&m).unwrap_err().contains("--remote-hostname"));
     }
 }

@@ -10734,13 +10734,27 @@ pub fn run(args: &[String]) -> ExitCode {
             // `ConfigRootOverride`), not the process `$PKGDIR` env the
             // local plan uses -- the server stores against the config it
             // resolved against (plan §7/§8).
-            if let Some(rctx) = crate::remote::take_remote_exec() {
+            if let Some(mut rctx) = crate::remote::take_remote_exec() {
                 if let Err(e) = crate::remote::check_binary_plan(entries) {
                     eprintln!("emerge: {e}");
                     return ExitCode::from(2);
                 }
-                if keep_going {
-                    eprintln!("mrg: warning: remote plan ignores --keep-going (slice 6)");
+                // Slice 6: CONFIG_PROTECT comes from the placed config
+                // (`Config::resolved_incremental` folds the profile +
+                // make.conf stack) unless explicitly flagged -- the
+                // client merge then protects what the client config
+                // protects, not the flag defaults.
+                if !rctx.config_protect_explicit
+                    && let Some(v) = config.resolved_incremental("CONFIG_PROTECT")
+                    && !v.is_empty()
+                {
+                    rctx.config_protect = v.join(" ");
+                }
+                if !rctx.config_protect_mask_explicit
+                    && let Some(v) = config.resolved_incremental("CONFIG_PROTECT_MASK")
+                    && !v.is_empty()
+                {
+                    rctx.config_protect_mask = v.join(" ");
                 }
                 if let Err(e) = crate::remote::run_remote_plan(
                     entries,
@@ -10750,6 +10764,7 @@ pub fn run(args: &[String]) -> ExitCode {
                     &std::path::PathBuf::from(&config.pkgdir),
                     &portage_tmpdir,
                     &rctx,
+                    keep_going,
                 ) {
                     eprintln!("emerge: {e}");
                     return ExitCode::from(1);

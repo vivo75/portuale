@@ -447,13 +447,13 @@ def _write_tmp_binhost(tmp_path):
     return binhost
 
 
-def _write_tmp_clientetc(tmp_path, binhost):
+def _write_tmp_clientetc(tmp_path, binhost, name="clientetc"):
     """A client `/etc/portage` copy of the fixture config, repointed at
     the tmp binhost (absolute repo locations so the copy resolves
     anywhere). Returns the config-root dir."""
     import shutil as _shutil
 
-    clientetc = tmp_path / "clientetc"
+    clientetc = tmp_path / name
     _shutil.copytree(
         Path(FIXTURES_ROOT) / "etc/portage",
         clientetc / "etc/portage",
@@ -608,6 +608,331 @@ def test_mrg_remote_pretend_stays_local(mrg_binary, fixture_env):
     )
     assert result.returncode == 0, result.stderr
     assert "[ebuild  N     ] dev-libs/binpkgrmpkg-2.0" in result.stdout
+
+
+def _write_tmp_keep_binhost(tmp_path):
+    """A `file://` binhost serving the keep-going chain
+    (`dev-libs/rmkga/b/c-1.0`, built by portuale itself into
+    `fixtures/pkgdir`): B's record carries `RDEPEND: dev-libs/rmkga`,
+    and A's record carries a forged SIZE (+100) so its download fails.
+    Returns (binhost_dir, sizes) with real sizes for B and C."""
+    import shutil as _shutil
+
+    binhost = tmp_path / "binhost"
+    (binhost / "dev-libs").mkdir(parents=True)
+    sizes = {}
+    for pkg in ("rmkga", "rmkgb", "rmkgc"):
+        src = Path(FIXTURES_ROOT) / f"pkgdir/dev-libs/{pkg}-1.0.tbz2"
+        _shutil.copy(src, binhost / f"dev-libs/{pkg}-1.0.tbz2")
+        sizes[pkg] = (binhost / f"dev-libs/{pkg}-1.0.tbz2").stat().st_size
+    records = []
+    for pkg, size in (
+        ("rmkga", sizes["rmkga"] + 100),
+        ("rmkgb", sizes["rmkgb"]),
+        ("rmkgc", sizes["rmkgc"]),
+    ):
+        record = (
+            "BUILD_ID: 1\n"
+            f"CPV: dev-libs/{pkg}-1.0\n"
+            "DEFINED_PHASES: install\n"
+            "EAPI: 8\n"
+            "KEYWORDS: amd64\n"
+            f"PATH: dev-libs/{pkg}-1.0.tbz2\n"
+        )
+        if pkg == "rmkgb":
+            record += "RDEPEND: dev-libs/rmkga\n"
+        record += (
+            "REPO: testrepo\n"
+            f"SIZE: {size}\n"
+            "SLOT: 0\n"
+            "USE:\n"
+        )
+        records.append(record)
+    (binhost / "Packages").write_text(
+        "TIMESTAMP: 0\nPACKAGES: 3\n\n" + "\n".join(records)
+    )
+    return binhost
+
+
+def _remote_keep_args(mrg_binary, root, work, clientetc, *extra):
+    """Shared resolve-mode argv for the keep-going chain (server-side
+    `/etc/portage` placement), caller-appends atoms."""
+    return (
+        [str(mrg_binary),
+         "--getbinpkgonly",
+         "--remote-hostname", "localtest",
+         "--remote-transport", "local",
+         "--remote-root", str(root),
+         "--remote-workdir", str(work),
+         "--remote-etc-portage", f"server:{clientetc}",
+         *extra]
+    )
+
+
+def test_mrg_remote_keep_going_merges_rest_and_skips_dependents(
+    mrg_binary, fixture_env, tmp_path
+):
+    """Slice-6 keep-going over local transport: A's forged SIZE fails its
+    download, B (RDEPEND A) is skipped with culprit attribution, C still
+    merges. Trailers + summary print; exit 1 carries the combined
+    failed+skipped report."""
+    binhost = _write_tmp_keep_binhost(tmp_path)
+    clientetc = _write_tmp_clientetc(tmp_path, binhost)
+    root = tmp_path / "root"
+    (root / "var" / "db" / "pkg").mkdir(parents=True)
+    env = _remote_resolve_env(fixture_env, root, clientetc)
+    result = subprocess.run(
+        _remote_keep_args(
+            mrg_binary, root, tmp_path / "work", clientetc,
+            "--keep-going",
+            "dev-libs/rmkga", "dev-libs/rmkgb", "dev-libs/rmkgc",
+        ),
+        capture_output=True, text=True, check=False,
+        env=env,
+    )
+    assert result.returncode == 1, result.stderr
+    assert "!!! Remote dev-libs/rmkga-1.0: failed:" in result.stdout
+    assert "downloaded size" in result.stdout
+    assert (
+        ">>> Remote dev-libs/rmkgb-1.0: skipped (dev-libs/rmkga-1.0 failed)"
+        in result.stdout
+    )
+    assert ">>> Remote merged dev-libs/rmkgc-1.0" in result.stdout
+    assert ">>> Remote summary: 1 merged, 1 failed, 1 skipped" in result.stdout
+    assert "Remote plan finished with 1 failed unit(s)" in result.stderr
+    assert "dependent package(s) not merged" in result.stderr
+    assert (root / "usr/share/rmkgc/payload.txt").is_file()
+    assert (root / "var/db/pkg/dev-libs/rmkgc-1.0/CONTENTS").is_file()
+    assert not (root / "usr/share/rmkgb").exists()
+    assert not (root / "usr/share/rmkga").exists()
+
+
+def test_mrg_remote_without_keep_going_aborts_on_first_failure(
+    mrg_binary, fixture_env, tmp_path
+):
+    """Same broken chain without `--keep-going`: A's download failure
+    aborts the plan -- no summary, no skip trailers, exit 1."""
+    binhost = _write_tmp_keep_binhost(tmp_path)
+    clientetc = _write_tmp_clientetc(tmp_path, binhost)
+    root = tmp_path / "root"
+    (root / "var" / "db" / "pkg").mkdir(parents=True)
+    env = _remote_resolve_env(fixture_env, root, clientetc)
+    result = subprocess.run(
+        _remote_keep_args(
+            mrg_binary, root, tmp_path / "work", clientetc,
+            "dev-libs/rmkga", "dev-libs/rmkgb", "dev-libs/rmkgc",
+        ),
+        capture_output=True, text=True, check=False,
+        env=env,
+    )
+    assert result.returncode == 1, result.stderr
+    assert "downloaded size" in result.stderr
+    assert "Remote summary" not in result.stdout
+    assert "skipped (" not in result.stdout
+
+
+def test_mrg_remote_stateless_vdb_merges_without_old_hooks(
+    mrg_binary, fixture_env, tmp_path
+):
+    """Slice-6 stateless degrade (`--remote-vdb server:`): the client
+    merges files with no vdb entry, no old hooks, and the `STATUS=merged`
+    protocol trailer -- all `skip:stateless-no-vdb`."""
+    binhost = _write_tmp_binhost(tmp_path)
+    clientetc = _write_tmp_clientetc(tmp_path, binhost)
+    root = tmp_path / "root"
+    (root / "var" / "db" / "pkg").mkdir(parents=True)
+    srvvdb = tmp_path / "srvvdb"
+    srvvdb.mkdir()
+    env = _remote_resolve_env(fixture_env, root, clientetc)
+    result = subprocess.run(
+        [str(mrg_binary),
+         "--getbinpkgonly",
+         "--remote-hostname", "localtest",
+         "--remote-transport", "local",
+         "--remote-root", str(root),
+         "--remote-workdir", str(tmp_path / "work"),
+         "--remote-etc-portage", f"server:{clientetc}",
+         "--remote-vdb", f"server:{srvvdb}",
+         "dev-libs/binpkgrmpkg"],
+        capture_output=True, text=True, check=False,
+        env=env,
+    )
+    assert result.returncode == 0, result.stderr
+    assert "run stateless" in result.stdout
+    assert "MERGE_PRERM=skip:stateless-no-vdb" in result.stdout
+    assert "MERGE_VDB=skip:stateless-no-vdb" in result.stdout
+    assert "MERGE_REMOVE=skip:stateless-no-vdb" in result.stdout
+    assert "MERGE_POSTRM=skip:stateless-no-vdb" in result.stdout
+    assert "STATUS=merged" in result.stdout
+    assert ">>> Remote summary: 1 merged, 0 failed, 0 skipped" in result.stdout
+    assert (root / "usr/share/binpkgrmpkg/payload-1.0.txt").is_file()
+    # Stateless keeps no installed-db: no vdb entry for the merged package.
+    assert not (root / "var/db/pkg/dev-libs/binpkgrmpkg-1.0").exists()
+    assert (root / "var/lib/binpkgrmpkg.log").read_text() == (
+        "setup-1.0\npreinst-1.0\npostinst-1.0\n"
+    )
+
+
+def test_mrg_remote_stateless_collision_is_fail_closed(
+    mrg_binary, fixture_env, tmp_path
+):
+    """Stateless with a foreign file at the payload path: the merge
+    refuses (`stateless refusing to overwrite`), the file is untouched,
+    and the `STATUS=failed:collision` trailer surfaces."""
+    binhost = _write_tmp_binhost(tmp_path)
+    clientetc = _write_tmp_clientetc(tmp_path, binhost)
+    root = tmp_path / "root"
+    payload = root / "usr/share/binpkgrmpkg/payload-1.0.txt"
+    payload.parent.mkdir(parents=True)
+    payload.write_text("foreign content\n")
+    (root / "var" / "db" / "pkg").mkdir(parents=True)
+    srvvdb = tmp_path / "srvvdb"
+    srvvdb.mkdir()
+    env = _remote_resolve_env(fixture_env, root, clientetc)
+    result = subprocess.run(
+        [str(mrg_binary),
+         "--getbinpkgonly",
+         "--remote-hostname", "localtest",
+         "--remote-transport", "local",
+         "--remote-root", str(root),
+         "--remote-workdir", str(tmp_path / "work"),
+         "--remote-etc-portage", f"server:{clientetc}",
+         "--remote-vdb", f"server:{srvvdb}",
+         "dev-libs/binpkgrmpkg"],
+        capture_output=True, text=True, check=False,
+        env=env,
+    )
+    assert result.returncode == 1, result.stderr
+    assert "stateless refusing to overwrite" in result.stdout
+    assert "STATUS=failed:collision" in result.stdout
+    assert "!!! Remote dev-libs/binpkgrmpkg-1.0: failed:" in result.stdout
+    assert payload.read_text() == "foreign content\n"
+
+
+def test_mrg_remote_shadow_prefails_a_foreign_owned_unit(
+    mrg_binary, fixture_env, tmp_path
+):
+    """Slice-6 shadow pre-check: the client vdb records another package
+    owning the payload path, so the unit fails with `not shipping`
+    before its tarball streams -- no bundle line, zero client writes."""
+    binhost = _write_tmp_binhost(tmp_path)
+    clientetc = _write_tmp_clientetc(tmp_path, binhost)
+    root = tmp_path / "root"
+    vdb_other = root / "var/db/pkg/dev-libs/rmother-1.0"
+    vdb_other.mkdir(parents=True)
+    (vdb_other / "CONTENTS").write_text(
+        "obj /usr/share/binpkgrmpkg/payload-1.0.txt d41d8cd98f00b204e9800998ecf8427e 1\n"
+    )
+    env = _remote_resolve_env(fixture_env, root, clientetc)
+    result = subprocess.run(
+        [str(mrg_binary),
+         "--getbinpkgonly",
+         "--remote-hostname", "localtest",
+         "--remote-transport", "local",
+         "--remote-root", str(root),
+         "--remote-workdir", str(tmp_path / "work"),
+         "--remote-etc-portage", f"server:{clientetc}",
+         "dev-libs/binpkgrmpkg"],
+        capture_output=True, text=True, check=False,
+        env=env,
+    )
+    assert result.returncode == 1, result.stderr
+    assert "not shipping dev-libs/binpkgrmpkg-1.0" in result.stderr
+    assert "owned by dev-libs/rmother-1.0 (vdb shadow)" in result.stderr
+    assert ">>> Remote bundle" not in result.stdout
+    assert not (root / "usr/share/binpkgrmpkg").exists()
+
+
+def test_mrg_remote_ledger_dir_override(mrg_binary, fixture_env, tmp_path):
+    """`--remote-ledger-dir` moves the server ledger out of the placed
+    PKGDIR; the default location stays absent."""
+    binhost = _write_tmp_binhost(tmp_path)
+    clientetc = _write_tmp_clientetc(tmp_path, binhost)
+    root = tmp_path / "root"
+    (root / "var" / "db" / "pkg").mkdir(parents=True)
+    ledgers = tmp_path / "ledgers"
+    env = _remote_resolve_env(fixture_env, root, clientetc)
+    result = subprocess.run(
+        [str(mrg_binary),
+         "--getbinpkgonly",
+         "--remote-hostname", "localtest",
+         "--remote-transport", "local",
+         "--remote-root", str(root),
+         "--remote-workdir", str(tmp_path / "work"),
+         "--remote-etc-portage", f"server:{clientetc}",
+         "--remote-ledger-dir", str(ledgers),
+         "dev-libs/binpkgrmpkg"],
+        capture_output=True, text=True, check=False,
+        env=env,
+    )
+    assert result.returncode == 0, result.stderr
+    assert "dev-libs/binpkgrmpkg-1.0" in (ledgers / "localtest").read_text()
+    assert not (clientetc / "pkgdir/remote-ledger").exists()
+
+
+def test_mrg_remote_config_protect_comes_from_the_placed_config(
+    mrg_binary, fixture_env, tmp_path
+):
+    """Slice-6 PROTECT derivation: the placed config's
+    `CONFIG_PROTECT=/usr/share` diverts a colliding payload file to a
+    `._cfgNNNN` sibling (original kept); without it the same run dies
+    on collision -- the merge protects what the client config protects,
+    not the flag defaults."""
+    binhost = _write_tmp_binhost(tmp_path)
+    clientetc = _write_tmp_clientetc(tmp_path, binhost)
+    with (clientetc / "etc/portage/make.conf").open("a") as conf:
+        conf.write('\nCONFIG_PROTECT="/usr/share"\n')
+
+    def run(root, work):
+        payload = root / "usr/share/binpkgrmpkg/payload-1.0.txt"
+        payload.parent.mkdir(parents=True, exist_ok=True)
+        payload.write_text("locally modified\n")
+        (root / "var" / "db" / "pkg").mkdir(parents=True, exist_ok=True)
+        env = _remote_resolve_env(fixture_env, root, clientetc)
+        return subprocess.run(
+            [str(mrg_binary),
+             "--getbinpkgonly",
+             "--remote-hostname", "localtest",
+             "--remote-transport", "local",
+             "--remote-root", str(root),
+             "--remote-workdir", str(work),
+             "--remote-etc-portage", f"server:{clientetc}",
+             "dev-libs/binpkgrmpkg"],
+            capture_output=True, text=True, check=False,
+            env=env,
+        ), payload
+
+    result, payload = run(tmp_path / "derived", tmp_path / "work-derived")
+    assert result.returncode == 0, result.stderr
+    assert payload.read_text() == "locally modified\n"
+    diverted = sorted(payload.parent.glob("._cfg????_payload-1.0.txt"))
+    assert len(diverted) == 1, [p.name for p in payload.parent.iterdir()]
+    assert "payload 1.0" in diverted[0].read_text()
+
+    # Control: the same tree without the placed CONFIG_PROTECT clobbers
+    # the unowned file instead (no divert without protection).
+    plainetc = _write_tmp_clientetc(tmp_path, binhost, name="plainetc")
+    env = _remote_resolve_env(fixture_env, tmp_path / "control", plainetc)
+    root = tmp_path / "control"
+    payload = root / "usr/share/binpkgrmpkg/payload-1.0.txt"
+    payload.parent.mkdir(parents=True)
+    payload.write_text("locally modified\n")
+    (root / "var" / "db" / "pkg").mkdir(parents=True)
+    result = subprocess.run(
+        [str(mrg_binary),
+         "--getbinpkgonly",
+         "--remote-hostname", "localtest",
+         "--remote-transport", "local",
+         "--remote-root", str(root),
+         "--remote-workdir", str(tmp_path / "work-control"),
+         "--remote-etc-portage", f"server:{plainetc}",
+         "dev-libs/binpkgrmpkg"],
+        capture_output=True, text=True, check=False,
+        env=env,
+    )
+    assert result.returncode == 0, result.stderr
+    assert "payload 1.0" in payload.read_text()
+    assert list(payload.parent.glob("._cfg????_payload-1.0.txt")) == []
 
 
 def test_mrg_remote_option_without_hostname_is_usage_error(mrg_binary, fixture_env):
