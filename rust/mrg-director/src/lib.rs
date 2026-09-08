@@ -24,6 +24,9 @@
 //! | RepoCache (md5-cache backends) | `portage/cache/template.py::database` (flat_hash/sqlite/anydbm/volatile) | `portage_repo::read_md5_cache` (flat file only) |
 //! | BinpkgFetch | `portage/package/ebuild/fetch.py` + `_emerge/*binpkg*` | `portage_fetch` (real `wget`) + `portage_repo` remote binpkg index |
 //! | MergeEngine | `_emerge/MergeListItem.py` dispatch + `_emerge/PackageMerge.py` / `EbuildMerge.py` / `vartree.py::dblink.merge` | `ebuild_merge::{run_merge, run_qmerge, merge_binpkg}` via `emerge_getbinpkg::run_merge_plan`'s per-entry dispatch |
+//! | BinpkgIndex | `portage/dbapi/bintree.py` (local `$PKGDIR`/`Packages` + remote `PORTAGE_BINHOST` backends) | `PkgdirBinIndex` (local) / `RemoteBinhostIndex` (remote), delegating to `portage_repo::BinaryIndex` reads |
+//! | NewsSet | `portage/news.py::Item.isRelevant`/`isValid` (+ a future GLSA `@security` selector) | `MetadataNews` marker; real evaluation in `pretend.rs::run_check_news` |
+//! | SchedulerPolicy | `_emerge/Scheduler.py::Scheduler._run` (jobs + load-average gate) | `LoadAwarePolicy` marker, the real serial/gated default |
 //! | Director | `actions.py::action_build` (build the depgraph from `create_depgraph_params`, walk the merge list via `Scheduler`) | `struct Director` below (resolve-then-hand-to-engine wiring; the `mrg` applet still calls `pretend::run` directly until a second algorithm lands) |
 //!
 //! Each contract documents: the real source it names, the single
@@ -309,6 +312,129 @@ pub trait MergeEngine {
 }
 
 // ---------------------------------------------------------------------------
+// BinpkgIndex
+// ---------------------------------------------------------------------------
+
+/// A source of **binary-package candidates**: what the director asks when
+/// it wants the built packages available for a `cat/pkg`, from whatever
+/// store backs them.
+///
+/// Grounding: real `portage/dbapi/bintree.py` models the binary-package
+/// database (a `dbapi` subclass) that real `depgraph.py` consults as the
+/// `"binary"` tree. It has exactly two real backends, both of which real
+/// `bintree` presents through the same `dbapi.cp_list`/`dbapi.aux_get`
+/// read facade:
+/// - the **local `$PKGDIR`** store — a `<pkgdir>/Packages` index, or a
+///   directory scan of each binpkg's own embedded metadata when there is
+///   no `Packages` (`bintree._populate_local`, real `packagesFile()` /
+///   `files()`); and
+/// - the **remote `PORTAGE_BINHOST`** store — a synced-`Packages` index
+///   served by a binhost (`bintree._populate`, real `packagesFile()`
+///   over the remote `Packages`), the `--getbinpkg` / `g` bracket
+///   candidate source.
+///
+/// The method set is the two reads resolution actually performs against
+/// a binary db — enumerate a cp's candidates, and pull one candidate's
+/// aux record — mirroring the `"binary"`-side of
+/// `portage_repo::CandidateSource` and the `Packages` `KEY: value` aux
+/// format `BinaryIndex` already parses. Both backends today funnel
+/// through `portage_repo::BinaryIndex`; the trait keeps them swappable
+/// (a content-addressed binpkg store, an OCI-backed one, … are each one
+/// `impl`).
+pub trait BinpkgIndex {
+    /// The binary candidates for `category/package`, real
+    /// `bintree.cp_list` order (highest version first). Empty when the
+    /// store holds nothing of that cp.
+    fn candidates(&self, category: &str, package: &str) -> Vec<portage_repo::Candidate>;
+
+    /// One candidate's raw `Packages` aux record (`CPV`, `SLOT`, `USE`,
+    /// `SIZE`, `BUILD_TIME`, the dep strings, …) — the real
+    /// `bintree.aux_get` surface. `None` when the store has no record
+    /// for that exact CPV.
+    fn metadata(
+        &self,
+        category: &str,
+        package: &str,
+        version: &str,
+    ) -> Option<std::collections::HashMap<String, String>>;
+
+    /// Where this index's candidates come from (`::reponame`, or the
+    /// local `$PKGDIR` path) for provenance in the `g` bracket / `-pv`
+    /// `::repo` decoration.
+    fn source_name(&self) -> String;
+}
+
+// ---------------------------------------------------------------------------
+// NewsSet
+// ---------------------------------------------------------------------------
+
+/// A **news / security-item selector**: the swappable relevance decision
+/// behind `--check-news` (and a future `@security` GLSA read).
+///
+/// Grounding: real `portage/news/` defines the news-item model. The
+/// in-scope (`--check-news`) backend is `Item.isRelevant` (`news.py`,
+/// real `lib/portage/news.py`), which decides a `metadata/news/<id>`
+/// item should be shown by matching its `Display-If-Installed` atom
+/// (or `Display-If-Keyword`/`Display-If-Profile`) against the installed
+/// db; `isValid` (`news.py`) gates on `News-Item-Format`/EAPI.
+/// Portuale's single reading today is `pretend.rs::run_check_news`
+/// (`news_item_valid` + `news_item_relevant`), Rust-only in the binary
+/// crate.
+///
+/// A GLSA `@security` selector (real `_emerge/glsa.Class.glsl` /
+/// `GlsaSet`) would implement the *same* seam — match a security item
+/// against the installed set — which is why the trait is named a
+/// "news/GLSA selector" here: it is the one decision, two data sources.
+/// The GLSA half stays gated on `@security` entering scope
+/// (`scope-backlog.md` Part 3 non-goal), so `MetadataNews` below is the
+/// only implementation today.
+pub trait NewsSelector {
+    /// The `metadata/news/<id>` item id of every **valid, not-already-
+    /// read, currently-relevant** item under the repo/root this selector
+    /// reads (real `NewsManager.updateItems`'s unread/skip accumulation,
+    /// narrowed to the pure relevance decision). Empty when nothing is
+    /// pending.
+    fn unread_ids(&self) -> Vec<String>;
+
+    /// The repo whose `metadata/news` this selector reads, for the
+    /// `… news items need reading for repository '<repo>'.` line.
+    fn repo_name(&self) -> String;
+}
+
+// ---------------------------------------------------------------------------
+// SchedulerPolicy
+// ---------------------------------------------------------------------------
+
+/// A **build-scheduler dispatch policy**: when the `-jN` merge DAG is
+/// allowed to start another build.
+///
+/// Grounding: real `_emerge/Scheduler.py` — `Scheduler._run` decides per
+/// step whether to dispatch another `MergeListItem` from the forward-dep
+/// queue, bounded by `--jobs` and real `--load-average` (`_run`: never
+/// start an *additional* build while the system 1-minute load average is
+/// above the limit — the first build is always allowed so the scheduler
+/// cannot deadlock). Portuale's single reading today is
+/// `emerge_build.rs::run_build_scheduler`'s `in_flight < jobs` +
+/// `system_loadavg_1min` gate, Rust-only in the binary crate.
+///
+/// The policy is the one swappable decision: a different scheduler shape
+/// (a serial `--jobs=1`, a deadline-aware build queue, a throttle that
+/// consults a remote build farm) changes only this method, never the DAG
+/// walk that calls it.
+pub trait SchedulerPolicy {
+    /// Whether to dispatch another build now. `running` is the count
+    /// currently in flight; `loadavg_1min` is the system 1-minute load
+    /// average read from `/proc/loadavg`. Callers guarantee `running <
+    /// [`Self::max_jobs`]` is enforced *before* consulting this, and that
+    /// at least one build is always permitted, so an implementer may
+    /// treat `running == 0` as unconditional.
+    fn should_start(&self, running: usize, loadavg_1min: f64) -> bool;
+
+    /// The hard concurrency ceiling (`--jobs=N`; 1 = serial merge).
+    fn max_jobs(&self) -> usize;
+}
+
+// ---------------------------------------------------------------------------
 // Implementation markers (the single implementations that satisfy the
 // contracts today)
 // ---------------------------------------------------------------------------
@@ -398,12 +524,176 @@ impl Fetcher for WgetFetcher {
     }
 }
 
+/// The local `$PKGDIR` `BinpkgIndex` implementation: reads the binary
+/// candidates real `bintree.py` yields from the local store -- the
+/// `<pkgdir>/Packages` index, or the per-file directory scan when no
+/// `Packages` exists (`bintree._populate_local`) -- via
+/// `portage_repo::BinaryIndex`.
+///
+/// This is one of *two* real binary-package backends (the "second
+/// implementation" the director contract is built to admit): the other is
+/// [`RemoteBinhostIndex`] for a `PORTAGE_BINHOST`. Both satisfy the same
+/// [`BinpkgIndex`] methods over the same
+/// [`portage_repo::BinaryIndex`] aux records, exactly as real `bintree`
+/// presents both through one `dbapi` facade.
+pub struct PkgdirBinIndex<'a> {
+    /// The parsed `$PKGDIR` index the resolution already built (the
+    /// `BinaryIndex::from_pkgdir` / directory-scan value) and the `$PKGDIR`
+    /// path for provenance.
+    pub index: &'a portage_repo::BinaryIndex,
+    /// The `$PKGDIR` directory this reads, for [`BinpkgIndex::source_name`].
+    pub pkgdir: &'a Path,
+}
+impl BinpkgIndex for PkgdirBinIndex<'_> {
+    fn candidates(&self, category: &str, package: &str) -> Vec<portage_repo::Candidate> {
+        portage_repo::list_binary_candidates(self.index, category, package)
+    }
+    fn metadata(
+        &self,
+        category: &str,
+        package: &str,
+        version: &str,
+    ) -> Option<std::collections::HashMap<String, String>> {
+        portage_repo::read_binary_metadata(self.index, category, package, version)
+    }
+    fn source_name(&self) -> String {
+        self.pkgdir.to_string_lossy().into_owned()
+    }
+}
+
+/// The remote `PORTAGE_BINHOST` `BinpkgIndex` implementation: the
+/// synced-`Packages` candidate source behind `--getbinpkg` (the `g`
+/// bracket column).
+///
+/// This is the "second implementation per slot" for the binary-index
+/// slot: real `bintree` has exactly these two backends (local store /
+/// remote binhost), and the director contract admits both behind one
+/// [`BinpkgIndex`]. Delegates to
+/// `portage_repo::list_remote_binary_candidates` for the per-binrepo scan
+/// (which real `bintree._populate` + `dbapi` resolution shadow a locally
+/// present version, the `bintree.isremote` rule) and
+/// `read_binary_metadata_any` for the aux record.
+pub struct RemoteBinhostIndex<'a> {
+    /// The resolved binhost configuration (`binrepos.conf` / `PORTAGE_
+    /// BINHOST`), real `BinRepoConfig` values.
+    pub config: &'a portage_profile::Config,
+    /// The `root` whose `$PKGDIR` the sync lands in (real
+    /// `BinRepo.packages_dir(root)`).
+    pub root: &'a Path,
+    /// The local `$PKGDIR` index — remote candidates a local build already
+    /// provides are shadowed out (real `bintree.isremote`).
+    pub local: &'a portage_repo::BinaryIndex,
+}
+impl BinpkgIndex for RemoteBinhostIndex<'_> {
+    fn candidates(&self, category: &str, package: &str) -> Vec<portage_repo::Candidate> {
+        portage_repo::list_remote_binary_candidates(
+            &self.config.binrepos,
+            self.root,
+            self.local,
+            category,
+            package,
+        )
+    }
+    fn metadata(
+        &self,
+        category: &str,
+        package: &str,
+        version: &str,
+    ) -> Option<std::collections::HashMap<String, String>> {
+        portage_repo::read_binary_metadata_any(
+            self.config,
+            self.root,
+            self.local,
+            category,
+            package,
+            version,
+        )
+    }
+    fn source_name(&self) -> String {
+        self.config
+            .binrepos
+            .iter()
+            .map(|b| b.name.clone())
+            .collect::<Vec<_>>()
+            .join(",")
+    }
+}
+
+/// The current `NewsSelector`: real `--check-news` relevance over the
+/// repo's `metadata/news/<id>/<id>.en.txt` items, gated by
+/// `News-Item-Format`/EAPI validity + `Display-If-Installed` matching
+/// against the installed db (real `portage/news.py::Item.isRelevant` /
+/// `isValid`; portuale's `pretend.rs::news_item_valid` /
+/// `news_item_relevant`).
+///
+/// The real evaluation lives in the `portuale` binary crate's
+/// `run_check_news` (not linkable from a library, the standing pattern);
+/// this marker exists so the *trait* is exercised and the seam stays
+/// pinned. A GLSA `@security` selector (real glsa-check / `GlsaSet`)
+/// would satisfy the same trait once `@security` enters scope — it is
+/// currently a `scope-backlog.md` Part 3 non-goal.
+pub struct MetadataNews;
+impl NewsSelector for MetadataNews {
+    fn unread_ids(&self) -> Vec<String> {
+        // The real accumulation lives in `pretend.rs::run_check_news`
+        // (binary crate). A no-state marker: the seam, not the algorithm.
+        Vec::new()
+    }
+    fn repo_name(&self) -> String {
+        // One selector is built per repo by the CLI layer; the marker
+        // owns none.
+        String::new()
+    }
+}
+
+/// The current `SchedulerPolicy`: real `Scheduler._run`'s per-step gate —
+/// start another build while `running < jobs` and the system 1-minute
+/// load average is under the `--load-average` ceiling (never gating the
+/// first build, so the DAG cannot deadlock).
+///
+/// The real gate lives in `emerge_build.rs::run_build_scheduler`
+/// (`in_flight < jobs` + `system_loadavg_1min`); this marker pins the
+/// seam. A scheduler policy "second implementation" (e.g. a serial
+/// `--jobs=1` always-serial policy, or a deadline/to-be-built-aware
+/// one) satisfies the same two methods.
+#[derive(Debug, Clone, Copy)]
+pub struct LoadAwarePolicy {
+    /// `--jobs` ceiling (`max_jobs`).
+    jobs: usize,
+    /// `--load-average` ceiling; `None` disables load gating.
+    load_average: Option<f64>,
+}
+impl Default for LoadAwarePolicy {
+    fn default() -> Self {
+        // Real portage's default scheduler has no `--jobs`/`--load-average`
+        // bound (bare `-j` = unlimited); the portable default is serial
+        // and ungated.
+        Self {
+            jobs: 1,
+            load_average: None,
+        }
+    }
+}
+impl SchedulerPolicy for LoadAwarePolicy {
+    fn should_start(&self, running: usize, loadavg_1min: f64) -> bool {
+        // The first build is always allowed (real `Scheduler._run` never
+        // gates `in_flight == 0`), and additional ones only while under
+        // the ceilings.
+        running == 0
+            || (running < self.jobs && self.load_average.is_none_or(|la| loadavg_1min <= la))
+    }
+    fn max_jobs(&self) -> usize {
+        self.jobs
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Director
 // ---------------------------------------------------------------------------
 
 /// The `mrg` **director**: one solver, one installed-db, one repo cache,
-/// one fetcher, one merge engine — held together, never implemented here.
+/// one fetcher, one merge engine, one binary-package index, one news
+/// selector, one scheduler policy — held together, never implemented here.
 ///
 /// Grounding: real `actions.py::action_build` builds the depgraph from
 /// `create_depgraph_params(...)` (`actions.py:268`), resolves it, and
@@ -415,20 +705,14 @@ impl Fetcher for WgetFetcher {
 /// database or cache backend, or a different merge method is one
 /// constructor argument, never a call-site change.
 ///
-/// Deliberate v1 narrowness: the director only *holds* the five slots and
+/// Deliberate v1 narrowness: the director only *holds* the eight slots and
 /// exposes `plan()` (solver delegation) today. The fetch→build→merge walk
 /// stays in `pretend.rs` / `emerge_build.rs` / `emerge_getbinpkg.rs`
 /// (and the `mrg` applet still calls `pretend::run` directly) until a
 /// second algorithm actually lands — growing the walk here now, with a
 /// single implementation per slot, would be exactly the dead abstraction
 /// the module doc comment refuses.
-///
-/// Future slots (named so they can be added without renaming anything):
-/// a `BinpkgIndex` over `portage_repo::BinaryIndex` (the `$PKGDIR` scan +
-/// `PORTAGE_BINHOST` `Packages` index behind the `g` bracket column), a
-/// `NewsSet`/`GlsaSet` selector if `@security` ever enters scope, and a
-/// `Scheduler` policy object if the `-jN` build DAG ever becomes swappable.
-pub struct Director<S, D, C, F, M> {
+pub struct Director<S, D, C, F, M, B, N, P> {
     /// Dependency-resolution strategy (the only slot used by `plan()`).
     pub solver: S,
     /// Already-installed packages (`/var/db/pkg` read side).
@@ -439,9 +723,15 @@ pub struct Director<S, D, C, F, M> {
     pub fetcher: F,
     /// Copy/install execution.
     pub merge_engine: M,
+    /// Binary-package candidate store (`$PKGDIR` / `PORTAGE_BINHOST`).
+    pub binpkg_index: B,
+    /// News-item (and future GLSA) relevance selector.
+    pub news_selector: N,
+    /// `-jN` build dispatch policy.
+    pub scheduler_policy: P,
 }
 
-impl<S, D, C, F, M> Director<S, D, C, F, M>
+impl<S, D, C, F, M, B, N, P> Director<S, D, C, F, M, B, N, P>
 where
     S: Resolver,
 {
@@ -601,7 +891,7 @@ mod tests {
 
     /// The [`Director`] holds one component per slot and `plan()` runs
     /// through its solver: swapping the solver swaps the plan, and the
-    /// other four slots ride along untouched. This pins the composition
+    /// other seven slots ride along untouched. This pins the composition
     /// *shape* — field access for the carried slots, plus a bound
     /// assertion that the wired solver really is a [`Resolver`] (which is
     /// exactly what `plan()`'s `S: Resolver` bound requires). It
@@ -611,7 +901,7 @@ mod tests {
     /// contract-shape test's. The delegation body itself is one line
     /// (`self.solver.resolve(req)`), left to inspection.
     #[test]
-    fn director_holds_five_slots_and_plans_through_its_solver() {
+    fn director_holds_eight_slots_and_plans_through_its_solver() {
         struct FakeSolver;
         impl Resolver for FakeSolver {
             fn resolve(&self, _req: &ResolveRequest) -> Result<GraphResult, portage_repo::Error> {
@@ -624,7 +914,17 @@ mod tests {
                 MergeOutcome::Skipped("inert pin".to_string())
             }
         }
-        type Wiring<'a> = Director<FakeSolver, FakeDb<'a>, Md5Cache<'a>, WgetFetcher, FakeEngine>;
+        type Wiring<'a> = Director<
+            FakeSolver,
+            FakeDb<'a>,
+            Md5Cache<'a>,
+            WgetFetcher,
+            FakeEngine,
+            PkgdirBinIndex<'a>,
+            MetadataNews,
+            LoadAwarePolicy,
+        >;
+        let idx = portage_repo::BinaryIndex::from_entries(vec![]);
         let director = Wiring {
             solver: FakeSolver,
             packages_db: FakeDb {
@@ -636,10 +936,128 @@ mod tests {
             },
             fetcher: WgetFetcher,
             merge_engine: FakeEngine,
+            binpkg_index: PkgdirBinIndex {
+                index: &idx,
+                pkgdir: Path::new("/var/cache/binpkgs"),
+            },
+            news_selector: MetadataNews,
+            scheduler_policy: LoadAwarePolicy::default(),
         };
         assert_eq!(director.packages_db.root().to_str(), Some("/root"));
         assert_eq!(director.repo_cache.repo(), "main");
+        assert_eq!(director.binpkg_index.source_name(), "/var/cache/binpkgs");
+        assert!(director.news_selector.unread_ids().is_empty());
+        assert!(director.scheduler_policy.should_start(0, 99.0));
         fn assert_resolver<T: Resolver>() {}
         assert_resolver::<FakeSolver>();
+    }
+
+    /// `BinpkgIndex` admits the two real binary backends (`bintree.py`'s
+    /// local `$PKGDIR` store and its remote `PORTAGE_BINHOST`), both
+    /// satisfying the same three methods over the same aux records — the
+    /// "second implementation per slot" the director's binary-index slot
+    /// is built for. The shape pins: candidates come out as real
+    /// `portage_repo::Candidate`s, metadata as the raw `Packages` aux
+    /// dict, and the source is named for the `g` bracket provenance.
+    #[test]
+    fn binpkg_index_admits_both_local_and_remote_backends() {
+        let entries = vec![std::collections::HashMap::from([
+            ("CPV".to_string(), "dev-libs/localbin-1.0".to_string()),
+            ("SLOT".to_string(), "0".to_string()),
+            ("USE".to_string(), "flag1".to_string()),
+        ])];
+        let idx = portage_repo::BinaryIndex::from_entries(entries);
+        let local = PkgdirBinIndex {
+            index: &idx,
+            pkgdir: Path::new("/var/cache/binpkgs"),
+        };
+        assert_eq!(local.source_name(), "/var/cache/binpkgs");
+        assert_eq!(
+            local
+                .candidates("dev-libs", "localbin")
+                .iter()
+                .map(|c| c.version.clone())
+                .collect::<Vec<_>>(),
+            vec!["1.0".to_string()]
+        );
+        assert_eq!(
+            local
+                .metadata("dev-libs", "localbin", "1.0")
+                .and_then(|m| m.get("USE").cloned()),
+            Some("flag1".to_string())
+        );
+        assert!(local.metadata("dev-libs", "localbin", "9.9").is_none());
+
+        // The remote backend is genuinely a second implementation: it
+        // delegates to the whole-binrepos scan (`bintree.isremote`
+        // shadowing included) and metadata-any. With no binrepos
+        // configured the *candidate* scan is empty (nothing remote), but
+        // `read_binary_metadata_any` still falls back to the local store
+        // for the aux record — exactly real `bintree`'s local-wins read
+        // path. Same seam either way, no panic.
+        let config = portage_profile::Config {
+            ..Default::default()
+        };
+        let remote = RemoteBinhostIndex {
+            config: &config,
+            root: Path::new("/"),
+            local: &idx,
+        };
+        assert!(remote.candidates("dev-libs", "localbin").is_empty());
+        assert_eq!(
+            remote
+                .metadata("dev-libs", "localbin", "1.0")
+                .and_then(|m| m.get("USE").cloned()),
+            Some("flag1".to_string())
+        );
+        assert!(remote.metadata("dev-libs", "localbin", "9.9").is_none());
+        assert_eq!(remote.source_name(), "");
+    }
+
+    /// `NewsSelector` is the pure relevance seam behind `--check-news`:
+    /// the director asks for the valid, relevant, unread item ids and the
+    /// repo owning them; a GLSA `@security` selector would satisfy the
+    /// same two methods (still a Part 3 non-goal). The marker is
+    /// state-free — the real evaluation is `pretend.rs`'s, live-tested
+    /// there, this only pins the shape.
+    #[test]
+    fn news_selector_is_unread_ids_plus_repo() {
+        struct FakeNews;
+        impl NewsSelector for FakeNews {
+            fn unread_ids(&self) -> Vec<String> {
+                vec!["2026-09-01-portuale".to_string()]
+            }
+            fn repo_name(&self) -> String {
+                "gentoo".to_string()
+            }
+        }
+        let n = FakeNews;
+        assert_eq!(n.unread_ids(), vec!["2026-09-01-portuale"]);
+        assert_eq!(n.repo_name(), "gentoo");
+        assert!(MetadataNews.unread_ids().is_empty());
+    }
+
+    /// `SchedulerPolicy` is the one decision the `-jN` DAG asks: start
+    /// another build now? `should_start` always admits the first build
+    /// (so the scheduler can't deadlock, real `Scheduler._run`), then caps
+    /// by `--jobs` and `--load-average`. The marker implements the real
+    /// gate inline — a different policy (serial, deadline-aware, remote
+    /// build-farm) is one `impl` of the same two methods.
+    #[test]
+    fn scheduler_policy_gates_by_jobs_and_load_average() {
+        let serial = LoadAwarePolicy::default();
+        assert_eq!(serial.max_jobs(), 1);
+        assert!(serial.should_start(0, 1.0));
+        assert!(!serial.should_start(1, 0.0));
+
+        let capped = LoadAwarePolicy {
+            jobs: 4,
+            load_average: Some(2.0),
+        };
+        assert_eq!(capped.max_jobs(), 4);
+        assert!(capped.should_start(3, 1.5));
+        assert!(!capped.should_start(3, 2.5));
+        assert!(!capped.should_start(4, 1.5));
+        assert!(capped.should_start(0, 99.0));
     }
 }

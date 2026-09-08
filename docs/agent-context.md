@@ -466,12 +466,17 @@ are not parsed yet). `mrg` is registered in the `Applet` enum /
 **`mrg` director contracts (2026-09-06)**: `mrg` is more than a second
 front end — it is the *director*, orchestrating interchangeable
 components (solver / installed-db / repo cache / fetcher / merge
-method), one per part of portage. The `rust/mrg-director` crate is the
+method / binpkg-index / news selector / scheduler policy — **eight slots
+since 2026-09-08**, when the three named-only future slots
+(`BinpkgIndex` with its local `$PKGDIR` + remote binhost second
+implementation, `NewsSet`, `SchedulerPolicy`) all shipped). The
+`rust/mrg-director` crate is the
 contract layer for that (traits + single-implementation markers + the
 `Director` wiring struct + shape-pinning tests, no runtime behaviour),
 each slot grounded in real `3rdparty/portage/lib` sources
-(`depgraph.py`, `dbapi/vartree.py`, `cache/template.py`,
-`package/ebuild/fetch.py`, `MergeListItem.py`/`PackageMerge.py`).
+(`depgraph.py`, `dbapi/vartree.py`, `bintree.py`, `cache/template.py`,
+`package/ebuild/fetch.py`, `news.py`, `_emerge/Scheduler.py`,
+`MergeListItem.py`/`PackageMerge.py`).
 `mrg` itself still calls `pretend::run` directly until a second
 algorithm per slot actually lands; see `what-this-proves.md`'s "`mrg`
 director contracts" entry and `scope-backlog.md` Part 2.H.

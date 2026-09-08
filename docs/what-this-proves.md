@@ -14782,6 +14782,52 @@ fixture-driven business. `cargo test --release -p mrg-director`: 7
 passed; `cargo clippy --release -p mrg-director --all-targets` zero
 warnings; `cargo fmt --check` clean.
 
+**All three named-but-unbuilt slots shipped 2026-09-08** (the "second
+implementations per director slot" slice): `BinpkgIndex`, `NewsSet`, and
+`SchedulerPolicy` are now real traits with implementations, and the
+`Director<S, D, C, F, M>` wiring struct is `Director<S, D, C, F, M, B,
+N, P>` — eight slots, ten shape-pin tests (the three new ones added).
+
+- **`BinpkgIndex`** names real `portage/dbapi/bintree.py`'s two real
+  backends behind one seam: [`PkgdirBinIndex`] (local `$PKGDIR` store —
+  `<pkgdir>/Packages` or the per-file scan, `bintree._populate_local`)
+  and [`RemoteBinhostIndex`] (remote `PORTAGE_BINHOST` — the synced-
+  `Packages` source, `bintree._populate`; delegates to
+  `portage_repo::list_remote_binary_candidates`, the whole-binrepos scan
+  with the `bintree.isremote` local-wins shadowing, and
+  `read_binary_metadata_any`). This is the slice's genuine **second
+  implementation per slot**: real `bintree` has exactly these two
+  backends, and both are now constructible from the trait. The trait's
+  three methods (`candidates`, `metadata`, `source_name` for the `g`
+  bracket provenance) use only `portage-repo` types (`Candidate`, the
+  aux `HashMap<String, String>`), so a content-addressed or OCI-backed
+  binpkg store is one more `impl` with no director change.
+- **`NewsSet`** names the pure relevance seam behind `--check-news`:
+  real `portage/news.py::Item.isRelevant`/`isValid` (ported as
+  `pretend.rs::news_item_valid`/`news_item_relevant`). The `MetadataNews`
+  marker carries no state — the evaluation lives in the binary crate —
+  but the seam is pinned: `unread_ids()` + `repo_name()` is precisely
+  the surface `Scheduler`/the director needs to print real's
+  `N news items need reading for repository '<repo>'.` block. A GLSA
+  `@security` selector would implement the same two methods and is the
+  reason the slot is called a "news/GLSA selector" (the GLSA half stays
+  a Part 3 non-goal).
+- **`SchedulerPolicy`** names `_emerge/Scheduler.py::Scheduler._run`'s
+  per-step dispatch decision (start another build only while
+  `running < jobs` and under the `--load-average` ceiling; the first
+  build is always allowed so the DAG cannot deadlock). The `LoadAwarePolicy`
+  marker implements that gate inline (`should_start(running,
+  loadavg_1min) -> bool` + `max_jobs()`), with the serial ungated real
+  default as `Default`; a deadline-aware or build-farm-backed policy is
+  one `impl` of the same two methods.
+
+`cargo test --release -p mrg-director`: 10 passed; clippy zero-warn;
+fmt clean. Still not wired end to end: the `mrg` applet continues to
+call `pretend::run` directly, and the fetch→build→merge walk stays in
+the binary crate — landing a *real second algorithm* into one of the
+eight slots (as `--solver=` did for the Solver slot) is the next "second
+implementation" slice, not this one.
+
 ### `solver`: load bridge facts lazily over the request closure (2026-09-07)
 
 `--solver=` lazy closure loading (2026-09-07): the first bridge cut fed

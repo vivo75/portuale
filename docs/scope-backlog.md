@@ -490,7 +490,8 @@ purpose). Current state and what's inside each of the following bullets:
   (see the other Part 2 sections) is open for `mrg` too, by
   definition.
 
-**Director contracts (2026-09-06)**: `mrg` is more than a front end —
+**Director contracts (2026-09-06, eight slots 2026-09-08)**: `mrg` is
+more than a front end —
 it is the **director**, orchestrating interchangeable components, one
 per part of portage. The `rust/mrg-director` crate is the contract
 layer (no runtime behaviour): `Resolver` (re-exported, never
@@ -502,9 +503,22 @@ vdb read side), `RepoCache` (`cache/template.py::database` read side;
 (`MergeListItem`-dispatch-shaped `execute(unit, ctx) -> outcome`),
 plus the `Director` wiring struct (`plan()` = solver delegation).
 Each slot names its single current implementation as the marker to
-replace; future slots (`BinpkgIndex`, news/GLSA, scheduler policy)
-are named, not built. What remains is landing *second*
-implementations per slot — new-algorithm work, not new-seam work
+replace. **The three previously-named-only future slots shipped
+2026-09-08**: `BinpkgIndex` (real `bintree.py`'s two real backends,
+both now behind the trait — local `$PKGDIR` [`PkgdirBinIndex`] and
+remote `PORTAGE_BINHOST` [`RemoteBinhostIndex`], a genuine second
+implementation per slot; both delegate to the `portage_repo::BinaryIndex`
+reads the `g` bracket column already runs), `NewsSet`
+(`portage/news.py::Item.isRelevant`/`isValid` — `MetadataNews` marker;
+the real evaluation stays in `pretend.rs::run_check_news`; a GLSA
+`@security` selector would satisfy the same seam but remains gated on
+`@security` entering scope, Part 3), and `SchedulerPolicy`
+(`_emerge/Scheduler.py::Scheduler._run`'s jobs + `--load-average` gate —
+`LoadAwarePolicy` marker implementing the serial/gated default inline).
+The `Director<S, D, C, F, M>` struct is now `Director<S, D, C, F, M, B,
+N, P>` carrying all eight slots; contract tests grew from seven shape
+pins to ten. What remains is landing further *second* implementations
+per slot — new-algorithm work, not new-seam work
 (see `what-this-proves.md`'s "`mrg` director contracts" entry).
 
 **`--solver=` alternate backends (2026-09-07)**: the solver slot's

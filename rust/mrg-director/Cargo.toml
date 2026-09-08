@@ -10,3 +10,4 @@ edition.workspace = true
 # mrg director names so each component can be swapped independently.
 portage-repo = { path = "../portage-repo" }
 portage-fetch = { path = "../portage-fetch" }
+portage-profile = { path = "../portage-profile" }

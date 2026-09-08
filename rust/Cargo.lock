@@ -1271,6 +1271,7 @@ name = "mrg-director"
 version = "0.1.0"
 dependencies = [
  "portage-fetch",
+ "portage-profile",
  "portage-repo",
 ]
 
