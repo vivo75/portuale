@@ -15546,6 +15546,28 @@ Deliberate deviations recorded: stateless writes no vdb entry at all
 (single-writer principle -- the server owns installed-db state), and
 the pre-check is lenient on same-package ownership by design.
 
+`mrg --remote-require-ledger-match` strict provenance (2026-09-09,
+remote-merge plan §8 / open question 4): the ledger pins the *provenance
+story* (which server repos + commits a client state came from), but v1
+left mismatch informational. This closes the "later" cut with a Flag
+that turns mismatch into a fail-early gate: before any unit ships, the
+server reads the client's newest ledger line (`<root>/var/db/remote-repos`,
+over the same transport) and its own record for that hostname
+(`<ledger-dir>/<hostname>`, last-10), and the two newest lines must
+agree -- both absent (a fresh client with no server record) or
+byte-identical. Any asymmetry (the client lost its ledger, was reimaged
+or hand-edited, or was last merged by a different server) aborts with
+both lines named, exit 1, zero client writes. `RemoteContext` gains
+`require_ledger_match`, parsed from the new `mrg` flag (type-agnostic
+`provided()` presence check joins `REMOTE_OPTION_IDS` so the bool flag
+and the string-valued `--remote-*` options share one "requires
+--remote-hostname" path); the gate runs in `run_remote_plan` right after
+the vdb-shadow load, before the merge loop -- pure `ledger_lines_match`
+comparison unit-tested, plus black-box tests
+(`test_mrg_remote_require_ledger_match_aborts_on_mismatch`,
+`..._passes_when_records_agree` -- the latter pins both the
+byte-identical and the both-fresh cases over local transport).
+
 Contract-suite hermeticity (2026-09-08, test-only slice): the suite
 never writes under `fixtures/` anymore. Bisecting order-dependent
 failures (inotify correlation + chunk runs) found the single polluter:

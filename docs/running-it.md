@@ -2318,11 +2318,31 @@ portuale mrg --getbinpkgonly --keep-going --remote-transport local \
 
 Deterministic slice tests: `pytest tests/test_portuale.py -k
 "keep_going or aborts_on_first or stateless or shadow_prefails or
-ledger_dir or protect_comes"` (keep-going merge/skip/report, abort
-without it, stateless fresh + fail-closed collision, shadow
-pre-ship gate, ledger-dir override, PROTECT derivation with control)
-and `cargo test -p portuale remote` (shadow parsers + pre-check,
-dependent-drop diamond, placement/option parsing).
+ledger_dir or protect_comes or require_ledger_match"` (keep-going
+merge/skip/report, abort without it, stateless fresh + fail-closed
+collision, shadow pre-ship gate, ledger-dir override, PROTECT derivation
+with control, ledger-match strict mode) and `cargo test -p portuale
+remote` (shadow parsers + pre-check, dependent-drop diamond,
+placement/option parsing, ledger-match comparison).
+
+`mrg --remote-require-ledger-match` (2026-09-09): strict ledger
+provenance -- abort before anything ships unless the client's and
+server's newest ledger line agree. Live-verified over local transport
+(client ledger at `<root>/var/db/remote-repos`, server record at
+`<placed-PKGDIR>/remote-ledger/<hostname>`):
+
+```sh
+# drift: the client claims provenance this server never shipped
+mkdir -p $T/root/var/db; echo "1700000000 otherrepo deadbeef dev-libs/ghost-9.9" > $T/root/var/db/remote-repos
+portuale mrg --getbinpkgonly --remote-require-ledger-match \
+  --remote-hostname x --remote-transport local --remote-root $T/root \
+  --remote-workdir $T/work --remote-etc-portage server:$T/cfgroot \
+  dev-libs/binpkgrmpkg
+# emerge: mrg: --remote-require-ledger-match: the client ledger provenance disagrees with the server record for x:
+# mrg:   client: 1700000000 otherrepo deadbeef dev-libs/ghost-9.9
+# mrg:   server: (no ledger)
+# (exit 1, nothing merged)
+```
 
 `--check-news` `News-Item-Format` 1.x/2.x atom gate (2026-09-08): a
 1.x item validates its `Display-If-Installed` atom under EAPI 0 (no

@@ -265,10 +265,12 @@ record *which* repos the resolved binpkgs were built from:
   serialization format to version).
 - The `Packages` index the server resolved against already pins the
   binpkg bytes; the ledger pins the *provenance story* ("this client
-  state came from server repos at these commits"). No enforcement on
-  mismatch in v1 (a `--remote-require-ledger-match` strict mode is a
-  named future slice), but the preflight prints the client's last
-  ledger line for the operator.
+  state came from server repos at these commits"). By default a mismatch
+  is informational; `--remote-require-ledger-match` turns it into a
+  fail-early gate (before anything ships): the client's and server's
+  *newest* ledger line must agree -- both absent (a fresh client with no
+  server record) or byte-identical -- otherwise the run aborts naming
+  both lines (shipped 2026-09-09).
 
 Commit hash source: `git -C <repo> rev-parse HEAD` + `git show -s
 --format=%ct` at bundle-build time (repos are git checkouts in
@@ -328,6 +330,7 @@ Required values are clap-required; unknown values exit 2 via clap.
 | `--remote-config-protect` | Value | `/etc` | space-separated CONFIG_PROTECT list for the client merge (the placed config's own value wins unless flagged -- slice 6 derives it via `resolved_incremental`). |
 | `--remote-config-protect-mask` | Value | `/etc/env.d` | space-separated CONFIG_PROTECT_MASK list (same derivation rule). |
 | `--remote-ledger-dir` | Value | `<placed-PKGDIR>/remote-ledger` | server ledger directory override (slice 6). |
+| `--remote-require-ledger-match` | Flag | off | strict-mode ledger provenance enforcement (§8): abort before anything ships unless the client's and server's newest ledger line agree (shipped 2026-09-09). |
 | `--remote-transport` | Value `ssh\|local` | `ssh` | how driver scripts and files reach the client; `local` runs the identical generated driver against local paths (offline debugging, SSH-free driver tests). |
 | `--remote-binpkg` | Value | — | bundle, stream and unpack one explicit binpkg file, bypassing resolution (slices 2-4 trials; later an escape hatch). |
 
@@ -479,7 +482,10 @@ disables -- only for labs with no NTP).
 3. Same-slot replace when the old version's vdb env is missing
    client-side: fail the unit, or merge without old hooks (local code
    degrades)? Lean: fail-closed (matches collision stance).
-4. Ledger strict mode (`--remote-require-ledger-match`) now or later?
-   Lean: later (named, §8).
+4. ~~Ledger strict mode (`--remote-require-ledger-match`) now or later?~~
+   **Shipped 2026-09-09**: a Flag that aborts before anything ships
+   unless the client's and server's newest ledger line agree (both
+   absent = fresh, or byte-identical). Default stays off -- mismatch is
+   informational without it.
 5. `env_update`/`ldconfig` on exotic clients (no `ldconfig`)? Lean:
    best-effort + logged, never fatal (matches postinst stance).

@@ -1076,6 +1076,16 @@ const OPTIONS: &[Opt] = &[
         missing: "",
         help: "server ledger directory override (default <placed-PKGDIR>/remote-ledger)",
     },
+    Opt {
+        id: "remote_require_ledger_match",
+        long: "--remote-require-ledger-match",
+        alias: None,
+        short: None,
+        kind: Kind::Flag,
+        choices: &[],
+        missing: "",
+        help: "enforce that the client's ledger provenance matches the server's record for this hostname (abort on mismatch, before anything merges)",
+    },
 ];
 
 /// Builds the clap `Arg` for one `Opt` entry, keeping real emerge's
@@ -1712,6 +1722,7 @@ mod tests {
         assert!(!emerge_handles("--remote-vdb"));
         assert!(!emerge_handles("--remote-edb"));
         assert!(!emerge_handles("--remote-ledger-dir"));
+        assert!(!emerge_handles("--remote-require-ledger-match"));
     }
 
     /// `check_remote` validation: hostname selects remote mode with
@@ -1751,6 +1762,7 @@ mod tests {
             crate::remote::ConfigPlacement::Server("/var/cache/edb".to_string())
         );
         assert_eq!(ctx.ledger_dir, None);
+        assert!(!ctx.require_ledger_match);
         assert!(!ctx.config_protect_explicit);
         assert!(!ctx.config_protect_mask_explicit);
 
@@ -1801,6 +1813,13 @@ mod tests {
         assert_eq!(ctx.config_protect, "/custom");
         assert!(ctx.config_protect_explicit);
         assert!(!ctx.config_protect_mask_explicit);
+
+        let m = parse(&["--remote-hostname", "h", "--remote-require-ledger-match"]).unwrap();
+        let ctx = check_remote(&m).unwrap().expect("remote mode");
+        assert!(ctx.require_ledger_match);
+
+        let m = parse(&["--remote-require-ledger-match"]).unwrap();
+        assert!(check_remote(&m).unwrap_err().contains("--remote-hostname"));
 
         let m = parse(&["--remote-hostname", "h", "--remote-vdb=bogus"]).unwrap();
         assert!(check_remote(&m).unwrap_err().contains("server:<path>"));

@@ -171,6 +171,10 @@ pub struct RemoteContext {
     /// Server ledger directory override (`None` =
     /// `<placed-PKGDIR>/remote-ledger`).
     pub ledger_dir: Option<String>,
+    /// Strict-mode ledger provenance enforcement
+    /// (`--remote-require-ledger-match`, plan §8): abort before merging
+    /// anything unless the client's and server's newest ledger line agree.
+    pub require_ledger_match: bool,
     /// Space-separated CONFIG_PROTECT list for the client merge (real
     /// default `/etc`; the resolve path derives it from the placed
     /// config unless explicitly flagged -- slice 6).
@@ -204,10 +208,21 @@ const REMOTE_OPTION_IDS: &[&str] = &[
     "remote_vdb",
     "remote_edb",
     "remote_ledger_dir",
+    "remote_require_ledger_match",
 ];
 
 fn get(matches: &ArgMatches, id: &str) -> Option<String> {
     matches.get_one::<String>(id).cloned()
+}
+
+/// Whether `id` was provided on the command line, type-agnostic -- the
+/// `REMOTE_OPTION_IDS` presence check must see both `Value` string
+/// options and `Flag` bools (which `get_one::<String>` would panic on).
+fn provided(matches: &ArgMatches, id: &str) -> bool {
+    matches.contains_id(id)
+        && matches
+            .value_source(id)
+            .is_some_and(|src| src == clap::parser::ValueSource::CommandLine)
 }
 
 /// Validate the `--remote-*` surface: `Ok(None)` = local mode,
@@ -215,10 +230,7 @@ fn get(matches: &ArgMatches, id: &str) -> Option<String> {
 pub fn check_remote(matches: &ArgMatches) -> Result<Option<RemoteContext>, String> {
     let hostname = get(matches, "remote_hostname");
     let Some(hostname) = hostname else {
-        if let Some(offender) = REMOTE_OPTION_IDS
-            .iter()
-            .find(|id| get(matches, id).is_some())
-        {
+        if let Some(offender) = REMOTE_OPTION_IDS.iter().find(|id| provided(matches, id)) {
             let long = format!("--{}", offender.replace('_', "-"));
             return Err(format!("mrg: {long} requires --remote-hostname"));
         }
@@ -311,6 +323,7 @@ pub fn check_remote(matches: &ArgMatches) -> Result<Option<RemoteContext>, Strin
         vdb,
         edb,
         ledger_dir: get(matches, "remote_ledger_dir").filter(|d| !d.is_empty()),
+        require_ledger_match: matches.get_flag("remote_require_ledger_match"),
         config_protect,
         config_protect_explicit,
         config_protect_mask,
@@ -1053,6 +1066,11 @@ pub(crate) fn run_remote_plan(
         Some(dir) => std::path::PathBuf::from(dir),
         None => pkgdir.join("remote-ledger"),
     };
+    // Strict-mode provenance gate (plan §8): fail early, before anything
+    // ships, when the client and server ledger record disagree.
+    if ctx.require_ledger_match {
+        check_ledger_match(ctx, control, &server_ledger_base)?;
+    }
     // cp -> the cps that depend on it (each entry's own `required_by`),
     // the same edge set `run_merge_loop` drops on.
     let dependents: HashMap<(String, String), Vec<(String, String)>> = entries
@@ -1463,6 +1481,100 @@ pub(crate) fn record_server_ledger(
 /// `<ctx.root>/var/db/remote-repos` (a plain file, not the vdb).
 fn client_ledger_file(ctx: &RemoteContext) -> String {
     format!("{}/var/db/remote-repos", ctx.root.trim_end_matches('/'))
+}
+
+/// The newest (last non-empty) line of a last-10 ledger file: the plan's
+/// append-ordered `<unix-ts> <repo> <commit> <cpv>` line (`docs/
+/// remote-merge.md` §8). `None` for an absent/empty ledger -- a client
+/// (or server) that has never recorded provenance.
+fn newest_ledger_line(text: &str) -> Option<String> {
+    text.lines()
+        .map(str::trim)
+        .rfind(|line| !line.is_empty())
+        .map(String::from)
+}
+
+/// The server-side ledger record for one hostname:
+/// `<base>/<hostname>` (last 10 kept). `None` when absent/empty.
+fn server_latest_ledger(base: &std::path::Path, hostname: &str) -> Option<String> {
+    std::fs::read_to_string(base.join(sanitize_hostname(hostname)))
+        .ok()
+        .and_then(|text| newest_ledger_line(&text))
+}
+
+/// Strict-mode provenance comparison (`--remote-require-ledger-match`,
+/// plan §8): the client's and server's *newest* ledger line must agree --
+/// both absent (fresh client + no server record) or byte-identical. Any
+/// asymmetry is drift: a client that lost its ledger, was reimaged or
+/// hand-edited, or was last merged by a different server.
+fn ledger_lines_match(client: Option<&str>, server: Option<&str>) -> bool {
+    match (client, server) {
+        (None, None) => true,
+        (Some(c), Some(s)) => c == s,
+        _ => false,
+    }
+}
+
+/// Read the client ledger's newest line over the transport (plan §8's
+/// "provenance story"). Missing/empty reads as `None`; only a transport
+/// or command failure is an `Err`.
+fn read_client_latest_ledger(
+    ctx: &RemoteContext,
+    control: Option<&std::path::Path>,
+) -> Result<Option<String>, String> {
+    let file = client_ledger_file(ctx);
+    let script = format!(
+        "f={};\nif [ -f \"$f\" ]; then tail -n 1 \"$f\"; fi\n",
+        sh_quote(&file)
+    );
+    let output = run_script_stdin(ctx, control, &script).map_err(|message| {
+        if ctx.transport == RemoteTransport::Local {
+            format!("mrg: local ledger read failed: {message}")
+        } else {
+            message
+        }
+    })?;
+    let code = output.status.code();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    if !output.status.success() {
+        if ctx.transport == RemoteTransport::Ssh && is_transport_error(code, &stderr) {
+            let mut message = format!("mrg: client {} unreachable:", ctx.hostname);
+            for line in stderr.lines().take(5) {
+                message.push_str(&format!("\nmrg:   {line}"));
+            }
+            return Err(message);
+        }
+        let mut message = format!(
+            "mrg: reading the client ledger failed (exit {}):",
+            code.unwrap_or(-1)
+        );
+        for line in stderr.lines().take(5) {
+            message.push_str(&format!("\nmrg:   {line}"));
+        }
+        return Err(message);
+    }
+    Ok(newest_ledger_line(&String::from_utf8_lossy(&output.stdout)))
+}
+
+/// The strict-mode gate: abort with no client writes unless the client's
+/// and server's newest ledger line agree (both-absent = fresh = ok).
+fn check_ledger_match(
+    ctx: &RemoteContext,
+    control: Option<&std::path::Path>,
+    server_ledger_base: &std::path::Path,
+) -> Result<(), String> {
+    let client = read_client_latest_ledger(ctx, control)?;
+    let server = server_latest_ledger(server_ledger_base, &ctx.hostname);
+    if ledger_lines_match(client.as_deref(), server.as_deref()) {
+        return Ok(());
+    }
+    let show = |line: Option<&str>| line.unwrap_or("(no ledger)").to_string();
+    Err(format!(
+        "mrg: --remote-require-ledger-match: the client ledger provenance disagrees with the server record for {}:\nmrg:   client: {}\nmrg:   server: {}",
+        ctx.hostname,
+        show(client.as_deref()),
+        show(server.as_deref()),
+    ))
 }
 
 // --- Vdb shadow + pre-ship collision pre-check (slice 6) ----------------------
@@ -2699,6 +2811,7 @@ mod tests {
             vdb: ConfigPlacement::Client("/var/db/pkg".to_string()),
             edb: ConfigPlacement::Server("/var/cache/edb".to_string()),
             ledger_dir: None,
+            require_ledger_match: false,
         }
     }
 
@@ -2750,6 +2863,30 @@ mod tests {
         assert_eq!(kept[0], "line4");
         assert_eq!(kept[9], "line13");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn newest_ledger_line_reads_the_last_non_empty_line() {
+        assert_eq!(newest_ledger_line(""), None);
+        assert_eq!(newest_ledger_line("\n\n"), None);
+        assert_eq!(
+            newest_ledger_line("10 old 0 pkg\n20 new 1 pkg\n"),
+            Some("20 new 1 pkg".to_string())
+        );
+        assert_eq!(newest_ledger_line("a\nb\n\n"), Some("b".to_string()));
+    }
+
+    #[test]
+    fn ledger_lines_match_requires_byte_identical_newest_lines() {
+        let line = "1700000000 testrepo abc123 dev-libs/x-1.0";
+        assert!(ledger_lines_match(None, None));
+        assert!(ledger_lines_match(Some(line), Some(line)));
+        assert!(!ledger_lines_match(
+            Some(line),
+            Some("1700000001 testrepo def dev-libs/y-2.0")
+        ));
+        assert!(!ledger_lines_match(None, Some(line)));
+        assert!(!ledger_lines_match(Some(line), None));
     }
 
     #[test]
@@ -3088,6 +3225,7 @@ mod tests {
             vdb: ConfigPlacement::Client(format!("{root}/var/db/pkg")),
             edb: ConfigPlacement::Server(format!("{root}/var/cache/edb")),
             ledger_dir: None,
+            require_ledger_match: false,
         }
     }
 

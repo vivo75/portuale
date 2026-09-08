@@ -897,6 +897,87 @@ def test_mrg_remote_ledger_dir_override(mrg_binary, fixture_env, tmp_path):
     assert not (clientetc / "pkgdir/remote-ledger").exists()
 
 
+def test_mrg_remote_require_ledger_match_aborts_on_mismatch(
+    mrg_binary, fixture_env, tmp_path
+):
+    """Strict-mode ledger provenance (`--remote-require-ledger-match`):
+    a client whose ledger records provenance the server never shipped
+    aborts before anything merges, exit 1, with both lines shown."""
+    binhost = _write_tmp_binhost(tmp_path)
+    clientetc = _write_tmp_clientetc(tmp_path, binhost)
+    root = tmp_path / "root"
+    (root / "var" / "db" / "pkg").mkdir(parents=True)
+    (root / "var" / "db" / "remote-repos").parent.mkdir(parents=True, exist_ok=True)
+    (root / "var" / "db" / "remote-repos").write_text(
+        "1700000000 otherrepo deadbeef dev-libs/ghost-9.9\n"
+    )
+    env = _remote_resolve_env(fixture_env, root, clientetc)
+    result = subprocess.run(
+        [str(mrg_binary),
+         "--getbinpkgonly",
+         "--remote-hostname", "localtest",
+         "--remote-transport", "local",
+         "--remote-root", str(root),
+         "--remote-workdir", str(tmp_path / "work"),
+         "--remote-etc-portage", f"server:{clientetc}",
+         "--remote-require-ledger-match",
+         "dev-libs/binpkgrmpkg"],
+        capture_output=True, text=True, check=False,
+        env=env,
+    )
+    assert result.returncode == 1, result.stderr
+    assert "--remote-require-ledger-match" in result.stderr
+    assert "client: 1700000000 otherrepo deadbeef dev-libs/ghost-9.9" in result.stderr
+    assert "server: (no ledger)" in result.stderr
+    assert not (root / "usr/share/binpkgrmpkg").exists()
+    assert not (root / "var/db/pkg/dev-libs/binpkgrmpkg-1.0").exists()
+
+
+def test_mrg_remote_require_ledger_match_passes_when_records_agree(
+    mrg_binary, fixture_env, tmp_path
+):
+    """Strict-mode passes when the client's and server's newest ledger
+    line agree -- both byte-identical (a server-known provenance) and a
+    fresh client + fresh server record (both absent)."""
+    binhost = _write_tmp_binhost(tmp_path)
+    clientetc = _write_tmp_clientetc(tmp_path, binhost)
+
+    def run(root):
+        (root / "var" / "db" / "pkg").mkdir(parents=True)
+        env = _remote_resolve_env(fixture_env, root, clientetc)
+        return subprocess.run(
+            [str(mrg_binary),
+             "--getbinpkgonly",
+             "--remote-hostname", "localtest",
+             "--remote-transport", "local",
+             "--remote-root", str(root),
+             "--remote-workdir", str(root.parent / f"work-{root.name}"),
+             "--remote-etc-portage", f"server:{clientetc}",
+             "--remote-require-ledger-match",
+             "dev-libs/binpkgrmpkg"],
+            capture_output=True, text=True, check=False,
+            env=env,
+        )
+
+    # Both absent: a fresh client still merges under strict mode.
+    fresh = run(tmp_path / "fresh")
+    assert fresh.returncode == 0, fresh.stderr
+    assert (tmp_path / "fresh/usr/share/binpkgrmpkg/payload-1.0.txt").is_file()
+
+    # Both identical: the client's recorded provenance is one this server
+    # shipped, so the merge proceeds.
+    line = "1700000000 testrepo 0123456789abcdef dev-libs/binpkgrmpkg-1.0\n"
+    root = tmp_path / "agreed"
+    server_ledger = clientetc / "pkgdir/remote-ledger/localtest"
+    server_ledger.parent.mkdir(parents=True, exist_ok=True)
+    server_ledger.write_text(line)
+    (root / "var" / "db").mkdir(parents=True, exist_ok=True)
+    (root / "var" / "db" / "remote-repos").write_text(line)
+    agreed = run(root)
+    assert agreed.returncode == 0, agreed.stderr
+    assert (root / "usr/share/binpkgrmpkg/payload-1.0.txt").is_file()
+
+
 def test_mrg_remote_config_protect_comes_from_the_placed_config(
     mrg_binary, fixture_env, tmp_path
 ):
