@@ -518,6 +518,26 @@ mod tests {
     }
 
     #[test]
+    fn select_phases_intersects_defined_words_in_order() {
+        assert_eq!(
+            select_phases("install postinst postrm preinst prerm setup", true, true),
+            vec!["setup".to_string(), "preinst".to_string(),]
+        );
+        assert_eq!(
+            select_phases("pretend setup preinst postinst", true, true),
+            vec![
+                "pretend".to_string(),
+                "setup".to_string(),
+                "preinst".to_string(),
+            ]
+        );
+        // Missing ebuild or environment degrades to no phases.
+        assert!(select_phases("pretend setup preinst", false, true).is_empty());
+        assert!(select_phases("pretend setup preinst", true, false).is_empty());
+        assert!(select_phases("-", true, true).is_empty());
+    }
+
+    #[test]
     fn bundle_stages_image_build_info_environment_and_manifest() {
         let tmp = tempdir("stage");
         let staged = build_bundle(BuildBundleArgs {

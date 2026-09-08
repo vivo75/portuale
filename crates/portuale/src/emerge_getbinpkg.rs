@@ -1158,6 +1158,60 @@ mod tests {
     }
 
     #[test]
+    fn merge_binpkg_rejects_a_tampered_signed_gpkg() {
+        // Flip a byte of the signed container's `image.tar.gz` (repacked so the
+        // tar framing stays parseable): the merge must fail on the `.sig` before
+        // anything is unpacked.
+        let tmp = tempdir();
+        let outer = tmp.join("outer");
+        std::fs::create_dir_all(&outer).unwrap();
+        let src = fixtures_root().join("pkgdir/dev-libs/gpgsignedpkg-1.0.gpkg.tar");
+        let status = std::process::Command::new("tar")
+            .args(["-xf"])
+            .arg(&src)
+            .args(["-C"])
+            .arg(&outer)
+            .status()
+            .unwrap();
+        assert!(status.success());
+        let member = outer.join("gpgsignedpkg-1.0/image.tar.gz");
+        let mut bytes = std::fs::read(&member).unwrap();
+        let mid = bytes.len() / 2;
+        bytes[mid] ^= 0xff;
+        std::fs::write(&member, bytes).unwrap();
+        let tampered = tmp.join("tampered.gpkg.tar");
+        // List the prefix's files, not the prefix dir: a `<prefix>/` directory
+        // member would be refused by the one-level structure check.
+        let mut pack = std::process::Command::new("tar");
+        pack.args(["-cf"]).arg(&tampered).args(["-C"]).arg(&outer);
+        for file in std::fs::read_dir(outer.join("gpgsignedpkg-1.0")).unwrap() {
+            pack.arg(format!(
+                "gpgsignedpkg-1.0/{}",
+                file.unwrap().file_name().to_string_lossy()
+            ));
+        }
+        let status = pack.status().unwrap();
+        assert!(status.success());
+
+        let root = tmp.join("root");
+        std::fs::create_dir_all(&root).unwrap();
+        let home = test_gpg_home();
+        let options = MergeOptions {
+            gpg_verify: test_gpg_verify(&home),
+            ..MergeOptions::default()
+        };
+        let err =
+            ebuild_merge::merge_binpkg(&tampered, &root, &tmp.join("portage_tmpdir"), &options)
+                .unwrap_err();
+        assert!(err.contains("GnuPG verification failed"), "{err}");
+        assert!(
+            !root.join("var/db/pkg/dev-libs/gpgsignedpkg-1.0").exists(),
+            "nothing is merged on a signature failure"
+        );
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
     fn merge_binpkg_installs_a_real_tbz2_into_the_vdb() {
         let tmp = tempdir();
         let root = tmp.join("root");

@@ -77,6 +77,55 @@ fn fixture(name: &str) -> std::path::PathBuf {
         .join(name)
 }
 
+/// [`synthetic_unit`] with binary payloads.
+fn synthetic_unit_bytes(
+    tmp: &std::path::Path,
+    files: &[(&str, &[u8])],
+) -> (String, crate::remote_bundle::StagedBundle) {
+    let unit = tmp.join("work/probe-1.0");
+    let image = unit.join("image");
+    let build_info = unit.join("build-info");
+    std::fs::create_dir_all(&build_info).unwrap();
+    for (rel, content) in files {
+        let path = image.join(rel);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, content).unwrap();
+    }
+    for (name, content) in [
+        ("PF", "probe-1.0"),
+        ("CATEGORY", "dev-libs"),
+        ("SLOT", "0"),
+        ("DEFINED_PHASES", "-"),
+    ] {
+        std::fs::write(build_info.join(name), content).unwrap();
+    }
+    let entries = crate::remote_bundle::collect_filemeta(&image).unwrap();
+    let filemeta = crate::remote_bundle::render_filemeta(&entries).unwrap();
+    std::fs::write(unit.join("filemeta"), &filemeta).unwrap();
+    let staged = crate::remote_bundle::StagedBundle {
+        tarball: tmp.join("bundle.tar"),
+        byte_count: 0,
+        manifest: crate::remote_bundle::BundleManifest {
+            format: 1,
+            cpv: "dev-libs/probe-1.0".to_string(),
+            slot: "0".to_string(),
+            repo: "test".to_string(),
+            has_environment: false,
+        },
+        eapi: "8".to_string(),
+        category: "dev-libs".to_string(),
+        pn: "probe".to_string(),
+        pv: "1.0".to_string(),
+        pr: "r0".to_string(),
+        pvr: "1.0".to_string(),
+        p: "probe-1.0".to_string(),
+        pf: "probe-1.0".to_string(),
+        phases: Vec::new(),
+        postinst_defined: false,
+    };
+    (unit.to_str().unwrap().to_string(), staged)
+}
+
 fn local_ctx(root: &str, workdir: &str) -> RemoteContext {
     // Direct stage runs (no preflight) still need a resolved absolute
     // path in the fixture context: the built `portuale` binary.
@@ -132,6 +181,87 @@ fn build_time_environment(with_postinst: bool) -> String {
     lines.join("\n") + "\n"
 }
 
+/// A full client unit for the regen tests: image + build-info (with the
+/// given ebuild text and `DEFINED_PHASES`) + build-time `$UNIT/environment`
+/// + runtime `bin/` + `filemeta`.
+fn regen_unit(
+    tmp: &std::path::Path,
+    ebuild: &str,
+    defined_phases: &str,
+) -> (String, crate::remote_bundle::StagedBundle) {
+    let unit = tmp.join("work/regen-1.0");
+    let image = unit.join("image");
+    let build_info = unit.join("build-info");
+    std::fs::create_dir_all(&build_info).unwrap();
+    let path = image.join("usr/share/regen/payload.txt");
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(&path, "payload\n").unwrap();
+    for (name, content) in [
+        ("PF", "regen-1.0"),
+        ("CATEGORY", "dev-libs"),
+        ("SLOT", "0"),
+        ("DEFINED_PHASES", defined_phases),
+    ] {
+        std::fs::write(build_info.join(name), content).unwrap();
+    }
+    std::fs::write(build_info.join("regen-1.0.ebuild"), ebuild).unwrap();
+    // The saved env carries the hooks the phase runs (an ebuild without
+    // `pkg_postinst` yields an env without one).
+    let with_postinst = ebuild.contains("pkg_postinst()");
+    std::fs::write(
+        unit.join("environment"),
+        build_time_environment(with_postinst),
+    )
+    .unwrap();
+    // Like a binpkg, `build-info/` carries the build-time
+    // `environment.bz2` (the vdb fallback the regen later overwrites).
+    {
+        let compressed = bzip2_compress(build_time_environment(with_postinst).as_bytes())
+            .expect("server bzip2 compresses");
+        std::fs::write(build_info.join("environment.bz2"), &compressed).unwrap();
+    }
+    let status = std::process::Command::new("cp")
+        .args(["-a"])
+        .arg(crate::ebuild_phases::bin_dir().unwrap())
+        .arg(unit.join("bin"))
+        .status()
+        .expect("cp -a bin");
+    assert!(status.success());
+    // Mirror `build_bundle`: the regen run's
+    // `${PORTAGE_BZIP2_COMMAND}` stand-in rides `bin/`.
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        let passthrough = unit.join("bin").join("bzip2-passthrough");
+        std::fs::write(&passthrough, crate::remote_bundle::BZIP2_PASSTHROUGH).unwrap();
+        std::fs::set_permissions(&passthrough, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let entries = crate::remote_bundle::collect_filemeta(&image).unwrap();
+    let filemeta = crate::remote_bundle::render_filemeta(&entries).unwrap();
+    std::fs::write(unit.join("filemeta"), &filemeta).unwrap();
+    let staged = crate::remote_bundle::StagedBundle {
+        tarball: tmp.join("bundle.tar"),
+        byte_count: 0,
+        manifest: crate::remote_bundle::BundleManifest {
+            format: 1,
+            cpv: "dev-libs/regen-1.0".to_string(),
+            slot: "0".to_string(),
+            repo: "test".to_string(),
+            has_environment: true,
+        },
+        eapi: "8".to_string(),
+        category: "dev-libs".to_string(),
+        pn: "regen".to_string(),
+        pv: "1.0".to_string(),
+        pr: "r0".to_string(),
+        pvr: "1.0".to_string(),
+        p: "regen-1.0".to_string(),
+        pf: "regen-1.0".to_string(),
+        phases: Vec::new(),
+        postinst_defined: defined_phases.split_whitespace().any(|w| w == "postinst"),
+    };
+    (unit.to_str().unwrap().to_string(), staged)
+}
+
 fn regen_tmp(tag: &str) -> std::path::PathBuf {
     TempDir::new(&format!("portuale-remote-regen-{tag}")).keep()
 }
@@ -152,6 +282,32 @@ fn read_vdb_env(vdb_env_bz2: &std::path::Path) -> String {
         .expect("server bzip2 decompresses");
     assert!(output.status.success());
     String::from_utf8(output.stdout).unwrap()
+}
+
+/// A minimal staged bundle for the render-level regen script test
+/// (the script only needs the identity fields).
+fn render_test_staged() -> crate::remote_bundle::StagedBundle {
+    crate::remote_bundle::StagedBundle {
+        tarball: std::path::PathBuf::from("/tmp/bundle.tar"),
+        byte_count: 0,
+        manifest: crate::remote_bundle::BundleManifest {
+            format: 1,
+            cpv: "dev-libs/regen-1.0".to_string(),
+            slot: "0".to_string(),
+            repo: "test".to_string(),
+            has_environment: true,
+        },
+        eapi: "8".to_string(),
+        category: "dev-libs".to_string(),
+        pn: "regen".to_string(),
+        pv: "1.0".to_string(),
+        pr: "r0".to_string(),
+        pvr: "1.0".to_string(),
+        p: "regen-1.0".to_string(),
+        pf: "regen-1.0".to_string(),
+        phases: Vec::new(),
+        postinst_defined: true,
+    }
 }
 
 /// Saved env for an old instance: `declare -x` lines (the
@@ -290,3 +446,4 @@ mod host_keys;
 mod merge_script;
 mod preflight;
 mod ssh;
+mod stages;

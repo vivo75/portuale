@@ -1,5 +1,74 @@
 use super::*;
 
+/// `phase_exports` carries `MERGE_TYPE=binary` exactly when
+/// `eapi_exports_merge_type` holds (expected value from Portage).
+#[test]
+fn phase_exports_gates_merge_type_on_eapi() {
+    // Binpkg merges set `MERGE_TYPE=binary`; EAPI < 4 gates it off.
+    fn exports_for(eapi: &str) -> String {
+        let staged = crate::remote_bundle::StagedBundle {
+            tarball: std::path::PathBuf::from("/tmp/bundle.tar"),
+            byte_count: 0,
+            manifest: crate::remote_bundle::BundleManifest {
+                format: 1,
+                cpv: "dev-libs/probe-1.0".to_string(),
+                slot: "0".to_string(),
+                repo: "test".to_string(),
+                has_environment: false,
+            },
+            eapi: eapi.to_string(),
+            category: "dev-libs".to_string(),
+            pn: "probe".to_string(),
+            pv: "1.0".to_string(),
+            pr: "r0".to_string(),
+            pvr: "1.0".to_string(),
+            p: "probe-1.0".to_string(),
+            pf: "probe-1.0".to_string(),
+            phases: Vec::new(),
+            postinst_defined: false,
+        };
+        phase_exports(PhaseExportsArgs {
+            ebuild: "/tmp/work/build-info/probe-1.0.ebuild",
+            build_dir: "/tmp/work",
+            root: "/",
+            image_dir: "/tmp/work/image",
+            temp_dir: "/tmp/work/temp",
+            work_subdir: "/tmp/work/work",
+            home_dir: "/tmp/work/homedir",
+            files_dir: "/tmp/work/files",
+            bin_dir: "/tmp/work/bin",
+            tmpdir: "/tmp",
+            colormap: "",
+            staged: &staged,
+            phase: "setup",
+            portuale_bin: "/opt/bin/portuale-0123456789abcdef",
+        })
+    }
+    assert!(eapi_exports_merge_type("4"));
+    assert!(eapi_exports_merge_type("8"));
+    assert!(!eapi_exports_merge_type("0"));
+    assert!(!eapi_exports_merge_type("3"));
+    assert!(!eapi_exports_merge_type("2"));
+    assert!(eapi_exports_merge_type("5"));
+    assert!(eapi_exports_merge_type("9"));
+    assert!(eapi_exports_merge_type("3-foo"));
+    assert!(eapi_exports_merge_type("bogus"));
+    let exporting = exports_for("8");
+    assert!(
+        exporting.contains("export EBUILD_PHASE=setup EMERGE_FROM=binary MERGE_TYPE=binary\n"),
+        "EAPI 8 must export MERGE_TYPE=binary:\n{exporting}"
+    );
+    let gated = exports_for("3");
+    assert!(
+        !gated.contains("MERGE_TYPE"),
+        "EAPI 3 must not export MERGE_TYPE:\n{gated}"
+    );
+    assert!(
+        gated.contains("export EBUILD_PHASE=setup EMERGE_FROM=binary\n"),
+        "EAPI 3 keeps the bare EMERGE_FROM line:\n{gated}"
+    );
+}
+
 /// A synthetic unit (hand-written ebuild + environment carrying
 /// `pkg_pretend`, the shipped `bin/`) runs the generated phase script
 /// under local bash; the ebuild/env being synthetic is the only gap.

@@ -261,3 +261,124 @@ fn remote_merge_masks_image_and_lands_aux_files_in_vdb() {
     );
     let _ = std::fs::remove_dir_all(&tmp);
 }
+
+/// End to end through both shell fragments: a staged unit with modes
+/// 4711/2755/1750 plus a 2750 directory must keep those modes on the
+/// merged root after unpack + merge.
+#[test]
+fn unpack_then_merge_preserves_special_mode_bits() {
+    use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
+
+    let tmp = TempDir::new("portuale-remote-setuid").keep();
+    let pf = "probe-1.0";
+    // Stage the unit the way `build_bundle` lays it out (`<pf>/` with
+    // image/, build-info/, remote-manifest, filemeta).
+    let staging = tmp.join("staging").join(pf);
+    let image = staging.join("image");
+    for (rel, mode) in [
+        ("usr/bin/pt-setuid", 0o4711u32),
+        ("usr/bin/pt-setgid", 0o2755u32),
+        ("usr/bin/pt-sticky", 0o1750u32),
+    ] {
+        let path = image.join(rel);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, b"probe payload\n").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(mode)).unwrap();
+    }
+    let sgiddir = image.join("usr/lib/pt-sgiddir");
+    std::fs::create_dir_all(&sgiddir).unwrap();
+    std::fs::set_permissions(&sgiddir, std::fs::Permissions::from_mode(0o2750)).unwrap();
+    let build_info = staging.join("build-info");
+    std::fs::create_dir_all(&build_info).unwrap();
+    for (name, content) in [
+        ("PF", "probe-1.0"),
+        ("CATEGORY", "dev-libs"),
+        ("SLOT", "0"),
+        ("DEFINED_PHASES", "-"),
+    ] {
+        std::fs::write(build_info.join(name), content).unwrap();
+    }
+    // The unpack driver only gates `FORMAT=` in the manifest.
+    std::fs::write(staging.join("remote-manifest"), "FORMAT=1\n").unwrap();
+    let entries = crate::remote_bundle::collect_filemeta(&image).unwrap();
+    let filemeta = crate::remote_bundle::render_filemeta(&entries).unwrap();
+    std::fs::write(staging.join("filemeta"), &filemeta).unwrap();
+    // Tar `<pf>/` like `build_bundle` (`tar -cf`, `-C` the staging dir),
+    // then deliver it as the streamed bundle.
+    let tarball = tmp.join("bundle.tar");
+    let status = std::process::Command::new("tar")
+        .args(["-cf"])
+        .arg(&tarball)
+        .args(["-C"])
+        .arg(tmp.join("staging"))
+        .arg(pf)
+        .status()
+        .expect("tar -cf stages the bundle");
+    assert!(status.success());
+    let byte_count = std::fs::metadata(&tarball).unwrap().len();
+    let work = tmp.join("work");
+    let unit = work.join(pf);
+    std::fs::create_dir_all(&unit).unwrap();
+    std::fs::copy(&tarball, unit.join("bundle.tar")).unwrap();
+
+    let script = unpack_script(work.to_str().unwrap(), pf, byte_count);
+    let output = std::process::Command::new("bash")
+        .args(["-s"])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .and_then(|mut child| {
+            use std::io::Write as _;
+            child.stdin.take().unwrap().write_all(script.as_bytes())?;
+            child.wait_with_output()
+        })
+        .expect("local bash runs the driver");
+    let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+    assert!(
+        output.status.success() && stdout.contains("UNPACK=ok"),
+        "unpack driver failed:\n{stdout}"
+    );
+
+    let root = tmp.join("root");
+    std::fs::create_dir_all(root.join("var/db/pkg")).unwrap();
+    let staged = crate::remote_bundle::StagedBundle {
+        tarball: tmp.join("bundle.tar"),
+        byte_count: 0,
+        manifest: crate::remote_bundle::BundleManifest {
+            format: 1,
+            cpv: "dev-libs/probe-1.0".to_string(),
+            slot: "0".to_string(),
+            repo: "test".to_string(),
+            has_environment: false,
+        },
+        eapi: "8".to_string(),
+        category: "dev-libs".to_string(),
+        pn: "probe".to_string(),
+        pv: "1.0".to_string(),
+        pr: "r0".to_string(),
+        pvr: "1.0".to_string(),
+        p: "probe-1.0".to_string(),
+        pf: "probe-1.0".to_string(),
+        phases: Vec::new(),
+        postinst_defined: false,
+    };
+    let ctx = local_ctx(root.to_str().unwrap(), work.to_str().unwrap());
+    let markers =
+        run_merge_stage(&ctx, None, unit.to_str().unwrap(), &staged, None).expect("merge succeeds");
+    assert!(markers.iter().any(|m| m == "MERGE_COPY=ok"), "{markers:?}");
+
+    for (rel, mode) in [
+        ("usr/bin/pt-setuid", 0o4711u32),
+        ("usr/bin/pt-setgid", 0o2755u32),
+        ("usr/bin/pt-sticky", 0o1750u32),
+        ("usr/lib/pt-sgiddir", 0o2750u32),
+    ] {
+        let got = std::fs::metadata(root.join(rel)).unwrap().mode() & 0o7777;
+        assert_eq!(
+            got, mode,
+            "{rel}: special mode bits must survive unpack + merge"
+        );
+    }
+    let _ = std::fs::remove_dir_all(&tmp);
+}
