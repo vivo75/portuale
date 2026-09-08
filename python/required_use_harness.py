@@ -17,8 +17,12 @@ Usage:
         iuse: comma-separated declared IUSE flags, or "-" for none
         token...: the REQUIRED_USE string's whitespace-separated tokens
       -> "true" | "false" | "ERROR"
+    required_use_harness.py reduce <enabled> <iuse> <token...>
+      -> "-" when satisfied, else the human-readable minimal unsatisfied
+         sub-expression (real check_required_use(...).tounicode() run
+         through human_readable_required_use), or "ERROR"
     required_use_harness.py batch
-      -> reads "check <enabled> <iuse> <token...>" lines from stdin, one
+      -> reads "<op> <enabled> <iuse> <token...>" lines from stdin, one
          result per line
 """
 
@@ -31,7 +35,7 @@ sys.path.insert(0, os.path.join(
     "lib",
 ))
 
-from portage.dep import check_required_use
+from portage.dep import check_required_use, human_readable_required_use
 from portage.exception import InvalidDependString
 
 
@@ -52,11 +56,30 @@ def _format_check(enabled_arg, iuse_arg, tokens):
     return "true" if satisfied else "false"
 
 
+def _format_reduce(enabled_arg, iuse_arg, tokens):
+    enabled = _parse_set(enabled_arg)
+    iuse = _parse_set(iuse_arg)
+    required_use = " ".join(tokens)
+    try:
+        result = check_required_use(
+            required_use, enabled, lambda flag: flag in iuse, eapi="8"
+        )
+    except InvalidDependString:
+        return "ERROR"
+    if bool(result):
+        return "-"
+    return human_readable_required_use(result.tounicode())
+
+
 def _dispatch(op, args):
     if op == "check":
         if len(args) < 2:
             raise ValueError("check expects at least 2 args (enabled, iuse)")
         return _format_check(args[0], args[1], args[2:])
+    if op == "reduce":
+        if len(args) < 2:
+            raise ValueError("reduce expects at least 2 args (enabled, iuse)")
+        return _format_reduce(args[0], args[1], args[2:])
     raise ValueError(f"unknown op {op!r}")
 
 

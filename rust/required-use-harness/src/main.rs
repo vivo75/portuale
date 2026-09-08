@@ -12,11 +12,15 @@
 //                 us, same convention use-reduce-harness's own "reduce"
 //                 op already uses)
 //     -> "true" | "false" | "ERROR"
+//   required-use-harness reduce <enabled> <iuse> <token...>
+//     -> "-" when satisfied, else the human-readable minimal unsatisfied
+//        sub-expression (real check_required_use(...).tounicode() run
+//        through human_readable_required_use), or "ERROR"
 //   required-use-harness batch
-//     -> reads "check <enabled> <iuse> <token...>" lines from stdin, one
+//     -> reads "<op> <enabled> <iuse> <token...>" lines from stdin, one
 //        result per line
 
-use portage_required_use::check_required_use;
+use portage_required_use::{check_required_use, human_readable, unsatisfied_reduced};
 use std::collections::HashSet;
 use std::process::ExitCode;
 
@@ -39,6 +43,17 @@ fn format_check(enabled_arg: &str, iuse_arg: &str, tokens: &[&str]) -> String {
     }
 }
 
+fn format_reduce(enabled_arg: &str, iuse_arg: &str, tokens: &[&str]) -> String {
+    let enabled = parse_set(enabled_arg);
+    let iuse = parse_set(iuse_arg);
+    let required_use = tokens.join(" ");
+    match unsatisfied_reduced(&required_use, &enabled, &iuse) {
+        Ok(None) => "-".to_string(),
+        Ok(Some(reduced)) => human_readable(&reduced),
+        Err(_) => "ERROR".to_string(),
+    }
+}
+
 fn dispatch(op: &str, args: &[&str]) -> Result<String, String> {
     match op {
         "check" => {
@@ -46,6 +61,15 @@ fn dispatch(op: &str, args: &[&str]) -> Result<String, String> {
                 return Err("check expects at least 2 args (enabled, iuse)".to_string());
             };
             Ok(format_check(enabled, iuse, tokens))
+        }
+        // "reduce": "-" when satisfied, else the human-readable minimal
+        // unsatisfied sub-expression (real depgraph.py's "The following
+        // REQUIRED_USE flag constraints are unsatisfied:" line).
+        "reduce" => {
+            let [enabled, iuse, tokens @ ..] = args else {
+                return Err("reduce expects at least 2 args (enabled, iuse)".to_string());
+            };
+            Ok(format_reduce(enabled, iuse, tokens))
         }
         other => Err(format!("unknown op {other:?}")),
     }

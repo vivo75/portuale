@@ -17,26 +17,22 @@
 // REQUIRED_USE at all (those are USE-*dep*, atom-only forms -- see
 // `portage-dep`'s own `UseDepOp`; a completely different grammar).
 //
+// [`check_required_use`] is a direct recursive-descent boolean evaluator
+// (`parse_items`); real `check_required_use` instead builds a
+// `_RequiredUseBranch` tree while it evaluates and returns that (its
+// `__bool__` is the verdict). The two agree on the verdict for every
+// input -- verified via the `required-use-harness`/`required_use_
+// harness.py` pair driven by `test_required_use_contract.py`, the same
+// wraps-the-real-thing pattern `use-reduce-harness` established.
+//
+// [`unsatisfied_reduced`] DOES port the tree (`build_required_use_tree`
+// + `RuTree::tounicode`, the `)` handler's node surgery included): real
+// `depgraph.py::_show_unsatisfied_dep` renders `tree.tounicode()` -- the
+// minimal still-unsatisfied sub-expression -- for its "The following
+// REQUIRED_USE flag constraints are unsatisfied:" line. Also verified
+// against real, via the harness `reduce` op.
+//
 // KNOWN, DOCUMENTED SIMPLIFICATIONS vs. real `check_required_use`:
-//   - Real `check_required_use` builds and returns a full
-//     `_RequiredUseBranch` tree (bool-coercible via `__bool__`, but also
-//     independently navigable) purely so a *caller* can later extract and
-//     pretty-print exactly which sub-expression failed
-//     (`human_readable_required_use`, real depgraph.py's own elaborate,
-//     colorized "The following REQUIRED_USE flag constraints are
-//     unsatisfied" report). Portuale only ever needs the final yes/no
-//     verdict (`resolve_pretend_graph` reports a violation with a short,
-//     honest, portuale-specific message showing the package's own full,
-//     as-declared REQUIRED_USE string -- not real portage's own
-//     "reduced," violation-only sub-expression -- same "portuale-specific
-//     summary, not a port of real formatting" precedent `--help` already
-//     set), so this port is a much simpler direct recursive-descent
-//     boolean evaluator with no tree bookkeeping at all -- verified to
-//     agree with real `check_required_use` on every case via the
-//     `required-use-harness`/`required_use_harness.py` pair, driven by
-//     the shared `test_required_use_contract.py` suite, the same
-//     wraps-the-real-thing verification pattern `use-reduce-harness`
-//     already established.
 //   - `empty_groups_always_true` (real `lib/portage/eapi.py`:
 //     `eapi <= Eapi("6")`) is never applied: an empty group (`( )`,
 //     `|| ( )`, etc -- PMS's own formal grammar actually requires "one or
@@ -205,6 +201,379 @@ pub fn check_required_use(
     Ok(!results.contains(&false))
 }
 
+/// Rewrites the `||`/`^^`/`??` operators of a REQUIRED_USE string to
+/// their human-readable spellings -- real `portage.dep.
+/// human_readable_required_use` (a plain three-way `str.replace`), which
+/// real `depgraph.py::_show_unsatisfied_dep` applies to both the
+/// reduced and the complete REQUIRED_USE expression before printing.
+pub fn human_readable(required_use: &str) -> String {
+    required_use
+        .replace("^^", "exactly-one-of")
+        .replace("||", "any-of")
+        .replace("??", "at-most-one-of")
+}
+
+// --- reduced "unsatisfied subset" expression -------------------------
+//
+// Real `check_required_use` builds a `_RequiredUseBranch` /
+// `_RequiredUseLeaf` tree while it evaluates; `bool(tree)` is the verdict
+// (what portuale's own `check_required_use` above returns directly), and
+// `tree.tounicode()` renders *only the still-unsatisfied portion* --
+// real depgraph.py's "The following REQUIRED_USE flag constraints are
+// unsatisfied: <this>" line. `unsatisfied_reduced` ports that tree build
+// + the exact node-collapsing done in real's `)` handler + `tounicode`.
+// The evaluation logic is duplicated from the recursive-descent
+// `check_required_use` above rather than shared; the two are cross-checked
+// (tree `_satisfied` == `check_required_use`) by the crate's own tests
+// and the `required-use-harness` contract.
+
+const VALID_OPERATORS: [&str; 3] = ["||", "^^", "??"];
+
+#[derive(Debug)]
+enum RuNode {
+    Leaf {
+        token: String,
+        satisfied: bool,
+    },
+    Branch {
+        operator: Option<String>,
+        children: Vec<usize>,
+        satisfied: bool,
+        parent: Option<usize>,
+    },
+}
+
+#[derive(Debug)]
+enum StackItem {
+    Bool(bool),
+    Op(String),
+}
+
+struct RuTree {
+    nodes: Vec<RuNode>,
+}
+
+impl RuTree {
+    fn push_branch(&mut self, operator: Option<String>, parent: Option<usize>) -> usize {
+        self.nodes.push(RuNode::Branch {
+            operator,
+            children: Vec::new(),
+            satisfied: false,
+            parent,
+        });
+        self.nodes.len() - 1
+    }
+
+    fn push_leaf(&mut self, token: &str, satisfied: bool) -> usize {
+        self.nodes.push(RuNode::Leaf {
+            token: token.to_string(),
+            satisfied,
+        });
+        self.nodes.len() - 1
+    }
+
+    fn is_branch(&self, i: usize) -> bool {
+        matches!(self.nodes[i], RuNode::Branch { .. })
+    }
+
+    fn operator(&self, i: usize) -> Option<String> {
+        match &self.nodes[i] {
+            RuNode::Branch { operator, .. } => operator.clone(),
+            RuNode::Leaf { .. } => None,
+        }
+    }
+
+    fn parent(&self, i: usize) -> Option<usize> {
+        match &self.nodes[i] {
+            RuNode::Branch { parent, .. } => *parent,
+            RuNode::Leaf { .. } => None,
+        }
+    }
+
+    fn set_parent(&mut self, i: usize, p: Option<usize>) {
+        if let RuNode::Branch { parent, .. } = &mut self.nodes[i] {
+            *parent = p;
+        }
+    }
+
+    fn set_satisfied(&mut self, i: usize, v: bool) {
+        if let RuNode::Branch { satisfied, .. } = &mut self.nodes[i] {
+            *satisfied = v;
+        }
+    }
+
+    fn satisfied(&self, i: usize) -> bool {
+        match &self.nodes[i] {
+            RuNode::Branch { satisfied, .. } | RuNode::Leaf { satisfied, .. } => *satisfied,
+        }
+    }
+
+    fn children(&self, i: usize) -> Vec<usize> {
+        match &self.nodes[i] {
+            RuNode::Branch { children, .. } => children.clone(),
+            RuNode::Leaf { .. } => Vec::new(),
+        }
+    }
+
+    fn push_child(&mut self, branch: usize, child: usize) {
+        if let RuNode::Branch { children, .. } = &mut self.nodes[branch] {
+            children.push(child);
+        }
+    }
+
+    fn pop_child(&mut self, branch: usize) -> Option<usize> {
+        if let RuNode::Branch { children, .. } = &mut self.nodes[branch] {
+            children.pop()
+        } else {
+            None
+        }
+    }
+
+    /// Real `_RequiredUseBranch.tounicode` / `_RequiredUseLeaf.tounicode`
+    /// -- a leaf is its own token; a branch prints its operator + parens
+    /// (parens only when it has a parent), and, *unless* it is inside a
+    /// `||`/`^^`/`??` ancestor, drops every already-satisfied child.
+    fn tounicode(&self, i: usize) -> String {
+        match &self.nodes[i] {
+            RuNode::Leaf { token, .. } => token.clone(),
+            RuNode::Branch {
+                operator,
+                children,
+                parent,
+                ..
+            } => {
+                let include_parens = parent.is_some();
+                let mut tokens: Vec<String> = Vec::new();
+                if let Some(op) = operator {
+                    tokens.push(op.clone());
+                }
+                if include_parens {
+                    tokens.push("(".to_string());
+                }
+                // real: walk up ancestors; "complex nesting" == some
+                // ancestor (or self) is a ||/^^/?? operator.
+                let mut complex_nesting = false;
+                let mut node = Some(i);
+                while let Some(n) = node {
+                    if self
+                        .operator(n)
+                        .is_some_and(|o| VALID_OPERATORS.contains(&o.as_str()))
+                    {
+                        complex_nesting = true;
+                        break;
+                    }
+                    node = self.parent(n);
+                }
+                for &child in children {
+                    if complex_nesting || !self.satisfied(child) {
+                        tokens.push(self.tounicode(child));
+                    }
+                }
+                if include_parens {
+                    tokens.push(")".to_string());
+                }
+                tokens.join(" ")
+            }
+        }
+    }
+}
+
+/// Builds real's `_RequiredUseBranch` tree for `required_use` under
+/// `enabled`/`iuse` and returns `(tree, root, satisfied)`. A faithful
+/// port of the tree-building half of real `portage.dep.
+/// check_required_use` (the `)` handler's node surgery included).
+fn build_required_use_tree(
+    required_use: &str,
+    enabled: &HashSet<String>,
+    iuse: &HashSet<String>,
+) -> Result<(RuTree, usize, bool), Error> {
+    let is_op = |s: &str| VALID_OPERATORS.contains(&s);
+    let is_satisfied = |operator: &str, argument: &[bool]| -> bool {
+        let tc = argument.iter().filter(|&&b| b).count();
+        match operator {
+            "||" => tc >= 1,
+            "^^" => tc == 1,
+            "??" => tc <= 1,
+            _ => !argument.contains(&false), // "flag?" -> "False not in argument"
+        }
+    };
+
+    let tokens: Vec<&str> = required_use.split_whitespace().collect();
+    let mut tree = RuTree {
+        nodes: vec![RuNode::Branch {
+            operator: None,
+            children: Vec::new(),
+            satisfied: false,
+            parent: None,
+        }],
+    };
+    let root = 0usize;
+    let mut node = root;
+    let mut stack: Vec<Vec<StackItem>> = vec![Vec::new()];
+    let mut level = 0usize;
+    let mut need_bracket = false;
+
+    for &token in &tokens {
+        if token == "(" {
+            if !need_bracket {
+                let child = tree.push_branch(None, Some(node));
+                tree.push_child(node, child);
+                node = child;
+            }
+            need_bracket = false;
+            stack.push(Vec::new());
+            level += 1;
+        } else if token == ")" {
+            if need_bracket {
+                return Err(Error::MissingOpenParen);
+            }
+            if level == 0 {
+                return Err(Error::UnbalancedParens);
+            }
+            level -= 1;
+            let l: Vec<bool> = stack
+                .pop()
+                .unwrap()
+                .into_iter()
+                .map(|it| match it {
+                    StackItem::Bool(b) => b,
+                    // a dangling operator inside a closed group == malformed
+                    StackItem::Op(_) => false,
+                })
+                .collect();
+            let mut op: Option<String> = None;
+            let last_is_op = matches!(stack[level].last(), Some(StackItem::Op(s)) if is_op(s));
+            let last_is_cond =
+                matches!(stack[level].last(), Some(StackItem::Op(s)) if s.ends_with('?'));
+            if last_is_op {
+                let Some(StackItem::Op(o)) = stack[level].pop() else {
+                    unreachable!()
+                };
+                let sat = is_satisfied(&o, &l);
+                stack[level].push(StackItem::Bool(sat));
+                tree.set_satisfied(node, sat);
+                op = Some(o);
+            } else if last_is_cond {
+                let Some(StackItem::Op(o)) = stack[level].pop() else {
+                    unreachable!()
+                };
+                op = Some(o.clone());
+                if is_active(&o[..o.len() - 1], enabled, iuse)? {
+                    let sat = is_satisfied(&o, &l);
+                    stack[level].push(StackItem::Bool(sat));
+                    tree.set_satisfied(node, sat);
+                } else {
+                    // inactive use-conditional -> vacuously satisfied, and
+                    // the whole group node is dropped from the tree.
+                    tree.set_satisfied(node, true);
+                    let popped = tree.pop_child(tree.parent(node).unwrap());
+                    debug_assert_eq!(popped, Some(node));
+                    node = tree.parent(node).unwrap();
+                    continue;
+                }
+            }
+
+            if op.is_none() {
+                // bare all-of group "( ... )"
+                let sat = !l.contains(&false);
+                tree.set_satisfied(node, sat);
+                if !l.is_empty() {
+                    stack[level].push(StackItem::Bool(sat));
+                }
+                let parent = tree.parent(node).unwrap();
+                let parent_op_is_valid = tree.operator(parent).is_some_and(|o| is_op(&o));
+                if tree.children(node).len() <= 1 || !parent_op_is_valid {
+                    let popped = tree.pop_child(parent);
+                    debug_assert_eq!(popped, Some(node));
+                    for child in tree.children(node) {
+                        tree.push_child(parent, child);
+                        if tree.is_branch(child) {
+                            tree.set_parent(child, Some(parent));
+                        }
+                    }
+                }
+            } else if tree.children(node).is_empty() {
+                // empty operator group -> drop it
+                let popped = tree.pop_child(tree.parent(node).unwrap());
+                debug_assert_eq!(popped, Some(node));
+            } else if tree.children(node).len() == 1 && op.as_deref().is_some_and(is_op) {
+                // single-child operator group -> replace with its child
+                let parent = tree.parent(node).unwrap();
+                let popped = tree.pop_child(parent);
+                debug_assert_eq!(popped, Some(node));
+                let only = tree.children(node)[0];
+                tree.push_child(parent, only);
+                if tree.is_branch(only) {
+                    tree.set_parent(only, Some(parent));
+                    node = only;
+                    let np = tree.parent(node).unwrap();
+                    let np_op_valid = tree.operator(np).is_some_and(|o| is_op(&o));
+                    if tree.operator(node).is_none() && !np_op_valid {
+                        let popped = tree.pop_child(np);
+                        debug_assert_eq!(popped, Some(node));
+                        for child in tree.children(node) {
+                            tree.push_child(np, child);
+                            if tree.is_branch(child) {
+                                tree.set_parent(child, Some(np));
+                            }
+                        }
+                    }
+                }
+            }
+
+            node = tree.parent(node).unwrap_or(root);
+        } else if is_op(token) {
+            if need_bracket {
+                return Err(Error::MissingOpenParen);
+            }
+            need_bracket = true;
+            stack[level].push(StackItem::Op(token.to_string()));
+            let child = tree.push_branch(Some(token.to_string()), Some(node));
+            tree.push_child(node, child);
+            node = child;
+        } else if need_bracket {
+            return Err(Error::MissingOpenParen);
+        } else if let Some(cond) = token.strip_suffix('?') {
+            let _ = cond;
+            need_bracket = true;
+            stack[level].push(StackItem::Op(token.to_string()));
+            let child = tree.push_branch(Some(token.to_string()), Some(node));
+            tree.push_child(node, child);
+            node = child;
+        } else {
+            let sat = is_active(token, enabled, iuse)?;
+            stack[level].push(StackItem::Bool(sat));
+            let leaf = tree.push_leaf(token, sat);
+            tree.push_child(node, leaf);
+        }
+    }
+
+    if level != 0 || need_bracket {
+        return Err(Error::UnbalancedParens);
+    }
+    let satisfied = !stack[0]
+        .iter()
+        .any(|it| matches!(it, StackItem::Bool(false)));
+    Ok((tree, root, satisfied))
+}
+
+/// Returns `None` when `required_use` is satisfied, else `Some(reduced)`
+/// where `reduced` is real `tree.tounicode()` -- the minimal
+/// still-unsatisfied sub-expression (operators NOT yet rewritten; run
+/// [`human_readable`] for that). `Err` on the same malformed-syntax /
+/// undeclared-flag conditions as [`check_required_use`].
+pub fn unsatisfied_reduced(
+    required_use: &str,
+    enabled: &HashSet<String>,
+    iuse: &HashSet<String>,
+) -> Result<Option<String>, Error> {
+    let (tree, root, satisfied) = build_required_use_tree(required_use, enabled, iuse)?;
+    if satisfied {
+        return Ok(None);
+    }
+    Ok(Some(tree.tounicode(root)))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -346,5 +715,74 @@ mod tests {
         assert!(check_required_use("||", &enabled, &iuse).is_err());
         assert!(check_required_use("|| a", &enabled, &iuse).is_err());
         assert!(check_required_use("foo?", &enabled, &iuse).is_err());
+    }
+
+    #[test]
+    fn human_readable_rewrites_the_three_operators() {
+        assert_eq!(
+            human_readable("^^ ( a b ) || ( c d ) ?? ( e f )"),
+            "exactly-one-of ( a b ) any-of ( c d ) at-most-one-of ( e f )"
+        );
+    }
+
+    #[test]
+    fn reduced_is_none_when_satisfied() {
+        let (enabled, iuse) = sets(&["a"], &["a", "b"]);
+        assert_eq!(unsatisfied_reduced("|| ( a b )", &enabled, &iuse), Ok(None));
+    }
+
+    #[test]
+    fn reduced_keeps_only_the_unsatisfied_conditional() {
+        // The libsdl2 / wine-vanilla shape: a big implicit-AND of
+        // `flag? ( ... )` conditionals, only one unsatisfied.
+        let ru = "alsa? ( sound ) haptic? ( joystick ) opengl? ( video ) \
+                  wayland? ( gles2 ) xscreensaver? ( X )";
+        let (enabled, _) = sets(
+            &[
+                "alsa", "sound", "haptic", "joystick", "opengl", "video", "wayland",
+            ],
+            &[],
+        );
+        let iuse: HashSet<String> = [
+            "alsa",
+            "sound",
+            "haptic",
+            "joystick",
+            "opengl",
+            "video",
+            "wayland",
+            "gles2",
+            "xscreensaver",
+            "X",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+        assert_eq!(
+            unsatisfied_reduced(ru, &enabled, &iuse),
+            Ok(Some("wayland? ( gles2 )".to_string()))
+        );
+    }
+
+    #[test]
+    fn reduced_top_level_all_of_drops_satisfied_leaves() {
+        let (enabled, iuse) = sets(&["a"], &["a", "b", "c"]);
+        assert_eq!(
+            unsatisfied_reduced("a b c", &enabled, &iuse),
+            Ok(Some("b c".to_string()))
+        );
+    }
+
+    #[test]
+    fn reduced_inside_an_operator_keeps_all_children() {
+        // real "complex_nesting": under a ||/^^/??, tounicode keeps every
+        // child (satisfied or not) so the operator still reads correctly.
+        let (enabled, iuse) = sets(&[], &["a", "b"]);
+        assert_eq!(
+            unsatisfied_reduced("^^ ( a b )", &enabled, &iuse),
+            Ok(Some(
+                "exactly-one-of ( a b )".replace("exactly-one-of", "^^")
+            ))
+        );
     }
 }

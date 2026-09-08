@@ -55,6 +55,43 @@ CHECK_CASES = [
     ),  # real-world-shaped: PYTHON_TARGETS-style exactly-one-of
 ]
 
+_LIBSDL2_IUSE = (
+    "X,alsa,dbus,haptic,joystick,opengl,sound,udev,video,wayland,"
+    "fcitx,gles1,gles2,ibus,jack,kms,nas,pulseaudio,sndio,test,"
+    "static-libs,vulkan,xscreensaver"
+)
+_LIBSDL2_RU = (
+    "alsa? ( sound ) fcitx? ( dbus ) gles1? ( video ) gles2? ( video ) "
+    "haptic? ( joystick ) ibus? ( dbus ) jack? ( sound ) "
+    "kms? ( || ( gles1 gles2 opengl ) ) nas? ( sound ) opengl? ( video ) "
+    "pulseaudio? ( sound ) sndio? ( sound ) test? ( static-libs ) "
+    "vulkan? ( video ) wayland? ( gles2 ) xscreensaver? ( X )"
+).split()
+
+# "reduce" cases: the harness returns "-" when satisfied, else the
+# human-readable minimal unsatisfied sub-expression (real
+# check_required_use(...).tounicode() -> human_readable_required_use).
+REDUCE_CASES = [
+    ("a", "a,b", ["||", "(", "a", "b", ")"]),  # satisfied -> "-"
+    ("-", "a,b", ["a", "b"]),  # top-level all-of, both unsatisfied
+    ("a", "a,b,c", ["a", "b", "c"]),  # all-of, one already satisfied -> dropped
+    ("-", "a,b", ["||", "(", "a", "b", ")"]),  # any-of, none
+    ("-", "a,b", ["^^", "(", "a", "b", ")"]),  # exactly-one-of, zero
+    ("a,b", "a,b", ["^^", "(", "a", "b", ")"]),  # exactly-one-of, two
+    ("foo", "foo,bar,baz", ["foo?", "(", "bar", ")", "baz"]),  # cond + trailing leaf
+    ("-", "foo,bar", ["foo?", "(", "bar", ")"]),  # cond inactive -> "-"
+    (
+        "x",
+        "x,y,z",
+        ["x?", "(", "^^", "(", "y", "z", ")", ")", "z"],
+    ),  # nested: only x?( ^^ ) unsatisfied, trailing z too
+    (
+        "X,alsa,dbus,haptic,joystick,opengl,sound,udev,video,wayland",
+        _LIBSDL2_IUSE,
+        _LIBSDL2_RU,
+    ),  # the media-libs/libsdl2 / wine-vanilla shape -> "wayland? ( gles2 )"
+]
+
 CHECK_ERROR_CASES = [
     ("-", "-", ["foo"]),  # flag not declared in IUSE at all
     ("-", "a", ["(", "a"]),  # unclosed paren
@@ -91,6 +128,16 @@ def test_check_error_matches_between_implementations(
     rust_result = _run([str(required_use_harness_rust)], "check", enabled, iuse, *tokens)
     assert python_result == "ERROR"
     assert rust_result == python_result
+
+
+@pytest.mark.parametrize("enabled,iuse,tokens", REDUCE_CASES)
+def test_reduce_matches_between_implementations(
+    enabled, iuse, tokens, required_use_harness_python, required_use_harness_rust
+):
+    python_result = _run(required_use_harness_python, "reduce", enabled, iuse, *tokens)
+    rust_result = _run([str(required_use_harness_rust)], "reduce", enabled, iuse, *tokens)
+    assert rust_result == python_result
+    assert python_result != "ERROR"
 
 
 def test_batch_mode_output_matches(required_use_harness_python, required_use_harness_rust):
