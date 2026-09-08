@@ -2235,6 +2235,11 @@ pub fn resolve_config(
     } else {
         Vec::new()
     };
+    // Per-level record of which scalars *this* level's `make.defaults` set
+    // (and to what) -- needed for the real config.py "translate profile
+    // USE_EXPAND defaults into per-level USE flags" fold (2849-2889) done
+    // once `USE_EXPAND` itself is final, further below.
+    let mut level_scalar_deltas: Vec<HashMap<String, String>> = Vec::new();
     for level in &chain {
         // `defaults`-tier walk, one profile at a time (real
         // `regenerate()` over `configdict["defaults"]`): this level's
@@ -2243,6 +2248,7 @@ pub fn resolve_config(
         // fallback path + inspection) -- slice out just this level's by
         // length delta.
         let before = config.use_tokens.len();
+        let scalars_before = scalars.clone();
         let make_defaults = level.join("make.defaults");
         if make_defaults.is_file() {
             // Real config.py quirk: USE is excluded from cross-level
@@ -2261,7 +2267,19 @@ pub fn resolve_config(
             make_defaults_use: level_make_defaults_use,
             package_use: level_package_use,
         });
+        level_scalar_deltas.push(
+            scalars
+                .iter()
+                .filter(|(k, v)| scalars_before.get(*k) != Some(*v))
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect(),
+        );
     }
+    // `scalars` as the profile chain left it, before `make.conf`/env: a
+    // USE_EXPAND variable still at this value below has had its final say
+    // from the profile (`defaults` tier) and is folded per-level here, not
+    // again in the global `conf`-tier loop.
+    let profile_scalars = scalars.clone();
 
     let make_conf = config_root.join("etc/portage/make.conf");
     if make_conf.is_file() {
@@ -2334,11 +2352,86 @@ pub fn resolve_config(
         }
     }
 
+    // Real config.py (2849-2889): "In order to best accommodate the
+    // long-standing practice of setting default USE_EXPAND variables in
+    // the profile's make.defaults, we translate these variables into
+    // their equivalent USE flags" -- **per profile level**, with the
+    // folded flags *prepended* before that level's own `USE=` line, so a
+    // sub-profile (or that same level's `package.use`) can incrementally
+    // cancel them. Real then skips re-folding USE_EXPAND for the
+    // `defaults` configdict (2964); portuale mirrors that with the
+    // `profile_scalars` guard in the two global loops just below.
+    //
+    // Without this, `LUA_SINGLE_TARGET="lua5-1"` from `profiles/base/
+    // make.defaults` folded once (last-wins) into the high-priority
+    // `conf` tier would be re-applied *after* `base/package.use`'s
+    // `app-editors/neovim lua_single_target_luajit
+    // -lua_single_target_lua5-1`, leaving both single-target flags on and
+    // tripping neovim's `^^ ( ... )` REQUIRED_USE.
+    {
+        let expand_names: Vec<String> = {
+            let mut v: Vec<String> = config.use_expand.iter().cloned().collect();
+            v.sort();
+            v
+        };
+        let unprefixed_names: Vec<String> = {
+            let mut v: Vec<String> = config.use_expand_unprefixed.iter().cloned().collect();
+            v.sort();
+            v
+        };
+        let prefix_tok = |var: &str, tok: &str| -> String {
+            let prefix = var.to_lowercase();
+            if let Some(rest) = tok.strip_prefix('-') {
+                format!("-{prefix}_{rest}")
+            } else if let Some(rest) = tok.strip_prefix('+') {
+                format!("{prefix}_{rest}")
+            } else {
+                format!("{prefix}_{tok}")
+            }
+        };
+        // Only a value the profile chain settled AND that `make.conf`/env
+        // did not later override belongs in the per-level fold; anything
+        // conf/env touched is a non-incremental replacement handled
+        // wholesale by the global loops below (real's `is_not_incremental`
+        // clear, 2972-2978), exactly as before this change.
+        let level_final = |var: &str, v: &str| {
+            scalars.get(var).map(String::as_str) == Some(v)
+                && profile_scalars.get(var) == scalars.get(var)
+        };
+        for (i, delta) in level_scalar_deltas.iter().enumerate() {
+            let mut expand_use: Vec<String> = Vec::new();
+            for var in &unprefixed_names {
+                if let Some(v) = delta.get(var).filter(|v| level_final(var, v)) {
+                    expand_use.extend(v.split_whitespace().map(String::from));
+                }
+            }
+            for var in &expand_names {
+                if let Some(v) = delta.get(var).filter(|v| level_final(var, v)) {
+                    expand_use.extend(v.split_whitespace().map(|t| prefix_tok(var, t)));
+                }
+            }
+            if expand_use.is_empty() {
+                continue;
+            }
+            let joined = expand_use.join(" ");
+            apply_incremental(&joined, &mut config.use_flags);
+            config.profile_use_layers[i]
+                .make_defaults_use
+                .insert(0, joined);
+        }
+    }
+
     let use_expand_vars: Vec<String> = config.use_expand.iter().cloned().collect();
     for var in use_expand_vars {
         let Some(value) = scalars.get(&var) else {
             continue;
         };
+        // Folded per-level above -- the profile chain had the final say
+        // and `make.conf`/env did not touch it (real skips the `defaults`
+        // configdict in its own USE_EXPAND re-fold, 2964).
+        if profile_scalars.get(&var) == scalars.get(&var) {
+            continue;
+        }
         let prefix = var.to_lowercase();
         let prefixed: String = value
             .split_whitespace()
@@ -2380,6 +2473,10 @@ pub fn resolve_config(
         let Some(value) = scalars.get(&var) else {
             continue;
         };
+        // Profile-only values are folded per-level above (real 2863-2866).
+        if profile_scalars.get(&var) == scalars.get(&var) {
+            continue;
+        }
         apply_incremental(value, &mut config.use_flags);
         config.conf_use_tokens.push(value.clone());
     }
@@ -3374,6 +3471,10 @@ sync-uri = file:///srv/pkgs
                 // it is also USE_EXPAND_HIDDEN, but that only affects the
                 // `emerge -pv` display, never the resolved flag set.
                 "cpu_flags_x86_sse2".to_string(),
+                // LUA_SINGLE_TARGET="lua5-1" in profiles/base/make.defaults
+                // (dev-libs/singletargetpkg's per-level fold fixture) --
+                // folded into the base level's own make_defaults_use.
+                "lua_single_target_lua5-1".to_string(),
             ])
         );
         assert_eq!(
@@ -3390,6 +3491,9 @@ sync-uri = file:///srv/pkgs
                 // (packageuseexpandpkg / hiddenexpandpkg).
                 "PYTHON_TARGETS".to_string(),
                 "CPU_FLAGS_X86".to_string(),
+                // LUA_SINGLE_TARGET for dev-libs/singletargetpkg's
+                // per-level USE_EXPAND-fold fixture.
+                "LUA_SINGLE_TARGET".to_string(),
             ])
         );
         assert_eq!(
@@ -4505,6 +4609,64 @@ sync-uri = file:///srv/pkgs
         assert!(!config.use_flags.contains("video_cards_nvidia"));
         assert!(config.use_flags.contains("video_cards_intel"));
         assert!(!config.use_flags.contains("+video_cards_intel"));
+    }
+
+    #[test]
+    fn profile_make_defaults_use_expand_is_folded_per_level_before_package_use() {
+        // Real config.py 2849-2889: a USE_EXPAND value set in a profile
+        // level's make.defaults is translated to its equivalent USE flag
+        // *in that level's* make_defaults_use, prepended before the raw
+        // `USE=`, so the same level's package.use can still cancel it --
+        // and it is NOT also folded into the high-priority conf tier
+        // (real skips configdict["defaults"] in its own re-fold, 2964).
+        // The neovim `^^ ( lua_single_target_* )` case in miniature.
+        let root = std::env::temp_dir().join("portage-profile-test-use-expand-per-level-fold");
+        let repo = root.join("repo");
+        let base = repo.join("profiles/base");
+        fs::create_dir_all(&base).unwrap();
+        fs::write(
+            base.join("make.defaults"),
+            "USE_EXPAND=\"LUA_SINGLE_TARGET\"\nLUA_SINGLE_TARGET=\"lua5-1\"\nUSE=\"rawflag\"\n",
+        )
+        .unwrap();
+        fs::write(
+            base.join("package.use"),
+            "dev-libs/pkg lua_single_target_luajit -lua_single_target_lua5-1\n",
+        )
+        .unwrap();
+        let portage_dir = root.join("etc/portage");
+        fs::create_dir_all(&portage_dir).unwrap();
+        let make_profile = portage_dir.join("make.profile");
+        let _ = fs::remove_file(&make_profile);
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&base, &make_profile).unwrap();
+
+        let config = resolve_config(&root, &repo, &[], &[], "testrepo", &HashMap::new())
+            .expect("config must resolve");
+        let layer = &config.profile_use_layers[0];
+        // folded flag lands in this level's make_defaults_use, prepended.
+        assert_eq!(
+            layer.make_defaults_use.first().map(String::as_str),
+            Some("lua_single_target_lua5-1")
+        );
+        assert!(layer.make_defaults_use.iter().any(|t| t == "rawflag"));
+        // ...and NOT in the conf tier, where it would out-rank package.use.
+        assert!(
+            !config
+                .conf_use_tokens
+                .iter()
+                .any(|t| t.contains("lua_single_target")),
+            "conf_use_tokens = {:?}",
+            config.conf_use_tokens
+        );
+        // the same level's package.use override is still present.
+        assert!(
+            layer
+                .package_use
+                .iter()
+                .any(|(atom, toks)| atom == "dev-libs/pkg"
+                    && toks.iter().any(|t| t == "lua_single_target_luajit"))
+        );
     }
 
     #[test]

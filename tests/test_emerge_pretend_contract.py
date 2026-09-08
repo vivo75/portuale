@@ -1271,6 +1271,7 @@ CASES = [
     ("bare name + nonexistent version: 'no ebuilds' on the expanded atom", ["--pretend", "newpkg-9.9"], 1),
     ("bare name + version, ambiguous: still rejected after stripping the version", ["--pretend", "ambigpkg-1.0"], 1),
     ("profile defaults walk: a leaf make.defaults cancels a parent package.use", ["--pretend", "-v", "dev-libs/interleavepkg"], 0),
+    ("profile USE_EXPAND default is folded per-level, so a same-level package.use satisfies `^^`", ["--pretend", "-v", "dev-libs/singletargetpkg"], 0),
     ("blocker: strong (!!) blocker matches an installed package", ["--pretend", "dev-libs/blockerpkg"], 0),
     ("blocker: weak (!) blocker matches another new package in the graph", ["--pretend", "dev-libs/graphblockerparent"], 0),
     ("blocker: -v widens the [blocks B ] bracket by the mask column", ["--pretend", "-v", "dev-libs/blockerpkg"], 0),
@@ -6300,6 +6301,37 @@ def test_profile_defaults_walk_is_per_level_not_flat(
         'USE="-interleaveflag -other"'
     )
     assert "dev-libs/newpkg" not in rust.stdout
+
+
+def test_profile_use_expand_default_is_folded_per_level(
+    emerge_binary, emerge_pretend_python, fixture_env
+):
+    """Real config.py (2849-2889): a USE_EXPAND value set in a profile
+    level's make.defaults is translated to its equivalent USE flag *in
+    that level's* contribution, prepended before the raw USE=, so the
+    same level's package.use can still override it -- and real then skips
+    re-folding USE_EXPAND for configdict["defaults"] (2964).
+
+    fixtures/repo/profiles/base/make.defaults sets
+    LUA_SINGLE_TARGET="lua5-1"; base/package.use flips
+    dev-libs/singletargetpkg to lua_single_target_luajit
+    -lua_single_target_lua5-1. The package's
+    `^^ ( lua_single_target_lua5-1 lua_single_target_luajit )`
+    REQUIRED_USE is satisfied with exactly luajit. A single collapsed
+    last-wins fold into the high-priority conf tier would re-add lua5-1
+    on top of the override, leaving both flags on -> abort. Rust ==
+    Python, exit 0. This is the app-editors/neovim LUA_SINGLE_TARGET
+    resolver divergence in miniature."""
+    base = ["--pretend", "-v", "dev-libs/singletargetpkg"]
+    rust = _run([str(emerge_binary)], base, fixture_env)
+    py = _run(emerge_pretend_python, base, fixture_env)
+    assert rust.returncode == 0
+    assert rust.stdout == py.stdout
+    assert rust.stdout.splitlines()[0] == (
+        '[ebuild  N     ] dev-libs/singletargetpkg-1.0::testrepo  '
+        'LUA_SINGLE_TARGET="luajit -lua5-1"'
+    )
+    assert "REQUIRED_USE" not in rust.stdout
 
 
 def test_repo_make_defaults_use_enables_a_flag_and_pulls_in_a_dependency(

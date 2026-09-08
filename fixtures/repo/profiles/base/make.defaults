@@ -10,8 +10,15 @@ USE="${USE} bar"
 # is here too so dev-libs/packageuseexpandpkg's package.use shorthand
 # groups under PYTHON_TARGETS="..." in `emerge -pv`. CPU_FLAGS_X86 is a
 # USE_EXPAND var that USE_EXPAND_HIDDEN then hides from that display.
-USE_EXPAND="VIDEO_CARDS ELIBC LINGUAS PYTHON_TARGETS CPU_FLAGS_X86"
+# LUA_SINGLE_TARGET exercises real config.py's per-level make.defaults
+# USE_EXPAND fold (2849-2889): this base value is prepended before this
+# level's own package.use, so base/package.use's
+# dev-libs/singletargetpkg override can cancel it -- a single collapsed
+# fold into the high-priority conf tier would re-add lua5-1 and trip the
+# package's `^^` REQUIRED_USE. See dev-libs/singletargetpkg.
+USE_EXPAND="VIDEO_CARDS ELIBC LINGUAS PYTHON_TARGETS CPU_FLAGS_X86 LUA_SINGLE_TARGET"
 VIDEO_CARDS="nvidia"
+LUA_SINGLE_TARGET="lua5-1"
 
 # Exercises USE_EXPAND_HIDDEN: `emerge -pv` omits the CPU_FLAGS_X86="..."
 # group from its USE_EXPAND display (real output.py map_to_use_expand's

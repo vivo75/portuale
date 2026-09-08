@@ -6,3 +6,10 @@
 # make.defaults, so the flag ends up OFF. A flat "all make.defaults then
 # all package.use" model would leave it ON.
 dev-libs/interleavepkg interleaveflag
+
+# base/make.defaults sets LUA_SINGLE_TARGET="lua5-1"; this same-level
+# package.use flips dev-libs/singletargetpkg to luajit. Real applies it
+# right after this level's make.defaults fold, so the package resolves
+# with exactly one lua_single_target_* flag and its `^^ ( ... )`
+# REQUIRED_USE is satisfied.
+dev-libs/singletargetpkg lua_single_target_luajit -lua_single_target_lua5-1

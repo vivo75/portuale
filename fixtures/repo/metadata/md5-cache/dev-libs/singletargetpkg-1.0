@@ -1,0 +1,8 @@
+DEFINED_PHASES=-
+DESCRIPTION=fixture package: profile make.defaults USE_EXPAND default vs same-level package.use for a `^^` single-target group
+EAPI=8
+IUSE=lua_single_target_lua5-1 lua_single_target_luajit
+KEYWORDS=amd64
+REQUIRED_USE=^^ ( lua_single_target_lua5-1 lua_single_target_luajit )
+SLOT=0
+_md5_=0000000000000000000000000000000

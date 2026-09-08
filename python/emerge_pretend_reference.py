@@ -4646,8 +4646,14 @@ def resolve_config(
     # fallback path); slice out just this level's by length delta. Mirrors
     # portage-profile/src/lib.rs's resolve_config.
     profile_use_layers = []
+    # Per-level record of the scalars *this* level's make.defaults set, for
+    # the real config.py "translate profile USE_EXPAND defaults into
+    # per-level USE flags" fold (2849-2889), done once USE_EXPAND is final
+    # further below. Mirrors portage-profile/src/lib.rs's resolve_config.
+    level_scalar_deltas = []
     for level in chain:
         before = len(use_tokens)
+        scalars_before = dict(scalars)
         make_defaults = os.path.join(level, "make.defaults")
         if os.path.isfile(make_defaults):
             # Real config.py quirk: USE is excluded from cross-level
@@ -4676,6 +4682,11 @@ def resolve_config(
                 ),
             }
         )
+        level_scalar_deltas.append(
+            {k: v for k, v in scalars.items() if scalars_before.get(k) != v}
+        )
+    # scalars as the profile chain left them, before make.conf/env.
+    profile_scalars = dict(scalars)
 
     make_conf = os.path.join(config_root, "etc", "portage", "make.conf")
     if os.path.isfile(make_conf):
@@ -4742,20 +4753,54 @@ def resolve_config(
         if var in os.environ:
             scalars[var] = os.environ[var]
 
+    def _prefix_expand_tok(var, tok):
+        prefix = var.lower()
+        if tok.startswith("-"):
+            return f"-{prefix}_{tok[1:]}"
+        if tok.startswith("+"):
+            return f"{prefix}_{tok[1:]}"
+        return f"{prefix}_{tok}"
+
+    # Real config.py (2849-2889): profile make.defaults USE_EXPAND /
+    # USE_EXPAND_UNPREFIXED values are translated to their equivalent USE
+    # flags *per level*, prepended before that level's own USE= line, so a
+    # sub-profile (or that level's own package.use) can incrementally
+    # cancel them. Real then skips re-folding USE_EXPAND for the defaults
+    # configdict (2964); the profile_scalars guard in the two global loops
+    # below mirrors that skip. Without this, LUA_SINGLE_TARGET="lua5-1"
+    # from profiles/base/make.defaults, folded once into the high-priority
+    # conf tier, would be re-applied after base/package.use's neovim
+    # lua_single_target_luajit override and trip neovim's ^^ REQUIRED_USE.
+    # Mirrors portage-profile/src/lib.rs's resolve_config.
+    def _level_final(var, v):
+        return scalars.get(var) == v and profile_scalars.get(var) == scalars.get(var)
+
+    for i, delta in enumerate(level_scalar_deltas):
+        expand_use = []
+        for var in sorted(use_expand_unprefixed):
+            v = delta.get(var)
+            if v is not None and _level_final(var, v):
+                expand_use.extend(v.split())
+        for var in sorted(use_expand):
+            v = delta.get(var)
+            if v is not None and _level_final(var, v):
+                expand_use.extend(_prefix_expand_tok(var, t) for t in v.split())
+        if not expand_use:
+            continue
+        joined = " ".join(expand_use)
+        _apply_incremental(joined, use_flags)
+        profile_use_layers[i]["make_defaults_use"].insert(0, joined)
+
     for var in use_expand:
         value = scalars.get(var)
         if value is None:
             continue
-        prefix = var.lower()
-        prefixed_tokens = []
-        for tok in value.split():
-            if tok.startswith("-"):
-                prefixed_tokens.append(f"-{prefix}_{tok[1:]}")
-            elif tok.startswith("+"):
-                prefixed_tokens.append(f"{prefix}_{tok[1:]}")
-            else:
-                prefixed_tokens.append(f"{prefix}_{tok}")
-        prefixed = " ".join(prefixed_tokens)
+        # Folded per-level above -- the profile chain had the final say and
+        # make.conf/env did not touch it (real skips the defaults
+        # configdict in its USE_EXPAND re-fold, 2964).
+        if profile_scalars.get(var) == scalars.get(var):
+            continue
+        prefixed = " ".join(_prefix_expand_tok(var, tok) for tok in value.split())
         _apply_incremental(prefixed, use_flags)
         conf_use_tokens.append(prefixed)
 
@@ -4770,6 +4815,9 @@ def resolve_config(
     for var in use_expand_unprefixed:
         value = scalars.get(var)
         if value is None:
+            continue
+        # Profile-only values are folded per-level above (real 2863-2866).
+        if profile_scalars.get(var) == scalars.get(var):
             continue
         _apply_incremental(value, use_flags)
         conf_use_tokens.append(value)
