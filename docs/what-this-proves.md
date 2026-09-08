@@ -15589,3 +15589,29 @@ satisfied (real portage does -- `--usepkgonly` restricts what may be
 real portage merges on `-k` alone. `compare/snapshot.sh` also gained a
 `--paths` (recurse `dir/` vs stat-only) and `--vdb-list` mode so the L1
 snapshot stays scoped to what the merge touched.
+
+Slice 3 -- `porttest` synthetic edge-case set
+(`TEST/atomlists/l1-porttest.txt`, nine `EAPI=8` fixtures under
+`TEST/images/overlay/porttest/`, one merge-path behaviour each: setuid /
+filecaps modes, hardlinks, a symlink farm incl. dangling+chained,
+`keepdir`/`.keep`, `dodoc`/`doman`/`doinfo`, `INSTALL_MASK`/`.la` drops,
+a fixture whose every `pkg_*` phase appends a marker to
+`/var/lib/porttest/phase.log`, `splitdebug` `.debug`+`.build-id`,
+filenames with spaces/tabs/UTF-8/shell metacharacters). First run
+(2026-09-08, both PMs at portage 3.0.82.2, identical fresh containers,
+same Portage-built `$PKGDIR`): **all nine fixtures byte-identical at the
+file level** -- 108/108 paths matching on mode (incl.
+`4711`/`2755`/`1750`/`0600`), ownership, xattrs/filecaps, sha256,
+symlink target (incl. the dangling and chained links), unicode names,
+the `splitdebug` split objects, the masked-file drops, the `keepdir`
+markers -- and VDB `CONTENTS`/`metadata`/`NEEDED` matching for all nine.
+**10 hard findings, all explained; 0 unexplained; 70 non-fatal mtime
+diffs.** Two allowlisted portuale bugs: L1-c again (vdb `environment`
+not refiltered, x9) and, newly surfaced by the phase-marker fixture,
+**L1-e -- portuale does not run `pkg_pretend` on a `-k`/`--getbinpkg`
+binary merge** (real portage's `Scheduler._run_pkg_pretend` runs it for
+every mergelist `Package`, binary included, that is EAPI>=4 and defines
+the phase). `compare/snapshot.sh` was also hardened: a dangling symlink
+in the walk made `getfattr` fail and, under `set -o pipefail`, silently
+abort the whole snapshot before the VDB tar -- now `getfattr -h` plus
+`set -e`-safe `stat`/`readlink`.

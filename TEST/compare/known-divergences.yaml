@@ -44,3 +44,18 @@
     tracked as L1-c in TEST/findings/l1.md. TEMPORARY -- delete this
     entry when L1-c is fixed on `main`.
   ticket: null
+
+- id: l1-pkg-pretend-skipped-on-binmerge
+  layer: l1
+  category: SIZE
+  path_glob: ["*/porttest/phase.log"]
+  owner: portuale-bug
+  reason: >-
+    portuale's `-k`/`--getbinpkg` binary-merge path does not run
+    `pkg_pretend`; real portage's `Scheduler._run_pkg_pretend` runs it
+    for every mergelist `Package` (binary included) that is EAPI>=4 and
+    defines the phase. The `porttest/phases` fixture logs one line per
+    phase, so portage's phase.log has a `pretend` line portuale's lacks
+    (322 vs 241 bytes). Tracked as L1-e in TEST/findings/l1.md.
+    TEMPORARY -- delete this entry when L1-e is fixed on `main`.
+  ticket: null

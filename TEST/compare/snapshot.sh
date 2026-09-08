@@ -22,6 +22,7 @@
 # mtimes are deliberately NOT in files.tsv (see docs/real-world-testing.md §4.3).
 
 set -euo pipefail
+trap 'echo "snapshot.sh: FAILED at line $LINENO (exit $?)" >&2' ERR
 PATHS_FILE=""
 VDB_LIST=""
 while true; do
@@ -71,8 +72,13 @@ emit_null() {  # feed to the stat loop below
       if [ "$rec" = 1 ]; then recurse+=("$ROOT$p"); else single+=("$ROOT$p"); fi
     fi
   done < "$PATHS_FILE"
-  [ ${#recurse[@]} -gt 0 ] && find "${recurse[@]}" "${prune_expr[@]}" -print0 2>/dev/null
-  [ ${#single[@]}  -gt 0 ] && find "${single[@]}" -maxdepth 0 -print0 2>/dev/null
+  if [ ${#recurse[@]} -gt 0 ]; then
+    find "${recurse[@]}" "${prune_expr[@]}" -print0 2>/dev/null || true
+  fi
+  if [ ${#single[@]} -gt 0 ]; then
+    find "${single[@]}" -maxdepth 0 -print0 2>/dev/null || true
+  fi
+  return 0
 }
 
 # find + stat; sha256 only for regular files; xattrs sorted & base64'd.
@@ -82,7 +88,9 @@ while IFS= read -r -d '' f; do
   rel=${f#"$ROOT"}; rel=${rel:-/}
   # `%F` is multi-word ("regular file", "symbolic link") -- use a `|`
   # delimiter, not whitespace. %a octal mode, %u %g %s %Y.
-  IFS='|' read -r kind mode uid gid size mtime <<<"$(stat -c '%F|%a|%u|%g|%s|%Y' "$f")"
+  sr=$(stat -c '%F|%a|%u|%g|%s|%Y' "$f" 2>/dev/null) || sr=
+  [ -n "$sr" ] || continue   # vanished mid-walk
+  IFS='|' read -r kind mode uid gid size mtime <<<"$sr" || true
   case $kind in
     "regular file"|"regular empty file") t=f ;;
     "directory") t=d ;;
@@ -95,33 +103,43 @@ while IFS= read -r -d '' f; do
   esac
   sha=- ; link=-
   if [ "$t" = f ] && [ "$size" != 0 ]; then
-    sha=$(sha256sum -- "$f" 2>/dev/null | cut -d' ' -f1); sha=${sha:--}
+    sha=$(sha256sum -- "$f" 2>/dev/null | cut -d' ' -f1) || sha=
+    sha=${sha:--}
   fi
-  [ "$t" = l ] && link=$(readlink -- "$f")
-  xa=$(getfattr -d -m - --absolute-names -- "$f" 2>/dev/null |
-       sed -n 's/^\([^=]*\)=\(.*\)$/\1=\2/p' | LC_ALL=C sort | paste -sd, -)
+  [ "$t" = l ] && { link=$(readlink -- "$f") || link=-; }
+  # `-h`: read the node's own xattrs, never dereference -- a dangling
+  # symlink (symfarm fixture) would otherwise make getfattr fail ENOENT
+  # and, under `set -o pipefail`, abort the whole walk. `|| xa=` keeps a
+  # genuine getfattr error from doing the same.
+  xa=$(getfattr -h -d -m - --absolute-names -- "$f" 2>/dev/null |
+       sed -n 's/^\([^=]*\)=\(.*\)$/\1=\2/p' | LC_ALL=C sort | paste -sd, -) || xa=
   xa=${xa:--}
   printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
     "$rel" "$t" "$mode" "$uid" "$gid" "$size" "$sha" "$link" "$xa" >> "$OUT.files.tsv"
   printf '%s\t%s\n' "$rel" "$mtime" >> "$OUT.mtimes.tsv"
-done
+done || echo "snapshot.sh: walk pipeline returned non-zero -- files.tsv may be short (continuing to VDB tar)" >&2
 
 # --paths can list a dir and a file inside it -> dedup.
 LC_ALL=C sort -u -o "$OUT.files.tsv" "$OUT.files.tsv"
 LC_ALL=C sort -u -o "$OUT.mtimes.tsv" "$OUT.mtimes.tsv"
 
 if [ -d "$ROOT/var/db/pkg" ]; then
+  vdb_members=()
   if [ -n "$VDB_LIST" ]; then
-    members=()
     while IFS= read -r cp; do
-      [ -n "$cp" ] && [ -d "$ROOT/var/db/pkg/$cp" ] && members+=("pkg/$cp")
+      [ -n "$cp" ] || continue
+      if [ -d "$ROOT/var/db/pkg/$cp" ]; then vdb_members+=("pkg/$cp"); fi
     done < "$VDB_LIST"
-    [ ${#members[@]} -gt 0 ] || members=(--files-from /dev/null)
-    tar -C "$ROOT/var/db" --sort=name --numeric-owner --mtime='@0' \
-        -cf "$OUT.vdb.tar" "${members[@]}"
   else
-    tar -C "$ROOT/var/db" --sort=name --numeric-owner \
-        --mtime='@0' -cf "$OUT.vdb.tar" pkg
+    vdb_members=(pkg)
+  fi
+  if [ ${#vdb_members[@]} -gt 0 ]; then
+    tar -C "$ROOT/var/db" --sort=name --numeric-owner --mtime='@0' \
+        --warning=no-file-changed -cf "$OUT.vdb.tar" "${vdb_members[@]}" \
+      || echo "!!! vdb tar exited $? (partial $OUT.vdb.tar)" >&2
+  else
+    : > "$OUT.vdb.tar" || true
+    tar -cf "$OUT.vdb.tar" -T /dev/null
   fi
 fi
 

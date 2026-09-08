@@ -31,12 +31,29 @@ export MAKEOPTS="-j${JOBS}"
 export EMERGE_DEFAULT_OPTS=""
 # -cgroup: the cgroup fs is ro under rootless podman (harmless warning
 # spam otherwise). -sign: no signing key. buildpkg: the whole point.
-export FEATURES="buildpkg -cgroup -ccache -distcc -sign parallel-fetch"
+# splitdebug + xattr + filecaps: the porttest fixtures exercise them.
+export FEATURES="buildpkg splitdebug xattr filecaps -cgroup -ccache -distcc -sign parallel-fetch"
 export BINPKG_FORMAT="gpkg"
 umask 022
 mkdir -p "$PKGDIR"
 
 log() { printf '[l1-build] %s\n' "$*"; }
+
+# The porttest synthetic overlay (TEST/images/overlay/porttest), live-
+# mounted ro by the orchestrator -- copy to a writable path so Portage
+# can regen its metadata, and wire it into repos.conf. No-op when the
+# atom list contains no `porttest/` atoms.
+if [ -d /porttest-overlay ] && grep -q '^porttest/' "$ATOMLIST"; then
+  rm -rf /var/db/repos/porttest
+  cp -a /porttest-overlay /var/db/repos/porttest
+  cat > /etc/portage/repos.conf/porttest.conf <<-EOF
+	[porttest]
+	location = /var/db/repos/porttest
+	masters = gentoo
+	auto-sync = no
+	EOF
+  log "porttest overlay staged at /var/db/repos/porttest"
+fi
 
 if [ "${L1_SKIP_PORTAGE_UPGRADE:-0}" != 1 ]; then
   cur=$(/usr/sbin/emerge --version 2>/dev/null | sed -n 's/^Portage \([0-9.]*\).*/\1/p')

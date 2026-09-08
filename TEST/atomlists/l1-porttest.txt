@@ -1,0 +1,26 @@
+# L1 merge-parity, synthetic edge-case set -- the `porttest` overlay
+# (TEST/images/overlay/porttest/porttest/), live-mounted into the L1
+# containers (no image rebuild needed). Each fixture isolates one
+# merge-path behaviour; all build in seconds.
+#
+#   TEST/run/l1-merge-from-binpkg.sh TEST/atomlists/l1-porttest.txt
+#
+#   porttest/setuid       4711/2755/1750 + 0600 modes  (perm preservation)
+#   porttest/hardlinks    hardlinked regular files      (CONTENTS obj dedup)
+#   porttest/symfarm      relative/absolute/dangling/chained symlinks
+#   porttest/emptydirs    keepdir + .keep naming + a bare owned empty dir
+#   porttest/docs         dodoc tree -> docompress, newdoc, doman, doinfo
+#   porttest/installmask  files an INSTALL_MASK / *.la strip should drop
+#   porttest/phases       every pkg_* phase appends a marker at merge
+#   porttest/splitdebug   FEATURES=splitdebug .debug + .build-id links
+#   porttest/unicode      spaces / UTF-8 / shell metachars in filenames
+
+porttest/setuid
+porttest/hardlinks
+porttest/symfarm
+porttest/emptydirs
+porttest/docs
+porttest/installmask
+porttest/phases
+porttest/splitdebug
+porttest/unicode

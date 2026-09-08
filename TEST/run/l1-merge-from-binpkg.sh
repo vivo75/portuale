@@ -37,12 +37,19 @@ ensure_image
 
 [ "${L1_REBUILD:-0}" = 1 ] && { echo ">>> L1_REBUILD: wiping $PKGCACHE"; rm -rf "${PKGCACHE:?}"/*; }
 
+# The porttest synthetic overlay is live-mounted (no image rebuild) into
+# every container; build.sh / consume.sh only stage it when the atom
+# list actually has `porttest/` atoms.
+PORTTEST_OVL="$TEST_DIR/images/overlay/porttest"
+ovl_mount=()
+[ -d "$PORTTEST_OVL/porttest" ] && ovl_mount=(-v "$PORTTEST_OVL:/porttest-overlay:ro")
+
 # --- build (Portage only) ------------------------------------------------
 if [ "${L1_SKIP_BUILD:-0}" != 1 ]; then
   echo ">>> building the set from source with Portage (pkgcache: $PKGCACHE)"
   "$PODMAN" run --rm --name "porttest-l1-build-$$" \
     --security-opt seccomp=unconfined --cgroups=enabled --cgroupns=private \
-    -v "$TEST_DIR:/TEST:ro" -v "$PKGCACHE:/pkgs" \
+    -v "$TEST_DIR:/TEST:ro" -v "$PKGCACHE:/pkgs" "${ovl_mount[@]}" \
     -e PKGDIR=/pkgs \
     -e "L1_JOBS=${L1_JOBS:-1}" \
     -e "L1_SKIP_PORTAGE_UPGRADE=${L1_SKIP_PORTAGE_UPGRADE:-0}" \
@@ -57,7 +64,7 @@ consume() {  # pm
   local pm=$1
   echo ">>> merging with $pm"
   podman_run_portuale "porttest-l1-$pm-$$" \
-    -v "$PKGCACHE:/pkgs:ro" \
+    -v "$PKGCACHE:/pkgs:ro" "${ovl_mount[@]}" \
     -e PKGDIR=/pkgs \
     -e "L1_SKIP_PORTAGE_UPGRADE=${L1_SKIP_PORTAGE_UPGRADE:-0}" \
     --entrypoint /bin/bash "$IMAGE" \

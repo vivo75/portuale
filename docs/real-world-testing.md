@@ -855,10 +855,39 @@ run. Committed only when asked.
    `owner: portuale-bug`, to be deleted when fixed on `main`.
    The reinstall + upgrade sub-cases and the full 10-package set are a
    slice-2 follow-up.
-3. **`porttest` overlay — real ebuilds.** Fill in the §7 table (start
-   with `cfgprotect`, `setuid`, `hardlinks`, `symfarm`, `emptydirs`,
-   `installmask`, `splitdebug`, `phases`). Wire into L1. Deliverable:
-   per-behaviour parity.
+3. **`porttest` overlay — real ebuilds.** — *shipped 2026-09-08.* Nine
+   `EAPI=8` fixtures under
+   `TEST/images/overlay/porttest/porttest/`: `setuid` (4711/2755/1750 +
+   0600 modes), `hardlinks`, `symfarm` (rel/abs/dangling/chain +
+   20 uniform), `emptydirs` (`keepdir` + `.keep` + bare owned empty
+   dir), `docs` (`dodoc -r`/`newdoc`/`doman`/`doinfo`/`docinto`),
+   `installmask` (`INSTALL_MASK`/`*.la`/`*.log` drop), `phases` (every
+   `pkg_*` appends to `/var/lib/porttest/phase.log`), `splitdebug`
+   (`.debug` + `.build-id` for a binary + a soname lib), `unicode`
+   (spaces/tabs/UTF-8/metachars). Live-mounted into the L1 containers
+   (`-v …:/porttest-overlay:ro`), staged by `layers/l1/{build,consume}.sh`
+   when the atom list has `porttest/` atoms — no image rebuild.
+   `atomlists/l1-porttest.txt`; `consume.sh` gained an `INSTALL_MASK`
+   line in `make.conf` (not an env export — L1-d) and `/var/lib/porttest/`
+   in the snapshot path list. First run (2026-09-08, both PMs at portage
+   3.0.82.2, identical fresh containers, same Portage-built `$PKGDIR`):
+   **all 9 fixtures byte-identical at the file level** (108/108 paths —
+   modes incl. `4711/2755/1750/0600`, ownership, xattrs/filecaps, sha256,
+   symlink targets incl. the dangling/chained ones, unicode names, the
+   `splitdebug` `.debug`/`.build-id`, the `INSTALL_MASK`/`.la` drops, the
+   `keepdir` `.keep` files); VDB `CONTENTS`/`metadata`/`NEEDED` match for
+   all 9. **10 hard findings, all explained; 0 unexplained; 70 non-fatal
+   mtime diffs.** Two allowlisted portuale bugs: L1-c (vdb `environment`
+   not refiltered, ×9) and **L1-e (new) — `pkg_pretend` is not run on a
+   `-k`/`--getbinpkg` binary merge** (the `phases` fixture's phase.log has
+   `setup preinst postinst` where portage's has `pretend setup preinst
+   postinst`). Triage in `TEST/findings/l1.md`.
+   Also fixed here: `snapshot.sh` aborted the whole walk (silently, under
+   `set -o pipefail`) when `getfattr` dereferenced a dangling symlink —
+   now `getfattr -h` + `set -e`-safe `stat`/`readlink`/`getfattr`.
+   Deferred (need the reinstall sub-case / L5): `cfgprotect`,
+   `soname-{1,2}`, `slotdep-*`, `collision`, `config-script`,
+   `preserve-fail`.
 4. **L2 Portuale-as-builder + `gpkg-structure.sh` + `gpkg-diff.sh`.**
    Structural validation, normalised archive-vs-archive diff (§4.7),
    `diffoscope` wired as the drill-down aid, cross-install both

@@ -1,32 +1,37 @@
 # `porttest` — synthetic merge/packaging test overlay
 
 Tiny, fast-building `EAPI=8` ebuilds, one per isolated merge/packaging
-behaviour, baked into `localhost/test-portuale` at
-`/var/db/repos/porttest` by `TEST/create-container.bash`. Used by L1/L5
-(they build in seconds); **not** L3.
+behaviour. `TEST/create-container.bash` bakes this into
+`localhost/test-portuale` at `/var/db/repos/porttest`; the L1
+orchestrator *also* live-mounts it (`-v …:/porttest-overlay:ro`) so no
+image rebuild is needed to iterate — `layers/l1/{build,consume}.sh`
+stage it to `/var/db/repos/porttest` + write `repos.conf/porttest.conf`
+whenever the atom list has `porttest/` atoms.
 
-Slice 1 ships only this skeleton (repo metadata + an empty `porttest`
-category). The ebuilds land in slice 3 — see the table in
-[`docs/real-world-testing.md`](../../../../docs/real-world-testing.md) §7:
+Run: `TEST/run/l1-merge-from-binpkg.sh TEST/atomlists/l1-porttest.txt`.
+Portage builds each fixture from source into `$PKGDIR`; Portage and
+portuale each merge that binpkg; `diff.py` compares. All build in
+seconds (no `SRC_URI`).
+
+## Shipped (slice 3)
 
 | pkg | exercises |
 |---|---|
-| `porttest/cfgprotect` | CONFIG_PROTECT `._cfg` creation |
-| `porttest/setuid` | `4755` binary + file capability (xattr) |
-| `porttest/hardlinks` | hardlinked regular files + `CONTENTS` dedup |
-| `porttest/symfarm` | relative/absolute/dangling symlinks |
-| `porttest/emptydirs` | `keepdir` + `.keep` naming |
-| `porttest/docs` | `dodoc` tree → docompress, `newdoc`, `doinfo` |
-| `porttest/unicode` | UTF-8 / space / `$` / newline in filenames |
-| `porttest/bigfile` | one large sparse file |
-| `porttest/installmask` | files an `INSTALL_MASK` should drop |
-| `porttest/splitdebug` | C source → `FEATURES=splitdebug` `.debug` split |
-| `porttest/soname-1` / `-2` | `libpt.so.1` → `.so.2` for preserve-libs |
-| `porttest/slotdep-*` | slot-op rebuild chain |
-| `porttest/phases` | every `pkg_*` phase writes a marker |
-| `porttest/collision` | two pkgs shipping the same path |
-| `porttest/config-script` | non-trivial `pkg_config` |
-| `porttest/preserve-fail` | postinst exits 1 → non-fatal handling |
+| `porttest/setuid` | `4711` / `2755` / `1750` binaries + `0600` data (perm preservation through a binpkg merge) |
+| `porttest/hardlinks` | hardlinked regular files (`CONTENTS` `obj` dedup, link count preserved) |
+| `porttest/symfarm` | relative / absolute / dangling / two-hop-chain symlinks + a bin→system-path link + 20 uniform links |
+| `porttest/emptydirs` | `keepdir` (+ `.keep_<cat>_<pn>-<slot>`), nested keepdir, a bare owned empty dir with no keepdir, an `0700` dir |
+| `porttest/docs` | `dodoc -r` tree → docompress, `newdoc`, `doman` (compressed), `doinfo` (not), `docinto html` (not) |
+| `porttest/installmask` | files an `INSTALL_MASK` / `*.la` / `*.log` strip should drop at merge, incl. a dir that becomes empty once its only file is dropped |
+| `porttest/phases` | every `pkg_*` phase appends `<phase> eapi=… ebuild_phase=… merge_type=…` to `/var/lib/porttest/phase.log` — merge runs `pkg_setup`/`pkg_preinst`/`pkg_postinst`, so those lines (and order) must match |
+| `porttest/splitdebug` | `FEATURES=splitdebug`: `/usr/lib/debug/**/*.debug` + `.build-id/**` symlinks for a binary AND a shared lib (soname) |
+| `porttest/unicode` | filenames with spaces, tabs, `$`, UTF-8, `()[]`, `#%`; a symlink with spaces in name+target; a subdir with a space |
 
-Keep each ebuild's `src_install` trivial and its build near-instant
-(no `SRC_URI`, or a checked-in tiny tarball).
+## Not yet (follow-ups)
+
+`cfgprotect` (needs the reinstall sub-case), `soname-1`/`-2` +
+`slotdep-*` (L5 preserve-libs / slot-op rebuild), `collision` (aborts a
+merge — needs its own harness), `config-script` / `preserve-fail`
+(L5), `bigfile`.
+
+Keep each ebuild's `src_install` trivial and its build near-instant.

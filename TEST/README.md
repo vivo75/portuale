@@ -56,13 +56,20 @@ step), `L0_SKIP_MULTI=1` (skip the `@system`/`@world` whole-graph runs),
 ### L1 — merge parity from an identical prebuilt binpkg set
 
 ```sh
-TEST/run/l1-merge-from-binpkg.sh                     # the default set
-TEST/run/l1-merge-from-binpkg.sh TEST/atomlists/foo.txt
+TEST/run/l1-merge-from-binpkg.sh                       # the default set
+TEST/run/l1-merge-from-binpkg.sh TEST/atomlists/l1-porttest.txt   # synthetic edge cases
 ```
+
+`atomlists/l1-porttest.txt` is the `porttest` synthetic set (§7 of
+`docs/real-world-testing.md`) — nine fixtures each isolating one
+merge-path behaviour (setuid/caps, hardlinks, symlink farm, `keepdir`,
+`dodoc`, `INSTALL_MASK`, `pkg_*` phase markers, `splitdebug`, unicode
+names). Live-mounted from `images/overlay/porttest/`, staged only when
+the atom list has `porttest/` atoms — no image rebuild.
 
 Portage builds `atomlists/l1-merge.txt` (+ deps) from source **once**,
 into a persistent `TEST/logs/_l1-pkgcache/` `$PKGDIR`. Then Portage and
-portuale each `emerge -K --oneshot` that same `$PKGDIR` into their own
+portuale each `emerge -k --getbinpkg --oneshot` that same `$PKGDIR` into their own
 fresh container's `/`; `compare/snapshot.sh` captures exactly the merged
 files + `/etc` + the VDB; `compare/normalize.py` strips the legitimately-
 volatile bits (`BUILD_TIME`/`COUNTER`, `env_update` output, `.pyc`,

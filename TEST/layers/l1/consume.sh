@@ -30,11 +30,32 @@ export PORTAGE_CONFIGROOT=/ ROOT=/ PORTAGE_RUNNING_ROOT=/
 export LC_ALL=C.UTF-8 TZ=UTC
 export PKGDIR
 export EMERGE_DEFAULT_OPTS=""
-export FEATURES="-buildpkg -cgroup -ccache -distcc -sign"
+export FEATURES="-buildpkg -cgroup -ccache -distcc -sign xattr filecaps"
 umask 022
 mkdir -p "$(dirname "$OUT")"
 
 log() { printf '[l1-consume %s] %s\n' "$PM" "$*"; }
+
+# porttest overlay (see build.sh) -- the binpkgs carry `REPO=porttest`,
+# so both consumers need a matching repos.conf entry for `-k` to resolve
+# them. No-op when the atom list has no `porttest/` atoms.
+if [ -d /porttest-overlay ] && grep -q '^porttest/' "$ATOMLIST"; then
+  rm -rf /var/db/repos/porttest
+  cp -a /porttest-overlay /var/db/repos/porttest
+  cat > /etc/portage/repos.conf/porttest.conf <<-EOF
+	[porttest]
+	location = /var/db/repos/porttest
+	masters = gentoo
+	auto-sync = no
+	EOF
+  # the porttest/installmask fixture ships files these patterns should
+  # drop at merge -- set in make.conf (the resolved-config layer) so
+  # BOTH PMs read it identically. (portuale reads env-var INSTALL_MASK
+  # for a source merge but not a --getbinpkg merge -- L1-d; put it here
+  # to actually exercise the mask logic.)
+  printf 'INSTALL_MASK="/usr/share/porttest/im/drop.txt /usr/share/porttest/im/*.log *.la"\n' \
+    >> /etc/portage/make.conf
+fi
 
 # Both containers must start from an IDENTICAL `/` -- so BOTH upgrade
 # portage to <PIN> (the portage consumer merges with it; the portuale
@@ -104,12 +125,17 @@ log "merged $(wc -l < "$OUT.merged-cpvs.txt") packages"
   printf '%s\n' \
     /var/lib/portage/world /var/lib/portage/config \
     /etc/ld.so.cache /etc/ld.so.conf /etc/profile.env /etc/csh.env \
-    /etc/environment /etc/environment.d/ /usr/share/info/dir
+    /etc/environment /etc/environment.d/ /usr/share/info/dir \
+    /var/lib/porttest/
 } | LC_ALL=C sort -u > "$OUT.paths.txt"
 
 log "snapshotting $(wc -l < "$OUT.paths.txt") path entries + $(wc -l < "$OUT.merged-cpvs.txt") vdb dirs -> $OUT.*"
-bash /TEST/compare/snapshot.sh \
-  --paths "$OUT.paths.txt" --vdb-list "$OUT.merged-cpvs.txt" / "$OUT"
+if ! bash /TEST/compare/snapshot.sh \
+     --paths "$OUT.paths.txt" --vdb-list "$OUT.merged-cpvs.txt" / "$OUT" \
+     2> "$OUT.snapshot.err"; then
+  log "!!! snapshot.sh exited non-zero -- see $OUT.snapshot.err"
+  tail -5 "$OUT.snapshot.err" | sed 's/^/    /'
+fi
 
 {
   echo "pm	$PM"
