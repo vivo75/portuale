@@ -1861,6 +1861,41 @@ def test_emerge_atom_without_pretend_really_builds_and_merges_from_source(
     assert world_lines == sorted(world_lines)
 
 
+def test_emerge_emptytree_without_pretend_really_merges(emerge_binary, tmp_path):
+    """`emerge -e/--emptytree` WITHOUT `--pretend` really merges now --
+    the contract suite's old `-e without -p is still refused` probe dated
+    from the dry-run pilot ("(this pilot never really merges)") and died
+    with the other `requires --pretend` gates: `-e` behaves like a plain
+    `emerge <atom>`. Hermetic like its sibling above: fixture `var`
+    copied to a tmp ROOT, so the merges (newpkg New, deeppkg2/deeppkg
+    Reinstall), the vdb entries and the world recording all land outside
+    the read-only fixtures (that probe used fixture ROOT and really
+    merged there, polluting every later test's resolve)."""
+    import shutil
+
+    root = tmp_path / "root"
+    shutil.copytree(Path(FIXTURES_ROOT) / "var", root / "var")
+    env = dict(os.environ)
+    env["PORTAGE_CONFIGROOT"] = FIXTURES_ROOT
+    env["ROOT"] = str(root)
+    env["DISTDIR"] = str(Path(FIXTURES_ROOT) / "distfiles")
+    env["PORTAGE_TMPDIR"] = str(tmp_path / "portage-tmpdir")
+
+    result = subprocess.run(
+        [str(emerge_binary), "-e", "dev-libs/deeppkg"],
+        capture_output=True,
+        text=True,
+        check=False,
+        env=env,
+    )
+    assert result.returncode == 0, result.stderr
+    for cpv in ("newpkg-1.0", "deeppkg2-1.0", "deeppkg-1.0"):
+        assert f">>> dev-libs/{cpv} merged." in result.stdout
+        assert (root / "var/db/pkg/dev-libs" / cpv / "CONTENTS").is_file()
+    assert '>>> Recording dev-libs/deeppkg in "world" favorites file...' in result.stdout
+    assert "dev-libs/deeppkg" in (root / "var/lib/portage/world").read_text().split()
+
+
 def test_emerge_debug_flag_enables_set_x_in_the_build_phases(emerge_binary, tmp_path):
     """`emerge --debug`/`-d` (real main.py:1235) sets PORTAGE_DEBUG=1 in
     every phase environment, so real bin/ebuild.sh's `set -x` guard fires

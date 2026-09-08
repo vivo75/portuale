@@ -15462,6 +15462,31 @@ Deliberate deviations recorded: stateless writes no vdb entry at all
 (single-writer principle -- the server owns installed-db state), and
 the pre-check is lenient on same-package ownership by design.
 
+Contract-suite hermeticity (2026-09-08, test-only slice): the suite
+never writes under `fixtures/` anymore. Bisecting order-dependent
+failures (inotify correlation + chunk runs) found the single polluter:
+`test_emptytree_reinstalls_the_whole_deep_dependency_tree` ended with
+a bare `emerge -e dev-libs/deeppkg` probe against fixture ROOT that
+really merged newpkg/deeppkg2/deeppkg there (vdb entries, world
+rewrite, conf-mem `config` file), breaking every later test whose
+resolve assumed the fixture vdb. The probe's own comment dated it --
+`-e without -p is still refused (this pilot never really merges)`,
+written when the dry-run restriction still held; the other
+`requires --pretend` gates have since been deliberately removed
+(`emerge <atom>`, `-C`, depclean, prune, deselect all act without
+pretend now), and real portage merges on `emerge -e` too, so refusal
+would contradict both. The probe now uses a non-matching atom like
+the sibling gate-gone probes (nothing to merge, nothing written), and
+the real `-e` merge is pinned hermetically in `test_portuale.py`
+(`test_emerge_emptytree_without_pretend_really_merges`: tmp ROOT over
+a copied fixture `var`, exit 0, merged markers, vdb + world in tmp).
+Killing the polluter fixed all 10 contract-file failures with it
+(978/978) -- they were downstream victims of the mid-run pollution,
+not independent breaks. Remaining suite failures are environmental
+(no-TTY `--ask` tests etc.), identical before and after. Rule going
+forward, now enforced by example: no-pretend probes use non-matching
+atoms or tmp ROOTs, never fixture ROOT.
+
 L0-found resolver fixes (2026-09-08, triaged from
 `TEST/run/l0-resolver.sh`'s first real-tree run against a live 3.0.82.2
 `emerge -pv`):

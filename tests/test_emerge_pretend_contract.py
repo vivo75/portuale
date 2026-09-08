@@ -11217,8 +11217,16 @@ def test_emptytree_reinstalls_the_whole_deep_dependency_tree(
     ).stdout
     assert "[ebuild     U  ] dev-libs/upgradepkg-2.0 [1.0]" in eu.stdout
 
-    # -e without -p is still refused (portuale never really merges).
-    assert _run([str(emerge_binary)], ["-e", "dev-libs/deeppkg"], fixture_env).returncode != 0
+    # -e without -p really merges now (the dry-run pilot's refusal died
+    # with the other `requires --pretend` gates -- `emerge -e` behaves
+    # like a plain `emerge <atom>`). So like the sibling gate-gone
+    # probes, use a non-matching atom here: nothing to merge, nothing
+    # written to the read-only fixture ROOT. The real -e merge itself is
+    # pinned hermetically in test_portuale.py
+    # (test_emerge_emptytree_without_pretend_really_merges).
+    nonexistent = _run([str(emerge_binary)], ["-e", "dev-libs/nonexistent"], fixture_env)
+    assert nonexistent.returncode != 0
+    assert "requires --pretend" not in nonexistent.stderr
 
 
 def test_installed_consumer_version_bound_blocks_an_upgrade(
