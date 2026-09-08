@@ -49,6 +49,7 @@ class Pkg:
     type: str
     cp: str
     ver: str
+    slot: str
     repo: str
     flags: str
     use: dict[str, list[str]]
@@ -73,6 +74,33 @@ def split_cpv(s: str) -> tuple[str, str, str]:
     if not m:
         return s, "", ""
     return m["cp"], m["ver"], m["repo"] or ""
+
+
+def split_cpv_slot(tok: str) -> tuple[str, str, str, str]:
+    """``cat/pkg-VER:SLOT/SUB::repo`` -> (cp, ver, slot, repo).
+
+    A multi-slot package (``llvm-core/llvm-21.1.8:21/21.1`` alongside
+    ``…-22.1.8:22/22.1``) must keep the slot in its identity key, or the
+    two rows collapse and the survivor is compared against the wrong
+    slot on the other side -- a phantom ``version`` finding.
+
+    >>> split_cpv_slot("llvm-core/llvm-21.1.8:21/21.1::gentoo")
+    ('llvm-core/llvm', '21.1.8', '21/21.1', 'gentoo')
+    >>> split_cpv_slot("dev-lang/rust-bin-1.96.1:1.96.1::gentoo")
+    ('dev-lang/rust-bin', '1.96.1', '1.96.1', 'gentoo')
+    >>> split_cpv_slot("app-misc/tmux-3.4::gentoo")
+    ('app-misc/tmux', '3.4', '', 'gentoo')
+    >>> split_cpv_slot("sys-apps/hwdata-0.401")
+    ('sys-apps/hwdata', '0.401', '', '')
+    """
+    repo = ""
+    if "::" in tok:
+        tok, repo = tok.split("::", 1)
+    cp, ver, _ = split_cpv(tok)
+    slot = ""
+    if ver and ":" in ver:
+        ver, slot = ver.split(":", 1)
+    return cp, ver, slot, repo
 
 
 ADVICE_ATOM = re.compile(r"^[<>=~]*[a-z0-9][a-z0-9+._-]*/\S+(?:\s+\S+)*\s*$")
@@ -106,15 +134,16 @@ def parse(path: Path) -> tuple[list[Pkg], list[str], int | None, set[str]]:
             tok = rest.split()[0]
             if m["type"] in ("blocks", "uninstall"):
                 # the token is an atom / cpv, not necessarily splittable
-                cp, ver, repo = tok, "", ""
+                cp, ver, slot, repo = tok, "", "", ""
             else:
-                cp, ver, repo = split_cpv(tok)
+                cp, ver, slot, repo = split_cpv_slot(tok)
             use = {k: sorted(v.split()) for k, v in KV.findall(rest)}
             pkgs.append(
                 Pkg(
                     type=m["type"],
                     cp=cp,
                     ver=ver,
+                    slot=slot,
                     repo=repo,
                     flags=" ".join(m["flags"].split()),
                     use=use,
@@ -188,11 +217,14 @@ def compare(slug: str, kind: str, rrc: int, prc: int, rp: Path, pp: Path) -> Pro
             add("error", f"portuale-only message: {e}")
         return pr
 
-    # -- package identity keyed by (type, cp) -------------------------------
-    rmap = {(p.type, p.cp): p for p in rpk}
-    pmap = {(p.type, p.cp): p for p in ppk}
+    # -- package identity keyed by (type, cp, slot) ------------------------
+    # slot is load-bearing: a package installed in two slots at once
+    # (llvm-core/llvm:21 + :22) must not collapse to one map entry.
+    rmap = {(p.type, p.cp, p.slot): p for p in rpk}
+    pmap = {(p.type, p.cp, p.slot): p for p in ppk}
     def ident(p: Pkg) -> str:
-        return f"{p.type} {p.cp}-{p.ver}" if p.ver else f"{p.type} {p.cp}"
+        s = f":{p.slot}" if p.slot else ""
+        return f"{p.type} {p.cp}-{p.ver}{s}" if p.ver else f"{p.type} {p.cp}{s}"
 
     for key in rmap.keys() - pmap.keys():
         add("missing", f"{ident(rmap[key])} present for real, absent for portuale")
@@ -201,8 +233,9 @@ def compare(slug: str, kind: str, rrc: int, prc: int, rp: Path, pp: Path) -> Pro
 
     for key in rmap.keys() & pmap.keys():
         r, p = rmap[key], pmap[key]
+        s = f":{r.slot}" if r.slot else ""
         if r.ver != p.ver:
-            add("version", f"{r.cp}: real {r.ver} vs portuale {p.ver}")
+            add("version", f"{r.cp}{s}: real {r.ver} vs portuale {p.ver}")
         if r.flags != p.flags:
             add("flags", f"{r.cp}: real flags [{r.flags}] vs portuale [{p.flags}]")
         for uk in r.use.keys() | p.use.keys():
@@ -211,8 +244,8 @@ def compare(slug: str, kind: str, rrc: int, prc: int, rp: Path, pp: Path) -> Pro
                 add("use", f"{r.cp} {uk}: real {rv} vs portuale {pv}")
 
     # -- merge order (over the common set) --------------------------------
-    common = [k for k in ((x.type, x.cp) for x in rpk) if k in pmap]
-    pcommon = [k for k in ((x.type, x.cp) for x in ppk) if k in rmap]
+    common = [k for k in ((x.type, x.cp, x.slot) for x in rpk) if k in pmap]
+    pcommon = [k for k in ((x.type, x.cp, x.slot) for x in ppk) if k in rmap]
     if common != pcommon and sorted(common) == sorted(pcommon):
         # first divergent position, for a readable detail
         for i, (a, b) in enumerate(zip(common, pcommon)):
