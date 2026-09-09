@@ -130,6 +130,7 @@ CASES = [
     ("without --deep, an already-installed package's own deps stay unwalked", ["--pretend", "dev-libs/deeppkg"], 0),
     ("--deep: walks the whole already-installed chain", ["--pretend", "--deep", "dev-libs/deeppkg"], 0),
     ("-D short alias for --deep", ["--pretend", "-D", "dev-libs/deeppkg"], 0),
+    ("--deep walk of an installed pkg evaluates flag?() deps against its vdb USE, not effective USE", ["--pretend", "-D", "dev-libs/deepvdbuseconsumer"], 0),
     ("--deep=N inline form", ["--pretend", "--deep=2", "dev-libs/deeppkg"], 0),
     ("--deep=0 matches not passing --deep at all", ["--pretend", "--deep=0", "dev-libs/deeppkg"], 0),
     ("--deep=-1 is a real, immediate parse error", ["--pretend", "--deep=-1", "dev-libs/deeppkg"], 2),
@@ -11541,6 +11542,32 @@ def test_dynamic_deps_chooses_ebuild_vs_vdb_deps_for_an_installed_deep_dep(
         emerge_pretend_python, base[:3] + ["--dynamic-deps=n"] + base[3:], fixture_env
     ).stdout
     assert "newpkg" not in static.stdout
+
+
+def test_deep_walk_evaluates_flag_deps_against_the_installed_vdb_use(
+    emerge_binary, emerge_pretend_python, fixture_env
+):
+    """Real `_pkg_use_enabled(pkg)` returns `pkg._metadata["USE"]` for a
+    `built` (installed) package, so a `--deep` walk's `flag? ( dep )`
+    conditionals resolve against the *recorded* vdb USE, never a fresh
+    profile recompute. dev-libs/deepvdbusepkg is installed with vdb
+    USE="" but its IUSE is `wantdep` and the base profile package.use
+    now enables `wantdep`; its current ebuild RDEPENDs
+    `wantdep? ( dev-libs/deepvdbusetarget )`. Reached only via the
+    `--deep` recursion under dev-libs/deepvdbuseconsumer (New), it must
+    NOT drag in deepvdbusetarget -- portuale previously used the
+    effective profile USE here and pulled it (+ its whole subtree; live
+    `-D @world` on a real box did the same, ~50 phantom packages).
+    Rust == Python."""
+    base = ["--pretend", "-D", "dev-libs/deepvdbuseconsumer"]
+    rust = _run([str(emerge_binary)], base, fixture_env)
+    py = _run(emerge_pretend_python, base, fixture_env)
+    assert rust.returncode == 0
+    assert rust.stdout == py.stdout
+    assert rust.stdout.splitlines() == [
+        "[ebuild  N     ] dev-libs/deepvdbuseconsumer-1.0 ",
+    ]
+    assert "deepvdbusetarget" not in rust.stdout
 
 
 def test_complete_graph_does_not_merge_a_missing_deep_dep_of_an_installed_pkg(

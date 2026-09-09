@@ -13675,18 +13675,12 @@ fn backtracking_resolve(req: &ResolveRequest) -> Result<GraphResult, Error> {
                     {
                         let pf = format!("{}-{version}", key.1);
                         if let Ok(metadata) = read_md5_cache(&resolved.repo_location, &key.0, &pf) {
-                            let candidate_str = format!(
-                                "{}/{}-{version}:{}/{}::{}",
-                                key.0, key.1, resolved.slot, resolved.sub_slot, resolved.repo_name
-                            );
-                            let use_flags = effective_use_flags(
-                                config,
-                                metadata.get("IUSE").map(String::as_str).unwrap_or_default(),
-                                &resolved.keywords,
-                                &candidate_str,
-                                &key.0,
-                                &key.1,
-                            );
+                            // Installed recorded USE, not effective profile
+                            // USE -- see `enqueue_dependencies`'s own note
+                            // just below; a `flag?`-gated dep this display
+                            // list shows must match what the recursion
+                            // actually queued.
+                            let use_flags = read_vdb_flag_set(root, &key.0, &key.1, version, "USE");
                             let real_order_keys: &[&str] = if with_bdeps {
                                 &["RDEPEND", "IDEPEND", "PDEPEND", "DEPEND", "BDEPEND"]
                             } else {
@@ -15583,17 +15577,12 @@ fn enqueue_dependencies(
     else {
         return;
     };
-    let slot = resolved.slot.clone();
-    let sub_slot = resolved.sub_slot.clone();
     let repo_location = resolved.repo_location.clone();
-    let repo_name = resolved.repo_name.clone();
-    let keywords = resolved.keywords.clone();
 
     let pf = format!("{package}-{version}");
     let Ok(metadata) = read_md5_cache(&repo_location, category, &pf) else {
         return;
     };
-    let candidate_str = format!("{category}/{package}-{version}:{slot}/{sub_slot}::{repo_name}");
 
     let dep_keys: &[&str] = if with_bdeps {
         &["DEPEND", "RDEPEND", "BDEPEND", "PDEPEND", "IDEPEND"]
@@ -15602,33 +15591,34 @@ fn enqueue_dependencies(
     };
 
     // `--dynamic-deps` (default) walks the repo's *current* ebuild
-    // metadata; `--dynamic-deps=n` walks the vdb's own installed-time
-    // `*DEPEND` snapshot, flattened against the built (`vdb/USE`) flags.
-    let (use_flags, depstr) = if dynamic_deps {
-        let use_flags = effective_use_flags(
-            config,
-            metadata.get("IUSE").map(String::as_str).unwrap_or_default(),
-            &keywords,
-            &candidate_str,
-            category,
-            package,
-        );
+    // `*DEPEND` strings; `--dynamic-deps=n` walks the vdb's own
+    // installed-time `*DEPEND` snapshot. Either way the USE conditionals
+    // in those strings are evaluated against the package's *installed*
+    // recorded USE (`vdb/USE`), never a fresh profile recompute -- real
+    // `_pkg_use_enabled(pkg)` returns `pkg._metadata["USE"]` for a
+    // `built` package, and `enqueue_dependencies`'s only caller is the
+    // `--deep` recursion into an AlreadyInstalled package (never a
+    // merge-bound one), so this is always a `built` package. Using the
+    // effective profile USE here spuriously pulled `flag?( … )` deps for
+    // a flag the installed build never had -- e.g. `-D @world` on a
+    // system with `app-text/xmlto` built `-text` walked its current
+    // `text? ( || ( virtual/w3m … ) )` and dragged in w3m + ~40 of its
+    // own deps that real never touches.
+    let use_flags = read_vdb_flag_set(root, category, package, version, "USE");
+    let depstr = {
         let mut depstr = String::new();
         for dep_key in dep_keys {
-            if let Some(d) = metadata.get(*dep_key) {
-                depstr.push_str(d);
+            if dynamic_deps {
+                if let Some(d) = metadata.get(*dep_key) {
+                    depstr.push_str(d);
+                    depstr.push(' ');
+                }
+            } else {
+                depstr.push_str(&read_vdb_string(root, category, package, version, dep_key));
                 depstr.push(' ');
             }
         }
-        (use_flags, depstr)
-    } else {
-        let use_flags = read_vdb_flag_set(root, category, package, version, "USE");
-        let mut depstr = String::new();
-        for dep_key in dep_keys {
-            depstr.push_str(&read_vdb_string(root, category, package, version, dep_key));
-            depstr.push(' ');
-        }
-        (use_flags, depstr)
+        depstr
     };
     let tokens: Vec<String> = depstr.split_whitespace().map(String::from).collect();
     // Real `--root-deps` branch-selection feed-in -- see the main
@@ -20570,6 +20560,87 @@ mod tests {
         assert!(call(true).iter().any(|n| n == "dev-libs/newpkg"));
         // =n: the vdb RDEPEND -> samepkg (installed) -> newpkg not pulled.
         assert!(!call(false).iter().any(|n| n == "dev-libs/newpkg"));
+    }
+
+    #[test]
+    fn deep_walk_evaluates_flag_deps_against_the_installed_vdb_use_not_effective() {
+        // dev-libs/deepvdbusepkg is installed with vdb USE="" (no
+        // `wantdep`); its IUSE is `wantdep` and fixtures/repo/profiles/
+        // base/package.use enables it in the *effective* set. Its current
+        // ebuild RDEPENDs `wantdep? ( dev-libs/deepvdbusetarget )`.
+        // Reached only via the --deep recursion under
+        // dev-libs/deepvdbuseconsumer (New), that conditional must be
+        // evaluated against the recorded vdb USE (real `_pkg_use_enabled`
+        // for a built package) -> deepvdbusetarget NOT pulled.
+        let root = fixtures_root();
+        let config = portage_profile::resolve_config(
+            &root,
+            &root.join("repo"),
+            &[("overlay".to_string(), root.join("overlay"))],
+            &[],
+            "testrepo",
+            &HashMap::new(),
+        )
+        .expect("fixture config resolves");
+        let names: Vec<String> = resolve_pretend_graph(
+            &root,
+            &root,
+            &["dev-libs/deepvdbuseconsumer".to_string()],
+            &config,
+            false,
+            false,
+            false,
+            false,
+            Deep::Unlimited,
+            &[],
+            true,
+            false,
+            false,
+            false,
+            false,
+            true,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            &[],
+            &[],
+            false,
+            None,
+            false,
+            false,
+            None,
+            &fixtures_root().join("distfiles"),
+            false,
+            false,
+            false,
+            10,
+            &[],
+            true,
+            false,
+            false,
+            false,
+            &[],
+            &[],
+            true,
+            false,
+        )
+        .unwrap()
+        .entries
+        .into_iter()
+        .map(|e| format!("{}/{}", e.category, e.package))
+        .collect();
+        assert!(
+            names.iter().any(|n| n == "dev-libs/deepvdbuseconsumer"),
+            "{names:?}"
+        );
+        assert!(
+            !names.iter().any(|n| n == "dev-libs/deepvdbusetarget"),
+            "vdb USE lacks `wantdep`, so the gated dep must not be walked: {names:?}"
+        );
     }
 
     #[test]

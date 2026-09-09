@@ -9932,17 +9932,12 @@ def resolve_pretend_graph(
                         except OSError:
                             _ai_metadata = None
                         if _ai_metadata is not None:
-                            _ai_candidate_str = (
-                                f"{category}/{package}-{outcome[1]}:{_ai_resolved['slot']}/"
-                                f"{_ai_resolved['sub_slot']}::{_ai_resolved['repo_name']}"
-                            )
-                            _ai_use_flags = effective_use_flags(
-                                config,
-                                _ai_metadata.get("IUSE", ""),
-                                _ai_resolved["keywords"],
-                                _ai_candidate_str,
-                                category,
-                                package,
+                            # Installed recorded USE, not effective profile
+                            # USE -- see _enqueue_dependencies's own note;
+                            # a flag?( ... ) dep this display list shows
+                            # must match what the recursion actually queued.
+                            _ai_use_flags = _read_vdb_flag_set(
+                                root, category, package, outcome[1], "USE"
                             )
                             _ai_real_order_keys = (
                                 ("RDEPEND", "IDEPEND", "PDEPEND", "DEPEND", "BDEPEND")
@@ -11371,21 +11366,19 @@ def _enqueue_dependencies(
         else ("RDEPEND", "PDEPEND", "IDEPEND")
     )
 
-    # --dynamic-deps (default) walks the current ebuild metadata;
-    # --dynamic-deps=n walks the vdb snapshot + built USE. Mirrors
-    # pretend.rs / portage-repo's enqueue_dependencies.
+    # --dynamic-deps (default) walks the current ebuild's *DEPEND
+    # strings; --dynamic-deps=n walks the vdb snapshot. Either way the
+    # USE conditionals are evaluated against the package's *installed*
+    # recorded USE (vdb/USE), never a fresh profile recompute -- real
+    # _pkg_use_enabled returns pkg._metadata["USE"] for a `built`
+    # package, and _enqueue_dependencies only ever recurses into an
+    # AlreadyInstalled package. Effective profile USE here spuriously
+    # pulled flag?( ... ) deps for a flag the installed build never had.
+    # Mirrors portage-repo's enqueue_dependencies.
+    use_flags = _read_vdb_flag_set(root, category, package, version, "USE")
     if dynamic_deps:
-        use_flags = effective_use_flags(
-            config,
-            metadata.get("IUSE", ""),
-            resolved["keywords"],
-            candidate_str,
-            category,
-            package,
-        )
         depstr = " ".join(metadata[k] for k in dep_keys if metadata.get(k))
     else:
-        use_flags = _read_vdb_flag_set(root, category, package, version, "USE")
         depstr = " ".join(
             _read_vdb_string(root, category, package, version, k) for k in dep_keys
         )

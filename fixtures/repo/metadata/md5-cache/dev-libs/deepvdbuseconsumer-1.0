@@ -1,0 +1,7 @@
+DEFINED_PHASES=-
+DESCRIPTION=fixture: New; RDEPENDs the installed dev-libs/deepvdbusepkg so a --deep walk recurses into it
+EAPI=8
+KEYWORDS=amd64
+RDEPEND=dev-libs/deepvdbusepkg
+SLOT=0
+_md5_=0000000000000000000000000000000

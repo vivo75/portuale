@@ -13,3 +13,11 @@ dev-libs/interleavepkg interleaveflag
 # with exactly one lua_single_target_* flag and its `^^ ( ... )`
 # REQUIRED_USE is satisfied.
 dev-libs/singletargetpkg lua_single_target_luajit -lua_single_target_lua5-1
+
+# dev-libs/deepvdbusepkg is installed with vdb USE="" (no wantdep); this
+# profile entry enables wantdep in the *effective* USE. A `--deep` walk
+# of the installed package must evaluate its `wantdep? ( ... )` RDEPEND
+# against the recorded vdb USE (real `_pkg_use_enabled` for a built
+# package), NOT this effective set -- so dev-libs/deepvdbusetarget is
+# NOT pulled.
+dev-libs/deepvdbusepkg wantdep

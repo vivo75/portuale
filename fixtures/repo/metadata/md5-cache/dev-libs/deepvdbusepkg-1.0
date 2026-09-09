@@ -1,0 +1,8 @@
+DEFINED_PHASES=-
+DESCRIPTION=fixture: installed -text-style; current ebuild has wantdep?( dep ), profile enables wantdep, but vdb USE does not
+EAPI=8
+IUSE=wantdep
+KEYWORDS=amd64
+RDEPEND=wantdep? ( dev-libs/deepvdbusetarget )
+SLOT=0
+_md5_=0000000000000000000000000000000
