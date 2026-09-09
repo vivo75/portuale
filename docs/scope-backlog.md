@@ -464,10 +464,14 @@ ANSI USE colour all shipped 2026-09-05, see `what-this-proves.md`'s
   `PollScheduler._can_add_job` semantics + the per-builddir key
   serialization matching real `doebuild()`'s `EbuildBuildDir` lock;
   byte-identical cache *and* stdout vs serial; `--jobs=0` = CPU count
-  per real `main.py:1023-1041` -- see `what-this-proves.md`). Still
-  open, each its own future slice: real's `_pull_valid_cache`
-  shortcut (skip the `depend` phase when the on-disk entry is already
-  valid -- performance only, content-identical) and
+  per real `main.py:1023-1041` -- see `what-this-proves.md`). Real's
+  `_pull_valid_cache` shortcut (skip the `depend` phase when the
+  on-disk entry is already valid -- performance only,
+  content-identical) **shipped 2026-09-09** (`regen.rs::
+  cache_entry_is_valid`: `_md5_` vs the ebuild file, `EAPI`
+  supported, every `_eclasses_` md5 vs the masters-chain winner;
+  the file is left untouched, mtime preserved -- see
+  `what-this-proves.md`). Still open, its own future slice:
   `metadata_regen_retry`'s `cp_retry` (re-run a whole cp whose phase
   failed with an *unexpected* returncode -- exit-code semantics, not
   content);

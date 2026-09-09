@@ -2214,6 +2214,103 @@ def test_emerge_regen_jobs_parallel_matches_serial_cache_bytes(emerge_binary, tm
     assert snapshot() == serial_bytes
 
 
+def test_emerge_regen_skips_the_depend_phase_when_the_cache_entry_is_valid(
+    emerge_binary, tmp_path
+):
+    """Real `MetadataRegen._iter_metadata_processes`'s
+    `portdb._pull_valid_cache(cpv, ebuild_path, repo_path)` shortcut
+    (`porttree.py:603-658` + `cache/template.py::validate_entry`):
+    when the on-disk `metadata/md5-cache/<cat>/<pf>` entry is already
+    valid -- `_md5_` matches the ebuild, `EAPI` supported, every
+    `_eclasses_` md5 still matching -- the `depend` phase is skipped
+    (perf only, content-identical). A stale `_md5_`, a changed ebuild,
+    or a changed eclass must still rewrite."""
+    import hashlib
+    import time
+
+    repo = tmp_path / "repo"
+    (repo / "dev-libs" / "regenpkg").mkdir(parents=True)
+    (repo / "dev-libs" / "inheritspkg").mkdir(parents=True)
+    (repo / "eclass").mkdir(parents=True)
+    (repo / "profiles").mkdir(parents=True)
+    (repo / "profiles" / "repo_name").write_text("regentest\n")
+    eclass_text = "# fixture eclass\n"
+    (repo / "eclass" / "regenclass.eclass").write_text(eclass_text)
+    ebuild = repo / "dev-libs" / "regenpkg" / "regenpkg-1.0.ebuild"
+    ebuild_text = 'EAPI=8\nDESCRIPTION="regen test"\nSLOT="0"\nKEYWORDS="amd64"\n'
+    ebuild.write_text(ebuild_text)
+    iebuild = repo / "dev-libs" / "inheritspkg" / "inheritspkg-1.0.ebuild"
+    iebuild_text = (
+        'EAPI=8\ninherit regenclass\nDESCRIPTION="inherits"\n'
+        'SLOT="0"\nKEYWORDS="amd64"\n'
+    )
+    iebuild.write_text(iebuild_text)
+
+    cfg = tmp_path / "cfg"
+    (cfg / "etc" / "portage").mkdir(parents=True)
+    (cfg / "etc" / "portage" / "repos.conf").write_text(
+        f"[DEFAULT]\nmain-repo = regentest\n\n[regentest]\nlocation = {repo}\n"
+    )
+
+    env = dict(os.environ)
+    env["PORTAGE_CONFIGROOT"] = str(cfg)
+    env["ROOT"] = str(cfg)
+    env["PORTAGE_RUNNING_ROOT"] = "/"
+    env["PORTAGE_TMPDIR"] = str(tmp_path / "pt")
+
+    def run_regen():
+        return subprocess.run(
+            [str(emerge_binary), "--regen"],
+            capture_output=True,
+            text=True,
+            check=False,
+            env=env,
+        )
+
+    first = run_regen()
+    assert first.returncode == 0, first.stderr
+    entry = repo / "metadata" / "md5-cache" / "dev-libs" / "regenpkg-1.0"
+    ientry = repo / "metadata" / "md5-cache" / "dev-libs" / "inheritspkg-1.0"
+    assert entry.exists() and ientry.exists()
+    first_bytes = entry.read_bytes()
+    first_ibytes = ientry.read_bytes()
+
+    # Backdate both entries: a skip leaves the file untouched (same
+    # bytes *and* same mtime), a rewrite would stamp "now".
+    old = time.time() - 100
+    os.utime(entry, (old, old))
+    os.utime(ientry, (old, old))
+
+    second = run_regen()
+    assert second.returncode == 0, second.stderr
+    assert second.stdout == first.stdout
+    assert entry.read_bytes() == first_bytes
+    assert ientry.read_bytes() == first_ibytes
+    assert abs(entry.stat().st_mtime - old) < 2
+    assert abs(ientry.stat().st_mtime - old) < 2
+
+    # A changed ebuild invalidates (stale `_md5_`): the entry is
+    # rewritten with the new content.
+    ebuild.write_text(ebuild_text.replace("regen test", "regen test two"))
+    third = run_regen()
+    assert third.returncode == 0, third.stderr
+    assert entry.read_bytes() != first_bytes
+    assert b"regen test two" in entry.read_bytes()
+    assert (
+        hashlib.md5(ebuild.read_bytes()).hexdigest()
+        in entry.read_text().split("_md5_=")[1]
+    )
+
+    # A changed eclass invalidates via `_eclasses_` (real
+    # `eclass_cache.validate_and_rewrite_cache`): the inherited
+    # entry's `_eclasses_` md5 follows the eclass file.
+    (repo / "eclass" / "regenclass.eclass").write_text("# fixture eclass v2\n")
+    fourth = run_regen()
+    assert fourth.returncode == 0, fourth.stderr
+    new_eclass_md5 = hashlib.md5(b"# fixture eclass v2\n").hexdigest()
+    assert f"regenclass\t{new_eclass_md5}" in ientry.read_text()
+
+
 def test_emerge_buildpkgonly_refuses_a_real_src_uri_with_no_manifest_entry(
     emerge_binary, tmp_path
 ):

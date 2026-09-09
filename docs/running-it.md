@@ -2413,7 +2413,31 @@ Deterministic slice tests: `pytest tests/test_portuale.py -k
 tests/test_emerge_pretend_contract.py -k "jobs or load_average or
 test_pretend_matches"` (every `--jobs`/`--load-average` spelling +
 error strings, Rust == Python) and `cargo test -p portuale regen`
-(dispatch key-blocking unit test).
+(dispatch key-blocking + `cache_valid` unit tests).
+
+`emerge --regen` skips the `depend` phase when the on-disk entry is
+already valid (real `_pull_valid_cache`, perf only -- same bytes,
+same stdout, file mtime untouched). Backdate the entry, regen again,
+and the timestamp survives:
+
+```sh
+export PORTAGE_CONFIGROOT=$T/cfg ROOT=$T/cfg PORTAGE_TMPDIR=$T/pt
+rust/target/release/portuale emerge --regen
+# Regenerating cache entries...
+# Processing dev-libs/regenpkg
+# done!
+touch -d '10 minutes ago' $T/repo/metadata/md5-cache/dev-libs/regenpkg-1.0
+stat -c '%y' $T/repo/metadata/md5-cache/dev-libs/regenpkg-1.0
+# 2026-09-09 14:36:32.888751399 +0200
+rust/target/release/portuale emerge --regen
+# (same three lines, exit 0)
+stat -c '%y' $T/repo/metadata/md5-cache/dev-libs/regenpkg-1.0
+# 2026-09-09 14:36:32.888751399 +0200  (unchanged: phase skipped)
+```
+
+Deterministic slice test: `pytest tests/test_portuale.py -k
+"skips_the_depend_phase"` (mtime + bytes preserved, edited ebuild /
+eclass still rewrite).
 
 `--implicit-system-deps=n` (skip the @system-first merge-order bias,
 real `depgraph._merge_order_bias` early return): `emerge -pu @world`
