@@ -46,7 +46,15 @@ the next slice") and expects the same rhythm every time:
 8. **Run the full verification pass** before a slice is done:
    `cargo fmt --check`, `cargo clippy --release --all-targets` (zero
    warnings), `cargo test --release` (whole workspace),
-   `python3 -m pytest tests -q` (whole suite).
+   `python3 -m pytest tests -q` (whole suite). **Periodically — and
+   always after a big merge from another branch, or a change to the
+   resolver / merge-order / ebuild-phase / merge code — also run the
+   container differential test bed** (`TEST/run/l0-resolver.sh`, plus
+   `TEST/run/l1-merge-from-binpkg.sh` if merge behaviour changed). It
+   compares portuale against the real `emerge` on a real Gentoo tree and
+   is the only thing that catches regressions the fixture suite can't;
+   it's heavier, so it's not part of every slice. See
+   [`TEST/README.md`](TEST/README.md).
 9. **Only `git commit` / `git push` when explicitly asked** — separate,
    later requests each time, never implied by finishing a slice. Commit
    title `<what changed>: <short description>`; wrapped body explaining

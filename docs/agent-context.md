@@ -124,6 +124,28 @@ implements (`pretend.rs`'s `HELP_TEXT`, mirrored in
   over time.
 - Rust CI also gates on a **musl static build** smoke-tested inside a
   minimal (`scratch`/busybox-level) container.
+- **Container-based real-system differential test bed** (`TEST/`, see
+  [`TEST/README.md`](../TEST/README.md) and
+  [`docs/real-world-testing.md`](real-world-testing.md)): runs portuale
+  *and* the real `emerge` against a pinned real Gentoo tree inside
+  throwaway `podman` containers and diffs the results. **L0**
+  (`TEST/run/l0-resolver.sh`) — `emerge -pv` for ~120 real atoms
+  (firefox, plasma-meta, `@world`, …), comparing merge lists / USE /
+  order / errors / exit codes. **L1**
+  (`TEST/run/l1-merge-from-binpkg.sh`) — both PMs merge an identical
+  prebuilt binpkg set into a fresh `/` and the resulting filesystem + VDB
+  snapshots are diffed. It is **live and exercised** (not the "planning
+  only" that `real-world-testing.md`'s header still says), and it is the
+  only check that catches resolver / merge-path regressions at real-tree
+  scale — the fixture-based pytest contract suite cannot. Needs the
+  `localhost/test-portuale:latest` image (`sudo TEST/create-container.bash`).
+  It is **slower and heavier** than the pytest/`cargo test` pass, so it
+  is not part of every slice's verification — but running L0 (and L1
+  where merge behaviour changed) is **advisable periodically, and
+  especially after a big merge from another branch or a change to the
+  resolver / merge-order / phase code**, to confirm nothing regressed at
+  scale. Findings go in `TEST/findings/`; adjudicated non-bugs in
+  `TEST/compare/known-divergences.yaml`.
 
 ## Ownership
 
