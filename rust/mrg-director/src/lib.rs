@@ -21,7 +21,7 @@
 //! |------|--------------|--------------------------|
 //! | Solver | `_emerge/depgraph.py` (`depgraph` class) + `_emerge/resolver/backtracking.py` | `portage_repo::Resolver` (`BacktrackingResolver`, via `active_resolver()`) |
 //! | PkgDatabase (vdb/edb/bintree) | `portage/dbapi/{vartree,porttree,bintree}.py` (subclasses of `dbapi`) | ad-hoc file readers scattered in `pretend.rs`/`portage-repo`; **no shared facade yet** |
-//! | RepoCache (md5-cache backends) | `portage/cache/template.py::database` (flat_hash/sqlite/anydbm/volatile) | `portage_repo::read_md5_cache` (flat file only) |
+//! | RepoCache (md5-cache backends) | `portage/cache/template.py::database` (flat_hash/sqlite/anydbm/volatile) | `Md5Cache` (flat file, real `flat_hash.py`) / `VolatileCache` (in-memory, real `volatile.py`) |
 //! | BinpkgFetch | `portage/package/ebuild/fetch.py` + `_emerge/*binpkg*` | `portage_fetch` (real `wget`) + `portage_repo` remote binpkg index |
 //! | MergeEngine | `_emerge/MergeListItem.py` dispatch + `_emerge/PackageMerge.py` / `EbuildMerge.py` / `vartree.py::dblink.merge` | `ebuild_merge::{run_merge, run_qmerge, merge_binpkg}` via `emerge_getbinpkg::run_merge_plan`'s per-entry dispatch |
 //! | BinpkgIndex | `portage/dbapi/bintree.py` (local `$PKGDIR`/`Packages` + remote `PORTAGE_BINHOST` backends) | `PkgdirBinIndex` (local) / `RemoteBinhostIndex` (remote), delegating to `portage_repo::BinaryIndex` reads |
@@ -510,6 +510,94 @@ impl RepoCache for Md5Cache<'_> {
     }
 }
 
+/// The in-memory `RepoCache` backend: the "second implementation per
+/// slot" for the repo-cache slot, holding the same flat aux dictionaries
+/// `Md5Cache` reads off disk in an owned map instead.
+///
+/// Grounding: real `portage/cache/volatile.py::database` — the
+/// dict-backed cache backend (`self._data = {}`), which `deepcopy`s on
+/// every read and write (`__getitem__`/`_setitem`) so callers can never
+/// alias the store's internals. This port mirrors that ownership rule:
+/// `insert` clones in, [`RepoCache::metadata`] clones out. Real marks
+/// `serialize_eclasses = False` / `store_eclass_paths = False` (no
+/// eclass-string round-trip); the trait's read-only surface already
+/// narrows that machinery out, so there is nothing further to port.
+///
+/// Uses, beyond satisfying the contract's interchangeability: a
+/// pre-loaded snapshot cache for benchmarks and tests (no filesystem),
+/// and the read side of a generated cache before it is ever written.
+#[derive(Debug, Clone, Default)]
+pub struct VolatileCache {
+    /// `(category, pf) → aux dict`, the `volatile._data` dict.
+    entries: std::collections::HashMap<(String, String), std::collections::HashMap<String, String>>,
+    /// The repo this cache stands in for (`::reponame`), for provenance.
+    repo_name: String,
+}
+
+impl VolatileCache {
+    /// An empty cache standing in for `repo_name`.
+    pub fn new(repo_name: &str) -> Self {
+        Self {
+            entries: std::collections::HashMap::new(),
+            repo_name: repo_name.to_string(),
+        }
+    }
+
+    /// A cache pre-loaded from `(category, pf, aux dict)` triples (a
+    /// snapshot read, or a generated cache not yet flushed to disk).
+    pub fn from_entries(
+        entries: Vec<(String, String, std::collections::HashMap<String, String>)>,
+        repo_name: &str,
+    ) -> Self {
+        let mut cache = Self::new(repo_name);
+        for (category, pf, metadata) in entries {
+            cache.insert(&category, &pf, metadata);
+        }
+        cache
+    }
+
+    /// Store (a copy of) `metadata` under `category/pf` — real
+    /// `volatile._setitem`'s `deepcopy` in.
+    pub fn insert(
+        &mut self,
+        category: &str,
+        pf: &str,
+        metadata: std::collections::HashMap<String, String>,
+    ) {
+        self.entries
+            .insert((category.to_string(), pf.to_string()), metadata);
+    }
+}
+
+impl RepoCache for VolatileCache {
+    fn metadata(
+        &self,
+        category: &str,
+        pf: &str,
+    ) -> Result<std::collections::HashMap<String, String>, String> {
+        // A copy out, never a borrow of the store — real
+        // `volatile.__getitem__`'s `deepcopy`, so a caller mutating the
+        // returned dict cannot corrupt the cache.
+        self.entries
+            .get(&(category.to_string(), pf.to_string()))
+            .cloned()
+            .ok_or_else(|| format!("volatile cache has no entry for {category}/{pf}"))
+    }
+    fn category(&self, category: &str) -> Vec<String> {
+        let mut pfs: Vec<String> = self
+            .entries
+            .keys()
+            .filter(|(c, _)| c == category)
+            .map(|(_, pf)| pf.clone())
+            .collect();
+        pfs.sort();
+        pfs
+    }
+    fn repo(&self) -> &str {
+        &self.repo_name
+    }
+}
+
 /// The current `Fetcher`: real-src via the same `wget` + Manifest
 /// verification steps `portuale::fetch::fetch_src_uri` drives.
 pub struct WgetFetcher;
@@ -822,6 +910,49 @@ mod tests {
         assert_eq!(cache.repo(), "main");
         assert!(cache.category("dev-libs").is_empty());
         assert!(cache.metadata("dev-libs", "example-1.0").is_err());
+    }
+
+    /// `VolatileCache` is the repo-cache slot's second implementation
+    /// (real `cache/volatile.py`'s dict backend): the same three reads as
+    /// `Md5Cache`, served from an owned in-memory map. The shape pins:
+    /// pre-loaded entries read back whole, `category` lists in stable
+    /// sort order, a missing entry is `Err` (never a panic), and the
+    /// returned dict is a copy — mutating it leaves the store intact
+    /// (real `volatile.__getitem__`'s `deepcopy`).
+    #[test]
+    fn repo_cache_volatile_is_the_in_memory_second_backend() {
+        let aux = std::collections::HashMap::from([
+            ("SLOT".to_string(), "0".to_string()),
+            ("KEYWORDS".to_string(), "amd64".to_string()),
+        ]);
+        let cache = VolatileCache::from_entries(
+            vec![
+                ("dev-libs".to_string(), "b-2.0".to_string(), aux.clone()),
+                ("dev-libs".to_string(), "a-1.0".to_string(), aux.clone()),
+            ],
+            "main",
+        );
+        assert_eq!(cache.repo(), "main");
+        assert_eq!(cache.category("dev-libs"), vec!["a-1.0", "b-2.0"]);
+        assert!(cache.category("sys-apps").is_empty());
+        assert_eq!(
+            cache.metadata("dev-libs", "a-1.0").unwrap().get("SLOT"),
+            Some(&"0".to_string())
+        );
+        assert!(cache.metadata("dev-libs", "missing-9.9").is_err());
+
+        let mut read_back = cache.metadata("dev-libs", "a-1.0").unwrap();
+        read_back.insert("SLOT".to_string(), "corrupted".to_string());
+        assert_eq!(
+            cache.metadata("dev-libs", "a-1.0").unwrap().get("SLOT"),
+            Some(&"0".to_string())
+        );
+
+        let mut empty = VolatileCache::new("overlay");
+        assert_eq!(empty.repo(), "overlay");
+        assert!(empty.category("dev-libs").is_empty());
+        empty.insert("dev-libs", "c-3.0", aux);
+        assert_eq!(empty.category("dev-libs"), vec!["c-3.0"]);
     }
 
     /// `Fetcher::fetch` takes a flattened per-file [`SrcUriEntry`] and

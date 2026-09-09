@@ -567,8 +567,13 @@ the real evaluation stays in `pretend.rs::run_check_news`; a GLSA
 `LoadAwarePolicy` marker implementing the serial/gated default inline).
 The `Director<S, D, C, F, M>` struct is now `Director<S, D, C, F, M, B,
 N, P>` carrying all eight slots; contract tests grew from seven shape
-pins to ten. What remains is landing further *second* implementations
-per slot — new-algorithm work, not new-seam work
+pins to eleven. **RepoCache second backend shipped (H.14, first slot
+after `BinpkgIndex`)**: `VolatileCache` (real `cache/volatile.py`'s
+dict backend, `deepcopy` in/out) next to `Md5Cache` (real
+`flat_hash.py`) behind the same three reads — see `what-this-proves.md`.
+What remains is landing further *second* implementations per slot —
+PackagesDb, Fetcher, MergeEngine, NewsSet, SchedulerPolicy, one slice
+each — new-algorithm work, not new-seam work
 (see `what-this-proves.md`'s "`mrg` director contracts" entry).
 
 **`--solver=` alternate backends**: the solver slot's

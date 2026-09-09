@@ -2041,16 +2041,30 @@ Live-verified exactly as run:
 
 ```sh
 cargo test --release -p mrg-director
-# running 7 tests
-# test tests::director_holds_five_slots_and_plans_through_its_solver ... ok
+# running 11 tests
+# test tests::binpkg_index_admits_both_local_and_remote_backends ... ok
+# test tests::director_holds_eight_slots_and_plans_through_its_solver ... ok
 # test tests::fetcher_returns_a_manifested_path ... ok
 # test tests::merge_engine_executes_one_unit_to_one_outcome ... ok
+# test tests::news_selector_is_unread_ids_plus_repo ... ok
 # test tests::packages_db_is_three_queries_plus_root ... ok
 # test tests::repo_cache_is_read_only_query_by_key ... ok
+# test tests::repo_cache_volatile_is_the_in_memory_second_backend ... ok
 # test tests::resolver_seam_is_the_single_re_export ... ok
 # test tests::resolver_speaks_graph_result ... ok
-# test result: ok. 7 passed; 0 failed
+# test tests::scheduler_policy_gates_by_jobs_and_load_average ... ok
+# test result: ok. 11 passed; 0 failed
 ```
+
+RepoCache second backend (H.14, first slot after BinpkgIndex): the
+repo-cache slot has its second algorithm — `VolatileCache`, the
+in-memory dict backend grounded in real `cache/volatile.py`
+(`deepcopy` in/out, so reads never alias the store), next to
+`Md5Cache` (real `flat_hash.py`). Same three reads, no filesystem —
+a pre-loaded snapshot cache for benchmarks and tests. Pinned by
+`repo_cache_volatile_is_the_in_memory_second_backend` in the run
+above (entries read back whole, sorted `category`, missing entry is
+`Err`, mutating a returned dict leaves the store intact).
 
 `--solver=` alternate backends (2026-09-07): the director's solver slot
 has its second and third algorithms — `emerge`/`mrg --pretend
