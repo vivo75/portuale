@@ -15944,30 +15944,37 @@ which left the tree non-compiling); the compile repair is part of this
 entry. Still open in Part 2.A: the `_FrontierDigraph` perf layer and
 blocker/uninstall interleaving.
 
-**Slot-collision `use` keys + `need_rebuild` trailer (tested, dormant).**
-The render side of the two remaining notice cuts is ported on both
-languages and pinned by unit tests, but ships dormant: no fixture can
-trigger it yet, so no contract CASES (a fixture that "passes" without
-isolating the behaviour would be worse than none). What landed:
-`portage-dep::use_mismatch_flags` (missing-IUSE vs contradicted-USE,
-transcribed from `violated_conditionals`' unconditional branches --
-conditional forms never yield keys, matching real, which only reads
-`.enabled ∪ .disabled`), the `Use(flag)` collision reason with
-unconditional-first display ordering and `^` spans over violated USE
-tokens (no colorization), the `slot_conflict_need_rebuild` check
-(installed + built-`:=` parent; `--exclude` / `--useoldpkg-atoms` /
-ebuild-masked reasons), and the trailer block. Verified live against real portage where real is
-runnable: the notice shape (both use-key parents shown, unconditional
-first, caret under the violated token, masked `(-x)` display) matches
-real's `--color=n` output exactly. Why dormant, each verified live:
-slot-reuse skips USE re-verification (real pulls a second instance,
-portuale reuses or swallows with rc 0); `--dynamic-deps=n` doesn't
-switch the walk source via the CLI (unit test disagrees -- open
-mystery); literal bound `:=` is accepted in ebuilds but real masks it
-as improper context. See `scope-backlog.md` Part 2.A for the scoped
-follow-ups. Pinned: five `portage-dep::use_mismatch_tests` unit tests;
-`cargo test` / `pytest` fully green around the change (32 slot-notice
-tests byte-identical).
+**Slot-collision `use` keys (observable) + `need_rebuild` trailer
+(dormant).** The render side ported earlier (`use_mismatch_flags`,
+`Use(flag)` reasons, unconditional-first ordering, USE-token `^` spans
+without colorization, `slot_conflict_need_rebuild` + trailer) is now
+triggered for real: slot-reuse re-verifies USE-deps (a `>=T-1.0[x]`
+parent no longer silently reuses a resolved x-off instance -- it pulls a
+second instance and reports the conflict, falling through to the
+autounmask flip suggestion exactly like real shows both), the
+backtracking solvability pre-check is USE-aware (no more swallowed
+"no visible ebuild" retries), same-slot records merge per (slot,
+existing, current) triple (real keeps one handler per slot), and
+puller filing is USE-aware with subslot-carrying match strings
+(built-`:=` parents no longer vanish). New `dev-libs/slotuse*` fixture
+(`slotusetarget` 1.0 `+x +y` / 2.0 `-x`, versioned `package.use.mask`
+blocking the x flip -- a repo-level file, user config has no such
+file): `emerge -p dev-libs/slotusegroup` renders the version-keyed
+parent plus unconditional `[y]` before violated `[x]`, byte-identical
+Rust == Python and matching live real portage's `--color=n` shape
+(modulo the standing divergences: resolved-first instance order vs
+real's arbitrary set order, no `to <root>` suffixes, rc 0). The
+`need_rebuild` trailer code stays dormant (no vdb-recorded bound-`:=`
+fixture reachable until `--dynamic-deps=n` switches the walk source
+via the CLI -- open mystery, both languages agree). Also noted along
+the way: literal bound `:=` in ebuilds is accepted by portuale but
+masked-invalid by real (atom validation gap). Pinned: five
+`portage-dep::use_mismatch_tests` unit tests, the extended
+`slot_conflict_reason_and_caret_span` render test (use keys + caret
+spans), `record_slot_conflict_merges_same_triple_and_appends_new`, a
+CASES entry, and
+`test_slot_conflict_use_reason_keys_unconditional_before_violated`
+(full stdout pinned, Rust == Python).
 
 **Circular `followup_change` fixture.** `docs/history/find-suggestions-
 plan.md` left exactly one `_find_suggestions` variant without a fixture:

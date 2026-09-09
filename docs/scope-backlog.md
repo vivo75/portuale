@@ -119,12 +119,13 @@ can't grow into these incrementally:
   groups, every IUSE flag, enabled-first, `( )`-wrapped for force/mask),
   via a new per-instance/per-parent `use_display` on `SlotConflict`
   (`what-this-proves.md`'s "slot-collision notice `pkg_use_display`"
-  entry). The `use` reason keys and the `need_rebuild` trailer have
-  since **landed as tested-but-dormant render code** (see
-  `what-this-proves.md`): the classification, display selection,
-  unconditional-first ordering, USE-token `^` spans (no color), and the
-  trailer all work, but no fixture can trigger them yet. Still cut or
-  blocked:
+  entry).   The `use` reason keys have since **shipped observably**
+  (`dev-libs/slotusegroup` fixture: unconditional `[y]` before violated
+  `[x]`, `^` spans, no color; see `what-this-proves.md`): classification,
+  display selection, unconditional-first ordering, and USE-token markers
+  all work dual-language, byte-identical. The `need_rebuild` trailer code
+  is also landed but still dormant (no fixture can trigger it yet). Still
+  cut or blocked:
   - operator/USE-token colorization (which faithfully reproduces a
     genuine upstream `highlight_violations` marker-drift bug — see
     `history/scope-backlog-2026-09-05.md`; portuale marks the uncolored
@@ -134,21 +135,24 @@ can't grow into these incrementally:
     `portage-dep` cannot parse soname atoms and dep flattening drops
     unparseable tokens, so no soname parent atom can ever reach the
     collision renderer (a deliberate non-gap, not a cut);
-  - **resolver substrate the dormant code waits on** (each a scoped
-    follow-up of its own, all verified live against real portage):
-    resolved-slot reuse skips USE re-verification (a `>=T-1.0[x]` parent
-    silently reuses a resolved x-off instance instead of pulling a
-    second one like real does -- and the upgrade direction swallows the
-    then-unsatisfied dep with rc 0; without this fix no USE-mismatching
-    second instance can ever form);
+  - the `need_rebuild` fixture (blocked on the vdb walk below);
+  - **resolver substrate, shipped or scoped** (all verified live against
+    real portage): slot-reuse USE re-verification **shipped** (a
+    `>=T-1.0[x]` parent no longer silently reuses a resolved x-off
+    instance -- it pulls a second instance and reports the conflict;
+    the backtrack solvability pre-check is USE-aware too); conflict
+    records merge per (slot, existing, current) triple (real keeps one
+    handler per slot); puller filing is USE-aware and subslot-carrying
+    (built-`:=` parents no longer vanish);
     `--dynamic-deps=n` not switching the AlreadyInstalled walk source
     via the CLI (both languages walk ebuild deps; the
     `dynamic_deps_picks_ebuild_vs_vdb_deps` unit test disagrees --
-    unexplained, needs owner eyes; it also blocks any vdb-recorded
-    bound-`:=` need_rebuild fixture);
+    unexplained, needs owner eyes);
     literal bound `:=` atoms accepted in ebuilds (real masks them
     "improper context for slot-operator built atom syntax" -- an atom
     validation gap; it also rules out ebuild-carried `:=` fixtures).
+  - instance display order (resolved-first vs real's arbitrary
+    set-iteration order -- pre-existing, no semantic content).
 - **Circular-dep's remaining cuts** — full elementary-cycle enumeration /
   `large_cycle_count` (real's own richer multi-priority digraph, a
   different graph representation than portuale keeps) and the cycle-only

@@ -12099,6 +12099,18 @@ fn build_slot_conflict(
     };
     let a_match = with_sub(existing_version, &a_sub);
     let b_match = with_sub(current_version, &b_sub);
+    // USE-aware filing: a puller files under the instance its atom
+    // *fully* satisfies (version+slot+USE), not just the string match.
+    // Real lists every puller and display-filters by reason; portuale's
+    // two-instance model files by match instead, so a USE-mismatching
+    // parent must land on the instance it actually pulls (e.g.
+    // `>=T-1.0[x]` under 1.0, never under the x-off 2.0 it version-
+    // matches). Without this, USE parents file under the wrong instance
+    // and vanish from the notice (their atom satisfies the other side).
+    let (a_iuse, a_use) =
+        slot_conflict_flag_sets(repos, config, category, package, existing_version);
+    let (b_iuse, b_use) =
+        slot_conflict_flag_sets(repos, config, category, package, current_version);
     let puller_cpv = |pc: &str, pp: &str, pv: &str| -> String {
         if pc.is_empty() {
             return String::new();
@@ -12110,10 +12122,22 @@ fn build_slot_conflict(
     let mut parents_b: Vec<SlotConflictParent> = Vec::new();
     if let Some(pullers) = slot_pullers.get(&(category.to_string(), package.to_string())) {
         for (pc, pp, pv, atom) in pullers {
+            let parsed = portage_dep::parse_atom(atom);
+            let use_ok = |iuse: &HashSet<String>, use_: &HashSet<String>| match &parsed {
+                Some(a) => match &a.use_deps {
+                    Some(ud) => portage_dep::use_deps_satisfied(ud, iuse, use_),
+                    None => true,
+                },
+                // Unparseable atoms (soname and friends never reach
+                // pullers, but be permissive): file by string match.
+                None => true,
+            };
             let hits_a = portage_dep::match_from_list(atom, &[a_match.as_str()])
-                .is_some_and(|m| !m.is_empty());
+                .is_some_and(|m| !m.is_empty())
+                && use_ok(&a_iuse, &a_use);
             let hits_b = portage_dep::match_from_list(atom, &[b_match.as_str()])
-                .is_some_and(|m| !m.is_empty());
+                .is_some_and(|m| !m.is_empty())
+                && use_ok(&b_iuse, &b_use);
             let entry = SlotConflictParent {
                 parent_cpv: puller_cpv(pc, pp, pv),
                 atom: atom.clone(),
@@ -12160,6 +12184,31 @@ fn build_slot_conflict(
                 parents: parents_b,
             },
         ],
+    }
+}
+
+/// Records a freshly built `SlotConflict`, merging into an existing
+/// record for the same `(category, package, slot, existing, current)`
+/// triple instead of appending a duplicate block. Real keeps one
+/// collision handler per conflicting slot, accumulating every puller;
+/// portuale pushes per mismatching atom, so a second distinct atom
+/// hitting the same pair (e.g. two USE-deps pulling the older version)
+/// must re-render the record from the pullers recorded so far -- which
+/// `build_slot_conflict` already does from the live `slot_pullers` map,
+/// making the merge a pure replace. Records that differ in any key
+/// element are unrelated and still append (the pre-existing multi-slot
+/// behavior is untouched).
+fn record_slot_conflict(slot_conflicts: &mut Vec<SlotConflict>, sc: SlotConflict) {
+    if let Some(prev) = slot_conflicts.iter_mut().find(|p| {
+        p.category == sc.category
+            && p.package == sc.package
+            && p.slot == sc.slot
+            && p.resolved_version == sc.resolved_version
+            && p.instances.get(1).map(|i| &i.version) == sc.instances.get(1).map(|i| &i.version)
+    }) {
+        *prev = sc;
+    } else {
+        slot_conflicts.push(sc);
     }
 }
 
@@ -14435,17 +14484,20 @@ fn backtracking_resolve(req: &ResolveRequest) -> Result<GraphResult, Error> {
                     portage_dep::match_from_list(&current_atom, &[existing_str.as_str()])
                         .is_some_and(|m| !m.is_empty());
                 if !satisfied {
-                    slot_conflicts.push(build_slot_conflict(
-                        &repos,
-                        config,
-                        &key.0,
-                        &key.1,
-                        &slot,
-                        &existing_version,
-                        &current_atom,
-                        &version,
-                        &slot_pullers,
-                    ));
+                    record_slot_conflict(
+                        &mut slot_conflicts,
+                        build_slot_conflict(
+                            &repos,
+                            config,
+                            &key.0,
+                            &key.1,
+                            &slot,
+                            &existing_version,
+                            &current_atom,
+                            &version,
+                            &slot_pullers,
+                        ),
+                    );
                     continue;
                 }
 
@@ -14458,6 +14510,66 @@ fn backtracking_resolve(req: &ResolveRequest) -> Result<GraphResult, Error> {
                 // package is re-resolved with the flag and its `flag?`-gated
                 // deps appear (real `_need_restart` after
                 // `_needed_use_config_changes` grows).
+                //
+                // Real goes one step further first: a USE mismatch means
+                // the graphed instance does NOT satisfy this atom, so real
+                // pulls a second instance and reports the slot conflict
+                // (live-verified: the notice then carries `("use", flag)`
+                // parents). `version` above is the fresh USE-filtered pick,
+                // so it becomes the conflict's second instance -- unless it
+                // is the already-resolved version itself (selection
+                // prefers the highest flippable version, so a flippable
+                // mismatch resolves in place with an autounmask flip and
+                // no second instance exists to report). No `continue`
+                // here -- the flip suggestion below still runs (real
+                // shows both the notice and the change block).
+                if version != existing_version
+                    && let Some(use_deps) = atom.use_deps.as_deref().filter(|d| !d.is_empty())
+                {
+                    let all_cands = list_candidates(&repos, &key.0, &key.1).unwrap_or_default();
+                    if let Some(existing_cand) =
+                        all_cands.iter().find(|c| c.version == existing_version)
+                    {
+                        let declared: HashSet<String> = existing_cand
+                            .iuse
+                            .split_whitespace()
+                            .map(|t| t.trim_start_matches(['+', '-']).to_string())
+                            .collect();
+                        let iuse_set = valid_iuse(&declared, config);
+                        let existing_cand_str = format!(
+                            "{}/{}-{existing_version}:{}/{}::{}",
+                            key.0,
+                            key.1,
+                            existing_cand.slot,
+                            existing_cand.sub_slot,
+                            existing_cand.repo_name
+                        );
+                        let existing_use = effective_use_flags(
+                            config,
+                            &existing_cand.iuse,
+                            &existing_cand.keywords,
+                            &existing_cand_str,
+                            &key.0,
+                            &key.1,
+                        );
+                        if !portage_dep::use_deps_satisfied(use_deps, &iuse_set, &existing_use) {
+                            record_slot_conflict(
+                                &mut slot_conflicts,
+                                build_slot_conflict(
+                                    &repos,
+                                    config,
+                                    &key.0,
+                                    &key.1,
+                                    &slot,
+                                    &existing_version,
+                                    &current_atom,
+                                    &version,
+                                    &slot_pullers,
+                                ),
+                            );
+                        }
+                    }
+                }
                 if autounmask_suggest_use
                     && let Some(use_deps) = atom.use_deps.as_deref().filter(|d| !d.is_empty())
                 {
@@ -15518,19 +15630,28 @@ fn backtracking_resolve(req: &ResolveRequest) -> Result<GraphResult, Error> {
                 // Solvability pre-check against the raw candidate list (real
                 // `_select_pkg_highest_available` over the full atom set). This
                 // deliberately ignores keyword/mask visibility -- the rare case
-                // where the one satisfying version is itself masked resolves to
-                // a plain `NoVisibleCandidate` on the retry, which is
-                // acceptable and documented for this slice.
+                // where the one satisfying version is itself masked resolves to a
+                // plain `NoVisibleCandidate` on the retry, which is
+                // acceptable and documented for this slice. It does NOT
+                // ignore USE-deps (real enforces them in selection): a
+                // version only counts when every want-atom matches it on
+                // version, slot, *and* USE, so a USE-mismatching slot reuse
+                // falls through to the mask trial and the notice instead of
+                // constraining a retry that can only end in swallowed
+                // "no visible ebuild" lines.
                 let candidates =
                     list_candidates(&repos, &pkg_key.0, &pkg_key.1).unwrap_or_default();
-                let candidate_strs: Vec<String> = candidates
-                    .iter()
-                    .map(|c| format!("{}/{}-{}:{}", pkg_key.0, pkg_key.1, c.version, c.slot))
-                    .collect();
-                let solvable = candidate_strs.iter().any(|cs| {
+                let solvable = candidates.iter().any(|c| {
+                    let cs = format!("{}/{}-{}:{}", pkg_key.0, pkg_key.1, c.version, c.slot);
+                    let (iuse, use_flags) =
+                        slot_conflict_flag_sets(&repos, config, &pkg_key.0, &pkg_key.1, &c.version);
                     wants.iter().all(|w| {
                         portage_dep::match_from_list(w, &[cs.as_str()])
                             .is_some_and(|m| !m.is_empty())
+                            && portage_dep::parse_atom(w).is_none_or(|a| match &a.use_deps {
+                                None => true,
+                                Some(ud) => portage_dep::use_deps_satisfied(ud, &iuse, &use_flags),
+                            })
                     })
                 });
                 if !solvable {
@@ -23535,6 +23656,43 @@ mod tests {
                 followup: true,
             }]
         );
+    }
+
+    #[test]
+    fn record_slot_conflict_merges_same_triple_and_appends_new() {
+        // Real keeps one collision handler per conflicting slot: a second
+        // distinct atom hitting the same (slot, existing, current) triple
+        // re-renders the record (rebuilt from the live pullers) instead
+        // of appending a duplicate notice block.
+        let mk = |atom: &str, current: &str| SlotConflict {
+            category: "dev-libs".to_string(),
+            package: "t".to_string(),
+            slot: "0".to_string(),
+            resolved_version: "2.0".to_string(),
+            conflicting_atom: atom.to_string(),
+            instances: vec![
+                SlotConflictInstance {
+                    version: "2.0".to_string(),
+                    sub_slot: "0".to_string(),
+                    repo_name: "r".to_string(),
+                    use_display: Vec::new(),
+                    parents: Vec::new(),
+                },
+                SlotConflictInstance {
+                    version: current.to_string(),
+                    sub_slot: "0".to_string(),
+                    repo_name: "r".to_string(),
+                    use_display: Vec::new(),
+                    parents: Vec::new(),
+                },
+            ],
+        };
+        let mut v = vec![mk("atom-1", "1.0")];
+        record_slot_conflict(&mut v, mk("atom-2", "1.0"));
+        assert_eq!(v.len(), 1);
+        assert_eq!(v[0].conflicting_atom, "atom-2");
+        record_slot_conflict(&mut v, mk("atom-3", "1.5"));
+        assert_eq!(v.len(), 2);
     }
 
     #[test]

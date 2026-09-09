@@ -412,8 +412,7 @@ CASES = [
         "circular dep: conditional grandparent keeps the suggestion with followup",
         ["--pretend", "dev-libs/fucyclec"],
         1,
-    ),
-    (
+    ),    (
         "recursion: any-of group prefers the installed alternative over an earlier uninstalled one",
         ["--pretend", "dev-libs/anyof"],
         0,
@@ -1330,6 +1329,7 @@ CASES = [
     ("slot conflict: pkg_use_display renders non-empty USE on instance + parent lines", ["--pretend", "dev-libs/scuseparent"], 0),
     ("slot conflict: --json carries the per-instance / per-parent pkg_use_display", ["--pretend", "--json", "dev-libs/scuseparent"], 0),
     ("slot conflict: three same-reason parents collapse to one + '(and N more)'", ["--pretend", "dev-libs/slotconfgroup"], 0),
+    ("slot conflict: USE reason keys, unconditional before violated", ["--pretend", "dev-libs/slotusegroup"], 0),
     ("slot conflict: --verbose-conflicts shows every omitted parent", ["--pretend", "--verbose-conflicts", "dev-libs/slotconfgroup"], 0),
     ("slot conflict: --verbose-conflicts=n is the default (collapsed)", ["--pretend", "--verbose-conflicts=n", "dev-libs/slotconfgroup"], 0),
     ("slot conflict: different slots of the same package coexist", ["--pretend", "dev-libs/multislotparent"], 0),
@@ -8022,6 +8022,55 @@ def test_slot_conflict_groups_same_reason_parents_and_offers_verbose_conflicts(
         )
     assert "with the same problem" not in vout
     assert "--verbose-conflicts' option to display parents omitted" not in vout
+
+
+def test_slot_conflict_use_reason_keys_unconditional_before_violated(
+    emerge_binary, emerge_pretend_python, fixture_env
+):
+    """dev-libs/slotusegroup pulls slotuseplain (>=slotusetarget-2.0, no
+    USE-deps -- resolves 2.0 first) plus slotusex/slotusey, whose
+    `>=slotusetarget-1.0[x]` / `[y]` USE-deps 2.0 cannot satisfy (x is
+    default-off and masked there via profiles/package.use.mask, y is gone
+    from 2.0's IUSE). Real re-verifies USE-deps on slot reuse: both pull
+    1.0 as a second instance and the notice reports `("use", flag)`
+    parents -- the missing-IUSE (unconditional) `[y]` parent before the
+    violated `[x]` one, each with a `^` marker under its own token (no
+    colorization). A single conflict block (one handler per slot), no
+    autounmask block (nothing flippable), no need_rebuild trailer (no
+    installed parent). Rust == Python byte-identical."""
+    args = ["--pretend", "dev-libs/slotusegroup"]
+    rust = _run([str(emerge_binary)], args, fixture_env)
+    py = _run(emerge_pretend_python, args, fixture_env)
+    assert rust.returncode == 0 and py.returncode == 0
+    assert rust.stdout == py.stdout
+    assert rust.stderr == py.stderr == ""
+    out = rust.stdout
+    assert out.splitlines()[:5] == [
+        '[ebuild  N     ] dev-libs/slotusetarget-2.0  USE="(-x)"',
+        '[ebuild  N     ] dev-libs/slotuseplain-1.0 ',
+        '[ebuild  N     ] dev-libs/slotusex-1.0 ',
+        '[ebuild  N     ] dev-libs/slotusey-1.0 ',
+        '[ebuild  N     ] dev-libs/slotusegroup-1.0 ',
+    ]
+    # exactly one conflict block
+    assert out.count("slot conflict:") == 1
+    # the 2.0 instance keeps its version-key parent
+    assert (
+        '  (dev-libs/slotusetarget-2.0:0/0::testrepo, ebuild scheduled for merge) USE="(-x)" pulled in by\n'
+        '    >=dev-libs/slotusetarget-2.0 required by (dev-libs/slotuseplain-1.0:0/0::testrepo, ebuild scheduled for merge) USE=""\n'
+        "    ^^                       ^^^"
+    ) in out
+    # the 1.0 instance shows both use parents, unconditional [y] first
+    y_line = '    >=dev-libs/slotusetarget-1.0[y] required by (dev-libs/slotusey-1.0:0/0::testrepo, ebuild scheduled for merge) USE=""\n'
+    x_line = '    >=dev-libs/slotusetarget-1.0[x] required by (dev-libs/slotusex-1.0:0/0::testrepo, ebuild scheduled for merge) USE=""\n'
+    assert y_line in out
+    assert x_line in out
+    assert out.index(y_line) < out.index(x_line)
+    # each use parent carries a caret under its own violated token
+    assert "                                 ^" in out
+    # no autounmask block (x is masked, y is unflippable) and no trailer
+    assert "USE changes are necessary" not in out
+    assert "cannot be rebuilt" not in out
 
 
 def test_different_slots_of_the_same_package_coexist_without_conflict(emerge_binary, fixture_env):

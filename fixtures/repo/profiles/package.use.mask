@@ -1,0 +1,8 @@
+# Mask x on =dev-libs/slotusetarget-2.0 only (versioned atom, bare flag
+# syntax -- package.use.mask exists at repo/profile level, never user
+# config): autounmask must not flip x on for 2.0 to satisfy
+# >=dev-libs/slotusetarget-1.0[x], so the slot conflict between 1.0
+# (x on) and 2.0 (x off, unflippable) survives to the notice renderer:
+# [y] reports a missing-IUSE (unconditional) key, [x] a violated key.
+# 1.0 keeps its +x default (unmasked), so slotusex still pulls it.
+=dev-libs/slotusetarget-2.0 x

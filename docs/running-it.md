@@ -2450,3 +2450,40 @@ tests/test_emerge_pretend_contract.py -k "conditional_grandparent or
 grandparent_use_conflict"` (followup vs disqualify vs bare suggestion,
 Rust == Python) and `cargo test -p portage-repo circular_dep`
 (suggestion unit tests).
+
+Slot-collision USE reason keys (unconditional `[y]` before violated
+`[x]`, real `_prepare_conflict_msg` shape): `emerge -p
+dev-libs/slotusegroup` against the fixture tree (both sides
+byte-identical, exit 0 -- slot-conflict notices are informational in
+portuale):
+
+```sh
+export FX="$(pwd)/fixtures" PORTAGE_CONFIGROOT="$FX" ROOT="$FX" PORTAGE_RUNNING_ROOT="$FX"
+rust/target/release/portuale emerge -p dev-libs/slotusegroup
+# [ebuild  N     ] dev-libs/slotusetarget-2.0  USE="(-x)"
+# [ebuild  N     ] dev-libs/slotuseplain-1.0
+# [ebuild  N     ] dev-libs/slotusex-1.0
+# [ebuild  N     ] dev-libs/slotusey-1.0
+# [ebuild  N     ] dev-libs/slotusegroup-1.0
+#
+# !!! Multiple package instances within a single package slot have been pulled
+# !!! into the dependency graph, resulting in a slot conflict:
+#
+# dev-libs/slotusetarget:0
+#
+#   (dev-libs/slotusetarget-2.0:0/0::testrepo, ebuild scheduled for merge) USE="(-x)" pulled in by
+#     >=dev-libs/slotusetarget-2.0 required by (dev-libs/slotuseplain-1.0:0/0::testrepo, ebuild scheduled for merge) USE=""
+#     ^^                       ^^^
+#
+#   (dev-libs/slotusetarget-1.0:0/0::testrepo, ebuild scheduled for merge) USE="x y" pulled in by
+#     >=dev-libs/slotusetarget-1.0[y] required by (dev-libs/slotusey-1.0:0/0::testrepo, ebuild scheduled for merge) USE=""
+#                                  ^
+#     >=dev-libs/slotusetarget-1.0[x] required by (dev-libs/slotusex-1.0:0/0::testrepo, ebuild scheduled for merge) USE=""
+#                                  ^
+# (then the package.mask advisory; exit 0)
+```
+
+Deterministic slice tests: `pytest
+tests/test_emerge_pretend_contract.py -k "slotuse or slotconfgroup"`
+(CASES + pinned order test, Rust == Python) and `cargo test -p
+portage-dep use_mismatch` (key computation unit tests).

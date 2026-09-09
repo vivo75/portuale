@@ -6121,6 +6121,25 @@ def _sc_need_rebuild(
     return None
 
 
+def _record_slot_conflict(slot_conflicts, sc):
+    """Records a freshly built slot conflict, merging into an existing
+    record for the same (category, package, slot, existing, current)
+    triple instead of appending a duplicate block. Real keeps one
+    collision handler per conflicting slot. Mirrors portage-repo/src/
+    lib.rs's record_slot_conflict exactly."""
+    for prev in slot_conflicts:
+        if (
+            prev["category"] == sc["category"]
+            and prev["package"] == sc["package"]
+            and prev["slot"] == sc["slot"]
+            and prev["resolved_version"] == sc["resolved_version"]
+            and prev["instances"][1]["version"] == sc["instances"][1]["version"]
+        ):
+            prev.update(sc)
+            return
+    slot_conflicts.append(sc)
+
+
 def _slot_conflict_meta(repos, category, package, version):
     """(sub_slot, repo_name, slot) of category/package's own `version` --
     the highest-repo_priority candidate carrying that exact version. All
@@ -6206,13 +6225,26 @@ def _build_slot_conflict(
     """Assembles a slot_conflicts entry (real slot_collision_handler's
     (pkg, parent_atoms) per slot_atom): instance A is `existing_version`
     (already in the graph), instance B is `current_version`. Each
-    slot_pullers entry for cat/pkg is filed under whichever instance its
-    atom matches (under A when it matches both). Mirrors
+    slot_pullers entry for cat/pkg is filed under the instance its atom
+    fully satisfies -- version+slot string match *and* USE-deps against
+    that instance's own IUSE/USE (under A when it matches both). Mirrors
     portage-repo/src/lib.rs's build_slot_conflict exactly."""
     a_sub, a_repo, _ = _slot_conflict_meta(repos, category, package, existing_version)
     b_sub, b_repo, _ = _slot_conflict_meta(repos, category, package, current_version)
-    a_match = f"{category}/{package}-{existing_version}:{slot}"
-    b_match = f"{category}/{package}-{current_version}:{slot}"
+
+    def _with_sub(v, sub):
+        if sub:
+            return f"{category}/{package}-{v}:{slot}/{sub}"
+        return f"{category}/{package}-{v}:{slot}"
+
+    a_match = _with_sub(existing_version, a_sub)
+    b_match = _with_sub(current_version, b_sub)
+    a_iuse, a_use = _slot_conflict_flag_sets(
+        repos, config, category, package, existing_version
+    )
+    b_iuse, b_use = _slot_conflict_flag_sets(
+        repos, config, category, package, current_version
+    )
 
     def _puller_cpv(pc, pp, pv):
         if not pc:
@@ -6220,11 +6252,27 @@ def _build_slot_conflict(
         psub, prepo, pslot = _slot_conflict_meta(repos, pc, pp, pv)
         return f"{pc}/{pp}-{pv}:{pslot}/{psub}::{prepo}"
 
+    def _use_ok(atom, iuse, use):
+        # A puller files under the instance its atom fully satisfies.
+        # Unparseable atoms file by string match (permissive, like the
+        # Rust side); atoms without use-deps always satisfy on USE.
+        try:
+            pa = Atom(atom)
+        except (InvalidAtom, InvalidDependString):
+            return True
+        if pa.use is None:
+            return True
+        return _use_deps_satisfied(pa, iuse, use)
+
     parents_a = []
     parents_b = []
     for pc, pp, pv, atom in slot_pullers.get((category, package), []):
-        hits_a = bool(match_from_list(atom, [a_match]))
-        hits_b = bool(match_from_list(atom, [b_match]))
+        hits_a = bool(match_from_list(atom, [a_match])) and _use_ok(
+            atom, a_iuse, a_use
+        )
+        hits_b = bool(match_from_list(atom, [b_match])) and _use_ok(
+            atom, b_iuse, b_use
+        )
         entry = {
             "parent": _puller_cpv(pc, pp, pv),
             "atom": atom,
@@ -10868,7 +10916,8 @@ def resolve_pretend_graph(
                 )
                 satisfied = bool(match_from_list(current_atom_str, [existing_str]))
                 if not satisfied:
-                    slot_conflicts.append(
+                    _record_slot_conflict(
+                        slot_conflicts,
                         _build_slot_conflict(
                             repos,
                             config,
@@ -10879,7 +10928,7 @@ def resolve_pretend_graph(
                             current_atom_str,
                             version,
                             slot_pullers,
-                        )
+                        ),
                     )
                     continue
 
@@ -10892,6 +10941,52 @@ def resolve_pretend_graph(
                 # whole walk so the package is walked with the flag on and
                 # its flag?-gated deps appear. Mirrors pretend.rs.
                 _reatom = Atom(current_atom_str, allow_wildcard=True)
+                # Real re-verifies USE-deps when an atom lands on an
+                # already-resolved slot instance (match_from_list above is
+                # version+slot only): on mismatch real pulls a second
+                # instance and reports the slot conflict (live-verified:
+                # the notice then carries ("use", flag) parents).
+                # `version` is the fresh USE-filtered pick, so it becomes
+                # the conflict's second instance -- unless it is the
+                # already-resolved version itself (selection prefers the
+                # highest flippable version). No `continue` here --
+                # the flip suggestion below still runs (real shows both).
+                # Mirrors portage-repo/src/lib.rs.
+                if version != existing_version and _reatom.use:
+                    _gec = next(
+                        (
+                            c
+                            for c in list_candidates(repos, category, package)
+                            if c["version"] == existing_version
+                        ),
+                        None,
+                    )
+                    if _gec is not None:
+                        _gdeclared = {t.lstrip("+-") for t in _gec["iuse"].split()}
+                        _gecs = (
+                            f"{category}/{package}-{existing_version}:"
+                            f"{_gec['slot']}/{_gec['sub_slot']}::{_gec['repo_name']}"
+                        )
+                        _geuse = effective_use_flags(
+                            config, _gec["iuse"], _gec["keywords"], _gecs, category, package
+                        )
+                        if not _use_deps_satisfied(
+                            _reatom, _valid_iuse(_gdeclared, config), _geuse
+                        ):
+                            _record_slot_conflict(
+                                slot_conflicts,
+                                _build_slot_conflict(
+                                    repos,
+                                    config,
+                                    category,
+                                    package,
+                                    slot,
+                                    existing_version,
+                                    current_atom_str,
+                                    version,
+                                    slot_pullers,
+                                ),
+                            )
                 if autounmask_suggest_use and _reatom.use:
                     _ec = next(
                         (
@@ -11730,9 +11825,10 @@ def resolve_pretend_graph(
         # conflicted `cat/pkg` into `slot_constraints` and re-run the
         # whole walk. Solvability is pre-checked against the raw
         # candidate list (real `_select_pkg_highest_available` over the
-        # full atom set). Unsolvable conflicts fall through to the
-        # runtime_pkg_mask trial below; anything still conflicting after
-        # `backtrack_max` attempts is reported as before.
+        # full atom set): a version counts only when every want-atom
+        # matches it on version, slot, *and* USE (real enforces USE-deps
+        # in selection), so a USE-mismatching slot reuse falls through
+        # to the mask trial and the notice. Mirrors portage-repo.
         if mask_phase == "none" and slot_conflicts and backtrack_iteration < backtrack_max:
             progressed = False
             for _sc in slot_conflicts:
@@ -11741,13 +11837,24 @@ def resolve_pretend_graph(
                 if len(_wants) < 2:
                     continue
                 _cands = list_candidates(repos, _pkg_key[0], _pkg_key[1])
-                _cand_strs = [
-                    f"{_pkg_key[0]}/{_pkg_key[1]}-{_c['version']}:{_c['slot']}"
-                    for _c in _cands
-                ]
+
+                def _want_satisfied(_w, _c):
+                    _cs = f"{_pkg_key[0]}/{_pkg_key[1]}-{_c['version']}:{_c['slot']}"
+                    if not match_from_list(_w, [_cs]):
+                        return False
+                    try:
+                        _wa = Atom(_w)
+                    except (InvalidAtom, InvalidDependString):
+                        return True
+                    if _wa.use is None:
+                        return True
+                    _wiuse, _wuse = _slot_conflict_flag_sets(
+                        repos, config, _pkg_key[0], _pkg_key[1], _c["version"]
+                    )
+                    return _use_deps_satisfied(_wa, _wiuse, _wuse)
+
                 _solvable = any(
-                    all(match_from_list(_w, [_cs]) for _w in _wants)
-                    for _cs in _cand_strs
+                    all(_want_satisfied(_w, _c) for _w in _wants) for _c in _cands
                 )
                 if not _solvable:
                     continue

@@ -1,0 +1,7 @@
+DEFINED_PHASES=-
+DESCRIPTION=fixture: pulls slotuseplain (resolves 2.0 first) plus slotusex/slotusey, whose USE-deps 2.0 cannot satisfy -- reuse fails per parent and the slot conflict fires with use-keyed parents
+EAPI=8
+KEYWORDS=amd64
+RDEPEND=dev-libs/slotuseplain dev-libs/slotusex dev-libs/slotusey
+SLOT=0
+_md5_=0000000000000000000000000000000

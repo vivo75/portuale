@@ -1,0 +1,7 @@
+DEFINED_PHASES=-
+DESCRIPTION=fixture: pulls >=dev-libs/slotusetarget-1.0[y] -- 2.0 does not declare y at all, so reuse fails with a missing-IUSE (unconditional) use key, rendered before the violated one
+EAPI=8
+KEYWORDS=amd64
+RDEPEND=>=dev-libs/slotusetarget-1.0[y]
+SLOT=0
+_md5_=0000000000000000000000000000000
