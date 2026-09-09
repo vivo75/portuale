@@ -2127,6 +2127,93 @@ def test_emerge_regen_finds_an_inherited_eclass_across_the_masters_chain(
     assert "INHERITED=regenclass" in lines
 
 
+def test_emerge_regen_jobs_parallel_matches_serial_cache_bytes(emerge_binary, tmp_path):
+    """`emerge --regen --jobs` (real `action_regen` -> `MetadataRegen`'s
+    `AsyncScheduler`: up to `--jobs` `depend` phases concurrently, the
+    `--load-average` gate holding off additional ones): only wall-clock
+    time changes -- the cache *content* is byte-identical to a serial
+    run, and so is stdout (deterministic `Processing` order + ordered
+    failure report, no completion-order interleaving). Regen serially,
+    snapshot every cache file's bytes, wipe the cache, regen with
+    `--jobs=4` (plus a `--load-average` no real load can reach, which
+    must never throttle), and diff both the bytes and stdout. A
+    `--jobs=0` run (real `main.py`: CPU count) must also succeed with
+    identical bytes."""
+    repo = tmp_path / "repo"
+    (repo / "dev-libs" / "regenpkg").mkdir(parents=True)
+    (repo / "dev-libs" / "otherpkg").mkdir(parents=True)
+    (repo / "profiles").mkdir(parents=True)
+    (repo / "profiles" / "repo_name").write_text("regentest\n")
+    (repo / "dev-libs" / "regenpkg" / "regenpkg-1.0.ebuild").write_text(
+        'EAPI=8\nDESCRIPTION="regen test"\nSLOT="0"\nKEYWORDS="amd64"\n'
+    )
+    (repo / "dev-libs" / "regenpkg" / "regenpkg-2.0.ebuild").write_text(
+        'EAPI=8\nDESCRIPTION="regen test two"\nSLOT="0"\nKEYWORDS="amd64"\n'
+    )
+    (repo / "dev-libs" / "otherpkg" / "otherpkg-1.0.ebuild").write_text(
+        'EAPI=8\nDESCRIPTION="other"\nSLOT="0"\nKEYWORDS="amd64"\n'
+    )
+
+    cfg = tmp_path / "cfg"
+    (cfg / "etc" / "portage").mkdir(parents=True)
+    (cfg / "etc" / "portage" / "repos.conf").write_text(
+        f"[DEFAULT]\nmain-repo = regentest\n\n[regentest]\nlocation = {repo}\n"
+    )
+
+    env = dict(os.environ)
+    env["PORTAGE_CONFIGROOT"] = str(cfg)
+    env["ROOT"] = str(cfg)
+    env["PORTAGE_RUNNING_ROOT"] = "/"
+    env["PORTAGE_TMPDIR"] = str(tmp_path / "pt")
+
+    def snapshot():
+        out = {}
+        cache = repo / "metadata" / "md5-cache"
+        for path in sorted(cache.rglob("*")):
+            if path.is_file():
+                out[str(path.relative_to(cache))] = path.read_bytes()
+        return out
+
+    serial = subprocess.run(
+        [str(emerge_binary), "--regen"],
+        capture_output=True,
+        text=True,
+        check=False,
+        env=env,
+    )
+    assert serial.returncode == 0, serial.stderr
+    assert "Regenerating cache entries..." in serial.stdout
+    assert "Processing dev-libs/regenpkg" in serial.stdout
+    assert "Processing dev-libs/otherpkg" in serial.stdout
+    assert serial.stdout.rstrip().endswith("done!")
+    serial_bytes = snapshot()
+    assert len(serial_bytes) == 3
+
+    shutil.rmtree(repo / "metadata" / "md5-cache")
+    parallel = subprocess.run(
+        [str(emerge_binary), "--regen", "--jobs=4", "--load-average=1000000"],
+        capture_output=True,
+        text=True,
+        check=False,
+        env=env,
+    )
+    assert parallel.returncode == 0, parallel.stderr
+    assert parallel.stdout == serial.stdout
+    assert snapshot() == serial_bytes
+
+    shutil.rmtree(repo / "metadata" / "md5-cache")
+    zero = subprocess.run(
+        [str(emerge_binary), "--regen", "--jobs=0"],
+        capture_output=True,
+        text=True,
+        check=False,
+        env=env,
+    )
+    assert zero.returncode == 0, zero.stderr
+    assert zero.stdout == serial.stdout
+    assert snapshot() == serial_bytes
+
+
 def test_emerge_buildpkgonly_refuses_a_real_src_uri_with_no_manifest_entry(
     emerge_binary, tmp_path
 ):

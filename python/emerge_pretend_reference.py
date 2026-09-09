@@ -16684,6 +16684,79 @@ def run(args):
             else:
                 print(f'emerge: invalid --backtrack parameter: "{value}"', file=sys.stderr)
                 return 2
+        elif arg in ("--jobs", "-j"):
+            # Real main.py --jobs: valid_integers_or_y_or_n with
+            # insert_optional_args -- the next token is consumed only if
+            # it parses as a non-negative integer, exactly like --deep/-D
+            # above. A bare --jobs/-j, or one followed by anything else,
+            # means unlimited (real myoptions.jobs == "True"). The value
+            # is inert here: under --pretend there is nothing to schedule
+            # (mirrors pretend.rs, which parses but ignores it), and
+            # --regen is real work the Rust side owns (regen.rs) while
+            # this reference returns 0 with no output. Accepted (not
+            # reported) so both sides agree on the full spelling surface.
+            nxt = args[i + 1] if i + 1 < len(args) else None
+            if nxt is not None and nxt.isdigit():
+                i += 2
+            else:
+                i += 1
+        elif arg.startswith("--jobs="):
+            # argparse's native "="-form -- a non-integer here is an
+            # immediate parse error (real parser.error("Invalid --jobs
+            # parameter: ...")), unlike a non-integer *next token*.
+            # Mirrors pretend.rs exactly, message included.
+            value = arg[len("--jobs=") :]
+            if value.isdigit():
+                i += 1
+            else:
+                print(f'emerge: invalid --jobs parameter: "{value}"', file=sys.stderr)
+                return 2
+        elif arg.startswith("-j") and len(arg) > 2:
+            # argparse's attached short-option form (`-j4`). Mirrors
+            # pretend.rs exactly, message included.
+            value = arg[2:]
+            if value.isdigit():
+                i += 1
+            else:
+                print(f'emerge: invalid -j parameter: "{value}"', file=sys.stderr)
+                return 2
+        elif arg in ("--load-average", "-l"):
+            # Real main.py --load-average: type=float, a REQUIRED value
+            # (unlike --jobs' optional one) -- a missing or non-positive
+            # value is an immediate usage error. Only meaningful together
+            # with --jobs > 1; inert here for the same reason --jobs is.
+            # Mirrors pretend.rs exactly, message included.
+            nxt = args[i + 1] if i + 1 < len(args) else None
+            try:
+                la = float(nxt) if nxt is not None else 0.0
+            except ValueError:
+                la = 0.0
+            if la > 0.0:
+                i += 2
+            else:
+                print(
+                    'emerge: option "--load-average" requires a positive number',
+                    file=sys.stderr,
+                )
+                return 2
+        elif arg.startswith("--load-average=") or (
+            arg.startswith("-l") and len(arg) > 2
+        ):
+            # The "="-form and the attached short form (`-l2.5`).
+            # Mirrors pretend.rs exactly, message included.
+            if arg.startswith("--load-average="):
+                value = arg[len("--load-average=") :]
+            else:
+                value = arg[2:]
+            try:
+                la = float(value)
+            except ValueError:
+                la = 0.0
+            if la > 0.0:
+                i += 1
+            else:
+                print(f'emerge: invalid --load-average parameter: "{value}"', file=sys.stderr)
+                return 2
         elif arg in ("--exclude", "-X"):
             # Real "action": "append" -- repeatable, each occurrence's
             # own value is itself a *space-separated* atom list (real

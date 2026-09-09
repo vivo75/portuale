@@ -15883,3 +15883,39 @@ updated to the corrected semantics (the `--selective`-without-`--update`
 case still stays installed; `--deep 3` no longer implies "no reinstall"
 for an ebuild-gone package); Rust unit test
 `ebuild_visible_at_and_binary_reinstall_warranted_match_real_identical_binary`.
+
+**`emerge --regen --jobs` threading.** The last `--regen` cut is closed:
+`--jobs`/`--load-average` now thread from the CLI into `regen::run`
+(real `actions.py:4123-4128`: `action_regen(settings, portdb,
+max_jobs, max_load)` with `opts.get("--jobs")` /
+`opts.get("--load-average")`), and the per-ebuild `depend`+write work
+list runs through a `std::thread::scope` dispatch loop with real
+`AsyncScheduler`/`PollScheduler._can_add_job` semantics -- at most
+`jobs` phases in flight, no *additional* worker while the 1-minute load
+is at or above the limit (the first always runs, so no deadlock; shared
+`emerge_build::system_loadavg_1min`), a bare `--jobs` meaning unlimited
+and an explicit `--jobs=0` meaning the CPU count (real
+`main.py:1023-1041`, now honored on every path, not just regen). Three
+deliberate, documented determinism divergences: `Processing <cp>` lines
+print up front in `cp` order (real prints them from its `_process_iter`
+generator mid-schedule), failure lines report in work-list order after
+every worker joins (real `_task_exit` reports in completion order), and
+same-`(category, pf)` items never run concurrently -- the builddir
+(`${PORTAGE_TMPDIR}/portage/<cat>/<pf>`, incl. `temp/.depend-metadata`)
+is shared per cpv across repos, which real serializes the other way
+(real `doebuild()` takes a per-builddir `EbuildBuildDir` lock); portuale
+holds the second item at dispatch instead. Net effect: `--regen
+--jobs=4` writes byte-identical cache files *and* byte-identical stdout
+to a serial `--regen` for the same tree. The Python reference mirrors
+the newly-accepted surface (`--jobs`/`-j` bare/`=N`/separate/`-jN`,
+`--load-average`/`-l` separate/`=`/`-lLA`, with real's own error
+strings) and stays inert under `--pretend`/`--regen` -- closing a
+latent Rust-vs-Python gap where Rust accepted `--jobs` and the
+reference reported it not-implemented. Pinned: CASES entries for every
+accepted spelling plus the three error spellings, the
+`test_jobs_and_load_average_are_scheduling_only_under_pretend`
+contract test, the `test_emerge_regen_jobs_parallel_matches_serial_cache_bytes`
+black-box test (serial vs `--jobs=4 --load-average=1000000` vs
+`--jobs=0`: identical bytes, identical stdout), and the Rust
+`dispatch_takes_the_first_item_whose_key_is_not_running` unit test.
+

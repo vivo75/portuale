@@ -5,15 +5,38 @@
 //! (`md5_database`) format -- `KEY=value` lines, keys sorted, empty
 //! values omitted, `_md5_=<md5 of the ebuild file>` last.
 //!
-//! Real portage runs the `depend` phases through the scheduler (parallel,
-//! `--jobs`); this v1 is sequential -- `--jobs` is accepted (the CLI
-//! parses it) but not yet threaded through. The cache *content* a
-//! `--jobs`-threaded run would produce is byte-identical to this
-//! sequential one (each ebuild's `depend` phase is independent, and
-//! `--jobs` only changes wall-clock time, not what gets written), so
-//! this is a documented performance cut, not a correctness gap --
-//! left as-is rather than adding scheduler complexity for zero
-//! observable-behavior payoff at portuale's fixture scale.
+//! Real portage runs the `depend` phases through its scheduler, up to
+//! `--jobs` concurrently with the `--load-average` gate (real
+//! `action_regen(settings, portdb, max_jobs, max_load)` ->
+//! `MetadataRegen(portdb, max_jobs, max_load)` -> `AsyncScheduler` +
+//! `PollScheduler._can_add_job`: at most `max_jobs` tasks in flight, and
+//! no *additional* task while the 1-minute load average is at or above
+//! `max_load` -- the first task always runs so the scheduler can't
+//! deadlock; a bare `--jobs` is unlimited (`True`), `--jobs=0` means the
+//! CPU count (real `main.py:1023-1041`), absent means serial). Each
+//! ebuild's `depend` phase is independent, so the cache *content* a
+//! `--jobs`-threaded run writes is byte-identical to the serial one --
+//! this port runs the same work list through a `std::thread::scope`
+//! dispatch loop with the same two gates (see `emerge_build.rs`'s own
+//! `--jobs` scheduler, which shares `system_loadavg_1min`).
+//!
+//! Two deliberate, documented divergences, both in service of portuale's
+//! determinism (a hard constraint -- real interleaves completions
+//! nondeterministically on stderr):
+//! - `Processing <cp>` lines print up front in `cp` order, before any
+//!   work is dispatched (real prints them from its `_process_iter`
+//!   generator while tasks run concurrently).
+//! - failure lines (` * <err>`) report in work-list order after every
+//!   worker joins, not in completion order (real `_task_exit` reports as
+//!   each task exits). Same failure set, same exit code, stable order.
+//! - same-`(category, pf)` items never run concurrently: the builddir
+//!   (`${PORTAGE_TMPDIR}/portage/<cat>/<pf>`, incl. `temp/
+//!   .depend-metadata`) is keyed by cpv, not by repo, so an overlay and
+//!   its master carrying the same version would share it. Real serializes
+//!   the same sharing the other way -- real `doebuild()` takes a
+//!   per-builddir lock (`EbuildBuildDir.async_lock()`); portuale holds
+//!   the second item back at dispatch instead of blocking inside the
+//!   phase, same net effect with no lock machinery.
 //!
 //! Stale-entry pruning and the eclass masters chain (below) *do* change
 //! on-disk output and are implemented.
@@ -58,7 +81,24 @@ const WRITE_KEYS: &[&str] = &[
     "_md5_",
 ];
 
-pub fn run(config_root: &Path, root: &Path, debug: bool) -> ExitCode {
+/// One ebuild's `depend`-phase unit of `MetadataRegen` work: the ebuild
+/// file plus the repo whose cache entry it (re)writes. `category`/`pf`
+/// double as the dispatch key -- see `run_parallel`'s own doc comment.
+struct RegenWorkItem {
+    ebuild_path: PathBuf,
+    repo_location: PathBuf,
+    masters: Vec<PathBuf>,
+    category: String,
+    pf: String,
+}
+
+pub fn run(
+    config_root: &Path,
+    root: &Path,
+    debug: bool,
+    jobs: usize,
+    load_average: Option<f64>,
+) -> ExitCode {
     // `--debug`/`-d`: run each `depend` phase with `PORTAGE_DEBUG=1`
     // (real `bin/ebuild.sh` `set -x`).
     let repos = match portage_repo::find_repos(config_root) {
@@ -86,6 +126,10 @@ pub fn run(config_root: &Path, root: &Path, debug: bool) -> ExitCode {
     // (`MetadataRegen.py:142-189`). Plain `emerge --regen` (no explicit
     // `cp` filter) always runs the global-cleanse variant.
     let mut valid_per_repo: HashMap<PathBuf, HashSet<(String, String)>> = HashMap::new();
+    // The full `MetadataRegen._process_iter` work list, collected (and
+    // its `Processing <cp>` lines printed) before any `depend` phase runs
+    // -- see the module doc comment for why the lines print up front.
+    let mut work: Vec<RegenWorkItem> = Vec::new();
     for cp in portage_repo::all_cp(&repos) {
         println!("Processing {cp}");
         let (category, package) = match cp.split_once('/') {
@@ -107,21 +151,36 @@ pub fn run(config_root: &Path, root: &Path, debug: bool) -> ExitCode {
                     .entry(repo.location.clone())
                     .or_default()
                     .insert((category.to_string(), pf.to_string()));
-                if let Err(e) = regen_one(
-                    &entry.path(),
-                    &repo.location,
-                    &repo.masters,
-                    category,
-                    pf,
-                    root,
-                    config_root,
-                    &portage_tmpdir,
-                    debug,
-                ) {
-                    eprintln!(" * {e}");
-                    failures += 1;
-                }
+                work.push(RegenWorkItem {
+                    ebuild_path: entry.path(),
+                    repo_location: repo.location.clone(),
+                    masters: repo.masters.clone(),
+                    category: category.to_string(),
+                    pf: pf.to_string(),
+                });
             }
+        }
+    }
+
+    let results: Vec<Result<(), String>> = if jobs <= 1 {
+        work.iter()
+            .map(|item| run_work_item(item, root, config_root, &portage_tmpdir, debug))
+            .collect()
+    } else {
+        run_parallel(
+            &work,
+            root,
+            config_root,
+            &portage_tmpdir,
+            debug,
+            jobs,
+            load_average,
+        )
+    };
+    for r in results {
+        if let Err(e) = r {
+            eprintln!(" * {e}");
+            failures += 1;
         }
     }
 
@@ -139,6 +198,114 @@ pub fn run(config_root: &Path, root: &Path, debug: bool) -> ExitCode {
     } else {
         ExitCode::from(1)
     }
+}
+
+/// One `RegenWorkItem`'s `depend` phase + cache write (real
+/// `EbuildMetadataPhase` + `portdb._write_cache`, via `regen_one`).
+fn run_work_item(
+    item: &RegenWorkItem,
+    root: &Path,
+    config_root: &Path,
+    portage_tmpdir: &Path,
+    debug: bool,
+) -> Result<(), String> {
+    regen_one(
+        &item.ebuild_path,
+        &item.repo_location,
+        &item.masters,
+        &item.category,
+        &item.pf,
+        root,
+        config_root,
+        portage_tmpdir,
+        debug,
+    )
+}
+
+/// Real `AsyncScheduler._schedule_tasks` for the `MetadataRegen` case:
+/// dispatch work-list items (in order) onto up to `jobs` worker threads,
+/// holding off *additional* workers while the 1-minute load average is at
+/// or above `load_average` (real `PollScheduler._can_add_job` -- the
+/// first worker always runs, so this can't deadlock), and never running
+/// two items with the same `(category, pf)` concurrently (the builddir is
+/// shared per cpv across repos -- see the module doc comment). Results
+/// come back in work-list order, so the caller's failure report is
+/// deterministic regardless of completion order.
+#[allow(clippy::too_many_arguments)]
+fn run_parallel(
+    work: &[RegenWorkItem],
+    root: &Path,
+    config_root: &Path,
+    portage_tmpdir: &Path,
+    debug: bool,
+    jobs: usize,
+    load_average: Option<f64>,
+) -> Vec<Result<(), String>> {
+    use std::collections::VecDeque;
+    use std::sync::mpsc;
+
+    let mut results: Vec<Option<Result<(), String>>> = (0..work.len()).map(|_| None).collect();
+    if work.is_empty() {
+        return Vec::new();
+    }
+    std::thread::scope(|scope| {
+        let (tx, rx) = mpsc::channel::<(usize, Result<(), String>)>();
+        let mut pending: VecDeque<usize> = (0..work.len()).collect();
+        let mut in_flight = 0usize;
+        let mut in_flight_keys: HashSet<(String, String)> = HashSet::new();
+        let mut done = 0usize;
+        while done < work.len() {
+            // Dispatch in work-list order while there is capacity. The
+            // first pending item whose builddir key isn't already running
+            // goes next; anything key-blocked waits for a completion.
+            while in_flight < jobs {
+                if in_flight >= 1
+                    && let Some(la) = load_average
+                    && crate::emerge_build::system_loadavg_1min() > la
+                {
+                    break;
+                }
+                let pos = next_dispatchable(&pending, &in_flight_keys, work);
+                let Some(pos) = pos else { break };
+                let idx = pending.remove(pos).expect("position came from pending");
+                in_flight_keys.insert((work[idx].category.clone(), work[idx].pf.clone()));
+                in_flight += 1;
+                let tx = tx.clone();
+                let item = &work[idx];
+                scope.spawn(move || {
+                    let r = run_work_item(item, root, config_root, portage_tmpdir, debug);
+                    let _ = tx.send((idx, r));
+                });
+            }
+            // Progress is guaranteed: the load gate never blocks the
+            // first dispatch, and with nothing in flight no key is
+            // blocked -- so a pending item always dispatches, and a
+            // completion is always on its way when we wait here.
+            let (idx, r) = rx.recv().expect("a worker result is always pending");
+            in_flight -= 1;
+            in_flight_keys.remove(&(work[idx].category.clone(), work[idx].pf.clone()));
+            results[idx] = Some(r);
+            done += 1;
+        }
+    });
+    results
+        .into_iter()
+        .map(|r| r.expect("every work item reported exactly once"))
+        .collect()
+}
+
+/// First position in `pending` whose builddir key isn't already running
+/// -- the "in work-list order, skip what would race" half of
+/// `run_parallel`'s dispatch. Split out so the ordering/blocking rule is
+/// unit-testable without running a `depend` phase.
+fn next_dispatchable(
+    pending: &std::collections::VecDeque<usize>,
+    in_flight_keys: &HashSet<(String, String)>,
+    work: &[RegenWorkItem],
+) -> Option<usize> {
+    pending.iter().position(|&idx| {
+        !in_flight_keys.contains(&(work[idx].category.clone(), work[idx].pf.clone()))
+    })
 }
 
 /// Real `MetadataRegen._cleanup`'s "global cleanse" (`MetadataRegen.py:
@@ -275,4 +442,53 @@ fn eclasses_field(
         parts.push(format!("{:x}", Md5::digest(&bytes)));
     }
     Some(parts.join("\t"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::VecDeque;
+
+    fn work_item(category: &str, pf: &str) -> RegenWorkItem {
+        RegenWorkItem {
+            ebuild_path: PathBuf::from(format!("/repo/{category}/pkg/{pf}.ebuild")),
+            repo_location: PathBuf::from("/repo"),
+            masters: Vec::new(),
+            category: category.to_string(),
+            pf: pf.to_string(),
+        }
+    }
+
+    fn key(category: &str, pf: &str) -> (String, String) {
+        (category.to_string(), pf.to_string())
+    }
+
+    /// Dispatch is work-list order, skipping only what would share a
+    /// builddir with something already running (real `doebuild()`'s own
+    /// per-builddir lock, held at dispatch instead of inside the phase).
+    #[test]
+    fn dispatch_takes_the_first_item_whose_key_is_not_running() {
+        let work = vec![
+            work_item("dev-libs", "a-1.0"),
+            work_item("dev-libs", "a-1.0"),
+            work_item("dev-libs", "b-1.0"),
+        ];
+        let pending: VecDeque<usize> = (0..3).collect();
+        // Nothing running: the head goes.
+        assert_eq!(next_dispatchable(&pending, &HashSet::new(), &work), Some(0));
+        // Head's key running: the same-key second item is skipped, the
+        // next key goes.
+        let running: HashSet<(String, String)> = [key("dev-libs", "a-1.0")].into();
+        assert_eq!(next_dispatchable(&pending, &running, &work), Some(2));
+        // Every key running: nothing is dispatchable (the caller waits
+        // for a completion instead of spinning).
+        let all: HashSet<(String, String)> =
+            [key("dev-libs", "a-1.0"), key("dev-libs", "b-1.0")].into();
+        assert_eq!(next_dispatchable(&pending, &all, &work), None);
+        // Empty queue: nothing to dispatch.
+        assert_eq!(
+            next_dispatchable(&VecDeque::new(), &HashSet::new(), &work),
+            None
+        );
+    }
 }

@@ -134,6 +134,18 @@ CASES = [
     ("--deep=N inline form", ["--pretend", "--deep=2", "dev-libs/deeppkg"], 0),
     ("--deep=0 matches not passing --deep at all", ["--pretend", "--deep=0", "dev-libs/deeppkg"], 0),
     ("--deep=-1 is a real, immediate parse error", ["--pretend", "--deep=-1", "dev-libs/deeppkg"], 2),
+    ("--jobs=N is accepted and inert under --pretend (scheduling only)", ["--pretend", "--jobs=2", "dev-libs/newpkg"], 0),
+    ("--jobs bare form means unlimited, still inert under --pretend", ["--pretend", "--jobs", "dev-libs/newpkg"], 0),
+    ("--jobs with a separate value, inert under --pretend", ["--pretend", "--jobs", "4", "dev-libs/newpkg"], 0),
+    ("-j4 attached short form, inert under --pretend", ["--pretend", "-j4", "dev-libs/newpkg"], 0),
+    ("--jobs=0 means the CPU count, still inert under --pretend", ["--pretend", "--jobs=0", "dev-libs/newpkg"], 0),
+    ("--jobs=x is a real, immediate parse error", ["--pretend", "--jobs=x", "dev-libs/newpkg"], 2),
+    ("-jx attached short form with a bad value is a parse error", ["--pretend", "-jx", "dev-libs/newpkg"], 2),
+    ("--load-average=N is accepted and inert under --pretend", ["--pretend", "--load-average=2.5", "dev-libs/newpkg"], 0),
+    ("--load-average with a separate value, inert under --pretend", ["--pretend", "--load-average", "2.5", "dev-libs/newpkg"], 0),
+    ("-l2.5 attached short form, inert under --pretend", ["--pretend", "-l2.5", "dev-libs/newpkg"], 0),
+    ("--load-average without a value is a parse error", ["--pretend", "--load-average", "dev-libs/newpkg"], 2),
+    ("--load-average=0 is a parse error (real requires a positive number)", ["--pretend", "--load-average=0", "dev-libs/newpkg"], 2),
     ("--emptytree: the whole deep tree reinstalls", ["--pretend", "--emptytree", "dev-libs/deeppkg"], 0),
     ("-e short alias for --emptytree", ["--pretend", "-e", "dev-libs/deeppkg"], 0),
     ("-pe bundled", ["-pe", "dev-libs/withdeps"], 0),
@@ -11659,6 +11671,58 @@ def test_deep_rejects_a_negative_inline_value(emerge_binary, fixture_env):
     assert result.returncode == 2
     assert result.stdout == ""
     assert result.stderr.strip() == 'emerge: invalid --deep parameter: "-1"'
+
+
+def test_jobs_and_load_average_are_scheduling_only_under_pretend(
+    emerge_binary, emerge_pretend_python, fixture_env
+):
+    """--jobs/--load-average (real `main.py`: `valid_integers_or_y_or_n`
+    + `insert_optional_args` for `--jobs`, `type=float` for
+    `--load-average`; consumed by the build `Scheduler` and
+    `MetadataRegen`, never by the resolver): every spelling parses on
+    both sides and leaves the `--pretend` merge list byte-identical --
+    including `--jobs=0` (real: CPU count) -- while bad values fail with
+    byte-identical messages. The `--regen` execution half (real
+    `action_regen(max_jobs, max_load)`) is black-box-tested in
+    `test_portuale.py`; the contract suite pins the shared CLI surface."""
+    expected = "[ebuild  N     ] dev-libs/newpkg-1.0 \n"
+    for extra in (
+        ["--jobs=2"],
+        ["--jobs"],
+        ["--jobs", "4"],
+        ["-j4"],
+        ["--jobs=0"],
+        ["--load-average=2.5"],
+        ["--load-average", "2.5"],
+        ["-l2.5"],
+    ):
+        args = ["--pretend", *extra, "dev-libs/newpkg"]
+        rust = _run([str(emerge_binary)], args, fixture_env)
+        py = _run(emerge_pretend_python, args, fixture_env)
+        assert rust.returncode == py.returncode == 0
+        assert rust.stdout == py.stdout == expected
+        assert rust.stderr == py.stderr
+    for args, message in (
+        (["--pretend", "--jobs=x"], 'emerge: invalid --jobs parameter: "x"'),
+        (["--pretend", "-jx"], 'emerge: invalid -j parameter: "x"'),
+        (
+            ["--pretend", "--load-average"],
+            'emerge: option "--load-average" requires a positive number',
+        ),
+        (
+            ["--pretend", "--load-average=0"],
+            'emerge: invalid --load-average parameter: "0"',
+        ),
+        (
+            ["--pretend", "--load-average=x"],
+            'emerge: invalid --load-average parameter: "x"',
+        ),
+    ):
+        rust = _run([str(emerge_binary)], args, fixture_env)
+        py = _run(emerge_pretend_python, args, fixture_env)
+        assert rust.returncode == py.returncode == 2
+        assert rust.stdout == py.stdout == ""
+        assert rust.stderr.strip() == py.stderr.strip() == message
 
 
 def test_deep_is_ignored_when_nodeps_disables_the_dependency_walk_entirely(

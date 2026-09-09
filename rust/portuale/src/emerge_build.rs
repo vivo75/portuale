@@ -919,8 +919,9 @@ fn scheduler_skip_dependents(
 /// Real portage's `--load-average` gate: the current system 1-minute load
 /// average (Linux `/proc/loadavg`), or `0.0` if it can't be read (a
 /// non-Linux host, or a sandboxed `/proc`) -- which disables the throttle
-/// rather than stalling.
-fn system_loadavg_1min() -> f64 {
+/// rather than stalling. Shared with `regen.rs`'s own `--jobs` dispatch
+/// (real `PollScheduler._can_add_job` gates `MetadataRegen` the same way).
+pub(crate) fn system_loadavg_1min() -> f64 {
     std::fs::read_to_string("/proc/loadavg")
         .ok()
         .and_then(|s| s.split_whitespace().next().and_then(|v| v.parse().ok()))

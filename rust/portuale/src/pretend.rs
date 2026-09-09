@@ -7215,16 +7215,29 @@ pub fn run(args: &[String]) -> ExitCode {
     // equivalent). Threaded into the build/merge/config/unmerge paths.
     let mut debug = false;
     // --jobs[=N] / -j[N] (real `main.py`, `valid_integers`): the maximum
-    // number of package *builds* to run concurrently (real
-    // `_emerge/Scheduler.py`'s `_max_jobs`). Default 1 = portuale's
-    // long-standing strictly-serial build+merge loop; a bare `--jobs`/`-j`
-    // means "as many as the dependency graph allows" (`usize::MAX`, capped
-    // to the build-set size by the scheduler). The vdb merge step is
-    // always serialized regardless -- only the `install` phase runs in
-    // parallel, matching real portage. Only consulted for a plain source
-    // `emerge <atom>`; `--buildpkgonly` and the binary-merge paths stay
-    // serial (nothing to build in parallel).
+    // number of concurrent jobs -- package *builds* for a plain source
+    // `emerge <atom>` (real `_emerge/Scheduler.py`'s `_max_jobs`), `depend`
+    // phases for `emerge --regen` (real `MetadataRegen`'s `max_jobs` --
+    // see `regen.rs`). Default 1 = portuale's long-standing
+    // strictly-serial build+merge loop; a bare `--jobs`/`-j` means "as many
+    // as the work allows" (`usize::MAX`, capped by the scheduler); an
+    // explicit `0` means the CPU count (real `main.py:1036-1039`). The vdb
+    // merge step is always serialized regardless -- only the `install`
+    // phase runs in parallel, matching real portage. Only consulted for a
+    // plain source `emerge <atom>` and `--regen`; `--buildpkgonly` and the
+    // binary-merge paths stay serial (nothing to build in parallel).
     let mut jobs: usize = 1;
+    /// Real `main.py:1036-1039`: an explicit `--jobs=0` means the CPU
+    /// count (not "one job"). Shared by every `--jobs` spelling below.
+    fn jobs_count(n: usize) -> usize {
+        if n == 0 {
+            std::thread::available_parallelism()
+                .map(|n| n.get())
+                .unwrap_or(1)
+        } else {
+            n
+        }
+    }
     // --load-average[=LA] / -l[LA] (real `main.py`, `type=float`): the
     // scheduler will not start an *additional* build (beyond the one it
     // always allows, so it can never deadlock) while the system's 1-minute
@@ -8438,7 +8451,7 @@ pub fn run(args: &[String]) -> ExitCode {
             // unlimited.
             match args.get(i + 1).map(|s| s.parse::<usize>()) {
                 Some(Ok(n)) => {
-                    jobs = n.max(1);
+                    jobs = jobs_count(n);
                     i += 2;
                 }
                 _ => {
@@ -8449,7 +8462,7 @@ pub fn run(args: &[String]) -> ExitCode {
         } else if let Some(value) = arg.strip_prefix("--jobs=") {
             match value.parse::<usize>() {
                 Ok(n) => {
-                    jobs = n.max(1);
+                    jobs = jobs_count(n);
                     i += 1;
                 }
                 Err(_) => {
@@ -8461,7 +8474,7 @@ pub fn run(args: &[String]) -> ExitCode {
             // argparse's attached short-option form (`-j4`).
             match value.parse::<usize>() {
                 Ok(n) => {
-                    jobs = n.max(1);
+                    jobs = jobs_count(n);
                     i += 1;
                 }
                 Err(_) => {
@@ -9185,9 +9198,17 @@ pub fn run(args: &[String]) -> ExitCode {
 
     // `--regen` (real `action_regen`): a real write action -- regenerate
     // every repo's `metadata/md5-cache` by running each ebuild's `depend`
-    // phase. `--pretend` was already rejected above.
+    // phase. `--pretend` was already rejected above. `--jobs` /
+    // `--load-average` thread straight through (real
+    // `action_regen(settings, portdb, max_jobs, max_load)`).
     if regen_action {
-        return crate::regen::run(&config_root_from_env(), &root_from_env(), debug);
+        return crate::regen::run(
+            &config_root_from_env(),
+            &root_from_env(),
+            debug,
+            jobs,
+            load_average,
+        );
     }
     // `--metadata` (real `action_metadata`): transfers a repo's
     // pre-generated cache into portage's own `depcachedir`. Portuale

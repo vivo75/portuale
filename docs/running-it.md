@@ -2366,3 +2366,33 @@ sort /tmp/newsroot/var/lib/gentoo/news/news-testrepo.skip
 # 2026-09-11-portuale-format1-plain
 # (…-slotatom / …-useatom are absent: invalid under 1.x)
 ```
+
+`emerge --regen --jobs` (parallel `depend` phases, byte-identical
+cache): the same tiny repo regenerated three ways -- serial, four
+workers under an unreachable `--load-average`, and `--jobs=0` (CPU
+count) -- prints identical stdout and writes identical cache bytes
+(real `action_regen(max_jobs, max_load)`; only wall-clock time differs):
+
+```sh
+export PORTAGE_CONFIGROOT=$T/cfg ROOT=$T/cfg PORTAGE_TMPDIR=$T/pt
+rust/target/release/portuale emerge --regen
+# Regenerating cache entries...
+# Processing dev-libs/regenpkg
+# Processing dev-libs/otherpkg
+# done!
+md5sum $(find $T/repo/metadata/md5-cache -type f) | sort > /tmp/serial.sums
+rm -rf $T/repo/metadata/md5-cache
+rust/target/release/portuale emerge --regen --jobs=4 --load-average=1000000
+# (same four lines, exit 0)
+md5sum $(find $T/repo/metadata/md5-cache -type f) | sort > /tmp/parallel.sums
+diff /tmp/serial.sums /tmp/parallel.sums && echo IDENTICAL
+# IDENTICAL
+```
+
+Deterministic slice tests: `pytest tests/test_portuale.py -k
+"regen"` (serial-vs-parallel-vs-zero byte-identity) and `pytest
+tests/test_emerge_pretend_contract.py -k "jobs or load_average or
+test_pretend_matches"` (every `--jobs`/`--load-average` spelling +
+error strings, Rust == Python) and `cargo test -p portuale regen`
+(dispatch key-blocking unit test).
+

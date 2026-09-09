@@ -423,9 +423,18 @@ ANSI USE colour all shipped 2026-09-05, see `what-this-proves.md`'s
   multi-line-continuation parser, the missing-file-means-all-`Unset:`
   rule, and the present-but-empty-matches-empty-prints-nowhere rule
   (see `what-this-proves.md`);
-- `--regen`: `--jobs` threading stays unimplemented on purpose — real's
-  scheduler parallelism only changes wall-clock time, not the cache
-  content written, so there's no correctness gap to close;
+- `--regen`: `--jobs`/`--load-average` threading **shipped**
+  (`thread::scope` dispatch with real `AsyncScheduler` /
+  `PollScheduler._can_add_job` semantics + the per-builddir key
+  serialization matching real `doebuild()`'s `EbuildBuildDir` lock;
+  byte-identical cache *and* stdout vs serial; `--jobs=0` = CPU count
+  per real `main.py:1023-1041` -- see `what-this-proves.md`). Still
+  open, each its own future slice: real's `_pull_valid_cache`
+  shortcut (skip the `depend` phase when the on-disk entry is already
+  valid -- performance only, content-identical) and
+  `metadata_regen_retry`'s `cp_retry` (re-run a whole cp whose phase
+  failed with an *unexpected* returncode -- exit-code semantics, not
+  content);
  - `--check-news`: versioned/slotted `Display-If-Installed` atoms
    (2026-09-05), a `[use]`-dep in the atom (2026-09-07, checked against
    the matched version's vdb `IUSE`/`USE` via `use_deps_satisfied` —
