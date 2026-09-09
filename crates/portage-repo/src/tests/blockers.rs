@@ -102,6 +102,57 @@ fn resolve_blockers_drops_a_use_dep_blocker_the_target_does_not_satisfy() {
 }
 
 #[test]
+fn resolve_blockers_buildpkgonly_gate() {
+    // Portage blanks non-built RDEPEND/PDEPEND/IDEPEND and clears non-hard
+    // blockers: under `buildpkgonly` only a strong buildtime blocker files.
+    let dir = slotundo_temp_dir("blocker-buildpkgonly-gate");
+    slotundo_vdb(SlotundoVdbArgs {
+        dir: &dir,
+        name: "blocked",
+        version: "1.0",
+        slot: "0",
+        rdepend: "",
+        installed_use: "",
+    });
+    let owner = graph_entry("dev-libs", "owner", "1.0");
+    let entries = vec![owner];
+    let call = |atom: &str, strong: bool, buildtime: bool, buildpkgonly: bool| {
+        resolve_blockers(
+            &dir,
+            &[PendingBlocker {
+                atom_str: atom.to_string(),
+                strong,
+                buildtime,
+                target_category: "dev-libs".to_string(),
+                target_package: "blocked".to_string(),
+                owner_key: ("dev-libs".to_string(), "owner".to_string()),
+                owner_version: "1.0".to_string(),
+                owner_merging: true,
+                owner_installed: false,
+            }],
+            &entries,
+            &HashSet::new(),
+            buildpkgonly,
+        )
+    };
+    // Soft DEPEND: files normally, dropped under buildpkgonly.
+    assert_eq!(call("!dev-libs/blocked", false, true, false).len(), 1);
+    assert!(call("!dev-libs/blocked", false, true, true).is_empty());
+    // Hard RDEPEND: files normally, dropped under buildpkgonly (never walked).
+    assert_eq!(call("!!dev-libs/blocked", true, false, false).len(), 1);
+    assert!(call("!!dev-libs/blocked", true, false, true).is_empty());
+    // Hard DEPEND: kept under buildpkgonly, resolved by uninstall.
+    let kept = call("!!dev-libs/blocked", true, true, true);
+    assert_eq!(kept.len(), 1);
+    assert!(!kept[0].conflict.unsolvable);
+    assert!(matches!(
+        kept[0].conflict.satisfied_by,
+        Some(BlockerSatisfiedBy::Uninstall { .. })
+    ));
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn resolve_blockers_keeps_an_installed_match_replaced_in_its_slot_as_satisfied() {
     // Installed match replaced in-slot: the row is kept as `Replacement`.
     let dir = slotundo_temp_dir("blocker-s1-a");
@@ -221,6 +272,326 @@ fn resolve_blockers_keeps_an_installed_match_replaced_in_its_slot_as_satisfied()
     assert!(conflicts[0].conflict.unsolvable);
     assert_eq!(conflicts[0].conflict.satisfied_by, None);
     let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn resolve_blockers_classifies_final_graph_matches_by_parent_operation() {
+    // Oracle cells b-h: final graph matches classified by parent operation.
+    let edge = |cat: &str, pkg: &str, atom: &str| DepEdge {
+        atom: atom.to_string(),
+        evaluated: atom.to_string().clone(),
+        category: cat.to_string(),
+        package: pkg.to_string(),
+        priority: DepPriority {
+            runtime: true,
+            ..DepPriority::default()
+        },
+        disjunctive: false,
+        alt: None,
+        key: 0,
+    };
+    let pb = |atom: &str, owner: &str| PendingBlocker {
+        atom_str: atom.to_string(),
+        strong: false,
+        buildtime: false,
+        target_category: "dev-libs".to_string(),
+        target_package: "blocked".to_string(),
+        owner_key: ("dev-libs".to_string(), owner.to_string()),
+        owner_version: "1.0".to_string(),
+        owner_merging: true,
+        owner_installed: false,
+    };
+    let installed = |pkg: &str| GraphEntry {
+        discovery: 0,
+        outcome: PretendOutcome::AlreadyInstalled {
+            version: "1.0".into(),
+        },
+        ..graph_entry("dev-libs", pkg, "1.0")
+    };
+    let blocked_upgrade = |to: &str| {
+        let mut e = graph_entry("dev-libs", "blocked", to);
+        e.outcome = PretendOutcome::Upgrade {
+            from: "1.0".into(),
+            to: to.into(),
+        };
+        e
+    };
+
+    // Cell c: a walked consumer holds the surviving installed match.
+    let dir = slotundo_temp_dir("blocker-s2-c");
+    slotundo_vdb(SlotundoVdbArgs {
+        dir: &dir,
+        name: "blocked",
+        version: "1.0",
+        slot: "0",
+        rdepend: "",
+        installed_use: "",
+    });
+    let mut walker = installed("bconsumer");
+    walker.deps = vec![edge("dev-libs", "blocked", "dev-libs/blocked")];
+    let conflicts = resolve_blockers(
+        &dir,
+        &[pb("!<dev-libs/blocked-2.0", "bparent")],
+        &[graph_entry("dev-libs", "bparent", "1.0"), walker],
+        &HashSet::new(),
+        false,
+    );
+    assert_eq!(conflicts.len(), 1);
+    assert!(
+        conflicts[0].conflict.unsolvable,
+        "a walked consumer blocks the unmerge"
+    );
+    // Cell d: without the walked consumer the uninstall is fine.
+    let conflicts = resolve_blockers(
+        &dir,
+        &[pb("!<dev-libs/blocked-2.0", "bparent")],
+        &[graph_entry("dev-libs", "bparent", "1.0")],
+        &HashSet::new(),
+        false,
+    );
+    assert_eq!(conflicts.len(), 1);
+    assert!(
+        !conflicts[0].conflict.unsolvable,
+        "an unwalked consumer does not"
+    );
+    // In a complete-mode context Portage's digraph holds the installed closure
+    // even though portuale's `entries` don't: the vdb reverse scan is the
+    // fallback and marks it unresolved again.
+    slotundo_vdb(SlotundoVdbArgs {
+        dir: &dir,
+        name: "bconsumer",
+        version: "1.0",
+        slot: "0",
+        rdepend: "dev-libs/blocked",
+        installed_use: "",
+    });
+    let closure: HashSet<(String, String)> =
+        [("dev-libs".to_string(), "blocked".to_string())].into();
+    let conflicts = resolve_blockers(
+        &dir,
+        &[pb("!<dev-libs/blocked-2.0", "bparent")],
+        &[graph_entry("dev-libs", "bparent", "1.0")],
+        &closure,
+        false,
+    );
+    assert_eq!(conflicts.len(), 1);
+    assert!(
+        conflicts[0].conflict.unsolvable,
+        "a required-set closure member is a graph node with parents"
+    );
+    let _ = fs::remove_dir_all(&dir);
+
+    // Cell e: merge-bound match with a merging parent is unresolved outright.
+    let mut bparent3 = graph_entry("dev-libs", "bparent3", "1.0");
+    bparent3.blockers = Vec::new();
+    let conflicts = resolve_blockers(
+        Path::new("/nonexistent-root-for-this-test"),
+        &[PendingBlocker {
+            atom_str: "!<dev-libs/blocked-3".to_string(),
+            strong: false,
+            buildtime: false,
+            target_category: "dev-libs".to_string(),
+            target_package: "blocked".to_string(),
+            owner_key: ("dev-libs".to_string(), "bparent3".to_string()),
+            owner_version: "1.0".to_string(),
+            owner_merging: true,
+            owner_installed: false,
+        }],
+        &[bparent3, graph_entry("dev-libs", "blocked", "2.0")],
+        &HashSet::new(),
+        false,
+    );
+    assert_eq!(conflicts.len(), 1);
+    assert!(
+        conflicts[0].conflict.unsolvable,
+        "merge-bound match, merging parent"
+    );
+
+    // Cell b: a same-version Reinstall is merge-bound too.
+    let dir = slotundo_temp_dir("blocker-s2-b");
+    slotundo_vdb(SlotundoVdbArgs {
+        dir: &dir,
+        name: "blocked",
+        version: "1.0",
+        slot: "0",
+        rdepend: "",
+        installed_use: "",
+    });
+    let mut reinstall = graph_entry("dev-libs", "blocked", "1.0");
+    reinstall.outcome = PretendOutcome::Reinstall {
+        version: "1.0".into(),
+        changed_flags: Vec::new(),
+        deps_changed: false,
+        slot_changed: false,
+        rebuilt_binary: false,
+        new_repo: false,
+        slot_operator_rebuild: false,
+    };
+    let conflicts = resolve_blockers(
+        &dir,
+        &[pb("!<dev-libs/blocked-2.0", "bparent")],
+        &[graph_entry("dev-libs", "bparent", "1.0"), reinstall],
+        &HashSet::new(),
+        false,
+    );
+    assert_eq!(conflicts.len(), 1);
+    assert!(conflicts[0].conflict.unsolvable);
+    let _ = fs::remove_dir_all(&dir);
+
+    // Cell f: an installed (nomerge) parent's installed match is ignored.
+    let dir = slotundo_temp_dir("blocker-s2-f");
+    slotundo_vdb(SlotundoVdbArgs {
+        dir: &dir,
+        name: "blocked",
+        version: "1.0",
+        slot: "0",
+        rdepend: "",
+        installed_use: "",
+    });
+    let conflicts = resolve_blockers(
+        &dir,
+        &[pb("!<dev-libs/blocked-2.0", "bparent")],
+        &[installed("bparent")],
+        &HashSet::new(),
+        false,
+    );
+    assert!(conflicts.is_empty(), "nomerge parent, installed match");
+    // Cell g: a merge-bound match survives; unresolved only when the owner is a
+    // walked node with parents. The atom matches two instances: installed 1.0
+    // (replaced in-slot, carrying a hidden `Replacement` row) and merge-bound
+    // 1.5 (whose state the owner's parents decide).
+    let conflicts = resolve_blockers(
+        &dir,
+        &[pb("!<dev-libs/blocked-2.0", "bparent")],
+        &[installed("bparent"), blocked_upgrade("1.5")],
+        &HashSet::new(),
+        false,
+    );
+    assert_eq!(conflicts.len(), 2, "installed 1.0 + merge-bound 1.5");
+    assert_eq!(
+        conflicts
+            .iter()
+            .find(|f| f.conflict.matched_version == "1.0")
+            .expect("installed 1.0 row")
+            .conflict
+            .satisfied_by,
+        Some(BlockerSatisfiedBy::Replacement {
+            cp: ("dev-libs".to_string(), "blocked".to_string()),
+            slot: "0".to_string(),
+        })
+    );
+    assert!(
+        !conflicts
+            .iter()
+            .find(|f| f.conflict.matched_version == "1.5")
+            .expect("merge-bound 1.5 row")
+            .conflict
+            .unsolvable,
+        "nomerge parent, no graph parents"
+    );
+    // The satisfied nomerge arm removes the owner, ordered after the blocked instance.
+    assert_eq!(
+        conflicts
+            .iter()
+            .find(|f| f.conflict.matched_version == "1.5")
+            .expect("merge-bound 1.5 row")
+            .conflict
+            .satisfied_by,
+        Some(BlockerSatisfiedBy::Uninstall {
+            cpv: "dev-libs/bparent-1.0".to_string(),
+            anchor: ("dev-libs".to_string(), "blocked".to_string()),
+        })
+    );
+    let mut parent_walker = installed("consumer");
+    parent_walker.deps = vec![edge("dev-libs", "bparent", "dev-libs/bparent")];
+    let conflicts = resolve_blockers(
+        &dir,
+        &[pb("!<dev-libs/blocked-2.0", "bparent")],
+        &[installed("bparent"), blocked_upgrade("1.5"), parent_walker],
+        &HashSet::new(),
+        false,
+    );
+    assert_eq!(conflicts.len(), 2);
+    assert!(
+        conflicts
+            .iter()
+            .find(|f| f.conflict.matched_version == "1.5")
+            .expect("merge-bound 1.5 row")
+            .conflict
+            .unsolvable,
+        "nomerge parent with graph parents"
+    );
+    // Owner in the world/selected/system closure (a SetArg parent): unresolved.
+    let closure: HashSet<(String, String)> =
+        [("dev-libs".to_string(), "bparent".to_string())].into();
+    let conflicts = resolve_blockers(
+        &dir,
+        &[pb("!<dev-libs/blocked-2.0", "bparent")],
+        &[installed("bparent"), blocked_upgrade("1.5")],
+        &closure,
+        false,
+    );
+    assert_eq!(conflicts.len(), 2);
+    assert!(
+        conflicts
+            .iter()
+            .find(|f| f.conflict.matched_version == "1.5")
+            .expect("merge-bound 1.5 row")
+            .conflict
+            .unsolvable,
+        "#73 cell g: the required-set closure is a parent"
+    );
+    // Closure membership alone never unresolves an installed-only match.
+    let conflicts = resolve_blockers(
+        &dir,
+        &[pb("!<dev-libs/blocked-2.0", "bparent")],
+        &[installed("bparent")],
+        &closure,
+        false,
+    );
+    assert!(
+        conflicts.is_empty(),
+        "#73 cell f: no merge-bound match, closure membership is not enough"
+    );
+    let _ = fs::remove_dir_all(&dir);
+
+    // Cell h: a soft same-slot self-block is skipped; a strong one is not.
+    let soft = resolve_blockers(
+        Path::new("/nonexistent-root-for-this-test"),
+        &[PendingBlocker {
+            atom_str: "!dev-libs/blocked".to_string(),
+            strong: false,
+            buildtime: false,
+            target_category: "dev-libs".to_string(),
+            target_package: "blocked".to_string(),
+            owner_key: ("dev-libs".to_string(), "blocked".to_string()),
+            owner_version: "1.0".to_string(),
+            owner_merging: true,
+            owner_installed: false,
+        }],
+        &[graph_entry("dev-libs", "blocked", "1.0")],
+        &HashSet::new(),
+        false,
+    );
+    assert!(soft.is_empty(), "soft same-slot skip");
+    let strong = resolve_blockers(
+        Path::new("/nonexistent-root-for-this-test"),
+        &[PendingBlocker {
+            atom_str: "!!dev-libs/blocked".to_string(),
+            strong: true,
+            buildtime: true,
+            target_category: "dev-libs".to_string(),
+            target_package: "blocked".to_string(),
+            owner_key: ("dev-libs".to_string(), "blocked".to_string()),
+            owner_version: "1.0".to_string(),
+            owner_merging: true,
+            owner_installed: false,
+        }],
+        &[graph_entry("dev-libs", "blocked", "1.0")],
+        &HashSet::new(),
+        false,
+    );
+    assert_eq!(strong.len(), 1, "a strong blocker is not skipped");
 }
 
 #[test]
