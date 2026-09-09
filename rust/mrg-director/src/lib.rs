@@ -23,7 +23,7 @@
 //! | PkgDatabase (vdb/edb/bintree) | `portage/dbapi/{vartree,porttree,bintree}.py` (subclasses of `dbapi`) | `VdbReader` (filesystem vdb read side) / `MemoryDb` (in-memory snapshot, real `FakeVartree.py`) |
 //! | RepoCache (md5-cache backends) | `portage/cache/template.py::database` (flat_hash/sqlite/anydbm/volatile) | `Md5Cache` (flat file, real `flat_hash.py`) / `VolatileCache` (in-memory, real `volatile.py`) |
 //! | BinpkgFetch | `portage/package/ebuild/fetch.py` + `_emerge/*binpkg*` | `portage_fetch` (real `wget`) + `portage_repo` remote binpkg index |
-//! | MergeEngine | `_emerge/MergeListItem.py` dispatch + `_emerge/PackageMerge.py` / `EbuildMerge.py` / `vartree.py::dblink.merge` | `ebuild_merge::{run_merge, run_qmerge, merge_binpkg}` via `emerge_getbinpkg::run_merge_plan`'s per-entry dispatch |
+//! | MergeEngine | `_emerge/MergeListItem.py` dispatch + `_emerge/PackageMerge.py` / `EbuildMerge.py` / `vartree.py::dblink.merge` | `SourceMergeEngine` (`"ebuild"` arm) / `BinaryMergeEngine` (`"binary"` arm), markers over `ebuild_merge` / `merge_binpkg` |
 //! | BinpkgIndex | `portage/dbapi/bintree.py` (local `$PKGDIR`/`Packages` + remote `PORTAGE_BINHOST` backends) | `PkgdirBinIndex` (local) / `RemoteBinhostIndex` (remote), delegating to `portage_repo::BinaryIndex` reads |
 //! | NewsSet | `portage/news.py::Item.isRelevant`/`isValid` (+ a future GLSA `@security` selector) | `MetadataNews` marker; real evaluation in `pretend.rs::run_check_news` |
 //! | SchedulerPolicy | `_emerge/Scheduler.py::Scheduler._run` (jobs + load-average gate) | `LoadAwarePolicy` marker, the real serial/gated default |
@@ -309,6 +309,61 @@ pub trait MergeEngine {
     /// the director serializes the vdb-write half (real portage merges
     /// one at a time).
     fn execute(&self, unit: &MergeUnit, ctx: &MergeContext) -> MergeOutcome;
+}
+
+/// The source-build `MergeEngine`: real `_emerge/MergeListItem.py`'s
+/// `"ebuild"` arm (`EbuildBuild`, `MergeListItem.py:87-106`).
+///
+/// The real phase chain + vdb write live in the `portuale` binary
+/// crate (`ebuild_merge::{run_merge, run_qmerge}` driven by
+/// `emerge_build`'s serial loop and the `-jN` parallel scheduler, not
+/// linkable from a library — the standing pattern); this marker exists
+/// so the *trait* is exercised and the kind dispatch is pinned. A unit
+/// of its own [`MergeKind::Source`] is declined as [`MergeOutcome::Skipped`]
+/// (never merged, never failed); a [`MergeKind::Binary`] unit is
+/// refused as [`MergeOutcome::Failed`] — the same `type_name` routing
+/// real `MergeListItem._start` performs, split across the two engines.
+pub struct SourceMergeEngine;
+impl MergeEngine for SourceMergeEngine {
+    fn execute(&self, unit: &MergeUnit, _ctx: &MergeContext) -> MergeOutcome {
+        if unit.kind == MergeKind::Source {
+            MergeOutcome::Skipped(
+                "SourceMergeEngine marker: source merges execute in portuale::emerge_build"
+                    .to_string(),
+            )
+        } else {
+            MergeOutcome::Failed(format!(
+                "SourceMergeEngine cannot merge binary unit {}",
+                unit.cpv
+            ))
+        }
+    }
+}
+
+/// The binary-unpack `MergeEngine`: real `_emerge/MergeListItem.py`'s
+/// `"binary"` arm (`Binpkg`, `MergeListItem.py:108+`).
+///
+/// The real download + unpack + vdb write live in the `portuale`
+/// binary crate (`emerge_getbinpkg::merge_binpkg` via
+/// `run_merge_plan`'s per-entry dispatch, not linkable from a library);
+/// this marker mirrors [`SourceMergeEngine`] for the other kind: a
+/// [`MergeKind::Binary`] unit is declined as [`MergeOutcome::Skipped`],
+/// a [`MergeKind::Source`] unit refused as [`MergeOutcome::Failed`].
+pub struct BinaryMergeEngine;
+impl MergeEngine for BinaryMergeEngine {
+    fn execute(&self, unit: &MergeUnit, _ctx: &MergeContext) -> MergeOutcome {
+        if unit.kind == MergeKind::Binary {
+            MergeOutcome::Skipped(
+                "BinaryMergeEngine marker: binary merges execute in portuale::emerge_getbinpkg"
+                    .to_string(),
+            )
+        } else {
+            MergeOutcome::Failed(format!(
+                "BinaryMergeEngine cannot merge source unit {}",
+                unit.cpv
+            ))
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1180,6 +1235,53 @@ mod tests {
         };
         assert!(matches!(
             engine.execute(&broken, &ctx),
+            MergeOutcome::Failed(_)
+        ));
+    }
+
+    /// The merge-engine slot's two implementations split on the unit
+    /// kind, exactly real `MergeListItem._start`'s `type_name` dispatch
+    /// (`"ebuild"` → `EbuildBuild`, `"binary"` → `Binpkg`): each engine
+    /// declines its own kind as [`MergeOutcome::Skipped`] (the real
+    /// execution lives in the `portuale` binary crate, the standing
+    /// pattern) and refuses the other kind as [`MergeOutcome::Failed`].
+    /// The shape pins the routing, not the merge itself.
+    #[test]
+    fn merge_engine_source_and_binary_split_by_unit_kind() {
+        let ctx = MergeContext {
+            root: PathBuf::from("/root"),
+            builddir: PathBuf::from("/var/tmp/portage"),
+            jobs: 1,
+            keep_going: false,
+        };
+        let source_unit = MergeUnit {
+            cpv: "dev-libs/example-1.0".to_string(),
+            kind: MergeKind::Source,
+            repo: Some("main".to_string()),
+            root: PathBuf::from("/root"),
+            replaces_same_slot: None,
+        };
+        let binary_unit = MergeUnit {
+            cpv: "dev-libs/example-1.0".to_string(),
+            kind: MergeKind::Binary,
+            repo: Some("main".to_string()),
+            root: PathBuf::from("/root"),
+            replaces_same_slot: None,
+        };
+        assert!(matches!(
+            SourceMergeEngine.execute(&source_unit, &ctx),
+            MergeOutcome::Skipped(_)
+        ));
+        assert!(matches!(
+            SourceMergeEngine.execute(&binary_unit, &ctx),
+            MergeOutcome::Failed(_)
+        ));
+        assert!(matches!(
+            BinaryMergeEngine.execute(&binary_unit, &ctx),
+            MergeOutcome::Skipped(_)
+        ));
+        assert!(matches!(
+            BinaryMergeEngine.execute(&source_unit, &ctx),
             MergeOutcome::Failed(_)
         ));
     }

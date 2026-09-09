@@ -2041,11 +2041,12 @@ Live-verified exactly as run:
 
 ```sh
 cargo test --release -p mrg-director
-# running 12 tests
+# running 13 tests
 # test tests::binpkg_index_admits_both_local_and_remote_backends ... ok
 # test tests::director_holds_eight_slots_and_plans_through_its_solver ... ok
 # test tests::fetcher_returns_a_manifested_path ... ok
 # test tests::merge_engine_executes_one_unit_to_one_outcome ... ok
+# test tests::merge_engine_source_and_binary_split_by_unit_kind ... ok
 # test tests::news_selector_is_unread_ids_plus_repo ... ok
 # test tests::packages_db_is_three_queries_plus_root ... ok
 # test tests::packages_db_memory_is_the_snapshot_second_backend ... ok
@@ -2054,7 +2055,7 @@ cargo test --release -p mrg-director
 # test tests::resolver_seam_is_the_single_re_export ... ok
 # test tests::resolver_speaks_graph_result ... ok
 # test tests::scheduler_policy_gates_by_jobs_and_load_average ... ok
-# test result: ok. 12 passed; 0 failed
+# test result: ok. 13 passed; 0 failed
 ```
 
 RepoCache second backend (H.14, first slot after BinpkgIndex): the
@@ -2074,6 +2075,16 @@ vartree copy). Same three read queries as the filesystem vdb reader,
 no filesystem — versions in recorded highest-first order, contents
 and reverse edges per version, unknown keys read empty. Pinned by
 `packages_db_memory_is_the_snapshot_second_backend` in the run
+above.
+
+MergeEngine source/binary split (H.14, next slot): the merge-engine
+slot has its two implementations — `SourceMergeEngine` and
+`BinaryMergeEngine`, split on the unit kind exactly like real
+`MergeListItem._start`'s `type_name` dispatch (`"ebuild"` →
+`EbuildBuild`, `"binary"` → `Binpkg`). Each declines its own kind as
+`Skipped` (the real chains live in the binary crate) and refuses the
+other as `Failed`. Pinned by
+`merge_engine_source_and_binary_split_by_unit_kind` in the run
 above.
 
 `--solver=` alternate backends (2026-09-07): the director's solver slot

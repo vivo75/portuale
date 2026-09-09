@@ -576,8 +576,14 @@ dict backend, `deepcopy` in/out) next to `Md5Cache` (real
 filesystem vdb reader behind the same three read queries (recorded
 highest-first versions, per-version contents and reverse edges,
 unknown keys read empty) — see `what-this-proves.md`.
+**MergeEngine source/binary split shipped (H.14, next slot)**:
+`SourceMergeEngine` / `BinaryMergeEngine` (real
+`MergeListItem._start`'s `type_name` dispatch, `"ebuild"` →
+`EbuildBuild` vs `"binary"` → `Binpkg`; each declines its own kind
+as `Skipped`, refuses the other as `Failed`) — see
+`what-this-proves.md`.
 What remains is landing further *second* implementations per slot —
-Fetcher, MergeEngine, NewsSet, SchedulerPolicy, one slice
+Fetcher, NewsSet, SchedulerPolicy, one slice
 each — new-algorithm work, not new-seam work
 (see `what-this-proves.md`'s "`mrg` director contracts" entry).
 
