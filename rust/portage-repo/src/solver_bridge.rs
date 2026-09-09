@@ -861,7 +861,25 @@ fn resolve_resolvo(req: &ResolveRequest) -> Result<GraphResult, String> {
     }
     let problem = resolvo::Problem::new().requirements(reqs);
     let mut solver = resolvo::Solver::new(provider);
-    let solution = solver.solve(problem).map_err(|e| format!("{e:?}"))?;
+    // Engine-native failure text (the H.15a half of the solver V1 depth
+    // cuts): an unsolvable request renders resolvo's own conflict
+    // explanation (`Conflict::display_user_friendly`: "The following
+    // packages are incompatible" plus the conflict chains, named through
+    // the portage provider's solvable display) instead of the raw
+    // `UnsolvableOrCancelled` debug dump (`Unsolvable(Conflict {
+    // clauses: ... })`), which names no package at all. This mirrors the
+    // pubgrub backend, whose `format_solve_error` already renders its
+    // `NoSolution` derivation tree. A cancelled solve (not reachable
+    // through this synchronous call path) stays a plain message.
+    let solution = match solver.solve(problem) {
+        Ok(solution) => solution,
+        Err(resolvo::UnsolvableOrCancelled::Unsolvable(conflict)) => {
+            return Err(format!("{}", conflict.display_user_friendly(&solver)));
+        }
+        Err(resolvo::UnsolvableOrCancelled::Cancelled(_)) => {
+            return Err("dependency resolution was cancelled".to_string());
+        }
+    };
     // `iter()` is `slice::Iter` (items are `&SolvableId`), so `to_vec`
     // would collect references -- the explicit copy stands.
     #[allow(clippy::iter_cloned_collect)]
@@ -1057,5 +1075,29 @@ mod tests {
         let newpkg = lazy.load_versions("dev-libs/newpkg").expect("loads newpkg");
         assert_eq!(newpkg.len(), 1);
         assert_eq!(newpkg[0].version, "1.0");
+    }
+
+    /// The resolvo backend reports engine-native failure text: an
+    /// unsatisfiable target renders resolvo's own conflict explanation
+    /// (`Conflict::display_user_friendly`) naming the involved packages
+    /// -- never the raw `UnsolvableOrCancelled` debug dump (which names
+    /// no package at all: `Unsolvable(Conflict { clauses: ... })`).
+    #[test]
+    fn resolvo_failure_text_is_engine_native_not_a_debug_dump() {
+        use super::super::active_resolver_for;
+        let mut req = fixture_request(&[">=dev-libs/newpkg-99.0"]);
+        req.solver = super::super::SolverKind::Resolvo;
+        let err = active_resolver_for(super::super::SolverKind::Resolvo)
+            .resolve(&req)
+            .expect_err("nothing provides newpkg-99.0");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("dev-libs/newpkg"),
+            "names the conflicted package: {msg}"
+        );
+        assert!(
+            !msg.contains("ClauseId") && !msg.contains("Unsolvable("),
+            "no engine-internals debug dump leaks out: {msg}"
+        );
     }
 }

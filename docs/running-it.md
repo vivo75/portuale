@@ -2122,6 +2122,35 @@ portuale emerge --pretend --solver=resolvo dev-libs/maskedpkg   # exit 1
 portuale emerge --pretend --solver=pubgrub dev-libs/newpkg      # [ebuild  N     ] dev-libs/newpkg-1.0
 ```
 
+Engine-native failure text (H.15a): an unsatisfiable target renders
+each engine's own conflict explanation, not a debug dump
+(`--solver=resolvo` used to print
+`Unsolvable(Conflict { clauses: ... })`). Live-verified exactly as
+run (same fixture env):
+
+```sh
+portuale emerge --pretend --solver=resolvo dev-libs/slotconfgroup  # exit 1
+# emerge: The following packages are incompatible
+# └─ dev-libs/slotconfgroup:0 >=dev-libs/slotconfgroup-0 cannot be installed because there are no viable options:
+#    └─ dev-libs/slotconfgroup:0 dev-libs/slotconfgroup-1.0:0 would require
+#       ├─ dev-libs/slotconfgroupc:0 >=dev-libs/slotconfgroupc-0, which can be installed with any of the following options:
+#       │  └─ dev-libs/slotconfgroupc:0 dev-libs/slotconfgroupc-1.0:0 would require
+#       │     └─ dev-libs/slotconflicttarget:0 <dev-libs/slotconflicttarget-2.0, which can be installed with any of the following options:
+#       │        └─ dev-libs/slotconflicttarget:0 dev-libs/slotconflicttarget-1.0:0
+#       └─ dev-libs/slotconfgroupnew:0 >=dev-libs/slotconfgroupnew-0, which cannot be installed because there are no viable options:
+#          └─ dev-libs/slotconfgroupnew:0 dev-libs/slotconfgroupnew-1.0:0 would require
+#             └─ dev-libs/slotconflicttarget:0 >=dev-libs/slotconflicttarget-2.0, which cannot be installed because there are no viable options:
+#                └─ dev-libs/slotconflicttarget:0 dev-libs/slotconflicttarget-2.0:0, which conflicts with the versions reported above.
+portuale emerge --pretend --solver=pubgrub dev-libs/slotconfgroup  # exit 1
+# emerge: Because dev-libs/slotconfgroupnew:0 depends on dev-libs/slotconflicttarget:0 >=2.0 and dev-libs/slotconfgroupa:0 1.0 depends on dev-libs/slotconflicttarget:0 <2.0, dev-libs/slotconfgroupa:0 1.0, dev-libs/slotconfgroupnew:0 * are incompatible.
+# (... derivation tree down to "the requested targets is forbidden.")
+```
+
+Deterministic slice test: `pytest tests/test_portuale.py -k
+"report_engine_native_conflicts"` (both backends name the conflicted
+packages, no engine-internals leaks) and `cargo test -p portage-repo
+solver_bridge`.
+
 `emerge --info`: the real config-layer stack (2026-09-07). `--info`'s
 `VAR="value"` dump now reads the same five dbs real portage stacks —
 `/etc/profile.env` (env.d), `cnf/make.globals`, the profile chain,

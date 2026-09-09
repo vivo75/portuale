@@ -246,6 +246,39 @@ def test_solver_backends_share_the_visibility_filter(emerge_binary, fixture_env)
         assert "[ebuild  N     ] dev-libs/newpkg-1.0" in visible.stdout, solver
 
 
+def test_solver_backends_report_engine_native_conflicts(emerge_binary, fixture_env):
+    """H.15a (engine-native failure text): an unsatisfiable target under
+    `--solver=resolvo` renders resolvo's own conflict explanation
+    (`Conflict::display_user_friendly` -- "The following packages are
+    incompatible" plus the conflict chains) instead of the raw
+    `Unsolvable(Conflict { clauses: ... })` debug dump, and pubgrub
+    keeps rendering its own `Because ... are incompatible` derivation
+    tree. Both name the conflicted packages and exit 1."""
+    resolvo = subprocess.run(
+        [str(emerge_binary), "--pretend", "--solver=resolvo", "dev-libs/slotconfgroup"],
+        capture_output=True,
+        text=True,
+        check=False,
+        env=fixture_env,
+    )
+    assert resolvo.returncode == 1
+    assert "The following packages are incompatible" in resolvo.stderr
+    assert "dev-libs/slotconflicttarget" in resolvo.stderr
+    assert "ClauseId(" not in resolvo.stderr
+    assert "Unsolvable(" not in resolvo.stderr
+
+    pubgrub = subprocess.run(
+        [str(emerge_binary), "--pretend", "--solver=pubgrub", "dev-libs/slotconfgroup"],
+        capture_output=True,
+        text=True,
+        check=False,
+        env=fixture_env,
+    )
+    assert pubgrub.returncode == 1
+    assert "are incompatible" in pubgrub.stderr
+    assert "dev-libs/slotconflicttarget" in pubgrub.stderr
+
+
 def _free_loopback_port():
     """An unused 127.0.0.1 TCP port for the fixture sshd (TOCTOU-racy by
     nature, fine for a test fixture)."""

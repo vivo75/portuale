@@ -597,10 +597,14 @@ are Rust-only there). **Visibility filtering shipped 2026-09-08**: the
 bridges now resolve from the same `is_visible`-filtered pool as the walk
 (`LazyRepo::load_versions` drops keyword/license/mask/PROPERTIES/RESTRICT-
 invisible candidates before the md5 read), so an invisible version is
-never offered to either engine. Remaining V1 depth cuts, each a future
-slice: slot-conflict/autounmask/`:=`-rebuild/blocker/circular notices,
-engine-native failure text, merge-order fidelity beyond plan install
-order.
+never offered to either engine. **Engine-native failure text shipped
+(H.15a)**: resolvo renders `Conflict::display_user_friendly` (the
+"The following packages are incompatible" chains) instead of the
+`Unsolvable(Conflict { clauses: ... })` debug dump; pubgrub keeps its
+`format_solve_error` derivation tree — see `what-this-proves.md`.
+Remaining V1 depth cuts, each a future slice: slot-conflict/autounmask/
+`:=`-rebuild/blocker/circular notices, merge-order fidelity beyond plan
+install order.
 
 **Hard invariant: `mrg` is a portuale-only applet. There will never be
 a portage counterpart or Python reference implementation.** Only its
