@@ -2041,19 +2041,20 @@ Live-verified exactly as run:
 
 ```sh
 cargo test --release -p mrg-director
-# running 11 tests
+# running 12 tests
 # test tests::binpkg_index_admits_both_local_and_remote_backends ... ok
 # test tests::director_holds_eight_slots_and_plans_through_its_solver ... ok
 # test tests::fetcher_returns_a_manifested_path ... ok
 # test tests::merge_engine_executes_one_unit_to_one_outcome ... ok
 # test tests::news_selector_is_unread_ids_plus_repo ... ok
 # test tests::packages_db_is_three_queries_plus_root ... ok
+# test tests::packages_db_memory_is_the_snapshot_second_backend ... ok
 # test tests::repo_cache_is_read_only_query_by_key ... ok
 # test tests::repo_cache_volatile_is_the_in_memory_second_backend ... ok
 # test tests::resolver_seam_is_the_single_re_export ... ok
 # test tests::resolver_speaks_graph_result ... ok
 # test tests::scheduler_policy_gates_by_jobs_and_load_average ... ok
-# test result: ok. 11 passed; 0 failed
+# test result: ok. 12 passed; 0 failed
 ```
 
 RepoCache second backend (H.14, first slot after BinpkgIndex): the
@@ -2065,6 +2066,15 @@ a pre-loaded snapshot cache for benchmarks and tests. Pinned by
 `repo_cache_volatile_is_the_in_memory_second_backend` in the run
 above (entries read back whole, sorted `category`, missing entry is
 `Err`, mutating a returned dict leaves the store intact).
+
+PackagesDb second backend (H.14, next slot): the installed-db slot
+has its second algorithm — `MemoryDb`, an owned snapshot grounded in
+real `_emerge/FakeVartree.py` (the depgraph's lock-free in-memory
+vartree copy). Same three read queries as the filesystem vdb reader,
+no filesystem — versions in recorded highest-first order, contents
+and reverse edges per version, unknown keys read empty. Pinned by
+`packages_db_memory_is_the_snapshot_second_backend` in the run
+above.
 
 `--solver=` alternate backends (2026-09-07): the director's solver slot
 has its second and third algorithms — `emerge`/`mrg --pretend

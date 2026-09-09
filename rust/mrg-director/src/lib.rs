@@ -20,7 +20,7 @@
 //! | Slot | Real Portage | Portuale implementation |
 //! |------|--------------|--------------------------|
 //! | Solver | `_emerge/depgraph.py` (`depgraph` class) + `_emerge/resolver/backtracking.py` | `portage_repo::Resolver` (`BacktrackingResolver`, via `active_resolver()`) |
-//! | PkgDatabase (vdb/edb/bintree) | `portage/dbapi/{vartree,porttree,bintree}.py` (subclasses of `dbapi`) | ad-hoc file readers scattered in `pretend.rs`/`portage-repo`; **no shared facade yet** |
+//! | PkgDatabase (vdb/edb/bintree) | `portage/dbapi/{vartree,porttree,bintree}.py` (subclasses of `dbapi`) | `VdbReader` (filesystem vdb read side) / `MemoryDb` (in-memory snapshot, real `FakeVartree.py`) |
 //! | RepoCache (md5-cache backends) | `portage/cache/template.py::database` (flat_hash/sqlite/anydbm/volatile) | `Md5Cache` (flat file, real `flat_hash.py`) / `VolatileCache` (in-memory, real `volatile.py`) |
 //! | BinpkgFetch | `portage/package/ebuild/fetch.py` + `_emerge/*binpkg*` | `portage_fetch` (real `wget`) + `portage_repo` remote binpkg index |
 //! | MergeEngine | `_emerge/MergeListItem.py` dispatch + `_emerge/PackageMerge.py` / `EbuildMerge.py` / `vartree.py::dblink.merge` | `ebuild_merge::{run_merge, run_qmerge, merge_binpkg}` via `emerge_getbinpkg::run_merge_plan`'s per-entry dispatch |
@@ -439,13 +439,12 @@ pub trait SchedulerPolicy {
 // contracts today)
 // ---------------------------------------------------------------------------
 
-/// The current, only `PackagesDb` implementation: reads the vdb directly
-/// from `<root>/var/db/pkg`. Marked with the real-source grounding so a
-/// future second implementation has an explicit seam to replace.
+/// The filesystem `PackagesDb` implementation: reads the vdb directly
+/// from `<root>/var/db/pkg`. One of two implementations (the other is
+/// [`MemoryDb` below); both satisfy the same three read queries.
 pub struct VdbReader<'a> {
     root: &'a Path,
 }
-
 impl<'a> PackagesDb for VdbReader<'a> {
     fn installed_versions(&self, category: &str, package: &str) -> Vec<String> {
         // Purposely unimplemented until the vdb read path is factored out
@@ -467,6 +466,124 @@ impl<'a> PackagesDb for VdbReader<'a> {
     }
     fn root(&self) -> &Path {
         self.root
+    }
+}
+
+/// The in-memory `PackagesDb` implementation: the "second
+/// implementation per slot" for the installed-db slot, holding a
+/// recorded snapshot of installed packages instead of reading
+/// `<root>/var/db/pkg`.
+///
+/// Grounding: real `_emerge/FakeVartree.py::FakeVartree` — "an in-memory
+/// copy of a vartree instance that provides all the interfaces required
+/// for use by the depgraph", built so dependency calculations can run
+/// without holding a lock on the vardb. Like it, this snapshot serves
+/// resolution-shaped reads with no filesystem behind them (benchmarks,
+/// tests, and callers that already hold the facts).
+///
+/// Two deliberate narrowings, both documented on the trait. First,
+/// versions come back in the order the snapshot recorded them: callers
+/// provide highest-first (real `dbapi.cp_list` sorts with `_cmp_cpv`),
+/// the snapshot preserves. Second, reverse dependents are recorded
+/// edges, not recomputed matches: real `FakeVartree` re-resolves dep
+/// strings live, but recomputation needs `portage_dep` atom matching
+/// (a dependency this contract crate deliberately does not take), so
+/// the snapshot records each package's dependents as observed facts via
+/// [`MemoryDb::add_package`].
+#[derive(Debug, Clone, Default)]
+pub struct MemoryDb {
+    /// The single `root` this snapshot stands in for (owned — unlike
+    /// [`VdbReader`'s] borrow — so a snapshot value is portable as one
+    /// unit).
+    root: PathBuf,
+    /// `(category, package) → installed versions`, recorded order.
+    versions: std::collections::HashMap<(String, String), Vec<String>>,
+    /// `(category, package, version) → CONTENTS-files list`.
+    contents: std::collections::HashMap<(String, String, String), Vec<String>>,
+    /// `(category, package, version) → direct dependents` (CPVs).
+    dependents: std::collections::HashMap<(String, String, String), Vec<String>>,
+}
+
+impl MemoryDb {
+    /// An empty snapshot standing in for `root`.
+    pub fn new(root: &Path) -> Self {
+        Self {
+            root: root.to_path_buf(),
+            versions: std::collections::HashMap::new(),
+            contents: std::collections::HashMap::new(),
+            dependents: std::collections::HashMap::new(),
+        }
+    }
+
+    /// Record one installed package: its CONTENTS-files list and the
+    /// CPVs that directly depend on it. Repeat calls for one
+    /// `category/package` accumulate versions in call order — provide
+    /// highest-first, real `dbapi.cp_list` order.
+    pub fn add_package(
+        &mut self,
+        category: &str,
+        package: &str,
+        version: &str,
+        contents_files: Vec<String>,
+        depended_on_by: Vec<String>,
+    ) {
+        self.versions
+            .entry((category.to_string(), package.to_string()))
+            .or_default()
+            .push(version.to_string());
+        self.contents.insert(
+            (
+                category.to_string(),
+                package.to_string(),
+                version.to_string(),
+            ),
+            contents_files,
+        );
+        self.dependents.insert(
+            (
+                category.to_string(),
+                package.to_string(),
+                version.to_string(),
+            ),
+            depended_on_by,
+        );
+    }
+}
+
+impl PackagesDb for MemoryDb {
+    fn installed_versions(&self, category: &str, package: &str) -> Vec<String> {
+        self.versions
+            .get(&(category.to_string(), package.to_string()))
+            .cloned()
+            .unwrap_or_default()
+    }
+    fn contents_files(&self, category: &str, package: &str, version: &str) -> Vec<String> {
+        self.contents
+            .get(&(
+                category.to_string(),
+                package.to_string(),
+                version.to_string(),
+            ))
+            .cloned()
+            .unwrap_or_default()
+    }
+    fn reverse_dependents(
+        &self,
+        consumer_category: &str,
+        consumer_package: &str,
+        consumer_version: &str,
+    ) -> Vec<String> {
+        self.dependents
+            .get(&(
+                consumer_category.to_string(),
+                consumer_package.to_string(),
+                consumer_version.to_string(),
+            ))
+            .cloned()
+            .unwrap_or_default()
+    }
+    fn root(&self) -> &Path {
+        &self.root
     }
 }
 
@@ -876,6 +993,53 @@ mod tests {
             vec!["app/other-1.0"]
         );
         assert_eq!(db.root().to_str(), Some("/root"));
+    }
+
+    /// `MemoryDb` is the installed-db slot's second implementation (real
+    /// `_emerge/FakeVartree.py`'s in-memory vartree copy): the same three
+    /// read queries as the filesystem vdb reader, served from a recorded
+    /// snapshot. The shape pins: versions come back in recorded
+    /// (caller-provided highest-first) order across repeat `add_package`
+    /// calls, contents and reverse edges read back per version, unknown
+    /// packages/versions read as empty (never a panic), and the snapshot
+    /// owns its root.
+    #[test]
+    fn packages_db_memory_is_the_snapshot_second_backend() {
+        let mut db = MemoryDb::new(Path::new("/root"));
+        assert_eq!(db.root().to_str(), Some("/root"));
+        assert!(db.installed_versions("dev-libs", "example").is_empty());
+        db.add_package(
+            "dev-libs",
+            "example",
+            "2.0",
+            vec!["usr/lib/libx.so.2".to_string()],
+            vec!["app/other-1.0".to_string()],
+        );
+        db.add_package(
+            "dev-libs",
+            "example",
+            "1.0",
+            vec!["usr/lib/libx.a".to_string()],
+            Vec::new(),
+        );
+        assert_eq!(
+            db.installed_versions("dev-libs", "example"),
+            vec!["2.0", "1.0"]
+        );
+        assert_eq!(
+            db.contents_files("dev-libs", "example", "2.0"),
+            vec!["usr/lib/libx.so.2"]
+        );
+        assert_eq!(
+            db.reverse_dependents("dev-libs", "example", "2.0"),
+            vec!["app/other-1.0"]
+        );
+        assert!(
+            db.reverse_dependents("dev-libs", "example", "1.0")
+                .is_empty()
+        );
+        assert!(db.contents_files("dev-libs", "example", "9.9").is_empty());
+        assert!(db.installed_versions("sys-apps", "missing").is_empty());
     }
 
     struct FakeDb<'a> {

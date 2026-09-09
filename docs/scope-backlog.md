@@ -571,8 +571,13 @@ pins to eleven. **RepoCache second backend shipped (H.14, first slot
 after `BinpkgIndex`)**: `VolatileCache` (real `cache/volatile.py`'s
 dict backend, `deepcopy` in/out) next to `Md5Cache` (real
 `flat_hash.py`) behind the same three reads — see `what-this-proves.md`.
+**PackagesDb second backend shipped (H.14, next slot)**: `MemoryDb`
+(real `_emerge/FakeVartree.py`'s in-memory vartree copy) next to the
+filesystem vdb reader behind the same three read queries (recorded
+highest-first versions, per-version contents and reverse edges,
+unknown keys read empty) — see `what-this-proves.md`.
 What remains is landing further *second* implementations per slot —
-PackagesDb, Fetcher, MergeEngine, NewsSet, SchedulerPolicy, one slice
+Fetcher, MergeEngine, NewsSet, SchedulerPolicy, one slice
 each — new-algorithm work, not new-seam work
 (see `what-this-proves.md`'s "`mrg` director contracts" entry).
 
