@@ -667,11 +667,13 @@ fn package_counters_summary(
     let (mut upgrades, mut downgrades, mut new, mut newslot, mut reinst) =
         (0u64, 0u64, 0u64, 0u64, 0u64);
     let (mut binary, mut interactive, mut blocks) = (0u64, 0u64, 0u64);
+    let mut blocks_unsolvable = 0u64;
     let (mut restrict_fetch, mut restrict_fetch_satisfied) = (0u64, 0u64);
     let mut totalsize: u64 = 0;
     let mut fetched: HashSet<&str> = HashSet::new();
     for entry in entries {
         blocks += entry.blockers.len() as u64;
+        blocks_unsolvable += entry.blockers.iter().filter(|b| b.unsolvable).count() as u64;
         let suppressed =
             onlydeps && top_level_pkgs.contains(&(entry.category.clone(), entry.package.clone()));
         if suppressed {
@@ -784,6 +786,12 @@ fn package_counters_summary(
     }
     if blocks > 0 {
         out.push_str(&format!("\nConflict: {blocks} block{}", plural(blocks)));
+        // Real `_PackageCounters.__str__`: `bad(f" ({N} unsatisfied)")`
+        // when the resolver left any `_unsolvable_blockers` -- a blocked
+        // installed package it could neither replace nor unmerge.
+        if blocks_unsolvable > 0 {
+            out.push_str(&color.c("BAD", &format!(" ({blocks_unsolvable} unsatisfied)")));
+        }
     }
     out
 }
@@ -1695,12 +1703,13 @@ fn entry_to_json(
         .iter()
         .map(|b| {
             format!(
-                "{{\"atom\":{},\"strong\":{},\"matched_category\":{},\"matched_package\":{},\"matched_version\":{}}}",
+                "{{\"atom\":{},\"strong\":{},\"matched_category\":{},\"matched_package\":{},\"matched_version\":{},\"unsolvable\":{}}}",
                 json_string(&b.atom_str),
                 b.strong,
                 json_string(&b.matched_category),
                 json_string(&b.matched_package),
-                json_string(&b.matched_version)
+                json_string(&b.matched_version),
+                b.unsolvable
             )
         })
         .collect();
@@ -10269,6 +10278,16 @@ pub fn run(args: &[String]) -> ExitCode {
         {
             return ExitCode::from(1);
         }
+        // An unsolvable blocker fails the run for a `--json` consumer's
+        // `$?` check too (real `actions.py` returns 1 regardless of
+        // output format).
+        if result
+            .entries
+            .iter()
+            .any(|e| e.blockers.iter().any(|b| b.unsolvable))
+        {
+            return ExitCode::from(1);
+        }
         return ExitCode::SUCCESS;
     }
 
@@ -10757,6 +10776,36 @@ pub fn run(args: &[String]) -> ExitCode {
     }
 
     if has_autounmask_changes && !autounmask_continue_active {
+        return ExitCode::from(1);
+    }
+
+    // Real `_serialize_tasks` -> `_show_unsatisfied_blockers` +
+    // `show_blocker_docs_link` (`depgraph.py:10496`): a blocked installed
+    // package the resolver could neither replace nor unmerge is an
+    // unresolved conflict -- real prints the `* Error: The above package
+    // list …` block and `actions.py` returns 1. Portuale's per-parent
+    // `pulled in by` detail is a documented cut (it needs real's
+    // `_parent_atoms` / complete graph); the sentence, the docs link and
+    // the exit code are what a `$?` check and the `Conflict: N blocks
+    // (M unsatisfied)` line depend on.
+    let unsolvable_blockers = result
+        .entries
+        .iter()
+        .any(|e| e.blockers.iter().any(|b| b.unsolvable));
+    if unsolvable_blockers && show_merge_list {
+        eprintln!();
+        for line in [
+            "Error: The above package list contains packages which cannot be",
+            "installed at the same time on the same system.",
+        ] {
+            eprintln!(" {} {line}", color.c("BAD", "*"));
+        }
+        eprintln!(
+            "\nFor more information about {}, please refer to the following",
+            color.c("BAD", "Blocked Packages")
+        );
+        eprintln!("section of the Gentoo Linux x86 Handbook (architecture is irrelevant):\n");
+        eprintln!("https://wiki.gentoo.org/wiki/Handbook:X86/Working/Portage#Blocked_packages\n");
         return ExitCode::from(1);
     }
 

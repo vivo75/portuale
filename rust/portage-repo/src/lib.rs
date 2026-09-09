@@ -10013,6 +10013,12 @@ pub struct BlockerConflict {
     pub matched_category: String,
     pub matched_package: String,
     pub matched_version: String,
+    /// Real `_serialize_tasks`' `unresolved_blocks`: the blocked package
+    /// is installed, can't be replaced or unmerged (it still has other
+    /// installed consumers), so the block cannot be resolved -- real
+    /// counts it in `Conflict: N blocks (M unsatisfied)`, prints the
+    /// `* Error: The above package list …` block, and exits 1.
+    pub unsolvable: bool,
 }
 
 /// One installed package portuale's renderer needs to name in an
@@ -11474,6 +11480,63 @@ struct PendingBlocker {
 /// the same fallback `split_slot` already uses for a plain (no `/`)
 /// `SLOT` value -- "unknown" and "not yet split from an unslashed SLOT"
 /// look identical here, and both mean "assume it matches the slot".
+/// Whether any **installed** package other than `owner` -- and not one
+/// this run is replacing (an `entries` merge for that same `cat/pkg`) --
+/// records a non-blocker dependency on `cat/pkg` in its own vdb
+/// `RDEPEND`/`PDEPEND`/`DEPEND`/`BDEPEND` (flattened against its vdb
+/// `USE`). Real's `_serialize_tasks` won't unmerge a blocked package
+/// that other graph nodes still pull in; portuale approximates "still
+/// pulled in" with this direct vdb reverse scan (no complete graph).
+fn installed_has_foreign_dependents(
+    root: &Path,
+    category: &str,
+    package: &str,
+    owner: &(String, String),
+    entries: &[GraphEntry],
+) -> bool {
+    let being_replaced: HashSet<(&str, &str)> = entries
+        .iter()
+        .filter(|e| {
+            !matches!(
+                e.outcome,
+                PretendOutcome::AlreadyInstalled { .. } | PretendOutcome::NoVisibleCandidate
+            )
+        })
+        .map(|e| (e.category.as_str(), e.package.as_str()))
+        .collect();
+    for pkg in all_installed_packages(root) {
+        if (pkg.category.as_str(), pkg.package.as_str()) == (owner.0.as_str(), owner.1.as_str()) {
+            continue;
+        }
+        if (pkg.category.as_str(), pkg.package.as_str()) == (category, package) {
+            continue;
+        }
+        if being_replaced.contains(&(pkg.category.as_str(), pkg.package.as_str())) {
+            continue;
+        }
+        let use_flags = read_vdb_flag_set(root, &pkg.category, &pkg.package, &pkg.version, "USE");
+        for key in ["RDEPEND", "PDEPEND", "DEPEND", "BDEPEND"] {
+            let depstr = read_vdb_string(root, &pkg.category, &pkg.package, &pkg.version, key);
+            if depstr.trim().is_empty() {
+                continue;
+            }
+            let Some(atoms) = flat_dep_atoms(&depstr, &use_flags) else {
+                continue;
+            };
+            for atom_str in atoms {
+                if let Some(a) = portage_dep::parse_atom(&atom_str)
+                    && a.blocker == portage_dep::Blocker::None
+                    && a.category == category
+                    && a.package == package
+                {
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+
 fn resolve_blockers(
     root: &Path,
     pending: &[PendingBlocker],
@@ -11587,6 +11650,29 @@ fn resolve_blockers(
             if !use_deps_apply(version) {
                 continue;
             }
+            // Real `_serialize_tasks` `unresolved_blocks`: the blocked
+            // package is installed (`pkg.installed`), the blocker's own
+            // parent is a `merge` -- so real tries to unmerge the blocked
+            // package -- but "we don't unmerge any package that have been
+            // pulled into the graph" (`digraph.contains(inst_pkg) and
+            // digraph.parent_nodes(inst_pkg)`). Portuale has no complete
+            // graph here, so the equivalent check is a direct vdb reverse
+            // scan: an installed `sys-apps/systemd` that other installed
+            // packages (util-linux, pam, dbus, …) still depend on, and
+            // that this run is not replacing, cannot be removed -> the
+            // block is unsolvable.
+            let blocked_installed =
+                installed_candidates(root, &pb.target_category, &pb.target_package)
+                    .iter()
+                    .any(|(v, _, _)| v == version);
+            let unsolvable = blocked_installed
+                && installed_has_foreign_dependents(
+                    root,
+                    &pb.target_category,
+                    &pb.target_package,
+                    &pb.owner_key,
+                    entries,
+                );
             conflicts.push((
                 pb.owner_key.clone(),
                 BlockerConflict {
@@ -11595,6 +11681,7 @@ fn resolve_blockers(
                     matched_category: pb.target_category.clone(),
                     matched_package: pb.target_package.clone(),
                     matched_version: version.clone(),
+                    unsolvable,
                 },
             ));
         }
@@ -25783,6 +25870,10 @@ mod tests {
     fn fixture_strong_blocker_matches_an_installed_package() {
         // dev-libs/blockerpkg's RDEPEND is "!!dev-libs/samepkg", and
         // dev-libs/samepkg-1.0 is already installed per the fixture vdb.
+        // Other installed fixtures (changeddepspkg, movedkeydepspkg, …)
+        // RDEPEND on dev-libs/samepkg, so it can't be unmerged to resolve
+        // the block -> `unsolvable` (real `_serialize_tasks`'
+        // `unresolved_blocks`).
         let entries = graph_entries_real("dev-libs/blockerpkg");
         assert_eq!(entries.len(), 1);
         assert_eq!(
@@ -25793,6 +25884,7 @@ mod tests {
                 matched_category: "dev-libs".to_string(),
                 matched_package: "samepkg".to_string(),
                 matched_version: "1.0".to_string(),
+                unsolvable: true,
             }]
         );
     }
@@ -25830,6 +25922,7 @@ mod tests {
                 matched_category: "dev-libs".to_string(),
                 matched_package: "blockerpartnerpkg".to_string(),
                 matched_version: "1.0".to_string(),
+                unsolvable: false,
             }]
         );
     }
@@ -27595,6 +27688,7 @@ mod tests {
                     matched_category: "dev-libs".to_string(),
                     matched_package: "target".to_string(),
                     matched_version: "2.0".to_string(),
+                    unsolvable: false,
                 }
             )]
         );

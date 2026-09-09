@@ -7019,6 +7019,42 @@ def resolve_pretend(
     return ("new", best["version"])
 
 
+def _installed_has_foreign_dependents(root, category, package, owner, entries):
+    """Whether any installed package other than `owner` -- and not one
+    this run is replacing -- records a non-blocker dependency on
+    category/package in its own vdb *DEPEND. Real `_serialize_tasks`
+    won't unmerge a blocked package other graph nodes still pull in;
+    this is portuale's no-complete-graph approximation. Mirrors
+    portage-repo/src/lib.rs's installed_has_foreign_dependents."""
+    being_replaced = {
+        (e[0], e[1])
+        for e in entries
+        if e[2][0] not in ("already_installed", "no_visible_candidate")
+    }
+    for c, p, v, _s in _all_installed_packages(root):
+        if (c, p) == tuple(owner) or (c, p) == (category, package):
+            continue
+        if (c, p) in being_replaced:
+            continue
+        use_flags = _read_vdb_flag_set(root, c, p, v, "USE")
+        for key in ("RDEPEND", "PDEPEND", "DEPEND", "BDEPEND"):
+            depstr = _read_vdb_string(root, c, p, v, key)
+            if not depstr.strip():
+                continue
+            atoms = _flat_dep_atoms(depstr, use_flags)
+            if atoms is None:
+                continue
+            for atom_str in atoms:
+                a = _parse_atom(atom_str)
+                if (
+                    a is not None
+                    and not a.blocker
+                    and tuple(a.cp.split("/", 1)) == (category, package)
+                ):
+                    return True
+    return False
+
+
 def resolve_blockers(root, pending, entries):
     """Matches each `pending` blocker's target category/package against
     both currently-installed candidates (installed_candidates, sub-slot
@@ -7124,6 +7160,22 @@ def resolve_blockers(root, pending, entries):
                 continue
             if not _use_deps_apply(matched_version):
                 continue
+            # Real `_serialize_tasks` `unresolved_blocks`: a blocked
+            # installed package that other installed packages still depend
+            # on can't be unmerged -> the block is unsolvable.
+            blocked_installed = any(
+                v == matched_version
+                for v, _s, _ss in installed_candidates(
+                    root, pb["target_category"], pb["target_package"]
+                )
+            )
+            unsolvable = blocked_installed and _installed_has_foreign_dependents(
+                root,
+                pb["target_category"],
+                pb["target_package"],
+                pb["owner_key"],
+                entries,
+            )
             conflicts.append(
                 (
                     pb["owner_key"],
@@ -7133,6 +7185,7 @@ def resolve_blockers(root, pending, entries):
                         "matched_category": pb["target_category"],
                         "matched_package": pb["target_package"],
                         "matched_version": matched_version,
+                        "unsolvable": unsolvable,
                     },
                 )
             )
@@ -12290,7 +12343,8 @@ def _entry_to_json(category, package, merge_order, outcome, blockers, slot, use_
         f'{{"atom":{_json_string(b["atom_str"])},"strong":{_json_bool(b["strong"])},'
         f'"matched_category":{_json_string(b["matched_category"])},'
         f'"matched_package":{_json_string(b["matched_package"])},'
-        f'"matched_version":{_json_string(b["matched_version"])}}}'
+        f'"matched_version":{_json_string(b["matched_version"])},'
+        f'"unsolvable":{_json_bool(b.get("unsolvable", False))}}}'
         for b in blockers
     )
     fields.append(f'"blockers":[{blockers_json}]')
@@ -16338,7 +16392,7 @@ def _package_counters_summary(entries, top_level_pkgs, onlydeps, color):
     isn't in real's merge list, so it isn't counted here either. Mirrors
     pretend.rs's package_counters_summary."""
     upgrades = downgrades = new = newslot = reinst = 0
-    binary = interactive = blocks = 0
+    binary = interactive = blocks = blocks_unsolvable = 0
     restrict_fetch = restrict_fetch_satisfied = 0
     totalsize = 0
     fetched = set()
@@ -16346,6 +16400,7 @@ def _package_counters_summary(entries, top_level_pkgs, onlydeps, color):
         category, package, outcome = entry[0], entry[1], entry[2]
         source, provenance = entry[7], entry[8]
         blocks += len(entry[3])
+        blocks_unsolvable += sum(1 for b in entry[3] if b.get("unsolvable"))
         if onlydeps and (category, package) in top_level_pkgs:
             continue
         tag = outcome[0]
@@ -16413,6 +16468,8 @@ def _package_counters_summary(entries, top_level_pkgs, onlydeps, color):
             )
     if blocks > 0:
         out += f"\nConflict: {blocks} block" + ("s" if blocks > 1 else "")
+        if blocks_unsolvable > 0:
+            out += color.c("BAD", f" ({blocks_unsolvable} unsatisfied)")
     return out
 
 
@@ -19262,6 +19319,8 @@ def run(args):
             and not (not pretend and autounmask_continue is True)
         ):
             return 1
+        if any(b.get("unsolvable") for e in result["entries"] for b in e[3]):
+            return 1
         return 0
 
     # Real PkgAttrDisplay.force_reinstall (the red `r` bracket column):
@@ -20056,6 +20115,34 @@ def run(args):
             sys.stderr.write(f" {color.c('WARN', '*')} {line}\n")
 
     if _has_autounmask_changes and not (not pretend and autounmask_continue is True):
+        return 1
+
+    # Real _serialize_tasks -> _show_unsatisfied_blockers +
+    # show_blocker_docs_link (depgraph.py:10496): a blocked installed
+    # package that can be neither replaced nor unmerged is an unresolved
+    # conflict -- real prints the `* Error: The above package list ...`
+    # block and returns 1. The per-parent `pulled in by` detail is a
+    # documented cut (needs real's _parent_atoms). Mirrors pretend.rs.
+    _unsolvable_blockers = any(
+        b.get("unsolvable") for e in result["entries"] for b in e[3]
+    )
+    if _unsolvable_blockers and show_merge_list:
+        sys.stderr.write("\n")
+        for line in (
+            "Error: The above package list contains packages which cannot be",
+            "installed at the same time on the same system.",
+        ):
+            sys.stderr.write(f" {color.c('BAD', '*')} {line}\n")
+        sys.stderr.write(
+            f"\nFor more information about {color.c('BAD', 'Blocked Packages')}, "
+            "please refer to the following\n"
+        )
+        sys.stderr.write(
+            "section of the Gentoo Linux x86 Handbook (architecture is irrelevant):\n\n"
+        )
+        sys.stderr.write(
+            "https://wiki.gentoo.org/wiki/Handbook:X86/Working/Portage#Blocked_packages\n\n"
+        )
         return 1
 
     # emerge --pretend --debug Stage 5: real _compute_abi_rebuild_info's

@@ -289,8 +289,17 @@ def compare(slug: str, kind: str, rrc: int, prc: int, rp: Path, pp: Path) -> Pro
                 add("use", f"{r.cp} {uk}: real {rv} vs portuale {pv}")
 
     # -- merge order (over the common set) --------------------------------
-    common = [k for k in ((x.type, x.cp, x.slot) for x in rpk) if k in pmap]
-    pcommon = [k for k in ((x.type, x.cp, x.slot) for x in ppk) if k in rmap]
+    # `[blocks ...]` lines are not merge tasks -- real prints them in
+    # `_blocker_parents` (a digraph) iteration order, which is
+    # PYTHONHASHSEED-randomised (a two-blocker package flips between runs)
+    # -- so they're excluded from the ordered comparison (still compared
+    # for identity above).
+    common = [
+        (x.type, x.cp, x.slot) for x in rpk if x.type != "blocks" and (x.type, x.cp, x.slot) in pmap
+    ]
+    pcommon = [
+        (x.type, x.cp, x.slot) for x in ppk if x.type != "blocks" and (x.type, x.cp, x.slot) in rmap
+    ]
     if common != pcommon and sorted(common) == sorted(pcommon):
         # first divergent position, for a readable detail
         for i, (a, b) in enumerate(zip(common, pcommon)):
