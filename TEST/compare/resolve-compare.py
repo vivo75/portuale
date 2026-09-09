@@ -174,7 +174,15 @@ def parse(path: Path) -> tuple[list[Pkg], list[str], int | None, set[str], bool]
                     in_use_block = False
                 continue
             if ADVICE_ATOM.match(stripped):
-                advice.add("use-change: " + re.sub(r"\s+", " ", stripped))
+                # Real `_display_autounmask` joins a package's flipped
+                # flags in Python `set` iteration order, which is
+                # PYTHONHASHSEED-randomised -- three `emerge -pv` runs of
+                # the same resolve give `cairo lcms` / `cairo lcms` /
+                # `lcms cairo`. Canonicalise to `<atom> <sorted flags>`
+                # so the flag *set* is what's compared, not its order.
+                parts = re.sub(r"\s+", " ", stripped).split(" ")
+                canon = parts[0] + " " + " ".join(sorted(parts[1:]))
+                advice.add("use-change: " + canon.strip())
                 continue
             in_use_block = False
         if MASKED.search(line):

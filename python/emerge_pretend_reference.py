@@ -11521,6 +11521,26 @@ def resolve_pretend_graph(
         ):
             autounmask_use_changes.append(_rec)
 
+    # Real _display_autounmask emits one line per package: it iterates
+    # _needed_use_config_changes.items() and joins every flipped flag of
+    # that pkg into a single `>=<cpv> flag -flag ...` line, in discovery
+    # order. Portuale accumulates one change per flip site, so a package
+    # needing two flags (each from a different consumer) landed on two
+    # lines. Coalesce by atom, first-seen order. Mirrors
+    # portage-repo/src/lib.rs.
+    _merged = []
+    for _ch in autounmask_use_changes:
+        _existing = next((m for m in _merged if m["atom"] == _ch["atom"]), None)
+        if _existing is None:
+            _merged.append(_ch)
+            continue
+        _flags = _existing["token"].split()
+        for _f in _ch["token"].split():
+            if _f not in _flags:
+                _flags.append(_f)
+        _existing["token"] = " ".join(_flags)
+    autounmask_use_changes = _merged
+
     # Real --autounmask-backtrack off (the default): the backward-cascade
     # re-check folded a package.use change into autounmask_use_config but
     # the driver did NOT re-drive the walk, so the affected package's entry

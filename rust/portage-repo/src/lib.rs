@@ -15482,6 +15482,37 @@ fn backtracking_resolve(req: &ResolveRequest) -> Result<GraphResult, Error> {
             }
         }
 
+        // Real `_display_autounmask` emits **one line per package** --
+        // it iterates `_needed_use_config_changes.items()` (one entry per
+        // `pkg`) and joins every flipped flag of that pkg into a single
+        // `>=<cpv> flag -flag …` line, in the order the flips were
+        // discovered. Portuale accumulates one `AutounmaskChange` per
+        // flip site, so `>=dev-qt/qtbase-6.11.1` needing both `cups` and
+        // `vulkan` (each from a different consumer) landed on two lines.
+        // Coalesce by `atom`, first-seen order, joining tokens and
+        // dropping a flag already present.
+        {
+            let mut merged: Vec<AutounmaskChange> = Vec::new();
+            for ch in autounmask_use_changes.drain(..) {
+                if let Some(existing) = merged.iter_mut().find(|m| m.atom == ch.atom) {
+                    let mut flags: Vec<String> = existing
+                        .token
+                        .split_whitespace()
+                        .map(String::from)
+                        .collect();
+                    for f in ch.token.split_whitespace() {
+                        if !flags.iter().any(|g| g == f) {
+                            flags.push(f.to_string());
+                        }
+                    }
+                    existing.token = flags.join(" ");
+                } else {
+                    merged.push(ch);
+                }
+            }
+            autounmask_use_changes = merged;
+        }
+
         // Real `--autounmask-backtrack` off (the default): the backward-
         // cascade re-check folded a `package.use` change into
         // `autounmask_use_config` but the driver did NOT re-drive the walk,
