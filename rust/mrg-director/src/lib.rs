@@ -200,6 +200,17 @@ pub trait RepoCache {
 /// resolved by `flatten_src_uri`) rather than raw `SRC_URI` text, so a
 /// fetch implementation owns the mirror/verification policy but not the
 /// flag-aware parse.
+///
+/// Single by design (no second implementation planned): real has a
+/// second fetch method -- the local-`fsmirror` copy (`fetch.py:1503`,
+/// `/`-rooted `custommirrors["local"]`/`GENTOO_MIRRORS` dirs tried via
+/// `shutil.copyfile` before any `FETCHCOMMAND`) -- but it verifies
+/// against Manifest digests resolved outside this seam, and this trait
+/// deliberately passes no Manifest context (only `entry` + `distdir`),
+/// so no second transport can satisfy the verification clause from
+/// inside a library crate. The optimization itself is out of scope in
+/// portuale too (`resolve_mirror_candidates` documents the cut), so
+/// there is nothing to factor out behind this seam either.
 pub trait Fetcher {
     /// Download `entry`'s file into `distdir` (creating it if needed),
     /// verifying real `Manifest` digests (`size` + `BLAKE2B`/`SHA512`),

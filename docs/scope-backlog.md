@@ -588,10 +588,17 @@ to `LoadAwarePolicy`, and `run_build_scheduler` dispatches through
 the trait instead of its old inline gate (decision-identical for the
 capped policy; existing scheduler build tests pass unchanged) — see
 `what-this-proves.md`.
-What remains is landing further *second* implementations per slot —
-Fetcher, NewsSet, one slice
-each — new-algorithm work, not new-seam work
-(see `what-this-proves.md`'s "`mrg` director contracts" entry).
+**Section H complete**: the two remaining slots are permanent singles
+by design, not open work. Fetcher: real's second fetch method (the
+local-`fsmirror` copy, `fetch.py:1503`) verifies against Manifest
+digests the trait deliberately does not pass, so no second transport
+can satisfy it from inside a library crate — and the optimization
+itself is out of scope in portuale (`resolve_mirror_candidates`
+documents the cut). NewsSet: the only second selector would be GLSA
+`@security`, a Part 3 non-goal. Six of eight slots carry ≥2
+implementations (Solver 3, BinpkgIndex / RepoCache / PackagesDb /
+MergeEngine / SchedulerPolicy 2 each); the contracts stay for the
+seams already landed.
 
 **`--solver=` alternate backends**: the solver slot's
 second and third implementations have landed — `active_resolver_for`
