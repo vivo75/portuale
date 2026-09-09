@@ -583,4 +583,30 @@ mod tests {
             Some(0)
         );
     }
+
+    /// Only non-1 returncodes retry, up to `MAX_TRIES`, in first-seen order.
+    /// Portage: MetadataRegen.py.
+    #[test]
+    fn retry_decision_matches_portage_task_exit() {
+        assert!(!is_retryable_returncode(1));
+        assert!(is_retryable_returncode(2));
+        assert!(is_retryable_returncode(-1));
+        assert!(is_retryable_returncode(130));
+        assert_eq!(MAX_TRIES, 3);
+    }
+
+    #[test]
+    fn retry_set_is_the_unexpectedly_failed_cps_in_first_seen_order() {
+        let cps = ["b/cp", "a/cp", "c/cp"]
+            .into_iter()
+            .map(str::to_string)
+            .collect::<Vec<_>>();
+        let unexpected: HashSet<String> =
+            ["c/cp", "b/cp"].into_iter().map(str::to_string).collect();
+        assert_eq!(
+            select_retry_cps(&cps, &unexpected),
+            vec!["b/cp".to_string(), "c/cp".to_string()]
+        );
+        assert!(select_retry_cps(&cps, &HashSet::new()).is_empty());
+    }
 }
