@@ -326,6 +326,10 @@ mod tests {
         (ebuild_path, repo, Vec::new())
     }
 
+    fn md5_hex(bytes: &[u8]) -> String {
+        format!("{:x}", Md5::digest(bytes))
+    }
+
     fn valid_repo(
         ebuild: &str,
         eclass: Option<&str>,
@@ -342,5 +346,87 @@ mod tests {
             pf: "pkg-1.0",
             store_eclass_paths: store_paths,
         })
+    }
+
+    #[test]
+    fn corrupt_line_and_unsupported_eapi_invalidate() {
+        let ebuild = "EAPI=8\n";
+        let md5 = md5_hex(ebuild.as_bytes());
+        // No "=" on one line: `flat_hash._parse_data` corruption.
+        assert!(!valid_repo(
+            ebuild,
+            None,
+            Some(&format!("EAPI=8\nNOEQUALS\n_md5_={md5}\n")),
+            false,
+        ));
+        // Unsupported EAPI is disregarded (Portage: porttree.py, _pull_valid_cache).
+        assert!(!valid_repo(
+            ebuild,
+            None,
+            Some(&format!("EAPI=99\n_md5_={md5}\n")),
+            false,
+        ));
+    }
+
+    #[test]
+    fn pair_eclass_format() {
+        let ebuild = "EAPI=8\n";
+        let ebuild_md5 = md5_hex(ebuild.as_bytes());
+        let eclass_md5 = md5_hex(b"# eclass\n");
+        let good = format!("EAPI=8\n_eclasses_=myclass\t{eclass_md5}\n_md5_={ebuild_md5}\n");
+        assert!(valid_repo(ebuild, Some("# eclass\n"), Some(&good), false));
+        // Changed eclass content.
+        assert!(!valid_repo(ebuild, Some("# changed\n"), Some(&good), false));
+        // Missing eclass file.
+        assert!(!valid_repo(ebuild, None, Some(&good), false));
+        // Odd-count `_eclasses_` (malformed).
+        assert!(!valid_repo(
+            ebuild,
+            Some("# eclass\n"),
+            Some(&format!("EAPI=8\n_eclasses_=myclass\n_md5_={ebuild_md5}\n")),
+            false,
+        ));
+        // The pair form is not a triple form.
+        assert!(!valid_repo(ebuild, Some("# eclass\n"), Some(&good), true));
+    }
+
+    /// A changed eclass must be re-hashed, not served from the memo.
+    #[test]
+    fn eclass_change_after_a_validation_is_seen() {
+        let dir = Layout::new();
+        let ebuild = "EAPI=8\n";
+        let ebuild_md5 = md5_hex(ebuild.as_bytes());
+        let first = md5_hex(b"# eclass\n");
+        let cache = format!("EAPI=8\n_eclasses_=myclass\t{first}\n_md5_={ebuild_md5}\n");
+        let (ebuild_path, repo, masters) =
+            write_repo(&dir, ebuild, Some("# eclass\n"), Some(&cache));
+        assert!(cache_entry_is_valid(CacheEntryIsValidArgs {
+            ebuild_path: &ebuild_path,
+            repo_location: &repo,
+            masters: &masters,
+            category: "dev-libs",
+            pf: "pkg-1.0",
+            store_eclass_paths: false
+        }));
+        // Content changes (size and mtime change) -> invalid.
+        std::fs::write(repo.join("eclass/myclass.eclass"), "# changed!\n").unwrap();
+        assert!(!cache_entry_is_valid(CacheEntryIsValidArgs {
+            ebuild_path: &ebuild_path,
+            repo_location: &repo,
+            masters: &masters,
+            category: "dev-libs",
+            pf: "pkg-1.0",
+            store_eclass_paths: false
+        }));
+    }
+
+    #[test]
+    fn eapi_support_matches_portage() {
+        for eapi in ["0", "5", "8", "9", "9-pre1", "5_pre1", " 8 "] {
+            assert!(eapi_is_supported(eapi), "{eapi}");
+        }
+        for eapi in ["", "99", "10", "8-pre1"] {
+            assert!(!eapi_is_supported(eapi), "{eapi:?}");
+        }
     }
 }
