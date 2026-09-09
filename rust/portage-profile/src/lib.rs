@@ -2389,24 +2389,34 @@ pub fn resolve_config(
                 format!("{prefix}_{tok}")
             }
         };
-        // Only a value the profile chain settled AND that `make.conf`/env
-        // did not later override belongs in the per-level fold; anything
-        // conf/env touched is a non-incremental replacement handled
-        // wholesale by the global loops below (real's `is_not_incremental`
-        // clear, 2972-2978), exactly as before this change.
-        let level_final = |var: &str, v: &str| {
-            scalars.get(var).map(String::as_str) == Some(v)
-                && profile_scalars.get(var) == scalars.get(var)
-        };
+        // Real `config.py` (2853-2866) folds *every* profile level's own
+        // `make.defaults` value for each USE_EXPAND var into that level's
+        // USE contribution -- the flags then stack incrementally through
+        // `USE_ORDER` (a later `arch/amd64` `VIDEO_CARDS="amdgpu fbdev …"`
+        // does NOT wipe an earlier `default/linux` `VIDEO_CARDS="dummy
+        // fbdev"`; the union stands). The only thing that suppresses the
+        // per-level fold is `make.conf`/env overriding the var: real then
+        // hits `is_not_incremental` in the `conf`/`env` configdict pass
+        // (2961-2978), which *clears* every `<var>_*` flag and re-adds
+        // that tier's value wholesale -- handled by the global loops
+        // below. So the guard is per-var ("did conf/env touch it"), never
+        // per-level ("is this level's value the one that survived").
+        let conf_overrode = |var: &str| profile_scalars.get(var) != scalars.get(var);
         for (i, delta) in level_scalar_deltas.iter().enumerate() {
             let mut expand_use: Vec<String> = Vec::new();
             for var in &unprefixed_names {
-                if let Some(v) = delta.get(var).filter(|v| level_final(var, v)) {
+                if conf_overrode(var) {
+                    continue;
+                }
+                if let Some(v) = delta.get(var) {
                     expand_use.extend(v.split_whitespace().map(String::from));
                 }
             }
             for var in &expand_names {
-                if let Some(v) = delta.get(var).filter(|v| level_final(var, v)) {
+                if conf_overrode(var) {
+                    continue;
+                }
+                if let Some(v) = delta.get(var) {
                     expand_use.extend(v.split_whitespace().map(|t| prefix_tok(var, t)));
                 }
             }
@@ -4667,6 +4677,51 @@ sync-uri = file:///srv/pkgs
                 .any(|(atom, toks)| atom == "dev-libs/pkg"
                     && toks.iter().any(|t| t == "lua_single_target_luajit"))
         );
+    }
+
+    #[test]
+    fn use_expand_value_set_at_two_profile_levels_stacks_incrementally() {
+        // Real Gentoo: profiles/default/linux/make.defaults sets
+        // VIDEO_CARDS="dummy fbdev"; profiles/arch/amd64/make.defaults sets
+        // VIDEO_CARDS="amdgpu fbdev intel ...". VIDEO_CARDS is not in
+        // INCREMENTALS, but real config.py folds *each* level's own value
+        // into that level's USE (2853-2866), and USE is incremental -- so
+        // the later level does NOT wipe `dummy`; the union stands. A
+        // genuine `-video_cards_*` in a later level still cancels.
+        let root = std::env::temp_dir().join("portage-profile-test-use-expand-two-level-stack");
+        let repo = root.join("repo");
+        let base = repo.join("profiles/base");
+        let leaf = root.join("leaf-profile");
+        fs::create_dir_all(&base).unwrap();
+        fs::create_dir_all(&leaf).unwrap();
+        fs::write(
+            base.join("make.defaults"),
+            "USE_EXPAND=\"VIDEO_CARDS\"\nVIDEO_CARDS=\"dummy fbdev radeon\"\n",
+        )
+        .unwrap();
+        fs::write(leaf.join("parent"), "../repo/profiles/base\n").unwrap();
+        fs::write(
+            leaf.join("make.defaults"),
+            "VIDEO_CARDS=\"amdgpu fbdev vesa -radeon\"\n",
+        )
+        .unwrap();
+        let portage_dir = root.join("etc/portage");
+        fs::create_dir_all(&portage_dir).unwrap();
+        let make_profile = portage_dir.join("make.profile");
+        let _ = fs::remove_file(&make_profile);
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&leaf, &make_profile).unwrap();
+
+        let config = resolve_config(&root, &repo, &[], &[], "testrepo", &HashMap::new())
+            .expect("config must resolve");
+        // base-only value survives the leaf's own VIDEO_CARDS assignment.
+        assert!(config.use_flags.contains("video_cards_dummy"));
+        // both levels' additive values are present.
+        assert!(config.use_flags.contains("video_cards_amdgpu"));
+        assert!(config.use_flags.contains("video_cards_fbdev"));
+        assert!(config.use_flags.contains("video_cards_vesa"));
+        // a real `-` in the later level still cancels the earlier value.
+        assert!(!config.use_flags.contains("video_cards_radeon"));
     }
 
     #[test]

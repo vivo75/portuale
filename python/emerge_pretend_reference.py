@@ -4762,29 +4762,29 @@ def resolve_config(
             return f"{prefix}_{tok[1:]}"
         return f"{prefix}_{tok}"
 
-    # Real config.py (2849-2889): profile make.defaults USE_EXPAND /
-    # USE_EXPAND_UNPREFIXED values are translated to their equivalent USE
-    # flags *per level*, prepended before that level's own USE= line, so a
-    # sub-profile (or that level's own package.use) can incrementally
-    # cancel them. Real then skips re-folding USE_EXPAND for the defaults
-    # configdict (2964); the profile_scalars guard in the two global loops
-    # below mirrors that skip. Without this, LUA_SINGLE_TARGET="lua5-1"
-    # from profiles/base/make.defaults, folded once into the high-priority
-    # conf tier, would be re-applied after base/package.use's neovim
-    # lua_single_target_luajit override and trip neovim's ^^ REQUIRED_USE.
-    # Mirrors portage-profile/src/lib.rs's resolve_config.
-    def _level_final(var, v):
-        return scalars.get(var) == v and profile_scalars.get(var) == scalars.get(var)
+    # Real config.py (2853-2866) folds *every* profile level's own
+    # make.defaults value for each USE_EXPAND var into that level's USE
+    # contribution -- the flags then stack incrementally through USE_ORDER
+    # (a later arch/amd64 VIDEO_CARDS="amdgpu fbdev ..." does NOT wipe an
+    # earlier default/linux VIDEO_CARDS="dummy fbdev"; the union stands).
+    # The per-level fold is suppressed only when make.conf/env overrode
+    # the var: real then hits is_not_incremental in the conf/env configdict
+    # pass (2961-2978), which clears every <var>_* flag and re-adds that
+    # tier's value wholesale (the global loops below). So the guard is
+    # per-var ("did conf/env touch it"), never per-level ("is this level's
+    # value the one that survived"). Mirrors portage-profile/src/lib.rs.
+    def _conf_overrode(var):
+        return profile_scalars.get(var) != scalars.get(var)
 
     for i, delta in enumerate(level_scalar_deltas):
         expand_use = []
         for var in sorted(use_expand_unprefixed):
             v = delta.get(var)
-            if v is not None and _level_final(var, v):
+            if v is not None and not _conf_overrode(var):
                 expand_use.extend(v.split())
         for var in sorted(use_expand):
             v = delta.get(var)
-            if v is not None and _level_final(var, v):
+            if v is not None and not _conf_overrode(var):
                 expand_use.extend(_prefix_expand_tok(var, t) for t in v.split())
         if not expand_use:
             continue
