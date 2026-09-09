@@ -2311,6 +2311,80 @@ def test_emerge_regen_skips_the_depend_phase_when_the_cache_entry_is_valid(
     assert f"regenclass\t{new_eclass_md5}" in ientry.read_text()
 
 
+def test_emerge_regen_retries_a_cp_on_an_unexpected_returncode(
+    emerge_binary, tmp_path
+):
+    """Real `metadata_regen_retry` (`MetadataRegen.py:15-52`) + `_task_exit`
+    (`MetadataRegen.py:199-212`): a `depend` phase that dies with an
+    *unexpected* returncode (anything but 1) re-runs its whole cp, up to
+    3 passes total (real `max_tries=3`); a returncode-1 ("expected")
+    failure never retries. A finally-failed cpv is dropped from the
+    valid set before pruning (real `_task_exit`'s `_valid_pkgs.discard`),
+    so a failed ebuild never leaves a (stale) cache entry behind."""
+    repo = tmp_path / "repo"
+    (repo / "dev-libs" / "goodpkg").mkdir(parents=True)
+    (repo / "dev-libs" / "expfailpkg").mkdir(parents=True)
+    (repo / "dev-libs" / "retryfailpkg").mkdir(parents=True)
+    (repo / "profiles").mkdir(parents=True)
+    (repo / "profiles" / "repo_name").write_text("regentest\n")
+    (repo / "dev-libs" / "goodpkg" / "goodpkg-1.0.ebuild").write_text(
+        'EAPI=8\nDESCRIPTION="good"\nSLOT="0"\nKEYWORDS="amd64"\n'
+    )
+    # Missing eclass: the phase `die`s with exit 1 (expected failure).
+    (repo / "dev-libs" / "expfailpkg" / "expfailpkg-1.0.ebuild").write_text(
+        'EAPI=8\ninherit nosucheclass\nSLOT="0"\n'
+    )
+    # Top-level `exit 2`: an unexpected returncode (like real's sandbox
+    # hit, which reports 2), so this whole cp is re-run.
+    (repo / "dev-libs" / "retryfailpkg" / "retryfailpkg-1.0.ebuild").write_text(
+        'EAPI=8\nexit 2\nSLOT="0"\n'
+    )
+    # A stale on-disk entry for the expected-failure ebuild: the failure
+    # drops it from the valid set, so the global cleanse deletes it.
+    stale_dir = repo / "metadata" / "md5-cache" / "dev-libs"
+    stale_dir.mkdir(parents=True)
+    stale = stale_dir / "expfailpkg-1.0"
+    stale.write_text("EAPI=8\nSLOT=0\n_md5_=00000000000000000000000000000000\n")
+
+    cfg = tmp_path / "cfg"
+    (cfg / "etc" / "portage").mkdir(parents=True)
+    (cfg / "etc" / "portage" / "repos.conf").write_text(
+        f"[DEFAULT]\nmain-repo = regentest\n\n[regentest]\nlocation = {repo}\n"
+    )
+
+    env = dict(os.environ)
+    env["PORTAGE_CONFIGROOT"] = str(cfg)
+    env["ROOT"] = str(cfg)
+    env["PORTAGE_RUNNING_ROOT"] = "/"
+    env["PORTAGE_TMPDIR"] = str(tmp_path / "pt")
+
+    result = subprocess.run(
+        [str(emerge_binary), "--regen"],
+        capture_output=True,
+        text=True,
+        check=False,
+        env=env,
+    )
+    assert result.returncode == 1
+    # Three passes total: the initial full run plus two retries of the
+    # unexpectedly-failed cp, each reprinting the header and its
+    # `Processing` line (one `MetadataRegen` instance per pass in real).
+    assert result.stdout.count("Regenerating cache entries...") == 3
+    assert result.stdout.count("Processing dev-libs/retryfailpkg") == 3
+    # The expected-failure cp and the good cp run exactly once.
+    assert result.stdout.count("Processing dev-libs/expfailpkg") == 1
+    assert result.stdout.count("Processing dev-libs/goodpkg") == 1
+    assert result.stdout.rstrip().endswith("done!")
+    # Both failures are reported with their real returncodes.
+    assert "depend phase failed for dev-libs/expfailpkg-1.0 (exit 1)" in result.stderr
+    assert "depend phase failed for dev-libs/retryfailpkg-1.0 (exit 2)" in result.stderr
+    # The good entry is written; the failed ebuilds leave nothing
+    # behind (the stale expected-failure entry is pruned).
+    assert (stale_dir / "goodpkg-1.0").is_file()
+    assert not stale.exists()
+    assert not (stale_dir / "retryfailpkg-1.0").exists()
+
+
 def test_emerge_buildpkgonly_refuses_a_real_src_uri_with_no_manifest_entry(
     emerge_binary, tmp_path
 ):

@@ -459,22 +459,23 @@ ANSI USE colour all shipped 2026-09-05, see `what-this-proves.md`'s
   multi-line-continuation parser, the missing-file-means-all-`Unset:`
   rule, and the present-but-empty-matches-empty-prints-nowhere rule
   (see `what-this-proves.md`);
-- `--regen`: `--jobs`/`--load-average` threading **shipped**
-  (`thread::scope` dispatch with real `AsyncScheduler` /
+- `--regen` — **complete (2026-09-09)**: `--jobs`/`--load-average`
+  threading (`thread::scope` dispatch with real `AsyncScheduler` /
   `PollScheduler._can_add_job` semantics + the per-builddir key
   serialization matching real `doebuild()`'s `EbuildBuildDir` lock;
   byte-identical cache *and* stdout vs serial; `--jobs=0` = CPU count
-  per real `main.py:1023-1041` -- see `what-this-proves.md`). Real's
-  `_pull_valid_cache` shortcut (skip the `depend` phase when the
-  on-disk entry is already valid -- performance only,
-  content-identical) **shipped 2026-09-09** (`regen.rs::
-  cache_entry_is_valid`: `_md5_` vs the ebuild file, `EAPI`
-  supported, every `_eclasses_` md5 vs the masters-chain winner;
-  the file is left untouched, mtime preserved -- see
-  `what-this-proves.md`). Still open, its own future slice:
-  `metadata_regen_retry`'s `cp_retry` (re-run a whole cp whose phase
-  failed with an *unexpected* returncode -- exit-code semantics, not
-  content);
+  per real `main.py:1023-1041`); the `_pull_valid_cache` shortcut (skip
+  the `depend` phase when the on-disk entry is already valid --
+  performance only, content-identical; the file is left untouched,
+  mtime preserved); and `metadata_regen_retry`'s `cp_retry` (re-run a
+  whole cp whose phase failed with an *unexpected* returncode --
+  exit-code semantics: the phase's own exit verbatim, setup failures
+  code 1, up to 3 passes, first-seen cp order for determinism; a
+  finally-failed cpv is dropped from the valid set so no stale entry
+  survives). One deliberate divergence, documented in `regen.rs`:
+  real `emerge --regen`'s own `action_regen` never retries -- the loop
+  is `egencache`'s path, folded into portuale's single regen tool.
+  See `what-this-proves.md` for the cited detail.
  - `--check-news`: versioned/slotted `Display-If-Installed` atoms
    (2026-09-05), a `[use]`-dep in the atom (2026-09-07, checked against
    the matched version's vdb `IUSE`/`USE` via `use_deps_satisfied` —

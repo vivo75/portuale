@@ -2439,6 +2439,29 @@ Deterministic slice test: `pytest tests/test_portuale.py -k
 "skips_the_depend_phase"` (mtime + bytes preserved, edited ebuild /
 eclass still rewrite).
 
+`emerge --regen` re-runs a cp whose `depend` phase dies with an
+unexpected returncode (real `metadata_regen_retry`, up to 3 passes;
+returncode 1 never retries). An ebuild whose top level is `exit 2`
+gets two retries -- three `Processing` lines -- and the run still
+exits 1:
+
+```sh
+export PORTAGE_CONFIGROOT=$T/cfg ROOT=$T/cfg PORTAGE_TMPDIR=$T/pt
+rust/target/release/portuale emerge --regen 2>/dev/null; echo "EXIT=$?"
+# Regenerating cache entries...
+# Processing dev-libs/retryfailpkg
+# Regenerating cache entries...
+# Processing dev-libs/retryfailpkg
+# Regenerating cache entries...
+# Processing dev-libs/retryfailpkg
+# done!
+# EXIT=1
+```
+
+Deterministic slice test: `pytest tests/test_portuale.py -k
+"retries_a_cp"` (3x/1x `Processing` counts, both returncodes in
+stderr, stale entry of the failed ebuild pruned).
+
 `--implicit-system-deps=n` (skip the @system-first merge-order bias,
 real `depgraph._merge_order_bias` early return): `emerge -pu @world`
 against the fixture tree promotes `newpkg` (@system reachable) ahead of

@@ -20,7 +20,7 @@
 //! dispatch loop with the same two gates (see `emerge_build.rs`'s own
 //! `--jobs` scheduler, which shares `system_loadavg_1min`).
 //!
-//! Two deliberate, documented divergences, both in service of portuale's
+//! Three deliberate, documented divergences, all in service of portuale's
 //! determinism (a hard constraint -- real interleaves completions
 //! nondeterministically on stderr):
 //! - `Processing <cp>` lines print up front in `cp` order, before any
@@ -52,6 +52,21 @@
 //! `md5_database` with `store_eclass_paths = False`) -- the `depend`
 //! phase is skipped and the file left untouched. Performance only:
 //! the bytes a skipped entry would get rewritten with are identical.
+//!
+//! The `cp_retry` loop (real `metadata_regen_retry`,
+//! `MetadataRegen.py:15-52`) is implemented too: a `depend` phase that
+//! dies with an *unexpected* returncode (anything but 1 -- real
+//! `MetadataRegen._task_exit`) re-runs its whole cp, up to 3 passes
+//! total (real `max_tries=3`). One deliberate, documented divergence:
+//! real `emerge --regen`'s own `action_regen` runs a *single*
+//! `MetadataRegen` with no retry at all -- the retry loop above is the
+//! path `egencache` takes, and portuale (which has no egencache)
+//! folds it into its single regen path. The end state of a
+//! persistently-broken tree is identical either way (same failure
+//! set, exit 1); only the extra passes' `Processing <cp>` lines differ.
+//! A finally-failed cpv is dropped from the valid set before pruning
+//! (real `_task_exit`'s `_valid_pkgs.discard`), so a failed ebuild
+//! never leaves a (stale) cache entry behind.
 //!
 //! Like every real filesystem-mutating `emerge` action, this rejects
 //! `--pretend` (real `actions.py:4106-4111`) at the CLI layer before
@@ -95,13 +110,54 @@ const WRITE_KEYS: &[&str] = &[
 
 /// One ebuild's `depend`-phase unit of `MetadataRegen` work: the ebuild
 /// file plus the repo whose cache entry it (re)writes. `category`/`pf`
-/// double as the dispatch key -- see `run_parallel`'s own doc comment.
+/// double as the dispatch key -- see `run_parallel`'s own doc comment --
+/// while `cp` (`cat/pkg`) is the retry unit -- see `run`'s own doc
+/// comment on `cp_retry`.
 struct RegenWorkItem {
     ebuild_path: PathBuf,
     repo_location: PathBuf,
     masters: Vec<PathBuf>,
     category: String,
     pf: String,
+    cp: String,
+}
+
+/// A failed `RegenWorkItem`: the message for the ` * ...` failure
+/// report plus the phase's own returncode, which is what
+/// `metadata_regen_retry`'s `cp_retry` decision keys off (real
+/// `MetadataRegen._task_exit`: an *unexpected* returncode -- anything
+/// but 1 -- re-runs the whole cp).
+struct RegenFailure {
+    code: i32,
+    message: String,
+}
+
+/// Real `metadata_regen_retry`'s own default (`MetadataRegen.py:15`):
+/// one initial run plus up to two retries of the unexpectedly-failed
+/// cps.
+const MAX_TRIES: u32 = 3;
+
+/// Real `MetadataRegen._task_exit` (`MetadataRegen.py:199-212`): a
+/// failed phase whose returncode is not 1 marks its whole cp for a
+/// re-run (`cp_retry`). Returncode 1 is the "expected" failure (real
+/// `EbuildMetadataPhase` sets exactly 1 for invalid metadata, and
+/// `doebuild`'s own pre-spawn failures surface as 1) -- never retried.
+fn is_retryable_returncode(code: i32) -> bool {
+    code != 1
+}
+
+/// The retry set for the next pass, in first-seen cp order: every cp
+/// with at least one unexpectedly-failed item. Real iterates a `set`
+/// (`cp_retry`), i.e. nondeterministic order; portuale keeps work-list
+/// order -- determinism is the hard constraint, and the set of
+/// retried cps (hence the final cache content and exit code) is the
+/// same either way.
+fn select_retry_cps(cps_in_order: &[String], unexpected_cps: &HashSet<String>) -> Vec<String> {
+    cps_in_order
+        .iter()
+        .filter(|cp| unexpected_cps.contains(cp.as_str()))
+        .cloned()
+        .collect()
 }
 
 pub fn run(
@@ -126,24 +182,34 @@ pub fn run(
         .unwrap_or_else(|| std::path::PathBuf::from("/var/tmp/portage"));
 
     // Real `MetadataRegen._iter_metadata_processes`: iterate `cp_all()`
-    // and, per `cat/pkg`, every ebuild version. `Regenerating cache
-    // entries...` then `Processing <cp>` per cp (stdout), `done!` at the
-    // end (`action_regen`).
-    println!("Regenerating cache entries...");
-
-    let mut failures = 0u32;
+    // and, per `cat/pkg`, every ebuild version.
+    // Real `metadata_regen_retry` (`MetadataRegen.py:15-52`, the path
+    // `egencache` runs its regen through -- plain `emerge --regen`'s
+    // own `action_regen` uses a single `MetadataRegen` with no retry):
+    // each pass prints `Regenerating cache entries...` then
+    // `Processing <cp>` per cp it iterates (stdout), and a pass whose
+    // phase died with an *unexpected* returncode re-runs the whole cp,
+    // up to `MAX_TRIES` passes total. Portuale folds that retry into
+    // its single regen path (there is no egencache here): the only
+    // divergence from `action_regen` is extra passes over broken cps --
+    // a persistently-broken tree ends failed with exit 1 either way.
+    // `done!` prints once at the very end (`action_regen`).
+    //
+    // The full work list is still collected before any `depend` phase
+    // runs, and each pass's `Processing <cp>` lines still print up
+    // front -- see the module doc comment for why the lines print up
+    // front rather than from the workers.
+    //
     // Real `MetadataRegen`'s own `_valid_pkgs`: every `(category, pf)`
     // actually found on disk, per repo location -- fed to `_cleanup`'s
     // "global cleanse" diff against the on-disk cache afterward
     // (`MetadataRegen.py:142-189`). Plain `emerge --regen` (no explicit
     // `cp` filter) always runs the global-cleanse variant.
     let mut valid_per_repo: HashMap<PathBuf, HashSet<(String, String)>> = HashMap::new();
-    // The full `MetadataRegen._process_iter` work list, collected (and
-    // its `Processing <cp>` lines printed) before any `depend` phase runs
-    // -- see the module doc comment for why the lines print up front.
     let mut work: Vec<RegenWorkItem> = Vec::new();
+    let mut cps_in_order: Vec<String> = Vec::new();
     for cp in portage_repo::all_cp(&repos) {
-        println!("Processing {cp}");
+        cps_in_order.push(cp.clone());
         let (category, package) = match cp.split_once('/') {
             Some(x) => x,
             None => continue,
@@ -169,30 +235,86 @@ pub fn run(
                     masters: repo.masters.clone(),
                     category: category.to_string(),
                     pf: pf.to_string(),
+                    cp: cp.clone(),
                 });
             }
         }
     }
 
-    let results: Vec<Result<(), String>> = if jobs <= 1 {
-        work.iter()
-            .map(|item| run_work_item(item, root, config_root, &portage_tmpdir, debug))
-            .collect()
-    } else {
-        run_parallel(
-            &work,
-            root,
-            config_root,
-            &portage_tmpdir,
-            debug,
-            jobs,
-            load_average,
-        )
-    };
-    for r in results {
-        if let Err(e) = r {
-            eprintln!(" * {e}");
+    // One slot per work item, filled by whichever pass runs it last --
+    // mirroring real's `cpv_failed`/`cpv_successful` bookkeeping (a cpv
+    // that fails and then succeeds on retry counts as successful: only
+    // the last outcome per item matters).
+    let mut results: Vec<Option<Result<(), RegenFailure>>> =
+        (0..work.len()).map(|_| None).collect();
+    let mut pending_cps: Vec<String> = cps_in_order.clone();
+    let mut tries = MAX_TRIES;
+    // `MAX_TRIES` is always >= 1, so at least the initial full pass runs.
+    while !pending_cps.is_empty() && tries > 0 {
+        println!("Regenerating cache entries...");
+        for cp in &pending_cps {
+            println!("Processing {cp}");
+        }
+        let pending_set: HashSet<&str> = pending_cps.iter().map(String::as_str).collect();
+        let pass_indices: Vec<usize> = (0..work.len())
+            .filter(|&i| pending_set.contains(work[i].cp.as_str()))
+            .collect();
+        let pass_results: Vec<(usize, Result<(), RegenFailure>)> = if jobs <= 1 {
+            pass_indices
+                .into_iter()
+                .map(|i| {
+                    (
+                        i,
+                        run_work_item(&work[i], root, config_root, &portage_tmpdir, debug),
+                    )
+                })
+                .collect()
+        } else {
+            run_parallel(
+                &work,
+                &pass_indices,
+                root,
+                config_root,
+                &portage_tmpdir,
+                debug,
+                jobs,
+                load_average,
+            )
+        };
+        for (i, r) in pass_results {
+            results[i] = Some(r);
+        }
+        tries -= 1;
+        // Real `metadata_regen_retry`'s `while scheduler.cp_retry and
+        // tries > 0`: re-run the unexpectedly-failed cps while attempts
+        // remain.
+        let unexpected_cps: HashSet<String> = work
+            .iter()
+            .zip(results.iter())
+            .filter_map(|(item, r)| match r {
+                Some(Err(f)) if is_retryable_returncode(f.code) => Some(item.cp.clone()),
+                _ => None,
+            })
+            .collect();
+        pending_cps = if tries > 0 {
+            select_retry_cps(&cps_in_order, &unexpected_cps)
+        } else {
+            Vec::new()
+        };
+    }
+
+    let mut failures = 0u32;
+    for (item, r) in work.iter().zip(results.iter()) {
+        if let Some(Err(f)) = r {
+            eprintln!(" * {}", f.message);
             failures += 1;
+            // Real `_task_exit`'s `self._valid_pkgs.discard(...)`: a
+            // finally-failed cpv is not valid, so `_cleanup`'s
+            // global-cleanse diff deletes any (stale) on-disk entry for
+            // it -- a failed ebuild never leaves a cache entry behind.
+            if let Some(valid) = valid_per_repo.get_mut(&item.repo_location) {
+                valid.remove(&(item.category.clone(), item.pf.clone()));
+            }
         }
     }
 
@@ -220,7 +342,7 @@ fn run_work_item(
     config_root: &Path,
     portage_tmpdir: &Path,
     debug: bool,
-) -> Result<(), String> {
+) -> Result<(), RegenFailure> {
     regen_one(
         &item.ebuild_path,
         &item.repo_location,
@@ -235,38 +357,42 @@ fn run_work_item(
 }
 
 /// Real `AsyncScheduler._schedule_tasks` for the `MetadataRegen` case:
-/// dispatch work-list items (in order) onto up to `jobs` worker threads,
-/// holding off *additional* workers while the 1-minute load average is at
-/// or above `load_average` (real `PollScheduler._can_add_job` -- the
-/// first worker always runs, so this can't deadlock), and never running
-/// two items with the same `(category, pf)` concurrently (the builddir is
+/// dispatch one pass's work-list items (global indices into `work`, in
+/// order) onto up to `jobs` worker threads, holding off *additional*
+/// workers while the 1-minute load average is at or above
+/// `load_average` (real `PollScheduler._can_add_job` -- the first
+/// worker always runs, so this can't deadlock), and never running two
+/// items with the same `(category, pf)` concurrently (the builddir is
 /// shared per cpv across repos -- see the module doc comment). Results
-/// come back in work-list order, so the caller's failure report is
-/// deterministic regardless of completion order.
+/// come back as `(global index, outcome)` pairs, so the caller folds
+/// them into pass order deterministically regardless of completion
+/// order.
 #[allow(clippy::too_many_arguments)]
 fn run_parallel(
     work: &[RegenWorkItem],
+    pass_indices: &[usize],
     root: &Path,
     config_root: &Path,
     portage_tmpdir: &Path,
     debug: bool,
     jobs: usize,
     load_average: Option<f64>,
-) -> Vec<Result<(), String>> {
+) -> Vec<(usize, Result<(), RegenFailure>)> {
     use std::collections::VecDeque;
     use std::sync::mpsc;
 
-    let mut results: Vec<Option<Result<(), String>>> = (0..work.len()).map(|_| None).collect();
-    if work.is_empty() {
+    let mut results: Vec<Option<(usize, Result<(), RegenFailure>)>> =
+        (0..pass_indices.len()).map(|_| None).collect();
+    if pass_indices.is_empty() {
         return Vec::new();
     }
     std::thread::scope(|scope| {
-        let (tx, rx) = mpsc::channel::<(usize, Result<(), String>)>();
-        let mut pending: VecDeque<usize> = (0..work.len()).collect();
+        let (tx, rx) = mpsc::channel::<(usize, (usize, Result<(), RegenFailure>))>();
+        let mut pending: VecDeque<usize> = (0..pass_indices.len()).collect();
         let mut in_flight = 0usize;
         let mut in_flight_keys: HashSet<(String, String)> = HashSet::new();
         let mut done = 0usize;
-        while done < work.len() {
+        while done < pass_indices.len() {
             // Dispatch in work-list order while there is capacity. The
             // first pending item whose builddir key isn't already running
             // goes next; anything key-blocked waits for a completion.
@@ -277,26 +403,28 @@ fn run_parallel(
                 {
                     break;
                 }
-                let pos = next_dispatchable(&pending, &in_flight_keys, work);
+                let pos = next_dispatchable_in(&pending, &in_flight_keys, work, pass_indices);
                 let Some(pos) = pos else { break };
-                let idx = pending.remove(pos).expect("position came from pending");
+                let slot = pending.remove(pos).expect("position came from pending");
+                let idx = pass_indices[slot];
                 in_flight_keys.insert((work[idx].category.clone(), work[idx].pf.clone()));
                 in_flight += 1;
                 let tx = tx.clone();
                 let item = &work[idx];
                 scope.spawn(move || {
                     let r = run_work_item(item, root, config_root, portage_tmpdir, debug);
-                    let _ = tx.send((idx, r));
+                    let _ = tx.send((slot, (idx, r)));
                 });
             }
             // Progress is guaranteed: the load gate never blocks the
             // first dispatch, and with nothing in flight no key is
             // blocked -- so a pending item always dispatches, and a
             // completion is always on its way when we wait here.
-            let (idx, r) = rx.recv().expect("a worker result is always pending");
+            let (slot, r) = rx.recv().expect("a worker result is always pending");
             in_flight -= 1;
+            let idx = pass_indices[slot];
             in_flight_keys.remove(&(work[idx].category.clone(), work[idx].pf.clone()));
-            results[idx] = Some(r);
+            results[slot] = Some(r);
             done += 1;
         }
     });
@@ -306,16 +434,20 @@ fn run_parallel(
         .collect()
 }
 
-/// First position in `pending` whose builddir key isn't already running
-/// -- the "in work-list order, skip what would race" half of
-/// `run_parallel`'s dispatch. Split out so the ordering/blocking rule is
-/// unit-testable without running a `depend` phase.
-fn next_dispatchable(
+/// First dispatchable slot in `pending`: the first position whose
+/// builddir key isn't already running -- the "in work-list order, skip
+/// what would race" half of `run_parallel`'s dispatch (`pending` holds
+/// positions into `pass_indices`, whose entries are global work
+/// indices). Split out so the ordering/blocking rule is unit-testable
+/// without running a `depend` phase.
+fn next_dispatchable_in(
     pending: &std::collections::VecDeque<usize>,
     in_flight_keys: &HashSet<(String, String)>,
     work: &[RegenWorkItem],
+    pass_indices: &[usize],
 ) -> Option<usize> {
-    pending.iter().position(|&idx| {
+    pending.iter().position(|&slot| {
+        let idx = pass_indices[slot];
         !in_flight_keys.contains(&(work[idx].category.clone(), work[idx].pf.clone()))
     })
 }
@@ -485,7 +617,15 @@ fn regen_one(
     config_root: &Path,
     portage_tmpdir: &Path,
     debug: bool,
-) -> Result<(), String> {
+) -> Result<(), RegenFailure> {
+    // Every `Err` below carries the returncode real
+    // `EbuildMetadataPhase` would report for the same outcome, so the
+    // caller can replay `MetadataRegen._task_exit`'s `cp_retry`
+    // decision (`returncode != 1` re-runs the cp). Only the phase's own
+    // non-1 exit is retryable; every setup/IO failure is code 1 --
+    // real's `doebuild`-before-spawn int retval and its
+    // metadata-invalid arm are both 1, never retried.
+    let fail = |code: i32, message: String| RegenFailure { code, message };
     // Real `MetadataRegen._iter_metadata_processes`'s
     // `portdb._pull_valid_cache(cpv, ebuild_path, repo_path)` shortcut:
     // a valid on-disk entry skips the `depend` phase entirely (perf
@@ -494,11 +634,13 @@ fn regen_one(
     if cache_entry_is_valid(ebuild_path, repo_location, masters, category, pf) {
         return Ok(());
     }
-    let env = ebuild_phases::compute_environment(ebuild_path, portage_tmpdir)?;
-    let md = ebuild_phases::run_depend_phase(&env, root, config_root, debug)?;
+    let env =
+        ebuild_phases::compute_environment(ebuild_path, portage_tmpdir).map_err(|e| fail(1, e))?;
+    let md = ebuild_phases::run_depend_phase(&env, root, config_root, debug)
+        .map_err(|e| fail(e.code, e.message))?;
 
-    let ebuild_bytes =
-        std::fs::read(ebuild_path).map_err(|e| format!("{}: {e}", ebuild_path.display()))?;
+    let ebuild_bytes = std::fs::read(ebuild_path)
+        .map_err(|e| fail(1, format!("{}: {e}", ebuild_path.display())))?;
     let ebuild_md5 = format!("{:x}", Md5::digest(&ebuild_bytes));
 
     // Real `flat_hash._setitem`: `for k in self._write_keys: v =
@@ -531,11 +673,13 @@ fn regen_one(
     }
 
     let cache_dir = repo_location.join("metadata/md5-cache").join(category);
-    std::fs::create_dir_all(&cache_dir).map_err(|e| format!("{}: {e}", cache_dir.display()))?;
+    std::fs::create_dir_all(&cache_dir)
+        .map_err(|e| fail(1, format!("{}: {e}", cache_dir.display())))?;
     let cache_file = cache_dir.join(pf);
     let tmp = cache_dir.join(format!(".{pf}.regen"));
-    std::fs::write(&tmp, out.as_bytes()).map_err(|e| format!("{}: {e}", tmp.display()))?;
-    std::fs::rename(&tmp, &cache_file).map_err(|e| format!("{}: {e}", cache_file.display()))?;
+    std::fs::write(&tmp, out.as_bytes()).map_err(|e| fail(1, format!("{}: {e}", tmp.display())))?;
+    std::fs::rename(&tmp, &cache_file)
+        .map_err(|e| fail(1, format!("{}: {e}", cache_file.display())))?;
     Ok(())
 }
 
@@ -598,6 +742,7 @@ mod tests {
             masters: Vec::new(),
             category: category.to_string(),
             pf: pf.to_string(),
+            cp: format!("{category}/pkg"),
         }
     }
 
@@ -615,23 +760,78 @@ mod tests {
             work_item("dev-libs", "a-1.0"),
             work_item("dev-libs", "b-1.0"),
         ];
+        let pass: Vec<usize> = vec![0, 1, 2];
         let pending: VecDeque<usize> = (0..3).collect();
         // Nothing running: the head goes.
-        assert_eq!(next_dispatchable(&pending, &HashSet::new(), &work), Some(0));
+        assert_eq!(
+            next_dispatchable_in(&pending, &HashSet::new(), &work, &pass),
+            Some(0)
+        );
         // Head's key running: the same-key second item is skipped, the
         // next key goes.
         let running: HashSet<(String, String)> = [key("dev-libs", "a-1.0")].into();
-        assert_eq!(next_dispatchable(&pending, &running, &work), Some(2));
+        assert_eq!(
+            next_dispatchable_in(&pending, &running, &work, &pass),
+            Some(2)
+        );
         // Every key running: nothing is dispatchable (the caller waits
         // for a completion instead of spinning).
         let all: HashSet<(String, String)> =
             [key("dev-libs", "a-1.0"), key("dev-libs", "b-1.0")].into();
-        assert_eq!(next_dispatchable(&pending, &all, &work), None);
+        assert_eq!(next_dispatchable_in(&pending, &all, &work, &pass), None);
         // Empty queue: nothing to dispatch.
         assert_eq!(
-            next_dispatchable(&VecDeque::new(), &HashSet::new(), &work),
+            next_dispatchable_in(&VecDeque::new(), &HashSet::new(), &work, &pass),
             None
         );
+        // A retry-pass subset mapping resolves keys through the pass
+        // indices, not the slot positions.
+        let subset: Vec<usize> = vec![2, 0];
+        let sub_pending: VecDeque<usize> = (0..2).collect();
+        assert_eq!(
+            next_dispatchable_in(&sub_pending, &running, &work, &subset),
+            Some(0)
+        );
+    }
+
+    /// Real `metadata_regen_retry`'s `cp_retry` (`MetadataRegen.py:15-52`
+    /// + `_task_exit`, `MetadataRegen.py:199-212`).
+    ///
+    /// Only an *unexpected* returncode (anything but 1) re-runs the
+    /// whole cp, up to `MAX_TRIES` passes total, in first-seen cp order
+    /// (real iterates a set -- nondeterministic; the retried set is the
+    /// same).
+    #[test]
+    fn retry_decision_matches_real_task_exit() {
+        // Returncode 1 is the "expected" failure: invalid metadata,
+        // pre-spawn `doebuild` retval -- never retried. (0/SUCCESS
+        // never reaches the retry decision at all.)
+        assert!(!is_retryable_returncode(1));
+        // Anything else (a real phase death: 2 for a sandbox hit or a
+        // bash syntax error, -1 for a signal) re-runs the cp.
+        assert!(is_retryable_returncode(2));
+        assert!(is_retryable_returncode(-1));
+        assert!(is_retryable_returncode(130));
+        // The pass budget is real's own `max_tries=3` default.
+        assert_eq!(MAX_TRIES, 3);
+    }
+
+    #[test]
+    fn retry_set_is_the_unexpectedly_failed_cps_in_first_seen_order() {
+        let cps = ["b/cp", "a/cp", "c/cp"]
+            .into_iter()
+            .map(str::to_string)
+            .collect::<Vec<_>>();
+        // Only the unexpectedly-failed cps come back, in work-list
+        // order regardless of set order.
+        let unexpected: HashSet<String> =
+            ["c/cp", "b/cp"].into_iter().map(str::to_string).collect();
+        assert_eq!(
+            select_retry_cps(&cps, &unexpected),
+            vec!["b/cp".to_string(), "c/cp".to_string()]
+        );
+        // Nothing unexpected: no retry pass.
+        assert!(select_retry_cps(&cps, &HashSet::new()).is_empty());
     }
 
     /// Real `_pull_valid_cache` (`porttree.py:603-658`) + `validate_entry`

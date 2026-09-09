@@ -2204,15 +2204,32 @@ fn spawn_trackable(cmd: &mut std::process::Command) -> std::io::Result<std::proc
 /// is a plain `bash bin/ebuild.sh depend` -- no `sandbox`/`unshare`
 /// wrapper. Only the `Bash` backend is used (the metadata pipe is a raw
 /// fd the in-process `Brush` interpreter can't be handed).
+/// An exit-code-carrying `run_depend_phase` failure. Real
+/// `EbuildMetadataPhase` reports every outcome as a `returncode`
+/// (`os.EX_OK` / 1 for an expected failure like invalid metadata /
+/// anything else for an unexpected one), and `MetadataRegen._task_exit`
+/// keys its `cp_retry` decision off exactly that (`returncode != 1` is
+/// retried). Threading the code through -- instead of a bare message --
+/// is what lets `regen.rs` replay that decision.
+pub(crate) struct DependError {
+    pub(crate) code: i32,
+    pub(crate) message: String,
+}
+
 pub(crate) fn run_depend_phase(
     env: &Environment,
     root: &Path,
     config_root: &Path,
     debug: bool,
-) -> Result<std::collections::HashMap<String, String>, String> {
+) -> Result<std::collections::HashMap<String, String>, DependError> {
     let bin_dir = bin_dir().to_path_buf();
     let helpers_dir = bin_dir.join("ebuild-helpers");
-    create_directories(env)?;
+    // Builddir setup happens before any phase spawns -- real's
+    // `doebuild`-before-spawn int retval, code 1, never retried.
+    create_directories(env).map_err(|e| DependError {
+        code: 1,
+        message: e,
+    })?;
 
     let meta_path = env.t().join(".depend-metadata");
     let _ = std::fs::remove_file(&meta_path);
@@ -2240,10 +2257,17 @@ pub(crate) fn run_depend_phase(
     cmd.envs(vars);
     cmd.stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null());
-    let out = cmd
-        .output()
-        .map_err(|e| format!("spawning bash for the depend phase failed: {e}"))?;
+    let out = cmd.output().map_err(|e| DependError {
+        // Real `EbuildMetadataPhase._async_start`: `doebuild` failing
+        // before it even spawns surfaces as an int retval (in
+        // practice 1) -- an "expected" failure, never retried by
+        // `metadata_regen_retry`'s `cp_retry` (which only re-runs a
+        // cp whose phase died with an *unexpected* returncode).
+        code: 1,
+        message: format!("spawning bash for the depend phase failed: {e}"),
+    })?;
     if !out.status.success() {
+        let code = out.status.code().unwrap_or(-1);
         let stderr = String::from_utf8_lossy(&out.stderr);
         let tail: String = stderr
             .lines()
@@ -2254,16 +2278,27 @@ pub(crate) fn run_depend_phase(
             .rev()
             .collect::<Vec<_>>()
             .join("\n");
-        return Err(format!(
-            "depend phase failed for {}/{} (exit {}):\n{tail}",
-            env.category,
-            env.split.pf,
-            out.status.code().unwrap_or(-1),
-        ));
+        return Err(DependError {
+            // The phase's own exit code passes through verbatim, exactly
+            // like real `EbuildMetadataPhase`'s `returncode` (real only
+            // rewrites it to 2 on a sandbox-log hit -- and the `depend`
+            // phase is never sandboxed, real `_doebuild_spawn`'s
+            // `SANDBOXED_SRC_PHASES` excludes it -- so no rewrite here).
+            code,
+            message: format!(
+                "depend phase failed for {}/{} (exit {code}):\n{tail}",
+                env.category, env.split.pf,
+            ),
+        });
     }
 
-    let text =
-        std::fs::read_to_string(&meta_path).map_err(|e| format!("{}: {e}", meta_path.display()))?;
+    let text = std::fs::read_to_string(&meta_path).map_err(|e| DependError {
+        // The phase exited 0 but left no parseable metadata behind --
+        // real's `metadata_valid == False` arm, which sets returncode 1
+        // (an "expected" failure, never retried).
+        code: 1,
+        message: format!("{}: {e}", meta_path.display()),
+    })?;
     let _ = std::fs::remove_file(&meta_path);
     let mut md = std::collections::HashMap::new();
     for line in text.lines() {
