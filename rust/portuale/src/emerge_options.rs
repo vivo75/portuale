@@ -319,7 +319,6 @@ pub const VALUE_OPTIONS: &[(&str, Option<&str>)] = &[
     ("--ignore-built-slot-operator-deps", None),
     ("--ignore-soname-deps", None),
     ("--ignore-world", None),
-    ("--implicit-system-deps", None),
     ("--jobs", Some("-j")),
     ("--jobs-tmpdir-require-free-gb", None),
     ("--keep-going", None),

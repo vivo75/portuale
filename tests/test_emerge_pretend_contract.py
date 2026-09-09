@@ -146,6 +146,9 @@ CASES = [
     ("-l2.5 attached short form, inert under --pretend", ["--pretend", "-l2.5", "dev-libs/newpkg"], 0),
     ("--load-average without a value is a parse error", ["--pretend", "--load-average", "dev-libs/newpkg"], 2),
     ("--load-average=0 is a parse error (real requires a positive number)", ["--pretend", "--load-average=0", "dev-libs/newpkg"], 2),
+    ("--implicit-system-deps=y is the default (bias on)", ["--pretend", "--update", "--implicit-system-deps=y", "@world"], 0),
+    ("--implicit-system-deps bare counts as y", ["--pretend", "--update", "--implicit-system-deps", "@world"], 0),
+    ("--implicit-system-deps=n skips the @system-first merge-order bias", ["--pretend", "--update", "--implicit-system-deps=n", "@world"], 0),
     ("--emptytree: the whole deep tree reinstalls", ["--pretend", "--emptytree", "dev-libs/deeppkg"], 0),
     ("-e short alias for --emptytree", ["--pretend", "-e", "dev-libs/deeppkg"], 0),
     ("-pe bundled", ["-pe", "dev-libs/withdeps"], 0),
@@ -8607,6 +8610,7 @@ Dependency and target selection:
       --backtrack N         maximum resolver backtracking passes (default 10; 0 disables)
       --package-moves[=y|n]  apply profiles/updates/ package moves (default y)
       --misspell-suggestions[=y|n]  suggest close names for a missing cat/pkg
+      --implicit-system-deps[=y|n]  order as if @system packages were implicit deps (default y)
 
 Autounmask (read-only: prints the required changes and stops -- never writes config):
       --autounmask[=y|n], --autounmask-use[=y|n], --autounmask-keep-keywords[=y|n]
@@ -11723,6 +11727,43 @@ def test_jobs_and_load_average_are_scheduling_only_under_pretend(
         assert rust.returncode == py.returncode == 2
         assert rust.stdout == py.stdout == ""
         assert rust.stderr.strip() == py.stderr.strip() == message
+
+
+def test_implicit_system_deps_n_skips_the_system_first_merge_order_bias(
+    emerge_binary, emerge_pretend_python, fixture_env
+):
+    """`--implicit-system-deps=n` (real `y_or_n`, default `y`; real
+    `create_depgraph_params.py:120` + `depgraph._merge_order_bias`'s own
+    early return): the @system-first / reference-count re-sort is
+    skipped and the merge list stays in scheduler-over-discovery order.
+    `emerge -pu @world` shows it: the bias promotes `newpkg` (@system
+    reachable) ahead of the unrelated leaf `upgradepkg`, while `=n`
+    leaves both leaves in discovery order (newpkg still first -- it is
+    also earliest in @world expansion -- but upgradepkg drops behind
+    innernestedsetpkg). Bare / `=y` match the default exactly."""
+    biased = [
+        "[ebuild  N     ] dev-libs/newpkg-1.0 ",
+        "[ebuild     U  ] dev-libs/upgradepkg-2.0 [1.0]",
+        "[ebuild  N     ] dev-libs/innernestedsetpkg-1.0 ",
+        "[ebuild  N     ] dev-libs/withdeps-1.0 ",
+    ]
+    unbiased = [
+        "[ebuild  N     ] dev-libs/newpkg-1.0 ",
+        "[ebuild  N     ] dev-libs/innernestedsetpkg-1.0 ",
+        "[ebuild     U  ] dev-libs/upgradepkg-2.0 [1.0]",
+        "[ebuild  N     ] dev-libs/withdeps-1.0 ",
+    ]
+    for extra in ([], ["--implicit-system-deps"], ["--implicit-system-deps=y"]):
+        args = ["--pretend", "--update", *extra, "@world"]
+        rust = _run([str(emerge_binary)], args, fixture_env)
+        py = _run(emerge_pretend_python, args, fixture_env)
+        assert rust.returncode == py.returncode == 0
+        assert rust.stdout.splitlines() == py.stdout.splitlines() == biased
+    args = ["--pretend", "--update", "--implicit-system-deps=n", "@world"]
+    rust = _run([str(emerge_binary)], args, fixture_env)
+    py = _run(emerge_pretend_python, args, fixture_env)
+    assert rust.returncode == py.returncode == 0
+    assert rust.stdout.splitlines() == py.stdout.splitlines() == unbiased
 
 
 def test_deep_is_ignored_when_nodeps_disables_the_dependency_walk_entirely(

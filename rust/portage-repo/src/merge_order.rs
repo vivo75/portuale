@@ -767,10 +767,19 @@ fn deep_system_deps(
 /// has nothing to apply to here (a `--pretend` merge graph has no
 /// uninstall nodes).
 ///
-/// `implicit_system_deps` is default-on and portuale has no
-/// `--implicit-system-deps=n`, a documented cut -- so the bias always
-/// runs.
-fn merge_order_bias(g: &mut Digraph, entries: &[GraphEntry], config: &portage_profile::Config) {
+/// `implicit_system_deps` is real `myparams["implicit_system_deps"]`
+/// (`create_depgraph_params.py:120`, default on): `false` (real
+/// `--implicit-system-deps=n`) takes real's own early return
+/// (`depgraph.py:9279`) and leaves discovery order alone.
+fn merge_order_bias(
+    g: &mut Digraph,
+    entries: &[GraphEntry],
+    config: &portage_profile::Config,
+    implicit_system_deps: bool,
+) {
+    if !implicit_system_deps {
+        return;
+    }
     let deep = deep_system_deps(g, entries, config);
     let parent_count: Vec<usize> = (0..g.n)
         .map(|i| g.parents[i].iter().filter(|&&p| g.alive[p]).count())
@@ -1343,12 +1352,17 @@ fn debug_dump_graph(g: &Digraph, entries: &[GraphEntry], top_level_atoms: &[Stri
 /// way real does, bias it, schedule it, and weave portuale's own
 /// non-merge-bound entries back in.
 ///
+/// `implicit_system_deps` (real `--implicit-system-deps`, default on)
+/// gates the bias re-sort only -- the digraph build, prune, schedule,
+/// and weave-back are identical either way.
+///
 /// Returns a permutation of `0..entries.len()` in merge order.
 pub(crate) fn serialize_merge_order(
     entries: &[GraphEntry],
     top_level_atoms: &[String],
     config: &portage_profile::Config,
     root: &Path,
+    implicit_system_deps: bool,
 ) -> Vec<usize> {
     let n = entries.len();
     let mut g = build_digraph(entries, top_level_atoms, root);
@@ -1363,7 +1377,7 @@ pub(crate) fn serialize_merge_order(
     }
 
     debug_dump_graph(&g, entries, top_level_atoms, root);
-    merge_order_bias(&mut g, entries, config);
+    merge_order_bias(&mut g, entries, config, implicit_system_deps);
     let scheduled = select_nodes(&mut g, entries, root);
 
     // Real's own retlist skips every "nomerge" node (`if node.operation

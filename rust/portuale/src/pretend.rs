@@ -1939,6 +1939,7 @@ Dependency and target selection:
       --backtrack N         maximum resolver backtracking passes (default 10; 0 disables)
       --package-moves[=y|n]  apply profiles/updates/ package moves (default y)
       --misspell-suggestions[=y|n]  suggest close names for a missing cat/pkg
+      --implicit-system-deps[=y|n]  order as if @system packages were implicit deps (default y)
 
 Autounmask (read-only: prints the required changes and stops -- never writes config):
       --autounmask[=y|n], --autounmask-use[=y|n], --autounmask-keep-keywords[=y|n]
@@ -7107,6 +7108,15 @@ pub fn run(args: &[String]) -> ExitCode {
     // via `portage_repo::set_package_moves_enabled` (a process-global,
     // like `--color`), not the resolver signature.
     let mut package_moves = true;
+    // --implicit-system-deps (real `y_or_n`, `main.py:490`, default "y"):
+    // whether `@system` members are assumed to be implicit dependencies.
+    // Only `=n` disables -- real `create_depgraph_params.py:120`
+    // (`myopts.get("--implicit-system-deps", "y") != "n"`), and for a
+    // `--pretend` merge list that only shows up in `_merge_order_bias`
+    // (depgraph.py:9279 early-returns): with `=n`, the @system-first /
+    // reference-count sort is skipped and the list stays in discovery
+    // order. Threaded into the resolver.
+    let mut implicit_system_deps = true;
     // --usepkg-exclude/--usepkg-include: same "action": "append",
     // space-separated-per-occurrence shape as --exclude/-X above (real
     // main.py: "A space separated list of package names or slot atoms"),
@@ -7658,6 +7668,20 @@ pub fn run(args: &[String]) -> ExitCode {
                 "y".to_string()
             };
             package_moves = !matches!(val.as_str(), "n" | "N");
+        } else if arg == "--implicit-system-deps" || arg.starts_with("--implicit-system-deps=") {
+            // Real `y_or_n` (a value is required in real `argparse`); the
+            // portuale is lenient and treats a bare flag as `y`.
+            let val = if let Some(v) = arg.strip_prefix("--implicit-system-deps=") {
+                i += 1;
+                v.to_string()
+            } else if matches!(args.get(i + 1).map(String::as_str), Some("y" | "n")) {
+                i += 2;
+                args[i - 1].clone()
+            } else {
+                i += 1;
+                "y".to_string()
+            };
+            implicit_system_deps = !matches!(val.as_str(), "n" | "N");
         } else if arg == "--rebuild-if-new-slot" || arg.starts_with("--rebuild-if-new-slot=") {
             // Real `y_or_n`, default "y" -- only `=n` disables.
             let val = if let Some(v) = arg.strip_prefix("--rebuild-if-new-slot=") {
@@ -9960,6 +9984,7 @@ pub fn run(args: &[String]) -> ExitCode {
             rebuild_exclude: rebuild_exclude.clone(),
             rebuild_ignore: rebuild_ignore.clone(),
             dynamic_deps,
+            implicit_system_deps,
             complete,
             solver,
         };

@@ -980,6 +980,7 @@ mod tests {
             rebuild_exclude: Vec::new(),
             rebuild_ignore: Vec::new(),
             dynamic_deps: false,
+            implicit_system_deps: true,
             complete: false,
             solver: SolverKind::Portage,
         }

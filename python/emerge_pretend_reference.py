@@ -8313,18 +8313,22 @@ def _deep_system_deps(g, entries, config):
     return deep
 
 
-def _merge_order_bias(g, entries, config):
+def _merge_order_bias(g, entries, config, implicit_system_deps=True):
     """Real depgraph._merge_order_bias (depgraph.py:9274-9307): re-sorts
     mygraph.order in place so that, among simultaneously-eligible leaves,
     @system-deep runtime deps come first and the rest go from highest to
     lowest reference count. Real's own uninstalls-last rule has nothing to
     apply to here (a --pretend merge graph has no uninstall nodes).
 
-    implicit_system_deps is default-on and this reference has no
-    --implicit-system-deps=n, a documented cut -- so the bias always runs.
+    implicit_system_deps is real myparams["implicit_system_deps"]
+    (create_depgraph_params.py:120, default on): False (real
+    --implicit-system-deps=n) takes real's own early return
+    (depgraph.py:9279) and leaves discovery order alone.
     The sort is stable, so a tie keeps discovery order (real's own
     cmp_sort_key comparator returns 0 for a tie and list.sort is stable
     too)."""
+    if not implicit_system_deps:
+        return
     deep = _deep_system_deps(g, entries, config)
     parent_count = [
         sum(1 for p in g.parents[i] if g.alive[p]) for i in range(g.n)
@@ -8665,7 +8669,7 @@ def _select_nodes(g, entries, root="/"):
     return retlist
 
 
-def _topological_merge_order(entries, top_level_atoms=(), config=None, root="/"):
+def _topological_merge_order(entries, top_level_atoms=(), config=None, root="/", implicit_system_deps=True):
     """Put `entries` in real portage's dependency-first *merge* order.
 
     Real portage's mylist (Display.__call__'s input) is a genuine merge
@@ -8710,7 +8714,7 @@ def _topological_merge_order(entries, top_level_atoms=(), config=None, root="/")
         discovery_rank[i] = pos
 
     _debug_dump_graph(g, entries, top_level_atoms, root)
-    _merge_order_bias(g, entries, config)
+    _merge_order_bias(g, entries, config, implicit_system_deps)
     scheduled = _select_nodes(g, entries, root)
 
     placed = set(scheduled)
@@ -9118,6 +9122,7 @@ def resolve_pretend_graph(
     rebuild_exclude=(),
     rebuild_ignore=(),
     dynamic_deps=True,
+    implicit_system_deps=True,
     complete=False,
     complete_seed_atoms=(),
     complete_locked_merges=(),
@@ -11236,7 +11241,7 @@ def resolve_pretend_graph(
     # every required_by edge is known. Mirrors portage-repo/src/lib.rs's
     # topological_merge_order exactly.
     _dump_resolution_walk(entries, root)
-    entries = _topological_merge_order(entries, atoms, config, root)
+    entries = _topological_merge_order(entries, atoms, config, root, implicit_system_deps)
 
     # Real depgraph.py:5706-5717 -- see the Rust side's own
     # GraphResult::buildpkgonly_deps_unsatisfied doc comment.
@@ -11614,7 +11619,8 @@ _VALUE_OPTIONS = [
     ("--ignore-built-slot-operator-deps", None),
     ("--ignore-soname-deps", None),
     ("--ignore-world", None),
-    ("--implicit-system-deps", None),
+    # --implicit-system-deps IS implemented (real y_or_n, default y --
+    # only =n disables the merge-order bias; see run() + _merge_order_bias).
     ("--jobs", "-j"),
     ("--jobs-tmpdir-require-free-gb", None),
     ("--keep-going", None),
@@ -12108,6 +12114,7 @@ Dependency and target selection:
       --backtrack N         maximum resolver backtracking passes (default 10; 0 disables)
       --package-moves[=y|n]  apply profiles/updates/ package moves (default y)
       --misspell-suggestions[=y|n]  suggest close names for a missing cat/pkg
+      --implicit-system-deps[=y|n]  order as if @system packages were implicit deps (default y)
 
 Autounmask (read-only: prints the required changes and stops -- never writes config):
       --autounmask[=y|n], --autounmask-use[=y|n], --autounmask-keep-keywords[=y|n]
@@ -16405,6 +16412,7 @@ def run(args):
     dynamic_deps = True
     misspell_suggestions = True
     package_moves = True
+    implicit_system_deps = True
     usepkg_exclude = []
     usepkg_include = []
     json_output = False
@@ -16850,6 +16858,21 @@ def run(args):
                 val = "y"
                 i += 1
             package_moves = val not in ("n", "N")
+        elif arg == "--implicit-system-deps" or arg.startswith("--implicit-system-deps="):
+            # Real y_or_n (main.py:490), default "y" -- only =n disables
+            # (real create_depgraph_params.py:120). Lenient like
+            # --package-moves above: a bare flag counts as y. Gates only
+            # _merge_order_bias (real depgraph.py:9279). Mirrors pretend.rs.
+            if arg.startswith("--implicit-system-deps="):
+                val = arg[len("--implicit-system-deps=") :]
+                i += 1
+            elif i + 1 < len(args) and args[i + 1] in ("y", "n"):
+                val = args[i + 1]
+                i += 2
+            else:
+                val = "y"
+                i += 1
+            implicit_system_deps = val not in ("n", "N")
         elif arg == "--rebuild-if-new-slot" or arg.startswith("--rebuild-if-new-slot="):
             # Real y_or_n, default "y" -- only =n disables.
             if arg.startswith("--rebuild-if-new-slot="):
@@ -18587,6 +18610,7 @@ def run(args):
             rebuild_exclude,
             rebuild_ignore,
             dynamic_deps and not nodeps,
+            implicit_system_deps,
             complete,
             _complete_seed_atoms if (complete and _complete_seed_atoms) else (),
             tuple(locked) if complete else (),

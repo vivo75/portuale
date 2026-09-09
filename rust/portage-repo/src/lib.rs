@@ -10254,6 +10254,7 @@ fn topological_merge_order(
     top_level_atoms: &[String],
     config: &portage_profile::Config,
     root: &Path,
+    implicit_system_deps: bool,
 ) -> Vec<GraphEntry> {
     if entries.len() < 2 {
         // Real still emits the `digraph:` dump for a single-package merge
@@ -10264,7 +10265,13 @@ fn topological_merge_order(
         }
         return entries;
     }
-    let order = merge_order::serialize_merge_order(&entries, top_level_atoms, config, root);
+    let order = merge_order::serialize_merge_order(
+        &entries,
+        top_level_atoms,
+        config,
+        root,
+        implicit_system_deps,
+    );
     let mut slots: Vec<Option<GraphEntry>> = entries.into_iter().map(Some).collect();
     order
         .into_iter()
@@ -12341,6 +12348,12 @@ pub struct ResolveRequest {
     pub rebuild_exclude: Vec<String>,
     pub rebuild_ignore: Vec<String>,
     pub dynamic_deps: bool,
+    /// `--implicit-system-deps[=y|n]` (real `y_or_n`, default `y`): only
+    /// `=n` disables, which skips `merge_order::merge_order_bias`'s
+    /// @system-first / reference-count re-sort (real
+    /// `depgraph._merge_order_bias`'s own `implicit_system_deps` early
+    /// return) -- the `--pretend` merge list then stays in discovery order.
+    pub implicit_system_deps: bool,
     pub complete: bool,
     /// Portuale-only `--solver=` selection (see [`SolverKind`]): which
     /// algorithm answers this request. `Portage` (the default) runs the
@@ -12774,6 +12787,7 @@ fn backtracking_resolve(req: &ResolveRequest) -> Result<GraphResult, Error> {
     let rebuild_exclude: &[String] = &req.rebuild_exclude;
     let rebuild_ignore: &[String] = &req.rebuild_ignore;
     let dynamic_deps: bool = req.dynamic_deps;
+    let implicit_system_deps: bool = req.implicit_system_deps;
     let complete: bool = req.complete;
 
     let repos = find_repos(config_root)?;
@@ -15225,7 +15239,7 @@ fn backtracking_resolve(req: &ResolveRequest) -> Result<GraphResult, Error> {
         // its dependencies are ever queued). Re-sort into merge order now
         // that every `required_by` edge is known -- see
         // `topological_merge_order`.
-        entries = topological_merge_order(entries, atoms, config, root);
+        entries = topological_merge_order(entries, atoms, config, root, implicit_system_deps);
 
         // Real depgraph.py:5706-5717 -- see GraphResult::
         // buildpkgonly_deps_unsatisfied's own doc comment.
@@ -15487,6 +15501,11 @@ pub fn resolve_pretend_graph(
         rebuild_exclude: rebuild_exclude.to_vec(),
         rebuild_ignore: rebuild_ignore.to_vec(),
         dynamic_deps,
+        // The legacy marshaller only ever answers with defaults: real's
+        // own default is on (`myopts.get(..., "y") != "n"`), and anything
+        // else arrives via a direct `ResolveRequest`. See the `solver`
+        // comment below.
+        implicit_system_deps: true,
         complete,
         // `resolve_pretend_graph` is the legacy 44-arg marshaller: it only
         // ever answers with the default solver. New code builds a
@@ -22715,6 +22734,7 @@ mod tests {
             &["dev-libs/cyc-a".to_string()],
             &test_config(),
             Path::new("/nonexistent-root"),
+            true,
         );
         let names: Vec<&str> = ordered.iter().map(|e| e.package.as_str()).collect();
         assert_eq!(names, vec!["cyc-b", "cyc-a"]);
@@ -22734,9 +22754,51 @@ mod tests {
             &["dev-libs/cyc-a".to_string()],
             &test_config(),
             Path::new("/nonexistent-root"),
+            true,
         );
         let names: Vec<&str> = ordered.iter().map(|e| e.package.as_str()).collect();
         assert_eq!(names, vec!["cyc-a", "cyc-b"]);
+    }
+
+    #[test]
+    fn implicit_system_deps_n_skips_the_merge_order_bias() {
+        // Three independent leaves in discovery order a, b, c, with c in
+        // @system: the bias promotes the deep system dep first, while
+        // `--implicit-system-deps=n` (real `depgraph._merge_order_bias`'s
+        // own early return) keeps discovery order.
+        let mut config = test_config();
+        config.system_packages = vec!["dev-libs/c".to_string()];
+        let atoms = vec![
+            "dev-libs/a".to_string(),
+            "dev-libs/b".to_string(),
+            "dev-libs/c".to_string(),
+        ];
+        let biased = topological_merge_order(
+            vec![
+                graph_entry("dev-libs", "a", "1.0"),
+                graph_entry("dev-libs", "b", "1.0"),
+                graph_entry("dev-libs", "c", "1.0"),
+            ],
+            &atoms,
+            &config,
+            Path::new("/nonexistent-root"),
+            true,
+        );
+        let names: Vec<&str> = biased.iter().map(|e| e.package.as_str()).collect();
+        assert_eq!(names, vec!["c", "a", "b"]);
+        let unbiased = topological_merge_order(
+            vec![
+                graph_entry("dev-libs", "a", "1.0"),
+                graph_entry("dev-libs", "b", "1.0"),
+                graph_entry("dev-libs", "c", "1.0"),
+            ],
+            &atoms,
+            &config,
+            Path::new("/nonexistent-root"),
+            false,
+        );
+        let names: Vec<&str> = unbiased.iter().map(|e| e.package.as_str()).collect();
+        assert_eq!(names, vec!["a", "b", "c"]);
     }
 
     #[test]

@@ -2396,3 +2396,27 @@ test_pretend_matches"` (every `--jobs`/`--load-average` spelling +
 error strings, Rust == Python) and `cargo test -p portuale regen`
 (dispatch key-blocking unit test).
 
+`--implicit-system-deps=n` (skip the @system-first merge-order bias,
+real `depgraph._merge_order_bias` early return): `emerge -pu @world`
+against the fixture tree promotes `newpkg` (@system reachable) ahead of
+the unrelated leaf `upgradepkg` by default, and leaves scheduler-over-
+discovery order with `=n` (both sides byte-identical):
+
+```sh
+export FX="$(pwd)/fixtures" PORTAGE_CONFIGROOT="$FX" ROOT="$FX" PORTAGE_RUNNING_ROOT="$FX"
+rust/target/release/portuale emerge -pu @world
+# [ebuild  N     ] dev-libs/newpkg-1.0
+# [ebuild     U  ] dev-libs/upgradepkg-2.0 [1.0]
+# [ebuild  N     ] dev-libs/innernestedsetpkg-1.0
+# [ebuild  N     ] dev-libs/withdeps-1.0
+rust/target/release/portuale emerge -pu --implicit-system-deps=n @world
+# [ebuild  N     ] dev-libs/newpkg-1.0
+# [ebuild  N     ] dev-libs/innernestedsetpkg-1.0
+# [ebuild     U  ] dev-libs/upgradepkg-2.0 [1.0]
+# [ebuild  N     ] dev-libs/withdeps-1.0
+```
+
+Deterministic slice tests: `pytest
+tests/test_emerge_pretend_contract.py -k "implicit_system"` (CASES +
+pinned order test, Rust == Python) and `cargo test -p portuale
+implicit_system_deps` (bias unit test).

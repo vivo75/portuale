@@ -15919,3 +15919,27 @@ black-box test (serial vs `--jobs=4 --load-average=1000000` vs
 `--jobs=0`: identical bytes, identical stdout), and the Rust
 `dispatch_takes_the_first_item_whose_key_is_not_running` unit test.
 
+**`--implicit-system-deps=n` (merge-order bias gate).** The remaining
+`_serialize_tasks` cut is closed: the flag (real `y_or_n`,
+`main.py:490`, default `y`; only `=n` disables, per real
+`create_depgraph_params.py:120`) threads from the CLI through
+`ResolveRequest` into `topological_merge_order` →
+`serialize_merge_order` → `merge_order_bias`, whose `false` arm is
+real `depgraph._merge_order_bias`'s own early return
+(`depgraph.py:9279`): the @system-first / reference-count re-sort is
+skipped and the list stays in scheduler-over-discovery order. Bare
+counts as `y` (portuale leniency, same as `--package-moves`); the
+legacy 44-arg `resolve_pretend_graph` marshaller keeps the default
+`true`. Dual-language, verified empirically (`emerge -pu @world`:
+biased `newpkg, upgradepkg, innernestedsetpkg, withdeps` vs `=n`
+`newpkg, innernestedsetpkg, upgradepkg, withdeps`, byte-identical
+Rust == Python). Pinned: three CASES entries, the
+`test_implicit_system_deps_n_skips_the_system_first_merge_order_bias`
+contract test, the Rust
+`implicit_system_deps_n_skips_the_merge_order_bias` unit test (three
+independent leaves, `@system` member promoted only with the bias on),
+and a `--help` line on both sides. This finished another session's
+half-landed slice (field + CLI parsing without the resolver threading,
+which left the tree non-compiling); the compile repair is part of this
+entry. Still open in Part 2.A: the `_FrontierDigraph` perf layer and
+blocker/uninstall interleaving.

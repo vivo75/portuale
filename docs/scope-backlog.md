@@ -163,10 +163,12 @@ can't grow into these incrementally:
   provider asap, bug #303567 / #328317) **shipped 2026-09-07**
   (`merge_order::seed_toolchain_asap`: the graphed `virtual/libc` /
   `virtual/os-headers` entry's `RDEPEND` providers seed `asap_nodes`
-  before the selection loop, os-headers first). Still open: the
-  `_FrontierDigraph` perf layer, blocker/uninstall interleaving (a
-  `--pretend` merge graph has no uninstall nodes to interleave), and
-  `--implicit-system-deps=n`.
+  before the selection loop, os-headers first). `--implicit-system-deps=n`
+  **shipped** (the `_merge_order_bias` early return, threaded
+  CLI → `ResolveRequest` → `serialize_merge_order` on both sides; see
+  `what-this-proves.md`). Still open: the `_FrontierDigraph` perf layer
+  and blocker/uninstall interleaving (a `--pretend` merge graph has no
+  uninstall nodes to interleave).
 - **`_complete_graph` as graph *nodes*.** Its reverse-dependency
   **atoms** shipped 2026-09-07 (`reverse_dependency_constraints` — a vdb
   reverse scan fed into the `'backtrack` loop's `slot_constraints`,
