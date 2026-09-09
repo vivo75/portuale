@@ -15944,6 +15944,31 @@ which left the tree non-compiling); the compile repair is part of this
 entry. Still open in Part 2.A: the `_FrontierDigraph` perf layer and
 blocker/uninstall interleaving.
 
+**Slot-collision `use` keys + `need_rebuild` trailer (tested, dormant).**
+The render side of the two remaining notice cuts is ported on both
+languages and pinned by unit tests, but ships dormant: no fixture can
+trigger it yet, so no contract CASES (a fixture that "passes" without
+isolating the behaviour would be worse than none). What landed:
+`portage-dep::use_mismatch_flags` (missing-IUSE vs contradicted-USE,
+transcribed from `violated_conditionals`' unconditional branches --
+conditional forms never yield keys, matching real, which only reads
+`.enabled ∪ .disabled`), the `Use(flag)` collision reason with
+unconditional-first display ordering and `^` spans over violated USE
+tokens (no colorization), the `slot_conflict_need_rebuild` check
+(installed + built-`:=` parent; `--exclude` / `--useoldpkg-atoms` /
+ebuild-masked reasons), and the trailer block. Verified live against real portage where real is
+runnable: the notice shape (both use-key parents shown, unconditional
+first, caret under the violated token, masked `(-x)` display) matches
+real's `--color=n` output exactly. Why dormant, each verified live:
+slot-reuse skips USE re-verification (real pulls a second instance,
+portuale reuses or swallows with rc 0); `--dynamic-deps=n` doesn't
+switch the walk source via the CLI (unit test disagrees -- open
+mystery); literal bound `:=` is accepted in ebuilds but real masks it
+as improper context. See `scope-backlog.md` Part 2.A for the scoped
+follow-ups. Pinned: five `portage-dep::use_mismatch_tests` unit tests;
+`cargo test` / `pytest` fully green around the change (32 slot-notice
+tests byte-identical).
+
 **Circular `followup_change` fixture.** `docs/history/find-suggestions-
 plan.md` left exactly one `_find_suggestions` variant without a fixture:
 the *conditional*-grandparent arm of step 9 (the hard-clash `ignore`

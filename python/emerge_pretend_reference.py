@@ -5859,6 +5859,84 @@ def _resolved_version_meta_and_use(repos, category, package, version, config):
     return (metadata, use_flags)
 
 
+def _slot_conflict_flag_sets(repos, config, category, package, version):
+    """Declared-IUSE names and resolved USE for category/package at
+    `version` (highest-repo_priority candidate, same re-lookup as
+    _slot_conflict_meta) -- the two sets real's USE branch reads off each
+    conflicting instance. Empty sets when unreadable (absence is real:
+    every required flag then counts as missing). Mirrors
+    portage-repo/src/lib.rs's slot_conflict_flag_sets."""
+    cands = [c for c in list_candidates(repos, category, package) if c["version"] == version]
+    if not cands:
+        return (set(), set())
+    cand = max(cands, key=lambda c: c["repo_priority"])
+    try:
+        _iuse, use_flags = _candidate_iuse_and_use(cand, category, package, config)
+    except (OSError, ValueError):
+        return (set(), set())
+    iuse = {t.lstrip("+-") for t in cand["iuse"].split()}
+    return (iuse, set(use_flags))
+
+
+def _sc_use_mismatch(use, other_use, other_iuse):
+    """Real _prepare_conflict_msg's USE branch for one parent atom
+    against one conflicting instance (slot_collision.py:331-389):
+    (unconditional, violated) flag sets. `use` is the real Atom's own
+    `_use_dep` object (`.required`/`.enabled`/`.disabled`/
+    `.missing_enabled`/`.missing_disabled` read directly, like
+    _use_deps_satisfied). Unconditional = default-less flags missing
+    from the other's IUSE (real get_missing_iuse -- also drives the
+    display preference); violated = unconditional-form deps contradicted
+    by the other's USE (real violated_conditionals' .enabled/.disabled).
+    Conditional forms never yield keys. Mirrors
+    portage-dep's use_mismatch_flags exactly."""
+    if use is None:
+        return (set(), set())
+    missing = {f for f in use.required if f not in other_iuse}
+    if missing:
+        return (missing, set())
+    violated = set()
+    for f in use.enabled:
+        if f not in other_use and (f in other_iuse or f in use.missing_disabled):
+            violated.add(f)
+    for f in use.disabled:
+        if f in other_use or (f not in other_iuse and f in use.missing_enabled):
+            violated.add(f)
+    return (set(), violated)
+
+
+def _sc_need_rebuild(
+    parent_cpv, atom, excluded, useoldpkg_atoms, usepkgonly, repos, config, installed_pkgs
+):
+    """Real slot_collision.py's need_rebuild scan for one shown parent in
+    a slot group: an installed parent with a built slot-operator atom
+    (cat/pkg:S/SS= -- real Atom.slot_operator_built; soname atoms can't
+    reach this renderer) reports why it cannot be rebuilt. Mirrors
+    pretend.rs's slot_conflict_need_rebuild exactly."""
+    if not atom.slot_operator_built:
+        return None
+    if ":" not in parent_cpv:
+        return None
+    cp, _, slot_part = parent_cpv.partition(":")
+    split = _split_cpv(cp)
+    if split is None:
+        return None
+    ccat, cpkg, cver = split
+    if (ccat, cpkg, cver) not in installed_pkgs:
+        return None
+    slot = slot_part.split("/")[0]
+    against = f"{ccat}/{cpkg}-{cver}:{slot}" if slot else f"{ccat}/{cpkg}-{cver}"
+    if any(match_from_list(e, [against]) for e in excluded):
+        return "matched by --exclude argument"
+    if any(match_from_list(e, [against]) for e in useoldpkg_atoms):
+        return "matched by --useoldpkg-atoms argument"
+    if usepkgonly:
+        return None
+    if not _ebuild_visible_at(repos, ccat, cpkg, cver, config):
+        return "ebuild is masked or unavailable"
+    return None
+
+
 def _slot_conflict_meta(repos, category, package, version):
     """(sub_slot, repo_name, slot) of category/package's own `version` --
     the highest-repo_priority candidate carrying that exact version. All
@@ -19347,19 +19425,25 @@ def run(args):
     # block, then the advisory paragraph. Ported: the preamble, the
     # per-instance '(<cpv>, ebuild scheduled for merge) USE="" pulled in
     # by' line, real _prepare_conflict_msg_and_check_for_specificity's
-    # collision_reasons grouping + one-representative-per-reason selection
-    # (every parent under --verbose-conflicts), the highlight_violations
-    # "^" marker line, the "(and N more with the same problem[s])" tail,
-    # the "NOTE: Use the '--verbose-conflicts' option ..." footer, and the
-    # advisory (--backtrack=30 hint gated the real way: shown unless
-    # --backtrack is >=30 or 0). Documented cuts (fixtures don't exercise
-    # them): the use/soname reason keys, pkg_use_display for a package
-    # with non-default USE (the ' USE=""' slot is rendered, non-empty flag
-    # lists are not), operator/USE colorization, an "=*" operator's
-    # ("version", None) key, and the need_rebuild "cannot be rebuilt"
-    # trailer. Purely informational -- v1 neither refuses nor changes the
+    # collision_reasons grouping (version, slot, and use keys) +
+    # one-representative-per-reason selection (every parent under
+    # --verbose-conflicts; every use-group member always), the
+    # unconditional-first ordering, the highlight_violations "^" marker
+    # line (operator, version, slot, and USE-token spans -- no
+    # colorization), the "(and N more with the same problem[s])" tail,
+    # the "NOTE: Use the '--verbose-conflicts' option ..." footer, the
+    # need_rebuild "cannot be rebuilt" trailer, and the advisory
+    # (--backtrack=30 hint gated the real way: shown unless --backtrack
+    # is >=30 or 0). Documented cuts (fixtures don't exercise them): the
+    # soname reason key (no soname atom can reach this renderer),
+    # operator/USE colorization, and an "=*" operator's ("version", None)
+    # key. Purely informational -- v1 neither refuses nor changes the
     # exit code. Mirrors pretend.rs.
     if result["slot_conflicts"]:
+        need_rebuild = []  # [(display, reason)], first-seen order
+        installed_pkgs = {
+            (c, p, v) for c, p, v, _slot in _all_installed_packages(_root())
+        }
 
         def _sc_version_sub(op):
             if op in (">=", ">"):
@@ -19371,27 +19455,47 @@ def run(args):
             return None
 
         def _sc_reasons(atom, others):
+            # `others` are (cpv, iuse_set, use_set) triples; the strings
+            # feed the version/slot probes, the sets the USE probe (real
+            # matches USE-deps against the other package, not a string).
+            # Returns (reasons, use_unconditional).
             bare = atom.without_use.without_slot
             no_use = atom.without_use
             reasons = []
-            for other in others:
-                if not match_from_list(bare, [other]):
+            use_unconditional = False
+            for other_cpv, other_iuse, other_use in others:
+                if not match_from_list(bare, [other_cpv]):
                     sub = _sc_version_sub(atom.operator)
                     if sub is not None:
                         r = ("version", sub)
                         if r not in reasons:
                             reasons.append(r)
                 elif atom.slot is not None:
-                    if not match_from_list(no_use, [other]):
+                    if not match_from_list(no_use, [other_cpv]):
                         s = ":" + atom.slot
                         if atom.sub_slot:
                             s += "/" + atom.sub_slot
                         r = ("slot", s)
                         if r not in reasons:
                             reasons.append(r)
-            return reasons
+                elif atom.use is not None:
+                    # match_from_list skips USE evaluation against
+                    # plain-string candidates (real's hasattr guard), so a
+                    # version+slot match always "matches" -- the USE
+                    # verdict comes from _sc_use_mismatch alone.
+                    missing, violated = _sc_use_mismatch(
+                        atom.use, other_use, other_iuse
+                    )
+                    if missing:
+                        use_unconditional = True
+                    flags = sorted(missing | violated)
+                    for f in flags:
+                        r = ("use", f)
+                        if r not in reasons:
+                            reasons.append(r)
+            return (reasons, use_unconditional)
 
-        def _sc_caret_idx(atom_str, atom, version_violated, slot_violated):
+        def _sc_caret_idx(atom_str, atom, version_violated, slot_violated, use_flags=()):
             idx = set()
             slot_str = ""
             if atom.slot:
@@ -19420,6 +19524,24 @@ def run(args):
                 start = atom_str.find(slot_str)
                 if start >= 0:
                     idx.update(range(start, start + len(slot_str)))
+            if use_flags and "[" in atom_str and "]" in atom_str:
+                # Real highlight_violations' USE-token branch, without
+                # colorization (indices stay aligned; real drifts under
+                # --color y). The strip rule is real's own, quirks
+                # included ((+)/(-) tokens never match).
+                bracket = atom_str.find("[")
+                close = atom_str.find("]")
+                cursor = bracket + 1
+                for piece in atom_str[bracket + 1 : close].split(","):
+                    if not piece:
+                        continue
+                    start = atom_str.find(piece, cursor)
+                    if start < 0:
+                        continue
+                    flag = piece.strip().lstrip("-!").rstrip("=?")
+                    if flag in use_flags:
+                        idx.update(range(start, start + len(piece)))
+                    cursor = start + len(piece)
             return idx
 
         any_omitted = False
@@ -19438,13 +19560,22 @@ def run(args):
                     f"/{inst['sub_slot']}::{inst['repo_name']}, ebuild scheduled for merge)"
                     f" {_render_pkg_use_display(inst['use_display'])} pulled in by"
                 )
-                others = [
-                    f"{c['category']}/{c['package']}-{o['version']}:{c['slot']}"
-                    f"/{o['sub_slot']}::{o['repo_name']}"
-                    for o in c["instances"]
-                    if o["version"] != inst["version"]
-                ]
-                classified = []  # (parent_cpv, atom_str, Atom, reasons, parent_use_display)
+                others = []
+                for o in c["instances"]:
+                    if o["version"] == inst["version"]:
+                        continue
+                    iuse, use = _slot_conflict_flag_sets(
+                        all_repos, config, c["category"], c["package"], o["version"]
+                    )
+                    others.append(
+                        (
+                            f"{c['category']}/{c['package']}-{o['version']}:{c['slot']}"
+                            f"/{o['sub_slot']}::{o['repo_name']}",
+                            iuse,
+                            use,
+                        )
+                    )
+                classified = []  # (parent_cpv, atom_str, Atom, reasons, use_display, unconditional)
                 for p in inst["parents"]:
                     parent_cpv, atom_str = p["parent"], p["atom"]
                     if not parent_cpv:
@@ -19453,14 +19584,14 @@ def run(args):
                         atom = Atom(atom_str)
                     except (InvalidAtom, InvalidDependString):
                         continue
-                    reasons = _sc_reasons(atom, others)
+                    reasons, unconditional = _sc_reasons(atom, others)
                     if reasons:
                         classified.append(
-                            (parent_cpv, atom_str, atom, reasons, p["use_display"])
+                            (parent_cpv, atom_str, atom, reasons, p["use_display"], unconditional)
                         )
                 num_all_specific = sum(len(c[3]) for c in classified)
                 groups = []  # [reason, [member idx]]
-                for i, (_, _, _, reasons, _) in enumerate(classified):
+                for i, (_, _, _, reasons, _, _) in enumerate(classified):
                     for reason in reasons:
                         for g in groups:
                             if g[0] == reason:
@@ -19495,19 +19626,50 @@ def run(args):
                             else:
                                 best.append([cp, m])
                         selected.extend(b[1] for b in best)
-                    else:  # slot
+                    elif reason[0] == "slot":
                         if members:
                             selected.append(members[0])
+                    else:  # use: every member always shows
+                        selected.extend(members)
+                # Real's need_rebuild scan runs over every slot-group
+                # parent (verbose or not); an unrebuildable parent is
+                # always shown, and recorded for the trailer below.
+                for reason, members in groups:
+                    if reason[0] != "slot":
+                        continue
+                    for m in members:
+                        parent_cpv, _, atom, _, _, _ = classified[m]
+                        why = _sc_need_rebuild(
+                            parent_cpv,
+                            atom,
+                            excluded,
+                            useoldpkg_atoms,
+                            usepkgonly,
+                            all_repos,
+                            config,
+                            installed_pkgs,
+                        )
+                        if why is not None:
+                            if m not in selected:
+                                selected.append(m)
+                            entry = (f"({parent_cpv}, installed)", why)
+                            if entry not in need_rebuild:
+                                need_rebuild.append(entry)
                 selected = sorted(set(selected))
+                # Real shows unconditional_use_deps first (its own set
+                # order is nondeterministic; this keeps the stable
+                # classified order within each half).
+                selected.sort(key=lambda m: not classified[m][5])
                 for m in selected:
-                    parent_cpv, atom_str, atom, reasons, parent_use = classified[m]
+                    parent_cpv, atom_str, atom, reasons, parent_use, _ = classified[m]
                     version_violated = any(r[0] == "version" for r in reasons)
                     slot_violated = any(r[0] == "slot" for r in reasons)
+                    use_flags = sorted({r[1] for r in reasons if r[0] == "use"})
                     cur_line = (
                         f"{atom_str} required by ({parent_cpv}, "
                         f"ebuild scheduled for merge) {_render_pkg_use_display(parent_use)}\n"
                     )
-                    idx = _sc_caret_idx(atom_str, atom, version_violated, slot_violated)
+                    idx = _sc_caret_idx(atom_str, atom, version_violated, slot_violated, use_flags)
                     marker = "".join(
                         "^" if k in idx else " " for k in range(len(cur_line))
                     )
@@ -19531,6 +19693,15 @@ def run(args):
                 )
             )
             print()
+        # Real slot_collision.py's need_rebuild trailer.
+        if need_rebuild:
+            print()
+            print("!!! The slot conflict(s) shown above involve package(s) which may need to")
+            print("!!! be rebuilt in order to solve the conflict(s). However, the following")
+            print("!!! package(s) cannot be rebuilt for the reason(s) shown:")
+            print()
+            for ppkg, reason in need_rebuild:
+                print(f"  {ppkg}: {reason}")
         print()
         for line in (
             "It may be possible to solve this problem by using package.mask to",

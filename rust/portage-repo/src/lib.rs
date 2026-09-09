@@ -7481,7 +7481,10 @@ fn best_binary_build_time(candidates: &[Candidate], version: &str) -> Option<i64
 /// resolver's own candidate pool, so it stays meaningful under
 /// `--usepkgonly` (where the pool excludes ebuilds but real still asks
 /// the tree whether the installed built instance's ebuild remains).
-fn ebuild_visible_at(
+/// Also read at render time by portuale's slot-collision
+/// `need_rebuild` check (real `slot_collision.py`'s
+/// `_equiv_ebuild_visible(ppkg)` gate).
+pub fn ebuild_visible_at(
     repos: &[RepoConfig],
     category: &str,
     package: &str,
@@ -11693,6 +11696,40 @@ fn pkg_use_display_for(
     build_use_expand_display(&disp, config, None, &forced, true, &HashSet::new())
 }
 
+/// Declared-IUSE names and resolved USE for `category/package` at
+/// `version` (highest-`repo_priority` candidate, same re-lookup as
+/// `slot_conflict_meta`/`pkg_use_display_for`) -- the two sets real
+/// `_prepare_conflict_msg_and_check_for_specificity`'s USE branch reads
+/// off each conflicting instance (`other_pkg.iuse`,
+/// `_pkg_use_enabled(other_pkg)`). Empty sets when the version is gone
+/// from every repo or its md5-cache entry is unreadable (same
+/// "absence is real" handling as `pkg_use_display_for`: every required
+/// flag then counts as missing). Read at render time by portuale's
+/// slot-collision `("use", flag)` classification.
+pub fn slot_conflict_flag_sets(
+    repos: &[RepoConfig],
+    config: &portage_profile::Config,
+    category: &str,
+    package: &str,
+    version: &str,
+) -> (HashSet<String>, HashSet<String>) {
+    let Some(cand) = list_candidates(repos, category, package)
+        .ok()
+        .and_then(|cs| {
+            cs.iter()
+                .filter(|c| c.version == version)
+                .max_by_key(|c| c.repo_priority)
+                .cloned()
+        })
+    else {
+        return (HashSet::new(), HashSet::new());
+    };
+    match candidate_iuse_and_use(&cand, category, package, config) {
+        Some((iuse, use_flags)) => (iuse, use_flags),
+        None => (HashSet::new(), HashSet::new()),
+    }
+}
+
 /// Assembles a `SlotConflict` (real `slot_collision_handler`'s
 /// `(pkg, parent_atoms)` per `slot_atom`): instance A is `existing_version`
 /// (already in the graph), instance B is `current_version` (what the
@@ -11713,8 +11750,22 @@ fn build_slot_conflict(
 ) -> SlotConflict {
     let (a_sub, a_repo, _) = slot_conflict_meta(repos, category, package, existing_version);
     let (b_sub, b_repo, _) = slot_conflict_meta(repos, category, package, current_version);
-    let a_match = format!("{category}/{package}-{existing_version}:{slot}");
-    let b_match = format!("{category}/{package}-{current_version}:{slot}");
+    // The match strings carry the sub-slot (real matches puller atoms
+    // against full packages, not slot-only strings): without it, a
+    // *built* slot-operator puller (`cat/pkg:S/SS=`) matches neither
+    // instance and vanishes from the notice entirely -- which also
+    // starves the `need_rebuild` scan below of exactly the parents it
+    // exists for. A missing sub-slot (version gone from every repo)
+    // keeps the old slot-only shape.
+    let with_sub = |v: &str, sub: &str| {
+        if sub.is_empty() {
+            format!("{category}/{package}-{v}:{slot}")
+        } else {
+            format!("{category}/{package}-{v}:{slot}/{sub}")
+        }
+    };
+    let a_match = with_sub(existing_version, &a_sub);
+    let b_match = with_sub(current_version, &b_sub);
     let puller_cpv = |pc: &str, pp: &str, pv: &str| -> String {
         if pc.is_empty() {
             return String::new();

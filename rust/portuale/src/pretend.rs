@@ -217,10 +217,13 @@ use crate::emerge_build;
 use crate::emerge_getbinpkg;
 use crate::emerge_options;
 use crate::needed_elf;
-use portage_dep::{Atom, Blocker, Operator, SlotOperator, match_from_list, parse_atom};
+use portage_dep::{
+    Atom, Blocker, Operator, SlotOperator, match_from_list, parse_atom, use_mismatch_flags,
+};
 use portage_repo::{
     ChangedDepsReportEntry, GraphEntry, PretendOutcome, ResolveRequest, SlotConflict,
-    active_resolver_for, config_root_from_env, root_from_env,
+    active_resolver_for, all_installed_packages, config_root_from_env, ebuild_visible_at,
+    root_from_env, slot_conflict_flag_sets,
 };
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
@@ -6767,18 +6770,20 @@ fn misspell_suggestion_block(
 /// One classified reason a slot-conflicted parent atom rejects the
 /// *other* instance's version, mirroring real
 /// `_slot_conflict_handler._prepare_conflict_msg_and_check_for_specificity`'s
-/// `collision_reasons` keys -- restricted to the two kinds portuale's
-/// fixtures exercise (`version` with a `ge`/`eq`/`le` sub-type, and
-/// `slot`). Documented cuts vs. real: the `use`/`soname` reason keys, an
-/// `=*` operator's `("version", None)` key (portuale files it under
-/// `"eq"`), `pkg_use_display` for a package carrying non-default USE (the
-/// ` USE=""` slot is still rendered, non-empty flag lists are not),
+/// `collision_reasons` keys -- `version` with a `ge`/`eq`/`le` sub-type,
+/// `slot` with the `:slot[/sub]` text (for the caret span), and `use`
+/// with the violated flag. Documented cuts vs. real: the `soname` reason
+/// key (no soname atom can reach this renderer -- `portage-dep` cannot
+/// parse soname atoms and dep flattening drops unparseable tokens, so
+/// the key is unreachable, not merely unimplemented), an `=*` operator's
+/// `("version", None)` key (portuale files it under `"eq"`),
 /// operator/USE colorization, and the `need_rebuild` "cannot be rebuilt"
-/// trailer.
+/// trailer (wired below, not cut).
 #[derive(Clone, PartialEq, Eq, Debug)]
 enum SlotConflictReason {
     Version(&'static str), // "ge" | "eq" | "le"
     Slot(String),          // the ":slot[/sub]" text, for the caret span
+    Use(String),           // the violated flag, for the caret span
 }
 
 /// One slot-conflict parent that contributed at least one specific
@@ -6789,6 +6794,11 @@ struct ClassifiedParent<'a> {
     atom_str: &'a str,
     atom: Atom,
     reasons: Vec<SlotConflictReason>,
+    /// Real `unconditional_use_deps`: at least one `("use", flag)` reason
+    /// came from a flag missing from the other instance's IUSE (rather
+    /// than contradicted by its USE) -- such parents render before the
+    /// rest of the selected set.
+    use_unconditional: bool,
     /// Real `pkg_use_display(parent, ...)` pairs for this parent package.
     use_display: &'a [(String, String)],
 }
@@ -6828,17 +6838,29 @@ fn slot_conflict_atom_string(atom: &Atom, include_slot: bool) -> String {
     s
 }
 
+/// One conflicting instance as seen by the collision-reason probes: the
+/// `match_from_list` candidate string plus the flag sets real matches
+/// USE-deps against (`other_pkg.iuse`, `_pkg_use_enabled(other_pkg)`).
+struct ConflictOther {
+    cpv: String,
+    iuse: HashSet<String>,
+    use_flags: HashSet<String>,
+}
+
 /// Real `_prepare_conflict_msg_and_check_for_specificity`'s per-parent
 /// `collision_reasons` classification: why `atom` (with USE and slot
-/// stripped in turn) fails to match each `other` conflicting instance
-/// (`{cat}/{pkg}-{ver}:{slot}/{sub}::{repo}` strings). Version mismatch
-/// wins over slot mismatch, matching real's `elif` ordering.
-fn slot_conflict_reasons(atom: &Atom, others: &[String]) -> Vec<SlotConflictReason> {
+/// stripped in turn) fails to match each `other` conflicting instance.
+/// Version mismatch wins over slot mismatch wins over USE mismatch,
+/// matching real's `elif` ordering. Returns the reasons plus whether any
+/// USE reason was unconditional (missing from the other's IUSE).
+fn slot_conflict_reasons(atom: &Atom, others: &[ConflictOther]) -> (Vec<SlotConflictReason>, bool) {
     let bare = slot_conflict_atom_string(atom, false);
     let no_use = slot_conflict_atom_string(atom, true);
     let mut reasons: Vec<SlotConflictReason> = Vec::new();
+    let mut use_unconditional = false;
     for other in others {
-        let matches_bare = match_from_list(&bare, &[other.as_str()]).is_some_and(|v| !v.is_empty());
+        let matches_bare =
+            match_from_list(&bare, &[other.cpv.as_str()]).is_some_and(|v| !v.is_empty());
         if !matches_bare {
             let sub = match atom.operator {
                 Operator::Ge | Operator::Gt => Some("ge"),
@@ -6854,7 +6876,7 @@ fn slot_conflict_reasons(atom: &Atom, others: &[String]) -> Vec<SlotConflictReas
             }
         } else if atom.slot.is_some() {
             let matches_no_use =
-                match_from_list(&no_use, &[other.as_str()]).is_some_and(|v| !v.is_empty());
+                match_from_list(&no_use, &[other.cpv.as_str()]).is_some_and(|v| !v.is_empty());
             if !matches_no_use {
                 let mut s = String::new();
                 if let Some(slot) = &atom.slot {
@@ -6870,20 +6892,44 @@ fn slot_conflict_reasons(atom: &Atom, others: &[String]) -> Vec<SlotConflictReas
                     reasons.push(r);
                 }
             }
+        } else if let Some(use_deps) = &atom.use_deps {
+            // `match_from_list` skips USE evaluation against plain-string
+            // candidates (real's own `hasattr(x, "use")` guard), so a
+            // version+slot match always "matches" here -- the USE verdict
+            // comes from `use_mismatch_flags` alone, exactly partitioning
+            // the cases where real's full-atom `findAtomForPackage` fails.
+            // (Soname atoms never reach this renderer -- see the
+            // `SlotConflictReason` doc comment.)
+            let (missing, violated) = use_mismatch_flags(use_deps, &other.use_flags, &other.iuse);
+            if !missing.is_empty() {
+                use_unconditional = true;
+            }
+            let mut flags: Vec<String> = missing.into_iter().chain(violated).collect();
+            flags.sort();
+            for f in flags {
+                let r = SlotConflictReason::Use(f);
+                if !reasons.contains(&r) {
+                    reasons.push(r);
+                }
+            }
         }
     }
-    reasons
+    (reasons, use_unconditional)
 }
 
 /// Real `highlight_violations`' `colored_idx`: the character positions in
-/// `atom_str` under the violated operator, version, and/or `:slot` -- the
-/// `^` marker line printed beneath a displayed parent atom. Colorization
-/// itself is a documented cut; this computes only the span.
+/// `atom_str` under the violated operator, version, `:slot`, and/or USE
+/// tokens -- the `^` marker line printed beneath a displayed parent atom.
+/// Colorization itself is a documented cut; this computes only the spans
+/// (on the uncolored string, so the markers stay aligned -- real drifts
+/// once ANSI codes lengthen the line, the documented marker-drift
+/// divergence, only observable under `--color y`).
 fn slot_conflict_caret_idx(
     atom_str: &str,
     atom: &Atom,
     version_violated: bool,
     slot_violated: bool,
+    use_flags: &[String],
 ) -> std::collections::HashSet<usize> {
     let chars: Vec<char> = atom_str.chars().collect();
     let mut idx: std::collections::HashSet<usize> = std::collections::HashSet::new();
@@ -6952,7 +6998,95 @@ fn slot_conflict_caret_idx(
     } else if slot_violated && let Some(start) = span(&slot_str, false) {
         mark(start, slot_str.chars().count());
     }
+    if !use_flags.is_empty()
+        && let Some(bracket) = chars.iter().position(|&c| c == '[')
+        && let Some(close) = chars.iter().position(|&c| c == ']')
+        && close > bracket
+    {
+        // Real `highlight_violations`' USE-token branch: mark every
+        // `[...]` token whose flag is violated. Real walks its own
+        // re-rendered tokens with a running cursor (no spaces assumed);
+        // portuale locates each comma-separated piece from the cursor
+        // instead, so spaced atoms (`[x, y]`) still mark correctly. The
+        // strip rule is real's own (`lstrip("-!")` / `rstrip("=?")`) --
+        // including its quirk that `(+)`/`(-)`-suffixed tokens never
+        // match.
+        let inner: String = chars[bracket + 1..close].iter().collect();
+        let mut cursor = bracket + 1;
+        for piece in inner.split(',') {
+            let piece_chars: Vec<char> = piece.chars().collect();
+            let start = chars[cursor..]
+                .windows(piece_chars.len().max(1))
+                .position(|w| w == &piece_chars[..])
+                .map(|p| p + cursor);
+            if let Some(start) = start {
+                let flag = piece
+                    .trim()
+                    .trim_start_matches(['-', '!'])
+                    .trim_end_matches(['=', '?']);
+                if use_flags.iter().any(|f| f == flag) {
+                    mark(start, piece_chars.len());
+                }
+                cursor = start + piece_chars.len();
+            }
+        }
+    }
     idx
+}
+
+/// Real `slot_collision.py`'s `need_rebuild` scan (lines 407-458) for one
+/// shown parent in a `slot` group: when the parent package is installed
+/// and its atom is a *built* slot-operator atom (`cat/pkg:S/SS=` -- real
+/// `Atom.slot_operator_built`; soname atoms can't reach this renderer,
+/// see the `SlotConflictReason` doc comment), report why it cannot be
+/// rebuilt -- `--exclude` / `--useoldpkg-atoms` match, or its ebuild
+/// masked/unavailable (real `_equiv_ebuild_visible`). Under
+/// `--usepkgonly` real stays quiet to avoid false positives. Returns the
+/// reason, if any. `installed` holds every vdb `(cat, pkg, ver)`.
+#[allow(clippy::too_many_arguments)]
+fn slot_conflict_need_rebuild(
+    parent_cpv: &str,
+    atom: &Atom,
+    excluded: &[String],
+    useoldpkg_atoms: &[String],
+    usepkgonly: bool,
+    repos: &[portage_repo::RepoConfig],
+    config: &portage_profile::Config,
+    installed: &std::collections::HashSet<(String, String, String)>,
+) -> Option<String> {
+    if atom.slot_operator != Some(SlotOperator::Equals) || atom.sub_slot.is_none() {
+        return None;
+    }
+    let (cp, slot_part) = parent_cpv.split_once(':')?;
+    let (ccat, cpkg, cver) = portage_repo::split_cpv(cp)?;
+    if !installed.contains(&(ccat.clone(), cpkg.clone(), cver.clone())) {
+        return None;
+    }
+    let slot = slot_part.split('/').next().unwrap_or("");
+    let against = if slot.is_empty() {
+        format!("{ccat}/{cpkg}-{cver}")
+    } else {
+        format!("{ccat}/{cpkg}-{cver}:{slot}")
+    };
+    if excluded
+        .iter()
+        .any(|e| match_from_list(e, &[against.as_str()]).is_some_and(|m| !m.is_empty()))
+    {
+        return Some("matched by --exclude argument".to_string());
+    }
+    if useoldpkg_atoms
+        .iter()
+        .any(|e| match_from_list(e, &[against.as_str()]).is_some_and(|m| !m.is_empty()))
+    {
+        return Some("matched by --useoldpkg-atoms argument".to_string());
+    }
+    if usepkgonly {
+        return None;
+    }
+    if !ebuild_visible_at(repos, &ccat, &cpkg, &cver, config) {
+        return Some("ebuild is masked or unavailable".to_string());
+    }
+    None
 }
 
 /// Real `pkg_use_display(pkg, ...)`'s own return string -- `USE="…"`
@@ -9089,6 +9223,10 @@ pub fn run(args: &[String]) -> ExitCode {
     // `--useoldpkg-atoms ATOMS`: a process-global read during candidate
     // selection (see `portage_repo::set_useoldpkg_atoms`). Set once here,
     // before any `resolve_pretend_graph` call; empty is a strict no-op.
+    // A clone is kept for the slot-collision `need_rebuild` trailer,
+    // which re-checks the same atoms at render time (real reads
+    // `frozen_config.useoldpkg_atoms` there too).
+    let useoldpkg_atoms_render = useoldpkg_atoms.clone();
     portage_repo::set_useoldpkg_atoms(useoldpkg_atoms);
 
     // `--binpkg-changed-deps=y|n` / `--use-ebuild-visibility=y|n`:
@@ -10237,18 +10375,31 @@ pub fn run(args: &[String]) -> ExitCode {
     // by` line, real `_prepare_conflict_msg_and_check_for_specificity`'s
     // `collision_reasons` grouping + one-representative-per-reason
     // selection (every parent under `--verbose-conflicts`), the
-    // `highlight_violations` `^` marker line, the `(and N more with the
+    // `highlight_violations` `^` marker line (operator, version, slot,
+    // and USE-token spans -- no colorization), the `(and N more with the
     // same problem[s])` tail, the `NOTE: Use the '--verbose-conflicts'
-    // option ...` footer, and the advisory (with the `--backtrack=30`
-    // hint gated the real way: shown unless `--backtrack` is >=30 or 0).
-    // Documented cuts (fixtures don't exercise them): the `use`/`soname`
-    // reason keys, `pkg_use_display` for a package with non-default USE
-    // (the ` USE=""` slot is rendered, non-empty flag lists are not),
-    // operator/USE colorization, an `=*` operator's `("version", None)`
-    // key, and the `need_rebuild` "cannot be rebuilt" trailer. Purely
-    // informational -- v1 neither refuses nor changes the exit code.
+    // option ...` footer, the `need_rebuild` "cannot be rebuilt" trailer,
+    // and the advisory (with the `--backtrack=30` hint gated the real
+    // way: shown unless `--backtrack` is >=30 or 0). Documented cuts
+    // (fixtures don't exercise them): the `soname` reason key (no soname
+    // atom can reach this renderer), operator/USE colorization (real
+    // drifts its `^` markers once ANSI codes lengthen the line; portuale
+    // marks the uncolored string, so markers stay aligned -- observable
+    // only under `--color y`), and an `=*` operator's `("version", None)`
+    // key. Purely informational -- v1 neither refuses nor changes the
+    // exit code.
     if !result.slot_conflicts.is_empty() {
         let mut any_omitted = false;
+        // Real `need_rebuild`: installed parents with built slot-operator
+        // atoms that cannot be rebuilt, in first-seen order, printed once
+        // after all conflicts (real keeps a dict across the whole
+        // handler).
+        let mut need_rebuild: Vec<(String, String)> = Vec::new();
+        let installed_pkgs: std::collections::HashSet<(String, String, String)> =
+            all_installed_packages(&root)
+                .into_iter()
+                .map(|p| (p.category, p.package, p.version))
+                .collect();
         println!();
         println!("!!! Multiple package instances within a single package slot have been pulled");
         println!("!!! into the dependency graph, resulting in a slot conflict:");
@@ -10267,15 +10418,26 @@ pub fn run(args: &[String]) -> ExitCode {
                     inst.repo_name,
                     render_pkg_use_display(&inst.use_display)
                 );
-                let others: Vec<String> = c
+                let others: Vec<ConflictOther> = c
                     .instances
                     .iter()
                     .filter(|o| o.version != inst.version)
                     .map(|o| {
-                        format!(
-                            "{}/{}-{}:{}/{}::{}",
-                            c.category, c.package, o.version, c.slot, o.sub_slot, o.repo_name
-                        )
+                        let (iuse, use_flags) = slot_conflict_flag_sets(
+                            &repos,
+                            &config,
+                            &c.category,
+                            &c.package,
+                            &o.version,
+                        );
+                        ConflictOther {
+                            cpv: format!(
+                                "{}/{}-{}:{}/{}::{}",
+                                c.category, c.package, o.version, c.slot, o.sub_slot, o.repo_name
+                            ),
+                            iuse,
+                            use_flags,
+                        }
                     })
                     .collect();
                 let mut classified: Vec<ClassifiedParent> = Vec::new();
@@ -10292,13 +10454,14 @@ pub fn run(args: &[String]) -> ExitCode {
                     let Some(atom) = parse_atom(&p.atom) else {
                         continue;
                     };
-                    let reasons = slot_conflict_reasons(&atom, &others);
+                    let (reasons, use_unconditional) = slot_conflict_reasons(&atom, &others);
                     if !reasons.is_empty() {
                         classified.push(ClassifiedParent {
                             parent_cpv: &p.parent_cpv,
                             atom_str: &p.atom,
                             atom,
                             reasons,
+                            use_unconditional,
                             use_display: &p.use_display,
                         });
                     }
@@ -10316,7 +10479,9 @@ pub fn run(args: &[String]) -> ExitCode {
                 }
                 // Representative selection: farthest version per `cp` for
                 // a `version` group, the first member for a `slot` group,
-                // every member under `--verbose-conflicts`.
+                // every member of a `use` group (real shows all broken
+                // reverse dependencies -- "people can simply use a pager"),
+                // and every member under `--verbose-conflicts`.
                 let mut selected: Vec<usize> = Vec::new();
                 for (reason, members) in &groups {
                     if verbose_conflicts {
@@ -10354,10 +10519,47 @@ pub fn run(args: &[String]) -> ExitCode {
                                 selected.push(first);
                             }
                         }
+                        SlotConflictReason::Use(_) => {
+                            selected.extend(members.iter().copied());
+                        }
+                    }
+                }
+                // Real's `need_rebuild` scan runs over every `slot`-group
+                // parent (verbose or not): an unrebuildable parent is
+                // always shown, and recorded for the once-per-notice
+                // trailer below.
+                for (reason, members) in &groups {
+                    if !matches!(reason, SlotConflictReason::Slot(_)) {
+                        continue;
+                    }
+                    for &m in members {
+                        let p = &classified[m];
+                        if let Some(why) = slot_conflict_need_rebuild(
+                            p.parent_cpv,
+                            &p.atom,
+                            &excluded,
+                            &useoldpkg_atoms_render,
+                            usepkgonly,
+                            &repos,
+                            &config,
+                            &installed_pkgs,
+                        ) {
+                            if !selected.contains(&m) {
+                                selected.push(m);
+                            }
+                            let entry = (format!("({}, installed)", p.parent_cpv), why);
+                            if !need_rebuild.contains(&entry) {
+                                need_rebuild.push(entry);
+                            }
+                        }
                     }
                 }
                 selected.sort_unstable();
                 selected.dedup();
+                // Real shows `unconditional_use_deps` first (its own set
+                // order is nondeterministic; portuale keeps the stable
+                // classified order within each half).
+                selected.sort_by_key(|m| !classified[*m].use_unconditional);
                 for &m in &selected {
                     let p = &classified[m];
                     let version_violated = p
@@ -10368,6 +10570,14 @@ pub fn run(args: &[String]) -> ExitCode {
                         .reasons
                         .iter()
                         .any(|r| matches!(r, SlotConflictReason::Slot(_)));
+                    let use_flags: Vec<String> = p
+                        .reasons
+                        .iter()
+                        .filter_map(|r| match r {
+                            SlotConflictReason::Use(f) => Some(f.clone()),
+                            _ => None,
+                        })
+                        .collect();
                     let cur_line = format!(
                         "{} required by ({}, ebuild scheduled for merge) {}\n",
                         p.atom_str,
@@ -10379,6 +10589,7 @@ pub fn run(args: &[String]) -> ExitCode {
                         &p.atom,
                         version_violated,
                         slot_violated,
+                        &use_flags,
                     );
                     let marker: String = (0..cur_line.chars().count())
                         .map(|k| if idx.contains(&k) { '^' } else { ' ' })
@@ -10413,6 +10624,18 @@ pub fn run(args: &[String]) -> ExitCode {
                 )
             );
             println!();
+        }
+        // Real `slot_collision.py`'s `need_rebuild` trailer: installed
+        // parents with built slot-operator atoms that cannot be rebuilt.
+        if !need_rebuild.is_empty() {
+            println!();
+            println!("!!! The slot conflict(s) shown above involve package(s) which may need to");
+            println!("!!! be rebuilt in order to solve the conflict(s). However, the following");
+            println!("!!! package(s) cannot be rebuilt for the reason(s) shown:");
+            println!();
+            for (ppkg, reason) in &need_rebuild {
+                println!("  {ppkg}: {reason}");
+            }
         }
         println!();
         for line in [
@@ -11283,27 +11506,61 @@ mod tests {
 
     #[test]
     fn slot_conflict_reason_and_caret_span() {
-        let others = vec!["dev-libs/t-1.0:0/0::r".to_string()];
+        let others = vec![ConflictOther {
+            cpv: "dev-libs/t-1.0:0/0::r".to_string(),
+            iuse: ["x".to_string()].into_iter().collect(),
+            use_flags: ["x".to_string()].into_iter().collect(),
+        }];
         // ">=dev-libs/t-2.0" does not accept 1.0 -> ("version", "ge")
         let ge = parse_atom(">=dev-libs/t-2.0").unwrap();
         assert_eq!(
             slot_conflict_reasons(&ge, &others),
-            vec![SlotConflictReason::Version("ge")]
+            (vec![SlotConflictReason::Version("ge")], false,)
         );
         // a bare atom accepts any version -> no reason
         let bare = parse_atom("dev-libs/t").unwrap();
-        assert!(slot_conflict_reasons(&bare, &others).is_empty());
+        assert!(slot_conflict_reasons(&bare, &others).0.is_empty());
         // "<dev-libs/t-2.0" DOES accept 1.0 -> no reason against this other
         let lt = parse_atom("<dev-libs/t-2.0").unwrap();
-        assert!(slot_conflict_reasons(&lt, &others).is_empty());
+        assert!(slot_conflict_reasons(&lt, &others).0.is_empty());
+        // ">=dev-libs/t-1.0[x]" accepts 1.0 on version+slot but x is on
+        // here, so no reason either...
+        let ok = parse_atom(">=dev-libs/t-1.0[x]").unwrap();
+        assert!(slot_conflict_reasons(&ok, &others).0.is_empty());
+        // ...while x off the other side is a violated use key ...
+        let others_off = vec![ConflictOther {
+            cpv: "dev-libs/t-1.0:0/0::r".to_string(),
+            iuse: ["x".to_string()].into_iter().collect(),
+            use_flags: HashSet::new(),
+        }];
+        assert_eq!(
+            slot_conflict_reasons(&ok, &others_off),
+            (vec![SlotConflictReason::Use("x".to_string())], false,)
+        );
+        // ... and x gone from IUSE is an unconditional one.
+        let others_gone = vec![ConflictOther {
+            cpv: "dev-libs/t-1.0:0/0::r".to_string(),
+            iuse: HashSet::new(),
+            use_flags: HashSet::new(),
+        }];
+        assert_eq!(
+            slot_conflict_reasons(&ok, &others_gone),
+            (vec![SlotConflictReason::Use("x".to_string())], true,)
+        );
 
         // caret span: under ">=" (idx 0,1) and under "2.0" (rfind)
-        let idx = slot_conflict_caret_idx(">=dev-libs/t-2.0", &ge, true, false);
+        let idx = slot_conflict_caret_idx(">=dev-libs/t-2.0", &ge, true, false, &[]);
         let ver_start = ">=dev-libs/t-2.0".rfind("2.0").unwrap();
         let expected: std::collections::HashSet<usize> =
             [0, 1, ver_start, ver_start + 1, ver_start + 2]
                 .into_iter()
                 .collect();
+        assert_eq!(idx, expected);
+        // caret span: under the violated "[x]" token
+        let idx =
+            slot_conflict_caret_idx(">=dev-libs/t-1.0[x]", &ok, false, false, &["x".to_string()]);
+        let use_start = ">=dev-libs/t-1.0[x]".find('x').unwrap();
+        let expected: std::collections::HashSet<usize> = [use_start].into_iter().collect();
         assert_eq!(idx, expected);
     }
 

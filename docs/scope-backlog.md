@@ -119,14 +119,36 @@ can't grow into these incrementally:
   groups, every IUSE flag, enabled-first, `( )`-wrapped for force/mask),
   via a new per-instance/per-parent `use_display` on `SlotConflict`
   (`what-this-proves.md`'s "slot-collision notice `pkg_use_display`"
-  entry). Still cut, each needing new plumbing for a purely
-  informational payoff: the `use`/`soname` reason keys
-  (atom-vs-package USE-conditional-violation matching + soname-aware
-  collision detection), operator/USE-token colorization (which faithfully
-  reproduces a genuine upstream `highlight_violations` marker-drift bug —
-  see `history/scope-backlog-2026-09-05.md`), and the `need_rebuild`
-  "cannot be rebuilt" trailer (`_equiv_ebuild_visible`/`useoldpkg_atoms`/
-  `excluded_pkgs` threading).
+  entry). The `use` reason keys and the `need_rebuild` trailer have
+  since **landed as tested-but-dormant render code** (see
+  `what-this-proves.md`): the classification, display selection,
+  unconditional-first ordering, USE-token `^` spans (no color), and the
+  trailer all work, but no fixture can trigger them yet. Still cut or
+  blocked:
+  - operator/USE-token colorization (which faithfully reproduces a
+    genuine upstream `highlight_violations` marker-drift bug — see
+    `history/scope-backlog-2026-09-05.md`; portuale marks the uncolored
+    string, so markers stay aligned -- observable only under
+    `--color y`);
+  - the `soname` reason key -- **unreachable, not merely unimplemented**:
+    `portage-dep` cannot parse soname atoms and dep flattening drops
+    unparseable tokens, so no soname parent atom can ever reach the
+    collision renderer (a deliberate non-gap, not a cut);
+  - **resolver substrate the dormant code waits on** (each a scoped
+    follow-up of its own, all verified live against real portage):
+    resolved-slot reuse skips USE re-verification (a `>=T-1.0[x]` parent
+    silently reuses a resolved x-off instance instead of pulling a
+    second one like real does -- and the upgrade direction swallows the
+    then-unsatisfied dep with rc 0; without this fix no USE-mismatching
+    second instance can ever form);
+    `--dynamic-deps=n` not switching the AlreadyInstalled walk source
+    via the CLI (both languages walk ebuild deps; the
+    `dynamic_deps_picks_ebuild_vs_vdb_deps` unit test disagrees --
+    unexplained, needs owner eyes; it also blocks any vdb-recorded
+    bound-`:=` need_rebuild fixture);
+    literal bound `:=` atoms accepted in ebuilds (real masks them
+    "improper context for slot-operator built atom syntax" -- an atom
+    validation gap; it also rules out ebuild-carried `:=` fixtures).
 - **Circular-dep's remaining cuts** — full elementary-cycle enumeration /
   `large_cycle_count` (real's own richer multi-priority digraph, a
   different graph representation than portuale keeps) and the cycle-only

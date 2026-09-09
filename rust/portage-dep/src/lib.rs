@@ -816,6 +816,69 @@ pub fn use_deps_satisfied(
     true
 }
 
+/// Real `_prepare_conflict_msg_and_check_for_specificity`'s USE branch
+/// (`slot_collision.py:331-389`) for one parent `atom` against one
+/// conflicting `other` instance (already matching on version and slot):
+/// which `("use", flag)` reason keys the pair contributes, split into
+/// unconditional and violated.
+///
+/// - Unconditional: `atom`'s default-less (`required`) flags absent from
+///   `other`'s IUSE -- real
+///   `other_pkg.iuse.get_missing_iuse(atom.unevaluated_atom.use.required)`.
+///   Non-empty both keys the flags *and* marks the parent preferred for
+///   display (real `unconditional_use_deps`); real skips the violated
+///   computation entirely for such a pair.
+/// - Violated: unconditional-form (`[x]`/`[-x]`) deps contradicted by
+///   `other`'s USE -- real `violated_conditionals`' `.enabled ∪
+///   .disabled` sets: `[x]` violated iff `x` is off `other` while valid
+///   (or carrying a `(-)` default); `[-x]` violated iff `x` is on `other`
+///   (or invalid with a `(+)` default).
+///
+/// Conditional forms (`?`/`=`/`!`...) never yield keys: real only reads
+/// `.enabled ∪ .disabled` (conditional hits land in a dropped side-dict),
+/// and without `parent_use` real *raises* -- portuale always has the
+/// parent but drops the dict either way, so no raise and no keys (a
+/// divergence only against a real crash).
+///
+/// `is_valid_flag` is plain declared-IUSE membership (real also consults
+/// `_iuse_implicit_match`; same documented simplification as the
+/// `iuse_names` precedent -- implicit-matched flags are rare in
+/// slot-conflict atoms).
+pub fn use_mismatch_flags(
+    use_deps: &[UseDep],
+    other_use: &HashSet<String>,
+    other_iuse: &HashSet<String>,
+) -> (HashSet<String>, HashSet<String>) {
+    let missing: HashSet<String> = use_deps
+        .iter()
+        .filter(|ud| ud.default.is_none() && !other_iuse.contains(&ud.flag))
+        .map(|ud| ud.flag.clone())
+        .collect();
+    if !missing.is_empty() {
+        return (missing, HashSet::new());
+    }
+    let mut violated = HashSet::new();
+    for ud in use_deps {
+        let hit = match ud.op {
+            UseDepOp::Enabled => {
+                !other_use.contains(&ud.flag)
+                    && (other_iuse.contains(&ud.flag)
+                        || ud.default == Some(UseDepDefault::Disabled))
+            }
+            UseDepOp::Disabled => {
+                other_use.contains(&ud.flag)
+                    || (!other_iuse.contains(&ud.flag)
+                        && ud.default == Some(UseDepDefault::Enabled))
+            }
+            _ => false,
+        };
+        if hit {
+            violated.insert(ud.flag.clone());
+        }
+    }
+    (HashSet::new(), violated)
+}
+
 /// Renders one `UseDep` back to its own atom-string token, the exact
 /// inverse of `parse_use_deps`'s own per-token parse (`flag`/`-flag`/
 /// `flag?`/`!flag?`/`flag=`/`!flag=`, each optionally suffixed with its
@@ -1670,6 +1733,101 @@ mod use_dep_satisfaction_tests {
         let a = parse_atom("dev-libs/foo[bar]").unwrap();
         let b = parse_atom("dev-libs/foo[-bar]").unwrap();
         assert!(!atom_intersects(&a, &b));
+    }
+}
+
+#[cfg(test)]
+mod use_mismatch_tests {
+    use super::*;
+
+    fn mismatch(atom_str: &str, use_: &[&str], iuse: &[&str]) -> (Vec<String>, Vec<String>) {
+        let ud = parse_atom(atom_str)
+            .expect("atom must parse")
+            .use_deps
+            .expect("atom must carry use deps");
+        let other_use: HashSet<String> = use_.iter().map(|s| s.to_string()).collect();
+        let other_iuse: HashSet<String> = iuse.iter().map(|s| s.to_string()).collect();
+        let (mut missing, mut violated) = use_mismatch_flags(&ud, &other_use, &other_iuse);
+        let mut missing: Vec<String> = missing.drain().collect();
+        let mut violated: Vec<String> = violated.drain().collect();
+        missing.sort();
+        violated.sort();
+        (missing, violated)
+    }
+
+    #[test]
+    fn missing_iuse_is_unconditional_and_skips_violation_checks() {
+        // `[x]` with x not in IUSE at all: unconditional, even though
+        // USE also lacks x (real skips violated_conditionals when
+        // get_missing_iuse is non-empty).
+        assert_eq!(
+            mismatch("dev-libs/foo[x]", &[], &[]),
+            (vec!["x".to_string()], vec![])
+        );
+        // ...and a would-be `[-z]` violation on the side is skipped too.
+        assert_eq!(
+            mismatch("dev-libs/foo[x,-z]", &["z"], &["z"]),
+            (vec!["x".to_string()], vec![])
+        );
+    }
+
+    #[test]
+    fn enabled_flag_off_other_is_a_violation() {
+        assert_eq!(
+            mismatch("dev-libs/foo[x]", &[], &["x"]),
+            (vec![], vec!["x".to_string()])
+        );
+        assert_eq!(
+            mismatch("dev-libs/foo[x]", &["x"], &["x"]),
+            (vec![], vec![])
+        );
+    }
+
+    #[test]
+    fn disabled_flag_on_other_is_a_violation() {
+        assert_eq!(
+            mismatch("dev-libs/foo[-x]", &["x"], &["x"]),
+            (vec![], vec!["x".to_string()])
+        );
+        assert_eq!(mismatch("dev-libs/foo[-x]", &[], &["x"]), (vec![], vec![]));
+        // `[-x]` with x not in IUSE: required, so missing (unconditional).
+        assert_eq!(
+            mismatch("dev-libs/foo[-x]", &[], &[]),
+            (vec!["x".to_string()], vec![])
+        );
+    }
+
+    #[test]
+    fn conditional_forms_never_yield_keys() {
+        // Real only reads violated_conditionals' .enabled/.disabled;
+        // conditional hits land in a dropped side-dict.
+        for atom in [
+            "dev-libs/foo[x?]",
+            "dev-libs/foo[!x?]",
+            "dev-libs/foo[x=]",
+            "dev-libs/foo[!x=]",
+        ] {
+            assert_eq!(mismatch(atom, &[], &["x"]), (vec![], vec![]), "{atom}");
+            assert_eq!(mismatch(atom, &["x"], &["x"]), (vec![], vec![]), "{atom}");
+        }
+    }
+
+    #[test]
+    fn defaults_rescue_undeclared_flags_for_matching_but_not_for_keys() {
+        // `[x(-)]` defaults an undeclared x to disabled: with x off,
+        // the (-) default makes the missing flag a violation anyway.
+        assert_eq!(
+            mismatch("dev-libs/foo[x(-)]", &[], &[]),
+            (vec![], vec!["x".to_string()])
+        );
+        // `[x(+)]` defaults it to enabled instead: nothing violated.
+        assert_eq!(mismatch("dev-libs/foo[x(+)]", &[], &[]), (vec![], vec![]));
+        // `[-x(+)]` with x undeclared: the (+) default stands in for
+        // "as if enabled", contradicting the must-be-disabled demand.
+        assert_eq!(
+            mismatch("dev-libs/foo[-x(+)]", &[], &[]),
+            (vec![], vec!["x".to_string()])
+        );
     }
 }
 
