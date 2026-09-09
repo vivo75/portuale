@@ -173,3 +173,51 @@ Write-once per event (`pf:timestamp.log` under `elog/<cat>/`,
    `world_sets`, and the local `Packages` index on `--buildpkg`; may
    treat the dep cache as read-only, `mtimedb` / resume as optional,
    and `DISTDIR` / binpkg payloads as an immutable content store.
+
+## Suitable database engines per store
+
+No single engine fits all six stores, and two must stay plain files
+for compat. Assumes portuale's hard goals (`agent-context.md`:
+musl-static binary, pure-Rust preferred, drop-in replacement): anything
+needing C/C++ (LMDB, RocksDB, MDBX) is a portability cost even when
+technically faster.
+
+- **redb** (CoW B+tree KV, MVCC, ACID, single file, pure Rust, stable
+  format in 2.x): best fit anywhere a KV index is justified. Single
+  writer transactions match portage (all writes already serialized
+  under `lockdir` / `lockfile`).
+- **LMDB / MDBX** (`heed`, C): fastest point reads, zero-copy,
+  lock-free readers — but fixed `mapsize`, mmap breaks on NFS, and the
+  C dep hurts the static build. What redb copies without the C.
+- **fjall** (LSM KV, pure Rust, LZ4, blob separation): right only for
+  bulk-ingest workloads (`egencache`); read amplification +
+  background compaction threads are overkill for read-mostly ~1 KB
+  values. **sled** (stagnant, space-amp issues) and **RocksDB**
+  (C++, tuning burden) are not picks for new work.
+- **SQLite** (`rusqlite` bundled, C but statically linkable):
+  already portage's optional dep-cache backend (`cache/sqlite.py`,
+  15 s lock timeout); helps only where secondary-index / `get_matches`
+  queries exist, with known `database is locked` pain.
+- **Content-addressed store** (Nix/OSTree-style hash-named blobs +
+  refs, implementable by hand): the right model for `DISTDIR` /
+  binpkg payloads, not for mutable indexes.
+- **Plain atomic files** (`write_atomic` + rename): already
+  crash-safe, debuggable, hand-editable, NFS-safe — optimal for tiny
+  single-value state.
+
+| Store | Suitable engine | Verdict |
+|---|---|---|
+| VDB (`/var/db/pkg`) | redb sidecar index only (LMDB if C were free) | Files stay canonical: `qlist`/`equery`/scripts/rescue read the dirs directly; `metadata` snapshot + dir-mtime protocol already fixed read amplification. A full migration breaks the ecosystem for zero crash-safety gain. Index tables (`meta`, `owners`, `soname`) would be rebuilt lazily, validated against dir mtimes like the `metadata` file. LSM is wrong (B+tree point-lookup workload); SQLite buys nothing without relational queries. |
+| Dep cache (`/var/cache/edb/dep` + `md5-cache`) | **redb** (SQLite exists; LMDB faster but C; fjall overkill) | The one migration worth doing: one file instead of ~40k inodes, MVCC readers (removes the `volatile` + `_ro_auxdb` split, `porttree.py:299-313`), atomic bulk `egencache` commit. Keep repo-shipped `md5-cache` text as the interchange format — repos stay dumb file trees. |
+| `Packages` index + binhost cache | Any tiny KV or append-journal + compaction | Keep the text wire format (binhosts serve `Packages{,.gz}`; `TTL`/`TIMESTAMP` in `bintree.py:1530-1545`). The fix is removing the O(n) full rewrite per inject (`bintree.py:1994-2090`), not a query engine. |
+| `world` / `world_sets` / `mtimedb` / `counter` / `config` / registry / news | None — atomic files optimal | All < hundreds of entries, read fully, rewritten fully; `world` files are hand-edited by users (a binary DB destroys that). Real fixes, not engines: `lockfile` around `mtimedb.commit()` (concurrent `--resume` clobber), persisted `counter` high-water mark (avoid the full-VDB recovery scan, `vartree.py:1363-1368`). |
+| `DISTDIR` / binpkg payloads | CAS layout (hash-named + GC + hardlink) | Dedup across `PORTAGE_RO_DISTDIRS`, verification-free reads; `Manifest` stays the text index. |
+| Logs (`elog/`, build logs) | None | Write-once, read-rarely, tailed/grepped, pruned by age. A DB adds write amplification and breaks `tail`/`grep`/logrotate. |
+
+For portuale concretely: dep-cache *reader* against `md5-cache` +
+in-memory memo (already done, see `performances-tuning.md`) is enough;
+add a redb cache only if the 40k-file layout ever shows up in profiles.
+Keep VDB / `world` / `Packages` writes byte-identical files, and never
+introduce a C-linked engine into the `emerge` / `ebuild` applets — that
+breaks the musl-static goal for at most single-digit percent on a
+workload dominated by process spawn and file I/O, not KV latency.
