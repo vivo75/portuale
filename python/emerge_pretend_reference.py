@@ -8246,6 +8246,39 @@ def _build_merge_digraph(entries, top_level_atoms, root):
             return any(str(m).endswith(want) for m in matched)
         return True
 
+    # Real _create_graph resolves every dep atom to a single package
+    # before _add_pkg records the edge. Portuale looked each atom's
+    # cat/pkg up in cp_indices and connected it to *every* scheduled
+    # instance of that cp -- so a slot-qualified atom
+    # (app-text/docbook-sgml-dtd:3.0) wrongly gained an edge to a sibling
+    # slot also being merged, and the extra parent skewed
+    # _merge_order_bias's parent-count ordering. Narrow every edge to the
+    # entries its atom actually matches; keep the edge whenever the
+    # candidate string can't be built or the atom won't parse. Mirrors
+    # merge_order.rs::build_digraph's entry_candidate/edge_matches.
+    def _entry_candidate(e):
+        ver = _entry_version(e)
+        if ver is None:
+            return None
+        prov = e[8] if isinstance(e[8], dict) else {}
+        slot = e[4]
+        sub_slot = prov.get("sub_slot")
+        if not slot or not sub_slot:
+            slot, sub_slot = _read_vdb_slot(root, e[0], e[1], ver)
+        repo = prov.get("repo_name") or "gentoo"
+        return f"{e[0]}/{e[1]}-{ver}:{slot}/{sub_slot}::{repo}"
+
+    entry_candidate = [_entry_candidate(e) for e in entries]
+
+    def edge_matches(atom_str, j):
+        cand = entry_candidate[j]
+        if cand is None:
+            return True
+        try:
+            return bool(match_from_list(atom_str, [cand]))
+        except (InvalidAtom, InvalidDependString):
+            return True
+
     # Real _create_graph: an explicit LIFO dep_stack seeded from the
     # top-level atoms. A node is recorded into .order the moment its
     # parent's dep string first names it (forward, before any recursion),
@@ -8268,6 +8301,8 @@ def _build_merge_digraph(entries, top_level_atoms, root):
         if atom is None or atom.blocker:
             continue
         for i in cp_indices.get(tuple(atom.cp.split("/", 1)), ()):
+            if not edge_matches(atom_str, i):
+                continue
             if discover(i):
                 stack.append(i)
 
@@ -8287,6 +8322,8 @@ def _build_merge_digraph(entries, top_level_atoms, root):
             if key_filter is not None and edge["key"] != key_filter:
                 continue
             for j in cp_indices.get(edge["cp"], ()):
+                if not edge_matches(edge["atom"], j):
+                    continue
                 if discover(j):
                     stack.append(j)
 
@@ -8318,6 +8355,8 @@ def _build_merge_digraph(entries, top_level_atoms, root):
     for i in range(n):
         for edge in _entry_deps(i):
             for j in cp_indices.get(edge["cp"], ()):
+                if not edge_matches(edge["atom"], j):
+                    continue
                 # Real _add_pkg: a direct self-edge is dropped unless it is
                 # an unsatisfied build-time dependency, "since otherwise it
                 # can skew the merge order calculation in an unwanted way"
@@ -8334,6 +8373,17 @@ def _build_merge_digraph(entries, top_level_atoms, root):
         for owner in e[6]:
             for i in cp_indices.get(tuple(owner), ()):
                 if i == j or any(c == j for c, _ in g.children[i]):
+                    continue
+                # required_by is keyed by cat/pkg only, so a multi-slot
+                # dependency hands every scheduled slot the same owner
+                # set. If the forward dep walk already gave this owner a
+                # real edge to *another* slot of j's cat/pkg, that atom
+                # was slot-qualified and resolved elsewhere -- don't
+                # synthesize a fallback edge to this slot too.
+                if any(
+                    entries[c][0] == e[0] and entries[c][1] == e[1]
+                    for c, _ in g.children[i]
+                ):
                     continue
                 g.add_edge(i, j, _new_priority(runtime=True, satisfied=g.installed[j]))
     return g

@@ -276,10 +276,27 @@ def compare(slug: str, kind: str, rrc: int, prc: int, rp: Path, pp: Path) -> Pro
     for key in pmap.keys() - rmap.keys():
         add("extra", f"{ident(pmap[key])} present for portuale, absent for real")
 
+    # A multi-slot package reinstalled/merged in several slots at once
+    # (app-text/docbook-xml-dtd:4.2 + :4.4 + :4.5 ...) shows no `:slot` at
+    # verbosity 2 (`emerge -pe`, no `-v`), so every slot collapses to the
+    # same `(type, cp, "")` map key and only the last-seen survives. A
+    # `version` finding off that survivor is pure position noise -- the
+    # underlying lists carry the identical slot set. Suppress `version`
+    # for any cp that appears more than once on either side without slot
+    # disambiguation; the reordering still surfaces as an `order` finding.
+    rcp_count: dict[str, int] = {}
+    pcp_count: dict[str, int] = {}
+    for x in rpk:
+        rcp_count[x.cp] = rcp_count.get(x.cp, 0) + 1
+    for x in ppk:
+        pcp_count[x.cp] = pcp_count.get(x.cp, 0) + 1
+
     for key in rmap.keys() & pmap.keys():
         r, p = rmap[key], pmap[key]
         s = f":{r.slot}" if r.slot else ""
-        if r.ver != p.ver:
+        if r.ver != p.ver and not (
+            not r.slot and (rcp_count.get(r.cp, 0) > 1 or pcp_count.get(r.cp, 0) > 1)
+        ):
             add("version", f"{r.cp}{s}: real {r.ver} vs portuale {p.ver}")
         if r.flags != p.flags:
             add("flags", f"{r.cp}: real flags [{r.flags}] vs portuale [{p.flags}]")

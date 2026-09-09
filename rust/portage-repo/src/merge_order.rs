@@ -753,6 +753,42 @@ fn build_digraph(entries: &[GraphEntry], top_level_atoms: &[String], root: &Path
         true
     };
 
+    // Real `_create_graph` resolves every dep atom to a single package
+    // (`_select_pkg_highest_available`) before `_add_pkg` records the
+    // edge. Portuale looked each atom's `cat/pkg` up in `cp_indices` and
+    // connected it to *every* scheduled instance of that `cp` -- so a
+    // slot-qualified atom (`app-text/docbook-sgml-dtd:3.0`) wrongly
+    // gained an edge to a sibling slot also being merged, and the extra
+    // parent skewed `_merge_order_bias`'s parent-count ordering. Narrow
+    // every edge to the entries its atom actually matches (version /
+    // slot / repo); keep the edge whenever the candidate string can't be
+    // built or the atom won't parse, so this only ever removes a
+    // provably-wrong edge.
+    let entry_candidate: Vec<Option<String>> = entries
+        .iter()
+        .map(|e| {
+            let ver = entry_version(e)?;
+            let (slot, sub_slot) = match (e.slot.as_deref(), e.sub_slot.as_deref()) {
+                (Some(s), Some(ss)) => (s.to_string(), ss.to_string()),
+                _ => read_vdb_slot(root, &e.category, &e.package, ver),
+            };
+            let repo = e.repo_name.as_deref().unwrap_or("gentoo");
+            Some(format!(
+                "{}/{}-{ver}:{slot}/{sub_slot}::{repo}",
+                e.category, e.package
+            ))
+        })
+        .collect();
+    let edge_matches = |atom: &str, j: usize| -> bool {
+        let Some(cand) = entry_candidate[j].as_deref() else {
+            return true;
+        };
+        match portage_dep::match_from_list(atom, &[cand]) {
+            Some(m) => !m.is_empty(),
+            None => true,
+        }
+    };
+
     // Real `_create_graph`: an explicit LIFO `dep_stack` seeded from the
     // top-level atoms. A node is recorded into `.order` the moment its
     // parent's dep string first names it (forward, before any recursion),
@@ -779,6 +815,9 @@ fn build_digraph(entries: &[GraphEntry], top_level_atoms: &[String], root: &Path
         }
         if let Some(idxs) = cp_indices.get(&(atom.category.as_str(), atom.package.as_str())) {
             for &i in idxs {
+                if !edge_matches(atom_str, i) {
+                    continue;
+                }
                 if discover(i, &mut discovered, &mut g.order) {
                     stack.push(i);
                 }
@@ -812,6 +851,9 @@ fn build_digraph(entries: &[GraphEntry], top_level_atoms: &[String], root: &Path
                 continue;
             };
             for &j in idxs {
+                if !edge_matches(&edge.atom, j) {
+                    continue;
+                }
                 if discover(j, discovered, order) {
                     stack.push(j);
                 }
@@ -857,6 +899,9 @@ fn build_digraph(entries: &[GraphEntry], top_level_atoms: &[String], root: &Path
                 continue;
             };
             for &j in idxs {
+                if !edge_matches(&edge.atom, j) {
+                    continue;
+                }
                 // Real `_add_pkg`: a direct self-edge is dropped unless
                 // it is an unsatisfied build-time dependency, "since
                 // otherwise it can skew the merge order calculation in
@@ -880,6 +925,18 @@ fn build_digraph(entries: &[GraphEntry], top_level_atoms: &[String], root: &Path
             };
             for &i in owner_indices {
                 if i == j || g.children[i].iter().any(|(c, _)| *c == j) {
+                    continue;
+                }
+                // `required_by` is keyed by `cat/pkg` only, so a
+                // multi-slot dependency hands every scheduled slot the
+                // same owner set. If the forward dep walk already gave
+                // this owner a real edge to *another* slot of `j`'s
+                // `cat/pkg`, that atom was slot-qualified and resolved
+                // elsewhere -- don't synthesize a fallback edge to this
+                // slot too (real resolves each atom to one package).
+                if g.children[i].iter().any(|(c, _)| {
+                    entries[*c].category == e.category && entries[*c].package == e.package
+                }) {
                     continue;
                 }
                 g.add_edge(

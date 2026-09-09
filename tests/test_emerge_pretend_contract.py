@@ -1327,6 +1327,8 @@ CASES = [
     ("slot conflict: --verbose-conflicts shows every omitted parent", ["--pretend", "--verbose-conflicts", "dev-libs/slotconfgroup"], 0),
     ("slot conflict: --verbose-conflicts=n is the default (collapsed)", ["--pretend", "--verbose-conflicts=n", "dev-libs/slotconfgroup"], 0),
     ("slot conflict: different slots of the same package coexist", ["--pretend", "dev-libs/multislotparent"], 0),
+    ("merge order: a slot-qualified dep does not edge to a sibling slot", ["--pretend", "dev-libs/slotorderroot"], 0),
+    ("merge order: --json for the slot-qualified sibling-slot fixture", ["--pretend", "--json", "dev-libs/slotorderroot"], 0),
     ("virtual: resolved directly", ["--pretend", "virtual/texteditor"], 0),
     ("virtual: resolved as a dependency", ["--pretend", "dev-libs/virtualconsumerpkg"], 0),
     ("multi-atom: two independent new packages", ["--pretend", "dev-libs/newpkg", "dev-libs/withdeps"], 0),
@@ -2752,6 +2754,30 @@ def test_diamond_dependency_is_deduped_and_ordered(emerge_binary, fixture_env):
         "[ebuild  N     ] dev-libs/shared-a-1.0 ",
         "[ebuild  N     ] dev-libs/shared-b-1.0 ",
         "[ebuild  N     ] dev-libs/diamond-1.0 ",
+    ]
+
+
+def test_slot_qualified_dep_does_not_edge_to_a_sibling_slot(emerge_binary, fixture_env):
+    """`_create_graph` resolves each dep atom to one package before adding
+    an edge. Portuale looked every atom's `cat/pkg` up and connected it to
+    *every* scheduled instance of that `cat/pkg`, so a slot-qualified atom
+    gained a phantom edge to a sibling slot also being merged, and the
+    extra parent skewed `_merge_order_bias`'s parent-count ordering.
+
+    `slotorderroot` RDEPENDs `slotorderdual:2` explicitly; `slotorderdual:1`
+    is pulled only through `slotorderb`. With the phantom edge, both
+    `slotorderdual` slots got parent-count 2 and `_merge_order_bias`
+    promoted them ahead of the plain leaf `slotordera` (parent-count 1,
+    declared first in `slotorderroot`'s RDEPEND). With per-atom edge
+    matching, `slotordera` keeps its slot ahead of them."""
+    result = _run([str(emerge_binary)], ["--pretend", "dev-libs/slotorderroot"], fixture_env)
+    assert result.returncode == 0
+    assert result.stdout.splitlines() == [
+        "[ebuild  N     ] dev-libs/slotordera-1.0 ",
+        "[ebuild  N     ] dev-libs/slotorderdual-2.0 ",
+        "[ebuild  N     ] dev-libs/slotorderdual-1.0 ",
+        "[ebuild  N     ] dev-libs/slotorderb-1.0 ",
+        "[ebuild  N     ] dev-libs/slotorderroot-1.0 ",
     ]
 
 

@@ -1,0 +1,8 @@
+DEFINED_PHASES=-
+DESCRIPTION=fixture: slot-blind digraph edge -- RDEPENDs slotorderdual:2 explicitly; the sibling slot :1 is pulled only through slotorderb, so :1 must not gain slotorderroot as a phantom second parent
+EAPI=8
+IUSE=
+KEYWORDS=amd64
+RDEPEND=dev-libs/slotordera dev-libs/slotorderb dev-libs/slotorderdual:2
+SLOT=0
+_md5_=0000000000000000000000000000000

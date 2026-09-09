@@ -23008,6 +23008,45 @@ mod tests {
     }
 
     #[test]
+    fn a_slot_qualified_dep_does_not_edge_to_a_sibling_slot() {
+        // `build_digraph` resolves each dep atom to the entries it
+        // actually matches before adding an edge. `slotorderroot` RDEPENDs
+        // `dev-libs/slotorderdual:2`; `:1` is pulled only through
+        // `slotorderb`. Before per-atom edge matching, the slot-blind
+        // `cat/pkg` lookup gave `slotorderroot` a phantom edge to `:1`
+        // too (and the `required_by` fallback did the same in reverse),
+        // so both `slotorderdual` slots reached parent-count 2 and
+        // `_merge_order_bias` promoted them ahead of the plain leaf
+        // `slotordera` (parent-count 1, declared first).
+        let names: Vec<String> = graph("dev-libs/slotorderroot")
+            .into_iter()
+            .map(|(n, _)| n)
+            .collect();
+        let pos = |p: &str| names.iter().position(|n| n == p).unwrap();
+        assert!(
+            pos("dev-libs/slotordera") < pos("dev-libs/slotorderdual"),
+            "{names:?}"
+        );
+        assert!(
+            pos("dev-libs/slotorderdual") < pos("dev-libs/slotorderb"),
+            "{names:?}"
+        );
+        assert!(
+            pos("dev-libs/slotorderb") < pos("dev-libs/slotorderroot"),
+            "{names:?}"
+        );
+        // both slots still merge -- the fix removes phantom edges, not nodes
+        assert_eq!(
+            names
+                .iter()
+                .filter(|n| *n == "dev-libs/slotorderdual")
+                .count(),
+            2,
+            "{names:?}"
+        );
+    }
+
+    #[test]
     fn recursion_terminates_on_a_dependency_cycle() {
         let entries = graph("dev-libs/cycle-a");
         let names: Vec<&str> = entries.iter().map(|(n, _)| n.as_str()).collect();
