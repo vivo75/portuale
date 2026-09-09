@@ -550,6 +550,7 @@ fn synthetic_installed_entry(
 fn add_installed_dependency_closure(
     entries: &mut Vec<GraphEntry>,
     root: &Path,
+    system_atoms: &[String],
     virtuals_only: bool,
 ) {
     // `virtuals_only` (a plain `[ebuild N]` resolve, real not in complete
@@ -566,6 +567,17 @@ fn add_installed_dependency_closure(
         .map(|p| ((p.category.as_str(), p.package.as_str()), p))
         .collect();
 
+    // Real `strip_libc_deps` (`portage.dep.libc`): practically every
+    // ebuild carries an implicit `virtual/libc` / `sys-libs/glibc`
+    // dependency that real strips from every dep string and re-expresses
+    // purely as the `asap_nodes` "merge libc first" ordering
+    // (`seed_toolchain_asap`). Keeping those edges on the synthetic
+    // installed nodes wires the whole graph into one giant `glibc` blob
+    // and makes `find_smallest_cycle` pick a 13-node runtime cycle where
+    // real picks 5.
+    let mut libc_cps = crate::libc_provider_cps(root);
+    libc_cps.insert(("virtual".to_string(), "libc".to_string()));
+
     let vdb_edges = |cat: &str, pkg: &str, ver: &str| -> Vec<DepEdge> {
         let mut md: HashMap<String, String> = HashMap::new();
         for k in ["RDEPEND", "IDEPEND", "PDEPEND", "DEPEND", "BDEPEND"] {
@@ -581,6 +593,9 @@ fn add_installed_dependency_closure(
             &["RDEPEND", "IDEPEND", "PDEPEND", "DEPEND", "BDEPEND"],
             true,
         )
+        .into_iter()
+        .filter(|e| !libc_cps.contains(&(e.category.clone(), e.package.clone())))
+        .collect()
     };
 
     let mut present: HashSet<(String, String)> = entries
@@ -626,6 +641,27 @@ fn add_installed_dependency_closure(
         .collect();
     for key in seed_targets {
         add_node(entries, &mut present, &mut queue, key);
+    }
+
+    // Seed 1b (complete mode only): real `_complete_graph` seeds from the
+    // whole `@system` set, not just the merge closure -- so an installed
+    // `@system` package like `net-misc/openssh` or `sys-apps/grep` is a
+    // graph node with its own tree even when nothing being merged depends
+    // on it. That extra installed bulk is what delays a package sitting
+    // on a shared installed dep (`sys-apps/lsb-release` -> `dev-lang/perl`)
+    // until real merges it, ~20 positions later.
+    if !virtuals_only {
+        for atom_str in system_atoms {
+            let Some(atom) = portage_dep::parse_atom(atom_str) else {
+                continue;
+            };
+            add_node(
+                entries,
+                &mut present,
+                &mut queue,
+                (atom.category, atom.package),
+            );
+        }
     }
 
     // Seed 2: every installed-outcome entry whose deps were never filled
@@ -1572,7 +1608,7 @@ pub(crate) fn serialize_merge_order(
         ) || (matches!(e.outcome, PretendOutcome::New { .. }) && e.new_slot)
     });
     let mut ext = entries.to_vec();
-    add_installed_dependency_closure(&mut ext, root, !complete);
+    add_installed_dependency_closure(&mut ext, root, &config.system_packages, !complete);
     let entries: &[GraphEntry] = &ext;
     let n = entries.len();
 

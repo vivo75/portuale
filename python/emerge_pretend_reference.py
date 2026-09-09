@@ -8865,7 +8865,7 @@ def _synthetic_installed_entry(category, package, version, deps):
     )
 
 
-def _add_installed_dependency_closure(entries, root, virtuals_only):
+def _add_installed_dependency_closure(entries, root, system_atoms, virtuals_only):
     """Real `_complete_graph`'s effect on `_serialize_tasks`: every
     installed nomerge node carries its own recorded vdb dependency tree,
     recursively -- so leaf selection clears a shallow installed subtree
@@ -8889,6 +8889,13 @@ def _add_installed_dependency_closure(entries, root, virtuals_only):
     def _expandable(cat):
         return not virtuals_only or cat == "virtual"
 
+    # Real strip_libc_deps: drop the implicit virtual/libc / sys-libs/glibc
+    # dependency real strips from every dep string (re-expressed purely as
+    # the asap_nodes "libc first" ordering) -- keeping it wires the graph
+    # into one glibc blob and inflates find_smallest_cycle's cycles.
+    libc_cps = {tuple(cp.split("/", 1)) for cp in _libc_provider_cps(root)}
+    libc_cps.add(("virtual", "libc"))
+
     def _vdb_edges(cat, pkg, ver):
         md = {}
         for k in ("RDEPEND", "IDEPEND", "PDEPEND", "DEPEND", "BDEPEND"):
@@ -8896,9 +8903,16 @@ def _add_installed_dependency_closure(entries, root, virtuals_only):
             if s and s.strip():
                 md[k] = s
         use_flags = _read_vdb_flag_set(root, cat, pkg, ver, "USE")
-        return _dep_edges_from_metadata(
-            md, use_flags, ("RDEPEND", "IDEPEND", "PDEPEND", "DEPEND", "BDEPEND"), True
-        )
+        return [
+            e
+            for e in _dep_edges_from_metadata(
+                md,
+                use_flags,
+                ("RDEPEND", "IDEPEND", "PDEPEND", "DEPEND", "BDEPEND"),
+                True,
+            )
+            if e["cp"] not in libc_cps
+        ]
 
     present = {(e[0], e[1]) for e in entries}
     queue = []
@@ -8923,6 +8937,15 @@ def _add_installed_dependency_closure(entries, root, virtuals_only):
 
     for key in seed_targets:
         _add_node(key)
+
+    # Seed 1b (complete mode only): real _complete_graph seeds from the
+    # whole @system set, so an installed @system package is a graph node
+    # with its own tree even when nothing being merged depends on it.
+    if not virtuals_only:
+        for atom_str in system_atoms:
+            atom = _parse_atom(atom_str)
+            if atom is not None:
+                _add_node(tuple(atom.cp.split("/", 1)))
 
     for i, e in enumerate(entries):
         if (
@@ -9006,7 +9029,10 @@ def _topological_merge_order(entries, top_level_atoms=(), config=None, root="/",
 
     entries = list(entries)
     _add_installed_dependency_closure(
-        entries, root, virtuals_only=not any(_is_complete(e) for e in entries)
+        entries,
+        root,
+        config.get("system_packages", ()),
+        virtuals_only=not any(_is_complete(e) for e in entries),
     )
     n = len(entries)
 
