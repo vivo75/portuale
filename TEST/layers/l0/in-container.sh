@@ -26,6 +26,14 @@ PTL=/usr/local/bin/emerge
 
 export PORTAGE_CONFIGROOT=/ ROOT=/
 export LC_ALL=C.UTF-8 TZ=UTC
+# Real portage's `_serialize_tasks` (and `_display_autounmask`) iterate
+# plain `set`s in a few spots, so its merge order / autounmask flag order
+# is PYTHONHASHSEED-randomised for a handful of order-independent
+# adjacent pairs (e.g. `llvm-core/llvmgold` <-> `llvm-core/llvm-toolchain-
+# symlinks`). Pin the seed so the real reference is reproducible and the
+# comparison is against one stable target -- portuale's own order is
+# deterministic and matches real at `PYTHONHASHSEED=0`.
+export PYTHONHASHSEED=0
 umask 022
 
 mkdir -p "$OUTDIR"/real "$OUTDIR"/portuale
