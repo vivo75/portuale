@@ -8805,6 +8805,17 @@ def _select_nodes(g, entries, root="/"):
                     continue
                 asap.append(c)
 
+        # Real _serialize_tasks (depgraph.py:10230-10231): "Only select
+        # root nodes as a last resort." -- also catches parentless plain
+        # leaves the one-at-a-time scan skipped, run *before* escalating
+        # to drop_satisfied. Mirrors portage-repo/src/merge_order.rs.
+        if selected is None:
+            roots = [
+                i for i in g.order if g.alive[i] and g.is_leaf(i, None)
+            ]
+            if roots:
+                selected = roots
+
         if selected is None and not drop_satisfied:
             drop_satisfied = True
             continue
@@ -8865,7 +8876,7 @@ def _synthetic_installed_entry(category, package, version, deps):
     )
 
 
-def _add_installed_dependency_closure(entries, root, system_atoms, virtuals_only):
+def _add_installed_dependency_closure(entries, root, virtuals_only):
     """Real `_complete_graph`'s effect on `_serialize_tasks`: every
     installed nomerge node carries its own recorded vdb dependency tree,
     recursively -- so leaf selection clears a shallow installed subtree
@@ -8937,15 +8948,6 @@ def _add_installed_dependency_closure(entries, root, system_atoms, virtuals_only
 
     for key in seed_targets:
         _add_node(key)
-
-    # Seed 1b (complete mode only): real _complete_graph seeds from the
-    # whole @system set, so an installed @system package is a graph node
-    # with its own tree even when nothing being merged depends on it.
-    if not virtuals_only:
-        for atom_str in system_atoms:
-            atom = _parse_atom(atom_str)
-            if atom is not None:
-                _add_node(tuple(atom.cp.split("/", 1)))
 
     for i, e in enumerate(entries):
         if (
@@ -9029,10 +9031,7 @@ def _topological_merge_order(entries, top_level_atoms=(), config=None, root="/",
 
     entries = list(entries)
     _add_installed_dependency_closure(
-        entries,
-        root,
-        config.get("system_packages", ()),
-        virtuals_only=not any(_is_complete(e) for e in entries),
+        entries, root, virtuals_only=not any(_is_complete(e) for e in entries)
     )
     n = len(entries)
 

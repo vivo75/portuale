@@ -550,7 +550,6 @@ fn synthetic_installed_entry(
 fn add_installed_dependency_closure(
     entries: &mut Vec<GraphEntry>,
     root: &Path,
-    system_atoms: &[String],
     virtuals_only: bool,
 ) {
     // `virtuals_only` (a plain `[ebuild N]` resolve, real not in complete
@@ -643,26 +642,13 @@ fn add_installed_dependency_closure(
         add_node(entries, &mut present, &mut queue, key);
     }
 
-    // Seed 1b (complete mode only): real `_complete_graph` seeds from the
-    // whole `@system` set, not just the merge closure -- so an installed
-    // `@system` package like `net-misc/openssh` or `sys-apps/grep` is a
-    // graph node with its own tree even when nothing being merged depends
-    // on it. That extra installed bulk is what delays a package sitting
-    // on a shared installed dep (`sys-apps/lsb-release` -> `dev-lang/perl`)
-    // until real merges it, ~20 positions later.
-    if !virtuals_only {
-        for atom_str in system_atoms {
-            let Some(atom) = portage_dep::parse_atom(atom_str) else {
-                continue;
-            };
-            add_node(
-                entries,
-                &mut present,
-                &mut queue,
-                (atom.category, atom.package),
-            );
-        }
-    }
+    // (Real `_complete_graph` seeds the whole `@system`/`@world` universe
+    // into the *pre-prune* digraph -- what its `--debug` dump shows -- but
+    // then `_serialize_tasks`' own "Prune 'nomerge' root nodes if nothing
+    // depends on them" loop removes every one of them that no merge-bound
+    // package reaches, so the graph selection actually runs on is exactly
+    // this forward closure. Seeding them here and *not* pruning them back
+    // out only skews leaf timing, so it is deliberately not done.)
 
     // Seed 2: every installed-outcome entry whose deps were never filled
     // (and, in `virtuals_only` mode, is a `virtual/*`).
@@ -1385,6 +1371,32 @@ fn select_nodes(g: &mut Digraph, entries: &[GraphEntry], root: &Path) -> Vec<usi
             }
         }
 
+        // Real `_serialize_tasks` (`depgraph.py:10230-10231`): "Only
+        // select root nodes as a last resort. This case should only
+        // trigger when the graph is nearly empty and the only remaining
+        // nodes are isolated (no parents or children)." -- but it also
+        // catches parentless plain leaves the one-node-at-a-time scan
+        // above skipped (it only ever picks a node *with* parents, and
+        // once `asap` is non-empty its rung-`NONE` batch is disabled).
+        // Real runs this *before* escalating to `drop_satisfied`, so a
+        // stub whose only dep is a satisfied-runtime edge is not freed
+        // early via `s_ignore_satisfied_runtime`.
+        if selected.is_none() {
+            let roots: Vec<usize> = g
+                .order
+                .iter()
+                .copied()
+                .filter(|&i| g.alive[i] && g.is_leaf(i, None))
+                .collect();
+            if !roots.is_empty() {
+                // Real leaves `ignore_priority` at `None` here, so the
+                // `medium_post` PDEPEND-asap promotion above (gated on
+                // `ignore_priority is not None`) does not apply -- and it
+                // has already run for this iteration regardless.
+                selected = Some(roots);
+            }
+        }
+
         if selected.is_none() && !drop_satisfied {
             drop_satisfied = true;
             continue;
@@ -1608,7 +1620,7 @@ pub(crate) fn serialize_merge_order(
         ) || (matches!(e.outcome, PretendOutcome::New { .. }) && e.new_slot)
     });
     let mut ext = entries.to_vec();
-    add_installed_dependency_closure(&mut ext, root, &config.system_packages, !complete);
+    add_installed_dependency_closure(&mut ext, root, !complete);
     let entries: &[GraphEntry] = &ext;
     let n = entries.len();
 
