@@ -8598,6 +8598,13 @@ def _seed_toolchain_asap(g, entries):
     provider atoms -> the merge-bound provider package. Mirrors
     merge_order.rs::seed_toolchain_asap."""
 
+    # Real: `pkg.operation == "merge" and not vardb.cpv_exists(pkg.cpv)`
+    # -- a genuine new-version/upgrade, NOT a bare `[ebuild R]` reinstall
+    # at a cpv already in the vdb. A @world re-emerge where virtual/libc /
+    # virtual/os-headers just reinstall must not seed asap.
+    def _new_cpv_merge(i):
+        return entries[i][2][0] in ("new", "upgrade", "downgrade")
+
     def providers(virt_pkg):
         vi = next(
             (i for i, e in enumerate(entries) if e[0] == "virtual" and e[1] == virt_pkg),
@@ -8606,7 +8613,7 @@ def _seed_toolchain_asap(g, entries):
         if vi is None:
             return []
         out = []
-        if not g.installed[vi]:
+        if _new_cpv_merge(vi):
             out.append(vi)
         prov = entries[vi][8] if isinstance(entries[vi][8], dict) else {}
         for edge in prov.get("deps") or []:
@@ -8616,7 +8623,7 @@ def _seed_toolchain_asap(g, entries):
                 (i for i, e in enumerate(entries) if (e[0], e[1]) == edge["cp"]),
                 None,
             )
-            if pi is not None and not g.installed[pi] and pi not in out:
+            if pi is not None and _new_cpv_merge(pi) and pi not in out:
                 out.append(pi)
         return out
 

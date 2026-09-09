@@ -1013,7 +1013,21 @@ fn merge_order_bias(
 /// `virtual/os-headers` entry, take its `RDEPEND` (`key == 0`) provider
 /// `cat/pkg`s, and return the merge-bound entries with those `cp`s.
 /// `os-headers` providers first (bug #328317), then libc.
-fn seed_toolchain_asap(g: &Digraph, entries: &[GraphEntry]) -> Vec<usize> {
+fn seed_toolchain_asap(entries: &[GraphEntry]) -> Vec<usize> {
+    // Real: `pkg.operation == "merge" and not vardb.cpv_exists(pkg.cpv)`
+    // -- a genuine new-version/upgrade merge, NOT a bare `[ebuild R]`
+    // reinstall at a cpv already in the vdb. A `@world` re-emerge where
+    // `virtual/libc` / `virtual/os-headers` just reinstall must not seed
+    // `asap`, or they front-load past dep-free `@system` leaves like
+    // `sys-devel/gnuconfig`.
+    let new_cpv_merge = |i: usize| {
+        matches!(
+            entries[i].outcome,
+            PretendOutcome::New { .. }
+                | PretendOutcome::Upgrade { .. }
+                | PretendOutcome::Downgrade { .. }
+        )
+    };
     let providers = |virt_pkg: &str| -> Vec<usize> {
         let Some(vi) = entries
             .iter()
@@ -1022,16 +1036,16 @@ fn seed_toolchain_asap(g: &Digraph, entries: &[GraphEntry]) -> Vec<usize> {
             return Vec::new();
         };
         let mut out: Vec<usize> = Vec::new();
-        // The virtual itself, if it is merge-bound (real
+        // The virtual itself, if it is a genuine merge (real
         // `_package_tracker.match` returns it too).
-        if !g.installed[vi] {
+        if new_cpv_merge(vi) {
             out.push(vi);
         }
         for edge in entries[vi].deps.iter().filter(|d| d.key == 0) {
             if let Some(pi) = entries
                 .iter()
                 .position(|e| e.category == edge.category && e.package == edge.package)
-                && !g.installed[pi]
+                && new_cpv_merge(pi)
                 && !out.contains(&pi)
             {
                 out.push(pi);
@@ -1221,7 +1235,7 @@ fn harvest_cycle(g: &Digraph, sub: &HashSet<usize>) -> Vec<usize> {
 /// nodes included -- the caller drops them).
 fn select_nodes(g: &mut Digraph, entries: &[GraphEntry], root: &Path) -> Vec<usize> {
     let mut retlist: Vec<usize> = Vec::new();
-    let mut asap: Vec<usize> = seed_toolchain_asap(g, entries);
+    let mut asap: Vec<usize> = seed_toolchain_asap(entries);
     let mut prefer_asap = true;
     let mut drop_satisfied = false;
 
