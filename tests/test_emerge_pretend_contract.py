@@ -597,6 +597,12 @@ CASES = [
         0,
     ),
     (
+        "--autounmask-use: a (+)-defaulted missing flag alongside a flippable one "
+        "does not block the flip",
+        ["--pretend", "dev-libs/useflagpkg[missingflag,nonexistentflag(+)]"],
+        1,
+    ),
+    (
         "REQUIRED_USE: genuinely satisfied, resolves normally",
         ["--pretend", "dev-libs/requireduseokpkg"],
         0,

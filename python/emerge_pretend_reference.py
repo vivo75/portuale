@@ -2336,6 +2336,17 @@ def _suggested_use_flip(candidate, category, package, atom, config):
     changes = []
     for flag, desired in wanted:
         if flag not in iuse:
+            # The flag isn't declared by this package, so no package.use
+            # entry could set it -- but a (+)/(-) default stands in for its
+            # state (real _use_dep "missing" handling, like
+            # _use_deps_satisfied): [flag(+)] is already satisfied when the
+            # requirement is "enabled", [flag(-)] when it's "disabled".
+            # Only a genuinely unsatisfiable missing flag (no default, or a
+            # contradicting one) makes the whole atom unfixable.
+            if (desired and flag in use.missing_enabled) or (
+                not desired and flag in use.missing_disabled
+            ):
+                continue
             return None
         if (flag in use_flags) != desired:
             changes.append((flag, desired))

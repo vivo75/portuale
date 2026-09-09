@@ -4223,7 +4223,21 @@ fn suggested_use_flip(
             _ => continue,
         };
         if !iuse.contains(&ud.flag) {
-            return None;
+            // The flag isn't declared by this package, so no `package.use`
+            // entry could ever set it -- but a `(+)`/`(-)` default stands
+            // in for its state (real `_use_dep`'s "missing" handling, same
+            // as `use_deps_satisfied`): `[flag(+)]` is already satisfied
+            // when the requirement is "enabled", `[flag(-)]` when it's
+            // "disabled". Only a genuinely unsatisfiable missing flag (no
+            // default, or a default that contradicts the requirement) makes
+            // the whole atom unfixable.
+            match (&ud.op, &ud.default) {
+                (portage_dep::UseDepOp::Enabled, Some(portage_dep::UseDepDefault::Enabled))
+                | (portage_dep::UseDepOp::Disabled, Some(portage_dep::UseDepDefault::Disabled)) => {
+                    continue;
+                }
+                _ => return None,
+            }
         }
         let currently_enabled = use_flags.contains(&ud.flag);
         if currently_enabled != desired {
@@ -25490,6 +25504,34 @@ mod tests {
             change.dep_chain,
             vec!["required by dev-libs/useflagpkg[-foo] (argument)".to_string()]
         );
+    }
+
+    #[test]
+    fn autounmask_use_flip_is_not_blocked_by_a_default_satisfied_missing_flag() {
+        // `dev-libs/useflagpkg[missingflag,nonexistentflag(+)]` -- the atom
+        // needs `missingflag` on (it's in IUSE, default-off: a real flip)
+        // AND `nonexistentflag(+)` (not in IUSE, its `(+)` default already
+        // stands in for "enabled" -- nothing to flip). `suggested_use_flip`
+        // must skip the default-satisfied missing flag rather than bail on
+        // the whole atom, so the `missingflag` flip is still suggested,
+        // applied, and recorded.
+        let result = graph_result_autounmask("dev-libs/useflagpkg[missingflag,nonexistentflag(+)]");
+        let entry = result
+            .entries
+            .iter()
+            .find(|e| e.package == "useflagpkg")
+            .expect("useflagpkg resolves via the missingflag flip");
+        assert!(matches!(entry.outcome, PretendOutcome::New { .. }));
+        assert_eq!(
+            entry
+                .use_flags_display
+                .iter()
+                .find(|(f, _)| f == "missingflag")
+                .map(|(_, on)| *on),
+            Some(true),
+        );
+        assert_eq!(result.autounmask_use_changes.len(), 1);
+        assert_eq!(result.autounmask_use_changes[0].token, "missingflag");
     }
 
     #[test]
