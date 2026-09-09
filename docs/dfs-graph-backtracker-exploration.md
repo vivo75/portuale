@@ -22,7 +22,22 @@ exactly real's `_dep_stack` (`depgraph.py::_create_graph`).
 | firefox, thunderbird, gimp | same package **set**, merge **order** shifts a few lines |
 | gnome-shell, nautilus | order shifts more (~60 lines); parity vs real essentially unchanged (nautilus 200→198, gimp 184→184, firefox 168→168, thunderbird 172→172) |
 | plasma-meta | 487 → 484 (DFS drops `dev-lang/yasm`, `media-libs/libaom`, `media-libs/libavif` — pulled via the `kimageformats[avif]` autounmask node) |
-| contract suite (`PORTUALE_DFS_WALK=1`) | _pending_ |
+| contract suite (`PORTUALE_DFS_WALK=1`) | **38 fail / 972 pass** |
+
+### The 38 contract failures are all order-of-representation, not wrong answers
+
+Same package sets, same versions, same USE — only the *order* in which
+things are walked/reported changes:
+
+| family | count | why |
+|---|---|---|
+| slot conflicts (`slot_conflict*`, `unsolvable_slot_conflict*`, `--backtrack=0/30`, `--verbose-conflicts`, `--json`/`--tree` multi-slot) | ~22 | which instance is "A"/"existing" and which parent is reported first both follow processing order |
+| autounmask backward cascade / breakage | ~7 | the "already-resolved slot re-check" fires when a `[flag]` dep is hit for an already-graphed pkg — order-dependent |
+| `--debug` resolver trace (`stage1_digraph_dump`, `stage3_candidate_list`, `stages_2_4_walk`) | 4 | the trace narrates the walk in walk order |
+| `package.provided` plural WARNING, REQUIRED_USE "two violations collected", `\|\|` yields-to-next | 5 | order of two independent atoms / branch selection under backtracking feedback |
+
+None is a resolution error — DFS just reorders a correct answer, and
+these tests pin the order.
 
 ### Key finding: the resolution-walk order is decoupled from the merge list
 
@@ -81,3 +96,18 @@ suppression") does not apply if the prefix is exact.
 **Open question:** is `want_restart_for_use_change`'s "the flip changed
 the dep set" the right cut point, or does real also stop at a flip that
 only breaks a *parent's* `[use]` dep? (real `want_restart` checks both.)
+
+## Verdict on Step 1
+
+**The flag-gated DFS walk is a dead end for the stated goal.** It is a
+lateral move: same answers, reshuffled representation, at the cost of 38
+order-pinned contract tests and zero merge-order-parity gain. The
+`PORTUALE_DFS_WALK` toggle stays in the tree as a research instrument
+(default off, no cost) but should not be promoted.
+
+**Recommended next step:** abandon the walk rewrite. Implement the
+targeted truncation post-pass (steps 1–4 above) on `main` as a normal
+slice — it is bounded, needs no DFS walk, and hits `plasma-meta`/`podman`
+exactly. If a genuine `get_best_run` is ever wanted it is a separate,
+much larger effort whose prerequisite (a real digraph object + abort
+semantics) is independent of queue-drain order.
