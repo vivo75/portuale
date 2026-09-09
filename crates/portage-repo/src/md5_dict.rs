@@ -302,4 +302,45 @@ mod tests {
             let _ = std::fs::remove_dir_all(&self.dir);
         }
     }
+
+    fn write_repo(
+        dir: &Layout,
+        ebuild_text: &str,
+        eclass_text: Option<&str>,
+        cache_text: Option<&str>,
+    ) -> (PathBuf, PathBuf, Vec<PathBuf>) {
+        let repo = dir.path().join("repo");
+        std::fs::create_dir_all(repo.join("dev-libs/pkg")).unwrap();
+        std::fs::create_dir_all(repo.join("eclass")).unwrap();
+        let ebuild_path = repo.join("dev-libs/pkg/pkg-1.0.ebuild");
+        std::fs::write(&ebuild_path, ebuild_text).unwrap();
+        if let Some(ec) = eclass_text {
+            std::fs::write(repo.join("eclass/myclass.eclass"), ec).unwrap();
+        }
+        if let Some(cache) = cache_text {
+            let cache_dir = repo.join("metadata/md5-cache/dev-libs");
+            std::fs::create_dir_all(&cache_dir).unwrap();
+            let mut f = std::fs::File::create(cache_dir.join("pkg-1.0")).unwrap();
+            f.write_all(cache.as_bytes()).unwrap();
+        }
+        (ebuild_path, repo, Vec::new())
+    }
+
+    fn valid_repo(
+        ebuild: &str,
+        eclass: Option<&str>,
+        cache: Option<&str>,
+        store_paths: bool,
+    ) -> bool {
+        let dir = Layout::new();
+        let (ebuild_path, repo, masters) = write_repo(&dir, ebuild, eclass, cache);
+        cache_entry_is_valid(CacheEntryIsValidArgs {
+            ebuild_path: &ebuild_path,
+            repo_location: &repo,
+            masters: &masters,
+            category: "dev-libs",
+            pf: "pkg-1.0",
+            store_eclass_paths: store_paths,
+        })
+    }
 }
