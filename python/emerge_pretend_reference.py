@@ -7894,12 +7894,15 @@ def _dep_edges_from_metadata(metadata, use_flags, real_order_keys, built):
     (and the atom's own slot operator) implies, plus real
     _queue_disjunctive_deps' inline-vs-deferred split.
 
-    One edge per distinct (category, package, priority): real records a
-    *list* of priorities per digraph edge (digraph.add's bisect.insort)
-    and leaf_nodes/child_nodes need every one of them, so an atom named by
-    both RDEPEND and DEPEND contributes two edges rather than being
-    deduped to the first. Mirrors portage-repo/src/merge_order.rs's
-    dep_edges_from_metadata exactly."""
+    One edge per distinct (atom, category, package, priority): real
+    records a *list* of priorities per digraph edge (digraph.add's
+    bisect.insort) and leaf_nodes/child_nodes need every one of them, so
+    an atom named by both RDEPEND and DEPEND contributes two edges rather
+    than being deduped to the first. The atom is part of the dedup key
+    (not just cp) so the distinct branches of a `|| ( >=foo-2:2
+    >=foo-1:1 )` group both survive -- _build_merge_digraph matches each
+    atom against the resolved entries individually. Mirrors
+    portage-repo/src/merge_order.rs's dep_edges_from_metadata exactly."""
     edges = []
     seen = set()
     for dep_key in real_order_keys:
@@ -7932,7 +7935,7 @@ def _dep_edges_from_metadata(metadata, use_flags, real_order_keys, built):
                 if priority["runtime"]:
                     priority["runtime_slot_op"] = True
             cp = tuple(dep_atom.cp.split("/", 1))
-            dedup = (cp, tuple(sorted(priority.items())))
+            dedup = (tok, cp, tuple(sorted(priority.items())))
             if dedup in seen:
                 continue
             seen.add(dedup)

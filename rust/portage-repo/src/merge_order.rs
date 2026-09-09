@@ -182,11 +182,15 @@ fn key_priority(key: &str, built: bool) -> DepPriority {
 /// the *other* branches simply never correspond to a real entry, so the
 /// digraph's own lookup skips them for free.
 ///
-/// One `DepEdge` per distinct `(category, package, priority)`: real
+/// One `DepEdge` per distinct `(atom, category, package, priority)`: real
 /// records a *list* of priorities per digraph edge (`digraph.add`'s
 /// `bisect.insort`), and `leaf_nodes`/`child_nodes` need every one of
 /// them, so an atom named by both `RDEPEND` and `DEPEND` contributes two
-/// edges here rather than being deduped to the first.
+/// edges here rather than being deduped to the first. The `atom` is part
+/// of the dedup key (not just `cat/pkg`) so the distinct branches of a
+/// `|| ( >=foo-2:2 >=foo-1:1 )` group both survive -- `build_digraph`
+/// matches each atom against the resolved entries individually, so the
+/// branch that doesn't resolve is dropped there, not here.
 ///
 /// `built` is real `pkg.built` -- true for a binary candidate and for an
 /// installed package -- and only affects whether the build-time keys are
@@ -200,7 +204,7 @@ pub(crate) fn dep_edges_from_metadata(
     built: bool,
 ) -> Vec<DepEdge> {
     let mut edges: Vec<DepEdge> = Vec::new();
-    let mut seen: HashSet<(String, String, DepPriority)> = HashSet::new();
+    let mut seen: HashSet<(String, String, String, DepPriority)> = HashSet::new();
     for dep_key in keys {
         let Some(d) = metadata.get(*dep_key) else {
             continue;
@@ -255,6 +259,7 @@ pub(crate) fn dep_edges_from_metadata(
                 }
             }
             let key = (
+                t.clone(),
                 dep_atom.category.clone(),
                 dep_atom.package.clone(),
                 priority,
