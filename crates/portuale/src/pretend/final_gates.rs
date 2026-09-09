@@ -280,3 +280,81 @@ pub(crate) fn print_resolver_debug(
         print!("\n\n");
     }
 }
+
+/// The values [`failure_gates`] reads from its caller.
+pub(crate) struct FailureGatesArgs<'a> {
+    pub(crate) opts: &'a EmergeOpts<'a>,
+    pub(crate) result: &'a GraphResult,
+    pub(crate) show_merge_list: bool,
+    pub(crate) color: &'a Colorizer,
+    pub(crate) repos: &'a [RepoConfig],
+    pub(crate) root: &'a Path,
+    pub(crate) config: &'a Config,
+}
+
+/// Unsolvable blockers, unresolved slot conflicts with backtracking off, and an unresolved --prune.
+pub(crate) fn failure_gates(args: FailureGatesArgs<'_>) -> Option<ExitCode> {
+    let FailureGatesArgs {
+        opts,
+        result,
+        show_merge_list,
+        color,
+        repos,
+        root,
+        config,
+    } = args;
+    let &EmergeOpts {
+        pretend,
+        backtrack_max,
+        buildpkgonly,
+        nodeps,
+        ..
+    } = opts;
+    // A blocked installed package the resolver could neither replace nor
+    // unmerge fails the run (exit 1). The per-parent detail is a documented
+    // cut; the sentence, the docs link and the exit code are what matters.
+    // Portage: _emerge/depgraph.py, _show_unsatisfied_blockers
+    let unsolvable_blockers = result
+        .entries
+        .iter()
+        .any(|e| e.blockers.iter().any(|b| b.unsolvable))
+        // An orphan row is unsolvable by construction, so it fails the run
+        // exactly like an entry-owned one.
+        || !result.orphan_blockers.is_empty();
+    if unsolvable_blockers && show_merge_list {
+        eprintln!();
+        for line in [
+            "Error: The above package list contains packages which cannot be",
+            "installed at the same time on the same system.",
+        ] {
+            eprintln!(" {} {line}", color.c("BAD", "*"));
+        }
+        eprintln!(
+            "\nFor more information about {}, please refer to the following",
+            color.c("BAD", "Blocked Packages")
+        );
+        eprintln!("section of the Gentoo Linux x86 Handbook (architecture is irrelevant):\n");
+        eprintln!("https://wiki.gentoo.org/wiki/Handbook:X86/Working/Portage#Blocked_packages\n");
+        pretend_end_news_notice(pretend, repos, root, config, color);
+        return Some(ExitCode::from(1));
+    }
+
+    // A recorded slot conflict fails the whole action (rc 1), gated on the data
+    // -- never on "the notice was printed", so `-q`/`--json`/`--columns` cannot
+    // change the rc. Escapes: `--autounmask-only` (returns 0 earlier), and
+    // backtracking disabled plus `--buildpkgonly`/`--nodeps`.
+    // Portage: _emerge/actions.py, action_build; depgraph.py, _accept_blocker_conflicts
+    let backtracking_disabled = backtrack_max == 0;
+    let slot_conflict_tolerated = backtracking_disabled && (buildpkgonly || nodeps);
+    if !result.slot_conflicts.is_empty() && !slot_conflict_tolerated {
+        pretend_end_news_notice(pretend, repos, root, config, color);
+        return Some(ExitCode::from(1));
+    }
+    // An unresolved `--prune`: display, then fail (no `prune_rebuilds` restart).
+    // Portage: _emerge/depgraph.py, _resolve
+    if result.prune_unresolved {
+        pretend_end_news_notice(pretend, repos, root, config, color);
+        return Some(ExitCode::from(1));
+    }
+    None
+}
