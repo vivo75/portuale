@@ -317,11 +317,32 @@ def test_solver_backends_report_matched_blockers(emerge_binary, fixture_env):
             check=False,
             env=fixture_env,
         )
-        assert result.returncode == 0, solver
+        # Unsolvable (samepkg is installed and depended-on, so the block
+        # cannot be resolved by unmerging): the walk and both engines
+        # print the [blocks B] line plus the Error block and exit 1.
+        assert result.returncode == 1, solver
         assert (
             '[blocks B      ] dev-libs/samepkg ("dev-libs/samepkg"'
             " is hard blocking dev-libs/blockerpkg-1.0)" in result.stdout
         ), solver
+        assert "cannot be\n * installed at the same time" in result.stderr, solver
+    portage_err = subprocess.run(
+        [str(emerge_binary), "--pretend", "--solver=portage", "dev-libs/blockerpkg"],
+        capture_output=True,
+        text=True,
+        check=False,
+        env=fixture_env,
+    )
+    for solver in ("pubgrub", "resolvo"):
+        result = subprocess.run(
+            [str(emerge_binary), "--pretend", f"--solver={solver}", "dev-libs/blockerpkg"],
+            capture_output=True,
+            text=True,
+            check=False,
+            env=fixture_env,
+        )
+        assert result.stdout == portage_err.stdout, solver
+        assert result.stderr == portage_err.stderr, solver
 
 
 def _slotbind_root(tmp_path):
@@ -3543,6 +3564,52 @@ def test_emerge_resume_replays_the_saved_mergelist(emerge_binary, tmp_path):
     assert ">>> dev-libs/schedok-1.0 merged." in r.stdout
     assert (root / "var/db/pkg/dev-libs/schedok-1.0/CONTENTS").is_file()
     assert not mtimedb.exists()  # resume list cleared on success
+
+
+def test_emerge_resume_builds_see_the_resolved_build_flags(emerge_binary, tmp_path):
+    """`emerge --resume` replays real builds, so resumed entries need the
+    same phase env as a fresh `emerge <atom>` build: the run-wide
+    compiler/make flags (`MergeOptions::build_env` <- `build_config_env`)
+    and the per-package `package.env` overrides
+    (`MergeOptions::package_env_vars`). Before this the resume path set
+    neither, so a resumed `src_install` saw `CFLAGS=""` (the per-entry
+    resolved `USE` already flowed via `candidate_use_flags_display`).
+    `dev-libs/schedbad` fails first so a resume list exists;
+    `--resume --skipfirst` then merges `dev-libs/usebuildpkg` (records
+    the run-wide flags) and `dev-libs/penvbuildpkg` (records its
+    `package.env` override of those same flags)."""
+    import shutil
+
+    root = tmp_path / "root"
+    shutil.copytree(Path(FIXTURES_ROOT) / "var", root / "var")
+    env = dict(os.environ)
+    env["PORTAGE_CONFIGROOT"] = FIXTURES_ROOT
+    env["ROOT"] = str(root)
+    env["DISTDIR"] = str(Path(FIXTURES_ROOT) / "distfiles")
+    env["PORTAGE_TMPDIR"] = str(tmp_path / "pt")
+    env["CFLAGS"] = "-O2 -pipe"
+    env["MAKEOPTS"] = "-j3"
+
+    r = subprocess.run(
+        [str(emerge_binary), "dev-libs/schedbad", "dev-libs/usebuildpkg", "dev-libs/penvbuildpkg"],
+        capture_output=True, text=True, check=False, env=env,
+    )
+    assert r.returncode == 1
+    assert "emerge --resume" in r.stderr
+
+    r = subprocess.run(
+        [str(emerge_binary), "--resume", "--skipfirst"],
+        capture_output=True, text=True, check=False, env=env,
+    )
+    assert r.returncode == 0, r.stderr
+    assert ">>> dev-libs/usebuildpkg-1.0 merged." in r.stdout
+    assert ">>> dev-libs/penvbuildpkg-1.0 merged." in r.stdout
+    assert (root / "usr/share/usebuildpkg/flags").read_text() == (
+        "CFLAGS=-O2 -pipe\nMAKEOPTS=-j3\n"
+    )
+    assert (root / "usr/share/penvbuildpkg/flags").read_text() == (
+        "CFLAGS=-Os -march=fixturepkgenv\nMAKEOPTS=-j7\n"
+    )
 
 
 def test_emerge_resume_carries_the_oneshot_flag(emerge_binary, tmp_path):

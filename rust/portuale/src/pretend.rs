@@ -3856,6 +3856,14 @@ fn run_resume(
         merge_options.install_mask_prunes_usr_share,
     ) = config_install_mask(config);
     merge_options.features = config_features_string(config);
+    // The compiler / make flags and `package.env` vars the non-resume
+    // `emerge` path resolves (see the `build_config_env` call there):
+    // a resumed source build is a real build and needs the same phase
+    // env -- without these a resumed `src_compile` sees `CFLAGS=""`.
+    // (The per-entry resolved `USE` already flows via
+    // `candidate_use_flags_display` above.)
+    merge_options.build_env = build_config_env(config);
+    merge_options.package_env_vars = config.package_env_vars.clone();
     // An all-source resume list keeps going through `run_source_merge`
     // (full `--jobs`/`--load-average` scheduler support); a mergelist
     // with at least one resumed binary entry (real portage's own resume

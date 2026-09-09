@@ -1271,6 +1271,7 @@ mod tests {
                 matched_category: "dev-libs".to_string(),
                 matched_package: "blockerpartnerpkg".to_string(),
                 matched_version: "1.0".to_string(),
+                unsolvable: false,
             }]
         );
 
@@ -1296,6 +1297,7 @@ mod tests {
                     matched_category: "dev-libs".to_string(),
                     matched_package: "samepkg".to_string(),
                     matched_version: "1.0".to_string(),
+                    unsolvable: true,
                 }]
             );
         }

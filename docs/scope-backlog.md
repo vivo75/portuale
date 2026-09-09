@@ -261,9 +261,11 @@ now actually gate correctly), `Packages`-index `USE` back-fill for
 `emerge -b` — see `what-this-proves.md`'s "Sandbox / build isolation"
 entry for the cited detail. SELinux sandbox and `userpriv`/`fakeroot`
 are confirmed non-goals (Part 3). Build flags / resolved USE stay
-`""`/absent for a standalone `ebuild <file> <phase>` (no graph) and for
-`emerge --resume` (`resume_entry` carries none) — both need a resolved
-graph this deep, a documented gap.
+`""`/absent for a standalone `ebuild <file> <phase>` (no graph reaches
+that deep -- still open); `emerge --resume` is now complete on this
+axis (per-entry USE re-derived since `491bbd0`, run-wide flags and
+`package.env` since the resume-flags slice -- see
+`what-this-proves.md`).
 
 ### E. Binary packages / fetch — **substantially complete (2026-09-04)**
 

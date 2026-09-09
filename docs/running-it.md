@@ -488,12 +488,17 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/profileuseena
 # [ebuild  N    ] dev-libs/profileuseenablepkg-1.0
 # [ebuild  N    ] dev-libs/newpkg-1.0
 
-# a strong (!!) blocker matching an already-installed package is reported
-# (not enforced -- exit code is still 0, same as real --pretend); the
-# line follows real output.py::_blockers now
-PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/blockerpkg
-# [ebuild  N    ] dev-libs/blockerpkg-1.0
-# [blocks B     ] dev-libs/samepkg ("dev-libs/samepkg" is hard blocking dev-libs/blockerpkg-1.0)
+# a strong (!!) blocker matching an installed package that other
+# installed packages still depend on is unsolvable (real
+# `_serialize_tasks`' `unresolved_blocks`): the `[blocks B]` line prints
+# plus the `* Error:` block, exit 1
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/blockerpkg ; echo "exit=$?"
+# [ebuild  N     ] dev-libs/blockerpkg-1.0
+# [blocks B      ] dev-libs/samepkg ("dev-libs/samepkg" is hard blocking dev-libs/blockerpkg-1.0)
+# (stderr:)
+#  * Error: The above package list contains packages which cannot be
+#  * installed at the same time on the same system.
+# exit=1
 
 # a weak (!) blocker matching another package this same run would also
 # newly merge (not just an installed one) -- "soft blocking"
@@ -1969,6 +1974,29 @@ rust/target/release/portuale emerge --resume --pretend
 # [ebuild  N     ] <cat>/<pkg>-<ver>        (the saved list; merges nothing, list kept)
 ```
 
+`emerge --resume` builds see the resolved build flags (per-entry
+`USE` already flowed since the resume-USE slice; run-wide
+`CFLAGS`/`MAKEOPTS` and `package.env` overrides were missing, so a
+resumed `src_install` saw `CFLAGS=""`). Live-verified exactly as run
+(failed `schedbad` seeds the list, `--resume --skipfirst` merges two
+flag-recording packages under env-layer `CFLAGS="-O2 -pipe"` /
+`MAKEOPTS="-j3"`):
+
+```sh
+rust/target/release/portuale emerge dev-libs/schedbad dev-libs/usebuildpkg dev-libs/penvbuildpkg  # exit 1
+rust/target/release/portuale emerge --resume --skipfirst                                           # exit 0
+cat $ROOT/usr/share/usebuildpkg/flags
+# CFLAGS=-O2 -pipe
+# MAKEOPTS=-j3
+cat $ROOT/usr/share/penvbuildpkg/flags
+# CFLAGS=-Os -march=fixturepkgenv
+# MAKEOPTS=-j7
+```
+
+Deterministic slice test: `pytest tests/test_portuale.py -k
+"resume_builds_see"` (fails without the two lines, passes with
+them).
+
 `--quiet-build` at a single job:
 
 ```sh
@@ -2174,9 +2202,11 @@ portuale emerge --pretend --solver=pubgrub dev-libs/graphblockerparent
 # [ebuild  N     ] dev-libs/weakblockerpkg-1.0
 # [ebuild  N     ] dev-libs/graphblockerparent-1.0
 # [blocks B      ] dev-libs/blockerpartnerpkg ("dev-libs/blockerpartnerpkg" is soft blocking dev-libs/weakblockerpkg-1.0)
-portuale emerge --pretend --solver=resolvo dev-libs/blockerpkg
+portuale emerge --pretend --solver=resolvo dev-libs/blockerpkg  # exit 1
 # [ebuild  N     ] dev-libs/blockerpkg-1.0
 # [blocks B      ] dev-libs/samepkg ("dev-libs/samepkg" is hard blocking dev-libs/blockerpkg-1.0)
+# (stderr:)  * Error: The above package list contains packages which cannot be
+#  * installed at the same time on the same system.
 ```
 
 Deterministic slice test: `pytest tests/test_portuale.py -k
