@@ -5724,7 +5724,7 @@ fn config_install_mask(config: &portage_profile::Config) -> (String, bool) {
     crate::install_mask::resolve(&configured, &features)
 }
 
-fn build_config_env(config: &portage_profile::Config) -> Vec<(String, String)> {
+pub(crate) fn build_config_env(config: &portage_profile::Config) -> Vec<(String, String)> {
     BUILD_VARS
         .iter()
         .filter_map(|&k| {

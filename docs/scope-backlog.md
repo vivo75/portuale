@@ -265,11 +265,10 @@ the build-env axis (per-entry USE re-derived since `491bbd0`,
 run-wide flags and `package.env` since the resume-flags slice), and a
 standalone `ebuild <file> <phase>` now exports config-derived `USE`
 (the `depend` phase deliberately keeps `""`) — see
-`what-this-proves.md`. Still open at phase depth: standalone compiler
-flags (phases inherit the calling env only; make.conf
-`CFLAGS`/`MAKEOPTS` are never loaded) and `PORTAGE_RESTRICT`/
-`PROPERTIES` reduction on the empty USE set (its own documented
-narrowing).
+`what-this-proves.md`. Still open at phase depth: per-package
+`package.env` on standalone runs (atom matching needs a resolved graph
+entry) and `PORTAGE_RESTRICT`/`PROPERTIES` reduction on the empty USE
+set (its own documented narrowing).
 
 ### E. Binary packages / fetch — **substantially complete (2026-09-04)**
 

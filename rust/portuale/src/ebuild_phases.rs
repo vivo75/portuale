@@ -758,35 +758,49 @@ fn flat_field(raw: &str) -> String {
     .unwrap_or_default()
 }
 
-/// Real `doebuild_environment()`'s own `USE`: the package's effective
-/// USE from the resolved config, exported into every phase. Merge builds
-/// pass their resolved flags via `extra_env` (appended after these base
-/// vars downstream, so it keeps overriding this default), which means
-/// this computation only ever surfaces for standalone `ebuild <file>
-/// <phase>` runs -- resolved the same way `ebuild_merge::
+/// Real `doebuild_environment()`'s own `USE` plus the compiler/make
+/// flags: the package's effective USE and the resolved `BUILD_VARS`
+/// (`CFLAGS`/`MAKEOPTS`/..., make.conf + profile + env layer) from one
+/// config load, exported as base vars into every phase. Merge builds
+/// pass their fully-resolved flags via `extra_env` (appended after these
+/// base vars downstream, so it keeps overriding them), which means this
+/// computation only ever surfaces for standalone `ebuild <file> <phase>`
+/// runs -- resolved the same way `ebuild_merge::
 /// blocked_installed_packages`' own standalone resolution does
 /// (`find_repos` + `resolve_config` + md5-cache `IUSE` +
-/// `effective_use_flags`, via `candidate_use_flags_display`), and `""`
-/// on any failure (missing `repos.conf`, unreadable cache, an ebuild
-/// path outside any real repo).
+/// `effective_use_flags`, via `candidate_use_flags_display` for USE and
+/// `pretend::build_config_env` for the flags), and empty on any failure
+/// (missing `repos.conf`, unreadable cache, an ebuild path outside any
+/// real repo).
 ///
 /// Two gates, both load-bearing. When `extra_env` already carries `USE`
 /// the whole computation is skipped (zero cost and zero behavior change
-/// for merge builds). And the `depend` phase keeps `USE=""`: metadata
-/// extraction must stay on the empty set -- config-derived USE there
-/// would rewrite `--regen` cache bytes for USE-conditional metadata and
-/// reload the whole profile once per ebuild (against the F.10/F.11 perf
-/// work); every pinned golden assumes it.
-fn phase_default_use(
+/// for merge builds -- their `extra_env` carries the complete flag set
+/// from the same config, so nothing is lost). And the `depend` phase
+/// keeps the old empty base exactly: metadata extraction must stay on
+/// the empty set -- config-derived values there would rewrite `--regen`
+/// cache bytes for USE-conditional metadata and reload the whole profile
+/// once per ebuild (against the F.10/F.11 perf work); every pinned
+/// golden assumes it.
+///
+/// Deliberate cut: per-package `package.env` still only flows on merge
+/// builds (`entry_package_env_vars` needs a resolved graph entry).
+///
+/// `(USE display pairs, build flag pairs)` from one standalone config
+/// load -- the alias keeps the loader closure below under clippy's
+/// `type_complexity` lint.
+type StandaloneBaseEnv = (Vec<(String, bool)>, Vec<(String, String)>);
+
+fn phase_standalone_base_env(
     env: &Environment,
     config_root: &Path,
     ebuild_phase_value: &str,
     extra_env: &[(String, String)],
-) -> String {
+) -> (String, Vec<(String, String)>) {
     if ebuild_phase_value == "depend" || extra_env.iter().any(|(k, _)| k == "USE") {
-        return String::new();
+        return (String::new(), Vec::new());
     }
-    let display = (|| -> Option<Vec<(String, bool)>> {
+    let Some((display, flags)) = (|| -> Option<StandaloneBaseEnv> {
         // Gate on a real repo checkout (same tolerance as
         // `restrict_and_properties` below): outside one there is no
         // md5-cache to read IUSE from.
@@ -815,21 +829,24 @@ fn phase_default_use(
             &repo_masters,
         )
         .ok()?;
-        Some(portage_repo::candidate_use_flags_display(
+        let display = portage_repo::candidate_use_flags_display(
             &repos,
             &config,
             &env.category,
             &env.split.pn,
             &env.split.pvr,
-        ))
-    })();
-    let display = display.unwrap_or_default();
+        );
+        let flags = crate::pretend::build_config_env(&config);
+        Some((display, flags))
+    })() else {
+        return (String::new(), Vec::new());
+    };
     let enabled: Vec<&str> = display
         .iter()
         .filter(|(_, on)| *on)
         .map(|(f, _)| f.as_str())
         .collect();
-    enabled.join(" ")
+    (enabled.join(" "), flags)
 }
 
 /// Real `PORTAGE_RESTRICT`/`PORTAGE_PROPERTIES` (`doebuild_environment()`
@@ -1766,6 +1783,13 @@ fn phase_env_vars(
         helpers_dir.display(),
         std::env::var("PATH").unwrap_or_default()
     );
+    // Config-derived base env for standalone runs (USE + compiler/make
+    // flags), computed once here so the single config load serves both
+    // the `USE` entry below and the flag entries pushed after the
+    // literal. `("", [])` for merge builds (their `extra_env` carries
+    // everything) and the `depend` phase -- see the helper.
+    let standalone_base_env =
+        phase_standalone_base_env(env, config_root, ebuild_phase_value, extra_env);
     let mut vars = vec![
         ("EAPI".to_string(), env.eapi.clone()),
         ("PN".to_string(), env.split.pn.clone()),
@@ -1834,14 +1858,17 @@ fn phase_env_vars(
         ),
         ("FEATURES".to_string(), phase_features_value()),
         // Real `doebuild_environment()` exports the package's effective
-        // `USE` into every phase. Merge builds override this base value
-        // downstream via `extra_env` (see `run_commands_async`); a
-        // standalone `ebuild <file> <phase>` has no `extra_env` USE, so
-        // the config-derived default is what its `use()` calls see.
-        (
-            "USE".to_string(),
-            phase_default_use(env, config_root, ebuild_phase_value, extra_env),
-        ),
+        // `USE` plus the resolved compiler/make flags into every phase.
+        // Merge builds override these base values downstream via
+        // `extra_env` (see `run_commands_async`); a standalone `ebuild
+        // <file> <phase>` has no `extra_env` flags, so the config-derived
+        // base is what its `use()` calls and `${CFLAGS}` see.
+        // `phase_standalone_base_env` returns `("", [])` for the
+        // `depend` phase and whenever `extra_env` already carries `USE`.
+        // Computed once here (one config load): the flags join `vars`
+        // below, ahead of the `extra_env` override, so merge builds keep
+        // their resolved values.
+        ("USE".to_string(), standalone_base_env.0.clone()),
         ("EPREFIX".to_string(), String::new()),
         ("EMERGE_FROM".to_string(), "ebuild".to_string()),
         ("PORTAGE_QUIET".to_string(), "1".to_string()),
@@ -1867,6 +1894,10 @@ fn phase_env_vars(
     let (restrict, properties) = restrict_and_properties(env);
     vars.push(("PORTAGE_RESTRICT".to_string(), restrict));
     vars.push(("PORTAGE_PROPERTIES".to_string(), properties));
+    // The config-derived compiler/make flags: base values only, ahead of
+    // the `extra_env` override below, so merge builds keep their resolved
+    // per-entry values and standalone phases gain make.conf's.
+    vars.extend(standalone_base_env.1);
 
     // Real `INHERITED` (`porttree.py:872`): exported into every phase so
     // that when a non-`depend` phase re-sources the ebuild,

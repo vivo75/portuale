@@ -2011,8 +2011,12 @@ cat $PORTAGE_TMPDIR/portage/dev-libs/usebuildpkg-1.0/temp/state
 Deterministic slice test: `pytest tests/test_portuale.py -k
 "config_derived_use"` (records `off` without the fix). The `depend`
 phase deliberately keeps `USE=""` (metadata extraction stays
-config-independent); standalone compiler flags stay calling-env-only
-(make.conf resolution at phase depth is still open).
+config-independent). The same config load also feeds the resolved
+compiler/make flags, so with env-layer `CFLAGS="-O9
+-pipe-standalone"` / `MAKEOPTS="-j9"` the standalone `install`
+records those exact values into `${T}/flags` too. Still open:
+per-package `package.env` on standalone runs, and `PORTAGE_RESTRICT`
+reduction on the empty USE set.
 
 `--quiet-build` at a single job:
 

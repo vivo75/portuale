@@ -1575,6 +1575,10 @@ def test_ebuild_install_phase_sees_config_derived_use(ebuild_binary, tmp_path):
     env["PORTAGE_TMPDIR"] = str(portage_tmpdir)
     env["DISTDIR"] = str(tmp_path / "distdir")
     (tmp_path / "distdir").mkdir()
+    # Env-layer flags: resolve_config folds the process env in, so the
+    # standalone phase env carries them like a merge build's would.
+    env["CFLAGS"] = "-O9 -pipe-standalone"
+    env["MAKEOPTS"] = "-j9"
 
     result = subprocess.run(
         [str(ebuild_binary), ebuild_path, "install"],
@@ -1586,6 +1590,8 @@ def test_ebuild_install_phase_sees_config_derived_use(ebuild_binary, tmp_path):
     assert result.returncode == 0, result.stderr
     state = portage_tmpdir / "portage/dev-libs/usebuildpkg-1.0/temp/state"
     assert state.read_text().strip() == "on"
+    flags = portage_tmpdir / "portage/dev-libs/usebuildpkg-1.0/temp/flags"
+    assert flags.read_text() == "CFLAGS=-O9 -pipe-standalone\nMAKEOPTS=-j9\n"
 
 
 def test_ebuild_accepts_multiple_real_commands(ebuild_binary):
