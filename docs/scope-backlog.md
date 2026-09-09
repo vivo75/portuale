@@ -260,12 +260,16 @@ The whole `FEATURES` isolation set wraps the six real `src_*` phases
 now actually gate correctly), `Packages`-index `USE` back-fill for
 `emerge -b` — see `what-this-proves.md`'s "Sandbox / build isolation"
 entry for the cited detail. SELinux sandbox and `userpriv`/`fakeroot`
-are confirmed non-goals (Part 3). Build flags / resolved USE stay
-`""`/absent for a standalone `ebuild <file> <phase>` (no graph reaches
-that deep -- still open); `emerge --resume` is now complete on this
-axis (per-entry USE re-derived since `491bbd0`, run-wide flags and
-`package.env` since the resume-flags slice -- see
-`what-this-proves.md`).
+are confirmed non-goals (Part 3). `emerge --resume` is complete on
+the build-env axis (per-entry USE re-derived since `491bbd0`,
+run-wide flags and `package.env` since the resume-flags slice), and a
+standalone `ebuild <file> <phase>` now exports config-derived `USE`
+(the `depend` phase deliberately keeps `""`) — see
+`what-this-proves.md`. Still open at phase depth: standalone compiler
+flags (phases inherit the calling env only; make.conf
+`CFLAGS`/`MAKEOPTS` are never loaded) and `PORTAGE_RESTRICT`/
+`PROPERTIES` reduction on the empty USE set (its own documented
+narrowing).
 
 ### E. Binary packages / fetch — **substantially complete (2026-09-04)**
 

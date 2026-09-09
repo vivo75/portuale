@@ -1997,6 +1997,23 @@ Deterministic slice test: `pytest tests/test_portuale.py -k
 "resume_builds_see"` (fails without the two lines, passes with
 them).
 
+Standalone phases see config-derived `USE` (merge builds already had
+it via `extra_env`; standalone had `USE=""`, so `use()` conditionals
+always took the off branch). Live-verified exactly as run:
+
+```sh
+PORTAGE_CONFIGROOT="$PWD/fixtures" rust/target/release/portuale ebuild \
+  "$PWD/fixtures/repo/dev-libs/usebuildpkg/usebuildpkg-1.0.ebuild" install
+cat $PORTAGE_TMPDIR/portage/dev-libs/usebuildpkg-1.0/temp/state
+# on
+```
+
+Deterministic slice test: `pytest tests/test_portuale.py -k
+"config_derived_use"` (records `off` without the fix). The `depend`
+phase deliberately keeps `USE=""` (metadata extraction stays
+config-independent); standalone compiler flags stay calling-env-only
+(make.conf resolution at phase depth is still open).
+
 `--quiet-build` at a single job:
 
 ```sh

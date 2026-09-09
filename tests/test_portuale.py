@@ -1554,6 +1554,40 @@ def test_mrg_help_exits_zero(mrg_binary):
         assert "--unmerge" in result.stdout
 
 
+def test_ebuild_install_phase_sees_config_derived_use(ebuild_binary, tmp_path):
+    """A standalone `ebuild <file> <phase>` has no resolved graph entry,
+    but real `doebuild_environment()` still exports the package's
+    effective `USE` from the resolved config -- so `bin/ebuild.sh`'s
+    `use()` works there too. `dev-libs/usebuildpkg` has
+    `IUSE="buildflag"` (enabled for it in
+    `fixtures/etc/portage/package.use`); a standalone `install` must see
+    it on (its `src_install` records `use buildflag` into `${T}/state`).
+    Before this the phase env left `USE=""` and recorded `off`. The
+    `depend` phase deliberately keeps `USE=""` (metadata extraction must
+    stay config-independent -- see `phase_default_use`)."""
+    ebuild_path = str(
+        Path(FIXTURES_ROOT)
+        / "repo/dev-libs/usebuildpkg/usebuildpkg-1.0.ebuild"
+    )
+    env = dict(os.environ)
+    env["PORTAGE_CONFIGROOT"] = FIXTURES_ROOT
+    portage_tmpdir = tmp_path / "portage-tmpdir"
+    env["PORTAGE_TMPDIR"] = str(portage_tmpdir)
+    env["DISTDIR"] = str(tmp_path / "distdir")
+    (tmp_path / "distdir").mkdir()
+
+    result = subprocess.run(
+        [str(ebuild_binary), ebuild_path, "install"],
+        capture_output=True,
+        text=True,
+        check=False,
+        env=env,
+    )
+    assert result.returncode == 0, result.stderr
+    state = portage_tmpdir / "portage/dev-libs/usebuildpkg-1.0/temp/state"
+    assert state.read_text().strip() == "on"
+
+
 def test_ebuild_accepts_multiple_real_commands(ebuild_binary):
     """Real ebuild invocations commonly chain several phases in one call
     (e.g. "clean compile install") -- all still just recognized, still a

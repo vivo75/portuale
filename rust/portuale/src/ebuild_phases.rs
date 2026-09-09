@@ -758,6 +758,80 @@ fn flat_field(raw: &str) -> String {
     .unwrap_or_default()
 }
 
+/// Real `doebuild_environment()`'s own `USE`: the package's effective
+/// USE from the resolved config, exported into every phase. Merge builds
+/// pass their resolved flags via `extra_env` (appended after these base
+/// vars downstream, so it keeps overriding this default), which means
+/// this computation only ever surfaces for standalone `ebuild <file>
+/// <phase>` runs -- resolved the same way `ebuild_merge::
+/// blocked_installed_packages`' own standalone resolution does
+/// (`find_repos` + `resolve_config` + md5-cache `IUSE` +
+/// `effective_use_flags`, via `candidate_use_flags_display`), and `""`
+/// on any failure (missing `repos.conf`, unreadable cache, an ebuild
+/// path outside any real repo).
+///
+/// Two gates, both load-bearing. When `extra_env` already carries `USE`
+/// the whole computation is skipped (zero cost and zero behavior change
+/// for merge builds). And the `depend` phase keeps `USE=""`: metadata
+/// extraction must stay on the empty set -- config-derived USE there
+/// would rewrite `--regen` cache bytes for USE-conditional metadata and
+/// reload the whole profile once per ebuild (against the F.10/F.11 perf
+/// work); every pinned golden assumes it.
+fn phase_default_use(
+    env: &Environment,
+    config_root: &Path,
+    ebuild_phase_value: &str,
+    extra_env: &[(String, String)],
+) -> String {
+    if ebuild_phase_value == "depend" || extra_env.iter().any(|(k, _)| k == "USE") {
+        return String::new();
+    }
+    let display = (|| -> Option<Vec<(String, bool)>> {
+        // Gate on a real repo checkout (same tolerance as
+        // `restrict_and_properties` below): outside one there is no
+        // md5-cache to read IUSE from.
+        repo_root_for(&env.pkg_dir)?;
+        let repos = portage_repo::find_repos(config_root).ok()?;
+        let main_repo = repos.iter().find(|r| r.is_main)?;
+        let overlay_repos: Vec<(String, PathBuf)> = repos
+            .iter()
+            .filter(|r| !r.is_main)
+            .map(|r| (r.name.clone(), r.location.clone()))
+            .collect();
+        let repo_aliases: Vec<(String, PathBuf)> = repos
+            .iter()
+            .flat_map(|r| r.aliases.iter().map(|a| (a.clone(), r.location.clone())))
+            .collect();
+        let repo_masters: std::collections::HashMap<String, Vec<PathBuf>> = repos
+            .iter()
+            .map(|r| (r.name.clone(), r.masters.clone()))
+            .collect();
+        let config = portage_profile::resolve_config(
+            config_root,
+            &main_repo.location,
+            &overlay_repos,
+            &repo_aliases,
+            &main_repo.name,
+            &repo_masters,
+        )
+        .ok()?;
+        Some(portage_repo::candidate_use_flags_display(
+            &repos,
+            &config,
+            &env.category,
+            &env.split.pn,
+            &env.split.pvr,
+        ))
+    })();
+    let display = display.unwrap_or_default();
+    let enabled: Vec<&str> = display
+        .iter()
+        .filter(|(_, on)| *on)
+        .map(|(f, _)| f.as_str())
+        .collect();
+    enabled.join(" ")
+}
+
 /// Real `PORTAGE_RESTRICT`/`PORTAGE_PROPERTIES` (`doebuild_environment()`
 /// sets both, unconditionally, for every phase): the ebuild's own
 /// `RESTRICT`/`PROPERTIES` metadata, USE-reduced. Read from the same
@@ -1759,7 +1833,15 @@ fn phase_env_vars(
             .to_string(),
         ),
         ("FEATURES".to_string(), phase_features_value()),
-        ("USE".to_string(), String::new()),
+        // Real `doebuild_environment()` exports the package's effective
+        // `USE` into every phase. Merge builds override this base value
+        // downstream via `extra_env` (see `run_commands_async`); a
+        // standalone `ebuild <file> <phase>` has no `extra_env` USE, so
+        // the config-derived default is what its `use()` calls see.
+        (
+            "USE".to_string(),
+            phase_default_use(env, config_root, ebuild_phase_value, extra_env),
+        ),
         ("EPREFIX".to_string(), String::new()),
         ("EMERGE_FROM".to_string(), "ebuild".to_string()),
         ("PORTAGE_QUIET".to_string(), "1".to_string()),
