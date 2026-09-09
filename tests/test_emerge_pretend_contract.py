@@ -1982,6 +1982,21 @@ def _run(cmd: list[str], args: list[str], env: dict[str, str]) -> subprocess.Com
     )
 
 
+def _all_masked(atom: str, cpv_repo: str, reason: str) -> str:
+    """Real `_show_unsatisfied_dep`'s "All ebuilds that could satisfy
+    <atom> have been masked" report, stripped (as the assertions below
+    compare `.stderr.strip()`). Emitted for a top-level atom whose only
+    matching ebuilds are all masked -- what portuale prints instead of
+    the bare "there are no ebuilds to satisfy" line."""
+    return (
+        f'!!! All ebuilds that could satisfy "{atom}" have been masked.\n'
+        "!!! One of the following masked packages is required to complete your request:\n"
+        f"- {cpv_repo} (masked by: {reason})\n"
+        "\nFor more information, see the MASKED PACKAGES section in the emerge\n"
+        "man page or refer to the Gentoo Handbook."
+    )
+
+
 # Real `_display_autounmask`'s tail, emitted on stderr after every
 # autounmask change block when `--autounmask-backtrack` is off (the
 # default) -- `--pretend` included. Appended to the pinned stderr of
@@ -4020,8 +4035,10 @@ def test_autounmask_no_keyword_suggestion_by_default(emerge_binary, fixture_env)
     )
     assert result.returncode == 1
     assert result.stdout == ""
-    assert result.stderr.strip() == (
-        'emerge: there are no ebuilds to satisfy "dev-libs/autounmaskkeywordpkg".'
+    assert result.stderr.strip() == _all_masked(
+        "dev-libs/autounmaskkeywordpkg",
+        "dev-libs/autounmaskkeywordpkg-1.0::testrepo",
+        "~amd64 keyword",
     )
 
 
@@ -5893,9 +5910,8 @@ def test_package_mask_hides_with_no_matching_unmask(emerge_binary, fixture_env):
     result = _run([str(emerge_binary)], ["--pretend", "dev-libs/hardmaskedpkg"], fixture_env)
     assert result.returncode == 1
     assert result.stdout == ""
-    assert (
-        result.stderr.strip()
-        == 'emerge: there are no ebuilds to satisfy "dev-libs/hardmaskedpkg".'
+    assert result.stderr.strip() == _all_masked(
+        "dev-libs/hardmaskedpkg", "dev-libs/hardmaskedpkg-1.0::testrepo", "package.mask"
     )
 
 
@@ -5929,13 +5945,13 @@ def test_license_eula_style_group_is_masked_by_the_real_default_accept_license(
     ACCEPT_LICENSE at all -- real portage's own "* -@EULA" default
     applies, and fixtures/repo/profiles/base/license_groups
     defines EULA="SomeEula", so dev-libs/eulapkg's own
-    LICENSE="SomeEula" is masked, same "no ebuilds to satisfy" outcome
+    LICENSE="SomeEula" is masked, same "All ebuilds ... masked" report
     package.mask already produces."""
     result = _run([str(emerge_binary)], ["--pretend", "dev-libs/eulapkg"], fixture_env)
     assert result.returncode == 1
     assert result.stdout == ""
-    assert (
-        result.stderr.strip() == 'emerge: there are no ebuilds to satisfy "dev-libs/eulapkg".'
+    assert result.stderr.strip() == _all_masked(
+        "dev-libs/eulapkg", "dev-libs/eulapkg-1.0::testrepo", "SomeEula license(s)"
     )
 
 
@@ -5983,9 +5999,10 @@ def test_an_overlay_own_license_groups_stacks_with_the_main_repo(
     )
     assert result.returncode == 1
     assert result.stdout == ""
-    assert (
-        result.stderr.strip()
-        == 'emerge: there are no ebuilds to satisfy "dev-libs/crossrepolicensepkg".'
+    assert result.stderr.strip() == _all_masked(
+        "dev-libs/crossrepolicensepkg",
+        "dev-libs/crossrepolicensepkg-1.0::testrepo",
+        "CrossRepoNonfree license(s)",
     )
 
 
@@ -6007,9 +6024,10 @@ def test_license_use_conditional_visible_when_flag_off_masked_when_forced_on(
     )
     assert forced_on.returncode == 1
     assert forced_on.stdout == ''
-    assert (
-        forced_on.stderr.strip()
-        == 'emerge: there are no ebuilds to satisfy "dev-libs/uselicensepkgforced".'
+    assert forced_on.stderr.strip() == _all_masked(
+        "dev-libs/uselicensepkgforced",
+        "dev-libs/uselicensepkgforced-1.0::testrepo",
+        "SomeEula license(s)",
     )
 
 
@@ -6032,9 +6050,8 @@ def test_package_properties_narrows_acceptance_for_one_package(emerge_binary, fi
     result = _run([str(emerge_binary)], ["--pretend", "dev-libs/interactivepkg"], fixture_env)
     assert result.returncode == 1
     assert result.stdout == ""
-    assert (
-        result.stderr.strip()
-        == 'emerge: there are no ebuilds to satisfy "dev-libs/interactivepkg".'
+    assert result.stderr.strip() == _all_masked(
+        "dev-libs/interactivepkg", "dev-libs/interactivepkg-1.0::testrepo", "PROPERTIES"
     )
 
 
@@ -6046,9 +6063,8 @@ def test_package_accept_restrict_narrows_acceptance_for_one_package(emerge_binar
     result = _run([str(emerge_binary)], ["--pretend", "dev-libs/restrictedpkg"], fixture_env)
     assert result.returncode == 1
     assert result.stdout == ""
-    assert (
-        result.stderr.strip()
-        == 'emerge: there are no ebuilds to satisfy "dev-libs/restrictedpkg".'
+    assert result.stderr.strip() == _all_masked(
+        "dev-libs/restrictedpkg", "dev-libs/restrictedpkg-1.0::testrepo", "RESTRICT"
     )
 
 
@@ -6061,9 +6077,8 @@ def test_repo_level_package_mask_hides_a_package(emerge_binary, fixture_env):
     result = _run([str(emerge_binary)], ["--pretend", "dev-libs/repomaskedpkg"], fixture_env)
     assert result.returncode == 1
     assert result.stdout == ""
-    assert (
-        result.stderr.strip()
-        == 'emerge: there are no ebuilds to satisfy "dev-libs/repomaskedpkg".'
+    assert result.stderr.strip() == _all_masked(
+        "dev-libs/repomaskedpkg", "dev-libs/repomaskedpkg-1.0::testrepo", "package.mask"
     )
 
 
@@ -6076,9 +6091,8 @@ def test_profile_level_package_mask_hides_a_package(emerge_binary, fixture_env):
     result = _run([str(emerge_binary)], ["--pretend", "dev-libs/profilemaskedpkg"], fixture_env)
     assert result.returncode == 1
     assert result.stdout == ""
-    assert (
-        result.stderr.strip()
-        == 'emerge: there are no ebuilds to satisfy "dev-libs/profilemaskedpkg".'
+    assert result.stderr.strip() == _all_masked(
+        "dev-libs/profilemaskedpkg", "dev-libs/profilemaskedpkg-1.0::testrepo", "package.mask"
     )
 
 
@@ -6153,9 +6167,10 @@ def test_package_accept_keywords_negation_revokes_a_globally_accepted_keyword(
         [str(emerge_binary)], ["--pretend", "dev-libs/keywordrevokedpkg"], fixture_env
     )
     assert result.returncode == 1
-    assert (
-        result.stderr.strip()
-        == 'emerge: there are no ebuilds to satisfy "dev-libs/keywordrevokedpkg".'
+    assert result.stderr.strip() == _all_masked(
+        "dev-libs/keywordrevokedpkg",
+        "dev-libs/keywordrevokedpkg-1.0::testrepo",
+        "missing keyword",
     )
 
 
@@ -6920,9 +6935,10 @@ def test_overlay_own_package_mask_still_hides_the_explicit_overlay_atom(
         [str(emerge_binary)], ["--pretend", "dev-libs/overlaymaskedpkg::overlay"], fixture_env
     )
     assert result.returncode == 1
-    assert (
-        result.stderr.strip()
-        == 'emerge: there are no ebuilds to satisfy "dev-libs/overlaymaskedpkg::overlay".'
+    assert result.stderr.strip() == _all_masked(
+        "dev-libs/overlaymaskedpkg::overlay",
+        "dev-libs/overlaymaskedpkg-1.0::overlay",
+        "package.mask",
     )
 
 
@@ -6968,9 +6984,8 @@ def test_overlay_implicit_masters_inherits_the_main_repos_own_package_mask(
     result = _run([str(emerge_binary)], ["--pretend", "dev-libs/mastermaskedpkg"], fixture_env)
     assert result.returncode == 1
     assert result.stdout == ""
-    assert (
-        result.stderr.strip()
-        == 'emerge: there are no ebuilds to satisfy "dev-libs/mastermaskedpkg".'
+    assert result.stderr.strip() == _all_masked(
+        "dev-libs/mastermaskedpkg", "dev-libs/mastermaskedpkg-1.0::overlay", "package.mask"
     )
 
 
@@ -7026,9 +7041,10 @@ def test_explicit_masters_inherits_a_non_main_declared_masters_mask(emerge_binar
     )
     assert result.returncode == 1
     assert result.stdout == ""
-    assert (
-        result.stderr.strip()
-        == 'emerge: there are no ebuilds to satisfy "dev-libs/independentmasteroverlaypkg".'
+    assert result.stderr.strip() == _all_masked(
+        "dev-libs/independentmasteroverlaypkg",
+        "dev-libs/independentmasteroverlaypkg-1.0::independentoverlay",
+        "package.mask",
     )
 
 
@@ -7038,18 +7054,19 @@ def test_layout_conf_masters_middle_tier_and_repo_name_override(emerge_binary, f
     below repos.conf and above the implicit main-repo default) and
     "repo-name = layoutrenamed". dev-libs/layoutmasterpkg exists only
     there and is masked only by the OVERLAY repo's own
-    profiles/package.mask -- so it resolves to "no ebuilds" exactly like
-    the repos.conf-masters sibling above, proving the layout.conf masters
-    tier feeds package.mask stacking and the overlay loads under its
-    layout.conf name."""
+    profiles/package.mask -- so it resolves to the "All ebuilds ...
+    masked" report exactly like the repos.conf-masters sibling above,
+    proving the layout.conf masters tier feeds package.mask stacking and
+    the overlay loads under its layout.conf name."""
     result = _run(
         [str(emerge_binary)], ["--pretend", "dev-libs/layoutmasterpkg"], fixture_env
     )
     assert result.returncode == 1
     assert result.stdout == ""
-    assert (
-        result.stderr.strip()
-        == 'emerge: there are no ebuilds to satisfy "dev-libs/layoutmasterpkg".'
+    assert result.stderr.strip() == _all_masked(
+        "dev-libs/layoutmasterpkg",
+        "dev-libs/layoutmasterpkg-1.0::layoutrenamed",
+        "package.mask",
     )
 
 

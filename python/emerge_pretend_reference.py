@@ -5718,6 +5718,127 @@ def _candidate_use_deps_satisfied(atom, c, category, package, config):
     return _use_deps_satisfied(atom, _valid_iuse(iuse, config), use_flags)
 
 
+def _candidate_masking_reasons(candidate, category, package, config):
+    """Real getmaskingstatus._getmaskingstatus's human reason strings for
+    a candidate that is *not* is_visible -- the "(masked by: ...)" text
+    _all_masked_report puts after each "- <cpv>" line. Order mirrors
+    real: package.mask, LICENSE, PROPERTIES, RESTRICT, KEYWORDS. The
+    package.mask / KEYWORDS ("~<arch> keyword" / "-<arch> keyword" /
+    "missing keyword") / LICENSE ("<names> license(s)") strings match
+    real verbatim; PROPERTIES/RESTRICT are the bare key name. Mirrors
+    portage-repo/src/lib.rs's candidate_masking_reasons."""
+    candidate_str = (
+        f"{category}/{package}-{candidate['version']}:{candidate['slot']}"
+        f"/{candidate['sub_slot']}::{candidate['repo_name']}"
+    )
+    reasons = []
+
+    if any(
+        _matches_config_entry(m, candidate_str, category, package)
+        for m in config["package_mask"]
+    ) and not any(
+        _matches_config_entry(u, candidate_str, category, package)
+        for u in config["package_unmask"]
+    ):
+        reasons.append("package.mask")
+
+    if not _license_accepted(candidate, category, package, candidate_str, config):
+        missing = _missing_licenses(candidate, category, package, candidate_str, config)
+        reasons.append(f"{' '.join(missing)} license(s)" if missing else "LICENSE")
+
+    if not _metadata_key_accepted(
+        candidate.get("properties", ""),
+        candidate,
+        category,
+        package,
+        candidate_str,
+        config,
+        config["accept_properties"],
+        config["package_properties"],
+    ):
+        reasons.append("PROPERTIES")
+
+    if not _metadata_key_accepted(
+        candidate.get("restrict", ""),
+        candidate,
+        category,
+        package,
+        candidate_str,
+        config,
+        config["accept_restrict"],
+        config["package_accept_restrict"],
+    ):
+        reasons.append("RESTRICT")
+
+    if not _keywords_accepted(
+        candidate["keywords"],
+        candidate_str,
+        category,
+        package,
+        config["accept_keywords"],
+        config["package_accept_keywords"],
+    ):
+        kmask = "missing"
+        for k in candidate["keywords"]:
+            if k.startswith("~") and k[1:] in config["accept_keywords"]:
+                kmask = k
+                break
+            if k.startswith("-") and k[1:] in config["accept_keywords"]:
+                kmask = k
+                break
+        reasons.append(f"{kmask} keyword")
+
+    if not reasons:
+        reasons.append("masked")
+    return reasons
+
+
+def _all_masked_report(repos, atom_str, config, xinfo):
+    """Real _show_unsatisfied_dep's "All ebuilds that could satisfy
+    <atom> have been masked" report (depgraph.py:6992-7016 +
+    show_masked_packages): built for a *top-level* atom that matches one
+    or more ebuilds by version, every one of which is masked. None when
+    the atom matches no ebuild at all by version (real's plain "there are
+    no ebuilds to satisfy" case) or when some matching ebuild is actually
+    is_visible (a "[use]"-dep miss -- real's separate path). `xinfo` is
+    the already-quoted atom string for the header. Mirrors
+    portage-repo/src/lib.rs's all_masked_report."""
+    atom = _parse_atom(atom_str)
+    if atom is None:
+        return None
+    category, package = atom.cp.split("/", 1)
+    candidates = list_candidates(repos, category, package)
+    strs = [
+        f"{category}/{package}-{c['version']}:{c['slot']}/{c['sub_slot']}::{c['repo_name']}"
+        for c in candidates
+    ]
+    matched = set(match_from_list(atom_str, strs))
+    masked = [c for c, s in zip(candidates, strs) if s in matched]
+    if not masked or any(is_visible(c, category, package, config) for c in masked):
+        return None
+    masked.sort(
+        key=functools.cmp_to_key(lambda a, b: vercmp(b["version"], a["version"]) or 0)
+    )
+
+    out = [
+        f"\n!!! All ebuilds that could satisfy {xinfo} have been masked.\n",
+        "!!! One of the following masked packages is required to complete your request:\n",
+    ]
+    seen = set()
+    for c in masked:
+        output_cpv = f"{category}/{package}-{c['version']}::{c['repo_name']}"
+        if output_cpv in seen:
+            continue
+        seen.add(output_cpv)
+        reasons = _candidate_masking_reasons(c, category, package, config)
+        out.append(f"- {output_cpv} (masked by: {', '.join(reasons)})\n")
+    out.append(
+        "\nFor more information, see the MASKED PACKAGES section in the emerge\n"
+        "man page or refer to the Gentoo Handbook.\n"
+    )
+    return "".join(out)
+
+
 def _atom_cp_installed(root, atom_str):
     """Real dep_zapdeps' all_installed predicate for one "||" alternative
     atom (dep_check.py:603-607): Atom(atom.cp) -- cp level, version/slot/
@@ -10372,6 +10493,16 @@ def resolve_pretend_graph(
             # unsatisfiable target, not the "report and keep going" treatment
             # a dependency's own NoVisibleCandidate gets a few lines down.
             if current_atom_str in top_level and outcome[0] == "no_visible_candidate":
+                # Real _show_unsatisfied_dep: an atom that matches ebuilds
+                # which all turned out masked reports the "All ebuilds
+                # that could satisfy ... have been masked" block (+ each
+                # masked candidate and why), not the "there are no ebuilds
+                # to satisfy" one. Mirrors portage-repo/src/lib.rs.
+                _report = _all_masked_report(
+                    repos, current_atom_str, config, f'"{current_atom_str}"'
+                )
+                if _report is not None:
+                    raise ResolutionError(_report)
                 message = f'there are no ebuilds to satisfy "{current_atom_str}".'
                 # --autounmask's own keyword-suggestion sub-feature (see
                 # this function's own docstring for the full on/off

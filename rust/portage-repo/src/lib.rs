@@ -7942,6 +7942,177 @@ fn atom_currently_satisfiable(
     })
 }
 
+/// Real `getmaskingstatus._getmaskingstatus`'s human reason strings for a
+/// candidate that is *not* [`is_visible`] -- the `(masked by: …)` text
+/// [`all_masked_report`] puts after each `- <cpv>` line. Reason order
+/// mirrors real: `package.mask`, `LICENSE`, `PROPERTIES`, `RESTRICT`,
+/// `KEYWORDS`. `package.mask` and the `KEYWORDS` string (`"~<arch>
+/// keyword"` / `"-<arch> keyword"` / `"missing keyword"`) and the
+/// `LICENSE` string (`"<names> license(s)"`) match real verbatim;
+/// `PROPERTIES`/`RESTRICT` are the bare key name (real names the specific
+/// tokens -- portuale has no missing-token list for those two, and
+/// neither the L0 comparator nor the contract suite checks this line
+/// against real anyway; the two `!!!` header lines are what matter).
+fn candidate_masking_reasons(
+    candidate: &Candidate,
+    category: &str,
+    package: &str,
+    config: &portage_profile::Config,
+) -> Vec<String> {
+    let candidate_str = format!(
+        "{category}/{package}-{}:{}/{}::{}",
+        candidate.version, candidate.slot, candidate.sub_slot, candidate.repo_name
+    );
+    let mut reasons = Vec::new();
+
+    if any_config_entry_matches(&config.package_mask, &candidate_str, category, package)
+        && !any_config_entry_matches(&config.package_unmask, &candidate_str, category, package)
+    {
+        reasons.push("package.mask".to_string());
+    }
+
+    if !license_accepted(candidate, category, package, &candidate_str, config) {
+        let missing = missing_licenses(candidate, category, package, &candidate_str, config);
+        reasons.push(if missing.is_empty() {
+            "LICENSE".to_string()
+        } else {
+            format!("{} license(s)", missing.join(" "))
+        });
+    }
+
+    if !metadata_key_accepted(
+        &candidate.properties,
+        candidate,
+        category,
+        package,
+        &candidate_str,
+        config,
+        &config.accept_properties,
+        &config.package_properties,
+    ) {
+        reasons.push("PROPERTIES".to_string());
+    }
+
+    if !metadata_key_accepted(
+        &candidate.restrict,
+        candidate,
+        category,
+        package,
+        &candidate_str,
+        config,
+        &config.accept_restrict,
+        &config.package_accept_restrict,
+    ) {
+        reasons.push("RESTRICT".to_string());
+    }
+
+    if !keywords_accepted(
+        &candidate.keywords,
+        &candidate_str,
+        category,
+        package,
+        &config.accept_keywords,
+        &config.package_accept_keywords,
+    ) {
+        let kmask = candidate
+            .keywords
+            .iter()
+            .find_map(|k| {
+                k.strip_prefix('~')
+                    .filter(|a| config.accept_keywords.contains(*a))
+                    .map(|a| format!("~{a}"))
+                    .or_else(|| {
+                        k.strip_prefix('-')
+                            .filter(|a| config.accept_keywords.contains(*a))
+                            .map(|a| format!("-{a}"))
+                    })
+            })
+            .unwrap_or_else(|| "missing".to_string());
+        reasons.push(format!("{kmask} keyword"));
+    }
+
+    if reasons.is_empty() {
+        reasons.push("masked".to_string());
+    }
+    reasons
+}
+
+/// Real `_show_unsatisfied_dep`'s "All ebuilds that could satisfy
+/// `<atom>` have been masked" report (`depgraph.py:6992-7016` +
+/// `show_masked_packages`): built for a *top-level* atom that matches one
+/// or more ebuilds by version, every one of which is masked. `None` when
+/// the atom matches no ebuild at all by version (real's plain "there are
+/// no ebuilds to satisfy" case) or when some matching ebuild is actually
+/// `is_visible` (e.g. only a `[use]`-dep mismatch -- real's separate
+/// "no ebuilds built with USE flags" path, left to the autounmask-use
+/// machinery). `xinfo` is the already-quoted atom string for the header.
+fn all_masked_report(
+    repos: &[RepoConfig],
+    atom_str: &str,
+    config: &portage_profile::Config,
+    xinfo: &str,
+) -> Option<String> {
+    let atom = portage_dep::parse_atom(atom_str)?;
+    let candidates = list_candidates(repos, &atom.category, &atom.package).ok()?;
+
+    let strs: Vec<String> = candidates
+        .iter()
+        .map(|c| {
+            format!(
+                "{}/{}-{}:{}/{}::{}",
+                atom.category, atom.package, c.version, c.slot, c.sub_slot, c.repo_name
+            )
+        })
+        .collect();
+    let refs: Vec<&str> = strs.iter().map(String::as_str).collect();
+    // Real `db.match(atom.without_use)` -- version/slot filter, USE and
+    // visibility ignored.
+    let matched: std::collections::HashSet<&str> = portage_dep::match_from_list(atom_str, &refs)?
+        .into_iter()
+        .collect();
+
+    let mut masked: Vec<&Candidate> = candidates
+        .iter()
+        .zip(strs.iter())
+        .filter(|(_, s)| matched.contains(s.as_str()))
+        .map(|(c, _)| c)
+        .collect();
+    if masked.is_empty()
+        || masked
+            .iter()
+            .any(|c| is_visible(c, &atom.category, &atom.package, config))
+    {
+        return None;
+    }
+    // Real `cpv_list.reverse()` -> descending version.
+    masked.sort_by(|a, b| vercmp_ordering(&b.version, &a.version));
+
+    let mut out = format!(
+        "\n!!! All ebuilds that could satisfy {xinfo} have been masked.\n\
+         !!! One of the following masked packages is required to complete your request:\n"
+    );
+    let mut seen = std::collections::HashSet::new();
+    for c in masked {
+        let output_cpv = format!(
+            "{}/{}-{}::{}",
+            atom.category, atom.package, c.version, c.repo_name
+        );
+        if !seen.insert(output_cpv.clone()) {
+            continue;
+        }
+        let reasons = candidate_masking_reasons(c, &atom.category, &atom.package, config);
+        out.push_str(&format!(
+            "- {output_cpv} (masked by: {})\n",
+            reasons.join(", ")
+        ));
+    }
+    out.push_str(
+        "\nFor more information, see the MASKED PACKAGES section in the emerge\n\
+         man page or refer to the Gentoo Handbook.\n",
+    );
+    Some(out)
+}
+
 /// Real `dep_zapdeps`'s `all_installed` predicate for one `||` alternative
 /// atom (`dep_check.py:603-607`): `Atom(atom.cp)` -- **cp level**, with
 /// version, slot and use-deps all stripped -- is matched by the vdb, OR
@@ -13790,6 +13961,19 @@ fn backtracking_resolve(req: &ResolveRequest) -> Result<GraphResult, Error> {
             if top_level.contains(current_atom.as_str())
                 && matches!(outcome, PretendOutcome::NoVisibleCandidate)
             {
+                // Real `_show_unsatisfied_dep`: an atom that matches
+                // ebuilds which all turned out masked reports the "All
+                // ebuilds that could satisfy … have been masked" block
+                // (+ each masked candidate and why), not the "there are
+                // no ebuilds to satisfy" one.
+                if let Some(report) = all_masked_report(
+                    &repos,
+                    current_atom.as_str(),
+                    config,
+                    &format!("{current_atom:?}"),
+                ) {
+                    return Err(Error::Detail(report));
+                }
                 let mut message = format!("there are no ebuilds to satisfy {current_atom:?}.");
                 // --autounmask's own keyword-suggestion sub-feature (see
                 // this function's own doc comment for the full on/off
@@ -24521,9 +24705,17 @@ mod tests {
             false,
         )
         .expect_err("no visible candidate at all");
+        // Keyword-masked-only -> real `_show_unsatisfied_dep`'s "All
+        // ebuilds … have been masked" block (`~amd64 keyword`), not the
+        // bare "there are no ebuilds to satisfy" line.
         assert_eq!(
             err_without_suggestion.to_string(),
-            "there are no ebuilds to satisfy \"dev-libs/autounmaskkeywordpkg\"."
+            "\n!!! All ebuilds that could satisfy \"dev-libs/autounmaskkeywordpkg\" \
+             have been masked.\n\
+             !!! One of the following masked packages is required to complete your request:\n\
+             - dev-libs/autounmaskkeywordpkg-1.0::testrepo (masked by: ~amd64 keyword)\n\
+             \nFor more information, see the MASKED PACKAGES section in the emerge\n\
+             man page or refer to the Gentoo Handbook.\n"
         );
 
         // With `--autounmask` explicit, the same keyword-masked-only
