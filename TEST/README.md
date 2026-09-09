@@ -11,7 +11,7 @@ Two things live here:
 2. **The differential test bed** (`run/`, `compare/`, `layers/`,
    `atomlists/`, `net/`, `images/`) — the structured Portuale-vs-Portage
    comparison described in
-   [`docs/real-world-testing.md`](../docs/real-world-testing.md). Built
+   [`docs/history/real-world-testing.md`](../docs/history/real-world-testing.md). Built
    slice by slice; **slice 1 = infra + L0**.
 
 ---
@@ -61,7 +61,7 @@ TEST/run/l1-merge-from-binpkg.sh TEST/atomlists/l1-porttest.txt   # synthetic ed
 ```
 
 `atomlists/l1-porttest.txt` is the `porttest` synthetic set (§7 of
-`docs/real-world-testing.md`) — nine fixtures each isolating one
+`docs/history/real-world-testing.md`) — nine fixtures each isolating one
 merge-path behaviour (setuid/caps, hardlinks, symlink farm, `keepdir`,
 `dodoc`, `INSTALL_MASK`, `pkg_*` phase markers, `splitdebug`, unicode
 names). Live-mounted from `images/overlay/porttest/`, staged only when

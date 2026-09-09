@@ -1,14 +1,11 @@
 # Agent context: portuale, a Rust reimplementation of Portage
 
-This file (`docs/agent-context.md`, formerly `PROMPT-next.md`) is the
-single entry point for (re)deriving where portuale stands and what to
-do next, without repeating the discovery conversations that produced it.
-It merges: the original porting-strategy prompt (goals, hard constraints,
-architectural decisions — the standalone historic copy is
-[`history/porting-strategy-prompt.md`](history/porting-strategy-prompt.md)),
-the phase-execution/bash-backend investigation, the current shipped
-state, and the open backlog. The session-to-session operating rhythm
-lives in [`../AGENTS.md`](../AGENTS.md).
+This file is the single entry point for (re)deriving where portuale
+stands and what to do next: goals, hard constraints, architecture
+decisions, the phase-execution/bash-backend findings, and pointers to the
+live state + open backlog. The original porting-strategy prompt is
+[`history/porting-strategy-prompt.md`](history/porting-strategy-prompt.md);
+the session-to-session operating rhythm is [`../AGENTS.md`](../AGENTS.md).
 
 As with any settled decision below: if you disagree, say so explicitly
 and re-open it — don't silently override it.
@@ -17,10 +14,12 @@ and re-open it — don't silently override it.
 
 Portage (this repository) is the Gentoo package manager, written in Python.
 Portuale is a Rust reimplementation of it, developed as a **friendly
-fork**: a separate, cooperating codebase, not a hostile competitor. The
-aim is a **real, drop-in, same-behaviour replacement** (and then some) —
-reached one reviewed, contract-tested slice at a time. It is not there
-yet; `scope-backlog.md` is the honest distance-to-parity.
+fork**: a separate, cooperating codebase, not a hostile competitor. It is
+a **working package manager** — it resolves, builds, merges, and unmerges
+real Gentoo packages — and the aim is a **drop-in, same-behaviour
+replacement** (and then some), reached one reviewed, contract-tested
+slice at a time. `scope-backlog.md` Part 2 is the honest list of what
+real portage still does that portuale doesn't.
 
 **EAPI floor**: EAPI 0, 1, 2, 3, 4, and 6 are deprecated and removed in
 this repo/fork — no ebuild uses them, and all profiles are EAPI 5 or
@@ -73,18 +72,16 @@ this precedent is invoked.)
   forecloses either: subprocess/CLI-based testing keeps both open,
   in-process FFI embedding (e.g. PyO3) would not — avoid it.
 
-## Scope of the first port
+## Scope
 
 1. **Core library**: version comparison (`portage.versions`), atom/dep
    parsing and matching, config resolution, dependency graph (depgraph).
-2. **`emerge` and `ebuild` executables.** The first slice was deliberately
-   restricted to **dry-run / read-only** behavior (dependency resolution,
-   `--pretend` output, parsing and validation) to limit blast radius while
-   the parity test suite was still young. **That restriction no longer
-   holds**: real ebuild phase execution and filesystem-mutating
-   merge/unmerge have since shipped too (see "Real ebuild phase execution
-   + filesystem merge" below) — it's live, exercised by real fixtures, and
-   has its own ongoing backlog, not a deferred future phase anymore.
+2. **`emerge` and `ebuild` executables** — both dry-run resolution
+   (`--pretend`, `--json`) and real execution: ebuild-phase execution,
+   filesystem-mutating merge / unmerge / package / config, binpkg
+   build+merge, the parallel build scheduler, world-file management. See
+   "Real ebuild phase execution + filesystem merge" below and
+   `what-this-proves.md`.
 
 ### `emerge`/`ebuild` binary shape
 
@@ -126,7 +123,7 @@ implements (`pretend.rs`'s `HELP_TEXT`, mirrored in
   minimal (`scratch`/busybox-level) container.
 - **Container-based real-system differential test bed** (`TEST/`, see
   [`TEST/README.md`](../TEST/README.md) and
-  [`docs/real-world-testing.md`](real-world-testing.md)): runs portuale
+  [`history/real-world-testing.md`](history/real-world-testing.md)): runs portuale
   *and* the real `emerge` against a pinned real Gentoo tree inside
   throwaway `podman` containers and diffs the results. **L0**
   (`TEST/run/l0-resolver.sh`) — `emerge -pv` for ~120 real atoms
@@ -134,10 +131,9 @@ implements (`pretend.rs`'s `HELP_TEXT`, mirrored in
   order / errors / exit codes. **L1**
   (`TEST/run/l1-merge-from-binpkg.sh`) — both PMs merge an identical
   prebuilt binpkg set into a fresh `/` and the resulting filesystem + VDB
-  snapshots are diffed. It is **live and exercised** (not the "planning
-  only" that `real-world-testing.md`'s header still says), and it is the
-  only check that catches resolver / merge-path regressions at real-tree
-  scale — the fixture-based pytest contract suite cannot. Needs the
+  snapshots are diffed. It is **live and exercised** — the only check
+  that catches resolver / merge-path regressions at real-tree scale (the
+  fixture-based pytest contract suite cannot). Needs the
   `localhost/test-portuale:latest` image (`sudo TEST/create-container.bash`).
   It is **slower and heavier** than the pytest/`cargo test` pass, so it
   is not part of every slice's verification — but running L0 (and L1
@@ -162,541 +158,55 @@ implements (`pretend.rs`'s `HELP_TEXT`, mirrored in
   shared submodule) — neither team may unilaterally narrow it to make
   their side pass.
 
-## Current state (read `what-this-proves.md` for the authoritative, living detail)
+## Current state
 
-Both major phases of portuale are live — re-verify against `git
-log`/`what-this-proves.md` before trusting this paragraph for long, since
-it decays fast.
+portuale is a **working package manager**, used on real systems. It
+resolves, builds, merges, unmerges, and manages the world file for real
+Gentoo packages, with real ebuild-phase execution and real filesystem
+mutation. The `--pretend` resolver is validated against real `emerge`
+at real-tree scale (`TEST/` L0: ~120 real atoms, 96/120 byte-identical
+plans; L1: filesystem+VDB merge parity, clean).
 
-**Infrastructure (2026-09-06)**: the whole `rust/` workspace now builds
-on **edition 2024** (`[workspace.package] edition = "2024"`, one line;
-every crate inherits via `edition.workspace = true`). See
-`what-this-proves.md`'s "Edition 2024 migration" for the two real code
-edits it required (a `portage-repo` binding-mode pattern, `unsafe`
-wrapping of `set_var`/`remove_var` in `elog.rs`'s test helper) and why
-the clippy/fmt churn is behavior-preserving. The toolchain here is
-1.97.1 — comfortably past edition 2024's 1.85 floor. The four harness
-binaries' shared `run_batch`/`main` scaffolding now also lives in a
-small `harness-common` crate (same day) — a behavior-preserving dedup
-of the only genuinely byte-identical duplication a `cargo dupes` scan
-found; see `what-this-proves.md`'s "Harness-scaffolding dedup" entry.
-Same day, **refactor-01 S1** (the `rust-skills` skill's CRITICAL
-`unsafe-safety-comment` rule): `// SAFETY:` markers added above every
-`unsafe` block in `portuale/src` (the library crates contain no
-`unsafe` at all); see `what-this-proves.md`'s "refactor-01 S1" entry
-and the audit at `docs/history/refactor-CRITICAL.md`. Same day, **refactor-01 S2**: the
-`portage-versions` overflow panics are gone — components, revisions,
-and suffix numerals wider than `i128` now fall back to an
-arbitrary-length decimal comparison (`Part::BigNum`), mirroring the
-Python reference's unbounded `int`; a previously-silent parity bug
-(huge suffix numerals coerced to `0`) was fixed in the same pass.
-Same day, **refactor-01 S3**: the workspace's only `&String`-typed
-parameter (`pretend.rs`'s `vercmp_key`) is now `&str`, and the 3
-`portage-versions` test-module clippy warnings from S2 were cleaned,
-restoring a genuinely zero-warn `--all-targets` build. Same day,
-**refactor-01 S4** (the `err-*` error model, option B): every library
-crate — `portage-use-reduce`, `portage-fetch`, `portage-required-use`,
-`portage-repo`, `portage-profile` — now has its own hand-rolled
-`pub enum Error` (byte-identical `Display`, `From<Error> for String`
-for crossing sites, `portage_repo::Error` composing the two/three it
-forwards); `portuale::Error { kind, detail: Vec<String> }` (§2.1's
-bounded seam) now types only the CLI boundary (the `pretend.rs` resolve
-handle, kind `"resolve"`), while portuale's `Result<_, String>`
-internals and the harnesses stay `String` per §2.1's "not now". Zero
-behavior change; suite totals now 799/799 Rust and pytest 1292 passed /
-5 pre-existing non-TTY failures / 2 skipped. Same day, the **refactor-01
-HIGH audit doc** (`api-`/`async-`/`conc-`/`num-`/`opt-`, 56 rules) was
-written at `docs/refactor-HIGH.md` with the CRITICAL doc's constraints
-as backdrop: 2 actionable findings (`opt-lto-release` and
-`opt-codegen-units` — a recommended `lto = "thin"` + `codegen-units = 1`
-release-profile change, gated on the user/CI's call), 4 compliant + 3
-compliant-profiling-gated `opt-` inline/cold/SIMD notes (gated on the
-`perf` write-up — now `docs/performances-tuning.md`, see below), 1 deliberate
-`opt-target-cpu` rejection (portability-first static musl binary), 2
-`opt-` N/A verdicts (PGO and SIMD both rejected), deliberate deviations
-recorded (no builders, no newtypes, error enums trait-poor, blocking
-subprocess/`std::fs` inside the async tree — the latter documented
-in-repo at `ebuild_phases.rs:1833`); 10 N/A api- + 13 N/A async- rules
-documented as the internal-crate/single-task-runtime posture;
-`num-cast-try-from` closed compliant in production, and its one
-test-only hygiene note (`make_xpak_binpkg` `as u32` XPAK casts in
-`binpkg.rs`) was **fixed** the same day by routing the lengths through
-`u32::try_from` (`xpak_u32`, panics like Python's `struct.pack`; 799/799,
-clippy zero-warn, fmt clean). The `shared_runtime` worker-count question
-(should it be `new_current_thread()` given exactly one buffered future?)
-is parked open in the doc's judgment-calls section, tied to the
-profiling write-up. All 56 HIGH rules audited; `opt-` category resolved
-(what remains is build-config work, not code).
+For the authoritative, cited-source record of every shipped capability
+read **[`what-this-proves.md`](what-this-proves.md)** (the living
+per-slice ledger) and `git log`. The per-slice "current state" narrative
+that used to live here is snapshotted at
+[`history/agent-context-current-state-2026-09-10.md`](history/agent-context-current-state-2026-09-10.md).
 
-**Performance (2026-09-07)**: `docs/performances-tuning.md` is the
-profiling write-up the `opt-` notes above were gated on. A `perf` +
-call-counter investigation of a live `emerge -puD --getbinpkg` found the
-resolver was doing ~2 orders of magnitude more work than real portage —
-34 M backtracking-regex atom parses for a 15-package result — because
-every per-package computation re-scanned the whole `package.*` config
-and nothing was memoised. Six commits (`67af529`..`8c5ea9c`) took the
-run **77 s → 4.5 s** (17×, now ~3.5× faster than a real `emerge`), all
-byte-identical: `parse_atom`/`parse_candidate` memo, cp-bucketed
-`package.*` config (portuale's `ExtendedAtomDict`), precomputed
-`profiles/updates/` move chains + memoised `all_installed_packages`,
-memoised `read_md5_cache` / `effective_use_flags` / `list_candidates`.
-The remaining `opt-lto-release` + `opt-codegen-units` recommendation
-(`lto = "thin"` + `codegen-units = 1`) measures a further ~7 % off CPU
-time and is still user/CI-gated.
-
-**Dry-run (`emerge --pretend`)**: full recursive DEPEND/RDEPEND/BDEPEND/
-PDEPEND/IDEPEND resolution; profile/make.conf-derived USE/ACCEPT_KEYWORDS
-with the real `USE_ORDER` precedence for the full
-`env.d`/`repo`/`features`/`pkginternal`/`defaults`/`conf`/`pkg`/`env`
-layer chain (`env.d` from `/etc/profile.env`, the lowest tier, added
-2026-09-03 — Part 2.C is now complete); every `package.*` file
-(`.mask`/`.unmask`/`.accept_keywords`/`.use`/`.use.mask`/`.use.force`/
-`.use.stable.mask`/`.use.stable.force`), repo-scoped across main **and**
-overlay repos; `package.provided` (a listed CPV satisfies a dependency
-atom silently / triggers the real `WARNING: … package.provided:` block
-for a direct target); explicit `repos.conf` `masters =` parsing (not just
-the implicit main-repo default); cross-repo profile parents;
-bare command-line names (`emerge eix` → `app-portage/eix`, real
-`dep_expand`/`cpv_expand`, ambiguity → the real `!!! ... ambiguous`
-block, added 2026-09-03); `USE_EXPAND`;
-REQUIRED_USE; blockers; slot conflicts (sub-slots, slot operators);
-slot-aware installed matching with the `[ebuild NS]` new-slot marker;
-the `[ebuild I..]` interactive (`PROPERTIES=interactive`) bracket column;
-the `-pv` `Total: N packages (…)` / `Conflict:` counters summary line;
-the `[ebuild ..f]`/`[ebuild ..F]` `RESTRICT=fetch` bracket column, and
-`-pv`'s `Size of downloads` / `Fetch Restriction:` counters lines
-(completing `_PackageCounters`); the `-pv` `USE=` line's enabled-first
-order + `--alphabetical` + `all_flags` (always on for `-pv`: the diff
-shows every flag, plain for unchanged, `(-flag%)` for one dropped from
-IUSE); the real `PkgAttrDisplay` fixed-width bracket field
-(`[I][N/r][S/R][f/F/g][U][D]` + a 7th mask column at `-v`) and the
-`[old-ver]` column replacing the `(upgrade from X)` / `(reinstall for …)`
-prose (increment 1 of the `-pv` real-`output.py` layout + ANSI-colour
-buildout — see README's own two `-pv layout + colour` bullets; increment 2
-(the `\x1b[` colour primitive + `--color=y|n` gating via new
-`portuale/src/color.rs` + the coloured bracket line, `pkgprint`
-world/system palette), increment 3 (USE-flag colours), and increment 4
-(counters-line `interactive`/fetch colour + `-pC`/`-pc`/`-pP`
-cleanup-action colour), and increment 5 (blocker line: real
-`output.py::_blockers` `[blocks B     ]` layout + `PKG_BLOCKER` red
-colour + deferred "print after every package line" ordering, new
-`dev-libs/blockerorderpkg` fixture) all shipped 2026-08-29 — the `-pv`
-layout + colour buildout is complete bar `--autounmask` message colour,
-its own future slice); verbosity-3
-`:slot`/`::repo` decoration of the bracket cpv + every `[old-ver]` (real
-`_append_slot`/`_append_repository`/`convert_myoldbest`,
-`GraphEntry::sub_slot`/`repo_name`/`oldbest`) shipped 2026-08-29 too; the
-`g` remote-binpkg bracket column shipped 2026-08-29 with the `--pretend`
-half of `--getbinpkg`/`--getbinpkgonly` (`binrepos.conf` +
-`PORTAGE_BINHOST` parsing via new `portage-profile` `BinRepo`/
-`parse_binrepos`, remote binhost `Packages`-index candidates via
-`portage-repo` `list_remote_binary_candidates`, `Size of downloads:` from
-the index `SIZE`), completing the `-pv` output arc: the real
-`--autounmask` block shipped for both the keyword and USE kinds
-2026-08-30 (`emerge --pretend [--autounmask] <blocked-pkg>` resolves the
-graph with the implicit `=cpv ~arch` / `package.use` flip applied +
-prints real `_display_autounmask`'s `The following <X> changes are
-necessary to proceed:` block, exit 0; `-pv`'s `USE=` line reflects the
-USE flip);
-multiple/versioned/slotted atoms; USE-deps including the `opt=`/`opt?`
-conditional forms; `--update`/`--deep`/`--emptytree` (`-e`: forces deep,
-clears selective, every installed atom in the tree -> a bare
-`[ebuild R]` reinstall -- for comparison with real portage +
-debugging)/`--newuse`/`--changed-use`/
-`--changed-deps`/`--changed-slot`/`--changed-deps-report`/`--with-bdeps`/
-`--with-test-deps`/`--selective`/`--noreplace`/`--onlydeps`/`--nodeps`/
-`--exclude`/`--deselect`/`--unmerge`/`-C` (full `_unmerge_display`:
-selected/omitted/protected, sys-apps/portage self-skip, system-profile +
-still-listed-in-sets warnings, a literal
-`/var/db/pkg/cat/pkg-ver[/pf.ebuild]` path arg — **and, without
-`--pretend`, a REAL removal now**: `pretend.rs::execute_unmerge` →
-`ebuild_merge::unmerge_one_installed` per selected version
-(`pkg_prerm` from vdb-saved env → files → `pkg_postrm` → vdb dir),
-`>>> Unmerging (N of M)` lines, then `deselect_from_world` (real
-`WorldSelectedPackagesSet.cleanPackage`); the `requires --pretend` gate
-is gone)/`--depclean`/
-`-c` (no-args full form AND the `--depclean <atoms>`
-narrowing — the RDEPEND/PDEPEND/DEPEND/BDEPEND reachability closure
-from `@world`+`@system` (build-time deps kept, real bdeps="auto" for
-remove mode), the cleanlist in real topological removal order
-(`topological_removal_order`, incl. the `runtime_slot_op` edge-priority
-bump and the cycle-breaking single-node pop as of 2026-08-31), the stats
-block; `--verbose` reverse-dep display
-(`show_parents`: `<cpv> pulled in by: <parent> requires <atom>`);
-`--depclean-lib-check` (the `NEEDED.ELF.2` soname-consumer scan — a
-cleanlist pkg a surviving binary still links against is kept, via a
-second cleanlist pass; the `* …will not be removed` WARNING; `=n`
-skips it + shows the `Depclean may break link level dependencies`
-advisory; wires up the previously-dead `needed_elf` module); the
-"dependencies could not be completely resolved" safety halt (real
-`unresolved_deps()` — a kept pkg's unsatisfiable hard runtime dep
-(`RDEPEND`/`PDEPEND`) prints the `bad(" * ")` block and exits 1 without
-removing anything; `||`-group + libc-provider atoms narrowed out);
-**without `--pretend`: real removal** via `execute_unmerge`, stats line
-`Number removed:`
-)/`--prune`/`-P` (`prune_cleanlist` — non-highest
-versions of multi-version cps, kept if still needed; no advisory/stats
-block; `--verbose` `show_parents` display; `--depclean-lib-check` too;
-`--nodeps` = the `_unmerge_display` prune branch, no dep check at all
-(`prune_nodeps_selection`); **without `--pretend`: real removal** too)/`--config`
-(real `action_config` — one atom, vdb-matched; `Configuring pkg...` +
-real `pkg_config` from the vdb-saved env via
-`ebuild_merge::run_vdb_saved_env_phase`; ignores `--pretend`; `--ask`
-picker cut)/`--alphabetical` (the `-pv` `USE=`
-line is enabled-first by default now, real `_create_use_string`;
-`--alphabetical` gives the one interleaved list)/`--autounmask`/`--autounmask-use`/
-`--autounmask-keep-keywords`/`--newrepo`/`--rebuilt-binaries`/
-`--buildpkgonly`/`--usepkg-exclude`/real `--tree` nested display/
-`--root-deps` (v1 scope: running-root existence check only, see backlog);
-binary package support (`--usepkg`/`--usepkgonly`/`--binpkg-respect-use`);
-a `--json` mode with a per-entry mask/unmask/keyword *provenance*
-state-change trace; full CLI-surface recognition for both `emerge` and
-`ebuild`.
-
-**Real execution (filesystem-mutating)**: `ebuild <file> install` runs the
-real 8-phase chain driving unmodified `bin/*.sh` — by default via a real
-`bash` subprocess, optionally via the embedded `brush` (`--shell brush`;
-the default flipped from `brush` to `bash` on 2026-09-01 after brush's
-`declare -f` was found to corrupt real eclass functions — see
-`what-this-proves.md`, "`--shell` default is now `bash`", and
-`brush-pin.md`); `ebuild <file> merge` really copies `${D}` into
-`${ROOT}` and writes a real vdb entry, with real `CONFIG_PROTECT`
-(`obj`/`sym` entries, `NOCONFMEM`, `new_protect_filename` file reuse),
-`FEATURES=collision-protect`/`protect-owned`, preserve-libs collision
-exclusion, real blocker exclusion, and `env_update()`/`ldconfig`
-triggering; `ebuild <file> qmerge` does the same minus a redundant
-`install` re-run, gated on the real `${PORTAGE_BUILDDIR}/.installed`
-marker; `ebuild <file> unmerge` really removes a package, including
-the `others_in_slot` reverse-dependency check, its own "symlink
-orphan" refinement (bug #326685/#640058), real
-`FEATURES=unmerge-orphans`, real `INFOPATH` cleanup, real
-`stale_confmem` cleanup, and real preserve-libs registration
-(a still-needed shared library survives unmerge and the real
-`preserved_libs_registry` is updated, not just the earlier merge-side
-collision exclusion); standalone
-`ebuild <file> config`/`info`/`prerm`/`postrm` really run the real
-`pkg_config`/`pkg_info`/`pkg_prerm`/`pkg_postrm` phase functions, no
-merge/unmerge/vdb step involved; `ebuild <file> package` builds a real
-binpkg, real `PORTAGE_COMPRESSION_COMMAND` resolution (all six real
-compressors, `BINPKG_COMPRESS` defaulting to real `"zstd"`); `emerge
---buildpkgonly` (without `--pretend`) really builds; a plain `emerge
-<atom>` (no `--pretend`) really builds **and merges** from source
-(`emerge_build::run_source_merge`; `New` + `Upgrade`/`Downgrade`/
-`Reinstall` — an in-place same-slot replace unmerges the old version via
-`ebuild_merge::unmerge_replaced_same_slot`, shared with `merge_binpkg`
-and `ebuild <file> merge`); and `emerge --getbinpkg`/`--getbinpkgonly`
-merges a mix of binary and source entries per the resolver's plan
-(`emerge_getbinpkg::run_merge_plan`); real `SRC_URI`
-fetch (including `mirror://`/`custommirrors` resolution and real
-`FEATURES=distlocks` file locking) via real `wget`; real eclass
-`inherit()` support; `ebuild --shell bash|brush` and `emerge --shell
-bash|brush` (portuale-only flags) pick the execution backend explicitly —
-`emerge`'s covers every real phase chain it can drive as of 2026-09-02
-(source/binpkg merge, the `pkg_prerm`/`pkg_postrm` removal hooks under
-`-C`/`--unmerge`/`--depclean`/`--prune`/`--clean`/`--rage-clean`, and
-`emerge --config`'s `pkg_config`).
-As of 2026-09-01 `emerge -v app-portage/eix` completes a full real merge
-against a live `~amd64` tree (real `eautoreconf`/`./configure`/`make`/
-`make install` → vdb entry; `qlist -I` agrees) — see `what-this-proves.md`,
-"`PORTAGE_PYM_PATH` is now set".
-
-**Backtracking (resolver retry loop)** — the `--autounmask*` family is
-fully shipped, and as of 2026-09-01 **slice 1 of real backtracking**:
-`resolve_pretend_graph` is now a `'backtrack` retry loop (real
-`_emerge/resolver/backtracking.py` shape) — each pass rebuilds the graph
-from scratch, and a **solvable slot conflict** (one version of the
-conflicted `cat/pkg` satisfies every parent atom that landed on the slot)
-folds those atoms into `slot_constraints`, fed to `resolve_pretend`'s new
-`extra_constraints` param, and the whole walk re-runs (up to
-`MAX_BACKTRACK = 10`). Unsolvable conflicts, and anything still
-conflicting after 10 passes, fall through and are reported as before.
-**Slice 2 (2026-09-01)** added the real `--backtrack=COUNT` flag
-(`backtrack_max` param, default 10, `--backtrack=0` disables). **Slice 3
-(2026-09-01)** added the real `runtime_pkg_mask`: `extra_constraints`
-gained a `!`-negation form, `resolve_pretend_graph` tracks `slot_pullers`
-and runs a trial-and-revert state machine — on an unsolvable slot
-conflict it masks the conflicted `cpv` + every puller-parent version with
-a lower alternative, re-runs, and keeps the masks only if every conflict
-clears with no new `NoVisibleCandidate`. **Slice 4 (2026-09-01)** replaced the compact `[slot conflict]` line with
-a simplified transcription of real `_show_slot_collision_notice` →
-`slot_conflict_handler.get_conflict()`: the `!!! Multiple package
-instances …` block (`SlotConflict.instances` = every conflicting version
-+ its `(parent_cpv, atom)` pullers, via `build_slot_conflict`) + the
-advisory paragraph with the `--backtrack=30` hint gated the real way.
-**Resolver extraction (2026-09-03)**: the ~1700-line graph walk +
-backtracking loop moved out of `resolve_pretend_graph` into
-`backtracking_resolve(req: &ResolveRequest)` behind a `trait Resolver` /
-`struct BacktrackingResolver` / `active_resolver() -> Box<dyn Resolver>`.
-`resolve_pretend_graph` is now a thin 44-arg marshaller (every call site
-untouched). The resolver is self-contained and runtime-swappable -- a
-different architecture is one `impl Resolver` plus an `active_resolver`
-branch, no call-site changes. Pure refactor, full suite byte-identical.
-**Slot-collision notice fidelity (2026-09-03)**: the slice-4 transcription
-grew real `_prepare_conflict_msg_and_check_for_specificity` --
-`collision_reasons` grouping (version `ge`/`eq`/`le`), one
-representative per reason (`--verbose-conflicts` shows all, and is now
-wired instead of rejected), the `pkg_use_display` ` USE=""` slot, the
-`highlight_violations` `^` marker line, `(and N more with the same
-problem[s])`, and the `NOTE: Use the '--verbose-conflicts' option …`
-footer. Fixture: `dev-libs/slotconfgroup`.
-
-Autounmask levels tried in sequence inside the loop, and both real
-`||`-preference / slot-operator-rebuild feedback paths driving a retry,
-shipped 2026-09-03 (see `scope-backlog.md` Part 1 / `what-this-proves.md`)
--- this paragraph predates that work and is kept only for the slice-1-4
-chronology above. Still deferred (see `scope-backlog.md` Part 2.A): the
-`Dependency resolution took X s (backtrack: N/M)` report line
-(non-deterministic timing -- deliberate cut; the `--backtrack=30` hint
-gating already ships), full elementary-cycle enumeration for the
-"circular dependencies" notice, and the slot-notice's remaining cuts
-(`pkg_use_display` for non-default USE, `use`/`soname` reason keys,
-colorization, `need_rebuild`).
-
-**`mrg` applet (2026-09-06: a clap front end over portuale's own emerge
-codepath)**: a new third applet `mrg` was added to the multicall
-binary — the deliberate counter-example to emerge/ebuild's
-near-zero-dependency, hand-rolled posture. `mrg` is allowed (and now
-does) lean on a major mainstream crate: `clap = "4"` (pure Rust, zero C
-linkage, so the musl-static story is untouched) builds the whole parser
-from one `OPTIONS` table carrying real emerge's own option surface —
-every action and option, short and long spelling as-is, the real
-`longopt_aliases` (`--cols`, `--skip-first`) and the real
-`actions`-with-shorts (`-c -C -P -s -V`, the `-X`/`-B`/`-U` `option`
-shorts), plus required-value choice options, and repeatable
-`action: "append"` options. `mrg` **parses with clap, translates the
-match into canonical long-form argv (`to_emerge_argv`), and hands it to
-`pretend::run`** — the exact function the `emerge` applet runs — so
-resolution output, error messages, and exit codes are literally
-emerge's. **`mrg` is a portuale-only
-applet — there will never be a portage counterpart or Python reference
-implementation.** Only its CLI surface matters, and the black-box tests
-live in `tests/test_portuale.py` (including a byte-identical-output
-assertion against the `emerge` applet). Real-fidelity
-notes: the `--deep`/`-D`, `--jobs`/`-j`, `--load-average`/`-l`
-optional-value numerics mirror real `insert_optional_args` exactly —
-a following token is the value only when real emerge's own validator
-accepts it, the bare form carries real's literal `"True"` and is
-forwarded BARE (the codepath's strict `=` validation rejects
-`--deep=True`), and `-j y`/`-j n` forward BARE = unlimited jobs (implemented
-via `require_equals` + a `join_optional_values` pre-pass and unit-tested
-for the `-D cat/a` atom, `-j 4`/`-j4`, and `-j y` forms); options the
-codepath does not implement yet are forwarded BARE so they are reported
-by their real spelling (`emerge: option "--root" is a real emerge
-option, but is not yet implemented in portuale ...`, exit 2). Usage
-errors exit 2, help exits 0, short flags bundle like real argparse
-(`-pv`). See `what-this-proves.md`'s "`mrg` applet" entries
-(the second one is "the clap front end now runs portuale's emerge
-codepath") and `mrg.rs`'s module doc comment (which records the
-deliberate cuts: the y/n optional-value *family* is modelled as plain
-flags so `-av pkg` never swallows the atom, and the `=y`/`=n` spellings
-are not parsed yet). `mrg` is registered in the `Applet` enum /
-`from_name` / `print_applets` / `run` dispatch like the other two.
-
-**`mrg` director contracts (2026-09-06)**: `mrg` is more than a second
-front end — it is the *director*, orchestrating interchangeable
-components (solver / installed-db / repo cache / fetcher / merge
-method / binpkg-index / news selector / scheduler policy — **eight slots
-since 2026-09-08**, when the three named-only future slots
-(`BinpkgIndex` with its local `$PKGDIR` + remote binhost second
-implementation, `NewsSet`, `SchedulerPolicy`) all shipped). The
-`rust/mrg-director` crate is the
-contract layer for that (traits + single-implementation markers + the
-`Director` wiring struct + shape-pinning tests, no runtime behaviour),
-each slot grounded in real `3rdparty/portage/lib` sources
-(`depgraph.py`, `dbapi/vartree.py`, `bintree.py`, `cache/template.py`,
-`package/ebuild/fetch.py`, `news.py`, `_emerge/Scheduler.py`,
-`MergeListItem.py`/`PackageMerge.py`).
-`mrg` itself still calls `pretend::run` directly until a second
-algorithm per slot actually lands; see `what-this-proves.md`'s "`mrg`
-director contracts" entry and `scope-backlog.md` Part 2.H.
-
-`what-this-proves.md` is the incrementally-
-updated record of every shipped slice, each grounded in cited real Python
-source — read that, not this list, for current detail, and `git log` for
-how work has actually been landing (one small, fully-shipped, documented-
-and-tested slice at a time — see "How portuale actually runs" below).
-
-### Open backlog
-
-This section previously carried a per-slice "recently closed" / shipped
-narrative that had grown to ~700 lines — the same drift `scope-backlog.md`
-fought, and the same fix: the narrative is gone. It is snapshotted at
-[`history/agent-context-open-backlog-2026-09-03.md`](history/agent-context-open-backlog-2026-09-03.md).
-
-- **What has shipped** — `what-this-proves.md` (the living, cited-source
-  per-slice record) and `git log` (one small, fully-shipped,
-  documented-and-tested slice at a time).
-- **What is genuinely still open** — real portage behaviour not ported to
-  either side, the deliberate cuts, the standing non-goals, and the
-  honest distance to a drop-in replacement: **`scope-backlog.md`** (Part
-  2 = remaining work, Part 3 = non-goals, Part 4 = distance-to-parity).
-  Kept lean on purpose; keep it current when a slice closes one of its
-  entries.
-
-The architectural core of a **real backtracking resolver**
-(`scope-backlog.md` Part 2.A / Part 4) is now in place: the shipped
-`'backtrack` loop reconciles solvable slot conflicts, masks unsolvable
-ones, renders the real notices, tries autounmask levels *inside* the
-loop, and drives both `||`-preference / slot-operator-rebuild feedback
-into a retry. What's left there is depth/fidelity work on pieces already
-built, not a missing mechanism — see Part 2.A for the specific remaining
-cuts. Everything else in Part 2 is one focused slice each.
-
+For what is **genuinely still open** — real portage behaviour not ported
+to either side, the deliberate cuts, the standing non-goals — see
+**[`scope-backlog.md`](scope-backlog.md)** (Part 2 = remaining work,
+Part 3 = non-goals). Keep that file current when a slice closes an entry.
 When scoping the next slice, re-ground candidates in current code
 (`what-this-proves.md` / `git log` / the source), never in a stale list.
 
 ### `helpers/` reference material
 
 - `helpers/devmanual/` — a full local checkout of the Gentoo
-  devmanual (`function-reference/`, `tools-reference/`, and per-phase
-  `ebuild-writing/functions/*/text.xml` docs). Useful any time real
-  ebuild-helper (`doins`, `dodir`, `insinto`, etc.) or phase-ordering
-  semantics need grounding.
-- `helpers/emerge_-1v_--debug_--getbinpkgonly__sys-fs--fuse.log`
-  — a real `emerge --getbinpkgonly` debug trace. The remote binpkg
-  download + merge is shipped (the trace's own "live `layout.conf`
-  negotiation" and `Packages.bz2`/`.lz4` were later found to be
-  mis-scoped -- not real `bintree.py` mechanisms at all, see
-  `scope-backlog.md` Part 2.E); this trace stays useful for the
-   remaining 2.E tail (fetch ordering -- the `BUILD_TIME`-vs-installed
-   reinstall trigger, binpkg `SHA1`, and gpkg `.sig`
-   signing/verification all shipped 2026-09-08/09, and `identical_binary`
-   / `useoldpkg`-multi-instance were investigated and found
-   already-correct;
-  `splitdebug`/`packdebug` and `binpkg-multi-instance` for both
-  formats have since shipped).
+  devmanual (`function-reference/`, `tools-reference/`, per-phase
+  `ebuild-writing/functions/*/text.xml`). Ground real ebuild-helper
+  (`doins`, `dodir`, `insinto`, …) or phase-ordering semantics against it.
+- `helpers/emerge_-1v_--debug_--getbinpkgonly__sys-fs--fuse.log` — a real
+  `emerge --getbinpkgonly` debug trace; still useful for the remaining
+  2.E fetch-ordering tail (`scope-backlog.md`).
 
-## Real ebuild phase execution + filesystem merge (shipped; ongoing refinement)
+## Real ebuild phase execution + filesystem merge
 
-This used to be "the next major phase after dry-run" — it's fully live
-now. `ebuild <file> install` runs the real `pretend → setup → unpack →
-prepare → configure → compile → test → install` chain via an embedded
-`brush` shell driving real, unmodified `bin/*.sh`
-(`rust/portuale/src/ebuild_phases.rs`). `ebuild <file> merge`
-copies `${D}` into `${ROOT}`, writes a real vdb entry, and runs real
-`pkg_preinst`/`pkg_postinst` (`ebuild_merge.rs`). `ebuild <file> unmerge`
-is `merge`'s natural complement (`ebuild_unmerge.rs`), without which
-`merge` alone could never be exercised through a real install/reinstall/
-removal cycle. `ebuild <file> package` builds a real binpkg
-(`ebuild_package.rs`). `emerge` itself has real, non-`--pretend`
-merge actions now (all in `emerge_build.rs` / `emerge_getbinpkg.rs`):
-`--buildpkgonly` (build a binpkg per resolved entry, never merge);
-**`FEATURES=buildpkg` / `--buildpkg`/`-b`** (2026-08-31 — a binpkg of
-each source entry written to `$PKGDIR` before the vdb merge, real
-`_emerge/EbuildBinpkg`: `ebuild_package::package_after_install` split
-from `run_package`, new `run_merge`/`merge_one_source_entry` `buildpkg`
-param; `--buildpkg=n` beats `FEATURES=buildpkg`; `--buildpkg` is a
-`--pretend` no-op; `--buildpkg-exclude <atoms>` shipped 2026-08-31 —
-`emerge_build::entry_matches_any` filters `buildpkg` to `None` per
-matching entry, still merged); a
-plain **`emerge <atom>`** (real source build + merge via
-`run_source_merge` → `ebuild_merge::run_merge`; `New` +
-`Upgrade`/`Downgrade`/`Reinstall`, an in-place same-slot replace
-unmerging the old version via `ebuild_merge::unmerge_replaced_same_slot`);
-and **`emerge --getbinpkg`/`--getbinpkgonly`** (`run_merge_plan`,
-dispatching per resolved entry — `Binary` → download + `merge_binpkg`
-(all four `pkg_*` hooks, same-slot replace), else →
-`merge_one_source_entry`; `--getbinpkgonly` is just the case where the
-binary-only resolve never yields a source entry). Both merge paths take
-`--keep-going` now (`emerge_build::run_merge_loop`: on a failure BFS-drop
-the failed entry's transitive dependents via `GraphEntry.required_by`,
-merge the rest, exit non-zero with a combined failed+skipped report —
-real `Scheduler._calc_resume_list`). v1 cut left: no preserve-libs on
-the replace.
-
-**`emerge -jN` / `--jobs=N` parallel build scheduler shipped 2026-09-01**
-(real `_emerge/Scheduler.py`): for a plain source `emerge <atom>`,
-`run_source_merge` routes `jobs > 1` to `run_build_scheduler`.
-`merge_one_source_entry` is split into `build_one_source_entry` (real
-`EbuildBuild`+`EbuildBinpkg` — `install` phase + `--buildpkg` binpkg,
-no vdb write) and `merge_one_built_entry` (real `EbuildMerge` — reuses
-`run_qmerge`). The scheduler builds the forward-dep DAG from
-`GraphEntry.required_by`, dispatches a build (`std::thread::scope`
-worker) only when all its deps are merged, runs up to `jobs` concurrently
-(bare `--jobs`/`-j` = `usize::MAX`, capped), and **serializes the vdb
-merge on the main thread** (real portage merges one at a time).
-`--keep-going` preserved (`scheduler_skip_dependents`). `--jobs[=N]` /
-`-j[N]` parses like `--deep`; `--load-average=LA` / `-l LA` (real
-`type=float`) holds off *additional* jobs while the 1-min system load
-(`system_loadavg_1min`, `/proc/loadavg`) exceeds LA, never the first.
-Rust-only — no contract-suite mirror (never executes builds). Each
-parallel build's phase output is captured to `${T}/build.log`
-(`run_commands_logged`, real `PORTAGE_LOG_FILE`; captured builds forced
-onto the `bash` backend for a complete OS-level redirect) instead of
-interleaving on stdout; the scheduler prints `>>> Jobs: X of Y complete`
-after each merge and folds the failed build's log tail into a
-`--keep-going` report. Cuts: the serialized merge step's `pkg_*` hooks
-still run uncaptured through brush (residual stderr noise, pre-existing);
-`--quiet-build` isn't a flag yet; one tokio runtime per `run_commands`;
-in-flight builds finish (not killed) on a hard fail.
-`unmerge_replaced_same_slot` (factored out of `merge_binpkg`) is also
-wired into `merge_after_install`, so `ebuild <file> merge` of v2 over v1
-no longer orphans v1's files.
-**`emerge -C <atom>` / `--unmerge` without `--pretend` is a real removal
-now** (2026-08-31): `pretend.rs::execute_unmerge` walks the
-`_unmerge_display` selection and calls
-`ebuild_merge::unmerge_one_installed` (factored out of
-`unmerge_replaced_same_slot`) per version — `pkg_prerm` from the vdb's
-own saved env → `unmerge_pkgfiles` → `pkg_postrm` → `delete_vdb_dir` —
-then `deselect_from_world` (real `WorldSelectedPackagesSet.cleanPackage`).
-**`emerge --depclean` / `--prune` / `--prune --nodeps` without `--pretend`
-remove for real too** (2026-08-31): `run_depclean_pretend` /
-`run_prune_pretend` / `run_prune_nodeps_pretend` each gained a
-`pretend: bool` and route their computed cleanlist through the same
-`execute_unmerge` (real `action_depclean` feeds its cleanlist to the
-identical `unmerge()`); the `unresolved_deps()` safety halt +
-`--depclean-lib-check` still gate removal, and depclean's stats line
-reads `Number removed:`. **Every `requires --pretend` gate is gone now**
-— `emerge --deselect` (no `--pretend`) rewrites `var/lib/portage/world`
-+ `world_sets` for real (2026-08-31, real `action_deselect`'s
-`world_set.replace(remaining)`; `Removing` vs `Would remove` verb; both
-files sorted, comments dropped).
-**`emerge --config <atom>`** (2026-08-31, real `action_config`):
-`pretend.rs::run_config_action` — one vdb-matched atom → `Configuring
-pkg...` → real `pkg_config` from the vdb-saved env via
-`ebuild_merge::run_vdb_saved_env_phase` (factored out of
-`unmerge_one_installed`, sans the `DEFINED_PHASES` gate) + a best-effort
-builddir clean. Ignores `--pretend`; `--ask` picker/prompt cut. New
-`dev-libs/emergeconfigpkg` fixture.
-**`FEATURES=unmerge-backup`** (2026-08-31, real `dblink._pre_unmerge_
-backup`): before `pkg_prerm` in `unmerge_one_installed` (for the
-standalone `-C`/`--depclean`/`--prune` paths, `backup:
-Option<&PackageOptions>`), `ebuild_package::quickpkg_from_vdb` builds a
-binpkg of the still-installed package into `$PKGDIR` from its vdb
-`CONTENTS` files (`image/` staged from `${ROOT}`, `build-info/` = a copy
-of the vdb dir, then the same `bin/misc-functions.sh __dyn_package` via
-the new `invoke_dyn_package`). A quickpkg failure aborts that unmerge.
-Cuts: `treewalk()` replace-loop `_pre_merge_backup`/`downgrade-backup`,
-`BUILD_TIME` idempotency (narrowed to file existence), `fif`/`dev` nodes.
-`MergeOptions::from_env` factors the env-var config reads shared by
-`emerge <atom>` and `ebuild <file> merge`. A successful `emerge <atom>`
-(not `--buildpkgonly`) records each requested target as `cat/pkg` in
-`var/lib/portage/world` (`pretend.rs::update_world_file`, real
-`Scheduler._world_atom`); `--oneshot`/`-1` (now implemented) suppresses
-that, and at `--pretend` drops a favorite from `PKG_MERGE_WORLD` to plain
-`PKG_MERGE` colour. A `cat/pkg:slot` arg for a genuinely slotted cp
-(2026-08-31, real `create_world_atom`: >1 SLOT in the repo or a lone
-non-`"0"` SLOT) is recorded slot-qualified. World-file v1 cuts still:
-version-pinned args that identify one slot, the vdb-only multislot
-fallback. `emerge @set` build support shipped 2026-08-31 (any non-built-in
-`@name` → recursive `resolve_custom_set`, same as the unmerge/depclean
-paths), and with it `saveNomergeFavorites`'s `@name` → `world_sets`
-recording (`update_world_sets_file`); `@selected` (= portuale's `@world`
-expansion, shared `expand_selected`) and `@installed` (`installed_set_atoms`,
-real `EverythingSet` — a `cat/pkg:slot` atom per vdb package, always
-slot-qualified) landed alongside. Real `SRC_URI` fetch (`portage-fetch` crate +
-`portuale/src/fetch.rs`) downloads via real `wget`, verifies real
-`Manifest` digests, and resolves `mirror://` against real
-`profiles/thirdpartymirrors` + `GENTOO_MIRRORS`. Real eclass `inherit()`
-support (`eclass_locations_value`) unblocked running real, unmodified
-ebuilds/eclasses from the actual `gentoo` tree — `app-arch/unzip`,
-`sys-fs/fuse`, `app-arch/xz-utils` have all been live-verified end to
-end.
-
-Each of these has its own dedicated, cited-source section in
-`what-this-proves.md` — read that for the real Python source
-grounding, the v1 scope cuts, and a runnable example per feature; for
-what's still *missing* see `scope-backlog.md` Part 2.
+Live. `ebuild <file> install|merge|unmerge|package` and non-`--pretend`
+`emerge <atom>` / `--getbinpkg[only]` / `--buildpkg[only]` / `-C` /
+`--depclean` / `--prune` / `--config` / `--deselect` / `@set` all run
+real ebuild phases (via `brush` over unmodified `bin/*.sh`) and mutate
+the filesystem + VDB for real — `rust/portuale/src/{ebuild_phases,
+ebuild_merge,ebuild_unmerge,ebuild_package,emerge_build,emerge_getbinpkg}.rs`.
+Real eclass `inherit()`, real `SRC_URI` fetch (Manifest digests,
+`mirror://`, `RESTRICT`), real `CONFIG_PROTECT` / preserve-libs /
+`env_update` / `os.lchown`, `emerge -jN` parallel scheduler +
+`--load-average` + build-log capture, `--keep-going`, `--resume`.
+`app-arch/unzip`, `sys-fs/fuse`, `app-arch/xz-utils` live-verified end
+to end. Per-feature cited-source detail + v1 cuts:
+`what-this-proves.md`; what is still missing: `scope-backlog.md` Part 2.
+The prior per-slice narrative of this section is in
+[`history/agent-context-current-state-2026-09-10.md`](history/agent-context-current-state-2026-09-10.md).
 
 ### What "install a package into the filesystem" actually is
 
@@ -733,76 +243,28 @@ useful orientation even though both are now shipped):
    `FILESDIR`, `EBUILD_PHASE`, `PORTAGE_BUILDDIR`, etc.) happens in
    `doebuild_environment()` (`:381`).
 
-### The bash-execution-backend question (resolved)
+### The bash-execution backend (resolved)
 
-The original plan was: "the Rust executor shells out to the system bash —
-a deliberate, accepted dynamic dependency, in tension with the minimal-
-Linux goal." Revisited because Rust-native bash implementations exist
-(`reubeno/brush`, `shellgei/rusty_bash`).
+Ebuild phases run bash. The choice was system `bash` vs an embedded
+Rust bash (`reubeno/brush`). Outcome:
 
-**`rusty_bash` was ruled out**: early-stage at investigation time (27/84
-real bash test scripts passing), not designed as an embeddable library.
+- **`ebuild --shell bash|brush` / `emerge --shell bash|brush`** select the
+  backend explicitly (system-bash subprocess `_doebuild_spawn()`-shaped,
+  vs embedded `brush_core::Shell`). **The default is `bash`** — brush's
+  `declare -f` corrupts real eclass functions with redirected here-docs
+  (`toolchain-funcs`), which breaks `emerge <atom>` for compiled
+  packages; brush stays opt-in and static-musl-friendly.
+- Several upstream brush bugs were found (brace-less function definitions
+  — **merged** as
+  [#1274](https://github.com/reubeno/brush/pull/1274); a `declare -f`
+  here-doc serialization bug; a pipeline-function-stage deadlock). The pin
+  is a **thin `vivo75/brush` fork** = upstream `main` + three
+  cherry-picked fixes (`docs/brush-pr/`), merged from upstream
+  periodically; drop the fork once the PRs land.
+- `rusty_bash` was ruled out (not an embeddable library).
 
-**`brush` (`brush-core`/`brush-builtins`) is real and mostly works**: pure
-Rust, MIT-licensed, embeddable via `brush_core::Shell`, tested against
-real bash with ~1700 compatibility tests. A spike confirmed the hard
-parts work: standard builtins, and real subprocess spawning (`doins`,
-an actual bash script under `bin/ebuild-helpers/`, resolved via `PATH`
-and executed as a child process).
-
-**A real, high-blast-radius parser gap was found and is now fixed
-upstream**: brush's grammar rejected bash's brace-less function-
-definition form (`name() single-compound-command`, without `{ }`) —
-valid in real bash, and used **60 times** in `bin/eapi.sh` alone (e.g.
-`___eapi_has_pkg_pretend() [[ ${1-${EAPI-0}} != [0-3] ]]`), which is
-unconditionally sourced by `isolated-functions.sh` — so this single
-construct blocked brush from parsing essentially any real ebuild/eclass
-pipeline. Fixed (new `CompoundCommand::ExtendedTest` AST variant,
-`function_body` taught to accept it) and **merged upstream** as
-**[reubeno/brush#1274](https://github.com/reubeno/brush/pull/1274)**
-(merge commit `18851e7`, 2026-08-20). Verified against real unmodified
-`bin/eapi.sh`/`isolated-functions.sh`/`phase-helpers.sh` end-to-end,
-full `brush-parser`+`brush-core` suites green before/after.
-
-A second, separate bug (a real runtime deadlock in `brush-core`'s own
-pipeline-function-stage handling, hit once enough eclasses — the
-`multilib` family — were in scope) was found live-testing real
-`sys-fs/fuse`/`xz-utils`, root-caused, fixed in `brush-core/src/
-commands.rs` (fork commit `c78ea429`, branch
-`fix/pipeline-function-stage-deadlock` — the current pin), and submitted
-upstream as **[reubeno/brush#1276](https://github.com/reubeno/brush/pull/1276)**
-(open, no review yet). This is the one fork-only fix keeping the pin off
-upstream `main`. Only these two constructs have been proven fixed — real
-ebuilds/eclasses in the wild almost certainly exercise other bash
-constructs not yet tried against brush; this was targeted spike-and-fix
-work, not an exhaustive compatibility sweep. **Full fork-tracking record:
-`brush-pin.md`.**
-
-### Candidate strategies (complementary, not mutually exclusive)
-
-1. **Default to brush, fall back to system bash** on a parse failure —
-   not implemented as automatic fallback. What shipped instead:
-   `ebuild --shell bash|brush` / `emerge --shell bash|brush`, explicit
-   backend selection (`_doebuild_spawn()`-shaped `bash <bin_dir>/
-   ebuild.sh <phase>` subprocess vs the embedded brush). **The default
-   flipped from `brush` to `bash` on 2026-09-01** — brush's `declare -f`
-   corrupts real eclass functions with redirected here-docs
-   (`toolchain-funcs`'s `_tc-has-openmp`), breaking `emerge <atom>` for
-   compiled packages. So in practice portuale now does the *reverse*:
-   default to bash, opt into brush. See `what-this-proves.md`'s
-   "`--shell` default is now `bash`" and `brush-pin.md`.
-2. **Fix our own `bin/*.sh` to avoid brush-hostile constructs** — **done
-   2026-09-01**: the only function-as-non-last-pipeline-stage in
-   `bin/*.sh` (the `__save_ebuild_env | __filter_readonly_variables`
-   pipes in `bin/phase-functions.sh`) now stages through a `${T}` temp
-   file via `__save_and_filter_ebuild_env`. See `brush-pin.md` and
-   `what-this-proves.md`'s "brush strategy #2".
-3. **Maintain a local brush fork with our fixes until upstream merges** —
-   no longer needed: **`portuale/Cargo.toml` now pins real upstream
-   `reubeno/brush` `main`** (the `vivo75/brush` fork is gone — #1274
-   merged upstream, and #1276's deadlock is designed around by strategy
-   #2 above, not patched). `brush-pin.md` tracks the pin and its
-   periodic-re-pin checklist.
+**[`brush-pin.md`](brush-pin.md) is the source of truth for the current
+pin, the staged fixes, and the re-pin checklist.**
 
 ## How portuale actually runs, session to session
 
@@ -811,16 +273,13 @@ lockstep/fixture/test rules, the full verification pass, and the
 commit/push rules — lives in **[`../AGENTS.md`](../AGENTS.md)**. Read it
 before scoping or implementing a slice.
 
-## How to use this prompt
+## How to use this doc
 
-Treat "Context" through "Ownership" above, and the phase-execution
-investigation's "bash-execution-backend question"/"Candidate strategies"
-sections, as settled, citation-backed decisions/findings — not things to
-re-derive from scratch. "Current state" is a decaying snapshot —
-re-verify against current `what-this-proves.md`/`git log`/the task list
-before assuming any of it still holds. "Open backlog" is now just a
-pointer to `scope-backlog.md`; that file is the one to keep current.
-For the bash-backend investigation specifically, check the live
-`reubeno/brush` crate state against `brush-pin.md`. If
-something here conflicts with current reality, or a genuinely open
-decision isn't covered above, ask before proceeding rather than assuming.
+"Context" through "Ownership", "Real ebuild phase execution", "What
+'install a package' actually is", and "The bash-execution backend" are
+settled, citation-backed decisions/findings — not things to re-derive.
+"Current state" is a pointer to the live records (`what-this-proves.md`,
+`git log`, `scope-backlog.md` — keep that one current). For brush, check
+the live `reubeno/brush` state against `brush-pin.md`. If something here
+conflicts with current reality, or a genuinely open decision isn't
+covered, ask before proceeding rather than assuming.

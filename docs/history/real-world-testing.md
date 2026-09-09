@@ -1,19 +1,14 @@
 # Real-world testing: Portuale vs Portage under `podman`
 
-Standalone planning document (deliberately **not** an edit to
-`agent-context.md` / `scope-backlog.md` / `what-this-proves.md`, to keep
-it rebase-friendly across branches — same rule as
-[`remote-merge.md`](remote-merge.md)).
+> **Historical planning doc.** L0 + L1 are **shipped and run live** —
+> `TEST/README.md` is the current operating guide, `TEST/findings/` the
+> results. The §1 methodology critique and the L2–L5 forward plan are
+> still the reference; L2–L5 status is tracked in `scope-backlog.md`.
 
-Goal: mature Portuale to the point where it can replace Portage as the
-package manager on thousands of production Gentoo machines. That needs a
-standing, repeatable, container-based differential test bed that exercises
-the *execution* side (build, package, merge, unmerge, binhost serve,
-remote merge) against real ebuilds — not just the `emerge --pretend`
-contract suite, which already covers the resolver.
-
-Status: **planning only**. Nothing here is implemented yet. Slice plan in
-§14.
+Goal: a standing, repeatable, container-based differential test bed that
+exercises the *execution* side (build, package, merge, unmerge, binhost
+serve, remote merge) against real ebuilds — the `emerge --pretend`
+contract suite covers the resolver. Slice plan in §14.
 
 ---
 

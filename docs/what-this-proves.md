@@ -1,11 +1,17 @@
 # What this proves
 
-> The living, append-only per-slice record of everything shipped in this
-> portuale, moved out of the root `README.md` verbatim. Each paragraph is a
-> historical entry — earlier paragraphs are fixed in place only to correct a
-> claim that later went stale (see [`agent-context.md`](agent-context.md),
-> workflow step 7). For the short version, see
-> [`scope-backlog.md`](scope-backlog.md).
+> The append-only per-slice record of everything shipped, each entry
+> grounded in the real portage source it ports. New slices append here
+> (workflow step 7); prior entries are fixed in place — a claim that
+> later went stale is corrected in a *later* entry, not by rewriting the
+> old one.
+>
+> **Reading order caveat:** the earliest entries date from when `emerge`
+> / `ebuild` were `--pretend`-only. Where an early entry says "still a
+> dry-run stub" / "no real merges yet", that stub has since shipped —
+> portuale builds, merges, and unmerges real packages now. The capability
+> index is [`scope-backlog.md`](scope-backlog.md) Part 1; `git log` is
+> this same history per-commit.
 
 ---
 

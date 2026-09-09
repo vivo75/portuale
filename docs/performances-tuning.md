@@ -315,6 +315,17 @@ backtracking-relevant change on pass 2. Confirm each pass is genuinely needed
 (real portage's `_backtrack_depgraph` only re-runs `_create_graph`, reusing
 already-resolved state); a wasted pass doubles everything above.
 
+### 5. Release-profile `lto` + `codegen-units`
+
+`[profile.release]` in `rust/Cargo.toml` sets `panic = "abort"` but leaves
+`lto` and `codegen-units` at their defaults. The `rust-skills` `opt-` audit
+(was `docs/refactor-HIGH.md`, now `docs/history/`) flagged
+`lto = "thin"` + `codegen-units = 1` as the one broadly-applicable
+release-build win — cross-crate inlining across the ~10 workspace crates,
+~5–10 % typical, at the cost of a slower release build. Gated on a
+user/CI call; measure against the `-puD --getbinpkg` workload before
+keeping.
+
 ## How to reproduce the measurement
 
 ```sh

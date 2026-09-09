@@ -5,9 +5,9 @@ manager: **same behaviour as [Portage](https://wiki.gentoo.org/wiki/Project:Port
 (and then some)**, developed as a **friendly fork** — a separate,
 cooperating codebase, verified against the Python original by a shared,
 black-box, jointly-owned test suite. It builds, merges, and unmerges
-real Gentoo packages today; it began (one reviewed slice at a time,
-starting from `portage.versions`) as a smaller pilot, and it isn't a
-complete replacement yet — see **Status** below.
+real Gentoo packages today. It was built one reviewed slice at a time,
+starting from `portage.versions`; a few portage features are still
+unported — see **Status** below.
 
 The four hard goals it is built to (see
 [`docs/agent-context.md`](docs/agent-context.md) for the full rationale):
@@ -98,8 +98,8 @@ Full pre-slice verification also runs `cargo fmt --check` and
 
 ## Run
 
-See [`docs/running-it.md`](docs/running-it.md) for live-verified examples
-of every shipped slice. Quick taste:
+See [`docs/history/running-it.md`](docs/history/running-it.md) for
+live-verified per-slice examples (historical). Quick taste:
 
 ```sh
 rust/target/release/portuale emerge --pretend sys-apps/portage
@@ -114,7 +114,7 @@ rust/target/release/versions-harness vercmp 1.0-r1 1.0
 | [`docs/agent-context.md`](docs/agent-context.md) | The full context: goals, hard constraints, architecture decisions, the bash-backend investigation, current state, and the open backlog. |
 | [`docs/what-this-proves.md`](docs/what-this-proves.md) | The living, append-only per-slice record — every feature, with its real-portage source grounding. |
 | [`docs/scope-backlog.md`](docs/scope-backlog.md) | What real portage behaviour is *not* yet ported (either side), the standing non-goals, and the distance to a drop-in replacement. |
-| [`docs/running-it.md`](docs/running-it.md) | Runnable examples for every shipped slice. |
+| [`docs/history/running-it.md`](docs/history/running-it.md) | Runnable per-slice examples (historical). |
 | [`docs/brush-pin.md`](docs/brush-pin.md) | The `brush` (embedded bash) dependency pin and its re-pin checklist. |
 | [`docs/operation-diagrams.md`](docs/operation-diagrams.md) | Block diagrams tracing four representative `emerge` invocations through the code. |
 | [`docs/history/`](docs/history/) | Superseded planning documents (the original derivation) and pre-compaction snapshots of docs that get periodically purged (e.g. the scope-backlog's shipped-item narrative). |

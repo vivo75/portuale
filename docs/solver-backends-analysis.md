@@ -296,3 +296,23 @@ ideas, never add a Cargo dependency on it**.
   profile/make.conf/package.use/ACCEPT_* resolution lives in the caller, the
   bridge only consumes per-version `desired` sets. Our `effective_use_flags`
   already computes exactly that — the feed exists.
+
+---
+
+## Real-tree status (2026-09-10 smoke test — not fixed)
+
+Both bridges are wired and pass the tiny synthetic `test_portuale.py`
+fixtures, but break on real targets:
+
+- **`--solver=resolvo`** — non-functional on anything whose closure has
+  a toolchain cycle (`app-misc/jq`, `dev-libs/libbsd`, `net-libs/nodejs`
+  all fail): the bridge's `install_order` cannot linearise the cycle and
+  `solver_bridge.rs` prints the raw ids
+  (`dependency cycle left unorderable: […]`).
+- **`--solver=pubgrub`** — over-merges once the closure is non-trivial
+  (`net-libs/nodejs`: 48 packages vs portage's 8), apparently resolving
+  the over-approximated `flag?()` closure as the real graph.
+- No `slot_conflicts` / `autounmask_*` / `circular_deps` notices, no
+  autounmask relaxation, forced-flag `( )` markers dropped.
+
+Full breakdown and the deliberate cuts: `scope-backlog.md` §J.

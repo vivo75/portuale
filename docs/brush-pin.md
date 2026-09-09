@@ -2,8 +2,7 @@
 
 `portuale` embeds [`brush`](https://github.com/reubeno/brush) (`brush-core`
 + `brush-builtins`) as its Rust-native bash backend for real ebuild phase
-execution — see [`agent-context.md`](agent-context.md)'s "bash-execution-backend
-question" for why brush at all, and
+execution — see [`agent-context.md`](agent-context.md)'s "The bash-execution backend" for why brush at all, and
 [`what-this-proves.md`](what-this-proves.md)'s "Bash-execution backend" /
 "`ebuild --shell bash|brush`" sections for how it is wired in.
 
@@ -194,5 +193,4 @@ construct, `brush strategy #2` style — and get recorded here.
   bash interpreter.
 - [`shellgei/rusty_bash`](https://github.com/shellgei/rusty_bash) — an
   alternative Rust bash implementation, evaluated as a backend candidate
-  (see [`agent-context.md`](agent-context.md), "bash-execution-backend
-  question").
+  (see [`agent-context.md`](agent-context.md), "The bash-execution backend").

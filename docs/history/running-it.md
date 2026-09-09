@@ -1,8 +1,10 @@
 # Running it
 
-> Runnable, live-verified examples for every shipped slice, moved out of the
-> root `README.md` verbatim. Build the binaries first (see the root
-> [`README.md`](../README.md) quickstart).
+> **Historical.** Per-slice runnable examples, append-only, current as of
+> the 2026-09-10 docs pass. For current usage see the root
+> [`README.md`](../../README.md) and `emerge --help` / `ebuild --help`;
+> for the container test beds see [`../../TEST/README.md`](../../TEST/README.md).
+> Build first: `cd rust && cargo build --release`.
 
 ---
 

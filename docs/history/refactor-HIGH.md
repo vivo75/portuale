@@ -1,5 +1,10 @@
 # refactor-HIGH: HIGH-impact rust-skills audit of the `rust/` workspace
 
+> **Historical.** This audit pass is closed — its fixes shipped. The one
+> item that outlived it, the release-profile `lto`/`codegen-units` tuning,
+> is now tracked in [`../performances-tuning.md`](../performances-tuning.md)
+> §5. Kept for the reasoning trail.
+
 A source-grounded audit of the whole `rust/` workspace — every crate
 (`portage-versions`, `portage-dep`, `portage-use-reduce`,
 `portage-profile`, `portage-repo`, `portage-required-use`,

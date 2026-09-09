@@ -39,10 +39,10 @@ the next slice") and expects the same rhythm every time:
 7. **Update the docs**: append a paragraph to
    [`docs/what-this-proves.md`](docs/what-this-proves.md) (never rewrite
    prior slices' paragraphs — they are history; fix one only to correct a
-   now-stale claim), add a live-verified example to
-   [`docs/running-it.md`](docs/running-it.md), and update
-   [`docs/agent-context.md`](docs/agent-context.md)'s "Current state" /
-   "Open backlog" and [`docs/scope-backlog.md`](docs/scope-backlog.md).
+   now-stale claim) with a runnable, live-verified example, and update
+   [`docs/scope-backlog.md`](docs/scope-backlog.md) if the slice closes or
+   changes an open entry. Update other docs only if the slice makes them
+   stale.
 8. **Run the full verification pass** before a slice is done:
    `cargo fmt --check`, `cargo clippy --release --all-targets` (zero
    warnings), `cargo test --release` (whole workspace),
