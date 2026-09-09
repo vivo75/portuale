@@ -9107,6 +9107,13 @@ pub fn run(args: &[String]) -> ExitCode {
     // before any `resolve_pretend_graph` call.
     portage_repo::set_resolver_debug(debug && pretend);
 
+    // EXPLORATORY (explore/dfs-graph-backtracker): PORTUALE_DFS_WALK=1
+    // drains the resolution queue depth-first. Env toggle, not a CLI
+    // flag -- this is a research switch, not a shipped feature.
+    portage_repo::set_dfs_walk(
+        std::env::var("PORTUALE_DFS_WALK").is_ok_and(|v| v == "1" || v == "y"),
+    );
+
     // Real actions.py: "if '--tree' in emerge_config.opts and '--columns'
     // in emerge_config.opts: print(...); return 1" -- checked once
     // parsing finishes (order-independent: works whichever flag came

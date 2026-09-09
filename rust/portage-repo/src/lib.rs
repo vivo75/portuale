@@ -487,6 +487,27 @@ pub fn resolver_debug() -> bool {
     RESOLVER_DEBUG.load(AtomicOrdering::Relaxed)
 }
 
+/// EXPLORATORY (`explore/dfs-graph-backtracker` branch): drain the
+/// resolution walk's work queue LIFO (`pop_back`) instead of FIFO
+/// (`pop_front`), so a package's dependency subtree is fully resolved
+/// before its siblings -- real portage's `_dep_stack` (`depgraph.py::
+/// _create_graph`, a plain list used as a stack). The step toward
+/// `get_best_run`-style partial graphs on an aborted resolve. Toggled by
+/// `pretend.rs` from `PORTUALE_DFS_WALK=1`; default (never set) is the
+/// existing breadth-first walk. Env-free process-global, same pattern as
+/// `RESOLVER_DEBUG` above.
+static DFS_WALK: AtomicBool = AtomicBool::new(false);
+
+/// Set by `pretend.rs` from `PORTUALE_DFS_WALK`, before resolution.
+pub fn set_dfs_walk(enabled: bool) {
+    DFS_WALK.store(enabled, AtomicOrdering::Relaxed);
+}
+
+/// Whether the resolution walk drains its queue depth-first (LIFO).
+pub fn dfs_walk() -> bool {
+    DFS_WALK.load(AtomicOrdering::Relaxed)
+}
+
 /// Real `update_dbentry` for a single `move`, applied to one atom token:
 /// if the token parses as an atom whose `cp` is `old`, rewrite just the
 /// `cat/pkg` part (first occurrence, real `token.replace(old, new, 1)`),
@@ -13152,8 +13173,16 @@ fn backtracking_resolve(req: &ResolveRequest) -> Result<GraphResult, Error> {
             owner,
             unevaluated: unevaluated_atom,
             buildtime_hard,
-        }) = queue.pop_front()
-        {
+        }) = if dfs_walk() {
+            // LIFO: a dependency's whole subtree resolves before its
+            // siblings (real `_dep_stack.pop()`). `enqueue_flat_deps`
+            // pushes a package's deps in forward declared order, so the
+            // last-declared sibling is popped -- and expanded -- first,
+            // exactly as real's `_create_graph` does.
+            queue.pop_back()
+        } else {
+            queue.pop_front()
+        } {
             let Some(atom) = portage_dep::parse_atom(&current_atom) else {
                 continue;
             };
