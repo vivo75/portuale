@@ -48,6 +48,12 @@ regex = "1"
 # deliberate, documented dependency, same waiver as brush-core/regex
 # above.
 md-5 = "0.10"
+# Binpkg `Packages` `SHA1` (real `bintree._pkgindex_hashes = ["MD5",
+# "SHA1"]`) -- RustCrypto's pure-Rust SHA-1, same waiver as md-5 above:
+# zero C linkage, so the musl-static story is untouched. Legacy-interop
+# use only (SHA-1 is cryptographically broken); real portage writes and
+# verifies it, so portuale does too.
+sha1 = "0.10"
 # Real merge: real movefile() explicitly preserves the source's own
 # mtime onto the merged destination (`newmtime=thismtime`) -- std::fs::
 # copy doesn't (the destination gets a fresh "now" mtime), which would

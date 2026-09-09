@@ -1624,6 +1624,25 @@ cat "${PKGDIR}"/Packages
 # BUILD_TIME: <unix time>
 ```
 
+The same `Packages` entry carries real `MD5` and `SHA1` digests of the
+whole `.tbz2` (real `bintree._pkgindex_hashes`), and both match the
+system tools -- live-verified against the build above:
+
+```sh
+grep -E '^(MD5|SHA1)' "${PKGDIR}"/Packages
+# MD5: <md5 of the .tbz2>
+# SHA1: <sha1 of the .tbz2>
+md5sum "${PKGDIR}"/dev-libs/packagepkg-1.0.tbz2
+# <same md5>  .../packagepkg-1.0.tbz2
+sha1sum "${PKGDIR}"/dev-libs/packagepkg-1.0.tbz2
+# <same sha1>  .../packagepkg-1.0.tbz2
+```
+
+A `SHA1` (or `MD5`) mismatch on a remote-binpkg download removes the
+file and fails the fetch -- the same remove-and-fail shape as the
+`SIZE` check (`emerge_getbinpkg::download_and_verify`, real
+`digestCheck`).
+
 Real `emerge --buildpkgonly` execution (see "What this proves" above for
 the full writeup): given *without* `--pretend`, actually builds a real
 binary package. `dev-libs/packagepkg`'s own `RDEPEND` (`dev-libs/samepkg`)

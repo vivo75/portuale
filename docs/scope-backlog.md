@@ -369,10 +369,17 @@ version over it when that binary's `BUILD_TIME` differs -- gated by
 with `ebuild_visible_at` querying the *tree* (not the pool, so it stays
 correct under `--usepkgonly`). See `what-this-proves.md`.
 Binpkg
-`SHA1` (no sha1 crate) and fetch candidate ordering/`RESTRICT=
+`SHA1` **shipped 2026-09-09** (the `sha1` crate exists -- RustCrypto,
+pure Rust, zero C linkage, musl-static story untouched; see
+`what-this-proves.md`): both `Packages` writers now record `MD5` **and**
+`SHA1` (real `_pkgindex_hashes = ["MD5", "SHA1"]`), and
+`download_and_verify` verifies each digest field present (real
+`_get_digests` + `digestCheck`), removing the file and failing on a
+`SHA1` mismatch exactly like `MD5`. Fetch candidate
+ordering/`RESTRICT=
 primaryuri` (determinism > a non-observable mirror-selection detail)
-are deliberate, pre-existing cuts documented in their own module doc
-comments.
+is the remaining deliberate, pre-existing cut, documented in its own
+module doc comment.
 
 ### F. Whole `emerge` actions
 
@@ -669,11 +676,11 @@ item, with a short incremental tail:
    and its full `all_use_satisfied` computation, deeper multi-constraint
    interplay), not a missing mechanism.
 
-2. **The rest of Part 2** — the remaining 2.E tail (`SHA1`, fetch
-   candidate ordering), the `--info` host-state half (2.F, a
-   fixture-driven test can't verify real host state anyway), the brush
-   `declare -f` upstream fix (2.G). Each is one focused slice, the
-   rhythm portuale already runs at.
+2. **The rest of Part 2** — the remaining 2.E tail (fetch
+    candidate ordering), the `--info` host-state half (2.F, a
+    fixture-driven test can't verify real host state anyway), the brush
+    `declare -f` upstream fix (2.G). Each is one focused slice, the
+    rhythm portuale already runs at.
 
 Config-resolution depth (2.C), sandbox isolation (2.D), and scheduler /
 build orchestration (2.B) are complete; the action/flag surface (2.F)

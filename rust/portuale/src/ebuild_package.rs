@@ -614,7 +614,7 @@ pub(crate) fn package_after_install(
         .ok()
         .map(|st| binpkg::file_mtime(&st).to_string())
         .unwrap_or_default();
-    let md5_str = binpkg_md5_hex(&binpkg_path).unwrap_or_default();
+    let (md5_str, sha1_str) = binpkg_checksums(&binpkg_path).unwrap_or_default();
     write_packages_index_entry(
         &options.pkgdir,
         &cpv,
@@ -640,6 +640,7 @@ pub(crate) fn package_after_install(
             ("_mtime_", &mtime_str),
             ("BUILD_ID", &build_id_str),
             ("MD5", &md5_str),
+            ("SHA1", &sha1_str),
         ],
     )?;
 
@@ -717,23 +718,26 @@ fn allocate_binpkg_build_id(
 /// `perform_multiple_checksums(pkg_path, hashes=self._pkgindex_hashes)`,
 /// `_pkgindex_hashes = ["MD5", "SHA1"]` at `bintree.py:548`) writes both
 /// an `MD5` and a `SHA1` digest of the whole binpkg file into its own
-/// `Packages` entry. Only `MD5` is computed here (real always writes
-/// both, but `emerge_getbinpkg::download_and_verify`'s own doc comment
-/// already documents the `SHA1` cut -- portuale has no sha1 crate, and
-/// `MD5` is always present in a real `Packages` too, so verifying
-/// against it alone is sufficient). Without this, a binpkg portuale
-/// itself built would carry no `MD5` at all, silently skipping
-/// `download_and_verify`'s own integrity check for anyone fetching it
+/// `Packages` entry. Both are computed here in a single read (real hashes
+/// the file once per checksum too, streaming; portuale's whole-file read
+/// matches the pre-existing `MD5`-only shape). Without this, a binpkg
+/// portuale itself built would carry no digests at all, silently skipping
+/// `download_and_verify`'s own integrity checks for anyone fetching it
 /// from a portuale-served pkgdir as a remote binhost.
-fn binpkg_md5_hex(path: &Path) -> Option<String> {
+fn binpkg_checksums(path: &Path) -> Option<(String, String)> {
+    // One import covers both hashers: `md5::Digest` and `sha1::Digest`
+    // are the same `digest::Digest` trait re-exported.
     use md5::Digest as _;
     let bytes = std::fs::read(path).ok()?;
-    Some(
-        md5::Md5::digest(&bytes)
-            .iter()
-            .map(|b| format!("{b:02x}"))
-            .collect(),
-    )
+    let md5: String = md5::Md5::digest(&bytes)
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
+    let sha1: String = sha1::Sha1::digest(&bytes)
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
+    Some((md5, sha1))
 }
 
 /// Runs the real, unmodified `bin/misc-functions.sh __dyn_package`
@@ -1087,7 +1091,7 @@ pub(crate) fn quickpkg_from_vdb(
         .ok()
         .map(|st| binpkg::file_mtime(&st).to_string())
         .unwrap_or_default();
-    let md5_str = binpkg_md5_hex(&binpkg_path).unwrap_or_default();
+    let (md5_str, sha1_str) = binpkg_checksums(&binpkg_path).unwrap_or_default();
     write_packages_index_entry(
         &options.pkgdir,
         &cpv,
@@ -1113,6 +1117,7 @@ pub(crate) fn quickpkg_from_vdb(
             ("SIZE", &size_str),
             ("_mtime_", &mtime_str),
             ("MD5", &md5_str),
+            ("SHA1", &sha1_str),
         ],
     )?;
 
@@ -1388,19 +1393,29 @@ mod tests {
             Some("dev-libs/samepkg")
         );
 
-        // Real `_pkgindex_entry` always writes an `MD5` of the whole
-        // binpkg file (`binpkg_md5_hex`'s own doc comment) -- without
-        // it, `emerge_getbinpkg::download_and_verify` would silently
-        // skip integrity-checking anyone fetching this same file from a
-        // portuale-served pkgdir as a remote binhost.
+        // Real `_pkgindex_entry` always writes an `MD5` and a `SHA1` of
+        // the whole binpkg file (`binpkg_checksums`'s own doc comment)
+        // -- without them, `emerge_getbinpkg::download_and_verify` would
+        // silently skip integrity-checking anyone fetching this same file
+        // from a portuale-served pkgdir as a remote binhost.
+        // (`md5::Digest` below is the shared `digest::Digest` trait both
+        // hashers implement -- one import covers both.)
         use md5::Digest as _;
         let expected_md5: String = md5::Md5::digest(&binpkg_bytes)
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect();
+        let expected_sha1: String = sha1::Sha1::digest(&binpkg_bytes)
             .iter()
             .map(|b| format!("{b:02x}"))
             .collect();
         assert_eq!(
             metadata.get("MD5").map(String::as_str),
             Some(expected_md5.as_str())
+        );
+        assert_eq!(
+            metadata.get("SHA1").map(String::as_str),
+            Some(expected_sha1.as_str())
         );
     }
 

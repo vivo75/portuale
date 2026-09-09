@@ -38,9 +38,10 @@
 //     `<cat>/<pf>.tbz2`) is trusted outright, same "trust the index"
 //     stance the `--pretend` half already takes.
 //   - digest verification checks `SIZE` and the `Packages` record's
-//     `MD5` (the md5 of the whole `.tbz2`, real `bintree`'s own field).
-//     Real portage also checks `SHA1` -- portuale has no sha1 crate, and
-//     `MD5` is always present in a real `Packages`. A downloaded gpkg
+//     `MD5` and `SHA1` (the md5/sha1 of the whole `.tbz2`, real
+//     `bintree`'s own fields, `_pkgindex_hashes = ["MD5", "SHA1"]`).
+//     Each field present is verified (real `_get_digests` collects every
+//     valid checksum key present, `digestCheck` verifies them all). A downloaded gpkg
 //     additionally has its internal `Manifest` (`DATA` BLAKE2B/SHA512
 //     lines) *and* its GPG signature layer (detached `.sig` sidecars +
 //     clear-signed `Manifest`, real `_verify_binpkg` -- see
@@ -287,7 +288,7 @@ pub(crate) fn resolve_local_binpkg(
 
 /// Fetch `<sync_uri>/<PATH>` (or the default `<cat>/<pf>.tbz2`) into
 /// `$PKGDIR`, then verify it against the index `SIZE` and, if present,
-/// the `MD5` field. A mismatch removes the file and fails.
+/// the `MD5` / `SHA1` fields. A mismatch removes the file and fails.
 pub(crate) fn download_and_verify(
     sync_uri: &str,
     record: &std::collections::HashMap<String, String>,
@@ -326,23 +327,42 @@ pub(crate) fn download_and_verify(
         }
     }
 
-    // Real `bintree.gettbz2` / `_verify_dist_hashes`: the `Packages`
-    // record's `MD5` field is the md5 of the whole `.tbz2`. (Real portage
-    // also checks `SHA1`; portuale has no sha1 crate, and `MD5` is
-    // always present in a real `Packages`.)
-    if let Some(expected_md5) = record.get("MD5").filter(|s| !s.is_empty()) {
-        use md5::Digest as _;
+    // Real `bintree.gettbz2` / `_get_digests` + `digestCheck`: the
+    // `Packages` record's `MD5`/`SHA1` fields are the md5/sha1 of the
+    // whole `.tbz2`, and real verifies every digest present. Same here --
+    // each present field is checked; a mismatch removes the file and
+    // fails.
+    let want_md5 = record.get("MD5").filter(|s| !s.is_empty()).cloned();
+    let want_sha1 = record.get("SHA1").filter(|s| !s.is_empty()).cloned();
+    if want_md5.is_some() || want_sha1.is_some() {
         let bytes = std::fs::read(&dest).map_err(|e| format!("{}: {e}", dest.display()))?;
-        let actual: String = md5::Md5::digest(&bytes)
-            .iter()
-            .map(|b| format!("{b:02x}"))
-            .collect();
-        if !actual.eq_ignore_ascii_case(expected_md5) {
-            let _ = std::fs::remove_file(&dest);
-            return Err(format!(
-                "{}: MD5 mismatch (index {expected_md5}, got {actual})",
-                dest.display()
-            ));
+        if let Some(expected_md5) = want_md5 {
+            use md5::Digest as _;
+            let actual: String = md5::Md5::digest(&bytes)
+                .iter()
+                .map(|b| format!("{b:02x}"))
+                .collect();
+            if !actual.eq_ignore_ascii_case(&expected_md5) {
+                let _ = std::fs::remove_file(&dest);
+                return Err(format!(
+                    "{}: MD5 mismatch (index {expected_md5}, got {actual})",
+                    dest.display()
+                ));
+            }
+        }
+        if let Some(expected_sha1) = want_sha1 {
+            use sha1::Digest as _;
+            let actual: String = sha1::Sha1::digest(&bytes)
+                .iter()
+                .map(|b| format!("{b:02x}"))
+                .collect();
+            if !actual.eq_ignore_ascii_case(&expected_sha1) {
+                let _ = std::fs::remove_file(&dest);
+                return Err(format!(
+                    "{}: SHA1 mismatch (index {expected_sha1}, got {actual})",
+                    dest.display()
+                ));
+            }
         }
     }
     Ok(dest)
@@ -1101,15 +1121,17 @@ mod tests {
 
     #[test]
     fn download_and_verify_fetches_then_size_and_md5_checks() {
-        // Real md5 of the committed fixture .tbz2 (`md5sum`, not invented).
+        // Real digests of the committed fixture .tbz2 (`md5sum`/`sha1sum`,
+        // not invented).
         const FIXTURE_MD5: &str = "54cab52a68eda02d7d41561b8f7d318a";
+        const FIXTURE_SHA1: &str = "750847f2903fcc4f84bc657c6bb172501c4db490";
         let tmp = tempdir();
         let pkgdir = tmp.join("pkgdir");
         let body =
             std::fs::read(fixtures_root().join("pkgdir/dev-libs/packagepkg-1.0.tbz2")).unwrap();
         let mut routes = HashMap::new();
         routes.insert("/dev-libs/packagepkg-1.0.tbz2".to_string(), body.clone());
-        let (base, _h) = serve(routes, 3);
+        let (base, _h) = serve(routes, 4);
 
         let record = |pairs: &[(&str, &str)]| -> HashMap<String, String> {
             pairs
@@ -1118,10 +1140,11 @@ mod tests {
                 .collect()
         };
 
-        // SIZE + a matching MD5 -> ok.
+        // SIZE + matching MD5 + matching SHA1 -> ok.
         let ok = record(&[
             ("SIZE", "4618"),
             ("MD5", FIXTURE_MD5),
+            ("SHA1", FIXTURE_SHA1),
             ("PATH", "dev-libs/packagepkg-1.0.tbz2"),
         ]);
         let got =
@@ -1145,6 +1168,19 @@ mod tests {
         let err = download_and_verify(&base, &bad_md5, "dev-libs", "packagepkg", "1.0", &pkgdir)
             .unwrap_err();
         assert!(err.contains("MD5 mismatch"), "{err}");
+        assert!(!pkgdir.join("dev-libs/packagepkg-1.0.tbz2").is_file());
+
+        // Right SIZE + MD5, wrong SHA1 -> rejected, file removed (real
+        // `digestCheck` verifies every digest present, not just MD5).
+        let bad_sha1 = record(&[
+            ("SIZE", "4618"),
+            ("MD5", FIXTURE_MD5),
+            ("SHA1", "0000000000000000000000000000000000000000"),
+            ("PATH", "dev-libs/packagepkg-1.0.tbz2"),
+        ]);
+        let err = download_and_verify(&base, &bad_sha1, "dev-libs", "packagepkg", "1.0", &pkgdir)
+            .unwrap_err();
+        assert!(err.contains("SHA1 mismatch"), "{err}");
         assert!(!pkgdir.join("dev-libs/packagepkg-1.0.tbz2").is_file());
         let _ = std::fs::remove_dir_all(&tmp);
     }

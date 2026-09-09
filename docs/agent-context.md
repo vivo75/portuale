@@ -529,10 +529,11 @@ When scoping the next slice, re-ground candidates in current code
   negotiation" and `Packages.bz2`/`.lz4` were later found to be
   mis-scoped -- not real `bintree.py` mechanisms at all, see
   `scope-backlog.md` Part 2.E); this trace stays useful for the
-  remaining 2.E tail (`BUILD_TIME`-vs-installed reinstall trigger,
-  `SHA1`, fetch ordering -- gpkg `.sig` signing/verification itself
-  shipped 2026-09-08, and `identical_binary` / `useoldpkg`-
-  multi-instance were investigated and found already-correct;
+   remaining 2.E tail (fetch ordering -- the `BUILD_TIME`-vs-installed
+   reinstall trigger, binpkg `SHA1`, and gpkg `.sig`
+   signing/verification all shipped 2026-09-08/09, and `identical_binary`
+   / `useoldpkg`-multi-instance were investigated and found
+   already-correct;
   `splitdebug`/`packdebug` and `binpkg-multi-instance` for both
   formats have since shipped).
 

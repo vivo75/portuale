@@ -15996,3 +15996,28 @@ Pinned: a CASES entry, the
 contract test (full stderr pinned), and the Rust
 `circular_dep_solutions_conditional_grandparent_keeps_the_suggestion_with_followup`
 unit test.
+
+**Binpkg `SHA1` (closing the 2.E tail).** Two module doc comments --
+`ebuild_package.rs`'s `binpkg_md5_hex` and `emerge_getbinpkg.rs`'s
+`download_and_verify` -- carried the same cut: "portuale has no sha1
+crate". The crate exists (`sha1`, RustCrypto, pure Rust, zero C linkage,
+so the musl-static story is untouched -- same waiver class as the
+pre-existing `md-5`), and it is now depended on (`sha1 = "0.10"`,
+matching the `md-5`/`sha2`/`blake2` 0.10 family so all four hashers share
+one `digest::Digest`). Real ground: `bintree.py:548`'s `_pkgindex_hashes
+= ["MD5", "SHA1"]`, written by `_pkgindex_entry` (`bintree.py:2302`) via
+`perform_multiple_checksums`, and verified on fetch by `_get_digests`
+(every valid checksum key present) + `digestCheck`. Ported both halves:
+`binpkg_checksums` computes MD5+SHA1 in a single read at both Packages
+writers (`package_after_install` and `quickpkg_from_vdb`), and
+`download_and_verify` verifies each digest field present -- a `SHA1`
+mismatch removes the file and fails, exactly like `MD5`. Real-execution-
+only, so no Python mirror (only CLI-recognition surface is mirrored for
+such paths). Pinned: the extended
+`download_and_verify_fetches_then_size_and_md5_checks` (real `sha1sum`
+of the committed fixture `.tbz2`, plus a wrong-`SHA1` rejection case)
+and the `SHA1` assertion in
+`real_package_builds_a_real_xpak_tbz2_and_a_real_packages_entry`.
+Live-verified (`docs/running-it.md`): a real `ebuild ... install
+package` build's `Packages` `MD5`/`SHA1` both match system
+`md5sum`/`sha1sum` of the built `.tbz2`.
