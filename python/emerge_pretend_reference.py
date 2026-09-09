@@ -11481,6 +11481,28 @@ def resolve_pretend_graph(
             for category, package, outcome, blockers, slot, use_display, _required_by, source, provenance, keyword_suggestion, use_suggestion, parent_use_suggestion, targets_running_root in entries
         ]
 
+        # An installed package that is also being merged in the same slot
+        # is one node in real's graph, not two. The BFS can build an
+        # already_installed entry for a cat/pkg before a later atom forces
+        # a same-slot merge of it (net-libs/nghttp2's >=sys-apps/systemd-209
+        # -> installed systemd, then sys-auth/polkit's
+        # sys-apps/systemd:0=[policykit] -> reinstall). Drop the redundant
+        # already_installed entry; the merge-bound one supersedes it (and
+        # carries the union of both owners' required_by). Mirrors
+        # portage-repo/src/lib.rs.
+        _mergebound_cp_slots = set()
+        for e in entries:
+            if e[2][0] in ("new", "reinstall", "upgrade", "downgrade"):
+                slot = e[4] or _read_vdb_slot(root, e[0], e[1], _entry_version(e))[0]
+                _mergebound_cp_slots.add((e[0], e[1], slot))
+        entries = [
+            e
+            for e in entries
+            if e[2][0] != "already_installed"
+            or (e[0], e[1], _read_vdb_slot(root, e[0], e[1], e[2][1])[0])
+            not in _mergebound_cp_slots
+        ]
+
         # setdefault (not a dict comprehension) so the *first* entry for a
         # given owner wins when the same category/package appears more than
         # once (multiple slots) -- mirrors portage-repo/src/lib.rs's

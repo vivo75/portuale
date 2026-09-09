@@ -15212,6 +15212,40 @@ fn backtracking_resolve(req: &ResolveRequest) -> Result<GraphResult, Error> {
             }
         }
 
+        // An installed package that is *also* being merged in the same
+        // slot is one node in real's graph, not two. The BFS can build an
+        // `AlreadyInstalled` entry for a `cat/pkg` before some later atom
+        // forces a same-slot merge of it -- `net-libs/nghttp2`'s
+        // `>=sys-apps/systemd-209` resolves to the installed systemd, then
+        // `sys-auth/polkit`'s `sys-apps/systemd:0=[policykit]` forces the
+        // reinstall. Drop the redundant `AlreadyInstalled` entry; the
+        // merge-bound one supersedes it (and already carries the union of
+        // both owners' `required_by`, filled just above).
+        let mergebound_cp_slots: HashSet<(String, String, String)> = entries
+            .iter()
+            .filter_map(|e| {
+                let ver = match &e.outcome {
+                    PretendOutcome::New { version } | PretendOutcome::Reinstall { version, .. } => {
+                        version
+                    }
+                    PretendOutcome::Upgrade { to, .. } | PretendOutcome::Downgrade { to, .. } => to,
+                    _ => return None,
+                };
+                let slot = e
+                    .slot
+                    .clone()
+                    .unwrap_or_else(|| read_vdb_slot(root, &e.category, &e.package, ver).0);
+                Some((e.category.clone(), e.package.clone(), slot))
+            })
+            .collect();
+        entries.retain(|e| {
+            let PretendOutcome::AlreadyInstalled { version } = &e.outcome else {
+                return true;
+            };
+            let (slot, _) = read_vdb_slot(root, &e.category, &e.package, version);
+            !mergebound_cp_slots.contains(&(e.category.clone(), e.package.clone(), slot))
+        });
+
         resolve_blockers(root, &pending_blockers, &entries)
             .into_iter()
             .for_each(|(owner_key, conflict)| {
