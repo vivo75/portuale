@@ -89,13 +89,40 @@ to the first `want_restart_for_use_change` autounmask node. Since
    `entries` (and the merge list) to the prefix.
 
 This matched `plasma-meta` (4) and `podman` (8) **exactly** in the
-paper analysis. It needs no walk rewrite — just (3) + a post-pass. The
-risk earlier flagged ("approximation defeats the comparator's size-gap
-suppression") does not apply if the prefix is exact.
+paper analysis. It needs no walk rewrite — just (3) + a post-pass.
 
-**Open question:** is `want_restart_for_use_change`'s "the flip changed
-the dep set" the right cut point, or does real also stop at a flip that
-only breaks a *parent's* `[use]` dep? (real `want_restart` checks both.)
+### …but it has a hard prerequisite it can't meet (Step 2, 2026-09-09)
+
+Prototyped the post-pass. **It never fires**, because step 2's
+`!circular_deps.is_empty()` is false for both probes:
+
+- Real `plasma-meta`/`podman` merge only `dev-lang/go-1.26.4` and report
+  the `go → go (buildtime)` self-cycle.
+- Portuale merges **both** `dev-lang/go` *and* `dev-lang/go-bootstrap`,
+  no cycle — its cluster-D `||` fix (`or-dep-required-use-repro`,
+  `2026-09-07`) marks the circular `>=dev-lang/go` branch of go's own
+  `BDEPEND=|| ( >=dev-lang/go-X dev-lang/go-bootstrap )` as unavailable
+  and takes `go-bootstrap`.
+
+Real's actual mechanism: on pass 1 `dep_zapdeps` has no
+`circular_dependency` map, so it picks the in-graph `>=dev-lang/go`
+(`preferred_in_graph`) → cycle detected → backtrack records
+`circular_dependency = {go: [go]}` → **pass 2** `dep_zapdeps` sends that
+choice to `other` and picks `go-bootstrap`. For a *standalone*
+`emerge -p dev-lang/go` this backtracking completes and both real and
+portuale end at `go-bootstrap` (no cycle). For `plasma-meta`,
+`--autounmask-backtrack=n` stops real after the first autounmask batch,
+so pass 2 never happens and the cycle stays.
+
+So reproducing real's `plasma-meta` needs portuale to **take the
+circular `||` branch on pass 1 when the cp is already a graph node**
+(conditionally undo cluster-D) **and** implement `circular_dependency`-
+map-driven backtracking so a later pass switches to `go-bootstrap` when
+backtracking is *allowed* to proceed. That is the deferred backtracking
+work, not a post-pass.
+
+The prototype (dead condition + `merge_order::discovery_order` helper +
+`autounmask_flip_cps` accumulator) was reverted from `main`.
 
 ## Verdict on Step 1
 
@@ -105,9 +132,21 @@ order-pinned contract tests and zero merge-order-parity gain. The
 `PORTUALE_DFS_WALK` toggle stays in the tree as a research instrument
 (default off, no cost) but should not be promoted.
 
-**Recommended next step:** abandon the walk rewrite. Implement the
-targeted truncation post-pass (steps 1–4 above) on `main` as a normal
-slice — it is bounded, needs no DFS walk, and hits `plasma-meta`/`podman`
-exactly. If a genuine `get_best_run` is ever wanted it is a separate,
-much larger effort whose prerequisite (a real digraph object + abort
-semantics) is independent of queue-drain order.
+**Recommended next step (revised after Step 2):** the truncation
+post-pass is *also* blocked — it depends on portuale detecting the same
+`go` self-cycle real does, which portuale's cluster-D `||` fix
+deliberately breaks. The remaining paths all lead through
+`circular_dependency`-map backtracking (real `dep_zapdeps` +
+`_backtrack_depgraph`):
+
+- **full**: `circular_dependency` map + pass-2 `||` re-selection +
+  `--autounmask-backtrack=n` early stop + partial-graph display. This is
+  the real feature; ~1–2 weeks; medium regression risk.
+- **do nothing**: `resolve-compare.py` already collapses the two probes
+  to one `truncated` finding each. Portuale's fuller `plasma-meta`
+  output (a complete resolution real never reached) is arguably *more*
+  useful to a user than real's stuck 4-package partial.
+
+`get_best_run` proper remains a separate, larger effort whose real
+prerequisites (a digraph object + abort-on-unrecoverable-failure) are
+independent of queue-drain order.
