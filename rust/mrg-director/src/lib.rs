@@ -26,7 +26,7 @@
 //! | MergeEngine | `_emerge/MergeListItem.py` dispatch + `_emerge/PackageMerge.py` / `EbuildMerge.py` / `vartree.py::dblink.merge` | `SourceMergeEngine` (`"ebuild"` arm) / `BinaryMergeEngine` (`"binary"` arm), markers over `ebuild_merge` / `merge_binpkg` |
 //! | BinpkgIndex | `portage/dbapi/bintree.py` (local `$PKGDIR`/`Packages` + remote `PORTAGE_BINHOST` backends) | `PkgdirBinIndex` (local) / `RemoteBinhostIndex` (remote), delegating to `portage_repo::BinaryIndex` reads |
 //! | NewsSet | `portage/news.py::Item.isRelevant`/`isValid` (+ a future GLSA `@security` selector) | `MetadataNews` marker; real evaluation in `pretend.rs::run_check_news` |
-//! | SchedulerPolicy | `_emerge/Scheduler.py::Scheduler._run` (jobs + load-average gate) | `LoadAwarePolicy` marker, the real serial/gated default |
+//! | SchedulerPolicy | `_emerge/Scheduler.py::Scheduler._run` (jobs + load-average gate) | `LoadAwarePolicy` (`--jobs=N`) / `UnlimitedPolicy` (bare `-j`, real `max_jobs is True`); `run_build_scheduler` runs under one of them |
 //! | Director | `actions.py::action_build` (build the depgraph from `create_depgraph_params`, walk the merge list via `Scheduler`) | `struct Director` below (resolve-then-hand-to-engine wiring; the `mrg` applet still calls `pretend::run` directly until a second algorithm lands) |
 //!
 //! Each contract documents: the real source it names, the single
@@ -906,22 +906,26 @@ impl NewsSelector for MetadataNews {
     }
 }
 
-/// The current `SchedulerPolicy`: real `Scheduler._run`'s per-step gate —
-/// start another build while `running < jobs` and the system 1-minute
-/// load average is under the `--load-average` ceiling (never gating the
-/// first build, so the DAG cannot deadlock).
-///
-/// The real gate lives in `emerge_build.rs::run_build_scheduler`
-/// (`in_flight < jobs` + `system_loadavg_1min`); this marker pins the
-/// seam. A scheduler policy "second implementation" (e.g. a serial
-/// `--jobs=1` always-serial policy, or a deadline/to-be-built-aware
-/// one) satisfies the same two methods.
+/// The capped-jobs `SchedulerPolicy`: real `Scheduler._run`'s per-step
+/// gate -- start another build while `running < jobs` and the system
+/// 1-minute load average is under the `--load-average` ceiling (never
+/// gating the first build, so the DAG cannot deadlock). One of two
+/// implementations (the other is [`UnlimitedPolicy`], real's
+/// `max_jobs is True` branch); `run_build_scheduler` runs under one of
+/// them, chosen by the `--jobs` spelling.
 #[derive(Debug, Clone, Copy)]
 pub struct LoadAwarePolicy {
     /// `--jobs` ceiling (`max_jobs`).
     jobs: usize,
     /// `--load-average` ceiling; `None` disables load gating.
     load_average: Option<f64>,
+}
+impl LoadAwarePolicy {
+    /// A policy for `--jobs=jobs` with an optional `--load-average`
+    /// ceiling -- the scheduler shape `run_build_scheduler` runs under.
+    pub fn new(jobs: usize, load_average: Option<f64>) -> Self {
+        Self { jobs, load_average }
+    }
 }
 impl Default for LoadAwarePolicy {
     fn default() -> Self {
@@ -944,6 +948,39 @@ impl SchedulerPolicy for LoadAwarePolicy {
     }
     fn max_jobs(&self) -> usize {
         self.jobs
+    }
+}
+
+/// The unlimited-jobs `SchedulerPolicy`: real `Scheduler` with
+/// `max_jobs is True` (a bare `--jobs`/`-j`, which portuale maps to
+/// `usize::MAX`) -- no concurrency ceiling at all, while the
+/// `--load-average` gate still holds off *additional* builds (real
+/// `PollScheduler._can_add_job` applies the load check whenever
+/// `max_jobs is True or max_jobs > 1`).
+///
+/// This is the scheduler slot's second implementation: the same two
+/// methods as [`LoadAwarePolicy`], the capped-vs-uncapped shapes real
+/// itself branches on, and the policy `run_build_scheduler` runs under
+/// for a bare `-j`.
+#[derive(Debug, Clone, Copy)]
+pub struct UnlimitedPolicy {
+    /// `--load-average` ceiling; `None` disables load gating.
+    load_average: Option<f64>,
+}
+impl UnlimitedPolicy {
+    /// An uncapped policy with an optional `--load-average` ceiling.
+    pub fn new(load_average: Option<f64>) -> Self {
+        Self { load_average }
+    }
+}
+impl SchedulerPolicy for UnlimitedPolicy {
+    fn should_start(&self, running: usize, loadavg_1min: f64) -> bool {
+        // Like `LoadAwarePolicy` minus the ceiling: the first build is
+        // always allowed, further ones only while under the load gate.
+        running == 0 || self.load_average.is_none_or(|la| loadavg_1min <= la)
+    }
+    fn max_jobs(&self) -> usize {
+        usize::MAX
     }
 }
 
@@ -1456,5 +1493,30 @@ mod tests {
         assert!(!capped.should_start(3, 2.5));
         assert!(!capped.should_start(4, 1.5));
         assert!(capped.should_start(0, 99.0));
+    }
+
+    /// `UnlimitedPolicy` is the scheduler slot's second implementation
+    /// (real's `max_jobs is True`, a bare `--jobs`/`-j`): no concurrency
+    /// ceiling (`max_jobs` is `usize::MAX`, the value the CLI maps bare
+    /// `-j` to), while the `--load-average` gate still holds off
+    /// *additional* builds exactly like the capped policy (real
+    /// `PollScheduler._can_add_job` load-checks whenever `max_jobs is
+    /// True or max_jobs > 1`).
+    #[test]
+    fn scheduler_policy_unlimited_never_caps_but_still_load_gates() {
+        let unlimited = UnlimitedPolicy::new(Some(2.0));
+        assert_eq!(unlimited.max_jobs(), usize::MAX);
+        assert!(unlimited.should_start(0, 99.0));
+        assert!(unlimited.should_start(1000, 1.5));
+        assert!(!unlimited.should_start(1000, 2.5));
+
+        let ungated = UnlimitedPolicy::new(None);
+        assert!(ungated.should_start(usize::MAX - 1, f64::INFINITY));
+
+        // The constructor the scheduler runs under carries both knobs.
+        let wired = LoadAwarePolicy::new(4, Some(2.0));
+        assert_eq!(wired.max_jobs(), 4);
+        assert!(wired.should_start(3, 1.5));
+        assert!(!wired.should_start(3, 2.5));
     }
 }

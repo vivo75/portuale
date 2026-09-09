@@ -2055,7 +2055,8 @@ cargo test --release -p mrg-director
 # test tests::resolver_seam_is_the_single_re_export ... ok
 # test tests::resolver_speaks_graph_result ... ok
 # test tests::scheduler_policy_gates_by_jobs_and_load_average ... ok
-# test result: ok. 13 passed; 0 failed
+# test tests::scheduler_policy_unlimited_never_caps_but_still_load_gates ... ok
+# test result: ok. 14 passed; 0 failed
 ```
 
 RepoCache second backend (H.14, first slot after BinpkgIndex): the
@@ -2067,6 +2068,17 @@ a pre-loaded snapshot cache for benchmarks and tests. Pinned by
 `repo_cache_volatile_is_the_in_memory_second_backend` in the run
 above (entries read back whole, sorted `category`, missing entry is
 `Err`, mutating a returned dict leaves the store intact).
+
+SchedulerPolicy second backend + live wiring (H.14, next slot): the
+scheduler slot has its second algorithm — `UnlimitedPolicy`, real's
+`max_jobs is True` branch (bare `-j`, no concurrency ceiling, load
+gate retained) next to `LoadAwarePolicy` (`--jobs=N`) — and
+`run_build_scheduler` dispatches through the trait instead of its old
+inline `in_flight < jobs` gate: same decisions for the capped policy,
+verified by the unchanged `run_build_scheduler_*` build tests (real
+parallel builds, not mocks). Pinned by
+`scheduler_policy_unlimited_never_caps_but_still_load_gates` in the
+run above.
 
 PackagesDb second backend (H.14, next slot): the installed-db slot
 has its second algorithm — `MemoryDb`, an owned snapshot grounded in

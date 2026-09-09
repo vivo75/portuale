@@ -221,6 +221,26 @@ pub fn run_source_merge(
     capture_log: bool,
 ) -> Result<(), String> {
     if jobs > 1 {
+        // The `-jN` dispatch policy, one of the director's two
+        // `SchedulerPolicy` implementations: a bare `-j` (mapped to
+        // `usize::MAX` by the CLI layer) runs uncapped (real
+        // `max_jobs is True`), a numbered `--jobs=N` runs capped --
+        // both keep the `--load-average` gate for additional builds.
+        if jobs == usize::MAX {
+            let policy = mrg_director::UnlimitedPolicy::new(load_average);
+            return run_build_scheduler(
+                entries,
+                repos,
+                root,
+                portage_tmpdir,
+                options,
+                keep_going,
+                buildpkg,
+                buildpkg_exclude,
+                &policy,
+            );
+        }
+        let policy = mrg_director::LoadAwarePolicy::new(jobs, load_average);
         return run_build_scheduler(
             entries,
             repos,
@@ -230,8 +250,7 @@ pub fn run_source_merge(
             keep_going,
             buildpkg,
             buildpkg_exclude,
-            jobs,
-            load_average,
+            &policy,
         );
     }
     run_merge_loop(entries, keep_going, |entry| {
@@ -945,11 +964,11 @@ fn run_build_scheduler(
     keep_going: bool,
     buildpkg: Option<&ebuild_package::PackageOptions>,
     buildpkg_exclude: &[String],
-    jobs: usize,
-    // Real `--load-average`: don't start an *additional* build (beyond
-    // the one always allowed, so the scheduler can't deadlock) while the
-    // system 1-minute load average is above this.
-    load_average: Option<f64>,
+    // The `-jN` dispatch policy (real `_emerge/Scheduler.py`'s jobs +
+    // `--load-average` gate): the director's `SchedulerPolicy` trait,
+    // so a capped (`LoadAwarePolicy`) or uncapped (`UnlimitedPolicy`)
+    // scheduler is one caller-side value, never a loop change here.
+    policy: &dyn mrg_director::SchedulerPolicy,
 ) -> Result<(), String> {
     use std::collections::{HashMap, HashSet};
     use std::sync::mpsc;
@@ -997,15 +1016,15 @@ fn run_build_scheduler(
         let (tx, rx) = mpsc::channel::<(usize, Result<PathBuf, String>)>();
         let mut in_flight = 0usize;
         loop {
-            while in_flight < jobs {
-                // Real `--load-average`: hold off on an *additional* build
-                // while the system is already loaded. Never blocks the
-                // first build (`in_flight >= 1`), so the scheduler always
-                // makes progress.
-                if in_flight >= 1
-                    && let Some(la) = load_average
-                    && system_loadavg_1min() > la
-                {
+            // The policy's two halves, asked in the order the trait
+            // contract names: `max_jobs` caps concurrency, then
+            // `should_start` gates one more build on the live 1-minute
+            // load average -- real `Scheduler._run` never gates the
+            // first build, so the DAG cannot deadlock. Identical
+            // decisions to the old inline `in_flight < jobs` +
+            // load-average gate for `LoadAwarePolicy`.
+            while in_flight < policy.max_jobs() {
+                if !policy.should_start(in_flight, system_loadavg_1min()) {
                     break;
                 }
                 let next = (0..n).find(|&i| {

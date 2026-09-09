@@ -582,8 +582,14 @@ unknown keys read empty) — see `what-this-proves.md`.
 `EbuildBuild` vs `"binary"` → `Binpkg`; each declines its own kind
 as `Skipped`, refuses the other as `Failed`) — see
 `what-this-proves.md`.
+**SchedulerPolicy second backend + live wiring shipped (H.14, next
+slot)**: `UnlimitedPolicy` (real `max_jobs is True`, bare `-j`) next
+to `LoadAwarePolicy`, and `run_build_scheduler` dispatches through
+the trait instead of its old inline gate (decision-identical for the
+capped policy; existing scheduler build tests pass unchanged) — see
+`what-this-proves.md`.
 What remains is landing further *second* implementations per slot —
-Fetcher, NewsSet, SchedulerPolicy, one slice
+Fetcher, NewsSet, one slice
 each — new-algorithm work, not new-seam work
 (see `what-this-proves.md`'s "`mrg` director contracts" entry).
 

@@ -1607,6 +1607,7 @@ dependencies = [
  "filetime",
  "libc",
  "md-5",
+ "mrg-director",
  "portage-dep",
  "portage-fetch",
  "portage-profile",
