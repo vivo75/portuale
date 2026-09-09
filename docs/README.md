@@ -11,6 +11,7 @@ holds everything else.
 | [`agent-context.md`](agent-context.md) | **Read first for any development work.** Goals, hard constraints, architecture decisions, the bash-backend resolution, and pointers to the live state + backlog. |
 | [`../AGENTS.md`](../AGENTS.md) | The "next slice" workflow and the verification / commit rules. |
 | [`scope-backlog.md`](scope-backlog.md) | What real portage does that portuale doesn't (either side), the standing non-goals, the distance to a drop-in replacement. |
+| [`backlog-tasks.md`](backlog-tasks.md) | The same open work as a flat, one-line-per-task list with code/doc pointers — for picking up a slice without a full context load. |
 | [`what-this-proves.md`](what-this-proves.md) | The append-only per-slice record — every shipped feature with its real-portage source grounding, plus a runnable example. Large; `git log` is the same history per-commit. |
 
 ## Reference
