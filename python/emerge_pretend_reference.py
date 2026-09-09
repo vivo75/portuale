@@ -8989,7 +8989,7 @@ def _synthetic_installed_entry(category, package, version, deps):
     )
 
 
-def _add_installed_dependency_closure(entries, root, virtuals_only):
+def _add_installed_dependency_closure(entries, root, system_atoms, virtuals_only):
     """Real `_complete_graph`'s effect on `_serialize_tasks`: every
     installed nomerge node carries its own recorded vdb dependency tree,
     recursively -- so leaf selection clears a shallow installed subtree
@@ -9013,10 +9013,10 @@ def _add_installed_dependency_closure(entries, root, virtuals_only):
     def _expandable(cat):
         return not virtuals_only or cat == "virtual"
 
-    # Real strip_libc_deps: drop the implicit virtual/libc / sys-libs/glibc
-    # dependency real strips from every dep string (re-expressed purely as
-    # the asap_nodes "libc first" ordering) -- keeping it wires the graph
-    # into one glibc blob and inflates find_smallest_cycle's cycles.
+    # KNOWN IMPERFECTION (see merge_order.rs): real's strip_libc_deps runs
+    # only on --changed-deps, never in _create_graph. Portuale strips the
+    # sys-libs/glibc / virtual/libc edges here anyway -- a net wash on L0
+    # pending find_smallest_cycle size parity.
     libc_cps = {tuple(cp.split("/", 1)) for cp in _libc_provider_cps(root)}
     libc_cps.add(("virtual", "libc"))
 
@@ -9062,6 +9062,17 @@ def _add_installed_dependency_closure(entries, root, virtuals_only):
     for key in seed_targets:
         _add_node(key)
 
+    # Seed 1b (complete mode only): real _complete_graph seeds a SetArg
+    # for @world/@system and walks it deep. Add each installed @system
+    # package as a node and queue its own dep walk; _topological_merge_
+    # order's prune drops the ones no merge-bound package reaches.
+    if not virtuals_only:
+        for atom_str in system_atoms:
+            atom = _parse_atom(atom_str)
+            if atom is None:
+                continue
+            _add_node(tuple(atom.cp.split("/", 1)))
+
     for i, e in enumerate(entries):
         if (
             e[2][0] == "already_installed"
@@ -9099,16 +9110,15 @@ def _topological_merge_order(entries, top_level_atoms=(), config=None, root="/",
     entry's own `deps` provenance (which carries real's per-key
     DepPriority) plus its required_by edges as a fallback.
 
-    Real's own "Prune 'nomerge' root nodes if nothing depends on them"
-    loop (depgraph.py:9509-9518) is deliberately not ported: real's graph
-    is seeded from DependencyArg nodes and so carries the whole installed
-    universe those sets reach, which is what the prune removes. This
-    reference's graph is built from resolved entries instead -- no arg
-    nodes, and never that universe. What the prune would still remove here
-    is a top-level already-installed entry, which real drops because it
-    never displays one; this reference does display them, ordered after
-    the dependencies they pull in, which is what leaving them in the
-    scheduler produces.
+    In complete mode this seeds the @system set into the graph
+    (_add_installed_dependency_closure) and then runs real's own "Prune
+    'nomerge' root nodes if nothing depends on them" loop
+    (depgraph.py:9505-9518) right after _build_merge_digraph: every
+    installed node left without a live parent is dropped, iterated to a
+    fixpoint. The deep-only @system members survive (a parent inside the
+    closure); the top-level @system leaves, whose only parent would have
+    been the pruned SetArg, do not. Pruned entries this reference still
+    displays are woven back into the output on their discovery rank.
 
     Mirrors portage-repo/src/merge_order.rs's serialize_merge_order
     exactly."""
@@ -9143,8 +9153,12 @@ def _topological_merge_order(entries, top_level_atoms=(), config=None, root="/",
         return tag == "new" and bool(prov.get("new_slot"))
 
     entries = list(entries)
+    virtuals_only = not any(_is_complete(e) for e in entries)
     _add_installed_dependency_closure(
-        entries, root, virtuals_only=not any(_is_complete(e) for e in entries)
+        entries,
+        root,
+        (config.get("system_packages") if isinstance(config, dict) else getattr(config, "system_packages", None)) or [],
+        virtuals_only,
     )
     n = len(entries)
 
@@ -9156,6 +9170,27 @@ def _topological_merge_order(entries, top_level_atoms=(), config=None, root="/",
         discovery_rank[i] = pos
 
     _debug_dump_graph(g, entries, top_level_atoms, root)
+
+    # Real _serialize_tasks: "Prune 'nomerge' root nodes if nothing
+    # depends on them" (depgraph.py:9505-9518), iterated to a fixpoint.
+    # Restricted to the synthetic i >= real_n nodes: a real
+    # already_installed *entry* is a nomerge root real drops too, but this
+    # reference displays it, ordered after the deps it pulls in -- which
+    # leaving it in the scheduler produces and pruning (-> leftover, on
+    # its parent-first discovery rank) does not.
+    while True:
+        removed = False
+        for i in range(real_n, n):
+            if not g.alive[i] or not g.installed[i]:
+                continue
+            if any(g.alive[p] for p in g.parents[i]):
+                continue
+            g.alive[i] = False
+            removed = True
+        if not removed:
+            break
+    g.order = [i for i in g.order if g.alive[i]]
+
     _merge_order_bias(g, entries, config, implicit_system_deps)
     scheduled = [i for i in _select_nodes(g, entries, root) if i < real_n]
 

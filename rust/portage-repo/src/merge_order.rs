@@ -547,14 +547,23 @@ fn synthetic_installed_entry(
 /// append a [`synthetic_installed_entry`] for each installed dependency
 /// not already present, to a fixpoint.
 ///
-/// Bounded by the installed set. Real additionally pulls the entire
-/// `@world`/`@system` universe in, but -- as this module's header notes
-/// and the `sys-apps/dbus` trace confirmed -- that only feeds
-/// `_merge_order_bias`'s parent counts, which for the cases that diverge
-/// come from the merge-bound packages themselves.
+/// Bounded by the installed set. In complete mode this also seeds from
+/// the whole `@system` set (real `_complete_graph` seeds `@world` /
+/// `@system` as `SetArg`s and walks them deep): an installed `@system`
+/// package like `app-shells/bash` or `dev-libs/gmp` -- reached from
+/// `sys-libs/glibc`'s optional `sys-devel/gcc` edge -- is a graph node
+/// with its own tree even when nothing being merged reaches it. That
+/// installed bulk is `_ignore_optional` ballast: real drains it one node
+/// at a time in `DepPriorityNormalRange`, which paces the frontier so a
+/// package sitting on a real runtime cycle (`dev-lang/perl` on the
+/// `glibc`/`libcrypt` cycle) is not front-loaded past an unrelated merge
+/// (`dev-cpp/eigen`) via a premature `drop_satisfied`. The nodes real's
+/// own "Prune 'nomerge' root nodes" step then drops are removed again in
+/// `serialize_merge_order` right after `build_digraph`.
 fn add_installed_dependency_closure(
     entries: &mut Vec<GraphEntry>,
     root: &Path,
+    system_atoms: &[String],
     virtuals_only: bool,
 ) {
     // `virtuals_only` (a plain `[ebuild N]` resolve, real not in complete
@@ -571,14 +580,18 @@ fn add_installed_dependency_closure(
         .map(|p| ((p.category.as_str(), p.package.as_str()), p))
         .collect();
 
-    // Real `strip_libc_deps` (`portage.dep.libc`): practically every
-    // ebuild carries an implicit `virtual/libc` / `sys-libs/glibc`
-    // dependency that real strips from every dep string and re-expresses
-    // purely as the `asap_nodes` "merge libc first" ordering
-    // (`seed_toolchain_asap`). Keeping those edges on the synthetic
-    // installed nodes wires the whole graph into one giant `glibc` blob
-    // and makes `find_smallest_cycle` pick a 13-node runtime cycle where
-    // real picks 5.
+    // KNOWN IMPERFECTION: real's `strip_libc_deps` (`portage/dep/libc.py`)
+    // runs only on the `--changed-deps` comparison, never in
+    // `_create_graph` -- real's scheduler digraph keeps every
+    // `sys-libs/glibc` / `virtual/libc` edge a package's own `*DEPEND`
+    // declares. Portuale strips them here anyway: keeping them lets
+    // `sys-libs/libxcrypt` / `virtual/libcrypt` merge out of real's
+    // `{glibc, libcrypt, libxcrypt, perl, locale-gen}` runtime cycle at
+    // the right time for `sys-auth/polkit`, but front-loads
+    // `sys-apps/lsb-release` in `dev-lang/rust` -- a net wash on L0 until
+    // the frontier-timing work lands the `find_smallest_cycle` size
+    // parity that would make the cycle break correctly. Revisit with
+    // that. "merge libc first" itself is `seed_toolchain_asap`.
     let mut libc_cps = crate::libc_provider_cps(root);
     libc_cps.insert(("virtual".to_string(), "libc".to_string()));
 
@@ -647,13 +660,27 @@ fn add_installed_dependency_closure(
         add_node(entries, &mut present, &mut queue, key);
     }
 
-    // (Real `_complete_graph` seeds the whole `@system`/`@world` universe
-    // into the *pre-prune* digraph -- what its `--debug` dump shows -- but
-    // then `_serialize_tasks`' own "Prune 'nomerge' root nodes if nothing
-    // depends on them" loop removes every one of them that no merge-bound
-    // package reaches, so the graph selection actually runs on is exactly
-    // this forward closure. Seeding them here and *not* pruning them back
-    // out only skews leaf timing, so it is deliberately not done.)
+    // Seed 1b (complete mode only): real `_complete_graph` seeds a
+    // `SetArg` for `@world`/`@system` and adds every atom in them, then
+    // walks the lot deep. Add each installed `@system` package as a node
+    // and queue its own dep walk. `serialize_merge_order`'s prune drops
+    // the ones no merge-bound package reaches -- but the deep-only
+    // members (`dev-libs/gmp` under `glibc` -> `gcc`, `sys-libs/readline`
+    // under `bash`, ...) stay, exactly as real's own post-prune graph
+    // keeps them.
+    if !virtuals_only {
+        for atom_str in system_atoms {
+            let Some(atom) = portage_dep::parse_atom(atom_str) else {
+                continue;
+            };
+            add_node(
+                entries,
+                &mut present,
+                &mut queue,
+                (atom.category, atom.package),
+            );
+        }
+    }
 
     // Seed 2: every installed-outcome entry whose deps were never filled
     // (and, in `virtuals_only` mode, is a `virtual/*`).
@@ -1696,7 +1723,7 @@ pub(crate) fn serialize_merge_order(
         ) || (matches!(e.outcome, PretendOutcome::New { .. }) && e.new_slot)
     });
     let mut ext = entries.to_vec();
-    add_installed_dependency_closure(&mut ext, root, !complete);
+    add_installed_dependency_closure(&mut ext, root, &config.system_packages, !complete);
     let entries: &[GraphEntry] = &ext;
     let n = entries.len();
 
@@ -1712,6 +1739,42 @@ pub(crate) fn serialize_merge_order(
     }
 
     debug_dump_graph(&g, entries, top_level_atoms, root);
+
+    // Real `_serialize_tasks`: after stripping its `DependencyArg` nodes
+    // (portuale has none), "Prune 'nomerge' root nodes if nothing depends
+    // on them, since otherwise they slow down merge order calculation"
+    // (`depgraph.py:9505-9518`) -- iterated to a fixpoint. This is what
+    // turns the `@system` seed above into real's actual post-prune
+    // selection graph: the deep-only members survive (a parent inside the
+    // closure), the top-level `@system` leaves (`net-misc/wget` and its
+    // ilk, whose only parent was the pruned `SetArg`) do not.
+    //
+    // Restricted to the synthetic `i >= real_n` nodes. A real
+    // `AlreadyInstalled` *entry* -- a top-level `--noreplace`/`--deep`
+    // target -- is also a nomerge root real would drop, but portuale
+    // *displays* it (real never does) and its `--tree` / "already
+    // installed" rendering wants it after the deps it pulls in. Leaving
+    // it in the scheduler produces exactly that (it only leafs once its
+    // subtree has); pruning it instead drops it into `leftover`, which
+    // re-weaves it on its *parent-first* discovery rank -- wrong order.
+    loop {
+        let mut removed = false;
+        for i in real_n..n {
+            if !g.alive[i] || !g.installed[i] {
+                continue;
+            }
+            if g.parents[i].iter().any(|&p| g.alive[p]) {
+                continue;
+            }
+            g.alive[i] = false;
+            removed = true;
+        }
+        if !removed {
+            break;
+        }
+    }
+    g.order.retain(|&i| g.alive[i]);
+
     merge_order_bias(&mut g, entries, config, implicit_system_deps);
     let scheduled: Vec<usize> = select_nodes(&mut g, entries, root)
         .into_iter()
