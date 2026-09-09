@@ -1,3 +1,22 @@
+# What this proves
+
+> Paths and identifiers written before 2026-10-10 may predate the #336 refactor: see [`renames.tsv`](renames.tsv).
+
+> The append-only per-slice record of everything shipped, each entry
+> grounded in the real portage source it ports. New slices append here
+> (workflow step 7); prior entries are fixed in place — a claim that
+> later went stale is corrected in a *later* entry, not by rewriting the
+> old one.
+>
+> **Reading order caveat:** the earliest entries date from when `emerge`
+> / `ebuild` were `--pretend`-only. Where an early entry says "still a
+> dry-run stub" / "no real merges yet", that stub has since shipped —
+> portuale builds, merges, and unmerges real packages now. The capability
+> index is [`scope-backlog.md`](scope-backlog.md) Part 1; `git log` is
+> this same history per-commit.
+
+---
+
 - **`versions-harness`**: a faithful Rust port of `vercmp`/`ververify`,
   checked against the real Python implementation through a neutral CLI
   contract (not a product CLI, not FFI/PyO3 bindings) -- see `agent-context.md`

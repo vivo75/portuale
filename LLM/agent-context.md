@@ -95,6 +95,81 @@ one-line description and exits 0; an unrecognized applet name still
 errors. `emerge --help` is a grouped tour of every action/option portuale
 implements (`pretend.rs`'s `HELP_TEXT`, pinned by the contract suite).
 
+## Test/benchmark harness architecture
+
+- For pure-library-level parity (versions, atom parsing, etc.), define a
+  neutral **CLI test-harness binary** on each side (not the real product
+  CLI) exposing the library surface as subcommands, with an identical
+  argv/output contract between the Python and Rust harnesses.
+- For `emerge`/`ebuild`, black-box test against the **real CLIs directly**
+  (with symlinks set up in the test `PATH` so multicall dispatch is
+  exercised as in real usage), since they're in scope as actual products,
+  not just internal library surface.
+- **There is no second copy of the resolver.** Until 2026-09-15 a Python
+  reference (`python/emerge_pretend_reference.py`) mirrored every
+  `emerge --pretend` slice and the contract suite asserted Rust == Python;
+  it proved agreement with a portuale-authored copy, not with Portage,
+  and was removed (`history/second_python_copy_removal.md`, in git history).
+  Expected `emerge` output now comes from Portage (the differential
+  beds, this host's `emerge`, upstream `lib/portage/tests/resolver/`
+  cases). In its place: expectation-free output invariants and cross-mode
+  checks (`pmtest/pytests-contract-suite/test_output_invariants.py`, also
+  run over L0), repeated-run determinism (all directory reads go through
+  the single `portage_util::read_dir_entries` seam — sorted by default,
+  seeded shuffle only under test-only `PORTUALE_SHUFFLE_DIRS`), the tree-wide primitive
+  differential (`pmtest/scripts/primitive_tree_differential.py`), the
+  unparsed-dependency-token counter, the re-pin review checklist
+  (`pmtest/scripts/portage_repin_review.py`), and the corpus harvested
+  from the last Rust/Python agreement
+  (`pmtest/pytests-contract-suite/corpus/`, drift is a warning). The primitive harnesses above
+  stay: they wrap Portage's `portage.versions`/`portage.dep`.
+- The harness needs **two modes**:
+  - *Correctness mode*: one operation per process invocation, pytest-driven,
+    exhaustive edge cases.
+  - *Benchmark mode*: batch input (many operations per single process
+    invocation) to avoid fork/exec overhead dominating the measurement.
+- Benchmark data: a **real, vendored Gentoo tree snapshot** (not purely
+  synthetic stress data) — realistic scale and distribution of versions/
+  atoms/deps. `pmtest/bench/extract_snapshot.py` refreshes
+  `gentoo_snapshot.json` against a live tree using Portage's
+  `portage.versions.pkgsplit` as the authority.
+- CI gates on both: correctness suite must pass on both implementations;
+  benchmark suite must show Rust ahead of Python and must not regress
+  over time.
+- Rust CI also gates on a **musl static build** smoke-tested inside a
+  minimal (`scratch`/busybox-level) container.
+- **Container-based real-system differential test bed**
+  (`pmtest/differential-test-bed/`, see its own `README.md` and
+  `history/real-world-testing.md` (git history)): runs portuale
+  *and* Portage's `emerge` against a pinned real Gentoo tree inside
+  throwaway `podman` containers and diffs the results. **L0**
+  (`differential-test-bed/run/l0-resolver.sh`) — `emerge -pv` for ~120 real atoms
+  (firefox, plasma-meta, `@world`, …), comparing merge lists / USE /
+  order / errors / exit codes. **L1**
+  (`differential-test-bed/run/l1-merge-from-binpkg.sh`) — both PMs merge an identical
+  prebuilt binpkg set into a fresh `/` and the resulting filesystem + VDB
+  snapshots are diffed. It is **live and exercised** — the only check
+  that catches resolver / merge-path regressions at real-tree scale (the
+  fixture-based pytest contract suite cannot). The fixture-oracle bed
+  (`differential-test-bed/run/l0-fixture-oracle-all.sh`) covers the same
+  ground per-fixture with Portage oracles — it caught backlog #54. Needs the
+  `localhost/test-portuale:latest` image
+  (`sudo differential-test-bed/create-container.bash`, run from pmtest).
+  It is **slower and heavier** than the pytest/`cargo test` pass, so it
+  is not part of every slice's verification — but running L0 (and L1
+  where merge behaviour changed) is **advisable periodically, and
+  especially after a big merge from another branch or a change to the
+  resolver / merge-order / phase code**, to confirm nothing regressed at
+  scale. Findings go in `differential-test-bed/findings/`; adjudicated
+  non-bugs in `differential-test-bed/compare/known-divergences.yaml`. **L1 must run *with* the portage
+  upgrade** (do not pass `L1_SKIP_PORTAGE_UPGRADE=1`) — the image's base
+  portage predates the VDB consolidated `metadata` file portuale mirrors,
+  so skipping the upgrade makes every merged package show a spurious
+  `metadata` finding. Last clean full runs (`2026-09-09`): L0 clean
+  96/120 / parity 0.800 (the 24 divergent are merge-order timing or the
+  parked backtracking-disclosure); L1 porttest 0 hard findings after the
+  16-commit director/solver/regen/binpkg merge.
+
 ## Ownership
 
 - Python team: `pym/portage` core + the Python-side test harness.
@@ -102,6 +177,24 @@ implements (`pretend.rs`'s `HELP_TEXT`, pinned by the contract suite).
 - The **shared pytest contract suite is jointly owned** (separate repo or
   shared submodule) — neither team may unilaterally narrow it to make
   their side pass.
+
+## Real ebuild phase execution + filesystem merge
+
+Live. `ebuild <file> install|merge|unmerge|package` and non-`--pretend`
+`emerge <atom>` / `--getbinpkg[only]` / `--buildpkg[only]` / `-C` /
+`--depclean` / `--prune` / `--config` / `--deselect` / `@set` all run
+real ebuild phases (via `brush` over unmodified `bin/*.sh`) and mutate
+the filesystem + VDB for real — `crates/portuale/src/{ebuild_phases,
+ebuild_merge,ebuild_unmerge,ebuild_package,emerge_build,emerge_getbinpkg}.rs`.
+Real eclass `inherit()`, real `SRC_URI` fetch (Manifest digests,
+`mirror://`, `RESTRICT`), real `CONFIG_PROTECT` / preserve-libs /
+`env_update` / `os.lchown`, `emerge -jN` parallel scheduler +
+`--load-average` + build-log capture, `--keep-going`, `--resume`.
+`app-arch/unzip`, `sys-fs/fuse`, `app-arch/xz-utils` live-verified end
+to end. Per-feature cited-source detail + v1 cuts:
+`what-this-proves.md`; what is still missing: `scope-backlog.md` Part 2.
+The prior per-slice narrative of this section is in
+`history/agent-context-current-state-2026-09-10.md` (git history).
 
 ### What "install a package into the filesystem" actually is
 
@@ -138,6 +231,11 @@ useful orientation even though both are now shipped):
    `FILESDIR`, `EBUILD_PHASE`, `PORTAGE_BUILDDIR`, etc.) happens in
    `doebuild_environment()` (`:381`).
 
+### The bash-execution backend (resolved)
+
+Ebuild phases run bash. The choice was system `bash` vs an embedded
+Rust bash (`reubeno/brush`). Outcome:
+
 ## How portuale actually runs, session to session
 
 The session-to-session operating rhythm — the "next slice" workflow, the
@@ -145,3 +243,13 @@ oracle/fixture/test rules, the full verification pass, and the
 commit/push rules — lives in **[`../AGENTS.md`](../AGENTS.md)**. Read it
 before scoping or implementing a slice.
 
+## How to use this doc
+
+"Context" through "Ownership", "Real ebuild phase execution", "What
+'install a package' actually is", and "The bash-execution backend" are
+settled, citation-backed decisions/findings — not things to re-derive.
+"Current state" is a pointer to the live records (`what-this-proves.md`,
+`git log`, `scope-backlog.md` — keep that one current). For brush, check
+the live `reubeno/brush` state against `brush-pin.md`. If something here
+conflicts with current reality, or a genuinely open decision isn't
+covered, ask before proceeding rather than assuming.
