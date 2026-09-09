@@ -10762,10 +10762,14 @@ pub fn run(args: &[String]) -> ExitCode {
     // sequence, with two documented cuts: (1) the reduced cycle-only
     // `--tree` re-display (`self.display(handler.merge_list)`) and its
     // leading `\n\n` separator -- the full merge list is already above;
-    // (2) `circular_dependency_handler._find_suggestions`, the ~180-line
-    // USE-flag heuristic that would replace the generic advisory with a
-    // specific "disable flag X on package Y" fix (portuale always hits
-    // the `else` branch real portage takes when no suggestion is found).
+    // (2) the `large_cycle_count` "a lot of cycles" trailer, which needs
+    // full elementary-cycle enumeration (portuale keeps one cycle, so it
+    // never fires). The `Change USE:` suggestion branch itself is shipped
+    // (`portage_repo::circular_dep_solutions`, real
+    // `circular_dependency_handler._find_suggestions`): fixtures
+    // `usecyclea` (bare suggestion), `gpcyclec` (hard grandparent clash
+    // disqualifies it), and `fucyclec` (conditional grandparent clash
+    // keeps it with `followup_change`) pin all three outcomes.
     // The shortest cycle drives `_prepare_circular_dep_message`; every
     // edge is build-time by construction, so every priority label is
     // `(buildtime)`.

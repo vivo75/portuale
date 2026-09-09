@@ -2418,5 +2418,35 @@ rust/target/release/portuale emerge -pu --implicit-system-deps=n @world
 
 Deterministic slice tests: `pytest
 tests/test_emerge_pretend_contract.py -k "implicit_system"` (CASES +
-pinned order test, Rust == Python) and `cargo test -p portuale
+pinned order test, Rust == Python) and `cargo test -p portage-repo
 implicit_system_deps` (bias unit test).
+
+Circular `followup_change` (conditional grandparent keeps the USE fix
+with a cascade warning, real `_find_suggestions` step 9): `emerge -p
+dev-libs/fucyclec` against the fixture tree (both sides byte-identical,
+exit 1):
+
+```sh
+export FX="$(pwd)/fixtures" PORTAGE_CONFIGROOT="$FX" ROOT="$FX" PORTAGE_RUNNING_ROOT="$FX"
+rust/target/release/portuale emerge -p dev-libs/fucyclec
+# [ebuild  N     ] dev-libs/fucyclea-1.0  USE="x"
+# [ebuild  N     ] dev-libs/fucycleb-1.0
+# [ebuild  N     ] dev-libs/fucyclec-1.0
+# (stderr:)
+#  * Error: circular dependencies:
+# dev-libs/fucyclea-1.0 depends on
+#  dev-libs/fucycleb-1.0 (buildtime)
+#   dev-libs/fucyclea-1.0 (buildtime)
+# It might be possible to break this cycle
+# by applying the following change:
+# - dev-libs/fucyclea-1.0 (Change USE: -x)
+#  (This change might require USE changes on parent packages.)
+# Note that this change can be reverted, once the package has been installed.
+# (exit 1)
+```
+
+Deterministic slice tests: `pytest
+tests/test_emerge_pretend_contract.py -k "conditional_grandparent or
+grandparent_use_conflict"` (followup vs disqualify vs bare suggestion,
+Rust == Python) and `cargo test -p portage-repo circular_dep`
+(suggestion unit tests).

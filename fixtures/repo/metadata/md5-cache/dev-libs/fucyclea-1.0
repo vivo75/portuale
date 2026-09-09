@@ -1,0 +1,8 @@
+DEFINED_PHASES=-
+DEPEND=x? ( dev-libs/fucycleb )
+DESCRIPTION=fixture: build-cycle with dev-libs/fucycleb gated behind USE=x -- same shape as gpcyclea, but the grandparent dev-libs/fucyclec constrains x only conditionally ([x?]), so the fix survives with followup_change
+EAPI=8
+IUSE=+x
+KEYWORDS=amd64
+SLOT=0
+_md5_=0000000000000000000000000000000

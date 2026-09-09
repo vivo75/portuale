@@ -131,9 +131,10 @@ can't grow into these incrementally:
   `large_cycle_count` (real's own richer multi-priority digraph, a
   different graph representation than portuale keeps) and the cycle-only
   `--tree` re-display (needs that same digraph fed through the entire
-  `--tree` renderer); the *conditional* `followup_change` grandparent
-  variant has no fixture (the *hard*-clash grandparent case does,
-  2026-09-05).
+  `--tree` renderer). The *conditional* `followup_change` grandparent
+  variant has a fixture now (`dev-libs/fucyclea`/`fucycleb`/`fucyclec`,
+  see `what-this-proves.md`); the *hard*-clash case has had one since
+  2026-09-05.
 - **`emerge --pretend --debug`: real's resolver trace — shipped
   2026-09-07.** All six stages plus the header/cycle dumps, dual-language
   (`portage-repo/src/resolver_trace.rs` + the `emerge_pretend_reference.py`

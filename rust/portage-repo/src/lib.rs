@@ -11122,7 +11122,7 @@ pub struct CircularSuggestion {
 /// crate sorts for a deterministic render, the same choice made
 /// everywhere else portuale diverges from a real non-determinism).
 ///
-/// Simplifications vs real, all documented in `docs/find-suggestions-plan.md`:
+/// Simplifications vs real, all documented in `docs/history/find-suggestions-plan.md`:
 /// `_pkg_use_enabled` is `effective_use_flags` without the (rare)
 /// autounmask-USE overlay (autounmask-*changed* flags are still honoured
 /// as untouchable); the grandparent-atom set is re-derived by scanning
@@ -22970,6 +22970,45 @@ mod tests {
             &result.entries,
         );
         assert!(sols.is_empty(), "{:?}", sols);
+    }
+
+    #[test]
+    fn circular_dep_solutions_conditional_grandparent_keeps_the_suggestion_with_followup() {
+        // Same USE-gated cycle shape (here fucyclea/fucycleb), but the
+        // top-level target dev-libs/fucyclec constrains the solution flag
+        // only conditionally (dev-libs/fucyclea[x?]) -- real
+        // `_find_suggestions` step 9's `followup_change` arm: the "disable
+        // x" fix survives, flagged as possibly cascading upward. This is
+        // the variant `docs/history/find-suggestions-plan.md` left
+        // without a fixture.
+        let root = fixtures_root();
+        let config = portage_profile::resolve_config(
+            &root,
+            &root.join("repo"),
+            &[("overlay".to_string(), root.join("overlay"))],
+            &[],
+            "testrepo",
+            &HashMap::new(),
+        )
+        .expect("fixture config resolves");
+        let repos = find_repos(&root).expect("repos");
+        let result = graph_result_real("dev-libs/fucyclec");
+        assert_eq!(result.circular_deps.len(), 1);
+        let sols = circular_dep_solutions(
+            &result.circular_deps[0],
+            &repos,
+            &config,
+            &result.autounmask_use_changes,
+            &result.entries,
+        );
+        assert_eq!(
+            sols,
+            vec![CircularSuggestion {
+                parent_cpv: "dev-libs/fucyclea-1.0".to_string(),
+                changes: vec![("x".to_string(), false)],
+                followup: true,
+            }]
+        );
     }
 
     #[test]

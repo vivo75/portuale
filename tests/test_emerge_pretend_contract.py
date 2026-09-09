@@ -409,6 +409,11 @@ CASES = [
         1,
     ),
     (
+        "circular dep: conditional grandparent keeps the suggestion with followup",
+        ["--pretend", "dev-libs/fucyclec"],
+        1,
+    ),
+    (
         "recursion: any-of group prefers the installed alternative over an earlier uninstalled one",
         ["--pretend", "dev-libs/anyof"],
         0,
@@ -2641,6 +2646,37 @@ def test_circular_dep_grandparent_use_conflict_disqualifies_the_suggestion(
         " * disabling USE flags that trigger optional dependencies.\n"
     )
     assert "Change USE:" not in rust.stderr
+
+
+def test_circular_dep_conditional_grandparent_keeps_the_suggestion_with_followup(
+    emerge_binary, emerge_pretend_python, fixture_env
+):
+    """The `followup_change` arm of the same grandparent check (real
+    `_find_suggestions` step 9; `docs/history/find-suggestions-plan.md`
+    left exactly this variant without a fixture): `dev-libs/fucyclec`
+    build-depends on `dev-libs/fucyclea[x?]` with a *conditional* USE-dep,
+    so the "disable x on fucyclea" fix survives but is flagged as possibly
+    cascading upward -- real prints the `Change USE:` line *plus* the
+    ` (This change might require USE changes on parent packages.)`
+    trailer. Rust == Python byte-identical, full stderr pinned."""
+    args = ["--pretend", "dev-libs/fucyclec"]
+    rust = _run([str(emerge_binary)], args, fixture_env)
+    py = _run(emerge_pretend_python, args, fixture_env)
+    assert rust.returncode == 1 and py.returncode == 1
+    assert rust.stdout == py.stdout and rust.stderr == py.stderr
+    assert rust.stderr == (
+        "\n * Error: circular dependencies:\n"
+        "\n"
+        "dev-libs/fucyclea-1.0 depends on\n"
+        " dev-libs/fucycleb-1.0 (buildtime)\n"
+        "  dev-libs/fucyclea-1.0 (buildtime)\n"
+        "\n"
+        "It might be possible to break this cycle\n"
+        "by applying the following change:\n"
+        "- dev-libs/fucyclea-1.0 (Change USE: -x)\n"
+        " (This change might require USE changes on parent packages.)\n"
+        "Note that this change can be reverted, once the package has been installed.\n"
+    )
 
 
 def test_root_deps_recursion_reports_an_unbuildable_build_dep(

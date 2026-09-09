@@ -15943,3 +15943,24 @@ half-landed slice (field + CLI parsing without the resolver threading,
 which left the tree non-compiling); the compile repair is part of this
 entry. Still open in Part 2.A: the `_FrontierDigraph` perf layer and
 blocker/uninstall interleaving.
+
+**Circular `followup_change` fixture.** `docs/history/find-suggestions-
+plan.md` left exactly one `_find_suggestions` variant without a fixture:
+the *conditional*-grandparent arm of step 9 (the hard-clash `ignore`
+arm had one since 2026-09-05). New `dev-libs/fucyclea`/`fucycleb` (the
+same `x?`-gated build cycle as `usecyclea`/`gpcyclea`) plus
+`dev-libs/fucyclec`, whose `DEPEND="dev-libs/fucyclea[x?]"` constrains
+the solution flag only conditionally: the "disable x on fucyclea" fix
+survives, flagged `followup_change`, so both sides print the
+`Change USE:` line *plus* the ` (This change might require USE changes
+on parent packages.)` trailer (byte-identical, exit 1). Same slice also
+repairs two stale comments the shipped heuristic left behind: the
+`pretend.rs` circular block claimed portuale "always hits the `else`
+branch" (false since the 2026-09-03 Slice 2 -- `usecyclea` renders a
+suggestion), and `circular_dep_solutions` cited
+`docs/find-suggestions-plan.md` after the plan moved to `docs/history/`.
+Pinned: a CASES entry, the
+`test_circular_dep_conditional_grandparent_keeps_the_suggestion_with_followup`
+contract test (full stderr pinned), and the Rust
+`circular_dep_solutions_conditional_grandparent_keeps_the_suggestion_with_followup`
+unit test.
