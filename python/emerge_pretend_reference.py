@@ -8837,6 +8837,113 @@ def _select_nodes(g, entries, root="/"):
     return retlist
 
 
+def _synthetic_installed_entry(category, package, version, deps):
+    """An `already_installed` graph node for an installed package the
+    resolve never made an entry for -- pulled in only to complete real
+    `_complete_graph`'s installed-dependency tree for merge ordering.
+    `_topological_merge_order` filters every index `>= real_n` back out.
+    Mirrors portage-repo/src/merge_order.rs's synthetic_installed_entry."""
+    return (
+        category,
+        package,
+        ("already_installed", version),
+        [],
+        None,
+        [],
+        [],
+        "ebuild",
+        {
+            "mask_entry": None,
+            "unmask_entry": None,
+            "keyword_entry": None,
+            "deps": deps,
+        },
+        None,
+        None,
+        None,
+        False,
+    )
+
+
+def _add_installed_dependency_closure(entries, root):
+    """Real `_complete_graph`'s effect on `_serialize_tasks`: every
+    installed nomerge node carries its own recorded vdb dependency tree,
+    recursively -- so leaf selection clears a shallow installed subtree
+    before a deep one. `_build_merge_digraph` only follows each entry's
+    `deps`, and an already_installed entry has none. Fill `deps` on every
+    installed entry from its vdb `*DEPEND` (USE-reduced against its
+    recorded USE, real `pkg.built` priorities), and append a
+    `_synthetic_installed_entry` for each installed dependency not
+    already present, to a fixpoint. Mirrors portage-repo/src/merge_order.rs's
+    add_installed_dependency_closure."""
+    by_cp = {}
+    for c, p, v, _s in _all_installed_packages(root):
+        by_cp.setdefault((c, p), (c, p, v))
+
+    def _vdb_edges(cat, pkg, ver):
+        md = {}
+        for k in ("RDEPEND", "IDEPEND", "PDEPEND", "DEPEND", "BDEPEND"):
+            s = _read_vdb_string(root, cat, pkg, ver, k)
+            if s and s.strip():
+                md[k] = s
+        use_flags = _read_vdb_flag_set(root, cat, pkg, ver, "USE")
+        return _dep_edges_from_metadata(
+            md, use_flags, ("RDEPEND", "IDEPEND", "PDEPEND", "DEPEND", "BDEPEND"), True
+        )
+
+    present = {(e[0], e[1]) for e in entries}
+    queue = []
+
+    seed_targets = [
+        edge["cp"]
+        for e in entries
+        for edge in (
+            e[8].get("deps") or [] if isinstance(e[8], dict) else []
+        )
+    ]
+    for key in seed_targets:
+        if key in present:
+            continue
+        present.add(key)
+        p = by_cp.get(key)
+        if p is None:
+            continue
+        entries.append(_synthetic_installed_entry(p[0], p[1], p[2], []))
+        queue.append(len(entries) - 1)
+
+    for i, e in enumerate(entries):
+        if e[2][0] == "already_installed" and not (
+            isinstance(e[8], dict) and e[8].get("deps")
+        ):
+            queue.append(i)
+
+    qi = 0
+    while qi < len(queue):
+        i = queue[qi]
+        qi += 1
+        e = entries[i]
+        if e[2][0] != "already_installed":
+            continue
+        prov = e[8] if isinstance(e[8], dict) else {}
+        if prov.get("deps"):
+            continue
+        edges = _vdb_edges(e[0], e[1], e[2][1])
+        for edge in edges:
+            key = edge["cp"]
+            if key in present:
+                continue
+            present.add(key)
+            p = by_cp.get(key)
+            if p is None:
+                continue
+            entries.append(_synthetic_installed_entry(p[0], p[1], p[2], []))
+            queue.append(len(entries) - 1)
+        # entry tuples are immutable -- rebuild [8] with the filled deps.
+        new_prov = dict(prov)
+        new_prov["deps"] = edges
+        entries[i] = e[:8] + (new_prov,) + e[9:]
+
+
 def _topological_merge_order(entries, top_level_atoms=(), config=None, root="/", implicit_system_deps=True):
     """Put `entries` in real portage's dependency-first *merge* order.
 
@@ -8860,13 +8967,13 @@ def _topological_merge_order(entries, top_level_atoms=(), config=None, root="/",
 
     Mirrors portage-repo/src/merge_order.rs's serialize_merge_order
     exactly."""
-    n = len(entries)
+    real_n = len(entries)
     config = config or {"system_packages": []}
-    if n < 2:
+    if real_n < 2:
         # Real still emits the `digraph:` dump for a single-package merge
         # (its scheduler runs regardless). Portuale short-circuits the
         # scheduler here, so build the graph once just for the dump.
-        if n == 1 and _RESOLVER_DEBUG:
+        if real_n == 1 and _RESOLVER_DEBUG:
             _debug_dump_graph(
                 _build_merge_digraph(entries, top_level_atoms, root),
                 entries,
@@ -8874,6 +8981,27 @@ def _topological_merge_order(entries, top_level_atoms=(), config=None, root="/",
                 root,
             )
         return entries
+
+    # Real `_complete_graph` auto-enables (a merge changes an
+    # already-installed package -> real re-walks the whole @world/@system
+    # universe as nomerge nodes with their full dependency trees). Only
+    # then does leaf selection clear a shallow installed subtree before a
+    # deep one; a plain all-`[ebuild N]` resolve keeps installed nodes as
+    # leaves. Trigger computed straight off `entries` (same set real's
+    # complete_graph_auto_enable checks). Synthetic nodes get indices
+    # `>= real_n` and are filtered out of `scheduled` / `leftover`.
+    def _is_complete(e):
+        tag = e[2][0]
+        if tag in ("reinstall", "upgrade", "downgrade"):
+            return True
+        prov = e[8] if isinstance(e[8], dict) else {}
+        return tag == "new" and bool(prov.get("new_slot"))
+
+    if any(_is_complete(e) for e in entries):
+        entries = list(entries)
+        _add_installed_dependency_closure(entries, root)
+    n = len(entries)
+
     g = _build_merge_digraph(entries, top_level_atoms, root)
     # Unbiased discovery rank, kept before the bias re-sorts g.order -- it
     # is what the entries the scheduler never saw are woven back in on.
@@ -8883,11 +9011,11 @@ def _topological_merge_order(entries, top_level_atoms=(), config=None, root="/",
 
     _debug_dump_graph(g, entries, top_level_atoms, root)
     _merge_order_bias(g, entries, config, implicit_system_deps)
-    scheduled = _select_nodes(g, entries, root)
+    scheduled = [i for i in _select_nodes(g, entries, root) if i < real_n]
 
     placed = set(scheduled)
     leftover = sorted(
-        (i for i in range(n) if i not in placed), key=lambda i: discovery_rank[i]
+        (i for i in range(real_n) if i not in placed), key=lambda i: discovery_rank[i]
     )
     out = []
     ti = 0

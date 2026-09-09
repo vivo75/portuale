@@ -31,7 +31,10 @@
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
-use crate::{GraphEntry, PretendOutcome, all_installed_packages, read_vdb_slot};
+use crate::{
+    CandidateSource, GraphEntry, PretendOutcome, VisibilityProvenance, all_installed_packages,
+    read_vdb_flag_set, read_vdb_slot, read_vdb_string,
+};
 
 /// Real `_emerge/DepPriority.py::DepPriority` -- the per-edge dependency
 /// classification that drives every `ignore_priority` decision in
@@ -477,6 +480,164 @@ fn installed_candidates_by_cp(root: &Path) -> HashMap<(String, String), Vec<Stri
             ));
     }
     by_cp
+}
+
+/// A synthetic `AlreadyInstalled` graph node for an installed package
+/// that the resolve never created an entry for -- pulled in only to
+/// complete real `_complete_graph`'s installed-dependency tree for merge
+/// ordering. `serialize_merge_order` filters every index `>= real_n`
+/// (these) back out of the scheduled list before returning.
+fn synthetic_installed_entry(
+    category: String,
+    package: String,
+    version: String,
+    deps: Vec<DepEdge>,
+) -> GraphEntry {
+    GraphEntry {
+        category,
+        package,
+        outcome: PretendOutcome::AlreadyInstalled { version },
+        blockers: Vec::new(),
+        slot: None,
+        sub_slot: None,
+        repo_name: None,
+        oldbest: Vec::new(),
+        use_flags_display: Vec::new(),
+        use_expand_display: Vec::new(),
+        use_expand_display_p: Vec::new(),
+        keyword_mask: None,
+        new_slot: false,
+        interactive: false,
+        fetch_restrict: false,
+        fetch_restrict_satisfied: false,
+        download_files: Vec::new(),
+        required_by: Vec::new(),
+        source: CandidateSource::Ebuild,
+        provenance: VisibilityProvenance::default(),
+        keyword_suggestion: None,
+        use_suggestion: None,
+        parent_use_suggestion: None,
+        targets_running_root: false,
+        remote_binary: false,
+        build_id: None,
+        deps,
+    }
+}
+
+/// Real `_complete_graph`'s effect on `_serialize_tasks`: every installed
+/// "nomerge" node in the digraph carries its own **recorded vdb
+/// dependency tree**, recursively -- so leaf selection clears a shallow
+/// installed subtree (`x11-libs/xtrans` -> `app-portage/elt-patches` ->
+/// `sys-apps/gentoo-functions`) before a deep one (`x11-base/xorg-proto`
+/// -> `dev-build/meson` -> the whole Python build stack) and merges the
+/// package sitting on the shallow one first.
+///
+/// `build_digraph` only follows `GraphEntry::deps`, and an
+/// `AlreadyInstalled` entry has none -- so portuale's graph truncated
+/// every installed node at depth 1 (`(no children)` in the `--debug`
+/// dump) and treated `meson`/`elt-patches` alike as instant leaves. This
+/// walks the forward transitive closure: fill `deps` on every installed
+/// entry from its vdb `*DEPEND` (USE-reduced against its recorded `USE`,
+/// with real `pkg.built` priorities so build deps are `optional`), and
+/// append a [`synthetic_installed_entry`] for each installed dependency
+/// not already present, to a fixpoint.
+///
+/// Bounded by the installed set. Real additionally pulls the entire
+/// `@world`/`@system` universe in, but -- as this module's header notes
+/// and the `sys-apps/dbus` trace confirmed -- that only feeds
+/// `_merge_order_bias`'s parent counts, which for the cases that diverge
+/// come from the merge-bound packages themselves.
+fn add_installed_dependency_closure(entries: &mut Vec<GraphEntry>, root: &Path) {
+    let installed = all_installed_packages(root);
+    let by_cp: HashMap<(&str, &str), &crate::InstalledPackage> = installed
+        .iter()
+        .map(|p| ((p.category.as_str(), p.package.as_str()), p))
+        .collect();
+
+    let vdb_edges = |cat: &str, pkg: &str, ver: &str| -> Vec<DepEdge> {
+        let mut md: HashMap<String, String> = HashMap::new();
+        for k in ["RDEPEND", "IDEPEND", "PDEPEND", "DEPEND", "BDEPEND"] {
+            let s = read_vdb_string(root, cat, pkg, ver, k);
+            if !s.trim().is_empty() {
+                md.insert(k.to_string(), s);
+            }
+        }
+        let use_flags = read_vdb_flag_set(root, cat, pkg, ver, "USE");
+        dep_edges_from_metadata(
+            &md,
+            &use_flags,
+            &["RDEPEND", "IDEPEND", "PDEPEND", "DEPEND", "BDEPEND"],
+            true,
+        )
+    };
+
+    let mut present: HashSet<(String, String)> = entries
+        .iter()
+        .map(|e| (e.category.clone(), e.package.clone()))
+        .collect();
+    let mut queue: std::collections::VecDeque<usize> = std::collections::VecDeque::new();
+
+    // Seed 1: every installed dependency named by an *already-resolved*
+    // entry (merge-bound or installed) that the resolve never made a
+    // node for -- an installed package satisfying a dep is not walked, so
+    // `dev-perl/common-sense`'s edge to the installed `dev-lang/perl`
+    // (and perl's own deep tree) was simply missing. Real
+    // `_complete_graph` has every one of these.
+    let seed_targets: Vec<(String, String)> = entries
+        .iter()
+        .flat_map(|e| e.deps.iter())
+        .map(|d| (d.category.clone(), d.package.clone()))
+        .collect();
+    for key in seed_targets {
+        if !present.insert(key.clone()) {
+            continue;
+        }
+        let Some(p) = by_cp.get(&(key.0.as_str(), key.1.as_str())) else {
+            continue;
+        };
+        entries.push(synthetic_installed_entry(
+            p.category.clone(),
+            p.package.clone(),
+            p.version.clone(),
+            Vec::new(),
+        ));
+        queue.push_back(entries.len() - 1);
+    }
+
+    // Seed 2: every installed-outcome entry whose deps were never filled.
+    for (i, e) in entries.iter().enumerate() {
+        if matches!(e.outcome, PretendOutcome::AlreadyInstalled { .. }) && e.deps.is_empty() {
+            queue.push_back(i);
+        }
+    }
+
+    while let Some(i) = queue.pop_front() {
+        let PretendOutcome::AlreadyInstalled { version } = entries[i].outcome.clone() else {
+            continue;
+        };
+        if !entries[i].deps.is_empty() {
+            continue;
+        }
+        let (cat, pkg) = (entries[i].category.clone(), entries[i].package.clone());
+        let edges = vdb_edges(&cat, &pkg, &version);
+        for e in &edges {
+            let key = (e.category.clone(), e.package.clone());
+            if !present.insert(key) {
+                continue;
+            }
+            let Some(p) = by_cp.get(&(e.category.as_str(), e.package.as_str())) else {
+                continue;
+            };
+            entries.push(synthetic_installed_entry(
+                p.category.clone(),
+                p.package.clone(),
+                p.version.clone(),
+                Vec::new(),
+            ));
+            queue.push_back(entries.len() - 1);
+        }
+        entries[i].deps = edges;
+    }
 }
 
 /// Builds the merge-order digraph out of the resolved `entries`.
@@ -1364,7 +1525,43 @@ pub(crate) fn serialize_merge_order(
     root: &Path,
     implicit_system_deps: bool,
 ) -> Vec<usize> {
+    let real_n = entries.len();
+    // Real `_complete_graph` auto-enables (a merge changes an
+    // already-installed package -> real re-walks the whole `@world` /
+    // `@system` universe as nomerge nodes carrying their full recorded
+    // dependency trees). In that mode leaf selection clears a shallow
+    // installed subtree (`xtrans` -> `elt-patches` -> `gentoo-functions`)
+    // before a deep one (`xorg-proto` -> `meson` -> the Python stack).
+    // Portuale gave every installed node `(no children)`, so both freed
+    // together and sorted by bias alone. `add_installed_dependency_
+    // closure` supplies those trees -- but only when a real
+    // `_complete_graph` would run: a plain all-`[ebuild N]` resolve keeps
+    // installed nodes as leaves. The trigger is the same set real's
+    // `complete_graph_auto_enable` checks (in-slot version/USE change, or
+    // a new-slot install of an already-installed `cp`); computed here
+    // straight off `entries` rather than threaded from the CLI, because
+    // the CLI's own `want_complete` misses a reason-less `[ebuild R]`
+    // whose displayed USE still differs from the vdb. Synthetic nodes get
+    // indices `>= real_n` and are filtered out of `scheduled` below.
+    let complete = entries.iter().any(|e| {
+        matches!(
+            e.outcome,
+            PretendOutcome::Reinstall { .. }
+                | PretendOutcome::Upgrade { .. }
+                | PretendOutcome::Downgrade { .. }
+        ) || (matches!(e.outcome, PretendOutcome::New { .. }) && e.new_slot)
+    });
+    let entries_owned: Vec<GraphEntry>;
+    let entries: &[GraphEntry] = if complete {
+        let mut ext = entries.to_vec();
+        add_installed_dependency_closure(&mut ext, root);
+        entries_owned = ext;
+        &entries_owned
+    } else {
+        entries
+    };
     let n = entries.len();
+
     let mut g = build_digraph(entries, top_level_atoms, root);
     // Unbiased discovery rank, kept before the bias re-sorts `g.order` --
     // it is what the trivial (non-merge-bound) entries are woven back in
@@ -1378,7 +1575,10 @@ pub(crate) fn serialize_merge_order(
 
     debug_dump_graph(&g, entries, top_level_atoms, root);
     merge_order_bias(&mut g, entries, config, implicit_system_deps);
-    let scheduled = select_nodes(&mut g, entries, root);
+    let scheduled: Vec<usize> = select_nodes(&mut g, entries, root)
+        .into_iter()
+        .filter(|&i| i < real_n)
+        .collect();
 
     // Real's own retlist skips every "nomerge" node (`if node.operation
     // == "nomerge": continue`), because real never displays one. Portuale
@@ -1396,10 +1596,10 @@ pub(crate) fn serialize_merge_order(
     // discovery rank, so such an entry is never bias-promoted past a
     // merge task it was behind in plain discovery order.
     let placed: HashSet<usize> = scheduled.iter().copied().collect();
-    let mut leftover: Vec<usize> = (0..n).filter(|i| !placed.contains(i)).collect();
+    let mut leftover: Vec<usize> = (0..real_n).filter(|i| !placed.contains(i)).collect();
     leftover.sort_by_key(|&i| discovery_rank[i]);
 
-    let mut out: Vec<usize> = Vec::with_capacity(n);
+    let mut out: Vec<usize> = Vec::with_capacity(real_n);
     let mut ti = 0;
     for &m in &scheduled {
         while ti < leftover.len() && discovery_rank[leftover[ti]] < discovery_rank[m] {
@@ -1409,6 +1609,6 @@ pub(crate) fn serialize_merge_order(
         out.push(m);
     }
     out.extend(&leftover[ti..]);
-    debug_assert_eq!(out.len(), n);
+    debug_assert_eq!(out.len(), real_n);
     out
 }
