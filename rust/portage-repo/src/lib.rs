@@ -13186,7 +13186,21 @@ fn backtracking_resolve(req: &ResolveRequest) -> Result<GraphResult, Error> {
                 let kinds = edge_kind_map
                     .entry((key.clone(), owner))
                     .or_insert((false, false));
-                if buildtime_hard {
+                // Real `DepPriority.satisfied` (`_emerge/DepPriority.py`):
+                // a build-time dep already provided by an installed
+                // package gets a *satisfied* priority, which
+                // `_serialize_tasks`' `DepPrioritySatisfiedRange` can
+                // ignore when breaking a cycle -- so it is not an
+                // unbreakable edge. Only a genuinely unsatisfied
+                // build-time dep counts as `has_hard`, matching this
+                // map's own "unsatisfied build-time dep" contract. Under
+                // `--emptytree` both ends of the `app-arch/xz-utils` <->
+                // `app-portage/elt-patches` build-time cycle are still
+                // installed, so real orders them by their installed
+                // versions rather than reporting a circular dependency.
+                if buildtime_hard
+                    && best_installed_for_atom(root, &current_atom, &key.0, &key.1).is_none()
+                {
                     kinds.0 = true;
                 } else {
                     kinds.1 = true;
@@ -23041,6 +23055,36 @@ mod tests {
     }
 
     #[test]
+    fn build_time_cycle_between_two_installed_packages_is_not_a_hard_cycle() {
+        // instcyclea BDEPENDs instcycleb BDEPENDs instcyclea, both
+        // already installed. Real `DepPriority.satisfied` demotes a
+        // build-time edge whose dep an installed package provides, so
+        // `_serialize_tasks` can break the cycle. Under --emptytree both
+        // are `[ebuild R]`; `circular_deps` must stay empty (contrast
+        // `hardcyclea`/`hardcycleb`, neither installed -> reported).
+        let result = graph_result_empty("dev-libs/instcyclea");
+        assert!(
+            result.circular_deps.is_empty(),
+            "expected no hard cycle, got {:?}",
+            result.circular_deps
+        );
+        let names: Vec<&str> = result.entries.iter().map(|e| e.package.as_str()).collect();
+        assert!(names.contains(&"instcyclea") && names.contains(&"instcycleb"));
+        assert!(
+            result
+                .entries
+                .iter()
+                .all(|e| matches!(e.outcome, PretendOutcome::Reinstall { .. }))
+        );
+        // sanity: the genuine hard cycle is still detected.
+        assert!(
+            !graph_result_real("dev-libs/hardcyclea")
+                .circular_deps
+                .is_empty()
+        );
+    }
+
+    #[test]
     fn recursion_prefers_the_installed_any_of_alternative_over_an_earlier_uninstalled_one() {
         // dev-libs/anyof's own RDEPEND is
         // "|| ( dev-libs/newpkg dev-libs/samepkg )". dev-libs/newpkg
@@ -24470,6 +24514,67 @@ mod tests {
 
     fn graph_result_real(atom_str: &str) -> GraphResult {
         graph_result_real_backtrack(atom_str, 10)
+    }
+
+    fn graph_result_empty(atom_str: &str) -> GraphResult {
+        let root = fixtures_root();
+        let config = portage_profile::resolve_config(
+            &root,
+            &root.join("repo"),
+            &[("overlay".to_string(), root.join("overlay"))],
+            &[],
+            "testrepo",
+            &HashMap::new(),
+        )
+        .expect("fixture config resolves");
+        #[allow(clippy::fn_params_excessive_bools)]
+        resolve_pretend_graph(
+            &root,
+            &root,
+            &[atom_str.to_string()],
+            &config,
+            false,
+            false,
+            false,
+            false,
+            Deep::NotRequested,
+            &[],
+            true,
+            false,
+            false,
+            false,
+            false,
+            true,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            &[],
+            &[],
+            false,
+            None,
+            false,
+            false,
+            None,
+            &fixtures_root().join("distfiles"),
+            /* empty: */ true,
+            false,
+            false,
+            10,
+            &[],
+            true,
+            false,
+            false,
+            false,
+            &[],
+            &[],
+            true,
+            false,
+        )
+        .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
     }
 
     #[track_caller]

@@ -2540,6 +2540,35 @@ def test_root_deps_recursion_terminates_on_a_bdepend_cycle(
     )
 
 
+def test_build_time_cycle_between_two_installed_packages_is_not_circular(
+    emerge_binary, emerge_pretend_python, fixture_env
+):
+    """instcyclea BDEPENDs instcycleb which BDEPENDs instcyclea -- but
+    both are already installed. Real `DepPriority.satisfied` (a build-time
+    dep provided by an installed package) lets `_serialize_tasks`'
+    `DepPrioritySatisfiedRange` ignore that edge when breaking a cycle, so
+    real orders the two by their installed versions instead of reporting a
+    circular dependency. Under `--emptytree` both become `[ebuild R]`; the
+    resolve still succeeds, exit 0, no `* Error: circular dependencies:`.
+    This is the `app-arch/xz-utils` <-> `app-portage/elt-patches`
+    emptytree case in miniature (contrast
+    test_unbreakable_build_time_cycle_prints_the_circular_deps_error,
+    where neither end is installed)."""
+    base = ["--pretend", "--emptytree", "dev-libs/instcyclea"]
+    rust = _run([str(emerge_binary)], base, fixture_env)
+    python = _run(emerge_pretend_python, base, fixture_env)
+
+    assert rust.returncode == 0
+    assert python.returncode == 0
+    assert rust.stdout == python.stdout
+    assert rust.stderr == python.stderr
+    assert "circular dependencies" not in rust.stderr
+    assert rust.stdout == (
+        "[ebuild   R    ] dev-libs/instcyclea-1.0 \n"
+        "[ebuild   R    ] dev-libs/instcycleb-1.0 \n"
+    )
+
+
 def test_unbreakable_build_time_cycle_prints_the_circular_deps_error(
     emerge_binary, emerge_pretend_python, fixture_env
 ):

@@ -9521,7 +9521,17 @@ def resolve_pretend_graph(
             if owner is not None:
                 required_by_map.setdefault(key, set()).add(owner)
                 kinds = edge_kind_map.setdefault((key, owner), [False, False])
-                if buildtime_hard:
+                # Real DepPriority.satisfied: a build-time dep already
+                # provided by an installed package gets a satisfied
+                # priority that _serialize_tasks' DepPrioritySatisfiedRange
+                # can ignore when breaking a cycle, so it is not an
+                # unbreakable edge. Only a genuinely unsatisfied build-time
+                # dep is has_hard (this map's "unsatisfied build-time dep"
+                # contract). Mirrors portage-repo/src/lib.rs.
+                if buildtime_hard and (
+                    _best_installed_for_atom(root, current_atom_str, key[0], key[1])
+                    is None
+                ):
                     kinds[0] = True
                 else:
                     kinds[1] = True
