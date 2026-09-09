@@ -616,6 +616,34 @@ fn abi_probe_harness(with_consumer: bool) -> (std::path::PathBuf, Vec<RepoConfig
     (base, repos)
 }
 
+fn abi_conflict_record(
+    inst0_parents: Vec<(&str, &str)>,
+    inst1_parents: Vec<(&str, &str)>,
+) -> SlotConflict {
+    let edge = |cpv: &str, atom: &str| SlotConflictParent {
+        parent_cpv: cpv.to_string(),
+        atom: atom.to_string(),
+        use_display: Vec::new(),
+        installed: false,
+    };
+    let inst = |version: &str, sub: &str, parents: Vec<(&str, &str)>| SlotConflictInstance {
+        version: version.to_string(),
+        sub_slot: sub.to_string(),
+        repo_name: "testrepo".to_string(),
+        use_display: Vec::new(),
+        parents: parents.into_iter().map(|(c, a)| edge(c, a)).collect(),
+        installed: false,
+    };
+    SlotConflict {
+        category: "app-misc".to_string(),
+        package: "abiprov".to_string(),
+        slot: "0".to_string(),
+        resolved_version: "2".to_string(),
+        conflicting_atom: "app-misc/abiprov:0/1=".to_string(),
+        instances: vec![inst("2", "2", inst0_parents), inst("1", "1", inst1_parents)],
+    }
+}
+
 fn abi_probe_entries(consumer_outcome: PretendOutcome) -> Vec<GraphEntry> {
     let provider = |version: &str, sub: &str| GraphEntry {
         outcome: PretendOutcome::New {
@@ -1860,6 +1888,7 @@ mod reinstall;
 mod repo_config;
 mod resolver_trace;
 mod rev_dep;
+mod slot_conflict;
 mod slot_undo;
 mod updates;
 mod use_display;

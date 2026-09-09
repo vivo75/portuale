@@ -542,3 +542,15 @@ struct Demote162Args<'a> {
     queued: &'a [QueueItem],
     update: bool,
 }
+
+fn demote_entries_162() -> Vec<GraphEntry> {
+    vec![entry_162(
+        "test",
+        "pkg",
+        PretendOutcome::New {
+            version: "2.0".to_string(),
+        },
+        Some("0"),
+        false,
+    )]
+}
