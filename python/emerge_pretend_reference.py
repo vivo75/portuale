@@ -5735,6 +5735,58 @@ def _atom_cp_installed(root, atom_str):
     return bool(installed_candidates(root, category, package))
 
 
+def _entry_merge_bound_cpv(e):
+    """`category/package-version` a merge-bound entry tuple would install,
+    or None for already_installed / no_visible_candidate. Mirrors
+    portage-repo/src/lib.rs's merge_bound_cpv."""
+    tag = e[2][0]
+    if tag in ("new", "reinstall"):
+        return f"{e[0]}/{e[1]}-{e[2][1]}"
+    if tag in ("upgrade", "downgrade"):
+        return f"{e[0]}/{e[1]}-{e[2][2]}"
+    return None
+
+
+def _atoms_all_in_graph(atoms, entries, config):
+    """Real dep_zapdeps' all_in_graph predicate for a "||" alternative
+    (dep_check.py:636-649): every non-blocker atom is satisfied by a
+    merge-bound entry already in the graph this run, [use]-deps checked
+    against that entry's resolved USE (entry index 5, the (flag, enabled)
+    display list). Real files such an alternative in choice bin 0
+    (preferred_in_graph, aliased to preferred_installed). Makes
+    virtual/secret-service pick the KDE-stack-pulled kwallet-runtime
+    over the first-listed gnome-keyring. Mirrors portage-repo's
+    atoms_all_in_graph."""
+    non_blocker = [
+        a
+        for a in atoms
+        if _parse_atom(a) is not None and not _parse_atom(a).blocker
+    ]
+    if not non_blocker:
+        return False
+    for a in non_blocker:
+        parsed = _parse_atom(a)
+        cat, pkg = parsed.cp.split("/", 1)
+        hit = False
+        for e in entries:
+            if e[0] != cat or e[1] != pkg:
+                continue
+            cpv = _entry_merge_bound_cpv(e)
+            if cpv is None or not match_from_list(a, [cpv]):
+                continue
+            if parsed.use is None:
+                hit = True
+                break
+            enabled = {f for f, on in e[5] if on}
+            iuse = {f for f, _ in e[5]}
+            if _use_deps_satisfied(parsed, _valid_iuse(iuse, config), enabled):
+                hit = True
+                break
+        if not hit:
+            return False
+    return True
+
+
 def _root_deps_satisfied_atoms(
     metadata, use_flags, repos, config, running_root, dep_keys=("DEPEND", "BDEPEND")
 ):
@@ -10885,12 +10937,16 @@ def resolve_pretend_graph(
                 )
                 if not all_available:
                     return 0
-                # Real dep_zapdeps preferred_installed (choice bin 0):
-                # every atom's cp is already installed -> beat a first-
-                # listed alternative that would need a merge (virtual/wine
-                # -> the installed wine-staging). Mirrors portage-repo's
-                # atom_cp_installed / AltPreference.
-                if all(_atom_cp_installed(root, a) for a in atoms):
+                # Real dep_zapdeps choice bin 0 (the single list
+                # preferred_in_graph / preferred_installed /
+                # preferred_any_slot alias to): every atom's cp is already
+                # installed (virtual/wine -> the installed wine-staging) OR
+                # every atom is already a merge-bound graph node this run,
+                # [use]-checked (virtual/secret-service -> the KDE-stack-
+                # pulled kwallet-runtime[keyring] over gnome-keyring).
+                if all(_atom_cp_installed(root, a) for a in atoms) or _atoms_all_in_graph(
+                    atoms, entries, config
+                ):
                     return 2
                 return 1
 
@@ -11553,9 +11609,12 @@ def _enqueue_dependencies(
         )
         if not all_available:
             return 0
-        # Real dep_zapdeps preferred_installed -- see the identical check
-        # in resolve_pretend_graph's main "||" closure.
-        if all(_atom_cp_installed(root, a) for a in atoms):
+        # Real dep_zapdeps choice bin 0 (preferred_installed /
+        # preferred_in_graph) -- see the identical check in
+        # resolve_pretend_graph's main "||" closure.
+        if all(_atom_cp_installed(root, a) for a in atoms) or _atoms_all_in_graph(
+            atoms, entries or [], config
+        ):
             return 2
         return 1
 

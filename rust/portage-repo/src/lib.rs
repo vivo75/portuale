@@ -7968,6 +7968,67 @@ fn atom_cp_installed(root: &Path, atom_str: &str) -> bool {
     !installed_candidates(root, &atom.category, &atom.package).is_empty()
 }
 
+/// Real `dep_zapdeps`'s `all_in_graph` predicate for a `||` alternative
+/// (`dep_check.py:636-649`): every non-blocker atom of the alternative is
+/// satisfied by a package *already added to the graph this run*
+/// (merge-bound), with the atom's own `[use]` deps checked against that
+/// entry's resolved USE (`use_flags_display`). Real files such an
+/// alternative in choice bin 0 -- `preferred_in_graph`, the same list
+/// object `preferred_installed`/`preferred_any_slot` collapse to -- so it
+/// ranks exactly like an installed alternative. This is what makes
+/// `virtual/secret-service`'s `|| ( gnome-base/gnome-keyring
+/// >=kde-frameworks/kwallet-runtime-6.18.0[keyring] app-admin/keepassxc )`
+/// pick `kwallet-runtime` (pulled in anyway by the KDE stack) instead of
+/// merging the first-listed `gnome-keyring` and its whole GTK/gcr subtree.
+///
+/// Returns `false` for an empty or all-blocker alternative (nothing to be
+/// "in graph"); the caller's own zero-atom / circular-self handling
+/// covers those cases first.
+fn atoms_all_in_graph(
+    atoms: &[String],
+    entries: &[GraphEntry],
+    config: &portage_profile::Config,
+) -> bool {
+    let non_blocker: Vec<&String> = atoms
+        .iter()
+        .filter(|a| {
+            portage_dep::parse_atom(a).is_some_and(|p| p.blocker == portage_dep::Blocker::None)
+        })
+        .collect();
+    if non_blocker.is_empty() {
+        return false;
+    }
+    non_blocker.iter().all(|a| {
+        let Some(parsed) = portage_dep::parse_atom(a) else {
+            return false;
+        };
+        let use_deps = parsed.use_deps.unwrap_or_default();
+        entries.iter().any(|e| {
+            let Some(cpv) = merge_bound_cpv(e) else {
+                return false;
+            };
+            if e.category != parsed.category || e.package != parsed.package {
+                return false;
+            }
+            if portage_dep::match_from_list(a, &[cpv.as_str()]).is_none_or(|m| m.is_empty()) {
+                return false;
+            }
+            if use_deps.is_empty() {
+                return true;
+            }
+            let enabled: HashSet<String> = e
+                .use_flags_display
+                .iter()
+                .filter(|(_, on)| *on)
+                .map(|(f, _)| f.clone())
+                .collect();
+            let iuse: HashSet<String> =
+                e.use_flags_display.iter().map(|(f, _)| f.clone()).collect();
+            portage_dep::use_deps_satisfied(&use_deps, &valid_iuse(&iuse, config), &enabled)
+        })
+    })
+}
+
 /// The best visible candidate for `atom_str` plus its `-pv`-style USE
 /// display -- what `emerge --info <atom>` shows in real `action_info`'s
 /// per-package "`<cpv>::<repo> would be built with the following:`"
@@ -14878,15 +14939,22 @@ fn backtracking_resolve(req: &ResolveRequest) -> Result<GraphResult, Error> {
                     if !all_available {
                         return portage_use_reduce::AltPreference::Unsatisfiable;
                     }
-                    // Real `dep_zapdeps` `preferred_installed` (choice bin
-                    // 0): every non-blocker atom's `cat/pkg` is already
-                    // installed (real's check is `Atom(atom.cp)` -- cp
-                    // level, no version/slot/use). Makes `virtual/wine`'s
+                    // Real `dep_zapdeps` choice bin 0 -- the single list
+                    // `preferred_in_graph` / `preferred_installed` /
+                    // `preferred_any_slot` all alias to when `graph_db` is
+                    // present. An alternative every non-blocker atom of
+                    // which is either already installed (`all_installed`,
+                    // cp-level -- makes `virtual/wine`'s
                     // `|| ( wine-vanilla wine-staging … )` pick the
-                    // installed `wine-staging` instead of the first-listed
-                    // `wine-vanilla` (whose only visible version fails
-                    // REQUIRED_USE).
-                    if atoms.iter().all(|a| atom_cp_installed(root, a)) {
+                    // installed `wine-staging`) OR already a merge-bound
+                    // node this run (`all_in_graph`, `[use]`-checked --
+                    // makes `virtual/secret-service` pick the
+                    // KDE-stack-pulled `kwallet-runtime[keyring]` over the
+                    // first-listed `gnome-keyring`) ranks above one that
+                    // would need a fresh merge.
+                    if atoms.iter().all(|a| atom_cp_installed(root, a))
+                        || atoms_all_in_graph(atoms, &entries, config)
+                    {
                         portage_use_reduce::AltPreference::Installed
                     } else {
                         portage_use_reduce::AltPreference::Available
@@ -15799,9 +15867,12 @@ fn enqueue_dependencies(
             });
             if !all_available {
                 portage_use_reduce::AltPreference::Unsatisfiable
-            } else if atoms.iter().all(|a| atom_cp_installed(root, a)) {
-                // Real `dep_zapdeps` `preferred_installed` -- see the
-                // identical check in the main New/Upgrade `||` closure.
+            } else if atoms.iter().all(|a| atom_cp_installed(root, a))
+                || atoms_all_in_graph(atoms, entries, config)
+            {
+                // Real `dep_zapdeps` choice bin 0 (`preferred_installed` /
+                // `preferred_in_graph`) -- see the identical check in the
+                // main New/Upgrade `||` closure.
                 portage_use_reduce::AltPreference::Installed
             } else {
                 portage_use_reduce::AltPreference::Available
@@ -23133,6 +23204,34 @@ mod tests {
                 .circular_deps
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn or_dep_prefers_a_branch_already_merge_bound_in_the_graph() {
+        // ingraphsvc RDEPENDs `|| ( dev-libs/ingraphkeyring
+        // dev-libs/ingraphwallet[keyring] )`. Neither branch is installed.
+        // ingraphany pulls ingraphwallet[keyring] directly *and*
+        // ingraphsvc -- so when ingraphsvc's `||` is resolved,
+        // ingraphwallet is already a graph node. Real `dep_zapdeps`
+        // `all_in_graph` (choice bin 0) picks it over the first-listed
+        // ingraphkeyring, so ingraphkeyring + its own dep never enter the
+        // graph.
+        let names: Vec<String> = graph("dev-libs/ingraphany")
+            .into_iter()
+            .map(|(n, _)| n)
+            .collect();
+        assert!(names.contains(&"dev-libs/ingraphwallet".to_string()));
+        assert!(!names.contains(&"dev-libs/ingraphkeyring".to_string()));
+        assert!(!names.contains(&"dev-libs/ingraphkeyringdep".to_string()));
+
+        // Control: with nothing pulling ingraphwallet in independently,
+        // the same `||` falls back to the first-listed branch.
+        let ctl: Vec<String> = graph("dev-libs/ingraphnoany")
+            .into_iter()
+            .map(|(n, _)| n)
+            .collect();
+        assert!(ctl.contains(&"dev-libs/ingraphkeyring".to_string()));
+        assert!(!ctl.contains(&"dev-libs/ingraphwallet".to_string()));
     }
 
     #[test]

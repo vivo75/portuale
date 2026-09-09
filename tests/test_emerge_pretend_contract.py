@@ -2814,6 +2814,36 @@ def test_any_of_group_prefers_the_installed_alternative(emerge_binary, fixture_e
     ]
 
 
+def test_or_group_prefers_a_branch_already_in_the_graph(
+    emerge_binary, emerge_pretend_python, fixture_env
+):
+    """Real `dep_zapdeps` `all_in_graph` (dep_check.py:636-649) files a
+    `||` alternative every atom of which is already a merge-bound graph
+    node into choice bin 0 -- the same list `preferred_installed` uses.
+    dev-libs/ingraphsvc's `|| ( dev-libs/ingraphkeyring
+    dev-libs/ingraphwallet[keyring] )` has neither branch installed, but
+    dev-libs/ingraphany pulls ingraphwallet[keyring] in directly (and
+    ingraphsvc), so the second branch is in-graph and wins -- ingraphkeyring
+    and its own dep never enter the list. This is the `virtual/secret-service
+    -> kwallet-runtime (not gnome-keyring)` case in miniature. The
+    ingraphnoany control has nothing pulling ingraphwallet, so the same
+    `||` falls back to the first-listed ingraphkeyring."""
+    r1 = _run([str(emerge_binary)], ["--pretend", "dev-libs/ingraphany"], fixture_env)
+    p1 = _run(emerge_pretend_python, ["--pretend", "dev-libs/ingraphany"], fixture_env)
+    assert r1.returncode == 0
+    assert r1.stdout == p1.stdout
+    lines = r1.stdout.splitlines()
+    assert any("dev-libs/ingraphwallet-1.0" in ln for ln in lines)
+    assert not any("dev-libs/ingraphkeyring" in ln for ln in lines)
+
+    r2 = _run([str(emerge_binary)], ["--pretend", "dev-libs/ingraphnoany"], fixture_env)
+    p2 = _run(emerge_pretend_python, ["--pretend", "dev-libs/ingraphnoany"], fixture_env)
+    assert r2.returncode == 0
+    assert r2.stdout == p2.stdout
+    assert any("dev-libs/ingraphkeyring-1.0" in ln for ln in r2.stdout.splitlines())
+    assert not any("dev-libs/ingraphwallet" in ln for ln in r2.stdout.splitlines())
+
+
 def test_or_group_installed_preference_skips_a_required_use_broken_first_alternative(
     emerge_binary, emerge_pretend_python, fixture_env
 ):
