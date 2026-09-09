@@ -151,6 +151,16 @@ pub(crate) fn xattr_excluded(pattern: &str, attr: &[u8]) -> bool {
     false
 }
 
+// ---------------------------------------------------------------------
+// D7 write guard: every mutation must land under the canonical `$D`
+// (else `--dest`). A static binary escapes libsandbox's `LD_PRELOAD`,
+// so symlinks could otherwise redirect writes outside the dest tree.
+// ---------------------------------------------------------------------
+
+struct Guard {
+    root: PathBuf,
+}
+
 /// Map an errno to Portage's Python exception type name.
 fn exc_name(errno: i32) -> &'static str {
     match errno {

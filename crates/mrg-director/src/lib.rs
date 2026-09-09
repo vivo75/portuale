@@ -1182,6 +1182,48 @@ mod tests {
         assert_eq!(db.root().to_str(), Some("/root"));
     }
 
+    /// `MemoryDb` is the installed-db slot's second implementation
+    /// (Portage `_emerge/FakeVartree.py`): recorded order, per-version
+    /// contents/edges, unknown reads as empty.
+    #[test]
+    fn packages_db_memory_is_the_snapshot_second_backend() {
+        let mut db = MemoryDb::new(Path::new("/root"));
+        assert_eq!(db.root().to_str(), Some("/root"));
+        assert!(db.installed_versions("dev-libs", "example").is_empty());
+        db.add_package(AddPackageArgs {
+            category: "dev-libs",
+            package: "example",
+            version: "2.0",
+            contents_files: vec!["usr/lib/libx.so.2".to_string()],
+            depended_on_by: vec!["app/other-1.0".to_string()],
+        });
+        db.add_package(AddPackageArgs {
+            category: "dev-libs",
+            package: "example",
+            version: "1.0",
+            contents_files: vec!["usr/lib/libx.a".to_string()],
+            depended_on_by: Vec::new(),
+        });
+        assert_eq!(
+            db.installed_versions("dev-libs", "example"),
+            vec!["2.0", "1.0"]
+        );
+        assert_eq!(
+            db.contents_files("dev-libs", "example", "2.0"),
+            vec!["usr/lib/libx.so.2"]
+        );
+        assert_eq!(
+            db.reverse_dependents("dev-libs", "example", "2.0"),
+            vec!["app/other-1.0"]
+        );
+        assert!(
+            db.reverse_dependents("dev-libs", "example", "1.0")
+                .is_empty()
+        );
+        assert!(db.contents_files("dev-libs", "example", "9.9").is_empty());
+        assert!(db.installed_versions("sys-apps", "missing").is_empty());
+    }
+
     struct FakeDb<'a> {
         root: &'a Path,
     }
@@ -1211,6 +1253,45 @@ mod tests {
         assert_eq!(cache.repo(), "main");
         assert!(cache.category("dev-libs").is_empty());
         assert!(cache.metadata("dev-libs", "example-1.0").is_err());
+    }
+
+    /// `VolatileCache` is the repo-cache slot's second implementation
+    /// (Portage `cache/volatile.py`): sorted order, missing reads as
+    /// `Err`, reads return copies.
+    #[test]
+    fn repo_cache_volatile_is_the_in_memory_second_backend() {
+        let aux = std::collections::HashMap::from([
+            ("SLOT".to_string(), "0".to_string()),
+            ("KEYWORDS".to_string(), "amd64".to_string()),
+        ]);
+        let cache = VolatileCache::from_entries(
+            vec![
+                ("dev-libs".to_string(), "b-2.0".to_string(), aux.clone()),
+                ("dev-libs".to_string(), "a-1.0".to_string(), aux.clone()),
+            ],
+            "main",
+        );
+        assert_eq!(cache.repo(), "main");
+        assert_eq!(cache.category("dev-libs"), vec!["a-1.0", "b-2.0"]);
+        assert!(cache.category("sys-apps").is_empty());
+        assert_eq!(
+            cache.metadata("dev-libs", "a-1.0").unwrap().get("SLOT"),
+            Some(&"0".to_string())
+        );
+        assert!(cache.metadata("dev-libs", "missing-9.9").is_err());
+
+        let mut read_back = cache.metadata("dev-libs", "a-1.0").unwrap();
+        read_back.insert("SLOT".to_string(), "corrupted".to_string());
+        assert_eq!(
+            cache.metadata("dev-libs", "a-1.0").unwrap().get("SLOT"),
+            Some(&"0".to_string())
+        );
+
+        let mut empty = VolatileCache::new("overlay");
+        assert_eq!(empty.repo(), "overlay");
+        assert!(empty.category("dev-libs").is_empty());
+        empty.insert("dev-libs", "c-3.0", aux);
+        assert_eq!(empty.category("dev-libs"), vec!["c-3.0"]);
     }
 
     /// `MergeEngine::execute` takes one [`MergeUnit`] under a
@@ -1630,5 +1711,25 @@ mod tests {
         assert!(!capped.should_start(3, 2.5));
         assert!(!capped.should_start(4, 1.5));
         assert!(capped.should_start(0, 99.0));
+    }
+
+    /// `UnlimitedPolicy` (Portage's `max_jobs is True`, bare `-j`): no
+    /// ceiling; `--load-average` still gates *additional* builds.
+    #[test]
+    fn scheduler_policy_unlimited_never_caps_but_still_load_gates() {
+        let unlimited = UnlimitedPolicy::new(Some(2.0));
+        assert_eq!(unlimited.max_jobs(), usize::MAX);
+        assert!(unlimited.should_start(0, 99.0));
+        assert!(unlimited.should_start(1000, 1.5));
+        assert!(!unlimited.should_start(1000, 2.5));
+
+        let ungated = UnlimitedPolicy::new(None);
+        assert!(ungated.should_start(usize::MAX - 1, f64::INFINITY));
+
+        // The constructor the scheduler runs under carries both knobs.
+        let wired = LoadAwarePolicy::new(4, Some(2.0));
+        assert_eq!(wired.max_jobs(), 4);
+        assert!(wired.should_start(3, 1.5));
+        assert!(!wired.should_start(3, 2.5));
     }
 }
