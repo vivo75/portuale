@@ -528,3 +528,59 @@ fn eclasses_field(
     }
     Some(parts.join("\t"))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use portage_util::TempDir;
+    use std::collections::VecDeque;
+
+    fn work_item(category: &str, pf: &str) -> RegenWorkItem {
+        RegenWorkItem {
+            ebuild_path: PathBuf::from(format!("/repo/{category}/pkg/{pf}.ebuild")),
+            repo_location: PathBuf::from("/repo"),
+            masters: Vec::new(),
+            category: category.to_string(),
+            pf: pf.to_string(),
+            cp: format!("{category}/pkg"),
+        }
+    }
+
+    fn key(category: &str, pf: &str) -> (String, String) {
+        (category.to_string(), pf.to_string())
+    }
+
+    /// Dispatch order skips only keys already running.
+    #[test]
+    fn dispatch_takes_the_first_item_whose_key_is_not_running() {
+        let work = vec![
+            work_item("dev-libs", "a-1.0"),
+            work_item("dev-libs", "a-1.0"),
+            work_item("dev-libs", "b-1.0"),
+        ];
+        let pass: Vec<usize> = vec![0, 1, 2];
+        let pending: VecDeque<usize> = (0..3).collect();
+        assert_eq!(
+            next_dispatchable_in(&pending, &HashSet::new(), &work, &pass),
+            Some(0)
+        );
+        let running: HashSet<(String, String)> = [key("dev-libs", "a-1.0")].into();
+        assert_eq!(
+            next_dispatchable_in(&pending, &running, &work, &pass),
+            Some(2)
+        );
+        let all: HashSet<(String, String)> =
+            [key("dev-libs", "a-1.0"), key("dev-libs", "b-1.0")].into();
+        assert_eq!(next_dispatchable_in(&pending, &all, &work, &pass), None);
+        assert_eq!(
+            next_dispatchable_in(&VecDeque::new(), &HashSet::new(), &work, &pass),
+            None
+        );
+        let subset: Vec<usize> = vec![2, 0];
+        let sub_pending: VecDeque<usize> = (0..2).collect();
+        assert_eq!(
+            next_dispatchable_in(&sub_pending, &running, &work, &subset),
+            Some(0)
+        );
+    }
+}

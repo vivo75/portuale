@@ -44,6 +44,34 @@ fn run_pass_reinstall_with_only_repo_drift_carries_oldbest() {
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// A masked candidate reports through the masked-dep channel.
+#[test]
+fn run_pass_reports_a_masked_candidate() {
+    let dir = slotundo_temp_dir("161-run-masked");
+    let atoms = vec!["dev-libs/hardmaskedpkg".to_string()];
+    let mut config = test_config();
+    config.package_mask = vec!["dev-libs/hardmaskedpkg".to_string()];
+    let repos = find_repos(&fixtures_root()).expect("fixture repos");
+    let opts = CtxOpts161 {
+        backtrack_max: 10,
+        atoms: atoms.clone(),
+        ..Default::default()
+    };
+    let ctx = ctx_161(&dir, &config, repos, &opts);
+    let pass = run_pass(&ctx, &BacktrackParams::default(), true).expect("walk settles");
+    assert!(matches!(
+        pass.entries[0].outcome,
+        PretendOutcome::NoVisibleCandidate
+    ));
+    assert!(
+        pass.masked_deps
+            .iter()
+            .any(|r| r.category == "dev-libs" && r.package == "hardmaskedpkg"),
+        "the masked candidate is reported"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// An unlimited deep walk recurses into an installed dependency's own deps.
 #[test]
 fn run_pass_deep_walk_recurses_into_installed_deps() {
@@ -171,5 +199,67 @@ fn run_pass_replace_seed_files_no_argument_puller() {
         pass.slot_pullers.is_empty(),
         "a lone seed files no Argument pullers"
     );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Under `--usepkgonly`, a newer staged binary merges even with no ebuild twin
+/// at its version.
+#[test]
+fn run_pass_usepkgonly_takes_a_newer_binary() {
+    let dir = slotundo_temp_dir("161-run-newbin");
+    let atoms = vec!["dev-libs/sounneed".to_string()];
+    let mut config = test_config();
+    config.scanned_binpkgs = Some(vec![HashMap::from([
+        ("CPV".to_string(), "dev-libs/sounneed-9.9".to_string()),
+        ("SLOT".to_string(), "0".to_string()),
+        ("KEYWORDS".to_string(), "amd64".to_string()),
+        ("REPO".to_string(), "testrepo".to_string()),
+    ])]);
+    let repos = find_repos(&fixtures_root()).expect("fixture repos");
+    let opts = CtxOpts161 {
+        backtrack_max: 10,
+        atoms: atoms.clone(),
+        usepkgonly: true,
+        ..Default::default()
+    };
+    let ctx = ctx_161(&dir, &config, repos, &opts);
+    let pass = run_pass(&ctx, &BacktrackParams::default(), true).expect("walk settles");
+    assert_eq!(pass.entries.len(), 1);
+    assert_eq!(pass.entries[0].source, CandidateSource::Binary);
+    assert!(matches!(
+        pass.entries[0].outcome,
+        PretendOutcome::New { ref version } if version == "9.9"
+    ));
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Under plain `--usepkg`, a binary with no ebuild twin at its version loses
+/// to the visible tree.
+#[test]
+fn run_pass_newer_binary_loses_to_the_tree() {
+    let dir = slotundo_temp_dir("161-run-ebwin");
+    let atoms = vec!["dev-libs/sounneed".to_string()];
+    let mut config = test_config();
+    config.scanned_binpkgs = Some(vec![HashMap::from([
+        ("CPV".to_string(), "dev-libs/sounneed-9.9".to_string()),
+        ("SLOT".to_string(), "0".to_string()),
+        ("KEYWORDS".to_string(), "amd64".to_string()),
+        ("REPO".to_string(), "testrepo".to_string()),
+    ])]);
+    let repos = find_repos(&fixtures_root()).expect("fixture repos");
+    let opts = CtxOpts161 {
+        backtrack_max: 10,
+        atoms: atoms.clone(),
+        usepkg: true,
+        ..Default::default()
+    };
+    let ctx = ctx_161(&dir, &config, repos, &opts);
+    let pass = run_pass(&ctx, &BacktrackParams::default(), true).expect("walk settles");
+    assert_eq!(pass.entries.len(), 1);
+    assert_eq!(pass.entries[0].source, CandidateSource::Ebuild);
+    assert!(matches!(
+        pass.entries[0].outcome,
+        PretendOutcome::New { ref version } if version == "1.0"
+    ));
     let _ = fs::remove_dir_all(&dir);
 }

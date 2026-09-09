@@ -99,6 +99,51 @@ fn topological_merge_order_stamps_discovery_before_sorting() {
     assert_eq!(ranks, vec![("b", 1), ("a", 0)]);
 }
 
+#[test]
+fn implicit_system_deps_n_skips_the_merge_order_bias() {
+    // Leaves a, b, c with c in @system: the bias promotes c first, while
+    // `--implicit-system-deps=n` keeps discovery order.
+    let mut config = test_config();
+    config.system_packages = vec!["dev-libs/c".to_string()];
+    let atoms = vec![
+        "dev-libs/a".to_string(),
+        "dev-libs/b".to_string(),
+        "dev-libs/c".to_string(),
+    ];
+    let (biased, _) = topological_merge_order(TopologicalMergeOrderArgs {
+        entries: vec![
+            graph_entry("dev-libs", "a", "1.0"),
+            graph_entry("dev-libs", "b", "1.0"),
+            graph_entry("dev-libs", "c", "1.0"),
+        ],
+        top_level_atoms: &atoms,
+        config: &config,
+        root: Path::new("/nonexistent-root"),
+        implicit_system_deps: true,
+        repos: &[],
+        dynamic_deps: true,
+        circular: &HashMap::new(),
+    });
+    let names: Vec<&str> = biased.iter().map(|e| e.package.as_str()).collect();
+    assert_eq!(names, vec!["c", "a", "b"]);
+    let (unbiased, _) = topological_merge_order(TopologicalMergeOrderArgs {
+        entries: vec![
+            graph_entry("dev-libs", "a", "1.0"),
+            graph_entry("dev-libs", "b", "1.0"),
+            graph_entry("dev-libs", "c", "1.0"),
+        ],
+        top_level_atoms: &atoms,
+        config: &config,
+        root: Path::new("/nonexistent-root"),
+        implicit_system_deps: false,
+        repos: &[],
+        dynamic_deps: true,
+        circular: &HashMap::new(),
+    });
+    let names: Vec<&str> = unbiased.iter().map(|e| e.package.as_str()).collect();
+    assert_eq!(names, vec!["a", "b", "c"]);
+}
+
 /// `skipped_update_roots` attributes the miss to the root the rejecting edge
 /// points at, and a merge parent to its entry's root.
 #[test]

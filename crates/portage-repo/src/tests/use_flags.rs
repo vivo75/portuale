@@ -118,6 +118,23 @@ fn effective_use_flags_lets_use_tokens_explicitly_cancel_a_plus_iuse_default() {
 }
 
 #[test]
+fn effective_use_flags_applies_a_use_prefix_wildcard() {
+    // Conf-tier USE_EXPAND folding produces `-video_cards_*`, which
+    // cancels an ebuild `+video_cards_dummy` default in the same loop.
+    let mut config = test_config();
+    config.conf_use_tokens = vec!["-video_cards_* video_cards_intel".to_string()];
+    let flags = effective_use_flags(EffectiveUseFlagsArgs {
+        config: &config,
+        iuse: "+video_cards_dummy video_cards_intel",
+        keywords: &["amd64".to_string()],
+        candidate_str: "dev-libs/pkg-1.0::testrepo",
+        category: "dev-libs",
+        package: "pkg",
+    });
+    assert_eq!(*flags, HashSet::from(["video_cards_intel".to_string()]));
+}
+
+#[test]
 fn effective_use_flags_lets_package_use_override_a_plus_iuse_default() {
     let package_use = vec![("dev-libs/pkg".to_string(), vec!["-foo".to_string()])];
     let use_flags = euf_flat(EufFlatArgs {
