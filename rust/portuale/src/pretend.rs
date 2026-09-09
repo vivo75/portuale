@@ -1939,6 +1939,7 @@ Dependency and target selection:
       --backtrack N         maximum resolver backtracking passes (default 10; 0 disables)
       --package-moves[=y|n]  apply profiles/updates/ package moves (default y)
       --misspell-suggestions[=y|n]  suggest close names for a missing cat/pkg
+      --implicit-system-deps[=y|n]  order as if @system packages were implicit deps (default y)
 
 Autounmask (read-only: prints the required changes and stops -- never writes config):
       --autounmask[=y|n], --autounmask-use[=y|n], --autounmask-keep-keywords[=y|n]
@@ -7107,6 +7108,15 @@ pub fn run(args: &[String]) -> ExitCode {
     // via `portage_repo::set_package_moves_enabled` (a process-global,
     // like `--color`), not the resolver signature.
     let mut package_moves = true;
+    // --implicit-system-deps (real `y_or_n`, `main.py:490`, default "y"):
+    // whether `@system` members are assumed to be implicit dependencies.
+    // Only `=n` disables -- real `create_depgraph_params.py:120`
+    // (`myopts.get("--implicit-system-deps", "y") != "n"`), and for a
+    // `--pretend` merge list that only shows up in `_merge_order_bias`
+    // (depgraph.py:9279 early-returns): with `=n`, the @system-first /
+    // reference-count sort is skipped and the list stays in discovery
+    // order. Threaded into the resolver.
+    let mut implicit_system_deps = true;
     // --usepkg-exclude/--usepkg-include: same "action": "append",
     // space-separated-per-occurrence shape as --exclude/-X above (real
     // main.py: "A space separated list of package names or slot atoms"),
@@ -7215,16 +7225,29 @@ pub fn run(args: &[String]) -> ExitCode {
     // equivalent). Threaded into the build/merge/config/unmerge paths.
     let mut debug = false;
     // --jobs[=N] / -j[N] (real `main.py`, `valid_integers`): the maximum
-    // number of package *builds* to run concurrently (real
-    // `_emerge/Scheduler.py`'s `_max_jobs`). Default 1 = portuale's
-    // long-standing strictly-serial build+merge loop; a bare `--jobs`/`-j`
-    // means "as many as the dependency graph allows" (`usize::MAX`, capped
-    // to the build-set size by the scheduler). The vdb merge step is
-    // always serialized regardless -- only the `install` phase runs in
-    // parallel, matching real portage. Only consulted for a plain source
-    // `emerge <atom>`; `--buildpkgonly` and the binary-merge paths stay
-    // serial (nothing to build in parallel).
+    // number of concurrent jobs -- package *builds* for a plain source
+    // `emerge <atom>` (real `_emerge/Scheduler.py`'s `_max_jobs`), `depend`
+    // phases for `emerge --regen` (real `MetadataRegen`'s `max_jobs` --
+    // see `regen.rs`). Default 1 = portuale's long-standing
+    // strictly-serial build+merge loop; a bare `--jobs`/`-j` means "as many
+    // as the work allows" (`usize::MAX`, capped by the scheduler); an
+    // explicit `0` means the CPU count (real `main.py:1036-1039`). The vdb
+    // merge step is always serialized regardless -- only the `install`
+    // phase runs in parallel, matching real portage. Only consulted for a
+    // plain source `emerge <atom>` and `--regen`; `--buildpkgonly` and the
+    // binary-merge paths stay serial (nothing to build in parallel).
     let mut jobs: usize = 1;
+    /// Real `main.py:1036-1039`: an explicit `--jobs=0` means the CPU
+    /// count (not "one job"). Shared by every `--jobs` spelling below.
+    fn jobs_count(n: usize) -> usize {
+        if n == 0 {
+            std::thread::available_parallelism()
+                .map(|n| n.get())
+                .unwrap_or(1)
+        } else {
+            n
+        }
+    }
     // --load-average[=LA] / -l[LA] (real `main.py`, `type=float`): the
     // scheduler will not start an *additional* build (beyond the one it
     // always allows, so it can never deadlock) while the system's 1-minute
@@ -7645,6 +7668,20 @@ pub fn run(args: &[String]) -> ExitCode {
                 "y".to_string()
             };
             package_moves = !matches!(val.as_str(), "n" | "N");
+        } else if arg == "--implicit-system-deps" || arg.starts_with("--implicit-system-deps=") {
+            // Real `y_or_n` (a value is required in real `argparse`); the
+            // portuale is lenient and treats a bare flag as `y`.
+            let val = if let Some(v) = arg.strip_prefix("--implicit-system-deps=") {
+                i += 1;
+                v.to_string()
+            } else if matches!(args.get(i + 1).map(String::as_str), Some("y" | "n")) {
+                i += 2;
+                args[i - 1].clone()
+            } else {
+                i += 1;
+                "y".to_string()
+            };
+            implicit_system_deps = !matches!(val.as_str(), "n" | "N");
         } else if arg == "--rebuild-if-new-slot" || arg.starts_with("--rebuild-if-new-slot=") {
             // Real `y_or_n`, default "y" -- only `=n` disables.
             let val = if let Some(v) = arg.strip_prefix("--rebuild-if-new-slot=") {
@@ -8438,7 +8475,7 @@ pub fn run(args: &[String]) -> ExitCode {
             // unlimited.
             match args.get(i + 1).map(|s| s.parse::<usize>()) {
                 Some(Ok(n)) => {
-                    jobs = n.max(1);
+                    jobs = jobs_count(n);
                     i += 2;
                 }
                 _ => {
@@ -8449,7 +8486,7 @@ pub fn run(args: &[String]) -> ExitCode {
         } else if let Some(value) = arg.strip_prefix("--jobs=") {
             match value.parse::<usize>() {
                 Ok(n) => {
-                    jobs = n.max(1);
+                    jobs = jobs_count(n);
                     i += 1;
                 }
                 Err(_) => {
@@ -8461,7 +8498,7 @@ pub fn run(args: &[String]) -> ExitCode {
             // argparse's attached short-option form (`-j4`).
             match value.parse::<usize>() {
                 Ok(n) => {
-                    jobs = n.max(1);
+                    jobs = jobs_count(n);
                     i += 1;
                 }
                 Err(_) => {
@@ -9185,9 +9222,17 @@ pub fn run(args: &[String]) -> ExitCode {
 
     // `--regen` (real `action_regen`): a real write action -- regenerate
     // every repo's `metadata/md5-cache` by running each ebuild's `depend`
-    // phase. `--pretend` was already rejected above.
+    // phase. `--pretend` was already rejected above. `--jobs` /
+    // `--load-average` thread straight through (real
+    // `action_regen(settings, portdb, max_jobs, max_load)`).
     if regen_action {
-        return crate::regen::run(&config_root_from_env(), &root_from_env(), debug);
+        return crate::regen::run(
+            &config_root_from_env(),
+            &root_from_env(),
+            debug,
+            jobs,
+            load_average,
+        );
     }
     // `--metadata` (real `action_metadata`): transfers a repo's
     // pre-generated cache into portage's own `depcachedir`. Portuale
@@ -9939,6 +9984,7 @@ pub fn run(args: &[String]) -> ExitCode {
             rebuild_exclude: rebuild_exclude.clone(),
             rebuild_ignore: rebuild_ignore.clone(),
             dynamic_deps,
+            implicit_system_deps,
             complete,
             solver,
         };

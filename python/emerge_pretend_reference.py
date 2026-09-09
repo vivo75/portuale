@@ -8351,18 +8351,22 @@ def _deep_system_deps(g, entries, config):
     return deep
 
 
-def _merge_order_bias(g, entries, config):
+def _merge_order_bias(g, entries, config, implicit_system_deps=True):
     """Real depgraph._merge_order_bias (depgraph.py:9274-9307): re-sorts
     mygraph.order in place so that, among simultaneously-eligible leaves,
     @system-deep runtime deps come first and the rest go from highest to
     lowest reference count. Real's own uninstalls-last rule has nothing to
     apply to here (a --pretend merge graph has no uninstall nodes).
 
-    implicit_system_deps is default-on and this reference has no
-    --implicit-system-deps=n, a documented cut -- so the bias always runs.
+    implicit_system_deps is real myparams["implicit_system_deps"]
+    (create_depgraph_params.py:120, default on): False (real
+    --implicit-system-deps=n) takes real's own early return
+    (depgraph.py:9279) and leaves discovery order alone.
     The sort is stable, so a tie keeps discovery order (real's own
     cmp_sort_key comparator returns 0 for a tie and list.sort is stable
     too)."""
+    if not implicit_system_deps:
+        return
     deep = _deep_system_deps(g, entries, config)
     parent_count = [
         sum(1 for p in g.parents[i] if g.alive[p]) for i in range(g.n)
@@ -8703,7 +8707,7 @@ def _select_nodes(g, entries, root="/"):
     return retlist
 
 
-def _topological_merge_order(entries, top_level_atoms=(), config=None, root="/"):
+def _topological_merge_order(entries, top_level_atoms=(), config=None, root="/", implicit_system_deps=True):
     """Put `entries` in real portage's dependency-first *merge* order.
 
     Real portage's mylist (Display.__call__'s input) is a genuine merge
@@ -8748,7 +8752,7 @@ def _topological_merge_order(entries, top_level_atoms=(), config=None, root="/")
         discovery_rank[i] = pos
 
     _debug_dump_graph(g, entries, top_level_atoms, root)
-    _merge_order_bias(g, entries, config)
+    _merge_order_bias(g, entries, config, implicit_system_deps)
     scheduled = _select_nodes(g, entries, root)
 
     placed = set(scheduled)
@@ -9156,6 +9160,7 @@ def resolve_pretend_graph(
     rebuild_exclude=(),
     rebuild_ignore=(),
     dynamic_deps=True,
+    implicit_system_deps=True,
     complete=False,
     complete_seed_atoms=(),
     complete_locked_merges=(),
@@ -11274,7 +11279,7 @@ def resolve_pretend_graph(
     # every required_by edge is known. Mirrors portage-repo/src/lib.rs's
     # topological_merge_order exactly.
     _dump_resolution_walk(entries, root)
-    entries = _topological_merge_order(entries, atoms, config, root)
+    entries = _topological_merge_order(entries, atoms, config, root, implicit_system_deps)
 
     # Real depgraph.py:5706-5717 -- see the Rust side's own
     # GraphResult::buildpkgonly_deps_unsatisfied doc comment.
@@ -11652,7 +11657,8 @@ _VALUE_OPTIONS = [
     ("--ignore-built-slot-operator-deps", None),
     ("--ignore-soname-deps", None),
     ("--ignore-world", None),
-    ("--implicit-system-deps", None),
+    # --implicit-system-deps IS implemented (real y_or_n, default y --
+    # only =n disables the merge-order bias; see run() + _merge_order_bias).
     ("--jobs", "-j"),
     ("--jobs-tmpdir-require-free-gb", None),
     ("--keep-going", None),
@@ -12146,6 +12152,7 @@ Dependency and target selection:
       --backtrack N         maximum resolver backtracking passes (default 10; 0 disables)
       --package-moves[=y|n]  apply profiles/updates/ package moves (default y)
       --misspell-suggestions[=y|n]  suggest close names for a missing cat/pkg
+      --implicit-system-deps[=y|n]  order as if @system packages were implicit deps (default y)
 
 Autounmask (read-only: prints the required changes and stops -- never writes config):
       --autounmask[=y|n], --autounmask-use[=y|n], --autounmask-keep-keywords[=y|n]
@@ -16443,6 +16450,7 @@ def run(args):
     dynamic_deps = True
     misspell_suggestions = True
     package_moves = True
+    implicit_system_deps = True
     usepkg_exclude = []
     usepkg_include = []
     json_output = False
@@ -16722,6 +16730,79 @@ def run(args):
             else:
                 print(f'emerge: invalid --backtrack parameter: "{value}"', file=sys.stderr)
                 return 2
+        elif arg in ("--jobs", "-j"):
+            # Real main.py --jobs: valid_integers_or_y_or_n with
+            # insert_optional_args -- the next token is consumed only if
+            # it parses as a non-negative integer, exactly like --deep/-D
+            # above. A bare --jobs/-j, or one followed by anything else,
+            # means unlimited (real myoptions.jobs == "True"). The value
+            # is inert here: under --pretend there is nothing to schedule
+            # (mirrors pretend.rs, which parses but ignores it), and
+            # --regen is real work the Rust side owns (regen.rs) while
+            # this reference returns 0 with no output. Accepted (not
+            # reported) so both sides agree on the full spelling surface.
+            nxt = args[i + 1] if i + 1 < len(args) else None
+            if nxt is not None and nxt.isdigit():
+                i += 2
+            else:
+                i += 1
+        elif arg.startswith("--jobs="):
+            # argparse's native "="-form -- a non-integer here is an
+            # immediate parse error (real parser.error("Invalid --jobs
+            # parameter: ...")), unlike a non-integer *next token*.
+            # Mirrors pretend.rs exactly, message included.
+            value = arg[len("--jobs=") :]
+            if value.isdigit():
+                i += 1
+            else:
+                print(f'emerge: invalid --jobs parameter: "{value}"', file=sys.stderr)
+                return 2
+        elif arg.startswith("-j") and len(arg) > 2:
+            # argparse's attached short-option form (`-j4`). Mirrors
+            # pretend.rs exactly, message included.
+            value = arg[2:]
+            if value.isdigit():
+                i += 1
+            else:
+                print(f'emerge: invalid -j parameter: "{value}"', file=sys.stderr)
+                return 2
+        elif arg in ("--load-average", "-l"):
+            # Real main.py --load-average: type=float, a REQUIRED value
+            # (unlike --jobs' optional one) -- a missing or non-positive
+            # value is an immediate usage error. Only meaningful together
+            # with --jobs > 1; inert here for the same reason --jobs is.
+            # Mirrors pretend.rs exactly, message included.
+            nxt = args[i + 1] if i + 1 < len(args) else None
+            try:
+                la = float(nxt) if nxt is not None else 0.0
+            except ValueError:
+                la = 0.0
+            if la > 0.0:
+                i += 2
+            else:
+                print(
+                    'emerge: option "--load-average" requires a positive number',
+                    file=sys.stderr,
+                )
+                return 2
+        elif arg.startswith("--load-average=") or (
+            arg.startswith("-l") and len(arg) > 2
+        ):
+            # The "="-form and the attached short form (`-l2.5`).
+            # Mirrors pretend.rs exactly, message included.
+            if arg.startswith("--load-average="):
+                value = arg[len("--load-average=") :]
+            else:
+                value = arg[2:]
+            try:
+                la = float(value)
+            except ValueError:
+                la = 0.0
+            if la > 0.0:
+                i += 1
+            else:
+                print(f'emerge: invalid --load-average parameter: "{value}"', file=sys.stderr)
+                return 2
         elif arg in ("--exclude", "-X"):
             # Real "action": "append" -- repeatable, each occurrence's
             # own value is itself a *space-separated* atom list (real
@@ -16815,6 +16896,21 @@ def run(args):
                 val = "y"
                 i += 1
             package_moves = val not in ("n", "N")
+        elif arg == "--implicit-system-deps" or arg.startswith("--implicit-system-deps="):
+            # Real y_or_n (main.py:490), default "y" -- only =n disables
+            # (real create_depgraph_params.py:120). Lenient like
+            # --package-moves above: a bare flag counts as y. Gates only
+            # _merge_order_bias (real depgraph.py:9279). Mirrors pretend.rs.
+            if arg.startswith("--implicit-system-deps="):
+                val = arg[len("--implicit-system-deps=") :]
+                i += 1
+            elif i + 1 < len(args) and args[i + 1] in ("y", "n"):
+                val = args[i + 1]
+                i += 2
+            else:
+                val = "y"
+                i += 1
+            implicit_system_deps = val not in ("n", "N")
         elif arg == "--rebuild-if-new-slot" or arg.startswith("--rebuild-if-new-slot="):
             # Real y_or_n, default "y" -- only =n disables.
             if arg.startswith("--rebuild-if-new-slot="):
@@ -18552,6 +18648,7 @@ def run(args):
             rebuild_exclude,
             rebuild_ignore,
             dynamic_deps and not nodeps,
+            implicit_system_deps,
             complete,
             _complete_seed_atoms if (complete and _complete_seed_atoms) else (),
             tuple(locked) if complete else (),
