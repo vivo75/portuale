@@ -279,6 +279,32 @@ def test_solver_backends_report_engine_native_conflicts(emerge_binary, fixture_e
     assert "dev-libs/slotconflicttarget" in pubgrub.stderr
 
 
+def test_solver_backends_share_the_walk_merge_order(emerge_binary, fixture_env):
+    """H.15b (merge-order fidelity): bridge plans used to display in raw
+    engine install order (pubgrub printed shared-b before shared-a for
+    `dev-libs/diamond`). Bridge entries now carry real `deps` edges and
+    run through the same `serialize_merge_order` sort as the walk, so all
+    three backends print one identical dependency-first merge list."""
+    outputs = []
+    for solver in ("portage", "pubgrub", "resolvo"):
+        result = subprocess.run(
+            [str(emerge_binary), "--pretend", f"--solver={solver}", "dev-libs/diamond"],
+            capture_output=True,
+            text=True,
+            check=False,
+            env=fixture_env,
+        )
+        assert result.returncode == 0, solver
+        outputs.append(result.stdout)
+    assert outputs[0] == outputs[1] == outputs[2]
+    assert [line.rstrip() for line in outputs[0].splitlines()] == [
+        "[ebuild  N     ] dev-libs/common-1.0",
+        "[ebuild  N     ] dev-libs/shared-a-1.0",
+        "[ebuild  N     ] dev-libs/shared-b-1.0",
+        "[ebuild  N     ] dev-libs/diamond-1.0",
+    ]
+
+
 def _free_loopback_port():
     """An unused 127.0.0.1 TCP port for the fixture sshd (TOCTOU-racy by
     nature, fine for a test fixture)."""

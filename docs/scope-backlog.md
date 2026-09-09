@@ -602,9 +602,12 @@ never offered to either engine. **Engine-native failure text shipped
 "The following packages are incompatible" chains) instead of the
 `Unsolvable(Conflict { clauses: ... })` debug dump; pubgrub keeps its
 `format_solve_error` derivation tree — see `what-this-proves.md`.
-Remaining V1 depth cuts, each a future slice: slot-conflict/autounmask/
-`:=`-rebuild/blocker/circular notices, merge-order fidelity beyond plan
-install order.
+**Merge-order fidelity shipped (H.15b)**: bridge entries carry real
+`deps` edges (same helper and key order as the walk) and run through
+the shared `serialize_merge_order` sort, so all three backends print
+one identical dependency-first merge list — see `what-this-proves.md`.
+Remaining V1 depth cut, its own future slice: slot-conflict/autounmask/
+`:=`-rebuild/blocker/circular notices (H.15c).
 
 **Hard invariant: `mrg` is a portuale-only applet. There will never be
 a portage counterpart or Python reference implementation.** Only its

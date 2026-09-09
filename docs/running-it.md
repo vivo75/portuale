@@ -2102,10 +2102,11 @@ done
 # [ebuild  N     ] dev-libs/newpkg-1.0   (all three)
 portuale emerge --pretend --solver=pubgrub dev-libs/diamond
 # [ebuild  N     ] dev-libs/common-1.0
-# [ebuild  N     ] dev-libs/shared-b-1.0
 # [ebuild  N     ] dev-libs/shared-a-1.0
+# [ebuild  N     ] dev-libs/shared-b-1.0
 # [ebuild  N     ] dev-libs/diamond-1.0
-# (same set as --solver=portage, plan order may differ)
+# (same order as --solver=portage since H.15b: bridge plans run through
+# the shared serialize_merge_order sort, not raw engine install order)
 portuale mrg --pretend --solver=resolvo dev-libs/newpkg
 # [ebuild  N     ] dev-libs/newpkg-1.0   (mrg forwards to the same codepath)
 ```

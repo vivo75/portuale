@@ -74,6 +74,11 @@ struct LoadedVersion {
     keywords: Vec<String>,
     /// DEPEND, RDEPEND, BDEPEND, PDEPEND, IDEPEND in that order.
     deps: [Vec<portage_solver::DepEntry>; 5],
+    /// The raw md5-cache strings those trees parsed from, same key
+    /// order -- kept so merge-order edge building can reuse the exact
+    /// walk-path helper (`merge_order::dep_edges_from_metadata`, which
+    /// needs the unreduced strings plus resolved USE).
+    raw_deps: [String; 5],
 }
 
 impl LoadedVersion {
@@ -216,14 +221,16 @@ impl LazyRepo {
                     continue;
                 }
                 let mut deps: [Vec<portage_solver::DepEntry>; 5] = Default::default();
+                let mut raw_deps: [String; 5] = Default::default();
                 for (i, key) in ["DEPEND", "RDEPEND", "BDEPEND", "PDEPEND", "IDEPEND"]
                     .iter()
                     .enumerate()
                 {
-                    if let Some(text) = metadata.get(*key)
-                        && let Ok(parsed) = portage_solver::DepEntry::parse(text)
-                    {
-                        deps[i] = parsed;
+                    if let Some(text) = metadata.get(*key) {
+                        raw_deps[i] = text.clone();
+                        if let Ok(parsed) = portage_solver::DepEntry::parse(text) {
+                            deps[i] = parsed;
+                        }
                     }
                 }
                 versions.push(LoadedVersion {
@@ -236,6 +243,7 @@ impl LazyRepo {
                     iuse: metadata.get("IUSE").cloned().unwrap_or_default(),
                     keywords: candidate.keywords.clone(),
                     deps,
+                    raw_deps,
                 });
             }
         }
@@ -488,6 +496,33 @@ fn graph_result_from_order(
         let mut required_by: Vec<(String, String)> = parents.get(&cpv).cloned().unwrap_or_default();
         required_by.sort();
         required_by.dedup();
+        // Merge-order fidelity (H.15b): the walk path builds every
+        // entry's `deps` (real `_add_pkg_dep_string` order/priorities)
+        // and sorts the whole list through `topological_merge_order`
+        // (real `_serialize_tasks`); bridge entries used to carry no
+        // edges at all, so engine install order leaked straight into
+        // the display. Reuse the exact walk-path helper over the raw
+        // dep strings (`raw_deps`: DEPEND, RDEPEND, BDEPEND, PDEPEND,
+        // IDEPEND) plus this version's resolved USE -- bridge plans are
+        // ebuild (source) candidates, hence the ebuild key list and
+        // `built = false`, exactly the walk's own call for one.
+        let dep_metadata: HashMap<String, String> = [
+            ("DEPEND", record.raw_deps[0].as_str()),
+            ("RDEPEND", record.raw_deps[1].as_str()),
+            ("BDEPEND", record.raw_deps[2].as_str()),
+            ("PDEPEND", record.raw_deps[3].as_str()),
+            ("IDEPEND", record.raw_deps[4].as_str()),
+        ]
+        .into_iter()
+        .filter(|(_, v)| !v.is_empty())
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect();
+        let deps = super::merge_order::dep_edges_from_metadata(
+            &dep_metadata,
+            &use_set,
+            &["RDEPEND", "IDEPEND", "PDEPEND", "DEPEND", "BDEPEND"],
+            false,
+        );
         entries.push(GraphEntry {
             category: record.category.clone(),
             package: record.package.clone(),
@@ -515,9 +550,22 @@ fn graph_result_from_order(
             targets_running_root: false,
             remote_binary: false,
             build_id: None,
-            deps: Vec::new(),
+            deps,
         });
     }
+    // Same merge-order sort the walk path applies (real portage's
+    // `mylist` is dependency-first): engine install order only seeds
+    // array positions now; `serialize_merge_order` re-sorts over the
+    // `deps` edges above plus the `required_by` fallback, with the same
+    // top-level atoms, profile config, root, and `--implicit-system-deps`
+    // bias the walk resolves under.
+    let entries = super::topological_merge_order(
+        entries,
+        &req.atoms,
+        &req.config,
+        &req.root,
+        req.implicit_system_deps,
+    );
     GraphResult {
         entries,
         slot_conflicts: Vec::new(),
@@ -1099,5 +1147,35 @@ mod tests {
             !msg.contains("ClauseId") && !msg.contains("Unsolvable("),
             "no engine-internals debug dump leaks out: {msg}"
         );
+    }
+
+    /// Merge-order fidelity (H.15b): bridge entries carry real
+    /// `deps` edges (same helper, same key order/priorities as the
+    /// walk path) instead of an empty vec, so the shared
+    /// `serialize_merge_order` sort -- not raw engine install order --
+    /// decides the display order. `dev-libs/diamond`'s own entry must
+    /// name both `shared-a` and `shared-b` as dependencies.
+    #[test]
+    fn bridge_entries_carry_merge_order_dep_edges() {
+        for kind in [
+            super::super::SolverKind::PubGrub,
+            super::super::SolverKind::Resolvo,
+        ] {
+            let mut req = fixture_request(&["dev-libs/diamond"]);
+            req.solver = kind;
+            let result = active_resolver_for(kind)
+                .resolve(&req)
+                .expect("diamond resolves");
+            assert_eq!(result.entries.len(), 4);
+            let diamond = result
+                .entries
+                .iter()
+                .find(|e| e.package == "diamond")
+                .expect("diamond entry");
+            let mut dep_pkgs: Vec<&str> = diamond.deps.iter().map(|d| d.package.as_str()).collect();
+            dep_pkgs.sort();
+            dep_pkgs.dedup();
+            assert_eq!(dep_pkgs, vec!["shared-a", "shared-b"]);
+        }
     }
 }
