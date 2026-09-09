@@ -580,20 +580,34 @@ fn add_installed_dependency_closure(
         .map(|p| ((p.category.as_str(), p.package.as_str()), p))
         .collect();
 
-    // KNOWN IMPERFECTION: real's `strip_libc_deps` (`portage/dep/libc.py`)
-    // runs only on the `--changed-deps` comparison, never in
-    // `_create_graph` -- real's scheduler digraph keeps every
-    // `sys-libs/glibc` / `virtual/libc` edge a package's own `*DEPEND`
-    // declares. Portuale strips them here anyway: keeping them lets
-    // `sys-libs/libxcrypt` / `virtual/libcrypt` merge out of real's
-    // `{glibc, libcrypt, libxcrypt, perl, locale-gen}` runtime cycle at
-    // the right time for `sys-auth/polkit`, but front-loads
-    // `sys-apps/lsb-release` in `dev-lang/rust` -- a net wash on L0 until
-    // the frontier-timing work lands the `find_smallest_cycle` size
-    // parity that would make the cycle break correctly. Revisit with
-    // that. "merge libc first" itself is `seed_toolchain_asap`.
-    let mut libc_cps = crate::libc_provider_cps(root);
-    libc_cps.insert(("virtual".to_string(), "libc".to_string()));
+    // Real's own `_serialize_tasks` digraph does NOT strip a package's
+    // recorded libc dependency (`strip_libc_deps` is `--changed-deps`
+    // only) -- but with `--dynamic-deps` on (the default), it walks the
+    // *current ebuild*'s deps, not the vdb's. The difference that matters
+    // here is `portage.package.ebuild.doebuild._inject_libc_dep`: every
+    // package portage installs gets a bare `>=<libc-provider>-<version>`
+    // appended to its vdb `RDEPEND` (bug #753500), which the ebuild never
+    // declared. `dev-libs/gmp` -- ebuild `RDEPEND=""` -- ends up with
+    // `RDEPEND=">=sys-libs/glibc-2.43-r2"` in the vdb, and that phantom
+    // `gmp -> glibc (runtime)` edge held `gmp`/`mpfr`/`mpc` behind
+    // `glibc`'s deep subtree so portuale's NORMAL frontier ran dry ~11
+    // merges before real's. Strip exactly that injected shape -- a bare
+    // `>=` atom on a libc provider with no slot and no USE deps -- and
+    // nothing else: a genuine `sys-libs/glibc[-crypt(-)]` (has USE deps,
+    // e.g. `sys-libs/libxcrypt`) is kept, exactly as real keeps it.
+    let libc_cps = crate::libc_provider_cps(root);
+    let is_injected_libc = |atom: &str| -> bool {
+        let Some(a) = portage_dep::parse_atom(atom) else {
+            return false;
+        };
+        a.blocker == portage_dep::Blocker::None
+            && a.operator == portage_dep::Operator::Ge
+            && a.version.is_some()
+            && a.slot.is_none()
+            && a.sub_slot.is_none()
+            && a.use_deps.as_ref().is_none_or(|u| u.is_empty())
+            && libc_cps.contains(&(a.category.clone(), a.package.clone()))
+    };
 
     let vdb_edges = |cat: &str, pkg: &str, ver: &str| -> Vec<DepEdge> {
         let mut md: HashMap<String, String> = HashMap::new();
@@ -611,7 +625,7 @@ fn add_installed_dependency_closure(
             true,
         )
         .into_iter()
-        .filter(|e| !libc_cps.contains(&(e.category.clone(), e.package.clone())))
+        .filter(|e| !is_injected_libc(&e.atom))
         .collect()
     };
 

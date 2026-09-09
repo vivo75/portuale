@@ -9013,12 +9013,32 @@ def _add_installed_dependency_closure(entries, root, system_atoms, virtuals_only
     def _expandable(cat):
         return not virtuals_only or cat == "virtual"
 
-    # KNOWN IMPERFECTION (see merge_order.rs): real's strip_libc_deps runs
-    # only on --changed-deps, never in _create_graph. Portuale strips the
-    # sys-libs/glibc / virtual/libc edges here anyway -- a net wash on L0
-    # pending find_smallest_cycle size parity.
+    # Real's _serialize_tasks digraph does NOT strip a recorded libc dep
+    # (strip_libc_deps is --changed-deps only), but --dynamic-deps (the
+    # default) walks the current ebuild's deps, not the vdb's. The
+    # difference that matters: doebuild._inject_libc_dep appends a bare
+    # `>=<libc-provider>-<version>` to every installed package's vdb
+    # RDEPEND (bug #753500), which the ebuild never declared -- e.g.
+    # dev-libs/gmp (ebuild RDEPEND="") ends up with a phantom
+    # `gmp -> glibc (runtime)` edge that holds gmp/mpfr/mpc behind glibc's
+    # deep subtree. Strip exactly that injected shape (bare `>=` atom on a
+    # libc provider, no slot, no USE deps); a genuine
+    # sys-libs/glibc[-crypt(-)] is kept, as real keeps it. Mirrors
+    # merge_order.rs's is_injected_libc.
     libc_cps = {tuple(cp.split("/", 1)) for cp in _libc_provider_cps(root)}
-    libc_cps.add(("virtual", "libc"))
+
+    def _is_injected_libc(atom_str):
+        a = _parse_atom(atom_str)
+        if a is None or a.blocker:
+            return False
+        return (
+            a.operator == ">="
+            and a.version is not None
+            and a.slot is None
+            and a.sub_slot is None
+            and a.use is None
+            and tuple(a.cp.split("/", 1)) in libc_cps
+        )
 
     def _vdb_edges(cat, pkg, ver):
         md = {}
@@ -9035,7 +9055,7 @@ def _add_installed_dependency_closure(entries, root, system_atoms, virtuals_only
                 ("RDEPEND", "IDEPEND", "PDEPEND", "DEPEND", "BDEPEND"),
                 True,
             )
-            if e["cp"] not in libc_cps
+            if not _is_injected_libc(e["atom"])
         ]
 
     present = {(e[0], e[1]) for e in entries}
