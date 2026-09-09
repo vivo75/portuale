@@ -279,6 +279,51 @@ def test_solver_backends_report_engine_native_conflicts(emerge_binary, fixture_e
     assert "dev-libs/slotconflicttarget" in pubgrub.stderr
 
 
+def test_solver_backends_report_matched_blockers(emerge_binary, fixture_env):
+    """H.15c (blockers): blocker atoms met in a solved bridge plan are
+    matched by the shared walk-path `resolve_blockers` and rendered as
+    `[blocks B]` lines -- byte-identical to the walk. A weak in-graph
+    block (pubgrub solves it) and a strong block against installed
+    `samepkg` (both engines solve it). Resolvo reads weak blockers as
+    hard conflicts and refuses `graphblockerparent` outright -- an
+    engine-model divergence, out of scope (its H.15a text already
+    renders the refusal readably)."""
+    portage_graph = subprocess.run(
+        [str(emerge_binary), "--pretend", "--solver=portage", "dev-libs/graphblockerparent"],
+        capture_output=True,
+        text=True,
+        check=False,
+        env=fixture_env,
+    )
+    pubgrub_graph = subprocess.run(
+        [str(emerge_binary), "--pretend", "--solver=pubgrub", "dev-libs/graphblockerparent"],
+        capture_output=True,
+        text=True,
+        check=False,
+        env=fixture_env,
+    )
+    assert pubgrub_graph.returncode == 0
+    assert pubgrub_graph.stdout == portage_graph.stdout
+    assert (
+        '[blocks B      ] dev-libs/blockerpartnerpkg ("dev-libs/blockerpartnerpkg"'
+        " is soft blocking dev-libs/weakblockerpkg-1.0)" in pubgrub_graph.stdout
+    )
+
+    for solver in ("portage", "pubgrub", "resolvo"):
+        result = subprocess.run(
+            [str(emerge_binary), "--pretend", f"--solver={solver}", "dev-libs/blockerpkg"],
+            capture_output=True,
+            text=True,
+            check=False,
+            env=fixture_env,
+        )
+        assert result.returncode == 0, solver
+        assert (
+            '[blocks B      ] dev-libs/samepkg ("dev-libs/samepkg"'
+            " is hard blocking dev-libs/blockerpkg-1.0)" in result.stdout
+        ), solver
+
+
 def test_solver_backends_share_the_walk_merge_order(emerge_binary, fixture_env):
     """H.15b (merge-order fidelity): bridge plans used to display in raw
     engine install order (pubgrub printed shared-b before shared-a for

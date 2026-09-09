@@ -606,8 +606,15 @@ never offered to either engine. **Engine-native failure text shipped
 `deps` edges (same helper and key order as the walk) and run through
 the shared `serialize_merge_order` sort, so all three backends print
 one identical dependency-first merge list — see `what-this-proves.md`.
-Remaining V1 depth cut, its own future slice: slot-conflict/autounmask/
-`:=`-rebuild/blocker/circular notices (H.15c).
+**Blocker reporting shipped (H.15c, first half)**: blocker atoms in a
+solved bridge plan are matched by the shared walk-path
+`resolve_blockers` and render byte-identical `[blocks B]` lines (weak
+in-graph and strong installed-db alike) — see `what-this-proves.md`.
+Deliberate non-gaps, documented there: resolvo reading weak blockers
+as hard conflicts (engine-model divergence), and slot-conflict/
+autounmask/circular notices (unreachable for solved engine plans --
+an engine solves cleanly or fails with H.15a text).
+Remaining V1 depth cut, its own future slice: ABI rebuilds (`:=`).
 
 **Hard invariant: `mrg` is a portuale-only applet. There will never be
 a portage counterpart or Python reference implementation.** Only its

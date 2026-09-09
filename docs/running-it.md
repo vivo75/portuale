@@ -2152,6 +2152,30 @@ Deterministic slice test: `pytest tests/test_portuale.py -k
 packages, no engine-internals leaks) and `cargo test -p portage-repo
 solver_bridge`.
 
+Blocker reporting on bridge plans (H.15c): blocker atoms in a solved
+engine plan render the walk's `[blocks B]` lines byte-identically.
+Live-verified exactly as run (same fixture env):
+
+```sh
+portuale emerge --pretend --solver=pubgrub dev-libs/graphblockerparent
+# [ebuild  N     ] dev-libs/blockerpartnerpkg-1.0
+# [ebuild  N     ] dev-libs/weakblockerpkg-1.0
+# [ebuild  N     ] dev-libs/graphblockerparent-1.0
+# [blocks B      ] dev-libs/blockerpartnerpkg ("dev-libs/blockerpartnerpkg" is soft blocking dev-libs/weakblockerpkg-1.0)
+portuale emerge --pretend --solver=resolvo dev-libs/blockerpkg
+# [ebuild  N     ] dev-libs/blockerpkg-1.0
+# [blocks B      ] dev-libs/samepkg ("dev-libs/samepkg" is hard blocking dev-libs/blockerpkg-1.0)
+```
+
+Deterministic slice test: `pytest tests/test_portuale.py -k
+"report_matched_blockers"` (full-stdout equality with the walk) and
+`cargo test -p portage-repo solver_bridge` (`bridge_entries_report_
+matched_blockers`). Known engine divergence, not a notice gap:
+resolvo reads weak blockers as hard conflicts and refuses
+`graphblockerparent` (its H.15a text renders the refusal); slot-
+conflict/autounmask/circular notices stay unported because they are
+unreachable for solved engine plans.
+
 `emerge --info`: the real config-layer stack (2026-09-07). `--info`'s
 `VAR="value"` dump now reads the same five dbs real portage stacks —
 `/etc/profile.env` (env.d), `cnf/make.globals`, the profile chain,

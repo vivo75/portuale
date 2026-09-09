@@ -396,6 +396,10 @@ fn graph_result_from_order(
 ) -> GraphResult {
     let installed = InstalledView::of(req);
     let mut entries = Vec::new();
+    // Blocker atoms met in plan entries' dep strings, resolved after the
+    // loop by the shared walk-path helper (see below).
+    let mut pending_blockers: Vec<super::PendingBlocker> = Vec::new();
+    let mut seen_blockers: HashSet<(String, String, String)> = HashSet::new();
     for (cp, version) in order {
         let Some(record) = repo.record(cp, version) else {
             // Not one of the offered facts (should not happen: the order
@@ -523,6 +527,46 @@ fn graph_result_from_order(
             &["RDEPEND", "IDEPEND", "PDEPEND", "DEPEND", "BDEPEND"],
             false,
         );
+        // Blocker collection (H.15c): the walk queues every USE-evaluated
+        // dep token and diverts blocker atoms into `pending_blockers`
+        // instead of the graph. Mirror it over the same raw strings and
+        // resolved USE: flatten each key with USE applied, and record
+        // every blocker atom against this owner (deduped per owner+atom;
+        // one owner can name the same block in several keys).
+        for raw in record.raw_deps.iter() {
+            let toks: Vec<String> = raw.split_whitespace().map(str::to_string).collect();
+            let Ok(flat) = portage_use_reduce::use_reduce_flat(
+                &toks,
+                &use_set,
+                portage_use_reduce::MatchMode::Normal,
+            ) else {
+                continue;
+            };
+            for tok in flat {
+                let evaluated = portage_dep::evaluate_atom_conditionals(&tok, &use_set)
+                    .unwrap_or_else(|| tok.clone());
+                let Some(dep_atom) = portage_dep::parse_atom(&evaluated) else {
+                    continue;
+                };
+                if dep_atom.blocker == portage_dep::Blocker::None {
+                    continue;
+                }
+                if seen_blockers.insert((
+                    record.category.clone(),
+                    record.package.clone(),
+                    evaluated.clone(),
+                )) {
+                    pending_blockers.push(super::PendingBlocker {
+                        atom_str: evaluated,
+                        strong: dep_atom.blocker == portage_dep::Blocker::Strong,
+                        target_category: dep_atom.category,
+                        target_package: dep_atom.package,
+                        owner_key: (record.category.clone(), record.package.clone()),
+                        owner_version: version.clone(),
+                    });
+                }
+            }
+        }
         entries.push(GraphEntry {
             category: record.category.clone(),
             package: record.package.clone(),
@@ -552,6 +596,20 @@ fn graph_result_from_order(
             build_id: None,
             deps,
         });
+    }
+    // Blocker reporting (H.15c): match every collected blocker atom
+    // against the installed db plus this plan's own resolved entries via
+    // the shared walk-path `resolve_blockers` (same USE-aware `[use]`
+    // gating, same `match_from_list` semantics), and file each conflict
+    // on its owner entry -- mirroring the walk, which resolves blockers
+    // after the graph settles and before the merge-order sort.
+    for (owner_key, conflict) in super::resolve_blockers(&req.root, &pending_blockers, &entries) {
+        if let Some(entry) = entries
+            .iter_mut()
+            .find(|e| (e.category.clone(), e.package.clone()) == owner_key)
+        {
+            entry.blockers.push(conflict);
+        }
     }
     // Same merge-order sort the walk path applies (real portage's
     // `mylist` is dependency-first): engine install order only seeds
@@ -1147,6 +1205,63 @@ mod tests {
             !msg.contains("ClauseId") && !msg.contains("Unsolvable("),
             "no engine-internals debug dump leaks out: {msg}"
         );
+    }
+
+    /// Blocker reporting (H.15c): blocker atoms met in a solved bridge
+    /// plan's dep strings are matched by the shared walk-path
+    /// `resolve_blockers` and filed on their owner entries -- a weak
+    /// in-graph block (`weakblockerpkg` vs `blockerpartnerpkg`) and a
+    /// strong block against an installed package (`blockerpkg` vs
+    /// installed `samepkg-1.0`) alike, exactly the walk's own shapes.
+    #[test]
+    fn bridge_entries_report_matched_blockers() {
+        use super::super::active_resolver_for;
+        let mut req = fixture_request(&["dev-libs/graphblockerparent"]);
+        req.solver = super::super::SolverKind::PubGrub;
+        let result = active_resolver_for(super::super::SolverKind::PubGrub)
+            .resolve(&req)
+            .expect("graphblockerparent solves");
+        let weak = result
+            .entries
+            .iter()
+            .find(|e| e.package == "weakblockerpkg")
+            .expect("weakblockerpkg entry");
+        assert_eq!(
+            weak.blockers,
+            vec![super::super::BlockerConflict {
+                atom_str: "!dev-libs/blockerpartnerpkg".to_string(),
+                strong: false,
+                matched_category: "dev-libs".to_string(),
+                matched_package: "blockerpartnerpkg".to_string(),
+                matched_version: "1.0".to_string(),
+            }]
+        );
+
+        for kind in [
+            super::super::SolverKind::PubGrub,
+            super::super::SolverKind::Resolvo,
+        ] {
+            let mut req = fixture_request(&["dev-libs/blockerpkg"]);
+            req.solver = kind;
+            let result = active_resolver_for(kind)
+                .resolve(&req)
+                .expect("blockerpkg solves");
+            let entry = result
+                .entries
+                .iter()
+                .find(|e| e.package == "blockerpkg")
+                .expect("blockerpkg entry");
+            assert_eq!(
+                entry.blockers,
+                vec![super::super::BlockerConflict {
+                    atom_str: "!!dev-libs/samepkg".to_string(),
+                    strong: true,
+                    matched_category: "dev-libs".to_string(),
+                    matched_package: "samepkg".to_string(),
+                    matched_version: "1.0".to_string(),
+                }]
+            );
+        }
     }
 
     /// Merge-order fidelity (H.15b): bridge entries carry real
