@@ -2176,6 +2176,31 @@ resolvo reads weak blockers as hard conflicts and refuses
 conflict/autounmask/circular notices stay unported because they are
 unreachable for solved engine plans.
 
+ABI rebuilds on bridge plans (H.15, last slice): upgrading
+slotbindtarget across its sub-slot (2 -> 2/9) reschedules the stale
+`:=` consumer through the walk's own fixpoint, byte-identical to the
+walk. Live-verified exactly as run (test-local ROOT with 1.0@SLOT=2
+installed plus stale/fresh consumers in @world, fixture config root):
+
+```sh
+portuale emerge --pretend --solver=pubgrub dev-libs/slotbindtarget
+# [ebuild  r  U  ] dev-libs/slotbindtarget-2.0 [1.0]
+# [ebuild  rR    ] dev-libs/slotbindconsumer-1.0
+#
+# The following packages are causing rebuilds:
+#
+#   (dev-libs/slotbindtarget-2.0:2/9::testrepo, ebuild scheduled for merge to '/tmp/...') causes rebuilds for:
+#     (dev-libs/slotbindconsumer-1.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/...')
+```
+
+Deterministic slice test: `pytest tests/test_portuale.py -k
+"stale_equals_consumer_reinstalls"` (full-stdout equality
+walk-vs-pubgrub, fresh consumer never rebuilt) and `cargo test -p
+portage-repo solver_bridge` (`bridge_plans_schedule_stale_equals_
+consumer_reinstalls`). Known divergence: resolvo favors the installed
+1.0 here and reports an empty plan (pre-existing, verified on the
+pristine tree).
+
 `emerge --info`: the real config-layer stack (2026-09-07). `--info`'s
 `VAR="value"` dump now reads the same five dbs real portage stacks —
 `/etc/profile.env` (env.d), `cnf/make.globals`, the profile chain,

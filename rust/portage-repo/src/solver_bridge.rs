@@ -390,6 +390,7 @@ fn newest_installed(versions: &[String]) -> &str {
 /// USE display resolves on demand through `repo` (memoized).
 fn graph_result_from_order(
     req: &ResolveRequest,
+    repos: &[RepoConfig],
     repo: &LazyRepo,
     order: &[(String, String)],
     parents: &HashMap<String, Vec<(String, String)>>,
@@ -611,6 +612,30 @@ fn graph_result_from_order(
             entry.blockers.push(conflict);
         }
     }
+    // ABI rebuilds (H.15, last slice): an installed consumer whose
+    // built `cat/pkg:S/SS=` dep no longer matches how this plan leaves
+    // that slot is scheduled for a reinstall -- the walk's own
+    // `slot_operator_rebuild_entries` fixpoint, called with the walk's
+    // own gate (`rebuild_if_new_slot`, not
+    // `ignore_built_slot_operator_deps`) and the walk's own
+    // complete-mode reachability (empty outside complete mode
+    // suppresses the scan entirely, exactly like a plain non-complete
+    // walk). Entries are extended before the merge-order sort so
+    // rebuilds land dependency-first like every other entry; the
+    // `(provider, consumer)` pairs feed `_show_abi_rebuild_info`.
+    let slot_op_reachable: HashSet<(String, String)> = if req.config.complete_seed_atoms.is_empty()
+    {
+        HashSet::new()
+    } else {
+        super::required_set_reachable_cps(&req.root, &req.config.complete_seed_atoms, &[])
+    };
+    let (slot_op_rebuilds, abi_rebuilds) =
+        if req.ignore_built_slot_operator_deps || !req.rebuild_if_new_slot {
+            (Vec::new(), Vec::new())
+        } else {
+            super::slot_operator_rebuild_entries(&req.root, repos, &entries, &slot_op_reachable)
+        };
+    entries.extend(slot_op_rebuilds);
     // Same merge-order sort the walk path applies (real portage's
     // `mylist` is dependency-first): engine install order only seeds
     // array positions now; `serialize_merge_order` re-sorts over the
@@ -634,7 +659,7 @@ fn graph_result_from_order(
         autounmask_use_changes: Vec::new(),
         autounmask_license_changes: Vec::new(),
         autounmask_mask_changes: Vec::new(),
-        abi_rebuilds: Vec::new(),
+        abi_rebuilds,
         circular_deps: Vec::new(),
     }
 }
@@ -856,7 +881,13 @@ fn resolve_pubgrub(req: &ResolveRequest) -> Result<GraphResult, String> {
             .or_default()
             .push((from_cat, from_pkg));
     }
-    Ok(graph_result_from_order(req, &lazy, &order, &parents))
+    Ok(graph_result_from_order(
+        req,
+        &lazy.repos,
+        &lazy,
+        &order,
+        &parents,
+    ))
 }
 
 // --- resolvo backend -------------------------------------------------------
@@ -1012,7 +1043,13 @@ fn resolve_resolvo(req: &ResolveRequest) -> Result<GraphResult, String> {
             .or_default()
             .push((from_cat, from_pkg));
     }
-    Ok(graph_result_from_order(req, &lazy, &order, &parents))
+    Ok(graph_result_from_order(
+        req,
+        &lazy.repos,
+        &lazy,
+        &order,
+        &parents,
+    ))
 }
 
 #[cfg(test)]
@@ -1262,6 +1299,113 @@ mod tests {
                 }]
             );
         }
+    }
+
+    /// ABI rebuilds (H.15, last slice): a plan that moves a slot's
+    /// sub-slot schedules installed `:=`-bound consumers for reinstall
+    /// via the walk's own `slot_operator_rebuild_entries` fixpoint --
+    /// same gate, same complete-mode reachability. A throwaway vdb holds
+    /// `slotbindtarget-1.0` at `SLOT=2` plus a stale (`:2/2=`) and a
+    /// fresh (`:2/9=`) consumer, both in the seed set; resolving the
+    /// target (whose `-2.0` ebuild is `SLOT=2/9`) must reinstall only the
+    /// stale consumer and record the `(provider, consumer)` pair.
+    #[test]
+    fn bridge_plans_schedule_stale_equals_consumer_reinstalls() {
+        use std::io::Write as _;
+        let dir = std::env::temp_dir().join(format!(
+            "portage-bridge-slotop-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        let mk = |name: &str, files: &[(&str, &str)]| {
+            let d = dir.join("var/db/pkg/dev-libs").join(name);
+            std::fs::create_dir_all(&d).unwrap();
+            for (file, content) in files {
+                let mut f = std::fs::File::create(d.join(file)).unwrap();
+                f.write_all(content.as_bytes()).unwrap();
+            }
+        };
+        mk(
+            "slotbindtarget-1.0",
+            &[
+                ("CATEGORY", "dev-libs\n"),
+                ("SLOT", "2\n"),
+                ("repository", "testrepo\n"),
+            ],
+        );
+        mk(
+            "slotbindconsumer-1.0",
+            &[
+                ("CATEGORY", "dev-libs\n"),
+                ("SLOT", "0\n"),
+                ("repository", "testrepo\n"),
+                ("RDEPEND", "dev-libs/slotbindtarget:2/2=\n"),
+            ],
+        );
+        mk(
+            "slotbindfresh-1.0",
+            &[
+                ("CATEGORY", "dev-libs\n"),
+                ("SLOT", "0\n"),
+                ("repository", "testrepo\n"),
+                ("RDEPEND", "dev-libs/slotbindtarget:2/9=\n"),
+            ],
+        );
+        let mut req = fixture_request(&["dev-libs/slotbindtarget"]);
+        req.root = dir.clone();
+        req.solver = super::super::SolverKind::PubGrub;
+        req.rebuild_if_new_slot = true;
+        req.config.complete_seed_atoms = vec![
+            "dev-libs/slotbindconsumer".to_string(),
+            "dev-libs/slotbindfresh".to_string(),
+        ];
+        let result = super::super::active_resolver_for(super::super::SolverKind::PubGrub)
+            .resolve(&req)
+            .expect("slotbindtarget resolves");
+        let by_pkg = |p: &str| {
+            result
+                .entries
+                .iter()
+                .find(|e| e.package == p)
+                .unwrap_or_else(|| {
+                    panic!(
+                        "no {p} entry in {:?}",
+                        result
+                            .entries
+                            .iter()
+                            .map(|e| format!("{}/{}", e.category, e.package))
+                            .collect::<Vec<_>>()
+                    )
+                })
+        };
+        // The target upgrades across the sub-slot; only the stale
+        // consumer reinstalls, flagged as a slot-operator rebuild.
+        assert!(matches!(
+            by_pkg("slotbindtarget").outcome,
+            super::super::PretendOutcome::Upgrade { .. }
+        ));
+        let consumer = by_pkg("slotbindconsumer");
+        assert!(
+            matches!(
+                consumer.outcome,
+                super::super::PretendOutcome::Reinstall {
+                    slot_operator_rebuild: true,
+                    ..
+                }
+            ),
+            "unexpected outcome: {:?}",
+            consumer.outcome
+        );
+        assert!(!result.abi_rebuilds.is_empty());
+        assert!(
+            result.entries.iter().all(|e| e.package != "slotbindfresh"),
+            "the fresh :2/9= consumer is already bound correctly -- never rebuilt"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// Merge-order fidelity (H.15b): bridge entries carry real

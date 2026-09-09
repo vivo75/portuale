@@ -614,7 +614,15 @@ Deliberate non-gaps, documented there: resolvo reading weak blockers
 as hard conflicts (engine-model divergence), and slot-conflict/
 autounmask/circular notices (unreachable for solved engine plans --
 an engine solves cleanly or fails with H.15a text).
-Remaining V1 depth cut, its own future slice: ABI rebuilds (`:=`).
+**ABI rebuilds shipped (H.15, last slice)**: a bridge plan that moves a
+sub-slot schedules stale `:=` consumers through the walk's own
+`slot_operator_rebuild_entries` fixpoint (same gate, same
+complete-mode reachability) with byte-identical upgrade + `[ebuild
+rR]` + "causing rebuilds" output — see `what-this-proves.md`. Known
+engine divergence, documented there: resolvo favors the installed
+version on the slotbind scenario and reports an empty plan (upgrade
+preference is solver-model work, not notices). The solver V1 depth is
+now complete.
 
 **Hard invariant: `mrg` is a portuale-only applet. There will never be
 a portage counterpart or Python reference implementation.** Only its

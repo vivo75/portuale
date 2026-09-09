@@ -324,6 +324,82 @@ def test_solver_backends_report_matched_blockers(emerge_binary, fixture_env):
         ), solver
 
 
+def _slotbind_root(tmp_path):
+    """A test-local ROOT: dev-libs/slotbindtarget-1.0 installed at
+    SLOT="2" (sub-slot 2), plus two := consumers -- slotbindconsumer,
+    bound to the stale "dev-libs/slotbindtarget:2/2=", and slotbindfresh,
+    already bound to "dev-libs/slotbindtarget:2/9=" (what -2.0 provides).
+    Both consumers are in @world so the slot-operator-rebuild scan's
+    reachability gate can see them. PORTAGE_CONFIGROOT stays at the shared
+    fixtures so slotbindtarget-2.0 (SLOT="2/9") is visible."""
+    for name, files in {
+        "slotbindtarget-1.0": {"CATEGORY": "dev-libs\n", "SLOT": "2\n", "repository": "testrepo\n"},
+        "slotbindconsumer-1.0": {
+            "CATEGORY": "dev-libs\n",
+            "SLOT": "0\n",
+            "repository": "testrepo\n",
+            "RDEPEND": "dev-libs/slotbindtarget:2/2=\n",
+        },
+        "slotbindfresh-1.0": {
+            "CATEGORY": "dev-libs\n",
+            "SLOT": "0\n",
+            "repository": "testrepo\n",
+            "RDEPEND": "dev-libs/slotbindtarget:2/9=\n",
+        },
+    }.items():
+        d = tmp_path / "var" / "db" / "pkg" / "dev-libs" / name
+        d.mkdir(parents=True)
+        for fn, content in files.items():
+            (d / fn).write_text(content)
+    world = tmp_path / "var" / "lib" / "portage" / "world"
+    world.parent.mkdir(parents=True)
+    world.write_text("dev-libs/slotbindconsumer\ndev-libs/slotbindfresh\n")
+    return tmp_path
+
+
+def test_solver_backends_schedule_stale_equals_consumer_reinstalls(
+    emerge_binary, fixture_env, tmp_path
+):
+    """H.15 (ABI rebuilds, last slice): upgrading slotbindtarget across
+    its sub-slot (2 -> 2/9) reschedules the stale := consumer for
+    reinstall (`[ebuild rR]`) plus the "causing rebuilds" block, via the
+    walk's own fixpoint -- byte-identical between the walk and pubgrub.
+    The fresh (`:2/9=`) consumer is never rebuilt. Resolvo favors the
+    installed 1.0 here and reports an empty plan (a pre-existing
+    engine-policy divergence, verified on the pristine tree) -- out of
+    scope, noted, not pinned beyond a clean exit."""
+    env = dict(fixture_env)
+    env["ROOT"] = str(_slotbind_root(tmp_path))
+    portage = subprocess.run(
+        [str(emerge_binary), "--pretend", "--solver=portage", "dev-libs/slotbindtarget"],
+        capture_output=True,
+        text=True,
+        check=False,
+        env=env,
+    )
+    pubgrub = subprocess.run(
+        [str(emerge_binary), "--pretend", "--solver=pubgrub", "dev-libs/slotbindtarget"],
+        capture_output=True,
+        text=True,
+        check=False,
+        env=env,
+    )
+    assert pubgrub.returncode == 0
+    assert pubgrub.stdout == portage.stdout
+    assert "[ebuild  rR    ] dev-libs/slotbindconsumer-1.0" in pubgrub.stdout
+    assert "slotbindfresh" not in pubgrub.stdout
+    assert "The following packages are causing rebuilds:" in pubgrub.stdout
+
+    resolvo = subprocess.run(
+        [str(emerge_binary), "--pretend", "--solver=resolvo", "dev-libs/slotbindtarget"],
+        capture_output=True,
+        text=True,
+        check=False,
+        env=env,
+    )
+    assert resolvo.returncode == 0
+
+
 def test_solver_backends_share_the_walk_merge_order(emerge_binary, fixture_env):
     """H.15b (merge-order fidelity): bridge plans used to display in raw
     engine install order (pubgrub printed shared-b before shared-a for
