@@ -6952,9 +6952,47 @@ def resolve_blockers(root, pending, entries):
         ]
         matched = match_from_list(pb["atom_str"], candidate_strs)
         by_str = dict(zip(candidate_strs, candidates))
+
+        # The blocker atom's own [use] deps must actually match the
+        # blocked package -- match_from_list (cpv strings only) can't
+        # check them. `mesa[-libglvnd(+)]` vs a mesa that dropped the
+        # libglvnd flag, or `shadow[su]` vs a shadow built -su, is a
+        # satisfied no-op blocker real drops. Mirrors resolve_blockers.
+        _blocker_atom = _parse_atom(pb["atom_str"].lstrip("!"))
+
+        def _use_deps_apply(version, _blocker_atom=_blocker_atom, _pb=pb):
+            if _blocker_atom is None or _blocker_atom.use is None:
+                return True
+            _ent = next(
+                (
+                    e
+                    for e in entries
+                    if e[0] == _pb["target_category"]
+                    and e[1] == _pb["target_package"]
+                    and (
+                        (e[2][0] in ("new", "reinstall") and e[2][1] == version)
+                        or (e[2][0] in ("upgrade", "downgrade") and e[2][2] == version)
+                    )
+                ),
+                None,
+            )
+            if _ent is not None and _ent[5]:
+                enabled = {f for f, on in _ent[5] if on}
+                iuse = {f for f, _ in _ent[5]}
+            else:
+                enabled = _read_vdb_flag_set(
+                    root, _pb["target_category"], _pb["target_package"], version, "USE"
+                )
+                iuse = _read_vdb_flag_set(
+                    root, _pb["target_category"], _pb["target_package"], version, "IUSE"
+                )
+            return _use_deps_satisfied(_blocker_atom, iuse, enabled)
+
         for m in matched:
             matched_version, _matched_slot, _matched_sub_slot = by_str[m]
             if target_key == pb["owner_key"] and matched_version == pb["owner_version"]:
+                continue
+            if not _use_deps_apply(matched_version):
                 continue
             conflicts.append(
                 (

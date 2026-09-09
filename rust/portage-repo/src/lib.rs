@@ -11446,11 +11446,74 @@ fn resolve_blockers(
             .map(String::as_str)
             .zip(candidates.iter())
             .collect();
+        // The blocker atom's own `[use]` deps must actually match the
+        // blocked package for the block to apply -- `match_from_list`
+        // (which has only a cpv string, no USE) can't check them, so a
+        // `mesa[-libglvnd(+)]` against a mesa that has since dropped the
+        // `libglvnd` flag, or `shadow[su]` against a shadow built without
+        // `su`, would spuriously fire. Real evaluates them against the
+        // blocked pkg's recorded (installed) / effective (graphed) USE
+        // and drops the satisfied no-op blocker from the merge list.
+        let blocker_use_deps: Vec<portage_dep::UseDep> = portage_dep::parse_atom(&pb.atom_str)
+            .and_then(|a| a.use_deps)
+            .unwrap_or_default();
+        let use_deps_apply = |version: &str| -> bool {
+            if blocker_use_deps.is_empty() {
+                return true;
+            }
+            let (enabled, iuse) = entries
+                .iter()
+                .find(|e| {
+                    e.category == pb.target_category
+                        && e.package == pb.target_package
+                        && matches!(&e.outcome,
+                            PretendOutcome::New { version: v }
+                            | PretendOutcome::Reinstall { version: v, .. } if v == version)
+                        || (e.category == pb.target_category
+                            && e.package == pb.target_package
+                            && matches!(&e.outcome,
+                                PretendOutcome::Upgrade { to, .. }
+                                | PretendOutcome::Downgrade { to, .. } if to == version))
+                })
+                .map(|e| {
+                    let en: HashSet<String> = e
+                        .use_flags_display
+                        .iter()
+                        .filter(|(_, on)| *on)
+                        .map(|(f, _)| f.clone())
+                        .collect();
+                    let iu: HashSet<String> =
+                        e.use_flags_display.iter().map(|(f, _)| f.clone()).collect();
+                    (en, iu)
+                })
+                .unwrap_or_else(|| {
+                    (
+                        read_vdb_flag_set(
+                            root,
+                            &pb.target_category,
+                            &pb.target_package,
+                            version,
+                            "USE",
+                        ),
+                        read_vdb_flag_set(
+                            root,
+                            &pb.target_category,
+                            &pb.target_package,
+                            version,
+                            "IUSE",
+                        ),
+                    )
+                });
+            portage_dep::use_deps_satisfied(&blocker_use_deps, &iuse, &enabled)
+        };
         for m in matched {
             let Some((version, _slot, _sub_slot)) = by_str.get(m).copied() else {
                 continue;
             };
             if target_key == pb.owner_key && *version == pb.owner_version {
+                continue;
+            }
+            if !use_deps_apply(version) {
                 continue;
             }
             conflicts.push((
@@ -27167,6 +27230,38 @@ mod tests {
             &entries,
         );
         assert!(conflicts.is_empty());
+    }
+
+    #[test]
+    fn resolve_blockers_drops_a_use_dep_blocker_the_target_does_not_satisfy() {
+        // `!!dev-libs/target[wantblock]` against a graphed target whose
+        // `use_flags_display` has `wantblock` OFF -> the block is a
+        // satisfied no-op, dropped (real omits the `[blocks]` line).
+        let mut target = graph_entry("dev-libs", "target", "2.0");
+        target.use_flags_display = vec![("wantblock".to_string(), false)];
+        let entries = vec![graph_entry("dev-libs", "owner", "1.0"), target];
+        let call = |atom: &str| {
+            resolve_blockers(
+                Path::new("/nonexistent-root-for-this-test"),
+                &[PendingBlocker {
+                    atom_str: atom.to_string(),
+                    strong: true,
+                    target_category: "dev-libs".to_string(),
+                    target_package: "target".to_string(),
+                    owner_key: ("dev-libs".to_string(), "owner".to_string()),
+                    owner_version: "1.0".to_string(),
+                }],
+                &entries,
+            )
+        };
+        assert!(call("!!dev-libs/target[wantblock]").is_empty());
+        // `(+)` default: `gone` is absent from the target's IUSE, so it
+        // stands in as enabled -> `-gone` unmet -> block dropped.
+        assert!(call("!!dev-libs/target[-gone(+)]").is_empty());
+        // but a plain (no `[use]`) blocker still fires,
+        assert_eq!(call("!!dev-libs/target").len(), 1);
+        // and a use-dep the target DOES satisfy fires too.
+        assert_eq!(call("!!dev-libs/target[-wantblock]").len(), 1);
     }
 
     #[test]

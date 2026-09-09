@@ -1277,6 +1277,7 @@ CASES = [
     ("blocker: weak (!) blocker matches another new package in the graph", ["--pretend", "dev-libs/graphblockerparent"], 0),
     ("blocker: -v widens the [blocks B ] bracket by the mask column", ["--pretend", "-v", "dev-libs/blockerpkg"], 0),
     ("blocker: line prints after every package line, not inline", ["--pretend", "dev-libs/blockerorderpkg"], 0),
+    ("blocker: a [use]-dep blocker the blocked package doesn't satisfy is dropped, not printed", ["--pretend", "dev-libs/blockusedepconsumer"], 0),
     ("blocker: --color=y colours the [blocks B ] line (PKG_BLOCKER red)", ["--pretend", "--color=y", "dev-libs/blockerpkg"], 0),
     ("blocker: --color=y -v coloured + widened", ["--pretend", "--color=y", "-v", "dev-libs/blockerorderpkg"], 0),
     ("blocker: --tree still ends with the deferred [blocks B ] line", ["--pretend", "--tree", "dev-libs/blockerorderpkg"], 0),
@@ -6692,6 +6693,29 @@ def test_unrelated_package_reports_no_blockers(emerge_binary, fixture_env):
     result = _run([str(emerge_binary)], ["--pretend", "dev-libs/diamond"], fixture_env)
     assert result.returncode == 0
     assert "[blocks" not in result.stdout
+
+
+def test_use_dep_blocker_that_the_target_does_not_satisfy_is_dropped(
+    emerge_binary, emerge_pretend_python, fixture_env
+):
+    """Real drops a `[blocks]` line for a blocker atom whose own `[use]`
+    deps the blocked package doesn't actually satisfy -- the block is a
+    satisfied no-op. dev-libs/blockusedepconsumer RDEPENDs
+    `!!dev-libs/blockusedeptarget[wantblock]` and
+    `!!dev-libs/blockusedeptarget[-gone(+)]`; the installed target was
+    built with `wantblock` OFF and has no `gone` flag (so the `(+)`
+    default stands in as enabled, and `-gone` is unmet). Neither block
+    applies -- no `[blocks]` line, no `Conflict:` summary. (This is the
+    `media-libs/mesa[-libglvnd(+)]` / `sys-apps/shadow[su]` real-tree
+    noise in miniature.) Rust == Python."""
+    base = ["--pretend", "dev-libs/blockusedepconsumer"]
+    rust = _run([str(emerge_binary)], base, fixture_env)
+    py = _run(emerge_pretend_python, base, fixture_env)
+    assert rust.returncode == 0
+    assert rust.stdout == py.stdout
+    assert rust.stdout == "[ebuild  N     ] dev-libs/blockusedepconsumer-1.0 \n"
+    assert "[blocks" not in rust.stdout
+    assert "Conflict" not in rust.stdout
 
 
 def test_overlay_only_package_is_found(emerge_binary, fixture_env):

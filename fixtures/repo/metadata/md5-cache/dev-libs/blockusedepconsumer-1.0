@@ -1,0 +1,7 @@
+DEFINED_PHASES=-
+DESCRIPTION=fixture: !!blockusedeptarget[wantblock] -- target is installed WITHOUT wantblock, so the blocker is a satisfied no-op and must not print
+EAPI=8
+KEYWORDS=amd64
+RDEPEND=!!dev-libs/blockusedeptarget[wantblock] !!dev-libs/blockusedeptarget[-gone(+)]
+SLOT=0
+_md5_=0000000000000000000000000000000
