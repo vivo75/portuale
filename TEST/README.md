@@ -85,6 +85,15 @@ Output: `TEST/logs/l1-<timestamp>/` (`portage.*` / `portuale.*` snapshots
 Env: `L1_REBUILD=1` (wipe the pkgcache), `L1_SKIP_BUILD=1` (reuse it),
 `L1_JOBS`, `L1_SKIP_PORTAGE_UPGRADE`, `PORTTEST_IMAGE`, `PORTTEST_PODMAN`.
 
+> **Do not pass `L1_SKIP_PORTAGE_UPGRADE=1` for L1.** The image's base
+> portage (`3.0.81.3`) predates the VDB **consolidated `metadata` file**
+> (`_consolidate_to_metadata_file`, `vartree.py`), which portuale mirrors
+> because it targets `3.0.82.2` (the version the run upgrades to). Skip
+> the upgrade and every merged package shows a spurious
+> `[VDB] …/metadata  present for portuale, absent for portage` finding —
+> a reference-version artefact, not a portuale bug. (L0 is `--pretend`
+> only, so `L0_SKIP_PORTAGE_UPGRADE=1` there is fine and faster.)
+
 The reinstall + upgrade sub-cases are a slice-2 follow-up.
 
 ### L2+ (not yet implemented)

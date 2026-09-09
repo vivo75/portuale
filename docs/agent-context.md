@@ -145,7 +145,14 @@ implements (`pretend.rs`'s `HELP_TEXT`, mirrored in
   especially after a big merge from another branch or a change to the
   resolver / merge-order / phase code**, to confirm nothing regressed at
   scale. Findings go in `TEST/findings/`; adjudicated non-bugs in
-  `TEST/compare/known-divergences.yaml`.
+  `TEST/compare/known-divergences.yaml`. **L1 must run *with* the portage
+  upgrade** (do not pass `L1_SKIP_PORTAGE_UPGRADE=1`) — the image's base
+  portage predates the VDB consolidated `metadata` file portuale mirrors,
+  so skipping the upgrade makes every merged package show a spurious
+  `metadata` finding. Last clean full runs (`2026-09-09`): L0 clean
+  96/120 / parity 0.800 (the 24 divergent are merge-order timing or the
+  parked backtracking-disclosure); L1 porttest 0 hard findings after the
+  16-commit director/solver/regen/binpkg merge.
 
 ## Ownership
 
