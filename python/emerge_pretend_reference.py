@@ -8865,7 +8865,7 @@ def _synthetic_installed_entry(category, package, version, deps):
     )
 
 
-def _add_installed_dependency_closure(entries, root):
+def _add_installed_dependency_closure(entries, root, virtuals_only):
     """Real `_complete_graph`'s effect on `_serialize_tasks`: every
     installed nomerge node carries its own recorded vdb dependency tree,
     recursively -- so leaf selection clears a shallow installed subtree
@@ -8874,11 +8874,20 @@ def _add_installed_dependency_closure(entries, root):
     installed entry from its vdb `*DEPEND` (USE-reduced against its
     recorded USE, real `pkg.built` priorities), and append a
     `_synthetic_installed_entry` for each installed dependency not
-    already present, to a fixpoint. Mirrors portage-repo/src/merge_order.rs's
+    already present, to a fixpoint.
+
+    `virtuals_only` (real not in complete mode -- a plain `[ebuild N]`
+    resolve): real still expands an installed `virtual/*` node to its
+    provider but leaves every non-virtual installed node a `(no children)`
+    leaf, so only a node whose own category is `virtual` gets its deps
+    walked. Mirrors portage-repo/src/merge_order.rs's
     add_installed_dependency_closure."""
     by_cp = {}
     for c, p, v, _s in _all_installed_packages(root):
         by_cp.setdefault((c, p), (c, p, v))
+
+    def _expandable(cat):
+        return not virtuals_only or cat == "virtual"
 
     def _vdb_edges(cat, pkg, ver):
         md = {}
@@ -8901,19 +8910,25 @@ def _add_installed_dependency_closure(entries, root):
             e[8].get("deps") or [] if isinstance(e[8], dict) else []
         )
     ]
-    for key in seed_targets:
+    def _add_node(key):
         if key in present:
-            continue
+            return
         present.add(key)
         p = by_cp.get(key)
         if p is None:
-            continue
+            return
         entries.append(_synthetic_installed_entry(p[0], p[1], p[2], []))
-        queue.append(len(entries) - 1)
+        if _expandable(key[0]):
+            queue.append(len(entries) - 1)
+
+    for key in seed_targets:
+        _add_node(key)
 
     for i, e in enumerate(entries):
-        if e[2][0] == "already_installed" and not (
-            isinstance(e[8], dict) and e[8].get("deps")
+        if (
+            e[2][0] == "already_installed"
+            and not (isinstance(e[8], dict) and e[8].get("deps"))
+            and _expandable(e[0])
         ):
             queue.append(i)
 
@@ -8929,15 +8944,7 @@ def _add_installed_dependency_closure(entries, root):
             continue
         edges = _vdb_edges(e[0], e[1], e[2][1])
         for edge in edges:
-            key = edge["cp"]
-            if key in present:
-                continue
-            present.add(key)
-            p = by_cp.get(key)
-            if p is None:
-                continue
-            entries.append(_synthetic_installed_entry(p[0], p[1], p[2], []))
-            queue.append(len(entries) - 1)
+            _add_node(edge["cp"])
         # entry tuples are immutable -- rebuild [8] with the filled deps.
         new_prov = dict(prov)
         new_prov["deps"] = edges
@@ -8997,9 +9004,10 @@ def _topological_merge_order(entries, top_level_atoms=(), config=None, root="/",
         prov = e[8] if isinstance(e[8], dict) else {}
         return tag == "new" and bool(prov.get("new_slot"))
 
-    if any(_is_complete(e) for e in entries):
-        entries = list(entries)
-        _add_installed_dependency_closure(entries, root)
+    entries = list(entries)
+    _add_installed_dependency_closure(
+        entries, root, virtuals_only=not any(_is_complete(e) for e in entries)
+    )
     n = len(entries)
 
     g = _build_merge_digraph(entries, top_level_atoms, root)

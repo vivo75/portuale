@@ -547,7 +547,19 @@ fn synthetic_installed_entry(
 /// and the `sys-apps/dbus` trace confirmed -- that only feeds
 /// `_merge_order_bias`'s parent counts, which for the cases that diverge
 /// come from the merge-bound packages themselves.
-fn add_installed_dependency_closure(entries: &mut Vec<GraphEntry>, root: &Path) {
+fn add_installed_dependency_closure(
+    entries: &mut Vec<GraphEntry>,
+    root: &Path,
+    virtuals_only: bool,
+) {
+    // `virtuals_only` (a plain `[ebuild N]` resolve, real not in complete
+    // mode): real still expands an installed `virtual/*` node to its
+    // provider (`virtual/pkgconfig` -> `dev-util/pkgconf`) -- new-style
+    // virtuals are "free" and always walked -- but leaves every
+    // non-virtual installed node a `(no children)` leaf. So only a node
+    // whose own category is `virtual` gets its deps walked; the provider
+    // it names is added as a leaf, not queued (unless it is itself a
+    // virtual).
     let installed = all_installed_packages(root);
     let by_cp: HashMap<(&str, &str), &crate::InstalledPackage> = installed
         .iter()
@@ -583,17 +595,18 @@ fn add_installed_dependency_closure(entries: &mut Vec<GraphEntry>, root: &Path) 
     // `dev-perl/common-sense`'s edge to the installed `dev-lang/perl`
     // (and perl's own deep tree) was simply missing. Real
     // `_complete_graph` has every one of these.
-    let seed_targets: Vec<(String, String)> = entries
-        .iter()
-        .flat_map(|e| e.deps.iter())
-        .map(|d| (d.category.clone(), d.package.clone()))
-        .collect();
-    for key in seed_targets {
+    // `virtuals_only`: a node just added is queued for its own dep walk
+    // only if the whole closure is wanted, or it is itself a `virtual/*`.
+    let expandable = |cat: &str| !virtuals_only || cat == "virtual";
+    let add_node = |entries: &mut Vec<GraphEntry>,
+                    present: &mut HashSet<(String, String)>,
+                    queue: &mut std::collections::VecDeque<usize>,
+                    key: (String, String)| {
         if !present.insert(key.clone()) {
-            continue;
+            return;
         }
         let Some(p) = by_cp.get(&(key.0.as_str(), key.1.as_str())) else {
-            continue;
+            return;
         };
         entries.push(synthetic_installed_entry(
             p.category.clone(),
@@ -601,12 +614,27 @@ fn add_installed_dependency_closure(entries: &mut Vec<GraphEntry>, root: &Path) 
             p.version.clone(),
             Vec::new(),
         ));
-        queue.push_back(entries.len() - 1);
+        if expandable(&key.0) {
+            queue.push_back(entries.len() - 1);
+        }
+    };
+
+    let seed_targets: Vec<(String, String)> = entries
+        .iter()
+        .flat_map(|e| e.deps.iter())
+        .map(|d| (d.category.clone(), d.package.clone()))
+        .collect();
+    for key in seed_targets {
+        add_node(entries, &mut present, &mut queue, key);
     }
 
-    // Seed 2: every installed-outcome entry whose deps were never filled.
+    // Seed 2: every installed-outcome entry whose deps were never filled
+    // (and, in `virtuals_only` mode, is a `virtual/*`).
     for (i, e) in entries.iter().enumerate() {
-        if matches!(e.outcome, PretendOutcome::AlreadyInstalled { .. }) && e.deps.is_empty() {
+        if matches!(e.outcome, PretendOutcome::AlreadyInstalled { .. })
+            && e.deps.is_empty()
+            && expandable(&e.category)
+        {
             queue.push_back(i);
         }
     }
@@ -621,20 +649,12 @@ fn add_installed_dependency_closure(entries: &mut Vec<GraphEntry>, root: &Path) 
         let (cat, pkg) = (entries[i].category.clone(), entries[i].package.clone());
         let edges = vdb_edges(&cat, &pkg, &version);
         for e in &edges {
-            let key = (e.category.clone(), e.package.clone());
-            if !present.insert(key) {
-                continue;
-            }
-            let Some(p) = by_cp.get(&(e.category.as_str(), e.package.as_str())) else {
-                continue;
-            };
-            entries.push(synthetic_installed_entry(
-                p.category.clone(),
-                p.package.clone(),
-                p.version.clone(),
-                Vec::new(),
-            ));
-            queue.push_back(entries.len() - 1);
+            add_node(
+                entries,
+                &mut present,
+                &mut queue,
+                (e.category.clone(), e.package.clone()),
+            );
         }
         entries[i].deps = edges;
     }
@@ -1551,15 +1571,9 @@ pub(crate) fn serialize_merge_order(
                 | PretendOutcome::Downgrade { .. }
         ) || (matches!(e.outcome, PretendOutcome::New { .. }) && e.new_slot)
     });
-    let entries_owned: Vec<GraphEntry>;
-    let entries: &[GraphEntry] = if complete {
-        let mut ext = entries.to_vec();
-        add_installed_dependency_closure(&mut ext, root);
-        entries_owned = ext;
-        &entries_owned
-    } else {
-        entries
-    };
+    let mut ext = entries.to_vec();
+    add_installed_dependency_closure(&mut ext, root, !complete);
+    let entries: &[GraphEntry] = &ext;
     let n = entries.len();
 
     let mut g = build_digraph(entries, top_level_atoms, root);
