@@ -1393,6 +1393,113 @@ mod use_dep_satisfaction_tests {
 }
 
 #[cfg(test)]
+mod use_mismatch_tests {
+    use super::*;
+
+    fn mismatch(atom_str: &str, use_: &[&str], iuse: &[&str]) -> (Vec<String>, Vec<String>) {
+        let ud = parse_atom(atom_str)
+            .expect("atom must parse")
+            .use_deps
+            .expect("atom must carry use deps");
+        let other_use: HashSet<String> = use_.iter().map(|s| s.to_string()).collect();
+        let other_iuse: HashSet<String> = iuse.iter().map(|s| s.to_string()).collect();
+        let (mut missing, mut violated) = use_mismatch_flags(&ud, &other_use, &other_iuse);
+        let mut missing: Vec<String> = missing.drain().collect();
+        let mut violated: Vec<String> = violated.drain().collect();
+        missing.sort();
+        violated.sort();
+        (missing, violated)
+    }
+
+    #[test]
+    fn missing_iuse_is_unconditional_and_skips_violation_checks() {
+        // Missing IUSE is unconditional and skips the violation checks.
+        assert_eq!(
+            mismatch("dev-libs/foo[x]", &[], &[]),
+            (vec!["x".to_string()], vec![])
+        );
+        // ...and a would-be `[-z]` violation on the side is skipped too.
+        assert_eq!(
+            mismatch("dev-libs/foo[x,-z]", &["z"], &["z"]),
+            (vec!["x".to_string()], vec![])
+        );
+    }
+
+    #[test]
+    fn enabled_flag_off_other_is_a_violation() {
+        assert_eq!(
+            mismatch("dev-libs/foo[x]", &[], &["x"]),
+            (vec![], vec!["x".to_string()])
+        );
+        assert_eq!(
+            mismatch("dev-libs/foo[x]", &["x"], &["x"]),
+            (vec![], vec![])
+        );
+    }
+
+    #[test]
+    fn disabled_flag_on_other_is_a_violation() {
+        assert_eq!(
+            mismatch("dev-libs/foo[-x]", &["x"], &["x"]),
+            (vec![], vec!["x".to_string()])
+        );
+        assert_eq!(mismatch("dev-libs/foo[-x]", &[], &["x"]), (vec![], vec![]));
+        // `[-x]` with x not in IUSE: required, so missing (unconditional).
+        assert_eq!(
+            mismatch("dev-libs/foo[-x]", &[], &[]),
+            (vec!["x".to_string()], vec![])
+        );
+    }
+
+    #[test]
+    fn conditional_forms_never_yield_keys() {
+        // Conditional hits are dropped, as in Portage.
+        for atom in [
+            "dev-libs/foo[x?]",
+            "dev-libs/foo[!x?]",
+            "dev-libs/foo[x=]",
+            "dev-libs/foo[!x=]",
+        ] {
+            assert_eq!(mismatch(atom, &[], &["x"]), (vec![], vec![]), "{atom}");
+            assert_eq!(mismatch(atom, &["x"], &["x"]), (vec![], vec![]), "{atom}");
+        }
+    }
+
+    #[test]
+    fn defaults_rescue_undeclared_flags_for_matching_but_not_for_keys() {
+        // The (-) default makes an undeclared, off `x` a violation.
+        assert_eq!(
+            mismatch("dev-libs/foo[x(-)]", &[], &[]),
+            (vec![], vec!["x".to_string()])
+        );
+        // `[x(+)]` defaults it to enabled instead: nothing violated.
+        assert_eq!(mismatch("dev-libs/foo[x(+)]", &[], &[]), (vec![], vec![]));
+        // `[-x(+)]` with x undeclared: the (+) default stands in for
+        // "as if enabled", contradicting the must-be-disabled demand.
+        assert_eq!(
+            mismatch("dev-libs/foo[-x(+)]", &[], &[]),
+            (vec![], vec!["x".to_string()])
+        );
+    }
+}
+
+#[cfg(test)]
+mod use_deps_violated_tests {
+    use super::*;
+
+    fn violated(atom_str: &str, parent: &[&str], child: &[&str], iuse: &[&str]) -> bool {
+        let ud = parse_atom(atom_str)
+            .expect("atom must parse")
+            .use_deps
+            .expect("atom must carry use deps");
+        let parent_use: HashSet<String> = parent.iter().map(|s| s.to_string()).collect();
+        let child_use: HashSet<String> = child.iter().map(|s| s.to_string()).collect();
+        let child_iuse: HashSet<String> = iuse.iter().map(|s| s.to_string()).collect();
+        use_deps_violated(&ud, &parent_use, &child_use, &child_iuse)
+    }
+}
+
+#[cfg(test)]
 mod use_dep_conditional_evaluation_tests {
     use super::*;
 
