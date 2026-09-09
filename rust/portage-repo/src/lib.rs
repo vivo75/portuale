@@ -23069,6 +23069,7 @@ mod tests {
             package: pkg.to_string(),
             priority,
             disjunctive: false,
+            alt: None,
             key: if priority.buildtime { 3 } else { 0 },
         };
         let buildtime = DepPriority {

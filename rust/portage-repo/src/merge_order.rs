@@ -90,6 +90,14 @@ pub struct DepEdge {
     /// positions later in real's graph than the sibling atoms declared
     /// next to it.
     pub disjunctive: bool,
+    /// For a `disjunctive` atom that came from an actual `|| ( … )`
+    /// group: `(group, branch)` -- `group` counts the `||` groups in
+    /// this dep key, `branch` the alternative within one group.
+    /// `build_digraph` keeps one branch per group (`dep_zapdeps`'
+    /// `choice_bins`: all-in-graph, then all-installed, then first) and
+    /// suppresses the rest. `None` for an inline atom or a bare deferred
+    /// `virtual/*`.
+    pub alt: Option<(u32, u32)>,
     /// Which of real's own `deps`-tuple keys this came from
     /// (0=`RDEPEND`, 1=`IDEPEND`, 2=`PDEPEND`, 3=`DEPEND`, 4=`BDEPEND`).
     /// Disjunctive bundles are queued one per key, so the walk needs the
@@ -107,18 +115,29 @@ pub struct DepEdge {
 /// check for PROPERTIES=virtual"), and yielded inline otherwise.
 ///
 /// Portuale keeps every branch of a `||` group rather than resolving one
-/// (real's `dep_zapdeps` picks a branch; here the branches that don't
-/// correspond to a resolved entry simply never match a graph node), so
-/// the disjunctive list is the flattened contents of each `||` group
-/// plus the `virtual/*` atoms.
-fn split_disjunctive(tokens: &[String]) -> (Vec<String>, Vec<String>) {
+/// up front; `build_digraph` then picks `dep_zapdeps`' first-satisfiable
+/// branch (see its own doc). Each disjunctive atom is tagged with the
+/// `(group, branch)` of the `|| ( … )` alternative it belongs to --
+/// `group` counts the distinct `||` groups reached in this key,
+/// `branch` the alternative within one group (a bare atom is its own
+/// single-atom branch; a nested `( … )` is a multi-atom branch). A
+/// `virtual/*` atom outside any `||` is deferred too (like real) with
+/// `group`/`branch` `u32::MAX` so `build_digraph` never groups it with a
+/// real alternative.
+fn split_disjunctive(tokens: &[String]) -> (Vec<String>, Vec<(String, u32, u32)>) {
     let mut inline: Vec<String> = Vec::new();
-    let mut disjunctive: Vec<String> = Vec::new();
+    let mut disjunctive: Vec<(String, u32, u32)> = Vec::new();
     // Depth of the innermost enclosing `|| ( … )`, if any: everything
     // below one is disjunctive, however deeply nested.
     let mut any_of_depth: Option<usize> = None;
     let mut depth: usize = 0;
     let mut pending_any_of = false;
+    let mut group: u32 = 0;
+    let mut next_group: u32 = 0;
+    let mut branch: u32 = 0;
+    // Depth at which the current `branch`'s nested `( … )` opened, if any;
+    // the branch stays fixed for every atom until that group's `)`.
+    let mut branch_group_depth: Option<usize> = None;
     for tok in tokens {
         match tok.as_str() {
             "||" => pending_any_of = true,
@@ -126,10 +145,24 @@ fn split_disjunctive(tokens: &[String]) -> (Vec<String>, Vec<String>) {
                 depth += 1;
                 if pending_any_of && any_of_depth.is_none() {
                     any_of_depth = Some(depth);
+                    group = next_group;
+                    next_group += 1;
+                    branch = 0;
+                    branch_group_depth = None;
+                } else if any_of_depth.is_some()
+                    && Some(depth) == any_of_depth.map(|d| d + 1)
+                    && branch_group_depth.is_none()
+                {
+                    // A nested `( … )` alternative directly inside the `||`.
+                    branch_group_depth = Some(depth);
                 }
                 pending_any_of = false;
             }
             ")" => {
+                if branch_group_depth == Some(depth) {
+                    branch_group_depth = None;
+                    branch += 1;
+                }
                 if any_of_depth == Some(depth) {
                     any_of_depth = None;
                 }
@@ -139,8 +172,14 @@ fn split_disjunctive(tokens: &[String]) -> (Vec<String>, Vec<String>) {
                 pending_any_of = false;
                 let is_virtual =
                     portage_dep::parse_atom(tok).is_some_and(|a| a.category == "virtual");
-                if any_of_depth.is_some() || is_virtual {
-                    disjunctive.push(tok.clone());
+                if let Some(aod) = any_of_depth {
+                    disjunctive.push((tok.clone(), group, branch));
+                    if depth == aod {
+                        // A bare atom directly in the `||` is its own branch.
+                        branch += 1;
+                    }
+                } else if is_virtual {
+                    disjunctive.push((tok.clone(), u32::MAX, u32::MAX));
                 } else {
                     inline.push(tok.clone());
                 }
@@ -230,15 +269,16 @@ pub(crate) fn dep_edges_from_metadata(
             continue;
         };
         let (inline, deferred) = split_disjunctive(&structured);
-        let flat: Vec<(String, bool)> = inline
+        let flat: Vec<(String, Option<(u32, u32)>)> = inline
             .into_iter()
-            .map(|a| (a, false))
-            .chain(deferred.into_iter().map(|a| (a, true)))
+            .map(|a| (a, None))
+            .chain(deferred.into_iter().map(|(a, g, b)| (a, Some((g, b)))))
             .collect();
-        for (t, disjunctive) in flat {
+        for (t, alt) in flat {
             if t == "||" {
                 continue;
             }
+            let disjunctive = alt.is_some();
             let Some(dep_atom) = portage_dep::parse_atom(&t) else {
                 continue;
             };
@@ -271,6 +311,7 @@ pub(crate) fn dep_edges_from_metadata(
                     package: dep_atom.package,
                     priority,
                     disjunctive,
+                    alt,
                     key: key_index,
                 });
             }
@@ -835,6 +876,79 @@ fn build_digraph(entries: &[GraphEntry], top_level_atoms: &[String], root: &Path
         }
     };
 
+    // Real `dep_zapdeps` (`dep_check.py`): a `|| ( … )` group resolves to
+    // one alternative, not all. Portuale keeps every branch's atoms in
+    // `GraphEntry::deps` and picks here, per `(key, group)`, following
+    // real's `choice_bins` ordering: the first branch (written order)
+    // *all* of whose atoms already match a merge-bound graph node
+    // (`preferred_in_graph`, and real's line-793 promotion of the
+    // all-in-graph choice ahead of an all-installed one in the same
+    // bin), else the first all of whose atoms match an installed entry
+    // (`preferred_installed`), else the first all of whose atoms match
+    // anything at all. Every other branch's `deps` index is then
+    // suppressed from the discovery walk and the edge loop. If *no*
+    // branch fully resolves, nothing is suppressed (keep the
+    // over-inclusive stopgap).
+    let alt_suppressed: Vec<HashSet<usize>> = entries
+        .iter()
+        .map(|e| {
+            let mut groups: HashMap<(u8, u32), Vec<(u32, usize)>> = HashMap::new();
+            for (ei, edge) in e.deps.iter().enumerate() {
+                if let Some((g, b)) = edge.alt
+                    && g != u32::MAX
+                {
+                    groups.entry((edge.key, g)).or_default().push((b, ei));
+                }
+            }
+            let mut suppressed = HashSet::new();
+            for members in groups.values() {
+                // Per branch: does *every* atom match a merge-bound node
+                // / an installed entry / anything?
+                let mut all_graph: std::collections::BTreeMap<u32, bool> =
+                    std::collections::BTreeMap::new();
+                let mut all_inst: std::collections::BTreeMap<u32, bool> =
+                    std::collections::BTreeMap::new();
+                let mut all_any: std::collections::BTreeMap<u32, bool> =
+                    std::collections::BTreeMap::new();
+                for &(b, ei) in members {
+                    let edge = &e.deps[ei];
+                    let (mut graph_m, mut inst_m, mut any_m) = (false, false, false);
+                    if let Some(idxs) =
+                        cp_indices.get(&(edge.category.as_str(), edge.package.as_str()))
+                    {
+                        for &j in idxs {
+                            if edge_matches(&edge.atom, j) {
+                                any_m = true;
+                                if g.installed[j] {
+                                    inst_m = true;
+                                } else {
+                                    graph_m = true;
+                                }
+                            }
+                        }
+                    }
+                    *all_graph.entry(b).or_insert(true) &= graph_m;
+                    *all_inst.entry(b).or_insert(true) &= inst_m;
+                    *all_any.entry(b).or_insert(true) &= any_m;
+                }
+                let pick = all_graph
+                    .iter()
+                    .find(|(_, v)| **v)
+                    .map(|(b, _)| *b)
+                    .or_else(|| all_inst.iter().find(|(_, v)| **v).map(|(b, _)| *b))
+                    .or_else(|| all_any.iter().find(|(_, v)| **v).map(|(b, _)| *b));
+                if let Some(pick) = pick {
+                    for &(b, ei) in members {
+                        if b != pick {
+                            suppressed.insert(ei);
+                        }
+                    }
+                }
+            }
+            suppressed
+        })
+        .collect();
+
     // Real `_create_graph`: an explicit LIFO `dep_stack` seeded from the
     // top-level atoms. A node is recorded into `.order` the moment its
     // parent's dep string first names it (forward, before any recursion),
@@ -885,11 +999,14 @@ fn build_digraph(entries: &[GraphEntry], top_level_atoms: &[String], root: &Path
                   discovered: &mut Vec<bool>,
                   order: &mut Vec<usize>,
                   stack: &mut Vec<usize>| {
-        for edge in &entries[i].deps {
+        for (ei, edge) in entries[i].deps.iter().enumerate() {
             if edge.disjunctive != disjunctive {
                 continue;
             }
             if key_filter.is_some_and(|k| k != edge.key) {
+                continue;
+            }
+            if alt_suppressed[i].contains(&ei) {
                 continue;
             }
             let Some(idxs) = cp_indices.get(&(edge.category.as_str(), edge.package.as_str()))
@@ -939,7 +1056,10 @@ fn build_digraph(entries: &[GraphEntry], top_level_atoms: &[String], root: &Path
     // dep-key/atom order (which `asap_nodes` and the cycle harvester
     // both read).
     for (i, entry) in entries.iter().enumerate() {
-        for edge in &entry.deps {
+        for (ei, edge) in entry.deps.iter().enumerate() {
+            if alt_suppressed[i].contains(&ei) {
+                continue;
+            }
             let Some(idxs) = cp_indices.get(&(edge.category.as_str(), edge.package.as_str()))
             else {
                 continue;

@@ -7822,35 +7822,46 @@ def _split_disjunctive(dep_struct, _disjunctions=None):
     its category is `virtual` ("Eventually this will check for
     PROPERTIES=virtual"), and yielded inline otherwise.
 
-    This reference keeps every branch of a `||` group rather than
-    resolving one (real's dep_zapdeps picks a branch; here the branches
-    that don't correspond to a resolved entry simply never match a graph
-    node), so the disjunctive list is the flattened contents of each `||`
-    group plus the virtual/* atoms. Mirrors
-    portage-repo/src/merge_order.rs's split_disjunctive exactly."""
+    This reference keeps every branch of a `||` group; _build_merge_digraph
+    picks dep_zapdeps' first-satisfiable branch. Each disjunctive atom is
+    tagged `(atom, group, branch)` -- `group` counts the distinct `||`
+    groups reached in this key, `branch` the alternative within a group (a
+    bare atom is its own single-atom branch, a nested `( ... )` a
+    multi-atom branch). A bare virtual/* atom outside any `||` is deferred
+    too with group/branch (1<<30) so it is never grouped with a real
+    alternative. Mirrors portage-repo/src/merge_order.rs's
+    split_disjunctive exactly."""
     inline = []
-    disjunctions = [] if _disjunctions is None else _disjunctions
+    state = _disjunctions if _disjunctions is not None else {"out": [], "next_group": 0}
+    disjunctions = state["out"]
+    _NOGROUP = 1 << 30
 
-    def flatten(node, out):
+    def flatten_atoms(node, out):
         if isinstance(node, list):
             for x in node:
                 if x != "||":
-                    flatten(x, out)
+                    flatten_atoms(x, out)
         else:
             out.append(str(node))
 
     for x in dep_struct:
         if isinstance(x, list):
             if x and x[0] == "||":
-                flatten(x, disjunctions)
+                group = state["next_group"]
+                state["next_group"] += 1
+                for branch, elem in enumerate(x[1:]):
+                    atoms = []
+                    flatten_atoms(elem, atoms)
+                    for a in atoms:
+                        disjunctions.append((a, group, branch))
             else:
-                sub_inline, _ = _split_disjunctive(x, disjunctions)
+                sub_inline, _ = _split_disjunctive(x, state)
                 inline.extend(sub_inline)
         else:
             tok = str(x)
             parsed = _parse_atom(tok)
             if parsed is not None and parsed.cp.split("/", 1)[0] == "virtual":
-                disjunctions.append(tok)
+                disjunctions.append((tok, _NOGROUP, _NOGROUP))
             else:
                 inline.append(tok)
     return inline, disjunctions
@@ -7916,11 +7927,12 @@ def _dep_edges_from_metadata(metadata, use_flags, real_order_keys, built):
         except (InvalidDependString, InvalidAtom):
             continue
         inline, deferred = _split_disjunctive(struct)
-        for tok, disjunctive in [(t, False) for t in inline] + [
-            (t, True) for t in deferred
+        for tok, alt in [(t, None) for t in inline] + [
+            (t, (g, b)) for (t, g, b) in deferred
         ]:
             if tok == "||":
                 continue
+            disjunctive = alt is not None
             dep_atom = _parse_atom(tok)
             if dep_atom is None or dep_atom.blocker:
                 continue
@@ -7945,6 +7957,7 @@ def _dep_edges_from_metadata(metadata, use_flags, real_order_keys, built):
                     "cp": cp,
                     "priority": priority,
                     "disjunctive": disjunctive,
+                    "alt": alt,
                     "key": key_index,
                 }
             )
@@ -8282,6 +8295,56 @@ def _build_merge_digraph(entries, top_level_atoms, root):
         except (InvalidAtom, InvalidDependString):
             return True
 
+    # Real dep_zapdeps (dep_check.py): a `|| ( ... )` group resolves to one
+    # alternative, per real's choice_bins ordering. Per (key, group), pick
+    # the first branch (written order) *all* of whose atoms match a
+    # merge-bound graph node (preferred_in_graph, + real's line-793
+    # promotion over an all-installed choice), else the first all of whose
+    # atoms match an installed entry (preferred_installed), else the first
+    # all of whose atoms match anything. Suppress the other branches. If
+    # no branch fully resolves, suppress nothing. Mirrors
+    # merge_order.rs::build_digraph's alt_suppressed.
+    _NOGROUP = 1 << 30
+    alt_suppressed = []
+    for e in entries:
+        deps = (
+            e[8].get("deps") or [] if isinstance(e[8], dict) else []
+        )
+        groups = {}
+        for ei, edge in enumerate(deps):
+            alt = edge.get("alt")
+            if alt is not None and alt[0] != _NOGROUP:
+                groups.setdefault((edge["key"], alt[0]), []).append((alt[1], ei))
+        suppressed = set()
+        for members in groups.values():
+            all_graph, all_inst, all_any = {}, {}, {}
+            for b, ei in members:
+                edge = deps[ei]
+                graph_m = inst_m = any_m = False
+                for j in cp_indices.get(edge["cp"], ()):
+                    if edge_matches(edge["atom"], j):
+                        any_m = True
+                        if g.installed[j]:
+                            inst_m = True
+                        else:
+                            graph_m = True
+                all_graph[b] = all_graph.get(b, True) and graph_m
+                all_inst[b] = all_inst.get(b, True) and inst_m
+                all_any[b] = all_any.get(b, True) and any_m
+            pick = None
+            for table in (all_graph, all_inst, all_any):
+                for b in sorted(table):
+                    if table[b]:
+                        pick = b
+                        break
+                if pick is not None:
+                    break
+            if pick is not None:
+                for b, ei in members:
+                    if b != pick:
+                        suppressed.add(ei)
+        alt_suppressed.append(suppressed)
+
     # Real _create_graph: an explicit LIFO dep_stack seeded from the
     # top-level atoms. A node is recorded into .order the moment its
     # parent's dep string first names it (forward, before any recursion),
@@ -8319,10 +8382,12 @@ def _build_merge_digraph(entries, top_level_atoms, root):
     disjunctive_stack = []
 
     def expand(i, disjunctive, key_filter):
-        for edge in _entry_deps(i):
+        for ei, edge in enumerate(_entry_deps(i)):
             if edge["disjunctive"] != disjunctive:
                 continue
             if key_filter is not None and edge["key"] != key_filter:
+                continue
+            if ei in alt_suppressed[i]:
                 continue
             for j in cp_indices.get(edge["cp"], ()):
                 if not edge_matches(edge["atom"], j):
@@ -8356,7 +8421,9 @@ def _build_merge_digraph(entries, top_level_atoms, root):
     # Edges. Forward first, so `children` keeps real's own dep-key/atom
     # order (which asap_nodes and the cycle harvester both read).
     for i in range(n):
-        for edge in _entry_deps(i):
+        for ei, edge in enumerate(_entry_deps(i)):
+            if ei in alt_suppressed[i]:
+                continue
             for j in cp_indices.get(edge["cp"], ()):
                 if not edge_matches(edge["atom"], j):
                     continue
