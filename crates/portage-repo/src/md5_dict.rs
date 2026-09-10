@@ -349,6 +349,35 @@ mod tests {
     }
 
     #[test]
+    fn valid_entry_without_eclasses_is_valid() {
+        let ebuild = "EAPI=8\nDESCRIPTION=x\n";
+        assert!(valid_repo(
+            ebuild,
+            None,
+            Some(&format!(
+                "EAPI=8\nSLOT=0\n_md5_={}\n",
+                md5_hex(ebuild.as_bytes())
+            )),
+            false,
+        ));
+    }
+
+    #[test]
+    fn stale_ebuild_md5_invalidates() {
+        assert!(!valid_repo(
+            "EAPI=8\nDESCRIPTION=new\n",
+            None,
+            Some("EAPI=8\nSLOT=0\n_md5_=00000000000000000000000000000000\n"),
+            false,
+        ));
+    }
+
+    #[test]
+    fn missing_cache_file_is_invalid() {
+        assert!(!valid_repo("EAPI=8\n", None, None, false));
+    }
+
+    #[test]
     fn corrupt_line_and_unsupported_eapi_invalidate() {
         let ebuild = "EAPI=8\n";
         let md5 = md5_hex(ebuild.as_bytes());

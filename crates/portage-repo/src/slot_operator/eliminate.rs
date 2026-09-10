@@ -2,6 +2,20 @@
 
 use crate::*;
 
+/// Arguments of [`slot_operator_eliminate_rebuilds`].
+pub(crate) struct SlotOperatorEliminateRebuildsArgs<'a> {
+    pub(crate) root: &'a Path,
+    pub(crate) repos: &'a [RepoConfig],
+    pub(crate) entries: &'a [GraphEntry],
+    pub(crate) replace: &'a BTreeSet<(String, String)>,
+    pub(crate) slot_want: &'a HashMap<(String, String), Vec<String>>,
+    pub(crate) reverse_pins: &'a [RevDepPin],
+    pub(crate) selective: bool,
+    pub(crate) changed_slot: bool,
+    pub(crate) top_level_cps: &'a HashSet<(String, String)>,
+    pub(crate) empty: bool,
+}
+
 /// Arguments of [`slot_operator_rebuild_entries`].
 pub(crate) struct SlotOperatorRebuildEntriesArgs<'a> {
     pub(crate) root: &'a Path,
