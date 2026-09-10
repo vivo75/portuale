@@ -84,6 +84,22 @@ impl Rng {
     }
 }
 
+/// Cycle node sets, order-insensitive (rotations of one ring are
+/// distinct records, like Portage).
+fn cycle_sets(cycles: &[Vec<usize>]) -> Vec<Vec<usize>> {
+    let mut out: Vec<Vec<usize>> = cycles
+        .iter()
+        .map(|c| {
+            let mut s = c.clone();
+            s.sort_unstable();
+            s
+        })
+        .collect();
+    out.sort();
+    out.dedup();
+    out
+}
+
 /// A minimal `New` `GraphEntry` for `build_digraph` tests --
 /// mirrors `synthetic_installed_entry`'s full field list.
 fn new_entry(category: &str, package: &str, version: &str, deps: Vec<DepEdge>) -> GraphEntry {
@@ -190,6 +206,7 @@ fn runtime_edge(atom: &str, cat: &str, pkg: &str) -> DepEdge {
 
 mod alt_edges;
 mod build;
+mod cycles;
 mod debug;
 mod digraph;
 mod priority;

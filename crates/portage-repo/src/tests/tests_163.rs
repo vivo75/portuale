@@ -714,3 +714,12 @@ fn ctx_163<'a>(args: Ctx163Args<'a>) -> ResolveCtx<'a> {
         local_binpkg: build_local_binpkg_index(config),
     }
 }
+
+fn plain_163(cat: &str, pkg: &str, atom: &str) -> PlainMissDepReport {
+    PlainMissDepReport {
+        category: cat.to_string(),
+        package: pkg.to_string(),
+        atom: atom.to_string(),
+        chain: Vec::new(),
+    }
+}
