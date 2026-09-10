@@ -400,7 +400,9 @@ Python reference.**
 
 L0 (resolver parity) + L1 (merge parity) are shipped and run live
 (`TEST/README.md`). The forward layers, planned in
-`history/real-world-testing.md` §5/§14, are not built:
+`history/real-world-testing.md` §5/§14 and distilled for execution
+into `real-world-testing.md` (§2–§8: controls, triage, L2–L5 designs,
+risks, metrics), are not built:
 
 - **L2** — portuale as builder: `emerge -b` the L1 set from source,
   structural `.gpkg.tar` checks (`gpkg-structure.sh`), cross-install

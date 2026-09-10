@@ -99,7 +99,11 @@ The reinstall + upgrade sub-cases are a slice-2 follow-up.
 ### L2+ (not yet implemented)
 
 `net/up.sh` / `net/down.sh` (shared network + volumes) for the HTTP
-binhost / `mrg` client; `compare/gpkg-{structure,diff}.sh`. See §14.
+binhost / `mrg` client; `compare/gpkg-{structure,diff}.sh`. Designs,
+controls, deferred fixtures, risks, and metrics:
+`docs/real-world-testing.md` §§2–8 (extracted from
+`docs/history/real-world-testing.md`, whose §14 slice history and §1
+methodology critique stay there).
 
 ### Layout
 

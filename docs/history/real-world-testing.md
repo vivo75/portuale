@@ -2,8 +2,12 @@
 
 > **Historical planning doc.** L0 + L1 are **shipped and run live** —
 > `TEST/README.md` is the current operating guide, `TEST/findings/` the
-> results. The §1 methodology critique and the L2–L5 forward plan are
-> still the reference; L2–L5 status is tracked in `scope-backlog.md`.
+> results. The execution-useful content (determinism controls, triage
+> guidance, archive-comparison and L2–L5 designs, risks, metrics) now
+> lives in [`../real-world-testing.md`](../real-world-testing.md);
+> what remains here — the §1 methodology critique, image specs, and
+> slice history — is reference only. L2–L5 status is tracked in
+> `scope-backlog.md`.
 
 Goal: a standing, repeatable, container-based differential test bed that
 exercises the *execution* side (build, package, merge, unmerge, binhost
