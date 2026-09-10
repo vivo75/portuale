@@ -62,6 +62,83 @@ fn stale_merging_entry_is_invisible_and_replaced_by_the_next_merge() {
     assert_eq!(portage_repo::all_installed_packages(&root).len(), 1);
 }
 
+/// A symlink pointing at a directory is never collision-checked, and
+/// `merge_tree` lands it at the first `dest.backup.NNNN`, keeping the dir.
+/// Portage: `vartree.py`, `mergeme`.
+#[test]
+fn directory_target_symlink_over_a_real_directory_is_ignored_and_backed_up() {
+    let tmp = tempdir();
+    let root = tmp.join("root");
+    let image = tmp.join("image");
+    std::fs::create_dir_all(root.join("lib/firmware/nvidia/ad103")).unwrap();
+    std::fs::write(
+        root.join("lib/firmware/nvidia/ad103/some.bin"),
+        b"installed",
+    )
+    .unwrap();
+    // An unclaimed ordinary collision alongside: must not abort under
+    // `protect_owned` alone either.
+    std::fs::create_dir_all(root.join("lib/firmware/brcm")).unwrap();
+    std::fs::write(root.join("lib/firmware/brcm/stray.txt"), b"stray on disk").unwrap();
+
+    std::fs::create_dir_all(image.join("lib/firmware/nvidia/real")).unwrap();
+    std::fs::write(image.join("lib/firmware/nvidia/real/some.bin"), b"new").unwrap();
+    std::os::unix::fs::symlink("real", image.join("lib/firmware/nvidia/ad103")).unwrap();
+    std::fs::create_dir_all(image.join("lib/firmware/brcm")).unwrap();
+    std::fs::write(image.join("lib/firmware/brcm/stray.txt"), b"new stray").unwrap();
+
+    let empty_plib = HashMap::new();
+    let empty_blocked = HashSet::new();
+    let (collisions, symlink_collisions, _) = find_collisions(FindCollisionsArgs {
+        d: &image,
+        root: &root,
+        category: "sys-kernel",
+        package: "linux-firmware",
+        slot: "0",
+        config_protect: "/etc",
+        config_protect_mask: "/etc/env.d",
+        plib_inodes: &empty_plib,
+        blocked: &empty_blocked,
+    })
+    .expect("find_collisions succeeds");
+    assert!(
+        symlink_collisions.is_empty(),
+        "a directory-target symlink is not a PMS 13.4 collision: {symlink_collisions:?}"
+    );
+    // The ordinary stray-file collision is reported...
+    assert_eq!(collisions, vec!["/lib/firmware/brcm/stray.txt".to_string()]);
+    assert!(
+        find_owners(&root, &collisions).is_empty(),
+        "the stray file is unclaimed"
+    );
+
+    let mut cfgfiledict = BTreeMap::new();
+    merge_tree(MergeTreeArgs {
+        d: &image,
+        root: &root,
+        category: "sys-kernel",
+        installed_instance_pf: None,
+        protect_if_modified: true,
+        config_protect: "/etc",
+        config_protect_mask: "/etc/env.d",
+        noconfmem: false,
+        cfgfiledict: &mut cfgfiledict,
+        xattrs: &XattrPolicy::default(),
+    })
+    .expect("merge_tree succeeds");
+
+    assert!(root.join("lib/firmware/nvidia/ad103").is_dir());
+    assert_eq!(
+        std::fs::read_link(root.join("lib/firmware/nvidia/ad103.backup.0000")).unwrap(),
+        PathBuf::from("real")
+    );
+    assert_eq!(
+        std::fs::read_to_string(root.join("lib/firmware/brcm/stray.txt")).unwrap(),
+        "new stray"
+    );
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
 /// Every `!atom`/`!!atom` in an already-flat dep list is matched against
 /// the installed vdb; non-blocker atoms are ignored.
 /// Portage: `vartree.py`, `blocked_installed_packages`.

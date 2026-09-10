@@ -1,5 +1,44 @@
 use super::*;
 
+/// In replacement mode a consumer owned by the old instance still keeps a
+/// preserved lib alive through the replacing package.
+/// Portage: `dblink.py`, `_prune_plib_registry`.
+#[test]
+fn prune_keeps_a_preserved_lib_whose_only_consumer_is_old_owned_in_replacement_mode() {
+    let tmp = tempdir();
+    let (root, being) = seed_old_owned_consumer_root(&tmp);
+
+    let unneeded = find_unused_preserved_libs(FindUnusedPreservedLibsArgs {
+        root: &root,
+        unmerge_no_replacement: true,
+        being_unmerged: &|p| being.contains(p),
+        exclude_cpvs: &[],
+        replacement_preserved: &BTreeMap::new(),
+        replacement_needed: &[],
+    });
+    assert_eq!(
+        unneeded,
+        BTreeMap::from([(
+            "dev-libs/provider-1.0".to_string(),
+            BTreeSet::from(["/usr/lib/keepA.so".to_string()]),
+        )]),
+        "standalone mode eliminates the about-to-be-unmerged consumer"
+    );
+
+    let unneeded = find_unused_preserved_libs(FindUnusedPreservedLibsArgs {
+        root: &root,
+        unmerge_no_replacement: false,
+        being_unmerged: &|p| being.contains(p),
+        exclude_cpvs: &[],
+        replacement_preserved: &BTreeMap::new(),
+        replacement_needed: &[],
+    });
+    assert!(
+        unneeded.is_empty(),
+        "replacement mode keeps the old-owned consumer, so the lib is needed: {unneeded:?}"
+    );
+}
+
 /// The replaced instance's `NEEDED.ELF.2` lines are excluded from the prune,
 /// so a consumer only it knows cannot keep a preserved lib alive.
 /// Portage: `dblink.py`, `_prune_plib_registry`.

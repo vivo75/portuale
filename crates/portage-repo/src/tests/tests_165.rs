@@ -930,6 +930,49 @@ fn collect_unwalked_installed_blockers_skips_walked_cps_and_nomerge_runs() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
+/// The duplicate guard is exact: a pre-seeded identical row is not
+/// filed twice, while a same-owner different-atom row still files.
+#[test]
+fn collect_unwalked_installed_blockers_dedups_exact_rows_only() {
+    let root = dir_165("scan-dedup");
+    install_165(
+        &root,
+        "dev-libs",
+        "blk-1.0",
+        "0",
+        &[("RDEPEND", "!!dev-libs/victim !!dev-libs/other")],
+    );
+    let entries = vec![new_165("dev-libs", "victim", "2.0")];
+    let seed = PendingBlocker {
+        atom_str: "!!dev-libs/victim".to_string(),
+        strong: true,
+        buildtime: false,
+        target_category: "dev-libs".to_string(),
+        target_package: "victim".to_string(),
+        owner_key: ("dev-libs".to_string(), "blk".to_string()),
+        owner_version: "1.0".to_string(),
+        owner_merging: false,
+        owner_installed: true,
+    };
+    let mut pending = vec![seed];
+    let mut memo = HashMap::new();
+    collect_unwalked_installed_blockers(CollectUnwalkedInstalledBlockersArgs {
+        repos: &[],
+        root: &root,
+        config: &cfg_165(),
+        dynamic_deps: false,
+        ignore_built_slot_operator_deps: false,
+        disj_constraints: &HashMap::new(),
+        root_deps_running_root: None,
+        entries: &entries,
+        pending_blockers: &mut pending,
+        installed_meta_memo: &mut memo,
+    });
+    assert_eq!(pending.len(), 2);
+    assert_eq!(pending[1].atom_str, "!!dev-libs/other");
+    let _ = std::fs::remove_dir_all(&root);
+}
+
 // ---- `enqueue_dependencies` (`--deep` AlreadyInstalled recursion). ----
 /// Arguments of [`enqueue_165`].
 struct Enqueue165Args<'a> {
@@ -994,4 +1037,87 @@ fn enqueue_165(args: Enqueue165Args<'_>) -> SlotPullers {
         &HashMap::new(),
     );
     pullers
+}
+
+/// A plain RDEPEND on an installed package is queued (not skipped).
+#[test]
+fn enqueue_dependencies_queues_a_plain_dep_on_an_installed_package() {
+    let root = dir_165("enqueue-basic");
+    install_165(
+        &root,
+        "dev-libs",
+        "consumer-1.0",
+        "0",
+        &[("RDEPEND", "dev-libs/dep")],
+    );
+    install_165(&root, "dev-libs", "dep-1.0", "0", &[]);
+    let repos = repo_165(
+        &root,
+        &[
+            ("dev-libs/consumer", "1.0", "0", "", "", "", ""),
+            ("dev-libs/dep", "1.0", "0", "", "", "", ""),
+        ],
+    );
+    let mut entries = Vec::new();
+    let mut queue = std::collections::VecDeque::new();
+    let mut pending = Vec::new();
+    let pullers = enqueue_165(Enqueue165Args {
+        repos: &repos,
+        root: &root,
+        config: &cfg_165(),
+        cat: "dev-libs",
+        pkg: "consumer",
+        ver: "1.0",
+        with_bdeps: false,
+        entries: &mut entries,
+        queue: &mut queue,
+        pending: &mut pending,
+    });
+    assert!(pending.is_empty());
+    assert_eq!(queue.len(), 1);
+    assert_eq!(queue[0].atom, "dev-libs/dep");
+    assert_eq!(queue[0].depth, 1);
+    assert_eq!(
+        pullers.get(&("dev-libs".to_string(), "dep".to_string())),
+        Some(&vec![(
+            "dev-libs".to_string(),
+            "consumer".to_string(),
+            "1.0".to_string(),
+            "dev-libs/dep".to_string()
+        )])
+    );
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// A dependency on the installed instance itself is the satisfied
+/// self-edge Portage drops.
+#[test]
+fn enqueue_dependencies_drops_a_dep_satisfied_by_the_instance_itself() {
+    let root = dir_165("enqueue-self");
+    install_165(
+        &root,
+        "dev-libs",
+        "consumer-1.0",
+        "0",
+        &[("RDEPEND", "dev-libs/consumer")],
+    );
+    let repos = repo_165(&root, &[("dev-libs/consumer", "1.0", "0", "", "", "", "")]);
+    let mut entries = Vec::new();
+    let mut queue = std::collections::VecDeque::new();
+    let mut pending = Vec::new();
+    enqueue_165(Enqueue165Args {
+        repos: &repos,
+        root: &root,
+        config: &cfg_165(),
+        cat: "dev-libs",
+        pkg: "consumer",
+        ver: "1.0",
+        with_bdeps: false,
+        entries: &mut entries,
+        queue: &mut queue,
+        pending: &mut pending,
+    });
+    assert!(queue.is_empty());
+    assert!(pending.is_empty());
+    let _ = std::fs::remove_dir_all(&root);
 }

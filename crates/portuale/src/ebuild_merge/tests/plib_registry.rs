@@ -70,6 +70,59 @@ fn plib_inode_map_skips_paths_that_no_longer_exist_on_disk() {
     );
 }
 
+/// A merge/unmerge that preserves nothing leaves the registry file
+/// byte- and mtime-identical.
+/// Portage: `PreservedLibsRegistry.py`, `store`.
+#[test]
+fn plib_registry_is_not_rewritten_when_nothing_is_preserved() {
+    let tmp = tempdir();
+    let root = tmp.join("root");
+    let reg_path = plib_registry_path(&root);
+    std::fs::create_dir_all(reg_path.parent().unwrap()).unwrap();
+    std::fs::write(&reg_path, b"").unwrap();
+    let before = std::fs::metadata(&reg_path).unwrap();
+    let before_mtime = before.modified().unwrap();
+
+    std::fs::create_dir_all(root.join("usr/lib")).unwrap();
+    std::fs::write(root.join("usr/lib/plain.so"), b"x").unwrap();
+    let vdb = root.join("var/db/pkg/dev-libs/plain-1.0");
+    std::fs::create_dir_all(&vdb).unwrap();
+    std::fs::write(vdb.join("COUNTER"), "3\n").unwrap();
+    let preserved = preserve_libs_on_unmerge(PreserveLibsOnUnmergeArgs {
+        root: &root,
+        category: "dev-libs",
+        pn: "plain",
+        pf: "plain-1.0",
+        slot: "0",
+        contents_text: "obj /usr/lib/plain.so abc 1\n",
+        is_replacement: false,
+    })
+    .unwrap();
+    assert!(preserved.is_empty());
+
+    let registry = read_plib_registry(&root);
+    unregister_preserved_libs(&root, "dev-libs/plain-1.0", registry, &BTreeMap::new()).unwrap();
+
+    let removed = prune_unused_preserved_libs(PruneUnusedPreservedLibsArgs {
+        root: &root,
+        unmerge_no_replacement: false,
+        being_unmerged: &|_| false,
+        exclude_cpvs: &[],
+        replacement_preserved: &BTreeMap::new(),
+        replacement_needed: &[],
+    })
+    .unwrap();
+    assert!(removed.is_empty());
+
+    let after = std::fs::metadata(&reg_path).unwrap();
+    assert_eq!(after.len(), 0, "a 0-byte registry must stay 0 bytes");
+    assert_eq!(
+        after.modified().unwrap(),
+        before_mtime,
+        "the registry file must not be rewritten when nothing changed"
+    );
+}
+
 /// A non-empty registry serializes byte-identical to Portage's `json.dumps`
 /// with `ensure_ascii=False`, tab indent and sorted keys.
 /// Portage: `PreservedLibsRegistry.py`, `store`.

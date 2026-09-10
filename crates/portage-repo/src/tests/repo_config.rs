@@ -199,3 +199,62 @@ fn find_repos_reads_profiles_repo_name_and_drops_a_mismatched_section() {
     );
     assert!(repos.iter().all(|r| r.name != "dropped-section"));
 }
+
+#[test]
+fn reverse_dependency_constraints_enforces_a_runtime_pin_but_ignores_a_build_time_pin() {
+    // The runtime-key pin enforces as a slot constraint; the
+    // build-time-key pin is ignored entirely.
+    let root = fixtures_root();
+    let repos = find_repos(&root).expect("fixture repos.conf must resolve");
+    let upgrade = |pkg: &str| GraphEntry {
+        discovery: 0,
+        category: "dev-libs".into(),
+        package: pkg.into(),
+        outcome: PretendOutcome::Upgrade {
+            from: "1.0".into(),
+            to: "2.0".into(),
+        },
+        ..graph_entry("dev-libs", pkg, "2.0")
+    };
+    let entries = [upgrade("whblocker"), upgrade("rdcblocker")];
+    let hard_want: HashMap<(String, String), Vec<String>> = HashMap::from([
+        (
+            ("dev-libs".to_string(), "whblocker".to_string()),
+            vec![">=dev-libs/whblocker-1".to_string()],
+        ),
+        (
+            ("dev-libs".to_string(), "rdcblocker".to_string()),
+            vec![">=dev-libs/rdcblocker-1".to_string()],
+        ),
+    ]);
+    let reachable: HashSet<(String, String)> = HashSet::from([
+        ("dev-libs".to_string(), "whtarget".to_string()),
+        ("dev-libs".to_string(), "rdctarget".to_string()),
+    ]);
+    let (enforced, dropped) = reverse_dependency_constraints(ReverseDependencyConstraintsArgs {
+        repos: &repos,
+        root: &root,
+        entries: &entries,
+        with_bdeps: true,
+        excluded: &[],
+        hard_want: &hard_want,
+        reachable: &reachable,
+        dynamic_deps: true,
+        ignore_built_slot_operator_deps: false,
+        top_level_cps: &HashSet::new(),
+        world_reachable: &HashSet::new(),
+        config: &portage_profile::Config::default(),
+        complete: false,
+    });
+    assert_eq!(
+        enforced.len(),
+        1,
+        "the reachable runtime-key pin must be enforced, got {enforced:?}"
+    );
+    assert_eq!(enforced[0].consumer.1, "whtarget");
+    assert!(
+        enforced.iter().all(|p| p.consumer.1 != "rdctarget")
+            && dropped.iter().all(|p| p.consumer.1 != "rdctarget"),
+        "the build-time-key pin must be ignored entirely, got enforced={enforced:?} dropped={dropped:?}"
+    );
+}

@@ -1,5 +1,102 @@
 use super::*;
 
+/// A source merge with a resolved config threads the full effective `USE`, the
+/// resolved (folded) `FEATURES`, and the entry's `SLOT` into the phase, under
+/// **both** backends. Expected value from Portage source.
+#[allow(clippy::field_reassign_with_default)]
+#[test]
+fn source_merge_with_resolved_config_threads_use_and_slot_into_the_phase() {
+    for (shell, label) in [
+        (ebuild_phases::ShellBackend::Bash, "bash"),
+        (ebuild_phases::ShellBackend::Brush, "brush"),
+    ] {
+        let config_root = fixtures_root();
+        let repos = find_repos(&config_root).unwrap();
+        let root = tempdir();
+        let portage_tmpdir = tempdir();
+        let mut config = portage_profile::Config::default();
+        config.use_tokens = vec!["abi_x86_64 amd64 elibc_glibc kernel_linux".to_string()];
+        config.iuse_effective = ["abi_x86_64", "amd64", "elibc_glibc", "kernel_linux"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        let mut config_env = config.clone();
+        config_env.other_vars.insert(
+            "FEATURES".to_string(),
+            "resolved features token".to_string(),
+        );
+        let mut options = ebuild_merge::MergeOptions {
+            distdir: tempdir(),
+            config_root: config_root.clone(),
+            shell,
+            ..ebuild_merge::MergeOptions::default()
+        };
+        options.build_env = portage_profile::phase_environ(&config_env, None);
+        options.resolved_config = Some(std::sync::Arc::new(config));
+        // The `${T}`/`build-info` files asserted below are the subject; keep
+        // the builddir via `FEATURES=noclean` (the default post-merge clean
+        // is pinned separately).
+        options.features = "noclean".to_string();
+
+        let entries = vec![source_entry(
+            "phaseenvpkg",
+            PretendOutcome::New {
+                version: "1.0".into(),
+            },
+        )];
+        run_source_merge(RunSourceMergeArgs {
+            entries: &entries,
+            repos: &repos,
+            root: &root,
+            portage_tmpdir: &portage_tmpdir,
+            options: &options,
+            keep_going: false,
+            buildpkg: None,
+            buildpkg_exclude: &[],
+            jobs: 1,
+            load_average: None,
+            capture_log: false,
+            mode: StatusMode::for_tests(),
+        })
+        .unwrap_or_else(|e| panic!("{label}: source merge succeeds: {e}"));
+
+        let keep = root.join("var/lib/phaseenvtest/.keep_dev-libs_phaseenvpkg-0");
+        assert!(
+            keep.exists(),
+            "{label}: keepdir marker missing: {}",
+            keep.display()
+        );
+        let t_dir = portage_tmpdir.join("portage/dev-libs/phaseenvpkg-1.0/temp");
+        assert_eq!(
+            fs::read_to_string(t_dir.join("phase-env-use.txt")).unwrap(),
+            "USE=abi_x86_64 amd64 elibc_glibc kernel_linux\n",
+            "{label}: USE"
+        );
+        assert_eq!(
+            fs::read_to_string(t_dir.join("phase-env-slot.txt")).unwrap(),
+            "SLOT=0\n",
+            "{label}: SLOT"
+        );
+        assert_eq!(
+            fs::read_to_string(t_dir.join("phase-env-features.txt")).unwrap(),
+            "FEATURES=resolved features token\n",
+            "{label}: the resolved FEATURES must win over the raw process-env base"
+        );
+        let build_use = fs::read_to_string(
+            portage_tmpdir.join("portage/dev-libs/phaseenvpkg-1.0/build-info/USE"),
+        )
+        .expect("build-info/USE should be written by the real __dyn_install");
+        assert_eq!(
+            build_use.trim(),
+            "abi_x86_64 amd64 elibc_glibc kernel_linux",
+            "{label}: build-info/USE"
+        );
+
+        let _ = fs::remove_dir_all(&root);
+        let _ = fs::remove_dir_all(&portage_tmpdir);
+    }
+}
+
 /// `envdreload-a` installs `/etc/env.d/99envdreload`; `envdreload-b`, built
 /// afterwards in the same run, must see the variable in its `src_install`.
 /// Expected value from Portage source.

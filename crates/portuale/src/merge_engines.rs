@@ -256,6 +256,63 @@ mod tests {
         }
     }
 
+    /// The unit carries everything the merge reads; installed and
+    /// unresolvable entries map to "nothing to merge".
+    #[test]
+    fn merge_unit_for_entry_carries_everything_the_merge_reads() {
+        let root = Path::new("/root");
+        let unit = merge_unit_for_entry(&test_entry(), root, mrg_director::MergeProgress::single())
+            .unwrap();
+        assert_eq!(unit.cpv, "dev-libs/example-2.0");
+        assert_eq!(unit.kind, MergeKind::Source);
+        assert_eq!(unit.repo.as_deref(), Some("main"));
+        assert_eq!(unit.slot.as_deref(), Some("0"));
+        assert_eq!(unit.use_flags, vec![("flag".to_string(), true)],);
+        assert!(!unit.remote_binary);
+
+        let mut installed = test_entry();
+        installed.outcome = PretendOutcome::AlreadyInstalled {
+            version: "2.0".to_string(),
+        };
+        assert!(
+            merge_unit_for_entry(&installed, root, mrg_director::MergeProgress::single()).is_none()
+        );
+        let mut unresolvable = test_entry();
+        unresolvable.outcome = PretendOutcome::NoVisibleCandidate;
+        assert!(
+            merge_unit_for_entry(&unresolvable, root, mrg_director::MergeProgress::single())
+                .is_none()
+        );
+
+        // A binary entry keeps its location bits on the unit, so the
+        // binary engine can locate it.
+        let mut binary = test_entry();
+        binary.source = CandidateSource::Binary;
+        binary.remote_binary = true;
+        binary.build_id = Some("3".to_string());
+        let unit =
+            merge_unit_for_entry(&binary, root, mrg_director::MergeProgress::single()).unwrap();
+        assert_eq!(unit.kind, MergeKind::Binary);
+        assert!(unit.remote_binary);
+        assert_eq!(unit.build_id.as_deref(), Some("3"));
+
+        // A `-rN` revision survives the unit round-trip.
+        let mut revised = test_entry();
+        revised.outcome = PretendOutcome::New {
+            version: "1.2-r1".to_string(),
+        };
+        let unit =
+            merge_unit_for_entry(&revised, root, mrg_director::MergeProgress::single()).unwrap();
+        assert_eq!(unit.cpv, "dev-libs/example-1.2-r1");
+        let rebuilt = rebuild_entry(&unit, CandidateSource::Ebuild).unwrap();
+        assert_eq!(
+            rebuilt.outcome,
+            PretendOutcome::New {
+                version: "1.2-r1".to_string()
+            }
+        );
+    }
+
     /// The adapters refuse the other kind, and report an unparseable unit
     /// as failed rather than panicking.
     #[test]
