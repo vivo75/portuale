@@ -16,6 +16,144 @@ pub(crate) struct SlotOperatorEliminateRebuildsArgs<'a> {
     pub(crate) empty: bool,
 }
 
+/// Portage's `_eliminate_rebuilds`: the undo path. For every cp in the replace
+/// set whose walked entry is a `slot_operator_rebuild` reinstall at the
+/// installed version, apply rules 1-8 in Portage's order and return the cps
+/// whose rebuild is unnecessary (rules 6/8 keep a genuine ABI rebuild).
+/// Skipped under `--emptytree` and under any live slot conflict.
+// Portage: _emerge/depgraph.py, _eliminate_rebuilds
+pub(crate) fn slot_operator_eliminate_rebuilds(
+    args: SlotOperatorEliminateRebuildsArgs<'_>,
+) -> BTreeSet<(String, String)> {
+    let SlotOperatorEliminateRebuildsArgs {
+        root,
+        repos,
+        entries,
+        replace,
+        slot_want,
+        reverse_pins,
+        selective,
+        changed_slot,
+        top_level_cps,
+        empty,
+    } = args;
+    let mut demoted: BTreeSet<(String, String)> = BTreeSet::new();
+    if empty || replace.is_empty() {
+        return demoted;
+    }
+    let installed_all = all_installed_packages(root);
+    let libc_cps = libc_provider_cps(root);
+    let dep_keys = ["BDEPEND", "DEPEND", "IDEPEND", "PDEPEND", "RDEPEND"];
+    for cp in replace {
+        let Some(entry) = entries
+            .iter()
+            .find(|e| e.category == cp.0 && e.package == cp.1)
+        else {
+            continue;
+        };
+        // Only a `slot_operator_rebuild` reinstall at the installed version
+        // can be undone; an ordinary upgrade or USE reinstall keeps its
+        // rebuild.
+        let PretendOutcome::Reinstall {
+            version,
+            changed_flags,
+            slot_operator_rebuild: true,
+            ..
+        } = &entry.outcome
+        else {
+            continue;
+        };
+        // Rule 7 first (it can only keep a rebuild): binary halves are not
+        // ported yet, so a binary entry keeps its rebuild.
+        if entry.source != CandidateSource::Ebuild {
+            continue;
+        }
+        // The installed instance in the entry's own main slot.
+        let entry_slot = entry.slot.as_deref().unwrap_or("0");
+        let Some(installed) = installed_all
+            .iter()
+            .find(|p| p.category == cp.0 && p.package == cp.1 && p.slot == entry_slot)
+        else {
+            continue;
+        };
+        // Rule 1.
+        if installed.version != *version {
+            continue;
+        }
+        // Rule 2.
+        if !changed_flags.is_empty() {
+            continue;
+        }
+        // Rule 3: `--changed-slot` keeps a rebuild whose tree ebuild at the
+        // same cpv moved (slot, sub_slot) vs the installed instance.
+        if changed_slot && slot_changed(root, repos, &cp.0, &cp.1, version) {
+            continue;
+        }
+        let (i_slot, i_sub) = read_vdb_slot(root, &cp.0, &cp.1, version);
+        let installed_str = format!("{}/{}-{version}:{i_slot}/{i_sub}", cp.0, cp.1);
+        // Rule 4.
+        let parents_match = slot_want
+            .get(cp)
+            .is_none_or(|atoms| atoms.iter().all(|a| atom_matches_str(a, &installed_str)))
+            && reverse_pins
+                .iter()
+                .filter(|pin| &pin.cp == cp)
+                .all(|pin| atom_matches_str(&pin.atom, &installed_str));
+        if !parents_match {
+            continue;
+        }
+        // Rule 5.
+        if !selective && top_level_cps.contains(cp) {
+            continue;
+        }
+        // Rule 6.
+        let (Some(e_slot), Some(e_sub)) = (entry.slot.as_deref(), entry.sub_slot.as_deref()) else {
+            continue;
+        };
+        if (i_slot.as_str(), i_sub.as_str()) != (e_slot, e_sub) {
+            continue;
+        }
+        // Rule 8.
+        let Some(metadata) = tree_metadata_for(repos, cp, version) else {
+            continue;
+        };
+        let new_use: HashSet<String> = entry
+            .use_flags_display
+            .iter()
+            .filter(|(_, on)| *on)
+            .map(|(f, _)| f.clone())
+            .collect();
+        let mut equal = true;
+        for key in dep_keys {
+            let installed_atoms =
+                flat_dep_atoms(&read_vdb_string(root, &cp.0, &cp.1, version, key), &new_use)
+                    .map(|atoms| strip_libc_atoms(atoms, &libc_cps));
+            let bound = bind_slot_operator_deps(
+                metadata.get(key).map(String::as_str).unwrap_or_default(),
+                entries,
+                root,
+            );
+            let new_atoms =
+                flat_dep_atoms(&bound, &new_use).map(|atoms| strip_libc_atoms(atoms, &libc_cps));
+            let key_equal = match (installed_atoms, new_atoms) {
+                (Some(a), Some(b)) => a == b,
+                // Either side's parse failure counts as "not equal", keeping
+                // the rebuild.
+                _ => false,
+            };
+            if !key_equal {
+                equal = false;
+                break;
+            }
+        }
+        if !equal {
+            continue;
+        }
+        demoted.insert(cp.clone());
+    }
+    demoted
+}
+
 /// Arguments of [`slot_operator_rebuild_entries`].
 pub(crate) struct SlotOperatorRebuildEntriesArgs<'a> {
     pub(crate) root: &'a Path,
