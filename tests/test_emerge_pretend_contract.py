@@ -52,6 +52,16 @@ CASES = [
         0,
     ),
     (
+        "a package.mask'd dependency is disclosed with its mask reasons",
+        ["--pretend", "dev-libs/maskneedpkg"],
+        0,
+    ),
+    (
+        "a keyword-masked dependency is disclosed with its mask reasons",
+        ["--pretend", "dev-libs/kwneedpkg"],
+        0,
+    ),
+    (
         "an explicitly pinned upgrade breaks an installed pin and reports the residual conflict",
         ["--pretend", "=dev-libs/paired-2.0"],
         0,
@@ -3527,7 +3537,10 @@ def test_autounmask_keyword_backward_cascade_re_resolves_a_slot_to_a_masked_vers
     assert d.returncode == 0
     assert d.stdout == dpy.stdout and d.stderr == dpy.stderr
     assert "kwbackmid-2.0" not in d.stdout
-    assert 'no visible ebuild for dependency "dev-libs/kwbackmid"' in d.stderr
+    assert (
+        'All ebuilds that could satisfy ">=dev-libs/kwbackmid-2.0" have been masked.'
+        in d.stderr
+    )
 
     # --autounmask: the slot re-resolves to 2.0 with an implicit keyword change
     a = ["--pretend", "--autounmask", "dev-libs/kwbacktop"]
@@ -3596,7 +3609,10 @@ def test_autounmask_levels_unmask_two_categories_at_once_on_the_same_version(
     )
     assert d.stdout == dpy.stdout and d.stderr == dpy.stderr
     assert "multimaskdep" not in d.stdout
-    assert 'no visible ebuild for dependency "dev-libs/multimaskdep"' in d.stderr
+    assert (
+        'All ebuilds that could satisfy "dev-libs/multimaskdep" have been masked.'
+        in d.stderr
+    )
 
 
 def test_autounmask_levels_prefer_license_over_a_higher_keyword_masked_version(
@@ -4179,7 +4195,9 @@ def test_autounmask_dependency_gets_no_keyword_suggestion_by_default(emerge_bina
     no-visible-candidate, previously always silent beyond the bare
     "no visible ebuild" line, regardless of --autounmask. With no
     --autounmask flag at all (the real, correct default), no suggestion
-    is appended here either, matching the top-level case's own default."""
+    is appended here either, matching the top-level case's own default --
+    but the masked-dependency disclosure still names the mask (real
+    `_show_unsatisfied_dep`)."""
     result = _run(
         [str(emerge_binary)],
         ["--pretend", "dev-libs/autounmaskdepconsumer"],
@@ -4187,8 +4205,14 @@ def test_autounmask_dependency_gets_no_keyword_suggestion_by_default(emerge_bina
     )
     assert result.returncode == 0
     assert result.stdout == '[ebuild  N     ] dev-libs/autounmaskdepconsumer-1.0 \n'
-    assert result.stderr.strip() == (
-        '!!! no visible ebuild for dependency "dev-libs/autounmaskkeywordpkg"'
+    _assert_masked_dep_block(
+        result.stderr,
+        "dev-libs/autounmaskkeywordpkg",
+        ["- dev-libs/autounmaskkeywordpkg-1.0::testrepo (masked by: ~amd64 keyword)"],
+        [
+            '(dependency required by "dev-libs/autounmaskdepconsumer-1.0::testrepo" [ebuild])',
+            '(dependency required by "dev-libs/autounmaskdepconsumer" [argument])',
+        ],
     )
 
 
@@ -4269,8 +4293,16 @@ def test_autounmask_license_resolves_a_eula_masked_dependency(emerge_binary, fix
     # A *dependency's* no-visible-candidate isn't fatal (only a top-level
     # atom's is), so the consumer still resolves; the dep just isn't there.
     assert off.returncode == 0
-    assert off.stderr.strip() == (
-        '!!! no visible ebuild for dependency "dev-libs/licensemaskedpkg"'
+    # License-masked with no autounmask: the masked-dependency disclosure
+    # (real `_show_unsatisfied_dep`), not the bare line.
+    _assert_masked_dep_block(
+        off.stderr,
+        "dev-libs/licensemaskedpkg",
+        ["- dev-libs/licensemaskedpkg-1.0::testrepo (masked by: SomeEula license(s))"],
+        [
+            '(dependency required by "dev-libs/licensemaskedconsumer-1.0::testrepo" [ebuild])',
+            '(dependency required by "dev-libs/licensemaskedconsumer" [argument])',
+        ],
     )
 
     result = _run(
@@ -11788,6 +11820,98 @@ def test_installed_consumers_built_slot_operator_atom_does_not_block_an_upgrade(
     assert rust.stdout.splitlines() == [
         "[ebuild     U  ] dev-libs/revdepslottarget-2.0 [1.0]",
     ]
+
+
+def _assert_masked_dep_block(stderr, atom, masked_lines, chain_lines):
+    """The masked-dependency disclosure block (real `_show_unsatisfied_dep`
+    for a dependency atom): the two `!!!` header lines, one
+    `- <cpv> (masked by: ...)` line per masked candidate, a blank line,
+    the `(dependency required by ...)` chain, and the docs footer --
+    exactly the shape real prints (verified live against 3.0.82.2),
+    minus the `for <root>` xinfo suffix real adds when ROOT differs from
+    the running root (portuale's top-level masked block omits it too) and
+    minus real's merge-list abandon + exit 1 (needs #19's abort path;
+    portuale keeps the merge list and exits 0)."""
+    lines = stderr.splitlines()
+    assert lines[0] == ""
+    assert lines[1] == f'!!! All ebuilds that could satisfy "{atom}" have been masked.'
+    assert (
+        lines[2]
+        == "!!! One of the following masked packages is required to complete your request:"
+    )
+    assert lines[3 : 3 + len(masked_lines)] == masked_lines
+    assert lines[3 + len(masked_lines)] == ""
+    assert (
+        lines[4 + len(masked_lines) : 4 + len(masked_lines) + len(chain_lines)]
+        == chain_lines
+    )
+    assert lines[4 + len(masked_lines) + len(chain_lines)] == (
+        "For more information, see the MASKED PACKAGES section in the emerge"
+    )
+    assert lines[5 + len(masked_lines) + len(chain_lines)] == (
+        "man page or refer to the Gentoo Handbook."
+    )
+
+
+def test_masked_dependency_is_disclosed_with_its_mask_reasons(
+    emerge_binary, emerge_pretend_python, fixture_env
+):
+    """Real `_show_unsatisfied_dep` for a dependency atom matching
+    masked-only ebuilds (verified live against 3.0.82.2): the "All
+    ebuilds ... have been masked" block plus the `(dependency required
+    by ...)` chain, instead of the bare `!!! no visible ebuild for
+    dependency` line. dev-libs/maskneedpkg-1.0 RDEPENDs
+    dev-libs/maskeddep, which user package.mask masks. The merge list
+    keeps the consumer (portuale never abandons -- real drops the whole
+    list, parked with #19) and the exit code stays 0 (real exits 1 --
+    same parked divergence)."""
+    args = ["--pretend", "dev-libs/maskneedpkg"]
+    rust = _run([str(emerge_binary)], args, fixture_env)
+    python = _run(emerge_pretend_python, args, fixture_env)
+    assert rust.returncode == 0
+    assert rust.stdout == python.stdout
+    assert rust.stderr == python.stderr
+    assert rust.stdout.splitlines() == [
+        "[ebuild  N     ] dev-libs/maskneedpkg-1.0 ",
+    ]
+    _assert_masked_dep_block(
+        rust.stderr,
+        "dev-libs/maskeddep",
+        ["- dev-libs/maskeddep-1.0::testrepo (masked by: package.mask)"],
+        [
+            '(dependency required by "dev-libs/maskneedpkg-1.0::testrepo" [ebuild])',
+            '(dependency required by "dev-libs/maskneedpkg" [argument])',
+        ],
+    )
+
+
+def test_keyword_masked_dependency_is_disclosed_with_its_mask_reasons(
+    emerge_binary, emerge_pretend_python, fixture_env
+):
+    """Same real rule for a KEYWORDS mask: dev-libs/kwneedpkg-1.0
+    RDEPENDs dev-libs/kwmaskeddep, whose only keyword is `~amd64`. The
+    block lists the `~amd64 keyword` reason; the chain is the same
+    two-line shape. (A USE-mismatch-only dep takes real's separate "no
+    ebuilds built with USE flags" path instead -- portuale's
+    autounmask-use machinery -- so no fixture covers that here.)"""
+    args = ["--pretend", "dev-libs/kwneedpkg"]
+    rust = _run([str(emerge_binary)], args, fixture_env)
+    python = _run(emerge_pretend_python, args, fixture_env)
+    assert rust.returncode == 0
+    assert rust.stdout == python.stdout
+    assert rust.stderr == python.stderr
+    assert rust.stdout.splitlines() == [
+        "[ebuild  N     ] dev-libs/kwneedpkg-1.0 ",
+    ]
+    _assert_masked_dep_block(
+        rust.stderr,
+        "dev-libs/kwmaskeddep",
+        ["- dev-libs/kwmaskeddep-1.0::testrepo (masked by: ~amd64 keyword)"],
+        [
+            '(dependency required by "dev-libs/kwneedpkg-1.0::testrepo" [ebuild])',
+            '(dependency required by "dev-libs/kwneedpkg" [argument])',
+        ],
+    )
 
 
 def _assert_residual_slot_conflict_block(

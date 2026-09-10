@@ -8146,21 +8146,49 @@ fn candidate_masking_reasons(
     reasons
 }
 
-/// Real `_show_unsatisfied_dep`'s "All ebuilds that could satisfy
-/// `<atom>` have been masked" report (`depgraph.py:6992-7016` +
-/// `show_masked_packages`): built for a *top-level* atom that matches one
-/// or more ebuilds by version, every one of which is masked. `None` when
-/// the atom matches no ebuild at all by version (real's plain "there are
-/// no ebuilds to satisfy" case) or when some matching ebuild is actually
-/// `is_visible` (e.g. only a `[use]`-dep mismatch -- real's separate
-/// "no ebuilds built with USE flags" path, left to the autounmask-use
-/// machinery). `xinfo` is the already-quoted atom string for the header.
-fn all_masked_report(
+/// One dependency atom's masked-only disclosure: real
+/// `_show_unsatisfied_dep`'s "All ebuilds that could satisfy … have been
+/// masked" block for a *dependency* (the Tier 2.20 half of finding S's
+/// top-level report). The resolver attaches these to the pass result;
+/// the caller (`pretend.rs`) renders each in place of the bare
+/// `!!! no visible ebuild for dependency` line, followed by the
+/// `(dependency required by …)` chain, then the docs footer -- real
+/// `depgraph.py:6992-7030`'s shape for a non-`AtomArg` parent.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MaskedDepReport {
+    pub category: String,
+    pub package: String,
+    /// The requesting atom text (the unevaluated form as queued, so a
+    /// USE-conditional dep shows as written).
+    pub atom: String,
+    /// `(cpv::repo, reasons)` descending version, cpv-deduped -- exactly
+    /// the `- <cpv> (masked by: …)` lines the renderer prints.
+    pub masked: Vec<(String, Vec<String>)>,
+    /// Real `_get_dep_chain` for this disclosure: `(node, type)` pairs,
+    /// innermost parent first, up to the top-level argument(s) -- e.g.
+    /// `("dev-libs/n1-1.0::probe", "ebuild")` then `("dev-libs/n1",
+    /// "argument")`. An installed intermediate renders its vdb repo
+    /// (`__unknown__` fallback, like real) with type `"installed"`; a
+    /// binary parent renders `"binary"`. Computed post-loop out of the
+    /// final entries (see `masked_dep_chain`); one chain per direct
+    /// parent (real shows only its DFS-first abandon -- portuale never
+    /// abandons, so all failing branches disclose, convergence with #19
+    /// parked).
+    pub chain: Vec<(String, String)>,
+}
+
+/// Real `_show_unsatisfied_dep`'s version match: the candidates an atom
+/// names by version, visibility and USE ignored (real `db.match(atom.
+/// without_use)`). `None` when the atom matches no ebuild at all by
+/// version (real's plain "there are no ebuilds to satisfy" case) or when
+/// some matching ebuild is actually `is_visible` (e.g. only a `[use]`-dep
+/// mismatch -- real's separate "no ebuilds built with USE flags" path,
+/// left to the autounmask-use machinery here).
+fn masked_candidates_for_atom(
     repos: &[RepoConfig],
     atom_str: &str,
     config: &portage_profile::Config,
-    xinfo: &str,
-) -> Option<String> {
+) -> Option<Vec<(String, Vec<String>)>> {
     let atom = portage_dep::parse_atom(atom_str)?;
     let candidates = list_candidates(repos, &atom.category, &atom.package).ok()?;
 
@@ -8196,10 +8224,7 @@ fn all_masked_report(
     // Real `cpv_list.reverse()` -> descending version.
     masked.sort_by(|a, b| vercmp_ordering(&b.version, &a.version));
 
-    let mut out = format!(
-        "\n!!! All ebuilds that could satisfy {xinfo} have been masked.\n\
-         !!! One of the following masked packages is required to complete your request:\n"
-    );
+    let mut out: Vec<(String, Vec<String>)> = Vec::new();
     let mut seen = std::collections::HashSet::new();
     for c in masked {
         let output_cpv = format!(
@@ -8210,6 +8235,25 @@ fn all_masked_report(
             continue;
         }
         let reasons = candidate_masking_reasons(c, &atom.category, &atom.package, config);
+        out.push((output_cpv, reasons));
+    }
+    Some(out)
+}
+fn all_masked_report(
+    repos: &[RepoConfig],
+    atom_str: &str,
+    config: &portage_profile::Config,
+    xinfo: &str,
+) -> Option<String> {
+    // The header/footer live here (top-level shape); the masked list
+    // itself is shared with the dependency disclosure below.
+    let masked = masked_candidates_for_atom(repos, atom_str, config)?;
+
+    let mut out = format!(
+        "\n!!! All ebuilds that could satisfy {xinfo} have been masked.\n\
+         !!! One of the following masked packages is required to complete your request:\n"
+    );
+    for (output_cpv, reasons) in masked {
         out.push_str(&format!(
             "- {output_cpv} (masked by: {})\n",
             reasons.join(", ")
@@ -8220,6 +8264,141 @@ fn all_masked_report(
          man page or refer to the Gentoo Handbook.\n",
     );
     Some(out)
+}
+
+/// Real `_get_dep_chain` for one masked-dependency disclosure
+/// (`depgraph.py:6257+`): `(node, type)` pairs from the failed
+/// dependency's direct parents up to the top-level argument(s),
+/// innermost first. `entries` must be final (post `required_by` fill).
+/// A merge-bound parent renders `cat/pkg-ver::repo` as `ebuild`
+/// (`binary` for a binpkg parent); an installed one renders its vdb
+/// repo (`__unknown__` fallback, like real) as `installed`; a
+/// top-level atom targeting the chain top renders as `argument`. One
+/// sub-chain per direct parent (real shows only its DFS-first abandon
+/// -- portuale never abandons, so all failing branches disclose, with
+/// #19 parked); cycles guarded by a visited set; ascent stops at the
+/// first arg-targeted node (real prefers arguments since they are root
+/// nodes). Narrowings, documented: no affecting-USE `pkg[flag]` suffix
+/// on chain nodes (fixtures use plain atoms; real appends it when the
+/// linking atom carries USE conditionals), and every matching top-level
+/// atom is shown (real shows the pulling one -- portuale doesn't track
+/// which).
+fn masked_dep_chain(
+    entries: &[GraphEntry],
+    category: &str,
+    package: &str,
+    atoms: &[String],
+    root: &Path,
+) -> Vec<(String, String)> {
+    /// This `cp`'s chain node: the merge-bound entry first (it
+    /// supersedes any same-cp `AlreadyInstalled` shadow, like everywhere
+    /// else), else the installed one. `None` for a `NoVisibleCandidate`
+    /// (no version to name) or a missing entry -- the chain stops.
+    fn select_entry<'a>(
+        entries: &'a [GraphEntry],
+        cp: &(String, String),
+    ) -> Option<&'a GraphEntry> {
+        entries
+            .iter()
+            .find(|e| {
+                (e.category.clone(), e.package.clone()) == *cp
+                    && matches!(
+                        e.outcome,
+                        PretendOutcome::New { .. }
+                            | PretendOutcome::Upgrade { .. }
+                            | PretendOutcome::Downgrade { .. }
+                            | PretendOutcome::Reinstall { .. }
+                    )
+            })
+            .or_else(|| {
+                entries.iter().find(|e| {
+                    (e.category.clone(), e.package.clone()) == *cp
+                        && matches!(e.outcome, PretendOutcome::AlreadyInstalled { .. })
+                })
+            })
+    }
+    /// `(node, type)` for one chain entry, or `None` to stop.
+    fn node_line(entry: &GraphEntry, root: &Path) -> Option<(String, String)> {
+        let version = match &entry.outcome {
+            PretendOutcome::New { version } | PretendOutcome::Reinstall { version, .. } => {
+                version.clone()
+            }
+            PretendOutcome::Upgrade { to, .. } | PretendOutcome::Downgrade { to, .. } => to.clone(),
+            PretendOutcome::AlreadyInstalled { version } => version.clone(),
+            PretendOutcome::NoVisibleCandidate => return None,
+        };
+        let (repo, ty) = match &entry.outcome {
+            PretendOutcome::AlreadyInstalled { .. } => (
+                installed_pkg_repo(root, &entry.category, &entry.package, &version),
+                "installed".to_string(),
+            ),
+            _ => (
+                entry.repo_name.clone().unwrap_or_default(),
+                if entry.source == CandidateSource::Binary {
+                    "binary".to_string()
+                } else {
+                    "ebuild".to_string()
+                },
+            ),
+        };
+        Some((
+            format!("{}/{}-{version}::{repo}", entry.category, entry.package),
+            ty,
+        ))
+    }
+    /// Top-level atom texts targeting `cp`, in request order.
+    fn arg_lines(atoms: &[String], cp: &(String, String)) -> Vec<(String, String)> {
+        atoms
+            .iter()
+            .filter(|a| {
+                portage_dep::parse_atom(a).is_some_and(|at| {
+                    at.blocker == portage_dep::Blocker::None
+                        && at.category == cp.0
+                        && at.package == cp.1
+                })
+            })
+            .map(|a| (a.clone(), "argument".to_string()))
+            .collect()
+    }
+
+    let start = entries.iter().find(|e| {
+        e.category == category
+            && e.package == package
+            && matches!(e.outcome, PretendOutcome::NoVisibleCandidate)
+    });
+    let mut chain: Vec<(String, String)> = Vec::new();
+    let mut visited: HashSet<(String, String)> = HashSet::new();
+    let direct: Vec<(String, String)> = start.map(|e| e.required_by.clone()).unwrap_or_default();
+    for parent in direct {
+        if !visited.insert(parent.clone()) {
+            continue;
+        }
+        let mut cur = parent;
+        while let Some(entry) = select_entry(entries, &cur) {
+            let Some((node, ty)) = node_line(entry, root) else {
+                break;
+            };
+            chain.push((node, ty));
+            // A chain top directly targeted from the command line ends
+            // in its argument line(s), like real stopping at args.
+            let args = arg_lines(atoms, &cur);
+            if !args.is_empty() {
+                chain.extend(args);
+                break;
+            }
+            let Some(next) = entry
+                .required_by
+                .iter()
+                .find(|c| !visited.contains(*c))
+                .cloned()
+            else {
+                break;
+            };
+            visited.insert(next.clone());
+            cur = next;
+        }
+    }
+    chain
 }
 
 /// Real `dep_zapdeps`'s `all_installed` predicate for one `||` alternative
@@ -12886,6 +13065,17 @@ pub struct GraphResult {
     /// renders `_show_circular_deps`'s block and exits 1 when this is
     /// non-empty. Empty in every ordinary resolve.
     pub circular_deps: Vec<Vec<String>>,
+    /// Masked-only dependency disclosures (real `_show_unsatisfied_dep`'s
+    /// "All ebuilds that could satisfy … have been masked" block for a
+    /// *dependency* atom): one per dependency `NoVisibleCandidate` entry
+    /// whose atom still matches ebuilds by version, every one of which
+    /// is masked. The caller (`pretend.rs`) renders each in place of the
+    /// bare `!!! no visible ebuild for dependency` line, followed by the
+    /// `(dependency required by …)` chain walked out of the final
+    /// entries. Empty when every dependency resolved or missed for other
+    /// reasons (nothing matched at all, or only a `[use]`-dep mismatch
+    /// -- the autounmask-use path).
+    pub masked_deps: Vec<MaskedDepReport>,
 }
 
 /// One real `--autounmask` change (`depgraph.py::_display_autounmask`):
@@ -14078,6 +14268,10 @@ fn backtracking_resolve(req: &ResolveRequest) -> Result<GraphResult, Error> {
         // shortcut.
         let mut required_use_violations: Vec<String> = Vec::new();
         let mut slot_conflicts: Vec<SlotConflict> = Vec::new();
+        // Masked-dependency disclosures for this pass (see
+        // `MaskedDepReport`): rebuilt every attempt like `slot_conflicts`,
+        // so only the final pass's reports are rendered.
+        let mut masked_deps: Vec<MaskedDepReport> = Vec::new();
         // `--changed-deps-report`: real `_changed_deps_pkgs` is a dict keyed
         // by the installed `Package` object, so a repeat visit to the same
         // installed category/package/version (e.g. via both a bare
@@ -14879,6 +15073,35 @@ fn backtracking_resolve(req: &ResolveRequest) -> Result<GraphResult, Error> {
                 } else {
                     None
                 };
+                // Masked-dependency disclosure (real
+                // `_show_unsatisfied_dep`'s "All ebuilds that could satisfy
+                // … have been masked" block for a *dependency* -- the Tier
+                // 2.20 half of finding S's top-level report): a dependency
+                // `NoVisibleCandidate` whose atom still matches ebuilds by
+                // version, every one of which is masked, is recorded here
+                // (one per `cat/pkg`, like the entry itself) instead of
+                // rendering the bare `!!! no visible ebuild` line. The
+                // display atom is the unevaluated form as queued, so a
+                // USE-conditional dep shows as written. Computed every
+                // pass; only the final pass's reports are rendered.
+                if matches!(outcome, PretendOutcome::NoVisibleCandidate) {
+                    let display_atom = unevaluated_atom.as_deref().unwrap_or(&current_atom);
+                    if let Some(masked) = masked_candidates_for_atom(&repos, display_atom, config)
+                        && !masked_deps
+                            .iter()
+                            .any(|r: &MaskedDepReport| r.category == key.0 && r.package == key.1)
+                    {
+                        masked_deps.push(MaskedDepReport {
+                            category: key.0.clone(),
+                            package: key.1.clone(),
+                            atom: display_atom.to_string(),
+                            masked,
+                            // Walked post-loop out of the final entries
+                            // (see below).
+                            chain: Vec::new(),
+                        });
+                    }
+                }
                 entries.push(GraphEntry {
                     category: key.0,
                     package: key.1,
@@ -16572,6 +16795,13 @@ fn backtracking_resolve(req: &ResolveRequest) -> Result<GraphResult, Error> {
             &dropped_pins,
         ));
 
+        // Masked-dependency chains are walked out of the final entries
+        // (`required_by` is only complete post-pass); the atom+masked
+        // data was recorded at each `NoVisibleCandidate` push above.
+        for rep in &mut masked_deps {
+            rep.chain = masked_dep_chain(&entries, &rep.category, &rep.package, atoms, root);
+        }
+
         return Ok(GraphResult {
             entries,
             slot_conflicts,
@@ -16584,6 +16814,7 @@ fn backtracking_resolve(req: &ResolveRequest) -> Result<GraphResult, Error> {
             autounmask_mask_changes,
             abi_rebuilds,
             circular_deps,
+            masked_deps,
         });
     }
 }
@@ -24314,6 +24545,86 @@ mod tests {
         assert_eq!(v[0].conflicting_atom, "atom-2");
         record_slot_conflict(&mut v, mk("atom-3", "1.5"));
         assert_eq!(v.len(), 2);
+    }
+
+    #[test]
+    fn masked_candidates_for_atom_reports_masked_only_matches() {
+        // Real `_show_unsatisfied_dep`'s version match: the masked list
+        // fires when every version-matching ebuild is masked, and stays
+        // silent when something is visible or nothing matches at all.
+        let root = fixtures_root();
+        let config = portage_profile::resolve_config(
+            &root,
+            &root.join("repo"),
+            &[("overlay".to_string(), root.join("overlay"))],
+            &[],
+            "testrepo",
+            &HashMap::new(),
+            &root,
+        )
+        .expect("fixture config resolves");
+        let repos = find_repos(&root).expect("repos");
+        let masked = masked_candidates_for_atom(&repos, "dev-libs/maskeddep", &config)
+            .expect("package.mask'd dep discloses");
+        assert_eq!(
+            masked,
+            vec![(
+                "dev-libs/maskeddep-1.0::testrepo".to_string(),
+                vec!["package.mask".to_string()]
+            )]
+        );
+        let kw = masked_candidates_for_atom(&repos, "dev-libs/kwmaskeddep", &config)
+            .expect("keyword-masked dep discloses");
+        assert_eq!(
+            kw,
+            vec![(
+                "dev-libs/kwmaskeddep-1.0::testrepo".to_string(),
+                vec!["~amd64 keyword".to_string()]
+            )]
+        );
+        // A visible candidate silences the report (USE-mismatch-only and
+        // friends take real's other paths).
+        assert_eq!(
+            masked_candidates_for_atom(&repos, "dev-libs/newpkg", &config),
+            None
+        );
+        // Nothing matching by version at all: real's plain "no ebuilds"
+        // case, also silent here.
+        assert_eq!(
+            masked_candidates_for_atom(&repos, "dev-libs/doesnotexist-anywhere", &config),
+            None
+        );
+    }
+
+    #[test]
+    fn masked_dep_report_carries_the_chain_to_the_argument() {
+        // End to end through the driver: the maskneedpkg resolve records
+        // one masked_deps report (atom + masked list) whose chain walks
+        // the merge parent up to the top-level argument, like real's
+        // `(dependency required by …)` lines.
+        let result = graph_result_real("dev-libs/maskneedpkg");
+        assert_eq!(result.masked_deps.len(), 1);
+        let rep = &result.masked_deps[0];
+        assert_eq!(
+            (
+                rep.category.as_str(),
+                rep.package.as_str(),
+                rep.atom.as_str()
+            ),
+            ("dev-libs", "maskeddep", "dev-libs/maskeddep")
+        );
+        assert_eq!(rep.masked.len(), 1);
+        assert_eq!(rep.masked[0].0, "dev-libs/maskeddep-1.0::testrepo");
+        assert_eq!(
+            rep.chain,
+            vec![
+                (
+                    "dev-libs/maskneedpkg-1.0::testrepo".to_string(),
+                    "ebuild".to_string()
+                ),
+                ("dev-libs/maskneedpkg".to_string(), "argument".to_string()),
+            ]
+        );
     }
 
     #[test]

@@ -9,3 +9,7 @@ dev-libs/maskedandunmaskedpkg
 dev-libs/samepkg
 -dev-libs/samepkg
 -dev-libs/repomaskedthenuserremovedpkg
+# fixture package.mask for the masked-dependency disclosure slice:
+# dev-libs/maskeddep stays masked so a dependency on it reports the
+# "All ebuilds ... have been masked" block (never unmasked anywhere).
+dev-libs/maskeddep

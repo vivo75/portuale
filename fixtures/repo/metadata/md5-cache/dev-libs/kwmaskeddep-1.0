@@ -1,0 +1,7 @@
+DEFINED_PHASES=-
+DESCRIPTION=fixture package: ~amd64-only, so a dependency on it reports the 'All ebuilds ... have been masked' block
+EAPI=8
+IUSE=
+KEYWORDS=~amd64
+SLOT=0
+_md5_=0000000000000000000000000000000

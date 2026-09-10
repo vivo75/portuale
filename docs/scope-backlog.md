@@ -85,6 +85,15 @@ can't grow into these incrementally:
   remaining signal is the `Dependency resolution took X s (backtrack:
   N/M).` report line, whose timing is non-deterministic (a deliberate
   cut — portuale is a deterministic tool).
+- **Masked-dependency abort parity** — the *disclosure* half shipped
+  2026-09-10 (a dependency atom matching masked-only ebuilds reports
+  real's "All ebuilds … have been masked" block plus its
+  `(dependency required by …)` chain instead of the bare
+  `!!! no visible ebuild` line; see `what-this-proves.md`). What stays
+  is the *abort* half: real abandons the whole resolve on an unfixable
+  masked dep (no merge list, exit 1); portuale keeps its "report, don't
+  enforce" merge list and exit 0. Same gated-abort-path gap as #19
+  (DFS-partial truncation) — parked there.
 - **Slot-collision notice's remaining cuts** — `pkg_use_display` for a
   package with non-default USE **shipped 2026-09-05**: every instance
   header and every shown parent line now carries that package's own

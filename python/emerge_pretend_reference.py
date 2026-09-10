@@ -5840,16 +5840,16 @@ def _candidate_masking_reasons(candidate, category, package, config):
     return reasons
 
 
-def _all_masked_report(repos, atom_str, config, xinfo):
-    """Real _show_unsatisfied_dep's "All ebuilds that could satisfy
-    <atom> have been masked" report (depgraph.py:6992-7016 +
-    show_masked_packages): built for a *top-level* atom that matches one
-    or more ebuilds by version, every one of which is masked. None when
-    the atom matches no ebuild at all by version (real's plain "there are
-    no ebuilds to satisfy" case) or when some matching ebuild is actually
-    is_visible (a "[use]"-dep miss -- real's separate path). `xinfo` is
-    the already-quoted atom string for the header. Mirrors
-    portage-repo/src/lib.rs's all_masked_report."""
+def _masked_candidates_for_atom(repos, atom_str, config):
+    """Real _show_unsatisfied_dep's version match: the candidates an atom
+    names by version, visibility and USE ignored (real db.match(atom.
+    without_use)). None when the atom matches no ebuild at all by version
+    or when some matching ebuild is actually is_visible (a "[use]"-dep
+    miss -- real's separate path). Otherwise the [(cpv::repo, reasons)]
+    masked list, descending version, cpv-deduped. Shared by the
+    top-level _all_masked_report string and the dependency disclosure
+    below. Mirrors portage-repo/src/lib.rs's masked_candidates_for_atom
+    exactly."""
     atom = _parse_atom(atom_str)
     if atom is None:
         return None
@@ -5866,11 +5866,7 @@ def _all_masked_report(repos, atom_str, config, xinfo):
     masked.sort(
         key=functools.cmp_to_key(lambda a, b: vercmp(b["version"], a["version"]) or 0)
     )
-
-    out = [
-        f"\n!!! All ebuilds that could satisfy {xinfo} have been masked.\n",
-        "!!! One of the following masked packages is required to complete your request:\n",
-    ]
+    out = []
     seen = set()
     for c in masked:
         output_cpv = f"{category}/{package}-{c['version']}::{c['repo_name']}"
@@ -5878,6 +5874,28 @@ def _all_masked_report(repos, atom_str, config, xinfo):
             continue
         seen.add(output_cpv)
         reasons = _candidate_masking_reasons(c, category, package, config)
+        out.append((output_cpv, reasons))
+    return out
+
+
+def _all_masked_report(repos, atom_str, config, xinfo):
+    """Real _show_unsatisfied_dep's "All ebuilds that could satisfy
+    <atom> have been masked" report (depgraph.py:6992-7016 +
+    show_masked_packages): built for a *top-level* atom that matches one
+    or more ebuilds by version, every one of which is masked. None when
+    the atom matches no ebuild at all by version (real's plain "there are
+    no ebuilds to satisfy" case) or when some matching ebuild is actually
+    is_visible (a "[use]"-dep miss -- real's separate path). `xinfo` is
+    the already-quoted atom string for the header. Mirrors
+    portage-repo/src/lib.rs's all_masked_report."""
+    masked = _masked_candidates_for_atom(repos, atom_str, config)
+    if masked is None:
+        return None
+    out = [
+        f"\n!!! All ebuilds that could satisfy {xinfo} have been masked.\n",
+        "!!! One of the following masked packages is required to complete your request:\n",
+    ]
+    for output_cpv, reasons in masked:
         out.append(f"- {output_cpv} (masked by: {', '.join(reasons)})\n")
     out.append(
         "\nFor more information, see the MASKED PACKAGES section in the emerge\n"
@@ -6270,6 +6288,107 @@ def _installed_use_display_for(root, config, category, package, version):
         True,
         None,
     )
+
+
+def _masked_dep_chain(entries, category, package, atoms, root, repos):
+    """Real _get_dep_chain for one masked-dependency disclosure
+    (depgraph.py:6257+): (node, type) pairs from the failed dependency's
+    direct parents up to the top-level argument(s), innermost first. A
+    merge-bound parent renders cat/pkg-ver::repo as ebuild (binary for a
+    binpkg parent); an installed one renders its vdb repo (__unknown__
+    fallback, like real) as installed; a top-level atom targeting the
+    chain top renders as argument. One sub-chain per direct parent (real
+    shows only its DFS-first abandon -- this reference never abandons,
+    so all failing branches disclose, with #19 parked); cycles guarded;
+    ascent stops at the first arg-targeted node. Narrowings, documented:
+    no affecting-USE pkg[flag] suffix on chain nodes, and every matching
+    top-level atom is shown. Mirrors portage-repo/src/lib.rs's
+    masked_dep_chain exactly."""
+
+    def _select(cp):
+        for e in entries:
+            if (e[0], e[1]) == cp and e[2][0] in (
+                "new",
+                "upgrade",
+                "downgrade",
+                "reinstall",
+            ):
+                return e
+        for e in entries:
+            if (e[0], e[1]) == cp and e[2][0] == "already_installed":
+                return e
+        return None
+
+    def _node_line(e):
+        tag = e[2][0]
+        if tag in ("new", "reinstall"):
+            version = e[2][1]
+        elif tag in ("upgrade", "downgrade"):
+            version = e[2][2]
+        elif tag == "already_installed":
+            version = e[2][1]
+        else:
+            return None
+        if tag == "already_installed":
+            repo = _installed_pkg_repo(root, e[0], e[1], version)
+            return (f"{e[0]}/{e[1]}-{version}::{repo}", "installed")
+        cands = [
+            c
+            for c in list_candidates(repos, e[0], e[1])
+            if c["version"] == version
+        ]
+        repo = (
+            max(cands, key=lambda c: c["repo_priority"])["repo_name"] if cands else ""
+        )
+        ty = "binary" if e[7] == "binary" else "ebuild"
+        return (f"{e[0]}/{e[1]}-{version}::{repo}", ty)
+
+    def _arg_lines(cp):
+        out = []
+        for a in atoms:
+            atom = _parse_atom(a)
+            if atom is None or atom.blocker:
+                continue
+            if tuple(atom.cp.split("/", 1)) == cp:
+                out.append((a, "argument"))
+        return out
+
+    start = next(
+        (
+            e
+            for e in entries
+            if e[0] == category
+            and e[1] == package
+            and e[2][0] == "no_visible_candidate"
+        ),
+        None,
+    )
+    chain = []
+    visited = set()
+    direct = list(start[6]) if start is not None else []
+    for parent in sorted(direct):
+        if parent in visited:
+            continue
+        visited.add(parent)
+        cur = parent
+        while True:
+            e = _select(cur)
+            if e is None:
+                break
+            line = _node_line(e)
+            if line is None:
+                break
+            chain.append(line)
+            args = _arg_lines(cur)
+            if args:
+                chain.extend(args)
+                break
+            nxt = next((c for c in sorted(e[6]) if c not in visited), None)
+            if nxt is None:
+                break
+            visited.add(nxt)
+            cur = nxt
+    return chain
 
 
 def _build_residual_slot_conflicts(repos, config, root, entries, slot_pullers, dropped):
@@ -10477,6 +10596,11 @@ def resolve_pretend_graph(
         # required_use_violations exactly.
         required_use_violations = []
         slot_conflicts = []
+        # Masked-dependency disclosures for this pass (see
+        # _masked_candidates_for_atom): rebuilt every attempt like
+        # slot_conflicts, so only the final pass's reports are rendered.
+        # Mirrors portage-repo/src/lib.rs's masked_deps.
+        masked_deps = []
         # --changed-deps-report: real _changed_deps_pkgs is a dict keyed by
         # the installed Package object, so a repeat visit to the same
         # installed category/package/version (e.g. via both a bare
@@ -11139,6 +11263,39 @@ def resolve_pretend_graph(
                         False,
                     )
                 )
+                # Masked-dependency disclosure (real
+                # _show_unsatisfied_dep's "All ebuilds that could satisfy
+                # ... have been masked" block for a *dependency*): a
+                # dependency NoVisibleCandidate whose atom still matches
+                # ebuilds by version, every one of which is masked, is
+                # recorded here (one per cat/pkg, like the entry itself)
+                # instead of rendering the bare no-visible-ebuild line.
+                # The display atom is the unevaluated form as queued.
+                # Mirrors portage-repo/src/lib.rs.
+                if outcome[0] == "no_visible_candidate":
+                    _display_atom = (
+                        unevaluated_atom
+                        if unevaluated_atom is not None
+                        else current_atom_str
+                    )
+                    _masked = _masked_candidates_for_atom(
+                        repos, _display_atom, config
+                    )
+                    if _masked is not None and not any(
+                        r["category"] == category and r["package"] == package
+                        for r in masked_deps
+                    ):
+                        masked_deps.append(
+                            {
+                                "category": category,
+                                "package": package,
+                                "atom": _display_atom,
+                                "masked": _masked,
+                                # Walked post-loop out of the final
+                                # entries (see below).
+                                "chain": [],
+                            }
+                        )
                 continue
 
             # The resolved version may have come from any of `repos`, from
@@ -12112,6 +12269,7 @@ def resolve_pretend_graph(
         return (
             entries,
             slot_conflicts,
+            masked_deps,
             required_use_violations,
             changed_deps_report_entries,
             pprovided_atoms,
@@ -12132,6 +12290,7 @@ def resolve_pretend_graph(
         (
             entries,
             slot_conflicts,
+            masked_deps,
             required_use_violations,
             changed_deps_report_entries,
             pprovided_atoms,
@@ -12484,6 +12643,15 @@ def resolve_pretend_graph(
             for (category, package, _o, _b, _s, _u, required_by, *_rest) in entries
         )
 
+    # Masked-dependency chains are walked out of the final entries
+    # (required_by is only complete post-pass); the atom+masked data was
+    # recorded at each NoVisibleCandidate push above. Mirrors
+    # portage-repo/src/lib.rs.
+    for _rep in masked_deps:
+        _rep["chain"] = _masked_dep_chain(
+            entries, _rep["category"], _rep["package"], atoms, root, repos
+        )
+
     return {
         "entries": entries,
         "slot_conflicts": slot_conflicts
@@ -12498,6 +12666,11 @@ def resolve_pretend_graph(
         "autounmask_license_changes": autounmask_license_changes,
         "autounmask_mask_changes": autounmask_mask_changes,
         "abi_rebuilds": abi_rebuilds,
+        # Masked-only dependency disclosures (real _show_unsatisfied_dep
+        # for a dependency atom). Rendered in place of the bare
+        # no-visible-ebuild line. Mirrors portage-repo/src/lib.rs's
+        # GraphResult::masked_deps.
+        "masked_deps": masked_deps,
         # Real _serialize_tasks -> _show_circular_deps: an unbreakable
         # build-time dependency cycle. See portage-repo/src/lib.rs's
         # GraphResult::circular_deps.
@@ -20418,10 +20591,50 @@ def run(args):
             # matched nothing in real, so it was dropped.
             pass
         else:
-            print(
-                f'!!! no visible ebuild for dependency "{category}/{package}"',
-                file=sys.stderr,
+            # Masked-dependency disclosure (real _show_unsatisfied_dep's
+            # "All ebuilds that could satisfy ... have been masked" block
+            # for a *dependency*): when the resolver recorded masked-only
+            # candidates for this atom, render the block plus its
+            # (dependency required by ...) chain instead of the bare
+            # line. Mirrors pretend.rs.
+            _rep = next(
+                (
+                    r
+                    for r in result["masked_deps"]
+                    if r["category"] == category and r["package"] == package
+                ),
+                None,
             )
+            if _rep is not None:
+                print(
+                    f'\n!!! All ebuilds that could satisfy "{_rep["atom"]}" have been masked.',
+                    file=sys.stderr,
+                )
+                print(
+                    "!!! One of the following masked packages is required to complete your request:",
+                    file=sys.stderr,
+                )
+                for _cpv, _reasons in _rep["masked"]:
+                    print(
+                        f"- {_cpv} (masked by: {', '.join(_reasons)})",
+                        file=sys.stderr,
+                    )
+                print(file=sys.stderr)
+                for _node, _ty in _rep["chain"]:
+                    print(
+                        f'(dependency required by "{_node}" [{_ty}])',
+                        file=sys.stderr,
+                    )
+                print(
+                    "For more information, see the MASKED PACKAGES section in the emerge",
+                    file=sys.stderr,
+                )
+                print("man page or refer to the Gentoo Handbook.", file=sys.stderr)
+            else:
+                print(
+                    f'!!! no visible ebuild for dependency "{category}/{package}"',
+                    file=sys.stderr,
+                )
             # --autounmask's own keyword-suggestion sub-feature, extended
             # to a dependency's own no_visible_candidate -- see
             # portage-repo/src/lib.rs's GraphEntry::keyword_suggestion own

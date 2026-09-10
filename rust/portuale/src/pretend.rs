@@ -882,12 +882,14 @@ fn print_entry_line(
     color: &Colorizer,
     system_atoms: &[String],
     world_atoms: &[String],
-    // Real `PkgAttrDisplay.force_reinstall` (the red `r` column): every
-    // `(cat, pkg)` on either side of a slot-operator ABI-rebuild edge --
-    // `result.abi_rebuilds` -- so the triggering upgrade AND every forced
-    // rebuild in the cascade are tagged.
     force_reinstall_cps: &HashSet<(String, String)>,
     blocker_lines: &mut Vec<String>,
+    // Masked-dependency disclosures for this resolve (real
+    // `_show_unsatisfied_dep`'s dependency block): the `NoVisibleCandidate`
+    // arm renders the recorded block in place of the bare
+    // `!!! no visible ebuild for dependency` line. Empty when nothing was
+    // masked-only (e.g. `--resume --pretend`, which never re-resolves).
+    masked_deps: &[portage_repo::MaskedDepReport],
 ) {
     // Real `_DisplayConfig` verbosity: `--quiet and 1 or --verbose and 3
     // or 2`. `--quiet` wins over `-v`. `v3` is "verbosity == 3" -- the
@@ -1171,10 +1173,39 @@ fn print_entry_line(
             // for `--json` consumers.
         }
         PretendOutcome::NoVisibleCandidate => {
-            eprintln!(
-                "!!! no visible ebuild for dependency \"{}/{}\"",
-                entry.category, entry.package
-            );
+            // Masked-dependency disclosure (real `_show_unsatisfied_dep`'s
+            // "All ebuilds that could satisfy … have been masked" block
+            // for a *dependency*): when the resolver recorded masked-only
+            // candidates for this atom, render the block plus its
+            // `(dependency required by …)` chain instead of the bare
+            // line. Suggestion notes below print either way (they name a
+            // fix; the block names the mask).
+            if let Some(report) = masked_deps
+                .iter()
+                .find(|r| r.category == entry.category && r.package == entry.package)
+            {
+                eprintln!(
+                    "\n!!! All ebuilds that could satisfy {:?} have been masked.",
+                    report.atom
+                );
+                eprintln!(
+                    "!!! One of the following masked packages is required to complete your request:"
+                );
+                for (cpv, reasons) in &report.masked {
+                    eprintln!("- {cpv} (masked by: {})", reasons.join(", "));
+                }
+                eprintln!();
+                for (node, ty) in &report.chain {
+                    eprintln!("(dependency required by \"{node}\" [{ty}])");
+                }
+                eprintln!("For more information, see the MASKED PACKAGES section in the emerge");
+                eprintln!("man page or refer to the Gentoo Handbook.");
+            } else {
+                eprintln!(
+                    "!!! no visible ebuild for dependency \"{}/{}\"",
+                    entry.category, entry.package
+                );
+            }
             // `--autounmask`'s own keyword-suggestion sub-feature,
             // extended to a dependency's own NoVisibleCandidate -- see
             // GraphEntry::keyword_suggestion's own doc comment.
@@ -1307,6 +1338,7 @@ fn print_tree(
     world_atoms: &[String],
     force_reinstall_cps: &HashSet<(String, String)>,
     blocker_lines: &mut Vec<String>,
+    masked_deps: &[portage_repo::MaskedDepReport],
 ) {
     let mut children: HashMap<(String, String), Vec<usize>> = HashMap::new();
     for (i, entry) in entries.iter().enumerate() {
@@ -1342,6 +1374,7 @@ fn print_tree(
         system_atoms: &'a [String],
         world_atoms: &'a [String],
         force_reinstall_cps: &'a HashSet<(String, String)>,
+        masked_deps: &'a [portage_repo::MaskedDepReport],
     }
 
     fn render(
@@ -1376,6 +1409,7 @@ fn print_tree(
             ctx.world_atoms,
             ctx.force_reinstall_cps,
             blocker_lines,
+            ctx.masked_deps,
         );
         let key = (
             ctx.entries[i].category.clone(),
@@ -1402,6 +1436,7 @@ fn print_tree(
         system_atoms,
         world_atoms,
         force_reinstall_cps,
+        masked_deps,
     };
     let mut rendered: HashSet<usize> = HashSet::new();
     for (i, entry) in entries.iter().enumerate() {
@@ -1432,6 +1467,7 @@ fn print_tree(
                 world_atoms,
                 force_reinstall_cps,
                 blocker_lines,
+                masked_deps,
             );
         }
     }
@@ -3842,6 +3878,9 @@ fn run_resume(
                 // caveat above.
                 &HashSet::new(),
                 &mut blocker_lines,
+                // No resolve ran, so no masked-dependency disclosure
+                // either (any NVC entry here renders the bare line).
+                &[],
             );
         }
         return ExitCode::SUCCESS;
@@ -10470,6 +10509,7 @@ pub fn run(args: &[String]) -> ExitCode {
                 &world_atoms,
                 &force_reinstall_cps,
                 &mut blocker_lines,
+                &result.masked_deps,
             );
         } else {
             for entry in entries {
@@ -10490,6 +10530,7 @@ pub fn run(args: &[String]) -> ExitCode {
                     &world_atoms,
                     &force_reinstall_cps,
                     &mut blocker_lines,
+                    &result.masked_deps,
                 );
             }
         }

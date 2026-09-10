@@ -725,6 +725,11 @@ fn graph_result_from_order(
         autounmask_mask_changes: Vec::new(),
         abi_rebuilds,
         circular_deps,
+        // The engine backends never leave an installed-consumer pin
+        // behind (a solved plan admits no same-slot divergence and no
+        // relaxation loop ran), so there is nothing to disclose here --
+        // same standing empty as slot_conflicts above.
+        masked_deps: Vec::new(),
     }
 }
 
