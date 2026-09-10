@@ -351,6 +351,7 @@ mod conflicts;
 mod env_config;
 mod news;
 mod prompt;
+mod remote;
 mod resume;
 mod unmerge;
 mod world;
