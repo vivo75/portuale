@@ -1,3 +1,5 @@
+TIME: 2026-09-10T17:10:53+02:00
+
 Ci sono discordanze tra l'ordinamento utilizzato da Portuale e l'ordinamento usato da Portage, di cui Portuale è un clone.
 Sai dirmi il perchè?
 
@@ -355,3 +357,23 @@ La differenza pratica è che lo Scheduler non ragiona più su DEPEND, RDEPEND o 
 ![xen_tools_valutazione_use_e_slot_operator](/home/vivo/repo/PORTUALE/portuale/docs/xen_tools_valutazione_use_e_slot_operator.svg)
 
 ![xen_tools_grafo_vs_modello_scheduler](/home/vivo/repo/PORTUALE/portuale/docs/xen_tools_grafo_vs_modello_scheduler.svg)
+
+# Portuale
+
+Rispetto ai grafici precedenti le differenze sono cinque.
+
+**1. Prima si sceglie, poi si valuta.** Nei miei schemi le USE «finali» sembravano un dato di partenza. Nel solver sono una conseguenza della scelta dell'istanza. Per ogni atomo Portage prende la versione più alta visibile, tenendo conto di maschere, keyword e licenze. Se non chiedi `--update`, preferisce quella installata. Solo dopo valuta USE e dipendenze di quella istanza. Un pacchetto binario porta con sé le USE con cui è stato compilato. Per un pacchetto installato Portage usa le dipendenze dell'ebuild corrente nel repository e non quelle del VDB, perché `--dynamic-deps` è attivo di default. Dal VDB prende invece le parti `:=` registrate al momento della build.
+
+**2. I gruppi `||` non sono una scelta libera.** `dep_zapdeps` segue un ordine di preferenza: prima le alternative già installate e non mascherate, poi quelle interamente non mascherate. Per `|| ( seabios seabios-bin )` vince quindi quella che hai già. Se non ne hai nessuna, vince la prima scritta nell'ebuild. Il solver non cerca l'alternativa «migliore» per il grafo complessivo.
+
+**3. Il grafo è parziale.** Senza `--deep` Portage non attraversa le dipendenze dei pacchetti già installati, mentre il mio primo grafico mostrava l'albero intero. Due opzioni allargano il grafo. `--with-bdeps` si attiva da solo nelle azioni di installazione. `--complete-graph-if-new-ver` è attivo di default. È questa seconda opzione che, passando da 4.19 a 4.20, porta nel grafo le dipendenze inverse come qemu e libvirt. Solo così Portage trova i rebuild da `xen-tools:=`.
+
+**4. Non c'è un solver SAT: c'è un loop greedy con backtracking.** Se emerge un conflitto, per esempio due versioni nello stesso slot o una USE dep non soddisfatta, Portage non ritratta la singola scelta. Butta via il depgraph e ne costruisce uno nuovo con vincoli aggiuntivi: pacchetti mascherati a runtime, installati da sostituire per slot operator, rebuild forzati. Esplora un albero di tentativi fino a `--backtrack` volte (default 20). Quindi può fallire anche quando una soluzione esiste.
+
+Alcuni problemi fermano il loop invece di alimentarlo. Con `USE=system-qemu` l'ebuild richiede `app-emulation/qemu[xen]`. Se il tuo qemu non ha `xen`, Portage non cambia la flag da solo: `--autounmask-use` (attivo di default) propone la riga per `package.use` e si ferma. Le violazioni di `REQUIRED_USE`, come `?? ( qemu system-qemu )`, vengono segnalate e non risolte.
+
+**5. Lo Scheduler è quasi come l'avevo descritto, con due correzioni.** Ho verificato il codice. Una build parte solo se nessuna dipendenza transitiva nel grafo resta da installare, escluse quelle già in coda dopo il pacchetto. Il tipo di arco (DEPEND o RDEPEND) non conta. C'è però un'eccezione: per i nodi che fanno parte di un ciclo le dipendenze post-merge vengono ignorate. Inoltre i pacchetti di @system e le loro dipendenze runtime profonde non si installano mentre ci sono build in corso: vanno in una `merge_wait_queue` e attendono che i job si svuotino, perché spesso gli ebuild non dichiarano le dipendenze da @system.
+
+Proprio xen-tools offre un esempio concreto di ciclo che il mio schema lineare non mostrava. Con `system-qemu` xen-tools ha in DEPEND `qemu[xen]`, e qemu con `USE=xen` dipende da `xen-tools:=`. Se uno dei due è già installato, l'arco risulta soddisfatto e la serializzazione può ignorarlo. In un'installazione da zero entrambi sono da compilare, quindi il ciclo non si spezza: Portage si ferma con un errore di dipendenza circolare e suggerisce una modifica di USE. Nel caso tipico propone di disattivare `xen` su qemu per il primo giro.
+
+![portage_solver_reale_con_backtracking](/home/vivo/repo/PORTUALE/portuale/docs/portage_solver_reale_con_backtracking.svg)
