@@ -1877,6 +1877,7 @@ mod force_scan;
 mod graph;
 mod info_pkgs;
 mod installed;
+mod installed_meta;
 mod license;
 mod masked_deps;
 mod metadata_cache;

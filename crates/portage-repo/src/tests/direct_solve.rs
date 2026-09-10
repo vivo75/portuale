@@ -1,6 +1,133 @@
 use super::*;
 
 #[test]
+fn direct_solve_removes_the_unforced_merge_and_reports_the_skip() {
+    // Old/new shape: `<2.0` forces 1.0, so the bare tuple drops 2.0 with a skip
+    // row (Portage's staged-oracle verdict).
+    let root = fixtures_root();
+    let repos = find_repos(&root).expect("fixture repos.conf must resolve");
+    let config = test_config();
+    let new_cpv = "dev-libs/slotconflictnewconsumer-1.0:0/0::testrepo";
+    let old_cpv = "dev-libs/slotconflictoldconsumer-1.0:0/0::testrepo";
+    let conflicts = [s2_conflict(vec![
+        (
+            "2.0",
+            false,
+            vec![(new_cpv, "dev-libs/slotconflicttarget", false)],
+        ),
+        (
+            "1.0",
+            false,
+            vec![(old_cpv, "<dev-libs/slotconflicttarget-2.0", false)],
+        ),
+    ])];
+    let entries = s2_entries(vec!["2.0", "1.0"]);
+    let top: HashSet<(String, String)> = HashSet::from([
+        (
+            "dev-libs".to_string(),
+            "slotconflictnewconsumer".to_string(),
+        ),
+        (
+            "dev-libs".to_string(),
+            "slotconflictoldconsumer".to_string(),
+        ),
+    ]);
+    let empty_replace: BTreeSet<(String, String)> = BTreeSet::new();
+    let out = direct_solve_slot_conflicts(s2_input(S2InputArgs {
+        conflicts: &conflicts,
+        entries: &entries,
+        top_level: &top,
+        replace_cps: &empty_replace,
+        root: &root,
+        repos: &repos,
+        config: &config,
+    }));
+    assert_eq!(
+        out.removed,
+        vec![(
+            "dev-libs".to_string(),
+            "slotconflicttarget".to_string(),
+            "2.0".to_string(),
+            "1.0".to_string()
+        )]
+    );
+    assert_eq!(out.surviving, vec![]);
+    assert_eq!(out.skipped.len(), 1);
+    let s = &out.skipped[0];
+    assert_eq!(s.skipped_version, "2.0");
+    assert_eq!(s.atom, "<dev-libs/slotconflicttarget-2.0");
+    assert_eq!(s.consumer_cpv, old_cpv);
+    assert!(!s.consumer_installed);
+}
+
+#[test]
+fn direct_solve_reports_an_argument_parent_with_the_cli_text() {
+    // Portage prints the CLI argument bare (no atom, no marker); the direct-solve
+    // producer supplies it via an ownerless depth-0 puller.
+    let root = fixtures_root();
+    let repos = find_repos(&root).expect("fixture repos.conf must resolve");
+    let config = test_config();
+    let new_cpv = "dev-libs/slotconflictnewconsumer-1.0:0/0::testrepo";
+    let old_cpv = "dev-libs/slotconflictoldconsumer-1.0:0/0::testrepo";
+    // Versioned argument pinning the kept instance rejects 2.0 the same way.
+    let arg = "=dev-libs/slotconflicttarget-1.0";
+    let conflicts = [s2_conflict(vec![
+        (
+            "2.0",
+            false,
+            vec![(new_cpv, "dev-libs/slotconflicttarget", false)],
+        ),
+        (
+            "1.0",
+            false,
+            vec![
+                (old_cpv, "<dev-libs/slotconflicttarget-2.0", false),
+                ("", arg, false),
+            ],
+        ),
+    ])];
+    let entries = s2_entries(vec!["2.0", "1.0"]);
+    let top: HashSet<(String, String)> = HashSet::from([
+        (
+            "dev-libs".to_string(),
+            "slotconflictnewconsumer".to_string(),
+        ),
+        (
+            "dev-libs".to_string(),
+            "slotconflictoldconsumer".to_string(),
+        ),
+    ]);
+    let empty_replace: BTreeSet<(String, String)> = BTreeSet::new();
+    let out = direct_solve_slot_conflicts(s2_input(S2InputArgs {
+        conflicts: &conflicts,
+        entries: &entries,
+        top_level: &top,
+        replace_cps: &empty_replace,
+        root: &root,
+        repos: &repos,
+        config: &config,
+    }));
+    assert_eq!(
+        out.removed,
+        vec![(
+            "dev-libs".to_string(),
+            "slotconflicttarget".to_string(),
+            "2.0".to_string(),
+            "1.0".to_string()
+        )]
+    );
+    assert_eq!(out.skipped.len(), 2);
+    let arg_row = out
+        .skipped
+        .iter()
+        .find(|s| s.consumer_cpv.is_empty())
+        .expect("the argument parent rides out as a bare row");
+    assert_eq!(arg_row.skipped_version, "2.0");
+    assert_eq!(arg_row.atom, arg);
+    assert!(!arg_row.consumer_installed);
+}
+
+#[test]
 fn direct_solve_skips_slot_operator_rebuild_conflicts() {
     // Rebuild conflicts never reach the direct solve (Portage).
     let root = fixtures_root();
@@ -317,6 +444,39 @@ fn direct_solve_solves_past_an_uninstalled_parent() {
     assert!(out.surviving.is_empty());
 }
 
+/// `--exclude` alone arms the rebuild gate.
+#[test]
+fn direct_solve_exclude_alone_arms_the_rebuild_gate() {
+    let root = fixtures_root();
+    let repos = find_repos(&root).expect("fixture repos.conf must resolve");
+    let config = test_config();
+    let (conflicts, entries, top) = ds_s0_161();
+    let mut conflict = conflicts[0].clone();
+    conflict.instances[0].parents.push(SlotConflictParent {
+        parent_cpv: "dev-libs/paired-1.0:0/0::testrepo".to_string(),
+        atom: "dev-libs/slotconflicttarget:0/0=".to_string(),
+        use_display: Vec::new(),
+        installed: false,
+    });
+    let conflicts = [conflict];
+    let excluded = vec!["dev-libs/paired".to_string()];
+    let empty_replace: BTreeSet<(String, String)> = BTreeSet::new();
+    let out = direct_solve_slot_conflicts(ds_input_161(DsInput161Args {
+        conflicts: &conflicts,
+        entries: &entries,
+        top_level: &top,
+        excluded: &excluded,
+        selective: false,
+        replace_cps: &empty_replace,
+        root: &root,
+        repos: &repos,
+        config: &config,
+    }));
+    // Excluded built-`=` parent is rebuild residue: the conflict survives.
+    assert!(out.removed.is_empty());
+    assert_eq!(out.surviving.len(), 1);
+}
+
 /// The replace set holds the conflict without solving.
 #[test]
 fn direct_solve_replace_set_holds_the_conflict() {
@@ -339,6 +499,45 @@ fn direct_solve_replace_set_holds_the_conflict() {
     }));
     assert!(out.removed.is_empty());
     assert_eq!(out.surviving.len(), 1);
+}
+
+/// A lone bare parent solves through the tuple path.
+#[test]
+fn direct_solve_lone_bare_parent_solves_through_the_tuple() {
+    let root = fixtures_root();
+    let repos = find_repos(&root).expect("fixture repos.conf must resolve");
+    let config = test_config();
+    let new_cpv = "dev-libs/slotconflictnewconsumer-1.0:0/0::testrepo";
+    let conflicts = [s2_conflict(vec![
+        (
+            "2.0",
+            false,
+            vec![(new_cpv, "dev-libs/slotconflicttarget", false)],
+        ),
+        ("1.0", false, vec![]),
+    ])];
+    let entries = s2_entries(vec!["2.0", "1.0"]);
+    let top: HashSet<(String, String)> = HashSet::new();
+    let empty_replace: BTreeSet<(String, String)> = BTreeSet::new();
+    let out = direct_solve_slot_conflicts(s2_input(S2InputArgs {
+        conflicts: &conflicts,
+        entries: &entries,
+        top_level: &top,
+        replace_cps: &empty_replace,
+        root: &root,
+        repos: &repos,
+        config: &config,
+    }));
+    assert_eq!(
+        out.removed,
+        vec![(
+            "dev-libs".to_string(),
+            "slotconflicttarget".to_string(),
+            "1.0".to_string(),
+            "2.0".to_string()
+        )]
+    );
+    assert!(out.surviving.is_empty());
 }
 
 /// Installed ranks last over three versions with only one walked.

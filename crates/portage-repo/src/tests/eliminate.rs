@@ -203,6 +203,254 @@ fn slot_operator_rebuild_entries_mark_repo_drifted_rebuilds_oldbest() {
 }
 
 #[test]
+fn slot_operator_eliminate_rebuilds_applies_the_eight_rules_in_order() {
+    // Flag off, so both rule-8 sides use-reduce the conditional away.
+    let dir = slotundo_temp_dir("undo");
+    slotundo_vdb(SlotundoVdbArgs {
+        dir: &dir,
+        name: "sounneed",
+        version: "1.0",
+        slot: "0/1",
+        rdepend: "soflag? ( dev-libs/souprov:0/1= )",
+        installed_use: "",
+    });
+    slotundo_vdb(SlotundoVdbArgs {
+        dir: &dir,
+        name: "souprov",
+        version: "1.0",
+        slot: "0/1",
+        rdepend: "",
+        installed_use: "",
+    });
+    let repos = find_repos(&fixtures_root()).expect("fixture repos");
+    let provider = slotundo_provider_entry();
+    let sounneed = ("dev-libs".to_string(), "sounneed".to_string());
+    let replace = BTreeSet::from([sounneed.clone()]);
+    let slot_want = HashMap::from([(sounneed.clone(), vec!["dev-libs/sounneed".to_string()])]);
+    let no_pins: Vec<RevDepPin> = Vec::new();
+    let no_top: HashSet<(String, String)> = HashSet::new();
+
+    let undo = |entries: &[GraphEntry],
+                selective: bool,
+                changed_slot: bool,
+                top: &HashSet<(String, String)>,
+                empty: bool| {
+        slot_operator_eliminate_rebuilds(SlotOperatorEliminateRebuildsArgs {
+            root: &dir,
+            repos: &repos,
+            entries,
+            replace: &replace,
+            slot_want: &slot_want,
+            reverse_pins: &no_pins,
+            selective,
+            changed_slot,
+            top_level_cps: top,
+            empty,
+        })
+    };
+
+    // Rule 8 flip: both sides use-reduce the `soflag?` group away.
+    let entry = slotundo_rebuild_entry("sounneed", "1.0", "0", "1", &[("soflag", false)]);
+    let entries = [provider.clone(), entry.clone()];
+    assert_eq!(undo(&entries, false, false, &no_top, false), replace);
+    // Flag on: the tree `:=` binds to the graph's 0/2, so the rebuild is kept.
+    let entry_on = slotundo_rebuild_entry("sounneed", "1.0", "0", "1", &[("soflag", true)]);
+    assert!(undo(&[provider.clone(), entry_on], false, false, &no_top, false).is_empty());
+
+    // Rule 6: an own-slot move keeps the rebuild.
+    let entry_slot = slotundo_rebuild_entry("sounneed", "1.0", "0", "2", &[("soflag", false)]);
+    assert!(
+        undo(
+            &[provider.clone(), entry_slot],
+            false,
+            false,
+            &no_top,
+            false
+        )
+        .is_empty()
+    );
+
+    // Rule 3: `--changed-slot` only fires when the tree ebuild moved; here it
+    // did not, so the rule-8 demotion stands.
+    assert_eq!(
+        undo(&entries, false, true, &no_top, false),
+        replace,
+        "rule 3 must not keep a rebuild whose tree ebuild did not move"
+    );
+    // Positive shape (vdb 0/1, tree 0/2): kept with and without the flag.
+    slotundo_vdb(SlotundoVdbArgs {
+        dir: &dir,
+        name: "souneedslot",
+        version: "1.0",
+        slot: "0/1",
+        rdepend: "",
+        installed_use: "",
+    });
+    let entry_slotmove = slotundo_rebuild_entry("souneedslot", "1.0", "0", "2", &[]);
+    let want_slotmove = HashMap::from([(
+        ("dev-libs".to_string(), "souneedslot".to_string()),
+        vec!["dev-libs/souneedslot".to_string()],
+    )]);
+    let replace_slotmove = BTreeSet::from([("dev-libs".to_string(), "souneedslot".to_string())]);
+    let rule3 = |changed_slot: bool| {
+        slot_operator_eliminate_rebuilds(SlotOperatorEliminateRebuildsArgs {
+            root: &dir,
+            repos: &repos,
+            entries: &[provider.clone(), entry_slotmove.clone()],
+            replace: &replace_slotmove,
+            slot_want: &want_slotmove,
+            reverse_pins: &no_pins,
+            selective: false,
+            changed_slot,
+            top_level_cps: &no_top,
+            empty: false,
+        })
+    };
+    assert!(
+        rule3(true).is_empty() && rule3(false).is_empty(),
+        "a slot-moved ebuild consumer is kept with and without --changed-slot"
+    );
+
+    // Rule 1: a different installed version is an upgrade.
+    let entry_v2 = slotundo_rebuild_entry("sounneed", "2.0", "0", "1", &[("soflag", false)]);
+    assert!(undo(&[provider.clone(), entry_v2], false, false, &no_top, false).is_empty());
+
+    // Rule 2: --newuse/--changed-use wins.
+    let mut entry_flags = entry.clone();
+    entry_flags.outcome = PretendOutcome::Reinstall {
+        version: "1.0".into(),
+        changed_flags: vec!["soflag".into()],
+        deps_changed: false,
+        slot_changed: false,
+        rebuilt_binary: false,
+        new_repo: false,
+        slot_operator_rebuild: true,
+    };
+    assert!(
+        undo(
+            &[provider.clone(), entry_flags],
+            false,
+            false,
+            &no_top,
+            false
+        )
+        .is_empty()
+    );
+
+    // Rule 4: a parent atom missing the installed instance.
+    let bad_want = HashMap::from([(sounneed.clone(), vec!["=dev-libs/sounneed-2.0".to_string()])]);
+    let demoted = slot_operator_eliminate_rebuilds(SlotOperatorEliminateRebuildsArgs {
+        root: &dir,
+        repos: &repos,
+        entries: &[provider.clone(), entry.clone()],
+        replace: &replace,
+        slot_want: &bad_want,
+        reverse_pins: &no_pins,
+        selective: false,
+        changed_slot: false,
+        top_level_cps: &no_top,
+        empty: false,
+    });
+    assert!(demoted.is_empty());
+
+    // Rule 5: non-selective keeps a user-requested package.
+    let top = HashSet::from([sounneed.clone()]);
+    assert!(
+        undo(
+            &[provider.clone(), entry.clone()],
+            false,
+            false,
+            &top,
+            false
+        )
+        .is_empty()
+    );
+    // Selective ignores the argument (Portage's `selective` arm).
+    assert_eq!(
+        undo(&[provider.clone(), entry.clone()], true, false, &top, false),
+        replace
+    );
+
+    // Rule 7: a binary entry keeps its rebuild.
+    let mut entry_binary = entry.clone();
+    entry_binary.source = CandidateSource::Binary;
+    assert!(
+        undo(
+            &[provider.clone(), entry_binary],
+            false,
+            false,
+            &no_top,
+            false
+        )
+        .is_empty()
+    );
+
+    // Rule 0: --emptytree skips the whole undo.
+    assert!(
+        undo(
+            &[provider.clone(), entry.clone()],
+            false,
+            false,
+            &no_top,
+            true
+        )
+        .is_empty()
+    );
+
+    // Non-slot-operator entries are never touched.
+    let mut entry_plain = entry.clone();
+    entry_plain.outcome = PretendOutcome::Reinstall {
+        version: "1.0".into(),
+        changed_flags: vec!["soflag".into()],
+        deps_changed: false,
+        slot_changed: false,
+        rebuilt_binary: false,
+        new_repo: false,
+        slot_operator_rebuild: false,
+    };
+    assert!(
+        undo(
+            &[provider.clone(), entry_plain],
+            false,
+            false,
+            &no_top,
+            false
+        )
+        .is_empty()
+    );
+
+    // The latch: demoted cps are never re-added by the scan.
+    let reach: HashSet<(String, String)> = HashSet::from([sounneed.clone()]);
+    let latched = undo(
+        &[provider.clone(), entry.clone()],
+        false,
+        false,
+        &no_top,
+        false,
+    );
+    assert_eq!(latched, replace);
+    let (rescheduled, ..) = slot_operator_rebuild_scan(SlotOperatorRebuildScanArgs {
+        root: &dir,
+        repos: &[],
+        entries: &[provider, entry],
+        reachable: &reach,
+        already: &BTreeSet::new(),
+        undone: &latched,
+        with_bdeps: true,
+        update: false,
+        top_level_cps: &HashSet::new(),
+        top_level_atoms: &HashSet::new(),
+        excluded: &[],
+        config: &test_config(),
+    });
+    assert!(
+        rescheduled.is_empty(),
+        "the undo latch suppresses the re-add"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn required_set_reachable_cps_follows_the_forward_installed_dep_graph() {
     // Throwaway vdb: tail -> mid -> target chain, an island, and a @system half.
     let dir = TempDir::new("portage-repo-reach").keep();
