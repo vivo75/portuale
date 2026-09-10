@@ -442,6 +442,11 @@ CASES = [
         "circular dep: conditional grandparent keeps the suggestion with followup",
         ["--pretend", "dev-libs/fucyclec"],
         1,
+    ),
+    (
+        "circular dep: four-ring with a USE-gated edge reports the lot-of-cycles trailer",
+        ["--pretend", "dev-libs/cyc4a"],
+        1,
     ),    (
         "recursion: any-of group prefers the installed alternative over an earlier uninstalled one",
         ["--pretend", "dev-libs/anyof"],
@@ -2631,10 +2636,12 @@ def test_unbreakable_build_time_cycle_prints_the_circular_deps_error(
     unbuilt, empty RDEPEND, no IUSE -- every edge an unsatisfied
     build-time dep with no run-time alternative, so real portage's
     `_ignore_runtime` scan can't linearize it. The full merge list still
-    goes to stdout; the `* Error: circular dependencies:` block (real
-    `_show_circular_deps`, minus the reduced --tree re-display) goes to
-    stderr; exit 1. With no IUSE, `_find_suggestions` finds nothing and
-    the generic advisory prints (the `else` branch) -- see
+    goes to stdout, followed by the reduced cycle-only re-display (real
+    `display(handler.merge_list)` -- flat portuale lines, since
+    portuale's tree model dedups shared nodes); the `* Error: circular
+    dependencies:` block (real `_show_circular_deps`) goes to stderr;
+    exit 1. With no IUSE, `_find_suggestions` finds nothing and the
+    generic advisory prints (the `else` branch) -- see
     test_circular_dep_use_flag_suggestion for the suggestion path. By
     contrast the pure-RDEPEND cycle-a/cycle-b cycle stays exit 0 (a
     CASES entry)."""
@@ -2647,6 +2654,9 @@ def test_unbreakable_build_time_cycle_prints_the_circular_deps_error(
     assert rust.stdout == python.stdout
     assert rust.stderr == python.stderr
     assert rust.stdout == (
+        "[ebuild  N     ] dev-libs/hardcyclea-1.0 \n"
+        "[ebuild  N     ] dev-libs/hardcycleb-1.0 \n"
+        "\n"
         "[ebuild  N     ] dev-libs/hardcyclea-1.0 \n"
         "[ebuild  N     ] dev-libs/hardcycleb-1.0 \n"
     )
@@ -2760,6 +2770,58 @@ def test_circular_dep_conditional_grandparent_keeps_the_suggestion_with_followup
         "- dev-libs/fucyclea-1.0 (Change USE: -x)\n"
         " (This change might require USE changes on parent packages.)\n"
         "Note that this change can be reverted, once the package has been installed.\n"
+    )
+
+
+def test_circular_dep_four_ring_reports_redisplay_suggestion_and_lot_of_cycles(
+    emerge_binary, emerge_pretend_python, fixture_env
+):
+    """The Tier 2.21 slice on one fixture: dev-libs/cyc4a through
+    dev-libs/cyc4d form a four-ring of build-time deps with the
+    cyc4a→cyc4b edge gated behind USE=x (default on). Real
+    `digraph.get_cycles` records one ring per node (rotations count
+    separately), so four records trip `large_cycle_count`, and the
+    stuck remainder re-displays as its own list (verified live against
+    3.0.82.2 on the same shape). Portuale prints the full merge list,
+    then the reduced cycle-only re-display (leaf-drain order -- flat
+    lines, since portuale's tree model dedups shared nodes and never
+    abandons the list), then the error block with the `-x` suggestion
+    and the lot-of-cycles trailer. Exit 1. Rust == Python
+    byte-identical, both streams pinned."""
+    args = ["--pretend", "dev-libs/cyc4a"]
+    rust = _run([str(emerge_binary)], args, fixture_env)
+    py = _run(emerge_pretend_python, args, fixture_env)
+    assert rust.returncode == 1 and py.returncode == 1
+    assert rust.stdout == py.stdout and rust.stderr == py.stderr
+    assert rust.stdout.splitlines() == [
+        "[ebuild  N     ] dev-libs/cyc4a-1.0  USE=\"x\"",
+        "[ebuild  N     ] dev-libs/cyc4d-1.0 ",
+        "[ebuild  N     ] dev-libs/cyc4c-1.0 ",
+        "[ebuild  N     ] dev-libs/cyc4b-1.0 ",
+        "",
+        "[ebuild  N     ] dev-libs/cyc4a-1.0  USE=\"x\"",
+        "[ebuild  N     ] dev-libs/cyc4d-1.0 ",
+        "[ebuild  N     ] dev-libs/cyc4c-1.0 ",
+        "[ebuild  N     ] dev-libs/cyc4b-1.0 ",
+    ]
+    assert rust.stderr == (
+        "\n * Error: circular dependencies:\n"
+        "\n"
+        "dev-libs/cyc4a-1.0 depends on\n"
+        " dev-libs/cyc4b-1.0 (buildtime)\n"
+        "  dev-libs/cyc4c-1.0 (buildtime)\n"
+        "   dev-libs/cyc4d-1.0 (buildtime)\n"
+        "    dev-libs/cyc4a-1.0 (buildtime)\n"
+        "\n"
+        "It might be possible to break this cycle\n"
+        "by applying the following change:\n"
+        "- dev-libs/cyc4a-1.0 (Change USE: -x)\n"
+        "\n"
+        "Note that this change can be reverted, once the package has been installed.\n"
+        "\n"
+        "Note that the dependency graph contains a lot of cycles.\n"
+        "Several changes might be required to resolve all cycles.\n"
+        "Temporarily changing some use flag for all packages might be the better option.\n"
     )
 
 

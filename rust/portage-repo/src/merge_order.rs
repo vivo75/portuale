@@ -1788,6 +1788,186 @@ fn harvest_cycle(g: &Digraph, sub: &HashSet<usize>) -> Vec<usize> {
 ///   `drop_satisfied` escalation to `DepPrioritySatisfiedRange` that lets
 ///   an already-installed dependency break one.
 ///
+/// Port of real `portage.util.digraph.get_cycles` (+ `shortest_path` +
+/// `bfs`): every node's shortest child→node paths (all ties), each a
+/// recorded cycle. Real feeds this the stuck remainder with the
+/// `medium_soft` rung and counts the records (`large_cycle_count =
+/// len(cycles) > 3`); rotations of one ring count separately (a square
+/// records four), which is exactly what makes the count a "lot of
+/// cycles" signal rather than a ring census.
+///
+/// `ig` is the survival filter (real's `ignore_priority`); pass `None`
+/// for the unfiltered graph. Nodes with no path back to themselves
+/// contribute nothing. Only the count and the member union are consumed
+/// downstream, so traversal order is fixed (sorted indices) for
+/// determinism -- real keeps every tie, which makes its result set
+/// order-independent too (same reasoning as its PYTHONHASHSEED comment).
+fn elementary_cycles(g: &Digraph, ig: Option<Ignore>) -> Vec<Vec<usize>> {
+    use std::collections::VecDeque;
+    /// BFS shortest path, real `digraph.shortest_path`: first visit wins
+    /// per node (BFS order), returned on first reaching `end`. `None`
+    /// when `end` is unreachable (real raises `KeyError` for unknown
+    /// nodes instead -- every node here is known by construction).
+    fn shortest_path(
+        g: &Digraph,
+        start: usize,
+        end: usize,
+        ig: Option<Ignore>,
+    ) -> Option<Vec<usize>> {
+        let mut paths: HashMap<usize, Vec<usize>> = HashMap::new();
+        let mut queue: VecDeque<(Option<usize>, usize)> = VecDeque::from([(None, start)]);
+        let mut enqueued: HashSet<usize> = HashSet::from([start]);
+        while let Some((parent, n)) = queue.pop_front() {
+            let mut path = match parent {
+                None => Vec::new(),
+                Some(p) => paths.get(&p).cloned().unwrap_or_default(),
+            };
+            path.push(n);
+            paths.insert(n, path);
+            if n == end {
+                return paths.remove(&end);
+            }
+            let mut fresh: Vec<usize> = g.children[n]
+                .iter()
+                .filter(|(c, prios)| {
+                    !enqueued.contains(c) && ig.is_none_or(|f| prios.iter().any(|p| !f(p)))
+                })
+                .map(|(c, _)| *c)
+                .collect();
+            fresh.sort_unstable();
+            for c in fresh {
+                enqueued.insert(c);
+                queue.push_back((Some(n), c));
+            }
+        }
+        None
+    }
+
+    let mut all: Vec<Vec<usize>> = Vec::new();
+    for &node in &g.order {
+        // Shortest child→node path length seen for this node; every
+        // path tied at the minimum is recorded (real appends paths not
+        // longer than the running minimum, then filters by the final
+        // minimum -- same set, same child order).
+        let mut min_len: Option<usize> = None;
+        let mut cands: Vec<Vec<usize>> = Vec::new();
+        for (child, prios) in &g.children[node] {
+            if !ig.is_none_or(|f| prios.iter().any(|p| !f(p))) {
+                continue;
+            }
+            let Some(path) = shortest_path(g, *child, node, ig) else {
+                continue;
+            };
+            if min_len.is_none_or(|m| path.len() <= m) {
+                if min_len.is_none_or(|m| path.len() < m) {
+                    min_len = Some(path.len());
+                }
+                cands.push(path);
+            }
+        }
+        if let Some(m) = min_len {
+            all.extend(cands.into_iter().filter(|p| p.len() == m));
+        }
+    }
+    all
+}
+
+/// Port of real `circular_dependency_handler._prepare_reduced_merge_list`
+/// over an explicit drain set: leaf-drain (no filter, like real's plain
+/// `leaf_nodes()`), falling back to the lowest-order remaining node when
+/// nothing is a leaf. Real drains its whole stuck remainder -- cycle
+/// members plus everything left unscheduled downstream of them; the
+/// caller (`cycle_report`) passes exactly that set: members plus
+/// transitive requirers. A drained child frees its parents (checked
+/// against the shrinking remainder, not the static set), matching
+/// real's shrinking copy.
+fn reduced_merge_order(g: &Digraph, drain: &HashSet<usize>) -> Vec<usize> {
+    // A node is a leaf when it has no still-remaining child in the
+    // drain set -- self-edges count, exactly like real's plain
+    // `leaf_nodes()` on its shrinking copy (an unsatisfied buildtime
+    // self-loop is the only self-edge `build_digraph` keeps). Checking
+    // a static set instead would pin every ring member forever, since
+    // a drained child must free its parents.
+    let mut remaining: HashSet<usize> = drain.clone();
+    let mut out: Vec<usize> = Vec::new();
+    while !remaining.is_empty() {
+        let mut leaves: Vec<usize> = g
+            .order
+            .iter()
+            .copied()
+            .filter(|i| {
+                remaining.contains(i) && !g.children[*i].iter().any(|(c, _)| remaining.contains(c))
+            })
+            .collect();
+        if leaves.is_empty() {
+            // Real `node = tempgraph.order[0]` -- lowest-order remaining
+            // node in insertion order (the fallback only fires inside
+            // a ring, where every remaining node has a remaining child).
+            leaves = g
+                .order
+                .iter()
+                .copied()
+                .filter(|i| remaining.contains(i))
+                .take(1)
+                .collect();
+        }
+        for i in leaves {
+            remaining.remove(&i);
+            out.push(i);
+        }
+    }
+    out
+}
+
+/// The `medium_soft` rung of the satisfied range -- the filter real's
+/// cycle handler passes to `get_cycles`. (Kept as an accessor because
+/// `PriorityRange`/`SATISFIED` stay private to this module.)
+fn satisfied_medium_soft_rung() -> Option<Ignore> {
+    SATISFIED.ig_medium_soft()
+}
+
+/// Cycle report over a freshly built scheduling graph: all elementary
+/// cycles (entry indices) plus the reduced display order. The drain set
+/// is the cycle members plus everything transitively requiring them --
+/// real drains its whole stuck remainder (members plus everything left
+/// unscheduled downstream); portuale schedules everything, so the
+/// downstream cone is re-derived here from `required_by` (cp-level, like
+/// everywhere else). Built on demand -- callers only pay for it when a
+/// hard cycle was already reported (the only path that consumes either
+/// number). `top_level_atoms`/`root` feed `build_digraph` exactly as
+/// `serialize_merge_order` passes them.
+pub(crate) fn cycle_report(
+    entries: &[GraphEntry],
+    top_level_atoms: &[String],
+    root: &Path,
+) -> (Vec<Vec<usize>>, Vec<usize>) {
+    let g = build_digraph(entries, top_level_atoms, root);
+    let cycles = elementary_cycles(&g, satisfied_medium_soft_rung());
+    let members: HashSet<usize> = cycles.iter().flatten().copied().collect();
+    let mut cp_indices: HashMap<(&str, &str), Vec<usize>> = HashMap::new();
+    for (i, e) in entries.iter().enumerate() {
+        cp_indices
+            .entry((e.category.as_str(), e.package.as_str()))
+            .or_default()
+            .push(i);
+    }
+    let mut drain: HashSet<usize> = members.clone();
+    let mut stack: Vec<usize> = members.iter().copied().collect();
+    while let Some(i) = stack.pop() {
+        for owner in &entries[i].required_by {
+            if let Some(idxs) = cp_indices.get(&(owner.0.as_str(), owner.1.as_str())) {
+                for &j in idxs {
+                    if drain.insert(j) {
+                        stack.push(j);
+                    }
+                }
+            }
+        }
+    }
+    let display = reduced_merge_order(&g, &drain);
+    (cycles, display)
+}
+
 /// Returns the alive nodes in scheduling order (installed "nomerge"
 /// nodes included -- the caller drops them).
 fn select_nodes(g: &mut Digraph, entries: &[GraphEntry], root: &Path) -> Vec<usize> {
@@ -2526,5 +2706,137 @@ mod tests {
         // A brand-new node gets an appended index and starts isolated.
         fr.add_edge(2, None, &[]);
         assert!(fr.surv.len() > 2);
+    }
+
+    /// Cycle node sets, order-insensitive (rotations of one ring are
+    /// distinct records, like real).
+    fn cycle_sets(cycles: &[Vec<usize>]) -> Vec<Vec<usize>> {
+        let mut out: Vec<Vec<usize>> = cycles
+            .iter()
+            .map(|c| {
+                let mut s = c.clone();
+                s.sort_unstable();
+                s
+            })
+            .collect();
+        out.sort();
+        out.dedup();
+        out
+    }
+
+    #[test]
+    fn elementary_cycles_counts_rotations_like_real() {
+        // Square 0->1->2->3->0: one ring per node (rotations), four
+        // records -- the shape that trips real's `> 3` large-cycle
+        // advisory.
+        let square = test_graph(
+            4,
+            &[
+                (0, 1, prio(1)),
+                (1, 2, prio(1)),
+                (2, 3, prio(1)),
+                (3, 0, prio(1)),
+            ],
+        );
+        let cycles = elementary_cycles(&square, None);
+        assert_eq!(cycles.len(), 4);
+        for c in &cycles {
+            assert_eq!(c.len(), 4);
+        }
+        // Triangle: three rotations.
+        let tri = test_graph(3, &[(0, 1, prio(1)), (1, 2, prio(1)), (2, 0, prio(1))]);
+        assert_eq!(elementary_cycles(&tri, None).len(), 3);
+        // Acyclic diamond: none.
+        let dag = test_graph(
+            4,
+            &[
+                (0, 1, prio(1)),
+                (0, 2, prio(1)),
+                (1, 3, prio(1)),
+                (2, 3, prio(1)),
+            ],
+        );
+        assert!(elementary_cycles(&dag, None).is_empty());
+        // Self-loop: the singleton record, like real's
+        // shortest_path(x, x) == [x].
+        let slf = test_graph(1, &[(0, 0, prio(1))]);
+        assert_eq!(elementary_cycles(&slf, None), vec![vec![0]]);
+    }
+
+    #[test]
+    fn elementary_cycles_honors_the_survival_filter() {
+        // Same square, but the 1->2 edge is optional-only: under the
+        // satisfied medium_soft rung it drops out, breaking the ring.
+        let g = test_graph(
+            4,
+            &[
+                (0, 1, prio(1)),
+                (1, 2, prio(32)),
+                (2, 3, prio(1)),
+                (3, 0, prio(1)),
+            ],
+        );
+        assert_eq!(elementary_cycles(&g, None).len(), 4);
+        assert!(
+            elementary_cycles(&g, satisfied_medium_soft_rung()).is_empty(),
+            "a filter-dropped edge breaks every ring"
+        );
+    }
+
+    #[test]
+    fn elementary_cycles_keeps_every_tied_shortest_path() {
+        // 0->1, 0->2, 1->3, 2->3, 3->0: from 0 both children yield
+        // length-3 paths ([1,3,0] and [2,3,0]) -- both recorded. The
+        // other nodes contribute one each ([3,0,1], [3,0,2], and [0,1,3]
+        // from 3, whose BFS reaches 3 via 1 first in sorted order).
+        let g = test_graph(
+            4,
+            &[
+                (0, 1, prio(1)),
+                (0, 2, prio(1)),
+                (1, 3, prio(1)),
+                (2, 3, prio(1)),
+                (3, 0, prio(1)),
+            ],
+        );
+        let cycles = elementary_cycles(&g, None);
+        let from_zero: Vec<_> = cycles.iter().filter(|c| c.last() == Some(&0)).collect();
+        assert_eq!(from_zero.len(), 2, "both tied paths recorded: {cycles:?}");
+        assert_eq!(cycles.len(), 5);
+        assert_eq!(cycle_sets(&cycles).len(), 2);
+    }
+
+    #[test]
+    fn reduced_merge_order_drains_a_set_in_leaf_order() {
+        // Square with a downstream outsider (4, depending on 0), all in
+        // the drain set like real's stuck remainder: leaf-drain order,
+        // outsider with the rest.
+        let g = test_graph(
+            5,
+            &[
+                (0, 1, prio(1)),
+                (1, 2, prio(1)),
+                (2, 3, prio(1)),
+                (3, 0, prio(1)),
+                (4, 0, prio(1)),
+            ],
+        );
+        let drain: HashSet<usize> = [0, 1, 2, 3, 4].into_iter().collect();
+        let order = reduced_merge_order(&g, &drain);
+        assert_eq!(order.len(), 5);
+        assert_eq!(
+            order.iter().copied().collect::<HashSet<_>>(),
+            drain,
+            "the whole drain set, outsider included"
+        );
+        // Members-only drain: exactly the members.
+        let members: HashSet<usize> = [0, 1, 2, 3].into_iter().collect();
+        let order = reduced_merge_order(&g, &members);
+        assert_eq!(order.len(), 4);
+        assert_eq!(order.iter().copied().collect::<HashSet<_>>(), members);
+        // Chain: tail-first.
+        let chain = test_graph(4, &[(0, 1, prio(1)), (1, 2, prio(1)), (0, 3, prio(1))]);
+        let members: HashSet<usize> = [0, 1, 2, 3].into_iter().collect();
+        assert_eq!(reduced_merge_order(&chain, &members), vec![2, 3, 1, 0]);
     }
 }

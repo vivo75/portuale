@@ -11672,10 +11672,11 @@ fn merge_bound_cpv(entry: &GraphEntry) -> Option<String> {
 /// to start at its lowest `entries` index for a deterministic render;
 /// empty when the hard-edge graph is acyclic (every ordinary resolve).
 ///
-/// Documented cut vs real `_find_cycles`: no full elementary-cycle
-/// enumeration (`get_cycles`) and no `large_cycle_count` "lots of
-/// cycles" advisory -- `_prepare_circular_dep_message` only ever renders
-/// the single shortest cycle, which is all `pretend.rs` needs.
+/// Full elementary-cycle enumeration lives separately
+/// (`merge_order::elementary_cycles`, real `digraph.get_cycles` over the
+/// `medium_soft` rung) and feeds only `large_cycle_count` and the
+/// cycle-only re-display -- this stays the short hard ring the message
+/// and the suggestions render.
 fn find_hard_cycles(entries: &[GraphEntry], edge_kind_map: &EdgeKindMap) -> Vec<Vec<String>> {
     // Merge-bound entries only, lowest index per cp (the merge list is
     // already in dependency order, so the first is the one to start a
@@ -13065,6 +13066,27 @@ pub struct GraphResult {
     /// renders `_show_circular_deps`'s block and exits 1 when this is
     /// non-empty. Empty in every ordinary resolve.
     pub circular_deps: Vec<Vec<String>>,
+    /// Real `circular_dependency_handler.large_cycle_count`: the full
+    /// elementary-cycle enumeration (`merge_order::cycle_report`, real
+    /// `digraph.get_cycles` over the `medium_soft` rung) counted more
+    /// than three records. The renderer prints real's "the dependency
+    /// graph contains a lot of cycles" trailer when this is set *and* a
+    /// concrete `Change USE:` suggestion is shown (real only reaches the
+    /// trailer inside the suggestions branch). Computed only when a hard
+    /// cycle was already reported (the only path that consumes it).
+    pub large_cycle_count: bool,
+    /// Real `circular_dependency_handler.merge_list`: the stuck-remainder
+    /// members in leaf-drain order (`merge_order::reduced_merge_order`
+    /// over cycle members plus their transitive requirers), as
+    /// `cat/pkg-version` CPVs, merge-bound members only (installed and
+    /// unresolvable entries have no merge line to re-display). The
+    /// renderer re-displays these as flat merge lines between the merge
+    /// list and the `* Error: circular dependencies:` block -- real's
+    /// cycle-only `--tree` re-display minus the tree nesting (portuale's
+    /// tree model dedups shared nodes by design, so it cannot duplicate
+    /// a package under two parents the way real's ordered tree does;
+    /// isolating *which* packages is what's ported).
+    pub cycle_display: Vec<String>,
     /// Masked-only dependency disclosures (real `_show_unsatisfied_dep`'s
     /// "All ebuilds that could satisfy … have been masked" block for a
     /// *dependency* atom): one per dependency `NoVisibleCandidate` entry
@@ -16716,6 +16738,22 @@ fn backtracking_resolve(req: &ResolveRequest) -> Result<GraphResult, Error> {
         // `* Error: circular dependencies:` block.
         let circular_deps = find_hard_cycles(&entries, &edge_kind_map);
 
+        // Elementary-cycle enumeration + reduced display order for the
+        // `large_cycle_count` trailer and the cycle-only re-display
+        // (real `circular_dependency_handler`, fed by `get_cycles` over
+        // the `medium_soft` rung). Built on demand: only a reported hard
+        // cycle consumes either number, so acyclic resolves pay nothing.
+        let (large_cycle_count, cycle_display) = if circular_deps.is_empty() {
+            (false, Vec::new())
+        } else {
+            let (cycles, display) = merge_order::cycle_report(&entries, atoms, root);
+            let display = display
+                .into_iter()
+                .filter_map(|i| merge_bound_cpv(&entries[i]))
+                .collect();
+            (cycles.len() > 3, display)
+        };
+
         // Backtracking slice: the `--autounmask-use` changes recorded
         // during the already-resolved-slot re-check (see
         // `autounmask_use_change_records`) -- the graph has settled with
@@ -16815,6 +16853,8 @@ fn backtracking_resolve(req: &ResolveRequest) -> Result<GraphResult, Error> {
             abi_rebuilds,
             circular_deps,
             masked_deps,
+            large_cycle_count,
+            cycle_display,
         });
     }
 }
@@ -24545,6 +24585,46 @@ mod tests {
         assert_eq!(v[0].conflicting_atom, "atom-2");
         record_slot_conflict(&mut v, mk("atom-3", "1.5"));
         assert_eq!(v.len(), 2);
+    }
+
+    #[test]
+    fn large_cycle_count_and_display_fire_on_a_four_ring() {
+        // dev-libs/cyc4a through dev-libs/cyc4d form a four-ring of
+        // build-time deps (the cyc4a edge gated behind USE=x, on by
+        // default): real `get_cycles` records one ring per node, so four
+        // records trip `large_cycle_count`, and the stuck remainder
+        // re-displays all four members in leaf-drain order.
+        let result = graph_result_real("dev-libs/cyc4a");
+        assert_eq!(result.circular_deps.len(), 1);
+        assert!(
+            result.large_cycle_count,
+            "four rotations must trip the trailer"
+        );
+        let mut display = result.cycle_display.clone();
+        display.sort();
+        assert_eq!(
+            display,
+            vec![
+                "dev-libs/cyc4a-1.0".to_string(),
+                "dev-libs/cyc4b-1.0".to_string(),
+                "dev-libs/cyc4c-1.0".to_string(),
+                "dev-libs/cyc4d-1.0".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn small_cycles_report_without_large_count_or_display() {
+        // Control: the two-ring reports its error block but neither the
+        // trailer (two records) nor ... -- well, the re-display still
+        // shows (two members); only `large_cycle_count` stays false.
+        let result = graph_result_real("dev-libs/hardcyclea");
+        assert_eq!(result.circular_deps.len(), 1);
+        assert!(
+            !result.large_cycle_count,
+            "two rotations must not trip the trailer"
+        );
+        assert_eq!(result.cycle_display.len(), 2);
     }
 
     #[test]

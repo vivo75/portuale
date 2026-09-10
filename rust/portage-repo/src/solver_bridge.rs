@@ -713,6 +713,19 @@ fn graph_result_from_order(
         }
     }
     let circular_deps = super::find_hard_cycles(&entries, &edge_kinds);
+    // Elementary-cycle enumeration for the `large_cycle_count` trailer
+    // and cycle-only re-display, same as the walk path: only a reported
+    // hard cycle pays for the report build.
+    let (large_cycle_count, cycle_display) = if circular_deps.is_empty() {
+        (false, Vec::new())
+    } else {
+        let (cycles, display) = super::merge_order::cycle_report(&entries, &req.atoms, &req.root);
+        let display = display
+            .into_iter()
+            .filter_map(|i| super::merge_bound_cpv(&entries[i]))
+            .collect();
+        (cycles.len() > 3, display)
+    };
     GraphResult {
         entries,
         slot_conflicts: Vec::new(),
@@ -725,6 +738,8 @@ fn graph_result_from_order(
         autounmask_mask_changes: Vec::new(),
         abi_rebuilds,
         circular_deps,
+        large_cycle_count,
+        cycle_display,
         // The engine backends never leave an installed-consumer pin
         // behind (a solved plan admits no same-slot divergence and no
         // relaxation loop ran), so there is nothing to disclose here --

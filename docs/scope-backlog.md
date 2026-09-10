@@ -143,10 +143,17 @@ can't grow into these incrementally:
   - instance display order (resolved-first vs real's arbitrary
     set-iteration order -- pre-existing, no semantic content).
 - **Circular-dep's remaining cuts** — full elementary-cycle enumeration /
-  `large_cycle_count` (real's own richer multi-priority digraph, a
-  different graph representation than portuale keeps) and the cycle-only
-  `--tree` re-display (needs that same digraph fed through the entire
-  `--tree` renderer). The *conditional* `followup_change` grandparent
+  `large_cycle_count` **shipped 2026-09-10** (`merge_order.rs` ports of
+  `digraph.get_cycles` + `_prepare_reduced_merge_list` over the
+  scheduling graph, dual-language: `> 3` records fire the "lot of
+  cycles" trailer with suggestions, and the cycle members re-display as
+  their own flat list between the merge list and the error block;
+  `dev-libs/cyc4a`–`cyc4d` four-ring fixture, verified live against real
+  3.0.82.2; see `what-this-proves.md`). Still cut: the tree *nesting*
+  (`[nomerge]` marking, node duplication -- portuale's tree model
+  dedups by design), the partial flat list + cumulative counters (needs
+  #19's abandon path), and backtrack-masking members out of the cycle.
+  The *conditional* `followup_change` grandparent
   variant has a fixture now (`dev-libs/fucyclea`/`fucycleb`/`fucyclec`,
   see `what-this-proves.md`); the *hard*-clash case has had one since
   2026-09-05.

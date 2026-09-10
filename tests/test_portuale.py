@@ -481,6 +481,9 @@ def test_solver_pubgrub_reports_the_unbreakable_build_time_cycle(emerge_binary, 
     expected_stdout = (
         "[ebuild  N     ] dev-libs/hardcyclea-1.0 \n"
         "[ebuild  N     ] dev-libs/hardcycleb-1.0 \n"
+        "\n"
+        "[ebuild  N     ] dev-libs/hardcyclea-1.0 \n"
+        "[ebuild  N     ] dev-libs/hardcycleb-1.0 \n"
     )
     expected_stderr = (
         "\n * Error: circular dependencies:\n"

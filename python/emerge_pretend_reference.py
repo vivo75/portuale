@@ -9947,6 +9947,112 @@ def _merge_bound_cpv(entry):
     return f"{entry[0]}/{entry[1]}-{version}"
 
 
+def _elementary_cycles(g, ig):
+    """Port of real portage.util.digraph.get_cycles (+ shortest_path +
+    bfs): every node's shortest child-to-node paths (all ties), each a
+    recorded cycle. Real feeds this the stuck remainder with the
+    medium_soft rung and counts the records (large_cycle_count =
+    len(cycles) > 3); rotations of one ring count separately. Only the
+    count and the member union are consumed downstream, so traversal
+    order is fixed (sorted indices) for determinism -- real keeps every
+    tie, which makes its result set order-independent too. Mirrors
+    portage-repo/src/merge_order.rs's elementary_cycles exactly."""
+
+    def _survives(prios):
+        return ig is None or any(not ig(p) for p in prios)
+
+    def _shortest_path(start, end):
+        paths = {}
+        queue = deque([(None, start)])
+        enqueued = {start}
+        while queue:
+            parent, n = queue.popleft()
+            path = [] if parent is None else list(paths[parent])
+            path.append(n)
+            paths[n] = path
+            if n == end:
+                return paths[end]
+            fresh = sorted(
+                c
+                for c, prios in g.children[n]
+                if c not in enqueued and _survives(prios)
+            )
+            for c in fresh:
+                enqueued.add(c)
+                queue.append((n, c))
+        return None
+
+    all_cycles = []
+    for node in g.order:
+        min_len = None
+        cands = []
+        for child, prios in g.children[node]:
+            if not _survives(prios):
+                continue
+            path = _shortest_path(child, node)
+            if path is None:
+                continue
+            if min_len is None or len(path) <= min_len:
+                if min_len is None or len(path) < min_len:
+                    min_len = len(path)
+                cands.append(path)
+        if min_len is not None:
+            all_cycles.extend(p for p in cands if len(p) == min_len)
+    return all_cycles
+
+
+def _reduced_merge_order(g, drain):
+    """Port of real circular_dependency_handler._prepare_reduced_merge_list
+    over an explicit drain set: leaf-drain (no filter, like real's plain
+    leaf_nodes()), falling back to the lowest-order remaining node when
+    nothing is a leaf. Real drains its whole stuck remainder; the caller
+    passes members plus transitive requirers (see _cycle_report). A
+    drained child frees its parents. Mirrors
+    portage-repo/src/merge_order.rs's reduced_merge_order exactly."""
+    remaining = set(drain)
+    out = []
+    while remaining:
+        leaves = [
+            i
+            for i in g.order
+            if i in remaining
+            and not any(c in remaining for c, _ in g.children[i])
+        ]
+        if not leaves:
+            leaves = [i for i in g.order if i in remaining][:1]
+        for i in leaves:
+            remaining.discard(i)
+            out.append(i)
+    return out
+
+
+def _cycle_report(entries, top_level_atoms, root):
+    """Cycle report over a freshly built scheduling graph: all elementary
+    cycles plus the reduced display order, both as entry indices. The
+    drain set is the cycle members plus everything transitively
+    requiring them (real's stuck remainder: members plus everything left
+    unscheduled downstream). Built on demand -- callers only pay for it
+    when a hard cycle was already reported. Mirrors
+    portage-repo/src/merge_order.rs's cycle_report exactly."""
+    g = _build_merge_digraph(entries, top_level_atoms, root)
+    medium_soft = _SATISFIED_RANGE["ignore"][_SATISFIED_RANGE["medium_soft"]]
+    cycles = _elementary_cycles(g, medium_soft)
+    members = {i for c in cycles for i in c}
+    by_cp = {}
+    for i, e in enumerate(entries):
+        by_cp.setdefault((e[0], e[1]), []).append(i)
+    drain = set(members)
+    stack = list(members)
+    while stack:
+        i = stack.pop()
+        for owner in entries[i][6]:
+            for j in by_cp.get(owner, []):
+                if j not in drain:
+                    drain.add(j)
+                    stack.append(j)
+    return cycles, _reduced_merge_order(g, drain)
+
+
 def _find_hard_cycles(entries, edge_kind_map):
     """The shortest unbreakable dependency cycle among the merge-bound
     entries -- real circular_dependency_handler._find_cycles +
@@ -12652,6 +12758,24 @@ def resolve_pretend_graph(
             entries, _rep["category"], _rep["package"], atoms, root, repos
         )
 
+    # Elementary-cycle enumeration for the large_cycle_count trailer
+    # and the cycle-only re-display (real circular_dependency_handler,
+    # fed by get_cycles over the medium_soft rung). Built on demand:
+    # only a reported hard cycle consumes either number. Mirrors
+    # portage-repo/src/lib.rs.
+    _hard_cycles = _find_hard_cycles(entries, edge_kind_map)
+    if _hard_cycles:
+        _enum_cycles, _display_idx = _cycle_report(entries, atoms, root)
+        _large_cycle_count = len(_enum_cycles) > 3
+        _cycle_display = []
+        for _i in _display_idx:
+            _cpv = _merge_bound_cpv(entries[_i])
+            if _cpv is not None:
+                _cycle_display.append(_cpv)
+    else:
+        _large_cycle_count = False
+        _cycle_display = []
+
     return {
         "entries": entries,
         "slot_conflicts": slot_conflicts
@@ -12674,7 +12798,10 @@ def resolve_pretend_graph(
         # Real _serialize_tasks -> _show_circular_deps: an unbreakable
         # build-time dependency cycle. See portage-repo/src/lib.rs's
         # GraphResult::circular_deps.
-        "circular_deps": _find_hard_cycles(entries, edge_kind_map),
+        "circular_deps": _hard_cycles,
+        # Real circular_dependency_handler.large_cycle_count + merge_list.
+        "large_cycle_count": _large_cycle_count,
+        "cycle_display": _cycle_display,
     }
 
 
@@ -20760,6 +20887,25 @@ def run(args):
         print()
         print(_package_counters_summary(entries, top_level_pkgs, onlydeps, color))
 
+    # Real _show_circular_deps' cycle-only re-display
+    # (display(handler.merge_list) with --verbose --tree forced): the
+    # stuck remainder isolated as its own list between the merge list and
+    # the error block. This reference re-displays result["cycle_display"]
+    # (cycle members plus their transitive requirers, leaf-drain order)
+    # as flat merge lines -- no tree nesting or [nomerge] marking (the
+    # tree model dedups shared nodes by design and never abandons the
+    # list, so there is no partial scheduler state to show); isolating
+    # *which* packages is what's ported. Mirrors pretend.rs.
+    if show_merge_list and result["cycle_display"]:
+        print()
+        for cpv in result["cycle_display"]:
+            entry = next(
+                (e for e in result["entries"] if _merge_bound_cpv(e) == cpv),
+                None,
+            )
+            if entry is not None:
+                print_entry_line(entry, "")
+
     # Real depgraph._show_slot_collision_notice -> slot_conflict_handler.
     # get_conflict() (lib/_emerge/resolver/slot_collision.py): the
     # "!!! Multiple package instances within a single package slot ..."
@@ -21405,12 +21551,15 @@ def run(args):
 
     # Real _serialize_tasks -> _show_circular_deps (depgraph.py:10425): an
     # unbreakable build-time dependency cycle -- printed to stderr after
-    # the merge list, then the action fails (exit 1). Faithful
-    # transcription of _show_circular_deps's writemsg sequence, minus the
-    # reduced cycle-only --tree re-display (+ its leading "\n\n") and
-    # large_cycle_count (needs full cycle enumeration). Every cycle edge is
-    # build-time by construction, so every priority label is "(buildtime)".
-    # Mirrors pretend.rs.
+    # the merge list, then the action fails (exit 1). The reduced
+    # cycle-only re-display (real's display(handler.merge_list)) prints
+    # above, between the merge list and this block -- flat lines, since
+    # this reference's tree model dedups shared nodes and never abandons
+    # the list. Faithful transcription of _show_circular_deps's writemsg
+    # sequence, plus the large_cycle_count trailer (shown only with a
+    # concrete suggestion, like real). Every cycle edge is build-time by
+    # construction, so every priority label is "(buildtime)". Mirrors
+    # pretend.rs.
     if result["circular_deps"]:
         cycle = result["circular_deps"][0]
         prefix = color.c("BAD", " * ")
@@ -21454,6 +21603,15 @@ def run(args):
             sys.stderr.write(
                 "\nNote that this change can be reverted, once the package has been installed.\n"
             )
+            # Real circular_dependency_handler.large_cycle_count: shown
+            # only with a concrete suggestion, like real. Mirrors
+            # pretend.rs.
+            if result["large_cycle_count"]:
+                sys.stderr.write(
+                    "\nNote that the dependency graph contains a lot of cycles.\n"
+                    "Several changes might be required to resolve all cycles.\n"
+                    "Temporarily changing some use flag for all packages might be the better option.\n"
+                )
         return 1
 
     return 0

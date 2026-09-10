@@ -10557,6 +10557,57 @@ pub fn run(args: &[String]) -> ExitCode {
         );
     }
 
+    // Real `_show_circular_deps`' cycle-only re-display
+    // (`self.display(handler.merge_list)` with `--verbose --tree`
+    // forced): the stuck remainder isolated as its own list between the
+    // merge list and the error block. Portuale re-displays
+    // `result.cycle_display` (cycle members plus their transitive
+    // requirers, leaf-drain order) as flat merge lines -- no tree
+    // nesting or `[nomerge]` marking (portuale's tree model dedups
+    // shared nodes by design and never abandons the merge list, so
+    // there is no partial scheduler state to show); isolating *which*
+    // packages is what's ported. A throwaway blocker sink keeps
+    // re-displayed blocker owners from doubling the collected lines.
+    // Non-empty exactly when a hard cycle was reported (the driver only
+    // builds the display then), so no extra gating is needed.
+    if show_merge_list && !result.cycle_display.is_empty() {
+        println!();
+        let mut thrown_away: Vec<String> = Vec::new();
+        for cpv in &result.cycle_display {
+            let Some(entry) = entries.iter().find(|e| {
+                let ver = match &e.outcome {
+                    portage_repo::PretendOutcome::New { version }
+                    | portage_repo::PretendOutcome::Reinstall { version, .. } => version,
+                    portage_repo::PretendOutcome::Upgrade { to, .. }
+                    | portage_repo::PretendOutcome::Downgrade { to, .. } => to,
+                    _ => return false,
+                };
+                format!("{}/{}-{ver}", e.category, e.package) == *cpv
+            }) else {
+                continue;
+            };
+            print_entry_line(
+                entry,
+                "",
+                &top_level_pkgs,
+                onlydeps,
+                oneshot,
+                verbose,
+                quiet,
+                alphabetical,
+                columns,
+                columnwidth,
+                root_deps_running_root.as_deref(),
+                &color,
+                system_atoms,
+                &world_atoms,
+                &force_reinstall_cps,
+                &mut thrown_away,
+                &result.masked_deps,
+            );
+        }
+    }
+
     // Real `depgraph._show_slot_collision_notice` -> `slot_conflict_handler.
     // get_conflict()` (`lib/_emerge/resolver/slot_collision.py`): the
     // `!!! Multiple package instances within a single package slot ...`
@@ -11266,12 +11317,13 @@ pub fn run(args: &[String]) -> ExitCode {
     // pretend or not -- real portage never proceeds to build a cycle.
     //
     // Faithful transcription of `_show_circular_deps`'s `writemsg`
-    // sequence, with two documented cuts: (1) the reduced cycle-only
-    // `--tree` re-display (`self.display(handler.merge_list)`) and its
-    // leading `\n\n` separator -- the full merge list is already above;
-    // (2) the `large_cycle_count` "a lot of cycles" trailer, which needs
-    // full elementary-cycle enumeration (portuale keeps one cycle, so it
-    // never fires). The `Change USE:` suggestion branch itself is shipped
+    // sequence: the reduced cycle-only re-display
+    // (`self.display(handler.merge_list)`, printed above between the
+    // merge list and this block -- flat portuale lines, since portuale's
+    // tree model dedups shared nodes and never abandons the list) and
+    // the `large_cycle_count` "a lot of cycles" trailer below (shown
+    // only with a concrete suggestion, like real). The `Change USE:`
+    // suggestion branch itself is shipped
     // (`portage_repo::circular_dep_solutions`, real
     // `circular_dependency_handler._find_suggestions`): fixtures
     // `usecyclea` (bare suggestion), `gpcyclec` (hard grandparent clash
@@ -11301,9 +11353,8 @@ pub fn run(args: &[String]) -> ExitCode {
         // `circular_dependency_handler._find_suggestions` turns up a
         // concrete `Change USE:` fix, print it instead of the generic
         // advisory. `+flag` red / `-flag` blue / `any of` bold, exactly as
-        // real `colorize`s them. `large_cycle_count` (the "a lot of
-        // cycles" trailer) needs full cycle enumeration -- a separate cut,
-        // so it never fires here.
+        // real `colorize`s them. The `large_cycle_count` trailer below
+        // fires on the same branch real gates it on (suggestions shown).
         let suggestions = portage_repo::circular_dep_solutions(
             cycle,
             &repos,
@@ -11346,6 +11397,17 @@ pub fn run(args: &[String]) -> ExitCode {
             eprintln!(
                 "\nNote that this change can be reverted, once the package has been installed."
             );
+            // Real `circular_dependency_handler.large_cycle_count`
+            // (`depgraph.py:10458`): shown only with a concrete
+            // suggestion, like real (the trailer lives inside its
+            // `if suggestions:` branch).
+            if result.large_cycle_count {
+                eprint!(
+                    "\nNote that the dependency graph contains a lot of cycles.\n\
+                     Several changes might be required to resolve all cycles.\n\
+                     Temporarily changing some use flag for all packages might be the better option.\n"
+                );
+            }
         }
         return ExitCode::from(1);
     }
