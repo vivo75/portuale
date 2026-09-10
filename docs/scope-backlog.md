@@ -173,9 +173,14 @@ can't grow into these incrementally:
   before the selection loop, os-headers first). `--implicit-system-deps=n`
   **shipped** (the `_merge_order_bias` early return, threaded
   CLI → `ResolveRequest` → `serialize_merge_order` on both sides; see
-  `what-this-proves.md`). Still open: the `_FrontierDigraph` perf layer
-  and blocker/uninstall interleaving (a `--pretend` merge graph has no
-  uninstall nodes to interleave).
+  `what-this-proves.md`). The `_FrontierDigraph` perf layer **shipped
+  2026-09-10** (`merge_order.rs::SerializeFrontier`: per-node/per-filter
+  surviving-child counts + per-filter ready heaps, wired into the hot
+  leaf queries, `PORTAGE_SERIALIZE_FRONTIER_DISABLE` falling back to
+  plain scans; pure perf, no behaviour change -- see
+  `what-this-proves.md` for the numbers). Still open: blocker/uninstall
+  interleaving (a `--pretend` merge graph has no uninstall nodes to
+  interleave).
 - **`_complete_graph` as graph *nodes*.** Its reverse-dependency
   **atoms** shipped 2026-09-07 (`reverse_dependency_constraints` — a vdb
   reverse scan fed into the `'backtrack` loop's `slot_constraints`,

@@ -27,8 +27,19 @@
 //! own graph down before scheduling ("Prune 'nomerge' root nodes if
 //! nothing depends on them", `depgraph.py:9509-9518`), and re-running
 //! the algorithm on just the closure yields the identical merge list.
+//!
+//! The selection loop runs over an incrementally-maintained leaf
+//! frontier (`SerializeFrontier` below, a port of real
+//! `_emerge/_serialize_frontier.py`): per-node, per-filter
+//! surviving-child counts plus per-filter ready heaps, so each ladder
+//! rung enumerates its leaves without an O(V+E) scan and each removal
+//! only decrements its parents. `PORTAGE_SERIALIZE_FRONTIER_DISABLE`
+//! falls back to the plain scans (real's own escape hatch). Pure
+//! plumbing: leaf sets, order, and every downstream decision are
+//! identical with the frontier on or off (pinned by unit tests).
 
-use std::collections::{HashMap, HashSet};
+use std::cmp::Reverse;
+use std::collections::{BinaryHeap, HashMap, HashSet};
 use std::path::Path;
 
 use crate::{
@@ -507,6 +518,326 @@ impl Digraph {
         }
         self.children[parent].push((child, vec![priority]));
         self.parents[child].push(parent);
+    }
+}
+
+// ---------------------------------------------------------------------
+// the leaf frontier (real `_emerge/_serialize_frontier.py`)
+// ---------------------------------------------------------------------
+
+/*
+ * Incrementally-maintained leaf frontier for the `select_nodes` loop,
+ * a port of real `_emerge/_serialize_frontier.py` (`_SerializeFrontier`;
+ * the `_FrontierDigraph` wrapper subclass has no portuale equivalent
+ * because removals here go through the one `alive[i] = false` site in
+ * `select_nodes`, which notifies the frontier explicitly instead).
+ *
+ * The selection loop used to ask `Digraph::leaf_nodes` which nodes are
+ * leaves under an `ignore_priority` filter on every ladder rung of every
+ * iteration -- one O(V+E) scan per query. The frontier keeps, per node
+ * and per filter level, a count of how many children have an edge
+ * surviving that level's filter; the node is a leaf under level L iff
+ * its count for L is zero. Removing a node decrements its parents'
+ * counts; each level owns a min-heap of order-indices of its current
+ * leaves, so leaves enumerate in `order` without a walk. Heaps use lazy
+ * deletion: an entry is valid iff the node is still alive and still a
+ * leaf under the level.
+ *
+ * Two deliberate narrowings vs real, both forced by portuale's model:
+ * nodes here are dense `usize` indices (not opaque `Package` objects),
+ * so counts/index maps are `Vec`s, and nothing is ever re-added -- the
+ * loop only ever clears `alive` -- so there is no `_assign_index` fresh
+ * path and no index-identity check on pop (an order-index is assigned
+ * once at build and never changes; `order.retain` preserves relative
+ * order, so heap order and scan order agree by construction).
+ * `add_edge` below exists for parity with real's mutation surface and
+ * is pinned by its own unit test; the selection loop never calls it
+ * (real only grows the graph mid-loop for uninstall reversal and
+ * blocker edges, and a `--pretend` merge graph has neither -- see the
+ * scope-backlog entry for this slice).
+ */
+
+/// Real `_SerializeFrontier`: per-node, per-level surviving-child counts
+/// plus per-level ready heaps. A node is a leaf under level L iff
+/// `surv[node][L] == 0`.
+struct SerializeFrontier {
+    /// Level -> filter (`None` at level 0: a leaf iff it has no children
+    /// at all). The deduped union of both `PriorityRange` ladders, so
+    /// every filter the loop can ask about has a level.
+    levels: Vec<Option<Ignore>>,
+    /// Per-node surviving-child count per level.
+    surv: Vec<Vec<u32>>,
+    /// `(parent, child)` -> survival bitmask over levels.
+    edge_mask: HashMap<(usize, usize), u64>,
+    /// Node -> order-index; order-index -> node. Assigned once at build
+    /// from `order`; never changes afterwards.
+    index: Vec<usize>,
+    by_index: Vec<usize>,
+    /// Per-level min-heap of order-indices currently believed leaf.
+    ready: Vec<BinaryHeap<Reverse<usize>>>,
+}
+
+impl SerializeFrontier {
+    /// The filter union both ladders query: `None` first, then every
+    /// rung of `NORMAL` and `SATISFIED` in ladder order, deduplicated by
+    /// function identity (real deduplicates by object identity too).
+    /// Textually identical rungs share a level when the toolchain folds
+    /// them to one address (observed: the two `p.optional` rungs) --
+    /// behavior-preserving, since identical bodies filter identically
+    /// and every consumer only ever asks "leaves under filter F".
+    ///
+    /// On the `unpredictable_function_pointer_comparisons` lint this
+    /// relies on below: a conflated level still computes the exact same
+    /// leaf sets for the reason above, and every consumer only ever asks
+    /// "leaves under filter F", never "which level index". The only
+    /// observable would be fewer internal levels, which no output
+    /// depends on (and the equivalence tests pin the leaf sets, not the
+    /// level count).
+    #[allow(unpredictable_function_pointer_comparisons)]
+    fn build_levels() -> Vec<Option<Ignore>> {
+        let mut levels: Vec<Option<Ignore>> = vec![None];
+        for f in NORMAL
+            .ignore
+            .iter()
+            .chain(SATISFIED.ignore.iter())
+            .copied()
+            .flatten()
+        {
+            if !levels.contains(&Some(f)) {
+                levels.push(Some(f));
+            }
+        }
+        levels
+    }
+
+    fn build(g: &Digraph) -> Self {
+        let levels = Self::build_levels();
+        debug_assert!(levels.len() <= 64, "edge masks are u64");
+        let nlevels = levels.len();
+        let n = g.n;
+        let mut index = vec![0usize; n];
+        let mut by_index = vec![0usize; g.order.len()];
+        for (pos, &node) in g.order.iter().enumerate() {
+            index[node] = pos;
+            by_index[pos] = node;
+        }
+        let mut edge_mask: HashMap<(usize, usize), u64> = HashMap::new();
+        let mut surv = vec![vec![0u32; nlevels]; n];
+        for &node in &g.order {
+            for (child, prios) in &g.children[node] {
+                let mask = Self::compute_mask(&levels, prios);
+                edge_mask.insert((node, *child), mask);
+                let mut m = mask;
+                while m != 0 {
+                    let l = m.trailing_zeros() as usize;
+                    surv[node][l] += 1;
+                    m &= m - 1;
+                }
+            }
+        }
+        // Seed each level's ready heap with its initial leaves, in
+        // order-index order -- ascending pushes need no heapify.
+        let mut ready: Vec<BinaryHeap<Reverse<usize>>> =
+            (0..nlevels).map(|_| BinaryHeap::new()).collect();
+        for &node in &g.order {
+            let idx = index[node];
+            for l in 0..nlevels {
+                if surv[node][l] == 0 {
+                    ready[l].push(Reverse(idx));
+                }
+            }
+        }
+        Self {
+            levels,
+            surv,
+            edge_mask,
+            index,
+            by_index,
+            ready,
+        }
+    }
+
+    /// Bitmask of the levels whose filter an edge with `prios`
+    /// survives. Level 0 (`None`) is always set; for level L > 0 the
+    /// edge survives iff some priority passes the filter -- exactly
+    /// `Digraph::is_leaf`'s per-edge test, as in real `_compute_mask`.
+    fn compute_mask(levels: &[Option<Ignore>], prios: &[DepPriority]) -> u64 {
+        let mut mask = 1u64;
+        for (l, f) in levels.iter().enumerate().skip(1) {
+            let f = f.expect("levels past 0 always hold a filter");
+            if prios.iter().any(|p| !f(p)) {
+                mask |= 1 << l;
+            }
+        }
+        mask
+    }
+
+    /// Level index for a filter, or `None` if untracked (every filter
+    /// the loop uses is tracked; the fallback is defensive, mirroring
+    /// real's `level_of` returning `None`). See `build_levels` on why
+    /// pointer comparison is sound here.
+    #[allow(unpredictable_function_pointer_comparisons)]
+    fn level_of(&self, ig: Option<Ignore>) -> Option<usize> {
+        self.levels.iter().position(|&f| f == ig)
+    }
+
+    fn is_leaf(&self, node: usize, level: usize) -> bool {
+        self.surv.get(node).is_some_and(|counts| counts[level] == 0)
+    }
+
+    /// The alive leaves under `level`, in `order` sequence -- the
+    /// frontier equivalent of `Digraph::leaf_nodes`. Drains the level's
+    /// heap, discarding stale entries (dead nodes and nodes that
+    /// stopped being leaves), and rebuilds it from the survivors;
+    /// entries pop in ascending order-index order, so the result is in
+    /// `order` and the rebuilt heap needs no heapify. `alive` is the
+    /// graph's liveness vector (nodes are never deleted here, only
+    /// flagged, unlike real's dict-keyed graph).
+    fn ready_nodes(&mut self, level: usize, alive: &[bool]) -> Vec<usize> {
+        let mut result: Vec<usize> = Vec::new();
+        let mut seen: HashSet<usize> = HashSet::new();
+        while let Some(Reverse(idx)) = self.ready[level].pop() {
+            if !seen.insert(idx) {
+                continue;
+            }
+            let Some(&node) = self.by_index.get(idx) else {
+                continue;
+            };
+            if !alive.get(node).copied().unwrap_or(false) {
+                continue;
+            }
+            if !self.is_leaf(node, level) {
+                continue;
+            }
+            result.push(node);
+        }
+        self.ready[level] = BinaryHeap::from(
+            result
+                .iter()
+                .map(|&node| Reverse(self.index[node]))
+                .collect::<Vec<_>>(),
+        );
+        result
+    }
+
+    /// Account for `node` leaving the graph. `children`/`parents` are
+    /// its adjacency as it stands (only the adjacency and the masks
+    /// matter here, so call before or after flipping `alive`). Each
+    /// removed edge decrements the parent's per-level counts wherever
+    /// the edge had survived; a count hitting zero pushes the parent's
+    /// index (lazily validated on pop). A removed node's own counts are
+    /// poisoned so `is_leaf` stays false for it, mirroring real's
+    /// `surv.pop`.
+    fn remove(&mut self, node: usize, children: &[(usize, Vec<DepPriority>)], parents: &[usize]) {
+        for &parent in parents {
+            let Some(mask) = self.edge_mask.remove(&(parent, node)) else {
+                continue;
+            };
+            let Some(pcounts) = self.surv.get_mut(parent) else {
+                continue;
+            };
+            let Some(&pidx) = self.index.get(parent) else {
+                continue;
+            };
+            let mut m = mask;
+            while m != 0 {
+                let l = m.trailing_zeros() as usize;
+                pcounts[l] = pcounts[l].saturating_sub(1);
+                if pcounts[l] == 0 {
+                    self.ready[l].push(Reverse(pidx));
+                }
+                m &= m - 1;
+            }
+        }
+        for (child, _) in children {
+            self.edge_mask.remove(&(node, *child));
+        }
+        if let Some(counts) = self.surv.get_mut(node) {
+            counts.fill(u32::MAX);
+        }
+    }
+
+    /// Account for `digraph.add(node, parent, priority)`: an edge from
+    /// `parent` to `node` whose priority list just grew to `priorities`.
+    /// Adding a priority only makes an edge survive more levels, so the
+    /// parent's counts only increase; a parent leaving a level's ready
+    /// set is handled lazily on pop. Not exercised by the selection
+    /// loop (which never adds edges); pinned by unit test for parity
+    /// with real's mutation surface.
+    #[allow(dead_code)]
+    fn add_edge(&mut self, node: usize, parent: Option<usize>, priorities: &[DepPriority]) {
+        let ensure = |slf: &mut Self, n: usize| {
+            if n >= slf.surv.len() {
+                let idx = slf.by_index.len();
+                slf.by_index.push(n);
+                slf.index.resize(n + 1, 0);
+                slf.index[n] = idx;
+                slf.surv.resize(n + 1, vec![0u32; slf.levels.len()]);
+                for heap in slf.ready.iter_mut() {
+                    heap.push(Reverse(idx));
+                }
+            }
+        };
+        ensure(self, node);
+        let Some(parent) = parent else { return };
+        ensure(self, parent);
+        let new_mask = Self::compute_mask(&self.levels, priorities);
+        let old_mask = self.edge_mask.get(&(parent, node)).copied().unwrap_or(0);
+        if new_mask == old_mask {
+            return;
+        }
+        self.edge_mask.insert((parent, node), new_mask);
+        let mut delta = new_mask & !old_mask;
+        while delta != 0 {
+            let l = delta.trailing_zeros() as usize;
+            self.surv[parent][l] += 1;
+            delta &= delta - 1;
+        }
+    }
+}
+
+/// Real `PORTAGE_SERIALIZE_FRONTIER_DISABLE`: fall back to the plain
+/// `leaf_nodes()`/`is_leaf()` scans (frontier never built). An escape
+/// hatch for debugging and for A/B perf comparison, same as upstream.
+fn frontier_enabled() -> bool {
+    std::env::var_os("PORTAGE_SERIALIZE_FRONTIER_DISABLE").is_none()
+}
+
+/// `Digraph::leaf_nodes` through the frontier when built, plain scan
+/// otherwise. The two agree by construction (same order, same filter);
+/// the equivalence unit tests pin it.
+fn leaves_via(
+    frontier: Option<&mut SerializeFrontier>,
+    g: &Digraph,
+    ig: Option<Ignore>,
+) -> Vec<usize> {
+    match frontier {
+        Some(fr) => match fr.level_of(ig) {
+            Some(level) => fr
+                .ready_nodes(level, &g.alive)
+                .into_iter()
+                .filter(|&i| g.alive[i])
+                .collect(),
+            None => g.leaf_nodes(ig),
+        },
+        None => g.leaf_nodes(ig),
+    }
+}
+
+/// `Digraph::is_leaf` through the frontier when built, direct check
+/// otherwise.
+fn is_leaf_via(
+    frontier: Option<&SerializeFrontier>,
+    g: &Digraph,
+    node: usize,
+    ig: Option<Ignore>,
+) -> bool {
+    match frontier {
+        Some(fr) => match fr.level_of(ig) {
+            Some(level) => fr.is_leaf(node, level),
+            None => g.is_leaf(node, ig),
+        },
+        None => g.is_leaf(node, ig),
     }
 }
 
@@ -1332,12 +1663,15 @@ fn gather_deps(
 /// smaller independent cycles before other cycles that depend on them."
 fn find_smallest_cycle(
     g: &Digraph,
+    frontier: Option<&mut SerializeFrontier>,
     entries: &[GraphEntry],
     range: &PriorityRange,
     asap: &[usize],
     prefer_asap: bool,
 ) -> Option<(HashSet<usize>, Option<Ignore>)> {
-    let mergeable: HashSet<usize> = g.leaf_nodes(range.ig_medium()).into_iter().collect();
+    let mergeable: HashSet<usize> = leaves_via(frontier, g, range.ig_medium())
+        .into_iter()
+        .collect();
     if mergeable.is_empty() {
         return None;
     }
@@ -1461,6 +1795,12 @@ fn select_nodes(g: &mut Digraph, entries: &[GraphEntry], root: &Path) -> Vec<usi
     let mut asap: Vec<usize> = seed_toolchain_asap(entries);
     let mut prefer_asap = true;
     let mut drop_satisfied = false;
+    // The incremental leaf frontier (see `SerializeFrontier`): built
+    // once from the biased order, kept in sync at the one removal site
+    // below. `None` when `PORTAGE_SERIALIZE_FRONTIER_DISABLE` falls back
+    // to the plain scans.
+    let mut frontier: Option<SerializeFrontier> =
+        frontier_enabled().then(|| SerializeFrontier::build(g));
 
     while g.order.iter().any(|&i| g.alive[i]) {
         let mut selected: Option<Vec<usize>> = None;
@@ -1473,7 +1813,7 @@ fn select_nodes(g: &mut Digraph, entries: &[GraphEntry], root: &Path) -> Vec<usi
             'asap: for i in 1..=range.medium_soft {
                 let ig = range.ig(i);
                 for (pos, &node) in asap.iter().enumerate() {
-                    if g.is_leaf(node, ig) {
+                    if is_leaf_via(frontier.as_ref(), g, node, ig) {
                         selected = Some(vec![node]);
                         used_ig = ig;
                         asap.remove(pos);
@@ -1486,7 +1826,7 @@ fn select_nodes(g: &mut Digraph, entries: &[GraphEntry], root: &Path) -> Vec<usi
         if selected.is_none() && !(prefer_asap && !asap.is_empty()) {
             for i in 0..=range.medium_soft {
                 let ig = range.ig(i);
-                let nodes = g.leaf_nodes(ig);
+                let nodes = leaves_via(frontier.as_mut(), g, ig);
                 if nodes.is_empty() {
                     continue;
                 }
@@ -1542,7 +1882,9 @@ fn select_nodes(g: &mut Digraph, entries: &[GraphEntry], root: &Path) -> Vec<usi
                 ranges.push(&SATISFIED);
             }
             for lr in ranges {
-                if let Some((sub, ig)) = find_smallest_cycle(g, entries, lr, &asap, prefer_asap) {
+                if let Some((sub, ig)) =
+                    find_smallest_cycle(g, frontier.as_mut(), entries, lr, &asap, prefer_asap)
+                {
                     used_ig = ig;
                     // `emerge --pretend --debug`: real
                     // `depgraph.py:9917-9930`'s `\nruntime cycle digraph
@@ -1619,12 +1961,9 @@ fn select_nodes(g: &mut Digraph, entries: &[GraphEntry], root: &Path) -> Vec<usi
         // stub whose only dep is a satisfied-runtime edge is not freed
         // early via `s_ignore_satisfied_runtime`.
         if selected.is_none() {
-            let roots: Vec<usize> = g
-                .order
-                .iter()
-                .copied()
-                .filter(|&i| g.alive[i] && g.is_leaf(i, None))
-                .collect();
+            // Same set the order scan collected (alive `None`-leaves),
+            // via the level-0 heap instead.
+            let roots: Vec<usize> = leaves_via(frontier.as_mut(), g, None);
             if !roots.is_empty() {
                 // Real leaves `ignore_priority` at `None` here, so the
                 // `medium_post` PDEPEND-asap promotion above (gated on
@@ -1668,6 +2007,12 @@ fn select_nodes(g: &mut Digraph, entries: &[GraphEntry], root: &Path) -> Vec<usi
                 continue;
             }
             g.alive[i] = false;
+            // Keep the frontier in sync at the loop's one removal site
+            // (real `_FrontierDigraph.remove`); counts/edges are read off
+            // the adjacency as it stands.
+            if let Some(fr) = frontier.as_mut() {
+                fr.remove(i, &g.children[i], &g.parents[i]);
+            }
             retlist.push(i);
         }
         g.order.retain(|&i| g.alive[i]);
@@ -1946,4 +2291,240 @@ pub(crate) fn serialize_merge_order(
     out.extend(&leftover[ti..]);
     debug_assert_eq!(out.len(), real_n);
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn prio(word: u64) -> DepPriority {
+        DepPriority {
+            buildtime: word & 1 != 0,
+            runtime: word & 2 != 0,
+            runtime_post: word & 4 != 0,
+            buildtime_slot_op: word & 8 != 0,
+            runtime_slot_op: word & 16 != 0,
+            optional: word & 32 != 0,
+            satisfied: word & 64 != 0,
+        }
+    }
+
+    /// A `Digraph` over `0..n` with deduped edges, mirroring
+    /// `Digraph::add_edge` semantics.
+    fn test_graph(n: usize, edges: &[(usize, usize, DepPriority)]) -> Digraph {
+        let mut g = Digraph {
+            n,
+            children: vec![Vec::new(); n],
+            parents: vec![Vec::new(); n],
+            order: (0..n).collect(),
+            installed: vec![false; n],
+            alive: vec![true; n],
+        };
+        for &(p, c, pr) in edges {
+            g.add_edge(p, c, pr);
+        }
+        g
+    }
+
+    /// Every filter the loop can ask about: `None` plus each rung of
+    /// both ladders.
+    fn all_filters() -> Vec<Option<Ignore>> {
+        let mut out = vec![None];
+        out.extend(NORMAL.ignore.iter().copied());
+        out.extend(SATISFIED.ignore.iter().copied());
+        out
+    }
+
+    /// Assert frontier/direct agreement on a graph snapshot: every
+    /// level's ready set equals the corresponding scan, and `is_leaf`
+    /// agrees on every alive node.
+    fn assert_equivalent(g: &Digraph, fr: &mut SerializeFrontier) {
+        for ig in all_filters() {
+            let level = fr.level_of(ig).expect("every loop filter has a level");
+            let mut ready = fr.ready_nodes(level, &g.alive);
+            ready.sort_unstable();
+            let mut direct = g.leaf_nodes(ig);
+            direct.sort_unstable();
+            assert_eq!(ready, direct, "ready_nodes != leaf_nodes for {ig:?}");
+        }
+        for node in 0..g.n {
+            if !g.alive[node] {
+                continue;
+            }
+            for ig in all_filters() {
+                let level = fr.level_of(ig).unwrap();
+                assert_eq!(
+                    fr.is_leaf(node, level),
+                    g.is_leaf(node, ig),
+                    "is_leaf disagrees on node {node} for {ig:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn frontier_levels_cover_every_ladder_rung() {
+        let g = test_graph(2, &[(0, 1, prio(0))]);
+        let fr = SerializeFrontier::build(&g);
+        // Level 0 is the None filter; every rung of both ladders
+        // resolves to some level. The exact count is NOT pinned: the
+        // toolchain may fold textually identical filters (the two
+        // `p.optional` rungs) to one address, sharing a level -- which
+        // is behavior-preserving, since identical bodies filter
+        // identically (see build_levels).
+        assert!(fr.levels[0].is_none(), "level 0 is the None filter");
+        assert_eq!(fr.level_of(None), Some(0));
+        for ig in all_filters() {
+            assert!(fr.level_of(ig).is_some(), "no level for {ig:?}");
+        }
+        for (l, f) in fr.levels.iter().enumerate() {
+            if l == 0 {
+                continue;
+            }
+            assert!(f.is_some(), "level {l} must hold a filter");
+        }
+    }
+
+    #[test]
+    fn frontier_matches_direct_scans_through_removals() {
+        // Diamond with mixed priorities: 0 -> {1, 2} -> 3, plus an
+        // optional edge and a multi-priority edge.
+        let g = test_graph(
+            4,
+            &[
+                (0, 1, prio(2)),  // runtime
+                (0, 2, prio(32)), // optional
+                (1, 3, prio(4)),  // runtime_post
+                (2, 3, prio(1)),  // buildtime
+                (0, 3, prio(2)),  // second priority on a direct edge
+            ],
+        );
+        let mut g = g;
+        // Fold a second priority into the (0,3) edge, like add_edge does.
+        g.add_edge(0, 3, prio(16));
+        let mut fr = SerializeFrontier::build(&g);
+        assert_equivalent(&g, &mut fr);
+        // Drain in an order that frees parents mid-sequence, mirroring
+        // the selection loop (remove + retain each step).
+        for node in [3, 1, 2, 0] {
+            g.alive[node] = false;
+            fr.remove(node, &g.children[node].clone(), &g.parents[node].clone());
+            g.order.retain(|&i| g.alive[i]);
+            assert_equivalent(&g, &mut fr);
+        }
+        assert!(g.order.is_empty());
+    }
+
+    /// Deterministic xorshift64* -- no rand dependency for a unit test.
+    struct Rng(u64);
+    impl Rng {
+        fn next(&mut self) -> u64 {
+            let mut x = self.0;
+            x ^= x >> 12;
+            x ^= x << 25;
+            x ^= x >> 27;
+            self.0 = x;
+            x.wrapping_mul(0x2545F4914F6CDD1D)
+        }
+        fn below(&mut self, n: usize) -> usize {
+            (self.next() % n as u64) as usize
+        }
+    }
+
+    #[test]
+    fn frontier_matches_direct_scans_on_random_graphs() {
+        // 50 deterministic graphs, 1..12 nodes, random edges (usually
+        // acyclic, sometimes not -- cycles only make leaf sets smaller,
+        // never less comparable) with random 1-2-priority lists, drained
+        // in random order with retain, comparing after every mutation.
+        let mut rng = Rng(0x12345678);
+        for _ in 0..50 {
+            let n = 1 + rng.below(12);
+            let mut edges = Vec::new();
+            let nedges = rng.below(n * 2 + 1);
+            for _ in 0..nedges {
+                let (mut p, mut c) = (rng.below(n), rng.below(n));
+                if p == c {
+                    continue;
+                }
+                if p > c {
+                    std::mem::swap(&mut p, &mut c);
+                }
+                let mut prios = vec![prio(rng.next() & 127)];
+                if rng.below(4) == 0 {
+                    prios.push(prio(rng.next() & 127));
+                }
+                for pr in prios {
+                    edges.push((p, c, pr));
+                }
+            }
+            let mut g = test_graph(n, &edges);
+            let mut fr = SerializeFrontier::build(&g);
+            assert_equivalent(&g, &mut fr);
+            let mut perm: Vec<usize> = (0..n).collect();
+            for i in (1..n).rev() {
+                let j = rng.below(i + 1);
+                perm.swap(i, j);
+            }
+            for node in perm {
+                g.alive[node] = false;
+                fr.remove(node, &g.children[node].clone(), &g.parents[node].clone());
+                g.order.retain(|&i| g.alive[i]);
+                assert_equivalent(&g, &mut fr);
+            }
+        }
+    }
+
+    #[test]
+    fn disabled_path_matches_direct_scans() {
+        // The PORTAGE_SERIALIZE_FRONTIER_DISABLE fallback routes every
+        // query to the plain scans: leaves_via/is_leaf_via with None
+        // agree with the direct calls on an arbitrary graph.
+        let mut rng = Rng(0xabcdef);
+        let n = 8;
+        let mut edges = Vec::new();
+        for _ in 0..14 {
+            edges.push((rng.below(n), rng.below(n), prio(rng.next() & 127)));
+        }
+        let edges: Vec<_> = edges.into_iter().filter(|(p, c, _)| p != c).collect();
+        let g = test_graph(n, &edges);
+        for ig in all_filters() {
+            assert_eq!(leaves_via(None, &g, ig), g.leaf_nodes(ig));
+            for node in 0..n {
+                assert_eq!(is_leaf_via(None, &g, node, ig), g.is_leaf(node, ig));
+            }
+        }
+    }
+
+    #[test]
+    fn frontier_add_edge_only_grows_survival() {
+        // Parity with real's add_edge contract: adding a priority only
+        // makes an edge survive more levels, never fewer.
+        let mut g = test_graph(2, &[(0, 1, prio(32))]);
+        let mut fr = SerializeFrontier::build(&g);
+        let before: Vec<u32> = fr.surv[0].to_vec();
+        // Sync a grown priority list (a second priority on the edge that
+        // survives strictly more levels).
+        g.add_edge(0, 1, prio(2));
+        fr.add_edge(
+            1,
+            Some(0),
+            &g.children[0].iter().find(|(c, _)| *c == 1).unwrap().1,
+        );
+        for (l, (&b, &a)) in before.iter().zip(fr.surv[0].iter()).enumerate() {
+            assert!(a >= b, "counts must not shrink at level {l}");
+        }
+        assert_equivalent(&g, &mut fr);
+        // Re-adding the identical mask is a no-op.
+        let snapshot: Vec<u32> = fr.surv[0].to_vec();
+        fr.add_edge(
+            1,
+            Some(0),
+            &g.children[0].iter().find(|(c, _)| *c == 1).unwrap().1,
+        );
+        assert_eq!(fr.surv[0], snapshot);
+        // A brand-new node gets an appended index and starts isolated.
+        fr.add_edge(2, None, &[]);
+        assert!(fr.surv.len() > 2);
+    }
 }
