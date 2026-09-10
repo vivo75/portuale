@@ -692,31 +692,117 @@ fn next_alternative<'a>(
     })
 }
 
-/// How much a caller prefers one `"||"` alternative -- portuale's cut of
+/// How much a caller prefers one `"||"` alternative -- portuale's port of
 /// real `dep_zapdeps`'s `choice_bins` (`lib/portage/dep/dep_check.py`).
-/// Real has nine bins; portuale models the two that decide the common
-/// case (an alternative already satisfied by an installed package beats
-/// one that would need a new merge) plus the "can't resolve it at all"
-/// fallback. Higher is more preferred.
+///
+/// Real fills nine lists and picks the first atom of the first *selectable*
+/// choice across them, in bin order (`dep_check.py:812-816`):
+///
+/// ```text
+/// for allow_masked in (False, True):
+///     for choices in choice_bins:
+///         for choice in choices:
+///             if choice.all_available or allow_masked:
+///                 return choice.atoms
+/// ```
+///
+/// with `choice_bins` equal to (soft lines 392-402, where real's
+/// `preferred_in_graph` / `preferred_installed` / `preferred_any_slot`
+/// are all aliases of one list):
+///
+/// ```text
+/// 0  preferred_in_graph          ( = preferred_installed = preferred_any_slot )
+/// 1  preferred_non_installed
+/// 2  unsat_use_in_graph
+/// 3  unsat_use_installed
+/// 4  unsat_use_non_installed
+/// 5  other_installed
+/// 6  other_installed_some
+/// 7  other_installed_any_slot
+/// 8  other
+/// ```
+///
+/// Every bin's choices have `all_available = True` except bins 5-8
+/// (`other_*`, reached when some atom is only available via a masked /
+/// force / circular path), which real still *returns* on its `allow_masked`
+/// second pass. Portuale deliberately keeps its never-drop invariant
+/// instead: bins 5-8 are never selected, so a `"||"` alternative whose
+/// only satisfiable members are `other_*` falls back to the literal
+/// `"||"` group exactly as `use_reduce_flat` would flatten it (never
+/// silently resolving a dependency to a masked/forced choice portuale
+/// can't ground -- the same `resolve_disjunctions` rule that already
+/// applies to a fully-unsatisfiable group).
+///
+/// The enum is ordered by real bin ordinal (higher discriminant = more
+/// preferred), with one extra lowest sentinel [`AltPreference::Unsatisfiable`]
+/// for "no atom in this alternative resolves at all". Deriving `Ord`
+/// over the variants gives selection exactly real's bin-order: `Installed`
+/// (bin 0) > `Available` (bin 1) > `UnsatUseInGraph` (2) >
+/// `UnsatUseInstalled` (3) > `UnsatUseNonInstalled` (4), with bins 5-8
+/// `other_*` and the sentinel never selectable.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default)]
 pub enum AltPreference {
-    /// No atom in this alternative resolves to anything -- the old
-    /// `false`. `resolve_disjunctions` only falls back to the literal
-    /// `"||"` group when *every* alternative is this.
+    /// No atom in this alternative resolves to anything (the old
+    /// `false`), *or* every atom only has an `other_*`-class availability
+    /// (real bins 5-8). Portuale never selects this: `resolve_disjunctions`
+    /// falls back to the literal `"||"` group when every alternative ranks
+    /// here.
     #[default]
     Unsatisfiable,
-    /// Resolvable, but at least one atom's `cat/pkg` is not installed --
-    /// real `preferred_non_installed` (choice bin 1).
+    /// Real `other` (bin 8): satisfiable only through a mask/force or
+    /// circular fallback. Never selected in portuale (see the enum doc).
+    Other,
+    /// Real `other_installed_any_slot` (bin 7). Never selected in portuale.
+    OtherInstalledAnySlot,
+    /// Real `other_installed_some` (bin 6). Never selected in portuale.
+    OtherInstalledSome,
+    /// Real `other_installed` (bin 5). Never selected in portuale.
+    OtherInstalled,
+    /// Real `unsat_use_non_installed` (bin 4): every atom's `cat/pkg` is
+    /// resolvable and its USE-deps are unmasked, but no single candidate
+    /// satisfies every alternative's USE-deps and the best alternative is
+    /// not installed and not in the graph. Selectable.
+    UnsatUseNonInstalled,
+    /// Real `unsat_use_installed` (bin 3): like `UnsatUseNonInstalled`
+    /// but every atom's `cat/pkg` is already installed. Selectable.
+    UnsatUseInstalled,
+    /// Real `unsat_use_in_graph` (bin 2): like `UnsatUseNonInstalled`
+    /// but every atom is already in the merge graph. Selectable.
+    UnsatUseInGraph,
+    /// Real `preferred_non_installed` (bin 1): resolvable, every
+    /// alternative's USE-deps unmasked and satisfiable, but at least one
+    /// atom's `cat/pkg` is not installed. This is what makes
+    /// `|| ( foo[a] foo[b] )` prefer `foo[b]` (whose USE-deps the tree can
+    /// satisfy without a masked change) over the USE-unsatisfiable
+    /// `foo[a]`. Selectable.
     Available,
-    /// Every non-blocker atom's `cat/pkg` is already installed (real
-    /// `all_installed` over `Atom(atom.cp)`) and the alternative is
-    /// otherwise satisfiable -- real `preferred_installed` (choice bin 0,
-    /// the alias `preferred_in_graph`/`preferred_any_slot` all collapse
-    /// to when `graph_db is None`). This is what makes `virtual/wine`'s
-    /// `|| ( wine-vanilla wine-staging … )` pick the installed
-    /// `wine-staging` instead of trying (and failing REQUIRED_USE on) the
-    /// first-listed `wine-vanilla`.
+    /// Real `preferred_in_graph` / `preferred_installed` /
+    /// `preferred_any_slot` (bin 0): every non-blocker atom's `cat/pkg` is
+    /// already installed (real `all_installed` over `Atom(atom.cp)`) or
+    /// already in the graph, and USE-deps are satisfiable -- what makes
+    /// `virtual/wine`'s `|| ( wine-vanilla wine-staging … )` pick the
+    /// installed `wine-staging` instead of failing REQUIRED_USE on the
+    /// first-listed `wine-vanilla`. The top bin; once found,
+    /// `resolve_disjunctions` breaks early. Selectable.
     Installed,
+}
+
+impl AltPreference {
+    /// Whether real `dep_zapdeps`'s selection loop would ever pick an
+    /// alternative ranked this way *without* its `allow_masked` second
+    /// pass. Portuale's whole point is to be stricter than that second
+    /// pass (it never resolves to a masked/forced `other_*` choice), so
+    /// this is exactly the bins portuale can select.
+    pub fn is_selectable(self) -> bool {
+        matches!(
+            self,
+            AltPreference::Installed
+                | AltPreference::Available
+                | AltPreference::UnsatUseInGraph
+                | AltPreference::UnsatUseInstalled
+                | AltPreference::UnsatUseNonInstalled
+        )
+    }
 }
 
 /// Real `_add_pkg_dep_string`'s own `"||"` resolution, considerably
@@ -813,7 +899,13 @@ fn resolve_disjunctions(
                         continue;
                     };
                     let rank = alternative_satisfiable(&flat_atoms);
-                    if rank == AltPreference::Unsatisfiable {
+                    if !rank.is_selectable() {
+                        // `Unsatisfiable` plus real's `other_*` bins (5-8)
+                        // -- portuale's deliberate never-pick-them cut. A
+                        // `||` group whose only satisfiable-looking
+                        // alternatives are masked/forced stays the literal
+                        // `"||"` group, exactly like a fully-unsatisfiable
+                        // one (see `is_selectable`).
                         continue;
                     }
                     if best.as_ref().is_none_or(|(b, _)| rank > *b) {
