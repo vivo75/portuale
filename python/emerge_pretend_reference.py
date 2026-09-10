@@ -6247,6 +6247,216 @@ def _pkg_use_display_for(repos, config, category, package, version):
     )
 
 
+def _installed_use_display_for(root, config, category, package, version):
+    """The same USE="..." display pairs as _pkg_use_display_for, built
+    from an installed package's vdb-recorded IUSE/USE instead of a tree
+    candidate -- real pkg_use_display(installed_pkg) for a nomerge node
+    or an installed parent in the residual installed-instance conflict
+    report. No profile-force/mask wraps (those need the tree
+    candidate's keywords, which the vdb does not record); a flagless
+    package renders byte-identical either way. Mirrors
+    portage-repo/src/lib.rs's installed_use_display_for."""
+    iuse = _read_vdb_flag_set(root, category, package, version, "IUSE")
+    use_flags = _read_vdb_flag_set(root, category, package, version, "USE")
+    disp = sorted(
+        ((f, f in use_flags) for f in iuse), key=lambda p: _alnum_sort_key(p[0])
+    )
+    return _build_use_expand_display(
+        disp,
+        config["use_expand"],
+        config["use_expand_hidden"],
+        None,
+        set(),
+        True,
+        None,
+    )
+
+
+def _build_residual_slot_conflicts(repos, config, root, entries, slot_pullers, dropped):
+    """Residual installed-instance slot conflicts for dropped
+    reverse-dep pins -- real _complete_graph's end-of-walk unsatisfied-dep
+    loop adding the installed satisfier as a nomerge node so the run
+    reports it as a slot collision against the merged version. For every
+    dropped pin whose consumer still names an installed version the final
+    merge-bound version fails: one record pairing the merge instance
+    (this pass's hard pullers as parents) against the installed instance
+    (hard pullers matching it, plus every dropped consumer pin for it).
+    Pins the final version satisfies, pins matching no installed version,
+    and pins whose installed version lives in another slot yield no
+    record. One record per (package, merge version, installed version),
+    parents unioned. Mirrors portage-repo/src/lib.rs's
+    build_residual_slot_conflicts exactly."""
+    grouped = {}
+    order = []
+
+    def _merge_version(e):
+        tag = e[2][0]
+        if tag in ("new", "reinstall"):
+            return e[2][1]
+        if tag in ("upgrade", "downgrade"):
+            return e[2][2]
+        return None
+
+    for cp, atom, consumer in dropped:
+        category, package = cp
+        merge = None
+        for e in entries:
+            if (e[0], e[1]) != cp:
+                continue
+            v = _merge_version(e)
+            if v is not None:
+                prov = e[8] if isinstance(e[8], dict) else {}
+                merge = (
+                    v,
+                    e[4] or "0",
+                    prov.get("sub_slot") or "0",
+                    prov.get("repo_name") or "",
+                )
+        if merge is None:
+            continue
+        merge_ver, slot, merge_sub, merge_repo = merge
+        merge_str = f"{category}/{package}-{merge_ver}:{slot}/{merge_sub}::{merge_repo}"
+        try:
+            if match_from_list(atom, [merge_str]):
+                continue
+        except (InvalidAtom, InvalidDependString):
+            continue
+        best = None
+        for r in _installed_refs(root, category, package):
+            s = "{}/{}-{}:{}/{}".format(category, package, r["version"], r["slot"], r["sub_slot"])
+            try:
+                if not match_from_list(atom, [s]):
+                    continue
+            except (InvalidAtom, InvalidDependString):
+                continue
+            if best is None or (vercmp(r["version"], best["version"]) or 0) > 0:
+                best = r
+        if best is None or best["slot"] != slot:
+            continue
+        key = (category, package, slot, merge_ver, best["version"])
+        if key in grouped:
+            continue
+
+        def _match_str(ver, sub):
+            return f"{category}/{package}-{ver}:{slot}/{sub}"
+
+        merge_match = _match_str(merge_ver, _slot_conflict_meta(repos, category, package, merge_ver)[0])
+        inst_match = _match_str(best["version"], best["sub_slot"])
+        m_iuse, m_use = _slot_conflict_flag_sets(repos, config, category, package, merge_ver)
+        i_iuse = _read_vdb_flag_set(root, category, package, best["version"], "IUSE")
+        i_use = _read_vdb_flag_set(root, category, package, best["version"], "USE")
+
+        def _use_ok(a, iuse, use):
+            try:
+                pa = Atom(a)
+            except (InvalidAtom, InvalidDependString):
+                return True
+            if pa.use is None:
+                return True
+            return _use_deps_satisfied(pa, iuse, use)
+
+        def _puller_cpv(pc, pp, pv):
+            if not pc:
+                return ""
+            psub, prepo, pslot = _slot_conflict_meta(repos, pc, pp, pv)
+            return f"{pc}/{pp}-{pv}:{pslot}/{psub}::{prepo}"
+
+        merge_parents = []
+        inst_parents = []
+        for pc, pp, pv, patom in slot_pullers.get((category, package), []):
+            try:
+                hits_merge = bool(match_from_list(patom, [merge_match])) and _use_ok(
+                    patom, m_iuse, m_use
+                )
+            except (InvalidAtom, InvalidDependString):
+                hits_merge = False
+            try:
+                hits_inst = bool(match_from_list(patom, [inst_match])) and _use_ok(
+                    patom, i_iuse, i_use
+                )
+            except (InvalidAtom, InvalidDependString):
+                hits_inst = False
+            entry = {
+                "parent": _puller_cpv(pc, pp, pv),
+                "atom": patom,
+                "use_display": (
+                    []
+                    if not pc
+                    else _pkg_use_display_for(repos, config, pc, pp, pv)
+                ),
+                "installed": False,
+            }
+            if hits_merge:
+                if entry not in merge_parents:
+                    merge_parents.append(entry)
+            elif hits_inst and entry not in inst_parents:
+                inst_parents.append(entry)
+        grouped[key] = {
+            "category": category,
+            "package": package,
+            "slot": slot,
+            "resolved_version": merge_ver,
+            "conflicting_atom": atom,
+            "instances": [
+                {
+                    "version": merge_ver,
+                    "sub_slot": merge_sub,
+                    "repo_name": merge_repo,
+                    "use_display": _pkg_use_display_for(
+                        repos, config, category, package, merge_ver
+                    ),
+                    "parents": merge_parents,
+                    "installed": False,
+                },
+                {
+                    "version": best["version"],
+                    "sub_slot": best["sub_slot"],
+                    "repo_name": best["repo"],
+                    "use_display": _installed_use_display_for(
+                        root, config, category, package, best["version"]
+                    ),
+                    "parents": inst_parents,
+                    "installed": True,
+                },
+            ],
+        }
+        order.append(key)
+
+    for cp, atom, consumer in dropped:
+        for key in order:
+            if (key[0], key[1]) != cp:
+                continue
+            record = grouped[key]
+            inst = next(i for i in record["instances"] if i["installed"])
+            inst_str = "{}/{}-{}:{}/{}".format(
+                record["category"], record["package"], inst["version"], record["slot"], inst["sub_slot"]
+            )
+            try:
+                guards = bool(match_from_list(atom, [inst_str]))
+            except (InvalidAtom, InvalidDependString):
+                guards = False
+            if not guards:
+                continue
+            cc, cp2, cv = consumer
+            cref = next(
+                (r for r in _installed_refs(root, cc, cp2) if r["version"] == cv), None
+            )
+            if cref is None:
+                cslot, csub, crepo = "0", "0", "__unknown__"
+            else:
+                cslot, csub, crepo = cref["slot"], cref["sub_slot"], cref["repo"]
+            entry = {
+                "parent": f"{cc}/{cp2}-{cv}:{cslot}/{csub}::{crepo}",
+                "atom": atom,
+                "use_display": _installed_use_display_for(root, config, cc, cp2, cv),
+                "installed": True,
+            }
+            if entry not in inst["parents"]:
+                inst["parents"].append(entry)
+    order.sort()
+    return [grouped[k] for k in order]
+
+
 def _build_slot_conflict(
     repos,
     config,
@@ -6315,6 +6525,7 @@ def _build_slot_conflict(
             "use_display": (
                 [] if not pc else _pkg_use_display_for(repos, config, pc, pp, pv)
             ),
+            "installed": False,
         }
         if hits_a:
             if entry not in parents_a:
@@ -6336,6 +6547,7 @@ def _build_slot_conflict(
                     repos, config, category, package, existing_version
                 ),
                 "parents": parents_a,
+                "installed": False,
             },
             {
                 "version": current_version,
@@ -6345,6 +6557,7 @@ def _build_slot_conflict(
                     repos, config, category, package, current_version
                 ),
                 "parents": parents_b,
+                "installed": False,
             },
         ],
     }
@@ -7658,17 +7871,83 @@ def _reverse_dep_constraint_atom(atom_str, atom):
     block, never the reverse. Mirrors portage-repo/src/lib.rs's
     reverse_dep_constraint_atom exactly."""
     head = atom_str.split("[", 1)[0]
-    built_slot_op = (
-        getattr(atom, "slot_operator", None) == "="
-        and getattr(atom, "slot", None)
-        and getattr(atom, "sub_slot", None)
-    )
-    if built_slot_op:
+    if _is_built_slot_op(atom):
         return head.split(":", 1)[0]
     return head
 
 
-def _reverse_dependency_constraints(root, entries, with_bdeps, excluded):
+def _is_built_slot_op(atom):
+    """A *built* slot-operator atom (cat/pkg:S/SS=) -- the shape real's
+    _slot_operator_check_reverse_dependencies normalises. Mirrors
+    portage-repo/src/lib.rs's is_built_slot_op."""
+    return (
+        getattr(atom, "slot_operator", None) == "="
+        and getattr(atom, "slot", None)
+        and getattr(atom, "sub_slot", None)
+    )
+
+
+def _rev_dep_pin_holdable(repos, cp, pin, pin_slot, upgraded_slots, hard_atoms):
+    """Whether `pin` (an installed consumer's recorded atom on `cp`) can
+    still hold alongside every hard requirement pulling `cp` this pass.
+    A jointly unsatisfiable pin is dropped for the residual
+    installed-instance conflict report instead of masking the
+    hard-required version into invisibility -- real merges the
+    hard-required version and reports the broken consumer against the
+    installed instance (verified against real 3.0.82.2). Per upgraded
+    slot, like the Rust side; anything unparseable (or no readable
+    candidates at all) falls back to enforcing. Mirrors
+    portage-repo/src/lib.rs's rev_dep_pin_holdable exactly."""
+    try:
+        if _parse_atom(pin) is None:
+            return True
+    except InvalidDependString:
+        return True
+    parsed_hard = []
+    for h in hard_atoms:
+        try:
+            pa = _parse_atom(h)
+        except InvalidDependString:
+            return True
+        if pa is None:
+            return True
+        parsed_hard.append((h, pa))
+    try:
+        cands = list_candidates(repos, cp[0], cp[1])
+    except Exception:
+        return True
+    constrained = [s for s in upgraded_slots if pin_slot is None or pin_slot == s]
+    if not constrained:
+        return True
+    for slot in constrained:
+        for c in cands:
+            if c["slot"] != slot:
+                continue
+            s = "{}/{}-{}:{}/{}::{}".format(
+                cp[0], cp[1], c["version"], c["slot"], c["sub_slot"], c["repo_name"]
+            )
+            try:
+                if not match_from_list(pin, [s]):
+                    continue
+            except (InvalidAtom, InvalidDependString):
+                continue
+            ok = True
+            for text, h in parsed_hard:
+                if h.slot is not None and h.slot != c["slot"]:
+                    continue
+                try:
+                    if not match_from_list(text, [s]):
+                        ok = False
+                        break
+                except (InvalidAtom, InvalidDependString):
+                    ok = False
+                    break
+            if ok:
+                return True
+    return False
+
+
+def _reverse_dependency_constraints(root, entries, with_bdeps, excluded, repos, hard_want):
     """Real depgraph._complete_graph reaching
     _slot_operator_check_reverse_dependencies: the dependency atoms an
     *installed* package records against a package this run wants to
@@ -7704,8 +7983,14 @@ def _reverse_dependency_constraints(root, entries, with_bdeps, excluded):
     (depgraph.py:7369) -- so for exactly the consumers this function
     finds, real skips those escapes too.
 
-    Returns sorted (cp, atom) pairs to add to slot_constraints; empty (and
-    the vdb scan skipped entirely) when nothing is being upgraded. Mirrors
+    Returns (enforced, dropped) pin lists -- (cp, atom, consumer) triples
+    with the installed consumer attached (real's nomerge node) -- each
+    sorted and deduped. Enforced pins feed slot_constraints as before; a
+    pin jointly unsatisfiable with this pass's hard requirements
+    (top-level arguments included) is dropped for the residual
+    installed-instance conflict report instead (real merges the
+    hard-required version and reports the broken consumer against the
+    installed instance). See _rev_dep_pin_holdable. Mirrors
     portage-repo/src/lib.rs's reverse_dependency_constraints exactly."""
     upgrading = {}
     being_replaced = set()
@@ -7717,17 +8002,18 @@ def _reverse_dependency_constraints(root, entries, with_bdeps, excluded):
         if outcome[0] not in ("upgrade", "downgrade"):
             continue
         to = outcome[2]
+        slot = e[4] or "0"
         prov = e[8] if isinstance(e[8], dict) else {}
-        upgrading[cp] = "{}/{}-{}:{}/{}::{}".format(
+        upgrading[(cp, slot)] = "{}/{}-{}:{}/{}::{}".format(
             e[0],
             e[1],
             to,
-            e[4] or "0",
+            slot,
             prov.get("sub_slot") or "0",
             prov.get("repo_name") or "",
         )
     if not upgrading:
-        return []
+        return [], []
 
     # Real _add_pkg_dep_string empties DEPEND/BDEPEND for a *built* package
     # (an installed one always is) unless --with-bdeps asks for them, so
@@ -7738,7 +8024,8 @@ def _reverse_dependency_constraints(root, entries, with_bdeps, excluded):
         else ("RDEPEND", "IDEPEND", "PDEPEND")
     )
 
-    out = set()
+    out_enforced = set()
+    out_dropped = set()
     for category, package, version, _slot in _all_installed_packages(root):
         consumer_cp = (category, package)
         if consumer_cp in being_replaced:
@@ -7761,17 +8048,31 @@ def _reverse_dependency_constraints(root, entries, with_bdeps, excluded):
                 if atom is None or atom.blocker:
                     continue
                 cp = tuple(atom.cp.split("/", 1))
-                candidate = upgrading.get(cp)
-                if candidate is None:
-                    continue
                 constraint = _reverse_dep_constraint_atom(atom_str, atom)
-                try:
-                    satisfied = bool(match_from_list(constraint, [candidate]))
-                except (InvalidAtom, InvalidDependString):
+                failing = set()
+                for (ucp, slot), candidate in upgrading.items():
+                    if ucp != cp:
+                        continue
+                    try:
+                        satisfied = bool(match_from_list(constraint, [candidate]))
+                    except (InvalidAtom, InvalidDependString):
+                        continue
+                    if not satisfied:
+                        failing.add(slot)
+                if not failing:
                     continue
-                if not satisfied:
-                    out.add((cp, constraint))
-    return sorted(out)
+                pin = (cp, constraint, (category, package, version))
+                pin_slot = None if _is_built_slot_op(atom) else atom.slot
+                hard = hard_want.get(cp, [])
+                holds = any(
+                    _rev_dep_pin_holdable(repos, cp, constraint, pin_slot, {s}, hard)
+                    for s in failing
+                )
+                if holds:
+                    out_enforced.add(pin)
+                else:
+                    out_dropped.add(pin)
+    return sorted(out_enforced), sorted(out_dropped)
 
 
 def _slot_operator_rebuild_entries(root, repos, entries, reachable):
@@ -10075,6 +10376,13 @@ def resolve_pretend_graph(
     # is never re-added and the backtrack loop converges. Mirrors
     # portage-repo/src/lib.rs.
     reverse_dep_masked = set()
+    # Dropped reverse-dep pins (jointly unsatisfiable with the hard
+    # requirements), accumulated across passes for the residual
+    # installed-instance conflict report once the graph settles (see
+    # _build_residual_slot_conflicts). Deduped; stale entries (a later
+    # pass picked a compatible version after all) simply yield no
+    # record. Mirrors portage-repo/src/lib.rs.
+    dropped_pins = []
     _missing_dep_trigger = None
     # Backtracking slice 3 (unsolvable conflict -> runtime_pkg_mask): a
     # small state machine across passes. "none" = ordinary pass; "trying" =
@@ -12034,18 +12342,31 @@ def resolve_pretend_graph(
         # already_installed -- and drops whatever the rejected version had
         # dragged into the graph. reverse_dep_masked latches every
         # constraint already added, so a pass that finds nothing new falls
-        # through and the loop terminates. Mirrors
-        # portage-repo/src/lib.rs.
+        # through and the loop terminates.
+        #
+        # A pin jointly unsatisfiable with this pass's hard requirements
+        # (an explicit versioned request, or a dependency only a newer
+        # version satisfies) is dropped instead of enforced: real merges
+        # the hard-required version anyway and reports the broken
+        # consumer against the installed instance. Dropped pins
+        # accumulate in dropped_pins for that residual report (see
+        # _build_residual_slot_conflicts); they never enter
+        # slot_constraints, so the hard-required version is never masked
+        # into invisibility. Mirrors portage-repo/src/lib.rs.
         if mask_phase == "none" and backtrack_iteration < backtrack_max:
             _rdc_added = False
-            for _rdc_cp, _rdc_atom in _reverse_dependency_constraints(
-                root, entries, with_bdeps, excluded
-            ):
+            _rdc_enforced, _rdc_dropped = _reverse_dependency_constraints(
+                root, entries, with_bdeps, excluded, repos, slot_want
+            )
+            for _rdc_cp, _rdc_atom, _rdc_consumer in _rdc_enforced:
                 if (_rdc_cp, _rdc_atom) in reverse_dep_masked:
                     continue
                 reverse_dep_masked.add((_rdc_cp, _rdc_atom))
                 slot_constraints.setdefault(_rdc_cp, []).append(_rdc_atom)
                 _rdc_added = True
+            for _rdc_pin in _rdc_dropped:
+                if _rdc_pin not in dropped_pins:
+                    dropped_pins.append(_rdc_pin)
             if _rdc_added:
                 backtrack_iteration += 1
                 continue
@@ -12165,7 +12486,10 @@ def resolve_pretend_graph(
 
     return {
         "entries": entries,
-        "slot_conflicts": slot_conflicts,
+        "slot_conflicts": slot_conflicts
+        + _build_residual_slot_conflicts(
+            repos, config, root, entries, slot_pullers, dropped_pins
+        ),
         "changed_deps_report": changed_deps_report_entries,
         "buildpkgonly_deps_unsatisfied": buildpkgonly_deps_unsatisfied,
         "pprovided_atoms": pprovided_atoms,
@@ -12839,10 +13163,12 @@ def _slot_conflict_to_json(c):
             f'{{"version":{_json_string(inst["version"])},'
             f'"sub_slot":{_json_string(inst["sub_slot"])},'
             f'"repo_name":{_json_string(inst["repo_name"])},'
-            f'"use":{_json_string(_render_pkg_use_display(inst["use_display"]))},"parents":['
+            f'"use":{_json_string(_render_pkg_use_display(inst["use_display"]))},'
+            f'"installed":{_json_bool(inst["installed"])},"parents":['
             + ",".join(
                 f'{{"parent":{_json_string(p["parent"])},"atom":{_json_string(p["atom"])},'
-                f'"use":{_json_string(_render_pkg_use_display(p["use_display"]))}}}'
+                f'"use":{_json_string(_render_pkg_use_display(p["use_display"]))},'
+                f'"installed":{_json_bool(p["installed"])}}}'
                 for p in inst["parents"]
             )
             + "]}"
@@ -20385,18 +20711,41 @@ def run(args):
             print(f"{c['category']}/{c['package']}:{c['slot']}")
             for inst in c["instances"]:
                 print()
-                print(
-                    f"  ({c['category']}/{c['package']}-{inst['version']}:{c['slot']}"
-                    f"/{inst['sub_slot']}::{inst['repo_name']}, ebuild scheduled for merge)"
-                    f" {_render_pkg_use_display(inst['use_display'])} pulled in by"
+                if inst["installed"]:
+                    # Real's installed nomerge node.
+                    print(
+                        f"  ({c['category']}/{c['package']}-{inst['version']}:{c['slot']}"
+                        f"/{inst['sub_slot']}::{inst['repo_name']}, installed in '{_root()}')"
+                        f" {_render_pkg_use_display(inst['use_display'])} pulled in by"
+                    )
+                else:
+                    print(
+                        f"  ({c['category']}/{c['package']}-{inst['version']}:{c['slot']}"
+                        f"/{inst['sub_slot']}::{inst['repo_name']}, ebuild scheduled for merge)"
+                        f" {_render_pkg_use_display(inst['use_display'])} pulled in by"
+                    )
+                # A bare (Argument) parent shows only when the *other*
+                # package is already installed -- always the case for a
+                # residual record's installed side, never for
+                # merge-vs-merge records.
+                show_argument_parents = any(
+                    o["version"] != inst["version"] and o["installed"] for o in c["instances"]
                 )
                 others = []
                 for o in c["instances"]:
                     if o["version"] == inst["version"]:
                         continue
-                    iuse, use = _slot_conflict_flag_sets(
-                        all_repos, config, c["category"], c["package"], o["version"]
-                    )
+                    if o["installed"]:
+                        iuse = _read_vdb_flag_set(
+                            _root(), c["category"], c["package"], o["version"], "IUSE"
+                        )
+                        use = _read_vdb_flag_set(
+                            _root(), c["category"], c["package"], o["version"], "USE"
+                        )
+                    else:
+                        iuse, use = _slot_conflict_flag_sets(
+                            all_repos, config, c["category"], c["package"], o["version"]
+                        )
                     others.append(
                         (
                             f"{c['category']}/{c['package']}-{o['version']}:{c['slot']}"
@@ -20405,10 +20754,10 @@ def run(args):
                             use,
                         )
                     )
-                classified = []  # (parent_cpv, atom_str, Atom, reasons, use_display, unconditional)
+                classified = []  # (parent_cpv, atom_str, Atom, reasons, use_display, unconditional, installed)
                 for p in inst["parents"]:
                     parent_cpv, atom_str = p["parent"], p["atom"]
-                    if not parent_cpv:
+                    if not parent_cpv and not show_argument_parents:
                         continue
                     try:
                         atom = Atom(atom_str)
@@ -20417,11 +20766,11 @@ def run(args):
                     reasons, unconditional = _sc_reasons(atom, others)
                     if reasons:
                         classified.append(
-                            (parent_cpv, atom_str, atom, reasons, p["use_display"], unconditional)
+                            (parent_cpv, atom_str, atom, reasons, p["use_display"], unconditional, p["installed"])
                         )
                 num_all_specific = sum(len(c[3]) for c in classified)
                 groups = []  # [reason, [member idx]]
-                for i, (_, _, _, reasons, _, _) in enumerate(classified):
+                for i, (_, _, _, reasons, _, _, _) in enumerate(classified):
                     for reason in reasons:
                         for g in groups:
                             if g[0] == reason:
@@ -20468,7 +20817,7 @@ def run(args):
                     if reason[0] != "slot":
                         continue
                     for m in members:
-                        parent_cpv, _, atom, _, _, _ = classified[m]
+                        parent_cpv, _, atom, _, _, _, _ = classified[m]
                         why = _sc_need_rebuild(
                             parent_cpv,
                             atom,
@@ -20491,7 +20840,7 @@ def run(args):
                 # classified order within each half).
                 selected.sort(key=lambda m: not classified[m][5])
                 for m in selected:
-                    parent_cpv, atom_str, atom, reasons, parent_use, _ = classified[m]
+                    parent_cpv, atom_str, atom, reasons, parent_use, _, parent_installed = classified[m]
                     version_violated = any(r[0] == "version" for r in reasons)
                     slot_violated = any(r[0] == "slot" for r in reasons)
                     use_flags = sorted({r[1] for r in reasons if r[0] == "use"})
@@ -20500,9 +20849,18 @@ def run(args):
                     # red, but markers track the displayed string (real
                     # drifts -- see pretend.rs's colorize_marked_spans).
                     atom_display, shifted = _colorize_marked_spans(atom_str, idx, color)
+                    # A bare command-line parent renders `<atom>
+                    # (Argument)` with no marker line; an installed
+                    # parent names its position like an instance does.
+                    if not parent_cpv:
+                        sys.stdout.write(f"    {atom_display} (Argument)\n")
+                        continue
+                    if parent_installed:
+                        parent_pos = f"{parent_cpv}, installed in '{_root()}'"
+                    else:
+                        parent_pos = f"{parent_cpv}, ebuild scheduled for merge"
                     cur_line = (
-                        f"{atom_display} required by ({parent_cpv}, "
-                        f"ebuild scheduled for merge) {_render_pkg_use_display(parent_use)}\n"
+                        f"{atom_display} required by ({parent_pos}) {_render_pkg_use_display(parent_use)}\n"
                     )
                     marker = "".join(
                         "^" if k in shifted else " " for k in range(len(cur_line))

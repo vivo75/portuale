@@ -10652,22 +10652,133 @@ fn topological_merge_order(
 /// candidate's own USE, which this vdb-only check has no resolved USE
 /// for; a documented cut, and one that can only *allow* an upgrade real
 /// would block, never the reverse.
+/// A *built* slot-operator atom (`cat/pkg:S/SS=`, operator `=`, both
+/// slot and sub-slot present, real `Atom.slot_operator_built`) -- the
+/// shape real's `_slot_operator_check_reverse_dependencies` normalises.
+fn is_built_slot_op(atom: &portage_dep::Atom) -> bool {
+    atom.slot_operator == Some(portage_dep::SlotOperator::Equals)
+        && atom.slot.is_some()
+        && atom.sub_slot.is_some()
+}
+
 fn reverse_dep_constraint_atom(atom_str: &str, atom: &portage_dep::Atom) -> String {
     let head = atom_str.split('[').next().unwrap_or(atom_str);
-    let built_slot_op = atom.slot_operator == Some(portage_dep::SlotOperator::Equals)
-        && atom.slot.is_some()
-        && atom.sub_slot.is_some();
-    if built_slot_op {
+    if is_built_slot_op(atom) {
         head.split(':').next().unwrap_or(head).to_string()
     } else {
         head.to_string()
     }
 }
 
+/// One installed consumer's recorded atom broken by this pass's
+/// upgrade, with the consumer's identity attached -- real's complete
+/// graph carries that consumer as a nomerge node (`_add_pkg` of the
+/// installed package); portuale carries the `(cp, atom, consumer)`
+/// triple instead, which is everything the backtrack loop and the
+/// residual-conflict report below need from the node.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct RevDepPin {
+    /// The upgraded `category/package`.
+    cp: (String, String),
+    /// The consumer's recorded atom, normalised by
+    /// `reverse_dep_constraint_atom`.
+    atom: String,
+    /// The installed consumer `(category, package, version)`.
+    consumer: (String, String, String),
+}
+
+/// Whether `pin` (a consumer atom on `cp`) can still hold alongside
+/// every hard requirement pulling `cp` this pass -- real's
+/// `_select_pkg_highest_available` seeing "the whole atom set for a
+/// package, not just the first" (`depgraph.py`), with the installed
+/// consumer's own atom among them.
+///
+/// A pin that is jointly unsatisfiable with the hard pullers is DROPPED,
+/// not enforced: real merges the hard-required version anyway and
+/// reports the broken consumer as a residual slot collision against the
+/// installed instance (exit 1), instead of masking the version into
+/// invisibility. Live shape (verified against real 3.0.82.2): an
+/// installed `keeper-1.0` recording `=paired-1.0` while the run merges
+/// `paired-2.0` for an explicit `=paired-2.0` argument or a
+/// `>=paired-2.0` dependency -- real prints `U paired-2.0` plus the
+/// conflict block pairing the merge instance against the installed
+/// `paired-1.0` pulled in by keeper; portuale used to mask `2.0` away
+/// entirely (`!!! no visible ebuild`, or a fatal top-level failure).
+///
+/// The check runs per upgraded slot: a pin (and each hard atom) applies
+/// to a slot group only when its own slot is unset or equal, so a pin on
+/// one slot never vetoes an upgrade in another. Anything unparseable, or
+/// a `cp` with no readable candidates at all, falls back to enforcing
+/// (today's behaviour) -- a drop happens only on proven joint
+/// unsatisfiability.
+fn rev_dep_pin_holdable(
+    repos: &[RepoConfig],
+    cp: &(String, String),
+    pin: &str,
+    pin_slot: Option<&str>,
+    upgraded_slots: &std::collections::HashSet<String>,
+    hard_atoms: &[String],
+) -> bool {
+    if portage_dep::parse_atom(pin).is_none() {
+        return true;
+    }
+    // A hard atom that cannot even be parsed cannot constrain anything;
+    // fall back to enforcing rather than reasoning about it.
+    let mut hard_parsed: Vec<(&str, portage_dep::Atom)> = Vec::new();
+    for h in hard_atoms {
+        match portage_dep::parse_atom(h) {
+            Some(a) => hard_parsed.push((h.as_str(), a)),
+            None => return true,
+        }
+    }
+    let Ok(cands) = list_candidates(repos, &cp.0, &cp.1) else {
+        return true;
+    };
+    // Slot groups the pin actually constrains that this pass upgrades.
+    let constrained: Vec<&String> = upgraded_slots
+        .iter()
+        .filter(|s| pin_slot.is_none_or(|ps| ps == *s))
+        .collect();
+    if constrained.is_empty() {
+        return true;
+    }
+    // The pin holds iff some constrained slot still admits a candidate
+    // satisfying the pin together with every slot-applicable hard atom.
+    constrained.iter().any(|slot| {
+        cands.iter().any(|c| {
+            if &c.slot != *slot {
+                return false;
+            }
+            let s = format!(
+                "{}/{}-{}:{}/{}::{}",
+                cp.0, cp.1, c.version, c.slot, c.sub_slot, c.repo_name
+            );
+            let refs = [s.as_str()];
+            if portage_dep::match_from_list(pin, &refs).is_none_or(|m| m.is_empty()) {
+                return false;
+            }
+            hard_parsed.iter().all(|(text, h)| {
+                if h.slot.is_some() && h.slot.as_deref() != Some(c.slot.as_str()) {
+                    return true;
+                }
+                portage_dep::match_from_list(text, &refs).is_some_and(|m| !m.is_empty())
+            })
+        })
+    })
+}
 /// Real `depgraph._complete_graph` reaching
 /// `_slot_operator_check_reverse_dependencies`: the dependency atoms an
 /// **installed** package records against a package this run wants to
 /// upgrade, which that upgrade would break.
+///
+/// A pin that no candidate can satisfy together with this pass's hard
+/// requirements (`hard_want`: every atom text that targeted the package,
+/// top-level arguments included) is NOT enforced -- it is returned in
+/// `dropped` instead, for the residual installed-instance conflict
+/// report (real merges the hard-required version and reports the broken
+/// consumer against the installed instance, exit 1). See
+/// `rev_dep_pin_holdable` for the joint-satisfiability rule and its
+/// live grounding.
 ///
 /// Real's graph does not stop at the packages its arguments reach. Once
 /// any installed package would change version, slot or USE,
@@ -10711,15 +10822,24 @@ fn reverse_dep_constraint_atom(atom_str: &str, atom: &portage_dep::Atom) -> Stri
 ///
 /// Returns `(cat/pkg, atom)` pairs to add to `slot_constraints`; empty
 /// (and the vdb scan skipped entirely) when nothing is being upgraded.
+///
+/// Returns `(enforced, dropped)` pin lists, each sorted and deduped by
+/// `(cp, atom, consumer)`. Enforced pins feed `slot_constraints` exactly
+/// as before; dropped pins (jointly unsatisfiable with this pass's hard
+/// requirements -- see `rev_dep_pin_holdable`) feed the residual
+/// installed-instance conflict report instead of masking the
+/// hard-required version into invisibility.
 fn reverse_dependency_constraints(
+    repos: &[RepoConfig],
     root: &Path,
     entries: &[GraphEntry],
     with_bdeps: bool,
     excluded: &[String],
-) -> Vec<((String, String), String)> {
-    // `cat/pkg` -> the candidate string this run would install, for every
-    // entry that replaces an installed version in its own slot.
-    let mut upgrading: HashMap<(String, String), String> = HashMap::new();
+    hard_want: &HashMap<(String, String), Vec<String>>,
+) -> (Vec<RevDepPin>, Vec<RevDepPin>) {
+    // (`cat/pkg`, slot) -> the candidate string this run would install,
+    // for every entry that replaces an installed version in its own slot.
+    let mut upgrading: HashMap<((String, String), String), String> = HashMap::new();
     let mut being_replaced: HashSet<(String, String)> = HashSet::new();
     for e in entries {
         let cp = (e.category.clone(), e.package.clone());
@@ -10731,7 +10851,7 @@ fn reverse_dependency_constraints(
             _ => continue,
         };
         upgrading.insert(
-            cp,
+            (cp, e.slot.clone().unwrap_or_else(|| "0".to_string())),
             format!(
                 "{}/{}-{to}:{}/{}::{}",
                 e.category,
@@ -10743,7 +10863,7 @@ fn reverse_dependency_constraints(
         );
     }
     if upgrading.is_empty() {
-        return Vec::new();
+        return (Vec::new(), Vec::new());
     }
 
     // Real `_add_pkg_dep_string` empties `DEPEND`/`BDEPEND` for a *built*
@@ -10755,8 +10875,13 @@ fn reverse_dependency_constraints(
         &["RDEPEND", "IDEPEND", "PDEPEND"]
     };
 
-    let mut out: Vec<((String, String), String)> = Vec::new();
-    let mut seen: HashSet<((String, String), String)> = HashSet::new();
+    static EMPTY_WANT: Vec<String> = Vec::new();
+    let mut enforced: Vec<RevDepPin> = Vec::new();
+    let mut dropped: Vec<RevDepPin> = Vec::new();
+    // (constrained cp, pin atom, pinning consumer) already emitted this
+    // pass.
+    type SeenPin = ((String, String), String, (String, String, String));
+    let mut seen: HashSet<SeenPin> = HashSet::new();
     for consumer in all_installed_packages(root) {
         let consumer_cp = (consumer.category.clone(), consumer.package.clone());
         if being_replaced.contains(&consumer_cp) {
@@ -10800,23 +10925,68 @@ fn reverse_dependency_constraints(
                     continue;
                 }
                 let cp = (atom.category.clone(), atom.package.clone());
-                let Some(candidate) = upgrading.get(&cp) else {
-                    continue;
-                };
+                let built_slot_op = is_built_slot_op(&atom);
                 let constraint = reverse_dep_constraint_atom(&atom_str, &atom);
-                let satisfied = portage_dep::match_from_list(&constraint, &[candidate.as_str()])
-                    .is_some_and(|m| !m.is_empty());
-                if !satisfied {
-                    let key = (cp, constraint);
-                    if seen.insert(key.clone()) {
-                        out.push(key);
+                // The pin fires when the upgrade in some slot breaks it;
+                // collect every failing slot for the per-slot holdability
+                // check below.
+                let mut failing: Vec<String> = Vec::new();
+                for ((ucp, slot), candidate) in &upgrading {
+                    if *ucp != cp {
+                        continue;
                     }
+                    let satisfied =
+                        portage_dep::match_from_list(&constraint, &[candidate.as_str()])
+                            .is_some_and(|m| !m.is_empty());
+                    if !satisfied {
+                        failing.push(slot.clone());
+                    }
+                }
+                if failing.is_empty() {
+                    continue;
+                }
+                let pin = RevDepPin {
+                    cp: cp.clone(),
+                    atom: constraint,
+                    consumer: (
+                        consumer.category.clone(),
+                        consumer.package.clone(),
+                        consumer.version.clone(),
+                    ),
+                };
+                if !seen.insert((pin.cp.clone(), pin.atom.clone(), pin.consumer.clone())) {
+                    continue;
+                }
+                // Enforce when some failing slot can still hold the pin
+                // alongside the hard requirements; otherwise drop it for
+                // the residual report (the hard-required upgrade merges
+                // anyway). `hard_want` is every atom text that targeted
+                // the package this pass, top-level arguments included --
+                // real's whole-atom-set selection. A slot-stripped
+                // (built-`:=`) pin constrains no slot in particular, like
+                // its normalised form; a plain slot pin stays scoped.
+                let pin_slot = if built_slot_op {
+                    None
+                } else {
+                    atom.slot.as_deref()
+                };
+                let hard = hard_want.get(&cp).map_or(&EMPTY_WANT, |v| v);
+                let holds = failing.iter().any(|slot| {
+                    let mut slots = std::collections::HashSet::new();
+                    slots.insert(slot.clone());
+                    rev_dep_pin_holdable(repos, &cp, &pin.atom, pin_slot, &slots, hard)
+                });
+                if holds {
+                    enforced.push(pin);
+                } else {
+                    dropped.push(pin);
                 }
             }
         }
     }
-    out.sort();
-    out
+    enforced.sort();
+    dropped.sort();
+    (enforced, dropped)
 }
 
 /// Real depgraph's `_slot_operator_trigger_reinstalls` +
@@ -12017,9 +12187,17 @@ pub struct SlotConflictInstance {
     /// scheduled for merge) USE="…" pulled in by` header line. Every
     /// `IUSE` flag, enabled-first, `( )`-wrapped for profile force/mask
     /// (same `build_use_expand_display` the `--info` block uses). Empty
-    /// slice → the header still renders a bare `USE=""`.
+    /// slice → the header still renders a bare `USE=""`. For an
+    /// installed instance the same pairs built from the vdb's own
+    /// `IUSE`/`USE` (see `installed_use_display_for`).
     pub use_display: Vec<(String, String)>,
     pub parents: Vec<SlotConflictParent>,
+    /// Real's installed nomerge node: an already-installed version kept
+    /// in the graph by a residual consumer pin (see
+    /// `build_residual_slot_conflicts`), rendered `(… installed in
+    /// '<root>')` instead of `(… ebuild scheduled for merge)`. Always
+    /// false for merge-vs-merge conflicts.
+    pub installed: bool,
 }
 
 /// One parent that pulled a `SlotConflictInstance` into the graph. See
@@ -12033,8 +12211,15 @@ pub struct SlotConflictParent {
     /// Real `pkg_use_display(parent, ...)` -- the parent package's own
     /// resolved `USE="…"` on its `<atom> required by (<parent_cpv>, …)
     /// USE="…"` line. Empty for a top-level `(Argument)` parent (real
-    /// renders a bare `""` for a non-`Package` parent).
+    /// renders a bare `""` for a non-`Package` parent). For an installed
+    /// parent the vdb's own `IUSE`/`USE` (see
+    /// `installed_use_display_for`).
     pub use_display: Vec<(String, String)>,
+    /// Real's installed nomerge parent: an already-installed package
+    /// whose recorded atom the merge breaks, rendered `required by
+    /// (<parent_cpv>, installed in '<root>')`. Always false for
+    /// merge-vs-merge conflicts.
+    pub installed: bool,
 }
 
 /// `(sub_slot, repo_name, slot)` of `cat/pkg`'s own `version` -- the
@@ -12124,6 +12309,31 @@ fn pkg_use_display_for(
     build_use_expand_display(&disp, config, None, &forced, true, &HashSet::new())
 }
 
+/// The same `USE="…"` display pairs as `pkg_use_display_for`, built from
+/// an **installed** package's vdb-recorded `IUSE`/`USE` instead of a tree
+/// candidate -- real `pkg_use_display(installed_pkg)` for a nomerge node
+/// or an installed parent in the residual installed-instance conflict
+/// report (see `build_residual_slot_conflicts`). An empty `IUSE` renders
+/// the bare `USE=""` real shows. Narrowing, documented: no
+/// profile-force/mask `( )` wraps (those need the tree candidate's
+/// keywords, which the vdb does not record); a flagless package -- every
+/// residual fixture so far -- renders byte-identical either way.
+pub fn installed_use_display_for(
+    root: &Path,
+    config: &portage_profile::Config,
+    category: &str,
+    package: &str,
+    version: &str,
+) -> Vec<(String, String)> {
+    let (iuse, use_flags) = installed_pkg_iuse_and_use(root, category, package, version);
+    let mut disp: Vec<(String, bool)> = iuse
+        .iter()
+        .map(|f| (f.clone(), use_flags.contains(f)))
+        .collect();
+    disp.sort_by_key(|p| alnum_sort_key(&p.0));
+    build_use_expand_display(&disp, config, None, &HashSet::new(), true, &HashSet::new())
+}
+
 /// Declared-IUSE names and resolved USE for `category/package` at
 /// `version` (highest-`repo_priority` candidate, same re-lookup as
 /// `slot_conflict_meta`/`pkg_use_display_for`) -- the two sets real
@@ -12206,13 +12416,6 @@ fn build_slot_conflict(
         slot_conflict_flag_sets(repos, config, category, package, existing_version);
     let (b_iuse, b_use) =
         slot_conflict_flag_sets(repos, config, category, package, current_version);
-    let puller_cpv = |pc: &str, pp: &str, pv: &str| -> String {
-        if pc.is_empty() {
-            return String::new();
-        }
-        let (psub, prepo, pslot) = slot_conflict_meta(repos, pc, pp, pv);
-        format!("{pc}/{pp}-{pv}:{pslot}/{psub}::{prepo}")
-    };
     let mut parents_a: Vec<SlotConflictParent> = Vec::new();
     let mut parents_b: Vec<SlotConflictParent> = Vec::new();
     if let Some(pullers) = slot_pullers.get(&(category.to_string(), package.to_string())) {
@@ -12234,13 +12437,14 @@ fn build_slot_conflict(
                 .is_some_and(|m| !m.is_empty())
                 && use_ok(&b_iuse, &b_use);
             let entry = SlotConflictParent {
-                parent_cpv: puller_cpv(pc, pp, pv),
+                parent_cpv: slot_conflict_puller_cpv(repos, pc, pp, pv),
                 atom: atom.clone(),
                 use_display: if pc.is_empty() {
                     Vec::new()
                 } else {
                     pkg_use_display_for(repos, config, pc, pp, pv)
                 },
+                installed: false,
             };
             if hits_a {
                 if !parents_a.contains(&entry) {
@@ -12270,6 +12474,7 @@ fn build_slot_conflict(
                     existing_version,
                 ),
                 parents: parents_a,
+                installed: false,
             },
             SlotConflictInstance {
                 version: current_version.to_string(),
@@ -12277,9 +12482,22 @@ fn build_slot_conflict(
                 repo_name: b_repo,
                 use_display: pkg_use_display_for(repos, config, category, package, current_version),
                 parents: parents_b,
+                installed: false,
             },
         ],
     }
+}
+
+/// `` `cat/pkg-ver:slot/sub_slot::repo` `` for a conflicting parent --
+/// the real `(<cpv>:<slot>/<sub>::<repo>, …)` form, empty for a
+/// top-level `(Argument)` parent. Shared by `build_slot_conflict` and
+/// the residual installed-instance report.
+fn slot_conflict_puller_cpv(repos: &[RepoConfig], pc: &str, pp: &str, pv: &str) -> String {
+    if pc.is_empty() {
+        return String::new();
+    }
+    let (psub, prepo, pslot) = slot_conflict_meta(repos, pc, pp, pv);
+    format!("{pc}/{pp}-{pv}:{pslot}/{psub}::{prepo}")
 }
 
 /// Records a freshly built `SlotConflict`, merging into an existing
@@ -12305,6 +12523,257 @@ fn record_slot_conflict(slot_conflicts: &mut Vec<SlotConflict>, sc: SlotConflict
     } else {
         slot_conflicts.push(sc);
     }
+}
+
+/// Residual installed-instance slot conflicts for dropped reverse-dep
+/// pins (see `RevDepPin`): real `_complete_graph`'s end-of-walk
+/// unsatisfied-dep loop (`depgraph.py:8770+`) adds the installed package
+/// satisfying a broken deep dependency as a nomerge node, so the run
+/// reports it as a slot collision against the merged version instead of
+/// silently breaking it -- merge instance vs installed instance, exit 1.
+///
+/// Portuale reports the same shape without carrying the nodes: for every
+/// dropped pin whose consumer still names an installed version the final
+/// merge-bound version fails, one record pairing the merge instance
+/// (parents: this pass's hard pullers) against the installed instance
+/// (parents: hard pullers matching it, plus every dropped consumer pin
+/// for it). Verified live against real 3.0.82.2 (`=paired-2.0` over a
+/// keeper pinning `=paired-1.0`, and the needer/othermod triangle): real
+/// prints the merge list with the upgrade *and* the conflict block, exit
+/// 1 -- where portuale used to mask the version into invisibility
+/// (`!!! no visible ebuild`) or fail the top-level atom outright.
+///
+/// A pin whose final version satisfies it after all (a later pass picked
+/// a compatible version anyway), one matching no installed version
+/// (the consumer was already broken -- real's `initially_unsatisfied`
+/// skip), or one whose installed version lives in a different slot than
+/// the merge (slots coexist; nothing breaks) yields no record. One
+/// record per `(package, merge version, installed version)`; parents
+/// unioned across pins. Sorted for determinism.
+fn build_residual_slot_conflicts(
+    repos: &[RepoConfig],
+    config: &portage_profile::Config,
+    root: &Path,
+    entries: &[GraphEntry],
+    slot_pullers: &SlotPullers,
+    dropped: &[RevDepPin],
+) -> Vec<SlotConflict> {
+    // (category, package, slot, merge version, installed version) ->
+    // installed-parent index into the record being assembled.
+    let mut grouped: HashMap<(String, String, String, String, String), SlotConflict> =
+        HashMap::new();
+    let mut order: Vec<(String, String, String, String, String)> = Vec::new();
+    for pin in dropped {
+        let (category, package) = (pin.cp.0.clone(), pin.cp.1.clone());
+        // The final merge-bound version of this package, if any.
+        let mut merge: Option<(String, String, String, String)> = None;
+        for e in entries {
+            if e.category != category || e.package != package {
+                continue;
+            }
+            let version = match &e.outcome {
+                PretendOutcome::New { version } | PretendOutcome::Reinstall { version, .. } => {
+                    Some(version.clone())
+                }
+                PretendOutcome::Upgrade { to, .. } | PretendOutcome::Downgrade { to, .. } => {
+                    Some(to.clone())
+                }
+                _ => None,
+            };
+            if let Some(version) = version {
+                merge = Some((
+                    version,
+                    e.slot.clone().unwrap_or_else(|| "0".to_string()),
+                    e.sub_slot.clone().unwrap_or_else(|| "0".to_string()),
+                    e.repo_name.clone().unwrap_or_default(),
+                ));
+            }
+        }
+        let Some((merge_ver, slot, merge_sub, merge_repo)) = merge else {
+            continue;
+        };
+        // The pin holds after all -- a later pass picked a compatible
+        // version. Nothing to report (real reconciles silently too).
+        let merge_str =
+            format!("{category}/{package}-{merge_ver}:{slot}/{merge_sub}::{merge_repo}");
+        if portage_dep::match_from_list(&pin.atom, &[merge_str.as_str()])
+            .is_some_and(|m| !m.is_empty())
+        {
+            continue;
+        }
+        // The installed version the pin preserves: the highest installed
+        // one it matches (real's `matches[-1]`). None -- the consumer was
+        // already broken before this run -- means no instance to show.
+        let refs = installed_refs(root, &category, &package);
+        let mut inst: Option<&InstalledRef> = None;
+        for r in &refs {
+            let s = format!(
+                "{category}/{package}-{}:{}/{}",
+                r.version, r.slot, r.sub_slot
+            );
+            if portage_dep::match_from_list(&pin.atom, &[s.as_str()]).is_some_and(|m| !m.is_empty())
+                && inst.is_none_or(|best: &InstalledRef| {
+                    vercmp_ordering(&r.version, &best.version) == std::cmp::Ordering::Greater
+                })
+            {
+                inst = Some(r);
+            }
+        }
+        let Some(inst) = inst else { continue };
+        // Different slots coexist -- the merge breaks nothing.
+        if inst.slot != slot {
+            continue;
+        }
+        let key = (
+            category.clone(),
+            package.clone(),
+            slot.clone(),
+            merge_ver.clone(),
+            inst.version.clone(),
+        );
+        if grouped.contains_key(&key) {
+            continue;
+        }
+        // Merge parents: this pass's hard pullers matching the merged
+        // version (plus every top-level Argument puller -- real files an
+        // `(Argument)` parent under a reason exactly when the other side
+        // is installed, which a residual always is). Installed parents:
+        // hard pullers matching the installed version instead, plus the
+        // dropped consumer pins below. Mirror `build_slot_conflict`'s
+        // match-first filing and USE-aware check on both sides.
+        let (m_sub, _m_repo, _) = slot_conflict_meta(repos, &category, &package, &merge_ver);
+        let merge_match = format!("{category}/{package}-{merge_ver}:{slot}/{m_sub}");
+        let inst_match = format!(
+            "{category}/{package}-{}:{}/{}",
+            inst.version, inst.slot, inst.sub_slot
+        );
+        let (m_iuse, m_use) =
+            slot_conflict_flag_sets(repos, config, &category, &package, &merge_ver);
+        let (i_iuse, i_use) = installed_pkg_iuse_and_use(root, &category, &package, &inst.version);
+        let use_ok_for = |atom_str: &str, iuse: &HashSet<String>, use_: &HashSet<String>| -> bool {
+            match portage_dep::parse_atom(atom_str) {
+                Some(a) => match &a.use_deps {
+                    Some(ud) => portage_dep::use_deps_satisfied(ud, iuse, use_),
+                    None => true,
+                },
+                None => true,
+            }
+        };
+        let mut merge_parents: Vec<SlotConflictParent> = Vec::new();
+        let mut inst_parents: Vec<SlotConflictParent> = Vec::new();
+        if let Some(pullers) = slot_pullers.get(&(category.clone(), package.clone())) {
+            for (pc, pp, pv, atom) in pullers {
+                let hits_merge = portage_dep::match_from_list(atom, &[merge_match.as_str()])
+                    .is_some_and(|m| !m.is_empty())
+                    && use_ok_for(atom, &m_iuse, &m_use);
+                let hits_inst = portage_dep::match_from_list(atom, &[inst_match.as_str()])
+                    .is_some_and(|m| !m.is_empty())
+                    && use_ok_for(atom, &i_iuse, &i_use);
+                let entry = SlotConflictParent {
+                    parent_cpv: slot_conflict_puller_cpv(repos, pc, pp, pv),
+                    atom: atom.clone(),
+                    use_display: if pc.is_empty() {
+                        Vec::new()
+                    } else {
+                        pkg_use_display_for(repos, config, pc, pp, pv)
+                    },
+                    installed: false,
+                };
+                if hits_merge {
+                    if !merge_parents.contains(&entry) {
+                        merge_parents.push(entry);
+                    }
+                } else if hits_inst && !inst_parents.contains(&entry) {
+                    inst_parents.push(entry);
+                }
+            }
+        }
+        let record = SlotConflict {
+            category: category.clone(),
+            package: package.clone(),
+            slot: slot.clone(),
+            resolved_version: merge_ver.clone(),
+            conflicting_atom: pin.atom.clone(),
+            instances: vec![
+                SlotConflictInstance {
+                    version: merge_ver.clone(),
+                    sub_slot: merge_sub.clone(),
+                    repo_name: merge_repo.clone(),
+                    use_display: pkg_use_display_for(
+                        repos, config, &category, &package, &merge_ver,
+                    ),
+                    parents: merge_parents,
+                    installed: false,
+                },
+                SlotConflictInstance {
+                    version: inst.version.clone(),
+                    sub_slot: inst.sub_slot.clone(),
+                    repo_name: inst.repo.clone(),
+                    use_display: installed_use_display_for(
+                        root,
+                        config,
+                        &category,
+                        &package,
+                        &inst.version,
+                    ),
+                    parents: inst_parents,
+                    installed: true,
+                },
+            ],
+        };
+        order.push(key.clone());
+        grouped.insert(key, record);
+    }
+    // Fold every dropped consumer pin for the group into the installed
+    // instance's parents (real lists each installed consumer beside the
+    // hard pullers already filed above). A pin belongs to a record only
+    // when it guards that record's own installed version.
+    for pin in dropped {
+        for key in order.iter() {
+            if key.0 != pin.cp.0 || key.1 != pin.cp.1 {
+                continue;
+            }
+            let Some(record) = grouped.get_mut(key) else {
+                continue;
+            };
+            let Some(inst) = record.instances.iter().find(|i| i.installed) else {
+                continue;
+            };
+            let inst_str = format!(
+                "{}/{}-{}:{}/{}",
+                record.category, record.package, inst.version, record.slot, inst.sub_slot
+            );
+            if portage_dep::match_from_list(&pin.atom, &[inst_str.as_str()])
+                .is_none_or(|m| m.is_empty())
+            {
+                continue;
+            }
+            let (cc, cp2, cv) = &pin.consumer;
+            let consumer_ref = installed_refs(root, cc, cp2)
+                .into_iter()
+                .find(|r| &r.version == cv);
+            let (cslot, csub, crepo) = match &consumer_ref {
+                Some(r) => (r.slot.clone(), r.sub_slot.clone(), r.repo.clone()),
+                None => ("0".to_string(), "0".to_string(), "__unknown__".to_string()),
+            };
+            let entry = SlotConflictParent {
+                parent_cpv: format!("{cc}/{cp2}-{cv}:{cslot}/{csub}::{crepo}"),
+                atom: pin.atom.clone(),
+                use_display: installed_use_display_for(root, config, cc, cp2, cv),
+                installed: true,
+            };
+            if let Some(inst) = record.instances.iter_mut().find(|i| i.installed)
+                && !inst.parents.contains(&entry)
+            {
+                inst.parents.push(entry);
+            }
+        }
+    }
+    order.sort();
+    order
+        .into_iter()
+        .filter_map(|k| grouped.remove(&k))
+        .collect()
 }
 
 /// `--changed-deps-report`: an installed package, still in the graph at
@@ -13456,6 +13925,12 @@ fn backtracking_resolve(req: &ResolveRequest) -> Result<GraphResult, Error> {
     // `(cat/pkg, atom)` already folded into `slot_constraints` so a
     // constraint is never re-added and the `'backtrack` loop converges.
     let mut reverse_dep_masked: HashSet<((String, String), String)> = HashSet::new();
+    // Dropped reverse-dep pins (see `RevDepPin`), accumulated across
+    // passes, for the residual installed-instance conflict report once
+    // the graph settles (see `build_residual_slot_conflicts`). Deduped
+    // by `(cp, atom, consumer)`; stale entries (a later pass picked a
+    // compatible version after all) simply yield no record.
+    let mut dropped_pins: Vec<RevDepPin> = Vec::new();
 
     // The local `$PKGDIR` binary index, built once for the whole walk
     // (either the CLI layer's `$PKGDIR` directory scan or the parsed
@@ -15912,14 +16387,30 @@ fn backtracking_resolve(req: &ResolveRequest) -> Result<GraphResult, Error> {
         // graph. `reverse_dep_masked` latches every constraint already
         // added, so a pass that finds nothing new falls through and the
         // loop terminates.
+        //
+        // A pin jointly unsatisfiable with this pass's hard requirements
+        // (an explicit versioned request, or a dependency only a newer
+        // version satisfies) is dropped instead of enforced: real merges
+        // the hard-required version anyway and reports the broken
+        // consumer against the installed instance. Dropped pins
+        // accumulate in `dropped_pins` for that residual report (see
+        // `build_residual_slot_conflicts`); they never enter
+        // `slot_constraints`, so the hard-required version is never
+        // masked into invisibility.
         if mask_phase == MaskPhase::None && backtrack_iteration < backtrack_max {
             let mut added = false;
-            for (cp, constraint) in
-                reverse_dependency_constraints(root, &entries, with_bdeps, excluded)
-            {
-                if reverse_dep_masked.insert((cp.clone(), constraint.clone())) {
-                    slot_constraints.entry(cp).or_default().push(constraint);
+            let (enforced, dropped) = reverse_dependency_constraints(
+                &repos, root, &entries, with_bdeps, excluded, &slot_want,
+            );
+            for pin in enforced {
+                if reverse_dep_masked.insert((pin.cp.clone(), pin.atom.clone())) {
+                    slot_constraints.entry(pin.cp).or_default().push(pin.atom);
                     added = true;
+                }
+            }
+            for pin in dropped {
+                if !dropped_pins.contains(&pin) {
+                    dropped_pins.push(pin);
                 }
             }
             if added {
@@ -16063,6 +16554,23 @@ fn backtracking_resolve(req: &ResolveRequest) -> Result<GraphResult, Error> {
                 refresh_entry_use_display(&mut entries, &repos, root, cp, &tier_config);
             }
         }
+
+        // Residual installed-instance slot conflicts for reverse-dep pins
+        // dropped as jointly unsatisfiable with the hard requirements
+        // (see the feed above and `build_residual_slot_conflicts`): the
+        // merge proceeds with the hard-required version, and the broken
+        // installed consumers are reported against the installed
+        // instance -- real's nomerge-node collision report. Appended
+        // after every merge-vs-merge record, so those keep their
+        // long-standing order.
+        slot_conflicts.extend(build_residual_slot_conflicts(
+            &repos,
+            config,
+            root,
+            &entries,
+            &slot_pullers,
+            &dropped_pins,
+        ));
 
         return Ok(GraphResult {
             entries,
@@ -23788,6 +24296,7 @@ mod tests {
                     repo_name: "r".to_string(),
                     use_display: Vec::new(),
                     parents: Vec::new(),
+                    installed: false,
                 },
                 SlotConflictInstance {
                     version: current.to_string(),
@@ -23795,6 +24304,7 @@ mod tests {
                     repo_name: "r".to_string(),
                     use_display: Vec::new(),
                     parents: Vec::new(),
+                    installed: false,
                 },
             ],
         };
@@ -23804,6 +24314,58 @@ mod tests {
         assert_eq!(v[0].conflicting_atom, "atom-2");
         record_slot_conflict(&mut v, mk("atom-3", "1.5"));
         assert_eq!(v.len(), 2);
+    }
+
+    #[test]
+    fn dropped_pin_reports_a_residual_installed_conflict() {
+        // dev-libs/keeper-1.0 (installed, outside every target closure)
+        // records `=dev-libs/paired-1.0`, which no candidate satisfies
+        // together with the explicit `=dev-libs/paired-2.0` request --
+        // so the pin is dropped, 2.0 merges, and the run reports the
+        // residual conflict pairing the merge instance against the kept
+        // installed 1.0 with keeper as its installed parent (real
+        // _complete_graph's end-of-walk nomerge node, verified live).
+        let result = graph_result_real("=dev-libs/paired-2.0");
+        let paired = result
+            .entries
+            .iter()
+            .find(|e| e.package == "paired")
+            .expect("paired resolves");
+        assert!(
+            matches!(
+                &paired.outcome,
+                PretendOutcome::Upgrade { to, .. } if to == "2.0"
+            ),
+            "the hard-required upgrade merges, not masked away: {:?}",
+            paired.outcome
+        );
+        assert_eq!(result.slot_conflicts.len(), 1);
+        let c = &result.slot_conflicts[0];
+        assert_eq!(
+            (c.category.as_str(), c.package.as_str(), c.slot.as_str()),
+            ("dev-libs", "paired", "0")
+        );
+        assert_eq!(c.instances.len(), 2);
+        let merge = &c.instances[0];
+        assert_eq!(merge.version, "2.0");
+        assert!(!merge.installed);
+        assert!(
+            merge.parents.iter().any(|p| p.parent_cpv.is_empty()
+                && p.atom == "=dev-libs/paired-2.0"
+                && !p.installed),
+            "the explicit request shows as an (Argument) parent: {:?}",
+            merge.parents
+        );
+        let inst = &c.instances[1];
+        assert_eq!(inst.version, "1.0");
+        assert!(inst.installed);
+        assert!(
+            inst.parents.iter().any(|p| p.installed
+                && p.atom == "=dev-libs/paired-1.0"
+                && p.parent_cpv.starts_with("dev-libs/keeper-1.0:")),
+            "keeper shows as an installed parent: {:?}",
+            inst.parents
+        );
     }
 
     #[test]

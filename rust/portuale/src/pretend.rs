@@ -1727,19 +1727,21 @@ fn slot_conflict_to_json(c: &SlotConflict) -> String {
                 .iter()
                 .map(|p| {
                     format!(
-                        "{{\"parent\":{},\"atom\":{},\"use\":{}}}",
+                        "{{\"parent\":{},\"atom\":{},\"use\":{},\"installed\":{}}}",
                         json_string(&p.parent_cpv),
                         json_string(&p.atom),
-                        json_string(&render_pkg_use_display(&p.use_display))
+                        json_string(&render_pkg_use_display(&p.use_display)),
+                        p.installed
                     )
                 })
                 .collect();
             format!(
-                "{{\"version\":{},\"sub_slot\":{},\"repo_name\":{},\"use\":{},\"parents\":[{}]}}",
+                "{{\"version\":{},\"sub_slot\":{},\"repo_name\":{},\"use\":{},\"installed\":{},\"parents\":[{}]}}",
                 json_string(&inst.version),
                 json_string(&inst.sub_slot),
                 json_string(&inst.repo_name),
                 json_string(&render_pkg_use_display(&inst.use_display)),
+                inst.installed,
                 parents.join(",")
             )
         })
@@ -10558,28 +10560,66 @@ pub fn run(args: &[String]) -> ExitCode {
             println!("{}/{}:{}", c.category, c.package, c.slot);
             for inst in &c.instances {
                 println!();
-                println!(
-                    "  ({}/{}-{}:{}/{}::{}, ebuild scheduled for merge) {} pulled in by",
-                    c.category,
-                    c.package,
-                    inst.version,
-                    c.slot,
-                    inst.sub_slot,
-                    inst.repo_name,
-                    render_pkg_use_display(&inst.use_display)
-                );
+                if inst.installed {
+                    // Real's installed nomerge node: `(cpv, installed in
+                    // '<root>')` (see `build_residual_slot_conflicts`).
+                    println!(
+                        "  ({}/{}-{}:{}/{}::{}, installed in '{}') {} pulled in by",
+                        c.category,
+                        c.package,
+                        inst.version,
+                        c.slot,
+                        inst.sub_slot,
+                        inst.repo_name,
+                        root.display(),
+                        render_pkg_use_display(&inst.use_display)
+                    );
+                } else {
+                    println!(
+                        "  ({}/{}-{}:{}/{}::{}, ebuild scheduled for merge) {} pulled in by",
+                        c.category,
+                        c.package,
+                        inst.version,
+                        c.slot,
+                        inst.sub_slot,
+                        inst.repo_name,
+                        render_pkg_use_display(&inst.use_display)
+                    );
+                }
+                // Whether a bare `(Argument)` parent shows: real files one
+                // under a reason only when the *other* package is already
+                // installed -- always the case for a residual record's
+                // installed side, never for merge-vs-merge records (whose
+                // instances are all scheduled for merge, so such a parent
+                // contributes no specific reason and is not shown).
+                let show_argument_parents = c
+                    .instances
+                    .iter()
+                    .any(|o| o.version != inst.version && o.installed);
                 let others: Vec<ConflictOther> = c
                     .instances
                     .iter()
                     .filter(|o| o.version != inst.version)
                     .map(|o| {
-                        let (iuse, use_flags) = slot_conflict_flag_sets(
-                            &repos,
-                            &config,
-                            &c.category,
-                            &c.package,
-                            &o.version,
-                        );
+                        // Flag sets for the `("use", flag)` branch: an
+                        // installed other's own vdb-recorded sets, like
+                        // the `use_display` on its header line.
+                        let (iuse, use_flags) = if o.installed {
+                            portage_repo::installed_pkg_iuse_and_use(
+                                &root,
+                                &c.category,
+                                &c.package,
+                                &o.version,
+                            )
+                        } else {
+                            slot_conflict_flag_sets(
+                                &repos,
+                                &config,
+                                &c.category,
+                                &c.package,
+                                &o.version,
+                            )
+                        };
                         ConflictOther {
                             cpv: format!(
                                 "{}/{}-{}:{}/{}::{}",
@@ -10591,14 +10631,12 @@ pub fn run(args: &[String]) -> ExitCode {
                     })
                     .collect();
                 let mut classified: Vec<ClassifiedParent> = Vec::new();
+                // (parent_cpv, atom, display, installed) for the selected
+                // line rendering below -- an installed parent renders
+                // `required by (<cpv>, installed in '<root>')`.
+                let mut classified_installed: Vec<bool> = Vec::new();
                 for p in &inst.parents {
-                    // Real files a bare command-line (`AtomArg`) parent
-                    // under a reason only when the *other* package is
-                    // already installed; portuale's slot-conflict
-                    // instances are always "scheduled for merge", so such
-                    // a parent contributes no specific reason and is not
-                    // shown.
-                    if p.parent_cpv.is_empty() {
+                    if p.parent_cpv.is_empty() && !show_argument_parents {
                         continue;
                     }
                     let Some(atom) = parse_atom(&p.atom) else {
@@ -10614,6 +10652,7 @@ pub fn run(args: &[String]) -> ExitCode {
                             use_unconditional,
                             use_display: &p.use_display,
                         });
+                        classified_installed.push(p.installed);
                     }
                 }
                 let num_all_specific: usize = classified.iter().map(|p| p.reasons.len()).sum();
@@ -10746,10 +10785,23 @@ pub fn run(args: &[String]) -> ExitCode {
                     // anyway). Portuale wraps the same spans but marks
                     // the DISPLAYED string, so color and carets agree.
                     let (atom_display, shifted) = colorize_marked_spans(p.atom_str, &idx, &color);
+                    // A bare command-line parent renders `<atom>
+                    // (Argument)` with no marker line (real shows no `^`
+                    // under one either); an installed parent names its
+                    // position like an installed instance does.
+                    if p.parent_cpv.is_empty() {
+                        println!("    {atom_display} (Argument)");
+                        continue;
+                    }
+                    let parent_pos = if classified_installed[m] {
+                        format!("{}, installed in '{}'", p.parent_cpv, root.display())
+                    } else {
+                        format!("{}, ebuild scheduled for merge", p.parent_cpv)
+                    };
                     let cur_line = format!(
-                        "{} required by ({}, ebuild scheduled for merge) {}\n",
+                        "{} required by ({}) {}\n",
                         atom_display,
-                        p.parent_cpv,
+                        parent_pos,
                         render_pkg_use_display(p.use_display)
                     );
                     let marker: String = (0..cur_line.chars().count())

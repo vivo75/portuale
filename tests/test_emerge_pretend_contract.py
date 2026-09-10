@@ -51,6 +51,26 @@ CASES = [
         ["--pretend", "--update", "dev-libs/revdepslottarget"],
         0,
     ),
+    (
+        "an explicitly pinned upgrade breaks an installed pin and reports the residual conflict",
+        ["--pretend", "=dev-libs/paired-2.0"],
+        0,
+    ),
+    (
+        "a hard dependency requirement breaks an installed pin and reports the residual conflict",
+        ["--pretend", "dev-libs/needer"],
+        0,
+    ),
+    (
+        "the needer triangle reports the installed instance with both parents",
+        ["--pretend", "dev-libs/needer", "dev-libs/othermod"],
+        0,
+    ),
+    (
+        "a satisfiable installed pin still holds the upgrade",
+        ["--pretend", "--update", "dev-libs/paired"],
+        0,
+    ),
     ("already installed", ["--pretend", "dev-libs/samepkg"], 0),
     (
         "a New package shows its full USE=\"...\" list at plain -p (verbosity 2)",
@@ -11768,6 +11788,174 @@ def test_installed_consumers_built_slot_operator_atom_does_not_block_an_upgrade(
     assert rust.stdout.splitlines() == [
         "[ebuild     U  ] dev-libs/revdepslottarget-2.0 [1.0]",
     ]
+
+
+def _assert_residual_slot_conflict_block(
+    stdout, root, slot_atom, merge_cpv, merge_parents, inst_cpv, inst_parents
+):
+    """The residual installed-instance conflict block (real
+    _complete_graph's end-of-walk unsatisfied-dep loop reporting the
+    installed satisfier as a nomerge node): the merge instance keeps the
+    ordinary `(cpv, ebuild scheduled for merge)` header while the kept
+    installed version renders `(cpv, installed in '<root>')`, and an
+    installed consumer renders `required by (<cpv>, installed in
+    '<root>')`. Structural asserts like _assert_slot_collision_block
+    (exact caret columns are pinned once, in the slotconfgroup test):
+    each parent atom is followed by its ` USE=""` slot and a `^` marker
+    line, and a bare command-line parent renders `<atom> (Argument)` with
+    no marker. Parents are (parent_cpv_or_None, atom, installed) lists."""
+    assert _SLOT_COLLISION_PREAMBLE in stdout
+    assert f"\n{slot_atom}\n" in stdout
+    assert (
+        f'  ({merge_cpv}, ebuild scheduled for merge) USE="" pulled in by\n' in stdout
+    )
+    assert (
+        f"  ({inst_cpv}, installed in '{root}') USE=\"\" pulled in by\n" in stdout
+    )
+    for parent_cpv, atom, installed in merge_parents + inst_parents:
+        if parent_cpv is None:
+            assert f"    {atom} (Argument)\n" in stdout
+            continue
+        if installed:
+            line = (
+                f'    {atom} required by ({parent_cpv}, '
+                f"installed in '{root}') USE=\"\"\n"
+            )
+        else:
+            line = (
+                f'    {atom} required by ({parent_cpv}, '
+                f'ebuild scheduled for merge) USE=""\n'
+            )
+        assert line in stdout
+        after = stdout.split(line, 1)[1]
+        marker = after.split("\n", 1)[0]
+        assert marker.startswith("    ") and set(marker) <= {" ", "^"}
+        assert "^" in marker
+    assert (
+        "It may be possible to solve this problem by using package.mask to" in stdout
+    )
+
+
+def test_explicitly_pinned_upgrade_breaks_an_installed_pin_and_reports_it(
+    emerge_binary, emerge_pretend_python, fixture_env
+):
+    """Real _complete_graph's end-of-walk unsatisfied-dep loop
+    (depgraph.py:8770+): an installed consumer's recorded atom that the
+    hard requirements cannot satisfy does not veto the upgrade -- real
+    merges the hard-required version anyway and reports the broken
+    consumer as a slot collision against the installed instance (exit 1
+    in real; informational, exit 0, by portuale's standing convention).
+
+    dev-libs/keeper-1.0 (installed, outside every target closure)
+    records RDEPEND="=dev-libs/paired-1.0". An explicit
+    `=dev-libs/paired-2.0` request upgrades anyway: the merge list keeps
+    `[ebuild U] paired-2.0`, and the notice pairs the merge instance
+    (pulled in by the `(Argument)`) against the installed 1.0 (pulled in
+    by keeper). Verified live against real 3.0.82.2, which prints the
+    same merge list plus the same-shaped block on stderr. Before this
+    slice portuale failed the top-level atom outright ("there are no
+    ebuilds to satisfy")."""
+    args = ["--pretend", "=dev-libs/paired-2.0"]
+    rust = _run([str(emerge_binary)], args, fixture_env)
+    python = _run(emerge_pretend_python, args, fixture_env)
+    assert rust.returncode == 0
+    assert rust.stdout == python.stdout
+    assert rust.stderr == python.stderr
+    assert rust.stdout.splitlines()[:1] == [
+        "[ebuild     U  ] dev-libs/paired-2.0 [1.0]",
+    ]
+    _assert_residual_slot_conflict_block(
+        rust.stdout,
+        fixture_env["ROOT"],
+        "dev-libs/paired:0",
+        "dev-libs/paired-2.0:0/0::testrepo",
+        [(None, "=dev-libs/paired-2.0", False)],
+        "dev-libs/paired-1.0:0/0::testrepo",
+        [("dev-libs/keeper-1.0:0/0::testrepo", "=dev-libs/paired-1.0", True)],
+    )
+
+
+def test_hard_dependency_requirement_breaks_an_installed_pin_and_reports_it(
+    emerge_binary, emerge_pretend_python, fixture_env
+):
+    """Same real rule as above, with the hard requirement coming from a
+    dependency instead of an argument: dev-libs/needer-1.0 requires
+    `>=dev-libs/paired-2.0`, which the keeper pin (`=paired-1.0`) cannot
+    satisfy. Real merges needer + the 2.0 upgrade and reports the
+    residual conflict (verified live); portuale used to merge needer
+    alone with `!!! no visible ebuild for dependency "dev-libs/paired"`.
+    The merge instance's parent is the needer dep (with `^^` markers),
+    the installed instance's the keeper pin."""
+    args = ["--pretend", "dev-libs/needer"]
+    rust = _run([str(emerge_binary)], args, fixture_env)
+    python = _run(emerge_pretend_python, args, fixture_env)
+    assert rust.returncode == 0
+    assert rust.stdout == python.stdout
+    assert rust.stderr == python.stderr
+    assert rust.stdout.splitlines()[:2] == [
+        "[ebuild     U  ] dev-libs/paired-2.0 [1.0]",
+        "[ebuild  N     ] dev-libs/needer-1.0 ",
+    ]
+    _assert_residual_slot_conflict_block(
+        rust.stdout,
+        fixture_env["ROOT"],
+        "dev-libs/paired:0",
+        "dev-libs/paired-2.0:0/0::testrepo",
+        [("dev-libs/needer-1.0:0/0::testrepo", ">=dev-libs/paired-2.0", False)],
+        "dev-libs/paired-1.0:0/0::testrepo",
+        [("dev-libs/keeper-1.0:0/0::testrepo", "=dev-libs/paired-1.0", True)],
+    )
+
+
+def test_needer_triangle_reports_the_installed_instance_with_both_parents(
+    emerge_binary, emerge_pretend_python, fixture_env
+):
+    """Both hard sides at once: needer requires `>=paired-2.0` while
+    othermod requires `<paired-2.0`, and keeper pins `=paired-1.0` from
+    outside. Real merges all three with the 2.0 upgrade and reports one
+    conflict pairing it against installed 1.0, whose parents are the
+    othermod dep *and* the keeper pin (verified live). Portuale used to
+    drop paired from the merge list entirely here."""
+    args = ["--pretend", "dev-libs/needer", "dev-libs/othermod"]
+    rust = _run([str(emerge_binary)], args, fixture_env)
+    python = _run(emerge_pretend_python, args, fixture_env)
+    assert rust.returncode == 0
+    assert rust.stdout == python.stdout
+    assert rust.stderr == python.stderr
+    assert rust.stdout.splitlines()[:3] == [
+        "[ebuild     U  ] dev-libs/paired-2.0 [1.0]",
+        "[ebuild  N     ] dev-libs/needer-1.0 ",
+        "[ebuild  N     ] dev-libs/othermod-1.0 ",
+    ]
+    _assert_residual_slot_conflict_block(
+        rust.stdout,
+        fixture_env["ROOT"],
+        "dev-libs/paired:0",
+        "dev-libs/paired-2.0:0/0::testrepo",
+        [("dev-libs/needer-1.0:0/0::testrepo", ">=dev-libs/paired-2.0", False)],
+        "dev-libs/paired-1.0:0/0::testrepo",
+        [
+            ("dev-libs/othermod-1.0:0/0::testrepo", "<dev-libs/paired-2.0", False),
+            ("dev-libs/keeper-1.0:0/0::testrepo", "=dev-libs/paired-1.0", True),
+        ],
+    )
+
+
+def test_satisfiable_installed_pin_still_holds_the_upgrade(
+    emerge_binary, emerge_pretend_python, fixture_env
+):
+    """The other side of the same rule: a bare `--update dev-libs/paired`
+    is satisfiable together with the keeper pin (1.0 satisfies the
+    unversioned request), so the pin holds and the entry settles as
+    already-installed -- silent, exactly like the revdeptarget case
+    above and like real, which also keeps 1.0 here (verified live)."""
+    args = ["--pretend", "--update", "dev-libs/paired"]
+    rust = _run([str(emerge_binary)], args, fixture_env)
+    python = _run(emerge_pretend_python, args, fixture_env)
+    assert rust.returncode == 0
+    assert rust.stdout == python.stdout
+    assert rust.stderr == python.stderr
+    assert rust.stdout.splitlines() == []
 
 
 def test_reinstall_atoms_forces_one_deep_dependency_to_reinstall(

@@ -180,13 +180,26 @@ can't grow into these incrementally:
   **atoms** shipped 2026-09-07 (`reverse_dependency_constraints` — a vdb
   reverse scan fed into the `'backtrack` loop's `slot_constraints`,
   closing the `media-libs/libdisplay-info` membership divergence; see
-  `what-this-proves.md`). What is still not ported is real's actual
-  re-walk, which carries every installed package `@world`/`@system`
-  reaches as a nomerge graph *node* — 1854 for a case whose own closure
-  is 461. The `_serialize_tasks` validation showed those nodes are not
-  needed for ordering, and nothing observed now needs them for membership
-  either; they would matter for a divergence that depends on an installed
-  package's *position* in the graph rather than on its recorded atoms.
+  `what-this-proves.md`). **Shipped 2026-09-10** the rest of what the
+  nodes observably do: pins jointly unsatisfiable with the hard pullers
+  are *dropped* instead of enforced (explicit versioned requests and
+  hard dependency requirements merge anyway), and the dropped pins
+  build residual conflict records pairing the merge instance against
+  the installed instance (highest installed version matching the pin)
+  with installed consumers as `installed in '<root>'` parents --
+  verified live against real 3.0.82.2 on three probe shapes (explicit
+  pin, hard-dep pin, needer/othermod triangle) and pinned
+  dual-language (`paired`/`keeper`/`needer`/`othermod` fixtures; see
+  `what-this-proves.md`). Reported residuals stay informational, exit
+  0, by the standing conflict convention (real exits 1). Still open
+  inside this shape: `--backtrack=0` skips the feed loop entirely
+  (real still completes its graph -- satisfiable-pin enforcement at
+  max=0 needs within-pass enforcement, its own slice);
+  reinstall-with-slot-change stays outside the scan gate; the 1854-node
+  re-walk itself stays deliberately unported (the `_serialize_tasks`
+  validation showed the nodes are not needed for ordering; nothing
+  observed needs them for membership beyond what the pins +
+  residuals now cover).
 - **`--root-deps` / multi-root, remaining edges.** *Mostly a non-gap for
   this fork* — the ebuilds are all EAPI 7+, where `--root-deps=rdeps` is
   a complete no-op and `BDEPEND`/`IDEPEND` always resolve against the
