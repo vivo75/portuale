@@ -49,8 +49,9 @@
 //     (`binpkg::extract_binpkg` -> `verify_gpkg_manifest`).
 
 use crate::ebuild_merge::{self, MergeOptions};
+use mrg_director::MergeEngine;
 use portage_profile::{BinRepo, Config};
-use portage_repo::{CandidateSource, GraphEntry, PretendOutcome, RepoConfig, find_remote_binpkg};
+use portage_repo::{GraphEntry, PretendOutcome, RepoConfig, find_remote_binpkg};
 use std::path::Path;
 
 /// Real `bintree._populate_remote`: for each `http(s)` binrepo, download
@@ -132,25 +133,53 @@ pub fn run_merge_plan(
     buildpkg_exclude: &[String],
 ) -> Result<(), String> {
     crate::emerge_build::run_merge_loop(entries, keep_going, |entry| {
-        if entry.source == CandidateSource::Binary {
-            merge_one_binary_entry(entry, config, root, pkgdir, portage_tmpdir, merge_options)
-        } else {
-            let bp = buildpkg.filter(|opts| {
-                crate::emerge_build::entry_buildpkg_wanted(
-                    entry,
+        // The director seam executes every unit: derive the entry's
+        // `MergeUnit` and dispatch on its kind through the real source /
+        // binary engines (real `MergeListItem._start`'s own `type_name`
+        // routing). An entry with nothing to merge (`AlreadyInstalled` /
+        // `NoVisibleCandidate`) stays a silent no-op, exactly the merge
+        // functions' own early return.
+        let Some(unit) = crate::merge_engines::merge_unit_for_entry(entry, root) else {
+            return Ok(());
+        };
+        let ctx = mrg_director::MergeContext {
+            root: root.to_path_buf(),
+            builddir: portage_tmpdir.to_path_buf(),
+            jobs: 1,
+            keep_going,
+        };
+        let outcome = match unit.kind {
+            mrg_director::MergeKind::Source => {
+                let bp = buildpkg.filter(|opts| {
+                    crate::emerge_build::entry_buildpkg_wanted(
+                        entry,
+                        repos,
+                        buildpkg_exclude,
+                        opts.buildpkg_live,
+                    )
+                });
+                crate::merge_engines::SourceEngine {
                     repos,
+                    root,
+                    portage_tmpdir,
+                    options: merge_options,
+                    buildpkg: bp,
                     buildpkg_exclude,
-                    opts.buildpkg_live,
-                )
-            });
-            crate::emerge_build::merge_one_source_entry(
-                entry,
-                repos,
+                }
+                .execute(&unit, &ctx)
+            }
+            mrg_director::MergeKind::Binary => crate::merge_engines::BinaryEngine {
+                config,
                 root,
+                pkgdir,
                 portage_tmpdir,
-                merge_options,
-                bp,
-            )
+                options: merge_options,
+            }
+            .execute(&unit, &ctx),
+        };
+        match outcome {
+            mrg_director::MergeOutcome::Merged | mrg_director::MergeOutcome::Skipped(_) => Ok(()),
+            mrg_director::MergeOutcome::Failed(e) => Err(e),
         }
     })
 }
@@ -159,7 +188,7 @@ pub fn run_merge_plan(
 /// is a silent no-op; `New`/`Upgrade`/`Downgrade`/`Reinstall` are
 /// fetched (remote) or located (`$PKGDIR`) and merged (`merge_binpkg`
 /// unmerges a replaced same-slot version itself).
-fn merge_one_binary_entry(
+pub(crate) fn merge_one_binary_entry(
     entry: &GraphEntry,
     config: &Config,
     root: &Path,
@@ -384,6 +413,7 @@ pub(crate) fn download_and_verify(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use portage_repo::CandidateSource;
     use portage_repo::PretendOutcome;
     use std::collections::HashMap;
     use std::io::{Read, Write};

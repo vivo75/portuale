@@ -5090,6 +5090,101 @@ pub fn installed_versions(root: &Path, category: &str, package: &str) -> Vec<Str
         .collect()
 }
 
+/// The ROOT-relative paths one installed `category/package-version`
+/// owns, read from its vdb `CONTENTS` file (real `vartree`/`dblink`
+/// shape: `obj <path> <md5> <mtime>`, `sym <path> -> <target> <mtime>`,
+/// `dir <path>`; `dev`/`fif`/`bin` device-node lines the same way).
+/// Only the path field is returned (the second whitespace token, with
+/// one leading `/` stripped -- the vdb records `${ROOT}`-absolute
+/// paths, the seam speaks `${ROOT}`-relative ones, matching the
+/// `mrg-director` `MemoryDb` convention); other line kinds are skipped,
+/// a missing/unreadable `CONTENTS` reads as empty -- the same tolerance
+/// `read_vdb_string` gives a missing key. File order is preserved
+/// (merge order), not sorted.
+pub fn installed_contents_files(
+    root: &Path,
+    category: &str,
+    package: &str,
+    version: &str,
+) -> Vec<String> {
+    let text = fs::read_to_string(vdb_pkg_dir(root, category, package, version).join("CONTENTS"))
+        .unwrap_or_default();
+    text.lines()
+        .filter_map(|line| {
+            let mut words = line.split_whitespace();
+            match (words.next(), words.next()) {
+                (Some("obj"), Some(path))
+                | (Some("sym"), Some(path))
+                | (Some("dir"), Some(path))
+                | (Some("dev"), Some(path))
+                | (Some("fif"), Some(path))
+                | (Some("bin"), Some(path)) => {
+                    Some(path.strip_prefix('/').unwrap_or(path).to_string())
+                }
+                _ => None,
+            }
+        })
+        .collect()
+}
+
+/// Every installed `category/package-version` whose vdb-recorded
+/// `DEPEND`/`RDEPEND`/`BDEPEND`/`PDEPEND` (each flattened against that
+/// package's own vdb `USE`) names an atom the installed
+/// `consumer_category/consumer_package-consumer_version` satisfies --
+/// real `vardb.match(atom)` direction, via `portage_dep::match_from_list`
+/// against a `cat/pkg-ver:slot/sub_slot` candidate built from the
+/// consumer's own installed slot (the same candidate shape
+/// `best_installed_for_atom` matches against). Blocker atoms (`!`/`!!`)
+/// never count (real `match` on a blocker is a conflict query, not a
+/// dependency). Sorted, deduplicated; empty when nothing depends on it.
+pub fn installed_reverse_dependents(
+    root: &Path,
+    consumer_category: &str,
+    consumer_package: &str,
+    consumer_version: &str,
+) -> Vec<String> {
+    let (slot, sub_slot) =
+        read_vdb_slot(root, consumer_category, consumer_package, consumer_version);
+    let candidate =
+        format!("{consumer_category}/{consumer_package}-{consumer_version}:{slot}/{sub_slot}");
+    let mut out = std::collections::BTreeSet::new();
+    for pkg in all_installed_packages(root) {
+        if pkg.category == consumer_category
+            && pkg.package == consumer_package
+            && pkg.version == consumer_version
+        {
+            continue;
+        }
+        let use_flags = read_vdb_flag_set(root, &pkg.category, &pkg.package, &pkg.version, "USE");
+        for key in ["DEPEND", "RDEPEND", "BDEPEND", "PDEPEND"] {
+            let depstr = read_vdb_string(root, &pkg.category, &pkg.package, &pkg.version, key);
+            if depstr.trim().is_empty() {
+                continue;
+            }
+            let Some(atoms) = flat_dep_atoms(&depstr, &use_flags) else {
+                continue;
+            };
+            for atom_str in atoms {
+                let Some(atom) = portage_dep::parse_atom(&atom_str) else {
+                    continue;
+                };
+                if atom.blocker != portage_dep::Blocker::None {
+                    continue;
+                }
+                if atom.category != consumer_category || atom.package != consumer_package {
+                    continue;
+                }
+                if portage_dep::match_from_list(&atom_str, &[candidate.as_str()])
+                    .is_some_and(|m| !m.is_empty())
+                {
+                    out.insert(format!("{}/{}-{}", pkg.category, pkg.package, pkg.version));
+                }
+            }
+        }
+    }
+    out.into_iter().collect()
+}
+
 /// The highest installed version of `category/package` that satisfies
 /// `atom_str`, or `None`. Real `_select_pkg_from_installed`
 /// (`depgraph.py:8518`) -- the graph-or-installed fallback complete mode

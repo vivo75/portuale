@@ -31,6 +31,7 @@ mod env_update;
 mod error;
 mod fetch;
 mod install_mask;
+mod merge_engines;
 mod mrg;
 mod mtimedb;
 mod needed_elf;

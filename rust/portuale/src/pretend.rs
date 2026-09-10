@@ -5399,36 +5399,67 @@ fn render_ambiguous_search_output(
 /// `write_news_state_if_changed`. `Display-If-Installed` atoms are
 /// matched in full (version operators, slot/sub-slot) -- see
 /// `news_item_relevant`'s own doc comment for its remaining narrow cuts.
-fn run_check_news(
-    repos: &[portage_repo::RepoConfig],
-    root: &Path,
-    quiet: bool,
-    color: &Colorizer,
-) -> ExitCode {
-    let mut any = false;
-    let mut first = true;
-    let mut per_repo: Vec<(String, usize)> = Vec::new();
-    for repo in repos {
-        let news_dir = repo.location.join("metadata/news");
+/// The live `NewsSelector`: real `--check-news` relevance over one
+/// repo's `metadata/news`, evaluated with the same `news_item_valid` /
+/// `news_item_relevant` used everywhere else. `run_check_news` reads each
+/// repo's unread ids through one of these rather than inlining the scan,
+/// so the director's news slot carries the production traffic; the state
+/// files (`.read`/`.skip`/`.unread` under
+/// `<root>/var/lib/gentoo/news`) are read here and written back by the
+/// caller, mirroring real `NewsManager.updateItems` + `getUnreadItems`.
+pub struct FilesystemNews<'a> {
+    /// The repo checkout (`metadata/news` lives under it).
+    pub repo_location: &'a Path,
+    /// The `::reponame` owning the state files.
+    pub repo_name: &'a str,
+    /// The `${ROOT}` the `Display-If-Installed` atoms match against and
+    /// the state files live under.
+    pub root: &'a Path,
+}
+
+/// The pure result of one [`FilesystemNews::evaluate`]: the state-file
+/// sets as found (`*_orig`) plus the re-evaluated sets the caller writes
+/// back when they changed.
+pub struct NewsEvaluation {
+    /// `.unread` as found on disk.
+    pub unread_orig: HashSet<String>,
+    /// `.unread` after evaluation (newly relevant added, `.read`
+    /// applied).
+    pub unread: HashSet<String>,
+    /// `.skip` as found on disk.
+    pub skip_orig: HashSet<String>,
+    /// `.skip` after evaluation (newly relevant added, permanent).
+    pub skip: HashSet<String>,
+}
+
+impl FilesystemNews<'_> {
+    /// Evaluate one repo's news items: every item not already in `.read`
+    /// or `.skip` is (re-)evaluated, and a valid, relevant one is added
+    /// to *both* the `unread` and `skip` accumulators. `None` when the
+    /// repo has no `metadata/news` directory at all (nothing pending,
+    /// nothing to write back).
+    pub fn evaluate(&self) -> Option<NewsEvaluation> {
+        let news_dir = self.repo_location.join("metadata/news");
         let Ok(entries) = std::fs::read_dir(&news_dir) else {
-            per_repo.push((repo.name.clone(), 0));
-            continue;
+            return None;
         };
         // `.read` (eselect news read) + `.skip` (updateItems' permanent
         // per-item skip list) -- an id in either is not counted.
-        let news_state_dir = root.join("var/lib/gentoo/news");
-        let read_state_file = |suffix: &str| -> std::collections::HashSet<String> {
-            std::fs::read_to_string(news_state_dir.join(format!("news-{}.{suffix}", repo.name)))
-                .unwrap_or_default()
-                .lines()
-                .map(|l| l.trim().to_string())
-                .filter(|l| !l.is_empty())
-                .collect()
+        let news_state_dir = self.root.join("var/lib/gentoo/news");
+        let read_state_file = |suffix: &str| -> HashSet<String> {
+            std::fs::read_to_string(
+                news_state_dir.join(format!("news-{}.{}", self.repo_name, suffix)),
+            )
+            .unwrap_or_default()
+            .lines()
+            .map(|l| l.trim().to_string())
+            .filter(|l| !l.is_empty())
+            .collect()
         };
         let read_only = read_state_file("read");
         let skip_orig = read_state_file("skip");
         let unread_orig = read_state_file("unread");
-        let read: std::collections::HashSet<String> = read_only
+        let read: HashSet<String> = read_only
             .iter()
             .cloned()
             .chain(skip_orig.iter().cloned())
@@ -5460,7 +5491,7 @@ fn run_check_news(
             if !news_item_valid(&text) {
                 continue;
             }
-            if news_item_relevant(&text, root) {
+            if news_item_relevant(&text, self.root) {
                 unread.insert(id.clone());
                 skip.insert(id);
             }
@@ -5477,9 +5508,68 @@ fn run_check_news(
         for id in &read_only {
             unread.remove(id);
         }
-        write_news_state_if_changed(&news_state_dir, &repo.name, "unread", &unread_orig, &unread);
-        write_news_state_if_changed(&news_state_dir, &repo.name, "skip", &skip_orig, &skip);
-        let count = unread.len();
+        Some(NewsEvaluation {
+            unread_orig,
+            unread,
+            skip_orig,
+            skip,
+        })
+    }
+}
+
+impl mrg_director::NewsSelector for FilesystemNews<'_> {
+    fn unread_ids(&self) -> Vec<String> {
+        let mut ids: Vec<String> = self
+            .evaluate()
+            .map(|eval| eval.unread.into_iter().collect())
+            .unwrap_or_default();
+        ids.sort();
+        ids
+    }
+
+    fn repo_name(&self) -> String {
+        self.repo_name.to_string()
+    }
+}
+
+fn run_check_news(
+    repos: &[portage_repo::RepoConfig],
+    root: &Path,
+    quiet: bool,
+    color: &Colorizer,
+) -> ExitCode {
+    let mut any = false;
+    let mut first = true;
+    let mut per_repo: Vec<(String, usize)> = Vec::new();
+    for repo in repos {
+        // The unread computation runs through the director's news slot:
+        // one filesystem selector per repo, evaluated here. Write-back
+        // of the state files stays the CLI layer's job (the selector is
+        // a pure relevance read, like every other director slot).
+        let selector = FilesystemNews {
+            repo_location: &repo.location,
+            repo_name: &repo.name,
+            root,
+        };
+        let Some(eval) = selector.evaluate() else {
+            per_repo.push((repo.name.clone(), 0));
+            continue;
+        };
+        write_news_state_if_changed(
+            &root.join("var/lib/gentoo/news"),
+            &repo.name,
+            "unread",
+            &eval.unread_orig,
+            &eval.unread,
+        );
+        write_news_state_if_changed(
+            &root.join("var/lib/gentoo/news"),
+            &repo.name,
+            "skip",
+            &eval.skip_orig,
+            &eval.skip,
+        );
+        let count = eval.unread.len();
         per_repo.push((repo.name.clone(), count));
         if count > 0 {
             any = true;
@@ -11506,6 +11596,64 @@ mod tests {
         // rejects too.
         assert!(!news_item_valid(&item("2.0", "dev-libs/foo[[bad")));
         assert!(!news_item_valid("Display-If-Installed: dev-libs/foo\n"));
+    }
+
+    #[test]
+    fn filesystem_news_selector_evaluates_one_repo_through_the_seam() {
+        // The director's news slot carries the production `--check-news`
+        // read: one `FilesystemNews` per repo evaluates validity +
+        // relevance over `metadata/news`, minus the already-read/skipped
+        // ids. A relevant item (installed atom matches the vdb) lands in
+        // `unread` (and permanently in `skip`); an irrelevant one (atom
+        // matches nothing installed) lands in neither; a repo without a
+        // `metadata/news` dir evaluates to `None` (nothing pending).
+        use mrg_director::NewsSelector;
+        let base = std::env::temp_dir().join(format!(
+            "pretend-test-{}-filesystem_news",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&base);
+        let repo = base.join("repo");
+        let root = base.join("root");
+        let item = |id: &str, atom: &str| {
+            let dir = repo.join("metadata/news").join(id);
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(
+                dir.join(format!("{id}.en.txt")),
+                format!("News-Item-Format: 2.0\nDisplay-If-Installed: {atom}\nTitle: {id}\n"),
+            )
+            .unwrap();
+        };
+        item("2026-09-01-relevant", "dev-libs/installed-pkg");
+        item("2026-09-02-irrelevant", "dev-libs/missing-pkg");
+        std::fs::create_dir_all(root.join("var/db/pkg/dev-libs/installed-pkg-1.0")).unwrap();
+
+        let selector = FilesystemNews {
+            repo_location: &repo,
+            repo_name: "testrepo",
+            root: &root,
+        };
+        assert_eq!(selector.repo_name(), "testrepo");
+        let eval = selector.evaluate().expect("news dir exists");
+        assert_eq!(
+            eval.unread,
+            HashSet::from(["2026-09-01-relevant".to_string()])
+        );
+        assert_eq!(
+            eval.skip,
+            HashSet::from(["2026-09-01-relevant".to_string()])
+        );
+        assert_eq!(selector.unread_ids(), vec!["2026-09-01-relevant"]);
+
+        // A repo with no news dir is nothing pending, never a panic.
+        let empty = FilesystemNews {
+            repo_location: &base.join("no-such-repo"),
+            repo_name: "testrepo",
+            root: &root,
+        };
+        assert!(empty.evaluate().is_none());
+        assert!(empty.unread_ids().is_empty());
+        let _ = std::fs::remove_dir_all(&base);
     }
 
     #[test]

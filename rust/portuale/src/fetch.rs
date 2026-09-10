@@ -83,7 +83,6 @@ use portage_fetch::{
     resolve_mirror_candidates, verify_digests,
 };
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 use crate::portage_lock::PortageLockfile;
 
@@ -208,8 +207,12 @@ impl Default for FetchOptions {
 /// fetch removes whatever partial file `wget` may have left behind,
 /// same "don't leave broken state around" reasoning `emerge_build.rs`'s
 /// own build-failure handling already applies elsewhere.
+///
+/// The transport itself is `portage_fetch::download_via_wget` (shared
+/// with the `mrg-director` `Fetcher` seam); these two wrappers only name
+/// real's `FETCHCOMMAND`/`RESUMECOMMAND` split at the call site.
 pub(crate) fn wget_fetch(uri: &str, dest: &Path) -> Result<(), String> {
-    wget_run(uri, dest, false)
+    portage_fetch::download_via_wget(uri, dest, false)
 }
 
 /// Real `make.globals`'s own default `RESUMECOMMAND` -- byte-for-byte
@@ -220,36 +223,7 @@ pub(crate) fn wget_fetch(uri: &str, dest: &Path) -> Result<(), String> {
 /// `RESUMECOMMAND` once a partial file is on disk; `fetch_src_uri`'s
 /// candidate loop does the same.
 pub(crate) fn wget_resume(uri: &str, dest: &Path) -> Result<(), String> {
-    wget_run(uri, dest, true)
-}
-
-fn wget_run(uri: &str, dest: &Path, resume: bool) -> Result<(), String> {
-    let mut cmd = Command::new("wget");
-    if resume {
-        cmd.arg("-c");
-    }
-    let status = cmd
-        .args(["-t", "3", "-T", "60", "--passive-ftp"])
-        .args([
-            "-U",
-            "Portage (Gentoo, https://www.gentoo.org) distfile-fetch",
-        ])
-        .arg("-O")
-        .arg(dest)
-        .arg(uri)
-        .status()
-        .map_err(|e| format!("failed to spawn wget: {e}"))?;
-    if !status.success() {
-        // A `resume` attempt keeps the partial for the *next* candidate
-        // to continue; a fresh `-O` fetch that failed can only have left
-        // junk, so remove it (the caller resumes only a partial it knows
-        // is legitimate).
-        if !resume {
-            let _ = std::fs::remove_file(dest);
-        }
-        return Err(format!("wget failed to fetch {uri:?} ({status})"));
-    }
-    Ok(())
+    portage_fetch::download_via_wget(uri, dest, true)
 }
 
 /// Real `doebuild()`'s own `SRC_URI`-vs-`DISTDIR` fetch check, run once

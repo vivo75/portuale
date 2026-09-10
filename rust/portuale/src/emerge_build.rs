@@ -253,6 +253,21 @@ pub fn run_source_merge(
             &policy,
         );
     }
+    // The serial loop merges through the director's source engine (the
+    // same `SourceEngine::merge_entry` the mixed dispatcher runs per
+    // source unit) rather than calling `merge_one_source_entry`
+    // directly, so the merge-engine slot carries the production
+    // source-merge traffic. The captured-build split stays inline: it is
+    // scheduler machinery (build-half concurrency), not per-unit
+    // execution.
+    let engine = crate::merge_engines::SourceEngine {
+        repos,
+        root,
+        portage_tmpdir,
+        options,
+        buildpkg,
+        buildpkg_exclude,
+    };
     run_merge_loop(entries, keep_going, |entry| {
         let bp = buildpkg.filter(|opts| {
             entry_buildpkg_wanted(entry, repos, buildpkg_exclude, opts.buildpkg_live)
@@ -262,7 +277,7 @@ pub fn run_source_merge(
                 build_one_source_entry(entry, repos, root, portage_tmpdir, options, bp, true)?;
             merge_one_built_entry(entry, &path, root, portage_tmpdir, options)
         } else {
-            merge_one_source_entry(entry, repos, root, portage_tmpdir, options, bp)
+            engine.merge_entry(entry)
         }
     })
 }

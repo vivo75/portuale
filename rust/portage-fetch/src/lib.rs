@@ -458,6 +458,42 @@ fn to_hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
+/// Real `make.globals`'s own default `FETCHCOMMAND` transport: `wget -t 3
+/// -T 60 --passive-ftp -U "Portage (Gentoo, https://www.gentoo.org)
+/// distfile-fetch" -O <dest> <uri>` as a real subprocess (never an
+/// in-process HTTP client). `resume` selects real `RESUMECOMMAND`
+/// (byte-for-byte `FETCHCOMMAND` plus `-c`, continuing a partial `dest`
+/// rather than restarting). A failed fresh fetch removes whatever partial
+/// file `wget` left behind; a failed resume keeps it for the next
+/// candidate -- the same split `portuale::fetch::fetch_src_uri`'s own
+/// candidate loop relies on. This is the one `wget` invocation both the
+/// `portuale` fetch path and the `mrg-director` `Fetcher` seam run; it
+/// lives here so the transport is shared, not duplicated per caller.
+pub fn download_via_wget(uri: &str, dest: &Path, resume: bool) -> Result<(), String> {
+    let mut cmd = std::process::Command::new("wget");
+    if resume {
+        cmd.arg("-c");
+    }
+    let status = cmd
+        .args(["-t", "3", "-T", "60", "--passive-ftp"])
+        .args([
+            "-U",
+            "Portage (Gentoo, https://www.gentoo.org) distfile-fetch",
+        ])
+        .arg("-O")
+        .arg(dest)
+        .arg(uri)
+        .status()
+        .map_err(|e| format!("failed to spawn wget: {e}"))?;
+    if !status.success() {
+        if !resume {
+            let _ = std::fs::remove_file(dest);
+        }
+        return Err(format!("wget failed to fetch {uri:?} ({status})"));
+    }
+    Ok(())
+}
+
 /// Real digest verification: file size (a cheap, real `_check_distfile`
 /// pre-check before ever hashing) plus every `BLAKE2B`/`SHA512` entry
 /// `digests` carries -- see the module doc comment for why only those

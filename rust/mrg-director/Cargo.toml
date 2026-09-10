@@ -6,8 +6,11 @@ edition.workspace = true
 [dependencies]
 # The contract-typed inputs/outputs (ResolveRequest/GraphResult/etc.) and
 # the re-export hooks (active_resolver) live in portage-repo. This crate
-# adds no runtime behaviour -- only the interchangeable-traits layer the
-# mrg director names so each component can be swapped independently.
+# is the interchangeable-traits layer the mrg director names so each
+# component can be swapped independently; the filesystem-backed slots
+# (VdbReader, WgetFetcher) delegate to the same library reads/transports
+# the production paths run, so the seam and the path never drift.
 portage-repo = { path = "../portage-repo" }
 portage-fetch = { path = "../portage-fetch" }
 portage-profile = { path = "../portage-profile" }
+portage-versions = { path = "../portage-versions" }
