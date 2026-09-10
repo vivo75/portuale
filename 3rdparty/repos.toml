@@ -40,9 +40,9 @@ url = "https://github.com/vivo75/brush"
 kind = "cargo-git-dependency"
 checkout_path = "3rdparty/brush"
 ref = "main"
-commit = "5af3f6c1869550389a9254be43b0448667a90365"
+commit = "67c301a79c0f4ae734cdd59783f6fdffcdd78c2e"
 pinned_in = "rust/portuale/Cargo.toml"
-pinned_at = "2026-09-01"
+pinned_at = "2026-09-10"
 tracking_doc = "docs/brush-pin.md"
 # No fork: plain upstream `main`, exact-commit pinned (no released
 # crates.io version yet carries reubeno/brush#1274, which portuale's use

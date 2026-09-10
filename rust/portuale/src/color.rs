@@ -351,6 +351,22 @@ impl Colorizer {
         format!("{seq}{text}{}", resolved_code("reset"))
     }
 
+    /// The raw open/close sequences `c(key, _)` wraps text in (both
+    /// empty when disabled or the key has no code -- exactly the cases
+    /// `c` returns its input unchanged). For callers that must know
+    /// where wrapped text lands in the output, e.g. aligned `^`
+    /// markers over colorized atoms.
+    pub(crate) fn wrap_codes(&self, key: &str) -> (String, String) {
+        if !self.enabled {
+            return (String::new(), String::new());
+        }
+        let seq = resolved_code(key);
+        if seq.is_empty() {
+            return (String::new(), String::new());
+        }
+        (seq, resolved_code("reset"))
+    }
+
     /// Real `Display.pkgprint` (`output.py:265-292`), the merge-list case
     /// only (`pkg_info.merge` is always true for every bracket entry this
     /// portuale prints): pick the palette entry from `built` (binary) +

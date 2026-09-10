@@ -6937,10 +6937,11 @@ fn slot_conflict_reasons(atom: &Atom, others: &[ConflictOther]) -> (Vec<SlotConf
 /// Real `highlight_violations`' `colored_idx`: the character positions in
 /// `atom_str` under the violated operator, version, `:slot`, and/or USE
 /// tokens -- the `^` marker line printed beneath a displayed parent atom.
-/// Colorization itself is a documented cut; this computes only the spans
-/// (on the uncolored string, so the markers stay aligned -- real drifts
-/// once ANSI codes lengthen the line, the documented marker-drift
-/// divergence, only observable under `--color y`).
+/// The render site wraps these spans in `BAD` red (`colorize_marked_spans`)
+/// and shifts the markers onto the displayed string; real marks the
+/// pre-color indices and drifts (upstream bug -- and real's own red
+/// varies by terminal colormap, so byte-parity with the drift is
+/// unachievable anyway).
 fn slot_conflict_caret_idx(
     atom_str: &str,
     atom: &Atom,
@@ -7049,6 +7050,34 @@ fn slot_conflict_caret_idx(
         }
     }
     idx
+}
+
+/// Wrap every `idx`-marked char of `text` in `BAD` red (a no-op when
+/// color is off) and return the wrapped string plus the marked
+/// positions shifted onto it. The marked char's displayed position is
+/// recorded after the ANSI open codes are pushed, so carets land on
+/// visible text, never inside an escape. See the render site for why
+/// markers track the displayed string rather than real's pre-color
+/// indices.
+fn colorize_marked_spans(
+    text: &str,
+    idx: &std::collections::HashSet<usize>,
+    color: &Colorizer,
+) -> (String, std::collections::HashSet<usize>) {
+    let (open, close) = color.wrap_codes("BAD");
+    let mut out = String::new();
+    let mut shifted = std::collections::HashSet::new();
+    for (i, c) in text.chars().enumerate() {
+        if idx.contains(&i) {
+            out.push_str(&open);
+            shifted.insert(out.chars().count());
+            out.push(c);
+            out.push_str(&close);
+        } else {
+            out.push(c);
+        }
+    }
+    (out, shifted)
 }
 
 /// Real `slot_collision.py`'s `need_rebuild` scan (lines 407-458) for one
@@ -9482,6 +9511,7 @@ pub fn run(args: &[String]) -> ExitCode {
         &repo_aliases,
         &main_repo.name,
         &repo_masters,
+        &root,
     ) {
         Ok(config) => config,
         Err(e) => {
@@ -10403,18 +10433,21 @@ pub fn run(args: &[String]) -> ExitCode {
     // `collision_reasons` grouping + one-representative-per-reason
     // selection (every parent under `--verbose-conflicts`), the
     // `highlight_violations` `^` marker line (operator, version, slot,
-    // and USE-token spans -- no colorization), the `(and N more with the
+    // and USE-token spans, wrapped in `BAD` red under `--color y` with
+    // markers kept aligned on the displayed string -- real marks
+    // pre-color indices and drifts, a genuine upstream bug portuale
+    // deliberately does not reproduce), the `(and N more with the
     // same problem[s])` tail, the `NOTE: Use the '--verbose-conflicts'
     // option ...` footer, the `need_rebuild` "cannot be rebuilt" trailer,
     // and the advisory (with the `--backtrack=30` hint gated the real
     // way: shown unless `--backtrack` is >=30 or 0). Documented cuts
     // (fixtures don't exercise them): the `soname` reason key (no soname
-    // atom can reach this renderer), operator/USE colorization (real
-    // drifts its `^` markers once ANSI codes lengthen the line; portuale
-    // marks the uncolored string, so markers stay aligned -- observable
-    // only under `--color y`), and an `=*` operator's `("version", None)`
-    // key. Purely informational -- v1 neither refuses nor changes the
-    // exit code.
+    // atom can reach this renderer) and an `=*` operator's `("version",
+    // None)` key. The one deliberate divergence in this block: real
+    // drifts its `^` markers once ANSI codes lengthen the line under
+    // `--color y` (genuine upstream bug); portuale wraps the same spans
+    // but keeps the markers aligned. Purely informational -- v1 neither
+    // refuses nor changes the exit code.
     if !result.slot_conflicts.is_empty() {
         let mut any_omitted = false;
         // Real `need_rebuild`: installed parents with built slot-operator
@@ -10605,12 +10638,6 @@ pub fn run(args: &[String]) -> ExitCode {
                             _ => None,
                         })
                         .collect();
-                    let cur_line = format!(
-                        "{} required by ({}, ebuild scheduled for merge) {}\n",
-                        p.atom_str,
-                        p.parent_cpv,
-                        render_pkg_use_display(p.use_display)
-                    );
                     let idx = slot_conflict_caret_idx(
                         p.atom_str,
                         &p.atom,
@@ -10618,8 +10645,25 @@ pub fn run(args: &[String]) -> ExitCode {
                         slot_violated,
                         &use_flags,
                     );
+                    // Real `highlight_violations` wraps the violated
+                    // spans in `BAD` red here (`--color y` only; plain
+                    // otherwise) -- and then marks the PRE-color
+                    // indices, so its `^` line drifts once ANSI codes
+                    // lengthen the line (genuine upstream bug: the
+                    // markers land left of their visible targets, and
+                    // real's own red varies by terminal colormap, so
+                    // byte-parity with the drift is unachievable
+                    // anyway). Portuale wraps the same spans but marks
+                    // the DISPLAYED string, so color and carets agree.
+                    let (atom_display, shifted) = colorize_marked_spans(p.atom_str, &idx, &color);
+                    let cur_line = format!(
+                        "{} required by ({}, ebuild scheduled for merge) {}\n",
+                        atom_display,
+                        p.parent_cpv,
+                        render_pkg_use_display(p.use_display)
+                    );
                     let marker: String = (0..cur_line.chars().count())
-                        .map(|k| if idx.contains(&k) { '^' } else { ' ' })
+                        .map(|k| if shifted.contains(&k) { '^' } else { ' ' })
                         .collect();
                     print!("    {cur_line}");
                     println!("    {marker}");
@@ -11366,8 +11410,8 @@ pub fn run(args: &[String]) -> ExitCode {
         //   - `echo`   -> the `* Messages for package <cpv>:` stdout block
         //   - `save`   -> `<logdir>/elog/<cat>:<pf>:<stamp>.log`
         //   - `save_summary` (ON by default) -> `<logdir>/elog/summary.log`
-        //   - `mail` / `mail_summary` -> a one-line "unsupported" notice
-        //     (a real SMTP client is out of scope -- see `elog.rs`).
+        //   - `mail` / `mail_summary` -> real MIME mail(s), sent via a
+        //     sendmail binary or plain SMTP (see `elog.rs`).
         if !buildpkgonly {
             let items: Vec<(String, std::path::PathBuf)> = entries
                 .iter()
@@ -11619,6 +11663,49 @@ mod tests {
         let use_start = ">=dev-libs/t-1.0[x]".find('x').unwrap();
         let expected: std::collections::HashSet<usize> = [use_start].into_iter().collect();
         assert_eq!(idx, expected);
+    }
+
+    #[test]
+    fn slot_conflict_colorized_spans_keep_markers_aligned() {
+        use crate::color::Colorizer;
+        let atom_str = ">=dev-libs/t-2.0";
+        let ge = parse_atom(atom_str).unwrap();
+        let idx = slot_conflict_caret_idx(atom_str, &ge, true, false, &[]);
+        // Color off: identity -- same string, same indices.
+        let (plain, shifted) = colorize_marked_spans(atom_str, &idx, &Colorizer::new(false));
+        assert_eq!(plain, atom_str);
+        assert_eq!(shifted, idx);
+        // Color on: every marked char wrapped, and each caret lands on
+        // visible text (never inside an escape), spelling the violated
+        // spans back out.
+        let (colored, shifted) = colorize_marked_spans(atom_str, &idx, &Colorizer::new(true));
+        assert!(colored.len() > atom_str.len());
+        // Map each raw offset to its visible char (None inside escapes).
+        let mut visible_at: Vec<Option<char>> = Vec::new();
+        let mut in_esc = false;
+        for c in colored.chars() {
+            if c == '\x1b' {
+                in_esc = true;
+                visible_at.push(None);
+            } else if in_esc {
+                visible_at.push(None);
+                if c == 'm' {
+                    in_esc = false;
+                }
+            } else {
+                visible_at.push(Some(c));
+            }
+        }
+        let stripped: String = visible_at.iter().filter_map(|c| *c).collect();
+        assert_eq!(stripped, atom_str);
+        let mut ordered: Vec<usize> = shifted.iter().copied().collect();
+        ordered.sort_unstable();
+        let careted: String = ordered
+            .iter()
+            .filter_map(|k| visible_at.get(*k).copied().flatten())
+            .collect();
+        assert_eq!(ordered.len(), idx.len());
+        assert_eq!(careted, ">=2.0");
     }
 
     #[test]

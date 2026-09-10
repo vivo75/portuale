@@ -1,0 +1,7 @@
+# fixture env file: ${VAR} expansion in package.env files (real
+# _grab_pkg_env's per-package expand map). PENVSCOPE exercises
+# within-file chaining (a later line seeing an earlier line's value);
+# ${ARCH} exercises the global map (ARCH="amd64" from the arch profile
+# level's own make.defaults).
+PENVSCOPE=penvexpscope
+USE="penvexp-${PENVSCOPE} ${ARCH}-penvexp"

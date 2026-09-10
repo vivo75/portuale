@@ -2371,6 +2371,7 @@ fn blocked_installed_packages(
             &repo_aliases,
             &main_repo.name,
             &repo_masters,
+            root,
         )
         .ok()?;
 

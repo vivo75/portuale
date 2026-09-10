@@ -40,13 +40,20 @@
 //     resolve_mirror_candidates`/`gentoo_mirror_fallback`, see that
 //     crate's own module doc comment for the exact real mechanics
 //     covered -- including real `custommirrors`, an admin-configured
-//     `${PORTAGE_CONFIGROOT}/etc/portage/mirrors` file, and real
+//     `${PORTAGE_CONFIGROOT}/etc/portage/mirrors` file, real
 //     `RESTRICT=mirror` (`FetchOptions::restrict_mirror` -- the public
-//     `GENTOO_MIRRORS` flat-layout fallback is skipped) -- and the real
-//     ones deliberately not attempted: live per-mirror `layout.conf`
-//     negotiation, real candidate-ordering/shuffling, and `RESTRICT=
-//     primaryuri` (doesn't port cleanly -- portuale's candidate
-//     ordering already deviates from real). The `mirror+`/`fetch+`
+//     `GENTOO_MIRRORS` flat-layout fallback is skipped), real
+//     `RESTRICT=primaryuri` (`FetchOptions::restrict_primaryuri` -- the
+//     file's own literal URIs move to the front of its candidate list),
+//     real `FEATURES=force-mirror` (`FetchOptions::force_mirror` --
+//     plain URIs never enter the list), and the real candidate order
+//     itself (`assemble_candidates`: local flat-layout mirrors, then
+//     public `GENTOO_MIRRORS`, then `mirror://` expansions, then
+//     literals -- rather than portuale's old most-specific-first).
+//     The real ones deliberately not attempted: live per-mirror
+//     `layout.conf` negotiation, third-party shuffle (portuale stays
+//     deterministic), and on-filesystem `fsmirrors` copies. The
+//     `mirror+`/`fetch+`
 //     SRC_URI prefixes ARE parsed (`portage_fetch::SrcUriEntry::
 //     override_mirror`/`override_fetch`): `mirror+` re-permits the
 //     public `GENTOO_MIRRORS` fallback even under `RESTRICT=mirror`, and
@@ -72,7 +79,7 @@
 //     scope at all yet, so there's nothing to port here.
 
 use portage_fetch::{
-    flatten_src_uri, gentoo_mirror_fallback, parse_manifest, parse_thirdpartymirrors,
+    SrcUriEntry, flatten_src_uri, gentoo_mirror_fallback, parse_manifest, parse_thirdpartymirrors,
     resolve_mirror_candidates, verify_digests,
 };
 use std::path::{Path, PathBuf};
@@ -161,6 +168,21 @@ pub struct FetchOptions {
     /// a missing file (a documented cut) -- `fetch_src_uri` fails with a
     /// generic "place it in DISTDIR by hand" pointer instead.
     pub restrict_fetch: bool,
+    /// Real `RESTRICT=primaryuri` (real `fetch.py:1187-1189`): the
+    /// file's own literal `SRC_URI` URIs (plus the `mirror://`
+    /// third-party expansions, real `primaryuri_dict`) move to the
+    /// FRONT of that file's candidate list, ahead of the local/public
+    /// mirror layouts and the inline `mirror://` expansions -- instead
+    /// of the back, where they sit otherwise. Sourced from the ebuild's
+    /// own `RESTRICT` md5-cache field by `ebuild_phases::fetch_sources`.
+    pub restrict_primaryuri: bool,
+    /// Real `FEATURES=force-mirror` (real `fetch.py:1058` +
+    /// `fetch.py:1167`): a *plain* (non-`mirror://`) `SRC_URI` URI is
+    /// never a fetchable candidate -- the file fetches from mirrors
+    /// only. Unlike `restrict_fetch` this is a `FEATURES` token, read
+    /// from the process env by `ebuild_phases::fetch_sources` (the same
+    /// env-var shortcut `distlocks` above uses).
+    pub force_mirror: bool,
 }
 
 impl Default for FetchOptions {
@@ -172,6 +194,8 @@ impl Default for FetchOptions {
             distlocks: true,
             restrict_mirror: false,
             restrict_fetch: false,
+            restrict_primaryuri: false,
+            force_mirror: false,
         }
     }
 }
@@ -230,6 +254,94 @@ fn wget_run(uri: &str, dest: &Path, resume: bool) -> Result<(), String> {
 
 /// Real `doebuild()`'s own `SRC_URI`-vs-`DISTDIR` fetch check, run once
 /// before a real `unpack` phase (see `ebuild_phases.rs`'s own call
+/// Real `fetch.py` per-file candidate order (`fetch()`'s own
+/// `filedict[myfile]` build, `:1112-1192`), narrowed to one `SRC_URI`
+/// entry: portuale loops per entry while real groups per file, so this
+/// is exact whenever a file has a single URI (every fixture, and the
+/// overwhelmingly common real case) and a per-entry approximation
+/// otherwise (a second URI's entry re-tries the shared mirror lists
+/// instead of sharing real's single interleaved list).
+///
+/// Order (real positions in parentheses):
+/// 1. `custommirrors["local"]` non-`/` entries as flat-layout URLs
+///    (real `local_mirrors`, always tried -- even under
+///    `RESTRICT=fetch`/`mirror`, real `location_lists =
+///    [local_mirrors] + ...`). `/`-rooted entries are on-filesystem
+///    copies (real `fsmirrors`), a separate documented cut, skipped.
+/// 2. public `GENTOO_MIRRORS` flat-layout fallback (real
+///    `public_mirrors`), unless mirror-restricted (real
+///    `file_restrict_mirror`), with the per-entry `mirror+` re-permit.
+/// 3. the entry's own `mirror://` expansions inline (`custommirrors`
+///    then `thirdpartymirrors`, unshuffled -- real shuffles the
+///    third-party half for load-balancing; portuale stays
+///    deterministic).
+/// 4. the entry's own literal URI -- APPENDED last normally, PREPENDED
+///    first (ahead of everything above, third-party expansions
+///    included) under `RESTRICT=primaryuri` (real `primaryuri_dict`
+///    merge, `fetch.py:1186-1192` -- including real's own double
+///    listing of the third-party expansions, once inline above and
+///    once in the primary-uri group).
+///    A plain literal barred by `RESTRICT=fetch` (without a
+///    `fetch+`/`mirror+` re-permit) or by `FEATURES=force-mirror` never
+///    enters the list (real `fetch.py:1167` `continue` -- `force-mirror`
+///    skips even a re-permitted literal).
+fn assemble_candidates(
+    entry: &SrcUriEntry,
+    custommirrors: &std::collections::HashMap<String, Vec<String>>,
+    thirdpartymirrors: &std::collections::HashMap<String, Vec<String>>,
+    options: &FetchOptions,
+) -> Vec<String> {
+    let is_mirror_uri = entry.uri.starts_with("mirror://");
+    let literal_barred = !is_mirror_uri
+        && ((options.restrict_fetch && !entry.override_fetch) || options.force_mirror);
+    let literal: Vec<String> = if !is_mirror_uri && !literal_barred {
+        vec![entry.uri.clone()]
+    } else {
+        Vec::new()
+    };
+    let expansions = if is_mirror_uri {
+        resolve_mirror_candidates(&entry.uri, custommirrors, thirdpartymirrors)
+    } else {
+        Vec::new()
+    };
+    // Third-party expansions alone (real `thirdpartymirror_uris`, the
+    // primary-uri group tail). Empty for a plain URI (which has no
+    // expansions at all -- `resolve_mirror_candidates` would hand its
+    // own literal back).
+    let thirdparty = if is_mirror_uri {
+        resolve_mirror_candidates(
+            &entry.uri,
+            &std::collections::HashMap::new(),
+            thirdpartymirrors,
+        )
+    } else {
+        Vec::new()
+    };
+    let local: Vec<String> = custommirrors
+        .get("local")
+        .map(|roots| {
+            roots
+                .iter()
+                .filter(|r| !r.starts_with('/'))
+                .map(|r| format!("{}/distfiles/{}", r.trim_end_matches('/'), entry.filename))
+                .collect()
+        })
+        .unwrap_or_default();
+    let public_barred =
+        (options.restrict_mirror || options.restrict_fetch) && !entry.override_mirror;
+    let public: Vec<String> = if public_barred {
+        Vec::new()
+    } else {
+        gentoo_mirror_fallback(&entry.filename, &options.gentoo_mirrors)
+    };
+    if options.restrict_primaryuri {
+        // Real `filedict[myfile] = primaryuri_dict.get(myfile, []) + uris`.
+        [literal, thirdparty, local, public, expansions].concat()
+    } else {
+        [local, public, expansions, literal, thirdparty].concat()
+    }
+}
+
 /// site): for every file `src_uri` (this ebuild's own real, md5-cache-
 /// sourced `SRC_URI` string) names for the current USE set, fetches it
 /// into `options.distdir` unless a real, Manifest-verified copy is
@@ -324,33 +436,21 @@ pub fn fetch_src_uri(
         let already_verified = dest.is_file() && verify_digests(&dest, digests).is_ok();
 
         if !already_verified {
-            // Real portage's own dedicated `mirror://` candidates
-            // (or, for a plain URI, the URI itself) tried first, the
-            // real `GENTOO_MIRRORS` flat-layout fallback tried last --
-            // a real, deliberate deviation from real portage's own
-            // precise interleaving, not a bug (see `portage_fetch`'s
-            // own doc comment). The first candidate that both fetches
-            // *and* real-digest-verifies wins; every candidate's own
-            // fetch error is collected so the final failure message
-            // (if all of them fail) mentions every URL actually tried,
-            // not just the last one.
-            let mut candidates =
-                resolve_mirror_candidates(&entry.uri, &custommirrors, &thirdpartymirrors);
+            let candidates =
+                assemble_candidates(entry, &custommirrors, &thirdpartymirrors, options);
             // Real `fetch.py:1166-1174`: `if (restrict_fetch and not
             // override_fetch) or force_mirror: continue` -- a *plain*
             // (non-`mirror://`) `SRC_URI` URI is NOT a fetchable
             // candidate under `RESTRICT=fetch` (only `mirror://`-named
             // mirrors + `custommirrors` are). A `fetch+`/`mirror+` prefix
-            // (`entry.override_fetch`) re-permits it. A `mirror://` URI's
-            // own candidates already come only from
-            // `resolve_mirror_candidates`'s expansions, never the raw
-            // token, so nothing to strip there.
-            let plain_uri_barred_by_restrict_fetch = options.restrict_fetch
-                && !entry.override_fetch
-                && !entry.uri.starts_with("mirror://");
-            if plain_uri_barred_by_restrict_fetch {
-                candidates.retain(|c| c != &entry.uri);
-            }
+            // (`entry.override_fetch`) re-permits it under
+            // `RESTRICT=fetch` (but not under `force-mirror`). A
+            // `mirror://` URI's own candidates already come only from
+            // the expansions, never the raw token, so nothing to strip
+            // there.
+            let plain_uri_barred_by_restrict_fetch =
+                (options.restrict_fetch && !entry.override_fetch || options.force_mirror)
+                    && !entry.uri.starts_with("mirror://");
             // Real `file_restrict_mirror = (restrict_fetch or
             // restrict_mirror) and not override_mirror`
             // (`fetch.py:1117-1119`): the public `GENTOO_MIRRORS`
@@ -361,12 +461,6 @@ pub fn fetch_src_uri(
             // (real: `(restrict_fetch or restrict_mirror)`).
             let public_mirrors_barred =
                 (options.restrict_mirror || options.restrict_fetch) && !entry.override_mirror;
-            if !public_mirrors_barred {
-                candidates.extend(gentoo_mirror_fallback(
-                    &entry.filename,
-                    &options.gentoo_mirrors,
-                ));
-            }
             if candidates.is_empty() {
                 // Real `fetch.py`: a `RESTRICT=fetch` file that isn't
                 // already in `DISTDIR` fails here; the caller
@@ -1135,5 +1229,182 @@ mod tests {
             "hello world"
         );
         handle.join().unwrap();
+    }
+
+    fn test_entry(uri: &str, filename: &str) -> SrcUriEntry {
+        SrcUriEntry {
+            uri: uri.to_string(),
+            filename: filename.to_string(),
+            override_mirror: false,
+            override_fetch: false,
+        }
+    }
+
+    fn test_options() -> FetchOptions {
+        FetchOptions {
+            distdir: tempdir(),
+            gentoo_mirrors: vec![
+                "https://public1.example.com".to_string(),
+                "https://public2.example.com".to_string(),
+            ],
+            ..FetchOptions::default()
+        }
+    }
+
+    /// Real `fetch.py:1112-1192` order for a plain URI: local
+    /// flat-layout mirrors, public `GENTOO_MIRRORS`, then the literal
+    /// URI itself last (no `mirror://` expansions, no third-party
+    /// tail).
+    #[test]
+    fn assemble_candidates_orders_plain_uri_after_the_mirror_lists() {
+        use std::collections::HashMap;
+        let mut custom: HashMap<String, Vec<String>> = HashMap::new();
+        custom.insert(
+            "local".to_string(),
+            vec!["https://local-mirror.example.com".to_string()],
+        );
+        let options = test_options();
+        assert_eq!(
+            assemble_candidates(
+                &test_entry("https://primary.example.com/f-1.0.tar.gz", "f-1.0.tar.gz"),
+                &custom,
+                &HashMap::new(),
+                &options,
+            ),
+            vec![
+                "https://local-mirror.example.com/distfiles/f-1.0.tar.gz".to_string(),
+                "https://public1.example.com/distfiles/f-1.0.tar.gz".to_string(),
+                "https://public2.example.com/distfiles/f-1.0.tar.gz".to_string(),
+                "https://primary.example.com/f-1.0.tar.gz".to_string(),
+            ]
+        );
+    }
+
+    /// Real `fetch.py:1187-1189` (`RESTRICT=primaryuri`): the literal
+    /// URI (plus the third-party expansions) moves ahead of the mirror
+    /// lists -- including real's own double listing of the third-party
+    /// expansions (inline below, and again in the primary-uri group).
+    #[test]
+    fn assemble_candidates_prepends_the_literal_under_restrict_primaryuri() {
+        use std::collections::HashMap;
+        let mut custom: HashMap<String, Vec<String>> = HashMap::new();
+        custom.insert(
+            "local".to_string(),
+            vec!["https://local-mirror.example.com".to_string()],
+        );
+        let mut third: HashMap<String, Vec<String>> = HashMap::new();
+        third.insert(
+            "gentoo".to_string(),
+            vec!["https://third.example.com/distfiles".to_string()],
+        );
+        let mut options = test_options();
+        options.restrict_primaryuri = true;
+        // Plain URI: literal first, then local, public (no expansions
+        // for a non-mirror:// token, no third-party tail).
+        assert_eq!(
+            assemble_candidates(
+                &test_entry("https://primary.example.com/f-1.0.tar.gz", "f-1.0.tar.gz"),
+                &custom,
+                &third,
+                &options,
+            )[..2],
+            vec![
+                "https://primary.example.com/f-1.0.tar.gz".to_string(),
+                "https://local-mirror.example.com/distfiles/f-1.0.tar.gz".to_string(),
+            ]
+        );
+        // mirror:// URI: literal group is empty, so the third-party
+        // expansions lead (twice: the primary-uri group tail, then the
+        // inline expansions after the mirror lists).
+        let got = assemble_candidates(
+            &test_entry("mirror://gentoo/f-1.0.tar.gz", "f-1.0.tar.gz"),
+            &custom,
+            &third,
+            &options,
+        );
+        let third_url = "https://third.example.com/distfiles/f-1.0.tar.gz".to_string();
+        assert_eq!(
+            got,
+            vec![
+                third_url.clone(),
+                "https://local-mirror.example.com/distfiles/f-1.0.tar.gz".to_string(),
+                "https://public1.example.com/distfiles/f-1.0.tar.gz".to_string(),
+                "https://public2.example.com/distfiles/f-1.0.tar.gz".to_string(),
+                third_url,
+            ]
+        );
+    }
+
+    /// `RESTRICT=fetch` bars the literal (real `fetch.py:1167`) while
+    /// `FEATURES=force-mirror` bars even a re-permitted one; the
+    /// mirror lists are unaffected.
+    #[test]
+    fn assemble_candidates_bars_the_literal_under_fetch_restrictions() {
+        use std::collections::HashMap;
+        let entry = test_entry("https://primary.example.com/f-1.0.tar.gz", "f-1.0.tar.gz");
+        let mut options = test_options();
+        options.restrict_fetch = true;
+        let got = assemble_candidates(&entry, &HashMap::new(), &HashMap::new(), &options);
+        assert!(
+            got.is_empty(),
+            "restrict_fetch bars the literal and the public list alike: {got:?}"
+        );
+        let mut options = test_options();
+        options.force_mirror = true;
+        let mut fetch_entry = entry.clone();
+        fetch_entry.override_fetch = true;
+        let got = assemble_candidates(&fetch_entry, &HashMap::new(), &HashMap::new(), &options);
+        assert!(
+            !got.iter().any(|c| c.contains("primary.example.com")),
+            "force-mirror skips even a fetch+-re-permitted literal: {got:?}"
+        );
+    }
+
+    /// A definitely-closed localhost port (bound, then released): `wget`
+    /// fails fast with "connection refused", so the "every candidate
+    /// failed" error text pins the tried order without any real server.
+    fn closed_port() -> u16 {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.local_addr().unwrap().port()
+    }
+
+    /// The assembled order is the tried order end to end: with every
+    /// candidate refusing connections, the failure report lists the
+    /// public `GENTOO_MIRRORS` fallback *before* the literal URI --
+    /// and with `restrict_primaryuri` the literal first.
+    #[test]
+    fn fetch_src_uri_tries_candidates_in_assembled_order() {
+        let public = format!("http://127.0.0.1:{}", closed_port());
+        let literal = format!("http://127.0.0.1:{}/f-1.0.tar.gz", closed_port());
+        let run = |restrict_primaryuri: bool| {
+            let pkg_dir = tempdir();
+            let distdir = tempdir();
+            write_manifest(&pkg_dir, "f-1.0.tar.gz", 11);
+            fetch_src_uri(
+                &pkg_dir,
+                &literal,
+                &FetchOptions {
+                    distdir,
+                    gentoo_mirrors: vec![public.clone()],
+                    restrict_primaryuri,
+                    ..FetchOptions::default()
+                },
+            )
+            .unwrap_err()
+        };
+        let err = run(false);
+        let public_at = err.find(&public).expect("public mirror tried");
+        let literal_at = err.find(&literal).expect("literal URI tried");
+        assert!(
+            public_at < literal_at,
+            "mirrors before literals by default: {err}"
+        );
+        let err = run(true);
+        let public_at = err.find(&public).expect("public mirror tried");
+        let literal_at = err.find(&literal).expect("literal URI tried");
+        assert!(
+            literal_at < public_at,
+            "literal first under primaryuri: {err}"
+        );
     }
 }

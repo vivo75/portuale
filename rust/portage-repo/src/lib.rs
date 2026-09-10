@@ -18156,6 +18156,7 @@ mod tests {
             &[],
             "testrepo",
             &HashMap::new(),
+            &root,
         )
         .expect("fixture config resolves");
         let display =
@@ -18187,6 +18188,7 @@ mod tests {
             &[],
             "testrepo",
             &HashMap::new(),
+            &root,
         )
         .expect("fixture config resolves");
         let atom_str = format!("{category}/{package}");
@@ -18235,6 +18237,7 @@ mod tests {
             &[],
             "testrepo",
             &HashMap::new(),
+            &root,
         )
         .expect("fixture config resolves");
         let atom_str = format!("{category}/{package}");
@@ -18282,6 +18285,7 @@ mod tests {
             &[],
             "testrepo",
             &HashMap::new(),
+            &root,
         )
         .expect("fixture config resolves");
         let atom_str = format!("{category}/{package}");
@@ -18397,6 +18401,7 @@ mod tests {
             &[],
             "testrepo",
             &HashMap::new(),
+            &root,
         )
         .expect("fixture config resolves");
         let atom_str = format!("{category}/{package}");
@@ -18722,6 +18727,7 @@ mod tests {
             &[],
             "testrepo",
             &HashMap::new(),
+            &root,
         )
         .expect("fixture config resolves");
         let atom_str = format!("{category}/{package}");
@@ -18787,6 +18793,7 @@ mod tests {
             &[],
             "testrepo",
             &HashMap::new(),
+            &root,
         )
         .expect("fixture config resolves");
         let atom_str = format!("{category}/{package}");
@@ -18901,6 +18908,7 @@ mod tests {
             &[],
             "testrepo",
             &HashMap::new(),
+            &root,
         )
         .expect("fixture config resolves");
         assert_eq!(
@@ -19070,6 +19078,7 @@ mod tests {
             &[],
             "testrepo",
             &HashMap::new(),
+            &root,
         )
         .expect("fixture config resolves");
         assert_eq!(
@@ -19225,6 +19234,7 @@ mod tests {
             &[],
             "testrepo",
             &HashMap::new(),
+            &root,
         )
         .expect("fixture config resolves");
         assert_eq!(
@@ -21269,6 +21279,7 @@ mod tests {
             &[],
             "testrepo",
             &HashMap::new(),
+            &root,
         )
         .expect("fixture config resolves");
         let names: Vec<String> = resolve_pretend_graph(
@@ -22761,6 +22772,7 @@ mod tests {
             &[],
             "testrepo",
             &HashMap::new(),
+            &root,
         )
         .expect("fixture config resolves");
         let entries = resolve_pretend_graph(
@@ -23096,6 +23108,7 @@ mod tests {
             &[],
             "testrepo",
             &HashMap::new(),
+            &root,
         )
         .expect("fixture config resolves");
         let entry = resolve_pretend_graph(
@@ -23564,6 +23577,7 @@ mod tests {
             &[],
             "testrepo",
             &HashMap::new(),
+            &root,
         )
         .expect("fixture config resolves");
         let repos = find_repos(&root).expect("repos");
@@ -23604,6 +23618,7 @@ mod tests {
             &[],
             "testrepo",
             &HashMap::new(),
+            &root,
         )
         .expect("fixture config resolves");
         let repos = find_repos(&root).expect("repos");
@@ -23636,6 +23651,7 @@ mod tests {
             &[],
             "testrepo",
             &HashMap::new(),
+            &root,
         )
         .expect("fixture config resolves");
         let repos = find_repos(&root).expect("repos");
@@ -23708,6 +23724,7 @@ mod tests {
             &[],
             "testrepo",
             &HashMap::new(),
+            &root,
         )
         .expect("fixture config resolves");
         let repos = find_repos(&root).expect("repos");
@@ -23848,6 +23865,7 @@ mod tests {
             &[],
             "testrepo",
             &HashMap::new(),
+            &root,
         )
         .expect("fixture config resolves");
         let entries = resolve_pretend_graph(
@@ -24061,6 +24079,7 @@ mod tests {
             &[],
             "testrepo",
             &HashMap::new(),
+            &root,
         )
         .expect("fixture config resolves");
         resolve_pretend_graph(
@@ -24126,6 +24145,7 @@ mod tests {
             &[],
             "testrepo",
             &HashMap::new(),
+            &root,
         )
         .expect("fixture config resolves");
         resolve_pretend_graph(
@@ -24250,6 +24270,7 @@ mod tests {
             &[],
             "testrepo",
             &HashMap::new(),
+            &root,
         )
         .expect("fixture config resolves");
         resolve_pretend_graph(
@@ -24314,6 +24335,7 @@ mod tests {
             &[],
             "testrepo",
             &HashMap::new(),
+            &root,
         )
         .expect("fixture config resolves");
         resolve_pretend_graph(
@@ -24379,6 +24401,7 @@ mod tests {
             &[],
             "testrepo",
             &HashMap::new(),
+            &root,
         )
         .expect("fixture config resolves");
         resolve_pretend_graph(
@@ -24444,6 +24467,7 @@ mod tests {
             &[],
             "testrepo",
             &HashMap::new(),
+            &root,
         )
         .expect("fixture config resolves");
         resolve_pretend_graph(
@@ -24740,6 +24764,7 @@ mod tests {
             &[],
             "testrepo",
             &HashMap::new(),
+            &root,
         )
         .expect("fixture config resolves");
         let err = resolve_pretend_graph(
@@ -24827,6 +24852,7 @@ mod tests {
             &[],
             "testrepo",
             &HashMap::new(),
+            &root,
         )
         .expect("fixture config resolves");
         let atoms = vec!["dev-libs/autounmaskkeywordpkg".to_string()];
@@ -24935,6 +24961,7 @@ mod tests {
             &[],
             "testrepo",
             &HashMap::new(),
+            &root,
         )
         .expect("fixture config resolves");
         let atoms = vec!["dev-libs/autounmaskdepconsumer".to_string()];
@@ -25024,6 +25051,7 @@ mod tests {
             &[],
             "testrepo",
             &HashMap::new(),
+            &root,
         )
         .expect("fixture config resolves");
         let atoms = vec!["dev-libs/useflagpkg[-foo]".to_string()];
@@ -25231,6 +25259,7 @@ mod tests {
             &[],
             "testrepo",
             &HashMap::new(),
+            &root,
         )
         .expect("fixture config resolves");
         #[allow(clippy::fn_params_excessive_bools)]
@@ -25319,6 +25348,7 @@ mod tests {
             &[],
             "testrepo",
             &HashMap::new(),
+            &root,
         )
         .expect("fixture config resolves");
         resolve_pretend_graph(
@@ -25385,6 +25415,7 @@ mod tests {
             &[],
             "testrepo",
             &HashMap::new(),
+            &root,
         )
         .expect("fixture config resolves");
         graph_result_autounmask_cfg(&config, atom_str)
@@ -25403,6 +25434,7 @@ mod tests {
             &[],
             "testrepo",
             &HashMap::new(),
+            &root,
         )
         .expect("fixture config resolves");
         config.autounmask_backtrack = true;
@@ -25474,6 +25506,7 @@ mod tests {
             &[],
             "testrepo",
             &HashMap::new(),
+            &root,
         )
         .expect("fixture config resolves");
         resolve_pretend_graph(
@@ -25992,6 +26025,7 @@ mod tests {
             &[],
             "testrepo",
             &HashMap::new(),
+            &cfg_root,
         )
         .expect("fixture config resolves");
         // Complete mode: `slotbindconsumer` is in `@world`, so the
@@ -26108,6 +26142,7 @@ mod tests {
             &[],
             "testrepo",
             &HashMap::new(),
+            &cfg_root,
         )
         .expect("fixture config resolves");
         let dir = std::env::temp_dir().join(format!(
@@ -26226,6 +26261,7 @@ mod tests {
             &[],
             "testrepo",
             &HashMap::new(),
+            &root,
         )
         .expect("fixture config resolves");
         resolve_pretend_graph(

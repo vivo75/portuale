@@ -447,6 +447,64 @@ def test_solver_backends_share_the_walk_merge_order(emerge_binary, fixture_env):
     ]
 
 
+def test_solver_backends_render_forced_flag_markers(emerge_binary, fixture_env):
+    """`--solver=` forced-flag markers (backlog Tier 1): bridge entries
+    used to build their USE display with an empty forced set, dropping
+    real `pkg_use_display`'s `( )` wraps for profile-forced/masked
+    flags. Both bridges now call the walk's own `forced_or_masked_flags`,
+    so `-pv` of `dev-libs/pkgusemaskforcepkg` matches the walk-path
+    contract byte for byte (`USE="(forceflag) (-maskflag) -specflag"`)."""
+    expected = (
+        '[ebuild  N     ] dev-libs/pkgusemaskforcepkg-1.0::testrepo  USE="(forceflag) (-maskflag) -specflag"\n'
+        "\nTotal: 1 package (1 new), Size of downloads: 0 KiB\n"
+    )
+    for solver in ("portage", "pubgrub", "resolvo"):
+        result = subprocess.run(
+            [str(emerge_binary), "--pretend", "-v", f"--solver={solver}", "dev-libs/pkgusemaskforcepkg"],
+            capture_output=True,
+            text=True,
+            check=False,
+            env=fixture_env,
+        )
+        assert result.returncode == 0, solver
+        assert result.stdout == expected, solver
+
+
+def test_solver_pubgrub_reports_the_unbreakable_build_time_cycle(emerge_binary, fixture_env):
+    """`--solver=` notice fields (backlog Tier 1): the bridge rebuilds
+    the walk's own hard/soft edge-kind map over its entry `deps` edges
+    and reports the shortest unbreakable build-time cycle, so pubgrub on
+    `dev-libs/hardcyclea` prints the same merge list plus the fatal
+    `* Error: circular dependencies:` block (exit 1) as the walk-path
+    contract pins. Resolvo is excluded: its `install_order` still cannot
+    linearise any cyclic closure (Tier-4 `--solver=resolvo` item)."""
+    expected_stdout = (
+        "[ebuild  N     ] dev-libs/hardcyclea-1.0 \n"
+        "[ebuild  N     ] dev-libs/hardcycleb-1.0 \n"
+    )
+    expected_stderr = (
+        "\n * Error: circular dependencies:\n"
+        "\n"
+        "dev-libs/hardcyclea-1.0 depends on\n"
+        " dev-libs/hardcycleb-1.0 (buildtime)\n"
+        "  dev-libs/hardcyclea-1.0 (buildtime)\n"
+        "\n"
+        " * Note that circular dependencies can often be avoided by temporarily\n"
+        " * disabling USE flags that trigger optional dependencies.\n"
+    )
+    for solver in ("portage", "pubgrub"):
+        result = subprocess.run(
+            [str(emerge_binary), "--pretend", f"--solver={solver}", "dev-libs/hardcyclea"],
+            capture_output=True,
+            text=True,
+            check=False,
+            env=fixture_env,
+        )
+        assert result.returncode == 1, solver
+        assert result.stdout == expected_stdout, solver
+        assert result.stderr == expected_stderr, solver
+
+
 def _free_loopback_port():
     """An unused 127.0.0.1 TCP port for the fixture sshd (TOCTOU-racy by
     nature, fine for a test fixture)."""
@@ -3259,6 +3317,66 @@ def test_emerge_quiet_build_redirects_a_single_job_build_to_the_log(
     assert not (tmp_path / "pt1" / log_rel).is_file()
 
 
+def test_emerge_compress_build_logs_gzips_the_build_log(emerge_binary, tmp_path):
+    """`FEATURES=compress-build-logs` (backlog Tier 1): real
+    `prepare_build_dirs.py` suffixes the log paths with `.gz` and real
+    `EbuildPhase._open_log` gzip-encodes every phase's output into the
+    file (one member per phase), with the failure tail and QA readers
+    gunzipping on the way back. A `--quiet-build=y` build of
+    `dev-libs/packagepkg` must therefore leave a `${T}/build.log.gz`
+    (a symlink into `PORTAGE_LOGDIR` when set, real's
+    `<CATEGORY><sep><PF><sep><logid_time>.log.gz` name) whose gunzipped
+    bytes carry the phase output -- and a failing build
+    (`dev-libs/schedbaddep`) must still fold the *decoded* tail into
+    its error report."""
+    import gzip
+    import shutil
+
+    # Success path, with PORTAGE_LOGDIR: the real log lives in the
+    # logdir under the `.log.gz` name; `${T}/build.log.gz` links to it.
+    root = tmp_path / "root"
+    shutil.copytree(Path(FIXTURES_ROOT) / "var", root / "var")
+    logdir = tmp_path / "logs"
+    env = dict(os.environ)
+    env["PORTAGE_CONFIGROOT"] = FIXTURES_ROOT
+    env["ROOT"] = str(root)
+    env["DISTDIR"] = str(Path(FIXTURES_ROOT) / "distfiles")
+    env["PORTAGE_TMPDIR"] = str(tmp_path / "pt")
+    env["PORTAGE_LOGDIR"] = str(logdir)
+    env["FEATURES"] = "compress-build-logs"
+    r = subprocess.run(
+        [str(emerge_binary), "--quiet-build=y", "dev-libs/packagepkg"],
+        capture_output=True, text=True, check=False, env=env,
+    )
+    assert r.returncode == 0, r.stderr
+    assert ">>> dev-libs/packagepkg-1.0 merged." in r.stdout
+    t_log = tmp_path / "pt/portage/dev-libs/packagepkg-1.0/temp/build.log.gz"
+    assert t_log.is_symlink(), "with PORTAGE_LOGDIR the T log links to the real log"
+    targets = list(logdir.glob("dev-libs:packagepkg-1.0:*.log.gz"))
+    assert len(targets) == 1
+    assert t_log.resolve() == targets[0]
+    text = gzip.decompress(targets[0].read_bytes()).decode()
+    assert len(text.splitlines()) > 0
+    # No plain sidecar anywhere: every phase wrote through the pump.
+    assert not (tmp_path / "pt/portage/dev-libs/packagepkg-1.0/temp/build.log").exists()
+
+    # Failure path: the tail folded into the report is decoded, and the
+    # header names the `.gz` log.
+    root2 = tmp_path / "root2"
+    shutil.copytree(Path(FIXTURES_ROOT) / "var", root2 / "var")
+    env["ROOT"] = str(root2)
+    env["PORTAGE_TMPDIR"] = str(tmp_path / "pt2")
+    del env["PORTAGE_LOGDIR"]
+    bad = subprocess.run(
+        [str(emerge_binary), "--quiet-build=y", "dev-libs/schedbaddep"],
+        capture_output=True, text=True, check=False, env=env,
+    )
+    assert bad.returncode == 1
+    assert "last lines of" in bad.stderr
+    assert "build.log.gz" in bad.stderr
+    assert "deliberate fixture build failure" in bad.stderr
+
+
 def test_emerge_jobs_with_load_average_still_builds_everything(emerge_binary, tmp_path):
     """`emerge -j4 --load-average <LA>` (real `main.py` `type=float`): the
     scheduler holds off on an *additional* build while the 1-minute system
@@ -3733,8 +3851,9 @@ def test_emerge_elog_save_and_save_summary_write_log_files(emerge_binary, tmp_pa
     class-filtered elog messages are written to
     `<logdir>/elog/<cat>:<pf>:<stamp>.log` (`save`) and appended to
     `<logdir>/elog/summary.log` (`save_summary`), in real
-    `_combine_logentries` format. `mail`/`mail_summary` print an
-    "unsupported" notice and are skipped."""
+    `_combine_logentries` format. (`mail`/`mail_summary` delivery itself
+    is covered by the dedicated tests below -- they are off here so no
+    delivery is attempted.)"""
     import re
     import shutil
 
@@ -3747,14 +3866,13 @@ def test_emerge_elog_save_and_save_summary_write_log_files(emerge_binary, tmp_pa
     env["DISTDIR"] = str(Path(FIXTURES_ROOT) / "distfiles")
     env["PORTAGE_TMPDIR"] = str(root / "pt")
     env["PORTAGE_LOGDIR"] = str(logdir)
-    env["PORTAGE_ELOG_SYSTEM"] = "save save_summary:log,warn,error,qa mail echo"
+    env["PORTAGE_ELOG_SYSTEM"] = "save save_summary:log,warn,error,qa echo"
 
     r = subprocess.run(
         [str(emerge_binary), "dev-libs/elogmsgpkg"],
         capture_output=True, text=True, check=False, env=env,
     )
     assert r.returncode == 0, r.stderr
-    assert "elog `mail`/`mail_summary` is not supported" in r.stderr
 
     elog = logdir / "elog"
     per_pkg = [p for p in elog.iterdir() if re.fullmatch(
@@ -3780,6 +3898,278 @@ def test_emerge_elog_save_and_save_summary_write_log_files(emerge_binary, tmp_pa
         "WARN: postinst\n"
         "a deprecated feature is still enabled\n"
     ) in summary
+
+
+def _write_fake_sendmail(path):
+    """A sendmail stand-in: appends its argv line to `<path>.args` and
+    the message bytes to `<path>.body`, so a test can assert both the
+    envelope (`-f <from> <recipient>`) and the MIME content."""
+    script = (
+        "#!/bin/sh\n"
+        f'echo "ARGS: $@" >> {path}.args\n'
+        f"cat >> {path}.body\n"
+    )
+    Path(path).write_text(script)
+    Path(path).chmod(0o755)
+
+
+def _mail_env(tmp_path, root, extra=None):
+    """Base env for the elog mail tests: fixture config/vdb/distfiles,
+    tmp build root, no PORTAGE_LOGDIR (mail writes no files)."""
+    import shutil
+
+    if not (root / "var").exists():
+        shutil.copytree(Path(FIXTURES_ROOT) / "var", root / "var")
+    env = dict(os.environ)
+    env["PORTAGE_CONFIGROOT"] = FIXTURES_ROOT
+    env["ROOT"] = str(root)
+    env["DISTDIR"] = str(Path(FIXTURES_ROOT) / "distfiles")
+    env["PORTAGE_TMPDIR"] = str(tmp_path / "pt")
+    for k, v in (extra or {}).items():
+        env[k] = v
+    return env
+
+
+def test_emerge_elog_mail_sends_via_sendmail_binary(emerge_binary, tmp_path):
+    """Real `mod_mail` (backlog Tier 1): one MIME mail per merged
+    package, piped to the sendmail binary named by
+    `PORTAGE_ELOG_MAILURI` (`<sendmail> -f <from> <recipient>` on
+    argv, message on stdin). Parsed here with Python's own `email`
+    package: headers (`To`/`From`/`Subject` with `${PACKAGE}`/
+    `${HOST}`/`${ACTION}` substituted, `Date`), one UTF-8 text part
+    whose decoded payload is the class-filtered combined log."""
+    import email
+    import email.policy
+
+    root = tmp_path / "root"
+    sendmail = tmp_path / "sendmail"
+    _write_fake_sendmail(sendmail)
+    env = _mail_env(tmp_path, root, {
+        "PORTAGE_ELOG_SYSTEM": "mail",
+        "PORTAGE_ELOG_MAILURI": f"root@testhost {sendmail}",
+        "PORTAGE_ELOG_MAILFROM": "portage@${HOST}",
+        "PORTAGE_ELOG_MAILSUBJECT": "[portage] ${ACTION} ${PACKAGE} on ${HOST}",
+    })
+    r = subprocess.run(
+        [str(emerge_binary), "dev-libs/elogmsgpkg"],
+        capture_output=True, text=True, check=False, env=env,
+    )
+    assert r.returncode == 0, r.stderr
+    args = (tmp_path / "sendmail.args").read_text()
+    assert args.startswith("ARGS: -f portage@"), args
+    assert args.rstrip().endswith("root@testhost"), args
+    host = args.split("portage@")[1].split()[0]
+    msg = email.message_from_bytes(
+        (tmp_path / "sendmail.body").read_bytes(), policy=email.policy.default
+    )
+    assert msg["To"] == "root@testhost"
+    assert msg["From"] == f"portage@{host}"
+    assert msg["Subject"] == f"[portage] merged dev-libs/elogmsgpkg-1.0 on {host}"
+    assert msg["Date"] is not None
+    parts = list(msg.iter_parts()) if msg.is_multipart() else [msg]
+    assert len(parts) == 1
+    assert parts[0].get_content_type() == "text/plain"
+    assert parts[0].get_content_charset() == "utf-8"
+    assert parts[0].get_content() == (
+        "LOG: install\n"
+        "this package needs manual configuration\n"
+        "see /usr/share/doc for details\n"
+        "WARN: postinst\n"
+        "a deprecated feature is still enabled\n"
+    )
+
+
+def test_emerge_elog_mail_summary_sends_one_multipart_mail(emerge_binary, tmp_path):
+    """Real `mod_mail_summary` (backlog Tier 1): nothing per package --
+    one `multipart/mixed` mail at process exit, subject's `${PACKAGE}`
+    the `one package`/`multiple packages` count, body listing every
+    package, each package's messages as an attachment. Merging
+    `elogmsgpkg` + `elogsecondpkg` must produce exactly one sendmail
+    invocation with two attachments."""
+    import email
+    import email.policy
+
+    root = tmp_path / "root"
+    sendmail = tmp_path / "sendmail"
+    _write_fake_sendmail(sendmail)
+    env = _mail_env(tmp_path, root, {
+        "PORTAGE_ELOG_SYSTEM": "mail_summary",
+        "PORTAGE_ELOG_MAILURI": f"root@testhost {sendmail}",
+        "PORTAGE_ELOG_MAILFROM": "portage@${HOST}",
+        "PORTAGE_ELOG_MAILSUBJECT": "[portage] log for ${PACKAGE}",
+    })
+    r = subprocess.run(
+        [str(emerge_binary), "dev-libs/elogmsgpkg", "dev-libs/elogsecondpkg"],
+        capture_output=True, text=True, check=False, env=env,
+    )
+    assert r.returncode == 0, r.stderr
+    # Exactly one sendmail invocation for the whole run.
+    assert (tmp_path / "sendmail.args").read_text().count("ARGS:") == 1
+    msg = email.message_from_bytes(
+        (tmp_path / "sendmail.body").read_bytes(), policy=email.policy.default
+    )
+    assert msg.is_multipart()
+    assert msg["Subject"] == "[portage] log for multiple packages"
+    parts = list(msg.iter_parts())
+    assert len(parts) == 3, [p.get_content_type() for p in parts]
+    assert "dev-libs/elogmsgpkg-1.0" in parts[0].get_content()
+    assert "dev-libs/elogsecondpkg-1.0" in parts[0].get_content()
+    assert "this package needs manual configuration" in parts[1].get_content()
+    assert "second package reporting in" in parts[2].get_content()
+
+
+def test_emerge_elog_mail_sends_via_smtp(emerge_binary, tmp_path):
+    """Real `portage.mail.send_mail` over SMTP (backlog Tier 1): EHLO,
+    `AUTH LOGIN`, `MAIL`/`RCPT`/`DATA` with the MIME bytes, `QUIT` --
+    against an in-test fake server on 127.0.0.1, asserting the envelope
+    and that the DATA parses as the package's mail."""
+    import email
+    import email.policy
+    import socket
+    import threading
+
+    transcript = []
+    data = {}
+
+    def handle(conn):
+        f = conn.makefile("rwb")
+        def send(line):
+            f.write(line + b"\r\n")
+            f.flush()
+        def recv():
+            line = f.readline().decode().rstrip("\r\n")
+            transcript.append("C: " + line)
+            return line
+        send(b"220 fake ESMTP ready")
+        assert recv().upper().startswith("EHLO")
+        send(b"250-fake greets\r\n250-AUTH LOGIN PLAIN\r\n250 8BITMIME")
+        assert recv().upper() == "AUTH LOGIN"
+        send(b"334 VXNlcm5hbWU6")
+        transcript.append("C: " + f.readline().decode().strip())
+        send(b"334 UGFzc3dvcmQ6")
+        transcript.append("C: " + f.readline().decode().strip())
+        send(b"235 authenticated")
+        assert recv().upper().startswith("MAIL FROM:")
+        send(b"250 ok")
+        assert recv().upper().startswith("RCPT TO:")
+        send(b"250 ok")
+        assert recv().upper() == "DATA"
+        send(b"354 end with a dot")
+        body = []
+        while True:
+            line = f.readline().decode().rstrip("\r\n")
+            if line == ".":
+                break
+            body.append(line)
+        data["message"] = "\n".join(body)
+        send(b"250 queued")
+        assert recv().upper() == "QUIT"
+        conn.close()
+
+    server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    server.bind(("127.0.0.1", 0))
+    server.listen(1)
+    port = server.getsockname()[1]
+
+    def serve():
+        conn, _ = server.accept()
+        try:
+            handle(conn)
+        finally:
+            server.close()
+
+    thread = threading.Thread(target=serve, daemon=True)
+    thread.start()
+
+    root = tmp_path / "root"
+    env = _mail_env(tmp_path, root, {
+        "PORTAGE_ELOG_SYSTEM": "mail",
+        "PORTAGE_ELOG_MAILURI": f"victim@example.com user:secret@127.0.0.1:{port}",
+        "PORTAGE_ELOG_MAILFROM": "portage@${HOST}",
+        "PORTAGE_ELOG_MAILSUBJECT": "[portage] ${ACTION} ${PACKAGE}",
+    })
+    r = subprocess.run(
+        [str(emerge_binary), "dev-libs/elogmsgpkg"],
+        capture_output=True, text=True, check=False, env=env,
+    )
+    thread.join(timeout=30)
+    assert r.returncode == 0, r.stderr
+    assert "An error occurred while trying to send logmail" not in r.stderr
+    assert "network error" not in r.stderr
+    mail_from = next(l for l in transcript if l.startswith("C: MAIL FROM:"))
+    rcpt_to = next(l for l in transcript if l.startswith("C: RCPT TO:"))
+    assert "portage@" in mail_from
+    assert "victim@example.com" in rcpt_to
+    assert any(l == "C: AUTH LOGIN" for l in transcript)
+    msg = email.message_from_bytes(data["message"].encode(), policy=email.policy.default)
+    assert msg["To"] == "victim@example.com"
+    assert msg["Subject"] == "[portage] merged dev-libs/elogmsgpkg-1.0"
+    assert "this package needs manual configuration" in msg.get_content()
+
+
+def test_emerge_elog_mail_smtp_failure_is_a_warning_not_a_failure(emerge_binary, tmp_path):
+    """Real `PortageException` handling: an unreachable SMTP host prints
+    real's own `!!! A network error occurred ... Sure you configured
+    PORTAGE_ELOG_MAILURI correctly?` line but the merge still succeeds
+    (delivery of the other modules is unaffected)."""
+    import socket
+
+    # A port that nothing listens on (bound then released).
+    probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    probe.bind(("127.0.0.1", 0))
+    port = probe.getsockname()[1]
+    probe.close()
+
+    root = tmp_path / "root"
+    env = _mail_env(tmp_path, root, {
+        "PORTAGE_ELOG_SYSTEM": "mail echo",
+        "PORTAGE_ELOG_MAILURI": f"root@localhost 127.0.0.1:{port}",
+    })
+    r = subprocess.run(
+        [str(emerge_binary), "dev-libs/elogmsgpkg"],
+        capture_output=True, text=True, check=False, env=env,
+    )
+    assert r.returncode == 0, r.stderr
+    assert "A network error occurred while trying to send logmail" in r.stderr
+    assert "Sure you configured PORTAGE_ELOG_MAILURI correctly?" in r.stderr
+    assert "Messages for package dev-libs/elogmsgpkg-1.0" in r.stdout
+
+
+def test_standalone_ebuild_merge_applies_package_env_build_vars(emerge_binary, tmp_path):
+    """Standalone `package.env` (backlog Tier 1): `ebuild <file> merge`
+    applies a matching `/etc/portage/package.env` entry's env file to
+    the phase env -- no resolved graph entry needed, the entry is
+    atom-matched against the ebuild's own md5-cache identity instead
+    (the merge path matches the same string off its `GraphEntry`).
+    `dev-libs/penvbuildpkg` records its phase `CFLAGS`/`MAKEOPTS` into
+    the merged `/usr/share/${PN}/flags` file: with
+    `package.env -> penv-buildflags` they come from the env file, not
+    make.conf. The `USE=` half needs no separate step (the standalone
+    USE display already folds `package_env_use` in)."""
+    import shutil
+
+    root = tmp_path / "root"
+    shutil.copytree(Path(FIXTURES_ROOT) / "var", root / "var")
+    env = dict(os.environ)
+    env["PORTAGE_CONFIGROOT"] = FIXTURES_ROOT
+    env["ROOT"] = str(root)
+    env["DISTDIR"] = str(Path(FIXTURES_ROOT) / "distfiles")
+    env["PORTAGE_TMPDIR"] = str(tmp_path / "pt")
+    ebuild_link = tmp_path / "ebuild"
+    ebuild_link.symlink_to(Path(emerge_binary).resolve())
+    r = subprocess.run(
+        [
+            str(ebuild_link),
+            str(Path(FIXTURES_ROOT) / "repo/dev-libs/penvbuildpkg/penvbuildpkg-1.0.ebuild"),
+            "merge",
+        ],
+        capture_output=True, text=True, check=False, env=env,
+    )
+    assert r.returncode == 0, r.stderr
+    flags = (root / "usr/share/penvbuildpkg/flags").read_text()
+    assert "CFLAGS=-Os -march=fixturepkgenv" in flags, flags
+    assert "MAKEOPTS=-j7" in flags, flags
 
 
 def test_emerge_unmerge_processes_prerm_postrm_elog(emerge_binary, tmp_path):

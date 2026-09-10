@@ -4402,11 +4402,12 @@ def _read_env_file_kv(path, config_root, visited):
     """One /etc/portage/env/<name> file as an ordered list of (KEY, value)
     -- real getconfig(penvfile, allow_sourcing=True). "source <path>" is
     expanded in place (absolute against config_root chroot-style, relative
-    against the file's dir); a ${VAR} in a value is left literal (no
-    per-file expand map this slice -- a documented simplification). A
-    missing file yields [] (real portage warns from setcpv; portuale
-    follows its "no warnings from deep in config resolution" precedent).
-    Mirrors portage-profile/src/lib.rs's read_env_file_kv."""
+    against the file's dir); a ${VAR} in a value is left literal here and
+    substituted by the caller (_expand_package_env_files) against the
+    per-entry expand map. A missing file yields [] (real portage warns
+    from setcpv; portuale follows its "no warnings from deep in config
+    resolution" precedent). Mirrors portage-profile/src/lib.rs's
+    read_env_file_kv."""
     if not os.path.isfile(path):
         return []
     canon = os.path.realpath(path)
@@ -4449,14 +4450,16 @@ def _read_repo_make_defaults_use(path, scalars):
     return out
 
 
-def _read_envd_use_tokens(config_root):
-    """Every USE= value from <config_root>/etc/profile.env -- real
+def _read_envd_use_tokens(eroot):
+    """Every USE= value from <eroot>/etc/profile.env -- real
     config.py's configdict["env.d"]["USE"] (getconfig(..., expand=False):
     an optional leading `export ` keyword, then KEY=value with quote
     removal, no ${VAR} expansion). The lowest USE_ORDER tier; practically
-    always empty. Mirrors portage-profile/src/lib.rs's
+    always empty. `eroot` (real EROOT, the target ROOT) is NOT
+    `config_root`: the two coincide except on a split
+    --config-root/--root setup. Mirrors portage-profile/src/lib.rs's
     read_envd_use_tokens."""
-    path = os.path.join(config_root, "etc", "profile.env")
+    path = os.path.join(eroot, "etc", "profile.env")
     if not os.path.isfile(path):
         return []
     with open(path) as f:
@@ -4472,14 +4475,38 @@ def _read_envd_use_tokens(config_root):
     return out
 
 
-def _env_file_use_tokens(env_dir, name, config_root):
+def _expand_package_env_files(env_dir, files, config_root, scalars):
+    """One package.env entry's env files expanded in order: real
+    _grab_pkg_env copies the global expand map once per package (env.d +
+    make.globals + make.defaults + make.conf -- our `scalars` here) and
+    reads each file with getconfig(..., expand=that map), which feeds
+    every assignment back into the map, so a later line (or a later file
+    of the same entry) sees earlier ones. Returns every pair in file
+    order, ${VAR}-substituted. Mirrors
+    portage-profile/src/lib.rs's expand_package_env_files."""
+    expand_map = dict(scalars)
+    out = []
+    for name in files:
+        for key, raw_value in _read_env_file_kv(
+            os.path.join(env_dir, name), config_root, set()
+        ):
+            value = _substitute(raw_value, expand_map)
+            expand_map[key] = value
+            out.append((key, value))
+    return out
+
+
+def _env_file_use_tokens(env_dir, name, config_root, scalars=None):
     """The USE= value token(s) of one /etc/portage/env/<name> file, in
     file order -- the only half of a package.env file this slice
-    consumes. Mirrors portage-profile/src/lib.rs's env_file_use_tokens."""
+    consumes. Values are ${VAR}-substituted against a copy of `scalars`
+    (real _grab_pkg_env's per-package expand map); tokens split after
+    substitution. Mirrors portage-profile/src/lib.rs's
+    expand_package_env_files (USE half)."""
+    if scalars is None:
+        scalars = {}
     tokens = []
-    for key, value in _read_env_file_kv(
-        os.path.join(env_dir, name), config_root, set()
-    ):
+    for key, value in _expand_package_env_files(env_dir, [name], config_root, scalars):
         if key == "USE":
             tokens.extend(value.split())
     return tokens
@@ -4492,6 +4519,7 @@ def resolve_config(
     repo_aliases=(),
     main_repo_name="",
     repo_masters=None,
+    eroot=None,
 ):
     """Computes real USE/ACCEPT_KEYWORDS/package.mask/.unmask/
     .accept_keywords: the profile chain rooted at
@@ -4602,11 +4630,15 @@ def resolve_config(
     # config.py:531). Portuale reads them here in the same order so the
     # const.INCREMENTALS fold in _resolved_incremental matches.
     #
-    # env.d: real _get_env_d -> <EROOT>/etc/profile.env. Only its
+    # env.d: real _get_env_d -> <eroot>/etc/profile.env (`eroot` is
+    # real EROOT, the target ROOT -- not `config_root`; the two
+    # coincide except on a split --config-root/--root setup). Only its
     # incremental entries (CONFIG_PROTECT / CONFIG_PROTECT_MASK, written
     # there by packages' /etc/env.d/* fragments) feed emerge --info; its
     # LANG / LEX / ... land as lowest-priority scalars.
-    profile_env_path = os.path.join(config_root, "etc", "profile.env")
+    if eroot is None:
+        eroot = config_root
+    profile_env_path = os.path.join(eroot, "etc", "profile.env")
     if os.path.isfile(profile_env_path):
         with open(profile_env_path) as f:
             for line in _logical_lines(f.read()):
@@ -5055,9 +5087,13 @@ def resolve_config(
     env_dir = os.path.join(config_root, "etc", "portage", "env")
     package_env_use = []
     for atom, files in package_env:
+        # One expand-map copy per entry (not per file): later files see
+        # earlier files' assignments, like real _grab_pkg_env.
+        pairs = _expand_package_env_files(env_dir, files, config_root, scalars)
         tokens = []
-        for name in files:
-            tokens.extend(_env_file_use_tokens(env_dir, name, config_root))
+        for key, value in pairs:
+            if key == "USE":
+                tokens.extend(value.split())
         if tokens:
             package_env_use.append((atom, tokens))
 
@@ -5384,7 +5420,7 @@ def resolve_config(
             if "test" in (scalars.get("FEATURES", "").split())
             else []
         ),
-        "envd_use_tokens": _read_envd_use_tokens(config_root),
+        "envd_use_tokens": _read_envd_use_tokens(eroot),
         "package_use": _parse_package_use_lines(profile_use_lines),
         "profile_use_layers": profile_use_layers,
         "package_env": package_env,
@@ -17111,6 +17147,18 @@ class _Colorizer:
             return text
         return seq + text + _resolved_code("reset")
 
+    def wrap_codes(self, key):
+        """The raw open/close sequences c(key, _) wraps text in (both
+        empty when disabled or the key has no code -- exactly the cases
+        c returns its input unchanged). Mirrors
+        pretend.rs's Colorizer::wrap_codes."""
+        if not self.enabled:
+            return ("", "")
+        seq = _resolved_code(key)
+        if not seq:
+            return ("", "")
+        return (seq, _resolved_code("reset"))
+
     def pkgprint(self, text, binary, system, world):
         """Real Display.pkgprint (output.py:265-292), merge-list case
         (always true for a bracket entry): system wins over world."""
@@ -18997,6 +19045,7 @@ def run(args):
             ],
             _main["name"],
             {r["name"]: r["masters"] for r in _repos},
+            _root(),
         )
         return _run_info(
             _info_config,
@@ -19083,6 +19132,7 @@ def run(args):
             repo_aliases,
             main_repo["name"],
             repo_masters,
+            _root(),
         )
     except ResolutionError as e:
         print(f"emerge: {e}", file=sys.stderr)
@@ -20277,10 +20327,11 @@ def run(args):
                 if start >= 0:
                     idx.update(range(start, start + len(slot_str)))
             if use_flags and "[" in atom_str and "]" in atom_str:
-                # Real highlight_violations' USE-token branch, without
-                # colorization (indices stay aligned; real drifts under
-                # --color y). The strip rule is real's own, quirks
-                # included ((+)/(-) tokens never match).
+                # Real highlight_violations' USE-token branch: mark every
+                # [...] token whose flag is violated (the render site wraps
+                # these spans in BAD red and shifts the markers onto the
+                # displayed string -- real drifts). The strip rule is
+                # real's own, quirks included ((+)/(-) tokens never match).
                 bracket = atom_str.find("[")
                 close = atom_str.find("]")
                 cursor = bracket + 1
@@ -20295,6 +20346,33 @@ def run(args):
                         idx.update(range(start, start + len(piece)))
                     cursor = start + len(piece)
             return idx
+
+        def _colorize_marked_spans(text, idx, color):
+            """Wrap every idx-marked char of text in BAD red (a no-op
+            when color is off) and return the wrapped string plus the
+            marked positions shifted onto it. Each marked char's
+            displayed position is recorded after the ANSI open codes
+            are pushed, so carets land on visible text, never inside an
+            escape. Mirrors pretend.rs's colorize_marked_spans: same
+            spans real highlight_violations wraps, but markers track the
+            displayed string (real marks pre-color indices and drifts)."""
+            open_code, close_code = color.wrap_codes("BAD")
+            out = []
+            shifted = set()
+            pos = 0
+            for i, ch in enumerate(text):
+                if i in idx:
+                    out.append(open_code)
+                    pos += len(open_code)
+                    shifted.add(pos)
+                    out.append(ch)
+                    pos += 1
+                    out.append(close_code)
+                    pos += len(close_code)
+                else:
+                    out.append(ch)
+                    pos += 1
+            return "".join(out), shifted
 
         any_omitted = False
         print()
@@ -20417,13 +20495,17 @@ def run(args):
                     version_violated = any(r[0] == "version" for r in reasons)
                     slot_violated = any(r[0] == "slot" for r in reasons)
                     use_flags = sorted({r[1] for r in reasons if r[0] == "use"})
+                    idx = _sc_caret_idx(atom_str, atom, version_violated, slot_violated, use_flags)
+                    # Same spans real highlight_violations wraps in BAD
+                    # red, but markers track the displayed string (real
+                    # drifts -- see pretend.rs's colorize_marked_spans).
+                    atom_display, shifted = _colorize_marked_spans(atom_str, idx, color)
                     cur_line = (
-                        f"{atom_str} required by ({parent_cpv}, "
+                        f"{atom_display} required by ({parent_cpv}, "
                         f"ebuild scheduled for merge) {_render_pkg_use_display(parent_use)}\n"
                     )
-                    idx = _sc_caret_idx(atom_str, atom, version_violated, slot_violated, use_flags)
                     marker = "".join(
-                        "^" if k in idx else " " for k in range(len(cur_line))
+                        "^" if k in shifted else " " for k in range(len(cur_line))
                     )
                     sys.stdout.write("    " + cur_line)
                     print("    " + marker)

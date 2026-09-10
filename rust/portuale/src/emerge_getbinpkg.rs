@@ -186,16 +186,23 @@ fn merge_one_binary_entry(
         &version,
         entry.build_id.as_deref(),
     );
-    // Prefer a `$PKGDIR` file already on disk; otherwise fetch it from a
-    // binhost. `entry.remote_binary` is the resolver's hint, but it isn't
-    // always available -- an `emerge --resume` list only records
-    // `cat/pkg-ver` (`resume_entry` -> `remote_binary: false`,
-    // `build_id: None`), so a resumed binhost binary that was never
-    // downloaded would otherwise fail here with "no binpkg file". Trying
-    // the binhosts whenever the local file is missing covers both.
+    // A `$PKGDIR` file already on disk wins; otherwise only a *remote*
+    // entry (`entry.remote_binary`, set by the resolver for a
+    // binhost-sourced candidate) may fetch from a binhost. A resumed
+    // entry always lands here with `remote_binary: false`
+    // (`resume_entry` records only `cat/pkg-ver`, so "was this fetched
+    // remotely" is not re-derived) -- and real replays a resumed
+    // binary against its *local* bintree, matched by the recorded
+    // `mtimedb["resume"]["binpkgs"]` build metadata, never by
+    // re-hitting the binhost. A resumed binary that was never
+    // downloaded therefore fails here (real: `PackageNotFound`, "An
+    // expected package is not available") instead of silently fetching
+    // a possibly-different file. The same holds for a fresh
+    // local-`$PKGDIR` entry: its fetch already happened, so a missing
+    // file is an error, not a refetch.
     let binpkg_path = match local {
         Some(path) => path,
-        None => {
+        None if entry.remote_binary => {
             let (sync_uri, record) = find_remote_binpkg(
                 &config.binrepos,
                 root,
@@ -217,6 +224,12 @@ fn merge_one_binary_entry(
                 &version,
                 pkgdir,
             )?
+        }
+        None => {
+            return Err(format!(
+                "{cp}-{version}: no binpkg file under {}",
+                pkgdir.display()
+            ));
         }
     };
 
@@ -1495,6 +1508,84 @@ mod tests {
         assert_eq!(
             std::fs::read_to_string(root.join("var/lib/binpkgphasepkg.phases")).unwrap(),
             "preinst\npostinst\n"
+        );
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// A resumed binary entry (`remote_binary: false`, `build_id: None`
+    /// -- all `resume_entry` records) with no local `$PKGDIR` file must
+    /// FAIL with the local-only error, never re-hit the binhost: real
+    /// replays a resumed binary against its local bintree only (a
+    /// never-downloaded binary isn't resumable at all). The `file://`
+    /// binhost below serves a REAL fixture binary, so pre-fix code
+    /// downloads it into `$PKGDIR` and merges successfully -- post-fix
+    /// the pkgdir stays empty and the error names the local dir.
+    #[test]
+    fn merge_one_binary_entry_never_refetches_for_a_non_remote_entry() {
+        let tmp = tempdir();
+        let root = tmp.join("root");
+        let pkgdir = tmp.join("pkgdir");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::create_dir_all(&pkgdir).unwrap();
+        let binhost = tmp.join("binhost");
+        std::fs::create_dir_all(binhost.join("dev-libs")).unwrap();
+        std::fs::copy(
+            fixtures_root().join("pkgdir/dev-libs/binpkgrmpkg-1.0.tbz2"),
+            binhost.join("dev-libs/binpkgrmpkg-1.0.tbz2"),
+        )
+        .unwrap();
+        let size = std::fs::metadata(binhost.join("dev-libs/binpkgrmpkg-1.0.tbz2"))
+            .unwrap()
+            .len();
+        std::fs::write(
+            binhost.join("Packages"),
+            format!(
+                "TIMESTAMP: 0\nPACKAGES: 1\n\nBUILD_ID: 1\nCPV: dev-libs/binpkgrmpkg-1.0\n\
+                 DEFINED_PHASES: -\nEAPI: 8\nKEYWORDS: amd64\nPATH: dev-libs/binpkgrmpkg-1.0.tbz2\n\
+                 REPO: testrepo\nSIZE: {size}\nSLOT: 0\nUSE:\n"
+            ),
+        )
+        .unwrap();
+        let config = Config {
+            binrepos: vec![BinRepo {
+                name: "test".into(),
+                sync_uri: format!("file://{}", binhost.display()),
+                priority: 1,
+                location: None,
+                verify_signature: false,
+            }],
+            ..Default::default()
+        };
+        // Sanity: the binhost really serves this cpv (a fetch WOULD
+        // succeed) -- so the failure below proves no fetch was tried.
+        assert!(
+            find_remote_binpkg(&config.binrepos, &root, "dev-libs", "binpkgrmpkg", "1.0").is_some()
+        );
+
+        // Resumed shape: `graph_entry` defaults to `remote_binary:
+        // false`, `build_id: None`, exactly like `resume_entry`.
+        let entry = graph_entry("binpkgrmpkg", CandidateSource::Binary, "1.0");
+        assert!(!entry.remote_binary);
+        let err = merge_one_binary_entry(
+            &entry,
+            &config,
+            &root,
+            &pkgdir,
+            &tmp.join("pt"),
+            &MergeOptions::default(),
+        )
+        .expect_err("a resumed binary with no local file must fail, not refetch");
+        assert!(
+            err.contains("no binpkg file under"),
+            "local-only error, got: {err}"
+        );
+        assert!(
+            !err.contains("binhost"),
+            "must not mention the index, got: {err}"
+        );
+        assert!(
+            std::fs::read_dir(&pkgdir).unwrap().next().is_none(),
+            "nothing may be downloaded into $PKGDIR"
         );
         let _ = std::fs::remove_dir_all(&tmp);
     }

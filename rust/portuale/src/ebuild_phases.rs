@@ -201,6 +201,7 @@
 use crate::fetch::{self, FetchOptions};
 use brush_builtins::ShellBuilderExt as _;
 use regex::Regex;
+use std::os::unix::io::FromRawFd as _;
 use std::path::{Path, PathBuf};
 
 /// Real PMS 7.3.1: the ebuild's own EAPI is the value of an `EAPI=...`
@@ -710,6 +711,15 @@ pub(crate) fn restrict_fetch_from_restrict(restrict: &str) -> bool {
     flat_field_has_token(restrict, &["fetch"])
 }
 
+/// Real `RESTRICT=primaryuri` (real `fetch.py:1187`, `"primaryuri" in
+/// restrict`), USE-conditional-evaluated the same way
+/// `restrict_mirror_from_restrict` does. Moves the file's own literal
+/// `SRC_URI` URIs to the front of its candidate list (see
+/// `FetchOptions::restrict_primaryuri`).
+pub(crate) fn restrict_primaryuri_from_restrict(restrict: &str) -> bool {
+    flat_field_has_token(restrict, &["primaryuri"])
+}
+
 /// USE-conditional-evaluates a raw md5-cache `RESTRICT`/`PROPERTIES`
 /// value (real `_PackageMetadataWrapper`'s own `use_reduce` pass)
 /// against portuale's own always-empty phase-side USE set (see
@@ -743,19 +753,18 @@ fn flat_field_has_token(raw: &str, wanted: &[&str]) -> bool {
 /// `:777`'s `RESTRICT=nostrip`/`RESTRICT=strip`, consume the reduced
 /// form, not the raw ebuild one). An unparsable value degrades to `""`,
 /// the same "can't tell, so don't claim it" precedent
-/// `flat_field_has_token` already uses.
-fn flat_field(raw: &str) -> String {
+/// `flat_field_has_token` already uses. `use_set` is the reduction
+/// input: empty for every phase but `depend` (see
+/// `restrict_and_properties`), the config `USE` set for `depend` (see
+/// `depend_use_set`).
+fn flat_field_on(raw: &str, use_set: &std::collections::HashSet<String>) -> String {
     if raw.trim().is_empty() {
         return String::new();
     }
     let tokens: Vec<String> = raw.split_whitespace().map(String::from).collect();
-    portage_use_reduce::use_reduce_flat(
-        &tokens,
-        &std::collections::HashSet::new(),
-        portage_use_reduce::MatchMode::Normal,
-    )
-    .map(|flat| flat.join(" "))
-    .unwrap_or_default()
+    portage_use_reduce::use_reduce_flat(&tokens, use_set, portage_use_reduce::MatchMode::Normal)
+        .map(|flat| flat.join(" "))
+        .unwrap_or_default()
 }
 
 /// Real `doebuild_environment()`'s own `USE` plus the compiler/make
@@ -783,8 +792,11 @@ fn flat_field(raw: &str) -> String {
 /// once per ebuild (against the F.10/F.11 perf work); every pinned
 /// golden assumes it.
 ///
-/// Deliberate cut: per-package `package.env` still only flows on merge
-/// builds (`entry_package_env_vars` needs a resolved graph entry).
+/// Standalone `package.env`: both halves flow here, not just on merge
+/// builds. The `USE=` half rides `candidate_use_flags_display` above
+/// (`effective_use_flags` atom-matches `package_env_use` itself); the
+/// build-vars half is atom-matched below against the ebuild's own
+/// md5-cache identity (`match_package_env_vars`).
 ///
 /// `(USE display pairs, build flag pairs)` from one standalone config
 /// load -- the alias keeps the loader closure below under clippy's
@@ -794,6 +806,7 @@ type StandaloneBaseEnv = (Vec<(String, bool)>, Vec<(String, String)>);
 fn phase_standalone_base_env(
     env: &Environment,
     config_root: &Path,
+    eroot: &Path,
     ebuild_phase_value: &str,
     extra_env: &[(String, String)],
 ) -> (String, Vec<(String, String)>) {
@@ -827,6 +840,7 @@ fn phase_standalone_base_env(
             &repo_aliases,
             &main_repo.name,
             &repo_masters,
+            eroot,
         )
         .ok()?;
         let display = portage_repo::candidate_use_flags_display(
@@ -837,6 +851,38 @@ fn phase_standalone_base_env(
             &env.split.pvr,
         );
         let flags = crate::pretend::build_config_env(&config);
+        // Per-package `package.env` build vars, atom-matched against
+        // the ebuild's own md5-cache identity (real `_grab_pkg_env`
+        // folding a matching entry into `configdict["pkg"]`): the
+        // standalone equivalent of the merge path's
+        // `entry_package_env_vars`, which needed a resolved graph
+        // entry only to name the same `cat/pkg-ver:slot/sub` string
+        // rebuilt here. Layered after the base flags so they win,
+        // like the merge path's own `entry_build_env` order. The
+        // `USE=` half needs no separate step: `candidate_use_flags_display`
+        // above already folds `package_env_use` in via
+        // `effective_use_flags`' own atom matching.
+        let slot_raw = portage_repo::read_md5_cache(
+            &repo_root_for(&env.pkg_dir)?,
+            &env.category,
+            &env.split.pf,
+        )
+        .ok()
+        .and_then(|m| m.get("SLOT").cloned())
+        .unwrap_or_default();
+        // Same `slot`/`sub_slot` fallback shape as the merge path's
+        // `entry_package_env_vars` (missing `SLOT` means slot `0`).
+        let (slot, sub_slot) = match slot_raw.split_once('/') {
+            Some((s, ss)) => (s.to_string(), ss.to_string()),
+            None if slot_raw.is_empty() => ("0".to_string(), "0".to_string()),
+            None => (slot_raw.clone(), slot_raw),
+        };
+        let cpv_slot = format!(
+            "{}/{}-{}:{}/{}",
+            env.category, env.split.pn, env.split.pvr, slot, sub_slot
+        );
+        let mut flags = flags;
+        flags.extend(match_package_env_vars(&config.package_env_vars, &cpv_slot));
         Some((display, flags))
     })() else {
         return (String::new(), Vec::new());
@@ -853,13 +899,18 @@ fn phase_standalone_base_env(
 /// sets both, unconditionally, for every phase): the ebuild's own
 /// `RESTRICT`/`PROPERTIES` metadata, USE-reduced. Read from the same
 /// repo's own `metadata/md5-cache` entry `fetch_sources`'s own `RESTRICT`
-/// read already trusts, against portuale's own always-empty phase-side
-/// USE set -- no resolved graph reaches a standalone `ebuild <file>
+/// read already trusts. `use_set` is the reduction input -- empty for
+/// every phase (no resolved graph reaches a standalone `ebuild <file>
 /// <phase>`, and `entry_build_env`'s own resolved USE (an `emerge -b`
-/// build) doesn't reach this deep yet either (see this module's own
-/// "KNOWN, DOCUMENTED GAPS"). `("", "")` outside any repo checkout,
-/// matching `repo_root_for`'s own established tolerance.
-fn restrict_and_properties(env: &Environment) -> (String, String) {
+/// build) doesn't reach this deep yet either -- see this module's own
+/// "KNOWN, DOCUMENTED GAPS"), except `depend` (see `depend_use_set`),
+/// whose config-`USE` reduction real `doebuild(mydo="depend")` runs
+/// with. `("", "")` outside any repo checkout, matching
+/// `repo_root_for`'s own established tolerance.
+fn restrict_and_properties(
+    env: &Environment,
+    use_set: &std::collections::HashSet<String>,
+) -> (String, String) {
     let Some(repo_root) = repo_root_for(&env.pkg_dir) else {
         return (String::new(), String::new());
     };
@@ -871,7 +922,91 @@ fn restrict_and_properties(env: &Environment) -> (String, String) {
             .map(String::as_str)
             .unwrap_or("")
     };
-    (flat_field(get("RESTRICT")), flat_field(get("PROPERTIES")))
+    (
+        flat_field_on(get("RESTRICT"), use_set),
+        flat_field_on(get("PROPERTIES"), use_set),
+    )
+}
+
+/// Atom-match `package_env_vars` (real `_grab_pkg_env` folding a
+/// matching `/etc/portage/package.env` entry's env file into
+/// `configdict["pkg"]`) against one `cat/pkg-ver:slot/sub` string,
+/// narrowed to the deterministic `pretend::BUILD_VARS` set. Later `env`
+/// files (and later matching atoms) win, matching the phase env's own
+/// last-wins application. Shared by the merge path
+/// (`emerge_build::entry_package_env_vars`, matching a resolved graph
+/// entry) and the standalone path below (matching the ebuild's own
+/// md5-cache identity -- no resolved graph needed).
+pub(crate) fn match_package_env_vars(
+    package_env_vars: &[(String, Vec<(String, String)>)],
+    cpv_slot: &str,
+) -> Vec<(String, String)> {
+    let mut out: Vec<(String, String)> = Vec::new();
+    for (atom, vars) in package_env_vars {
+        if portage_dep::match_from_list(atom, &[cpv_slot]).is_some_and(|m| !m.is_empty()) {
+            for (k, v) in vars {
+                if crate::pretend::BUILD_VARS.contains(&k.as_str()) && !v.is_empty() {
+                    out.push((k.clone(), v.clone()));
+                }
+            }
+        }
+    }
+    out
+}
+
+/// The config-`USE` set the `depend` phase reduces `RESTRICT`/
+/// `PROPERTIES` on: real `doebuild(mydo="depend")` runs with the
+/// `setcpv` config `USE` (profile + `make.conf` + user `package.use`,
+/// no per-package IUSE resolution -- the phase *generates* IUSE), and
+/// `PORTAGE_RESTRICT`/`PORTAGE_PROPERTIES` come from that same
+/// already-USE-reduced `_pkg` accessor (`_flatten` over
+/// `settings["PORTAGE_USE"]`). Portuale's equivalent is
+/// `Config::use_flags` (the same config-global set, no per-candidate
+/// layer). Empty when no repo checkout or config load is available --
+/// the pre-existing empty-set behavior, not an error. Atom-matched
+/// `package.use` / `package.env` entries for the depend target are NOT
+/// folded in (matching needs the target's `cat/pkg-ver:slot/sub`
+/// identity, which the `depend` path deliberately doesn't resolve --
+/// metadata extraction stays on the config-global set).
+fn depend_use_set(
+    env: &Environment,
+    config_root: &Path,
+    eroot: &Path,
+) -> std::collections::HashSet<String> {
+    let Some(_) = repo_root_for(&env.pkg_dir) else {
+        return std::collections::HashSet::new();
+    };
+    let repos = match portage_repo::find_repos(config_root) {
+        Ok(repos) => repos,
+        Err(_) => return std::collections::HashSet::new(),
+    };
+    let Some(main_repo) = repos.iter().find(|r| r.is_main) else {
+        return std::collections::HashSet::new();
+    };
+    let overlay_repos: Vec<(String, std::path::PathBuf)> = repos
+        .iter()
+        .filter(|r| !r.is_main)
+        .map(|r| (r.name.clone(), r.location.clone()))
+        .collect();
+    let repo_aliases: Vec<(String, std::path::PathBuf)> = repos
+        .iter()
+        .flat_map(|r| r.aliases.iter().map(|a| (a.clone(), r.location.clone())))
+        .collect();
+    let repo_masters: std::collections::HashMap<String, Vec<std::path::PathBuf>> = repos
+        .iter()
+        .map(|r| (r.name.clone(), r.masters.clone()))
+        .collect();
+    portage_profile::resolve_config(
+        config_root,
+        &main_repo.location,
+        &overlay_repos,
+        &repo_aliases,
+        &main_repo.name,
+        &repo_masters,
+        eroot,
+    )
+    .map(|config| config.use_flags)
+    .unwrap_or_default()
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -901,6 +1036,9 @@ async fn fetch_sources(
     let restrict_fetch = restrict
         .map(|r| restrict_fetch_from_restrict(r))
         .unwrap_or(false);
+    let restrict_primaryuri = restrict
+        .map(|r| restrict_primaryuri_from_restrict(r))
+        .unwrap_or(false);
     let aa = portage_fetch::flatten_src_uri(&src_uri, |_, _| true)
         .map_err(|e| format!("{}: {e}", env.pkg_dir.display()))?
         .into_iter()
@@ -926,6 +1064,13 @@ async fn fetch_sources(
                 .unwrap_or(FetchOptions::default().distlocks),
             restrict_mirror,
             restrict_fetch,
+            restrict_primaryuri,
+            // Real `FEATURES=force-mirror` -- same env-var shortcut as
+            // `distlocks` above (no full config resolution on this
+            // path), defaulting to real `false`.
+            force_mirror: std::env::var("FEATURES")
+                .map(|features| features.split_whitespace().any(|tok| tok == "force-mirror"))
+                .unwrap_or(false),
         },
     );
     let a = match a {
@@ -1589,7 +1734,11 @@ fn phase_isolation(env: &Environment, phase: &str) -> Isolation {
     }
     let mut net = network_sandbox_requested();
     if net {
-        let (restrict, properties) = restrict_and_properties(env);
+        // Exemption checks run for sandboxable phases only (`depend`
+        // never reaches here -- it is outside `SANDBOXED_SRC_PHASES`
+        // above), so the empty-set reduction is the whole story.
+        let (restrict, properties) =
+            restrict_and_properties(env, &std::collections::HashSet::new());
         if network_sandbox_exempt(phase, &restrict, &properties) {
             net = false;
         }
@@ -1789,7 +1938,7 @@ fn phase_env_vars(
     // literal. `("", [])` for merge builds (their `extra_env` carries
     // everything) and the `depend` phase -- see the helper.
     let standalone_base_env =
-        phase_standalone_base_env(env, config_root, ebuild_phase_value, extra_env);
+        phase_standalone_base_env(env, config_root, root, ebuild_phase_value, extra_env);
     let mut vars = vec![
         ("EAPI".to_string(), env.eapi.clone()),
         ("PN".to_string(), env.split.pn.clone()),
@@ -1888,10 +2037,16 @@ fn phase_env_vars(
     // `RESTRICT=strip` -- rather than re-deriving them from `RESTRICT`/
     // `PROPERTIES` itself, which portuale's own phase env never exports
     // at all (only the ebuild's own bash sees the raw, unreduced values,
-    // via its own sourced metadata). See `restrict_and_properties`'s own
-    // doc comment for the exact real source and portuale's own
-    // USE-reduction narrowing.
-    let (restrict, properties) = restrict_and_properties(env);
+    // via its own sourced metadata). The `depend` phase reduces on the
+    // config `USE` set (real `doebuild(mydo="depend")`'s own
+    // `PORTAGE_USE`); every other phase reduces on the empty set -- see
+    // `restrict_and_properties`'s own doc comment.
+    let restrict_use_set = if ebuild_phase_value == "depend" {
+        depend_use_set(env, config_root, root)
+    } else {
+        std::collections::HashSet::new()
+    };
+    let (restrict, properties) = restrict_and_properties(env, &restrict_use_set);
     vars.push(("PORTAGE_RESTRICT".to_string(), restrict));
     vars.push(("PORTAGE_PROPERTIES".to_string(), properties));
     // The config-derived compiler/make flags: base values only, ahead of
@@ -2087,7 +2242,7 @@ async fn run_one_phase_brush(
         .build()
         .await
         .map_err(|e| format!("brush shell failed to start: {e}"))?;
-    let params = brush_phase_params(&mut shell, log_file)?;
+    let (params, pump) = brush_phase_params(&mut shell, log_file)?;
 
     let setup = phase_setup_script(
         env,
@@ -2099,37 +2254,49 @@ async fn run_one_phase_brush(
         config_root,
         extra_env,
     );
-    shell
-        .run_string(&setup, &brush_core::SourceInfo::default(), &params)
-        .await
-        .map_err(|e| format!("environment setup failed: {e}"))?;
+    // The shell owns the pipe write ends (its fd table) and must drop
+    // before `pump` joins (EOF then finish) -- see `open_log_file`'s
+    // lifetime contract. No `?` may return between here and the drops
+    // (an early return would drop `pump`, declared after `shell`,
+    // first and hang the join), so the outcome is captured, the
+    // holders dropped in order, and only then returned.
+    let outcome: Result<i32, String> = async {
+        shell
+            .run_string(&setup, &brush_core::SourceInfo::default(), &params)
+            .await
+            .map_err(|e| format!("environment setup failed: {e}"))?;
 
-    // Real bin/ebuild.sh's own top-level code (unconditional, not gated
-    // on EBUILD_SH_ARGS at all -- confirmed empirically, not just by
-    // reading it: `bin/ebuild.sh:681`'s own `source "${EBUILD}" || die`
-    // sits in ebuild.sh's own main body) ALREADY sources the ebuild file
-    // itself as part of being sourced -- a second, separate
-    // `source_script` call on the ebuild file here would be genuinely
-    // redundant, not just wasteful: it re-runs the ebuild's own
-    // top-level code a second time against variables ebuild.sh's own
-    // tail has *already* made `readonly` from the first pass, which
-    // fails outright ("cannot mutate readonly variable") -- confirmed
-    // empirically by removing this line and watching that error
-    // disappear.
-    shell
-        .source_script(
-            bin_dir.join("ebuild.sh"),
-            std::iter::empty::<String>(),
-            &params,
-        )
-        .await
-        .map_err(|e| format!("sourcing bin/ebuild.sh failed: {e}"))?;
+        // Real bin/ebuild.sh's own top-level code (unconditional, not gated
+        // on EBUILD_SH_ARGS at all -- confirmed empirically, not just by
+        // reading it: `bin/ebuild.sh:681`'s own `source "${EBUILD}" || die`
+        // sits in ebuild.sh's own main body) ALREADY sources the ebuild file
+        // itself as part of being sourced -- a second, separate
+        // `source_script` call on the ebuild file here would be genuinely
+        // redundant, not just wasteful: it re-runs the ebuild's own
+        // top-level code a second time against variables ebuild.sh's own
+        // tail has *already* made `readonly` from the first pass, which
+        // fails outright ("cannot mutate readonly variable") -- confirmed
+        // empirically by removing this line and watching that error
+        // disappear.
+        shell
+            .source_script(
+                bin_dir.join("ebuild.sh"),
+                std::iter::empty::<String>(),
+                &params,
+            )
+            .await
+            .map_err(|e| format!("sourcing bin/ebuild.sh failed: {e}"))?;
 
-    shell
-        .invoke_function("__ebuild_main", [phase], params)
-        .await
-        .map_err(|e| format!("phase {phase} failed: {e}"))
-        .map(u8::into)
+        shell
+            .invoke_function("__ebuild_main", [phase], params)
+            .await
+            .map_err(|e| format!("phase {phase} failed: {e}"))
+            .map(|result| i32::from(u8::from(result.exit_code)))
+    }
+    .await;
+    drop(shell);
+    drop(pump);
+    outcome
 }
 
 /// `--shell bash`: spawns a genuine `bash <bin_dir>/ebuild.sh <phase>`
@@ -2169,6 +2336,14 @@ fn run_one_phase_bash(
         config_root,
         extra_env,
     );
+    // The gzip pump guard must outlive `cmd` (see `open_log_file`'s
+    // lifetime contract + the sink comment below): it joins the gzip
+    // thread, which needs EOF, which needs `cmd`'s stored parent
+    // write-end copies closed. Declared BEFORE `cmd` so reverse drop
+    // order destroys it AFTER `cmd` on every path (normal return and
+    // `?` early return alike); `drop(cmd)` below closes the copies
+    // deterministically right after the wait.
+    let mut pump_guard: Option<LogPump> = None;
     let mut cmd = sandbox_wrapped_command(&bin_dir.join("ebuild.sh"), phase, iso);
     // Real `doebuild` spawns a phase with a curated `config.environ()`,
     // never the inherited process env wholesale -- so `EMERGE_DEFAULT_OPTS`
@@ -2180,11 +2355,28 @@ fn run_one_phase_bash(
     cmd.envs(std::env::vars().filter(|(k, _)| environ_whitelisted(k)));
     cmd.envs(vars);
     if let Some(path) = log_file {
-        let (out, err) = open_log_file(path)?;
-        cmd.stdout(out).stderr(err);
+        // `sink.pump` MUST outlive `cmd`: the guard joins the gzip
+        // thread, which needs EOF on the pipes, which needs `cmd`'s
+        // stored parent copies of the write ends closed (plus the
+        // waited child's). A guard scoped to this block would drop
+        // (join) here -- before the child is even spawned, with `cmd`
+        // still holding its copies -- and hang forever. So only the
+        // write ends move into `cmd`; the guard escapes to the outer
+        // scope, where reverse declaration order drops it after `cmd`
+        // on every path (normal return and `?` early return alike).
+        // `drop(cmd)` below closes the copies deterministically right
+        // after the wait; see `open_log_file`.
+        let sink = open_log_file(path)?;
+        cmd.stdout(sink.out).stderr(sink.err);
+        pump_guard = sink.pump;
     }
     let status = spawn_trackable(&mut cmd)
         .map_err(|e| format!("spawning real bash for phase {phase} failed: {e}"))?;
+    drop(cmd);
+    // Explicit (a pure-drop guard reads as unused otherwise): joins the
+    // gzip thread now that every write end is closed. Scope-end order
+    // would do the same, including on the `?` early return above.
+    drop(pump_guard);
     Ok(status.code().unwrap_or(1))
 }
 
@@ -2519,7 +2711,7 @@ async fn run_misc_functions_brush(
         .build()
         .await
         .map_err(|e| format!("brush shell failed to start: {e}"))?;
-    let params = brush_phase_params(&mut shell, log_file)?;
+    let (params, pump) = brush_phase_params(&mut shell, log_file)?;
 
     let setup = phase_setup_script(
         env,
@@ -2531,20 +2723,29 @@ async fn run_misc_functions_brush(
         config_root,
         extra_env,
     );
-    shell
-        .run_string(&setup, &brush_core::SourceInfo::default(), &params)
-        .await
-        .map_err(|e| format!("environment setup failed: {e}"))?;
+    // Same shell-before-pump drop discipline as
+    // `run_one_phase_brush`: capture the outcome, drop in order, then
+    // return -- see `open_log_file`.
+    let outcome: Result<i32, String> = async {
+        shell
+            .run_string(&setup, &brush_core::SourceInfo::default(), &params)
+            .await
+            .map_err(|e| format!("environment setup failed: {e}"))?;
 
-    shell
-        .source_script(
-            bin_dir.join("misc-functions.sh"),
-            [dyn_command.to_string()].into_iter(),
-            &params,
-        )
-        .await
-        .map_err(|e| format!("running {dyn_command} failed: {e}"))
-        .map(|result| i32::from(u8::from(result.exit_code)))
+        shell
+            .source_script(
+                bin_dir.join("misc-functions.sh"),
+                [dyn_command.to_string()].into_iter(),
+                &params,
+            )
+            .await
+            .map_err(|e| format!("running {dyn_command} failed: {e}"))
+            .map(|result| i32::from(u8::from(result.exit_code)))
+    }
+    .await;
+    drop(shell);
+    drop(pump);
+    outcome
 }
 
 /// `--shell bash`: spawns a genuine `bash <bin_dir>/misc-functions.sh
@@ -2593,14 +2794,25 @@ fn run_misc_functions_bash(
         fs_sandbox,
         ..Isolation::default()
     };
+    // The gzip pump guard must outlive `cmd` (same contract as
+    // `run_one_phase_bash`): declared BEFORE `cmd` so reverse drop
+    // order destroys it AFTER `cmd` on every path; filled from the
+    // sink below. The explicit `drop(cmd)` after the wait closes the
+    // parent write-end copies deterministically.
+    let mut pump_guard: Option<LogPump> = None;
     let mut cmd = sandbox_wrapped_command(&bin_dir.join("misc-functions.sh"), dyn_command, iso);
     cmd.envs(vars);
     if let Some(path) = log_file {
-        let (out, err) = open_log_file(path)?;
-        cmd.stdout(out).stderr(err);
+        let sink = open_log_file(path)?;
+        cmd.stdout(sink.out).stderr(sink.err);
+        pump_guard = sink.pump;
     }
     let status = spawn_trackable(&mut cmd)
         .map_err(|e| format!("spawning real bash for {dyn_command} failed: {e}"))?;
+    drop(cmd);
+    // Explicit (a pure-drop guard reads as unused otherwise): joins the
+    // gzip thread now that every write end is closed.
+    drop(pump_guard);
     Ok(status.code().unwrap_or(1))
 }
 
@@ -2872,22 +3084,154 @@ pub fn run_commands_logged(
     ))
 }
 
-/// Opens `log_file` for append (creating it and its parent dir), returning
-/// two independent handles -- one for a subprocess's stdout, one for its
-/// stderr. See `run_commands_logged`.
-fn open_log_file(log_file: &Path) -> Result<(std::fs::File, std::fs::File), String> {
+/// Opens `log_file` for append (creating it and its parent dir),
+/// returning the two write ends a phase's stdout+stderr go to plus the
+/// gzip pump guard when the path ends in `.gz`
+/// (`FEATURES=compress-build-logs`, whose `.gz`-suffixed paths
+/// `emerge_build::build_log_path` produces).
+///
+/// Real `EbuildPhase._open_log` (`_emerge/EbuildPhase.py`): the log
+/// file is opened `ab` and, when its name ends `.gz`, wrapped in a
+/// `gzip.GzipFile(mode="ab")` -- every phase appends one gzip member to
+/// the same file, and the failure-tail / QA readers wrap it in
+/// `gzip.GzipFile(mode="rb")` back. The pump thread below is that
+/// wrapper: the phase (a real bash child, or the embedded brush shell
+/// writing its fd table) writes plain bytes into two pipes, and the
+/// thread gzip-encodes them into the `.gz` file -- one member per
+/// `open_log_file` call, exactly like real's one `GzipFile` per
+/// `_open_log` call. A phase that writes nothing appends no member at
+/// all (real's header is deferred to the first write too).
+///
+/// Lifetime: the guard MUST drop after the phase's write ends close
+/// (child waited + parent `Command` dropped, or brush `Shell`
+/// dropped), otherwise its join hangs waiting for EOF. Declare the
+/// sink early and `drop` the writer holder explicitly -- see the call
+/// sites. Joining first also guarantees the `.gz` member is finished
+/// before any reader (failure tail, next phase's append, QA scan)
+/// touches the file.
+struct LogSink {
+    out: std::fs::File,
+    err: std::fs::File,
+    pump: Option<LogPump>,
+}
+
+struct LogPump {
+    thread: Option<std::thread::JoinHandle<()>>,
+}
+
+impl Drop for LogPump {
+    fn drop(&mut self) {
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
+    }
+}
+
+/// One pipe's read end drained into the shared gzip encoder; returns
+/// bytes forwarded. Both pipes' pumps share one `GzEncoder` (under a
+/// mutex -- stdout/stderr chunk interleaving was never deterministic),
+/// and the member is finished only when at least one byte flowed.
+fn pump_one_pipe(
+    mut read_end: std::fs::File,
+    encoder: &std::sync::Arc<std::sync::Mutex<flate2::write::GzEncoder<std::fs::File>>>,
+) -> u64 {
+    use std::io::{Read, Write};
+    let mut forwarded: u64 = 0;
+    let mut buf = [0u8; 65536];
+    loop {
+        match read_end.read(&mut buf) {
+            Ok(0) => break,
+            Ok(n) => {
+                let Ok(mut enc) = encoder.lock() else {
+                    break;
+                };
+                if enc.write_all(&buf[..n]).is_err() {
+                    break;
+                }
+                forwarded += n as u64;
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(_) => break,
+        }
+    }
+    forwarded
+}
+
+fn open_log_file(log_file: &Path) -> Result<LogSink, String> {
     if let Some(parent) = log_file.parent() {
         std::fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
     }
-    let f = std::fs::OpenOptions::new()
+    let is_gz = log_file.extension().is_some_and(|ext| ext == "gz");
+    if !is_gz {
+        let f = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(log_file)
+            .map_err(|e| format!("{}: {e}", log_file.display()))?;
+        let g = f
+            .try_clone()
+            .map_err(|e| format!("{}: {e}", log_file.display()))?;
+        return Ok(LogSink {
+            out: f,
+            err: g,
+            pump: None,
+        });
+    }
+    let target = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
         .open(log_file)
         .map_err(|e| format!("{}: {e}", log_file.display()))?;
-    let g = f
-        .try_clone()
-        .map_err(|e| format!("{}: {e}", log_file.display()))?;
-    Ok((f, g))
+    let pipe = |what: &str| -> Result<(std::fs::File, std::fs::File), String> {
+        let mut fds = [0; 2];
+        // `O_CLOEXEC`: the pump's read ends must not leak into the
+        // phase child across fork/exec (hygiene only -- EOF keys off
+        // the write ends).
+        if unsafe { libc::pipe2(fds.as_mut_ptr(), libc::O_CLOEXEC) } != 0 {
+            return Err(format!(
+                "pipe for {what}: {}",
+                std::io::Error::last_os_error()
+            ));
+        }
+        Ok(unsafe {
+            (
+                std::fs::File::from_raw_fd(fds[0]),
+                std::fs::File::from_raw_fd(fds[1]),
+            )
+        })
+    };
+    let (out_r, out_w) = pipe("build-log stdout")?;
+    let (err_r, err_w) = pipe("build-log stderr")?;
+    let thread = std::thread::spawn(move || {
+        let encoder = std::sync::Arc::new(std::sync::Mutex::new(flate2::write::GzEncoder::new(
+            target,
+            flate2::Compression::default(),
+        )));
+        let encoder_err = encoder.clone();
+        let encoder_out = encoder.clone();
+        let out_pump = std::thread::spawn(move || pump_one_pipe(out_r, &encoder_out));
+        let err_bytes = pump_one_pipe(err_r, &encoder_err);
+        let out_bytes = out_pump.join().unwrap_or(0);
+        if out_bytes + err_bytes > 0
+            && let Ok(mut enc) = encoder.lock()
+        {
+            // Trailer for this phase's member; the next phase
+            // appends a fresh member (real's per-`_open_log`
+            // `GzipFile` does the same).
+            let _ = enc.try_finish();
+            let _ = enc.get_mut().sync_all();
+        }
+        // Else: drop the encoder unfinished -- nothing was ever
+        // written, so no header went out either, and the file is left
+        // exactly as found (real's deferred header behaves the same).
+    });
+    Ok(LogSink {
+        out: out_w,
+        err: err_w,
+        pump: Some(LogPump {
+            thread: Some(thread),
+        }),
+    })
 }
 
 /// Builds the `ExecutionParameters` for a brush phase shell, redirecting
@@ -2900,17 +3244,22 @@ fn open_log_file(log_file: &Path) -> Result<(std::fs::File, std::fs::File), Stri
 fn brush_phase_params(
     shell: &mut brush_core::Shell,
     log_file: Option<&Path>,
-) -> Result<brush_core::ExecutionParameters, String> {
+) -> Result<(brush_core::ExecutionParameters, Option<LogPump>), String> {
+    let mut pump = None;
     if let Some(path) = log_file {
-        let (out, err) = open_log_file(path)?;
+        let sink = open_log_file(path)?;
         shell
             .open_files_mut()
-            .set_fd(brush_core::openfiles::OpenFiles::STDOUT_FD, out.into());
+            .set_fd(brush_core::openfiles::OpenFiles::STDOUT_FD, sink.out.into());
         shell
             .open_files_mut()
-            .set_fd(brush_core::openfiles::OpenFiles::STDERR_FD, err.into());
+            .set_fd(brush_core::openfiles::OpenFiles::STDERR_FD, sink.err.into());
+        // The shell owns the pipe write ends now (its fd table); the
+        // caller holds the guard across execution and drops the shell
+        // first -- see `open_log_file`'s lifetime contract.
+        pump = sink.pump;
     }
-    Ok(shell.default_exec_params())
+    Ok((shell.default_exec_params(), pump))
 }
 
 /// Runs exactly `phase`, with no `actionmap_deps` prerequisite chain --
@@ -3305,9 +3654,66 @@ mod tests {
             &portage_tmpdir,
         )
         .expect("real fixture parses");
-        let (restrict, properties) = restrict_and_properties(&env);
+        let (restrict, properties) =
+            restrict_and_properties(&env, &std::collections::HashSet::new());
         assert_eq!(restrict, "");
         assert_eq!(properties, "live");
+    }
+
+    #[test]
+    fn depend_phase_reduces_restrict_on_the_config_use_set() {
+        // A conditional `RESTRICT` drops its gated tokens on the empty
+        // set but keeps them on the config `USE` set -- the `depend`
+        // phase's own reduction (real `doebuild(mydo="depend")` runs
+        // with the `setcpv` config `USE`, so ebuild.sh's own
+        // `contains_word … "${PORTAGE_RESTRICT}"` checks, e.g. the
+        // `strip`/`nostrip` `DEBUGBUILD` gate, see the configured
+        // tokens). No fixture change: a throwaway repo carries the
+        // conditional entry, while the config `USE` comes from the
+        // fixture tree (`make.conf` sets `confflag`).
+        let tmp = std::env::temp_dir().join(format!(
+            "ebuild-phases-test-{}-depend_use_set",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&tmp);
+        let repo = tmp.join("repo");
+        std::fs::create_dir_all(repo.join("profiles")).unwrap();
+        std::fs::write(repo.join("profiles/repo_name"), "testrepo\n").unwrap();
+        let pkg_dir = repo.join("dev-libs/condrestrictpkg");
+        std::fs::create_dir_all(&pkg_dir).unwrap();
+        std::fs::write(
+            pkg_dir.join("condrestrictpkg-1.0.ebuild"),
+            "EAPI=8\nSLOT=\"0\"\n",
+        )
+        .unwrap();
+        let cache_dir = repo.join("metadata/md5-cache/dev-libs");
+        std::fs::create_dir_all(&cache_dir).unwrap();
+        std::fs::write(
+            cache_dir.join("condrestrictpkg-1.0"),
+            "DEFINED_PHASES=-\nEAPI=8\nIUSE=\nKEYWORDS=amd64\n\
+             RESTRICT=confflag? ( strip ) other? ( bindist )\nSLOT=0\n\
+             _md5_=0000000000000000000000000000000\n",
+        )
+        .unwrap();
+        let portage_tmpdir = tmp.join("pt");
+        let env = compute_environment(&pkg_dir.join("condrestrictpkg-1.0.ebuild"), &portage_tmpdir)
+            .expect("synthetic ebuild parses");
+        let empty = std::collections::HashSet::new();
+        assert_eq!(
+            restrict_and_properties(&env, &empty),
+            (String::new(), String::new())
+        );
+        // The fixture config's own `USE` carries `confflag` (its
+        // `make.conf`), so the `depend` reduction keeps `strip` while
+        // still dropping the `other?` group.
+        let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures");
+        let use_set = depend_use_set(&env, &fixtures, &fixtures);
+        assert!(use_set.contains("confflag"), "{use_set:?}");
+        assert_eq!(
+            restrict_and_properties(&env, &use_set),
+            ("strip".to_string(), String::new())
+        );
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 
     #[test]
@@ -3323,7 +3729,7 @@ mod tests {
         std::fs::write(&ebuild, "EAPI=8\nSLOT=\"0\"\n").unwrap();
         let env = compute_environment(&ebuild, &tmp).expect("standalone ebuild parses");
         assert_eq!(
-            restrict_and_properties(&env),
+            restrict_and_properties(&env, &std::collections::HashSet::new()),
             (String::new(), String::new())
         );
     }
@@ -4225,5 +4631,122 @@ mod tests {
         assert_eq!(status, 0);
 
         let _ = std::fs::remove_dir_all(&portage_tmpdir);
+    }
+
+    /// `FEATURES=compress-build-logs` pump round-trip (real
+    /// `EbuildPhase._open_log`'s `gzip.GzipFile(mode="ab")`): bytes
+    /// written to the sink's two handles land gzip-encoded in the
+    /// `.gz` file -- one member per `open_log_file` call, so a second
+    /// call appends a second member -- and decode back losslessly. A
+    /// plain path still writes through unencoded.
+    #[test]
+    fn open_log_file_gzip_pump_round_trips() {
+        use std::io::{Read, Write};
+        let dir = std::env::temp_dir().join(format!(
+            "ebuild-phases-gzlog-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        let gz = dir.join("build.log.gz");
+        let plain = dir.join("build.log");
+
+        for (path, stdout_text, stderr_text) in [
+            (&gz, "phase one out\n", "phase one err\n"),
+            (&gz, "phase two out\n", ""),
+        ] {
+            let mut sink = open_log_file(path).expect("open_log_file succeeds");
+            assert!(sink.pump.is_some(), "{path:?} must pump");
+            sink.out.write_all(stdout_text.as_bytes()).unwrap();
+            sink.err.write_all(stderr_text.as_bytes()).unwrap();
+            // Closing the write ends (then joining) finishes the
+            // member -- the same drop order the phase call sites use.
+            drop(sink);
+        }
+        let mut sink = open_log_file(&plain).expect("open_log_file succeeds");
+        assert!(sink.pump.is_none());
+        sink.out.write_all(b"plain\n").unwrap();
+        drop(sink);
+
+        let mut decoded = String::new();
+        flate2::read::MultiGzDecoder::new(std::fs::File::open(&gz).expect("gz log exists"))
+            .read_to_string(&mut decoded)
+            .expect("gz log decodes");
+        // Both members, both streams -- stdout/stderr chunk order
+        // across the two pipes was never deterministic (real appends
+        // both fds to one gzip stream too), so compare unordered.
+        let mut lines: Vec<&str> = decoded.lines().collect();
+        lines.sort_unstable();
+        assert_eq!(
+            lines,
+            vec!["phase one err", "phase one out", "phase two out"],
+        );
+        assert_eq!(std::fs::read_to_string(&plain).unwrap(), "plain\n");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Standalone `package.env` build vars (real `_grab_pkg_env`): a
+    /// standalone phase env layers a matching `package.env` entry's env
+    /// file over the base flags -- atom-matched against the ebuild's own
+    /// md5-cache identity, with no resolved graph entry anywhere.
+    /// `dev-libs/penvbuildpkg` (mapped to `penv-buildflags`) carries the
+    /// env file's `CFLAGS`/`MAKEOPTS`; `dev-libs/newpkg` (unmapped)
+    /// doesn't; the `depend` phase never does (its empty base is
+    /// deliberate -- metadata extraction must not see config values).
+    #[test]
+    fn standalone_phase_env_layers_matching_package_env_build_vars() {
+        let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures");
+        let repo = fixtures.join("repo");
+        let portage_tmpdir = std::env::temp_dir().join(format!(
+            "ebuild-phases-test-{}-standalone-penv",
+            std::process::id()
+        ));
+        let bin_dir = bin_dir().to_path_buf();
+        let vars_for = |pkg: &str, pf: &str, phase: &str| {
+            let env = compute_environment(
+                &repo.join(format!("dev-libs/{pkg}/{pf}.ebuild")),
+                &portage_tmpdir,
+            )
+            .expect("fixture ebuild parses");
+            phase_env_vars(
+                &env,
+                &fixtures,
+                phase,
+                false,
+                &bin_dir,
+                &bin_dir.join("ebuild-helpers"),
+                &fixtures,
+                &[],
+            )
+        };
+        let get = |vars: &[(String, String)], key: &str| {
+            vars.iter()
+                .filter(|(k, _)| k == key)
+                .map(|(_, v)| v.clone())
+                .next_back()
+        };
+        let setup_vars = vars_for("penvbuildpkg", "penvbuildpkg-1.0", "setup");
+        assert_eq!(
+            get(&setup_vars, "CFLAGS").as_deref(),
+            Some("-Os -march=fixturepkgenv")
+        );
+        assert_eq!(get(&setup_vars, "MAKEOPTS").as_deref(), Some("-j7"));
+        let plain_vars = vars_for("newpkg", "newpkg-1.0", "setup");
+        assert!(
+            !plain_vars
+                .iter()
+                .any(|(_, v)| v.contains("-march=fixturepkgenv")),
+            "unmapped package must not see package.env values"
+        );
+        let depend_vars = vars_for("penvbuildpkg", "penvbuildpkg-1.0", "depend");
+        assert!(
+            !depend_vars
+                .iter()
+                .any(|(_, v)| v.contains("-march=fixturepkgenv")),
+            "depend keeps its empty base"
+        );
     }
 }

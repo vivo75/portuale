@@ -29,13 +29,27 @@ portage's own upstream base included) in sync too.
 | | |
 |---|---|
 | Repo | `https://github.com/vivo75/brush` (thin fork of `reubeno/brush`) |
-| Rev | `5af3f6c1869550389a9254be43b0448667a90365` |
+| Rev | `67c301a79c0f4ae734cdd59783f6fdffcdd78c2e` |
 
-`5af3f6c1` = `reubeno/brush@a250b84e` + `95959d30`/`e9157f0a`/`de451b39`
-(the `brush-pr/` fixes, cherry-picked) + a merge of `reubeno:main` (one
-upstream commit, `#1331`, interactive-only). Frozen in `Cargo.lock` too
-(three `git+https://github.com/vivo75/brush?rev=5af3f6c1…` source lines:
-`brush-core`, `brush-builtins`, `brush-parser`).
+`67c301a7` = `reubeno/brush@812336dd` + `95959d30`/`e9157f0a`/`de451b39`
+(the `brush-pr/` fixes, cherry-picked) + a merge of `reubeno:main`
+(upstream commits `#1331` (interactive-only, carried over) through
+`#1360`, incl. `#1347`/`#1348`/`#1349` builtins/regex fixes and `#1361`
+for-loop perf). Frozen in `Cargo.lock` too (`brush-core`
+0.5.0 / `brush-builtins` / `brush-parser`, three
+`git+https://github.com/vivo75/brush?rev=67c301a7…` source lines).
+
+Re-pinned 2026-09-10 (Tier 1): one upstream API break on the way --
+`Shell::invoke_function` now returns `ExecutionResult` instead of `u8`
+(`run_one_phase_brush` maps `result.exit_code` the way the
+misc-functions brush path already did). Verified: brush's own
+`brush-compat-tests` 2015 succeeded / 0 failed (482 known-fail, 29
+skipped -- no upstream regressions in the merged range), `cargo test
+--release -p portuale` 442/0 (incl. the deadlock guard and every phase
+test). The three staged fixes are still unmerged upstream (checked
+`upstream/main` for each branch tip -- none landed), so the thin fork
+stays; the per-bug `fix/*` branches are untouched, still staged for
+the unopened upstream PRs.
 
 > The gitignored **`3rdparty/brush/` working checkout** tracks the same
 > `main` (`origin` = `vivo75/brush`, `upstream` = `reubeno/brush`), plus

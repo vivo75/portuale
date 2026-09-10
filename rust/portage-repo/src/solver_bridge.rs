@@ -35,10 +35,20 @@
 //!   but unlike the walk, a candidate that would need a `--autounmask*`
 //!   flip (a `~arch` keyword, a license, a `package.mask`) simply fails
 //!   to resolve rather than producing the flip suggestion.
-//! - No notices: slot conflicts, autounmask change lists, `:=` rebuilds,
-//!   blockers and circular deps come back empty -- a bridge failure is
-//!   one `Error::Detail` line, not a real `depgraph.py` notice.
-//! - Merge order is the plan's install order (`GraphEntry::deps` empty).
+//! - Notices, wired where the bridge result admits them: blockers are
+//!   resolved through the walk's own `resolve_blockers` (H.15c), ABI
+//!   rebuilds through its `slot_operator_rebuild_entries` fixpoint
+//!   (H.15), circular deps through its `find_hard_cycles` over the
+//!   entry `deps` edges (J), and USE display carries the real
+//!   forced/masked `( )` markers (J). `slot_conflicts` and the
+//!   `autounmask_*` change lists stay empty: an engine solution picks a
+//!   single version per CPN, so a successful plan admits no same-slot
+//!   divergence, and no relaxation loop ran whose flips could be
+//!   listed -- a bridge failure is one `Error::Detail` line (engine-
+//!   native text), not a real `depgraph.py` notice.
+//! - Merge order is the walk's own `topological_merge_order` over real
+//!   `deps` edges rebuilt from each version's raw dep strings plus
+//!   resolved USE (H.15b) -- engine install order only seeds positions.
 //! - A dep-string class that `DepEntry::parse` rejects feeds empty deps
 //!   for that class; a version `Cpv`/`Version`-unparsable by
 //!   `portage_atom` is skipped; top-level blocker atoms are skipped.
@@ -385,9 +395,11 @@ fn newest_installed(versions: &[String]) -> &str {
 }
 
 /// Shared `Plan -> GraphResult` mapping: ordered `(cp, version)` selections
-/// plus `(to_cpv -> [(from_cat, from_pkg)])` parent edges become entries in
-/// plan order (the plan's install order *is* the merge order -- v1 cut).
-/// USE display resolves on demand through `repo` (memoized).
+/// plus `(to_cpv -> [(from_cat, from_pkg)])` parent edges become entries;
+/// each entry's `deps` come from its raw dep strings plus resolved USE
+/// (H.15b) and the whole list is re-sorted through the walk's own
+/// `topological_merge_order` below. USE display resolves on demand
+/// through `repo` (memoized).
 fn graph_result_from_order(
     req: &ResolveRequest,
     repos: &[RepoConfig],
@@ -479,13 +491,32 @@ fn graph_result_from_order(
             })
             .collect();
         let empty: HashSet<String> = HashSet::new();
+        // Forced/masked-flag `( )` markers (J): the walk wraps every
+        // profile-forced or masked IUSE flag via `forced_or_masked_flags`
+        // (`refresh_entry_use_display`); the bridge passed an empty set,
+        // so real `pkg_use_display`'s `( )` wraps never rendered. Same
+        // call, same `cat/pkg-ver:slot/sub::repo` candidate spelling.
+        let candidate_str = format!(
+            "{cp}-{version}:{}/{sub}::{repo}",
+            record.slot,
+            sub = record.sub_slot,
+            repo = record.repo_name,
+        );
+        let forced = super::forced_or_masked_flags(
+            &record.iuse,
+            &record.keywords,
+            &candidate_str,
+            &record.category,
+            &record.package,
+            &req.config,
+        );
         // Same `all_flags` split `pretend.rs` uses: enabled-first full
         // form for `-pv`, changed-only form for plain `-p`.
         let use_expand_display = super::build_use_expand_display(
             &use_flags_display,
             &req.config,
             None,
-            &empty,
+            &forced,
             true,
             &empty,
         );
@@ -493,7 +524,7 @@ fn graph_result_from_order(
             &use_flags_display,
             &req.config,
             None,
-            &empty,
+            &forced,
             false,
             &empty,
         );
@@ -649,6 +680,39 @@ fn graph_result_from_order(
         &req.root,
         req.implicit_system_deps,
     );
+    // Circular-dep notice (J): the walk records every dependency edge's
+    // hard/soft kind while draining its queue and reports the shortest
+    // unbreakable build-time cycle via `find_hard_cycles`, which
+    // `pretend.rs` renders as the fatal `* Error: circular
+    // dependencies:` block (exit 1). Bridge entries carry the same
+    // `deps` edges (`dep_edges_from_metadata`, H.15b), so rebuild the
+    // same kind map here: a build-time edge no installed package
+    // satisfies is hard (`best_installed_for_atom`, the walk's own
+    // gate), anything else soft -- blockers never reach the map on
+    // either side (both skip them before recording). `slot_conflicts`
+    // and the `autounmask_*` lists stay empty on purpose: an engine
+    // solution picks a single version per CPN, so a successful plan
+    // admits no same-slot divergence to report, and no relaxation loop
+    // ran whose flips could be listed (a candidate needing a flip
+    // fails instead -- the remaining cut, same as the module doc).
+    let mut edge_kinds: super::EdgeKindMap = HashMap::new();
+    for e in &entries {
+        let owner = (e.category.clone(), e.package.clone());
+        for dep in &e.deps {
+            let kinds = edge_kinds
+                .entry(((dep.category.clone(), dep.package.clone()), owner.clone()))
+                .or_insert((false, false));
+            if dep.priority.buildtime
+                && super::best_installed_for_atom(&req.root, &dep.atom, &dep.category, &dep.package)
+                    .is_none()
+            {
+                kinds.0 = true;
+            } else {
+                kinds.1 = true;
+            }
+        }
+    }
+    let circular_deps = super::find_hard_cycles(&entries, &edge_kinds);
     GraphResult {
         entries,
         slot_conflicts: Vec::new(),
@@ -660,7 +724,7 @@ fn graph_result_from_order(
         autounmask_license_changes: Vec::new(),
         autounmask_mask_changes: Vec::new(),
         abi_rebuilds,
-        circular_deps: Vec::new(),
+        circular_deps,
     }
 }
 
@@ -1438,5 +1502,89 @@ mod tests {
             dep_pkgs.dedup();
             assert_eq!(dep_pkgs, vec!["shared-a", "shared-b"]);
         }
+    }
+
+    /// Forced/masked-flag `( )` markers (J): with `forceflag` forced
+    /// and `maskflag` masked for the package, both bridge backends
+    /// render the walk's own `(forceflag)` / `(-maskflag)` wraps --
+    /// the bridge used to pass an empty forced set, so real
+    /// `pkg_use_display`'s markers never rendered. Fixture
+    /// `dev-libs/pkgusemaskforcepkg`, the same package the walk-path
+    /// contract pins (`USE="(forceflag) (-maskflag) -specflag"`).
+    #[test]
+    fn bridge_use_display_wraps_forced_and_masked_flags() {
+        for kind in [
+            super::super::SolverKind::PubGrub,
+            super::super::SolverKind::Resolvo,
+        ] {
+            let mut req = fixture_request(&["dev-libs/pkgusemaskforcepkg"]);
+            req.solver = kind;
+            // `forced_or_masked_flags` reads the per-level stack, not
+            // the flat fields: one synthetic repo level forcing
+            // `forceflag` and masking `maskflag` for the package.
+            req.config.use_mask_force_levels = vec![portage_profile::UseMaskForceLevel {
+                package_use_force: vec![(
+                    "dev-libs/pkgusemaskforcepkg".to_string(),
+                    vec!["forceflag".to_string()],
+                )],
+                package_use_mask: vec![(
+                    "dev-libs/pkgusemaskforcepkg".to_string(),
+                    vec!["maskflag".to_string()],
+                )],
+                ..Default::default()
+            }];
+            let result = active_resolver_for(kind)
+                .resolve(&req)
+                .expect("pkgusemaskforcepkg resolves");
+            assert_eq!(result.entries.len(), 1);
+            let body: String = result.entries[0]
+                .use_expand_display
+                .iter()
+                .map(|(_, text)| text.clone())
+                .collect::<Vec<_>>()
+                .join(" ");
+            assert!(
+                body.contains("(forceflag)"),
+                "forced flag unwrapped ({kind:?}): {body}"
+            );
+            assert!(
+                body.contains("(-maskflag)"),
+                "masked flag unwrapped ({kind:?}): {body}"
+            );
+        }
+    }
+
+    /// Circular-dep notice (J): the bridge rebuilds the walk's own
+    /// hard/soft edge-kind map over its entry `deps` edges and reports
+    /// the shortest unbreakable build-time cycle via `find_hard_cycles`
+    /// -- `pretend.rs` renders the fatal block from it, exactly like
+    /// the walk (`dev-libs/hardcyclea` <-> `dev-libs/hardcycleb`, both
+    /// unbuilt DEPEND edges). PubGrub linearises the cyclic closure,
+    /// so the notice lands; resolvo's `install_order` still cannot
+    /// linearise any cycle (Tier-4 `--solver=resolvo` item,
+    /// `scope-backlog.md` §J) and errors before the mapping runs.
+    #[test]
+    fn bridge_plan_reports_the_unbreakable_build_time_cycle() {
+        let mut req = fixture_request(&["dev-libs/hardcyclea"]);
+        req.solver = super::super::SolverKind::PubGrub;
+        let result = active_resolver_for(super::super::SolverKind::PubGrub)
+            .resolve(&req)
+            .expect("hardcyclea solves under pubgrub");
+        assert_eq!(result.circular_deps.len(), 1);
+        let cycle = &result.circular_deps[0];
+        assert!(
+            cycle.contains(&"dev-libs/hardcyclea-1.0".to_string())
+                && cycle.contains(&"dev-libs/hardcycleb-1.0".to_string()),
+            "unexpected cycle: {cycle:?}"
+        );
+
+        let mut req = fixture_request(&["dev-libs/hardcyclea"]);
+        req.solver = super::super::SolverKind::Resolvo;
+        assert!(
+            active_resolver_for(super::super::SolverKind::Resolvo)
+                .resolve(&req)
+                .is_err(),
+            "resolvo still cannot order a cyclic closure (Tier-4 item)"
+        );
     }
 }

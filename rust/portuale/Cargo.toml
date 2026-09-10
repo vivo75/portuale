@@ -40,14 +40,22 @@ portage-versions = { path = "../portage-versions" }
 #     is the guard.
 # See docs/brush-pin.md for the tracking record and the periodic
 # re-pin checklist (bump the rev to a newer `main`, re-run the suite).
-brush-core = { git = "https://github.com/vivo75/brush", rev = "5af3f6c1869550389a9254be43b0448667a90365" }
-brush-builtins = { git = "https://github.com/vivo75/brush", rev = "5af3f6c1869550389a9254be43b0448667a90365" }
+brush-core = { git = "https://github.com/vivo75/brush", rev = "67c301a79c0f4ae734cdd59783f6fdffcdd78c2e" }
+brush-builtins = { git = "https://github.com/vivo75/brush", rev = "67c301a79c0f4ae734cdd59783f6fdffcdd78c2e" }
 # "rt-multi-thread", not just "rt": a single-threaded runtime deadlocks
 # partway through a real multi-phase run (confirmed empirically -- see
 # ebuild_phases::run_commands's own doc comment) -- brush-core's own
 # Cargo.toml requires this exact feature under unix too.
 tokio = { version = "1", features = ["rt", "rt-multi-thread"] }
 regex = "1"
+# Real FEATURES=compress-build-logs (`prepare_build_dirs.py`'s own
+# `.gz`-suffixed log paths + `EbuildPhase._open_log`'s gzip stream):
+# phase output is gzip-encoded into the `.gz` log through a pure-Rust
+# pump thread, and failure tails decode it back -- flate2 over
+# miniz_oxide only (no C linkage, so the musl-static story is
+# untouched; already in Cargo.lock via brush). Same waiver as md-5
+# above.
+flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
 # Real merge/filesystem mutation (task #55, first slice): CONTENTS's own
 # "obj" lines record a real MD5 digest of each merged regular file
 # (mergeme()'s own `perform_md5`, `lib/portage/checksum.py`) -- another

@@ -99,11 +99,15 @@ can't grow into these incrementally:
   all work dual-language, byte-identical. The `need_rebuild` trailer code
   is also landed but still dormant (no fixture can trigger it yet). Still
   cut or blocked:
-  - operator/USE-token colorization (which faithfully reproduces a
-    genuine upstream `highlight_violations` marker-drift bug — see
-    `history/scope-backlog-2026-09-05.md`; portuale marks the uncolored
-    string, so markers stay aligned -- observable only under
-    `--color y`);
+  - operator/USE-token colorization **shipped (Tier 1, decided)** --
+    with one deliberate divergence: real `highlight_violations` wraps
+    the violated spans in red and then marks the *pre-color* indices,
+    so its `^` line drifts (genuine upstream bug, and real's own red
+    varies by terminal colormap, so byte-parity with the drift is
+    unachievable anyway); portuale wraps the same spans but marks the
+    displayed string, so color and carets agree (see
+    `history/scope-backlog-2026-09-05.md` for the original analysis and
+    `what-this-proves.md` for the decision);
   - the `soname` reason key -- **unreachable, not merely unimplemented**:
     `portage-dep` cannot parse soname atoms and dep flattening drops
     unparseable tokens, so no soname parent atom can ever reach the
@@ -121,9 +125,12 @@ can't grow into these incrementally:
     via the CLI (both languages walk ebuild deps; the
     `dynamic_deps_picks_ebuild_vs_vdb_deps` unit test disagrees --
     unexplained, needs owner eyes);
-    literal bound `:=` atoms accepted in ebuilds (real masks them
-    "improper context for slot-operator built atom syntax" -- an atom
-    validation gap; it also rules out ebuild-carried `:=` fixtures).
+    literal bound `:=` atoms in ebuilds -- **investigated (Tier 1),
+    premise contradicted, not a gap**: no "improper context for
+    slot-operator built atom syntax" masking exists in the vendored
+    checkout, site-packages 3.0.82.2, PyPI 3.0.82.2, or upstream main
+    -- all parse `:slot/sub=` and match it structurally, exactly like
+    `portage-dep` already does (see `what-this-proves.md`).
   - instance display order (resolved-first vs real's arbitrary
     set-iteration order -- pre-existing, no semantic content).
 - **Circular-dep's remaining cuts** — full elementary-cycle enumeration /
@@ -203,23 +210,32 @@ can't grow into these incrementally:
 
 **B. Scheduler / build orchestration** (2026-09-04): merge-hook log
 capture, tokio-runtime kill-in-flight, `mtimedb["resume"]` rotation,
-`--ask` TTY/re-prompt, `elog` syslog/custom. Cuts:
-`FEATURES=compress-build-logs`, `mail`/`mail_summary` elog, a resumed
-binary entry always resolving from local `$PKGDIR`.
+`--ask` TTY/re-prompt, `elog` syslog/custom, `elog` `mail`/`mail_summary`
+(Tier 1: MIME + sendmail-binary/plain-SMTP delivery, per-package and
+run-wide summary; STARTTLS stays a documented cut),
+`FEATURES=compress-build-logs` (Tier 1: `.gz` log paths + gzip pump +
+gunzip tails), resumed binary entries resolving from local `$PKGDIR`
+only (Tier 1: the binhost fallback is gated on `remote_binary`).
+Complete; no residual cuts.
 
 **C. Config resolution depth** (2026-09-03; later refined by the
 per-level `USE_EXPAND` fold, slices J-neovim / P). The whole `USE_ORDER`
-chain incl. per-profile-level `defaults` interleaving. Cuts: no per-file
-`${VAR}` expand map for `package.env` / `env.d`; `env.d` read relative to
-`config_root` not a distinct `eroot` (coincide in every typical config).
+chain incl. per-profile-level `defaults` interleaving, `env.d` from
+`eroot` (Tier 1, not `config_root`), and the per-entry expand map for
+`package.env` files (Tier 1: global-map + within-file/cross-file
+chaining; `env.d` values verified already-correct literal/order). No
+residual cuts (the broot half of `_get_env_d`'s two-file merge stays a
+documented cut: no distinct `BROOT`, and host `/etc/profile.env` must
+never leak into deterministic resolution).
 
 **D. Sandbox / build isolation** (2026-09-04): the `FEATURES` isolation
 set (`unshare` + `sandbox`) wraps the six `src_*` phases;
 `network-sandbox` / `live` / `test_network` exemptions; real `FEATURES`
-passthrough to the phase env; `Packages`-index `USE` back-fill. Cuts:
-per-package `package.env` on a *standalone* `ebuild <file> <phase>` run
-(atom matching needs a resolved graph entry); `PORTAGE_RESTRICT` /
-`PROPERTIES` reduction on the empty-USE `depend` phase. SELinux sandbox,
+passthrough to the phase env; `Packages`-index `USE` back-fill;
+per-package `package.env` on standalone `ebuild <file> <phase>` runs
+(Tier 1: atom-matched on the ebuild's md5-cache identity) and
+`PORTAGE_RESTRICT` / `PROPERTIES` reduction on the config-`USE`
+`depend` phase (Tier 1). SELinux sandbox,
 `userpriv`/`fakeroot` — non-goals (Part 3).
 
 **E. Binary packages / fetch** (substantially complete 2026-09-04..09):
@@ -228,10 +244,14 @@ binpkg-multi-instance for both formats, `--binpkg-changed-deps` /
 `--rebuilt-binaries` / `--use-ebuild-visibility` overrides, `.sig`
 signing/verification, `BUILD_TIME`-vs-installed reinstall, quickpkg
 multi-instance. `identical_binary` and `--useoldpkg-atoms` +
-multi-instance were investigated and found already-correct. **Remaining
-cut:** fetch candidate ordering / `RESTRICT=primaryuri` (determinism
-chosen over a non-observable mirror-selection detail — documented in the
-`portage-fetch` module doc).
+multi-instance were investigated and found already-correct. Fetch
+candidate ordering / `RESTRICT=primaryuri` **shipped (Tier 1)**:
+local flat-layout mirrors, public `GENTOO_MIRRORS`, inline
+`mirror://` expansions, literals (appended, or prepended with the
+third-party group under `primaryuri`), plus `FEATURES=force-mirror`;
+still cut inside that shape: third-party shuffle (determinism), live
+`layout.conf` negotiation, on-filesystem `fsmirrors` copies, and the
+multi-URI-per-file interleave.
 
 
 ### F. Whole `emerge` actions
@@ -411,13 +431,17 @@ real-tree scale** (smoke-tested 2026-09-10, not fixed):
   non-trivial (`net-libs/nodejs`: 48 packages vs portage's 8). It appears
   to feed pubgrub the over-approximated reachability closure (both
   branches of every `flag?()` followed) as the actual dependency graph.
-- Bridge output drops the forced-flag `( )` USE markers.
-- `GraphResult` fields hard-coded empty under `--solver=`: `slot_conflicts`,
-  `autounmask_*`, `circular_deps` — so no `[slot conflict]` / "USE changes
-  are necessary" / circular-dep block, and no autounmask relaxation (a
-  `~arch`/license/mask candidate silently fails instead of suggesting a
-  flip). The module doc's "v1 cuts" list is partly stale (blockers, ABI
-  rebuilds, merge-order edges have since been wired).
+- Bridge output carries the forced-flag `( )` USE markers (Tier 1 --
+  same `forced_or_masked_flags` call as the walk).
+- `GraphResult`'s circular deps are wired from the bridge result (Tier
+  1 -- `find_hard_cycles` over the entry `deps` edges); `slot_conflicts`
+  and `autounmask_*` stay empty by construction (a solved engine plan
+  admits no same-slot divergence, and no relaxation loop ran) -- so no
+  `[slot conflict]` / "USE changes are necessary" block under
+  `--solver=`, and an invisible candidate still fails instead of
+  suggesting a flip. The module doc's "v1 cuts" list is current again
+  (Tier 1 doc refresh: blockers, ABI rebuilds, merge-order edges,
+  markers, circular deps all named as wired).
 
 These predate the current merge — the `--solver=` bridge has been this
 way since it was added. `docs/solver-backends-analysis.md` has the
@@ -498,8 +522,9 @@ merge, unmerge, world management, all real. The gap to a full drop-in is:
    `all_use_satisfied`, the DFS-partial merge-list truncation, and the
    `_serialize_tasks` frontier-timing at real-tree scale (L0 merge-order:
    ~19 probes, correct set / slightly-off sequence).
-2. **The Part 2 tails** — E's fetch ordering, F's `--info` host-state
-   half, G's brush re-pin, §J's `--solver=` real-tree bugs. Each is one
-   focused slice.
+2. **The Part 2 tails** — F's `--info` host-state
+   half, G's brush re-pin, §J's `--solver=` real-tree bugs (E's fetch
+   ordering and §J's notices/markers/doc cuts shipped as Tier-1
+   slices). Each is one focused slice.
 
 B / C / D are complete; F is substantially complete.

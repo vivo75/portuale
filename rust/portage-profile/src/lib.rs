@@ -437,12 +437,9 @@ pub struct Config {
     /// from `<eroot>/etc/profile.env` (which `env-update` generates from
     /// `/etc/env.d/*`). Read `expand=False`, `export ` prefix stripped.
     /// `effective_use_flags` replays these first, before the `repo` tier,
-    /// so everything else overrides them. Portuale reads `profile.env`
-    /// relative to `config_root` rather than a distinct `eroot` (they
-    /// coincide in every tested and typical configuration -- a documented
-    /// divergence, the same one every other config_root-relative read in
-    /// this crate carries). `/etc/env.d/*` practically never sets `USE`,
-    /// so this is almost always empty.
+    /// so everything else overrides them. Read from `<eroot>` (see
+    /// `resolve_config`), not `config_root`. `/etc/env.d/*` practically
+    /// never sets `USE`, so this is almost always empty.
     pub envd_use_tokens: Vec<String>,
     pub accept_keywords: HashSet<String>,
     /// Raw atom or bounded-wildcard-atom strings (see
@@ -1612,9 +1609,9 @@ fn process_make_conf_file(
 /// allow_sourcing=True)`. `source <path>` lines are expanded in place
 /// (absolute against `config_root` chroot-style, relative against the
 /// file's own directory), the same resolution `process_make_conf_file`
-/// uses; a `${VAR}` in a value is left literal (this slice has no
-/// per-file expand map -- real portage seeds one from the global
-/// config, a documented simplification). A missing file yields an empty
+/// uses; a `${VAR}` in a value is left literal here and substituted by
+/// the caller (`expand_package_env_files`) against the per-entry
+/// expand map. A missing file yields an empty
 /// list (real portage warns from `setcpv`; portuale follows its
 /// standing "no warnings from deep in config resolution" precedent).
 /// `visited` guards a `source` cycle.
@@ -1655,31 +1652,35 @@ fn read_env_file_kv(
     out
 }
 
-/// The `USE=` value token(s) of one `/etc/portage/env/<name>` file, in
-/// file order -- the only half of a `package.env` file this slice
-/// consumes. Every `USE=` assignment's whitespace-split tokens
-/// (`-flag`/`flag`/`+flag` incremental syntax preserved for
-/// `effective_use_flags`' own `apply_incremental`).
-fn env_file_use_tokens(env_dir: &Path, name: &str, config_root: &Path) -> Vec<String> {
-    let mut visited = HashSet::new();
-    read_env_file_kv(&env_dir.join(name), config_root, &mut visited)
-        .into_iter()
-        .filter(|(k, _)| k == "USE")
-        .flat_map(|(_, v)| v.split_whitespace().map(String::from).collect::<Vec<_>>())
-        .collect()
-}
-
-/// The **non-`USE`** `KEY=value` pairs of one `/etc/portage/env/<name>`
-/// file, in file order -- the scalar half of a `package.env` file (real
-/// `_grab_pkg_env` folds every key into `configdict["pkg"]`; `USE` is
-/// [`env_file_use_tokens`]' concern). No `${VAR}` expansion (same
-/// simplification as `read_env_file_kv`); `source` is followed.
-fn env_file_build_vars(env_dir: &Path, name: &str, config_root: &Path) -> Vec<(String, String)> {
-    let mut visited = HashSet::new();
-    read_env_file_kv(&env_dir.join(name), config_root, &mut visited)
-        .into_iter()
-        .filter(|(k, _)| k != "USE")
-        .collect()
+/// One `package.env` entry's env files expanded in order: real
+/// `_grab_pkg_env` copies the global expand map once per package
+/// (`env.d` + `make.globals` + `make.defaults` + `make.conf` values --
+/// portuale's own `scalars` at the `package.env` read site) and reads
+/// each file with `getconfig(..., expand=that map)`, which also feeds
+/// every assignment back into the map -- so a later line (or a later
+/// file of the same entry) sees earlier ones, exactly like
+/// `make.conf`'s own within-file chaining. Returns every pair in file
+/// order, `${VAR}`-substituted; callers split the `USE=` half (tokens
+/// split *after* substitution) from the scalar half. Per-package
+/// values never flow back into `scalars` (real: "don't want
+/// per-package settings to pollute the global expand_map").
+fn expand_package_env_files(
+    env_dir: &Path,
+    files: &[String],
+    config_root: &Path,
+    scalars: &HashMap<String, String>,
+) -> Vec<(String, String)> {
+    let mut map = scalars.clone();
+    let mut out = Vec::new();
+    for name in files {
+        let mut visited = HashSet::new();
+        for (key, raw_value) in read_env_file_kv(&env_dir.join(name), config_root, &mut visited) {
+            let value = substitute(&raw_value, &map);
+            map.insert(key.clone(), value.clone());
+            out.push((key, value));
+        }
+    }
+    out
 }
 
 /// Every `USE=` value from a repo's top-level `profiles/make.defaults`
@@ -1702,13 +1703,13 @@ fn read_repo_make_defaults_use(path: &Path, scalars: &HashMap<String, String>) -
 }
 
 /// Real `config.py`'s `configdict["env.d"]["USE"]` -- every `USE=` value
-/// in `<config_root>/etc/profile.env` (real `_get_env_d`'s
+/// in `<eroot>/etc/profile.env` (real `_get_env_d`'s
 /// `getconfig(..., expand=False)`: an optional leading `export ` keyword,
 /// then `KEY=value` with quote removal, no `${VAR}` expansion). Returned
 /// in file order for `effective_use_flags` to fold in via
 /// `apply_incremental`. A missing file yields an empty list.
-fn read_envd_use_tokens(config_root: &Path) -> Vec<String> {
-    let Ok(text) = fs::read_to_string(config_root.join("etc/profile.env")) else {
+fn read_envd_use_tokens(eroot: &Path) -> Vec<String> {
+    let Ok(text) = fs::read_to_string(eroot.join("etc/profile.env")) else {
         return Vec::new();
     };
     text.lines()
@@ -2155,6 +2156,22 @@ fn parse_package_use_lines(
 /// thing and is deliberately NOT resolved -- real `match_from_list` does
 /// a straight `pkg.repo == atom.repo` name comparison with no alias
 /// step, and portuale matches that.)
+///
+/// `eroot` is real `EROOT` (the target root -- portuale's own `ROOT`,
+/// passed as `root` at every call site): `env.d`
+/// (`<eroot>/etc/profile.env`, real `_get_env_d`) is read relative to
+/// it, not to `config_root` (real `PORTAGE_CONFIGROOT`). The two
+/// coincide in every typical config and in every fixture test; they
+/// differ only on a split `--config-root`/`--root` setup. The rest of
+/// the resolution (profile chain, `make.conf`, `package.*`) stays
+/// `config_root`-relative, exactly like real. Deliberate cut inside
+/// the cut: real `_get_env_d` merges *two* files (broot's and eroot's,
+/// routing `PATH`/`ROOTPATH`-class vars to broot and everything else
+/// to eroot); portuale reads eroot's file only -- it has no distinct
+/// `BROOT` (builds always run on the host), and reading the host's
+/// own `/etc/profile.env` would leak host state into
+/// fixture-deterministic resolution.
+#[allow(clippy::too_many_arguments)]
 pub fn resolve_config(
     config_root: &Path,
     main_repo_location: &Path,
@@ -2162,6 +2179,7 @@ pub fn resolve_config(
     repo_aliases: &[(String, PathBuf)],
     main_repo_name: &str,
     repo_masters: &HashMap<String, Vec<PathBuf>>,
+    eroot: &Path,
 ) -> Result<Config, Error> {
     let mut config = Config::default();
     let mut scalars: HashMap<String, String> = HashMap::new();
@@ -2191,16 +2209,28 @@ pub fn resolve_config(
     // `regenerate`). Portuale reads them here in the same order so the
     // `const.INCREMENTALS` fold in `resolved_incremental` matches.
     //
-    // `env.d`: real `_get_env_d` -> `<EROOT>/etc/profile.env` (the
-    // compiled `env-update` output). Only its incremental entries
+    // `env.d`: real `_get_env_d` -> `<eroot>/etc/profile.env` (the
+    // compiled `env-update` output; `eroot`, not `config_root` -- see
+    // `resolve_config`'s doc comment). Only its incremental entries
     // (`CONFIG_PROTECT` / `CONFIG_PROTECT_MASK`, written there by
     // packages' `/etc/env.d/*` fragments) feed `emerge --info`; the rest
     // is build-phase env portuale doesn't model.
-    if let Ok(text) = fs::read_to_string(config_root.join("etc/profile.env")) {
+    if let Ok(text) = fs::read_to_string(eroot.join("etc/profile.env")) {
         for line in logical_lines(&text) {
             let t = line.trim();
             let l = t.strip_prefix("export ").unwrap_or(t);
             if let Some((key, raw_value)) = parse_kv_line(l) {
+                // Eager (portuale resolves eagerly where real expands
+                // lazily on access): values already known -- earlier
+                // lines of this file -- substitute, matching real's
+                // on-access result for backward references; forward
+                // references to later files stay literal here and pick
+                // up their values when those files are read (the eager
+                // approximation portuale uses throughout). Either way
+                // the values seed `scalars`, so every later file
+                // (globals, profile chain, `make.conf`, `package.env`
+                // files) expands against them -- real's
+                // `expand_map = env_d.copy()` seeding.
                 let value = substitute(raw_value, &scalars);
                 note_incremental(&mut config, key, &value);
                 // env.d is a real scalar db too (real `configdict["env.d"]`):
@@ -2778,9 +2808,9 @@ pub fn resolve_config(
     };
 
     // `configdict["env.d"]["USE"]` -- the lowest `USE_ORDER` tier, from
-    // `<config_root>/etc/profile.env` (real `_get_env_d`). Practically
+    // `<eroot>/etc/profile.env` (real `_get_env_d`). Practically
     // always empty (`/etc/env.d/*` doesn't set `USE`).
-    config.envd_use_tokens = read_envd_use_tokens(config_root);
+    config.envd_use_tokens = read_envd_use_tokens(eroot);
 
     config.package_use = parse_package_use_lines(&profile_use_lines, false);
     config.package_use_user = parse_package_use_lines(&user_use_lines, true);
@@ -2830,25 +2860,34 @@ pub fn resolve_config(
         .filter(|(_, files)| !files.is_empty())
         .collect();
     let env_dir = config_root.join("etc/portage/env");
-    config.package_env_use = config
+    // Each `package.env` entry's files share one expand-map copy (see
+    // `expand_package_env_files`); the two halves split it afterwards.
+    let package_env_expanded: Vec<(String, Vec<(String, String)>)> = config
         .package_env
         .iter()
-        .filter_map(|(atom, files)| {
-            let tokens: Vec<String> = files
+        .map(|(atom, files)| {
+            (
+                atom.clone(),
+                expand_package_env_files(&env_dir, files, config_root, &scalars),
+            )
+        })
+        .collect();
+    config.package_env_use = package_env_expanded
+        .iter()
+        .filter_map(|(atom, pairs)| {
+            let tokens: Vec<String> = pairs
                 .iter()
-                .flat_map(|name| env_file_use_tokens(&env_dir, name, config_root))
+                .filter(|(k, _)| k == "USE")
+                .flat_map(|(_, v)| v.split_whitespace().map(String::from).collect::<Vec<_>>())
                 .collect();
             (!tokens.is_empty()).then(|| (atom.clone(), tokens))
         })
         .collect();
-    config.package_env_vars = config
-        .package_env
+    config.package_env_vars = package_env_expanded
         .iter()
-        .filter_map(|(atom, files)| {
-            let vars: Vec<(String, String)> = files
-                .iter()
-                .flat_map(|name| env_file_build_vars(&env_dir, name, config_root))
-                .collect();
+        .filter_map(|(atom, pairs)| {
+            let vars: Vec<(String, String)> =
+                pairs.iter().filter(|(k, _)| k != "USE").cloned().collect();
             (!vars.is_empty()).then(|| (atom.clone(), vars))
         })
         .collect();
@@ -3442,6 +3481,44 @@ sync-uri = file:///srv/pkgs
     ///   make.local (sourced first from make.conf):
     ///                    USE="${USE} localflag"            -> {foo, baz, localflag}
     ///   make.conf:       USE="confflag"                    -> {foo, baz, localflag, confflag}
+    /// `env.d` comes from `eroot`, not `config_root` (real `_get_env_d`):
+    /// with the fixture tree as `config_root` (whose own
+    /// `etc/profile.env` sets `USE='envdusetestflag'`), an `eroot`
+    /// without any `profile.env` yields no `envd_use_tokens`, while an
+    /// `eroot` equal to the fixture root keeps the flag.
+    #[test]
+    fn envd_use_tokens_follow_eroot_not_config_root() {
+        let root = fixtures_root();
+        let overlay_repos = [("overlay".to_string(), root.join("overlay"))];
+        let args = |eroot: &Path| {
+            resolve_config(
+                &root,
+                &root.join("repo"),
+                &overlay_repos,
+                &[],
+                "testrepo",
+                &HashMap::new(),
+                eroot,
+            )
+            .expect("fixture config must resolve")
+        };
+        assert_eq!(
+            args(&root).envd_use_tokens,
+            vec!["envdusetestflag".to_string()]
+        );
+        let bare = std::env::temp_dir().join(format!(
+            "portage-profile-test-eroot-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&bare).unwrap();
+        assert_eq!(args(&bare).envd_use_tokens, Vec::<String>::new());
+        let _ = fs::remove_dir_all(&bare);
+    }
+
     #[test]
     fn resolves_fixture_profile_chain_and_make_conf() {
         let root = fixtures_root();
@@ -3458,6 +3535,7 @@ sync-uri = file:///srv/pkgs
             &[],
             "testrepo",
             &HashMap::new(),
+            &root,
         )
         .expect("fixture config must resolve");
         assert_eq!(
@@ -3566,6 +3644,7 @@ sync-uri = file:///srv/pkgs
             &[],
             "testrepo",
             &HashMap::new(),
+            &root,
         );
         std::fs::remove_file(&stray).ok();
         let config = config.expect("fixture config must resolve");
@@ -3591,6 +3670,7 @@ sync-uri = file:///srv/pkgs
             &[],
             "testrepo",
             &HashMap::new(),
+            &empty_root,
         )
         .expect("missing profile/make.conf is not an error");
         assert_eq!(config.use_flags, HashSet::new());
@@ -3640,6 +3720,7 @@ sync-uri = file:///srv/pkgs
             &[],
             "testrepo",
             &HashMap::new(),
+            &root,
         )
         .expect("cross-repo parent must resolve");
         assert!(config.use_flags.contains("crossrepoflag"));
@@ -3682,6 +3763,7 @@ sync-uri = file:///srv/pkgs
             &repo_aliases,
             "testrepo",
             &HashMap::new(),
+            &root,
         )
         .expect("aliased cross-repo parent must resolve");
         assert!(config.use_flags.contains("aliasedflag"));
@@ -3695,6 +3777,7 @@ sync-uri = file:///srv/pkgs
             &[],
             "testrepo",
             &HashMap::new(),
+            &root,
         )
         .unwrap_err();
         assert!(err.to_string().contains("no repo named \"ovl\""), "{err}");
@@ -3720,6 +3803,7 @@ sync-uri = file:///srv/pkgs
             &[],
             "testrepo",
             &HashMap::new(),
+            &root,
         )
         .expect_err("unknown repo name must be rejected");
         assert!(
@@ -3762,8 +3846,16 @@ sync-uri = file:///srv/pkgs
         #[cfg(unix)]
         std::os::unix::fs::symlink(main_repo.join("profiles/leaf"), &make_profile).unwrap();
 
-        let config = resolve_config(&root, &main_repo, &[], &[], "testrepo", &HashMap::new())
-            .expect("same-repo colon parent must resolve");
+        let config = resolve_config(
+            &root,
+            &main_repo,
+            &[],
+            &[],
+            "testrepo",
+            &HashMap::new(),
+            &root,
+        )
+        .expect("same-repo colon parent must resolve");
         assert!(config.use_flags.contains("samerepocolon"));
     }
 
@@ -3789,8 +3881,16 @@ sync-uri = file:///srv/pkgs
         #[cfg(unix)]
         std::os::unix::fs::symlink(main_repo.join("profiles/leaf"), &make_profile).unwrap();
 
-        let err = resolve_config(&root, &main_repo, &[], &[], "testrepo", &HashMap::new())
-            .expect_err("a colon parent in a non-portage-2 repo must not resolve");
+        let err = resolve_config(
+            &root,
+            &main_repo,
+            &[],
+            &[],
+            "testrepo",
+            &HashMap::new(),
+            &root,
+        )
+        .expect_err("a colon parent in a non-portage-2 repo must not resolve");
         assert!(err.to_string().contains(":base"), "unexpected error: {err}");
     }
 
@@ -3814,6 +3914,7 @@ sync-uri = file:///srv/pkgs
             &[],
             "testrepo",
             &HashMap::new(),
+            &root,
         )
         .expect_err("same-repo colon outside any known repo must be rejected");
         assert!(
@@ -3854,6 +3955,7 @@ sync-uri = file:///srv/pkgs
             &[],
             "testrepo",
             &HashMap::new(),
+            &root,
         )
         .expect("diamond inheritance must resolve");
         assert_eq!(
@@ -3898,6 +4000,7 @@ sync-uri = file:///srv/pkgs
             &[],
             "testrepo",
             &HashMap::new(),
+            &root,
         )
         .expect("config with package.* files must resolve");
         assert_eq!(config.package_mask, vec!["dev-libs/foo".to_string()]);
@@ -3952,7 +4055,7 @@ sync-uri = file:///srv/pkgs
         #[cfg(unix)]
         std::os::unix::fs::symlink(&leaf, &make_profile).unwrap();
 
-        let config = resolve_config(&root, &repo, &[], &[], "testrepo", &HashMap::new())
+        let config = resolve_config(&root, &repo, &[], &[], "testrepo", &HashMap::new(), &root)
             .expect("config must resolve");
         assert_eq!(
             config.package_mask,
@@ -3999,6 +4102,7 @@ sync-uri = file:///srv/pkgs
             &[],
             "testrepo",
             &HashMap::new(),
+            &root,
         )
         .expect("config must resolve");
         assert_eq!(config.package_mask, vec!["dev-libs/a::overlay".to_string()]);
@@ -4029,6 +4133,7 @@ sync-uri = file:///srv/pkgs
             &[],
             "testrepo",
             &HashMap::new(),
+            &root,
         )
         .expect("config must resolve");
         assert_eq!(config.package_mask, vec!["dev-libs/a::overlay".to_string()]);
@@ -4065,6 +4170,7 @@ sync-uri = file:///srv/pkgs
             &[],
             "testrepo",
             &HashMap::new(),
+            &root,
         )
         .expect("config must resolve");
         assert_eq!(
@@ -4101,6 +4207,7 @@ sync-uri = file:///srv/pkgs
             &[],
             "testrepo",
             &HashMap::new(),
+            &root,
         )
         .expect("config must resolve");
         assert_eq!(
@@ -4126,8 +4233,16 @@ sync-uri = file:///srv/pkgs
 
         let overlay_repos = [("overlay".to_string(), overlay.clone())];
         let repo_masters = HashMap::from([("overlay".to_string(), Vec::<PathBuf>::new())]);
-        let config = resolve_config(&root, &repo, &overlay_repos, &[], "testrepo", &repo_masters)
-            .expect("config must resolve");
+        let config = resolve_config(
+            &root,
+            &repo,
+            &overlay_repos,
+            &[],
+            "testrepo",
+            &repo_masters,
+            &root,
+        )
+        .expect("config must resolve");
         // The main repo's own "dev-libs/a" entry still applies to
         // itself (real portage's own repo-level package.mask always
         // masks its own repo, independent of who masters whom) -- but
@@ -4162,8 +4277,16 @@ sync-uri = file:///srv/pkgs
             ("downstream".to_string(), downstream.clone()),
         ];
         let repo_masters = HashMap::from([("downstream".to_string(), vec![overlay.clone()])]);
-        let config = resolve_config(&root, &repo, &overlay_repos, &[], "testrepo", &repo_masters)
-            .expect("config must resolve");
+        let config = resolve_config(
+            &root,
+            &repo,
+            &overlay_repos,
+            &[],
+            "testrepo",
+            &repo_masters,
+            &root,
+        )
+        .expect("config must resolve");
         assert!(
             config
                 .package_mask
@@ -4200,6 +4323,7 @@ sync-uri = file:///srv/pkgs
             &[],
             "testrepo",
             &HashMap::new(),
+            &root,
         )
         .expect("config must resolve");
         assert_eq!(
@@ -4247,6 +4371,7 @@ sync-uri = file:///srv/pkgs
             &[],
             "testrepo",
             &HashMap::new(),
+            &root,
         )
         .expect("config must resolve");
         assert_eq!(
@@ -4308,6 +4433,7 @@ sync-uri = file:///srv/pkgs
             &[],
             "testrepo",
             &HashMap::new(),
+            &root,
         )
         .expect("config must resolve");
         assert_eq!(
@@ -4358,7 +4484,7 @@ sync-uri = file:///srv/pkgs
         #[cfg(unix)]
         std::os::unix::fs::symlink(&leaf, &make_profile).unwrap();
 
-        let config = resolve_config(&root, &repo, &[], &[], "testrepo", &HashMap::new())
+        let config = resolve_config(&root, &repo, &[], &[], "testrepo", &HashMap::new(), &root)
             .expect("config must resolve");
         assert_eq!(config.system_packages, vec!["dev-libs/b".to_string()]);
     }
@@ -4398,7 +4524,7 @@ sync-uri = file:///srv/pkgs
         #[cfg(unix)]
         std::os::unix::fs::symlink(&leaf, &make_profile).unwrap();
 
-        let config = resolve_config(&root, &repo, &[], &[], "testrepo", &HashMap::new())
+        let config = resolve_config(&root, &repo, &[], &[], "testrepo", &HashMap::new(), &root)
             .expect("config must resolve");
         assert_eq!(config.package_provided, vec!["dev-libs/c-1.0".to_string()]);
     }
@@ -4441,7 +4567,7 @@ sync-uri = file:///srv/pkgs
         #[cfg(unix)]
         std::os::unix::fs::symlink(&leaf, &make_profile).unwrap();
 
-        let config = resolve_config(&root, &repo, &[], &[], "testrepo", &HashMap::new())
+        let config = resolve_config(&root, &repo, &[], &[], "testrepo", &HashMap::new(), &root)
             .expect("config must resolve");
         assert_eq!(
             config.use_flags,
@@ -4483,7 +4609,7 @@ sync-uri = file:///srv/pkgs
         #[cfg(unix)]
         std::os::unix::fs::symlink(&leaf, &make_profile).unwrap();
 
-        let config = resolve_config(&root, &repo, &[], &[], "testrepo", &HashMap::new())
+        let config = resolve_config(&root, &repo, &[], &[], "testrepo", &HashMap::new(), &root)
             .expect("config must resolve");
         assert_eq!(
             config.archlist,
@@ -4526,7 +4652,7 @@ sync-uri = file:///srv/pkgs
         std::os::unix::fs::symlink(&leaf, &make_profile).unwrap();
         fs::write(portage_dir.join("make.conf"), "USE=\"baz\"\n").unwrap();
 
-        let config = resolve_config(&root, &repo, &[], &[], "testrepo", &HashMap::new())
+        let config = resolve_config(&root, &repo, &[], &[], "testrepo", &HashMap::new(), &root)
             .expect("config must resolve");
         assert_eq!(
             config.use_tokens,
@@ -4575,7 +4701,7 @@ sync-uri = file:///srv/pkgs
         #[cfg(unix)]
         std::os::unix::fs::symlink(&leaf, &make_profile).unwrap();
 
-        let config = resolve_config(&root, &repo, &[], &[], "testrepo", &HashMap::new())
+        let config = resolve_config(&root, &repo, &[], &[], "testrepo", &HashMap::new(), &root)
             .expect("config must resolve");
         assert_eq!(
             config.use_expand,
@@ -4614,7 +4740,7 @@ sync-uri = file:///srv/pkgs
         #[cfg(unix)]
         std::os::unix::fs::symlink(&base, &make_profile).unwrap();
 
-        let config = resolve_config(&root, &repo, &[], &[], "testrepo", &HashMap::new())
+        let config = resolve_config(&root, &repo, &[], &[], "testrepo", &HashMap::new(), &root)
             .expect("config must resolve");
         assert!(!config.use_flags.contains("video_cards_nvidia"));
         assert!(config.use_flags.contains("video_cards_intel"));
@@ -4651,7 +4777,7 @@ sync-uri = file:///srv/pkgs
         #[cfg(unix)]
         std::os::unix::fs::symlink(&base, &make_profile).unwrap();
 
-        let config = resolve_config(&root, &repo, &[], &[], "testrepo", &HashMap::new())
+        let config = resolve_config(&root, &repo, &[], &[], "testrepo", &HashMap::new(), &root)
             .expect("config must resolve");
         let layer = &config.profile_use_layers[0];
         // folded flag lands in this level's make_defaults_use, prepended.
@@ -4712,7 +4838,7 @@ sync-uri = file:///srv/pkgs
         #[cfg(unix)]
         std::os::unix::fs::symlink(&leaf, &make_profile).unwrap();
 
-        let config = resolve_config(&root, &repo, &[], &[], "testrepo", &HashMap::new())
+        let config = resolve_config(&root, &repo, &[], &[], "testrepo", &HashMap::new(), &root)
             .expect("config must resolve");
         // base-only value survives the leaf's own VIDEO_CARDS assignment.
         assert!(config.use_flags.contains("video_cards_dummy"));
@@ -4750,7 +4876,7 @@ sync-uri = file:///srv/pkgs
         #[cfg(unix)]
         std::os::unix::fs::symlink(&base, &make_profile).unwrap();
 
-        let config = resolve_config(&root, &repo, &[], &[], "testrepo", &HashMap::new())
+        let config = resolve_config(&root, &repo, &[], &[], "testrepo", &HashMap::new(), &root)
             .expect("config must resolve");
         assert_eq!(
             config.use_expand_unprefixed,
@@ -4787,7 +4913,7 @@ sync-uri = file:///srv/pkgs
         #[cfg(unix)]
         std::os::unix::fs::symlink(&base, &make_profile).unwrap();
 
-        let config = resolve_config(&root, &repo, &[], &[], "testrepo", &HashMap::new())
+        let config = resolve_config(&root, &repo, &[], &[], "testrepo", &HashMap::new(), &root)
             .expect("config must resolve");
         assert!(!config.use_flags.contains("foo"));
         assert!(config.use_flags.contains("bar"));
@@ -4821,7 +4947,7 @@ sync-uri = file:///srv/pkgs
         #[cfg(unix)]
         std::os::unix::fs::symlink(&leaf, &make_profile).unwrap();
 
-        let config = resolve_config(&root, &repo, &[], &[], "testrepo", &HashMap::new())
+        let config = resolve_config(&root, &repo, &[], &[], "testrepo", &HashMap::new(), &root)
             .expect("config must resolve");
         assert_eq!(
             config.package_accept_keywords,
@@ -4863,7 +4989,7 @@ sync-uri = file:///srv/pkgs
         #[cfg(unix)]
         std::os::unix::fs::symlink(&leaf, &make_profile).unwrap();
 
-        let config = resolve_config(&root, &repo, &[], &[], "testrepo", &HashMap::new())
+        let config = resolve_config(&root, &repo, &[], &[], "testrepo", &HashMap::new(), &root)
             .expect("config must resolve");
         assert_eq!(
             config.package_accept_keywords,
@@ -4901,7 +5027,7 @@ sync-uri = file:///srv/pkgs
         #[cfg(unix)]
         std::os::unix::fs::symlink(&leaf, &make_profile).unwrap();
 
-        let config = resolve_config(&root, &repo, &[], &[], "testrepo", &HashMap::new())
+        let config = resolve_config(&root, &repo, &[], &[], "testrepo", &HashMap::new(), &root)
             .expect("config must resolve");
         assert_eq!(
             config.package_accept_keywords,
@@ -4935,7 +5061,7 @@ sync-uri = file:///srv/pkgs
         #[cfg(unix)]
         std::os::unix::fs::symlink(&leaf, &make_profile).unwrap();
 
-        let config = resolve_config(&root, &repo, &[], &[], "testrepo", &HashMap::new())
+        let config = resolve_config(&root, &repo, &[], &[], "testrepo", &HashMap::new(), &root)
             .expect("config must resolve");
         assert_eq!(
             config.package_use_repo,
@@ -4995,7 +5121,7 @@ sync-uri = file:///srv/pkgs
 
         // No env: baseline.
         with_test_env(&[], || {
-            let c = resolve_config(&root, &repo, &[], &[], "testrepo", &HashMap::new())
+            let c = resolve_config(&root, &repo, &[], &[], "testrepo", &HashMap::new(), &root)
                 .expect("resolves");
             assert!(c.accept_keywords.contains("amd64"));
             assert!(!c.accept_keywords.contains("~amd64"));
@@ -5011,7 +5137,7 @@ sync-uri = file:///srv/pkgs
                 ("CFLAGS", "-O3"),
             ],
             || {
-                let c = resolve_config(&root, &repo, &[], &[], "testrepo", &HashMap::new())
+                let c = resolve_config(&root, &repo, &[], &[], "testrepo", &HashMap::new(), &root)
                     .expect("resolves");
                 // ACCEPT_KEYWORDS: incremental -- profile amd64 kept, env ~amd64 added.
                 assert!(c.accept_keywords.contains("amd64"));
@@ -5058,7 +5184,7 @@ sync-uri = file:///srv/pkgs
         .unwrap();
 
         with_test_env(&[], || {
-            let c = resolve_config(&root, &repo, &[], &[], "testrepo", &HashMap::new())
+            let c = resolve_config(&root, &repo, &[], &[], "testrepo", &HashMap::new(), &root)
                 .expect("resolves");
             assert!(c.use_flags.contains("globalflag"));
             assert!(!c.use_flags.contains("profileflag"));
@@ -5090,7 +5216,7 @@ sync-uri = file:///srv/pkgs
         #[cfg(unix)]
         std::os::unix::fs::symlink(&leaf, &make_profile).unwrap();
 
-        let config = resolve_config(&root, &repo, &[], &[], "testrepo", &HashMap::new())
+        let config = resolve_config(&root, &repo, &[], &[], "testrepo", &HashMap::new(), &root)
             .expect("config must resolve");
         assert_eq!(
             config.profile_use_layers,
@@ -5151,6 +5277,7 @@ sync-uri = file:///srv/pkgs
             &[],
             "testrepo",
             &HashMap::new(),
+            &root,
         )
         .expect("config must resolve");
         assert_eq!(
@@ -5185,13 +5312,13 @@ sync-uri = file:///srv/pkgs
         )
         .unwrap();
 
-        let config = resolve_config(&root, &repo, &[], &[], "testrepo", &HashMap::new())
+        let config = resolve_config(&root, &repo, &[], &[], "testrepo", &HashMap::new(), &root)
             .expect("config must resolve");
         assert_eq!(config.envd_use_tokens, vec!["envdflag -other".to_string()]);
 
         // No profile.env -> empty.
         fs::remove_file(etc.join("profile.env")).unwrap();
-        let config = resolve_config(&root, &repo, &[], &[], "testrepo", &HashMap::new())
+        let config = resolve_config(&root, &repo, &[], &[], "testrepo", &HashMap::new(), &root)
             .expect("config must resolve");
         assert!(config.envd_use_tokens.is_empty());
         let _ = fs::remove_dir_all(&root);
@@ -5224,7 +5351,7 @@ sync-uri = file:///srv/pkgs
         fs::write(env_dir.join("shared"), "USE=\"sharedflag -commonflag\"\n").unwrap();
         // `gone` is referenced but doesn't exist -> contributes nothing.
 
-        let config = resolve_config(&root, &repo, &[], &[], "testrepo", &HashMap::new())
+        let config = resolve_config(&root, &repo, &[], &[], "testrepo", &HashMap::new(), &root)
             .expect("config must resolve");
 
         assert_eq!(
@@ -5265,6 +5392,58 @@ sync-uri = file:///srv/pkgs
     }
 
     #[test]
+    fn package_env_expands_dollar_vars_against_the_global_map_with_chaining() {
+        // Real `_grab_pkg_env`'s per-package expand map: `${SHARED}` from
+        // `make.conf` (already in the global map), `INNER` chained from
+        // the same file's own earlier line, and `ACROSS` chained from an
+        // earlier file of the same entry. The scalar half expands the
+        // same way.
+        let root = std::env::temp_dir().join("portage-profile-test-package-env-expand");
+        let repo = root.join("repo");
+        let portage_dir = root.join("etc/portage");
+        let env_dir = portage_dir.join("env");
+        fs::create_dir_all(repo.join("profiles")).unwrap();
+        fs::create_dir_all(&env_dir).unwrap();
+        fs::write(portage_dir.join("make.conf"), "SHARED=\"sharedflag\"\n").unwrap();
+        fs::write(portage_dir.join("package.env"), "dev-libs/a first second\n").unwrap();
+        fs::write(
+            env_dir.join("first"),
+            "INNER=\"innerflag\"\nUSE=\"${SHARED} ${INNER}\"\n",
+        )
+        .unwrap();
+        fs::write(
+            env_dir.join("second"),
+            "USE=\"across-${INNER}\"\nCFLAGS=\"-O2 ${SHARED}\"\n",
+        )
+        .unwrap();
+
+        let config = resolve_config(&root, &repo, &[], &[], "testrepo", &HashMap::new(), &root)
+            .expect("config must resolve");
+        assert_eq!(
+            config.package_env_use,
+            vec![(
+                "dev-libs/a".to_string(),
+                vec![
+                    "sharedflag".to_string(),
+                    "innerflag".to_string(),
+                    "across-innerflag".to_string(),
+                ]
+            )]
+        );
+        assert_eq!(
+            config.package_env_vars,
+            vec![(
+                "dev-libs/a".to_string(),
+                vec![
+                    ("INNER".to_string(), "innerflag".to_string()),
+                    ("CFLAGS".to_string(), "-O2 sharedflag".to_string()),
+                ]
+            )]
+        );
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
     fn package_use_expand_shorthand_applies_prefix_to_following_tokens_on_the_same_line() {
         // User-level "dev-libs/a VIDEO_CARDS: nvidia -intel plainflag" --
         // "nvidia"/"intel" get the video_cards_ prefix (negation kept
@@ -5282,7 +5461,7 @@ sync-uri = file:///srv/pkgs
         )
         .unwrap();
 
-        let config = resolve_config(&root, &repo, &[], &[], "testrepo", &HashMap::new())
+        let config = resolve_config(&root, &repo, &[], &[], "testrepo", &HashMap::new(), &root)
             .expect("config must resolve");
         assert_eq!(
             config.package_use_user,
@@ -5313,7 +5492,7 @@ sync-uri = file:///srv/pkgs
         )
         .unwrap();
 
-        let config = resolve_config(&root, &repo, &[], &[], "testrepo", &HashMap::new())
+        let config = resolve_config(&root, &repo, &[], &[], "testrepo", &HashMap::new(), &root)
             .expect("config must resolve");
         assert_eq!(
             config.package_use_user,
@@ -5345,7 +5524,7 @@ sync-uri = file:///srv/pkgs
         )
         .unwrap();
 
-        let config = resolve_config(&root, &repo, &[], &[], "testrepo", &HashMap::new())
+        let config = resolve_config(&root, &repo, &[], &[], "testrepo", &HashMap::new(), &root)
             .expect("config must resolve");
         assert_eq!(
             config.package_use_repo,
@@ -5389,7 +5568,7 @@ sync-uri = file:///srv/pkgs
         #[cfg(unix)]
         std::os::unix::fs::symlink(&leaf, &make_profile).unwrap();
 
-        let config = resolve_config(&root, &repo, &[], &[], "testrepo", &HashMap::new())
+        let config = resolve_config(&root, &repo, &[], &[], "testrepo", &HashMap::new(), &root)
             .expect("config must resolve");
         assert_eq!(
             config.package_use_mask,
@@ -5431,7 +5610,7 @@ sync-uri = file:///srv/pkgs
         #[cfg(unix)]
         std::os::unix::fs::symlink(&leaf, &make_profile).unwrap();
 
-        let config = resolve_config(&root, &repo, &[], &[], "testrepo", &HashMap::new())
+        let config = resolve_config(&root, &repo, &[], &[], "testrepo", &HashMap::new(), &root)
             .expect("config must resolve");
         assert_eq!(
             config.use_stable_mask,
@@ -5489,7 +5668,7 @@ sync-uri = file:///srv/pkgs
         #[cfg(unix)]
         std::os::unix::fs::symlink(&leaf, &make_profile).unwrap();
 
-        let config = resolve_config(&root, &repo, &[], &[], "testrepo", &HashMap::new())
+        let config = resolve_config(&root, &repo, &[], &[], "testrepo", &HashMap::new(), &root)
             .expect("config must resolve");
         assert_eq!(
             config.package_use_stable_mask,
@@ -5525,6 +5704,7 @@ sync-uri = file:///srv/pkgs
             &[],
             "testrepo",
             &HashMap::new(),
+            &root,
         )
         .expect("config with package.use must resolve");
         assert_eq!(

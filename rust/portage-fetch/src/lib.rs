@@ -71,18 +71,18 @@
 //     replicated here (no URL-encoding dependency in this crate, and
 //     real distfile filenames essentially never contain characters
 //     that would need it).
-//   - Real fetch ordering interleaves `GENTOO_MIRRORS` fallback,
-//     `mirror://`-expanded candidates, and the literal `SRC_URI` URI
-//     itself in a specific, somewhat subtle order (real `fetch.py`'s
-//     own comment: "Prefer thirdpartymirrors over normal mirrors in
-//     cases when the file does not yet exist on the normal mirrors").
-//     Portuale instead tries the most-specific candidate first,
-//     deterministically: `mirror://`-expanded (or the literal URI for
-//     a non-`mirror://` token) first, `gentoo_mirror_fallback` last --
-//     a real, deliberate deviation from real portage's own precise
-//     ordering, not a bug; every candidate is still tried and real-
-//     digest-verified regardless of order, so this only affects which
-//     mirror is attempted first, never correctness.
+//   - Real fetch ordering is now `assemble_candidates`' own shape
+//     (`portuale/src/fetch.rs`, real `fetch.py:1112-1192`): local
+//     flat-layout mirrors, public `GENTOO_MIRRORS`, inline `mirror://`
+//     expansions, literals (appended, or prepended with the third-party
+//     expansions under `RESTRICT=primaryuri`). Deliberately still cut
+//     inside that shape: real shuffles the `thirdpartymirrors` half
+//     (load-balancing; portuale stays deterministic), negotiates a
+//     per-mirror `layout.conf` live over the network (flat layout
+//     only here), copies on-filesystem `fsmirrors` instead of
+//     downloading, and groups several URIs for one file into a single
+//     interleaved list (portuale loops per entry -- identical for the
+//     single-URI files real trees overwhelmingly use).
 //   - Only `BLAKE2B`/`SHA512` are verified (real `MANIFEST2_HASH_DEFAULTS`
 //     exactly) -- any other hash name appearing in a Manifest entry is
 //     silently ignored, the same "real, standard hash, not reimplemented

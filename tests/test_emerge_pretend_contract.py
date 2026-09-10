@@ -1286,6 +1286,7 @@ CASES = [
     ("package.use depth: repo-level entry loses to the profile make.defaults", ["--pretend", "-v", "dev-libs/repouseweakpkg"], 0),
     ("package.use depth: profile-level entry loses to make.conf", ["--pretend", "-v", "dev-libs/profileuseweakpkg"], 0),
     ("package.env: env-file USE= enables a flag, pulling in a dependency", ["--pretend", "dev-libs/penvpkg"], 0),
+    ("package.env: env-file USE= with ${VAR} expansion", ["--pretend", "dev-libs/penvexppkg"], 0),
     ("repo make.defaults: USE= enables a flag, pulling in a dependency", ["--pretend", "-v", "dev-libs/repomakedefaultpkg"], 0),
     ("env.d: /etc/profile.env USE= enables a flag, pulling in a dependency", ["--pretend", "-v", "dev-libs/envdusepkg"], 0),
     ("bare name: a unique package name is category-qualified", ["--pretend", "newpkg"], 0),
@@ -1329,6 +1330,7 @@ CASES = [
     ("slot conflict: pkg_use_display renders non-empty USE on instance + parent lines", ["--pretend", "dev-libs/scuseparent"], 0),
     ("slot conflict: --json carries the per-instance / per-parent pkg_use_display", ["--pretend", "--json", "dev-libs/scuseparent"], 0),
     ("slot conflict: three same-reason parents collapse to one + '(and N more)'", ["--pretend", "dev-libs/slotconfgroup"], 0),
+    ("slot conflict: --color=y colours violated spans, markers stay aligned", ["--pretend", "--color=y", "dev-libs/slotconfgroup"], 0),
     ("slot conflict: USE reason keys, unconditional before violated", ["--pretend", "dev-libs/slotusegroup"], 0),
     ("slot conflict: --verbose-conflicts shows every omitted parent", ["--pretend", "--verbose-conflicts", "dev-libs/slotconfgroup"], 0),
     ("slot conflict: --verbose-conflicts=n is the default (collapsed)", ["--pretend", "--verbose-conflicts=n", "dev-libs/slotconfgroup"], 0),
@@ -6488,6 +6490,29 @@ def test_package_env_env_file_use_enables_a_flag_and_pulls_in_a_dependency(
     ]
 
 
+def test_package_env_env_file_use_expands_dollar_vars(
+    emerge_binary, emerge_pretend_python, fixture_env
+):
+    """`fixtures/etc/portage/package.env` maps "dev-libs/penvexppkg" to
+    the env file "penv-expand", whose `USE="penvexp-${PENVSCOPE}
+    ${ARCH}-penvexp"` exercises real `_grab_pkg_env`'s per-package
+    expand map twice: `${ARCH}` from the global map (the arch profile
+    level's `make.defaults`), `PENVSCOPE` from the same file's own
+    earlier line (real `getconfig` feeds every assignment back into the
+    map). Both flags land on, so the `penvexp-penvexpscope?` dependency
+    (dev-libs/newpkg) is pulled in. Rust == Python."""
+    base = ["--pretend", "-v", "dev-libs/penvexppkg"]
+    rust = _run([str(emerge_binary)], base, fixture_env)
+    python = _run(emerge_pretend_python, base, fixture_env)
+    assert rust.returncode == 0
+    assert rust.stdout == python.stdout
+    assert rust.stdout.splitlines()[:2] == [
+        "[ebuild  N     ] dev-libs/newpkg-1.0::testrepo ",
+        '[ebuild  N     ] dev-libs/penvexppkg-1.0::testrepo  '
+        'USE="amd64-penvexp penvexp-penvexpscope -penvexpother"',
+    ]
+
+
 def test_profile_defaults_walk_is_per_level_not_flat(
     emerge_binary, emerge_pretend_python, fixture_env
 ):
@@ -6583,6 +6608,30 @@ def test_envd_use_enables_a_flag_and_pulls_in_a_dependency(
         "[ebuild  N     ] dev-libs/newpkg-1.0::testrepo ",
         '[ebuild  N     ] dev-libs/envdusepkg-1.0::testrepo  '
         'USE="envdusetestflag -other"',
+    ]
+
+
+def test_envd_use_read_from_eroot_not_config_root(
+    emerge_binary, emerge_pretend_python, fixture_env, tmp_path
+):
+    """`env.d` (`etc/profile.env`) is read from `eroot` (real
+    `_get_env_d`), not `config_root` -- the two coincide except on a
+    split `--config-root`/`--root` setup. With `PORTAGE_CONFIGROOT` on
+    the fixtures (whose `profile.env` sets `USE='envdusetestflag'`) but
+    `ROOT` on a bare tree without any `profile.env`,
+    `dev-libs/envdusepkg` loses the flag: no `dev-libs/newpkg` pull-in,
+    `USE="-envdusetestflag -other"`. Rust == Python."""
+    env = dict(fixture_env)
+    env["ROOT"] = str(tmp_path)
+    env["PORTAGE_RUNNING_ROOT"] = str(tmp_path)
+    base = ["--pretend", "-v", "dev-libs/envdusepkg"]
+    rust = _run([str(emerge_binary)], base, env)
+    python = _run(emerge_pretend_python, base, env)
+    assert rust.returncode == 0
+    assert rust.stdout == python.stdout
+    assert rust.stdout.splitlines()[:1] == [
+        '[ebuild  N     ] dev-libs/envdusepkg-1.0::testrepo  '
+        'USE="-envdusetestflag -other"',
     ]
 
 
@@ -8022,6 +8071,48 @@ def test_slot_conflict_groups_same_reason_parents_and_offers_verbose_conflicts(
         )
     assert "with the same problem" not in vout
     assert "--verbose-conflicts' option to display parents omitted" not in vout
+
+
+def test_slot_conflict_color_y_colours_violated_spans_with_aligned_markers(
+    emerge_binary, emerge_pretend_python, fixture_env
+):
+    """Slot-conflict `--color y` marker alignment (backlog Tier 1,
+    decided): real `highlight_violations` wraps the violated operator /
+    version / slot / USE-token spans in red and then marks the PRE-color
+    indices, so its `^` line drifts once ANSI codes lengthen the line
+    (genuine upstream bug -- and real's own red varies by terminal
+    colormap, so byte-parity with the drift is unachievable anyway).
+    Portuale wraps the same spans but marks the DISPLAYED string, so
+    color and carets agree: `>=` and `2.0` come out red, and the `^`
+    line sits under exactly those visible characters. Rust == Python."""
+    import re
+
+    RED = "\x1b[31;01m"
+    R = "\x1b[39;49;00m"
+    base = ["--pretend", "--color=y", "dev-libs/slotconfgroup"]
+    rust = _run([str(emerge_binary)], base, fixture_env)
+    python = _run(emerge_pretend_python, base, fixture_env)
+    assert rust.returncode == 0
+    assert rust.stdout == python.stdout
+    out = rust.stdout
+    atom_line = (
+        f"    {RED}>{R}{RED}={R}dev-libs/slotconflicttarget-"
+        f"{RED}2{R}{RED}.{R}{RED}0{R} required by "
+        "(dev-libs/slotconfgroupnew-1.0:0/0::testrepo, ebuild scheduled for merge) "
+        'USE=""\n'
+    )
+    assert atom_line in out, out
+    marker = out.split(atom_line)[1].split("\n")[0] + "\n"
+    # Map each raw marker offset to its visible char (None inside an
+    # escape): every caret must sit on a violated character.
+    visible = []
+    for m in re.finditer(r"\x1b\[[0-9;]*m|[^\x1b]", atom_line):
+        tok = m.group(0)
+        visible.extend([None] * len(tok) if tok.startswith("\x1b") else [tok])
+    careted = [(i, visible[i]) for i, ch in enumerate(marker.rstrip("\n")) if ch == "^"]
+    assert careted, marker
+    assert "".join(c for _, c in careted) == ">=2.0", careted
+    assert all(c is not None for _, c in careted)
 
 
 def test_slot_conflict_use_reason_keys_unconditional_before_violated(

@@ -326,6 +326,14 @@ release-build win — cross-crate inlining across the ~10 workspace crates,
 user/CI call; measure against the `-puD --getbinpkg` workload before
 keeping.
 
+**Shipped as a Tier-1 slice (settings kept):** `lto = "thin"` +
+`codegen-units = 1` are now set. Measured off the live tree (no live
+tree in this environment): release `portuale` 15.5 MB → 13.2 MB
+(-15 %), and a 30× fixture-resolve loop identical within noise
+(startup-dominated, too small to discriminate -- honest non-result).
+The `-puD --getbinpkg` timing from "How to reproduce" below stays a
+re-run item for a machine with the real tree.
+
 ## How to reproduce the measurement
 
 ```sh

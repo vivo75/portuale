@@ -1,0 +1,8 @@
+DEFINED_PHASES=-
+DESCRIPTION=fixture package: package.env env-file USE= with ${VAR} expansion
+EAPI=8
+IUSE=penvexp-penvexpscope amd64-penvexp penvexpother
+KEYWORDS=amd64
+RDEPEND=penvexp-penvexpscope? ( dev-libs/newpkg )
+SLOT=0
+_md5_=0000000000000000000000000000000
