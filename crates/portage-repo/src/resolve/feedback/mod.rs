@@ -37,3 +37,57 @@ pub(crate) struct MaskEntry {
     pub(crate) neg: String,
     pub(crate) reason: MaskReason,
 }
+
+/// The settle tail of `backtracking_resolve`. USE changes start their chain at the
+/// forcing parent, not the first requirer: the flip site records its forcing owner in
+/// `AutounmaskChange::trigger`; the fill starts there when it is still a requirer,
+/// else the legacy first-requirer start stands. The ascent above that start is
+/// unchanged (single-branch, first-requirer hops). Keyword/license/mask changes keep
+/// the legacy start (see `fill_non_use_change_chains`).
+pub(crate) fn fill_use_change_chains(
+    entries: &[GraphEntry],
+    changes: &mut [AutounmaskChange],
+    top_level: &std::collections::HashSet<&str>,
+    root: &Path,
+) {
+    for change in changes.iter_mut() {
+        if change.dep_chain.is_empty()
+            && let Some(atom) = portage_dep::parse_atom(&change.atom)
+        {
+            let owner = entries
+                .iter()
+                .find(|e| e.category == atom.category && e.package == atom.package)
+                .and_then(|e| {
+                    change
+                        .trigger
+                        .clone()
+                        .filter(|t| e.required_by.contains(t))
+                        .or_else(|| e.required_by.first().cloned())
+                });
+            change.dep_chain = autounmask_dep_chain(&owner, &change.atom, top_level, entries, root);
+        }
+    }
+}
+
+/// Keyword/license/mask twin of `fill_use_change_chains`. Re-derive from the change's
+/// own atom: its left-hand `=<cpv>` / `>=<cpv>` names the package the change is on.
+/// Same no-start-node rule: a change on an argument package passes `None`, yielding
+/// just the `(argument)` line.
+pub(crate) fn fill_non_use_change_chains(
+    entries: &[GraphEntry],
+    changes: &mut [AutounmaskChange],
+    top_level: &std::collections::HashSet<&str>,
+    root: &Path,
+) {
+    for change in changes.iter_mut() {
+        if change.dep_chain.is_empty()
+            && let Some(atom) = portage_dep::parse_atom(&change.atom)
+        {
+            let owner = entries
+                .iter()
+                .find(|e| e.category == atom.category && e.package == atom.package)
+                .and_then(|e| e.required_by.first().cloned());
+            change.dep_chain = autounmask_dep_chain(&owner, &change.atom, top_level, entries, root);
+        }
+    }
+}

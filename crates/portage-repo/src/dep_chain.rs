@@ -232,3 +232,131 @@ pub(crate) fn chain_arg_lines(atoms: &[String], cp: &(String, String)) -> Vec<(S
         .map(|a| (a.clone(), "argument".to_string()))
         .collect()
 }
+
+/// Arguments of [`masked_dep_chain`].
+pub(crate) struct MaskedDepChainArgs<'a> {
+    pub(crate) repos: &'a [RepoConfig],
+    pub(crate) config: &'a portage_profile::Config,
+    pub(crate) entries: &'a [GraphEntry],
+    pub(crate) category: &'a str,
+    pub(crate) package: &'a str,
+    pub(crate) atoms: &'a [String],
+    pub(crate) root: &'a Path,
+    /// The disclosed miss atom. Direct parents are restricted to
+    /// those pulling this atom (Portage starts from the one failing parent
+    /// edge); the restriction is vacuous when no direct parent matches.
+    pub(crate) atom: &'a str,
+}
+
+/// Portage `_get_dep_chain` for one masked-dependency disclosure
+/// (Portage depgraph): `(node, type)` pairs from the failed dependency's
+/// direct parents up to the top-level argument(s), innermost first.
+/// Narrowings: every matching top-level atom is shown (Portage shows the
+/// pulling one -- untracked here); one sub-chain per direct parent (Portage
+/// shows only its DFS-first abandon); the affecting-USE suffix
+/// is Portage's own ([`chain_node_usedep_suffix`] has the approximations).
+pub(crate) fn masked_dep_chain(args: MaskedDepChainArgs<'_>) -> Vec<(String, String)> {
+    let MaskedDepChainArgs {
+        repos,
+        config,
+        entries,
+        category,
+        package,
+        atoms,
+        root,
+        atom,
+    } = args;
+    /// This `cp`'s chain node: the merge-bound entry first (superseding any
+    /// same-cp `AlreadyInstalled` shadow), else the installed one. `None`
+    /// for `NoVisibleCandidate` or a missing entry -- the chain stops.
+    fn select_entry<'a>(
+        entries: &'a [GraphEntry],
+        cp: &(String, String),
+    ) -> Option<&'a GraphEntry> {
+        entries
+            .iter()
+            .find(|e| {
+                (e.category.clone(), e.package.clone()) == *cp
+                    && matches!(
+                        e.outcome,
+                        PretendOutcome::New { .. }
+                            | PretendOutcome::Upgrade { .. }
+                            | PretendOutcome::Downgrade { .. }
+                            | PretendOutcome::Reinstall { .. }
+                    )
+            })
+            .or_else(|| {
+                entries.iter().find(|e| {
+                    (e.category.clone(), e.package.clone()) == *cp
+                        && matches!(e.outcome, PretendOutcome::AlreadyInstalled { .. })
+                })
+            })
+    }
+    let start = entries.iter().find(|e| {
+        e.category == category
+            && e.package == package
+            && matches!(e.outcome, PretendOutcome::NoVisibleCandidate)
+    });
+    let mut chain: Vec<(String, String)> = Vec::new();
+    let mut visited: HashSet<(String, String)> = HashSet::new();
+    let direct_all: Vec<(String, String)> =
+        start.map(|e| e.required_by.clone()).unwrap_or_default();
+    // Keep only the direct parents pulling the disclosed atom;
+    // vacuous when none match.
+    let direct: Vec<(String, String)> = {
+        let pulling: Vec<(String, String)> = direct_all
+            .iter()
+            .filter(|(c, p)| {
+                entries.iter().any(|e| {
+                    e.category == *c
+                        && e.package == *p
+                        && e.deps.iter().any(|d| {
+                            d.category == category
+                                && d.package == package
+                                && (d.atom == atom || d.evaluated == atom)
+                        })
+                })
+            })
+            .cloned()
+            .collect();
+        if pulling.is_empty() {
+            direct_all
+        } else {
+            pulling
+        }
+    };
+    for parent in direct {
+        if !visited.insert(parent.clone()) {
+            continue;
+        }
+        // The cp below the current node: the failed dependency first, the
+        // previous chain node after each ascent step.
+        let mut child = (category.to_string(), package.to_string());
+        let mut cur = parent;
+        while let Some(entry) = select_entry(entries, &cur) {
+            let Some((node, ty)) = chain_node_line(entry, root, repos, config, &child) else {
+                break;
+            };
+            chain.push((node, ty));
+            // A chain top targeted from the command line ends in its argument
+            // line(s), like Portage stopping at args.
+            let args = chain_arg_lines(atoms, &cur);
+            if !args.is_empty() {
+                chain.extend(args);
+                break;
+            }
+            let Some(next) = entry
+                .required_by
+                .iter()
+                .find(|c| !visited.contains(*c))
+                .cloned()
+            else {
+                break;
+            };
+            visited.insert(next.clone());
+            child = cur;
+            cur = next;
+        }
+    }
+    chain
+}

@@ -1638,6 +1638,212 @@ mod tests_164 {
         })
     }
 
+    /// `masked_dep_chain` walks from a `NoVisibleCandidate`'s requirers up to
+    /// the command-line argument (Portage's `_show_unsatisfied_dep` tail).
+    #[test]
+    fn masked_dep_chain_164_walks_to_the_argument() {
+        let dir = slotundo_temp_dir("164-mdc");
+        let entries = vec![
+            // Decoy: merge-bound but the wrong package.
+            entry_164(Entry164Args {
+                category: "dev-libs",
+                package: "decoy",
+                outcome: PretendOutcome::New {
+                    version: "9.0".to_string(),
+                },
+                required_by: Vec::new(),
+                repo: Some("testrepo"),
+                source: CandidateSource::Ebuild,
+            }),
+            // Decoy: NVC but the wrong package.
+            entry_164(Entry164Args {
+                category: "dev-libs",
+                package: "sibling",
+                outcome: PretendOutcome::NoVisibleCandidate,
+                required_by: Vec::new(),
+                repo: None,
+                source: CandidateSource::Ebuild,
+            }),
+            entry_164(Entry164Args {
+                category: "dev-libs",
+                package: "target",
+                outcome: PretendOutcome::NoVisibleCandidate,
+                required_by: vec![("dev-libs".to_string(), "parent".to_string())],
+                repo: None,
+                source: CandidateSource::Ebuild,
+            }),
+            new_164("parent", "1.0", "grandma"),
+            entry_164(Entry164Args {
+                category: "dev-libs",
+                package: "grandma",
+                outcome: PretendOutcome::New {
+                    version: "1.0".to_string(),
+                },
+                required_by: Vec::new(),
+                repo: Some("testrepo"),
+                source: CandidateSource::Ebuild,
+            }),
+        ];
+        let atoms = ["dev-libs/grandma".to_string()];
+        let got = masked_dep_chain(MaskedDepChainArgs {
+            repos: &[],
+            config: &portage_profile::Config::default(),
+            entries: &entries,
+            category: "dev-libs",
+            package: "target",
+            atoms: &atoms,
+            root: &dir,
+            atom: "",
+        });
+        assert_eq!(
+            got,
+            vec![
+                (
+                    "dev-libs/parent-1.0::testrepo".to_string(),
+                    "ebuild".to_string()
+                ),
+                (
+                    "dev-libs/grandma-1.0::testrepo".to_string(),
+                    "ebuild".to_string()
+                ),
+                ("dev-libs/grandma".to_string(), "argument".to_string()),
+            ]
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn masked_dep_chain_164_installed_parent_reports_the_vdb_repo() {
+        // An `AlreadyInstalled` parent renders with the vdb repo and the
+        // `installed` type; the same-category decoy must not shadow the parent.
+        let dir = slotundo_temp_dir("164-mdc-inst");
+        let entries = vec![
+            entry_164(Entry164Args {
+                category: "dev-libs",
+                package: "aidecoy",
+                outcome: PretendOutcome::AlreadyInstalled {
+                    version: "7.0".to_string(),
+                },
+                required_by: Vec::new(),
+                repo: None,
+                source: CandidateSource::Ebuild,
+            }),
+            entry_164(Entry164Args {
+                category: "dev-libs",
+                package: "target",
+                outcome: PretendOutcome::NoVisibleCandidate,
+                required_by: vec![("dev-libs".to_string(), "parent".to_string())],
+                repo: None,
+                source: CandidateSource::Ebuild,
+            }),
+            entry_164(Entry164Args {
+                category: "dev-libs",
+                package: "parent",
+                outcome: PretendOutcome::AlreadyInstalled {
+                    version: "1.0".to_string(),
+                },
+                required_by: vec![("dev-libs".to_string(), "grandma".to_string())],
+                repo: None,
+                source: CandidateSource::Ebuild,
+            }),
+            entry_164(Entry164Args {
+                category: "dev-libs",
+                package: "grandma",
+                outcome: PretendOutcome::New {
+                    version: "1.0".to_string(),
+                },
+                required_by: Vec::new(),
+                repo: Some("testrepo"),
+                source: CandidateSource::Ebuild,
+            }),
+        ];
+        let atoms = ["dev-libs/grandma".to_string()];
+        let got = masked_dep_chain(MaskedDepChainArgs {
+            repos: &[],
+            config: &portage_profile::Config::default(),
+            entries: &entries,
+            category: "dev-libs",
+            package: "target",
+            atoms: &atoms,
+            root: &dir,
+            atom: "",
+        });
+        assert_eq!(
+            got,
+            vec![
+                (
+                    "dev-libs/parent-1.0::__unknown__".to_string(),
+                    "installed".to_string()
+                ),
+                (
+                    "dev-libs/grandma-1.0::testrepo".to_string(),
+                    "ebuild".to_string()
+                ),
+                ("dev-libs/grandma".to_string(), "argument".to_string()),
+            ]
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn masked_dep_chain_164_argument_lines_skip_blockers_and_other_packages() {
+        // `arg_lines` keeps only non-blocker atoms for this exact cp:
+        // a `!`-blocker on the same cp and a plain atom on another cp
+        // are not argument lines.
+        let dir = slotundo_temp_dir("164-mdc-args");
+        let entries = vec![
+            entry_164(Entry164Args {
+                category: "dev-libs",
+                package: "target",
+                outcome: PretendOutcome::NoVisibleCandidate,
+                required_by: vec![("dev-libs".to_string(), "parent".to_string())],
+                repo: None,
+                source: CandidateSource::Ebuild,
+            }),
+            new_164("parent", "1.0", "grandma"),
+            entry_164(Entry164Args {
+                category: "dev-libs",
+                package: "grandma",
+                outcome: PretendOutcome::New {
+                    version: "1.0".to_string(),
+                },
+                required_by: Vec::new(),
+                repo: Some("testrepo"),
+                source: CandidateSource::Ebuild,
+            }),
+        ];
+        let atoms = [
+            "dev-libs/grandma".to_string(),
+            "!dev-libs/grandma".to_string(),
+            "dev-libs/unrelated".to_string(),
+        ];
+        let got = masked_dep_chain(MaskedDepChainArgs {
+            repos: &[],
+            config: &portage_profile::Config::default(),
+            entries: &entries,
+            category: "dev-libs",
+            package: "target",
+            atoms: &atoms,
+            root: &dir,
+            atom: "",
+        });
+        assert_eq!(
+            got,
+            vec![
+                (
+                    "dev-libs/parent-1.0::testrepo".to_string(),
+                    "ebuild".to_string()
+                ),
+                (
+                    "dev-libs/grandma-1.0::testrepo".to_string(),
+                    "ebuild".to_string()
+                ),
+                ("dev-libs/grandma".to_string(), "argument".to_string()),
+            ]
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
     /// `required_use_dep_chain` reports the failing package's direct parent
     /// plus its command-line argument (Portage's `_show_unsatisfied_dep` tail).
     #[test]
@@ -1765,6 +1971,166 @@ mod tests_164 {
             required_use_dep_chain(&owner, &empty, &installed),
             Vec::new()
         );
+    }
+
+    #[test]
+    fn autounmask_dep_chain_164_walks_the_whole_parent_chain() {
+        let dir = slotundo_temp_dir("164-auc");
+        let entries = vec![
+            // Decoy: same category, wrong package -- must not win
+            // the parent lookup at any hop.
+            entry_164(Entry164Args {
+                category: "dev-libs",
+                package: "audecoy",
+                outcome: PretendOutcome::New {
+                    version: "9.0".to_string(),
+                },
+                required_by: Vec::new(),
+                repo: Some("testrepo"),
+                source: CandidateSource::Ebuild,
+            }),
+            entry_164(Entry164Args {
+                category: "dev-libs",
+                package: "aumid",
+                outcome: PretendOutcome::New {
+                    version: "1.0".to_string(),
+                },
+                required_by: vec![("dev-libs".to_string(), "autop".to_string())],
+                repo: Some("testrepo"),
+                source: CandidateSource::Ebuild,
+            }),
+            entry_164(Entry164Args {
+                category: "dev-libs",
+                package: "autop",
+                outcome: PretendOutcome::New {
+                    version: "2.0".to_string(),
+                },
+                required_by: Vec::new(),
+                repo: Some("testrepo"),
+                source: CandidateSource::Ebuild,
+            }),
+        ];
+        let owner = Some(("dev-libs".to_string(), "aumid".to_string()));
+        // A same-category sibling atom must not attach mid-chain.
+        let top: HashSet<&str> = ["dev-libs/autop", "dev-libs/ausibling"]
+            .into_iter()
+            .collect();
+        let got = autounmask_dep_chain(&owner, "dev-libs/aumid", &top, &entries, &dir);
+        assert_eq!(
+            got,
+            vec![
+                "required by dev-libs/aumid-1.0::testrepo".to_string(),
+                "required by dev-libs/autop-2.0::testrepo".to_string(),
+                "required by dev-libs/autop (argument)".to_string(),
+            ]
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn autounmask_dep_chain_164_upgrade_parent_reports_the_to_version() {
+        let dir = slotundo_temp_dir("164-auc-up");
+        let entries = vec![
+            entry_164(Entry164Args {
+                category: "dev-libs",
+                package: "auup",
+                outcome: PretendOutcome::Upgrade {
+                    from: "1.0".to_string(),
+                    to: "2.0".to_string(),
+                },
+                required_by: vec![("dev-libs".to_string(), "auuptop".to_string())],
+                repo: Some("testrepo"),
+                source: CandidateSource::Ebuild,
+            }),
+            entry_164(Entry164Args {
+                category: "dev-libs",
+                package: "auuptop",
+                outcome: PretendOutcome::New {
+                    version: "3.0".to_string(),
+                },
+                required_by: Vec::new(),
+                repo: Some("testrepo"),
+                source: CandidateSource::Ebuild,
+            }),
+        ];
+        let owner = Some(("dev-libs".to_string(), "auup".to_string()));
+        let top: HashSet<&str> = ["dev-libs/auuptop"].into_iter().collect();
+        let got = autounmask_dep_chain(&owner, "dev-libs/auup", &top, &entries, &dir);
+        assert_eq!(
+            got,
+            vec![
+                "required by dev-libs/auup-2.0::testrepo".to_string(),
+                "required by dev-libs/auuptop-3.0::testrepo".to_string(),
+                "required by dev-libs/auuptop (argument)".to_string(),
+            ]
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn autounmask_dep_chain_164_installed_parent_reports_the_vdb_repo() {
+        // An installed parent renders with the vdb repo; with no vdb
+        // entry that repo is `__unknown__` (see `installed_pkg_repo`).
+        let dir = slotundo_temp_dir("164-auc-inst");
+        let entries = vec![
+            entry_164(Entry164Args {
+                category: "dev-libs",
+                package: "auinst",
+                outcome: PretendOutcome::AlreadyInstalled {
+                    version: "1.0".to_string(),
+                },
+                required_by: vec![("dev-libs".to_string(), "auinsttop".to_string())],
+                repo: None,
+                source: CandidateSource::Ebuild,
+            }),
+            entry_164(Entry164Args {
+                category: "dev-libs",
+                package: "auinsttop",
+                outcome: PretendOutcome::New {
+                    version: "2.0".to_string(),
+                },
+                required_by: Vec::new(),
+                repo: Some("testrepo"),
+                source: CandidateSource::Ebuild,
+            }),
+        ];
+        let owner = Some(("dev-libs".to_string(), "auinst".to_string()));
+        let top: HashSet<&str> = ["dev-libs/auinsttop"].into_iter().collect();
+        let got = autounmask_dep_chain(&owner, "dev-libs/auinst", &top, &entries, &dir);
+        assert_eq!(
+            got,
+            vec![
+                "required by dev-libs/auinst-1.0::__unknown__".to_string(),
+                "required by dev-libs/auinsttop-2.0::testrepo".to_string(),
+                "required by dev-libs/auinsttop (argument)".to_string(),
+            ]
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn autounmask_dep_chain_164_self_requiring_parent_stops_after_its_row() {
+        // A parent whose `required_by` names itself cannot ascend: the chain
+        // is just its own row.
+        let dir = slotundo_temp_dir("164-auc-self");
+        let entries = vec![entry_164(Entry164Args {
+            category: "dev-libs",
+            package: "auself",
+            outcome: PretendOutcome::New {
+                version: "1.0".to_string(),
+            },
+            required_by: vec![("dev-libs".to_string(), "auself".to_string())],
+            repo: Some("testrepo"),
+            source: CandidateSource::Ebuild,
+        })];
+        let owner = Some(("dev-libs".to_string(), "auself".to_string()));
+        let top: HashSet<&str> = ["sys-apps/other"].into_iter().collect();
+        let got = autounmask_dep_chain(&owner, "dev-libs/auselfdep", &top, &entries, &dir);
+        assert_eq!(
+            got,
+            vec!["required by dev-libs/auself-1.0::testrepo".to_string()]
+        );
+        let _ = fs::remove_dir_all(&dir);
     }
 }
 

@@ -1,6 +1,54 @@
 use super::*;
 
 #[test]
+fn masked_candidates_for_atom_reports_masked_only_matches() {
+    // Portage's `_show_unsatisfied_dep` version match: fires only when every
+    // version-matching ebuild is masked.
+    let root = fixtures_root();
+    let config = portage_profile::resolve_config(portage_profile::ResolveConfigArgs {
+        config_root: &root,
+        main_repo_location: &root.join("repo"),
+        overlay_repos: &[("overlay".to_string(), root.join("overlay"))],
+        repo_aliases: &[],
+        main_repo_name: "testrepo",
+        repo_masters: &HashMap::new(),
+        eroot: &root,
+    })
+    .expect("fixture config resolves");
+    let repos = find_repos(&root).expect("repos");
+    let masked = masked_candidates_for_atom(&repos, "dev-libs/maskeddep", &config)
+        .expect("package.mask'd dep discloses");
+    assert_eq!(
+        masked,
+        vec![(
+            "dev-libs/maskeddep-1.0::testrepo".to_string(),
+            vec!["package.mask".to_string()]
+        )]
+    );
+    let kw = masked_candidates_for_atom(&repos, "dev-libs/kwmaskeddep", &config)
+        .expect("keyword-masked dep discloses");
+    assert_eq!(
+        kw,
+        vec![(
+            "dev-libs/kwmaskeddep-1.0::testrepo".to_string(),
+            vec!["~amd64 keyword".to_string()]
+        )]
+    );
+    // A visible candidate silences the report (USE-mismatch takes Portage's
+    // other paths).
+    assert_eq!(
+        masked_candidates_for_atom(&repos, "dev-libs/newpkg", &config),
+        None
+    );
+    // Nothing matching by version at all is also silent (Portage's plain
+    // "no ebuilds" case).
+    assert_eq!(
+        masked_candidates_for_atom(&repos, "dev-libs/doesnotexist-anywhere", &config),
+        None
+    );
+}
+
+#[test]
 fn atom_all_use_unmasked_is_true_for_the_unsatuseor_alternative() {
     // Portage's `all_use_unmasked` probe (bug 515584): an off-by-default flag
     // keeps the choice selectable, not demoted to `other`.

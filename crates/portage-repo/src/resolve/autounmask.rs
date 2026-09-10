@@ -2,6 +2,112 @@
 
 use crate::*;
 
+/// The `#required by …` lines for an autounmask change on `owner`'s
+/// dependency (or a top-level `current_atom`), narrowed to portuale's
+/// one-level-parent tracking. A top-level atom yields a single
+/// `required by <atom> (argument)` line.
+/// Portage: depgraph.py, _get_dep_chain_as_comment.
+pub(crate) fn autounmask_dep_chain(
+    owner: &Option<(String, String)>,
+    current_atom: &str,
+    top_level: &std::collections::HashSet<&str>,
+    entries: &[GraphEntry],
+    root: &Path,
+) -> Vec<String> {
+    let Some(start) = owner else {
+        // A top-level change prints the argument atom *as given*, not the
+        // change's own `>=<cpv>` left-hand form.
+        let arg = top_level
+            .iter()
+            .find(|t| {
+                portage_dep::parse_atom(t).is_some_and(|a| {
+                    portage_dep::parse_atom(current_atom)
+                        .is_some_and(|c| a.category == c.category && a.package == c.package)
+                })
+            })
+            .copied()
+            .unwrap_or(current_atom);
+        return vec![format!("required by {arg} (argument)")];
+    };
+    // Walks the whole parent chain to the argument, not just the immediate
+    // owner. Each node renders `required by <cpv>::<repo>` (vdb repo for an
+    // installed parent) or `required by <atom> (argument)`.
+    //
+    // Single-branch rule (deliberate): the owner is re-derived as the first
+    // `required_by` entry and the ascent follows one branch.
+    let mut chain: Vec<String> = Vec::new();
+    let mut visited: std::collections::HashSet<(String, String)> = std::collections::HashSet::new();
+    let mut cur = start.clone();
+    loop {
+        if !visited.insert(cur.clone()) {
+            break;
+        }
+        let args: Vec<String> = top_level
+            .iter()
+            .filter(|t| {
+                portage_dep::parse_atom(t).is_some_and(|a| {
+                    a.category == cur.0
+                        && a.package == cur.1
+                        && a.blocker == portage_dep::Blocker::None
+                })
+            })
+            .map(|t| format!("required by {t} (argument)"))
+            .collect();
+        let parent = entries.iter().find(|e| {
+            e.category == cur.0
+                && e.package == cur.1
+                && !matches!(
+                    e.outcome,
+                    PretendOutcome::NoVisibleCandidate | PretendOutcome::Uninstall { .. }
+                )
+        });
+        let mut advanced = false;
+        if let Some(parent) = parent {
+            let (version, installed) = match &parent.outcome {
+                PretendOutcome::New { version } | PretendOutcome::Reinstall { version, .. } => {
+                    (Some(version.clone()), false)
+                }
+                PretendOutcome::Upgrade { to, .. } | PretendOutcome::Downgrade { to, .. } => {
+                    (Some(to.clone()), false)
+                }
+                PretendOutcome::AlreadyInstalled { version } => (Some(version.clone()), true),
+                _ => (None, false),
+            };
+            if let Some(v) = version {
+                let repo = if installed {
+                    installed_pkg_repo(root, &cur.0, &cur.1, &v)
+                } else {
+                    parent.repo_name.clone().unwrap_or_default()
+                };
+                if repo.is_empty() {
+                    chain.push(format!("required by {}/{}-{v}", cur.0, cur.1));
+                } else {
+                    chain.push(format!("required by {}/{}-{v}::{repo}", cur.0, cur.1));
+                }
+            }
+            // Ascend to the parent's own requirer, one hop per loop.
+            match parent.required_by.first() {
+                Some(next) if *next != cur => {
+                    cur = next.clone();
+                    advanced = true;
+                }
+                _ => {}
+            }
+        }
+        if !args.is_empty() {
+            chain.extend(args);
+            break;
+        }
+        if !advanced {
+            if chain.is_empty() {
+                chain.push(format!("required by {}/{}", cur.0, cur.1));
+            }
+            break;
+        }
+    }
+    chain
+}
+
 /// `USE="…"` then one ` VAR="…"` per non-hidden `USE_EXPAND` group, from
 /// the `(name, body)` pairs [`pkg_use_display_for`] produces.
 /// Portage: pkg_use_display.
