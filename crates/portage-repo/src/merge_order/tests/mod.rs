@@ -31,6 +31,59 @@ fn test_graph(n: usize, edges: &[(usize, usize, DepPriority)]) -> Digraph {
     g
 }
 
+/// Every filter the loop can ask about: `None` plus each rung of
+/// both ladders.
+fn all_filters() -> Vec<Option<Ignore>> {
+    let mut out = vec![None];
+    out.extend(NORMAL.ignore.iter().copied());
+    out.extend(SATISFIED.ignore.iter().copied());
+    out
+}
+
+/// Assert frontier/direct agreement on a graph snapshot: every
+/// level's ready set equals the corresponding scan, and `is_leaf`
+/// agrees on every alive node.
+fn assert_equivalent(g: &Digraph, fr: &mut SerializeFrontier) {
+    for ig in all_filters() {
+        let level = fr.level_of(ig).expect("every loop filter has a level");
+        let mut ready = fr.ready_nodes(level, &g.alive);
+        ready.sort_unstable();
+        let mut direct = g.leaf_nodes(ig);
+        direct.sort_unstable();
+        assert_eq!(ready, direct, "ready_nodes != leaf_nodes for {ig:?}");
+    }
+    for node in 0..g.n {
+        if !g.alive[node] {
+            continue;
+        }
+        for ig in all_filters() {
+            let level = fr.level_of(ig).unwrap();
+            assert_eq!(
+                fr.is_leaf(node, level),
+                g.is_leaf(node, ig),
+                "is_leaf disagrees on node {node} for {ig:?}"
+            );
+        }
+    }
+}
+
+/// Deterministic xorshift64* -- no rand dependency for a unit test.
+struct Rng(u64);
+
+impl Rng {
+    fn next(&mut self) -> u64 {
+        let mut x = self.0;
+        x ^= x >> 12;
+        x ^= x << 25;
+        x ^= x >> 27;
+        self.0 = x;
+        x.wrapping_mul(0x2545F4914F6CDD1D)
+    }
+    fn below(&mut self, n: usize) -> usize {
+        (self.next() % n as u64) as usize
+    }
+}
+
 /// A minimal `New` `GraphEntry` for `build_digraph` tests --
 /// mirrors `synthetic_installed_entry`'s full field list.
 fn new_entry(category: &str, package: &str, version: &str, deps: Vec<DepEdge>) -> GraphEntry {
@@ -138,6 +191,7 @@ fn runtime_edge(atom: &str, cat: &str, pkg: &str) -> DepEdge {
 mod alt_edges;
 mod build;
 mod debug;
+mod digraph;
 mod priority;
 mod serialize;
 mod tree_display;

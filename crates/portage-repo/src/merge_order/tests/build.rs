@@ -58,3 +58,29 @@ fn build_digraph_drops_self_edges_except_unsatisfied_buildtime() {
         g.children[0]
     );
 }
+
+#[test]
+fn deep_system_deps_follows_only_runtime_edges() {
+    let config = portage_profile::Config {
+        system_packages: vec!["dev-libs/sys".to_string()],
+        ..portage_profile::Config::default()
+    };
+    let entries = vec![
+        new_entry("dev-libs", "sys", "1.0", Vec::new()),
+        new_entry("dev-libs", "rt", "1.0", Vec::new()),
+        new_entry("dev-libs", "bt", "1.0", Vec::new()),
+        new_entry("dev-libs", "post", "1.0", Vec::new()),
+    ];
+    let g = test_graph(
+        4,
+        &[
+            (0, 1, prio(2)), // runtime
+            (0, 2, prio(1)), // buildtime
+            (1, 3, prio(4)), // runtime_post
+        ],
+    );
+    assert_eq!(
+        deep_system_deps(&g, &entries, &config),
+        vec![true, true, false, true]
+    );
+}

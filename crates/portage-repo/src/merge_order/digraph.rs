@@ -232,6 +232,44 @@ impl SerializeFrontier {
             counts.fill(u32::MAX);
         }
     }
+
+    /// Account for an edge whose priority list just grew: counts only increase.
+    /// Not exercised by the selection loop; pinned by unit test.
+    #[allow(dead_code)]
+    pub(crate) fn add_edge(
+        &mut self,
+        node: usize,
+        parent: Option<usize>,
+        priorities: &[DepPriority],
+    ) {
+        let ensure = |slf: &mut Self, n: usize| {
+            if n >= slf.surv.len() {
+                let idx = slf.by_index.len();
+                slf.by_index.push(n);
+                slf.index.resize(n + 1, 0);
+                slf.index[n] = idx;
+                slf.surv.resize(n + 1, vec![0u32; slf.levels.len()]);
+                for heap in slf.ready.iter_mut() {
+                    heap.push(Reverse(idx));
+                }
+            }
+        };
+        ensure(self, node);
+        let Some(parent) = parent else { return };
+        ensure(self, parent);
+        let new_mask = Self::compute_mask(&self.levels, priorities);
+        let old_mask = self.edge_mask.get(&(parent, node)).copied().unwrap_or(0);
+        if new_mask == old_mask {
+            return;
+        }
+        self.edge_mask.insert((parent, node), new_mask);
+        let mut delta = new_mask & !old_mask;
+        while delta != 0 {
+            let l = delta.trailing_zeros() as usize;
+            self.surv[parent][l] += 1;
+            delta &= delta - 1;
+        }
+    }
 }
 
 /// Fall back to plain `leaf_nodes()`/`is_leaf()` scans when
