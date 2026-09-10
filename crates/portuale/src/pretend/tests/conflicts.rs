@@ -62,3 +62,42 @@ fn slot_conflict_reason_and_caret_span() {
     let expected: std::collections::HashSet<usize> = [use_start].into_iter().collect();
     assert_eq!(idx, expected);
 }
+
+#[test]
+fn slot_conflict_colorized_spans_keep_markers_aligned() {
+    use crate::color::Colorizer;
+    let atom_str = ">=dev-libs/t-2.0";
+    let ge = parse_atom(atom_str).unwrap();
+    let idx = slot_conflict_caret_idx(atom_str, &ge, true, false, &[]);
+    let (plain, shifted) = colorize_marked_spans(atom_str, &idx, &Colorizer::new(false));
+    assert_eq!(plain, atom_str);
+    assert_eq!(shifted, idx);
+    // Each caret must land on visible text, never inside an escape.
+    let (colored, shifted) = colorize_marked_spans(atom_str, &idx, &Colorizer::new(true));
+    assert!(colored.len() > atom_str.len());
+    let mut visible_at: Vec<Option<char>> = Vec::new();
+    let mut in_esc = false;
+    for c in colored.chars() {
+        if c == '\x1b' {
+            in_esc = true;
+            visible_at.push(None);
+        } else if in_esc {
+            visible_at.push(None);
+            if c == 'm' {
+                in_esc = false;
+            }
+        } else {
+            visible_at.push(Some(c));
+        }
+    }
+    let stripped: String = visible_at.iter().filter_map(|c| *c).collect();
+    assert_eq!(stripped, atom_str);
+    let mut ordered: Vec<usize> = shifted.iter().copied().collect();
+    ordered.sort_unstable();
+    let careted: String = ordered
+        .iter()
+        .filter_map(|k| visible_at.get(*k).copied().flatten())
+        .collect();
+    assert_eq!(ordered.len(), idx.len());
+    assert_eq!(careted, ">=2.0");
+}

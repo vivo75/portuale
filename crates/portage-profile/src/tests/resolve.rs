@@ -1,5 +1,34 @@
 use super::*;
 
+/// End-to-end check against fixtures/repo/profiles + make.conf (which sources
+/// make.local). Hand-traced USE/keyword accumulation; env.d USE follows `eroot`.
+/// Expected values from the committed fixture tree.
+#[test]
+fn envd_use_tokens_follow_eroot_not_config_root() {
+    let root = fixtures_root();
+    let overlay_repos = [("overlay".to_string(), root.join("overlay"))];
+    let args = |eroot: &Path| {
+        resolve_config(ResolveConfigArgs {
+            config_root: &root,
+            main_repo_location: &root.join("repo"),
+            overlay_repos: &overlay_repos,
+            repo_aliases: &[],
+            main_repo_name: "testrepo",
+            repo_masters: &HashMap::new(),
+            eroot,
+        })
+        .expect("fixture config must resolve")
+    };
+    assert_eq!(
+        args(&root).envd_use_tokens,
+        vec!["envdusetestflag".to_string()]
+    );
+    let bare = TempDir::new("portage-profile-test-eroot").keep();
+    fs::create_dir_all(&bare).unwrap();
+    assert_eq!(args(&bare).envd_use_tokens, Vec::<String>::new());
+    let _ = fs::remove_dir_all(&bare);
+}
+
 #[test]
 fn resolves_fixture_profile_chain_and_make_conf() {
     let root = fixtures_root();

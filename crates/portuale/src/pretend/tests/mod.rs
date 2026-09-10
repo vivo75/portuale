@@ -25,6 +25,25 @@ fn single_resume_root(tag: &str) -> std::path::PathBuf {
     root
 }
 
+/// Plain recursive copy (files + dirs + symlinks) for fixture trees.
+#[cfg(unix)]
+fn copy_tree(src: &std::path::Path, dst: &std::path::Path) {
+    std::fs::create_dir_all(dst).unwrap();
+    for entry in std::fs::read_dir(src).unwrap() {
+        let entry = entry.unwrap();
+        let dst_path = dst.join(entry.file_name());
+        let ft = entry.file_type().unwrap();
+        if ft.is_symlink() {
+            let target = std::fs::read_link(entry.path()).unwrap();
+            std::os::unix::fs::symlink(target, dst_path).unwrap();
+        } else if ft.is_dir() {
+            copy_tree(&entry.path(), &dst_path);
+        } else if ft.is_file() {
+            std::fs::copy(entry.path(), dst_path).unwrap();
+        }
+    }
+}
+
 /// `fixture_resolve_env` with `FEATURES="news"` opted in.
 fn news_resolve_env(
     root: &std::path::Path,

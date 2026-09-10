@@ -834,3 +834,48 @@ fn pretend_alone_succeeds_with_no_explicit_phase_functions() {
 
     let _ = std::fs::remove_dir_all(&portage_tmpdir);
 }
+
+/// `FEATURES=compress-build-logs` pump round-trip: bytes land
+/// gzip-encoded (one member per call, appended) and decode losslessly.
+/// Portage: EbuildPhase, _open_log.
+#[test]
+fn open_log_file_gzip_pump_round_trips() {
+    use std::io::{Read, Write};
+    let dir = TempDir::new("ebuild-phases-gzlog").keep();
+    let _ = std::fs::remove_dir_all(&dir);
+    let gz = dir.join("build.log.gz");
+    let plain = dir.join("build.log");
+
+    for (path, stdout_text, stderr_text) in [
+        (&gz, "phase one out\n", "phase one err\n"),
+        (&gz, "phase two out\n", ""),
+    ] {
+        let mut sink = open_log_file(path).expect("open_log_file succeeds");
+        assert!(sink.pump.is_some(), "{path:?} must pump");
+        sink.out.write_all(stdout_text.as_bytes()).unwrap();
+        sink.err.write_all(stderr_text.as_bytes()).unwrap();
+        // Closing the write ends (then joining) finishes the
+        // member -- the same drop order the phase call sites use.
+        drop(sink);
+    }
+    let mut sink = open_log_file(&plain).expect("open_log_file succeeds");
+    assert!(sink.pump.is_none());
+    sink.out.write_all(b"plain\n").unwrap();
+    drop(sink);
+
+    let mut decoded = String::new();
+    flate2::read::MultiGzDecoder::new(std::fs::File::open(&gz).expect("gz log exists"))
+        .read_to_string(&mut decoded)
+        .expect("gz log decodes");
+    // Both members, both streams -- stdout/stderr chunk order
+    // across the two pipes was never deterministic (Portage appends
+    // both fds to one gzip stream too), so compare unordered.
+    let mut lines: Vec<&str> = decoded.lines().collect();
+    lines.sort_unstable();
+    assert_eq!(
+        lines,
+        vec!["phase one err", "phase one out", "phase two out"],
+    );
+    assert_eq!(std::fs::read_to_string(&plain).unwrap(), "plain\n");
+    let _ = std::fs::remove_dir_all(&dir);
+}

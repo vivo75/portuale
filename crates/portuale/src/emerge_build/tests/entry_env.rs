@@ -77,3 +77,57 @@ fn buildpkgonly_entry_build_env_matches_package_env_and_folds_flags() {
         "an unmatched neighbour must not see the matched entry's package.env value"
     );
 }
+
+/// A `package.env` `FEATURES` entry folds onto the run-wide list instead of
+/// replacing it. Expected value from Portage source.
+#[test]
+fn buildpkgonly_entry_build_env_folds_matched_features() {
+    let config_root = fixtures_root();
+    let repos = find_repos(&config_root).unwrap();
+    let candidate = locate_candidate(&repos, "dev-libs", "penvbuildpkg", "1.0")
+        .expect("penvbuildpkg-1.0 fixture candidate resolves");
+    let entry = source_entry(
+        "penvbuildpkg",
+        PretendOutcome::New {
+            version: "1.0".into(),
+        },
+    );
+    let config = portage_profile::Config {
+        package_env_vars: vec![(
+            "dev-libs/penvbuildpkg".to_string(),
+            vec![("FEATURES".to_string(), "splitdebug".to_string())],
+        )],
+        ..portage_profile::Config::default()
+    };
+    let run_wide = run_wide_phase_env(&config);
+    let run_wide_features = run_wide
+        .iter()
+        .find(|(k, _)| k == "FEATURES")
+        .map(|(_, v)| v.clone())
+        .unwrap_or_default();
+    let cpv_slot = entry_cpv_slot(&entry, "1.0");
+    let build_env = buildpkgonly_entry_build_env(BuildpkgonlyEntryBuildEnvArgs {
+        config: &config,
+        repos: &repos,
+        entry: &entry,
+        candidate: &candidate,
+        cpv_slot: &cpv_slot,
+        run_wide: &run_wide,
+    });
+    let features = build_env
+        .iter()
+        .filter(|(k, _)| k == "FEATURES")
+        .map(|(_, v)| v.clone())
+        .next_back()
+        .expect("FEATURES is exported");
+    assert!(
+        features.split_whitespace().any(|t| t == "splitdebug"),
+        "matched FEATURES must fold in, got {features:?}"
+    );
+    for tok in run_wide_features.split_whitespace() {
+        assert!(
+            features.split_whitespace().any(|t| t == tok),
+            "the run-wide FEATURES token {tok:?} must survive the fold, got {features:?}"
+        );
+    }
+}

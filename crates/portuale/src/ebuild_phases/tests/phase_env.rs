@@ -95,3 +95,64 @@ fn eclass_locations_value_does_not_duplicate_the_own_repo_when_it_is_also_a_mast
 
     let _ = std::fs::remove_dir_all(&tmp);
 }
+
+/// A standalone phase env layers a matching `package.env` entry's env
+/// file over the base flags, with no resolved graph entry anywhere.
+#[test]
+fn standalone_phase_env_layers_matching_package_env_build_vars() {
+    let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures");
+    let repo = fixtures.join("repo");
+    let portage_tmpdir = TempDir::new("ebuild-phases-test-standalone-penv").keep();
+    let bin_dir = bin_dir().unwrap().to_path_buf();
+    let vars_for = |pkg: &str, pf: &str, phase: &str| {
+        let env = compute_environment(
+            &repo.join(format!("dev-libs/{pkg}/{pf}.ebuild")),
+            &portage_tmpdir,
+        )
+        .expect("fixture ebuild parses");
+        phase_env_vars(PhaseEnvVarsArgs {
+            env: &env,
+            root: &fixtures,
+            ebuild_phase_value: phase,
+            debug: false,
+            bin_dir: &bin_dir,
+            helpers_dir: &bin_dir.join("ebuild-helpers"),
+            config_root: &fixtures,
+            extra_env: &[],
+        })
+    };
+    let get = |vars: &[(String, String)], key: &str| {
+        vars.iter()
+            .filter(|(k, _)| k == key)
+            .map(|(_, v)| v.clone())
+            .next_back()
+    };
+    let setup_vars = vars_for("penvbuildpkg", "penvbuildpkg-1.0", "setup");
+    assert_eq!(
+        get(&setup_vars, "CFLAGS").as_deref(),
+        Some("-Os -march=fixturepkgenv")
+    );
+    assert_eq!(get(&setup_vars, "MAKEOPTS").as_deref(), Some("-j7"));
+    assert_eq!(get(&setup_vars, "CC").as_deref(), Some("fixture-cc"));
+    assert_eq!(get(&setup_vars, "CXX").as_deref(), Some("fixture-cxx"));
+    assert_eq!(get(&setup_vars, "AR").as_deref(), Some("fixture-ar"));
+    assert_eq!(
+        get(&setup_vars, "RUSTFLAGS").as_deref(),
+        Some("-C target-cpu=fixturepkg")
+    );
+    assert_eq!(get(&setup_vars, "ENV_UNSET").as_deref(), Some("PENV_UNSET"));
+    let plain_vars = vars_for("newpkg", "newpkg-1.0", "setup");
+    assert!(
+        !plain_vars
+            .iter()
+            .any(|(_, v)| v.contains("-march=fixturepkgenv")),
+        "unmapped package must not see package.env values"
+    );
+    let depend_vars = vars_for("penvbuildpkg", "penvbuildpkg-1.0", "depend");
+    assert!(
+        !depend_vars
+            .iter()
+            .any(|(_, v)| v.contains("-march=fixturepkgenv")),
+        "depend keeps its empty base"
+    );
+}

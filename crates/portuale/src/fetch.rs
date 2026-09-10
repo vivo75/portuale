@@ -1761,6 +1761,111 @@ mod tests {
         }
     }
 
+    fn test_options() -> FetchOptions {
+        FetchOptions {
+            distdir: tempdir(),
+            gentoo_mirrors: vec![
+                "https://public1.example.com".to_string(),
+                "https://public2.example.com".to_string(),
+            ],
+            ..FetchOptions::default()
+        }
+    }
+
+    /// A plain URI sorts after the mirror lists, last (Portage's `fetch`
+    /// order).
+    #[test]
+    fn assemble_candidates_orders_plain_uri_after_the_mirror_lists() {
+        use std::collections::HashMap;
+        let mut custom: HashMap<String, Vec<String>> = HashMap::new();
+        custom.insert(
+            "local".to_string(),
+            vec!["https://local-mirror.example.com".to_string()],
+        );
+        let options = test_options();
+        assert_eq!(
+            assemble_candidates(
+                &[&test_entry(
+                    "https://primary.example.com/f-1.0.tar.gz",
+                    "f-1.0.tar.gz"
+                )],
+                &custom,
+                &HashMap::new(),
+                &options,
+            ),
+            vec![
+                mirror("https://local-mirror.example.com"),
+                mirror("https://public1.example.com"),
+                mirror("https://public2.example.com"),
+                uri("https://primary.example.com/f-1.0.tar.gz"),
+            ]
+        );
+    }
+
+    fn mirror(root: &str) -> Candidate {
+        Candidate::Mirror(root.to_string())
+    }
+
+    fn uri(uri: &str) -> Candidate {
+        Candidate::Uri(uri.to_string())
+    }
+
+    /// Under `RESTRICT=primaryuri` the literal (plus third-party expansions)
+    /// moves ahead of the mirror lists.
+    #[test]
+    fn assemble_candidates_prepends_the_literal_under_restrict_primaryuri() {
+        use std::collections::HashMap;
+        let mut custom: HashMap<String, Vec<String>> = HashMap::new();
+        custom.insert(
+            "local".to_string(),
+            vec!["https://local-mirror.example.com".to_string()],
+        );
+        let mut third: HashMap<String, Vec<String>> = HashMap::new();
+        third.insert(
+            "gentoo".to_string(),
+            vec!["https://third.example.com/distfiles".to_string()],
+        );
+        let mut options = test_options();
+        options.restrict_primaryuri = true;
+        // Plain URI: literal first, then local, public (no expansions
+        // for a non-mirror:// token, no third-party tail).
+        assert_eq!(
+            assemble_candidates(
+                &[&test_entry(
+                    "https://primary.example.com/f-1.0.tar.gz",
+                    "f-1.0.tar.gz"
+                )],
+                &custom,
+                &third,
+                &options,
+            )[..2],
+            vec![
+                uri("https://primary.example.com/f-1.0.tar.gz"),
+                mirror("https://local-mirror.example.com"),
+            ]
+        );
+        // mirror:// URI: literal group is empty, so the third-party
+        // expansions lead (twice: the primary-uri group tail, then the
+        // inline expansions after the mirror lists).
+        let got = assemble_candidates(
+            &[&test_entry("mirror://gentoo/f-1.0.tar.gz", "f-1.0.tar.gz")],
+            &custom,
+            &third,
+            &options,
+        );
+        let third_url = uri("https://third.example.com/distfiles/f-1.0.tar.gz");
+        assert_eq!(
+            got,
+            vec![
+                third_url.clone(),
+                mirror("https://local-mirror.example.com"),
+                mirror("https://public1.example.com"),
+                mirror("https://public2.example.com"),
+                third_url,
+            ]
+        );
+    }
+
     #[test]
     fn checksum_failures_rename_bad_files_with_deterministic_suffix() {
         let bad = || serve_mirror(vec![("/distfiles/bad-1.0.tar.gz", b"BAD DATA".to_vec())], 2);
@@ -1841,11 +1946,74 @@ mod tests {
         assert_eq!(filenames, vec!["hello-1.0.tar.gz".to_string()]);
     }
 
+    /// `RESTRICT=fetch` bars the literal (and `force-mirror` even a
+    /// re-permitted one); the mirror lists are unaffected.
+    #[test]
+    fn assemble_candidates_bars_the_literal_under_fetch_restrictions() {
+        use std::collections::HashMap;
+        let entry = test_entry("https://primary.example.com/f-1.0.tar.gz", "f-1.0.tar.gz");
+        let mut options = test_options();
+        options.restrict_fetch = true;
+        let got = assemble_candidates(&[&entry], &HashMap::new(), &HashMap::new(), &options);
+        assert!(
+            got.is_empty(),
+            "restrict_fetch bars the literal and the public list alike: {got:?}"
+        );
+        let mut options = test_options();
+        options.force_mirror = true;
+        let mut fetch_entry = entry.clone();
+        fetch_entry.override_fetch = true;
+        let got = assemble_candidates(&[&fetch_entry], &HashMap::new(), &HashMap::new(), &options);
+        assert!(
+            !got.iter()
+                .any(|c| matches!(c, Candidate::Uri(u) if u.contains("primary.example.com"))),
+            "force-mirror skips even a fetch+-re-permitted literal: {got:?}"
+        );
+    }
+
     /// A definitely-closed localhost port, so the failure text pins the tried
     /// order without any server.
     fn closed_port() -> u16 {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         listener.local_addr().unwrap().port()
+    }
+
+    /// The failure report lists candidates in tried order: mirrors before
+    /// literals by default, literal first under primaryuri.
+    #[test]
+    fn fetch_src_uri_tries_candidates_in_assembled_order() {
+        let public = format!("http://127.0.0.1:{}", closed_port());
+        let literal = format!("http://127.0.0.1:{}/f-1.0.tar.gz", closed_port());
+        let run = |restrict_primaryuri: bool| {
+            let pkg_dir = tempdir();
+            let distdir = tempdir();
+            write_manifest(&pkg_dir, "f-1.0.tar.gz", 11);
+            fetch_src_uri(
+                &pkg_dir,
+                &literal,
+                &FetchOptions {
+                    distdir,
+                    gentoo_mirrors: vec![public.clone()],
+                    restrict_primaryuri,
+                    ..FetchOptions::default()
+                },
+            )
+            .unwrap_err()
+        };
+        let err = run(false);
+        let public_at = err.find(&public).expect("public mirror tried");
+        let literal_at = err.find(&literal).expect("literal URI tried");
+        assert!(
+            public_at < literal_at,
+            "mirrors before literals by default: {err}"
+        );
+        let err = run(true);
+        let public_at = err.find(&public).expect("public mirror tried");
+        let literal_at = err.find(&literal).expect("literal URI tried");
+        assert!(
+            literal_at < public_at,
+            "literal first under primaryuri: {err}"
+        );
     }
 
     /// A twice-listed third-party expansion is still attempted exactly once,

@@ -1502,4 +1502,190 @@ mod tests {
             }
         }
     }
+
+    #[test]
+    fn base64_encode_matches_the_standard_vectors() {
+        assert_eq!(base64_encode(b""), "");
+        assert_eq!(base64_encode(b"f"), "Zg==");
+        assert_eq!(base64_encode(b"fo"), "Zm8=");
+        assert_eq!(base64_encode(b"foo"), "Zm9v");
+        assert_eq!(base64_encode(b"foobar"), "Zm9vYmFy");
+        assert_eq!(base64_encode("\0user\0pass".as_bytes()), "AHVzZXIAcGFzcw==");
+    }
+
+    #[test]
+    fn force_ascii_backslash_escapes_non_ascii() {
+        assert_eq!(force_ascii("plain"), "plain");
+        assert_eq!(force_ascii("caf\u{e9}"), "caf\\xe9");
+        assert_eq!(force_ascii("A\u{4e2d}B"), "A\\u4e2dB");
+    }
+
+    #[test]
+    fn mail_action_follows_the_merged_unmerged_unknown_call() {
+        assert_eq!(mail_action(&["install", "postinst"]), "merged");
+        assert_eq!(mail_action(&[]), "merged");
+        assert_eq!(mail_action(&["prerm", "postrm"]), "unmerged");
+        assert_eq!(mail_action(&["prerm", "other"]), "unmerged");
+        assert_eq!(mail_action(&["prerm", "install"]), "unknown");
+        assert_eq!(mail_action(&["postrm", "preinst"]), "unknown");
+    }
+
+    #[test]
+    fn parse_mailuri_covers_recipient_only_sendmail_and_smtp() {
+        // Bare recipient: direct SMTP to localhost:25.
+        let (to, route) = parse_mailuri("root@localhost");
+        assert_eq!(to, "root@localhost");
+        assert!(route.is_none());
+        let (to, route) = parse_mailuri("root@localhost /usr/sbin/sendmail");
+        assert_eq!(to, "root@localhost");
+        assert!(
+            matches!(route, Some(MailRoute::Sendmail { path }) if path == "/usr/sbin/sendmail")
+        );
+        let (to, route) = parse_mailuri("me@example.com mail.example.com");
+        assert_eq!(to, "me@example.com");
+        assert!(
+            matches!(route, Some(MailRoute::Smtp { host, port, starttls, user, .. })
+                if host == "mail.example.com" && port == 25 && !starttls && user.is_empty())
+        );
+        let (to, route) = parse_mailuri("me@example.com user:secret@mail.example.com:587");
+        assert_eq!(to, "me@example.com");
+        assert!(
+            matches!(route, Some(MailRoute::Smtp { host, port, user, passwd, .. })
+                if host == "mail.example.com" && port == 587 && user == "user" && passwd == "secret")
+        );
+        let (_, route) = parse_mailuri("me@example.com mail.example.com:100465");
+        assert!(matches!(route, Some(MailRoute::Smtp { port, starttls: true, .. }) if port == 465));
+    }
+
+    #[test]
+    fn create_message_renders_headers_and_base64_body() {
+        let msg = create_message(
+            "portage@testhost",
+            "root@testhost",
+            "[portage] ebuild log for dev-libs/foo-1.0 on testhost",
+            "LOG: install\nhello\n",
+            &[],
+        );
+        assert!(msg.starts_with("From portage@testhost "), "{msg}");
+        assert!(msg.contains("\nTo: root@testhost\n"), "{msg}");
+        assert!(msg.contains("\nFrom: portage@testhost\n"), "{msg}");
+        assert!(
+            msg.contains("\nSubject: [portage] ebuild log for dev-libs/foo-1.0 on testhost\n"),
+            "{msg}"
+        );
+        assert!(msg.contains("\nDate: "), "{msg}");
+        assert!(msg.contains("Content-Transfer-Encoding: base64"), "{msg}");
+        // Bodies are base64 even when pure ASCII.
+        assert!(msg.contains("TE9HOiBpbnN0YWxsCmhlbGxvCg=="), "{msg}");
+    }
+
+    /// `mail_process` + `mail_summary` accumulation/finalize through a
+    /// fake sendmail binary: argv (`-f <from> <recipient>`) and the
+    /// MIME bytes on stdin. One test function (not three) because
+    /// `MAIL_SUMMARY` is process-global -- internal steps stay
+    /// sequential, and `temp_env` serializes the env side.
+    #[test]
+    fn mail_modules_deliver_through_a_sendmail_binary() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let dir = TempDir::new("elog-mail-test").keep();
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let sendmail = dir.join("sendmail");
+        std::fs::write(
+            &sendmail,
+            format!(
+                "#!/bin/sh\n\
+                 echo \"ARGS: $@\" >> {}\n\
+                 cat >> {}\n",
+                dir.join("args").display(),
+                dir.join("body").display(),
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&sendmail, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        temp_env(
+            &[
+                (
+                    "PORTAGE_ELOG_MAILURI",
+                    Some(&format!("root@testhost {}", sendmail.display())),
+                ),
+                ("PORTAGE_ELOG_MAILFROM", Some("portage@${HOST}")),
+                (
+                    "PORTAGE_ELOG_MAILSUBJECT",
+                    Some("[portage] ${ACTION} ${PACKAGE} on ${HOST}"),
+                ),
+            ],
+            || {
+                // Drain any accumulation a parallel test left behind
+                // (finalize always clears, sent or not).
+                mail_summary_finalize();
+                assert!(MAIL_SUMMARY.lock().unwrap().items.is_empty());
+
+                // One immediate `mail` for a merged package.
+                mail_process("dev-libs/foo-1.0", &["install"], "LOG: install\nhello\n");
+                let args = std::fs::read_to_string(dir.join("args")).unwrap();
+                let host = mail_host();
+                assert!(
+                    args.contains(&format!("ARGS: -f portage@{host} root@testhost")),
+                    "{args}"
+                );
+                let body = std::fs::read_to_string(dir.join("body")).unwrap();
+                assert!(
+                    body.contains(&format!(
+                        "Subject: [portage] merged dev-libs/foo-1.0 on {host}"
+                    )),
+                    "{body}"
+                );
+
+                // Two packages into `mail_summary`: nothing is sent
+                // yet (one run-wide mail at finalize).
+                std::fs::remove_file(dir.join("args")).unwrap();
+                mail_summary_accumulate("dev-libs/foo-1.0", "LOG: install\nhello\n");
+                mail_summary_accumulate("dev-libs/bar-2.0", "WARN: postinst\ncareful\n");
+                assert!(
+                    !dir.join("args").exists(),
+                    "summary must not send per package"
+                );
+                mail_summary_finalize();
+                assert!(
+                    MAIL_SUMMARY.lock().unwrap().items.is_empty(),
+                    "finalize clears"
+                );
+                let body = std::fs::read_to_string(dir.join("body")).unwrap();
+                assert!(body.contains("multipart/mixed"), "{body}");
+                // The summary substitutes only `${PACKAGE}` and `${HOST}`;
+                // a `${ACTION}` in the template stays literal.
+                assert!(
+                    body.contains(&format!(
+                        "Subject: [portage] ${{ACTION}} multiple packages on {}",
+                        mail_host()
+                    )),
+                    "{body}"
+                );
+                // The lead part is base64, so the package list is asserted
+                // in its encoded form.
+                let lead = format!(
+                    "elog messages for the following packages generated by process {} on host {}:\n- dev-libs/foo-1.0\n- dev-libs/bar-2.0\n",
+                    std::process::id(),
+                    mail_host(),
+                );
+                assert!(body.contains(base64_wrapped(&lead).trim_end()), "{body}");
+                // Lead part + one MIME part per attachment, on top of the
+                // first mail's own single part. Full MIME round-trip is
+                // covered end to end in test_portuale.py.
+                assert_eq!(
+                    body.matches("Content-Type: text/plain").count(),
+                    4,
+                    "{body}"
+                );
+
+                // Finalize with nothing accumulated sends nothing.
+                let before = std::fs::read(dir.join("body")).unwrap().len();
+                mail_summary_finalize();
+                assert_eq!(std::fs::read(dir.join("body")).unwrap().len(), before);
+            },
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

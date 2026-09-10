@@ -150,6 +150,25 @@ fn ensure_portage_logdir_symlink_gains_the_gz_suffix_when_compressed() {
 }
 
 #[test]
+fn tail_of_gunzips_a_compressed_build_log() {
+    // A `.gz`-suffixed log must decode, not print binary.
+    let tmp = tempdir();
+    let log_path = tmp.join("build.log.gz");
+    {
+        let f = fs::File::create(&log_path).unwrap();
+        let mut enc = flate2::write::GzEncoder::new(f, flate2::Compression::default());
+        use std::io::Write;
+        enc.write_all(b"line1\nline2\nline3\nline4\n").unwrap();
+        enc.finish().unwrap();
+    }
+    assert_eq!(tail_of(&log_path, 2), "line3\nline4");
+    assert_eq!(
+        tail_of(&tmp.join("missing.log.gz"), 2),
+        "(build log unavailable)"
+    );
+}
+
+#[test]
 fn capture_log_also_captures_pkg_preinst_and_pkg_postinst_output() {
     // `pkg_preinst`/`pkg_postinst` run separately from `install`, so they
     // need the log file threaded to them too; otherwise their output leaks
