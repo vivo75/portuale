@@ -452,6 +452,10 @@ fn s8_sha256(path: &std::path::Path) -> String {
     )
 }
 
+fn s8_stdout(output: &std::process::Output) -> String {
+    String::from_utf8_lossy(&output.stdout).into_owned()
+}
+
 mod binpkg_flow;
 mod context;
 mod host_keys;

@@ -96,6 +96,29 @@ fn plain_edge(atom: &str, category: &str, package: &str, priority: DepPriority) 
     }
 }
 
+// -----------------------------------------------------------------
+// Installed / vdb-backed inputs
+// -----------------------------------------------------------------
+
+/// A scratch vdb: `var/db/pkg/<cat>/<pf>/` with the given files.
+/// Each test builds the exact installed shape it needs under a unique
+/// root (avoids the per-root installed-packages cache).
+type VdbFile<'a> = (&'a str, &'a str);
+
+type VdbEntry<'a> = (&'a str, &'a str, &'a [VdbFile<'a>]);
+
+fn mo_tmp_vdb(tag: &str, entries: &[VdbEntry<'_>]) -> std::path::PathBuf {
+    let root = TempDir::new(&format!("portuale-mo-vdb-{}-{}", std::process::id(), tag)).keep();
+    for (cat, pf, files) in entries {
+        let dir = root.join("var/db/pkg").join(cat).join(pf);
+        std::fs::create_dir_all(&dir).unwrap();
+        for (name, value) in *files {
+            std::fs::write(dir.join(name), value.as_bytes()).unwrap();
+        }
+    }
+    root
+}
+
 fn fixtures_vdb_root() -> std::path::PathBuf {
     std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures")
 }

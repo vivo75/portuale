@@ -76,6 +76,10 @@ fn cfg_163() -> portage_profile::Config {
         ..Default::default()
     }
 }
+
+fn owner_163(cat: &str, pkg: &str) -> (String, String) {
+    (cat.to_string(), pkg.to_string())
+}
 /// Arguments of [`write_pkg_163`].
 struct WritePkg163Args<'a> {
     repo: &'a Path,

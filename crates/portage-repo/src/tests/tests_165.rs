@@ -110,6 +110,36 @@ fn write_pkg_165(args: WritePkg165Args<'_>) {
     std::fs::write(cachedir.join(format!("{pkg}-{pv}")), entry).unwrap();
 }
 
+fn repo_165(dir: &Path, pkgs: &[(&str, &str, &str, &str, &str, &str, &str)]) -> Vec<RepoConfig> {
+    let repo = dir.join("repo");
+    for (cp, pv, slot, iuse, depend, rdepend, bdepend) in pkgs {
+        write_pkg_165(WritePkg165Args {
+            repo: &repo,
+            cp,
+            pv,
+            slot,
+            iuse,
+            depend,
+            rdepend,
+            bdepend,
+        });
+    }
+    vec![RepoConfig {
+        name: "testrepo".to_string(),
+        location: repo,
+        priority: 0,
+        is_main: true,
+        masters: vec![],
+        profile_formats: vec![],
+        cache_formats: vec![],
+        aliases: vec![],
+        sync_type: None,
+        sync_uri: None,
+        volatile: false,
+        module_specific_options: vec![],
+    }]
+}
+
 fn cfg_165() -> portage_profile::Config {
     portage_profile::Config {
         accept_keywords: HashSet::from(["amd64".to_string()]),

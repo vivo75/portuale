@@ -6,6 +6,19 @@ fn fixtures_root() -> std::path::PathBuf {
     std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures")
 }
 
+/// Test `NewsContext`: the fixture `default` profile on `amd64`, self-owned so no
+/// chown is ever needed.
+fn test_news_context() -> NewsContext {
+    NewsContext {
+        profile: Some("default".to_string()),
+        has_profile: true,
+        arch: "amd64".to_string(),
+        // SAFETY: `geteuid`/`getegid` have no preconditions.
+        inst_uid: unsafe { libc::geteuid() },
+        portage_gid: unsafe { libc::getegid() },
+    }
+}
+
 /// A scratch `ROOT` with a single-item stale resume list, so
 /// `--resume --skipfirst` exits with nothing to do and no merge.
 fn single_resume_root(tag: &str) -> std::path::PathBuf {
