@@ -457,6 +457,7 @@ fn s8_stdout(output: &std::process::Output) -> String {
 }
 
 mod binpkg_flow;
+mod client_binary;
 mod context;
 mod host_keys;
 mod ledger;
