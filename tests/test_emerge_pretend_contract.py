@@ -467,6 +467,31 @@ CASES = [
         ["--pretend", "--autounmask-use=n", "dev-libs/unsatuseor"],
         0,
     ),
+    (
+        "recursion: --deep walk of an installed pkg's || group hits the same unsat_use_* dispatch as the main walk",
+        ["--pretend", "-D", "dev-libs/unsatuseinstconsumer"],
+        1,
+    ),
+    (
+        "recursion: --deep walk of an installed pkg's || group, --autounmask-use=n",
+        ["--pretend", "-D", "--autounmask-use=n", "dev-libs/unsatuseinstconsumer"],
+        0,
+    ),
+    (
+        "recursion: || group's unsat_use_installed bin keys on the SLOT the alternative targets, not just cp-installed (F4 all_installed_slots)",
+        ["--pretend", "dev-libs/unsatuseslot"],
+        1,
+    ),
+    (
+        "recursion: || ( foo[a] foo[b] ) prefers preferred_non_installed over unsat_use_non_installed with no autounmask change",
+        ["--pretend", "dev-libs/unsatuseorder"],
+        0,
+    ),
+    (
+        "recursion: || group demotes a use.mask-violating alternative to other (never selected), the unsat_use alternative wins instead",
+        ["--pretend", "dev-libs/unsatusemasked"],
+        1,
+    ),
     ("recursion: unresolvable dep doesn't fail the graph", ["--pretend", "dev-libs/missingdep"], 0),
     ("recursion: dedup across DEPEND and RDEPEND", ["--pretend", "dev-libs/dualdep"], 0),
     ("recursion: BDEPEND is walked", ["--pretend", "dev-libs/bdependpkg"], 0),
@@ -3087,6 +3112,138 @@ def test_or_group_use_unsat_alternative_reports_the_dependency_it_enqueued_witho
         '!!! no visible ebuild for dependency "dev-libs/unsatusealt"',
     ]
     assert "doesnotexist-unsatuseor" not in rust.stderr
+
+
+def test_deep_walk_dispatches_or_group_through_the_same_unsat_use_bins_as_the_main_walk(
+    emerge_binary, emerge_pretend_python, fixture_env
+):
+    """Review finding F1 (2026-09-11 review of "portage-repo: wire
+    dep_zapdeps unsat_use fine bins"): `enqueue_dependencies` (the
+    `--deep` recursion into an AlreadyInstalled package) had its own,
+    unfixed `||` probe closure -- only `resolve_pretend_graph`'s main
+    New/Upgrade walk got the `unsat_use_*` fine-bin wiring. dev-libs/
+    unsatuseinst is installed and RDEPENDs the same `|| ( dev-libs/
+    unsatusealt[unsatuseorflag] dev-libs/doesnotexist-unsatuseor )` group
+    as dev-libs/unsatuseor; dev-libs/unsatuseinstconsumer (New) RDEPENDs
+    unsatuseinst, so `-D` recurses into it via `enqueue_dependencies`, not
+    the main walk. Before the fix, `enqueue_dependencies`'s closure probed
+    `all_available` with the atom's own `[use]` block still attached
+    (never stripping to `.without_use`), so alternative 1 came back
+    `Unsatisfiable` and the group fell back to the literal `||`, enqueuing
+    BOTH alternatives -- the dead `doesnotexist-unsatuseor` included."""
+    args = ["--pretend", "-D", "dev-libs/unsatuseinstconsumer"]
+    rust = _run([str(emerge_binary)], args, fixture_env)
+    py = _run(emerge_pretend_python, args, fixture_env)
+    assert rust.returncode == 1 and py.returncode == 1
+    assert rust.stdout == py.stdout and rust.stderr == py.stderr
+    assert rust.stdout.splitlines() == [
+        '[ebuild  N     ] dev-libs/unsatusealt-1.0  USE="unsatuseorflag"',
+        "[ebuild  N     ] dev-libs/unsatuseinstconsumer-1.0 ",
+    ]
+    assert "doesnotexist-unsatuseor" not in rust.stderr, (
+        "the dead alternative must not be enqueued once the group resolves, "
+        "even through the --deep enqueue_dependencies recursion"
+    )
+
+    args_no_unmask = ["--pretend", "-D", "--autounmask-use=n", "dev-libs/unsatuseinstconsumer"]
+    rust2 = _run([str(emerge_binary)], args_no_unmask, fixture_env)
+    py2 = _run(emerge_pretend_python, args_no_unmask, fixture_env)
+    assert rust2.returncode == 0 and py2.returncode == 0
+    assert rust2.stdout == py2.stdout and rust2.stderr == py2.stderr
+    assert rust2.stdout.splitlines() == [
+        "[ebuild  N     ] dev-libs/unsatuseinstconsumer-1.0 ",
+    ]
+    assert rust2.stderr.splitlines() == [
+        '!!! no visible ebuild for dependency "dev-libs/unsatusealt"',
+    ]
+    assert "doesnotexist-unsatuseor" not in rust2.stderr
+
+
+def test_or_group_unsat_use_installed_bin_keys_on_the_targeted_slot_not_just_cp(
+    emerge_binary, emerge_pretend_python, fixture_env
+):
+    """Review finding F4: real dep_zapdeps' unsat_use_installed choice bin
+    keys on all_installed_slots (dep_check.py soft 599-607) -- every
+    `slot_map` atom (`cat/pkg:<slot of the best USE-ignoring candidate>`)
+    must match the vdb, not just the bare cp. dev-libs/unsatuseslot's
+    RDEPEND is `|| ( dev-libs/unsatuseslotalt:2[unsatuseorflag]
+    dev-libs/unsatuseslotother[unsatuseorflag] )`: unsatuseslotalt is
+    installed in slot 1 only, but alternative 1 explicitly targets slot 2
+    (visible, flag off) -- cp-installed but NOT slot-installed, so real
+    files it under unsat_use_non_installed (bin 4), not unsat_use_installed
+    (bin 3). unsatuseslotother is installed in slot 0 and the visible
+    ebuild is also slot 0 -- cp AND slot installed, unsat_use_installed
+    (bin 3), which outranks bin 4. Before the fix, `all(atom_cp_installed)`
+    alone put BOTH alternatives in the same bin, and the first-listed
+    (unsatuseslotalt:2) won on the tie -- wrong slot, wrong package."""
+    args = ["--pretend", "dev-libs/unsatuseslot"]
+    rust = _run([str(emerge_binary)], args, fixture_env)
+    py = _run(emerge_pretend_python, args, fixture_env)
+    assert rust.returncode == 1 and py.returncode == 1
+    assert rust.stdout == py.stdout and rust.stderr == py.stderr
+    assert rust.stdout.splitlines() == [
+        '[ebuild   R    ] dev-libs/unsatuseslotother-1.0  USE="unsatuseorflag*"',
+        "[ebuild  N     ] dev-libs/unsatuseslot-1.0 ",
+    ]
+    assert "unsatuseslotalt" not in rust.stdout, (
+        "the wrong-slot alternative must not be the one selected/merged"
+    )
+
+
+def test_or_group_preferred_non_installed_outranks_unsat_use_non_installed(
+    emerge_binary, emerge_pretend_python, fixture_env
+):
+    """Review finding F8 (contract coverage): the real-source comment
+    "unsat_use_* must come after preferred_non_installed for correct
+    ordering in cases like `|| ( foo[a] foo[b] )`" (dep_check.py soft
+    392-393), pinned as its own fixture instead of only being implied by
+    the enum's `Ord` derive. dev-libs/unsatuseorder's RDEPEND is `|| (
+    dev-libs/unsatuseordertarget[unsatuseorflag]
+    dev-libs/unsatuseordertarget[unsatuseotherflag] )`, target IUSE
+    `unsatuseorflag +unsatuseotherflag`: alternative 1's flag is off by
+    default (unsat_use_non_installed, bin 4), alternative 2's is ON by
+    default (preferred_non_installed, bin 1) -- real picks alternative 2
+    outright, with NO autounmask change proposed at all, exit 0."""
+    args = ["--pretend", "dev-libs/unsatuseorder"]
+    rust = _run([str(emerge_binary)], args, fixture_env)
+    py = _run(emerge_pretend_python, args, fixture_env)
+    assert rust.returncode == 0 and py.returncode == 0
+    assert rust.stdout == py.stdout and rust.stderr == py.stderr
+    assert rust.stdout.splitlines() == [
+        '[ebuild  N     ] dev-libs/unsatuseordertarget-1.0  USE="unsatuseotherflag -unsatuseorflag"',
+        "[ebuild  N     ] dev-libs/unsatuseorder-1.0 ",
+    ]
+    assert rust.stderr == ""
+
+
+def test_or_group_use_mask_violation_demotes_to_other_never_selected(
+    emerge_binary, emerge_pretend_python, fixture_env
+):
+    """Review finding F8 (contract coverage) for the bug-515584 masked
+    demotion, at the contract level (the Rust side already had a unit
+    test for this; this pins the same behaviour end to end and gives the
+    Python mirror its own coverage). dev-libs/unsatusemasked's RDEPEND is
+    `|| ( dev-libs/unsatusemaskedalt[unsatusemaskedflag]
+    dev-libs/unsatuseordertarget[unsatuseorflag] )`; unsatusemaskedflag is
+    globally use.mask'd for unsatusemaskedalt (profiles/package.use.mask),
+    so alternative 1's [use]-dep can never be fixed by an autounmask flip
+    -- real demotes it to `other` (bin 8, never selected without the
+    `allow_masked` second pass portuale deliberately never takes).
+    Alternative 2 is merely unsat_use_non_installed (bin 4, selectable),
+    so it wins and an autounmask flip is proposed for it."""
+    args = ["--pretend", "dev-libs/unsatusemasked"]
+    rust = _run([str(emerge_binary)], args, fixture_env)
+    py = _run(emerge_pretend_python, args, fixture_env)
+    assert rust.returncode == 1 and py.returncode == 1
+    assert rust.stdout == py.stdout and rust.stderr == py.stderr
+    assert rust.stdout.splitlines() == [
+        '[ebuild  N     ] dev-libs/unsatuseordertarget-1.0  USE="unsatuseorflag unsatuseotherflag"',
+        "[ebuild  N     ] dev-libs/unsatusemasked-1.0 ",
+    ]
+    assert "unsatusemaskedalt" not in rust.stdout, (
+        "the use.mask-violating alternative must never be the one selected/merged"
+    )
+    assert ">=dev-libs/unsatuseordertarget-1.0 unsatuseorflag" in rust.stderr
 
 
 def test_or_group_alternative_yields_to_the_next_when_backtracking_masks_it(

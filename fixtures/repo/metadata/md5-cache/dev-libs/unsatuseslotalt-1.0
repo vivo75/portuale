@@ -1,0 +1,7 @@
+DEFINED_PHASES=-
+DESCRIPTION=fixture: F4 all_installed_slots -- installed in slot 1, also visible in slot 2 (see unsatuseslotalt-2.0)
+EAPI=8
+IUSE=unsatuseorflag
+KEYWORDS=amd64
+SLOT=1
+_md5_=0000000000000000000000000000000

@@ -1,0 +1,7 @@
+DEFINED_PHASES=-
+DESCRIPTION=fixture: installed, matched by an AlreadyInstalled resolve; RDEPENDs the same unsatuseor || group so a --deep walk (enqueue_dependencies) hits the unsat_use_* dispatch, not just the main New/Upgrade walk
+EAPI=8
+KEYWORDS=amd64
+RDEPEND=|| ( dev-libs/unsatusealt[unsatuseorflag] dev-libs/doesnotexist-unsatuseor )
+SLOT=0
+_md5_=0000000000000000000000000000000

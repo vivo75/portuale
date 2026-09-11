@@ -6,3 +6,9 @@
 # [y] reports a missing-IUSE (unconditional) key, [x] a violated key.
 # 1.0 keeps its +x default (unmasked), so slotusex still pulls it.
 =dev-libs/slotusetarget-2.0 x
+
+# fixture: bug-515584 masked demotion (dep_zapdeps all_use_unmasked) --
+# masks unsatusemaskedflag globally for dev-libs/unsatusemaskedalt, so a
+# [unsatusemaskedflag] use-dep on it can never be satisfied by an
+# autounmask flip; see unsatusemasked's || group.
+dev-libs/unsatusemaskedalt unsatusemaskedflag

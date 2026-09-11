@@ -5767,7 +5767,7 @@ def _candidate_use_deps_satisfied(atom, c, category, package, config):
     return _use_deps_satisfied(atom, _valid_iuse(iuse, config), use_flags)
 
 
-def _atom_all_use_unmasked(repos, atom_str, config):
+def _atom_all_use_unmasked(repos, atom_str, config, extra_constraints=()):
     """Real `atom.violated_conditionals(pkg_use_enabled(avail_pkg),
     avail_pkg.iuse.is_valid_flag)` -- the `all_use_unmasked` boolean of
     `dep_zapdeps`'s choice classification (dep_check.py soft 406-414,
@@ -5777,7 +5777,10 @@ def _atom_all_use_unmasked(repos, atom_str, config):
     own `use.mask` / `use.force` (one masked/forced violation makes the
     whole choice fall to `other`, never selectable). One masked/forced
     violation kills the choice; mirrors portage-repo/src/lib.rs's
-    atom_all_use_unmasked exactly."""
+    atom_all_use_unmasked exactly. `extra_constraints` is the same
+    'backtrack-loop runtime_pkg_mask filter _atom_currently_satisfiable
+    applies (F5) -- threaded through to
+    _highest_available_candidate_ignoring_use."""
     atom = _parse_atom(atom_str)
     if atom is None:
         return True
@@ -5786,10 +5789,12 @@ def _atom_all_use_unmasked(repos, atom_str, config):
     if not atom.use:
         return True
     category, package = atom.cp.split("/", 1)
-    best = _highest_available_candidate_ignoring_use(repos, atom_str, config)
+    best = _highest_available_candidate_ignoring_use(
+        repos, atom_str, config, extra_constraints
+    )
     if best is None:
         return True
-    candidate_str, keywords, iuse, enabled = best
+    candidate_str, keywords, iuse, enabled, _slot = best
     valid_iuse = _valid_iuse(iuse, config)
     stable = _is_stable(
         keywords,
@@ -5828,13 +5833,17 @@ def _atom_all_use_unmasked(repos, atom_str, config):
     return True
 
 
-def _highest_available_candidate_ignoring_use(repos, atom_str, config):
+def _highest_available_candidate_ignoring_use(repos, atom_str, config, extra_constraints=()):
     """Real `avail_pkg = mydbapi_match_pkgs(atom.without_use)[-1]`
     (dep_check.py soft 469-474): the single highest-versioned visible
     candidate matching an atom's `[...]`-stripped form, plus its
-    candidate string, IUSE and effective enabled-use set. Mirrors
+    candidate string, IUSE, effective enabled-use set and slot. Mirrors
     portage-repo/src/lib.rs's highest_available_candidate_ignoring_use
-    exactly."""
+    exactly. `extra_constraints` (F5) is the same 'backtrack-loop
+    runtime_pkg_mask filter _atom_currently_satisfiable applies -- real's
+    mydbapi in dep_zapdeps is _dep_check_composite_db, which honours it
+    too, so once backtracking masks the highest version this must probe
+    the highest *unmasked* one instead."""
     atom = _parse_atom(atom_str)
     if atom is None:
         return None
@@ -5849,6 +5858,25 @@ def _highest_available_candidate_ignoring_use(repos, atom_str, config):
     ]
     by_str = dict(zip(candidate_strs, visible))
     matched = [by_str[m] for m in match_from_list(atom.without_use, candidate_strs) if m in by_str]
+    if extra_constraints:
+        def _con_ok(cstr, con):
+            cs = [cstr]
+            if con.startswith("!"):
+                return not match_from_list(con[1:], cs)
+            return bool(match_from_list(con, cs))
+
+        matched = [
+            c
+            for c in matched
+            if all(
+                _con_ok(
+                    f"{category}/{package}-{c['version']}:{c['slot']}"
+                    f"/{c['sub_slot']}::{c['repo_name']}",
+                    con,
+                )
+                for con in extra_constraints
+            )
+        ]
     if not matched:
         return None
     best = matched[0]
@@ -5860,7 +5888,7 @@ def _highest_available_candidate_ignoring_use(repos, atom_str, config):
         f"/{best['sub_slot']}::{best['repo_name']}"
     )
     iuse, use_flags = _candidate_iuse_and_use(best, category, package, config)
-    return (best_str, best["keywords"], iuse, use_flags)
+    return (best_str, best["keywords"], iuse, use_flags, best["slot"])
 
 
 def _candidate_masking_reasons(candidate, category, package, config):
@@ -6009,7 +6037,14 @@ def _atom_cp_installed(root, atom_str):
     "virtual/" (real's "new-style virtuals have zero cost to install"
     exemption). A blocker is vacuously satisfied. Bumps a "||" alternative
     into AltPreference.Installed (real's preferred_installed choice bin 0).
-    Mirrors portage-repo/src/lib.rs's atom_cp_installed."""
+
+    Deliberately does NOT re-check the atom's own use-deps against the
+    installed package's recorded USE: real's all_installed is
+    vardb.match(Atom(atom.cp)), strictly cp-level, by construction blind
+    to "[use]". The USE side is a wholly separate fact
+    (all_use_satisfied) that _disjunction_preference computes and
+    combines with this one itself. Mirrors portage-repo/src/lib.rs's
+    atom_cp_installed."""
     atom = _parse_atom(atom_str)
     if atom is None:
         return False
@@ -6017,6 +6052,34 @@ def _atom_cp_installed(root, atom_str):
     if atom.blocker or category == "virtual":
         return True
     return bool(installed_candidates(root, category, package))
+
+
+def _atom_installed_in_slot_of(repos, root, atom_str, config, extra_constraints=()):
+    """Real dep_zapdeps' all_installed_slots predicate (dep_check.py soft
+    599-607, slot_map/avail_slot): whether the *slot* of the best
+    USE-ignoring candidate for atom_str (_highest_available_candidate_
+    ignoring_use, real's avail_pkg) is itself installed --
+    slot_map[Atom(f"{atom.cp}:{avail_pkg.slot}")] matched against the
+    vdb, or "virtual/" (zero-cost exemption, same as _atom_cp_installed).
+    Distinct from _atom_cp_installed: a package can be installed in some
+    *other* slot while the specific slot this "||" alternative would need
+    is not, which real still counts as unsat_use_non_installed, not
+    unsat_use_installed. A blocker is vacuously satisfied. No candidate
+    at all counts as not-installed-in-slot. Mirrors portage-repo/src/
+    lib.rs's atom_installed_in_slot_of."""
+    atom = _parse_atom(atom_str)
+    if atom is None:
+        return False
+    category, package = atom.cp.split("/", 1)
+    if atom.blocker or category == "virtual":
+        return True
+    best = _highest_available_candidate_ignoring_use(
+        repos, atom_str, config, extra_constraints
+    )
+    if best is None:
+        return False
+    _candidate_str, _keywords, _iuse, _enabled, slot = best
+    return any(s == slot for _v, s, _ss in installed_candidates(root, category, package))
 
 
 def _entry_merge_bound_cpv(e):
@@ -6069,6 +6132,125 @@ def _atoms_all_in_graph(atoms, entries, config):
         if not hit:
             return False
     return True
+
+
+def _disjunction_preference(
+    repos, config, root, entries, self_cp, constraints, root_deps_running_root, atoms
+):
+    """The single probe function `_use_reduce_flat_disjunctive` calls for
+    every "||" alternative -- real dep_zapdeps' whole choice-bin
+    classification (dep_check.py soft 449-523, 599-618) collapsed into
+    one int rank (0 = Unsatisfiable ... 9 = Installed, matching
+    portage-repo's AltPreference discriminant order exactly). Shared by
+    both of portuale's "||"-resolution call sites (the main New/Upgrade/
+    Reinstall walk in resolve_pretend_graph, and the --deep
+    AlreadyInstalled recursion in _enqueue_dependencies) so a fix to one
+    can never silently miss the other again (2026-09-11 review finding
+    F1/F2: the Rust side had kept its own, unfixed copy of this closure
+    after the fine unsat_use_* bins shipped here). Mirrors portage-repo/
+    src/lib.rs's disjunction_preference exactly.
+
+    `constraints` is the 'backtrack-loop's accumulated per-cat/pkg
+    runtime_pkg_mask ({} at every non-disjunctive call site, a strict
+    no-op); `self_cp` is the entry currently being resolved, for the
+    circular-self-dep check; `root_deps_running_root` is the --root-deps
+    feed-in (None = strict no-op).
+
+    Real's per-atom loop probes each atom's availability once and
+    short-circuits (`if not avail_pkg: ... break`, soft 469): review
+    finding F3 -- for an atom with no "[use]" block (the overwhelming
+    majority), atom.without_use and atom are the same string, so a
+    separate all_available/all_use_satisfied probe would do
+    byte-identical candidate-listing work twice. This loop computes each
+    atom's availability once and reuses it for both facts when there is
+    no "[use]" block to strip."""
+
+    def _constraints_for(a):
+        pa = _parse_atom(a)
+        if pa is None:
+            return ()
+        return constraints.get(tuple(pa.cp.split("/", 1)), ())
+
+    all_available = True
+    all_use_satisfied = True
+    all_use_unmasked = True
+    for a in atoms:
+        pa = _parse_atom(a)
+        circular_self = (
+            pa is not None
+            and not pa.blocker
+            and tuple(pa.cp.split("/", 1)) == self_cp
+            and not _atom_cp_installed(root, a)
+        )
+        if circular_self:
+            all_available = False
+            break
+        stripped = _without_use(a)
+        extra_constraints = _constraints_for(a)
+        # Real all_available's per-atom probe: mydbapi_match_pkgs(atom.
+        # without_use) -- USE settings never affect "||" preference
+        # evaluation at this stage (dep_check.py soft 469).
+        avail = _atom_currently_satisfiable(
+            repos, stripped, config, extra_constraints
+        ) or (
+            root_deps_running_root is not None
+            and _running_root_satisfies_atom(a, root_deps_running_root)
+        )
+        if not avail:
+            all_available = False
+            all_use_satisfied = False
+            break
+        # No "[use]" block: real's "if atom.use:" is false, so this atom
+        # trivially satisfies its own (nonexistent) use-deps -- reuse
+        # `avail` (== True) instead of re-probing the identical candidate
+        # list a second time (F3).
+        if stripped == a:
+            use_ok = True
+        else:
+            use_ok = _atom_currently_satisfiable(
+                repos, a, config, extra_constraints
+            ) or (
+                root_deps_running_root is not None
+                and _running_root_satisfies_atom(a, root_deps_running_root)
+            )
+        if not use_ok:
+            all_use_satisfied = False
+            # Real's bug-515584 probe: only evaluated for an atom whose
+            # own USE-match actually failed (dep_check.py soft 493-523).
+            if not _atom_all_use_unmasked(repos, a, config, extra_constraints):
+                all_use_unmasked = False
+
+    if not all_available:
+        return 0
+    if all_use_satisfied:
+        # Real dep_zapdeps choice bin 0 (preferred_installed /
+        # preferred_in_graph) -- see the identical check below.
+        if all(_atom_cp_installed(root, a) for a in atoms) or _atoms_all_in_graph(
+            atoms, entries, config
+        ):
+            return 9
+        return 8
+    # !all_use_satisfied: real's unsat_use_* bins -- the alternative
+    # exists but can only be merged with USE changes. First the
+    # bug-515584 gate (soft 705): if the flags that would have to change
+    # sit in use.mask / use.force, the choice is demoted to other (never
+    # selectable); otherwise it keeps the fine-bin ordering
+    # unsat_use_in_graph > unsat_use_installed > unsat_use_non_installed.
+    if not all_use_unmasked:
+        return 0
+    if _atoms_all_in_graph(atoms, entries, config):
+        return 7
+    # Real unsat_use_installed's all_installed_slots (dep_check.py soft
+    # 599-607): cp-level installed is not enough -- the *slot* the best
+    # USE-ignoring candidate would pull in must also be installed (F4). A
+    # cp installed only in a different slot than this alternative targets
+    # still counts as unsat_use_non_installed.
+    if all(_atom_cp_installed(root, a) for a in atoms) and all(
+        _atom_installed_in_slot_of(repos, root, a, config, _constraints_for(a))
+        for a in atoms
+    ):
+        return 6
+    return 5
 
 
 def _root_deps_satisfied_atoms(
@@ -12238,12 +12420,6 @@ def resolve_pretend_graph(
             # this loop accumulated for its cat/pkg (slot_constraints, =
             # runtime_pkg_mask) counts as unsatisfiable, so the next
             # alternative wins on the retry.
-            def _disj_constraints(a):
-                _pa = _parse_atom(a)
-                if _pa is None:
-                    return ()
-                return slot_constraints.get(tuple(_pa.cp.split("/", 1)), ())
-
             # Real dep_zapdeps skips a "||" alternative satisfied only by
             # the package currently being resolved (a circular self-dep)
             # -- dev-lang/go's BDEPEND `|| ( >=dev-lang/go-<min>
@@ -12252,60 +12428,22 @@ def resolve_pretend_graph(
             # portage-repo/src/lib.rs.
             _self_cp = (category, package)
 
+            # The whole dep_zapdeps choice-bin classification lives in the
+            # single shared _disjunction_preference function -- see its
+            # own docstring (2026-09-11 review F1/F2: portage-repo's Rust
+            # side used to keep its own, unfixed copy of this closure
+            # after the fine unsat_use_* bins shipped here).
             def _disj_pref(atoms):
-                def _circular_self(a):
-                    _pa = _parse_atom(a)
-                    return (
-                        _pa is not None
-                        and not _pa.blocker
-                        and tuple(_pa.cp.split("/", 1)) == _self_cp
-                        and not _atom_cp_installed(root, a)
-                    )
-
-                all_available = all(
-                    (not _circular_self(a))
-                    and (
-                        _atom_currently_satisfiable(
-                            repos,
-                            _without_use(a),
-                            config,
-                            _disj_constraints(a),
-                        )
-                        or (
-                            root_deps_running_root is not None
-                            and _running_root_satisfies_atom(a, root_deps_running_root)
-                        )
-                    )
-                    for a in atoms
+                return _disjunction_preference(
+                    repos,
+                    config,
+                    root,
+                    entries,
+                    _self_cp,
+                    slot_constraints,
+                    root_deps_running_root,
+                    atoms,
                 )
-                if not all_available:
-                    return 0
-                all_use_satisfied = all(
-                    _atom_currently_satisfiable(repos, a, config, _disj_constraints(a))
-                    or (
-                        root_deps_running_root is not None
-                        and _running_root_satisfies_atom(a, root_deps_running_root)
-                    )
-                    for a in atoms
-                )
-                if all_use_satisfied:
-                    # Real dep_zapdeps choice bin 0 (preferred_installed /
-                    # preferred_in_graph) -- see the identical check in
-                    # resolve_pretend_graph's main "||" closure.
-                    if all(_atom_cp_installed(root, a) for a in atoms) or _atoms_all_in_graph(
-                        atoms, entries, config
-                    ):
-                        return 9
-                    return 8
-                if not all(
-                    _atom_all_use_unmasked(repos, a, config) for a in atoms
-                ):
-                    return 0
-                if _atoms_all_in_graph(atoms, entries, config):
-                    return 7
-                if all(_atom_cp_installed(root, a) for a in atoms):
-                    return 6
-                return 5
 
             try:
                 flat_deps = _use_reduce_flat_disjunctive(depstr, use_flags, _disj_pref)
@@ -13039,66 +13177,27 @@ def _enqueue_dependencies(
     # --deep/AlreadyInstalled-recursion counterpart to it).
     _dc = disj_constraints or {}
 
-    def _disj_c(a):
-        _pa = _parse_atom(a)
-        if _pa is None:
-            return ()
-        return _dc.get(tuple(_pa.cp.split("/", 1)), ())
-
     # Real dep_zapdeps skips a "||" alternative satisfied only by the
     # package currently being resolved (circular self-dep) -- see the
     # main "||" closure. Mirrors portage-repo/src/lib.rs.
     _self_cp = (category, package)
 
+    # The whole dep_zapdeps choice-bin classification lives in the single
+    # shared _disjunction_preference function -- see its own docstring
+    # (2026-09-11 review F1/F2: portage-repo's Rust side used to keep its
+    # own, unfixed copy of this closure after the fine unsat_use_* bins
+    # shipped here).
     def _disj_pref(atoms):
-        def _circular_self(a):
-            _pa = _parse_atom(a)
-            return (
-                _pa is not None
-                and not _pa.blocker
-                and tuple(_pa.cp.split("/", 1)) == _self_cp
-                and not _atom_cp_installed(root, a)
-            )
-
-        all_available = all(
-            (not _circular_self(a))
-            and (
-                _atom_currently_satisfiable(
-                    repos, _without_use(a), config, _disj_c(a)
-                )
-                or (
-                    root_deps_running_root is not None
-                    and _running_root_satisfies_atom(a, root_deps_running_root)
-                )
-            )
-            for a in atoms
+        return _disjunction_preference(
+            repos,
+            config,
+            root,
+            entries or [],
+            _self_cp,
+            _dc,
+            root_deps_running_root,
+            atoms,
         )
-        if not all_available:
-            return 0
-        all_use_satisfied = all(
-            _atom_currently_satisfiable(repos, a, config, _disj_c(a))
-            or (
-                root_deps_running_root is not None
-                and _running_root_satisfies_atom(a, root_deps_running_root)
-            )
-            for a in atoms
-        )
-        if all_use_satisfied:
-            # Real dep_zapdeps choice bin 0 (preferred_installed /
-            # preferred_in_graph) -- see the identical check in
-            # resolve_pretend_graph's main "||" closure.
-            if all(_atom_cp_installed(root, a) for a in atoms) or _atoms_all_in_graph(
-                atoms, entries or [], config
-            ):
-                return 9
-            return 8
-        if not all(_atom_all_use_unmasked(repos, a, config) for a in atoms):
-            return 0
-        if _atoms_all_in_graph(atoms, entries or [], config):
-            return 7
-        if all(_atom_cp_installed(root, a) for a in atoms):
-            return 6
-        return 5
 
     try:
         flat_deps = _use_reduce_flat_disjunctive(depstr, use_flags, _disj_pref)

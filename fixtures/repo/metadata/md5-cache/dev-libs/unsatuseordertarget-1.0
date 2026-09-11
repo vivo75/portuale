@@ -1,0 +1,7 @@
+DEFINED_PHASES=-
+DESCRIPTION=fixture: shared target of unsatuseorder's || group, one flag off-by-default (unsatuseorflag) and one on-by-default (unsatuseotherflag)
+EAPI=8
+IUSE=unsatuseorflag +unsatuseotherflag
+KEYWORDS=amd64
+SLOT=0
+_md5_=0000000000000000000000000000000

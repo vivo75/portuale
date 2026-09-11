@@ -1,0 +1,7 @@
+DEFINED_PHASES=-
+DESCRIPTION=fixture: F4 || group where the cp-installed alternative isn't installed in the SLOT it targets (unsatuseslotalt:2) vs. the alternative installed in its own slot (unsatuseslotother)
+EAPI=8
+KEYWORDS=amd64
+RDEPEND=|| ( dev-libs/unsatuseslotalt:2[unsatuseorflag] dev-libs/unsatuseslotother[unsatuseorflag] )
+SLOT=0
+_md5_=0000000000000000000000000000000

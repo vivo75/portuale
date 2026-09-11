@@ -562,12 +562,13 @@ merge, unmerge, world management, all real. The gap to a full drop-in is:
    renders the notices, autounmask levels inside the loop, `||`-preference
    + slot-op-rebuild feedback). What's left is depth on pieces already
    built: richer `_slot_conflict_backtrack` mask-target analysis, the
-   still-finer `dep_zapdeps` bins (`other_*`; `unsat_use_*` shipped
-   2026-09-11 — `||` group resolution, bug-515584 unmask gate, both
-   languages) and full `all_use_satisfied`, the DFS-partial merge-list
-   truncation, and the `_serialize_tasks` frontier-timing at real-tree
-   scale (L0 merge-order: ~19 probes, correct set / slightly-off
-   sequence).
+   still-finer `dep_zapdeps` bins (`all_available`/`all_use_satisfied`
+   split, `unsat_use_*` with the bug-515584 unmask gate and
+   `all_installed_slots` shipped 2026-09-11, one shared probe helper both
+   languages — `other_*` bins + the `allow_masked` second pass, and
+   in-bin ordering remain), the DFS-partial merge-list truncation, and
+   the `_serialize_tasks` frontier-timing at real-tree scale (L0
+   merge-order: ~19 probes, correct set / slightly-off sequence).
 2. **The Part 2 tails** — F's `--info` host-state
    half, G's brush re-pin, §J's `--solver=` real-tree bugs (E's fetch
    ordering and §J's notices/markers/doc cuts shipped as Tier-1

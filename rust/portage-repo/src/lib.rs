@@ -8076,6 +8076,7 @@ fn atom_all_use_unmasked(
     repos: &[RepoConfig],
     atom_str: &str,
     config: &portage_profile::Config,
+    extra_constraints: &[String],
 ) -> bool {
     let Some(atom) = portage_dep::parse_atom(atom_str) else {
         return true;
@@ -8086,13 +8087,16 @@ fn atom_all_use_unmasked(
     let Some(use_deps) = atom.use_deps.as_deref().filter(|d| !d.is_empty()) else {
         return true;
     };
-    let Some((candidate_str, keywords, iuse, enabled)) = highest_available_candidate_ignoring_use(
-        repos,
-        atom_str,
-        &atom.category,
-        &atom.package,
-        config,
-    ) else {
+    let Some((candidate_str, keywords, iuse, enabled, _slot)) =
+        highest_available_candidate_ignoring_use(
+            repos,
+            atom_str,
+            &atom.category,
+            &atom.package,
+            config,
+            extra_constraints,
+        )
+    else {
         // No visible candidate at all -- `all_available` already sent the
         // whole choice to `Unsatisfiable`; nothing to evaluate here.
         return true;
@@ -8154,17 +8158,31 @@ fn atom_all_use_unmasked(
 /// Real `avail_pkg = mydbapi_match_pkgs(atom.without_use)[-1]`
 /// (`dep_check.py` soft 469-474): the single highest-sorted visible
 /// candidate matching an atom's `[...]`-stripped form, plus its
-/// candidate string, IUSE and effective enabled-use set -- the seeds of
-/// both the `use.mask`/`use.force` probe and the
-/// `violated_conditionals` argument of [`atom_all_use_unmasked`].
-type CandidateUseProbe = (String, Vec<String>, HashSet<String>, HashSet<String>);
+/// candidate string, IUSE, effective enabled-use set and slot -- the
+/// seeds of the `use.mask`/`use.force` probe, the `violated_conditionals`
+/// argument of [`atom_all_use_unmasked`], and the slot
+/// [`atom_installed_in_slot_of`] checks against the vdb.
+type CandidateUseProbe = (
+    String,
+    Vec<String>,
+    HashSet<String>,
+    HashSet<String>,
+    String,
+);
 
+/// `extra_constraints` is the same `'backtrack`-loop `runtime_pkg_mask`
+/// filter [`atom_currently_satisfiable`] applies -- real's `mydbapi` in
+/// `dep_zapdeps` is `_dep_check_composite_db`, which honours it too, so
+/// once backtracking masks the highest version this must probe the
+/// highest *unmasked* one instead. Empty `&[]` at every non-disjunctive
+/// call site, a strict no-op.
 fn highest_available_candidate_ignoring_use(
     repos: &[RepoConfig],
     atom_str: &str,
     category: &str,
     package: &str,
     config: &portage_profile::Config,
+    extra_constraints: &[String],
 ) -> Option<CandidateUseProbe> {
     let stripped = portage_dep::without_use(atom_str);
     let Ok(candidates) = list_candidates(repos, category, package) else {
@@ -8188,6 +8206,26 @@ fn highest_available_candidate_ignoring_use(
         .collect();
     let candidate_str_refs: Vec<&str> = candidate_strs.iter().map(String::as_str).collect();
     let matched = portage_dep::match_from_list(stripped, &candidate_str_refs)?;
+    // Same `runtime_pkg_mask` filter as `atom_currently_satisfiable` --
+    // see that function's own doc comment for the grounding.
+    let matched: Vec<&str> = if extra_constraints.is_empty() {
+        matched
+    } else {
+        matched
+            .into_iter()
+            .filter(|m| {
+                extra_constraints.iter().all(|c| {
+                    if let Some(neg) = c.strip_prefix('!') {
+                        !portage_dep::match_from_list(neg, std::slice::from_ref(m))
+                            .is_some_and(|r| !r.is_empty())
+                    } else {
+                        portage_dep::match_from_list(c, std::slice::from_ref(m))
+                            .is_some_and(|r| !r.is_empty())
+                    }
+                })
+            })
+            .collect()
+    };
     let mut by_str: HashMap<&str, &Candidate> = HashMap::new();
     for (s, c) in candidate_str_refs.iter().zip(visible.iter()) {
         by_str.insert(*s, *c);
@@ -8204,7 +8242,13 @@ fn highest_available_candidate_ignoring_use(
         "{category}/{package}-{}:{}/{}::{}",
         best.version, best.slot, best.sub_slot, best.repo_name
     );
-    Some((best_str, best.keywords.clone(), iuse, use_flags))
+    Some((
+        best_str,
+        best.keywords.clone(),
+        iuse,
+        use_flags,
+        best.slot.clone(),
+    ))
 }
 
 /// Real `getmaskingstatus._getmaskingstatus`'s human reason strings for a
@@ -8568,11 +8612,12 @@ fn masked_dep_chain(
 /// branch wins over a first-listed one that would need a new merge.
 ///
 /// Deliberately does NOT re-check the atom's own use-deps against the
-/// installed package's recorded `USE` -- real folds that into a separate
-/// `all_use_satisfied` flag, and portuale's `atom_currently_satisfiable`
-/// gate (checked by the caller before this) already rejects an
-/// alternative whose use-deps can't hold against the *tree* candidate,
-/// which is a close enough proxy for the cases that matter.
+/// installed package's recorded `USE`: real's `all_installed` is
+/// `vardb.match(Atom(atom.cp))`, strictly cp-level, by construction blind
+/// to `[use]`. The USE side is a wholly separate fact
+/// (`all_use_satisfied`) that [`disjunction_preference`] computes and
+/// combines with this one itself -- not something this predicate's
+/// caller pre-filters away.
 fn atom_cp_installed(root: &Path, atom_str: &str) -> bool {
     let Some(atom) = portage_dep::parse_atom(atom_str) else {
         return false;
@@ -8581,6 +8626,46 @@ fn atom_cp_installed(root: &Path, atom_str: &str) -> bool {
         return true;
     }
     !installed_candidates(root, &atom.category, &atom.package).is_empty()
+}
+
+/// Real `dep_zapdeps`'s `all_installed_slots` predicate (`dep_check.py`
+/// soft 599-607, `slot_map`/`avail_slot`): whether the *slot* of the
+/// best USE-ignoring candidate for `atom_str`
+/// (`highest_available_candidate_ignoring_use`, real's `avail_pkg`) is
+/// itself installed -- `slot_map[Atom(f"{atom.cp}:{avail_pkg.slot}")]`
+/// matched against the vdb, or `virtual/` (zero-cost exemption, same as
+/// [`atom_cp_installed`]). Distinct from `atom_cp_installed`: a package
+/// can be installed in some *other* slot while the specific slot this
+/// `||` alternative would need is not, which real still counts as
+/// `unsat_use_non_installed`, not `unsat_use_installed`. A blocker is
+/// vacuously satisfied. No candidate at all (`all_available` already
+/// rejected the whole choice) counts as not-installed-in-slot.
+fn atom_installed_in_slot_of(
+    root: &Path,
+    repos: &[RepoConfig],
+    config: &portage_profile::Config,
+    atom_str: &str,
+    extra_constraints: &[String],
+) -> bool {
+    let Some(atom) = portage_dep::parse_atom(atom_str) else {
+        return false;
+    };
+    if atom.blocker != portage_dep::Blocker::None || atom.category == "virtual" {
+        return true;
+    }
+    let Some((.., slot)) = highest_available_candidate_ignoring_use(
+        repos,
+        atom_str,
+        &atom.category,
+        &atom.package,
+        config,
+        extra_constraints,
+    ) else {
+        return false;
+    };
+    installed_candidates(root, &atom.category, &atom.package)
+        .iter()
+        .any(|(_, installed_slot, _)| *installed_slot == slot)
 }
 
 /// Real `dep_zapdeps`'s `all_in_graph` predicate for a `||` alternative
@@ -8642,6 +8727,157 @@ fn atoms_all_in_graph(
             portage_dep::use_deps_satisfied(&use_deps, &valid_iuse(&iuse, config), &enabled)
         })
     })
+}
+
+/// The single probe closure `use_reduce_flat_disjunctive` calls for every
+/// `||` alternative -- real `dep_zapdeps`'s whole choice-bin
+/// classification (`dep_check.py` soft 449-523, 599-618) collapsed into
+/// one [`AltPreference`](portage_use_reduce::AltPreference) rank. Shared
+/// by both of portuale's `||`-resolution call sites (the main New/
+/// Upgrade/Reinstall walk in `backtracking_resolve`, and the `--deep`
+/// AlreadyInstalled recursion in `enqueue_dependencies`) so a fix to one
+/// can never silently miss the other again (2026-09-11 review finding
+/// F1/F2: `enqueue_dependencies` had kept its own, unfixed copy of this
+/// closure after the fine `unsat_use_*` bins shipped).
+///
+/// `constraints` is the `'backtrack`-loop's accumulated per-`cat/pkg`
+/// `runtime_pkg_mask` (empty at every non-disjunctive call site, a strict
+/// no-op) -- kept as the raw map rather than a `constraints_for(atom)`
+/// closure parameter (as first drafted): a `&dyn Fn(&str) -> &[String]`
+/// trait object needs the elided-lifetime signature `for<'a> Fn(&'a str)
+/// -> &'a [String]`, which a closure whose return actually borrows a
+/// captured map (not the input `&str`) can't satisfy without the borrow
+/// checker extending the map's borrow for the trait object's whole
+/// lifetime -- exactly the `slot_constraints` "does not live long enough"
+/// / "also borrowed as mutable" conflict this hit against the
+/// `'backtrack` loop's later `slot_constraints.entry(...)` mutations.
+/// `self_cp` is the entry currently being resolved, for the
+/// circular-self-dep check; `root_deps_running_root` is the `--root-deps`
+/// feed-in (`None` = strict no-op). See `atom_currently_satisfiable`'s,
+/// `atom_all_use_unmasked`'s, `atom_cp_installed`'s and
+/// `atom_installed_in_slot_of`'s own doc comments for the per-predicate
+/// grounding; this function only sequences them the way real
+/// `dep_zapdeps`'s per-atom loop does.
+///
+/// Real's per-atom loop probes each atom's availability once and
+/// short-circuits (`if not avail_pkg: ... break`, soft 469): review
+/// finding F3 -- for an atom with no `[use]` block (the overwhelming
+/// majority), `atom.without_use` and `atom` are the same string, so
+/// real's separate `all_available`/`all_use_satisfied` probes would do
+/// byte-identical candidate-listing work twice. This loop computes each
+/// atom's availability once and reuses it for both facts when there is no
+/// `[use]` block to strip.
+#[allow(clippy::too_many_arguments)]
+fn disjunction_preference(
+    repos: &[RepoConfig],
+    config: &portage_profile::Config,
+    root: &Path,
+    entries: &[GraphEntry],
+    self_cp: &(String, String),
+    constraints: &HashMap<(String, String), Vec<String>>,
+    root_deps_running_root: Option<&Path>,
+    atoms: &[String],
+) -> portage_use_reduce::AltPreference {
+    let constraints_for = |a: &str| -> &[String] {
+        portage_dep::parse_atom(a)
+            .and_then(|at| constraints.get(&(at.category, at.package)))
+            .map_or(&[][..], Vec::as_slice)
+    };
+    let mut all_available = true;
+    let mut all_use_satisfied = true;
+    let mut all_use_unmasked = true;
+    for a in atoms {
+        let circular_self = portage_dep::parse_atom(a).is_some_and(|at| {
+            at.blocker == portage_dep::Blocker::None
+                && (at.category.clone(), at.package.clone()) == *self_cp
+                && !atom_cp_installed(root, a)
+        });
+        if circular_self {
+            all_available = false;
+            break;
+        }
+        let stripped = portage_dep::without_use(a);
+        let extra_constraints = constraints_for(a);
+        // Real `all_available`'s per-atom probe: `mydbapi_match_pkgs(
+        // atom.without_use)` -- USE settings never affect `||` preference
+        // evaluation at this stage (dep_check.py soft 469).
+        let avail = atom_currently_satisfiable(repos, stripped, config, extra_constraints)
+            || root_deps_running_root
+                .is_some_and(|running_root| running_root_satisfies_atom(a, running_root));
+        if !avail {
+            all_available = false;
+            all_use_satisfied = false;
+            break;
+        }
+        // No `[use]` block: real's `if atom.use:` is false, so this atom
+        // trivially satisfies its own (nonexistent) use-deps -- reuse
+        // `avail` (`== true`) instead of re-probing the identical
+        // candidate list a second time (F3).
+        let use_ok = if stripped.len() == a.len() {
+            true
+        } else {
+            atom_currently_satisfiable(repos, a, config, extra_constraints)
+                || root_deps_running_root
+                    .is_some_and(|running_root| running_root_satisfies_atom(a, running_root))
+        };
+        if !use_ok {
+            all_use_satisfied = false;
+            // Real's bug-515584 probe: only evaluated for an atom whose
+            // own USE-match actually failed (dep_check.py soft 493-523).
+            if !atom_all_use_unmasked(repos, a, config, extra_constraints) {
+                all_use_unmasked = false;
+            }
+        }
+    }
+    if !all_available {
+        return portage_use_reduce::AltPreference::Unsatisfiable;
+    }
+    if all_use_satisfied {
+        // Real `dep_zapdeps` choice bin 0 -- the single list
+        // `preferred_in_graph` / `preferred_installed` / `preferred_any_slot`
+        // all alias to when `graph_db` is present. An alternative every
+        // non-blocker atom of which is either already installed
+        // (`all_installed`, cp-level -- makes `virtual/wine`'s
+        // `|| ( wine-vanilla wine-staging … )` pick the installed
+        // `wine-staging`) OR already a merge-bound node this run
+        // (`all_in_graph`, `[use]`-checked -- makes `virtual/secret-service`
+        // pick the KDE-stack-pulled `kwallet-runtime[keyring]` over the
+        // first-listed `gnome-keyring`) ranks above one that would need a
+        // fresh merge.
+        return if atoms.iter().all(|a| atom_cp_installed(root, a))
+            || atoms_all_in_graph(atoms, entries, config)
+        {
+            portage_use_reduce::AltPreference::Installed
+        } else {
+            portage_use_reduce::AltPreference::Available
+        };
+    }
+    // `!all_use_satisfied`: real's `unsat_use_*` bins -- the alternative
+    // exists but can only be merged with USE changes. First the
+    // bug-515584 gate (soft 705): if the flags that would have to change
+    // sit in `use.mask` / `use.force`, the choice is demoted to `other`
+    // (never selectable); otherwise it keeps the fine-bin ordering
+    // `unsat_use_in_graph` > `unsat_use_installed` > `unsat_use_non_installed`.
+    if !all_use_unmasked {
+        return portage_use_reduce::AltPreference::Unsatisfiable;
+    }
+    if atoms_all_in_graph(atoms, entries, config) {
+        return portage_use_reduce::AltPreference::UnsatUseInGraph;
+    }
+    // Real `unsat_use_installed`'s `all_installed_slots` (dep_check.py
+    // soft 599-607): cp-level installed is not enough -- the *slot* the
+    // best USE-ignoring candidate would pull in must also be installed
+    // (F4). A cp installed only in a different slot than this alternative
+    // targets still counts as `unsat_use_non_installed`.
+    if atoms.iter().all(|a| atom_cp_installed(root, a))
+        && atoms
+            .iter()
+            .all(|a| atom_installed_in_slot_of(root, repos, config, a, constraints_for(a)))
+    {
+        portage_use_reduce::AltPreference::UnsatUseInstalled
+    } else {
+        portage_use_reduce::AltPreference::UnsatUseNonInstalled
+    }
 }
 
 /// The best visible candidate for `atom_str` plus its `-pv`-style USE
@@ -16269,12 +16505,9 @@ fn backtracking_resolve(req: &ResolveRequest) -> Result<GraphResult, Error> {
             // only satisfying candidates are excluded by the negatives
             // this loop accumulated for its `cat/pkg` (`slot_constraints`,
             // = `runtime_pkg_mask`) counts as unsatisfiable, so the next
-            // alternative wins on the retry.
-            let disj_constraints = |a: &str| -> &[String] {
-                portage_dep::parse_atom(a)
-                    .and_then(|at| slot_constraints.get(&(at.category, at.package)))
-                    .map_or(&[][..], Vec::as_slice)
-            };
+            // alternative wins on the retry -- `disjunction_preference`
+            // takes `slot_constraints` itself (not a lookup closure over
+            // it; see that function's own doc comment for why).
             // Real `dep_zapdeps` skips a `||` alternative that would only
             // be satisfied by the package currently being resolved (a
             // circular self-dep) -- e.g. `dev-lang/go`'s BDEPEND
@@ -16288,92 +16521,27 @@ fn backtracking_resolve(req: &ResolveRequest) -> Result<GraphResult, Error> {
                 entries[entry_idx].category.clone(),
                 entries[entry_idx].package.clone(),
             );
+            // The whole `dep_zapdeps` choice-bin classification lives in
+            // the single shared `disjunction_preference` helper -- see its
+            // own doc comment (2026-09-11 review F1/F2: this closure and
+            // `enqueue_dependencies`'s used to be two independently
+            // hand-maintained copies, and only this one got the fine
+            // `unsat_use_*` bins).
             let Ok(flat_deps) = portage_use_reduce::use_reduce_flat_disjunctive(
                 &tokens,
                 &use_flags,
                 portage_use_reduce::MatchMode::Normal,
                 &mut |atoms: &[String]| {
-                    // Real `dep_zapdeps`'s two-step availability split:
-                    // `all_available` probes each atom's `[...]`-stripped
-                    // form (`mydbapi_match_pkgs(atom.without_use)`,
-                    // dep_check.py soft 469 -- "we don't want USE settings
-                    // to adversely affect || preference evaluation"), so a
-                    // candidate that exists but whose USE-deps can't be
-                    // satisfied still keeps the alternative in play; only
-                    // then does `all_use_satisfied` / bug-515584 decide
-                    // *which* of the fine `unsat_use_*` bins it lands in.
-                    let all_available = atoms.iter().all(|a| {
-                        let circular_self = portage_dep::parse_atom(a).is_some_and(|at| {
-                            at.blocker == portage_dep::Blocker::None
-                                && (at.category.clone(), at.package.clone()) == self_cp
-                                && !atom_cp_installed(root, a)
-                        });
-                        !circular_self
-                            && (atom_currently_satisfiable(
-                                &repos,
-                                portage_dep::without_use(a),
-                                config,
-                                disj_constraints(a),
-                            ) || root_deps_running_root
-                                .is_some_and(|root| running_root_satisfies_atom(a, root)))
-                    });
-                    if !all_available {
-                        return portage_use_reduce::AltPreference::Unsatisfiable;
-                    }
-                    // Real's `avail_pkg_use = mydbapi_match_pkgs(atom)`
-                    // (soft 493): does any candidate satisfy the `[use]`
-                    // block too. If yes for every atom, this is one of
-                    // the *preferred* bins (soft 694); if not, the
-                    // bug-515584 `all_use_unmasked` probe decides between
-                    // the fine `unsat_use_*` bins and `other` (soft 705).
-                    let all_use_satisfied = atoms.iter().all(|a| {
-                        atom_currently_satisfiable(&repos, a, config, disj_constraints(a))
-                            || root_deps_running_root
-                                .is_some_and(|root| running_root_satisfies_atom(a, root))
-                    });
-                    if all_use_satisfied {
-                        // Real `dep_zapdeps` choice bin 0 -- the single list
-                        // `preferred_in_graph` / `preferred_installed` /
-                        // `preferred_any_slot` all alias to when `graph_db` is
-                        // present. An alternative every non-blocker atom of
-                        // which is either already installed (`all_installed`,
-                        // cp-level -- makes `virtual/wine`'s
-                        // `|| ( wine-vanilla wine-staging … )` pick the
-                        // installed `wine-staging`) OR already a merge-bound
-                        // node this run (`all_in_graph`, `[use]`-checked --
-                        // makes `virtual/secret-service` pick the
-                        // KDE-stack-pulled `kwallet-runtime[keyring]` over the
-                        // first-listed `gnome-keyring`) ranks above one that
-                        // would need a fresh merge.
-                        return if atoms.iter().all(|a| atom_cp_installed(root, a))
-                            || atoms_all_in_graph(atoms, &entries, config)
-                        {
-                            portage_use_reduce::AltPreference::Installed
-                        } else {
-                            portage_use_reduce::AltPreference::Available
-                        };
-                    }
-                    // `!all_use_satisfied`: real's `unsat_use_*` bins --
-                    // the alternative exists but can only be merged with
-                    // USE changes. First the bug-515584 gate (soft 705):
-                    // if the flags that would have to change sit in
-                    // `use.mask` / `use.force`, the choice is demoted to
-                    // `other` (never selectable); otherwise it keeps the
-                    // fine-bin ordering `unsat_use_in_graph` >
-                    // `unsat_use_installed` > `unsat_use_non_installed`.
-                    let all_use_unmasked = atoms
-                        .iter()
-                        .all(|a| atom_all_use_unmasked(&repos, a, config));
-                    if !all_use_unmasked {
-                        return portage_use_reduce::AltPreference::Unsatisfiable;
-                    }
-                    if atoms_all_in_graph(atoms, &entries, config) {
-                        portage_use_reduce::AltPreference::UnsatUseInGraph
-                    } else if atoms.iter().all(|a| atom_cp_installed(root, a)) {
-                        portage_use_reduce::AltPreference::UnsatUseInstalled
-                    } else {
-                        portage_use_reduce::AltPreference::UnsatUseNonInstalled
-                    }
+                    disjunction_preference(
+                        &repos,
+                        config,
+                        root,
+                        &entries,
+                        &self_cp,
+                        &slot_constraints,
+                        root_deps_running_root,
+                        atoms,
+                    )
                 },
             ) else {
                 continue;
@@ -17388,43 +17556,30 @@ fn enqueue_dependencies(
     // New/Upgrade/Reinstall loop's own identical fix, above, for the
     // full grounding (this is `resolve_pretend_graph`'s own
     // `--deep`/AlreadyInstalled-recursion counterpart to it).
-    let disj_c = |a: &str| -> &[String] {
-        portage_dep::parse_atom(a)
-            .and_then(|at| disj_constraints.get(&(at.category, at.package)))
-            .map_or(&[][..], Vec::as_slice)
-    };
     // Real `dep_zapdeps` skips a `||` alternative satisfied only by the
     // package currently being resolved (circular self-dep) -- see the
     // main New/Upgrade `||` closure's identical `self_cp` check.
     let self_cp = (category.to_string(), package.to_string());
+    // The whole `dep_zapdeps` choice-bin classification lives in the
+    // single shared `disjunction_preference` helper -- see its own doc
+    // comment (2026-09-11 review F1/F2: this closure used to be its own,
+    // unfixed copy that never got the fine `unsat_use_*` bins the main
+    // New/Upgrade walk's closure did).
     let Ok(flat_deps) = portage_use_reduce::use_reduce_flat_disjunctive(
         &tokens,
         &use_flags,
         portage_use_reduce::MatchMode::Normal,
         &mut |atoms: &[String]| {
-            let all_available = atoms.iter().all(|a| {
-                let circular_self = portage_dep::parse_atom(a).is_some_and(|at| {
-                    at.blocker == portage_dep::Blocker::None
-                        && (at.category.clone(), at.package.clone()) == self_cp
-                        && !atom_cp_installed(root, a)
-                });
-                !circular_self
-                    && (atom_currently_satisfiable(repos, a, config, disj_c(a))
-                        || root_deps_running_root
-                            .is_some_and(|root| running_root_satisfies_atom(a, root)))
-            });
-            if !all_available {
-                portage_use_reduce::AltPreference::Unsatisfiable
-            } else if atoms.iter().all(|a| atom_cp_installed(root, a))
-                || atoms_all_in_graph(atoms, entries, config)
-            {
-                // Real `dep_zapdeps` choice bin 0 (`preferred_installed` /
-                // `preferred_in_graph`) -- see the identical check in the
-                // main New/Upgrade `||` closure.
-                portage_use_reduce::AltPreference::Installed
-            } else {
-                portage_use_reduce::AltPreference::Available
-            }
+            disjunction_preference(
+                repos,
+                config,
+                root,
+                entries,
+                &self_cp,
+                disj_constraints,
+                root_deps_running_root,
+                atoms,
+            )
         },
     ) else {
         return;
@@ -29613,7 +29768,8 @@ mod tests {
         assert!(atom_all_use_unmasked(
             &repos,
             "dev-libs/unsatusealt[unsatuseorflag]",
-            &config
+            &config,
+            &[]
         ));
     }
 
@@ -29639,8 +29795,9 @@ mod tests {
         let repos = find_repos(&root).expect("fixture repos.conf resolves");
         // The 1.0 version keeps its +x default (unmasked) -- only the
         // masked 2.0 should probe false.
-        let masked = atom_all_use_unmasked(&repos, "=dev-libs/slotusetarget-2.0[x]", &config);
-        let unmasked = atom_all_use_unmasked(&repos, "=dev-libs/slotusetarget-1.0[x]", &config);
+        let masked = atom_all_use_unmasked(&repos, "=dev-libs/slotusetarget-2.0[x]", &config, &[]);
+        let unmasked =
+            atom_all_use_unmasked(&repos, "=dev-libs/slotusetarget-1.0[x]", &config, &[]);
         assert!(!masked, "mask-affected x on 2.0 must demote to other");
         assert!(unmasked, "x default-enabled on 1.0 stays selectable");
     }
@@ -29665,14 +29822,16 @@ mod tests {
         )
         .expect("fixture config resolves");
         let repos = find_repos(&root).expect("fixture repos.conf resolves");
-        let (candidate_str, keywords, iuse, use_flags) = highest_available_candidate_ignoring_use(
-            &repos,
-            "dev-libs/unsatusealt[unsatuseorflag]",
-            "dev-libs",
-            "unsatusealt",
-            &config,
-        )
-        .expect("an ignoring-use candidate exists");
+        let (candidate_str, keywords, iuse, use_flags, slot) =
+            highest_available_candidate_ignoring_use(
+                &repos,
+                "dev-libs/unsatusealt[unsatuseorflag]",
+                "dev-libs",
+                "unsatusealt",
+                &config,
+                &[],
+            )
+            .expect("an ignoring-use candidate exists");
         assert_eq!(
             candidate_str, "dev-libs/unsatusealt-1.0:0/0::testrepo",
             "the sole visible version is found"
@@ -29680,6 +29839,7 @@ mod tests {
         assert!(keywords.contains(&"amd64".to_string()));
         assert!(iuse.contains("unsatuseorflag"));
         assert!(!use_flags.contains("unsatuseorflag"), "off by default");
+        assert_eq!(slot, "0");
 
         assert!(
             highest_available_candidate_ignoring_use(
@@ -29688,8 +29848,57 @@ mod tests {
                 "dev-libs",
                 "doesnotexist-unsatuseor",
                 &config,
+                &[],
             )
             .is_none()
+        );
+    }
+
+    #[test]
+    fn highest_available_candidate_ignoring_use_honours_extra_constraints() {
+        // F5: real's `mydbapi` in `dep_zapdeps` is `_dep_check_composite_db`,
+        // which honours the `'backtrack` loop's accumulated
+        // `runtime_pkg_mask` -- so once backtracking excludes the highest
+        // version of a `cat/pkg`, the bug-515584 probe must be seeded from
+        // the highest *unmasked* version instead. `dev-libs/slotusetarget`
+        // has two visible versions (1.0, 2.0); a negative constraint
+        // excluding 2.0 must fall back to 1.0.
+        let root = fixtures_root();
+        let config = portage_profile::resolve_config(
+            &root,
+            &root.join("repo"),
+            &[("overlay".to_string(), root.join("overlay"))],
+            &[],
+            "testrepo",
+            &HashMap::new(),
+            &root,
+        )
+        .expect("fixture config resolves");
+        let repos = find_repos(&root).expect("fixture repos.conf resolves");
+        let (unconstrained, ..) = highest_available_candidate_ignoring_use(
+            &repos,
+            "dev-libs/slotusetarget[x]",
+            "dev-libs",
+            "slotusetarget",
+            &config,
+            &[],
+        )
+        .expect("an ignoring-use candidate exists");
+        assert_eq!(unconstrained, "dev-libs/slotusetarget-2.0:0/0::testrepo");
+
+        let constraints = vec!["!=dev-libs/slotusetarget-2.0".to_string()];
+        let (constrained, ..) = highest_available_candidate_ignoring_use(
+            &repos,
+            "dev-libs/slotusetarget[x]",
+            "dev-libs",
+            "slotusetarget",
+            &config,
+            &constraints,
+        )
+        .expect("an ignoring-use candidate exists under the constraint");
+        assert_eq!(
+            constrained, "dev-libs/slotusetarget-1.0:0/0::testrepo",
+            "the highest UNMASKED candidate is returned once backtracking excludes 2.0"
         );
     }
 }

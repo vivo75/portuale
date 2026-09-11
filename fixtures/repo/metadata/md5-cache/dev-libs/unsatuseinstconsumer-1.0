@@ -1,0 +1,7 @@
+DEFINED_PHASES=-
+DESCRIPTION=fixture: New; RDEPENDs the installed dev-libs/unsatuseinst so a --deep walk recurses into it via enqueue_dependencies
+EAPI=8
+KEYWORDS=amd64
+RDEPEND=dev-libs/unsatuseinst
+SLOT=0
+_md5_=0000000000000000000000000000000
