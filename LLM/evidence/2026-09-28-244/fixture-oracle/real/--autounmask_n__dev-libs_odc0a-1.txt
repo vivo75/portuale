@@ -1,0 +1,14 @@
+Undefined license group 'FREE'
+
+These are the packages that would be merged, in order:
+
+Calculating dependencies ... done!
+Dependency resolution took 0.10 s (backtrack: 0/20).
+
+
+emerge: there are no ebuilds built with USE flags to satisfy "dev-libs/odc0d[-baz]".
+!!! One of the following packages is required to complete your request:
+- dev-libs/odc0d-1::testrepo (Change USE: -baz)
+(dependency required by "dev-libs/odc0b-1::testrepo[-bar]" [ebuild])
+(dependency required by "dev-libs/odc0a-1::testrepo[foo]" [ebuild])
+(dependency required by "=dev-libs/odc0a-1" [argument])

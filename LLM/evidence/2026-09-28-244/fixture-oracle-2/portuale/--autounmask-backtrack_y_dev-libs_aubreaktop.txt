@@ -1,0 +1,13 @@
+These are the packages that would be merged, in order:
+
+Calculating dependencies ... done!
+Dependency resolution took (backtrack: 2/10).
+
+
+emerge: there are no ebuilds built with USE flags to satisfy "dev-libs/aubreaksub[brk]".
+!!! One of the following packages is required to complete your request:
+- dev-libs/aubreaksub-1.0::testrepo (Change USE: +brk)
+(dependency required by "dev-libs/aubreaktop-1.0::testrepo" [ebuild])
+(dependency required by "dev-libs/aubreaktop" [argument])
+(dependency required by "dev-libs/aubreakunwant-1.0::testrepo" [ebuild])
+(dependency required by "dev-libs/aubreakwant-1.0::testrepo" [ebuild])
