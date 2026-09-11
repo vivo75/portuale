@@ -73,6 +73,18 @@ fn conflict_166(versions: Vec<(&str, bool)>) -> SlotConflict {
     }
 }
 
+/// Arguments of [`arg_input_166`].
+struct ArgInput166Args<'a> {
+    conflicts: &'a [SlotConflict],
+    top_level: &'a HashSet<(String, String)>,
+    excluded: &'a [String],
+    selective: bool,
+    replace_cps: &'a BTreeSet<(String, String)>,
+    root: &'a Path,
+    repos: &'a [RepoConfig],
+    config: &'a portage_profile::Config,
+}
+
 /// One installed instance with the given `USE` record.
 fn use_install_166(root: &Path, cat: &str, pf: &str, use_flags: &str) {
     let d = root.join("var/db/pkg").join(cat).join(pf);

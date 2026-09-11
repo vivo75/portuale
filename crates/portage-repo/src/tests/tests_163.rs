@@ -837,3 +837,42 @@ fn plain_163(cat: &str, pkg: &str, atom: &str) -> PlainMissDepReport {
         chain: Vec::new(),
     }
 }
+
+/// A record with a new token for a known atom is appended, then
+/// coalesced into the atom's line.
+#[test]
+fn assemble_result_new_token_for_a_known_atom_is_coalesced() {
+    let dir = dir_163("asm-coal");
+    let repos = repo_pkgs_163(&dir, &[]);
+    let config = cfg_163();
+    let no_strings: Vec<String> = Vec::new();
+    let atoms: Vec<String> = Vec::new();
+    let ctx = ctx_163(Ctx163Args {
+        root: &dir,
+        config: &config,
+        repos,
+        atoms: &atoms,
+        no_strings: &no_strings,
+        buildpkgonly: false,
+        backtrack_enabled: false,
+        ignore_slot_op: false,
+        rebuild_new_slot: true,
+        reachable: HashSet::new(),
+    });
+    let mut pass = pass_163();
+    pass.autounmask_use_changes = vec![change_163(">=dev-libs/a-1.0", "x", &[])];
+    let params = BacktrackParams {
+        autounmask_use_change_records: vec![change_163(">=dev-libs/a-1.0", "y", &[])],
+        ..Default::default()
+    };
+    let result = assemble_result(&ctx, &params, pass, &config, 0);
+    assert_eq!(
+        result
+            .autounmask_use_changes
+            .iter()
+            .map(|c| (c.atom.clone(), c.token.clone()))
+            .collect::<Vec<_>>(),
+        vec![(">=dev-libs/a-1.0".to_string(), "x y".to_string())]
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}

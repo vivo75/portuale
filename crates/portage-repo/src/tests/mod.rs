@@ -2241,6 +2241,7 @@ mod depclean;
 mod direct_solve;
 mod eliminate;
 mod entry;
+mod feedback;
 mod force_scan;
 mod graph;
 mod info_pkgs;
