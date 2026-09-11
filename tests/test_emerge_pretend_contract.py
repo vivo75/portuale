@@ -522,7 +522,7 @@ CASES = [
         ["--pretend", "dev-libs/unsatusemasked"],
         1,
     ),
-    ("recursion: unresolvable dep aborts the resolve (exit 1, list still shown until Slice 4)", ["--pretend", "dev-libs/missingdep"], 1),
+    ("recursion: unresolvable dep aborts the resolve (exit 1, no list since Slice 4)", ["--pretend", "dev-libs/missingdep"], 1),
     ("recursion: dedup across DEPEND and RDEPEND", ["--pretend", "dev-libs/dualdep"], 0),
     ("recursion: BDEPEND is walked", ["--pretend", "dev-libs/bdependpkg"], 0),
     ("recursion: PDEPEND is walked", ["--pretend", "dev-libs/pdependpkg"], 0),
@@ -2704,10 +2704,10 @@ def test_unbreakable_build_time_cycle_prints_the_circular_deps_error(
     """hardcyclea DEPENDs hardcycleb which DEPENDs hardcyclea, both
     unbuilt, empty RDEPEND, no IUSE -- every edge an unsatisfied
     build-time dep with no run-time alternative, so real portage's
-    `_ignore_runtime` scan can't linearize it. The full merge list still
-    goes to stdout, followed by the reduced cycle-only re-display (real
-    `display(handler.merge_list)` -- flat portuale lines, since
-    portuale's tree model dedups shared nodes); the `* Error: circular
+    `_ignore_runtime` scan can't linearize it. Since Slice 4 the merge
+    list is the stuck remainder only (no full list, no separate
+    re-display -- real `_show_circular_deps` shows
+    `display(handler.merge_list)` exactly once); the `* Error: circular
     dependencies:` block (real `_show_circular_deps`) goes to stderr;
     exit 1. With no IUSE, `_find_suggestions` finds nothing and the
     generic advisory prints (the `else` branch) -- see
@@ -2723,9 +2723,6 @@ def test_unbreakable_build_time_cycle_prints_the_circular_deps_error(
     assert rust.stdout == python.stdout
     assert rust.stderr == python.stderr
     assert rust.stdout == (
-        "[ebuild  N     ] dev-libs/hardcyclea-1.0 \n"
-        "[ebuild  N     ] dev-libs/hardcycleb-1.0 \n"
-        "\n"
         "[ebuild  N     ] dev-libs/hardcyclea-1.0 \n"
         "[ebuild  N     ] dev-libs/hardcycleb-1.0 \n"
     )
@@ -2849,13 +2846,12 @@ def test_circular_dep_four_ring_reports_redisplay_suggestion_and_lot_of_cycles(
     dev-libs/cyc4d form a four-ring of build-time deps with the
     cyc4a→cyc4b edge gated behind USE=x (default on). Real
     `digraph.get_cycles` records one ring per node (rotations count
-    separately), so four records trip `large_cycle_count`, and the
-    stuck remainder re-displays as its own list (verified live against
-    3.0.82.2 on the same shape). Portuale prints the full merge list,
-    then the reduced cycle-only re-display (leaf-drain order -- flat
-    lines, since portuale's tree model dedups shared nodes and never
-    abandons the list), then the error block with the `-x` suggestion
-    and the lot-of-cycles trailer. Exit 1. Rust == Python
+    separately), so four records trip `large_cycle_count` (verified live
+    against 3.0.82.2 on the same shape). Since Slice 4 the merge list is
+    the stuck remainder only (leaf-drain order -- flat lines, since
+    portuale's tree model dedups shared nodes; no separate re-display,
+    which would duplicate it), then the error block with the `-x`
+    suggestion and the lot-of-cycles trailer. Exit 1. Rust == Python
     byte-identical, both streams pinned."""
     args = ["--pretend", "dev-libs/cyc4a"]
     rust = _run([str(emerge_binary)], args, fixture_env)
@@ -2863,11 +2859,6 @@ def test_circular_dep_four_ring_reports_redisplay_suggestion_and_lot_of_cycles(
     assert rust.returncode == 1 and py.returncode == 1
     assert rust.stdout == py.stdout and rust.stderr == py.stderr
     assert rust.stdout.splitlines() == [
-        "[ebuild  N     ] dev-libs/cyc4a-1.0  USE=\"x\"",
-        "[ebuild  N     ] dev-libs/cyc4d-1.0 ",
-        "[ebuild  N     ] dev-libs/cyc4c-1.0 ",
-        "[ebuild  N     ] dev-libs/cyc4b-1.0 ",
-        "",
         "[ebuild  N     ] dev-libs/cyc4a-1.0  USE=\"x\"",
         "[ebuild  N     ] dev-libs/cyc4d-1.0 ",
         "[ebuild  N     ] dev-libs/cyc4c-1.0 ",
@@ -2894,28 +2885,6 @@ def test_circular_dep_four_ring_reports_redisplay_suggestion_and_lot_of_cycles(
     )
 
 
-_ABORT_NO_LIST_ATOMS = [
-    "dev-libs/abort-masked-mid",
-    "dev-libs/abort-masked-last",
-    "dev-libs/abort-unsat-mid",
-    "dev-libs/abort-unsat-last",
-    # Slice 3 precedence oracle: masked dep + hard cycle in one top --
-    # real abandons the walk before serialization ever runs, so no list
-    # and no circular block either.
-    "dev-libs/abort-masked-cycle",
-]
-
-_ABORT_CYCLE_ATOMS = [
-    "dev-libs/abort-cycle-mid",
-    "dev-libs/abort-cycle-last",
-    # Slice 3 fourth-shape oracle (spec §4d): autounmask changes
-    # coinciding with the cycle -- real cuts backtracking at try 0 and
-    # shows the same stuck remainder, then the USE-changes block after
-    # the circular block.
-    "dev-libs/abort-au-cycle",
-    "dev-libs/abort-au-restart-cycle",
-]
-
 _ABORT_MODES = [
     ["--pretend", "-pv"],
     ["--pretend", "-pvt"],
@@ -2934,27 +2903,48 @@ def _merge_lines(stdout: str) -> list[str]:
     ]
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="backlog #19 abort path: real exits 1 with no merge list on an "
-    "unfixable masked/unsat dep (docs/abort-path-spec.md §4a/§4b); portuale "
-    "still prints the full list and exits 0",
+@pytest.mark.parametrize(
+    "atom,mode",
+    [
+        pytest.param(a, m, id=f"{mid}-{a.split('/')[1]}")
+        for a in [
+            "dev-libs/abort-masked-mid",
+            "dev-libs/abort-masked-last",
+            "dev-libs/abort-unsat-mid",
+            "dev-libs/abort-unsat-last",
+        ]
+        for (mid, m) in [
+            ("pv", ["--pretend", "-pv"]),
+            ("pvt", ["--pretend", "-pvt"]),
+            ("columns", ["--pretend", "-pv", "--columns"]),
+        ]
+    ]
+    + [
+        pytest.param(
+            "dev-libs/abort-masked-last",
+            ["--pretend", "--debug"],
+            id="debug-abort-masked-last",
+        ),
+        pytest.param(
+            "dev-libs/abort-unsat-last",
+            ["--pretend", "--debug"],
+            id="debug-abort-unsat-last",
+        ),
+    ],
 )
-@pytest.mark.parametrize("atom", _ABORT_NO_LIST_ATOMS)
-@pytest.mark.parametrize("mode", _ABORT_MODES, ids=["pv", "pvt", "columns", "debug"])
 def test_abort_path_masked_unsat_suppresses_merge_list(
     atom, mode, emerge_binary, emerge_pretend_python, fixture_env
 ):
-    """Oracle-pinned target (live-captured against real 3.0.81.3, see
+    """Oracle-pinned (live-captured against real 3.0.81.3, see
     `fixtures/abort-captures/` + `docs/abort-path-spec.md`): a masked-only
     or unsatisfiable dependency aborts the resolve — exit 1, zero merge
     lines and no `Total:` line on stdout in every output mode (the error
     block alone goes to stderr). The `-last` siblings pin that the failing
     dep's declared position is unobservable: real admits nothing observable
-    either way. Rust == Python is asserted now; since Slice 3 the abort
-    outcome is produced (exit 1 with the gate on), the list suppression
-    lands in Slice 4 and the error blocks in Slice 5. `abort-masked-cycle`
-    additionally pins the precedence oracle: no circular block either."""
+    either way. Slice 4 renders the (empty) partial instead of the full
+    list with the gate on; the `--debug` cases for the `-mid` atoms and
+    `abort-masked-cycle` stay xfailed below (pre-existing dump-order gap
+    and Slice-5 error-block work respectively). Rust == Python asserted."""
     # Test command lines carry explicit --pretend (suite convention: never
     # exercise the real-merge path against the fixture ROOT). The oracle
     # ran bare -pv/-pvt; the flag is a no-op on the abort path (both forms
@@ -2974,55 +2964,221 @@ def test_abort_path_masked_unsat_suppresses_merge_list(
 
 @pytest.mark.xfail(
     strict=True,
-    reason="backlog #19 abort path: real shows only the _serialize_tasks "
-    "stuck remainder on an unserializable cycle (docs/abort-path-spec.md "
-    "§4c); portuale still prepends the full flat list with leaf members",
+    reason="backlog #19 Slice 5: abort-masked-cycle's MaskedDep outcome "
+    "must also suppress the circular block (real abandons the walk before "
+    "serialization ever runs -- docs/abort-path-spec.md); the list "
+    "suppression itself ships in Slice 4",
 )
-@pytest.mark.parametrize("atom", _ABORT_CYCLE_ATOMS)
+@pytest.mark.parametrize("atom", ["dev-libs/abort-masked-cycle"])
 @pytest.mark.parametrize("mode", _ABORT_MODES, ids=["pv", "pvt", "columns", "debug"])
+def test_abort_path_masked_cycle_hides_circular_block(
+    atom, mode, emerge_binary, emerge_pretend_python, fixture_env
+):
+    """Slice 3 precedence oracle: masked dep + hard cycle in one top --
+    real abandons the walk before serialization ever runs, so no list and
+    no circular block either. Slice 4 suppresses the list; suppressing the
+    circular block for a MaskedDep outcome is Slice 5's error-block
+    wiring."""
+    args = [*mode, atom]
+    rust = _run([str(emerge_binary)], args, fixture_env)
+    py = _run(emerge_pretend_python, args, fixture_env)
+    assert rust.returncode == py.returncode
+    assert rust.stdout == py.stdout and rust.stderr == py.stderr
+    assert rust.returncode == 1
+    assert _merge_lines(rust.stdout) == []
+    assert "Total:" not in rust.stdout
+    assert "circular dependencies" not in rust.stderr
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="pre-existing resolver ordering gap (not #19): Rust admits a "
+    "NoVisibleCandidate dependency earlier than Python (maskeddep at index "
+    "1 vs 2 -- visible in --json merge_order and the --debug Stage-1 "
+    "digraph dump), so split-stream comparison diverges on the -mid "
+    "atoms; the abort rendering itself is identical",
+)
+@pytest.mark.parametrize("atom", ["dev-libs/abort-masked-mid", "dev-libs/abort-unsat-mid"])
+def test_abort_debug_digraph_dump_order_matches(
+    atom, emerge_binary, emerge_pretend_python, fixture_env
+):
+    """The `--debug` Stage-1 digraph dump and `--json` merge_order expose
+    entry-admission order, and the two implementations admit the
+    NoVisibleCandidate entry at different positions for the `-mid` atoms
+    (Rust: NVC second; Python: NVC third -- e.g. maskeddep merge_order 1
+    vs 2). Everything the abort path renders (list suppression, counters,
+    error blocks, exit codes) already matches; this pins the remaining
+    order-only divergence for a future resolver-ordering slice."""
+    for args in (["--pretend", "--debug", atom],):
+        rust = _run([str(emerge_binary)], args, fixture_env)
+        py = _run(emerge_pretend_python, args, fixture_env)
+        assert rust.returncode == py.returncode == 1
+        assert rust.stdout == py.stdout and rust.stderr == py.stderr
+
+
+@pytest.mark.parametrize(
+    "atom,mode",
+    [
+        pytest.param(a, m, id=f"{mid}-{a.split('/')[1]}")
+        for a in [
+            "dev-libs/abort-cycle-mid",
+            "dev-libs/abort-cycle-last",
+        ]
+        for (mid, m) in [
+            ("pv", ["--pretend", "-pv"]),
+            ("pvt", ["--pretend", "-pvt"]),
+            ("columns", ["--pretend", "-pv", "--columns"]),
+            ("debug", ["--pretend", "--debug"]),
+        ]
+    ],
+)
 def test_abort_path_cycle_shows_reduced_list_only(
     atom, mode, emerge_binary, emerge_pretend_python, fixture_env
 ):
-    """Oracle-pinned target (live-captured, see `fixtures/abort-captures/`
-    + `docs/abort-path-spec.md`): an unserializable cycle aborts with exit
+    """Oracle-pinned (live-captured, see `fixtures/abort-captures/` +
+    `docs/abort-path-spec.md`): an unserializable cycle aborts with exit
     1 and the merge list is the stuck remainder only — the unrelated
     leaves (`abort-leaf-a/b`, drained before the give-up) are absent while
     the top and both cycle arms stay; `Total:` counters are computed over
-    that reduced list. Mid/last pin that the cycle entry's declared
-    position is unobservable in real's output. The `abort-au-*` variants
-    pin the fourth shape (spec §4d): the same remainder, the circular
-    block, and then the USE-changes block (portuale today early-exits on
-    the autounmask change before the circular block is reached). Rust ==
-    Python is asserted now; the leaf-absence assertion fails until Slice
-    4 routes the remainder through as the only list."""
+    that reduced list (unique packages -- the tree-duplicated row count
+    stays a deliberate G0.2 cut). Mid/last pin that the cycle entry's
+    declared position is unobservable in real's output. Slice 4 renders
+    the remainder as the only list; the `abort-au-*` fourth-shape order
+    stays xfailed below. Rust == Python asserted. Mode-shaped
+    assertions: `--columns` splits the version into `[x.y::repo]`, and
+    `--debug` without `-v` prints no `Total:` line (real: verbosity != 3
+    -- the oracle `--debug` capture shows the remainder with no counters
+    either)."""
     args = [*mode, atom]
     rust = _run([str(emerge_binary)], args, fixture_env)
     py = _run(emerge_pretend_python, args, fixture_env)
     assert rust.returncode == py.returncode == 1
     assert rust.stdout == py.stdout and rust.stderr == py.stderr
-    assert "abort-leaf" not in rust.stdout
-    assert "abort-cycle-a-1.0" in rust.stdout
-    assert "Total:" in rust.stdout
+    # Merge-line-scoped: `--debug` stdout also carries the full-walk
+    # narration (`Child:`/`Candidates:` name every visited dep, leaves
+    # included -- the oracle `--debug` capture walks them too); only the
+    # merge list itself is the reduced remainder.
+    merge_lines = _merge_lines(rust.stdout)
+    assert not any("abort-leaf" in line for line in merge_lines)
+    assert any("abort-cycle-a" in line for line in merge_lines)
+    if mode == ["--pretend", "--debug"]:
+        assert "Total:" not in rust.stdout
+    else:
+        assert "Total:" in rust.stdout
     assert "circular dependencies" in rust.stderr
-    if atom.startswith("dev-libs/abort-au-"):
-        assert rust.stderr.index("circular dependencies") < rust.stderr.index(
-            "USE changes are necessary"
-        )
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="backlog #19 Slice 5: the autounmask USE-changes block must "
+    "follow the circular block (real display_problems order -- "
+    "docs/abort-path-spec.md); portuale's error-block order for the "
+    "coinciding autounmask+cycle shape is still Slice-3's",
+)
+@pytest.mark.parametrize(
+    "atom", ["dev-libs/abort-au-cycle", "dev-libs/abort-au-restart-cycle"]
+)
+@pytest.mark.parametrize("mode", _ABORT_MODES, ids=["pv", "pvt", "columns", "debug"])
+def test_abort_path_au_cycle_orders_use_block_after_circular(
+    atom, mode, emerge_binary, emerge_pretend_python, fixture_env
+):
+    """Fourth shape (spec §4d): autounmask changes coinciding with the
+    cycle -- the same stuck remainder, the circular block, and then the
+    USE-changes block. Slice 4 renders the remainder; the block order is
+    Slice 5's error-block wiring."""
+    args = [*mode, atom]
+    rust = _run([str(emerge_binary)], args, fixture_env)
+    py = _run(emerge_pretend_python, args, fixture_env)
+    assert rust.returncode == py.returncode == 1
+    assert rust.stdout == py.stdout and rust.stderr == py.stderr
+    merge_lines = _merge_lines(rust.stdout)
+    assert not any("abort-leaf" in line for line in merge_lines)
+    assert any("abort-cycle-a" in line for line in merge_lines)
+    assert "circular dependencies" in rust.stderr
+    assert rust.stderr.index("circular dependencies") < rust.stderr.index(
+        "USE changes are necessary"
+    )
+
+
+@pytest.mark.parametrize(
+    "atom,expected_packages,expected_reason",
+    [
+        (
+            "dev-libs/abort-masked-mid",
+            [],
+            {"reason": "masked-dep", "atom": "dev-libs/maskeddep"},
+        ),
+        (
+            "dev-libs/abort-unsat-mid",
+            [],
+            {"reason": "unsatisfied-atom", "atom": "dev-libs/abort-nonexistent"},
+        ),
+        (
+            "dev-libs/abort-cycle-mid",
+            ["abort-cycle-mid", "abort-cycle-a", "abort-cycle-b"],
+            {"reason": "unserializable-cycle"},
+        ),
+    ],
+)
+def test_abort_path_json_carries_partial_list_and_aborted_reason(
+    atom, expected_packages, expected_reason, emerge_binary, emerge_pretend_python,
+    fixture_env,
+):
+    """Slice 4 `--json` provenance (plan: "add an `aborted` field with the
+    reason; keep the partial list as the merge_list array"): on an abort
+    the `entries` array is the partial list (empty for masked/unsat, the
+    stuck remainder for cycles) and `aborted` carries the reason (+
+    atom/parent for dep shapes, members for cycles); `null` on the
+    complete path (pinned by the diamond case). Exit 1 like every other
+    format (real `actions.py:460-462` runs before any format split).
+     Rust == Python asserted, including the exact reason payloads."""
+    args = ["--pretend", "--json", atom]
+    rust = _run([str(emerge_binary)], args, fixture_env)
+    py = _run(emerge_pretend_python, args, fixture_env)
+    assert rust.returncode == py.returncode == 1
+    assert rust.stderr == py.stderr
+    payload = json.loads(rust.stdout)
+    assert payload == json.loads(py.stdout)
+    assert [e["package"] for e in payload["entries"]] == expected_packages
+    aborted = payload["aborted"]
+    assert aborted is not None
+    for key, value in expected_reason.items():
+        assert aborted[key] == value
+    if expected_reason["reason"] == "unserializable-cycle":
+        assert aborted["members"] == [
+            "dev-libs/abort-cycle-mid-1.0",
+            "dev-libs/abort-cycle-a-1.0",
+            "dev-libs/abort-cycle-b-1.0",
+        ]
+
+
+def test_abort_path_json_complete_resolve_carries_null_aborted(
+    emerge_binary, emerge_pretend_python, fixture_env
+):
+    """The `aborted` field is `null` on the complete path (and the full
+    list stays the `entries` array) -- pinned on the diamond so the new
+    key cannot regress ordinary `--json` consumers."""
+    args = ["--pretend", "--json", "dev-libs/diamond"]
+    rust = _run([str(emerge_binary)], args, fixture_env)
+    py = _run(emerge_pretend_python, args, fixture_env)
+    assert rust.returncode == py.returncode == 0
+    payload = json.loads(rust.stdout)
+    assert payload == json.loads(py.stdout)
+    assert payload["aborted"] is None
+    assert {e["package"] for e in payload["entries"]} == {
+        "diamond",
+        "shared-a",
+        "shared-b",
+        "common",
+    }
 
 
 @pytest.mark.parametrize(
     "atom",
     [
-        "dev-libs/abort-cycle-mid",
-        "dev-libs/abort-cycle-last",
-        "dev-libs/abort-au-cycle",
         "dev-libs/abort-au-plain",
-        # masked dep + cycle: the circular exit 1 predates the gate, so
-        # the gate is invisible here too (the abort reason is MaskedDep).
-        "dev-libs/abort-masked-cycle",
         "dev-libs/aucasctop",
         "dev-libs/diamond",
-        "dev-libs/hardcyclea",
         "dev-libs/newpkg",
     ],
 )
@@ -3031,13 +3187,11 @@ def test_abort_path_gate_is_behaviour_neutral(
 ):
     """Merge-order-unchanged guard (plan invariant): `PORTUALE_ABORT_PATH=0`
     (legacy fallback) and the default (gate on) are byte-identical on both
-    implementations — full merge lists, counters, notices, and exit
-    codes — for everything the gate does not yet change: cycle fixtures
-    (exit 1 either way, the circular exit predates the gate), autounmask
-    changes without an abort, a diamond, a hard cycle, and a plain new
-    install. Slice 3 moved the masked/unsat atoms to
-    test_abort_path_gate_off_restores_legacy_exit_code (their exit code
-    now depends on the gate)."""
+    implementations for everything without an abort outcome -- autounmask
+    changes without an abort, a diamond, and a plain new install. Abort
+    atoms render the partial list with the gate on and the full legacy
+    list with it off, so they live in the abort tests above and
+    test_abort_path_gate_off_restores_legacy_exit_code below, not here."""
     args = ["--pretend", atom]
     off_env = dict(fixture_env, PORTUALE_ABORT_PATH="0")
     rust_on = _run([str(emerge_binary)], args, fixture_env)
@@ -3074,24 +3228,27 @@ def test_abort_path_gate_is_behaviour_neutral(
 def test_abort_path_gate_off_restores_legacy_exit_code(
     atom, emerge_binary, emerge_pretend_python, fixture_env
 ):
-    """Slice 3: the abort outcome is produced for a masked-only or
+    """Slice 3+4: the abort outcome is produced for a masked-only or
     unsatisfiable dependency of a merge-bound package, so with the gate on
-    (default) the resolve exits 1 like real (`actions.py:460-462`); with
-    `PORTUALE_ABORT_PATH=0` the legacy "report, don't enforce" exit 0
-    stays. Everything printed is byte-identical either way on both
-    implementations — the list suppression is Slice 4's, so this pins
-    exactly one observable change."""
+    (default) the resolve exits 1 with the list suppressed (Slice 4 --
+    empty stdout) like real (`actions.py:460-462`); with
+    `PORTUALE_ABORT_PATH=0` the legacy "report, don't enforce" full list
+    and exit 0 stay. The stderr error content is byte-identical either
+    way on both implementations -- only the list presence and the exit
+    code depend on the gate."""
     args = ["--pretend", atom]
     off_env = dict(fixture_env, PORTUALE_ABORT_PATH="0")
     rust_on = _run([str(emerge_binary)], args, fixture_env)
     rust_off = _run([str(emerge_binary)], args, off_env)
     py_on = _run(emerge_pretend_python, args, fixture_env)
     py_off = _run(emerge_pretend_python, args, off_env)
-    assert (rust_on.stdout, rust_on.stderr) == (rust_off.stdout, rust_off.stderr)
-    assert (py_on.stdout, py_on.stderr) == (py_off.stdout, py_off.stderr)
-    assert (rust_on.stdout, rust_on.stderr) == (py_on.stdout, py_on.stderr)
     assert rust_on.returncode == py_on.returncode == 1
     assert rust_off.returncode == py_off.returncode == 0
+    assert rust_on.stdout == py_on.stdout == ""
+    assert rust_off.stdout == py_off.stdout
+    assert _merge_lines(rust_off.stdout) != []
+    assert (rust_on.stderr, rust_off.stderr) == (py_on.stderr, py_off.stderr)
+    assert rust_on.stderr == rust_off.stderr
 
 
 @pytest.mark.xfail(
@@ -3161,11 +3318,11 @@ def test_root_deps_recursion_reports_an_unbuildable_build_dep(
     emerge_binary, emerge_pretend_python, fixture_env
 ):
     """rdrmisstool (pulled in against the running root) BDEPENDs
-    rdrnothere, which has no ebuild anywhere and isn't installed. Before
-    this slice --root-deps silently swallowed such a dep; now it's
-    surfaced by the renderer's own non-fatal "!!! no visible ebuild for
-    dependency" note, exactly as it would be without --root-deps (exit 0
-    -- it's a dependency, not the top-level atom)."""
+    rdrnothere, which has no ebuild anywhere and isn't installed. Since
+    Slice 4 the unbuildable build dep aborts the resolve like any other
+    unsatisfiable dependency of a merge-bound parent (exit 1, no merge
+    list -- real abandons the same way); the renderer's "!!! no visible
+    ebuild for dependency" note still names it on stderr."""
     env = dict(fixture_env)
     env["PORTAGE_RUNNING_ROOT"] = "/"
     base = ["--pretend", "--root-deps", "dev-libs/rdrmiss"]
@@ -3176,12 +3333,7 @@ def test_root_deps_recursion_reports_an_unbuildable_build_dep(
     assert python.returncode == 1
     assert rust.stdout == python.stdout
     assert rust.stderr == python.stderr
-    assert rust.stdout == (
-        (
-        '[ebuild  N     ] dev-libs/rdrmisstool-1.0 to /\n'
-        '[ebuild  N     ] dev-libs/rdrmiss-1.0 \n'
-        )
-    )
+    assert rust.stdout == ""
     assert '!!! no visible ebuild for dependency "dev-libs/rdrnothere"' in rust.stderr
 
 
@@ -3587,17 +3739,18 @@ def test_or_group_use_unsat_alternative_reports_the_dependency_it_enqueued_witho
     still resolves to `unsatusealt[unsatuseorflag]` (alternative 1 is
     selectable regardless), so `unsatusealt` is enqueued as a dependency
     -- but with no autounmask flip available it has no visible ebuild and
-    is reported (`!!! no visible ebuild for dependency
-    "dev-libs/unsatusealt"`). The dead second alternative is again never
-    enqueued. Before the fine-bin wiring both alternatives ranked
-    `Unsatisfiable`, so the literal `||` fallback enqueued BOTH and stderr
-    carried two `no visible ebuild` lines."""
+    aborts the resolve (exit 1, no merge list since Slice 4), reported as
+    (`!!! no visible ebuild for dependency "dev-libs/unsatusealt"`). The
+    dead second alternative is again never enqueued. Before the fine-bin
+    wiring both alternatives ranked `Unsatisfiable`, so the literal `||`
+    fallback enqueued BOTH and stderr carried two `no visible ebuild`
+    lines."""
     args = ["--pretend", "--autounmask-use=n", "dev-libs/unsatuseor"]
     rust = _run([str(emerge_binary)], args, fixture_env)
     py = _run(emerge_pretend_python, args, fixture_env)
     assert rust.returncode == 1 and py.returncode == 1
     assert rust.stdout == py.stdout and rust.stderr == py.stderr
-    assert rust.stdout.splitlines() == ['[ebuild  N     ] dev-libs/unsatuseor-1.0 ']
+    assert rust.stdout.splitlines() == []
     assert rust.stderr.splitlines() == [
         '!!! no visible ebuild for dependency "dev-libs/unsatusealt"',
     ]
@@ -3885,14 +4038,13 @@ def test_sub_slot_restricted_dependency_atom_rejects_a_real_mismatch(
     (rejects an incompatible sub-slot), not just "always accept" (which
     an implementation that dropped the sub-slot restriction from the
     *atom* side, rather than the candidate side, could still pass the
-    companion test above with)."""
+    companion test above with). The mismatch aborts the resolve (exit 1,
+    no merge list since Slice 4); stderr still names the rejected atom."""
     result = _run(
         [str(emerge_binary)], ["--pretend", "dev-libs/subslotmismatchconsumer"], fixture_env
     )
     assert result.returncode == 1
-    assert result.stdout.splitlines() == [
-        '[ebuild  N     ] dev-libs/subslotmismatchconsumer-1.0 ',
-    ]
+    assert result.stdout.splitlines() == []
     assert (
         result.stderr.splitlines()
         == ['!!! no visible ebuild for dependency "dev-libs/subslotpkg"']
@@ -4269,7 +4421,10 @@ def test_autounmask_breakage_abandons_autounmask_when_a_flag_is_wanted_both_ways
     so the contradiction is never noticed -- brk is collected for
     aubreakwant, aubreaksub's USE line re-renders to "brk", and the block
     reports `>=aubreaksub-1.0 brk` (aubreakunwant's opposite need is left
-    silently unmet, a pre-existing already-resolved-slot limitation).
+    silently unmet, a pre-existing already-resolved-slot limitation: a
+    flippable [use]-dep mismatch is a candidate with a suggestion, not a
+    NoVisibleCandidate, so no abort fires here -- only the
+    unflippable --autounmask-use=n / breakage paths below abort).
 
     --autounmask-backtrack=y: the loop re-drives, spots brk wanted both
     ways, and real _autounmask_breakage (depgraph.py:12262) drops every
@@ -4301,12 +4456,7 @@ def test_autounmask_breakage_abandons_autounmask_when_a_flag_is_wanted_both_ways
     rust_ab = _run([str(emerge_binary)], ab, fixture_env)
     py_ab = _run(emerge_pretend_python, ab, fixture_env)
     assert rust_ab.stdout == py_ab.stdout and rust_ab.stderr == py_ab.stderr
-    assert rust_ab.stdout.splitlines() == [
-        '[ebuild  N     ] dev-libs/aubreaksub-1.0  USE="-brk"',
-        "[ebuild  N     ] dev-libs/aubreakwant-1.0 ",
-        "[ebuild  N     ] dev-libs/aubreakunwant-1.0 ",
-        "[ebuild  N     ] dev-libs/aubreaktop-1.0 ",
-    ]
+    assert rust_ab.stdout.splitlines() == []
     assert "USE changes are necessary" not in rust_ab.stderr
     assert rust_ab.stderr == (
         '!!! no visible ebuild for dependency "dev-libs/aubreaksub"\n'
@@ -4993,14 +5143,15 @@ def test_autounmask_dependency_gets_no_keyword_suggestion_by_default(emerge_bina
     --autounmask flag at all (the real, correct default), no suggestion
     is appended here either, matching the top-level case's own default --
     but the masked-dependency disclosure still names the mask (real
-    `_show_unsatisfied_dep`)."""
+    `_show_unsatisfied_dep`). Since Slice 4 the abort suppresses the
+    merge list (no consumer line); the disclosure block is unchanged."""
     result = _run(
         [str(emerge_binary)],
         ["--pretend", "dev-libs/autounmaskdepconsumer"],
         fixture_env,
     )
     assert result.returncode == 1  # abort path: unsatisfiable dep of a merge-bound parent
-    assert result.stdout == '[ebuild  N     ] dev-libs/autounmaskdepconsumer-1.0 \n'
+    assert result.stdout == ''
     _assert_masked_dep_block(
         result.stderr,
         "dev-libs/autounmaskkeywordpkg",
@@ -5224,16 +5375,16 @@ def test_autounmask_use_dependency_suggestion_is_suppressed_by_autounmask_use_n(
     whenever autounmask itself is (which itself defaults on), so
     dev-libs/usedeprejectedpkg's own dependency-level suggestion (see the
     plain-text test above) already appears with no flag at all. An
-    explicit --autounmask-use=n is the only way to suppress it."""
+    explicit --autounmask-use=n is the only way to suppress it. Since
+    Slice 4 the unflipped dep aborts the resolve (exit 1, no merge
+    list)."""
     result = _run(
         [str(emerge_binary)],
         ["--pretend", "--autounmask-use=n", "dev-libs/usedeprejectedpkg"],
         fixture_env,
     )
     assert result.returncode == 1  # abort path: unsatisfiable dep of a merge-bound parent
-    assert result.stdout.splitlines() == [
-        '[ebuild  N     ] dev-libs/usedeprejectedpkg-1.0 ',
-    ]
+    assert result.stdout.splitlines() == []
     assert (
         result.stderr.strip()
         == '!!! no visible ebuild for dependency "dev-libs/useflagpkg"'
@@ -5309,14 +5460,15 @@ def test_autounmask_use_parent_flip_suggestion_is_suppressed_by_autounmask_use_n
     """Both --autounmask-use mechanisms (Part A's plain candidate flip
     and Part B's opt=-aware parent flip) share the same
     autounmask_suggest_use gate -- an explicit --autounmask-use=n
-    suppresses both at once."""
+    suppresses both at once. The unflipped dep aborts the resolve (exit
+    1, no merge list since Slice 4)."""
     result = _run(
         [str(emerge_binary)],
         ["--pretend", "--autounmask-use=n", "dev-libs/useeqparentoffpkg"],
         fixture_env,
     )
     assert result.returncode == 1  # abort path: unsatisfiable dep of a merge-bound parent
-    assert result.stdout.strip() == '[ebuild  N     ] dev-libs/useeqparentoffpkg-1.0  USE="-eqflag"'
+    assert result.stdout.strip() == ''
     assert (
         result.stderr.strip()
         == '!!! no visible ebuild for dependency "dev-libs/useeqchildpkg"'
@@ -5356,14 +5508,15 @@ def test_autounmask_use_parent_flip_resolves_when_the_child_flag_is_masked(
     )
 
     # --autounmask-use=n: the shared gate is off -> the dep stays
-    # unresolvable, no change block.
+    # unresolvable and aborts the resolve (exit 1, no merge list since
+    # Slice 4), no change block.
     n = _run(
         [str(emerge_binary)],
         ["--pretend", "--autounmask-use=n", "dev-libs/parentflipeqpkg"],
         fixture_env,
     )
     assert n.returncode == 1  # abort path: unsatisfiable dep of a merge-bound parent
-    assert n.stdout.strip() == '[ebuild  N     ] dev-libs/parentflipeqpkg-1.0  USE="feat"'
+    assert n.stdout.strip() == ''
     assert (
         n.stderr.strip()
         == '!!! no visible ebuild for dependency "dev-libs/parentflipchildpkg"'
@@ -5417,7 +5570,8 @@ def test_autounmask_use_parent_flip_re_resolves_the_whole_graph(
     assert "pfgraphextra" not in rust_ab.stdout
 
     # --autounmask-use=n: the shared gate is off -> pf stays on,
-    # pfgraphchild[pf] is unresolvable, and pf? ( pfgraphextra ) still fires.
+    # pfgraphchild[pf] is unresolvable and aborts the resolve (exit 1, no
+    # merge list since Slice 4 -- pfgraphextra goes with it).
     n = _run(
         [str(emerge_binary)],
         ["--pretend", "--autounmask-use=n", "dev-libs/pfgraphparent"],
@@ -5429,21 +5583,20 @@ def test_autounmask_use_parent_flip_re_resolves_the_whole_graph(
         fixture_env,
     )
     assert n.stdout == npy.stdout and n.stderr == npy.stderr
-    assert "pfgraphextra" in n.stdout
+    assert "pfgraphextra" not in n.stdout
     assert 'no visible ebuild for dependency "dev-libs/pfgraphchild"' in n.stderr
 
 
 def test_unresolvable_dependency_is_reported_not_silently_dropped(
     emerge_binary, fixture_env
 ):
-    """The top-level package still resolves and the graph doesn't fail,
-    but the unresolvable dependency is reported on stderr, not silently
-    omitted."""
+    """The abort path owns the resolve: an unsatisfiable dependency of a
+    merge-bound parent suppresses the whole merge list (no list at all,
+    like real -- Slice 4) while the unresolvable dependency is still
+    reported on stderr, not silently dropped."""
     result = _run([str(emerge_binary)], ["--pretend", "dev-libs/missingdep"], fixture_env)
     assert result.returncode == 1  # abort path: unsatisfiable dep of a merge-bound parent
-    assert result.stdout.splitlines() == [
-        '[ebuild  N     ] dev-libs/missingdep-1.0 ',
-    ]
+    assert result.stdout.splitlines() == []
     assert (
         result.stderr.strip()
         == '!!! no visible ebuild for dependency "dev-libs/doesnotexist-anywhere"'
@@ -5752,8 +5905,9 @@ def test_pkgdir_directory_scan_resolves_a_binpkg_with_no_packages_index(
     # Each scanned binpkg carries real dependency metadata (packagepkg's
     # xpak has `RDEPEND=dev-libs/samepkg` from real `build-info`;
     # gpkgreadpkg's gpkg metadata has `dev-libs/newpkg`), and those deps
-    # are actually walked -- the ad-hoc root has neither, so each shows
-    # up as an unresolvable dependency (informational, exit stays 0).
+    # are actually walked -- the ad-hoc root has neither, so each aborts
+    # the resolve (exit 1, no merge list since Slice 4) with the dep note
+    # on stderr.
     for pkg, ver, dep in [
         ("packagepkg", "1.0", "dev-libs/samepkg"),
         ("gpkgreadpkg", "1.0", "dev-libs/newpkg"),
@@ -5764,16 +5918,12 @@ def test_pkgdir_directory_scan_resolves_a_binpkg_with_no_packages_index(
         assert rust.returncode == 1, (pkg, rust.stdout, rust.stderr)
         assert rust.stdout == py.stdout, pkg
         assert rust.stderr == py.stderr, pkg
-        # A New entry shows its USE list at plain -p now; gpkgreadpkg's
-        # gpkg metadata carries IUSE=grfoo (default off).
-        assert rust.stdout.splitlines()[0].startswith(
-            f"[binary  N     ] dev-libs/{pkg}-{ver} "
-        ), (pkg, rust.stdout.splitlines()[0])
+        # The binary candidate resolved (its dep was walked far enough to
+        # name it); the abort suppresses every merge line.
+        assert rust.stdout.splitlines() == [], (pkg, rust.stdout)
         assert f'no visible ebuild for dependency "{dep}"' in rust.stderr, pkg
 
-    # -pv: the scanned entry's SIZE (the file's own byte size) feeds
-    # `Size of downloads:` just like a `Packages` `SIZE` field would --
-    # wait, no: a local binpkg is already present, nothing to download.
+    # -v: same abort, still exit 1 on both sides.
     v = _run(
         [str(emerge_binary)],
         ["--pretend", "-v", "--usepkgonly", "dev-libs/gpkgreadpkg"],
@@ -5863,13 +6013,15 @@ def test_pkgdir_scan_finds_both_indexed_and_loose_binpkgs(
     assert idx.returncode == 0
     assert idx.stdout.splitlines() == ['[binary  N     ] dev-libs/binaryonlypkg-1.0-1 ']
 
+    # The loose file is discovered (its dep is walked far enough to abort
+    # on: gpkgreadpkg's gpkg metadata RDEPENDs dev-libs/newpkg, which has
+    # no binary under --usepkgonly -- exit 1, no merge list since Slice 4).
     loose = _run(
         [str(emerge_binary)], ["--pretend", "--usepkgonly", "dev-libs/gpkgreadpkg"], fixture_env
     )
     assert loose.returncode == 1
-    assert loose.stdout.splitlines() == [
-        '[binary  N     ] dev-libs/gpkgreadpkg-1.0  USE="-grfoo"'
-    ]
+    assert loose.stdout.splitlines() == []
+    assert 'no visible ebuild for dependency "dev-libs/newpkg"' in loose.stderr
 
 
 def test_pkgdir_scan_reads_a_multi_instance_xpak_from_the_cat_pn_subdir(
@@ -5914,11 +6066,18 @@ def test_pkgdir_scan_reads_a_multi_instance_xpak_from_the_cat_pn_subdir(
     assert rust.returncode == 1, (rust.stdout, rust.stderr)
     assert rust.stdout == py.stdout
     assert rust.stderr == py.stderr
-    # Real `output.py::_append_build_id`: the `-3` from the filename.
-    assert rust.stdout.splitlines()[0].startswith(
-        "[binary  N     ] dev-libs/packagepkg-1.0-3 "
-    ), rust.stdout
+    # The multi-instance file was read (its embedded RDEPEND names the
+    # dep below); the unresolvable dep then aborts the resolve (exit 1,
+    # no merge list since Slice 4 -- the `-3` build-id rendering is
+    # pinned on the legacy gate instead, where the list still shows).
+    assert rust.stdout.splitlines() == []
     assert 'no visible ebuild for dependency "dev-libs/samepkg"' in rust.stderr
+    off_env = dict(env, PORTUALE_ABORT_PATH="0")
+    legacy = _run([str(emerge_binary)], args, off_env)
+    # Real `output.py::_append_build_id`: the `-3` from the filename.
+    assert legacy.stdout.splitlines()[0].startswith(
+        "[binary  N     ] dev-libs/packagepkg-1.0-3 "
+    ), legacy.stdout
 
 
 def test_getbinpkg_makes_a_remote_binhost_binary_eligible(
@@ -6181,12 +6340,15 @@ def test_binpkg_changed_deps_explicit_override(
     assert ry.stdout == py.stdout
     assert ry.stderr == py.stderr
     assert 'no ebuilds to satisfy "dev-libs/bcdeppkg"' in ry.stderr
-    # ...whereas plain --getbinpkgonly keeps it (check off by default).
+    # ...whereas plain --getbinpkgonly keeps it (check off by default) --
+    # but its own dep is unresolvable, so the resolve aborts (exit 1, no
+    # merge list since Slice 4) with the dep note on stderr.
     base = _run(
         [str(emerge_binary)], ["--pretend", "--getbinpkgonly", "dev-libs/bcdeppkg"], fixture_env
     )
     assert base.returncode == 1
-    assert "[binary  N g   ] dev-libs/bcdeppkg-1.0-1 " in base.stdout.splitlines()
+    assert base.stdout.splitlines() == []
+    assert 'no visible ebuild for dependency "dev-libs/bcdepold"' in base.stderr
 
 
 def test_use_ebuild_visibility_enforces_the_check_under_usepkgonly(
@@ -6361,20 +6523,17 @@ def test_any_of_group_falls_back_to_every_alternative_when_none_satisfiable(
     anywhere`, the never-chosen alternative, is dropped entirely rather
     than reported alongside it. Backlog #19's abort path then flips the
     overall exit code to 1 (a `NoVisibleCandidate` dependency of a
-    merge-bound package means real would abandon the resolve) even
-    though the merge list itself is still rendered here -- the #22
-    fine-bin selection and the #19 abort path are independent fixes that
-    both apply: #22 decides WHICH dead alternative gets named, #19
-    decides that naming one at all is a hard failure, not just a
-    warning."""
+    merge-bound package means real would abandon the resolve) and Slice 4
+    suppresses the merge list -- the #22 fine-bin selection and the #19
+    abort path are independent fixes that both apply: #22 decides WHICH
+    dead alternative gets named, #19 decides that naming one at all is a
+    hard failure with no list, not just a warning."""
     args = ["--pretend", "dev-libs/anyofunresolvable"]
     rust = _run([str(emerge_binary)], args, fixture_env)
     py = _run(emerge_pretend_python, args, fixture_env)
     assert rust.returncode == 1 and py.returncode == 1
     assert rust.stdout == py.stdout and rust.stderr == py.stderr
-    assert rust.stdout.splitlines() == [
-        '[ebuild  N     ] dev-libs/anyofunresolvable-1.0 ',
-    ]
+    assert rust.stdout.splitlines() == []
     assert rust.stderr.strip().splitlines() == [
         '!!! no visible ebuild for dependency "dev-libs/doesnotexist-anywhere"',
     ]
@@ -6721,7 +6880,7 @@ def test_use_expand_implicit_flag_is_valid_iuse_even_when_unlisted(
     assert bad.returncode == 1  # abort path: unsatisfiable dep of a merge-bound parent
     assert bad.stdout == bad_py.stdout
     assert bad.stderr == bad_py.stderr
-    assert bad.stdout == '[ebuild  N     ] dev-libs/implicitiusepkgmusl-1.0 \n'
+    assert bad.stdout == ''
     assert '!!! no visible ebuild for dependency "dev-libs/implicitiuseprov"' in bad.stderr
 
 
@@ -8515,7 +8674,8 @@ def test_use_dep_equal_parent_mismatches_when_parent_flag_is_disabled(emerge_bin
     eqflag. With --autounmask-use=n (autounmask-use is on by default and
     would resolve this via a child-flip -- see
     test_autounmask_use_resolves_the_opt_conditional_dependency_via_the_child_flip)
-    the dependency is reported unresolvable, not silently dropped or
+    the dependency is reported unresolvable and aborts the resolve (exit
+    1, no merge list since Slice 4), not silently dropped or
     incorrectly satisfied."""
     result = _run(
         [str(emerge_binary)],
@@ -8523,7 +8683,7 @@ def test_use_dep_equal_parent_mismatches_when_parent_flag_is_disabled(emerge_bin
         fixture_env,
     )
     assert result.returncode == 1  # abort path: unsatisfiable dep of a merge-bound parent
-    assert result.stdout.strip() == '[ebuild  N     ] dev-libs/useeqparentoffpkg-1.0  USE="-eqflag"'
+    assert result.stdout.strip() == ''
     assert result.stderr.strip() == (
         '!!! no visible ebuild for dependency "dev-libs/useeqchildpkg"'
     )
@@ -12669,19 +12829,16 @@ def test_masked_dependency_is_disclosed_with_its_mask_reasons(
     ebuilds ... have been masked" block plus the `(dependency required
     by ...)` chain, instead of the bare `!!! no visible ebuild for
     dependency` line. dev-libs/maskneedpkg-1.0 RDEPENDs
-    dev-libs/maskeddep, which user package.mask masks. The merge list
-    keeps the consumer (portuale never abandons -- real drops the whole
-    list, parked with #19) and the exit code stays 0 (real exits 1 --
-    same parked divergence)."""
+    dev-libs/maskeddep, which user package.mask masks. The merge list is
+    suppressed entirely (Slice 4 -- real shows no list on the abort path,
+    only the error block) and the exit code is 1 (Slice 3)."""
     args = ["--pretend", "dev-libs/maskneedpkg"]
     rust = _run([str(emerge_binary)], args, fixture_env)
     python = _run(emerge_pretend_python, args, fixture_env)
     assert rust.returncode == 1  # abort path (Slice 3): masked-only dep aborts, exit 1
     assert rust.stdout == python.stdout
     assert rust.stderr == python.stderr
-    assert rust.stdout.splitlines() == [
-        "[ebuild  N     ] dev-libs/maskneedpkg-1.0 ",
-    ]
+    assert rust.stdout.splitlines() == []
     _assert_masked_dep_block(
         rust.stderr,
         "dev-libs/maskeddep",
@@ -12699,18 +12856,17 @@ def test_keyword_masked_dependency_is_disclosed_with_its_mask_reasons(
     """Same real rule for a KEYWORDS mask: dev-libs/kwneedpkg-1.0
     RDEPENDs dev-libs/kwmaskeddep, whose only keyword is `~amd64`. The
     block lists the `~amd64 keyword` reason; the chain is the same
-    two-line shape. (A USE-mismatch-only dep takes real's separate "no
-    ebuilds built with USE flags" path instead -- portuale's
-    autounmask-use machinery -- so no fixture covers that here.)"""
+    two-line shape; the merge list is suppressed (Slice 4). (A
+    USE-mismatch-only dep takes real's separate "no ebuilds built with
+    USE flags" path instead -- portuale's autounmask-use machinery -- so
+    no fixture covers that here.)"""
     args = ["--pretend", "dev-libs/kwneedpkg"]
     rust = _run([str(emerge_binary)], args, fixture_env)
     python = _run(emerge_pretend_python, args, fixture_env)
     assert rust.returncode == 1  # abort path (Slice 3): masked-only dep aborts, exit 1
     assert rust.stdout == python.stdout
     assert rust.stderr == python.stderr
-    assert rust.stdout.splitlines() == [
-        "[ebuild  N     ] dev-libs/kwneedpkg-1.0 ",
-    ]
+    assert rust.stdout.splitlines() == []
     _assert_masked_dep_block(
         rust.stderr,
         "dev-libs/kwmaskeddep",
@@ -13396,7 +13552,7 @@ def test_json_is_not_a_real_emerge_option(emerge_binary, fixture_env):
     assert result.stderr == ""
     assert result.stdout == (
         (
-        '{"entries":[{"category":"dev-libs","package":"newpkg","merge_order":0,"outcome":"new","version":"1.0","new_slot":false,"interactive":false,"fetch_restrict":false,"fetch_restrict_satisfied":false,"slot":"0","source":"ebuild","provenance":{"mask_entry":null,"unmask_entry":null,"keyword_entry":null},"requested":true,"required_by":[],"builds_against_running_root":null,"blockers":[]}],"slot_conflicts":[],"changed_deps_report":[],"autounmask_keyword_changes":[],"autounmask_use_changes":[],"autounmask_license_changes":[],"autounmask_mask_changes":[],"abi_rebuilds":[]}\n'
+        '{"entries":[{"category":"dev-libs","package":"newpkg","merge_order":0,"outcome":"new","version":"1.0","new_slot":false,"interactive":false,"fetch_restrict":false,"fetch_restrict_satisfied":false,"slot":"0","source":"ebuild","provenance":{"mask_entry":null,"unmask_entry":null,"keyword_entry":null},"requested":true,"required_by":[],"builds_against_running_root":null,"blockers":[]}],"slot_conflicts":[],"changed_deps_report":[],"autounmask_keyword_changes":[],"autounmask_use_changes":[],"autounmask_license_changes":[],"autounmask_mask_changes":[],"abi_rebuilds":[],"aborted":null}\n'
         )
     )
 
@@ -13410,7 +13566,7 @@ def test_json_upgrade_includes_from_version(emerge_binary, fixture_env):
     assert result.returncode == 0
     assert result.stdout == (
         (
-        '{"entries":[{"category":"dev-libs","package":"upgradepkg","merge_order":0,"outcome":"upgrade","version":"2.0","from_version":"1.0","interactive":false,"fetch_restrict":false,"fetch_restrict_satisfied":false,"slot":"0","source":"ebuild","provenance":{"mask_entry":null,"unmask_entry":null,"keyword_entry":null},"requested":true,"required_by":[],"builds_against_running_root":null,"blockers":[]}],"slot_conflicts":[],"changed_deps_report":[],"autounmask_keyword_changes":[],"autounmask_use_changes":[],"autounmask_license_changes":[],"autounmask_mask_changes":[],"abi_rebuilds":[]}\n'
+        '{"entries":[{"category":"dev-libs","package":"upgradepkg","merge_order":0,"outcome":"upgrade","version":"2.0","from_version":"1.0","interactive":false,"fetch_restrict":false,"fetch_restrict_satisfied":false,"slot":"0","source":"ebuild","provenance":{"mask_entry":null,"unmask_entry":null,"keyword_entry":null},"requested":true,"required_by":[],"builds_against_running_root":null,"blockers":[]}],"slot_conflicts":[],"changed_deps_report":[],"autounmask_keyword_changes":[],"autounmask_use_changes":[],"autounmask_license_changes":[],"autounmask_mask_changes":[],"abi_rebuilds":[],"aborted":null}\n'
         )
     )
 
@@ -13529,18 +13685,40 @@ def test_json_source_reflects_ebuild_vs_binary_and_is_omitted_for_no_visible_can
     before binary-package support (--usepkg/--usepkgonly) existed at
     all, only caught once a binary candidate could actually resolve.
     "source" is omitted entirely for a dependency-level
-    no_visible_candidate (nothing was resolved at all)."""
+    no_visible_candidate (nothing was resolved at all) -- pinned via the
+    legacy gate, since the abort path (Slice 4) suppresses the whole
+    list for a merge-bound miss and its `--json` entries array is empty
+    (see test_abort_path_json_carries_partial_list_and_aborted_reason)."""
     result = _run(
         [str(emerge_binary)],
-        ["--pretend", "--json", "--usepkg", "dev-libs/missingdep", "dev-libs/binaryonlypkg"],
+        ["--pretend", "--json", "--usepkg", "dev-libs/newpkg", "dev-libs/binaryonlypkg"],
         fixture_env,
     )
     assert result.returncode == 0
     payload = json.loads(result.stdout)
     by_package = {e["package"]: e for e in payload["entries"]}
-    assert by_package["missingdep"]["source"] == "ebuild"
+    assert by_package["newpkg"]["source"] == "ebuild"
     assert by_package["binaryonlypkg"]["source"] == "binary"
-    assert "source" not in by_package["doesnotexist-anywhere"]
+    assert payload["aborted"] is None
+
+    off_env = dict(fixture_env, PORTUALE_ABORT_PATH="0")
+    legacy = _run(
+        [str(emerge_binary)],
+        ["--pretend", "--json", "--usepkg", "dev-libs/missingdep", "dev-libs/binaryonlypkg"],
+        off_env,
+    )
+    assert legacy.returncode == 0
+    legacy_payload = json.loads(legacy.stdout)
+    legacy_by_package = {e["package"]: e for e in legacy_payload["entries"]}
+    assert "source" not in legacy_by_package["doesnotexist-anywhere"]
+    # The outcome is computed gate-independently (the gate guards only
+    # rendering + exit code): the legacy list still carries the abort
+    # reason.
+    assert legacy_payload["aborted"] == {
+        "reason": "unsatisfied-atom",
+        "atom": "dev-libs/doesnotexist-anywhere",
+        "parent": "dev-libs/missingdep-1.0",
+    }
 
 
 def test_json_dumps_the_whole_graph_unaffected_by_onlydeps(emerge_binary, fixture_env):

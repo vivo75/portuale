@@ -474,14 +474,22 @@ def test_solver_pubgrub_reports_the_unbreakable_build_time_cycle(emerge_binary, 
     """`--solver=` notice fields (backlog Tier 1): the bridge rebuilds
     the walk's own hard/soft edge-kind map over its entry `deps` edges
     and reports the shortest unbreakable build-time cycle, so pubgrub on
-    `dev-libs/hardcyclea` prints the same merge list plus the fatal
+    `dev-libs/hardcyclea` prints the merge list plus the fatal
     `* Error: circular dependencies:` block (exit 1) as the walk-path
     contract pins. Resolvo is excluded: its `install_order` still cannot
-    linearise any cyclic closure (Tier-4 `--solver=resolvo` item)."""
-    expected_stdout = (
+    linearise any cyclic closure (Tier-4 `--solver=resolvo` item). Since
+    Slice 4 the `--solver=portage` path renders the stuck remainder only
+    (no separate re-display); the pubgrub bridge result stays `Complete`
+    by construction (no walk/backtrack to abandon -- Slice 2), so it
+    keeps the legacy list-plus-redisplay."""
+    legacy_stdout = (
         "[ebuild  N     ] dev-libs/hardcyclea-1.0 \n"
         "[ebuild  N     ] dev-libs/hardcycleb-1.0 \n"
         "\n"
+        "[ebuild  N     ] dev-libs/hardcyclea-1.0 \n"
+        "[ebuild  N     ] dev-libs/hardcycleb-1.0 \n"
+    )
+    partial_stdout = (
         "[ebuild  N     ] dev-libs/hardcyclea-1.0 \n"
         "[ebuild  N     ] dev-libs/hardcycleb-1.0 \n"
     )
@@ -495,7 +503,10 @@ def test_solver_pubgrub_reports_the_unbreakable_build_time_cycle(emerge_binary, 
         " * Note that circular dependencies can often be avoided by temporarily\n"
         " * disabling USE flags that trigger optional dependencies.\n"
     )
-    for solver in ("portage", "pubgrub"):
+    for solver, expected_stdout in (
+        ("portage", partial_stdout),
+        ("pubgrub", legacy_stdout),
+    ):
         result = subprocess.run(
             [str(emerge_binary), "--pretend", f"--solver={solver}", "dev-libs/hardcyclea"],
             capture_output=True,

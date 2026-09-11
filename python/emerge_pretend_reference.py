@@ -14105,6 +14105,7 @@ def _print_json(
     autounmask_license_changes,
     autounmask_mask_changes,
     abi_rebuilds,
+    outcome,
     top_level_pkgs,
     verbose,
     running_root=None,
@@ -14140,6 +14141,27 @@ def _print_json(
         f'{{"provider":{_json_string(child)},"consumer":{_json_string(parent)}}}'
         for child, parent in abi_rebuilds
     )
+    # Backlog #19 Slice 4: the abort outcome as provenance -- null on the
+    # complete path, {"reason":...} on an abort (reason spellings match
+    # the outcome tuples). The entries array above is already the partial
+    # list on an abort (the caller passes the display list). Mirrors
+    # pretend.rs.
+    if outcome[0] == "aborted":
+        _reason = outcome[1]
+        if _reason[0] in ("masked-dep", "unsatisfied-atom"):
+            aborted_json = (
+                f'{{"reason":{_json_string(_reason[0])},'
+                f'"atom":{_json_string(_reason[1])},'
+                f'"parent":{_json_string(_reason[2])}}}'
+            )
+        else:
+            members_json = ",".join(_json_string(m) for m in _reason[1])
+            aborted_json = (
+                f'{{"reason":{_json_string(_reason[0])},'
+                f'"members":[{members_json}]}}'
+            )
+    else:
+        aborted_json = "null"
     print(
         f'{{"entries":[{entries_json}],"slot_conflicts":[{conflicts_json}],'
         f'"changed_deps_report":[{changed_deps_report_json}],'
@@ -14147,7 +14169,7 @@ def _print_json(
         f'"autounmask_use_changes":[{autounmask_use_json}],'
         f'"autounmask_license_changes":[{autounmask_license_json}],'
         f'"autounmask_mask_changes":[{autounmask_mask_json}],'
-        f'"abi_rebuilds":[{abi_rebuilds_json}]}}'
+        f'"abi_rebuilds":[{abi_rebuilds_json}],"aborted":{aborted_json}}}'
     )
 
 
@@ -20820,6 +20842,28 @@ def run(args):
         sys.stderr.write("\n")
         return 1
     entries = result["entries"]
+    # Backlog #19 Slice 4: with the gate on, an aborted resolve renders
+    # the outcome's partial list *instead of* the full entries -- real
+    # never calls display() on the abort path (actions.py:460-462), so
+    # masked/unsat shapes (empty partial) show no list at all and the
+    # cycle shape shows the stuck remainder only (docs/abort-path-spec.md
+    # section 4). Everything else (the locked set and complete-graph
+    # decisions above, the unsolvable-blocker scans below) keeps the full
+    # graph. With the gate off (PORTUALE_ABORT_PATH=0) the legacy full
+    # list renders. Mirrors pretend.rs.
+    _gated_abort_partial = None
+    if abort_path_enabled() and result["outcome"][0] == "aborted":
+        _gated_abort_partial = result["outcome"][2]
+    display_entries = (
+        _gated_abort_partial if _gated_abort_partial is not None else entries
+    )
+    # Real Display.__call__ runs (and prints Total:) only when the merge
+    # list is displayed at all: the masked/unsat abort shows neither list
+    # nor counters, while the cycle abort counts over the partial rows
+    # only. Mirrors pretend.rs.
+    _display_list_suppressed = (
+        _gated_abort_partial is not None and not display_entries
+    )
 
     # Real depgraph.py:11192-11235's display_problems() block for a
     # directly-requested atom that matched package.provided -- to stderr,
@@ -21013,7 +21057,7 @@ def run(args):
 
     if json_output:
         _print_json(
-            entries,
+            display_entries,
             result["slot_conflicts"],
             result["changed_deps_report"],
             result["autounmask_keyword_changes"],
@@ -21021,6 +21065,7 @@ def run(args):
             result["autounmask_license_changes"],
             result["autounmask_mask_changes"],
             result["abi_rebuilds"],
+            result["outcome"],
             top_level_pkgs,
             verbose,
             root_deps_running_root,
@@ -21040,6 +21085,12 @@ def run(args):
         ):
             return 1
         if any(b.get("unsolvable") for e in result["entries"] for b in e[3]):
+            return 1
+        # Backlog #19 Slice 4: an aborted resolve exits 1 in every output
+        # format (real actions.py:460-462 runs before any format split).
+        # Gated like the text path below; the Aborted arm there fires
+        # first, so this only matters for --json. Mirrors pretend.rs.
+        if _gated_abort_partial is not None:
             return 1
         return 0
 
@@ -21464,10 +21515,29 @@ def run(args):
 
     if show_merge_list:
         if tree:
-            print_tree(entries)
+            print_tree(display_entries)
         else:
-            for entry in entries:
+            for entry in display_entries:
                 print_entry_line(entry, "")
+
+        # Backlog #19 Slice 4: the aborted partial list carries no
+        # no_visible_candidate entries (masked/unsat partials are empty;
+        # the cycle remainder is merge-bound), so the disclosure /
+        # bare-unsat lines print_entry_line emits for them would go silent
+        # with the list switch. Re-emit them here, in full-entries order
+        # -- the same stderr sequence the full-list walk produced, since
+        # these lines already go to stderr while the list goes to stdout.
+        # Slice 5 reshapes this into the AbortReason error block that
+        # follows the partial list; until then the content is unchanged.
+        # Non-abort resolves render those lines in the loop above exactly
+        # as before. Mirrors pretend.rs.
+        if _gated_abort_partial is not None and result["outcome"][1][0] in (
+            "masked-dep",
+            "unsatisfied-atom",
+        ):
+            for entry in result["entries"]:
+                if entry[2][0] == "no_visible_candidate":
+                    print_entry_line(entry, "")
 
         # Real Display.print_blockers(): the collected `[blocks B ...]`
         # lines, printed as one group after every package line and before
@@ -21480,10 +21550,17 @@ def run(args):
     # after every entry (and blocker) line, only under -v, for the
     # tree/columns/flat layouts alike. Real emits f"\n{self.counters}\n"
     # (a leading blank line). --quiet forces verbosity to 1, so -pvq
-    # suppresses the line that -pv would show. Mirrors pretend.rs.
-    if show_merge_list and verbose and not quiet:
+    # suppresses the line that -pv would show. Suppressed together with
+    # an empty aborted list (real never calls display() there, so no
+    # counters exist); the cycle partial counts over its own rows only.
+    # Mirrors pretend.rs.
+    if show_merge_list and verbose and not quiet and not _display_list_suppressed:
         print()
-        print(_package_counters_summary(entries, top_level_pkgs, onlydeps, color))
+        print(
+            _package_counters_summary(
+                display_entries, top_level_pkgs, onlydeps, color
+            )
+        )
 
     # Real _show_circular_deps' cycle-only re-display
     # (display(handler.merge_list) with --verbose --tree forced): the
@@ -21494,11 +21571,21 @@ def run(args):
     # tree model dedups shared nodes by design and never abandons the
     # list, so there is no partial scheduler state to show); isolating
     # *which* packages is what's ported. Mirrors pretend.rs.
-    if show_merge_list and result["cycle_display"]:
+    #
+    # Backlog #19 Slice 4: with the gate on, an aborted cycle renders the
+    # remainder as the merge list itself (see display_entries above), so
+    # the re-display would duplicate it line for line and is skipped --
+    # real shows the reduced list exactly once too (_show_circular_deps'
+    # single display(handler.merge_list)). Gate off keeps the legacy
+    # list-plus-redisplay. Mirrors pretend.rs.
+    _skip_redisplay = _gated_abort_partial is not None and result["outcome"][1][
+        0
+    ] == "unserializable-cycle"
+    if show_merge_list and result["cycle_display"] and not _skip_redisplay:
         print()
         for cpv in result["cycle_display"]:
             entry = next(
-                (e for e in result["entries"] if _merge_bound_cpv(e) == cpv),
+                (e for e in display_entries if _merge_bound_cpv(e) == cpv),
                 None,
             )
             if entry is not None:

@@ -1816,6 +1816,37 @@ fn autounmask_change_to_json(change: &portage_repo::AutounmaskChange) -> String 
     )
 }
 
+/// Backlog #19 Slice 4: the `--json` `aborted` field for a resolve
+/// outcome — `null` on the complete path, `{"reason":…}` on an abort.
+/// Reason spellings (`masked-dep`, `unsatisfied-atom`,
+/// `unserializable-cycle`) match the Python mirror's outcome tuples
+/// exactly (see `_print_json`); the contract suite pins both sides'
+/// bytes on the abort fixtures.
+fn abort_outcome_to_json(outcome: &portage_repo::ResolveOutcome) -> String {
+    match outcome {
+        portage_repo::ResolveOutcome::Complete => "null".to_string(),
+        portage_repo::ResolveOutcome::Aborted { reason, .. } => match reason {
+            portage_repo::AbortReason::MaskedDep { atom, parent_cpv } => format!(
+                "{{\"reason\":\"masked-dep\",\"atom\":{},\"parent\":{}}}",
+                json_string(atom),
+                json_string(parent_cpv)
+            ),
+            portage_repo::AbortReason::UnsatisfiedAtom { atom, parent_cpv } => format!(
+                "{{\"reason\":\"unsatisfied-atom\",\"atom\":{},\"parent\":{}}}",
+                json_string(atom),
+                json_string(parent_cpv)
+            ),
+            portage_repo::AbortReason::UnserializableCycle { members } => {
+                let members: Vec<String> = members.iter().map(|m| json_string(m)).collect();
+                format!(
+                    "{{\"reason\":\"unserializable-cycle\",\"members\":[{}]}}",
+                    members.join(",")
+                )
+            }
+        },
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn print_json(
     entries: &[GraphEntry],
@@ -1826,6 +1857,7 @@ fn print_json(
     autounmask_license_changes: &[portage_repo::AutounmaskChange],
     autounmask_mask_changes: &[portage_repo::AutounmaskChange],
     abi_rebuilds: &[(String, String)],
+    outcome: &portage_repo::ResolveOutcome,
     top_level_pkgs: &HashSet<(String, String)>,
     verbose: bool,
     running_root: Option<&Path>,
@@ -1866,8 +1898,15 @@ fn print_json(
             )
         })
         .collect();
+    // Backlog #19 Slice 4: the abort outcome as provenance — `null` on
+    // the complete path every consumer already parses, `{"reason":…}`
+    // on an abort (reason spellings match the Python mirror's outcome
+    // tuples). The `entries` array above is already the partial list on
+    // an abort (the caller passes the display list), so a `--json`
+    // consumer sees the same rows the text list shows.
+    let aborted_json = abort_outcome_to_json(outcome);
     println!(
-        "{{\"entries\":[{}],\"slot_conflicts\":[{}],\"changed_deps_report\":[{}],\"autounmask_keyword_changes\":[{}],\"autounmask_use_changes\":[{}],\"autounmask_license_changes\":[{}],\"autounmask_mask_changes\":[{}],\"abi_rebuilds\":[{}]}}",
+        "{{\"entries\":[{}],\"slot_conflicts\":[{}],\"changed_deps_report\":[{}],\"autounmask_keyword_changes\":[{}],\"autounmask_use_changes\":[{}],\"autounmask_license_changes\":[{}],\"autounmask_mask_changes\":[{}],\"abi_rebuilds\":[{}],\"aborted\":{}}}",
         entries_json.join(","),
         conflicts_json.join(","),
         changed_deps_report_json.join(","),
@@ -1875,7 +1914,8 @@ fn print_json(
         autounmask_use_json.join(","),
         autounmask_license_json.join(","),
         autounmask_mask_json.join(","),
-        abi_rebuilds_json.join(",")
+        abi_rebuilds_json.join(","),
+        aborted_json
     );
 }
 
@@ -10379,6 +10419,31 @@ pub fn run(args: &[String]) -> ExitCode {
         result
     };
     let entries = &result.entries;
+    // Backlog #19 Slice 4: with the gate on, an aborted resolve renders
+    // the outcome's partial list *instead of* the full entries — real
+    // never calls `display()` on the abort path (`actions.py:460-462`),
+    // so masked/unsat shapes (empty partial) show no list at all and the
+    // cycle shape shows the stuck remainder only (`abort-path-spec.md`
+    // §4). Everything else (resolver trace, abi-rebuild maps, the
+    // complete-graph decisions above, the unsolvable-blocker scan below)
+    // keeps the full graph. With the gate off
+    // (`PORTUALE_ABORT_PATH=0`) the legacy full list renders.
+    let gated_abort_partial: Option<&Vec<portage_repo::GraphEntry>> =
+        if portage_repo::abort_path_enabled() {
+            match &result.outcome {
+                portage_repo::ResolveOutcome::Aborted { partial, .. } => Some(partial),
+                portage_repo::ResolveOutcome::Complete => None,
+            }
+        } else {
+            None
+        };
+    let display_entries: &[portage_repo::GraphEntry] =
+        gated_abort_partial.map_or(entries.as_slice(), Vec::as_slice);
+    // Real `Display.__call__` runs (and prints `Total:`) only when the
+    // merge list is displayed at all: the masked/unsat abort shows
+    // neither list nor counters, while the cycle abort counts over the
+    // partial rows only.
+    let display_list_suppressed = gated_abort_partial.is_some() && display_entries.is_empty();
 
     // `--autounmask-only` (real `actions.py:456`): skip the whole merge
     // list -- only the `display_problems()` equivalent (slot-conflict
@@ -10421,7 +10486,7 @@ pub fn run(args: &[String]) -> ExitCode {
 
     if json {
         print_json(
-            entries,
+            display_entries,
             &result.slot_conflicts,
             &result.changed_deps_report,
             &result.autounmask_keyword_changes,
@@ -10429,6 +10494,7 @@ pub fn run(args: &[String]) -> ExitCode {
             &result.autounmask_license_changes,
             &result.autounmask_mask_changes,
             &result.abi_rebuilds,
+            &result.outcome,
             &top_level_pkgs,
             verbose,
             root_deps_running_root.as_deref(),
@@ -10455,6 +10521,13 @@ pub fn run(args: &[String]) -> ExitCode {
             .iter()
             .any(|e| e.blockers.iter().any(|b| b.unsolvable))
         {
+            return ExitCode::from(1);
+        }
+        // Backlog #19 Slice 4: an aborted resolve exits 1 in every output
+        // format (real `actions.py:460-462` runs before any format
+        // split). Gated like the text path below; the `Aborted` arm there
+        // fires first, so this only matters for `--json`.
+        if gated_abort_partial.is_some() {
             return ExitCode::from(1);
         }
         return ExitCode::SUCCESS;
@@ -10495,7 +10568,7 @@ pub fn run(args: &[String]) -> ExitCode {
     if show_merge_list {
         if tree {
             print_tree(
-                entries,
+                display_entries,
                 &top_level_pkgs,
                 onlydeps,
                 oneshot,
@@ -10512,7 +10585,7 @@ pub fn run(args: &[String]) -> ExitCode {
                 &result.masked_deps,
             );
         } else {
-            for entry in entries {
+            for entry in display_entries {
                 print_entry_line(
                     entry,
                     "",
@@ -10535,6 +10608,57 @@ pub fn run(args: &[String]) -> ExitCode {
             }
         }
 
+        // Backlog #19 Slice 4: the aborted partial list carries no
+        // `NoVisibleCandidate` entries (masked/unsat partials are empty;
+        // the cycle remainder is merge-bound), so the disclosure / bare-
+        // unsat lines `print_entry_line` emits for them would go silent
+        // with the list switch. Re-emit them here, in full-entries order
+        // — the same stderr sequence the full-list walk produced, since
+        // these lines already go to stderr while the list goes to stdout.
+        // Slice 5 reshapes this into the `AbortReason` error block that
+        // follows the partial list; until then the content is unchanged.
+        // Non-abort resolves (including `Complete` graphs that still
+        // carry NVC entries, e.g. build-root-only misses) render those
+        // lines in the loop above exactly as before.
+        if gated_abort_partial.is_some()
+            && matches!(
+                &result.outcome,
+                portage_repo::ResolveOutcome::Aborted {
+                    reason: portage_repo::AbortReason::MaskedDep { .. }
+                        | portage_repo::AbortReason::UnsatisfiedAtom { .. },
+                    ..
+                }
+            )
+        {
+            let mut thrown_away: Vec<String> = Vec::new();
+            for entry in &result.entries {
+                if matches!(
+                    entry.outcome,
+                    portage_repo::PretendOutcome::NoVisibleCandidate
+                ) {
+                    print_entry_line(
+                        entry,
+                        "",
+                        &top_level_pkgs,
+                        onlydeps,
+                        oneshot,
+                        verbose,
+                        quiet,
+                        alphabetical,
+                        columns,
+                        columnwidth,
+                        root_deps_running_root.as_deref(),
+                        &color,
+                        system_atoms,
+                        &world_atoms,
+                        &force_reinstall_cps,
+                        &mut thrown_away,
+                        &result.masked_deps,
+                    );
+                }
+            }
+        }
+
         // Real `Display.print_blockers()`: the collected `[blocks B ...]`
         // lines, printed as one group after every package line and before
         // the counters.
@@ -10548,12 +10672,14 @@ pub fn run(args: &[String]) -> ExitCode {
     // after every entry (and blocker) line, only under `-v`, for the
     // tree/columns/flat layouts alike. Real emits `f"\n{self.counters}\n"`
     // (a leading blank line). `--quiet` forces verbosity to 1, so `-pvq`
-    // suppresses the line that `-pv` would show.
-    if show_merge_list && verbose && !quiet {
+    // suppresses the line that `-pv` would show. Suppressed together with
+    // an empty aborted list (real never calls `display()` there, so no
+    // counters exist); the cycle partial counts over its own rows only.
+    if show_merge_list && verbose && !quiet && !display_list_suppressed {
         println!();
         println!(
             "{}",
-            package_counters_summary(entries, &top_level_pkgs, onlydeps, &color)
+            package_counters_summary(display_entries, &top_level_pkgs, onlydeps, &color)
         );
     }
 
@@ -10570,11 +10696,26 @@ pub fn run(args: &[String]) -> ExitCode {
     // re-displayed blocker owners from doubling the collected lines.
     // Non-empty exactly when a hard cycle was reported (the driver only
     // builds the display then), so no extra gating is needed.
-    if show_merge_list && !result.cycle_display.is_empty() {
+    //
+    // Backlog #19 Slice 4: with the gate on, an aborted cycle renders
+    // the remainder as the merge list itself (see `display_entries`
+    // above), so the re-display would duplicate it line for line and is
+    // skipped — real shows the reduced list exactly once too
+    // (`_show_circular_deps`' single `display(handler.merge_list)`).
+    // Gate off keeps the legacy list-plus-redisplay.
+    let skip_redisplay = gated_abort_partial.is_some()
+        && matches!(
+            &result.outcome,
+            portage_repo::ResolveOutcome::Aborted {
+                reason: portage_repo::AbortReason::UnserializableCycle { .. },
+                ..
+            }
+        );
+    if show_merge_list && !result.cycle_display.is_empty() && !skip_redisplay {
         println!();
         let mut thrown_away: Vec<String> = Vec::new();
         for cpv in &result.cycle_display {
-            let Some(entry) = entries.iter().find(|e| {
+            let Some(entry) = display_entries.iter().find(|e| {
                 let ver = match &e.outcome {
                     portage_repo::PretendOutcome::New { version }
                     | portage_repo::PretendOutcome::Reinstall { version, .. } => version,
@@ -11773,6 +11914,46 @@ mod tests {
         // rejects too.
         assert!(!news_item_valid(&item("2.0", "dev-libs/foo[[bad")));
         assert!(!news_item_valid("Display-If-Installed: dev-libs/foo\n"));
+    }
+
+    #[test]
+    fn abort_outcome_to_json_spells_reasons_like_the_python_mirror() {
+        // Slice 4 `--json` provenance: `null` on the complete path, one
+        // `{"reason":…}` shape per abort variant. The spellings and
+        // payload keys are the cross-language contract (the Python
+        // mirror's `_print_json` builds them independently; the abort
+        // contract tests pin both sides' bytes on the fixtures).
+        use portage_repo::{AbortReason, ResolveOutcome};
+        assert_eq!(abort_outcome_to_json(&ResolveOutcome::Complete), "null");
+        assert_eq!(
+            abort_outcome_to_json(&ResolveOutcome::Aborted {
+                reason: AbortReason::MaskedDep {
+                    atom: "dev-libs/maskeddep".to_string(),
+                    parent_cpv: "dev-libs/abort-masked-mid-1.0".to_string(),
+                },
+                partial: Vec::new(),
+            }),
+            r#"{"reason":"masked-dep","atom":"dev-libs/maskeddep","parent":"dev-libs/abort-masked-mid-1.0"}"#
+        );
+        assert_eq!(
+            abort_outcome_to_json(&ResolveOutcome::Aborted {
+                reason: AbortReason::UnsatisfiedAtom {
+                    atom: "dev-libs/abort-nonexistent".to_string(),
+                    parent_cpv: "dev-libs/abort-unsat-mid-1.0".to_string(),
+                },
+                partial: Vec::new(),
+            }),
+            r#"{"reason":"unsatisfied-atom","atom":"dev-libs/abort-nonexistent","parent":"dev-libs/abort-unsat-mid-1.0"}"#
+        );
+        assert_eq!(
+            abort_outcome_to_json(&ResolveOutcome::Aborted {
+                reason: AbortReason::UnserializableCycle {
+                    members: vec!["dev-libs/abort-cycle-a-1.0".to_string()],
+                },
+                partial: Vec::new(),
+            }),
+            r#"{"reason":"unserializable-cycle","members":["dev-libs/abort-cycle-a-1.0"]}"#
+        );
     }
 
     #[test]
