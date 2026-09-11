@@ -10996,6 +10996,11 @@ def resolve_pretend_graph(
         # slot_conflicts, so only the final pass's reports are rendered.
         # Mirrors portage-repo/src/lib.rs's masked_deps.
         masked_deps = []
+        # The unevaluated dep atom behind each dependency
+        # no_visible_candidate entry (first requirer wins, like the entry
+        # itself), for _abort_outcome's "unsatisfied-atom" reason.
+        # Mirrors lib.rs's nvc_dep_atoms.
+        nvc_dep_atoms = {}
         # --changed-deps-report: real _changed_deps_pkgs is a dict keyed by
         # the installed Package object, so a repeat visit to the same
         # installed category/package/version (e.g. via both a bare
@@ -11673,6 +11678,7 @@ def resolve_pretend_graph(
                         if unevaluated_atom is not None
                         else current_atom_str
                     )
+                    nvc_dep_atoms.setdefault((category, package), _display_atom)
                     _masked = _masked_candidates_for_atom(
                         repos, _display_atom, config
                     )
@@ -12650,6 +12656,7 @@ def resolve_pretend_graph(
             slot_want,
             slot_pullers,
             edge_kind_map,
+            nvc_dep_atoms,
         )
 
     def _nvc_count(rows):
@@ -12671,6 +12678,7 @@ def resolve_pretend_graph(
             slot_want,
             slot_pullers,
             edge_kind_map,
+            nvc_dep_atoms,
         ) = _graph_pass()
 
         if required_use_violations:
@@ -13066,18 +13074,72 @@ def resolve_pretend_graph(
         # Real circular_dependency_handler.large_cycle_count + merge_list.
         "large_cycle_count": _large_cycle_count,
         "cycle_display": _cycle_display,
-        # Backlog #19 abort outcome (docs/abort-path-spec.md). Mirrors
-        # portage-repo/src/lib.rs's ResolveOutcome/AbortReason:
-        # ("complete",) on every path today -- Slice 2 carries the outcome
-        # through without producing it. Slice 5 populates ("aborted",
-        # reason, partial) where reason is one of ("masked-dep", atom,
-        # parent_cpv), ("unsatisfied-atom", atom, parent_cpv),
-        # ("unserializable-cycle", [member cpvs]) or
-        # ("autounmask-partial", top_cpv), and partial is the entry-tuple
-        # list Slice 4 renders instead of "entries" (empty for the
-        # masked/unsat shapes -- real shows no list at all).
-        "outcome": ("complete",),
+        # Backlog #19 abort outcome (docs/abort-path-spec.md): ("complete",)
+        # or ("aborted", reason, partial), reason one of ("masked-dep",
+        # atom, parent_cpv), ("unsatisfied-atom", atom, parent_cpv) or
+        # ("unserializable-cycle", [member cpvs]); partial is the
+        # entry-tuple list Slice 4 renders instead of "entries" (empty for
+        # the masked/unsat shapes -- real shows no list at all; the cycle
+        # remainder in cycle_display order otherwise). Mirrors
+        # portage-repo/src/lib.rs's ResolveOutcome/AbortReason via
+        # _abort_outcome.
+        "outcome": _abort_outcome(
+            entries, masked_deps, _hard_cycles, _cycle_display, nvc_dep_atoms
+        ),
     }
+
+
+def _abort_outcome(entries, masked_deps, circular_deps, cycle_display, nvc_dep_atoms):
+    """Derives the abort outcome from the settled graph -- real's abandon
+    sites as a post-loop classification (the final pass is the one real
+    would display). Precedence follows real's control flow: a walk-time
+    failure (_add_dep returning 0 -> _create_graph 0 -> _resolve returns
+    before altlist(), depgraph.py:5676-5681) wins over the
+    _serialize_tasks give-up inside altlist(), so a masked/unsat
+    dependency beats a cycle in the same graph (oracle: abort-masked-
+    cycle). Among several walk-time failures real records only the first
+    its DFS reaches; this takes the first in BFS admission order (a
+    deliberate cut). A no_visible_candidate dependency aborts only when
+    at least one requirer is merge-bound (real rescues an installed
+    parent's unsatisfied dep, :3425-3437 / :3458-3470; a top-level miss
+    is fatal via the argument path). Masked-only atoms are those with a
+    masked_deps report; every other miss is "unsatisfied-atom"
+    (:3479-3483). Mirrors portage-repo/src/lib.rs's abort_outcome."""
+    by_cp = {(e[0], e[1]): e for e in entries}
+    for entry in entries:
+        if entry[2][0] != "no_visible_candidate":
+            continue
+        parent_cpv = None
+        for owner in entry[6]:
+            o = by_cp.get(owner)
+            if o is not None:
+                parent_cpv = _merge_bound_cpv(o)
+                if parent_cpv is not None:
+                    break
+        if parent_cpv is None:
+            continue
+        rep = next(
+            (r for r in masked_deps if r["category"] == entry[0] and r["package"] == entry[1]),
+            None,
+        )
+        if rep is not None:
+            reason = ("masked-dep", rep["atom"], parent_cpv)
+        else:
+            reason = (
+                "unsatisfied-atom",
+                nvc_dep_atoms.get((entry[0], entry[1]), f"{entry[0]}/{entry[1]}"),
+                parent_cpv,
+            )
+        return ("aborted", reason, [])
+    if circular_deps:
+        partial = []
+        for cpv in cycle_display:
+            for e in entries:
+                if _merge_bound_cpv(e) == cpv:
+                    partial.append(e)
+                    break
+        return ("aborted", ("unserializable-cycle", list(cycle_display)), partial)
+    return ("complete",)
 
 
 def _deep_recurses_at(deep, depth):
@@ -21820,20 +21882,6 @@ def run(args):
         print(file=sys.stderr)
         return 1
 
-    # Backlog #19 abort-path outcome mapping (real actions.py:460-462:
-    # `not success` -> `display_problems()`, `return 1` -- the merge list
-    # is never displayed, so an aborted resolve shows at most the partial
-    # list and always exits 1). Gated on abort_path_enabled()
-    # (PORTUALE_ABORT_PATH=0 keeps the legacy "report, don't enforce"
-    # list + exit 0 -- Gate G0.4). Behaviour-neutral today: the resolver
-    # only ever returns ("complete",) (see the "outcome" key comment at
-    # the resolve_pretend_graph return below), so this arm cannot fire;
-    # Slice 5 populates ("aborted", reason, partial) at the three
-    # _select_files failure sites and moves the partial-list rendering
-    # here. Mirrors pretend.rs.
-    if abort_path_enabled() and result["outcome"][0] == "aborted":
-        return 1
-
     # Real _serialize_tasks -> _show_circular_deps (depgraph.py:10425): an
     # unbreakable build-time dependency cycle -- printed to stderr after
     # the merge list, then the action fails (exit 1). The reduced
@@ -21897,6 +21945,21 @@ def run(args):
                     "Several changes might be required to resolve all cycles.\n"
                     "Temporarily changing some use flag for all packages might be the better option.\n"
                 )
+        return 1
+
+    # Backlog #19 abort-path outcome mapping (real actions.py:460-462:
+    # `not success` -> `display_problems()`, `return 1` -- the merge list
+    # is never displayed, so an aborted resolve shows at most the partial
+    # list and always exits 1). Gated on abort_path_enabled()
+    # (PORTUALE_ABORT_PATH=0 keeps the legacy "report, don't enforce"
+    # list + exit 0 -- Gate G0.4). Since Slice 3 the resolver produces
+    # ("aborted", ...) (see _abort_outcome), so this fires for a
+    # masked-only or otherwise unsatisfiable dependency of a merge-bound
+    # package and for an unserializable cycle; it sits *after* the
+    # circular block above because real's display_problems() prints
+    # _show_circular_deps first (depgraph.py:11113) and only then returns
+    # 1. Slice 4 moves the partial-list rendering here. Mirrors pretend.rs.
+    if abort_path_enabled() and result["outcome"][0] == "aborted":
         return 1
 
     return 0

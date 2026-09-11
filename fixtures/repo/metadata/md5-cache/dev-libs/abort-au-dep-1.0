@@ -1,0 +1,7 @@
+DEFINED_PHASES=-
+DESCRIPTION=fixture package: autounmask USE target for the abort-path fourth shape (auflag default off, no deps)
+EAPI=8
+IUSE=auflag
+KEYWORDS=amd64
+SLOT=0
+_md5_=0000000000000000000000000000000

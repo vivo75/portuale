@@ -1,0 +1,8 @@
+DEFINED_PHASES=-
+DESCRIPTION=fixture package: masked-only dep plus a hard DEPEND cycle in one top -- oracles the walk-time-before-serialize-time abort precedence
+EAPI=8
+IUSE=
+KEYWORDS=amd64
+RDEPEND=dev-libs/abort-leaf-a dev-libs/maskeddep dev-libs/abort-cycle-a dev-libs/abort-leaf-b
+SLOT=0
+_md5_=0000000000000000000000000000000

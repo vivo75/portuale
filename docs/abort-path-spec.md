@@ -132,6 +132,21 @@ fixtures), `11 news items … 'gentoo'` / `5 news items … 'testrepo'`
 (backtrack: N/20)` timing (non-deterministic by plan invariant — a
 deliberate cut, never pinned).
 
+**Slice 3 addendum (2026-09-11, `TEST/run/abort-capture.sh`).**
+The method above is now a script. One correction to it: the Slice 1
+runs bind-mounted the *host's* `/etc/make.local`, whose
+`EMERGE_DEFAULT_OPTS` carries `--binpkg-respect-use=y` — which real
+`create_depgraph_params.py:63-67` turns into `--autounmask-use=n` — plus
+`--autounmask=y --usepkg=n --getbinpkg=y`. Portuale resolves the fixture
+`make.conf`'s `source /etc/make.local` chroot-style (no such file under
+`fixtures/`), so the host file must not reach the oracle either: the
+script mounts an empty file by default. The six Slice 1 tops were
+re-captured that way and diff from the committed captures only in
+environment noise (spinner dots, news-item order, `Unable to unshare`
+repeats, the global-updates banner) — no merge line, `Total:`, error
+block, or exit code moved, so §4a–§4c stand as committed. Every capture
+added in Slice 3 (§4d, §4e) used the clean mount.
+
 ## 4. What real does, per shape (the oracle)
 
 ### 4a. Masked-only dependency (`abort-masked-mid`, `-last`) — exit 1, NO merge list
@@ -198,19 +213,123 @@ row-counted counters); the re-display becomes the *only* list; tree
 nesting/`[nomerge]`/duplication is portuale's standing dedup-by-design
 cut (see §7).
 
-### 4d. Fourth shape (NOT covered by new fixtures): backtrack-exhausted autounmask+cycle
+### 4d. Fourth shape, oracled in Slice 3: autounmask changes + unserializable cycle — exit 1, the SAME reduced tree as 4c, USE block after the circular block
 
-No new fixture: the trigger needs autounmask changes *plus* an
-unresolvable cycle *plus* `--autounmask-backtrack != y`, i.e. the
-plasma-meta/podman cluster-A shape documented in `bb9e147` and
-`TEST/findings/`. Mechanism (re-derived from source, not re-captured):
-`_backtrack_depgraph` breaks at `backtracked == 0` via
-`need_config_change()` (`depgraph.py:12228-12234`, `11708-11760`), the
-`get_best_run` re-run at `:12250-12260` is skipped, and the pass-1
-partial digraph reaches `display_problems()` → `_display_autounmask()`
-→ `_show_merge_list()` (`:10488-10494`), which displays the partial
-`_serialized_tasks_cache`. Whether v1 covers this shape is a Gate-0
-scoping question (G0.3 below).
+Gate G0.3 put "the autounmask+cycle partial-altlist shape" (the
+plasma-meta cluster-A truncation, `bb9e147`) in v1 and made its fixture
+a Slice 3 prerequisite. Two fixtures now cover it, both captured live
+(`fixtures/abort-captures/dev-libs_abort-au-*`, 3.0.81.3, clean
+`make.local`, `backtrack: 0/20`):
+
+- `abort-au-cycle`: `leaf-a abort-au-dep[auflag] abort-cycle-a leaf-b`,
+  where `abort-au-dep` has `IUSE="auflag"` (off) — a fresh-candidate
+  `--autounmask-use` flip plus the 4c cycle.
+- `abort-au-restart-cycle`: `leaf-a aucascmid aucasclate abort-cycle-a
+  leaf-b` — the *in-graph* flip (`aucasclate` needs
+  `aucascmid[cascade]` on the already-added `aucascmid`, whose own
+  `cascade? ( aucascleaf )` dep set changes: real's
+  `want_restart_for_use_change`, `depgraph.py:7719-7796`) plus the cycle.
+
+stdout (`-pv`, identical under `-pvt`/`--columns`) is **byte-for-byte
+the 4c tree** modulo the top's name: `[ebuild N] <top>`, the two
+`[nomerge]` rows, `[ebuild N]` cycle-a ×2, cycle-b, `Total: 4 packages
+(4 new)`. `leaf-a`, `leaf-b`, `abort-au-dep`/`aucascmid`/`aucasclate`
+are all absent — drained out of the remainder like the leaves. stderr:
+the `* Error: circular dependencies:` block exactly as in 4c, **then**
+`The following USE changes are necessary to proceed:` with its
+`# required by` chain, then the "backtracking has terminated early"
+notice. Exit 1.
+
+Mechanism: the autounmask change does not change *what* is displayed,
+only *how many passes* run. Pass 0 walks to completion (the
+`--debug` capture shows every `Child:` incl. `abort-au-dep`
+`USE="auflag"`), `altlist()` → `_serialize_tasks` gives up on the cycle
+(`:10262-10294`: `_circular_deps_for_display = mygraph`, `_need_restart`)
+→ `_resolve` returns False. `_backtrack_depgraph` then tests
+`need_config_change()` *before* `need_restart()` (`:12228-12234`):
+`_have_autounmask_changes()` is true, so `_autounmask_backtrack_disabled
+= True` and the loop breaks at `backtracked == 0` — no
+`circular_dependency` feedback pass, no `get_best_run`. `action_build` →
+`display_problems()`: `_show_circular_deps` first (`:11113`, the reduced
+tree + circular block), `_display_autounmask` later (`:11140`; its
+`_show_merge_list()` finds `_serialized_tasks_cache` None — `altlist()`
+raised before `:10410/10419` set it — and prints nothing more). Without
+the autounmask change (4c) the same pass-0 give-up feeds the
+`circular_dependency` map and backtracking continues (`backtrack: 1/20`
+in the 4c captures); the displayed remainder is the same either way.
+
+**Consequences.** (1) There is no fourth *membership* shape: the
+"pass-1 partial DFS prefix" of `bb9e147`/`TEST/findings/l0.md` cluster A
+is not what real displays — plasma-meta's 4 (`go ← gocryptfs ←
+plasma-vault ← plasma-meta`) is exactly `_prepare_reduced_merge_list`'s
+remainder (cycle members plus unserialized requirers), i.e. shape 4c.
+`AbortReason` therefore has no `AutounmaskPartial` variant (removed in
+Slice 3; the reason is `UnserializableCycle`, with the autounmask
+changes reported alongside). (2) For plasma-meta/podman on the real tree
+the remaining gap is not the abort path but the `||` choice: real takes
+the in-graph `>=dev-lang/go` branch on pass 0 and hits the self-cycle,
+portuale's `circular_self` heuristic (`lib.rs`, cluster D) picks
+`go-bootstrap` on pass 0 and never sees a cycle — so it resolves the
+complete 484-package list real never reaches. Reproducing real there
+needs "no `circular_self` on pass 0; on a cycle with autounmask changes
+abort with the remainder, otherwise apply the `circular_dependency` map
+and re-resolve" — a `||`-selection change, tracked in the backlog, not
+part of #19's abort path. (3) Portuale's *ordering* is wrong today: it
+early-exits on the autounmask change before the circular block is
+reached (the two new cycle atoms print the USE block and never the
+circular block); Slice 4/5 must print the circular block first, as real
+does. Pinned as strict xfails in `test_abort_path_cycle_shows_reduced_
+list_only` (the `abort-au-*` entries).
+
+Precedence between abort sites is also oracled now:
+`abort-masked-cycle` (`leaf-a maskeddep abort-cycle-a leaf-b`) prints
+**no merge list and no circular block** — masked block + chain, exit 1 —
+because `_add_dep` returns 0 inside `_create_graph` (`:3483-3522`) and
+`_resolve` returns before `altlist()` ever runs (`:5676-5681`). A
+walk-time failure beats a serialize-time one. Portuale's
+`abort_outcome` (Slice 3) follows that order; between two walk-time
+failures real records whichever its DFS reaches first and portuale
+takes the first in BFS admission order (deliberate cut; no fixture
+carries two).
+
+### 4e. Side findings from the Slice 3 captures (NOT abort-path scope, oracle-backed)
+
+Both captured while building 4d, both pinned as strict xfails so they
+have a target; neither is changed by #19.
+
+- **`aucasctop` (the shipped backward-cascade fixture) lists
+  `aucascleaf` in real.** `emerge -pv dev-libs/aucasctop`: `aucascleaf`,
+  `aucascmid USE="cascade"`, `aucasclate`, `aucasctop`, `Total: 4`, USE
+  block, "terminated early" notice, exit 1, `backtrack: 0/20`. The
+  `--debug` walk shows why: `aucasctop`'s two deps are both `_add_pkg`'d
+  (pushed on `_dep_stack`, `:3254-3271`) before either's deps are walked;
+  `aucasclate` pops first, its `aucascmid[cascade]` flips the
+  still-unwalked `aucascmid` (`_pkg_use_enabled`, `:7795` — the restart
+  flag is set but nothing consults it before the walk ends), and when
+  `aucascmid` pops its `cascade?` dep is live. Portuale's
+  already-resolved-slot re-check leaves the gated leaf out
+  (`test_autounmask_backward_cascade_re_resolves_an_already_resolved_
+  slot` pins 3 lines). Whether real would also pull the leaf when the
+  flipped node's deps were walked *before* the flip is a different
+  fixture (not captured).
+- **No "terminated early" notice when the autounmask change is the only
+  problem.** `abort-au-plain` (`leaf-a abort-au-dep[auflag] leaf-b`): full
+  4-line list, USE block, exit 1, no notice. `need_config_change()`
+  returns on `_success_without_autounmask` (`:11713-11717`) before the
+  notice's flag is set (`:11759`); the notice needs a coinciding
+  failure (`need_restart`, a cycle). Portuale prints it for every
+  autounmask change with backtrack off (12 pinned tests carry
+  `BACKTRACK_TERMINATED_EARLY`; on the real tree most autounmask probes
+  *do* coincide with a restart, which is why L0 never flagged it).
+- **Contaminated-capture bonus (`--autounmask-use` effectively `n`,
+  first run of `abort-au-plain`, not committed):** real printed no list,
+  `emerge: there are no ebuilds built with USE flags to satisfy
+  "dev-libs/abort-au-dep[auflag]"` + `!!! One of the following packages
+  is required … (Change USE: +auflag)` + the chain, exit 1 — i.e. a
+  `[use]`-dep mismatch no flip resolves is an abort of the 4b shape with
+  the `show_missing_use` error block (`:6973`). That is the
+  `--autounmask-use=n` residue already in backlog #20 and is what
+  `abort_outcome`'s `UnsatisfiedAtom` classification covers.
 
 ## 5. Mechanism (source citations, vendored 3.0.82.2)
 
@@ -284,8 +403,12 @@ not apply to it.
   shapes; the observable is the *absence* of the list). Cycle: the
   `_serialize_tasks` stuck remainder (already-drained leaves excluded),
   i.e. cycle members plus their unserialized requirers — for the
-  fixtures, `{top, cycle-a, cycle-b}`. Fourth shape: the pass-1 partial
-  digraph's `altlist()` (not re-derived here; see `bb9e147`).
+  fixtures, `{top, cycle-a, cycle-b}`. Fourth shape (§4d, oracled in
+  Slice 3): identical to the cycle shape — the `bb9e147` "pass-1
+  partial digraph" premise is falsified; autounmask changes only stop
+  the backtracking, they do not change the displayed remainder.
+  Precedence: walk-time (masked/unsat) over serialize-time (cycle),
+  §4d `abort-masked-cycle`.
 - **Order.** Masked/unsat: n/a. Cycle: `_prepare_reduced_merge_list`
   leaf-drain order over the remainder, rendered as a real `--tree` with
   node duplication — NOT DFS acceptance order and NOT the normal
@@ -295,10 +418,12 @@ not apply to it.
   new), Size of downloads: 0 KiB`; duplicated tree rows count multiply.
   (`Size of downloads` is 0 KiB here — no `SRC_URI`s; the `myfetchlist`
   dedup in `output.py:777-782` is orthogonal.)
-- **Exit code.** 1 in all 24 probes, set at `actions.py:460-462` (`not
-  success → display_problems → return 1`). Portuale's hook is
-  `pretend::run` (`pretend.rs:7293`) consuming `GraphResult`
-  (`lib.rs:13137`): circular already exits 1; masked/unsat exit 0 today.
+- **Exit code.** 1 in all 24 probes (and all 20 Slice 3 probes), set at
+  `actions.py:460-462` (`not success → display_problems → return 1`).
+  Portuale's hook is `pretend::run` consuming `GraphResult`: circular
+  already exits 1; masked/unsat exit 1 since Slice 3 with the gate on
+  (`abort_outcome` + the Slice 2 arm, now placed after the circular
+  block like real's `display_problems()` order).
 - **Backtrack interaction.** The abort happens *inside* the retry loop:
   masked/unsat show `backtrack: 1/20` (one `missing dependency`
   feedback + `runtime_pkg_mask` pass, then `get_best_run` re-run fails).
@@ -308,7 +433,8 @@ not apply to it.
 
 ## 7. Stop-condition verdict (plan §1.4: stop if membership depends on unmodelled state)
 
-**Not hit.** Masked/unsat need no traversal-order state at all (the list
+**Not hit** (re-confirmed by Slice 3 for the fourth shape: it needs the
+same `cycle_display` remainder as 4c, nothing pass-retaining). Masked/unsat need no traversal-order state at all (the list
 is absent; only the error block + exit code must be built — both already
 exist in portuale: `masked_deps` disclosure at `lib.rs:13246-13256` /
 `pretend.rs:1177-1200`, the bare unsat line, and the exit-code site in
@@ -344,6 +470,9 @@ real's `_dynamic_config` reinstall bookkeeping or the 1854-node re-walk.
   cycle partial altlist, §4d — the original plasma-meta #19) in v1, or
   does it stay parked with the L0 `truncated` suppression? It needs
   pass-retaining backtrack state portuale does not keep.
+  *Slice 3 outcome:* the owner said "all four"; the fourth turned out
+  to be the third (§4d) — no pass-retaining state was needed, and the
+  plasma-meta residue moved to the `||`-selection gap noted there.
 - **G0.4 (rollout gate).** `PORTUALE_ABORT_PATH=0` fallback vs
   unconditional? The masked/unsat flip changes exit codes on existing
   contract cases (`maskneedpkg`, `kwneedpkg` CASES entries expect 0
@@ -353,7 +482,10 @@ real's `_dynamic_config` reinstall bookkeeping or the 1854-node re-walk.
 ## 9. Provenance
 
 - Captures: `fixtures/abort-captures/`, portage 3.0.81.3, 2026-09-11,
-  `PYTHONHASHSEED=0`, command lines in `*.cmd` files.
+  `PYTHONHASHSEED=0`, command lines in `*.cmd` files. Slice 3 added 20
+  probes (`abort-au-cycle`, `abort-au-plain`, `abort-au-restart-cycle`,
+  `abort-masked-cycle`, `aucasctop`) via `TEST/run/abort-capture.sh`
+  with an empty `/etc/make.local` (§3 addendum).
 - Real source: vendored `3rdparty/portage` (3.0.82.2), line numbers in
   §5 verified against the checkout.
 - Parked work: `backlog/019-DFS-partial` (`9c1e66f`, docs only),

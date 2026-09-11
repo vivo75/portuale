@@ -1,0 +1,99 @@
+
+Performing Global Updates
+(Could take a couple of minutes if you have a lot of binary packages.)
+  .='update pass'  *='binary update'  #='/var/db update'  @='/var/db move'
+  s='/var/db SLOT move'  %='binary move'  S='binary SLOT move'
+  p='update /etc/portage/package.*'
+/fixtures/repo/profiles/updates/2Q-2024..
+
+
+
+Performing Global Updates
+(Could take a couple of minutes if you have a lot of binary packages.)
+  .='update pass'  *='binary update'  #='/var/db update'  @='/var/db move'
+  s='/var/db SLOT move'  %='binary move'  S='binary SLOT move'
+  p='update /etc/portage/package.*'
+/fixtures/repo/profiles/updates/2Q-2024..
+
+
+myaction None
+myopts {'--debug': True, '--pretend': True, '--regex-search-auto': 'y'}
+
+
+myparams {'recurse': True, 'binpkg_respect_use': 'auto', 'autounmask': True, 'autounmask_keep_use': False, 'autounmask_keep_license': True, 'autounmask_keep_keywords': True, 'autounmask_keep_masks': True, 'bdeps': 'auto', 'ignore_soname_deps': 'y', 'dynamic_deps': True, 'implicit_system_deps': True, 'binpkg_changed_deps': 'auto'}
+
+
+These are the packages that would be merged, in order:
+
+Calculating dependencies  
+      Arg: dev-libs/aucasctop
+     Atom: dev-libs/aucasctop
+
+Child:         (dev-libs/aucasctop-1.0:0/0::testrepo, ebuild scheduled for merge to '/fixtures/') USE="" ELIBC="glibc"
+Parent Dep:    dev-libs/aucasctop
+
+Parent:    (dev-libs/aucasctop-1.0:0/0::testrepo, ebuild scheduled for merge to '/fixtures/')
+Depstring: dev-libs/aucascmid dev-libs/aucasclate
+Priority:  runtime
+
+Parent:    (dev-libs/aucasctop-1.0:0/0::testrepo, ebuild scheduled for merge to '/fixtures/')
+Depstring: dev-libs/aucascmid dev-libs/aucasclate
+Priority:  runtime
+Candidates: ['dev-libs/aucascmid', 'dev-libs/aucasclate']
+
+Child:         (dev-libs/aucascmid-1.0:0/0::testrepo, ebuild scheduled for merge to '/fixtures/') USE="-cascade" ELIBC="glibc"
+Parent Dep:    dev-libs/aucascmid required by (dev-libs/aucasctop-1.0:0/0::testrepo, ebuild scheduled for merge to '/fixtures/')
+
+Child:         (dev-libs/aucasclate-1.0:0/0::testrepo, ebuild scheduled for merge to '/fixtures/') USE="" ELIBC="glibc"
+Parent Dep:    dev-libs/aucasclate required by (dev-libs/aucasctop-1.0:0/0::testrepo, ebuild scheduled for merge to '/fixtures/')
+
+Exiting... (dev-libs/aucasctop-1.0:0/0::testrepo, ebuild scheduled for merge to '/fixtures/')
+
+Parent:    (dev-libs/aucasclate-1.0:0/0::testrepo, ebuild scheduled for merge to '/fixtures/')
+Depstring: dev-libs/aucascmid[cascade]
+Priority:  runtime
+
+Parent:    (dev-libs/aucasclate-1.0:0/0::testrepo, ebuild scheduled for merge to '/fixtures/')
+Depstring: dev-libs/aucascmid[cascade]
+Priority:  runtime
+Candidates: ['dev-libs/aucascmid[cascade]']
+
+Child:         (dev-libs/aucascmid-1.0:0/0::testrepo, ebuild scheduled for merge to '/fixtures/') USE="cascade" ELIBC="glibc"
+Parent Dep:    dev-libs/aucascmid[cascade] required by (dev-libs/aucasclate-1.0:0/0::testrepo, ebuild scheduled for merge to '/fixtures/')
+
+Exiting... (dev-libs/aucasclate-1.0:0/0::testrepo, ebuild scheduled for merge to '/fixtures/')
+
+Parent:    (dev-libs/aucascmid-1.0:0/0::testrepo, ebuild scheduled for merge to '/fixtures/')
+Depstring: cascade? ( dev-libs/aucascleaf )
+Priority:  runtime
+
+Parent:    (dev-libs/aucascmid-1.0:0/0::testrepo, ebuild scheduled for merge to '/fixtures/')
+Depstring: dev-libs/aucascleaf
+Priority:  runtime
+Candidates: ['dev-libs/aucascleaf']
+
+Child:         (dev-libs/aucascleaf-1.0:0/0::testrepo, ebuild scheduled for merge to '/fixtures/') USE="" ELIBC="glibc"
+Parent Dep:    dev-libs/aucascleaf required by (dev-libs/aucascmid-1.0:0/0::testrepo, ebuild scheduled for merge to '/fixtures/')
+
+Exiting... (dev-libs/aucascmid-1.0:0/0::testrepo, ebuild scheduled for merge to '/fixtures/')
+... done!
+Dependency resolution took 0.57 s (backtrack: 0/20).
+
+forced reinstall atoms:
+
+
+slot operator dependencies:
+
+
+forced rebuilds:
+
+
+[ebuild  N     ] dev-libs/aucascleaf-1.0 to /fixtures/
+[ebuild  N     ] dev-libs/aucascmid-1.0 to /fixtures/ USE="cascade" 
+[ebuild  N     ] dev-libs/aucasclate-1.0 to /fixtures/
+[ebuild  N     ] dev-libs/aucasctop-1.0 to /fixtures/
+
+ * IMPORTANT: 11 news items need reading for repository 'gentoo'.
+ * IMPORTANT: 5 news items need reading for repository 'testrepo'.
+ * Use eselect news read to view new items.
+
