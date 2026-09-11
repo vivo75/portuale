@@ -11412,6 +11412,28 @@ pub fn run(args: &[String]) -> ExitCode {
         return ExitCode::from(1);
     }
 
+    // Backlog #19 abort-path outcome mapping (real `_emerge/actions.py:
+    // 460-462`: `not success` -> `display_problems()`, `return 1` — the
+    // merge list `display()` is never reached, so an aborted resolve
+    // shows at most the partial list and always exits 1). Gated on
+    // `portage_repo::abort_path_enabled` (`PORTUALE_ABORT_PATH=0` keeps
+    // the legacy "report, don't enforce" list + exit 0 — Gate G0.4).
+    // Since Slice 3 the resolver produces `Aborted` (see
+    // `portage_repo::abort_outcome`), so this fires for a masked-only or
+    // otherwise unsatisfiable dependency of a merge-bound package and for
+    // an unserializable cycle; it sits *after* the circular block above
+    // because real's `display_problems()` prints `_show_circular_deps`
+    // first (`depgraph.py:11113`) and only then returns 1. Slice 4 moves
+    // the partial-list rendering here. `mrg` needs no separate wiring:
+    // `to_emerge_argv` hands its argv to this same `pretend::run`
+    // (`mrg.rs`), so resolution output and exit codes are literally
+    // `emerge`'s by construction.
+    if portage_repo::abort_path_enabled()
+        && let portage_repo::ResolveOutcome::Aborted { .. } = &result.outcome
+    {
+        return ExitCode::from(1);
+    }
+
     // Real execution: only reachable when `!pretend`, which the gate at
     // the top of this function only ever lets through when `buildpkgonly`
     // is also `true` -- see `emerge_build.rs`'s own module doc comment

@@ -728,6 +728,13 @@ fn graph_result_from_order(
     };
     GraphResult {
         entries,
+        // A solved engine plan admits no same-slot divergence and no
+        // relaxation loop ran, so it cannot abort either (no
+        // `_create_graph` 0-return, no `_serialize_tasks` give-up, no
+        // backtrack loop to exhaust) — always `Complete`. See
+        // `ResolveOutcome`'s doc comment; the abort path is a property
+        // of the BFS walk + backtrack loop in `lib.rs`, not the bridge.
+        outcome: super::ResolveOutcome::Complete,
         slot_conflicts: Vec::new(),
         changed_deps_report: Vec::new(),
         buildpkgonly_deps_unsatisfied: false,

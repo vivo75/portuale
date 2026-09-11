@@ -240,6 +240,75 @@ can't grow into these incrementally:
   see `history/scope-backlog-2026-09-05.md` for the full citations.
   `--changed-slot` itself already ships standalone (`slot_changed`).
 
+- **DFS-partial abort path (#19) — Gate-0 decisions recorded 2026-09-11
+  (Slice 1 oracle: `docs/abort-path-spec.md`, fixtures
+  `dev-libs/abort-*-mid/-last`, captures `fixtures/abort-captures/`,
+  24 strict-xfail contract tests).** Owner answers: (G0.1) adopt real's
+  **exit 1 on abort** for all three oracled shapes (masked-only,
+  unserializable cycle, unsat atom) — the `maskneedpkg`/`kwneedpkg`
+  CASES exits flip in Slice 5, and the slot-conflict "informational,
+  exit 0" convention is reconciled explicitly there; (G0.2)
+  **membership + deterministic flat order**, not byte-parity — real's
+  tree duplication + `[nomerge]` rows + row-counted `Total:` stay a
+  deliberate cut under the dedup-by-design rule (moot for masked/unsat,
+  which print no list at all); (G0.3) **all four shapes in v1** —
+  including the autounmask+cycle partial-altlist shape (the original
+  plasma-meta cluster-A truncation), which still needs a synthetic
+  fixture (Slice 3 prerequisite) plus pass-retaining backtrack state;
+  (G0.4) the path lands **flag-gated** (`PORTUALE_ABORT_PATH=0`
+  fallback), so Slice 2 stays behaviour-neutral.
+
+- **DFS-partial abort path (#19) — Slice 3 (membership/order) shipped
+  2026-09-11.** `abort_outcome` / `_abort_outcome` classify the settled
+  graph into `ResolveOutcome::Aborted { reason, partial }` on both sides:
+  a `NoVisibleCandidate` dependency with a merge-bound requirer →
+  `MaskedDep` (has a `MaskedDepReport`) or `UnsatisfiedAtom` (anything
+  else, `[use]`-dep mismatches included), empty partial; else a hard
+  cycle → `UnserializableCycle { members = cycle_display }`, partial =
+  the remainder entries in leaf-drain order. Walk-time beats
+  serialize-time (oracle `abort-masked-cycle`). The fourth Gate-0 shape
+  was oracled (`abort-au-cycle`, `abort-au-restart-cycle`, spec §4d) and
+  is the cycle shape — no `AutounmaskPartial` variant, no
+  pass-retaining state. Observable change with the gate on: exit 1 for
+  every such abort (the Slice 2 arm, now placed after the circular
+  block); 14 CASES + 25 pinned assertions re-pinned 0→1 (`maskneedpkg`,
+  `kwneedpkg`, `missingdep`, the `--autounmask-use=n` shapes, `--root-deps`
+  build-dep misses, `--usepkgonly` binpkgs with no binary for a dep — all
+  "unsatisfiable dep of a to-be-merged parent", real `_add_dep` returns
+  0). The list itself is still the full one (Slice 4), the error blocks
+  unchanged (Slice 5). Deliberate cuts recorded: first-failure choice in
+  BFS admission order when two walk-time failures coexist; installed
+  parents' unsatisfied deps never abort (real's
+  `_initially_unsatisfied_deps` rescue — the `--deep` sub-cases are
+  uncaptured). **Real-tree residue (not the abort path):** plasma-meta/
+  podman need the `||` choice to follow real (`>=dev-lang/go` in-graph
+  on pass 0, cycle, abort with the remainder when autounmask changes are
+  present; `circular_dependency`-map re-resolve otherwise) — portuale's
+  `circular_self` pick of `go-bootstrap` on pass 0 hides the cycle. Stays
+  under the L0 `truncated` suppression until that `||` slice.
+
+- **Autounmask side findings from the Slice 3 oracle (open, not #19;
+  strict xfails `test_autounmask_only_resolve_prints_no_terminated_early_
+  notice`, `test_autounmask_cascade_flip_before_dep_walk_pulls_the_gated_
+  leaf`, captures `fixtures/abort-captures/dev-libs_{abort-au-plain,
+  aucasctop}.*`, spec §4e).** (a) Real prints the "backtracking has
+  terminated early" notice only when the autounmask change coincides
+  with another failure (`need_config_change` returns on
+  `_success_without_autounmask` before setting
+  `_autounmask_backtrack_disabled`, `depgraph.py:11713-11717`);
+  portuale prints it for every change with backtrack off. (b) Real's
+  DFS applies an in-graph `[use]` flip before walking the flipped node's
+  own deps when that node was pushed but not yet popped (`aucasctop`:
+  `aucascleaf` IS listed, `Total: 4`); portuale's already-resolved-slot
+  re-check leaves the `flag?`-gated dep out. The Slice 1 captures were
+  also re-verified with a clean `/etc/make.local` (the host file had
+  leaked `--binpkg-respect-use=y` → `--autounmask-use=n`): unchanged.
+  Also noticed (pre-existing, not introduced here): `--json` on
+  `abort-masked-mid`/`abort-unsat-mid` orders the `no_visible_candidate`
+  entry differently in Rust (BFS admission position) and Python (after
+  the sibling leaves) — invisible in the text modes, which are
+  byte-identical; the contract suite never diffs `--json` on those.
+
 ### B / C / D / E — complete; residual documented cuts only
 
 **B. Scheduler / build orchestration** (2026-09-04): merge-hook log

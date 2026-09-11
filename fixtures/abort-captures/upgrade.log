@@ -1,0 +1,164 @@
+upgrading portage 3.0.81.3 -> 3.0.82.2
+!!! Repository 'overlay' is missing masters attribute in '/fixtures/overlay/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+!!! Repository 'independentoverlay' is missing masters attribute in '/fixtures/independentoverlay/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+!!! Repository 'repnamefromfile' is missing masters attribute in '/fixtures/repnamerepo/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+!!! Repository 'repnamefromfile' is missing masters attribute in '/fixtures/repnamerepo/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+--- EAPI '0' does not support 'package.use.stable.mask': '/fixtures/repo/profiles/package.use.stable.mask'
+--- Invalid atom in /fixtures/repo/profiles/package.use.force: */pkgusemaskforcepkg
+--- EAPI '0' does not support 'use.stable.force': '/fixtures/repo/profiles/base/use.stable.force'
+--- EAPI '0' does not support 'package.use.stable.mask': '/fixtures/repo/profiles/base/package.use.stable.mask'
+!!! Repository 'independentoverlay' is missing masters attribute in '/fixtures/independentoverlay/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+!!! Repository 'overlay' is missing masters attribute in '/fixtures/overlay/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+!!! Repository 'repnamefromfile' is missing masters attribute in '/fixtures/repnamerepo/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+!!! Repository 'repnamefromfile' is missing masters attribute in '/fixtures/repnamerepo/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+--- EAPI '0' does not support 'package.use.stable.mask': '/fixtures/repo/profiles/package.use.stable.mask'
+--- Invalid atom in /fixtures/repo/profiles/package.use.force: */pkgusemaskforcepkg
+FEATURES variable contains unknown value(s): cgroup, observability
+
+Performing Global Updates
+(Could take a couple of minutes if you have a lot of binary packages.)
+ERROR: Update type not recognized '# Quarter 2 2024 package moves (fixture)'
+
+
+!!! Repository 'overlay' is missing masters attribute in '/fixtures/overlay/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+!!! Repository 'independentoverlay' is missing masters attribute in '/fixtures/independentoverlay/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+!!! Repository 'repnamefromfile' is missing masters attribute in '/fixtures/repnamerepo/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+!!! Repository 'repnamefromfile' is missing masters attribute in '/fixtures/repnamerepo/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+--- EAPI '0' does not support 'package.use.stable.mask': '/fixtures/repo/profiles/package.use.stable.mask'
+--- Invalid atom in /fixtures/repo/profiles/package.use.force: */pkgusemaskforcepkg
+--- EAPI '0' does not support 'use.stable.force': '/fixtures/repo/profiles/base/use.stable.force'
+--- EAPI '0' does not support 'package.use.stable.mask': '/fixtures/repo/profiles/base/package.use.stable.mask'
+!!! Repository 'independentoverlay' is missing masters attribute in '/fixtures/independentoverlay/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+!!! Repository 'overlay' is missing masters attribute in '/fixtures/overlay/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+!!! Repository 'repnamefromfile' is missing masters attribute in '/fixtures/repnamerepo/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+!!! Repository 'repnamefromfile' is missing masters attribute in '/fixtures/repnamerepo/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+--- EAPI '0' does not support 'package.use.stable.mask': '/fixtures/repo/profiles/package.use.stable.mask'
+--- Invalid atom in /fixtures/repo/profiles/package.use.force: */pkgusemaskforcepkg
+FEATURES variable contains unknown value(s): cgroup, observability
+
+Performing Global Updates
+(Could take a couple of minutes if you have a lot of binary packages.)
+ERROR: Update type not recognized '# Quarter 2 2024 package moves (fixture)'
+
+
+!!! Repository 'overlay' is missing masters attribute in '/fixtures/overlay/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+!!! Repository 'independentoverlay' is missing masters attribute in '/fixtures/independentoverlay/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+!!! Repository 'repnamefromfile' is missing masters attribute in '/fixtures/repnamerepo/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+!!! Repository 'repnamefromfile' is missing masters attribute in '/fixtures/repnamerepo/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+--- EAPI '0' does not support 'package.use.stable.mask': '/fixtures/repo/profiles/package.use.stable.mask'
+--- Invalid atom in /fixtures/repo/profiles/package.use.force: */pkgusemaskforcepkg
+--- EAPI '0' does not support 'use.stable.force': '/fixtures/repo/profiles/base/use.stable.force'
+--- EAPI '0' does not support 'package.use.stable.mask': '/fixtures/repo/profiles/base/package.use.stable.mask'
+!!! Repository 'independentoverlay' is missing masters attribute in '/fixtures/independentoverlay/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+!!! Repository 'overlay' is missing masters attribute in '/fixtures/overlay/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+!!! Repository 'repnamefromfile' is missing masters attribute in '/fixtures/repnamerepo/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+!!! Repository 'repnamefromfile' is missing masters attribute in '/fixtures/repnamerepo/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+--- EAPI '0' does not support 'package.use.stable.mask': '/fixtures/repo/profiles/package.use.stable.mask'
+--- Invalid atom in /fixtures/repo/profiles/package.use.force: */pkgusemaskforcepkg
+FEATURES variable contains unknown value(s): cgroup, observability
+!!! Invalid news item: /fixtures/repo/metadata/news/2026-09-08-portuale-malformed/2026-09-08-portuale-malformed.en.txt
+!!!   line 7: Display-If-Installed: dev-libs/infoinstpkg[[bad
+!!! Invalid news item: /fixtures/repo/metadata/news/2026-09-10-portuale-format1-useatom/2026-09-10-portuale-format1-useatom.en.txt
+!!!   line 7: Display-If-Installed: dev-libs/infoinstpkg[alpha]
+!!! Invalid news item: /fixtures/repo/metadata/news/2026-09-09-portuale-format1-slotatom/2026-09-09-portuale-format1-slotatom.en.txt
+!!!   line 7: Display-If-Installed: dev-libs/samepkg:1
+
+ * IMPORTANT: 11 news items need reading for repository 'gentoo'.
+ * IMPORTANT: 5 news items need reading for repository 'testrepo'.
+ * Use eselect news read to view new items.
+
+Unable to unshare: EPERM (for FEATURES="ipc-sandbox network-sandbox pid-sandbox")
+Unable to unshare: EPERM (for FEATURES="ipc-sandbox network-sandbox pid-sandbox")
+Unable to unshare: EPERM (for FEATURES="ipc-sandbox network-sandbox pid-sandbox")
+Unable to unshare: EPERM (for FEATURES="ipc-sandbox network-sandbox pid-sandbox")
+Unable to unshare: EPERM (for FEATURES="ipc-sandbox network-sandbox pid-sandbox")
+Unable to unshare: EPERM (for FEATURES="ipc-sandbox network-sandbox pid-sandbox")
+Unable to unshare: EPERM (for FEATURES="ipc-sandbox network-sandbox pid-sandbox")
+Unable to unshare: EPERM (for FEATURES="ipc-sandbox network-sandbox pid-sandbox")
+Unable to unshare: EPERM (for FEATURES="ipc-sandbox network-sandbox pid-sandbox")
+Unable to unshare: EPERM (for FEATURES="ipc-sandbox network-sandbox pid-sandbox")
+Unable to unshare: EPERM (for FEATURES="ipc-sandbox network-sandbox pid-sandbox")
+Unable to unshare: EPERM (for FEATURES="ipc-sandbox network-sandbox pid-sandbox")
+Unable to unshare: EPERM (for FEATURES="ipc-sandbox network-sandbox pid-sandbox")
+Unable to unshare: EPERM (for FEATURES="ipc-sandbox network-sandbox pid-sandbox")
+Unable to unshare: EPERM (for FEATURES="ipc-sandbox network-sandbox pid-sandbox")
+Unable to unshare: EPERM (for FEATURES="ipc-sandbox network-sandbox pid-sandbox")
+Unable to unshare: EPERM (for FEATURES="ipc-sandbox network-sandbox pid-sandbox")
+Unable to unshare: EPERM (for FEATURES="ipc-sandbox network-sandbox pid-sandbox")
+Unable to unshare: EPERM (for FEATURES="ipc-sandbox network-sandbox pid-sandbox")
+Unable to unshare: EPERM (for FEATURES="ipc-sandbox network-sandbox pid-sandbox")
+Unable to unshare: EPERM (for FEATURES="ipc-sandbox network-sandbox pid-sandbox")
+Unable to unshare: EPERM (for FEATURES="ipc-sandbox network-sandbox pid-sandbox")
+Unable to unshare: EPERM (for FEATURES="ipc-sandbox network-sandbox pid-sandbox")
+Unable to unshare: EPERM (for FEATURES="ipc-sandbox network-sandbox pid-sandbox")
+Unable to unshare: EPERM (for FEATURES="ipc-sandbox network-sandbox pid-sandbox")
+Unable to unshare: EPERM (for FEATURES="ipc-sandbox network-sandbox pid-sandbox")
+Unable to unshare: EPERM (for FEATURES="ipc-sandbox network-sandbox pid-sandbox")
+Unable to unshare: EPERM (for FEATURES="ipc-sandbox network-sandbox pid-sandbox")
+Unable to unshare: EPERM (for FEATURES="ipc-sandbox network-sandbox pid-sandbox")
+Unable to unshare: EPERM (for FEATURES="ipc-sandbox network-sandbox pid-sandbox")
+Unable to unshare: EPERM (for FEATURES="ipc-sandbox network-sandbox pid-sandbox")
+Unable to unshare: EPERM (for FEATURES="ipc-sandbox network-sandbox pid-sandbox")
+Unable to unshare: EPERM (for FEATURES="ipc-sandbox network-sandbox pid-sandbox")
+Unable to unshare: EPERM (for FEATURES="ipc-sandbox network-sandbox pid-sandbox")
+Unable to unshare: EPERM (for FEATURES="ipc-sandbox network-sandbox pid-sandbox")
+Unable to unshare: EPERM (for FEATURES="ipc-sandbox network-sandbox pid-sandbox")
+Unable to unshare: EPERM (for FEATURES="ipc-sandbox network-sandbox pid-sandbox")
+Unable to unshare: EPERM (for FEATURES="ipc-sandbox network-sandbox pid-sandbox")
+Unable to unshare: EPERM (for FEATURES="ipc-sandbox network-sandbox pid-sandbox")
+Unable to unshare: EPERM (for FEATURES="ipc-sandbox network-sandbox pid-sandbox")
+Unable to unshare: EPERM (for FEATURES="ipc-sandbox network-sandbox pid-sandbox")
+Unable to unshare: EPERM (for FEATURES="ipc-sandbox network-sandbox pid-sandbox")
+Unable to unshare: EPERM (for FEATURES="ipc-sandbox network-sandbox pid-sandbox")
+
+Messages for package [32mdev-libs/blockusedeptarget-1.0::testrepo[0m:
+ [31;01m*[0m ERROR: dev-libs/blockusedeptarget-1.0::testrepo failed (depend phase):
+ [31;01m*[0m   External commands disallowed while sourcing ebuild: gone
+ [31;01m*[0m 
+ [31;01m*[0m Call stack:
+ [31;01m*[0m                      ebuild.sh, line 681:  Called source '/fixtures/repo/dev-libs/blockusedeptarget/blockusedeptarget-1.0.ebuild'
+ [31;01m*[0m   blockusedeptarget-1.0.ebuild, line   2:  Called command_not_found_handle 'gone'
+ [31;01m*[0m                      ebuild.sh, line 107:  Called die
+ [31;01m*[0m The specific snippet of code:
+ [31;01m*[0m   		die "External commands disallowed while sourcing ebuild: ${*}"
+ [31;01m*[0m 
+ [31;01m*[0m If you need support, post the output of `emerge --info '=dev-libs/blockusedeptarget-1.0::testrepo'`,
+ [31;01m*[0m the complete build log and the output of `emerge -pqv '=dev-libs/blockusedeptarget-1.0::testrepo'`.
+ [31;01m*[0m Working directory: '/usr/lib/python3.14/site-packages'
+ [31;01m*[0m S: '/var/tmp/portage/dev-libs/blockusedeptarget-1.0/work/blockusedeptarget-1.0'
+Unable to unshare: EPERM (for FEATURES="ipc-sandbox network-sandbox pid-sandbox")
+Unable to unshare: EPERM (for FEATURES="ipc-sandbox network-sandbox pid-sandbox")
+Unable to unshare: EPERM (for FEATURES="ipc-sandbox network-sandbox pid-sandbox")
+
+!!! All ebuilds that could satisfy "=sys-apps/portage-3.0.82.2" for /fixtures/ have been masked.
+!!! One of the following masked packages is required to complete your request:
+- sys-apps/portage-3.0.82.2::gentoo (masked by: invalid: RDEPEND: USE flag 'kernel_linux' referenced in conditional 'kernel_linux?' is not in IUSE)
+
+For more information, see the MASKED PACKAGES section in the emerge
+man page or refer to the Gentoo Handbook.
+
+UPGRADE FAILED -- captures are against 3.0.81.3

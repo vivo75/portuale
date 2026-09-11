@@ -1,0 +1,74 @@
+
+Performing Global Updates
+(Could take a couple of minutes if you have a lot of binary packages.)
+  .='update pass'  *='binary update'  #='/var/db update'  @='/var/db move'
+  s='/var/db SLOT move'  %='binary move'  S='binary SLOT move'
+  p='update /etc/portage/package.*'
+/fixtures/repo/profiles/updates/2Q-2024..
+
+
+
+Performing Global Updates
+(Could take a couple of minutes if you have a lot of binary packages.)
+  .='update pass'  *='binary update'  #='/var/db update'  @='/var/db move'
+  s='/var/db SLOT move'  %='binary move'  S='binary SLOT move'
+  p='update /etc/portage/package.*'
+/fixtures/repo/profiles/updates/2Q-2024..
+
+
+myaction None
+myopts {'--debug': True, '--pretend': True, '--regex-search-auto': 'y'}
+
+
+myparams {'recurse': True, 'binpkg_respect_use': 'auto', 'autounmask': True, 'autounmask_keep_use': False, 'autounmask_keep_license': True, 'autounmask_keep_keywords': True, 'autounmask_keep_masks': True, 'bdeps': 'auto', 'ignore_soname_deps': 'y', 'dynamic_deps': True, 'implicit_system_deps': True, 'binpkg_changed_deps': 'auto'}
+
+
+These are the packages that would be merged, in order:
+
+Calculating dependencies  
+      Arg: dev-libs/abort-au-plain
+     Atom: dev-libs/abort-au-plain
+
+Child:         (dev-libs/abort-au-plain-1.0:0/0::testrepo, ebuild scheduled for merge to '/fixtures/') USE="" ELIBC="glibc"
+Parent Dep:    dev-libs/abort-au-plain
+
+Parent:    (dev-libs/abort-au-plain-1.0:0/0::testrepo, ebuild scheduled for merge to '/fixtures/')
+Depstring: dev-libs/abort-leaf-a dev-libs/abort-au-dep[auflag] dev-libs/abort-leaf-b
+Priority:  runtime
+
+Parent:    (dev-libs/abort-au-plain-1.0:0/0::testrepo, ebuild scheduled for merge to '/fixtures/')
+Depstring: dev-libs/abort-leaf-a dev-libs/abort-au-dep[auflag] dev-libs/abort-leaf-b
+Priority:  runtime
+Candidates: ['dev-libs/abort-leaf-a', 'dev-libs/abort-au-dep[auflag]', 'dev-libs/abort-leaf-b']
+
+Child:         (dev-libs/abort-leaf-a-1.0:0/0::testrepo, ebuild scheduled for merge to '/fixtures/') USE="" ELIBC="glibc"
+Parent Dep:    dev-libs/abort-leaf-a required by (dev-libs/abort-au-plain-1.0:0/0::testrepo, ebuild scheduled for merge to '/fixtures/')
+
+Child:         (dev-libs/abort-au-dep-1.0:0/0::testrepo, ebuild scheduled for merge to '/fixtures/') USE="auflag" ELIBC="glibc"
+Parent Dep:    dev-libs/abort-au-dep[auflag] required by (dev-libs/abort-au-plain-1.0:0/0::testrepo, ebuild scheduled for merge to '/fixtures/')
+
+Child:         (dev-libs/abort-leaf-b-1.0:0/0::testrepo, ebuild scheduled for merge to '/fixtures/') USE="" ELIBC="glibc"
+Parent Dep:    dev-libs/abort-leaf-b required by (dev-libs/abort-au-plain-1.0:0/0::testrepo, ebuild scheduled for merge to '/fixtures/')
+
+Exiting... (dev-libs/abort-au-plain-1.0:0/0::testrepo, ebuild scheduled for merge to '/fixtures/')
+... done!
+Dependency resolution took 0.58 s (backtrack: 0/20).
+
+forced reinstall atoms:
+
+
+slot operator dependencies:
+
+
+forced rebuilds:
+
+
+[ebuild  N     ] dev-libs/abort-leaf-a-1.0 to /fixtures/
+[ebuild  N     ] dev-libs/abort-au-dep-1.0 to /fixtures/ USE="auflag" 
+[ebuild  N     ] dev-libs/abort-leaf-b-1.0 to /fixtures/
+[ebuild  N     ] dev-libs/abort-au-plain-1.0 to /fixtures/
+
+ * IMPORTANT: 11 news items need reading for repository 'gentoo'.
+ * IMPORTANT: 5 news items need reading for repository 'testrepo'.
+ * Use eselect news read to view new items.
+

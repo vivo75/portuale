@@ -1,0 +1,35 @@
+
+Performing Global Updates
+(Could take a couple of minutes if you have a lot of binary packages.)
+  .='update pass'  *='binary update'  #='/var/db update'  @='/var/db move'
+  s='/var/db SLOT move'  %='binary move'  S='binary SLOT move'
+  p='update /etc/portage/package.*'
+/fixtures/repo/profiles/updates/2Q-2024..
+
+
+
+Performing Global Updates
+(Could take a couple of minutes if you have a lot of binary packages.)
+  .='update pass'  *='binary update'  #='/var/db update'  @='/var/db move'
+  s='/var/db SLOT move'  %='binary move'  S='binary SLOT move'
+  p='update /etc/portage/package.*'
+/fixtures/repo/profiles/updates/2Q-2024..
+
+
+
+These are the packages that would be merged, in reverse order:
+
+Calculating dependencies  ... done!
+Dependency resolution took 0.57 s (backtrack: 0/20).
+
+[ebuild  N     ] dev-libs/aucasctop-1.0::testrepo to /fixtures/ 0 KiB
+[ebuild  N     ]  dev-libs/aucasclate-1.0::testrepo to /fixtures/ 0 KiB
+[ebuild  N     ]   dev-libs/aucascmid-1.0::testrepo to /fixtures/ USE="cascade" 0 KiB
+[ebuild  N     ]    dev-libs/aucascleaf-1.0::testrepo to /fixtures/ 0 KiB
+
+Total: 4 packages (4 new), Size of downloads: 0 KiB
+
+ * IMPORTANT: 11 news items need reading for repository 'gentoo'.
+ * IMPORTANT: 5 news items need reading for repository 'testrepo'.
+ * Use eselect news read to view new items.
+

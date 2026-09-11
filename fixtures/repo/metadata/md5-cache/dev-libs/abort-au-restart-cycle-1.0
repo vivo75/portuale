@@ -1,0 +1,8 @@
+DEFINED_PHASES=-
+DESCRIPTION=fixture package: want_restart autounmask flip (aucascmid[cascade] on an already-added node) plus a hard DEPEND cycle, between two leaves (abort-path fourth shape, restart variant)
+EAPI=8
+IUSE=
+KEYWORDS=amd64
+RDEPEND=dev-libs/abort-leaf-a dev-libs/aucascmid dev-libs/aucasclate dev-libs/abort-cycle-a dev-libs/abort-leaf-b
+SLOT=0
+_md5_=0000000000000000000000000000000

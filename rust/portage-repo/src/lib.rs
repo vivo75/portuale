@@ -13653,9 +13653,173 @@ pub struct ChangedDepsReportEntry {
     pub repo_name: String,
 }
 
+/// Why a resolve was abandoned (backlog #19, `docs/abort-path-spec.md`):
+/// real's `_create_graph` returns 0 the moment a required dep cannot be
+/// satisfied (`depgraph.py:3254-3271`) or `_serialize_tasks` gives up on
+/// an unserializable cycle (`:10262-10294`) — and `action_build` then
+/// runs `display_problems()` without ever calling `display()`
+/// (`actions.py:460-462`), so the merge list shown is at most a partial
+/// one and the exit status is 1. Produced by [`abort_outcome`] from the
+/// settled graph (Slice 3); rendered and given its error block by the
+/// later slices, the exit code by `pretend::run`'s gated arm.
+///
+/// There is deliberately no "autounmask + cycle" variant: the oracle
+/// (spec §4d, `abort-au-cycle` / `abort-au-restart-cycle`) shows that
+/// autounmask changes coinciding with a cycle only cut the backtrack
+/// loop at try 0 (`need_config_change`, `:11736-11760`) — the list
+/// displayed is still `_show_circular_deps`' stuck remainder, followed
+/// by the autounmask block. That is [`AbortReason::UnserializableCycle`]
+/// with `autounmask_*_changes` non-empty, not a fourth membership shape.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AbortReason {
+    /// A dependency atom matching masked-only ebuilds (spec §4a): the
+    /// disclosure half already ships as [`MaskedDepReport`]; the abort
+    /// half suppresses the merge list and exits 1. `atom` is the report's
+    /// display atom, `parent_cpv` the first merge-bound requirer.
+    MaskedDep { atom: String, parent_cpv: String },
+    /// A dependency atom no visible package satisfies for any other
+    /// reason (spec §4b — nothing matches at all; also a `[use]`-dep
+    /// mismatch no autounmask flip resolves, real's "there are no
+    /// ebuilds built with USE flags" flavour, `depgraph.py:3479-3483`):
+    /// same abort shape as [`AbortReason::MaskedDep`], different error
+    /// block. `atom` is the unevaluated dep atom as queued.
+    UnsatisfiedAtom { atom: String, parent_cpv: String },
+    /// `_serialize_tasks` drained everything serializable and got stuck
+    /// (spec §4c): the display is the stuck remainder only, with
+    /// cumulative counters. `members` are `cat/pkg-version` CPVs in
+    /// leaf-drain remainder order (`GraphResult::cycle_display`); the
+    /// tree nesting/`[nomerge]` rows stay a deliberate cut
+    /// (dedup-by-design, Gate G0.2).
+    UnserializableCycle { members: Vec<String> },
+}
+
+/// Whether the resolve ran to completion or was abandoned: real's
+/// `select_files` falsy-success paths (`depgraph.py:5676-5683`) as data.
+/// The `Aborted` partial list is what Slice 4 renders *instead of*
+/// `entries` (masked/unsat shapes carry an empty partial — real shows no
+/// list at all; the cycle shape carries the stuck remainder, one entry
+/// per `cycle_display` CPV in that order).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ResolveOutcome {
+    Complete,
+    Aborted {
+        reason: AbortReason,
+        partial: Vec<GraphEntry>,
+    },
+}
+
+/// Rollout gate for the abort path (Gate G0.4, flag-gated): unset or any
+/// value but `0` enables the Slice-5 abort rendering + exit codes;
+/// `PORTUALE_ABORT_PATH=0` keeps the legacy "report, don't enforce"
+/// merge list and exit 0. Read directly off the environment at the use
+/// site (same pattern as `PORTAGE_SERIALIZE_FRONTIER_DISABLE` in
+/// `merge_order.rs`), so neither `ResolveRequest` nor the ~60-arg
+/// `resolve_pretend_graph` marshaller grows a parameter for it.
+pub fn abort_path_enabled() -> bool {
+    match std::env::var("PORTUALE_ABORT_PATH") {
+        Ok(v) => v != "0",
+        Err(_) => true,
+    }
+}
+
+/// Derives the abort outcome from the settled graph — real's three
+/// abandon sites as a post-loop classification, since portuale's
+/// `'backtrack` loop (unlike real's `_backtrack_depgraph`) rebuilds
+/// `entries` per pass and the final pass is the one real would display
+/// (spec §6, "the final (best-run-equivalent) pass deciding").
+///
+/// Precedence follows real's control flow: a walk-time failure
+/// (`_add_dep` returning 0 → `_create_graph` 0 → `_resolve` returns
+/// before `altlist()`, `depgraph.py:5676-5681`) wins over a
+/// serialize-time one (the `_serialize_tasks` give-up inside
+/// `altlist()`), so a masked/unsat dependency beats a cycle in the same
+/// graph (oracle: `abort-masked-cycle` — no list, no circular block).
+/// Between several walk-time failures real records only the first one
+/// its DFS reaches; portuale takes the first in BFS admission order
+/// (`entries` order) — a deliberate cut, since which failure is "first"
+/// is a walk-order artefact, and the fixtures never carry two.
+///
+/// A `NoVisibleCandidate` dependency entry aborts only when at least one
+/// requirer is merge-bound: real rescues an *installed* parent's
+/// unsatisfied dep (`_initially_unsatisfied_deps`, `:3425-3437` and
+/// `:3458-3470`, the "error message but do not cause the dependency
+/// calculation to fail" path) and a top-level miss is already fatal via
+/// the argument path, not this one. Masked-only atoms are those with a
+/// [`MaskedDepReport`]; every other miss — nothing matches, or a
+/// `[use]` dep no autounmask flip resolves — is `UnsatisfiedAtom`
+/// (`_select_package(dep.atom.without_use)` succeeding still returns 0,
+/// `:3479-3483`, oracled by the `abort-au-plain` capture taken with
+/// `--autounmask-use` off). `nvc_dep_atoms` carries each such entry's
+/// unevaluated atom as queued.
+pub fn abort_outcome(
+    entries: &[GraphEntry],
+    masked_deps: &[MaskedDepReport],
+    circular_deps: &[Vec<String>],
+    cycle_display: &[String],
+    nvc_dep_atoms: &HashMap<(String, String), String>,
+) -> ResolveOutcome {
+    for entry in entries {
+        if !matches!(entry.outcome, PretendOutcome::NoVisibleCandidate) {
+            continue;
+        }
+        let Some(parent_cpv) = entry.required_by.iter().find_map(|(c, p)| {
+            entries
+                .iter()
+                .find(|o| &o.category == c && &o.package == p)
+                .and_then(merge_bound_cpv)
+        }) else {
+            continue;
+        };
+        let key = (entry.category.clone(), entry.package.clone());
+        let reason = match masked_deps
+            .iter()
+            .find(|r| r.category == entry.category && r.package == entry.package)
+        {
+            Some(rep) => AbortReason::MaskedDep {
+                atom: rep.atom.clone(),
+                parent_cpv,
+            },
+            None => AbortReason::UnsatisfiedAtom {
+                atom: nvc_dep_atoms
+                    .get(&key)
+                    .cloned()
+                    .unwrap_or_else(|| format!("{}/{}", entry.category, entry.package)),
+                parent_cpv,
+            },
+        };
+        return ResolveOutcome::Aborted {
+            reason,
+            partial: Vec::new(),
+        };
+    }
+    if !circular_deps.is_empty() {
+        let partial = cycle_display
+            .iter()
+            .filter_map(|cpv| {
+                entries
+                    .iter()
+                    .find(|e| merge_bound_cpv(e).as_deref() == Some(cpv.as_str()))
+                    .cloned()
+            })
+            .collect();
+        return ResolveOutcome::Aborted {
+            reason: AbortReason::UnserializableCycle {
+                members: cycle_display.to_vec(),
+            },
+            partial,
+        };
+    }
+    ResolveOutcome::Complete
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GraphResult {
     pub entries: Vec<GraphEntry>,
+    /// [`abort_outcome`] over the settled graph (Slice 3): `Aborted`
+    /// exactly when real would have abandoned the resolve, `Complete`
+    /// otherwise. `entries` is still the full graph either way; the
+    /// renderer switches to `partial` in Slice 4.
+    pub outcome: ResolveOutcome,
     pub slot_conflicts: Vec<SlotConflict>,
     pub changed_deps_report: Vec<ChangedDepsReportEntry>,
     /// `--buildpkgonly`'s own real depgraph check
@@ -14970,6 +15134,10 @@ fn backtracking_resolve(req: &ResolveRequest) -> Result<GraphResult, Error> {
         // `MaskedDepReport`): rebuilt every attempt like `slot_conflicts`,
         // so only the final pass's reports are rendered.
         let mut masked_deps: Vec<MaskedDepReport> = Vec::new();
+        // The unevaluated dep atom behind each dependency
+        // `NoVisibleCandidate` entry (first requirer wins, like the entry
+        // itself), for `abort_outcome`'s `UnsatisfiedAtom` reason.
+        let mut nvc_dep_atoms: HashMap<(String, String), String> = HashMap::new();
         // `--changed-deps-report`: real `_changed_deps_pkgs` is a dict keyed
         // by the installed `Package` object, so a repeat visit to the same
         // installed category/package/version (e.g. via both a bare
@@ -15784,6 +15952,9 @@ fn backtracking_resolve(req: &ResolveRequest) -> Result<GraphResult, Error> {
                 // pass; only the final pass's reports are rendered.
                 if matches!(outcome, PretendOutcome::NoVisibleCandidate) {
                     let display_atom = unevaluated_atom.as_deref().unwrap_or(&current_atom);
+                    nvc_dep_atoms
+                        .entry(key.clone())
+                        .or_insert_with(|| display_atom.to_string());
                     if let Some(masked) = masked_candidates_for_atom(&repos, display_atom, config)
                         && !masked_deps
                             .iter()
@@ -17505,8 +17676,19 @@ fn backtracking_resolve(req: &ResolveRequest) -> Result<GraphResult, Error> {
             rep.chain = masked_dep_chain(&entries, &rep.category, &rep.package, atoms, root);
         }
 
+        // Backlog #19 Slice 3: classify the settled graph the way real's
+        // abandon sites would have (see `abort_outcome`).
+        let outcome = abort_outcome(
+            &entries,
+            &masked_deps,
+            &circular_deps,
+            &cycle_display,
+            &nvc_dep_atoms,
+        );
+
         return Ok(GraphResult {
             entries,
+            outcome,
             slot_conflicts,
             changed_deps_report: changed_deps_report_entries,
             buildpkgonly_deps_unsatisfied,
@@ -27022,6 +27204,180 @@ mod tests {
             false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
+    }
+
+    #[test]
+    fn abort_path_gate_truth_table() {
+        // `PORTUALE_ABORT_PATH=0` is the legacy fallback; unset or any
+        // other value enables the abort path (Gate G0.4). A concurrent
+        // resolve racing these mutations is behaviorally invisible: the
+        // gate only guards the `Aborted` arm and Slice 2 never produces
+        // one, so every concurrent outcome stays `Complete` either way.
+        // (`set_var`/`remove_var` are `unsafe` in edition 2024 because
+        // env is process-global; the blocks below are sound for exactly
+        // the invisibility reason above.)
+        unsafe {
+            std::env::remove_var("PORTUALE_ABORT_PATH");
+        }
+        assert!(abort_path_enabled());
+        unsafe {
+            std::env::set_var("PORTUALE_ABORT_PATH", "1");
+        }
+        assert!(abort_path_enabled());
+        unsafe {
+            std::env::set_var("PORTUALE_ABORT_PATH", "yes");
+        }
+        assert!(abort_path_enabled());
+        unsafe {
+            std::env::set_var("PORTUALE_ABORT_PATH", "0");
+        }
+        assert!(!abort_path_enabled());
+        unsafe {
+            std::env::remove_var("PORTUALE_ABORT_PATH");
+        }
+    }
+
+    #[test]
+    fn abort_outcome_membership_and_order() {
+        // Slice 3 pins (docs/abort-path-spec.md §6, live captures in
+        // fixtures/abort-captures/): the outcome is produced on the
+        // settled graph while `entries` stays the full graph (the
+        // renderer switches to `partial` in Slice 4).
+        //
+        // Masked-only dep (§4a): empty partial, the report's display
+        // atom, the top as the first merge-bound requirer -- and the
+        // `-last` sibling identical (declared position is unobservable).
+        for top in ["dev-libs/abort-masked-mid", "dev-libs/abort-masked-last"] {
+            let result = graph_result_real(top);
+            assert_eq!(result.entries.len(), 4, "{top}: full graph kept");
+            match &result.outcome {
+                ResolveOutcome::Aborted {
+                    reason: AbortReason::MaskedDep { atom, parent_cpv },
+                    partial,
+                } => {
+                    assert_eq!(atom, "dev-libs/maskeddep", "{top}");
+                    assert_eq!(parent_cpv, &format!("{top}-1.0"), "{top}");
+                    assert!(partial.is_empty(), "{top}: real shows no list at all");
+                }
+                other => panic!("{top}: expected MaskedDep, got {other:?}"),
+            }
+        }
+        // Nothing matches at all (§4b): same shape, `UnsatisfiedAtom`.
+        for top in ["dev-libs/abort-unsat-mid", "dev-libs/abort-unsat-last"] {
+            let result = graph_result_real(top);
+            match &result.outcome {
+                ResolveOutcome::Aborted {
+                    reason: AbortReason::UnsatisfiedAtom { atom, parent_cpv },
+                    partial,
+                } => {
+                    assert_eq!(atom, "dev-libs/abort-nonexistent", "{top}");
+                    assert_eq!(parent_cpv, &format!("{top}-1.0"), "{top}");
+                    assert!(partial.is_empty(), "{top}");
+                }
+                other => panic!("{top}: expected UnsatisfiedAtom, got {other:?}"),
+            }
+        }
+        // Unserializable cycle (§4c): the `_serialize_tasks` stuck
+        // remainder -- top + both arms, both leaves drained out -- in
+        // leaf-drain order, `partial` one entry per member in that order.
+        // The autounmask+cycle fixtures (§4d) are the same shape: the
+        // autounmask changes only stop real's backtracking at try 0.
+        // (The `abort-au-*` tops resolve with `--autounmask-use` on, the
+        // CLI default; `graph_result_real` runs with autounmask off.)
+        for (top, result) in [
+            (
+                "dev-libs/abort-cycle-mid",
+                graph_result_real("dev-libs/abort-cycle-mid"),
+            ),
+            (
+                "dev-libs/abort-cycle-last",
+                graph_result_real("dev-libs/abort-cycle-last"),
+            ),
+            (
+                "dev-libs/abort-au-cycle",
+                graph_result_autounmask("dev-libs/abort-au-cycle"),
+            ),
+            (
+                "dev-libs/abort-au-restart-cycle",
+                graph_result_autounmask("dev-libs/abort-au-restart-cycle"),
+            ),
+        ] {
+            let expected = vec![
+                format!("{top}-1.0"),
+                "dev-libs/abort-cycle-a-1.0".to_string(),
+                "dev-libs/abort-cycle-b-1.0".to_string(),
+            ];
+            match &result.outcome {
+                ResolveOutcome::Aborted {
+                    reason: AbortReason::UnserializableCycle { members },
+                    partial,
+                } => {
+                    assert_eq!(members, &expected, "{top}");
+                    assert_eq!(members, &result.cycle_display, "{top}");
+                    let partial_cpvs: Vec<String> =
+                        partial.iter().filter_map(merge_bound_cpv).collect();
+                    assert_eq!(
+                        partial_cpvs, expected,
+                        "{top}: partial follows remainder order"
+                    );
+                    assert!(
+                        !partial.iter().any(|e| e.package.starts_with("abort-leaf")),
+                        "{top}: drained leaves are not in the remainder"
+                    );
+                }
+                other => panic!("{top}: expected UnserializableCycle, got {other:?}"),
+            }
+            assert!(
+                result.entries.iter().any(|e| e.package == "abort-leaf-a"),
+                "{top}: full graph kept"
+            );
+        }
+        for top in ["dev-libs/abort-au-cycle", "dev-libs/abort-au-restart-cycle"] {
+            assert!(
+                !graph_result_autounmask(top)
+                    .autounmask_use_changes
+                    .is_empty(),
+                "{top}: the autounmask change is still reported alongside the cycle"
+            );
+        }
+        // With `--autounmask-use=n` the `[auflag]` dep is unsatisfiable
+        // and wins over the cycle (spec §4e third bullet: real prints
+        // the "no ebuilds built with USE flags" block, no list).
+        assert!(matches!(
+            graph_result_autounmask_use_n("dev-libs/abort-au-cycle").outcome,
+            ResolveOutcome::Aborted {
+                reason: AbortReason::UnsatisfiedAtom { .. },
+                ..
+            }
+        ));
+        // Precedence: a walk-time failure beats the serialize-time one
+        // in the same graph (oracle `abort-masked-cycle`: no list, no
+        // circular block) -- even though the cycle is still detected.
+        let result = graph_result_real("dev-libs/abort-masked-cycle");
+        assert!(!result.circular_deps.is_empty());
+        assert!(matches!(
+            result.outcome,
+            ResolveOutcome::Aborted {
+                reason: AbortReason::MaskedDep { .. },
+                ..
+            }
+        ));
+        // Autounmask changes alone never abort (real `_success_without_
+        // autounmask` shows the full list); neither do ordinary resolves.
+        for top in ["dev-libs/abort-au-plain", "dev-libs/aucasctop"] {
+            assert_eq!(
+                graph_result_autounmask(top).outcome,
+                ResolveOutcome::Complete,
+                "{top}"
+            );
+        }
+        for top in ["dev-libs/newpkg", "dev-libs/diamond"] {
+            assert_eq!(
+                graph_result_real(top).outcome,
+                ResolveOutcome::Complete,
+                "{top}"
+            );
+        }
     }
 
     #[track_caller]

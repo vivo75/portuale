@@ -1,0 +1,217 @@
+
+Performing Global Updates
+(Could take a couple of minutes if you have a lot of binary packages.)
+  .='update pass'  *='binary update'  #='/var/db update'  @='/var/db move'
+  s='/var/db SLOT move'  %='binary move'  S='binary SLOT move'
+  p='update /etc/portage/package.*'
+/fixtures/repo/profiles/updates/2Q-2024..
+
+
+
+Performing Global Updates
+(Could take a couple of minutes if you have a lot of binary packages.)
+  .='update pass'  *='binary update'  #='/var/db update'  @='/var/db move'
+  s='/var/db SLOT move'  %='binary move'  S='binary SLOT move'
+  p='update /etc/portage/package.*'
+/fixtures/repo/profiles/updates/2Q-2024..
+
+
+myaction None
+myopts {'--debug': True, '--pretend': True, '--regex-search-auto': 'y'}
+
+
+myparams {'recurse': True, 'binpkg_respect_use': 'auto', 'autounmask': True, 'autounmask_keep_use': False, 'autounmask_keep_license': True, 'autounmask_keep_keywords': True, 'autounmask_keep_masks': True, 'bdeps': 'auto', 'ignore_soname_deps': 'y', 'dynamic_deps': True, 'implicit_system_deps': True, 'binpkg_changed_deps': 'auto'}
+
+
+These are the packages that would be merged, in order:
+
+Calculating dependencies  
+      Arg: dev-libs/abort-cycle-mid
+     Atom: dev-libs/abort-cycle-mid
+
+Child:         (dev-libs/abort-cycle-mid-1.0:0/0::testrepo, ebuild scheduled for merge to '/fixtures/') USE="" ELIBC="glibc"
+Parent Dep:    dev-libs/abort-cycle-mid
+
+Parent:    (dev-libs/abort-cycle-mid-1.0:0/0::testrepo, ebuild scheduled for merge to '/fixtures/')
+Depstring: dev-libs/abort-leaf-a dev-libs/abort-cycle-a dev-libs/abort-leaf-b
+Priority:  runtime
+
+Parent:    (dev-libs/abort-cycle-mid-1.0:0/0::testrepo, ebuild scheduled for merge to '/fixtures/')
+Depstring: dev-libs/abort-leaf-a dev-libs/abort-cycle-a dev-libs/abort-leaf-b
+Priority:  runtime
+Candidates: ['dev-libs/abort-leaf-a', 'dev-libs/abort-cycle-a', 'dev-libs/abort-leaf-b']
+
+Child:         (dev-libs/abort-leaf-a-1.0:0/0::testrepo, ebuild scheduled for merge to '/fixtures/') USE="" ELIBC="glibc"
+Parent Dep:    dev-libs/abort-leaf-a required by (dev-libs/abort-cycle-mid-1.0:0/0::testrepo, ebuild scheduled for merge to '/fixtures/')
+
+Child:         (dev-libs/abort-cycle-a-1.0:0/0::testrepo, ebuild scheduled for merge to '/fixtures/') USE="" ELIBC="glibc"
+Parent Dep:    dev-libs/abort-cycle-a required by (dev-libs/abort-cycle-mid-1.0:0/0::testrepo, ebuild scheduled for merge to '/fixtures/')
+
+Child:         (dev-libs/abort-leaf-b-1.0:0/0::testrepo, ebuild scheduled for merge to '/fixtures/') USE="" ELIBC="glibc"
+Parent Dep:    dev-libs/abort-leaf-b required by (dev-libs/abort-cycle-mid-1.0:0/0::testrepo, ebuild scheduled for merge to '/fixtures/')
+
+Exiting... (dev-libs/abort-cycle-mid-1.0:0/0::testrepo, ebuild scheduled for merge to '/fixtures/')
+
+Parent:    (dev-libs/abort-cycle-a-1.0:0/0::testrepo, ebuild scheduled for merge to '/fixtures/')
+Depstring: dev-libs/abort-cycle-b
+Priority:  buildtime
+
+Parent:    (dev-libs/abort-cycle-a-1.0:0/0::testrepo, ebuild scheduled for merge to '/fixtures/')
+Depstring: dev-libs/abort-cycle-b
+Priority:  buildtime
+Candidates: ['dev-libs/abort-cycle-b']
+
+Child:         (dev-libs/abort-cycle-b-1.0:0/0::testrepo, ebuild scheduled for merge) USE="" ABI_X86="(64)"
+Parent Dep:    dev-libs/abort-cycle-b required by (dev-libs/abort-cycle-a-1.0:0/0::testrepo, ebuild scheduled for merge to '/fixtures/')
+
+Exiting... (dev-libs/abort-cycle-a-1.0:0/0::testrepo, ebuild scheduled for merge to '/fixtures/')
+
+Parent:    (dev-libs/abort-cycle-b-1.0:0/0::testrepo, ebuild scheduled for merge)
+Depstring: dev-libs/abort-cycle-a
+Priority:  buildtime
+
+Parent:    (dev-libs/abort-cycle-b-1.0:0/0::testrepo, ebuild scheduled for merge)
+Depstring: dev-libs/abort-cycle-a
+Priority:  buildtime
+Candidates: ['dev-libs/abort-cycle-a']
+
+Child:         (dev-libs/abort-cycle-a-1.0:0/0::testrepo, ebuild scheduled for merge) USE="" ABI_X86="(64)"
+Parent Dep:    dev-libs/abort-cycle-a required by (dev-libs/abort-cycle-b-1.0:0/0::testrepo, ebuild scheduled for merge)
+
+Exiting... (dev-libs/abort-cycle-b-1.0:0/0::testrepo, ebuild scheduled for merge)
+
+Parent:    (dev-libs/abort-cycle-a-1.0:0/0::testrepo, ebuild scheduled for merge)
+Depstring: dev-libs/abort-cycle-b
+Priority:  buildtime
+
+Parent:    (dev-libs/abort-cycle-a-1.0:0/0::testrepo, ebuild scheduled for merge)
+Depstring: dev-libs/abort-cycle-b
+Priority:  buildtime
+Candidates: ['dev-libs/abort-cycle-b']
+
+Child:         (dev-libs/abort-cycle-b-1.0:0/0::testrepo, ebuild scheduled for merge) USE="" ABI_X86="(64)"
+Parent Dep:    dev-libs/abort-cycle-b required by (dev-libs/abort-cycle-a-1.0:0/0::testrepo, ebuild scheduled for merge)
+
+Exiting... (dev-libs/abort-cycle-a-1.0:0/0::testrepo, ebuild scheduled for merge)
+
+
+backtracking try 1 
+
+
+
+circular dependency graph:
+
+[ebuild  N     ] dev-libs/abort-cycle-mid-1.0::testrepo to /fixtures/ 0 KiB
+[nomerge       ]  dev-libs/abort-cycle-a-1.0::testrepo to /fixtures/
+[nomerge       ]   dev-libs/abort-cycle-b-1.0::testrepo 
+[ebuild  N     ]    dev-libs/abort-cycle-a-1.0::testrepo  0 KiB
+[ebuild  N     ]  dev-libs/abort-cycle-a-1.0::testrepo to /fixtures/ 0 KiB
+[ebuild  N     ]   dev-libs/abort-cycle-b-1.0::testrepo  0 KiB
+
+Total: 4 packages (4 new), Size of downloads: 0 KiB
+forced reinstall atoms:
+
+
+slot operator dependencies:
+
+
+forced rebuilds:
+
+
+
+      Arg: dev-libs/abort-cycle-mid
+     Atom: dev-libs/abort-cycle-mid
+
+Child:         (dev-libs/abort-cycle-mid-1.0:0/0::testrepo, ebuild scheduled for merge to '/fixtures/') USE="" ELIBC="glibc"
+Parent Dep:    dev-libs/abort-cycle-mid
+
+Parent:    (dev-libs/abort-cycle-mid-1.0:0/0::testrepo, ebuild scheduled for merge to '/fixtures/')
+Depstring: dev-libs/abort-leaf-a dev-libs/abort-cycle-a dev-libs/abort-leaf-b
+Priority:  runtime
+
+Parent:    (dev-libs/abort-cycle-mid-1.0:0/0::testrepo, ebuild scheduled for merge to '/fixtures/')
+Depstring: dev-libs/abort-leaf-a dev-libs/abort-cycle-a dev-libs/abort-leaf-b
+Priority:  runtime
+Candidates: ['dev-libs/abort-leaf-a', 'dev-libs/abort-cycle-a', 'dev-libs/abort-leaf-b']
+
+Child:         (dev-libs/abort-leaf-a-1.0:0/0::testrepo, ebuild scheduled for merge to '/fixtures/') USE="" ELIBC="glibc"
+Parent Dep:    dev-libs/abort-leaf-a required by (dev-libs/abort-cycle-mid-1.0:0/0::testrepo, ebuild scheduled for merge to '/fixtures/')
+
+Child:         (dev-libs/abort-cycle-a-1.0:0/0::testrepo, ebuild scheduled for merge to '/fixtures/') USE="" ELIBC="glibc"
+Parent Dep:    dev-libs/abort-cycle-a required by (dev-libs/abort-cycle-mid-1.0:0/0::testrepo, ebuild scheduled for merge to '/fixtures/')
+
+Child:         (dev-libs/abort-leaf-b-1.0:0/0::testrepo, ebuild scheduled for merge to '/fixtures/') USE="" ELIBC="glibc"
+Parent Dep:    dev-libs/abort-leaf-b required by (dev-libs/abort-cycle-mid-1.0:0/0::testrepo, ebuild scheduled for merge to '/fixtures/')
+
+Exiting... (dev-libs/abort-cycle-mid-1.0:0/0::testrepo, ebuild scheduled for merge to '/fixtures/')
+
+Parent:    (dev-libs/abort-cycle-a-1.0:0/0::testrepo, ebuild scheduled for merge to '/fixtures/')
+Depstring: dev-libs/abort-cycle-b
+Priority:  buildtime
+
+Parent:    (dev-libs/abort-cycle-a-1.0:0/0::testrepo, ebuild scheduled for merge to '/fixtures/')
+Depstring: dev-libs/abort-cycle-b
+Priority:  buildtime
+Candidates: ['dev-libs/abort-cycle-b']
+
+Child:         (dev-libs/abort-cycle-b-1.0:0/0::testrepo, ebuild scheduled for merge) USE="" ABI_X86="(64)"
+Parent Dep:    dev-libs/abort-cycle-b required by (dev-libs/abort-cycle-a-1.0:0/0::testrepo, ebuild scheduled for merge to '/fixtures/')
+
+Exiting... (dev-libs/abort-cycle-a-1.0:0/0::testrepo, ebuild scheduled for merge to '/fixtures/')
+
+Parent:    (dev-libs/abort-cycle-b-1.0:0/0::testrepo, ebuild scheduled for merge)
+Depstring: dev-libs/abort-cycle-a
+Priority:  buildtime
+
+Parent:    (dev-libs/abort-cycle-b-1.0:0/0::testrepo, ebuild scheduled for merge)
+Depstring: dev-libs/abort-cycle-a
+Priority:  buildtime
+Candidates: ['dev-libs/abort-cycle-a']
+
+Child:         (dev-libs/abort-cycle-a-1.0:0/0::testrepo, ebuild scheduled for merge) USE="" ABI_X86="(64)"
+Parent Dep:    dev-libs/abort-cycle-a required by (dev-libs/abort-cycle-b-1.0:0/0::testrepo, ebuild scheduled for merge)
+
+Exiting... (dev-libs/abort-cycle-b-1.0:0/0::testrepo, ebuild scheduled for merge)
+
+Parent:    (dev-libs/abort-cycle-a-1.0:0/0::testrepo, ebuild scheduled for merge)
+Depstring: dev-libs/abort-cycle-b
+Priority:  buildtime
+
+Parent:    (dev-libs/abort-cycle-a-1.0:0/0::testrepo, ebuild scheduled for merge)
+Depstring: dev-libs/abort-cycle-b
+Priority:  buildtime
+Candidates: ['dev-libs/abort-cycle-b']
+
+Child:         (dev-libs/abort-cycle-b-1.0:0/0::testrepo, ebuild scheduled for merge) USE="" ABI_X86="(64)"
+Parent Dep:    dev-libs/abort-cycle-b required by (dev-libs/abort-cycle-a-1.0:0/0::testrepo, ebuild scheduled for merge)
+
+Exiting... (dev-libs/abort-cycle-a-1.0:0/0::testrepo, ebuild scheduled for merge)
+... done!
+Dependency resolution took 0.82 s (backtrack: 1/20).
+
+
+
+circular dependency graph:
+
+[ebuild  N     ] dev-libs/abort-cycle-mid-1.0::testrepo to /fixtures/ 0 KiB
+[nomerge       ]  dev-libs/abort-cycle-a-1.0::testrepo to /fixtures/
+[nomerge       ]   dev-libs/abort-cycle-b-1.0::testrepo 
+[ebuild  N     ]    dev-libs/abort-cycle-a-1.0::testrepo  0 KiB
+[ebuild  N     ]  dev-libs/abort-cycle-a-1.0::testrepo to /fixtures/ 0 KiB
+[ebuild  N     ]   dev-libs/abort-cycle-b-1.0::testrepo  0 KiB
+
+Total: 4 packages (4 new), Size of downloads: 0 KiB
+forced reinstall atoms:
+
+
+slot operator dependencies:
+
+
+forced rebuilds:
+
+
+
+ * IMPORTANT: 11 news items need reading for repository 'gentoo'.
+ * IMPORTANT: 5 news items need reading for repository 'testrepo'.
+ * Use eselect news read to view new items.
+
