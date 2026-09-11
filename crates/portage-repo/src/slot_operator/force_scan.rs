@@ -2,6 +2,14 @@
 
 use crate::*;
 
+/// [`slot_operator_update_force_scan`]'s result: the consumers joining
+/// the replace set and the `(category, package, version)` children whose
+/// update the restart must select.
+pub(crate) type SlotOpForceScan = (
+    BTreeSet<(String, String)>,
+    BTreeSet<(String, String, String)>,
+);
+
 /// Arguments of [`slot_operator_slot_change_probe`].
 pub(crate) struct SlotOperatorSlotChangeProbeArgs<'a> {
     pub(crate) root: &'a Path,

@@ -61,6 +61,63 @@ pub enum SkippedDepDisclosure {
     Plain(PlainMissDepReport),
 }
 
+/// Collapses rows per `(category, package, slot)` to the highest
+/// `skipped_version`; equal versions all stay, exact duplicates collapse to
+/// one. A slot's survivors sit at the position of the slot's first row, and
+/// the mask-rows-then-direct-rows-then-withholds relative order is preserved.
+// Portage: depgraph.py, _get_missed_updates
+pub(crate) fn collapse_skipped_updates(rows: Vec<SkippedUpdate>) -> Vec<SkippedUpdate> {
+    let mut best: HashMap<(String, String, String), String> = HashMap::new();
+    for s in &rows {
+        let key = (s.category.clone(), s.package.clone(), s.slot.clone());
+        let replace = match best.get(&key) {
+            Some(kept) => vercmp_ordering(&s.skipped_version, kept) == std::cmp::Ordering::Greater,
+            None => true,
+        };
+        if replace {
+            best.insert(key, s.skipped_version.clone());
+        }
+    }
+    // A replacing version renders where the lower was first recorded.
+    let mut first_pos: HashMap<(String, String, String), usize> = HashMap::new();
+    for (i, s) in rows.iter().enumerate() {
+        first_pos
+            .entry((s.category.clone(), s.package.clone(), s.slot.clone()))
+            .or_insert(i);
+    }
+    let slot_pos = |s: &SkippedUpdate| -> usize {
+        first_pos[&(s.category.clone(), s.package.clone(), s.slot.clone())]
+    };
+    let mut rows = rows;
+    rows.sort_by_key(slot_pos);
+    let mut seen: HashSet<SkippedUpdateKey> = HashSet::new();
+    rows.into_iter()
+        .filter(|s| {
+            best.get(&(s.category.clone(), s.package.clone(), s.slot.clone()))
+                .is_some_and(|v| v == &s.skipped_version)
+        })
+        .filter(|s| {
+            seen.insert((
+                (
+                    s.category.clone(),
+                    s.package.clone(),
+                    s.slot.clone(),
+                    s.skipped_version.clone(),
+                    s.skipped_sub_slot.clone(),
+                    s.skipped_repo.clone(),
+                ),
+                s.skipped_use.clone(),
+                s.atom.clone(),
+                s.consumer_cpv.clone(),
+                s.consumer_installed,
+                s.consumer_use.clone(),
+                s.missed_targets_running_root,
+                s.consumer_targets_running_root,
+            ))
+        })
+        .collect()
+}
+
 /// Whether `atom` (USE-deps stripped) matches a version the settled backtrack
 /// state still masks: then the missed update renders in the abbreviated tail.
 // Portage: depgraph.py, _show_unsatisfied_dep (check_backtrack probe)

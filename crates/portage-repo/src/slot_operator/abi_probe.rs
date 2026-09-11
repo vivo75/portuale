@@ -145,6 +145,14 @@ pub(crate) fn probe_refused(
     })
 }
 
+/// `cat/pkg-ver` for a slot-conflict parent edge, stripped back from the
+/// display form (empty for a top-level `(Argument)` parent).
+pub(crate) fn parse_conflict_parent_cpv(parent_cpv: &str) -> Option<(String, String, String)> {
+    let head = parent_cpv.split_once("::").map_or(parent_cpv, |(h, _)| h);
+    let (cpv_part, _) = head.split_once(':')?;
+    split_cpv(cpv_part)
+}
+
 /// Display continuity for conflict-fired rebuilds: recomputed here from the
 /// settled state, since the firing pass restarts the search. For every
 /// `slot_operator_rebuild` reinstall entry, each recorded built `:=` atom on

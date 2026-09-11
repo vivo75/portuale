@@ -15,3 +15,11 @@ pub(crate) struct SlotOperatorUnsatisfiedProbeArgs<'a> {
     pub(crate) excluded: &'a [String],
     pub(crate) config: &'a portage_profile::Config,
 }
+
+/// [`slot_operator_unsatisfied_probe_full`]'s result: the installed
+/// parents to reinstall and the `(category, package, version)` binary
+/// parents to mask.
+pub(crate) type SlotOpUnsatProbe = (
+    BTreeSet<(String, String)>,
+    BTreeSet<(String, String, String)>,
+);

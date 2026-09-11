@@ -183,3 +183,26 @@ pub(crate) fn tree_metadata_for(
     )
     .ok()
 }
+
+/// Applies Portage's `prune_rebuilds` restart to the working params:
+/// latches the flag, clears the replace set, and drops the
+/// `slot_operator_mask_built` steers.
+// Portage: resolver/backtracking.py, _feedback_config
+pub(crate) fn apply_prune_rebuilds(params: &mut BacktrackParams) {
+    params.prune_rebuilds = true;
+    params.slot_operator_replace_installed.clear();
+    // The forcing half goes with the set.
+    params.slot_operator_forced_upgrade.clear();
+    let mut removed: Vec<((String, String), String)> = Vec::new();
+    params.runtime_pkg_mask.retain(|cp, bucket| {
+        bucket.retain(|entry| {
+            let drop_it = matches!(entry.reason, MaskReason::SlotOperatorBuilt);
+            if drop_it {
+                removed.push((cp.clone(), entry.neg.clone()));
+            }
+            !drop_it
+        });
+        !bucket.is_empty()
+    });
+    params.mask_order.retain(|slot| !removed.contains(slot));
+}
