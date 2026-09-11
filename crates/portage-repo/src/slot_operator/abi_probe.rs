@@ -153,6 +153,21 @@ pub(crate) fn parse_conflict_parent_cpv(parent_cpv: &str) -> Option<(String, Str
     split_cpv(cpv_part)
 }
 
+/// Arguments of [`slot_conflict_abi_probe`].
+pub(crate) struct SlotConflictAbiProbeArgs<'a> {
+    pub(crate) root: &'a Path,
+    pub(crate) repos: &'a [RepoConfig],
+    pub(crate) entries: &'a [GraphEntry],
+    pub(crate) conflicts: &'a [SlotConflict],
+    pub(crate) already: &'a BTreeSet<(String, String)>,
+    pub(crate) undone: &'a BTreeSet<(String, String)>,
+    pub(crate) with_bdeps: bool,
+    pub(crate) walked: &'a HashSet<(String, String)>,
+    pub(crate) excluded: &'a [String],
+    pub(crate) probe_parents: &'a HashMap<(String, String), Vec<ProbeParent>>,
+    pub(crate) config: &'a portage_profile::Config,
+}
+
 /// Display continuity for conflict-fired rebuilds: recomputed here from the
 /// settled state, since the firing pass restarts the search. For every
 /// `slot_operator_rebuild` reinstall entry, each recorded built `:=` atom on

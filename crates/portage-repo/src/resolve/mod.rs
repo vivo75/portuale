@@ -1,3 +1,4 @@
+mod assemble;
 mod autounmask;
 mod backtrack_params;
 mod backtracker;
@@ -30,6 +31,8 @@ mod skipped;
 mod slot_conflict;
 mod slot_expand;
 mod withhold;
+
+pub(crate) use assemble::*;
 pub(crate) use autounmask::*;
 pub use backtrack_params::*;
 pub(crate) use backtracker::*;
