@@ -242,6 +242,245 @@ pub(crate) fn find_hard_cycles(
     }
 }
 
+/// The restart-trigger half of Portage `_serialize_tasks`' no-leaf handling:
+/// a directed cycle over the kept edges containing at least one buildtime
+/// edge. One index cycle per hard edge that closes a loop; empty when no
+/// hard edge closes a loop.
+// Portage: _emerge/depgraph.py, _serialize_tasks (no-leaf handling)
+pub(crate) fn find_restart_cycles(
+    entries: &[GraphEntry],
+    edge_kind_map: &EdgeKindMap,
+    root: &Path,
+    circular: &HashMap<RootCp, Vec<CircularDepChild>>,
+) -> Vec<Vec<usize>> {
+    let cp_index = merge_bound_index(entries);
+    // The per-(root, cp) resolution view (see `find_hard_cycles`).
+    let root_index = merge_bound_root_index(entries);
+    // Trigger adjacency: owner index -> (dep index, hard). `hard` is an
+    // unsatisfied buildtime edge; any entry is an unsatisfied
+    // non-optional buildtime-or-runtime edge.
+    let mut adj: Vec<Vec<(usize, bool)>> = vec![Vec::new(); entries.len()];
+    let add_edge = |adj: &mut [Vec<(usize, bool)>], oi: usize, di: usize, hard: bool| {
+        if oi == di {
+            return;
+        }
+        match adj[oi].iter_mut().find(|(t, _)| *t == di) {
+            Some(slot) => {
+                slot.1 |= hard;
+            }
+            None => adj[oi].push((di, hard)),
+        }
+    };
+    // The walk's hard arm, same reading as `find_hard_cycles`.
+    for ((dep_cp, owner_cp), (has_hard, _)) in edge_kind_map {
+        if !has_hard {
+            continue;
+        }
+        let (Some(oi), Some(di)) = (
+            root_cp_lookup(&root_index, &cp_index, owner_cp),
+            root_cp_lookup(&root_index, &cp_index, dep_cp),
+        ) else {
+            continue;
+        };
+        add_edge(&mut adj, oi, di, true);
+    }
+    // The `deps` walk: selected branches only, under the installed gate.
+    let kept = kept_alt_branches(entries, root, circular);
+    for oi in 0..entries.len() {
+        if merge_bound_cpv(&entries[oi]).is_none() {
+            continue;
+        }
+        for (ei, d) in entries[oi].deps.iter().enumerate() {
+            if d.alt.is_some() && !kept[oi].contains(&ei) {
+                continue;
+            }
+            if d.priority.optional {
+                continue;
+            }
+            if !(d.priority.buildtime || d.priority.runtime) {
+                continue;
+            }
+            // The child's resolving-root instance.
+            let Some(di) =
+                dep_child_lookup(&root_index, &cp_index, entries[oi].targets_running_root, d)
+            else {
+                continue;
+            };
+            if dep_edge_satisfied_by_installed(root, d, Some(&entries[di])) {
+                continue;
+            }
+            add_edge(&mut adj, oi, di, d.priority.buildtime);
+        }
+    }
+    for v in &mut adj {
+        v.sort_unstable();
+    }
+    // One BFS per hard edge: from the hard edge's target back to its
+    // owner over trigger edges; success is a hard-containing cycle.
+    let mut cycles: Vec<Vec<usize>> = Vec::new();
+    for (u, targets) in adj.iter().enumerate() {
+        for &(v, hard) in targets {
+            if !hard {
+                continue;
+            }
+            // BFS v -> ... -> u.
+            let mut prev: HashMap<usize, usize> = HashMap::new();
+            let mut seen: HashSet<usize> = HashSet::from([v]);
+            let mut frontier = vec![v];
+            let mut found = false;
+            while !frontier.is_empty() && !found {
+                let mut next = Vec::new();
+                for &x in &frontier {
+                    for &(w, _) in &adj[x] {
+                        if w == u {
+                            prev.insert(w, x);
+                            found = true;
+                            break;
+                        }
+                        if seen.insert(w) {
+                            prev.insert(w, x);
+                            next.push(w);
+                        }
+                    }
+                    if found {
+                        break;
+                    }
+                }
+                frontier = next;
+            }
+            if !found {
+                continue;
+            }
+            // Walk u backwards to v: [u, ..., v]; reversed and
+            // re-rooted at u it reads u -> v -> ... -> u.
+            let mut rev = vec![u];
+            let mut cur = u;
+            while cur != v {
+                cur = prev[&cur];
+                rev.push(cur);
+            }
+            rev.reverse();
+            rev.truncate(rev.len() - 1);
+            let mut cycle = vec![u];
+            cycle.extend(rev);
+            cycles.push(cycle);
+        }
+    }
+    cycles
+}
+
+/// Portage's virtual-cycle rule: while resolving a `virtual/` atom, re-entering
+/// a virtual already on the probe stack fails the resolve. Ported as a
+/// settled-graph check over the selected providers; members return as
+/// `cpv::repo` lines in sorted order. Empty when no merge-bound virtual
+/// (transitively) requires itself.
+// Portage: lib/_emerge/depgraph.py, _virt_deps_visible
+pub(crate) fn find_virtual_cycles(entries: &[GraphEntry], root: &Path) -> Vec<String> {
+    // Cheap gate: no merge-bound virtual, no probe (every ordinary resolve).
+    if !entries
+        .iter()
+        .any(|e| e.category == "virtual" && merge_bound_cpv(e).is_some())
+    {
+        return Vec::new();
+    }
+    let cp_index = merge_bound_index(entries);
+    // Branch selection reuses `kept_alt_branches` (Portage's digraph holds the
+    // resolved edge only) -- computed lazily so resolves without a `||` edge
+    // on any merge-bound virtual never touch the digraph prelude.
+    let kept: Vec<HashSet<usize>> = if entries.iter().any(|e| {
+        e.category == "virtual"
+            && merge_bound_cpv(e).is_some()
+            && e.deps.iter().any(|d| d.alt.is_some())
+    }) {
+        kept_alt_branches(entries, root, &HashMap::new())
+    } else {
+        vec![HashSet::new(); entries.len()]
+    };
+    // Successors: kept-branch RDEPEND edges to merge-bound virtual targets.
+    let succ = |idx: usize| -> Vec<usize> {
+        let mut out: Vec<usize> = entries[idx]
+            .deps
+            .iter()
+            .enumerate()
+            .filter(|(ei, d)| {
+                d.key == 0 && d.category == "virtual" && (d.alt.is_none() || kept[idx].contains(ei))
+            })
+            .filter_map(|(_, d)| cp_index.get(&(d.category.as_str(), d.package.as_str())))
+            .copied()
+            .filter(|&t| entries[t].category == "virtual")
+            .collect();
+        out.sort_unstable();
+        out.dedup();
+        out
+    };
+    fn visit(
+        idx: usize,
+        succ: &dyn Fn(usize) -> Vec<usize>,
+        stack: &mut Vec<usize>,
+        on_stack: &mut HashSet<usize>,
+        done: &mut HashSet<usize>,
+    ) -> Option<Vec<usize>> {
+        for t in succ(idx) {
+            // The revisit check is the recursion-membership test: the reported
+            // members are the whole stack.
+            if on_stack.contains(&t) {
+                return Some(stack.clone());
+            }
+            if !done.contains(&t) {
+                stack.push(t);
+                on_stack.insert(t);
+                if let Some(members) = visit(t, succ, stack, on_stack, done) {
+                    return Some(members);
+                }
+                stack.pop();
+                on_stack.remove(&t);
+            }
+        }
+        done.insert(idx);
+        None
+    }
+    for start in 0..entries.len() {
+        if entries[start].category != "virtual" {
+            continue;
+        }
+        if merge_bound_cpv(&entries[start]).is_none() {
+            continue;
+        }
+        let mut stack = vec![start];
+        let mut on_stack: HashSet<usize> = HashSet::from([start]);
+        let mut done: HashSet<usize> = HashSet::new();
+        if let Some(path) = visit(start, &succ, &mut stack, &mut on_stack, &mut done) {
+            let mut members: Vec<(&str, &str, &str, &str)> = path
+                .iter()
+                .map(|&i| {
+                    let e = &entries[i];
+                    (
+                        e.category.as_str(),
+                        e.package.as_str(),
+                        merge_bound_version(&e.outcome)
+                            .expect("merge-bound")
+                            .as_str(),
+                        e.repo_name.as_deref().unwrap_or("unknown"),
+                    )
+                })
+                .collect();
+            // Sorted by cp, then `vercmp` version (the `::repo` suffix plays no
+            // part there).
+            members.sort_by(|a, b| {
+                a.0.cmp(b.0)
+                    .then(a.1.cmp(b.1))
+                    .then(vercmp_ordering(a.2, b.2))
+                    .then(a.3.cmp(b.3))
+            });
+            return members
+                .into_iter()
+                .map(|(c, p, v, r)| format!("{c}/{p}-{v}::{r}"))
+                .collect();
+        }
+    }
+    Vec::new()
+}
+
 /// One label per edge of a `find_hard_cycles` cycle: `labels[i]` is the edge
 /// `cycle[i] -> cycle[(i + 1) % len]`, rendered from the hardest `deps`
 /// priority the owner carries toward the dep's cp.

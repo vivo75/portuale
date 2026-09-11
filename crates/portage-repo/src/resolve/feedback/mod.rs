@@ -2,7 +2,11 @@
 
 use crate::*;
 use std::ops::ControlFlow;
+mod circular_dead_end;
+mod no_leaf_restart;
 mod solvable_slot_conflicts;
+pub(crate) use circular_dead_end::*;
+pub(crate) use no_leaf_restart::*;
 pub(crate) use solvable_slot_conflicts::*;
 
 /// Why one `cat/pkg` version is masked on retry. Readers see the union across
@@ -36,6 +40,50 @@ pub(crate) enum MaskReason {
 pub(crate) struct MaskEntry {
     pub(crate) neg: String,
     pub(crate) reason: MaskReason,
+}
+
+/// File one `_slot_operator_unsatisfied_probe` result into the working backtrack
+/// accumulators: replace-set seeds grow `slot_operator_replace_installed`, binary
+/// parents become `[binary]`-marked `SlotOperatorBuilt` negatives. Returns true when
+/// anything grew -- the caller restarts with budget-free Config feedback. Single
+/// filing point for both probe sites (the missing-dep trigger arm and the no-trigger
+/// dead-end fallback). Under `--usepkgonly` the binary result is discarded.
+pub(crate) fn file_unsat_probe_results(
+    grown: &mut BacktrackParams,
+    fresh: BTreeSet<(String, String)>,
+    binary_masks: BTreeSet<(String, String, String)>,
+    usepkgonly: bool,
+) -> bool {
+    let mut masks_new = false;
+    // `--usepkgonly`: no ebuild replacement (see the trigger site).
+    let binary_masks = if usepkgonly {
+        BTreeSet::new()
+    } else {
+        binary_masks
+    };
+    for (cat, pkg, ver) in &binary_masks {
+        let neg = format!("!={cat}/{pkg}-{ver}[binary]");
+        let bucket = grown
+            .runtime_pkg_mask
+            .entry((cat.clone(), pkg.clone()))
+            .or_default();
+        if !bucket.iter().any(|m| m.neg == neg) {
+            bucket.push(MaskEntry {
+                neg,
+                reason: MaskReason::SlotOperatorBuilt,
+            });
+            masks_new = true;
+        }
+    }
+    if masks_new
+        || fresh
+            .iter()
+            .any(|cp| !grown.slot_operator_replace_installed.contains(cp))
+    {
+        grown.slot_operator_replace_installed.extend(fresh);
+        return true;
+    }
+    false
 }
 
 /// The settle tail of `backtracking_resolve`. USE changes start their chain at the

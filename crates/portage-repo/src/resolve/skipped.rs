@@ -60,3 +60,39 @@ pub enum SkippedDepDisclosure {
     Masked(MaskedDepReport),
     Plain(PlainMissDepReport),
 }
+
+/// Whether `atom` (USE-deps stripped) matches a version the settled backtrack
+/// state still masks: then the missed update renders in the abbreviated tail.
+// Portage: depgraph.py, _show_unsatisfied_dep (check_backtrack probe)
+pub(crate) fn backtrack_masked_match(
+    repos: &[RepoConfig],
+    params: &BacktrackParams,
+    atom: &str,
+) -> bool {
+    let probe_atom = portage_dep::without_use(atom).to_string();
+    for ((cat, pkg), bucket) in &params.runtime_pkg_mask {
+        for entry in bucket {
+            let Some(stripped) = entry.neg.strip_prefix("!=") else {
+                continue;
+            };
+            let Some((c, p, ver)) = split_cpv(stripped) else {
+                continue;
+            };
+            if c != *cat || p != *pkg {
+                continue;
+            }
+            let (_, _, slot) = slot_conflict_meta(repos, &c, &p, &ver);
+            let probe = if slot.is_empty() {
+                format!("{c}/{p}-{ver}")
+            } else {
+                format!("{c}/{p}-{ver}:{slot}")
+            };
+            if portage_dep::match_from_list(&probe_atom, &[probe.as_str()])
+                .is_some_and(|m| !m.is_empty())
+            {
+                return true;
+            }
+        }
+    }
+    false
+}
