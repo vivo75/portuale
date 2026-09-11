@@ -1,0 +1,10 @@
+# create-container.bash's own scratch/cache state -- generated or
+# host-specific, never committed.
+/WORKDIR/
+/stage3-*.tar.xz
+
+# Per-machine local mirrors of the pinned gentoo/buildovl trees that
+# create-container.bash fetches from via `file://` (see LAST_COMMIT in
+# create-container.bash) -- typically symlinks to this host's own
+# already-synced /.gentoo/repos/{gentoo,buildovl}, never committed.
+/repos/

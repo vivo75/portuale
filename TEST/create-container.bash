@@ -13,6 +13,12 @@ declare -a REPOS=( gentoo buildovl )
 declare -A LAST_COMMIT
 LAST_COMMIT["gentoo"]="11c58b7af1df0fbc3e9f2560a82c4355231967a6"
 LAST_COMMIT["buildovl"]="3b1df68114f4c486520864338b1b6a42efcaec7e"
+# The `--shallow-since` cutoff for fetching the two LAST_COMMIT hashes
+# above: must stay AT OR BEFORE both commits' own dates (gentoo
+# 2026-08-29, buildovl 2026-08-27) or `git fetch --shallow-since` prunes
+# the very commit being fetched. Independent of DATESTART/the stage3
+# snapshot below -- re-pin only when LAST_COMMIT changes too.
+REPOS_SHALLOW_SINCE=2026-08-23T15:30:57Z
 DATESTART=2026-08-23T15:30:57Z
 
 STAGEID=stage3-amd64-systemd
@@ -35,7 +41,11 @@ ret=$? ; if [[ ${ret} != 0 ]] ; then echo "compile init failed with err=${ret}" 
 
 if [[ ! -e ${BASEDIR}/${STAGEID}-${STAGETS}.tar.xz ]] ; then
   # https://www.gentoo.org/downloads/amd64/#stages
-  wget https://distfiles.gentoo.org/releases/amd64/autobuilds/${STAGEID}/${STAGETS}-${STAGETS}.tar.xz
+  # Real autobuilds layout is <timestamp>/<stageid>-<timestamp>.tar.xz
+  # (not <stageid>/<timestamp>-<timestamp>.tar.xz); -O so the cache
+  # check above and the tar -x below (both keyed on ${BASEDIR}/...) see
+  # the same file wget actually produced.
+  wget -O ${BASEDIR}/${STAGEID}-${STAGETS}.tar.xz https://distfiles.gentoo.org/releases/amd64/autobuilds/${STAGETS}/${STAGEID}-${STAGETS}.tar.xz
   ret=$? ; if [[ ${ret} != 0 ]] ; then echo "download of stage3 failed with err=${ret}" ; exit 4; fi
 fi
 tar -xf ${BASEDIR}/${STAGEID}-${STAGETS}.tar.xz
@@ -53,7 +63,7 @@ for repo in ${REPOS[@]} ; do
   git init
   git remote add origin file://${BASEDIR}/repos/${repo}/
   # limit it with '--depth=...' or '--shallow-since=...'
-  git fetch origin --shallow-since=${DATESTART} ${LAST_COMMIT[${repo}]}
+  git fetch origin --shallow-since=${REPOS_SHALLOW_SINCE} ${LAST_COMMIT[${repo}]}
   git reset --hard FETCH_HEAD
   popd # ${repo}
 done
@@ -125,6 +135,7 @@ cat << 'EOF' > repos.conf/porttest.conf
 [porttest]
 location = /var/db/repos/porttest
 sync-type = git
+sync-uri = file:///var/db/repos/porttest
 priority = 20
 EOF
 popd # ./etc/portage/
