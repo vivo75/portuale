@@ -397,6 +397,25 @@ fn parse_use_deps(raw: &str) -> Option<Vec<UseDep>> {
     Some(deps)
 }
 
+/// Real `Atom.without_use` for a plain atom STRING: the atom with its
+/// trailing `[use...]` block removed, leaving `cat/pkg[:slot[::repo]]`
+/// to be matched with USE-deps completely ignored. `dep_zapdeps` uses it
+/// for `all_available` so that "does a `||` alternative exist at all"
+/// (`mydbapi.match_pkgs(atom.without_use)`, `dep_check.py:447-449 check,
+/// soft 469) is independent of whether the pickle's USE-flags could
+/// actually be satisfied ("...since we don't want USE settings to
+/// adversely affect || preference evaluation", soft 467-468). The rust
+/// port later re-probes the WITH-USE string for the `all_use_satisfied`
+/// / bug-515584 split. Blocks are always a trailing `[…]` suffix
+/// (PMS 8.3.5), so removing the first `[` through the final `]` is
+/// exact; the no-block input is returned unchanged.
+pub fn without_use(atom_str: &str) -> &str {
+    match atom_str.find('[') {
+        Some(start) => &atom_str[..start],
+        None => atom_str,
+    }
+}
+
 pub fn parse_atom(s: &str) -> Option<Atom> {
     if let Some(hit) = ATOM_CACHE.with(|c| c.borrow().get(s).cloned()) {
         return hit;
@@ -1205,6 +1224,39 @@ mod parse_cache_tests {
             assert_eq!(parse_candidate(s), want, "first cached call for {s:?}");
             assert_eq!(parse_candidate(s), want, "second cached call for {s:?}");
         }
+    }
+}
+
+#[cfg(test)]
+mod without_use_tests {
+    use super::*;
+
+    // Real `Atom.without_use`: the trailing `[...]` block is stripped,
+    // everything before it (cat/pkg, slot, repo, version) untouched. The
+    // USE block being always-trailing (PMS 8.3.5), stripping from the
+    // first `[` is exact -- including a no-USE-block atom, which must be
+    // returned unchanged (mydbapi_match_pkgs(atom.without_use) must
+    // behave exactly like the full atom for a `||` alternative with no
+    // `[use]` deps at all).
+    #[test]
+    fn strips_trailing_use_block_leaving_the_rest_untouched() {
+        assert_eq!(without_use("dev-libs/foo[bar]"), "dev-libs/foo");
+        assert_eq!(
+            without_use(">=dev-libs/foo-1.2.3-r1:2/3=[bar,-baz]"),
+            ">=dev-libs/foo-1.2.3-r1:2/3="
+        );
+        assert_eq!(
+            without_use("net-libs/rest:0/0::gentoo[x y]"),
+            "net-libs/rest:0/0::gentoo"
+        );
+        assert_eq!(without_use("sys-apps/portage"), "sys-apps/portage");
+        assert_eq!(without_use(""), "");
+        // Real's cut is at the FIRST `[` (dep/__init__.py:1792
+        // `s.index("[")`, the same `find('[')` used here) -- the USE
+        // block is guaranteed to be the first and only one (PMS 8.3.5),
+        // so a malformed double-bracket string cuts at the first `[`
+        // exactly like real.
+        assert_eq!(without_use("cat/pkg[flag][other]"), "cat/pkg");
     }
 }
 

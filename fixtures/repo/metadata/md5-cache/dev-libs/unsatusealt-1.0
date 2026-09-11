@@ -1,0 +1,7 @@
+DEFINED_PHASES=-
+DESCRIPTION=fixture package: the USE-unsatisfiable-but-unmasked alternative of unsatuseor's || group; declares unsatuseorflag in IUSE so the [unsatuseorflag] dep is a real (unmutable-by-mask/force) constraint
+EAPI=8
+IUSE=unsatuseorflag
+KEYWORDS=amd64
+SLOT=0
+_md5_=0000000000000000000000000000000

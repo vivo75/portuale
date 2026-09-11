@@ -457,6 +457,16 @@ CASES = [
         ["--pretend", "dev-libs/anyofunresolvable"],
         0,
     ),
+    (
+        "recursion: || group resolves a USE-unsatisfiable-but-unmasked alternative (unsat_use_non_installed bin) and autounmask flips the flag",
+        ["--pretend", "dev-libs/unsatuseor"],
+        1,
+    ),
+    (
+        "recursion: || group picks the USE-unsat alternative, then reports the no-visible-ebuild dependency it enqueued",
+        ["--pretend", "--autounmask-use=n", "dev-libs/unsatuseor"],
+        0,
+    ),
     ("recursion: unresolvable dep doesn't fail the graph", ["--pretend", "dev-libs/missingdep"], 0),
     ("recursion: dedup across DEPEND and RDEPEND", ["--pretend", "dev-libs/dualdep"], 0),
     ("recursion: BDEPEND is walked", ["--pretend", "dev-libs/bdependpkg"], 0),
@@ -3007,6 +3017,76 @@ def test_or_group_installed_preference_skips_a_required_use_broken_first_alterna
     assert rust.stdout.splitlines() == ['[ebuild  N     ] dev-libs/orrequseprefer-1.0 ']
     assert rust.stdout == py.stdout
     assert rust.returncode == py.returncode
+
+
+def test_or_group_resolves_a_use_unsatisfiable_but_unmasked_alternative(
+    emerge_binary, emerge_pretend_python, fixture_env
+):
+    """The bug-515584 `unsat_use_*` bins, now genuinely produced by the
+    `||` dispatch (see commit "portage-repo: wire dep_zapdeps
+    unsat_use fine bins"). dev-libs/unsatuseor's RDEPEND is
+    `|| ( dev-libs/unsatusealt[unsatuseorflag]
+    dev-libs/doesnotexist-unsatuseor )`. The first alternative's only
+    ebuild is visible but `[unsatuseorflag]` is unsatisfiable by default
+    (the flag IS in IUSE, nothing enables it); the second alternative has
+    no ebuild at all. Real dep_zapdeps still files alternative 1 in
+    `unsat_use_non_installed` (dep_check.py soft 705-712 -- selectable,
+    the flags that would have to change sit in neither `use.mask` nor
+    `use.force`, bug-515584), and with `--autounmask-use` the flip is
+    proposed: `unsatusealt` merges with `USE="unsatuseorflag"` and the
+    dead alternative is never enqueued. Before this commit both branches
+    ranked `Unsatisfiable`, the group fell back to the literal `||`, and
+    the dead alternative was enqueued and reported (`!!! no visible
+    ebuild for dependency "dev-libs/doesnotexist-unsatuseor"`)."""
+    args = ["--pretend", "dev-libs/unsatuseor"]
+    rust = _run([str(emerge_binary)], args, fixture_env)
+    py = _run(emerge_pretend_python, args, fixture_env)
+    assert rust.returncode == 1 and py.returncode == 1
+    assert rust.stdout == py.stdout and rust.stderr == py.stderr
+    assert rust.stdout.splitlines() == [
+        '[ebuild  N     ] dev-libs/unsatusealt-1.0  USE="unsatuseorflag"',
+        '[ebuild  N     ] dev-libs/unsatuseor-1.0 ',
+    ]
+    assert rust.stderr.splitlines() == [
+        "",
+        "The following USE changes are necessary to proceed:",
+        ' (see "package.use" in the portage(5) man page for more details)',
+        "# required by dev-libs/unsatuseor-1.0::testrepo",
+        "# required by dev-libs/unsatuseor (argument)",
+        ">=dev-libs/unsatusealt-1.0 unsatuseorflag",
+        "",
+        " * In order to avoid wasting time, backtracking has terminated early",
+        " * due to the above autounmask change(s). The --autounmask-backtrack=y",
+        " * option can be used to force further backtracking, but there is no",
+        " * guarantee that it will produce a solution.",
+    ]
+    assert "doesnotexist-unsatuseor" not in rust.stderr, (
+        "the dead alternative must not be enqueued once the group resolves"
+    )
+
+
+def test_or_group_use_unsat_alternative_reports_the_dependency_it_enqueued_without_autounmask(
+    emerge_binary, emerge_pretend_python, fixture_env
+):
+    """Same unsatuseor fixture with `--autounmask-use=n`: the `||` group
+    still resolves to `unsatusealt[unsatuseorflag]` (alternative 1 is
+    selectable regardless), so `unsatusealt` is enqueued as a dependency
+    -- but with no autounmask flip available it has no visible ebuild and
+    is reported (`!!! no visible ebuild for dependency
+    "dev-libs/unsatusealt"`). The dead second alternative is again never
+    enqueued. Before the fine-bin wiring both alternatives ranked
+    `Unsatisfiable`, so the literal `||` fallback enqueued BOTH and stderr
+    carried two `no visible ebuild` lines."""
+    args = ["--pretend", "--autounmask-use=n", "dev-libs/unsatuseor"]
+    rust = _run([str(emerge_binary)], args, fixture_env)
+    py = _run(emerge_pretend_python, args, fixture_env)
+    assert rust.returncode == 0 and py.returncode == 0
+    assert rust.stdout == py.stdout and rust.stderr == py.stderr
+    assert rust.stdout.splitlines() == ['[ebuild  N     ] dev-libs/unsatuseor-1.0 ']
+    assert rust.stderr.splitlines() == [
+        '!!! no visible ebuild for dependency "dev-libs/unsatusealt"',
+    ]
+    assert "doesnotexist-unsatuseor" not in rust.stderr
 
 
 def test_or_group_alternative_yields_to_the_next_when_backtracking_masks_it(

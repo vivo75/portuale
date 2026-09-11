@@ -8051,6 +8051,162 @@ fn atom_currently_satisfiable(
     })
 }
 
+/// Real `atom.violated_conditionals(pkg_use_enabled(avail_pkg),
+/// avail_pkg.iuse.is_valid_flag)` -- the `all_use_unmasked` boolean of
+/// `dep_zapdeps`'s choice classification (`dep_check.py` soft 406-414,
+/// 497-523). For an atom whose `[use]` deps NO candidate satisfies
+/// (`avail_pkg_use` empty, the `if not avail_pkg_use:` branch at soft
+/// 494), real computes which flags would have to change to satisfy the
+/// atom, then checks those violated flags against the best candidate's
+/// (`avail_pkg = mydbapi_match_pkgs(atom.without_use)[-1]`, see
+/// `atom_all_use_unmasked`) own `use.mask` / `use.force`:
+///   * an enabled-required flag that isn't enabled needs unmasking if it
+///     sits in `use.mask` (global or package, `resolved_use_mask_or_force`)
+///   * a disabled-required flag that is enabled needs unforcing if it
+///     sits in `use.force` and is *not* also in `use.mask`
+///     (one masked/forced violation makes the whole choice fall to `other`,
+///     never selectable). Evaluated per single use-dep via
+///     [`portage_dep::use_deps_satisfied`] so default-marker/missing-IUSE
+///     semantics match real exactly (`(+)`-defaulted missing flags are "as if
+///     enabled", `(-)`-defaulted missing flags "as if disabled", no-default
+///     missing flags fail the atom outright -- the same classification real's
+///     `violated_conditionals` derives from `is_valid_flag` +
+///     `missing_enabled`/`missing_disabled`).
+fn atom_all_use_unmasked(
+    repos: &[RepoConfig],
+    atom_str: &str,
+    config: &portage_profile::Config,
+) -> bool {
+    let Some(atom) = portage_dep::parse_atom(atom_str) else {
+        return true;
+    };
+    if atom.blocker != portage_dep::Blocker::None {
+        return true;
+    }
+    let Some(use_deps) = atom.use_deps.as_deref().filter(|d| !d.is_empty()) else {
+        return true;
+    };
+    let Some((candidate_str, keywords, iuse, enabled)) = highest_available_candidate_ignoring_use(
+        repos,
+        atom_str,
+        &atom.category,
+        &atom.package,
+        config,
+    ) else {
+        // No visible candidate at all -- `all_available` already sent the
+        // whole choice to `Unsatisfiable`; nothing to evaluate here.
+        return true;
+    };
+    let valid_iuse = valid_iuse(&iuse, config);
+    let stable = is_stable(
+        &keywords,
+        &candidate_str,
+        &atom.category,
+        &atom.package,
+        &config.accept_keywords,
+        &config.package_accept_keywords,
+    );
+    let mask = resolved_use_mask_or_force(
+        MaskOrForce::Mask,
+        config,
+        &candidate_str,
+        &atom.category,
+        &atom.package,
+        stable,
+    );
+    let force = resolved_use_mask_or_force(
+        MaskOrForce::Force,
+        config,
+        &candidate_str,
+        &atom.category,
+        &atom.package,
+        stable,
+    );
+    let mut violated_enabled = Vec::new();
+    let mut violated_disabled = Vec::new();
+    for ud in use_deps {
+        // Single-dep evaluation = "would *this* flag have to change", per
+        // real `violated_conditionals`'s per-token classification.
+        if !portage_dep::use_deps_satisfied(std::slice::from_ref(ud), &valid_iuse, &enabled) {
+            match ud.op {
+                portage_dep::UseDepOp::Enabled => violated_enabled.push(ud.flag.clone()),
+                portage_dep::UseDepOp::Disabled => violated_disabled.push(ud.flag.clone()),
+                // The four conditional forms impose no candidate
+                // constraint in portuale's matching (see the
+                // `use_deps_satisfied` doc), so they can never be
+                // "violated" here either.
+                _ => {}
+            }
+        }
+    }
+    if violated_enabled.iter().any(|f| mask.contains(f)) {
+        return false;
+    }
+    if violated_disabled
+        .iter()
+        .any(|f| force.contains(f) && !mask.contains(f))
+    {
+        return false;
+    }
+    true
+}
+
+/// Real `avail_pkg = mydbapi_match_pkgs(atom.without_use)[-1]`
+/// (`dep_check.py` soft 469-474): the single highest-sorted visible
+/// candidate matching an atom's `[...]`-stripped form, plus its
+/// candidate string, IUSE and effective enabled-use set -- the seeds of
+/// both the `use.mask`/`use.force` probe and the
+/// `violated_conditionals` argument of [`atom_all_use_unmasked`].
+type CandidateUseProbe = (String, Vec<String>, HashSet<String>, HashSet<String>);
+
+fn highest_available_candidate_ignoring_use(
+    repos: &[RepoConfig],
+    atom_str: &str,
+    category: &str,
+    package: &str,
+    config: &portage_profile::Config,
+) -> Option<CandidateUseProbe> {
+    let stripped = portage_dep::without_use(atom_str);
+    let Ok(candidates) = list_candidates(repos, category, package) else {
+        return None;
+    };
+    let visible: Vec<&Candidate> = candidates
+        .iter()
+        .filter(|c| is_visible(c, category, package, config))
+        .collect();
+    if visible.is_empty() {
+        return None;
+    }
+    let candidate_strs: Vec<String> = visible
+        .iter()
+        .map(|c| {
+            format!(
+                "{category}/{package}-{}:{}/{}::{}",
+                c.version, c.slot, c.sub_slot, c.repo_name
+            )
+        })
+        .collect();
+    let candidate_str_refs: Vec<&str> = candidate_strs.iter().map(String::as_str).collect();
+    let matched = portage_dep::match_from_list(stripped, &candidate_str_refs)?;
+    let mut by_str: HashMap<&str, &Candidate> = HashMap::new();
+    for (s, c) in candidate_str_refs.iter().zip(visible.iter()) {
+        by_str.insert(*s, *c);
+    }
+    // Real `match_pkgs` returns matches ascending by version and takes
+    // `[-1]`; `candidate_strs` is in repo/readdir order, so pick the
+    // highest-VERSIONED match explicitly.
+    let best = matched
+        .iter()
+        .filter_map(|m| by_str.get(m))
+        .max_by(|a, b| vercmp_ordering(&a.version, &b.version))?;
+    let (iuse, use_flags) = candidate_iuse_and_use(best, category, package, config)?;
+    let best_str = format!(
+        "{category}/{package}-{}:{}/{}::{}",
+        best.version, best.slot, best.sub_slot, best.repo_name
+    );
+    Some((best_str, best.keywords.clone(), iuse, use_flags))
+}
+
 /// Real `getmaskingstatus._getmaskingstatus`'s human reason strings for a
 /// candidate that is *not* [`is_visible`] -- the `(masked by: …)` text
 /// [`all_masked_report`] puts after each `- <cpv>` line. Reason order
@@ -16137,6 +16293,15 @@ fn backtracking_resolve(req: &ResolveRequest) -> Result<GraphResult, Error> {
                 &use_flags,
                 portage_use_reduce::MatchMode::Normal,
                 &mut |atoms: &[String]| {
+                    // Real `dep_zapdeps`'s two-step availability split:
+                    // `all_available` probes each atom's `[...]`-stripped
+                    // form (`mydbapi_match_pkgs(atom.without_use)`,
+                    // dep_check.py soft 469 -- "we don't want USE settings
+                    // to adversely affect || preference evaluation"), so a
+                    // candidate that exists but whose USE-deps can't be
+                    // satisfied still keeps the alternative in play; only
+                    // then does `all_use_satisfied` / bug-515584 decide
+                    // *which* of the fine `unsat_use_*` bins it lands in.
                     let all_available = atoms.iter().all(|a| {
                         let circular_self = portage_dep::parse_atom(a).is_some_and(|at| {
                             at.blocker == portage_dep::Blocker::None
@@ -16144,32 +16309,70 @@ fn backtracking_resolve(req: &ResolveRequest) -> Result<GraphResult, Error> {
                                 && !atom_cp_installed(root, a)
                         });
                         !circular_self
-                            && (atom_currently_satisfiable(&repos, a, config, disj_constraints(a))
-                                || root_deps_running_root
-                                    .is_some_and(|root| running_root_satisfies_atom(a, root)))
+                            && (atom_currently_satisfiable(
+                                &repos,
+                                portage_dep::without_use(a),
+                                config,
+                                disj_constraints(a),
+                            ) || root_deps_running_root
+                                .is_some_and(|root| running_root_satisfies_atom(a, root)))
                     });
                     if !all_available {
                         return portage_use_reduce::AltPreference::Unsatisfiable;
                     }
-                    // Real `dep_zapdeps` choice bin 0 -- the single list
-                    // `preferred_in_graph` / `preferred_installed` /
-                    // `preferred_any_slot` all alias to when `graph_db` is
-                    // present. An alternative every non-blocker atom of
-                    // which is either already installed (`all_installed`,
-                    // cp-level -- makes `virtual/wine`'s
-                    // `|| ( wine-vanilla wine-staging … )` pick the
-                    // installed `wine-staging`) OR already a merge-bound
-                    // node this run (`all_in_graph`, `[use]`-checked --
-                    // makes `virtual/secret-service` pick the
-                    // KDE-stack-pulled `kwallet-runtime[keyring]` over the
-                    // first-listed `gnome-keyring`) ranks above one that
-                    // would need a fresh merge.
-                    if atoms.iter().all(|a| atom_cp_installed(root, a))
-                        || atoms_all_in_graph(atoms, &entries, config)
-                    {
-                        portage_use_reduce::AltPreference::Installed
+                    // Real's `avail_pkg_use = mydbapi_match_pkgs(atom)`
+                    // (soft 493): does any candidate satisfy the `[use]`
+                    // block too. If yes for every atom, this is one of
+                    // the *preferred* bins (soft 694); if not, the
+                    // bug-515584 `all_use_unmasked` probe decides between
+                    // the fine `unsat_use_*` bins and `other` (soft 705).
+                    let all_use_satisfied = atoms.iter().all(|a| {
+                        atom_currently_satisfiable(&repos, a, config, disj_constraints(a))
+                            || root_deps_running_root
+                                .is_some_and(|root| running_root_satisfies_atom(a, root))
+                    });
+                    if all_use_satisfied {
+                        // Real `dep_zapdeps` choice bin 0 -- the single list
+                        // `preferred_in_graph` / `preferred_installed` /
+                        // `preferred_any_slot` all alias to when `graph_db` is
+                        // present. An alternative every non-blocker atom of
+                        // which is either already installed (`all_installed`,
+                        // cp-level -- makes `virtual/wine`'s
+                        // `|| ( wine-vanilla wine-staging … )` pick the
+                        // installed `wine-staging`) OR already a merge-bound
+                        // node this run (`all_in_graph`, `[use]`-checked --
+                        // makes `virtual/secret-service` pick the
+                        // KDE-stack-pulled `kwallet-runtime[keyring]` over the
+                        // first-listed `gnome-keyring`) ranks above one that
+                        // would need a fresh merge.
+                        return if atoms.iter().all(|a| atom_cp_installed(root, a))
+                            || atoms_all_in_graph(atoms, &entries, config)
+                        {
+                            portage_use_reduce::AltPreference::Installed
+                        } else {
+                            portage_use_reduce::AltPreference::Available
+                        };
+                    }
+                    // `!all_use_satisfied`: real's `unsat_use_*` bins --
+                    // the alternative exists but can only be merged with
+                    // USE changes. First the bug-515584 gate (soft 705):
+                    // if the flags that would have to change sit in
+                    // `use.mask` / `use.force`, the choice is demoted to
+                    // `other` (never selectable); otherwise it keeps the
+                    // fine-bin ordering `unsat_use_in_graph` >
+                    // `unsat_use_installed` > `unsat_use_non_installed`.
+                    let all_use_unmasked = atoms
+                        .iter()
+                        .all(|a| atom_all_use_unmasked(&repos, a, config));
+                    if !all_use_unmasked {
+                        return portage_use_reduce::AltPreference::Unsatisfiable;
+                    }
+                    if atoms_all_in_graph(atoms, &entries, config) {
+                        portage_use_reduce::AltPreference::UnsatUseInGraph
+                    } else if atoms.iter().all(|a| atom_cp_installed(root, a)) {
+                        portage_use_reduce::AltPreference::UnsatUseInstalled
                     } else {
-                        portage_use_reduce::AltPreference::Available
+                        portage_use_reduce::AltPreference::UnsatUseNonInstalled
                     }
                 },
             ) else {
@@ -29381,6 +29584,112 @@ mod tests {
         assert_eq!(
             apply_slotmove_to_token("dev-libs/baz:2", &cp, "0", "1"),
             "dev-libs/baz:2"
+        );
+    }
+
+    #[test]
+    fn atom_all_use_unmasked_is_true_for_the_unsatuseor_alternative() {
+        // `dev-libs/unsatuseor`'s `||` group's first alternative is
+        // `dev-libs/unsatusealt[unsatuseorflag]`: unsatusealt is visible
+        // but the flag is off by default (IUSE declares it, nothing
+        // enables it), and `unsatuseorflag` is in NO use.mask /
+        // use.force profile file -- so real's bug-515584 probe
+        // (`all_use_unmasked`) must keep the choice in the selectable
+        // `unsat_use_*` bins, not demote it to `other`. The second
+        // alternative (dev-libs/doesnotexist-unsatuseor) has no visible
+        // ebuild at all.
+        let root = fixtures_root();
+        let config = portage_profile::resolve_config(
+            &root,
+            &root.join("repo"),
+            &[("overlay".to_string(), root.join("overlay"))],
+            &[],
+            "testrepo",
+            &HashMap::new(),
+            &root,
+        )
+        .expect("fixture config resolves");
+        let repos = find_repos(&root).expect("fixture repos.conf resolves");
+        assert!(atom_all_use_unmasked(
+            &repos,
+            "dev-libs/unsatusealt[unsatuseorflag]",
+            &config
+        ));
+    }
+
+    #[test]
+    fn atom_all_use_unmasked_is_false_when_the_violated_flag_is_in_use_mask() {
+        // The `other`-demotion side of bug-515584: a `[use]` dep on a
+        // flag that sits in the candidate's own use.mask is NOT "fixable
+        // by a USE change", so the whole `||` choice drops out of every
+        // selectable bin. `dev-libs/slotusetarget` has `=...-2.0` mask `x`
+        // in the fixture profile (fixtures/repo/profiles/package.use.mask)
+        // -- see the slotconflict fixture tests for the matching side.
+        let root = fixtures_root();
+        let config = portage_profile::resolve_config(
+            &root,
+            &root.join("repo"),
+            &[("overlay".to_string(), root.join("overlay"))],
+            &[],
+            "testrepo",
+            &HashMap::new(),
+            &root,
+        )
+        .expect("fixture config resolves");
+        let repos = find_repos(&root).expect("fixture repos.conf resolves");
+        // The 1.0 version keeps its +x default (unmasked) -- only the
+        // masked 2.0 should probe false.
+        let masked = atom_all_use_unmasked(&repos, "=dev-libs/slotusetarget-2.0[x]", &config);
+        let unmasked = atom_all_use_unmasked(&repos, "=dev-libs/slotusetarget-1.0[x]", &config);
+        assert!(!masked, "mask-affected x on 2.0 must demote to other");
+        assert!(unmasked, "x default-enabled on 1.0 stays selectable");
+    }
+
+    #[test]
+    fn highest_available_candidate_ignoring_use_picks_the_use_unsatisfiable_ebuild() {
+        // Real `mydbapi_match_pkgs(atom.without_use)[-1]`: asking for
+        // `dev-libs/unsatusealt[unsatuseorflag]` must still find
+        // unspecified-use candidate `unsatusealt-1.0` (the `[...]` block
+        // stripped) -- the seed for both the mask/force probe and the
+        // violated-flag list. The hard dep would find NO candidate
+        // (`doesnotexist-unsatuseor`).
+        let root = fixtures_root();
+        let config = portage_profile::resolve_config(
+            &root,
+            &root.join("repo"),
+            &[("overlay".to_string(), root.join("overlay"))],
+            &[],
+            "testrepo",
+            &HashMap::new(),
+            &root,
+        )
+        .expect("fixture config resolves");
+        let repos = find_repos(&root).expect("fixture repos.conf resolves");
+        let (candidate_str, keywords, iuse, use_flags) = highest_available_candidate_ignoring_use(
+            &repos,
+            "dev-libs/unsatusealt[unsatuseorflag]",
+            "dev-libs",
+            "unsatusealt",
+            &config,
+        )
+        .expect("an ignoring-use candidate exists");
+        assert_eq!(
+            candidate_str, "dev-libs/unsatusealt-1.0:0/0::testrepo",
+            "the sole visible version is found"
+        );
+        assert!(keywords.contains(&"amd64".to_string()));
+        assert!(iuse.contains("unsatuseorflag"));
+        assert!(!use_flags.contains("unsatuseorflag"), "off by default");
+
+        assert!(
+            highest_available_candidate_ignoring_use(
+                &repos,
+                "dev-libs/doesnotexist-unsatuseor",
+                "dev-libs",
+                "doesnotexist-unsatuseor",
+                &config,
+            )
+            .is_none()
         );
     }
 }

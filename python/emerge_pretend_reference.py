@@ -5622,8 +5622,9 @@ def _resolve_disjunctions(nodes, uselist, alternative_satisfiable):
             # Real dep_zapdeps classifies every alternative into a
             # choice_bin and takes the first entry of the best-ranked
             # non-empty bin -- not the first *satisfiable* one. Mirror
-            # that: rank all alternatives (0 = unsatisfiable, 1 =
-            # AltPreference.Available, 2 = AltPreference.Installed), keep
+            # that: rank all alternatives (0 = unsatisfiable, 5-8 =
+            # AltPreference.UnsatUseNonInstalled / UnsatUseInstalled /
+            # UnsatUseInGraph / Available, 9 = AltPreference.Installed), keep
             # the first at the best rank (ties -> earlier-listed, real's
             # within-bin order). See portage-use-reduce's AltPreference.
             best = None  # (rank, alt_nodes)
@@ -5638,7 +5639,7 @@ def _resolve_disjunctions(nodes, uselist, alternative_satisfiable):
                     continue
                 if best is None or rank > best[0]:
                     best = (rank, alt_nodes)
-                if rank >= 2:
+                if rank >= 9:
                     break
             chosen = (
                 _resolve_disjunctions(best[1], uselist, alternative_satisfiable)
@@ -5664,8 +5665,9 @@ def _resolve_disjunctions(nodes, uselist, alternative_satisfiable):
 def _use_reduce_flat_disjunctive(depstr, uselist, alternative_satisfiable):
     """Real _add_pkg_dep_string's own "||" resolution, considerably
     simplified: of every alternative, picks the first with the highest
-    rank `alternative_satisfiable` reports (2 = AltPreference.Installed,
-    1 = Available, 0 = Unsatisfiable), instead of flattening every
+    rank `alternative_satisfiable` reports (9 = AltPreference.Installed,
+    8 = Available, 7/6/5 = UnsatUseInGraph/UnsatUseInstalled/
+    UnsatUseNonInstalled, 0 = Unsatisfiable), instead of flattening every
     alternative into the result the way plain use_reduce(flat=True)
     always has. An alternative that resolves to zero atoms at all (every
     token inside it gated by an inactive conditional) counts as trivially
@@ -5763,6 +5765,102 @@ def _candidate_use_deps_satisfied(atom, c, category, package, config):
     helper for the two tree-candidate USE-dep filters below."""
     iuse, use_flags = _candidate_iuse_and_use(c, category, package, config)
     return _use_deps_satisfied(atom, _valid_iuse(iuse, config), use_flags)
+
+
+def _atom_all_use_unmasked(repos, atom_str, config):
+    """Real `atom.violated_conditionals(pkg_use_enabled(avail_pkg),
+    avail_pkg.iuse.is_valid_flag)` -- the `all_use_unmasked` boolean of
+    `dep_zapdeps`'s choice classification (dep_check.py soft 406-414,
+    497-523): for an atom whose `[use]` deps NO candidate satisfies,
+    which flags would have to change, and are those flags in the best
+    candidate's (`avail_pkg = mydbapi_match_pkgs(atom.without_use)[-1]`)
+    own `use.mask` / `use.force` (one masked/forced violation makes the
+    whole choice fall to `other`, never selectable). One masked/forced
+    violation kills the choice; mirrors portage-repo/src/lib.rs's
+    atom_all_use_unmasked exactly."""
+    atom = _parse_atom(atom_str)
+    if atom is None:
+        return True
+    if atom.blocker:
+        return True
+    if not atom.use:
+        return True
+    category, package = atom.cp.split("/", 1)
+    best = _highest_available_candidate_ignoring_use(repos, atom_str, config)
+    if best is None:
+        return True
+    candidate_str, keywords, iuse, enabled = best
+    valid_iuse = _valid_iuse(iuse, config)
+    stable = _is_stable(
+        keywords,
+        candidate_str,
+        category,
+        package,
+        config["accept_keywords"],
+        config["package_accept_keywords"],
+    )
+    mask = _resolved_use_mask_or_force(
+        "mask", config, candidate_str, category, package, stable
+    )
+    force = _resolved_use_mask_or_force(
+        "force", config, candidate_str, category, package, stable
+    )
+    violated_enabled = []
+    violated_disabled = []
+    for tok in atom.use.tokens:
+        # Single-token evaluation per real `violated_conditionals`'s own
+        # per-token classification (portage/dep/__init__.py 1488-1524) --
+        # assessed via a synthetic real Atom so `_use_deps_satisfied`'s
+        # default-marker/missing-IUSE semantics apply exactly as they do
+        # for whole-atom matching.
+        single = _parse_atom(f"{atom.cp}[{tok}]")
+        if single is not None and single.use is not None:
+            if _use_deps_satisfied(single, valid_iuse, enabled):
+                continue
+            if single.use.enabled:
+                violated_enabled.append(next(iter(single.use.enabled)))
+            elif single.use.disabled:
+                violated_disabled.append(next(iter(single.use.disabled)))
+    if any(f in mask for f in violated_enabled):
+        return False
+    if any(f in force and f not in mask for f in violated_disabled):
+        return False
+    return True
+
+
+def _highest_available_candidate_ignoring_use(repos, atom_str, config):
+    """Real `avail_pkg = mydbapi_match_pkgs(atom.without_use)[-1]`
+    (dep_check.py soft 469-474): the single highest-versioned visible
+    candidate matching an atom's `[...]`-stripped form, plus its
+    candidate string, IUSE and effective enabled-use set. Mirrors
+    portage-repo/src/lib.rs's highest_available_candidate_ignoring_use
+    exactly."""
+    atom = _parse_atom(atom_str)
+    if atom is None:
+        return None
+    category, package = atom.cp.split("/", 1)
+    candidates = list_candidates(repos, category, package)
+    visible = [c for c in candidates if is_visible(c, category, package, config)]
+    if not visible:
+        return None
+    candidate_strs = [
+        f"{category}/{package}-{c['version']}:{c['slot']}/{c['sub_slot']}::{c['repo_name']}"
+        for c in visible
+    ]
+    by_str = dict(zip(candidate_strs, visible))
+    matched = [by_str[m] for m in match_from_list(atom.without_use, candidate_strs) if m in by_str]
+    if not matched:
+        return None
+    best = matched[0]
+    for c in matched[1:]:
+        if (vercmp(c["version"], best["version"]) or 0) > 0:
+            best = c
+    best_str = (
+        f"{category}/{package}-{best['version']}:{best['slot']}"
+        f"/{best['sub_slot']}::{best['repo_name']}"
+    )
+    iuse, use_flags = _candidate_iuse_and_use(best, category, package, config)
+    return (best_str, best["keywords"], iuse, use_flags)
 
 
 def _candidate_masking_reasons(candidate, category, package, config):
@@ -12167,7 +12265,12 @@ def resolve_pretend_graph(
                 all_available = all(
                     (not _circular_self(a))
                     and (
-                        _atom_currently_satisfiable(repos, a, config, _disj_constraints(a))
+                        _atom_currently_satisfiable(
+                            repos,
+                            _without_use(a),
+                            config,
+                            _disj_constraints(a),
+                        )
                         or (
                             root_deps_running_root is not None
                             and _running_root_satisfies_atom(a, root_deps_running_root)
@@ -12177,18 +12280,32 @@ def resolve_pretend_graph(
                 )
                 if not all_available:
                     return 0
-                # Real dep_zapdeps choice bin 0 (the single list
-                # preferred_in_graph / preferred_installed /
-                # preferred_any_slot alias to): every atom's cp is already
-                # installed (virtual/wine -> the installed wine-staging) OR
-                # every atom is already a merge-bound graph node this run,
-                # [use]-checked (virtual/secret-service -> the KDE-stack-
-                # pulled kwallet-runtime[keyring] over gnome-keyring).
-                if all(_atom_cp_installed(root, a) for a in atoms) or _atoms_all_in_graph(
-                    atoms, entries, config
+                all_use_satisfied = all(
+                    _atom_currently_satisfiable(repos, a, config, _disj_constraints(a))
+                    or (
+                        root_deps_running_root is not None
+                        and _running_root_satisfies_atom(a, root_deps_running_root)
+                    )
+                    for a in atoms
+                )
+                if all_use_satisfied:
+                    # Real dep_zapdeps choice bin 0 (preferred_installed /
+                    # preferred_in_graph) -- see the identical check in
+                    # resolve_pretend_graph's main "||" closure.
+                    if all(_atom_cp_installed(root, a) for a in atoms) or _atoms_all_in_graph(
+                        atoms, entries, config
+                    ):
+                        return 9
+                    return 8
+                if not all(
+                    _atom_all_use_unmasked(repos, a, config) for a in atoms
                 ):
-                    return 2
-                return 1
+                    return 0
+                if _atoms_all_in_graph(atoms, entries, config):
+                    return 7
+                if all(_atom_cp_installed(root, a) for a in atoms):
+                    return 6
+                return 5
 
             try:
                 flat_deps = _use_reduce_flat_disjunctive(depstr, use_flags, _disj_pref)
@@ -12946,7 +13063,9 @@ def _enqueue_dependencies(
         all_available = all(
             (not _circular_self(a))
             and (
-                _atom_currently_satisfiable(repos, a, config, _disj_c(a))
+                _atom_currently_satisfiable(
+                    repos, _without_use(a), config, _disj_c(a)
+                )
                 or (
                     root_deps_running_root is not None
                     and _running_root_satisfies_atom(a, root_deps_running_root)
@@ -12956,14 +13075,30 @@ def _enqueue_dependencies(
         )
         if not all_available:
             return 0
-        # Real dep_zapdeps choice bin 0 (preferred_installed /
-        # preferred_in_graph) -- see the identical check in
-        # resolve_pretend_graph's main "||" closure.
-        if all(_atom_cp_installed(root, a) for a in atoms) or _atoms_all_in_graph(
-            atoms, entries or [], config
-        ):
-            return 2
-        return 1
+        all_use_satisfied = all(
+            _atom_currently_satisfiable(repos, a, config, _disj_c(a))
+            or (
+                root_deps_running_root is not None
+                and _running_root_satisfies_atom(a, root_deps_running_root)
+            )
+            for a in atoms
+        )
+        if all_use_satisfied:
+            # Real dep_zapdeps choice bin 0 (preferred_installed /
+            # preferred_in_graph) -- see the identical check in
+            # resolve_pretend_graph's main "||" closure.
+            if all(_atom_cp_installed(root, a) for a in atoms) or _atoms_all_in_graph(
+                atoms, entries or [], config
+            ):
+                return 9
+            return 8
+        if not all(_atom_all_use_unmasked(repos, a, config) for a in atoms):
+            return 0
+        if _atoms_all_in_graph(atoms, entries or [], config):
+            return 7
+        if all(_atom_cp_installed(root, a) for a in atoms):
+            return 6
+        return 5
 
     try:
         flat_deps = _use_reduce_flat_disjunctive(depstr, use_flags, _disj_pref)
@@ -13065,6 +13200,23 @@ def _parse_atom(atom_str):
         return Atom(atom_str, allow_wildcard=True)
     except InvalidAtom:
         return None
+
+
+def _without_use(atom_str):
+    """Real `Atom.without_use` -- the atom string with its trailing
+    `[...]` USE block stripped (`[use]` is always the last slot, so a
+    single `"["` find truncates exactly like portage/dep/__init__.py
+    1801-1806). An atom with no USE block returns unchanged. Used in
+    `||` dispatch exactly where real dep_zapdeps resolves availability
+    with `mydbapi_match_pkgs(atom.without_use)`
+    (dep_check.py:469-474). Mirrors portage-dep/src/lib.rs's
+    without_use exactly."""
+    if not atom_str:
+        return atom_str
+    lb = atom_str.find("[")
+    if lb == -1:
+        return atom_str
+    return atom_str[:lb]
 
 
 # Enumerates the real `emerge` CLI's full option surface (see

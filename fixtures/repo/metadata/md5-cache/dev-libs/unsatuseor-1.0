@@ -1,0 +1,8 @@
+DEFINED_PHASES=-
+DESCRIPTION=fixture package: || group whose best alternative is USE-unsatisfiable-but-unmasked (dep_zapdeps unsat_use_non_installed bin), isolated against a non-existent second alternative
+EAPI=8
+IUSE=
+KEYWORDS=amd64
+RDEPEND=|| ( dev-libs/unsatusealt[unsatuseorflag] dev-libs/doesnotexist-unsatuseor )
+SLOT=0
+_md5_=0000000000000000000000000000000
