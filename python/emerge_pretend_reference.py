@@ -21106,7 +21106,7 @@ def run(args):
         )
     )
 
-    def _run_resolve(complete, locked=()):
+    def _run_resolve(complete, locked=(), with_seeds=False):
         return resolve_pretend_graph(
             _config_root(),
             _root(),
@@ -21153,7 +21153,7 @@ def run(args):
             dynamic_deps and not nodeps,
             implicit_system_deps,
             complete,
-            _complete_seed_atoms if (complete and _complete_seed_atoms) else (),
+            _complete_seed_atoms if ((complete or with_seeds) and _complete_seed_atoms) else (),
             tuple(locked) if complete else (),
         )
 
@@ -21170,7 +21170,7 @@ def run(args):
                 file=sys.stderr,
             )
             return 2
-        result = _run_resolve(False)
+        result = _run_resolve(False, (), False)
         _locked = [
             f"{e[0]}/{e[1]}"
             for e in result["entries"]
@@ -21178,21 +21178,27 @@ def run(args):
         ]
         # Phase 2 (_complete_graph): explicit --complete-graph, or
         # auto-enabled (depgraph.py:8581-8648) when the first graph
-        # changes an already-installed package and the trigger is on --
-        # unless --deep already forced the deep walk, or --nodeps killed
-        # it. The locked set gates it so the visible merge list never
-        # changes. Mirrors pretend.rs.
-        if complete_graph_r or (
-            not deep
-            and not nodeps
-            and _complete_graph_auto_enable(
-                result["entries"],
-                complete_if_new_use_r,
-                complete_if_new_ver_r,
-                rebuild_if_new_slot,
-            )
-        ):
-            result = _run_resolve(True, _locked)
+        # changes an already-installed package and the trigger is on.
+        # Real has no --deep condition (it forces deep itself); when
+        # --deep already forced the deep walk, the locked-gate re-resolve
+        # is skipped and the phase-1 walk is instead re-run with only the
+        # seeds fed in (they feed slot_op_reachable, nothing else).
+        # Skipped entirely under --nodeps. The locked set gates phase 2
+        # so the visible merge list never changes. Mirrors pretend.rs.
+        _auto_enable = not nodeps and _complete_graph_auto_enable(
+            result["entries"],
+            complete_if_new_use_r,
+            complete_if_new_ver_r,
+            rebuild_if_new_slot,
+        )
+        if complete_graph_r or (not deep and _auto_enable):
+            result = _run_resolve(True, _locked, True)
+        elif _auto_enable:
+            # --deep in force (the only way here with _auto_enable
+            # true): deterministic input means an identical walk; the
+            # only delta is the slot-operator-rebuild scan now seeing
+            # slot_op_reachable.
+            result = _run_resolve(False, (), True)
     except ResolutionError as e:
         msg = str(e)
         # Real never prefixes a `!!!`-headed report (masked packages, the

@@ -10376,9 +10376,9 @@ pub fn run(args: &[String]) -> ExitCode {
         v.dedup();
         v
     };
-    let run_resolve = |complete: bool, locked: &[String]| {
+    let run_resolve = |complete: bool, locked: &[String], with_seeds: bool| {
         let cfg: std::borrow::Cow<portage_profile::Config> =
-            if complete && (!complete_seed_atoms.is_empty() || !locked.is_empty()) {
+            if with_seeds && (!complete_seed_atoms.is_empty() || !locked.is_empty()) {
                 let mut c = config.clone();
                 c.complete_seed_atoms = complete_seed_atoms.clone();
                 c.complete_locked_merges = locked.to_vec();
@@ -10464,7 +10464,7 @@ pub fn run(args: &[String]) -> ExitCode {
     // list. Real `_complete_graph` runs *after* the normal graph is
     // built and only extends it (graph-or-installed selection, never a
     // new merge).
-    let result = match handle(run_resolve(false, &[]).map_err(crate::error::Error::from)) {
+    let result = match handle(run_resolve(false, &[], false).map_err(crate::error::Error::from)) {
         Ok(result) => result,
         Err(code) => return code,
     };
@@ -10489,22 +10489,37 @@ pub fn run(args: &[String]) -> ExitCode {
     // explicit, or auto-enabled -- real `depgraph.py:8581-8648`, re-walk
     // in complete mode when the first graph changes an already-installed
     // package and `--complete-graph-if-new-use`/`-if-new-ver`/
-    // `--rebuild-if-new-slot` is on. Skipped when `--deep` already forced
-    // the deep walk or `--nodeps` killed it. The completeness re-walk
+    // `--rebuild-if-new-slot` is on. Real has no `--deep` condition (it
+    // forces deep itself when not already deep); when `--deep` already
+    // forced the deep walk, the locked-gate re-resolve is skipped --
+    // the deep walk already visited the reachable closure -- and the
+    // phase-1 walk is instead re-run below with only the
+    // `complete_seed_atoms` fed in (they feed `slot_op_reachable` and
+    // nothing else -- see `ResolveCtx::new`). Skipped entirely under
+    // `--nodeps`. The completeness re-walk
     // never changes the visible merge list (the locked set gates it) --
     // it only widens `--json` / `--changed-deps-report` / slot-op
     // accounting.
-    let want_complete = complete_graph
-        || (deep == portage_repo::Deep::NotRequested
-            && !nodeps
-            && portage_repo::complete_graph_auto_enable(
-                &result.entries,
-                complete_if_new_use,
-                complete_if_new_ver,
-                rebuild_if_new_slot,
-            ));
+    let auto_enable = !nodeps
+        && portage_repo::complete_graph_auto_enable(
+            &result.entries,
+            complete_if_new_use,
+            complete_if_new_ver,
+            rebuild_if_new_slot,
+        );
+    let want_complete = complete_graph || (deep == portage_repo::Deep::NotRequested && auto_enable);
     let result = if want_complete {
-        match handle(run_resolve(true, &locked_merges).map_err(crate::error::Error::from)) {
+        match handle(run_resolve(true, &locked_merges, true).map_err(crate::error::Error::from)) {
+            Ok(result) => result,
+            Err(code) => return code,
+        }
+    } else if auto_enable {
+        // `--deep` in force (the only way to reach here with
+        // `auto_enable` true): real would still run `_complete_graph`,
+        // so re-run the phase-1 walk with the seeds fed in. Deterministic
+        // input means an identical walk; the only delta is the
+        // slot-operator-rebuild scan now seeing `slot_op_reachable`.
+        match handle(run_resolve(false, &[], true).map_err(crate::error::Error::from)) {
             Ok(result) => result,
             Err(code) => return code,
         }

@@ -107,5 +107,68 @@ Fixpoint-loop `continue`s in source order (`lib.rs:11951-11983`):
 |---|---|---|---|---|
 | *(S2 fills this)* | | | | |
 
+## S1 — complete-mode gate under `--deep` (2026-09-12)
+
+Fix (plan §S1 option (b)): `rust/portuale/src/pretend.rs` (`run_resolve`
+gains `with_seeds`; phase-2 guard restructured) + mirror in
+`python/emerge_pretend_reference.py` (`_run_resolve` gains `with_seeds`).
+When `--deep` is in force, phase 2's locked-gate re-resolve stays
+skipped, but whenever `complete_graph_auto_enable` fires on the phase-1
+entries the phase-1 walk is re-run with only `complete_seed_atoms` fed
+in (they feed `slot_op_reachable` and nothing else --
+`ResolveCtx::new`, `solver_bridge.rs:657`). Deterministic input, so the
+walk is identical; the only delta is the slot-operator scan now seeing
+reachability. Verified live: `-uD @world` on the baseline shape now
+prints `[ebuild  r  U  ] app-misc/A-2 [1]`, `[ebuild  rR    ]
+app-misc/B-0` + the "causing rebuilds" block -- byte-identical to
+`-uD --complete-graph @world`, Rust == Python on all probes (including
+`--nodeps`, which stays seed-less per real's `"recurse" not in myparams`
+early return). Third-arm check done: portuale passes
+`rebuild_if_new_slot` as `if_new_slot`, matching real's
+`complete_if_new_slot = rebuild_if_new_slot` (`depgraph.py:8590-8592`).
+
+Judgment calls surfaced (not defaulted):
+
+- **The `test_slot_operator_unsatisfied.py` case 1 (`-uD @world` →
+  `[B-0]`, bug 439694) does NOT flip in S1**, contra the plan's "MATCH
+  after S1" cell. Verified live (even `--complete-graph` prints no
+  `B-0`): with no version change anywhere, no merge entry fires
+  auto-enable, so a seeded re-run has nothing to scan. Real reaches
+  `[B-0]` through the **in-walk** `_slot_operator_unsatisfied_probe`
+  (`depgraph.py:3447-3454` → `_slot_operator_unsatisfied_backtrack`),
+  which no post-walk detector can reproduce. Pinned as
+  `strict=True` xfail (`test_oracle_slot_operator_unsatisfied_rebuilds_the_stale_consumer`)
+  and filed as a v2 item (candidate `#24f`: in-walk unsatisfied built
+  slot-op probe + backtrack; needs #25 nomerge nodes to see the flawed
+  parent in-graph). Case 2 (`--oneshot A` → `[A-2]`, no rebuild) MATCHES
+  and is pinned passing.
+- **No new Rust unit test**: the gate is CLI-layer branching in both
+  languages with no new helper; coverage comes from the `CASES` row
+  (shared-fixture `-uD @world` exercises the seeded re-run path on both
+  sides -- output-neutral there, no stale consumer in shared fixtures)
+  plus the flipped a522084 pin and the two unsat pins, all asserting
+  Rust == Python empirically. The existing
+  `complete_graph_auto_enable` unit tests cover the trigger.
+
+Pins flipped: `test_oracle_non_slot_operator_update_selects_new_slot`
+(second assertion → both `r`-tagged rows in real's `[A-2, B-0]` order +
+block); `docs/023-oracle.md` a522084 row PARTIAL → MATCH;
+`docs/backlog-tasks.md` #24 line notes S1 shipped.
+
+S1 also closed two latent divergences the new gate exposed:
+`test_oracle_boost_subslot_upgrade` and
+`test_oracle_virtual_subslot_upgrade_avoids_missed_update` asserted
+`libcmis`/`DBD-mysql` silence while quoting upstream mergelists that
+merge them -- both now print the full upstream lists (`r`-tagged
+provider + `rR` consumer + block). Pins updated to the oracle lists;
+`docs/023-oracle.md` boost/virt rows corrected from "MATCH (versions)"
+to full MATCH.
+
+L0 stop-condition check: `TEST/logs/l0-20260911T234323Z` vs the S0
+archive `l0-20260911T231643Z` -- parity 0.800 both, findings JSON
+identical, raw `portuale/` outputs byte-identical (`diff -rq` clean).
+Stronger than the stop condition allows (zero added rows: no stale `:=`
+consumer among the L0 probes); no regression.
+
 L0 baseline: archived under `TEST/findings/` by the S0 commit (raw
 `l0-resolver.sh` output on `main`, pre-S1).

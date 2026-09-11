@@ -331,6 +331,11 @@ CASES = [
         ["--pretend", "--noreplace", "dev-libs/completegraphpkg"],
         0,
     ),
+    (
+        "--deep no longer suppresses the auto-enabled pass: -uD @world re-runs seeded (output-neutral here, no stale consumer in shared fixtures)",
+        ["--pretend", "--update", "--deep", "@world"],
+        0,
+    ),
     ("-pv: cpv decorated with ::repo", ["--pretend", "-v", "dev-libs/newpkg"], 0),
     ("-pv: :slot/sub_slot decoration on a sub-slotted dep", ["--pretend", "-v", "dev-libs/subslotconsumer"], 0),
     ("-pv: [old-ver] decorated for an Upgrade", ["--pretend", "-v", "--update", "dev-libs/upgradepkg"], 0),
@@ -15043,12 +15048,14 @@ def test_oracle_boost_subslot_upgrade(
     """023 oracle, case boost (upstream
     `test_slot_conflict_update.py::testSlotConflictUpdate`): `libcmis`
     needs `boost:=`, installed at subslot 1.52 with `boost-build-1.52.0`.
-    Real merges `[boost-build-1.53.0, boost-1.53.0, libcmis-0.3.1]`
-    (`libcmis` itself is already installed, hence silent here). Portuale
-    reaches the same versions via highest-first selection + solvable
-    growth, without ever hitting the missed-update mask path this test
-    was written for -- MATCHES real on versions (the `@system` lines are
-    fixture-profile noise, identical on both sides)."""
+    Real merges `[boost-build-1.53.0, boost-1.53.0, libcmis-0.3.1]`.
+    Portuale reaches the same versions via highest-first selection +
+    solvable growth, without ever hitting the missed-update mask path
+    this test was written for -- and since #24 S1's complete-mode gate
+    it also schedules the `libcmis` subslot rebuild real merges (the
+    `r`-tagged provider + `rR` consumer + "causing rebuilds" block).
+    Full mergelist MATCH (`@system` lines are fixture-profile noise,
+    identical on both sides)."""
     root = _b1_root(
         tmp_path,
         ["dev-cpp/libcmis", "dev-libs/boost", "app-text/podofo"],
@@ -15079,8 +15086,15 @@ def test_oracle_boost_subslot_upgrade(
     )
     merges = _b1_merges(rust.stdout)
     assert "[ebuild     U  ] dev-util/boost-build-1.53.0 [1.52.0]" in merges
-    assert "[ebuild     U  ] dev-libs/boost-1.53.0 [1.52.0]" in merges
-    assert not [ln for ln in merges if "libcmis" in ln or "podofo" in ln]
+    assert "[ebuild  r  U  ] dev-libs/boost-1.53.0 [1.52.0]" in merges
+    assert "[ebuild  rR    ] dev-cpp/libcmis-0.3.1 " in merges
+    assert not [ln for ln in merges if "podofo" in ln]
+    assert [ln for ln in merges if "boost" in ln or "libcmis" in ln] == [
+        "[ebuild     U  ] dev-util/boost-build-1.53.0 [1.52.0]",
+        "[ebuild  r  U  ] dev-libs/boost-1.53.0 [1.52.0]",
+        "[ebuild  rR    ] dev-cpp/libcmis-0.3.1 ",
+    ]
+    assert "The following packages are causing rebuilds:" in rust.stdout
 
 
 def test_oracle_virtual_subslot_upgrade_avoids_missed_update(
@@ -15089,11 +15103,12 @@ def test_oracle_virtual_subslot_upgrade_avoids_missed_update(
     """023 oracle, case virt (upstream
     `test_slot_conflict_update_virt.py`, bug 692746): `DBD-mysql` needs
     `virtual/libmysqlclient:=`, installed at subslot 18. Real merges
-    `[mysql-connector-c-8.0.17-r3, libmysqlclient-21, DBD-mysql-4.44.0]`
-    (`DBD-mysql` itself is already installed, hence silent here). Portuale
-    reaches the same versions via highest-first selection -- the 692746
-    existing-node mask path never triggers because no slot conflict
-    arises. MATCHES real on versions (`@system` noise as above)."""
+    `[mysql-connector-c-8.0.17-r3, libmysqlclient-21, DBD-mysql-4.44.0]`.
+    Portuale reaches the same versions via highest-first selection --
+    the 692746 existing-node mask path never triggers because no slot
+    conflict arises -- and since #24 S1's complete-mode gate it also
+    schedules the `DBD-mysql` subslot rebuild real merges. Full
+    mergelist MATCH (`@system` noise as above)."""
     root = _b1_root(
         tmp_path,
         ["dev-db/mysql-connector-c", "dev-perl/DBD-mysql"],
@@ -15123,7 +15138,14 @@ def test_oracle_virtual_subslot_upgrade_avoids_missed_update(
     )
     merges = _b1_merges(rust.stdout)
     assert "[ebuild     U  ] dev-db/mysql-connector-c-8.0.17-r3 [6.1.11-r2]" in merges
-    assert "[ebuild     U  ] virtual/libmysqlclient-21 [18-r1]" in merges
+    assert "[ebuild  r  U  ] virtual/libmysqlclient-21 [18-r1]" in merges
+    assert "[ebuild  rR    ] dev-perl/DBD-mysql-4.44.0 " in merges
+    assert [ln for ln in merges if "mysql" in ln] == [
+        "[ebuild     U  ] dev-db/mysql-connector-c-8.0.17-r3 [6.1.11-r2]",
+        "[ebuild  r  U  ] virtual/libmysqlclient-21 [18-r1]",
+        "[ebuild  rR    ] dev-perl/DBD-mysql-4.44.0 ",
+    ]
+    assert "The following packages are causing rebuilds:" in rust.stdout
 
 
 def test_oracle_backtrack_masks_are_discarded_with_their_reason(
@@ -15211,13 +15233,17 @@ def test_oracle_no_aggressive_downgrade(
 def test_oracle_non_slot_operator_update_selects_new_slot(
     emerge_binary, emerge_pretend_python, fixture_env, tmp_path
 ):
-    """023 oracle, case a522084 -- PARTIAL, see `docs/023-oracle.md`
+    """023 oracle, case a522084 -- MATCH, see `docs/023-oracle.md`
     (upstream `test_solve_non_slot_operator_slot_conflicts.py`, bug
     522084): `app-misc/A` 1 (`:0/1`) -> 2 (`:0/2`) with installed `B-0`
-    recording `A:0/1=`. Real merges `[A-2, B-0]`. Portuale selects the
-    right version (`A-2`, no missed update -- the #23-adjacent half) but
-    does not schedule the `B-0` subslot rebuild (the `:=` rebuild path is
-    backlog #24's, not #23's). Pinned to portuale's current output."""
+    recording `A:0/1=`. Real merges `[A-2, B-0]`. The version choice
+    (`A-2`, no missed update) is #23's half; the `B-0` subslot rebuild
+    arrives via #24 S1's complete-mode gate (real `_complete_graph` has
+    no `--deep` condition, `depgraph.py:8562-8648`, so the auto-enabled
+    pass runs under `-uD` too -- portuale re-runs the phase-1 walk with
+    the required-set seeds fed in). Real tags both rows with the red `r`
+    (`PkgAttrDisplay.force_reinstall`) and prints the "causing rebuilds"
+    block."""
     root = _b1_root(
         tmp_path,
         ["app-misc/A"],
@@ -15233,8 +15259,91 @@ def test_oracle_non_slot_operator_update_selects_new_slot(
         emerge_pretend_python,
     )
     merges = _b1_merges(rust.stdout)
-    assert "[ebuild     U  ] app-misc/A-2 [1]" in merges
-    assert not [ln for ln in merges if "app-misc/B" in ln]
+    assert "[ebuild  r  U  ] app-misc/A-2 [1]" in merges
+    assert "[ebuild  rR    ] app-misc/B-0 " in merges
+    assert [ln for ln in merges if "app-misc/" in ln] == [
+        "[ebuild  r  U  ] app-misc/A-2 [1]",
+        "[ebuild  rR    ] app-misc/B-0 ",
+    ]
+    assert "The following packages are causing rebuilds:" in rust.stdout
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="bug 439694 needs real's in-walk `_slot_operator_unsatisfied_probe` "
+    "(`depgraph.py:3447-3454` -> `_slot_operator_unsatisfied_backtrack`): "
+    "with no version change anywhere, no merge entry fires the complete-mode "
+    "auto-enable, so S1's seeded re-run has nothing to scan -- a post-walk "
+    "detector can never see it. Filed as a v2 item; S3/S4 stay post-walk.",
+)
+def test_oracle_slot_operator_unsatisfied_rebuilds_the_stale_consumer(
+    emerge_binary, emerge_pretend_python, fixture_env, tmp_path
+):
+    """024 oracle, bug 439694 (upstream
+    `test_slot_operator_unsatisfied.py::testSlotOperatorUnsatisfied` case
+    1): installed `A-2` (`0/2`) with `B-0` recording `A:0/1=` (its tree
+    ebuild says `A:=`). Real merges `[B-0]` under `-uD @world` -- the
+    broken built slot-operator dep triggers a rebuild with no version
+    change at all. Portuale merges nothing yet (DIVERGENT, xfail). Rust
+    == Python asserted now, so the flip later only touches the
+    expectation."""
+    root = _b1_root(
+        tmp_path,
+        ["app-misc/B"],
+        [
+            ("app-misc", "A", "2", "0/2", {}),
+            (
+                "app-misc",
+                "B",
+                "0",
+                "0",
+                {"DEPEND": "app-misc/A:0/1=", "RDEPEND": "app-misc/A:0/1="},
+            ),
+        ],
+    )
+    rust = _b1_both(
+        ["--pretend", "--update", "--deep", "@world"],
+        _b1_env(fixture_env, root),
+        emerge_binary,
+        emerge_pretend_python,
+    )
+    assert [ln for ln in _b1_merges(rust.stdout) if "app-misc/" in ln] == [
+        "[ebuild  rR    ] app-misc/B-0 ",
+    ]
+
+
+def test_oracle_slot_operator_unsatisfied_oneshot_selects_without_rebuild(
+    emerge_binary, emerge_pretend_python, fixture_env, tmp_path
+):
+    """024 oracle, bug 439694 (upstream
+    `test_slot_operator_unsatisfied.py::testSlotOperatorUnsatisfied` case
+    2): `emerge --oneshot app-misc/A` on the same shape merges `[A-2]`
+    with no `B-0` rebuild -- no version change triggers complete-graph
+    mode, and initially-unsatisfied deps are ignored there anyway.
+    MATCHES real: a directly-named atom re-merges even when installed
+    (non-selective default, hence `[R]`), and the seed-less run sees no
+    reachable consumer. Rust == Python asserted."""
+    root = _b1_root(
+        tmp_path,
+        ["app-misc/B"],
+        [
+            ("app-misc", "A", "2", "0/2", {}),
+            (
+                "app-misc",
+                "B",
+                "0",
+                "0",
+                {"DEPEND": "app-misc/A:0/1=", "RDEPEND": "app-misc/A:0/1="},
+            ),
+        ],
+    )
+    rust = _b1_both(
+        ["--pretend", "--oneshot", "app-misc/A"],
+        _b1_env(fixture_env, root),
+        emerge_binary,
+        emerge_pretend_python,
+    )
+    assert _b1_merges(rust.stdout) == ["[ebuild   R    ] app-misc/A-2 "]
 
 
 def test_oracle_two_simultaneous_conflicts_defer_second_to_later_pass(
