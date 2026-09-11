@@ -627,6 +627,39 @@ fn resolve_pretend_rebuilt_binaries_reinstalls_on_newer_build() {
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
+// ---- shared assemble_result harness ----
+
+fn pass_163() -> PassResult {
+    PassResult {
+        entries: Vec::new(),
+        slot_conflicts: Vec::new(),
+        skipped_updates: Vec::new(),
+        orphan_blockers: Vec::new(),
+        slot_want: HashMap::new(),
+        slot_pullers: HashMap::new(),
+        masked_deps: Vec::new(),
+        use_unsat_deps: Vec::new(),
+        plain_miss_deps: Vec::new(),
+        nvc_dep_atoms: HashMap::new(),
+        missing_dep_trigger: None,
+        missing_args: Vec::new(),
+        autounmask_grew: false,
+        parent_flip_rescued: false,
+        edge_kind_map: HashMap::new(),
+        changed_deps_report_entries: Vec::new(),
+        pprovided_atoms: Vec::new(),
+        autounmask_keyword_changes: Vec::new(),
+        autounmask_use_changes: Vec::new(),
+        autounmask_license_changes: Vec::new(),
+        autounmask_mask_changes: Vec::new(),
+        use_overlay: HashMap::new(),
+        use_change_overlay: Vec::new(),
+        use_broke: false,
+        abi_rebuilds: None,
+        suppressed_nvc: false,
+        parent_atoms: Vec::new(),
+    }
+}
 
 /// Arguments of [`ctx_163`].
 struct Ctx163Args<'a> {
@@ -712,6 +745,15 @@ fn ctx_163<'a>(args: Ctx163Args<'a>) -> ResolveCtx<'a> {
         top_level: HashSet::new(),
         top_level_cps: HashSet::new(),
         local_binpkg: build_local_binpkg_index(config),
+    }
+}
+
+fn change_163(atom: &str, token: &str, chain: &[&str]) -> AutounmaskChange {
+    AutounmaskChange {
+        atom: atom.to_string(),
+        token: token.to_string(),
+        dep_chain: chain.iter().map(|s| s.to_string()).collect(),
+        trigger: None,
     }
 }
 

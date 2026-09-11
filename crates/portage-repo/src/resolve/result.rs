@@ -79,6 +79,17 @@ pub fn abort_path_enabled() -> bool {
     }
 }
 
+/// Arguments of [`abort_outcome`].
+pub struct AbortOutcomeArgs<'a> {
+    pub entries: &'a [GraphEntry],
+    pub masked_deps: &'a [MaskedDepReport],
+    pub circular_deps: &'a [Vec<String>],
+    pub cycle_display: &'a [String],
+    pub cycle_display_idx: &'a [usize],
+    pub nvc_dep_atoms: &'a HashMap<(String, String), String>,
+    pub virtual_cycle: &'a [String],
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GraphResult {
     pub entries: Vec<GraphEntry>,
