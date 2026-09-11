@@ -6338,6 +6338,28 @@ def _disjunction_preference(
         if any(_cp_installed_raw(a) for a in non_blocker):
             return 2
         return 1
+    # Backlog #22 slice 5 (docs/022-agent-task-22-zapdeps.fable.md §4):
+    # real demotes an otherwise-all_available choice straight to other
+    # (skipping bin 0/1 entirely) on THREE further conditions this
+    # deliberately never checks, each needing an input portuale's
+    # architecture doesn't have and the design brief itself flags as such
+    # (§2's own "inputs portuale does not have" list) -- documented cuts,
+    # not oversights:
+    #   - conflict_downgrade/installed_downgrade (dep_check.py soft
+    #     476-521, bug 531656/downgrade-into-a-slot-conflict guards): both
+    #     need downgrade_probe (whether config/CLI flags accept a
+    #     downgrade for this specific atom) and a graph_db that reflects
+    #     the CURRENT in-progress backtrack attempt's own slot choices,
+    #     not just this run's final merge-bound set (_atoms_all_in_graph's
+    #     entries is close but not the same live, mutating structure real
+    #     threads through the whole dep_zapdeps call).
+    #   - circular_atom (soft 649-682): needs circular_dependency
+    #     (populated by an earlier, separate real backtrack pass this
+    #     alternative isn't itself running inside of) and parent.onlydeps
+    #     (the --onlydeps CLI flag, not threaded to this call depth).
+    # All three belong with the slot-conflict backtracking work (#23/#24)
+    # if their inputs ever get mapped, per the brief's own slice-5 note --
+    # not bolted onto this classification function as a guess.
     if all_use_satisfied:
         # Real dep_zapdeps choice bin 0 (preferred_installed /
         # preferred_in_graph) -- see the identical check below.

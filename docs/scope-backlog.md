@@ -629,17 +629,18 @@ merge, unmerge, world management, all real. The gap to a full drop-in is:
 1. **Resolver depth (§A).** The `'backtrack` loop's architecture is in
    place (reconciles solvable slot conflicts, masks unsolvable ones,
    renders the notices, autounmask levels inside the loop, `||`-preference
-   + slot-op-rebuild feedback). What's left is depth on pieces already
-   built: richer `_slot_conflict_backtrack` mask-target analysis, the
-   still-finer `dep_zapdeps` bins (`all_available`/`all_use_satisfied`
-   split, `unsat_use_*` with the bug-515584 unmask gate,
-   `all_installed_slots`, in-bin upgrade-preference ordering, and the
-   `other_*` bins + `allow_masked` two-pass return all shipped
-   2026-09-11, one shared probe + tie-break pair both languages —
-   `minimize_slots` and the downgrade/circular guards remain), the
-   DFS-partial merge-list truncation, and the `_serialize_tasks`
-   frontier-timing at real-tree scale (L0 merge-order: ~19 probes,
-   correct set / slightly-off
+   + slot-op-rebuild feedback). `dep_zapdeps`'s finer choice bins are now
+   **done** (`all_available`/`all_use_satisfied` split, `unsat_use_*` with
+   the bug-515584 unmask gate, `all_installed_slots`, in-bin
+   upgrade-preference ordering, and the `other_*` bins + `allow_masked`
+   two-pass return, shipped 2026-09-11, one shared probe + tie-break pair
+   both languages — `minimize_slots` and the `conflict_downgrade`/
+   `installed_downgrade`/`circular_atom` guards stay deliberate,
+   documented cuts, the latter two folded into #23's own scope). What's
+   left is depth on other pieces already built: richer
+   `_slot_conflict_backtrack` mask-target analysis, the DFS-partial
+   merge-list truncation, and the `_serialize_tasks` frontier-timing at
+   real-tree scale (L0 merge-order: ~19 probes, correct set / slightly-off
    sequence).
 2. **The Part 2 tails** — F's `--info` host-state
    half, G's brush re-pin, §J's `--solver=` real-tree bugs (E's fetch
