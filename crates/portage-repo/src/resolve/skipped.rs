@@ -76,6 +76,119 @@ pub(crate) struct MissingDepFullRowArgs<'a> {
     pub(crate) atom: &'a str,
 }
 
+/// Builds the full-form row for the masked higher version `ver` of `cat/pkg`
+/// at `slot`. `None` when no settled entry holds the slot or metadata fails.
+pub(crate) fn missing_dep_full_row(
+    args: MissingDepFullRowArgs<'_>,
+) -> Option<SkippedMissingDepFull> {
+    let MissingDepFullRowArgs {
+        repos,
+        root,
+        config,
+        entries,
+        cat,
+        pkg,
+        slot,
+        ver,
+        sub,
+        repo,
+        atom,
+    } = args;
+    // The tracker's slot match: merge-bound entry first, else installed.
+    let mut selected_merge: Option<(&str, &str, &str, &str)> = None;
+    let mut selected_installed: Option<&str> = None;
+    for e in entries {
+        if e.category != cat || e.package != pkg {
+            continue;
+        }
+        match &e.outcome {
+            PretendOutcome::New { version } | PretendOutcome::Reinstall { version, .. } => {
+                if e.slot.as_deref() == Some(slot) {
+                    selected_merge = Some((
+                        version.as_str(),
+                        e.slot.as_deref().unwrap_or(slot),
+                        e.sub_slot.as_deref().unwrap_or(sub),
+                        e.repo_name.as_deref().unwrap_or(repo),
+                    ));
+                    break;
+                }
+            }
+            PretendOutcome::Upgrade { to, .. } | PretendOutcome::Downgrade { to, .. } => {
+                if e.slot.as_deref() == Some(slot) {
+                    selected_merge = Some((
+                        to.as_str(),
+                        e.slot.as_deref().unwrap_or(slot),
+                        e.sub_slot.as_deref().unwrap_or(sub),
+                        e.repo_name.as_deref().unwrap_or(repo),
+                    ));
+                    break;
+                }
+            }
+            PretendOutcome::AlreadyInstalled { version } => {
+                if selected_installed.is_none() && read_vdb_slot(root, cat, pkg, version).0 == slot
+                {
+                    selected_installed = Some(version.as_str());
+                }
+            }
+            PretendOutcome::NoVisibleCandidate | PretendOutcome::Uninstall { .. } => {}
+        }
+    }
+    let selected_display = if let Some((v, s, ss, r)) = selected_merge {
+        format!("({cat}/{pkg}-{v}:{s}/{ss}::{r}, ebuild scheduled for merge)")
+    } else if let Some(v) = selected_installed {
+        let (s, ss) = read_vdb_slot(root, cat, pkg, v);
+        let r = installed_pkg_repo(root, cat, pkg, v);
+        format!("({cat}/{pkg}-{v}:{s}/{ss}::{r}, installed)")
+    } else {
+        // No settled entry holds the slot, but the vdb holds the masked version
+        // itself: fall back to it, scoped to version equality only.
+        let v = installed_candidates(root, cat, pkg)
+            .into_iter()
+            .find(|(iv, _, _)| iv.as_str() == ver && read_vdb_slot(root, cat, pkg, iv).0 == slot)
+            .map(|(iv, _, _)| iv)?;
+        let (s, ss) = read_vdb_slot(root, cat, pkg, &v);
+        let r = installed_pkg_repo(root, cat, pkg, &v);
+        format!("({cat}/{pkg}-{v}:{s}/{ss}::{r}, installed)")
+    };
+    let skipped_display =
+        format!("({cat}/{pkg}-{ver}:{slot}/{sub}::{repo}, ebuild scheduled for merge)");
+    // The chain is the single skipped node (not in the settled graph).
+    let chain = vec![(format!("{cat}/{pkg}-{ver}::{repo}"), "ebuild".to_string())];
+    let dep = match masked_candidates_for_atom(repos, atom, config) {
+        Some(masked) => {
+            let (acat, apkg) = portage_dep::parse_atom(atom)
+                .map(|a| (a.category, a.package))
+                .unwrap_or_else(|| (cat.to_string(), pkg.to_string()));
+            SkippedDepDisclosure::Masked(MaskedDepReport {
+                category: acat,
+                package: apkg,
+                atom: atom.to_string(),
+                masked,
+                chain,
+            })
+        }
+        None => {
+            let (acat, apkg) = portage_dep::parse_atom(atom)
+                .map(|a| (a.category, a.package))
+                .unwrap_or_else(|| (cat.to_string(), pkg.to_string()));
+            SkippedDepDisclosure::Plain(PlainMissDepReport {
+                category: acat,
+                package: apkg,
+                atom: atom.to_string(),
+                chain,
+            })
+        }
+    };
+    Some(SkippedMissingDepFull {
+        category: cat.to_string(),
+        package: pkg.to_string(),
+        slot: slot.to_string(),
+        selected_display,
+        skipped_display,
+        dep,
+    })
+}
+
 /// Collapses rows per `(category, package, slot)` to the highest
 /// `skipped_version`; equal versions all stay, exact duplicates collapse to
 /// one. A slot's survivors sit at the position of the slot's first row, and
