@@ -168,6 +168,176 @@ pub(crate) struct SlotConflictAbiProbeArgs<'a> {
     pub(crate) config: &'a portage_profile::Config,
 }
 
+/// Portage's slot-conflict-fired half of the update probe: for every recorded
+/// conflict, for every parent edge whose atom is a built `:=` atom that rejects
+/// another instance, schedule the parent reinstall when the same-version tree
+/// ebuild's live atoms accept that instance and no other parent vetoes it.
+/// Runs over the direct solve's surviving records, before the mask arms, and
+/// returns the newly-scheduled parent cps; no masks are filed for a resolved
+/// conflict.
+// Portage: _emerge/depgraph.py, _slot_conflict_backtrack_abi
+pub(crate) fn slot_conflict_abi_probe(
+    args: SlotConflictAbiProbeArgs<'_>,
+) -> BTreeSet<(String, String)> {
+    let SlotConflictAbiProbeArgs {
+        root,
+        repos,
+        entries,
+        conflicts,
+        already,
+        undone,
+        with_bdeps,
+        walked,
+        excluded,
+        probe_parents,
+        config,
+    } = args;
+    // cp -> () for every merge-bound entry: only installed parents probe.
+    let merge_bound: HashSet<(String, String)> = entries
+        .iter()
+        .filter(|e| merge_bound_version(&e.outcome).is_some())
+        .map(|e| (e.category.clone(), e.package.clone()))
+        .collect();
+    // Portage restarts the whole search per resolution; the growing set
+    // below is the local equivalent.
+    let mut scheduled: BTreeSet<(String, String)> = BTreeSet::new();
+    let mut refusals: BTreeSet<(String, String)> = already.clone();
+    for sc in conflicts {
+        let provider_cp = (sc.category.clone(), sc.package.clone());
+        if sc.instances.len() < 2 {
+            continue;
+        }
+        for (mi, m) in sc.instances.iter().enumerate() {
+            for parent in &m.parents {
+                let Some((pcat, ppkg, pver)) = parse_conflict_parent_cpv(&parent.parent_cpv) else {
+                    continue;
+                };
+                let pcp = (pcat.clone(), ppkg.clone());
+                if !installed_candidates(root, &pcat, &ppkg)
+                    .iter()
+                    .any(|(v, _, _)| v == &pver)
+                {
+                    continue;
+                }
+                if merge_bound.contains(&pcp)
+                    || already.contains(&pcp)
+                    || scheduled.contains(&pcp)
+                    || undone.contains(&pcp)
+                {
+                    continue;
+                }
+                let pq_str = format!("{pcat}/{ppkg}-{pver}");
+                if excluded
+                    .iter()
+                    .any(|ex| matches_config_entry(ex, &pq_str, &pcat, &ppkg))
+                {
+                    continue;
+                }
+                let Some(atom) = portage_dep::parse_atom(&parent.atom) else {
+                    continue;
+                };
+                if !is_built_slot_op(&atom) {
+                    continue;
+                }
+                // Every other instance is a candidate child.
+                for (ci, c) in sc.instances.iter().enumerate() {
+                    if ci == mi {
+                        continue;
+                    }
+                    if m.sub_slot.is_empty() || c.sub_slot.is_empty() || m.sub_slot == c.sub_slot {
+                        continue;
+                    }
+                    if vercmp_ordering(&c.version, &m.version) == std::cmp::Ordering::Less {
+                        continue;
+                    }
+                    let c_str = format!(
+                        "{cat}/{pkg}-{cver}:{slot}/{csub}",
+                        cat = sc.category,
+                        pkg = sc.package,
+                        cver = c.version,
+                        slot = sc.slot,
+                        csub = c.sub_slot,
+                    );
+                    // The edge is only conflicted when A rejects C.
+                    if portage_dep::match_from_list(&parent.atom, &[c_str.as_str()])
+                        .is_some_and(|mt| !mt.is_empty())
+                    {
+                        continue;
+                    }
+                    // The same-version reinstall Portage forces: its live
+                    // atoms must accept C.
+                    let Some(live) = live_metadata_for_installed(repos, root, &pcat, &ppkg, &pver)
+                    else {
+                        continue;
+                    };
+                    // The replacement's build-time keys follow the same rule
+                    // as the scan.
+                    let dep_keys: &[&str] = match with_bdeps && walked.contains(&pcp) {
+                        true => &["RDEPEND", "PDEPEND", "DEPEND", "BDEPEND", "IDEPEND"],
+                        false => &["RDEPEND", "PDEPEND", "IDEPEND"],
+                    };
+                    // The replacement's USE conditionals are evaluated against
+                    // its effective USE: an atom under a disabled `flag?`
+                    // group is never selected, so it cannot accept C.
+                    let Some(rep_use) = list_candidates(repos, &pcat, &ppkg).ok().and_then(|cs| {
+                        let c = cs
+                            .iter()
+                            .filter(|c| c.version == pver && c.source == CandidateSource::Ebuild)
+                            .max_by_key(|c| c.repo_priority)?;
+                        let cand_str = format!(
+                            "{pcat}/{ppkg}-{}:{}/{}::{}",
+                            c.version, c.slot, c.sub_slot, c.repo_name
+                        );
+                        Some(effective_use_flags_uncached(
+                            EffectiveUseFlagsUncachedArgs {
+                                config,
+                                iuse: live.get("IUSE").map(String::as_str).unwrap_or_default(),
+                                keywords: &c.keywords,
+                                candidate_str: &cand_str,
+                                category: &pcat,
+                                package: &ppkg,
+                            },
+                        ))
+                    }) else {
+                        continue;
+                    };
+                    let accepts = dep_keys
+                        .iter()
+                        .filter_map(|k| {
+                            flat_dep_atoms(live.get(*k).map(String::as_str).unwrap_or(""), &rep_use)
+                        })
+                        .flatten()
+                        .any(|tok| {
+                            let Some(la) = portage_dep::parse_atom(&tok) else {
+                                return false;
+                            };
+                            if la.blocker != portage_dep::Blocker::None {
+                                return false;
+                            }
+                            if la.category != sc.category || la.package != sc.package {
+                                return false;
+                            }
+                            portage_dep::match_from_list(
+                                portage_dep::without_use(&tok),
+                                &[c_str.as_str()],
+                            )
+                            .is_some_and(|mt| !mt.is_empty())
+                        });
+                    if !accepts {
+                        continue;
+                    }
+                    if probe_refused(probe_parents, &refusals, &provider_cp, &c_str, &pcp) {
+                        continue;
+                    }
+                    scheduled.insert(pcp.clone());
+                    refusals.insert(pcp.clone());
+                }
+            }
+        }
+    }
+    scheduled
+}
+
 /// Display continuity for conflict-fired rebuilds: recomputed here from the
 /// settled state, since the firing pass restarts the search. For every
 /// `slot_operator_rebuild` reinstall entry, each recorded built `:=` atom on
