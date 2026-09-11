@@ -1,0 +1,29 @@
+
+Performing Global Updates
+(Could take a couple of minutes if you have a lot of binary packages.)
+  .='update pass'  *='binary update'  #='/var/db update'  @='/var/db move'
+  s='/var/db SLOT move'  %='binary move'  S='binary SLOT move'
+  p='update /etc/portage/package.*'
+/tmp/r269stage/fixtures/repo/profiles/updates/2Q-2024..
+
+
+
+Performing Global Updates
+(Could take a couple of minutes if you have a lot of binary packages.)
+  .='update pass'  *='binary update'  #='/var/db update'  @='/var/db move'
+  s='/var/db SLOT move'  %='binary move'  S='binary SLOT move'
+  p='update /etc/portage/package.*'
+/tmp/r269stage/fixtures/repo/profiles/updates/2Q-2024..
+
+
+
+These are the packages that would be merged, in order:
+
+Calculating dependencies ... done!
+Dependency resolution took 0.04 s (backtrack: 3/20).
+
+[ebuild  N     ] dev-libs/slotconflicttarget-1.0 to /tmp/r269root/
+[ebuild     U  ] app-misc/mmprov-3 [2] to /tmp/r269root/
+[ebuild  rR    ] app-misc/mmcons-1 to /tmp/r269root/
+[ebuild  N     ] dev-libs/slotconflictoldconsumer-1.0 to /tmp/r269root/
+[ebuild  N     ] dev-libs/slotconflictnewconsumer-1.0 to /tmp/r269root/
