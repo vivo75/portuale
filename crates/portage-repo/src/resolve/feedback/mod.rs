@@ -9,12 +9,14 @@ mod no_leaf_restart;
 mod reverse_dep_pins;
 mod slot_conflict_abi;
 mod solvable_slot_conflicts;
+mod unsatisfied_dead_end;
 pub(crate) use autounmask::*;
 pub(crate) use circular_dead_end::*;
 pub(crate) use no_leaf_restart::*;
 pub(crate) use reverse_dep_pins::*;
 pub(crate) use slot_conflict_abi::*;
 pub(crate) use solvable_slot_conflicts::*;
+pub(crate) use unsatisfied_dead_end::*;
 
 /// Why one `cat/pkg` version is masked on retry. Readers see the union across
 /// reasons; the backtracker consumes them. Portage: backtracking.py, `runtime_pkg_mask`.
