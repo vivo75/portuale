@@ -2254,6 +2254,7 @@ mod rebuild_scan;
 mod reinstall;
 mod repo_config;
 mod resolver_trace;
+mod result;
 mod rev_dep;
 mod slot_conflict;
 mod slot_undo;

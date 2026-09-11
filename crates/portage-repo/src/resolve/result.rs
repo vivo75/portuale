@@ -90,6 +90,131 @@ pub struct AbortOutcomeArgs<'a> {
     pub virtual_cycle: &'a [String],
 }
 
+/// Derives the abort outcome from the settled graph: Portage's three abandon sites
+/// as a post-loop classification (portuale rebuilds `entries` per pass; the final
+/// pass is the one Portage would display).
+///
+/// Precedence follows Portage's control flow: a walk-time failure wins over a
+/// serialize-time one, so a masked/unsat dependency beats a cycle in the same graph.
+/// Between walk-time failures Portage records the first its DFS reaches; portuale
+/// takes the first in BFS admission order (`entries` order). The autounmask-breakage
+/// clean pass is re-cut afterwards to the fail-fast walk (`fail_fast_truncate`).
+///
+/// A `NoVisibleCandidate` dependency entry always aborts: Portage has no
+/// installed-parent rescue for a settled miss (its `_initially_unsatisfied_deps`
+/// path is narrow: complete-mode beyond-depth and masked-parent backward-compat,
+/// both "error message but do not fail"). A top-level miss is already fatal via the
+/// argument path. Masked-only atoms are those with a [`MaskedDepReport`]; every other
+/// miss is `UnsatisfiedAtom`. `nvc_dep_atoms` carries each entry's unevaluated atom.
+// Portage: depgraph.py _add_dep, _create_graph, _resolve:5676-5681, _serialize_tasks,
+// _select_package:3473-3483,6880-6900, _initially_unsatisfied_deps:3425-3470
+pub fn abort_outcome(args: AbortOutcomeArgs<'_>) -> ResolveOutcome {
+    let AbortOutcomeArgs {
+        entries,
+        masked_deps,
+        circular_deps,
+        cycle_display,
+        cycle_display_idx,
+        nvc_dep_atoms,
+        virtual_cycle,
+    } = args;
+    // Portage's virtual-cycle failure is an exception out of the walk, so it preempts
+    // every serialize-time failure like a walk-time miss does; checked before both.
+    // Against a masked/unsat miss in the same graph, virtual-first is the documented
+    // choice (no fixture shapes both at once).
+    // Portage: depgraph.py _virtual_cycle_error via _resolve to select_files
+    if !virtual_cycle.is_empty() {
+        return ResolveOutcome::Aborted {
+            reason: AbortReason::VirtualCycle {
+                members: virtual_cycle.to_vec(),
+            },
+            partial: Vec::new(),
+        };
+    }
+    for entry in entries {
+        if !matches!(entry.outcome, PretendOutcome::NoVisibleCandidate) {
+            continue;
+        }
+        // The abort's `parent_cpv` is the first merge-bound requirer; with
+        // installed-only requirers it is the first requirer's own installed cpv. An
+        // NVC entry with no resolvable requirer keeps the old rescue (nobody to blame).
+        let Some(parent_cpv) = entry
+            .required_by
+            .iter()
+            .find_map(|(c, p)| {
+                entries
+                    .iter()
+                    .find(|o| &o.category == c && &o.package == p)
+                    .and_then(merge_bound_cpv)
+            })
+            .or_else(|| {
+                entry.required_by.iter().find_map(|(c, p)| {
+                    entries
+                        .iter()
+                        .find(|o| &o.category == c && &o.package == p)
+                        .and_then(|o| match &o.outcome {
+                            PretendOutcome::AlreadyInstalled { version } => {
+                                Some(format!("{c}/{p}-{version}"))
+                            }
+                            _ => None,
+                        })
+                })
+            })
+        else {
+            continue;
+        };
+        let key = (entry.category.clone(), entry.package.clone());
+        let reason = match masked_deps
+            .iter()
+            .find(|r| r.category == entry.category && r.package == entry.package)
+        {
+            Some(rep) => AbortReason::MaskedDep {
+                atom: rep.atom.clone(),
+                parent_cpv,
+            },
+            None => AbortReason::UnsatisfiedAtom {
+                atom: nvc_dep_atoms
+                    .get(&key)
+                    .cloned()
+                    .unwrap_or_else(|| format!("{}/{}", entry.category, entry.package)),
+                parent_cpv,
+            },
+        };
+        return ResolveOutcome::Aborted {
+            reason,
+            partial: Vec::new(),
+        };
+    }
+    if !circular_deps.is_empty() {
+        // The drain's node indices keep the two instances of a cp living in both
+        // roots apart (they share one cpv string); the cpv lookup is the fallback
+        // for callers without indices.
+        let partial = if cycle_display_idx.is_empty() {
+            cycle_display
+                .iter()
+                .filter_map(|cpv| {
+                    entries
+                        .iter()
+                        .find(|e| merge_bound_cpv(e).as_deref() == Some(cpv.as_str()))
+                        .cloned()
+                })
+                .collect()
+        } else {
+            cycle_display_idx
+                .iter()
+                .map(|&i| entries[i].clone())
+                .collect()
+        };
+        return ResolveOutcome::Aborted {
+            reason: AbortReason::UnserializableCycle {
+                members: cycle_display.to_vec(),
+            },
+            partial,
+        };
+    }
+    ResolveOutcome::Complete
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GraphResult {
     pub entries: Vec<GraphEntry>,

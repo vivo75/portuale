@@ -60,6 +60,78 @@ fn installed_163(version: &str) -> PretendOutcome {
     }
 }
 
+/// A merge-bound requirer whose cp is absent still completes, even
+/// with a same-category merge-bound decoy present.
+#[test]
+fn abort_outcome_ghost_requirer_completes_despite_a_same_category_merge() {
+    let entries = vec![
+        entry_163(
+            "dev-libs",
+            "need",
+            PretendOutcome::NoVisibleCandidate,
+            &[("dev-libs", "ghost")],
+        ),
+        entry_163("dev-libs", "top", new_163("1.0"), &[]),
+    ];
+    assert_eq!(
+        abort_outcome(AbortOutcomeArgs {
+            entries: &entries,
+            masked_deps: &[],
+            circular_deps: &[],
+            cycle_display: &[],
+            cycle_display_idx: &[],
+            nvc_dep_atoms: &HashMap::new(),
+            virtual_cycle: &[]
+        }),
+        ResolveOutcome::Complete
+    );
+}
+
+/// A ghost requirer still completes with a same-category installed
+/// decoy present.
+#[test]
+fn abort_outcome_ghost_requirer_completes_despite_a_same_category_installed_entry() {
+    let entries = vec![
+        entry_163(
+            "dev-libs",
+            "need",
+            PretendOutcome::NoVisibleCandidate,
+            &[("dev-libs", "ghost")],
+        ),
+        entry_163("dev-libs", "top", installed_163("1.0"), &[]),
+    ];
+    assert_eq!(
+        abort_outcome(AbortOutcomeArgs {
+            entries: &entries,
+            masked_deps: &[],
+            circular_deps: &[],
+            cycle_display: &[],
+            cycle_display_idx: &[],
+            nvc_dep_atoms: &HashMap::new(),
+            virtual_cycle: &[]
+        }),
+        ResolveOutcome::Complete
+    );
+}
+
+/// No NVC entries and no cycles completes.
+#[test]
+fn abort_outcome_empty_graph_completes() {
+    let entries = vec![entry_163("dev-libs", "top", new_163("1.0"), &[])];
+    assert_eq!(
+        abort_outcome(AbortOutcomeArgs {
+            entries: &entries,
+            masked_deps: &[],
+            circular_deps: &[],
+            cycle_display: &[],
+            cycle_display_idx: &[],
+            nvc_dep_atoms: &HashMap::new(),
+            virtual_cycle: &[]
+        }),
+        ResolveOutcome::Complete
+    );
+}
+
 /// Fresh unique scratch dir per test (vdb + repo live under it, so
 /// the per-root memo caches never see a reused path). Mirrors
 /// `tests_162::dir_162`, which must stay untouched.
