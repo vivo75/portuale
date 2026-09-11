@@ -168,6 +168,13 @@ pub(crate) fn constraint_withheld_updates(
     out
 }
 
+/// Highest missed version per `(cat, pkg, slot)` while deriving
+/// [`backtrack_missed_updates`]: version, first-seen mask order, mask reason,
+/// tree sub-slot and repo.
+pub(crate) type KeptMissedValue = (String, usize, MaskReason, String, String);
+
+pub(crate) type KeptMissed = HashMap<(String, String, String), KeptMissedValue>;
+
 /// Row-identity key for [`collapse_skipped_updates`]' exact-duplicate pass:
 /// every [`SkippedUpdate`] field, root flags included.
 pub(crate) type SkippedUpdateKey = (
@@ -180,3 +187,251 @@ pub(crate) type SkippedUpdateKey = (
     bool,
     bool,
 );
+
+/// Arguments of [`backtrack_missed_updates`].
+pub(crate) struct BacktrackMissedUpdatesArgs<'a> {
+    pub(crate) repos: &'a [RepoConfig],
+    pub(crate) root: &'a Path,
+    pub(crate) config: &'a portage_profile::Config,
+    pub(crate) entries: &'a [GraphEntry],
+    pub(crate) params: &'a BacktrackParams,
+    /// The settled pass's dropped set-member atoms (consulted by the vdb
+    /// fallback in [`missing_dep_full_row`]). Empty at the prune-rebuilds
+    /// probe site, where the row must not materialize.
+    pub(crate) missing_args: &'a [String],
+}
+
+/// Missed updates over the settled backtrack trial state: the accumulated
+/// `runtime_pkg_mask` (the slot-conflict removals already ride
+/// `PassResult::skipped_updates`). The highest masked version per slot above
+/// the chosen one becomes a row. Narrowings: one root only; installed or
+/// metadata-less versions skipped; cross-source collapse at the call site.
+// Portage: depgraph.py, _get_missed_updates
+pub(crate) fn backtrack_missed_updates(
+    args: BacktrackMissedUpdatesArgs<'_>,
+) -> (
+    Vec<SkippedUpdate>,
+    Vec<SkippedMissingDep>,
+    Vec<SkippedMissingDepFull>,
+) {
+    let BacktrackMissedUpdatesArgs {
+        repos,
+        root,
+        config,
+        entries,
+        params,
+        missing_args,
+    } = args;
+    // First-seen position per negative (dict insertion order).
+    let order_of = |cp: &(String, String), neg: &str| -> usize {
+        params
+            .mask_order
+            .iter()
+            .position(|(k, n)| k == cp && n == neg)
+            .unwrap_or(usize::MAX)
+    };
+    // Ties go to the first-seen mask.
+    let mut kept: KeptMissed = HashMap::new();
+    for ((cat, pkg), bucket) in &params.runtime_pkg_mask {
+        let cp = (cat.clone(), pkg.clone());
+        for entry in bucket {
+            // Built-binary steers render no missed-update rows: the mask steers
+            // *within* a version, so the masked version is never higher.
+            if matches!(entry.reason, MaskReason::SlotOperatorBuilt) {
+                continue;
+            }
+            // `!=cat/pkg-ver` back to the version.
+            let (ver, order) = match entry.neg.strip_prefix("!=").and_then(split_cpv) {
+                Some((c, p, v)) if c == *cat && p == *pkg => (v, order_of(&cp, &entry.neg)),
+                _ => continue,
+            };
+            // Installed exclusion for `SlotConflict` masks only: a mask whose
+            // version is installed reports nothing. `MissingDependency` masks
+            // are keyed by package object, so they still report (the
+            // `[installed]`-marked neg already skips at `split_cpv` above).
+            if matches!(entry.reason, MaskReason::SlotConflict { .. })
+                && installed_candidates(root, cat, pkg)
+                    .iter()
+                    .any(|(v, _, _)| v == &ver)
+            {
+                continue;
+            }
+            let (sub, repo, slot) = slot_conflict_meta(repos, cat, pkg, &ver);
+            if slot.is_empty() {
+                continue;
+            }
+            // The tracker's `(root, slot_atom)` match: merge-bound entries plus
+            // installed ones still listed.
+            let mut any_selected = false;
+            let mut missed = true;
+            for e in entries {
+                if e.category != *cat || e.package != *pkg {
+                    continue;
+                }
+                let (chosen_ver, chosen_installed) =
+                    match &e.outcome {
+                        PretendOutcome::New { version }
+                        | PretendOutcome::Reinstall { version, .. } => (version, false),
+                        PretendOutcome::Upgrade { to, .. }
+                        | PretendOutcome::Downgrade { to, .. } => (to, false),
+                        PretendOutcome::AlreadyInstalled { version } => (version, true),
+                        PretendOutcome::NoVisibleCandidate | PretendOutcome::Uninstall { .. } => {
+                            continue;
+                        }
+                    };
+                let chosen_slot = e.slot.clone().or_else(|| {
+                    let s = if chosen_installed {
+                        read_vdb_slot(root, cat, pkg, chosen_ver).0
+                    } else {
+                        slot_conflict_meta(repos, cat, pkg, chosen_ver).2
+                    };
+                    if s.is_empty() { None } else { Some(s) }
+                });
+                if chosen_slot.as_deref() != Some(slot.as_str()) {
+                    continue;
+                }
+                any_selected = true;
+                match vercmp_ordering(chosen_ver, &ver) {
+                    std::cmp::Ordering::Greater => {
+                        missed = false;
+                        break;
+                    }
+                    std::cmp::Ordering::Equal if !chosen_installed => {
+                        missed = false;
+                        break;
+                    }
+                    _ => {}
+                }
+            }
+            if !any_selected
+                && matches!(entry.reason, MaskReason::MissingDependency { .. })
+                && missing_args.iter().any(|a| {
+                    portage_dep::parse_atom(a).is_some_and(|p| {
+                        p.category == *cat
+                            && p.package == *pkg
+                            && p.blocker == portage_dep::Blocker::None
+                    })
+                })
+                && installed_candidates(root, cat, pkg)
+                    .iter()
+                    .any(|(iv, _, _)| iv == &ver && read_vdb_slot(root, cat, pkg, iv).0 == slot)
+            {
+                // The dropped set member's installed instance still counts as
+                // selected (scoped to version equality); it never clears the
+                // miss, like an equal-version installed choice.
+                any_selected = true;
+            }
+            if !any_selected || !missed {
+                continue;
+            }
+            // Mask types with no parents are skipped.
+            if let MaskReason::SlotConflict { parents } = &entry.reason
+                && parents.is_empty()
+            {
+                continue;
+            }
+            let key = (cat.clone(), pkg.clone(), slot.clone());
+            let replace = match kept.get(&key) {
+                None => true,
+                Some((kept_ver, kept_order, _, _, _)) => match vercmp_ordering(&ver, kept_ver) {
+                    std::cmp::Ordering::Greater => true,
+                    std::cmp::Ordering::Equal => order < *kept_order,
+                    _ => false,
+                },
+            };
+            if replace {
+                kept.insert(key, (ver, order, entry.reason.clone(), sub, repo));
+            }
+        }
+    }
+    // Emit in first-seen order.
+    let mut kept: Vec<((String, String, String), KeptMissedValue)> = kept.into_iter().collect();
+    kept.sort_by(|a, b| {
+        a.1.1
+            .cmp(&b.1.1)
+            .then_with(|| (a.0.clone(), a.1.0.clone()).cmp(&(b.0.clone(), b.1.0.clone())))
+    });
+    let mut skipped: Vec<SkippedUpdate> = Vec::new();
+    let mut missing: Vec<SkippedMissingDep> = Vec::new();
+    let mut full: Vec<SkippedMissingDepFull> = Vec::new();
+    for ((cat, pkg, slot), (ver, _, reason, sub, repo)) in kept {
+        match reason {
+            MaskReason::SlotConflict { parents } => {
+                for ((pc, pp, pv), atom) in parents {
+                    if pc.is_empty() {
+                        continue;
+                    }
+                    // An installed enforcing consumer renders vdb-based
+                    // (`(<cpv>, installed ...)`); a graph puller keeps the
+                    // tree form.
+                    let installed_ref = installed_refs(root, &pc, &pp)
+                        .into_iter()
+                        .find(|r| r.version == pv);
+                    let (consumer_cpv, consumer_installed, consumer_use) = match &installed_ref {
+                        Some(r) => (
+                            format!("{pc}/{pp}-{pv}:{}/{}::{}", r.slot, r.sub_slot, r.repo),
+                            true,
+                            skipped_update_installed_use_display_for(root, config, &pc, &pp, &pv),
+                        ),
+                        None => (
+                            slot_conflict_puller_cpv(repos, &pc, &pp, &pv),
+                            false,
+                            skipped_update_use_display_for(repos, config, &pc, &pp, &pv),
+                        ),
+                    };
+                    // Per-node roots: the missed instance rides the rejecting
+                    // parent's edge, a merge parent its entry, an installed
+                    // parent the walk root's vdb.
+                    let (missed_running, consumer_running) = if consumer_installed {
+                        (false, false)
+                    } else {
+                        skipped_update_roots(entries, (&cat, &pkg), (&pc, &pp, &pv), &atom)
+                    };
+                    skipped.push(SkippedUpdate {
+                        category: cat.clone(),
+                        package: pkg.clone(),
+                        slot: slot.clone(),
+                        skipped_version: ver.clone(),
+                        skipped_sub_slot: sub.clone(),
+                        skipped_repo: repo.clone(),
+                        skipped_use: skipped_update_use_display_for(
+                            repos, config, &cat, &pkg, &ver,
+                        ),
+                        atom,
+                        consumer_cpv,
+                        consumer_installed,
+                        consumer_use,
+                        missed_targets_running_root: missed_running,
+                        consumer_targets_running_root: consumer_running,
+                    });
+                }
+            }
+            MaskReason::MissingDependency { atom, .. } => {
+                if backtrack_masked_match(repos, params, &atom) {
+                    missing.push(SkippedMissingDep {
+                        category: cat.clone(),
+                        package: pkg.clone(),
+                        slot: slot.clone(),
+                    });
+                } else if let Some(row) = missing_dep_full_row(MissingDepFullRowArgs {
+                    repos,
+                    root,
+                    config,
+                    entries,
+                    cat: &cat,
+                    pkg: &pkg,
+                    slot: &slot,
+                    ver: &ver,
+                    sub: &sub,
+                    repo: &repo,
+                    atom: &atom,
+                }) {
+                    full.push(row);
+                }
+            }
+            // The collection loop above skips these, so none ever reach `kept`.
+            MaskReason::SlotOperatorBuilt => {}
+        }
+    }
+    (skipped, missing, full)
+}
