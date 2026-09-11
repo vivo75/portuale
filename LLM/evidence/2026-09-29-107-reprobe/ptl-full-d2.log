@@ -1,0 +1,7 @@
+[ebuild     U  ] dev-libs/md4c-0.6.0 [0.5.3]
+[ebuild  N     ] net-libs/rest-0.10.2  USE="introspection -gtk-doc -test -vala"
+
+ * IMPORTANT: 20 news items need reading for repository 'gentoo'.
+ * Use eselect news read to view new items.
+
+ptl rc=0

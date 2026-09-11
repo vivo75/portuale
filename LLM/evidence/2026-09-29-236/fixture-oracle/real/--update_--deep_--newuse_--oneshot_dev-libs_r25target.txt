@@ -1,0 +1,29 @@
+Undefined license group 'FREE'
+
+Performing Global Updates
+(Could take a couple of minutes if you have a lot of binary packages.)
+  .='update pass'  *='binary update'  #='/var/db update'  @='/var/db move'
+  s='/var/db SLOT move'  %='binary move'  S='binary SLOT move'
+  p='update /etc/portage/package.*'
+/tmp/l0-fixture-oracle/fixtures/repo/profiles/updates/2Q-2024..
+@s
+
+Undefined license group 'FREE'
+
+Performing Global Updates
+(Could take a couple of minutes if you have a lot of binary packages.)
+  .='update pass'  *='binary update'  #='/var/db update'  @='/var/db move'
+  s='/var/db SLOT move'  %='binary move'  S='binary SLOT move'
+  p='update /etc/portage/package.*'
+/tmp/l0-fixture-oracle/fixtures/repo/profiles/updates/2Q-2024..
+@s
+
+Undefined license group 'FREE'
+
+These are the packages that would be merged, in order:
+
+Calculating dependencies ... done!
+Dependency resolution took 0.12 s (backtrack: 0/20).
+
+[ebuild     U  ] dev-libs/r25up-2.0 [1.0] to /tmp/l0-fixture-oracle/fixtures/
+[ebuild  N     ] dev-libs/r25target-1.0 to /tmp/l0-fixture-oracle/fixtures/
