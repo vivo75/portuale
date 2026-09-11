@@ -86,6 +86,7 @@ variables, defaulting to "/" -- see lib/portage/const.py.
 """
 
 import configparser
+import copy
 import functools
 import json
 import os
@@ -10931,6 +10932,107 @@ def _refresh_entry_use_display(entries, repos, cp, cfg):
         entries[_i] = _e[:5] + (_disp,) + _e[6:]
 
 
+def _slot_conflict_mask_choices(sc, slot_pullers, ctx_repos, runtime_masks, excluded,
+                                visible_config):
+    """Phase C4 (023): the similar-package half of real's
+    `_slot_confict_backtrack` via `_iter_similar_available` (same cp,
+    same slot, visible, not `--exclude`d, not already masked, not
+    already a conflict party): missed-update siblings sharing at least
+    one conflict atom join the choice's mask group, so one node masks
+    them together. Skipped when the target's own conflict set is empty
+    (real's `if conflict_atoms` gate). Highest version first, for a
+    deterministic group order. Real's built/binpkg-visibility checks
+    have no counterpart (the listing is ebuilds only); the
+    `autounmask_level` argument is `None` at real's own call site too.
+    Mirrors portage-repo's `slot_conflict_mask_choices` (which also
+    takes the search params, repos, and effective config).
+    Returns ranked `[(target, parents, similar)]` where `target` is a
+    `(cat, pkg, ver)` triple to mask, `parents` the pulling
+    `((cat, pkg, ver), atom)` triples whose atom does NOT match it
+    (real's `conflict_atoms`), and `similar` the
+    `[((cat, pkg, ver), parents)]` missed-update siblings masked in the
+    same node. The in-graph resolved version is always a candidate (bug
+    692746); candidates sort version-desc, then stably by ascending
+    conflict-atom count; the driver adds the nodes in that order so DFS
+    pops the longest-conflict choice first. Candidate matching uses the
+    step-2 candidate-string form (`cat/pkg-ver:slot`, main slot only --
+    the same documented subslot approximation C1 used)."""
+    _versions = []
+    for _inst in sc.get("instances") or []:
+        if _inst["version"] not in _versions:
+            _versions.append(_inst["version"])
+    _versions.sort(key=functools.cmp_to_key(
+        lambda a, b: vercmp(a, b) or 0
+    ), reverse=True)
+    if sc.get("resolved_version") not in _versions:
+        _versions.append(sc.get("resolved_version"))
+    _all_parents = []
+    for _pc, _pp, _pv, _atom in slot_pullers.get(
+        (sc["category"], sc["package"]), []
+    ):
+        if not _pc or ((_pc, _pp, _pv), _atom) in _all_parents:
+            continue
+        _all_parents.append(((_pc, _pp, _pv), _atom))
+    _choices = []
+    for _ver in _versions:
+        _candidate = f'{sc["category"]}/{sc["package"]}-{_ver}:{sc["slot"]}'
+        _parents = [
+            _p
+            for _p in _all_parents
+            if not match_from_list(_p[1], [_candidate])
+        ]
+        _similar = []
+        if _parents:
+            _party_versions = set(
+                _inst["version"] for _inst in sc.get("instances") or []
+            )
+            _sibs = []
+            for _c in list_candidates(
+                ctx_repos, sc["category"], sc["package"]
+            ):
+                if _c["slot"] != sc["slot"] or _c["version"] in _party_versions:
+                    continue
+                if f'!={sc["category"]}/{sc["package"]}-{_c["version"]}' in [
+                    _n
+                    for _n, _r in runtime_masks.get(
+                        (sc["category"], sc["package"]), []
+                    )
+                ]:
+                    continue
+                if not is_visible(_c, sc["category"], sc["package"], visible_config):
+                    continue
+                _against = (
+                    f'{sc["category"]}/{sc["package"]}-{_c["version"]}:{_c["slot"]}'
+                )
+                if any(match_from_list(_ex, [_against]) for _ex in excluded):
+                    continue
+                _sibs.append(_c)
+            _sibs.sort(
+                key=functools.cmp_to_key(
+                    lambda a, b: (vercmp(b["version"], a["version"]) or 0)
+                )
+            )
+            for _c in _sibs:
+                _sim_cpv = (
+                    f'{sc["category"]}/{sc["package"]}-{_c["version"]}:{sc["slot"]}'
+                )
+                _subset = [
+                    _p
+                    for _p in _parents
+                    if not match_from_list(_p[1], [_sim_cpv])
+                ]
+                if not _subset:
+                    continue
+                _similar.append(
+                    ((sc["category"], sc["package"], _c["version"]), _subset)
+                )
+        _choices.append(
+            ((sc["category"], sc["package"], _ver), _parents, _similar)
+        )
+    _choices.sort(key=lambda c: len(c[1]))
+    return _choices
+
+
 def resolve_pretend_graph(
     config_root,
     root,
@@ -11132,9 +11234,28 @@ def resolve_pretend_graph(
     # text that targeted a conflicted package) and the counter survive.
     # The retry ceiling is `backtrack_max` (real `--backtrack=COUNT`,
     # default 10, `0` disables). Mirrors portage-repo/src/lib.rs's
-    # resolve_pretend_graph exactly.
+    # resolve_pretend_graph exactly. Since C1 this dict holds only the
+    # positive atom sets; negatives live in `runtime_pkg_mask` (readers
+    # use the per-pass union built at the top of `_graph_pass`).
     slot_constraints = {}
-    backtrack_iteration = 0
+    # C1 split: every "!=cpv" negative with its reason, keyed by the
+    # masked version's cat/pkg: `{cp: [(neg, reason)]}`. Reasons mirror
+    # portage-repo's `MaskReason`: `("slot_conflict", parents)` with
+    # `parents = [((cat, pkg, ver), atom)]` not matching the masked
+    # version,
+    # `("missing_dependency", (parent_cp, dep_atom))`. Enforced
+    # reverse-dep pins are positive atoms, not masks -- they stay in
+    # `slot_constraints`.
+    runtime_pkg_mask = {}
+    # Per-node search position (real's node attributes, kept beside the
+    # accumulators like portage-repo's `BacktrackParams`). `mask_steps`
+    # counts mask-producing retries (real's `--backtrack=N` bounds this);
+    # `backtrack_depth` counts every retry including config-growth passes.
+    # Written here, read by the `_bt_*` search helpers below. The name is
+    # `backtrack_depth`, not `depth`: `_graph_pass` owns a per-atom loop
+    # var of that name and the two scopes must never merge.
+    mask_steps = 0
+    backtrack_depth = 0
     # Real backtracking.py::_feedback_missing_dep: a dependency atom with
     # no matching package makes _backtrack_depgraph mask that atom's
     # *parent* and retry, so dep_zapdeps re-picks a "||" group whose
@@ -11156,17 +11277,209 @@ def resolve_pretend_graph(
     # record. Mirrors portage-repo/src/lib.rs.
     dropped_pins = []
     _missing_dep_trigger = None
-    # Backtracking slice 3 (unsolvable conflict -> runtime_pkg_mask): a
-    # small state machine across passes. "none" = ordinary pass; "trying" =
-    # the pass just ran with a trial set of "!=cpv" masks and its result
-    # must be judged (kept if every conflict cleared with no new
-    # no_visible_candidate, else reverted); "reverting" = one final clean
-    # pass after a rejected trial. `mask_trial_spent` stops a second trial
-    # once the first has been judged. Mirrors portage-repo/src/lib.rs.
-    mask_phase = "none"
-    mask_trial_spent = False
-    mask_negatives = []
-    pre_trial_nvc = 0
+
+    # Phase C2 (023): the depth-first search over mask/config choices,
+    # mirroring real `_emerge/resolver/backtracking.py::Backtracker` (and
+    # portage-repo's `Backtracker`). The driver locals ARE the working
+    # copy: `_bt_get` restores a node snapshot into them, `_graph_pass`
+    # and the decision chain read them, and each arm packages a `grown`
+    # deepcopy for `_bt_feedback` instead of mutating the live search
+    # state. `config` is deliberately NOT snapshotted: it is derived
+    # from the accumulator on every restore (`_base_config` when empty,
+    # tiered otherwise -- exactly the two shapes the growth/breakage
+    # arms produce), so it can neither drift nor bloat the snapshots.
+    _bt_nodes = []
+    _bt_unexplored = []
+    _bt_current = None
+
+    def _node_snapshot():
+        # Reads enclosing driver locals (closure reads need no
+        # `nonlocal`). Every cross-pass accumulator; `config` is
+        # deliberately excluded (derived on restore, see below).
+        return {
+            "slot_constraints": copy.deepcopy(slot_constraints),
+            "runtime_pkg_mask": copy.deepcopy(runtime_pkg_mask),
+            "mask_steps": mask_steps,
+            "backtrack_depth": backtrack_depth,
+            "missing_dep_masked": copy.deepcopy(missing_dep_masked),
+            "reverse_dep_masked": copy.deepcopy(reverse_dep_masked),
+            "dropped_pins": copy.deepcopy(dropped_pins),
+            "autounmask_use_config": copy.deepcopy(autounmask_use_config),
+            "autounmask_use_change_records": copy.deepcopy(
+                autounmask_use_change_records
+            ),
+            "autounmask_use_broke": autounmask_use_broke,
+            "autounmask_disabled": autounmask_disabled,
+            "autounmask_suggest_keywords": autounmask_suggest_keywords,
+            "autounmask_suggest_use": autounmask_suggest_use,
+            "autounmask_suggest_license": autounmask_suggest_license,
+            "autounmask_suggest_masks": autounmask_suggest_masks,
+        }
+
+    def _node_restore(snap):
+        nonlocal slot_constraints, runtime_pkg_mask, mask_steps, backtrack_depth
+        nonlocal missing_dep_masked, reverse_dep_masked, dropped_pins
+        nonlocal autounmask_use_config, autounmask_use_change_records
+        nonlocal autounmask_use_broke, autounmask_disabled
+        nonlocal autounmask_suggest_keywords, autounmask_suggest_use
+        nonlocal autounmask_suggest_license, autounmask_suggest_masks
+        nonlocal config
+        slot_constraints = copy.deepcopy(snap["slot_constraints"])
+        runtime_pkg_mask = copy.deepcopy(snap["runtime_pkg_mask"])
+        mask_steps = snap["mask_steps"]
+        backtrack_depth = snap["backtrack_depth"]
+        missing_dep_masked = copy.deepcopy(snap["missing_dep_masked"])
+        reverse_dep_masked = copy.deepcopy(snap["reverse_dep_masked"])
+        dropped_pins = copy.deepcopy(snap["dropped_pins"])
+        autounmask_use_config = copy.deepcopy(snap["autounmask_use_config"])
+        autounmask_use_change_records = copy.deepcopy(
+            snap["autounmask_use_change_records"]
+        )
+        autounmask_use_broke = snap["autounmask_use_broke"]
+        autounmask_disabled = snap["autounmask_disabled"]
+        autounmask_suggest_keywords = snap["autounmask_suggest_keywords"]
+        autounmask_suggest_use = snap["autounmask_suggest_use"]
+        autounmask_suggest_license = snap["autounmask_suggest_license"]
+        autounmask_suggest_masks = snap["autounmask_suggest_masks"]
+        # `config` is derived, never stored: the tiered view exactly when
+        # the accumulator is non-empty (the only two shapes the
+        # growth/breakage arms ever produce).
+        if autounmask_use_config:
+            config = {
+                **_base_config,
+                "autounmask_use": _autounmask_use_tier(autounmask_use_config),
+            }
+        else:
+            config = _base_config
+
+    # Two snapshots describe the same search state when every
+    # accumulator agrees. Excluded, like real's parameter `__eq__`:
+    # `config` (derived, see above) and the per-node search position
+    # (`mask_steps`, `backtrack_depth`).
+    _EQ_KEYS = (
+        "slot_constraints",
+        "runtime_pkg_mask",
+        "missing_dep_masked",
+        "reverse_dep_masked",
+        "dropped_pins",
+        "autounmask_use_config",
+        "autounmask_use_change_records",
+        "autounmask_use_broke",
+        "autounmask_disabled",
+        "autounmask_suggest_keywords",
+        "autounmask_suggest_use",
+        "autounmask_suggest_license",
+        "autounmask_suggest_masks",
+    )
+
+    def _params_equal(a, b):
+        return all(a[k] == b[k] for k in _EQ_KEYS)
+
+    def _check_runtime_pkg_mask(masks):
+        # Real `Backtracker._check_runtime_pkg_mask` (bug 375573): a node
+        # is discarded when a slot-conflict mask's every parent is itself
+        # masked. Missing-dependency masks never disqualify; a mask with
+        # no parents is always valid (real's 692746 arm). Mirrors
+        # portage-repo's `check_runtime_pkg_mask`.
+        for _cp, _entries in masks.items():
+            for _neg, _reason in _entries:
+                if _reason[0] != "slot_conflict":
+                    continue
+                _parents = _reason[1]
+                if not _parents:
+                    continue
+                _any_unmasked = False
+                for (_pc, _pp, _pv), _atom in _parents:
+                    _bucket = masks.get((_pc, _pp), [])
+                    if f"!={_pc}/{_pp}-{_pv}" not in [
+                        _n for _n, _r in _bucket
+                    ]:
+                        _any_unmasked = True
+                        break
+                if not _any_unmasked:
+                    return False
+        return True
+
+    def _bt_add(params, terminal, explore=True):
+        # Real `Backtracker._add`: keep the node unless a 375573 discard
+        # applies, it exceeds the mask budget, or an equal state exists.
+        if not _check_runtime_pkg_mask(params["runtime_pkg_mask"]):
+            return False
+        if params["mask_steps"] > backtrack_max:
+            return False
+        if any(_params_equal(n["params"], params) for n in _bt_nodes):
+            return False
+        _bt_nodes.append({"params": params, "terminal": terminal})
+        if explore:
+            _bt_unexplored.append(len(_bt_nodes) - 1)
+        return True
+
+    def _bt_get():
+        # Real `Backtracker.get`: pop the DFS stack; `None` means the
+        # search is exhausted and the driver falls back to the best run.
+        nonlocal _bt_current
+        if not _bt_unexplored:
+            return None
+        _bt_current = _bt_unexplored.pop()
+        return copy.deepcopy(_bt_nodes[_bt_current]["params"])
+
+    def _bt_best():
+        # Real `Backtracker.get_best_run`: the deepest terminal node's
+        # params -- the most config progress with no masks. The root is
+        # terminal, so this always yields at least the initial state.
+        _best = 0
+        for _i, _node in enumerate(_bt_nodes):
+            if _node["terminal"] and _node["params"]["backtrack_depth"] > (
+                _bt_nodes[_best]["params"]["backtrack_depth"]
+            ):
+                _best = _i
+        return copy.deepcopy(_bt_nodes[_best]["params"])
+
+    def _bt_feedback_config(grown):
+        # Real `_feedback_config`: config growth keeps the step budget
+        # and the current terminal value. Mirrors portage-repo's
+        # `Backtracker::feedback` Config arm.
+        grown["backtrack_depth"] += 1
+        _bt_add(grown, _bt_nodes[_bt_current]["terminal"], True)
+
+    def _bt_feedback_masks(grown, new_masks, latch_neg=None):
+        # Real `_feedback_slot_conflict` / `_feedback_missing_dep`: merge
+        # the masks into the grown working copy, cost one budget unit,
+        # never terminal. The re-mask latch travels with a missing-dep
+        # mask. Mirrors portage-repo's `Backtracker::feedback` mask arms.
+        for _cp, (_neg, _reason) in new_masks:
+            _bucket = grown["runtime_pkg_mask"].setdefault(_cp, [])
+            if _neg not in [_n for _n, _r in _bucket]:
+                _bucket.append((_neg, _reason))
+        if latch_neg is not None:
+            grown["missing_dep_masked"].add(latch_neg)
+        grown["mask_steps"] += 1
+        grown["backtrack_depth"] += 1
+        _bt_add(grown, False, True)
+
+    def _bt_feedback_slot_conflict(grown, choices):
+        # C3: one node per ranked choice (real's `_feedback_slot_conflict`
+        # loop), masking the target plus its C4 similar group. A repeated
+        # mask replaces its reason (real assigns
+        # `runtime_pkg_mask[pkg]["slot conflict"]`, it never accumulates).
+        # Mirrors portage-repo's `Backtracker::feedback` SlotConflict arm.
+        for _tgt, _parents, _sim in choices:
+            _node = copy.deepcopy(grown)
+            for _m_tgt, _m_pars in _sim + [(_tgt, _parents)]:
+                _neg = f"!={_m_tgt[0]}/{_m_tgt[1]}-{_m_tgt[2]}"
+                _bucket = _node["runtime_pkg_mask"].setdefault(
+                    (_m_tgt[0], _m_tgt[1]), []
+                )
+                _reason = ("slot_conflict", _m_pars)
+                for _i, (_n, _r) in enumerate(_bucket):
+                    if _n == _neg:
+                        _bucket[_i] = (_neg, _reason)
+                        break
+                else:
+                    _bucket.append((_neg, _reason))
+            _node["mask_steps"] += 1
+            _node["backtrack_depth"] += 1
+            _bt_add(_node, False, True)
 
     # Backtracking slice: --autounmask-use changes fed back into the loop
     # (real _dynamic_config._needed_use_config_changes / _feedback_config).
@@ -11205,9 +11518,19 @@ def resolve_pretend_graph(
         out.sort()
         return out
 
+    # phase: run_pass (Rust: portage-repo run_pass; per-pass walk + PassState.
+    # See docs/023-refactor-inventory.md for the region map.)
     def _graph_pass():
         nonlocal autounmask_use_broke, _missing_dep_trigger
         _missing_dep_trigger = None
+        # C1: readers see positives + rendered negatives as one bucket.
+        # Pass-constant: the driver never mutates either dict mid-walk.
+        # Mirrors portage-repo's `BacktrackParams::union_constraints`.
+        _union_constraints = {k: list(v) for k, v in slot_constraints.items()}
+        for _cp, _masks in runtime_pkg_mask.items():
+            _union_constraints.setdefault(_cp, []).extend(
+                _neg for _neg, _reason in _masks
+            )
         # Guards against infinite requeuing (e.g. a dependency cycle): the
         # exact same atom text is only ever resolved once -- deliberately
         # coarser than the (category, package, slot) dedup below, which
@@ -11282,7 +11605,7 @@ def resolve_pretend_graph(
         # emerge --pretend --debug Stage 3: real _resolve's own
         # "\n      Arg: <arg>\n     Atom: <atom>\n" (depgraph.py:5521),
         # once per top-level arg atom, first pass only. Mirrors lib.rs.
-        if _RESOLVER_DEBUG and backtrack_iteration == 0:
+        if _RESOLVER_DEBUG and _first_pass:
             for a in atoms:
                 _tr(f"\n      Arg: {a}\n     Atom: {a}\n")
         queue = deque((a, 0, None, None, False) for a in atoms)
@@ -11374,7 +11697,7 @@ def resolve_pretend_graph(
             # _wrapped_select_pkg_highest_available_imp's candidate list
             # (depgraph.py:8347), to stderr, first pass only. Mirrors
             # resolver_trace.rs::dump_atom_candidates.
-            if _RESOLVER_DEBUG and backtrack_iteration == 0:
+            if _RESOLVER_DEBUG and _first_pass:
                 _dump_atom_candidates(repos, root, current_atom_str, key[0], key[1])
             # Backtracking: record this atom as one of the constraints
             # pulling `cat/pkg` (real `_select_pkg_highest_available` sees
@@ -11390,7 +11713,7 @@ def resolve_pretend_graph(
             # is now enforced together, so this attempt picks the one
             # version that satisfies all of them and the conflict
             # disappears.
-            extra_constraints = slot_constraints.get(key, ())
+            extra_constraints = _union_constraints.get(key, ())
 
             # Real _complete_graph's _select_pkg_from_graph
             # (depgraph.py:8495): in complete mode the deep re-walk of the
@@ -11765,15 +12088,26 @@ def resolve_pretend_graph(
                 # backtrack when only a USE change would satisfy the dep
                 # (_select_package(dep.atom.without_use) still finds a
                 # package) -- an unfixable "[flag]" dep is a plain NVC.
+                # C3: real's "no matching package" is mask-aware (a masked
+                # candidate matches nothing), so the probe consults the
+                # negatives, not the bare tree -- reaching the same
+                # downgrade the old puller pre-masking produced. Positives
+                # stay out (real selection has none); a USE-only failure
+                # still satisfies the probe and stays out, as before.
+                # Mirrors portage-repo's `masked_negatives_for`.
                 _bare_atom = current_atom_str.split("[", 1)[0]
+                _masked_probe = tuple(
+                    _n for _n, _r in runtime_pkg_mask.get(key, [])
+                )
                 if (
                     outcome[0] == "no_visible_candidate"
                     and backtrack_max > 0
-                    and mask_phase == "none"
                     and _missing_dep_trigger is None
                     and owner is not None
                     and owner not in top_level_cps
-                    and not _atom_currently_satisfiable(repos, _bare_atom, config)
+                    and not _atom_currently_satisfiable(
+                        repos, _bare_atom, config, _masked_probe
+                    )
                 ):
                     _pv = None
                     for _e in entries:
@@ -11787,7 +12121,9 @@ def resolve_pretend_graph(
                     if _pv is not None:
                         _neg = f"!={owner[0]}/{owner[1]}-{_pv}"
                         if _neg not in missing_dep_masked:
-                            _missing_dep_trigger = (owner, _neg)
+                            # C1: the trigger carries the unsatisfiable dep
+                            # atom for the missing-dependency reason.
+                            _missing_dep_trigger = (owner, _neg, current_atom_str)
                 # AlreadyInstalled / NoVisibleCandidate: no slot to key a
                 # repeat by, so dedup on category/package alone, same as v1
                 # always did before slot-aware resolution existed.
@@ -11861,7 +12197,7 @@ def resolve_pretend_graph(
                         root_deps_running_root,
                         entries,
                         root_deps_build_seen,
-                        slot_constraints,
+                        _union_constraints,
                     )
                 # --autounmask's own keyword-suggestion sub-feature, extended
                 # here to a *dependency's* own NoVisibleCandidate -- see
@@ -12713,14 +13049,14 @@ def resolve_pretend_graph(
                     root,
                     entries,
                     _self_cp,
-                    slot_constraints,
+                    _union_constraints,
                     root_deps_running_root,
                     atoms,
                 )
 
             def _disj_tie_break(alts):
                 return _promote_tied_alternative(
-                    repos, config, root, entries, slot_constraints, alts
+                    repos, config, root, entries, _union_constraints, alts
                 )
 
             try:
@@ -12924,10 +13260,18 @@ def resolve_pretend_graph(
             nvc_dep_atoms,
         )
 
-    def _nvc_count(rows):
-        return sum(1 for r in rows if r[2][0] == "no_visible_candidate")
-
+    # Phase C2 (023): real `_backtrack_depgraph` -- pop a node, run one
+    # pass, settle/feed back/abandon, and on exhaustion re-run the deepest
+    # terminal (config-only) params. `--backtrack=0` settles the root pass
+    # as-is (real's `_allow_backtracking` gate). Mirrors portage-repo.
+    _bt_add(_node_snapshot(), True, True)  # root
+    _first_pass = True
+    _settled = False
     while True:
+        _params = _bt_get()
+        if _params is None:
+            break
+        _node_restore(_params)
         _au_before = sum(len(v) for v in autounmask_use_config.values())
         (
             entries,
@@ -12945,27 +13289,26 @@ def resolve_pretend_graph(
             edge_kind_map,
             nvc_dep_atoms,
         ) = _graph_pass()
+        _first_pass = False
 
         if required_use_violations:
             raise ResolutionError("".join(required_use_violations))
 
-        # Backtracking slice 3: judge a pending runtime_pkg_mask trial.
-        if mask_phase == "trying":
-            mask_phase = "none"
-            if not slot_conflicts and _nvc_count(entries) <= pre_trial_nvc:
-                # The trial cleared every conflict without making any
-                # dependency unsatisfiable -- keep the masks.
-                pass
-            else:
-                # Rejected: drop the trial masks and re-run one clean pass.
-                for _k, _neg in mask_negatives:
-                    if _k in slot_constraints and _neg in slot_constraints[_k]:
-                        slot_constraints[_k].remove(_neg)
-                mask_negatives = []
-                mask_phase = "reverting"
-                continue
-        elif mask_phase == "reverting":
-            mask_phase = "none"
+        if backtrack_max == 0:
+            # No search: report the root pass as-is (locals already hold
+            # the in-walk writes; nothing to merge). Settles once --
+            # no best-run re-walk, mirroring portage-repo.
+            _settled = True
+            break
+
+        # C2: the A3-overlay equivalent lands in a working copy, not the
+        # live search state (Python in-walk writes go straight to the
+        # restored locals, so the snapshot already holds them).
+        grown = _node_snapshot()
+
+        # phase: collect_feedback (Rust: portage-repo collect_feedback;
+        # the post-walk decision chain -- growth, masks, breakage, growth,
+        # missing-dep, reverse pins -- then settle, feedback, or dead end).
 
         # Solvable slot conflict -> fold every atom that targeted the
         # conflicted `cat/pkg` into `slot_constraints` and re-run the
@@ -12975,7 +13318,9 @@ def resolve_pretend_graph(
         # matches it on version, slot, *and* USE (real enforces USE-deps
         # in selection), so a USE-mismatching slot reuse falls through
         # to the mask trial and the notice. Mirrors portage-repo.
-        if mask_phase == "none" and slot_conflicts and backtrack_iteration < backtrack_max:
+        # C2: config feedback is budget-free; the mask budget is
+        # enforced by `_bt_add`. First hit wins, like portage-repo.
+        if slot_conflicts:
             progressed = False
             for _sc in slot_conflicts:
                 _pkg_key = (_sc["category"], _sc["package"])
@@ -13004,69 +13349,51 @@ def resolve_pretend_graph(
                 )
                 if not _solvable:
                     continue
-                _bucket = slot_constraints.setdefault(_pkg_key, [])
+                _bucket = grown["slot_constraints"].setdefault(_pkg_key, [])
                 for _w in _wants:
                     if _w not in _bucket:
                         _bucket.append(_w)
                         progressed = True
             if progressed:
-                backtrack_iteration += 1
+                _bt_feedback_config(grown)
                 continue
 
-        # Backtracking slice 3 (real _slot_conflict_backtrack ->
-        # runtime_pkg_mask): a slot conflict no single version can solve.
-        # Hide the currently-resolved version of the conflicted package,
-        # plus every puller-parent version that has a lower alternative,
-        # then re-run once and judge the result above.
-        if (
-            mask_phase == "none"
-            and not mask_trial_spent
-            and slot_conflicts
-            and backtrack_iteration < backtrack_max
-        ):
-            negatives = []
-            for _sc in slot_conflicts:
-                _cp = (_sc["category"], _sc["package"])
-                # Mask the *highest* conflicting instance, not merely the
-                # first-resolved one -- real backtracking's downgrade bias,
-                # and the version a "||"-pulled ">=" alternative
-                # re-selects, so dep_zapdeps yields to the next alternative
-                # on the retry. Mirrors pretend.rs.
-                _insts = _sc.get("instances") or []
-                if _insts:
-                    _mask_ver = _insts[0]["version"]
-                    for _inst in _insts[1:]:
-                        if (vercmp(_inst["version"], _mask_ver) or 0) > 0:
-                            _mask_ver = _inst["version"]
-                else:
-                    _mask_ver = _sc["resolved_version"]
-                negatives.append(
-                    (_cp, f'!={_sc["category"]}/{_sc["package"]}-{_mask_ver}')
-                )
-                _seen = set()
-                for _pc, _pp, _pv, _atom in slot_pullers.get(_cp, []):
-                    if not _pc or (_pc, _pp, _pv) in _seen:
-                        continue
-                    _seen.add((_pc, _pp, _pv))
-                    _lower = any(
-                        (vercmp(_c["version"], _pv) or 0) < 0
-                        for _c in list_candidates(repos, _pc, _pp)
-                    )
-                    if _lower:
-                        negatives.append(((_pc, _pp), f"!={_pc}/{_pp}-{_pv}"))
-            added = False
-            for _k, _neg in negatives:
-                _bucket = slot_constraints.setdefault(_k, [])
-                if _neg not in _bucket:
-                    _bucket.append(_neg)
-                    added = True
-            if added:
-                mask_negatives = negatives
-                pre_trial_nvc = _nvc_count(entries)
-                mask_phase = "trying"
-                mask_trial_spent = True
-                backtrack_iteration += 1
+        # C3: real `_slot_confict_backtrack` (one node per ranked
+        # choice, first conflicting slot only -- real
+        # `_feedback_slot_conflicts` takes `conflicts_data[0]`). The old
+        # bundled trial (highest child + every lower-alternative puller)
+        # is gone: puller-masking now happens only through a later pass's
+        # own missing-dep feedback, exactly like real. Mirrors
+        # portage-repo's `slot_conflict_mask_choices`.
+        if slot_conflicts:
+            _choices = _slot_conflict_mask_choices(
+                slot_conflicts[0],
+                slot_pullers,
+                repos,
+                grown["runtime_pkg_mask"],
+                excluded,
+                config,
+            )
+            # Novelty mirrors the old trial-dedup, compared on the full
+            # entry (neg + reason, the same granularity the node-dedup
+            # uses) across the target and every group member. Mirrors
+            # portage-repo.
+            _added = False
+            for _tgt, _pars, _sim in _choices:
+                for _m_tgt, _m_pars in _sim + [(_tgt, _pars)]:
+                    _neg = f"!={_m_tgt[0]}/{_m_tgt[1]}-{_m_tgt[2]}"
+                    _entry = (_neg, ("slot_conflict", _m_pars))
+                    if _entry not in grown["runtime_pkg_mask"].get(
+                        (_m_tgt[0], _m_tgt[1]), []
+                    ):
+                        _added = True
+                        break
+                if _added:
+                    break
+            if _added:
+                _bt_feedback_slot_conflict(grown, _choices)
                 continue
+
 
         # Real _autounmask_breakage (depgraph.py:12262-12280): an accumulated
         # autounmask USE change made another use-dep unsatisfiable and the
@@ -13074,16 +13401,15 @@ def resolve_pretend_graph(
         # autounmask change, turn suggestion fully off, and re-resolve one
         # final clean pass -- real's myparams["autounmask"] = False retry.
         # The autounmask_disabled latch keeps it to a single extra pass.
-        if autounmask_use_broke and not autounmask_disabled and mask_phase == "none":
-            autounmask_disabled = True
-            autounmask_suggest_keywords = False
-            autounmask_suggest_use = False
-            autounmask_suggest_license = False
-            autounmask_suggest_masks = False
-            autounmask_use_config.clear()
-            autounmask_use_change_records.clear()
-            config = _base_config
-            backtrack_iteration += 1
+        if autounmask_use_broke and not autounmask_disabled:
+            grown["autounmask_disabled"] = True
+            grown["autounmask_suggest_keywords"] = False
+            grown["autounmask_suggest_use"] = False
+            grown["autounmask_suggest_license"] = False
+            grown["autounmask_suggest_masks"] = False
+            grown["autounmask_use_config"].clear()
+            grown["autounmask_use_change_records"].clear()
+            _bt_feedback_config(grown)
             continue
 
         # Backtracking slice: this pass folded a new --autounmask-use flip
@@ -13096,17 +13422,12 @@ def resolve_pretend_graph(
         # the change is recorded + displayed but the graph is not re-driven.
         # Mirrors pretend.rs.
         _au_after = sum(len(v) for v in autounmask_use_config.values())
-        if (
-            _ab_enabled
-            and _au_after > _au_before
-            and mask_phase == "none"
-            and backtrack_iteration < backtrack_max
-        ):
-            backtrack_iteration += 1
-            config = {
-                **_base_config,
-                "autounmask_use": _autounmask_use_tier(autounmask_use_config),
-            }
+        # C2: config feedback is budget-free; the accumulator is already
+        # in `grown` (in-walk writes went straight to the restored
+        # locals). The tiered `config` rebuilds on restore. Mirrors
+        # portage-repo.
+        if _ab_enabled and _au_after > _au_before:
+            _bt_feedback_config(grown)
             continue
 
         # Real backtracking.py::_feedback_missing_dep: this pass hit a
@@ -13118,15 +13439,20 @@ def resolve_pretend_graph(
         # backtrack_max blocks the retry, the pass's own
         # no_visible_candidate entry is reported, as before. Mirrors
         # portage-repo/src/lib.rs.
-        if (
-            _missing_dep_trigger is not None
-            and mask_phase == "none"
-            and backtrack_iteration < backtrack_max
-        ):
-            _mdp_owner, _mdp_neg = _missing_dep_trigger
-            slot_constraints.setdefault(_mdp_owner, []).append(_mdp_neg)
-            missing_dep_masked.add(_mdp_neg)
-            backtrack_iteration += 1
+        if _missing_dep_trigger is not None:
+            _mdp_owner, _mdp_neg, _mdp_atom = _missing_dep_trigger
+            # C2: the latch travels with the mask (see
+            # `_bt_feedback_masks`). Mirrors portage-repo.
+            _bt_feedback_masks(
+                grown,
+                [
+                    (
+                        _mdp_owner,
+                        (_mdp_neg, ("missing_dependency", (_mdp_owner, _mdp_atom))),
+                    )
+                ],
+                latch_neg=_mdp_neg,
+            )
             continue
 
         # Real _complete_graph's installed-universe walk reaching
@@ -13155,24 +13481,62 @@ def resolve_pretend_graph(
         # _build_residual_slot_conflicts); they never enter
         # slot_constraints, so the hard-required version is never masked
         # into invisibility. Mirrors portage-repo/src/lib.rs.
-        if mask_phase == "none" and backtrack_iteration < backtrack_max:
-            _rdc_added = False
-            _rdc_enforced, _rdc_dropped = _reverse_dependency_constraints(
-                root, entries, with_bdeps, excluded, repos, slot_want
-            )
-            for _rdc_cp, _rdc_atom, _rdc_consumer in _rdc_enforced:
-                if (_rdc_cp, _rdc_atom) in reverse_dep_masked:
-                    continue
-                reverse_dep_masked.add((_rdc_cp, _rdc_atom))
-                slot_constraints.setdefault(_rdc_cp, []).append(_rdc_atom)
-                _rdc_added = True
-            for _rdc_pin in _rdc_dropped:
-                if _rdc_pin not in dropped_pins:
-                    dropped_pins.append(_rdc_pin)
-            if _rdc_added:
-                backtrack_iteration += 1
+        # C2: unconditional (real re-derives its complete-graph pins
+        # every pass); the latch below keeps it to one effective retry
+        # per pin set. Enforced pins stay positives. Mirrors portage-repo.
+        _rdc_added = False
+        _rdc_enforced, _rdc_dropped = _reverse_dependency_constraints(
+            root, entries, with_bdeps, excluded, repos, slot_want
+        )
+        for _rdc_cp, _rdc_atom, _rdc_consumer in _rdc_enforced:
+            if (_rdc_cp, _rdc_atom) in grown["reverse_dep_masked"]:
                 continue
+            grown["reverse_dep_masked"].add((_rdc_cp, _rdc_atom))
+            grown["slot_constraints"].setdefault(_rdc_cp, []).append(_rdc_atom)
+            _rdc_added = True
+        for _rdc_pin in _rdc_dropped:
+            if _rdc_pin not in grown["dropped_pins"]:
+                grown["dropped_pins"].append(_rdc_pin)
+        if _rdc_added:
+            _bt_feedback_config(grown)
+            continue
+        # C2: no feedback fired. A pass that still carries an
+        # unsatisfiable dependency is a dead end (real's abandoned
+        # `_create_graph`), not a report; a conflict-only fall-through
+        # still settles. The node keeps the merged copy so a best-run
+        # re-pass reports what the abandoned pass saw. Mirrors
+        # portage-repo's `DeadEnd`.
+        _has_nvc = any(r[2][0] == "no_visible_candidate" for r in entries)
+        if _has_nvc:
+            _bt_nodes[_bt_current]["params"] = grown
+            continue
+        _node_restore(grown)
+        _settled = True
         break
+
+    if not _settled:
+        # Exhausted without settling: re-run the deepest terminal
+        # (config-only) params and report those (real `get_best_run`).
+        # Mirrors portage-repo.
+        _node_restore(_bt_best())
+        (
+            entries,
+            slot_conflicts,
+            masked_deps,
+            required_use_violations,
+            changed_deps_report_entries,
+            pprovided_atoms,
+            autounmask_keyword_changes,
+            autounmask_use_changes,
+            autounmask_license_changes,
+            autounmask_mask_changes,
+            slot_want,
+            slot_pullers,
+            edge_kind_map,
+            nvc_dep_atoms,
+        ) = _graph_pass()
+        if required_use_violations:
+            raise ResolutionError("".join(required_use_violations))
 
     # Backtracking slice: surface the --autounmask-use changes recorded
     # during the already-resolved-slot re-check (autounmask_use_change_
@@ -13224,6 +13588,8 @@ def resolve_pretend_graph(
     if required_use_violations:
         raise ResolutionError("".join(required_use_violations))
 
+    # phase: assemble_result (Rust: portage-repo assemble_result; rebuild
+    # passes, trace dump, merge-order sort, residuals, GraphResult).
     # Real depgraph's slot-operator auto-rebuild -- see
     # portage-repo/src/lib.rs's slot_operator_rebuild_entries.
     # --ignore-built-slot-operator-deps (real main.py:470) skips the scan

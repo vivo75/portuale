@@ -676,13 +676,20 @@ merge, unmerge, world management, all real. The gap to a full drop-in is:
    the bug-515584 unmask gate, `all_installed_slots`, in-bin
    upgrade-preference ordering, and the `other_*` bins + `allow_masked`
    two-pass return, shipped 2026-09-11, one shared probe + tie-break pair
-   both languages — `minimize_slots` and the `conflict_downgrade`/
+   both languages —    `minimize_slots` and the `conflict_downgrade`/
    `installed_downgrade`/`circular_atom` guards stay deliberate,
-   documented cuts, the latter two folded into #23's own scope). What's
-    left is depth on other pieces already built: richer
-    `_slot_conflict_backtrack` mask-target analysis (slot conflicts keep
-    the standing informational exit 0 -- reconciled explicitly under the
-    #19 Slice-5 entry above, not flipped), and the `_serialize_tasks`
+   documented cuts, the latter two carved to #35). The backtracking
+   search itself is **done** (2026-09-11, backlog #23: real's node-stack
+   search with ranked one-node-per-choice masks, similar grouping,
+   mask-step budget, `get_best_run`, and dead-end abandonment -- see
+   `docs/023-oracle.md` and `what-this-proves.md`). What's
+    left is depth on other pieces already built: the follow-ups that own
+    the remaining resolver divergences (`#25` installed-nomerge
+    instances for btnr, `#24` `:=` rebuild for the a522084 `B-0`,
+    `#36` mask-aware selection fallback for mg3 at tight budgets;
+    slot conflicts keep the standing informational exit 0 --
+    reconciled explicitly under the #19 Slice-5 entry above, not
+    flipped), and the `_serialize_tasks`
     frontier-timing at real-tree scale (L0 merge-order: ~19 probes,
     correct set / slightly-off sequence).
 2. **The Part 2 tails** — F's `--info` host-state

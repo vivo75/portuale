@@ -1,0 +1,8 @@
+DEFINED_PHASES=-
+DESCRIPTION=023 oracle fixture: firefox
+EAPI=8
+IUSE=
+KEYWORDS=amd64
+RDEPEND==media-libs/libvpx-1.7*:0=[postproc] media-video/ffmpeg
+SLOT=0
+_md5_=0000000000000000000000000000000

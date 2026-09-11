@@ -8961,12 +8961,15 @@ def test_unsolvable_slot_conflict_resolved_by_masking_a_puller_version(
 ):
     """dev-libs/btparent -> btconsumer (resolves -2.0, RDEPEND
     >=bttarget-2.0) + btpin (RDEPEND <bttarget-2.0). No bttarget version
-    satisfies both, so slice 1's solvability check fails. Slice 3's real
-    runtime_pkg_mask trial hides bttarget-2.0 AND btconsumer-2.0 (which
-    has a lower -1.0 whose RDEPEND is only a bare bttarget); the retry
-    falls back to btconsumer-1.0 + bttarget-1.0 and every constraint is
-    met, with no [slot conflict] line. `--backtrack=0` turns the trial
-    off, so the conflict is reported instead."""
+    satisfies both, so slice 1's solvability check fails. C3's ranked
+    slot-conflict choice masks bttarget-2.0; the retry finds
+    btconsumer-2.0's dep unsatisfiable under the mask (mask-aware
+    missing-dep probe) and masks its parent, falling back to
+    btconsumer-1.0 + bttarget-1.0 with every constraint met and no [slot
+    conflict] line -- the same parent downgrade the old puller
+    pre-masking produced, via real's feedback paths instead.
+    `--backtrack=0` turns the search off, so the conflict is reported
+    instead."""
     r = _run([str(emerge_binary)], ["--pretend", "dev-libs/btparent"], fixture_env)
     assert r.returncode == 0
     assert r.stdout.splitlines() == [
@@ -14885,3 +14888,412 @@ def test_genuinely_unrecognized_option_gets_a_distinct_message(emerge_binary, fi
     )
     assert result.returncode == 2
     assert result.stderr.strip() == 'emerge: unrecognized option "--totally-fake-option"'
+
+
+def _b1_root(tmp_path, world_atoms, installed):
+    """Ad-hoc ROOT for the 023 oracle cases (`docs/023-oracle.md`): a world
+    file plus vdb entries. `installed` is a list of
+    `(category, package, version, slot, {file: content})`."""
+    root = tmp_path / "b1root"
+    portage_dir = root / "var" / "lib" / "portage"
+    portage_dir.mkdir(parents=True)
+    (portage_dir / "world").write_text("".join(a + "\n" for a in world_atoms))
+    for cat, pkg, ver, slot, files in installed:
+        d = root / "var" / "db" / "pkg" / cat / f"{pkg}-{ver}"
+        d.mkdir(parents=True)
+        (d / "CATEGORY").write_text(cat + "\n")
+        (d / "SLOT").write_text(slot + "\n")
+        (d / "repository").write_text("testrepo\n")
+        for name, content in files.items():
+            (d / name).write_text(content + "\n")
+    return root
+
+
+def _b1_env(fixture_env, root):
+    env = dict(fixture_env)
+    env["ROOT"] = str(root)
+    env["PORTAGE_RUNNING_ROOT"] = str(root)
+    return env
+
+
+def _b1_merges(stdout):
+    """`[ebuild ...]` merge lines only (drops @system noise and blocks)."""
+    return [ln for ln in stdout.splitlines() if ln.startswith("[ebuild")]
+
+
+def _b1_both(args, env, emerge_binary, emerge_pretend_python):
+    rust = _run([str(emerge_binary)], args, env)
+    python = _run(emerge_pretend_python, args, env)
+    assert rust.returncode == 0
+    assert rust.stdout == python.stdout
+    assert rust.stderr == python.stderr
+    return rust
+
+
+def test_oracle_slot_conflict_masks_highest_version_first(
+    emerge_binary, emerge_pretend_python, fixture_env
+):
+    """023 oracle, case mgf (upstream
+    `test_slot_conflict_mask_update.py::testBacktrackingGoodVersionFirst`):
+    `mgfa` needs `=mgfc-1` + `mgfb`; `mgfb-2` needs `=mgfc-2`. Real masks
+    the highest conflicting instance (`mgfc-2`) and merges
+    `[mgfc-1, mgfb-1, mgfa-1]` -- portuale's slice-3 downgrade bias already
+    does this. Regression guard: MATCHES real."""
+    rust = _b1_both(
+        ["--pretend", "dev-libs/mgfa"],
+        fixture_env,
+        emerge_binary,
+        emerge_pretend_python,
+    )
+    assert _b1_merges(rust.stdout) == [
+        "[ebuild  N     ] dev-libs/mgfc-1 ",
+        "[ebuild  N     ] dev-libs/mgfb-1 ",
+        "[ebuild  N     ] dev-libs/mgfa-1 ",
+    ]
+
+
+def test_oracle_explicit_pin_beats_transitive_pull(
+    emerge_binary, emerge_pretend_python, fixture_env
+):
+    """023 oracle, case btb (upstream
+    `test_backtracking.py::testBacktracking`): `=btba-1` + `btbb`
+    (which pulls bare `btba`) merges `[btba-1, btbb-1]` in either argument
+    order. Guard: MATCHES real."""
+    for args in (
+        ["--pretend", "=dev-libs/btba-1", "dev-libs/btbb"],
+        ["--pretend", "dev-libs/btbb", "=dev-libs/btba-1"],
+    ):
+        rust = _b1_both(args, fixture_env, emerge_binary, emerge_pretend_python)
+        assert _b1_merges(rust.stdout) == [
+            "[ebuild  N     ] dev-libs/btba-1 ",
+            "[ebuild  N     ] dev-libs/btbb-1 ",
+        ]
+
+
+def test_oracle_one_step_backtrack_budget(
+    emerge_binary, emerge_pretend_python, fixture_env
+):
+    """023 oracle, case btn (upstream
+    `test_backtracking.py::testBacktrackNotNeeded`, `--backtrack 1`):
+    `btnc` needs `btna` + `btnb`, `btnd` pins both `-1`. Real merges all
+    four (order-insensitive). Guard: MATCHES real."""
+    rust = _b1_both(
+        ["--pretend", "--backtrack", "1", "dev-libs/btnc", "dev-libs/btnd"],
+        fixture_env,
+        emerge_binary,
+        emerge_pretend_python,
+    )
+    assert _b1_merges(rust.stdout) == [
+        "[ebuild  N     ] dev-libs/btna-1 ",
+        "[ebuild  N     ] dev-libs/btnb-1 ",
+        "[ebuild  N     ] dev-libs/btnc-1 ",
+        "[ebuild  N     ] dev-libs/btnd-1 ",
+    ]
+
+
+def test_oracle_update_pull_over_installed_old(
+    emerge_binary, emerge_pretend_python, fixture_env, tmp_path
+):
+    """023 oracle, case btw (upstream
+    `test_backtracking.py::testBacktrackWithoutUpdates`): `btwa` needs
+    `btwz`, `btwb` needs `>=btwz-2`, `btwz-1` installed, no `--update`.
+    Real merges `[btwz-2, btwb-1, btwa-1]` (order-insensitive). Guard:
+    MATCHES real."""
+    root = _b1_root(tmp_path, [], [("dev-libs", "btwz", "1", "0", {})])
+    rust = _b1_both(
+        ["--pretend", "dev-libs/btwb", "dev-libs/btwa"],
+        _b1_env(fixture_env, root),
+        emerge_binary,
+        emerge_pretend_python,
+    )
+    assert _b1_merges(rust.stdout) == [
+        "[ebuild     U  ] dev-libs/btwz-2 [1]",
+        "[ebuild  N     ] dev-libs/btwb-1 ",
+        "[ebuild  N     ] dev-libs/btwa-1 ",
+    ]
+
+
+def test_oracle_selective_update_is_a_noop(
+    emerge_binary, emerge_pretend_python, fixture_env, tmp_path
+):
+    """023 oracle, case btmu (upstream
+    `test_backtracking.py::testBacktrackMissedUpdates`): `btmb` pins
+    `<=btma-1`, both installed, `--update --deep --selective`. Real merges
+    nothing (the update is correctly missed). Guard: MATCHES real."""
+    root = _b1_root(
+        tmp_path,
+        [],
+        [
+            ("dev-libs", "btma", "1", "0", {}),
+            ("dev-libs", "btmb", "1", "0", {"RDEPEND": "<=dev-libs/btma-1"}),
+        ],
+    )
+    rust = _b1_both(
+        ["--pretend", "--update", "--deep", "--selective", "dev-libs/btma", "dev-libs/btmb"],
+        _b1_env(fixture_env, root),
+        emerge_binary,
+        emerge_pretend_python,
+    )
+    assert _b1_merges(rust.stdout) == []
+
+
+def test_oracle_boost_subslot_upgrade(
+    emerge_binary, emerge_pretend_python, fixture_env, tmp_path
+):
+    """023 oracle, case boost (upstream
+    `test_slot_conflict_update.py::testSlotConflictUpdate`): `libcmis`
+    needs `boost:=`, installed at subslot 1.52 with `boost-build-1.52.0`.
+    Real merges `[boost-build-1.53.0, boost-1.53.0, libcmis-0.3.1]`
+    (`libcmis` itself is already installed, hence silent here). Portuale
+    reaches the same versions via highest-first selection + solvable
+    growth, without ever hitting the missed-update mask path this test
+    was written for -- MATCHES real on versions (the `@system` lines are
+    fixture-profile noise, identical on both sides)."""
+    root = _b1_root(
+        tmp_path,
+        ["dev-cpp/libcmis", "dev-libs/boost", "app-text/podofo"],
+        [
+            ("app-text", "podofo", "0.9.2", "0", {}),
+            (
+                "dev-cpp",
+                "libcmis",
+                "0.3.1",
+                "0",
+                {"RDEPEND": "dev-libs/boost:0/1.52="},
+            ),
+            ("dev-util", "boost-build", "1.52.0", "0", {}),
+            (
+                "dev-libs",
+                "boost",
+                "1.52.0",
+                "0/1.52",
+                {"RDEPEND": "=dev-util/boost-build-1.52.0"},
+            ),
+        ],
+    )
+    rust = _b1_both(
+        ["--pretend", "--update", "--deep", "@world"],
+        _b1_env(fixture_env, root),
+        emerge_binary,
+        emerge_pretend_python,
+    )
+    merges = _b1_merges(rust.stdout)
+    assert "[ebuild     U  ] dev-util/boost-build-1.53.0 [1.52.0]" in merges
+    assert "[ebuild     U  ] dev-libs/boost-1.53.0 [1.52.0]" in merges
+    assert not [ln for ln in merges if "libcmis" in ln or "podofo" in ln]
+
+
+def test_oracle_virtual_subslot_upgrade_avoids_missed_update(
+    emerge_binary, emerge_pretend_python, fixture_env, tmp_path
+):
+    """023 oracle, case virt (upstream
+    `test_slot_conflict_update_virt.py`, bug 692746): `DBD-mysql` needs
+    `virtual/libmysqlclient:=`, installed at subslot 18. Real merges
+    `[mysql-connector-c-8.0.17-r3, libmysqlclient-21, DBD-mysql-4.44.0]`
+    (`DBD-mysql` itself is already installed, hence silent here). Portuale
+    reaches the same versions via highest-first selection -- the 692746
+    existing-node mask path never triggers because no slot conflict
+    arises. MATCHES real on versions (`@system` noise as above)."""
+    root = _b1_root(
+        tmp_path,
+        ["dev-db/mysql-connector-c", "dev-perl/DBD-mysql"],
+        [
+            ("dev-db", "mysql-connector-c", "6.1.11-r2", "0/18", {}),
+            (
+                "virtual",
+                "libmysqlclient",
+                "18-r1",
+                "0/18",
+                {"RDEPEND": "dev-db/mysql-connector-c:0/18"},
+            ),
+            (
+                "dev-perl",
+                "DBD-mysql",
+                "4.44.0",
+                "0",
+                {"RDEPEND": "virtual/libmysqlclient:0/18="},
+            ),
+        ],
+    )
+    rust = _b1_both(
+        ["--pretend", "--update", "--deep", "@world"],
+        _b1_env(fixture_env, root),
+        emerge_binary,
+        emerge_pretend_python,
+    )
+    merges = _b1_merges(rust.stdout)
+    assert "[ebuild     U  ] dev-db/mysql-connector-c-8.0.17-r3 [6.1.11-r2]" in merges
+    assert "[ebuild     U  ] virtual/libmysqlclient-21 [18-r1]" in merges
+
+
+def test_oracle_backtrack_masks_are_discarded_with_their_reason(
+    emerge_binary, emerge_pretend_python, fixture_env, tmp_path
+):
+    """023 oracle, case btnr -- oracle-DIVERGENT, see `docs/023-oracle.md`
+    (upstream `test_backtracking.py::testBacktrackNoWrongRebuilds`,
+    `--backtrack 6`): `btrd` needs `<btra-2`, `btrc-2` needs `>=btra-2`.
+    Real explores several mask nodes, discards masks whose reason got
+    masked itself (bug 375573 `_check_runtime_pkg_mask`), and merges
+    NOTHING. Portuale's single bundled trial cannot explore that search:
+    it upgrades `btra` + `btrc` and reports the residual slot conflict.
+    Pinned to portuale's current output; the Phase C driver for the node
+    stack."""
+    root = _b1_root(
+        tmp_path,
+        ["dev-libs/btrb", "dev-libs/btrc"],
+        [
+            ("dev-libs", "btra", "1", "0", {}),
+            ("dev-libs", "btrb", "1", "0", {"RDEPEND": "dev-libs/btrd"}),
+            ("dev-libs", "btrc", "1", "0", {}),
+            ("dev-libs", "btrd", "1", "0", {"RDEPEND": "<dev-libs/btra-2"}),
+        ],
+    )
+    rust = _b1_both(
+        ["--pretend", "--backtrack", "6", "--deep", "--selective", "--update", "@world"],
+        _b1_env(fixture_env, root),
+        emerge_binary,
+        emerge_pretend_python,
+    )
+    merges = _b1_merges(rust.stdout)
+    assert "[ebuild     U  ] dev-libs/btra-2 [1]" in merges
+    assert "[ebuild     U  ] dev-libs/btrc-2 [1]" in merges
+    assert "!!! Multiple package instances within a single package slot" in rust.stdout
+
+
+def test_oracle_no_aggressive_downgrade(
+    emerge_binary, emerge_pretend_python, fixture_env, tmp_path
+):
+    """023 oracle, case bwd (upstream
+    `test_aggressive_backtrack_downgrade.py`, bug 693836): upgrading
+    `libvpx` to 1.8.0 must NOT downgrade `firefox` 69.0 -> 60.9.0. Real
+    merges nothing; portuale also merges nothing (no `firefox`/`libvpx`/
+    `ffmpeg` lines at all). MATCHES real. (The `conflict_downgrade` guards
+    that police finer variants of this live in backlog #35, not #23.)"""
+    root = _b1_root(
+        tmp_path,
+        ["media-video/ffmpeg", "www-client/firefox"],
+        [
+            (
+                "www-client",
+                "firefox",
+                "69.0",
+                "0",
+                {
+                    "RDEPEND": "=media-libs/libvpx-1.7*:0=[postproc] media-video/ffmpeg"
+                },
+            ),
+            (
+                "media-libs",
+                "libvpx",
+                "1.7.0",
+                "0/5",
+                {"IUSE": "+postproc", "USE": "postproc"},
+            ),
+            (
+                "media-video",
+                "ffmpeg",
+                "4.2",
+                "0",
+                {"RDEPEND": "media-libs/libvpx:0/5="},
+            ),
+        ],
+    )
+    rust = _b1_both(
+        ["--pretend", "--update", "--deep", "@world"],
+        _b1_env(fixture_env, root),
+        emerge_binary,
+        emerge_pretend_python,
+    )
+    merges = _b1_merges(rust.stdout)
+    assert not [ln for ln in merges if "firefox" in ln or "libvpx" in ln or "ffmpeg" in ln]
+
+
+def test_oracle_non_slot_operator_update_selects_new_slot(
+    emerge_binary, emerge_pretend_python, fixture_env, tmp_path
+):
+    """023 oracle, case a522084 -- PARTIAL, see `docs/023-oracle.md`
+    (upstream `test_solve_non_slot_operator_slot_conflicts.py`, bug
+    522084): `app-misc/A` 1 (`:0/1`) -> 2 (`:0/2`) with installed `B-0`
+    recording `A:0/1=`. Real merges `[A-2, B-0]`. Portuale selects the
+    right version (`A-2`, no missed update -- the #23-adjacent half) but
+    does not schedule the `B-0` subslot rebuild (the `:=` rebuild path is
+    backlog #24's, not #23's). Pinned to portuale's current output."""
+    root = _b1_root(
+        tmp_path,
+        ["app-misc/A"],
+        [
+            ("app-misc", "A", "1", "0/1", {"PDEPEND": "app-misc/B"}),
+            ("app-misc", "B", "0", "0", {"RDEPEND": "app-misc/A:0/1="}),
+        ],
+    )
+    rust = _b1_both(
+        ["--pretend", "--update", "--deep", "@world"],
+        _b1_env(fixture_env, root),
+        emerge_binary,
+        emerge_pretend_python,
+    )
+    merges = _b1_merges(rust.stdout)
+    assert "[ebuild     U  ] app-misc/A-2 [1]" in merges
+    assert not [ln for ln in merges if "app-misc/B" in ln]
+
+
+def test_oracle_two_simultaneous_conflicts_defer_second_to_later_pass(
+    emerge_binary, emerge_pretend_python, fixture_env
+):
+    """023 oracle, case mg2 (C3 first-conflict-only deferral, no direct
+    upstream equivalent -- real `_feedback_slot_conflicts` takes
+    `conflicts_data[0]`): `mg2top` pulls two independent mask-good-first
+    subtrees (`mgfa`/`mgfb`/`mgfc` and `mgxa`/`mgxb`/`mgxc`). Both slots
+    conflict on the first pass; only the first becomes nodes, the second
+    is handled under each sibling in later passes. The search settles
+    with every `-1.0` and no conflict block -- the same set a bundled
+    trial would reach, via real's deferral order."""
+    rust = _b1_both(
+        ["--pretend", "dev-libs/mg2top"],
+        fixture_env,
+        emerge_binary,
+        emerge_pretend_python,
+    )
+    assert _b1_merges(rust.stdout) == [
+        "[ebuild  N     ] dev-libs/mgxc-1 ",
+        "[ebuild  N     ] dev-libs/mgfc-1 ",
+        "[ebuild  N     ] dev-libs/mgxb-1 ",
+        "[ebuild  N     ] dev-libs/mgfb-1 ",
+        "[ebuild  N     ] dev-libs/mgfa-1 ",
+        "[ebuild  N     ] dev-libs/mgxa-1 ",
+        "[ebuild  N     ] dev-libs/mg2top-1 ",
+    ]
+
+
+def test_oracle_missed_update_siblings_masked_together(
+    emerge_binary, emerge_pretend_python, fixture_env
+):
+    """023 oracle, case mg3 (C4 similar-grouping): `mgfc-3.0` is visible
+    but pulled by nothing -- a missed-update sibling of the `mgfc-2.0`
+    vs `=mgfc-1` conflict. Real's `_slot_confict_backtrack` masks `{3.0,
+    2.0}` in ONE node (similar grouping) and its mask-aware selection
+    then picks `mgfb-1.0` directly, settling all-`1.0`. Portuale groups
+    the node the same way, but still selects the highest visible
+    `mgfb-2.0` and NVCs instead of falling back, so the downgrade costs
+    a second mask step through missing-dep feedback. At the default
+    budget both converge to all-`1.0` (pinned); at `--backtrack=1` real
+    settles while portuale exhausts and reports -- oracle-DIVERGENT, see
+    `docs/023-oracle.md` (mask-aware candidate fallback, backlog #36,
+    beyond #23's loop scope)."""
+    ok = _b1_both(["--pretend", "dev-libs/mgfa"], fixture_env, emerge_binary,
+                  emerge_pretend_python)
+    assert _b1_merges(ok.stdout) == [
+        "[ebuild  N     ] dev-libs/mgfc-1 ",
+        "[ebuild  N     ] dev-libs/mgfb-1 ",
+        "[ebuild  N     ] dev-libs/mgfa-1 ",
+    ]
+    one = _b1_both(
+        ["--pretend", "--backtrack", "1", "dev-libs/mgfa"],
+        fixture_env, emerge_binary, emerge_pretend_python,
+    )
+    assert _b1_merges(one.stdout) == [
+        "[ebuild  N     ] dev-libs/mgfc-1 ",
+        "[ebuild  N     ] dev-libs/mgfb-2 ",
+        "[ebuild  N     ] dev-libs/mgfa-1 ",
+    ]
+    assert "!!! Multiple package instances within a single package slot" in one.stdout
