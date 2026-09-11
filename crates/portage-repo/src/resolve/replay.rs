@@ -53,3 +53,60 @@ pub(crate) fn replay_use_of(
         }),
     })
 }
+
+/// The params of the one final clean pass: every autounmask change dropped
+/// and suggestion fully off.
+// Portage: depgraph.py, _autounmask_breakage
+pub(crate) fn breakage_clean_params(params: &BacktrackParams) -> BacktrackParams {
+    let mut grown = params.clone();
+    grown.autounmask_disabled = true;
+    grown.autounmask_suggest_keywords = false;
+    grown.autounmask_suggest_use = false;
+    grown.autounmask_suggest_license = false;
+    grown.autounmask_suggest_masks = false;
+    grown.autounmask_use_config.clear();
+    grown.autounmask_use_change_records.clear();
+    grown.backtrack_config = None;
+    grown
+}
+
+/// Portage's `pkg_use_display` for a walked entry the replay placed in a
+/// slot-conflict block: the flip-applied state, grouped into `USE` +
+/// `USE_EXPAND`. `None` when the candidate or its metadata is unreadable; the
+/// caller then keeps the pre-replay display.
+// Portage: UseFlagDisplay.pkg_use_display; _pkg_use_enabled
+pub(crate) fn replay_conflict_use_display(
+    ctx: &ResolveCtx<'_>,
+    entry: &GraphEntry,
+    version: &str,
+) -> Option<Vec<(String, String)>> {
+    let candidates = list_candidates(&ctx.repos, &entry.category, &entry.package).ok()?;
+    let cand = candidates
+        .iter()
+        .filter(|c| c.version == version)
+        .filter(|c| entry.repo_name.as_deref().is_none_or(|r| r == c.repo_name))
+        .max_by_key(|c| c.repo_priority)
+        .cloned()?;
+    let pf = format!("{}-{version}", entry.package);
+    let metadata = repo_aux_metadata(&cand.repo_location, &entry.category, &pf).ok()?;
+    let (_, base) = candidate_iuse_and_use(&cand, &entry.category, &entry.package, ctx.config)?;
+    let mut modified: HashSet<String> = base.iter().cloned().collect();
+    for (flag, on) in &entry.use_flags_display {
+        if *on {
+            modified.insert(flag.clone());
+        } else {
+            modified.remove(flag);
+        }
+    }
+    Some(assemble_tree_pkg_use_display(
+        AssembleTreePkgUseDisplayArgs {
+            cand: &cand,
+            metadata: &metadata,
+            enabled: &modified,
+            config: ctx.config,
+            category: &entry.category,
+            package: &entry.package,
+            version,
+        },
+    ))
+}

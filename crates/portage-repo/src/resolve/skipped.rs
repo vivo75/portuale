@@ -61,6 +61,21 @@ pub enum SkippedDepDisclosure {
     Plain(PlainMissDepReport),
 }
 
+/// Arguments of [`missing_dep_full_row`].
+pub(crate) struct MissingDepFullRowArgs<'a> {
+    pub(crate) repos: &'a [RepoConfig],
+    pub(crate) root: &'a Path,
+    pub(crate) config: &'a portage_profile::Config,
+    pub(crate) entries: &'a [GraphEntry],
+    pub(crate) cat: &'a str,
+    pub(crate) pkg: &'a str,
+    pub(crate) slot: &'a str,
+    pub(crate) ver: &'a str,
+    pub(crate) sub: &'a str,
+    pub(crate) repo: &'a str,
+    pub(crate) atom: &'a str,
+}
+
 /// Collapses rows per `(category, package, slot)` to the highest
 /// `skipped_version`; equal versions all stay, exact duplicates collapse to
 /// one. A slot's survivors sit at the position of the slot's first row, and

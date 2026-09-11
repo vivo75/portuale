@@ -87,4 +87,114 @@ impl<'a> ResolveCtx<'a> {
         self.root_deps_running_root
             .filter(|r| r.as_os_str() != self.root.as_os_str())
     }
+
+    pub(crate) fn new(req: &'a ResolveRequest) -> Result<Self, Error> {
+        // Complete mode forces a deep walk only for `--changed-deps-report`;
+        // forcing it always made large upgrades take minutes for a merge
+        // list identical to the non-deep result.
+        let deep = if req.empty
+            || (req.complete && req.deep == Deep::NotRequested && req.changed_deps_report)
+        {
+            Deep::Unlimited
+        } else {
+            req.deep
+        };
+        // Requested atoms seed the required-set walk too; an empty seed set
+        // still means "not complete mode".
+        let slot_op_reachable: HashSet<(String, String)> =
+            if req.config.complete_seed_atoms.is_empty() {
+                HashSet::new()
+            } else {
+                let mut seeds = req.config.complete_seed_atoms.clone();
+                seeds.extend(req.atoms.iter().cloned());
+                seeds.sort();
+                seeds.dedup();
+                required_set_reachable_cps(&req.root, &seeds, &[])
+            };
+        // Without the requested atoms, so the reverse scan can tell a
+        // world-reached consumer from a merely requested one.
+        let world_reachable: HashSet<(String, String)> =
+            if req.config.complete_seed_atoms.is_empty() {
+                HashSet::new()
+            } else {
+                required_set_reachable_cps(&req.root, &req.config.complete_seed_atoms, &[])
+            };
+        // The blocker classification reads this closure on every pass.
+        let blocker_retry_closure: HashSet<(String, String)> = {
+            let mut seeds = req.config.blocker_retry_seed_atoms.clone();
+            seeds.extend(req.atoms.iter().cloned());
+            seeds.sort();
+            seeds.dedup();
+            let system = req.config.system_packages.clone();
+            required_set_reachable_cps(&req.root, &seeds, &system)
+        };
+        Ok(ResolveCtx {
+            root: &req.root,
+            atoms: &req.atoms,
+            config: &req.config,
+            newuse: req.newuse,
+            changed_use: req.changed_use,
+            nodeps: req.nodeps,
+            onlydeps: req.onlydeps,
+            onlydeps_with_rdeps: req.onlydeps_with_rdeps,
+            onlydeps_with_ideps: req.onlydeps_with_ideps,
+            update: req.update,
+            deep,
+            excluded: &req.excluded,
+            with_bdeps: req.with_bdeps,
+            changed_deps: req.changed_deps,
+            changed_slot: req.changed_slot,
+            with_test_deps: req.with_test_deps,
+            changed_deps_report: req.changed_deps_report,
+            selective: req.selective,
+            autounmask_backtrack_enabled: req.config.autounmask_backtrack,
+            usepkg: req.usepkg,
+            usepkgonly: req.usepkgonly,
+            binpkg_respect_use: req.binpkg_respect_use,
+            usepkg_exclude: &req.usepkg_exclude,
+            usepkg_include: &req.usepkg_include,
+            rebuilt_binaries: req.rebuilt_binaries,
+            rebuilt_binaries_timestamp: req.rebuilt_binaries_timestamp,
+            newrepo: req.newrepo,
+            buildpkgonly: req.buildpkgonly,
+            root_deps_running_root: req.root_deps_running_root.as_deref(),
+            distdir: &req.distdir,
+            empty: req.empty,
+            getbinpkg: req.getbinpkg,
+            ignore_built_slot_operator_deps: req.ignore_built_slot_operator_deps,
+            backtrack_max: req.backtrack_max,
+            reinstall_atoms: &req.reinstall_atoms,
+            rebuild_if_new_slot: req.rebuild_if_new_slot,
+            rebuild_if_unbuilt: req.rebuild_if_unbuilt,
+            rebuild_if_new_rev: req.rebuild_if_new_rev,
+            rebuild_if_new_ver: req.rebuild_if_new_ver,
+            rebuild_exclude: &req.rebuild_exclude,
+            rebuild_ignore: &req.rebuild_ignore,
+            dynamic_deps: req.dynamic_deps,
+            implicit_system_deps: req.implicit_system_deps,
+            complete: req.complete,
+            set_args: req.set_args.clone(),
+            repos: find_repos(&req.config_root)?,
+            slot_op_reachable,
+            world_reachable,
+            blocker_retry_closure,
+            complete_locked_merges: req
+                .config
+                .complete_locked_merges
+                .iter()
+                .filter_map(|s| {
+                    s.split_once('/')
+                        .map(|(c, p)| (c.to_string(), p.to_string()))
+                })
+                .collect(),
+            top_level: req.atoms.iter().map(|s| s.as_str()).collect(),
+            top_level_cps: req
+                .atoms
+                .iter()
+                .filter_map(|a| portage_dep::parse_atom(a))
+                .map(|a| (a.category, a.package))
+                .collect(),
+            local_binpkg: build_local_binpkg_index(&req.config),
+        })
+    }
 }

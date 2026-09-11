@@ -2,11 +2,16 @@
 
 use crate::*;
 use std::ops::ControlFlow;
+
+mod autounmask;
 mod circular_dead_end;
 mod no_leaf_restart;
+mod reverse_dep_pins;
 mod solvable_slot_conflicts;
+pub(crate) use autounmask::*;
 pub(crate) use circular_dead_end::*;
 pub(crate) use no_leaf_restart::*;
+pub(crate) use reverse_dep_pins::*;
 pub(crate) use solvable_slot_conflicts::*;
 
 /// Why one `cat/pkg` version is masked on retry. Readers see the union across
