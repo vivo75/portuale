@@ -143,6 +143,15 @@ def _running_root():
     return os.environ.get("PORTAGE_RUNNING_ROOT") or "/"
 
 
+def abort_path_enabled():
+    """Rollout gate for the backlog #19 abort path (Gate G0.4,
+    flag-gated): unset or any value but "0" enables the Slice-5 abort
+    rendering + exit codes; PORTUALE_ABORT_PATH=0 keeps the legacy
+    "report, don't enforce" merge list and exit 0. Mirrors
+    portage-repo/src/lib.rs's abort_path_enabled exactly."""
+    return os.environ.get("PORTUALE_ABORT_PATH", "") != "0"
+
+
 def _parse_layout_conf(repo_location):
     """Parses a repo's own metadata/layout.conf (real parse_layout_conf,
     lib/portage/repository/config.py:1516) -- a section-less key = value
@@ -13057,6 +13066,17 @@ def resolve_pretend_graph(
         # Real circular_dependency_handler.large_cycle_count + merge_list.
         "large_cycle_count": _large_cycle_count,
         "cycle_display": _cycle_display,
+        # Backlog #19 abort outcome (docs/abort-path-spec.md). Mirrors
+        # portage-repo/src/lib.rs's ResolveOutcome/AbortReason:
+        # ("complete",) on every path today -- Slice 2 carries the outcome
+        # through without producing it. Slice 5 populates ("aborted",
+        # reason, partial) where reason is one of ("masked-dep", atom,
+        # parent_cpv), ("unsatisfied-atom", atom, parent_cpv),
+        # ("unserializable-cycle", [member cpvs]) or
+        # ("autounmask-partial", top_cpv), and partial is the entry-tuple
+        # list Slice 4 renders instead of "entries" (empty for the
+        # masked/unsat shapes -- real shows no list at all).
+        "outcome": ("complete",),
     }
 
 
@@ -21798,6 +21818,20 @@ def run(args):
         print("!!! --buildpkgonly requires all dependencies to be merged.", file=sys.stderr)
         print("!!! Cannot merge requested packages. Merge deps and try again.", file=sys.stderr)
         print(file=sys.stderr)
+        return 1
+
+    # Backlog #19 abort-path outcome mapping (real actions.py:460-462:
+    # `not success` -> `display_problems()`, `return 1` -- the merge list
+    # is never displayed, so an aborted resolve shows at most the partial
+    # list and always exits 1). Gated on abort_path_enabled()
+    # (PORTUALE_ABORT_PATH=0 keeps the legacy "report, don't enforce"
+    # list + exit 0 -- Gate G0.4). Behaviour-neutral today: the resolver
+    # only ever returns ("complete",) (see the "outcome" key comment at
+    # the resolve_pretend_graph return below), so this arm cannot fire;
+    # Slice 5 populates ("aborted", reason, partial) at the three
+    # _select_files failure sites and moves the partial-list rendering
+    # here. Mirrors pretend.rs.
+    if abort_path_enabled() and result["outcome"][0] == "aborted":
         return 1
 
     # Real _serialize_tasks -> _show_circular_deps (depgraph.py:10425): an

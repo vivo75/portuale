@@ -13369,9 +13369,77 @@ pub struct ChangedDepsReportEntry {
     pub repo_name: String,
 }
 
+/// Why a resolve was abandoned (backlog #19, `docs/abort-path-spec.md`):
+/// real's `_create_graph` returns 0 the moment a required dep cannot be
+/// satisfied (`depgraph.py:3254-3271`), `_serialize_tasks` gives up on an
+/// unserializable cycle (`:10262-10294`), or autounmask changes coincide
+/// with an unresolvable cycle so `_backtrack_depgraph` breaks via
+/// `need_config_change` (`:12228-12234`) — and `action_build` then runs
+/// `display_problems()` without ever calling `display()`
+/// (`actions.py:460-462`), so the merge list shown is at most a partial
+/// one and the exit status is 1. Each variant names the producer Slice 5
+/// will wire; Slice 2 only carries the outcome through, never producing
+/// it (every resolve still returns [`ResolveOutcome::Complete`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AbortReason {
+    /// A dependency atom matching masked-only ebuilds (spec §4a): the
+    /// disclosure half already ships as [`MaskedDepReport`]; the abort
+    /// half suppresses the merge list and exits 1.
+    MaskedDep { atom: String, parent_cpv: String },
+    /// A dependency atom matching no ebuild at all (spec §4b): same
+    /// display shape as [`AbortReason::MaskedDep`], with real's plain
+    /// "there are no ebuilds to satisfy" block.
+    UnsatisfiedAtom { atom: String, parent_cpv: String },
+    /// `_serialize_tasks` drained everything serializable and got stuck
+    /// (spec §4c): the display is the stuck remainder only, with
+    /// cumulative counters. `members` are `cat/pkg-version` CPVs in
+    /// remainder order; the tree nesting/`[nomerge]` rows stay a
+    /// deliberate cut (dedup-by-design, Gate G0.2).
+    UnserializableCycle { members: Vec<String> },
+    /// Autounmask changes plus an unresolvable cycle broke the backtrack
+    /// loop at `backtracked == 0` (spec §4d, the plasma-meta shape): the
+    /// display is the pass-1 partial digraph's list. Needs the synthetic
+    /// fixture + pass-retaining state (Slice 3 prerequisite, Gate G0.3).
+    AutounmaskPartial { top_cpv: String },
+}
+
+/// Whether the resolve ran to completion or was abandoned: real's
+/// `select_files` falsy-success paths (`depgraph.py:5676-5683`,
+/// `:5805-5810`) as data. The `Aborted` partial list is what Slice 4
+/// renders *instead of* `entries` (masked/unsat shapes carry an empty
+/// partial — real shows no list at all; the cycle shape carries the
+/// stuck remainder; the autounmask shape the pass-1 partial digraph).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ResolveOutcome {
+    Complete,
+    Aborted {
+        reason: AbortReason,
+        partial: Vec<GraphEntry>,
+    },
+}
+
+/// Rollout gate for the abort path (Gate G0.4, flag-gated): unset or any
+/// value but `0` enables the Slice-5 abort rendering + exit codes;
+/// `PORTUALE_ABORT_PATH=0` keeps the legacy "report, don't enforce"
+/// merge list and exit 0. Read directly off the environment at the use
+/// site (same pattern as `PORTAGE_SERIALIZE_FRONTIER_DISABLE` in
+/// `merge_order.rs`), so neither `ResolveRequest` nor the ~60-arg
+/// `resolve_pretend_graph` marshaller grows a parameter for it.
+pub fn abort_path_enabled() -> bool {
+    match std::env::var("PORTUALE_ABORT_PATH") {
+        Ok(v) => v != "0",
+        Err(_) => true,
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GraphResult {
     pub entries: Vec<GraphEntry>,
+    /// [`ResolveOutcome::Complete`] on every path today (Slice 2 carries
+    /// the outcome through without producing it — see [`AbortReason`]);
+    /// Slice 5 populates `Aborted` at the three `_select_files`
+    /// failure sites and renders `partial` instead of `entries`.
+    pub outcome: ResolveOutcome,
     pub slot_conflicts: Vec<SlotConflict>,
     pub changed_deps_report: Vec<ChangedDepsReportEntry>,
     /// `--buildpkgonly`'s own real depgraph check
@@ -17213,6 +17281,7 @@ fn backtracking_resolve(req: &ResolveRequest) -> Result<GraphResult, Error> {
 
         return Ok(GraphResult {
             entries,
+            outcome: ResolveOutcome::Complete,
             slot_conflicts,
             changed_deps_report: changed_deps_report_entries,
             buildpkgonly_deps_unsatisfied,
@@ -26716,6 +26785,57 @@ mod tests {
             false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
+    }
+
+    #[test]
+    fn abort_path_gate_truth_table() {
+        // `PORTUALE_ABORT_PATH=0` is the legacy fallback; unset or any
+        // other value enables the abort path (Gate G0.4). A concurrent
+        // resolve racing these mutations is behaviorally invisible: the
+        // gate only guards the `Aborted` arm and Slice 2 never produces
+        // one, so every concurrent outcome stays `Complete` either way.
+        // (`set_var`/`remove_var` are `unsafe` in edition 2024 because
+        // env is process-global; the blocks below are sound for exactly
+        // the invisibility reason above.)
+        unsafe {
+            std::env::remove_var("PORTUALE_ABORT_PATH");
+        }
+        assert!(abort_path_enabled());
+        unsafe {
+            std::env::set_var("PORTUALE_ABORT_PATH", "1");
+        }
+        assert!(abort_path_enabled());
+        unsafe {
+            std::env::set_var("PORTUALE_ABORT_PATH", "yes");
+        }
+        assert!(abort_path_enabled());
+        unsafe {
+            std::env::set_var("PORTUALE_ABORT_PATH", "0");
+        }
+        assert!(!abort_path_enabled());
+        unsafe {
+            std::env::remove_var("PORTUALE_ABORT_PATH");
+        }
+    }
+
+    #[test]
+    fn abort_outcome_is_complete_until_slice_5() {
+        // Slice 2 carries `ResolveOutcome` through without producing it:
+        // even the abort fixtures resolve `Complete` (full entries, exit
+        // codes unchanged). Slice 5 populates `Aborted` at the
+        // `_select_files` failure sites and must update this test —
+        // with the gate on (test env default) the masked/cycle/unsat
+        // fixtures flip to `Aborted`; with `PORTUALE_ABORT_PATH=0` they
+        // stay `Complete`.
+        for atom in [
+            "dev-libs/abort-masked-mid",
+            "dev-libs/abort-cycle-mid",
+            "dev-libs/abort-unsat-mid",
+        ] {
+            let result = graph_result_real(atom);
+            assert_eq!(result.outcome, ResolveOutcome::Complete, "{atom}");
+            assert!(!result.entries.is_empty(), "{atom}");
+        }
     }
 
     #[track_caller]

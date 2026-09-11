@@ -11308,6 +11308,25 @@ pub fn run(args: &[String]) -> ExitCode {
         return ExitCode::from(1);
     }
 
+    // Backlog #19 abort-path outcome mapping (real `_emerge/actions.py:
+    // 460-462`: `not success` -> `display_problems()`, `return 1` — the
+    // merge list `display()` is never reached, so an aborted resolve
+    // shows at most the partial list and always exits 1). Gated on
+    // `portage_repo::abort_path_enabled` (`PORTUALE_ABORT_PATH=0` keeps
+    // the legacy "report, don't enforce" list + exit 0 — Gate G0.4).
+    // Behaviour-neutral today: the resolver only ever returns
+    // `ResolveOutcome::Complete` (see `AbortReason`'s doc comment), so
+    // this arm cannot fire; Slice 5 populates `Aborted` at the three
+    // `_select_files` failure sites and moves the partial-list rendering
+    // here. `mrg` needs no separate wiring: `to_emerge_argv` hands its
+    // argv to this same `pretend::run` (`mrg.rs`), so resolution output
+    // and exit codes are literally `emerge`'s by construction.
+    if portage_repo::abort_path_enabled()
+        && let portage_repo::ResolveOutcome::Aborted { .. } = &result.outcome
+    {
+        return ExitCode::from(1);
+    }
+
     // Real `_serialize_tasks` -> `_show_circular_deps` (`depgraph.py:
     // 10425`): an unbreakable build-time dependency cycle among the
     // merge-bound packages -- every edge in it an unsatisfied

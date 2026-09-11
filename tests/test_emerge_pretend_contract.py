@@ -2956,6 +2956,55 @@ def test_abort_path_cycle_shows_reduced_list_only(
     assert "Total:" in rust.stdout
 
 
+@pytest.mark.parametrize(
+    "atom",
+    [
+        "dev-libs/abort-masked-mid",
+        "dev-libs/abort-masked-last",
+        "dev-libs/abort-cycle-mid",
+        "dev-libs/abort-cycle-last",
+        "dev-libs/abort-unsat-mid",
+        "dev-libs/abort-unsat-last",
+        "dev-libs/diamond",
+        "dev-libs/hardcyclea",
+        "dev-libs/maskneedpkg",
+        "dev-libs/newpkg",
+    ],
+)
+def test_abort_path_gate_is_behaviour_neutral(
+    atom, emerge_binary, emerge_pretend_python, fixture_env
+):
+    """Slice 2 merge-order-unchanged guard: the outcome is carried but
+    never produced, so `PORTUALE_ABORT_PATH=0` (legacy fallback) and the
+    default (gate on) are byte-identical on both implementations — full
+    merge lists, counters, notices, and exit codes. The abort fixtures
+    plus a diamond, a hard cycle, a disclosure case, and a plain new
+    install cover every rendering path the gate guards. Slice 5 flips
+    the abort atoms with the gate on and must narrow this test to the
+    non-abort atoms."""
+    args = ["--pretend", atom]
+    off_env = dict(fixture_env, PORTUALE_ABORT_PATH="0")
+    rust_on = _run([str(emerge_binary)], args, fixture_env)
+    rust_off = _run([str(emerge_binary)], args, off_env)
+    assert (rust_off.stdout, rust_off.stderr, rust_off.returncode) == (
+        rust_on.stdout,
+        rust_on.stderr,
+        rust_on.returncode,
+    )
+    py_on = _run(emerge_pretend_python, args, fixture_env)
+    py_off = _run(emerge_pretend_python, args, off_env)
+    assert (py_off.stdout, py_off.stderr, py_off.returncode) == (
+        py_on.stdout,
+        py_on.stderr,
+        py_on.returncode,
+    )
+    assert (rust_on.stdout, rust_on.stderr, rust_on.returncode) == (
+        py_on.stdout,
+        py_on.stderr,
+        py_on.returncode,
+    )
+
+
 def test_root_deps_recursion_reports_an_unbuildable_build_dep(
     emerge_binary, emerge_pretend_python, fixture_env
 ):
