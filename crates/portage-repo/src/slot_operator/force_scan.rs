@@ -10,6 +10,21 @@ pub(crate) type SlotOpForceScan = (
     BTreeSet<(String, String, String)>,
 );
 
+/// Arguments of [`slot_operator_update_force_scan`].
+pub(crate) struct SlotOperatorUpdateForceScanArgs<'a> {
+    pub(crate) root: &'a Path,
+    pub(crate) repos: &'a [RepoConfig],
+    pub(crate) config: &'a portage_profile::Config,
+    pub(crate) entries: &'a [GraphEntry],
+    pub(crate) reachable: &'a HashSet<(String, String)>,
+    pub(crate) already: &'a BTreeSet<(String, String)>,
+    pub(crate) undone: &'a BTreeSet<(String, String)>,
+    pub(crate) with_bdeps: bool,
+    pub(crate) update: bool,
+    pub(crate) top_level_cps: &'a HashSet<(String, String)>,
+    pub(crate) excluded: &'a [String],
+}
+
 /// Arguments of [`slot_operator_slot_change_probe`].
 pub(crate) struct SlotOperatorSlotChangeProbeArgs<'a> {
     pub(crate) root: &'a Path,
