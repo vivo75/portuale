@@ -1,0 +1,8 @@
+DEFINED_PHASES=-
+DEPEND=dev-libs/abort-cycle-b
+DESCRIPTION=fixture package: hard DEPEND cycle arm for the DFS-partial abort fixtures
+EAPI=8
+IUSE=
+KEYWORDS=amd64
+SLOT=0
+_md5_=0000000000000000000000000000000

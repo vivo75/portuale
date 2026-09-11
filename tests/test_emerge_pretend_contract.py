@@ -2860,6 +2860,102 @@ def test_circular_dep_four_ring_reports_redisplay_suggestion_and_lot_of_cycles(
     )
 
 
+_ABORT_NO_LIST_ATOMS = [
+    "dev-libs/abort-masked-mid",
+    "dev-libs/abort-masked-last",
+    "dev-libs/abort-unsat-mid",
+    "dev-libs/abort-unsat-last",
+]
+
+_ABORT_CYCLE_ATOMS = [
+    "dev-libs/abort-cycle-mid",
+    "dev-libs/abort-cycle-last",
+]
+
+_ABORT_MODES = [
+    ["--pretend", "-pv"],
+    ["--pretend", "-pvt"],
+    ["--pretend", "-pv", "--columns"],
+    ["--pretend", "--debug"],
+]
+
+_MERGE_LINE_PREFIXES = ("[ebuild", "[binary", "[blocks", "[nomerge")
+
+
+def _merge_lines(stdout: str) -> list[str]:
+    return [
+        line
+        for line in stdout.splitlines()
+        if line.lstrip().startswith(_MERGE_LINE_PREFIXES)
+    ]
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="backlog #19 abort path: real exits 1 with no merge list on an "
+    "unfixable masked/unsat dep (docs/abort-path-spec.md §4a/§4b); portuale "
+    "still prints the full list and exits 0",
+)
+@pytest.mark.parametrize("atom", _ABORT_NO_LIST_ATOMS)
+@pytest.mark.parametrize("mode", _ABORT_MODES, ids=["pv", "pvt", "columns", "debug"])
+def test_abort_path_masked_unsat_suppresses_merge_list(
+    atom, mode, emerge_binary, emerge_pretend_python, fixture_env
+):
+    """Oracle-pinned target (live-captured against real 3.0.81.3, see
+    `fixtures/abort-captures/` + `docs/abort-path-spec.md`): a masked-only
+    or unsatisfiable dependency aborts the resolve — exit 1, zero merge
+    lines and no `Total:` line on stdout in every output mode (the error
+    block alone goes to stderr). The `-last` siblings pin that the failing
+    dep's declared position is unobservable: real admits nothing observable
+    either way. Rust == Python is asserted now (both print the same full
+    list, exit 0); the real-behavior assertions fail until Slice 5 wires
+    the abort outcome through."""
+    # Test command lines carry explicit --pretend (suite convention: never
+    # exercise the real-merge path against the fixture ROOT). The oracle
+    # ran bare -pv/-pvt; the flag is a no-op on the abort path (both forms
+    # hit `not success -> display_problems -> return 1` before any
+    # pretend/non-pretend split -- verified live for one probe per shape,
+    # see docs/abort-path-spec.md §3), so the pinned behavior is identical.
+    args = [*mode, atom]
+    rust = _run([str(emerge_binary)], args, fixture_env)
+    py = _run(emerge_pretend_python, args, fixture_env)
+    assert rust.returncode == py.returncode
+    assert rust.stdout == py.stdout and rust.stderr == py.stderr
+    assert rust.returncode == 1
+    assert _merge_lines(rust.stdout) == []
+    assert "Total:" not in rust.stdout
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="backlog #19 abort path: real shows only the _serialize_tasks "
+    "stuck remainder on an unserializable cycle (docs/abort-path-spec.md "
+    "§4c); portuale still prepends the full flat list with leaf members",
+)
+@pytest.mark.parametrize("atom", _ABORT_CYCLE_ATOMS)
+@pytest.mark.parametrize("mode", _ABORT_MODES, ids=["pv", "pvt", "columns", "debug"])
+def test_abort_path_cycle_shows_reduced_list_only(
+    atom, mode, emerge_binary, emerge_pretend_python, fixture_env
+):
+    """Oracle-pinned target (live-captured, see `fixtures/abort-captures/`
+    + `docs/abort-path-spec.md`): an unserializable cycle aborts with exit
+    1 and the merge list is the stuck remainder only — the unrelated
+    leaves (`abort-leaf-a/b`, drained before the give-up) are absent while
+    the top and both cycle arms stay; `Total:` counters are computed over
+    that reduced list. Mid/last pin that the cycle entry's declared
+    position is unobservable in real's output. Rust == Python is asserted
+    now (both print the full 5-line list); the leaf-absence assertion
+    fails until Slice 5 routes the remainder through as the only list."""
+    args = [*mode, atom]
+    rust = _run([str(emerge_binary)], args, fixture_env)
+    py = _run(emerge_pretend_python, args, fixture_env)
+    assert rust.returncode == py.returncode == 1
+    assert rust.stdout == py.stdout and rust.stderr == py.stderr
+    assert "abort-leaf" not in rust.stdout
+    assert "abort-cycle-a-1.0" in rust.stdout
+    assert "Total:" in rust.stdout
+
+
 def test_root_deps_recursion_reports_an_unbuildable_build_dep(
     emerge_binary, emerge_pretend_python, fixture_env
 ):

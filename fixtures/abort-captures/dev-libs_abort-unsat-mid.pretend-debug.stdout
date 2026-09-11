@@ -1,0 +1,115 @@
+
+Performing Global Updates
+(Could take a couple of minutes if you have a lot of binary packages.)
+  .='update pass'  *='binary update'  #='/var/db update'  @='/var/db move'
+  s='/var/db SLOT move'  %='binary move'  S='binary SLOT move'
+  p='update /etc/portage/package.*'
+/fixtures/repo/profiles/updates/2Q-2024..
+
+
+
+Performing Global Updates
+(Could take a couple of minutes if you have a lot of binary packages.)
+  .='update pass'  *='binary update'  #='/var/db update'  @='/var/db move'
+  s='/var/db SLOT move'  %='binary move'  S='binary SLOT move'
+  p='update /etc/portage/package.*'
+/fixtures/repo/profiles/updates/2Q-2024..
+
+
+myaction None
+myopts {'--debug': True, '--pretend': True, '--regex-search-auto': 'y'}
+
+
+myparams {'recurse': True, 'binpkg_respect_use': 'auto', 'autounmask': True, 'autounmask_keep_use': False, 'autounmask_keep_license': True, 'autounmask_keep_keywords': True, 'autounmask_keep_masks': True, 'bdeps': 'auto', 'ignore_soname_deps': 'y', 'dynamic_deps': True, 'implicit_system_deps': True, 'binpkg_changed_deps': 'auto'}
+
+
+These are the packages that would be merged, in order:
+
+Calculating dependencies  
+      Arg: dev-libs/abort-unsat-mid
+     Atom: dev-libs/abort-unsat-mid
+
+Child:         (dev-libs/abort-unsat-mid-1.0:0/0::testrepo, ebuild scheduled for merge to '/fixtures/') USE="" ELIBC="glibc"
+Parent Dep:    dev-libs/abort-unsat-mid
+
+Parent:    (dev-libs/abort-unsat-mid-1.0:0/0::testrepo, ebuild scheduled for merge to '/fixtures/')
+Depstring: dev-libs/abort-leaf-a dev-libs/abort-nonexistent dev-libs/abort-leaf-b
+Priority:  runtime
+
+Parent:    (dev-libs/abort-unsat-mid-1.0:0/0::testrepo, ebuild scheduled for merge to '/fixtures/')
+Depstring: dev-libs/abort-leaf-a dev-libs/abort-nonexistent dev-libs/abort-leaf-b
+Priority:  runtime
+Candidates: ['dev-libs/abort-leaf-a', 'dev-libs/abort-nonexistent', 'dev-libs/abort-leaf-b']
+
+
+backtracking due to unsatisfied dep:
+    parent: (dev-libs/abort-unsat-mid-1.0:0/0::testrepo, ebuild scheduled for merge to '/fixtures/')
+  priority: runtime
+      root: /fixtures/
+      atom: dev-libs/abort-nonexistent
+
+
+
+backtracking try 1 
+
+forced reinstall atoms:
+
+
+slot operator dependencies:
+
+
+forced rebuilds:
+
+
+
+
+runtime_pkg_mask: {<Package ('ebuild', '/fixtures/', 'dev-libs/abort-unsat-mid-1.0', 'merge', 'testrepo')>: {'missing dependency': {(<Package ('ebuild', '/fixtures/', 'dev-libs/abort-unsat-mid-1.0', 'merge', 'testrepo')>, '/fixtures/', 'dev-libs/abort-nonexistent')}}} 
+
+
+      Arg: dev-libs/abort-unsat-mid
+     Atom: dev-libs/abort-unsat-mid
+
+
+backtracking aborted after 1 tries
+
+forced reinstall atoms:
+
+
+slot operator dependencies:
+
+
+forced rebuilds:
+
+
+
+      Arg: dev-libs/abort-unsat-mid
+     Atom: dev-libs/abort-unsat-mid
+
+Child:         (dev-libs/abort-unsat-mid-1.0:0/0::testrepo, ebuild scheduled for merge to '/fixtures/') USE="" ELIBC="glibc"
+Parent Dep:    dev-libs/abort-unsat-mid
+
+Parent:    (dev-libs/abort-unsat-mid-1.0:0/0::testrepo, ebuild scheduled for merge to '/fixtures/')
+Depstring: dev-libs/abort-leaf-a dev-libs/abort-nonexistent dev-libs/abort-leaf-b
+Priority:  runtime
+
+Parent:    (dev-libs/abort-unsat-mid-1.0:0/0::testrepo, ebuild scheduled for merge to '/fixtures/')
+Depstring: dev-libs/abort-leaf-a dev-libs/abort-nonexistent dev-libs/abort-leaf-b
+Priority:  runtime
+Candidates: ['dev-libs/abort-leaf-a', 'dev-libs/abort-nonexistent', 'dev-libs/abort-leaf-b']
+... done!
+Dependency resolution took 0.75 s (backtrack: 1/20).
+
+forced reinstall atoms:
+
+
+slot operator dependencies:
+
+
+forced rebuilds:
+
+
+
+ * IMPORTANT: 11 news items need reading for repository 'gentoo'.
+ * IMPORTANT: 5 news items need reading for repository 'testrepo'.
+ * Use eselect news read to view new items.
+

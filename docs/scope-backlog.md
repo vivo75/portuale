@@ -240,6 +240,24 @@ can't grow into these incrementally:
   see `history/scope-backlog-2026-09-05.md` for the full citations.
   `--changed-slot` itself already ships standalone (`slot_changed`).
 
+- **DFS-partial abort path (#19) — Gate-0 decisions recorded 2026-09-11
+  (Slice 1 oracle: `docs/abort-path-spec.md`, fixtures
+  `dev-libs/abort-*-mid/-last`, captures `fixtures/abort-captures/`,
+  24 strict-xfail contract tests).** Owner answers: (G0.1) adopt real's
+  **exit 1 on abort** for all three oracled shapes (masked-only,
+  unserializable cycle, unsat atom) — the `maskneedpkg`/`kwneedpkg`
+  CASES exits flip in Slice 5, and the slot-conflict "informational,
+  exit 0" convention is reconciled explicitly there; (G0.2)
+  **membership + deterministic flat order**, not byte-parity — real's
+  tree duplication + `[nomerge]` rows + row-counted `Total:` stay a
+  deliberate cut under the dedup-by-design rule (moot for masked/unsat,
+  which print no list at all); (G0.3) **all four shapes in v1** —
+  including the autounmask+cycle partial-altlist shape (the original
+  plasma-meta cluster-A truncation), which still needs a synthetic
+  fixture (Slice 3 prerequisite) plus pass-retaining backtrack state;
+  (G0.4) the path lands **flag-gated** (`PORTUALE_ABORT_PATH=0`
+  fallback), so Slice 2 stays behaviour-neutral.
+
 ### B / C / D / E — complete; residual documented cuts only
 
 **B. Scheduler / build orchestration** (2026-09-04): merge-hook log

@@ -1,0 +1,132 @@
+!!! Repository 'overlay' is missing masters attribute in '/fixtures/overlay/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+!!! Repository 'independentoverlay' is missing masters attribute in '/fixtures/independentoverlay/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+!!! Repository 'repnamefromfile' is missing masters attribute in '/fixtures/repnamerepo/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+!!! Repository 'repnamefromfile' is missing masters attribute in '/fixtures/repnamerepo/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+--- EAPI '0' does not support 'package.use.stable.mask': '/fixtures/repo/profiles/package.use.stable.mask'
+--- Invalid atom in /fixtures/repo/profiles/package.use.force: */pkgusemaskforcepkg
+--- EAPI '0' does not support 'use.stable.force': '/fixtures/repo/profiles/base/use.stable.force'
+--- EAPI '0' does not support 'package.use.stable.mask': '/fixtures/repo/profiles/base/package.use.stable.mask'
+!!! Repository 'independentoverlay' is missing masters attribute in '/fixtures/independentoverlay/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+!!! Repository 'overlay' is missing masters attribute in '/fixtures/overlay/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+!!! Repository 'repnamefromfile' is missing masters attribute in '/fixtures/repnamerepo/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+!!! Repository 'repnamefromfile' is missing masters attribute in '/fixtures/repnamerepo/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+--- EAPI '0' does not support 'package.use.stable.mask': '/fixtures/repo/profiles/package.use.stable.mask'
+--- Invalid atom in /fixtures/repo/profiles/package.use.force: */pkgusemaskforcepkg
+FEATURES variable contains unknown value(s): cgroup, observability
+ERROR: Update type not recognized '# Quarter 2 2024 package moves (fixture)'
+!!! Repository 'overlay' is missing masters attribute in '/fixtures/overlay/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+!!! Repository 'independentoverlay' is missing masters attribute in '/fixtures/independentoverlay/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+!!! Repository 'repnamefromfile' is missing masters attribute in '/fixtures/repnamerepo/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+!!! Repository 'repnamefromfile' is missing masters attribute in '/fixtures/repnamerepo/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+--- EAPI '0' does not support 'package.use.stable.mask': '/fixtures/repo/profiles/package.use.stable.mask'
+--- Invalid atom in /fixtures/repo/profiles/package.use.force: */pkgusemaskforcepkg
+--- EAPI '0' does not support 'use.stable.force': '/fixtures/repo/profiles/base/use.stable.force'
+--- EAPI '0' does not support 'package.use.stable.mask': '/fixtures/repo/profiles/base/package.use.stable.mask'
+!!! Repository 'independentoverlay' is missing masters attribute in '/fixtures/independentoverlay/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+!!! Repository 'overlay' is missing masters attribute in '/fixtures/overlay/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+!!! Repository 'repnamefromfile' is missing masters attribute in '/fixtures/repnamerepo/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+!!! Repository 'repnamefromfile' is missing masters attribute in '/fixtures/repnamerepo/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+--- EAPI '0' does not support 'package.use.stable.mask': '/fixtures/repo/profiles/package.use.stable.mask'
+--- Invalid atom in /fixtures/repo/profiles/package.use.force: */pkgusemaskforcepkg
+FEATURES variable contains unknown value(s): cgroup, observability
+ERROR: Update type not recognized '# Quarter 2 2024 package moves (fixture)'
+!!! Repository 'overlay' is missing masters attribute in '/fixtures/overlay/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+!!! Repository 'independentoverlay' is missing masters attribute in '/fixtures/independentoverlay/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+!!! Repository 'repnamefromfile' is missing masters attribute in '/fixtures/repnamerepo/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+!!! Repository 'repnamefromfile' is missing masters attribute in '/fixtures/repnamerepo/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+--- EAPI '0' does not support 'package.use.stable.mask': '/fixtures/repo/profiles/package.use.stable.mask'
+--- Invalid atom in /fixtures/repo/profiles/package.use.force: */pkgusemaskforcepkg
+--- EAPI '0' does not support 'use.stable.force': '/fixtures/repo/profiles/base/use.stable.force'
+--- EAPI '0' does not support 'package.use.stable.mask': '/fixtures/repo/profiles/base/package.use.stable.mask'
+!!! Repository 'independentoverlay' is missing masters attribute in '/fixtures/independentoverlay/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+!!! Repository 'overlay' is missing masters attribute in '/fixtures/overlay/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+!!! Repository 'repnamefromfile' is missing masters attribute in '/fixtures/repnamerepo/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+!!! Repository 'repnamefromfile' is missing masters attribute in '/fixtures/repnamerepo/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+--- EAPI '0' does not support 'package.use.stable.mask': '/fixtures/repo/profiles/package.use.stable.mask'
+--- Invalid atom in /fixtures/repo/profiles/package.use.force: */pkgusemaskforcepkg
+FEATURES variable contains unknown value(s): cgroup, observability
+WARNING: One or more repositories have missing repo_name entries:
+
+	/fixtures/independentoverlay/profiles/repo_name
+	/fixtures/overlay/profiles/repo_name
+
+NOTE: Each repo_name entry should be a plain text file containing a
+unique name for the repository on the first line.
+
+
+Unable to unshare: EPERM (for FEATURES="ipc-sandbox network-sandbox pid-sandbox")
+
+Messages for package [32mdev-libs/blockusedeptarget-1.0::testrepo[0m:
+ [31;01m*[0m ERROR: dev-libs/blockusedeptarget-1.0::testrepo failed (depend phase):
+ [31;01m*[0m   External commands disallowed while sourcing ebuild: gone
+ [31;01m*[0m 
+ [31;01m*[0m Call stack:
+ [31;01m*[0m                      ebuild.sh, line 681:  Called source '/fixtures/repo/dev-libs/blockusedeptarget/blockusedeptarget-1.0.ebuild'
+ [31;01m*[0m   blockusedeptarget-1.0.ebuild, line   2:  Called command_not_found_handle 'gone'
+ [31;01m*[0m                      ebuild.sh, line 107:  Called die
+ [31;01m*[0m The specific snippet of code:
+ [31;01m*[0m   		die "External commands disallowed while sourcing ebuild: ${*}"
+ [31;01m*[0m 
+ [31;01m*[0m If you need support, post the output of `emerge --info '=dev-libs/blockusedeptarget-1.0::testrepo'`,
+ [31;01m*[0m the complete build log and the output of `emerge -pqv '=dev-libs/blockusedeptarget-1.0::testrepo'`.
+ [31;01m*[0m Working directory: '/usr/lib/python3.14/site-packages'
+ [31;01m*[0m S: '/var/tmp/portage/dev-libs/blockusedeptarget-1.0/work/blockusedeptarget-1.0'
+Unable to unshare: EPERM (for FEATURES="ipc-sandbox network-sandbox pid-sandbox")
+Unable to unshare: EPERM (for FEATURES="ipc-sandbox network-sandbox pid-sandbox")
+
+Messages for package [32mdev-libs/blockusedeptarget-1.0::testrepo[0m:
+ [31;01m*[0m ERROR: dev-libs/blockusedeptarget-1.0::testrepo failed (depend phase):
+ [31;01m*[0m   External commands disallowed while sourcing ebuild: gone
+ [31;01m*[0m 
+ [31;01m*[0m Call stack:
+ [31;01m*[0m                      ebuild.sh, line 681:  Called source '/fixtures/repo/dev-libs/blockusedeptarget/blockusedeptarget-1.0.ebuild'
+ [31;01m*[0m   blockusedeptarget-1.0.ebuild, line   2:  Called command_not_found_handle 'gone'
+ [31;01m*[0m                      ebuild.sh, line 107:  Called die
+ [31;01m*[0m The specific snippet of code:
+ [31;01m*[0m   		die "External commands disallowed while sourcing ebuild: ${*}"
+ [31;01m*[0m 
+ [31;01m*[0m If you need support, post the output of `emerge --info '=dev-libs/blockusedeptarget-1.0::testrepo'`,
+ [31;01m*[0m the complete build log and the output of `emerge -pqv '=dev-libs/blockusedeptarget-1.0::testrepo'`.
+ [31;01m*[0m Working directory: '/usr/lib/python3.14/site-packages'
+ [31;01m*[0m S: '/var/tmp/portage/dev-libs/blockusedeptarget-1.0/work/blockusedeptarget-1.0'
+
+
+
+ * Error: circular dependencies:
+
+(dev-libs/abort-cycle-a-1.0:0/0::testrepo, ebuild scheduled for merge) depends on
+ (dev-libs/abort-cycle-b-1.0:0/0::testrepo, ebuild scheduled for merge) (buildtime)
+  (dev-libs/abort-cycle-a-1.0:0/0::testrepo, ebuild scheduled for merge) (buildtime)
+
+ * Note that circular dependencies can often be avoided by temporarily
+ * disabling USE flags that trigger optional dependencies.
+!!! Invalid news item: /fixtures/repo/metadata/news/2026-09-08-portuale-malformed/2026-09-08-portuale-malformed.en.txt
+!!!   line 7: Display-If-Installed: dev-libs/infoinstpkg[[bad
+!!! Invalid news item: /fixtures/repo/metadata/news/2026-09-10-portuale-format1-useatom/2026-09-10-portuale-format1-useatom.en.txt
+!!!   line 7: Display-If-Installed: dev-libs/infoinstpkg[alpha]
+!!! Invalid news item: /fixtures/repo/metadata/news/2026-09-09-portuale-format1-slotatom/2026-09-09-portuale-format1-slotatom.en.txt
+!!!   line 7: Display-If-Installed: dev-libs/samepkg:1
