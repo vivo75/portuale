@@ -1,5 +1,244 @@
 use super::*;
 
+/// `find_restart_cycles` finds the hard-containing cycle a stranded walk leaves
+/// behind, one index cycle per closing hard edge.
+#[test]
+fn find_restart_cycles_reports_a_hard_two_cycle() {
+    let dep = |pkg: &str, priority: DepPriority| DepEdge {
+        atom: format!("dev-libs/{pkg}"),
+        evaluated: format!("dev-libs/{pkg}"),
+        category: "dev-libs".to_string(),
+        package: pkg.to_string(),
+        priority,
+        disjunctive: false,
+        alt: None,
+        key: 3,
+    };
+    let buildtime = DepPriority {
+        buildtime: true,
+        ..DepPriority::default()
+    };
+    let mut a = graph_entry("dev-libs", "cyc-a", "1.0");
+    let mut b = graph_entry("dev-libs", "cyc-b", "1.0");
+    a.deps = vec![dep("cyc-b", buildtime)];
+    b.deps = vec![dep("cyc-a", buildtime)];
+    let entries = vec![a, b];
+    let mut map: EdgeKindMap = HashMap::new();
+    map.insert(
+        (
+            (false, "dev-libs".to_string(), "cyc-b".to_string()),
+            (false, "dev-libs".to_string(), "cyc-a".to_string()),
+        ),
+        (true, false),
+    );
+    map.insert(
+        (
+            (false, "dev-libs".to_string(), "cyc-a".to_string()),
+            (false, "dev-libs".to_string(), "cyc-b".to_string()),
+        ),
+        (true, false),
+    );
+    let cycles = find_restart_cycles(
+        &entries,
+        &map,
+        Path::new("/nonexistent-root"),
+        &HashMap::new(),
+    );
+    assert_eq!(cycles.len(), 2, "{cycles:?}");
+    for cycle in &cycles {
+        assert_eq!(cycle.len(), 2, "{cycles:?}");
+    }
+    // Canonical rotations of the same loop.
+    let mut canon: Vec<Vec<usize>> = cycles
+        .iter()
+        .map(|c| {
+            let min = c.iter().enumerate().min_by_key(|&(_, &i)| i).unwrap().0;
+            c.iter().cycle().skip(min).take(c.len()).copied().collect()
+        })
+        .collect();
+    canon.sort();
+    canon.dedup();
+    assert_eq!(canon, vec![vec![0, 1]], "{cycles:?}");
+}
+
+/// Runtime-closing cycle (bug-705986 shape): invisible to `find_hard_cycles` but
+/// still a restart trigger while it holds an unsatisfied buildtime edge.
+#[test]
+fn find_restart_cycles_reports_a_runtime_closing_cycle() {
+    let dep = |pkg: &str, priority: DepPriority, key: u8| DepEdge {
+        atom: format!("dev-libs/{pkg}"),
+        evaluated: format!("dev-libs/{pkg}"),
+        category: "dev-libs".to_string(),
+        package: pkg.to_string(),
+        priority,
+        disjunctive: false,
+        alt: None,
+        key,
+    };
+    let buildtime = DepPriority {
+        buildtime: true,
+        ..DepPriority::default()
+    };
+    let runtime = DepPriority {
+        runtime: true,
+        ..DepPriority::default()
+    };
+    let mut a = graph_entry("dev-libs", "cyc-a", "1.0");
+    let mut v = graph_entry("dev-libs", "cyc-v", "1.0");
+    a.deps = vec![dep("cyc-v", buildtime, 3)];
+    v.deps = vec![dep("cyc-a", runtime, 0)];
+    let entries = vec![a, v];
+    // Only the buildtime half reaches the hard arm.
+    let mut map: EdgeKindMap = HashMap::new();
+    map.insert(
+        (
+            (false, "dev-libs".to_string(), "cyc-v".to_string()),
+            (false, "dev-libs".to_string(), "cyc-a".to_string()),
+        ),
+        (true, false),
+    );
+    let cycles = find_restart_cycles(
+        &entries,
+        &map,
+        Path::new("/nonexistent-root"),
+        &HashMap::new(),
+    );
+    assert_eq!(cycles.len(), 1, "{cycles:?}");
+    assert_eq!(cycles[0].len(), 2, "{cycles:?}");
+}
+
+/// A pure-runtime two-cycle is group-merged, never restarted; an acyclic pair is
+/// quiet too.
+#[test]
+fn find_restart_cycles_ignores_runtime_only_and_acyclic_graphs() {
+    let dep = |pkg: &str, priority: DepPriority| DepEdge {
+        atom: format!("dev-libs/{pkg}"),
+        evaluated: format!("dev-libs/{pkg}"),
+        category: "dev-libs".to_string(),
+        package: pkg.to_string(),
+        priority,
+        disjunctive: false,
+        alt: None,
+        key: 0,
+    };
+    let runtime = DepPriority {
+        runtime: true,
+        ..DepPriority::default()
+    };
+    let mut a = graph_entry("dev-libs", "cyc-a", "1.0");
+    let mut b = graph_entry("dev-libs", "cyc-b", "1.0");
+    a.deps = vec![dep("cyc-b", runtime)];
+    b.deps = vec![dep("cyc-a", runtime)];
+    let entries = vec![a, b];
+    let mut map: EdgeKindMap = HashMap::new();
+    map.insert(
+        (
+            (false, "dev-libs".to_string(), "cyc-b".to_string()),
+            (false, "dev-libs".to_string(), "cyc-a".to_string()),
+        ),
+        (false, true),
+    );
+    map.insert(
+        (
+            (false, "dev-libs".to_string(), "cyc-a".to_string()),
+            (false, "dev-libs".to_string(), "cyc-b".to_string()),
+        ),
+        (false, true),
+    );
+    assert!(
+        find_restart_cycles(
+            &entries,
+            &map,
+            Path::new("/nonexistent-root"),
+            &HashMap::new()
+        )
+        .is_empty()
+    );
+    // Acyclic: b's edge dropped.
+    let mut a = graph_entry("dev-libs", "cyc-a", "1.0");
+    let b = graph_entry("dev-libs", "cyc-b", "1.0");
+    a.deps = vec![dep(
+        "cyc-b",
+        DepPriority {
+            buildtime: true,
+            ..DepPriority::default()
+        },
+    )];
+    let entries = vec![a, b];
+    assert!(
+        find_restart_cycles(
+            &entries,
+            &map,
+            Path::new("/nonexistent-root"),
+            &HashMap::new()
+        )
+        .is_empty()
+    );
+}
+
+/// A build-time edge softened by a parallel run-time route hides from hard cycles
+/// but still strands the walk, so restart cycles report it.
+#[test]
+fn softened_buildtime_edge_hides_from_hard_cycles_but_not_restart_cycles() {
+    let dep = |pkg: &str, priority: DepPriority, key: u8| DepEdge {
+        atom: format!("dev-libs/{pkg}"),
+        evaluated: format!("dev-libs/{pkg}"),
+        category: "dev-libs".to_string(),
+        package: pkg.to_string(),
+        priority,
+        disjunctive: false,
+        alt: None,
+        key,
+    };
+    let buildtime = DepPriority {
+        buildtime: true,
+        ..DepPriority::default()
+    };
+    let runtime = DepPriority {
+        runtime: true,
+        ..DepPriority::default()
+    };
+    let mut a = graph_entry("dev-libs", "sbr-a", "1.0");
+    let mut b = graph_entry("dev-libs", "sbr-b", "1.0");
+    a.deps = vec![dep("sbr-b", buildtime, 4), dep("sbr-b", runtime, 0)];
+    b.deps = vec![dep("sbr-a", buildtime, 4)];
+    let entries = vec![a, b];
+    let cp = |pkg: &str| (false, "dev-libs".to_string(), pkg.to_string());
+    let mut map: EdgeKindMap = HashMap::new();
+    // Hard + soft route: breakable, invisible to the hard reporter.
+    map.insert((cp("sbr-b"), cp("sbr-a")), (true, true));
+    // Hard only, but one directed edge is no cycle.
+    map.insert((cp("sbr-a"), cp("sbr-b")), (true, false));
+    assert!(
+        find_hard_cycles(
+            &entries,
+            &map,
+            Path::new("/nonexistent-root"),
+            &HashMap::new(),
+            None
+        )
+        .is_empty()
+    );
+    let cycles = find_restart_cycles(
+        &entries,
+        &map,
+        Path::new("/nonexistent-root"),
+        &HashMap::new(),
+    );
+    // One index cycle per closing hard edge.
+    assert_eq!(cycles.len(), 2, "{cycles:?}");
+    let mut canon: Vec<Vec<usize>> = cycles
+        .iter()
+        .map(|c| {
+            let min = c.iter().enumerate().min_by_key(|&(_, &i)| i).unwrap().0;
+            c.iter().cycle().skip(min).take(c.len()).copied().collect()
+        })
+        .collect();
+    canon.sort();
+    canon.dedup();
+    assert_eq!(canon, vec![vec![0, 1]], "{cycles:?}");
+}
+
 #[test]
 fn find_hard_cycles_reports_a_build_time_cycle_and_ignores_a_run_time_one() {
     let hardcpv = |p: &str| format!("dev-libs/{p}-1.0");

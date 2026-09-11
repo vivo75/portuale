@@ -5,18 +5,22 @@ use std::ops::ControlFlow;
 
 mod autounmask;
 mod circular_dead_end;
+mod missing_dep;
 mod no_leaf_restart;
 mod reverse_dep_pins;
 mod slot_conflict_abi;
 mod slot_conflict_backtrack;
+mod slot_operator_probe;
 mod solvable_slot_conflicts;
 mod unsatisfied_dead_end;
 pub(crate) use autounmask::*;
 pub(crate) use circular_dead_end::*;
+pub(crate) use missing_dep::*;
 pub(crate) use no_leaf_restart::*;
 pub(crate) use reverse_dep_pins::*;
 pub(crate) use slot_conflict_abi::*;
 pub(crate) use slot_conflict_backtrack::*;
+pub(crate) use slot_operator_probe::*;
 pub(crate) use solvable_slot_conflicts::*;
 pub(crate) use unsatisfied_dead_end::*;
 
@@ -95,6 +99,120 @@ pub(crate) fn file_unsat_probe_results(
         return true;
     }
     false
+}
+
+/// One pass's outcome in `_backtrack_depgraph` terms. The overlay merge runs first
+/// (steps read the merged accumulators, as they always did); each arm then packages
+/// its effect without touching the search state.
+pub(crate) fn collect_feedback(
+    ctx: &ResolveCtx<'_>,
+    params: &BacktrackParams,
+    pass: &mut PassResult,
+    config: &portage_profile::Config,
+) -> PassDecision {
+    // The A3 overlay union lands in a working copy, not the live search state --
+    // the driver applies the packaged effect through `Backtracker::feedback`.
+    // Placed before the chain: an earlier step may fire on the same pass that folded
+    // flips, and the retry must see them -- as it always did.
+    let mut grown = params.clone();
+    for (cp, flags) in &pass.use_overlay {
+        let bucket = grown.autounmask_use_config.entry(cp.clone()).or_default();
+        for (f, want) in flags {
+            if bucket.get(f) != Some(want) {
+                bucket.insert(f.clone(), *want);
+            }
+        }
+    }
+    for rec in &pass.use_change_overlay {
+        if !grown
+            .autounmask_use_change_records
+            .iter()
+            .any(|c| c.atom == rec.atom && c.token == rec.token)
+        {
+            grown.autounmask_use_change_records.push(rec.clone());
+        }
+    }
+    grown.autounmask_use_broke |= pass.use_broke;
+
+    // A pass that ends in slot-conflict mask feedback returns long before the
+    // reverse-dependency scan's own site, so those pins never reached `grown` and a
+    // later re-pass would report the collision without its installed consumers.
+    // Collected here for exactly that case, so the ordinary settle path pays for one
+    // scan, as it always did, not two.
+    if !pass.slot_conflicts.is_empty() {
+        let (_, dropped) = reverse_dependency_constraints(ReverseDependencyConstraintsArgs {
+            repos: &ctx.repos,
+            root: ctx.root,
+            entries: &pass.entries,
+            with_bdeps: ctx.with_bdeps,
+            excluded: ctx.excluded,
+            hard_want: &pass.slot_want,
+            reachable: &ctx.slot_op_reachable,
+            dynamic_deps: ctx.dynamic_deps,
+            ignore_built_slot_operator_deps: ctx.ignore_built_slot_operator_deps,
+            top_level_cps: &ctx.top_level_cps,
+            world_reachable: &ctx.world_reachable,
+            config: ctx.config,
+            complete: ctx.complete,
+        });
+        for pin in dropped {
+            if !grown.dropped_pins.contains(&pin) {
+                grown.dropped_pins.push(pin);
+            }
+        }
+    }
+
+    if let Some(decision) = step_circular_dead_end(pass, ctx, &mut grown) {
+        return decision;
+    }
+
+    if let Some(decision) = step_slot_conflict_abi(pass, ctx, &mut grown, config) {
+        return decision;
+    }
+
+    if let Some(decision) = step_solvable_slot_conflicts(pass, ctx, config, &mut grown) {
+        return decision;
+    }
+
+    if let Some(decision) = step_slot_conflict_backtrack(pass, ctx, &mut grown, config) {
+        return decision;
+    }
+
+    if let Some(decision) = step_autounmask(&mut grown, pass, ctx) {
+        return decision;
+    }
+
+    if let Some(decision) = step_missing_dep(pass, ctx, &mut grown, config) {
+        return decision;
+    }
+
+    let reverse_pins = match step_reverse_dep_pins(ctx, pass, &mut grown) {
+        ControlFlow::Continue(out) => out,
+        ControlFlow::Break(decision) => return decision,
+    };
+
+    let has_nvc = match step_unsatisfied_dead_end(pass, ctx, &mut grown, config, &reverse_pins) {
+        ControlFlow::Continue(out) => out,
+        ControlFlow::Break(decision) => return decision,
+    };
+
+    if let Some(decision) = step_no_leaf_restart(ctx, has_nvc, pass, &mut grown) {
+        return decision;
+    }
+
+    if let Some(decision) = step_slot_operator_probe(has_nvc, ctx, pass, &mut grown, config) {
+        return decision;
+    }
+
+    if has_nvc {
+        PassDecision::DeadEnd {
+            params: Box::new(grown),
+        }
+    } else {
+        PassDecision::Settle {
+            params: Box::new(grown),
+        }
+    }
 }
 
 /// The settle tail of `backtracking_resolve`. USE changes start their chain at the

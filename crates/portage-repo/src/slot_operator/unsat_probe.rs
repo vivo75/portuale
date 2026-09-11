@@ -16,6 +16,40 @@ pub(crate) struct SlotOperatorUnsatisfiedProbeArgs<'a> {
     pub(crate) config: &'a portage_profile::Config,
 }
 
+/// Post-pass trigger for an unsatisfied built slot-operator dep: each
+/// `NoVisibleCandidate` entry whose targeting atoms include one seeds its
+/// installed owner into the replace set, and the driver restarts.
+/// Backtrack-gated at the call site.
+// Portage: _emerge/depgraph.py, _slot_operator_unsatisfied_probe
+#[cfg(test)]
+pub(crate) fn slot_operator_unsatisfied_probe(
+    args: SlotOperatorUnsatisfiedProbeArgs<'_>,
+) -> BTreeSet<(String, String)> {
+    let SlotOperatorUnsatisfiedProbeArgs {
+        root,
+        repos,
+        entries,
+        slot_want,
+        pullers,
+        masked,
+        with_bdeps,
+        excluded,
+        config,
+    } = args;
+    slot_operator_unsatisfied_probe_full(SlotOperatorUnsatisfiedProbeFullArgs {
+        root,
+        repos,
+        entries,
+        slot_want,
+        pullers,
+        masked,
+        with_bdeps,
+        excluded,
+        config,
+    })
+    .0
+}
+
 /// [`slot_operator_unsatisfied_probe_full`]'s result: the installed
 /// parents to reinstall and the `(category, package, version)` binary
 /// parents to mask.

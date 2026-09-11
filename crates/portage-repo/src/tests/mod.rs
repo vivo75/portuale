@@ -2226,6 +2226,8 @@ mod tests_166;
 mod tests_184;
 
 mod abi_probe;
+mod backtrack_params;
+mod backtracker;
 mod binary_index;
 mod bind;
 mod binpkg_use;
