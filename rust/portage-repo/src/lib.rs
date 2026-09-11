@@ -8880,6 +8880,173 @@ fn disjunction_preference(
     }
 }
 
+/// Real `mydbapi_match_pkgs(atom.without_use)[-1]`'s `version` field,
+/// parsed back out of a `highest_available_candidate_ignoring_use`
+/// candidate string (`"{cp}-{version}:{slot}/{sub_slot}::{repo}"`) --
+/// the per-atom seed of a `||` alternative's own `cp_map`
+/// (`promote_tied_alternative`'s slice-2 in-bin ordering).
+fn candidate_version(candidate_str: &str, category: &str, package: &str) -> Option<String> {
+    let rest = candidate_str.strip_prefix(&format!("{category}/{package}-"))?;
+    rest.split(':').next().map(str::to_string)
+}
+
+/// Real `dep_zapdeps`'s in-bin upgrade-preference ordering pass
+/// (`dep_check.py` soft 738-802), plugged in as `use_reduce_flat_disjunctive`'s
+/// `tie_break` -- called only when 2+ alternatives tie at the best
+/// selectable [`AltPreference`](portage_use_reduce::AltPreference) rank
+/// (`disjunction_preference`'s own return). Real processes `choices[1:]`
+/// (by object identity, in original left-to-right order) against the
+/// CURRENT, being-mutated bin list, promoting `choice_1` in front of the
+/// first `choice_2` it beats and stopping the moment it would reach its
+/// own current position unpromoted; ported as a literal remove+insert
+/// over an `id`-tagged `Vec` (not simplified to a stable sort -- the
+/// promotion isn't transitive/associative in general, which is the
+/// whole point of real's own "sorting is done separately for each bin,
+/// so as not to interfere with the ordering ... specified in the
+/// ebuild" comment) so this matches real byte-for-byte rather than an
+/// approximation of it. Returns the WINNING alternative's original
+/// index into `alts` (`tie_break`'s own contract).
+///
+/// Two of real's per-choice facts are deliberate, documented cuts (§2 of
+/// the design brief, `docs/022-agent-task-22-zapdeps.fable.md`):
+/// `minimize_slots` (only applies after `_overlap_dnf`'s DNF rewrite,
+/// which portuale doesn't do -- skipped entirely, matching the brief's
+/// own "cut it and document" fallback for slice 2) and `want_update`
+/// (`graph_interface.want_update_pkg`, needing the `--update`/`--newuse`
+/// "wanted" set threaded down to this call depth, which portuale
+/// doesn't do) -- pinned to real's own default (`False`), which only
+/// ever WIDENS when the `all_installed_slots` promotion applies (a true
+/// `want_update` on `choice_2` would SUPPRESS it): never picks a
+/// DIFFERENT winner than real would for a fixture where `want_update` is
+/// genuinely false, only potentially a fixture real would need
+/// `want_update` to decide -- none of which are targeted here.
+///
+/// Also deliberately simplified vs `dep_check.py`'s own `cp_map`
+/// construction (soft 552-568, "bug 600346"): when an alternative's OWN
+/// atoms name the SAME `cp` more than once, real re-checks whether the
+/// higher-version candidate still satisfies every atom that already
+/// matched the previous one before overwriting `cp_map[cp]` (internal
+/// consistency); this always just keeps the higher version. A narrow
+/// cut -- it only differs from real when a single `||` alternative
+/// contains two atoms on the identical package where the higher version
+/// satisfies one atom but not the other, which the brief's own slice-2
+/// fixtures don't exercise -- documented in `scope-backlog.md`.
+fn promote_tied_alternative(
+    repos: &[RepoConfig],
+    config: &portage_profile::Config,
+    root: &Path,
+    entries: &[GraphEntry],
+    constraints: &HashMap<(String, String), Vec<String>>,
+    alts: &[Vec<String>],
+) -> usize {
+    struct Choice {
+        id: usize,
+        all_installed_slots: bool,
+        all_in_graph: bool,
+        cp_map: HashMap<String, String>,
+    }
+    let constraints_for = |a: &str| -> &[String] {
+        portage_dep::parse_atom(a)
+            .and_then(|at| constraints.get(&(at.category, at.package)))
+            .map_or(&[][..], Vec::as_slice)
+    };
+    let mut choices: Vec<Choice> = alts
+        .iter()
+        .enumerate()
+        .map(|(id, atoms)| {
+            let mut cp_map: HashMap<String, String> = HashMap::new();
+            for a in atoms {
+                let Some(atom) = portage_dep::parse_atom(a) else {
+                    continue;
+                };
+                if atom.blocker != portage_dep::Blocker::None {
+                    continue;
+                }
+                let cp = format!("{}/{}", atom.category, atom.package);
+                if let Some((candidate_str, .., _slot)) = highest_available_candidate_ignoring_use(
+                    repos,
+                    a,
+                    &atom.category,
+                    &atom.package,
+                    config,
+                    constraints_for(a),
+                ) && let Some(version) =
+                    candidate_version(&candidate_str, &atom.category, &atom.package)
+                {
+                    let better = cp_map
+                        .get(&cp)
+                        .is_none_or(|existing| vercmp_ordering(&version, existing).is_gt());
+                    if better {
+                        cp_map.insert(cp, version);
+                    }
+                }
+            }
+            Choice {
+                id,
+                all_installed_slots: atoms.iter().all(|a| atom_cp_installed(root, a))
+                    && atoms.iter().all(|a| {
+                        atom_installed_in_slot_of(root, repos, config, a, constraints_for(a))
+                    }),
+                all_in_graph: atoms_all_in_graph(atoms, entries, config),
+                cp_map,
+            }
+        })
+        .collect();
+
+    if choices.len() < 2 {
+        return 0;
+    }
+    // Real `for choice_1 in choices[1:]:` -- a snapshot of every choice
+    // BUT the first, by identity, taken before any mutation.
+    let snapshot_ids: Vec<usize> = choices[1..].iter().map(|c| c.id).collect();
+    for id1 in snapshot_ids {
+        let Some(pos1) = choices.iter().position(|c| c.id == id1) else {
+            continue;
+        };
+        let choice1_all_installed_slots = choices[pos1].all_installed_slots;
+        let choice1_all_in_graph = choices[pos1].all_in_graph;
+        let choice1_cp_map = choices[pos1].cp_map.clone();
+        let mut promote_before: Option<usize> = None;
+        for (pos2, choice2) in choices.iter().enumerate() {
+            if choice2.id == id1 {
+                // Reached choice_1's own current position without a
+                // promotion firing -- real's `if choice_1 is choice_2: break`.
+                break;
+            }
+            if choice1_all_installed_slots && !choice2.all_installed_slots {
+                promote_before = Some(pos2);
+                break;
+            }
+            let mut has_upgrade = false;
+            let mut has_downgrade = false;
+            for (cp, v1) in &choice1_cp_map {
+                if let Some(v2) = choice2.cp_map.get(cp) {
+                    if vercmp_ordering(v1, v2).is_gt() {
+                        has_upgrade = true;
+                    } else if vercmp_ordering(v1, v2).is_lt() {
+                        has_downgrade = true;
+                    }
+                }
+            }
+            if (has_upgrade && !has_downgrade)
+                || (choice1_all_in_graph
+                    && !choice2.all_in_graph
+                    && !(has_downgrade && !has_upgrade))
+            {
+                promote_before = Some(pos2);
+                break;
+            }
+        }
+        if let Some(pos2) = promote_before {
+            // `pos2 < pos1` always (the scan breaks the moment it would
+            // reach `pos1`), so removing `pos1` first never shifts `pos2`.
+            let choice1 = choices.remove(pos1);
+            choices.insert(pos2, choice1);
+        }
+    }
+    choices[0].id
+}
+
 /// The best visible candidate for `atom_str` plus its `-pv`-style USE
 /// display -- what `emerge --info <atom>` shows in real `action_info`'s
 /// per-package "`<cpv>::<repo> would be built with the following:`"
@@ -9551,6 +9718,11 @@ fn root_deps_satisfied_atoms(
                 portage_use_reduce::AltPreference::Unsatisfiable
             }
         },
+        // No "prefer an upgrade" question here either -- Available-vs-
+        // Unsatisfiable never ties on more than one selectable
+        // alternative in a way this call site's own logic distinguishes,
+        // so the trivial "first tied wins" shim is a strict no-op.
+        &mut |_: &[Vec<String>]| 0,
     )
     .map(|flat| {
         flat.into_iter()
@@ -9617,6 +9789,11 @@ fn unsatisfied_root_deps_atoms(
                 portage_use_reduce::AltPreference::Unsatisfiable
             }
         },
+        // No "prefer an upgrade" question here either -- Available-vs-
+        // Unsatisfiable never ties on more than one selectable
+        // alternative in a way this call site's own logic distinguishes,
+        // so the trivial "first tied wins" shim is a strict no-op.
+        &mut |_: &[Vec<String>]| 0,
     )
     .map(|flat| {
         flat.into_iter()
@@ -16543,6 +16720,16 @@ fn backtracking_resolve(req: &ResolveRequest) -> Result<GraphResult, Error> {
                         atoms,
                     )
                 },
+                &mut |alts: &[Vec<String>]| {
+                    promote_tied_alternative(
+                        &repos,
+                        config,
+                        root,
+                        &entries,
+                        &slot_constraints,
+                        alts,
+                    )
+                },
             ) else {
                 continue;
             };
@@ -17580,6 +17767,9 @@ fn enqueue_dependencies(
                 root_deps_running_root,
                 atoms,
             )
+        },
+        &mut |alts: &[Vec<String>]| {
+            promote_tied_alternative(repos, config, root, entries, disj_constraints, alts)
         },
     ) else {
         return;

@@ -458,6 +458,21 @@ CASES = [
         0,
     ),
     (
+        "recursion: || ( foo:1 foo:2 ) ties at the Installed bin -- in-bin ordering promotes the upgrade slot over the first-listed one",
+        ["--pretend", "-D", "dev-libs/orupgrade"],
+        0,
+    ),
+    (
+        "recursion: || group in-bin ordering promotes an already-in-graph alternative over an installed-only one",
+        ["--pretend", "-D", "dev-libs/oringraph"],
+        0,
+    ),
+    (
+        "recursion: || group in-bin ordering promotes all_installed_slots over any-slot, avoiding an unwanted new-slot merge",
+        ["--pretend", "dev-libs/oranyslot"],
+        0,
+    ),
+    (
         "recursion: || group resolves a USE-unsatisfiable-but-unmasked alternative (unsat_use_non_installed bin) and autounmask flips the flag",
         ["--pretend", "dev-libs/unsatuseor"],
         1,
@@ -3042,6 +3057,99 @@ def test_or_group_installed_preference_skips_a_required_use_broken_first_alterna
     assert rust.stdout.splitlines() == ['[ebuild  N     ] dev-libs/orrequseprefer-1.0 ']
     assert rust.stdout == py.stdout
     assert rust.returncode == py.returncode
+
+
+def test_or_group_in_bin_ordering_promotes_the_upgrade_over_the_first_listed_alternative(
+    emerge_binary, emerge_pretend_python, fixture_env
+):
+    """Backlog #22 slice 2 (in-bin ordering, `docs/022-agent-task-22-
+    zapdeps.fable.md` §4): real `dep_zapdeps` doesn't just take the
+    first-listed alternative at the best-ranked bin -- within a tied bin
+    it promotes an upgrade via `vercmp` over the intersecting `cp_map`
+    (`dep_check.py` soft 738-802, the exact comment: "this helps for deps
+    such as `|| ( foo:1 foo:2 )`, where we want to prefer the atom which
+    matches the higher version rather than the atom furthest to the
+    left"). dev-libs/orupgradealt is installed in BOTH slot 1 (1.0) and
+    slot 2 (2.0); dev-libs/orupgrade's RDEPEND is `|| (
+    dev-libs/orupgradealt:1 dev-libs/orupgradealt:2 )` -- both
+    alternatives tie at the `Installed` bin (cp-level `all_installed`,
+    real's aliased bin 0), since neither has a `[use]` block to fail.
+    Before this slice, portuale's `resolve_disjunctions` always kept the
+    first tied alternative (`:1`); real promotes `:2` (the higher
+    version) instead. Each slot RDEPENDs its own marker package so a
+    `--deep` walk into the (already-installed, unaffected either way)
+    `orupgradealt` reveals which slot was actually chosen: `:1`'s marker
+    must NOT appear, `:2`'s must."""
+    args = ["--pretend", "-D", "dev-libs/orupgrade"]
+    rust = _run([str(emerge_binary)], args, fixture_env)
+    py = _run(emerge_pretend_python, args, fixture_env)
+    assert rust.returncode == 0 and py.returncode == 0
+    assert rust.stdout == py.stdout and rust.stderr == py.stderr
+    assert rust.stdout.splitlines() == [
+        "[ebuild  N     ] dev-libs/orupgrademarker2-1.0 ",
+        "[ebuild  N     ] dev-libs/orupgrade-1.0 ",
+    ]
+    assert "orupgrademarker1" not in rust.stdout, (
+        "the first-listed, non-upgrade slot must not be the one chosen"
+    )
+
+
+def test_or_group_in_bin_ordering_promotes_in_graph_over_installed_only(
+    emerge_binary, emerge_pretend_python, fixture_env
+):
+    """Backlog #22 slice 2, in-bin ordering rule 3 (`docs/022-agent-task-
+    22-zapdeps.fable.md` §4, dep_check.py soft 788-796): "prefer choices
+    where all packages have been pulled into the graph" beats an
+    installed-only alternative that isn't. dev-libs/oringraph RDEPENDs
+    `dev-libs/oringraphpulled dev-libs/oringraphtie` -- the plain first
+    atom graphs `oringraphpulled` (New) before `oringraphtie`'s own `||
+    ( dev-libs/oringraphinstalled dev-libs/oringraphpulled )` is
+    resolved. Both alternatives tie at the Installed bin
+    (`oringraphinstalled` cp-installed, `oringraphpulled` already
+    in-graph); real promotes the in-graph one (`oringraphpulled`, listed
+    SECOND) ahead of the merely-installed one (`oringraphinstalled`,
+    listed FIRST). `oringraphinstalled` RDEPENDs its own marker so a
+    `--deep` walk would reveal it if the || group wrongly chose it."""
+    args = ["--pretend", "-D", "dev-libs/oringraph"]
+    rust = _run([str(emerge_binary)], args, fixture_env)
+    py = _run(emerge_pretend_python, args, fixture_env)
+    assert rust.returncode == 0 and py.returncode == 0
+    assert rust.stdout == py.stdout and rust.stderr == py.stderr
+    assert rust.stdout.splitlines() == [
+        "[ebuild  N     ] dev-libs/oringraphpulled-1.0 ",
+        "[ebuild  N     ] dev-libs/oringraphtie-1.0 ",
+        "[ebuild  N     ] dev-libs/oringraph-1.0 ",
+    ]
+    assert "oringraphinstalled" not in rust.stdout, (
+        "the installed-only, not-in-graph alternative must not be chosen"
+    )
+
+
+def test_or_group_in_bin_ordering_promotes_all_installed_slots_over_any_slot(
+    emerge_binary, emerge_pretend_python, fixture_env
+):
+    """Backlog #22 slice 2, in-bin ordering rule 2 (`docs/022-agent-task-
+    22-zapdeps.fable.md` §4, dep_check.py soft 763-770): `all_installed_
+    slots` beats a same-cp alternative that isn't -- checked BEFORE the
+    upgrade-preference rule, so it wins even against a higher version.
+    dev-libs/oranyslotalt is installed in slot 1 only; slot 2 (a HIGHER
+    version) is visible but not installed. dev-libs/oranyslot's RDEPEND
+    is `|| ( dev-libs/oranyslotalt:2 dev-libs/oranyslotalt:1 )` -- slot 2
+    listed first. Both tie at the Installed bin (cp-installed via slot
+    1); real promotes slot 1 (the exact installed slot) ahead of slot 2
+    despite slot 2 being both first-listed AND the higher version --
+    avoiding an unwanted new-slot merge. Before this slice, portuale
+    always kept the first-listed alternative regardless, merging the
+    unwanted slot 2."""
+    args = ["--pretend", "dev-libs/oranyslot"]
+    rust = _run([str(emerge_binary)], args, fixture_env)
+    py = _run(emerge_pretend_python, args, fixture_env)
+    assert rust.returncode == 0 and py.returncode == 0
+    assert rust.stdout == py.stdout and rust.stderr == py.stderr
+    assert rust.stdout.splitlines() == ["[ebuild  N     ] dev-libs/oranyslot-1.0 "]
+    assert "oranyslotalt" not in rust.stdout, (
+        "the already-installed slot must satisfy the || group with no new merge at all"
+    )
 
 
 def test_or_group_resolves_a_use_unsatisfiable_but_unmasked_alternative(

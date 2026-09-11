@@ -1,0 +1,6 @@
+DEFINED_PHASES=-
+DESCRIPTION=fixture: marker pulled in only if the || group's slot-2 alternative (the winning upgrade) was chosen
+EAPI=8
+KEYWORDS=amd64
+SLOT=0
+_md5_=0000000000000000000000000000000

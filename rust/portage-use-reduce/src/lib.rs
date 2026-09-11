@@ -825,19 +825,34 @@ impl AltPreference {
 /// exact "never silently wrong about whether a dependency exists"
 /// invariant `resolve_pretend_graph`'s own doc comment (portage-repo)
 /// already established for the unconditional-flatten v1 this replaces.
-/// Real portage's own richer preference order (the `in_graph` /
-/// `any_slot` / `unsat_use_*` / `other_*` bins, backtracking on a later
-/// constraint failure) still isn't fully ported -- just the
-/// installed-vs-not split that decides the overwhelming majority of real
-/// `||` groups.
+/// Real's `other_*` bins and the `allow_masked` second pass still aren't
+/// ported (`AltPreference::is_selectable`'s own doc comment); everything
+/// else -- the fine `unsat_use_*` bins and, as of slice 2, in-bin
+/// upgrade-preference ordering via `tie_break` below -- is.
+///
+/// Called only when 2+ alternatives tie at the best selectable
+/// [`AltPreference`] rank a single `"||"` group's probe produced --
+/// real `dep_zapdeps`'s own in-bin ordering pass (`dep_check.py` soft
+/// 738-802: prefer an upgrade via `vercmp` over the intersecting
+/// `cp_map`, or `all_installed_slots`, or `all_in_graph`, unless doing so
+/// would sacrifice an upgrade). `portage-use-reduce` stays atom-agnostic
+/// (design rule 2, `docs/022-agent-task-22-zapdeps.fable.md`): it hands
+/// the caller the tied alternatives' own flattened atom lists, in
+/// original left-to-right order, and the caller (which owns candidate
+/// lookup, `cp`/version parsing and `vercmp`) returns which original
+/// index wins. A trivial `&mut |_| 0` reproduces the pre-slice-2
+/// behaviour (first-listed-in-bin always wins).
+pub type TieBreak<'a> = dyn FnMut(&[Vec<String>]) -> usize + 'a;
+
 pub fn use_reduce_flat_disjunctive(
     tokens: &[String],
     uselist: &HashSet<String>,
     mode: MatchMode,
     alternative_satisfiable: &mut impl FnMut(&[String]) -> AltPreference,
+    tie_break: &mut TieBreak<'_>,
 ) -> Result<Vec<String>, Error> {
     let tree = build_dep_tree(tokens)?;
-    let resolved = resolve_disjunctions(&tree, uselist, mode, alternative_satisfiable)?;
+    let resolved = resolve_disjunctions(&tree, uselist, mode, alternative_satisfiable, tie_break)?;
     let mut reserialized = Vec::new();
     serialize_dep_tree(&resolved, &mut reserialized);
     use_reduce_flat(&reserialized, uselist, mode)
@@ -848,6 +863,7 @@ fn resolve_disjunctions(
     uselist: &HashSet<String>,
     mode: MatchMode,
     alternative_satisfiable: &mut impl FnMut(&[String]) -> AltPreference,
+    tie_break: &mut TieBreak<'_>,
 ) -> Result<Vec<DepNode>, Error> {
     let mut result: Vec<DepNode> = Vec::new();
     // Real `_create_graph` fully drains the plain `dep_stack` before
@@ -866,16 +882,26 @@ fn resolve_disjunctions(
     while let Some(node) = iter.next() {
         match node {
             DepNode::Group(children) => {
-                let resolved =
-                    resolve_disjunctions(children, uselist, mode, alternative_satisfiable)?;
+                let resolved = resolve_disjunctions(
+                    children,
+                    uselist,
+                    mode,
+                    alternative_satisfiable,
+                    tie_break,
+                )?;
                 result.push(DepNode::Group(resolved));
             }
             DepNode::Str(s) if s.ends_with('?') => {
                 let Some(DepNode::Group(children)) = iter.next() else {
                     return Err(Error::ConditionalNotFollowedByGroup { s: s.to_string() });
                 };
-                let resolved =
-                    resolve_disjunctions(children, uselist, mode, alternative_satisfiable)?;
+                let resolved = resolve_disjunctions(
+                    children,
+                    uselist,
+                    mode,
+                    alternative_satisfiable,
+                    tie_break,
+                )?;
                 result.push(DepNode::Str(s.clone()));
                 result.push(DepNode::Group(resolved));
             }
@@ -885,11 +911,14 @@ fn resolve_disjunctions(
                 };
                 // Real `dep_zapdeps` classifies every alternative into a
                 // `choice_bin` and takes the first entry of the
-                // best-ranked non-empty bin -- not the first *satisfiable*
-                // one. Mirror that: rank all alternatives, keep the first
-                // at the best rank seen (ties -> earlier-listed wins,
-                // which is real's within-bin order).
-                let mut best: Option<(AltPreference, Vec<DepNode>)> = None;
+                // best-ranked non-empty bin. Unlike the pre-slice-2
+                // version, this no longer stops at the first `Installed`
+                // hit: every alternative must be ranked so a tie at the
+                // best bin can be seen and handed to `tie_break` (real's
+                // own in-bin upgrade-preference ordering, `dep_check.py`
+                // soft 738-802) instead of always keeping the
+                // first-listed one.
+                let mut selectable: Vec<(AltPreference, Vec<DepNode>, Vec<String>)> = Vec::new();
                 let mut alt_iter = alternatives.iter();
                 while let Some(alt) = next_alternative(&mut alt_iter) {
                     let alt_nodes = alt?;
@@ -908,21 +937,34 @@ fn resolve_disjunctions(
                         // one (see `is_selectable`).
                         continue;
                     }
-                    if best.as_ref().is_none_or(|(b, _)| rank > *b) {
-                        best = Some((rank, alt_nodes));
-                    }
-                    if rank == AltPreference::Installed {
-                        // Can't beat the top rank -- stop early, matching
-                        // "first entry of the best bin".
-                        break;
-                    }
+                    selectable.push((rank, alt_nodes, flat_atoms));
                 }
-                let chosen = match best {
-                    Some((_, alt_nodes)) => Some(resolve_disjunctions(
+                let best_rank = selectable.iter().map(|(r, _, _)| *r).max();
+                let chosen_nodes = match best_rank {
+                    None => None,
+                    Some(best_rank) => {
+                        let mut tied: Vec<(Vec<DepNode>, Vec<String>)> = selectable
+                            .into_iter()
+                            .filter(|(r, _, _)| *r == best_rank)
+                            .map(|(_, nodes, flat)| (nodes, flat))
+                            .collect();
+                        let winner = if tied.len() == 1 {
+                            0
+                        } else {
+                            let flats: Vec<Vec<String>> =
+                                tied.iter().map(|(_, flat)| flat.clone()).collect();
+                            tie_break(&flats).min(tied.len() - 1)
+                        };
+                        Some(tied.swap_remove(winner).0)
+                    }
+                };
+                let chosen = match chosen_nodes {
+                    Some(alt_nodes) => Some(resolve_disjunctions(
                         &alt_nodes,
                         uselist,
                         mode,
                         alternative_satisfiable,
+                        tie_break,
                     )?),
                     None => None,
                 };
@@ -1069,6 +1111,7 @@ mod tests {
             &HashSet::new(),
             MatchMode::Normal,
             &mut |atoms| pref(atoms == ["dev-libs/b"]),
+            &mut |_| 0,
         )
         .unwrap();
         assert_eq!(result, vec!["dev-libs/b"]);
@@ -1084,6 +1127,7 @@ mod tests {
             &HashSet::new(),
             MatchMode::Normal,
             &mut |_| AltPreference::Unsatisfiable,
+            &mut |_| 0,
         )
         .unwrap();
         assert_eq!(result, vec!["||", "dev-libs/a", "dev-libs/b"]);
@@ -1099,6 +1143,7 @@ mod tests {
             &HashSet::new(),
             MatchMode::Normal,
             &mut |atoms| pref(atoms == ["dev-libs/a", "dev-libs/b"]),
+            &mut |_| 0,
         )
         .unwrap();
         assert_eq!(result, vec!["dev-libs/a", "dev-libs/b"]);
@@ -1114,6 +1159,7 @@ mod tests {
             &HashSet::new(),
             MatchMode::Normal,
             &mut |atoms| pref(atoms == ["dev-libs/c"]),
+            &mut |_| 0,
         )
         .unwrap();
         assert_eq!(result, vec!["dev-libs/c"]);
@@ -1130,6 +1176,7 @@ mod tests {
             &HashSet::new(),
             MatchMode::Normal,
             &mut |atoms: &[String]| pref(atoms.is_empty()),
+            &mut |_| 0,
         )
         .unwrap();
         assert!(result.is_empty());
@@ -1153,24 +1200,86 @@ mod tests {
                     AltPreference::Available
                 }
             },
+            &mut |_| 0,
         )
         .unwrap();
         assert_eq!(result, vec!["dev-libs/b"]);
     }
 
     #[test]
-    fn disjunctive_keeps_the_first_alternative_when_ranks_are_equal() {
-        // Ties stay first-listed (real's within-bin order): both `a` and
-        // `b` `Available` -> `a` wins, unchanged from the pre-rank
-        // "first satisfiable" behaviour.
+    fn disjunctive_defers_a_tie_to_tie_break_and_keeps_first_when_it_says_zero() {
+        // Both `a` and `b` rank `Available` (a real tie) -- `tie_break`
+        // decides, not "first satisfiable". A trivial `&mut |_| 0`
+        // (portage-repo's own pre-slice-2 shim at its two `--root-deps`
+        // call sites) reproduces the old first-listed-wins behaviour.
         let result = use_reduce_flat_disjunctive(
             &toks("|| ( dev-libs/a dev-libs/b )"),
             &HashSet::new(),
             MatchMode::Normal,
             &mut |_| AltPreference::Available,
+            &mut |_| 0,
         )
         .unwrap();
         assert_eq!(result, vec!["dev-libs/a"]);
+    }
+
+    #[test]
+    fn disjunctive_ties_call_tie_break_with_every_tied_alternatives_own_flat_atoms() {
+        // Same tie as above, but `tie_break` picks index 1 ("b") --
+        // proves resolve_disjunctions no longer breaks early on the
+        // first `Installed`/best-rank hit (it used to, pre-slice-2,
+        // which made a real tie-break decision impossible to reach at
+        // all) and that it hands `tie_break` exactly the tied
+        // alternatives' own already-flattened atom lists, in order.
+        let mut seen: Vec<Vec<String>> = Vec::new();
+        let result = use_reduce_flat_disjunctive(
+            &toks("|| ( dev-libs/a dev-libs/b )"),
+            &HashSet::new(),
+            MatchMode::Normal,
+            &mut |_| AltPreference::Available,
+            &mut |alts: &[Vec<String>]| {
+                seen = alts.to_vec();
+                1
+            },
+        )
+        .unwrap();
+        assert_eq!(result, vec!["dev-libs/b"]);
+        assert_eq!(
+            seen,
+            vec![
+                vec!["dev-libs/a".to_string()],
+                vec!["dev-libs/b".to_string()]
+            ]
+        );
+    }
+
+    #[test]
+    fn disjunctive_never_calls_tie_break_for_a_single_alternative_at_the_best_rank() {
+        // "b" alone ranks Installed (beats "a"'s Available) -- there is
+        // no tie, so tie_break must not be consulted at all.
+        let mut called = false;
+        let result = use_reduce_flat_disjunctive(
+            &toks("|| ( dev-libs/a dev-libs/b )"),
+            &HashSet::new(),
+            MatchMode::Normal,
+            &mut |atoms: &[String]| {
+                if atoms == ["dev-libs/b"] {
+                    AltPreference::Installed
+                } else {
+                    AltPreference::Available
+                }
+            },
+            &mut |_| {
+                called = true;
+                0
+            },
+        )
+        .unwrap();
+        assert_eq!(result, vec!["dev-libs/b"]);
+        assert!(
+            !called,
+            "a single best-rank alternative must skip tie_break"
+        );
     }
 
     #[test]
@@ -1180,6 +1289,7 @@ mod tests {
             &set(&["foo"]),
             MatchMode::Normal,
             &mut |_| AltPreference::Unsatisfiable,
+            &mut |_| 0,
         )
         .unwrap();
         assert_eq!(result, vec!["dev-libs/a", "dev-libs/b"]);

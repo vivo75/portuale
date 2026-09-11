@@ -5589,7 +5589,7 @@ def _best_candidate(candidates, prefer_binary=False):
     return best
 
 
-def _resolve_disjunctions(nodes, uselist, alternative_satisfiable):
+def _resolve_disjunctions(nodes, uselist, alternative_satisfiable, tie_break=None):
     """Walks `nodes` (real use_reduce(flat=False, uselist=uselist)'s own
     nested-list shape), picking the first alternative of every "||"
     group whose own flattened atoms `alternative_satisfiable` accepts --
@@ -5621,13 +5621,16 @@ def _resolve_disjunctions(nodes, uselist, alternative_satisfiable):
             alternatives = nodes[i + 1]
             # Real dep_zapdeps classifies every alternative into a
             # choice_bin and takes the first entry of the best-ranked
-            # non-empty bin -- not the first *satisfiable* one. Mirror
-            # that: rank all alternatives (0 = unsatisfiable, 5-8 =
-            # AltPreference.UnsatUseNonInstalled / UnsatUseInstalled /
-            # UnsatUseInGraph / Available, 9 = AltPreference.Installed), keep
-            # the first at the best rank (ties -> earlier-listed, real's
-            # within-bin order). See portage-use-reduce's AltPreference.
-            best = None  # (rank, alt_nodes)
+            # non-empty bin. Unlike the pre-slice-2 version, this no
+            # longer stops at the first rank>=9 (Installed) hit: every
+            # alternative must be ranked so a tie at the best bin can be
+            # seen and handed to `tie_break` (real's own in-bin
+            # upgrade-preference ordering, dep_check.py soft 738-802)
+            # instead of always keeping the first-listed one. See
+            # portage-use-reduce's AltPreference for the rank values
+            # (0 = unsatisfiable, 5-8 = UnsatUseNonInstalled/
+            # UnsatUseInstalled/UnsatUseInGraph/Available, 9 = Installed).
+            selectable = []  # [(rank, alt_nodes, flat_atoms), ...]
             for alt in alternatives:
                 alt_nodes = alt if isinstance(alt, list) else [alt]
                 try:
@@ -5637,13 +5640,21 @@ def _resolve_disjunctions(nodes, uselist, alternative_satisfiable):
                 rank = alternative_satisfiable(flat_atoms)
                 if not rank:
                     continue
-                if best is None or rank > best[0]:
-                    best = (rank, alt_nodes)
-                if rank >= 9:
-                    break
+                selectable.append((rank, alt_nodes, flat_atoms))
+            chosen_nodes = None
+            if selectable:
+                best_rank = max(r for r, _, _ in selectable)
+                tied = [(nodes_, flat) for r, nodes_, flat in selectable if r == best_rank]
+                if len(tied) == 1:
+                    winner = 0
+                else:
+                    flats = [flat for _, flat in tied]
+                    winner = (tie_break or (lambda _: 0))(flats)
+                    winner = max(0, min(winner, len(tied) - 1))
+                chosen_nodes = tied[winner][0]
             chosen = (
-                _resolve_disjunctions(best[1], uselist, alternative_satisfiable)
-                if best is not None
+                _resolve_disjunctions(chosen_nodes, uselist, alternative_satisfiable, tie_break)
+                if chosen_nodes is not None
                 else None
             )
             if chosen is not None:
@@ -5653,7 +5664,9 @@ def _resolve_disjunctions(nodes, uselist, alternative_satisfiable):
                 result.append(alternatives)
             i += 2
         elif isinstance(node, list):
-            result.append(_resolve_disjunctions(node, uselist, alternative_satisfiable))
+            result.append(
+                _resolve_disjunctions(node, uselist, alternative_satisfiable, tie_break)
+            )
             i += 1
         else:
             result.append(node)
@@ -5662,7 +5675,7 @@ def _resolve_disjunctions(nodes, uselist, alternative_satisfiable):
     return result
 
 
-def _use_reduce_flat_disjunctive(depstr, uselist, alternative_satisfiable):
+def _use_reduce_flat_disjunctive(depstr, uselist, alternative_satisfiable, tie_break=None):
     """Real _add_pkg_dep_string's own "||" resolution, considerably
     simplified: of every alternative, picks the first with the highest
     rank `alternative_satisfiable` reports (9 = AltPreference.Installed,
@@ -5675,6 +5688,13 @@ def _use_reduce_flat_disjunctive(depstr, uselist, alternative_satisfiable):
     non-zero rank for an empty list, the same vacuous-truth real portage
     gives a no-cost alternative.
 
+    `tie_break` (default None -> always pick index 0, portage-repo's own
+    "first tied wins" shim) is called only when 2+ alternatives tie at
+    the best selectable rank -- real dep_zapdeps' own in-bin
+    upgrade-preference ordering pass (dep_check.py soft 738-802),
+    factored out to _promote_tied_alternative. Mirrors portage-repo/src/
+    lib.rs's use_reduce_flat_disjunctive's tie_break exactly.
+
     Falls back to keeping the *whole* "||" group exactly as
     use_reduce(flat=True) would have flattened it (literal "||" marker,
     every alternative's own atoms, no selection at all) whenever *no*
@@ -5682,14 +5702,13 @@ def _use_reduce_flat_disjunctive(depstr, uselist, alternative_satisfiable):
     can't currently resolve is never silently dropped, preserving the
     exact "never silently wrong about whether a dependency exists"
     invariant resolve_pretend_graph's own docstring already established
-    for the unconditional-flatten v1 this replaces. Real portage's richer
-    preference order (the in_graph / any_slot / unsat_use_* / other_*
-    bins, backtracking on a later constraint failure) still isn't fully
-    ported -- just the installed-vs-not split that decides the
-    overwhelming majority of real "||" groups. Mirrors
-    portage-repo/src/lib.rs's use_reduce_flat_disjunctive exactly."""
+    for the unconditional-flatten v1 this replaces. Real's other_* bins
+    and the allow_masked second pass still aren't ported; everything
+    else -- the fine unsat_use_* bins and, as of slice 2, in-bin
+    upgrade-preference ordering -- is. Mirrors portage-repo/src/lib.rs's
+    use_reduce_flat_disjunctive exactly."""
     tree = use_reduce(depstr, flat=False, uselist=uselist)
-    resolved = _resolve_disjunctions(tree, uselist, alternative_satisfiable)
+    resolved = _resolve_disjunctions(tree, uselist, alternative_satisfiable, tie_break)
     return use_reduce(paren_enclose(resolved), flat=True, uselist=uselist)
 
 
@@ -6251,6 +6270,125 @@ def _disjunction_preference(
     ):
         return 6
     return 5
+
+
+def _candidate_version(candidate_str, category, package):
+    """Real mydbapi_match_pkgs(atom.without_use)[-1]'s version field,
+    parsed back out of a _highest_available_candidate_ignoring_use
+    candidate string ("{cp}-{version}:{slot}/{sub_slot}::{repo}") -- the
+    per-atom seed of a "||" alternative's own cp_map
+    (_promote_tied_alternative's slice-2 in-bin ordering). Mirrors
+    portage-repo/src/lib.rs's candidate_version."""
+    prefix = f"{category}/{package}-"
+    if not candidate_str.startswith(prefix):
+        return None
+    return candidate_str[len(prefix):].split(":", 1)[0]
+
+
+def _promote_tied_alternative(repos, config, root, entries, constraints, alts):
+    """Real dep_zapdeps' in-bin upgrade-preference ordering pass
+    (dep_check.py soft 738-802), plugged in as _use_reduce_flat_
+    disjunctive's tie_break -- called only when 2+ alternatives tie at
+    the best selectable rank (_disjunction_preference's own return).
+    Real processes choices[1:] (by object identity, in original
+    left-to-right order) against the CURRENT, being-mutated bin list,
+    promoting choice_1 in front of the first choice_2 it beats and
+    stopping the moment it would reach its own current position
+    unpromoted; ported as a literal remove+insert over an id-tagged list
+    (not simplified to a stable sort -- the promotion isn't transitive/
+    associative in general). Returns the WINNING alternative's original
+    index into `alts` (tie_break's own contract). Mirrors portage-repo/
+    src/lib.rs's promote_tied_alternative exactly, including its two
+    documented cuts (minimize_slots, want_update) and its simplified
+    cp_map (no bug-600346 internal-consistency re-check)."""
+
+    def _constraints_for(a):
+        pa = _parse_atom(a)
+        if pa is None:
+            return ()
+        return constraints.get(tuple(pa.cp.split("/", 1)), ())
+
+    choices = []
+    for idx, atoms in enumerate(alts):
+        cp_map = {}
+        for a in atoms:
+            pa = _parse_atom(a)
+            if pa is None or pa.blocker:
+                continue
+            category, package = pa.cp.split("/", 1)
+            cp = pa.cp
+            best = _highest_available_candidate_ignoring_use(
+                repos, a, config, _constraints_for(a)
+            )
+            if best is None:
+                continue
+            version = _candidate_version(best[0], category, package)
+            if version is None:
+                continue
+            existing = cp_map.get(cp)
+            if existing is None or (vercmp(version, existing) or 0) > 0:
+                cp_map[cp] = version
+        choices.append(
+            {
+                "id": idx,
+                "all_installed_slots": all(_atom_cp_installed(root, a) for a in atoms)
+                and all(
+                    _atom_installed_in_slot_of(repos, root, a, config, _constraints_for(a))
+                    for a in atoms
+                ),
+                "all_in_graph": _atoms_all_in_graph(atoms, entries, config),
+                "cp_map": cp_map,
+            }
+        )
+
+    if len(choices) < 2:
+        return 0
+
+    # Real `for choice_1 in choices[1:]:` -- a snapshot of every choice
+    # BUT the first, by identity, taken before any mutation.
+    snapshot_ids = [c["id"] for c in choices[1:]]
+    for id1 in snapshot_ids:
+        pos1 = next((i for i, c in enumerate(choices) if c["id"] == id1), None)
+        if pos1 is None:
+            continue
+        choice1_all_installed_slots = choices[pos1]["all_installed_slots"]
+        choice1_all_in_graph = choices[pos1]["all_in_graph"]
+        choice1_cp_map = choices[pos1]["cp_map"]
+        promote_before = None
+        for pos2, choice2 in enumerate(choices):
+            if choice2["id"] == id1:
+                # Reached choice_1's own current position without a
+                # promotion firing -- real's `if choice_1 is choice_2: break`.
+                break
+            if choice1_all_installed_slots and not choice2["all_installed_slots"]:
+                promote_before = pos2
+                break
+            has_upgrade = False
+            has_downgrade = False
+            for cp, v1 in choice1_cp_map.items():
+                v2 = choice2["cp_map"].get(cp)
+                if v2 is None:
+                    continue
+                diff = vercmp(v1, v2) or 0
+                if diff > 0:
+                    has_upgrade = True
+                elif diff < 0:
+                    has_downgrade = True
+            if (has_upgrade and not has_downgrade) or (
+                choice1_all_in_graph
+                and not choice2["all_in_graph"]
+                and not (has_downgrade and not has_upgrade)
+            ):
+                promote_before = pos2
+                break
+        if promote_before is not None:
+            # `promote_before < pos1` always (the scan breaks the moment
+            # it would reach pos1), so removing pos1 first never shifts
+            # promote_before.
+            choice1 = choices.pop(pos1)
+            choices.insert(promote_before, choice1)
+
+    return choices[0]["id"]
 
 
 def _root_deps_satisfied_atoms(
@@ -12445,8 +12583,15 @@ def resolve_pretend_graph(
                     atoms,
                 )
 
+            def _disj_tie_break(alts):
+                return _promote_tied_alternative(
+                    repos, config, root, entries, slot_constraints, alts
+                )
+
             try:
-                flat_deps = _use_reduce_flat_disjunctive(depstr, use_flags, _disj_pref)
+                flat_deps = _use_reduce_flat_disjunctive(
+                    depstr, use_flags, _disj_pref, _disj_tie_break
+                )
             except InvalidDependString:
                 continue
             # --root-deps: real ESYSROOT-vs-ROOT distinction (see
@@ -13199,8 +13344,11 @@ def _enqueue_dependencies(
             atoms,
         )
 
+    def _disj_tie_break(alts):
+        return _promote_tied_alternative(repos, config, root, entries or [], _dc, alts)
+
     try:
-        flat_deps = _use_reduce_flat_disjunctive(depstr, use_flags, _disj_pref)
+        flat_deps = _use_reduce_flat_disjunctive(depstr, use_flags, _disj_pref, _disj_tie_break)
     except InvalidDependString:
         return
 

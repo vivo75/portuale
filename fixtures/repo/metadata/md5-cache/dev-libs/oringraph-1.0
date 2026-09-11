@@ -1,0 +1,7 @@
+DEFINED_PHASES=-
+DESCRIPTION=fixture: slice 2 in-bin ordering top-level -- RDEPENDs oringraphpulled directly (graphing it) before oringraphtie's own || group ties against it
+EAPI=8
+KEYWORDS=amd64
+RDEPEND=dev-libs/oringraphpulled dev-libs/oringraphtie
+SLOT=0
+_md5_=0000000000000000000000000000000

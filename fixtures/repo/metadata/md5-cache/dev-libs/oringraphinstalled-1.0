@@ -1,0 +1,7 @@
+DEFINED_PHASES=-
+DESCRIPTION=fixture: slice 2 in-bin ordering -- installed, but never pulled into the graph any other way; RDEPENDs a marker so a --deep walk reveals if the || group wrongly chose this (losing) alternative
+EAPI=8
+KEYWORDS=amd64
+RDEPEND=dev-libs/oringraphinstalledmarker
+SLOT=0
+_md5_=0000000000000000000000000000000
