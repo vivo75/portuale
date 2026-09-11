@@ -20,6 +20,147 @@ pub(crate) struct SimilarMask {
     pub(crate) parents: Vec<((String, String, String), String)>,
 }
 
+/// Arguments of [`slot_conflict_mask_choices`].
+pub(crate) struct SlotConflictMaskChoicesArgs<'a> {
+    pub(crate) repos: &'a [RepoConfig],
+    pub(crate) excluded: &'a [String],
+    pub(crate) params: &'a BacktrackParams,
+    pub(crate) slot_pullers: &'a SlotPullers,
+    pub(crate) sc: &'a SlotConflict,
+    pub(crate) config: &'a portage_profile::Config,
+}
+
+/// Ranked mask choices for a slot conflict: each choice masks its target plus
+/// missed-update siblings in one node. The in-graph resolved version is always
+/// a candidate; candidates sort version-desc, then stably by ascending
+/// conflict-atom count, so DFS pops the longest-conflict choice first.
+/// Portage: depgraph.py, _slot_confict_backtrack (note the upstream one-`l`
+/// spelling) + _iter_similar_available.
+///
+/// Candidate matching uses `cat/pkg-ver:slot` (main slot only). Two known
+/// ceilings (ranking-only, neither exercised by any fixture): candidates come
+/// from the recorded `instances`, and conflict-atom membership is version+slot
+/// only.
+pub(crate) fn slot_conflict_mask_choices(args: SlotConflictMaskChoicesArgs<'_>) -> Vec<MaskChoice> {
+    let SlotConflictMaskChoicesArgs {
+        repos,
+        excluded,
+        params,
+        slot_pullers,
+        sc,
+        config,
+    } = args;
+    // Every pulled version is a candidate, highest first.
+    let mut versions: Vec<String> = sc.instances.iter().map(|i| i.version.clone()).collect();
+    versions.sort_by(|a, b| vercmp_ordering(a, b));
+    versions.reverse();
+    versions.dedup();
+    // The resolved version is a candidate even when every parent atom
+    // matches it (masking it avoids a missed update).
+    if !versions.contains(&sc.resolved_version) {
+        versions.push(sc.resolved_version.clone());
+    }
+    // All pulling parents, minus the top-level-argument pseudo-pullers
+    // (empty `cat`), which match every version and never discriminate.
+    let mut all_parents: Vec<((String, String, String), String)> = Vec::new();
+    if let Some(pullers) = slot_pullers.get(&(sc.category.clone(), sc.package.clone())) {
+        for (pc, pp, pv, atom) in pullers {
+            if pc.is_empty() {
+                continue;
+            }
+            let parent = ((pc.clone(), pp.clone(), pv.clone()), atom.clone());
+            if !all_parents.contains(&parent) {
+                all_parents.push(parent);
+            }
+        }
+    }
+    let mut choices: Vec<MaskChoice> = versions
+        .into_iter()
+        .map(|ver| {
+            let candidate = format!("{}/{}-{}:{}", sc.category, sc.package, ver, sc.slot);
+            let parents: Vec<((String, String, String), String)> = all_parents
+                .iter()
+                .filter(|(_, atom)| {
+                    !portage_dep::match_from_list(atom, &[candidate.as_str()])
+                        .is_some_and(|m| !m.is_empty())
+                })
+                .cloned()
+                .collect();
+            // Missed-update siblings join the choice's mask group, each
+            // sharing at least one conflict atom with the target (else
+            // masking it is pointless). Skipped entirely when the target's
+            // own conflict set is empty. Highest version first.
+            let mut similar: Vec<SimilarMask> = Vec::new();
+            if !parents.is_empty() {
+                let party_versions: Vec<&str> =
+                    sc.instances.iter().map(|i| i.version.as_str()).collect();
+                if let Ok(cands) = list_candidates(repos, &sc.category, &sc.package) {
+                    let mut sibs: Vec<&Candidate> = Vec::new();
+                    for c in cands.iter() {
+                        if c.slot != sc.slot || party_versions.contains(&c.version.as_str()) {
+                            continue;
+                        }
+                        if params
+                            .runtime_pkg_mask
+                            .get(&(sc.category.clone(), sc.package.clone()))
+                            .is_some_and(|bucket| {
+                                bucket.iter().any(|m| {
+                                    m.neg
+                                        == format!("!={}/{}-{}", sc.category, sc.package, c.version)
+                                })
+                            })
+                        {
+                            continue;
+                        }
+                        if !is_visible(c, &sc.category, &sc.package, config) {
+                            continue;
+                        }
+                        let cand_str = format!(
+                            "{}/{}-{}:{}/{}::{}",
+                            sc.category, sc.package, c.version, c.slot, c.sub_slot, c.repo_name
+                        );
+                        if excluded.iter().any(|ex| {
+                            matches_config_entry(ex, &cand_str, &sc.category, &sc.package)
+                        }) {
+                            continue;
+                        }
+                        sibs.push(c);
+                    }
+                    sibs.sort_by(|a, b| vercmp_ordering(&b.version, &a.version));
+                    for c in sibs {
+                        let sim_cpv =
+                            format!("{}/{}-{}:{}", sc.category, sc.package, c.version, sc.slot);
+                        let subset: Vec<((String, String, String), String)> = parents
+                            .iter()
+                            .filter(|(_, atom)| {
+                                !portage_dep::match_from_list(atom, &[sim_cpv.as_str()])
+                                    .is_some_and(|m| !m.is_empty())
+                            })
+                            .cloned()
+                            .collect();
+                        if subset.is_empty() {
+                            continue;
+                        }
+                        similar.push(SimilarMask {
+                            target: (sc.category.clone(), sc.package.clone(), c.version.clone()),
+                            parents: subset,
+                        });
+                    }
+                }
+            }
+            MaskChoice {
+                target: (sc.category.clone(), sc.package.clone(), ver),
+                parents,
+                similar,
+            }
+        })
+        .collect();
+    // Stable ascending length sort, so equal-length choices keep
+    // version-desc order.
+    choices.sort_by_key(|c| c.parents.len());
+    choices
+}
+
 /// One pass's outcome in `_backtrack_depgraph` terms. Every variant carries
 /// the overlay-merged working copy (`base` for the mask kinds, `params` for
 /// `Config`): a pass that folded flips or dropped pins AND hit a
@@ -221,6 +362,18 @@ pub(crate) fn circular_child_candidate(child: &CircularDepChild) -> String {
 }
 
 impl BacktrackParams {
+    /// The root node's params: the caller's suggestion flags, everything
+    /// else default.
+    pub(crate) fn initial(req: &ResolveRequest) -> Self {
+        BacktrackParams {
+            autounmask_suggest_keywords: req.autounmask_suggest_keywords,
+            autounmask_suggest_use: req.autounmask_suggest_use,
+            autounmask_suggest_license: req.autounmask_suggest_license,
+            autounmask_suggest_masks: req.autounmask_suggest_masks,
+            ..Default::default()
+        }
+    }
+
     /// Effective per-`cat/pkg` constraint bucket for readers: the
     /// solvable-conflict positives plus the rendered `runtime_pkg_mask`
     /// negatives (applied as an order-independent conjunction). Built once

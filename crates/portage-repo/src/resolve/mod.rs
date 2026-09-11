@@ -1,5 +1,6 @@
 mod autounmask;
 mod backtrack_params;
+mod backtracker;
 mod blockers;
 mod complete_graph;
 mod conflict_use_display;
@@ -31,6 +32,7 @@ mod slot_expand;
 mod withhold;
 pub(crate) use autounmask::*;
 pub use backtrack_params::*;
+pub(crate) use backtracker::*;
 pub use blockers::*;
 pub use complete_graph::*;
 pub use conflict_use_display::*;
