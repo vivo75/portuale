@@ -1,0 +1,21 @@
+
+Performing Global Updates
+(Could take a couple of minutes if you have a lot of binary packages.)
+  .='update pass'  *='binary update'  #='/var/db update'  @='/var/db move'
+  s='/var/db SLOT move'  %='binary move'  S='binary SLOT move'
+  p='update /etc/portage/package.*'
+/tmp/stage/fixtures/repo/profiles/updates/2Q-2024..
+
+
+
+These are the packages that would be merged, in order:
+
+Calculating dependencies ... done!
+Dependency resolution took 0.44 s (backtrack: 0/20).
+
+[ebuild  N     ] dev-libs/newpkg-1.0 to /tmp/root-E4-slotatom-world-set/
+[ebuild  N     ] dev-libs/upgradepkg-2.0 to /tmp/root-E4-slotatom-world-set/
+[ebuild  N     ] dev-libs/systempkg-1.0 to /tmp/root-E4-slotatom-world-set/
+[ebuild     U  ] app-misc/bdprov-3 [2] to /tmp/root-E4-slotatom-world-set/
+[ebuild  N     ] dev-libs/withdeps-1.0 to /tmp/root-E4-slotatom-world-set/
+[blocks B      ] app-misc/bdprov:0 ("app-misc/bdprov:0" is soft blocking app-misc/bdprov-3)
