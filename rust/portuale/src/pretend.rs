@@ -1847,6 +1847,99 @@ fn abort_outcome_to_json(outcome: &portage_repo::ResolveOutcome) -> String {
     }
 }
 
+/// Backlog #19 Slice 5: real `_show_circular_deps` (`depgraph.py:10425`)
+/// as a callable unit — the `* Error: circular dependencies:` block, the
+/// `Change USE:` suggestion-or-advisory branch, and the
+/// `large_cycle_count` trailer. Faithful transcription of the `writemsg`
+/// sequence (see the call sites for the re-display note); every edge is
+/// buildtime by construction. Prints only — every call site returns
+/// `ExitCode::from(1)` itself, except the gated cycle-abort path, which
+/// prints this *before* the autounmask section (real `display_problems`
+/// order, `:11113` before `:11140`) and then continues into it.
+#[allow(clippy::too_many_arguments)]
+fn print_circular_block(
+    cycle: &[String],
+    color: &Colorizer,
+    repos: &[portage_repo::RepoConfig],
+    config: &portage_profile::Config,
+    autounmask_use_changes: &[portage_repo::AutounmaskChange],
+    entries: &[portage_repo::GraphEntry],
+    large_cycle_count: bool,
+) {
+    let prefix = color.c("BAD", " * ");
+    eprint!("\n{prefix}Error: circular dependencies:\n\n");
+    // `_prepare_circular_dep_message`: `<pkg> depends on`, then each
+    // subsequent `<pkg> (buildtime)` at a growing one-space indent,
+    // closing back on the first package.
+    let mut lines: Vec<String> = vec![format!("{} depends on", cycle[0])];
+    for (pos, pkg) in cycle.iter().enumerate().skip(1) {
+        lines.push(format!("{}{pkg} (buildtime)", " ".repeat(pos)));
+    }
+    lines.push(format!(
+        "{}{} (buildtime)",
+        " ".repeat(cycle.len()),
+        cycle[0]
+    ));
+    eprint!("{}", lines.join("\n"));
+
+    // Real `_show_circular_deps` (`depgraph.py:10448`): when
+    // `circular_dependency_handler._find_suggestions` turns up a concrete
+    // `Change USE:` fix, print it instead of the generic advisory.
+    // `+flag` red / `-flag` blue / `any of` bold, exactly as real
+    // `colorize`s them. The `large_cycle_count` trailer below fires on
+    // the same branch real gates it on (suggestions shown). Fixtures
+    // `usecyclea` (bare suggestion), `gpcyclec` (hard grandparent clash
+    // disqualifies it), and `fucyclec` (conditional grandparent clash
+    // keeps it with `followup_change`) pin all three outcomes.
+    let suggestions =
+        portage_repo::circular_dep_solutions(cycle, repos, config, autounmask_use_changes, entries);
+    if suggestions.is_empty() {
+        eprint!(
+            "\n\n{prefix}Note that circular dependencies can often be avoided by temporarily\n\
+             {prefix}disabling USE flags that trigger optional dependencies.\n"
+        );
+    } else {
+        eprint!("\n\nIt might be possible to break this cycle\n");
+        if suggestions.len() == 1 {
+            eprintln!("by applying the following change:");
+        } else {
+            eprintln!(
+                "by applying {} the following changes:",
+                color.c("bold", "any of")
+            );
+        }
+        for s in &suggestions {
+            let changes: Vec<String> = s
+                .changes
+                .iter()
+                .map(|(f, on)| {
+                    if *on {
+                        color.c("red", &format!("+{f}"))
+                    } else {
+                        color.c("blue", &format!("-{f}"))
+                    }
+                })
+                .collect();
+            eprintln!("- {} (Change USE: {})", s.parent_cpv, changes.join(" "));
+            if s.followup {
+                eprint!(" (This change might require USE changes on parent packages.)");
+            }
+        }
+        eprintln!("\nNote that this change can be reverted, once the package has been installed.");
+        // Real `circular_dependency_handler.large_cycle_count`
+        // (`depgraph.py:10458`): shown only with a concrete
+        // suggestion, like real (the trailer lives inside its
+        // `if suggestions:` branch).
+        if large_cycle_count {
+            eprint!(
+                "\nNote that the dependency graph contains a lot of cycles.\n\
+                 Several changes might be required to resolve all cycles.\n\
+                 Temporarily changing some use flag for all packages might be the better option.\n"
+            );
+        }
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn print_json(
     entries: &[GraphEntry],
@@ -11106,6 +11199,33 @@ pub fn run(args: &[String]) -> ExitCode {
         println!();
     }
 
+    // Backlog #19 Slice 5: with the gate on, an aborted cycle prints its
+    // circular block HERE -- before the autounmask section -- matching
+    // real `display_problems()` order (`_show_circular_deps` at
+    // `depgraph.py:11113`, `_display_autounmask` at `:11140`). Flow then
+    // continues into the autounmask rendering below (USE block, notice,
+    // exit 1), which is exactly the fourth-shape oracle (spec §4d). A
+    // masked/unsat abort prints no circular block at all (real abandons
+    // the walk before serialization ever runs); gate off keeps the
+    // legacy position below.
+    if portage_repo::abort_path_enabled()
+        && let portage_repo::ResolveOutcome::Aborted {
+            reason: portage_repo::AbortReason::UnserializableCycle { members: _ },
+            ..
+        } = &result.outcome
+        && let Some(cycle) = result.circular_deps.first()
+    {
+        print_circular_block(
+            cycle,
+            &color,
+            &repos,
+            &config,
+            &result.autounmask_use_changes,
+            &result.entries,
+            result.large_cycle_count,
+        );
+    }
+
     // Real `depgraph.py::_display_autounmask` (`:10625`), the
     // `unstable_keyword_msg` half: `--autounmask` accepted a
     // `KEYWORDS`-alone mask to make the graph resolve, so the implicit
@@ -11473,82 +11593,27 @@ pub fn run(args: &[String]) -> ExitCode {
     // The shortest cycle drives `_prepare_circular_dep_message`; every
     // edge is build-time by construction, so every priority label is
     // `(buildtime)`.
-    if let Some(cycle) = result.circular_deps.first() {
-        let prefix = color.c("BAD", " * ");
-        eprint!("\n{prefix}Error: circular dependencies:\n\n");
-        // `_prepare_circular_dep_message`: `<pkg> depends on`, then each
-        // subsequent `<pkg> (buildtime)` at a growing one-space indent,
-        // closing back on the first package.
-        let mut lines: Vec<String> = vec![format!("{} depends on", cycle[0])];
-        for (pos, pkg) in cycle.iter().enumerate().skip(1) {
-            lines.push(format!("{}{pkg} (buildtime)", " ".repeat(pos)));
-        }
-        lines.push(format!(
-            "{}{} (buildtime)",
-            " ".repeat(cycle.len()),
-            cycle[0]
-        ));
-        eprint!("{}", lines.join("\n"));
-
-        // Real `_show_circular_deps` (`depgraph.py:10448`): when
-        // `circular_dependency_handler._find_suggestions` turns up a
-        // concrete `Change USE:` fix, print it instead of the generic
-        // advisory. `+flag` red / `-flag` blue / `any of` bold, exactly as
-        // real `colorize`s them. The `large_cycle_count` trailer below
-        // fires on the same branch real gates it on (suggestions shown).
-        let suggestions = portage_repo::circular_dep_solutions(
-            cycle,
-            &repos,
-            &config,
-            &result.autounmask_use_changes,
-            &result.entries,
+    // Slice 5 routing for the legacy site: gate-on aborts never reach
+    // here with work left (a cycle abort printed above, before the
+    // autounmask section; a masked/unsat abort prints no circular block
+    // at all), so this serves gate-off and Complete resolves only — the
+    // pre-Slice-5 print-and-exit-1 shape, byte-identical.
+    let gated_abort = portage_repo::abort_path_enabled()
+        && matches!(
+            &result.outcome,
+            portage_repo::ResolveOutcome::Aborted { .. }
         );
-        if suggestions.is_empty() {
-            eprint!(
-                "\n\n{prefix}Note that circular dependencies can often be avoided by temporarily\n\
-                 {prefix}disabling USE flags that trigger optional dependencies.\n"
+    if let Some(cycle) = result.circular_deps.first() {
+        if !gated_abort {
+            print_circular_block(
+                cycle,
+                &color,
+                &repos,
+                &config,
+                &result.autounmask_use_changes,
+                &result.entries,
+                result.large_cycle_count,
             );
-        } else {
-            eprint!("\n\nIt might be possible to break this cycle\n");
-            if suggestions.len() == 1 {
-                eprintln!("by applying the following change:");
-            } else {
-                eprintln!(
-                    "by applying {} the following changes:",
-                    color.c("bold", "any of")
-                );
-            }
-            for s in &suggestions {
-                let changes: Vec<String> = s
-                    .changes
-                    .iter()
-                    .map(|(f, on)| {
-                        if *on {
-                            color.c("red", &format!("+{f}"))
-                        } else {
-                            color.c("blue", &format!("-{f}"))
-                        }
-                    })
-                    .collect();
-                eprintln!("- {} (Change USE: {})", s.parent_cpv, changes.join(" "));
-                if s.followup {
-                    eprint!(" (This change might require USE changes on parent packages.)");
-                }
-            }
-            eprintln!(
-                "\nNote that this change can be reverted, once the package has been installed."
-            );
-            // Real `circular_dependency_handler.large_cycle_count`
-            // (`depgraph.py:10458`): shown only with a concrete
-            // suggestion, like real (the trailer lives inside its
-            // `if suggestions:` branch).
-            if result.large_cycle_count {
-                eprint!(
-                    "\nNote that the dependency graph contains a lot of cycles.\n\
-                     Several changes might be required to resolve all cycles.\n\
-                     Temporarily changing some use flag for all packages might be the better option.\n"
-                );
-            }
         }
         return ExitCode::from(1);
     }

@@ -2962,13 +2962,6 @@ def test_abort_path_masked_unsat_suppresses_merge_list(
     assert "circular dependencies" not in rust.stderr
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="backlog #19 Slice 5: abort-masked-cycle's MaskedDep outcome "
-    "must also suppress the circular block (real abandons the walk before "
-    "serialization ever runs -- docs/abort-path-spec.md); the list "
-    "suppression itself ships in Slice 4",
-)
 @pytest.mark.parametrize("atom", ["dev-libs/abort-masked-cycle"])
 @pytest.mark.parametrize("mode", _ABORT_MODES, ids=["pv", "pvt", "columns", "debug"])
 def test_abort_path_masked_cycle_hides_circular_block(
@@ -2976,9 +2969,8 @@ def test_abort_path_masked_cycle_hides_circular_block(
 ):
     """Slice 3 precedence oracle: masked dep + hard cycle in one top --
     real abandons the walk before serialization ever runs, so no list and
-    no circular block either. Slice 4 suppresses the list; suppressing the
-    circular block for a MaskedDep outcome is Slice 5's error-block
-    wiring."""
+    no circular block either. Slice 4 suppresses the list; Slice 5
+    suppresses the circular block for a MaskedDep outcome."""
     args = [*mode, atom]
     rust = _run([str(emerge_binary)], args, fixture_env)
     py = _run(emerge_pretend_python, args, fixture_env)
@@ -2990,25 +2982,17 @@ def test_abort_path_masked_cycle_hides_circular_block(
     assert "circular dependencies" not in rust.stderr
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="pre-existing resolver ordering gap (not #19): Rust admits a "
-    "NoVisibleCandidate dependency earlier than Python (maskeddep at index "
-    "1 vs 2 -- visible in --json merge_order and the --debug Stage-1 "
-    "digraph dump), so split-stream comparison diverges on the -mid "
-    "atoms; the abort rendering itself is identical",
-)
 @pytest.mark.parametrize("atom", ["dev-libs/abort-masked-mid", "dev-libs/abort-unsat-mid"])
 def test_abort_debug_digraph_dump_order_matches(
     atom, emerge_binary, emerge_pretend_python, fixture_env
 ):
     """The `--debug` Stage-1 digraph dump and `--json` merge_order expose
-    entry-admission order, and the two implementations admit the
-    NoVisibleCandidate entry at different positions for the `-mid` atoms
-    (Rust: NVC second; Python: NVC third -- e.g. maskeddep merge_order 1
-    vs 2). Everything the abort path renders (list suppression, counters,
-    error blocks, exit codes) already matches; this pins the remaining
-    order-only divergence for a future resolver-ordering slice."""
+    entry-admission order: both implementations admit the
+    NoVisibleCandidate entry second for the `-mid` atoms (e.g. maskeddep
+    merge_order 1) and render installed-node labels with an empty version
+    (never a bare "None" in a cpv-shaped label). Unmarked in Slice 5 --
+    the only divergence ever observed here was the label formatting,
+    fixed on the Python side to match Rust's `unwrap_or("")`."""
     for args in (["--pretend", "--debug", atom],):
         rust = _run([str(emerge_binary)], args, fixture_env)
         py = _run(emerge_pretend_python, args, fixture_env)
@@ -3068,24 +3052,37 @@ def test_abort_path_cycle_shows_reduced_list_only(
     assert "circular dependencies" in rust.stderr
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="backlog #19 Slice 5: the autounmask USE-changes block must "
-    "follow the circular block (real display_problems order -- "
-    "docs/abort-path-spec.md); portuale's error-block order for the "
-    "coinciding autounmask+cycle shape is still Slice-3's",
-)
 @pytest.mark.parametrize(
-    "atom", ["dev-libs/abort-au-cycle", "dev-libs/abort-au-restart-cycle"]
+    "atom,mode",
+    [
+        pytest.param(a, m, id=f"{mid}-{a.split('/')[1]}")
+        for a in [
+            "dev-libs/abort-au-cycle",
+            "dev-libs/abort-au-restart-cycle",
+        ]
+        for (mid, m) in [
+            ("pv", ["--pretend", "-pv"]),
+            ("pvt", ["--pretend", "-pvt"]),
+            ("columns", ["--pretend", "-pv", "--columns"]),
+        ]
+    ]
+    + [
+        pytest.param(
+            "dev-libs/abort-au-cycle",
+            ["--pretend", "--debug"],
+            id="debug-abort-au-cycle",
+        ),
+    ],
 )
-@pytest.mark.parametrize("mode", _ABORT_MODES, ids=["pv", "pvt", "columns", "debug"])
 def test_abort_path_au_cycle_orders_use_block_after_circular(
     atom, mode, emerge_binary, emerge_pretend_python, fixture_env
 ):
     """Fourth shape (spec §4d): autounmask changes coinciding with the
     cycle -- the same stuck remainder, the circular block, and then the
-    USE-changes block. Slice 4 renders the remainder; the block order is
-    Slice 5's error-block wiring."""
+    USE-changes block. Slice 4 renders the remainder; Slice 5 orders the
+    circular block before the autounmask section (real display_problems
+    order). The `--debug` au-restart narration stays xfailed below
+    (pre-flip USE staleness, unrelated to rendering)."""
     args = [*mode, atom]
     rust = _run([str(emerge_binary)], args, fixture_env)
     py = _run(emerge_pretend_python, args, fixture_env)
@@ -3098,6 +3095,33 @@ def test_abort_path_au_cycle_orders_use_block_after_circular(
     assert rust.stderr.index("circular dependencies") < rust.stderr.index(
         "USE changes are necessary"
     )
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="pre-existing --debug narration gap (not #19's rendering): the "
+    "reference bakes entry USE before the backward-cascade flip, so its "
+    "Child: line shows the pre-flip flags (USE=\"cascade\") while real "
+    "3.0.81.3 and the Rust walk show post-flip (USE=\"-cascade\") -- the "
+    "abort list, counters, error blocks, and exit code already match",
+)
+@pytest.mark.parametrize("atom", ["dev-libs/abort-au-restart-cycle"])
+@pytest.mark.parametrize("mode", [["--pretend", "--debug"]], ids=["debug"])
+def test_abort_debug_child_line_shows_post_flip_use(
+    atom, mode, emerge_binary, emerge_pretend_python, fixture_env
+):
+    """The `--debug` resolution-walk narration names every visited dep;
+    for a backward-cascade flip the Child: USE must reflect the flipped
+    state (live oracle:
+    `fixtures/abort-captures/dev-libs_abort-au-restart-cycle.pretend-debug.stdout`
+    line 47, `USE="-cascade"`). The merge-list rendering is unaffected
+    (pinned passing in
+    test_abort_path_au_cycle_orders_use_block_after_circular)."""
+    args = [*mode, atom]
+    rust = _run([str(emerge_binary)], args, fixture_env)
+    py = _run(emerge_pretend_python, args, fixture_env)
+    assert rust.returncode == py.returncode == 1
+    assert rust.stdout == py.stdout and rust.stderr == py.stderr
 
 
 @pytest.mark.parametrize(
@@ -3632,15 +3656,16 @@ def test_or_group_other_installed_some_bin_beats_plain_other(
     individually lack a visible tree candidate each); `omissingelsepartly`
     (the never-chosen alternative) is dropped entirely. Backlog #19's
     abort path then flips the exit code to 1 (a `NoVisibleCandidate`
-    dependency of this merge-bound package) -- independent of which
-    alternative #22 picked, matching `test_any_of_group_falls_back_to_
-    every_alternative_when_none_satisfiable`'s identical interaction."""
+    dependency of this merge-bound package) and Slice 4 suppresses the
+    merge list -- independent of which alternative #22 picked, matching
+    `test_any_of_group_falls_back_to_every_alternative_when_none_satisfiable`'s
+    identical interaction."""
     args = ["--pretend", "dev-libs/opartly"]
     rust = _run([str(emerge_binary)], args, fixture_env)
     py = _run(emerge_pretend_python, args, fixture_env)
     assert rust.returncode == 1 and py.returncode == 1
     assert rust.stdout == py.stdout and rust.stderr == py.stderr
-    assert rust.stdout.splitlines() == ['[ebuild  N     ] dev-libs/opartly-1.0 ']
+    assert rust.stdout.splitlines() == []
     assert rust.stderr.splitlines() == [
         '!!! no visible ebuild for dependency "dev-libs/opartlya"',
         '!!! no visible ebuild for dependency "dev-libs/opartlyb"',
@@ -3668,16 +3693,16 @@ def test_or_group_other_installed_any_slot_bin_beats_plain_other(
     digraph`'s `_entry_candidate` built a malformed `"cat/pkg-"` cpv
     string and crashed `match_from_list` downstream -- fixed to mirror
     `portage-repo/src/merge_order.rs::entry_version`'s `Option<&str>`
-    exactly (`None` for `NoVisibleCandidate`). Backlog #19's abort path
-    then flips the exit code to 1 (a `NoVisibleCandidate` dependency of
-    this merge-bound package) -- independent of which alternative #22
-    picked."""
+     exactly (`None` for `NoVisibleCandidate`). Backlog #19's abort path
+     then flips the exit code to 1 (a `NoVisibleCandidate` dependency of
+     this merge-bound package) and Slice 4 suppresses the merge list --
+     independent of which alternative #22 picked."""
     args = ["--pretend", "dev-libs/ofuzzy"]
     rust = _run([str(emerge_binary)], args, fixture_env)
     py = _run(emerge_pretend_python, args, fixture_env)
     assert rust.returncode == 1 and py.returncode == 1
     assert rust.stdout == py.stdout and rust.stderr == py.stderr
-    assert rust.stdout.splitlines() == ['[ebuild  N     ] dev-libs/ofuzzy-1.0 ']
+    assert rust.stdout.splitlines() == []
     assert rust.stderr.splitlines() == [
         '!!! no visible ebuild for dependency "dev-libs/ofuzzyinstalled"',
     ]

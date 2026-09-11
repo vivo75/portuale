@@ -89,11 +89,12 @@ can't grow into these incrementally:
   2026-09-10 (a dependency atom matching masked-only ebuilds reports
   real's "All ebuilds … have been masked" block plus its
   `(dependency required by …)` chain instead of the bare
-  `!!! no visible ebuild` line; see `what-this-proves.md`). What stays
-  is the *abort* half: real abandons the whole resolve on an unfixable
-  masked dep (no merge list, exit 1); portuale keeps its "report, don't
-  enforce" merge list and exit 0. Same gated-abort-path gap as #19
-  (DFS-partial truncation) — parked there.
+  `!!! no visible ebuild` line; see `what-this-proves.md`). The *abort*
+  half **shipped 2026-09-11** with backlog #19 (Slices 1–5): real's
+  abandon (no merge list, exit 1) is ported dual-language behind
+  `PORTUALE_ABORT_PATH` (`=0` keeps the legacy report-don't-enforce
+  list + exit 0); `dev-libs/abort-masked-{mid,last}` + `maskneedpkg` /
+  `kwneedpkg` pin it.
 - **Slot-collision notice's remaining cuts** — `pkg_use_display` for a
   package with non-default USE **shipped 2026-09-05**: every instance
   header and every shown parent line now carries that package's own
@@ -149,10 +150,17 @@ can't grow into these incrementally:
   cycles" trailer with suggestions, and the cycle members re-display as
   their own flat list between the merge list and the error block;
   `dev-libs/cyc4a`–`cyc4d` four-ring fixture, verified live against real
-  3.0.82.2; see `what-this-proves.md`). Still cut: the tree *nesting*
-  (`[nomerge]` marking, node duplication -- portuale's tree model
-  dedups by design), the partial flat list + cumulative counters (needs
-  #19's abandon path), and backtrack-masking members out of the cycle.
+  3.0.82.2; see `what-this-proves.md`). The partial flat list +
+  cumulative counters **shipped 2026-09-11** with backlog #19 (Slices
+  1–5): an unserializable cycle renders the stuck remainder as the only
+  list (flat lines, unique-package counters) with the circular block +
+  suggestions + `large_cycle_count` trailer after it; a masked/unsat
+  abort in the same graph suppresses the circular block (walk died
+  before serialization — oracle `abort-masked-cycle`); an autounmask
+  coincidence prints circular-then-USE (real `display_problems` order).
+  Still cut: the tree *nesting* (`[nomerge]` marking, node duplication
+  -- portuale's tree model dedups by design; row-counted `Total:` goes
+  with it), and backtrack-masking members out of the cycle.
   The *conditional* `followup_change` grandparent
   variant has a fixture now (`dev-libs/fucyclea`/`fucycleb`/`fucyclec`,
   see `what-this-proves.md`); the *hard*-clash case has had one since
@@ -303,11 +311,45 @@ can't grow into these incrementally:
   re-check leaves the `flag?`-gated dep out. The Slice 1 captures were
   also re-verified with a clean `/etc/make.local` (the host file had
   leaked `--binpkg-respect-use=y` → `--autounmask-use=n`): unchanged.
-  Also noticed (pre-existing, not introduced here): `--json` on
-  `abort-masked-mid`/`abort-unsat-mid` orders the `no_visible_candidate`
-  entry differently in Rust (BFS admission position) and Python (after
-  the sibling leaves) — invisible in the text modes, which are
-  byte-identical; the contract suite never diffs `--json` on those.
+   Also noticed (pre-existing, not introduced here): `--json` on
+   `abort-masked-mid`/`abort-unsat-mid` orders the `no_visible_candidate`
+   entry differently in Rust (BFS admission position) and Python (after
+   the sibling leaves) — invisible in the text modes, which are
+   byte-identical; the contract suite never diffs `--json` on those.
+   (Slice 5 correction: that order gap never existed — it was a stale
+   binary + a `"None"`-vs-`""` installed-node label artifact, both
+   resolved; `--json` merge_order is byte-identical on those atoms, and
+   the label renders `""` on both sides like Rust's `unwrap_or("")`.)
+
+- **DFS-partial abort path (#19) — Slices 4+5 (rendering + error-block
+  wiring) shipped 2026-09-11, closing the item.** Slice 4 renders the
+  outcome's partial instead of `entries` on every mode (`-p`/`-pv`/
+  `-pvt`/`--columns`/`--debug`/`--json`): masked/unsat show no list and
+  no `Total:`, cycles show the flat remainder with counters over its
+  rows; the duplicate re-display is skipped on a gated cycle abort;
+  `--json` gains the `aborted` reason field with `entries` as the
+  partial list, exit 1 in every format. Slice 5 wires the consumers:
+  the circular block prints before the autounmask section on a gated
+  cycle abort (real `display_problems` order) and is suppressed on a
+  masked/unsat abort; disclosures re-emit in full-entries order (stderr
+  sequence unchanged — their move into the `AbortReason` block is
+  deferred, content identical). The 24 Slice-1 xfails are plain passing
+  tests; remaining strict xfails: the two spec-§4e autounmask findings
+  (not #19) and one `--debug` narration (Python trace shows the
+  pre-flip USE on a backward-cascade Child: line, real+Rust post-flip).
+  Deliberate cuts carried forward: tree nesting + `[nomerge]` +
+  row-counted `Total:` (dedup-by-design, Gate G0.2); first-failure
+  choice in BFS admission order; installed parents' unsatisfied deps
+  never abort (real's `_initially_unsatisfied_deps` rescue).
+  **Gate G0.1 reconciliation (Slice 5.6):** exit 1 covers the three
+  unfixable abandon shapes (masked/unsat/cycle — the resolver cannot
+  proceed, no list exists). Slot conflicts keep the standing
+  informational exit 0: the backtrack loop reconciles the solvable ones
+  (resolution *succeeds* with notices) and unsolvable residuals print
+  with actionable suggestions — a completed resolve with diagnostics,
+  not an abandonment; 6 CASES entries pin exit 0, and flipping them is
+  out of #19's scope (real exits 1 there via a different
+  `select_files` failure — a documented divergence, as before).
 
 ### B / C / D / E — complete; residual documented cuts only
 
@@ -637,11 +679,12 @@ merge, unmerge, world management, all real. The gap to a full drop-in is:
    both languages — `minimize_slots` and the `conflict_downgrade`/
    `installed_downgrade`/`circular_atom` guards stay deliberate,
    documented cuts, the latter two folded into #23's own scope). What's
-   left is depth on other pieces already built: richer
-   `_slot_conflict_backtrack` mask-target analysis, the DFS-partial
-   merge-list truncation, and the `_serialize_tasks` frontier-timing at
-   real-tree scale (L0 merge-order: ~19 probes, correct set / slightly-off
-   sequence).
+    left is depth on other pieces already built: richer
+    `_slot_conflict_backtrack` mask-target analysis (slot conflicts keep
+    the standing informational exit 0 -- reconciled explicitly under the
+    #19 Slice-5 entry above, not flipped), and the `_serialize_tasks`
+    frontier-timing at real-tree scale (L0 merge-order: ~19 probes,
+    correct set / slightly-off sequence).
 2. **The Part 2 tails** — F's `--info` host-state
    half, G's brush re-pin, §J's `--solver=` real-tree bugs (E's fetch
    ordering and §J's notices/markers/doc cuts shipped as Tier-1

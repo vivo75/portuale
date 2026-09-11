@@ -9314,7 +9314,10 @@ def _node_label(entry, root, installed):
     """Real _emerge.Package.__str__ (Package.py:568) minus the ANSI colour:
     (cat/pkg-ver[-build_id]:slot/sub_slot::repo, <state>)."""
     category, package = entry[0], entry[1]
-    ver = _entry_version(entry)
+    # None for a NoVisibleCandidate entry renders as "" (Rust's
+    # entry_version(e).unwrap_or("") -- a bare "None" must never leak
+    # into a cpv-shaped label).
+    ver = _entry_version(entry) or ""
     prov = entry[8] if isinstance(entry[8], dict) else {}
     if installed:
         slot, sub_slot = _read_vdb_slot(root, category, package, ver)
@@ -21992,6 +21995,81 @@ def run(args):
             )
             print(color.c("INFORM", atom_line), file=sys.stderr)
 
+    def _print_circular_block(cycle):
+        # Backlog #19 Slice 5: real _show_circular_deps (depgraph.py:10425)
+        # as a callable unit -- the error block, the Change USE:
+        # suggestion-or-advisory branch, and the large_cycle_count trailer.
+        # Prints only; every call site returns 1 itself, except the gated
+        # cycle-abort path, which prints this *before* the autounmask
+        # section (real display_problems order, :11113 before :11140) and
+        # then continues into it. Mirrors pretend.rs's print_circular_block.
+        prefix = color.c("BAD", " * ")
+        sys.stderr.write(f"\n{prefix}Error: circular dependencies:\n\n")
+        lines = [f"{cycle[0]} depends on"]
+        for pos, pkg in enumerate(cycle[1:], start=1):
+            lines.append(f"{' ' * pos}{pkg} (buildtime)")
+        lines.append(f"{' ' * len(cycle)}{cycle[0]} (buildtime)")
+        sys.stderr.write("\n".join(lines))
+
+        suggestions = _circular_dep_solutions(
+            cycle,
+            find_repos(_config_root()),
+            config,
+            result["autounmask_use_changes"],
+            result["entries"],
+        )
+        if not suggestions:
+            sys.stderr.write(
+                f"\n\n{prefix}Note that circular dependencies can often be avoided by temporarily\n"
+                f"{prefix}disabling USE flags that trigger optional dependencies.\n"
+            )
+        else:
+            sys.stderr.write("\n\nIt might be possible to break this cycle\n")
+            if len(suggestions) == 1:
+                sys.stderr.write("by applying the following change:\n")
+            else:
+                sys.stderr.write(
+                    f"by applying {color.c('bold', 'any of')} the following changes:\n"
+                )
+            for s in suggestions:
+                changes = " ".join(
+                    color.c("red", f"+{f}") if on else color.c("blue", f"-{f}")
+                    for f, on in s["changes"]
+                )
+                sys.stderr.write(f"- {s['parent_cpv']} (Change USE: {changes})\n")
+                if s["followup"]:
+                    sys.stderr.write(
+                        " (This change might require USE changes on parent packages.)"
+                    )
+            sys.stderr.write(
+                "\nNote that this change can be reverted, once the package has been installed.\n"
+            )
+            # Real circular_dependency_handler.large_cycle_count: shown
+            # only with a concrete suggestion, like real. Mirrors
+            # pretend.rs.
+            if result["large_cycle_count"]:
+                sys.stderr.write(
+                    "\nNote that the dependency graph contains a lot of cycles.\n"
+                    "Several changes might be required to resolve all cycles.\n"
+                    "Temporarily changing some use flag for all packages might be the better option.\n"
+                )
+
+    # Backlog #19 Slice 5: with the gate on, an aborted cycle prints its
+    # circular block HERE -- before the autounmask section -- matching
+    # real display_problems() order (_show_circular_deps at
+    # depgraph.py:11113, _display_autounmask at :11140). Flow then
+    # continues into the autounmask rendering below (USE block, notice,
+    # exit 1), which is exactly the fourth-shape oracle (spec section 4d).
+    # A masked/unsat abort prints no circular block at all (real abandons
+    # the walk before serialization ever runs); gate off keeps the legacy
+    # position below. Mirrors pretend.rs.
+    if (
+        abort_path_enabled()
+        and result["outcome"][0] == "aborted"
+        and result["outcome"][1][0] == "unserializable-cycle"
+        and result["circular_deps"]
+    ):
+        _print_circular_block(result["circular_deps"][0])
     # Real _display_autounmask _writemsg order: keyword, mask, USE, license.
     _print_autounmask_block(
         "keyword changes",
@@ -22013,6 +22091,8 @@ def run(args):
     # below do not run. Mirrors pretend.rs.
     if autounmask_only:
         return 0
+
+    # Real _display_autounmask _writemsg order: keyword, mask, USE, license.
 
     # Real action_build: backtrack_depgraph returns success=False
     # whenever _have_autounmask_changes() (autounmask had to touch
@@ -22245,58 +22325,17 @@ def run(args):
     # concrete suggestion, like real). Every cycle edge is build-time by
     # construction, so every priority label is "(buildtime)". Mirrors
     # pretend.rs.
+    #
+    # Slice 5 routing for the legacy site: gate-on aborts never reach
+    # here with work left (a cycle abort printed above, before the
+    # autounmask section; a masked/unsat abort prints no circular block
+    # at all), so this serves gate-off and complete resolves only -- the
+    # pre-Slice-5 print-and-exit-1 shape, byte-identical. Mirrors
+    # pretend.rs.
+    _gated_abort = abort_path_enabled() and result["outcome"][0] == "aborted"
     if result["circular_deps"]:
-        cycle = result["circular_deps"][0]
-        prefix = color.c("BAD", " * ")
-        sys.stderr.write(f"\n{prefix}Error: circular dependencies:\n\n")
-        lines = [f"{cycle[0]} depends on"]
-        for pos, pkg in enumerate(cycle[1:], start=1):
-            lines.append(f"{' ' * pos}{pkg} (buildtime)")
-        lines.append(f"{' ' * len(cycle)}{cycle[0]} (buildtime)")
-        sys.stderr.write("\n".join(lines))
-
-        suggestions = _circular_dep_solutions(
-            cycle,
-            find_repos(_config_root()),
-            config,
-            result["autounmask_use_changes"],
-            result["entries"],
-        )
-        if not suggestions:
-            sys.stderr.write(
-                f"\n\n{prefix}Note that circular dependencies can often be avoided by temporarily\n"
-                f"{prefix}disabling USE flags that trigger optional dependencies.\n"
-            )
-        else:
-            sys.stderr.write("\n\nIt might be possible to break this cycle\n")
-            if len(suggestions) == 1:
-                sys.stderr.write("by applying the following change:\n")
-            else:
-                sys.stderr.write(
-                    f"by applying {color.c('bold', 'any of')} the following changes:\n"
-                )
-            for s in suggestions:
-                changes = " ".join(
-                    color.c("red", f"+{f}") if on else color.c("blue", f"-{f}")
-                    for f, on in s["changes"]
-                )
-                sys.stderr.write(f"- {s['parent_cpv']} (Change USE: {changes})\n")
-                if s["followup"]:
-                    sys.stderr.write(
-                        " (This change might require USE changes on parent packages.)"
-                    )
-            sys.stderr.write(
-                "\nNote that this change can be reverted, once the package has been installed.\n"
-            )
-            # Real circular_dependency_handler.large_cycle_count: shown
-            # only with a concrete suggestion, like real. Mirrors
-            # pretend.rs.
-            if result["large_cycle_count"]:
-                sys.stderr.write(
-                    "\nNote that the dependency graph contains a lot of cycles.\n"
-                    "Several changes might be required to resolve all cycles.\n"
-                    "Temporarily changing some use flag for all packages might be the better option.\n"
-                )
+        if not _gated_abort:
+            _print_circular_block(result["circular_deps"][0])
         return 1
 
     # Backlog #19 abort-path outcome mapping (real actions.py:460-462:
