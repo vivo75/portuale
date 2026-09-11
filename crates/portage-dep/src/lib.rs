@@ -904,6 +904,29 @@ mod parse_cache_tests {
 }
 
 #[cfg(test)]
+mod without_use_tests {
+    use super::*;
+
+    // Cuts at the first `[` (the USE block is trailing, PMS 8.3.5); no block: unchanged.
+    #[test]
+    fn strips_trailing_use_block_leaving_the_rest_untouched() {
+        assert_eq!(without_use("dev-libs/foo[bar]"), "dev-libs/foo");
+        assert_eq!(
+            without_use(">=dev-libs/foo-1.2.3-r1:2/3=[bar,-baz]"),
+            ">=dev-libs/foo-1.2.3-r1:2/3="
+        );
+        assert_eq!(
+            without_use("net-libs/rest:0/0::gentoo[x y]"),
+            "net-libs/rest:0/0::gentoo"
+        );
+        assert_eq!(without_use("sys-apps/portage"), "sys-apps/portage");
+        assert_eq!(without_use(""), "");
+        // A malformed double-bracket string cuts at the first `[` too, like Portage.
+        assert_eq!(without_use("cat/pkg[flag][other]"), "cat/pkg");
+    }
+}
+
+#[cfg(test)]
 mod wildcard_tests {
     use super::*;
 
