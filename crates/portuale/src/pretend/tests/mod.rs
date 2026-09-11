@@ -362,6 +362,7 @@ mod attrs;
 mod blockers;
 mod conflicts;
 mod env_config;
+mod json;
 mod news;
 mod prompt;
 mod remote;
