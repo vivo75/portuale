@@ -724,39 +724,52 @@ fn next_alternative<'a>(
 ///
 /// Every bin's choices have `all_available = True` except bins 5-8
 /// (`other_*`, reached when some atom is only available via a masked /
-/// force / circular path), which real still *returns* on its `allow_masked`
-/// second pass. Portuale deliberately keeps its never-drop invariant
-/// instead: bins 5-8 are never selected, so a `"||"` alternative whose
-/// only satisfiable members are `other_*` falls back to the literal
-/// `"||"` group exactly as `use_reduce_flat` would flatten it (never
-/// silently resolving a dependency to a masked/forced choice portuale
-/// can't ground -- the same `resolve_disjunctions` rule that already
-/// applies to a fully-unsatisfiable group).
+/// force path), which real still *returns* on its `allow_masked` second
+/// pass -- ported as of slice 2/4 of backlog #22
+/// (`docs/022-agent-task-22-zapdeps.fable.md`): `resolve_disjunctions`
+/// runs a first pass considering only [`is_selectable`](AltPreference::is_selectable)
+/// ranks (real's `allow_masked=False`), and only when THAT finds nothing
+/// at all does a second pass consider the `other_*` bins too (real's
+/// `allow_masked=True`) -- see `resolve_disjunctions`'s own doc comment.
+/// One exception: portuale's own bolt-on circular-self-dep guard (no
+/// real equivalent) stays hard-`Unsatisfiable` in both passes -- see
+/// `portage-repo::disjunction_preference`'s own doc comment.
 ///
 /// The enum is ordered by real bin ordinal (higher discriminant = more
 /// preferred), with one extra lowest sentinel [`AltPreference::Unsatisfiable`]
-/// for "no atom in this alternative resolves at all". Deriving `Ord`
-/// over the variants gives selection exactly real's bin-order: `Installed`
-/// (bin 0) > `Available` (bin 1) > `UnsatUseInGraph` (2) >
-/// `UnsatUseInstalled` (3) > `UnsatUseNonInstalled` (4), with bins 5-8
-/// `other_*` and the sentinel never selectable.
+/// for "no atom in this alternative resolves at all, not even into an
+/// `other_*` bin" (portuale's circular-self-dep guard only, since real's
+/// own classification always lands an atom in *some* bin). Deriving
+/// `Ord` over the variants gives selection exactly real's bin-order in
+/// EITHER pass: `Installed` (bin 0) > `Available` (bin 1) >
+/// `UnsatUseInGraph` (2) > `UnsatUseInstalled` (3) >
+/// `UnsatUseNonInstalled` (4) > `OtherInstalled` (5) >
+/// `OtherInstalledSome` (6) > `OtherInstalledAnySlot` (7) > `Other` (8).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default)]
 pub enum AltPreference {
-    /// No atom in this alternative resolves to anything (the old
-    /// `false`), *or* every atom only has an `other_*`-class availability
-    /// (real bins 5-8). Portuale never selects this: `resolve_disjunctions`
-    /// falls back to the literal `"||"` group when every alternative ranks
-    /// here.
+    /// No atom in this alternative resolves to anything at all -- real
+    /// has no equivalent state (see the enum's own doc comment); this is
+    /// portuale's circular-self-dep guard only. Never selected, in
+    /// either pass.
     #[default]
     Unsatisfiable,
-    /// Real `other` (bin 8): satisfiable only through a mask/force or
-    /// circular fallback. Never selected in portuale (see the enum doc).
+    /// Real `other` (bin 8): every atom resolves to *something*, but at
+    /// least one only via a masked/forced USE change. Second-pass-only
+    /// (`is_selectable` is false).
     Other,
-    /// Real `other_installed_any_slot` (bin 7). Never selected in portuale.
+    /// Real `other_installed_any_slot` (bin 7): no atom's full match
+    /// exists at all (not even ignoring `[use]`), but some atom's bare
+    /// `cat/pkg` is installed in some slot (bug 522652's fuzzy match).
+    /// Second-pass-only.
     OtherInstalledAnySlot,
-    /// Real `other_installed_some` (bin 6). Never selected in portuale.
+    /// Real `other_installed_some` (bin 6): like `OtherInstalledAnySlot`,
+    /// but at least one (not all) atom's FULL vdb match (version/slot/
+    /// `[use]`) succeeds. Second-pass-only.
     OtherInstalledSome,
-    /// Real `other_installed` (bin 5). Never selected in portuale.
+    /// Real `other_installed` (bin 5): every non-blocker atom's FULL vdb
+    /// match succeeds, yet the alternative still isn't `all_available`
+    /// (its own `atom.without_use` tree match fails -- typically masked
+    /// or keyword-rejected). Second-pass-only.
     OtherInstalled,
     /// Real `unsat_use_non_installed` (bin 4): every atom's `cat/pkg` is
     /// resolvable and its USE-deps are unmasked, but no single candidate
@@ -788,11 +801,12 @@ pub enum AltPreference {
 }
 
 impl AltPreference {
-    /// Whether real `dep_zapdeps`'s selection loop would ever pick an
-    /// alternative ranked this way *without* its `allow_masked` second
-    /// pass. Portuale's whole point is to be stricter than that second
-    /// pass (it never resolves to a masked/forced `other_*` choice), so
-    /// this is exactly the bins portuale can select.
+    /// Whether real `dep_zapdeps`'s selection loop would pick an
+    /// alternative ranked this way on its FIRST pass (`allow_masked =
+    /// False`, `dep_check.py` soft 812-816) -- real's own
+    /// `choice.all_available` gate. `resolve_disjunctions` only falls
+    /// through to considering the non-selectable `other_*` bins (its own
+    /// second pass) when no alternative anywhere is `is_selectable`.
     pub fn is_selectable(self) -> bool {
         matches!(
             self,
@@ -911,14 +925,15 @@ fn resolve_disjunctions(
                 };
                 // Real `dep_zapdeps` classifies every alternative into a
                 // `choice_bin` and takes the first entry of the
-                // best-ranked non-empty bin. Unlike the pre-slice-2
-                // version, this no longer stops at the first `Installed`
-                // hit: every alternative must be ranked so a tie at the
-                // best bin can be seen and handed to `tie_break` (real's
-                // own in-bin upgrade-preference ordering, `dep_check.py`
-                // soft 738-802) instead of always keeping the
-                // first-listed one.
-                let mut selectable: Vec<(AltPreference, Vec<DepNode>, Vec<String>)> = Vec::new();
+                // best-ranked non-empty bin, in TWO passes (`allow_masked`
+                // False then True, `dep_check.py` soft 812-816): every
+                // alternative is ranked regardless, a real tie at the
+                // best bin is handed to `tie_break` (in-bin
+                // upgrade-preference ordering, soft 738-802), and the
+                // second pass -- considering the non-`is_selectable`
+                // `other_*` bins -- only runs when the first finds
+                // NOTHING at all.
+                let mut ranked: Vec<(AltPreference, Vec<DepNode>, Vec<String>)> = Vec::new();
                 let mut alt_iter = alternatives.iter();
                 while let Some(alt) = next_alternative(&mut alt_iter) {
                     let alt_nodes = alt?;
@@ -928,16 +943,21 @@ fn resolve_disjunctions(
                         continue;
                     };
                     let rank = alternative_satisfiable(&flat_atoms);
-                    if !rank.is_selectable() {
-                        // `Unsatisfiable` plus real's `other_*` bins (5-8)
-                        // -- portuale's deliberate never-pick-them cut. A
-                        // `||` group whose only satisfiable-looking
-                        // alternatives are masked/forced stays the literal
-                        // `"||"` group, exactly like a fully-unsatisfiable
-                        // one (see `is_selectable`).
-                        continue;
-                    }
-                    selectable.push((rank, alt_nodes, flat_atoms));
+                    ranked.push((rank, alt_nodes, flat_atoms));
+                }
+                let mut selectable: Vec<&(AltPreference, Vec<DepNode>, Vec<String>)> = ranked
+                    .iter()
+                    .filter(|(r, _, _)| r.is_selectable())
+                    .collect();
+                if selectable.is_empty() {
+                    // Real's `allow_masked = True` pass: still never
+                    // picks portuale's own circular-self-dep guard (no
+                    // real equivalent -- see `AltPreference::Unsatisfiable`'s
+                    // own doc comment), only a genuine `other_*` bin.
+                    selectable = ranked
+                        .iter()
+                        .filter(|(r, _, _)| *r != AltPreference::Unsatisfiable)
+                        .collect();
                 }
                 let best_rank = selectable.iter().map(|(r, _, _)| *r).max();
                 let chosen_nodes = match best_rank {
@@ -946,7 +966,7 @@ fn resolve_disjunctions(
                         let mut tied: Vec<(Vec<DepNode>, Vec<String>)> = selectable
                             .into_iter()
                             .filter(|(r, _, _)| *r == best_rank)
-                            .map(|(_, nodes, flat)| (nodes, flat))
+                            .map(|(_, nodes, flat)| (nodes.clone(), flat.clone()))
                             .collect();
                         let winner = if tied.len() == 1 {
                             0

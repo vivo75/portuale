@@ -564,12 +564,13 @@ merge, unmerge, world management, all real. The gap to a full drop-in is:
    built: richer `_slot_conflict_backtrack` mask-target analysis, the
    still-finer `dep_zapdeps` bins (`all_available`/`all_use_satisfied`
    split, `unsat_use_*` with the bug-515584 unmask gate,
-   `all_installed_slots`, and in-bin upgrade-preference ordering all
-   shipped 2026-09-11, one shared probe + tie-break pair both languages
-   — `other_*` bins, the `allow_masked` second pass, `minimize_slots`,
-   and the downgrade/circular guards remain), the DFS-partial merge-list
-   truncation, and the `_serialize_tasks` frontier-timing at real-tree
-   scale (L0 merge-order: ~19 probes, correct set / slightly-off
+   `all_installed_slots`, in-bin upgrade-preference ordering, and the
+   `other_*` bins + `allow_masked` two-pass return all shipped
+   2026-09-11, one shared probe + tie-break pair both languages —
+   `minimize_slots` and the downgrade/circular guards remain), the
+   DFS-partial merge-list truncation, and the `_serialize_tasks`
+   frontier-timing at real-tree scale (L0 merge-order: ~19 probes,
+   correct set / slightly-off
    sequence).
 2. **The Part 2 tails** — F's `--info` host-state
    half, G's brush re-pin, §J's `--solver=` real-tree bugs (E's fetch

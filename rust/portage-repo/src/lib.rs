@@ -8628,6 +8628,64 @@ fn atom_cp_installed(root: &Path, atom_str: &str) -> bool {
     !installed_candidates(root, &atom.category, &atom.package).is_empty()
 }
 
+/// Real `vardb.match(atom)` for one `||` alternative atom, the FULL
+/// match (`dep_check.py` soft 715-722, the `not all_available` "other_*"
+/// classification -- slice 4 of backlog #22): unlike `atom_cp_installed`
+/// (cp-level, deliberately blind to `[use]`), this checks the atom's
+/// version/slot AND its `[use]` deps against the matching installed
+/// version's own recorded vdb `USE` -- real's `built`-package semantics
+/// (`_iuse_implicit_built`, bug #640318: the `is_valid_flag` domain is
+/// the vdb `IUSE` unioned with the package's own recorded `USE`, so a
+/// flag the ebuild has since dropped from `IUSE` but the installed copy
+/// was built with still counts), same pattern as
+/// `dependency_avoid_update_candidate`'s own USE-dep filter. No blocker/
+/// virtual exemption here (unlike `atom_cp_installed`): real's own
+/// `all_installed`/`some_installed` loop only ever calls this for
+/// `if not atom.blocker`-filtered atoms (the caller's job), and this
+/// exact code path has no virtual short-circuit in real either.
+fn atom_matches_installed(root: &Path, atom_str: &str, config: &portage_profile::Config) -> bool {
+    let Some(atom) = portage_dep::parse_atom(atom_str) else {
+        return false;
+    };
+    let installed = installed_candidates(root, &atom.category, &atom.package);
+    if installed.is_empty() {
+        return false;
+    }
+    let cpv_strs: Vec<String> = installed
+        .iter()
+        .map(|(v, s, ss)| {
+            format!(
+                "{}/{}-{v}:{s}/{ss}::{}",
+                atom.category,
+                atom.package,
+                installed_pkg_repo(root, &atom.category, &atom.package, v)
+            )
+        })
+        .collect();
+    let refs: Vec<&str> = cpv_strs.iter().map(String::as_str).collect();
+    let Some(matched) = portage_dep::match_from_list(atom_str, &refs) else {
+        return false;
+    };
+    if matched.is_empty() {
+        return false;
+    }
+    let Some(use_deps) = atom.use_deps.as_ref().filter(|d| !d.is_empty()) else {
+        return true;
+    };
+    let by_str: HashMap<&str, &(String, String, String)> =
+        refs.iter().copied().zip(installed.iter()).collect();
+    matched.into_iter().any(|m| {
+        let Some((version, _slot, _sub)) = by_str.get(m) else {
+            return false;
+        };
+        let vdb_iuse = read_vdb_flag_set(root, &atom.category, &atom.package, version, "IUSE");
+        let vdb_use = read_vdb_flag_set(root, &atom.category, &atom.package, version, "USE");
+        let mut valid = valid_iuse(&vdb_iuse, config);
+        valid.extend(vdb_use.iter().cloned());
+        portage_dep::use_deps_satisfied(use_deps, &valid, &vdb_use)
+    })
+}
+
 /// Real `dep_zapdeps`'s `all_installed_slots` predicate (`dep_check.py`
 /// soft 599-607, `slot_map`/`avail_slot`): whether the *slot* of the
 /// best USE-ignoring candidate for `atom_str`
@@ -8786,6 +8844,12 @@ fn disjunction_preference(
     let mut all_available = true;
     let mut all_use_satisfied = true;
     let mut all_use_unmasked = true;
+    // Portuale's own bolt-on (real has no equivalent): once true, the
+    // alternative is hard `Unsatisfiable` in BOTH passes below, never
+    // promoted into one of the `other_*` bins the way a genuine
+    // `!all_available` atom is -- selecting it even as a last resort
+    // would let a package self-satisfy its own not-yet-resolved atom.
+    let mut circular = false;
     for a in atoms {
         let circular_self = portage_dep::parse_atom(a).is_some_and(|at| {
             at.blocker == portage_dep::Blocker::None
@@ -8794,6 +8858,7 @@ fn disjunction_preference(
         });
         if circular_self {
             all_available = false;
+            circular = true;
             break;
         }
         let stripped = portage_dep::without_use(a);
@@ -8830,7 +8895,47 @@ fn disjunction_preference(
         }
     }
     if !all_available {
-        return portage_use_reduce::AltPreference::Unsatisfiable;
+        if circular {
+            return portage_use_reduce::AltPreference::Unsatisfiable;
+        }
+        // Real's `other_installed`/`other_installed_some`/
+        // `other_installed_any_slot`/`other` classification
+        // (dep_check.py soft 715-724): reached when some atom has no
+        // tree candidate at all, even ignoring USE. Blockers are
+        // excluded from the fold entirely (real's own `if not
+        // atom.blocker:` guard), not merely vacuously satisfied.
+        let non_blocker: Vec<&String> = atoms
+            .iter()
+            .filter(|a| {
+                portage_dep::parse_atom(a)
+                    .is_some_and(|at| at.blocker == portage_dep::Blocker::None)
+            })
+            .collect();
+        let all_installed = non_blocker
+            .iter()
+            .all(|a| atom_matches_installed(root, a, config));
+        if all_installed {
+            return portage_use_reduce::AltPreference::OtherInstalled;
+        }
+        let some_installed = non_blocker
+            .iter()
+            .any(|a| atom_matches_installed(root, a, config));
+        if some_installed {
+            return portage_use_reduce::AltPreference::OtherInstalledSome;
+        }
+        // Real's own fuzzy cp-level fallback (soft 720-724, bug 522652)
+        // -- plain `vardb.match(Atom(atom.cp))`, deliberately NOT
+        // `atom_cp_installed` (that helper's `virtual/` zero-cost
+        // exemption doesn't apply to this specific real code path).
+        let any_cp_installed = non_blocker.iter().any(|a| {
+            portage_dep::parse_atom(a)
+                .is_some_and(|at| !installed_candidates(root, &at.category, &at.package).is_empty())
+        });
+        return if any_cp_installed {
+            portage_use_reduce::AltPreference::OtherInstalledAnySlot
+        } else {
+            portage_use_reduce::AltPreference::Other
+        };
     }
     if all_use_satisfied {
         // Real `dep_zapdeps` choice bin 0 -- the single list
@@ -8855,11 +8960,13 @@ fn disjunction_preference(
     // `!all_use_satisfied`: real's `unsat_use_*` bins -- the alternative
     // exists but can only be merged with USE changes. First the
     // bug-515584 gate (soft 705): if the flags that would have to change
-    // sit in `use.mask` / `use.force`, the choice is demoted to `other`
-    // (never selectable); otherwise it keeps the fine-bin ordering
-    // `unsat_use_in_graph` > `unsat_use_installed` > `unsat_use_non_installed`.
+    // sit in `use.mask` / `use.force`, the choice is demoted to plain
+    // `other` (dep_check.py soft 705-706 -- no installed-variant
+    // sub-classification, unlike the `!all_available` branch above);
+    // otherwise it keeps the fine-bin ordering `unsat_use_in_graph` >
+    // `unsat_use_installed` > `unsat_use_non_installed`.
     if !all_use_unmasked {
-        return portage_use_reduce::AltPreference::Unsatisfiable;
+        return portage_use_reduce::AltPreference::Other;
     }
     if atoms_all_in_graph(atoms, entries, config) {
         return portage_use_reduce::AltPreference::UnsatUseInGraph;
@@ -23338,22 +23445,30 @@ mod tests {
     #[test]
     fn root_deps_feeds_running_root_satisfiability_into_disjunctive_branch_selection() {
         // rootdepsorpkg's own BDEPEND is `|| ( rootdepsnonexistent
-        // rootdepsprovider )` -- neither branch has an ebuild anywhere
-        // in the fixture repo tree, so without `--root-deps` no branch
-        // can be selected via ordinary tree-visibility at all: this
-        // portuale's own pre-existing, unrelated `portage_use_reduce`
-        // simplification (real `dep_zapdeps()`'s own "fall back to the
-        // *last* alternative" isn't ported) leaves the whole `||` group
-        // unresolved instead, so *both* branches end up queued and
-        // reported individually -- unaffected by this fix, since
-        // `root_deps_running_root` is `None` here.
+        // rootdepsprovider )` -- neither branch has an ebuild anywhere in
+        // the fixture repo tree, so `all_available` is false for both
+        // even without `--root-deps`. `rootdepsprovider` IS installed in
+        // the fixture vdb (used as the target root here regardless of
+        // `root_deps_running_root`), so real `dep_zapdeps`'s `other_*`
+        // classification (backlog #22 slice 4) files it in `other_installed`
+        // (every non-blocker atom's full vdb match succeeds) while
+        // `rootdepsnonexistent` -- matched nowhere at all -- falls to
+        // plain `other`; `other_installed` outranks `other`, so the `||`
+        // group resolves to `rootdepsprovider` alone via the
+        // `allow_masked` second pass (real's own two-pass return),
+        // dropping `rootdepsnonexistent` entirely rather than reporting
+        // it as a spurious failure alongside a genuinely-satisfied dep.
+        // `rootdepsprovider` still reports `NoVisibleCandidate` here --
+        // a pre-existing, slice-4-unrelated quirk (this atom's own
+        // resolution path checks tree visibility before an install
+        // shortcut for a BDEPEND with no root-deps feed-in); it is NOT
+        // itself queued as a build target as a `PretendOutcome::New` and
+        // is dropped by the trailing `root_deps_satisfied_atoms` filter
+        // once `root_deps_running_root` IS given, per the second
+        // assertion below.
         assert_eq!(
             graph_root_deps("dev-libs/rootdepsorpkg", None),
             vec![
-                (
-                    "dev-libs/rootdepsnonexistent".to_string(),
-                    PretendOutcome::NoVisibleCandidate
-                ),
                 (
                     "dev-libs/rootdepsprovider".to_string(),
                     PretendOutcome::NoVisibleCandidate
@@ -23365,7 +23480,8 @@ mod tests {
                     }
                 )
             ],
-            "without --root-deps, neither branch resolves, so both are reported"
+            "other_installed outranks other even without --root-deps, so only the \
+             genuinely-installed branch is ever queued"
         );
 
         // With `--root-deps` pointed at a running root where

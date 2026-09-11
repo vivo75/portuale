@@ -473,6 +473,21 @@ CASES = [
         0,
     ),
     (
+        "recursion: || group other_installed bin (allow_masked 2nd pass) beats plain other when nothing is all_available",
+        ["--pretend", "dev-libs/omasked"],
+        0,
+    ),
+    (
+        "recursion: || group other_installed_some bin -- a bracketed AND-alternative partly installed beats plain other",
+        ["--pretend", "dev-libs/opartly"],
+        0,
+    ),
+    (
+        "recursion: || group other_installed_any_slot bin (bug 522652 fuzzy cp match) beats plain other",
+        ["--pretend", "dev-libs/ofuzzy"],
+        0,
+    ),
+    (
         "recursion: || group resolves a USE-unsatisfiable-but-unmasked alternative (unsat_use_non_installed bin) and autounmask flips the flag",
         ["--pretend", "dev-libs/unsatuseor"],
         1,
@@ -2375,15 +2390,19 @@ def test_root_deps_disjunctive_branch_selection_matches_between_implementations(
 ):
     """--root-deps branch-selection feed-in: rootdepsorpkg's own BDEPEND
     is "|| ( dev-libs/rootdepsnonexistent dev-libs/rootdepsprovider )" --
-    neither branch has an ebuild anywhere in the fixture repo tree, so
-    without --root-deps no branch resolves at all and *both* are reported
-    as unresolvable dependencies (portuale's own pre-existing "leave an
-    unresolved || group's branches all in flat_deps" fallback, unrelated
-    to --root-deps itself). With --root-deps, rootdepsprovider's own
-    running-root satisfaction lets the closure select that branch
-    specifically, so neither branch is reported at all: rootdepsprovider
-    because it's already satisfied, rootdepsnonexistent because it was
-    never selected in the first place."""
+    neither branch has an ebuild anywhere in the fixture repo tree.
+    rootdepsprovider IS installed in the fixture vdb (used as the target
+    root regardless of --root-deps), so even WITHOUT --root-deps, real
+    dep_zapdeps' other_installed bin (backlog #22 slice 4) already beats
+    rootdepsnonexistent's plain other -- the || group resolves to
+    rootdepsprovider alone (dropping rootdepsnonexistent entirely), which
+    still reports "no visible ebuild" since it has no tree candidate at
+    all (a pre-existing, slice-4-unrelated quirk of this atom's own
+    resolution path). WITH --root-deps, rootdepsprovider's own
+    running-root satisfaction lets the closure accept it as fully
+    Available instead, so the trailing root_deps_satisfied_atoms filter
+    drops it from the queue entirely too -- nothing reported either
+    side."""
     env = dict(fixture_env)
     env["PORTAGE_RUNNING_ROOT"] = env["ROOT"]
     args_without = ["--pretend", "dev-libs/rootdepsorpkg"]
@@ -3149,6 +3168,99 @@ def test_or_group_in_bin_ordering_promotes_all_installed_slots_over_any_slot(
     assert rust.stdout.splitlines() == ["[ebuild  N     ] dev-libs/oranyslot-1.0 "]
     assert "oranyslotalt" not in rust.stdout, (
         "the already-installed slot must satisfy the || group with no new merge at all"
+    )
+
+
+def test_or_group_other_installed_bin_beats_plain_other_in_the_allow_masked_pass(
+    emerge_binary, emerge_pretend_python, fixture_env
+):
+    """Backlog #22 slice 4 (`docs/022-agent-task-22-zapdeps.fable.md` §4,
+    dep_check.py soft 715-724 + the two-pass `allow_masked` return, soft
+    812-816): when NO alternative anywhere is `all_available`, real
+    still picks one instead of falling back to the literal `||` --
+    preferring `other_installed` (every non-blocker atom's FULL vdb
+    match, version/slot/`[use]`, succeeds) over plain `other`.
+    dev-libs/omasked's RDEPEND is `|| ( dev-libs/omaskedmissing
+    dev-libs/omaskedinstalled )`: `omaskedmissing` exists nowhere at all
+    (plain `other`); `omaskedinstalled` is masked in the tree
+    (`profiles/package.mask`) but genuinely installed (`other_installed`).
+    Before this slice, both ranked hard `Unsatisfiable` and the literal
+    `||` fallback enqueued -- and reported -- both as `no visible
+    ebuild`; now only `omaskedinstalled` is selected (still reported,
+    since it likewise has no visible tree candidate -- a pre-existing,
+    slice-4-unrelated quirk), and `omaskedmissing` is dropped entirely."""
+    args = ["--pretend", "dev-libs/omasked"]
+    rust = _run([str(emerge_binary)], args, fixture_env)
+    py = _run(emerge_pretend_python, args, fixture_env)
+    assert rust.returncode == 0 and py.returncode == 0
+    assert rust.stdout == py.stdout and rust.stderr == py.stderr
+    assert rust.stdout.splitlines() == ['[ebuild  N     ] dev-libs/omasked-1.0 ']
+    assert rust.stderr == ""
+    assert "omaskedmissing" not in rust.stdout, (
+        "the plain-other alternative must never be the one selected"
+    )
+
+
+def test_or_group_other_installed_some_bin_beats_plain_other(
+    emerge_binary, emerge_pretend_python, fixture_env
+):
+    """Backlog #22 slice 4, `other_installed_some` (dep_check.py soft
+    715-719): a bracketed AND-alternative where only SOME (not all) of
+    its own atoms match the vdb still outranks plain `other`.
+    dev-libs/opartly's RDEPEND is `|| ( ( dev-libs/opartlya
+    dev-libs/opartlyb ) dev-libs/omissingelsepartly )`: neither
+    `opartlya` nor `opartlyb` has a tree ebuild (so the bracketed pair
+    isn't `all_available`), but `opartlya` alone is installed
+    (`some_installed`, not `all_installed`) -- `other_installed_some`
+    beats `omissingelsepartly`'s plain `other`. Both `opartlya` and
+    `opartlyb` are reported (the CHOSEN alternative's own atoms still
+    individually lack a visible tree candidate each); `omissingelsepartly`
+    (the never-chosen alternative) is dropped entirely."""
+    args = ["--pretend", "dev-libs/opartly"]
+    rust = _run([str(emerge_binary)], args, fixture_env)
+    py = _run(emerge_pretend_python, args, fixture_env)
+    assert rust.returncode == 0 and py.returncode == 0
+    assert rust.stdout == py.stdout and rust.stderr == py.stderr
+    assert rust.stdout.splitlines() == ['[ebuild  N     ] dev-libs/opartly-1.0 ']
+    assert rust.stderr.splitlines() == [
+        '!!! no visible ebuild for dependency "dev-libs/opartlya"',
+        '!!! no visible ebuild for dependency "dev-libs/opartlyb"',
+    ]
+    assert "omissingelsepartly" not in rust.stdout and "omissingelsepartly" not in rust.stderr, (
+        "the never-chosen plain-other alternative must not be reported"
+    )
+
+
+def test_or_group_other_installed_any_slot_bin_beats_plain_other(
+    emerge_binary, emerge_pretend_python, fixture_env
+):
+    """Backlog #22 slice 4, `other_installed_any_slot` (dep_check.py soft
+    720-724, bug 522652's fuzzy cp-level match): when an atom's FULL vdb
+    match fails (wrong version/slot) but the bare `cat/pkg` is installed
+    in some other version, that still outranks plain `other`.
+    dev-libs/ofuzzy's RDEPEND is `|| ( =dev-libs/ofuzzyinstalled-2.0
+    dev-libs/ofuzzymissing )`: `ofuzzyinstalled` is installed at 1.0, but
+    the atom demands exactly `=...-2.0` (a version that exists nowhere,
+    not the tree, not the vdb) -- its FULL vdb match fails, but the bare
+    cp is installed, so it's `other_installed_any_slot`; `ofuzzymissing`
+    is plain `other`. This also exercises a real, independent Python-only
+    robustness gap this fixture exposed: `_entry_version` returned `""`
+    (not `None`) for a `NoVisibleCandidate` entry, so `_build_merge_
+    digraph`'s `_entry_candidate` built a malformed `"cat/pkg-"` cpv
+    string and crashed `match_from_list` downstream -- fixed to mirror
+    `portage-repo/src/merge_order.rs::entry_version`'s `Option<&str>`
+    exactly (`None` for `NoVisibleCandidate`)."""
+    args = ["--pretend", "dev-libs/ofuzzy"]
+    rust = _run([str(emerge_binary)], args, fixture_env)
+    py = _run(emerge_pretend_python, args, fixture_env)
+    assert rust.returncode == 0 and py.returncode == 0
+    assert rust.stdout == py.stdout and rust.stderr == py.stderr
+    assert rust.stdout.splitlines() == ['[ebuild  N     ] dev-libs/ofuzzy-1.0 ']
+    assert rust.stderr.splitlines() == [
+        '!!! no visible ebuild for dependency "dev-libs/ofuzzyinstalled"',
+    ]
+    assert "ofuzzymissing" not in rust.stdout and "ofuzzymissing" not in rust.stderr, (
+        "the never-chosen plain-other alternative must not be reported"
     )
 
 
@@ -5958,28 +6070,35 @@ def test_installed_dependency_use_dep_flag_only_in_built_use_is_kept(
 
 
 def test_any_of_group_falls_back_to_every_alternative_when_none_satisfiable(
-    emerge_binary, fixture_env
+    emerge_binary, emerge_pretend_python, fixture_env
 ):
     """dev-libs/anyofunresolvable's own RDEPEND is
     "|| ( dev-libs/doesnotexist-anywhere dev-libs/alsodoesnotexist-anywhere )"
-    -- NEITHER alternative has a visible candidate anywhere, so real
-    "||" resolution (use_reduce_flat_disjunctive, portage-use-reduce)
-    falls back to keeping every alternative exactly like plain
-    use_reduce(flat=True) always did, matching portuale's own
-    pre-existing "never silently wrong about whether a dependency
-    exists" invariant -- both get reported on stderr, neither silently
-    dropped just because they're inside an unresolvable || group."""
-    result = _run(
-        [str(emerge_binary)], ["--pretend", "dev-libs/anyofunresolvable"], fixture_env
-    )
-    assert result.returncode == 0
-    assert result.stdout.splitlines() == [
+    -- neither alternative has a visible candidate anywhere, NOR any vdb
+    entry, NOR even a bare cp-level installed match, so real dep_zapdeps
+    (backlog #22 slice 4) classifies BOTH as plain `other` (rank 1) --
+    tied. `promote_tied_alternative` finds nothing to promote (neither
+    has any installed/in-graph/cp_map fact at all), so the tie stays
+    first-listed: `doesnotexist-anywhere` is the one real's own
+    `allow_masked` second pass actually selects and reports; the
+    second, never-chosen alternative is dropped entirely rather than
+    reported alongside it. (Before slice 4, both ranked hard
+    Unsatisfiable and the literal `||` fallback enqueued -- and
+    reported -- both.)"""
+    args = ["--pretend", "dev-libs/anyofunresolvable"]
+    rust = _run([str(emerge_binary)], args, fixture_env)
+    py = _run(emerge_pretend_python, args, fixture_env)
+    assert rust.returncode == 0 and py.returncode == 0
+    assert rust.stdout == py.stdout and rust.stderr == py.stderr
+    assert rust.stdout.splitlines() == [
         '[ebuild  N     ] dev-libs/anyofunresolvable-1.0 ',
     ]
-    assert result.stderr.strip().splitlines() == [
+    assert rust.stderr.strip().splitlines() == [
         '!!! no visible ebuild for dependency "dev-libs/doesnotexist-anywhere"',
-        '!!! no visible ebuild for dependency "dev-libs/alsodoesnotexist-anywhere"',
     ]
+    assert "alsodoesnotexist-anywhere" not in rust.stderr, (
+        "the never-selected alternative must not be reported"
+    )
 
 
 def test_env_config_vars_override_the_profile_and_make_conf(

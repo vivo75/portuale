@@ -5621,16 +5621,16 @@ def _resolve_disjunctions(nodes, uselist, alternative_satisfiable, tie_break=Non
             alternatives = nodes[i + 1]
             # Real dep_zapdeps classifies every alternative into a
             # choice_bin and takes the first entry of the best-ranked
-            # non-empty bin. Unlike the pre-slice-2 version, this no
-            # longer stops at the first rank>=9 (Installed) hit: every
-            # alternative must be ranked so a tie at the best bin can be
-            # seen and handed to `tie_break` (real's own in-bin
-            # upgrade-preference ordering, dep_check.py soft 738-802)
-            # instead of always keeping the first-listed one. See
-            # portage-use-reduce's AltPreference for the rank values
-            # (0 = unsatisfiable, 5-8 = UnsatUseNonInstalled/
-            # UnsatUseInstalled/UnsatUseInGraph/Available, 9 = Installed).
-            selectable = []  # [(rank, alt_nodes, flat_atoms), ...]
+            # non-empty bin, in TWO passes (allow_masked False then True,
+            # dep_check.py soft 812-816): every alternative is ranked
+            # regardless, a real tie at the best bin is handed to
+            # `tie_break` (in-bin upgrade-preference ordering, soft
+            # 738-802), and the second pass -- considering the
+            # non-selectable other_* bins (ranks 1-4) -- only runs when
+            # the first finds NOTHING at all (rank >= 5). See
+            # _disjunction_preference's own docstring for the full rank
+            # table.
+            ranked = []  # [(rank, alt_nodes, flat_atoms), ...]
             for alt in alternatives:
                 alt_nodes = alt if isinstance(alt, list) else [alt]
                 try:
@@ -5638,9 +5638,14 @@ def _resolve_disjunctions(nodes, uselist, alternative_satisfiable, tie_break=Non
                 except InvalidDependString:
                     continue
                 rank = alternative_satisfiable(flat_atoms)
-                if not rank:
-                    continue
-                selectable.append((rank, alt_nodes, flat_atoms))
+                ranked.append((rank, alt_nodes, flat_atoms))
+            selectable = [r for r in ranked if r[0] >= 5]
+            if not selectable:
+                # Real's allow_masked=True pass: still never picks
+                # portuale's own circular-self-dep guard (rank 0, no real
+                # equivalent -- see _disjunction_preference's own
+                # docstring), only a genuine other_* bin (ranks 1-4).
+                selectable = [r for r in ranked if r[0] >= 1]
             chosen_nodes = None
             if selectable:
                 best_rank = max(r for r, _, _ in selectable)
@@ -6073,6 +6078,47 @@ def _atom_cp_installed(root, atom_str):
     return bool(installed_candidates(root, category, package))
 
 
+def _atom_matches_installed(root, atom_str, config):
+    """Real vardb.match(atom) for one "||" alternative atom, the FULL
+    match (dep_check.py soft 715-722, the not-all_available "other_*"
+    classification -- backlog #22 slice 4): unlike _atom_cp_installed
+    (cp-level, deliberately blind to "[use]"), this checks the atom's
+    version/slot AND its "[use]" deps against the matching installed
+    version's own recorded vdb USE -- real's built-package semantics
+    (_iuse_implicit_built, bug #640318: the is_valid_flag domain is the
+    vdb IUSE unioned with the package's own recorded USE). No blocker/
+    virtual exemption here (unlike _atom_cp_installed): real's own
+    all_installed/some_installed loop only ever calls this for
+    non-blocker atoms (the caller's job), and this exact code path has
+    no virtual short-circuit in real either. Mirrors portage-repo/src/
+    lib.rs's atom_matches_installed."""
+    atom = _parse_atom(atom_str)
+    if atom is None:
+        return False
+    category, package = atom.cp.split("/", 1)
+    installed = installed_candidates(root, category, package)
+    if not installed:
+        return False
+    cpv_strs = [
+        f"{category}/{package}-{v}:{s}/{ss}::{_installed_pkg_repo(root, category, package, v)}"
+        for v, s, ss in installed
+    ]
+    matched = match_from_list(atom_str, cpv_strs)
+    if not matched:
+        return False
+    if not atom.use:
+        return True
+    by_str = dict(zip(cpv_strs, installed))
+    for m in matched:
+        version, _slot, _sub = by_str[m]
+        vdb_iuse = _read_vdb_flag_set(root, category, package, version, "IUSE")
+        vdb_use = _read_vdb_flag_set(root, category, package, version, "USE")
+        valid = _valid_iuse(vdb_iuse, config) | set(vdb_use)
+        if _use_deps_satisfied(atom, valid, vdb_use):
+            return True
+    return False
+
+
 def _atom_installed_in_slot_of(repos, root, atom_str, config, extra_constraints=()):
     """Real dep_zapdeps' all_installed_slots predicate (dep_check.py soft
     599-607, slot_map/avail_slot): whether the *slot* of the best
@@ -6158,10 +6204,17 @@ def _disjunction_preference(
 ):
     """The single probe function `_use_reduce_flat_disjunctive` calls for
     every "||" alternative -- real dep_zapdeps' whole choice-bin
-    classification (dep_check.py soft 449-523, 599-618) collapsed into
-    one int rank (0 = Unsatisfiable ... 9 = Installed, matching
-    portage-repo's AltPreference discriminant order exactly). Shared by
-    both of portuale's "||"-resolution call sites (the main New/Upgrade/
+    classification (dep_check.py soft 449-523, 599-618, 715-724)
+    collapsed into one int rank matching portage-repo's AltPreference
+    discriminant order exactly: 0 = Unsatisfiable (portuale's own
+    circular-self-dep guard only, no real equivalent), 1 = Other,
+    2 = OtherInstalledAnySlot, 3 = OtherInstalledSome,
+    4 = OtherInstalled, 5 = UnsatUseNonInstalled, 6 = UnsatUseInstalled,
+    7 = UnsatUseInGraph, 8 = Available, 9 = Installed. Ranks 1-4 (the
+    other_* bins, backlog #22 slice 4) are only ever selected by
+    `_use_reduce_flat_disjunctive`'s own second (`allow_masked`) pass,
+    when no alternative anywhere ranks 5 or higher. Shared by both of
+    portuale's "||"-resolution call sites (the main New/Upgrade/
     Reinstall walk in resolve_pretend_graph, and the --deep
     AlreadyInstalled recursion in _enqueue_dependencies) so a fix to one
     can never silently miss the other again (2026-09-11 review finding
@@ -6193,6 +6246,12 @@ def _disjunction_preference(
     all_available = True
     all_use_satisfied = True
     all_use_unmasked = True
+    # Portuale's own bolt-on (real has no equivalent): once True, the
+    # alternative is hard rank 0 in BOTH passes below, never promoted
+    # into an other_* bin the way a genuine !all_available atom is --
+    # selecting it even as a last resort would let a package
+    # self-satisfy its own not-yet-resolved atom.
+    circular = False
     for a in atoms:
         pa = _parse_atom(a)
         circular_self = (
@@ -6203,6 +6262,7 @@ def _disjunction_preference(
         )
         if circular_self:
             all_available = False
+            circular = True
             break
         stripped = _without_use(a)
         extra_constraints = _constraints_for(a)
@@ -6240,7 +6300,35 @@ def _disjunction_preference(
                 all_use_unmasked = False
 
     if not all_available:
-        return 0
+        if circular:
+            return 0
+        # Real's other_installed/other_installed_some/
+        # other_installed_any_slot/other classification (dep_check.py
+        # soft 715-724): reached when some atom has no tree candidate at
+        # all, even ignoring USE. Blockers are excluded from the fold
+        # entirely (real's own "if not atom.blocker:" guard), not merely
+        # vacuously satisfied.
+        non_blocker = [
+            a for a in atoms if (lambda pa: pa is not None and not pa.blocker)(_parse_atom(a))
+        ]
+        if all(_atom_matches_installed(root, a, config) for a in non_blocker):
+            return 4
+        if any(_atom_matches_installed(root, a, config) for a in non_blocker):
+            return 3
+        # Real's own fuzzy cp-level fallback (soft 720-724, bug 522652)
+        # -- plain vardb.match(Atom(atom.cp)), deliberately NOT
+        # _atom_cp_installed (that helper's "virtual/" zero-cost
+        # exemption doesn't apply to this specific real code path).
+        def _cp_installed_raw(a):
+            pa = _parse_atom(a)
+            if pa is None:
+                return False
+            category, package = pa.cp.split("/", 1)
+            return bool(installed_candidates(root, category, package))
+
+        if any(_cp_installed_raw(a) for a in non_blocker):
+            return 2
+        return 1
     if all_use_satisfied:
         # Real dep_zapdeps choice bin 0 (preferred_installed /
         # preferred_in_graph) -- see the identical check below.
@@ -6252,11 +6340,13 @@ def _disjunction_preference(
     # !all_use_satisfied: real's unsat_use_* bins -- the alternative
     # exists but can only be merged with USE changes. First the
     # bug-515584 gate (soft 705): if the flags that would have to change
-    # sit in use.mask / use.force, the choice is demoted to other (never
-    # selectable); otherwise it keeps the fine-bin ordering
-    # unsat_use_in_graph > unsat_use_installed > unsat_use_non_installed.
+    # sit in use.mask / use.force, the choice is demoted to plain other
+    # (dep_check.py soft 705-706 -- no installed-variant
+    # sub-classification, unlike the not-all_available branch above);
+    # otherwise it keeps the fine-bin ordering unsat_use_in_graph >
+    # unsat_use_installed > unsat_use_non_installed.
     if not all_use_unmasked:
-        return 0
+        return 1
     if _atoms_all_in_graph(atoms, entries, config):
         return 7
     # Real unsat_use_installed's all_installed_slots (dep_check.py soft
@@ -9752,14 +9842,19 @@ def _gather_deps(g, node, ig, mergeable):
 def _entry_version(entry):
     """The version a graph entry resolves to, whatever its outcome -- real
     Package.version, which find_smallest_cycle's sorted(nodes) compares
-    after cp."""
+    after cp. None for a NoVisibleCandidate entry (no version to compare
+    at all -- exposed by backlog #22 slice 4, where a || group can now
+    select an alternative with no candidate anywhere via the
+    other_installed_any_slot bin: the pre-existing "" fallback here built
+    a malformed cpv string like "cat/pkg-" downstream). Mirrors
+    portage-repo/src/merge_order.rs's entry_version exactly."""
     outcome = entry[2]
     tag = outcome[0]
     if tag in ("new", "reinstall", "already_installed"):
         return outcome[1]
     if tag in ("upgrade", "downgrade"):
         return outcome[2]
-    return ""
+    return None
 
 
 def _find_smallest_cycle(g, entries, prange, asap, prefer_asap):

@@ -1,0 +1,7 @@
+DEFINED_PHASES=-
+DESCRIPTION=fixture: backlog #22 slice 4 -- || ( omaskedmissing omaskedinstalled ), neither all_available (one masked-but-installed, one nowhere at all); real's other_installed beats plain other in the allow_masked second pass
+EAPI=8
+KEYWORDS=amd64
+RDEPEND=|| ( dev-libs/omaskedmissing dev-libs/omaskedinstalled )
+SLOT=0
+_md5_=0000000000000000000000000000000
