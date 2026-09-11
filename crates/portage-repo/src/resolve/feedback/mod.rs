@@ -8,6 +8,7 @@ mod circular_dead_end;
 mod no_leaf_restart;
 mod reverse_dep_pins;
 mod slot_conflict_abi;
+mod slot_conflict_backtrack;
 mod solvable_slot_conflicts;
 mod unsatisfied_dead_end;
 pub(crate) use autounmask::*;
@@ -15,6 +16,7 @@ pub(crate) use circular_dead_end::*;
 pub(crate) use no_leaf_restart::*;
 pub(crate) use reverse_dep_pins::*;
 pub(crate) use slot_conflict_abi::*;
+pub(crate) use slot_conflict_backtrack::*;
 pub(crate) use solvable_slot_conflicts::*;
 pub(crate) use unsatisfied_dead_end::*;
 
