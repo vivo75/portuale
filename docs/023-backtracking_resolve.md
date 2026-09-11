@@ -414,17 +414,22 @@ The real work.
 ### C3 — Real mask-choice generation (M, F review)
 
 - Port `_slot_confict_backtrack` into a free fn
-  `slot_conflict_mask_choices(ctx, pass, conflict) -> Vec<Vec<(cpv, parent_atoms)>>`:
-  existing node always included (692746), sort conflict pkgs by version
-  desc, per-candidate `conflict_atoms` = all-parents minus those matching
-  it, stable sort by `len(conflict_atoms)`, return the full ranked list
-  (real feeds *all* choices as siblings; DFS pops the last-added first).
-- `_feedback_slot_conflict` now emits one node per choice. **Remove
-  the puller-masking** from the slot-conflict path; verify with B1
-  fixtures that `_feedback_missing_dep` on the next node reaches the
-  parent-downgrade real produces. If a B1 case regresses because
-  portuale's missing-dep feedback is narrower than real's, surface it
-  — that is a separate gap, not a reason to keep puller-masking.
+  `slot_conflict_mask_choices(pass, conflict) -> Vec<MaskChoice>`
+  (no `ctx`: the body touches only the conflict record, the puller map,
+  and pure match/vercmp helpers): existing node always included (692746),
+  sort conflict pkgs by version desc, per-candidate `conflict_atoms` =
+  all-parents minus those matching it, stable sort by
+  `len(conflict_atoms)`, return the full ranked list (real feeds *all*
+  choices as siblings; DFS pops the last-added first). First
+  conflicting slot only (real `conflicts_data[0]`).
+- `_feedback_slot_conflict` now emits one node per choice (replace, not
+  accumulate, like real's assignment). **Remove the puller-masking**
+  from the slot-conflict path; the mask-aware missing-dep probe (C3
+  addition to the trigger site: consult the negatives, not the bare
+  tree) reaches the parent-downgrade on the next node instead. If a B1
+  case regresses because portuale's missing-dep feedback is narrower
+  than real's, surface it -- that is a separate gap, not a reason to
+  keep puller-masking.
 - `_iter_similar_available` grouping is **not** in this slice (C4).
 - Python mirror in lockstep.
 - **Model:** M writes (the ranking is ~80 lines with a precise spec);

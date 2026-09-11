@@ -14300,9 +14300,10 @@ struct QueueItem {
 
 /// Backtracking: `(cat, pkg)` targeted by an atom -> every puller this
 /// pass, as `(parent_cat, parent_pkg, parent_version, atom_text)`. A
-/// top-level atom is recorded with empty parent fields. Slice 3 uses the
-/// `(parent, version)` part to pick a mask target; slice 4 uses the atom
-/// text to render the `pulled in by` lines. See
+/// top-level atom is recorded with empty parent fields. Slice 4 uses the
+/// atom text to render the `pulled in by` lines; C3's
+/// `slot_conflict_mask_choices` uses the `(parent, version, atom)`
+/// triples to build each choice's `conflict_atoms`. See
 /// `resolve_pretend_graph`'s `slot_pullers`.
 type SlotPullers = HashMap<(String, String), Vec<(String, String, String, String)>>;
 
@@ -14867,1911 +14868,2641 @@ pub fn active_resolver_for(kind: SolverKind) -> Box<dyn Resolver> {
 ///
 /// (Formerly the whole body of `resolve_pretend_graph`; that name is now
 /// a thin marshaller. Kept as a free function taking one `ResolveRequest`
-/// so the ~1700-line body below keeps its original indentation. The `let`
-/// block re-binds each field to the exact borrowed type the walk expects;
-/// everything past it is unchanged.)
-fn backtracking_resolve(req: &ResolveRequest) -> Result<GraphResult, Error> {
-    let config_root: &Path = &req.config_root;
-    let root: &Path = &req.root;
-    let atoms: &[String] = &req.atoms;
-    let config: &portage_profile::Config = &req.config;
-    let newuse: bool = req.newuse;
-    let changed_use: bool = req.changed_use;
-    let nodeps: bool = req.nodeps;
-    let update: bool = req.update;
-    let deep: Deep = req.deep;
-    let excluded: &[String] = &req.excluded;
-    let with_bdeps: bool = req.with_bdeps;
-    let changed_deps: bool = req.changed_deps;
-    let changed_slot: bool = req.changed_slot;
-    let with_test_deps: bool = req.with_test_deps;
-    let changed_deps_report: bool = req.changed_deps_report;
-    let selective: bool = req.selective;
-    // `mut` so the `_autounmask_breakage` fallback (real depgraph.py:12262)
-    // can switch all four off for one final clean pass once an accumulated
-    // autounmask change turns out to break another dependency.
-    let mut autounmask_suggest_keywords: bool = req.autounmask_suggest_keywords;
-    let mut autounmask_suggest_use: bool = req.autounmask_suggest_use;
-    let mut autounmask_suggest_license: bool = req.autounmask_suggest_license;
-    let mut autounmask_suggest_masks: bool = req.autounmask_suggest_masks;
-    // Real `--autounmask-backtrack` (off by default, `depgraph.py:11736`):
-    // only when on does the loop re-drive the whole walk after an
-    // autounmask change grows the accumulator. Off, the change is still
-    // collected and displayed but the graph structure is left alone (a
-    // post-loop pass refreshes just the flipped package's USE line).
-    let autounmask_backtrack_enabled: bool = req.config.autounmask_backtrack;
-    let usepkg: bool = req.usepkg;
-    let usepkgonly: bool = req.usepkgonly;
-    let binpkg_respect_use: bool = req.binpkg_respect_use;
-    let usepkg_exclude: &[String] = &req.usepkg_exclude;
-    let usepkg_include: &[String] = &req.usepkg_include;
-    let rebuilt_binaries: bool = req.rebuilt_binaries;
-    let rebuilt_binaries_timestamp: Option<u64> = req.rebuilt_binaries_timestamp;
-    let newrepo: bool = req.newrepo;
-    let buildpkgonly: bool = req.buildpkgonly;
-    let root_deps_running_root: Option<&Path> = req.root_deps_running_root.as_deref();
-    let distdir: &Path = &req.distdir;
-    let empty: bool = req.empty;
-    let getbinpkg: bool = req.getbinpkg;
-    let ignore_built_slot_operator_deps: bool = req.ignore_built_slot_operator_deps;
-    let backtrack_max: u32 = req.backtrack_max;
-    let reinstall_atoms: &[String] = &req.reinstall_atoms;
-    let rebuild_if_new_slot: bool = req.rebuild_if_new_slot;
-    let rebuild_if_unbuilt: bool = req.rebuild_if_unbuilt;
-    let rebuild_if_new_rev: bool = req.rebuild_if_new_rev;
-    let rebuild_if_new_ver: bool = req.rebuild_if_new_ver;
-    let rebuild_exclude: &[String] = &req.rebuild_exclude;
-    let rebuild_ignore: &[String] = &req.rebuild_ignore;
-    let dynamic_deps: bool = req.dynamic_deps;
-    let implicit_system_deps: bool = req.implicit_system_deps;
-    let complete: bool = req.complete;
+/// so the ~1700-line body below keeps its original indentation.
+/// `ResolveCtx::new` re-binds each request field to the exact borrowed
+/// type the walk expects; `BacktrackParams` holds the cross-pass
+/// accumulators; everything past those two lines is unchanged.)
+/// Phase A1 (023): the read-only half of `backtracking_resolve`'s old `let`
+/// block, built once per call. Every field is a pure rename of the
+/// local it replaces (`ctx.root` was `root`, …); no logic moved.
+/// `repos` is fallible (`find_repos`), so the constructor returns
+/// `Result`. Lifetimes: every borrow points into `req`.
+struct ResolveCtx<'a> {
+    root: &'a Path,
+    atoms: &'a [String],
+    config: &'a portage_profile::Config,
+    newuse: bool,
+    changed_use: bool,
+    nodeps: bool,
+    update: bool,
+    deep: Deep,
+    excluded: &'a [String],
+    with_bdeps: bool,
+    changed_deps: bool,
+    changed_slot: bool,
+    with_test_deps: bool,
+    changed_deps_report: bool,
+    selective: bool,
+    /// Real `--autounmask-backtrack` (off by default, `depgraph.py:11736`):
+    /// only when on does the loop re-drive the whole walk after an
+    /// autounmask change grows the accumulator. Off, the change is still
+    /// collected and displayed but the graph structure is left alone (a
+    /// post-loop pass refreshes just the flipped package's USE line).
+    autounmask_backtrack_enabled: bool,
+    usepkg: bool,
+    usepkgonly: bool,
+    binpkg_respect_use: bool,
+    usepkg_exclude: &'a [String],
+    usepkg_include: &'a [String],
+    rebuilt_binaries: bool,
+    rebuilt_binaries_timestamp: Option<u64>,
+    newrepo: bool,
+    buildpkgonly: bool,
+    root_deps_running_root: Option<&'a Path>,
+    distdir: &'a Path,
+    empty: bool,
+    getbinpkg: bool,
+    ignore_built_slot_operator_deps: bool,
+    backtrack_max: u32,
+    reinstall_atoms: &'a [String],
+    rebuild_if_new_slot: bool,
+    rebuild_if_unbuilt: bool,
+    rebuild_if_new_rev: bool,
+    rebuild_if_new_ver: bool,
+    rebuild_exclude: &'a [String],
+    rebuild_ignore: &'a [String],
+    dynamic_deps: bool,
+    implicit_system_deps: bool,
+    complete: bool,
+    repos: Vec<RepoConfig>,
+    /// Real `_complete_graph`'s deep re-walk of the required sets: the
+    /// installed `(cat, pkg)` closure reachable from `@world ∪ @selected ∪
+    /// @system` (`config.complete_seed_atoms`, populated by the CLI layer
+    /// only in complete mode). Gates the slot-operator-rebuild scan --
+    /// empty means "not complete mode", which suppresses it entirely, the
+    /// way real produces no slot-op rebuild for a plain `emerge -p <atom>`
+    /// that changes nothing installed.
+    slot_op_reachable: HashSet<(String, String)>,
+    /// Real `_complete_graph` swaps package selection to
+    /// `_select_pkg_from_graph` (`depgraph.py:8662`) -- graph-or-installed,
+    /// never a new merge. Portuale re-resolves the whole graph in complete
+    /// mode instead, so the CLI layer passes phase 1's merge set here; in
+    /// the complete pass an atom whose `cp` is not a genuine phase-1 merge
+    /// target may only resolve `AlreadyInstalled`/`NoVisibleCandidate`.
+    complete_locked_merges: HashSet<(String, String)>,
+    /// Only used to tell a top-level atom's own NoVisibleCandidate (fatal
+    /// to the whole call) apart from a dependency's (reported, not fatal).
+    top_level: HashSet<&'a str>,
+    /// The `(cat, pkg)` of every directly-requested atom -- the
+    /// "missing dependency" backtrack (real `_feedback_missing_dep`)
+    /// never masks one of these (masking a requested package just turns
+    /// its own line into a fatal `there are no ebuilds to satisfy`, no
+    /// better than reporting the missing transitive dep).
+    top_level_cps: HashSet<(String, String)>,
+    /// The local `$PKGDIR` binary index, built once for the whole walk
+    /// (either the CLI layer's `$PKGDIR` directory scan or the parsed
+    /// `<pkgdir>/Packages` -- see `local_binpkg_index`). Only consulted
+    /// under `--usepkg`/`--usepkgonly`, but cheap to build unconditionally
+    /// (an absent/empty `Packages` and a `None` scan both yield an empty
+    /// index).
+    local_binpkg: BinaryIndex,
+}
 
-    let repos = find_repos(config_root)?;
-    // Real `_complete_graph`'s deep re-walk of the required sets: the
-    // installed `(cat, pkg)` closure reachable from `@world ∪ @selected ∪
-    // @system` (`config.complete_seed_atoms`, populated by the CLI layer
-    // only in complete mode). Gates the slot-operator-rebuild scan --
-    // empty means "not complete mode", which suppresses it entirely, the
-    // way real produces no slot-op rebuild for a plain `emerge -p <atom>`
-    // that changes nothing installed.
-    let slot_op_reachable: HashSet<(String, String)> = if req.config.complete_seed_atoms.is_empty()
-    {
-        HashSet::new()
-    } else {
-        required_set_reachable_cps(root, &req.config.complete_seed_atoms, &[])
-    };
-    // Real `_complete_graph` swaps package selection to
-    // `_select_pkg_from_graph` (`depgraph.py:8662`) -- graph-or-installed,
-    // never a new merge. Portuale re-resolves the whole graph in complete
-    // mode instead, so the CLI layer passes phase 1's merge set here; in
-    // the complete pass an atom whose `cp` is not a genuine phase-1 merge
-    // target may only resolve `AlreadyInstalled`/`NoVisibleCandidate`.
-    let complete_locked_merges: HashSet<(String, String)> = req
-        .config
-        .complete_locked_merges
-        .iter()
-        .filter_map(|s| {
-            s.split_once('/')
-                .map(|(c, p)| (c.to_string(), p.to_string()))
-        })
-        .collect();
-    // Real `create_depgraph_params.py:178`: `--emptytree` sets
-    // `myparams["deep"] = True`. Real `_complete_graph` (8668-8670) does
-    // the same -- but paired with `_select_pkg_from_graph`, a cheap
-    // graph-or-installed check. Portuale's deep walk runs full
-    // resolution per node, so forcing it over the whole installed world
-    // for every `--complete-graph` (which auto-enables on any upgrade)
-    // made `emerge -pt gnome-control-center` take minutes for a merge
-    // list that -- with the `complete_locked_merges` gate -- is
-    // identical to the non-deep phase-1 result. So complete mode only
-    // forces the deep walk when a consumer actually needs the wider
-    // installed-dependency scan: `--changed-deps-report` (real
-    // `_changed_deps_report`, which in complete mode walks the required
-    // sets). The slot-operator-rebuild gate uses `complete_seed_atoms`
-    // /`required_set_reachable_cps` directly, not this walk.
-    let deep = if empty || (complete && deep == Deep::NotRequested && changed_deps_report) {
-        Deep::Unlimited
-    } else {
-        deep
-    };
-
-    // Only used to tell a top-level atom's own NoVisibleCandidate (fatal
-    // to the whole call) apart from a dependency's (reported, not fatal)
-    // -- see the doc comment above.
-    let top_level: HashSet<&str> = atoms.iter().map(|s| s.as_str()).collect();
-    // The `(cat, pkg)` of every directly-requested atom -- the
-    // "missing dependency" backtrack (real `_feedback_missing_dep`)
-    // never masks one of these (masking a requested package just turns
-    // its own line into a fatal `there are no ebuilds to satisfy`, no
-    // better than reporting the missing transitive dep).
-    let top_level_cps: HashSet<(String, String)> = atoms
-        .iter()
-        .filter_map(|a| portage_dep::parse_atom(a))
-        .map(|a| (a.category, a.package))
-        .collect();
-    // Real `backtracking.py::_feedback_missing_dep`: a dependency atom
-    // with no matching package makes `_backtrack_depgraph` mask that
-    // atom's *parent* and retry, so `dep_zapdeps` re-picks a `||` group
-    // whose chosen alternative had an unsatisfiable subtree. The latch
-    // (real's `dep.parent not in _runtime_pkg_mask` check) holds every
-    // `!=parent-cpv` already tried, guaranteeing termination.
-    let mut missing_dep_masked: HashSet<String> = HashSet::new();
-    // Real `_complete_graph`'s own parent atoms, discovered by vdb
-    // reverse scan -- see `reverse_dependency_constraints`. Latches every
-    // `(cat/pkg, atom)` already folded into `slot_constraints` so a
-    // constraint is never re-added and the `'backtrack` loop converges.
-    let mut reverse_dep_masked: HashSet<((String, String), String)> = HashSet::new();
-    // Dropped reverse-dep pins (see `RevDepPin`), accumulated across
-    // passes, for the residual installed-instance conflict report once
-    // the graph settles (see `build_residual_slot_conflicts`). Deduped
-    // by `(cp, atom, consumer)`; stale entries (a later pass picked a
-    // compatible version after all) simply yield no record.
-    let mut dropped_pins: Vec<RevDepPin> = Vec::new();
-
-    // The local `$PKGDIR` binary index, built once for the whole walk
-    // (either the CLI layer's `$PKGDIR` directory scan or the parsed
-    // `<pkgdir>/Packages` -- see `local_binpkg_index`). Only consulted
-    // under `--usepkg`/`--usepkgonly`, but cheap to build unconditionally
-    // (an absent/empty `Packages` and a `None` scan both yield an empty
-    // index).
-    let local_binpkg = local_binpkg_index(config);
-
-    // Real `_emerge/resolver/backtracking.py`: the resolver runs the whole
-    // graph walk, and if the first pass hits a *solvable* slot conflict
-    // (real `_process_slot_conflicts` -- a single version can satisfy
-    // every parent atom that landed on the slot), it records the extra
-    // constraints and re-runs the entire walk from scratch. `entries` and
-    // every other per-pass accumulator below is rebuilt each iteration;
-    // only `slot_constraints` (keyed by `cat/pkg`, the union of every atom
-    // text that targeted a conflicted package) and the iteration counter
-    // survive across attempts. The retry ceiling is `backtrack_max` (real
-    // `--backtrack=COUNT`, default 10, `0` disables).
-    let mut slot_constraints: HashMap<(String, String), Vec<String>> = HashMap::new();
-    let mut backtrack_iteration: u32 = 0;
-    // Backtracking slice 3 (unsolvable conflict -> `runtime_pkg_mask`): a
-    // small state machine across passes. `None` = ordinary pass; `Trying`
-    // = the pass just ran with a trial set of `!=cpv` masks and its result
-    // must be judged (kept if every conflict cleared with no new
-    // `NoVisibleCandidate`, else reverted); `Reverting` = one final clean
-    // pass after a rejected trial, so the reported graph isn't the
-    // masked-and-worse one. `mask_trial_spent` stops a second trial once
-    // the first has been judged -- one `runtime_pkg_mask` round per call.
-    #[derive(PartialEq)]
-    enum MaskPhase {
-        None,
-        Trying,
-        Reverting,
-    }
-    let mut mask_phase = MaskPhase::None;
-    let mut mask_trial_spent = false;
-    let mut mask_negatives: Vec<((String, String), String)> = Vec::new();
-    let mut pre_trial_nvc: usize = 0;
-
-    // Backtracking slice: `--autounmask-use` changes fed back into the
-    // loop (real `_dynamic_config._needed_use_config_changes`, applied by
-    // `backtracking.py::_feedback_config` on the next attempt). A
-    // dependency atom `X[flag]` that lands on an *already-resolved* slot
-    // whose package can't satisfy `[flag]` -- but a `package.use` flip
-    // could -- folds the flip in here (`(cat, pkg) -> {flag -> desired}`)
-    // and re-runs the whole walk, so the freshly-walked package's
-    // `flag?`-gated deps appear. Survives across passes like
-    // `slot_constraints`; converges when a pass adds nothing new.
-    let mut autounmask_use_config: HashMap<(String, String), HashMap<String, bool>> =
-        HashMap::new();
-    // The `The following USE changes are necessary to proceed:` block
-    // entries recorded at the moment each flip is folded in above --
-    // recorded here (not the per-pass `autounmask_use_changes`) because a
-    // `continue 'backtrack` discards the pass, and after the re-resolve
-    // the atom's `[flag]` is *satisfied* (by the accumulator) so nothing
-    // re-records it. Merged into `autounmask_use_changes` once the graph
-    // settles. Deduped by `(atom, token)`.
-    let mut autounmask_use_change_records: Vec<AutounmaskChange> = Vec::new();
-    // `req.config` with `autounmask_use` filled from the accumulator --
-    // rebuilt whenever the accumulator grows, `None` until then (so the
-    // common no-autounmask path never clones `Config`).
-    let mut backtrack_config: Option<portage_profile::Config> = None;
-    // Real `_autounmask_breakage` (depgraph.py:12262): once an accumulated
-    // autounmask USE change turns out to make some *other* use-dep
-    // unsatisfiable and cannot be reconciled -- the same flag ends up
-    // wanted both on and off -- portage abandons autounmask entirely
-    // (`myparams["autounmask"] = False`) and re-resolves one final clean
-    // pass. `autounmask_use_broke` latches the contradiction; the driver
-    // acts on it once and sets `autounmask_disabled` so it can't re-fire.
-    let mut autounmask_use_broke = false;
-    let mut autounmask_disabled = false;
-
-    'backtrack: loop {
-        // The per-pass config view: the accumulator's autounmask-use
-        // changes layered on as the top USE tier (see `Config::
-        // autounmask_use`). `config` is the outer `&req.config` until the
-        // first flip is folded in.
-        let config: &portage_profile::Config = backtrack_config.as_ref().unwrap_or(config);
-        // Guards against infinite requeuing (e.g. a dependency cycle): the
-        // exact same atom *text* is only ever resolved once. This is
-        // deliberately coarser than the (category, package, slot) dedup
-        // below -- it exists purely for termination, not to decide whether a
-        // given slot has already been fully resolved (two different atom
-        // texts, e.g. a bare "dev-libs/foo" and a slotted "dev-libs/foo:1",
-        // can both need to be resolved even though they'd share a visited-atom
-        // check keyed any coarser than exact text).
-        let mut visited_atoms: HashSet<String> = HashSet::new();
-        // (category, package, slot) -> index into `entries`, for New/Upgrade
-        // outcomes only. The first atom to resolve a given slot "wins" (its
-        // version is what gets recursed into); every later atom landing on
-        // the same slot is checked against that already-resolved version
-        // (see `SlotConflict`) instead of triggering a second, independent
-        // resolution.
-        let mut resolved_slots: HashMap<(String, String, String), usize> = HashMap::new();
-        // (category, package) -> already added an AlreadyInstalled/
-        // NoVisibleCandidate entry for it. Separate from `resolved_slots`
-        // since neither outcome carries a slot to usefully key repeats by.
-        let mut other_outcomes: HashSet<(String, String)> = HashSet::new();
-        // (category, package) -> already added a `targets_running_root`
-        // entry for it (see `resolve_root_deps_build_entries`'s own doc
-        // comment). Deliberately separate from `resolved_slots`/
-        // `other_outcomes` above -- those two dedup ROOT-targeted
-        // resolutions, and a package genuinely can need building into *both*
-        // ROOT (as an ordinary RDEPEND) and the running root (as some other
-        // package's own BDEPEND) at once, which must never collide into one
-        // shared dedup key.
-        let mut root_deps_build_seen: HashSet<(String, String)> = HashSet::new();
-
-        // Backtracking: every atom text (bare or constrained) that targeted a
-        // given `cat/pkg` this pass. On a solvable slot conflict the whole set
-        // for the conflicted package becomes its `slot_constraints` entry for
-        // the next attempt.
-        let mut slot_want: HashMap<(String, String), Vec<String>> = HashMap::new();
-        // Backtracking (slice 3, unsolvable conflicts): for each `cat/pkg`
-        // targeted by some package's dependency string this pass, the
-        // `(cat, pkg, version)` of every package that pulled it in. The
-        // unsolvable-slot-conflict handler masks a puller version that has
-        // a lower alternative so the retry falls back to it (real
-        // `runtime_pkg_mask` propagation).
-        let mut slot_pullers: SlotPullers = HashMap::new();
-        // Set when this pass folded a new `--autounmask-use` flip into
-        // `autounmask_use_config` (the already-resolved-slot re-check).
-        // The driver at the bottom re-runs the whole walk with the grown
-        // config, so the flipped package's `flag?`-gated deps appear.
-        let mut autounmask_grew = false;
-        // Set (once) when this pass hit a dependency `NoVisibleCandidate`
-        // whose non-top-level parent isn't already latched -- the driver
-        // at the bottom masks `!=parent-cpv` and re-runs (real
-        // `_feedback_missing_dep`).
-        let mut missing_dep_trigger: Option<((String, String), String)> = None;
-
-        let mut entries: Vec<GraphEntry> = Vec::new();
-        // REQUIRED_USE (see the check further below, in the main BFS loop):
-        // real depgraph.py's own `_add_pkg` sets
-        // `_dynamic_config._required_use_unsatisfied = True` and returns 0
-        // on a violation -- it does NOT abort the whole graph walk, unlike a
-        // top-level atom's own `NoVisibleCandidate`. Every violation
-        // encountered anywhere in the walk is collected here and the BFS
-        // keeps going; the whole call only fails at the very end, once every
-        // reachable candidate has had a chance to resolve (or fail) on its
-        // own terms -- matching real portage's own `_unsatisfied_deps_for_
-        // display` list (checked once, at the very end of the real resolve)
-        // rather than portuale's own previous "abort on the first hit"
-        // shortcut.
-        let mut required_use_violations: Vec<String> = Vec::new();
-        let mut slot_conflicts: Vec<SlotConflict> = Vec::new();
-        // Masked-dependency disclosures for this pass (see
-        // `MaskedDepReport`): rebuilt every attempt like `slot_conflicts`,
-        // so only the final pass's reports are rendered.
-        let mut masked_deps: Vec<MaskedDepReport> = Vec::new();
-        // The unevaluated dep atom behind each dependency
-        // `NoVisibleCandidate` entry (first requirer wins, like the entry
-        // itself), for `abort_outcome`'s `UnsatisfiedAtom` reason.
-        let mut nvc_dep_atoms: HashMap<(String, String), String> = HashMap::new();
-        // `--changed-deps-report`: real `_changed_deps_pkgs` is a dict keyed
-        // by the installed `Package` object, so a repeat visit to the same
-        // installed category/package/version (e.g. via both a bare
-        // "dev-libs/foo" and an explicit "dev-libs/foo:0" atom text, or a
-        // diamond dependency) naturally collapses to one entry -- mirrored
-        // here with an explicit dedup set, keyed the same way, preserving
-        // first-encountered order (real dict iteration order) rather than
-        // sorting.
-        let mut changed_deps_report_seen: HashSet<(String, String, String)> = HashSet::new();
-        let mut changed_deps_report_entries: Vec<ChangedDepsReportEntry> = Vec::new();
-        // Each queued atom carries its own depth (0 for a directly-requested
-        // top-level atom, parent's depth + 1 for anything reached only via a
-        // dependency string) -- only consulted by `deep.recurses_at` below,
-        // for deciding whether an AlreadyInstalled package's own further
-        // dependencies get walked; every other outcome ignores it entirely
-        // (see `Deep`'s own doc comment) -- and the `(category, package)`
-        // that pushed it, if any (`None` for a directly-requested top-level
-        // atom), only consulted by `required_by_map` below, for `GraphEntry`'s
-        // own `required_by` field.
-        let mut queue: VecDeque<QueueItem> = VecDeque::new();
-        // `emerge --pretend --debug` Stage 3: real `_resolve`'s own
-        // `\n      Arg: <arg>\n     Atom: <atom>\n` (`depgraph.py:5521`),
-        // once per top-level arg atom. First pass only (real's `_resolve`
-        // arg loop runs once; only `_create_graph` re-runs on backtrack).
-        if resolver_debug() && backtrack_iteration == 0 {
-            for a in atoms {
-                resolver_trace::tr!("\n      Arg: {a}\n     Atom: {a}\n");
-            }
-        }
-        for a in atoms {
-            // A top-level atom has no "unevaluated" form distinct from
-            // itself (no parent to ever flip a flag on), matching real
-            // portage, which never suggests a parent-flag fix for a
-            // top-level atom either.
-            queue.push_back(QueueItem {
-                atom: a.clone(),
-                depth: 0,
-                owner: None,
-                unevaluated: None,
-                buildtime_hard: false,
-            });
-        }
-
-        let mut pending_blockers: Vec<PendingBlocker> = Vec::new();
-        // Top-level atoms matched by `package.provided` -- see
-        // `GraphResult::pprovided_atoms`.
-        let mut pprovided_atoms: Vec<String> = Vec::new();
-        // Real `--autounmask` changes applied during this walk -- see
-        // `GraphResult::autounmask_keyword_changes` / `autounmask_use_changes`.
-        let mut autounmask_keyword_changes: Vec<AutounmaskChange> = Vec::new();
-        let mut autounmask_use_changes: Vec<AutounmaskChange> = Vec::new();
-        let mut autounmask_license_changes: Vec<AutounmaskChange> = Vec::new();
-        let mut autounmask_mask_changes: Vec<AutounmaskChange> = Vec::new();
-        let pprovided_refs: Vec<&str> =
-            config.package_provided.iter().map(String::as_str).collect();
-        // (category, package) -> every distinct owner that reached it via a
-        // dependency string, accumulated separately from the BFS's own
-        // dedup/recursion decisions below (`visited_atoms`/`resolved_slots`/
-        // `other_outcomes`) so a diamond dependency's *second* (deduped)
-        // owner still gets recorded even though it never triggers a new
-        // resolution -- merged into `entries` in a single post-pass at the
-        // end, mirroring `pending_blockers`/`resolve_blockers`'s own
-        // "accumulate now, merge once the whole graph is known" shape.
-        let mut required_by_map: HashMap<(String, String), HashSet<(String, String)>> =
-            HashMap::new();
-        // See `EdgeKindMap`'s own doc comment. An edge counts as
-        // unbreakable only when `has_hard && !has_soft` -- one run-time or
-        // optional route makes the whole edge breakable, matching real
-        // portage's per-edge `DepPriority`.
-        let mut edge_kind_map: EdgeKindMap = HashMap::new();
-
-        'queue: while let Some(QueueItem {
-            atom: current_atom,
-            depth,
-            owner,
-            unevaluated: unevaluated_atom,
-            buildtime_hard,
-        }) = queue.pop_front()
+impl<'a> ResolveCtx<'a> {
+    fn new(req: &'a ResolveRequest) -> Result<Self, Error> {
+        // Real `create_depgraph_params.py:178`: `--emptytree` sets
+        // `myparams["deep"] = True`. Real `_complete_graph` (8668-8670)
+        // does the same -- but paired with `_select_pkg_from_graph`, a
+        // cheap graph-or-installed check. Portuale's deep walk runs full
+        // resolution per node, so forcing it over the whole installed world
+        // for every `--complete-graph` (which auto-enables on any upgrade)
+        // made `emerge -pt gnome-control-center` take minutes for a merge
+        // list that -- with the `complete_locked_merges` gate -- is
+        // identical to the non-deep phase-1 result. So complete mode only
+        // forces the deep walk when a consumer actually needs the wider
+        // installed-dependency scan: `--changed-deps-report` (real
+        // `_changed_deps_report`, which in complete mode walks the required
+        // sets). The slot-operator-rebuild gate uses `complete_seed_atoms`
+        // /`required_set_reachable_cps` directly, not this walk.
+        let deep = if req.empty
+            || (req.complete && req.deep == Deep::NotRequested && req.changed_deps_report)
         {
-            let Some(atom) = portage_dep::parse_atom(&current_atom) else {
-                continue;
-            };
-            if atom.blocker != portage_dep::Blocker::None {
-                continue;
-            }
-            // `package.provided` (real `dep_check.py:1052` for a dependency,
-            // `depgraph.py:5497-5615` for a top-level target): an atom whose
-            // `cat/pkg` is listed and whose constraint one of that cp's
-            // provided CPVs satisfies is treated as already installed. A
-            // dependency is silently dropped (no entry, no `required_by`
-            // edge -- real portage removes it from the deplist); a top-level
-            // atom is recorded for the `WARNING: … package.provided:` block
-            // and otherwise skipped.
-            if !pprovided_refs.is_empty()
-                && portage_dep::match_from_list(&current_atom, &pprovided_refs)
-                    .is_some_and(|m| !m.is_empty())
-            {
-                if depth == 0 && !pprovided_atoms.contains(&current_atom) {
-                    pprovided_atoms.push(current_atom.clone());
-                }
-                continue;
-            }
-            let key = (atom.category.clone(), atom.package.clone());
-            if let Some(owner) = owner.clone() {
-                required_by_map
-                    .entry(key.clone())
-                    .or_default()
-                    .insert(owner.clone());
-                let kinds = edge_kind_map
-                    .entry((key.clone(), owner))
-                    .or_insert((false, false));
-                // Real `DepPriority.satisfied` (`_emerge/DepPriority.py`):
-                // a build-time dep already provided by an installed
-                // package gets a *satisfied* priority, which
-                // `_serialize_tasks`' `DepPrioritySatisfiedRange` can
-                // ignore when breaking a cycle -- so it is not an
-                // unbreakable edge. Only a genuinely unsatisfied
-                // build-time dep counts as `has_hard`, matching this
-                // map's own "unsatisfied build-time dep" contract. Under
-                // `--emptytree` both ends of the `app-arch/xz-utils` <->
-                // `app-portage/elt-patches` build-time cycle are still
-                // installed, so real orders them by their installed
-                // versions rather than reporting a circular dependency.
-                if buildtime_hard
-                    && best_installed_for_atom(root, &current_atom, &key.0, &key.1).is_none()
-                {
-                    kinds.0 = true;
-                } else {
-                    kinds.1 = true;
-                }
-            }
-            if !visited_atoms.insert(current_atom.clone()) {
-                continue;
-            }
-            // `emerge --pretend --debug` Stage 3: real
-            // `_wrapped_select_pkg_highest_available_imp`'s own
-            // `f"{type_name + ':':>10} {cpv}::{repo}\n"` candidate list
-            // (`depgraph.py:8347`) -- every candidate that matched this
-            // atom, in real's `dbs` order (ebuild, then binary, then
-            // installed), to stderr. First pass only.
-            if resolver_debug() && backtrack_iteration == 0 {
-                resolver_trace::dump_atom_candidates(&repos, root, &current_atom, &key.0, &key.1);
-            }
-            // Backtracking: record this atom as one of the constraints pulling
-            // `cat/pkg` (real `_select_pkg_highest_available` sees the whole
-            // atom set for a package, not just the first).
-            slot_want
-                .entry(key.clone())
-                .or_default()
-                .push(current_atom.clone());
-            // Backtracking slice 4: a top-level atom targeting this
-            // `cat/pkg` is an "Argument" puller for the slot-collision
-            // block (real `slot_collision_handler`'s `(Argument)` line).
-            if owner.is_none() {
-                slot_pullers.entry(key.clone()).or_default().push((
-                    String::new(),
-                    String::new(),
-                    String::new(),
-                    current_atom.clone(),
-                ));
-            }
-
-            // Backtracking: if an earlier attempt hit a *solvable* slot
-            // conflict on this `cat/pkg`, every parent atom that targeted it is
-            // now enforced together, so this attempt picks the one version
-            // that satisfies all of them and the conflict disappears.
-            let empty_constraints: Vec<String> = Vec::new();
-            let extra_constraints = slot_constraints.get(&key).unwrap_or(&empty_constraints);
-
-            // Real `_complete_graph`'s `_select_pkg_from_graph`
-            // (`depgraph.py:8495`): in complete mode the deep re-walk of
-            // the required sets may only pick a package already in the
-            // graph or installed -- never resolve/merge anything new. For
-            // a dependency atom whose `cp` isn't a genuine phase-1 merge
-            // target, that means: an installed version that satisfies it
-            // -> `AlreadyInstalled` (deep-walk its deps, merge nothing);
-            // nothing installed -> real's `_initially_unsatisfied_deps`,
-            // no graph node -> drop. Done **before** `resolve_pretend`,
-            // not after -- the full candidate/visibility/USE resolution
-            // for every installed package in the world is exactly the
-            // work real's cheap graph-or-installed check avoids (it made
-            // `emerge -pt gnome-control-center` take minutes). A no-op
-            // unless `complete_locked_merges` was populated (only the CLI
-            // layer's complete pass does that); top-level atoms always go
-            // through `resolve_pretend` (their `NoVisibleCandidate` is
-            // fatal, handled below).
-            let mut outcome = if complete
-                && !complete_locked_merges.is_empty()
-                && owner.is_some()
-                && !complete_locked_merges.contains(&key)
-            {
-                match best_installed_for_atom(root, &current_atom, &key.0, &key.1) {
-                    Some(v) => PretendOutcome::AlreadyInstalled { version: v },
-                    None => continue 'queue,
-                }
+            Deep::Unlimited
+        } else {
+            req.deep
+        };
+        let slot_op_reachable: HashSet<(String, String)> =
+            if req.config.complete_seed_atoms.is_empty() {
+                HashSet::new()
             } else {
-                resolve_pretend(
-                    &repos,
-                    root,
-                    &current_atom,
-                    config,
-                    newuse,
-                    changed_use,
-                    update,
-                    excluded,
-                    changed_deps,
-                    with_bdeps,
-                    changed_slot,
-                    selective,
-                    depth == 0,
-                    usepkg,
-                    usepkgonly,
-                    binpkg_respect_use,
-                    usepkg_exclude,
-                    usepkg_include,
-                    rebuilt_binaries,
-                    rebuilt_binaries_timestamp,
-                    newrepo,
-                    empty,
-                    getbinpkg,
-                    autounmask_suggest_keywords,
-                    autounmask_suggest_use,
-                    autounmask_suggest_license,
-                    autounmask_suggest_masks,
-                    extra_constraints,
-                )?
+                required_set_reachable_cps(&req.root, &req.config.complete_seed_atoms, &[])
             };
+        Ok(ResolveCtx {
+            root: &req.root,
+            atoms: &req.atoms,
+            config: &req.config,
+            newuse: req.newuse,
+            changed_use: req.changed_use,
+            nodeps: req.nodeps,
+            update: req.update,
+            deep,
+            excluded: &req.excluded,
+            with_bdeps: req.with_bdeps,
+            changed_deps: req.changed_deps,
+            changed_slot: req.changed_slot,
+            with_test_deps: req.with_test_deps,
+            changed_deps_report: req.changed_deps_report,
+            selective: req.selective,
+            autounmask_backtrack_enabled: req.config.autounmask_backtrack,
+            usepkg: req.usepkg,
+            usepkgonly: req.usepkgonly,
+            binpkg_respect_use: req.binpkg_respect_use,
+            usepkg_exclude: &req.usepkg_exclude,
+            usepkg_include: &req.usepkg_include,
+            rebuilt_binaries: req.rebuilt_binaries,
+            rebuilt_binaries_timestamp: req.rebuilt_binaries_timestamp,
+            newrepo: req.newrepo,
+            buildpkgonly: req.buildpkgonly,
+            root_deps_running_root: req.root_deps_running_root.as_deref(),
+            distdir: &req.distdir,
+            empty: req.empty,
+            getbinpkg: req.getbinpkg,
+            ignore_built_slot_operator_deps: req.ignore_built_slot_operator_deps,
+            backtrack_max: req.backtrack_max,
+            reinstall_atoms: &req.reinstall_atoms,
+            rebuild_if_new_slot: req.rebuild_if_new_slot,
+            rebuild_if_unbuilt: req.rebuild_if_unbuilt,
+            rebuild_if_new_rev: req.rebuild_if_new_rev,
+            rebuild_if_new_ver: req.rebuild_if_new_ver,
+            rebuild_exclude: &req.rebuild_exclude,
+            rebuild_ignore: &req.rebuild_ignore,
+            dynamic_deps: req.dynamic_deps,
+            implicit_system_deps: req.implicit_system_deps,
+            complete: req.complete,
+            repos: find_repos(&req.config_root)?,
+            slot_op_reachable,
+            complete_locked_merges: req
+                .config
+                .complete_locked_merges
+                .iter()
+                .filter_map(|s| {
+                    s.split_once('/')
+                        .map(|(c, p)| (c.to_string(), p.to_string()))
+                })
+                .collect(),
+            top_level: req.atoms.iter().map(|s| s.as_str()).collect(),
+            top_level_cps: req
+                .atoms
+                .iter()
+                .filter_map(|a| portage_dep::parse_atom(a))
+                .map(|a| (a.category, a.package))
+                .collect(),
+            local_binpkg: local_binpkg_index(&req.config),
+        })
+    }
+}
 
-            // `--reinstall-atoms`: a matching already-installed package
-            // is forced to re-merge (real `depgraph.py` drops it from
-            // every `inst_pkgs` list). In portuale's model that is the
-            // `--emptytree` rewrite, scoped to the matched atom.
-            if let PretendOutcome::AlreadyInstalled { version } = &outcome {
-                let cpv = format!("{}/{}-{version}", key.0, key.1);
-                if reinstall_atoms
-                    .iter()
-                    .any(|a| matches_config_entry(a, &cpv, &key.0, &key.1))
-                {
-                    outcome = PretendOutcome::Reinstall {
-                        version: version.clone(),
-                        changed_flags: Vec::new(),
-                        deps_changed: false,
-                        slot_changed: false,
-                        rebuilt_binary: false,
-                        new_repo: false,
-                        slot_operator_rebuild: false,
-                    };
-                }
+/// Phase C2 (023): one search node, mirroring real
+/// `backtracking.py::_BacktrackNode` (`parameter` + `depth` +
+/// `mask_steps` + `terminal`). `depth`/`mask_steps` live inside
+/// `BacktrackParams` (C1) rather than alongside it; `params_equal`
+/// excludes them (plus the derived `backtrack_config`), exactly like
+/// real's parameter-only `__eq__`.
+struct BacktrackNode {
+    params: BacktrackParams,
+    terminal: bool,
+}
+
+/// Phase C2 (023): the depth-first search over mask/config choices,
+/// mirroring real `backtracking.py::Backtracker`. `nodes` holds every
+/// node ever added; `unexplored` is the DFS stack of pending node
+/// indices; `current` is the node whose pass just ran (feedback builds
+/// from it). `max_depth` is real's `_max_depth` role (mask steps only)
+/// but NOT its formula: real computes `max(1, (retries + 1) // 2)` from
+/// `--backtrack` (default 20 retries) and additionally caps total
+/// restarts; portuale budgets `--backtrack=N` mask steps directly with
+/// no total cap (same depth-10 at default; documented deviation, see
+/// `backtrack_max`).
+struct Backtracker {
+    nodes: Vec<BacktrackNode>,
+    unexplored: Vec<usize>,
+    current: Option<usize>,
+    max_depth: u32,
+}
+
+/// Two `BacktrackParams` describe the same search state when every
+/// accumulator agrees. Excluded, like real's parameter `__eq__` excludes
+/// everything but the parameter content: `backtrack_config` (rebuilt
+/// deterministically from `autounmask_use_config` whenever it grows),
+/// `depth`/`mask_steps` (per-node search position, not state).
+fn params_equal(a: &BacktrackParams, b: &BacktrackParams) -> bool {
+    a.autounmask_suggest_keywords == b.autounmask_suggest_keywords
+        && a.autounmask_suggest_use == b.autounmask_suggest_use
+        && a.autounmask_suggest_license == b.autounmask_suggest_license
+        && a.autounmask_suggest_masks == b.autounmask_suggest_masks
+        && a.missing_dep_masked == b.missing_dep_masked
+        && a.reverse_dep_masked == b.reverse_dep_masked
+        && a.dropped_pins == b.dropped_pins
+        && a.slot_constraints == b.slot_constraints
+        && a.runtime_pkg_mask == b.runtime_pkg_mask
+        && a.autounmask_use_config == b.autounmask_use_config
+        && a.autounmask_use_change_records == b.autounmask_use_change_records
+        && a.autounmask_use_broke == b.autounmask_use_broke
+        && a.autounmask_disabled == b.autounmask_disabled
+}
+
+/// Real `Backtracker._check_runtime_pkg_mask` (bug 375573): a node is
+/// discarded when a slot-conflict mask's every parent is itself masked
+/// (the mask's reason got masked away -- exploring it is pointless).
+/// Missing-dependency masks never disqualify. A mask with no parents is
+/// always valid (real's 692746 arm: masking an all-matched package to
+/// avoid a missed update).
+/// Granularity note (carried into C3): real tests versioned-package
+/// presence (`ppkg not in runtime_pkg_mask`); here a parent counts as
+/// masked only on an exact `!=cpv` string hit, so masking a *different*
+/// version of a cited parent explores where real discards (safe
+/// direction: extra search, same reports). C3's real-shaped parent sets
+/// are the place to tighten this.
+fn check_runtime_pkg_mask(masks: &HashMap<(String, String), Vec<MaskEntry>>) -> bool {
+    for entries in masks.values() {
+        for entry in entries {
+            let parents = match &entry.reason {
+                MaskReason::SlotConflict { parents } => parents,
+                MaskReason::MissingDependency { .. } => continue,
+            };
+            if parents.is_empty() {
+                continue;
             }
+            let any_unmasked = parents.iter().any(|((pc, pp, pv), _atom)| {
+                !masks.get(&(pc.clone(), pp.clone())).is_some_and(|bucket| {
+                    bucket.iter().any(|m| m.neg == format!("!={pc}/{pp}-{pv}"))
+                })
+            });
+            if !any_unmasked {
+                return false;
+            }
+        }
+    }
+    true
+}
 
-            // Real `--autounmask-use` PART B *resolution* (`_apply_parent_use_changes`
-            // -> `_show_unsatisfied_dep(collect_use_changes=True)`,
-            // `depgraph.py:5820`/`6768`): a dependency's use-dep was originally
-            // conditional on the *requesting parent's* own USE (`opt?`/`opt=`
-            // forms), and no candidate satisfies the evaluated form -- because
-            // the child's own flag is `use.mask`'d/forced, so a child-side
-            // `package.use` flip (`suggested_use_flip`) is impossible. Real
-            // portage flips the *parent's* conditional flag instead
-            // (`suggested_parent_use_candidate`), folds it into
-            // `_needed_use_config_changes`, and re-drives the *whole* graph
-            // (`_backtrack_depgraph`) so the parent's other `flag?`-gated deps
-            // re-evaluate against the flipped state too. Slice 4: fold the flip
-            // into `autounmask_use_config` (keyed `(parent_cat, parent_pkg)` --
-            // exactly a `package.use` entry) and let the driver's
-            // `autounmask_grew` restart re-walk everything; a probe
-            // re-resolution of just the freed atom still gates it, so only a
-            // flip that actually helps is folded. `--autounmask-use=n`
-            // suppresses it via the shared `autounmask_suggest_use` gate.
-            let (current_atom, atom) = 'parent_flip: {
-                if !(matches!(outcome, PretendOutcome::NoVisibleCandidate)
-                    && autounmask_suggest_use
-                    && depth > 0)
-                {
-                    break 'parent_flip (current_atom, atom);
+impl Backtracker {
+    fn new(max_depth: u32, initial: BacktrackParams) -> Self {
+        let mut bt = Backtracker {
+            nodes: Vec::new(),
+            unexplored: Vec::new(),
+            current: None,
+            max_depth,
+        };
+        // Real `_add(self._root)`: the unmasked starting state, always
+        // terminal (deepest-terminal wins in `get_best_run`).
+        bt.add_node(initial, true, true);
+        bt
+    }
+
+    /// Real `Backtracker._add`: keep the node unless a 375573 discard
+    /// applies, it exceeds the mask budget, or an equal state exists.
+    /// Returns whether the node will be explored.
+    fn add_node(&mut self, params: BacktrackParams, terminal: bool, explore: bool) -> bool {
+        if !check_runtime_pkg_mask(&params.runtime_pkg_mask) {
+            return false;
+        }
+        if params.mask_steps > self.max_depth {
+            return false;
+        }
+        if self.nodes.iter().any(|n| params_equal(&n.params, &params)) {
+            return false;
+        }
+        self.nodes.push(BacktrackNode { params, terminal });
+        if explore {
+            self.unexplored.push(self.nodes.len() - 1);
+        }
+        true
+    }
+
+    /// C2: a dead end keeps its pass's merged accumulators in its node
+    /// (see `PassDecision::DeadEnd`), so a later best-run re-pass
+    /// reports what the abandoned pass saw instead of silently dropping
+    /// its USE-change records and dropped pins.
+    fn adopt_current(&mut self, params: BacktrackParams) {
+        if let Some(idx) = self.current {
+            self.nodes[idx].params = params;
+        }
+    }
+
+    /// Real `Backtracker.get`: pop the DFS stack; `None` means the search
+    /// is exhausted and the driver falls back to `get_best_run`.
+    fn get(&mut self) -> Option<BacktrackParams> {
+        let idx = self.unexplored.pop()?;
+        self.current = Some(idx);
+        Some(self.nodes[idx].params.clone())
+    }
+
+    /// Real `Backtracker.get_best_run`: the deepest terminal node's
+    /// params -- the most config progress with no masks -- so users never
+    /// see a "masked by backtracking" graph unless nothing better exists.
+    /// The root is terminal, so this always yields at least the initial
+    /// state.
+    fn get_best_run(&self) -> BacktrackParams {
+        let mut best = 0;
+        for (i, node) in self.nodes.iter().enumerate() {
+            if node.terminal && node.params.depth > self.nodes[best].params.depth {
+                best = i;
+            }
+        }
+        self.nodes[best].params.clone()
+    }
+
+    /// Real `Backtracker.feedback`: turn one pass's outcome into new
+    /// nodes from the current one. Config growth keeps the step budget
+    /// and the current terminal value; mask steps cost one budget unit
+    /// and are never terminal.
+    fn feedback(&mut self, kind: BacktrackFeedback) {
+        let current_idx = self
+            .current
+            .expect("feedback() only after get() returned params");
+        let current_terminal = self.nodes[current_idx].terminal;
+        let (mut params, terminal, mask_cost) = match kind {
+            BacktrackFeedback::Config { params } => (*params, current_terminal, 0),
+            BacktrackFeedback::SlotConflict { base, choices } => {
+                // C3: one node per ranked choice (real's
+                // `_feedback_slot_conflict` loop), masking the target
+                // plus its C4 similar group. A repeated mask replaces
+                // its reason (real assigns
+                // `runtime_pkg_mask[pkg]["slot conflict"]`, it never
+                // accumulates).
+                for choice in choices {
+                    let mut params = (*base).clone();
+                    let members = choice
+                        .similar
+                        .iter()
+                        .map(|s| (&s.target, &s.parents))
+                        .chain(std::iter::once((&choice.target, &choice.parents)))
+                        .collect::<Vec<_>>();
+                    for ((cat, pkg, ver), parents) in members {
+                        let neg = format!("!={cat}/{pkg}-{ver}");
+                        let bucket = params
+                            .runtime_pkg_mask
+                            .entry((cat.clone(), pkg.clone()))
+                            .or_default();
+                        match bucket.iter_mut().find(|m| m.neg == neg) {
+                            Some(existing) => {
+                                existing.reason = MaskReason::SlotConflict {
+                                    parents: parents.clone(),
+                                };
+                            }
+                            None => bucket.push(MaskEntry {
+                                neg,
+                                reason: MaskReason::SlotConflict {
+                                    parents: parents.clone(),
+                                },
+                            }),
+                        }
+                    }
+                    params.mask_steps += 1;
+                    params.depth += 1;
+                    self.add_node(params, false, true);
                 }
-                let (Some(owner_key), Some(unevaluated)) =
-                    (owner.as_ref(), unevaluated_atom.as_deref())
-                else {
-                    break 'parent_flip (current_atom, atom);
-                };
-                let Some((pc, pp, pv, target_use)) = suggested_parent_use_candidate(
-                    &repos,
-                    &entries,
-                    unevaluated,
-                    owner_key,
-                    config,
-                ) else {
-                    break 'parent_flip (current_atom, atom);
-                };
-                let Some((parent_cand, _piuse, parent_use, _pru)) =
-                    parent_use_state(&repos, &entries, owner_key, config)
-                else {
-                    break 'parent_flip (current_atom, atom);
-                };
-                let mut new_parent_use = parent_use.clone();
-                for (flag, want) in &target_use {
-                    if *want {
-                        new_parent_use.insert(flag.clone());
-                    } else {
-                        new_parent_use.remove(flag);
+                return;
+            }
+            BacktrackFeedback::MissingDep { base, owner, entry } => {
+                let mut params = *base;
+                // The re-mask latch travels with the mask (real's
+                // `dep.parent not in _runtime_pkg_mask` is the mask
+                // itself; portuale's string latch additionally pins the
+                // exact cpv so the same parent is never re-masked).
+                params.missing_dep_masked.insert(entry.neg.clone());
+                let bucket = params.runtime_pkg_mask.entry(owner).or_default();
+                if !bucket.iter().any(|m| m.neg == entry.neg) {
+                    bucket.push(entry);
+                }
+                (params, false, 1)
+            }
+        };
+        params.mask_steps += mask_cost;
+        params.depth += 1;
+        self.add_node(params, terminal, true);
+    }
+}
+
+/// Phase C3 (023): one ranked mask choice for a slot conflict: mask
+/// `target` (a `(cat, pkg, ver)` triple), opposed by `parents` (the
+/// pulling `((cat, pkg, ver), atom)` triples whose atom does NOT match
+/// the masked version -- real's `conflict_atoms`). One choice becomes
+/// one sibling node; DFS explores the last-added first.
+/// C4: `similar` holds missed-update siblings masked in the SAME node
+/// (real's `similar_pkgs` grouping): same `cat/pkg`, same slot, visible,
+/// not excluded, not already masked, not already a conflict party, each
+/// sharing at least one conflict atom with the target.
+struct MaskChoice {
+    target: (String, String, String),
+    parents: Vec<((String, String, String), String)>,
+    similar: Vec<SimilarMask>,
+}
+
+/// One missed-update sibling in a choice's mask group: mask its version
+/// alongside the choice target, opposed by its own non-matching subset.
+struct SimilarMask {
+    target: (String, String, String),
+    parents: Vec<((String, String, String), String)>,
+}
+
+/// Phase C3 (023): port of real
+/// `lib/_emerge/depgraph.py::_slot_confict_backtrack` (note the upstream
+/// one-`l` spelling), C4 extended with the `_iter_similar_available`
+/// grouping: each choice masks its target plus missed-update siblings
+/// in one node.
+/// Ranked ascending: the in-graph resolved version is always a
+/// candidate (real's bug-692746 append), candidates sort version-desc,
+/// then stably by ascending `conflict_atoms` length; the driver adds the
+/// nodes in that order so DFS pops the longest-conflict choice first,
+/// exactly like real's sort-then-`pop()`. Candidate matching uses the
+/// step-2 candidate-string form (`cat/pkg-ver:slot`, main slot only --
+/// the same documented subslot approximation C1 used, kept so the two
+/// call sites cannot disagree).
+/// Two known ceilings, both documented (neither is exercised by any
+/// fixture, and ranking-only effects cannot change the explored set,
+/// only its order): candidates come from the recorded `instances`
+/// (portuale keeps two per conflict -- existing + current -- where real
+/// ranks every pulled version, so a 3+-version conflict drops its third
+/// candidate), and `conflict_atoms` membership is version+slot only
+/// (real joins atoms via `atom.match(pkg.with_use(...))`, so a parent
+/// that version-matches but USE-mismatches counts as conflicting here
+/// and merely inflates the choice's length).
+/// Similar-grouping gates: same `cat/pkg` (the listing is scoped by cp),
+/// same main slot, `is_visible` under the effective config (real passes
+/// no `autounmask_level` at its own call site either), not `--exclude`d
+/// (same `matches_config_entry` idiom as selection), not already masked
+/// (exact-`!=cpv`-string presence -- same-version-different-repo is
+/// treated as masked, absent from fixtures), and not already a conflict
+/// party. The ebuild-only listing moots real's installed-skip and its
+/// built/binpkg-visibility branches (no counterpart, documented cut).
+fn slot_conflict_mask_choices(
+    repos: &[RepoConfig],
+    excluded: &[String],
+    params: &BacktrackParams,
+    slot_pullers: &SlotPullers,
+    sc: &SlotConflict,
+    config: &portage_profile::Config,
+) -> Vec<MaskChoice> {
+    // Every pulled version is a candidate, highest first (real's
+    // `conflict_pkgs.sort(reverse=True)`).
+    let mut versions: Vec<String> = sc.instances.iter().map(|i| i.version.clone()).collect();
+    versions.sort_by(|a, b| vercmp_ordering(a, b));
+    versions.reverse();
+    versions.dedup();
+    // Real's bug-692746 append: the resolved version is a candidate even
+    // when every parent atom matches it (masking it avoids a missed
+    // update). Portuale's `instances[0]` is always the resolved version,
+    // so this only fires when the instance list is somehow empty.
+    if !versions.contains(&sc.resolved_version) {
+        versions.push(sc.resolved_version.clone());
+    }
+    // All pulling parents (real's `all_parents`), minus the
+    // top-level-argument pseudo-pullers (empty `cat`), which match every
+    // version and hence never discriminate -- real keeps `@selected` in
+    // the set for the same null effect.
+    let mut all_parents: Vec<((String, String, String), String)> = Vec::new();
+    if let Some(pullers) = slot_pullers.get(&(sc.category.clone(), sc.package.clone())) {
+        for (pc, pp, pv, atom) in pullers {
+            if pc.is_empty() {
+                continue;
+            }
+            let parent = ((pc.clone(), pp.clone(), pv.clone()), atom.clone());
+            if !all_parents.contains(&parent) {
+                all_parents.push(parent);
+            }
+        }
+    }
+    let mut choices: Vec<MaskChoice> = versions
+        .into_iter()
+        .map(|ver| {
+            let candidate = format!("{}/{}-{}:{}", sc.category, sc.package, ver, sc.slot);
+            let parents: Vec<((String, String, String), String)> = all_parents
+                .iter()
+                .filter(|(_, atom)| {
+                    !portage_dep::match_from_list(atom, &[candidate.as_str()])
+                        .is_some_and(|m| !m.is_empty())
+                })
+                .cloned()
+                .collect();
+            // C4: missed-update siblings join the choice's mask group
+            // (real's `similar_pkgs`): same cp, same slot, visible under
+            // the effective config, not `--exclude`d, not already masked
+            // in the search state, not already a conflict party -- each
+            // sharing at least one conflict atom with the target (else
+            // masking it is pointless). Skipped entirely when the
+            // target's own conflict set is empty (real's `if
+            // conflict_atoms` gate). Highest version first, for a
+            // deterministic group order.
+            let mut similar: Vec<SimilarMask> = Vec::new();
+            if !parents.is_empty() {
+                let party_versions: Vec<&str> =
+                    sc.instances.iter().map(|i| i.version.as_str()).collect();
+                if let Ok(cands) = list_candidates(repos, &sc.category, &sc.package) {
+                    let mut sibs: Vec<&Candidate> = Vec::new();
+                    for c in cands.iter() {
+                        if c.slot != sc.slot || party_versions.contains(&c.version.as_str()) {
+                            continue;
+                        }
+                        if params
+                            .runtime_pkg_mask
+                            .get(&(sc.category.clone(), sc.package.clone()))
+                            .is_some_and(|bucket| {
+                                bucket.iter().any(|m| {
+                                    m.neg
+                                        == format!("!={}/{}-{}", sc.category, sc.package, c.version)
+                                })
+                            })
+                        {
+                            continue;
+                        }
+                        if !is_visible(c, &sc.category, &sc.package, config) {
+                            continue;
+                        }
+                        let cand_str = format!(
+                            "{}/{}-{}:{}/{}::{}",
+                            sc.category, sc.package, c.version, c.slot, c.sub_slot, c.repo_name
+                        );
+                        if excluded.iter().any(|ex| {
+                            matches_config_entry(ex, &cand_str, &sc.category, &sc.package)
+                        }) {
+                            continue;
+                        }
+                        sibs.push(c);
+                    }
+                    sibs.sort_by(|a, b| vercmp_ordering(&b.version, &a.version));
+                    for c in sibs {
+                        let sim_cpv =
+                            format!("{}/{}-{}:{}", sc.category, sc.package, c.version, sc.slot);
+                        let subset: Vec<((String, String, String), String)> = parents
+                            .iter()
+                            .filter(|(_, atom)| {
+                                !portage_dep::match_from_list(atom, &[sim_cpv.as_str()])
+                                    .is_some_and(|m| !m.is_empty())
+                            })
+                            .cloned()
+                            .collect();
+                        if subset.is_empty() {
+                            continue;
+                        }
+                        similar.push(SimilarMask {
+                            target: (sc.category.clone(), sc.package.clone(), c.version.clone()),
+                            parents: subset,
+                        });
                     }
                 }
-                let Some(re_atom) =
-                    portage_dep::evaluate_atom_conditionals(unevaluated, &new_parent_use)
-                else {
-                    break 'parent_flip (current_atom, atom);
+            }
+            MaskChoice {
+                target: (sc.category.clone(), sc.package.clone(), ver),
+                parents,
+                similar,
+            }
+        })
+        .collect();
+    // Stable ascending length sort (real's `backtrack_data.sort`), so
+    // equal-length choices keep version-desc order.
+    choices.sort_by_key(|c| c.parents.len());
+    choices
+}
+
+/// Phase C2 (023): one pass's outcome in real `_backtrack_depgraph`
+/// terms. Every variant carries the overlay-merged working copy (`base`
+/// for the mask kinds, `params` for `Config`): a pass that folded flips
+/// or dropped pins AND hit a conflict/mask reports or retries with the
+/// union, exactly as the old live-`bp` code did. `feedback` advances the
+/// counters; mask kinds are non-terminal, `Config` preserves the current
+/// terminal value. First hit wins, like the old step order (a pass with
+/// both growth and a conflict takes the growth -- real would park the
+/// config node and explore the conflict first; that combined ordering is
+/// a deliberate C2 cut).
+enum BacktrackFeedback {
+    Config {
+        params: Box<BacktrackParams>,
+    },
+    SlotConflict {
+        base: Box<BacktrackParams>,
+        choices: Vec<MaskChoice>,
+    },
+    MissingDep {
+        base: Box<BacktrackParams>,
+        owner: (String, String),
+        entry: MaskEntry,
+    },
+}
+
+/// Phase C2 (023): settle (report this pass with its merged working
+/// copy), feed one outcome back into the search, or abandon this node.
+/// `DeadEnd` is a pass real would not retry from: it carries an
+/// unsatisfiable dependency no feedback covers (top-level or latched
+/// parent, USE-only mismatch), i.e. real's `_create_graph` returning 0.
+/// The node is consumed but keeps the merged copy (see
+/// `Backtracker::adopt_current`); the search continues elsewhere and
+/// `get_best_run` picks the report. Without this, such a pass would
+/// settle straight into the abort path and hide the unmasked best run.
+enum PassDecision {
+    Settle { params: Box<BacktrackParams> },
+    Feedback(BacktrackFeedback),
+    DeadEnd { params: Box<BacktrackParams> },
+}
+
+/// Phase A1 (023): the cross-pass half of `backtracking_resolve`'s old
+/// `let mut` block. Cloned per search node once C2 lands (hence `Clone`).
+///
+/// ## Real counterpart
+///
+/// Real `lib/_emerge/resolver/backtracking.py::BacktrackParameter` carries
+/// `runtime_pkg_mask` (a `cpv -> mask-reason` dict fed by every feedback
+/// path), `needed_use_config_changes` (the autounmask accumulator) and the
+/// search bookkeeping (`depth`, `mask_steps`). Mapped here:
+/// `slot_constraints` holds only the solvable-conflict atom sets
+/// (portuale-specific positives); every `!=cpv` negative lives in
+/// `runtime_pkg_mask` with its `MaskReason` (C1 split); readers see the
+/// union via `union_constraints`.
+/// `autounmask_use_config` ≈ `needed_use_config_changes`. The C1
+/// trial quartet (`mask_phase`/`mask_trial_spent`/`mask_negatives`/
+/// `pre_trial_nvc`) and the `Reverting` pass had no real counterpart --
+/// portuale-only, removed in C2 when `get_best_run` replaced them.
+/// `mask_steps`/`depth` are the per-node search position (real's node
+/// attributes); `params_equal` excludes them, like real's parameter-only
+/// `__eq__`.
+#[derive(Debug, Clone, Default)]
+struct BacktrackParams {
+    /// `mut` so the `_autounmask_breakage` fallback (real
+    /// depgraph.py:12262) can switch all four off for one final clean
+    /// pass once an accumulated autounmask change turns out to break
+    /// another dependency.
+    autounmask_suggest_keywords: bool,
+    autounmask_suggest_use: bool,
+    autounmask_suggest_license: bool,
+    autounmask_suggest_masks: bool,
+    /// Real `backtracking.py::_feedback_missing_dep`: a dependency atom
+    /// with no matching package makes `_backtrack_depgraph` mask that
+    /// atom's *parent* and retry, so `dep_zapdeps` re-picks a `||` group
+    /// whose chosen alternative had an unsatisfiable subtree. The latch
+    /// (real's `dep.parent not in _runtime_pkg_mask` check) holds every
+    /// `!=parent-cpv` already tried, guaranteeing termination.
+    missing_dep_masked: HashSet<String>,
+    /// Real `_complete_graph`'s own parent atoms, discovered by vdb
+    /// reverse scan -- see `reverse_dependency_constraints`. Latches every
+    /// `(cat/pkg, atom)` already folded into `slot_constraints` so a
+    /// constraint is never re-added and the `'backtrack` loop converges.
+    reverse_dep_masked: HashSet<((String, String), String)>,
+    /// Dropped reverse-dep pins (see `RevDepPin`), accumulated across
+    /// passes, for the residual installed-instance conflict report once
+    /// the graph settles (see `build_residual_slot_conflicts`). Deduped
+    /// by `(cp, atom, consumer)`; stale entries (a later pass picked a
+    /// compatible version after all) simply yield no record.
+    dropped_pins: Vec<RevDepPin>,
+    /// Real `_emerge/resolver/backtracking.py`: the resolver runs the whole
+    /// graph walk, and if the first pass hits a *solvable* slot conflict
+    /// (real `_process_slot_conflicts` -- a single version can satisfy
+    /// every parent atom that landed on the slot), it records the extra
+    /// constraints and re-runs the entire walk from scratch. `entries` and
+    /// every other per-pass accumulator is rebuilt each iteration; only
+    /// this map (keyed by `cat/pkg`, the union of every atom text that
+    /// targeted a conflicted package) and the other cross-pass
+    /// accumulators survive across attempts. Since C1 this map
+    /// holds only the positive atom sets; negatives live in
+    /// `runtime_pkg_mask` (readers use `union_constraints`).
+    slot_constraints: HashMap<(String, String), Vec<String>>,
+    /// C1 split of the old combined map: every `!=cpv` negative with its
+    /// `MaskReason`, keyed by the masked version's `cat/pkg` (real keys by
+    /// package; the per-`cat/pkg` bucket keeps every reader's lookup shape).
+    runtime_pkg_mask: HashMap<(String, String), Vec<MaskEntry>>,
+    /// Mask-producing retries (slot-conflict choices, missing-dep
+    /// parents). Real's `--backtrack=N` bounds this per node
+    /// (`Backtracker._add`), not the pass count; advanced by
+    /// `Backtracker::feedback`, never in the walk.
+    mask_steps: u32,
+    /// Every retry including config-growth passes. Real's node depth;
+    /// advanced by `Backtracker::feedback`, never in the walk.
+    depth: u32,
+    /// Backtracking slice: `--autounmask-use` changes fed back into the
+    /// loop (real `_dynamic_config._needed_use_config_changes`, applied by
+    /// `backtracking.py::_feedback_config` on the next attempt). A
+    /// dependency atom `X[flag]` that lands on an *already-resolved* slot
+    /// whose package can't satisfy `[flag]` -- but a `package.use` flip
+    /// could -- folds the flip in here (`(cat, pkg) -> {flag -> desired}`)
+    /// and re-runs the whole walk, so the freshly-walked package's
+    /// `flag?`-gated deps appear. Survives across passes like
+    /// `slot_constraints`; converges when a pass adds nothing new.
+    /// Written in-walk (see the A3 overlay); read back within the same pass.
+    autounmask_use_config: HashMap<(String, String), HashMap<String, bool>>,
+    /// The `The following USE changes are necessary to proceed:` block
+    /// entries recorded at the moment each flip is folded in above --
+    /// recorded here (not the per-pass `autounmask_use_changes`) because a
+    /// `continue 'backtrack` discards the pass, and after the re-resolve
+    /// the atom's `[flag]` is *satisfied* (by the accumulator) so nothing
+    /// re-records it. Merged into `autounmask_use_changes` once the graph
+    /// settles. Deduped by `(atom, token)`.
+    /// Written in-walk (see the A3 overlay); read back within the same pass.
+    autounmask_use_change_records: Vec<AutounmaskChange>,
+    /// `req.config` with `autounmask_use` filled from the accumulator --
+    /// rebuilt whenever the accumulator grows, `None` until then (so the
+    /// common no-autounmask path never clones `Config`).
+    backtrack_config: Option<portage_profile::Config>,
+    /// Real `_autounmask_breakage` (depgraph.py:12262): once an accumulated
+    /// autounmask USE change turns out to make some *other* use-dep
+    /// unsatisfiable and cannot be reconciled -- the same flag ends up
+    /// wanted both on and off -- portage abandons autounmask entirely
+    /// (`myparams["autounmask"] = False`) and re-resolves one final clean
+    /// pass. This latch holds the contradiction; the driver acts on it
+    /// once and sets `autounmask_disabled` so it can't re-fire.
+    /// Written in-walk (see the A3 overlay); read back within the same pass.
+    autounmask_use_broke: bool,
+    autounmask_disabled: bool,
+}
+
+impl BacktrackParams {
+    /// The root node's params: the caller's suggestion flags, everything
+    /// else default (no constraints, no masks, step counters at zero).
+    fn initial(req: &ResolveRequest) -> Self {
+        BacktrackParams {
+            autounmask_suggest_keywords: req.autounmask_suggest_keywords,
+            autounmask_suggest_use: req.autounmask_suggest_use,
+            autounmask_suggest_license: req.autounmask_suggest_license,
+            autounmask_suggest_masks: req.autounmask_suggest_masks,
+            ..Default::default()
+        }
+    }
+
+    /// Effective per-`cat/pkg` constraint bucket for readers: the
+    /// solvable-conflict positives plus the rendered `runtime_pkg_mask`
+    /// negatives. Order within a bucket is positives-then-negatives; every
+    /// consumer applies the entries as an order-independent conjunction
+    /// (see the `!`-prefix handling in `atom_currently_satisfiable` and
+    /// `resolve_pretend`), so this matches the old combined map exactly.
+    /// Built once per pass in `run_pass` -- `bp` is never mutated
+    /// mid-walk, so the union is pass-constant.
+    fn union_constraints(&self) -> HashMap<(String, String), Vec<String>> {
+        let mut out = self.slot_constraints.clone();
+        for (cp, masks) in &self.runtime_pkg_mask {
+            out.entry(cp.clone())
+                .or_default()
+                .extend(masks.iter().map(|m| m.neg.clone()));
+        }
+        out
+    }
+
+    /// Just the rendered `runtime_pkg_mask` negatives for one `cat/pkg`
+    /// (no positives): what real's dep-level `runtime_pkg_mask` probe
+    /// sees. Used by the missing-dep trigger to tell mask-induced
+    /// unsatisfiability (retry with the parent masked) from genuine
+    /// absence and USE-only failure.
+    fn masked_negatives_for(&self, cp: &(String, String)) -> Vec<String> {
+        self.runtime_pkg_mask
+            .get(cp)
+            .map(|bucket| bucket.iter().map(|m| m.neg.clone()).collect())
+            .unwrap_or_default()
+    }
+}
+
+/// Phase A2 (023): every per-pass value the decision chain or the
+/// tail assembly reads. Built once per pass from the walk locals;
+/// `Feedback` drops it, `Settle` moves it into `assemble_result`.
+/// (C2: plus the overlay trio, folded into the node params by the
+/// driver before deciding.)
+struct PassResult {
+    entries: Vec<GraphEntry>,
+    slot_conflicts: Vec<SlotConflict>,
+    slot_want: HashMap<(String, String), Vec<String>>,
+    slot_pullers: SlotPullers,
+    masked_deps: Vec<MaskedDepReport>,
+    nvc_dep_atoms: HashMap<(String, String), String>,
+    missing_dep_trigger: Option<((String, String), String, String)>,
+    autounmask_grew: bool,
+    edge_kind_map: EdgeKindMap,
+    changed_deps_report_entries: Vec<ChangedDepsReportEntry>,
+    pprovided_atoms: Vec<String>,
+    autounmask_keyword_changes: Vec<AutounmaskChange>,
+    autounmask_use_changes: Vec<AutounmaskChange>,
+    autounmask_license_changes: Vec<AutounmaskChange>,
+    autounmask_mask_changes: Vec<AutounmaskChange>,
+    /// This pass's overlay accumulators, folded into `bp` by `next_step`
+    /// before the decision chain (see `PassState`).
+    use_overlay: HashMap<(String, String), HashMap<String, bool>>,
+    use_change_overlay: Vec<AutounmaskChange>,
+    use_broke: bool,
+}
+
+/// Phase A3 (023): the walk's-Everything per-pass `let mut`s, moved out of
+/// the loop body so the `'queue` walk can live in `run_pass`. Field docs
+/// are the original declaration-site comments, moved verbatim. Plus the
+/// three overlay accumulators (`use_overlay`, `use_change_overlay`,
+/// `use_broke`): the walk writes the cross-pass autounmask accumulators
+/// through these and reads them back overlay-then-`bp` within the same
+/// pass (see `overlay_use_want`); `collect_feedback` + driver folds them into `bp` before
+/// the decision chain, which is exactly where today's code already has
+/// them (today the walk writes `bp` directly).
+#[derive(Default)]
+struct PassState {
+    /// Guards against infinite requeuing (e.g. a dependency cycle): the
+    /// exact same atom *text* is only ever resolved once. This is
+    /// deliberately coarser than the (category, package, slot) dedup
+    /// below -- it exists purely for termination, not to decide whether a
+    /// given slot has already been fully resolved (two different atom
+    /// texts, e.g. a bare "dev-libs/foo" and a slotted "dev-libs/foo:1",
+    /// can both need to be resolved even though they'd share a visited-atom
+    /// check keyed any coarser than exact text).
+    visited_atoms: HashSet<String>,
+    /// (category, package, slot) -> index into `entries`, for New/Upgrade
+    /// outcomes only. The first atom to resolve a given slot "wins" (its
+    /// version is what gets recursed into); every later atom landing on
+    /// the same slot is checked against that already-resolved version
+    /// (see `SlotConflict`) instead of triggering a second, independent
+    /// resolution.
+    resolved_slots: HashMap<(String, String, String), usize>,
+    /// (category, package) -> already added an AlreadyInstalled/
+    /// NoVisibleCandidate entry for it. Separate from `resolved_slots`
+    /// since neither outcome carries a slot to usefully key repeats by.
+    other_outcomes: HashSet<(String, String)>,
+    /// (category, package) -> already added a `targets_running_root`
+    /// entry for it (see `resolve_root_deps_build_entries`'s own doc
+    /// comment). Deliberately separate from `resolved_slots`/
+    /// `other_outcomes` above -- those two dedup ROOT-targeted
+    /// resolutions, and a package genuinely can need building into *both*
+    /// ROOT (as an ordinary RDEPEND) and the running root (as some other
+    /// package's own BDEPEND) at once, which must never collide into one
+    /// shared dedup key.
+    root_deps_build_seen: HashSet<(String, String)>,
+    /// Backtracking: every atom text (bare or constrained) that targeted a
+    /// given `cat/pkg` this pass. On a solvable slot conflict the whole set
+    /// for the conflicted package becomes its `slot_constraints` entry for
+    /// the next attempt.
+    slot_want: HashMap<(String, String), Vec<String>>,
+    /// Backtracking: for each `cat/pkg` targeted by some package's
+    /// dependency string this pass, the `(cat, pkg, version)` of every
+    /// package that pulled it in, plus the pulling atom text. C3's
+    /// `slot_conflict_mask_choices` reads the triples to build each
+    /// choice's `conflict_atoms` (real's parent side); parent
+    /// downgrades now arrive via missing-dep feedback on a later pass,
+    /// not pre-masking (see the step-3 site).
+    slot_pullers: SlotPullers,
+    /// Set when this pass folded a new `--autounmask-use` flip into
+    /// `autounmask_use_config` (the already-resolved-slot re-check).
+    /// The driver at the bottom re-runs the whole walk with the grown
+    /// config, so the flipped package's `flag?`-gated deps appear.
+    autounmask_grew: bool,
+    /// Set (once) when this pass hit a dependency `NoVisibleCandidate`
+    /// whose non-top-level parent isn't already latched -- the driver
+    /// at the bottom masks `!=parent-cpv` and re-runs (real
+    /// `_feedback_missing_dep`).
+    missing_dep_trigger: Option<((String, String), String, String)>,
+    entries: Vec<GraphEntry>,
+    /// REQUIRED_USE (see the check further below, in the main BFS loop):
+    /// real depgraph.py's own `_add_pkg` sets
+    /// `_dynamic_config._required_use_unsatisfied = True` and returns 0
+    /// on a violation -- it does NOT abort the whole graph walk, unlike a
+    /// top-level atom's own `NoVisibleCandidate`. Every violation
+    /// encountered anywhere in the walk is collected here and the BFS
+    /// keeps going; the whole call only fails at the very end, once every
+    /// reachable candidate has had a chance to resolve (or fail) on its
+    /// own terms -- matching real portage's own `_unsatisfied_deps_for_
+    /// display` list (checked once, at the very end of the real resolve)
+    /// rather than portuale's own previous "abort on the first hit"
+    /// shortcut.
+    required_use_violations: Vec<String>,
+    slot_conflicts: Vec<SlotConflict>,
+    /// Masked-dependency disclosures for this pass (see
+    /// `MaskedDepReport`): rebuilt every attempt like `slot_conflicts`,
+    /// so only the final pass's reports are rendered.
+    masked_deps: Vec<MaskedDepReport>,
+    /// The unevaluated dep atom behind each dependency
+    /// `NoVisibleCandidate` entry (first requirer wins, like the entry
+    /// itself), for `abort_outcome`'s `UnsatisfiedAtom` reason.
+    nvc_dep_atoms: HashMap<(String, String), String>,
+    /// `--changed-deps-report`: real `_changed_deps_pkgs` is a dict keyed
+    /// by the installed `Package` object, so a repeat visit to the same
+    /// installed category/package/version (e.g. via both a bare
+    /// "dev-libs/foo" and an explicit "dev-libs/foo:0" atom text, or a
+    /// diamond dependency) naturally collapses to one entry -- mirrored
+    /// here with an explicit dedup set, keyed the same way, preserving
+    /// first-encountered order (real dict iteration order) rather than
+    /// sorting.
+    changed_deps_report_seen: HashSet<(String, String, String)>,
+    changed_deps_report_entries: Vec<ChangedDepsReportEntry>,
+    /// Each queued atom carries its own depth (0 for a directly-requested
+    /// top-level atom, parent's depth + 1 for anything reached only via a
+    /// dependency string) -- only consulted by `deep.recurses_at` below,
+    /// for deciding whether an AlreadyInstalled package's own further
+    /// dependencies get walked; every other outcome ignores it entirely
+    /// (see `Deep`'s own doc comment) -- and the `(category, package)`
+    /// that pushed it, if any (`None` for a directly-requested top-level
+    /// atom), only consulted by `required_by_map` below, for `GraphEntry`'s
+    /// own `required_by` field.
+    queue: VecDeque<QueueItem>,
+    pending_blockers: Vec<PendingBlocker>,
+    /// Top-level atoms matched by `package.provided` -- see
+    /// `GraphResult::pprovided_atoms`.
+    pprovided_atoms: Vec<String>,
+    /// Real `--autounmask` changes applied during this walk -- see
+    /// `GraphResult::autounmask_keyword_changes` / `autounmask_use_changes`.
+    autounmask_keyword_changes: Vec<AutounmaskChange>,
+    autounmask_use_changes: Vec<AutounmaskChange>,
+    autounmask_license_changes: Vec<AutounmaskChange>,
+    autounmask_mask_changes: Vec<AutounmaskChange>,
+    /// (category, package) -> every distinct owner that reached it via a
+    /// dependency string, accumulated separately from the BFS's own
+    /// dedup/recursion decisions below (`visited_atoms`/`resolved_slots`/
+    /// `other_outcomes`) so a diamond dependency's *second* (deduped)
+    /// owner still gets recorded even though it never triggers a new
+    /// resolution -- merged into `entries` in a single post-pass at the
+    /// end, mirroring `pending_blockers`/`resolve_blockers`'s own
+    /// "accumulate now, merge once the whole graph is known" shape.
+    required_by_map: HashMap<(String, String), HashSet<(String, String)>>,
+    /// See `EdgeKindMap`'s own doc comment. An edge counts as
+    /// unbreakable only when `has_hard && !has_soft` -- one run-time or
+    /// optional route makes the whole edge breakable, matching real
+    /// portage's per-edge `DepPriority`.
+    edge_kind_map: EdgeKindMap,
+    /// This pass's `--autounmask-use` flips (`(cat, pkg) -> {flag ->
+    /// desired}`), overlaying `bp.autounmask_use_config` (see
+    /// `overlay_use_want`). Buckets are never empty: entries are created
+    /// only together with an insert, exactly like the old direct writes.
+    use_overlay: HashMap<(String, String), HashMap<String, bool>>,
+    /// This pass's `The following USE changes are necessary to proceed:`
+    /// records, overlaying `bp.autounmask_use_change_records` (deduped by
+    /// `(atom, token)` across the union).
+    use_change_overlay: Vec<AutounmaskChange>,
+    /// This pass hit an autounmask contradiction (a flag wanted both on
+    /// and off); `collect_feedback` + driver latches it into `bp.autounmask_use_broke`.
+    use_broke: bool,
+}
+
+/// Phase A3 (023): the effective value of one autounmask flag for the
+/// current pass -- this pass's overlay first, then the cross-pass
+/// accumulator. The walk's two flip sites must see both (a flip folded on
+/// an *earlier* pass lives in `committed`; one folded *earlier this pass*
+/// lives in `overlay`), exactly as the old direct-write-then-read did.
+fn overlay_use_want(
+    overlay: &HashMap<(String, String), HashMap<String, bool>>,
+    committed: &HashMap<(String, String), HashMap<String, bool>>,
+    key: &(String, String),
+    flag: &str,
+) -> Option<bool> {
+    overlay
+        .get(key)
+        .and_then(|b| b.get(flag))
+        .copied()
+        .or_else(|| committed.get(key).and_then(|b| b.get(flag)).copied())
+}
+
+/// Phase A3 (023): one full BFS walk over the current `bp`.
+/// Takes `&bp`, never `&mut bp` -- the walk records its
+/// autounmask flips into the pass-local overlay (`PassState`:
+/// `use_overlay` / `use_change_overlay` / `use_broke`, read back
+/// overlay-then-`bp` within the pass) and `collect_feedback` + driver folds them
+/// into `bp` before deciding. Returns the settled pass; the
+/// `REQUIRED_USE` early-`Err` below is the only failure mode.
+fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<PassResult, Error> {
+    // The same effective-config view the loop feeds `collect_feedback` + driver /
+    // `assemble_result` (cloned out of `bp`; only `&bp` is borrowed
+    // in here, so no `config_owned` dance is needed).
+    let config_owned: Option<portage_profile::Config> = bp.backtrack_config.clone();
+    let config: &portage_profile::Config = config_owned.as_ref().unwrap_or(ctx.config);
+    let mut state = PassState::default();
+    // C1: readers see positives + rendered negatives as one bucket.
+    // Pass-constant: `bp` is never mutated mid-walk (only the overlay).
+    let union_constraints = bp.union_constraints();
+    if resolver_debug() && first_pass {
+        for a in ctx.atoms {
+            resolver_trace::tr!("\n      Arg: {a}\n     Atom: {a}\n");
+        }
+    }
+    for a in ctx.atoms {
+        // A top-level atom has no "unevaluated" form distinct from
+        // itself (no parent to ever flip a flag on), matching real
+        // portage, which never suggests a parent-flag fix for a
+        // top-level atom either.
+        state.queue.push_back(QueueItem {
+            atom: a.clone(),
+            depth: 0,
+            owner: None,
+            unevaluated: None,
+            buildtime_hard: false,
+        });
+    }
+
+    let pprovided_refs: Vec<&str> = config.package_provided.iter().map(String::as_str).collect();
+
+    'queue: while let Some(QueueItem {
+        atom: current_atom,
+        depth,
+        owner,
+        unevaluated: unevaluated_atom,
+        buildtime_hard,
+    }) = state.queue.pop_front()
+    {
+        let Some(atom) = portage_dep::parse_atom(&current_atom) else {
+            continue;
+        };
+        if atom.blocker != portage_dep::Blocker::None {
+            continue;
+        }
+        // `package.provided` (real `dep_check.py:1052` for a dependency,
+        // `depgraph.py:5497-5615` for a top-level target): an atom whose
+        // `cat/pkg` is listed and whose constraint one of that cp's
+        // provided CPVs satisfies is treated as already installed. A
+        // dependency is silently dropped (no entry, no `required_by`
+        // edge -- real portage removes it from the deplist); a top-level
+        // atom is recorded for the `WARNING: … package.provided:` block
+        // and otherwise skipped.
+        if !pprovided_refs.is_empty()
+            && portage_dep::match_from_list(&current_atom, &pprovided_refs)
+                .is_some_and(|m| !m.is_empty())
+        {
+            if depth == 0 && !state.pprovided_atoms.contains(&current_atom) {
+                state.pprovided_atoms.push(current_atom.clone());
+            }
+            continue;
+        }
+        let key = (atom.category.clone(), atom.package.clone());
+        if let Some(owner) = owner.clone() {
+            state
+                .required_by_map
+                .entry(key.clone())
+                .or_default()
+                .insert(owner.clone());
+            let kinds = state
+                .edge_kind_map
+                .entry((key.clone(), owner))
+                .or_insert((false, false));
+            // Real `DepPriority.satisfied` (`_emerge/DepPriority.py`):
+            // a build-time dep already provided by an installed
+            // package gets a *satisfied* priority, which
+            // `_serialize_tasks`' `DepPrioritySatisfiedRange` can
+            // ignore when breaking a cycle -- so it is not an
+            // unbreakable edge. Only a genuinely unsatisfied
+            // build-time dep counts as `has_hard`, matching this
+            // map's own "unsatisfied build-time dep" contract. Under
+            // `--emptytree` both ends of the `app-arch/xz-utils` <->
+            // `app-portage/elt-patches` build-time cycle are still
+            // installed, so real orders them by their installed
+            // versions rather than reporting a circular dependency.
+            if buildtime_hard
+                && best_installed_for_atom(ctx.root, &current_atom, &key.0, &key.1).is_none()
+            {
+                kinds.0 = true;
+            } else {
+                kinds.1 = true;
+            }
+        }
+        if !state.visited_atoms.insert(current_atom.clone()) {
+            continue;
+        }
+        // `emerge --pretend --debug` Stage 3: real
+        // `_wrapped_select_pkg_highest_available_imp`'s own
+        // `f"{type_name + ':':>10} {cpv}::{repo}\n"` candidate list
+        // (`depgraph.py:8347`) -- every candidate that matched this
+        // atom, in real's `dbs` order (ebuild, then binary, then
+        // installed), to stderr. First pass only.
+        if resolver_debug() && first_pass {
+            resolver_trace::dump_atom_candidates(
+                &ctx.repos,
+                ctx.root,
+                &current_atom,
+                &key.0,
+                &key.1,
+            );
+        }
+        // Backtracking: record this atom as one of the constraints pulling
+        // `cat/pkg` (real `_select_pkg_highest_available` sees the whole
+        // atom set for a package, not just the first).
+        state
+            .slot_want
+            .entry(key.clone())
+            .or_default()
+            .push(current_atom.clone());
+        // Backtracking slice 4: a top-level atom targeting this
+        // `cat/pkg` is an "Argument" puller for the slot-collision
+        // block (real `slot_collision_handler`'s `(Argument)` line).
+        if owner.is_none() {
+            state.slot_pullers.entry(key.clone()).or_default().push((
+                String::new(),
+                String::new(),
+                String::new(),
+                current_atom.clone(),
+            ));
+        }
+
+        // Backtracking: if an earlier attempt hit a *solvable* slot
+        // conflict on this `cat/pkg`, every parent atom that targeted it is
+        // now enforced together, so this attempt picks the one version
+        // that satisfies all of them and the conflict disappears.
+        let empty_constraints: Vec<String> = Vec::new();
+        let extra_constraints = union_constraints.get(&key).unwrap_or(&empty_constraints);
+
+        // Real `_complete_graph`'s `_select_pkg_from_graph`
+        // (`depgraph.py:8495`): in complete mode the deep re-walk of
+        // the required sets may only pick a package already in the
+        // graph or installed -- never resolve/merge anything new. For
+        // a dependency atom whose `cp` isn't a genuine phase-1 merge
+        // target, that means: an installed version that satisfies it
+        // -> `AlreadyInstalled` (deep-walk its deps, merge nothing);
+        // nothing installed -> real's `_initially_unsatisfied_deps`,
+        // no graph node -> drop. Done **before** `resolve_pretend`,
+        // not after -- the full candidate/visibility/USE resolution
+        // for every installed package in the world is exactly the
+        // work real's cheap graph-or-installed check avoids (it made
+        // `emerge -pt gnome-control-center` take minutes). A no-op
+        // unless `complete_locked_merges` was populated (only the CLI
+        // layer's complete pass does that); top-level atoms always go
+        // through `resolve_pretend` (their `NoVisibleCandidate` is
+        // fatal, handled below).
+        let mut outcome = if ctx.complete
+            && !ctx.complete_locked_merges.is_empty()
+            && owner.is_some()
+            && !ctx.complete_locked_merges.contains(&key)
+        {
+            match best_installed_for_atom(ctx.root, &current_atom, &key.0, &key.1) {
+                Some(v) => PretendOutcome::AlreadyInstalled { version: v },
+                None => continue 'queue,
+            }
+        } else {
+            resolve_pretend(
+                &ctx.repos,
+                ctx.root,
+                &current_atom,
+                config,
+                ctx.newuse,
+                ctx.changed_use,
+                ctx.update,
+                ctx.excluded,
+                ctx.changed_deps,
+                ctx.with_bdeps,
+                ctx.changed_slot,
+                ctx.selective,
+                depth == 0,
+                ctx.usepkg,
+                ctx.usepkgonly,
+                ctx.binpkg_respect_use,
+                ctx.usepkg_exclude,
+                ctx.usepkg_include,
+                ctx.rebuilt_binaries,
+                ctx.rebuilt_binaries_timestamp,
+                ctx.newrepo,
+                ctx.empty,
+                ctx.getbinpkg,
+                bp.autounmask_suggest_keywords,
+                bp.autounmask_suggest_use,
+                bp.autounmask_suggest_license,
+                bp.autounmask_suggest_masks,
+                extra_constraints,
+            )?
+        };
+
+        // `--reinstall-atoms`: a matching already-installed package
+        // is forced to re-merge (real `depgraph.py` drops it from
+        // every `inst_pkgs` list). In portuale's model that is the
+        // `--emptytree` rewrite, scoped to the matched atom.
+        if let PretendOutcome::AlreadyInstalled { version } = &outcome {
+            let cpv = format!("{}/{}-{version}", key.0, key.1);
+            if ctx
+                .reinstall_atoms
+                .iter()
+                .any(|a| matches_config_entry(a, &cpv, &key.0, &key.1))
+            {
+                outcome = PretendOutcome::Reinstall {
+                    version: version.clone(),
+                    changed_flags: Vec::new(),
+                    deps_changed: false,
+                    slot_changed: false,
+                    rebuilt_binary: false,
+                    new_repo: false,
+                    slot_operator_rebuild: false,
                 };
-                let Some(re_parsed) = portage_dep::parse_atom(&re_atom) else {
-                    break 'parent_flip (current_atom, atom);
-                };
-                let re_outcome = resolve_pretend(
-                    &repos,
-                    root,
-                    &re_atom,
+            }
+        }
+
+        // Real `--autounmask-use` PART B *resolution* (`_apply_parent_use_changes`
+        // -> `_show_unsatisfied_dep(collect_use_changes=True)`,
+        // `depgraph.py:5820`/`6768`): a dependency's use-dep was originally
+        // conditional on the *requesting parent's* own USE (`opt?`/`opt=`
+        // forms), and no candidate satisfies the evaluated form -- because
+        // the child's own flag is `use.mask`'d/forced, so a child-side
+        // `package.use` flip (`suggested_use_flip`) is impossible. Real
+        // portage flips the *parent's* conditional flag instead
+        // (`suggested_parent_use_candidate`), folds it into
+        // `_needed_use_config_changes`, and re-drives the *whole* graph
+        // (`_backtrack_depgraph`) so the parent's other `flag?`-gated deps
+        // re-evaluate against the flipped state too. Slice 4: fold the flip
+        // into `autounmask_use_config` (keyed `(parent_cat, parent_pkg)` --
+        // exactly a `package.use` entry) and let the driver's
+        // `autounmask_grew` restart re-walk everything; a probe
+        // re-resolution of just the freed atom still gates it, so only a
+        // flip that actually helps is folded. `--autounmask-use=n`
+        // suppresses it via the shared `autounmask_suggest_use` gate.
+        let (current_atom, atom) = 'parent_flip: {
+            if !(matches!(outcome, PretendOutcome::NoVisibleCandidate)
+                && bp.autounmask_suggest_use
+                && depth > 0)
+            {
+                break 'parent_flip (current_atom, atom);
+            }
+            let (Some(owner_key), Some(unevaluated)) =
+                (owner.as_ref(), unevaluated_atom.as_deref())
+            else {
+                break 'parent_flip (current_atom, atom);
+            };
+            let Some((pc, pp, pv, target_use)) = suggested_parent_use_candidate(
+                &ctx.repos,
+                &state.entries,
+                unevaluated,
+                owner_key,
+                config,
+            ) else {
+                break 'parent_flip (current_atom, atom);
+            };
+            let Some((parent_cand, _piuse, parent_use, _pru)) =
+                parent_use_state(&ctx.repos, &state.entries, owner_key, config)
+            else {
+                break 'parent_flip (current_atom, atom);
+            };
+            let mut new_parent_use = parent_use.clone();
+            for (flag, want) in &target_use {
+                if *want {
+                    new_parent_use.insert(flag.clone());
+                } else {
+                    new_parent_use.remove(flag);
+                }
+            }
+            let Some(re_atom) =
+                portage_dep::evaluate_atom_conditionals(unevaluated, &new_parent_use)
+            else {
+                break 'parent_flip (current_atom, atom);
+            };
+            let Some(re_parsed) = portage_dep::parse_atom(&re_atom) else {
+                break 'parent_flip (current_atom, atom);
+            };
+            let re_outcome = resolve_pretend(
+                &ctx.repos,
+                ctx.root,
+                &re_atom,
+                config,
+                ctx.newuse,
+                ctx.changed_use,
+                ctx.update,
+                ctx.excluded,
+                ctx.changed_deps,
+                ctx.with_bdeps,
+                ctx.changed_slot,
+                ctx.selective,
+                depth == 0,
+                ctx.usepkg,
+                ctx.usepkgonly,
+                ctx.binpkg_respect_use,
+                ctx.usepkg_exclude,
+                ctx.usepkg_include,
+                ctx.rebuilt_binaries,
+                ctx.rebuilt_binaries_timestamp,
+                ctx.newrepo,
+                ctx.empty,
+                ctx.getbinpkg,
+                bp.autounmask_suggest_keywords,
+                bp.autounmask_suggest_use,
+                bp.autounmask_suggest_license,
+                bp.autounmask_suggest_masks,
+                &[],
+            )?;
+            if matches!(re_outcome, PretendOutcome::NoVisibleCandidate) {
+                break 'parent_flip (current_atom, atom);
+            }
+
+            if !ctx.autounmask_backtrack_enabled {
+                // Default (real `--autounmask-backtrack` off): apply the
+                // parent flip to *this* dependency's resolution and
+                // re-render the parent's own USE line, but do NOT
+                // re-drive the whole graph -- the parent's other
+                // `flag?`-gated deps keep whatever the first walk gave
+                // them (real records `_needed_use_config_changes` and
+                // breaks out of `_backtrack_depgraph`).
+                outcome = re_outcome;
+                let parent_cpv = format!("{pc}/{pp}-{pv}");
+                let parent_all = list_candidates(&ctx.repos, &pc, &pp).unwrap_or_default();
+                let token = target_use
+                    .iter()
+                    .map(|(f, e)| if *e { f.clone() } else { format!("-{f}") })
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                state.autounmask_use_changes.push(AutounmaskChange {
+                    atom: autounmask_use_atom_form(&parent_cand, &parent_all, &pc, &pp, config),
+                    token,
+                    dep_chain: autounmask_dep_chain(
+                        &Some((pc.clone(), pp.clone())),
+                        "",
+                        &ctx.top_level,
+                        &state.entries,
+                    ),
+                });
+                let mut disp_seen: HashSet<String> = HashSet::new();
+                let mut disp: Vec<(String, bool)> = parent_cand
+                    .iuse
+                    .split_whitespace()
+                    .map(|t| t.trim_start_matches(['+', '-']).to_string())
+                    .filter(|f| disp_seen.insert(f.clone()))
+                    .map(|f| {
+                        let on = new_parent_use.contains(&f);
+                        (f, on)
+                    })
+                    .collect();
+                disp.sort_by_key(|p| alnum_sort_key(&p.0));
+                let forced = forced_or_masked_flags(
+                    &parent_cand.iuse,
+                    &parent_cand.keywords,
+                    &parent_cpv,
+                    &pc,
+                    &pp,
                     config,
-                    newuse,
-                    changed_use,
-                    update,
-                    excluded,
-                    changed_deps,
-                    with_bdeps,
-                    changed_slot,
-                    selective,
-                    depth == 0,
-                    usepkg,
-                    usepkgonly,
-                    binpkg_respect_use,
-                    usepkg_exclude,
-                    usepkg_include,
-                    rebuilt_binaries,
-                    rebuilt_binaries_timestamp,
-                    newrepo,
-                    empty,
-                    getbinpkg,
-                    autounmask_suggest_keywords,
-                    autounmask_suggest_use,
-                    autounmask_suggest_license,
-                    autounmask_suggest_masks,
-                    &[],
-                )?;
-                if matches!(re_outcome, PretendOutcome::NoVisibleCandidate) {
+                );
+                let no_reinst = HashSet::new();
+                let pv_disp =
+                    build_use_expand_display(&disp, config, None, &forced, true, &no_reinst);
+                let p_disp =
+                    build_use_expand_display(&disp, config, None, &forced, false, &no_reinst);
+                if let Some(pe) = state
+                    .entries
+                    .iter_mut()
+                    .find(|e| e.category == pc && e.package == pp)
+                {
+                    pe.use_flags_display = disp;
+                    pe.use_expand_display = pv_disp;
+                    pe.use_expand_display_p = p_disp;
+                }
+                (re_atom, re_parsed)
+            } else {
+                // `--autounmask-backtrack=y`: fold the flip into
+                // `autounmask_use_config` (a `package.use` change on the
+                // parent) and let the driver re-walk the whole graph so
+                // `flag?`-gated deps of the parent re-evaluate against
+                // the flipped state (real `_needed_use_config_changes`
+                // -> `_backtrack_depgraph`). A parent flip that
+                // contradicts an accumulated change is real
+                // `_autounmask_breakage` territory (Slice 3).
+                let key_pp = (pc.clone(), pp.clone());
+                // A3 overlay: the opposite-flip check reads the effective
+                // (overlay-then-`bp`) value, exactly like the old direct
+                // read of the single map.
+                if target_use.iter().any(|(f, want)| {
+                    overlay_use_want(&state.use_overlay, &bp.autounmask_use_config, &key_pp, f)
+                        .is_some_and(|p| p != *want)
+                }) {
+                    state.use_broke = true;
                     break 'parent_flip (current_atom, atom);
                 }
-
-                if !autounmask_backtrack_enabled {
-                    // Default (real `--autounmask-backtrack` off): apply the
-                    // parent flip to *this* dependency's resolution and
-                    // re-render the parent's own USE line, but do NOT
-                    // re-drive the whole graph -- the parent's other
-                    // `flag?`-gated deps keep whatever the first walk gave
-                    // them (real records `_needed_use_config_changes` and
-                    // breaks out of `_backtrack_depgraph`).
-                    outcome = re_outcome;
-                    let parent_cpv = format!("{pc}/{pp}-{pv}");
-                    let parent_all = list_candidates(&repos, &pc, &pp).unwrap_or_default();
-                    let token = target_use
+                // A3 overlay: `newly` is computed against the effective
+                // value too (a flip folded on an *earlier* pass lives in
+                // `bp`, not the overlay -- without this the same flip
+                // would re-fire every pass and eat the backtrack budget).
+                // Writes go to the overlay only; `collect_feedback` + driver unions them
+                // into `bp` before deciding.
+                let mut newly = false;
+                for (f, want) in &target_use {
+                    if overlay_use_want(&state.use_overlay, &bp.autounmask_use_config, &key_pp, f)
+                        != Some(*want)
+                    {
+                        state
+                            .use_overlay
+                            .entry(key_pp.clone())
+                            .or_default()
+                            .insert(f.clone(), *want);
+                        newly = true;
+                    }
+                }
+                if !newly {
+                    // Already folded on an earlier pass yet the dep
+                    // still failed this one -- let the ordinary
+                    // NoVisibleCandidate path (with
+                    // `parent_use_suggestion`) render it.
+                    break 'parent_flip (current_atom, atom);
+                }
+                let parent_all = list_candidates(&ctx.repos, &pc, &pp).unwrap_or_default();
+                let token = target_use
+                    .iter()
+                    .map(|(f, e)| if *e { f.clone() } else { format!("-{f}") })
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                let atom_form =
+                    autounmask_use_atom_form(&parent_cand, &parent_all, &pc, &pp, config);
+                // A3 overlay: dedup spans the union (this pass's overlay
+                // plus `bp`'s committed records), like the old single vec.
+                if !state
+                    .use_change_overlay
+                    .iter()
+                    .any(|c| c.atom == atom_form && c.token == token)
+                    && !bp
+                        .autounmask_use_change_records
                         .iter()
-                        .map(|(f, e)| if *e { f.clone() } else { format!("-{f}") })
-                        .collect::<Vec<_>>()
-                        .join(" ");
-                    autounmask_use_changes.push(AutounmaskChange {
-                        atom: autounmask_use_atom_form(&parent_cand, &parent_all, &pc, &pp, config),
+                        .any(|c| c.atom == atom_form && c.token == token)
+                {
+                    state.use_change_overlay.push(AutounmaskChange {
+                        atom: atom_form,
                         token,
                         dep_chain: autounmask_dep_chain(
                             &Some((pc.clone(), pp.clone())),
                             "",
-                            &top_level,
-                            &entries,
+                            &ctx.top_level,
+                            &state.entries,
                         ),
                     });
-                    let mut disp_seen: HashSet<String> = HashSet::new();
-                    let mut disp: Vec<(String, bool)> = parent_cand
-                        .iuse
-                        .split_whitespace()
-                        .map(|t| t.trim_start_matches(['+', '-']).to_string())
-                        .filter(|f| disp_seen.insert(f.clone()))
-                        .map(|f| {
-                            let on = new_parent_use.contains(&f);
-                            (f, on)
-                        })
-                        .collect();
-                    disp.sort_by_key(|p| alnum_sort_key(&p.0));
-                    let forced = forced_or_masked_flags(
-                        &parent_cand.iuse,
-                        &parent_cand.keywords,
-                        &parent_cpv,
-                        &pc,
-                        &pp,
-                        config,
-                    );
-                    let no_reinst = HashSet::new();
-                    let pv_disp =
-                        build_use_expand_display(&disp, config, None, &forced, true, &no_reinst);
-                    let p_disp =
-                        build_use_expand_display(&disp, config, None, &forced, false, &no_reinst);
-                    if let Some(pe) = entries
-                        .iter_mut()
-                        .find(|e| e.category == pc && e.package == pp)
-                    {
-                        pe.use_flags_display = disp;
-                        pe.use_expand_display = pv_disp;
-                        pe.use_expand_display_p = p_disp;
-                    }
-                    (re_atom, re_parsed)
-                } else {
-                    // `--autounmask-backtrack=y`: fold the flip into
-                    // `autounmask_use_config` (a `package.use` change on the
-                    // parent) and let the driver re-walk the whole graph so
-                    // `flag?`-gated deps of the parent re-evaluate against
-                    // the flipped state (real `_needed_use_config_changes`
-                    // -> `_backtrack_depgraph`). A parent flip that
-                    // contradicts an accumulated change is real
-                    // `_autounmask_breakage` territory (Slice 3).
-                    let key_pp = (pc.clone(), pp.clone());
-                    if target_use.iter().any(|(f, want)| {
-                        autounmask_use_config
-                            .get(&key_pp)
-                            .and_then(|b| b.get(f))
-                            .is_some_and(|p| p != want)
-                    }) {
-                        autounmask_use_broke = true;
-                        break 'parent_flip (current_atom, atom);
-                    }
-                    let bucket = autounmask_use_config.entry(key_pp).or_default();
-                    let mut newly = false;
-                    for (f, want) in &target_use {
-                        if bucket.get(f) != Some(want) {
-                            bucket.insert(f.clone(), *want);
-                            newly = true;
-                        }
-                    }
-                    if !newly {
-                        // Already folded on an earlier pass yet the dep
-                        // still failed this one -- let the ordinary
-                        // NoVisibleCandidate path (with
-                        // `parent_use_suggestion`) render it.
-                        break 'parent_flip (current_atom, atom);
-                    }
-                    let parent_all = list_candidates(&repos, &pc, &pp).unwrap_or_default();
-                    let token = target_use
-                        .iter()
-                        .map(|(f, e)| if *e { f.clone() } else { format!("-{f}") })
-                        .collect::<Vec<_>>()
-                        .join(" ");
-                    let atom_form =
-                        autounmask_use_atom_form(&parent_cand, &parent_all, &pc, &pp, config);
-                    if !autounmask_use_change_records
-                        .iter()
-                        .any(|c| c.atom == atom_form && c.token == token)
-                    {
-                        autounmask_use_change_records.push(AutounmaskChange {
-                            atom: atom_form,
-                            token,
-                            dep_chain: autounmask_dep_chain(
-                                &Some((pc.clone(), pp.clone())),
-                                "",
-                                &top_level,
-                                &entries,
-                            ),
-                        });
-                    }
-                    autounmask_grew = true;
-                    continue 'queue;
                 }
-            };
+                state.autounmask_grew = true;
+                continue 'queue;
+            }
+        };
 
-            // `--changed-deps-report`: real portage stays "completely
-            // silent" whenever `--changed-deps` itself is also given (its
-            // own collected `_changed_deps_pkgs` dict is discarded unread by
-            // `_changed_deps_report`'s own early return in that case) -- so,
-            // rather than collecting anything now and discarding it at print
-            // time, this simply never bothers computing `deps_changed` at
-            // all when `changed_deps` is true, an equivalent, simpler
-            // no-op-preserving shortcut. Only AlreadyInstalled/Reinstall
-            // outcomes name a version that's genuinely installed right now
-            // (the only case `deps_changed` -- a vdb-vs-current-ebuild
-            // comparison for one specific version -- is meaningful for); a
-            // Reinstall here can only be for `newuse`/`changed_use`/
-            // `changed_slot` (never for `changed_deps` itself, since that's
-            // false in this branch), so this still fires independently of
-            // those other reasons, matching real portage's own
-            // freely-combinable reinstall triggers.
-            if changed_deps_report && !changed_deps {
-                let installed_version = match &outcome {
-                    PretendOutcome::AlreadyInstalled { version }
-                    | PretendOutcome::Reinstall { version, .. } => Some(version.clone()),
-                    _ => None,
-                };
-                if let Some(version) = installed_version {
-                    let dedup_key = (key.0.clone(), key.1.clone(), version.clone());
-                    if changed_deps_report_seen.insert(dedup_key)
-                        && deps_changed(root, &repos, &key.0, &key.1, &version, with_bdeps)
-                        && let Ok(repo_candidates) = list_candidates(&repos, &key.0, &key.1)
-                        && let Some(c) = repo_candidates.iter().find(|c| c.version == version)
-                    {
-                        changed_deps_report_entries.push(ChangedDepsReportEntry {
+        // `--changed-deps-report`: real portage stays "completely
+        // silent" whenever `--changed-deps` itself is also given (its
+        // own collected `_changed_deps_pkgs` dict is discarded unread by
+        // `_changed_deps_report`'s own early return in that case) -- so,
+        // rather than collecting anything now and discarding it at print
+        // time, this simply never bothers computing `deps_changed` at
+        // all when `changed_deps` is true, an equivalent, simpler
+        // no-op-preserving shortcut. Only AlreadyInstalled/Reinstall
+        // outcomes name a version that's genuinely installed right now
+        // (the only case `deps_changed` -- a vdb-vs-current-ebuild
+        // comparison for one specific version -- is meaningful for); a
+        // Reinstall here can only be for `newuse`/`changed_use`/
+        // `changed_slot` (never for `changed_deps` itself, since that's
+        // false in this branch), so this still fires independently of
+        // those other reasons, matching real portage's own
+        // freely-combinable reinstall triggers.
+        if ctx.changed_deps_report && !ctx.changed_deps {
+            let installed_version = match &outcome {
+                PretendOutcome::AlreadyInstalled { version }
+                | PretendOutcome::Reinstall { version, .. } => Some(version.clone()),
+                _ => None,
+            };
+            if let Some(version) = installed_version {
+                let dedup_key = (key.0.clone(), key.1.clone(), version.clone());
+                if state.changed_deps_report_seen.insert(dedup_key)
+                    && deps_changed(
+                        ctx.root,
+                        &ctx.repos,
+                        &key.0,
+                        &key.1,
+                        &version,
+                        ctx.with_bdeps,
+                    )
+                    && let Ok(repo_candidates) = list_candidates(&ctx.repos, &key.0, &key.1)
+                    && let Some(c) = repo_candidates.iter().find(|c| c.version == version)
+                {
+                    state
+                        .changed_deps_report_entries
+                        .push(ChangedDepsReportEntry {
                             category: key.0.clone(),
                             package: key.1.clone(),
                             version,
                             repo_name: c.repo_name.clone(),
                         });
-                    }
                 }
             }
+        }
 
-            // A top-level atom (as opposed to a dependency reached while
-            // recursing) with no visible candidate aborts the whole call --
-            // matching real portage's own depgraph.py behavior for an
-            // unsatisfiable target, not the "report and keep going" treatment
-            // a dependency's own NoVisibleCandidate gets a few lines down.
-            // Top-level atoms are always dequeued (and so reach this point)
-            // in argv order, before any dependency, so this also guarantees
-            // the *first* bad top-level atom is the one that aborts.
-            if top_level.contains(current_atom.as_str())
-                && matches!(outcome, PretendOutcome::NoVisibleCandidate)
+        // A top-level atom (as opposed to a dependency reached while
+        // recursing) with no visible candidate aborts the whole call --
+        // matching real portage's own depgraph.py behavior for an
+        // unsatisfiable target, not the "report and keep going" treatment
+        // a dependency's own NoVisibleCandidate gets a few lines down.
+        // Top-level atoms are always dequeued (and so reach this point)
+        // in argv order, before any dependency, so this also guarantees
+        // the *first* bad top-level atom is the one that aborts.
+        if ctx.top_level.contains(current_atom.as_str())
+            && matches!(outcome, PretendOutcome::NoVisibleCandidate)
+        {
+            // Real `_show_unsatisfied_dep`: an atom that matches
+            // ebuilds which all turned out masked reports the "All
+            // ebuilds that could satisfy … have been masked" block
+            // (+ each masked candidate and why), not the "there are
+            // no ebuilds to satisfy" one.
+            if let Some(report) = all_masked_report(
+                &ctx.repos,
+                current_atom.as_str(),
+                config,
+                &format!("{current_atom:?}"),
+            ) {
+                return Err(Error::Detail(report));
+            }
+            let mut message = format!("there are no ebuilds to satisfy {current_atom:?}.");
+            // --autounmask's own keyword-suggestion sub-feature (see
+            // this function's own doc comment for the full on/off
+            // default-resolution logic): only even attempted when
+            // enabled, and only ever finds something to suggest when a
+            // real candidate exists that's masked by KEYWORDS alone
+            // (see `keyword_masked_only`'s own doc comment) -- a
+            // candidate masked by package.mask/license/etc. too gets no
+            // suggestion here, matching real portage's own "only
+            // suggest a change that would actually fix it" spirit,
+            // even though portuale doesn't yet combine multiple
+            // simultaneous suggestion kinds the way real portage can.
+            if bp.autounmask_suggest_keywords
+                && let Some((version, keyword)) =
+                    suggested_keyword_candidate(&ctx.repos, &atom.category, &atom.package, config)
             {
-                // Real `_show_unsatisfied_dep`: an atom that matches
-                // ebuilds which all turned out masked reports the "All
-                // ebuilds that could satisfy … have been masked" block
-                // (+ each masked candidate and why), not the "there are
-                // no ebuilds to satisfy" one.
-                if let Some(report) = all_masked_report(
-                    &repos,
-                    current_atom.as_str(),
-                    config,
-                    &format!("{current_atom:?}"),
-                ) {
-                    return Err(Error::Detail(report));
-                }
-                let mut message = format!("there are no ebuilds to satisfy {current_atom:?}.");
-                // --autounmask's own keyword-suggestion sub-feature (see
-                // this function's own doc comment for the full on/off
-                // default-resolution logic): only even attempted when
-                // enabled, and only ever finds something to suggest when a
-                // real candidate exists that's masked by KEYWORDS alone
-                // (see `keyword_masked_only`'s own doc comment) -- a
-                // candidate masked by package.mask/license/etc. too gets no
-                // suggestion here, matching real portage's own "only
-                // suggest a change that would actually fix it" spirit,
-                // even though portuale doesn't yet combine multiple
-                // simultaneous suggestion kinds the way real portage can.
-                if autounmask_suggest_keywords
-                    && let Some((version, keyword)) =
-                        suggested_keyword_candidate(&repos, &atom.category, &atom.package, config)
-                {
-                    message.push_str(&format!(
-                        "\nnote: {}/{}-{version} exists but is masked by KEYWORDS; \
-                         --autounmask-keep-keywords=n suggests adding \"{}/{} {keyword}\" \
-                         to package.accept_keywords",
-                        atom.category, atom.package, atom.category, atom.package,
-                    ));
-                }
-                // `--autounmask-use`'s own suggestion sub-feature -- same
-                // gating/"only suggest a fix that would actually work"
-                // spirit as the keyword one just above. Message format
-                // mirrors real `package.use` suggestion syntax
-                // (`=category/package-version flag -flag`).
-                if autounmask_suggest_use
-                    && let Some((version, flip)) = suggested_use_candidate(
-                        &repos,
-                        &atom.category,
-                        &atom.package,
-                        atom.use_deps.as_deref(),
-                        config,
-                    )
-                {
-                    let adjustments: Vec<String> = flip
-                        .iter()
-                        .map(|(flag, enabled)| {
-                            if *enabled {
-                                flag.clone()
-                            } else {
-                                format!("-{flag}")
-                            }
-                        })
-                        .collect();
-                    message.push_str(&format!(
-                        "\nnote: {}/{}-{version} exists but its USE flags don't satisfy \
-                         this atom; --autounmask-use suggests adding \"={}/{}-{version} {}\" \
-                         to package.use",
-                        atom.category,
-                        atom.package,
-                        atom.category,
-                        atom.package,
-                        adjustments.join(" "),
-                    ));
-                }
-                // `--autounmask-license`'s own suggestion sub-feature -- same
-                // "only suggest a fix that would actually work" gating.
-                if autounmask_suggest_license
-                    && let Some((version, licenses)) =
-                        suggested_license_candidate(&repos, &atom.category, &atom.package, config)
-                {
-                    message.push_str(&format!(
-                        "\nnote: {}/{}-{version} exists but its LICENSE is not accepted; \
-                         --autounmask-license suggests adding \"={}/{}-{version} {licenses}\" \
-                         to package.license",
-                        atom.category, atom.package, atom.category, atom.package,
-                    ));
-                }
-                // `--autounmask-keep-masks=n`'s own suggestion sub-feature.
-                if autounmask_suggest_masks
-                    && let Some(version) =
-                        suggested_mask_candidate(&repos, &atom.category, &atom.package, config)
-                {
-                    message.push_str(&format!(
-                        "\nnote: {}/{}-{version} exists but is package.mask'd; \
-                         --autounmask-keep-masks=n suggests adding \"={}/{}-{version}\" \
-                         to package.unmask",
-                        atom.category, atom.package, atom.category, atom.package,
-                    ));
-                }
-                return Err(Error::Detail(message));
+                message.push_str(&format!(
+                    "\nnote: {}/{}-{version} exists but is masked by KEYWORDS; \
+                     --autounmask-keep-keywords=n suggests adding \"{}/{} {keyword}\" \
+                     to package.accept_keywords",
+                    atom.category, atom.package, atom.category, atom.package,
+                ));
             }
-
-            let resolved_version = match &outcome {
-                PretendOutcome::New { version } => Some(version.clone()),
-                PretendOutcome::Upgrade { to, .. } => Some(to.clone()),
-                PretendOutcome::Downgrade { to, .. } => Some(to.clone()),
-                PretendOutcome::Reinstall { version, .. } => Some(version.clone()),
-                _ => None,
-            };
-
-            let Some(version) = resolved_version else {
-                // Real `_feedback_missing_dep`: this dependency atom has
-                // no matching package. If backtracking is live and its
-                // parent is a merge-bound, non-top-level entry not yet
-                // tried, remember to mask `!=parent-cpv` and retry -- so a
-                // `||` group whose chosen alternative has an unsatisfiable
-                // subtree yields to the next alternative. Only the first
-                // such trigger per pass is acted on (like real, one
-                // backtrack node at a time); the NVC entry is still built
-                // below so an un-fixable dep is reported unchanged.
-                // Real (depgraph.py:3473-3483) does NOT missing-dep
-                // backtrack when only a USE change would satisfy the dep
-                // (`_select_package(dep.atom.without_use)` still finds a
-                // package) -- that path is the autounmask machinery's, and
-                // an unfixable `[flag]` dep is reported as a plain NVC.
-                let bare_atom = current_atom
-                    .split_once('[')
-                    .map_or(current_atom.as_str(), |(b, _)| b);
-                if matches!(outcome, PretendOutcome::NoVisibleCandidate)
-                    && backtrack_max > 0
-                    && mask_phase == MaskPhase::None
-                    && missing_dep_trigger.is_none()
-                    && !atom_currently_satisfiable(&repos, bare_atom, config, &[])
-                    && let Some((pc, pp)) = owner.clone()
-                    && !top_level_cps.contains(&(pc.clone(), pp.clone()))
-                {
-                    let parent_cpv = entries
-                        .iter()
-                        .find(|e| e.category == pc && e.package == pp)
-                        .and_then(|e| match &e.outcome {
-                            PretendOutcome::New { version }
-                            | PretendOutcome::Reinstall { version, .. } => Some(version.clone()),
-                            PretendOutcome::Upgrade { to, .. }
-                            | PretendOutcome::Downgrade { to, .. } => Some(to.clone()),
-                            _ => None,
-                        });
-                    if let Some(pv) = parent_cpv {
-                        let neg = format!("!={pc}/{pp}-{pv}");
-                        if !missing_dep_masked.contains(&neg) {
-                            missing_dep_trigger = Some(((pc, pp), neg));
+            // `--autounmask-use`'s own suggestion sub-feature -- same
+            // gating/"only suggest a fix that would actually work"
+            // spirit as the keyword one just above. Message format
+            // mirrors real `package.use` suggestion syntax
+            // (`=category/package-version flag -flag`).
+            if bp.autounmask_suggest_use
+                && let Some((version, flip)) = suggested_use_candidate(
+                    &ctx.repos,
+                    &atom.category,
+                    &atom.package,
+                    atom.use_deps.as_deref(),
+                    config,
+                )
+            {
+                let adjustments: Vec<String> = flip
+                    .iter()
+                    .map(|(flag, enabled)| {
+                        if *enabled {
+                            flag.clone()
+                        } else {
+                            format!("-{flag}")
                         }
+                    })
+                    .collect();
+                message.push_str(&format!(
+                    "\nnote: {}/{}-{version} exists but its USE flags don't satisfy \
+                     this atom; --autounmask-use suggests adding \"={}/{}-{version} {}\" \
+                     to package.use",
+                    atom.category,
+                    atom.package,
+                    atom.category,
+                    atom.package,
+                    adjustments.join(" "),
+                ));
+            }
+            // `--autounmask-license`'s own suggestion sub-feature -- same
+            // "only suggest a fix that would actually work" gating.
+            if bp.autounmask_suggest_license
+                && let Some((version, licenses)) =
+                    suggested_license_candidate(&ctx.repos, &atom.category, &atom.package, config)
+            {
+                message.push_str(&format!(
+                    "\nnote: {}/{}-{version} exists but its LICENSE is not accepted; \
+                     --autounmask-license suggests adding \"={}/{}-{version} {licenses}\" \
+                     to package.license",
+                    atom.category, atom.package, atom.category, atom.package,
+                ));
+            }
+            // `--autounmask-keep-masks=n`'s own suggestion sub-feature.
+            if bp.autounmask_suggest_masks
+                && let Some(version) =
+                    suggested_mask_candidate(&ctx.repos, &atom.category, &atom.package, config)
+            {
+                message.push_str(&format!(
+                    "\nnote: {}/{}-{version} exists but is package.mask'd; \
+                     --autounmask-keep-masks=n suggests adding \"={}/{}-{version}\" \
+                     to package.unmask",
+                    atom.category, atom.package, atom.category, atom.package,
+                ));
+            }
+            return Err(Error::Detail(message));
+        }
+
+        let resolved_version = match &outcome {
+            PretendOutcome::New { version } => Some(version.clone()),
+            PretendOutcome::Upgrade { to, .. } => Some(to.clone()),
+            PretendOutcome::Downgrade { to, .. } => Some(to.clone()),
+            PretendOutcome::Reinstall { version, .. } => Some(version.clone()),
+            _ => None,
+        };
+
+        let Some(version) = resolved_version else {
+            // Real `_feedback_missing_dep`: this dependency atom has
+            // no matching package. If backtracking is live and its
+            // parent is a merge-bound, non-top-level entry not yet
+            // tried, remember to mask `!=parent-cpv` and retry -- so a
+            // `||` group whose chosen alternative has an unsatisfiable
+            // subtree yields to the next alternative. Only the first
+            // such trigger per pass is acted on (like real, one
+            // backtrack node at a time); the NVC entry is still built
+            // below so an un-fixable dep is reported unchanged.
+            // Real (depgraph.py:3473-3483) does NOT missing-dep
+            // backtrack when only a USE change would satisfy the dep
+            // (`_select_package(dep.atom.without_use)` still finds a
+            // package) -- that path is the autounmask machinery's, and
+            // an unfixable `[flag]` dep is reported as a plain NVC.
+            // C3: real's "no matching package" is mask-aware (a masked
+            // candidate matches nothing), so the probe consults the
+            // negatives, not the bare tree: a dependency unsatisfiable
+            // only because backtracking masked its candidates masks its
+            // parent and retries, reaching the same downgrade the old
+            // puller pre-masking produced (e.g. `btconsumer-2.0` under a
+            // masked `bttarget-2.0` falls back to `btconsumer-1.0` on
+            // the retry). Positives stay out (real selection has no
+            // enforcement counterpart); a USE-only failure still
+            // satisfies the probe and stays out, exactly as before.
+            let bare_atom = current_atom
+                .split_once('[')
+                .map_or(current_atom.as_str(), |(b, _)| b);
+            let masked_probe = bp.masked_negatives_for(&key);
+            if matches!(outcome, PretendOutcome::NoVisibleCandidate)
+                && ctx.backtrack_max > 0
+                && state.missing_dep_trigger.is_none()
+                && !atom_currently_satisfiable(&ctx.repos, bare_atom, config, &masked_probe)
+                && let Some((pc, pp)) = owner.clone()
+                && !ctx.top_level_cps.contains(&(pc.clone(), pp.clone()))
+            {
+                let parent_cpv = state
+                    .entries
+                    .iter()
+                    .find(|e| e.category == pc && e.package == pp)
+                    .and_then(|e| match &e.outcome {
+                        PretendOutcome::New { version }
+                        | PretendOutcome::Reinstall { version, .. } => Some(version.clone()),
+                        PretendOutcome::Upgrade { to, .. }
+                        | PretendOutcome::Downgrade { to, .. } => Some(to.clone()),
+                        _ => None,
+                    });
+                if let Some(pv) = parent_cpv {
+                    let neg = format!("!={pc}/{pp}-{pv}");
+                    if !bp.missing_dep_masked.contains(&neg) {
+                        state.missing_dep_trigger = Some(((pc, pp), neg, current_atom.clone()));
                     }
                 }
-                // AlreadyInstalled / NoVisibleCandidate: no slot to key a
-                // repeat by, so dedup on category/package alone, same as v1
-                // always did before slot-aware resolution existed.
-                if !other_outcomes.insert(key.clone()) {
-                    continue;
-                }
-                // `--deep`: an AlreadyInstalled package's own further
-                // dependencies are walked too, once `deep` allows recursion
-                // at this package's own depth (see `Deep::recurses_at`'s own
-                // doc comment) -- never for NoVisibleCandidate (no version to
-                // look anything up by), and never when `nodeps` disables the
-                // dependency walk entirely, matching every other outcome's
-                // own `nodeps` handling further below. Real's own `_add_pkg`
-                // gate is the same: an installed package whose deps aren't
-                // recursed into gets pushed onto `_ignored_deps`, never
-                // `.order`, so `deps` (below) is likewise only ever
-                // computed under this identical condition.
-                let mut already_installed_deps: Vec<DepEdge> = Vec::new();
-                if let PretendOutcome::AlreadyInstalled { version } = &outcome
-                    && !nodeps
-                    && deep.recurses_at(depth)
-                {
-                    // `GraphEntry::deps` for an AlreadyInstalled
-                    // entry: always the *current* tree ebuild's metadata
-                    // (real `--dynamic-deps`'s own default) -- ordering
-                    // is a display nicety, not resolution-critical, so
-                    // this doesn't also mirror `enqueue_dependencies`'
-                    // own `--dynamic-deps=n` vdb-snapshot branch.
-                    if let Some(resolved) =
-                        list_candidates(&repos, &key.0, &key.1).ok().and_then(|cs| {
+            }
+            // AlreadyInstalled / NoVisibleCandidate: no slot to key a
+            // repeat by, so dedup on category/package alone, same as v1
+            // always did before slot-aware resolution existed.
+            if !state.other_outcomes.insert(key.clone()) {
+                continue;
+            }
+            // `--deep`: an AlreadyInstalled package's own further
+            // dependencies are walked too, once `deep` allows recursion
+            // at this package's own depth (see `Deep::recurses_at`'s own
+            // doc comment) -- never for NoVisibleCandidate (no version to
+            // look anything up by), and never when `nodeps` disables the
+            // dependency walk entirely, matching every other outcome's
+            // own `nodeps` handling further below. Real's own `_add_pkg`
+            // gate is the same: an installed package whose deps aren't
+            // recursed into gets pushed onto `_ignored_deps`, never
+            // `.order`, so `deps` (below) is likewise only ever
+            // computed under this identical condition.
+            let mut already_installed_deps: Vec<DepEdge> = Vec::new();
+            if let PretendOutcome::AlreadyInstalled { version } = &outcome
+                && !ctx.nodeps
+                && ctx.deep.recurses_at(depth)
+            {
+                // `GraphEntry::deps` for an AlreadyInstalled
+                // entry: always the *current* tree ebuild's metadata
+                // (real `--dynamic-deps`'s own default) -- ordering
+                // is a display nicety, not resolution-critical, so
+                // this doesn't also mirror `enqueue_dependencies`'
+                // own `--dynamic-deps=n` vdb-snapshot branch.
+                if let Some(resolved) =
+                    list_candidates(&ctx.repos, &key.0, &key.1)
+                        .ok()
+                        .and_then(|cs| {
                             cs.iter()
                                 .filter(|c| &c.version == version)
                                 .max_by_key(|c| c.repo_priority)
                                 .cloned()
                         })
-                    {
-                        let pf = format!("{}-{version}", key.1);
-                        if let Ok(metadata) = read_md5_cache(&resolved.repo_location, &key.0, &pf) {
-                            // Installed recorded USE, not effective profile
-                            // USE -- see `enqueue_dependencies`'s own note
-                            // just below; a `flag?`-gated dep this display
-                            // list shows must match what the recursion
-                            // actually queued.
-                            let use_flags = read_vdb_flag_set(root, &key.0, &key.1, version, "USE");
-                            let real_order_keys: &[&str] = if with_bdeps {
-                                &["RDEPEND", "IDEPEND", "PDEPEND", "DEPEND", "BDEPEND"]
-                            } else {
-                                &["RDEPEND", "IDEPEND", "PDEPEND"]
-                            };
-                            // An installed package is `pkg.built`, so
-                            // real marks its build-time deps `optional`.
-                            already_installed_deps = merge_order::dep_edges_from_metadata(
-                                &metadata,
-                                &use_flags,
-                                real_order_keys,
-                                true,
-                            );
-                        }
-                    }
-                    enqueue_dependencies(
-                        &repos,
-                        root,
-                        dynamic_deps,
-                        &key.0,
-                        &key.1,
-                        version,
-                        config,
-                        depth + 1,
-                        &mut queue,
-                        &mut pending_blockers,
-                        key.clone(),
-                        version.clone(),
-                        with_bdeps,
-                        root_deps_running_root,
-                        &mut entries,
-                        &mut root_deps_build_seen,
-                        &slot_constraints,
-                    );
-                }
-                // `--autounmask`'s own keyword-suggestion sub-feature,
-                // extended here to a *dependency's* own `NoVisibleCandidate`
-                // -- see `GraphEntry::keyword_suggestion`'s own doc comment.
-                let keyword_suggestion = if matches!(outcome, PretendOutcome::NoVisibleCandidate)
-                    && autounmask_suggest_keywords
                 {
-                    suggested_keyword_candidate(&repos, &key.0, &key.1, config)
-                } else {
-                    None
-                };
-                // `--autounmask-use`'s own suggestion sub-feature -- see
-                // `GraphEntry::use_suggestion`'s own doc comment. `atom.
-                // use_deps` is the dependency atom's own use-dep spec
-                // (already conditional-evaluated by `enqueue_flat_deps`
-                // before this atom was ever queued, so only plain `flag`/
-                // `-flag` forms survive to be checked here).
-                let use_suggestion = if matches!(outcome, PretendOutcome::NoVisibleCandidate)
-                    && autounmask_suggest_use
-                {
-                    suggested_use_candidate(
-                        &repos,
-                        &key.0,
-                        &key.1,
-                        atom.use_deps.as_deref(),
-                        config,
-                    )
-                } else {
-                    None
-                };
-                // `--autounmask-use`'s own second, architecturally distinct
-                // suggestion sub-feature -- see `suggested_parent_use_
-                // candidate`'s own doc comment. Only ever attempted when
-                // this atom actually had a conditional use-dep evaluated
-                // away (`unevaluated_atom.is_some()`) and has a real parent
-                // to flip a flag on (`owner.is_some()`, always true here: a
-                // top-level atom's own `NoVisibleCandidate` already aborted
-                // the whole call via the fatal check above, so any
-                // `NoVisibleCandidate` reaching this point is necessarily a
-                // dependency's own, which always has an `owner`).
-                let parent_use_suggestion = if matches!(outcome, PretendOutcome::NoVisibleCandidate)
-                    && autounmask_suggest_use
-                {
-                    owner.as_ref().zip(unevaluated_atom.as_deref()).and_then(
-                        |(owner, unevaluated)| {
-                            suggested_parent_use_candidate(
-                                &repos,
-                                &entries,
-                                unevaluated,
-                                owner,
-                                config,
-                            )
-                        },
-                    )
-                } else {
-                    None
-                };
-                // Masked-dependency disclosure (real
-                // `_show_unsatisfied_dep`'s "All ebuilds that could satisfy
-                // … have been masked" block for a *dependency* -- the Tier
-                // 2.20 half of finding S's top-level report): a dependency
-                // `NoVisibleCandidate` whose atom still matches ebuilds by
-                // version, every one of which is masked, is recorded here
-                // (one per `cat/pkg`, like the entry itself) instead of
-                // rendering the bare `!!! no visible ebuild` line. The
-                // display atom is the unevaluated form as queued, so a
-                // USE-conditional dep shows as written. Computed every
-                // pass; only the final pass's reports are rendered.
-                if matches!(outcome, PretendOutcome::NoVisibleCandidate) {
-                    let display_atom = unevaluated_atom.as_deref().unwrap_or(&current_atom);
-                    nvc_dep_atoms
-                        .entry(key.clone())
-                        .or_insert_with(|| display_atom.to_string());
-                    if let Some(masked) = masked_candidates_for_atom(&repos, display_atom, config)
-                        && !masked_deps
-                            .iter()
-                            .any(|r: &MaskedDepReport| r.category == key.0 && r.package == key.1)
-                    {
-                        masked_deps.push(MaskedDepReport {
-                            category: key.0.clone(),
-                            package: key.1.clone(),
-                            atom: display_atom.to_string(),
-                            masked,
-                            // Walked post-loop out of the final entries
-                            // (see below).
-                            chain: Vec::new(),
-                        });
+                    let pf = format!("{}-{version}", key.1);
+                    if let Ok(metadata) = read_md5_cache(&resolved.repo_location, &key.0, &pf) {
+                        // Installed recorded USE, not effective profile
+                        // USE -- see `enqueue_dependencies`'s own note
+                        // just below; a `flag?`-gated dep this display
+                        // list shows must match what the recursion
+                        // actually queued.
+                        let use_flags = read_vdb_flag_set(ctx.root, &key.0, &key.1, version, "USE");
+                        let real_order_keys: &[&str] = if ctx.with_bdeps {
+                            &["RDEPEND", "IDEPEND", "PDEPEND", "DEPEND", "BDEPEND"]
+                        } else {
+                            &["RDEPEND", "IDEPEND", "PDEPEND"]
+                        };
+                        // An installed package is `pkg.built`, so
+                        // real marks its build-time deps `optional`.
+                        already_installed_deps = merge_order::dep_edges_from_metadata(
+                            &metadata,
+                            &use_flags,
+                            real_order_keys,
+                            true,
+                        );
                     }
                 }
-                entries.push(GraphEntry {
-                    category: key.0,
-                    package: key.1,
-                    outcome,
-                    blockers: Vec::new(),
-                    slot: None,
-                    sub_slot: None,
-                    repo_name: None,
-                    oldbest: Vec::new(),
-                    use_flags_display: Vec::new(),
-                    use_expand_display: Vec::new(),
-                    use_expand_display_p: Vec::new(),
-                    keyword_mask: None,
-                    new_slot: false,
-                    interactive: false,
-                    fetch_restrict: false,
-                    fetch_restrict_satisfied: false,
-                    download_files: Vec::new(),
-                    required_by: Vec::new(),
-                    source: CandidateSource::Ebuild,
-                    provenance: VisibilityProvenance::default(),
-                    keyword_suggestion,
-                    use_suggestion,
-                    parent_use_suggestion,
-                    targets_running_root: false,
-                    remote_binary: false,
-                    build_id: None,
-                    deps: already_installed_deps,
-                });
-                continue;
-            };
-
-            // The resolved version may have come from any of `repos`, or
-            // from PKGDIR (`--usepkg`/`--usepkgonly`) or a remote binhost
-            // (`--getbinpkg`), so re-derive which one it actually lives in
-            // -- reusing `list_candidates`/`list_binary_candidates` rather
-            // than threading a repo location back out of `PretendOutcome`,
-            // since more than one source could carry the identical
-            // version. This step MUST agree with what `resolve_pretend`
-            // itself chose: real `_wrapped_select_pkg_highest_available_
-            // imp` returns `matched_packages[-1]` with `ebuild` built
-            // first in `dbs` order -- "ebuild type is the last resort"
-            // (`depgraph.py:8492`) -- so at a version tie a
-            // `--usepkg`/`--getbinpkg` binary that passed
-            // `binpkg-respect-use` beats the ebuild. Mirrors
-            // `resolve_pretend`'s own pool construction (`--usepkgonly`
-            // excludes ebuilds entirely).
-            let mut repo_candidates = if usepkgonly {
-                Vec::new()
-            } else {
-                let Ok(c) = list_candidates(&repos, &key.0, &key.1) else {
-                    continue;
-                };
-                c.to_vec()
-            };
-            if usepkg || usepkgonly {
-                let mut binary_candidates = list_binary_candidates(&local_binpkg, &key.0, &key.1);
-                if getbinpkg {
-                    binary_candidates.extend(list_remote_binary_candidates(
-                        &config.binrepos,
-                        root,
-                        &local_binpkg,
-                        &key.0,
-                        &key.1,
-                    ));
-                }
-                // Same `--binpkg-respect-use` / `--binpkg-changed-deps`
-                // gates `resolve_pretend` applied when it chose this
-                // version -- a binary that was never eligible then can't
-                // be re-derived as the source here either.
-                if binpkg_respect_use {
-                    binary_candidates.retain(|c| binpkg_respect_use_ok(c, &key.0, &key.1, config));
-                }
-                if binpkg_changed_deps_active(usepkgonly) {
-                    binary_candidates.retain(|c| {
-                        !binary_deps_changed(root, &repos, c, &key.0, &key.1, with_bdeps)
-                    });
-                }
-                // `_equiv_ebuild_visible` (see `resolve_pretend`): a
-                // binary re-derived here needs a visible ebuild at its
-                // own exact version, when any visible ebuild satisfies
-                // the atom. `--use-ebuild-visibility` enforces it even
-                // under `--usepkgonly` / a `--useoldpkg-atoms` match.
-                let uev = use_ebuild_visibility();
-                if (!usepkgonly || uev) && !binary_candidates.is_empty() {
-                    let some_ebuild_matches = repo_candidates.iter().any(|c| {
-                        c.source == CandidateSource::Ebuild
-                            && is_visible(c, &key.0, &key.1, config)
-                            && {
-                                let s = format!(
-                                    "{}/{}-{}:{}/{}::{}",
-                                    key.0, key.1, c.version, c.slot, c.sub_slot, c.repo_name
-                                );
-                                portage_dep::match_from_list(&current_atom, &[s.as_str()])
-                                    .is_some_and(|r| !r.is_empty())
-                            }
-                    });
-                    if some_ebuild_matches || uev {
-                        binary_candidates.retain(|c| {
-                            (!uev && useoldpkg_atom_matches(&key.0, &key.1, &c.version))
-                                || repo_candidates.iter().any(|e| {
-                                    e.source == CandidateSource::Ebuild
-                                        && e.version == c.version
-                                        && is_visible(e, &key.0, &key.1, config)
-                                })
-                        });
-                    }
-                }
-                let binary_candidates = dedup_binary_instances(binary_candidates, &atom, config);
-                repo_candidates.extend(filter_usepkg_exclude_include(
-                    binary_candidates,
+                enqueue_dependencies(
+                    &ctx.repos,
+                    ctx.root,
+                    ctx.dynamic_deps,
                     &key.0,
                     &key.1,
-                    usepkg_exclude,
-                    usepkg_include,
-                ));
+                    version,
+                    config,
+                    depth + 1,
+                    &mut state.queue,
+                    &mut state.pending_blockers,
+                    key.clone(),
+                    version.clone(),
+                    ctx.with_bdeps,
+                    ctx.root_deps_running_root,
+                    &mut state.entries,
+                    &mut state.root_deps_build_seen,
+                    &union_constraints,
+                );
             }
-            let Some(resolved) = repo_candidates
-                .iter()
-                .filter(|c| c.version == *version)
-                .max_by(|a, b| {
-                    // "ebuild type is the last resort" -- see
-                    // `resolve_pretend`'s own `best` pick.
-                    let src_rank = |c: &Candidate| match c.source {
-                        CandidateSource::Binary => 1u8,
-                        CandidateSource::Ebuild => 0,
-                    };
-                    src_rank(a)
-                        .cmp(&src_rank(b))
-                        .then(a.repo_priority.cmp(&b.repo_priority))
-                })
-            else {
-                continue;
-            };
-            let slot = resolved.slot.clone();
-            let sub_slot = resolved.sub_slot.clone();
-            let repo_location = resolved.repo_location.clone();
-            let repo_name = resolved.repo_name.clone();
-            let keywords = resolved.keywords.clone();
-
-            let slot_key = (key.0.clone(), key.1.clone(), slot.clone());
-            if let Some(&existing_idx) = resolved_slots.get(&slot_key) {
-                // This exact category/package/slot was already resolved by
-                // an earlier atom. If the current atom's own constraint
-                // doesn't accept that already-resolved version, it's a real
-                // slot conflict -- report it and move on, without a second,
-                // independent resolution or any attempt to reconcile the two.
-                let existing_version = match &entries[existing_idx].outcome {
-                    PretendOutcome::New { version } => version.clone(),
-                    PretendOutcome::Upgrade { to, .. } => to.clone(),
-                    PretendOutcome::Downgrade { to, .. } => to.clone(),
-                    PretendOutcome::Reinstall { version, .. } => version.clone(),
-                    _ => unreachable!(
-                        "resolved_slots only ever indexes New/Upgrade/Downgrade/Reinstall entries"
-                    ),
-                };
-                // Include the already-resolved version's own sub-slot: a
-                // *built* slot-operator atom (`cat/pkg:0/2=`, common in a
-                // binary package's recorded RDEPEND) carries an explicit
-                // sub-slot and won't match a `:slot`-only string even when
-                // the sub-slots agree -- which produced a spurious slot
-                // conflict for a package two binary parents both depend on.
-                let existing_sub = slot_conflict_meta(&repos, &key.0, &key.1, &existing_version).0;
-                let existing_str = if existing_sub.is_empty() {
-                    format!("{}/{}-{existing_version}:{slot}", key.0, key.1)
-                } else {
-                    format!(
-                        "{}/{}-{existing_version}:{slot}/{existing_sub}",
-                        key.0, key.1
-                    )
-                };
-                let satisfied =
-                    portage_dep::match_from_list(&current_atom, &[existing_str.as_str()])
-                        .is_some_and(|m| !m.is_empty());
-                if !satisfied {
-                    record_slot_conflict(
-                        &mut slot_conflicts,
-                        build_slot_conflict(
-                            &repos,
-                            config,
-                            &key.0,
-                            &key.1,
-                            &slot,
-                            &existing_version,
-                            &current_atom,
-                            &version,
-                            &slot_pullers,
-                        ),
-                    );
-                    continue;
-                }
-
-                // `match_from_list` above matched version + slot only. If
-                // this atom carries a `[flag]` use-dep, the already-resolved
-                // package still has to satisfy it -- and if it doesn't, but
-                // a `package.use` flip would (real `--autounmask-use` for a
-                // dep on a package already in the graph), fold the flip into
-                // `autounmask_use_config` and re-run the whole walk so the
-                // package is re-resolved with the flag and its `flag?`-gated
-                // deps appear (real `_need_restart` after
-                // `_needed_use_config_changes` grows).
-                //
-                // Real goes one step further first: a USE mismatch means
-                // the graphed instance does NOT satisfy this atom, so real
-                // pulls a second instance and reports the slot conflict
-                // (live-verified: the notice then carries `("use", flag)`
-                // parents). `version` above is the fresh USE-filtered pick,
-                // so it becomes the conflict's second instance -- unless it
-                // is the already-resolved version itself (selection
-                // prefers the highest flippable version, so a flippable
-                // mismatch resolves in place with an autounmask flip and
-                // no second instance exists to report). No `continue`
-                // here -- the flip suggestion below still runs (real
-                // shows both the notice and the change block).
-                if version != existing_version
-                    && let Some(use_deps) = atom.use_deps.as_deref().filter(|d| !d.is_empty())
-                {
-                    let all_cands = list_candidates(&repos, &key.0, &key.1).unwrap_or_default();
-                    if let Some(existing_cand) =
-                        all_cands.iter().find(|c| c.version == existing_version)
-                    {
-                        let declared: HashSet<String> = existing_cand
-                            .iuse
-                            .split_whitespace()
-                            .map(|t| t.trim_start_matches(['+', '-']).to_string())
-                            .collect();
-                        let iuse_set = valid_iuse(&declared, config);
-                        let existing_cand_str = format!(
-                            "{}/{}-{existing_version}:{}/{}::{}",
-                            key.0,
-                            key.1,
-                            existing_cand.slot,
-                            existing_cand.sub_slot,
-                            existing_cand.repo_name
-                        );
-                        let existing_use = effective_use_flags(
-                            config,
-                            &existing_cand.iuse,
-                            &existing_cand.keywords,
-                            &existing_cand_str,
-                            &key.0,
-                            &key.1,
-                        );
-                        if !portage_dep::use_deps_satisfied(use_deps, &iuse_set, &existing_use) {
-                            record_slot_conflict(
-                                &mut slot_conflicts,
-                                build_slot_conflict(
-                                    &repos,
-                                    config,
-                                    &key.0,
-                                    &key.1,
-                                    &slot,
-                                    &existing_version,
-                                    &current_atom,
-                                    &version,
-                                    &slot_pullers,
-                                ),
-                            );
-                        }
-                    }
-                }
-                if autounmask_suggest_use
-                    && let Some(use_deps) = atom.use_deps.as_deref().filter(|d| !d.is_empty())
-                {
-                    let all_ebuild_cands =
-                        list_candidates(&repos, &key.0, &key.1).unwrap_or_default();
-                    if let Some(existing_cand) = all_ebuild_cands
-                        .iter()
-                        .find(|c| c.version == existing_version)
-                    {
-                        let declared: HashSet<String> = existing_cand
-                            .iuse
-                            .split_whitespace()
-                            .map(|t| t.trim_start_matches(['+', '-']).to_string())
-                            .collect();
-                        let iuse_set = valid_iuse(&declared, config);
-                        let existing_cand_str = format!(
-                            "{}/{}-{existing_version}:{}/{}::{}",
-                            key.0,
-                            key.1,
-                            existing_cand.slot,
-                            existing_cand.sub_slot,
-                            existing_cand.repo_name
-                        );
-                        let existing_use = effective_use_flags(
-                            config,
-                            &existing_cand.iuse,
-                            &existing_cand.keywords,
-                            &existing_cand_str,
-                            &key.0,
-                            &key.1,
-                        );
-                        if !portage_dep::use_deps_satisfied(use_deps, &iuse_set, &existing_use)
-                            && let Some(flip) =
-                                suggested_use_flip(existing_cand, &key.0, &key.1, use_deps, config)
-                        {
-                            let bucket = autounmask_use_config.entry(key.clone()).or_default();
-                            let mut newly = false;
-                            for (f, on) in &flip {
-                                match bucket.get(f) {
-                                    Some(prev) if prev == on => {}
-                                    // The accumulator already wants this
-                                    // flag the *other* way for a different
-                                    // atom -- flipping it now would just
-                                    // re-break that one. Real
-                                    // `_autounmask_breakage`: give up on
-                                    // autounmask entirely (handled by the
-                                    // driver below).
-                                    Some(_) => autounmask_use_broke = true,
-                                    None => {
-                                        bucket.insert(f.clone(), *on);
-                                        newly = true;
-                                    }
-                                }
-                            }
-                            if newly {
-                                let token = flip
-                                    .iter()
-                                    .map(|(f, e)| if *e { f.clone() } else { format!("-{f}") })
-                                    .collect::<Vec<_>>()
-                                    .join(" ");
-                                let atom_form = autounmask_use_atom_form(
-                                    existing_cand,
-                                    &all_ebuild_cands,
-                                    &key.0,
-                                    &key.1,
-                                    config,
-                                );
-                                if !autounmask_use_change_records
-                                    .iter()
-                                    .any(|c| c.atom == atom_form && c.token == token)
-                                {
-                                    autounmask_use_change_records.push(AutounmaskChange {
-                                        atom: atom_form,
-                                        token,
-                                        dep_chain: autounmask_dep_chain(
-                                            &owner,
-                                            &current_atom,
-                                            &top_level,
-                                            &entries,
-                                        ),
-                                    });
-                                }
-                                // Real `_backtrack_depgraph` finishes
-                                // the attempt, then restarts with the
-                                // grown config -- the driver at the
-                                // bottom of `'backtrack` does the
-                                // `continue`, not here. Only with
-                                // `--autounmask-backtrack=y`; off (the
-                                // default), the change is recorded and
-                                // displayed but the graph is not
-                                // re-driven (a post-loop pass refreshes
-                                // this package's own USE line).
-                                if autounmask_backtrack_enabled {
-                                    autounmask_grew = true;
-                                }
-                            }
-                        }
-                    }
-                }
-                continue;
-            }
-            let entry_idx = entries.len();
-            resolved_slots.insert(slot_key, entry_idx);
-            let candidate_source = resolved.source;
-            // Real `output.py:648`: `attr_display.remote_binary = pkg.remote`.
-            let candidate_remote = resolved.remote;
-            // Real `output.py::_append_build_id`: only a `type_name ==
-            // "binary"` package's version gets the `-{build_id}` suffix.
-            let candidate_build_id = if candidate_source == CandidateSource::Binary {
-                resolved.build_id.clone()
+            // `--autounmask`'s own keyword-suggestion sub-feature,
+            // extended here to a *dependency's* own `NoVisibleCandidate`
+            // -- see `GraphEntry::keyword_suggestion`'s own doc comment.
+            let keyword_suggestion = if matches!(outcome, PretendOutcome::NoVisibleCandidate)
+                && bp.autounmask_suggest_keywords
+            {
+                suggested_keyword_candidate(&ctx.repos, &key.0, &key.1, config)
             } else {
                 None
             };
-            let provenance = visibility_provenance(resolved, &key.0, &key.1, config);
-            let keyword_mask =
-                keyword_mask_marker(resolved, &key.0, &key.1, config, &provenance.mask_entry);
-            let resolved_cpv_str = format!(
-                "{}/{}-{version}:{slot}/{sub_slot}::{repo_name}",
-                key.0, key.1
-            );
-            // Real `--autounmask` keyword resolution: `resolve_pretend`
-            // accepted this candidate over an unaccepted `KEYWORDS` (real
-            // `_pkg_visibility_check` under an `allow_unstable_keywords`
-            // level). Record the implicit `=<cpv> <keyword>` change (real
-            // `depgraph.py::_display_autounmask`'s `unstable_keyword_msg` +
-            // `_get_dep_chain_as_comment`; `autounmask_unrestricted_atoms`
-            // defaults to `"n"`, so always the exact-version `=` form). The
-            // gate is per-category, not `keyword_masked_only`: a candidate
-            // masked by `~arch` *and* `LICENSE` records *both* changes.
-            if autounmask_suggest_keywords
-                && !keywords_accepted(
-                    &resolved.keywords,
-                    &resolved_cpv_str,
+            // `--autounmask-use`'s own suggestion sub-feature -- see
+            // `GraphEntry::use_suggestion`'s own doc comment. `atom.
+            // use_deps` is the dependency atom's own use-dep spec
+            // (already conditional-evaluated by `enqueue_flat_deps`
+            // before this atom was ever queued, so only plain `flag`/
+            // `-flag` forms survive to be checked here).
+            let use_suggestion = if matches!(outcome, PretendOutcome::NoVisibleCandidate)
+                && bp.autounmask_suggest_use
+            {
+                suggested_use_candidate(
+                    &ctx.repos,
                     &key.0,
                     &key.1,
-                    &config.accept_keywords,
-                    &config.package_accept_keywords,
+                    atom.use_deps.as_deref(),
+                    config,
                 )
-                && let Some(kw) = suggested_keyword(resolved)
+            } else {
+                None
+            };
+            // `--autounmask-use`'s own second, architecturally distinct
+            // suggestion sub-feature -- see `suggested_parent_use_
+            // candidate`'s own doc comment. Only ever attempted when
+            // this atom actually had a conditional use-dep evaluated
+            // away (`unevaluated_atom.is_some()`) and has a real parent
+            // to flip a flag on (`owner.is_some()`, always true here: a
+            // top-level atom's own `NoVisibleCandidate` already aborted
+            // the whole call via the fatal check above, so any
+            // `NoVisibleCandidate` reaching this point is necessarily a
+            // dependency's own, which always has an `owner`).
+            let parent_use_suggestion = if matches!(outcome, PretendOutcome::NoVisibleCandidate)
+                && bp.autounmask_suggest_use
             {
-                autounmask_keyword_changes.push(AutounmaskChange {
-                    atom: format!("={}/{}-{version}", key.0, key.1),
-                    token: kw.to_string(),
-                    dep_chain: autounmask_dep_chain(&owner, &current_atom, &top_level, &entries),
-                });
-            }
-            // Real `--autounmask-license`: `resolve_pretend` accepted this
-            // candidate over an unaccepted `LICENSE`. Record the missing
-            // licenses (real `_display_autounmask`'s `license_msg`;
-            // `check_if_latest(pkg)` without `check_visibility` -> the `>=` /
-            // `>=…:slot` / `=` form). Per-category gate (the non-empty
-            // `missing` list *is* the "license needs a change" signal), so a
-            // multi-category mask still records its license part.
-            if autounmask_suggest_license {
-                let missing = missing_licenses(resolved, &key.0, &key.1, &resolved_cpv_str, config);
-                if !missing.is_empty() {
-                    let all = list_candidates(&repos, &key.0, &key.1).unwrap_or_default();
-                    autounmask_license_changes.push(AutounmaskChange {
-                        atom: check_if_latest_atom_form(
-                            resolved, &all, &key.0, &key.1, config, false,
-                        ),
-                        token: missing.join(" "),
-                        dep_chain: autounmask_dep_chain(
-                            &owner,
-                            &current_atom,
-                            &top_level,
-                            &entries,
-                        ),
+                owner
+                    .as_ref()
+                    .zip(unevaluated_atom.as_deref())
+                    .and_then(|(owner, unevaluated)| {
+                        suggested_parent_use_candidate(
+                            &ctx.repos,
+                            &state.entries,
+                            unevaluated,
+                            owner,
+                            config,
+                        )
+                    })
+            } else {
+                None
+            };
+            // Masked-dependency disclosure (real
+            // `_show_unsatisfied_dep`'s "All ebuilds that could satisfy
+            // … have been masked" block for a *dependency* -- the Tier
+            // 2.20 half of finding S's top-level report): a dependency
+            // `NoVisibleCandidate` whose atom still matches ebuilds by
+            // version, every one of which is masked, is recorded here
+            // (one per `cat/pkg`, like the entry itself) instead of
+            // rendering the bare `!!! no visible ebuild` line. The
+            // display atom is the unevaluated form as queued, so a
+            // USE-conditional dep shows as written. Computed every
+            // pass; only the final pass's reports are rendered.
+            if matches!(outcome, PretendOutcome::NoVisibleCandidate) {
+                let display_atom = unevaluated_atom.as_deref().unwrap_or(&current_atom);
+                state
+                    .nvc_dep_atoms
+                    .entry(key.clone())
+                    .or_insert_with(|| display_atom.to_string());
+                if let Some(masked) = masked_candidates_for_atom(&ctx.repos, display_atom, config)
+                    && !state
+                        .masked_deps
+                        .iter()
+                        .any(|r: &MaskedDepReport| r.category == key.0 && r.package == key.1)
+                {
+                    state.masked_deps.push(MaskedDepReport {
+                        category: key.0.clone(),
+                        package: key.1.clone(),
+                        atom: display_atom.to_string(),
+                        masked,
+                        // Walked post-loop out of the final entries
+                        // (see below).
+                        chain: Vec::new(),
                     });
                 }
             }
-            // Real `--autounmask-keep-masks=n`: `resolve_pretend` accepted
-            // this candidate over an active `package.mask`. Record `=<cpv>`
-            // (real `p_mask_change_msg`; `autounmask_unrestricted_atoms`
-            // `"n"` -> always the exact-version form; no token). Per-category
-            // gate (`package.mask` matched, nothing unmasked it), so a
-            // multi-category mask still records its mask part.
-            if autounmask_suggest_masks
-                && provenance.mask_entry.is_some()
-                && provenance.unmask_entry.is_none()
-            {
-                autounmask_mask_changes.push(AutounmaskChange {
-                    atom: format!("={}/{}-{version}", key.0, key.1),
-                    token: String::new(),
-                    dep_chain: autounmask_dep_chain(&owner, &current_atom, &top_level, &entries),
+            state.entries.push(GraphEntry {
+                category: key.0,
+                package: key.1,
+                outcome,
+                blockers: Vec::new(),
+                slot: None,
+                sub_slot: None,
+                repo_name: None,
+                oldbest: Vec::new(),
+                use_flags_display: Vec::new(),
+                use_expand_display: Vec::new(),
+                use_expand_display_p: Vec::new(),
+                keyword_mask: None,
+                new_slot: false,
+                interactive: false,
+                fetch_restrict: false,
+                fetch_restrict_satisfied: false,
+                download_files: Vec::new(),
+                required_by: Vec::new(),
+                source: CandidateSource::Ebuild,
+                provenance: VisibilityProvenance::default(),
+                keyword_suggestion,
+                use_suggestion,
+                parent_use_suggestion,
+                targets_running_root: false,
+                remote_binary: false,
+                build_id: None,
+                deps: already_installed_deps,
+            });
+            continue;
+        };
+
+        // The resolved version may have come from any of `repos`, or
+        // from PKGDIR (`--usepkg`/`--usepkgonly`) or a remote binhost
+        // (`--getbinpkg`), so re-derive which one it actually lives in
+        // -- reusing `list_candidates`/`list_binary_candidates` rather
+        // than threading a repo location back out of `PretendOutcome`,
+        // since more than one source could carry the identical
+        // version. This step MUST agree with what `resolve_pretend`
+        // itself chose: real `_wrapped_select_pkg_highest_available_
+        // imp` returns `matched_packages[-1]` with `ebuild` built
+        // first in `dbs` order -- "ebuild type is the last resort"
+        // (`depgraph.py:8492`) -- so at a version tie a
+        // `--usepkg`/`--getbinpkg` binary that passed
+        // `binpkg-respect-use` beats the ebuild. Mirrors
+        // `resolve_pretend`'s own pool construction (`--usepkgonly`
+        // excludes ebuilds entirely).
+        let mut repo_candidates = if ctx.usepkgonly {
+            Vec::new()
+        } else {
+            let Ok(c) = list_candidates(&ctx.repos, &key.0, &key.1) else {
+                continue;
+            };
+            c.to_vec()
+        };
+        if ctx.usepkg || ctx.usepkgonly {
+            let mut binary_candidates = list_binary_candidates(&ctx.local_binpkg, &key.0, &key.1);
+            if ctx.getbinpkg {
+                binary_candidates.extend(list_remote_binary_candidates(
+                    &config.binrepos,
+                    ctx.root,
+                    &ctx.local_binpkg,
+                    &key.0,
+                    &key.1,
+                ));
+            }
+            // Same `--binpkg-respect-use` / `--binpkg-changed-deps`
+            // gates `resolve_pretend` applied when it chose this
+            // version -- a binary that was never eligible then can't
+            // be re-derived as the source here either.
+            if ctx.binpkg_respect_use {
+                binary_candidates.retain(|c| binpkg_respect_use_ok(c, &key.0, &key.1, config));
+            }
+            if binpkg_changed_deps_active(ctx.usepkgonly) {
+                binary_candidates.retain(|c| {
+                    !binary_deps_changed(ctx.root, &ctx.repos, c, &key.0, &key.1, ctx.with_bdeps)
                 });
             }
-            // Real `_get_installed_best`'s `new_slot`: a `New` entry whose
-            // `category/package` is installed in some *other* slot (the
-            // in-slot New/Upgrade decision already happened inside
-            // `resolve_pretend`, so `New` here means nothing in *this* slot).
-            let new_slot = matches!(outcome, PretendOutcome::New { .. })
-                && !installed_candidates(root, &key.0, &key.1).is_empty();
-            let candidate_str = format!(
-                "{}/{}-{version}:{slot}/{sub_slot}::{repo_name}",
-                key.0, key.1
-            );
-            // Real `output.py:833`: `if "interactive" in pkg.properties and
-            // pkg.operation == "merge"`. `pkg.properties` is `PROPERTIES`
-            // after real USE-conditional evaluation (`_PackageMetadataWrapper`,
-            // gated on `"?" in v`); every graph entry reaching this point is
-            // a merge (`New`/`Upgrade`/`Downgrade`/`Reinstall` -- the only
-            // outcomes `resolved_slots` ever indexes), so no separate
-            // operation check is needed here.
-            let interactive = evaluated_metadata_tokens(
-                &resolved.properties,
+            // `_equiv_ebuild_visible` (see `resolve_pretend`): a
+            // binary re-derived here needs a visible ebuild at its
+            // own exact version, when any visible ebuild satisfies
+            // the atom. `--use-ebuild-visibility` enforces it even
+            // under `--usepkgonly` / a `--useoldpkg-atoms` match.
+            let uev = use_ebuild_visibility();
+            if (!ctx.usepkgonly || uev) && !binary_candidates.is_empty() {
+                let some_ebuild_matches = repo_candidates.iter().any(|c| {
+                    c.source == CandidateSource::Ebuild
+                        && is_visible(c, &key.0, &key.1, config)
+                        && {
+                            let s = format!(
+                                "{}/{}-{}:{}/{}::{}",
+                                key.0, key.1, c.version, c.slot, c.sub_slot, c.repo_name
+                            );
+                            portage_dep::match_from_list(&current_atom, &[s.as_str()])
+                                .is_some_and(|r| !r.is_empty())
+                        }
+                });
+                if some_ebuild_matches || uev {
+                    binary_candidates.retain(|c| {
+                        (!uev && useoldpkg_atom_matches(&key.0, &key.1, &c.version))
+                            || repo_candidates.iter().any(|e| {
+                                e.source == CandidateSource::Ebuild
+                                    && e.version == c.version
+                                    && is_visible(e, &key.0, &key.1, config)
+                            })
+                    });
+                }
+            }
+            let binary_candidates = dedup_binary_instances(binary_candidates, &atom, config);
+            repo_candidates.extend(filter_usepkg_exclude_include(
+                binary_candidates,
+                &key.0,
+                &key.1,
+                ctx.usepkg_exclude,
+                ctx.usepkg_include,
+            ));
+        }
+        let Some(resolved) = repo_candidates
+            .iter()
+            .filter(|c| c.version == *version)
+            .max_by(|a, b| {
+                // "ebuild type is the last resort" -- see
+                // `resolve_pretend`'s own `best` pick.
+                let src_rank = |c: &Candidate| match c.source {
+                    CandidateSource::Binary => 1u8,
+                    CandidateSource::Ebuild => 0,
+                };
+                src_rank(a)
+                    .cmp(&src_rank(b))
+                    .then(a.repo_priority.cmp(&b.repo_priority))
+            })
+        else {
+            continue;
+        };
+        let slot = resolved.slot.clone();
+        let sub_slot = resolved.sub_slot.clone();
+        let repo_location = resolved.repo_location.clone();
+        let repo_name = resolved.repo_name.clone();
+        let keywords = resolved.keywords.clone();
+
+        let slot_key = (key.0.clone(), key.1.clone(), slot.clone());
+        if let Some(&existing_idx) = state.resolved_slots.get(&slot_key) {
+            // This exact category/package/slot was already resolved by
+            // an earlier atom. If the current atom's own constraint
+            // doesn't accept that already-resolved version, it's a real
+            // slot conflict -- report it and move on, without a second,
+            // independent resolution or any attempt to reconcile the two.
+            let existing_version = match &state.entries[existing_idx].outcome {
+                PretendOutcome::New { version } => version.clone(),
+                PretendOutcome::Upgrade { to, .. } => to.clone(),
+                PretendOutcome::Downgrade { to, .. } => to.clone(),
+                PretendOutcome::Reinstall { version, .. } => version.clone(),
+                _ => unreachable!(
+                    "resolved_slots only ever indexes New/Upgrade/Downgrade/Reinstall entries"
+                ),
+            };
+            // Include the already-resolved version's own sub-slot: a
+            // *built* slot-operator atom (`cat/pkg:0/2=`, common in a
+            // binary package's recorded RDEPEND) carries an explicit
+            // sub-slot and won't match a `:slot`-only string even when
+            // the sub-slots agree -- which produced a spurious slot
+            // conflict for a package two binary parents both depend on.
+            let existing_sub = slot_conflict_meta(&ctx.repos, &key.0, &key.1, &existing_version).0;
+            let existing_str = if existing_sub.is_empty() {
+                format!("{}/{}-{existing_version}:{slot}", key.0, key.1)
+            } else {
+                format!(
+                    "{}/{}-{existing_version}:{slot}/{existing_sub}",
+                    key.0, key.1
+                )
+            };
+            let satisfied = portage_dep::match_from_list(&current_atom, &[existing_str.as_str()])
+                .is_some_and(|m| !m.is_empty());
+            if !satisfied {
+                record_slot_conflict(
+                    &mut state.slot_conflicts,
+                    build_slot_conflict(
+                        &ctx.repos,
+                        config,
+                        &key.0,
+                        &key.1,
+                        &slot,
+                        &existing_version,
+                        &current_atom,
+                        &version,
+                        &state.slot_pullers,
+                    ),
+                );
+                continue;
+            }
+
+            // `match_from_list` above matched version + slot only. If
+            // this atom carries a `[flag]` use-dep, the already-resolved
+            // package still has to satisfy it -- and if it doesn't, but
+            // a `package.use` flip would (real `--autounmask-use` for a
+            // dep on a package already in the graph), fold the flip into
+            // `autounmask_use_config` and re-run the whole walk so the
+            // package is re-resolved with the flag and its `flag?`-gated
+            // deps appear (real `_need_restart` after
+            // `_needed_use_config_changes` grows).
+            //
+            // Real goes one step further first: a USE mismatch means
+            // the graphed instance does NOT satisfy this atom, so real
+            // pulls a second instance and reports the slot conflict
+            // (live-verified: the notice then carries `("use", flag)`
+            // parents). `version` above is the fresh USE-filtered pick,
+            // so it becomes the conflict's second instance -- unless it
+            // is the already-resolved version itself (selection
+            // prefers the highest flippable version, so a flippable
+            // mismatch resolves in place with an autounmask flip and
+            // no second instance exists to report). No `continue`
+            // here -- the flip suggestion below still runs (real
+            // shows both the notice and the change block).
+            if version != existing_version
+                && let Some(use_deps) = atom.use_deps.as_deref().filter(|d| !d.is_empty())
+            {
+                let all_cands = list_candidates(&ctx.repos, &key.0, &key.1).unwrap_or_default();
+                if let Some(existing_cand) =
+                    all_cands.iter().find(|c| c.version == existing_version)
+                {
+                    let declared: HashSet<String> = existing_cand
+                        .iuse
+                        .split_whitespace()
+                        .map(|t| t.trim_start_matches(['+', '-']).to_string())
+                        .collect();
+                    let iuse_set = valid_iuse(&declared, config);
+                    let existing_cand_str = format!(
+                        "{}/{}-{existing_version}:{}/{}::{}",
+                        key.0,
+                        key.1,
+                        existing_cand.slot,
+                        existing_cand.sub_slot,
+                        existing_cand.repo_name
+                    );
+                    let existing_use = effective_use_flags(
+                        config,
+                        &existing_cand.iuse,
+                        &existing_cand.keywords,
+                        &existing_cand_str,
+                        &key.0,
+                        &key.1,
+                    );
+                    if !portage_dep::use_deps_satisfied(use_deps, &iuse_set, &existing_use) {
+                        record_slot_conflict(
+                            &mut state.slot_conflicts,
+                            build_slot_conflict(
+                                &ctx.repos,
+                                config,
+                                &key.0,
+                                &key.1,
+                                &slot,
+                                &existing_version,
+                                &current_atom,
+                                &version,
+                                &state.slot_pullers,
+                            ),
+                        );
+                    }
+                }
+            }
+            if bp.autounmask_suggest_use
+                && let Some(use_deps) = atom.use_deps.as_deref().filter(|d| !d.is_empty())
+            {
+                let all_ebuild_cands =
+                    list_candidates(&ctx.repos, &key.0, &key.1).unwrap_or_default();
+                if let Some(existing_cand) = all_ebuild_cands
+                    .iter()
+                    .find(|c| c.version == existing_version)
+                {
+                    let declared: HashSet<String> = existing_cand
+                        .iuse
+                        .split_whitespace()
+                        .map(|t| t.trim_start_matches(['+', '-']).to_string())
+                        .collect();
+                    let iuse_set = valid_iuse(&declared, config);
+                    let existing_cand_str = format!(
+                        "{}/{}-{existing_version}:{}/{}::{}",
+                        key.0,
+                        key.1,
+                        existing_cand.slot,
+                        existing_cand.sub_slot,
+                        existing_cand.repo_name
+                    );
+                    let existing_use = effective_use_flags(
+                        config,
+                        &existing_cand.iuse,
+                        &existing_cand.keywords,
+                        &existing_cand_str,
+                        &key.0,
+                        &key.1,
+                    );
+                    if !portage_dep::use_deps_satisfied(use_deps, &iuse_set, &existing_use)
+                        && let Some(flip) =
+                            suggested_use_flip(existing_cand, &key.0, &key.1, use_deps, config)
+                    {
+                        // A3 overlay: the three-way match reads the effective
+                        // (overlay-then-`bp`) value. Unlike the parent-flip
+                        // site above this one inserts non-conflicting flags
+                        // and flags only the conflicting one -- preserved.
+                        // Writes go to the overlay only.
+                        let mut newly = false;
+                        for (f, on) in &flip {
+                            match overlay_use_want(
+                                &state.use_overlay,
+                                &bp.autounmask_use_config,
+                                &key,
+                                f,
+                            ) {
+                                Some(prev) if prev == *on => {}
+                                // The accumulator already wants this
+                                // flag the *other* way for a different
+                                // atom -- flipping it now would just
+                                // re-break that one. Real
+                                // `_autounmask_breakage`: give up on
+                                // autounmask entirely (handled by the
+                                // driver below).
+                                Some(_) => state.use_broke = true,
+                                None => {
+                                    state
+                                        .use_overlay
+                                        .entry(key.clone())
+                                        .or_default()
+                                        .insert(f.clone(), *on);
+                                    newly = true;
+                                }
+                            }
+                        }
+                        if newly {
+                            let token = flip
+                                .iter()
+                                .map(|(f, e)| if *e { f.clone() } else { format!("-{f}") })
+                                .collect::<Vec<_>>()
+                                .join(" ");
+                            let atom_form = autounmask_use_atom_form(
+                                existing_cand,
+                                &all_ebuild_cands,
+                                &key.0,
+                                &key.1,
+                                config,
+                            );
+                            // A3 overlay: dedup spans the union (this pass's
+                            // overlay plus `bp`'s committed records), like
+                            // the old single vec.
+                            if !state
+                                .use_change_overlay
+                                .iter()
+                                .any(|c| c.atom == atom_form && c.token == token)
+                                && !bp
+                                    .autounmask_use_change_records
+                                    .iter()
+                                    .any(|c| c.atom == atom_form && c.token == token)
+                            {
+                                state.use_change_overlay.push(AutounmaskChange {
+                                    atom: atom_form,
+                                    token,
+                                    dep_chain: autounmask_dep_chain(
+                                        &owner,
+                                        &current_atom,
+                                        &ctx.top_level,
+                                        &state.entries,
+                                    ),
+                                });
+                            }
+                            // Real `_backtrack_depgraph` finishes
+                            // the attempt, then restarts with the
+                            // grown config -- the driver at the
+                            // bottom of `'backtrack` does the
+                            // `continue`, not here. Only with
+                            // `--autounmask-backtrack=y`; off (the
+                            // default), the change is recorded and
+                            // displayed but the graph is not
+                            // re-driven (a post-loop pass refreshes
+                            // this package's own USE line).
+                            if ctx.autounmask_backtrack_enabled {
+                                state.autounmask_grew = true;
+                            }
+                        }
+                    }
+                }
+            }
+            continue;
+        }
+        let entry_idx = state.entries.len();
+        state.resolved_slots.insert(slot_key, entry_idx);
+        let candidate_source = resolved.source;
+        // Real `output.py:648`: `attr_display.remote_binary = pkg.remote`.
+        let candidate_remote = resolved.remote;
+        // Real `output.py::_append_build_id`: only a `type_name ==
+        // "binary"` package's version gets the `-{build_id}` suffix.
+        let candidate_build_id = if candidate_source == CandidateSource::Binary {
+            resolved.build_id.clone()
+        } else {
+            None
+        };
+        let provenance = visibility_provenance(resolved, &key.0, &key.1, config);
+        let keyword_mask =
+            keyword_mask_marker(resolved, &key.0, &key.1, config, &provenance.mask_entry);
+        let resolved_cpv_str = format!(
+            "{}/{}-{version}:{slot}/{sub_slot}::{repo_name}",
+            key.0, key.1
+        );
+        // Real `--autounmask` keyword resolution: `resolve_pretend`
+        // accepted this candidate over an unaccepted `KEYWORDS` (real
+        // `_pkg_visibility_check` under an `allow_unstable_keywords`
+        // level). Record the implicit `=<cpv> <keyword>` change (real
+        // `depgraph.py::_display_autounmask`'s `unstable_keyword_msg` +
+        // `_get_dep_chain_as_comment`; `autounmask_unrestricted_atoms`
+        // defaults to `"n"`, so always the exact-version `=` form). The
+        // gate is per-category, not `keyword_masked_only`: a candidate
+        // masked by `~arch` *and* `LICENSE` records *both* changes.
+        if bp.autounmask_suggest_keywords
+            && !keywords_accepted(
+                &resolved.keywords,
+                &resolved_cpv_str,
+                &key.0,
+                &key.1,
+                &config.accept_keywords,
+                &config.package_accept_keywords,
+            )
+            && let Some(kw) = suggested_keyword(resolved)
+        {
+            state.autounmask_keyword_changes.push(AutounmaskChange {
+                atom: format!("={}/{}-{version}", key.0, key.1),
+                token: kw.to_string(),
+                dep_chain: autounmask_dep_chain(
+                    &owner,
+                    &current_atom,
+                    &ctx.top_level,
+                    &state.entries,
+                ),
+            });
+        }
+        // Real `--autounmask-license`: `resolve_pretend` accepted this
+        // candidate over an unaccepted `LICENSE`. Record the missing
+        // licenses (real `_display_autounmask`'s `license_msg`;
+        // `check_if_latest(pkg)` without `check_visibility` -> the `>=` /
+        // `>=…:slot` / `=` form). Per-category gate (the non-empty
+        // `missing` list *is* the "license needs a change" signal), so a
+        // multi-category mask still records its license part.
+        if bp.autounmask_suggest_license {
+            let missing = missing_licenses(resolved, &key.0, &key.1, &resolved_cpv_str, config);
+            if !missing.is_empty() {
+                let all = list_candidates(&ctx.repos, &key.0, &key.1).unwrap_or_default();
+                state.autounmask_license_changes.push(AutounmaskChange {
+                    atom: check_if_latest_atom_form(resolved, &all, &key.0, &key.1, config, false),
+                    token: missing.join(" "),
+                    dep_chain: autounmask_dep_chain(
+                        &owner,
+                        &current_atom,
+                        &ctx.top_level,
+                        &state.entries,
+                    ),
+                });
+            }
+        }
+        // Real `--autounmask-keep-masks=n`: `resolve_pretend` accepted
+        // this candidate over an active `package.mask`. Record `=<cpv>`
+        // (real `p_mask_change_msg`; `autounmask_unrestricted_atoms`
+        // `"n"` -> always the exact-version form; no token). Per-category
+        // gate (`package.mask` matched, nothing unmasked it), so a
+        // multi-category mask still records its mask part.
+        if bp.autounmask_suggest_masks
+            && provenance.mask_entry.is_some()
+            && provenance.unmask_entry.is_none()
+        {
+            state.autounmask_mask_changes.push(AutounmaskChange {
+                atom: format!("={}/{}-{version}", key.0, key.1),
+                token: String::new(),
+                dep_chain: autounmask_dep_chain(
+                    &owner,
+                    &current_atom,
+                    &ctx.top_level,
+                    &state.entries,
+                ),
+            });
+        }
+        // Real `_get_installed_best`'s `new_slot`: a `New` entry whose
+        // `category/package` is installed in some *other* slot (the
+        // in-slot New/Upgrade decision already happened inside
+        // `resolve_pretend`, so `New` here means nothing in *this* slot).
+        let new_slot = matches!(outcome, PretendOutcome::New { .. })
+            && !installed_candidates(ctx.root, &key.0, &key.1).is_empty();
+        let candidate_str = format!(
+            "{}/{}-{version}:{slot}/{sub_slot}::{repo_name}",
+            key.0, key.1
+        );
+        // Real `output.py:833`: `if "interactive" in pkg.properties and
+        // pkg.operation == "merge"`. `pkg.properties` is `PROPERTIES`
+        // after real USE-conditional evaluation (`_PackageMetadataWrapper`,
+        // gated on `"?" in v`); every graph entry reaching this point is
+        // a merge (`New`/`Upgrade`/`Downgrade`/`Reinstall` -- the only
+        // outcomes `resolved_slots` ever indexes), so no separate
+        // operation check is needed here.
+        let interactive = evaluated_metadata_tokens(
+            &resolved.properties,
+            resolved,
+            &key.0,
+            &key.1,
+            &candidate_str,
+            config,
+        )
+        .contains("interactive");
+        // Real `_get_installed_best`'s `myoldbest`: an `Upgrade`/
+        // `Downgrade` replaces the installed version(s) in *its* slot
+        // (`myinslotlist = vardb.match(pkg.slot_atom)`); a new-slot `New`
+        // lists every installed version, all slots
+        // (`myoldbest = installed_versions`). Version-sorted for a stable
+        // display order. A brand-new `New` / `Reinstall` -> empty.
+        let mut oldbest: Vec<InstalledRef> = match &outcome {
+            PretendOutcome::Upgrade { .. } | PretendOutcome::Downgrade { .. } => {
+                installed_refs(ctx.root, &key.0, &key.1)
+                    .into_iter()
+                    .filter(|r| r.slot == slot)
+                    .collect()
+            }
+            PretendOutcome::New { .. } if new_slot => installed_refs(ctx.root, &key.0, &key.1),
+            _ => Vec::new(),
+        };
+        oldbest.sort_by(|a, b| vercmp_ordering(&a.version, &b.version));
+        state.entries.push(GraphEntry {
+            category: key.0.clone(),
+            package: key.1.clone(),
+            outcome,
+            blockers: Vec::new(),
+            slot: Some(slot.clone()),
+            sub_slot: Some(sub_slot.clone()),
+            repo_name: Some(repo_name.clone()),
+            oldbest,
+            use_flags_display: Vec::new(),
+            use_expand_display: Vec::new(),
+            use_expand_display_p: Vec::new(),
+            keyword_mask,
+            new_slot,
+            interactive,
+            // Real `output.py:633`'s `not pkg.built and … "fetch" in
+            // pkg.restrict`. Filled in below, once `metadata`/`use_flags`
+            // (for `SRC_URI` flattening) are read -- a binary candidate
+            // (`pkg.built`) is never fetch-restricted, so it stays
+            // `false` here regardless.
+            fetch_restrict: false,
+            fetch_restrict_satisfied: false,
+            download_files: Vec::new(),
+            required_by: Vec::new(),
+            source: candidate_source,
+            provenance,
+            keyword_suggestion: None,
+            use_suggestion: None,
+            parent_use_suggestion: None,
+            targets_running_root: false,
+            remote_binary: candidate_remote,
+            build_id: candidate_build_id,
+            deps: Vec::new(),
+        });
+
+        let metadata = if candidate_source == CandidateSource::Binary {
+            let Some(metadata) = read_binary_metadata_any(
+                config,
+                ctx.root,
+                &ctx.local_binpkg,
+                &key.0,
+                &key.1,
+                &version,
+            ) else {
+                continue;
+            };
+            std::sync::Arc::new(metadata)
+        } else {
+            let pf = format!("{}-{version}", key.1);
+            let Ok(metadata) = read_md5_cache(&repo_location, &key.0, &pf) else {
+                continue;
+            };
+            metadata
+        };
+        // A *built* package (a `--getbinpkg` binary candidate) carries
+        // the USE flags it was actually built with (`Packages` `USE:`
+        // field / `Candidate::binary_use`) -- real `_pkg_use_enabled`
+        // returns `pkg.use.enabled` (= the baked set) for a
+        // `pkg.built` package, never a fresh profile recomputation.
+        // This is what the REQUIRED_USE check (PMS 7.3.4), the `-pv`
+        // `USE="…"` line and the USE-conditional dependency walk below
+        // must all see -- identical to what `candidate_iuse_and_use`
+        // already does everywhere else. Recomputing from the profile
+        // (`effective_use_flags`) would e.g. spuriously fail a
+        // `^^ ( elogind systemd )` REQUIRED_USE whenever the profile
+        // forces neither flag but the binary was built with exactly
+        // one. (`--newuse`/`-N` rebuild-vs-reuse is a *selection*
+        // decision made upstream; if it stays `Binary` here, the baked
+        // USE is authoritative.)
+        let mut use_flags = if candidate_source == CandidateSource::Binary {
+            resolved.binary_use.clone().unwrap_or_default()
+        } else {
+            effective_use_flags(
+                config,
+                metadata.get("IUSE").map(String::as_str).unwrap_or_default(),
+                &keywords,
+                &candidate_str,
+                &key.0,
+                &key.1,
+            )
+        };
+
+        // Real `--autounmask-use` USE resolution: `resolve_pretend` kept
+        // this candidate despite an atom use-dep mismatch because a
+        // `package.use` flip fixes it (`suggested_use_flip`). Apply the
+        // flip to `use_flags` here -- once, at the graph layer -- so the
+        // `-pv` `USE="…"` line, the REQUIRED_USE check and the dependency
+        // walk below all see the adjusted state (real `_pkg_use_enabled`)
+        // -- and record the change (real `_display_autounmask`'s
+        // `use_changes_msg` + `_get_dep_chain_as_comment(pkg,
+        // unsatisfied_dependency=True)`).
+        if bp.autounmask_suggest_use
+            && let Some(use_deps) = atom.use_deps.as_deref().filter(|d| !d.is_empty())
+        {
+            let iuse_declared: HashSet<String> = metadata
+                .get("IUSE")
+                .map(String::as_str)
+                .unwrap_or_default()
+                .split_whitespace()
+                .map(|tok| tok.trim_start_matches(['+', '-']).to_string())
+                .collect();
+            let iuse_set = valid_iuse(&iuse_declared, config);
+            if !portage_dep::use_deps_satisfied(use_deps, &iuse_set, &use_flags)
+                && let Some(flip) = suggested_use_flip(resolved, &key.0, &key.1, use_deps, config)
+            {
+                for (flag, enabled) in &flip {
+                    if *enabled {
+                        use_flags.insert(flag.clone());
+                    } else {
+                        use_flags.remove(flag);
+                    }
+                }
+                let token = flip
+                    .iter()
+                    .map(|(f, e)| if *e { f.clone() } else { format!("-{f}") })
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                state.autounmask_use_changes.push(AutounmaskChange {
+                    atom: autounmask_use_atom_form(
+                        resolved,
+                        &repo_candidates,
+                        &key.0,
+                        &key.1,
+                        config,
+                    ),
+                    token,
+                    dep_chain: autounmask_dep_chain(
+                        &owner,
+                        &current_atom,
+                        &ctx.top_level,
+                        &state.entries,
+                    ),
+                });
+            }
+        }
+
+        // Real `output.py:633-641`'s own `f`/`F` fetch-restrict column
+        // (`not pkg.built` -> ebuild candidates only; a binary is already
+        // built and never re-fetched). `resolved.restrict` is the raw
+        // `RESTRICT`; `evaluated_metadata_tokens` resolves its USE
+        // conditionals the same way it does for `interactive`'s
+        // `PROPERTIES`. `fetch_restrict_satisfied` is real
+        // `not getfetchsizes(only_restricted=True)`.
+        if candidate_source == CandidateSource::Ebuild
+            && evaluated_metadata_tokens(
+                &resolved.restrict,
                 resolved,
                 &key.0,
                 &key.1,
                 &candidate_str,
                 config,
             )
-            .contains("interactive");
-            // Real `_get_installed_best`'s `myoldbest`: an `Upgrade`/
-            // `Downgrade` replaces the installed version(s) in *its* slot
-            // (`myinslotlist = vardb.match(pkg.slot_atom)`); a new-slot `New`
-            // lists every installed version, all slots
-            // (`myoldbest = installed_versions`). Version-sorted for a stable
-            // display order. A brand-new `New` / `Reinstall` -> empty.
-            let mut oldbest: Vec<InstalledRef> = match &outcome {
-                PretendOutcome::Upgrade { .. } | PretendOutcome::Downgrade { .. } => {
-                    installed_refs(root, &key.0, &key.1)
-                        .into_iter()
-                        .filter(|r| r.slot == slot)
-                        .collect()
-                }
-                PretendOutcome::New { .. } if new_slot => installed_refs(root, &key.0, &key.1),
-                _ => Vec::new(),
-            };
-            oldbest.sort_by(|a, b| vercmp_ordering(&a.version, &b.version));
-            entries.push(GraphEntry {
-                category: key.0.clone(),
-                package: key.1.clone(),
-                outcome,
-                blockers: Vec::new(),
-                slot: Some(slot.clone()),
-                sub_slot: Some(sub_slot.clone()),
-                repo_name: Some(repo_name.clone()),
-                oldbest,
-                use_flags_display: Vec::new(),
-                use_expand_display: Vec::new(),
-                use_expand_display_p: Vec::new(),
-                keyword_mask,
-                new_slot,
-                interactive,
-                // Real `output.py:633`'s `not pkg.built and … "fetch" in
-                // pkg.restrict`. Filled in below, once `metadata`/`use_flags`
-                // (for `SRC_URI` flattening) are read -- a binary candidate
-                // (`pkg.built`) is never fetch-restricted, so it stays
-                // `false` here regardless.
-                fetch_restrict: false,
-                fetch_restrict_satisfied: false,
-                download_files: Vec::new(),
-                required_by: Vec::new(),
-                source: candidate_source,
-                provenance,
-                keyword_suggestion: None,
-                use_suggestion: None,
-                parent_use_suggestion: None,
-                targets_running_root: false,
-                remote_binary: candidate_remote,
-                build_id: candidate_build_id,
-                deps: Vec::new(),
-            });
-
-            let metadata = if candidate_source == CandidateSource::Binary {
-                let Some(metadata) =
-                    read_binary_metadata_any(config, root, &local_binpkg, &key.0, &key.1, &version)
-                else {
-                    continue;
-                };
-                std::sync::Arc::new(metadata)
-            } else {
-                let pf = format!("{}-{version}", key.1);
-                let Ok(metadata) = read_md5_cache(&repo_location, &key.0, &pf) else {
-                    continue;
-                };
+            .contains("fetch")
+        {
+            state.entries[entry_idx].fetch_restrict = true;
+            state.entries[entry_idx].fetch_restrict_satisfied = fetch_restrict_files_all_present(
                 metadata
-            };
-            // A *built* package (a `--getbinpkg` binary candidate) carries
-            // the USE flags it was actually built with (`Packages` `USE:`
-            // field / `Candidate::binary_use`) -- real `_pkg_use_enabled`
-            // returns `pkg.use.enabled` (= the baked set) for a
-            // `pkg.built` package, never a fresh profile recomputation.
-            // This is what the REQUIRED_USE check (PMS 7.3.4), the `-pv`
-            // `USE="…"` line and the USE-conditional dependency walk below
-            // must all see -- identical to what `candidate_iuse_and_use`
-            // already does everywhere else. Recomputing from the profile
-            // (`effective_use_flags`) would e.g. spuriously fail a
-            // `^^ ( elogind systemd )` REQUIRED_USE whenever the profile
-            // forces neither flag but the binary was built with exactly
-            // one. (`--newuse`/`-N` rebuild-vs-reuse is a *selection*
-            // decision made upstream; if it stays `Binary` here, the baked
-            // USE is authoritative.)
-            let mut use_flags = if candidate_source == CandidateSource::Binary {
-                resolved.binary_use.clone().unwrap_or_default()
-            } else {
-                effective_use_flags(
-                    config,
-                    metadata.get("IUSE").map(String::as_str).unwrap_or_default(),
-                    &keywords,
-                    &candidate_str,
-                    &key.0,
-                    &key.1,
-                )
-            };
-
-            // Real `--autounmask-use` USE resolution: `resolve_pretend` kept
-            // this candidate despite an atom use-dep mismatch because a
-            // `package.use` flip fixes it (`suggested_use_flip`). Apply the
-            // flip to `use_flags` here -- once, at the graph layer -- so the
-            // `-pv` `USE="…"` line, the REQUIRED_USE check and the dependency
-            // walk below all see the adjusted state (real `_pkg_use_enabled`)
-            // -- and record the change (real `_display_autounmask`'s
-            // `use_changes_msg` + `_get_dep_chain_as_comment(pkg,
-            // unsatisfied_dependency=True)`).
-            if autounmask_suggest_use
-                && let Some(use_deps) = atom.use_deps.as_deref().filter(|d| !d.is_empty())
-            {
-                let iuse_declared: HashSet<String> = metadata
-                    .get("IUSE")
+                    .get("SRC_URI")
                     .map(String::as_str)
-                    .unwrap_or_default()
-                    .split_whitespace()
-                    .map(|tok| tok.trim_start_matches(['+', '-']).to_string())
-                    .collect();
-                let iuse_set = valid_iuse(&iuse_declared, config);
-                if !portage_dep::use_deps_satisfied(use_deps, &iuse_set, &use_flags)
-                    && let Some(flip) =
-                        suggested_use_flip(resolved, &key.0, &key.1, use_deps, config)
-                {
-                    for (flag, enabled) in &flip {
-                        if *enabled {
-                            use_flags.insert(flag.clone());
-                        } else {
-                            use_flags.remove(flag);
-                        }
-                    }
-                    let token = flip
-                        .iter()
-                        .map(|(f, e)| if *e { f.clone() } else { format!("-{f}") })
+                    .unwrap_or_default(),
+                &use_flags,
+                &repo_location,
+                &key.0,
+                &key.1,
+                ctx.distdir,
+            );
+        }
+
+        // Real `output.py:300-332`'s own `_calc_size` -> `counters.
+        // totalsize` (the `-v` `Total:` line's `Size of downloads`): the
+        // bytes still to fetch for this ebuild merge, per distfile.
+        // Runs for every merge-bound ebuild entry, not just
+        // fetch-restricted ones. See `GraphEntry::download_files`.
+        if candidate_source == CandidateSource::Ebuild {
+            state.entries[entry_idx].download_files = fetch_bytes_to_download(
+                metadata
+                    .get("SRC_URI")
+                    .map(String::as_str)
+                    .unwrap_or_default(),
+                &use_flags,
+                &repo_location,
+                &key.0,
+                &key.1,
+                ctx.distdir,
+            );
+        } else if candidate_remote {
+            // A `--getbinpkg` remote binary: real `_calc_size` -> real
+            // `bindbapi.getfetchsizes` returns `{<cpv>: SIZE}` from the
+            // binhost `Packages` index for a package not yet downloaded
+            // (`bintree.isremote`). Feeds both the `-v` per-line ` N KiB`
+            // suffix and the `Size of downloads:` counter. A local
+            // `$PKGDIR` binary is already present -> nothing to fetch.
+            let cpv = format!("{}/{}-{version}", key.0, key.1);
+            let size = metadata.get("SIZE").and_then(|s| s.parse::<u64>().ok());
+            if let Some(size) = size {
+                state.entries[entry_idx].download_files = vec![(cpv, size)];
+            }
+        }
+
+        // IUSE's own "+flag"/"-flag" default markers only matter for
+        // resolving a flag's default when nothing else decides it --
+        // already handled upstream, wherever `use_flags` itself came
+        // from -- so display only needs the bare flag name, paired with
+        // whatever `use_flags` (the real resolved set) says. Computed
+        // (and shown by `--pretend -v`) regardless of `nodeps` below --
+        // real portage's own USE display is about the package's own
+        // metadata, unrelated to whether its dependencies get walked.
+        // REQUIRED_USE (PMS 7.3.4/8.2): checked once, here, right after a
+        // candidate is newly resolved -- real depgraph.py's own "NOTE:
+        // REQUIRED_USE checks are delayed until after package selection"
+        // (it's a genuine *post*-selection check, no part of matching/
+        // visibility at all, unlike package.use/package.mask). A
+        // violation eventually fails the whole run regardless of whether
+        // this candidate was reached as a top-level atom or a dependency
+        // deep in the graph -- but NOT immediately: real depgraph.py's
+        // own `_add_pkg` (~line 3600) sets
+        // `_dynamic_config._required_use_unsatisfied = True` and returns
+        // 0 on a violation, which does NOT stop the rest of the graph
+        // walk (unlike a top-level atom's own `NoVisibleCandidate`,
+        // which genuinely does abort immediately). Every violation
+        // anywhere in the walk is collected into
+        // `required_use_violations` and the BFS keeps going -- see that
+        // variable's own doc comment, near the top of this function, for
+        // the full grounding and where the collected violations actually
+        // get turned into this call's own `Err`. An genuinely *invalid*
+        // REQUIRED_USE (the `Err(e)` branch below, e.g. referencing a
+        // flag that isn't even valid IUSE) is different: real
+        // `check_required_use` itself raises for that case, outside the
+        // explicit `if not required_use_is_sat:` branch that the delayed
+        // collection above lives in -- so portuale keeps that one
+        // immediately fatal, same as before.
+        if let Some(required_use) = metadata.get("REQUIRED_USE")
+            && !required_use.trim().is_empty()
+        {
+            // Real `check_required_use` validates a referenced flag
+            // against `pkg.iuse.is_valid_flag`, not a package's own
+            // literal IUSE alone -- real config.py's own
+            // `_get_implicit_iuse()` folds `PORTAGE_ARCHLIST`
+            // (profiles/arch.list), `use.mask ∪ use.force`, and
+            // literal `build`/`bootstrap` into every package's
+            // effective IUSE regardless of what that package's own
+            // IUSE declares. Without this, a REQUIRED_USE referencing
+            // an implicit flag never mentioned in a package's own
+            // IUSE (e.g. real media-libs/mesa's own REQUIRED_USE
+            // referencing "x86", a valid arch.list entry that isn't
+            // the profile's own active arch) spuriously fails with
+            // "USE flag ... is not in IUSE" -- confirmed live against
+            // the real, installed system. See `portage_profile::
+            // Config::archlist`'s own doc comment for the full
+            // grounding and the deliberate USE_EXPAND_HIDDEN
+            // (elibc_*/kernel_*/userland_*) simplification.
+            let iuse_set = implicit_iuse_set(
+                metadata.get("IUSE").map(String::as_str).unwrap_or_default(),
+                config,
+            );
+            match portage_required_use::check_required_use(required_use, &use_flags, &iuse_set) {
+                Ok(true) => {}
+                Ok(false) => {
+                    let normalized = required_use
+                        .split_whitespace()
                         .collect::<Vec<_>>()
                         .join(" ");
-                    autounmask_use_changes.push(AutounmaskChange {
-                        atom: autounmask_use_atom_form(
-                            resolved,
-                            &repo_candidates,
-                            &key.0,
-                            &key.1,
-                            config,
-                        ),
-                        token,
-                        dep_chain: autounmask_dep_chain(
-                            &owner,
-                            &current_atom,
-                            &top_level,
-                            &entries,
-                        ),
-                    });
-                }
-            }
-
-            // Real `output.py:633-641`'s own `f`/`F` fetch-restrict column
-            // (`not pkg.built` -> ebuild candidates only; a binary is already
-            // built and never re-fetched). `resolved.restrict` is the raw
-            // `RESTRICT`; `evaluated_metadata_tokens` resolves its USE
-            // conditionals the same way it does for `interactive`'s
-            // `PROPERTIES`. `fetch_restrict_satisfied` is real
-            // `not getfetchsizes(only_restricted=True)`.
-            if candidate_source == CandidateSource::Ebuild
-                && evaluated_metadata_tokens(
-                    &resolved.restrict,
-                    resolved,
-                    &key.0,
-                    &key.1,
-                    &candidate_str,
-                    config,
-                )
-                .contains("fetch")
-            {
-                entries[entry_idx].fetch_restrict = true;
-                entries[entry_idx].fetch_restrict_satisfied = fetch_restrict_files_all_present(
-                    metadata
-                        .get("SRC_URI")
-                        .map(String::as_str)
-                        .unwrap_or_default(),
-                    &use_flags,
-                    &repo_location,
-                    &key.0,
-                    &key.1,
-                    distdir,
-                );
-            }
-
-            // Real `output.py:300-332`'s own `_calc_size` -> `counters.
-            // totalsize` (the `-v` `Total:` line's `Size of downloads`): the
-            // bytes still to fetch for this ebuild merge, per distfile.
-            // Runs for every merge-bound ebuild entry, not just
-            // fetch-restricted ones. See `GraphEntry::download_files`.
-            if candidate_source == CandidateSource::Ebuild {
-                entries[entry_idx].download_files = fetch_bytes_to_download(
-                    metadata
-                        .get("SRC_URI")
-                        .map(String::as_str)
-                        .unwrap_or_default(),
-                    &use_flags,
-                    &repo_location,
-                    &key.0,
-                    &key.1,
-                    distdir,
-                );
-            } else if candidate_remote {
-                // A `--getbinpkg` remote binary: real `_calc_size` -> real
-                // `bindbapi.getfetchsizes` returns `{<cpv>: SIZE}` from the
-                // binhost `Packages` index for a package not yet downloaded
-                // (`bintree.isremote`). Feeds both the `-v` per-line ` N KiB`
-                // suffix and the `Size of downloads:` counter. A local
-                // `$PKGDIR` binary is already present -> nothing to fetch.
-                let cpv = format!("{}/{}-{version}", key.0, key.1);
-                let size = metadata.get("SIZE").and_then(|s| s.parse::<u64>().ok());
-                if let Some(size) = size {
-                    entries[entry_idx].download_files = vec![(cpv, size)];
-                }
-            }
-
-            // IUSE's own "+flag"/"-flag" default markers only matter for
-            // resolving a flag's default when nothing else decides it --
-            // already handled upstream, wherever `use_flags` itself came
-            // from -- so display only needs the bare flag name, paired with
-            // whatever `use_flags` (the real resolved set) says. Computed
-            // (and shown by `--pretend -v`) regardless of `nodeps` below --
-            // real portage's own USE display is about the package's own
-            // metadata, unrelated to whether its dependencies get walked.
-            // REQUIRED_USE (PMS 7.3.4/8.2): checked once, here, right after a
-            // candidate is newly resolved -- real depgraph.py's own "NOTE:
-            // REQUIRED_USE checks are delayed until after package selection"
-            // (it's a genuine *post*-selection check, no part of matching/
-            // visibility at all, unlike package.use/package.mask). A
-            // violation eventually fails the whole run regardless of whether
-            // this candidate was reached as a top-level atom or a dependency
-            // deep in the graph -- but NOT immediately: real depgraph.py's
-            // own `_add_pkg` (~line 3600) sets
-            // `_dynamic_config._required_use_unsatisfied = True` and returns
-            // 0 on a violation, which does NOT stop the rest of the graph
-            // walk (unlike a top-level atom's own `NoVisibleCandidate`,
-            // which genuinely does abort immediately). Every violation
-            // anywhere in the walk is collected into
-            // `required_use_violations` and the BFS keeps going -- see that
-            // variable's own doc comment, near the top of this function, for
-            // the full grounding and where the collected violations actually
-            // get turned into this call's own `Err`. An genuinely *invalid*
-            // REQUIRED_USE (the `Err(e)` branch below, e.g. referencing a
-            // flag that isn't even valid IUSE) is different: real
-            // `check_required_use` itself raises for that case, outside the
-            // explicit `if not required_use_is_sat:` branch that the delayed
-            // collection above lives in -- so portuale keeps that one
-            // immediately fatal, same as before.
-            if let Some(required_use) = metadata.get("REQUIRED_USE")
-                && !required_use.trim().is_empty()
-            {
-                // Real `check_required_use` validates a referenced flag
-                // against `pkg.iuse.is_valid_flag`, not a package's own
-                // literal IUSE alone -- real config.py's own
-                // `_get_implicit_iuse()` folds `PORTAGE_ARCHLIST`
-                // (profiles/arch.list), `use.mask ∪ use.force`, and
-                // literal `build`/`bootstrap` into every package's
-                // effective IUSE regardless of what that package's own
-                // IUSE declares. Without this, a REQUIRED_USE referencing
-                // an implicit flag never mentioned in a package's own
-                // IUSE (e.g. real media-libs/mesa's own REQUIRED_USE
-                // referencing "x86", a valid arch.list entry that isn't
-                // the profile's own active arch) spuriously fails with
-                // "USE flag ... is not in IUSE" -- confirmed live against
-                // the real, installed system. See `portage_profile::
-                // Config::archlist`'s own doc comment for the full
-                // grounding and the deliberate USE_EXPAND_HIDDEN
-                // (elibc_*/kernel_*/userland_*) simplification.
-                let iuse_set = implicit_iuse_set(
-                    metadata.get("IUSE").map(String::as_str).unwrap_or_default(),
-                    config,
-                );
-                match portage_required_use::check_required_use(required_use, &use_flags, &iuse_set)
-                {
-                    Ok(true) => {}
-                    Ok(false) => {
-                        let normalized = required_use
-                            .split_whitespace()
-                            .collect::<Vec<_>>()
-                            .join(" ");
-                        // Real `_show_unsatisfied_dep`'s REQUIRED_USE block:
-                        // the failing atom as `xinfo` (real's own
-                        // `atom.unevaluated_atom`), the candidate + its
-                        // `pkg_use_display`, the minimal unsatisfied
-                        // sub-expression (real `check_required_use(...).
-                        // tounicode()`), the complete expression when it
-                        // differs, then the `(dependency required by …)`
-                        // chain.
-                        let reduced = match portage_required_use::unsatisfied_reduced(
-                            required_use,
-                            &use_flags,
-                            &iuse_set,
-                        ) {
-                            Ok(Some(r)) => portage_required_use::human_readable(&r),
-                            _ => portage_required_use::human_readable(&normalized),
-                        };
-                        let full = portage_required_use::human_readable(&normalized);
-                        let use_display =
-                            pkg_use_display_for(&repos, config, &key.0, &key.1, &version);
-                        let cpv_repo = match &resolved.repo_name {
-                            repo if !repo.is_empty() => {
-                                format!("{}/{}-{version}::{repo}", key.0, key.1)
-                            }
-                            _ => format!("{}/{}-{version}", key.0, key.1),
-                        };
-                        let dep_chain = required_use_dep_chain(&owner, &top_level, &entries);
-                        required_use_violations.push(render_required_use_block(
+                    // Real `_show_unsatisfied_dep`'s REQUIRED_USE block:
+                    // the failing atom as `xinfo` (real's own
+                    // `atom.unevaluated_atom`), the candidate + its
+                    // `pkg_use_display`, the minimal unsatisfied
+                    // sub-expression (real `check_required_use(...).
+                    // tounicode()`), the complete expression when it
+                    // differs, then the `(dependency required by …)`
+                    // chain.
+                    let reduced = match portage_required_use::unsatisfied_reduced(
+                        required_use,
+                        &use_flags,
+                        &iuse_set,
+                    ) {
+                        Ok(Some(r)) => portage_required_use::human_readable(&r),
+                        _ => portage_required_use::human_readable(&normalized),
+                    };
+                    let full = portage_required_use::human_readable(&normalized);
+                    let use_display =
+                        pkg_use_display_for(&ctx.repos, config, &key.0, &key.1, &version);
+                    let cpv_repo = match &resolved.repo_name {
+                        repo if !repo.is_empty() => {
+                            format!("{}/{}-{version}::{repo}", key.0, key.1)
+                        }
+                        _ => format!("{}/{}-{version}", key.0, key.1),
+                    };
+                    let dep_chain = required_use_dep_chain(&owner, &ctx.top_level, &state.entries);
+                    state
+                        .required_use_violations
+                        .push(render_required_use_block(
                             unevaluated_atom.as_deref().unwrap_or(&current_atom),
                             &cpv_repo,
                             &use_display,
@@ -16779,955 +17510,1123 @@ fn backtracking_resolve(req: &ResolveRequest) -> Result<GraphResult, Error> {
                             &full,
                             &dep_chain,
                         ));
-                        continue;
-                    }
-                    Err(e) => {
-                        return Err(Error::InvalidRequiredUse {
-                            package: format!("{}/{}-{version}", key.0, key.1),
-                            source: e,
-                        });
-                    }
-                }
-            }
-
-            if let Some(iuse) = metadata.get("IUSE") {
-                // Dedup a flag `IUSE` names twice (eclass + ebuild, e.g.
-                // gnome-extra/gnome-color-manager's `IUSE="test test"`) --
-                // real renders `sorted(pkg.iuse.all)`, a `frozenset`.
-                let mut iuse_seen: HashSet<String> = HashSet::new();
-                let mut display: Vec<(String, bool)> = iuse
-                    .split_whitespace()
-                    .map(|tok| tok.trim_start_matches(['+', '-']).to_string())
-                    .filter(|flag| iuse_seen.insert(flag.clone()))
-                    .map(|flag| {
-                        let enabled = use_flags.contains(&flag);
-                        (flag, enabled)
-                    })
-                    .collect();
-                // Real `_create_use_string`'s `any_iuse.sort(key=_alnum_sort_key)`.
-                display.sort_by_key(|p| alnum_sort_key(&p.0));
-                // Real `_display_use`'s `previous_pkg`: the installed
-                // version's own recorded USE/IUSE, for the `*`/`%` diff
-                // markers -- only for an entry that actually replaces an
-                // installed one (`Upgrade`/`Downgrade` from `from`,
-                // `Reinstall` at the same version). `New`/`AlreadyInstalled`/
-                // `NoVisibleCandidate` have no installed side to diff.
-                let installed_version = match &entries[entry_idx].outcome {
-                    PretendOutcome::Upgrade { from, .. }
-                    | PretendOutcome::Downgrade { from, .. } => Some(from.clone()),
-                    PretendOutcome::Reinstall { version, .. } => Some(version.clone()),
-                    _ => None,
-                };
-                let installed = installed_version.map(|v| {
-                    let old_iuse = read_vdb_flag_set(root, &key.0, &key.1, &v, "IUSE");
-                    let mut old_use = read_vdb_flag_set(root, &key.0, &key.1, &v, "USE");
-                    old_use.retain(|f| old_iuse.contains(f));
-                    InstalledUseState { old_use, old_iuse }
-                });
-                // Real `_display_use`'s `self.forced_flags` (`pkg.use.force |
-                // pkg.use.mask`): the flags `-pv` wraps in `( … )`.
-                let forced =
-                    forced_or_masked_flags(iuse, &keywords, &candidate_str, &key.0, &key.1, config);
-                // Real `reinst_flags_map`: the `_reinstall_for_flags` trigger
-                // set (`Reinstall::changed_flags`), force-shown in the USE
-                // line even at plain `-p`. Only a USE-triggered `Reinstall`
-                // carries one; `Upgrade`/`Downgrade`/`New` don't (their
-                // still-present changed flags already render via the
-                // `*`/`%` markers).
-                let reinst_flags: HashSet<String> = match &entries[entry_idx].outcome {
-                    PretendOutcome::Reinstall { changed_flags, .. } => {
-                        changed_flags.iter().cloned().collect()
-                    }
-                    _ => HashSet::new(),
-                };
-                // Two renderings of the same flag set: `use_expand_display`
-                // is the `-pv` (`all_flags = verbosity == 3`) form -- every
-                // flag shown -- and `use_expand_display_p` is the plain `-p`
-                // (`all_flags` off) form -- only the *changed* flags for a
-                // Reinstall/Upgrade/Downgrade (plus its `reinst_flags`), the
-                // full list for a `New` (`is_new` renders everything
-                // regardless). `pretend.rs`'s `use_suffix` picks by
-                // verbosity. Both are cheap; for a `New` (no `installed`
-                // diff) they're identical.
-                entries[entry_idx].use_expand_display = build_use_expand_display(
-                    &display,
-                    config,
-                    installed.as_ref(),
-                    &forced,
-                    true,
-                    &reinst_flags,
-                );
-                entries[entry_idx].use_expand_display_p = build_use_expand_display(
-                    &display,
-                    config,
-                    installed.as_ref(),
-                    &forced,
-                    false,
-                    &reinst_flags,
-                );
-                entries[entry_idx].use_flags_display = display;
-            }
-
-            // `--nodeps`: real create_depgraph_params.py pops "recurse" from
-            // myparams, and depgraph.py's own dependency-walk returns early
-            // when "recurse" isn't in myparams -- ported here as skipping
-            // this package's own DEPEND/RDEPEND/etc entirely, so nothing of
-            // its is ever parsed, flattened, or queued. This also means no
-            // blockers are ever collected from a `--nodeps` run (blockers
-            // only ever come from a dependency string, which is never read),
-            // matching real portage exactly.
-            if nodeps {
-                continue;
-            }
-
-            // Real `depgraph.py:4195-4247` (`_add_pkg_dep_string`): for a
-            // *built* package (`pkg.built` -- true for a binary, not for a
-            // fresh ebuild) with `myparams["bdeps"]` not in `("y","auto")`
-            // -- i.e. `--usepkg`/`--getbinpkg` given, which leaves `bdeps`
-            // unset (`create_depgraph_params.py:100`) -- `DEPEND` and
-            // `BDEPEND` are both emptied before the walk. `with_bdeps`
-            // (built from that same rule in `pretend.rs`) carries the bit;
-            // a binary's recorded `BDEPEND` (e.g. libgweather's `|| ( (
-            // python:3.14 pygobject[...] ) ... )`) must not drive a merge.
-            let dep_keys: &[&str] = if candidate_source == CandidateSource::Binary && !with_bdeps {
-                &["RDEPEND", "PDEPEND", "IDEPEND"]
-            } else {
-                &["DEPEND", "RDEPEND", "BDEPEND", "PDEPEND", "IDEPEND"]
-            };
-            let mut depstr = String::new();
-            for dep_key in dep_keys {
-                if let Some(d) = metadata.get(*dep_key) {
-                    depstr.push_str(d);
-                    depstr.push(' ');
-                }
-            }
-            let tokens: Vec<String> = depstr.split_whitespace().map(String::from).collect();
-
-            // Real graph *discovery* order (`GraphEntry::deps`, see
-            // its own doc comment): real `_add_pkg_dep_string` walks
-            // `RDEPEND`, `IDEPEND`, `PDEPEND`, `DEPEND`, `BDEPEND` in that
-            // exact order (`depgraph.py:4253-4289`'s own `deps` tuple) --
-            // a different order than `dep_keys` above (which only cares
-            // which keys are included, not their order). Each key is
-            // flattened separately so cross-key token order can't leak in;
-            // `use_reduce_flat` transparently drops `||`/`(`/`)` markers,
-            // listing every branch's atoms in written order (the *other*
-            // branches are simply never a real entry, so they contribute
-            // no edge once the merge-order digraph looks them up).
-            let real_order_keys: &[&str] =
-                if candidate_source == CandidateSource::Binary && !with_bdeps {
-                    &["RDEPEND", "PDEPEND", "IDEPEND"]
-                } else {
-                    &["RDEPEND", "IDEPEND", "PDEPEND", "DEPEND", "BDEPEND"]
-                };
-            entries[entry_idx].deps = merge_order::dep_edges_from_metadata(
-                &metadata,
-                &use_flags,
-                real_order_keys,
-                candidate_source == CandidateSource::Binary,
-            );
-
-            // Per-edge build-time/run-time classification for the
-            // merge-order sort + circular-dependency detection (real
-            // `DepPriority`): re-flatten just the build-time keys and just
-            // the run-time keys, so `enqueue_flat_deps` can tag an atom
-            // present in the first and absent from the second as
-            // `buildtime_hard`. A plain (non-disjunctive) `use_reduce_flat`
-            // is enough here -- the classification only needs which key an
-            // atom came from, and a `||` group's branch choice matches the
-            // main flatten below in every case without one.
-            let flatten_keys = |keys: &[&str]| -> HashSet<String> {
-                let joined: String = keys
-                    .iter()
-                    .filter_map(|k| metadata.get(*k))
-                    .map(String::as_str)
-                    .collect::<Vec<_>>()
-                    .join(" ");
-                let toks: Vec<String> = joined.split_whitespace().map(String::from).collect();
-                portage_use_reduce::use_reduce_flat(
-                    &toks,
-                    &use_flags,
-                    portage_use_reduce::MatchMode::Normal,
-                )
-                .map(|v| v.into_iter().filter(|t| t != "||").collect())
-                .unwrap_or_default()
-            };
-            let buildtime_atoms = if candidate_source == CandidateSource::Binary && !with_bdeps {
-                // Build-time deps were dropped from the walk above -- no
-                // queued atom can be classified from them.
-                HashSet::new()
-            } else {
-                flatten_keys(&["DEPEND", "BDEPEND"])
-            };
-            let runtime_atoms = flatten_keys(&["RDEPEND", "PDEPEND", "IDEPEND"]);
-            // Real `--root-deps` branch-selection feed-in (see
-            // `root_deps_satisfied_atoms`'s own doc comment): a `||` group
-            // with no branch tree-visible still needs a branch selected
-            // here too, not just in `root_deps_satisfied_atoms`'s own
-            // separate re-flatten -- otherwise the *other*, genuinely
-            // unsatisfiable branch would remain in `flat_deps` and get
-            // queued as an ordinary (and wrongly reported) dependency. Real
-            // `--root-deps` only ever applies to `DEPEND`/`BDEPEND` -- this
-            // closure can't tell which of the five merged dep keys a given
-            // atom came from (portuale's own single-unified-graph
-            // architecture merges them into one combined string before
-            // flattening at all -- the same documented limitation
-            // `docs/agent-context.md`'s own `--root-deps` backlog entry
-            // names for the bigger, still-unattempted "recursive second-root
-            // graph" gap), so an `RDEPEND`/`PDEPEND`/`IDEPEND` `||` group
-            // gets this same permissive check too -- harmless in practice
-            // (those atoms almost always resolve via ordinary tree
-            // visibility already; a running-root coincidence only ever
-            // widens acceptance, never narrows it).
-            // Real `dep_zapdeps` re-choosing a `||` alternative once
-            // backtracking has masked the preferred one: an atom whose
-            // only satisfying candidates are excluded by the negatives
-            // this loop accumulated for its `cat/pkg` (`slot_constraints`,
-            // = `runtime_pkg_mask`) counts as unsatisfiable, so the next
-            // alternative wins on the retry -- `disjunction_preference`
-            // takes `slot_constraints` itself (not a lookup closure over
-            // it; see that function's own doc comment for why).
-            // Real `dep_zapdeps` skips a `||` alternative that would only
-            // be satisfied by the package currently being resolved (a
-            // circular self-dep) -- e.g. `dev-lang/go`'s BDEPEND
-            // `|| ( >=dev-lang/go-<min> >=dev-lang/go-bootstrap-<min> )`
-            // with nothing installed: the first branch's only tree match
-            // *is* `dev-lang/go`, so real falls through to the
-            // `go-bootstrap` branch. An atom whose `cat/pkg` is this
-            // entry's own and which nothing installed satisfies counts
-            // as unavailable here.
-            let self_cp = (
-                entries[entry_idx].category.clone(),
-                entries[entry_idx].package.clone(),
-            );
-            // The whole `dep_zapdeps` choice-bin classification lives in
-            // the single shared `disjunction_preference` helper -- see its
-            // own doc comment (2026-09-11 review F1/F2: this closure and
-            // `enqueue_dependencies`'s used to be two independently
-            // hand-maintained copies, and only this one got the fine
-            // `unsat_use_*` bins).
-            let Ok(flat_deps) = portage_use_reduce::use_reduce_flat_disjunctive(
-                &tokens,
-                &use_flags,
-                portage_use_reduce::MatchMode::Normal,
-                &mut |atoms: &[String]| {
-                    disjunction_preference(
-                        &repos,
-                        config,
-                        root,
-                        &entries,
-                        &self_cp,
-                        &slot_constraints,
-                        root_deps_running_root,
-                        atoms,
-                    )
-                },
-                &mut |alts: &[Vec<String>]| {
-                    promote_tied_alternative(
-                        &repos,
-                        config,
-                        root,
-                        &entries,
-                        &slot_constraints,
-                        alts,
-                    )
-                },
-            ) else {
-                continue;
-            };
-            // `--root-deps`: real `ESYSROOT`-vs-`ROOT` distinction (see
-            // `root_deps_satisfied_atoms`'s own doc comment for the full
-            // grounding and its documented scope cut) -- a strict no-op when
-            // `root_deps_running_root` is `None`, matching every pre-existing
-            // call site/test.
-            let root_deps_satisfied: HashSet<String> = root_deps_running_root
-                .map(|root| {
-                    root_deps_satisfied_atoms(
-                        &metadata,
-                        &use_flags,
-                        &repos,
-                        config,
-                        root,
-                        &["DEPEND", "BDEPEND", "IDEPEND"],
-                    )
-                })
-                .unwrap_or_default();
-            // Real "recursively pull in and build new packages against the
-            // running root" (see `resolve_root_deps_build_entries`'s own doc
-            // comment for the full grounding): the *other* half of the same
-            // real `DEPEND`/`BDEPEND` set `root_deps_satisfied` above already
-            // covers -- every atom in it isn't satisfied by the running root
-            // either, so (unlike before the first `--root-deps` build-entry
-            // slice) it must *not* fall through into the ordinary `flat_deps`
-            // queue below and get wrongly resolved against `ROOT` instead
-            // (real `DEPEND`/`BDEPEND` never targets `ROOT`/`ESYSROOT` at all
-            // under portuale's own established `--root-deps` simplification
-            // -- see `root_deps_satisfied_atoms`'s own doc comment). Each one
-            // instead gets resolved against the running root directly, the
-            // same way any other atom would be, added as its own
-            // `targets_running_root` entry, and recursed into. Kept as a
-            // `Vec` (not a `HashSet`) so the resulting entry order is
-            // deterministic. A strict no-op when `root_deps_running_root` is
-            // `None`, matching every pre-existing call site/test.
-            let root_deps_unsatisfied: Vec<String> = root_deps_running_root
-                .map(|root| {
-                    unsatisfied_root_deps_atoms(
-                        &metadata,
-                        &use_flags,
-                        &repos,
-                        config,
-                        root,
-                        &["DEPEND", "BDEPEND", "IDEPEND"],
-                    )
-                })
-                .unwrap_or_default();
-            let flat_deps: Vec<String> = flat_deps
-                .into_iter()
-                .filter(|tok| !root_deps_satisfied.contains(tok))
-                .filter(|tok| !root_deps_unsatisfied.contains(tok))
-                .collect();
-            if let Some(running_root) = root_deps_running_root {
-                for atom_str in &root_deps_unsatisfied {
-                    entries.extend(resolve_root_deps_build_entries(
-                        &repos,
-                        running_root,
-                        atom_str,
-                        config,
-                        key.clone(),
-                        &mut root_deps_build_seen,
-                    ));
-                }
-            }
-            // Backtracking (slices 3/4): record this package as a puller of
-            // every non-blocker `cat/pkg` its dependency string names,
-            // keeping the atom text for slice 4's `pulled in by` lines,
-            // before `flat_deps` is consumed below.
-            for tok in &flat_deps {
-                if let Some(dep_atom) = portage_dep::parse_atom(tok)
-                    && dep_atom.blocker == portage_dep::Blocker::None
-                {
-                    slot_pullers
-                        .entry((dep_atom.category.clone(), dep_atom.package.clone()))
-                        .or_default()
-                        .push((key.0.clone(), key.1.clone(), version.clone(), tok.clone()));
-                }
-            }
-            enqueue_flat_deps(
-                flat_deps,
-                &key,
-                &version,
-                depth,
-                &use_flags,
-                &mut queue,
-                &mut pending_blockers,
-                &buildtime_atoms,
-                &runtime_atoms,
-            );
-
-            // --with-test-deps: additive on top of the normal deps just
-            // queued above, never a replacement for them -- see
-            // resolve_pretend_graph's own doc comment for the full gating
-            // (depth == 0, "test" a valid, not-already-enabled, not-masked
-            // IUSE flag) and why this needs use_reduce_flat_subset rather
-            // than another plain use_reduce_flat pass.
-            if with_test_deps && depth == 0 && !use_flags.contains("test") {
-                let iuse_flags: HashSet<String> = metadata
-                    .get("IUSE")
-                    .map(String::as_str)
-                    .unwrap_or_default()
-                    .split_whitespace()
-                    .map(|tok| tok.trim_start_matches(['+', '-']).to_string())
-                    .collect();
-                let test_masked = config.use_mask.contains("test")
-                    || specificity_ordered_flags(
-                        &config.package_use_mask,
-                        &candidate_str,
-                        &key.0,
-                        &key.1,
-                        HashSet::new(),
-                    )
-                    .contains("test");
-                if iuse_flags.contains("test") && !test_masked {
-                    let mut test_uselist = use_flags.clone();
-                    test_uselist.insert("test".to_string());
-                    let subset: HashSet<String> = ["test".to_string()].into_iter().collect();
-                    if let Ok(test_deps) = portage_use_reduce::use_reduce_flat_subset(
-                        &tokens,
-                        &test_uselist,
-                        portage_use_reduce::MatchMode::Normal,
-                        &subset,
-                    ) {
-                        enqueue_flat_deps(
-                            test_deps,
-                            &key,
-                            &version,
-                            depth,
-                            &test_uselist,
-                            &mut queue,
-                            &mut pending_blockers,
-                            // A `test?` dep is `DepPriority.optional` --
-                            // never a hard cycle contributor.
-                            &HashSet::new(),
-                            &HashSet::new(),
-                        );
-                    }
-                }
-            }
-        }
-
-        // `.get()`, not `.remove()`: `entries` can hold more than one entry
-        // for the same `(category, package)` -- one per resolved slot (see
-        // this function's own doc comment on multi-slot support) -- and every
-        // one of them was pulled in by the same owner(s), so every one needs
-        // the same `required_by`. A destructive `.remove()` here handed the
-        // owners to whichever slot's entry the loop reached first and left
-        // the rest with an empty `required_by`, which `--tree` then dropped
-        // to its flush-left safety net instead of nesting under the parent
-        // (and `--json` reported as `"required_by": []`). Entries with no key
-        // in the map keep whatever `required_by` they were built with -- a
-        // `--root-deps` running-root build entry sets its own immediate
-        // requester at construction and must not be wiped to empty here.
-        for entry in &mut entries {
-            if let Some(owners) =
-                required_by_map.get(&(entry.category.clone(), entry.package.clone()))
-            {
-                let mut owners: Vec<(String, String)> = owners.iter().cloned().collect();
-                owners.sort();
-                entry.required_by = owners;
-            }
-        }
-
-        // An installed package that is *also* being merged in the same
-        // slot is one node in real's graph, not two. The BFS can build an
-        // `AlreadyInstalled` entry for a `cat/pkg` before some later atom
-        // forces a same-slot merge of it -- `net-libs/nghttp2`'s
-        // `>=sys-apps/systemd-209` resolves to the installed systemd, then
-        // `sys-auth/polkit`'s `sys-apps/systemd:0=[policykit]` forces the
-        // reinstall. Drop the redundant `AlreadyInstalled` entry; the
-        // merge-bound one supersedes it (and already carries the union of
-        // both owners' `required_by`, filled just above).
-        let mergebound_cp_slots: HashSet<(String, String, String)> = entries
-            .iter()
-            .filter_map(|e| {
-                let ver = match &e.outcome {
-                    PretendOutcome::New { version } | PretendOutcome::Reinstall { version, .. } => {
-                        version
-                    }
-                    PretendOutcome::Upgrade { to, .. } | PretendOutcome::Downgrade { to, .. } => to,
-                    _ => return None,
-                };
-                let slot = e
-                    .slot
-                    .clone()
-                    .unwrap_or_else(|| read_vdb_slot(root, &e.category, &e.package, ver).0);
-                Some((e.category.clone(), e.package.clone(), slot))
-            })
-            .collect();
-        entries.retain(|e| {
-            let PretendOutcome::AlreadyInstalled { version } = &e.outcome else {
-                return true;
-            };
-            let (slot, _) = read_vdb_slot(root, &e.category, &e.package, version);
-            !mergebound_cp_slots.contains(&(e.category.clone(), e.package.clone(), slot))
-        });
-
-        resolve_blockers(root, &pending_blockers, &entries)
-            .into_iter()
-            .for_each(|(owner_key, conflict)| {
-                if let Some(entry) = entries
-                    .iter_mut()
-                    .find(|e| (e.category.clone(), e.package.clone()) == owner_key)
-                {
-                    entry.blockers.push(conflict);
-                }
-            });
-
-        if !required_use_violations.is_empty() {
-            // Each block is self-delimiting (leading + trailing newline).
-            return Err(Error::Detail(required_use_violations.join("")));
-        }
-
-        let nvc_count = |entries: &[GraphEntry]| {
-            entries
-                .iter()
-                .filter(|e| matches!(e.outcome, PretendOutcome::NoVisibleCandidate))
-                .count()
-        };
-
-        // Backtracking slice 3: judge a pending `runtime_pkg_mask` trial.
-        match mask_phase {
-            MaskPhase::Trying => {
-                mask_phase = MaskPhase::None;
-                if slot_conflicts.is_empty() && nvc_count(&entries) <= pre_trial_nvc {
-                    // The trial cleared every conflict without making any
-                    // dependency unsatisfiable -- keep the masks (they stay
-                    // in `slot_constraints`) and fall through to output.
-                } else {
-                    // Rejected: drop the trial masks and re-run one clean
-                    // pass so the reported graph isn't the masked, worse one.
-                    for (k, neg) in &mask_negatives {
-                        if let Some(bucket) = slot_constraints.get_mut(k) {
-                            bucket.retain(|c| c != neg);
-                        }
-                    }
-                    mask_negatives.clear();
-                    mask_phase = MaskPhase::Reverting;
-                    continue 'backtrack;
-                }
-            }
-            MaskPhase::Reverting => {
-                // The clean re-run after a rejected trial: report whatever
-                // conflicts remain, exactly as before backtracking.
-                mask_phase = MaskPhase::None;
-            }
-            MaskPhase::None => {}
-        }
-
-        // Backtracking (real `backtracking.py` retry loop driven by
-        // `_process_slot_conflicts`): if this attempt left any slot conflicts,
-        // check each one for solvability -- is there a single version of the
-        // conflicted `cat/pkg` that satisfies *every* atom text that targeted
-        // it this pass? If so, fold that whole atom set into `slot_constraints`
-        // and re-run the entire walk. Unsolvable conflicts fall through to the
-        // `runtime_pkg_mask` trial below; anything still conflicting after
-        // `backtrack_max` attempts is reported exactly as before.
-        if mask_phase == MaskPhase::None
-            && !slot_conflicts.is_empty()
-            && backtrack_iteration < backtrack_max
-        {
-            let mut progressed = false;
-            for sc in &slot_conflicts {
-                let pkg_key = (sc.category.clone(), sc.package.clone());
-                let wants = match slot_want.get(&pkg_key) {
-                    Some(w) if w.len() >= 2 => w.clone(),
-                    _ => continue,
-                };
-                // Solvability pre-check against the raw candidate list (real
-                // `_select_pkg_highest_available` over the full atom set). This
-                // deliberately ignores keyword/mask visibility -- the rare case
-                // where the one satisfying version is itself masked resolves to a
-                // plain `NoVisibleCandidate` on the retry, which is
-                // acceptable and documented for this slice. It does NOT
-                // ignore USE-deps (real enforces them in selection): a
-                // version only counts when every want-atom matches it on
-                // version, slot, *and* USE, so a USE-mismatching slot reuse
-                // falls through to the mask trial and the notice instead of
-                // constraining a retry that can only end in swallowed
-                // "no visible ebuild" lines.
-                let candidates =
-                    list_candidates(&repos, &pkg_key.0, &pkg_key.1).unwrap_or_default();
-                let solvable = candidates.iter().any(|c| {
-                    let cs = format!("{}/{}-{}:{}", pkg_key.0, pkg_key.1, c.version, c.slot);
-                    let (iuse, use_flags) =
-                        slot_conflict_flag_sets(&repos, config, &pkg_key.0, &pkg_key.1, &c.version);
-                    wants.iter().all(|w| {
-                        portage_dep::match_from_list(w, &[cs.as_str()])
-                            .is_some_and(|m| !m.is_empty())
-                            && portage_dep::parse_atom(w).is_none_or(|a| match &a.use_deps {
-                                None => true,
-                                Some(ud) => portage_dep::use_deps_satisfied(ud, &iuse, &use_flags),
-                            })
-                    })
-                });
-                if !solvable {
                     continue;
                 }
-                let slot = slot_constraints.entry(pkg_key).or_default();
-                for w in wants {
-                    if !slot.contains(&w) {
-                        slot.push(w);
-                        progressed = true;
-                    }
+                Err(e) => {
+                    return Err(Error::InvalidRequiredUse {
+                        package: format!("{}/{}-{version}", key.0, key.1),
+                        source: e,
+                    });
                 }
             }
-            if progressed {
-                backtrack_iteration += 1;
-                continue 'backtrack;
-            }
         }
 
-        // Backtracking slice 3 (real `_slot_conflict_backtrack` ->
-        // `runtime_pkg_mask`): a slot conflict no single version can solve.
-        // Hide the currently-resolved version of the conflicted package,
-        // plus every puller-parent version that has a lower alternative
-        // (masking a newer parent whose dependency string carries the
-        // tighter constraint lets the retry fall back to an older parent
-        // with looser deps), then re-run once and judge the result above.
-        if mask_phase == MaskPhase::None
-            && !mask_trial_spent
-            && !slot_conflicts.is_empty()
-            && backtrack_iteration < backtrack_max
-        {
-            let mut negatives: Vec<((String, String), String)> = Vec::new();
-            for sc in &slot_conflicts {
-                let cp = (sc.category.clone(), sc.package.clone());
-                // Mask the *highest* conflicting instance, not merely the
-                // first-resolved one: real backtracking's downgrade bias
-                // ("try a larger --backtrack ... to see if that will solve
-                // this conflict" == fall back to a lower version), and the
-                // version a `||`-pulled `>=` alternative re-selects, so
-                // `dep_zapdeps` yields to the next alternative on the
-                // retry. Falls back to `resolved_version` if the instance
-                // list is somehow empty.
-                let mask_ver = sc
-                    .instances
-                    .iter()
-                    .map(|i| i.version.clone())
-                    .max_by(|a, b| vercmp_ordering(a, b))
-                    .unwrap_or_else(|| sc.resolved_version.clone());
-                negatives.push((
-                    cp.clone(),
-                    format!("!={}/{}-{}", sc.category, sc.package, mask_ver),
-                ));
-                if let Some(pullers) = slot_pullers.get(&cp) {
-                    let mut seen: HashSet<(String, String, String)> = HashSet::new();
-                    for (pc, pp, pv, _atom) in pullers {
-                        if pc.is_empty() {
-                            continue;
-                        }
-                        if !seen.insert((pc.clone(), pp.clone(), pv.clone())) {
-                            continue;
-                        }
-                        let has_lower = list_candidates(&repos, pc, pp)
-                            .map(|cands| {
-                                cands.iter().any(|c| {
-                                    vercmp_ordering(&c.version, pv) == std::cmp::Ordering::Less
-                                })
-                            })
-                            .unwrap_or(false);
-                        if has_lower {
-                            negatives.push(((pc.clone(), pp.clone()), format!("!={pc}/{pp}-{pv}")));
-                        }
-                    }
-                }
-            }
-            let mut added = false;
-            for (k, neg) in &negatives {
-                let bucket = slot_constraints.entry(k.clone()).or_default();
-                if !bucket.contains(neg) {
-                    bucket.push(neg.clone());
-                    added = true;
-                }
-            }
-            if added {
-                mask_negatives = negatives;
-                pre_trial_nvc = nvc_count(&entries);
-                mask_phase = MaskPhase::Trying;
-                mask_trial_spent = true;
-                backtrack_iteration += 1;
-                continue 'backtrack;
-            }
-        }
-
-        // Real `_autounmask_breakage` (depgraph.py:12262-12280): an
-        // accumulated autounmask USE change made another use-dep
-        // unsatisfiable and the two can't be reconciled (a flag wanted
-        // both ways). Drop every autounmask change, turn suggestion fully
-        // off, and re-resolve one final clean pass -- exactly real's
-        // `myparams["autounmask"] = False` retry. The `autounmask_disabled`
-        // latch keeps it to a single extra pass.
-        if autounmask_use_broke && !autounmask_disabled && mask_phase == MaskPhase::None {
-            autounmask_disabled = true;
-            autounmask_suggest_keywords = false;
-            autounmask_suggest_use = false;
-            autounmask_suggest_license = false;
-            autounmask_suggest_masks = false;
-            autounmask_use_config.clear();
-            autounmask_use_change_records.clear();
-            backtrack_config = None;
-            backtrack_iteration += 1;
-            continue 'backtrack;
-        }
-
-        // Backtracking slice: this pass folded a new `--autounmask-use`
-        // flip into `autounmask_use_config` (real `_feedback_config`
-        // growing `_needed_use_config_changes`). Re-run the whole walk
-        // with the grown config so the flipped package is re-resolved
-        // with the flag on and its `flag?`-gated deps appear. Converges
-        // because `autounmask_grew` is only set on a *newly*-added
-        // `(cp, flag)` entry.
-        if autounmask_grew && mask_phase == MaskPhase::None && backtrack_iteration < backtrack_max {
-            backtrack_iteration += 1;
-            let mut c = req.config.clone();
-            c.autounmask_use = autounmask_use_tier(&autounmask_use_config);
-            backtrack_config = Some(c);
-            continue 'backtrack;
-        }
-
-        // Real `backtracking.py::_feedback_missing_dep`: this pass hit a
-        // dependency with no matching package; mask its parent (`!=cpv`,
-        // via `slot_constraints`, latched in `missing_dep_masked` so the
-        // same parent is never re-masked) and re-run. Combined with the
-        // `||` closure honouring `slot_constraints`, a `|| ( a b )` whose
-        // `a` has an unsatisfiable subtree now yields to `b`. When the
-        // latch or `backtrack_max` blocks the retry, the pass's own
-        // `NoVisibleCandidate` entry is reported, exactly as before.
-        if let Some(((pc, pp), neg)) = missing_dep_trigger.take()
-            && mask_phase == MaskPhase::None
-            && backtrack_iteration < backtrack_max
-        {
-            slot_constraints
-                .entry((pc, pp))
-                .or_default()
-                .push(neg.clone());
-            missing_dep_masked.insert(neg);
-            backtrack_iteration += 1;
-            continue 'backtrack;
-        }
-
-        // Real `_complete_graph`'s installed-universe walk reaching
-        // `_slot_operator_check_reverse_dependencies`: an upgrade this
-        // pass picked breaks a dependency an *installed* package -- one
-        // nowhere near the requested atom's own tree -- already records
-        // against it. Real sees such an atom because complete mode
-        // (auto-enabled by any installed-package version/USE change)
-        // pulls every installed package into the graph as a nomerge
-        // node, contributing its recorded atoms to `_parent_atoms`;
-        // portuale finds them with a direct vdb reverse scan instead and
-        // feeds them back here as ordinary `slot_constraints`, which is
-        // precisely what parent atoms are. The re-resolve then picks the
-        // highest candidate satisfying them -- normally the installed
-        // version, so the entry settles as `AlreadyInstalled` -- and
-        // drops whatever the rejected version had dragged into the
-        // graph. `reverse_dep_masked` latches every constraint already
-        // added, so a pass that finds nothing new falls through and the
-        // loop terminates.
-        //
-        // A pin jointly unsatisfiable with this pass's hard requirements
-        // (an explicit versioned request, or a dependency only a newer
-        // version satisfies) is dropped instead of enforced: real merges
-        // the hard-required version anyway and reports the broken
-        // consumer against the installed instance. Dropped pins
-        // accumulate in `dropped_pins` for that residual report (see
-        // `build_residual_slot_conflicts`); they never enter
-        // `slot_constraints`, so the hard-required version is never
-        // masked into invisibility.
-        if mask_phase == MaskPhase::None && backtrack_iteration < backtrack_max {
-            let mut added = false;
-            let (enforced, dropped) = reverse_dependency_constraints(
-                &repos, root, &entries, with_bdeps, excluded, &slot_want,
-            );
-            for pin in enforced {
-                if reverse_dep_masked.insert((pin.cp.clone(), pin.atom.clone())) {
-                    slot_constraints.entry(pin.cp).or_default().push(pin.atom);
-                    added = true;
-                }
-            }
-            for pin in dropped {
-                if !dropped_pins.contains(&pin) {
-                    dropped_pins.push(pin);
-                }
-            }
-            if added {
-                backtrack_iteration += 1;
-                continue 'backtrack;
-            }
-        }
-
-        // Real depgraph's slot-operator auto-rebuild: an installed consumer
-        // whose built `cat/pkg:S/SS=` dep no longer matches how this run
-        // leaves `cat/pkg` in that slot is scheduled for a reinstall. Added
-        // before the merge-order sort so it lands in dependency-first order
-        // like every other entry. `abi_rebuilds` feeds `_show_abi_rebuild_info`.
-        let (slot_op_rebuilds, abi_rebuilds) =
-            if ignore_built_slot_operator_deps || !rebuild_if_new_slot {
-                (Vec::new(), Vec::new())
-            } else {
-                slot_operator_rebuild_entries(root, &repos, &entries, &slot_op_reachable)
-            };
-        entries.extend(slot_op_rebuilds);
-
-        // Real `_rebuild_config.trigger_rebuilds()` (`--rebuild-if-unbuilt`
-        // / `--rebuild-if-new-rev` / `--rebuild-if-new-ver`): an installed
-        // package whose build-time dep is being merged this run gets its
-        // own `[ebuild R]` rebuild entry. Same `all_installed_packages`
-        // scan / entry shape as the slot-operator pass above.
-        entries.extend(rebuild_if_entries(
-            root,
-            &entries,
-            rebuild_if_unbuilt,
-            rebuild_if_new_rev,
-            rebuild_if_new_ver,
-            rebuild_exclude,
-            rebuild_ignore,
-        ));
-
-        // `emerge --pretend --debug` stages 2/4/6: the per-package
-        // resolution narration, emitted here (final `entries`, successful
-        // pass) rather than threaded through the BFS -- see
-        // `resolver_trace::dump_resolution_walk`. Before the merge-order
-        // sort / `digraph:` dump, matching real's order (walk, then
-        // graph).
-        resolver_trace::dump_resolution_walk(&entries, root);
-
-        // Real portage's `mylist` is dependency-first (its Scheduler installs
-        // a package only after everything it depends on); portuale's BFS
-        // builds `entries` the other way (a package's entry is pushed before
-        // its dependencies are ever queued). Re-sort into merge order now
-        // that every `required_by` edge is known -- see
-        // `topological_merge_order`.
-        entries = topological_merge_order(entries, atoms, config, root, implicit_system_deps);
-
-        // Real depgraph.py:5706-5717 -- see GraphResult::
-        // buildpkgonly_deps_unsatisfied's own doc comment.
-        let buildpkgonly_deps_unsatisfied = buildpkgonly && {
-            let needs_action: HashSet<(String, String)> = entries
-                .iter()
-                .filter(|e| {
-                    !matches!(
-                        e.outcome,
-                        PretendOutcome::AlreadyInstalled { .. }
-                            | PretendOutcome::NoVisibleCandidate
-                    )
+        if let Some(iuse) = metadata.get("IUSE") {
+            // Dedup a flag `IUSE` names twice (eclass + ebuild, e.g.
+            // gnome-extra/gnome-color-manager's `IUSE="test test"`) --
+            // real renders `sorted(pkg.iuse.all)`, a `frozenset`.
+            let mut iuse_seen: HashSet<String> = HashSet::new();
+            let mut display: Vec<(String, bool)> = iuse
+                .split_whitespace()
+                .map(|tok| tok.trim_start_matches(['+', '-']).to_string())
+                .filter(|flag| iuse_seen.insert(flag.clone()))
+                .map(|flag| {
+                    let enabled = use_flags.contains(&flag);
+                    (flag, enabled)
                 })
-                .map(|e| (e.category.clone(), e.package.clone()))
                 .collect();
-            entries.iter().any(|e| {
-                needs_action.contains(&(e.category.clone(), e.package.clone()))
-                    && e.required_by
-                        .iter()
-                        .any(|owner| needs_action.contains(owner))
-            })
-        };
-
-        // Real `_serialize_tasks` -> `_show_circular_deps`: an
-        // unbreakable build-time dependency cycle among the merge-bound
-        // packages. `topological_merge_order` above already left such a
-        // cycle in discovery order (it can't linearize one); this
-        // records it for `pretend.rs` to render the fatal
-        // `* Error: circular dependencies:` block.
-        let circular_deps = find_hard_cycles(&entries, &edge_kind_map);
-
-        // Elementary-cycle enumeration + reduced display order for the
-        // `large_cycle_count` trailer and the cycle-only re-display
-        // (real `circular_dependency_handler`, fed by `get_cycles` over
-        // the `medium_soft` rung). Built on demand: only a reported hard
-        // cycle consumes either number, so acyclic resolves pay nothing.
-        let (large_cycle_count, cycle_display) = if circular_deps.is_empty() {
-            (false, Vec::new())
-        } else {
-            let (cycles, display) = merge_order::cycle_report(&entries, atoms, root);
-            let display = display
-                .into_iter()
-                .filter_map(|i| merge_bound_cpv(&entries[i]))
-                .collect();
-            (cycles.len() > 3, display)
-        };
-
-        // Backtracking slice: the `--autounmask-use` changes recorded
-        // during the already-resolved-slot re-check (see
-        // `autounmask_use_change_records`) -- the graph has settled with
-        // those flips applied, so surface them in the same "necessary to
-        // proceed" block as the fresh-path ones. Deduped by `(atom,
-        // token)`.
-        for rec in &autounmask_use_change_records {
-            if !autounmask_use_changes
-                .iter()
-                .any(|c| c.atom == rec.atom && c.token == rec.token)
-            {
-                autounmask_use_changes.push(rec.clone());
-            }
-        }
-
-        // Real `_display_autounmask` emits **one line per package** --
-        // it iterates `_needed_use_config_changes.items()` (one entry per
-        // `pkg`) and joins every flipped flag of that pkg into a single
-        // `>=<cpv> flag -flag …` line, in the order the flips were
-        // discovered. Portuale accumulates one `AutounmaskChange` per
-        // flip site, so `>=dev-qt/qtbase-6.11.1` needing both `cups` and
-        // `vulkan` (each from a different consumer) landed on two lines.
-        // Coalesce by `atom`, first-seen order, joining tokens and
-        // dropping a flag already present.
-        {
-            let mut merged: Vec<AutounmaskChange> = Vec::new();
-            for ch in autounmask_use_changes.drain(..) {
-                if let Some(existing) = merged.iter_mut().find(|m| m.atom == ch.atom) {
-                    let mut flags: Vec<String> = existing
-                        .token
-                        .split_whitespace()
-                        .map(String::from)
-                        .collect();
-                    for f in ch.token.split_whitespace() {
-                        if !flags.iter().any(|g| g == f) {
-                            flags.push(f.to_string());
-                        }
-                    }
-                    existing.token = flags.join(" ");
-                } else {
-                    merged.push(ch);
+            // Real `_create_use_string`'s `any_iuse.sort(key=_alnum_sort_key)`.
+            display.sort_by_key(|p| alnum_sort_key(&p.0));
+            // Real `_display_use`'s `previous_pkg`: the installed
+            // version's own recorded USE/IUSE, for the `*`/`%` diff
+            // markers -- only for an entry that actually replaces an
+            // installed one (`Upgrade`/`Downgrade` from `from`,
+            // `Reinstall` at the same version). `New`/`AlreadyInstalled`/
+            // `NoVisibleCandidate` have no installed side to diff.
+            let installed_version = match &state.entries[entry_idx].outcome {
+                PretendOutcome::Upgrade { from, .. } | PretendOutcome::Downgrade { from, .. } => {
+                    Some(from.clone())
                 }
+                PretendOutcome::Reinstall { version, .. } => Some(version.clone()),
+                _ => None,
+            };
+            let installed = installed_version.map(|v| {
+                let old_iuse = read_vdb_flag_set(ctx.root, &key.0, &key.1, &v, "IUSE");
+                let mut old_use = read_vdb_flag_set(ctx.root, &key.0, &key.1, &v, "USE");
+                old_use.retain(|f| old_iuse.contains(f));
+                InstalledUseState { old_use, old_iuse }
+            });
+            // Real `_display_use`'s `self.forced_flags` (`pkg.use.force |
+            // pkg.use.mask`): the flags `-pv` wraps in `( … )`.
+            let forced =
+                forced_or_masked_flags(iuse, &keywords, &candidate_str, &key.0, &key.1, config);
+            // Real `reinst_flags_map`: the `_reinstall_for_flags` trigger
+            // set (`Reinstall::changed_flags`), force-shown in the USE
+            // line even at plain `-p`. Only a USE-triggered `Reinstall`
+            // carries one; `Upgrade`/`Downgrade`/`New` don't (their
+            // still-present changed flags already render via the
+            // `*`/`%` markers).
+            let reinst_flags: HashSet<String> = match &state.entries[entry_idx].outcome {
+                PretendOutcome::Reinstall { changed_flags, .. } => {
+                    changed_flags.iter().cloned().collect()
+                }
+                _ => HashSet::new(),
+            };
+            // Two renderings of the same flag set: `use_expand_display`
+            // is the `-pv` (`all_flags = verbosity == 3`) form -- every
+            // flag shown -- and `use_expand_display_p` is the plain `-p`
+            // (`all_flags` off) form -- only the *changed* flags for a
+            // Reinstall/Upgrade/Downgrade (plus its `reinst_flags`), the
+            // full list for a `New` (`is_new` renders everything
+            // regardless). `pretend.rs`'s `use_suffix` picks by
+            // verbosity. Both are cheap; for a `New` (no `installed`
+            // diff) they're identical.
+            state.entries[entry_idx].use_expand_display = build_use_expand_display(
+                &display,
+                config,
+                installed.as_ref(),
+                &forced,
+                true,
+                &reinst_flags,
+            );
+            state.entries[entry_idx].use_expand_display_p = build_use_expand_display(
+                &display,
+                config,
+                installed.as_ref(),
+                &forced,
+                false,
+                &reinst_flags,
+            );
+            state.entries[entry_idx].use_flags_display = display;
+        }
+
+        // `--nodeps`: real create_depgraph_params.py pops "recurse" from
+        // myparams, and depgraph.py's own dependency-walk returns early
+        // when "recurse" isn't in myparams -- ported here as skipping
+        // this package's own DEPEND/RDEPEND/etc entirely, so nothing of
+        // its is ever parsed, flattened, or queued. This also means no
+        // blockers are ever collected from a `--nodeps` run (blockers
+        // only ever come from a dependency string, which is never read),
+        // matching real portage exactly.
+        if ctx.nodeps {
+            continue;
+        }
+
+        // Real `depgraph.py:4195-4247` (`_add_pkg_dep_string`): for a
+        // *built* package (`pkg.built` -- true for a binary, not for a
+        // fresh ebuild) with `myparams["bdeps"]` not in `("y","auto")`
+        // -- i.e. `--usepkg`/`--getbinpkg` given, which leaves `bdeps`
+        // unset (`create_depgraph_params.py:100`) -- `DEPEND` and
+        // `BDEPEND` are both emptied before the walk. `with_bdeps`
+        // (built from that same rule in `pretend.rs`) carries the bit;
+        // a binary's recorded `BDEPEND` (e.g. libgweather's `|| ( (
+        // python:3.14 pygobject[...] ) ... )`) must not drive a merge.
+        let dep_keys: &[&str] = if candidate_source == CandidateSource::Binary && !ctx.with_bdeps {
+            &["RDEPEND", "PDEPEND", "IDEPEND"]
+        } else {
+            &["DEPEND", "RDEPEND", "BDEPEND", "PDEPEND", "IDEPEND"]
+        };
+        let mut depstr = String::new();
+        for dep_key in dep_keys {
+            if let Some(d) = metadata.get(*dep_key) {
+                depstr.push_str(d);
+                depstr.push(' ');
             }
-            autounmask_use_changes = merged;
         }
+        let tokens: Vec<String> = depstr.split_whitespace().map(String::from).collect();
 
-        // Real `--autounmask-backtrack` off (the default): the backward-
-        // cascade re-check folded a `package.use` change into
-        // `autounmask_use_config` but the driver did NOT re-drive the walk,
-        // so the affected package's entry still shows its pre-flip USE. Real
-        // portage's `_pkg_use_enabled` consults `_needed_use_config_changes`
-        // for the display regardless -- so re-render just that USE line here
-        // (its `flag?`-gated deps still, correctly, do not appear).
-        if !autounmask_backtrack_enabled && !autounmask_use_config.is_empty() {
-            let tier = autounmask_use_tier(&autounmask_use_config);
-            let mut tier_config = req.config.clone();
-            tier_config.autounmask_use = tier;
-            for cp in autounmask_use_config.keys() {
-                refresh_entry_use_display(&mut entries, &repos, root, cp, &tier_config);
-            }
-        }
-
-        // Residual installed-instance slot conflicts for reverse-dep pins
-        // dropped as jointly unsatisfiable with the hard requirements
-        // (see the feed above and `build_residual_slot_conflicts`): the
-        // merge proceeds with the hard-required version, and the broken
-        // installed consumers are reported against the installed
-        // instance -- real's nomerge-node collision report. Appended
-        // after every merge-vs-merge record, so those keep their
-        // long-standing order.
-        slot_conflicts.extend(build_residual_slot_conflicts(
-            &repos,
-            config,
-            root,
-            &entries,
-            &slot_pullers,
-            &dropped_pins,
-        ));
-
-        // Masked-dependency chains are walked out of the final entries
-        // (`required_by` is only complete post-pass); the atom+masked
-        // data was recorded at each `NoVisibleCandidate` push above.
-        for rep in &mut masked_deps {
-            rep.chain = masked_dep_chain(&entries, &rep.category, &rep.package, atoms, root);
-        }
-
-        // Backlog #19 Slice 3: classify the settled graph the way real's
-        // abandon sites would have (see `abort_outcome`).
-        let outcome = abort_outcome(
-            &entries,
-            &masked_deps,
-            &circular_deps,
-            &cycle_display,
-            &nvc_dep_atoms,
+        // Real graph *discovery* order (`GraphEntry::deps`, see
+        // its own doc comment): real `_add_pkg_dep_string` walks
+        // `RDEPEND`, `IDEPEND`, `PDEPEND`, `DEPEND`, `BDEPEND` in that
+        // exact order (`depgraph.py:4253-4289`'s own `deps` tuple) --
+        // a different order than `dep_keys` above (which only cares
+        // which keys are included, not their order). Each key is
+        // flattened separately so cross-key token order can't leak in;
+        // `use_reduce_flat` transparently drops `||`/`(`/`)` markers,
+        // listing every branch's atoms in written order (the *other*
+        // branches are simply never a real entry, so they contribute
+        // no edge once the merge-order digraph looks them up).
+        let real_order_keys: &[&str] =
+            if candidate_source == CandidateSource::Binary && !ctx.with_bdeps {
+                &["RDEPEND", "PDEPEND", "IDEPEND"]
+            } else {
+                &["RDEPEND", "IDEPEND", "PDEPEND", "DEPEND", "BDEPEND"]
+            };
+        state.entries[entry_idx].deps = merge_order::dep_edges_from_metadata(
+            &metadata,
+            &use_flags,
+            real_order_keys,
+            candidate_source == CandidateSource::Binary,
         );
 
-        return Ok(GraphResult {
-            entries,
-            outcome,
-            slot_conflicts,
-            changed_deps_report: changed_deps_report_entries,
-            buildpkgonly_deps_unsatisfied,
-            pprovided_atoms,
-            autounmask_keyword_changes,
-            autounmask_use_changes,
-            autounmask_license_changes,
-            autounmask_mask_changes,
-            abi_rebuilds,
-            circular_deps,
-            masked_deps,
-            large_cycle_count,
-            cycle_display,
+        // Per-edge build-time/run-time classification for the
+        // merge-order sort + circular-dependency detection (real
+        // `DepPriority`): re-flatten just the build-time keys and just
+        // the run-time keys, so `enqueue_flat_deps` can tag an atom
+        // present in the first and absent from the second as
+        // `buildtime_hard`. A plain (non-disjunctive) `use_reduce_flat`
+        // is enough here -- the classification only needs which key an
+        // atom came from, and a `||` group's branch choice matches the
+        // main flatten below in every case without one.
+        let flatten_keys = |keys: &[&str]| -> HashSet<String> {
+            let joined: String = keys
+                .iter()
+                .filter_map(|k| metadata.get(*k))
+                .map(String::as_str)
+                .collect::<Vec<_>>()
+                .join(" ");
+            let toks: Vec<String> = joined.split_whitespace().map(String::from).collect();
+            portage_use_reduce::use_reduce_flat(
+                &toks,
+                &use_flags,
+                portage_use_reduce::MatchMode::Normal,
+            )
+            .map(|v| v.into_iter().filter(|t| t != "||").collect())
+            .unwrap_or_default()
+        };
+        let buildtime_atoms = if candidate_source == CandidateSource::Binary && !ctx.with_bdeps {
+            // Build-time deps were dropped from the walk above -- no
+            // queued atom can be classified from them.
+            HashSet::new()
+        } else {
+            flatten_keys(&["DEPEND", "BDEPEND"])
+        };
+        let runtime_atoms = flatten_keys(&["RDEPEND", "PDEPEND", "IDEPEND"]);
+        // Real `--root-deps` branch-selection feed-in (see
+        // `root_deps_satisfied_atoms`'s own doc comment): a `||` group
+        // with no branch tree-visible still needs a branch selected
+        // here too, not just in `root_deps_satisfied_atoms`'s own
+        // separate re-flatten -- otherwise the *other*, genuinely
+        // unsatisfiable branch would remain in `flat_deps` and get
+        // queued as an ordinary (and wrongly reported) dependency. Real
+        // `--root-deps` only ever applies to `DEPEND`/`BDEPEND` -- this
+        // closure can't tell which of the five merged dep keys a given
+        // atom came from (portuale's own single-unified-graph
+        // architecture merges them into one combined string before
+        // flattening at all -- the same documented limitation
+        // `docs/agent-context.md`'s own `--root-deps` backlog entry
+        // names for the bigger, still-unattempted "recursive second-root
+        // graph" gap), so an `RDEPEND`/`PDEPEND`/`IDEPEND` `||` group
+        // gets this same permissive check too -- harmless in practice
+        // (those atoms almost always resolve via ordinary tree
+        // visibility already; a running-root coincidence only ever
+        // widens acceptance, never narrows it).
+        // Real `dep_zapdeps` re-choosing a `||` alternative once
+        // backtracking has masked the preferred one: an atom whose
+        // only satisfying candidates are excluded by the negatives
+        // this loop accumulated for its `cat/pkg` (`slot_constraints`,
+        // = `runtime_pkg_mask`) counts as unsatisfiable, so the next
+        // alternative wins on the retry -- `disjunction_preference`
+        // takes `slot_constraints` itself (not a lookup closure over
+        // it; see that function's own doc comment for why).
+        // Real `dep_zapdeps` skips a `||` alternative that would only
+        // be satisfied by the package currently being resolved (a
+        // circular self-dep) -- e.g. `dev-lang/go`'s BDEPEND
+        // `|| ( >=dev-lang/go-<min> >=dev-lang/go-bootstrap-<min> )`
+        // with nothing installed: the first branch's only tree match
+        // *is* `dev-lang/go`, so real falls through to the
+        // `go-bootstrap` branch. An atom whose `cat/pkg` is this
+        // entry's own and which nothing installed satisfies counts
+        // as unavailable here.
+        let self_cp = (
+            state.entries[entry_idx].category.clone(),
+            state.entries[entry_idx].package.clone(),
+        );
+        // The whole `dep_zapdeps` choice-bin classification lives in
+        // the single shared `disjunction_preference` helper -- see its
+        // own doc comment (2026-09-11 review F1/F2: this closure and
+        // `enqueue_dependencies`'s used to be two independently
+        // hand-maintained copies, and only this one got the fine
+        // `unsat_use_*` bins).
+        let Ok(flat_deps) = portage_use_reduce::use_reduce_flat_disjunctive(
+            &tokens,
+            &use_flags,
+            portage_use_reduce::MatchMode::Normal,
+            &mut |atoms: &[String]| {
+                disjunction_preference(
+                    &ctx.repos,
+                    config,
+                    ctx.root,
+                    &state.entries,
+                    &self_cp,
+                    &union_constraints,
+                    ctx.root_deps_running_root,
+                    atoms,
+                )
+            },
+            &mut |alts: &[Vec<String>]| {
+                promote_tied_alternative(
+                    &ctx.repos,
+                    config,
+                    ctx.root,
+                    &state.entries,
+                    &union_constraints,
+                    alts,
+                )
+            },
+        ) else {
+            continue;
+        };
+        // `--root-deps`: real `ESYSROOT`-vs-`ROOT` distinction (see
+        // `root_deps_satisfied_atoms`'s own doc comment for the full
+        // grounding and its documented scope cut) -- a strict no-op when
+        // `root_deps_running_root` is `None`, matching every pre-existing
+        // call site/test.
+        let root_deps_satisfied: HashSet<String> = ctx
+            .root_deps_running_root
+            .map(|root| {
+                root_deps_satisfied_atoms(
+                    &metadata,
+                    &use_flags,
+                    &ctx.repos,
+                    config,
+                    root,
+                    &["DEPEND", "BDEPEND", "IDEPEND"],
+                )
+            })
+            .unwrap_or_default();
+        // Real "recursively pull in and build new packages against the
+        // running root" (see `resolve_root_deps_build_entries`'s own doc
+        // comment for the full grounding): the *other* half of the same
+        // real `DEPEND`/`BDEPEND` set `root_deps_satisfied` above already
+        // covers -- every atom in it isn't satisfied by the running root
+        // either, so (unlike before the first `--root-deps` build-entry
+        // slice) it must *not* fall through into the ordinary `flat_deps`
+        // queue below and get wrongly resolved against `ROOT` instead
+        // (real `DEPEND`/`BDEPEND` never targets `ROOT`/`ESYSROOT` at all
+        // under portuale's own established `--root-deps` simplification
+        // -- see `root_deps_satisfied_atoms`'s own doc comment). Each one
+        // instead gets resolved against the running root directly, the
+        // same way any other atom would be, added as its own
+        // `targets_running_root` entry, and recursed into. Kept as a
+        // `Vec` (not a `HashSet`) so the resulting entry order is
+        // deterministic. A strict no-op when `root_deps_running_root` is
+        // `None`, matching every pre-existing call site/test.
+        let root_deps_unsatisfied: Vec<String> = ctx
+            .root_deps_running_root
+            .map(|root| {
+                unsatisfied_root_deps_atoms(
+                    &metadata,
+                    &use_flags,
+                    &ctx.repos,
+                    config,
+                    root,
+                    &["DEPEND", "BDEPEND", "IDEPEND"],
+                )
+            })
+            .unwrap_or_default();
+        let flat_deps: Vec<String> = flat_deps
+            .into_iter()
+            .filter(|tok| !root_deps_satisfied.contains(tok))
+            .filter(|tok| !root_deps_unsatisfied.contains(tok))
+            .collect();
+        if let Some(running_root) = ctx.root_deps_running_root {
+            for atom_str in &root_deps_unsatisfied {
+                state.entries.extend(resolve_root_deps_build_entries(
+                    &ctx.repos,
+                    running_root,
+                    atom_str,
+                    config,
+                    key.clone(),
+                    &mut state.root_deps_build_seen,
+                ));
+            }
+        }
+        // Backtracking (slices 3/4): record this package as a puller of
+        // every non-blocker `cat/pkg` its dependency string names,
+        // keeping the atom text for slice 4's `pulled in by` lines,
+        // before `flat_deps` is consumed below.
+        for tok in &flat_deps {
+            if let Some(dep_atom) = portage_dep::parse_atom(tok)
+                && dep_atom.blocker == portage_dep::Blocker::None
+            {
+                state
+                    .slot_pullers
+                    .entry((dep_atom.category.clone(), dep_atom.package.clone()))
+                    .or_default()
+                    .push((key.0.clone(), key.1.clone(), version.clone(), tok.clone()));
+            }
+        }
+        enqueue_flat_deps(
+            flat_deps,
+            &key,
+            &version,
+            depth,
+            &use_flags,
+            &mut state.queue,
+            &mut state.pending_blockers,
+            &buildtime_atoms,
+            &runtime_atoms,
+        );
+
+        // --with-test-deps: additive on top of the normal deps just
+        // queued above, never a replacement for them -- see
+        // resolve_pretend_graph's own doc comment for the full gating
+        // (depth == 0, "test" a valid, not-already-enabled, not-masked
+        // IUSE flag) and why this needs use_reduce_flat_subset rather
+        // than another plain use_reduce_flat pass.
+        if ctx.with_test_deps && depth == 0 && !use_flags.contains("test") {
+            let iuse_flags: HashSet<String> = metadata
+                .get("IUSE")
+                .map(String::as_str)
+                .unwrap_or_default()
+                .split_whitespace()
+                .map(|tok| tok.trim_start_matches(['+', '-']).to_string())
+                .collect();
+            let test_masked = config.use_mask.contains("test")
+                || specificity_ordered_flags(
+                    &config.package_use_mask,
+                    &candidate_str,
+                    &key.0,
+                    &key.1,
+                    HashSet::new(),
+                )
+                .contains("test");
+            if iuse_flags.contains("test") && !test_masked {
+                let mut test_uselist = use_flags.clone();
+                test_uselist.insert("test".to_string());
+                let subset: HashSet<String> = ["test".to_string()].into_iter().collect();
+                if let Ok(test_deps) = portage_use_reduce::use_reduce_flat_subset(
+                    &tokens,
+                    &test_uselist,
+                    portage_use_reduce::MatchMode::Normal,
+                    &subset,
+                ) {
+                    enqueue_flat_deps(
+                        test_deps,
+                        &key,
+                        &version,
+                        depth,
+                        &test_uselist,
+                        &mut state.queue,
+                        &mut state.pending_blockers,
+                        // A `test?` dep is `DepPriority.optional` --
+                        // never a hard cycle contributor.
+                        &HashSet::new(),
+                        &HashSet::new(),
+                    );
+                }
+            }
+        }
+    }
+
+    // `.get()`, not `.remove()`: `entries` can hold more than one entry
+    // for the same `(category, package)` -- one per resolved slot (see
+    // this function's own doc comment on multi-slot support) -- and every
+    // one of them was pulled in by the same owner(s), so every one needs
+    // the same `required_by`. A destructive `.remove()` here handed the
+    // owners to whichever slot's entry the loop reached first and left
+    // the rest with an empty `required_by`, which `--tree` then dropped
+    // to its flush-left safety net instead of nesting under the parent
+    // (and `--json` reported as `"required_by": []`). Entries with no key
+    // in the map keep whatever `required_by` they were built with -- a
+    // `--root-deps` running-root build entry sets its own immediate
+    // requester at construction and must not be wiped to empty here.
+    for entry in &mut state.entries {
+        if let Some(owners) = state
+            .required_by_map
+            .get(&(entry.category.clone(), entry.package.clone()))
+        {
+            let mut owners: Vec<(String, String)> = owners.iter().cloned().collect();
+            owners.sort();
+            entry.required_by = owners;
+        }
+    }
+
+    // An installed package that is *also* being merged in the same
+    // slot is one node in real's graph, not two. The BFS can build an
+    // `AlreadyInstalled` entry for a `cat/pkg` before some later atom
+    // forces a same-slot merge of it -- `net-libs/nghttp2`'s
+    // `>=sys-apps/systemd-209` resolves to the installed systemd, then
+    // `sys-auth/polkit`'s `sys-apps/systemd:0=[policykit]` forces the
+    // reinstall. Drop the redundant `AlreadyInstalled` entry; the
+    // merge-bound one supersedes it (and already carries the union of
+    // both owners' `required_by`, filled just above).
+    let mergebound_cp_slots: HashSet<(String, String, String)> = state
+        .entries
+        .iter()
+        .filter_map(|e| {
+            let ver = match &e.outcome {
+                PretendOutcome::New { version } | PretendOutcome::Reinstall { version, .. } => {
+                    version
+                }
+                PretendOutcome::Upgrade { to, .. } | PretendOutcome::Downgrade { to, .. } => to,
+                _ => return None,
+            };
+            let slot = e
+                .slot
+                .clone()
+                .unwrap_or_else(|| read_vdb_slot(ctx.root, &e.category, &e.package, ver).0);
+            Some((e.category.clone(), e.package.clone(), slot))
+        })
+        .collect();
+    state.entries.retain(|e| {
+        let PretendOutcome::AlreadyInstalled { version } = &e.outcome else {
+            return true;
+        };
+        let (slot, _) = read_vdb_slot(ctx.root, &e.category, &e.package, version);
+        !mergebound_cp_slots.contains(&(e.category.clone(), e.package.clone(), slot))
+    });
+
+    resolve_blockers(ctx.root, &state.pending_blockers, &state.entries)
+        .into_iter()
+        .for_each(|(owner_key, conflict)| {
+            if let Some(entry) = state
+                .entries
+                .iter_mut()
+                .find(|e| (e.category.clone(), e.package.clone()) == owner_key)
+            {
+                entry.blockers.push(conflict);
+            }
+        });
+
+    if !state.required_use_violations.is_empty() {
+        // Each block is self-delimiting (leading + trailing newline).
+        return Err(Error::Detail(state.required_use_violations.join("")));
+    }
+
+    let pass = PassResult {
+        entries: state.entries,
+        slot_conflicts: state.slot_conflicts,
+        slot_want: state.slot_want,
+        slot_pullers: state.slot_pullers,
+        masked_deps: state.masked_deps,
+        nvc_dep_atoms: state.nvc_dep_atoms,
+        missing_dep_trigger: state.missing_dep_trigger,
+        autounmask_grew: state.autounmask_grew,
+        edge_kind_map: state.edge_kind_map,
+        changed_deps_report_entries: state.changed_deps_report_entries,
+        pprovided_atoms: state.pprovided_atoms,
+        autounmask_keyword_changes: state.autounmask_keyword_changes,
+        autounmask_use_changes: state.autounmask_use_changes,
+        autounmask_license_changes: state.autounmask_license_changes,
+        autounmask_mask_changes: state.autounmask_mask_changes,
+        use_overlay: state.use_overlay,
+        use_change_overlay: state.use_change_overlay,
+        use_broke: state.use_broke,
+    };
+    Ok(pass)
+}
+
+/// Phase C1 (023): why one `cat/pkg` version is masked on retry,
+/// mirroring real `backtracking.py`'s `runtime_pkg_mask[pkg][reason]`
+/// dict shape (one entry per masked version, reason-annotated). C1 only
+/// splits the storage -- readers still see the union (see
+/// `BacktrackParams::union_constraints`); C2's `Backtracker` consumes
+/// the reasons.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum MaskReason {
+    /// Real `mask_info["slot conflict"]`: the masked version collided in
+    /// its slot. `parents` are the pulling `((cat, pkg, ver), atom)`
+    /// triples whose atom does NOT match the masked version (real's
+    /// `conflict_atoms`, used by the bug-375573 discard check, which
+    /// tests versioned parent packages -- hence the stored `ver`).
+    /// Parent downgrades are `MissingDependency` masks on a later node,
+    /// never empty-parent slot masks (C3 removed puller pre-masking).
+    SlotConflict {
+        parents: Vec<((String, String, String), String)>,
+    },
+    /// Real `mask_info["missing dependency"]`: the masked parent's
+    /// subtree contained an unsatisfiable dep; `atom` is that dep's text
+    /// (real also records the root; portuale resolves a single root).
+    MissingDependency {
+        parent: (String, String),
+        atom: String,
+    },
+}
+
+/// One `!=cat/pkg-ver` negative with its reason. `neg` renders exactly
+/// as the string used to live in `slot_constraints`, so every reader
+/// that matches on it behaves identically. The masked version is
+/// recoverable without parsing: strip the `!=cat/pkg-` prefix formed
+/// from the bucket key (C2 does this when it needs per-cpv granularity).
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct MaskEntry {
+    neg: String,
+    reason: MaskReason,
+}
+
+/// One pass's outcome in real `_backtrack_depgraph` terms -- see the
+/// type docs above. The overlay merge runs first (steps read the merged
+/// accumulators, as they always did); each arm then packages its effect
+/// without touching the search state.
+fn collect_feedback(
+    ctx: &ResolveCtx<'_>,
+    params: &BacktrackParams,
+    pass: &mut PassResult,
+    config: &portage_profile::Config,
+) -> PassDecision {
+    // C2: the A3 overlay union lands in a working copy, not the live
+    // search state -- the driver applies the packaged effect through
+    // `Backtracker::feedback`.
+    // A3: fold this pass's overlay into the cross-pass accumulators
+    // before deciding. The old code wrote `bp` directly during the walk,
+    // so at this point `bp` already held everything; the union below
+    // reproduces that state exactly (idempotent per-flag insert with the
+    // same `bucket.get(f) != Some(want)` rule, `(atom, token)`-deduped
+    // record append, `|=` latch for the contradiction). Placed before the
+    // chain rather than in step 5: an earlier step (solvable growth, mask
+    // trial, breakage) may fire on the same pass that folded flips, and
+    // the retry must see them -- as it always did.
+    let mut grown = params.clone();
+    for (cp, flags) in &pass.use_overlay {
+        let bucket = grown.autounmask_use_config.entry(cp.clone()).or_default();
+        for (f, want) in flags {
+            if bucket.get(f) != Some(want) {
+                bucket.insert(f.clone(), *want);
+            }
+        }
+    }
+    for rec in &pass.use_change_overlay {
+        if !grown
+            .autounmask_use_change_records
+            .iter()
+            .any(|c| c.atom == rec.atom && c.token == rec.token)
+        {
+            grown.autounmask_use_change_records.push(rec.clone());
+        }
+    }
+    grown.autounmask_use_broke |= pass.use_broke;
+    // Backtracking (real `backtracking.py` retry loop driven by
+    // `_process_slot_conflicts`): if this attempt left any slot conflicts,
+    // check each one for solvability -- is there a single version of the
+    // conflicted `cat/pkg` that satisfies *every* atom text that targeted
+    // it this pass? If so, the whole atom set becomes a config-feedback
+    // node for the conflicted package. Unsolvable conflicts fall through
+    // to the mask node below; anything still conflicting when the search
+    // is exhausted is reported from the best run, exactly as before.
+    if !pass.slot_conflicts.is_empty() {
+        let mut progressed = false;
+        for sc in &pass.slot_conflicts {
+            let pkg_key = (sc.category.clone(), sc.package.clone());
+            let wants = match pass.slot_want.get(&pkg_key) {
+                Some(w) if w.len() >= 2 => w.clone(),
+                _ => continue,
+            };
+            // Solvability pre-check against the raw candidate list (real
+            // `_select_pkg_highest_available` over the full atom set). This
+            // deliberately ignores keyword/mask visibility -- the rare case
+            // where the one satisfying version is itself masked resolves to a
+            // plain `NoVisibleCandidate` on the retry, which is
+            // acceptable and documented for this slice. It does NOT
+            // ignore USE-deps (real enforces them in selection): a
+            // version only counts when every want-atom matches it on
+            // version, slot, *and* USE, so a USE-mismatching slot reuse
+            // falls through to the mask trial and the notice instead of
+            // constraining a retry that can only end in swallowed
+            // "no visible ebuild" lines.
+            let candidates =
+                list_candidates(&ctx.repos, &pkg_key.0, &pkg_key.1).unwrap_or_default();
+            let solvable = candidates.iter().any(|c| {
+                let cs = format!("{}/{}-{}:{}", pkg_key.0, pkg_key.1, c.version, c.slot);
+                let (iuse, use_flags) =
+                    slot_conflict_flag_sets(&ctx.repos, config, &pkg_key.0, &pkg_key.1, &c.version);
+                wants.iter().all(|w| {
+                    portage_dep::match_from_list(w, &[cs.as_str()]).is_some_and(|m| !m.is_empty())
+                        && portage_dep::parse_atom(w).is_none_or(|a| match &a.use_deps {
+                            None => true,
+                            Some(ud) => portage_dep::use_deps_satisfied(ud, &iuse, &use_flags),
+                        })
+                })
+            });
+            if !solvable {
+                continue;
+            }
+            let slot = grown.slot_constraints.entry(pkg_key).or_default();
+            for w in wants {
+                if !slot.contains(&w) {
+                    slot.push(w);
+                    progressed = true;
+                }
+            }
+        }
+        if progressed {
+            return PassDecision::Feedback(BacktrackFeedback::Config {
+                params: Box::new(grown),
+            });
+        }
+    }
+
+    // C3: real `_slot_confict_backtrack` (one node per ranked choice,
+    // first conflicting slot only -- real `_feedback_slot_conflicts`
+    // takes `conflicts_data[0]`). The old bundled trial (highest child +
+    // every lower-alternative puller) is gone: puller-masking now happens
+    // only through a later pass's own missing-dep feedback, exactly like
+    // real, where a downgraded parent is abandoned via its unsatisfiable
+    // atom rather than pre-masked.
+    if !pass.slot_conflicts.is_empty() {
+        let choices = slot_conflict_mask_choices(
+            &ctx.repos,
+            ctx.excluded,
+            &grown,
+            &pass.slot_pullers,
+            &pass.slot_conflicts[0],
+            config,
+        );
+        // Novelty mirrors the old trial-dedup, compared on the full
+        // entry (neg + reason, the same granularity the node-dedup
+        // uses): at least one group member new to the search state. A
+        // repeat with recomputed parents is a distinct state and
+        // explores -- the mask budget still caps it.
+        let added = choices.iter().any(|c| {
+            c.similar
+                .iter()
+                .map(|s| (&s.target, &s.parents))
+                .chain(std::iter::once((&c.target, &c.parents)))
+                .any(|((cat, pkg, ver), parents)| {
+                    let entry = MaskEntry {
+                        neg: format!("!={cat}/{pkg}-{ver}"),
+                        reason: MaskReason::SlotConflict {
+                            parents: parents.clone(),
+                        },
+                    };
+                    !grown
+                        .runtime_pkg_mask
+                        .get(&(cat.clone(), pkg.clone()))
+                        .is_some_and(|bucket| bucket.contains(&entry))
+                })
+        });
+        if added {
+            return PassDecision::Feedback(BacktrackFeedback::SlotConflict {
+                base: Box::new(grown),
+                choices,
+            });
+        }
+    }
+
+    // Real `_autounmask_breakage` (depgraph.py:12262-12280): an
+    // accumulated autounmask USE change made another use-dep
+    // unsatisfiable and the two can't be reconciled (a flag wanted
+    // both ways). Drop every autounmask change, turn suggestion fully
+    // off, and re-resolve one final clean pass -- exactly real's
+    // `myparams["autounmask"] = False` retry. The `autounmask_disabled`
+    // latch keeps it to a single extra pass.
+    if grown.autounmask_use_broke && !grown.autounmask_disabled {
+        grown.autounmask_disabled = true;
+        grown.autounmask_suggest_keywords = false;
+        grown.autounmask_suggest_use = false;
+        grown.autounmask_suggest_license = false;
+        grown.autounmask_suggest_masks = false;
+        grown.autounmask_use_config.clear();
+        grown.autounmask_use_change_records.clear();
+        grown.backtrack_config = None;
+        return PassDecision::Feedback(BacktrackFeedback::Config {
+            params: Box::new(grown),
         });
     }
+
+    // Backtracking slice: this pass folded a new `--autounmask-use`
+    // flip into `autounmask_use_config` (real `_feedback_config`
+    // growing `_needed_use_config_changes`). Re-run the whole walk
+    // with the grown config so the flipped package is re-resolved
+    // with the flag on and its `flag?`-gated deps appear. Converges
+    // because `autounmask_grew` is only set on a *newly*-added
+    // `(cp, flag)` entry. Config feedback is budget-free (real's
+    // `_feedback_config` doesn't count toward `--backtrack=N`).
+    if pass.autounmask_grew {
+        let mut c = ctx.config.clone();
+        c.autounmask_use = autounmask_use_tier(&grown.autounmask_use_config);
+        grown.backtrack_config = Some(c);
+        return PassDecision::Feedback(BacktrackFeedback::Config {
+            params: Box::new(grown),
+        });
+    }
+
+    // Real `backtracking.py::_feedback_missing_dep`: this pass hit a
+    // dependency with no matching package; mask its parent (`!=cpv` in
+    // `runtime_pkg_mask`, latched in `missing_dep_masked` so the
+    // same parent is never re-masked) and re-run. Combined with the
+    // `||` closure honouring `slot_constraints`, a `|| ( a b )` whose
+    // `a` has an unsatisfiable subtree now yields to `b`. A trigger the
+    // latch already covers, or a top-level/USE-only mismatch with no
+    // trigger at all, falls through below (dead end unless other
+    // feedback fired first).
+    if let Some(((pc, pp), neg, dep_atom)) = pass.missing_dep_trigger.take() {
+        // C2: the latch moves into the node with the mask (see
+        // `Backtracker::feedback`); the trigger here only packages.
+        return PassDecision::Feedback(BacktrackFeedback::MissingDep {
+            base: Box::new(grown),
+            owner: (pc.clone(), pp.clone()),
+            entry: MaskEntry {
+                neg,
+                reason: MaskReason::MissingDependency {
+                    parent: (pc, pp),
+                    atom: dep_atom,
+                },
+            },
+        });
+    }
+
+    // Real `_complete_graph`'s installed-universe walk reaching
+    // `_slot_operator_check_reverse_dependencies`: an upgrade this
+    // pass picked breaks a dependency an *installed* package -- one
+    // nowhere near the requested atom's own tree -- already records
+    // against it. Real sees such an atom because complete mode
+    // (auto-enabled by any installed-package version/USE change)
+    // pulls every installed package into the graph as a nomerge
+    // node, contributing its recorded atoms to `_parent_atoms`;
+    // portuale finds them with a direct vdb reverse scan instead and
+    // feeds them back here as positive enforcement atoms (C1: they stay
+    // in the positives bucket -- they are not masks), which is
+    // precisely what parent atoms are. The re-resolve then picks the
+    // highest candidate satisfying them -- normally the installed
+    // version, so the entry settles as `AlreadyInstalled` -- and
+    // drops whatever the rejected version had dragged into the
+    // graph. `reverse_dep_masked` latches every constraint already
+    // added, so a pass that finds nothing new falls through and the
+    // loop terminates.
+    //
+    // A pin jointly unsatisfiable with this pass's hard requirements
+    // (an explicit versioned request, or a dependency only a newer
+    // version satisfies) is dropped instead of enforced: real merges
+    // the hard-required version anyway and reports the broken
+    // consumer against the installed instance. Dropped pins
+    // accumulate in `dropped_pins` for that residual report (see
+    // `build_residual_slot_conflicts`); they never enter
+    // `slot_constraints`, so the hard-required version is never
+    // masked into invisibility.
+    let mut added = false;
+    let (enforced, dropped) = reverse_dependency_constraints(
+        &ctx.repos,
+        ctx.root,
+        &pass.entries,
+        ctx.with_bdeps,
+        ctx.excluded,
+        &pass.slot_want,
+    );
+    for pin in enforced {
+        if grown
+            .reverse_dep_masked
+            .insert((pin.cp.clone(), pin.atom.clone()))
+        {
+            // C1: enforced pins are positive enforcement atoms (the
+            // consumer's recorded atom must keep matching), not
+            // masks -- they stay in the positives bucket, exactly
+            // like the solvable-conflict wants above.
+            grown
+                .slot_constraints
+                .entry(pin.cp)
+                .or_default()
+                .push(pin.atom);
+            added = true;
+        }
+    }
+    for pin in dropped {
+        if !grown.dropped_pins.contains(&pin) {
+            grown.dropped_pins.push(pin);
+        }
+    }
+    if added {
+        return PassDecision::Feedback(BacktrackFeedback::Config {
+            params: Box::new(grown),
+        });
+    }
+    // C2: no feedback fired. A pass that still carries an unsatisfiable
+    // dependency is a dead end (see `DeadEnd`), not a report -- settling
+    // here would abort on the masked graph instead of the best run.
+    // A conflict-only fall-through still settles (standing informational
+    // convention, exit 0).
+    let has_nvc = pass
+        .entries
+        .iter()
+        .any(|e| matches!(e.outcome, PretendOutcome::NoVisibleCandidate));
+    if has_nvc {
+        PassDecision::DeadEnd {
+            params: Box::new(grown),
+        }
+    } else {
+        PassDecision::Settle {
+            params: Box::new(grown),
+        }
+    }
+}
+
+/// Phase A2 (023): the settle tail of `backtracking_resolve` --
+/// rebuild passes, trace dump, merge-order sort, autounmask
+/// coalesce, residual conflicts, masked chains, `abort_outcome`,
+/// and the `GraphResult`. Residual conflicts (`slot_conflicts`
+/// extension) live here, not in `PassResult`: no `continue`
+/// follows them, so they cannot influence a retry.
+fn assemble_result(
+    ctx: &ResolveCtx<'_>,
+    params: &BacktrackParams,
+    mut pass: PassResult,
+    config: &portage_profile::Config,
+) -> GraphResult {
+    // Real depgraph's slot-operator auto-rebuild: an installed consumer
+    // whose built `cat/pkg:S/SS=` dep no longer matches how this run
+    // leaves `cat/pkg` in that slot is scheduled for a reinstall. Added
+    // before the merge-order sort so it lands in dependency-first order
+    // like every other entry. `abi_rebuilds` feeds `_show_abi_rebuild_info`.
+    let (slot_op_rebuilds, abi_rebuilds) = if ctx.ignore_built_slot_operator_deps
+        || !ctx.rebuild_if_new_slot
+    {
+        (Vec::new(), Vec::new())
+    } else {
+        slot_operator_rebuild_entries(ctx.root, &ctx.repos, &pass.entries, &ctx.slot_op_reachable)
+    };
+    pass.entries.extend(slot_op_rebuilds);
+
+    // Real `_rebuild_config.trigger_rebuilds()` (`--rebuild-if-unbuilt`
+    // / `--rebuild-if-new-rev` / `--rebuild-if-new-ver`): an installed
+    // package whose build-time dep is being merged this run gets its
+    // own `[ebuild R]` rebuild entry. Same `all_installed_packages`
+    // scan / entry shape as the slot-operator pass above.
+    pass.entries.extend(rebuild_if_entries(
+        ctx.root,
+        &pass.entries,
+        ctx.rebuild_if_unbuilt,
+        ctx.rebuild_if_new_rev,
+        ctx.rebuild_if_new_ver,
+        ctx.rebuild_exclude,
+        ctx.rebuild_ignore,
+    ));
+
+    // `emerge --pretend --debug` stages 2/4/6: the per-package
+    // resolution narration, emitted here (final `entries`, successful
+    // pass) rather than threaded through the BFS -- see
+    // `resolver_trace::dump_resolution_walk`. Before the merge-order
+    // sort / `digraph:` dump, matching real's order (walk, then
+    // graph).
+    resolver_trace::dump_resolution_walk(&pass.entries, ctx.root);
+
+    // Real portage's `mylist` is dependency-first (its Scheduler installs
+    // a package only after everything it depends on); portuale's BFS
+    // builds `entries` the other way (a package's entry is pushed before
+    // its dependencies are ever queued). Re-sort into merge order now
+    // that every `required_by` edge is known -- see
+    // `topological_merge_order`.
+    pass.entries = topological_merge_order(
+        pass.entries,
+        ctx.atoms,
+        config,
+        ctx.root,
+        ctx.implicit_system_deps,
+    );
+
+    // Real depgraph.py:5706-5717 -- see GraphResult::
+    // buildpkgonly_deps_unsatisfied's own doc comment.
+    let buildpkgonly_deps_unsatisfied = ctx.buildpkgonly && {
+        let needs_action: HashSet<(String, String)> = pass
+            .entries
+            .iter()
+            .filter(|e| {
+                !matches!(
+                    e.outcome,
+                    PretendOutcome::AlreadyInstalled { .. } | PretendOutcome::NoVisibleCandidate
+                )
+            })
+            .map(|e| (e.category.clone(), e.package.clone()))
+            .collect();
+        pass.entries.iter().any(|e| {
+            needs_action.contains(&(e.category.clone(), e.package.clone()))
+                && e.required_by
+                    .iter()
+                    .any(|owner| needs_action.contains(owner))
+        })
+    };
+
+    // Real `_serialize_tasks` -> `_show_circular_deps`: an
+    // unbreakable build-time dependency cycle among the merge-bound
+    // packages. `topological_merge_order` above already left such a
+    // cycle in discovery order (it can't linearize one); this
+    // records it for `pretend.rs` to render the fatal
+    // `* Error: circular dependencies:` block.
+    let circular_deps = find_hard_cycles(&pass.entries, &pass.edge_kind_map);
+
+    // Elementary-cycle enumeration + reduced display order for the
+    // `large_cycle_count` trailer and the cycle-only re-display
+    // (real `circular_dependency_handler`, fed by `get_cycles` over
+    // the `medium_soft` rung). Built on demand: only a reported hard
+    // cycle consumes either number, so acyclic resolves pay nothing.
+    let (large_cycle_count, cycle_display) = if circular_deps.is_empty() {
+        (false, Vec::new())
+    } else {
+        let (cycles, display) = merge_order::cycle_report(&pass.entries, ctx.atoms, ctx.root);
+        let display = display
+            .into_iter()
+            .filter_map(|i| merge_bound_cpv(&pass.entries[i]))
+            .collect();
+        (cycles.len() > 3, display)
+    };
+
+    // Backtracking slice: the `--autounmask-use` changes recorded
+    // during the already-resolved-slot re-check (see
+    // `autounmask_use_change_records`) -- the graph has settled with
+    // those flips applied, so surface them in the same "necessary to
+    // proceed" block as the fresh-path ones. Deduped by `(atom,
+    // token)`.
+    for rec in &params.autounmask_use_change_records {
+        if !pass
+            .autounmask_use_changes
+            .iter()
+            .any(|c| c.atom == rec.atom && c.token == rec.token)
+        {
+            pass.autounmask_use_changes.push(rec.clone());
+        }
+    }
+
+    // Real `_display_autounmask` emits **one line per package** --
+    // it iterates `_needed_use_config_changes.items()` (one entry per
+    // `pkg`) and joins every flipped flag of that pkg into a single
+    // `>=<cpv> flag -flag …` line, in the order the flips were
+    // discovered. Portuale accumulates one `AutounmaskChange` per
+    // flip site, so `>=dev-qt/qtbase-6.11.1` needing both `cups` and
+    // `vulkan` (each from a different consumer) landed on two lines.
+    // Coalesce by `atom`, first-seen order, joining tokens and
+    // dropping a flag already present.
+    {
+        let mut merged: Vec<AutounmaskChange> = Vec::new();
+        for ch in pass.autounmask_use_changes.drain(..) {
+            if let Some(existing) = merged.iter_mut().find(|m| m.atom == ch.atom) {
+                let mut flags: Vec<String> = existing
+                    .token
+                    .split_whitespace()
+                    .map(String::from)
+                    .collect();
+                for f in ch.token.split_whitespace() {
+                    if !flags.iter().any(|g| g == f) {
+                        flags.push(f.to_string());
+                    }
+                }
+                existing.token = flags.join(" ");
+            } else {
+                merged.push(ch);
+            }
+        }
+        pass.autounmask_use_changes = merged;
+    }
+
+    // Real `--autounmask-backtrack` off (the default): the backward-
+    // cascade re-check folded a `package.use` change into
+    // `autounmask_use_config` but the driver did NOT re-drive the walk,
+    // so the affected package's entry still shows its pre-flip USE. Real
+    // portage's `_pkg_use_enabled` consults `_needed_use_config_changes`
+    // for the display regardless -- so re-render just that USE line here
+    // (its `flag?`-gated deps still, correctly, do not appear).
+    if !ctx.autounmask_backtrack_enabled && !params.autounmask_use_config.is_empty() {
+        let tier = autounmask_use_tier(&params.autounmask_use_config);
+        let mut tier_config = ctx.config.clone();
+        tier_config.autounmask_use = tier;
+        for cp in params.autounmask_use_config.keys() {
+            refresh_entry_use_display(&mut pass.entries, &ctx.repos, ctx.root, cp, &tier_config);
+        }
+    }
+
+    // Residual installed-instance slot conflicts for reverse-dep pins
+    // dropped as jointly unsatisfiable with the hard requirements
+    // (see the feed above and `build_residual_slot_conflicts`): the
+    // merge proceeds with the hard-required version, and the broken
+    // installed consumers are reported against the installed
+    // instance -- real's nomerge-node collision report. Appended
+    // after every merge-vs-merge record, so those keep their
+    // long-standing order.
+    pass.slot_conflicts.extend(build_residual_slot_conflicts(
+        &ctx.repos,
+        config,
+        ctx.root,
+        &pass.entries,
+        &pass.slot_pullers,
+        &params.dropped_pins,
+    ));
+
+    // Masked-dependency chains are walked out of the final entries
+    // (`required_by` is only complete post-pass); the atom+masked
+    // data was recorded at each `NoVisibleCandidate` push above.
+    for rep in &mut pass.masked_deps {
+        rep.chain = masked_dep_chain(
+            &pass.entries,
+            &rep.category,
+            &rep.package,
+            ctx.atoms,
+            ctx.root,
+        );
+    }
+
+    // Backlog #19 Slice 3: classify the settled graph the way real's
+    // abandon sites would have (see `abort_outcome`).
+    let outcome = abort_outcome(
+        &pass.entries,
+        &pass.masked_deps,
+        &circular_deps,
+        &cycle_display,
+        &pass.nvc_dep_atoms,
+    );
+
+    GraphResult {
+        entries: pass.entries,
+        outcome,
+        slot_conflicts: pass.slot_conflicts,
+        changed_deps_report: pass.changed_deps_report_entries,
+        buildpkgonly_deps_unsatisfied,
+        pprovided_atoms: pass.pprovided_atoms,
+        autounmask_keyword_changes: pass.autounmask_keyword_changes,
+        autounmask_use_changes: pass.autounmask_use_changes,
+        autounmask_license_changes: pass.autounmask_license_changes,
+        autounmask_mask_changes: pass.autounmask_mask_changes,
+        abi_rebuilds,
+        circular_deps,
+        masked_deps: pass.masked_deps,
+        large_cycle_count,
+        cycle_display,
+    }
+}
+
+fn backtracking_resolve(req: &ResolveRequest) -> Result<GraphResult, Error> {
+    // Phase C2 (023): real `_backtrack_depgraph` -- pop a node, run one
+    // pass, settle or feed the outcome back, and when the search is
+    // exhausted re-run with the deepest terminal (config-only) params.
+    // `--backtrack=0` explores no feedback at all (real's
+    // `_allow_backtracking` gate): the root pass settles as-is.
+    let ctx = ResolveCtx::new(req)?;
+    let mut bt = Backtracker::new(ctx.backtrack_max, BacktrackParams::initial(req));
+    let mut first_pass = true;
+    while let Some(params) = bt.get() {
+        let mut pass = run_pass(&ctx, &params, first_pass)?;
+        first_pass = false;
+        // The per-pass config view: the accumulator's autounmask-use
+        // changes layered on as the top USE tier (see `Config::
+        // autounmask_use`). Cloned (not borrowed) out of the node params
+        // so the decision/assembly calls below can borrow alongside it;
+        // the clone only allocates on autounmask-growth passes.
+        let config_owned: Option<portage_profile::Config> = params.backtrack_config.clone();
+        let config: &portage_profile::Config = config_owned.as_ref().unwrap_or(ctx.config);
+        match collect_feedback(&ctx, &params, &mut pass, config) {
+            PassDecision::Settle { params } => {
+                return Ok(assemble_result(&ctx, &params, pass, config));
+            }
+            PassDecision::DeadEnd { params } => {
+                // Real's abandoned `_create_graph` attempt: the node is
+                // consumed, but it keeps the pass's merged accumulators
+                // so a best-run re-pass reports the same USE changes and
+                // dropped pins the abandoned pass saw. The search itself
+                // continues elsewhere; the report comes from the best
+                // run below.
+                bt.adopt_current(*params);
+            }
+            PassDecision::Feedback(kind) => {
+                if ctx.backtrack_max == 0 {
+                    // No search: report the root pass with its merged
+                    // working copy, exactly like the old single pass.
+                    let grown: BacktrackParams = match kind {
+                        BacktrackFeedback::Config { params } => *params,
+                        BacktrackFeedback::SlotConflict { base, .. } => *base,
+                        BacktrackFeedback::MissingDep { base, .. } => *base,
+                    };
+                    return Ok(assemble_result(&ctx, &grown, pass, config));
+                }
+                bt.feedback(kind);
+            }
+        }
+    }
+    // Exhausted without settling: the best run (deepest terminal node)
+    // is reported, never a masked-by-backtracking graph unless nothing
+    // better exists (real `get_best_run`).
+    let best = bt.get_best_run();
+    let pass = run_pass(&ctx, &best, false)?;
+    let config_owned: Option<portage_profile::Config> = best.backtrack_config.clone();
+    let config: &portage_profile::Config = config_owned.as_ref().unwrap_or(ctx.config);
+    Ok(assemble_result(&ctx, &best, pass, config))
 }
 
 /// Historical entry point, kept at its original 44-argument signature so
@@ -17801,13 +18700,19 @@ pub fn resolve_pretend_graph(
     // "Intended only for debugging purposes" per the real `--help`.
     ignore_built_slot_operator_deps: bool,
     // `--backtrack=COUNT` (real `main.py`, `type=int`, `valid_integers`).
-    // The maximum number of times the `'backtrack` retry loop below may
-    // re-run the whole graph walk after a solvable slot conflict. Real
-    // portage's default is 10 (the CLI layer passes 10 when the flag is
-    // absent); `--backtrack=0` disables backtracking entirely -- the
-    // `backtrack_iteration < backtrack_max` guard is false from the first
-    // pass, so a slot conflict is reported without any retry, exactly the
+    // The maximum number of mask steps the backtracking search below may
+    // take. Portuale's CLI default is 10 (flag absent); real's own
+    // default is `--backtrack=20` retries with
+    // `max_depth = max(1, (retries + 1) // 2)` (= 10 at default -- the
+    // same depth portuale budgets, coincidentally) plus a total-restart
+    // cap real enforces and portuale does not (dedup termination is
+    // proven without it; matching real's exact stopping rule is
+    // deferred, not silently assumed). `--backtrack=0` disables
+    // backtracking entirely -- no feedback node is explored, so a slot
+    // conflict is reported without any retry, exactly the
     // pre-backtracking behavior.
+    // Config-growth retries never counted against this budget (real's
+    // `_feedback_config` doesn't count toward `--backtrack=N` either).
     backtrack_max: u32,
     // `--reinstall-atoms ATOMS` (real `main.py`, `action: "append"` ->
     // `depgraph.py:363-365`: `WildcardPackageSet(atoms)`). An
@@ -21134,14 +22039,187 @@ mod tests {
     }
 
     #[test]
+    fn check_runtime_pkg_mask_discards_fully_masked_parent_sets() {
+        // Real `Backtracker._check_runtime_pkg_mask` (bug 375573),
+        // C3 oracle for the discard predicate itself (no fixture can
+        // reach it end to end yet -- needs a 3-pass parent-masking
+        // chain, see `docs/023-oracle.md`).
+        let entry = |neg: &str, reason: MaskReason| MaskEntry {
+            neg: neg.to_string(),
+            reason,
+        };
+        let slot =
+            |parents: Vec<((String, String, String), String)>| MaskReason::SlotConflict { parents };
+        let parent = |cp: (&str, &str, &str), atom: &str| {
+            (
+                (cp.0.to_string(), cp.1.to_string(), cp.2.to_string()),
+                atom.to_string(),
+            )
+        };
+        // A mask whose every parent is itself masked is discarded.
+        let mut masks: HashMap<(String, String), Vec<MaskEntry>> = HashMap::new();
+        masks.insert(
+            ("dev-libs".to_string(), "a".to_string()),
+            vec![entry(
+                "!=dev-libs/a-2.0",
+                slot(vec![parent(("dev-libs", "b", "2.0"), ">=dev-libs/b-2.0")]),
+            )],
+        );
+        masks.insert(
+            ("dev-libs".to_string(), "b".to_string()),
+            vec![entry(
+                "!=dev-libs/b-2.0",
+                slot(vec![parent(("dev-libs", "c", "1.0"), "dev-libs/c")]),
+            )],
+        );
+        assert!(!check_runtime_pkg_mask(&masks));
+        // One unmasked parent anywhere keeps the node.
+        masks.insert(
+            ("dev-libs".to_string(), "c".to_string()),
+            vec![entry(
+                "!=dev-libs/c-1.0",
+                slot(vec![parent(("dev-libs", "d", "1.0"), "dev-libs/d")]),
+            )],
+        );
+        // `c-1.0`'s parent `d` is unmasked, but `a`'s parent `b-2.0` is
+        // still fully masked -- still discarded.
+        assert!(!check_runtime_pkg_mask(&masks));
+        // Unmask `b-2.0` by dropping its entry: `a`'s parent is free.
+        masks.insert(("dev-libs".to_string(), "b".to_string()), vec![]);
+        assert!(check_runtime_pkg_mask(&masks));
+        // Masks with no parents (real's 692746 arm) never disqualify,
+        // and missing-dependency entries are skipped entirely.
+        let mut masks2: HashMap<(String, String), Vec<MaskEntry>> = HashMap::new();
+        masks2.insert(
+            ("dev-libs".to_string(), "e".to_string()),
+            vec![
+                entry("!=dev-libs/e-2.0", slot(vec![])),
+                MaskEntry {
+                    neg: "!=dev-libs/e-1.0".to_string(),
+                    reason: MaskReason::MissingDependency {
+                        parent: ("dev-libs".to_string(), "f".to_string()),
+                        atom: "dev-libs/f".to_string(),
+                    },
+                },
+            ],
+        );
+        assert!(check_runtime_pkg_mask(&masks2));
+    }
+
+    #[test]
+    fn slot_conflict_mask_choices_groups_missed_update_siblings() {
+        // `mgfc` conflict as the `mgfa` walk records it: 2.0 pulled by
+        // `mgfb-2`'s `=mgfc-2`, 1.0 by `mgfa`'s and `mgfb-1`'s `=mgfc-1`;
+        // `mgfc-3.0` visible in the repo but pulled by nothing. The 2.0
+        // choice groups 3.0 (both `=1.0` parents miss it); the 1.0 choice
+        // groups 3.0 too (`=2.0` misses it). Longest-conflict first, so
+        // the 2.0 choice sorts last and DFS explores it first.
+        let repos = find_repos(&fixtures_root()).expect("fixture repos resolve");
+        let config = test_config();
+        let puller = |pkg: &str, ver: &str, atom: &str| {
+            (
+                "dev-libs".to_string(),
+                pkg.to_string(),
+                ver.to_string(),
+                atom.to_string(),
+            )
+        };
+        let mut pullers: SlotPullers = HashMap::new();
+        pullers.insert(
+            ("dev-libs".to_string(), "mgfc".to_string()),
+            vec![
+                puller("mgfb", "2", "=dev-libs/mgfc-2"),
+                puller("mgfa", "1", "=dev-libs/mgfc-1"),
+                puller("mgfb", "1", "=dev-libs/mgfc-1"),
+            ],
+        );
+        let instance = |ver: &str| SlotConflictInstance {
+            version: ver.to_string(),
+            sub_slot: "0".to_string(),
+            repo_name: "testrepo".to_string(),
+            use_display: Vec::new(),
+            parents: Vec::new(),
+            installed: false,
+        };
+        let sc = SlotConflict {
+            category: "dev-libs".to_string(),
+            package: "mgfc".to_string(),
+            slot: "0".to_string(),
+            resolved_version: "2".to_string(),
+            conflicting_atom: "=dev-libs/mgfc-1".to_string(),
+            instances: vec![instance("2"), instance("1")],
+        };
+        let choices = slot_conflict_mask_choices(
+            &repos,
+            &[],
+            &BacktrackParams::default(),
+            &pullers,
+            &sc,
+            &config,
+        );
+        assert_eq!(choices.len(), 2);
+        // Ascending length: the 1.0 choice (one parent) first.
+        assert_eq!(
+            choices[0].target,
+            ("dev-libs".to_string(), "mgfc".to_string(), "1".to_string())
+        );
+        assert_eq!(choices[0].parents.len(), 1);
+        assert_eq!(choices[0].similar.len(), 1);
+        assert_eq!(
+            choices[0].similar[0].target,
+            (
+                "dev-libs".to_string(),
+                "mgfc".to_string(),
+                "3.0".to_string()
+            )
+        );
+        assert_eq!(choices[0].similar[0].parents.len(), 1);
+        assert_eq!(
+            choices[1].target,
+            ("dev-libs".to_string(), "mgfc".to_string(), "2".to_string())
+        );
+        assert_eq!(choices[1].parents.len(), 2);
+        assert_eq!(choices[1].similar.len(), 1);
+        assert_eq!(
+            choices[1].similar[0].target,
+            (
+                "dev-libs".to_string(),
+                "mgfc".to_string(),
+                "3.0".to_string()
+            )
+        );
+        assert_eq!(choices[1].similar[0].parents.len(), 2);
+        // Content, not just counts: the 2.0 choice is opposed by both
+        // `=1.0` pulls (neither matches 2.0), and so is its 3.0 sibling;
+        // the 1.0 choice and its sibling answer only `=2.0`.
+        fn atoms(ps: &[((String, String, String), String)]) -> Vec<String> {
+            let mut v: Vec<String> = ps.iter().map(|(_, a)| a.clone()).collect();
+            v.sort();
+            v
+        }
+        assert_eq!(
+            atoms(&choices[1].parents),
+            ["=dev-libs/mgfc-1", "=dev-libs/mgfc-1"]
+        );
+        assert_eq!(
+            atoms(&choices[1].similar[0].parents),
+            ["=dev-libs/mgfc-1", "=dev-libs/mgfc-1"]
+        );
+        assert_eq!(atoms(&choices[0].parents), ["=dev-libs/mgfc-2"]);
+        assert_eq!(atoms(&choices[0].similar[0].parents), ["=dev-libs/mgfc-2"]);
+    }
+
+    #[test]
     fn fixture_unsolvable_slot_conflict_is_resolved_by_masking_a_puller_version() {
         // dev-libs/btparent -> btconsumer (resolves -2.0, RDEPEND
         // >=bttarget-2.0) + btpin (RDEPEND <bttarget-2.0). No bttarget
         // version satisfies both, so slice 1's solvability check fails.
-        // Slice 3's runtime_pkg_mask trial hides bttarget-2.0 AND
-        // btconsumer-2.0 (which has a lower -1.0 with only a bare bttarget
-        // RDEPEND); the retry falls back to btconsumer-1.0 + bttarget-1.0
-        // and every constraint is met.
+        // C3's ranked choices mask bttarget-2.0 on one node; the retry
+        // finds btconsumer-2.0's dep unsatisfiable (mask-aware
+        // missing-dep probe) and masks its parent, falling back to
+        // btconsumer-1.0 + bttarget-1.0 with every constraint met --
+        // the same downgrade the old puller pre-masking produced, via
+        // real's feedback paths instead.
         let result = graph_result_real("dev-libs/btparent");
         assert_eq!(result.slot_conflicts, vec![]);
         let ver = |pkg: &str| {
