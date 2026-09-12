@@ -550,3 +550,37 @@ helper, the per-pass memo, the `--ignore-built-slot-operator-deps` gate,
 the `installed_dep_string` unit tests and the `builtbindpkg` fixture all
 land now.
 
+### F-A2 — `need_rebuild` fires under the append gate; the masked-ebuild reason and Python parity wait (2026-09-12)
+
+**Status:** trailer pinned (Rust) for two of the three reasons; #27 closes
+as partial with the residue named here.
+
+A4 landed the `slot_pullers` recording from `enqueue_dependencies` (both
+languages) -- the missing prerequisite identified in the 024 plan
+§0.3.2. With the A1 append gate on
+(`PORTUALE_DYNAMIC_DEPS_APPEND=1`), `kde-base/ark`'s vdb binding
+`app-arch/libarchive:0/0=` walks alongside the ebuild `:=`, the
+`--changed-slot` shape produces a real slot conflict, and the installed
+parent is now a recorded puller. The `#27` trailer then fires for both
+flag reasons, byte-identical Rust == Python on the trailer itself, and
+is pinned by
+`test_need_rebuild_trailer_fires_for_an_installed_parent` (with the
+gate-off negative control: no conflict, no trailer).
+
+What remains:
+
+1. **The `--usepkgonly` shape** exits 1 on this fixture (no binary
+   candidates), so its "stay quiet" arm is unpinned.
+2. **The "ebuild is masked or unavailable" reason** needs an installed
+   parent whose ebuild is present-but-masked *and reached as a
+   dependency* (a top-level masked atom aborts before the walk, and a
+   missing ebuild makes `enqueue_dependencies` return early today --
+   real's `_DynamicDepsNotApplicable` fallback is not ported there).
+3. **The Python mirror drifts** on the conflict/merge output for every
+   shape in this family (F-A1), so the new pin runs the Rust side against
+   the real-pinned trailer and xfails the Python comparison. Flipping the
+   append default (F-A1) is the precondition for both this reason family
+   and any Rust==Python pin.
+
+
+

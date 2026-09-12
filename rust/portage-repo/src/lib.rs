@@ -17249,6 +17249,7 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
                     &mut state.entries,
                     &mut state.root_deps_build_seen,
                     &mut state.installed_meta_memo,
+                    &mut state.slot_pullers,
                     &union_constraints,
                 );
             }
@@ -19804,6 +19805,13 @@ fn enqueue_dependencies(
     // Per-pass `installed_dep_string` memo (see its own doc comment):
     // keyed `(category, package, version, key)`, Effective results only.
     installed_meta_memo: &mut HashMap<(String, String, String, String), String>,
+    // A4 (#27): this installed package's own flattened non-blocker atoms
+    // become slot-conflict pullers, exactly like the main
+    // New/Upgrade/Reinstall loop's own flat-deps recording. Without it an
+    // installed parent's built `:S/SS=` atom never reaches
+    // `SlotConflict::parents`, so `slot_conflict_need_rebuild` can never
+    // see the parent real's `_parent_atoms` would show.
+    slot_pullers: &mut SlotPullers,
     // The `'backtrack` loop's accumulated per-`cat/pkg` `runtime_pkg_mask`
     // (`slot_constraints`), consulted by this walk's `||` branch
     // selection the same way the main New/Upgrade loop's is -- empty on
@@ -20009,6 +20017,25 @@ fn enqueue_dependencies(
         // package's deps, which are satisfied edges -- never a `hard`
         // build-time cycle contributor (real `_ignore_runtime` would drop
         // them anyway).
+        //
+        // A4 (#27): record the installed parent as a puller of this
+        // token before queueing it -- the main New/Upgrade/Reinstall loop
+        // does the same for its own flat deps; without this an installed
+        // parent's built `:S/SS=` atom never reaches
+        // `SlotConflict::parents` and the `need_rebuild` scan stays
+        // dormant. `tok` names a non-blocker `cat/pkg` here (blockers
+        // `continue`d above).
+        if let Some(dep_atom) = portage_dep::parse_atom(&tok) {
+            slot_pullers
+                .entry((dep_atom.category.clone(), dep_atom.package.clone()))
+                .or_default()
+                .push((
+                    owner_key.0.clone(),
+                    owner_key.1.clone(),
+                    owner_version.clone(),
+                    tok.clone(),
+                ));
+        }
         queue.push_back(QueueItem {
             atom: tok,
             depth: child_depth,

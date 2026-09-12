@@ -1032,7 +1032,7 @@ fn add_installed_dependency_closure(
             true,
         )
         .into_iter()
-        .filter(|e| layer == crate::InstalledMetaLayer::Raw || !is_injected_libc(&e.atom))
+        .filter(|e| layer != crate::InstalledMetaLayer::Raw || !is_injected_libc(&e.atom))
         .collect()
     };
 

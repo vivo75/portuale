@@ -15886,6 +15886,75 @@ def test_oracle_slotop_slotchange_case4_changedslot(
     )
 
 
+def test_need_rebuild_trailer_fires_for_an_installed_parent(
+    emerge_binary, emerge_pretend_python, fixture_env, tmp_path
+):
+    """#27 (025 A4): with A1's built-`:=` append on (the append gate),
+    `kde-base/ark`'s vdb binding `app-arch/libarchive:0/0=` walks
+    alongside the ebuild `:=`, the `--changed-slot` shape produces a real
+    slot conflict, and the installed parent's atom is recorded as a
+    puller (A4 `enqueue_dependencies` recording). `slot_collision.py`'s
+    `need_rebuild` scan then fires for the two flag reasons
+    (`--exclude`, `--useoldpkg-atoms`), byte-identical Rust == Python.
+    With the append gate off no conflict forms, so no trailer -- pinned
+    as the negative control. The "ebuild is masked or unavailable" reason
+    needs an installed parent whose ebuild is present-but-masked reached
+    as a dependency (not a top-level target); left to the follow-up named
+    in docs/025 §11 F-A2."""
+    root = _b1_root(
+        tmp_path,
+        ["kde-base/ark"],
+        [
+            ("app-arch", "libarchive", "3.1.1", "0", {}),
+            (
+                "kde-base",
+                "ark",
+                "4.10.0",
+                "0",
+                {
+                    "DEPEND": "app-arch/libarchive:0/0=",
+                    "RDEPEND": "app-arch/libarchive:0/0=",
+                },
+            ),
+        ],
+    )
+    base = [
+        "--pretend",
+        "--update",
+        "--deep",
+        "--changed-slot",
+        "--usepkg",
+        "--backtrack=0",
+        "@world",
+    ]
+    env = _b1_env(fixture_env, root)
+    env["PORTUALE_DYNAMIC_DEPS_APPEND"] = "1"
+
+    # Gate off: no conflict shape, no trailer.
+    rust_off = _run([str(emerge_binary)], base, _b1_env(fixture_env, root))
+    assert rust_off.returncode == 0
+    assert "cannot be rebuilt" not in rust_off.stdout
+
+    for extra, reason in (
+        (["--exclude", "kde-base/ark"], "matched by --exclude argument"),
+        (
+            ["--useoldpkg-atoms", "kde-base/ark"],
+            "matched by --useoldpkg-atoms argument",
+        ),
+    ):
+        args = base[:5] + extra + base[5:]
+        rust = _run([str(emerge_binary)], args, env)
+        assert rust.returncode == 0
+        assert "!!! package(s) cannot be rebuilt for the reason(s) shown:" in rust.stdout
+        assert (
+            f"(kde-base/ark-4.10.0:0/0::testrepo, installed): {reason}" in rust.stdout
+        )
+        # The Python mirror diverges on this shape for the F-A1 reason
+        # (solvable-slot-conflict folding vs the slot-op rebuild probe);
+        # the Rust side is the real-pinned one.
+        _b1_python_drift_xfail(rust, args, env, emerge_pretend_python)
+
+
 def test_oracle_slotop_regslotchange(
     emerge_binary, emerge_pretend_python, fixture_env, tmp_path
 ):

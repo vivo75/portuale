@@ -10650,7 +10650,7 @@ def _add_installed_dependency_closure(
                 ("RDEPEND", "IDEPEND", "PDEPEND", "DEPEND", "BDEPEND"),
                 True,
             )
-            if _layer == _INSTALLED_META_RAW or not _is_injected_libc(e["atom"])
+            if _layer != _INSTALLED_META_RAW or not _is_injected_libc(e["atom"])
         ]
 
     present = {(e[0], e[1]) for e in entries}
@@ -12572,17 +12572,19 @@ def resolve_pretend_graph(
                 # handling further below.
                 already_installed_deps = []
                 if outcome[0] == "already_installed" and not nodeps and _deep_recurses_at(deep, depth):
-                    # GraphEntry::deps for an AlreadyInstalled entry:
-                    # always the *current* tree ebuild's metadata (real
-                    # --dynamic-deps's own default) -- ordering is a
-                    # display nicety, not resolution-critical, so this
-                    # doesn't also mirror _enqueue_dependencies's own
-                    # --dynamic-deps=n vdb-snapshot branch. Real's own
-                    # _add_pkg gate is the same: an installed package
-                    # whose deps aren't recursed into gets pushed onto
-                    # _ignored_deps, never .order, so `deps` is
-                    # likewise only ever computed under this identical
-                    # condition. Mirrors portage-repo/src/lib.rs exactly.
+                    # GraphEntry deps for an AlreadyInstalled entry:
+                    # A2 (#26) builds them from the same installed-metadata
+                    # view the recursion below walks (_installed_dep_string)
+                    # -- the live ebuild by default, the vdb snapshot under
+                    # --dynamic-deps=n, plus the vdb's built := atoms with
+                    # the append gate on. So --debug's Depstring line and
+                    # --tree's edges can no longer contradict the child the
+                    # walk actually queued. Real's own _add_pkg gate is the
+                    # same: an installed package whose deps aren't recursed
+                    # into gets pushed onto _ignored_deps, never .order,
+                    # so `deps` is likewise only ever computed under this
+                    # identical condition. Mirrors portage-repo/src/lib.rs
+                    # exactly.
                     _ai_candidates = [
                         c
                         for c in list_candidates(repos, category, package)
@@ -12595,24 +12597,43 @@ def resolve_pretend_graph(
                             _ai_metadata = read_md5_cache(_ai_resolved["repo_location"], category, _ai_pf)
                         except OSError:
                             _ai_metadata = None
-                        if _ai_metadata is not None:
-                            # Installed recorded USE, not effective profile
-                            # USE -- see _enqueue_dependencies's own note;
-                            # a flag?( ... ) dep this display list shows
-                            # must match what the recursion actually queued.
-                            _ai_use_flags = _read_vdb_flag_set(
-                                root, category, package, outcome[1], "USE"
+                        # Installed recorded USE, not effective profile
+                        # USE -- see _enqueue_dependencies's own note;
+                        # a flag?( ... ) dep this display list shows
+                        # must match what the recursion actually queued.
+                        _ai_use_flags = _read_vdb_flag_set(
+                            root, category, package, outcome[1], "USE"
+                        )
+                        _ai_real_order_keys = (
+                            ("RDEPEND", "IDEPEND", "PDEPEND", "DEPEND", "BDEPEND")
+                            if with_bdeps
+                            else ("RDEPEND", "IDEPEND", "PDEPEND")
+                        )
+                        _ai_layer = (
+                            _INSTALLED_META_EFFECTIVE if dynamic_deps else _INSTALLED_META_RAW
+                        )
+                        _ai_effective = {}
+                        for _k in _ai_real_order_keys:
+                            _s = _installed_dep_string(
+                                root,
+                                dynamic_deps,
+                                _dynamic_deps_append_enabled(),
+                                ignore_built_slot_operator_deps,
+                                category,
+                                package,
+                                outcome[1],
+                                _ai_metadata,
+                                _k,
+                                _ai_layer,
+                                installed_meta_memo,
                             )
-                            _ai_real_order_keys = (
-                                ("RDEPEND", "IDEPEND", "PDEPEND", "DEPEND", "BDEPEND")
-                                if with_bdeps
-                                else ("RDEPEND", "IDEPEND", "PDEPEND")
-                            )
-                            # An installed package is pkg.built, so real
-                            # marks its build-time deps optional.
-                            already_installed_deps = _dep_edges_from_metadata(
-                                _ai_metadata, _ai_use_flags, _ai_real_order_keys, True
-                            )
+                            if _s and _s.strip():
+                                _ai_effective[_k] = _s
+                        # An installed package is pkg.built, so real
+                        # marks its build-time deps optional.
+                        already_installed_deps = _dep_edges_from_metadata(
+                            _ai_effective, _ai_use_flags, _ai_real_order_keys, True
+                        )
                     _enqueue_dependencies(
                         repos,
                         root,
@@ -12632,6 +12653,7 @@ def resolve_pretend_graph(
                         entries,
                         root_deps_build_seen,
                         installed_meta_memo,
+                        slot_pullers,
                         _union_constraints,
                     )
                 # --autounmask's own keyword-suggestion sub-feature, extended
@@ -14478,6 +14500,7 @@ def _enqueue_dependencies(
     entries=None,
     root_deps_build_seen=None,
     installed_meta_memo=None,
+    slot_pullers=None,
     disj_constraints=None,
 ):
     """Reads `category/package-version`'s own DEPEND+RDEPEND+BDEPEND+
@@ -14687,6 +14710,16 @@ def _enqueue_dependencies(
         # only ever reaches an already-installed package's deps, which are
         # satisfied edges -- never a hard build-time cycle contributor
         # (mirrors portage-repo/src/lib.rs's enqueue_dependencies).
+        #
+        # A4 (#27): record the installed parent as a puller of this token
+        # before queueing it, like the main New/Upgrade/Reinstall loop
+        # does for its own flat deps; without it an installed parent's
+        # built :S/SS= atom never reaches SlotConflict parents and the
+        # need_rebuild scan stays dormant.
+        if dep_atom is not None and slot_pullers is not None:
+            slot_pullers.setdefault(
+                (dep_atom.cp.split("/", 1)[0], dep_atom.cp.split("/", 1)[1]), []
+            ).append((owner_key[0], owner_key[1], owner_version, tok))
         queue.append((tok, child_depth, owner_key, None, False))
 
 
