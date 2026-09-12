@@ -10616,6 +10616,15 @@ def _add_installed_dependency_closure(
                 live = None
         md = {}
         _memo = {}
+        # A2 follow-up: the closure only moves to the Effective view when
+        # the built-:= append is actually on; with the gate off (and under
+        # --dynamic-deps=n) stay on Raw, the pre-A2 scheduler graph. See
+        # merge_order.rs's vdb_edges.
+        _layer = (
+            _INSTALLED_META_EFFECTIVE
+            if (dynamic_deps and dynamic_deps_append)
+            else _INSTALLED_META_RAW
+        )
         for k in ("RDEPEND", "IDEPEND", "PDEPEND", "DEPEND", "BDEPEND"):
             s = _installed_dep_string(
                 root,
@@ -10627,7 +10636,7 @@ def _add_installed_dependency_closure(
                 ver,
                 live,
                 k,
-                _INSTALLED_META_EFFECTIVE if dynamic_deps else _INSTALLED_META_RAW,
+                _layer,
                 _memo,
             )
             if s and s.strip():
@@ -10641,7 +10650,7 @@ def _add_installed_dependency_closure(
                 ("RDEPEND", "IDEPEND", "PDEPEND", "DEPEND", "BDEPEND"),
                 True,
             )
-            if not dynamic_deps or not _is_injected_libc(e["atom"])
+            if _layer == _INSTALLED_META_RAW or not _is_injected_libc(e["atom"])
         ]
 
     present = {(e[0], e[1]) for e in entries}

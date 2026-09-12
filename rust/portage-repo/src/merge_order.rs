@@ -995,12 +995,18 @@ fn add_installed_dependency_closure(
         });
         let mut md: HashMap<String, String> = HashMap::new();
         let mut memo: HashMap<(String, String, String, String), String> = HashMap::new();
+        // A2 follow-up: the closure only moves to the Effective view when
+        // the built-:= append is actually on. With the gate off (and under
+        // `--dynamic-deps=n`), stay on Raw -- the pre-A2 scheduler graph
+        // (raw minus the injected libc) is closer to real's effective view
+        // than the ebuild alone, which would lose the vdb's built :S/SS=
+        // atoms until the append lands.
+        let layer = if dynamic_deps && dynamic_deps_append {
+            crate::InstalledMetaLayer::Effective
+        } else {
+            crate::InstalledMetaLayer::Raw
+        };
         for k in ["RDEPEND", "IDEPEND", "PDEPEND", "DEPEND", "BDEPEND"] {
-            let layer = if dynamic_deps {
-                crate::InstalledMetaLayer::Effective
-            } else {
-                crate::InstalledMetaLayer::Raw
-            };
             let s = crate::installed_dep_string(
                 root,
                 dynamic_deps,
@@ -1026,7 +1032,7 @@ fn add_installed_dependency_closure(
             true,
         )
         .into_iter()
-        .filter(|e| !dynamic_deps || !is_injected_libc(&e.atom))
+        .filter(|e| layer == crate::InstalledMetaLayer::Raw || !is_injected_libc(&e.atom))
         .collect()
     };
 
