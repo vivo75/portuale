@@ -555,3 +555,32 @@ Judgment calls surfaced (not defaulted):
   `_add_pkg_deps` 6033-6038, and the probe arm is not gated by either).
   Kept to avoid moving the pre-existing gated pins; no v1 oracle covers
   the combination.
+
+## S6 — L0 real-tree validation and triage (2026-09-12)
+
+Run `TEST/logs/l0-20260912T120635Z/` (branch @ S5 `69ed4f7` + the
+review follow-ups `a7d0ef1`, docs/comment-only), same pinned tree as the
+S0 archive (`gentoo` @ `11c58b7a`, `buildovl` @ `3b1df681`, `porttest` @
+`aef17684`, profile `default/linux/amd64/23.0/systemd`, portage
+`3.0.82.2`): **120 probes, 96 clean, parity 0.800**, `UNEXPLAINED: 46`
+-- byte-identical topline and `l0-report.json` to both the S0 archive
+(`l0-20260911T231643Z`, pre-S1) and S1's run
+(`l0-20260911T234323Z`).
+
+- `portuale/` raw outputs `diff -rq` clean vs both archives: stronger
+  than the stop condition, which allowed added `rR` rows under `-uD`
+  probes (S1) moving to real's position (S3). No probe in the corpus has
+  a stale `:=` consumer, so neither the scan, the probe nor the undo
+  fires there -- zero added rows, zero moved rows, zero regressions, and
+  zero findings to adjudicate (`known-divergences.yaml` stays empty; the
+  46 findings are the recorded clusters).
+- `real/` raw outputs differ only in the `Dependency resolution took`
+  timing line (every differing file checked); the merge-order timing
+  cluster is untouched.
+- No S3 rollback flag to remove: G0.2 was answered "unconditional".
+- L1 not run: `git diff 5d2e874..a7d0ef1 --stat` names only
+  `rust/portuale/src/pretend.rs` and `rust/portage-repo/src/lib.rs`, no
+  merge/unmerge/package/fetch/phase code.
+
+Finding log: `TEST/findings/l0.md` §"Slice run: backlog #24 S1–S5
+slot-operator rebuild (2026-09-12)".
