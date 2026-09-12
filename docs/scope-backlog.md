@@ -236,9 +236,9 @@ can't grow into these incrementally:
   multi-root graph (a `root` per dependency edge) stays a deliberate
   edge-by-edge approximation; a running-root entry's `PDEPEND` stays a
   target-`ROOT` concern (a permanent non-gap).
-- **Slot-operator rebuild v1 cuts — mostly closed 2026-09-12 (#24
-  S1–S4).** Investigated 2026-09-05: real's slot-operator machinery is a
-  *reconciliation* with an undo path
+- **Slot-operator rebuild v1 cuts — closed 2026-09-12 (#24 S1–S5), v2
+  carved out.** Investigated 2026-09-05: real's slot-operator machinery
+  is a *reconciliation* with an undo path
   (`_slot_operator_update_probe`/`_backtrack`/etc.,
   `depgraph.py:2400-3200`); portuale's `slot_operator_rebuild_entries`
   fixpoint had no undo path at all, so "single-pass" and "no
@@ -257,15 +257,24 @@ can't grow into these incrementally:
   the nine ordered rules + the graph-aware `:=` binder
   (`bind_slot_operator_deps`, real `_eval_deps` over `_graph_trees`),
   demoting via the `slot_operator_undone` latch (`slotundo-unnecessary`
-  MATCHes; a522084 `B-0` is kept by rule 8). **Still open:** bug
-  614390's `complete` case is a *selection* gap, not the undo (named
-  bare `socc` resolves before meta's `=socc-1` through the
+  MATCHes; a522084 `B-0` is kept by rule 8); S5
+  `_slot_change_probe` — the slot-move-without-revbump detector (bug
+  456208) schedules the installed child from the merge-bound parent's
+  unbuilt `:=`/`:S=` dep (`slotchange-1`/`regslotchange` MATCH), real's
+  `--changed-slot` rule 3 landed behaviour-neutrally, and two S2
+  expectations were corrected live (the flag half has no `r`/edge in
+  real; conflict-mass is the update probe, not this one). **Still
+  cut:** bug 614390's `complete` case is a *selection* gap, not the
+  undo (named bare `socc` resolves before meta's `=socc-1` through the
   already-installed fast path, which skips `resolved_slots`; real's
-  `_add_pkg` slot-parent check catches it — #36 overlap); S5
-  (`_slot_change_probe` + the `--changed-slot` rule-3 line); L0 triage
-  (S6); and the v2 probe family (#24b–#24e) + `IUSE_EFFECTIVE` in the
-  built-dep domain, which stays a named cut. `--changed-slot` itself
-  already ships standalone (`slot_changed`).
+  `_add_pkg` slot-parent check catches it — #36 overlap); the v2 probe
+  family `#24b`–`#24e` (update probe + `check_reverse_dependencies`,
+  `slot_operator_mask_built`, `prune_rebuilds`,
+  `_slot_conflict_backtrack_abi`) and `IUSE_EFFECTIVE` in the
+  built-dep domain. `--changed-slot` itself ships standalone
+  (`slot_changed`), and the unbuilt probe keeps the pre-existing
+  `--ignore-built-slot-operator-deps` / `--rebuild-if-new-slot=n` scan
+  gates (a documented narrowing vs real, no v1 oracle).
 
 - **DFS-partial abort path (#19) — Gate-0 decisions recorded 2026-09-11
   (Slice 1 oracle: `docs/abort-path-spec.md`, fixtures

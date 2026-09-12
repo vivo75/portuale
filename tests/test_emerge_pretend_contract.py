@@ -15648,14 +15648,6 @@ def test_oracle_slotop_complete(
     ]
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="bug 456208 needs real's in-walk `_slot_change_probe` "
-    "(`depgraph.py:2317-2359`): an unbuilt `:=` dep whose installed "
-    "child moved `(slot, sub-slot)` at the same cpv schedules the "
-    "child. No post-walk scan can see it (nothing merges yet). "
-    "Flips in S5.",
-)
 def test_oracle_slotop_slotchange_case1(
     emerge_binary, emerge_pretend_python, fixture_env, tmp_path
 ):
@@ -15664,7 +15656,19 @@ def test_oracle_slotop_slotchange_case1(
     ad-hoc ROOT so `--usepkg` falls back to ebuilds -- the binary half
     is v2 `#24c`): installed `libarchive-3.1.1` (`SLOT 0`, tree `0/13`)
     + `ark-4.10.0` (`libarchive:0/0=`); world `[ark]`. Real merges
-    `[libarchive-3.1.1, ark-4.10.0]`."""
+    `[libarchive-3.1.1, ark-4.10.0]`.
+
+    MATCHES since #24 S5: real's `_slot_change_probe`
+    (`depgraph.py:2317-2359`) fires on the merge-bound `ark`'s *unbuilt*
+    `app-arch/libarchive:=` dep (its child resolved to the installed
+    libarchive) because the tree ebuild at the child's own cpv moved
+    `SLOT` `0` -> `0/13` without a revbump (bug 456208) -- the
+    installed child is scheduled. The provider row carries the `r`
+    marker real's auto-set `force_reinstall` gives it (`slot {0/0 ->
+    0/13}` oldbest bracket), `ark` is a plain `R`; real's
+    `_compute_abi_rebuild_info` yields no `_forced_rebuilds` pair for
+    this direction (the scheduled package is the *child*), so there is
+    no "causing rebuilds" block."""
     root = _b1_root(
         tmp_path,
         ["kde-base/ark"],
@@ -15688,10 +15692,11 @@ def test_oracle_slotop_slotchange_case1(
         emerge_binary,
         emerge_pretend_python,
     )
-    assert _slotop_cpv(rust.stdout) == [
-        ("app-arch/libarchive", "3.1.1"),
-        ("kde-base/ark", "4.10.0"),
+    assert _b1_merges(rust.stdout) == [
+        "[ebuild  rR    ] app-arch/libarchive-3.1.1 [3.1.1]",
+        "[ebuild   R    ] kde-base/ark-4.10.0 ",
     ]
+    assert "causing rebuilds" not in rust.stdout
 
 
 def test_oracle_slotop_slotchange_case2_noreplace(
@@ -15775,21 +15780,21 @@ def test_oracle_slotop_slotchange_case4_changedslot(
     assert "The following packages are causing rebuilds:" in rust.stdout
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="Same `_slot_change_probe` gap as bug 456208 (S5), on the "
-    "main slot: installed `soslotlib-1.52.0` (`0/1.52`, tree `0`) is "
-    "never pulled at the available slot. Renamed: upstream "
-    "`dev-libs/boost` is taken by the 023 oracle with other SLOTs.",
-)
 def test_oracle_slotop_regslotchange(
     emerge_binary, emerge_pretend_python, fixture_env, tmp_path
 ):
     """Upstream `test_regular_slot_change_without_revbump.py`, ebuild
     variant (`soslotconsumer --oneshot --usepkg`): real pulls the
     available slot (`soslotlib-1.52.0` at `SLOT 0`) and merges
-    `[soslotlib-1.52.0, soslotconsumer-4.0.0.2]`. The binary half
-    (binpkg at `1.52` rejected) is v2 `#24c`."""
+    `[soslotlib-1.52.0, soslotconsumer-4.0.0.2]`. The tree ebuild at the
+    installed cpv moved the *main* slot (`0/1.52` -> `0/0`), which the
+    S3 post-walk scan cannot see (`a_slot == n_slot` fails); real's
+    `_slot_change_probe` has no such restriction, and since #24 S5
+    neither does portuale. `soslotlib` is the scheduled child, so the
+    `r` marker sits on it and real's `_forced_rebuilds` stays empty --
+    no "causing rebuilds" block. The binary half (binpkg at `1.52`
+    rejected) is v2 `#24c`. Renamed: upstream `dev-libs/boost` is taken
+    by the 023 oracle with other SLOTs."""
     root = _b1_root(
         tmp_path,
         [],
@@ -15801,10 +15806,11 @@ def test_oracle_slotop_regslotchange(
         emerge_binary,
         emerge_pretend_python,
     )
-    assert _slotop_cpv(rust.stdout) == [
-        ("dev-libs/soslotlib", "1.52.0"),
-        ("dev-libs/soslotconsumer", "4.0.0.2"),
+    assert _b1_merges(rust.stdout) == [
+        "[ebuild  rR    ] dev-libs/soslotlib-1.52.0 [1.52.0]",
+        "[ebuild  N     ] dev-libs/soslotconsumer-4.0.0.2 ",
     ]
+    assert "causing rebuilds" not in rust.stdout
 
 
 def test_oracle_slotop_revdeps(
@@ -16054,10 +16060,15 @@ def test_oracle_slotop_conflict_rebuild(
 
 @pytest.mark.xfail(
     strict=True,
-    reason="bug 486580 needs S5's `_slot_change_probe` (main-slot move "
-    "`1 -> 2/2` is not a sub-slot shift, so the scan never fires) plus "
-    "S3's walked node; the leaves are also outside the CLI seeds (named "
-    "atoms are not seeded -- S3 must seed the walk's own graph).",
+    reason="bug 486580 needs the v2 `#24b` `_slot_operator_update_probe` "
+    "family: the leaves' recorded built `somassb:1/1=` deps must be "
+    "re-resolved against the graph's `somassb:2/2`. Verified live "
+    "against the vendored portage (ResolverPlayground, "
+    "`_slot_operator_update_backtrack` fires per leaf); S5's "
+    "`_slot_change_probe` only handles *unbuilt* `:=`/`:S=` deps from a "
+    "merge-bound parent, so it does not fire here. The leaves are also "
+    "outside the CLI seeds (named atoms are not seeded -- S3 seeds the "
+    "walk's own graph).",
 )
 def test_oracle_slotop_conflict_mass_rebuild(
     emerge_binary, emerge_pretend_python, fixture_env, tmp_path
@@ -16435,8 +16446,9 @@ def test_oracle_slotop_undo_changed_slot_guard(
     installed `0/1`). Real keeps the rebuild via rule 6 (installed vs
     new slot differ) -- S4's undo must NOT over-demote a slot-moved
     consumer. MATCHES real today (kept); guard for S4. (The flag half
-    is `test_oracle_slotop_undo_changed_slot_flag`; rule 3 subsumes
-    rule 6 for ebuilds, so the flag flips only display -- S5.)"""
+    is `test_oracle_slotop_undo_changed_slot_flag`; since S5 landed
+    real's rule 3, both halves keep this output -- rule 3 is
+    behaviour-neutral for ebuilds, see that test's docstring.)"""
     root = _b1_root(
         tmp_path,
         ["dev-libs/souneedslot", "dev-libs/souprov"],
@@ -16463,20 +16475,24 @@ def test_oracle_slotop_undo_changed_slot_guard(
     assert "The following packages are causing rebuilds:" in rust.stdout
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="S5 rule 3 (`_changed_slot`, `depgraph.py:3898-3899`): with "
-    "`--changed-slot` the slot-moved consumer stays in the replace set "
-    "(`r` + edge). Today the standalone `slot_changed` trigger "
-    "reinstalls it outside the scan (`R`, no edge).",
-)
 def test_oracle_slotop_undo_changed_slot_flag(
     emerge_binary, emerge_pretend_python, fixture_env, tmp_path
 ):
     """Synthetic `slotundo-changed-slot` (flag half): same shape as
     `test_oracle_slotop_undo_changed_slot_guard` with `--changed-slot`.
-    Real keeps the rebuild *in the replace set* (`r`-tagged provider +
-    `rR` consumer + edge)."""
+
+    S2 expected a `r`-tagged provider, `rR` consumer and edge here (rule
+    3 keeping the consumer in the replace set); verified live against
+    the vendored portage that this is *not* real's behaviour: with the
+    flag the consumer's own slot move makes it a plain reinstall
+    (`_changed_slot` selection), the S3 scan never puts it in the
+    auto-set, `_eliminate_rebuilds` does not run, and
+    `_compute_abi_rebuild_info` yields an empty `_forced_rebuilds` --
+    no `r` marker, no "causing rebuilds" block. Portuale's output
+    (standalone `slot_changed` trigger + `-u` provider upgrade) already
+    matched; S5 pinned it and landed real's rule 3 (`depgraph.py:
+    3898-3899`) in its position, behaviour-neutral for ebuilds (rule 6
+    is the equivalent -- see `docs/024-oracle.md`'s S2 correction)."""
     root = _b1_root(
         tmp_path,
         ["dev-libs/souneedslot", "dev-libs/souprov"],
@@ -16498,9 +16514,10 @@ def test_oracle_slotop_undo_changed_slot_flag(
         emerge_pretend_python,
     )
     merges = _b1_merges(rust.stdout)
-    assert "[ebuild  r  U  ] dev-libs/souprov-2.0 [1.0]" in merges
-    assert "[ebuild  rR    ] dev-libs/souneedslot-1.0 [1.0]" in merges
-    assert "The following packages are causing rebuilds:" in rust.stdout
+    assert "[ebuild     U  ] dev-libs/souprov-2.0 [1.0]" in merges
+    assert "[ebuild   R    ] dev-libs/souneedslot-1.0 [1.0]" in merges
+    assert "causing rebuilds" not in rust.stdout
+    assert not [ln for ln in merges if "[ebuild  r" in ln]
 
 
 def test_oracle_slotop_undo_rebind(

@@ -127,9 +127,8 @@ with an existing fixture package carrying different deps.
 | rebuild-1 | `test_slot_operator_rebuild.py` case 1 (`emerge A`, `--dynamic-deps=n`; bug 522652) | order + `\|\|`-wrapped `:=` | **MATCH (S3)** -- `[A-2, B-0, C-0]` | done |
 | rebuild-2 | same, case 2 (`--usepkg`, binary `E-1` at `F:0/1`) | `slot_operator_mask_built` (bug 652938) | NOT TRANSLATABLE (needs a binpkg with built `F:0/1=` metadata + `--usepkg` mask-built path; no ad-hoc binpkg machinery in `_b1_root` tests) | v2 `#24c` |
 | unsat-439694 | `test_slot_operator_unsatisfied.py` | in-walk unsatisfied arm | case 2 MATCH, case 1 strict-xfail (S1) | case 1 → v2 `#24f` (new item, S1 finding) |
-| slotchange-1/4 | `test_slot_change_without_revbump.py` cases 1 (`--oneshot`, ebuild variant), 4 (`-uD --changed-slot`) | `_slot_change_probe` + `--changed-slot` (bug 456208) | case 1 strict-xfail; case 4 MATCH (sets+markers via standalone trigger; S5 owns routing); case 2 (`--noreplace` → `[]`) MATCH | cases 1+4 MATCH after S5 (ebuild variant; binary halves → v2 `#24c`) |
-| regslotchange | `test_regular_slot_change_without_revbump.py` (`soslotconsumer --oneshot --usepkg`) | same, main slot (renamed: `dev-libs/boost` taken by 023 oracle) | strict-xfail | MATCH after S5 (ebuild variant) |
-| complete | `test_slot_operator_complete_graph.py` (bug 614390; `=socmeta-2 socc --backtrack 9`) | complete mode + cascade + undo | strict-xfail (named `socc` out-selects meta's `=socc-1` pin -- #36 overlap) | **S4 acceptance** |
+| slotchange-1/4 | `test_slot_change_without_revbump.py` cases 1 (`--oneshot`, ebuild variant), 4 (`-uD --changed-slot`) | `_slot_change_probe` + `--changed-slot` (bug 456208) | case 1 strict-xfail → **MATCH (S5)**; case 4 MATCH (sets+markers via standalone trigger; S5 owns routing); case 2 (`--noreplace` → `[]`) MATCH | cases 1+4 MATCH after S5 (ebuild variant; binary halves → v2 `#24c`) |
+| regslotchange | `test_regular_slot_change_without_revbump.py` (`soslotconsumer --oneshot --usepkg`) | same, main slot (renamed: `dev-libs/boost` taken by 023 oracle) | strict-xfail → **MATCH (S5)** | MATCH after S5 (ebuild variant) || complete | `test_slot_operator_complete_graph.py` (bug 614390; `=socmeta-2 socc --backtrack 9`) | complete mode + cascade + undo | strict-xfail (named `socc` out-selects meta's `=socc-1` pin -- #36 overlap) | **S4 acceptance** |
 | revdeps | `test_slot_operator_reverse_deps.py` (bug 584626; + ignore-built variant) | selection + scan (no probe needed on this shape) | MATCH both | done (probe family stays v2 `#24b`) |
 | revdeps-libgit2 | same file (bug 717140, `-uD` → `[]`) | must-not-downgrade guard | MATCH (guard) | stays `[]` through v1 |
 | parentdown | `test_slot_operator_update_probe_parent_downgrade.py` (bug 528610, `-uD` → `[]`) | probe must NOT fire | MATCH (guard) | stays `[]` through v1 |
@@ -141,11 +140,11 @@ with an existing fixture package carrying different deps.
 | bdeps | `test_slot_operator_bdeps.py` (`-uD`, + `--usepkg --with-bdeps=y` ebuild-fallback) | `BDEPEND` `:=` rebuild | MATCH both | done (binary-rejection half → v2 `#24c`) |
 | required_use | `test_slot_operator_required_use.py` (bug 523048, → fail) | REQUIRED_USE-gated rebuild | **MATCH (S3)** -- the walked node runs the ordinary `REQUIRED_USE` check the synthesiser bypassed | done (no v2 item needed) |
 | conflict-rebuild | `test_slot_conflict_rebuild.py` (bug 439688, `-uD --backtrack 4` → `[D-2, E-0]`) | conflict holds `A`, `D` shifts | MATCH (bug 922038 falls out) | done |
-| conflict-mass | same file (bug 486580, 5 leaves) | `_slot_change_probe` (main-slot move, renamed `somass*`) + named-atom seeding gap (leaves outside CLI seeds) | strict-xfail | MATCH after S5+S3 (probe + walked node; seeds must cover the walk) |
+| conflict-mass | same file (bug 486580, 5 leaves) | ~~`_slot_change_probe` (main-slot move, renamed `somass*`)~~ **`_slot_operator_update_probe` (v2 `#24b`)** + named-atom seeding gap (leaves outside CLI seeds) | strict-xfail | **stays strict-xfail** (v2 `#24b`: verified live, the leaves' *built* `somassb:1/1=` deps need the update probe, not `_slot_change_probe`; S5 does not fire) |
 | missed_update-Qt / blocker | `test_missed_update.py`, `testBacktrackInconsistentForcedRebuildWithBlocker` | — | OUT (upstream `xfail`; blocker + rebuild) | out of scope |
 | slotundo-cascade | synthetic (a522084 + consumer tree-`SLOT` bump) | tree-`SLOT` cascade | MATCH | guards `casc*` for S3 |
 | slotundo-unnecessary | synthetic (USE-disabled `soflag? ( := )` dep) | rule 8 USE-reduction | strict-xfail (scan reads raw vdb) | flips in S4 |
-| slotundo-changed-slot | synthetic (consumer same-version SLOT move) | rule 6 (no flag) / rule 3 (flag) | no-flag MATCH (guard vs over-undo); flag strict-xfail (loses `r` + edge via standalone trigger) | S4 keeps guard; flag display flips in S5 |
+| slotundo-changed-slot | synthetic (consumer same-version SLOT move) | rule 6 (no flag) / rule 3 (flag) | no-flag MATCH (guard vs over-undo); flag **MATCH (S5)** after correction -- real runs no undo and shows no `r`/edge here, see the S2 correction below | S4 keeps guard; flag display was mis-expected, S5 pins real's actual shape |
 | slotundo-rebind | synthetic (consumer gains `sounewdep`) | walked node edges | **MATCH (S3)** -- one walked `reinstall` row, no `already_installed` duplicate | done |
 
 S2 corrections to the plan (surfaced, not defaulted):
@@ -167,10 +166,23 @@ S2 corrections to the plan (surfaced, not defaulted):
   `_eliminate_rebuilds` 3859-4000 + `_changed_slot` 3247-3252 +
   `_equiv_ebuild` 7390): for an ebuild consumer, rule-3-trigger (flag +
   same-cpv slot move) ⟺ rule-6-keep, so `--changed-slot` never flips an
-  ebuild shape by itself -- the S5-observable on
-  `slotundo-changed-slot --changed-slot` is display-level (`r` + edge
-  restored via the replace set). The flag's demote-vs-keep flip needs
-  binaries (v2).
+  ebuild shape by itself. **Corrected in S5**: the follow-on claim that
+  the flag's observable is `r` + edge ("restored via the replace set")
+  was wrong -- verified live against the vendored portage that with the
+  flag real's `_eliminate_rebuilds` does not even run on the
+  `slotundo-changed-slot` shape (`_forced_rebuilds` empty: the
+  consumer's own slot move makes it a plain reinstall, so the S3 scan
+  never puts it in the auto-set, no `r` marker, no block). Portuale's
+  pre-S5 output already matched; S5 pinned it. The flag's demote-vs-keep
+  flip still needs binaries (v2 `#24c`).
+- **conflict-mass is the update-probe family, not S5's**
+  (S5, verified live with `ResolverPlayground` on the upstream
+  `testSlotConflictMassRebuild` shape): every leaf fires
+  `_slot_operator_update_backtrack` against its recorded *built*
+  `somassb:1/1=` dep -- `_slot_change_probe` only ever sees *unbuilt*
+  `:=`/`:S=` deps, and the S5 probe does not fire on this shape. The
+  mass case therefore stays strict-xfail under its original v2 owner
+  (`#24b`), not "MATCH after S5+S3".
 - **Rebuild-2, exclusive, unsolved, slotchange/regslotchange binary
   halves**: labelled per the stop condition (not approximated).
 
@@ -451,3 +463,95 @@ and `slot_operator_eliminate_rebuilds_applies_the_eight_rules_in_order`
 `fixtures/repo/dev-libs/souprov` pair. Contract test
 `test_oracle_slotop_undo_unnecessary` flipped xfail → pinned exact
 output (`--json` `abi_rebuilds: []` included).
+
+## S5 — `_slot_change_probe` + `--changed-slot` contact (2026-09-12)
+
+The last detector of the family: real `_slot_change_probe`
+(`depgraph.py:2317-2359`), the first arm of
+`_slot_operator_trigger_reinstalls` (3103-3107). For an **unbuilt**
+slot-operator dep (`:=` / `:S=`, real's `not (atom.soname or
+atom.slot_operator_built)`) whose parent is an ebuild scheduled for
+merge and whose child the graph resolved to an installed instance, the
+tree ebuild at the child's own cpv may carry a different
+`(slot, sub_slot)` than the vdb record -- a slot move without a revbump
+(bug 456208). Real sees the dep through `_slot_operator_deps`
+(registered when the parent's dep was walked); portuale re-reads the
+parent entry's tree metadata and use-reduces it against the node's
+enabled USE (`flat_dep_atoms`), then requires the pass to have resolved
+the child to the installed instance (`AlreadyInstalled`, real's
+`dep.child.built`), and calls the existing `slot_changed` for the
+tree-ebuild-at-cpv lookup. A hit joins the S3 replace set, exactly
+real's `_slot_change_backtrack` (2361-2399) writing
+`slot_operator_replace_installed` + `_need_restart`.
+
+Placement: `slot_operator_slot_change_probe` /
+`_slot_operator_slot_change_probe` (`rust/portage-repo/src/lib.rs`,
+`python/emerge_pretend_reference.py`), called from the tail of
+`slot_operator_rebuild_scan`. Deliberately **outside** the `reachable`
+gate: real's first trigger arm is not complete-mode gated, and the two
+new oracle cases (`--oneshot`, no sets at all) have an empty
+`slot_op_reachable` -- the vdb half of the scan stays gated exactly as
+before. The `collect_feedback` gates (`--backtrack=0`,
+`--ignore-built-slot-operator-deps`, `--rebuild-if-new-slot=n`) still
+gate the whole scan including the probe; that is a documented narrowing
+vs real (real gaps only the *update-probe* new-slot arm on
+`rebuild_if_new_slot`, at 3123) with no oracle in v1.
+
+`--changed-slot` (real 3898-3899) is rule 3 in
+`slot_operator_eliminate_rebuilds` now, in real's position between rule
+2 and rule 4. As the S2 correction says, it is behaviour-neutral for
+ebuilds (rule 6 keeps every consumer whose tree ebuild moved), so the
+observable S5 flip is the probe's, not the undo's.
+
+**Verdicts (live, `_b1_root`, Rust == Python byte-for-byte):**
+
+| case | before S5 | after S5 |
+|---|---|---|
+| slotchange-1 (bug 456208) | `[R] ark-4.10.0` only | `[rR] libarchive-3.1.1 [3.1.1]`, `[R] ark-4.10.0`, no block |
+| regslotchange | `[N] soslotconsumer` only | `[rR] soslotlib-1.52.0 [1.52.0]`, `[N] soslotconsumer-4.0.0.2`, no block |
+| slotchange-4 (`-uD --changed-slot @world`) | MATCH | unchanged (the child is the standalone `--changed-slot` reinstall, not `AlreadyInstalled` -- real's `dep.child.built` fails) |
+| slotundo-changed-slot (no flag / flag) | MATCH / xfail with the wrong `r`+edge expectation | both MATCH real: no flag keeps `[r U]`+`[rR]`+block; flag is a plain `[U]`+`[R]`, no block (real runs no undo there) |
+| a522084, rebuild-1, cascade, slotbind, bdeps, revdeps, parentdown, libgit2 guard, conflict-rebuild, runtime_pkg_mask, autounmask, required_use, undo-unnecessary, undo-rebind | -- | unchanged |
+| conflict-mass | strict-xfail | **strict-xfail** (v2 `#24b` -- now correctly attributed; S5's probe does not fire) |
+
+Pins moved:
+
+1. `test_oracle_slotop_slotchange_case1`, `test_oracle_slotop_regslotchange`
+   -- strict-xfail → passing, pinned to real's exact merge lines (the
+   scheduled child carries `r`, the parent does not, and real's
+   `_compute_abi_rebuild_info` yields no pair for the child direction,
+   so no "causing rebuilds" block).
+2. `test_oracle_slotop_undo_changed_slot_flag` -- strict-xfail → passing
+   with the *real-verified* expectation: `[ebuild U] souprov-2.0`,
+   `[ebuild R] souneedslot-1.0`, no `r`, no block. The S2 expectation of
+   `r`+edge was wrong (see the S2 correction above).
+3. `test_oracle_slotop_conflict_mass_rebuild` stays strict-xfail with a
+   corrected reason naming `_slot_operator_update_probe` (v2 `#24b`).
+
+Rust unit test: `slot_operator_slot_change_probe_schedules_a_moved_installed_child`
+-- the fixture `kde-base/ark` -> installed `app-arch/libarchive-3.1.1`
+shape (vdb `0`, tree `0/13`) schedules the child; a merge-bound child
+entry (the graph chose an upgrade), the `slot_operator_undone` latch,
+and a child whose tree ebuild did not move (`souprov`, tree `0/1` vs
+vdb `0/1`) all stay unscheduled. The undo-rules unit test gained its
+rule-3 assertions (positive: `souneedslot` kept with and without the
+flag; negative: `sounneed`'s rule-8 demotion stands with the flag on,
+because its tree ebuild did not move).
+
+Judgment calls surfaced (not defaulted):
+
+- **The S2 flag-half expectation was wrong, not portuale.** Verified
+  live with `ResolverPlayground`: with `--changed-slot`, real's
+  `_eliminate_rebuilds` never runs on `slotundo-changed-slot` and
+  `_compute_abi_rebuild_info` is empty; the consumer is rebuilt by the
+  standalone `_changed_slot` selection. Pinning the old `r`+edge
+  expectation would have been a synthetic divergence.
+- **conflict-mass re-attributed** to v2 `#24b` after the live trace
+  showed `_slot_operator_update_backtrack` firing per leaf; the plan's
+  "MATCH after S5+S3" cell is superseded.
+- **`--ignore-built-slot-operator-deps` / `--rebuild-if-new-slot=n`
+  still gate the unbuilt probe**, unlike real (real's
+  `ignore_built_slot_operator_deps` is a dep-string parse-time strip in
+  `_add_pkg_deps` 6033-6038, and the probe arm is not gated by either).
+  Kept to avoid moving the pre-existing gated pins; no v1 oracle covers
+  the combination.

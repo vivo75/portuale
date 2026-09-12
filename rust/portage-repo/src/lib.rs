@@ -11907,7 +11907,9 @@ type SlotOpRebuildScan = (BTreeSet<(String, String)>, Vec<(String, String)>);
 /// forward-installed-dep of a member of, the required sets: real
 /// `_complete_graph` 8677 starts from `_initial_arg_list` -- the CLI
 /// args -- and appends `@world`/`@selected`/`@system`). `reachable`
-/// empty (not complete mode) means no rebuilds at all.
+/// empty (not complete mode) means no rebuilds at all. #24 S5: the vdb
+/// half of this scan keeps that gate; the appended
+/// [`slot_operator_slot_change_probe`] half does *not* (real 3103-3107).
 ///
 /// `already` is the replace set as the current search node carries it.
 /// A cp in it is *not* skipped by the in-graph test (it is in the graph
@@ -11925,6 +11927,7 @@ type SlotOpRebuildScan = (BTreeSet<(String, String)>, Vec<(String, String)>);
 /// `slot_operator_mask_built` for non-installed binaries (v2 `#24c`).
 fn slot_operator_rebuild_scan(
     root: &Path,
+    repos: &[RepoConfig],
     entries: &[GraphEntry],
     reachable: &HashSet<(String, String)>,
     already: &BTreeSet<(String, String)>,
@@ -11955,55 +11958,177 @@ fn slot_operator_rebuild_scan(
             );
         }
     }
-    if new_slot.is_empty() || reachable.is_empty() {
-        return (already.clone(), Vec::new());
-    }
-
     let installed = all_installed_packages(root);
     let mut scheduled: BTreeSet<(String, String)> = already.clone();
     let mut abi_rebuilds: Vec<(String, String)> = Vec::new();
-    for pkg in &installed {
-        let cp = (pkg.category.clone(), pkg.package.clone());
-        if undone.contains(&cp)
-            || !reachable.contains(&cp)
-            || (in_graph.contains(&cp) && !already.contains(&cp))
-        {
-            continue;
+    // #24 S5: the rest of this function is the post-walk vdb scan, which
+    // stays behind the `reachable` gate (complete mode). The
+    // `_slot_change_probe` half below is *not* complete-mode gated in
+    // real (its first trigger arm runs for any merge-bound parent,
+    // 3103-3107), so it is called unconditionally.
+    if !new_slot.is_empty() && !reachable.is_empty() {
+        for pkg in &installed {
+            let cp = (pkg.category.clone(), pkg.package.clone());
+            if undone.contains(&cp)
+                || !reachable.contains(&cp)
+                || (in_graph.contains(&cp) && !already.contains(&cp))
+            {
+                continue;
+            }
+            let consumer_cpv = pkg.cpv();
+            let mut providers: Vec<String> = ["RDEPEND", "PDEPEND", "DEPEND", "BDEPEND", "IDEPEND"]
+                .iter()
+                .flat_map(|key| {
+                    read_vdb_string(root, &pkg.category, &pkg.package, &pkg.version, key)
+                        .split_whitespace()
+                        .map(String::from)
+                        .collect::<Vec<_>>()
+                })
+                .filter_map(|tok| portage_dep::parse_atom(&tok))
+                .filter_map(|atom| {
+                    if atom.slot_operator != Some(portage_dep::SlotOperator::Equals) {
+                        return None;
+                    }
+                    let (a_slot, a_sub) = (atom.slot.as_deref()?, atom.sub_slot.as_deref()?);
+                    let (n_ver, n_slot, n_sub) =
+                        new_slot.get(&(atom.category.clone(), atom.package.clone()))?;
+                    (a_slot == n_slot && a_sub != n_sub)
+                        .then(|| format!("{}/{}-{n_ver}", atom.category, atom.package))
+                })
+                .collect();
+            providers.sort();
+            providers.dedup();
+            if providers.is_empty() {
+                continue;
+            }
+            for provider_cpv in providers {
+                abi_rebuilds.push((provider_cpv, consumer_cpv.clone()));
+            }
+            scheduled.insert(cp);
         }
-        let consumer_cpv = pkg.cpv();
-        let mut providers: Vec<String> = ["RDEPEND", "PDEPEND", "DEPEND", "BDEPEND", "IDEPEND"]
-            .iter()
-            .flat_map(|key| {
-                read_vdb_string(root, &pkg.category, &pkg.package, &pkg.version, key)
-                    .split_whitespace()
-                    .map(String::from)
-                    .collect::<Vec<_>>()
-            })
-            .filter_map(|tok| portage_dep::parse_atom(&tok))
-            .filter_map(|atom| {
-                if atom.slot_operator != Some(portage_dep::SlotOperator::Equals) {
-                    return None;
-                }
-                let (a_slot, a_sub) = (atom.slot.as_deref()?, atom.sub_slot.as_deref()?);
-                let (n_ver, n_slot, n_sub) =
-                    new_slot.get(&(atom.category.clone(), atom.package.clone()))?;
-                (a_slot == n_slot && a_sub != n_sub)
-                    .then(|| format!("{}/{}-{n_ver}", atom.category, atom.package))
-            })
-            .collect();
-        providers.sort();
-        providers.dedup();
-        if providers.is_empty() {
-            continue;
-        }
-        for provider_cpv in providers {
-            abi_rebuilds.push((provider_cpv, consumer_cpv.clone()));
-        }
-        scheduled.insert(cp);
     }
+
+    // #24 S5: real `_slot_change_probe` (depgraph.py:2317-2359), the
+    // slot-move-without-revbump arm (bug 456208). Runs even when the vdb
+    // scan above is gated off (real's first trigger arm is not
+    // complete-mode gated) -- see the helper's own doc comment.
+    slot_operator_slot_change_probe(root, repos, entries, undone, &mut scheduled);
+
     abi_rebuilds.sort();
     abi_rebuilds.dedup();
     (scheduled, abi_rebuilds)
+}
+
+/// Backlog #24 S5: real `_slot_change_probe` (`depgraph.py:2317-2359`),
+/// the first arm of `_slot_operator_trigger_reinstalls` (`3103-3107`).
+/// For an *unbuilt* slot-operator dep -- `:=` or `:S=`, real's
+/// `not (atom.soname or atom.slot_operator_built)`, i.e. anything but
+/// the built `:S/SS=` form -- whose parent is an ebuild being merged
+/// and whose child the graph resolved to an installed instance, the
+/// tree ebuild at the child's own cpv may carry a different
+/// `(slot, sub_slot)` than the vdb record: a slot move without a
+/// revbump (bug 456208; `test_slot_change_without_revbump.py`,
+/// `test_regular_slot_change_without_revbump.py`). Real finds the dep
+/// through `_slot_operator_deps` (registered when the parent's dep was
+/// walked); portuale re-reads the parent entry's own tree metadata and
+/// use-reduces it against the node's enabled USE ([`flat_dep_atoms`])
+/// so only deps this run would walk are seen -- `||` arms are flattened
+/// (the same over-approximation the vdb side of the scan makes; the S4
+/// undo and the probe's own rule-6 keep are the correction for a false
+/// hit). [`slot_changed`] is the probe's tree-ebuild-at-cpv lookup. A
+/// hit joins `scheduled`, exactly real's `_slot_change_backtrack`
+/// (`2361-2399`) writing `slot_operator_replace_installed` +
+/// `_need_restart`.
+///
+/// Real's visibility / `runtime_pkg_mask` / excluded-package checks on
+/// the tree ebuild (`_pkg_visibility_check` 2347, 2341/2343) have no
+/// portuale counterpart here: [`slot_changed`] is the same tolerant
+/// metadata re-lookup the standalone `--changed-slot` trigger uses.
+/// The binary arm (`dep.child` a binary package scheduled for merge) is
+/// v2 `#24c`.
+fn slot_operator_slot_change_probe(
+    root: &Path,
+    repos: &[RepoConfig],
+    entries: &[GraphEntry],
+    undone: &BTreeSet<(String, String)>,
+    scheduled: &mut BTreeSet<(String, String)>,
+) {
+    const DEP_KEYS: [&str; 5] = ["BDEPEND", "DEPEND", "IDEPEND", "PDEPEND", "RDEPEND"];
+    for e in entries {
+        // Real's `not dep.parent.built`: only an ebuild scheduled for
+        // merge is a probing parent.
+        if e.source != CandidateSource::Ebuild {
+            continue;
+        }
+        let version = match &e.outcome {
+            PretendOutcome::New { version } | PretendOutcome::Reinstall { version, .. } => version,
+            PretendOutcome::Upgrade { to, .. } | PretendOutcome::Downgrade { to, .. } => to,
+            _ => continue,
+        };
+        let cp = (e.category.clone(), e.package.clone());
+        let Some(metadata) = tree_metadata_for(repos, &cp, version) else {
+            continue;
+        };
+        let use_flags: HashSet<String> = e
+            .use_flags_display
+            .iter()
+            .filter(|(_, on)| *on)
+            .map(|(f, _)| f.clone())
+            .collect();
+        for key in DEP_KEYS {
+            let Some(tokens) = flat_dep_atoms(
+                metadata.get(key).map(String::as_str).unwrap_or_default(),
+                &use_flags,
+            ) else {
+                continue;
+            };
+            for token in tokens {
+                let Some(atom) = portage_dep::parse_atom(&token) else {
+                    continue;
+                };
+                if atom.slot_operator != Some(portage_dep::SlotOperator::Equals)
+                    || atom.sub_slot.is_some()
+                {
+                    continue;
+                }
+                let child_cp = (atom.category.clone(), atom.package.clone());
+                if undone.contains(&child_cp) || scheduled.contains(&child_cp) {
+                    continue;
+                }
+                // Real's `dep.child.built`: the graph must have resolved
+                // this dep to that installed instance. A merge-bound
+                // entry means the walk chose a different candidate
+                // (typically a real upgrade) -- the probe does not fire.
+                let Some(installed_version) =
+                    best_installed_for_atom(root, &token, &atom.category, &atom.package)
+                else {
+                    continue;
+                };
+                let resolved_installed = entries.iter().any(|x| {
+                    x.category == child_cp.0
+                        && x.package == child_cp.1
+                        && matches!(
+                            &x.outcome,
+                            PretendOutcome::AlreadyInstalled { version } if *version == installed_version
+                        )
+                });
+                if !resolved_installed {
+                    continue;
+                }
+                // The probe itself: the tree ebuild at the child's own
+                // cpv moved (slot, sub_slot) vs the installed instance.
+                if slot_changed(
+                    root,
+                    repos,
+                    &atom.category,
+                    &atom.package,
+                    &installed_version,
+                ) {
+                    scheduled.insert(child_cp);
+                }
+            }
+        }
+    }
 }
 
 /// Backlog #24 S4: real portage's graph-aware `:=`/`:S=` binder (real
@@ -12148,8 +12273,13 @@ fn tree_metadata_for(
 /// Rules, with real's line refs:
 /// 1. installed instance at the same cpv (a real upgrade is never undone);
 /// 2. `--newuse`/`--changed-use` wins (`pkg in _reinstall_nodes`);
-/// 3. `--changed-slot` (3898-3899 -- landed in S5; rule 6 subsumes it for
-///    an ebuild-only v1, see `docs/024-oracle.md`'s S2 correction);
+/// 3. `--changed-slot` (3898-3899): keep the rebuild when the tree
+///    ebuild at the same cpv moved `(slot, sub_slot)` vs the installed
+///    instance. Landed in S5; for an ebuild consumer rule 6 already
+///    keeps every such rebuild (the entry's own slot *is* the tree
+///    ebuild's), so the line is behaviour-neutral until the binary
+///    halves land (v2 `#24c`) -- kept in real's position so that half
+///    drops in without moving rules;
 /// 4. every parent atom matches the installed instance;
 /// 5. non-`selective` only: no user-asked parent;
 /// 6. installed and new `(slot, sub_slot)` equal;
@@ -12171,6 +12301,7 @@ fn slot_operator_eliminate_rebuilds(
     slot_want: &HashMap<(String, String), Vec<String>>,
     reverse_pins: &[RevDepPin],
     selective: bool,
+    changed_slot: bool,
     top_level_cps: &HashSet<(String, String)>,
     empty: bool,
 ) -> BTreeSet<(String, String)> {
@@ -12223,8 +12354,18 @@ fn slot_operator_eliminate_rebuilds(
         if !changed_flags.is_empty() {
             continue;
         }
-        // Rule 3 (S5) sits here in real; rule 6 below is its ebuild
-        // equivalent for portuale's entry model.
+        // Rule 3 (real 3898-3899, S5): `--changed-slot` keeps a rebuild
+        // whose tree ebuild at the same cpv moved (slot, sub_slot) vs
+        // the installed instance (real `_changed_slot(installed_instance)`).
+        // Real also checks `_changed_slot(pkg)`, always false for a
+        // merge-bound ebuild entry -- its slot *is* the tree ebuild's --
+        // and rule 6 below is the ebuild equivalent, so this is
+        // behaviour-neutral until the binary halves land (v2 `#24c`).
+        // Kept in real's position so that half drops in without moving
+        // the rules.
+        if changed_slot && slot_changed(root, repos, &cp.0, &cp.1, version) {
+            continue;
+        }
         let (i_slot, i_sub) = read_vdb_slot(root, &cp.0, &cp.1, version);
         let installed_str = format!("{}/{}-{version}:{i_slot}/{i_sub}", cp.0, cp.1);
         // Rule 4.
@@ -12321,8 +12462,14 @@ fn slot_operator_rebuild_entries(
     loop {
         let mut combined: Vec<GraphEntry> = entries.to_vec();
         combined.extend(out.iter().cloned());
-        let (next, pairs) =
-            slot_operator_rebuild_scan(root, &combined, reachable, &scheduled, &BTreeSet::new());
+        let (next, pairs) = slot_operator_rebuild_scan(
+            root,
+            repos,
+            &combined,
+            reachable,
+            &scheduled,
+            &BTreeSet::new(),
+        );
         abi_rebuilds = pairs;
         if next == scheduled {
             break;
@@ -18817,6 +18964,7 @@ fn collect_feedback(
     } else {
         let (scheduled, abi_rebuilds) = slot_operator_rebuild_scan(
             ctx.root,
+            &ctx.repos,
             &pass.entries,
             &ctx.slot_op_reachable,
             &grown.slot_operator_replace_installed,
@@ -18858,6 +19006,7 @@ fn collect_feedback(
                 &pass.slot_want,
                 &reverse_pins,
                 ctx.selective,
+                ctx.changed_slot,
                 &ctx.top_level_cps,
                 ctx.empty,
             );
@@ -18909,6 +19058,7 @@ fn assemble_result(
         None => {
             slot_operator_rebuild_scan(
                 ctx.root,
+                &ctx.repos,
                 &pass.entries,
                 &ctx.slot_op_reachable,
                 &params.slot_operator_replace_installed,
@@ -29649,6 +29799,7 @@ mod tests {
         let empty: BTreeSet<(String, String)> = BTreeSet::new();
         let (scheduled, abi) = slot_operator_rebuild_scan(
             &dir,
+            &[],
             std::slice::from_ref(&bar_upgrade),
             &reach,
             &empty,
@@ -29669,13 +29820,16 @@ mod tests {
 
         // Nothing changing `bar` -> no rebuilds.
         let (empty_sched, empty_abi) =
-            slot_operator_rebuild_scan(&dir, &[], &reach, &empty, &empty);
+            slot_operator_rebuild_scan(&dir, &[], &[], &reach, &empty, &empty);
         assert!(empty_sched.is_empty() && empty_abi.is_empty());
 
-        // Not reachable -> the scan is suppressed entirely (real: no
-        // slot-op rebuild for a consumer outside the required sets).
+        // Not reachable -> the post-walk vdb scan is suppressed entirely
+        // (real: no slot-op rebuild for a consumer outside the required
+        // sets). The S5 probe is not complete-mode gated, but `bar`'s
+        // upgrade carries no unbuilt `:=` dep, so nothing fires here.
         let (none_sched, none_abi) = slot_operator_rebuild_scan(
             &dir,
+            &[],
             std::slice::from_ref(&bar_upgrade),
             &HashSet::new(),
             &empty,
@@ -29706,6 +29860,7 @@ mod tests {
         let already = BTreeSet::from([("dev-libs".to_string(), "stale".to_string())]);
         let (again, again_abi) = slot_operator_rebuild_scan(
             &dir,
+            &[],
             &[bar_upgrade.clone(), stale_rebuild],
             &reach,
             &already,
@@ -29737,8 +29892,135 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
     }
 
-    /// Throwaway vdb under `dir` for the #24 S4 undo tests: one installed
-    /// `dev-libs/<name>-<version>` at `slot` with the given `RDEPEND` and
+    #[test]
+    fn slot_operator_slot_change_probe_schedules_a_moved_installed_child() {
+        // Bug 456208 shape, from the fixtures: `kde-base/ark`'s tree
+        // `RDEPEND=app-arch/libarchive:=` (an *unbuilt* slot operator)
+        // against the installed `libarchive-3.1.1`, whose vdb `SLOT` is
+        // `0` while the tree ebuild at the same cpv says `0/13` -- a
+        // slot move without a revbump. Real `_slot_change_probe`
+        // (depgraph.py:2317-2359) schedules the installed child.
+        let dir = slotundo_temp_dir("probe");
+        let mk = |name: &str, slot: &str| {
+            let d = dir.join("var/db/pkg/app-arch").join(name);
+            fs::create_dir_all(&d).unwrap();
+            fs::write(d.join("CATEGORY"), "app-arch\n").unwrap();
+            fs::write(d.join("SLOT"), format!("{slot}\n")).unwrap();
+            fs::write(d.join("repository"), "testrepo\n").unwrap();
+        };
+        mk("libarchive-3.1.1", "0");
+        let repos = find_repos(&fixtures_root()).expect("fixture repos");
+        let parent = GraphEntry {
+            outcome: PretendOutcome::Reinstall {
+                version: "4.10.0".into(),
+                changed_flags: Vec::new(),
+                deps_changed: false,
+                slot_changed: false,
+                rebuilt_binary: false,
+                new_repo: false,
+                slot_operator_rebuild: false,
+            },
+            slot: Some("0".into()),
+            sub_slot: Some("0".into()),
+            ..graph_entry("kde-base", "ark", "4.10.0")
+        };
+        let child = GraphEntry {
+            outcome: PretendOutcome::AlreadyInstalled {
+                version: "3.1.1".into(),
+            },
+            slot: Some("0".into()),
+            sub_slot: Some("0".into()),
+            ..graph_entry("app-arch", "libarchive", "3.1.1")
+        };
+        let child_cp = ("app-arch".to_string(), "libarchive".to_string());
+        let empty = BTreeSet::new();
+
+        let mut scheduled = BTreeSet::new();
+        slot_operator_slot_change_probe(
+            &dir,
+            &repos,
+            &[parent.clone(), child.clone()],
+            &empty,
+            &mut scheduled,
+        );
+        assert_eq!(
+            scheduled,
+            BTreeSet::from([child_cp.clone()]),
+            "the moved installed child joins the replace set (bug 456208)"
+        );
+
+        // Real's `dep.child.built`: when the graph resolved the dep to a
+        // merge-bound entry (a real upgrade), the probe does not fire.
+        let mut merged_child = child.clone();
+        merged_child.outcome = PretendOutcome::Reinstall {
+            version: "3.1.1".into(),
+            changed_flags: Vec::new(),
+            deps_changed: false,
+            slot_changed: false,
+            rebuilt_binary: false,
+            new_repo: false,
+            slot_operator_rebuild: false,
+        };
+        let mut scheduled = BTreeSet::new();
+        slot_operator_slot_change_probe(
+            &dir,
+            &repos,
+            &[parent.clone(), merged_child],
+            &empty,
+            &mut scheduled,
+        );
+        assert!(scheduled.is_empty());
+
+        // The S4 undo latch suppresses a re-add.
+        let mut scheduled = BTreeSet::new();
+        slot_operator_slot_change_probe(
+            &dir,
+            &repos,
+            &[parent, child],
+            &BTreeSet::from([child_cp]),
+            &mut scheduled,
+        );
+        assert!(scheduled.is_empty());
+
+        // A child whose tree ebuild did *not* move is not scheduled: the
+        // `souneedslot` fixture depends on `dev-libs/souprov:=`, and the
+        // installed `souprov-1.0` (vdb 0/1) has tree `SLOT="0/1"`.
+        slotundo_vdb(&dir, "souprov", "1.0", "0/1", "", "");
+        let parent_souprov = GraphEntry {
+            outcome: PretendOutcome::Reinstall {
+                version: "1.0".into(),
+                changed_flags: Vec::new(),
+                deps_changed: false,
+                slot_changed: true,
+                rebuilt_binary: false,
+                new_repo: false,
+                slot_operator_rebuild: false,
+            },
+            slot: Some("0".into()),
+            sub_slot: Some("2".into()),
+            ..graph_entry("dev-libs", "souneedslot", "1.0")
+        };
+        let child_souprov = GraphEntry {
+            outcome: PretendOutcome::AlreadyInstalled {
+                version: "1.0".into(),
+            },
+            slot: Some("0".into()),
+            sub_slot: Some("1".into()),
+            ..graph_entry("dev-libs", "souprov", "1.0")
+        };
+        let mut scheduled = BTreeSet::new();
+        slot_operator_slot_change_probe(
+            &dir,
+            &repos,
+            &[parent_souprov, child_souprov],
+            &empty,
+            &mut scheduled,
+        );
+        assert!(scheduled.is_empty());
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
     /// recordered `USE`.
     fn slotundo_vdb(
         dir: &Path,
@@ -29887,30 +30169,89 @@ mod tests {
 
         let undo = |entries: &[GraphEntry],
                     selective: bool,
+                    changed_slot: bool,
                     top: &HashSet<(String, String)>,
                     empty: bool| {
             slot_operator_eliminate_rebuilds(
-                &dir, &repos, entries, &replace, &slot_want, &no_pins, selective, top, empty,
+                &dir,
+                &repos,
+                entries,
+                &replace,
+                &slot_want,
+                &no_pins,
+                selective,
+                changed_slot,
+                top,
+                empty,
             )
         };
 
         // Rule 8 flip: both sides use-reduce the `soflag?` group away.
         let entry = slotundo_rebuild_entry("sounneed", "1.0", "0", "1", &[("soflag", false)]);
         let entries = [provider.clone(), entry.clone()];
-        assert_eq!(undo(&entries, false, &no_top, false), replace);
+        assert_eq!(undo(&entries, false, false, &no_top, false), replace);
         // ... and the same shape with the flag ON keeps the rebuild: the
         // tree `:=` binds to the graph's 0/2, the vdb says 0/1.
         let entry_on = slotundo_rebuild_entry("sounneed", "1.0", "0", "1", &[("soflag", true)]);
-        assert!(undo(&[provider.clone(), entry_on], false, &no_top, false).is_empty());
+        assert!(undo(&[provider.clone(), entry_on], false, false, &no_top, false).is_empty());
 
         // Rule 6: an own-slot move (installed 0/1, tree 0/2) keeps the
         // rebuild even though rule 8 would compare equal.
         let entry_slot = slotundo_rebuild_entry("sounneed", "1.0", "0", "2", &[("soflag", false)]);
-        assert!(undo(&[provider.clone(), entry_slot], false, &no_top, false).is_empty());
+        assert!(
+            undo(
+                &[provider.clone(), entry_slot],
+                false,
+                false,
+                &no_top,
+                false
+            )
+            .is_empty()
+        );
+
+        // Rule 3 (S5): `--changed-slot` keeps a rebuild whose tree ebuild
+        // at the same cpv moved vs the installed instance. `sounneed`'s
+        // tree slot is its vdb slot, so the rule does not fire: the rule-8
+        // demotion stands with the flag on.
+        assert_eq!(
+            undo(&entries, false, true, &no_top, false),
+            replace,
+            "rule 3 must not keep a rebuild whose tree ebuild did not move"
+        );
+        // The `souneedslot` fixture (vdb 0/1, tree 0/2) is the positive
+        // shape: kept with the flag on. Rule 6 keeps it without the flag
+        // too -- rule 3 is behaviour-neutral for ebuilds (documented), so
+        // both must agree.
+        slotundo_vdb(&dir, "souneedslot", "1.0", "0/1", "", "");
+        let entry_slotmove = slotundo_rebuild_entry("souneedslot", "1.0", "0", "2", &[]);
+        let want_slotmove = HashMap::from([(
+            ("dev-libs".to_string(), "souneedslot".to_string()),
+            vec!["dev-libs/souneedslot".to_string()],
+        )]);
+        let replace_slotmove =
+            BTreeSet::from([("dev-libs".to_string(), "souneedslot".to_string())]);
+        let rule3 = |changed_slot: bool| {
+            slot_operator_eliminate_rebuilds(
+                &dir,
+                &repos,
+                &[provider.clone(), entry_slotmove.clone()],
+                &replace_slotmove,
+                &want_slotmove,
+                &no_pins,
+                false,
+                changed_slot,
+                &no_top,
+                false,
+            )
+        };
+        assert!(
+            rule3(true).is_empty() && rule3(false).is_empty(),
+            "a slot-moved ebuild consumer is kept with and without --changed-slot"
+        );
 
         // Rule 1: a different installed version is a real upgrade.
         let entry_v2 = slotundo_rebuild_entry("sounneed", "2.0", "0", "1", &[("soflag", false)]);
-        assert!(undo(&[provider.clone(), entry_v2], false, &no_top, false).is_empty());
+        assert!(undo(&[provider.clone(), entry_v2], false, false, &no_top, false).is_empty());
 
         // Rule 2: --newuse/--changed-use wins.
         let mut entry_flags = entry.clone();
@@ -29923,7 +30264,16 @@ mod tests {
             new_repo: false,
             slot_operator_rebuild: true,
         };
-        assert!(undo(&[provider.clone(), entry_flags], false, &no_top, false).is_empty());
+        assert!(
+            undo(
+                &[provider.clone(), entry_flags],
+                false,
+                false,
+                &no_top,
+                false
+            )
+            .is_empty()
+        );
 
         // Rule 4: a parent atom that doesn't match the installed instance.
         let bad_want =
@@ -29936,6 +30286,7 @@ mod tests {
             &bad_want,
             &no_pins,
             false,
+            false,
             &no_top,
             false,
         );
@@ -29943,20 +30294,47 @@ mod tests {
 
         // Rule 5: non-selective keeps a user-requested package.
         let top = HashSet::from([sounneed.clone()]);
-        assert!(undo(&[provider.clone(), entry.clone()], false, &top, false).is_empty());
+        assert!(
+            undo(
+                &[provider.clone(), entry.clone()],
+                false,
+                false,
+                &top,
+                false
+            )
+            .is_empty()
+        );
         // ... selective ignores the argument (real's `selective` arm).
         assert_eq!(
-            undo(&[provider.clone(), entry.clone()], true, &top, false),
+            undo(&[provider.clone(), entry.clone()], true, false, &top, false),
             replace
         );
 
         // Rule 7: a binary entry keeps its rebuild (binary halves are v2).
         let mut entry_binary = entry.clone();
         entry_binary.source = CandidateSource::Binary;
-        assert!(undo(&[provider.clone(), entry_binary], false, &no_top, false).is_empty());
+        assert!(
+            undo(
+                &[provider.clone(), entry_binary],
+                false,
+                false,
+                &no_top,
+                false
+            )
+            .is_empty()
+        );
 
         // Rule 0: --emptytree skips the whole undo.
-        assert!(undo(&[provider.clone(), entry.clone()], false, &no_top, true).is_empty());
+        assert!(
+            undo(
+                &[provider.clone(), entry.clone()],
+                false,
+                false,
+                &no_top,
+                true
+            )
+            .is_empty()
+        );
 
         // A non-slot-operator entry (e.g. an ordinary USE reinstall for
         // the same cp) is never touched.
@@ -29970,15 +30348,31 @@ mod tests {
             new_repo: false,
             slot_operator_rebuild: false,
         };
-        assert!(undo(&[provider.clone(), entry_plain], false, &no_top, false).is_empty());
+        assert!(
+            undo(
+                &[provider.clone(), entry_plain],
+                false,
+                false,
+                &no_top,
+                false
+            )
+            .is_empty()
+        );
 
         // The latch: once demoted, the S3 scan cannot re-add the cp even
         // though its vdb binding is still stale.
         let reach: HashSet<(String, String)> = HashSet::from([sounneed.clone()]);
-        let latched = undo(&[provider.clone(), entry.clone()], false, &no_top, false);
+        let latched = undo(
+            &[provider.clone(), entry.clone()],
+            false,
+            false,
+            &no_top,
+            false,
+        );
         assert_eq!(latched, replace);
         let (rescheduled, _) = slot_operator_rebuild_scan(
             &dir,
+            &[],
             &[provider, entry],
             &reach,
             &BTreeSet::new(),

@@ -8792,34 +8792,128 @@ def _slot_operator_rebuild_scan(root, repos, entries, reachable, already, undone
             resolved = max(matching, key=lambda c: c["repo_priority"])
             new_slot[(category, package)] = (version, resolved["slot"], resolved["sub_slot"])
     if not new_slot or not reachable:
-        return set(already), []
+        scheduled = set(already)
+        abi_rebuilds = []
+    else:
+        installed = _all_installed_packages(root)
+        scheduled = set(already)
+        abi_rebuilds = []
+        for category, package, version, _slot in installed:
+            cp = (category, package)
+            if cp in undone or cp not in reachable or (cp in in_graph and cp not in already):
+                continue
+            consumer_cpv = f"{category}/{package}-{version}"
+            providers = set()
+            for key in ("RDEPEND", "PDEPEND", "DEPEND", "BDEPEND", "IDEPEND"):
+                for tok in _read_vdb_string(root, category, package, version, key).split():
+                    try:
+                        atom = Atom(tok, allow_repo=True)
+                    except Exception:
+                        continue
+                    if atom.slot_operator != "=" or atom.slot is None or atom.sub_slot is None:
+                        continue
+                    ns = new_slot.get(tuple(atom.cp.split("/", 1)))
+                    if ns is not None and atom.slot == ns[1] and atom.sub_slot != ns[2]:
+                        providers.add(f"{atom.cp}-{ns[0]}")
+            if not providers:
+                continue
+            for provider_cpv in sorted(providers):
+                abi_rebuilds.append((provider_cpv, consumer_cpv))
+            scheduled.add(cp)
 
-    installed = _all_installed_packages(root)
-    scheduled = set(already)
-    abi_rebuilds = []
-    for category, package, version, _slot in installed:
-        cp = (category, package)
-        if cp in undone or cp not in reachable or (cp in in_graph and cp not in already):
-            continue
-        consumer_cpv = f"{category}/{package}-{version}"
-        providers = set()
-        for key in ("RDEPEND", "PDEPEND", "DEPEND", "BDEPEND", "IDEPEND"):
-            for tok in _read_vdb_string(root, category, package, version, key).split():
-                try:
-                    atom = Atom(tok, allow_repo=True)
-                except Exception:
-                    continue
-                if atom.slot_operator != "=" or atom.slot is None or atom.sub_slot is None:
-                    continue
-                ns = new_slot.get(tuple(atom.cp.split("/", 1)))
-                if ns is not None and atom.slot == ns[1] and atom.sub_slot != ns[2]:
-                    providers.add(f"{atom.cp}-{ns[0]}")
-        if not providers:
-            continue
-        for provider_cpv in sorted(providers):
-            abi_rebuilds.append((provider_cpv, consumer_cpv))
-        scheduled.add(cp)
+    # #24 S5: real _slot_change_probe (depgraph.py:2317-2359), the
+    # slot-move-without-revbump arm (bug 456208). Runs even when the vdb
+    # scan above is gated off (real's first trigger arm is not
+    # complete-mode gated) -- see the helper's own doc comment.
+    _slot_operator_slot_change_probe(root, repos, entries, undone, scheduled)
     return scheduled, sorted(set(abi_rebuilds))
+
+
+def _slot_operator_slot_change_probe(root, repos, entries, undone, scheduled):
+    """Backlog #24 S5: real _slot_change_probe (depgraph.py:2317-2359),
+    the first arm of _slot_operator_trigger_reinstalls (3103-3107). For
+    an *unbuilt* slot-operator dep -- := or :S=, real's
+    `not (atom.soname or atom.slot_operator_built)`, i.e. anything but
+    the built :S/SS= form -- whose parent is an ebuild being merged and
+    whose child the graph resolved to an installed instance, the tree
+    ebuild at the child's own cpv may carry a different (slot, sub_slot)
+    than the vdb record: a slot move without a revbump (bug 456208;
+    test_slot_change_without_revbump.py,
+    test_regular_slot_change_without_revbump.py). Real finds the dep
+    through _slot_operator_deps (registered when the parent's dep was
+    walked); this reference re-reads the parent entry's own tree
+    metadata and use-reduces it against the node's enabled USE
+    (_flat_dep_atoms) so only deps this run would walk are seen -- ||
+    arms are flattened (the same over-approximation the vdb side of the
+    scan makes; the S4 undo and the probe's own rule-6 keep are the
+    correction for a false hit). _slot_changed is the probe's
+    tree-ebuild-at-cpv lookup. A hit joins scheduled, exactly real's
+    _slot_change_backtrack (2361-2399) writing
+    slot_operator_replace_installed + _need_restart.
+
+    Real's visibility / runtime_pkg_mask / excluded-package checks on
+    the tree ebuild (_pkg_visibility_check 2347, 2341/2343) have no
+    reference counterpart here: _slot_changed is the same tolerant
+    metadata re-lookup the standalone --changed-slot trigger uses. The
+    binary arm (dep.child a binary package scheduled for merge) is v2
+    #24c. Mirrors portage-repo/src/lib.rs's
+    slot_operator_slot_change_probe."""
+    for e in entries:
+        category, package, outcome = e[0], e[1], e[2]
+        # Real's `not dep.parent.built`: only an ebuild scheduled for
+        # merge is a probing parent.
+        if e[7] != "ebuild":
+            continue
+        tag = outcome[0]
+        if tag == "new":
+            version = outcome[1]
+        elif tag == "reinstall":
+            version = outcome[1]
+        elif tag in ("upgrade", "downgrade"):
+            version = outcome[2]
+        else:
+            continue
+        metadata = _tree_metadata_for(repos, (category, package), version)
+        if metadata is None:
+            continue
+        use_flags = {f for f, on in e[5] if on}
+        for key in ("BDEPEND", "DEPEND", "IDEPEND", "PDEPEND", "RDEPEND"):
+            tokens = _flat_dep_atoms(metadata.get(key, ""), use_flags)
+            if tokens is None:
+                continue
+            for token in tokens:
+                atom = _parse_atom(token)
+                if (
+                    atom is None
+                    or atom.slot_operator != "="
+                    or atom.sub_slot is not None
+                ):
+                    continue
+                child_cp = tuple(atom.cp.split("/", 1))
+                if child_cp in undone or child_cp in scheduled:
+                    continue
+                # Real's `dep.child.built`: the graph must have resolved
+                # this dep to that installed instance. A merge-bound
+                # entry means the walk chose a different candidate
+                # (typically a real upgrade) -- the probe does not fire.
+                installed_version = _best_installed_for_atom(
+                    root, token, child_cp[0], child_cp[1]
+                )
+                if installed_version is None:
+                    continue
+                resolved_installed = any(
+                    x[0] == child_cp[0]
+                    and x[1] == child_cp[1]
+                    and x[2][0] == "already_installed"
+                    and x[2][1] == installed_version
+                    for x in entries
+                )
+                if not resolved_installed:
+                    continue
+                # The probe itself: the tree ebuild at the child's own
+                # cpv moved (slot, sub_slot) vs the installed instance.
+                if _slot_changed(root, repos, child_cp[0], child_cp[1], installed_version):
+                    scheduled.add(child_cp)
 
 
 def _bind_slot_operator_deps(depstr, entries, root):
@@ -8942,7 +9036,16 @@ def _atom_matches_str(atom_str, candidate):
 
 
 def _slot_operator_eliminate_rebuilds(
-    root, repos, entries, replace, slot_want, reverse_pins, selective, top_level_cps, empty
+    root,
+    repos,
+    entries,
+    replace,
+    slot_want,
+    reverse_pins,
+    selective,
+    changed_slot,
+    top_level_cps,
+    empty,
 ):
     """Backlog #24 S4: real _eliminate_rebuilds (depgraph.py:3859-4000),
     the undo path. For every cp in the S3 replace set whose walked entry
@@ -8955,8 +9058,12 @@ def _slot_operator_eliminate_rebuilds(
     Rules, with real's line refs:
     1. installed instance at the same cpv (a real upgrade is never undone);
     2. --newuse/--changed-use wins (pkg in _reinstall_nodes);
-    3. --changed-slot (3898-3899 -- landed in S5; rule 6 subsumes it for
-       an ebuild-only v1, see docs/024-oracle.md's S2 correction);
+    3. --changed-slot (3898-3899, landed in S5): keep the rebuild when
+       the tree ebuild at the same cpv moved (slot, sub_slot) vs the
+       installed instance. For an ebuild consumer rule 6 already keeps
+       every such rebuild (the entry's own slot *is* the tree ebuild's),
+       so the line is behaviour-neutral until the binary halves land
+       (v2 #24c); kept in real's position;
     4. every parent atom matches the installed instance;
     5. non-selective only: no user-asked parent;
     6. installed and new (slot, sub_slot) equal;
@@ -9008,8 +9115,17 @@ def _slot_operator_eliminate_rebuilds(
         # Rule 2.
         if outcome[2]:
             continue
-        # Rule 3 (S5) sits here in real; rule 6 below is its ebuild
-        # equivalent for this entry model.
+        # Rule 3 (real 3898-3899, S5): --changed-slot keeps a rebuild
+        # whose tree ebuild at the same cpv moved (slot, sub_slot) vs
+        # the installed instance (real
+        # _changed_slot(installed_instance)). Real also checks
+        # _changed_slot(pkg), always false for a merge-bound ebuild entry
+        # -- its slot *is* the tree ebuild's -- and rule 6 below is the
+        # ebuild equivalent, so this is behaviour-neutral until the
+        # binary halves land (v2 #24c). Kept in real's position so that
+        # half drops in without moving the rules.
+        if changed_slot and _slot_changed(root, repos, cp[0], cp[1], version):
+            continue
         i_slot, i_sub = _read_vdb_slot(root, cp[0], cp[1], version)
         installed_str = f"{cp[0]}/{cp[1]}-{version}:{i_slot}/{i_sub}"
         # Rule 4.
@@ -13880,6 +13996,7 @@ def resolve_pretend_graph(
                     slot_want,
                     _sop_reverse_pins,
                     selective,
+                    changed_slot,
                     top_level_cps,
                     empty,
                 )
