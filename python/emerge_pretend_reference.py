@@ -8734,28 +8734,41 @@ def _reverse_dependency_constraints(root, entries, with_bdeps, excluded, repos, 
     return sorted(out_enforced), sorted(out_dropped)
 
 
-def _slot_operator_rebuild_entries(root, repos, entries, reachable):
-    """Real depgraph's _slot_operator_trigger_reinstalls +
+def _slot_operator_rebuild_scan(root, repos, entries, reachable, already):
+    """Real depgraph's _slot_operator_trigger_reinstalls (3089-3132) +
     _slot_operator_replace_installed (the
     @__auto_slot_operator_replace_installed__ set): an installed package
     whose vdb *DEPEND carries a built slot-operator atom (cat/pkg:S/SS=)
     whose bound S/SS no longer matches how this run leaves cat/pkg in
-    that same slot is scheduled for a reinstall.
+    that same slot must be rebuilt.
+
+    #24 S3: this is the *scan* only. It returns the consumer (cat, pkg)
+    set for the slot_operator_replace_installed accumulator (real's
+    backtrack_infos["config"]["slot_operator_replace_installed"]) plus
+    the (provider-cpv, consumer-cpv) display pairs (real's
+    _forced_rebuilds, what _show_abi_rebuild_info renders), and builds no
+    entry at all: the consumer becomes a walked node on the next pass
+    (the walk's seed + flip), which is what gives it re-evaluated deps, a
+    re-bound := and real merge-order edges. The old post-pass entry
+    synthesiser -- and with it the internal scheduled/new_slot fixpoint
+    -- is gone; the cascade now falls out of the next pass seeing the
+    rebuilt consumer as a provider at its *tree* sub-slot.
 
     The scan is gated on `reachable` -- real only slot-op-rebuilds a
     consumer that is in the graph in complete mode (a member of, or a
-    forward-installed-dep of a member of, @world/@selected/@system).
-    `reachable` empty (not complete mode) means no rebuilds at all.
+    forward-installed-dep of a member of, the required sets: real
+    _complete_graph 8677 starts from _initial_arg_list -- the CLI args --
+    and appends @world/@selected/@system). `reachable` empty (not
+    complete mode) means no rebuilds at all.
 
-    Cascade (real _backtrack_depgraph re-drive): a scheduled rebuild
-    lands at its *tree ebuild*'s SLOT sub-slot, not the vdb's; when those
-    differ the rebuild is itself a slot shift, so the scan iterates to a
-    fixpoint, chasing the consumer's own stale built-slot-op consumers.
+    `already` is the replace set as the current search node carries it.
+    A cp in it is *not* skipped by the in-graph test (it is in the graph
+    precisely because this scan put it there last pass), so its
+    abi_rebuilds pairs keep being reported for the whole search; every
+    other in-graph cp is skipped, exactly as before.
 
-    Returns (new_entries, abi_rebuilds), the latter being the sorted,
-    deduped (provider-cpv, consumer-cpv) pairs real _compute_abi_rebuild_
-    info records for _show_abi_rebuild_info. Mirrors portage-repo/src/
-    lib.rs's slot_operator_rebuild_entries exactly (cuts and all)."""
+    Mirrors portage-repo/src/lib.rs's slot_operator_rebuild_scan exactly
+    (cuts and all)."""
     new_slot = {}
     in_graph = set()
     for entry in entries:
@@ -8773,106 +8786,34 @@ def _slot_operator_rebuild_entries(root, repos, entries, reachable):
             resolved = max(matching, key=lambda c: c["repo_priority"])
             new_slot[(category, package)] = (version, resolved["slot"], resolved["sub_slot"])
     if not new_slot or not reachable:
-        return [], []
+        return set(already), []
 
     installed = _all_installed_packages(root)
-    # Fixpoint: each pass finds installed consumers (reachable, not
-    # already in the graph or scheduled) with a stale built `:S/SS=` dep
-    # on a `new_slot` provider; schedules them at their *tree ebuild*'s
-    # sub-slot, which -- when it differs from vdb -- becomes a fresh
-    # `new_slot` entry that the next pass chases.
-    scheduled = set()
+    scheduled = set(already)
     abi_rebuilds = []
-    while True:
-        grew = False
-        for category, package, version, _slot in installed:
-            cp = (category, package)
-            if cp in in_graph or cp in scheduled or cp not in reachable:
-                continue
-            consumer_cpv = f"{category}/{package}-{version}"
-            providers = set()
-            for key in ("RDEPEND", "PDEPEND", "DEPEND", "BDEPEND", "IDEPEND"):
-                for tok in _read_vdb_string(root, category, package, version, key).split():
-                    try:
-                        atom = Atom(tok, allow_repo=True)
-                    except Exception:
-                        continue
-                    if atom.slot_operator != "=" or atom.slot is None or atom.sub_slot is None:
-                        continue
-                    ns = new_slot.get(tuple(atom.cp.split("/", 1)))
-                    if ns is not None and atom.slot == ns[1] and atom.sub_slot != ns[2]:
-                        providers.add(f"{atom.cp}-{ns[0]}")
-            if not providers:
-                continue
-            for provider_cpv in sorted(providers):
-                abi_rebuilds.append((provider_cpv, consumer_cpv))
-            # The rebuild lands at the tree ebuild's SLOT, not the vdb's
-            # (real re-reads SLOT at merge time). A sub-slot bump here is
-            # itself a slot shift -> feed it back as a `new_slot` entry
-            # for the next fixpoint pass.
-            v_slot, v_sub = _read_vdb_slot(root, category, package, version)
-            tree = [
-                c
-                for c in list_candidates(repos, category, package)
-                if c["version"] == version
-            ]
-            slot, sub_slot = (
-                (tree[0]["slot"], tree[0]["sub_slot"]) if tree else (v_slot, v_sub)
-            )
-            new_slot[cp] = (version, slot, sub_slot)
-            scheduled.add(cp)
-            grew = True
-        if not grew:
-            break
-
-    out = []
     for category, package, version, _slot in installed:
         cp = (category, package)
-        if cp not in scheduled:
+        if cp not in reachable or (cp in in_graph and cp not in already):
             continue
-        v_slot, v_sub = _read_vdb_slot(root, category, package, version)
-        ns = new_slot.get(cp)
-        slot, sub_slot = (ns[1], ns[2]) if ns is not None else (v_slot, v_sub)
-        repo = _read_vdb_string(root, category, package, version, "repository").strip()
-        # Real output.py::_get_installed_best (723-732): the rebuilt cpv
-        # is already installed (replace = True), so the `[oldver]` bracket
-        # shows only when the rebuild lands at a different slot/sub-slot
-        # than the installed instance -- exactly the sub-slot bump that
-        # drives the cascade.
-        oldbest = (
-            [{"version": version, "slot": v_slot, "sub_slot": v_sub, "repo": repo}]
-            if (slot, sub_slot) != (v_slot, v_sub)
-            else []
-        )
-        outcome = ("reinstall", version, [], False, False, False, False, True)
-        out.append(
-            (
-                category,
-                package,
-                outcome,
-                [],
-                slot,
-                [],
-                [],
-                "ebuild",
-                {
-                    "mask_entry": None,
-                    "unmask_entry": None,
-                    "keyword_entry": None,
-                    "sub_slot": sub_slot,
-                    "repo_name": repo,
-                    "oldbest": oldbest,
-                },
-                None,
-                None,
-                None,
-                False,
-            )
-        )
-    out.sort(key=lambda e: (e[0], e[1]))
-    abi_rebuilds = sorted(set(abi_rebuilds))
-    return out, abi_rebuilds
-
+        consumer_cpv = f"{category}/{package}-{version}"
+        providers = set()
+        for key in ("RDEPEND", "PDEPEND", "DEPEND", "BDEPEND", "IDEPEND"):
+            for tok in _read_vdb_string(root, category, package, version, key).split():
+                try:
+                    atom = Atom(tok, allow_repo=True)
+                except Exception:
+                    continue
+                if atom.slot_operator != "=" or atom.slot is None or atom.sub_slot is None:
+                    continue
+                ns = new_slot.get(tuple(atom.cp.split("/", 1)))
+                if ns is not None and atom.slot == ns[1] and atom.sub_slot != ns[2]:
+                    providers.add(f"{atom.cp}-{ns[0]}")
+        if not providers:
+            continue
+        for provider_cpv in sorted(providers):
+            abi_rebuilds.append((provider_cpv, consumer_cpv))
+        scheduled.add(cp)
+    return scheduled, sorted(set(abi_rebuilds))
 
 def _strip_revision(version):
     base, sep, rev = version.rpartition("-r")
@@ -11276,6 +11217,21 @@ def resolve_pretend_graph(
     # pass picked a compatible version after all) simply yield no
     # record. Mirrors portage-repo/src/lib.rs.
     dropped_pins = []
+    # Backlog #24 S3: real _dynamic_config._slot_operator_replace_installed
+    # (depgraph.py:2400/2361/2881 write it, resolver/backtracking.py::
+    # _feedback_config 237-257 consumes it, _gen_reinstall_sets 5457-5480
+    # turns it into the pseudo SetArg @__auto_slot_operator_replace_installed__
+    # with force_reinstall=True, reset_depth=False). An installed consumer
+    # whose built cat/pkg:S/SS= dep no longer matches how this run leaves
+    # the provider lands here; the next pass seeds the walk with its
+    # cat/pkg atom and flips its already_installed outcome to a
+    # slot-operator reinstall, so the consumer is a *walked node* -- its
+    # tree RDEPEND re-evaluated, its := re-bound against the graph, its
+    # merge-order edges real. Keyed (cat, pkg), narrowing real's
+    # (root, slot_atom) exactly as portage-repo does. Mirrors
+    # portage-repo/src/lib.rs's BacktrackParams::
+    # slot_operator_replace_installed.
+    slot_operator_replace_installed = set()
     _missing_dep_trigger = None
 
     # Phase C2 (023): the depth-first search over mask/config choices,
@@ -11314,6 +11270,9 @@ def resolve_pretend_graph(
             "autounmask_suggest_use": autounmask_suggest_use,
             "autounmask_suggest_license": autounmask_suggest_license,
             "autounmask_suggest_masks": autounmask_suggest_masks,
+            "slot_operator_replace_installed": copy.deepcopy(
+                slot_operator_replace_installed
+            ),
         }
 
     def _node_restore(snap):
@@ -11323,7 +11282,7 @@ def resolve_pretend_graph(
         nonlocal autounmask_use_broke, autounmask_disabled
         nonlocal autounmask_suggest_keywords, autounmask_suggest_use
         nonlocal autounmask_suggest_license, autounmask_suggest_masks
-        nonlocal config
+        nonlocal config, slot_operator_replace_installed
         slot_constraints = copy.deepcopy(snap["slot_constraints"])
         runtime_pkg_mask = copy.deepcopy(snap["runtime_pkg_mask"])
         mask_steps = snap["mask_steps"]
@@ -11341,6 +11300,9 @@ def resolve_pretend_graph(
         autounmask_suggest_use = snap["autounmask_suggest_use"]
         autounmask_suggest_license = snap["autounmask_suggest_license"]
         autounmask_suggest_masks = snap["autounmask_suggest_masks"]
+        slot_operator_replace_installed = copy.deepcopy(
+            snap["slot_operator_replace_installed"]
+        )
         # `config` is derived, never stored: the tiered view exactly when
         # the accumulator is non-empty (the only two shapes the
         # growth/breakage arms ever produce).
@@ -11370,6 +11332,7 @@ def resolve_pretend_graph(
         "autounmask_suggest_use",
         "autounmask_suggest_license",
         "autounmask_suggest_masks",
+        "slot_operator_replace_installed",
     )
 
     def _params_equal(a, b):
@@ -11609,6 +11572,18 @@ def resolve_pretend_graph(
             for a in atoms:
                 _tr(f"\n      Arg: {a}\n     Atom: {a}\n")
         queue = deque((a, 0, None, None, False) for a in atoms)
+        # #24 S3: real _gen_reinstall_sets (5457-5480) turns
+        # _slot_operator_replace_installed into the pseudo SetArg
+        # @__auto_slot_operator_replace_installed__, appended to the arg
+        # list *after* the user's own args (select_files 5430) and walked
+        # as a root node -- which is why the rebuilt consumer gets its
+        # deps re-walked at all. owner=None mirrors the set arg having no
+        # package parent; depth=1 is real's reset_depth=False (the node
+        # must not interact with --deep=N depth accounting, nor read as a
+        # top-level argument, which depth == 0 means everywhere in this
+        # walk). Mirrors portage-repo/src/lib.rs's run_pass.
+        for _cat, _pkg in sorted(slot_operator_replace_installed):
+            queue.append((f"{_cat}/{_pkg}", 1, None, None, False))
         pending_blockers = []
         # Top-level atoms matched by package.provided -- see
         # portage-repo/src/lib.rs's GraphResult::pprovided_atoms.
@@ -11705,7 +11680,10 @@ def resolve_pretend_graph(
             slot_want.setdefault(key, []).append(current_atom_str)
             # Backtracking slice 4: a top-level atom targeting this cat/pkg
             # is an "Argument" puller for the slot-collision block.
-            if owner is None:
+            # #24 S3: depth == 0 excludes the auto-replace seeds above --
+            # real's __auto_slot_operator_replace_installed__ is an
+            # internal set, never an "(Argument)" puller.
+            if owner is None and depth == 0:
                 slot_pullers.setdefault(key, []).append(("", "", "", current_atom_str))
 
             # Backtracking: if an earlier attempt hit a *solvable* slot
@@ -11776,9 +11754,17 @@ def resolve_pretend_graph(
             # forced to re-merge (real depgraph.py drops it from every
             # inst_pkgs list) -- the --emptytree rewrite, scoped to the
             # matched atom. Mirrors portage-repo/src/lib.rs.
-            if outcome[0] == "already_installed" and reinstall_atoms:
+            #
+            # #24 S3: the same flip point carries real's
+            # __auto_slot_operator_replace_installed__ force_reinstall=True
+            # (_gen_reinstall_sets 5457-5480). Keyed on the cat/pkg, not on
+            # the seeded atom, so whichever visit of this package comes
+            # first in the walk -- the seed, or an ordinary dependency edge
+            # that reached it earlier -- is the one that flips; patching the
+            # entry afterwards would leave its deps unenqueued.
+            if outcome[0] == "already_installed":
                 cpv = f"{key[0]}/{key[1]}-{outcome[1]}"
-                if any(
+                if reinstall_atoms and any(
                     _matches_config_entry(a, cpv, key[0], key[1])
                     for a in reinstall_atoms
                 ):
@@ -11791,6 +11777,17 @@ def resolve_pretend_graph(
                         False,
                         False,
                         False,
+                    )
+                elif key in slot_operator_replace_installed:
+                    outcome = (
+                        "reinstall",
+                        outcome[1],
+                        [],
+                        False,
+                        False,
+                        False,
+                        False,
+                        True,
                     )
 
             # Real --autounmask-use PART B *resolution*
@@ -12688,6 +12685,22 @@ def resolve_pretend_graph(
                 _ob = [r for r in _installed_refs(root, category, package) if r["slot"] == slot]
             elif outcome[0] == "new" and provenance["new_slot"]:
                 _ob = _installed_refs(root, category, package)
+            elif outcome[0] == "reinstall":
+                # Real output.py::_get_installed_best (721-727): a
+                # reinstall is the vardb.cpv_exists(pkg.cpv) arm
+                # (replace = True), and myoldbest is the installed
+                # instance *only* when its (slot, sub_slot) differs from
+                # the one being merged -- the `[oldver]` bracket a
+                # slot/sub-slot move (e.g. a slot-operator cascade
+                # rebuild landing at its tree ebuild's new sub-slot)
+                # shows. Real's third disjunct (not quiet_repo_display
+                # and repo differs) stays out. Mirrors portage-repo.
+                _ob = [
+                    r
+                    for r in _installed_refs(root, category, package)
+                    if r["version"] == outcome[1]
+                    and (r["slot"] != slot or r["sub_slot"] != sub_slot)
+                ]
             else:
                 _ob = []
             _ob.sort(key=functools.cmp_to_key(lambda a, b: vercmp(a["version"], b["version"]) or 0))
@@ -13264,6 +13277,28 @@ def resolve_pretend_graph(
     # pass, settle/feed back/abandon, and on exhaustion re-run the deepest
     # terminal (config-only) params. `--backtrack=0` settles the root pass
     # as-is (real's `_allow_backtracking` gate). Mirrors portage-repo.
+    # The slot-operator rebuild scan's reachability gate. Real only
+    # slot-op-rebuilds a consumer that is in the graph in complete mode (a
+    # member of, or a forward-installed-dep of a member of, the required
+    # sets). #24 S3: real _complete_graph starts its required-set walk
+    # from args = self._dynamic_config._initial_arg_list[:] (8677) and
+    # *appends* the @world/@selected/@system set args to it (8723-8731),
+    # so a directly-requested atom is a seed too. The CLI layer fills
+    # complete_seed_atoms with the sets only; the args are added here. An
+    # empty complete_seed_atoms still means "not complete mode" and gates
+    # the whole scan off -- the args alone never enable it. Mirrors
+    # portage-repo/src/lib.rs's ResolveCtx::new.
+    slot_op_reachable = (
+        _required_set_reachable_cps(
+            root, sorted(set(list(complete_seed_atoms) + list(atoms))), []
+        )
+        if complete_seed_atoms
+        else set()
+    )
+    # The scan's (provider, consumer) pairs for the settling pass; None
+    # when the scan did not run for the reported pass (the get_best_run
+    # re-pass). Mirrors portage-repo's PassResult::abi_rebuilds.
+    _pass_abi_rebuilds = None
     _bt_add(_node_snapshot(), True, True)  # root
     _first_pass = True
     _settled = False
@@ -13298,6 +13333,16 @@ def resolve_pretend_graph(
             # No search: report the root pass as-is (locals already hold
             # the in-walk writes; nothing to merge). Settles once --
             # no best-run re-walk, mirroring portage-repo.
+            #
+            # #24 S3: --backtrack=0 also turns the slot-operator rebuild
+            # trigger off, matching real's allow_backtracking =
+            # max_retries > 0 (_backtrack_depgraph 12190) gating
+            # _slot_operator_trigger_reinstalls at 2131: with no search
+            # there is no restart to apply the replace set on, so real
+            # schedules nothing and _forced_rebuilds stays empty (no
+            # "causing rebuilds" block either). Mirrors portage-repo's
+            # collect_feedback.
+            _pass_abi_rebuilds = []
             _settled = True
             break
 
@@ -13500,6 +13545,7 @@ def resolve_pretend_graph(
         if _rdc_added:
             _bt_feedback_config(grown)
             continue
+
         # C2: no feedback fired. A pass that still carries an
         # unsatisfiable dependency is a dead end (real's abandoned
         # `_create_graph`), not a report; a conflict-only fall-through
@@ -13507,6 +13553,41 @@ def resolve_pretend_graph(
         # re-pass reports what the abandoned pass saw. Mirrors
         # portage-repo's `DeadEnd`.
         _has_nvc = any(r[2][0] == "no_visible_candidate" for r in entries)
+
+        # #24 S3: real _process_slot_conflicts -> _slot_operator_trigger_
+        # reinstalls (2131-2132, gated on _allow_backtracking) ->
+        # _slot_operator_*_backtrack (2361-2452) writing backtrack_infos
+        # ["config"]["slot_operator_replace_installed"] + _need_restart,
+        # consumed by resolver/backtracking.py::_feedback_config (237-257).
+        # A consumer the scan finds becomes a *walked node* on the next
+        # pass, so its deps, its := binding and its merge-order edges are
+        # real -- nothing is synthesised after the settle any more.
+        #
+        # Placed last in the chain, on the settled graph: real runs the
+        # trigger after the walk, and the old synthesiser ran on the final
+        # entries, so this sees exactly the same input it always did. A
+        # pass carrying an unsatisfiable dependency is a dead end first.
+        # Config feedback is budget-free, and the set only ever grows --
+        # bounded by the installed cp count -- so the search terminates.
+        # --backtrack=0 / --nodeps never reach here (the driver settles
+        # the root pass above), matching real's allow_backtracking =
+        # max_retries > 0 gate on the trigger itself. Mirrors portage-repo.
+        if _has_nvc or ignore_built_slot_operator_deps or not rebuild_if_new_slot:
+            _pass_abi_rebuilds = []
+        else:
+            _sop_scheduled, _sop_abi = _slot_operator_rebuild_scan(
+                root,
+                repos,
+                entries,
+                slot_op_reachable,
+                grown["slot_operator_replace_installed"],
+            )
+            _pass_abi_rebuilds = _sop_abi
+            if _sop_scheduled != grown["slot_operator_replace_installed"]:
+                grown["slot_operator_replace_installed"] = _sop_scheduled
+                _bt_feedback_config(grown)
+                continue
+
         if _has_nvc:
             _bt_nodes[_bt_current]["params"] = grown
             continue
@@ -13519,6 +13600,7 @@ def resolve_pretend_graph(
         # (config-only) params and report those (real `get_best_run`).
         # Mirrors portage-repo.
         _node_restore(_bt_best())
+        _pass_abi_rebuilds = None
         (
             entries,
             slot_conflicts,
@@ -13601,18 +13683,24 @@ def resolve_pretend_graph(
     # forward-installed-dep of a member of, @world/@selected/@system).
     # `complete_seed_atoms` is populated by the CLI layer only when
     # complete-graph mode is active; empty means no rebuilds at all.
-    slot_op_reachable = (
-        _required_set_reachable_cps(root, complete_seed_atoms, [])
-        if complete_seed_atoms
-        else set()
-    )
-    if ignore_built_slot_operator_deps or not rebuild_if_new_slot:
-        slot_op_rebuilds, abi_rebuilds = [], []
+    # #24 S3: the consumers themselves are walked nodes now (seeded +
+    # flipped in the walk from slot_operator_replace_installed), so
+    # nothing is synthesised here -- only the _forced_rebuilds display
+    # pairs feed _show_abi_rebuild_info. The decision chain already ran
+    # the scan for every pass it decided; the get_best_run re-pass does
+    # not go through it, hence the fallback.
+    if _pass_abi_rebuilds is not None:
+        abi_rebuilds = _pass_abi_rebuilds
+    elif ignore_built_slot_operator_deps or not rebuild_if_new_slot:
+        abi_rebuilds = []
     else:
-        slot_op_rebuilds, abi_rebuilds = _slot_operator_rebuild_entries(
-            root, repos, entries, slot_op_reachable
-        )
-    entries.extend(slot_op_rebuilds)
+        abi_rebuilds = _slot_operator_rebuild_scan(
+            root,
+            repos,
+            entries,
+            slot_op_reachable,
+            slot_operator_replace_installed,
+        )[1]
 
     # Real _rebuild_config.trigger_rebuilds (--rebuild-if-unbuilt /
     # --rebuild-if-new-rev / --rebuild-if-new-ver). Mirrors pretend.rs.
@@ -18830,15 +18918,17 @@ def _colorize_use_token(tok, color):
     return f"{open_}{color.c(key, core)}{markers}{close}"
 
 
-def _decorate_version(version, slot, sub_slot, repo, show_slot):
+def _decorate_version(version, slot, sub_slot, repo, show_slot, force_sub_slot=False):
     """Real output.py::_append_slot + _append_repository (verbosity 3 --
     emerge -pv only): decorate a bare version with `:slot` (plus
     `/sub_slot` when it differs) and `::repo`. `show_slot` carries real
-    _append_slot's own gate. Mirrors pretend.rs's decorate_version."""
+    _append_slot's own gate; `force_sub_slot` carries convert_myoldbest's
+    extra disjunct (see the oldbest caller). Mirrors pretend.rs's
+    decorate_version."""
     s = version
     if show_slot:
         s += ":" + slot
-        if slot != sub_slot:
+        if slot != sub_slot or force_sub_slot:
             s += "/" + sub_slot
     return s + "::" + repo
 
@@ -21598,7 +21688,25 @@ def run(args):
             for r in oldbest_refs:
                 v = r["version"][:-3] if r["version"].endswith("-r0") else r["version"]
                 parts.append(
-                    _decorate_version(v, r["slot"], r["sub_slot"], r["repo"], show_slot)
+                    _decorate_version(
+                        v,
+                        r["slot"],
+                        r["sub_slot"],
+                        r["repo"],
+                        show_slot,
+                        # Real convert_myoldbest's non-new_slot branch
+                        # appends the old instance's sub-slot on a
+                        # *second* disjunct the entry's own _append_slot
+                        # does not have: old.slot == pkg.slot and
+                        # old.sub_slot != pkg.sub_slot. Only reachable
+                        # for an oldbest whose slot matches but whose
+                        # sub-slot moved -- a --changed-slot /
+                        # slot-operator reinstall (#24 S3 made reinstall
+                        # carry an oldbest at all). Mirrors pretend.rs.
+                        not new_slot_flag
+                        and r["slot"] == entry_slot
+                        and r["sub_slot"] != entry_sub,
+                    )
                     if v3
                     else v
                 )

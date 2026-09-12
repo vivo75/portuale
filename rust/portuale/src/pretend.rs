@@ -495,12 +495,13 @@ fn decorate_version(
     sub_slot: &str,
     repo: &str,
     show_slot: bool,
+    force_sub_slot: bool,
 ) -> String {
     let mut s = String::from(version);
     if show_slot {
         s.push(':');
         s.push_str(slot);
-        if slot != sub_slot {
+        if slot != sub_slot || force_sub_slot {
             s.push('/');
             s.push_str(sub_slot);
         }
@@ -999,7 +1000,7 @@ fn print_entry_line(
             None => v.to_string(),
         };
         if v3 {
-            decorate_version(&v, entry_slot, entry_sub, entry_repo, show_slot)
+            decorate_version(&v, entry_slot, entry_sub, entry_repo, show_slot, false)
         } else {
             v
         }
@@ -1018,7 +1019,17 @@ fn print_entry_line(
             .map(|r| {
                 let v = r.version.strip_suffix("-r0").unwrap_or(&r.version);
                 if v3 {
-                    decorate_version(v, &r.slot, &r.sub_slot, &r.repo, show_slot)
+                    // Real `convert_myoldbest`'s non-`new_slot` branch
+                    // appends the old instance's sub-slot on a *second*
+                    // disjunct the entry's own `_append_slot` does not
+                    // have: `old.slot == pkg.slot and old.sub_slot !=
+                    // pkg.sub_slot`. Only reachable for an `oldbest`
+                    // whose slot matches but whose sub-slot moved -- a
+                    // `--changed-slot` / slot-operator reinstall
+                    // (#24 S3 made `Reinstall` carry an `oldbest` at all).
+                    let force_sub =
+                        !entry.new_slot && r.slot == entry_slot && r.sub_slot != entry_sub;
+                    decorate_version(v, &r.slot, &r.sub_slot, &r.repo, show_slot, force_sub)
                 } else {
                     v.to_string()
                 }

@@ -124,7 +124,7 @@ with an existing fixture package carrying different deps.
 | case | upstream file | mechanism | S2 status | expected v1 status |
 |---|---|---|---|---|
 | a522084 | `test_solve_non_slot_operator_slot_conflicts.py` | complete gate | MATCH (S1) | done |
-| rebuild-1 | `test_slot_operator_rebuild.py` case 1 (`emerge A`, `--dynamic-deps=n`; bug 522652) | order + `\|\|`-wrapped `:=` | DIVERGENT-order (set right, incl. the `\|\|`-arm `C-0`) | MATCH after S3 |
+| rebuild-1 | `test_slot_operator_rebuild.py` case 1 (`emerge A`, `--dynamic-deps=n`; bug 522652) | order + `\|\|`-wrapped `:=` | **MATCH (S3)** -- `[A-2, B-0, C-0]` | done |
 | rebuild-2 | same, case 2 (`--usepkg`, binary `E-1` at `F:0/1`) | `slot_operator_mask_built` (bug 652938) | NOT TRANSLATABLE (needs a binpkg with built `F:0/1=` metadata + `--usepkg` mask-built path; no ad-hoc binpkg machinery in `_b1_root` tests) | v2 `#24c` |
 | unsat-439694 | `test_slot_operator_unsatisfied.py` | in-walk unsatisfied arm | case 2 MATCH, case 1 strict-xfail (S1) | case 1 → v2 `#24f` (new item, S1 finding) |
 | slotchange-1/4 | `test_slot_change_without_revbump.py` cases 1 (`--oneshot`, ebuild variant), 4 (`-uD --changed-slot`) | `_slot_change_probe` + `--changed-slot` (bug 456208) | case 1 strict-xfail; case 4 MATCH (sets+markers via standalone trigger; S5 owns routing); case 2 (`--noreplace` → `[]`) MATCH | cases 1+4 MATCH after S5 (ebuild variant; binary halves → v2 `#24c`) |
@@ -139,14 +139,14 @@ with an existing fixture package carrying different deps.
 | runtime_pkg_mask | `test_slot_operator_runtime_pkg_mask.py` (`=socmeta-2 --backtrack 14`) | runtime mask + rebuild | MATCH (ambiguous order) | done |
 | unsolved | `test_slot_operator_unsolved.py` (ruby cycle, USE-gated solutions) | cycle + probe interplay | NOT TRANSLATABLE without approximating (USE-gated `circular_dependency_solutions`; an approx pin is worse than none) | v2 |
 | bdeps | `test_slot_operator_bdeps.py` (`-uD`, + `--usepkg --with-bdeps=y` ebuild-fallback) | `BDEPEND` `:=` rebuild | MATCH both | done (binary-rejection half → v2 `#24c`) |
-| required_use | `test_slot_operator_required_use.py` (bug 523048, → fail) | REQUIRED_USE-gated rebuild | strict-xfail (rebuilds instead of reporting) | v2 (new item: REQUIRED_USE gate on forced rebuilds) |
+| required_use | `test_slot_operator_required_use.py` (bug 523048, → fail) | REQUIRED_USE-gated rebuild | **MATCH (S3)** -- the walked node runs the ordinary `REQUIRED_USE` check the synthesiser bypassed | done (no v2 item needed) |
 | conflict-rebuild | `test_slot_conflict_rebuild.py` (bug 439688, `-uD --backtrack 4` → `[D-2, E-0]`) | conflict holds `A`, `D` shifts | MATCH (bug 922038 falls out) | done |
 | conflict-mass | same file (bug 486580, 5 leaves) | `_slot_change_probe` (main-slot move, renamed `somass*`) + named-atom seeding gap (leaves outside CLI seeds) | strict-xfail | MATCH after S5+S3 (probe + walked node; seeds must cover the walk) |
 | missed_update-Qt / blocker | `test_missed_update.py`, `testBacktrackInconsistentForcedRebuildWithBlocker` | — | OUT (upstream `xfail`; blocker + rebuild) | out of scope |
 | slotundo-cascade | synthetic (a522084 + consumer tree-`SLOT` bump) | tree-`SLOT` cascade | MATCH | guards `casc*` for S3 |
 | slotundo-unnecessary | synthetic (USE-disabled `soflag? ( := )` dep) | rule 8 USE-reduction | strict-xfail (scan reads raw vdb) | flips in S4 |
 | slotundo-changed-slot | synthetic (consumer same-version SLOT move) | rule 6 (no flag) / rule 3 (flag) | no-flag MATCH (guard vs over-undo); flag strict-xfail (loses `r` + edge via standalone trigger) | S4 keeps guard; flag display flips in S5 |
-| slotundo-rebind | synthetic (consumer gains `sounewdep`) | walked node edges | strict-xfail (`--json` duplicate rows) | flips in S3 |
+| slotundo-rebind | synthetic (consumer gains `sounewdep`) | walked node edges | **MATCH (S3)** -- one walked `reinstall` row, no `already_installed` duplicate | done |
 
 S2 corrections to the plan (surfaced, not defaulted):
 
@@ -239,3 +239,134 @@ consumer among the L0 probes); no regression.
 
 L0 baseline: archived under `TEST/findings/` by the S0 commit (raw
 `l0-resolver.sh` output on `main`, pre-S1).
+
+## S3 — route the rebuild through the `Backtracker` (2026-09-12)
+
+The architectural slice. A slot-operator rebuild is no longer a
+`GraphEntry` synthesised after the search settles; it is a **walked
+graph node**, exactly as in real.
+
+**Shape (real citations).** `slot_operator_rebuild_entries` is split
+into `slot_operator_rebuild_scan` (`lib.rs`, Python
+`_slot_operator_rebuild_scan`), which returns only the consumer
+`(cat, pkg)` set plus the `(provider_cpv, consumer_cpv)` display pairs.
+It runs in `collect_feedback` / the Python decision chain, last in the
+chain, on the settled graph -- real calls
+`_slot_operator_trigger_reinstalls` from `_process_slot_conflicts`
+(`depgraph.py:2131-2132`) after the walk. A grown set becomes
+`BacktrackFeedback::Config` (real
+`backtrack_infos["config"]["slot_operator_replace_installed"]`,
+`depgraph.py:2400`/`2361`/`2881` → `resolver/backtracking.py::
+_feedback_config` 237-257) carried on
+`BacktrackParams::slot_operator_replace_installed` (`BTreeSet`, in
+`params_equal`). The next pass seeds the walk with a bare `cat/pkg`
+atom per member -- real's pseudo `SetArg`
+`@__auto_slot_operator_replace_installed__` (`_gen_reinstall_sets`
+5457-5480), appended *after* the user's args (`select_files` 5430),
+`owner = None` (the set arg has no package parent) and `depth = 1`
+(real's `reset_depth=False`: no `--deep=N` depth interaction, and not a
+top-level argument, which `depth == 0` means everywhere in the walk) --
+and flips that package's `AlreadyInstalled` outcome to
+`Reinstall { slot_operator_rebuild: true }` at the same point
+`--reinstall-atoms` flips (real's `force_reinstall=True`). Keyed on the
+`cat/pkg`, so whichever visit comes first -- the seed or an ordinary
+dependency edge -- is the one that flips; patching the entry afterwards
+would leave its deps unenqueued. The cascade falls out for free (the
+rebuilt consumer is a provider at its *tree* sub-slot on the next
+pass), so the internal fixpoint is gone. Narrowing, documented on the
+field: real keys `(root, slot_atom)` via `_replace_installed_atom`
+(3059-3087); portuale resolves one instance per `cat/pkg`.
+
+**Verdicts (live, `_b1_root`, Rust == Python byte-for-byte on every
+probe):**
+
+| case | before S3 | after S3 |
+|---|---|---|
+| rebuild-1 (bug 522652) | `[B-0, C-0, A-2]` -- array position | `[A-2, B-0, C-0]` = real's `[A-2, (B-0, C-0)]` |
+| slotundo-rebind | `already_installed` + `reinstall` duplicate `--json` rows | one walked `reinstall` row |
+| required_use (bug 523048) | merged `soreqb-0` | `!!! … has unmet requirements` + rc 1, real's shape |
+| a522084, cascade, slotbind, bdeps, revdeps, autounmask, conflict-rebuild, runtime_pkg_mask, parentdown, libgit2 guard | — | unchanged |
+
+**Three pins moved, each with its oracle:**
+
+1. `test_oracle_slotop_rebuild_order`, `test_oracle_slotop_undo_rebind`
+   -- strict-xfail → passing (upstream `test_slot_operator_rebuild.py`
+   case 1; the S2 synthetic).
+2. `test_oracle_slotop_required_use` -- strict-xfail → passing
+   (upstream `test_slot_operator_required_use.py`). Not planned: the
+   walked node simply runs the `REQUIRED_USE` check the synthesiser
+   never consulted. The planned v2 item is therefore **not needed**.
+3. `test_oracle_slotop_slotchange_case4_changedslot`
+   (`app-arch/libarchive-3.1.1`),
+   `test_changed_slot_reinstalls_a_package_whose_vdb_slot_differs_from_the_current_ebuild`
+   and `test_changed_deps_and_changed_slot_combine_in_one_reinstall_line`
+   (`dev-libs/changedslotpkg-1.0`) -- all three now render the
+   `[oldver]` bracket. Real `output.py::_get_installed_best` 721-727: a
+   reinstall of an installed cpv is the `vardb.cpv_exists(pkg.cpv)` arm
+   (`replace = True`) and carries `myoldbest = [installed_version]`
+   exactly when the installed instance's `(slot, sub_slot)` differs
+   from the one being merged -- which both shapes are (installed `0/0`
+   vs tree `SLOT="0/13"` / `SLOT="0/2"`); `convert_myoldbest` does not
+   suppress a same-version bracket. The post-pass synthesiser already
+   applied that rule to its own entries; S3 gives it to walked
+   reinstalls, where real applies it. Real's third disjunct (`not
+   quiet_repo_display and repo differs`) stays out, as it did there.
+
+   The same bracket made one real-renderer branch reachable for the
+   first time and it was missing, so it was ported with the pin:
+   `convert_myoldbest`'s non-`new_slot` arm appends the *old*
+   instance's sub-slot on a second disjunct the entry's own
+   `_append_slot` does not have -- `old.slot == pkg.slot and
+   old.sub_slot != pkg.sub_slot`. `decorate_version` /
+   `_decorate_version` gained a `force_sub_slot` argument, passed only
+   from the `oldbest` caller, so `emerge -pv --changed-slot
+   dev-libs/changedslotpkg` prints real's
+   `[1.0:0/0::testrepo]` rather than `[1.0:0::testrepo]`. Pinned in the
+   slot-only `--changed-slot` test.
+
+**New behaviour, deliberate (`--backtrack=0` / `--nodeps`):** the
+rebuild is off. Real gates `_slot_operator_trigger_reinstalls` on
+`_allow_backtracking` (`depgraph.py:2131`), which `_backtrack_depgraph`
+sets from `allow_backtracking = max_retries > 0` (12190) -- with no
+search there is no restart to apply the replace set on, so real
+schedules nothing and `_forced_rebuilds` stays empty (no "causing
+rebuilds" block either). The pre-S3 synthesiser ran regardless of the
+budget. Pinned in
+`test_slot_operator_rebuild_is_a_walked_node_and_off_at_backtrack_zero`.
+
+**Reachability widened (the S2 mass-rebuild finding):** `slot_op_reachable`
+is now seeded from `complete_seed_atoms ∪ atoms`. Real `_complete_graph`
+starts its required-set walk from
+`args = self._dynamic_config._initial_arg_list[:]` (8677) and *appends*
+the `@world`/`@selected`/`@system` set args (8723-8731), so a
+directly-requested atom is a seed too. An empty `complete_seed_atoms`
+still means "not complete mode" and gates the whole scan off -- the args
+alone never enable it.
+
+Judgment calls surfaced (not defaulted):
+
+- **Gate G0.2 answered "unconditional"** by the owner: no
+  `PORTUALE_SLOT_OP_GRAPH` flag; the synthesiser is deleted from the
+  default path. S6's L0 triage compares against the S0 archive rather
+  than toggling a flag.
+- **The `--solver=pubgrub` / `--solver=resolvo` bridges keep the
+  synthesiser.** `solver_bridge.rs` has no `Backtracker`, so it cannot
+  re-drive a pass with the consumer seeded; `slot_operator_rebuild_entries`
+  survives there as a documented legacy wrapper around the scan (it
+  re-runs the scan to a fixpoint to keep the cascade). The default
+  `--solver=portage` path has no synthesiser left.
+- **`required_by` on a rebuilt row stays empty**, and `--tree` does not
+  indent it. That is faithful, not a gap: real's parent is the internal
+  auto set arg, and `_eliminate_rebuilds` rule 5 exists precisely to
+  exclude it from the "the user asked for it" test. The merge-order
+  evidence is the row's own `deps` (asserted in the Rust unit test) and
+  the provider-first order (asserted in three contract pins).
+- **`conflict-mass` (bug 486580) stays strict-xfail.** S3 removed the
+  seeding half of its blocker (named atoms now seed reachability), but
+  the shape still needs S5's `_slot_change_probe` -- a main-slot move
+  `1 → 2/2` is not a sub-slot shift, so the scan never fires. Reason
+  text left as-is; it already names S5 first.
+
+S3 does **not** implement the undo (`_eliminate_rebuilds`): every
+consumer the scan schedules is still kept. That is S4, and the two
+`slotundo-unnecessary` / `complete` xfails stay strict.

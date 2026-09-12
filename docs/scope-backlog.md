@@ -236,17 +236,29 @@ can't grow into these incrementally:
   multi-root graph (a `root` per dependency edge) stays a deliberate
   edge-by-edge approximation; a running-root entry's `PDEPEND` stays a
   target-`ROOT` concern (a permanent non-gap).
-- **Slot-operator rebuild v1 cuts** — single-pass (no backtracking for a
-  rebuild that itself shifts another sub-slot), the rebuilt consumer's
-  own `:=` deps not re-bound in the pretend graph, no `--changed-slot`
-  interaction, `IUSE_EFFECTIVE` in the built-dep domain. Investigated
-  2026-09-05: real's slot-operator machinery is a *reconciliation* with
-  an undo path (`_slot_operator_update_probe`/`_backtrack`/etc.,
+- **Slot-operator rebuild v1 cuts — mostly closed 2026-09-12 (#24
+  S1–S3).** Investigated 2026-09-05: real's slot-operator machinery is a
+  *reconciliation* with an undo path
+  (`_slot_operator_update_probe`/`_backtrack`/etc.,
   `depgraph.py:2400-3200`); portuale's `slot_operator_rebuild_entries`
-  fixpoint has no undo path at all, so "single-pass" and "no
-  `--changed-slot` interaction" are the same missing piece, not two —
+  fixpoint had no undo path at all, so "single-pass" and "no
+  `--changed-slot` interaction" were the same missing piece, not two —
   see `history/scope-backlog-2026-09-05.md` for the full citations.
-  `--changed-slot` itself already ships standalone (`slot_changed`).
+  **Shipped:** S1 the complete-mode gate under `--deep` (the a522084
+  `B-0` miss was the missing auto-enabled pass); S2 22 oracle pins over
+  the `test_slot_operator_*` family (`docs/024-oracle.md`); S3 the
+  rebuild is a **walked graph node** routed through the `Backtracker`
+  (`slot_operator_rebuild_scan` → `BacktrackParams::
+  slot_operator_replace_installed` → in-walk seed + flip, real's
+  `@__auto_slot_operator_replace_installed__`), so the consumer's deps
+  are re-walked, its `:=` re-bound and its merge order real — the
+  synthesiser is gone from the default solver (the `--solver=` bridges
+  keep it as a documented legacy wrapper). **Still open:** the undo
+  itself (`_eliminate_rebuilds`, #24 S4), `_slot_change_probe` + the
+  `--changed-slot` rule-3 line (S5), L0 triage (S6), and the v2 probe
+  family (#24b–#24e) + `IUSE_EFFECTIVE` in the built-dep domain, which
+  stays a named cut. `--changed-slot` itself already ships standalone
+  (`slot_changed`).
 
 - **DFS-partial abort path (#19) — Gate-0 decisions recorded 2026-09-11
   (Slice 1 oracle: `docs/abort-path-spec.md`, fixtures

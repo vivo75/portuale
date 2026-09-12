@@ -4193,6 +4193,61 @@ def test_slot_operator_rebuild_reinstalls_a_stale_equals_consumer(
     assert "causing rebuilds" not in no_block.stdout
 
 
+def test_slot_operator_rebuild_is_a_walked_node_and_off_at_backtrack_zero(
+    emerge_binary, emerge_pretend_python, fixture_env, tmp_path
+):
+    """Backlog #24 S3, the two observables of routing the rebuild through
+    the `Backtracker` instead of synthesising an entry after the settle.
+
+    1. **Walked node.** The consumer is scheduled into
+       `slot_operator_replace_installed` (real
+       `backtrack_infos["config"]["slot_operator_replace_installed"]`,
+       `depgraph.py:2400`), seeded on the next pass as real's
+       `@__auto_slot_operator_replace_installed__` `SetArg`
+       (`_gen_reinstall_sets` 5457-5480, `force_reinstall=True`,
+       `reset_depth=False`) and resolved by the ordinary walk. So it
+       owns its tree dependency edges: the provider it is rebuilt
+       against merges *before* it, and there is exactly one `--json` row
+       for it (the synthesiser left an `already_installed` row beside
+       the `reinstall` one whenever the walk had reached the consumer).
+       It is not an `(Argument)` puller either -- real's auto set is
+       internal.
+    2. **`--backtrack=0` turns it off.** Real gates
+       `_slot_operator_trigger_reinstalls` on `_allow_backtracking`
+       (`depgraph.py:2131`), which `_backtrack_depgraph` sets from
+       `allow_backtracking = max_retries > 0` (12190): with no search
+       there is no restart to apply the replace set on, so nothing is
+       scheduled and `_forced_rebuilds` stays empty -- no `rR` row and
+       no "causing rebuilds" block. The pre-S3 post-pass synthesiser ran
+       regardless of the budget."""
+    env = dict(fixture_env)
+    root = str(_slotbind_root(tmp_path))
+    env["ROOT"] = root
+    args = ["--pretend", "dev-libs/slotbindtarget"]
+
+    rows = json.loads(_run([str(emerge_binary)], args + ["--json"], env).stdout)[
+        "entries"
+    ]
+    consumer = [e for e in rows if e["package"] == "slotbindconsumer"]
+    assert len(consumer) == 1, consumer
+    assert consumer[0]["outcome"] == "reinstall"
+    assert consumer[0]["slot_operator_rebuild"] is True
+    order = [e["package"] for e in rows]
+    assert order.index("slotbindtarget") < order.index("slotbindconsumer")
+
+    for budget in (["--backtrack", "0"], ["--backtrack=0"]):
+        rust = _run([str(emerge_binary)], args + budget, env)
+        python = _run(emerge_pretend_python, args + budget, env)
+        assert rust.stdout == python.stdout and rust.stderr == python.stderr
+        assert rust.returncode == 0
+        assert rust.stdout.splitlines() == [
+            "[ebuild     U  ] dev-libs/slotbindtarget-2.0 [1.0]"
+        ], rust.stdout
+
+    # The default budget still rebuilds (guard against the gate leaking).
+    assert "slotbindconsumer" in _run([str(emerge_binary)], args, env).stdout
+
+
 def test_ignore_built_slot_operator_deps_suppresses_the_rebuild(
     emerge_binary, emerge_pretend_python, fixture_env, tmp_path
 ):
@@ -12215,7 +12270,19 @@ def test_changed_slot_reinstalls_a_package_whose_vdb_slot_differs_from_the_curre
     --changed-slot is given, portuale reports a reinstall. Without
     --changed-deps, only the slot reason appears even though this same
     fixture package's own RDEPEND also differs (see the combined-reason
-    test below)."""
+    test below).
+
+    The `[1.0]` bracket is real `output.py::_get_installed_best`
+    721-727: a reinstall of an installed cpv is the
+    `vardb.cpv_exists(pkg.cpv)` arm (`replace = True`) and carries
+    `myoldbest = [installed_version]` exactly when the installed
+    instance's `(slot, sub_slot)` differs from the one being merged --
+    which is this fixture (vdb `SLOT="0"`, ebuild `SLOT="0/2"`).
+    `convert_myoldbest` does not suppress a same-version bracket. Only
+    reachable since #24 S3 gave walked reinstalls an `oldbest` at all.
+    At `-pv` real's non-`new_slot` branch appends the old sub-slot on
+    its extra `old.slot == pkg.slot and old.sub_slot != pkg.sub_slot`
+    disjunct, hence `[1.0:0/0::testrepo]`."""
     result = _run(
         [str(emerge_binary)],
         ["--pretend", "--changed-slot", "dev-libs/changedslotpkg"],
@@ -12224,8 +12291,17 @@ def test_changed_slot_reinstalls_a_package_whose_vdb_slot_differs_from_the_curre
     assert result.returncode == 0
     assert result.stdout.splitlines() == [
         '[ebuild  N     ] dev-libs/newpkg-1.0 ',
-        '[ebuild   R    ] dev-libs/changedslotpkg-1.0 ',
+        '[ebuild   R    ] dev-libs/changedslotpkg-1.0 [1.0]',
     ]
+    verbose = _run(
+        [str(emerge_binary)],
+        ["--pretend", "-v", "--changed-slot", "dev-libs/changedslotpkg"],
+        fixture_env,
+    )
+    assert (
+        "[ebuild   R    ] dev-libs/changedslotpkg-1.0:0/2::testrepo "
+        "[1.0:0/0::testrepo]" in verbose.stdout
+    )
 
 
 def test_changed_deps_and_changed_slot_combine_in_one_reinstall_line(
@@ -12244,7 +12320,9 @@ def test_changed_deps_and_changed_slot_combine_in_one_reinstall_line(
     assert result.returncode == 0
     assert result.stdout.splitlines() == [
         '[ebuild  N     ] dev-libs/newpkg-1.0 ',
-        '[ebuild   R    ] dev-libs/changedslotpkg-1.0 ',
+        # `[1.0]`: real `_get_installed_best` 721-727 -- see the
+        # slot-only test just above.
+        '[ebuild   R    ] dev-libs/changedslotpkg-1.0 [1.0]',
     ]
 
 
@@ -15434,14 +15512,6 @@ def _slotop_cpv(stdout):
     return out
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="bug 522652 set-vs-order split: the scan schedules the full "
-    "{A-2, B-0, C-0} set (the ||-arm C rebuild is NOT missed), but the "
-    "synthesised entries sort by array position, provider-last. Real "
-    "walks the consumer as a graph node (merge order [A-2, B-0, C-0]). "
-    "Flips in S3.",
-)
 def test_oracle_slotop_rebuild_order(
     emerge_binary, emerge_pretend_python, fixture_env, tmp_path
 ):
@@ -15473,14 +15543,17 @@ def test_oracle_slotop_rebuild_order(
         emerge_pretend_python,
     )
     merges = _b1_merges(rust.stdout)
-    assert [ln for ln in merges if "app-misc/" in ln][0].startswith(
-        "[ebuild  r  U  ] app-misc/A-2 "
-    )
-    assert {
-        ln.split("] ", 1)[1].split(" ", 1)[0]
-        for ln in merges
-        if "app-misc/B-0" in ln or "app-misc/C-0" in ln
-    } == {"app-misc/B-0", "app-misc/C-0"}
+    app = [ln for ln in merges if "app-misc/" in ln]
+    # S3 (#24): the two consumers are walked graph nodes now, so the
+    # provider they are rebuilt against merges first -- real's
+    # `[A-2, (B-0, C-0)]`. Upstream leaves the (B-0, C-0) pair itself
+    # unordered, so only the provider-first edge is pinned as a sequence.
+    assert app[0].startswith("[ebuild  r  U  ] app-misc/A-2 ")
+    assert {ln.split("] ", 1)[1].split(" ", 1)[0] for ln in app[1:]} == {
+        "app-misc/B-0",
+        "app-misc/C-0",
+    }
+    assert all(ln.startswith("[ebuild  rR    ] ") for ln in app[1:])
 
 
 @pytest.mark.xfail(
@@ -15683,7 +15756,12 @@ def test_oracle_slotop_slotchange_case4_changedslot(
         emerge_pretend_python,
     )
     merges = _b1_merges(rust.stdout)
-    assert "[ebuild  rR    ] app-arch/libarchive-3.1.1 " in merges
+    # `[3.1.1]`: real `output.py::_get_installed_best` 721-727 -- a
+    # reinstall of an installed cpv carries `myoldbest = [installed]`
+    # exactly when its `(slot, sub_slot)` moved, which is this shape
+    # (installed `0/0`, tree `SLOT="0/13"`). #24 S3 gave walked
+    # reinstalls the same rule the post-pass synthesiser already had.
+    assert "[ebuild  rR    ] app-arch/libarchive-3.1.1 [3.1.1]" in merges
     assert "[ebuild  rR    ] kde-base/ark-4.10.0 " in merges
     assert "The following packages are causing rebuilds:" in rust.stdout
 
@@ -16012,13 +16090,6 @@ def test_oracle_slotop_conflict_mass_rebuild(
     }
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="bug 523048 needs a REQUIRED_USE-gated rebuild path (v2): "
-    "portuale rebuilds `soreqb-0` (whose tree `REQUIRED_USE` is "
-    "unsatisfied at default USE) instead of reporting it. Real fails "
-    "the resolve with `required_use_unsatisfied`.",
-)
 def test_oracle_slotop_required_use(
     emerge_binary, emerge_pretend_python, fixture_env, tmp_path
 ):
@@ -16026,9 +16097,12 @@ def test_oracle_slotop_required_use(
     `emerge app-misc/A`): installed `A-1` + `soreqb-0` (`A:0/1=`,
     `IUSE x y`, `USE=x`); tree `soreqb-0` adds `REQUIRED_USE || ( x y )`
     (unsatisfied at default USE). Real fails with
-    `required_use_unsatisfied=[soreqb:0]`. Renamed: fixture `app-misc/B`
-    is taken (no IUSE). (`A-2`'s fixture `PDEPEND` pulls `B-0 N` along;
-    incidental.)"""
+    `required_use_unsatisfied=[soreqb:0]`. MATCHES since #24 S3: the
+    rebuilt consumer is a walked node, so ordinary selection runs its
+    `REQUIRED_USE` check -- the post-pass synthesiser built the entry
+    without ever consulting it, and merged a package real refuses.
+    Renamed: fixture `app-misc/B` is taken (no IUSE). (`A-2`'s fixture
+    `PDEPEND` pulls `B-0 N` along; incidental.)"""
     root = _b1_root(
         tmp_path,
         ["app-misc/soreqb"],
@@ -16396,22 +16470,15 @@ def test_oracle_slotop_undo_changed_slot_flag(
     assert "The following packages are causing rebuilds:" in rust.stdout
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="S3's walked node: today the consumer is synthesised post-pass "
-    "(`already_installed` + `reinstall` duplicate rows in `--json`), so "
-    "the flipped node never owns its edges. After S3 there is exactly "
-    "one walked `reinstall` row.",
-)
 def test_oracle_slotop_undo_rebind(
     emerge_binary, emerge_pretend_python, fixture_env, tmp_path
 ):
     """Synthetic `slotundo-rebind`: `sorebind-1.0`'s tree `RDEPEND`
     gained `dev-libs/sounewdep` over its installed
-    `souprov:0/1=`-only string. The new dep already resolves today
-    (presence guard); S3 makes the rebuilt row the walked node (one
-    `--json` row, not the `already_installed` + `reinstall` duplicate
-    the synthesiser leaves)."""
+    `souprov:0/1=`-only string. S3 (#24) makes the rebuilt row the
+    walked node: exactly one `--json` row, `outcome == "reinstall"`, and
+    no `already_installed` + `reinstall` duplicate of the kind the
+    post-pass synthesiser left behind."""
     root = _b1_root(
         tmp_path,
         ["dev-libs/sorebind"],

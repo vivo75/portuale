@@ -63,7 +63,7 @@ pub use merge_order::{DepEdge, DepPriority};
 use portage_versions::vercmp;
 use std::cell::RefCell;
 use std::cmp::Ordering;
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
@@ -11868,16 +11868,33 @@ fn reverse_dependency_constraints(
     (enforced, dropped)
 }
 
-/// Real depgraph's `_slot_operator_trigger_reinstalls` +
+/// [`slot_operator_rebuild_scan`]'s result: the consumer `(cat, pkg)`
+/// replace set (real `_slot_operator_replace_installed`) and the
+/// `(provider_cpv, consumer_cpv)` display pairs (real `_forced_rebuilds`,
+/// what `_show_abi_rebuild_info` renders).
+type SlotOpRebuildScan = (BTreeSet<(String, String)>, Vec<(String, String)>);
+
+/// Real depgraph's `_slot_operator_trigger_reinstalls` (3089-3132) +
 /// `_slot_operator_replace_installed` (the
 /// `@__auto_slot_operator_replace_installed__` set), run once every
 /// merge-bound entry is resolved: an installed package whose vdb
 /// `*DEPEND` carries a *built* slot-operator atom (`cat/pkg:S/SS=` --
 /// operator `=`, both slot and sub-slot present, real
 /// `Atom.slot_operator_built`) whose bound `S/SS` no longer matches how
-/// this run leaves `cat/pkg` **in that same slot** is scheduled for a
-/// reinstall (`Reinstall { slot_operator_rebuild: true, .. }`) -- real
-/// portage's "don't leave a broken ABI link" auto-rebuild.
+/// this run leaves `cat/pkg` **in that same slot** must be rebuilt --
+/// real portage's "don't leave a broken ABI link" auto-rebuild.
+///
+/// #24 S3: this is the *scan* only. It returns the consumer `(cat, pkg)`
+/// set for `BacktrackParams::slot_operator_replace_installed` (real's
+/// `backtrack_infos["config"]["slot_operator_replace_installed"]`) plus
+/// the `(provider_cpv, consumer_cpv)` display pairs (real's
+/// `_forced_rebuilds`), and builds **no** `GraphEntry`: the consumer
+/// becomes a walked node on the next pass (`run_pass`'s seed + flip),
+/// which is what gives it re-evaluated deps, a re-bound `:=` and real
+/// merge-order edges. The old post-pass entry synthesiser -- and with it
+/// the internal `scheduled`/`new_slot` fixpoint -- is gone; the cascade
+/// now falls out of the next pass seeing the rebuilt consumer as a
+/// provider at its *tree* sub-slot.
 ///
 /// A provider entry counts only when it *replaces* an installed version
 /// in a slot (`Upgrade`/`Downgrade`/`Reinstall` -- a new-other-slot
@@ -11887,30 +11904,26 @@ fn reverse_dependency_constraints(
 ///
 /// **The scan is gated on `reachable`** -- real only slot-op-rebuilds a
 /// consumer that is in the graph in complete mode (a member of, or a
-/// forward-installed-dep of a member of, `@world`/`@selected`/`@system`).
-/// `reachable` empty (not complete mode) means no rebuilds at all.
+/// forward-installed-dep of a member of, the required sets: real
+/// `_complete_graph` 8677 starts from `_initial_arg_list` -- the CLI
+/// args -- and appends `@world`/`@selected`/`@system`). `reachable`
+/// empty (not complete mode) means no rebuilds at all.
 ///
-/// **Cascade (real `_backtrack_depgraph` re-drive):** a scheduled
-/// rebuild lands at its *tree ebuild*'s `SLOT` sub-slot, not the vdb's.
-/// When those differ (a sub-slot bump on the consumer since it was
-/// installed) the rebuild is itself a slot shift, so the scan iterates
-/// to a fixpoint, chasing the consumer's own stale built-slot-op
-/// consumers. `abi_rebuilds` accumulates every level -- real's
-/// `_forced_rebuilds`, rendered as "The following packages are causing
-/// rebuilds:".
+/// `already` is the replace set as the current search node carries it.
+/// A cp in it is *not* skipped by the in-graph test (it is in the graph
+/// precisely because this scan put it there last pass), so its
+/// `abi_rebuilds` pairs keep being reported for the whole search; every
+/// other in-graph cp is skipped, exactly as before.
 ///
-/// Cuts: the scheduled rebuild's own `RDEPEND`/`DEPEND` are **not
-/// re-walked** here (real does, so a genuinely new dependency of a
-/// cascade rebuild is missed -- a pure sub-slot cascade has none); no
-/// explicit `:=` re-bind / `_slot_operator_check_reverse_dependencies`
-/// rejection; no `--changed-slot` / `--ignore-built-slot-operator-deps`
-/// interaction.
-fn slot_operator_rebuild_entries(
+/// Cuts (unchanged from v1): no `_slot_operator_check_reverse_dependencies`
+/// rejection, no `_slot_operator_update_probe` family (v2 `#24b`), no
+/// `slot_operator_mask_built` for non-installed binaries (v2 `#24c`).
+fn slot_operator_rebuild_scan(
     root: &Path,
-    repos: &[RepoConfig],
     entries: &[GraphEntry],
     reachable: &HashSet<(String, String)>,
-) -> (Vec<GraphEntry>, Vec<(String, String)>) {
+    already: &BTreeSet<(String, String)>,
+) -> SlotOpRebuildScan {
     // cp -> (new version, new slot, new sub-slot) for every entry that
     // replaces an installed version in that slot.
     let mut new_slot: HashMap<(String, String), (String, String, String)> = HashMap::new();
@@ -11937,153 +11950,172 @@ fn slot_operator_rebuild_entries(
         }
     }
     if new_slot.is_empty() || reachable.is_empty() {
-        return (Vec::new(), Vec::new());
+        return (already.clone(), Vec::new());
     }
 
     let installed = all_installed_packages(root);
-    // Fixpoint: each pass finds installed consumers (reachable, not
-    // already in the graph or scheduled) with a stale built `:S/SS=` dep
-    // on a `new_slot` provider; schedules them at their *tree ebuild*'s
-    // sub-slot, which -- when it differs from vdb -- becomes a fresh
-    // `new_slot` entry that the next pass chases.
-    let mut scheduled: HashSet<(String, String)> = HashSet::new();
+    let mut scheduled: BTreeSet<(String, String)> = already.clone();
     let mut abi_rebuilds: Vec<(String, String)> = Vec::new();
-    loop {
-        let mut grew = false;
-        for pkg in &installed {
-            let cp = (pkg.category.clone(), pkg.package.clone());
-            if in_graph.contains(&cp) || scheduled.contains(&cp) || !reachable.contains(&cp) {
-                continue;
-            }
-            let consumer_cpv = pkg.cpv();
-            let mut providers: Vec<String> = ["RDEPEND", "PDEPEND", "DEPEND", "BDEPEND", "IDEPEND"]
-                .iter()
-                .flat_map(|key| {
-                    read_vdb_string(root, &pkg.category, &pkg.package, &pkg.version, key)
-                        .split_whitespace()
-                        .map(String::from)
-                        .collect::<Vec<_>>()
-                })
-                .filter_map(|tok| portage_dep::parse_atom(&tok))
-                .filter_map(|atom| {
-                    if atom.slot_operator != Some(portage_dep::SlotOperator::Equals) {
-                        return None;
-                    }
-                    let (a_slot, a_sub) = (atom.slot.as_deref()?, atom.sub_slot.as_deref()?);
-                    let (n_ver, n_slot, n_sub) =
-                        new_slot.get(&(atom.category.clone(), atom.package.clone()))?;
-                    (a_slot == n_slot && a_sub != n_sub)
-                        .then(|| format!("{}/{}-{n_ver}", atom.category, atom.package))
-                })
-                .collect();
-            providers.sort();
-            providers.dedup();
-            if providers.is_empty() {
-                continue;
-            }
-            for provider_cpv in providers {
-                abi_rebuilds.push((provider_cpv, consumer_cpv.clone()));
-            }
-
-            // The rebuild lands at the tree ebuild's SLOT, not the vdb's
-            // (real re-reads `SLOT` at merge time). A sub-slot bump here
-            // is itself a slot shift -> feed it back as a `new_slot`
-            // entry for the next fixpoint pass.
-            let (v_slot, v_sub) = read_vdb_slot(root, &pkg.category, &pkg.package, &pkg.version);
-            let (slot, sub_slot) = list_candidates(repos, &pkg.category, &pkg.package)
-                .ok()
-                .and_then(|cands| {
-                    cands
-                        .iter()
-                        .find(|c| c.version == pkg.version)
-                        .map(|c| (c.slot.clone(), c.sub_slot.clone()))
-                })
-                .unwrap_or((v_slot, v_sub));
-            new_slot.insert(cp.clone(), (pkg.version.clone(), slot, sub_slot));
-            scheduled.insert(cp);
-            grew = true;
-        }
-        if !grew {
-            break;
-        }
-    }
-
-    let mut out: Vec<GraphEntry> = Vec::new();
     for pkg in &installed {
         let cp = (pkg.category.clone(), pkg.package.clone());
-        if !scheduled.contains(&cp) {
+        if !reachable.contains(&cp) || (in_graph.contains(&cp) && !already.contains(&cp)) {
             continue;
         }
-        let (v_slot, v_sub) = read_vdb_slot(root, &pkg.category, &pkg.package, &pkg.version);
-        let (slot, sub_slot) = new_slot
-            .get(&cp)
-            .map(|(_, s, ss)| (s.clone(), ss.clone()))
-            .unwrap_or_else(|| (v_slot.clone(), v_sub.clone()));
-        let repo = read_vdb_string(
-            root,
-            &pkg.category,
-            &pkg.package,
-            &pkg.version,
-            "repository",
-        )
-        .trim()
-        .to_string();
-        // Real output.py::_get_installed_best (723-732): the rebuilt cpv
-        // is already installed (`replace = True`), so the `[oldver]`
-        // bracket shows only when the rebuild lands at a different
-        // slot/sub-slot than the installed instance -- exactly the
-        // sub-slot bump that drives the cascade.
-        let oldbest = if (slot.as_str(), sub_slot.as_str()) != (v_slot.as_str(), v_sub.as_str()) {
-            vec![InstalledRef {
-                version: pkg.version.clone(),
-                slot: v_slot,
-                sub_slot: v_sub,
-                repo: repo.clone(),
-            }]
-        } else {
-            Vec::new()
-        };
-        out.push(GraphEntry {
-            category: pkg.category.clone(),
-            package: pkg.package.clone(),
-            outcome: PretendOutcome::Reinstall {
-                version: pkg.version.clone(),
-                changed_flags: Vec::new(),
-                deps_changed: false,
-                slot_changed: false,
-                rebuilt_binary: false,
-                new_repo: false,
-                slot_operator_rebuild: true,
-            },
-            blockers: Vec::new(),
-            slot: Some(slot),
-            sub_slot: Some(sub_slot),
-            repo_name: (!repo.is_empty()).then_some(repo),
-            oldbest,
-            use_flags_display: Vec::new(),
-            use_expand_display: Vec::new(),
-            use_expand_display_p: Vec::new(),
-            keyword_mask: None,
-            new_slot: false,
-            interactive: false,
-            fetch_restrict: false,
-            fetch_restrict_satisfied: false,
-            download_files: Vec::new(),
-            required_by: Vec::new(),
-            source: CandidateSource::Ebuild,
-            provenance: VisibilityProvenance::default(),
-            keyword_suggestion: None,
-            use_suggestion: None,
-            parent_use_suggestion: None,
-            targets_running_root: false,
-            remote_binary: false,
-            build_id: None,
-            deps: Vec::new(),
-        });
+        let consumer_cpv = pkg.cpv();
+        let mut providers: Vec<String> = ["RDEPEND", "PDEPEND", "DEPEND", "BDEPEND", "IDEPEND"]
+            .iter()
+            .flat_map(|key| {
+                read_vdb_string(root, &pkg.category, &pkg.package, &pkg.version, key)
+                    .split_whitespace()
+                    .map(String::from)
+                    .collect::<Vec<_>>()
+            })
+            .filter_map(|tok| portage_dep::parse_atom(&tok))
+            .filter_map(|atom| {
+                if atom.slot_operator != Some(portage_dep::SlotOperator::Equals) {
+                    return None;
+                }
+                let (a_slot, a_sub) = (atom.slot.as_deref()?, atom.sub_slot.as_deref()?);
+                let (n_ver, n_slot, n_sub) =
+                    new_slot.get(&(atom.category.clone(), atom.package.clone()))?;
+                (a_slot == n_slot && a_sub != n_sub)
+                    .then(|| format!("{}/{}-{n_ver}", atom.category, atom.package))
+            })
+            .collect();
+        providers.sort();
+        providers.dedup();
+        if providers.is_empty() {
+            continue;
+        }
+        for provider_cpv in providers {
+            abi_rebuilds.push((provider_cpv, consumer_cpv.clone()));
+        }
+        scheduled.insert(cp);
     }
-    out.sort_by(|a, b| (a.category.as_str(), a.package.as_str()).cmp(&(&b.category, &b.package)));
     abi_rebuilds.sort();
     abi_rebuilds.dedup();
+    (scheduled, abi_rebuilds)
+}
+
+/// #24 S3 legacy path, for the `--solver=pubgrub` / `--solver=resolvo`
+/// bridges only (`solver_bridge.rs`). Those engines have no
+/// `Backtracker`, so they cannot re-drive a pass with the consumer
+/// seeded as a walked node the way the default resolver now does; they
+/// keep the pre-S3 post-pass synthesiser: run
+/// [`slot_operator_rebuild_scan`], build one
+/// `Reinstall { slot_operator_rebuild: true }` entry per scheduled
+/// consumer, and iterate until the set stops growing (the cascade the
+/// scan itself no longer walks -- a rebuild lands at its *tree* ebuild's
+/// sub-slot, which when it differs from the vdb's is itself a slot shift
+/// the next round chases).
+///
+/// Same cuts as the v1 synthesiser it is: empty `deps` / `required_by`,
+/// so a synthesised rebuild falls back to array position in
+/// `topological_merge_order`, and its own `RDEPEND` is never re-walked.
+/// The default `--solver=portage` path has none of that -- see
+/// `BacktrackParams::slot_operator_replace_installed`.
+fn slot_operator_rebuild_entries(
+    root: &Path,
+    repos: &[RepoConfig],
+    entries: &[GraphEntry],
+    reachable: &HashSet<(String, String)>,
+) -> (Vec<GraphEntry>, Vec<(String, String)>) {
+    let installed = all_installed_packages(root);
+    let mut scheduled: BTreeSet<(String, String)> = BTreeSet::new();
+    let mut out: Vec<GraphEntry> = Vec::new();
+    let mut abi_rebuilds: Vec<(String, String)>;
+    loop {
+        let mut combined: Vec<GraphEntry> = entries.to_vec();
+        combined.extend(out.iter().cloned());
+        let (next, pairs) = slot_operator_rebuild_scan(root, &combined, reachable, &scheduled);
+        abi_rebuilds = pairs;
+        if next == scheduled {
+            break;
+        }
+        scheduled = next;
+        out = installed
+            .iter()
+            .filter(|pkg| scheduled.contains(&(pkg.category.clone(), pkg.package.clone())))
+            .map(|pkg| {
+                // The rebuild lands at the tree ebuild's SLOT, not the
+                // vdb's (real re-reads `SLOT` at merge time).
+                let (v_slot, v_sub) =
+                    read_vdb_slot(root, &pkg.category, &pkg.package, &pkg.version);
+                let (slot, sub_slot) = list_candidates(repos, &pkg.category, &pkg.package)
+                    .ok()
+                    .and_then(|cands| {
+                        cands
+                            .iter()
+                            .find(|c| c.version == pkg.version)
+                            .map(|c| (c.slot.clone(), c.sub_slot.clone()))
+                    })
+                    .unwrap_or_else(|| (v_slot.clone(), v_sub.clone()));
+                let repo = read_vdb_string(
+                    root,
+                    &pkg.category,
+                    &pkg.package,
+                    &pkg.version,
+                    "repository",
+                )
+                .trim()
+                .to_string();
+                // Real `output.py::_get_installed_best` (721-727): the
+                // rebuilt cpv is already installed (`replace = True`), so
+                // the `[oldver]` bracket shows only when the rebuild
+                // lands at a different slot/sub-slot than the installed
+                // instance -- exactly the sub-slot bump driving the
+                // cascade.
+                let oldbest =
+                    if (slot.as_str(), sub_slot.as_str()) != (v_slot.as_str(), v_sub.as_str()) {
+                        vec![InstalledRef {
+                            version: pkg.version.clone(),
+                            slot: v_slot,
+                            sub_slot: v_sub,
+                            repo: repo.clone(),
+                        }]
+                    } else {
+                        Vec::new()
+                    };
+                GraphEntry {
+                    category: pkg.category.clone(),
+                    package: pkg.package.clone(),
+                    outcome: PretendOutcome::Reinstall {
+                        version: pkg.version.clone(),
+                        changed_flags: Vec::new(),
+                        deps_changed: false,
+                        slot_changed: false,
+                        rebuilt_binary: false,
+                        new_repo: false,
+                        slot_operator_rebuild: true,
+                    },
+                    slot: Some(slot),
+                    sub_slot: Some(sub_slot),
+                    repo_name: (!repo.is_empty()).then_some(repo),
+                    oldbest,
+                    blockers: Vec::new(),
+                    use_flags_display: Vec::new(),
+                    use_expand_display: Vec::new(),
+                    use_expand_display_p: Vec::new(),
+                    keyword_mask: None,
+                    new_slot: false,
+                    interactive: false,
+                    fetch_restrict: false,
+                    fetch_restrict_satisfied: false,
+                    download_files: Vec::new(),
+                    required_by: Vec::new(),
+                    source: CandidateSource::Ebuild,
+                    provenance: VisibilityProvenance::default(),
+                    keyword_suggestion: None,
+                    use_suggestion: None,
+                    parent_use_suggestion: None,
+                    targets_running_root: false,
+                    remote_binary: false,
+                    build_id: None,
+                    deps: Vec::new(),
+                }
+            })
+            .collect();
+    }
     (out, abi_rebuilds)
 }
 
@@ -14981,11 +15013,23 @@ impl<'a> ResolveCtx<'a> {
         } else {
             req.deep
         };
+        // #24 S3: real `_complete_graph` starts its required-set walk from
+        // `args = self._dynamic_config._initial_arg_list[:]` (8677) and
+        // *appends* the `@world`/`@selected`/`@system` set args to it
+        // (8723-8731), so a directly-requested atom is a seed too. The CLI
+        // layer fills `complete_seed_atoms` with the sets only; the args
+        // are added here. An empty `complete_seed_atoms` still means "not
+        // complete mode" and gates the whole scan off -- the args alone
+        // never enable it.
         let slot_op_reachable: HashSet<(String, String)> =
             if req.config.complete_seed_atoms.is_empty() {
                 HashSet::new()
             } else {
-                required_set_reachable_cps(&req.root, &req.config.complete_seed_atoms, &[])
+                let mut seeds = req.config.complete_seed_atoms.clone();
+                seeds.extend(req.atoms.iter().cloned());
+                seeds.sort();
+                seeds.dedup();
+                required_set_reachable_cps(&req.root, &seeds, &[])
             };
         Ok(ResolveCtx {
             root: &req.root,
@@ -15099,6 +15143,7 @@ fn params_equal(a: &BacktrackParams, b: &BacktrackParams) -> bool {
         && a.autounmask_use_change_records == b.autounmask_use_change_records
         && a.autounmask_use_broke == b.autounmask_use_broke
         && a.autounmask_disabled == b.autounmask_disabled
+        && a.slot_operator_replace_installed == b.slot_operator_replace_installed
 }
 
 /// Real `Backtracker._check_runtime_pkg_mask` (bug 375573): a node is
@@ -15602,6 +15647,26 @@ struct BacktrackParams {
     /// Written in-walk (see the A3 overlay); read back within the same pass.
     autounmask_use_broke: bool,
     autounmask_disabled: bool,
+    /// Backlog #24 S3: real `_dynamic_config._slot_operator_replace_installed`
+    /// (`depgraph.py:2400`/`2361`/`2881` write it, `resolver/backtracking.py::
+    /// _feedback_config` 237-257 consumes it, `_gen_reinstall_sets` 5457-5480
+    /// turns it into the pseudo `SetArg` `__auto_slot_operator_replace_installed__`
+    /// with `force_reinstall=True`, `reset_depth=False`). An installed consumer
+    /// whose built `cat/pkg:S/SS=` dep no longer matches how this run leaves
+    /// the provider is added here by `collect_feedback`'s scan; the next pass
+    /// seeds the walk with its `cat/pkg` atom and flips its
+    /// `AlreadyInstalled` outcome to `Reinstall { slot_operator_rebuild: true }`,
+    /// so the consumer is a **walked graph node** -- its tree `RDEPEND` is
+    /// re-evaluated, its `:=` re-bound against the graph, and its merge-order
+    /// edges real.
+    ///
+    /// Narrowing: real keys `(root, slot_atom)` (`_replace_installed_atom`
+    /// 3059-3087 returns the *available* ebuild's `slot_atom`). Portuale
+    /// resolves one instance per `cat/pkg` (`resolved_slots` is keyed by
+    /// `(cat, pkg, slot)` but a dependency walk never pulls two slots of one
+    /// cp), so `(cat, pkg)` carries the same information here. `BTreeSet` for
+    /// deterministic seed order.
+    slot_operator_replace_installed: BTreeSet<(String, String)>,
 }
 
 impl BacktrackParams {
@@ -15674,6 +15739,13 @@ struct PassResult {
     use_overlay: HashMap<(String, String), HashMap<String, bool>>,
     use_change_overlay: Vec<AutounmaskChange>,
     use_broke: bool,
+    /// #24 S3: the `(provider_cpv, consumer_cpv)` pairs this pass's
+    /// slot-operator scan found (real `_forced_rebuilds`), stashed by
+    /// `collect_feedback` so `assemble_result` renders "The following
+    /// packages are causing rebuilds:" without a second vdb scan.
+    /// `None` = the scan did not run for this pass (the `get_best_run`
+    /// re-pass, which never goes through `collect_feedback`).
+    abi_rebuilds: Option<Vec<(String, String)>>,
 }
 
 /// Phase A3 (023): the walk's-Everything per-pass `let mut`s, moved out of
@@ -15873,6 +15945,31 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
             buildtime_hard: false,
         });
     }
+    // #24 S3: real `_gen_reinstall_sets` (5457-5480) turns
+    // `_slot_operator_replace_installed` into the pseudo `SetArg`
+    // `@__auto_slot_operator_replace_installed__`, appended to the arg
+    // list *after* the user's own args (`select_files` 5430) and walked
+    // as a root node -- which is why the rebuilt consumer gets its deps
+    // re-walked at all. Seeded here with the same ordering.
+    //
+    // `owner: None` mirrors the set arg having no package parent (real's
+    // `_eliminate_rebuilds` rule 5 explicitly excludes the auto sets from
+    // its "the user asked for it" test, 3859-4000). `depth: 1` is real's
+    // `reset_depth=False`: the node must not interact with `--deep=N`
+    // depth accounting, and -- portuale-side -- must not read as a
+    // top-level argument, which `depth == 0` means everywhere in this
+    // walk (`resolve_pretend`'s `toplevel`, the `(Argument)` slot-puller
+    // line). `top_level`/`top_level_cps` come from `req.atoms` and are
+    // untouched by construction.
+    for (cat, pkg) in &bp.slot_operator_replace_installed {
+        state.queue.push_back(QueueItem {
+            atom: format!("{cat}/{pkg}"),
+            depth: 1,
+            owner: None,
+            unevaluated: None,
+            buildtime_hard: false,
+        });
+    }
 
     let pprovided_refs: Vec<&str> = config.package_provided.iter().map(String::as_str).collect();
 
@@ -15967,7 +16064,11 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
         // Backtracking slice 4: a top-level atom targeting this
         // `cat/pkg` is an "Argument" puller for the slot-collision
         // block (real `slot_collision_handler`'s `(Argument)` line).
-        if owner.is_none() {
+        // #24 S3: `depth == 0` excludes the auto-replace seeds above --
+        // real's `__auto_slot_operator_replace_installed__` is an
+        // internal set, never an `(Argument)` puller in the
+        // slot-collision block.
+        if owner.is_none() && depth == 0 {
             state.slot_pullers.entry(key.clone()).or_default().push((
                 String::new(),
                 String::new(),
@@ -16046,6 +16147,14 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
         // is forced to re-merge (real `depgraph.py` drops it from
         // every `inst_pkgs` list). In portuale's model that is the
         // `--emptytree` rewrite, scoped to the matched atom.
+        //
+        // #24 S3: the same flip point carries real's
+        // `__auto_slot_operator_replace_installed__` `force_reinstall=True`
+        // (`_gen_reinstall_sets` 5457-5480). Keyed on the `cat/pkg`, not
+        // on the seeded atom, so whichever visit of this package comes
+        // first in the walk -- the seed, or an ordinary dependency edge
+        // that reached it earlier -- is the one that flips; patching the
+        // entry afterwards would leave its deps unenqueued.
         if let PretendOutcome::AlreadyInstalled { version } = &outcome {
             let cpv = format!("{}/{}-{version}", key.0, key.1);
             if ctx
@@ -16061,6 +16170,16 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
                     rebuilt_binary: false,
                     new_repo: false,
                     slot_operator_rebuild: false,
+                };
+            } else if bp.slot_operator_replace_installed.contains(&key) {
+                outcome = PretendOutcome::Reinstall {
+                    version: version.clone(),
+                    changed_flags: Vec::new(),
+                    deps_changed: false,
+                    slot_changed: false,
+                    rebuilt_binary: false,
+                    new_repo: false,
+                    slot_operator_rebuild: true,
                 };
             }
         }
@@ -17200,7 +17319,17 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
         // (`myinslotlist = vardb.match(pkg.slot_atom)`); a new-slot `New`
         // lists every installed version, all slots
         // (`myoldbest = installed_versions`). Version-sorted for a stable
-        // display order. A brand-new `New` / `Reinstall` -> empty.
+        // display order. A brand-new `New` -> empty.
+        //
+        // A `Reinstall` is real's `vardb.cpv_exists(pkg.cpv)` arm
+        // (`output.py:721-727`): `replace = True`, and `myoldbest` is the
+        // installed instance *only* when its `(slot, sub_slot)` differs
+        // from the one being merged -- the `[oldver]` bracket a
+        // slot/sub-slot move (e.g. a slot-operator cascade rebuild landing
+        // at its tree ebuild's new sub-slot) shows. Same rule the old
+        // post-pass slot-op synthesiser applied to its own entries; real's
+        // third disjunct (`not quiet_repo_display and repo differs`) stays
+        // out, as it did there.
         let mut oldbest: Vec<InstalledRef> = match &outcome {
             PretendOutcome::Upgrade { .. } | PretendOutcome::Downgrade { .. } => {
                 installed_refs(ctx.root, &key.0, &key.1)
@@ -17209,6 +17338,10 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
                     .collect()
             }
             PretendOutcome::New { .. } if new_slot => installed_refs(ctx.root, &key.0, &key.1),
+            PretendOutcome::Reinstall { version, .. } => installed_refs(ctx.root, &key.0, &key.1)
+                .into_iter()
+                .filter(|r| &r.version == version && (r.slot != slot || r.sub_slot != sub_slot))
+                .collect(),
             _ => Vec::new(),
         };
         oldbest.sort_by(|a, b| vercmp_ordering(&a.version, &b.version));
@@ -18004,6 +18137,7 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
         use_overlay: state.use_overlay,
         use_change_overlay: state.use_change_overlay,
         use_broke: state.use_broke,
+        abi_rebuilds: None,
     };
     Ok(pass)
 }
@@ -18321,6 +18455,7 @@ fn collect_feedback(
             params: Box::new(grown),
         });
     }
+
     // C2: no feedback fired. A pass that still carries an unsatisfiable
     // dependency is a dead end (see `DeadEnd`), not a report -- settling
     // here would abort on the masked graph instead of the best run.
@@ -18330,6 +18465,58 @@ fn collect_feedback(
         .entries
         .iter()
         .any(|e| matches!(e.outcome, PretendOutcome::NoVisibleCandidate));
+
+    // #24 S3: real `_process_slot_conflicts` -> `_slot_operator_trigger_reinstalls`
+    // (2131-2132, gated on `_allow_backtracking`) -> `_slot_operator_*_backtrack`
+    // (2361-2452) writing `backtrack_infos["config"]
+    // ["slot_operator_replace_installed"]` + `_need_restart`, consumed by
+    // `resolver/backtracking.py::_feedback_config` (237-257). A consumer the
+    // scan finds becomes a *walked node* on the next pass (`run_pass`'s seed
+    // + flip), so its deps, its `:=` binding and its merge-order edges are
+    // real -- that is the whole point of the slice; nothing is synthesised
+    // after the settle any more.
+    //
+    // Placed last in the chain, on the settled graph: real runs the trigger
+    // after the walk, and the old synthesiser ran on `assemble_result`'s
+    // entries, so this sees exactly the same input it always did. A pass
+    // carrying an unsatisfiable dependency is a dead end first (real never
+    // reaches `_process_slot_conflicts`' tail with a failed `_create_graph`).
+    // Config feedback is budget-free, and the set only ever grows -- bounded
+    // by the installed cp count -- so the search terminates.
+    //
+    // `--backtrack=0` turns the whole trigger off, matching real's
+    // `allow_backtracking = max_retries > 0` (`_backtrack_depgraph` 12190)
+    // gating `_slot_operator_trigger_reinstalls` at 2131: with no search
+    // there is no restart to apply the replace set on, so real schedules
+    // nothing and `_forced_rebuilds` stays empty (no "causing rebuilds"
+    // block either). `--nodeps` is the same via `max_retries = 0`.
+    //
+    // `abi_rebuilds` is always recorded (empty when the trigger is off) so
+    // `assemble_result` knows the scan ran for this pass; only the
+    // `get_best_run` re-pass, which never comes through here, leaves it
+    // `None`.
+    if has_nvc
+        || ctx.backtrack_max == 0
+        || ctx.ignore_built_slot_operator_deps
+        || !ctx.rebuild_if_new_slot
+    {
+        pass.abi_rebuilds = Some(Vec::new());
+    } else {
+        let (scheduled, abi_rebuilds) = slot_operator_rebuild_scan(
+            ctx.root,
+            &pass.entries,
+            &ctx.slot_op_reachable,
+            &grown.slot_operator_replace_installed,
+        );
+        pass.abi_rebuilds = Some(abi_rebuilds);
+        if scheduled != grown.slot_operator_replace_installed {
+            grown.slot_operator_replace_installed = scheduled;
+            return PassDecision::Feedback(BacktrackFeedback::Config {
+                params: Box::new(grown),
+            });
+        }
+    }
+
     if has_nvc {
         PassDecision::DeadEnd {
             params: Box::new(grown),
@@ -18353,19 +18540,26 @@ fn assemble_result(
     mut pass: PassResult,
     config: &portage_profile::Config,
 ) -> GraphResult {
-    // Real depgraph's slot-operator auto-rebuild: an installed consumer
-    // whose built `cat/pkg:S/SS=` dep no longer matches how this run
-    // leaves `cat/pkg` in that slot is scheduled for a reinstall. Added
-    // before the merge-order sort so it lands in dependency-first order
-    // like every other entry. `abi_rebuilds` feeds `_show_abi_rebuild_info`.
-    let (slot_op_rebuilds, abi_rebuilds) = if ctx.ignore_built_slot_operator_deps
-        || !ctx.rebuild_if_new_slot
-    {
-        (Vec::new(), Vec::new())
-    } else {
-        slot_operator_rebuild_entries(ctx.root, &ctx.repos, &pass.entries, &ctx.slot_op_reachable)
+    // Real depgraph's slot-operator auto-rebuild (#24 S3): the consumers
+    // themselves are walked nodes now (seeded + flipped in `run_pass`
+    // from `params.slot_operator_replace_installed`), so nothing is
+    // synthesised here -- only the `_forced_rebuilds` display pairs are
+    // recomputed for `_show_abi_rebuild_info`. `collect_feedback` already
+    // ran the scan for every pass it decided; the `get_best_run` re-pass
+    // does not go through it, hence the fallback.
+    let abi_rebuilds = match pass.abi_rebuilds.take() {
+        Some(pairs) => pairs,
+        None if ctx.ignore_built_slot_operator_deps || !ctx.rebuild_if_new_slot => Vec::new(),
+        None => {
+            slot_operator_rebuild_scan(
+                ctx.root,
+                &pass.entries,
+                &ctx.slot_op_reachable,
+                &params.slot_operator_replace_installed,
+            )
+            .1
+        }
     };
-    pass.entries.extend(slot_op_rebuilds);
 
     // Real `_rebuild_config.trigger_rebuilds()` (`--rebuild-if-unbuilt`
     // / `--rebuild-if-new-rev` / `--rebuild-if-new-ver`): an installed
@@ -29049,7 +29243,7 @@ mod tests {
     }
 
     #[test]
-    fn slot_operator_rebuild_entries_flags_only_the_stale_bindings() {
+    fn slot_operator_rebuild_scan_flags_only_the_stale_bindings() {
         // A throwaway vdb: `foo` (unused here), a `stale` consumer bound
         // `bar:2/2=`, a `fresh` consumer bound `bar:2/9=`, an
         // `otherslot` consumer bound `bar:1/1=`, and a `nonop` consumer
@@ -29095,21 +29289,14 @@ mod tests {
             .iter()
             .map(|p| ("dev-libs".to_string(), (*p).to_string()))
             .collect();
-        let (out, abi) =
-            slot_operator_rebuild_entries(&dir, &[], std::slice::from_ref(&bar_upgrade), &reach);
-        let names: Vec<&str> = out.iter().map(|e| e.package.as_str()).collect();
+        let empty: BTreeSet<(String, String)> = BTreeSet::new();
+        let (scheduled, abi) =
+            slot_operator_rebuild_scan(&dir, std::slice::from_ref(&bar_upgrade), &reach, &empty);
         assert_eq!(
-            names,
-            vec!["stale"],
-            "only the stale :2/2= binding rebuilds"
+            scheduled,
+            BTreeSet::from([("dev-libs".to_string(), "stale".to_string())]),
+            "only the stale :2/2= binding is scheduled for a rebuild"
         );
-        assert!(matches!(
-            out[0].outcome,
-            PretendOutcome::Reinstall {
-                slot_operator_rebuild: true,
-                ..
-            }
-        ));
         assert_eq!(
             abi,
             vec![(
@@ -29119,18 +29306,69 @@ mod tests {
         );
 
         // Nothing changing `bar` -> no rebuilds.
-        let (empty_out, empty_abi) = slot_operator_rebuild_entries(&dir, &[], &[], &reach);
-        assert!(empty_out.is_empty() && empty_abi.is_empty());
+        let (empty_sched, empty_abi) = slot_operator_rebuild_scan(&dir, &[], &reach, &empty);
+        assert!(empty_sched.is_empty() && empty_abi.is_empty());
 
         // Not reachable -> the scan is suppressed entirely (real: no
         // slot-op rebuild for a consumer outside the required sets).
-        let (none_out, none_abi) = slot_operator_rebuild_entries(
+        let (none_sched, none_abi) = slot_operator_rebuild_scan(
             &dir,
-            &[],
             std::slice::from_ref(&bar_upgrade),
             &HashSet::new(),
+            &empty,
         );
-        assert!(none_out.is_empty() && none_abi.is_empty());
+        assert!(none_sched.is_empty() && none_abi.is_empty());
+
+        // #24 S3: a cp already in `already` stays reported even once it is
+        // in the graph as the rebuild this scan asked for last pass --
+        // that is how `abi_rebuilds` survives to the settling pass. A
+        // *different* in-graph cp is still skipped.
+        let stale_rebuild = GraphEntry {
+            category: "dev-libs".into(),
+            package: "stale".into(),
+            outcome: PretendOutcome::Reinstall {
+                version: "1.0".into(),
+                changed_flags: Vec::new(),
+                deps_changed: false,
+                slot_changed: false,
+                rebuilt_binary: false,
+                new_repo: false,
+                slot_operator_rebuild: true,
+            },
+            slot: Some("0".into()),
+            sub_slot: Some("0".into()),
+            ..graph_entry("dev-libs", "stale", "1.0")
+        };
+        let already = BTreeSet::from([("dev-libs".to_string(), "stale".to_string())]);
+        let (again, again_abi) = slot_operator_rebuild_scan(
+            &dir,
+            &[bar_upgrade.clone(), stale_rebuild],
+            &reach,
+            &already,
+        );
+        assert_eq!(again, already, "the set is stable -- no second restart");
+        assert_eq!(
+            again_abi,
+            vec![(
+                "dev-libs/bar-2.0".to_string(),
+                "dev-libs/stale-1.0".to_string()
+            )],
+            "the causing-rebuilds pair survives into the settling pass"
+        );
+
+        // The `--solver=` bridges keep the pre-S3 synthesiser; it must
+        // still build the one entry, flagged `slot_operator_rebuild`.
+        let (out, _) =
+            slot_operator_rebuild_entries(&dir, &[], std::slice::from_ref(&bar_upgrade), &reach);
+        let names: Vec<&str> = out.iter().map(|e| e.package.as_str()).collect();
+        assert_eq!(names, vec!["stale"]);
+        assert!(matches!(
+            out[0].outcome,
+            PretendOutcome::Reinstall {
+                slot_operator_rebuild: true,
+                ..
+            }
+        ));
         let _ = fs::remove_dir_all(&dir);
     }
 
@@ -29276,14 +29514,58 @@ mod tests {
         };
 
         let normal = resolve(false);
+        let consumer = normal
+            .entries
+            .iter()
+            .find(|e| e.package == "slotbindconsumer")
+            .expect("consumer is rebuilt by default");
+        assert!(!normal.abi_rebuilds.is_empty());
+        // #24 S3: the rebuilt consumer is a *walked node*, not a
+        // post-pass synthetic entry -- it carries the tree ebuild's own
+        // dependency edges (`slotbindtarget:2/2=` re-read from
+        // `metadata/md5-cache`), which is what puts the provider ahead
+        // of it in merge order. The pre-S3 synthesiser left `deps`
+        // empty, so this assertion is the slice.
         assert!(
+            matches!(
+                consumer.outcome,
+                PretendOutcome::Reinstall {
+                    slot_operator_rebuild: true,
+                    ..
+                }
+            ),
+            "outcome flipped by the replace set, not synthesised: {:?}",
+            consumer.outcome
+        );
+        assert!(
+            consumer
+                .deps
+                .iter()
+                .any(|d| d.atom.starts_with("dev-libs/slotbindtarget")),
+            "the walked rebuild owns its tree deps: {:?}",
+            consumer.deps
+        );
+        let pos = |pkg: &str| {
             normal
                 .entries
                 .iter()
-                .any(|e| e.package == "slotbindconsumer"),
-            "consumer is rebuilt by default"
+                .position(|e| e.package == pkg)
+                .expect("entry")
+        };
+        assert!(
+            pos("slotbindtarget") < pos("slotbindconsumer"),
+            "the provider merges before the consumer it forces a rebuild of"
         );
-        assert!(!normal.abi_rebuilds.is_empty());
+        // Exactly one entry per cp: the flip happens where the outcome is
+        // first decided, so no `AlreadyInstalled` row is left behind.
+        assert_eq!(
+            normal
+                .entries
+                .iter()
+                .filter(|e| e.package == "slotbindconsumer")
+                .count(),
+            1
+        );
 
         let ignored = resolve(true);
         assert!(
