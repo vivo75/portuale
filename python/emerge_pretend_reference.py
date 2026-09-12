@@ -11952,6 +11952,11 @@ def resolve_pretend_graph(
             for a in atoms:
                 _tr(f"\n      Arg: {a}\n     Atom: {a}\n")
         queue = deque((a, 0, None, None, False) for a in atoms)
+        # A1 (#26): per-pass memo for _installed_dep_string's Effective
+        # layer (real FakeVartree.dynamic_deps_applied applies once per
+        # installed instance; see _installed_dep_string's own doc
+        # comment). Mirrors portage-repo/src/lib.rs's PassState.
+        installed_meta_memo = {}
         # #24 S3: real _gen_reinstall_sets (5457-5480) turns
         # _slot_operator_replace_installed into the pseudo SetArg
         # @__auto_slot_operator_replace_installed__, appended to the arg
@@ -12561,6 +12566,7 @@ def resolve_pretend_graph(
                         repos,
                         root,
                         dynamic_deps,
+                        ignore_built_slot_operator_deps,
                         category,
                         package,
                         outcome[1],
@@ -12574,6 +12580,7 @@ def resolve_pretend_graph(
                         root_deps_running_root,
                         entries,
                         root_deps_build_seen,
+                        installed_meta_memo,
                         _union_constraints,
                     )
                 # --autounmask's own keyword-suggestion sub-feature, extended
@@ -14301,10 +14308,101 @@ def _deep_recurses_at(deep, depth):
     return depth < deep
 
 
+# Real `Package._raw_metadata` vs `Package._metadata` for an installed
+# package (see `_installed_dep_string`). String constants, not an enum,
+# to mirror the Rust `InstalledMetaLayer` one-for-one.
+_INSTALLED_META_RAW = "raw"
+_INSTALLED_META_EFFECTIVE = "effective"
+
+
+def _built_slot_operator_atoms(raw_depstr, use_flags):
+    """Real find_built_slot_operator_atoms(pkg)
+    (portage/dep/_slot_operator.py:24-38): every atom in one raw (vdb)
+    *DEPEND string whose Atom.slot_operator_built is true -- `:=` *with
+    a sub-slot* (`foo/bar:0/1=`; a plain `foo/bar:2=` is not built,
+    portage/dep/__init__.py:2156-2162) -- flattened against the
+    package's recorded (vdb/USE) flags, in use_reduce order. Mirrors
+    portage-repo's built_slot_operator_atoms exactly."""
+    try:
+        flat = use_reduce(raw_depstr.split(), flat=True, uselist=use_flags)
+    except InvalidDependString:
+        return []
+    out = []
+    for tok in flat:
+        parsed = _parse_atom(tok)
+        if parsed is not None and parsed.slot_operator_built:
+            out.append(tok)
+    return out
+
+
+def _installed_dep_string(
+    root,
+    dynamic_deps,
+    dynamic_deps_append,
+    ignore_built_slot_operator_deps,
+    category,
+    package,
+    version,
+    live,
+    key,
+    layer,
+    memo,
+):
+    """One installed package's *DEPEND string for `key`, at `layer` --
+    real `Package._raw_metadata[key]` vs `Package._metadata[key]`.
+
+    `live` is the repo's current md5-cache metadata dict for this exact
+    cat/pkg-version (None when the version is gone from every repo).
+    `memo` is a per-pass dict keyed `(category, package, version, key)`
+    caching the Effective result only; real's FakeVartree applies the
+    overlay once per instance (dynamic_deps_applied). Mirrors
+    portage-repo's installed_dep_string exactly.
+
+    `dynamic_deps_append` is the `PORTUALE_DYNAMIC_DEPS_APPEND` gate
+    (default off): while off, Effective = the live value alone, the
+    pre-A1 default behaviour. See portage-repo's
+    `dynamic_deps_append_enabled` doc comment for why."""
+    raw = _read_vdb_string(root, category, package, version, key).strip()
+    if layer == _INSTALLED_META_RAW or not dynamic_deps:
+        return raw
+    memo_key = (category, package, version, key)
+    if memo_key in memo:
+        return memo[memo_key]
+    if live is None:
+        # Real _DynamicDepsNotApplicable: no live ebuild metadata, so the
+        # raw record stands, with global package moves applied.
+        result = apply_updates_to_dep_string(raw)
+    else:
+        live_value = (live.get(key) or "").strip()
+        if ignore_built_slot_operator_deps or not dynamic_deps_append:
+            result = live_value
+        else:
+            use_flags = _read_vdb_flag_set(root, category, package, version, "USE")
+            built = _built_slot_operator_atoms(raw, use_flags)
+            if not built:
+                result = live_value
+            elif not live_value:
+                result = " ".join(built)
+            else:
+                result = live_value + " " + " ".join(built)
+    memo[memo_key] = result
+    return result
+
+
+def _dynamic_deps_append_enabled():
+    """`PORTUALE_DYNAMIC_DEPS_APPEND` (default off): the gate for the
+    FakeVartree built-`:=` append. `"0"` disables, anything else set
+    enables; unset is off. Mirrors portage-repo's
+    `dynamic_deps_append_enabled` exactly."""
+    val = os.environ.get("PORTUALE_DYNAMIC_DEPS_APPEND")
+    return val is not None and val != "0"
+
+
 def _enqueue_dependencies(
     repos,
     root,
     dynamic_deps,
+    ignore_built_slot_operator_deps,
     category,
     package,
     version,
@@ -14318,6 +14416,7 @@ def _enqueue_dependencies(
     root_deps_running_root=None,
     entries=None,
     root_deps_build_seen=None,
+    installed_meta_memo=None,
     disj_constraints=None,
 ):
     """Reads `category/package-version`'s own DEPEND+RDEPEND+BDEPEND+
@@ -14332,13 +14431,13 @@ def _enqueue_dependencies(
     repo, or its md5-cache entry can't be read -- matching the same
     tolerance the main loop already has for those cases.
 
-    Deliberate simplification: real portage reads an AlreadyInstalled
-    package's metadata from the vdb's own installed-time snapshot, not
-    the repo's *current* ebuild -- portuale has no vdb-metadata reader
-    (installed_versions only checks presence, never reads DEPEND/USE/
-    etc), so this reuses the repo's current metadata for that version
-    instead, same as every other candidate lookup in portuale already
-    does.
+    `dynamic_deps` (real --dynamic-deps, create_depgraph_params.py:
+    116-123, ON by default): True walks the repo's current ebuild
+    metadata **plus the vdb's own built `:=` atoms appended** (real
+    FakeVartree._apply_dynamic_deps; see _installed_dep_string's own doc
+    comment); False (`--dynamic-deps=n`) walks the vdb snapshot alone.
+    `ignore_built_slot_operator_deps` suppresses only the append, like
+    real FakeVartree.py:171.
 
     `with_bdeps` (real --with-bdeps, see resolve_pretend_graph's own
     docstring for the full grounding): when False, DEPEND and BDEPEND are
@@ -14381,22 +14480,36 @@ def _enqueue_dependencies(
         else ("RDEPEND", "PDEPEND", "IDEPEND")
     )
 
-    # --dynamic-deps (default) walks the current ebuild's *DEPEND
-    # strings; --dynamic-deps=n walks the vdb snapshot. Either way the
-    # USE conditionals are evaluated against the package's *installed*
-    # recorded USE (vdb/USE), never a fresh profile recompute -- real
-    # _pkg_use_enabled returns pkg._metadata["USE"] for a `built`
-    # package, and _enqueue_dependencies only ever recurses into an
-    # AlreadyInstalled package. Effective profile USE here spuriously
-    # pulled flag?( ... ) deps for a flag the installed build never had.
-    # Mirrors portage-repo's enqueue_dependencies.
+    # --dynamic-deps (default) walks the current ebuild's *DEPEND plus
+    # the vdb's own built := atoms appended (real
+    # FakeVartree._apply_dynamic_deps; see _installed_dep_string's own
+    # doc comment); --dynamic-deps=n walks the vdb snapshot alone.
+    # Either way the USE conditionals are evaluated against the
+    # package's *installed* recorded USE (vdb/USE), never a fresh
+    # profile recompute -- real _pkg_use_enabled returns
+    # pkg._metadata["USE"] for a `built` package, and
+    # _enqueue_dependencies only ever recurses into an AlreadyInstalled
+    # package. Effective profile USE here spuriously pulled flag?( ... )
+    # deps for a flag the installed build never had. Mirrors
+    # portage-repo's enqueue_dependencies.
     use_flags = _read_vdb_flag_set(root, category, package, version, "USE")
-    if dynamic_deps:
-        depstr = " ".join(metadata[k] for k in dep_keys if metadata.get(k))
-    else:
-        depstr = " ".join(
-            _read_vdb_string(root, category, package, version, k) for k in dep_keys
+    _memo = installed_meta_memo if installed_meta_memo is not None else {}
+    depstr = " ".join(
+        _installed_dep_string(
+            root,
+            dynamic_deps,
+            _dynamic_deps_append_enabled(),
+            ignore_built_slot_operator_deps,
+            category,
+            package,
+            version,
+            metadata,
+            key,
+            _INSTALLED_META_EFFECTIVE if dynamic_deps else _INSTALLED_META_RAW,
+            _memo,
         )
+        for key in dep_keys
+    )
     # --root-deps branch-selection feed-in -- see the main
     # New/Upgrade/Reinstall loop's own identical fix for the full
     # grounding (this is _enqueue_dependencies's own

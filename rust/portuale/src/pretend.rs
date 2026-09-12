@@ -9566,6 +9566,16 @@ pub fn run(args: &[String]) -> ExitCode {
     // before any `resolve_pretend_graph` call.
     portage_repo::set_resolver_debug(debug && pretend);
 
+    // A1 (#26): the `FakeVartree._apply_dynamic_deps` built-`:=` append is
+    // gated default-off until the resolver can reconcile a vdb-built
+    // `:S/SS=` atom with the ebuild's unbound `:=` for the same cp (two
+    // #24 oracle pins regress otherwise -- see
+    // `set_dynamic_deps_append`'s own doc comment). Opt in with
+    // `PORTUALE_DYNAMIC_DEPS_APPEND=1`; `--dynamic-deps=n` never appends.
+    portage_repo::set_dynamic_deps_append(
+        std::env::var("PORTUALE_DYNAMIC_DEPS_APPEND").is_ok_and(|v| v != "0"),
+    );
+
     // Real actions.py: "if '--tree' in emerge_config.opts and '--columns'
     // in emerge_config.opts: print(...); return 1" -- checked once
     // parsing finishes (order-independent: works whichever flag came

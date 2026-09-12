@@ -487,6 +487,32 @@ pub fn resolver_debug() -> bool {
     RESOLVER_DEBUG.load(AtomicOrdering::Relaxed)
 }
 
+/// `PORTUALE_DYNAMIC_DEPS_APPEND` (default off): the gate for the
+/// `FakeVartree._apply_dynamic_deps` built-`:=` append (A1, #26). A1
+/// landed the overlay helper and the append, but two #24 oracle pins
+/// (`slotchange-case4`, `slotundo-cascade`) prove the *resolver* cannot
+/// yet reconcile a vdb-built `:S/SS=` atom walking alongside the
+/// ebuild's unbound `:=` for the same cp -- real resolves that pair
+/// through the slot-operator rebuild probe; portuale folds it as a
+/// solvable slot conflict (Python) or drops the cascade's second
+/// consumer (both). Until that probe ordering is fixed the append stays
+/// behind this gate, exactly like `PORTUALE_ABORT_PATH` gated backlog
+/// #19. Process-global, env-free -- `pretend.rs` sets it once from the
+/// env, and `--dynamic-deps=n` never appends regardless (Effective
+/// collapses to Raw). Finding: `docs/025-tier2-closeout.deepseek.md`.
+static DYNAMIC_DEPS_APPEND: AtomicBool = AtomicBool::new(false);
+
+/// Set by `pretend.rs` from `PORTUALE_DYNAMIC_DEPS_APPEND` before
+/// resolution (and by tests directly).
+pub fn set_dynamic_deps_append(enabled: bool) {
+    DYNAMIC_DEPS_APPEND.store(enabled, AtomicOrdering::Relaxed);
+}
+
+/// Whether the `--dynamic-deps` built-`:=` append is enabled.
+pub(crate) fn dynamic_deps_append_enabled() -> bool {
+    DYNAMIC_DEPS_APPEND.load(AtomicOrdering::Relaxed)
+}
+
 /// Real `update_dbentry` for a single `move`, applied to one atom token:
 /// if the token parses as an atom whose `cp` is `old`, rewrite just the
 /// `cat/pkg` part (first occurrence, real `token.replace(old, new, 1)`),
@@ -16248,6 +16274,14 @@ struct PassState {
     /// package's own BDEPEND) at once, which must never collide into one
     /// shared dedup key.
     root_deps_build_seen: HashSet<(String, String)>,
+    /// A1 (#26): per-pass cache for `installed_dep_string`'s
+    /// `Effective` layer, keyed `(category, package, version, key)`.
+    /// Real `FakeVartree._apply_dynamic_deps` applies the overlay once
+    /// per installed instance (`dynamic_deps_applied`) and keeps it for
+    /// every backtracking pass; a per-pass cache is portuale's
+    /// counterpart to that idempotence (the walk itself re-runs per
+    /// pass, so the cache cannot outlive one).
+    installed_meta_memo: HashMap<(String, String, String, String), String>,
     /// Backtracking: every atom text (bare or constrained) that targeted a
     /// given `cat/pkg` this pass. On a solvable slot conflict the whole set
     /// for the conflicted package becomes its `slot_constraints` entry for
@@ -17165,6 +17199,7 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
                     &ctx.repos,
                     ctx.root,
                     ctx.dynamic_deps,
+                    ctx.ignore_built_slot_operator_deps,
                     &key.0,
                     &key.1,
                     version,
@@ -17178,6 +17213,7 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
                     ctx.root_deps_running_root,
                     &mut state.entries,
                     &mut state.root_deps_build_seen,
+                    &mut state.installed_meta_memo,
                     &union_constraints,
                 );
             }
@@ -19539,6 +19575,125 @@ pub fn resolve_pretend_graph(
     active_resolver().resolve(&req)
 }
 
+/// Real `Package._raw_metadata` vs `Package._metadata` for an installed
+/// package. `Raw` is the vdb record verbatim. `Effective` is what real
+/// `FakeVartree._apply_dynamic_deps` (`_emerge/FakeVartree.py:146-191`)
+/// leaves behind: the live ebuild metadata for the five `*DEPEND` keys,
+/// with the vdb's own built slot-operator atoms appended back on. With
+/// `--dynamic-deps=n` (`dynamic_deps == false`) the two collapse into
+/// one -- real never installs the wrapper then (`FakeVartree.py:85-91`).
+///
+/// Portuale has no EAPI parametrization inside the EAPI 5+ floor (see
+/// `docs/agent-context.md`), so real's two `eapi_is_supported` arms
+/// (`FakeVartree.py:157-166`) are dead code here and deliberately not
+/// ported. The live-ebuild-gone arm is ported: `Raw` plus the global
+/// package-move updates real's `_DynamicDepsNotApplicable` fallback runs
+/// (`perform_global_updates`, `FakeVartree.py:184-191`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) enum InstalledMetaLayer {
+    Raw,
+    Effective,
+}
+
+/// Real `find_built_slot_operator_atoms(pkg)` (`portage/dep/_slot_operator.py:24-38`):
+/// every atom in one raw (vdb) `*DEPEND` string whose
+/// `Atom.slot_operator_built` is true -- `:=` **with a sub-slot**
+/// (`foo/bar:0/1=`; a plain `foo/bar:2=` is *not* built,
+/// `portage/dep/__init__.py:2156-2162`) -- flattened against the
+/// package's recorded (`vdb/USE`) flags, in `use_reduce` order. The
+/// append at `FakeVartree.py:180` is what makes the default
+/// `--dynamic-deps` mode see vdb-only built bindings at all; without it
+/// a consumer whose ebuild dropped the `:=` silently stops pulling the
+/// built binding.
+fn built_slot_operator_atoms(raw_depstr: &str, use_flags: &HashSet<String>) -> Vec<String> {
+    let tokens: Vec<String> = raw_depstr.split_whitespace().map(String::from).collect();
+    let Ok(flat) = portage_use_reduce::use_reduce_flat(
+        &tokens,
+        use_flags,
+        portage_use_reduce::MatchMode::Normal,
+    ) else {
+        return Vec::new();
+    };
+    flat.into_iter()
+        .filter(|tok| {
+            portage_dep::parse_atom(tok).is_some_and(|a| {
+                a.slot_operator == Some(portage_dep::SlotOperator::Equals) && a.sub_slot.is_some()
+            })
+        })
+        .collect()
+}
+
+/// One installed package's `*DEPEND` string for `key`, at `layer` --
+/// real `Package._raw_metadata[key]` vs `Package._metadata[key]`.
+///
+/// `live` is the repo's current md5-cache metadata for this exact
+/// `cat/pkg-version` (`None` when the version is gone from every repo;
+/// `enqueue_dependencies` already returns early when its own cache read
+/// fails, but the merge-order closure calls this for installed packages
+/// that may have no ebuild left at all).
+///
+/// `memo` is keyed `(category, package, version, key)` and caches the
+/// **Effective** result only, per pass. Real applies the overlay once
+/// per installed instance (`FakeVartree.dynamic_deps_applied`) and is
+/// explicit that a second application is a bug; a per-pass cache is the
+/// portuale counterpart (the walk re-runs per backtracking pass, and
+/// real's `frozen_config` would keep the first overlay across them).
+///
+/// `ignore_built_slot_operator_deps` suppresses only the append, exactly
+/// like real `FakeVartree.py:171` (`built_slot_operator_atoms = None`):
+/// the live ebuild string still stands.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn installed_dep_string(
+    root: &Path,
+    dynamic_deps: bool,
+    dynamic_deps_append: bool,
+    ignore_built_slot_operator_deps: bool,
+    category: &str,
+    package: &str,
+    version: &str,
+    live: Option<&HashMap<String, String>>,
+    key: &str,
+    layer: InstalledMetaLayer,
+    memo: &mut HashMap<(String, String, String, String), String>,
+) -> String {
+    let raw = read_vdb_string(root, category, package, version, key)
+        .trim()
+        .to_string();
+    if layer == InstalledMetaLayer::Raw || !dynamic_deps {
+        return raw;
+    }
+    let memo_key = (
+        category.to_string(),
+        package.to_string(),
+        version.to_string(),
+        key.to_string(),
+    );
+    if let Some(cached) = memo.get(&memo_key) {
+        return cached.clone();
+    }
+    let result = match live {
+        // Real `_DynamicDepsNotApplicable`: no live ebuild metadata, so
+        // the raw record stands, with global package moves applied.
+        None => apply_updates_to_dep_string(&raw),
+        Some(live) => {
+            let live_value = live.get(key).map(String::as_str).unwrap_or("").trim();
+            if ignore_built_slot_operator_deps || !dynamic_deps_append {
+                live_value.to_string()
+            } else {
+                let use_flags = read_vdb_flag_set(root, category, package, version, "USE");
+                let built = built_slot_operator_atoms(&raw, &use_flags);
+                match (live_value.is_empty(), built.is_empty()) {
+                    (_, true) => live_value.to_string(),
+                    (true, false) => built.join(" "),
+                    (false, false) => format!("{live_value} {}", built.join(" ")),
+                }
+            }
+        }
+    };
+    memo.insert(memo_key, result.clone());
+    result
+}
+
 /// Reads `category/package-version`'s own DEPEND+RDEPEND+BDEPEND+PDEPEND+
 /// IDEPEND metadata (from whichever repo actually carries this exact
 /// version) and enqueues each flattened dependency token -- into
@@ -19552,15 +19707,18 @@ pub fn resolve_pretend_graph(
 /// the same tolerance the main loop already has for those cases.
 ///
 /// `dynamic_deps` (real `--dynamic-deps`, `create_depgraph_params.py:
-/// 116-123`, ON by default for a source install): when `true` (the
-/// portuale's own long-standing behaviour), an AlreadyInstalled package's
-/// dependency walk uses the repo's **current** ebuild metadata + the
-/// recomputed effective `USE`, exactly like every other candidate lookup
-/// in portuale. When `false` (`--dynamic-deps=n`), it reads the
-/// package's own vdb-recorded `*DEPEND` snapshot instead, flattened
-/// against its built (`vdb/USE`) flags -- real portage's own
-/// installed-time metadata. The two only differ when the repo's copy of
-/// that exact version's ebuild changed since it was installed.
+/// 116-123`, ON by default for a source install): when `true`, an
+/// AlreadyInstalled package's dependency walk uses the repo's **current**
+/// ebuild metadata **plus the vdb's own built `:=` atoms appended**
+/// (real `FakeVartree._apply_dynamic_deps`; see `installed_dep_string`'s
+/// own doc comment), flattened against its built (`vdb/USE`) flags.
+/// When `false` (`--dynamic-deps=n`), it reads the package's own
+/// vdb-recorded `*DEPEND` snapshot alone -- real portage's own
+/// installed-time metadata. The two differ when the repo's copy of that
+/// exact version's ebuild changed since it was installed, and/or when
+/// the vdb recorded a built sub-slot binding the ebuild no longer has.
+/// `ignore_built_slot_operator_deps` (real `--ignore-built-slot-operator-deps`)
+/// suppresses only the append, exactly like real `FakeVartree.py:171`.
 ///
 /// `with_bdeps` (real `--with-bdeps`, see `resolve_pretend_graph`'s own
 /// doc comment for the full grounding): when `false`, DEPEND and BDEPEND
@@ -19590,6 +19748,7 @@ fn enqueue_dependencies(
     repos: &[RepoConfig],
     root: &Path,
     dynamic_deps: bool,
+    ignore_built_slot_operator_deps: bool,
     category: &str,
     package: &str,
     version: &str,
@@ -19603,6 +19762,9 @@ fn enqueue_dependencies(
     root_deps_running_root: Option<&Path>,
     entries: &mut Vec<GraphEntry>,
     root_deps_build_seen: &mut HashSet<(String, String)>,
+    // Per-pass `installed_dep_string` memo (see its own doc comment):
+    // keyed `(category, package, version, key)`, Effective results only.
+    installed_meta_memo: &mut HashMap<(String, String, String, String), String>,
     // The `'backtrack` loop's accumulated per-`cat/pkg` `runtime_pkg_mask`
     // (`slot_constraints`), consulted by this walk's `||` branch
     // selection the same way the main New/Upgrade loop's is -- empty on
@@ -19633,7 +19795,9 @@ fn enqueue_dependencies(
     };
 
     // `--dynamic-deps` (default) walks the repo's *current* ebuild
-    // `*DEPEND` strings; `--dynamic-deps=n` walks the vdb's own
+    // `*DEPEND` strings **plus** the vdb's own built `:=` atoms appended
+    // (real `FakeVartree._apply_dynamic_deps`, see `installed_dep_string`'s
+    // own doc comment); `--dynamic-deps=n` walks the vdb's own
     // installed-time `*DEPEND` snapshot. Either way the USE conditionals
     // in those strings are evaluated against the package's *installed*
     // recorded USE (`vdb/USE`), never a fresh profile recompute -- real
@@ -19650,15 +19814,25 @@ fn enqueue_dependencies(
     let depstr = {
         let mut depstr = String::new();
         for dep_key in dep_keys {
-            if dynamic_deps {
-                if let Some(d) = metadata.get(*dep_key) {
-                    depstr.push_str(d);
-                    depstr.push(' ');
-                }
+            let layer = if dynamic_deps {
+                InstalledMetaLayer::Effective
             } else {
-                depstr.push_str(&read_vdb_string(root, category, package, version, dep_key));
-                depstr.push(' ');
-            }
+                InstalledMetaLayer::Raw
+            };
+            depstr.push_str(&installed_dep_string(
+                root,
+                dynamic_deps,
+                dynamic_deps_append_enabled(),
+                ignore_built_slot_operator_deps,
+                category,
+                package,
+                version,
+                Some(&metadata),
+                dep_key,
+                layer,
+                installed_meta_memo,
+            ));
+            depstr.push(' ');
         }
         depstr
     };
@@ -24778,6 +24952,256 @@ mod tests {
         assert!(call(true).iter().any(|n| n == "dev-libs/newpkg"));
         // =n: the vdb RDEPEND -> samepkg (installed) -> newpkg not pulled.
         assert!(!call(false).iter().any(|n| n == "dev-libs/newpkg"));
+    }
+
+    #[test]
+    fn installed_dep_string_appends_only_vdb_built_slot_operator_atoms() {
+        // Real `FakeVartree._apply_dynamic_deps`: Effective = live ebuild
+        // value + the vdb's own `slot_operator_built` atoms (`:=` with a
+        // sub-slot); a plain `:2=` binding is NOT built and is never
+        // appended (`portage/dep/__init__.py:2156-2162`).
+        // --dynamic-deps=n and Raw collapse to the vdb record;
+        // --ignore-built-slot-operator-deps suppresses only the append;
+        // the no-live-metadata arm is real's `_DynamicDepsNotApplicable`
+        // fallback (raw + global moves, identity in fixtures).
+        let root = fixtures_root();
+        let live_slotop: HashMap<String, String> =
+            [("RDEPEND".to_string(), "dev-libs/slotoptarget:=".to_string())]
+                .into_iter()
+                .collect();
+        // slotopdepspkg's vdb RDEPEND is `dev-libs/slotoptarget:2=` --
+        // no sub-slot -> not built -> no append.
+        let mut memo = HashMap::new();
+        let eff = installed_dep_string(
+            &root,
+            true,
+            true,
+            false,
+            "dev-libs",
+            "slotopdepspkg",
+            "1.0",
+            Some(&live_slotop),
+            "RDEPEND",
+            InstalledMetaLayer::Effective,
+            &mut memo,
+        );
+        assert_eq!(eff, "dev-libs/slotoptarget:=");
+
+        // revdepslotconsumer's vdb RDEPEND is
+        // `dev-libs/revdepslottarget:0/1=` -- built -> appended.
+        let live_empty: HashMap<String, String> = HashMap::new();
+        let mut memo = HashMap::new();
+        let eff = installed_dep_string(
+            &root,
+            true,
+            true,
+            false,
+            "dev-libs",
+            "revdepslotconsumer",
+            "1.0",
+            Some(&live_empty),
+            "RDEPEND",
+            InstalledMetaLayer::Effective,
+            &mut memo,
+        );
+        assert_eq!(eff, "dev-libs/revdepslottarget:0/1=");
+        assert!(memo.contains_key(&(
+            "dev-libs".to_string(),
+            "revdepslotconsumer".to_string(),
+            "1.0".to_string(),
+            "RDEPEND".to_string()
+        )));
+
+        // Appended *after* a non-empty live value, space-separated.
+        let live_target: HashMap<String, String> = [(
+            "RDEPEND".to_string(),
+            "dev-libs/revdepslottarget:=".to_string(),
+        )]
+        .into_iter()
+        .collect();
+        let mut memo = HashMap::new();
+        let eff = installed_dep_string(
+            &root,
+            true,
+            true,
+            false,
+            "dev-libs",
+            "revdepslotconsumer",
+            "1.0",
+            Some(&live_target),
+            "RDEPEND",
+            InstalledMetaLayer::Effective,
+            &mut memo,
+        );
+        assert_eq!(
+            eff,
+            "dev-libs/revdepslottarget:= dev-libs/revdepslottarget:0/1="
+        );
+
+        // =n: the raw snapshot, byte-for-byte.
+        let mut memo = HashMap::new();
+        let raw = installed_dep_string(
+            &root,
+            false,
+            true,
+            false,
+            "dev-libs",
+            "revdepslotconsumer",
+            "1.0",
+            Some(&live_target),
+            "RDEPEND",
+            InstalledMetaLayer::Raw,
+            &mut memo,
+        );
+        assert_eq!(raw, "dev-libs/revdepslottarget:0/1=");
+
+        // --ignore-built-slot-operator-deps: append suppressed, live stands.
+        let mut memo = HashMap::new();
+        let ignored = installed_dep_string(
+            &root,
+            true,
+            true,
+            true,
+            "dev-libs",
+            "revdepslotconsumer",
+            "1.0",
+            Some(&live_target),
+            "RDEPEND",
+            InstalledMetaLayer::Effective,
+            &mut memo,
+        );
+        assert_eq!(ignored, "dev-libs/revdepslottarget:=");
+
+        // The append gate off (the default): the live value alone, exactly
+        // the pre-A1 `--dynamic-deps` behaviour.
+        let mut memo = HashMap::new();
+        let gated = installed_dep_string(
+            &root,
+            true,
+            false,
+            false,
+            "dev-libs",
+            "revdepslotconsumer",
+            "1.0",
+            Some(&live_target),
+            "RDEPEND",
+            InstalledMetaLayer::Effective,
+            &mut memo,
+        );
+        assert_eq!(gated, "dev-libs/revdepslottarget:=");
+
+        // Missing live metadata: raw record stands (global moves are
+        // identity without `profiles/updates` commands).
+        let mut memo = HashMap::new();
+        let fallback = installed_dep_string(
+            &root,
+            true,
+            true,
+            false,
+            "dev-libs",
+            "revdepslotconsumer",
+            "1.0",
+            None,
+            "RDEPEND",
+            InstalledMetaLayer::Effective,
+            &mut memo,
+        );
+        assert_eq!(fallback, "dev-libs/revdepslottarget:0/1=");
+    }
+
+    #[test]
+    fn default_dynamic_deps_pulls_a_vdb_built_binding_dropped_by_the_ebuild() {
+        // dev-libs/builtbindpkg is installed with vdb
+        // RDEPEND="dev-libs/builtbindtarget:0/1=" while its current ebuild
+        // RDEPEND is "dev-libs/newpkg" (the binding was dropped from the
+        // tree). Real's default `--dynamic-deps` appends the vdb's built
+        // atom to the live metadata, so *both* are walked; `=n` walks the
+        // vdb snapshot alone; `--ignore-built-slot-operator-deps`
+        // suppresses only the append. The append is gated default-off
+        // (`PORTUALE_DYNAMIC_DEPS_APPEND`), so turn it on for this test.
+        set_dynamic_deps_append(true);
+        let root = fixtures_root();
+        let call = |dynamic_deps: bool, ignore_built: bool| -> Vec<String> {
+            resolve_pretend_graph(
+                &root,
+                &root,
+                &["dev-libs/builtbindpkg".to_string()],
+                &test_config(),
+                false,
+                false,
+                false,
+                false,
+                Deep::Unlimited,
+                &[],
+                true,
+                false,
+                false,
+                false,
+                false,
+                true,
+                false,
+                false,
+                false,
+                false,
+                false,
+                false,
+                false,
+                &[],
+                &[],
+                false,
+                None,
+                false,
+                false,
+                None,
+                &fixtures_root().join("distfiles"),
+                false,
+                false,
+                ignore_built,
+                10,
+                &[],
+                true,
+                false,
+                false,
+                false,
+                &[],
+                &[],
+                dynamic_deps,
+                false,
+            )
+            .unwrap()
+            .entries
+            .into_iter()
+            .map(|e| format!("{}/{}", e.category, e.package))
+            .collect()
+        };
+        let default = call(true, false);
+        assert!(
+            default.iter().any(|n| n == "dev-libs/newpkg"),
+            "live ebuild dep: {default:?}"
+        );
+        assert!(
+            default.iter().any(|n| n == "dev-libs/builtbindtarget"),
+            "vdb built binding appended: {default:?}"
+        );
+        let static_ = call(false, false);
+        assert!(
+            !static_.iter().any(|n| n == "dev-libs/newpkg"),
+            "=n reads the vdb snapshot, not the ebuild: {static_:?}"
+        );
+        assert!(
+            static_.iter().any(|n| n == "dev-libs/builtbindtarget"),
+            "=n still walks the recorded built binding: {static_:?}"
+        );
+        let ignored = call(true, true);
+        assert!(
+            ignored.iter().any(|n| n == "dev-libs/newpkg"),
+            "append suppressed, live dep intact: {ignored:?}"
+        );
+        assert!(
+            !ignored.iter().any(|n| n == "dev-libs/builtbindtarget"),
+            "append suppressed drops the vdb-only binding: {ignored:?}"
+        );
+        set_dynamic_deps_append(false);
     }
 
     #[test]

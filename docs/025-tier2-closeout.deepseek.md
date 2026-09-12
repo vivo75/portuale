@@ -1,11 +1,13 @@
 # Tier 2 close-out — #17 + #26 + #27 — agent plan (deepseek draft)
 
-Status: proposed. Written 2026-09-12 against `main` @ `be76d0d` (post
-#24 S7). Companion detail for #26/#27 lives in
-`docs/024-dynamic-deps_n_disagreement.deepseek.md` (referred to below as
-**the 024 plan**); this document is the combined execution plan that also
-covers **#17** (`docs/backlog-tasks.md:38`), which had no plan doc until
-now.
+Status: executing. A0 (record correction) and A1 (effective
+installed-metadata helper + built-`:=` append, gated default-off) landed
+2026-09-12; see §11 for the A1 finding that gates the append. Written
+2026-09-12 against `main` @ `be76d0d` (post #24 S7). Companion detail for
+#26/#27 lives in `docs/024-dynamic-deps_n_disagreement.deepseek.md`
+(referred to below as **the 024 plan**); this document is the combined
+execution plan that also covers **#17** (`docs/backlog-tasks.md:38`),
+which had no plan doc until now.
 
 **Read first:** `AGENTS.md` (step 8; step 9's commit rules), `docs/agent-context.md`,
 `docs/024-slot-operator-plan.md` §2 (rules/invariants), `docs/024-oracle.md`
@@ -502,3 +504,48 @@ updated per AGENTS.md step 7, no commit/push unless asked.
   `Scheduler`-side FakeVartree (024 plan non-goals).
 - Any new resolver architecture beyond B4's two rules, and any
   `merge_order.rs` heuristic without a container oracle.
+
+---
+
+## 11. Findings filed while executing
+
+### F-A1 — the appended vdb-built atom is not reconciled by the resolver (2026-09-12)
+
+**Status:** open; blocks flipping the `PORTUALE_DYNAMIC_DEPS_APPEND`
+default from off to on (A1 landed behind that gate).
+
+A1's overlay appends the vdb's `slot_operator_built` atoms (`:=` with a
+sub-slot) to the live ebuild dep string, exactly like real
+`FakeVartree._apply_dynamic_deps`. Two #24 oracle pins prove portuale's
+resolver cannot yet consume that union when the ebuild carries the
+*unbound* form of the same atom:
+
+- `test_oracle_slotop_slotchange_case4_changedslot`
+  (installed `libarchive-3.1.1:0/13`, vdb built binding `:0/0=`, ebuild
+  `:=`): with the append on, the Rust side still matches the pinned real
+  output (`[rR] libarchive-3.1.1` + `[rR] ark` + the rebuilds block),
+  but the Python mirror folds the conflict as "solvable" in
+  `_slot_conflict_mask_choices`' pre-check and converges on the
+  `3.0.4-r1` downgrade. Root cause: real portage's `match_from_list`
+  against a *subslot-less* candidate string treats the built `:0/0=` as
+  slot-matching (`True` for `libarchive-3.1.1:0`), while the Rust
+  `portage-dep` matcher is stricter; the two languages disagree on
+  whether a single version satisfies both wants.
+- `test_oracle_slotop_undo_cascade`: with the append on, **both**
+  languages drop the cascade's second consumer (`soccascc`) from the
+  merge list (the rebuilds block still names it), diverging from the
+  pinned real output (`[rR] soccascc-0`). Real resolves the pair through
+  the slot-operator rebuild probe before any "one version satisfies all"
+  folding.
+
+**Not chased here** (plan rule 2.8/5 "surface, don't chase"): the fix is
+probe ordering in the slot-conflict reconciliation (real
+`_process_slot_conflicts` -> `_slot_conflict_backtrack_abi` /
+`_slot_operator_update_probe` before the generic solvable fold), i.e. a
+#23/#24-family resolver slice, not the #26 overlay. Until it lands the
+append is opt-in (`PORTUALE_DYNAMIC_DEPS_APPEND=1`), `--dynamic-deps=n`
+is unaffected, and the default remains byte-identical to pre-A1. The
+helper, the per-pass memo, the `--ignore-built-slot-operator-deps` gate,
+the `installed_dep_string` unit tests and the `builtbindpkg` fixture all
+land now.
+
