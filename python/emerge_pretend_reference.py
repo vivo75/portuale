@@ -10575,9 +10575,35 @@ def _add_installed_dependency_closure(
     leaf, so only a node whose own category is `virtual` gets its deps
     walked. Mirrors portage-repo/src/merge_order.rs's
     add_installed_dependency_closure."""
+    # B1: every installed *version* of a cp, not one (a cp -> single pkg
+    # map silently dropped all but the first-installed slot; real's
+    # _complete_graph keeps every installed slot -- gtk:4's missing
+    # docbook-xml-dtd-{4.2,4.4,4.5} nodes were exactly this).
     by_cp = {}
     for c, p, v, _s in _all_installed_packages(root):
-        by_cp.setdefault((c, p), (c, p, v))
+        by_cp.setdefault((c, p), []).append((c, p, v, _s))
+
+    def _pick_installed(atom, cat, pkg):
+        cands = by_cp.get((cat, pkg))
+        if not cands:
+            return None
+
+        def _highest(pool):
+            best = None
+            for p in pool:
+                if best is None or (vercmp(p[2], best[2]) or 0) > 0:
+                    best = p
+            return best
+
+        if atom is not None:
+            matching = [
+                p
+                for p in cands
+                if match_from_list(atom, [f"{p[0]}/{p[1]}-{p[2]}:{p[3]}"])
+            ]
+            if matching:
+                return _highest(matching)
+        return _highest(cands)
 
     def _expandable(cat):
         return not virtuals_only or cat == "virtual"
@@ -10653,29 +10679,39 @@ def _add_installed_dependency_closure(
             if _layer != _INSTALLED_META_RAW or not _is_injected_libc(e["atom"])
         ]
 
-    present = {(e[0], e[1]) for e in entries}
+    def _entry_version(e):
+        tag = e[2][0]
+        if tag in ("new", "reinstall", "already_installed"):
+            return e[2][1]
+        if tag in ("upgrade", "downgrade"):
+            return e[2][2]
+        return None
+
+    present = {(e[0], e[1], _entry_version(e) or "") for e in entries}
     queue = []
 
     seed_targets = [
-        edge["cp"]
+        (edge.get("atom"), edge["cp"][0], edge["cp"][1])
         for e in entries
         for edge in (
             e[8].get("deps") or [] if isinstance(e[8], dict) else []
         )
     ]
-    def _add_node(key):
+
+    def _add_node(atom, cat, pkg):
+        p = _pick_installed(atom, cat, pkg)
+        if p is None:
+            return
+        key = (p[0], p[1], p[2])
         if key in present:
             return
         present.add(key)
-        p = by_cp.get(key)
-        if p is None:
-            return
         entries.append(_synthetic_installed_entry(p[0], p[1], p[2], []))
-        if _expandable(key[0]):
+        if _expandable(cat):
             queue.append(len(entries) - 1)
 
-    for key in seed_targets:
-        _add_node(key)
+    for atom, cat, pkg in seed_targets:
+        _add_node(atom, cat, pkg)
 
     # Seed 1b (complete mode only): real _complete_graph seeds a SetArg
     # for @world/@system and walks it deep. Add each installed @system
@@ -10686,7 +10722,7 @@ def _add_installed_dependency_closure(
             atom = _parse_atom(atom_str)
             if atom is None:
                 continue
-            _add_node(tuple(atom.cp.split("/", 1)))
+            _add_node(atom_str, *tuple(atom.cp.split("/", 1)))
 
     for i, e in enumerate(entries):
         if (
@@ -10708,7 +10744,7 @@ def _add_installed_dependency_closure(
             continue
         edges = _vdb_edges(e[0], e[1], e[2][1])
         for edge in edges:
-            _add_node(edge["cp"])
+            _add_node(edge.get("atom"), edge["cp"][0], edge["cp"][1])
         # entry tuples are immutable -- rebuild [8] with the filled deps.
         new_prov = dict(prov)
         new_prov["deps"] = edges

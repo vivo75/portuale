@@ -644,3 +644,21 @@ atom actually matches, and let `build_digraph`'s existing per-slot
 `edge_matches` narrow the edges (slice 6). Any such change moves the
 scheduler graph, so it needs its own L0 run before the next probe's
 order can be re-read.
+
+**B1 round 2 (2026-09-12): landed.** `add_installed_dependency_closure`
+now keeps every installed version (`by_cp: cp -> Vec<&InstalledPackage>`),
+keys `present`/`add_node` by cpv, and selects the version each edge's own
+atom names (highest matching, highest overall when the atom is
+absent/unparseable). Re-run in the container: `gui-libs/gtk:4` node sets
+now match **398 == 398** (previously 398 vs 395). The first remaining
+trace difference is no longer membership but the *order inside the
+iteration-1 greedy batch* (`sys-libs/zlib` at real position 9 vs
+portuale 45; the batch is the same set), and portuale still runs 578
+iterations against real's 290 -- the frontier-timing residue now starts
+from an identical graph, which is the state B1/B2/B3 were meant to
+reach. Full L0 (`TEST/logs/l0-20260912T181102Z`): **clean 96 -> 98,
+parity 0.800 -> 0.817, order 22 -> 20**, no new divergence;
+`app-text/texlive-core` and `dev-texlive/texlive-latex` flipped clean
+(the docbook NS row moved to real's position), `net-misc/networkmanager`
+moved one row (still divergent). Python reference mirrored; the full
+contract suite stays green.

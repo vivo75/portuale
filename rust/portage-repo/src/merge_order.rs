@@ -855,6 +855,20 @@ fn mo_sel_enabled() -> bool {
     std::env::var_os("PORTUALE_MO_SEL").is_some_and(|v| v != "0")
 }
 
+/// The version an entry is resolved at (the merge target for an
+/// upgrade/downgrade, the current version otherwise). `None` only for
+/// `NoVisibleCandidate`.
+fn outcome_version(e: &GraphEntry) -> Option<&str> {
+    match &e.outcome {
+        PretendOutcome::New { version } | PretendOutcome::Reinstall { version, .. } => {
+            Some(version)
+        }
+        PretendOutcome::Upgrade { to, .. } | PretendOutcome::Downgrade { to, .. } => Some(to),
+        PretendOutcome::AlreadyInstalled { version } => Some(version),
+        PretendOutcome::NoVisibleCandidate => None,
+    }
+}
+
 /// Real `Package`'s `cat/pkg-ver` label for the trace `pick=` field.
 /// Prefixed `m:` for a merge-bound node (real `operation == "merge"`) or
 /// `n:` for a nomerge/installed one, so the aligner can see *which kind*
@@ -862,16 +876,8 @@ fn mo_sel_enabled() -> bool {
 /// gnuconfig/elt-patches batch vs real's installed-nomerge batch is
 /// exactly the difference this harness exists to localize.
 fn mo_sel_cpv(e: &GraphEntry, installed: bool) -> String {
-    let version = match &e.outcome {
-        PretendOutcome::New { version } | PretendOutcome::Reinstall { version, .. } => {
-            Some(version)
-        }
-        PretendOutcome::Upgrade { to, .. } | PretendOutcome::Downgrade { to, .. } => Some(to),
-        PretendOutcome::AlreadyInstalled { version } => Some(version),
-        PretendOutcome::NoVisibleCandidate => None,
-    };
     let kind = if installed { 'n' } else { 'm' };
-    match version {
+    match outcome_version(e) {
         Some(v) => format!("{kind}:{}/{}-{}", e.category, e.package, v),
         None => format!("{kind}:{}/{}", e.category, e.package),
     }
@@ -1050,10 +1056,51 @@ fn add_installed_dependency_closure(
     // it names is added as a leaf, not queued (unless it is itself a
     // virtual).
     let installed = all_installed_packages(root);
-    let by_cp: HashMap<(&str, &str), &crate::InstalledPackage> = installed
-        .iter()
-        .map(|p| ((p.category.as_str(), p.package.as_str()), p))
-        .collect();
+    // B1: every installed *version* of a cp, not one (a `cp -> single pkg`
+    // map silently dropped all but the last-installed slot; real's
+    // `_complete_graph` keeps every installed slot -- gtk:4's missing
+    // `docbook-xml-dtd-{4.2,4.4,4.5}` nodes were exactly this).
+    let by_cp: HashMap<(&str, &str), Vec<&crate::InstalledPackage>> = {
+        let mut m: HashMap<(&str, &str), Vec<&crate::InstalledPackage>> = HashMap::new();
+        for p in installed.iter() {
+            m.entry((p.category.as_str(), p.package.as_str()))
+                .or_default()
+                .push(p);
+        }
+        m
+    };
+    // Pick the installed version an edge's atom names -- the highest
+    // matching version when several match, the highest overall when the
+    // atom is absent/unparseable. The candidate string carries the main
+    // slot (`:4.2` style atoms are what pull sibling docbook slots in).
+    let pick_installed =
+        |atom: Option<&str>, cat: &str, pkg: &str| -> Option<&crate::InstalledPackage> {
+            let cands = by_cp.get(&(cat, pkg))?;
+            let mut best: Option<&crate::InstalledPackage> = None;
+            for p in cands {
+                if let Some(a) = atom
+                    && !portage_dep::match_from_list(
+                        a,
+                        &[format!("{cat}/{pkg}-{}:{}", p.version, p.slot).as_str()],
+                    )
+                    .is_some_and(|m| !m.is_empty())
+                {
+                    continue;
+                }
+                if best.is_none_or(|b| {
+                    portage_versions::vercmp(&b.version, &p.version).is_some_and(|o| o < 0)
+                }) {
+                    best = Some(p);
+                }
+            }
+            best.or_else(|| {
+                cands.iter().copied().max_by(|a, b| {
+                    portage_versions::vercmp(&a.version, &b.version)
+                        .unwrap_or(0)
+                        .cmp(&0)
+                })
+            })
+        };
 
     // A2 (#26): the edges come from the same installed-metadata view the
     // walk uses (`installed_dep_string`): with `--dynamic-deps` on (the
@@ -1134,9 +1181,15 @@ fn add_installed_dependency_closure(
         .collect()
     };
 
-    let mut present: HashSet<(String, String)> = entries
+    let mut present: HashSet<(String, String, String)> = entries
         .iter()
-        .map(|e| (e.category.clone(), e.package.clone()))
+        .map(|e| {
+            (
+                e.category.clone(),
+                e.package.clone(),
+                outcome_version(e).unwrap_or("").to_string(),
+            )
+        })
         .collect();
     let mut queue: std::collections::VecDeque<usize> = std::collections::VecDeque::new();
 
@@ -1148,35 +1201,42 @@ fn add_installed_dependency_closure(
     // `_complete_graph` has every one of these.
     // `virtuals_only`: a node just added is queued for its own dep walk
     // only if the whole closure is wanted, or it is itself a `virtual/*`.
+    // B1: `present` is keyed by cpv, and `add_node` selects the installed
+    // version the edge's own atom names -- real keeps every installed
+    // slot, and keying by cp alone dropped all but the first
+    // (`docbook-xml-dtd:4.2`/`:4.4`/`:4.5` vs the already-present 4.1.2).
     let expandable = |cat: &str| !virtuals_only || cat == "virtual";
     let add_node = |entries: &mut Vec<GraphEntry>,
-                    present: &mut HashSet<(String, String)>,
+                    present: &mut HashSet<(String, String, String)>,
                     queue: &mut std::collections::VecDeque<usize>,
-                    key: (String, String)| {
-        if !present.insert(key.clone()) {
-            return;
-        }
-        let Some(p) = by_cp.get(&(key.0.as_str(), key.1.as_str())) else {
+                    atom: Option<&str>,
+                    cat: &str,
+                    pkg: &str| {
+        let Some(p) = pick_installed(atom, cat, pkg) else {
             return;
         };
+        let key = (p.category.clone(), p.package.clone(), p.version.clone());
+        if !present.insert(key) {
+            return;
+        }
         entries.push(synthetic_installed_entry(
             p.category.clone(),
             p.package.clone(),
             p.version.clone(),
             Vec::new(),
         ));
-        if expandable(&key.0) {
+        if expandable(cat) {
             queue.push_back(entries.len() - 1);
         }
     };
 
-    let seed_targets: Vec<(String, String)> = entries
+    let seed_targets: Vec<(String, String, String)> = entries
         .iter()
         .flat_map(|e| e.deps.iter())
-        .map(|d| (d.category.clone(), d.package.clone()))
+        .map(|d| (d.atom.clone(), d.category.clone(), d.package.clone()))
         .collect();
-    for key in seed_targets {
-        add_node(entries, &mut present, &mut queue, key);
+    for (atom, cat, pkg) in seed_targets {
+        add_node(entries, &mut present, &mut queue, Some(&atom), &cat, &pkg);
     }
 
     // Seed 1b (complete mode only): real `_complete_graph` seeds a
@@ -1196,7 +1256,9 @@ fn add_installed_dependency_closure(
                 entries,
                 &mut present,
                 &mut queue,
-                (atom.category, atom.package),
+                Some(atom_str),
+                &atom.category,
+                &atom.package,
             );
         }
     }
@@ -1226,7 +1288,9 @@ fn add_installed_dependency_closure(
                 entries,
                 &mut present,
                 &mut queue,
-                (e.category.clone(), e.package.clone()),
+                Some(&e.atom),
+                &e.category,
+                &e.package,
             );
         }
         entries[i].deps = edges;
