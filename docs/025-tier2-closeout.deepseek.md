@@ -749,3 +749,17 @@ distinguishing information is real's walk order (which atom forced the
 merge first), i.e. the resolver must record `initially-satisfied ->
 no edge` and drop a superseded installed node's in-edges -- the #25
 architecture item. B4's probes (gedit #5, nautilus #8) stay residue.
+
+### F-B5 — B5: gnome-shell's `order #0` explained as cluster-A abort residue (2026-09-12)
+
+Real aborts on the unsatisfiable USE-dep
+(`emerge: there are no ebuilds built with USE flags to satisfy
+">=net-fs/samba-4.0.0[client]"`, masked-required notice, rc 1) and
+prints a truncated list (Total 453); portuale autounmask-backtracks
+(`libcanberra pulseaudio`) and exits 1 later (Total 454). The `order #0`
+(`hwdata` vs `libmd`), the extra `dev-lang/nasm` and the totals delta are
+all downstream of that abort handling, so the probe is adjudicated to the
+cluster-A bundle (already recorded at `TEST/findings/l0.md:948-952`) and
+covered by a `known-divergences.yaml` entry
+(`gnome-shell-cluster-a-abort`). Comparator on the B2 run: explained
+0 -> 6, unexplained 44 -> 38, order 20 -> 19. No code change.

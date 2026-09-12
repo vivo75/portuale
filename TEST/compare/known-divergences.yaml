@@ -33,3 +33,19 @@
 # (empty -- L1-c fixed on `main`; the `l1-env-binpkg-not-refiltered`
 #  entry that stood here is gone. The L1-f phase-env-inheritance residue
 #  is handled by normalize.py's ENV_DROP, not an allowlist entry.)
+
+- id: gnome-shell-cluster-a-abort
+  categories: [order, extra, totals, advice, error]
+  slugs: ["gnome-base_gnome-shell"]
+  reason: >
+    Cluster-A abort-path bundle, not a #17 order bug: real abandons the
+    resolve at the unsatisfiable USE-dep (`emerge: there are no ebuilds
+    built with USE flags to satisfy ">=net-fs/samba-4.0.0[client]"`, the
+    masked-required notice, rc 1) and prints a truncated merge list
+    (Total 453). Portuale keeps going with an autounmask USE change
+    (libcanberra pulseaudio) and exits 1 later (Total 454), so the
+    `order #0` (real sys-apps/hwdata vs portuale app-crypt/libmd), the
+    extra dev-lang/nasm row and the totals delta are downstream of the
+    abort handling. Recorded as the gnome-shell cluster-A bundle in
+    TEST/findings/l0.md (~948-952).
+  owner: deepseek-v4.1-flash
