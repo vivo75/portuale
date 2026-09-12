@@ -8734,7 +8734,7 @@ def _reverse_dependency_constraints(root, entries, with_bdeps, excluded, repos, 
     return sorted(out_enforced), sorted(out_dropped)
 
 
-def _slot_operator_rebuild_scan(root, repos, entries, reachable, already):
+def _slot_operator_rebuild_scan(root, repos, entries, reachable, already, undone):
     """Real depgraph's _slot_operator_trigger_reinstalls (3089-3132) +
     _slot_operator_replace_installed (the
     @__auto_slot_operator_replace_installed__ set): an installed package
@@ -8767,6 +8767,12 @@ def _slot_operator_rebuild_scan(root, repos, entries, reachable, already):
     abi_rebuilds pairs keep being reported for the whole search; every
     other in-graph cp is skipped, exactly as before.
 
+    `undone` (#24 S4) is the undo latch: a cp real's _eliminate_rebuilds
+    demoted must never be scheduled again within a search node (real
+    mutates the settled graph in place and does not restart, so its scan
+    cannot re-fire; this reference's re-runs every pass and needs the
+    latch).
+
     Mirrors portage-repo/src/lib.rs's slot_operator_rebuild_scan exactly
     (cuts and all)."""
     new_slot = {}
@@ -8793,7 +8799,7 @@ def _slot_operator_rebuild_scan(root, repos, entries, reachable, already):
     abi_rebuilds = []
     for category, package, version, _slot in installed:
         cp = (category, package)
-        if cp not in reachable or (cp in in_graph and cp not in already):
+        if cp in undone or cp not in reachable or (cp in in_graph and cp not in already):
             continue
         consumer_cpv = f"{category}/{package}-{version}"
         providers = set()
@@ -8814,6 +8820,245 @@ def _slot_operator_rebuild_scan(root, repos, entries, reachable, already):
             abi_rebuilds.append((provider_cpv, consumer_cpv))
         scheduled.add(cp)
     return scheduled, sorted(set(abi_rebuilds))
+
+
+def _bind_slot_operator_deps(depstr, entries, root):
+    """Backlog #24 S4: real portage's graph-aware :=/:S= binder (real
+    portage/dep/_slot_operator.py::_eval_deps, run per atom from
+    evaluate_slot_operator_equal_deps). Real binds every slot-operator
+    atom against _graph_trees[root]["vartree"], whose dbapi is the
+    PackageTrackerDbapiWrapper (depgraph.py:744-775) -- "the state that
+    the vdb will have after new packages have been installed". So a
+    merge-bound package wins over the installed instance: here a
+    merge-bound (new/upgrade/downgrade/reinstall) entry first, else the
+    installed candidates, highest matching version (vardb.match(x)[-1]).
+    An atom no candidate satisfies is left unchanged, exactly like
+    real's own "just leave it as-is for now ... keeping the information
+    in vdb". Mirrors portage-repo/src/lib.rs's bind_slot_operator_deps."""
+    return " ".join(
+        _bind_slot_operator_token(tok, entries, root) for tok in depstr.split()
+    )
+
+
+def _bind_slot_operator_token(token, entries, root):
+    """One token of _bind_slot_operator_deps. The rewrite is string
+    surgery on the atom's own slot-dep substring (:= / :2= / :2/3=), the
+    same reconstruction ebuild_phases.rs::bind_slot_operator uses: that
+    substring is distinctive enough to appear exactly once in a
+    well-formed atom. Mirrors portage-repo/src/lib.rs's
+    bind_slot_operator_token."""
+    atom = _parse_atom(token)
+    if atom is None or atom.slot_operator != "=":
+        return token
+
+    def _matches(version, slot, sub_slot):
+        candidate = f"{atom.cp}-{version}:{slot}/{sub_slot}"
+        try:
+            return bool(match_from_list(token, [candidate]))
+        except (InvalidAtom, InvalidDependString):
+            return False
+
+    best = None
+    for e in entries:
+        if f"{e[0]}/{e[1]}" != atom.cp:
+            continue
+        outcome = e[2]
+        if outcome[0] in ("new", "reinstall"):
+            version = outcome[1]
+        elif outcome[0] in ("upgrade", "downgrade"):
+            version = outcome[2]
+        else:
+            continue
+        prov = e[8] if isinstance(e[8], dict) else {}
+        slot, sub_slot = e[4], prov.get("sub_slot")
+        if slot is None or sub_slot is None or not _matches(version, slot, sub_slot):
+            continue
+        if best is None or (vercmp(version, best[0]) or 0) > 0:
+            best = (version, slot, sub_slot)
+    if best is None:
+        for version, slot, sub_slot in installed_candidates(
+            root, *atom.cp.split("/", 1)
+        ):
+            if _matches(version, slot, sub_slot) and (
+                best is None or (vercmp(version, best[0]) or 0) > 0
+            ):
+                best = (version, slot, sub_slot)
+    if best is None:
+        return token
+    _, slot, sub_slot = best
+    if atom.slot is None:
+        old_slotdep = ":="
+    elif atom.sub_slot is None:
+        old_slotdep = f":{atom.slot}="
+    else:
+        old_slotdep = f":{atom.slot}/{atom.sub_slot}="
+    return token.replace(old_slotdep, f":{slot}/{sub_slot}=", 1)
+
+
+def _strip_libc_atoms(atoms, libc_cps):
+    """Real strip_libc_deps (portage/dep/libc.py): remove every atom
+    whose cp is an installed libc provider from a rule-8 side. Applied to
+    the flattened set (real strips only each key's outer level; the flat
+    comparison has no levels left -- documented narrowing). Mirrors
+    portage-repo/src/lib.rs's strip_libc_atoms."""
+    if not libc_cps:
+        return atoms
+    return {a for a in atoms if _parse_atom(a) is None or _parse_atom(a).cp not in libc_cps}
+
+
+def _tree_metadata_for(repos, cp, version):
+    """The tree ebuild's md5-cache metadata for cp at version -- the
+    source rule 8's *new* side is compared from (real
+    pkgsettings.setcpv(pkg) -> configdict["pkg"]). None when the
+    candidate or its metadata can't be read: the rebuild is kept, the
+    conservative direction. Mirrors portage-repo/src/lib.rs's
+    tree_metadata_for."""
+    matching = [
+        c for c in list_candidates(repos, cp[0], cp[1]) if c["version"] == version
+    ]
+    if not matching:
+        return None
+    resolved = max(matching, key=lambda c: c["repo_priority"])
+    try:
+        return read_md5_cache(
+            resolved["repo_location"], cp[0], f"{cp[1]}-{version}"
+        )
+    except OSError:
+        return None
+
+
+def _atom_matches_str(atom_str, candidate):
+    """match_from_list against one candidate string -- the shape every
+    atom-vs-instance check in the undo rules uses. Use-deps are not
+    evaluated here (the candidate string carries no USE state); a
+    literal [flag] parent atom the walk accepted therefore reads as
+    matching, the same direction _reverse_dep_constraint_atom already
+    documents for its own use-dep cut. Mirrors portage-repo/src/lib.rs's
+    atom_matches_str."""
+    try:
+        return bool(match_from_list(atom_str, [candidate]))
+    except (InvalidAtom, InvalidDependString):
+        return False
+
+
+def _slot_operator_eliminate_rebuilds(
+    root, repos, entries, replace, slot_want, reverse_pins, selective, top_level_cps, empty
+):
+    """Backlog #24 S4: real _eliminate_rebuilds (depgraph.py:3859-4000),
+    the undo path. For every cp in the S3 replace set whose walked entry
+    is a slot-operator reinstall at the installed version, apply rules
+    1-8 of docs/024-slot-operator-plan.md's §1.2 *in real's order* and
+    return the cps whose rebuild is unnecessary (rules 6/8 keep a genuine
+    ABI rebuild): the caller drops them from the set and latches them in
+    slot_operator_undone.
+
+    Rules, with real's line refs:
+    1. installed instance at the same cpv (a real upgrade is never undone);
+    2. --newuse/--changed-use wins (pkg in _reinstall_nodes);
+    3. --changed-slot (3898-3899 -- landed in S5; rule 6 subsumes it for
+       an ebuild-only v1, see docs/024-oracle.md's S2 correction);
+    4. every parent atom matches the installed instance;
+    5. non-selective only: no user-asked parent;
+    6. installed and new (slot, sub_slot) equal;
+    7. built provides/requires equal -- not reachable in v1: the binary
+       halves are v2 #24c, so a binary entry keeps its rebuild;
+    8. the dep comparison: _flat_dep_atoms (use-reduced against the *new*
+       node's enabled USE) of _bind_slot_operator_deps's bound tree
+       string vs the vdb string, both through _strip_libc_atoms.
+
+    Skipped entirely under --emptytree (real "empty" in myparams) and
+    under any live slot conflict (the caller checks, real bug 922038).
+    Mirrors portage-repo/src/lib.rs's slot_operator_eliminate_rebuilds."""
+    demoted = set()
+    if empty or not replace:
+        return demoted
+    installed_all = _all_installed_packages(root)
+    libc_cps = _libc_provider_cps(root)
+    dep_keys = ("BDEPEND", "DEPEND", "IDEPEND", "PDEPEND", "RDEPEND")
+    for cp in replace:
+        entry = next((e for e in entries if (e[0], e[1]) == cp), None)
+        if entry is None:
+            continue
+        outcome = entry[2]
+        # Real match(root, atom, installed=False) only ever sees a
+        # *non-installed* graph pkg; the S3 flip is the only thing that
+        # constructs a slot-operator reinstall, and an ordinary
+        # upgrade/Reinstall-for-USE entry keeps its rebuild like real's
+        # installed_instance.cpv != pkg.cpv / _reinstall_nodes arms.
+        if outcome[0] != "reinstall" or not outcome[7]:
+            continue
+        # Rule 7 (see the function doc): binary halves are v2.
+        if entry[7] != "ebuild":
+            continue
+        version = outcome[1]
+        # Real installed_instance = match_pkgs(pkg.slot_atom)[0]: the
+        # installed instance in the *entry's* own main slot.
+        entry_slot = entry[4] or "0"
+        installed = next(
+            (
+                p
+                for p in installed_all
+                if (p[0], p[1]) == cp and p[3] == entry_slot
+            ),
+            None,
+        )
+        # Rule 1.
+        if installed is None or installed[2] != version:
+            continue
+        # Rule 2.
+        if outcome[2]:
+            continue
+        # Rule 3 (S5) sits here in real; rule 6 below is its ebuild
+        # equivalent for this entry model.
+        i_slot, i_sub = _read_vdb_slot(root, cp[0], cp[1], version)
+        installed_str = f"{cp[0]}/{cp[1]}-{version}:{i_slot}/{i_sub}"
+        # Rule 4.
+        parents_match = all(
+            _atom_matches_str(a, installed_str) for a in slot_want.get(cp, [])
+        ) and all(
+            _atom_matches_str(p[1], installed_str)
+            for p in reverse_pins
+            if p[0] == cp
+        )
+        if not parents_match:
+            continue
+        # Rule 5.
+        if not selective and cp in top_level_cps:
+            continue
+        # Rule 6.
+        prov = entry[8] if isinstance(entry[8], dict) else {}
+        e_slot, e_sub = entry[4], prov.get("sub_slot")
+        if e_slot is None or e_sub is None:
+            continue
+        if (i_slot, i_sub) != (e_slot, e_sub):
+            continue
+        # Rule 8.
+        metadata = _tree_metadata_for(repos, cp, version)
+        if metadata is None:
+            continue
+        new_use = {f for f, on in entry[5] if on}
+        equal = True
+        for key in dep_keys:
+            installed_atoms = _flat_dep_atoms(
+                _read_vdb_string(root, cp[0], cp[1], version, key), new_use
+            )
+            if installed_atoms is not None:
+                installed_atoms = _strip_libc_atoms(installed_atoms, libc_cps)
+            bound = _bind_slot_operator_deps(metadata.get(key, ""), entries, root)
+            new_atoms = _flat_dep_atoms(bound, new_use)
+            if new_atoms is not None:
+                new_atoms = _strip_libc_atoms(new_atoms, libc_cps)
+            if (
+                installed_atoms is None
+                or new_atoms is None
+                or installed_atoms != new_atoms
+            ):
+                equal = False
+                break
+        if not equal:
+            continue
+        demoted.add(cp)
+    return demoted
 
 def _strip_revision(version):
     base, sep, rev = version.rpartition("-r")
@@ -11232,6 +11477,16 @@ def resolve_pretend_graph(
     # portage-repo/src/lib.rs's BacktrackParams::
     # slot_operator_replace_installed.
     slot_operator_replace_installed = set()
+    # Backlog #24 S4: the undo latch. Real _eliminate_rebuilds
+    # (3859-4000) re-adds the installed instance in the rebuilt pkg's
+    # place and never sets _need_restart, so a within-node redo cannot
+    # re-schedule it; this reference's S3 scan re-runs every pass on a
+    # fresh graph, so a demoted cp must be remembered here or the scan
+    # would immediately re-add it (its vdb :S/SS= binding is still stale
+    # -- that is *why* rule 8 demoted it). Monotone and bounded by the
+    # installed cp count, so the search terminates. Mirrors
+    # portage-repo/src/lib.rs's BacktrackParams::slot_operator_undone.
+    slot_operator_undone = set()
     _missing_dep_trigger = None
 
     # Phase C2 (023): the depth-first search over mask/config choices,
@@ -11273,6 +11528,7 @@ def resolve_pretend_graph(
             "slot_operator_replace_installed": copy.deepcopy(
                 slot_operator_replace_installed
             ),
+            "slot_operator_undone": copy.deepcopy(slot_operator_undone),
         }
 
     def _node_restore(snap):
@@ -11283,6 +11539,7 @@ def resolve_pretend_graph(
         nonlocal autounmask_suggest_keywords, autounmask_suggest_use
         nonlocal autounmask_suggest_license, autounmask_suggest_masks
         nonlocal config, slot_operator_replace_installed
+        nonlocal slot_operator_undone
         slot_constraints = copy.deepcopy(snap["slot_constraints"])
         runtime_pkg_mask = copy.deepcopy(snap["runtime_pkg_mask"])
         mask_steps = snap["mask_steps"]
@@ -11303,6 +11560,7 @@ def resolve_pretend_graph(
         slot_operator_replace_installed = copy.deepcopy(
             snap["slot_operator_replace_installed"]
         )
+        slot_operator_undone = copy.deepcopy(snap["slot_operator_undone"])
         # `config` is derived, never stored: the tiered view exactly when
         # the accumulator is non-empty (the only two shapes the
         # growth/breakage arms ever produce).
@@ -11333,6 +11591,7 @@ def resolve_pretend_graph(
         "autounmask_suggest_license",
         "autounmask_suggest_masks",
         "slot_operator_replace_installed",
+        "slot_operator_undone",
     )
 
     def _params_equal(a, b):
@@ -13533,6 +13792,11 @@ def resolve_pretend_graph(
         _rdc_enforced, _rdc_dropped = _reverse_dependency_constraints(
             root, entries, with_bdeps, excluded, repos, slot_want
         )
+        # #24 S4: rule 4 of _eliminate_rebuilds checks every parent atom
+        # of the rebuilt pkg, and real's complete-graph nomerge consumers
+        # are part of _parent_atoms; these are the pins carrying their
+        # atoms. Kept before the loops below consume the lists.
+        _sop_reverse_pins = _rdc_enforced + _rdc_dropped
         for _rdc_cp, _rdc_atom, _rdc_consumer in _rdc_enforced:
             if (_rdc_cp, _rdc_atom) in grown["reverse_dep_masked"]:
                 continue
@@ -13581,12 +13845,50 @@ def resolve_pretend_graph(
                 entries,
                 slot_op_reachable,
                 grown["slot_operator_replace_installed"],
+                grown["slot_operator_undone"],
             )
             _pass_abi_rebuilds = _sop_abi
             if _sop_scheduled != grown["slot_operator_replace_installed"]:
                 grown["slot_operator_replace_installed"] = _sop_scheduled
                 _bt_feedback_config(grown)
                 continue
+
+            # #24 S4: real _resolve's _eliminate_rebuilds call
+            # (depgraph.py:5771-5779), which runs after the
+            # _process_slot_conflicts trigger settled and after altlist()
+            # succeeded -- i.e. on the pass where the replace set did not
+            # grow. For each walked rebuild whose re-evaluated tree deps
+            # equal its installed deps, real re-adds the installed
+            # instance in place and re-serialises; this reference drops
+            # the cp from the set and latches it
+            # (slot_operator_undone), so the next pass walks the consumer
+            # as ordinary already_installed again and the S3 scan cannot
+            # re-add it. Config feedback is budget-free, so the demotion
+            # lands in place of the rebuild rather than costing a
+            # backtrack step. Mirrors portage-repo/src/lib.rs.
+            #
+            # Rule 0 skip (real 3867-3872, bug 922038): under --emptytree
+            # (checked inside) or with any live slot conflict the merge
+            # list is not valid to compare against, so real returns
+            # early.
+            if not slot_conflicts:
+                _sop_demoted = _slot_operator_eliminate_rebuilds(
+                    root,
+                    repos,
+                    entries,
+                    grown["slot_operator_replace_installed"],
+                    slot_want,
+                    _sop_reverse_pins,
+                    selective,
+                    top_level_cps,
+                    empty,
+                )
+                if _sop_demoted:
+                    for _sop_cp in _sop_demoted:
+                        grown["slot_operator_replace_installed"].discard(_sop_cp)
+                        grown["slot_operator_undone"].add(_sop_cp)
+                    _bt_feedback_config(grown)
+                    continue
 
         if _has_nvc:
             _bt_nodes[_bt_current]["params"] = grown
@@ -13700,6 +14002,7 @@ def resolve_pretend_graph(
             entries,
             slot_op_reachable,
             slot_operator_replace_installed,
+            slot_operator_undone,
         )[1]
 
     # Real _rebuild_config.trigger_rebuilds (--rebuild-if-unbuilt /

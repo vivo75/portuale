@@ -370,3 +370,84 @@ Judgment calls surfaced (not defaulted):
 S3 does **not** implement the undo (`_eliminate_rebuilds`): every
 consumer the scan schedules is still kept. That is S4, and the two
 `slotundo-unnecessary` / `complete` xfails stay strict.
+
+## S4 — `_eliminate_rebuilds` undo path (2026-09-12)
+
+The retraction half of the family: a consumer the S3 scan schedules is
+now demoted when real's `_eliminate_rebuilds` (`depgraph.py:3859-4000`)
+would demote it. The nine rules of plan §1.2, in real's order, live in
+`portage-repo::slot_operator_eliminate_rebuilds` (+ Python
+`_slot_operator_eliminate_rebuilds`), called from `collect_feedback` on
+the settle-eligible pass *after* the S3 scan did not grow the set (real
+runs it in `_resolve` after `_process_slot_conflicts`). Rule 8 needs
+real's graph-aware `:=`/`:S=` binder, ported as
+`bind_slot_operator_deps` / `_bind_slot_operator_deps` (real
+`portage/dep/_slot_operator.py::_eval_deps` over
+`evaluate_slot_operator_equal_deps`'s `_graph_trees`, whose vartree is
+the `PackageTrackerDbapiWrapper`, `depgraph.py:744-775` -- merge-bound
+entry first, else the installed vdb). Demotion drops the cp from
+`BacktrackParams::slot_operator_replace_installed`, latches it in the
+new `slot_operator_undone` (`in params_equal`), and returns budget-free
+`Config` feedback; the S3 scan takes the latch, so the still-stale vdb
+binding cannot re-add it. Skip conditions: `--emptytree` (`ctx.empty`)
+and any live slot conflict (real bug 922038). Rule 7 (`provides`/
+`requires` for built packages) is not reachable in the ebuild-only v1
+(a binary entry keeps its rebuild; v2 `#24c`); rule 3 (`--changed-slot`)
+is S5's line, and rule 6 already subsumes it for ebuilds (S2
+correction).
+
+### S4 verdicts
+
+| case | before S4 | after S4 |
+|---|---|---|
+| slotundo-unnecessary | strict-xfail: `[rR] sounneed`, `[r U] souprov`, block | MATCH -- `[U] souprov-2.0 [1.0]`, no `sounneed` row, no block, `abi_rebuilds: []` |
+| slotundo-changed-slot (no flag) | MATCH (kept) | MATCH -- rule 6 still keeps the slot-moved consumer (guard against over-undo) |
+| complete (bug 614390) | strict-xfail | **strict-xfail -- selection, not undo** (finding below) |
+| a522084 `B-0` (bug 522084) | MATCH | MATCH -- rule 8 keeps it (tree `A:=` binds to `A:0/2=`, vdb says `A:0/1=`) |
+| rebuild-1 (bug 522652), cascade, slotbind, bdeps, revdeps, parentdown, libgit2 guard, conflict-rebuild, runtime_pkg_mask, autounmask | -- | unchanged (rule 8/6 keep every genuine ABI rebuild) |
+
+### Finding: `complete` is blocked by selection, not by the undo
+
+The S2 table called `test_slot_operator_complete_graph.py` (bug 614390)
+the "S4 acceptance case"; live after S4 the undo is *not* what the case
+needs. The walk resolves the top-level bare `dev-libs/socc` to `socc-2`;
+meta-pkg's later `=socc-1` dep then resolves as `AlreadyInstalled` for
+the already-scheduled slot, and that fast path never consults
+`resolved_slots` -- real's `_add_pkg` slot-parent check
+(`depgraph.py:2160-2185`) turns it into a slot conflict, and the
+solvable-conflict feedback enforces `{dev-libs/socc, =socc-1}` →
+`socc-1`. The undo rules themselves are right on this shape: rule 5
+keeps `socc-1`'s `AtomArg` rebuild, rule 8 keeps `socd-1`/`socb-2`'s
+graph-bound `socfoo:=` (`0/2=` vs the vdb's `0/1=`). Pinned as
+strict-xfail with the selection reason; the installed-side slot check is
+the backlog #36 (mask-aware selection) overlap S2 already named.
+
+Judgment calls surfaced (not defaulted):
+
+- **The triggering provider loses its `r` when the only edge is
+  demoted.** Portuale's `force_reinstall` marker comes from the surviving
+  `abi_rebuilds` pairs (`pretend.rs` ~10671), and `_compute_abi_rebuild_info`
+  drops the edge of a demoted parent exactly the same way (its
+  replacement parent is the reinstated installed node, not a
+  merge-bound one, so the pair is skipped) -- but real's `r` on the
+  provider additionally comes from the trigger having put the
+  provider's replacement atom into the auto set. Upstream
+  `ResolverPlayground` pins mergelists only, so there is no oracle
+  either way; portuale's model is "no surviving rebuild edge, no
+  forced-reinstall marker" and the pinned test documents it.
+- **Rule 4's atom matching ignores `[use]` deps** (the candidate string
+  carries no USE state), the same documented direction
+  `reverse_dep_constraint_atom` already takes -- can only keep a
+  rebuild, never demote one.
+- **Rule 8 compares flat atom sets, not real's structured per-key
+  lists** (order/redundant-bracket differences read equal), and strips
+  libc atoms after flattening rather than at the outer level only --
+  both narrower-than-real demotion risks, matching the plan's own
+  `flat_dep_atoms` instruction.
+
+Rust unit tests: `bind_slot_operator_deps_binds_against_entries_then_installed`
+and `slot_operator_eliminate_rebuilds_applies_the_eight_rules_in_order`
+(rules 0,1,2,4,5,6,7,8 + non-slot-op entries + the latch) on the shared
+`fixtures/repo/dev-libs/souprov` pair. Contract test
+`test_oracle_slotop_undo_unnecessary` flipped xfail → pinned exact
+output (`--json` `abi_rebuilds: []` included).

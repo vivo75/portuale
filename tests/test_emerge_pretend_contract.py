@@ -15558,10 +15558,19 @@ def test_oracle_slotop_rebuild_order(
 
 @pytest.mark.xfail(
     strict=True,
-    reason="bug 614390 is the S4 acceptance case: the scan schedules "
-    "consumers, but the named `socc` atom out-selects meta's `=socc-1` "
-    "pin (mask-aware selection, backlog #36 overlap) and the entries are "
-    "synthesised, not walked. Needs S3 (walked node) + S4 (undo).",
+    reason="bug 614390 stays divergent on SELECTION, not on the rebuild "
+    "route or the undo (both landed: S3 walked node, S4 "
+    "_eliminate_rebuilds). The top-level bare `dev-libs/socc` resolves "
+    "socc-2 first; meta's later `=socc-1` dep then lands on the "
+    "already-scheduled slot through the already-installed fast path, "
+    "which never consults `resolved_slots` -- real's `_add_pkg` "
+    "slot-parent check (depgraph.py:2160-2185) turns that into a slot "
+    "conflict, and the solvable-conflict feedback enforces "
+    "`{dev-libs/socc, =socc-1}` -> socc-1. Portuale's installed-side "
+    "slot check is the #36-overlap gap (mask-aware selection); the undo "
+    "rules themselves are correct on this shape (rule 5 keeps socc-1's "
+    "AtomArg rebuild, rule 8 keeps socd-1/socb-2's graph-bound := with "
+    "`socfoo:0/2=`).",
 )
 def test_oracle_slotop_complete(
     emerge_binary, emerge_pretend_python, fixture_env, tmp_path
@@ -16351,22 +16360,22 @@ def test_oracle_slotop_autounmask_ignorebuilt(
     assert not [ln for ln in _b1_merges(rust.stdout) if "libxml2" in ln]
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="Real `_eliminate_rebuilds` rule 8 demotes this (both sides "
-    "use-reduce the `soflag?` conditional away at disabled USE), but "
-    "portuale's scan reads the raw vdb string with no USE-awareness. "
-    "Flips in S4 (bound-tree-vs-vdb comparison with USE). The stale "
-    "atom survives in the vdb from a flag-on install (unmodelled "
-    "history); current USE is flag-off on both sides, no --newuse.",
-)
 def test_oracle_slotop_undo_unnecessary(
     emerge_binary, emerge_pretend_python, fixture_env, tmp_path
 ):
     """Synthetic `slotundo-unnecessary`: `souprov` upgrades `1.0`
     (`0/1`) -> `2.0` (`0/2`); `sounneed-1.0` records
     `soflag? ( souprov:0/1= )` with the flag OFF, so the dep is gone
-    from both rule-8 sides. Portuale rebuilds today; real undoes."""
+    from both rule-8 sides. Real `_eliminate_rebuilds` rule 8
+    (`depgraph.py:3935-3970`) demotes it: the tree
+    `soflag? ( souprov:= )` use-reduced with the new node's enabled USE
+    (flag off, `pkg.use.enabled`) equals the vdb string use-reduced the
+    same way -- both empty. S4 does the same -- no `sounneed` row, no
+    "causing rebuilds" block, `abi_rebuilds: []` -- and latches the cp in
+    `slot_operator_undone` so the S3 scan cannot re-add it next pass.
+    (The triggering provider keeps its plain `U`: with no surviving
+    rebuild edge there is no forced-reinstall pair left to mark it, the
+    ebuild-entry model of S4.)"""
     root = _b1_root(
         tmp_path,
         ["dev-libs/sounneed", "dev-libs/souprov"],
@@ -16385,13 +16394,37 @@ def test_oracle_slotop_undo_unnecessary(
             ),
         ],
     )
+    args = ["--pretend", "--update", "--deep", "@world"]
     rust = _b1_both(
-        ["--pretend", "--update", "--deep", "@world"],
+        args,
         _b1_env(fixture_env, root),
         emerge_binary,
         emerge_pretend_python,
     )
-    assert not [ln for ln in _b1_merges(rust.stdout) if "sounneed" in ln]
+    assert [
+        ln
+        for ln in _b1_merges(rust.stdout)
+        if "souprov" in ln or "sounneed" in ln
+    ] == ["[ebuild     U  ] dev-libs/souprov-2.0 [1.0]"], rust.stdout
+    assert "causing rebuilds" not in rust.stdout
+
+    # `--json`: the demoted consumer is not a merge entry and the display
+    # pairs are empty (real `_compute_abi_rebuild_info` drops the edge of
+    # a demoted parent -- the replacement has no non-installed node to
+    # point at).
+    rj = _b1_both(
+        args + ["--json"],
+        _b1_env(fixture_env, root),
+        emerge_binary,
+        emerge_pretend_python,
+    )
+    payload = json.loads(rj.stdout)
+    assert payload["abi_rebuilds"] == []
+    assert not [
+        e
+        for e in payload["entries"]
+        if e["package"] == "sounneed" and e["outcome"] == "reinstall"
+    ]
 
 
 def test_oracle_slotop_undo_changed_slot_guard(
