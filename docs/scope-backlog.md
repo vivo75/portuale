@@ -131,10 +131,15 @@ can't grow into these incrementally:
     records merge per (slot, existing, current) triple (real keeps one
     handler per slot); puller filing is USE-aware and subslot-carrying
     (built-`:=` parents no longer vanish);
-    `--dynamic-deps=n` not switching the AlreadyInstalled walk source
-    via the CLI (both languages walk ebuild deps; the
-    `dynamic_deps_picks_ebuild_vs_vdb_deps` unit test disagrees --
-    unexplained, needs owner eyes);
+    `--dynamic-deps=n` **switches correctly** (verified live
+    2026-09-12: both languages walk the vdb snapshot; the old "walk
+    source disagrees" claim was false). The real gap is the *default*:
+    real's `FakeVartree._apply_dynamic_deps` overlays the live ebuild
+    deps **plus** the vdb's built `:=` atoms, portuale drops the
+    append, and `GraphEntry::deps` for an installed entry still reads
+    the ebuild under `=n`; installed-parent atoms are also never
+    recorded in `slot_pullers`, which is the actual `need_rebuild`
+    blocker (see `docs/025-tier2-closeout.deepseek.md`);
     literal bound `:=` atoms in ebuilds -- **investigated (Tier 1),
     premise contradicted, not a gap**: no "improper context for
     slot-operator built atom syntax" masking exists in the vendored
