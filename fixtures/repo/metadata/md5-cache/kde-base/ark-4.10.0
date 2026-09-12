@@ -1,0 +1,9 @@
+DEFINED_PHASES=-
+DESCRIPTION=024 oracle fixture: := consumer of libarchive (bug 456208)
+EAPI=8
+IUSE=
+KEYWORDS=amd64
+DEPEND=app-arch/libarchive:=
+RDEPEND=app-arch/libarchive:=
+SLOT=0
+_md5_=0000000000000000000000000000000

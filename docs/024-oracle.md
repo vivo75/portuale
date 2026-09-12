@@ -101,11 +101,78 @@ Fixpoint-loop `continue`s in source order (`lib.rs:11951-11983`):
   `rebuild_if_new_slot` rows: behaviour-neutral in S1 except the a522084
   flip; any other move is a defect.
 
-### S2 oracle table (filled by S2; headers only in S0)
+### S2 oracle table (filled by S2 2026-09-12; S0 headers replaced)
 
-| case | upstream file | mechanism | S0 status | expected v1 status |
+Prior art (why the cuts were one piece): `docs/history/
+slot-op-rebuild-cascade-plan.md` (2026-09-03, COMPLETE) shipped the
+reachability gate (`required_set_reachable_cps`), the tree-`SLOT`
+fixpoint cascade, the `r` marker and the "causing rebuilds" render,
+container-verified byte-for-byte -- and kept one documented cut: a
+rebuild's own `RDEPEND` is never re-walked. `what-this-proves.md`
+Increment 4 pins the same shape (`slotbindconsumer`, `casctarget`
+chain). So v1 is all reconciliation (route the rebuild through the
+`Backtracker`, S3) + undo (`_eliminate_rebuilds`, S4) + the slot-change
+contact (S5); the update-probe family stays v2.
+
+Method: upstream test → `_b1_root` case (+ committed
+`fixtures/repo/…` ebuilds + `metadata/md5-cache`, listed per row),
+one `test_oracle_slotop_*` each, Rust == Python asserted now, real's
+mergelist as expectation under `xfail(strict=True)` where divergent.
+`so*`/`soc*` renames mark shapes whose upstream names would collide
+with an existing fixture package carrying different deps.
+
+| case | upstream file | mechanism | S2 status | expected v1 status |
 |---|---|---|---|---|
-| *(S2 fills this)* | | | | |
+| a522084 | `test_solve_non_slot_operator_slot_conflicts.py` | complete gate | MATCH (S1) | done |
+| rebuild-1 | `test_slot_operator_rebuild.py` case 1 (`emerge A`, `--dynamic-deps=n`; bug 522652) | order + `\|\|`-wrapped `:=` | DIVERGENT-order (set right, incl. the `\|\|`-arm `C-0`) | MATCH after S3 |
+| rebuild-2 | same, case 2 (`--usepkg`, binary `E-1` at `F:0/1`) | `slot_operator_mask_built` (bug 652938) | NOT TRANSLATABLE (needs a binpkg with built `F:0/1=` metadata + `--usepkg` mask-built path; no ad-hoc binpkg machinery in `_b1_root` tests) | v2 `#24c` |
+| unsat-439694 | `test_slot_operator_unsatisfied.py` | in-walk unsatisfied arm | case 2 MATCH, case 1 strict-xfail (S1) | case 1 → v2 `#24f` (new item, S1 finding) |
+| slotchange-1/4 | `test_slot_change_without_revbump.py` cases 1 (`--oneshot`, ebuild variant), 4 (`-uD --changed-slot`) | `_slot_change_probe` + `--changed-slot` (bug 456208) | case 1 strict-xfail; case 4 MATCH (sets+markers via standalone trigger; S5 owns routing); case 2 (`--noreplace` → `[]`) MATCH | cases 1+4 MATCH after S5 (ebuild variant; binary halves → v2 `#24c`) |
+| regslotchange | `test_regular_slot_change_without_revbump.py` (`soslotconsumer --oneshot --usepkg`) | same, main slot (renamed: `dev-libs/boost` taken by 023 oracle) | strict-xfail | MATCH after S5 (ebuild variant) |
+| complete | `test_slot_operator_complete_graph.py` (bug 614390; `=socmeta-2 socc --backtrack 9`) | complete mode + cascade + undo | strict-xfail (named `socc` out-selects meta's `=socc-1` pin -- #36 overlap) | **S4 acceptance** |
+| revdeps | `test_slot_operator_reverse_deps.py` (bug 584626; + ignore-built variant) | selection + scan (no probe needed on this shape) | MATCH both | done (probe family stays v2 `#24b`) |
+| revdeps-libgit2 | same file (bug 717140, `-uD` → `[]`) | must-not-downgrade guard | MATCH (guard) | stays `[]` through v1 |
+| parentdown | `test_slot_operator_update_probe_parent_downgrade.py` (bug 528610, `-uD` → `[]`) | probe must NOT fire | MATCH (guard) | stays `[]` through v1 |
+| missedupd | `test_slot_operator_missed_update.py` (bug 743115, `--backtrack 4`; compacted `soflag` for `python_targets_*`) | `prune_rebuilds` | strict-xfail (upgrades `sosetuptools` instead of holding the rebuild) | v2 `#24d` |
+| autounmask | `test_slot_operator_autounmask.py::testSubSlot` ignore-built case (`icu --oneshot`, → `[icu-49]`) | flag contact | MATCH | done (keyword/autounmask/binpkg cases → v2) |
+| exclusive | `test_slot_operator_exclusive_slots.py` (bugs 612772, 612874) | slot upgrades + depclean uninstalls | NOT TRANSLATABLE (mergelists carry `[uninstall]`/`!slot` removal ops; `--pretend` has no removal display) | v2 (needs depclean semantics) |
+| runtime_pkg_mask | `test_slot_operator_runtime_pkg_mask.py` (`=socmeta-2 --backtrack 14`) | runtime mask + rebuild | MATCH (ambiguous order) | done |
+| unsolved | `test_slot_operator_unsolved.py` (ruby cycle, USE-gated solutions) | cycle + probe interplay | NOT TRANSLATABLE without approximating (USE-gated `circular_dependency_solutions`; an approx pin is worse than none) | v2 |
+| bdeps | `test_slot_operator_bdeps.py` (`-uD`, + `--usepkg --with-bdeps=y` ebuild-fallback) | `BDEPEND` `:=` rebuild | MATCH both | done (binary-rejection half → v2 `#24c`) |
+| required_use | `test_slot_operator_required_use.py` (bug 523048, → fail) | REQUIRED_USE-gated rebuild | strict-xfail (rebuilds instead of reporting) | v2 (new item: REQUIRED_USE gate on forced rebuilds) |
+| conflict-rebuild | `test_slot_conflict_rebuild.py` (bug 439688, `-uD --backtrack 4` → `[D-2, E-0]`) | conflict holds `A`, `D` shifts | MATCH (bug 922038 falls out) | done |
+| conflict-mass | same file (bug 486580, 5 leaves) | `_slot_change_probe` (main-slot move, renamed `somass*`) + named-atom seeding gap (leaves outside CLI seeds) | strict-xfail | MATCH after S5+S3 (probe + walked node; seeds must cover the walk) |
+| missed_update-Qt / blocker | `test_missed_update.py`, `testBacktrackInconsistentForcedRebuildWithBlocker` | — | OUT (upstream `xfail`; blocker + rebuild) | out of scope |
+| slotundo-cascade | synthetic (a522084 + consumer tree-`SLOT` bump) | tree-`SLOT` cascade | MATCH | guards `casc*` for S3 |
+| slotundo-unnecessary | synthetic (USE-disabled `soflag? ( := )` dep) | rule 8 USE-reduction | strict-xfail (scan reads raw vdb) | flips in S4 |
+| slotundo-changed-slot | synthetic (consumer same-version SLOT move) | rule 6 (no flag) / rule 3 (flag) | no-flag MATCH (guard vs over-undo); flag strict-xfail (loses `r` + edge via standalone trigger) | S4 keeps guard; flag display flips in S5 |
+| slotundo-rebind | synthetic (consumer gains `sounewdep`) | walked node edges | strict-xfail (`--json` duplicate rows) | flips in S3 |
+
+S2 corrections to the plan (surfaced, not defaulted):
+
+- **unsat case 1 is not S1's** (S1 commit): needs the in-walk
+  `_slot_operator_unsatisfied_probe` (`depgraph.py:3447-3454`); filed
+  as v2 candidate `#24f` (probe + backtrack; needs #25 nomerge nodes).
+- **revdeps cases 1-2 MATCH without any probe** (highest-first
+  selection + S1-gated scan suffice on this shape); the plan's blanket
+  "v2 — DIVERGENT" holds for the probe *mechanism* (`#24b`), not these
+  mergelists.
+- **Named atoms are not CLI seeds** (mass-rebuild finding):
+  `complete_seed_atoms` = world file + `@system` only; real's required
+  sets are args ∪ system ∪ world (`_complete_graph` docstring). With an
+  empty world, `emerge somassa` seeds nothing and the scan skips walked
+  leaves. S3 (scan inside `collect_feedback`) must seed from the walk's
+  own graph, not just the CLI seeds.
+- **Rule 6 subsumes rule 3 for ebuilds** (read against
+  `_eliminate_rebuilds` 3859-4000 + `_changed_slot` 3247-3252 +
+  `_equiv_ebuild` 7390): for an ebuild consumer, rule-3-trigger (flag +
+  same-cpv slot move) ⟺ rule-6-keep, so `--changed-slot` never flips an
+  ebuild shape by itself -- the S5-observable on
+  `slotundo-changed-slot --changed-slot` is display-level (`r` + edge
+  restored via the replace set). The flag's demote-vs-keep flip needs
+  binaries (v2).
+- **Rebuild-2, exclusive, unsolved, slotchange/regslotchange binary
+  halves**: labelled per the stop condition (not approximated).
 
 ## S1 — complete-mode gate under `--deep` (2026-09-12)
 

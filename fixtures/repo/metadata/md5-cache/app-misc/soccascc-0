@@ -1,0 +1,8 @@
+DEFINED_PHASES=-
+DESCRIPTION=024 oracle fixture: cascade tail (slotundo-cascade)
+EAPI=8
+IUSE=
+KEYWORDS=amd64
+RDEPEND=app-misc/soccascb:=
+SLOT=0
+_md5_=0000000000000000000000000000000

@@ -15406,3 +15406,1080 @@ def test_oracle_missed_update_siblings_masked_together(
         "[ebuild  N     ] dev-libs/mgfa-1 ",
     ]
     assert "!!! Multiple package instances within a single package slot" in one.stdout
+
+
+# ---------------------------------------------------------------------------
+# Backlog #24 Slice 2 oracle pins: the slot-operator family, one
+# `test_oracle_slotop_*` per upstream shape (method: `docs/023-oracle.md`;
+# verdict table: `docs/024-oracle.md`). Every pin asserts Rust == Python
+# *now* (`_b1_both`); real's mergelist is the expectation, under
+# `xfail(strict=True)` where portuale still diverges. Fixture ebuilds live
+# under `fixtures/repo/` (+ `metadata/md5-cache/`); vdb + world come from
+# `_b1_root`. Renames (`soc*`, `so*`) mark shapes whose upstream names
+# would collide with an existing fixture package carrying different deps;
+# each docstring maps back to the upstream atom.
+# ---------------------------------------------------------------------------
+
+
+def _slotop_cpv(stdout):
+    """`(category/package, version)` for merge lines only, display order
+    (splits the cpv at the first hyphen followed by a digit, so
+    hyphenated package names like `libgit2-glib-0.99.0.1` survive)."""
+    out = []
+    for ln in _b1_merges(stdout):
+        cpv = ln.split("] ", 1)[1].split(" ", 1)[0]
+        cat, rest = cpv.split("/", 1)
+        pkg, ver = re.split(r"-(?=\d)", rest, maxsplit=1)
+        out.append((f"{cat}/{pkg}", ver))
+    return out
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="bug 522652 set-vs-order split: the scan schedules the full "
+    "{A-2, B-0, C-0} set (the ||-arm C rebuild is NOT missed), but the "
+    "synthesised entries sort by array position, provider-last. Real "
+    "walks the consumer as a graph node (merge order [A-2, B-0, C-0]). "
+    "Flips in S3.",
+)
+def test_oracle_slotop_rebuild_order(
+    emerge_binary, emerge_pretend_python, fixture_env, tmp_path
+):
+    """Upstream `test_slot_operator_rebuild.py` case 1 (`emerge app-misc/A`,
+    `--dynamic-deps=n`): installed `A-1`, `B-0` (`A:0/1=`), `C-0`
+    (`|| ( X A:0/1= )`); world `[B, C]`. Real merges `[A-2, (B-0, C-0)]`
+    -- the unsatisfiable `X` arm lands in `_initially_unsatisfied_deps`
+    and the `A:=` arm still rebuilds `C-0`. Tree `C-0` is
+    `fixtures/repo/app-misc/C/C-0.ebuild` (`X` exists nowhere)."""
+    root = _b1_root(
+        tmp_path,
+        ["app-misc/B", "app-misc/C"],
+        [
+            ("app-misc", "A", "1", "0/1", {}),
+            ("app-misc", "B", "0", "0", {"RDEPEND": "app-misc/A:0/1="}),
+            (
+                "app-misc",
+                "C",
+                "0",
+                "0",
+                {"RDEPEND": "|| ( app-misc/X app-misc/A:0/1= )"},
+            ),
+        ],
+    )
+    rust = _b1_both(
+        ["--pretend", "--dynamic-deps=n", "app-misc/A"],
+        _b1_env(fixture_env, root),
+        emerge_binary,
+        emerge_pretend_python,
+    )
+    merges = _b1_merges(rust.stdout)
+    assert [ln for ln in merges if "app-misc/" in ln][0].startswith(
+        "[ebuild  r  U  ] app-misc/A-2 "
+    )
+    assert {
+        ln.split("] ", 1)[1].split(" ", 1)[0]
+        for ln in merges
+        if "app-misc/B-0" in ln or "app-misc/C-0" in ln
+    } == {"app-misc/B-0", "app-misc/C-0"}
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="bug 614390 is the S4 acceptance case: the scan schedules "
+    "consumers, but the named `socc` atom out-selects meta's `=socc-1` "
+    "pin (mask-aware selection, backlog #36 overlap) and the entries are "
+    "synthesised, not walked. Needs S3 (walked node) + S4 (undo).",
+)
+def test_oracle_slotop_complete(
+    emerge_binary, emerge_pretend_python, fixture_env, tmp_path
+):
+    """Upstream `test_slot_operator_complete_graph.py` (bug 614390):
+    `=meta-pkg-2 + C`, `--backtrack 9`. Renamed onto `dev-libs/soc*`
+    (`socmeta` pins `=socb-2 =socc-1 =socd-1 =socfoo-2`; `socc`
+    additionally deps `socb`, the complete-graph flavour -- the
+    runtime-mask flavour shares these fixtures, see
+    `test_oracle_slotop_runtime_pkg_mask`). Installed `socmeta-1`,
+    `socb-1`/`socc-1`/`socd-1` (`socfoo:0/1=`), `socfoo-1` (`0/1`);
+    world `[socmeta]`. Real merges
+    `[socfoo-2, (socd-1, socc-1, socb-2), socmeta-2]`."""
+    root = _b1_root(
+        tmp_path,
+        ["dev-libs/socmeta"],
+        [
+            (
+                "dev-libs",
+                "socmeta",
+                "1",
+                "0",
+                {
+                    "DEPEND": "=dev-libs/socb-1 =dev-libs/socc-1 =dev-libs/socd-1 =dev-libs/socfoo-1",
+                    "RDEPEND": "=dev-libs/socb-1 =dev-libs/socc-1 =dev-libs/socd-1 =dev-libs/socfoo-1",
+                },
+            ),
+            (
+                "dev-libs",
+                "socb",
+                "1",
+                "0",
+                {
+                    "DEPEND": "dev-libs/socfoo:0/1=",
+                    "RDEPEND": "dev-libs/socfoo:0/1=",
+                },
+            ),
+            (
+                "dev-libs",
+                "socc",
+                "1",
+                "0",
+                {
+                    "DEPEND": "dev-libs/socfoo:0/1= dev-libs/socb",
+                    "RDEPEND": "dev-libs/socfoo:0/1= dev-libs/socb",
+                },
+            ),
+            (
+                "dev-libs",
+                "socd",
+                "1",
+                "0",
+                {
+                    "DEPEND": "dev-libs/socfoo:0/1=",
+                    "RDEPEND": "dev-libs/socfoo:0/1=",
+                },
+            ),
+            ("dev-libs", "socfoo", "1", "0/1", {}),
+        ],
+    )
+    rust = _b1_both(
+        ["--pretend", "=dev-libs/socmeta-2", "dev-libs/socc", "--backtrack", "9"],
+        _b1_env(fixture_env, root),
+        emerge_binary,
+        emerge_pretend_python,
+    )
+    got = _slotop_cpv(rust.stdout)
+    got = [c for c in got if c[0].startswith("dev-libs/soc")]
+    assert got[0] == ("dev-libs/socfoo", "2")
+    assert got[-1] == ("dev-libs/socmeta", "2")
+    assert sorted(got[1:-1]) == [
+        ("dev-libs/socb", "2"),
+        ("dev-libs/socc", "1"),
+        ("dev-libs/socd", "1"),
+    ]
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="bug 456208 needs real's in-walk `_slot_change_probe` "
+    "(`depgraph.py:2317-2359`): an unbuilt `:=` dep whose installed "
+    "child moved `(slot, sub-slot)` at the same cpv schedules the "
+    "child. No post-walk scan can see it (nothing merges yet). "
+    "Flips in S5.",
+)
+def test_oracle_slotop_slotchange_case1(
+    emerge_binary, emerge_pretend_python, fixture_env, tmp_path
+):
+    """Upstream `test_slot_change_without_revbump.py` case 1, ebuild
+    variant (`kde-base/ark --oneshot --usepkg`; no binaries exist in the
+    ad-hoc ROOT so `--usepkg` falls back to ebuilds -- the binary half
+    is v2 `#24c`): installed `libarchive-3.1.1` (`SLOT 0`, tree `0/13`)
+    + `ark-4.10.0` (`libarchive:0/0=`); world `[ark]`. Real merges
+    `[libarchive-3.1.1, ark-4.10.0]`."""
+    root = _b1_root(
+        tmp_path,
+        ["kde-base/ark"],
+        [
+            ("app-arch", "libarchive", "3.1.1", "0", {}),
+            (
+                "kde-base",
+                "ark",
+                "4.10.0",
+                "0",
+                {
+                    "DEPEND": "app-arch/libarchive:0/0=",
+                    "RDEPEND": "app-arch/libarchive:0/0=",
+                },
+            ),
+        ],
+    )
+    rust = _b1_both(
+        ["--pretend", "--oneshot", "--usepkg", "kde-base/ark"],
+        _b1_env(fixture_env, root),
+        emerge_binary,
+        emerge_pretend_python,
+    )
+    assert _slotop_cpv(rust.stdout) == [
+        ("app-arch/libarchive", "3.1.1"),
+        ("kde-base/ark", "4.10.0"),
+    ]
+
+
+def test_oracle_slotop_slotchange_case2_noreplace(
+    emerge_binary, emerge_pretend_python, fixture_env, tmp_path
+):
+    """Upstream `test_slot_change_without_revbump.py` case 2
+    (`libarchive --noreplace --usepkg`): nothing to do, mergelist `[]`.
+    MATCHES real (same shape as case 1)."""
+    root = _b1_root(
+        tmp_path,
+        ["kde-base/ark"],
+        [
+            ("app-arch", "libarchive", "3.1.1", "0", {}),
+            (
+                "kde-base",
+                "ark",
+                "4.10.0",
+                "0",
+                {
+                    "DEPEND": "app-arch/libarchive:0/0=",
+                    "RDEPEND": "app-arch/libarchive:0/0=",
+                },
+            ),
+        ],
+    )
+    rust = _b1_both(
+        ["--pretend", "--noreplace", "--usepkg", "app-arch/libarchive"],
+        _b1_env(fixture_env, root),
+        emerge_binary,
+        emerge_pretend_python,
+    )
+    assert not [
+        ln
+        for ln in _b1_merges(rust.stdout)
+        if "libarchive" in ln or "kde-base/ark" in ln
+    ]
+
+
+def test_oracle_slotop_slotchange_case4_changedslot(
+    emerge_binary, emerge_pretend_python, fixture_env, tmp_path
+):
+    """Upstream `test_slot_change_without_revbump.py` case 4, ebuild
+    variant (`@world --changed-slot --usepkg -uD`): real merges
+    `[libarchive-3.1.1, ark-4.10.0]`. MATCHES real on the merge set:
+    the standalone `slot_changed` reinstall trigger schedules
+    `libarchive`, and the post-walk scan rebinds `ark` (provider-side
+    `r` + `rR` + block, exactly real's `_forced_rebuilds` tagging).
+    S5 owns the routing (replace-set probe instead of the standalone
+    trigger); the display is already real-shaped."""
+    root = _b1_root(
+        tmp_path,
+        ["kde-base/ark"],
+        [
+            ("app-arch", "libarchive", "3.1.1", "0", {}),
+            (
+                "kde-base",
+                "ark",
+                "4.10.0",
+                "0",
+                {
+                    "DEPEND": "app-arch/libarchive:0/0=",
+                    "RDEPEND": "app-arch/libarchive:0/0=",
+                },
+            ),
+        ],
+    )
+    rust = _b1_both(
+        ["--pretend", "--update", "--deep", "--changed-slot", "--usepkg", "@world"],
+        _b1_env(fixture_env, root),
+        emerge_binary,
+        emerge_pretend_python,
+    )
+    merges = _b1_merges(rust.stdout)
+    assert "[ebuild  rR    ] app-arch/libarchive-3.1.1 " in merges
+    assert "[ebuild  rR    ] kde-base/ark-4.10.0 " in merges
+    assert "The following packages are causing rebuilds:" in rust.stdout
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="Same `_slot_change_probe` gap as bug 456208 (S5), on the "
+    "main slot: installed `soslotlib-1.52.0` (`0/1.52`, tree `0`) is "
+    "never pulled at the available slot. Renamed: upstream "
+    "`dev-libs/boost` is taken by the 023 oracle with other SLOTs.",
+)
+def test_oracle_slotop_regslotchange(
+    emerge_binary, emerge_pretend_python, fixture_env, tmp_path
+):
+    """Upstream `test_regular_slot_change_without_revbump.py`, ebuild
+    variant (`soslotconsumer --oneshot --usepkg`): real pulls the
+    available slot (`soslotlib-1.52.0` at `SLOT 0`) and merges
+    `[soslotlib-1.52.0, soslotconsumer-4.0.0.2]`. The binary half
+    (binpkg at `1.52` rejected) is v2 `#24c`."""
+    root = _b1_root(
+        tmp_path,
+        [],
+        [("dev-libs", "soslotlib", "1.52.0", "0/1.52", {})],
+    )
+    rust = _b1_both(
+        ["--pretend", "--oneshot", "--usepkg", "dev-libs/soslotconsumer"],
+        _b1_env(fixture_env, root),
+        emerge_binary,
+        emerge_pretend_python,
+    )
+    assert _slotop_cpv(rust.stdout) == [
+        ("dev-libs/soslotlib", "1.52.0"),
+        ("dev-libs/soslotconsumer", "4.0.0.2"),
+    ]
+
+
+def test_oracle_slotop_revdeps(
+    emerge_binary, emerge_pretend_python, fixture_env, tmp_path
+):
+    """Upstream `test_slot_operator_reverse_deps.py` case 1 (bug 584626,
+    `-uD @world`): installed `mesa-11.2.2` (`llvm:0/3.7.1=`),
+    `clang-3.7.1-r100`, `llvm-3.7.1-r2`; world `[mesa]`. Real merges
+    `[llvm-3.8.0-r2, clang-3.8.0-r100, mesa-11.2.2]`. MATCHES real on
+    set and order -- highest-first selection upgrades llvm+clang and
+    the S1-gated scan rebuilds mesa, no `check_reverse_dependencies`
+    probe needed on this shape (the probe family stays v2 `#24b`)."""
+    root = _b1_root(
+        tmp_path,
+        ["media-libs/mesa"],
+        [
+            (
+                "media-libs",
+                "mesa",
+                "11.2.2",
+                "0",
+                {"RDEPEND": ">=sys-devel/llvm-3.6.0:0/3.7.1="},
+            ),
+            (
+                "sys-devel",
+                "clang",
+                "3.7.1-r100",
+                "0/3.7",
+                {"RDEPEND": "~sys-devel/llvm-3.7.1"},
+            ),
+            (
+                "sys-devel",
+                "llvm",
+                "3.7.1-r2",
+                "0/3.7.1",
+                {"PDEPEND": "=sys-devel/clang-3.7.1-r100"},
+            ),
+        ],
+    )
+    rust = _b1_both(
+        ["--pretend", "--update", "--deep", "@world"],
+        _b1_env(fixture_env, root),
+        emerge_binary,
+        emerge_pretend_python,
+    )
+    merges = _b1_merges(rust.stdout)
+    assert [
+        ln for ln in merges if "sys-devel/" in ln or "media-libs/mesa" in ln
+    ] == [
+        "[ebuild  r  U  ] sys-devel/llvm-3.8.0-r2 [3.7.1-r2]",
+        "[ebuild     U  ] sys-devel/clang-3.8.0-r100 [3.7.1-r100]",
+        "[ebuild  rR    ] media-libs/mesa-11.2.2 ",
+    ]
+    assert "The following packages are causing rebuilds:" in rust.stdout
+
+
+def test_oracle_slotop_revdeps_ignorebuilt(
+    emerge_binary, emerge_pretend_python, fixture_env, tmp_path
+):
+    """Upstream `test_slot_operator_reverse_deps.py` case 2
+    (`--ignore-built-slot-operator-deps=y`): real merges
+    `[llvm-3.8.0-r2, clang-3.8.0-r100]` with no mesa rebuild. MATCHES
+    real (same shape as `test_oracle_slotop_revdeps`)."""
+    root = _b1_root(
+        tmp_path,
+        ["media-libs/mesa"],
+        [
+            (
+                "media-libs",
+                "mesa",
+                "11.2.2",
+                "0",
+                {"RDEPEND": ">=sys-devel/llvm-3.6.0:0/3.7.1="},
+            ),
+            (
+                "sys-devel",
+                "clang",
+                "3.7.1-r100",
+                "0/3.7",
+                {"RDEPEND": "~sys-devel/llvm-3.7.1"},
+            ),
+            (
+                "sys-devel",
+                "llvm",
+                "3.7.1-r2",
+                "0/3.7.1",
+                {"PDEPEND": "=sys-devel/clang-3.7.1-r100"},
+            ),
+        ],
+    )
+    rust = _b1_both(
+        ["--pretend", "--update", "--deep", "--ignore-built-slot-operator-deps=y", "@world"],
+        _b1_env(fixture_env, root),
+        emerge_binary,
+        emerge_pretend_python,
+    )
+    merges = _b1_merges(rust.stdout)
+    assert [
+        ln for ln in merges if "sys-devel/" in ln or "media-libs/mesa" in ln
+    ] == [
+        "[ebuild     U  ] sys-devel/llvm-3.8.0-r2 [3.7.1-r2]",
+        "[ebuild     U  ] sys-devel/clang-3.8.0-r100 [3.7.1-r100]",
+    ]
+    assert "causing rebuilds" not in rust.stdout
+
+
+def test_oracle_slotop_revdeps_libgit2_stays_empty(
+    emerge_binary, emerge_pretend_python, fixture_env, tmp_path
+):
+    """Upstream `test_slot_operator_reverse_deps.py::testSlotOperatorReverseDepsLibGit2`
+    (bug 717140, `-uD @world`): real merges `[]` -- no upgrade to
+    `libgit2-1.0.0` (it would break glib's `<libgit2-1` bound) and no
+    downgrade to `0.28.4`. MATCHES real: portuale settles with no
+    `libgit2`/`glib`/`gitg` merge rows. Regression guard through v1
+    (mechanism differs -- no update probe -- so S3/S4 must keep it)."""
+    root = _b1_root(
+        tmp_path,
+        ["dev-vcs/gitg"],
+        [
+            ("dev-libs", "libgit2", "0.99.0-r1", "0/0.99", {}),
+            (
+                "dev-libs",
+                "libgit2-glib",
+                "0.99.0.1",
+                "0",
+                {
+                    "RDEPEND": "<dev-libs/libgit2-1:0/0.99= >=dev-libs/libgit2-0.26.0"
+                },
+            ),
+            (
+                "dev-vcs",
+                "gitg",
+                "3.32.1-r1",
+                "0",
+                {
+                    "RDEPEND": "dev-libs/libgit2:0/0.99= >=dev-libs/libgit2-glib-0.27 <dev-libs/libgit2-glib-1"
+                },
+            ),
+        ],
+    )
+    rust = _b1_both(
+        ["--pretend", "--update", "--deep", "@world"],
+        _b1_env(fixture_env, root),
+        emerge_binary,
+        emerge_pretend_python,
+    )
+    assert not [
+        ln
+        for ln in _b1_merges(rust.stdout)
+        if "libgit2" in ln or "dev-vcs/gitg" in ln
+    ]
+
+
+def test_oracle_slotop_parentdowngrade_stays_empty(
+    emerge_binary, emerge_pretend_python, fixture_env, tmp_path
+):
+    """Upstream `test_slot_operator_update_probe_parent_downgrade.py`
+    (bug 528610, `-uD @world`): real merges `[]` -- the update probe
+    must NOT fire a rebuild for the `<sodb-6.0:=` dep. MATCHES real
+    (nothing scheduled on either side). Renamed (`soopenldap`,
+    `sys-libs/sodb`) to keep the oracle family grep-able; upstream
+    atoms are `net-nds/openldap`, `sys-libs/db`. Regression guard
+    through v1."""
+    root = _b1_root(
+        tmp_path,
+        ["net-nds/soopenldap"],
+        [
+            (
+                "net-nds",
+                "soopenldap",
+                "2.4.40-r3",
+                "0",
+                {
+                    "RDEPEND": "<sys-libs/sodb-6.0:5.3/5.3= || ( sys-libs/sodb:5.3 sys-libs/sodb:5.1 )"
+                },
+            ),
+            ("sys-libs", "sodb", "6.0", "6.0", {}),
+            ("sys-libs", "sodb", "5.3", "5.3", {}),
+        ],
+    )
+    rust = _b1_both(
+        ["--pretend", "--update", "--deep", "@world"],
+        _b1_env(fixture_env, root),
+        emerge_binary,
+        emerge_pretend_python,
+    )
+    assert not [
+        ln
+        for ln in _b1_merges(rust.stdout)
+        if "soopenldap" in ln or "sodb" in ln
+    ]
+
+
+def test_oracle_slotop_conflict_rebuild(
+    emerge_binary, emerge_pretend_python, fixture_env, tmp_path
+):
+    """Upstream `test_slot_conflict_rebuild.py::testSlotConflictRebuild`
+    (bug 439688, `-uD --backtrack 4 @world`): `C-0`'s `<A-2` cap holds
+    `A` at `1`, so no `A`/`B` rebuild; `D` upgrades `1 -> 2` (`0/1 ->
+    0/2`) and `E-0` (`D:0/1=`) rebuilds. Real merges `[D-2, E-0]`.
+    MATCHES real (bug 922038 falls out: nothing schedules `B`, so no
+    undo machinery is needed yet)."""
+    root = _b1_root(
+        tmp_path,
+        ["app-misc/B", "app-misc/C", "app-misc/E"],
+        [
+            ("app-misc", "A", "1", "0/1", {}),
+            (
+                "app-misc",
+                "B",
+                "0",
+                "0",
+                {"DEPEND": "app-misc/A:0/1=", "RDEPEND": "app-misc/A:0/1="},
+            ),
+            (
+                "app-misc",
+                "C",
+                "0",
+                "0",
+                {"DEPEND": "<app-misc/A-2", "RDEPEND": "<app-misc/A-2"},
+            ),
+            ("app-misc", "D", "1", "0/1", {}),
+            (
+                "app-misc",
+                "E",
+                "0",
+                "0",
+                {"DEPEND": "app-misc/D:0/1=", "RDEPEND": "app-misc/D:0/1="},
+            ),
+        ],
+    )
+    rust = _b1_both(
+        ["--pretend", "--update", "--deep", "--backtrack", "4", "@world"],
+        _b1_env(fixture_env, root),
+        emerge_binary,
+        emerge_pretend_python,
+    )
+    merges = _b1_merges(rust.stdout)
+    assert [
+        ln for ln in merges if "app-misc/D-2" in ln or "app-misc/E-0" in ln
+    ] == [
+        "[ebuild  r  U  ] app-misc/D-2 [1]",
+        "[ebuild  rR    ] app-misc/E-0 ",
+    ]
+    assert not [ln for ln in merges if "app-misc/A-2" in ln or "app-misc/B-0" in ln]
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="bug 486580 needs S5's `_slot_change_probe` (main-slot move "
+    "`1 -> 2/2` is not a sub-slot shift, so the scan never fires) plus "
+    "S3's walked node; the leaves are also outside the CLI seeds (named "
+    "atoms are not seeded -- S3 must seed the walk's own graph).",
+)
+def test_oracle_slotop_conflict_mass_rebuild(
+    emerge_binary, emerge_pretend_python, fixture_env, tmp_path
+):
+    """Upstream `test_slot_conflict_rebuild.py::testSlotConflictMassRebuild`
+    (bug 486580, `somassa --backtrack 3 -uD`): real merges
+    `[somassa-1, somassb-2, 5 leaves]`. Renamed (`somass*`; upstream
+    `app-misc/A-1` carries different deps than the fixture `A-1`)."""
+    installed = [("app-misc", "somassb", "1", "1", {})]
+    installed += [
+        (
+            "app-misc",
+            f"somassc{i}c",
+            "1",
+            "0",
+            {
+                "DEPEND": "app-misc/somassb:1/1=",
+                "RDEPEND": "app-misc/somassb:1/1=",
+            },
+        )
+        for i in range(5)
+    ]
+    root = _b1_root(tmp_path, [], installed)
+    rust = _b1_both(
+        ["--pretend", "--backtrack", "3", "--update", "--deep", "app-misc/somassa"],
+        _b1_env(fixture_env, root),
+        emerge_binary,
+        emerge_pretend_python,
+    )
+    got = {c for c in _slotop_cpv(rust.stdout) if c[0].startswith("app-misc/somass")}
+    assert got == {
+        ("app-misc/somassa", "1"),
+        ("app-misc/somassb", "2"),
+        ("app-misc/somassc0c", "1"),
+        ("app-misc/somassc1c", "1"),
+        ("app-misc/somassc2c", "1"),
+        ("app-misc/somassc3c", "1"),
+        ("app-misc/somassc4c", "1"),
+    }
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="bug 523048 needs a REQUIRED_USE-gated rebuild path (v2): "
+    "portuale rebuilds `soreqb-0` (whose tree `REQUIRED_USE` is "
+    "unsatisfied at default USE) instead of reporting it. Real fails "
+    "the resolve with `required_use_unsatisfied`.",
+)
+def test_oracle_slotop_required_use(
+    emerge_binary, emerge_pretend_python, fixture_env, tmp_path
+):
+    """Upstream `test_slot_operator_required_use.py` (bug 523048,
+    `emerge app-misc/A`): installed `A-1` + `soreqb-0` (`A:0/1=`,
+    `IUSE x y`, `USE=x`); tree `soreqb-0` adds `REQUIRED_USE || ( x y )`
+    (unsatisfied at default USE). Real fails with
+    `required_use_unsatisfied=[soreqb:0]`. Renamed: fixture `app-misc/B`
+    is taken (no IUSE). (`A-2`'s fixture `PDEPEND` pulls `B-0 N` along;
+    incidental.)"""
+    root = _b1_root(
+        tmp_path,
+        ["app-misc/soreqb"],
+        [
+            ("app-misc", "A", "1", "0/1", {}),
+            (
+                "app-misc",
+                "soreqb",
+                "0",
+                "0",
+                {"RDEPEND": "app-misc/A:0/1=", "IUSE": "x y", "USE": "x"},
+            ),
+        ],
+    )
+    env = _b1_env(fixture_env, root)
+    rust = _run([str(emerge_binary)], ["--pretend", "app-misc/A"], env)
+    python = _run(emerge_pretend_python, ["--pretend", "app-misc/A"], env)
+    assert rust.stdout == python.stdout and rust.stderr == python.stderr
+    assert rust.returncode == 1
+    assert "soreqb" in rust.stderr
+
+
+def test_oracle_slotop_bdeps(
+    emerge_binary, emerge_pretend_python, fixture_env, tmp_path
+):
+    """Upstream `test_slot_operator_bdeps.py` case 1 (`-uD @world`) and
+    case 2 (same + `--usepkg --with-bdeps=y`; no binaries exist in the
+    ad-hoc ROOT so `--usepkg` falls back to ebuilds -- the "reject the
+    stale binaries" half is v2 `#24c`): installed `go-1.14.12`
+    (`0/1.14.12`) + `buildah`/`libpod` (`BDEPEND go:0/1.14.12=`);
+    world both consumers. Real merges
+    `[go-1.15.5, buildah-1.16.1, libpod-2.1.0]` twice. MATCHES real on
+    both commands (the scan reads `BDEPEND` from the vdb)."""
+    installed = [
+        (
+            "app-emulation",
+            pkg,
+            "1.16.1" if pkg == "buildah" else "2.1.0",
+            "0",
+            {"BDEPEND": "dev-lang/go:0/1.14.12="},
+        )
+        for pkg in ("buildah", "libpod")
+    ]
+    installed.append(("dev-lang", "go", "1.14.12", "0/1.14.12", {}))
+    root = _b1_root(
+        tmp_path, ["app-emulation/buildah", "app-emulation/libpod"], installed
+    )
+    for extra in ([], ["--usepkg", "--with-bdeps=y"]):
+        rust = _b1_both(
+            ["--pretend", *extra, "--update", "--deep", "@world"],
+            _b1_env(fixture_env, root),
+            emerge_binary,
+            emerge_pretend_python,
+        )
+        merges = _b1_merges(rust.stdout)
+        assert [
+            ln
+            for ln in merges
+            if "dev-lang/go" in ln or "app-emulation/" in ln
+        ] == [
+            "[ebuild  r  U  ] dev-lang/go-1.15.5 [1.14.12]",
+            "[ebuild  rR    ] app-emulation/buildah-1.16.1 ",
+            "[ebuild  rR    ] app-emulation/libpod-2.1.0 ",
+        ], extra
+        assert "The following packages are causing rebuilds:" in rust.stdout
+
+
+def test_oracle_slotop_runtime_pkg_mask(
+    emerge_binary, emerge_pretend_python, fixture_env, tmp_path
+):
+    """Upstream `test_slot_operator_runtime_pkg_mask.py`
+    (`=socmeta-2`, `--backtrack 14` -- same version topology as the
+    complete-graph shape but no named `socc`, so meta's `=socc-1` pin
+    holds; `socc` carries the complete flavour's extra `socb` dep,
+    documented in `test_oracle_slotop_complete`). Real merges
+    `[socfoo-2, (socd-1, socc-1, socb-2), socmeta-2]`. MATCHES real
+    within the ambiguous middle order."""
+    root = _b1_root(
+        tmp_path,
+        ["dev-libs/socmeta"],
+        [
+            (
+                "dev-libs",
+                "socmeta",
+                "1",
+                "0",
+                {
+                    "DEPEND": "=dev-libs/socb-1 =dev-libs/socc-1 =dev-libs/socd-1 =dev-libs/socfoo-1",
+                    "RDEPEND": "=dev-libs/socb-1 =dev-libs/socc-1 =dev-libs/socd-1 =dev-libs/socfoo-1",
+                },
+            ),
+            (
+                "dev-libs",
+                "socb",
+                "1",
+                "0",
+                {
+                    "DEPEND": "dev-libs/socfoo:0/1=",
+                    "RDEPEND": "dev-libs/socfoo:0/1=",
+                },
+            ),
+            (
+                "dev-libs",
+                "socc",
+                "1",
+                "0",
+                {
+                    "DEPEND": "dev-libs/socfoo:0/1= dev-libs/socb",
+                    "RDEPEND": "dev-libs/socfoo:0/1= dev-libs/socb",
+                },
+            ),
+            (
+                "dev-libs",
+                "socd",
+                "1",
+                "0",
+                {
+                    "DEPEND": "dev-libs/socfoo:0/1=",
+                    "RDEPEND": "dev-libs/socfoo:0/1=",
+                },
+            ),
+            ("dev-libs", "socfoo", "1", "0/1", {}),
+        ],
+    )
+    rust = _b1_both(
+        ["--pretend", "=dev-libs/socmeta-2", "--backtrack", "14"],
+        _b1_env(fixture_env, root),
+        emerge_binary,
+        emerge_pretend_python,
+    )
+    got = _slotop_cpv(rust.stdout)
+    got = [c for c in got if c[0].startswith("dev-libs/soc")]
+    assert got[0] == ("dev-libs/socfoo", "2")
+    assert got[-1] == ("dev-libs/socmeta", "2")
+    assert sorted(got[1:-1]) == [
+        ("dev-libs/socb", "2"),
+        ("dev-libs/socc", "1"),
+        ("dev-libs/socd", "1"),
+    ]
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="bug 743115 needs v2 `#24d` `prune_rebuilds` (a "
+    "`missed_updates` accumulator clearing the replace set): with no "
+    "replace set, portuale upgrades `sosetuptools` to `50.3.0` where "
+    "real holds the `46.4.0` rebuild. Compacted with a plain `soflag` "
+    "for upstream's `python_targets_*` USE_EXPAND machinery.",
+)
+def test_oracle_slotop_missed_update(
+    emerge_binary, emerge_pretend_python, fixture_env, tmp_path
+):
+    """Upstream `test_slot_operator_missed_update.py` (bug 743115,
+    `>=sopypy-7.3.2 @world -uD --backtrack 4`): real merges
+    `[sopypy-7.3.2, sosetuptools-46.4.0 (rebuild, NOT the 50.3.0 "
+    "upgrade), somercurial-5.5.1]`."""
+    root = _b1_root(
+        tmp_path,
+        ["dev-vcs/somercurial"],
+        [
+            ("dev-lang", "sopython", "2.7", "2.7", {}),
+            ("dev-python", "sopypy", "7.3.1", "0/sopy36", {}),
+            (
+                "dev-python",
+                "sosetuptools",
+                "46.4.0",
+                "0",
+                {
+                    "IUSE": "+soflag",
+                    "USE": "soflag",
+                    "RDEPEND": "soflag? ( dev-python/sopypy:0/sopy36= )",
+                },
+            ),
+            (
+                "dev-vcs",
+                "somercurial",
+                "5.5.1",
+                "0",
+                {
+                    "IUSE": "+soflag",
+                    "USE": "soflag",
+                    "RDEPEND": "dev-python/sosetuptools[soflag] soflag? ( dev-python/sopypy:0/sopy36= )",
+                },
+            ),
+        ],
+    )
+    rust = _b1_both(
+        [
+            "--pretend",
+            ">=dev-python/sopypy-7.3.2",
+            "@world",
+            "--update",
+            "--deep",
+            "--backtrack",
+            "4",
+        ],
+        _b1_env(fixture_env, root),
+        emerge_binary,
+        emerge_pretend_python,
+    )
+    got = _slotop_cpv(rust.stdout)
+    got = [c for c in got if not c[0].startswith("dev-libs/")]
+    assert got == [
+        ("dev-python/sopypy", "7.3.2"),
+        ("dev-python/sosetuptools", "46.4.0"),
+        ("dev-vcs/somercurial", "5.5.1"),
+    ]
+
+
+def test_oracle_slotop_autounmask_ignorebuilt(
+    emerge_binary, emerge_pretend_python, fixture_env, tmp_path
+):
+    """Upstream `test_slot_operator_autounmask.py::testSubSlot` case 2
+    (`icu --oneshot --ignore-built-slot-operator-deps=y`): installed
+    `icu-4.8` (`0/48`) + keyword-masked `libxml2-2.7.8` (`icu:0/48=`);
+    world `[libxml2]`. Real merges `[icu-49]`. MATCHES real (the flag
+    skips the scan; the masked consumer stays out). The remaining
+    autounmask/keyword/binpkg cases of that file are v2 rows in
+    `docs/024-oracle.md` (autounmask + keyword-unmask machinery)."""
+    root = _b1_root(
+        tmp_path,
+        ["dev-libs/libxml2"],
+        [
+            ("dev-libs", "icu", "4.8", "0/48", {}),
+            (
+                "dev-libs",
+                "libxml2",
+                "2.7.8",
+                "0",
+                {
+                    "DEPEND": "dev-libs/icu:0/48=",
+                    "RDEPEND": "dev-libs/icu:0/48=",
+                },
+            ),
+        ],
+    )
+    rust = _b1_both(
+        ["--pretend", "--oneshot", "--ignore-built-slot-operator-deps=y", "dev-libs/icu"],
+        _b1_env(fixture_env, root),
+        emerge_binary,
+        emerge_pretend_python,
+    )
+    assert [
+        ln for ln in _b1_merges(rust.stdout) if "dev-libs/icu" in ln
+    ] == ["[ebuild     U  ] dev-libs/icu-49 [4.8]"]
+    assert not [ln for ln in _b1_merges(rust.stdout) if "libxml2" in ln]
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="Real `_eliminate_rebuilds` rule 8 demotes this (both sides "
+    "use-reduce the `soflag?` conditional away at disabled USE), but "
+    "portuale's scan reads the raw vdb string with no USE-awareness. "
+    "Flips in S4 (bound-tree-vs-vdb comparison with USE). The stale "
+    "atom survives in the vdb from a flag-on install (unmodelled "
+    "history); current USE is flag-off on both sides, no --newuse.",
+)
+def test_oracle_slotop_undo_unnecessary(
+    emerge_binary, emerge_pretend_python, fixture_env, tmp_path
+):
+    """Synthetic `slotundo-unnecessary`: `souprov` upgrades `1.0`
+    (`0/1`) -> `2.0` (`0/2`); `sounneed-1.0` records
+    `soflag? ( souprov:0/1= )` with the flag OFF, so the dep is gone
+    from both rule-8 sides. Portuale rebuilds today; real undoes."""
+    root = _b1_root(
+        tmp_path,
+        ["dev-libs/sounneed", "dev-libs/souprov"],
+        [
+            ("dev-libs", "souprov", "1.0", "0/1", {}),
+            (
+                "dev-libs",
+                "sounneed",
+                "1.0",
+                "0/1",
+                {
+                    "IUSE": "soflag",
+                    "USE": "",
+                    "RDEPEND": "soflag? ( dev-libs/souprov:0/1= )",
+                },
+            ),
+        ],
+    )
+    rust = _b1_both(
+        ["--pretend", "--update", "--deep", "@world"],
+        _b1_env(fixture_env, root),
+        emerge_binary,
+        emerge_pretend_python,
+    )
+    assert not [ln for ln in _b1_merges(rust.stdout) if "sounneed" in ln]
+
+
+def test_oracle_slotop_undo_changed_slot_guard(
+    emerge_binary, emerge_pretend_python, fixture_env, tmp_path
+):
+    """Synthetic `slotundo-changed-slot` (no-flag half): `souneedslot`
+    is `sounneed` plus its own same-version SLOT move (tree `0/2`,
+    installed `0/1`). Real keeps the rebuild via rule 6 (installed vs
+    new slot differ) -- S4's undo must NOT over-demote a slot-moved
+    consumer. MATCHES real today (kept); guard for S4. (The flag half
+    is `test_oracle_slotop_undo_changed_slot_flag`; rule 3 subsumes
+    rule 6 for ebuilds, so the flag flips only display -- S5.)"""
+    root = _b1_root(
+        tmp_path,
+        ["dev-libs/souneedslot", "dev-libs/souprov"],
+        [
+            ("dev-libs", "souprov", "1.0", "0/1", {}),
+            (
+                "dev-libs",
+                "souneedslot",
+                "1.0",
+                "0/1",
+                {"RDEPEND": "dev-libs/souprov:0/1="},
+            ),
+        ],
+    )
+    rust = _b1_both(
+        ["--pretend", "--update", "--deep", "@world"],
+        _b1_env(fixture_env, root),
+        emerge_binary,
+        emerge_pretend_python,
+    )
+    merges = _b1_merges(rust.stdout)
+    assert "[ebuild  r  U  ] dev-libs/souprov-2.0 [1.0]" in merges
+    assert "[ebuild  rR    ] dev-libs/souneedslot-1.0 [1.0]" in merges
+    assert "The following packages are causing rebuilds:" in rust.stdout
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="S5 rule 3 (`_changed_slot`, `depgraph.py:3898-3899`): with "
+    "`--changed-slot` the slot-moved consumer stays in the replace set "
+    "(`r` + edge). Today the standalone `slot_changed` trigger "
+    "reinstalls it outside the scan (`R`, no edge).",
+)
+def test_oracle_slotop_undo_changed_slot_flag(
+    emerge_binary, emerge_pretend_python, fixture_env, tmp_path
+):
+    """Synthetic `slotundo-changed-slot` (flag half): same shape as
+    `test_oracle_slotop_undo_changed_slot_guard` with `--changed-slot`.
+    Real keeps the rebuild *in the replace set* (`r`-tagged provider +
+    `rR` consumer + edge)."""
+    root = _b1_root(
+        tmp_path,
+        ["dev-libs/souneedslot", "dev-libs/souprov"],
+        [
+            ("dev-libs", "souprov", "1.0", "0/1", {}),
+            (
+                "dev-libs",
+                "souneedslot",
+                "1.0",
+                "0/1",
+                {"RDEPEND": "dev-libs/souprov:0/1="},
+            ),
+        ],
+    )
+    rust = _b1_both(
+        ["--pretend", "--update", "--deep", "--changed-slot", "@world"],
+        _b1_env(fixture_env, root),
+        emerge_binary,
+        emerge_pretend_python,
+    )
+    merges = _b1_merges(rust.stdout)
+    assert "[ebuild  r  U  ] dev-libs/souprov-2.0 [1.0]" in merges
+    assert "[ebuild  rR    ] dev-libs/souneedslot-1.0 [1.0]" in merges
+    assert "The following packages are causing rebuilds:" in rust.stdout
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="S3's walked node: today the consumer is synthesised post-pass "
+    "(`already_installed` + `reinstall` duplicate rows in `--json`), so "
+    "the flipped node never owns its edges. After S3 there is exactly "
+    "one walked `reinstall` row.",
+)
+def test_oracle_slotop_undo_rebind(
+    emerge_binary, emerge_pretend_python, fixture_env, tmp_path
+):
+    """Synthetic `slotundo-rebind`: `sorebind-1.0`'s tree `RDEPEND`
+    gained `dev-libs/sounewdep` over its installed
+    `souprov:0/1=`-only string. The new dep already resolves today
+    (presence guard); S3 makes the rebuilt row the walked node (one
+    `--json` row, not the `already_installed` + `reinstall` duplicate
+    the synthesiser leaves)."""
+    root = _b1_root(
+        tmp_path,
+        ["dev-libs/sorebind"],
+        [
+            ("dev-libs", "souprov", "1.0", "0/1", {}),
+            (
+                "dev-libs",
+                "sorebind",
+                "1.0",
+                "0",
+                {"RDEPEND": "dev-libs/souprov:0/1="},
+            ),
+        ],
+    )
+    env = _b1_env(fixture_env, root)
+    rust = _b1_both(
+        ["--pretend", "--update", "--deep", "@world"], env, emerge_binary,
+        emerge_pretend_python,
+    )
+    assert "[ebuild  N     ] dev-libs/sounewdep-1.0 " in _b1_merges(rust.stdout)
+    rj = _run([str(emerge_binary)], ["--pretend", "--update", "--deep", "--json", "@world"], env)
+    pj = _run(emerge_pretend_python, ["--pretend", "--update", "--deep", "--json", "@world"], env)
+    assert rj.stdout == pj.stdout and rj.stderr == pj.stderr
+    rows = [
+        e for e in json.loads(rj.stdout)["entries"] if e["package"] == "sorebind"
+    ]
+    assert len(rows) == 1
+    assert rows[0]["outcome"] == "reinstall"
+
+
+def test_oracle_slotop_undo_cascade(
+    emerge_binary, emerge_pretend_python, fixture_env, tmp_path
+):
+    """Synthetic `slotundo-cascade`: a522084 plus the consumer's own
+    tree `SLOT` bumped (`soccascb` tree `0/5`, installed `0`), so its
+    rebuild lands at a new sub-slot and `soccascc` (`soccascb:0/0=`)
+    rebuilds in turn. MATCHES real today (the fixpoint scan chases the
+    tree `SLOT`); guards the `casc*` behaviour under the new shape for
+    S3 (which must preserve the cascade minus the synthesiser)."""
+    root = _b1_root(
+        tmp_path,
+        ["app-misc/A", "app-misc/soccascc"],
+        [
+            ("app-misc", "A", "1", "0/1", {}),
+            (
+                "app-misc",
+                "soccascb",
+                "0",
+                "0",
+                {"RDEPEND": "app-misc/A:0/1="},
+            ),
+            (
+                "app-misc",
+                "soccascc",
+                "0",
+                "0",
+                {"RDEPEND": "app-misc/soccascb:0/0="},
+            ),
+        ],
+    )
+    rust = _b1_both(
+        ["--pretend", "--update", "--deep", "@world"],
+        _b1_env(fixture_env, root),
+        emerge_binary,
+        emerge_pretend_python,
+    )
+    merges = _b1_merges(rust.stdout)
+    assert "[ebuild  r  U  ] app-misc/A-2 [1]" in merges
+    assert "[ebuild  rR    ] app-misc/soccascb-0 [0]" in merges
+    assert "[ebuild  rR    ] app-misc/soccascc-0 " in merges
+    assert rust.stdout.count("causes rebuilds for:") == 2

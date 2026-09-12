@@ -1,0 +1,8 @@
+DEFINED_PHASES=-
+DESCRIPTION=024 oracle fixture: USE-conditional := consumer, dep disabled (slotundo)
+EAPI=8
+IUSE=soflag
+KEYWORDS=amd64
+RDEPEND=soflag? ( dev-libs/souprov:= )
+SLOT=0/1
+_md5_=0000000000000000000000000000000

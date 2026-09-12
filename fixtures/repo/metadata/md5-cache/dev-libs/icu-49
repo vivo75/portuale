@@ -1,0 +1,7 @@
+DEFINED_PHASES=-
+DESCRIPTION=024 oracle fixture: icu new sub-slot (autounmask slot-op)
+EAPI=8
+IUSE=
+KEYWORDS=amd64
+SLOT=0/49
+_md5_=0000000000000000000000000000000

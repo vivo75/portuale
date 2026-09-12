@@ -1,0 +1,8 @@
+DEFINED_PHASES=-
+DESCRIPTION=024 oracle fixture: clang bound to llvm 3.7 (bug 584626)
+EAPI=8
+IUSE=
+KEYWORDS=amd64
+RDEPEND=~sys-devel/llvm-3.7.1
+SLOT=0/3.7
+_md5_=0000000000000000000000000000000
