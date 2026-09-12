@@ -3,7 +3,9 @@
 Status: executing. A0 (record correction), A1 (effective
 installed-metadata helper + built-`:=` append, gated default-off) and A2
 (scheduler closure + `GraphEntry::deps` read the same view) landed
-2026-09-12; see §11 for the A1 finding that gates the append. Written
+2026-09-12; A3 (L0 re-baseline, byte-identical: 96/0.800, order x22) and
+A4 (installed-parent pullers + the `need_rebuild` pin) followed; B0 (the
+committed trace harness) is in. See §11 for the findings. Written
 2026-09-12 against `main` @ `be76d0d` (post #24 S7). Companion detail for
 #26/#27 lives in `docs/024-dynamic-deps_n_disagreement.deepseek.md`
 (referred to below as **the 024 plan**); this document is the combined
@@ -584,3 +586,22 @@ What remains:
 
 
 
+
+### F-B0 — the trace harness is live (2026-09-12)
+
+`TEST/scripts/mo-trace/` is committed: `real-trace.py` (idempotent
+`RT_SEL` injector for real's `_serialize_tasks`; `--unpatch` is
+byte-identical; handles both 3.0.81.3's extra `_spinner_update()` loop
+head and the 3.0.82.2 shape), `ptl-trace.sh` (`PORTUALE_MO_SEL=1`
+wrapper), `align-traces.py` (field-by-field first divergence), README.
+The Rust side is gated by `PORTUALE_MO_SEL` and pinned by the
+`mo_sel_trace_line_pins_the_harness_format` unit test; unset, output is
+byte-identical.
+
+Validation (container, 2026-09-12): `app-misc/tmux` aligns through every
+iteration; `gui-libs/gtk:4` diverges at iteration 1 with `alive=398`
+(real) vs `alive=395` (portuale) -- the same 3-node graph-membership gap
+the 2026-09-09 note recorded as "post-prune al=301 vs 298" -- before any
+`retlist`/`ig` difference. The `pick=` field marks each selected node
+`m:` (merge) / `n:` (nomerge), so which *kind* of leaf drains first is
+visible at the first divergent iteration: that is B1's entry point.

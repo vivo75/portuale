@@ -407,6 +407,46 @@ fn s_ignore_runtime(p: &DepPriority) -> bool {
     (!p.runtime_slot_op || p.satisfied) && (p.satisfied || p.optional || !p.buildtime)
 }
 
+/// Real `ignore_priority.__name__` for the `_serialize_tasks` trace
+/// (`PORTUALE_MO_SEL`), so a portuale `MO_SEL` line lines up field-for-
+/// field with the `RT_SEL` line `TEST/scripts/mo-trace/real-trace.py`
+/// injects into real's loop. `None` is real's `ignore_priority = None`.
+fn ignore_name(ig: Option<Ignore>) -> &'static str {
+    let Some(f) = ig else {
+        return "none";
+    };
+    let addr = f as usize;
+    for (pred, name) in [
+        (n_ignore_optional as Ignore, "ignore_optional"),
+        (n_ignore_runtime_post as Ignore, "ignore_runtime_post"),
+        (n_ignore_runtime as Ignore, "ignore_runtime"),
+        (s_ignore_optional as Ignore, "ignore_optional"),
+        (
+            s_ignore_satisfied_runtime_post as Ignore,
+            "ignore_satisfied_runtime_post",
+        ),
+        (s_ignore_runtime_post as Ignore, "ignore_runtime_post"),
+        (
+            s_ignore_satisfied_runtime as Ignore,
+            "ignore_satisfied_runtime",
+        ),
+        (
+            s_ignore_satisfied_buildtime as Ignore,
+            "ignore_satisfied_buildtime",
+        ),
+        (
+            s_ignore_satisfied_buildtime_slot_op as Ignore,
+            "ignore_satisfied_buildtime_slot_op",
+        ),
+        (s_ignore_runtime as Ignore, "ignore_runtime"),
+    ] {
+        if addr == pred as usize {
+            return name;
+        }
+    }
+    "unknown"
+}
+
 /// Real's two `DepPriority*Range` classes: an `ignore_priority` ladder
 /// indexed `NONE=0 .. MEDIUM`, plus the named rungs `_serialize_tasks`
 /// reaches for directly.
@@ -801,6 +841,64 @@ impl SerializeFrontier {
 /// hatch for debugging and for A/B perf comparison, same as upstream.
 fn frontier_enabled() -> bool {
     std::env::var_os("PORTAGE_SERIALIZE_FRONTIER_DISABLE").is_none()
+}
+
+/// `PORTUALE_MO_SEL=1`: emit one `MO_SEL ` line per `select_nodes`
+/// iteration to stderr -- the portuale half of the real-vs-portuale
+/// merge-order trace harness (`TEST/scripts/mo-trace/`). The real half is
+/// `real-trace.py`, which injects an `RT_SEL` line with the same fields
+/// into real's `_serialize_tasks`; `align-traces.py` walks the two streams
+/// in step and reports the first iteration whose state diverges. Never
+/// on by default, so a normal run is byte-identical (there is no other
+/// output change).
+fn mo_sel_enabled() -> bool {
+    std::env::var_os("PORTUALE_MO_SEL").is_some_and(|v| v != "0")
+}
+
+/// Real `Package`'s `cat/pkg-ver` label for the trace `pick=` field.
+/// Prefixed `m:` for a merge-bound node (real `operation == "merge"`) or
+/// `n:` for a nomerge/installed one, so the aligner can see *which kind*
+/// of node each side removed when the frontiers differ -- the iter-1
+/// gnuconfig/elt-patches batch vs real's installed-nomerge batch is
+/// exactly the difference this harness exists to localize.
+fn mo_sel_cpv(e: &GraphEntry, installed: bool) -> String {
+    let version = match &e.outcome {
+        PretendOutcome::New { version } | PretendOutcome::Reinstall { version, .. } => {
+            Some(version)
+        }
+        PretendOutcome::Upgrade { to, .. } | PretendOutcome::Downgrade { to, .. } => Some(to),
+        PretendOutcome::AlreadyInstalled { version } => Some(version),
+        PretendOutcome::NoVisibleCandidate => None,
+    };
+    let kind = if installed { 'n' } else { 'm' };
+    match version {
+        Some(v) => format!("{kind}:{}/{}-{}", e.category, e.package, v),
+        None => format!("{kind}:{}/{}", e.category, e.package),
+    }
+}
+
+/// One `MO_SEL ` line (`PORTUALE_MO_SEL`) -- pure so the format is
+/// unit-pinned. Field order is the shared harness contract:
+/// `iter retlist alive asap prefer_asap drop_satisfied ig pick`.
+#[allow(clippy::too_many_arguments)]
+fn mo_sel_trace_line(
+    iter: usize,
+    retlist: usize,
+    alive: usize,
+    asap: usize,
+    prefer_asap: bool,
+    drop_satisfied: bool,
+    ig: Option<Ignore>,
+    pick: &[String],
+) -> String {
+    format!(
+        "MO_SEL iter={iter} retlist={retlist} alive={alive} asap={asap} \
+         prefer_asap={} drop_satisfied={} ig={} pick={}",
+        prefer_asap as u8,
+        drop_satisfied as u8,
+        ignore_name(ig),
+        pick.join(" ")
+    )
 }
 
 /// `Digraph::leaf_nodes` through the frontier when built, plain scan
@@ -2016,8 +2114,10 @@ fn select_nodes(g: &mut Digraph, entries: &[GraphEntry], root: &Path) -> Vec<usi
     // to the plain scans.
     let mut frontier: Option<SerializeFrontier> =
         frontier_enabled().then(|| SerializeFrontier::build(g));
+    let mut mo_iter: usize = 0;
 
     while g.order.iter().any(|&i| g.alive[i]) {
+        mo_iter += 1;
         let mut selected: Option<Vec<usize>> = None;
         let mut used_ig: Option<Ignore> = None;
         let asap_active = prefer_asap && !asap.is_empty();
@@ -2215,6 +2315,36 @@ fn select_nodes(g: &mut Digraph, entries: &[GraphEntry], root: &Path) -> Vec<usi
             ],
         };
 
+        if mo_sel_enabled() {
+            let retlist_merges = retlist
+                .iter()
+                .filter(|&&i| {
+                    !matches!(
+                        entries[i].outcome,
+                        PretendOutcome::AlreadyInstalled { .. }
+                            | PretendOutcome::NoVisibleCandidate
+                    )
+                })
+                .count();
+            let alive = g.order.iter().filter(|&&i| g.alive[i]).count();
+            let pick: Vec<String> = selected
+                .iter()
+                .map(|&i| mo_sel_cpv(&entries[i], g.installed[i]))
+                .collect();
+            eprintln!(
+                "{}",
+                mo_sel_trace_line(
+                    mo_iter,
+                    retlist_merges,
+                    alive,
+                    asap.len(),
+                    prefer_asap,
+                    drop_satisfied,
+                    used_ig,
+                    &pick,
+                )
+            );
+        }
         prefer_asap = true;
         drop_satisfied = false;
         for i in selected {
@@ -2525,6 +2655,35 @@ pub(crate) fn serialize_merge_order(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mo_sel_trace_line_pins_the_harness_format() {
+        // The shared contract with `TEST/scripts/mo-trace/real-trace.py`
+        // and `align-traces.py`: one line per `select_nodes` iteration,
+        // fields `iter retlist alive asap prefer_asap drop_satisfied ig
+        // pick`. Changing this string breaks the aligner, so it is
+        // pinned.
+        let line = mo_sel_trace_line(
+            7,
+            3,
+            42,
+            1,
+            false,
+            true,
+            Some(n_ignore_runtime),
+            &["m:dev-libs/a-1".to_string(), "n:dev-libs/b-2".to_string()],
+        );
+        assert_eq!(
+            line,
+            "MO_SEL iter=7 retlist=3 alive=42 asap=1 prefer_asap=0 \
+             drop_satisfied=1 ig=ignore_runtime pick=m:dev-libs/a-1 n:dev-libs/b-2"
+        );
+        assert_eq!(
+            mo_sel_trace_line(1, 0, 5, 0, true, false, None, &[]),
+            "MO_SEL iter=1 retlist=0 alive=5 asap=0 prefer_asap=1 \
+             drop_satisfied=0 ig=none pick="
+        );
+    }
 
     fn prio(word: u64) -> DepPriority {
         DepPriority {
