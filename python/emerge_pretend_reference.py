@@ -10547,16 +10547,27 @@ def _synthetic_installed_entry(category, package, version, deps):
     )
 
 
-def _add_installed_dependency_closure(entries, root, system_atoms, virtuals_only):
+def _add_installed_dependency_closure(
+    entries,
+    root,
+    repos,
+    system_atoms,
+    virtuals_only,
+    dynamic_deps,
+    dynamic_deps_append,
+    ignore_built_slot_operator_deps,
+):
     """Real `_complete_graph`'s effect on `_serialize_tasks`: every
     installed nomerge node carries its own recorded vdb dependency tree,
     recursively -- so leaf selection clears a shallow installed subtree
     before a deep one. `_build_merge_digraph` only follows each entry's
     `deps`, and an already_installed entry has none. Fill `deps` on every
-    installed entry from its vdb `*DEPEND` (USE-reduced against its
-    recorded USE, real `pkg.built` priorities), and append a
-    `_synthetic_installed_entry` for each installed dependency not
-    already present, to a fixpoint.
+    installed entry from its *effective* metadata (A2 #26:
+    `installed_dep_string` -- the live ebuild by default, the vdb snapshot
+    under `--dynamic-deps=n`, plus the vdb's built `:=` atoms when the
+    append gate is on), USE-reduced against its recorded USE, real
+    `pkg.built` priorities, and append a `_synthetic_installed_entry` for
+    each installed dependency not already present, to a fixpoint.
 
     `virtuals_only` (real not in complete mode -- a plain `[ebuild N]`
     resolve): real still expands an installed `virtual/*` node to its
@@ -10571,18 +10582,14 @@ def _add_installed_dependency_closure(entries, root, system_atoms, virtuals_only
     def _expandable(cat):
         return not virtuals_only or cat == "virtual"
 
-    # Real's _serialize_tasks digraph does NOT strip a recorded libc dep
-    # (strip_libc_deps is --changed-deps only), but --dynamic-deps (the
-    # default) walks the current ebuild's deps, not the vdb's. The
-    # difference that matters: doebuild._inject_libc_dep appends a bare
+    # A2 (#26): the edges come from the same installed-metadata view the
+    # walk uses (_installed_dep_string): the live ebuild by default, the
+    # raw vdb snapshot under --dynamic-deps=n. The injected-libc strip is
+    # only sound on the Raw path: _inject_libc_dep appends a bare
     # `>=<libc-provider>-<version>` to every installed package's vdb
-    # RDEPEND (bug #753500), which the ebuild never declared -- e.g.
-    # dev-libs/gmp (ebuild RDEPEND="") ends up with a phantom
-    # `gmp -> glibc (runtime)` edge that holds gmp/mpfr/mpc behind glibc's
-    # deep subtree. Strip exactly that injected shape (bare `>=` atom on a
-    # libc provider, no slot, no USE deps); a genuine
-    # sys-libs/glibc[-crypt(-)] is kept, as real keeps it. Mirrors
-    # merge_order.rs's is_injected_libc.
+    # RDEPEND (bug #753500) which the ebuild never declared, so the
+    # default (ebuild) path must keep a genuine ebuild-written
+    # `>=sys-libs/glibc-x` edge. Mirrors merge_order.rs.
     libc_cps = {tuple(cp.split("/", 1)) for cp in _libc_provider_cps(root)}
 
     def _is_injected_libc(atom_str):
@@ -10599,9 +10606,30 @@ def _add_installed_dependency_closure(entries, root, system_atoms, virtuals_only
         )
 
     def _vdb_edges(cat, pkg, ver):
+        live = None
+        _cands = [c for c in list_candidates(repos, cat, pkg) if c["version"] == ver]
+        if _cands:
+            _resolved = max(_cands, key=lambda c: c["repo_priority"])
+            try:
+                live = read_md5_cache(_resolved["repo_location"], cat, f"{pkg}-{ver}")
+            except OSError:
+                live = None
         md = {}
+        _memo = {}
         for k in ("RDEPEND", "IDEPEND", "PDEPEND", "DEPEND", "BDEPEND"):
-            s = _read_vdb_string(root, cat, pkg, ver, k)
+            s = _installed_dep_string(
+                root,
+                dynamic_deps,
+                dynamic_deps_append,
+                ignore_built_slot_operator_deps,
+                cat,
+                pkg,
+                ver,
+                live,
+                k,
+                _INSTALLED_META_EFFECTIVE if dynamic_deps else _INSTALLED_META_RAW,
+                _memo,
+            )
             if s and s.strip():
                 md[k] = s
         use_flags = _read_vdb_flag_set(root, cat, pkg, ver, "USE")
@@ -10613,7 +10641,7 @@ def _add_installed_dependency_closure(entries, root, system_atoms, virtuals_only
                 ("RDEPEND", "IDEPEND", "PDEPEND", "DEPEND", "BDEPEND"),
                 True,
             )
-            if not _is_injected_libc(e["atom"])
+            if not dynamic_deps or not _is_injected_libc(e["atom"])
         ]
 
     present = {(e[0], e[1]) for e in entries}
@@ -10678,7 +10706,17 @@ def _add_installed_dependency_closure(entries, root, system_atoms, virtuals_only
         entries[i] = e[:8] + (new_prov,) + e[9:]
 
 
-def _topological_merge_order(entries, top_level_atoms=(), config=None, root="/", implicit_system_deps=True):
+def _topological_merge_order(
+    entries,
+    top_level_atoms=(),
+    config=None,
+    root="/",
+    implicit_system_deps=True,
+    repos=(),
+    dynamic_deps=True,
+    dynamic_deps_append=False,
+    ignore_built_slot_operator_deps=False,
+):
     """Put `entries` in real portage's dependency-first *merge* order.
 
     Real portage's mylist (Display.__call__'s input) is a genuine merge
@@ -10735,8 +10773,12 @@ def _topological_merge_order(entries, top_level_atoms=(), config=None, root="/",
     _add_installed_dependency_closure(
         entries,
         root,
+        repos,
         (config.get("system_packages") if isinstance(config, dict) else getattr(config, "system_packages", None)) or [],
         virtuals_only,
+        dynamic_deps,
+        dynamic_deps_append,
+        ignore_built_slot_operator_deps,
     )
     n = len(entries)
 
@@ -14155,7 +14197,17 @@ def resolve_pretend_graph(
     # every required_by edge is known. Mirrors portage-repo/src/lib.rs's
     # topological_merge_order exactly.
     _dump_resolution_walk(entries, root)
-    entries = _topological_merge_order(entries, atoms, config, root, implicit_system_deps)
+    entries = _topological_merge_order(
+        entries,
+        atoms,
+        config,
+        root,
+        implicit_system_deps,
+        repos,
+        dynamic_deps,
+        _dynamic_deps_append_enabled(),
+        ignore_built_slot_operator_deps,
+    )
 
     # Real depgraph.py:5706-5717 -- see the Rust side's own
     # GraphResult::buildpkgonly_deps_unsatisfied doc comment.

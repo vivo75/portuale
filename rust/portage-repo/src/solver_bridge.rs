@@ -679,6 +679,10 @@ fn graph_result_from_order(
         &req.config,
         &req.root,
         req.implicit_system_deps,
+        repos,
+        req.dynamic_deps,
+        super::dynamic_deps_append_enabled(),
+        req.ignore_built_slot_operator_deps,
     );
     // Circular-dep notice (J): the walk records every dependency edge's
     // hard/soft kind while draining its queue and reports the shortest

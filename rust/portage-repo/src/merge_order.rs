@@ -43,8 +43,8 @@ use std::collections::{BinaryHeap, HashMap, HashSet};
 use std::path::Path;
 
 use crate::{
-    CandidateSource, GraphEntry, PretendOutcome, VisibilityProvenance, all_installed_packages,
-    read_vdb_flag_set, read_vdb_slot, read_vdb_string,
+    CandidateSource, GraphEntry, PretendOutcome, RepoConfig, VisibilityProvenance,
+    all_installed_packages, list_candidates, read_md5_cache, read_vdb_flag_set, read_vdb_slot,
 };
 
 /// Real `_emerge/DepPriority.py::DepPriority` -- the per-edge dependency
@@ -932,11 +932,16 @@ fn synthetic_installed_entry(
 /// (`dev-cpp/eigen`) via a premature `drop_satisfied`. The nodes real's
 /// own "Prune 'nomerge' root nodes" step then drops are removed again in
 /// `serialize_merge_order` right after `build_digraph`.
+#[allow(clippy::too_many_arguments)]
 fn add_installed_dependency_closure(
     entries: &mut Vec<GraphEntry>,
     root: &Path,
+    repos: &[RepoConfig],
     system_atoms: &[String],
     virtuals_only: bool,
+    dynamic_deps: bool,
+    dynamic_deps_append: bool,
+    ignore_built_slot_operator_deps: bool,
 ) {
     // `virtuals_only` (a plain `[ebuild N]` resolve, real not in complete
     // mode): real still expands an installed `virtual/*` node to its
@@ -952,21 +957,19 @@ fn add_installed_dependency_closure(
         .map(|p| ((p.category.as_str(), p.package.as_str()), p))
         .collect();
 
-    // Real's own `_serialize_tasks` digraph does NOT strip a package's
-    // recorded libc dependency (`strip_libc_deps` is `--changed-deps`
-    // only) -- but with `--dynamic-deps` on (the default), it walks the
-    // *current ebuild*'s deps, not the vdb's. The difference that matters
-    // here is `portage.package.ebuild.doebuild._inject_libc_dep`: every
-    // package portage installs gets a bare `>=<libc-provider>-<version>`
-    // appended to its vdb `RDEPEND` (bug #753500), which the ebuild never
-    // declared. `dev-libs/gmp` -- ebuild `RDEPEND=""` -- ends up with
-    // `RDEPEND=">=sys-libs/glibc-2.43-r2"` in the vdb, and that phantom
-    // `gmp -> glibc (runtime)` edge held `gmp`/`mpfr`/`mpc` behind
-    // `glibc`'s deep subtree so portuale's NORMAL frontier ran dry ~11
-    // merges before real's. Strip exactly that injected shape -- a bare
-    // `>=` atom on a libc provider with no slot and no USE deps -- and
-    // nothing else: a genuine `sys-libs/glibc[-crypt(-)]` (has USE deps,
-    // e.g. `sys-libs/libxcrypt`) is kept, exactly as real keeps it.
+    // A2 (#26): the edges come from the same installed-metadata view the
+    // walk uses (`installed_dep_string`): with `--dynamic-deps` on (the
+    // default) the *current ebuild*'s deps (+ the vdb's built `:=` atoms
+    // when `PORTUALE_DYNAMIC_DEPS_APPEND` is set), exactly what real's
+    // FakeVartree hands `_serialize_tasks`; `--dynamic-deps=n` reads the
+    // raw vdb snapshot. The injected-libc strip below is therefore only
+    // sound on the Raw path (Gate G0.3): `_inject_libc_dep` appends a
+    // bare `>=<libc-provider>-<version>` to every installed package's vdb
+    // `RDEPEND` (bug #753500), which the ebuild never declared -- real's
+    // default walk never sees it, but the `=n` snapshot does, and
+    // portuale keeps the historical strip there. A genuine ebuild-written
+    // `>=sys-libs/glibc-x` must NOT be stripped now that the default path
+    // reads the ebuild.
     let libc_cps = crate::libc_provider_cps(root);
     let is_injected_libc = |atom: &str| -> bool {
         let Some(a) = portage_dep::parse_atom(atom) else {
@@ -982,9 +985,35 @@ fn add_installed_dependency_closure(
     };
 
     let vdb_edges = |cat: &str, pkg: &str, ver: &str| -> Vec<DepEdge> {
+        // Live md5-cache metadata for this exact installed cpv (None when
+        // the version is gone from every repo -- the Raw fallback).
+        let live = list_candidates(repos, cat, pkg).ok().and_then(|cs| {
+            cs.iter()
+                .filter(|c| c.version == ver)
+                .max_by_key(|c| c.repo_priority)
+                .and_then(|c| read_md5_cache(&c.repo_location, cat, &format!("{pkg}-{ver}")).ok())
+        });
         let mut md: HashMap<String, String> = HashMap::new();
+        let mut memo: HashMap<(String, String, String, String), String> = HashMap::new();
         for k in ["RDEPEND", "IDEPEND", "PDEPEND", "DEPEND", "BDEPEND"] {
-            let s = read_vdb_string(root, cat, pkg, ver, k);
+            let layer = if dynamic_deps {
+                crate::InstalledMetaLayer::Effective
+            } else {
+                crate::InstalledMetaLayer::Raw
+            };
+            let s = crate::installed_dep_string(
+                root,
+                dynamic_deps,
+                dynamic_deps_append,
+                ignore_built_slot_operator_deps,
+                cat,
+                pkg,
+                ver,
+                live.as_deref(),
+                k,
+                layer,
+                &mut memo,
+            );
             if !s.trim().is_empty() {
                 md.insert(k.to_string(), s);
             }
@@ -997,7 +1026,7 @@ fn add_installed_dependency_closure(
             true,
         )
         .into_iter()
-        .filter(|e| !is_injected_libc(&e.atom))
+        .filter(|e| !dynamic_deps || !is_injected_libc(&e.atom))
         .collect()
     };
 
@@ -2348,12 +2377,17 @@ fn debug_dump_graph(g: &Digraph, entries: &[GraphEntry], top_level_atoms: &[Stri
 /// and weave-back are identical either way.
 ///
 /// Returns a permutation of `0..entries.len()` in merge order.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn serialize_merge_order(
     entries: &[GraphEntry],
     top_level_atoms: &[String],
     config: &portage_profile::Config,
     root: &Path,
     implicit_system_deps: bool,
+    repos: &[RepoConfig],
+    dynamic_deps: bool,
+    dynamic_deps_append: bool,
+    ignore_built_slot_operator_deps: bool,
 ) -> Vec<usize> {
     let real_n = entries.len();
     // Real `_complete_graph` auto-enables (a merge changes an
@@ -2382,7 +2416,16 @@ pub(crate) fn serialize_merge_order(
         ) || (matches!(e.outcome, PretendOutcome::New { .. }) && e.new_slot)
     });
     let mut ext = entries.to_vec();
-    add_installed_dependency_closure(&mut ext, root, &config.system_packages, !complete);
+    add_installed_dependency_closure(
+        &mut ext,
+        root,
+        repos,
+        &config.system_packages,
+        !complete,
+        dynamic_deps,
+        dynamic_deps_append,
+        ignore_built_slot_operator_deps,
+    );
     let entries: &[GraphEntry] = &ext;
     let n = entries.len();
 

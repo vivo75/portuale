@@ -1,7 +1,8 @@
 # Tier 2 close-out — #17 + #26 + #27 — agent plan (deepseek draft)
 
-Status: executing. A0 (record correction) and A1 (effective
-installed-metadata helper + built-`:=` append, gated default-off) landed
+Status: executing. A0 (record correction), A1 (effective
+installed-metadata helper + built-`:=` append, gated default-off) and A2
+(scheduler closure + `GraphEntry::deps` read the same view) landed
 2026-09-12; see §11 for the A1 finding that gates the append. Written
 2026-09-12 against `main` @ `be76d0d` (post #24 S7). Companion detail for
 #26/#27 lives in `docs/024-dynamic-deps_n_disagreement.deepseek.md`

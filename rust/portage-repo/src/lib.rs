@@ -11504,12 +11504,17 @@ type EdgeKindMap = HashMap<((String, String), (String, String)), (bool, bool)>;
 /// loop both read this order directly; `--tree` re-derives its own
 /// nesting from `required_by` and is unaffected by the Vec order (see
 /// `pretend.rs::print_tree`).
+#[allow(clippy::too_many_arguments)]
 fn topological_merge_order(
     entries: Vec<GraphEntry>,
     top_level_atoms: &[String],
     config: &portage_profile::Config,
     root: &Path,
     implicit_system_deps: bool,
+    repos: &[RepoConfig],
+    dynamic_deps: bool,
+    dynamic_deps_append: bool,
+    ignore_built_slot_operator_deps: bool,
 ) -> Vec<GraphEntry> {
     if entries.len() < 2 {
         // Real still emits the `digraph:` dump for a single-package merge
@@ -11526,6 +11531,10 @@ fn topological_merge_order(
         config,
         root,
         implicit_system_deps,
+        repos,
+        dynamic_deps,
+        dynamic_deps_append,
+        ignore_built_slot_operator_deps,
     );
     let mut slots: Vec<Option<GraphEntry>> = entries.into_iter().map(Some).collect();
     order
@@ -17157,11 +17166,13 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
                 && ctx.deep.recurses_at(depth)
             {
                 // `GraphEntry::deps` for an AlreadyInstalled
-                // entry: always the *current* tree ebuild's metadata
-                // (real `--dynamic-deps`'s own default) -- ordering
-                // is a display nicety, not resolution-critical, so
-                // this doesn't also mirror `enqueue_dependencies`'
-                // own `--dynamic-deps=n` vdb-snapshot branch.
+                // entry: A2 (#26) builds it from the *same* installed
+                // metadata view the recursion below walks
+                // (`installed_dep_string`): the live ebuild's deps by
+                // default, the vdb snapshot under `--dynamic-deps=n`, and
+                // the vdb's built `:=` atoms with the append gate on. So
+                // `--debug`'s `Depstring` line and `--tree`'s edges can no
+                // longer contradict the child the walk actually queued.
                 if let Some(resolved) =
                     list_candidates(&ctx.repos, &key.0, &key.1)
                         .ok()
@@ -17185,10 +17196,34 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
                         } else {
                             &["RDEPEND", "IDEPEND", "PDEPEND"]
                         };
+                        let layer = if ctx.dynamic_deps {
+                            InstalledMetaLayer::Effective
+                        } else {
+                            InstalledMetaLayer::Raw
+                        };
+                        let mut effective: HashMap<String, String> = HashMap::new();
+                        for k in real_order_keys {
+                            let s = installed_dep_string(
+                                ctx.root,
+                                ctx.dynamic_deps,
+                                dynamic_deps_append_enabled(),
+                                ctx.ignore_built_slot_operator_deps,
+                                &key.0,
+                                &key.1,
+                                version,
+                                Some(&metadata),
+                                k,
+                                layer,
+                                &mut state.installed_meta_memo,
+                            );
+                            if !s.trim().is_empty() {
+                                effective.insert((*k).to_string(), s);
+                            }
+                        }
                         // An installed package is `pkg.built`, so
                         // real marks its build-time deps `optional`.
                         already_installed_deps = merge_order::dep_edges_from_metadata(
-                            &metadata,
+                            &effective,
                             &use_flags,
                             real_order_keys,
                             true,
@@ -19144,6 +19179,10 @@ fn assemble_result(
         config,
         ctx.root,
         ctx.implicit_system_deps,
+        &ctx.repos,
+        ctx.dynamic_deps,
+        dynamic_deps_append_enabled(),
+        ctx.ignore_built_slot_operator_deps,
     );
 
     // Real depgraph.py:5706-5717 -- see GraphResult::
@@ -27410,6 +27449,10 @@ mod tests {
             &test_config(),
             Path::new("/nonexistent-root"),
             true,
+            &[],
+            true,
+            false,
+            false,
         );
         let names: Vec<&str> = ordered.iter().map(|e| e.package.as_str()).collect();
         assert_eq!(names, vec!["cyc-b", "cyc-a"]);
@@ -27430,6 +27473,10 @@ mod tests {
             &test_config(),
             Path::new("/nonexistent-root"),
             true,
+            &[],
+            true,
+            false,
+            false,
         );
         let names: Vec<&str> = ordered.iter().map(|e| e.package.as_str()).collect();
         assert_eq!(names, vec!["cyc-a", "cyc-b"]);
@@ -27458,6 +27505,10 @@ mod tests {
             &config,
             Path::new("/nonexistent-root"),
             true,
+            &[],
+            true,
+            false,
+            false,
         );
         let names: Vec<&str> = biased.iter().map(|e| e.package.as_str()).collect();
         assert_eq!(names, vec!["c", "a", "b"]);
@@ -27470,6 +27521,10 @@ mod tests {
             &atoms,
             &config,
             Path::new("/nonexistent-root"),
+            false,
+            &[],
+            true,
+            false,
             false,
         );
         let names: Vec<&str> = unbiased.iter().map(|e| e.package.as_str()).collect();
