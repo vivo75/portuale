@@ -1,11 +1,13 @@
 # Tier 2 close-out — #17 + #26 + #27 — agent plan (deepseek draft)
 
-Status: executing. A0 (record correction), A1 (effective
-installed-metadata helper + built-`:=` append, gated default-off) and A2
-(scheduler closure + `GraphEntry::deps` read the same view) landed
-2026-09-12; A3 (L0 re-baseline, byte-identical: 96/0.800, order x22) and
-A4 (installed-parent pullers + the `need_rebuild` pin) followed; B0 (the
-committed trace harness) is in. See §11 for the findings. Written
+Status: executing. Phase A landed 2026-09-12 (A0 record correction;
+A1 effective installed-metadata helper + built-`:=` append, gated
+default-off; A2 scheduler closure + `GraphEntry::deps`; A3 L0 baseline;
+A4 installed-parent pullers + `need_rebuild` pin). Phase B: B0 harness,
+B1 installed-slot closure (2 probes clean), B2 multi-slot atom
+resolution, B3/B4 adjudicated (F-B3/F-B4 -> #25), B5 gnome-shell
+explanation, B6 docs closure. L0: clean 98, parity 0.817, order 20 raw
+/ 19 explained. See §11 for the findings. Written
 2026-09-12 against `main` @ `be76d0d` (post #24 S7). Companion detail for
 #26/#27 lives in `docs/024-dynamic-deps_n_disagreement.deepseek.md`
 (referred to below as **the 024 plan**); this document is the combined

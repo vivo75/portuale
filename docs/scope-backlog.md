@@ -727,8 +727,12 @@ merge, unmerge, world management, all real. The gap to a full drop-in is:
     slot conflicts keep the standing informational exit 0 --
     reconciled explicitly under the #19 Slice-5 entry above, not
     flipped), and the `_serialize_tasks`
-    frontier-timing at real-tree scale (L0 merge-order: ~19 probes,
-    correct set / slightly-off sequence).
+    frontier-timing at real-tree scale (L0 merge-order: 20 raw findings
+    -- 19 after the B5 gnome-shell cluster-A explanation -- correct set /
+    slightly-off sequence; the 025 B-series committed the trace harness
+    and cut the count from 22 with parity 0.800 -> 0.817, residue
+    adjudicated in `docs/025-tier2-closeout.deepseek.md` §11
+    F-B1/F-B3/F-B4 and #25).
 2. **The Part 2 tails** — F's `--info` host-state
    half, G's brush re-pin, §J's `--solver=` real-tree bugs (E's fetch
    ordering and §J's notices/markers/doc cuts shipped as Tier-1
