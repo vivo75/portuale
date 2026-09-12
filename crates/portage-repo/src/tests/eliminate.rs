@@ -101,6 +101,66 @@ fn slot_operator_bridge_entries_run_the_new_slot_arm() {
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// The replace-cp lookup matches the cp being decided: a decoy and a foreign pin
+/// never satisfy it.
+#[test]
+fn slot_operator_eliminate_rebuilds_lookup_matches_the_replace_cp() {
+    let dir = slotundo_temp_dir("161-elim");
+    slotundo_vdb(SlotundoVdbArgs {
+        dir: &dir,
+        name: "sounneed",
+        version: "1.0",
+        slot: "0/1",
+        rdepend: "soflag? ( dev-libs/souprov:0/1= )",
+        installed_use: "",
+    });
+    slotundo_vdb(SlotundoVdbArgs {
+        dir: &dir,
+        name: "souprov",
+        version: "1.0",
+        slot: "0/1",
+        rdepend: "",
+        installed_use: "",
+    });
+    // Same-category decoy sorting first: the exact lookup walks past it.
+    let decoy = dir.join("var/db/pkg/dev-libs/aadecoy-9.9");
+    fs::create_dir_all(&decoy).unwrap();
+    fs::write(decoy.join("CATEGORY"), "dev-libs\n").unwrap();
+    fs::write(decoy.join("SLOT"), "0\n").unwrap();
+    let repos = find_repos(&fixtures_root()).expect("fixture repos");
+    let provider = slotundo_provider_entry();
+    let entry = slotundo_rebuild_entry("sounneed", "1.0", "0", "1", &[("soflag", false)]);
+    let sounneed = ("dev-libs".to_string(), "sounneed".to_string());
+    let other_pin = RevDepPin {
+        cp: ("app-arch".to_string(), "aadecoy".to_string()),
+        atom: "=app-arch/aadecoy-1.0".to_string(),
+        raw_atom: "=app-arch/aadecoy-1.0".to_string(),
+        consumer: (
+            "app-arch".to_string(),
+            "aadecoy".to_string(),
+            "9.9".to_string(),
+        ),
+    };
+    let demoted = slot_operator_eliminate_rebuilds(SlotOperatorEliminateRebuildsArgs {
+        root: &dir,
+        repos: &repos,
+        entries: &[provider, entry],
+        replace: &BTreeSet::from([sounneed.clone()]),
+        slot_want: &HashMap::from([(sounneed.clone(), vec!["dev-libs/sounneed".to_string()])]),
+        reverse_pins: &[other_pin],
+        selective: false,
+        changed_slot: false,
+        top_level_cps: &HashSet::new(),
+        empty: false,
+    });
+    assert_eq!(
+        demoted,
+        BTreeSet::from([sounneed]),
+        "rule 8 demotes with a decoy installed and a foreign pin present"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// The synthesiser entry lands at the tree ebuild's slot, with no `[oldver]`
 /// bracket on agreement, and records the vdb repository.
 #[test]

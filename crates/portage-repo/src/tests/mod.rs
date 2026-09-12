@@ -38,6 +38,28 @@ fn fixture_binhost() -> portage_profile::BinRepo {
     }
 }
 
+/// Binpkg-multi-instance builds of one `cpv` are told apart only by `BUILD_ID`.
+/// Shared fixture for the three tests below, oldest first like a live index.
+fn multi_instance_entry_1010(
+    build_id: &str,
+    build_time: i64,
+    rdepend: &str,
+) -> HashMap<String, String> {
+    HashMap::from([
+        ("CPV".to_string(), "dev-libs/spectre-0.2.12".to_string()),
+        ("SLOT".to_string(), "0".to_string()),
+        ("KEYWORDS".to_string(), "amd64".to_string()),
+        ("REPO".to_string(), "gentoo".to_string()),
+        ("BUILD_ID".to_string(), build_id.to_string()),
+        ("BUILD_TIME".to_string(), build_time.to_string()),
+        ("RDEPEND".to_string(), rdepend.to_string()),
+        (
+            "PATH".to_string(),
+            format!("dev-libs/spectre/spectre-0.2.12-{build_id}.gpkg.tar"),
+        ),
+    ])
+}
+
 /// A binrepo whose `Packages` index lives only in the in-memory override
 /// table, under a pid+nanos-unique `sync_uri` so parallel tests never collide.
 fn in_memory_binhost_1010(

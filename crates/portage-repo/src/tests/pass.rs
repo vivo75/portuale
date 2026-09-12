@@ -44,6 +44,33 @@ fn run_pass_reinstall_with_only_repo_drift_carries_oldbest() {
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Top-level atoms matched by `package.provided` ride out sorted in argument
+/// order instead of resolving.
+#[test]
+fn run_pass_sorts_provided_atoms_in_argument_order() {
+    let dir = slotundo_temp_dir("161-run-prov");
+    let atoms = vec![
+        "dev-libs/paired".to_string(),
+        "dev-libs/sounneed".to_string(),
+    ];
+    let mut config = test_config();
+    config.package_provided = vec![
+        "dev-libs/paired-1.0".to_string(),
+        "dev-libs/sounneed-1.0".to_string(),
+    ];
+    let repos = find_repos(&fixtures_root()).expect("fixture repos");
+    let opts = CtxOpts161 {
+        backtrack_max: 10,
+        atoms: atoms.clone(),
+        ..Default::default()
+    };
+    let ctx = ctx_161(&dir, &config, repos, &opts);
+    let pass = run_pass(&ctx, &BacktrackParams::default(), true).expect("walk settles");
+    assert!(pass.entries.is_empty());
+    assert_eq!(pass.pprovided_atoms, atoms);
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// A masked candidate reports through the masked-dep channel.
 #[test]
 fn run_pass_reports_a_masked_candidate() {
@@ -68,6 +95,34 @@ fn run_pass_reports_a_masked_candidate() {
             .iter()
             .any(|r| r.category == "dev-libs" && r.package == "hardmaskedpkg"),
         "the masked candidate is reported"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// A REQUIRED_USE violation fails the walk with no entries at all.
+#[test]
+fn run_pass_fails_a_required_use_violation() {
+    let dir = slotundo_temp_dir("161-run-requse");
+    let atoms = vec!["dev-libs/requiredusebadpkg".to_string()];
+    let mut config = test_config();
+    config.package_use = vec![(
+        "dev-libs/requiredusebadpkg".to_string(),
+        vec!["foo".to_string()],
+    )];
+    let repos = find_repos(&fixtures_root()).expect("fixture repos");
+    let opts = CtxOpts161 {
+        backtrack_max: 10,
+        atoms: atoms.clone(),
+        ..Default::default()
+    };
+    let ctx = ctx_161(&dir, &config, repos, &opts);
+    let Err(err) = run_pass(&ctx, &BacktrackParams::default(), true) else {
+        panic!("expected a REQUIRED_USE violation");
+    };
+    let msg = format!("{err}");
+    assert!(
+        msg.contains("foo") && msg.contains("bar"),
+        "the violation names both flags, got: {msg}"
     );
     let _ = fs::remove_dir_all(&dir);
 }
@@ -168,6 +223,40 @@ fn run_pass_files_one_row_per_blocker_owner() {
         .map(|e| e.package.as_str())
         .collect();
     assert_eq!(rows.len(), 2);
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// An older staged binary loses to the newer tree ebuild under `--usepkg`.
+#[test]
+fn run_pass_newer_ebuild_beats_older_binary() {
+    let dir = slotundo_temp_dir("161-run-oldbin");
+    let atoms = vec!["dev-libs/sounneed".to_string()];
+    let mut config = test_config();
+    config.scanned_binpkgs = Some(vec![HashMap::from([
+        ("CPV".to_string(), "dev-libs/sounneed-0.9".to_string()),
+        ("SLOT".to_string(), "0".to_string()),
+        ("KEYWORDS".to_string(), "amd64".to_string()),
+        ("REPO".to_string(), "testrepo".to_string()),
+    ])]);
+    let repos = find_repos(&fixtures_root()).expect("fixture repos");
+    let opts = CtxOpts161 {
+        backtrack_max: 10,
+        atoms: atoms.clone(),
+        usepkg: true,
+        ..Default::default()
+    };
+    let ctx = ctx_161(&dir, &config, repos, &opts);
+    let pass = run_pass(&ctx, &BacktrackParams::default(), true).expect("walk settles");
+    assert_eq!(pass.entries.len(), 1);
+    assert_eq!(
+        pass.entries[0].source,
+        CandidateSource::Ebuild,
+        "the newer tree ebuild wins"
+    );
+    assert!(matches!(
+        pass.entries[0].outcome,
+        PretendOutcome::New { ref version } if version == "1.0"
+    ));
     let _ = fs::remove_dir_all(&dir);
 }
 

@@ -62,3 +62,46 @@ fn bind_slot_operator_token_prefers_graph_entries_then_installed() {
     );
     let _ = fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn bind_slot_operator_deps_binds_against_entries_then_installed() {
+    let dir = slotundo_temp_dir("bind");
+    slotundo_vdb(SlotundoVdbArgs {
+        dir: &dir,
+        name: "souprov",
+        version: "1.0",
+        slot: "0/1",
+        rdepend: "",
+        installed_use: "",
+    });
+    let provider = slotundo_provider_entry();
+
+    // Merge-bound entry wins (Portage models the post-merge vdb); a stale
+    // `:0/1=` falls back to installed (Portage enforces the built sub-slot).
+    assert_eq!(
+        bind_slot_operator_deps(
+            "dev-libs/souprov:= dev-libs/souprov:0/1=",
+            std::slice::from_ref(&provider),
+            &dir,
+        ),
+        "dev-libs/souprov:0/2= dev-libs/souprov:0/1="
+    );
+    assert_eq!(
+        bind_slot_operator_deps("dev-libs/souprov:=", &[], &dir),
+        "dev-libs/souprov:0/1="
+    );
+    // Left as-is when nothing satisfies the constraint (keeps the vdb information).
+    assert_eq!(
+        bind_slot_operator_deps(
+            ">=dev-libs/souprov-3:=",
+            std::slice::from_ref(&provider),
+            &dir,
+        ),
+        ">=dev-libs/souprov-3:="
+    );
+    assert_eq!(
+        bind_slot_operator_deps("dev-libs/souprov ( || )", &[], &dir),
+        "dev-libs/souprov ( || )"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}

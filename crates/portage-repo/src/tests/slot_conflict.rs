@@ -150,6 +150,70 @@ fn build_residual_keeps_the_highest_matching_installed() {
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Each pin folds into its own record only; a stray pin folds nowhere.
+#[test]
+fn build_residual_folds_each_pin_into_its_own_record() {
+    let dir = slotundo_temp_dir("161-resid-two");
+    let (repos, config, upgrade) = residual_161_setup(&dir);
+    let d = dir.join("var/db/pkg/dev-libs/sounneed-1.0");
+    fs::create_dir_all(&d).unwrap();
+    fs::write(d.join("CATEGORY"), "dev-libs\n").unwrap();
+    fs::write(d.join("SLOT"), "0/1\n").unwrap();
+    fs::write(d.join("repository"), "testrepo\n").unwrap();
+    let sounneed_merge = GraphEntry {
+        discovery: 0,
+        category: "dev-libs".into(),
+        package: "sounneed".into(),
+        outcome: PretendOutcome::New {
+            version: "1.0".into(),
+        },
+        slot: Some("0".into()),
+        sub_slot: Some("2".into()),
+        ..graph_entry("dev-libs", "sounneed", "1.0")
+    };
+    let pin_b = RevDepPin {
+        cp: ("dev-libs".to_string(), "sounneed".to_string()),
+        atom: "=dev-libs/sounneed-1.0:0/1".to_string(),
+        raw_atom: "=dev-libs/sounneed-1.0:0/1".to_string(),
+        consumer: (
+            "dev-libs".to_string(),
+            "conpkg".to_string(),
+            "1.0".to_string(),
+        ),
+    };
+    let pin_stray = RevDepPin {
+        cp: ("dev-libs".to_string(), "zzz".to_string()),
+        atom: "=dev-libs/souprov-1.0:0/1".to_string(),
+        raw_atom: "=dev-libs/souprov-1.0:0/1".to_string(),
+        consumer: ("dev-libs".to_string(), "zzz".to_string(), "9.9".to_string()),
+    };
+    let out = build_residual_slot_conflicts(BuildResidualSlotConflictsArgs {
+        repos: &repos,
+        config: &config,
+        root: &dir,
+        entries: &[upgrade, sounneed_merge],
+        slot_pullers: &HashMap::new(),
+        dropped: &[residual_161_pin(), pin_b, pin_stray],
+    });
+    assert_eq!(out.len(), 2);
+    for r in &out {
+        let atoms: Vec<&str> = r.instances[1]
+            .parents
+            .iter()
+            .map(|p| p.atom.as_str())
+            .collect();
+        assert_eq!(atoms.len(), 1, "exactly its own pin: {atoms:?}");
+        assert!(
+            !r.instances[1]
+                .parents
+                .iter()
+                .any(|p| p.parent_cpv.contains("zzz")),
+            "the stray pin folds nowhere"
+        );
+    }
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// Two identical pins fold one parent line, not two.
 #[test]
 fn build_residual_dedups_identical_pins() {
