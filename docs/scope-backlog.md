@@ -236,9 +236,9 @@ can't grow into these incrementally:
   multi-root graph (a `root` per dependency edge) stays a deliberate
   edge-by-edge approximation; a running-root entry's `PDEPEND` stays a
   target-`ROOT` concern (a permanent non-gap).
-- **Slot-operator rebuild v1 cuts — closed 2026-09-12 (#24 S1–S5), v2
-  carved out.** Investigated 2026-09-05: real's slot-operator machinery
-  is a *reconciliation* with an undo path
+- **Slot-operator rebuild v1 cuts — closed 2026-09-12 (#24 S1–S6 + S7
+  docs), v2 carved out.** Investigated 2026-09-05: real's slot-operator
+  machinery is a *reconciliation* with an undo path
   (`_slot_operator_update_probe`/`_backtrack`/etc.,
   `depgraph.py:2400-3200`); portuale's `slot_operator_rebuild_entries`
   fixpoint had no undo path at all, so "single-pass" and "no
@@ -263,18 +263,22 @@ can't grow into these incrementally:
   unbuilt `:=`/`:S=` dep (`slotchange-1`/`regslotchange` MATCH), real's
   `--changed-slot` rule 3 landed behaviour-neutrally, and two S2
   expectations were corrected live (the flag half has no `r`/edge in
-  real; conflict-mass is the update probe, not this one). **Still
+  real; conflict-mass is the update probe, not this one). S6 L0
+  validation: 120 probes, 96 clean, parity 0.800, `portuale/` outputs
+  byte-identical to the S0/S1 archives (the slot-op path does not fire
+  on the corpus) -- no regression, no new known-divergence. **Still
   cut:** bug 614390's `complete` case is a *selection* gap, not the
   undo (named bare `socc` resolves before meta's `=socc-1` through the
   already-installed fast path, which skips `resolved_slots`; real's
   `_add_pkg` slot-parent check catches it — #36 overlap); the v2 probe
-  family `#24b`–`#24e` (update probe + `check_reverse_dependencies`,
+  family `#24b`–`#24f` (update probe + `check_reverse_dependencies`,
   `slot_operator_mask_built`, `prune_rebuilds`,
-  `_slot_conflict_backtrack_abi`) and `IUSE_EFFECTIVE` in the
-  built-dep domain. `--changed-slot` itself ships standalone
-  (`slot_changed`), and the unbuilt probe keeps the pre-existing
-  `--ignore-built-slot-operator-deps` / `--rebuild-if-new-slot=n` scan
-  gates (a documented narrowing vs real, no v1 oracle).
+  `_slot_conflict_backtrack_abi`, the in-walk unsatisfied probe) and
+  `IUSE_EFFECTIVE` in the built-dep domain. `--changed-slot` itself
+  ships standalone (`slot_changed`), and the unbuilt probe keeps the
+  pre-existing `--ignore-built-slot-operator-deps` /
+  `--rebuild-if-new-slot=n` scan gates (a documented narrowing vs real,
+  no v1 oracle).
 
 - **DFS-partial abort path (#19) — Gate-0 decisions recorded 2026-09-11
   (Slice 1 oracle: `docs/abort-path-spec.md`, fixtures

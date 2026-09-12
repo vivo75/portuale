@@ -173,6 +173,16 @@ per-slice ledger) and `git log`. The per-slice "current state" narrative
 that used to live here is snapshotted at
 [`history/agent-context-current-state-2026-09-10.md`](history/agent-context-current-state-2026-09-10.md).
 
+**2026-09-12 memory note:** backlog #24 (slot-operator rebuild undo
+path, S1–S7) is **closed** — the rebuild is a walked graph node, the
+`_eliminate_rebuilds` undo and the `_slot_change_probe` slot-move
+detector are in, L0 is regression-free, and the v2 residue
+(`#24b`–`#24f`, `IUSE_EFFECTIVE`, `--rebuild-if-*` through the same
+path) is filed in `scope-backlog.md` §A with its upstream tests. The
+one open judgment call (G0.4's S4 acceptance bar, `docs/024-S4-review.md`
+D-1) is recorded in `docs/024-oracle.md` §"Verdict", awaiting the
+owner.
+
 For what is **genuinely still open** — real portage behaviour not ported
 to either side, the deliberate cuts, the standing non-goals — see
 **[`scope-backlog.md`](scope-backlog.md)** (Part 2 = remaining work,

@@ -584,3 +584,63 @@ S0 archive (`gentoo` @ `11c58b7a`, `buildovl` @ `3b1df681`, `porttest` @
 
 Finding log: `TEST/findings/l0.md` §"Slice run: backlog #24 S1–S5
 slot-operator rebuild (2026-09-12)".
+
+## Verdict (S7 closure, 2026-09-12)
+
+**Every case the plan scoped to v1 MATCHes real, Rust == Python
+byte-for-byte.** The slot-operator contract suite holds four strict
+xfails; each is a v2/re-scoped shape with its item number, not a v1
+gap:
+
+| case | verdict | where |
+|---|---|---|
+| a522084 (bug 522084) | MATCH | S1 (complete gate) |
+| rebuild-1 (bug 522652) | MATCH | S3, `[A-2, B-0, C-0]` |
+| unsat (bug 439694) case 2 | MATCH | S1 |
+| unsat case 1 | strict-xfail, v2 `#24f` | in-walk `_slot_operator_unsatisfied_probe` (3447-3454) |
+| slotchange cases 1, 2, 4 | MATCH | case 1/4 S5, case 2 S2 |
+| regslotchange | MATCH | S5 |
+| complete (bug 614390) | strict-xfail, backlog #36 | selection gap (bare `socc`), not the undo -- S4 finding |
+| revdeps (bug 584626) + libgit2 guard | MATCH | S2/S3 |
+| parentdown (bug 528610) | MATCH `[]` (regression guard) | S2/S3/S4 |
+| missedupd (bug 743115) | strict-xfail, v2 `#24d` | `prune_rebuilds` |
+| autounmask (ignore-built) | MATCH | S2/S3 |
+| exclusive / unsolved | NOT TRANSLATABLE, v2 | `[uninstall]` display / USE-gated cycle solutions |
+| runtime_pkg_mask | MATCH | S3 |
+| bdeps | MATCH | S3 (binary-rejection half `#24c`) |
+| required_use (bug 523048) | MATCH | S3; the planned v2 item is not needed |
+| conflict-rebuild (bug 439688) | MATCH | S3 |
+| conflict-mass (bug 486580) | strict-xfail, v2 `#24b` | live-verified: update probe, not `_slot_change_probe` (S5 correction) |
+| missed_update-Qt / blocker | OUT | upstream `xfail` |
+| rebuild-2 | NOT TRANSLATABLE, v2 `#24c` | needs ad-hoc binpkg metadata |
+| slotundo-cascade | MATCH | S3 |
+| slotundo-unnecessary | MATCH | S4 |
+| slotundo-changed-slot (no flag / flag) | MATCH / MATCH | S4 guard; S5 pinned real's actual no-`r`/no-block flag shape |
+| slotundo-rebind | MATCH | S3 |
+
+Definition-of-done checks: `emerge -p app-misc/A` prints `[A-2, B-0]`
+and `-p -uD @world` the same (S1/S3); `slotundo-unnecessary` is not
+rebuilt (S4); `slotundo-changed-slot` is rebuilt under `--changed-slot`
+(S5, as a standalone reinstall, matching real); `parentdown` stays `[]`;
+the default solver has no synthesised slot-op `GraphEntry` left (the
+`--solver=` bridges keep the documented legacy wrapper); rebuilt rows
+carry real `deps` and merge order (real's `required_by` is the internal
+auto-set arg, so empty is faithful); Rust unit tests cover the binder,
+the nine undo rules and the S5 probe. L0 (§S6) shows no regression.
+
+Carved out to v2, per the plan and the slices' findings: `#24b`
+(`_slot_operator_update_probe` + `_slot_operator_check_reverse_dependencies`,
+bugs 584626/528610/612772/612874/460304/486580), `#24c`
+(`slot_operator_mask_built`, bug 652938; all binary halves), `#24d`
+(`prune_rebuilds`, bug 743115), `#24e` (`_slot_conflict_backtrack_abi`,
+bug 439688 slot-conflict variant), `#24f` (in-walk unsatisfied probe,
+bug 439694), `IUSE_EFFECTIVE` in the built-dep domain
+(`dbapi/__init__.py:238-276`), and `--rebuild-if-*` through the same
+path (G0.6). `--debug` narration stays cut (G0.7).
+
+Surfaced for the owner, not decided here: `docs/024-S4-review.md` D-1
+notes the plan's G0.4 made bug 614390 the S4 acceptance bar and
+recommends accepting S4 as shipped (the undo is demonstrably correct on
+that shape; the residue is a selection gap that belongs to backlog #36).
+The slice commits and this file record the recommendation; flipping the
+G0.4 wording itself is the owner's call.

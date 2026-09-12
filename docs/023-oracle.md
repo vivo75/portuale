@@ -72,7 +72,8 @@ nodes, backlog #25). Phase C still ships, re-scoped:
   C-scope change.
 
 Non-#23 residue filed, not driving C: the a522084 `B-0` rebuild miss
-(#24 slot-operator rebuild undo path).
+(#24 slot-operator rebuild undo path; **closed** -- see the row above
+and `docs/024-oracle.md`).
 
 ## Verdict: CLOSED with #23 (2026-09-11)
 
@@ -80,7 +81,7 @@ C2+C3+C4 shipped, all green (contract 1124 + 3 xfailed, zero moves from
 the C2 baseline; L0 byte-identical post-grouping). Final table: every
 case matches except three filed divergences, each with a named home
 outside #23 -- btnr (needs #25 installed-nomerge instances before the
-search can see the conflict), a522084-`B-0` (needs #24 `:=` rebuild),
-mg3-bt1 (needs #36 mask-aware selection fallback). C4 acceptance met:
-no table entry moved down; mg2 + 375573-unit + mg3-default are new
-matches; the rest held.
+search can see the conflict), a522084-`B-0` (needs #24 `:=` rebuild;
+**shipped 2026-09-12, row MATCH**), mg3-bt1 (needs #36 mask-aware
+selection fallback). C4 acceptance met: no table entry moved down;
+mg2 + 375573-unit + mg3-default are new matches; the rest held.
