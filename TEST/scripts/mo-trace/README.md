@@ -30,7 +30,9 @@ MO_SEL iter=7 retlist=3 alive=42 asap=1 prefer_asap=0 drop_satisfied=1
 
 - `retlist` -- merge packages selected so far (real appends only merges)
 - `alive` -- non-uninstall packages still in the graph (post-prune)
-- `asap` -- real's `asap_nodes` length
+- `asap` -- the bracketed list of live `asap_nodes` cpvs (contents, not a
+  count: one extra lingering node is what firefox's clang-runtime
+  divergence turned out to be)
 - `ig` -- `ignore_priority.__name__` (real) / the same name ported
 - `pick` -- the nodes selected this iteration, `m:cat/pkg-ver` for a
   merge-bound node, `n:cat/pkg-ver` for an installed nomerge one (the

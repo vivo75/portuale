@@ -6,7 +6,7 @@ the comparator half of the harness described in
 Both streams carry one line per `_serialize_tasks`/`select_nodes`
 iteration, same field order:
 
-    <PREFIX> iter=N retlist=R alive=A asap=S prefer_asap=0|1
+    <PREFIX> iter=N retlist=R alive=A asap=[cpv ...] prefer_asap=0|1
              drop_satisfied=0|1 ig=NAME pick=cat/pkg-ver ...
 
 This walks the two streams in order and reports the first iteration whose
@@ -17,6 +17,11 @@ list the binary comparator already flags.
 Usage:
 
     align-traces.py REAL.trace PORTUALE.trace
+    align-traces.py --merge-only REAL.trace PORTUALE.trace
+
+`--merge-only` skips the iteration walk (which is sensitive to nomerge
+ordering noise) and diffs just the ordered merge picks -- the actual
+merge-list sequence.
 
 Exit: 0 aligned, 1 divergence or length mismatch, 2 usage.
 """
@@ -42,7 +47,7 @@ LINE_RE = re.compile(
             r"iter=(\d+)",
             r"retlist=(\d+)",
             r"alive=(\d+)",
-            r"asap=(\d+)",
+            r"asap=\[([^\]]*)\]",
             r"prefer_asap=(\d+)",
             r"drop_satisfied=(\d+)",
             r"ig=(\S+)",
@@ -96,13 +101,55 @@ def report_nodes(real_nodes, ptl_nodes):
     return False
 
 
+def merge_sequence(rows):
+    """The ordered merge picks (`m:` items) across the whole trace --
+    exactly the order they were appended to `retlist`, i.e. the merge
+    list real/portuale are actually compared on. Nomerges are skipped so
+    an irrelevant nomerge-ordering difference does not mask the first
+    real merge-order divergence."""
+    seq = []
+    for row in rows:
+        for item in row["pick"].split():
+            if item.startswith("m:"):
+                seq.append(item)
+    return seq
+
+
+def report_merges(real, ptl):
+    r, p = merge_sequence(real), merge_sequence(ptl)
+    print(f"merge picks: real {len(r)}  portuale {len(p)}")
+    for i in range(min(len(r), len(p))):
+        if r[i] != p[i]:
+            lo = max(0, i - 2)
+            print(f"\nfirst merge-order divergence at merge index {i}:")
+            for j in range(lo, i):
+                print(f"    = {r[j]}")
+            print(f"  real     : {r[i]}")
+            print(f"  portuale : {p[i]}")
+            if len(r) > i + 1 or len(p) > i + 1:
+                print(f"  next real     : {r[i+1] if i+1 < len(r) else '<end>'}")
+                print(f"  next portuale : {p[i+1] if i+1 < len(p) else '<end>'}")
+            return 1
+    if len(r) != len(p):
+        print(f"\nmerge sequences agree on the common prefix; lengths differ "
+              f"(real {len(r)} vs portuale {len(p)})")
+        return 1
+    print("merge sequences align")
+    return 0
+
+
 def main(argv):
+    merge_only = "--merge-only" in argv
+    argv = [a for a in argv if a != "--merge-only"]
     if len(argv) != 2:
         print(__doc__)
         return 2
     real, real_nodes = parse(argv[0])
     ptl, ptl_nodes = parse(argv[1])
     node_diff = report_nodes(real_nodes, ptl_nodes)
+    if merge_only:
+        rc = report_merges(real, ptl)
+        return 1 if node_diff or rc else 0
     print(f"real iterations: {len(real)}   portuale iterations: {len(ptl)}")
     n = min(len(real), len(ptl))
     for i in range(n):

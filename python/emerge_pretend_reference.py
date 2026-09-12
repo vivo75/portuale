@@ -9910,19 +9910,48 @@ def _build_merge_digraph(entries, top_level_atoms, root):
         for ei, edge in enumerate(_entry_deps(i)):
             if ei in alt_suppressed[i]:
                 continue
+            # B2: real resolves every dep atom to a single package
+            # (_select_pkg_highest_available) before _add_pkg records the
+            # edge. A bare multi-slot atom (llvm-runtimes/clang-runtime[...]
+            # in clang-common's PDEPEND) matches every scheduled slot;
+            # edging it to all of them gave the older slot an extra
+            # runtime_post parent, which promoted it into asap and split
+            # the clang-runtime drain. Among the matches prefer a
+            # merge-bound entry (the node real's scheduler graph actually
+            # edges to when the cp is being rebuilt/updated), then the
+            # highest version; first on ties. Mirrors merge_order.rs.
+            def _merge_bound(e):
+                return e[2][0] not in ("already_installed", "no_visible_candidate")
+
+            best = None
             for j in cp_indices.get(edge["cp"], ()):
                 if not edge_matches(edge["atom"], j):
                     continue
-                # Real _add_pkg: a direct self-edge is dropped unless it is
-                # an unsatisfied build-time dependency, "since otherwise it
-                # can skew the merge order calculation in an unwanted way"
-                # (depgraph.py:3765-3770).
-                sat = satisfied(edge, j)
-                if i == j and not (edge["priority"]["buildtime"] and not sat):
+                if best is None:
+                    best = j
                     continue
-                priority = dict(edge["priority"])
-                priority["satisfied"] = sat
-                g.add_edge(i, j, priority)
+                jb, bb = _merge_bound(entries[j]), _merge_bound(entries[best])
+                if jb != bb:
+                    better = jb
+                else:
+                    bv = _entry_version(entries[best]) or ""
+                    jv = _entry_version(entries[j]) or ""
+                    better = (vercmp(jv, bv) or 0) > 0
+                if better:
+                    best = j
+            if best is None:
+                continue
+            j = best
+            # Real _add_pkg: a direct self-edge is dropped unless it is
+            # an unsatisfied build-time dependency, "since otherwise it
+            # can skew the merge order calculation in an unwanted way"
+            # (depgraph.py:3765-3770).
+            sat = satisfied(edge, j)
+            if i == j and not (edge["priority"]["buildtime"] and not sat):
+                continue
+            priority = dict(edge["priority"])
+            priority["satisfied"] = sat
+            g.add_edge(i, j, priority)
     # Fallback edges from required_by for owner relationships the forward
     # walk has no deps entry for.
     for j, e in enumerate(entries):

@@ -6,7 +6,7 @@
 The injected block prints one line per selection iteration, just before
 real removes the selected nodes:
 
-    RT_SEL iter=<N> retlist=<R> alive=<A> asap=<S> prefer_asap=<0|1>
+    RT_SEL iter=<N> retlist=<R> alive=<A> asap=[<cpv ...>] prefer_asap=<0|1>
            drop_satisfied=<0|1> ig=<name> pick=<cat/pkg-ver ...>
 
 with exactly the field order portuale's `PORTUALE_MO_SEL` line uses
@@ -69,15 +69,20 @@ TRACE_BLOCK = (
                     for _mo_n in selected_nodes
                     if isinstance(_mo_n, Package) and _mo_n.operation != "uninstall"
                 ]
+                _mo_asap = [
+                    ("m:" if _mo_n.operation == "merge" else "n:") + _mo_n.cpv
+                    for _mo_n in asap_nodes
+                    if mygraph.contains(_mo_n)
+                ]
                 _mo_ig = getattr(ignore_priority, "__name__", "none") or "none"
                 _mo_sys.stderr.write(
-                    "RT_SEL iter=%d retlist=%d alive=%d asap=%d "
+                    "RT_SEL iter=%d retlist=%d alive=%d asap=[%s] "
                     "prefer_asap=%d drop_satisfied=%d ig=%s pick=%s\\n"
                     % (
                         _mo_iter,
                         _mo_retlist,
                         _mo_alive,
-                        len(asap_nodes),
+                        " ".join(_mo_asap),
                         int(prefer_asap),
                         int(drop_satisfied),
                         _mo_ig,

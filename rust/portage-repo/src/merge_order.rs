@@ -885,21 +885,25 @@ fn mo_sel_cpv(e: &GraphEntry, installed: bool) -> String {
 
 /// One `MO_SEL ` line (`PORTUALE_MO_SEL`) -- pure so the format is
 /// unit-pinned. Field order is the shared harness contract:
-/// `iter retlist alive asap prefer_asap drop_satisfied ig pick`.
+/// `iter retlist alive asap prefer_asap drop_satisfied ig pick`; `asap`
+/// is the bracketed list of `asap_nodes` cpvs (a count was not enough:
+/// firefox's clang-runtime divergence is exactly one extra lingering
+/// asap node on portuale's side).
 #[allow(clippy::too_many_arguments)]
 fn mo_sel_trace_line(
     iter: usize,
     retlist: usize,
     alive: usize,
-    asap: usize,
+    asap: &[String],
     prefer_asap: bool,
     drop_satisfied: bool,
     ig: Option<Ignore>,
     pick: &[String],
 ) -> String {
     format!(
-        "MO_SEL iter={iter} retlist={retlist} alive={alive} asap={asap} \
+        "MO_SEL iter={iter} retlist={retlist} alive={alive} asap=[{}] \
          prefer_asap={} drop_satisfied={} ig={} pick={}",
+        asap.join(" "),
         prefer_asap as u8,
         drop_satisfied as u8,
         ignore_name(ig),
@@ -1592,10 +1596,44 @@ fn build_digraph(entries: &[GraphEntry], top_level_atoms: &[String], root: &Path
             else {
                 continue;
             };
+            // B2: real resolves every dep atom to a *single* package
+            // (`_select_pkg_highest_available`) before `_add_pkg` records
+            // the edge. A bare multi-slot atom (`llvm-runtimes/
+            // clang-runtime[...]` in clang-common's PDEPEND) matches
+            // every scheduled slot, and edging it to all of them gave the
+            // older slot an extra `runtime_post` parent -- which promoted
+            // it into `asap` and split the clang-runtime drain. Among the
+            // matches prefer a merge-bound entry (the node real's
+            // scheduler graph actually edges to when the cp is being
+            // rebuilt/updated), then the highest version; first on ties.
+            let merge_bound = |e: &GraphEntry| {
+                !matches!(
+                    e.outcome,
+                    PretendOutcome::AlreadyInstalled { .. } | PretendOutcome::NoVisibleCandidate
+                )
+            };
+            let mut best: Option<usize> = None;
             for &j in idxs {
                 if !edge_matches(&edge.atom, j) {
                     continue;
                 }
+                best = Some(match best {
+                    None => j,
+                    Some(b) => {
+                        let better = match (merge_bound(&entries[j]), merge_bound(&entries[b])) {
+                            (true, false) => true,
+                            (false, true) => false,
+                            _ => {
+                                let bv = outcome_version(&entries[b]).unwrap_or("");
+                                let jv = outcome_version(&entries[j]).unwrap_or("");
+                                portage_versions::vercmp(jv, bv).is_some_and(|o| o > 0)
+                            }
+                        };
+                        if better { j } else { b }
+                    }
+                });
+            }
+            if let Some(j) = best {
                 // Real `_add_pkg`: a direct self-edge is dropped unless
                 // it is an unsatisfied build-time dependency, "since
                 // otherwise it can skew the merge order calculation in
@@ -2408,13 +2446,18 @@ fn select_nodes(g: &mut Digraph, entries: &[GraphEntry], root: &Path) -> Vec<usi
                 .iter()
                 .map(|&i| mo_sel_cpv(&entries[i], g.installed[i]))
                 .collect();
+            let asap_cpvs: Vec<String> = asap
+                .iter()
+                .filter(|&&i| g.alive[i])
+                .map(|&i| mo_sel_cpv(&entries[i], g.installed[i]))
+                .collect();
             eprintln!(
                 "{}",
                 mo_sel_trace_line(
                     mo_iter,
                     retlist_merges,
                     alive,
-                    asap.len(),
+                    &asap_cpvs,
                     prefer_asap,
                     drop_satisfied,
                     used_ig,
@@ -2744,7 +2787,7 @@ mod tests {
             7,
             3,
             42,
-            1,
+            &["m:llvm-runtimes/clang-runtime-22".to_string()],
             false,
             true,
             Some(n_ignore_runtime),
@@ -2752,12 +2795,12 @@ mod tests {
         );
         assert_eq!(
             line,
-            "MO_SEL iter=7 retlist=3 alive=42 asap=1 prefer_asap=0 \
-             drop_satisfied=1 ig=ignore_runtime pick=m:dev-libs/a-1 n:dev-libs/b-2"
+            "MO_SEL iter=7 retlist=3 alive=42 asap=[m:llvm-runtimes/clang-runtime-22] \
+             prefer_asap=0 drop_satisfied=1 ig=ignore_runtime pick=m:dev-libs/a-1 n:dev-libs/b-2"
         );
         assert_eq!(
-            mo_sel_trace_line(1, 0, 5, 0, true, false, None, &[]),
-            "MO_SEL iter=1 retlist=0 alive=5 asap=0 prefer_asap=1 \
+            mo_sel_trace_line(1, 0, 5, &[], true, false, None, &[]),
+            "MO_SEL iter=1 retlist=0 alive=5 asap=[] prefer_asap=1 \
              drop_satisfied=0 ig=none pick="
         );
     }

@@ -662,3 +662,33 @@ parity 0.800 -> 0.817, order 22 -> 20**, no new divergence;
 (the docbook NS row moved to real's position), `net-misc/networkmanager`
 moved one row (still divergent). Python reference mirrored; the full
 contract suite stays green.
+
+### F-B2 — B2: a bare multi-slot atom drew an edge to every slot (2026-09-12)
+
+**Status:** fixed; L0 measurement below.
+
+The firefox/thunderbird divergence was *not* the bias tie-break the plan
+assumed. The `MO_SEL` trace (with the asap list as contents, not a
+count) showed portuale holding **two** `asap_nodes` where real held one:
+`llvm-runtimes/clang-runtime-21.1.8` was promoted (PDEPEND-asap, bug
+180045) on portuale's side only. Root cause: `llvm-core/clang-common-22`'s
+ebuild `PDEPEND` ends with the **unslotted** atom
+`llvm-runtimes/clang-runtime[...]`; `build_digraph`'s forward-edge loop
+edged that atom to *every* scheduled slot of the cp, giving
+`clang-runtime-21` an extra `runtime_post` parent. Real resolves each
+atom to a single package (`_select_pkg_highest_available`) before
+`_add_pkg` records the edge.
+
+Fix: the forward-edge loop now narrows a multi-match atom to a single
+entry -- preferring a merge-bound entry (the node real's scheduler graph
+edges to when the cp is being rebuilt), then the highest version, first
+on ties -- mirrored in the Python reference. The first refinement
+(highest version only) fixed firefox/thunderbird (divergence #29 -> #37)
+but transposed `sys-apps/portage`/`app-portage/gentoolkit` in
+`MULTI_deep-update-world`; the merge-bound preference restores that probe
+and keeps the firefox win.
+
+Final L0 (`TEST/logs/l0-20260912T205626Z`): clean 98, parity 0.817,
+order 20 -- the B1 topline with no new divergence; firefox #29 -> #37 and
+thunderbird #30 -> #38 (both now the `nasm`/`freetype` Lever-1 timing
+family).
