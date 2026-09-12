@@ -1494,6 +1494,28 @@ mod tests_164 {
         ));
     }
 
+    #[test]
+    fn mask_masked_only_164_invalid_is_never_mask_only() {
+        // Same shape as the keyword leg: an `invalid` verdict disqualifies the
+        // "mask alone" claim even though the mask gate itself is open.
+        let config = portage_profile::Config {
+            accept_keywords: HashSet::from(["amd64".to_string()]),
+            package_mask: vec!["dev-libs/maskinvalid".to_string()],
+            ..Default::default()
+        };
+        let mut invalid = binary_164("1.0", "", &[]);
+        invalid.binary_deps = HashMap::from([(
+            "RDEPEND".to_string(),
+            "bogusflag? ( dev-libs/foo )".to_string(),
+        )]);
+        assert!(!mask_masked_only(
+            &invalid,
+            "dev-libs",
+            "maskinvalid",
+            &config
+        ));
+    }
+
     /// A candidate masked by LICENSE alone (Portage's `LicenseManager`).
     #[test]
     fn license_masked_only_164_needs_a_license_and_only_a_license() {

@@ -149,3 +149,101 @@ fn slot_operator_slot_change_probe_schedules_a_moved_installed_child() {
 
     let _ = fs::remove_dir_all(&dir);
 }
+
+/// The binary arm masks only when the same-version ebuild is visible (Portage's
+/// `_slot_change_probe`).
+#[test]
+fn slot_operator_slot_change_probe_keeps_a_binary_whose_ebuild_is_invisible() {
+    use md5::Digest as _;
+    use std::fmt::Write as _;
+    let base = slotundo_temp_dir("243-probe");
+    let repo = base.join("repo");
+    let write_pkg = |cp: &str, slot: &str, keywords: &str, rdepend: &str| {
+        let (cat, pkg) = cp.split_once('/').expect("category/package");
+        let dir = repo.join(cat).join(pkg);
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut body = format!(
+            "EAPI=8\nDESCRIPTION=\"243 probe\"\nSLOT=\"{slot}\"\nKEYWORDS=\"{keywords}\"\n"
+        );
+        if !rdepend.is_empty() {
+            writeln!(body, "RDEPEND=\"{rdepend}\"").unwrap();
+        }
+        std::fs::write(dir.join(format!("{pkg}-1.0.ebuild")), &body).unwrap();
+        let md5 = format!("{:x}", md5::Md5::digest(body.as_bytes()));
+        let mut entry = "DEFINED_PHASES=-\nDESCRIPTION=243 probe\nEAPI=8\n".to_string();
+        if !rdepend.is_empty() {
+            writeln!(entry, "RDEPEND={rdepend}").unwrap();
+        }
+        writeln!(entry, "KEYWORDS={keywords}\nSLOT={slot}\n_md5_={md5}").unwrap();
+        let cachedir = repo.join("metadata/md5-cache").join(cat);
+        std::fs::create_dir_all(&cachedir).unwrap();
+        std::fs::write(cachedir.join(format!("{pkg}-1.0")), entry).unwrap();
+    };
+    write_pkg(
+        "dev-libs/visparent",
+        "0",
+        "amd64",
+        "dev-libs/stalechild:= dev-libs/hiddenchild:=",
+    );
+    // Both trees moved 0/1 -> 0/2; only `hiddenchild`'s ebuild is masked.
+    write_pkg("dev-libs/stalechild", "0/2", "amd64", "");
+    write_pkg("dev-libs/hiddenchild", "0/2", "~amd64", "");
+    let repos = vec![RepoConfig {
+        name: "testrepo".to_string(),
+        location: repo.clone(),
+        priority: 0,
+        is_main: true,
+        masters: vec![],
+        profile_formats: vec![],
+        cache_formats: vec![],
+        aliases: vec![],
+        sync_type: None,
+        sync_uri: None,
+        volatile: false,
+        module_specific_options: vec![],
+    }];
+    let parent = GraphEntry {
+        discovery: 0,
+        outcome: PretendOutcome::New {
+            version: "1.0".into(),
+        },
+        ..graph_entry("dev-libs", "visparent", "1.0")
+    };
+    let binary_child = |package: &str| GraphEntry {
+        discovery: 0,
+        outcome: PretendOutcome::New {
+            version: "1.0".into(),
+        },
+        slot: Some("0".into()),
+        sub_slot: Some("1".into()),
+        source: CandidateSource::Binary,
+        ..graph_entry("dev-libs", package, "1.0")
+    };
+    let entries = vec![
+        parent,
+        binary_child("stalechild"),
+        binary_child("hiddenchild"),
+    ];
+    let empty = BTreeSet::new();
+    let mut scheduled = BTreeSet::new();
+    let mut masked: BTreeSet<(String, String, String)> = BTreeSet::new();
+    slot_operator_slot_change_probe(SlotOperatorSlotChangeProbeArgs {
+        root: &base,
+        repos: &repos,
+        entries: &entries,
+        undone: &empty,
+        scheduled: &mut scheduled,
+        excluded: &[],
+        masked: &mut masked,
+        config: &test_config(),
+    });
+    assert_eq!(
+        masked,
+        BTreeSet::from([(
+            "dev-libs".to_string(),
+            "stalechild".to_string(),
+            "1.0".to_string()
+        )]),
+        "the visible stale binary is masked, the one behind a hidden ebuild is kept"
+    );
+}
