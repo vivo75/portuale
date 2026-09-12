@@ -54,12 +54,20 @@ LINE_RE = re.compile(
 
 def parse(path):
     rows = []
+    nodes = None
     with open(path, errors="replace") as f:
         for line in f:
-            m = LINE_RE.match(line.strip())
+            s = line.strip()
+            if s.startswith("MO_NODES "):
+                if nodes is None:
+                    m = re.match(r"MO_NODES count=(\d+)\s*(.*)$", s)
+                    if m:
+                        nodes = m.group(2).split()
+                continue
+            m = LINE_RE.match(s)
             if m:
                 rows.append(dict(zip(FIELDS, m.groups())))
-    return rows
+    return rows, nodes or []
 
 
 def render(row):
@@ -70,11 +78,31 @@ def render(row):
     )
 
 
+def report_nodes(real_nodes, ptl_nodes):
+    """Name a post-prune graph membership difference (the gtk:4
+    alive=398 vs 395 gap) before the iteration walk."""
+    if not real_nodes and not ptl_nodes:
+        return False
+    rs, ps = set(real_nodes), set(ptl_nodes)
+    print(f"graph nodes: real {len(real_nodes)}  portuale {len(ptl_nodes)}")
+    if rs != ps:
+        for label, diff in (("only in real", sorted(rs - ps)), ("only in portuale", sorted(ps - rs))):
+            if diff:
+                print(f"  {label} ({len(diff)}):")
+                for n in diff:
+                    print(f"    {n}")
+        return True
+    print("  node sets match")
+    return False
+
+
 def main(argv):
     if len(argv) != 2:
         print(__doc__)
         return 2
-    real, ptl = parse(argv[0]), parse(argv[1])
+    real, real_nodes = parse(argv[0])
+    ptl, ptl_nodes = parse(argv[1])
+    node_diff = report_nodes(real_nodes, ptl_nodes)
     print(f"real iterations: {len(real)}   portuale iterations: {len(ptl)}")
     n = min(len(real), len(ptl))
     for i in range(n):
@@ -91,6 +119,9 @@ def main(argv):
             print(f"\nportuale trace ended first; next real line: {render(real[n])}")
         else:
             print(f"\nreal trace ended first; next portuale line: {render(ptl[n])}")
+        return 1
+    if node_diff:
+        print("\n(nodes differ but the selected sequences align)")
         return 1
     print("traces align through every iteration")
     return 0

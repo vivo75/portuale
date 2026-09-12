@@ -605,3 +605,42 @@ the 2026-09-09 note recorded as "post-prune al=301 vs 298" -- before any
 `retlist`/`ig` difference. The `pick=` field marks each selected node
 `m:` (merge) / `n:` (nomerge), so which *kind* of leaf drains first is
 visible at the first divergent iteration: that is B1's entry point.
+
+### F-B1 — B1 round 1: the closure's `by_cp` drops every installed slot but one (2026-09-12)
+
+**Status:** root cause identified with the harness; fix (round 2) not
+landed.
+
+With the `MO_NODES` snapshot the aligner now names the gtk:4 graph
+difference exactly: portuale's post-prune graph is 395 nodes against
+real's 398, and the three missing nodes are
+`app-text/docbook-xml-dtd-{4.2-r3,4.4-r3,4.5-r2}` -- installed slots
+whose parents real has:
+
+| missing node | parent edge (real's dump) |
+|---|---|
+| `docbook-xml-dtd-4.2-r3` | `app-text/xmlto-0.0.28-r11` (installed, optional + runtime + buildtime) |
+| `docbook-xml-dtd-4.4-r3` | `sys-apps/dbus-1.16.2` (installed, optional) |
+| `docbook-xml-dtd-4.5-r2` | `sys-apps/systemd-260.1-r2` (installed, optional) |
+
+`xmlto`'s live metadata really does name `app-text/docbook-xml-dtd:4.2`
+in both DEPEND and RDEPEND, and portuale's closure *does* visit xmlto --
+so the edge is not missing. The dedup is: `add_installed_dependency_closure`
+builds `by_cp` as `cp -> one InstalledPackage` (last wins) and keys
+`present`/`add_node` on `(category, package)` only. The first
+`docbook-xml-dtd` node added (4.1.2-r7, via gtk's explicit `:4.1.2` dep)
+marks the cp present, so the `:4.2=`, `:4.4=`, `:4.5=` edges of xmlto,
+dbus and systemd all resolve to the *same* cp key and are skipped --
+real's `_complete_graph` keeps every installed slot. This is the
+"membership wrong, count nearly equal" residue from the 2026-09-09 note
+(301 vs 298), now named and reproducible.
+
+The A1 append gate is *not* the cause: with
+`PORTUALE_DYNAMIC_DEPS_APPEND=1` the node set is unchanged (395); the
+live-vs-raw layer is irrelevant because the parent edge is present in
+both. B1 round 2: key the closure's `present`/`add_node` by
+`(cat, pkg, slot)` (or cpv), selecting the installed version the edge's
+atom actually matches, and let `build_digraph`'s existing per-slot
+`edge_matches` narrow the edges (slice 6). Any such change moves the
+scheduler graph, so it needs its own L0 run before the next probe's
+order can be re-read.

@@ -112,6 +112,19 @@ def patch(text):
     text, n = COUNTER_RE.subn(
         lambda m: (
             "        _mo_iter = 0\n"
+            + "        try:\n"
+            + "            import sys as _mo_sys2\n"
+            + "\n"
+            + "            _mo_nodes = [\n"
+            + "                ('m:' if _mo_n.operation == 'merge' else 'n:') + _mo_n.cpv\n"
+            + "                for _mo_n in mygraph\n"
+            + "                if isinstance(_mo_n, Package) and _mo_n.operation != 'uninstall'\n"
+            + "            ]\n"
+            + "            _mo_sys2.stderr.write(\n"
+            + '                "MO_NODES count=%d %s\\n" % (len(_mo_nodes), " ".join(_mo_nodes))\n'
+            + "            )\n"
+            + "        except Exception:\n"
+            + "            pass\n"
             + m.group(1)
             + "            _mo_iter += 1\n"
             + m.group(2)
@@ -130,7 +143,13 @@ def unpatch(text):
     if BEGIN not in text:
         return text, False
     text = re.sub(re.escape(BEGIN) + r".*?" + re.escape(END) + "\n", "", text, flags=re.S)
-    text = text.replace("        _mo_iter = 0\n", "", 1)
+    text = re.sub(
+        r"        _mo_iter = 0\n.*?        while mygraph:\n",
+        "        while mygraph:\n",
+        text,
+        count=1,
+        flags=re.S,
+    )
     text = text.replace("            _mo_iter += 1\n", "", 1)
     return text, True
 

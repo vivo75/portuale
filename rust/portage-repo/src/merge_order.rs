@@ -2116,6 +2116,19 @@ fn select_nodes(g: &mut Digraph, entries: &[GraphEntry], root: &Path) -> Vec<usi
         frontier_enabled().then(|| SerializeFrontier::build(g));
     let mut mo_iter: usize = 0;
 
+    // B1: one `MO_NODES` snapshot of the post-prune graph, so the aligner
+    // can name a membership difference (gtk:4 is alive=398 vs 395 at
+    // iteration 1) instead of only reporting the count.
+    if mo_sel_enabled() {
+        let nodes: Vec<String> = g
+            .order
+            .iter()
+            .filter(|&&i| g.alive[i])
+            .map(|&i| mo_sel_cpv(&entries[i], g.installed[i]))
+            .collect();
+        eprintln!("MO_NODES count={} {}", nodes.len(), nodes.join(" "));
+    }
+
     while g.order.iter().any(|&i| g.alive[i]) {
         mo_iter += 1;
         let mut selected: Option<Vec<usize>> = None;
