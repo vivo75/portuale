@@ -9094,7 +9094,12 @@ def _slot_operator_eliminate_rebuilds(
         # installed_instance.cpv != pkg.cpv / _reinstall_nodes arms.
         if outcome[0] != "reinstall" or not outcome[7]:
             continue
-        # Rule 7 (see the function doc): binary halves are v2.
+        # Rule 7 (see the function doc): binary halves are v2. Hoisted
+        # above rule 1 (real checks pkg.built between rule 6 and 8): the
+        # pre-filter can only *keep* a rebuild, and rules 1-6/8 are all
+        # keep-on-mismatch, so the only decision it can change is the
+        # all-rules-pass demotion that IS rule 7's domain -- no ordering
+        # counter-example exists.
         if entry[7] != "ebuild":
             continue
         version = outcome[1]
