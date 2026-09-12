@@ -49,6 +49,27 @@ SELECT_ANCHOR = """            # At this point, we've succeeded in selecting one
             drop_satisfied = False
 """
 
+ORDER_BEGIN = "        # MO_ORDER_TRACE_BEGIN (injected by TEST/scripts/mo-trace/real-trace.py)\n"
+ORDER_END = "        # MO_ORDER_TRACE_END\n"
+ORDER_ANCHOR = "        self._merge_order_bias(mygraph)\n"
+ORDER_BLOCK = (
+    ORDER_BEGIN
+    + """        try:
+            import sys as _mo_sys3
+
+            _mo_order = [
+                ("m:" if _mo_n.operation == "merge" else "n:") + _mo_n.cpv
+                for _mo_n in mygraph.order
+            ]
+            _mo_sys3.stderr.write(
+                "MO_ORDER count=%d %s\\n" % (len(_mo_order), " ".join(_mo_order))
+            )
+        except Exception:
+            pass
+"""
+    + ORDER_END
+)
+
 TRACE_BLOCK = (
     BEGIN
     + """            try:
@@ -141,6 +162,9 @@ def patch(text):
     if n != 1:
         raise SystemExit("real-trace: could not find the `while mygraph:` loop head")
     text = text.replace(SELECT_ANCHOR, TRACE_BLOCK + SELECT_ANCHOR, 1)
+    if ORDER_ANCHOR not in text:
+        raise SystemExit("real-trace: could not find _merge_order_bias")
+    text = text.replace(ORDER_ANCHOR, ORDER_BLOCK + ORDER_ANCHOR, 1)
     return text, True
 
 
@@ -148,6 +172,12 @@ def unpatch(text):
     if BEGIN not in text:
         return text, False
     text = re.sub(re.escape(BEGIN) + r".*?" + re.escape(END) + "\n", "", text, flags=re.S)
+    text = re.sub(
+        re.escape(ORDER_BEGIN) + r".*?" + re.escape(ORDER_END),
+        "",
+        text,
+        flags=re.S,
+    )
     text = re.sub(
         r"        _mo_iter = 0\n.*?        while mygraph:\n",
         "        while mygraph:\n",

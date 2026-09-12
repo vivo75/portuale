@@ -692,3 +692,34 @@ Final L0 (`TEST/logs/l0-20260912T205626Z`): clean 98, parity 0.817,
 order 20 -- the B1 topline with no new divergence; firefox #29 -> #37 and
 thunderbird #30 -> #38 (both now the `nasm`/`freetype` Lever-1 timing
 family).
+
+### F-B3 — B3: the emptytree tie-break is real's `_create_graph` insertion order (2026-09-12)
+
+**Status:** adjudicated — blocked on a resolver-traversal item; not a
+scheduler tweak.
+
+The `-pe @system` trace (`MO_ORDER`, new: post-prune, pre-bias) shows
+real's and portuale's graphs have identical node sets (368 == 368) and
+identical bias keys (parent counts for `glibc`/`zstd`/`packaging`/
+`libxml2` all match: 8/7/7/7), but the **pre-bias insertion order**
+diverges at index 1:
+
+```
+real     : baselayout, findutils, patch, eselect, awk, bzip2, gzip, sh, tar ...
+portuale : baselayout, awk, bzip2, gzip, sh, tar, ..., eselect ...
+```
+
+`_merge_order_bias` is a stable sort, so equal-count leaves keep this
+order; the first merge-list divergence (`#13`, `acct-group/adm` vs
+`app-misc/mime-types`) is downstream of it. Parent counts and node sets
+matching rules out the bias tiers, edge narrowing (B2), the closure
+(B1), and `asap` (the divergence is a single greedy batch with
+`asap=[]`). The remaining difference is real's `_create_graph` LIFO
+insertion order vs portuale's `build_digraph` DFS from the expanded
+top-level atoms -- i.e. the same "port real's graph insertion order"
+item that B4 (superseded in-edges) also needs.
+
+Action: filed as a resolver-architecture follow-up; B3's probes
+(`_system` #11, `_world` #14, `MULTI_emptytree-system` #13) stay in the
+cluster-I residue. The `MO_ORDER` snapshot stays in the harness (both
+sides; patcher round-trip re-verified).

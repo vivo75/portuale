@@ -2733,6 +2733,17 @@ pub(crate) fn serialize_merge_order(
     }
     g.order.retain(|&i| g.alive[i]);
 
+    // B3: post-prune, pre-bias insertion order -- the tie-break real's
+    // stable `_merge_order_bias` preserves when parent counts are equal.
+    if mo_sel_enabled() {
+        let nodes: Vec<String> = g
+            .order
+            .iter()
+            .map(|&i| mo_sel_cpv(&entries[i], g.installed[i]))
+            .collect();
+        eprintln!("MO_ORDER count={} {}", nodes.len(), nodes.join(" "));
+    }
+
     merge_order_bias(&mut g, entries, config, implicit_system_deps);
     let scheduled: Vec<usize> = select_nodes(&mut g, entries, root)
         .into_iter()
