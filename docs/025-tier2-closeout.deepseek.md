@@ -723,3 +723,29 @@ Action: filed as a resolver-architecture follow-up; B3's probes
 (`_system` #11, `_world` #14, `MULTI_emptytree-system` #13) stay in the
 cluster-I residue. The `MO_ORDER` snapshot stays in the harness (both
 sides; patcher round-trip re-verified).
+
+### F-B4 — B4: superseded installed in-edges are walk-order dependent (2026-09-12)
+
+**Status:** adjudicated — moved to #25 (`_complete_graph` installed
+nomerge nodes), per the plan's Gate 0.2 recommendation.
+
+Harness on `-puvD app-editors/gedit`: node sets match (427 == 427);
+first merge divergence #5, real `net-libs/nghttp2` vs portuale
+`x11-themes/hicolor-icon-theme`, and portuale's nghttp2 lands ~4 picks
+later. Real's dump gives nghttp2 exactly one outgoing dep
+(`virtual/pkgconfig`, buildtime); portuale still carries the
+`nghttp2 -> sys-apps/systemd (merge, buildtime)` edge, so nghttp2 waits
+for the systemd merge. The note's mechanism is confirmed: nghttp2's
+bare `>=sys-apps/systemd-209` resolved to the *installed* systemd, whose
+in-edges real drops when polkit's `systemd[policykit]` forces the merge
+in the same slot; portuale deduped the installed entry away (B1/1-slice
+12 shape) but kept nothing that distinguishes satisfied-by-installed
+owners from the atom that forced the merge.
+
+A static build_digraph rule cannot resolve it: the same shape occurs in
+`MULTI_deep-update-world` (`sys-apps/portage` downgrade vs gentoolkit),
+where the merge-bound edge is *required* for the B2-restored order. The
+distinguishing information is real's walk order (which atom forced the
+merge first), i.e. the resolver must record `initially-satisfied ->
+no edge` and drop a superseded installed node's in-edges -- the #25
+architecture item. B4's probes (gedit #5, nautilus #8) stay residue.
