@@ -11947,47 +11947,15 @@ pub fn run(args: &[String]) -> ExitCode {
             }
         }
 
-        // Real `elog_process` (runs after every merge; `mod_echo.finalize`
-        // is an atexit handler): for every package that was merged and had
-        // `elog`/`ewarn`/`eerror` output, hand its `${T}/logging/` to each
-        // module in `PORTAGE_ELOG_SYSTEM`. Portuale never cleans the
-        // builddir, so re-scan each merged entry's `${T}/logging/` here.
-        //   - `echo`   -> the `* Messages for package <cpv>:` stdout block
-        //   - `save`   -> `<logdir>/elog/<cat>:<pf>:<stamp>.log`
-        //   - `save_summary` (ON by default) -> `<logdir>/elog/summary.log`
-        //   - `mail` / `mail_summary` -> real MIME mail(s), sent via a
-        //     sendmail binary or plain SMTP (see `elog.rs`).
+        // `elog_process` is no longer batched here: real runs it
+        // per-package inside `dblink.merge()` (before the post-merge
+        // `clean`, `vartree.py:6160-6198`), and backlog #42's clean now
+        // removes `${T}` -- so `ebuild_merge::process_merge_elog` is
+        // called from `merge_after_install`/`merge_binpkg` themselves.
+        // The `echo` summary still reaches stdout, the `save`/
+        // `save_summary` files the logdir, and `mail`/`mail_summary`
+        // the MTA exactly as before (see `elog.rs`).
         if !buildpkgonly {
-            let items: Vec<(String, std::path::PathBuf)> = entries
-                .iter()
-                .filter_map(|entry| {
-                    let version = match &entry.outcome {
-                        PretendOutcome::New { version }
-                        | PretendOutcome::Reinstall { version, .. } => version.clone(),
-                        PretendOutcome::Upgrade { to, .. }
-                        | PretendOutcome::Downgrade { to, .. } => to.clone(),
-                        _ => return None,
-                    };
-                    let cpv = format!("{}/{}-{version}", entry.category, entry.package);
-                    let t_dir = portage_tmpdir
-                        .join("portage")
-                        .join(&entry.category)
-                        .join(format!("{}-{version}", entry.package))
-                        .join("temp");
-                    Some((cpv, t_dir))
-                })
-                .collect();
-            crate::elog::process_batch(
-                &crate::elog::logdir(&root),
-                &root.display().to_string(),
-                &items,
-                None,
-                &color,
-                config_features_list(&config)
-                    .iter()
-                    .any(|t| t == "split-elog"),
-            );
-
             // Real `post_emerge()` (`post_emerge.py:141-152`): once the
             // merge changed the vdb, warn about any library the merge/
             // unmerge just preserved and point the user at

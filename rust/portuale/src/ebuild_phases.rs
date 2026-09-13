@@ -521,7 +521,9 @@ impl Environment {
     fn workdir(&self) -> PathBuf {
         self.portage_builddir.join("work")
     }
-    fn t(&self) -> PathBuf {
+    /// Real `${T}` -- also read by `ebuild_merge::process_merge_elog`
+    /// (the per-package `elog` flush before the post-merge clean, #42).
+    pub(crate) fn t(&self) -> PathBuf {
         self.portage_builddir.join("temp")
     }
     fn s(&self) -> PathBuf {
@@ -3446,6 +3448,56 @@ pub(crate) fn run_single_phase(
     })
 }
 
+/// Real `clean` phase (`bin/ebuild.sh clean` -> `bin/phase-functions.sh:
+/// 316`'s `__dyn_clean`): removes `${PORTAGE_BUILDDIR}/image`,
+/// `.installed` and the `.pretended`/`.setuped`/`.unpacked`/`.compiled`/
+/// `.installed` resume markers, plus `${T}` and `WORKDIR`/`build-info`/
+/// `files` unless `FEATURES=keeptemp`/`keepwork` (backlog #42).
+///
+/// Real starts this phase from four places (all vendored, all read for
+/// this grounding):
+///   - `_emerge/EbuildBuild.py:207-229` (`_start_pre_clean`): after
+///     locking the builddir and **before every build**, unconditionally
+///     -- `noclean` does not skip it, only the phase's own
+///     `keeptemp`/`keepwork` checks do. Without it, a stale `.installed`
+///     marker makes `__dyn_install` print "already installed; skipping"
+///     and repackage an already-`instprep`ped image (the #38 S4 repro).
+///   - `_emerge/Scheduler.py:969-981` and `:1119-1139`: the same clean
+///     before a pretend/build when an existing builddir is present.
+///   - `_emerge/Binpkg.py:305`: before unpacking a binary package.
+///   - `_emerge/EbuildBuild.py:525-535` (`_buildpkgonly_success_hook_exit`)
+///     after a `--buildpkgonly` package, and `dbapi/vartree.py:6183-6198`
+///     (`dblink.merge()`'s tail) after a merge unless `FEATURES=noclean`
+///     -- the post-merge half of #42.
+///
+/// A thin wrapper over `run_single_phase` (real only ever starts the
+/// phase through an `EbuildPhase`, i.e. `bin/ebuild.sh clean`), kept as
+/// its own named entry point so every call site below reads as the real
+/// mechanism.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn run_clean(
+    ebuild_path: &Path,
+    root: &Path,
+    portage_tmpdir: &Path,
+    build_env: &[(String, String)],
+    debug: bool,
+    config_root: &Path,
+    shell: ShellBackend,
+    log_file: Option<&Path>,
+) -> Result<i32, String> {
+    run_single_phase(
+        ebuild_path,
+        "clean",
+        root,
+        portage_tmpdir,
+        debug,
+        config_root,
+        shell,
+        build_env,
+        log_file,
+    )
+}
+
 /// Real `_emerge/BinpkgEnvExtractor`: `${T}/environment` <- the binpkg's
 /// `environment.bz2`, plus the `${T}/environment.raw` marker (see
 /// `run_phase_from_saved_env`).
@@ -4089,6 +4141,101 @@ mod tests {
         let contents = std::fs::read_to_string(&installed)
             .unwrap_or_else(|e| panic!("{} should have been installed: {e}", installed.display()));
         assert_eq!(contents, "hello from phasepkg\n");
+
+        let _ = std::fs::remove_dir_all(&portage_tmpdir);
+    }
+
+    /// Backlog #42: the real `clean` phase (`bin/ebuild.sh clean` ->
+    /// `__dyn_clean`) is what real `_emerge/EbuildBuild._start_pre_clean`
+    /// runs before every build. Given a stale `.installed` marker and a
+    /// populated `image/` + `${T}`, it must remove all three -- exactly
+    /// the state that made a rebuild silently skip `install` and
+    /// repackage an already-`instprep`ped image (#38 S4).
+    #[test]
+    fn run_clean_removes_a_stale_installed_marker_image_and_temp() {
+        let ebuild_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../fixtures/repo/dev-libs/phasepkg/phasepkg-1.0.ebuild");
+        let portage_tmpdir = std::env::temp_dir().join(format!(
+            "ebuild-phases-test-{}-run-clean",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&portage_tmpdir);
+        let builddir = portage_tmpdir.join("portage/dev-libs/phasepkg-1.0");
+        std::fs::create_dir_all(builddir.join("image/usr/share/phasepkg")).unwrap();
+        std::fs::write(
+            builddir.join("image/usr/share/phasepkg/hello.txt"),
+            "stale\n",
+        )
+        .unwrap();
+        std::fs::write(builddir.join(".installed"), []).unwrap();
+        std::fs::create_dir_all(builddir.join("temp")).unwrap();
+        std::fs::write(builddir.join("temp/build.log"), "stale log\n").unwrap();
+
+        let status = run_clean(
+            &ebuild_path,
+            Path::new("/"),
+            &portage_tmpdir,
+            &[],
+            false,
+            Path::new("/dev/null/no-config-root"),
+            ShellBackend::Bash,
+            None,
+        )
+        .expect("run_clean should not itself error");
+        assert_eq!(status, 0, "clean should exit successfully");
+        assert!(
+            !builddir.join(".installed").exists(),
+            "a stale .installed marker must be removed"
+        );
+        assert!(
+            !builddir.join("image").exists(),
+            "a stale image must be removed"
+        );
+        assert!(
+            !builddir.join("temp").exists(),
+            "T must be removed without keeptemp/keepwork"
+        );
+
+        let _ = std::fs::remove_dir_all(&portage_tmpdir);
+    }
+
+    /// `FEATURES=keepwork` (real `__dyn_clean`'s own guard): `clean`
+    /// still drops the stale `.installed`/`image`, but keeps `${T}` and
+    /// `WORKDIR` -- the documented real way to inspect a build.
+    #[test]
+    fn run_clean_with_keepwork_keeps_temp_and_workdir_but_still_drops_the_marker() {
+        let ebuild_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../fixtures/repo/dev-libs/phasepkg/phasepkg-1.0.ebuild");
+        let portage_tmpdir = std::env::temp_dir().join(format!(
+            "ebuild-phases-test-{}-run-clean-keepwork",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&portage_tmpdir);
+        let builddir = portage_tmpdir.join("portage/dev-libs/phasepkg-1.0");
+        std::fs::create_dir_all(builddir.join("image/usr/share/phasepkg")).unwrap();
+        std::fs::create_dir_all(builddir.join("temp")).unwrap();
+        std::fs::write(builddir.join("temp/build.log"), "kept\n").unwrap();
+        std::fs::write(builddir.join(".installed"), []).unwrap();
+
+        let keepwork = vec![("FEATURES".to_string(), "keepwork".to_string())];
+        let status = run_clean(
+            &ebuild_path,
+            Path::new("/"),
+            &portage_tmpdir,
+            &keepwork,
+            false,
+            Path::new("/dev/null/no-config-root"),
+            ShellBackend::Bash,
+            None,
+        )
+        .expect("run_clean should not itself error");
+        assert_eq!(status, 0, "clean should exit successfully");
+        assert!(!builddir.join(".installed").exists());
+        assert!(!builddir.join("image").exists());
+        assert!(
+            builddir.join("temp/build.log").is_file(),
+            "keepwork must keep T"
+        );
 
         let _ = std::fs::remove_dir_all(&portage_tmpdir);
     }

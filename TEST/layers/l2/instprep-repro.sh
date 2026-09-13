@@ -69,8 +69,15 @@ snapshot() {  # <cell>
     echo "## debug"
     find /usr/lib/debug -path '*pt-*' -print 2>/dev/null | LC_ALL=C sort
     echo "## CONTENTS"
+    # All three setuid binaries are byte-identical and share one
+    # build-id, so which name `estrip`'s `___parallel` traversal links
+    # the shared `.build-id/e0/2277…` lines to is nondeterministic in
+    # real too (the #38 S0/S2 race): match every `pt-*` target and drop
+    # the target text (`awk` keeps `$1 $2`), so the link *paths* still
+    # compare.
     for p in docs setuid; do
-      grep -h -E 'BIG\.txt|pt-setuid' /var/db/pkg/porttest/$p-1.0/CONTENTS 2>/dev/null \
+      grep -h -E 'BIG\.txt|pt-setuid|pt-setgid|pt-sticky' \
+        /var/db/pkg/porttest/$p-1.0/CONTENTS 2>/dev/null \
         | awk '{print $1, $2}'
     done | LC_ALL=C sort
   } > "$f"
@@ -82,11 +89,11 @@ log "cell src: emerge -1 ${ATOMS[*]}"
 snapshot src
 
 log "cell bin: emerge -B, unmerge, emerge -1K"
-# Real `EbuildBuild._start_pre_clean` runs the `clean` phase before every
-# build; portuale does not (backlog #42), so the -B build would reuse the
-# src cell's already-instprepped image. Start it from the state real's
-# pre-clean leaves.
-rm -rf /var/tmp/portage/porttest
+# No builddir wipe: real `_emerge/EbuildBuild._start_pre_clean` runs the
+# `clean` phase before every build, and portuale does the same since
+# backlog #42 (and post-cleans after a successful merge), so the -B build
+# starts from the state the pre-clean leaves in either PM. Before #42
+# this cell needed `rm -rf /var/tmp/portage/porttest` to emulate it.
 "$EM" --buildpkgonly --oneshot --color=n "${ATOMS[@]}" > "$OUT/bin-build.log" 2>&1 \
   || { log "!!! -B failed"; tail -30 "$OUT/bin-build.log"; }
 /usr/sbin/emerge --unmerge --color=n "${ATOMS[@]}" > "$OUT/bin-unmerge.log" 2>&1

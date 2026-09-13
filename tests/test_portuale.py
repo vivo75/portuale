@@ -3356,6 +3356,10 @@ def test_emerge_jobs_builds_independent_packages_in_parallel(emerge_binary, tmp_
     env["ROOT"] = str(root)
     env["DISTDIR"] = str(Path(FIXTURES_ROOT) / "distfiles")
     env["PORTAGE_TMPDIR"] = str(tmp_path / "portage-tmpdir")
+    # Real `dblink.merge()`'s post-merge `clean` removes `${T}` after a
+    # successful merge unless `FEATURES=keepwork` (backlog #42); the
+    # build.log assertion below needs the real keepwork state.
+    env["FEATURES"] = "keepwork"
 
     result = subprocess.run(
         [str(emerge_binary), "-j2", "dev-libs/schedparent"],
@@ -3421,6 +3425,10 @@ def test_emerge_quiet_build_redirects_a_single_job_build_to_the_log(
         env["ROOT"] = str(root)
         env["DISTDIR"] = str(Path(FIXTURES_ROOT) / "distfiles")
         env["PORTAGE_TMPDIR"] = str(tmp_path / f"pt{n}")
+        # Real `dblink.merge()`'s post-merge `clean` removes `${T}` after
+        # a successful merge unless `FEATURES=keepwork` (backlog #42);
+        # the build.log assertions below need the real keepwork state.
+        env["FEATURES"] = "keepwork"
         return root, env
 
     log_rel = "portage/dev-libs/packagepkg-1.0/temp/build.log"
@@ -3476,7 +3484,11 @@ def test_emerge_compress_build_logs_gzips_the_build_log(emerge_binary, tmp_path)
     env["DISTDIR"] = str(Path(FIXTURES_ROOT) / "distfiles")
     env["PORTAGE_TMPDIR"] = str(tmp_path / "pt")
     env["PORTAGE_LOGDIR"] = str(logdir)
-    env["FEATURES"] = "compress-build-logs"
+    # `keepwork`: real `dblink.merge()`'s post-merge `clean` removes
+    # `${T}` (including the `build.log.gz` symlink asserted below) after
+    # a successful merge unless `FEATURES=keepwork` (backlog #42). The
+    # real log file in PORTAGE_LOGDIR survives either way.
+    env["FEATURES"] = "compress-build-logs keepwork"
     r = subprocess.run(
         [str(emerge_binary), "--quiet-build=y", "dev-libs/packagepkg"],
         capture_output=True, text=True, check=False, env=env,
@@ -3508,6 +3520,54 @@ def test_emerge_compress_build_logs_gzips_the_build_log(emerge_binary, tmp_path)
     assert "last lines of" in bad.stderr
     assert "build.log.gz" in bad.stderr
     assert "deliberate fixture build failure" in bad.stderr
+
+
+def test_emerge_pre_cleans_a_dirty_builddir_before_rebuilding(emerge_binary, tmp_path):
+    """Backlog #42: real `_emerge/EbuildBuild._start_pre_clean` runs the
+    `clean` phase before every build, and `dblink.merge()`'s tail runs
+    it after a successful merge unless `FEATURES=noclean`. A second
+    `emerge -1` in the same `${PORTAGE_BUILDDIR}` must therefore discard
+    the stale `.installed` + `${D}` and rebuild, not silently skip
+    `install` and merge the old image. `FEATURES=noclean` pins the first
+    run's build state; the tampered image then stands in for an
+    already-`instprep`ped one (the #38 S4 `-B` symptom)."""
+    import shutil
+
+    root = tmp_path / "root"
+    shutil.copytree(Path(FIXTURES_ROOT) / "var", root / "var")
+    env = dict(os.environ)
+    env["PORTAGE_CONFIGROOT"] = FIXTURES_ROOT
+    env["ROOT"] = str(root)
+    env["DISTDIR"] = str(Path(FIXTURES_ROOT) / "distfiles")
+    env["PORTAGE_TMPDIR"] = str(tmp_path / "pt")
+
+    # First run: noclean keeps the builddir and its `.installed` marker.
+    env["FEATURES"] = "noclean"
+    r = subprocess.run(
+        [str(emerge_binary), "--oneshot", "dev-libs/packagepkg"],
+        capture_output=True, text=True, check=False, env=env,
+    )
+    assert r.returncode == 0, r.stderr
+    builddir = tmp_path / "pt/portage/dev-libs/packagepkg-1.0"
+    assert (builddir / ".installed").is_file(), "noclean keeps the build state"
+    installed = root / "usr/share/packagepkg/hello.txt"
+    assert installed.read_text() == "hello from packagepkg\n"
+    # Tamper with the staged image: a rebuild must overwrite it, a
+    # marker-skipped install would merge this stale content instead.
+    (builddir / "image/usr/share/packagepkg/hello.txt").write_text("stale\n")
+
+    # Second run: no noclean -> pre-clean drops the stale image and
+    # `.installed`, `install` re-runs for real, and the post-merge clean
+    # removes the builddir again.
+    env["FEATURES"] = "sandbox"
+    r = subprocess.run(
+        [str(emerge_binary), "--oneshot", "dev-libs/packagepkg"],
+        capture_output=True, text=True, check=False, env=env,
+    )
+    assert r.returncode == 0, r.stderr
+    assert installed.read_text() == "hello from packagepkg\n"
+    assert not (builddir / ".installed").exists()
+    assert not (builddir / "image").exists()
 
 
 def test_emerge_jobs_with_load_average_still_builds_everything(emerge_binary, tmp_path):

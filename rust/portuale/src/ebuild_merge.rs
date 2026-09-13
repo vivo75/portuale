@@ -2724,6 +2724,54 @@ fn collision_message(
     lines.join("\n")
 }
 
+/// `token` in the merge's own `FEATURES`: the resolved incremental list
+/// (`MergeOptions::features`, the `emerge` paths, #37 S2) when set, else
+/// the raw `$FEATURES` process env (the standalone `ebuild <file>`
+/// fallback `MergeOptions::from_env` documents). Mirrors
+/// `emerge_build::resolved_features`' precedence; kept private to the
+/// merge path so its `noclean` gate and the phase env can never disagree.
+pub(crate) fn feature_enabled(options: &MergeOptions, token: &str) -> bool {
+    let env_features;
+    let features: &str = if options.features.is_empty() {
+        env_features = std::env::var("FEATURES").unwrap_or_default();
+        &env_features
+    } else {
+        &options.features
+    };
+    features.split_whitespace().any(|t| t == token)
+}
+
+/// Hand this package's `${T}/logging/<phase>` files to every configured
+/// elog module -- real `dblink.merge()`'s own `self._elog_process()`
+/// call, which sits between the success/die hooks and the post-merge
+/// `clean` in `dbapi/vartree.py:6160-6198`. Running it there (rather
+/// than in a batch after the whole `emerge` returns) is what keeps the
+/// messages alive now that backlog #42's clean removes `${T}`: real
+/// `elog_process` is per-package, before the clean, and so is this.
+///
+/// `run_merge`/`run_qmerge` (through `merge_after_install`) and
+/// `merge_binpkg` (a binary merge's hooks) each call it once on their
+/// success path; `--buildpkgonly` keeps its pre-existing "no elog"
+/// behavior (real processes it in `_buildpkgonly_success_hook_exit`,
+/// portuale does not yet).
+pub(crate) fn process_merge_elog(
+    env: &ebuild_phases::Environment,
+    root: &Path,
+    options: &MergeOptions,
+) {
+    let cpv = format!("{}/{}", env.category, env.split.pf);
+    crate::elog::process_batch(
+        &crate::elog::logdir(root),
+        &root.display().to_string(),
+        &[(cpv, env.t())],
+        None,
+        &crate::color::Colorizer::new(crate::color::resolve_havecolor(None)),
+        // The merge's resolved list when one was set (#37 S2); the
+        // standalone `ebuild <file> merge` fallback is the raw env.
+        feature_enabled(options, "split-elog"),
+    );
+}
+
 /// Real `merge()`'s own first step is always the real `install` phase
 /// chain having already completed (`actionmap_deps["merge"] ==
 /// ["install"]`) -- run here directly rather than requiring the caller
@@ -2785,7 +2833,28 @@ pub fn run_merge(
         }
     }
     let env = ebuild_phases::compute_environment(ebuild_path, portage_tmpdir)?;
-    merge_after_install(ebuild_path, root, portage_tmpdir, &env, options)
+    let merge_status = merge_after_install(ebuild_path, root, portage_tmpdir, &env, options)?;
+    // Real `dblink.merge()`'s tail (`dbapi/vartree.py:6183-6198`): after
+    // the success hooks and `env_update`, the `clean` phase removes the
+    // builddir unless `FEATURES=noclean` (and never after a postinst
+    // failure -- bug #704866 -- which is exactly a non-zero
+    // `merge_status`). The phase itself honors `keeptemp`/`keepwork`.
+    // Backlog #42's post-merge half; the `emerge` scheduler's separate
+    // build+merge split gets the same call from
+    // `emerge_build::merge_one_built_entry`.
+    if merge_status == 0 && !feature_enabled(options, "noclean") {
+        ebuild_phases::run_clean(
+            ebuild_path,
+            root,
+            portage_tmpdir,
+            &options.build_env,
+            options.debug,
+            &options.config_root,
+            options.shell,
+            options.log_file.as_deref(),
+        )?;
+    }
+    Ok(merge_status)
 }
 
 /// Real `doebuild()`'s own `mydo == "qmerge"` branch
@@ -2804,6 +2873,16 @@ pub fn run_merge(
 /// other "not in the expected state" checks (e.g. `run_unmerge`'s own
 /// "not installed" case) rather than hand-rolling a second message-
 /// printing path.
+///
+/// **No post-merge `clean` here.** Real `doebuild()`'s `qmerge` branch
+/// adds `noclean` to `settings.features` before calling `merge()`
+/// (`doebuild.py:1573-1575`: "qmerge is a special phase that implies
+/// noclean"), so `dblink.merge()`'s tail skips it. The `emerge`
+/// scheduler path also reaches `run_qmerge` (its build and merge are
+/// separate tasks) but *does* post-clean like real's `dblink.merge()`;
+/// that call lives in `emerge_build::merge_one_built_entry`, right after
+/// this returns 0, keeping `ebuild <file> qmerge`'s builddir exactly the
+/// way real keeps it (backlog #42).
 pub fn run_qmerge(
     ebuild_path: &Path,
     root: &Path,
@@ -3000,6 +3079,13 @@ fn merge_after_install(
         // and gets deleted + unregistered (real `_prune_plib_registry()`).
         prune_unused_preserved_libs(root, false, &|_| false)?;
     }
+
+    // Real `dblink.merge()`: `self._elog_process()` runs here, after the
+    // merge body and before the clean (which every caller runs once this
+    // returns). Backlog #42: the post-merge clean removes `${T}`, so
+    // this must not be deferred to a batch after the whole `emerge`
+    // returns any more -- and real never deferred it either.
+    process_merge_elog(env, root, options);
 
     Ok(postinst_status)
 }
@@ -3632,6 +3718,21 @@ pub fn merge_binpkg(
         // (identical to `merge_after_install`).
         prune_unused_preserved_libs(root, false, &|_| false)?;
     }
+
+    // Real `dblink.merge()`'s `_elog_process()`, before the builddir
+    // removal below -- the binary merge's `pkg_preinst`/`pkg_postinst`
+    // output lives in this builddir's `${T}/logging`, and the
+    // unconditional `remove_dir_all` right after would take it with it
+    // (the same #42 ordering as `merge_after_install`). Empty (and
+    // silent) for a binpkg that carried no saved env.
+    crate::elog::process_batch(
+        &crate::elog::logdir(root),
+        &root.display().to_string(),
+        &[(format!("{category}/{pf}"), builddir.join("temp"))],
+        None,
+        &crate::color::Colorizer::new(crate::color::resolve_havecolor(None)),
+        feature_enabled(options, "split-elog"),
+    );
 
     let _ = std::fs::remove_dir_all(&builddir);
     Ok(postinst_status)
@@ -4676,14 +4777,16 @@ mod tests {
             std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/repo");
         let ebuild = repo_root.join("dev-libs/mergepkg/mergepkg-1.0.ebuild");
 
-        let status = run_merge(
-            &ebuild,
-            &root,
-            &portage_tmpdir,
-            &MergeOptions::default(),
-            None,
-        )
-        .expect("run_merge succeeds");
+        // The ordering markers `mergepkg`'s own hooks leave under `${T}`
+        // are asserted below, so this merge keeps its build state the way
+        // real `FEATURES=noclean` does -- the default post-merge clean is
+        // pinned by `run_merge_post_cleans_the_builddir_unless_noclean`.
+        let options = MergeOptions {
+            features: "noclean".to_string(),
+            ..MergeOptions::default()
+        };
+        let status =
+            run_merge(&ebuild, &root, &portage_tmpdir, &options, None).expect("run_merge succeeds");
         assert_eq!(status, 0);
 
         assert!(root.join("usr/share/mergepkg/hello.txt").is_file());
@@ -4929,6 +5032,66 @@ mod tests {
             !root
                 .join("var/db/pkg/dev-libs/-MERGING-mergepkg-1.0")
                 .exists()
+        );
+    }
+
+    /// Backlog #42: real `dblink.merge()`'s tail (`vartree.py:6183-6198`)
+    /// runs the `clean` phase after a merge unless `FEATURES=noclean`.
+    /// The `emerge` paths that reach `run_merge` therefore leave no
+    /// `${PORTAGE_BUILDDIR}` behind (which is what stopped a later `-B`
+    /// from repackaging an already-`instprep`ped image, #38 S4); with
+    /// `noclean` the build state survives.
+    #[test]
+    fn run_merge_post_cleans_the_builddir_unless_noclean() {
+        let repo_root =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/repo");
+        let ebuild = repo_root.join("dev-libs/mergepkg/mergepkg-1.0.ebuild");
+
+        // Default (no noclean): the builddir is cleaned after the merge.
+        let tmp = tempdir();
+        let root = tmp.join("root");
+        let portage_tmpdir = tmp.join("tmp");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::create_dir_all(&portage_tmpdir).unwrap();
+        let options = MergeOptions {
+            features: "sandbox".to_string(),
+            ..MergeOptions::default()
+        };
+        let status =
+            run_merge(&ebuild, &root, &portage_tmpdir, &options, None).expect("run_merge succeeds");
+        assert_eq!(status, 0);
+        assert!(root.join("usr/share/mergepkg/hello.txt").is_file());
+        let builddir = portage_tmpdir.join("portage/dev-libs/mergepkg-1.0");
+        assert!(
+            !builddir.join(".installed").exists(),
+            "post-merge clean must drop .installed"
+        );
+        assert!(
+            !builddir.join("image").exists(),
+            "post-merge clean must drop the image"
+        );
+
+        // `FEATURES=noclean`: real keeps the builddir (bug #704866's
+        // sibling gate); `.installed` is still there for a later
+        // `qmerge`/inspection.
+        let tmp2 = tempdir();
+        let root2 = tmp2.join("root");
+        let portage_tmpdir2 = tmp2.join("tmp");
+        std::fs::create_dir_all(&root2).unwrap();
+        std::fs::create_dir_all(&portage_tmpdir2).unwrap();
+        let options = MergeOptions {
+            features: "noclean".to_string(),
+            ..MergeOptions::default()
+        };
+        let status = run_merge(&ebuild, &root2, &portage_tmpdir2, &options, None)
+            .expect("run_merge succeeds");
+        assert_eq!(status, 0);
+        assert!(root2.join("usr/share/mergepkg/hello.txt").is_file());
+        assert!(
+            portage_tmpdir2
+                .join("portage/dev-libs/mergepkg-1.0/.installed")
+                .exists(),
+            "noclean must keep the builddir"
         );
     }
 

@@ -691,10 +691,15 @@ blockers are the #39 entries plus the test-bed GPG check below.
   ebuild-derived `RDEPEND`/`REQUIRES`/`PROVIDES`, the `Packages` index
   `REPO` field, and `NEEDED.ELF.2`'s trailing ELF-class field
   (`l2-needed-elf2-format`).
-- **`emerge` never pre-cleans `${PORTAGE_BUILDDIR}`** (backlog #42,
-  found in #38 S4): real runs the `clean` phase before every build; a
-  portuale rebuild in a dirty builddir reuses the already-`instprep`ped
-  image, so a `-B` after a source merge archives stripped binaries.
+- **FIXED 2026-09-13 (backlog #42, found in #38 S4) — `emerge` never
+  pre-cleans `${PORTAGE_BUILDDIR}`.** `ebuild_phases::run_clean` (the
+  real `clean` phase, `__dyn_clean`) now runs before every source build,
+  after every successful `--buildpkgonly` package, and after every
+  merge unless `FEATURES=noclean` (plus `merge_binpkg`'s pre-existing
+  builddir removal for binary merges); `run_qmerge` stays clean-free
+  like real `doebuild qmerge`. The #38 S4 instprep repro no longer wipes
+  the builddir and is green (`TEST/logs/l2-instprep-20260913T222526Z`).
+  Evidence: `TEST/findings/l2.md` "#42".
 - **Degraded consumer env** (`l2-consumes-portuale-env-degraded`,
   MEDIUM): real Portage merging a portuale-built archive runs merge
   phases with `MERGE_TYPE` unset and skips `pkg_pretend`.

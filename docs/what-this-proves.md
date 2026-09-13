@@ -16394,3 +16394,45 @@ ebuild `doman`-compressed claim was corrected (`pt.1` is 33 B, plain
 under `PORTAGE_DOCOMPRESS_SIZE_LIMIT=128`). Slice record:
 `docs/038_Packaging-transforms.plan.md`; per-finding evidence:
 `TEST/findings/l2.md` "#38 S4/S5".
+
+### `emerge` cleans the build directory like real (backlog #42, 2026-09-13)
+
+A build-directory lifecycle gap found while proving #38 S4 is closed:
+real `_emerge/EbuildBuild._start_pre_clean` runs the `clean` phase
+(`bin/ebuild.sh clean` → `__dyn_clean`) **before every build**, and
+`dblink.merge()`'s tail runs it after every successful merge unless
+`FEATURES=noclean` (plus `_buildpkgonly_success_hook_exit` after a
+`--buildpkgonly` package and `_emerge/Binpkg` before a binary unpack).
+Portuale ran none of them, so a second build in the same
+`${PORTAGE_BUILDDIR}` saw the stale `.installed` marker and silently
+skipped `install` — exactly how the #38 S4 repro's `-B` repackaged an
+already-`instprep`ped (stripped) image and its `-K` merge then died on
+`debuglink section already exists`. `ebuild_phases::run_clean` now
+invokes that same vendored phase at real's positions: before the
+`install` chain in `merge_one_source_entry`/`build_one_source_entry`/
+`run_buildpkgonly`, unconditionally after a successful
+`--buildpkgonly` package, and after a successful merge unless
+`FEATURES=noclean` (`run_merge` and the scheduler's
+`merge_one_built_entry`); `run_qmerge` stays clean-free because real
+`doebuild qmerge` implies `noclean`. The clean also forced portuale's
+`elog` flush to real's position — per package inside the merge, before
+the clean (`ebuild_merge::process_merge_elog`), instead of a batch that
+re-scanned `${T}` after the whole run. No phase logic in Rust, no
+vendored `bin/*` edited. Runnable, live-verified:
+
+```sh
+TEST/run/l2-instprep-repro.sh                                    # rc 0
+python3 -m pytest tests/test_portuale.py -q -k pre_cleans_a_dirty
+```
+
+The container repro's `bin` cell used to `rm -rf /var/tmp/portage/porttest`
+before `-B` to emulate real's pre-clean; the workaround is gone and the
+run is green (`TEST/logs/l2-instprep-20260913T222526Z`, both cells
+identical between PMs — the snapshot also matches every `pt-*` target
+now, so the known `estrip` build-id link race cannot flip it). On the
+host, `test_emerge_pre_cleans_a_dirty_builddir_before_rebuilding` pins
+the discriminator end-to-end: a `FEATURES=noclean` merge keeps
+`.installed`, the staged `${D}` is then tampered with, and the next
+`emerge` must rebuild and land the real file (a marker-skipped install
+would merge the stale image instead) and post-clean the builddir.
+Evidence: `TEST/findings/l2.md` "#42".

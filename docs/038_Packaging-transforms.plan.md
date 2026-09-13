@@ -622,3 +622,17 @@ ref / backlog id)
   updated to "#38 landed, verification-mode". Full step-8 pass: `cargo
   fmt --check`, clippy (0 warnings), `cargo test --release`, `pytest
   tests -q` all green.
+
+- **Postscript (2026-09-13) — backlog #42 fixed, S4's repro workaround
+  removed.** `ebuild_phases::run_clean` (the real `clean` phase,
+  `__dyn_clean`) now runs at real's positions: before every source build
+  (`merge_one_source_entry`, `build_one_source_entry`, `run_buildpkgonly`),
+  unconditionally after a successful `--buildpkgonly` package, and after
+  a merge unless `FEATURES=noclean` (`run_merge`, `merge_one_built_entry`);
+  `run_qmerge` stays clean-free (real `doebuild qmerge` implies noclean).
+  `TEST/layers/l2/instprep-repro.sh` no longer wipes the builddir between
+  cells and `TEST/run/l2-instprep-repro.sh` is rc 0
+  (`TEST/logs/l2-instprep-20260913T222526Z`); the snapshot now matches
+  every `pt-*` CONTENTS target so the setuid build-id race cannot flip it.
+  Evidence: `TEST/findings/l2.md` "#42"; `docs/what-this-proves.md`
+  "`emerge` cleans the build directory like real".

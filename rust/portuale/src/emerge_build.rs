@@ -172,23 +172,55 @@ pub fn run_buildpkgonly(
             .find(|(k, _)| k == "USE")
             .map(|(_, v)| v.as_str())
             .unwrap_or("");
-        let failure = match ebuild_package::run_package(
-            &path,
-            root,
-            portage_tmpdir,
-            options,
-            &build_env,
-            use_flags,
-        ) {
-            Ok(0) => None,
-            Ok(_) => Some(format!(
-                "{}/{}-{version}: build failed",
-                entry.category, entry.package
-            )),
-            Err(e) => Some(format!(
-                "{}/{}-{version}: {e}",
-                entry.category, entry.package
-            )),
+        // Real `_emerge/EbuildBuild._start_pre_clean` before the build
+        // and `_buildpkgonly_success_hook_exit` (`EbuildBuild.py:525-535`)
+        // after the package: `--buildpkgonly` pre-cleans like every other
+        // build and post-cleans unconditionally -- the phase itself, not
+        // a `noclean` gate, is what honors `keeptemp`/`keepwork` (real's
+        // `_clean_exit` treats a failed clean as a failed build).
+        // Backlog #42.
+        let clean_failure = |phase: &str| -> Option<String> {
+            match ebuild_phases::run_clean(
+                &path,
+                root,
+                portage_tmpdir,
+                &build_env,
+                options.debug,
+                &options.config_root,
+                options.shell,
+                None,
+            ) {
+                Ok(0) => None,
+                Ok(status) => Some(format!(
+                    "{}/{}-{version}: {phase} clean failed ({status})",
+                    entry.category, entry.package
+                )),
+                Err(e) => Some(format!(
+                    "{}/{}-{version}: {phase} clean failed: {e}",
+                    entry.category, entry.package
+                )),
+            }
+        };
+        let failure = match clean_failure("pre") {
+            Some(failure) => Some(failure),
+            None => match ebuild_package::run_package(
+                &path,
+                root,
+                portage_tmpdir,
+                options,
+                &build_env,
+                use_flags,
+            ) {
+                Ok(0) => clean_failure("post"),
+                Ok(_) => Some(format!(
+                    "{}/{}-{version}: build failed",
+                    entry.category, entry.package
+                )),
+                Err(e) => Some(format!(
+                    "{}/{}-{version}: {e}",
+                    entry.category, entry.package
+                )),
+            },
         };
         if let Some(failure) = failure {
             if keep_going {
@@ -529,6 +561,26 @@ pub(crate) fn merge_one_source_entry(
     // not the implicit/arch part of the effective set.
     let mut per_entry = options.clone();
     per_entry.build_env = entry_build_env(options, entry, repos);
+    // Real `_emerge/EbuildBuild._start_pre_clean` (`EbuildBuild.py:207-
+    // 229`) and `Scheduler.py:969-981`/`:1119-1139`: the `clean` phase
+    // runs before every build, unconditionally (`noclean` only skips the
+    // *post*-merge clean). Without it a stale `.installed` marker or an
+    // already-`instprep`ped image from an earlier build in the same
+    // `${PORTAGE_BUILDDIR}` silently skips `install` (backlog #42, found
+    // in #38 S4).
+    let clean_status = ebuild_phases::run_clean(
+        &path,
+        root,
+        portage_tmpdir,
+        &per_entry.build_env,
+        per_entry.debug,
+        &per_entry.config_root,
+        per_entry.shell,
+        per_entry.log_file.as_deref(),
+    )?;
+    if clean_status != 0 {
+        return Err(format!("{cp}-{version}: clean failed ({clean_status})"));
+    }
     let status = ebuild_merge::run_merge(&path, root, portage_tmpdir, &per_entry, buildpkg)?;
     if status != 0 {
         return Err(format!("{cp}-{version}: merge failed ({status})"));
@@ -1053,6 +1105,23 @@ fn build_one_source_entry(
         options.shell
     };
     let build_env = entry_build_env(options, entry, repos);
+    // Real `_emerge/EbuildBuild._start_pre_clean`: the `clean` phase runs
+    // before every build, unconditionally (`noclean` only skips the
+    // post-merge clean) -- see `merge_one_source_entry`'s own call for
+    // the full grounding. Backlog #42.
+    let clean_status = ebuild_phases::run_clean(
+        &path,
+        root,
+        portage_tmpdir,
+        &build_env,
+        options.debug,
+        &options.config_root,
+        shell,
+        log_path.as_deref(),
+    )?;
+    if clean_status != 0 {
+        return Err(format!("{cp}-{version}: clean failed ({clean_status})"));
+    }
     let status = ebuild_phases::run_commands_logged(
         &path,
         &["install"],
@@ -1141,6 +1210,25 @@ fn merge_one_built_entry(
     let status = ebuild_merge::run_qmerge(ebuild_path, root, portage_tmpdir, &per_entry)?;
     if status != 0 {
         return Err(format!("{cp}-{version}: merge failed ({status})"));
+    }
+    // Real `dblink.merge()`'s tail (`dbapi/vartree.py:6183-6198`): the
+    // `clean` phase runs after a successful merge unless
+    // `FEATURES=noclean` (the postinst-failure gate collapses into
+    // `status != 0` above). `run_qmerge` itself deliberately does *not*
+    // clean -- real `doebuild qmerge` implies noclean (see its own doc
+    // comment) -- so this is where the `emerge` scheduler/captured
+    // build+merge split gets the real post-merge behavior. Backlog #42.
+    if !ebuild_merge::feature_enabled(&per_entry, "noclean") {
+        ebuild_phases::run_clean(
+            ebuild_path,
+            root,
+            portage_tmpdir,
+            &per_entry.build_env,
+            per_entry.debug,
+            &per_entry.config_root,
+            per_entry.shell,
+            per_entry.log_file.as_deref(),
+        )?;
     }
     println!(">>> {cp}-{version} merged.");
     Ok(())
@@ -2003,6 +2091,10 @@ mod tests {
             };
             options.build_env = portage_profile::phase_environ(&config_env, None);
             options.resolved_config = Some(std::sync::Arc::new(config));
+            // The `${T}`/`build-info` files asserted below are the
+            // subject; keep the builddir the way real `FEATURES=noclean`
+            // does (the default post-merge clean is pinned separately).
+            options.features = "noclean".to_string();
 
             let entries = vec![source_entry(
                 "phaseenvpkg",
@@ -2191,6 +2283,116 @@ mod tests {
         let _ = fs::remove_dir_all(&portage_tmpdir);
     }
 
+    /// Backlog #42 regression: `merge_one_source_entry` (the serial
+    /// `emerge` source path) pre-cleans before every build, exactly like
+    /// real `_emerge/EbuildBuild._start_pre_clean`. With a stale
+    /// `.installed` marker and a tampered `${D}` left by an earlier build
+    /// in the same `${PORTAGE_BUILDDIR}` (kept here via `noclean`), the
+    /// next run must discard them and rebuild -- previously `install`
+    /// printed "already installed; skipping" and merged the stale image,
+    /// which is how a `-B` after a source merge shipped stripped
+    /// binaries (#38 S4).
+    #[test]
+    fn source_merge_pre_cleans_a_stale_installed_image() {
+        let config_root = fixtures_root();
+        let repos = find_repos(&config_root).unwrap();
+        let root = tempdir();
+        let portage_tmpdir = tempdir();
+        let entry = source_entry(
+            "packagepkg",
+            PretendOutcome::New {
+                version: "1.0".into(),
+            },
+        );
+
+        // First merge with noclean: the build state survives.
+        let options = ebuild_merge::MergeOptions {
+            features: "noclean".to_string(),
+            ..ebuild_merge::MergeOptions::default()
+        };
+        merge_one_source_entry(&entry, &repos, &root, &portage_tmpdir, &options, None)
+            .expect("first merge succeeds");
+        let builddir = portage_tmpdir.join("portage/dev-libs/packagepkg-1.0");
+        assert!(
+            builddir.join(".installed").exists(),
+            "noclean must keep the first build's state"
+        );
+
+        // Tamper: replace the real image file with a stale one, keeping
+        // the `.installed` marker -- the exact state the missing
+        // pre-clean treated as "already built".
+        let image = builddir.join("image/usr/share/packagepkg");
+        std::fs::remove_file(image.join("hello.txt")).unwrap();
+        std::fs::write(image.join("stale.txt"), "stale\n").unwrap();
+
+        // Second merge, no noclean: the pre-clean drops the stale
+        // `.installed`/image, so `install` really re-runs.
+        let options = ebuild_merge::MergeOptions {
+            features: "sandbox".to_string(),
+            ..ebuild_merge::MergeOptions::default()
+        };
+        merge_one_source_entry(&entry, &repos, &root, &portage_tmpdir, &options, None)
+            .expect("second merge succeeds");
+        assert!(root.join("usr/share/packagepkg/hello.txt").is_file());
+        assert!(
+            !root.join("usr/share/packagepkg/stale.txt").exists(),
+            "the stale image must not be merged"
+        );
+
+        let _ = fs::remove_dir_all(&root);
+        let _ = fs::remove_dir_all(&portage_tmpdir);
+    }
+
+    /// Backlog #42: real `_buildpkgonly_success_hook_exit` runs the
+    /// `clean` phase after a successful `--buildpkgonly` package, so the
+    /// builddir is gone afterwards (the phase itself, not a `noclean`
+    /// gate, honors `keepwork`).
+    #[test]
+    fn buildpkgonly_post_cleans_the_builddir() {
+        let config_root = fixtures_root();
+        let repos = find_repos(&config_root).unwrap();
+        let root = tempdir();
+        let portage_tmpdir = tempdir();
+        let pkgdir = tempdir();
+
+        let entries = vec![source_entry(
+            "packagepkg",
+            PretendOutcome::New {
+                version: "1.0".into(),
+            },
+        )];
+        run_buildpkgonly(
+            &entries,
+            &portage_profile::Config::default(),
+            &repos,
+            &root,
+            &portage_tmpdir,
+            &PackageOptions {
+                pkgdir: pkgdir.clone(),
+                distdir: tempdir(),
+                binpkg_compress: "bzip2".to_string(),
+                ..PackageOptions::default()
+            },
+            false,
+        )
+        .expect("--buildpkgonly succeeds");
+
+        assert!(pkgdir.join("dev-libs/packagepkg-1.0.tbz2").is_file());
+        let builddir = portage_tmpdir.join("portage/dev-libs/packagepkg-1.0");
+        assert!(
+            !builddir.join(".installed").exists(),
+            "the buildpkgonly tail must clean .installed"
+        );
+        assert!(
+            !builddir.join("image").exists(),
+            "the buildpkgonly tail must clean the image"
+        );
+
+        let _ = fs::remove_dir_all(&root);
+        let _ = fs::remove_dir_all(&portage_tmpdir);
+        let _ = fs::remove_dir_all(&pkgdir);
+    }
+
     #[test]
     fn capture_log_also_captures_pkg_preinst_and_pkg_postinst_output() {
         // Real `Scheduler._background_mode`: under `capture_log` (always
@@ -2218,6 +2420,10 @@ mod tests {
         let options = ebuild_merge::MergeOptions {
             distdir: tempdir(),
             config_root: config_root.clone(),
+            // The `${T}/build.log` this test reads is removed by the real
+            // post-merge clean; keep it the way real `FEATURES=noclean`
+            // does (the clean itself is pinned separately, #42).
+            features: "noclean".to_string(),
             ..ebuild_merge::MergeOptions::default()
         };
         run_source_merge(

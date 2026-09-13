@@ -202,8 +202,13 @@ clean run with the `l2-bpkgonly-env`, `l2-gpkg-dostrip-splitdebug` and
 blockers are **#39** (gpkg metadata/`Packages` index, incl. the
 install-time `*DEPEND` rewrite) and the test-bed GPG check
 (`l2-binpkg-gpg-check`, backlog #43) — not env or transform parity.
-Backlog #42 (`emerge` never pre-cleans `PORTAGE_BUILDDIR`) came out of
-#38 S4.
+Backlog #42 (`emerge` never pre-cleans `PORTAGE_BUILDDIR`, found in #38
+S4) is **closed too**: `ebuild_phases::run_clean` runs the real `clean`
+phase before every source build, after a `--buildpkgonly` package, and
+after a merge unless `FEATURES=noclean` (real `EbuildBuild.
+_start_pre_clean` + `dblink.merge()`'s tail); `run_qmerge` stays
+clean-free like real `doebuild qmerge` (evidence: `TEST/findings/l2.md`
+"#42").
 
 For what is **genuinely still open** — real portage behaviour not ported
 to either side, the deliberate cuts, the standing non-goals — see
