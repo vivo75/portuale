@@ -229,10 +229,15 @@ pub(crate) fn merge_one_binary_entry(
     // a possibly-different file. The same holds for a fresh
     // local-`$PKGDIR` entry: its fetch already happened, so a missing
     // file is an error, not a refetch.
+    // Real `gpkg.__init__(verify_signature=...)`: a repo fetched from a
+    // configured binrepo uses **that repo's** own policy, not the bare
+    // `FEATURES` default (backlog #43). `None` for a local `$PKGDIR`
+    // file, which has no binrepo and keeps `merge_options.gpg_verify`.
+    let mut fetched_verify = None;
     let binpkg_path = match local {
         Some(path) => path,
         None if entry.remote_binary => {
-            let (sync_uri, record) = find_remote_binpkg(
+            let (binrepo, record) = find_remote_binpkg(
                 &config.binrepos,
                 root,
                 &entry.category,
@@ -245,14 +250,24 @@ pub(crate) fn merge_one_binary_entry(
                     pkgdir.display()
                 )
             })?;
-            download_and_verify(
-                &sync_uri,
+            let path = download_and_verify(
+                &binrepo.sync_uri,
                 &record,
                 &entry.category,
                 &entry.package,
                 &version,
                 pkgdir,
-            )?
+            )?;
+            let features = if merge_options.features.is_empty() {
+                std::env::var("FEATURES").unwrap_or_default()
+            } else {
+                merge_options.features.clone()
+            };
+            fetched_verify = Some(crate::binpkg::GpgVerify::from_binrepo(
+                binrepo.verify_signature,
+                &features,
+            ));
+            path
         }
         None => {
             return Err(format!(
@@ -263,6 +278,15 @@ pub(crate) fn merge_one_binary_entry(
     };
 
     println!(">>> Merging binary package {cp}-{version}...");
+    let mut entry_options;
+    let merge_options = match fetched_verify {
+        Some(gpg) => {
+            entry_options = merge_options.clone();
+            entry_options.gpg_verify = gpg;
+            &entry_options
+        }
+        None => merge_options,
+    };
     let status = ebuild_merge::merge_binpkg(&binpkg_path, root, portage_tmpdir, merge_options)?;
     if status != 0 {
         return Err(format!("{cp}-{version}: binpkg merge failed ({status})"));

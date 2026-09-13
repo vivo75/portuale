@@ -1191,7 +1191,7 @@ fn run_one_remote_unit(
     server_ledger_base: &std::path::Path,
 ) -> Result<(), String> {
     let binpkg_path = if entry.remote_binary {
-        let (sync_uri, record) = portage_repo::find_remote_binpkg(
+        let (binrepo, record) = portage_repo::find_remote_binpkg(
             &config.binrepos,
             root,
             &entry.category,
@@ -1205,7 +1205,7 @@ fn run_one_remote_unit(
             )
         })?;
         crate::emerge_getbinpkg::download_and_verify(
-            &sync_uri,
+            &binrepo.sync_uri,
             &record,
             &entry.category,
             &entry.package,

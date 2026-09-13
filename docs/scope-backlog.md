@@ -703,17 +703,14 @@ blockers are the #39 entries plus the test-bed GPG check below.
 - **Degraded consumer env** (`l2-consumes-portuale-env-degraded`,
   MEDIUM): real Portage merging a portuale-built archive runs merge
   phases with `MERGE_TYPE` unset and skips `pkg_pretend`.
-- **OPEN (backlog #43) — test-bed binpkg GPG check blocks the real-set
-  cross-install** (`l2-binpkg-gpg-check`, found in #37 S4 / surfaced
-  again by #38 S5, owner note 2026-09-13): the consume container's catalyst
-  `binrepos.conf/gentoo.conf` has `verify-signature = true` and merges
-  with `-k --getbinpkg`, so when real Portage declines a portuale-built
-  archive (the #39 `Packages` gaps above) it falls back to
-  `/var/cache/binhost/gentoo` and dies on GnuPG verification. Fix in
-  the image/consume env (`verify-signature = false` or no gentoo
-  binrepo, and/or `FEATURES=binpkg-ignore-signature`) **and** portuale
-  (`binpkg::GpgVerify` ignores a per-binrepo `verify-signature =
-  false`). Details: `TEST/findings/l2.md` `l2-binpkg-gpg-check`.
+- **FIXED 2026-09-13 (backlog #43) — test-bed binpkg GPG check blocked
+  the real-set cross-install** (`l2-binpkg-gpg-check`, found in #37 S4 /
+  surfaced again by #38 S5): `TEST/layers/l1/consume.sh` drops the
+  image's signed, different-revision catalyst gentoo binrepo before the
+  `-k --getbinpkg` merge, so the merge considers only `$PKGDIR` + the
+  installed state; portuale honours a per-binrepo `verify-signature`
+  (`binpkg::GpgVerify::from_binrepo`, real `gpkg.py:792-819`) on fetched
+  remote archives. Details: `TEST/findings/l2.md` `l2-binpkg-gpg-check`.
 
 Fixed while building the bed: `l2-pkgindex-version-missing` (the
 `Packages` header lacked `VERSION`, so real Portage under

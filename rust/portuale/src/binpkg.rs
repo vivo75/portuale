@@ -1106,13 +1106,10 @@ impl GpgVerify {
     /// portuale already takes: `FEATURES` (`binpkg-request-signature` /
     /// `binpkg-ignore-signature`), `BINPKG_GPG_VERIFY_BASE_COMMAND`,
     /// `BINPKG_GPG_VERIFY_GPG_HOME`. A per-binrepo
-    /// `verify-signature = false` (`binrepos.conf`) is a deliberate cut
-    /// here -- portuale parses and displays it (see `BinRepo`), but the
-    /// merge path has no binrepo at hand for a local `$PKGDIR` file, so
-    /// `FEATURES` alone decides. Observable divergence is narrow: an
-    /// outright-bad signature from such a repo fails here where real
-    /// would skip the check; unsigned packages merge identically either
-    /// way.
+    /// `verify-signature` (`binrepos.conf`) is **not** consulted here --
+    /// use [`GpgVerify::from_binrepo`] on the `--getbinpkg` path, which
+    /// knows which repo the download came from; this fallback is for a
+    /// local `$PKGDIR` file that has no binrepo at all.
     pub fn from_env() -> Self {
         Self::default()
     }
@@ -1127,6 +1124,43 @@ impl GpgVerify {
         Self {
             verify_signature,
             request_signature,
+            base_command: std::env::var("BINPKG_GPG_VERIFY_BASE_COMMAND")
+                .unwrap_or_else(|_| DEFAULT_GPG_VERIFY_BASE_COMMAND.to_string()),
+            gpg_home: std::env::var("BINPKG_GPG_VERIFY_GPG_HOME")
+                .unwrap_or_else(|_| DEFAULT_GPG_VERIFY_GPG_HOME.to_string()),
+        }
+    }
+
+    /// Real `gpkg.__init__`'s own per-binrepo policy (`gpkg.py:792-819`)
+    /// with `verify-signature` **set**: real's shipped
+    /// `cnf/binrepos.conf` `[DEFAULT] verify-signature = true` means an
+    /// explicit `false` in a `binrepos.conf` section is the meaningful
+    /// case, and portuale's [`portage_profile::BinRepo::verify_signature`]
+    /// is already `true` by default, so a `true` here carries real's
+    /// "explicitly true" semantics: signature verification and the
+    /// sidecar requirement both on. `FEATURES` then overrides in one
+    /// direction if stronger (`binpkg-request-signature` forces both on,
+    /// `binpkg-ignore-signature` forces both off), exactly real's own
+    /// `if`/`elif` tail -- so a `--getbinpkg` download from a repo that
+    /// opted out merges unsigned packages the way real does (backlog
+    /// #43).
+    pub fn from_binrepo(verify_signature: bool, features: &str) -> Self {
+        let has = |tok: &str| features.split_whitespace().any(|t| t == tok);
+        let (mut verify, mut request) = if verify_signature {
+            (true, true)
+        } else {
+            (false, false)
+        };
+        if has("binpkg-request-signature") {
+            verify = true;
+            request = true;
+        } else if has("binpkg-ignore-signature") {
+            verify = false;
+            request = false;
+        }
+        Self {
+            verify_signature: verify,
+            request_signature: request,
             base_command: std::env::var("BINPKG_GPG_VERIFY_BASE_COMMAND")
                 .unwrap_or_else(|_| DEFAULT_GPG_VERIFY_BASE_COMMAND.to_string()),
             gpg_home: std::env::var("BINPKG_GPG_VERIFY_GPG_HOME")
@@ -1878,6 +1912,31 @@ mod tests {
         assert_eq!(
             gpg_policy_for_features("binpkg-request-signature binpkg-ignore-signature"),
             (true, true)
+        );
+    }
+
+    /// Backlog #43: real `gpkg.__init__` (`gpkg.py:792-819`) takes a
+    /// binrepo's explicit `verify-signature` as *both* flags (unlike the
+    /// unset case, where `request` depends on the request feature), then
+    /// lets the stronger `FEATURES` token override.
+    #[test]
+    fn gpg_verify_from_binrepo_matches_real_gpkg_init_with_an_explicit_verify_signature() {
+        // `verify-signature = true`: verify + the sidecar requirement.
+        assert!(GpgVerify::from_binrepo(true, "sandbox").verify_signature);
+        assert!(GpgVerify::from_binrepo(true, "sandbox").request_signature);
+        // `verify-signature = false`: both off, so an unsigned archive
+        // from that repo merges (real's documented opt-out).
+        assert!(!GpgVerify::from_binrepo(false, "sandbox").verify_signature);
+        assert!(!GpgVerify::from_binrepo(false, "sandbox").request_signature);
+        // FEATURES override in one direction if stronger.
+        assert!(GpgVerify::from_binrepo(false, "binpkg-request-signature").verify_signature);
+        assert!(GpgVerify::from_binrepo(false, "binpkg-request-signature").request_signature);
+        assert!(!GpgVerify::from_binrepo(true, "binpkg-ignore-signature").verify_signature);
+        assert!(!GpgVerify::from_binrepo(true, "binpkg-ignore-signature").request_signature);
+        // Request beats ignore (real's `if`/`elif`).
+        assert!(
+            GpgVerify::from_binrepo(false, "binpkg-request-signature binpkg-ignore-signature")
+                .verify_signature
         );
     }
 

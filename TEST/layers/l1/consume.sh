@@ -32,6 +32,15 @@ export PKGDIR
 export EMERGE_DEFAULT_OPTS=""
 export FEATURES="-buildpkg -cgroup -ccache -distcc -sign xattr filecaps"
 umask 022
+
+# Test-bed binhost policy (backlog #43): the image's catalyst
+# binrepos.conf points at a real remote gentoo binhost -- signed, and at
+# *different revisions* than the $PKGDIR set under test. Under
+# `-k --getbinpkg` real Portage would silently substitute a
+# gentoo-revision binary for the one being tested, and dies on GnuPG
+# verification when the local test archives (unsigned) make it fall
+# back. The set under test is $PKGDIR + installed deps: drop it.
+rm -f /etc/portage/binrepos.conf/gentoo.conf
 mkdir -p "$(dirname "$OUT")"
 
 log() { printf '[l1-consume %s] %s\n' "$PM" "$*"; }
