@@ -1,0 +1,236 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Ebuild phases, in order — pkg_* and src_*</title>
+  <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500;600&family=Noto+Sans+KR:wght@400;500;600&family=Noto+Serif+KR:wght@400&family=Noto+Sans+TC:wght@400;500;600&family=Noto+Serif+TC:wght@400&display=swap" rel="stylesheet">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --color-paper:   #f5f5f5;
+      --color-ink:     #2d3142;
+      --color-muted:   #4f5d75;
+      --color-accent:  #eb6c36;
+      --font-sans:     'Geist', system-ui, sans-serif;
+      --font-serif:    'Instrument Serif', 'Noto Serif KR', serif;
+      --font-mono:     'Geist Mono', ui-monospace, monospace;
+    }
+    body {
+      font-family: var(--font-sans);
+      background: var(--color-paper);
+      color: var(--color-ink);
+      min-height: 100vh;
+      display: flex;
+      justify-content: center;
+      padding: 3rem 2rem;
+    }
+    .frame { max-width: 1560px; width: 100%; overflow-x: auto; }
+    .eyebrow {
+      font-family: var(--font-mono);
+      font-size: 0.66rem;
+      font-weight: 500;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+      color: var(--color-muted);
+      margin-bottom: 0.5rem;
+    }
+    h1 {
+      font-family: var(--font-serif);
+      font-size: clamp(1.5rem, 2.4vw + 0.75rem, 2rem);
+      font-weight: 400;
+      letter-spacing: -0.02em;
+      line-height: 1.15;
+      color: var(--color-ink);
+      margin-bottom: 0.5rem;
+    }
+    .sub {
+      font-family: var(--font-sans);
+      font-size: 0.9rem;
+      color: var(--color-muted);
+      margin-bottom: 1.5rem;
+    }
+    .note {
+      font-family: var(--font-mono);
+      font-size: 0.72rem;
+      line-height: 1.6;
+      color: var(--color-muted);
+      margin-top: 1rem;
+      max-width: 1100px;
+    }
+    svg { width: 100%; min-width: 1200px; display: block; }
+  </style>
+</head>
+<body>
+  <div class="frame">
+    <p class="eyebrow">Process · Diagram Design</p>
+    <h1>Ebuild phases, in order</h1>
+    <p class="sub">Every <span style="font-family:var(--font-mono)">pkg_*</span> and <span style="font-family:var(--font-mono)">src_*</span> through <span style="font-family:var(--font-mono)">run_commands</span> — bash/brush over unmodified <span style="font-family:var(--font-mono)">bin/*.sh</span>. Run-conditions live in each node's tool line.</p>
+
+    <svg viewBox="0 0 1512 276" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="ebuild-phases-title ebuild-phases-desc">
+      <title id="ebuild-phases-title">ebuild phase chain</title>
+      <desc id="ebuild-phases-desc">Process diagram showing the twelve ordered ebuild phases from environment setup through src_install to the filesystem merge, with per-phase run conditions and the install image payload traced to the merge.</desc>
+      <defs>
+        <pattern id="dots" width="22" height="22" patternUnits="userSpaceOnUse">
+          <circle cx="11" cy="11" r="0.8" fill="rgba(45,49,66,0.10)"/>
+        </pattern>
+        <marker id="arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#4f5d75"/></marker>
+        <marker id="arrow-accent" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#eb6c36"/></marker>
+        <marker id="arrow-sm" markerWidth="6" markerHeight="5" refX="5" refY="2.5" orient="auto"><polygon points="0 0, 6 2.5, 0 5" fill="#4f5d75"/></marker>
+      </defs>
+
+      <rect width="100%" height="100%" fill="#f5f5f5"/>
+      <rect width="100%" height="100%" fill="url(#dots)" opacity="0.55"/>
+      <rect x="140" y="36" width="1372" height="80" fill="rgba(45,49,66,0.018)"/>
+      <line x1="0" y1="36" x2="1512" y2="36" stroke="rgba(45,49,66,0.12)" stroke-width="0.8"/>
+      <line x1="0" y1="116" x2="1512" y2="116" stroke="rgba(45,49,66,0.12)" stroke-width="0.8"/>
+      <line x1="0" y1="196" x2="1512" y2="196" stroke="rgba(45,49,66,0.12)" stroke-width="0.8"/>
+      <line x1="140" y1="36" x2="140" y2="196" stroke="rgba(45,49,66,0.20)" stroke-width="1"/>
+
+      <!-- Lane labels -->
+      <text x="70" y="80" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">EBUILD</text>
+      <text x="70" y="160" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">DOEBUILD</text>
+
+      <!-- Step header chips: cx = 198+112j -->
+      <!-- j0 OPEN --><rect x="190" y="8" width="16" height="16" rx="8" fill="rgba(45,49,66,0.12)"/><text x="198" y="19" fill="#2d3142" font-size="8" font-weight="600" font-family="'Geist Mono', monospace" text-anchor="middle">1</text><text x="198" y="32" fill="#4f5d75" font-size="6" font-weight="500" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.12em">OPEN</text>
+      <!-- j1 PRETEND --><rect x="302" y="8" width="16" height="16" rx="8" fill="rgba(45,49,66,0.12)"/><text x="310" y="19" fill="#2d3142" font-size="8" font-weight="600" font-family="'Geist Mono', monospace" text-anchor="middle">2</text><text x="310" y="32" fill="#4f5d75" font-size="6" font-weight="500" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.12em">PRETEND</text>
+      <!-- j2 SETUP --><rect x="414" y="8" width="16" height="16" rx="8" fill="rgba(45,49,66,0.12)"/><text x="422" y="19" fill="#2d3142" font-size="8" font-weight="600" font-family="'Geist Mono', monospace" text-anchor="middle">3</text><text x="422" y="32" fill="#4f5d75" font-size="6" font-weight="500" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.12em">SETUP</text>
+      <!-- j3 UNPACK --><rect x="526" y="8" width="16" height="16" rx="8" fill="rgba(45,49,66,0.12)"/><text x="534" y="19" fill="#2d3142" font-size="8" font-weight="600" font-family="'Geist Mono', monospace" text-anchor="middle">4</text><text x="534" y="32" fill="#4f5d75" font-size="6" font-weight="500" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.12em">UNPACK</text>
+      <!-- j4 PREPARE --><rect x="638" y="8" width="16" height="16" rx="8" fill="rgba(45,49,66,0.12)"/><text x="646" y="19" fill="#2d3142" font-size="8" font-weight="600" font-family="'Geist Mono', monospace" text-anchor="middle">5</text><text x="646" y="32" fill="#4f5d75" font-size="6" font-weight="500" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.12em">PREPARE</text>
+      <!-- j5 CONF --><rect x="750" y="8" width="16" height="16" rx="8" fill="rgba(45,49,66,0.12)"/><text x="758" y="19" fill="#2d3142" font-size="8" font-weight="600" font-family="'Geist Mono', monospace" text-anchor="middle">6</text><text x="758" y="32" fill="#4f5d75" font-size="6" font-weight="500" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.12em">CONF</text>
+      <!-- j6 MAKE --><rect x="862" y="8" width="16" height="16" rx="8" fill="rgba(45,49,66,0.12)"/><text x="870" y="19" fill="#2d3142" font-size="8" font-weight="600" font-family="'Geist Mono', monospace" text-anchor="middle">7</text><text x="870" y="32" fill="#4f5d75" font-size="6" font-weight="500" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.12em">MAKE</text>
+      <!-- j7 TEST --><rect x="974" y="8" width="16" height="16" rx="8" fill="rgba(45,49,66,0.12)"/><text x="982" y="19" fill="#2d3142" font-size="8" font-weight="600" font-family="'Geist Mono', monospace" text-anchor="middle">8</text><text x="982" y="32" fill="#4f5d75" font-size="6" font-weight="500" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.12em">TEST</text>
+      <!-- j8 INSTALL focal --><rect x="1084" y="8" width="20" height="16" rx="8" fill="rgba(235,108,54,0.20)"/><text x="1094" y="19" fill="#eb6c36" font-size="8" font-weight="600" font-family="'Geist Mono', monospace" text-anchor="middle">9</text><text x="1094" y="32" fill="#eb6c36" font-size="6" font-weight="500" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.12em">INSTALL</text>
+      <!-- j9 HOOKS --><rect x="1196" y="8" width="20" height="16" rx="8" fill="rgba(45,49,66,0.12)"/><text x="1206" y="19" fill="#2d3142" font-size="8" font-weight="600" font-family="'Geist Mono', monospace" text-anchor="middle">10</text><text x="1206" y="32" fill="#4f5d75" font-size="6" font-weight="500" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.12em">HOOKS</text>
+      <!-- j10 REMOVE --><rect x="1308" y="8" width="20" height="16" rx="8" fill="rgba(45,49,66,0.12)"/><text x="1318" y="19" fill="#2d3142" font-size="8" font-weight="600" font-family="'Geist Mono', monospace" text-anchor="middle">11</text><text x="1318" y="32" fill="#4f5d75" font-size="6" font-weight="500" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.12em">REMOVE</text>
+      <!-- j11 MERGE --><rect x="1420" y="8" width="20" height="16" rx="8" fill="rgba(45,49,66,0.12)"/><text x="1430" y="19" fill="#2d3142" font-size="8" font-weight="600" font-family="'Geist Mono', monospace" text-anchor="middle">12</text><text x="1430" y="32" fill="#4f5d75" font-size="6" font-weight="500" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.12em">MERGE</text>
+
+      <!-- Connectors (before nodes) -->
+      <path d="M 248 156 H 302 Q 310 156 310 148 V 108" fill="none" stroke="#4f5d75" stroke-width="1" marker-end="url(#arrow)"/>
+      <line x1="360" y1="76" x2="372" y2="76" stroke="#4f5d75" stroke-width="1" marker-end="url(#arrow)"/>
+      <line x1="472" y1="76" x2="484" y2="76" stroke="#4f5d75" stroke-width="1" marker-end="url(#arrow)"/>
+      <line x1="584" y1="76" x2="596" y2="76" stroke="#4f5d75" stroke-width="1" marker-end="url(#arrow)"/>
+      <line x1="696" y1="76" x2="708" y2="76" stroke="#4f5d75" stroke-width="1" marker-end="url(#arrow)"/>
+      <line x1="808" y1="76" x2="820" y2="76" stroke="#4f5d75" stroke-width="1" marker-end="url(#arrow)"/>
+      <line x1="920" y1="76" x2="932" y2="76" stroke="#4f5d75" stroke-width="1" marker-end="url(#arrow)"/>
+      <line x1="1032" y1="76" x2="1044" y2="76" stroke="#eb6c36" stroke-width="1.2" marker-end="url(#arrow-accent)"/>
+      <line x1="1144" y1="76" x2="1156" y2="76" stroke="#eb6c36" stroke-width="1.2" marker-end="url(#arrow-accent)"/>
+      <line x1="1256" y1="76" x2="1268" y2="76" stroke="#4f5d75" stroke-width="1" marker-end="url(#arrow)"/>
+      <line x1="1368" y1="76" x2="1380" y2="76" stroke="#4f5d75" stroke-width="1" marker-end="url(#arrow)"/>
+      <path d="M 1368 76 H 1422 Q 1430 76 1430 84 V 124" fill="none" stroke="#4f5d75" stroke-width="1" marker-end="url(#arrow)"/>
+
+      <!-- ORC nodes -->
+      <rect x="148" y="124" width="100" height="64" rx="6" fill="#ffffff" stroke="rgba(45,49,66,0.25)" stroke-width="1"/>
+      <rect x="152" y="128" width="14" height="10" rx="2" fill="rgba(45,49,66,0.12)"/><text x="159" y="136" fill="#2d3142" font-size="6" font-weight="600" font-family="'Geist Mono', monospace" text-anchor="middle">ORC</text>
+      <text x="198" y="150" fill="#2d3142" font-size="9" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Setup env</text>
+      <text x="198" y="164" fill="#4f5d75" font-size="6.5" font-family="'Geist Mono', monospace" text-anchor="middle">ROOT + config</text>
+      <text x="198" y="176" fill="#7a8399" font-size="6.5" font-family="'Geist Mono', monospace" text-anchor="middle">doebuild_environ</text>
+
+      <rect x="1380" y="124" width="100" height="64" rx="6" fill="#ffffff" stroke="rgba(45,49,66,0.25)" stroke-width="1"/>
+      <rect x="1384" y="128" width="14" height="10" rx="2" fill="rgba(45,49,66,0.12)"/><text x="1391" y="136" fill="#2d3142" font-size="6" font-weight="600" font-family="'Geist Mono', monospace" text-anchor="middle">ORC</text>
+      <text x="1430" y="150" fill="#2d3142" font-size="9" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Merge image</text>
+      <text x="1430" y="164" fill="#4f5d75" font-size="6.5" font-family="'Geist Mono', monospace" text-anchor="middle">D to ROOT+VDB</text>
+      <text x="1430" y="176" fill="#7a8399" font-size="6.5" font-family="'Geist Mono', monospace" text-anchor="middle">dblink.merge</text>
+      <rect x="1384" y="178" width="16" height="8" rx="2" fill="#9c6b50"/><text x="1392" y="184" fill="#ffffff" font-size="5" font-weight="700" font-family="'Geist Mono', monospace" text-anchor="middle">FL</text>
+
+      <!-- EBL nodes -->
+      <rect x="260" y="44" width="100" height="64" rx="6" fill="#ffffff" stroke="rgba(45,49,66,0.25)" stroke-width="1"/>
+      <rect x="264" y="48" width="14" height="10" rx="2" fill="rgba(45,49,66,0.12)"/><text x="271" y="56" fill="#2d3142" font-size="6" font-weight="600" font-family="'Geist Mono', monospace" text-anchor="middle">EBL</text>
+      <text x="310" y="70" fill="#2d3142" font-size="9" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">pkg_pretend</text>
+      <text x="310" y="84" fill="#4f5d75" font-size="6.5" font-family="'Geist Mono', monospace" text-anchor="middle">always</text>
+      <text x="310" y="96" fill="#7a8399" font-size="6.5" font-family="'Geist Mono', monospace" text-anchor="middle">bash +nofetch-if-restr</text>
+
+      <rect x="372" y="44" width="100" height="64" rx="6" fill="#ffffff" stroke="rgba(45,49,66,0.25)" stroke-width="1"/>
+      <rect x="376" y="48" width="14" height="10" rx="2" fill="rgba(45,49,66,0.12)"/><text x="383" y="56" fill="#2d3142" font-size="6" font-weight="600" font-family="'Geist Mono', monospace" text-anchor="middle">EBL</text>
+      <text x="422" y="70" fill="#2d3142" font-size="9" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">pkg_setup</text>
+      <text x="422" y="84" fill="#4f5d75" font-size="6.5" font-family="'Geist Mono', monospace" text-anchor="middle">always</text>
+      <text x="422" y="96" fill="#7a8399" font-size="6.5" font-family="'Geist Mono', monospace" text-anchor="middle">bash brush</text>
+
+      <rect x="484" y="44" width="100" height="64" rx="6" fill="#ffffff" stroke="rgba(45,49,66,0.25)" stroke-width="1"/>
+      <rect x="488" y="48" width="14" height="10" rx="2" fill="rgba(45,49,66,0.12)"/><text x="495" y="56" fill="#2d3142" font-size="6" font-weight="600" font-family="'Geist Mono', monospace" text-anchor="middle">EBL</text>
+      <text x="534" y="70" fill="#2d3142" font-size="9" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">src_unpack</text>
+      <text x="534" y="84" fill="#4f5d75" font-size="6.5" font-family="'Geist Mono', monospace" text-anchor="middle">DISTDIR to S</text>
+      <text x="534" y="96" fill="#7a8399" font-size="6.5" font-family="'Geist Mono', monospace" text-anchor="middle">bash unpack</text>
+
+      <rect x="596" y="44" width="100" height="64" rx="6" fill="#ffffff" stroke="rgba(45,49,66,0.25)" stroke-width="1"/>
+      <rect x="600" y="48" width="14" height="10" rx="2" fill="rgba(45,49,66,0.12)"/><text x="607" y="56" fill="#2d3142" font-size="6" font-weight="600" font-family="'Geist Mono', monospace" text-anchor="middle">EBL</text>
+      <text x="646" y="70" fill="#2d3142" font-size="9" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">src_prepare</text>
+      <text x="646" y="84" fill="#4f5d75" font-size="6.5" font-family="'Geist Mono', monospace" text-anchor="middle">patches on</text>
+      <text x="646" y="96" fill="#7a8399" font-size="6.5" font-family="'Geist Mono', monospace" text-anchor="middle">bash eapply</text>
+
+      <rect x="708" y="44" width="100" height="64" rx="6" fill="#ffffff" stroke="rgba(45,49,66,0.25)" stroke-width="1"/>
+      <rect x="712" y="48" width="14" height="10" rx="2" fill="rgba(45,49,66,0.12)"/><text x="719" y="56" fill="#2d3142" font-size="6" font-weight="600" font-family="'Geist Mono', monospace" text-anchor="middle">EBL</text>
+      <text x="758" y="70" fill="#2d3142" font-size="9" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">src_configure</text>
+      <text x="758" y="84" fill="#4f5d75" font-size="6.5" font-family="'Geist Mono', monospace" text-anchor="middle">econf build</text>
+      <text x="758" y="96" fill="#7a8399" font-size="6.5" font-family="'Geist Mono', monospace" text-anchor="middle">bash tc</text>
+
+      <rect x="820" y="44" width="100" height="64" rx="6" fill="#ffffff" stroke="rgba(45,49,66,0.25)" stroke-width="1"/>
+      <rect x="824" y="48" width="14" height="10" rx="2" fill="rgba(45,49,66,0.12)"/><text x="831" y="56" fill="#2d3142" font-size="6" font-weight="600" font-family="'Geist Mono', monospace" text-anchor="middle">EBL</text>
+      <text x="870" y="70" fill="#2d3142" font-size="9" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">src_compile</text>
+      <text x="870" y="84" fill="#4f5d75" font-size="6.5" font-family="'Geist Mono', monospace" text-anchor="middle">emake code</text>
+      <text x="870" y="96" fill="#7a8399" font-size="6.5" font-family="'Geist Mono', monospace" text-anchor="middle">bash tc</text>
+
+      <rect x="932" y="44" width="100" height="64" rx="6" fill="#ffffff" stroke="rgba(45,49,66,0.25)" stroke-width="1"/>
+      <rect x="936" y="48" width="14" height="10" rx="2" fill="rgba(45,49,66,0.12)"/><text x="943" y="56" fill="#2d3142" font-size="6" font-weight="600" font-family="'Geist Mono', monospace" text-anchor="middle">EBL</text>
+      <text x="982" y="70" fill="#2d3142" font-size="9" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">src_test</text>
+      <text x="982" y="84" fill="#4f5d75" font-size="6.5" font-family="'Geist Mono', monospace" text-anchor="middle">FEATURES=test</text>
+      <text x="982" y="96" fill="#7a8399" font-size="6.5" font-family="'Geist Mono', monospace" text-anchor="middle">bash dyn_test</text>
+
+      <rect x="1044" y="44" width="100" height="64" rx="6" fill="rgba(235,108,54,0.08)" stroke="#eb6c36" stroke-width="1.2"/>
+      <rect x="1048" y="48" width="14" height="10" rx="2" fill="rgba(235,108,54,0.18)"/><text x="1055" y="56" fill="#eb6c36" font-size="6" font-weight="600" font-family="'Geist Mono', monospace" text-anchor="middle">EBL</text>
+      <text x="1094" y="70" fill="#2d3142" font-size="9" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">src_install</text>
+      <text x="1094" y="84" fill="#4f5d75" font-size="6.5" font-family="'Geist Mono', monospace" text-anchor="middle">S to D image</text>
+      <text x="1094" y="96" fill="#7a8399" font-size="6.5" font-family="'Geist Mono', monospace" text-anchor="middle">bash doins</text>
+      <rect x="1128" y="98" width="16" height="8" rx="2" fill="#9c6b50"/><text x="1136" y="104" fill="#ffffff" font-size="5" font-weight="700" font-family="'Geist Mono', monospace" text-anchor="middle">FL</text>
+
+      <rect x="1156" y="44" width="100" height="64" rx="6" fill="#ffffff" stroke="rgba(45,49,66,0.25)" stroke-width="1"/>
+      <rect x="1160" y="48" width="14" height="10" rx="2" fill="rgba(45,49,66,0.12)"/><text x="1167" y="56" fill="#2d3142" font-size="6" font-weight="600" font-family="'Geist Mono', monospace" text-anchor="middle">EBL</text>
+      <text x="1206" y="70" fill="#2d3142" font-size="9" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">pre/postinst</text>
+      <text x="1206" y="84" fill="#4f5d75" font-size="6.5" font-family="'Geist Mono', monospace" text-anchor="middle">if defined</text>
+      <text x="1206" y="96" fill="#7a8399" font-size="6.5" font-family="'Geist Mono', monospace" text-anchor="middle">bash merge-env</text>
+      <rect x="1160" y="98" width="16" height="8" rx="2" fill="#9c6b50"/><text x="1168" y="104" fill="#ffffff" font-size="5" font-weight="700" font-family="'Geist Mono', monospace" text-anchor="middle">FL</text>
+      <rect x="1240" y="98" width="16" height="8" rx="2" fill="#9c6b50"/><text x="1248" y="104" fill="#ffffff" font-size="5" font-weight="700" font-family="'Geist Mono', monospace" text-anchor="middle">FL</text>
+
+      <rect x="1268" y="44" width="100" height="64" rx="6" fill="#ffffff" stroke="rgba(45,49,66,0.25)" stroke-width="1"/>
+      <rect x="1272" y="48" width="14" height="10" rx="2" fill="rgba(45,49,66,0.12)"/><text x="1279" y="56" fill="#2d3142" font-size="6" font-weight="600" font-family="'Geist Mono', monospace" text-anchor="middle">EBL</text>
+      <text x="1318" y="70" fill="#2d3142" font-size="9" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">prerm/postrm</text>
+      <text x="1318" y="84" fill="#4f5d75" font-size="6.5" font-family="'Geist Mono', monospace" text-anchor="middle">if replacing</text>
+      <text x="1318" y="96" fill="#7a8399" font-size="6.5" font-family="'Geist Mono', monospace" text-anchor="middle">bash vdb-env</text>
+
+      <rect x="1380" y="44" width="100" height="64" rx="6" fill="#ffffff" stroke="rgba(45,49,66,0.25)" stroke-width="1"/>
+      <rect x="1384" y="48" width="14" height="10" rx="2" fill="rgba(45,49,66,0.12)"/><text x="1391" y="56" fill="#2d3142" font-size="6" font-weight="600" font-family="'Geist Mono', monospace" text-anchor="middle">EBL</text>
+      <text x="1430" y="70" fill="#2d3142" font-size="9" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">config/info</text>
+      <text x="1430" y="84" fill="#4f5d75" font-size="6.5" font-family="'Geist Mono', monospace" text-anchor="middle">req. + always</text>
+      <text x="1430" y="96" fill="#7a8399" font-size="6.5" font-family="'Geist Mono', monospace" text-anchor="middle">bash phases</text>
+
+      <!-- Legend -->
+      <text x="144" y="212" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.14em">STEPS</text>
+      <rect x="280" y="202" width="20" height="14" rx="7" fill="rgba(45,49,66,0.12)"/><text x="290" y="213" fill="#2d3142" font-size="6" font-weight="600" font-family="'Geist Mono', monospace" text-anchor="middle">1</text><text x="290" y="225" fill="#4f5d75" font-size="6" font-family="'Geist Mono', monospace" text-anchor="middle">OPEN</text>
+      <rect x="380" y="202" width="20" height="14" rx="7" fill="rgba(45,49,66,0.12)"/><text x="390" y="213" fill="#2d3142" font-size="6" font-weight="600" font-family="'Geist Mono', monospace" text-anchor="middle">2</text><text x="390" y="225" fill="#4f5d75" font-size="6" font-family="'Geist Mono', monospace" text-anchor="middle">PRETEND</text>
+      <rect x="480" y="202" width="20" height="14" rx="7" fill="rgba(45,49,66,0.12)"/><text x="490" y="213" fill="#2d3142" font-size="6" font-weight="600" font-family="'Geist Mono', monospace" text-anchor="middle">3</text><text x="490" y="225" fill="#4f5d75" font-size="6" font-family="'Geist Mono', monospace" text-anchor="middle">SETUP</text>
+      <rect x="580" y="202" width="20" height="14" rx="7" fill="rgba(45,49,66,0.12)"/><text x="590" y="213" fill="#2d3142" font-size="6" font-weight="600" font-family="'Geist Mono', monospace" text-anchor="middle">4</text><text x="590" y="225" fill="#4f5d75" font-size="6" font-family="'Geist Mono', monospace" text-anchor="middle">UNPACK</text>
+      <rect x="680" y="202" width="20" height="14" rx="7" fill="rgba(45,49,66,0.12)"/><text x="690" y="213" fill="#2d3142" font-size="6" font-weight="600" font-family="'Geist Mono', monospace" text-anchor="middle">5</text><text x="690" y="225" fill="#4f5d75" font-size="6" font-family="'Geist Mono', monospace" text-anchor="middle">PREPARE</text>
+      <rect x="780" y="202" width="20" height="14" rx="7" fill="rgba(45,49,66,0.12)"/><text x="790" y="213" fill="#2d3142" font-size="6" font-weight="600" font-family="'Geist Mono', monospace" text-anchor="middle">6</text><text x="790" y="225" fill="#4f5d75" font-size="6" font-family="'Geist Mono', monospace" text-anchor="middle">CONF</text>
+      <rect x="880" y="202" width="20" height="14" rx="7" fill="rgba(45,49,66,0.12)"/><text x="890" y="213" fill="#2d3142" font-size="6" font-weight="600" font-family="'Geist Mono', monospace" text-anchor="middle">7</text><text x="890" y="225" fill="#4f5d75" font-size="6" font-family="'Geist Mono', monospace" text-anchor="middle">MAKE</text>
+      <rect x="980" y="202" width="20" height="14" rx="7" fill="rgba(45,49,66,0.12)"/><text x="990" y="213" fill="#2d3142" font-size="6" font-weight="600" font-family="'Geist Mono', monospace" text-anchor="middle">8</text><text x="990" y="225" fill="#4f5d75" font-size="6" font-family="'Geist Mono', monospace" text-anchor="middle">TEST</text>
+      <rect x="1080" y="202" width="20" height="14" rx="7" fill="rgba(235,108,54,0.20)"/><text x="1090" y="213" fill="#eb6c36" font-size="6" font-weight="600" font-family="'Geist Mono', monospace" text-anchor="middle">9</text><text x="1090" y="225" fill="#eb6c36" font-size="6" font-family="'Geist Mono', monospace" text-anchor="middle">INSTALL</text>
+      <rect x="1180" y="202" width="20" height="14" rx="7" fill="rgba(45,49,66,0.12)"/><text x="1190" y="213" fill="#2d3142" font-size="6" font-weight="600" font-family="'Geist Mono', monospace" text-anchor="middle">10</text><text x="1190" y="225" fill="#4f5d75" font-size="6" font-family="'Geist Mono', monospace" text-anchor="middle">HOOKS</text>
+      <rect x="1280" y="202" width="20" height="14" rx="7" fill="rgba(45,49,66,0.12)"/><text x="1290" y="213" fill="#2d3142" font-size="6" font-weight="600" font-family="'Geist Mono', monospace" text-anchor="middle">11</text><text x="1290" y="225" fill="#4f5d75" font-size="6" font-family="'Geist Mono', monospace" text-anchor="middle">REMOVE</text>
+      <rect x="1380" y="202" width="20" height="14" rx="7" fill="rgba(45,49,66,0.12)"/><text x="1390" y="213" fill="#2d3142" font-size="6" font-weight="600" font-family="'Geist Mono', monospace" text-anchor="middle">12</text><text x="1390" y="225" fill="#4f5d75" font-size="6" font-family="'Geist Mono', monospace" text-anchor="middle">MERGE</text>
+
+      <text x="144" y="239" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.14em">DATA TYPE</text>
+      <rect x="290" y="231" width="16" height="8" rx="2" fill="#9c6b50"/><text x="298" y="237" fill="#ffffff" font-size="5" font-weight="700" font-family="'Geist Mono', monospace" text-anchor="middle">FL</text>
+      <text x="314" y="239" fill="#4f5d75" font-size="6.5" font-family="'Geist Mono', monospace">FL = install image</text>
+      <text x="470" y="239" fill="#7a8399" font-size="6.5" font-family="'Geist Mono', monospace">left chip = input · right chip = output</text>
+
+      <text x="144" y="258" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.14em">FLOW</text>
+      <line x1="290" y1="254" x2="330" y2="254" stroke="#4f5d75" stroke-width="1" marker-end="url(#arrow)"/>
+      <text x="338" y="258" fill="#4f5d75" font-size="6.5" font-family="'Geist Mono', monospace">HANDOFF</text>
+      <line x1="470" y1="254" x2="510" y2="254" stroke="#eb6c36" stroke-width="1.2" marker-end="url(#arrow-accent)"/>
+      <text x="518" y="258" fill="#4f5d75" font-size="6.5" font-family="'Geist Mono', monospace">INTO + OUT OF INSTALL</text>
+    </svg>
+
+    <p class="note">SOURCES — phase order: docs/agent-context.md (pkg_pretend always, pkg_nofetch restricted-only, pkg_setup always, src chain, src_test on FEATURES=test, src_install source-only, pre/postinst if defined, prerm/postrm replacing-only, pkg_config on request, pkg_info always) + helpers/devmanual per-phase tables; runner: rust/portuale/src/ebuild_phases.rs run_commands:3101 over unmodified bin/*.sh, default bash per docs/brush-pin.md (brush opt-in). doebuild merge wiring (install-then-merge, qmerge skips install) in agent-context. OUT OF FRAME: eclass inherit(), doins/dodir/ecompress helpers (devmanual), pkg_nofetch folded into step 2's tool line, CONFIG_PROTECT/preserve-libs inside step 12 (see xinstall.html), unmerge/package/config actions (ebuild.rs).</p>
+  </div>
+</body>
+</html>

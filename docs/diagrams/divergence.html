@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>portuale vs portage — where -u @world diverges</title>
+  <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500;600&family=Noto+Sans+KR:wght@400;500;600&family=Noto+Serif+KR:wght@400&family=Noto+Sans+TC:wght@400;500;600&family=Noto+Serif+TC:wght@400&display=swap" rel="stylesheet">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --color-paper:   #f5f5f5;
+      --color-ink:     #2d3142;
+      --color-muted:   #4f5d75;
+      --color-accent:  #eb6c36;
+      --font-sans:     'Geist', system-ui, sans-serif;
+      --font-serif:    'Instrument Serif', 'Noto Serif KR', serif;
+      --font-mono:     'Geist Mono', ui-monospace, monospace;
+    }
+    body {
+      font-family: var(--font-sans);
+      background: var(--color-paper);
+      color: var(--color-ink);
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 3rem 2rem;
+    }
+    .frame { max-width: 1200px; width: 100%; }
+    .eyebrow {
+      font-family: var(--font-mono);
+      font-size: 0.66rem;
+      font-weight: 500;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+      color: var(--color-muted);
+      margin-bottom: 0.5rem;
+    }
+    h1 {
+      font-family: var(--font-serif);
+      font-size: clamp(1.5rem, 2.4vw + 0.75rem, 2rem);
+      font-weight: 400;
+      letter-spacing: -0.02em;
+      line-height: 1.15;
+      color: var(--color-ink);
+      margin-bottom: 0.5rem;
+    }
+    .sub {
+      font-family: var(--font-sans);
+      font-size: 0.9rem;
+      color: var(--color-muted);
+      margin-bottom: 1.5rem;
+    }
+    .note {
+      font-family: var(--font-mono);
+      font-size: 0.72rem;
+      line-height: 1.6;
+      color: var(--color-muted);
+      margin-top: 1rem;
+      max-width: 1000px;
+    }
+    svg { width: 100%; min-width: 900px; display: block; }
+  </style>
+</head>
+<body>
+  <div class="frame">
+    <p class="eyebrow">Flowchart · Paired traces · Diagram Design</p>
+    <h1>portuale vs portage — where -u @world diverges</h1>
+    <p class="sub">Same five evaluation rules on both traces. Companion to <span style="font-family:var(--font-mono)">docs/diagrams/emerge-world.html</span>.</p>
+
+    <svg viewBox="0 0 1000 780" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="divergence-title divergence-desc">
+      <title id="divergence-title">portuale vs portage divergence traces</title>
+      <desc id="divergence-desc">Flowchart with paired evaluation traces showing five shared rules for emerge -u @world, each marked pass or diverge on the portuale and portage sides, with the first divergence flagged at the abort-path rule.</desc>
+      <defs>
+        <marker id="arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#4f5d75"/></marker>
+        <marker id="arrow-accent" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#eb6c36"/></marker>
+        <marker id="arrow-link" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#2e5aa8"/></marker>
+        <marker id="arrow-open" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polyline points="0 0, 8 3, 0 6" fill="none" stroke="#4f5d75" stroke-width="1.2"/></marker>
+      </defs>
+
+      <rect width="100%" height="100%" fill="#f5f5f5"/>
+
+      <!-- Spine connectors (drawn before nodes) -->
+      <line x1="500" y1="104" x2="500" y2="160" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <line x1="500" y1="232" x2="500" y2="256" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <line x1="500" y1="328" x2="500" y2="352" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <line x1="500" y1="424" x2="500" y2="448" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <line x1="500" y1="520" x2="500" y2="544" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <!-- Split to outcomes: distinct attach points on R5 bottom edge -->
+      <path d="M 470 616 L 470 632 Q 470 640 478 640 L 312 640 Q 304 640 304 648 L 304 656" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <path d="M 530 616 L 530 632 Q 530 640 538 640 L 688 640 Q 696 640 696 648 L 696 656" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#arrow)"/>
+
+      <!-- First-divergence bracket (annotation, no arrowhead) -->
+      <line x1="716" y1="160" x2="716" y2="232" stroke="#eb6c36" stroke-width="1.6"/>
+      <line x1="708" y1="160" x2="716" y2="160" stroke="#eb6c36" stroke-width="1.6"/>
+      <line x1="708" y1="232" x2="716" y2="232" stroke="#eb6c36" stroke-width="1.6"/>
+      <rect x="728" y="188" width="132" height="16" rx="2" fill="#f5f5f5"/>
+      <text x="860" y="200" fill="#eb6c36" font-size="8" font-family="'Geist Mono', monospace" text-anchor="end" letter-spacing="0.06em">FIRST DIVERGENCE</text>
+
+      <!-- Start oval -->
+      <rect x="360" y="56" width="280" height="48" rx="20" fill="#f5f5f5"/>
+      <rect x="360" y="56" width="280" height="48" rx="20" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+      <text x="500" y="76" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">emerge -u @world</text>
+      <text x="500" y="92" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">one request, two traces</text>
+
+      <!-- R1 abort path (focal: coral border) -->
+      <rect x="300" y="160" width="400" height="72" rx="6" fill="#f5f5f5"/>
+      <rect x="300" y="160" width="400" height="72" rx="6" fill="rgba(235,108,54,0.08)" stroke="#eb6c36" stroke-width="1.2"/>
+      <text x="500" y="180" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">1 · Masked-dep abort path</text>
+      <line x1="500" y1="188" x2="500" y2="224" stroke="rgba(45,49,66,0.20)" stroke-width="1" stroke-dasharray="4,3"/>
+      <text x="316" y="204" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.04em">PORTUALE: DIVERGE</text>
+      <text x="316" y="220" fill="#7a8399" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.04em">report+exit0 / flag=abandon</text>
+      <text x="516" y="204" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.04em">PORTAGE: DIVERGE</text>
+      <text x="516" y="220" fill="#7a8399" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.04em">abandon, no list, exit 1</text>
+
+      <!-- R2 merge order -->
+      <rect x="300" y="256" width="400" height="72" rx="6" fill="#f5f5f5"/>
+      <rect x="300" y="256" width="400" height="72" rx="6" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+      <text x="500" y="276" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">2 · Merge-list order</text>
+      <line x1="500" y1="284" x2="500" y2="320" stroke="rgba(45,49,66,0.20)" stroke-width="1" stroke-dasharray="4,3"/>
+      <text x="316" y="300" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.04em">PORTUALE: DIVERGE</text>
+      <text x="316" y="316" fill="#7a8399" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.04em">deterministic serialize</text>
+      <text x="516" y="300" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.04em">PORTAGE: DIVERGE</text>
+      <text x="516" y="316" fill="#7a8399" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.04em">timing-sensitive order</text>
+
+      <!-- R3 EAPI -->
+      <rect x="300" y="352" width="400" height="72" rx="6" fill="#f5f5f5"/>
+      <rect x="300" y="352" width="400" height="72" rx="6" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+      <text x="500" y="372" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">3 · EAPI handling</text>
+      <line x1="500" y1="380" x2="500" y2="416" stroke="rgba(45,49,66,0.20)" stroke-width="1" stroke-dasharray="4,3"/>
+      <text x="316" y="396" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.04em">PORTUALE: DIVERGE</text>
+      <text x="316" y="412" fill="#7a8399" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.04em">5+ uniform, 7+ behavior</text>
+      <text x="516" y="396" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.04em">PORTAGE: DIVERGE</text>
+      <text x="516" y="412" fill="#7a8399" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.04em">per-EAPI branches</text>
+
+      <!-- R4 shell backend -->
+      <rect x="300" y="448" width="400" height="72" rx="6" fill="#f5f5f5"/>
+      <rect x="300" y="448" width="400" height="72" rx="6" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+      <text x="500" y="468" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">4 · Shell backend</text>
+      <line x1="500" y1="476" x2="500" y2="512" stroke="rgba(45,49,66,0.20)" stroke-width="1" stroke-dasharray="4,3"/>
+      <text x="316" y="492" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.04em">PORTUALE: PASS</text>
+      <text x="316" y="508" fill="#7a8399" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.04em">bash default, brush opt-in</text>
+      <text x="516" y="492" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.04em">PORTAGE: PASS</text>
+      <text x="516" y="508" fill="#7a8399" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.04em">bash, same observable</text>
+
+      <!-- R5 builder env + strip -->
+      <rect x="300" y="544" width="400" height="72" rx="6" fill="#f5f5f5"/>
+      <rect x="300" y="544" width="400" height="72" rx="6" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+      <text x="500" y="564" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">5 · Builder env + strip</text>
+      <line x1="500" y1="572" x2="500" y2="608" stroke="rgba(45,49,66,0.20)" stroke-width="1" stroke-dasharray="4,3"/>
+      <text x="316" y="588" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.04em">PORTUALE: DIVERGE</text>
+      <text x="316" y="604" fill="#7a8399" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.04em">whitelist env, no strip</text>
+      <text x="516" y="588" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.04em">PORTAGE: DIVERGE</text>
+      <text x="516" y="604" fill="#7a8399" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.04em">resolved env + estrip</text>
+
+      <!-- Outcomes -->
+      <rect x="164" y="656" width="280" height="48" rx="20" fill="#f5f5f5"/>
+      <rect x="164" y="656" width="280" height="48" rx="20" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+      <text x="304" y="676" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">portuale plan</text>
+      <text x="304" y="692" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">deterministic, L2 gaps open</text>
+
+      <rect x="556" y="656" width="280" height="48" rx="20" fill="#f5f5f5"/>
+      <rect x="556" y="656" width="280" height="48" rx="20" fill="rgba(45,49,66,0.05)" stroke="#4f5d75" stroke-width="1"/>
+      <text x="696" y="676" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">portage plan</text>
+      <text x="696" y="692" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">reference behavior</text>
+
+      <!-- Legend -->
+      <line x1="30" y1="728" x2="970" y2="728" stroke="rgba(45,49,66,0.10)" stroke-width="0.8"/>
+      <text x="30" y="744" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.14em">LEGEND</text>
+      <rect x="152" y="732" width="52" height="16" rx="2" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+      <text x="178" y="744" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle">PASS</text>
+      <rect x="232" y="732" width="64" height="16" rx="2" fill="#ffffff" stroke="#4f5d75" stroke-width="1"/>
+      <text x="264" y="744" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle">DIVERGE</text>
+      <line x1="348" y1="740" x2="380" y2="740" stroke="#eb6c36" stroke-width="1.6"/>
+      <text x="388" y="744" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace">FIRST</text>
+      <text x="512" y="744" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace">2 TRACES · 5 RULES · 10 CELLS</text>
+    </svg>
+
+    <p class="note">SOURCES — R1 abort path: docs/scope-backlog.md §A + PORTUALE_ABORT_PATH (masked-abort slices S1–S5); gnome-shell advice-bundle in TEST/compare/known-divergences.yaml. R2 order: TEST/ L0 96/120 note in docs/agent-context.md + _serialize_tasks cuts (scope-backlog §A). R3 EAPI 5+ floor: docs/agent-context.md. R4 shell: docs/agent-context.md “bash-execution backend”, docs/brush-pin.md. R5 env+strip: scope-backlog §K + TEST/findings/l2.md (l2-bpkgonly-env, l2-gpkg-dostrip-splitdebug, l2-gpkg-metadata-members). OUT OF FRAME: backtrack timing line (deterministic cut), slot-collision caret drift (upstream bug), soname key (unreachable), --solver= backends (§J).</p>
+  </div>
+</body>
+</html>

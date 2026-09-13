@@ -1,0 +1,52 @@
+{
+  "schema_version": 1,
+  "diagram_type": "sequence",
+  "meta": {
+    "title": "emerge -u @world — program flux",
+    "locale": "en",
+    "quality_profile": "showcase",
+    "column_fit": "spread",
+    "viewBox": [1080, 560]
+  },
+  "participants": [
+    { "id": "cli", "type": "external", "label": "User CLI", "sublabel": "emerge -u @world" },
+    { "id": "frontend", "type": "frontend", "label": "Emerge front-end", "sublabel": "run / main.py" },
+    { "id": "resolver", "type": "backend", "label": "Resolver", "sublabel": "depgraph / repo" },
+    { "id": "builder", "type": "backend", "label": "Builder", "sublabel": "build / Scheduler" },
+    { "id": "store", "type": "database", "label": "Repo VDB world", "sublabel": "tree / vardb / world" }
+  ],
+  "segments": [
+    { "from": 375, "to": 435, "label": "per package" }
+  ],
+  "messages": [
+    { "id": "m_update", "from": "cli", "to": "frontend", "y": 160, "label": "-U @WORLD", "variant": "default" },
+    { "id": "m_read", "from": "frontend", "to": "store", "y": 188, "label": "READ WORLD", "variant": "default" },
+    { "id": "m_atoms", "from": "store", "to": "frontend", "y": 216, "label": "WORLD ATOMS", "variant": "return" },
+    { "id": "m_resolve", "from": "frontend", "to": "resolver", "y": 244, "label": "RESOLVE -U", "variant": "emphasis" },
+    { "id": "m_repo", "from": "resolver", "to": "store", "y": 272, "label": "REPO+VDB", "variant": "default" },
+    { "id": "m_candidates", "from": "store", "to": "resolver", "y": 300, "label": "CANDIDATES", "variant": "return" },
+    { "id": "m_mergelist", "from": "resolver", "to": "frontend", "y": 328, "label": "MERGE LIST", "variant": "return" },
+    { "id": "m_build", "from": "frontend", "to": "builder", "y": 360, "label": "BUILD PKG", "variant": "emphasis" },
+    { "id": "m_merge", "from": "builder", "to": "store", "y": 390, "label": "MERGE D ROOT", "variant": "default" },
+    { "id": "m_vdb", "from": "store", "to": "builder", "y": 420, "label": "VDB WRITE", "variant": "return" },
+    { "id": "m_done", "from": "frontend", "to": "cli", "y": 450, "label": "DONE+WORLD", "variant": "emphasis" }
+  ],
+  "cards": [
+    {
+      "dot": "emerald",
+      "title": "Shared backbone",
+      "items": [
+        "CLI to front-end to resolver to builder to store",
+        "Same flux for portuale and portage"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "Per-package loop",
+      "items": [
+        "BUILD PKG through VDB WRITE repeats per merge entry",
+        "World file updates on DONE+WORLD"
+      ]
+    }
+  ]
+}

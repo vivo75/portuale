@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>portuale × portage — diagram index</title>
+  <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500;600&family=Noto+Sans+KR:wght@400;500;600&family=Noto+Serif+KR:wght@400&family=Noto+Sans+TC:wght@400;500;600&family=Noto+Serif+TC:wght@400&display=swap" rel="stylesheet">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --color-paper:   #f5f5f5;
+      --color-ink:     #2d3142;
+      --color-muted:   #4f5d75;
+      --color-soft:    #7a8399;
+      --color-accent:  #eb6c36;
+      --font-sans:     'Geist', system-ui, sans-serif;
+      --font-serif:    'Instrument Serif', 'Noto Serif KR', serif;
+      --font-mono:     'Geist Mono', ui-monospace, monospace;
+    }
+    body {
+      font-family: var(--font-sans);
+      background: var(--color-paper);
+      color: var(--color-ink);
+      min-height: 100vh;
+      display: flex;
+      justify-content: center;
+      padding: 3rem 2rem;
+    }
+    .frame { max-width: 1000px; width: 100%; }
+    .eyebrow {
+      font-family: var(--font-mono);
+      font-size: 0.66rem;
+      font-weight: 500;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+      color: var(--color-muted);
+      margin-bottom: 0.5rem;
+    }
+    h1 {
+      font-family: var(--font-serif);
+      font-size: clamp(1.5rem, 2.4vw + 0.75rem, 2rem);
+      font-weight: 400;
+      letter-spacing: -0.02em;
+      line-height: 1.15;
+      margin-bottom: 0.5rem;
+    }
+    .sub {
+      font-size: 0.9rem;
+      color: var(--color-muted);
+      margin-bottom: 2rem;
+      max-width: 640px;
+      line-height: 1.6;
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: 1.15fr 1fr;
+      gap: 1rem;
+    }
+    .card {
+      background: #ffffff;
+      border: 1px solid rgba(45,49,66,0.12);
+      border-radius: 6px;
+      padding: 1.25rem;
+      text-decoration: none;
+      color: inherit;
+      display: block;
+    }
+    .card:hover { border-color: var(--color-accent); }
+    .card.wide { grid-column: 1 / -1; }
+    .card-meta {
+      font-family: var(--font-mono);
+      font-size: 0.66rem;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+      color: var(--color-soft);
+      margin-bottom: 0.5rem;
+    }
+    .card-header { display: flex; align-items: baseline; gap: 0.6rem; margin-bottom: 0.5rem; }
+    .card-num {
+      font-family: var(--font-mono);
+      font-size: 0.75rem;
+      font-weight: 600;
+      color: var(--color-accent);
+    }
+    .card h3 { font-size: 1.05rem; font-weight: 600; letter-spacing: -0.01em; }
+    .card p { font-size: 0.85rem; color: var(--color-muted); line-height: 1.55; }
+    .card .go {
+      font-family: var(--font-mono);
+      font-size: 0.72rem;
+      color: var(--color-accent);
+      margin-top: 0.75rem;
+      display: block;
+    }
+    footer {
+      margin-top: 2.5rem;
+      padding-top: 1rem;
+      border-top: 1px solid rgba(45,49,66,0.10);
+      font-family: var(--font-mono);
+      font-size: 0.7rem;
+      color: var(--color-soft);
+      line-height: 1.7;
+    }
+    @media (max-width: 700px) { .grid { grid-template-columns: 1fr; } }
+  </style>
+</head>
+<body>
+  <div class="frame">
+    <p class="eyebrow">Diagram Design · Index</p>
+    <h1>portuale × portage — <span style="font-family:var(--font-mono); font-size:0.55em; letter-spacing:0;">emerge -u @world</span></h1>
+    <p class="sub">Six diagrams, one reading order: the shared program flux, where the two implementations diverge, a zoom-in on the builder gap, the cross-install proof, how a single dependency is selected, and the ebuild phase chain in order. Grounded in <span style="font-family:var(--font-mono); font-size:0.85em;">docs/scope-backlog.md</span>, <span style="font-family:var(--font-mono); font-size:0.85em;">TEST/findings/l2.md</span>, <span style="font-family:var(--font-mono); font-size:0.85em;">rust/portage-repo</span>, <span style="font-family:var(--font-mono); font-size:0.85em;">rust/portuale/src/ebuild_phases.rs</span> and the L2 container bed.</p>
+
+    <div class="grid">
+      <a class="card wide" href="./emerge-world.html">
+        <p class="card-meta">Sequence · 5 lifelines · 11 messages</p>
+        <div class="card-header"><span class="card-num">01</span><h3>Program flux — emerge -u @world</h3></div>
+        <p>Shared backbone for both implementations: CLI → emerge front-end → resolver → builder → repo + VDB + world store. Start here.</p>
+        <span class="go">OPEN emerge-world.html →</span>
+      </a>
+
+      <a class="card" href="./divergence.html">
+        <p class="card-meta">Flowchart · paired traces · 5 rules</p>
+        <div class="card-header"><span class="card-num">02</span><h3>Where they diverge</h3></div>
+        <p>Abort path, merge order, EAPI, shell backend, builder env — each PASS/DIVERGE on both traces, first divergence flagged.</p>
+        <span class="go">OPEN divergence.html →</span>
+      </a>
+
+      <a class="card" href="./rule5-builder.html">
+        <p class="card-meta">Flowchart · paired traces · 4 stages</p>
+        <div class="card-header"><span class="card-num">03</span><h3>Rule 5 zoom-in — builder gaps</h3></div>
+        <p>Env → strip → compress → package metadata: the four L2 producer gaps in pipeline order, focal on the HIGH env gap.</p>
+        <span class="go">OPEN rule5-builder.html →</span>
+      </a>
+
+      <a class="card wide" href="./xinstall.html">
+        <p class="card-meta">Sequence · 5 lifelines · LOOP per atom</p>
+        <div class="card-header"><span class="card-num">04</span><h3>Cross-install direction A</h3></div>
+        <p>Real Portage merges the portuale-built candidate in a fresh container — degraded phases included — and the normalized layer-l2 diff lands at 161 hard / 0 unexplained.</p>
+        <span class="go">OPEN xinstall.html →</span>
+      </a>
+
+      <a class="card" href="./dep-select.html">
+        <p class="card-meta">Flowchart · 9 nodes · 9 arrows</p>
+        <div class="card-header"><span class="card-num">05</span><h3>Is this dependency built?</h3></div>
+        <p>One dependency atom through the resolver: excluded? → visible? → installed-ok? → slot-clash? — ending in merge-list entry, kept as-is, skipped, or not selected.</p>
+        <span class="go">OPEN dep-select.html →</span>
+      </a>
+
+      <a class="card" href="./ebuild-phases.html">
+        <p class="card-meta">Process · 2 lanes · 12 steps</p>
+        <div class="card-header"><span class="card-num">06</span><h3>Ebuild phases, in order</h3></div>
+        <p>pkg_pretend → pkg_setup → src_unpack … src_install → hooks → merge: all twelve phases with run-conditions, focal on the src_install image pivot.</p>
+        <span class="go">OPEN ebuild-phases.html →</span>
+      </a>
+    </div>
+
+    <footer>Default skin (white-smoke + atomic-tangerine) · self_check.py OK on all six diagrams · sources cited in each diagram's caption note</footer>
+  </div>
+</body>
+</html>

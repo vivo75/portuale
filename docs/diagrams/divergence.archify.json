@@ -1,0 +1,51 @@
+{
+  "schema_version": 2,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "portuale vs portage — where -u @world diverges",
+    "locale": "en",
+    "quality_profile": "showcase"
+  },
+  "lanes": [
+    { "id": "rules", "label": "Shared evaluation rules" },
+    { "id": "plans", "label": "Resulting plans", "variant": "exception" }
+  ],
+  "mainPath": ["req", "r1_abort", "r2_order", "r3_eapi", "r4_shell", "r5_env", "portuale_plan"],
+  "nodes": [
+    { "id": "req", "lane": "rules", "col": 0, "type": "external", "label": "emerge -u @world", "sublabel": "one request two traces", "width": 132 },
+    { "id": "r1_abort", "lane": "rules", "col": 1, "type": "security", "label": "1 Masked-dep abort", "sublabel": "both DIVERGE", "tag": "first divergence", "width": 132 },
+    { "id": "r2_order", "lane": "rules", "col": 2, "type": "backend", "label": "2 Merge-list order", "sublabel": "both DIVERGE", "width": 132 },
+    { "id": "r3_eapi", "lane": "rules", "col": 3, "type": "backend", "label": "3 EAPI handling", "sublabel": "both DIVERGE", "width": 132 },
+    { "id": "r4_shell", "lane": "rules", "col": 4, "type": "backend", "label": "4 Shell backend", "sublabel": "both PASS", "width": 132 },
+    { "id": "r5_env", "lane": "rules", "col": 5, "type": "backend", "label": "5 Builder env strip", "sublabel": "both DIVERGE", "width": 132 },
+    { "id": "portuale_plan", "lane": "plans", "col": 5, "type": "backend", "label": "portuale plan", "sublabel": "deterministic gaps open", "width": 132 },
+    { "id": "portage_plan", "lane": "plans", "col": 4, "type": "external", "label": "portage plan", "sublabel": "reference behavior" }
+  ],
+  "edges": [
+    { "id": "d_start", "from": "req", "to": "r1_abort", "variant": "default", "role": "main" },
+    { "id": "d_12", "from": "r1_abort", "to": "r2_order", "variant": "default", "role": "main" },
+    { "id": "d_23", "from": "r2_order", "to": "r3_eapi", "variant": "default", "role": "main" },
+    { "id": "d_34", "from": "r3_eapi", "to": "r4_shell", "variant": "default", "role": "main" },
+    { "id": "d_45", "from": "r4_shell", "to": "r5_env", "variant": "default", "role": "main" },
+    { "id": "d_out_portuale", "from": "r5_env", "to": "portuale_plan", "variant": "default", "role": "main" },
+    { "id": "d_out_portage", "from": "r5_env", "to": "portage_plan", "variant": "default", "role": "branch" }
+  ],
+  "cards": [
+    {
+      "dot": "rose",
+      "title": "First divergence",
+      "items": [
+        "Rule 1 masked-dep abort path diverges first",
+        "Portuale reports exit 0, Portage abandons exit 1"
+      ]
+    },
+    {
+      "dot": "cyan",
+      "title": "Two traces five rules",
+      "items": [
+        "Same five rules evaluated on both traces",
+        "Only the shell backend passes on both sides"
+      ]
+    }
+  ]
+}

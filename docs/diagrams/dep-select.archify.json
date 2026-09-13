@@ -1,0 +1,54 @@
+{
+  "schema_version": 2,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "Is this dependency built?",
+    "locale": "en",
+    "quality_profile": "showcase"
+  },
+  "lanes": [
+    { "id": "decide", "label": "Selection decisions" },
+    { "id": "outcomes", "label": "Outcomes", "variant": "exception" }
+  ],
+  "mainPath": ["dep_atom", "excluded", "visible", "installed", "slot", "merge_entry"],
+  "nodes": [
+    { "id": "dep_atom", "lane": "decide", "col": 0, "type": "external", "label": "dep atom", "sublabel": "is_top_level false" },
+    { "id": "excluded", "lane": "decide", "col": 1, "type": "backend", "label": "EXCLUDED -X?" },
+    { "id": "visible", "lane": "decide", "col": 2, "type": "backend", "label": "VISIBLE CAND?" },
+    { "id": "installed", "lane": "decide", "col": 3, "type": "security", "label": "INSTALLED OK?", "tag": "focal" },
+    { "id": "slot", "lane": "decide", "col": 4, "type": "backend", "label": "SLOT CLASH?" },
+    { "id": "merge_entry", "lane": "decide", "col": 5, "type": "backend", "label": "Merge-list entry", "sublabel": "New Up Down Reinst", "width": 132 },
+    { "id": "skipped", "lane": "outcomes", "col": 1, "type": "external", "label": "Skipped", "sublabel": "matched by exclude" },
+    { "id": "kept", "lane": "outcomes", "col": 4, "type": "database", "label": "Kept as-is", "sublabel": "AlreadyInstalled" },
+    { "id": "notsel", "lane": "outcomes", "col": 3, "type": "external", "label": "Not selected", "sublabel": "masked clash-masked" }
+  ],
+  "edges": [
+    { "id": "e_start", "from": "dep_atom", "to": "excluded", "variant": "default", "role": "main" },
+    { "id": "e_excl_yes", "from": "excluded", "to": "skipped", "label": "YES: -X", "variant": "default", "role": "branch" },
+    { "id": "e_excl_no", "from": "excluded", "to": "visible", "label": "NO", "variant": "default", "role": "main" },
+    { "id": "e_vis_none", "from": "visible", "to": "notsel", "label": "NONE VISIBLE", "variant": "default", "role": "branch" },
+    { "id": "e_vis_yes", "from": "visible", "to": "installed", "label": "YES", "variant": "default", "role": "main" },
+    { "id": "e_inst_keep", "from": "installed", "to": "kept", "label": "YES: keep", "variant": "default", "role": "branch" },
+    { "id": "e_inst_sel", "from": "installed", "to": "slot", "label": "SELECT", "variant": "default", "role": "main" },
+    { "id": "e_slot_mask", "from": "slot", "to": "notsel", "label": "MASKED", "variant": "default", "role": "branch" },
+    { "id": "e_slot_ok", "from": "slot", "to": "merge_entry", "label": "OK FIXED", "variant": "default", "role": "main" }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Same logic as top-level",
+      "items": [
+        "One dep atom through resolve_pretend_graph minus selective",
+        "Excluded is checked before visibility"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "Focal decision",
+      "items": [
+        "INSTALLED OK keeps AlreadyInstalled unconditionally",
+        "Slot clash and masking end in Not selected"
+      ]
+    }
+  ]
+}

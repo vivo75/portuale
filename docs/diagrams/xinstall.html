@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>cross-install direction A — portage merges portuale gpkg</title>
+  <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500;600&family=Noto+Sans+KR:wght@400;500;600&family=Noto+Serif+KR:wght@400&family=Noto+Sans+TC:wght@400;500;600&family=Noto+Serif+TC:wght@400&display=swap" rel="stylesheet">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --color-paper:   #f5f5f5;
+      --color-ink:     #2d3142;
+      --color-muted:   #4f5d75;
+      --color-accent:  #eb6c36;
+      --font-sans:     'Geist', system-ui, sans-serif;
+      --font-serif:    'Instrument Serif', 'Noto Serif KR', serif;
+      --font-mono:     'Geist Mono', ui-monospace, monospace;
+    }
+    body {
+      font-family: var(--font-sans);
+      background: var(--color-paper);
+      color: var(--color-ink);
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 3rem 2rem;
+    }
+    .frame { max-width: 1200px; width: 100%; }
+    .eyebrow {
+      font-family: var(--font-mono);
+      font-size: 0.66rem;
+      font-weight: 500;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+      color: var(--color-muted);
+      margin-bottom: 0.5rem;
+    }
+    h1 {
+      font-family: var(--font-serif);
+      font-size: clamp(1.5rem, 2.4vw + 0.75rem, 2rem);
+      font-weight: 400;
+      letter-spacing: -0.02em;
+      line-height: 1.15;
+      color: var(--color-ink);
+      margin-bottom: 0.5rem;
+    }
+    .sub {
+      font-family: var(--font-sans);
+      font-size: 0.9rem;
+      color: var(--color-muted);
+      margin-bottom: 1.5rem;
+    }
+    .note {
+      font-family: var(--font-mono);
+      font-size: 0.72rem;
+      line-height: 1.6;
+      color: var(--color-muted);
+      margin-top: 1rem;
+      max-width: 1000px;
+    }
+    svg { width: 100%; min-width: 900px; display: block; }
+  </style>
+</head>
+<body>
+  <div class="frame">
+    <p class="eyebrow">Sequence · Diagram Design</p>
+    <h1>cross-install direction A — portage merges the portuale gpkg</h1>
+    <p class="sub">The L2 proof that a portuale-built archive installs cleanly under real Portage. Companion to <span style="font-family:var(--font-mono)">docs/diagrams/rule5-builder.html</span>.</p>
+
+    <svg viewBox="0 0 1000 668" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="xinstall-title xinstall-desc">
+      <title id="xinstall-title">cross-install direction A sequence</title>
+      <desc id="xinstall-desc">Sequence showing the harness building a package with portuale, real Portage merging the candidate archive in a fresh container with degraded phases, and the normalized layer-l2 diff verdict of zero unexplained findings.</desc>
+      <defs>
+        <marker id="arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#4f5d75"/></marker>
+        <marker id="arrow-accent" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#eb6c36"/></marker>
+        <marker id="arrow-link" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#2e5aa8"/></marker>
+        <marker id="arrow-open" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polyline points="0 0, 8 3, 0 6" fill="none" stroke="#4f5d75" stroke-width="1.2"/></marker>
+      </defs>
+
+      <rect width="100%" height="100%" fill="#f5f5f5"/>
+
+      <!-- LOOP frame -->
+      <rect x="72" y="124" width="656" height="148" rx="4" fill="rgba(45,49,66,0.02)" stroke="rgba(45,49,66,0.22)" stroke-width="1"/>
+      <rect x="72" y="124" width="40" height="16" rx="2" fill="#f5f5f5" stroke="rgba(45,49,66,0.22)" stroke-width="1"/>
+      <text x="92" y="136" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.12em">LOOP</text>
+      <text x="124" y="156" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.04em">[for each atom]</text>
+
+      <!-- Lifelines: C=100 H=300 B=500 A=700 P=900 -->
+      <line x1="100" y1="108" x2="100" y2="580" stroke="rgba(45,49,66,0.20)" stroke-width="1" stroke-dasharray="3,3"/>
+      <line x1="300" y1="108" x2="300" y2="580" stroke="rgba(45,49,66,0.20)" stroke-width="1" stroke-dasharray="3,3"/>
+      <line x1="500" y1="108" x2="500" y2="580" stroke="rgba(45,49,66,0.20)" stroke-width="1" stroke-dasharray="3,3"/>
+      <line x1="700" y1="108" x2="700" y2="580" stroke="rgba(45,49,66,0.20)" stroke-width="1" stroke-dasharray="3,3"/>
+      <line x1="900" y1="108" x2="900" y2="580" stroke="rgba(45,49,66,0.20)" stroke-width="1" stroke-dasharray="3,3"/>
+
+      <!-- Activation bars -->
+      <rect x="296" y="184" width="8" height="356" fill="rgba(45,49,66,0.06)" stroke="#4f5d75" stroke-width="0.8"/>
+      <rect x="496" y="184" width="8" height="32" fill="rgba(45,49,66,0.06)" stroke="#4f5d75" stroke-width="0.8"/>
+      <rect x="696" y="216" width="8" height="12" fill="rgba(45,49,66,0.06)" stroke="#4f5d75" stroke-width="0.8"/>
+      <rect x="696" y="336" width="8" height="16" fill="rgba(45,49,66,0.06)" stroke="#4f5d75" stroke-width="0.8"/>
+      <rect x="896" y="304" width="8" height="172" fill="rgba(45,49,66,0.06)" stroke="#4f5d75" stroke-width="0.8"/>
+      <rect x="96" y="248" width="8" height="12" fill="rgba(45,49,66,0.06)" stroke="#4f5d75" stroke-width="0.8"/>
+      <rect x="96" y="508" width="8" height="32" fill="rgba(45,49,66,0.06)" stroke="#4f5d75" stroke-width="0.8"/>
+
+      <!-- Messages (arrows before boxes) -->
+      <line x1="300" y1="184" x2="500" y2="184" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <line x1="500" y1="216" x2="700" y2="216" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <line x1="300" y1="248" x2="100" y2="248" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <line x1="300" y1="304" x2="900" y2="304" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <line x1="900" y1="336" x2="700" y2="336" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <path d="M 900 364 L 916 364 Q 924 364 924 372 L 924 380 Q 924 388 916 388 L 900 388" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <line x1="900" y1="412" x2="300" y2="412" stroke="#4f5d75" stroke-width="1.2" stroke-dasharray="5,4" marker-end="url(#arrow)"/>
+      <line x1="300" y1="444" x2="900" y2="444" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <line x1="900" y1="476" x2="300" y2="476" stroke="#4f5d75" stroke-width="1.2" stroke-dasharray="5,4" marker-end="url(#arrow)"/>
+      <line x1="300" y1="508" x2="100" y2="508" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <line x1="100" y1="540" x2="300" y2="540" stroke="#eb6c36" stroke-width="1.6" stroke-dasharray="5,4" marker-end="url(#arrow-accent)"/>
+
+      <!-- Arrow labels (mask + 8px gap above stroke) -->
+      <rect x="364" y="160" width="72" height="16" rx="2" fill="#f5f5f5"/>
+      <text x="400" y="172" fill="#7a8399" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.06em">BUILD PKG</text>
+
+      <rect x="564" y="192" width="72" height="16" rx="2" fill="#f5f5f5"/>
+      <text x="600" y="204" fill="#7a8399" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.06em">WRITE GPKG</text>
+
+      <rect x="164" y="224" width="72" height="16" rx="2" fill="#f5f5f5"/>
+      <text x="200" y="236" fill="#7a8399" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.06em">DIFF GPKG</text>
+
+      <rect x="564" y="280" width="72" height="16" rx="2" fill="#f5f5f5"/>
+      <text x="600" y="292" fill="#7a8399" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.06em">MERGE CAND</text>
+
+      <rect x="764" y="312" width="72" height="16" rx="2" fill="#f5f5f5"/>
+      <text x="800" y="324" fill="#7a8399" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.06em">READ GPKG</text>
+
+      <rect x="928" y="368" width="64" height="16" rx="2" fill="#f5f5f5"/>
+      <text x="932" y="380" fill="#7a8399" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.06em">DEGRADED</text>
+
+      <rect x="576" y="388" width="48" height="16" rx="2" fill="#f5f5f5"/>
+      <text x="600" y="400" fill="#7a8399" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.06em">MERGED</text>
+
+      <rect x="564" y="420" width="72" height="16" rx="2" fill="#f5f5f5"/>
+      <text x="600" y="432" fill="#7a8399" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.06em">MERGE REF</text>
+
+      <rect x="576" y="452" width="48" height="16" rx="2" fill="#f5f5f5"/>
+      <text x="600" y="464" fill="#7a8399" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.06em">MERGED</text>
+
+      <rect x="170" y="484" width="60" height="16" rx="2" fill="#f5f5f5"/>
+      <text x="200" y="496" fill="#7a8399" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.06em">DIFF L2</text>
+
+      <rect x="156" y="516" width="88" height="16" rx="2" fill="#f5f5f5"/>
+      <text x="200" y="528" fill="#eb6c36" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.06em">0 UNEXPLAINED</text>
+
+      <!-- Actors: C=100 H=300 B=500 A=700 P=900 -->
+      <!-- Comparator -->
+      <rect x="20" y="60" width="160" height="48" rx="6" fill="#f5f5f5"/>
+      <rect x="20" y="60" width="160" height="48" rx="6" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+      <rect x="28" y="68" width="32" height="12" rx="2" fill="transparent" stroke="rgba(45,49,66,0.40)" stroke-width="0.8"/>
+      <text x="44" y="76" fill="rgba(45,49,66,0.8)" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">STEP</text>
+      <text x="100" y="88" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Comparator</text>
+      <text x="100" y="100" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">normalize + diff.py</text>
+
+      <!-- Harness -->
+      <rect x="220" y="60" width="160" height="48" rx="6" fill="#f5f5f5"/>
+      <rect x="220" y="60" width="160" height="48" rx="6" fill="rgba(79,93,117,0.10)" stroke="#7a8399" stroke-width="1"/>
+      <rect x="228" y="68" width="28" height="12" rx="2" fill="transparent" stroke="rgba(122,131,153,0.40)" stroke-width="0.8"/>
+      <text x="242" y="76" fill="rgba(122,131,153,0.8)" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">API</text>
+      <text x="300" y="88" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Harness</text>
+      <text x="300" y="100" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">l2-portuale-builder</text>
+
+      <!-- Portuale builder -->
+      <rect x="420" y="60" width="160" height="48" rx="6" fill="#f5f5f5"/>
+      <rect x="420" y="60" width="160" height="48" rx="6" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+      <rect x="428" y="68" width="32" height="12" rx="2" fill="transparent" stroke="rgba(45,49,66,0.40)" stroke-width="0.8"/>
+      <text x="444" y="76" fill="rgba(45,49,66,0.8)" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">STEP</text>
+      <text x="500" y="88" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Portuale builder</text>
+      <text x="500" y="100" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">--buildpkgonly archive</text>
+
+      <!-- Candidate archive -->
+      <rect x="620" y="60" width="160" height="48" rx="6" fill="#f5f5f5"/>
+      <rect x="620" y="60" width="160" height="48" rx="6" fill="rgba(45,49,66,0.05)" stroke="#4f5d75" stroke-width="1"/>
+      <rect x="628" y="68" width="36" height="12" rx="2" fill="transparent" stroke="rgba(79,93,117,0.40)" stroke-width="0.8"/>
+      <text x="646" y="76" fill="rgba(79,93,117,0.8)" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">STORE</text>
+      <text x="700" y="88" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Candidate gpkg</text>
+      <text x="700" y="100" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">$PKGDIR candidate</text>
+
+      <!-- Real portage -->
+      <rect x="820" y="60" width="160" height="48" rx="6" fill="#f5f5f5"/>
+      <rect x="820" y="60" width="160" height="48" rx="6" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+      <rect x="828" y="68" width="32" height="12" rx="2" fill="transparent" stroke="rgba(45,49,66,0.40)" stroke-width="0.8"/>
+      <text x="844" y="76" fill="rgba(45,49,66,0.8)" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">STEP</text>
+      <text x="900" y="88" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Real portage</text>
+      <text x="900" y="100" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">merge in fresh ctr</text>
+
+      <!-- Legend -->
+      <line x1="30" y1="612" x2="970" y2="612" stroke="rgba(45,49,66,0.10)" stroke-width="0.8"/>
+      <text x="30" y="628" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.14em">LEGEND</text>
+      <line x1="152" y1="624" x2="184" y2="624" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <text x="192" y="628" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace">CALL</text>
+      <line x1="312" y1="624" x2="344" y2="624" stroke="#4f5d75" stroke-width="1.2" stroke-dasharray="5,4" marker-end="url(#arrow)"/>
+      <text x="352" y="628" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace">RETURN</text>
+      <line x1="472" y1="624" x2="504" y2="624" stroke="#eb6c36" stroke-width="1.6" stroke-dasharray="5,4" marker-end="url(#arrow-accent)"/>
+      <text x="512" y="628" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace">VERDICT</text>
+      <rect x="632" y="616" width="32" height="16" rx="2" fill="rgba(45,49,66,0.02)" stroke="rgba(45,49,66,0.22)" stroke-width="1"/>
+      <text x="672" y="628" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace">LOOP ATOM</text>
+      <text x="792" y="628" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace">161 HARD / 0 UNEXPL</text>
+    </svg>
+
+    <p class="note">SOURCES — TEST/run/l2-portuale-builder.sh (orchestrator: portage build -&gt; portuale build -&gt; structure both -&gt; per-atom gpkg-diff -&gt; three cross-installs -&gt; diff.py --layer l2), TEST/layers/l2/build-portuale.sh (--buildpkgonly --oneshot, fresh $PKGDIR, shared DISTDIR), S2 gpkg-diff.sh + --tolerate-payload pins, S3/S4 adjudications (161 hard explained, 0 unexplained; control portuale&lt;-portage 0/0), degraded merge l2-consumes-portuale-env-degraded (MERGE_TYPE unset, pkg_pretend skipped, 226 B vs 322 B phase.log). FOLDED: reference merge + L1 control shown as one MERGE REF pair; normalize.py ENV_DROP/BINPKGMD5 + strict-vs-tolerant modes in caption only. Real-set cross-install blocked on the build-env gap (S5 stop rule).</p>
+  </div>
+</body>
+</html>

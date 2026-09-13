@@ -1,0 +1,49 @@
+{
+  "schema_version": 2,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "Rule 5 expansion — builder env plus strip",
+    "locale": "en",
+    "quality_profile": "showcase"
+  },
+  "lanes": [
+    { "id": "stages", "label": "Producer pipeline stages" },
+    { "id": "archives", "label": "Resulting archives", "variant": "exception" }
+  ],
+  "mainPath": ["build_start", "s1_env", "s2_strip", "s3_compress", "s4_meta", "portuale_gpkg"],
+  "nodes": [
+    { "id": "build_start", "lane": "stages", "col": 0, "type": "external", "label": "source build starts", "sublabel": "same ebuild two builders", "width": 132 },
+    { "id": "s1_env", "lane": "stages", "col": 1, "type": "security", "label": "S1 Phase environment", "sublabel": "portuale DIVERGE", "tag": "first divergence", "width": 132 },
+    { "id": "s2_strip", "lane": "stages", "col": 2, "type": "backend", "label": "S2 Strip splitdebug", "sublabel": "portuale DIVERGE", "width": 132 },
+    { "id": "s3_compress", "lane": "stages", "col": 3, "type": "backend", "label": "S3 Docompress", "sublabel": "portuale DIVERGE", "width": 132 },
+    { "id": "s4_meta", "lane": "stages", "col": 4, "type": "backend", "label": "S4 Package metadata", "sublabel": "portuale DIVERGE", "width": 132 },
+    { "id": "portuale_gpkg", "lane": "archives", "col": 5, "type": "backend", "label": "portuale gpkg", "sublabel": "MERGE_TYPE unset", "width": 132 },
+    { "id": "portage_gpkg", "lane": "archives", "col": 4, "type": "external", "label": "portage gpkg", "sublabel": "reference archive", "width": 132 }
+  ],
+  "edges": [
+    { "id": "b_start", "from": "build_start", "to": "s1_env", "variant": "default", "role": "main" },
+    { "id": "b_12", "from": "s1_env", "to": "s2_strip", "variant": "default", "role": "main" },
+    { "id": "b_23", "from": "s2_strip", "to": "s3_compress", "variant": "default", "role": "main" },
+    { "id": "b_34", "from": "s3_compress", "to": "s4_meta", "variant": "default", "role": "main" },
+    { "id": "b_out_portuale", "from": "s4_meta", "to": "portuale_gpkg", "variant": "default", "role": "main" },
+    { "id": "b_out_portage", "from": "s4_meta", "to": "portage_gpkg", "variant": "default", "role": "branch" }
+  ],
+  "cards": [
+    {
+      "dot": "rose",
+      "title": "Focal HIGH gap",
+      "items": [
+        "S1 environment is the first and largest divergence",
+        "Whitelist env loses implicit USE and libdir vars"
+      ]
+    },
+    {
+      "dot": "cyan",
+      "title": "Pipeline order",
+      "items": [
+        "Env to strip to compress to metadata in build order",
+        "Portage passes every stage, portuale diverges all four"
+      ]
+    }
+  ]
+}

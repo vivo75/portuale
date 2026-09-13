@@ -1,0 +1,49 @@
+{
+  "schema_version": 2,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "Ebuild phases, in order",
+    "locale": "en",
+    "quality_profile": "showcase"
+  },
+  "lanes": [
+    { "id": "phases", "label": "Ebuild phase pairs" },
+    { "id": "doebuild", "label": "Doebuild orchestration", "variant": "exception" }
+  ],
+  "mainPath": ["setup_env", "g1", "g2", "g3", "g4", "g5", "merge"],
+  "nodes": [
+    { "id": "setup_env", "lane": "doebuild", "col": 0, "type": "backend", "label": "1 Setup env", "sublabel": "ROOT config", "width": 132 },
+    { "id": "g1", "lane": "phases", "col": 0, "type": "backend", "label": "2-3 pretend setup", "sublabel": "always / always", "width": 132 },
+    { "id": "g2", "lane": "phases", "col": 1, "type": "backend", "label": "4-5 unpack prepare", "sublabel": "DISTDIR-S / patches", "width": 132 },
+    { "id": "g3", "lane": "phases", "col": 2, "type": "backend", "label": "6-7 conf compile", "sublabel": "econf / emake", "width": 132 },
+    { "id": "g4", "lane": "phases", "col": 3, "type": "security", "label": "8-9 test install", "sublabel": "FEATURES-test / S-D", "tag": "image pivot", "width": 132 },
+    { "id": "g5", "lane": "phases", "col": 4, "type": "backend", "label": "10-11 hooks remove", "sublabel": "defined / replacing", "width": 132 },
+    { "id": "merge", "lane": "doebuild", "col": 5, "type": "backend", "label": "12 Merge image", "sublabel": "D to ROOT VDB", "width": 132 }
+  ],
+  "edges": [
+    { "id": "p_01", "from": "setup_env", "to": "g1", "variant": "default", "role": "main" },
+    { "id": "p_12", "from": "g1", "to": "g2", "variant": "default", "role": "main" },
+    { "id": "p_23", "from": "g2", "to": "g3", "variant": "default", "role": "main" },
+    { "id": "p_34", "from": "g3", "to": "g4", "variant": "default", "role": "main" },
+    { "id": "p_45", "from": "g4", "to": "g5", "label": "D image", "variant": "default", "role": "main" },
+    { "id": "p_56", "from": "g5", "to": "merge", "label": "merge D", "variant": "default", "role": "main" }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Twelve phases in six pairs",
+      "items": [
+        "pretend setup unpack prepare configure compile",
+        "test install hooks remove plus setup and merge"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "Focal image pivot",
+      "items": [
+        "Pair 8-9 holds src_install, the S to D image pivot",
+        "run_commands over unmodified bin sh, bash default"
+      ]
+    }
+  ]
+}

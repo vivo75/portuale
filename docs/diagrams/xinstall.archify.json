@@ -1,0 +1,51 @@
+{
+  "schema_version": 1,
+  "diagram_type": "sequence",
+  "meta": {
+    "title": "cross-install direction A — portage merges portuale gpkg",
+    "locale": "en",
+    "quality_profile": "showcase",
+    "column_fit": "spread",
+    "viewBox": [1080, 580]
+  },
+  "participants": [
+    { "id": "compare", "type": "backend", "label": "Comparator", "sublabel": "normalize + diff" },
+    { "id": "harness", "type": "frontend", "label": "Harness", "sublabel": "l2-portuale-builder" },
+    { "id": "builder", "type": "backend", "label": "Portuale builder", "sublabel": "buildpkgonly archive" },
+    { "id": "gpkg", "type": "database", "label": "Candidate gpkg", "sublabel": "PKGDIR candidate" },
+    { "id": "portage", "type": "external", "label": "Real portage", "sublabel": "merge in fresh ctr" }
+  ],
+  "segments": [
+    { "from": 145, "to": 230, "label": "per atom" }
+  ],
+  "messages": [
+    { "id": "x_build", "from": "harness", "to": "builder", "y": 160, "label": "BUILD PKG", "variant": "default" },
+    { "id": "x_write", "from": "builder", "to": "gpkg", "y": 188, "label": "WRITE GPKG", "variant": "default" },
+    { "id": "x_diff", "from": "harness", "to": "compare", "y": 216, "label": "DIFF GPKG", "variant": "dashed" },
+    { "id": "x_merge", "from": "harness", "to": "portage", "y": 250, "label": "MERGE CAND", "variant": "emphasis" },
+    { "id": "x_read", "from": "portage", "to": "gpkg", "y": 285, "label": "READ GPKG", "variant": "default", "note": "degraded phases" },
+    { "id": "x_merged", "from": "portage", "to": "harness", "y": 320, "label": "MERGED", "variant": "return" },
+    { "id": "x_ref", "from": "harness", "to": "portage", "y": 360, "label": "MERGE REF", "variant": "default" },
+    { "id": "x_refdone", "from": "portage", "to": "harness", "y": 395, "label": "MERGED", "variant": "return" },
+    { "id": "x_diffl2", "from": "harness", "to": "compare", "y": 430, "label": "DIFF L2", "variant": "default" },
+    { "id": "x_verdict", "from": "compare", "to": "harness", "y": 465, "label": "0 UNEXPLAINED", "variant": "emphasis" }
+  ],
+  "cards": [
+    {
+      "dot": "emerald",
+      "title": "Direction A proof",
+      "items": [
+        "Portuale builds the gpkg, real Portage merges it",
+        "Reference merge pairs the candidate merge"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "Verdict",
+      "items": [
+        "Normalized layer-l2 diff: 161 hard, 0 unexplained",
+        "Degraded phases folded into READ GPKG"
+      ]
+    }
+  ]
+}
