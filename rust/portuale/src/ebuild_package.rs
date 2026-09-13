@@ -283,12 +283,84 @@ fn resolve_compression_command(
     binpkg_compress_flags: &str,
     portage_bzip2_command: &str,
 ) -> Option<String> {
+    resolve_compression_command_jobs(
+        binpkg_compress,
+        binpkg_compress_flags,
+        portage_bzip2_command,
+        &makeopts_to_job_count(""),
+    )
+}
+
+/// Real `makeopts_to_job_count` (`util/cpuinfo.py:55-70`): the digits
+/// after the *last* `j` (or `--jobs=<whitespace>`) that is followed by
+/// optional whitespace and a number -- the greedy `.*(j|--jobs=\s)\s*
+/// ([0-9]+)` match -- else the CPU count (`get_cpu_count()` =
+/// `sched_getaffinity`). Returned as the matched text, as real does.
+fn makeopts_to_job_count(makeopts: &str) -> String {
+    let cpu_count = || {
+        std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(1)
+            .to_string()
+    };
+    let bytes = makeopts.as_bytes();
+    let digits_after = |mut i: usize| -> Option<String> {
+        while i < bytes.len() && bytes[i].is_ascii_whitespace() {
+            i += 1;
+        }
+        let start = i;
+        while i < bytes.len() && bytes[i].is_ascii_digit() {
+            i += 1;
+        }
+        (i > start).then(|| makeopts[start..i].to_string())
+    };
+    for i in (0..bytes.len()).rev() {
+        let hit = if bytes[i] == b'j' {
+            digits_after(i + 1)
+        } else if makeopts[i..].starts_with("--jobs=")
+            && bytes.get(i + 7).is_some_and(|b| b.is_ascii_whitespace())
+        {
+            digits_after(i + 8)
+        } else {
+            None
+        };
+        if let Some(jobs) = hit {
+            return jobs;
+        }
+    }
+    cpu_count()
+}
+
+/// Real `doebuild_environment()`'s `PORTAGE_COMPRESSION_COMMAND`
+/// (`doebuild.py:697-750`), set for every build phase regardless of
+/// `BINPKG_FORMAT`, from the resolved config (`lookup`: calling env over
+/// `make.conf`/profile/`make.globals`): `BINPKG_COMPRESS` (default
+/// `bzip2`; empty = `cat`), `BINPKG_COMPRESS_FLAGS_<NAME>` replacing
+/// `BINPKG_COMPRESS_FLAGS` when set, `{JOBS}` from `MAKEOPTS` (the
+/// already-defaulted phase value). `None` for an unknown compressor or a
+/// missing binary, like real (left unset, only warned about).
+pub fn phase_compression_command(lookup: impl Fn(&str) -> Option<String>) -> Option<String> {
+    let name = lookup("BINPKG_COMPRESS").unwrap_or_else(|| "bzip2".to_string());
+    if name.is_empty() {
+        return Some("cat".to_string());
+    }
+    let flags = lookup(&format!("BINPKG_COMPRESS_FLAGS_{}", name.to_uppercase()))
+        .or_else(|| lookup("BINPKG_COMPRESS_FLAGS"))
+        .unwrap_or_default();
+    let bzip2 = lookup("PORTAGE_BZIP2_COMMAND").unwrap_or_else(|| "bzip2".to_string());
+    let makeopts = lookup("MAKEOPTS").unwrap_or_else(|| "1".to_string());
+    resolve_compression_command_jobs(&name, &flags, &bzip2, &makeopts_to_job_count(&makeopts))
+}
+
+fn resolve_compression_command_jobs(
+    binpkg_compress: &str,
+    binpkg_compress_flags: &str,
+    portage_bzip2_command: &str,
+    jobs: &str,
+) -> Option<String> {
     let template = compress_template(binpkg_compress)?;
-    let jobs = std::thread::available_parallelism()
-        .map(|n| n.get())
-        .unwrap_or(1);
     let expanded = template
-        .replace("{JOBS}", &jobs.to_string())
+        .replace("{JOBS}", jobs)
         .replace("${PORTAGE_BZIP2_COMMAND}", portage_bzip2_command)
         .replace("${BINPKG_COMPRESS_FLAGS}", binpkg_compress_flags);
     let tokens: Vec<&str> = expanded.split_whitespace().collect();
@@ -1247,6 +1319,56 @@ mod tests {
                 "-T should be followed by a real positive integer, got {jobs_token:?}"
             );
         }
+    }
+
+    #[test]
+    fn makeopts_to_job_count_matches_the_real_greedy_regex() {
+        assert_eq!(makeopts_to_job_count("-j1"), "1");
+        assert_eq!(makeopts_to_job_count("-j4 -l5"), "4");
+        assert_eq!(makeopts_to_job_count("-j 3 -j12"), "12");
+        assert_eq!(makeopts_to_job_count("--jobs= 6"), "6");
+        let cpus = std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(1)
+            .to_string();
+        // `--jobs=6` has no whitespace after `=`, and `j` is followed by
+        // `obs`: real falls back to the CPU count.
+        assert_eq!(makeopts_to_job_count("--jobs=6"), cpus);
+        assert_eq!(makeopts_to_job_count(""), cpus);
+    }
+
+    #[test]
+    fn phase_compression_command_reads_the_resolved_config() {
+        let cfg = |pairs: &'static [(&'static str, &'static str)]| {
+            move |k: &str| {
+                pairs
+                    .iter()
+                    .find(|(n, _)| *n == k)
+                    .map(|(_, v)| v.to_string())
+            }
+        };
+        // Flag-less templates collapse to the bare binary (the L2 oracle's
+        // `zstd -T{JOBS}` + `MAKEOPTS=-j1` is `zstd -T1` the same way).
+        assert_eq!(
+            phase_compression_command(cfg(&[("BINPKG_COMPRESS", "gzip"), ("MAKEOPTS", "-j1")])),
+            Some("gzip".to_string())
+        );
+        assert_eq!(
+            phase_compression_command(cfg(&[
+                ("BINPKG_COMPRESS", "gzip"),
+                ("BINPKG_COMPRESS_FLAGS", "-1"),
+                ("BINPKG_COMPRESS_FLAGS_GZIP", "-9"),
+            ])),
+            Some("gzip -9".to_string())
+        );
+        assert_eq!(
+            phase_compression_command(cfg(&[("BINPKG_COMPRESS", "")])),
+            Some("cat".to_string())
+        );
+        assert_eq!(
+            phase_compression_command(cfg(&[("BINPKG_COMPRESS", "made-up-codec")])),
+            None
+        );
     }
 
     #[test]

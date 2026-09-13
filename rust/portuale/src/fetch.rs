@@ -182,6 +182,12 @@ pub struct FetchOptions {
     /// from the process env by `ebuild_phases::fetch_sources` (the same
     /// env-var shortcut `distlocks` above uses).
     pub force_mirror: bool,
+    /// The package's resolved `USE` (real `PORTAGE_USE`, the phase env's
+    /// `USE`) that `SRC_URI`'s `flag?` groups reduce against -- real
+    /// `use_reduce(SRC_URI, uselist=mysettings["PORTAGE_USE"].split())`.
+    /// Empty (every `flag?` off, every `!flag?` on) when no resolved
+    /// `USE` was threaded (standalone `ebuild <file>` with no graph).
+    pub use_flags: std::collections::HashSet<String>,
 }
 
 impl Default for FetchOptions {
@@ -195,6 +201,7 @@ impl Default for FetchOptions {
             restrict_fetch: false,
             restrict_primaryuri: false,
             force_mirror: false,
+            use_flags: std::collections::HashSet::new(),
         }
     }
 }
@@ -319,11 +326,11 @@ fn assemble_candidates(
 /// site): for every file `src_uri` (this ebuild's own real, md5-cache-
 /// sourced `SRC_URI` string) names for the current USE set, fetches it
 /// into `options.distdir` unless a real, Manifest-verified copy is
-/// already there. Portuale's own USE is always empty (see
-/// `ebuild_phases.rs`'s own `phase_setup_script`, which always exports
-/// `USE=""`) -- so a `flag?` group never fires and a `!flag?` one
-/// always does, matching real `use_reduce(pkgsettings["USE"].split())`
-/// against an empty set exactly.
+/// already there. `flag?` groups reduce against `options.use_flags`
+/// (real `use_reduce(..., uselist=PORTAGE_USE)`, #37 S4): before the
+/// resolved `USE` was threaded here every `flag?` group was treated as
+/// off, so an enabled `eselect? ( bashcomp.tar.gz )` was never fetched
+/// nor unpacked while `use eselect` was true in `src_prepare`.
 ///
 /// Returns the real filename list real `A` should be set to (the
 /// caller is responsible for actually exporting it -- this module has
@@ -339,8 +346,10 @@ pub fn fetch_src_uri(
     options: &FetchOptions,
 ) -> Result<Vec<String>, String> {
     let manifest = parse_manifest(&pkg_dir.join("Manifest"))?;
-    let entries = flatten_src_uri(src_uri, |negated, _flag| negated)
-        .map_err(|e| format!("{}: {e}", pkg_dir.display()))?;
+    let entries = flatten_src_uri(src_uri, |negated, flag| {
+        options.use_flags.contains(flag) != negated
+    })
+    .map_err(|e| format!("{}: {e}", pkg_dir.display()))?;
 
     if entries.is_empty() {
         return Ok(Vec::new());
@@ -673,6 +682,33 @@ mod tests {
         )
         .unwrap();
         assert_eq!(result, vec!["hello-1.0.tar.gz".to_string()]);
+    }
+
+    /// #37 S4 (L2 real set, `app-shells/bash-completion[eselect]`): a
+    /// `flag?` group reduces against the resolved `USE`, so an enabled
+    /// conditional distfile is part of `A`, and a `!flag?` one is not.
+    #[test]
+    fn fetch_src_uri_reduces_use_conditional_groups_against_the_resolved_use() {
+        let pkg_dir = tempdir();
+        let distdir = tempdir();
+        write_manifest(&pkg_dir, "hello-1.0.tar.gz", 11);
+        fs::write(distdir.join("hello-1.0.tar.gz"), b"hello world").unwrap();
+        let src_uri = "eselect? ( https://192.0.2.1/hello-1.0.tar.gz ) \
+                       !eselect? ( https://192.0.2.1/unlisted-1.0.tar.gz )";
+        let with_use = |flags: &[&str]| FetchOptions {
+            distdir: distdir.clone(),
+            gentoo_mirrors: vec![],
+            use_flags: flags.iter().map(|f| f.to_string()).collect(),
+            ..FetchOptions::default()
+        };
+        assert_eq!(
+            fetch_src_uri(&pkg_dir, src_uri, &with_use(&["eselect"])).unwrap(),
+            vec!["hello-1.0.tar.gz".to_string()]
+        );
+        // Flag off: the negated group is selected (and refused -- no
+        // Manifest entry), the enabled-only file is not.
+        let err = fetch_src_uri(&pkg_dir, src_uri, &with_use(&[])).unwrap_err();
+        assert!(err.contains("unlisted-1.0.tar.gz"), "{err}");
     }
 
     #[test]

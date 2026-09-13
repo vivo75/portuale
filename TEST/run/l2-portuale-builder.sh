@@ -59,7 +59,6 @@ KNOWN_FINDINGS=(
   "l2-gpkg-metadata-members|missing in b: metadata/(SIZE|IUSE|IUSE_EFFECTIVE|repository|REPO_REVISIONS|RDEPEND|REQUIRES|PROVIDES|NEEDED|NEEDED\.ELF\.2)$"
   "l2-gpkg-metadata-members|metadata/NEEDED(\.ELF\.2)? differs:"
   "l2-gpkg-metadata-members|Packages stanza has no REPO field$"
-  "l2-bpkgonly-env|metadata/environment\.bz2 differs:"
   "l2-gpkg-dostrip-splitdebug|only in [ab]: usr/lib/debug/"
   "l2-gpkg-dostrip-splitdebug|only in [ab]: usr/lib(64)?/libptsd"
   "l2-gpkg-dostrip-splitdebug|only in [ab]: usr/lib$"

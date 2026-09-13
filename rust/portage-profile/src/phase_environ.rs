@@ -393,6 +393,27 @@ pub fn phase_environ(config: &Config, pkg: Option<PhaseUse<'_>>) -> Vec<(String,
         }
     }
 
+    // 2b. `doebuild_environment()` dynamic defaults that depend only on
+    //     the config. `PATH`: when `env.d` sets it, real drops the
+    //     calling env's `PATH` so the config-file stack's value stands
+    //     (`_doebuild_path`, `doebuild.py:365-378`); the phase runner
+    //     prepends its helper dirs to whatever `PATH` pair it is handed.
+    //     `MAKEOPTS`/`GNUMAKEFLAGS`: filled from the CPU count when
+    //     neither `MAKEOPTS` nor `MAKEFLAGS` is set (`doebuild.py:646-653`).
+    if config.envd_sets_path
+        && let Some(path) = config.other_vars.get("PATH")
+    {
+        env.insert("PATH".to_string(), path.clone());
+    }
+    if !env.contains_key("MAKEOPTS") && !env.contains_key("MAKEFLAGS") {
+        let nproc = std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(1);
+        env.insert("MAKEOPTS".to_string(), format!("-j{nproc}"));
+        env.entry("GNUMAKEFLAGS".to_string())
+            .or_insert_with(|| format!("--load-average {nproc} --output-sync=line"));
+    }
+
     // 3. Incrementals, folded and sorted like real `regenerate()`.
     let features = config
         .resolved_incremental("FEATURES")
@@ -406,8 +427,10 @@ pub fn phase_environ(config: &Config, pkg: Option<PhaseUse<'_>>) -> Vec<(String,
         .join(" ");
     env.insert("FEATURES".to_string(), features.clone());
     env.insert("PORTAGE_FEATURES".to_string(), features);
-    if let Some(unset) = config.resolved_incremental("ENV_UNSET") {
-        env.insert("ENV_UNSET".to_string(), unset.join(" "));
+    for key in ["ENV_UNSET", "PROFILE_ONLY_VARIABLES"] {
+        if let Some(folded) = config.resolved_incremental(key) {
+            env.insert(key.to_string(), folded.join(" "));
+        }
     }
     env.insert("USE_EXPAND".to_string(), sorted_joined(&config.use_expand));
     env.insert(
@@ -536,6 +559,8 @@ mod tests {
              USE_EXPAND_VALUES_KERNEL=\"linux\"\n\
              IUSE_IMPLICIT=\"abi_x86_64 prefix\"\n\
              ENV_UNSET=\"DISPLAY PERL5LIB\"\n\
+             PROFILE_ONLY_VARIABLES=\"KERNEL ELIBC\"\n\
+             PROFILE_ONLY_VARIABLES=\"${PROFILE_ONLY_VARIABLES} ARCH\"\n\
              USE=\"abi_x86_64 baseflag\"\nVIDEO_CARDS=\"nvidia\"\n\
              FEATURES=\"assume-digests binpkg-docompress binpkg-dostrip sandbox\"\n\
              SRC_URI=\"should-never-export\"\nHOME=\"/profile/home\"\n",
@@ -772,6 +797,51 @@ mod tests {
                 assert_eq!(get(&env, "ARCH"), Some("amd64"));
             },
         );
+    }
+
+    #[test]
+    fn phase_environ_applies_the_doebuild_environment_config_defaults() {
+        let (root, repo) = synthetic_root("dynamic", "PATH=\"/conf/bin:/usr/bin\"\n");
+        // No env.d PATH: the calling env's PATH is the phase runner's
+        // business (computed key), nothing exported here.
+        with_test_env(&[("PATH", "/env/bin")], || {
+            let c = resolve(&root, &repo);
+            assert!(!c.envd_sets_path);
+            let env = phase_environ(&c, None);
+            assert_eq!(get(&env, "PATH"), None);
+            // Incremental fold of `${PROFILE_ONLY_VARIABLES} ARCH`, sorted.
+            assert_eq!(
+                get(&env, "PROFILE_ONLY_VARIABLES"),
+                Some("ARCH ELIBC KERNEL")
+            );
+            // Neither MAKEOPTS nor MAKEFLAGS: the CPU-count default.
+            let nproc = std::thread::available_parallelism()
+                .map(|n| n.get())
+                .unwrap_or(1);
+            let makeopts = format!("-j{nproc}");
+            assert_eq!(get(&env, "MAKEOPTS"), Some(makeopts.as_str()));
+            let gnumake = format!("--load-average {nproc} --output-sync=line");
+            assert_eq!(get(&env, "GNUMAKEFLAGS"), Some(gnumake.as_str()));
+        });
+        with_test_env(&[("MAKEFLAGS", "-j3")], || {
+            let env = phase_environ(&resolve(&root, &repo), None);
+            assert_eq!(get(&env, "MAKEOPTS"), None);
+            assert_eq!(get(&env, "GNUMAKEFLAGS"), None);
+        });
+        // env.d sets PATH: the calling env's PATH is dropped and the
+        // config-file stack's value (make.conf over env.d) is exported.
+        fs::create_dir_all(root.join("etc")).unwrap();
+        fs::write(
+            root.join("etc/profile.env"),
+            "export PATH='/usr/local/bin:/usr/bin:/opt/bin'\n",
+        )
+        .unwrap();
+        with_test_env(&[("PATH", "/env/bin")], || {
+            let c = resolve(&root, &repo);
+            assert!(c.envd_sets_path);
+            let env = phase_environ(&c, None);
+            assert_eq!(get(&env, "PATH"), Some("/conf/bin:/usr/bin"));
+        });
     }
 
     #[test]

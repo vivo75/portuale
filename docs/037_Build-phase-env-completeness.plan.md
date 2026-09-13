@@ -1,6 +1,6 @@
 # Plan: backlog #37 — Build-phase env completeness (merged)
 
-Status: **S0-S3 complete 2026-09-13.** S3 moved every phase-execution/merge gate onto the resolved `FEATURES` (raw env only as documented standalone fallbacks), validated on the L2 porttest track (0 unexplained). S4/S5 (real-set re-run, docs closeout) remain. S2 threaded the resolved env into `emerge`/`--resume`/`--buildpkgonly` (both backends), dropped `AA`/`O`, shell-quoted the brush exports, and captured the L2 porttest track green (0 unexplained) with the `l2-bpkgonly-env` rows deleted; residuals filed in `TEST/findings/l2.md` S2. G1 (full
+Status: **S0-S4 complete 2026-09-13.** S4 deleted the `l2-bpkgonly-env` allowlist rows (porttest track green from a clean rebuild, every archive `environment.bz2` equal to real), fixed the six phase-env gaps the container runs exposed, and took the real set through the whole build closure (oniguruma/jq in `/usr/lib64`); its next stop is #39 (dep-metadata rewrite + `Packages` index fields), not env. Only S5 (docs closeout) remains. S3 moved every phase-execution/merge gate onto the resolved `FEATURES` (raw env only as documented standalone fallbacks), validated on the L2 porttest track (0 unexplained). S4/S5 (real-set re-run, docs closeout) remain. S2 threaded the resolved env into `emerge`/`--resume`/`--buildpkgonly` (both backends), dropped `AA`/`O`, shell-quoted the brush exports, and captured the L2 porttest track green (0 unexplained) with the `l2-bpkgonly-env` rows deleted; residuals filed in `TEST/findings/l2.md` S2. G1 (full
 layer) and G3 (`PORTAGE_USE` everywhere) decided by the owner; S1 landed
 `portage_profile::phase_environ` / `portage_use` + the three transcribed
 key sets, unit-tested, not yet threaded (S2). S0's exhaustive
@@ -556,15 +556,15 @@ upgrade), L0.
 
 ## 9. Definition of done
 
-- [ ] S0 table complete; every row cited and routed.
-- [ ] G1-G7 answered and recorded in §4.
-- [ ] Porttest track: all env-caused diffs gone; `l2-bpkgonly-env`
+- [x] S0 table complete; every row cited and routed.
+- [x] G1-G7 answered and recorded in §4.
+- [x] Porttest track: all env-caused diffs gone; `l2-bpkgonly-env`
       allowlist rows deleted.
 - [ ] `--buildpkgonly` ≡ `-b` env-shaped metadata.
-- [ ] Oniguruma → `/usr/lib64`; jq configures (commands in `l2.md`).
+- [x] Oniguruma → `/usr/lib64`; jq configures (commands in `l2.md`).
 - [ ] `SOURCE_DATE_EPOCH` reaches the phase from config (L3 G0.6).
-- [ ] No undocumented `std::env::var("FEATURES")` on the build path.
-- [ ] Full verification pass green; L1/L0 unchanged apart from fixed rows.
+- [x] No undocumented `std::env::var("FEATURES")` on the build path.
+- [x] Full verification pass green; L1/L0 unchanged apart from fixed rows.
 - [ ] Docs updated (S5); no dead allowlist entries.
 
 ## 10. Delegation brief (for subagents)
@@ -681,5 +681,40 @@ end-to-end**.
 - Residual filed: `execute_unmerge`'s `unmerge-backup`/`split-elog` raw
   (no config reaches that helper); standalone `ebuild <file>` by design.
 
-(append future entries here as S4-S5 run: command, expected, actual,
+### S4 — 2026-09-13 (container proof; allowlist gone; real set past jq)
+
+Full evidence and commands: `TEST/findings/l2.md` "S4 — container proof
++ allowlist cleanup (#37)".
+
+- Allowlist: `l2-bpkgonly-env` deleted from `l2-portuale-builder.sh` and
+  `known-divergences.yaml`. Porttest track `L2_REBUILD=1` →
+  `TEST/logs/l2-20260913T174459Z`: 0 unexplained, rc 0, no allowlist row
+  covers `environment.bz2`.
+- Fixed here (all phase-env, all real-cited): pkg metadata exports
+  (`DEFINED_PHASES`/`KEYWORDS`/`LICENSE`), `PORTAGE_COMPRESSION_COMMAND`
+  for every build with `{JOBS}` from `MAKEOPTS`, `PROFILE_ONLY_VARIABLES`
+  incremental fold, env.d `PATH` over the calling env
+  (`_doebuild_path`), `MAKEOPTS`/`GNUMAKEFLAGS` CPU-count defaults,
+  `SRC_URI` reduced against the threaded `USE` (bash-completion
+  `eselect?` distfile), EAPI ≥ 7 trailing-slash strip on
+  `D`/`ED`/`ROOT`/`EROOT` (pv/htop `KERNEL_DIR`).
+- Real set `L2_REBUILD=1 L2_MODE=payload-tolerant L2_BUILD_MODE=deep` →
+  `TEST/logs/l2-20260913T174940Z`: all 18 closure packages build under
+  portuale; oniguruma/jq in `/usr/lib64`; no environment row left. Next
+  stop (not env): `l2-gpkg-dep-metadata-rewrite` (install-time `*DEPEND`
+  rewrite) and `l2-pkgindex-eapi-missing` (+ no `REPO`/unreduced
+  `RDEPEND` in `Packages`) — both #39; the cross-install consumer then
+  falls back to the image binhost, whose GPG check fails.
+- L1 porttest pair (portage upgraded) `TEST/logs/l1-20260913T175944Z`:
+  0 hard findings. L0 `TEST/logs/l0-20260913T180053Z`: identical to the
+  `l0-20260912T205626Z` baseline (98 clean, parity 0.817, same 38
+  pre-existing unexplained lines).
+- Verification: `cargo fmt`, workspace `cargo clippy --release
+  --all-targets` 0 warnings, `cargo test --release` green; `python3 -m
+  pytest tests -q` 1561 passed / 4 failed = the pre-existing no-TTY
+  `--ask`/`pkg_config` set recorded at S1.
+- Not done in S4 (still open for the DoD): `--buildpkgonly` ≡ `-b`
+  metadata comparison and the `SOURCE_DATE_EPOCH` L3 pointer (S5 docs).
+
+(append future entries here as S5 runs: command, expected, actual,
 root cause, fix ref / backlog id)

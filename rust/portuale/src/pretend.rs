@@ -4063,7 +4063,7 @@ fn run_resume(
     // env -- without these a resumed `src_compile` sees `CFLAGS=""`.
     // (The per-entry resolved `USE` already flows via
     // `candidate_use_flags_display` above.)
-    merge_options.build_env = portage_profile::phase_environ(config, None);
+    merge_options.build_env = crate::emerge_build::run_wide_phase_env(config);
     merge_options.resolved_config = Some(std::sync::Arc::new(config.clone()));
     merge_options.package_env_vars = config.package_env_vars.clone();
     // An all-source resume list keeps going through `run_source_merge`
@@ -11740,7 +11740,7 @@ pub fn run(args: &[String]) -> ExitCode {
         // not every scalar (`PATH`/`HOME`/... are handled by
         // `phase_env_vars` itself), and `FEATURES` stays out (portuale
         // models it via its own `feature_enabled`, forcing `""` here).
-        merge_options.build_env = portage_profile::phase_environ(&config, None);
+        merge_options.build_env = crate::emerge_build::run_wide_phase_env(&config);
         merge_options.resolved_config = Some(std::sync::Arc::new(config.clone()));
         // Real `preinst_mask()`: `INSTALL_MASK` + the `no{man,info,doc}`
         // `FEATURES` fold, from the resolved config (not the process

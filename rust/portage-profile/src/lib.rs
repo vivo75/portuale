@@ -447,6 +447,12 @@ pub struct Config {
     /// `resolve_config`), not `config_root`. `/etc/env.d/*` practically
     /// never sets `USE`, so this is almost always empty.
     pub envd_use_tokens: Vec<String>,
+    /// `<eroot>/etc/profile.env` assigns `PATH`. Real `_doebuild_path`
+    /// (`doebuild.py:365-368`) then drops the calling env's `PATH` so the
+    /// phase `PATH` is the config-file stack's value
+    /// (`other_vars["PATH"]`) -- "this allows packages to update our PATH
+    /// as they get installed".
+    pub envd_sets_path: bool,
     pub accept_keywords: HashSet<String>,
     /// Raw atom or bounded-wildcard-atom strings (see
     /// `portage_dep::parse_wildcard_atom`) from `package.mask`, with
@@ -954,13 +960,17 @@ impl Config {
 }
 
 /// The `const.INCREMENTALS` variables [`Config::incremental_sources`]
-/// tracks for `emerge --info` (the rest of real's tuple is either
-/// USE-related -- handled separately -- or never displayed).
-const TRACKED_INCREMENTALS: [&str; 4] = [
+/// tracks for `emerge --info` and the build-phase env (the rest of real's
+/// tuple is either USE-related -- handled separately -- or
+/// `environ_filter`ed). `PROFILE_ONLY_VARIABLES` is exported folded and
+/// sorted (`const.py:132`): the profile's `"${PROFILE_ONLY_VARIABLES}
+/// ARCH …"` stacking must not survive as a literal concatenation.
+const TRACKED_INCREMENTALS: [&str; 5] = [
     "CONFIG_PROTECT",
     "CONFIG_PROTECT_MASK",
     "ENV_UNSET",
     "FEATURES",
+    "PROFILE_ONLY_VARIABLES",
 ];
 
 /// Splits `text` into logical assignment lines, joining physical lines
@@ -2269,6 +2279,9 @@ pub fn resolve_config(
                 // `expand_map = env_d.copy()` seeding.
                 let value = substitute(raw_value, &scalars);
                 note_incremental(&mut config, key, &value);
+                if key == "PATH" {
+                    config.envd_sets_path = true;
+                }
                 // env.d is a real scalar db too (real `configdict["env.d"]`):
                 // its `LANG` / `LEX` / … surface in `emerge --info`. Lowest
                 // priority -- `make.globals`, the profile chain and

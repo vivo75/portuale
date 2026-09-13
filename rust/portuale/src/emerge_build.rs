@@ -127,7 +127,7 @@ pub fn run_buildpkgonly(
     // The run-wide half of real `config.environ()`, once for the whole
     // run (`--buildpkgonly` has no `MergeOptions`; `entry_phase_env_tail`
     // adds the per-entry half). #37 S2.
-    let run_wide = portage_profile::phase_environ(config, None);
+    let run_wide = run_wide_phase_env(config);
     let mut failures = Vec::new();
     for entry in entries {
         if entry.source == CandidateSource::Binary {
@@ -622,6 +622,50 @@ fn entry_identity_env(entry: &GraphEntry, candidate: Option<&Candidate>) -> Vec<
     env
 }
 
+/// The run-wide half of real `config.environ()` for a build:
+/// `portage_profile::phase_environ(config, None)` plus the dynamic
+/// `doebuild_environment()` value that needs portuale's compressor table,
+/// `PORTAGE_COMPRESSION_COMMAND` (`doebuild.py:697-750`, set for every
+/// build regardless of `BINPKG_FORMAT`). `BINPKG_COMPRESS*` are
+/// `environ_filter`ed, so they are read from the calling env / config
+/// directly; `MAKEOPTS` from the (already-defaulted) export set.
+pub(crate) fn run_wide_phase_env(config: &portage_profile::Config) -> Vec<(String, String)> {
+    let mut env = portage_profile::phase_environ(config, None);
+    let lookup = |key: &str| {
+        env.iter()
+            .find(|(k, _)| k == key)
+            .map(|(_, v)| v.clone())
+            .or_else(|| std::env::var(key).ok())
+            .or_else(|| config.other_vars.get(key).cloned())
+    };
+    if let Some(cmd) = ebuild_package::phase_compression_command(lookup) {
+        env.push(("PORTAGE_COMPRESSION_COMMAND".to_string(), cmd));
+    }
+    env
+}
+
+/// The package metadata keys real `config.setcpv` loads into
+/// `configdict["pkg"]` (`_setcpv_aux_keys`, `config.py:171-189`) that
+/// survive `environ_filter` and stay exported in the saved environment:
+/// `bin/ebuild.sh` unsets `IUSE`/`REQUIRED_USE`/`PROPERTIES`/`RESTRICT`/
+/// `INHERITED`/`EAPI` before sourcing the ebuild (`:634-635`), so only
+/// these three keep real's `declare -x`; `SLOT`/`EAPI`/`INHERITED` are
+/// computed elsewhere. Values from the md5-cache (real `aux_get`; an
+/// omitted key is `""`).
+const EXPORTED_PKG_METADATA: [&str; 3] = ["DEFINED_PHASES", "KEYWORDS", "LICENSE"];
+
+fn entry_metadata_env(entry: &GraphEntry, candidate: &Candidate) -> Vec<(String, String)> {
+    let pf = format!("{}-{}", entry.package, candidate.version);
+    let Ok(metadata) = portage_repo::read_md5_cache(&candidate.repo_location, &entry.category, &pf)
+    else {
+        return Vec::new();
+    };
+    EXPORTED_PKG_METADATA
+        .iter()
+        .map(|k| (k.to_string(), metadata.get(*k).cloned().unwrap_or_default()))
+        .collect()
+}
+
 /// The per-entry tail of [`entry_build_env`]: resolved `USE` (or the
 /// legacy enabled-IUSE-only `USE` when no config is in scope), the
 /// `IUSE_EFFECTIVE`/`USE_EXPAND` rows, and the `SLOT`/repo identity.
@@ -646,6 +690,7 @@ fn entry_phase_env_tail(
         return env;
     };
     if let Some(candidate) = candidate {
+        env.extend(entry_metadata_env(entry, candidate));
         let enabled = portage_repo::candidate_effective_use_flags(
             repos,
             config,

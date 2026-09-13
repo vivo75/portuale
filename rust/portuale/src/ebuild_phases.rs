@@ -1053,6 +1053,7 @@ async fn fetch_sources(
     config_root: &Path,
     shell: ShellBackend,
     features: &str,
+    use_flags: &str,
 ) -> Result<(Vec<String>, Vec<String>), String> {
     let Some(repo_root) = repo_root_for(&env.pkg_dir) else {
         return Ok((Vec::new(), Vec::new()));
@@ -1103,6 +1104,7 @@ async fn fetch_sources(
             // `distlocks` above (no full config resolution on this
             // path), defaulting to real `false`.
             force_mirror: features.split_whitespace().any(|tok| tok == "force-mirror"),
+            use_flags: use_flags.split_whitespace().map(String::from).collect(),
         },
     );
     let a = match a {
@@ -1974,13 +1976,10 @@ fn phase_env_vars(
     // unconditionally below), so real `ED="${D}"` (no prefix-relative
     // adjustment) collapses to exactly `D`'s own value -- no separate
     // computation needed.
-    let d = format!("{}/", env.d().display());
+    let d = eapi_path_var(&env.eapi, &format!("{}/", env.d().display()));
+    let root_value = eapi_path_var(&env.eapi, &format!("{}/", root.display()));
     let resolved_features = features_string(extra_env);
-    let path = format!(
-        "{}:{}",
-        helpers_dir.display(),
-        std::env::var("PATH").unwrap_or_default()
-    );
+    let path = phase_path(helpers_dir, extra_env);
     // Config-derived base env for standalone runs (USE + compiler/make
     // flags), computed once here so the single config load serves both
     // the `USE` entry below and the flag entries pushed after the
@@ -1998,8 +1997,8 @@ fn phase_env_vars(
         ("PF".to_string(), env.split.pf.clone()),
         ("CATEGORY".to_string(), env.category.clone()),
         ("EBUILD".to_string(), env.ebuild_abs.display().to_string()),
-        ("ROOT".to_string(), root.display().to_string()),
-        ("EROOT".to_string(), root.display().to_string()),
+        ("ROOT".to_string(), root_value.clone()),
+        ("EROOT".to_string(), root_value),
         (
             "PORTAGE_BUILDDIR".to_string(),
             env.portage_builddir.display().to_string(),
@@ -2135,9 +2134,53 @@ fn phase_env_vars(
         ));
     }
 
-    vars.extend(extra_env.iter().cloned());
+    // `PATH` is consumed above as the base behind the helper dirs; a
+    // verbatim `extra_env` pair would drop them again.
+    vars.extend(extra_env.iter().filter(|(k, _)| k != "PATH").cloned());
 
     vars
+}
+
+/// Real `config.environ()`'s path-variable shape (`config.py:3392-3395`):
+/// `D`/`ED`/`ROOT`/`EROOT` end with a trailing `/` only for EAPI <= 6
+/// (`eapi.py:307`, `path_variables_end_with_trailing_slash`); later
+/// EAPIs `rstrip("/")` them, so `ROOT=/` is exported as `""` and
+/// `${ROOT}/usr/src/linux` (`linux-info.eclass`) stays `/usr/src/linux`.
+/// `value` is passed with its trailing slash.
+fn eapi_path_var(eapi: &str, value: &str) -> String {
+    let trailing = matches!(eapi, "0" | "1" | "2" | "3" | "4" | "5" | "6");
+    let base = value.trim_end_matches('/');
+    if trailing {
+        format!("{base}/")
+    } else {
+        base.to_string()
+    }
+}
+
+/// Real `_doebuild_path` (`doebuild.py:332-378`), narrowed to the
+/// `ebuild-helpers` prefix portuale's runner needs: the helper dir first,
+/// then every entry of the base `PATH` not already listed. The base is
+/// the resolved config's `PATH` when the caller threaded one (the last
+/// `extra_env` pair -- `portage_profile::phase_environ` exports it only
+/// when `env.d` sets `PATH`, real's "ignore PATH from the calling
+/// environment" rule), else the calling env's.
+fn phase_path(helpers_dir: &Path, extra_env: &[(String, String)]) -> String {
+    let base = extra_env
+        .iter()
+        .rev()
+        .find(|(k, _)| k == "PATH")
+        .map(|(_, v)| v.clone())
+        .unwrap_or_else(|| std::env::var("PATH").unwrap_or_default());
+    let helpers = helpers_dir.display().to_string();
+    let mut seen: std::collections::HashSet<&str> = std::collections::HashSet::new();
+    seen.insert(helpers.as_str());
+    let mut parts = vec![helpers.as_str()];
+    for p in base.split(':') {
+        if seen.insert(p) {
+            parts.push(p);
+        }
+    }
+    parts.join(":")
 }
 
 /// `Brush`-backend-only: `phase_env_vars` formatted as real `export
@@ -3006,6 +3049,14 @@ async fn run_commands_async(
             config_root,
             shell,
             &features_string(&extra_env),
+            // The resolved `USE` threaded by the caller (last `USE` pair,
+            // the value the phases themselves see), so `A` names exactly
+            // the distfiles `use()` will expect.
+            extra_env
+                .iter()
+                .rev()
+                .find(|(k, _)| k == "USE")
+                .map_or("", |(_, v)| v.as_str()),
         )
         .await?;
         // Real `config.environ()` exports `A` but pops `AA` for every
@@ -4319,6 +4370,36 @@ mod tests {
                 ("FEATURES".to_string(), "resolved".to_string()),
             ]),
             "resolved"
+        );
+    }
+
+    /// #37 S4 (L2 real set, pv/htop `KERNEL_DIR="//usr/src/linux"`): path
+    /// variables lose their trailing slash from EAPI 7 on, so `ROOT=/`
+    /// is exported empty.
+    #[test]
+    fn eapi_path_var_strips_the_trailing_slash_from_eapi_7() {
+        assert_eq!(eapi_path_var("8", "//"), "");
+        assert_eq!(eapi_path_var("7", "/var/tmp/p/image/"), "/var/tmp/p/image");
+        assert_eq!(eapi_path_var("6", "/"), "/");
+        assert_eq!(eapi_path_var("5", "/var/tmp/p/image/"), "/var/tmp/p/image/");
+    }
+
+    /// #37 S4: a threaded `PATH` pair (the resolved env.d `PATH`) is the
+    /// base behind the helper dir, deduplicated like real `_doebuild_path`,
+    /// and never replaces the helper-prefixed value verbatim.
+    #[test]
+    fn phase_path_prefixes_helpers_onto_the_threaded_path() {
+        let helpers = Path::new("/bin/ebuild-helpers");
+        let extra = [
+            ("PATH".to_string(), "/env/bin".to_string()),
+            (
+                "PATH".to_string(),
+                "/usr/local/bin:/bin/ebuild-helpers:/usr/bin:/usr/local/bin".to_string(),
+            ),
+        ];
+        assert_eq!(
+            phase_path(helpers, &extra),
+            "/bin/ebuild-helpers:/usr/local/bin:/usr/bin"
         );
     }
 

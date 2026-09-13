@@ -72,6 +72,7 @@
     - "porttest/*/PROVIDES"
     - "porttest/*/NEEDED"
     - "porttest/*/NEEDED.ELF.2"
+    - "porttest/*/metadata"
   reason: >
     portuale's gpkg `metadata/` member set is incomplete vs real (SIZE,
     IUSE, IUSE_EFFECTIVE, repository, REPO_REVISIONS, and the
@@ -79,25 +80,18 @@
     lacks them. Filed as l2-gpkg-metadata-members.
   owner: portuale-bug
 
-- id: l2-bpkgonly-env
+- id: l2-pkgindex-eapi-missing
   layer: l2
-  categories: [VDB, MISSING]
-  path_glob:
-    - "porttest/*/FEATURES"
-    - "porttest/*/USE"
-    - "porttest/*/environment"
-    - "porttest/*/metadata"
-    - "/var/lib/porttest/kept/*"
+  category: VDB
+  path_glob: "porttest/*/environment"
   reason: >
-    Residual saved-environment differences after #37 S2 threaded the
-    resolved config env (USE/FEATURES/SLOT/repo identity now match;
-    .keep-*<slot> and metadata/USE/FEATURES rows deleted). What remains:
-    real's `declare -x` vs portuale's plain `declare` for pkg metadata
-    vars (DEFINED_PHASES/KEYWORDS/LICENSE, same values), missing
-    PORTAGE_COMPRESSION_COMMAND, a PROFILE_ONLY_VARIABLES substitution
-    difference, and the aclocal/autoconf wrapper paths
-    (/usr/sbin vs /usr/bin, a phase-PATH artifact). Filed as
-    l2-bpkgonly-env residuals in TEST/findings/l2.md S2.
+    portuale's Packages index stanza carries no EAPI/DEFINED_PHASES (real
+    `bintree._pkgindex_aux_keys`). Under pkgdir-index-trusted real Portage
+    takes the binpkg's EAPI from the index, defaults it to "0"
+    (`bintree.py:615`), and the merge-time phases then export the EAPI<=6
+    DESTTREE/INSDESTTREE/PORTDIR/ECLASSDIR into the saved vdb environment.
+    The producer's own environment.bz2 matches real exactly (archive diff,
+    no allowlist). #39 scope; filed as l2-pkgindex-eapi-missing.
   owner: portuale-bug
 
 - id: l2-gpkg-dostrip-splitdebug
