@@ -16243,5 +16243,62 @@ residue is adjudicated, not chased: B1's frontier drain timing (578 vs
 and B4's superseded installed in-edges (both moved to #25) -- see
 `docs/025-tier2-closeout.deepseek.md` §11.
 
+### L2 — portuale as builder: the first producer-side, cross-install bed (2026-09-13)
+
+L1 proved portuale *consumes* Portage-built binpkgs; L2 proves (and
+tests) that it can *produce* them and that real Portage can consume
+portuale's output. New bed: `TEST/layers/l2/build-portage.sh` /
+`build-portuale.sh` build an atom list from source into two fresh
+`$PKGDIR`s (`--buildpkgonly`, or `-b --deep` when a dep closure is
+missing), `TEST/run/l2-portuale-builder.sh` validates every archive
+with `TEST/compare/gpkg-structure.sh` (container member set, inner tar
+roots, the stable metadata-key set, Manifest, filename↔`BUILD_ID`,
+`Packages` stanza), diffs each Portage/portuale archive pair with
+`gpkg-diff.sh` (normalised metadata via `normalize.py`'s own
+environment ruleset, image path/mode/owner/xattr/symlink parity,
+payload sha as strict-or-tolerated), then has real Portage merge the
+portuale-built candidate and the portage-built reference into identical
+fresh containers and compares the snapshots with `diff.py --layer l2
+[--tolerate-payload]`; portuale merging the portage-built set stays as
+the L1 control. Runnable example:
+
+```sh
+TEST/run/l2-portuale-builder.sh TEST/atomlists/l1-porttest.txt   # rc 0
+L2_MODE=payload-tolerant L2_BUILD_MODE=deep \
+  TEST/run/l2-portuale-builder.sh                               # real L1 set
+```
+
+Live result (`TEST/logs/l2-20260913T014700Z`): porttest track — 0
+unexplained structure/archive findings, 161-hard-finding cross-install
+diff with 0 unexplained, control 0/0; the 170 remaining findings are
+each adjudicated to a filed producer gap. Two core bugs were found and
+fixed on the way: the `<PKGDIR>/Packages` header carried no `VERSION`,
+so real Portage under `pkgdir-index-trusted` discarded the index and
+silently rebuilt from source (`VERSION: 0` now written, unit-pinned),
+and `${PORTAGE_BUILDDIR}/files` was never linked to the ebuild repo's
+`files/` (real `_prepare_fake_filesdir`), so every `eapply` died —
+`app-misc/jq`'s patch now applies. The real set then built and merged
+13 packages before stopping at jq's configure: the source-build phase
+env is a curated whitelist, not the resolved config env (no implicit
+USE, multiple `get_libdir` vars → oniguruma installs to `/usr/lib`,
+raw `FEATURES`), plus no `dostrip`/`splitdebug`/`docompress` and an
+incomplete gpkg metadata set. All filed with repros in
+`TEST/findings/l2.md` / `scope-backlog.md` §K (#37-#41);
+`known-divergences.yaml` carries temporary `layer: l2`
+`owner: portuale-bug` entries keyed to them. Plan + slice record:
+`docs/029_portuale-as-builder.deepseek.md`.
+
+**Build-phase env completeness: the phase environment is the resolved config, not a curated whitelist (backlog #37, 2026-09-13).** `emerge <atom>`, `--resume` and `--buildpkgonly` now run every ebuild phase with `portage_profile::phase_environ(&Config)` — `(config scalars ∪ process env) − environ_filter − PORTUALE_COMPUTED` (real `config.environ()`, `config.py:3263-3350`), folded incrementals (`FEATURES` + `PORTAGE_FEATURES`, `ENV_UNSET`, `PROFILE_ONLY_VARIABLES`, `USE_EXPAND*`), the per-package `USE`/`IUSE_EFFECTIVE`/`USE_EXPAND` values, per-entry `SLOT`/`PORTAGE_REPO_NAME`/`PORTAGE_REPO_REVISIONS`, and `PORTAGE_COMPRESSION_COMMAND`; `extra_env` stays the last (winning) layer, brush exports are shell-quoted, and the exported `AA`/`O` are gone. The same resolved `FEATURES` now feeds the execution gates (sandbox family, `distlocks`/`force-mirror`, `split-log`/`compress-build-logs`, `collision-protect`/`protect-owned`, `GpgVerify`) instead of the raw process env. Runnable, live-verified:
+
+```sh
+L2_REBUILD=1 TEST/run/l2-portuale-builder.sh TEST/atomlists/l1-porttest.txt   # rc 0
+A=TEST/logs/_l2-pkgcache-portuale/porttest/docs/docs-1.0-1.gpkg.tar
+for f in USE FEATURES SLOT; do
+  tar -xOf "$A" docs-1.0-1/metadata.tar.zst | zstd -dc | tar -xOf - "metadata/$f"
+done
+```
+
+Live (`TEST/logs/l2-20260913T182502Z`): the porttest track is green with 0 unexplained (cross-install 95 hard findings, all explained; control 0/0), and the portuale-built `porttest/docs` archive matches the portage-built pair exactly — `USE="abi_x86_64 amd64 elibc_glibc kernel_linux"`, the resolved `FEATURES` incremental list (now carrying `binpkg-docompress`/`binpkg-dostrip`, which the raw env never had), `SLOT=0`, and a normalised `environment.bz2` equal to real's with no allowlist row; `.keep_porttest_emptydirs-0` also matches. The two build modes agree: a `--buildpkgonly` and a `-b` archive of the same fixture compare `gpkg-diff: mode=strict hard=0 soft=0` (`TEST/logs/_l2-b-vs-B/`). On the real L1 set (`TEST/logs/l2-20260913T174940Z`), oniguruma installs `/usr/lib64/libonig.so.5.5.0` + `/usr/lib64/pkgconfig/oniguruma.pc` (before #37: `/usr/lib/...`, no `MULTILIB_ABIS`/`DEFAULT_ABI`/`LIBDIR_*`, so `toolchain-funcs::get_libdir` fell back to `lib` and jq's `econf` could not find it), jq configures, and all 18 closure packages build under portuale; `SOURCE_DATE_EPOCH` flows from `make.conf` through the same builder (L3 G0.6, unit-pinned). The remaining L2 real-set blockers are no longer env completeness: `dostrip`/`splitdebug`/`docompress` (#38) and the gpkg metadata/`Packages`-index gaps (#39). Full slice record: `docs/037_Build-phase-env-completeness.plan.md`; per-finding evidence and commands: `TEST/findings/l2.md` S5.
+
 # # required by dev-libs/useflagpkg[-foo] (argument)
 # == sqlite
