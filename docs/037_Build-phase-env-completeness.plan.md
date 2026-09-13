@@ -1,8 +1,13 @@
 # Plan: backlog #37 — Build-phase env completeness (merged)
 
-Status: **proposed, not executed.** Owner decisions required at the
-gates in §4 before S1 code lands. Written 2026-09-13 against `main` @
-`ec13936`.
+Status: **S0 complete 2026-09-13; S1 not started.** S0's exhaustive
+var-by-var recon is written into `TEST/findings/l2.md` under
+`l2-bpkgonly-env` ("S0 recon (#37, 2026-09-13)"): real 160 env keys vs
+portuale 45 on the porttest pair; 118 only-real grouped by setter and
+slice; 3 only-portuale (`AA`, `O`, `LC_ALL`); 2 value-differs (`USE`,
+`FEATURES`). S0 **revises G1** (see §4 G1) — the whitelist-only export
+set cannot satisfy the `environment.bz2` acceptance bar; owner decision
+required before S1. Written 2026-09-13 against `main` @ `ec13936`.
 
 This is the **merge** of three independent drafts —
 `037_Build-phase-env-completeness.deepseek.md`, `.musespark.md`,
@@ -57,7 +62,7 @@ asked to commit, whoever wrote it.
 | Topic | deepseek | musespark | claude | **Merged decision** | Evidence |
 |---|---|---|---|---|---|
 | Nature of the work | one architectural asymmetry, semantic core | plumbing in existing seams | plumbing, with one semantic knot (USE) | **plumbing with one gated semantic decision**: the seams exist (`entry_build_env`, `extra_env`-last, `config_features_string`, `effective_use_flags`); only the USE shape and the export set need a decision | `emerge_build.rs:558-566`, `ebuild_phases.rs:2125`, `pretend.rs:5988`, `portage-repo/src/lib.rs:2509` |
-| Export set (G1) | *everything* in resolved config minus `environ_filter` | keep the curated whitelist, add the known vars | real's own `environ_whitelist` ∩ `other_vars`, minus computed, plus the profile arch/multilib family | **claude's** — it *is* real's post-`setup` behaviour (`filter_calling_env` applies the whitelist whenever `$T/environment` exists), it cannot clobber computed vars, and it is a `const` transcribed from real source. deepseek's "everything" is the *recorded fallback* if L3 proves a whitelisted-only set insufficient; musespark's "add the six" fails on the next real package | `config.py:3275-3301`, `special_env_vars.py:83-250` |
+| Export set (G1) | *everything* in resolved config minus `environ_filter` | keep the curated whitelist, add the known vars | real's own `environ_whitelist` ∩ `other_vars`, minus computed, plus the profile arch/multilib family | **originally claude's, revised to deepseek's by S0 evidence (2026-09-13)** — real's saved env is the accumulated *setup-phase full dump* (real imports all of `os.environ`, `config.py:551,567`; the whitelist only kicks in from phase 2, `:3275-3305`), so whitelist-only cannot pass the `environment.bz2` acceptance row. Revised route: `(config scalars ∪ process env) − environ_filter − PORTUALE_COMPUTED`; the whitelist route survives only as the fallback with a weakened acceptance bar. musespark's "add the six" fails on the next real package | `TEST/findings/l2.md` "S0 recon"; `config.py:3275-3305`, `special_env_vars.py:83-250` |
 | `USE` shape (G3) | `PORTAGE_USE` = enabled filtered by IUSE/implicit | `PORTAGE_USE` for the phase var; **keep enabled-IUSE-only for index/metadata `USE`** | enabled ∩ `IUSE_EFFECTIVE`, **same value for `metadata/USE`** | **claude/deepseek**: musespark's trap 3 is wrong — real's binpkg `metadata/USE` *is* `PORTAGE_USE` (oracle: `abi_x86_64 amd64 elibc_glibc kernel_linux` for a package with empty IUSE) | `TEST/findings/l2.md:246`, `config.py:3329`, vdb oracle env line 918 |
 | `ABI` | compute from `DEFAULT_ABI` | — | plain profile scalar | **plain scalar**: `config.py` never mentions `ABI`; profile `make.defaults` sets it, `multilib.eclass` reads `${ABI:-${DEFAULT_ABI}}` | `grep ABI config.py` → 0 hits; oracle line 802 |
 | Empty values (G2) | — | `PORTAGE_COMPRESS=""` must flow as empty (in its 038 draft) | export set-but-empty, omit unset | **export set-but-empty**; `build_config_env`'s skip-empties shape is wrong for the new builder | `ecompress:228-229,254` |
@@ -274,23 +279,29 @@ contract `CASES` (real-execution-only item, `AGENTS.md` step 4).
 
 ## 4. Gates (owner decisions — answer before S1 code)
 
-- **G1 Export set.** *Decision (safest route):* the builder exports
-  `other_vars ∩ REAL_ENVIRON_WHITELIST ∖ PORTUALE_COMPUTED ∪ PROFILE_
-  FAMILY`, where `REAL_ENVIRON_WHITELIST` is transcribed from
-  `special_env_vars.py:83-250` as a `const` with citation;
-  `PORTUALE_COMPUTED` is the set `phase_env_vars` already sets (`D`,
-  `ED`, `T`, `WORKDIR`, `HOME`, `PORTAGE_BUILDDIR`, `FILESDIR`, `DISTDIR`,
-  `ROOT`, `EROOT`, `PATH`, `P`, `PN`, `PV`, `PR`, `PVR`, `PF`, `CATEGORY`,
-  `EAPI`, `EBUILD_PHASE`, `PORTAGE_TMPDIR`, `EMERGE_FROM`, `PORTAGE_BIN_
-  PATH`, `PORTAGE_PYM_PATH`, …, each with its `doebuild_environment()`
-  setter line); `PROFILE_FAMILY` = `ARCH ELIBC KERNEL ABI DEFAULT_ABI
-  MULTILIB_ABIS LIBDIR_* IUSE_IMPLICIT USE_EXPAND USE_EXPAND_UNPREFIXED
-  USE_EXPAND_IMPLICIT USE_EXPAND_HIDDEN USE_EXPAND_VALUES_*` (cited to
-  the oracle env). Also mirror `environ_filter` as a `const` and assert
-  the two sets are disjoint. **Recorded fallback** (deepseek G1.1): if
-  L3 later proves a non-whitelisted var matters, widen to "everything
-  minus `environ_filter` minus computed" in a follow-up — file it, do
-  not do it silently. Owner: **user**.
+- **G1 Export set.** **S0 evidence (2026-09-13) revised this gate.**
+  Real's `environment.bz2` is the accumulated *setup-phase full dump*
+  (real imports the whole process env as the top config layer,
+  `config.py:551,567`; `environ_filter` is applied to every export and
+  the `environ_whitelist` restriction only from the second phase on,
+  `config.py:3275-3305`). Portuale's 45-key curated env cannot match it;
+  the porttest track's `metadata/environment.bz2 differs` row is
+  unfixable under a whitelist-only builder. **Revised recommendation
+  (deepseek's route):** export `(resolved config scalars ∪ process env)
+  − environ_filter − PORTUALE_COMPUTED`, plus synthesized empty
+  `USE_EXPAND` placeholders (`config.py:2247`) and the profile
+  arch/multilib family. `PORTUALE_COMPUTED` = every key `phase_env_vars`
+  already computes (`D`, `ED`, `T`, `WORKDIR`, `HOME`, `PORTAGE_BUILDDIR`,
+  `FILESDIR`, `DISTDIR`, `ROOT`, `EROOT`, `PATH`, `P`, `PN`, `PV`, `PR`,
+  `PVR`, `PF`, `CATEGORY`, `EAPI`, `EBUILD_PHASE`, `PORTAGE_TMPDIR`,
+  `EMERGE_FROM`, `PORTAGE_BIN_PATH`, `PORTAGE_PYM_PATH`, …, each with its
+  `doebuild_environment()` setter line) and always wins. Mirror
+  `environ_filter` as a `const` with citation. **Fallback** (the
+  pre-S0 recommendation, only if the user prefers a narrower diff
+  surface): whitelist ∩ `other_vars` ∪ `PROFILE_FAMILY`, and the S2
+  acceptance bar drops exact `environment.bz2` parity to "no
+  config-resolved key missing" — a weaker bar L3's VDB diff will keep
+  surfacing. Owner: **user** (decide before S1).
 - **G2 Empty values.** Export keys that are *set to empty* as empty
   (`PORTAGE_COMPRESS=""` is real's documented "disable", `ecompress:254`);
   omit keys that are *unset*. `build_config_env`'s skip-empties shape is
@@ -354,16 +365,22 @@ slice; no code changed.
 
 ### S1 — `phase_environ()` builder + `USE` shape (F, 5-8 h)
 
-1. Transcribe `environ_whitelist` and `environ_filter` as `const`s in
-   `portage-profile` with line citations (data, refreshed when the
-   vendored portage moves). Define `PORTUALE_COMPUTED` and `PROFILE_FAMILY`
-   (G1) with per-entry citations.
-2. `phase_environ(&Config)`: `other_vars` ∩ whitelist ∖ computed ∪
-   family; `FEATURES` **and** `PORTAGE_FEATURES` from
-   `resolved_incremental("FEATURES")` (fallback `other_vars`, then
-   nothing); export set-but-empty (G2); deterministic key order.
-   `SOURCE_DATE_EPOCH`, `PORTAGE_COMPRESS*`, `MAKEOPTS`, `CBUILD` etc.
-   fall out of the whitelist — pin them in tests, do not special-case.
+1. Transcribe `environ_filter` as a `const` in `portage-profile` with
+   line citations (data, refreshed when the vendored portage moves).
+   Define `PORTUALE_COMPUTED` (G1) with per-entry citations. Keep the
+   `environ_whitelist` transcription only if G1's fallback route is
+   chosen — under the revised route it is documentation, not data.
+2. `phase_environ(&Config)`: `(other_vars ∪ process env) −
+   environ_filter − PORTUALE_COMPUTED`, plus the synthesized empty
+   `USE_EXPAND` placeholders (for every `Config::use_expand` name not
+   otherwise set) and the profile arch/multilib family; `FEATURES`
+   **and** `PORTAGE_FEATURES` from `resolved_incremental("FEATURES")`
+   (fallback `other_vars`, then nothing); export set-but-empty (G2);
+   deterministic key order. `SOURCE_DATE_EPOCH`, `PORTAGE_COMPRESS*`,
+   `MAKEOPTS`, `CBUILD` etc. fall out of the set — pin them in tests,
+   do not special-case. Real's phase-1 semantics is the spec; the
+   per-phase whitelist re-export (phase 2+) is not replicated (fresh
+   shell, §see S0 note).
 3. `effective_phase_use(config, repos, category, package, version) ->
    String`: `effective_use_flags` ∩ `iuse_effective(IUSE)`, sorted,
    space-joined (G3). Reuse `candidate_use_flags_display`'s candidate/
@@ -556,5 +573,23 @@ end-to-end**.
 
 ## 11. Findings filed while executing
 
-(append here as S0-S5 run: command, expected, actual, root cause, fix
-ref / backlog id)
+### S0 — 2026-09-13 (recon only; table in `TEST/findings/l2.md`)
+
+- `l2-env-setup-full-dump` — real exports the accumulated setup-phase
+  full config dump (160 keys vs portuale's 45); a whitelist-only builder
+  cannot pass the `environment.bz2` acceptance row. Root cause: real
+  imports the whole process env (`config.py:551,567`) and only filters
+  from phase 2 on. Fix ref: §4 G1 (revised) / S1/S2. Owner decision open.
+- `l2-env-aa-exported` — portuale exports `AA` (empty) on EAPI 8 where
+  real pops it (`config.py:3331-3333`, `eapi_exports_AA` false for
+  EAPI ≥ 4). Fix ref: #37 S2 (drop `AA`; EAPI floor 5+ means always).
+- `l2-env-o-exported` — portuale exports `O` (the ebuild dir) where
+  real's `environ_filter` drops it (`special_env_vars.py:300`). Fix ref:
+  #37 S2 (add to the builder filter / drop from `extra_env`).
+- Note (pre-existing, not this item): real's later phases re-export only
+  `environ_whitelist`, so an ebuild `unset` persists across phases;
+  portuale's fresh shell per phase re-adds everything. File separately
+  if a fixture ever shows it (bug 189417 behaviour).
+
+(append future entries here as S1-S5 run: command, expected, actual,
+root cause, fix ref / backlog id)
