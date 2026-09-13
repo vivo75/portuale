@@ -89,10 +89,15 @@
     - "porttest/*/metadata"
     - "/var/lib/porttest/kept/*"
   reason: >
-    `emerge --buildpkgonly` builds with the standalone ebuild env, not
-    the resolved graph env (raw env FEATURES, empty USE, no SLOT, no
-    PORTAGE_REPO_NAME); `.keep_...-<slot>` markers and the saved
-    environment inherit that. Filed as l2-bpkgonly-env.
+    Residual saved-environment differences after #37 S2 threaded the
+    resolved config env (USE/FEATURES/SLOT/repo identity now match;
+    .keep-*<slot> and metadata/USE/FEATURES rows deleted). What remains:
+    real's `declare -x` vs portuale's plain `declare` for pkg metadata
+    vars (DEFINED_PHASES/KEYWORDS/LICENSE, same values), missing
+    PORTAGE_COMPRESSION_COMMAND, a PROFILE_ONLY_VARIABLES substitution
+    difference, and the aclocal/autoconf wrapper paths
+    (/usr/sbin vs /usr/bin, a phase-PATH artifact). Filed as
+    l2-bpkgonly-env residuals in TEST/findings/l2.md S2.
   owner: portuale-bug
 
 - id: l2-gpkg-dostrip-splitdebug
@@ -105,8 +110,11 @@
     - "/usr/lib64/libptsd*"
     - "/usr/bin/pt-*"
   reason: >
-    portuale's packaging path runs no `dostrip`/`splitdebug`: archives
-    ship unstripped binaries and no /usr/lib/debug objects. Filed as
+    #37 S2 made the gates fire (resolved FEATURES reaches install_qa_check):
+    both archives now carry stripped binaries, /usr/lib/debug/** and
+    .build-id/** with matching path sets. The residual rows are compiled-
+    artifact byte differences (the fixture compiles from source; the main
+    binary payload differs the same way), not transform gaps. Filed as
     l2-gpkg-dostrip-splitdebug.
   owner: portuale-bug
 
@@ -154,30 +162,8 @@
   reason: "CONTENTS entry residue of l2-gpkg-dostrip-splitdebug."
   owner: portuale-bug
 
-- id: l2-gpkg-docompress
-  layer: l2
-  categories: [MISSING]
-  path_glob: "/usr/share/doc/docs-1.0/BIG.txt*"
-  reason: >
-    No `docompress`/`ecompress`: portuale archives ship BIG.txt where
-    real ships BIG.txt.bz2. Filed as l2-gpkg-docompress.
-  owner: portuale-bug
 
-- id: l2-gpkg-docompress-contents
-  layer: l2
-  category: CONTENTS
-  path_glob: "porttest/*/CONTENTS"
-  match: "BIG.txt"
-  reason: "CONTENTS entry residue of l2-gpkg-docompress."
-  owner: portuale-bug
 
-- id: l2-bpkgonly-keep-contents
-  layer: l2
-  category: CONTENTS
-  path_glob: "porttest/*/CONTENTS"
-  match: ".keep_porttest_emptydirs-"
-  reason: "CONTENTS entry residue of l2-bpkgonly-env (SLOT not set)."
-  owner: portuale-bug
 
 - id: l2-consumes-portuale-env-degraded
   layer: l2

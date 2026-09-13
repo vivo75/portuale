@@ -292,7 +292,8 @@ use std::sync::OnceLock;
 
 mod phase_environ;
 pub use phase_environ::{
-    ENV_BLACKLIST, ENVIRON_FILTER, PORTUALE_COMPUTED, PhaseUse, phase_environ, portage_use,
+    ENV_BLACKLIST, ENVIRON_FILTER, PORTUALE_COMPUTED, PhaseUse, phase_environ, phase_environ_pkg,
+    portage_use,
 };
 
 /// Error resolving profile/config files. Distinct variants mirror the

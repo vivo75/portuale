@@ -365,7 +365,14 @@ pub fn run(args: &[String]) -> ExitCode {
             } else if ebuild_unmerge::is_real_unmerge_command(cmd) {
                 ebuild_unmerge::run_unmerge(ebuild_path, &root, &portage_tmpdir, &unmerge_options)
             } else if ebuild_package::is_real_package_command(cmd) {
-                ebuild_package::run_package(ebuild_path, &root, &portage_tmpdir, &package_options)
+                ebuild_package::run_package(
+                    ebuild_path,
+                    &root,
+                    &portage_tmpdir,
+                    &package_options,
+                    &[],
+                    "",
+                )
             } else if ebuild_phases::is_real_standalone_phase_command(cmd) {
                 ebuild_phases::run_single_phase(
                     ebuild_path,

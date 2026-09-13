@@ -4999,8 +4999,10 @@ def test_ebuild_install_really_fetches_via_the_already_verified_skip_path(
     fixture's own checked-in Manifest records) exercises the real
     already-verified skip-fetch path end-to-end through the compiled
     CLI, with no live network access needed at all -- the fixture's own
-    `src_install` records the real `A`/`AA` it observed, proving the
-    conditional group is excluded from `A` but still present in `AA`."""
+    `src_install` records the real `A`/`AA` it observed. `A` carries the
+    unconditionally-fetched rename; `AA` is unset (real `config.environ()`
+    pops it for every EAPI >= 4, `config.py:3331-3333`), so the
+    conditional group never appears."""
     ebuild_path = str(
         Path(FIXTURES_ROOT)
         / "repo/dev-libs/verifiedfetchpkg/verifiedfetchpkg-1.0.ebuild"
@@ -5030,7 +5032,7 @@ def test_ebuild_install_really_fetches_via_the_already_verified_skip_path(
     )
     assert marker.read_text() == (
         "A=verifiedfetchpkg-1.0.tar.gz\n"
-        "AA=verifiedfetchpkg-1.0.tar.gz verifiedfetchpkg-tests-1.0.tar.gz\n"
+        "AA=\n"
     )
 
 

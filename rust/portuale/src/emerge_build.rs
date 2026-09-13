@@ -117,12 +117,17 @@ fn ebuild_path(candidate: &Candidate, category: &str, package: &str, version: &s
 /// `Ok(())` only once every entry has a real binary package on disk.
 pub fn run_buildpkgonly(
     entries: &[GraphEntry],
+    config: &portage_profile::Config,
     repos: &[RepoConfig],
     root: &Path,
     portage_tmpdir: &Path,
     options: &PackageOptions,
     keep_going: bool,
 ) -> Result<(), String> {
+    // The run-wide half of real `config.environ()`, once for the whole
+    // run (`--buildpkgonly` has no `MergeOptions`; `entry_phase_env_tail`
+    // adds the per-entry half). #37 S2.
+    let run_wide = portage_profile::phase_environ(config, None);
     let mut failures = Vec::new();
     for entry in entries {
         if entry.source == CandidateSource::Binary {
@@ -149,7 +154,32 @@ pub fn run_buildpkgonly(
             ">>> Building binary for {}/{}-{version}...",
             entry.category, entry.package
         );
-        let failure = match ebuild_package::run_package(&path, root, portage_tmpdir, options) {
+        // Real `config.environ()` per entry: the run-wide base plus this
+        // entry's resolved `USE`/`IUSE_EFFECTIVE`/`USE_EXPAND` and
+        // `SLOT`/repo identity (#37 S2). The `install` chain and the
+        // `install_qa_check` misc-functions call after it see the same
+        // env the `-b` merge path does, and `package_after_install` gets
+        // the real `USE` for the `Packages` index / `metadata/USE`.
+        let mut build_env = run_wide.clone();
+        build_env.extend(entry_phase_env_tail(
+            Some(config),
+            repos,
+            entry,
+            Some(&candidate),
+        ));
+        let use_flags = build_env
+            .iter()
+            .find(|(k, _)| k == "USE")
+            .map(|(_, v)| v.as_str())
+            .unwrap_or("");
+        let failure = match ebuild_package::run_package(
+            &path,
+            root,
+            portage_tmpdir,
+            options,
+            &build_env,
+            use_flags,
+        ) {
             Ok(0) => None,
             Ok(_) => Some(format!(
                 "{}/{}-{version}: build failed",
@@ -275,7 +305,7 @@ pub fn run_source_merge(
         if capture_log && scheduler_needs_build(entry) {
             let path =
                 build_one_source_entry(entry, repos, root, portage_tmpdir, options, bp, true)?;
-            merge_one_built_entry(entry, &path, root, portage_tmpdir, options)
+            merge_one_built_entry(entry, repos, &path, root, portage_tmpdir, options)
         } else {
             engine.merge_entry(entry)
         }
@@ -498,7 +528,7 @@ pub(crate) fn merge_one_source_entry(
     // IUSE-declared enabled flags only (`GraphEntry::use_flags_display`),
     // not the implicit/arch part of the effective set.
     let mut per_entry = options.clone();
-    per_entry.build_env = entry_build_env(options, entry);
+    per_entry.build_env = entry_build_env(options, entry, repos);
     let status = ebuild_merge::run_merge(&path, root, portage_tmpdir, &per_entry, buildpkg)?;
     if status != 0 {
         return Err(format!("{cp}-{version}: merge failed ({status})"));
@@ -551,17 +581,114 @@ fn entry_package_env_vars(
     crate::ebuild_phases::match_package_env_vars(&options.package_env_vars, &cpv_slot)
 }
 
-/// The full per-entry build-phase env: the run-wide compiler/make flags
-/// the caller stashed on `options.build_env` (`pretend.rs::
-/// build_config_env`), then any per-package `package.env` build vars on
-/// top of those, then this entry's own resolved `USE`.
+/// `SLOT`, `PORTAGE_REPO_NAME`, `PORTAGE_REPO_REVISIONS` for `entry` --
+/// the per-entry identity real `doebuild_environment()` sets
+/// (`doebuild.py:483`) and `EbuildPhase._setup_repo_revisions` builds
+/// (`EbuildPhase.py:73-108`). `SLOT` is the ebuild's own `SLOT`
+/// (`slot/sub_slot` when a sub-slot is declared, bare slot otherwise,
+/// matching the ebuild global real `config.environ()` carries), never
+/// empty (`entry.slot` unset -> `"0"`; the `.keep_<cp>-` bug is exactly
+/// an empty slot). `PORTAGE_REPO_REVISIONS` is `"{}"` until portuale
+/// tracks a repo revision (real `json.dumps({}, sort_keys=True)`).
+/// `PORTAGE_REPO_NAME` is omitted only when no repo is known at all.
+fn entry_identity_env(entry: &GraphEntry, candidate: Option<&Candidate>) -> Vec<(String, String)> {
+    let slot = entry
+        .slot
+        .as_deref()
+        .or_else(|| candidate.map(|c| c.slot.as_str()))
+        .unwrap_or("0");
+    let sub_slot = entry
+        .sub_slot
+        .as_deref()
+        .or_else(|| candidate.map(|c| c.sub_slot.as_str()))
+        .unwrap_or(slot);
+    let slot_value = if sub_slot.is_empty() || sub_slot == slot {
+        slot.to_string()
+    } else {
+        format!("{slot}/{sub_slot}")
+    };
+    let repo_name = entry
+        .repo_name
+        .as_deref()
+        .or_else(|| candidate.map(|c| c.repo_name.as_str()))
+        .unwrap_or("");
+    let mut env = vec![
+        ("SLOT".to_string(), slot_value),
+        ("PORTAGE_REPO_REVISIONS".to_string(), "{}".to_string()),
+    ];
+    if !repo_name.is_empty() {
+        env.push(("PORTAGE_REPO_NAME".to_string(), repo_name.to_string()));
+    }
+    env
+}
+
+/// The per-entry tail of [`entry_build_env`]: resolved `USE` (or the
+/// legacy enabled-IUSE-only `USE` when no config is in scope), the
+/// `IUSE_EFFECTIVE`/`USE_EXPAND` rows, and the `SLOT`/repo identity.
+/// Shared with `run_buildpkgonly`, whose `PackageOptions` carries no
+/// `MergeOptions`.
+///
+/// With `config` set (`emerge <atom>` and friends, #37 S2) the `USE` is
+/// real `PORTAGE_USE`: the resolver's full effective set
+/// (`candidate_effective_use_flags`, which includes the implicit profile
+/// flags no package declares in `IUSE`) narrowed by `portage_use` to
+/// `IUSE ∪ IUSE_EFFECTIVE`. Without a config (standalone `ebuild <file>
+/// merge`/`qmerge`, tests) the previous enabled-IUSE-only `USE` stands.
+fn entry_phase_env_tail(
+    config: Option<&portage_profile::Config>,
+    repos: &[RepoConfig],
+    entry: &GraphEntry,
+    candidate: Option<&Candidate>,
+) -> Vec<(String, String)> {
+    let mut env = Vec::new();
+    let Some(config) = config else {
+        env.extend(build_use_env(entry));
+        return env;
+    };
+    if let Some(candidate) = candidate {
+        let enabled = portage_repo::candidate_effective_use_flags(
+            repos,
+            config,
+            &entry.category,
+            &entry.package,
+            &candidate.version,
+        );
+        let iuse: Vec<String> = candidate
+            .iuse
+            .split_whitespace()
+            .map(String::from)
+            .collect();
+        env.extend(portage_profile::phase_environ_pkg(
+            config,
+            Some(portage_profile::PhaseUse {
+                iuse: &iuse,
+                enabled: &enabled,
+            }),
+        ));
+    }
+    env.extend(entry_identity_env(entry, candidate));
+    env
+}
+
+/// The full per-entry build-phase env: the run-wide resolved env the
+/// caller stashed on `options.build_env` (`portage_profile::
+/// phase_environ(config, None)`), then any per-package `package.env`
+/// build vars on top of those, then [`entry_phase_env_tail`].
 fn entry_build_env(
     options: &ebuild_merge::MergeOptions,
     entry: &GraphEntry,
+    repos: &[RepoConfig],
 ) -> Vec<(String, String)> {
+    let candidate = entry_version(&entry.outcome)
+        .and_then(|version| locate_candidate(repos, &entry.category, &entry.package, version));
     let mut env = options.build_env.clone();
     env.extend(entry_package_env_vars(options, entry));
-    env.extend(build_use_env(entry));
+    env.extend(entry_phase_env_tail(
+        options.resolved_config.as_deref(),
+        repos,
+        entry,
+        candidate.as_ref(),
+    ));
     env
 }
 
@@ -855,7 +982,7 @@ fn build_one_source_entry(
     } else {
         options.shell
     };
-    let build_env = entry_build_env(options, entry);
+    let build_env = entry_build_env(options, entry, repos);
     let status = ebuild_phases::run_commands_logged(
         &path,
         &["install"],
@@ -915,6 +1042,7 @@ fn build_one_source_entry(
 /// upgraded/reinstalled version).
 fn merge_one_built_entry(
     entry: &GraphEntry,
+    repos: &[RepoConfig],
     ebuild_path: &Path,
     root: &Path,
     portage_tmpdir: &Path,
@@ -924,7 +1052,7 @@ fn merge_one_built_entry(
     // `merge_after_install`'s `pkg_preinst`/`pkg_postinst` see this
     // entry's resolved `USE` too (see `merge_one_source_entry`).
     let mut per_entry = options.clone();
-    per_entry.build_env = entry_build_env(options, entry);
+    per_entry.build_env = entry_build_env(options, entry, repos);
     // This function is only ever reached once `build_one_source_entry`
     // already captured the same package's own `install` phase to this
     // exact path (both callers only route here when `capture_log` is
@@ -1126,9 +1254,15 @@ fn run_build_scheduler(
             in_flight -= 1;
 
             let failure = match build_result {
-                Ok(path) => {
-                    merge_one_built_entry(&entries[idx], &path, root, portage_tmpdir, options).err()
-                }
+                Ok(path) => merge_one_built_entry(
+                    &entries[idx],
+                    repos,
+                    &path,
+                    root,
+                    portage_tmpdir,
+                    options,
+                )
+                .err(),
                 Err(e) => Some(e),
             };
 
@@ -1546,6 +1680,7 @@ mod tests {
         let bogus = PathBuf::from("/nonexistent/does/not/exist");
         let result = run_buildpkgonly(
             &entries,
+            &portage_profile::Config::default(),
             &[],
             &bogus,
             &bogus,
@@ -1609,6 +1744,7 @@ mod tests {
 
         let result = run_buildpkgonly(
             &entries,
+            &portage_profile::Config::default(),
             &repos,
             &root,
             &portage_tmpdir,
@@ -1671,6 +1807,257 @@ mod tests {
             build_id: None,
             deps: Vec::new(),
         }
+    }
+
+    /// #37 S2: with a resolved config in scope, `entry_build_env` threads
+    /// the full effective `USE` (implicit profile flags included), the
+    /// per-package `USE_EXPAND` values, and the entry's `SLOT`/repo
+    /// identity -- the S0 oracle's exact row set
+    /// (`TEST/findings/l2.md` "S0 recon (#37)").
+    #[allow(clippy::field_reassign_with_default)]
+    #[test]
+    fn entry_build_env_resolves_full_use_expand_and_entry_identity() {
+        let config_root = fixtures_root();
+        let repos = find_repos(&config_root).unwrap();
+        let mut config = portage_profile::Config::default();
+        // The profile layers `effective_use_flags` replays: implicit
+        // arch/elibc/kernel flags no package declares in IUSE.
+        config.use_tokens = vec!["abi_x86_64 amd64 elibc_glibc kernel_linux".to_string()];
+        config.iuse_effective = [
+            "abi_x86_64",
+            "amd64",
+            "elibc_glibc",
+            "kernel_linux",
+            "riscv",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+        config.use_expand = ["ABI_X86"].iter().map(|s| s.to_string()).collect();
+        config
+            .other_vars
+            .insert("FEATURES".to_string(), "sandbox".to_string());
+        let mut options = ebuild_merge::MergeOptions {
+            distdir: tempdir(),
+            config_root: config_root.clone(),
+            ..ebuild_merge::MergeOptions::default()
+        };
+        options.build_env = portage_profile::phase_environ(&config, None);
+        options.resolved_config = Some(std::sync::Arc::new(config));
+
+        let mut entry = source_entry(
+            "archusepkg",
+            PretendOutcome::New {
+                version: "1.0".into(),
+            },
+        );
+        let env = entry_build_env(&options, &entry, &repos);
+        // Later pairs win in both backends (`Command::envs` / successive
+        // `export`s), so read the *last* pair: the run-wide base carries
+        // empty `USE_EXPAND` placeholders that the per-entry rows override.
+        fn get<'a>(env: &'a [(String, String)], k: &str) -> Option<&'a str> {
+            env.iter()
+                .rev()
+                .find(|(n, _)| n == k)
+                .map(|(_, v)| v.as_str())
+        }
+        // `archusepkg` declares `IUSE="amd64 riscv"`; the implicit flags
+        // come from the resolver's full effective set, not from IUSE.
+        assert_eq!(
+            get(&env, "USE"),
+            Some("abi_x86_64 amd64 elibc_glibc kernel_linux")
+        );
+        assert_eq!(
+            get(&env, "IUSE_EFFECTIVE"),
+            Some("abi_x86_64 amd64 elibc_glibc kernel_linux riscv")
+        );
+        assert_eq!(get(&env, "ABI_X86"), Some("64"));
+        assert_eq!(get(&env, "SLOT"), Some("0"));
+        assert_eq!(get(&env, "PORTAGE_REPO_REVISIONS"), Some("{}"));
+        assert_eq!(get(&env, "PORTAGE_REPO_NAME"), Some("testrepo"));
+        // The run-wide half rides along, folded `FEATURES` included.
+        assert_eq!(get(&env, "FEATURES"), Some("sandbox"));
+        // Real `environ_filter`/`AA`-pop rows stay out (S0 findings).
+        for absent in ["O", "AA", "SRC_URI", "PORTAGE_USE"] {
+            assert_eq!(get(&env, absent), None, "{absent}");
+        }
+
+        // A declared sub-slot renders `slot/sub_slot`; a missing
+        // `entry.repo_name` falls back to the candidate's own repo.
+        entry.sub_slot = Some("5".to_string());
+        entry.repo_name = None;
+        let env = entry_build_env(&options, &entry, &repos);
+        assert_eq!(get(&env, "SLOT"), Some("0/5"));
+        assert!(
+            get(&env, "PORTAGE_REPO_NAME").is_some_and(|v| !v.is_empty()),
+            "repo fallback missing"
+        );
+    }
+
+    /// #37 S2 end-to-end: a real source merge with a resolved config
+    /// threads the full effective `USE`, the resolved (folded)
+    /// `FEATURES` -- which must win over `phase_env_vars`' raw process-env
+    /// base -- and the entry's `SLOT` into the phase, under **both**
+    /// backends. `build-info/USE` is what real `__dyn_install` writes from
+    /// the phase `${USE}`; the `.keep_*` marker is written by the external
+    /// `ebuild-helpers/keepdir` subprocess, which is why an unexported
+    /// `SLOT` used to produce a bare `-` (S0's `l2-env-*` findings).
+    #[allow(clippy::field_reassign_with_default)]
+    #[test]
+    fn source_merge_with_resolved_config_threads_use_and_slot_into_the_phase() {
+        for (shell, label) in [
+            (ebuild_phases::ShellBackend::Bash, "bash"),
+            (ebuild_phases::ShellBackend::Brush, "brush"),
+        ] {
+            let config_root = fixtures_root();
+            let repos = find_repos(&config_root).unwrap();
+            let root = tempdir();
+            let portage_tmpdir = tempdir();
+            let mut config = portage_profile::Config::default();
+            config.use_tokens = vec!["abi_x86_64 amd64 elibc_glibc kernel_linux".to_string()];
+            config.iuse_effective = ["abi_x86_64", "amd64", "elibc_glibc", "kernel_linux"]
+                .iter()
+                .map(|s| s.to_string())
+                .collect();
+            let mut config_env = config.clone();
+            config_env.other_vars.insert(
+                "FEATURES".to_string(),
+                "resolved features token".to_string(),
+            );
+            let mut options = ebuild_merge::MergeOptions {
+                distdir: tempdir(),
+                config_root: config_root.clone(),
+                shell,
+                ..ebuild_merge::MergeOptions::default()
+            };
+            options.build_env = portage_profile::phase_environ(&config_env, None);
+            options.resolved_config = Some(std::sync::Arc::new(config));
+
+            let entries = vec![source_entry(
+                "phaseenvpkg",
+                PretendOutcome::New {
+                    version: "1.0".into(),
+                },
+            )];
+            run_source_merge(
+                &entries,
+                &repos,
+                &root,
+                &portage_tmpdir,
+                &options,
+                false,
+                None,
+                &[],
+                1,
+                None,
+                false,
+            )
+            .unwrap_or_else(|e| panic!("{label}: source merge succeeds: {e}"));
+
+            let keep = root.join("var/lib/phaseenvtest/.keep_dev-libs_phaseenvpkg-0");
+            assert!(
+                keep.exists(),
+                "{label}: keepdir marker missing: {}",
+                keep.display()
+            );
+            let t_dir = portage_tmpdir.join("portage/dev-libs/phaseenvpkg-1.0/temp");
+            assert_eq!(
+                fs::read_to_string(t_dir.join("phase-env-use.txt")).unwrap(),
+                "USE=abi_x86_64 amd64 elibc_glibc kernel_linux\n",
+                "{label}: USE"
+            );
+            assert_eq!(
+                fs::read_to_string(t_dir.join("phase-env-slot.txt")).unwrap(),
+                "SLOT=0\n",
+                "{label}: SLOT"
+            );
+            assert_eq!(
+                fs::read_to_string(t_dir.join("phase-env-features.txt")).unwrap(),
+                "FEATURES=resolved features token\n",
+                "{label}: the resolved FEATURES must win over the raw process-env base"
+            );
+            let build_use = fs::read_to_string(
+                portage_tmpdir.join("portage/dev-libs/phaseenvpkg-1.0/build-info/USE"),
+            )
+            .expect("build-info/USE should be written by the real __dyn_install");
+            assert_eq!(
+                build_use.trim(),
+                "abi_x86_64 amd64 elibc_glibc kernel_linux",
+                "{label}: build-info/USE"
+            );
+
+            let _ = fs::remove_dir_all(&root);
+            let _ = fs::remove_dir_all(&portage_tmpdir);
+        }
+    }
+
+    /// #37 S2: `--buildpkgonly` threads the same resolved env as the
+    /// `-b` merge path -- the archive's `metadata/USE`/`metadata/FEATURES`
+    /// (real `__dyn_install` writes both into `build-info` from the phase
+    /// env) and the `Packages` index `USE` field carry the effective
+    /// flags, not the raw harness env / empty standalone env.
+    #[allow(clippy::field_reassign_with_default)]
+    #[test]
+    fn buildpkgonly_with_resolved_config_writes_resolved_use_and_features() {
+        let config_root = fixtures_root();
+        let repos = find_repos(&config_root).unwrap();
+        let root = tempdir();
+        let portage_tmpdir = tempdir();
+        let pkgdir = tempdir();
+        let mut config = portage_profile::Config::default();
+        config.use_tokens = vec!["abi_x86_64 amd64 elibc_glibc kernel_linux".to_string()];
+        config.iuse_effective = ["abi_x86_64", "amd64", "elibc_glibc", "kernel_linux"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        config
+            .other_vars
+            .insert("FEATURES".to_string(), "sandbox".to_string());
+
+        let entries = vec![source_entry(
+            "phaseenvpkg",
+            PretendOutcome::New {
+                version: "1.0".into(),
+            },
+        )];
+        run_buildpkgonly(
+            &entries,
+            &config,
+            &repos,
+            &root,
+            &portage_tmpdir,
+            &PackageOptions {
+                debug: false,
+                pkgdir: pkgdir.clone(),
+                distdir: tempdir(),
+                binpkg_format: "gpkg".to_string(),
+                binpkg_compress: "bzip2".to_string(),
+                ..PackageOptions::default()
+            },
+            false,
+        )
+        .expect("--buildpkgonly succeeds");
+
+        let archive = pkgdir.join("dev-libs/phaseenvpkg-1.0.gpkg.tar");
+        let meta = crate::binpkg::read_gpkg_metadata(&archive)
+            .expect("portuale's gpkg reader parses the real writer's output");
+        assert_eq!(
+            meta.get("USE").map(String::as_str),
+            Some("abi_x86_64 amd64 elibc_glibc kernel_linux")
+        );
+        assert_eq!(meta.get("FEATURES").map(String::as_str), Some("sandbox"));
+        assert_eq!(meta.get("SLOT").map(String::as_str), Some("0"));
+
+        let packages = fs::read_to_string(pkgdir.join("Packages")).unwrap();
+        assert!(
+            packages.contains("USE: abi_x86_64 amd64 elibc_glibc kernel_linux"),
+            "Packages index USE missing the resolved flags:
+{packages}"
+        );
+
+        let _ = fs::remove_dir_all(&root);
+        let _ = fs::remove_dir_all(&portage_tmpdir);
+        let _ = fs::remove_dir_all(&pkgdir);
     }
 
     #[test]
@@ -2330,6 +2717,7 @@ mod tests {
 
         let result = run_buildpkgonly(
             &entries,
+            &portage_profile::Config::default(),
             &repos,
             &root,
             &portage_tmpdir,
@@ -2415,6 +2803,7 @@ mod tests {
 
         let result = run_buildpkgonly(
             &entries,
+            &portage_profile::Config::default(),
             &repos,
             &root,
             &portage_tmpdir,
@@ -2454,6 +2843,7 @@ mod tests {
 
         let result = run_buildpkgonly(
             &entries,
+            &portage_profile::Config::default(),
             &repos,
             &root,
             &portage_tmpdir,

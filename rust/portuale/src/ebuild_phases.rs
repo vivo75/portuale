@@ -1984,7 +1984,6 @@ fn phase_env_vars(
         ("PF".to_string(), env.split.pf.clone()),
         ("CATEGORY".to_string(), env.category.clone()),
         ("EBUILD".to_string(), env.ebuild_abs.display().to_string()),
-        ("O".to_string(), env.pkg_dir.display().to_string()),
         ("ROOT".to_string(), root.display().to_string()),
         ("EROOT".to_string(), root.display().to_string()),
         (
@@ -2124,27 +2123,20 @@ fn phase_env_vars(
 
     vars.extend(extra_env.iter().cloned());
 
-    // A binary-merge phase (`run_phase_from_saved_env`, which stamps
-    // `MERGE_TYPE=binary`) runs from the package's saved bash env, not a
-    // re-sourced ebuild -- real portage never sets `O` (the ebuild's
-    // source dir, not in `environ_whitelist`) for it, and it is
-    // meaningless there anyway (no source repo). Dropping it keeps the
-    // regenerated vdb `environment` matching real (L1-f).
-    if vars.iter().any(|(k, v)| k == "MERGE_TYPE" && v == "binary") {
-        vars.retain(|(k, _)| k != "O");
-    }
     vars
 }
 
 /// `Brush`-backend-only: `phase_env_vars` formatted as real `export
-/// NAME=value` bash source text (Rust's own `{:?}` Debug-format
-/// double-quoted escaping -- not a full shell-quoting implementation,
-/// so a value containing `$`/backtick isn't protected against
-/// expansion, but every value here is portuale's own computed path/
-/// metadata text, never arbitrary ebuild-controlled content). `Bash`
-/// backend needs no such text at all -- `phase_env_vars`'s own pairs
-/// are passed directly as real subprocess environment variables
-/// instead, see `run_one_phase_bash`/`run_misc_functions_bash`.
+/// NAME=value` bash source text. Values are **single-quote escaped**
+/// (`shell_single_quote`, G6 of the #37 plan): since the resolved
+/// config env reaches `extra_env`, a value can now be arbitrary
+/// config/ebuild text (`CFLAGS` with `$(…)`, `PORTAGE_COMPRESS_
+/// EXCLUDE_SUFFIXES` globs, descriptions with quotes), and the previous
+/// `{:?}`-formatted double-quoted export would have let the brush shell
+/// word-split/expand/command-substitute it. `Bash` backend needs no such
+/// text at all -- `phase_env_vars`'s own pairs are passed directly as
+/// real subprocess environment variables instead, see
+/// `run_one_phase_bash`/`run_misc_functions_bash`.
 #[allow(clippy::too_many_arguments)]
 fn phase_setup_script(
     env: &Environment,
@@ -2184,9 +2176,28 @@ fn phase_setup_script(
         }
     }
     for (name, value) in vars {
-        script.push_str(&format!("export {name}={value:?}\n"));
+        script.push_str(&format!("export {name}={}\n", shell_single_quote(&value)));
     }
     script
+}
+
+/// A POSIX single-quoted shell word: everything between `'…'` is
+/// literal, and an embedded `'` is the usual `'\''` close/escape/reopen
+/// dance. `$`, backticks, `\`, `"`, whitespace and newlines are all
+/// inert inside it. Used by `phase_setup_script` for every brush
+/// `export` value (G6 of the #37 plan).
+fn shell_single_quote(value: &str) -> String {
+    let mut out = String::with_capacity(value.len() + 2);
+    out.push('\'');
+    for c in value.chars() {
+        if c == '\'' {
+            out.push_str("'\\''");
+        } else {
+            out.push(c);
+        }
+    }
+    out.push('\'');
+    out
 }
 
 /// Builds one fresh embedded brush shell for a single phase: real
@@ -2972,9 +2983,12 @@ async fn run_commands_async(
     let mut extra_env = vec![("DISTDIR".to_string(), distdir.display().to_string())];
     extra_env.extend(build_env.iter().cloned());
     if chain.contains(&"unpack") {
-        let (a, aa) = fetch_sources(&env, root, distdir, debug, config_root, shell).await?;
+        let (a, _aa) = fetch_sources(&env, root, distdir, debug, config_root, shell).await?;
+        // Real `config.environ()` exports `A` but pops `AA` for every
+        // EAPI >= 4 (`config.py:3331-3333`, `eapi_exports_AA`); the
+        // EAPI floor here is 5+, so `AA` is never exported (S0 finding
+        // `l2-env-aa-exported`).
         extra_env.push(("A".to_string(), a.join(" ")));
-        extra_env.push(("AA".to_string(), aa.join(" ")));
     }
 
     for &command in commands {
@@ -4174,18 +4188,18 @@ mod tests {
     /// (portuale's own always-empty USE set) but still appear in
     /// `AA` (real PMS's own "every file regardless of USE" definition).
     #[test]
-    fn install_computes_real_a_and_aa_from_a_verified_distfile_with_no_network() {
+    fn install_computes_real_a_from_a_verified_distfile_and_leaves_aa_unset() {
         let ebuild_path = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../fixtures/repo/dev-libs/verifiedfetchpkg/verifiedfetchpkg-1.0.ebuild");
         let portage_tmpdir = std::env::temp_dir().join(format!(
             "ebuild-phases-test-{}-{}",
             std::process::id(),
-            "install_computes_real_a_and_aa_from_a_verified_distfile_with_no_network"
+            "install_computes_real_a_from_a_verified_distfile_and_leaves_aa_unset"
         ));
         let distdir = std::env::temp_dir().join(format!(
             "ebuild-phases-test-distdir-{}-{}",
             std::process::id(),
-            "install_computes_real_a_and_aa_from_a_verified_distfile_with_no_network"
+            "install_computes_real_a_from_a_verified_distfile_and_leaves_aa_unset"
         ));
         let _ = std::fs::remove_dir_all(&portage_tmpdir);
         let _ = std::fs::remove_dir_all(&distdir);
@@ -4214,14 +4228,107 @@ mod tests {
             portage_tmpdir.join("portage/dev-libs/verifiedfetchpkg-1.0/temp/fetch-vars.txt");
         let observed = std::fs::read_to_string(&marker)
             .unwrap_or_else(|e| panic!("{} should have been written: {e}", marker.display()));
-        assert_eq!(
-            observed,
-            "A=verifiedfetchpkg-1.0.tar.gz\n\
-             AA=verifiedfetchpkg-1.0.tar.gz verifiedfetchpkg-tests-1.0.tar.gz\n"
-        );
+        // `AA` is unset: real `config.environ()` pops it for every
+        // EAPI >= 4 (`config.py:3331-3333`); the EAPI floor here is 5+.
+        // The ebuild's own `echo "AA=${AA}"` therefore writes an empty
+        // value, matching a real EAPI-8 phase.
+        assert_eq!(observed, "A=verifiedfetchpkg-1.0.tar.gz\nAA=\n");
 
         let _ = std::fs::remove_dir_all(&portage_tmpdir);
         let _ = std::fs::remove_dir_all(&distdir);
+    }
+
+    /// #37 S2 step 6: the `depend` phase (real `doebuild(mydo="depend")`,
+    /// the `--regen`/metadata path) never gets the standalone base env --
+    /// `phase_standalone_base_env` short-circuits before any config load,
+    /// so S2's resolved-config threading cannot leak into it. A real repo
+    /// checkout with a resolvable package is used precisely so removing
+    /// the guard would fail this test rather than silently pass.
+    #[test]
+    fn depend_phase_standalone_base_env_stays_empty_with_a_real_repo() {
+        let ebuild_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../fixtures/repo/dev-libs/phaseenvpkg/phaseenvpkg-1.0.ebuild");
+        let portage_tmpdir = std::env::temp_dir().join(format!(
+            "ebuild-phases-test-depend-base-{}",
+            std::process::id()
+        ));
+        let env = compute_environment(&ebuild_path, &portage_tmpdir).unwrap();
+        let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures");
+        let (use_str, flags) =
+            phase_standalone_base_env(&env, &fixtures, Path::new("/"), "depend", &[]);
+        assert_eq!(use_str, "", "depend must not get a config-derived USE");
+        assert!(flags.is_empty(), "depend must not get config build vars");
+        // The `extra_env`-carries-USE guard is the same short-circuit.
+        let (use_str, flags) = phase_standalone_base_env(
+            &env,
+            &fixtures,
+            Path::new("/"),
+            "install",
+            &[("USE".to_string(), "confflag".to_string())],
+        );
+        assert_eq!(use_str, "");
+        assert!(flags.is_empty());
+    }
+
+    /// #37 S2 G6: every brush `export` value is single-quoted, so a
+    /// config-derived value containing `$`, backticks, `\`, `"` or
+    /// whitespace can neither word-split nor command-substitute. Before
+    /// this gate the resolved config env reached `phase_setup_script`
+    /// through Rust's `{:?}` Debug formatting, which does not protect
+    /// against expansion.
+    #[test]
+    fn shell_single_quote_neutralises_every_shell_metacharacter() {
+        assert_eq!(shell_single_quote("plain"), "'plain'");
+        assert_eq!(shell_single_quote("a b"), "'a b'");
+        assert_eq!(shell_single_quote("a'b"), "'a'\\''b'");
+        assert_eq!(
+            shell_single_quote("$(touch /tmp/pwned) `id` \\ \" $HOME"),
+            "'$(touch /tmp/pwned) `id` \\ \" $HOME'"
+        );
+        assert_eq!(shell_single_quote(""), "''");
+        // A `CFLAGS`-shaped value with a single quote and a newline.
+        assert_eq!(
+            shell_single_quote("-O2 -DMSG='hi'\n-Wl,-z,now"),
+            "'-O2 -DMSG='\\''hi'\\''\n-Wl,-z,now'"
+        );
+    }
+
+    /// #37 S2 step 2: `extra_env` carries the resolved `FEATURES` and is
+    /// appended last, so it must win over `phase_env_vars`' own
+    /// `phase_features_value()` base (the raw process env). Verified as
+    /// brush *script composition* here; the real-phase execution proof
+    /// is `emerge_build::tests::source_merge_with_resolved_config_
+    /// threads_use_and_slot_into_the_phase` (which asserts the
+    /// `FEATURES=` marker under both backends).
+    #[test]
+    fn phase_setup_script_exports_extra_env_features_last() {
+        let ebuild = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../fixtures/repo/dev-libs/phaseenvpkg/phaseenvpkg-1.0.ebuild");
+        let portage_tmpdir = std::env::temp_dir().join(format!(
+            "ebuild-phases-test-setup-script-{}",
+            std::process::id()
+        ));
+        let env = compute_environment(&ebuild, &portage_tmpdir).unwrap();
+        let script = phase_setup_script(
+            &env,
+            Path::new("/"),
+            "install",
+            false,
+            bin_dir(),
+            &bin_dir().join("ebuild-helpers"),
+            Path::new("/dev/null/no-config-root"),
+            &[("FEATURES".to_string(), "resolved one".to_string())],
+        );
+        let features: Vec<&str> = script
+            .lines()
+            .filter(|l| l.starts_with("export FEATURES="))
+            .collect();
+        assert!(!features.is_empty(), "no FEATURES export in script");
+        assert_eq!(
+            *features.last().unwrap(),
+            "export FEATURES='resolved one'",
+            "the extra_env FEATURES must be exported last to win"
+        );
     }
 
     /// Real, end-to-end proof of `eclass_locations_value`: `dev-libs/

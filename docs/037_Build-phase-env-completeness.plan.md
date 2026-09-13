@@ -1,6 +1,6 @@
 # Plan: backlog #37 — Build-phase env completeness (merged)
 
-Status: **S0 + S1 complete 2026-09-13; S2 not started.** G1 (full
+Status: **S0 + S1 + S2 complete 2026-09-13; S3 not started.** S2 threaded the resolved env into `emerge`/`--resume`/`--buildpkgonly` (both backends), dropped `AA`/`O`, shell-quoted the brush exports, and captured the L2 porttest track green (0 unexplained) with the `l2-bpkgonly-env` rows deleted; residuals filed in `TEST/findings/l2.md` S2. G1 (full
 layer) and G3 (`PORTAGE_USE` everywhere) decided by the owner; S1 landed
 `portage_profile::phase_environ` / `portage_use` + the three transcribed
 key sets, unit-tested, not yet threaded (S2). S0's exhaustive
@@ -628,5 +628,34 @@ end-to-end**.
   `doebuild.py:750`), `SLOT`/`PORTAGE_REPO_*` per entry, dropping `AA`/`O`
   from `run_commands`' own `extra_env`, brush quoting.
 
-(append future entries here as S2-S5 run: command, expected, actual,
+### S2 — 2026-09-13 (threaded; L2 porttest green)
+
+- `entry_build_env`/new `entry_phase_env_tail` thread
+  `phase_environ` per entry: resolved `USE`/`IUSE_EFFECTIVE`/
+  `USE_EXPAND` from `candidate_effective_use_flags` + `portage_use`,
+  plus `SLOT`/`PORTAGE_REPO_NAME`/`PORTAGE_REPO_REVISIONS`; the merge
+  path via `MergeOptions::resolved_config` (Arc), `--buildpkgonly` via
+  a `config` param into `run_buildpkgonly` →
+  `run_package(build_env, use_flags)`. `run_commands` no longer exports
+  `AA`; `phase_env_vars` no longer sets `O`; brush exports are
+  single-quoted (`shell_single_quote`, G6).
+- L2 porttest (`L2_REBUILD=1`, `TEST/logs/l2-20260913T131426Z`):
+  `.keep_porttest_emptydirs-0`, `metadata/USE`/`FEATURES`/`repository`
+  match real; `ecompress` + `estrip`/`splitdebug` now fire (docs carry
+  `BIG.txt.bz2`, splitdebug the `/usr/lib/debug`+`.build-id` tree);
+  0 unexplained, cross-install 0/0.
+- Residuals filed (not this slice): `l2-env-pkg-vars-unexported`
+  (export-state of `DEFINED_PHASES`/`KEYWORDS`/`LICENSE`),
+  `l2-env-compression-command` (`PORTAGE_COMPRESSION_COMMAND`),
+  `l2-env-profile-only-vars` (a `${VAR}` substitution in
+  `PROFILE_ONLY_VARIABLES`), `l2-env-path-aclocal` (phase `PATH`
+  order); and the fixture-compiled `.debug`/`.build-id` payload bytes
+  (now allowlisted under `l2-gpkg-dostrip-splitdebug`, #38's strict
+  payload question).
+- Correction found while threading: `candidate_effective_use_flags`
+  must treat a missing `IUSE` cache key as an empty IUSE (the porttest
+  md5-cache omits it), not as unreadable metadata — otherwise exactly
+  the empty-IUSE packages keep `USE=""`.
+
+(append future entries here as S3-S5 run: command, expected, actual,
 root cause, fix ref / backlog id)

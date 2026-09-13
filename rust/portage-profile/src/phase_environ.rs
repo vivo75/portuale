@@ -423,10 +423,37 @@ pub fn phase_environ(config: &Config, pkg: Option<PhaseUse<'_>>) -> Vec<(String,
         sorted_joined(&config.iuse_implicit),
     );
 
-    // 4. Per-package: `USE`, `IUSE_EFFECTIVE`, and every `USE_EXPAND`
-    //    variable's value derived from the effective USE
-    //    (`config.py:2218-2252`). Unprefixed names (`ARCH`) keep their
-    //    profile scalar (already in from step 1).
+    // 4. Per-package rows. With a package, its derived values overwrite
+    //    anything step 1/2/3 put in (`VIDEO_CARDS=""` even though the
+    //    profile sets `nvidia` -- the package doesn't declare it). With
+    //    no package there is no derivation, so the placeholders only
+    //    fill *gaps*: a profile scalar (`VIDEO_CARDS="nvidia"`, `ARCH`)
+    //    must survive (`or_insert`, not `insert`).
+    for (key, value) in phase_environ_pkg(config, pkg) {
+        if pkg.is_some() {
+            env.insert(key, value);
+        } else {
+            env.entry(key).or_insert(value);
+        }
+    }
+
+    env.into_iter().collect()
+}
+
+/// The **per-package** rows of `phase_environ`, split out so the
+/// per-entry build threading (`emerge_build::entry_build_env`) can add
+/// them on top of the run-wide `phase_environ(config, None)` result
+/// without recomputing the ~160-key base for every entry.
+///
+/// `Some(pkg)`: `USE` (real `PORTAGE_USE`), `IUSE_EFFECTIVE` (the
+/// package's declared IUSE ∪ the profile implicit set), and every
+/// `USE_EXPAND` variable's value derived from the effective USE
+/// (`config.py:2218-2252`), empty when the flag is off. `None`: no
+/// `USE`/`IUSE_EFFECTIVE` (there is no resolved candidate; the caller's
+/// own base stands) and every `USE_EXPAND` variable gets an empty
+/// placeholder -- unprefixed names (`ARCH`) keep their profile scalar.
+pub fn phase_environ_pkg(config: &Config, pkg: Option<PhaseUse<'_>>) -> Vec<(String, String)> {
+    let mut env: BTreeMap<String, String> = BTreeMap::new();
     match pkg {
         Some(p) => {
             let use_flags = portage_use(config, p.iuse, p.enabled);
@@ -456,7 +483,6 @@ pub fn phase_environ(config: &Config, pkg: Option<PhaseUse<'_>>) -> Vec<(String,
             }
         }
     }
-
     env.into_iter().collect()
 }
 

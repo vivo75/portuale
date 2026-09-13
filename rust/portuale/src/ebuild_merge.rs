@@ -299,6 +299,17 @@ pub struct MergeOptions {
     /// leaves. Empty (`Default`) for a standalone `ebuild <file> merge`
     /// / `qmerge` and every test. See `ebuild_phases::run_commands_async`.
     pub build_env: Vec<(String, String)>,
+    /// The resolved config this merge's `build_env` came from, when one
+    /// is in scope (`emerge <atom>` and friends; #37 S2). `None` for a
+    /// standalone `ebuild <file> merge`/`qmerge` and for tests -- those
+    /// keep the curated base env. `emerge_build::entry_build_env` uses
+    /// it to compute each entry's own resolved `USE` (`portage_profile::
+    /// portage_use` over `portage_repo::candidate_effective_use_flags`)
+    /// and the per-package rows of real `config.environ()` (`phase_
+    /// environ_pkg`), instead of the enabled-IUSE-only `USE` this field
+    /// used to carry. An `Arc` so the per-entry `options.clone()` is a
+    /// pointer copy.
+    pub resolved_config: Option<std::sync::Arc<portage_profile::Config>>,
     /// `/etc/portage/package.env`'s non-`USE` scalar half
     /// (`Config::package_env_vars`): `(atom, [(KEY, value)])` pairs.
     /// `emerge_build::entry_build_env` matches a build-bound entry's cpv
@@ -373,6 +384,7 @@ impl Default for MergeOptions {
             distdir: PathBuf::from("/var/cache/distfiles"),
             shell: ebuild_phases::ShellBackend::default(),
             collision_protect: false,
+            resolved_config: None,
             protect_owned: true,
             noconfmem: false,
             protect_if_modified: true,
@@ -420,6 +432,7 @@ impl MergeOptions {
         Self {
             debug,
             shell,
+            resolved_config: None,
             config_protect: std::env::var("CONFIG_PROTECT").unwrap_or(d.config_protect),
             config_protect_mask: std::env::var("CONFIG_PROTECT_MASK")
                 .unwrap_or(d.config_protect_mask),

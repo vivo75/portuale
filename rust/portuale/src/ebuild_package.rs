@@ -445,11 +445,21 @@ fn require_signing_config(options: &PackageOptions) -> Result<(), String> {
     Ok(())
 }
 
+///
+/// `build_env`: the resolved phase environment the caller wants the
+/// `install` chain to run with. `--buildpkgonly` passes the full
+/// `phase_environ`-derived env plus the entry's own `USE` (#37 S2);
+/// a standalone `ebuild <file> package` passes `&[]` (no graph, no
+/// resolved config -- `phase_env_vars`' own curated base stands).
+/// `use_flags`: real `Package.use.enabled`, written to the `Packages`
+/// index `USE` field; `""` for standalone.
 pub fn run_package(
     ebuild_path: &Path,
     root: &Path,
     portage_tmpdir: &Path,
     options: &PackageOptions,
+    build_env: &[(String, String)],
+    use_flags: &str,
 ) -> Result<i32, String> {
     require_signing_config(options)?;
     let status = ebuild_phases::run_commands(
@@ -461,7 +471,7 @@ pub fn run_package(
         options.debug,
         &options.config_root,
         options.shell,
-        &[],
+        build_env,
     )?;
     if status != 0 {
         return Ok(status);
@@ -469,8 +479,8 @@ pub fn run_package(
     // Standalone `ebuild <file> package`: no resolved graph reaches
     // this deep, so there is no resolved USE to report -- the same "no
     // graph, no USE" gap `package_after_install`'s own doc comment
-    // covers.
-    package_after_install(ebuild_path, root, portage_tmpdir, options, "")
+    // covers (`use_flags` is then `""`).
+    package_after_install(ebuild_path, root, portage_tmpdir, options, use_flags)
 }
 
 /// The packaging tail of `run_package`, split out so it can also run as a
@@ -1369,8 +1379,8 @@ mod tests {
         let repo_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/repo");
         let ebuild = repo_root.join("dev-libs/packagepkg/packagepkg-1.0.ebuild");
 
-        let status =
-            run_package(&ebuild, &root, &portage_tmpdir, &options).expect("run_package succeeds");
+        let status = run_package(&ebuild, &root, &portage_tmpdir, &options, &[], "")
+            .expect("run_package succeeds");
         assert_eq!(status, 0);
 
         // A real file, real bzip2+tar+XPAK content -- not portuale's
@@ -1507,8 +1517,8 @@ mod tests {
         let repo_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/repo");
         let ebuild = repo_root.join("dev-libs/packagepkg/packagepkg-1.0.ebuild");
 
-        let status =
-            run_package(&ebuild, &root, &portage_tmpdir, &options).expect("run_package succeeds");
+        let status = run_package(&ebuild, &root, &portage_tmpdir, &options, &[], "")
+            .expect("run_package succeeds");
         assert_eq!(status, 0);
 
         // A real `.gpkg.tar` -- real, unmodified `bin/gpkg-helper.py
@@ -1589,11 +1599,11 @@ mod tests {
         // Build it twice -- real `FEATURES=binpkg-multi-instance` keeps
         // both builds around under distinct `BUILD_ID`s, rather than the
         // single-instance default of overwriting the same bare filename.
-        let status =
-            run_package(&ebuild, &root, &portage_tmpdir, &options).expect("run_package succeeds");
+        let status = run_package(&ebuild, &root, &portage_tmpdir, &options, &[], "")
+            .expect("run_package succeeds");
         assert_eq!(status, 0);
-        let status =
-            run_package(&ebuild, &root, &portage_tmpdir, &options).expect("run_package succeeds");
+        let status = run_package(&ebuild, &root, &portage_tmpdir, &options, &[], "")
+            .expect("run_package succeeds");
         assert_eq!(status, 0);
 
         // Real `bintree._allocate_filename_multi`: `<pkgdir>/<cat>/<pn>/
@@ -1685,8 +1695,8 @@ mod tests {
         let repo_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/repo");
         let ebuild = repo_root.join("dev-libs/packagepkg/packagepkg-1.0.ebuild");
 
-        let status =
-            run_package(&ebuild, &root, &portage_tmpdir, &options).expect("run_package succeeds");
+        let status = run_package(&ebuild, &root, &portage_tmpdir, &options, &[], "")
+            .expect("run_package succeeds");
         assert_eq!(status, 0);
 
         let xpak = options
@@ -1763,7 +1773,7 @@ mod tests {
         std::fs::create_dir_all(binpkg_path.parent().unwrap()).unwrap();
         std::fs::write(&binpkg_path, b"OLD-CONTENT").unwrap();
 
-        let status = run_package(&ebuild, &root, &portage_tmpdir, &options)
+        let status = run_package(&ebuild, &root, &portage_tmpdir, &options, &[], "")
             .expect("run_package returns Ok(status)");
         assert_ne!(
             status, 0,

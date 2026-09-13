@@ -5449,6 +5449,61 @@ pub fn candidate_use_flags_display(
     display
 }
 
+/// The package's **full** effective `USE` set -- everything
+/// `effective_use_flags` resolved enabled, not just the declared-IUSE
+/// subset `candidate_use_flags_display` exposes. `bin/ebuild.sh`'s own
+/// `use()` and the build-info `USE` file real `__dyn_install` writes
+/// need the implicit profile flags (`abi_x86_64 amd64 elibc_glibc
+/// kernel_linux`) too, which no package declares in `IUSE` (#37; the S0
+/// recon's `metadata/USE` row, `TEST/findings/l2.md`).
+///
+/// The caller filters this through `portage_profile::portage_use` (real
+/// `config.py:2261`'s own IUSE ∪ `IUSE_EFFECTIVE` narrowing) -- this
+/// function deliberately returns the resolver's raw answer, the same set
+/// `candidate_use_flags_display`'s `enabled` column is derived from.
+/// Empty when the candidate or its md5-cache is unavailable, matching
+/// every other resolver helper's degraded case.
+pub fn candidate_effective_use_flags(
+    repos: &[RepoConfig],
+    config: &portage_profile::Config,
+    category: &str,
+    package: &str,
+    version: &str,
+) -> Vec<String> {
+    let Some(candidate) = list_candidates(repos, category, package)
+        .ok()
+        .and_then(|cs| cs.iter().find(|c| c.version == version).cloned())
+    else {
+        return Vec::new();
+    };
+    let pf = format!("{package}-{version}");
+    let Ok(metadata) = read_md5_cache(&candidate.repo_location, category, &pf) else {
+        return Vec::new();
+    };
+    // A missing `IUSE` key is an empty `IUSE`, not missing metadata: the
+    // real md5-cache writer omits empty fields (`porttest/emptydirs`
+    // has no `IUSE=` line at all), and real portage still computes the
+    // package's full effective USE -- the implicit profile flags -- for
+    // it. Bailing here would leave `USE=""` on exactly the empty-IUSE
+    // packages (`TEST/findings/l2.md` "S0 recon").
+    let iuse = metadata.get("IUSE").map(String::as_str).unwrap_or("");
+    let candidate_str = format!(
+        "{category}/{package}-{version}:{}/{}::{}",
+        candidate.slot, candidate.sub_slot, candidate.repo_name
+    );
+    let use_flags = effective_use_flags(
+        config,
+        iuse,
+        &candidate.keywords,
+        &candidate_str,
+        category,
+        package,
+    );
+    let mut sorted: Vec<String> = use_flags.into_iter().collect();
+    sorted.sort_by_key(|f| alnum_sort_key(f));
+    sorted
+}
+
 /// The on-disk vdb directory for `<category>/<package>-<version>`. Real
 /// global-updates renames a moved package's vdb dir; portuale never
 /// writes, so when the direct path is absent it falls back to every
@@ -21759,6 +21814,38 @@ mod tests {
             candidate_use_flags_display(&repos, &config, "dev-libs", "nope-does-not-exist", "9")
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn candidate_effective_use_flags_treats_a_missing_iuse_key_as_empty_iuse() {
+        // Real's md5-cache writer omits empty fields (`porttest/
+        // emptydirs` ships no `IUSE=` line at all), but a package with
+        // an empty IUSE still has the full effective USE -- the global
+        // profile flags. Bailing on a missing key would leave `USE=""`
+        // on exactly those packages (#37 S2, `TEST/findings/l2.md`
+        // "S0 recon").
+        let root = fixtures_root();
+        let repos = find_repos(&root).expect("fixture repos.conf resolves");
+        let config = portage_profile::resolve_config(
+            &root,
+            &root.join("repo"),
+            &[("overlay".to_string(), root.join("overlay"))],
+            &[],
+            "testrepo",
+            &HashMap::new(),
+            &root,
+        )
+        .expect("fixture config resolves");
+        // `aubreaktop`'s cache has no `IUSE=` line.
+        let flags = candidate_effective_use_flags(&repos, &config, "dev-libs", "aubreaktop", "1.0");
+        assert!(!flags.is_empty(), "missing IUSE must not blank the USE set");
+        assert!(
+            flags
+                .iter()
+                .any(|f| f == "baz" || f == "confflag" || f == "foo"),
+            "expected a profile USE flag, got {flags:?}"
+        );
+        assert!(candidate_effective_use_flags(&repos, &config, "dev-libs", "nope", "9").is_empty());
     }
 
     /// Unlike `resolve()`, uses the fixture's *real* resolved config
