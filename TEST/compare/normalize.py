@@ -57,6 +57,10 @@ def norm_files(prefix: Path) -> None:
         path, typ, mode, uid, gid, size, sha, link, xattr = parts
         if path in ENV_FILES or any(rx.search(path) for rx in PRESENCE_ONLY):
             sha = "-"
+            # a regenerated cache's *size* drifts too (e.g.
+            # /etc/ld.so.cache between two different binpkgs);
+            # presence-only means exactly that.
+            size = "-"
         # a directory's st_size is filesystem-internal (hash-tree/block
         # allocation) -- not meaningful, and it drifts even between two
         # dirs with an identical entry set.
@@ -68,7 +72,12 @@ def norm_files(prefix: Path) -> None:
 
 
 # --- VDB --------------------------------------------------------------
-BLANK_FILES = {"BUILD_TIME", "BUILD_ID", "COUNTER", "INSTALL_TIME"}
+# BINPKGMD5 records the *archive* a package was merged from; L1 merges
+# the same archives on both sides (equal by construction), but L2/L3
+# cross-install compares different builds of the same package, where the
+# archive md5 is expected to differ (like BUILD_ID). The merged payload
+# comparison is what matters, not the source archive's digest.
+BLANK_FILES = {"BUILD_TIME", "BUILD_ID", "COUNTER", "INSTALL_TIME", "BINPKGMD5"}
 SORT_FILES = {"NEEDED", "NEEDED.ELF.2", "REQUIRES", "PROVIDES"}
 # the consolidated `metadata` file (`#format=1` then KEY=value): blank
 # the same volatile keys inline.

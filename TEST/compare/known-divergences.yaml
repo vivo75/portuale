@@ -49,3 +49,143 @@
     abort handling. Recorded as the gnome-shell cluster-A bundle in
     TEST/findings/l0.md (~948-952).
   owner: deepseek-v4.1-flash
+
+# ---------------------------------------------------------------------
+# L2 (portuale as builder) -- temporary adjudications, 2026-09-13.
+# Every entry below is a filed *producer* gap with evidence in
+# TEST/findings/l2.md. All are `owner: portuale-bug` in spirit (the
+# schema's rule applies: delete the entry the moment the gap is fixed);
+# they exist only so the L2 bed can gate everything else while the gap
+# is open.
+
+- id: l2-gpkg-metadata-members
+  layer: l2
+  categories: [VDB]
+  path_glob:
+    - "porttest/*/IUSE"
+    - "porttest/*/IUSE_EFFECTIVE"
+    - "porttest/*/REPO_REVISIONS"
+    - "porttest/*/SIZE"
+    - "porttest/*/repository"
+    - "porttest/*/RDEPEND"
+    - "porttest/*/REQUIRES"
+    - "porttest/*/PROVIDES"
+    - "porttest/*/NEEDED"
+    - "porttest/*/NEEDED.ELF.2"
+  reason: >
+    portuale's gpkg `metadata/` member set is incomplete vs real (SIZE,
+    IUSE, IUSE_EFFECTIVE, repository, REPO_REVISIONS, and the
+    ebuild-derived *DEPEND / scanelf NEEDED* keys); the merged VDB then
+    lacks them. Filed as l2-gpkg-metadata-members.
+  owner: portuale-bug
+
+- id: l2-bpkgonly-env
+  layer: l2
+  categories: [VDB, MISSING]
+  path_glob:
+    - "porttest/*/FEATURES"
+    - "porttest/*/USE"
+    - "porttest/*/environment"
+    - "porttest/*/metadata"
+    - "/var/lib/porttest/kept/*"
+  reason: >
+    `emerge --buildpkgonly` builds with the standalone ebuild env, not
+    the resolved graph env (raw env FEATURES, empty USE, no SLOT, no
+    PORTAGE_REPO_NAME); `.keep_...-<slot>` markers and the saved
+    environment inherit that. Filed as l2-bpkgonly-env.
+  owner: portuale-bug
+
+- id: l2-gpkg-dostrip-splitdebug
+  layer: l2
+  categories: [MISSING, SIZE, CONTENT]
+  path_glob:
+    - "/usr/lib/debug"
+    - "/usr/lib/debug/*"
+    - "/usr/lib/libptsd*"
+    - "/usr/lib64/libptsd*"
+    - "/usr/bin/pt-*"
+  reason: >
+    portuale's packaging path runs no `dostrip`/`splitdebug`: archives
+    ship unstripped binaries and no /usr/lib/debug objects. Filed as
+    l2-gpkg-dostrip-splitdebug.
+  owner: portuale-bug
+
+- id: l2-gpkg-dostrip-splitdebug-contents
+  layer: l2
+  category: CONTENTS
+  path_glob: "porttest/*/CONTENTS"
+  match: "/usr/bin/pt-"
+  reason: "CONTENTS md5/entry residue of l2-gpkg-dostrip-splitdebug."
+  owner: portuale-bug
+
+- id: l2-gpkg-dostrip-splitdebug-libptsd
+  layer: l2
+  category: CONTENTS
+  path_glob: "porttest/*/CONTENTS"
+  match: "/usr/lib/libptsd"
+  reason: "CONTENTS entry residue of l2-gpkg-dostrip-splitdebug."
+  owner: portuale-bug
+
+- id: l2-gpkg-dostrip-splitdebug-dirs
+  layer: l2
+  category: CONTENTS
+  path_glob: "porttest/*/CONTENTS"
+  match: "line: dir /usr/lib/debug"
+  reason: "CONTENTS dir residue of l2-gpkg-dostrip-splitdebug."
+  owner: portuale-bug
+
+- id: l2-gpkg-dostrip-splitdebug-libdir
+  layer: l2
+  category: CONTENTS
+  path_glob: "porttest/*/CONTENTS"
+  match: "line: dir /usr/lib"
+  reason: >
+    The bare `dir /usr/lib` line exists only because splitdebug targets
+    live under /usr/lib/debug (l2-gpkg-dostrip-splitdebug); the
+    `/usr/lib/debug` lines are claimed by
+    l2-gpkg-dostrip-splitdebug-dirs, listed first.
+  owner: portuale-bug
+
+- id: l2-gpkg-dostrip-splitdebug-lib64
+  layer: l2
+  category: CONTENTS
+  path_glob: "porttest/*/CONTENTS"
+  match: "/usr/lib64/libptsd"
+  reason: "CONTENTS entry residue of l2-gpkg-dostrip-splitdebug."
+  owner: portuale-bug
+
+- id: l2-gpkg-docompress
+  layer: l2
+  categories: [MISSING]
+  path_glob: "/usr/share/doc/docs-1.0/BIG.txt*"
+  reason: >
+    No `docompress`/`ecompress`: portuale archives ship BIG.txt where
+    real ships BIG.txt.bz2. Filed as l2-gpkg-docompress.
+  owner: portuale-bug
+
+- id: l2-gpkg-docompress-contents
+  layer: l2
+  category: CONTENTS
+  path_glob: "porttest/*/CONTENTS"
+  match: "BIG.txt"
+  reason: "CONTENTS entry residue of l2-gpkg-docompress."
+  owner: portuale-bug
+
+- id: l2-bpkgonly-keep-contents
+  layer: l2
+  category: CONTENTS
+  path_glob: "porttest/*/CONTENTS"
+  match: ".keep_porttest_emptydirs-"
+  reason: "CONTENTS entry residue of l2-bpkgonly-env (SLOT not set)."
+  owner: portuale-bug
+
+- id: l2-consumes-portuale-env-degraded
+  layer: l2
+  categories: [SIZE, CONTENT]
+  path_glob: "/var/lib/porttest/phase.log"
+  reason: >
+    Real Portage merging a portuale-built archive runs merge phases with
+    a degraded saved env (no MERGE_TYPE, pkg_pretend skipped), so the
+    phases fixture's log is shorter. Filed as
+    l2-consumes-portuale-env-degraded.
+  owner: portuale-bug

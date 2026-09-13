@@ -138,13 +138,10 @@ def _contents_map(text: str) -> dict:
 def diff_contents(k: str, ta: str, tb: str, rep: Report, tolerate_payload: bool) -> None:
     if not tolerate_payload:
         la, lb = set(ta.splitlines()), set(tb.splitlines())
-        for ln in sorted(la - lb)[:8]:
+        for ln in sorted(la - lb):
             rep.add("CONTENTS", k, f"portage-only line: {ln}")
-        for ln in sorted(lb - la)[:8]:
+        for ln in sorted(lb - la):
             rep.add("CONTENTS", k, f"portuale-only line: {ln}")
-        extra = (len(la - lb) + len(lb - la)) - min(8, len(la - lb)) - min(8, len(lb - la))
-        if extra > 0:
-            rep.add("CONTENTS", k, f"... +{extra} more line diffs")
         return
     # tolerated mode: entry sets must match (hard); an `obj` md5 is a
     # payload difference (compiled file), a `sym` target/dir change is
