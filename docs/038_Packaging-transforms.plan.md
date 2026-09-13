@@ -1,9 +1,11 @@
 # Plan: backlog #38 — Packaging transforms: dostrip / splitdebug / docompress (merged)
 
-Status: **in progress — S0–S4 done 2026-09-13** (see §11 and
-`TEST/findings/l2.md` "#38 S1/S2/S3/S4"). The S0 `PORTAGE_TMPDIR` finding
+Status: **DONE — S0–S5 complete 2026-09-13** (see §11 and
+`TEST/findings/l2.md` "#38 S0-S5"). The S0 `PORTAGE_TMPDIR` finding
 was fixed as a #37 follow-up (G6). S4: the user chose to **implement**
-`instprep` (not file #38b). Remaining: S5 (closeout). **#37, its
+`instprep` (not file #38b). S5 closed the backlog: fresh L2 porttest 0
+unexplained, L1 0 hard findings, real set as far as #39 allows with no
+new #38 finding, docs updated, no dead allowlist entries. **#37, its
 blocker, landed 2026-09-13** — resolved `FEATURES`, `PORTAGE_COMPRESS*`,
 `USE`, `SLOT` are in the phase env now
 (`037_Build-phase-env-completeness.plan.md`, S0–S5 complete). Written 2026-09-13 against `main` @ `ec13936`.
@@ -457,12 +459,28 @@ is touched.
       (Implemented: `ebuild_phases::run_instprep` on every source and
       binary merge; repro `TEST/run/l2-instprep-repro.sh` green in
       `l2-instprep-20260913T201638Z`; host e2e both merge kinds.)
-- [ ] No transform reimplemented in Rust; no vendored `bin/*` edited.
-- [ ] L2 porttest 0 unexplained; L1 unchanged; full verification pass
-      green. (Post-S4: L2 `l2-20260913T201941Z` 0 unexplained, L1
-      `l1-20260913T202308Z` 0 hard findings, full pass green; S5 re-runs
-      from a fresh state for closeout.)
-- [ ] Docs updated (S5); no dead allowlist entries.
+- [x] No transform reimplemented in Rust; no vendored `bin/*` edited.
+      (S4's `run_instprep` is an invocation of the vendored
+      `__dyn_instprep`; S1's ecompress is the vendored script.)
+- [x] L2 porttest 0 unexplained; L1 unchanged; full verification pass
+      green. (S5 fresh re-run `l2-20260913T203727Z` rc 0: 82 known / 0
+      unexplained — the 2 extra known rows are the narrowed `setuid`
+      build-id race, actually hit this run — cross-install 67/67
+      explained / 0 unexplained, control 0/0; L1
+      `l1-20260913T204335Z` rc 0, 0 hard findings, 70 mtime-only, both
+      PMs merge all 10 fixtures. Real set `l2-20260913T204249Z`: both
+      PMs build all 19 binpkgs; stop point unchanged (8 filed
+      `l2-gpkg-dep-metadata-rewrite` rows, then `consume cand` rc 1 at
+      the #39 index gap + `l2-binpkg-gpg-check`); full host pass green.)
+- [x] Docs updated (S5); no dead allowlist entries. (`what-this-proves.md`
+      S4/S5 paragraph; `scope-backlog.md` §K transforms bullet closed +
+      `l2-binpkg-gpg-check`/backlog #43; `backlog-tasks.md` #38 DONE,
+      #39 widened, #43 filed; fixture README/eBuild `doman` claim
+      corrected; `docs/030` G0.5/S3 status. Every remaining yaml row was
+      hit by the S5 fresh cross-install (50 metadata-members, 10
+      pkgindex-eapi, 2 dostrip-splitdebug + 4 `-contents`, 1
+      consumes-env-degraded) and the setuid-race builder row by the
+      fresh archive diff; no dead row.)
 
 ## 10. Delegation brief (for subagents)
 
@@ -572,3 +590,35 @@ ref / backlog id)
   an already-instprepped image (the `-B` archive came out stripped and the
   `-K` `estrip` died on `debuglink section already exists`); scheduler
   scope, the repro wipes the builddir between cells.
+
+- **S5 (2026-09-13)** — closeout. Fresh porttest track
+  (`L2_REBUILD=1 TEST/run/l2-portuale-builder.sh
+  TEST/atomlists/l1-porttest.txt`) → `TEST/logs/l2-20260913T203727Z`,
+  rc 0: 82 known / 0 unexplained (the 2 extra known rows are the
+  narrowed `setuid` build-id race, actually hit this run: real's
+  `.build-id/e0/2277…` link pair disagrees with itself, oracle
+  `pt-setuid` vs this real build `pt-setgid`), cross-install 67/67
+  explained / 0 unexplained (same 67 as S2), control 0/0. `TEST/run/
+  l1-merge-from-binpkg.sh TEST/atomlists/l1-porttest.txt` →
+  `TEST/logs/l1-20260913T204335Z` rc 0: 0 hard findings, 70 mtime-only,
+  both PMs merge all 10 fixtures (S4's mandatory archive-consumer
+  re-run: clean). Real set (`L2_REBUILD=1 L2_MODE=payload-tolerant
+  L2_BUILD_MODE=deep … TEST/atomlists/l1-merge.txt`) →
+  `TEST/logs/l2-20260913T204249Z`: both PMs build all 19 binpkgs; the
+  **stop point is unchanged from #37 S4** — 8 unexplained archive rows,
+  all `metadata/{DEPEND,RDEPEND}` install-time rewrite = #39
+  `l2-gpkg-dep-metadata-rewrite` (widened in `backlog-tasks.md` #39),
+  then `consume cand` rc 1: real Portage takes only 5/18 archives from
+  portuale's `$PKGDIR`, falls back to the image binhost (higher
+  revisions) or source (unusable #39 stanzas) for the rest and dies on
+  `GnuPG verification failed` = `l2-binpkg-gpg-check`, now filed as
+  **backlog #43** with the owner note. No env (#37) and no transform
+  (#38) rows. Docs: `what-this-proves.md` S4/S5 paragraph with live
+  commands; `scope-backlog.md` §K transforms bullet closed and the GPG
+  entry added; `backlog-tasks.md` #38 DONE / #39 widened / #43 filed;
+  fixture `README.md`/ebuild `doman`-compressed claim corrected
+  (`pt.1` is 33 B, plain under `PORTAGE_DOCOMPRESS_SIZE_LIMIT`; only
+  `BIG.txt.bz2` is compressed in that fixture); `docs/030` G0.5 + S3
+  updated to "#38 landed, verification-mode". Full step-8 pass: `cargo
+  fmt --check`, clippy (0 warnings), `cargo test --release`, `pytest
+  tests -q` all green.

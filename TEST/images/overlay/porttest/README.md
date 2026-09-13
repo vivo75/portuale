@@ -29,7 +29,7 @@ sync when an ebuild here changes (`egencache --repo porttest --update`).
 | `porttest/hardlinks` | hardlinked regular files (`CONTENTS` `obj` dedup, link count preserved) |
 | `porttest/symfarm` | relative / absolute / dangling / two-hop-chain symlinks + a bin→system-path link + 20 uniform links |
 | `porttest/emptydirs` | `keepdir` (+ `.keep_<cat>_<pn>-<slot>`), nested keepdir, a bare owned empty dir with no keepdir, an `0700` dir |
-| `porttest/docs` | `dodoc -r` tree → docompress, `newdoc`, `doman` (compressed), `doinfo` (not), `docinto html` (not) |
+| `porttest/docs` | `dodoc -r` tree → docompress (`BIG.txt.bz2`; files < 128 B stay plain), `newdoc`, `doman` (`pt.1` 33 B, plain under the size limit), `doinfo` (not), `docinto html` (not) |
 | `porttest/installmask` | files an `INSTALL_MASK` / `*.la` / `*.log` strip should drop at merge, incl. a dir that becomes empty once its only file is dropped |
 | `porttest/phases` | every `pkg_*` phase appends `<phase> eapi=… ebuild_phase=… merge_type=…` to `/var/lib/porttest/phase.log` — merge runs `pkg_setup`/`pkg_preinst`/`pkg_postinst`, so those lines (and order) must match |
 | `porttest/splitdebug` | `FEATURES=splitdebug`: `/usr/lib/debug/**/*.debug` + `.build-id/**` symlinks for a binary AND a shared lib (soname) |

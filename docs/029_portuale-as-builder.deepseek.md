@@ -12,8 +12,9 @@ backlog #37 (S1–S5, 2026-09-13 —
 its whole 18-package closure and oniguruma lands in `/usr/lib64`. The
 S4 mechanism (cross-install direction A + `--tolerate-payload`) is
 delivered and proven on the fixture track; its real half now waits on
-#38/#39 (packaging transforms, gpkg metadata/`Packages` index), not on
-env. Two core
+#39 (gpkg metadata/`Packages` index) and the test-bed GPG check (#43),
+not on env — #38 (packaging transforms) closed 2026-09-13 (S0-S5,
+`docs/038_Packaging-transforms.plan.md`). Two core
 fixes landed along the way (the `Packages` header `VERSION` that made
 real Portage ignore every portuale-built archive, and the missing
 `FILESDIR`→repo-`files/` symlink that made every `eapply` die).

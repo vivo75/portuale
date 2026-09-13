@@ -16,7 +16,8 @@ src_install() {
 	dodoc -r docs/.
 	newdoc docs/small.txt RENAMED.txt
 
-	# a man page (compressed) and an info file (NOT compressed by default)
+	# a man page (33 B, under PORTAGE_DOCOMPRESS_SIZE_LIMIT -> plain)
+	# and an info file (NOT compressed by default)
 	printf '.TH PT 1\n.SH NAME\npt \\- porttest\n' > "${S}"/pt.1
 	doman "${S}"/pt.1
 	printf 'This is pt.info, node Top.\n' > "${S}"/pt.info

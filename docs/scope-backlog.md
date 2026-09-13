@@ -655,8 +655,9 @@ portuale cannot yet produce. Evidence, repro commands and adjudications:
 [`TEST/findings/l2.md`](../TEST/findings/l2.md). The `porttest` fixture
 track runs green modulo these (temporary `owner: portuale-bug`
 allowlist entries in `known-divergences.yaml`, `layer: l2`); the
-`l2-bpkgonly-env` entry is closed (2026-09-13), and the real L1 set's
-remaining blockers are the #38/#39 entries below.
+`l2-bpkgonly-env` (#37) and `l2-gpkg-dostrip-splitdebug`/`-docompress`
+(#38) entries are closed (2026-09-13), and the real L1 set's remaining
+blockers are the #39 entries plus the test-bed GPG check below.
 
 - **FIXED 2026-09-13 (#37 S1-S4) — build phase env is a curated
   whitelist, not the resolved config env** (`l2-bpkgonly-env`, HIGH).
@@ -672,10 +673,19 @@ remaining blockers are the #38/#39 entries below.
   from a clean run, archives' `environment.bz2` normalise equal, and
   oniguruma lands in `/usr/lib64` (evidence: `TEST/findings/l2.md`
   S4/S5; plan: `docs/037_Build-phase-env-completeness.plan.md`).
-- **No packaging transforms** (`l2-gpkg-dostrip-splitdebug`, HIGH):
-  no `dostrip`/`estrip`, no splitdebug — archives ship unstripped
-  binaries and no `/usr/lib/debug`; `l2-gpkg-docompress` (no
-  `ecompress`: `BIG.txt` vs `BIG.txt.bz2`).
+- **FIXED 2026-09-13 (#38 S0-S5) — no packaging transforms**
+  (`l2-gpkg-dostrip-splitdebug`, HIGH). The gates were already the real
+  `install_qa_check` ones; #37's resolved env made them fire, and the
+  last byte difference was a `PORTAGE_TMPDIR` boundary default fixed as
+  a #37 follow-up. `porttest/splitdebug` now carries the oracle's own
+  build-ids/`.debug` sha256s, `porttest/setuid` is 14384 B/binary again,
+  `porttest/docs` ships `BIG.txt.bz2` with `<128 B` files plain, and the
+  new `porttest/restrict-strip` (`RESTRICT=strip`) pins the inverse
+  cell; the merge-time complement (`__dyn_instprep`) is now run on
+  every merge from the resolved phase env. Allowlists narrowed to the
+  one genuinely nondeterministic `porttest/setuid` build-id link race
+  (real disagrees with itself). Plan: `docs/038_Packaging-transforms.plan.md`;
+  evidence: `TEST/findings/l2.md` "#38 S0-S5".
 - **Incomplete gpkg metadata** (`l2-gpkg-metadata-members`, MEDIUM):
   `SIZE`, `IUSE`, `IUSE_EFFECTIVE`, `repository`, `REPO_REVISIONS`,
   ebuild-derived `RDEPEND`/`REQUIRES`/`PROVIDES`, the `Packages` index
@@ -688,6 +698,17 @@ remaining blockers are the #38/#39 entries below.
 - **Degraded consumer env** (`l2-consumes-portuale-env-degraded`,
   MEDIUM): real Portage merging a portuale-built archive runs merge
   phases with `MERGE_TYPE` unset and skips `pkg_pretend`.
+- **OPEN (backlog #43) — test-bed binpkg GPG check blocks the real-set
+  cross-install** (`l2-binpkg-gpg-check`, found in #37 S4 / surfaced
+  again by #38 S5, owner note 2026-09-13): the consume container's catalyst
+  `binrepos.conf/gentoo.conf` has `verify-signature = true` and merges
+  with `-k --getbinpkg`, so when real Portage declines a portuale-built
+  archive (the #39 `Packages` gaps above) it falls back to
+  `/var/cache/binhost/gentoo` and dies on GnuPG verification. Fix in
+  the image/consume env (`verify-signature = false` or no gentoo
+  binrepo, and/or `FEATURES=binpkg-ignore-signature`) **and** portuale
+  (`binpkg::GpgVerify` ignores a per-binrepo `verify-signature =
+  false`). Details: `TEST/findings/l2.md` `l2-binpkg-gpg-check`.
 
 Fixed while building the bed: `l2-pkgindex-version-missing` (the
 `Packages` header lacked `VERSION`, so real Portage under

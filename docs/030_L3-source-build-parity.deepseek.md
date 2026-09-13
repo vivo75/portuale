@@ -361,8 +361,10 @@ session with the S2 noise set in hand.
   S3 owns them under this plan. Owner: user. **Status 2026-09-13: taken
   as recommended — #37 ran as its own Tier-5 item (S0–S5,
   `docs/037_Build-phase-env-completeness.plan.md`) and is closed; S3
-  here is now verification-mode for the env half. #38 remains
-  (`docs/038_Packaging-transforms.plan.md`).**
+  here is now verification-mode for the env half. #38 has landed
+  (S0-S5, `docs/038_Packaging-transforms.plan.md`, 2026-09-13) — the
+  transforms and merge-time `instprep` are parity-proven on the L2
+  porttest track, so S3 here is verification-mode for both halves.**
 - **G0.6 `SOURCE_DATE_EPOCH` plumbing.** Recommendation: fix inside
   #37's resolved-env work (config key → phase env) plus a unit test
   pinning it; no separate user-facing flag. The harness puts it in
@@ -516,7 +518,11 @@ green; `normalize.md` and `normalize.py` in sync.
 **Status 2026-09-13: #37 has landed** (S0–S5, see G0.5/G0.6 above) —
 step 1 below is now a *verification* pass: the resolved env is threaded
 and the L2 porttest track is green with the `l2-bpkgonly-env` allowlist
-gone (`TEST/findings/l2.md` S4/S5). Step 2 (#38) remains open.
+gone (`TEST/findings/l2.md` S4/S5). **#38 has since landed too**
+(S0-S5, `docs/038_Packaging-transforms.plan.md`; `TEST/findings/l2.md`
+"#38 S0-S5"), so step 2 below is now a *verification* pass as well:
+the transforms' `l2-gpkg-dostrip-splitdebug`/`-docompress` allowlists
+are gone and `L2_REBUILD=1 … l1-porttest.txt` is green.
 
 Workstreams (details live in the findings, this is the L3-facing
 contract):

@@ -16346,5 +16346,51 @@ brush parent for a non-compiled fixture, while a compiled fixture no-ops
 inside brush before `estrip` is reached — a brush-backend gap filed
 under the brush-pin workflow (`backlog-tasks.md` #6), not a transform
 bug. Slice record: `docs/038_Packaging-transforms.plan.md`; per-finding
-evidence: `TEST/findings/l2.md` "#38 S1/S2/S3". S4 (`instprep`
-decision) and S5 (closeout) remain.
+evidence: `TEST/findings/l2.md` "#38 S1/S2/S3". S4 (`instprep`) and S5
+(closeout) follow below.
+
+### Merge-time `instprep`: the transforms also run when the archive is consumed (backlog #38 S4–S5, 2026-09-13)
+
+Portuale's binpkgs now stay byte-identical to real's in *both* merge
+directions. Real runs `instprep` as the first step of every merge
+(`dblink.treewalk()` → `doebuild_environment(..., "instprep")`), before
+`INSTALL_MASK`/collision-protect/`pkg_preinst`; `__dyn_instprep`
+(`misc-functions.sh:265-308`) applies `ecompress`/`estrip` iff
+`PORTAGE_COMPRESS` is set and `binpkg-docompress`/`binpkg-dostrip` are
+*absent* — the complement of the package-time gates — and is idempotent
+via `.instprepped`. `ebuild_phases::run_instprep` now invokes that same
+vendored function with the resolved phase env at real's position: first
+in `merge_after_install` (every source merge) and after `pkg_setup` in
+`merge_binpkg` (every binary merge), with binary merges seeding
+`${T}/environment` from the archive's `environment.bz2` plus
+`EMERGE_FROM`/`MERGE_TYPE=binary`. No transform logic in Rust, no
+vendored `bin/*` edited; under the default `FEATURES` the script's gates
+are false, so it is a near no-op. Runnable, live-verified:
+
+```sh
+TEST/run/l2-instprep-repro.sh      # rc 1 before, rc 0 after
+L2_REBUILD=1 TEST/run/l2-portuale-builder.sh TEST/atomlists/l1-porttest.txt   # rc 0
+A=TEST/logs/_l2-pkgcache-portuale/porttest/docs/docs-1.0-1.gpkg.tar
+tar xOf "$A" docs-1.0-1/image.tar.zst | zstd -dc | tar tv | grep -E 'BIG|small|pt\.'
+TEST/run/l1-merge-from-binpkg.sh TEST/atomlists/l1-porttest.txt              # rc 0
+```
+
+Live: the S4 repro (`TEST/logs/l2-instprep-20260913T201638Z`, both
+`FEATURES="-binpkg-dostrip -binpkg-docompress"` cells source and `-B`
+→`-K`, one container per PM) is identical between PMs — unstripped
+15424 B archives both strip at merge, plain `BIG.txt` archives both
+compress. S5's fresh runs close the track: L2
+`TEST/logs/l2-20260913T203727Z` rc 0 with 0 unexplained (cross-install
+67/67 explained, control 0/0) and L1 `TEST/logs/l1-20260913T204335Z`
+rc 0 (0 hard findings, both PMs merge all 10 fixtures). The real set
+(`TEST/logs/l2-20260913T204249Z`, deep/payload-tolerant) builds all 19
+binpkgs with both PMs and stops exactly where #37 left it — the filed
+#39 metadata gaps (`l2-gpkg-dep-metadata-rewrite`) and the test-bed
+`l2-binpkg-gpg-check`, now backlog #43 — with no env or transform row.
+The transforms' allowlists therefore hold only the one genuinely
+ungradable `porttest/setuid` build-id link race (real disagrees with
+itself between runs; hit again in S5), and the fixture `README.md`/
+ebuild `doman`-compressed claim was corrected (`pt.1` is 33 B, plain
+under `PORTAGE_DOCOMPRESS_SIZE_LIMIT=128`). Slice record:
+`docs/038_Packaging-transforms.plan.md`; per-finding evidence:
+`TEST/findings/l2.md` "#38 S4/S5".

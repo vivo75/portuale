@@ -98,14 +98,16 @@ Complements the `$ROOT`+VDB diff; the L0/L1 bed does not need it.
 ### L2 — Portuale as builder, structural + cross-install
 
 > **Status 2026-09-13: the bed is shipped and #37 (build-phase env
-> completeness) is closed** — `TEST/run/l2-portuale-builder.sh` +
+> completeness) + #38 (packaging transforms) are closed** —
+> `TEST/run/l2-portuale-builder.sh` +
 > `layers/l2/*` + `compare/gpkg-structure.sh` / `gpkg-diff.sh`, with
 > `diff.py --layer l2 [--tolerate-payload]`. The `porttest` fixture
-> track is green from a clean run with the `l2-bpkgonly-env` allowlist
-> gone (0 unexplained); the real set builds its whole closure and
-> oniguruma installs to `/usr/lib64`, with the next blockers now #38
-> (packaging transforms) and #39 (gpkg metadata/`Packages` index), plus
-> the test-bed GPG check. Every open finding is in
+> track is green from a clean run with the `l2-bpkgonly-env`,
+> `l2-gpkg-dostrip-splitdebug` and `l2-gpkg-docompress` allowlists gone
+> (0 unexplained); the real set builds its whole closure and oniguruma
+> installs to `/usr/lib64`, with the next blockers now #39 (gpkg
+> metadata/`Packages` index) plus the test-bed GPG check (#43). Every
+> open finding is in
 > [`../TEST/findings/l2.md`](../TEST/findings/l2.md), adjudicated via
 > `known-divergences.yaml` (`layer: l2`). The steps below are the
 > original design and still describe the run.
