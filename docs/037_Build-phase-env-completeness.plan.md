@@ -1,6 +1,9 @@
 # Plan: backlog #37 — Build-phase env completeness (merged)
 
-Status: **S0 complete 2026-09-13; S1 not started.** S0's exhaustive
+Status: **S0 + S1 complete 2026-09-13; S2 not started.** G1 (full
+layer) and G3 (`PORTAGE_USE` everywhere) decided by the owner; S1 landed
+`portage_profile::phase_environ` / `portage_use` + the three transcribed
+key sets, unit-tested, not yet threaded (S2). S0's exhaustive
 var-by-var recon is written into `TEST/findings/l2.md` under
 `l2-bpkgonly-env` ("S0 recon (#37, 2026-09-13)"): real 160 env keys vs
 portuale 45 on the porttest pair; 118 only-real grouped by setter and
@@ -257,8 +260,9 @@ TEST/run/l2-portuale-builder.sh TEST/atomlists/l1-merge.txt` → dies at
 ## 3. Scope
 
 **In:** (1) a cited, real-derived export-set builder over `Config`;
-(2) effective `USE` = enabled ∩ `IUSE_EFFECTIVE`, also exported as
-`PORTAGE_USE`, and used for `metadata/USE`; (3) per-entry `SLOT`,
+(2) effective `USE` = enabled ∩ `IUSE_EFFECTIVE` (real's `PORTAGE_USE`
+value; `PORTAGE_USE` itself is `environ_filter`ed, only `USE` is
+exported), also used for `metadata/USE`; (3) per-entry `SLOT`,
 `PORTAGE_REPO_NAME`, `PORTAGE_REPO_REVISIONS`; (4) resolved
 `FEATURES`/`PORTAGE_FEATURES` in the phase env; (5) the same on
 `--buildpkgonly` and `--resume`; (6) `SOURCE_DATE_EPOCH` as an ordinary
@@ -301,7 +305,8 @@ contract `CASES` (real-execution-only item, `AGENTS.md` step 4).
   surface): whitelist ∩ `other_vars` ∪ `PROFILE_FAMILY`, and the S2
   acceptance bar drops exact `environment.bz2` parity to "no
   config-resolved key missing" — a weaker bar L3's VDB diff will keep
-  surfacing. Owner: **user** (decide before S1).
+  surfacing. Owner: **user** — **decided 2026-09-13: full layer**
+  (implemented as `portage_profile::phase_environ`, S1).
 - **G2 Empty values.** Export keys that are *set to empty* as empty
   (`PORTAGE_COMPRESS=""` is real's documented "disable", `ecompress:254`);
   omit keys that are *unset*. `build_config_env`'s skip-empties shape is
@@ -311,9 +316,12 @@ contract `CASES` (real-execution-only item, `AGENTS.md` step 4).
   2261`). The **same value** feeds `write_post_install_metadata` /
   `package_after_install`'s `use_flags` (`metadata/USE`, `Packages`
   `USE`); `GraphEntry::use_flags_display` stays for `--pretend` bracket
-  output only. S1 presents a live side-by-side (old vs new) on
-  `porttest/docs` and one IUSE-bearing real package before S2 starts.
-  Owner: **user**. **Stop rule:** if the new value is *wrong* (not
+  output only. Note `PORTAGE_USE` is in real's `environ_filter`
+  (`special_env_vars.py`), so only `USE` is exported. Side-by-side
+  (S0 oracle): `porttest/docs` old `""` → new `abi_x86_64 amd64
+  elibc_glibc kernel_linux`; `dev-libs/oniguruma` old `abi_x86_64` → new
+  `abi_x86_64 amd64 elibc_glibc kernel_linux` (= real's `metadata/USE`).
+  Owner: **user** — **decided 2026-09-13: `PORTAGE_USE` everywhere.** **Stop rule:** if the new value is *wrong* (not
   merely more complete) on any fixture, stop and escalate.
 - **G4 Rust `FEATURES` gates.** Pass the resolved list explicitly where a
   `Config` is in scope (the `emerge` paths); keep `std::env` as the
@@ -405,7 +413,7 @@ source line; F review of `PORTUALE_COMPUTED`; G3 answered.
    `:11705` with `phase_environ(&config)`. Extend `entry_build_env` with
    `SLOT` (`entry.slot` or `"0"`, never `""`), `PORTAGE_REPO_NAME`
    (candidate repo), `PORTAGE_REPO_REVISIONS` (`"{}"` unless tracked),
-   `USE`/`PORTAGE_USE` from S1.3. Keep `extra_env` as the **last** layer.
+   `USE` from S1.3 (`portage_use`). Keep `extra_env` as the **last** layer.
 2. `FEATURES`: since `extra_env` wins, the base `phase_features_value()`
    can stand as the standalone fallback; **unit-test** that the last
    `FEATURES` pair wins under both backends (bash `cmd.envs` — later
@@ -591,5 +599,34 @@ end-to-end**.
   portuale's fresh shell per phase re-adds everything. File separately
   if a fixture ever shows it (bug 189417 behaviour).
 
-(append future entries here as S1-S5 run: command, expected, actual,
+### S1 — 2026-09-13 (builder landed, not threaded)
+
+- Landed `rust/portage-profile/src/phase_environ.rs`: `ENVIRON_FILTER`,
+  `ENV_BLACKLIST`, `PORTUALE_COMPUTED` (transcribed/cited), `portage_use`
+  (enabled ∩ (IUSE ∪ `IUSE_EFFECTIVE`), sorted) and `phase_environ(&Config,
+  Option<PhaseUse>)` = `(other_vars ∪ whole process env) − filter −
+  blacklist − computed`, then folded incrementals (`FEATURES` +
+  `PORTAGE_FEATURES`, `ENV_UNSET`, `USE_EXPAND*`, `IUSE_IMPLICIT`) and
+  the per-package `USE`/`IUSE_EFFECTIVE`/`USE_EXPAND`-derived values
+  (`config.py:2218-2252`); plus `config_env_all()` (test-overridable
+  whole-env accessor) in `lib.rs`. Four unit tests; workspace clippy 0
+  warnings; `cargo test --release` green; pytest 1561 passed with only
+  the 4 pre-existing no-TTY `--ask` failures (same set without the
+  change).
+- Correction to S0/plan text: real's `environ_filter` contains
+  `PORTAGE_USE`, so only `USE` is exported (not `USE` + `PORTAGE_USE`).
+- Correction to the synthetic-profile assumption: `ELIBC`/`KERNEL` must
+  be in `USE_EXPAND` (as real `base/make.defaults` has them) for
+  `iuse_effective` to contain `elibc_glibc`/`kernel_linux` — a fixture
+  that omits them silently drops the implicit flags from `USE`.
+- Design note for S2: `phase_environ` takes the package's `IUSE` +
+  enabled set because real derives `IUSE_EFFECTIVE` and every
+  `USE_EXPAND` variable value per package (oracle: `PYTHON_SINGLE_TARGET=""`
+  for `emptydirs` despite the `*/*` `package.use` entry). `pkg == None`
+  (standalone `ebuild <file>`) exports placeholders only.
+- Not yet covered (S2): `PORTAGE_COMPRESSION_COMMAND` (dynamic,
+  `doebuild.py:750`), `SLOT`/`PORTAGE_REPO_*` per entry, dropping `AA`/`O`
+  from `run_commands`' own `extra_env`, brush quoting.
+
+(append future entries here as S2-S5 run: command, expected, actual,
 root cause, fix ref / backlog id)

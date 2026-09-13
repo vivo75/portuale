@@ -290,6 +290,11 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
+mod phase_environ;
+pub use phase_environ::{
+    ENV_BLACKLIST, ENVIRON_FILTER, PORTUALE_COMPUTED, PhaseUse, phase_environ, portage_use,
+};
+
 /// Error resolving profile/config files. Distinct variants mirror the
 /// real message shapes so `Display` reproduces them byte-for-byte.
 #[derive(Debug)]
@@ -1248,7 +1253,7 @@ thread_local! {
     /// an absent key reads as unset. Lets the env-layer test drive
     /// `resolve_config` without `set_var`, which would race every other
     /// test thread also calling `resolve_config` (see `with_test_env`).
-    static TEST_ENV_OVERRIDE: std::cell::RefCell<Option<HashMap<String, String>>> =
+    pub(crate) static TEST_ENV_OVERRIDE: std::cell::RefCell<Option<HashMap<String, String>>> =
         const { std::cell::RefCell::new(None) };
 }
 
@@ -1263,6 +1268,36 @@ fn config_env_var(name: &str) -> Option<String> {
         }
     }
     std::env::var(name).ok()
+}
+
+/// The *whole* process environment, through the same test override
+/// `config_env_var` honours -- for `phase_environ`, which mirrors real
+/// `config.__init__`'s `self.backupenv = os.environ.copy()` /
+/// `configdict["env"] = LazyItemsDict(self.backupenv)`
+/// (`config.py:551,567`): real's `env` layer is *all* of the calling
+/// environment, not the `ENV_*_VARS` allowlist `resolve_config` reads
+/// for `emerge --info`. Non-UTF-8 entries are dropped (real's are
+/// `str` already).
+pub(crate) fn config_env_all() -> Vec<(String, String)> {
+    #[cfg(test)]
+    {
+        if TEST_ENV_OVERRIDE.with(|o| o.borrow().is_some()) {
+            return TEST_ENV_OVERRIDE.with(|o| {
+                let mut v: Vec<(String, String)> = o
+                    .borrow()
+                    .as_ref()
+                    .unwrap()
+                    .iter()
+                    .map(|(k, v)| (k.clone(), v.clone()))
+                    .collect();
+                v.sort();
+                v
+            });
+        }
+    }
+    std::env::vars_os()
+        .filter_map(|(k, v)| Some((k.into_string().ok()?, v.into_string().ok()?)))
+        .collect()
 }
 
 /// Apply the `env` `USE_ORDER` layer: for every allowlisted config var
