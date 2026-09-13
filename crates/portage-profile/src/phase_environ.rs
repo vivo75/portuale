@@ -505,4 +505,258 @@ mod tests {
         std::os::unix::fs::symlink(&prof, &make_profile).unwrap();
         (root, repo)
     }
+
+    fn resolve(root: &Path, repo: &Path) -> Config {
+        resolve_config(ResolveConfigArgs {
+            config_root: root,
+            main_repo_location: repo,
+            overlay_repos: &[],
+            repo_aliases: &[],
+            main_repo_name: "testrepo",
+            repo_masters: &HashMap::new(),
+            eroot: root,
+        })
+        .expect("synthetic profile resolves")
+    }
+
+    fn get<'a>(env: &'a [(String, String)], key: &str) -> Option<&'a str> {
+        env.iter().find(|(k, _)| k == key).map(|(_, v)| v.as_str())
+    }
+
+    fn strs(v: &[&str]) -> Vec<String> {
+        v.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn portage_use_is_enabled_intersected_with_iuse_and_implicit_iuse() {
+        let (root, repo) = synthetic_root("portage-use", "");
+        with_test_env(&[], || {
+            let c = resolve(&root, &repo);
+            // Empty IUSE: only implicit flags survive; an enabled but
+            // undeclared flag is hidden from `use()`.
+            let enabled = strs(&[
+                "abi_x86_64",
+                "amd64",
+                "elibc_glibc",
+                "kernel_linux",
+                "baseflag",
+            ]);
+            assert_eq!(
+                portage_use(&c, &[], &enabled),
+                strs(&["abi_x86_64", "amd64", "elibc_glibc", "kernel_linux"])
+            );
+            // A declared flag (with a `+` default marker) joins; order is
+            // sorted, duplicates collapse.
+            let iuse = strs(&["+baseflag", "other"]);
+            let dup = strs(&["baseflag", "baseflag", "amd64"]);
+            assert_eq!(portage_use(&c, &iuse, &dup), strs(&["amd64", "baseflag"]));
+        });
+    }
+
+    #[test]
+    fn phase_environ_exports_the_profile_family_and_folded_incrementals() {
+        let (root, repo) = synthetic_root(
+            "family",
+            "FEATURES=\"-sandbox splitdebug\"\nPORTAGE_COMPRESS=\"bzip2\"\n\
+             SOURCE_DATE_EPOCH=\"1740000000\"\nMAKEOPTS=\"-j1\"\n",
+        );
+        with_test_env(&[], || {
+            let c = resolve(&root, &repo);
+            let iuse: Vec<String> = Vec::new();
+            let enabled = strs(&[
+                "abi_x86_64",
+                "amd64",
+                "elibc_glibc",
+                "kernel_linux",
+                "baseflag",
+            ]);
+            let env = phase_environ(
+                &c,
+                Some(PhaseUse {
+                    iuse: &iuse,
+                    enabled: &enabled,
+                }),
+            );
+
+            // Sorted by name, no duplicate keys.
+            let keys: Vec<&str> = env.iter().map(|(k, _)| k.as_str()).collect();
+            let mut sorted = keys.clone();
+            sorted.sort();
+            sorted.dedup();
+            assert_eq!(keys, sorted);
+
+            // Expected values from Portage (oracle rows).
+            assert_eq!(get(&env, "ARCH"), Some("amd64"));
+            assert_eq!(get(&env, "ELIBC"), Some("glibc"));
+            assert_eq!(get(&env, "KERNEL"), Some("linux"));
+            assert_eq!(get(&env, "ABI"), Some("amd64"));
+            assert_eq!(get(&env, "DEFAULT_ABI"), Some("amd64"));
+            assert_eq!(get(&env, "MULTILIB_ABIS"), Some("amd64 x86"));
+            assert_eq!(get(&env, "LIBDIR_amd64"), Some("lib64"));
+            assert_eq!(get(&env, "COMMON_FLAGS"), Some("-O2 -pipe"));
+            assert_eq!(get(&env, "CFLAGS"), Some("-O2 -pipe"));
+            assert_eq!(get(&env, "USE_EXPAND_IMPLICIT"), Some("ARCH ELIBC KERNEL"));
+            assert_eq!(get(&env, "USE_EXPAND_UNPREFIXED"), Some("ARCH"));
+            assert_eq!(
+                get(&env, "USE_EXPAND"),
+                Some("ABI_X86 ELIBC KERNEL L10N VIDEO_CARDS")
+            );
+            assert_eq!(get(&env, "IUSE_IMPLICIT"), Some("abi_x86_64 prefix"));
+            assert_eq!(get(&env, "USE_EXPAND_VALUES_ARCH"), Some("amd64 x86"));
+            assert_eq!(get(&env, "ENV_UNSET"), Some("DISPLAY PERL5LIB"));
+
+            // FEATURES is the incremental fold, mirrored as PORTAGE_FEATURES.
+            let features = "assume-digests binpkg-docompress binpkg-dostrip splitdebug";
+            assert_eq!(get(&env, "FEATURES"), Some(features));
+            assert_eq!(get(&env, "PORTAGE_FEATURES"), Some(features));
+
+            // Plain make.conf scalars pass through.
+            assert_eq!(get(&env, "PORTAGE_COMPRESS"), Some("bzip2"));
+            assert_eq!(get(&env, "SOURCE_DATE_EPOCH"), Some("1740000000"));
+            assert_eq!(get(&env, "MAKEOPTS"), Some("-j1"));
+
+            // USE is PORTAGE_USE; PORTAGE_USE itself is filtered out.
+            assert_eq!(
+                get(&env, "USE"),
+                Some("abi_x86_64 amd64 elibc_glibc kernel_linux")
+            );
+            assert_eq!(
+                get(&env, "IUSE_EFFECTIVE"),
+                Some("abi_x86_64 amd64 elibc_glibc elibc_musl kernel_linux prefix x86")
+            );
+            assert_eq!(get(&env, "PORTAGE_USE"), None);
+
+            // USE_EXPAND values derive from the package's USE.
+            assert_eq!(get(&env, "ABI_X86"), Some("64"));
+            assert_eq!(get(&env, "VIDEO_CARDS"), Some(""));
+            assert_eq!(get(&env, "L10N"), Some(""));
+        });
+    }
+
+    #[test]
+    fn phase_environ_filters_blacklists_and_never_clobbers_computed_keys() {
+        let (root, repo) = synthetic_root(
+            "filter",
+            "HOME=\"/conf/home\"\nDISTDIR=\"/conf/distfiles\"\nPORTAGE_TMPDIR=\"/conf/tmp\"\n\
+             GENTOO_MIRRORS=\"https://mirror\"\nCONFIG_PROTECT=\"/etc\"\n\
+             EMERGE_DEFAULT_OPTS=\"--ask\"\nACCEPT_KEYWORDS=\"~amd64\"\n\
+             PORTAGE_COMPRESS=\"\"\n",
+        );
+        with_test_env(
+            &[
+                // Calling env Portage would carry.
+                ("L2_JOBS", "1"),
+                ("container", "podman"),
+                ("TZ", "UTC"),
+                // Blacklisted / computed / filtered entries.
+                ("SLOT", "9"),
+                ("A", "evil.tar"),
+                ("AA", "evil.tar"),
+                ("EAPI", "0"),
+                ("ROOT", "/evil"),
+                ("PORTAGE_REPO_NAME", "evil"),
+                ("PORTAGE_CONFIGROOT", "/evil"),
+                ("PATH", "/evil/bin"),
+                ("HOME", "/env/home"),
+                ("O", "/evil/ebuild/dir"),
+                ("PORTAGE_USE", "evil"),
+                ("SRC_URI", "http://evil"),
+                ("USE", "evil"),
+                ("FEATURES", "evil"),
+                ("_", "/usr/bin/env"),
+                ("BASH_FUNC_foo%%", "() { :; }"),
+                ("1BAD", "x"),
+                // A plain env scalar overriding make.conf.
+                ("MAKEOPTS", "-j7"),
+            ],
+            || {
+                let c = resolve(&root, &repo);
+                let env = phase_environ(&c, None);
+
+                for absent in [
+                    "SLOT",
+                    "A",
+                    "AA",
+                    "EAPI",
+                    "ROOT",
+                    "PORTAGE_REPO_NAME",
+                    "PORTAGE_CONFIGROOT",
+                    "PATH",
+                    "HOME",
+                    "O",
+                    "PORTAGE_USE",
+                    "SRC_URI",
+                    "DISTDIR",
+                    "PORTAGE_TMPDIR",
+                    "GENTOO_MIRRORS",
+                    "CONFIG_PROTECT",
+                    "EMERGE_DEFAULT_OPTS",
+                    "ACCEPT_KEYWORDS",
+                    "_",
+                    "BASH_FUNC_foo%%",
+                    "1BAD",
+                    "IUSE_EFFECTIVE",
+                ] {
+                    assert_eq!(get(&env, absent), None, "{absent} must not be exported");
+                }
+
+                // Calling env passes through.
+                assert_eq!(get(&env, "L2_JOBS"), Some("1"));
+                assert_eq!(get(&env, "container"), Some("podman"));
+                assert_eq!(get(&env, "TZ"), Some("UTC"));
+                assert_eq!(get(&env, "MAKEOPTS"), Some("-j7"));
+
+                // Env `USE`/`FEATURES` never leak verbatim (folded, not copied).
+                assert_eq!(
+                    get(&env, "FEATURES"),
+                    Some("assume-digests binpkg-docompress binpkg-dostrip evil sandbox")
+                );
+                assert_eq!(get(&env, "USE"), None);
+
+                // Set-but-empty exports as empty.
+                assert_eq!(get(&env, "PORTAGE_COMPRESS"), Some(""));
+                // Unset keys are absent.
+                assert_eq!(get(&env, "PORTAGE_COMPRESS_FLAGS"), None);
+
+                // `pkg == None`: USE_EXPAND placeholders fill gaps only.
+                assert_eq!(get(&env, "VIDEO_CARDS"), Some("nvidia"));
+                assert_eq!(get(&env, "L10N"), Some(""));
+                assert_eq!(get(&env, "ABI_X86"), Some(""));
+                assert_eq!(get(&env, "ARCH"), Some("amd64"));
+            },
+        );
+    }
+
+    #[test]
+    fn the_three_key_sets_are_transcribed_consistently() {
+        // Every entry is a valid identifier (except Portage's literal
+        // `_`); nothing computed here is filtered from its own output.
+        for k in ENVIRON_FILTER
+            .iter()
+            .chain(ENV_BLACKLIST)
+            .chain(PORTUALE_COMPUTED)
+        {
+            assert!(*k == "_" || exportable_name(k), "{k}");
+        }
+        for k in [
+            "FEATURES",
+            "PORTAGE_FEATURES",
+            "USE",
+            "IUSE_EFFECTIVE",
+            "ENV_UNSET",
+            "USE_EXPAND",
+            "USE_EXPAND_UNPREFIXED",
+            "USE_EXPAND_IMPLICIT",
+            "IUSE_IMPLICIT",
+        ] {
+            assert!(
+                !ENVIRON_FILTER.contains(&k),
+                "{k} is computed here yet filtered"
+            );
+        }
+        // `PORTAGE_USE` and `O` are filtered by Portage.
+        assert!(ENVIRON_FILTER.contains(&"PORTAGE_USE"));
+        assert!(ENVIRON_FILTER.contains(&"O"));
+        assert!(ENV_BLACKLIST.contains(&"AA"));
+    }
 }

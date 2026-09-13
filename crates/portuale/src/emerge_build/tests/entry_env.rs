@@ -131,3 +131,85 @@ fn buildpkgonly_entry_build_env_folds_matched_features() {
         );
     }
 }
+
+/// With a resolved config, `entry_build_env` threads the full effective `USE`
+/// (implicit profile flags included), the per-package `USE_EXPAND` values,
+/// and the entry's `SLOT`/repo identity. Expected value from the fixture oracle.
+#[allow(clippy::field_reassign_with_default)]
+#[test]
+fn entry_build_env_resolves_full_use_expand_and_entry_identity() {
+    let config_root = fixtures_root();
+    let repos = find_repos(&config_root).unwrap();
+    let mut config = portage_profile::Config::default();
+    // The profile layers `effective_use_flags` replays: implicit
+    // arch/elibc/kernel flags no package declares in IUSE.
+    config.use_tokens = vec!["abi_x86_64 amd64 elibc_glibc kernel_linux".to_string()];
+    config.iuse_effective = [
+        "abi_x86_64",
+        "amd64",
+        "elibc_glibc",
+        "kernel_linux",
+        "riscv",
+    ]
+    .iter()
+    .map(|s| s.to_string())
+    .collect();
+    config.use_expand = ["ABI_X86"].iter().map(|s| s.to_string()).collect();
+    config
+        .other_vars
+        .insert("FEATURES".to_string(), "sandbox".to_string());
+    let mut options = ebuild_merge::MergeOptions {
+        distdir: tempdir(),
+        config_root: config_root.clone(),
+        ..ebuild_merge::MergeOptions::default()
+    };
+    options.build_env = portage_profile::phase_environ(&config, None);
+    options.resolved_config = Some(std::sync::Arc::new(config));
+
+    let mut entry = source_entry(
+        "archusepkg",
+        PretendOutcome::New {
+            version: "1.0".into(),
+        },
+    );
+    let env = entry_build_env(&options, &entry, &repos);
+    // Later pairs win in both backends, so read the *last* pair: the
+    // run-wide base carries placeholders that the per-entry rows override.
+    fn get<'a>(env: &'a [(String, String)], k: &str) -> Option<&'a str> {
+        env.iter()
+            .rev()
+            .find(|(n, _)| n == k)
+            .map(|(_, v)| v.as_str())
+    }
+    // The implicit flags come from the resolver's full effective set, not
+    // from IUSE.
+    assert_eq!(
+        get(&env, "USE"),
+        Some("abi_x86_64 amd64 elibc_glibc kernel_linux")
+    );
+    assert_eq!(
+        get(&env, "IUSE_EFFECTIVE"),
+        Some("abi_x86_64 amd64 elibc_glibc kernel_linux riscv")
+    );
+    assert_eq!(get(&env, "ABI_X86"), Some("64"));
+    assert_eq!(get(&env, "SLOT"), Some("0"));
+    assert_eq!(get(&env, "PORTAGE_REPO_REVISIONS"), Some("{}"));
+    assert_eq!(get(&env, "PORTAGE_REPO_NAME"), Some("testrepo"));
+    // The run-wide half rides along, folded `FEATURES` included.
+    assert_eq!(get(&env, "FEATURES"), Some("sandbox"));
+    // Filtered-out rows stay out.
+    for absent in ["O", "AA", "SRC_URI", "PORTAGE_USE"] {
+        assert_eq!(get(&env, absent), None, "{absent}");
+    }
+
+    // A declared sub-slot renders `slot/sub_slot`; a missing
+    // `entry.repo_name` falls back to the candidate's own repo.
+    entry.sub_slot = Some("5".to_string());
+    entry.repo_name = None;
+    let env = entry_build_env(&options, &entry, &repos);
+    assert_eq!(get(&env, "SLOT"), Some("0/5"));
+    assert!(
+        get(&env, "PORTAGE_REPO_NAME").is_some_and(|v| !v.is_empty()),
+        "repo fallback missing"
+    );
+}
