@@ -10,6 +10,7 @@
 #   DISTDIR                    (required) shared distfile cache, rw mount
 #   L2_JOBS=1                  MAKEOPTS -j
 #   L2_SKIP_PORTAGE_UPGRADE=0  (base / must match the portage builder's)
+#   L2_BUILD_MODE=bpkgonly|deep  (must match build-portage.sh; see there)
 
 set -u
 ATOMLIST=${1:?atom list path}
@@ -62,7 +63,14 @@ while IFS= read -r line || [ -n "$line" ]; do
 done < "$ATOMLIST"
 log "building ${#atoms[@]} atoms (archive-only, --buildpkgonly)"
 
-if ! /usr/local/bin/emerge --buildpkgonly --oneshot --color=n "${atoms[@]}"; then
+BUILD_MODE=${L2_BUILD_MODE:-bpkgonly}
+if [ "$BUILD_MODE" = deep ]; then
+  log "mode=deep: building the dep closure too (-b --deep)"
+  emerge_args=(-b --oneshot --deep --color=n)
+else
+  emerge_args=(--buildpkgonly --oneshot --color=n)
+fi
+if ! /usr/local/bin/emerge "${emerge_args[@]}" "${atoms[@]}"; then
   log "!!! build failed"
   exit 1
 fi

@@ -109,6 +109,7 @@ if [ "${L2_SKIP_BUILD:-0}" != 1 ]; then
     -e "L2_JOBS=${L2_JOBS:-1}" \
     -e "L2_SKIP_PORTAGE_UPGRADE=${L2_SKIP_PORTAGE_UPGRADE:-0}" \
     -e "L2_PORTAGE_PIN=${L2_PORTAGE_PIN:-3.0.82.2}" \
+    -e "L2_BUILD_MODE=${L2_BUILD_MODE:-bpkgonly}" \
     --entrypoint /bin/bash "$IMAGE" \
     /TEST/layers/l2/build-portage.sh "$REL_ATOMLIST" 2>&1 | tee "$OUT/build-portage.log"
 
@@ -120,6 +121,7 @@ if [ "${L2_SKIP_BUILD:-0}" != 1 ]; then
     -e "L2_JOBS=${L2_JOBS:-1}" \
     -e "L2_SKIP_PORTAGE_UPGRADE=${L2_SKIP_PORTAGE_UPGRADE:-0}" \
     -e "L2_PORTAGE_PIN=${L2_PORTAGE_PIN:-3.0.82.2}" \
+    -e "L2_BUILD_MODE=${L2_BUILD_MODE:-bpkgonly}" \
     --entrypoint /bin/bash "$IMAGE" \
     /TEST/layers/l2/build-portuale.sh "$REL_ATOMLIST" 2>&1 | tee "$OUT/build-portuale.log"
 else
@@ -144,8 +146,8 @@ while IFS= read -r line || [ -n "$line" ]; do
   atom=${line%%#*}; atom=$(printf '%s' "$atom" | tr -d '[:space:]')
   [ -n "$atom" ] || continue
   cat=${atom%%/*}; pn=${atom#*/}
-  a=$(find "$PKG_PORTAGE/$cat" -name "$pn-*.gpkg.tar" 2>/dev/null | LC_ALL=C sort | head -1)
-  b=$(find "$PKG_PORTUALE/$cat" -name "$pn-*.gpkg.tar" 2>/dev/null | LC_ALL=C sort | head -1)
+  a=$(find "$PKG_PORTAGE/$cat" -name "$pn-*.gpkg.tar" 2>/dev/null | LC_ALL=C sort | head -1 || true)
+  b=$(find "$PKG_PORTUALE/$cat" -name "$pn-*.gpkg.tar" 2>/dev/null | LC_ALL=C sort | head -1 || true)
   pair_out="$OUT/archive-$cat-$pn.txt"
   {
     echo "### $atom"

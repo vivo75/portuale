@@ -11,7 +11,14 @@
 #   L2_PORTAGE_PIN=3.0.82.2    portage version portuale mirrors
 #   L2_JOBS=1                  MAKEOPTS -j / --jobs
 #   L2_SKIP_PORTAGE_UPGRADE=0
-
+#   L2_BUILD_MODE=bpkgonly|deep
+#     bpkgonly -- `--buildpkgonly` (archive-only), for sets whose deps are
+#                 already installed (the porttest fixtures);
+#     deep     -- `-b --deep --usepkg=n`, which also builds+merges any
+#                 missing dependency into the throwaway builder first.
+#                 Needed for the real L1 set: real `-B` refuses when a
+#                 dep is not merged ("--buildpkgonly requires all
+#                 dependencies to be merged"). G0.1 revisited at S5.
 set -u
 ATOMLIST=${1:?atom list path}
 PIN=${L2_PORTAGE_PIN:-3.0.82.2}
@@ -65,7 +72,14 @@ while IFS= read -r line || [ -n "$line" ]; do
 done < "$ATOMLIST"
 log "building ${#atoms[@]} atoms (archive-only, --buildpkgonly) with MAKEOPTS=$MAKEOPTS"
 
-if ! /usr/sbin/emerge --buildpkgonly --oneshot --color=n --quiet-build=y "${atoms[@]}"; then
+BUILD_MODE=${L2_BUILD_MODE:-bpkgonly}
+if [ "$BUILD_MODE" = deep ]; then
+  log "mode=deep: building the dep closure too (--buildpkg --deep --usepkg=n)"
+  emerge_args=(--buildpkg --oneshot --deep --usepkg=n --color=n --quiet-build=y)
+else
+  emerge_args=(--buildpkgonly --oneshot --color=n --quiet-build=y)
+fi
+if ! /usr/sbin/emerge "${emerge_args[@]}" "${atoms[@]}"; then
   log "!!! build failed"
   exit 1
 fi

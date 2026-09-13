@@ -453,6 +453,41 @@ pub(crate) fn compute_environment(
             }
         });
 
+    // Real `prepare_build_dirs._prepare_fake_filesdir`
+    // (`lib/portage/package/ebuild/prepare_build_dirs.py:504-515`):
+    // `${PORTAGE_BUILDDIR}/files` is always a symlink to the ebuild's own
+    // `O/files` (the repo package dir's `files/`). The phase env's
+    // `FILESDIR` is `Environment::filesdir()` = builddir/files (matching
+    // real `doebuild.py:527`), so without this link every `eapply`/
+    // `FILESDIR` reference in a real ebuild (app-misc/jq's
+    // `jq-1.6-r3-never-bundle-oniguruma.patch` is what surfaced it) dies
+    // on a missing path -- L2 S5 finding `l2-filesdir-symlink-missing`.
+    // A binary merge's ebuild is copied *into* the builddir (pkg_dir ==
+    // portage_builddir), where the link would be a self-loop; and a
+    // scratch ebuild with no `files/` dir would make it a dangling link
+    // that `create_directories`' `create_dir_all` then rejects. Link
+    // only a real, existing repo `files/` dir; otherwise
+    // `create_directories` makes a plain dir as before.
+    let real_filesdir = pkg_dir.join("files");
+    if pkg_dir != portage_builddir && real_filesdir.is_dir() {
+        let fake_filesdir = portage_builddir.join("files");
+        if std::fs::create_dir_all(&portage_builddir).is_ok() {
+            match std::fs::read_link(&fake_filesdir) {
+                Ok(target) => {
+                    if target != real_filesdir {
+                        let _ = std::fs::remove_file(&fake_filesdir);
+                        let _ = std::os::unix::fs::symlink(&real_filesdir, &fake_filesdir);
+                    }
+                }
+                Err(_) => {
+                    if !fake_filesdir.exists() {
+                        let _ = std::os::unix::fs::symlink(&real_filesdir, &fake_filesdir);
+                    }
+                }
+            }
+        }
+    }
+
     Ok(Environment {
         ebuild_abs,
         pkg_dir,
@@ -4336,6 +4371,36 @@ mod tests {
         std::fs::write(&solo, "EAPI=8\nSLOT=0\n").unwrap();
         let env = compute_environment(&solo, Path::new("/var/tmp/portage")).unwrap();
         assert_eq!(env.inherited, None);
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn compute_environment_links_builddir_files_to_the_repo_filesdir() {
+        // Real `_prepare_fake_filesdir`: FILESDIR is builddir/files, a
+        // symlink to the ebuild's own repo `files/`. Without it every
+        // ebuild patch via `eapply` dies (L2 S5).
+        let tmp = std::env::temp_dir().join(format!(
+            "ebuild-phases-test-{}-filesdir",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&tmp);
+        let pkg_dir = tmp.join("repo/dev-libs/patchpkg");
+        std::fs::create_dir_all(pkg_dir.join("files")).unwrap();
+        std::fs::write(
+            pkg_dir.join("patchpkg-1.0.ebuild"),
+            "EAPI=8\nSLOT=0\n",
+        )
+        .unwrap();
+        std::fs::write(pkg_dir.join("files/fix.patch"), "diff\n").unwrap();
+        let portage_tmp = tmp.join("ptmp");
+        let env = compute_environment(&pkg_dir.join("patchpkg-1.0.ebuild"), &portage_tmp).unwrap();
+        let expected = pkg_dir.join("files");
+        assert_eq!(std::fs::read_link(env.filesdir()).unwrap(), expected);
+        assert!(env.filesdir().join("fix.patch").is_file());
+
+        // Re-running must be idempotent (real unlinks a stale target).
+        let env2 = compute_environment(&pkg_dir.join("patchpkg-1.0.ebuild"), &portage_tmp).unwrap();
+        assert_eq!(std::fs::read_link(env2.filesdir()).unwrap(), expected);
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
