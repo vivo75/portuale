@@ -1,5 +1,33 @@
 use super::*;
 
+/// Path variables lose their trailing slash from EAPI 7 on, so
+/// `ROOT=/` is exported empty.
+#[test]
+fn eapi_path_var_strips_the_trailing_slash_from_eapi_7() {
+    assert_eq!(eapi_path_var("8", "//"), "");
+    assert_eq!(eapi_path_var("7", "/var/tmp/p/image/"), "/var/tmp/p/image");
+    assert_eq!(eapi_path_var("6", "/"), "/");
+    assert_eq!(eapi_path_var("5", "/var/tmp/p/image/"), "/var/tmp/p/image/");
+}
+
+/// A threaded `PATH` pair is the base behind the helper dir,
+/// deduplicated, and never replaces the helper-prefixed value verbatim.
+#[test]
+fn phase_path_prefixes_helpers_onto_the_threaded_path() {
+    let helpers = Path::new("/bin/ebuild-helpers");
+    let extra = [
+        ("PATH".to_string(), "/env/bin".to_string()),
+        (
+            "PATH".to_string(),
+            "/usr/local/bin:/bin/ebuild-helpers:/usr/bin:/usr/local/bin".to_string(),
+        ),
+    ];
+    assert_eq!(
+        phase_path(helpers, &extra, ""),
+        "/bin/ebuild-helpers:/usr/local/bin:/usr/bin"
+    );
+}
+
 /// Every brush `export` value is single-quoted, so config-derived
 /// values can neither word-split nor command-substitute.
 #[test]

@@ -728,6 +728,49 @@ mod tests {
     }
 
     #[test]
+    fn phase_environ_applies_the_doebuild_environment_config_defaults() {
+        let (root, repo) = synthetic_root("dynamic", "PATH=\"/conf/bin:/usr/bin\"\n");
+        // No env.d PATH: PATH stays a computed key, nothing exported.
+        with_test_env(&[("PATH", "/env/bin")], || {
+            let c = resolve(&root, &repo);
+            assert!(!c.envd_sets_path);
+            let env = phase_environ(&c, None);
+            assert_eq!(get(&env, "PATH"), None);
+            // Incremental fold, sorted.
+            assert_eq!(
+                get(&env, "PROFILE_ONLY_VARIABLES"),
+                Some("ARCH ELIBC KERNEL")
+            );
+            // Neither MAKEOPTS nor MAKEFLAGS set: the CPU-count default.
+            let nproc = std::thread::available_parallelism()
+                .map(|n| n.get())
+                .unwrap_or(1);
+            let makeopts = format!("-j{nproc}");
+            assert_eq!(get(&env, "MAKEOPTS"), Some(makeopts.as_str()));
+            let gnumake = format!("--load-average {nproc} --output-sync=line");
+            assert_eq!(get(&env, "GNUMAKEFLAGS"), Some(gnumake.as_str()));
+        });
+        with_test_env(&[("MAKEFLAGS", "-j3")], || {
+            let env = phase_environ(&resolve(&root, &repo), None);
+            assert_eq!(get(&env, "MAKEOPTS"), None);
+            assert_eq!(get(&env, "GNUMAKEFLAGS"), None);
+        });
+        // env.d sets PATH: the config-file stack's value is exported.
+        fs::create_dir_all(root.join("etc")).unwrap();
+        fs::write(
+            root.join("etc/profile.env"),
+            "export PATH='/usr/local/bin:/usr/bin:/opt/bin'\n",
+        )
+        .unwrap();
+        with_test_env(&[("PATH", "/env/bin")], || {
+            let c = resolve(&root, &repo);
+            assert!(c.envd_sets_path);
+            let env = phase_environ(&c, None);
+            assert_eq!(get(&env, "PATH"), Some("/conf/bin:/usr/bin"));
+        });
+    }
+
+    #[test]
     fn the_three_key_sets_are_transcribed_consistently() {
         // Every entry is a valid identifier (except Portage's literal
         // `_`); nothing computed here is filtered from its own output.

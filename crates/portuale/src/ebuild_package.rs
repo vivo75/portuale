@@ -1543,10 +1543,81 @@ mod tests {
     }
 
     #[test]
+    fn makeopts_to_job_count_matches_the_portage_greedy_regex() {
+        assert_eq!(makeopts_to_job_count("-j1"), "1");
+        assert_eq!(makeopts_to_job_count("-j4 -l5"), "4");
+        assert_eq!(makeopts_to_job_count("-j 3 -j12"), "12");
+        assert_eq!(makeopts_to_job_count("--jobs= 6"), "6");
+        let cpus = std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(1)
+            .to_string();
+        // `--jobs=6` has no whitespace after `=`: Portage falls back to CPU count.
+        assert_eq!(makeopts_to_job_count("--jobs=6"), cpus);
+        assert_eq!(makeopts_to_job_count(""), cpus);
+    }
+
+    #[test]
+    fn phase_compression_command_reads_the_resolved_config() {
+        let cfg = |pairs: &'static [(&'static str, &'static str)]| {
+            move |k: &str| {
+                pairs
+                    .iter()
+                    .find(|(n, _)| *n == k)
+                    .map(|(_, v)| v.to_string())
+            }
+        };
+        // Flag-less templates collapse to the bare binary.
+        assert_eq!(
+            phase_compression_command(cfg(&[("BINPKG_COMPRESS", "gzip"), ("MAKEOPTS", "-j1")])),
+            Some("gzip".to_string())
+        );
+        assert_eq!(
+            phase_compression_command(cfg(&[
+                ("BINPKG_COMPRESS", "gzip"),
+                ("BINPKG_COMPRESS_FLAGS", "-1"),
+                ("BINPKG_COMPRESS_FLAGS_GZIP", "-9"),
+            ])),
+            Some("gzip -9".to_string())
+        );
+        assert_eq!(
+            phase_compression_command(cfg(&[("BINPKG_COMPRESS", "")])),
+            Some("cat".to_string())
+        );
+        assert_eq!(
+            phase_compression_command(cfg(&[("BINPKG_COMPRESS", "made-up-codec")])),
+            None
+        );
+    }
+
+    #[test]
     fn resolve_compression_command_is_none_for_an_unknown_compressor() {
         assert_eq!(
             resolve_compression_command("made-up-codec", "", "bzip2"),
             None
+        );
+    }
+
+    #[test]
+    fn resolve_binpkg_format_defaults_to_gpkg_and_obeys_the_chain() {
+        // Expected values from Portage's `make.globals` defaults.
+        let cfg = |pairs: &'static [(&'static str, &'static str)]| {
+            move |k: &str| {
+                pairs
+                    .iter()
+                    .find(|(n, _)| *n == k)
+                    .map(|(_, v)| v.to_string())
+            }
+        };
+        assert_eq!(PackageOptions::default().binpkg_format, "gpkg");
+        assert_eq!(resolve_binpkg_format(cfg(&[])), "gpkg");
+        assert_eq!(
+            resolve_binpkg_format(cfg(&[("BINPKG_FORMAT", "xpak")])),
+            "xpak"
+        );
+        assert_eq!(
+            resolve_binpkg_format(cfg(&[("BINPKG_FORMAT", "gpkg")])),
+            "gpkg"
         );
     }
 

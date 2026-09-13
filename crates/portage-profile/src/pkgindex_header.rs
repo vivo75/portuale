@@ -253,3 +253,18 @@ pub fn pkgindex_header_apply_buildpkg_opt(header: &mut PkgIndexHeader, opt: Opti
         _ => {}
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashSet;
+
+    fn snapshot_value<'a>(snapshot: &'a HeaderSnapshot, key: &str) -> &'a str {
+        snapshot
+            .iter()
+            .find(|(k, _)| k == key)
+            .and_then(|(_, v)| v.as_ref())
+            .map(String::as_str)
+            .unwrap_or("<absent>")
+    }
+}
