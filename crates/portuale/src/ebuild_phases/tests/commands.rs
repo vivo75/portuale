@@ -168,6 +168,148 @@ fn install_writes_the_real_build_time_file() {
     let _ = std::fs::remove_dir_all(&portage_tmpdir);
 }
 
+/// End-to-end proof of the `binpkg-docompress` path: with
+/// `PORTAGE_COMPRESS=bzip2` and `FEATURES=binpkg-docompress`, big docs
+/// compress, small ones don't, and dangling links are repaired.
+/// Uses the `bash` backend, like a live `emerge`.
+#[test]
+fn install_qa_check_docompress_compresses_docs_and_repairs_symlinks() {
+    if std::process::Command::new("bzip2")
+        .arg("--version")
+        .output()
+        .is_err()
+    {
+        eprintln!("skipping: bzip2 not available on this host");
+        return;
+    }
+    let ebuild_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../fixtures/repo/dev-libs/doccompresspkg/doccompresspkg-1.0.ebuild");
+    let portage_tmpdir = TempDir::new("ebuild-phases-test-docompress").keep();
+    let _ = std::fs::remove_dir_all(&portage_tmpdir);
+
+    let extra_env = vec![
+        ("PORTAGE_COMPRESS".to_string(), "bzip2".to_string()),
+        ("FEATURES".to_string(), "binpkg-docompress".to_string()),
+    ];
+    let status = run_commands(RunCommandsArgs {
+        ebuild_path: &ebuild_path,
+        commands: &["install"],
+        root: Path::new("/"),
+        portage_tmpdir: &portage_tmpdir,
+        distdir: &portage_tmpdir.join("distfiles"),
+        debug: false,
+        config_root: Path::new("/dev/null/no-config-root"),
+        shell: ShellBackend::Bash,
+        build_env: &extra_env,
+    })
+    .expect("run_commands should not itself error");
+    assert_eq!(status, 0, "install should exit successfully");
+
+    let docdir = portage_tmpdir
+        .join("portage/dev-libs/doccompresspkg-1.0/image/usr/share/doc/doccompresspkg-1.0");
+    assert!(
+        docdir.join("BIG.txt.bz2").is_file(),
+        "a doc above PORTAGE_DOCOMPRESS_SIZE_LIMIT must be compressed"
+    );
+    assert!(
+        !docdir.join("BIG.txt").exists(),
+        "ecompress must remove the uncompressed original"
+    );
+    assert!(
+        docdir.join("small.txt").is_file(),
+        "a doc below the size limit must stay uncompressed"
+    );
+    assert_eq!(
+        std::fs::read_link(docdir.join("link-to-big.txt.bz2")).unwrap(),
+        Path::new("BIG.txt.bz2"),
+        "a symlink into a compressed doc must be repaired and suffixed"
+    );
+
+    let _ = std::fs::remove_dir_all(&portage_tmpdir);
+}
+
+/// The merge-time `instprep` phase complements the `install_qa_check`
+/// gate and is idempotent through `.instprepped`.
+#[test]
+fn run_instprep_applies_only_the_complement_of_the_install_qa_gate() {
+    if std::process::Command::new("bzip2")
+        .arg("--version")
+        .output()
+        .is_err()
+    {
+        eprintln!("skipping: bzip2 not available on this host");
+        return;
+    }
+    let ebuild_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../fixtures/repo/dev-libs/doccompresspkg/doccompresspkg-1.0.ebuild");
+    let portage_tmpdir = TempDir::new("ebuild-phases-test-instprep").keep();
+    let _ = std::fs::remove_dir_all(&portage_tmpdir);
+    let no_root = Path::new("/dev/null/no-config-root");
+    let env_with = |features: &str| {
+        vec![
+            ("PORTAGE_COMPRESS".to_string(), "bzip2".to_string()),
+            // `binpkg-dostrip` stays on: this test is about compression.
+            ("FEATURES".to_string(), format!("binpkg-dostrip {features}")),
+        ]
+    };
+
+    let status = run_commands(RunCommandsArgs {
+        ebuild_path: &ebuild_path,
+        commands: &["install"],
+        root: Path::new("/"),
+        portage_tmpdir: &portage_tmpdir,
+        distdir: &portage_tmpdir.join("distfiles"),
+        debug: false,
+        config_root: no_root,
+        shell: ShellBackend::Bash,
+        build_env: &env_with("-binpkg-docompress"),
+    })
+    .expect("run_commands should not itself error");
+    assert_eq!(status, 0, "install should exit successfully");
+    let builddir = portage_tmpdir.join("portage/dev-libs/doccompresspkg-1.0");
+    let docdir = builddir.join("image/usr/share/doc/doccompresspkg-1.0");
+    assert!(
+        docdir.join("BIG.txt").is_file(),
+        "install_qa_check must not compress without binpkg-docompress"
+    );
+
+    let instprep = |features: &str| {
+        run_instprep(RunInstprepArgs {
+            ebuild_path: &ebuild_path,
+            saved_env_bz2: None,
+            seed: false,
+            root: Path::new("/"),
+            portage_tmpdir: &portage_tmpdir,
+            build_env: &env_with(features),
+            debug: false,
+            config_root: no_root,
+            shell: ShellBackend::Bash,
+            log_file: None,
+        })
+        .expect("run_instprep should not itself error")
+    };
+
+    assert_eq!(instprep("binpkg-docompress"), 0);
+    assert!(
+        docdir.join("BIG.txt").is_file(),
+        "instprep must not compress when binpkg-docompress is on"
+    );
+    assert!(builddir.join(".instprepped").is_file());
+
+    std::fs::remove_file(builddir.join(".instprepped")).unwrap();
+    assert_eq!(instprep("-binpkg-docompress"), 0);
+    assert!(docdir.join("BIG.txt.bz2").is_file());
+    assert!(!docdir.join("BIG.txt").exists());
+    assert!(docdir.join("small.txt").is_file());
+    assert_eq!(
+        std::fs::read_link(docdir.join("link-to-big.txt.bz2")).unwrap(),
+        Path::new("BIG.txt.bz2")
+    );
+    assert!(builddir.join(".instprepped").is_file());
+
+    let _ = std::fs::remove_dir_all(&portage_tmpdir);
+}
+
 /// End-to-end proof that the `install` post-phase QA runs: the
 /// `95empty-dirs` check strips a genuinely empty dir for EAPI 8+
 /// while a `keepdir`'d one survives.
