@@ -1,0 +1,8 @@
+DEFINED_PHASES=install
+DESCRIPTION=porttest: hardlinked regular files (CONTENTS obj dedup + link count)
+EAPI=8
+HOMEPAGE=https://example.invalid/porttest
+KEYWORDS=amd64
+LICENSE=GPL-2
+SLOT=0
+_md5_=bc31b16f7b57c48a39256b82a1571b37

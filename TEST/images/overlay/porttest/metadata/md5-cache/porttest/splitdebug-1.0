@@ -1,0 +1,10 @@
+DEFINED_PHASES=compile install
+DESCRIPTION=porttest: FEATURES=splitdebug .debug files + .build-id links
+EAPI=8
+HOMEPAGE=https://example.invalid/porttest
+INHERIT=toolchain-funcs
+KEYWORDS=amd64
+LICENSE=GPL-2
+SLOT=0
+_eclasses_=toolchain-funcs	58a918e3a42d0156f010dcfd43725be5
+_md5_=e760abd0c79f72a463350aca556d84b0

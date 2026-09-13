@@ -1,0 +1,8 @@
+DEFINED_PHASES=install
+DESCRIPTION=porttest: relative / absolute / dangling / chained symlinks
+EAPI=8
+HOMEPAGE=https://example.invalid/porttest
+KEYWORDS=amd64
+LICENSE=GPL-2
+SLOT=0
+_md5_=e01377c01b7638f5252799ee2731216a

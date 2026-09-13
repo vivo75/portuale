@@ -1,0 +1,8 @@
+DEFINED_PHASES=install
+DESCRIPTION=porttest: filenames with spaces, UTF-8, shell metachars (CONTENTS quoting)
+EAPI=8
+HOMEPAGE=https://example.invalid/porttest
+KEYWORDS=amd64
+LICENSE=GPL-2
+SLOT=0
+_md5_=c73c3ea5a85737aea880614b08bba5f3

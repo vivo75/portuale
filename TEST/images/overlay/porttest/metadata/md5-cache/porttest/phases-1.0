@@ -1,0 +1,8 @@
+DEFINED_PHASES=config info install postinst postrm preinst prerm pretend setup
+DESCRIPTION=porttest: every pkg_* phase writes a marker (merge phase order + env)
+EAPI=8
+HOMEPAGE=https://example.invalid/porttest
+KEYWORDS=amd64
+LICENSE=GPL-2
+SLOT=0
+_md5_=18de17394a024d31f2f02eff8adbab4b

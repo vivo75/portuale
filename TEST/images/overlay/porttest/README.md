@@ -13,6 +13,14 @@ Portage builds each fixture from source into `$PKGDIR`; Portage and
 portuale each merge that binpkg; `diff.py` compares. All build in
 seconds (no `SRC_URI`).
 
+`metadata/md5-cache/` is committed (generated with `egencache --repo
+porttest --update` from the pinned portage) because real Portage parses
+a cache-less repo but portuale's reader
+(`portage-repo/src/lib.rs::read_md5_cache`) only consults the cache —
+without it the L2 `builder-portuale` cannot resolve any `porttest/*`
+atom (finding `l2-no-md5-cache-ebuild-fallback`). Keep the cache in
+sync when an ebuild here changes (`egencache --repo porttest --update`).
+
 ## Shipped (slice 3)
 
 | pkg | exercises |

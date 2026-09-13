@@ -308,13 +308,22 @@ fn now_unix_time() -> Result<u64, String> {
 
 /// Real `<pkgdir>/Packages`'s own header block (see `portage_repo::
 /// read_packages_index`'s own doc comment: always the first, blank-
-/// line-terminated block, unconditionally skipped by every reader,
-/// real and portuale's own alike) -- a single real field
-/// (`TIMESTAMP`) is enough to be an honest, non-empty header without
-/// needing to replicate every real field (`VERSION`/`PACKAGES`/etc.)
-/// portuale's own reader never looks at anyway.
+/// line-terminated block, unconditionally skipped by portuale's own
+/// reader) -- but real Portage does NOT skip it: `bintree._load_pkgindex`
+/// runs the header through `_pkgindex_version_supported`
+/// (`bintree.py:2429-2437`), which returns False unless the header
+/// carries a `VERSION` <= `bintree._pkgindex_version`. Without it real
+/// Portage discards the whole index and, under `pkgdir-index-trusted`
+/// (the test image's own FEATURES), never walks the directory to rebuild
+/// it -- so every portuale-built archive is invisible and `emerge -k`
+/// silently falls back to a from-source build (L2 S0 finding
+/// `l2-pkgindex-version-missing`). Real's writer always stamps the
+/// header with `VERSION: <n>` (`bintree.py:2388`/`:2397`); a
+/// `TIMESTAMP`-only header is not a valid index to real Portage.
+/// `PACKAGES`/the config-fingerprint fields stay omitted: real only
+/// updates/consumes them when it rewrites the index itself.
 fn packages_index_header(now: u64) -> String {
-    format!("TIMESTAMP: {now}\n")
+    format!("TIMESTAMP: {now}\nVERSION: 0\n")
 }
 
 fn format_packages_entry(fields: &[(&str, &str)]) -> String {
@@ -1271,6 +1280,13 @@ mod tests {
         let blocks: Vec<&str> = text.trim().split("\n\n").collect();
         assert_eq!(blocks.len(), 2, "header block + one entry: {text:?}");
         assert!(blocks[0].contains("TIMESTAMP:"));
+        // Real Portage's `_pkgindex_version_supported` gate -- without
+        // VERSION it discards the index wholesale (L2 S0 finding
+        // `l2-pkgindex-version-missing`).
+        assert!(
+            blocks[0].contains("VERSION: 0"),
+            "header must carry VERSION for real Portage: {text:?}"
+        );
         assert!(blocks[1].contains("CPV: dev-libs/foo-1.0"));
         assert!(blocks[1].contains("SLOT: 0"));
     }

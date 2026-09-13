@@ -1,0 +1,10 @@
+DEFINED_PHASES=install
+DESCRIPTION=porttest: a setuid-root ELF + a setgid one + odd perms
+EAPI=8
+HOMEPAGE=https://example.invalid/porttest
+INHERIT=toolchain-funcs
+KEYWORDS=amd64
+LICENSE=GPL-2
+SLOT=0
+_eclasses_=toolchain-funcs	58a918e3a42d0156f010dcfd43725be5
+_md5_=729530ca6c29ed7c27b7bf9d1d7bcccd
