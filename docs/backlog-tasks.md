@@ -50,9 +50,9 @@ features have no Python mirror.
 35. **`downgrade_probe` + live `graph_db` for `dep_zapdeps`** — carved out of #22/#23 (2026-09-11, plan `docs/023-backtracking_resolve.md` B2): real's `conflict_downgrade`/`installed_downgrade` guards (`lib/portage/dep/dep_check.py` soft 476-521, bug 531656) demote a `||` alternative when the slot conflict it would cause is solvable by downgrade. Needs a live, mutating slot-conflict `graph_db` + `downgrade_probe` neither language models; #23's closure is not blocked on it. [A]
 36. **Mask-aware candidate fallback in selection** — filed from #23's C4 (2026-09-11, `docs/023-oracle.md` case mg3): real's `_select_pkg_highest_available` tries versions highest-first with `dep_check` (masks applied), so a masked-dep version is skipped *within selection* and a lower version is picked on the same pass. Portuale selects the highest *visible* version and reports the masked dep as NVC, reaching the downgrade only via a second missing-dep mask step on the next node. Same fixpoint at the default budget (proven: `btparent`, `mgf`/`mgfa` settle identically), but tight `--backtrack` budgets exhaust where real settles (`mgfa --backtrack=1` reports, real merges). Needs selection-time satisfiability probing, a forward-pass feature outside the backtrack loop's scope. [A]
 
-## Tier 3 — container test bed (L2–L5, not started)
+## Tier 3 — container test bed (L2–L5)
 
-29. **L2 — portuale as builder** — `emerge -b` the L1 set from source, `.gpkg.tar` structural checks (`gpkg-structure.sh`), cross-install portuale↔portage archives. `TEST/`; plan in `history/real-world-testing.md` §5. [I]
+29. **L2 — portuale as builder** — **BED SHIPPED 2026-09-13.** `TEST/run/l2-portuale-builder.sh` + `layers/l2/*` + `compare/gpkg-{structure,diff}.sh` + `diff.py --layer l2/--tolerate-payload`; porttest fixture track green modulo the producer gaps now filed as #37-#40, real set blocked on #37. Findings: `TEST/findings/l2.md`; plan: `docs/029_portuale-as-builder.deepseek.md`. [I, K]
 30. **L3 — source-build parity** — both PMs build `@system` / a desktop `@world` from source with `SOURCE_DATE_EPOCH` + `-j1`; diff VDB metadata + CONTENTS structure. `TEST/`. [I]
 31. **L4 — `mrg` remote merge over SSH** — differential test of the remote binary-merge path; design in `remote-merge.md` §6. [I]
 32. **L5 — lifecycle & fault injection** — `-C` / `--depclean` diffs, soname bump → preserved-libs, `CONFIG_PROTECT`, `--resume` after SIGKILL, disk-full / corrupt-archive / binhost-500. `TEST/`. [I]
@@ -61,6 +61,14 @@ features have no Python mirror.
 
 33. **`--solver=resolvo` cycle linearization** — `install_order` can't order any closure with a toolchain cycle (glibc↔gcc↔perl); `solver_bridge.rs` prints raw ids. Non-functional on real targets. `solver-backends-analysis.md`. [J]
 34. **`--solver=pubgrub` over-merge** — feeds pubgrub the over-approximated `flag?()` reachability closure as the real graph (`nodejs`: 48 vs 8). Feed the resolved graph instead. `solver_bridge.rs`. [J]
+
+## Tier 5 — L2 producer parity (filed 2026-09-13, blocks #29's real half)
+
+37. **Build phase env completeness** — source builds run with a curated env, not the resolved config env: implicit USE (`amd64`/`elibc_glibc`/`kernel_linux`), resolved `FEATURES`, `MULTILIB_ABIS`/`DEFAULT_ABI`/`LIBDIR_*` (`get_libdir` returns `lib` → oniguruma installs to `/usr/lib`), `SLOT`, `PORTAGE_REPO_NAME`/`REPO_REVISIONS`; `--buildpkgonly` threads no graph `build_env` at all. Blocks the L2 real set. `emerge_build.rs`/`ebuild_phases.rs`. Findings: `l2-bpkgonly-env`. [K]
+38. **Packaging transforms: dostrip/splitdebug/docompress** — portuale archives ship unstripped binaries with no `/usr/lib/debug` and uncompressed docs (`BIG.txt` vs `BIG.txt.bz2`); real runs `dostrip`/`estrip` + `ecompress` at package time. Findings: `l2-gpkg-dostrip-splitdebug`, `l2-gpkg-docompress`. [K]
+39. **gpkg metadata completeness** — `SIZE`/`IUSE`/`IUSE_EFFECTIVE`/`repository`/`REPO_REVISIONS`, ebuild-derived `RDEPEND`/`REQUIRES`/`PROVIDES`, `Packages` index `REPO`, and `NEEDED.ELF.2`'s trailing ELF-class field. Findings: `l2-gpkg-metadata-members`, `l2-needed-elf2-format`. [K]
+40. **Consumer-side env of portuale-built archives** — real Portage merging a portuale archive runs merge phases with `MERGE_TYPE` unset and skips `pkg_pretend`. Finding: `l2-consumes-portuale-env-degraded`. [K]
+41. **Ebuild fallback for a cache-less repo** — real parses ebuilds when `metadata/md5-cache` is absent; portuale reports "no ebuilds to satisfy". Finding: `l2-no-md5-cache-ebuild-fallback`. [K]
 
 ---
 

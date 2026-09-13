@@ -97,6 +97,17 @@ Complements the `$ROOT`+VDB diff; the L0/L1 bed does not need it.
 
 ### L2 — Portuale as builder, structural + cross-install
 
+> **Status 2026-09-13: the bed is shipped** —
+> `TEST/run/l2-portuale-builder.sh` + `layers/l2/*` +
+> `compare/gpkg-structure.sh` / `gpkg-diff.sh`, with
+> `diff.py --layer l2 [--tolerate-payload]`. The `porttest` fixture
+> track is green modulo filed producer gaps (0 unexplained); the real
+> set is blocked on `l2-bpkgonly-env` (build phase env is a curated
+> whitelist, not the resolved config env). Every open finding is in
+> [`../TEST/findings/l2.md`](../TEST/findings/l2.md), temporarily
+> adjudicated via `known-divergences.yaml` (`layer: l2`). The steps
+> below are the original design and still describe the run.
+
 1. `builder-portuale`: `emerge -b` the L1 set from source. For a subset,
    `builder-portage` builds the same atoms with `SOURCE_DATE_EPOCH` +
    `-j1` pinned (§2) so the pair is as comparable as the toolchain

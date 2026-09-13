@@ -16238,3 +16238,48 @@ residue is adjudicated, not chased: B1's frontier drain timing (578 vs
 290 iterations on gtk:4), B3's `_create_graph` pre-bias insertion order,
 and B4's superseded installed in-edges (both moved to #25) -- see
 `docs/025-tier2-closeout.deepseek.md` §11.
+
+### L2 — portuale as builder: the first producer-side, cross-install bed (2026-09-13)
+
+L1 proved portuale *consumes* Portage-built binpkgs; L2 proves (and
+tests) that it can *produce* them and that real Portage can consume
+portuale's output. New bed: `TEST/layers/l2/build-portage.sh` /
+`build-portuale.sh` build an atom list from source into two fresh
+`$PKGDIR`s (`--buildpkgonly`, or `-b --deep` when a dep closure is
+missing), `TEST/run/l2-portuale-builder.sh` validates every archive
+with `TEST/compare/gpkg-structure.sh` (container member set, inner tar
+roots, the stable metadata-key set, Manifest, filename↔`BUILD_ID`,
+`Packages` stanza), diffs each Portage/portuale archive pair with
+`gpkg-diff.sh` (normalised metadata via `normalize.py`'s own
+environment ruleset, image path/mode/owner/xattr/symlink parity,
+payload sha as strict-or-tolerated), then has real Portage merge the
+portuale-built candidate and the portage-built reference into identical
+fresh containers and compares the snapshots with `diff.py --layer l2
+[--tolerate-payload]`; portuale merging the portage-built set stays as
+the L1 control. Runnable example:
+
+```sh
+TEST/run/l2-portuale-builder.sh TEST/atomlists/l1-porttest.txt   # rc 0
+L2_MODE=payload-tolerant L2_BUILD_MODE=deep \
+  TEST/run/l2-portuale-builder.sh                               # real L1 set
+```
+
+Live result (`TEST/logs/l2-20260913T014700Z`): porttest track — 0
+unexplained structure/archive findings, 161-hard-finding cross-install
+diff with 0 unexplained, control 0/0; the 170 remaining findings are
+each adjudicated to a filed producer gap. Two core bugs were found and
+fixed on the way: the `<PKGDIR>/Packages` header carried no `VERSION`,
+so real Portage under `pkgdir-index-trusted` discarded the index and
+silently rebuilt from source (`VERSION: 0` now written, unit-pinned),
+and `${PORTAGE_BUILDDIR}/files` was never linked to the ebuild repo's
+`files/` (real `_prepare_fake_filesdir`), so every `eapply` died —
+`app-misc/jq`'s patch now applies. The real set then built and merged
+13 packages before stopping at jq's configure: the source-build phase
+env is a curated whitelist, not the resolved config env (no implicit
+USE, multiple `get_libdir` vars → oniguruma installs to `/usr/lib`,
+raw `FEATURES`), plus no `dostrip`/`splitdebug`/`docompress` and an
+incomplete gpkg metadata set. All filed with repros in
+`TEST/findings/l2.md` / `scope-backlog.md` §K (#37-#41);
+`known-divergences.yaml` carries temporary `layer: l2`
+`owner: portuale-bug` entries keyed to them. Plan + slice record:
+`docs/029_portuale-as-builder.deepseek.md`.

@@ -586,17 +586,22 @@ that resolves). `Fetcher` / `NewsSet` are permanent singles by design.
 **Hard invariant: `mrg` is portuale-only — no portage counterpart, no
 Python reference.**
 
-### I. Container test bed — L2–L5 (not started)
+### I. Container test bed — L2–L5
 
 L0 (resolver parity) + L1 (merge parity) are shipped and run live
-(`TEST/README.md`). The forward layers, planned in
+(`TEST/README.md`). **L2 shipped 2026-09-13**: `layers/l2/*`,
+`TEST/run/l2-portuale-builder.sh`, `compare/gpkg-structure.sh` +
+`gpkg-diff.sh`, `diff.py --layer l2/--tolerate-payload`. The `porttest`
+fixture track is green modulo the producer gaps in §K (0 unexplained);
+the real set is blocked by §K's build-env gap. L3–L5 planned in
 `history/real-world-testing.md` §5/§14 and distilled for execution
 into `real-world-testing.md` (§2–§8: controls, triage, L2–L5 designs,
 risks, metrics), are not built:
 
 - **L2** — portuale as builder: `emerge -b` the L1 set from source,
   structural `.gpkg.tar` checks (`gpkg-structure.sh`), cross-install
-  (portuale-built archive merges under portage and vice versa).
+  (portuale-built archive merges under portage and vice versa). —
+  *bed shipped; producer parity open (§K).*
 - **L3** — full source-build parity: both PMs build `@system` / a desktop
   `@world` from source with `SOURCE_DATE_EPOCH` + `-j1`; diff VDB
   metadata + CONTENTS structure (tolerate compiled-artefact sha diffs).
@@ -638,6 +643,46 @@ real-tree scale** (smoke-tested 2026-09-10, not fixed):
 These predate the current merge — the `--solver=` bridge has been this
 way since it was added. `docs/solver-backends-analysis.md` has the
 backend comparison.
+
+### K. L2 producer parity — portuale as *builder* (filed 2026-09-13)
+
+The L2 container bed (`TEST/run/l2-portuale-builder.sh`) exposed what
+portuale cannot yet produce. Evidence, repro commands and adjudications:
+[`TEST/findings/l2.md`](../TEST/findings/l2.md). The `porttest` fixture
+track runs green modulo these (temporary `owner: portuale-bug`
+allowlist entries in `known-divergences.yaml`, `layer: l2`); the real
+L1 set is blocked at `l2-bpkgonly-env`.
+
+- **Build phase env is a curated whitelist, not the resolved config
+  env** (`l2-bpkgonly-env`, HIGH; blocks the real set). Missing: the
+  profile's implicit USE (`amd64`, `elibc_glibc`, `kernel_linux`),
+  resolved `FEATURES`, multilib vars (`MULTILIB_ABIS`/`DEFAULT_ABI`/
+  `LIBDIR_*` — `get_libdir` returns `lib`, so oniguruma installs to
+  `/usr/lib` and jq's configure cannot find it), `SLOT`,
+  `PORTAGE_REPO_NAME`/`REPO_REVISIONS`, and for `--buildpkgonly` the
+  graph entry's `build_env` at all. `emerge_build.rs`'s source-build
+  path must thread the resolved environment (real `config.environ()`)
+  into the phase env.
+- **No packaging transforms** (`l2-gpkg-dostrip-splitdebug`, HIGH):
+  no `dostrip`/`estrip`, no splitdebug — archives ship unstripped
+  binaries and no `/usr/lib/debug`; `l2-gpkg-docompress` (no
+  `ecompress`: `BIG.txt` vs `BIG.txt.bz2`).
+- **Incomplete gpkg metadata** (`l2-gpkg-metadata-members`, MEDIUM):
+  `SIZE`, `IUSE`, `IUSE_EFFECTIVE`, `repository`, `REPO_REVISIONS`,
+  ebuild-derived `RDEPEND`/`REQUIRES`/`PROVIDES`, the `Packages` index
+  `REPO` field, and `NEEDED.ELF.2`'s trailing ELF-class field
+  (`l2-needed-elf2-format`).
+- **Degraded consumer env** (`l2-consumes-portuale-env-degraded`,
+  MEDIUM): real Portage merging a portuale-built archive runs merge
+  phases with `MERGE_TYPE` unset and skips `pkg_pretend`.
+
+Fixed while building the bed: `l2-pkgindex-version-missing` (the
+`Packages` header lacked `VERSION`, so real Portage under
+`pkgdir-index-trusted` silently rebuilt from source) and
+`l2-filesdir-symlink-missing` (`FILESDIR` linked to the ebuild's repo
+`files/`, without which every `eapply` died); plus the harness-side
+`metadata/md5-cache` for the cache-less `porttest` overlay (portuale
+has no ebuild fallback for a cache-less repo, `l2-no-md5-cache-ebuild-fallback`).
 
 
 ---

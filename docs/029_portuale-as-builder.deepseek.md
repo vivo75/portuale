@@ -1,11 +1,28 @@
 # L2 — portuale as builder — agent plan (deepseek draft)
 
-Status: **scoped, not started.** Written 2026-09-13 against `main` @
-`fdb244a`. Covers backlog #29 (`docs/backlog-tasks.md:53-55`),
-`docs/scope-backlog.md` §I L2 bullet (`:597-599`), the layer design
-`docs/real-world-testing.md` §5 (`:98-114`) and the tooling spec §4
-(`:73-94`). Companion history: `docs/history/real-world-testing.md` §5
-(`:448-473`) and §14 item 4 (`:895-898`).
+Status: **executed 2026-09-13** (S0–S6; base `fdb244a`, L2 commits
+`244c6e8` (S0) `9a8d81b` (S1) `f4a4fb5` (S2) `24d42d9`+`7ff9cdb` (S3)
+`1c07ecb` (S5) + the S6 docs commit). Outcome: the bed is shipped and
+the `porttest` fixture track runs green modulo filed producer gaps (0
+unexplained); the real L1 set is **blocked on `l2-bpkgonly-env`** (the
+build phase env is a curated whitelist, not the resolved config env)
+and S5's stop rule was invoked as designed. The S4 mechanism
+(cross-install direction A + `--tolerate-payload`) is delivered and
+proven on the fixture track; its real half waits on #37. Two core
+fixes landed along the way (the `Packages` header `VERSION` that made
+real Portage ignore every portuale-built archive, and the missing
+`FILESDIR`→repo-`files/` symlink that made every `eapply` die).
+Evidence, per-finding repros and the temporary `layer: l2`
+adjudications: [`../TEST/findings/l2.md`](../TEST/findings/l2.md); the
+follow-up work is `backlog-tasks.md` #37-#41 / `scope-backlog.md` §K.
+The slice descriptions below are kept as the executed record.
+
+Written 2026-09-13 against `main` @ `fdb244a`. Covers backlog #29
+(`docs/backlog-tasks.md:53-55`), `docs/scope-backlog.md` §I L2 bullet
+(`:597-599`), the layer design `docs/real-world-testing.md` §5
+(`:98-114`) and the tooling spec §4 (`:73-94`). Companion history:
+`docs/history/real-world-testing.md` §5 (`:448-473`) and §14 item 4
+(`:895-898`).
 
 **Read first:** `AGENTS.md` (steps 4/5/7/8), `docs/agent-context.md`,
 [`TEST/README.md`](../TEST/README.md), `docs/real-world-testing.md` §2

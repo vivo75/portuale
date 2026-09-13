@@ -96,27 +96,73 @@ Env: `L1_REBUILD=1` (wipe the pkgcache), `L1_SKIP_BUILD=1` (reuse it),
 
 The reinstall + upgrade sub-cases are a slice-2 follow-up.
 
-### L2+ (not yet implemented)
+### L2 — portuale as builder (structure + cross-install)
+
+```sh
+TEST/run/l2-portuale-builder.sh TEST/atomlists/l1-porttest.txt   # fixture track, strict
+L2_MODE=payload-tolerant L2_BUILD_MODE=deep \
+  TEST/run/l2-portuale-builder.sh                               # real L1 set
+```
+
+Both package managers build the atom list from source into separate
+fresh `$PKGDIR`s with a shared `DISTDIR`
+(`layers/l2/build-portage.sh`, `layers/l2/build-portuale.sh`), then:
+`gpkg-structure.sh --dir … --packages` validates every archive
+(member set, inner roots, the stable metadata-key set, Manifest,
+filename↔`BUILD_ID`, `Packages` stanza);
+`gpkg-diff.sh --mode strict|payload-tolerant` diffs each
+portage-built/portuale-built pair (outer layout, normalised metadata,
+image paths/attrs, payload; strict = payload hard, for the
+deterministic `porttest` fixtures); finally real Portage merges the
+portuale-built **candidate** and the portage-built **reference** into
+two identical fresh containers (`layers/l1/consume.sh`), portuale
+merges the portage-built set as the L1 **control**, and
+`diff.py --layer l2 [--tolerate-payload]` compares the normalised
+snapshots. `L2_BUILD_MODE=bpkgonly` (default) is archive-only
+`--buildpkgonly`; `deep` builds+merges the dependency closure first
+(real `-B` refuses unmerged deps).
+
+Output: `TEST/logs/l2-<timestamp>/` (`structure-*.txt`,
+`archive-<cat>-<pn>.txt`, `cross-install.txt`, `control.txt`,
+`classification.txt`, `l2-report.txt`, `l2-report.json`);
+`TEST/logs/l2-report.txt` symlinks the latest. Env: `L2_MODE`,
+`L2_BUILD_MODE`, `L2_REBUILD`, `L2_SKIP_BUILD`, `L2_JOBS`,
+`L2_SKIP_PORTAGE_UPGRADE`, `PORTTEST_*`.
+
+Status (2026-09-13): the **fixture track is green modulo filed
+producer gaps** — 0 unexplained structural/archive findings, 0
+unexplained in the cross-install diff, control 0/0. The real set is
+**blocked** on a systemic build-env gap (see
+[`findings/l2.md`](findings/l2.md) `l2-bpkgonly-env`); all open
+findings are filed there and adjudicated temporarily via
+`known-divergences.yaml` (`layer: l2`, `owner: portuale-bug`).
+
+Host-only self-tests (no container): `compare/test-gpkg-structure.sh`,
+`compare/test-gpkg-diff.sh`, `compare/test-diff-tolerance.py`.
+
+### L3+ (not yet implemented)
 
 `net/up.sh` / `net/down.sh` (shared network + volumes) for the HTTP
-binhost / `mrg` client; `compare/gpkg-{structure,diff}.sh`. Designs,
-controls, deferred fixtures, risks, and metrics:
-`docs/real-world-testing.md` §§2–8 (extracted from
+binhost / `mrg` client. Designs, controls, deferred fixtures, risks,
+and metrics: `docs/real-world-testing.md` §§2–8 (extracted from
 `docs/history/real-world-testing.md`, whose §14 slice history and §1
 methodology critique stay there).
 
 ### Layout
 
 ```
-run/          host orchestrators (l0-resolver.sh, l1-merge-from-binpkg.sh, lib.sh)
+run/          host orchestrators (l0-resolver.sh, l1-merge-from-binpkg.sh,
+              l2-portuale-builder.sh, lib.sh)
 layers/l0/    in-container.sh — the per-atom probe driver
 layers/l1/    build.sh (Portage, from source) + consume.sh (one PM, merge + snapshot)
+layers/l2/    build-portage.sh + build-portuale.sh (archive-only / deep)
 atomlists/    curated atom / package lists
-compare/      resolve-compare.py (L0), snapshot.sh + normalize.py + diff.py (L1),
-              normalize.md, known-divergences.yaml
+compare/      resolve-compare.py (L0), snapshot.sh + normalize.py + diff.py (L1/L2),
+              gpkg-structure.sh + gpkg-diff.sh (L2), test-*.sh, normalize.md,
+              known-divergences.yaml
 net/          up.sh / down.sh
-images/       Containerfile material + overlay/porttest/
-logs/         run output (git-ignored)  — incl. _l1-pkgcache/ (the binpkg cache)
+images/       Containerfile material + overlay/porttest/ (incl. metadata/md5-cache)
+logs/         run output (git-ignored)  — incl. _l1-pkgcache/, _l2-*
 ```
 
 ---

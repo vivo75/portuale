@@ -4386,11 +4386,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&tmp);
         let pkg_dir = tmp.join("repo/dev-libs/patchpkg");
         std::fs::create_dir_all(pkg_dir.join("files")).unwrap();
-        std::fs::write(
-            pkg_dir.join("patchpkg-1.0.ebuild"),
-            "EAPI=8\nSLOT=0\n",
-        )
-        .unwrap();
+        std::fs::write(pkg_dir.join("patchpkg-1.0.ebuild"), "EAPI=8\nSLOT=0\n").unwrap();
         std::fs::write(pkg_dir.join("files/fix.patch"), "diff\n").unwrap();
         let portage_tmp = tmp.join("ptmp");
         let env = compute_environment(&pkg_dir.join("patchpkg-1.0.ebuild"), &portage_tmp).unwrap();
