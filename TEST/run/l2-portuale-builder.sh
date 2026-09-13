@@ -59,14 +59,12 @@ KNOWN_FINDINGS=(
   "l2-gpkg-metadata-members|missing in b: metadata/(SIZE|IUSE|IUSE_EFFECTIVE|repository|REPO_REVISIONS|RDEPEND|REQUIRES|PROVIDES|NEEDED|NEEDED\.ELF\.2)$"
   "l2-gpkg-metadata-members|metadata/NEEDED(\.ELF\.2)? differs:"
   "l2-gpkg-metadata-members|Packages stanza has no REPO field$"
-  "l2-gpkg-dostrip-splitdebug|only in [ab]: usr/lib/debug/"
-  "l2-gpkg-dostrip-splitdebug|only in [ab]: usr/lib(64)?/libptsd"
-  "l2-gpkg-dostrip-splitdebug|only in [ab]: usr/lib$"
-  "l2-gpkg-dostrip-splitdebug|only in [ab]: usr/lib/debug$"
-  "l2-gpkg-dostrip-splitdebug|payload differs: usr/bin/pt-"
-  "l2-gpkg-dostrip-splitdebug|payload differs: usr/lib(64)?/libptsd"
-  "l2-gpkg-dostrip-splitdebug|payload differs: usr/lib/debug/"
-  "l2-gpkg-dostrip-splitdebug|usr/lib/debug/\.build-id/.*: a=.*b="
+  # `porttest/setuid`'s three byte-identical binaries share one build-id;
+  # which name the shared `.build-id/e0/2277…` links target depends on
+  # `estrip`'s `___parallel` traversal order. Real disagrees with itself
+  # (oracle `pt-setuid`, a later real L2 build `pt-sticky`), so this one
+  # link pair is the only ungradable row (#38 S0/S2).
+  "l2-gpkg-dostrip-splitdebug|usr/lib/debug/\.build-id/e0/2277.*: a=.*b="
 )
 
 classify_file() {  # <label> <findings-file>

@@ -13,6 +13,7 @@
 #   porttest/installmask  files an INSTALL_MASK / *.la strip should drop
 #   porttest/phases       every pkg_* phase appends a marker at merge
 #   porttest/splitdebug   FEATURES=splitdebug .debug + .build-id links
+#   porttest/restrict-strip  RESTRICT=strip: unstripped, no /usr/lib/debug
 #   porttest/unicode      spaces / UTF-8 / shell metachars in filenames
 
 porttest/setuid
@@ -23,4 +24,5 @@ porttest/docs
 porttest/installmask
 porttest/phases
 porttest/splitdebug
+porttest/restrict-strip
 porttest/unicode

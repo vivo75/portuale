@@ -1,7 +1,9 @@
 # Plan: backlog #38 — Packaging transforms: dostrip / splitdebug / docompress (merged)
 
-Status: **in progress — S0 done 2026-09-13** (see §11 and `TEST/findings/l2.md`
-"#38 recon"). **#37, its blocker, landed 2026-09-13**
+Status: **in progress — S0–S3 done 2026-09-13** (see §11 and
+`TEST/findings/l2.md` "#38 S1/S2/S3"). The S0 `PORTAGE_TMPDIR` finding
+was fixed as a #37 follow-up (G6). Remaining: S4 (the `instprep`
+decision) and S5 (closeout). **#37, its blocker, landed 2026-09-13**
 — resolved `FEATURES`, `PORTAGE_COMPRESS*`, `USE`, `SLOT` are in the
 phase env now (`037_Build-phase-env-completeness.plan.md`, S0–S5
 complete). Written 2026-09-13 against `main` @ `ec13936`.
@@ -444,13 +446,18 @@ is touched.
 
 - [ ] S0 table + tool table + `instprep` call order cited; expected trees
       frozen from the oracle.
-- [ ] `l2-gpkg-docompress` closed (S1); `l2-gpkg-dostrip-splitdebug*`
-      closed (S2) — each with before/after evidence.
-- [ ] `RESTRICT=strip` cell pinned by a both-PM fixture (S3).
+- [x] `l2-gpkg-docompress` closed (S1); `l2-gpkg-dostrip-splitdebug*`
+      closed (S2) — each with before/after evidence. (S1 =
+      `l2-20260913T191450Z` + host e2e; S2 adds the `PORTAGE_TMPDIR`
+      #37 follow-up and narrows the two allowlists to the ungradable
+      `setuid` build-id race only.)
+- [x] `RESTRICT=strip` cell pinned by a both-PM fixture (S3)
+      (`porttest/restrict-strip` in `l2-20260913T191450Z`, strict-clean).
 - [ ] `instprep`: implemented+fixtured **or** #38b filed with repro (S4).
 - [ ] No transform reimplemented in Rust; no vendored `bin/*` edited.
 - [ ] L2 porttest 0 unexplained; L1 unchanged; full verification pass
-      green.
+      green. (L2 porttest 0 unexplained in `l2-20260913T191450Z`; L1 and
+      the full pass are S5's.)
 - [ ] Docs updated (S5); no dead allowlist entries.
 
 ## 10. Delegation brief (for subagents)
@@ -484,3 +491,57 @@ ref / backlog id)
   L2 build `pt-sticky` → real-divergence, keep one narrowed row. Tools: all
   present except `dwz` (only `dedupdebug`). `instprep` call-order table
   recorded (G2 data); harness sets no `-binpkg-*` → S4 default stands.
+
+- **G6 #37 follow-up landed (2026-09-13)** — the S0 `portuale-env` row,
+  fixed at the boundary: `portage_repo::PORTAGE_TMPDIR_DEFAULT = "/var/tmp"`
+  + `portage_tmpdir_from_env()` / `portage_tmpdir_from_config()` (calling
+  env → resolved `Config::other_vars` scalar → real default). Every CLI
+  boundary updated (`pretend.rs` `run`/`run_resume`/`run_info`/
+  `execute_unmerge`/`run_config_action`, `ebuild.rs`, `regen.rs`); unit
+  test `portage_tmpdir_comes_from_the_resolved_scalar_then_the_make_globals_default`.
+  Expected: the builddir is `/var/tmp/portage/<cat>/<pf>`, so the DWARF
+  `comp_dir` and the salted `.build-id` equal real's. Confirmed by S2.
+
+- **S1 (2026-09-13)** — `l2-gpkg-docompress` closed. Fresh
+  `L2_REBUILD=1 TEST/run/l2-portuale-builder.sh TEST/atomlists/l1-porttest.txt`
+  → `TEST/logs/l2-20260913T191450Z`, rc 0: `porttest/docs`' archives are
+  strict-clean except the filed #39 metadata rows; the `docs` oracle tree
+  (BIG.txt.bz2 / small.txt / html / man / info) is what both carry. Host
+  e2e added: Rust
+  `install_qa_check_docompress_compresses_docs_and_repairs_symlinks`
+  (`fixtures/repo/dev-libs/doccompresspkg`, default bash backend) and
+  `tests/test_portuale.py` docompress test (merged VDB `CONTENTS` records
+  the `.bz2` path). No product-code change was needed.
+
+- **S2 (2026-09-13)** — `l2-gpkg-dostrip-splitdebug*` closed. In the same
+  run the splitdebug path set, modes, symlink targets and payload sha256
+  are identical to the portage-built sibling, and the `.debug` objects +
+  `.build-id` links carry the **2026-09-08 oracle's own build-ids**
+  (`7c/f6c1b1…`, `e8/95ec8e…`) and sha256s; `setuid` is 14384 B/binary
+  again. Archive diff shows only #39 metadata. Allowlists: deleted all
+  eight broad `l2-gpkg-dostrip-splitdebug` `KNOWN_FINDINGS` rows and the
+  five broad yaml entries; the single `setuid` build-id link race
+  (real-divergence: `pt-setuid` oracle vs `pt-sticky` real build) stays as
+  one narrowed row + one narrowed CONTENTS entry. **G3 brush smoke:**
+  `porttest/docs` builds and compresses under `--shell brush`, but
+  `porttest/splitdebug` silently produces an empty image (brush no-ops the
+  compiled fixture's `src_compile`; rc 0) — a brush-backend gap that fires
+  before `estrip`, filed under the brush-pin workflow (`backlog-tasks.md`
+  #6); brush stays, default stays `bash`.
+
+- **S3 (2026-09-13)** — `porttest/restrict-strip` (`RESTRICT=strip`,
+  compiled `-g` binary) added to the overlay + md5-cache + atomlist +
+  README, built by both PMs in the same run. Archive diff strict-clean:
+  byte-identical unstripped binary (`pt-restrict` 16576 B, identical
+  build-id), no `.debug` object under `/usr/lib/debug` for either PM even
+  though the bed has `FEATURES=splitdebug` (`estrip`'s
+  `has_restriction[strip]` skip). `FEATURES=nostrip` stays unfiled/not
+  claimed (bed cannot set it per-fixture).
+
+- **Verification (S1–S3, step 8)** — `cargo fmt --check`, clippy
+  (0 warnings), `cargo test --release`, `pytest tests -q` (1566 passed)
+  all green; L2 `l2-20260913T191450Z` 0 unexplained; L1
+  `l1-20260913T194808Z` 0 hard findings, both PMs merging all 10
+  fixtures (incl. `restrict-strip`). The four `--ask` prompt tests that
+  had been red on `main` since the 2026-09-04 TTY gate (`7dc0486`) were
+  repaired with a pty-stdin helper (own commit).

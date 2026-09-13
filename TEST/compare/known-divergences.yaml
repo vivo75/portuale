@@ -96,68 +96,26 @@
 
 - id: l2-gpkg-dostrip-splitdebug
   layer: l2
-  categories: [MISSING, SIZE, CONTENT, SYMLINK]
-  path_glob:
-    - "/usr/lib/debug"
-    - "/usr/lib/debug/*"
-    - "/usr/lib/debug/.build-id/*"
-    - "/usr/lib/libptsd*"
-    - "/usr/lib64/libptsd*"
-    - "/usr/bin/pt-*"
+  category: SYMLINK
+  path_glob: "/usr/lib/debug/.build-id/e0/2277*"
   reason: >
-    #37 S2 made the gates fire (resolved FEATURES reaches install_qa_check):
-    both archives now carry stripped binaries, /usr/lib/debug/** and
-    .build-id/** with matching path sets. The residual rows are compiled-
-    artifact bytes and traversal-order artifacts, not transform gaps: the
-    fixture compiles from source (main binary/.debug payloads differ), and
-    pt-setgid/pt-sticky are byte-identical binaries sharing one build-id,
-    so which name the shared .build-id symlink targets depends on estrip's
-    find traversal order in each build. Filed as
-    l2-gpkg-dostrip-splitdebug.
+    #38 S0/S2: `porttest/setuid` installs three byte-identical binaries
+    (pt-setuid/pt-setgid/pt-sticky) that share one build-id; `estrip`
+    processes ELFs through `___parallel` and whichever name its
+    `__try_symlink` sees first becomes the target of the shared
+    `.build-id/e0/2277…` links. Real disagrees with itself: the
+    2026-09-08 oracle links `pt-setuid`, the 2026-09-13 real L2 build
+    links `pt-sticky`. Ungradable by construction; narrowed to this one
+    link pair. Everything else (paths, sizes, payloads, CONTENTS) now
+    matches the portage-built sibling exactly.
   owner: portuale-bug
 
 - id: l2-gpkg-dostrip-splitdebug-contents
   layer: l2
   category: CONTENTS
-  path_glob: "porttest/*/CONTENTS"
-  match: "/usr/bin/pt-"
-  reason: "CONTENTS md5/entry residue of l2-gpkg-dostrip-splitdebug."
-  owner: portuale-bug
-
-- id: l2-gpkg-dostrip-splitdebug-libptsd
-  layer: l2
-  category: CONTENTS
-  path_glob: "porttest/*/CONTENTS"
-  match: "/usr/lib/libptsd"
-  reason: "CONTENTS entry residue of l2-gpkg-dostrip-splitdebug."
-  owner: portuale-bug
-
-- id: l2-gpkg-dostrip-splitdebug-dirs
-  layer: l2
-  category: CONTENTS
-  path_glob: "porttest/*/CONTENTS"
-  match: "line: dir /usr/lib/debug"
-  reason: "CONTENTS dir residue of l2-gpkg-dostrip-splitdebug."
-  owner: portuale-bug
-
-- id: l2-gpkg-dostrip-splitdebug-libdir
-  layer: l2
-  category: CONTENTS
-  path_glob: "porttest/*/CONTENTS"
-  match: "line: dir /usr/lib"
-  reason: >
-    The bare `dir /usr/lib` line exists only because splitdebug targets
-    live under /usr/lib/debug (l2-gpkg-dostrip-splitdebug); the
-    `/usr/lib/debug` lines are claimed by
-    l2-gpkg-dostrip-splitdebug-dirs, listed first.
-  owner: portuale-bug
-
-- id: l2-gpkg-dostrip-splitdebug-lib64
-  layer: l2
-  category: CONTENTS
-  path_glob: "porttest/*/CONTENTS"
-  match: "/usr/lib64/libptsd"
-  reason: "CONTENTS entry residue of l2-gpkg-dostrip-splitdebug."
+  path_glob: "porttest/setuid-1.0/CONTENTS"
+  match: "sym /usr/lib/debug/.build-id/e0/2277"
+  reason: "VDB CONTENTS sym-target residue of the same ungradable build-id link race."
   owner: portuale-bug
 
 

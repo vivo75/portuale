@@ -33,6 +33,7 @@ sync when an ebuild here changes (`egencache --repo porttest --update`).
 | `porttest/installmask` | files an `INSTALL_MASK` / `*.la` / `*.log` strip should drop at merge, incl. a dir that becomes empty once its only file is dropped |
 | `porttest/phases` | every `pkg_*` phase appends `<phase> eapi=… ebuild_phase=… merge_type=…` to `/var/lib/porttest/phase.log` — merge runs `pkg_setup`/`pkg_preinst`/`pkg_postinst`, so those lines (and order) must match |
 | `porttest/splitdebug` | `FEATURES=splitdebug`: `/usr/lib/debug/**/*.debug` + `.build-id/**` symlinks for a binary AND a shared lib (soname) |
+| `porttest/restrict-strip` | `RESTRICT=strip`: the binary stays unstripped and no `.debug` objects are produced under `/usr/lib/debug`, even with `FEATURES=splitdebug` (both PMs do leave the empty `/usr/lib/debug` dir) |
 | `porttest/unicode` | filenames with spaces, tabs, `$`, UTF-8, `()[]`, `#%`; a symlink with spaces in name+target; a subdir with a space |
 
 ## Not yet (follow-ups)

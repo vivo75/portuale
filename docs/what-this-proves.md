@@ -16295,3 +16295,56 @@ done
 ```
 
 Live (`TEST/logs/l2-20260913T182502Z`): the porttest track is green with 0 unexplained (cross-install 95 hard findings, all explained; control 0/0), and the portuale-built `porttest/docs` archive matches the portage-built pair exactly — `USE="abi_x86_64 amd64 elibc_glibc kernel_linux"`, the resolved `FEATURES` incremental list (now carrying `binpkg-docompress`/`binpkg-dostrip`, which the raw env never had), `SLOT=0`, and a normalised `environment.bz2` equal to real's with no allowlist row; `.keep_porttest_emptydirs-0` also matches. The two build modes agree: a `--buildpkgonly` and a `-b` archive of the same fixture compare `gpkg-diff: mode=strict hard=0 soft=0` (`TEST/logs/_l2-b-vs-B/`). On the real L1 set (`TEST/logs/l2-20260913T174940Z`), oniguruma installs `/usr/lib64/libonig.so.5.5.0` + `/usr/lib64/pkgconfig/oniguruma.pc` (before #37: `/usr/lib/...`, no `MULTILIB_ABIS`/`DEFAULT_ABI`/`LIBDIR_*`, so `toolchain-funcs::get_libdir` fell back to `lib` and jq's `econf` could not find it), jq configures, and all 18 closure packages build under portuale; `SOURCE_DATE_EPOCH` flows from `make.conf` through the same builder (L3 G0.6, unit-pinned). The remaining L2 real-set blockers are no longer env completeness: `dostrip`/`splitdebug`/`docompress` (#38) and the gpkg metadata/`Packages`-index gaps (#39). Full slice record: `docs/037_Build-phase-env-completeness.plan.md`; per-finding evidence and commands: `TEST/findings/l2.md` S5.
+
+### Packaging transforms: `dostrip` / `splitdebug` / `docompress` now match real byte-for-byte (backlog #38 S1–S3, 2026-09-13)
+
+Portuale already ran the real transform code — `install_qa_check`
+(`misc-functions.sh:147-152,239-250`) has the `ecompress` and `estrip`
+gates, and `run_commands_async` runs it after every successful `install`
+chain. Two things were missing: #37's resolved phase env (now landed, so
+the default-on `binpkg-docompress`/`binpkg-dostrip` gates fire), and the
+right `PORTAGE_TMPDIR`. The boundary defaulted to `/var/tmp/portage` and
+then appended `portage/<cat>/<pf>`, doubling the component; real
+`make.globals:35` is `/var/tmp`. That changed the DWARF `DW_AT_comp_dir`,
+`debugedit`'s salted `.build-id` and every compiled payload. Fixed at the
+boundary (`portage_repo::portage_tmpdir_from_env`/`_from_config`:
+calling env → resolved config scalar → `/var/tmp`), with a unit test.
+Runnable, live-verified:
+
+```sh
+L2_REBUILD=1 TEST/run/l2-portuale-builder.sh TEST/atomlists/l1-porttest.txt   # rc 0
+S=$(mktemp -d)
+for w in portage portuale; do
+  tar xOf TEST/logs/_l2-pkgcache-$w/porttest/splitdebug/splitdebug-1.0-1.gpkg.tar \
+    splitdebug-1.0-1/image.tar.zst | zstd -dc | tar -xC $S/$w
+done
+diff <(cd $S/portage && find image | LC_ALL=C sort) \
+     <(cd $S/portuale && find image | LC_ALL=C sort)      # identical
+sha256sum $S/portage/image/usr/lib/debug/usr/bin/pt-splitdebug.debug \
+          $S/portuale/image/usr/lib/debug/usr/bin/pt-splitdebug.debug
+```
+
+Live (`TEST/logs/l2-20260913T191450Z`, porttest track): 0 unexplained;
+the portage-built and portuale-built archives differ only in the filed
+#39 metadata members. `porttest/splitdebug` carries the 2026-09-08
+oracle's own build-ids (`7c/f6c1b1…`, `e8/95ec8e…`), `.debug` objects and
+sha256s; `porttest/setuid` is back to 14384 B/binary; `porttest/docs`
+ships `BIG.txt.bz2` with `small.txt` plain and `html/` skipped. New
+fixture `porttest/restrict-strip` (`RESTRICT=strip`) pins the ungradable
+inverse: even with `FEATURES=splitdebug` on, both PMs ship the identical
+unstripped binary and no `.debug` object (`estrip`'s
+`has_restriction[strip]` skip). Host end-to-end tests run the real
+`ecompress` through the default `bash` backend
+(`install_qa_check_docompress_compresses_docs_and_repairs_symlinks`, plus
+`emerge dev-libs/doccompresspkg` in `tests/test_portuale.py`): the
+compressed `.bz2` is in `${D}`, in the merged tree and in `CONTENTS`, and
+`ecompress`'s `fix_symlinks` repair of a link into a compressed doc is
+pinned. The only transform allowlist entries left are one narrowed
+`porttest/setuid` `.build-id` link race (real disagrees with itself
+between runs); an `--shell brush` smoke shows the transforms work under a
+brush parent for a non-compiled fixture, while a compiled fixture no-ops
+inside brush before `estrip` is reached — a brush-backend gap filed
+under the brush-pin workflow (`backlog-tasks.md` #6), not a transform
+bug. Slice record: `docs/038_Packaging-transforms.plan.md`; per-finding
+evidence: `TEST/findings/l2.md` "#38 S1/S2/S3". S4 (`instprep`
+decision) and S5 (closeout) remain.

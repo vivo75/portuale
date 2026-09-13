@@ -201,6 +201,21 @@ incompatibilities not yet tried. New ones are their own slices — fix
 upstream first, or (for portage-tree `bin/*.sh`) rewrite the offending
 construct, `brush strategy #2` style — and get recorded here.
 
+- **2026-09-13 — a compiled ebuild's `src_compile` no-ops under brush
+  (#38 G3 smoke).** `TEST/images/overlay/porttest/porttest/splitdebug`
+  (a `src_compile` whose heredoc pattern is `cat > pt-sd.c <<-'EOF'`
+  plus `tc-getCC`) under `emerge --shell brush --buildpkgonly` — or
+  `ebuild --shell brush <fixture> install` — returns 0 but produces an
+  **empty image**: `work/` stays empty, so `src_install` has nothing to
+  `dobin`, alongside `error: declare: cannot mutate readonly variable`
+  and `env: '': No such file or directory` noise. The same fixture
+  builds and strips correctly under `--shell bash`. A non-compiled
+  fixture (`porttest/docs`) builds fine under brush, and its external
+  `ecompress` transform fires — so this is the brush phase runner, not
+  the transforms. Repro:
+  `TEST/logs/_l2-brush-smoke/` + `TEST/findings/l2.md` "#38 S2".
+  Recorded, not fixed; the default stays `bash`.
+
 ## References
 
 - [`reubeno/brush`](https://github.com/reubeno/brush) — the embedded
