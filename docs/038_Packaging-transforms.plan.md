@@ -1,9 +1,9 @@
 # Plan: backlog #38 — Packaging transforms: dostrip / splitdebug / docompress (merged)
 
-Status: **proposed, not executed. Blocked on #37 S2** (resolved
-`FEATURES`, `PORTAGE_COMPRESS*`, `USE`, `SLOT` in the phase env —
-`037_Build-phase-env-completeness.plan.md`). Written 2026-09-13 against
-`main` @ `ec13936`.
+Status: **proposed, not executed. #37, its blocker, landed 2026-09-13**
+— resolved `FEATURES`, `PORTAGE_COMPRESS*`, `USE`, `SLOT` are in the
+phase env now (`037_Build-phase-env-completeness.plan.md`, S0–S5
+complete). Written 2026-09-13 against `main` @ `ec13936`.
 
 This is the **merge** of three independent drafts —
 `038_Packaging-transforms.{deepseek,musespark,claude}.md` — keeping the

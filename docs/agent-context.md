@@ -183,6 +183,19 @@ one open judgment call (G0.4's S4 acceptance bar, `docs/024-S4-review.md`
 D-1) is recorded in `docs/024-oracle.md` §"Verdict", awaiting the
 owner.
 
+**2026-09-13 memory note:** backlog #37 (build-phase env completeness)
+is **closed** — `emerge`/`--resume`/`--buildpkgonly` run every ebuild
+phase with the resolved config env (`portage_profile::phase_environ`:
+implicit USE, resolved `FEATURES`/`PORTAGE_FEATURES`, multilib vars,
+`SLOT`/`PORTAGE_REPO_*`, `SOURCE_DATE_EPOCH`), the Rust execution gates
+read the resolved `FEATURES`, and the L2 porttest track is green from a
+clean run with the `l2-bpkgonly-env` allowlist gone (evidence:
+`TEST/findings/l2.md` S4/S5; plan:
+`docs/037_Build-phase-env-completeness.plan.md`). The L2 real set's next
+blockers are **#38** (packaging transforms) and **#39** (gpkg
+metadata/`Packages` index), then the test-bed GPG check
+(`l2-binpkg-gpg-check`) — not env completeness.
+
 For what is **genuinely still open** — real portage behaviour not ported
 to either side, the deliberate cuts, the standing non-goals — see
 **[`scope-backlog.md`](scope-backlog.md)** (Part 2 = remaining work,

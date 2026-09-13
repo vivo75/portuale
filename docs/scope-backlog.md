@@ -596,7 +596,8 @@ L0 (resolver parity) + L1 (merge parity) are shipped and run live
 `TEST/run/l2-portuale-builder.sh`, `compare/gpkg-structure.sh` +
 `gpkg-diff.sh`, `diff.py --layer l2/--tolerate-payload`. The `porttest`
 fixture track is green modulo the producer gaps in §K (0 unexplained);
-the real set is blocked by §K's build-env gap. L3–L5 planned in
+the real set is past the build-env gap (#37 closed 2026-09-13) and
+blocked by §K's #38/#39 gaps. L3–L5 planned in
 `history/real-world-testing.md` §5/§14 and distilled for execution
 into `real-world-testing.md` (§2–§8: controls, triage, L2–L5 designs,
 risks, metrics), are not built:
@@ -653,19 +654,24 @@ The L2 container bed (`TEST/run/l2-portuale-builder.sh`) exposed what
 portuale cannot yet produce. Evidence, repro commands and adjudications:
 [`TEST/findings/l2.md`](../TEST/findings/l2.md). The `porttest` fixture
 track runs green modulo these (temporary `owner: portuale-bug`
-allowlist entries in `known-divergences.yaml`, `layer: l2`); the real
-L1 set is blocked at `l2-bpkgonly-env`.
+allowlist entries in `known-divergences.yaml`, `layer: l2`); the
+`l2-bpkgonly-env` entry is closed (2026-09-13), and the real L1 set's
+remaining blockers are the #38/#39 entries below.
 
-- **Build phase env is a curated whitelist, not the resolved config
-  env** (`l2-bpkgonly-env`, HIGH; blocks the real set). Missing: the
-  profile's implicit USE (`amd64`, `elibc_glibc`, `kernel_linux`),
-  resolved `FEATURES`, multilib vars (`MULTILIB_ABIS`/`DEFAULT_ABI`/
-  `LIBDIR_*` — `get_libdir` returns `lib`, so oniguruma installs to
-  `/usr/lib` and jq's configure cannot find it), `SLOT`,
-  `PORTAGE_REPO_NAME`/`REPO_REVISIONS`, and for `--buildpkgonly` the
-  graph entry's `build_env` at all. `emerge_build.rs`'s source-build
-  path must thread the resolved environment (real `config.environ()`)
-  into the phase env.
+- **FIXED 2026-09-13 (#37 S1-S4) — build phase env is a curated
+  whitelist, not the resolved config env** (`l2-bpkgonly-env`, HIGH).
+  Missing: the profile's implicit USE (`amd64`, `elibc_glibc`,
+  `kernel_linux`), resolved `FEATURES`, multilib vars
+  (`MULTILIB_ABIS`/`DEFAULT_ABI`/`LIBDIR_*` — `get_libdir` returned
+  `lib`, so oniguruma installed to `/usr/lib` and jq's configure could
+  not find it), `SLOT`, `PORTAGE_REPO_NAME`/`REPO_REVISIONS`, and for
+  `--buildpkgonly` the graph entry's `build_env` at all. The source
+  build path now threads `portage_profile::phase_environ` (real
+  `config.environ()`) into the phase env on `emerge`, `--resume` and
+  `--buildpkgonly`; the allowlist row is deleted, porttest is green
+  from a clean run, archives' `environment.bz2` normalise equal, and
+  oniguruma lands in `/usr/lib64` (evidence: `TEST/findings/l2.md`
+  S4/S5; plan: `docs/037_Build-phase-env-completeness.plan.md`).
 - **No packaging transforms** (`l2-gpkg-dostrip-splitdebug`, HIGH):
   no `dostrip`/`estrip`, no splitdebug — archives ship unstripped
   binaries and no `/usr/lib/debug`; `l2-gpkg-docompress` (no

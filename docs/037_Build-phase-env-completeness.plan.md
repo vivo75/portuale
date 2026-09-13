@@ -1,6 +1,6 @@
 # Plan: backlog #37 — Build-phase env completeness (merged)
 
-Status: **S0-S4 complete 2026-09-13.** S4 deleted the `l2-bpkgonly-env` allowlist rows (porttest track green from a clean rebuild, every archive `environment.bz2` equal to real), fixed the six phase-env gaps the container runs exposed, and took the real set through the whole build closure (oniguruma/jq in `/usr/lib64`); its next stop is #39 (dep-metadata rewrite + `Packages` index fields), not env. Only S5 (docs closeout) remains. S3 moved every phase-execution/merge gate onto the resolved `FEATURES` (raw env only as documented standalone fallbacks), validated on the L2 porttest track (0 unexplained). S4/S5 (real-set re-run, docs closeout) remain. S2 threaded the resolved env into `emerge`/`--resume`/`--buildpkgonly` (both backends), dropped `AA`/`O`, shell-quoted the brush exports, and captured the L2 porttest track green (0 unexplained) with the `l2-bpkgonly-env` rows deleted; residuals filed in `TEST/findings/l2.md` S2. G1 (full
+Status: **S0-S5 complete 2026-09-13.** S4 deleted the `l2-bpkgonly-env` allowlist rows (porttest track green from a clean rebuild, every archive `environment.bz2` equal to real), fixed the six phase-env gaps the container runs exposed, and took the real set through the whole build closure (oniguruma/jq in `/usr/lib64`); its next stop is #39 (dep-metadata rewrite + `Packages` index fields), not env. S5 closed the docs and the two remaining acceptance checks: a fresh porttest-track re-run (`l2-20260913T182502Z`, 0 unexplained) and `--buildpkgonly` ≡ `-b` archive metadata (`gpkg-diff --mode strict hard=0`), with `SOURCE_DATE_EPOCH` unit-pinned. S3 moved every phase-execution/merge gate onto the resolved `FEATURES` (raw env only as documented standalone fallbacks), validated on the L2 porttest track (0 unexplained). S2 threaded the resolved env into `emerge`/`--resume`/`--buildpkgonly` (both backends), dropped `AA`/`O`, shell-quoted the brush exports, and captured the L2 porttest track green (0 unexplained) with the `l2-bpkgonly-env` rows deleted; residuals filed in `TEST/findings/l2.md` S2. G1 (full
 layer) and G3 (`PORTAGE_USE` everywhere) decided by the owner; S1 landed
 `portage_profile::phase_environ` / `portage_use` + the three transcribed
 key sets, unit-tested, not yet threaded (S2). S0's exhaustive
@@ -560,12 +560,23 @@ upgrade), L0.
 - [x] G1-G7 answered and recorded in §4.
 - [x] Porttest track: all env-caused diffs gone; `l2-bpkgonly-env`
       allowlist rows deleted.
-- [ ] `--buildpkgonly` ≡ `-b` env-shaped metadata.
+- [x] `--buildpkgonly` ≡ `-b` env-shaped metadata (S5 container check:
+      `gpkg-diff --mode strict hard=0 soft=0`; artifacts under
+      `TEST/logs/_l2-b-vs-B/`).
 - [x] Oniguruma → `/usr/lib64`; jq configures (commands in `l2.md`).
-- [ ] `SOURCE_DATE_EPOCH` reaches the phase from config (L3 G0.6).
+- [x] `SOURCE_DATE_EPOCH` reaches the phase from config (L3 G0.6):
+      `phase_environ` passes the `make.conf` scalar through; pinned by
+      `phase_environ_exports_the_profile_family_and_folded_incrementals`.
 - [x] No undocumented `std::env::var("FEATURES")` on the build path.
 - [x] Full verification pass green; L1/L0 unchanged apart from fixed rows.
-- [ ] Docs updated (S5); no dead allowlist entries.
+- [x] Docs updated (S5); no dead allowlist entries.
+
+**S5 closure map:** `docs/what-this-proves.md` (new paragraph),
+`scope-backlog.md` §I/§K, `backlog-tasks.md` #29/#37,
+`docs/030_L3-source-build-parity.deepseek.md` G0.5/G0.6 + S3 status,
+`docs/agent-context.md`, `docs/real-world-testing.md` §5,
+`docs/029_portuale-as-builder.deepseek.md` status, `TEST/findings/l2.md`
+S5.
 
 ## 10. Delegation brief (for subagents)
 
@@ -721,5 +732,27 @@ Full evidence and commands: `TEST/findings/l2.md` "S4 — container proof
 - Not done in S4 (still open for the DoD): `--buildpkgonly` ≡ `-b`
   metadata comparison and the `SOURCE_DATE_EPOCH` L3 pointer (S5 docs).
 
-(append future entries here as S5 runs: command, expected, actual,
-root cause, fix ref / backlog id)
+### S5 — 2026-09-13 (docs closeout; acceptance re-runs green)
+
+- **Fresh porttest track** (reproducibility of S4):
+  `L2_REBUILD=1 TEST/run/l2-portuale-builder.sh TEST/atomlists/l1-porttest.txt`
+  → `TEST/logs/l2-20260913T182502Z`, rc 0: 0 unexplained (88 known
+  #38/#39 rows), cross-install 95 hard / 95 explained / 0 unexplained,
+  control 0/0. `porttest/docs`'s portuale-built archive metadata equals
+  the portage-built pair (`USE=abi_x86_64 amd64 elibc_glibc
+  kernel_linux`, resolved `FEATURES` incl. `binpkg-docompress`/
+  `binpkg-dostrip`, `SLOT=0`); `environment.bz2` normalises equal; no
+  allowlist row covers it.
+- **DoD `--buildpkgonly` ≡ `-b`**: two throwaway containers, same env,
+  `/TEST/layers/l2/build-portuale.sh` (`--buildpkgonly`) vs
+  `emerge -b --oneshot porttest/docs`; `gpkg-diff.sh --mode strict` →
+  `hard=0 soft=0` (rc 0). Artifacts retained under
+  `TEST/logs/_l2-b-vs-B/`. Closes the S2 exit row and the last open DoD
+  acceptance box.
+- **DoD `SOURCE_DATE_EPOCH`**: unit-pinned in
+  `phase_environ_exports_the_profile_family_and_folded_incrementals`;
+  L3 status pointer recorded in `docs/030` G0.5/G0.6.
+- Docs updated (closure map in §9). No new findings; no allowlist entry
+  for #37 anywhere. The `l2-gpkg-*` rows still on the porttest track are
+  #38/#39 by design; the real-set stop point is recorded in
+  `TEST/findings/l2.md` S5.

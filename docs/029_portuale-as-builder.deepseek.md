@@ -4,11 +4,16 @@ Status: **executed 2026-09-13** (S0–S6; base `fdb244a`, L2 commits
 `244c6e8` (S0) `9a8d81b` (S1) `f4a4fb5` (S2) `24d42d9`+`7ff9cdb` (S3)
 `1c07ecb` (S5) + the S6 docs commit). Outcome: the bed is shipped and
 the `porttest` fixture track runs green modulo filed producer gaps (0
-unexplained); the real L1 set is **blocked on `l2-bpkgonly-env`** (the
+unexplained); the real L1 set was **blocked on `l2-bpkgonly-env`** (the
 build phase env is a curated whitelist, not the resolved config env)
-and S5's stop rule was invoked as designed. The S4 mechanism
-(cross-install direction A + `--tolerate-payload`) is delivered and
-proven on the fixture track; its real half waits on #37. Two core
+and S5's stop rule was invoked as designed. That gap was then closed by
+backlog #37 (S1–S5, 2026-09-13 —
+`docs/037_Build-phase-env-completeness.plan.md`): the real set builds
+its whole 18-package closure and oniguruma lands in `/usr/lib64`. The
+S4 mechanism (cross-install direction A + `--tolerate-payload`) is
+delivered and proven on the fixture track; its real half now waits on
+#38/#39 (packaging transforms, gpkg metadata/`Packages` index), not on
+env. Two core
 fixes landed along the way (the `Packages` header `VERSION` that made
 real Portage ignore every portuale-built archive, and the missing
 `FILESDIR`→repo-`files/` symlink that made every `eapply` die).
