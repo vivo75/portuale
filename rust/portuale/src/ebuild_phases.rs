@@ -1052,6 +1052,7 @@ async fn fetch_sources(
     debug: bool,
     config_root: &Path,
     shell: ShellBackend,
+    features: &str,
 ) -> Result<(Vec<String>, Vec<String>), String> {
     let Some(repo_root) = repo_root_for(&env.pkg_dir) else {
         return Ok((Vec::new(), Vec::new()));
@@ -1094,18 +1095,14 @@ async fn fetch_sources(
             // `collision_protect`/`protect_owned`/`unmerge_orphans`
             // already use, defaulting to real `true` (see
             // `FetchOptions::distlocks`'s own doc comment).
-            distlocks: std::env::var("FEATURES")
-                .map(|features| features.split_whitespace().any(|tok| tok == "distlocks"))
-                .unwrap_or(FetchOptions::default().distlocks),
+            distlocks: features.split_whitespace().any(|tok| tok == "distlocks"),
             restrict_mirror,
             restrict_fetch,
             restrict_primaryuri,
             // Real `FEATURES=force-mirror` -- same env-var shortcut as
             // `distlocks` above (no full config resolution on this
             // path), defaulting to real `false`.
-            force_mirror: std::env::var("FEATURES")
-                .map(|features| features.split_whitespace().any(|tok| tok == "force-mirror"))
-                .unwrap_or(false),
+            force_mirror: features.split_whitespace().any(|tok| tok == "force-mirror"),
         },
     );
     let a = match a {
@@ -1545,12 +1542,28 @@ pub(crate) fn environ_whitelisted(key: &str) -> bool {
     ENVIRON_WHITELIST.contains(&key) || key.starts_with("CCACHE_") || key.starts_with("DISTCC_")
 }
 
-/// A `FEATURES` token check, the same one `pretend.rs`/`ebuild_merge.rs`
-/// already do -- read straight from the process environment.
-fn feature_token_present(token: &str) -> bool {
-    std::env::var("FEATURES")
-        .map(|f| f.split_whitespace().any(|t| t == token))
-        .unwrap_or(false)
+/// The `FEATURES` string a phase-execution decision should consult:
+/// the **last** `FEATURES` pair on `extra_env` when present (the
+/// resolved incremental list #37 S2 threads), else the process
+/// environment (a standalone `ebuild <file>` run, where no resolved
+/// config exists). Real semantics: every Rust-side gate below reads
+/// `settings.features`, i.e. the resolved list, never the raw calling
+/// env.
+fn features_string(extra_env: &[(String, String)]) -> String {
+    extra_env
+        .iter()
+        .rev()
+        .find(|(k, _)| k == "FEATURES")
+        .map(|(_, v)| v.clone())
+        .unwrap_or_else(|| std::env::var("FEATURES").unwrap_or_default())
+}
+
+/// A `FEATURES` token check over the given resolved features string
+/// (`features_string`'s output). The `pretend.rs`/`ebuild_merge.rs`
+/// siblings keep their own process-env reads: they are CLI-boundary
+/// fallbacks (`ebuild <file>`), not phase execution.
+fn feature_token_present(features: &str, token: &str) -> bool {
+    features.split_whitespace().any(|t| t == token)
 }
 
 /// Real `FEATURES` for the phase's own bash environment
@@ -1583,8 +1596,8 @@ fn phase_features_value() -> String {
 }
 
 /// `FEATURES=network-sandbox` present?
-fn network_sandbox_requested() -> bool {
-    feature_token_present("network-sandbox")
+fn network_sandbox_requested(features: &str) -> bool {
+    feature_token_present(features, "network-sandbox")
 }
 
 /// Real `_doebuild_spawn`'s own `networked` exemption formula
@@ -1611,8 +1624,8 @@ fn network_sandbox_exempt(phase: &str, restrict: &str, properties: &str) -> bool
 /// `_spawn`'s own `"sandbox" not in features and "usersandbox" not in
 /// features` gate. (Portuale does no `userpriv`, so `sandbox` and
 /// `usersandbox` are equivalent here.)
-fn fs_sandbox_requested() -> bool {
-    feature_token_present("sandbox") || feature_token_present("usersandbox")
+fn fs_sandbox_requested(features: &str) -> bool {
+    feature_token_present(features, "sandbox") || feature_token_present(features, "usersandbox")
 }
 
 /// Real `portage.const.SANDBOX_BINARY` (`/usr/bin/sandbox`), and real
@@ -1647,9 +1660,9 @@ fn sandbox_binary() -> Option<&'static Path> {
 /// binary is available. A single warning is printed (real `_spawn`'s own
 /// silent degrade is matched with an explicit note) when the feature is
 /// on but the binary is missing.
-fn fs_sandbox_for_phase(phase: &str) -> bool {
+fn fs_sandbox_for_phase(phase: &str, features: &str) -> bool {
     use std::sync::OnceLock;
-    if !fs_sandbox_requested() || !SANDBOXED_SRC_PHASES.contains(&phase) {
+    if !fs_sandbox_requested(features) || !SANDBOXED_SRC_PHASES.contains(&phase) {
         return false;
     }
     if sandbox_binary().is_some() {
@@ -1762,12 +1775,12 @@ fn unshare_combo_usable(flags: &[&str]) -> bool {
 /// (`setup`/`pretend`/`config`/`info`/`pre|postinst`/`pre|postrm`) is
 /// real's own third exemption clause, but every one of those is already
 /// outside `SANDBOXED_SRC_PHASES` here, so it never needs its own check.
-fn phase_isolation(env: &Environment, phase: &str) -> Isolation {
+fn phase_isolation(env: &Environment, phase: &str, features: &str) -> Isolation {
     use std::sync::OnceLock;
     if !SANDBOXED_SRC_PHASES.contains(&phase) {
         return Isolation::default();
     }
-    let mut net = network_sandbox_requested();
+    let mut net = network_sandbox_requested(features);
     if net {
         // Exemption checks run for sandboxable phases only (`depend`
         // never reaches here -- it is outside `SANDBOXED_SRC_PHASES`
@@ -1780,10 +1793,10 @@ fn phase_isolation(env: &Environment, phase: &str) -> Isolation {
     }
     let mut iso = Isolation {
         net,
-        ipc: feature_token_present("ipc-sandbox"),
-        mount: feature_token_present("mount-sandbox"),
-        pid: feature_token_present("pid-sandbox"),
-        fs_sandbox: fs_sandbox_for_phase(phase),
+        ipc: feature_token_present(features, "ipc-sandbox"),
+        mount: feature_token_present(features, "mount-sandbox"),
+        pid: feature_token_present(features, "pid-sandbox"),
+        fs_sandbox: fs_sandbox_for_phase(phase, features),
     };
     if iso.any_unshare() && !unshare_combo_usable(&iso.unshare_flags()) {
         static WARNED: OnceLock<()> = OnceLock::new();
@@ -1962,6 +1975,7 @@ fn phase_env_vars(
     // adjustment) collapses to exactly `D`'s own value -- no separate
     // computation needed.
     let d = format!("{}/", env.d().display());
+    let resolved_features = features_string(extra_env);
     let path = format!(
         "{}:{}",
         helpers_dir.display(),
@@ -2032,7 +2046,7 @@ fn phase_env_vars(
         // default stays exactly as before.
         (
             "SANDBOX_DISABLED".to_string(),
-            if fs_sandbox_for_phase(ebuild_phase_value) {
+            if fs_sandbox_for_phase(ebuild_phase_value, &resolved_features) {
                 "0"
             } else {
                 "1"
@@ -2238,7 +2252,7 @@ async fn run_one_phase(
     // LD_PRELOAD `libsandbox.so` can confine the in-process `Brush`
     // interpreter without taking the whole `portuale` process with it.
     // See this module's own doc comment.
-    let iso = phase_isolation(env, phase);
+    let iso = phase_isolation(env, phase, &features_string(extra_env));
     let effective_shell = if iso.any() { ShellBackend::Bash } else { shell };
 
     match effective_shell {
@@ -2700,7 +2714,8 @@ async fn run_misc_functions(
     // `_PostPhaseCommands` passes only `ld_preload_sandbox`, never
     // `networked`). This forces the `Bash` backend, same as a
     // `sandbox`-wrapped phase.
-    let fs_sandbox = fs_sandbox_requested() && sandbox_binary().is_some();
+    let fs_sandbox =
+        fs_sandbox_requested(&features_string(extra_env)) && sandbox_binary().is_some();
     let effective_shell = if fs_sandbox {
         ShellBackend::Bash
     } else {
@@ -2983,7 +2998,16 @@ async fn run_commands_async(
     let mut extra_env = vec![("DISTDIR".to_string(), distdir.display().to_string())];
     extra_env.extend(build_env.iter().cloned());
     if chain.contains(&"unpack") {
-        let (a, _aa) = fetch_sources(&env, root, distdir, debug, config_root, shell).await?;
+        let (a, _aa) = fetch_sources(
+            &env,
+            root,
+            distdir,
+            debug,
+            config_root,
+            shell,
+            &features_string(&extra_env),
+        )
+        .await?;
         // Real `config.environ()` exports `A` but pops `AA` for every
         // EAPI >= 4 (`config.py:3331-3333`, `eapi_exports_AA`); the
         // EAPI floor here is 5+, so `AA` is never exported (S0 finding
@@ -4268,6 +4292,34 @@ mod tests {
         );
         assert_eq!(use_str, "");
         assert!(flags.is_empty());
+    }
+
+    /// #37 S3: the phase-execution gates read the **resolved** `FEATURES`
+    /// threaded on `extra_env` (`features_string`), never the raw process
+    /// env -- a `make.conf` `-sandbox` disables the sandbox even when the
+    /// calling env exports `sandbox`. The helpers take the features string
+    /// as a parameter precisely so this is directly testable.
+    #[test]
+    fn feature_gates_use_the_resolved_features_string() {
+        assert!(!feature_token_present("buildpkg", "sandbox"));
+        assert!(feature_token_present("sandbox usersandbox", "sandbox"));
+        assert!(!network_sandbox_requested("distlocks"));
+        assert!(network_sandbox_requested("network-sandbox"));
+        assert!(!fs_sandbox_requested(""));
+        assert!(fs_sandbox_requested("usersandbox"));
+        // The extra_env pair wins over the process env (here: whatever the
+        // test runner exported); an absent pair falls back to it.
+        assert_eq!(
+            features_string(&[("FEATURES".to_string(), "".to_string())]),
+            ""
+        );
+        assert_eq!(
+            features_string(&[
+                ("FEATURES".to_string(), "raw".to_string()),
+                ("FEATURES".to_string(), "resolved".to_string()),
+            ]),
+            "resolved"
+        );
     }
 
     /// #37 S2 G6: every brush `export` value is single-quoted, so a

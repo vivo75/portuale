@@ -1204,13 +1204,17 @@ pub fn save_modules_process(
 /// first use). A no-op when no module is enabled
 /// or nothing has messages. Portuale never cleans the builddir, so the
 /// caller re-scans `${T}/logging/` here rather than threading a message
-/// buffer through the (un)merge machinery.
+/// buffer through the (un)merge machinery. `split_elog` is real
+/// `settings.features`' `split-elog` token: the `emerge` callers pass
+/// the resolved list (#37 S3), the standalone unmerge path the raw env
+/// fallback.
 pub fn process_batch(
     logdir: &Path,
     root_display: &str,
     items: &[(String, PathBuf)],
     phases: Option<&[&str]>,
     color: &Colorizer,
+    split_elog: bool,
 ) {
     let echo = echo_enabled();
     // "save_any" gates the one `collect_all`/`save_modules_process` call
@@ -1226,10 +1230,6 @@ pub fn process_batch(
     if !(echo || save_any) {
         return;
     }
-    let split_elog = std::env::var("FEATURES")
-        .unwrap_or_default()
-        .split_whitespace()
-        .any(|f| f == "split-elog");
     let mut packages = Vec::new();
     for (cpv, t_dir) in items {
         if save_any {

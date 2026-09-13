@@ -471,6 +471,25 @@ impl MergeOptions {
     }
 }
 
+impl MergeOptions {
+    /// Apply the **resolved** `FEATURES` list (real `settings.features`
+    /// from `config.environ()`) and re-derive every merge-time token that
+    /// follows it. The `emerge` paths call this right after `from_env`
+    /// (which reads the raw process env as the `ebuild <file>` fallback);
+    /// `ebuild <file> merge`/`qmerge` keep `from_env`'s values. This is
+    /// what makes a `make.conf` `FEATURES=collision-protect` (or
+    /// `-protect-owned`) take effect on the `emerge` paths -- real reads
+    /// `settings.features`, never the calling env, for all three.
+    pub fn set_resolved_features(&mut self, features: &str) {
+        let has = |token: &str| features.split_whitespace().any(|t| t == token);
+        self.collision_protect = has("collision-protect");
+        self.protect_owned = has("protect-owned");
+        self.protect_if_modified = has("config-protect-if-modified");
+        self.gpg_verify = crate::binpkg::GpgVerify::from_features(features);
+        self.features = features.to_string();
+    }
+}
+
 /// Real `ConfigProtect.isprotected()` (`lib/portage/util/__init__.py`):
 /// longest-prefix match against `config_protect` (a whitespace-separated
 /// path list, `root`-joined) minus `config_protect_mask`. A protect/mask
@@ -3068,6 +3087,12 @@ pub(crate) fn unmerge_replaced_same_slot(
         &items,
         Some(&["prerm", "postrm"]),
         &crate::color::Colorizer::new(crate::color::resolve_havecolor(None)),
+        // The merge path's resolved list when one was set (#37 S3); the
+        // standalone `ebuild <file> merge` fallback is the raw env.
+        options
+            .features
+            .split_whitespace()
+            .any(|t| t == "split-elog"),
     );
 
     Ok(replaced)
@@ -4991,6 +5016,31 @@ mod tests {
     /// relying on `MergeOptions::default()` -- see
     /// `protect_owned_alone_aborts_when_an_owner_is_identified` for the
     /// real-default (`protect_owned: true`) case.
+    #[test]
+    fn set_resolved_features_rederives_the_merge_tokens() {
+        // #37 S3: the emerge paths replace `from_env`'s raw-FEATURES
+        // fields with the resolved list, which is what makes a
+        // make.conf `collision-protect` / `-protect-owned` /
+        // `config-protect-if-modified` take effect; the GPG verify policy
+        // follows the same list.
+        let mut options = MergeOptions::default();
+        options.set_resolved_features("collision-protect binpkg-request-signature");
+        assert!(options.collision_protect);
+        assert!(!options.protect_owned);
+        assert!(!options.protect_if_modified);
+        assert_eq!(
+            options.features,
+            "collision-protect binpkg-request-signature"
+        );
+        assert!(options.gpg_verify.request_signature);
+        // Defaults-on tokens present in make.globals stay on.
+        options.set_resolved_features("protect-owned config-protect-if-modified");
+        assert!(options.protect_owned);
+        assert!(options.protect_if_modified);
+        assert!(!options.collision_protect);
+        assert!(!options.gpg_verify.request_signature);
+    }
+
     #[test]
     fn ordinary_collision_is_merged_over_with_both_collision_protect_and_protect_owned_off() {
         let tmp = tempdir();

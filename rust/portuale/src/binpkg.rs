@@ -1116,6 +1116,23 @@ impl GpgVerify {
     pub fn from_env() -> Self {
         Self::default()
     }
+
+    /// The same policy from a **resolved** `FEATURES` list (real
+    /// `settings.features`, #37 S3): `set_resolved_features` replaces
+    /// `from_env`'s raw read on the `emerge` paths, so a `make.conf`
+    /// `binpkg-request-signature`/`binpkg-ignore-signature` takes
+    /// effect.
+    pub fn from_features(features: &str) -> Self {
+        let (verify_signature, request_signature) = gpg_policy_for_features(features);
+        Self {
+            verify_signature,
+            request_signature,
+            base_command: std::env::var("BINPKG_GPG_VERIFY_BASE_COMMAND")
+                .unwrap_or_else(|_| DEFAULT_GPG_VERIFY_BASE_COMMAND.to_string()),
+            gpg_home: std::env::var("BINPKG_GPG_VERIFY_GPG_HOME")
+                .unwrap_or_else(|_| DEFAULT_GPG_VERIFY_GPG_HOME.to_string()),
+        }
+    }
 }
 
 /// Real `gpkg.__init__`'s own `request_signature` / `verify_signature`

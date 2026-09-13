@@ -102,10 +102,11 @@
 
 - id: l2-gpkg-dostrip-splitdebug
   layer: l2
-  categories: [MISSING, SIZE, CONTENT]
+  categories: [MISSING, SIZE, CONTENT, SYMLINK]
   path_glob:
     - "/usr/lib/debug"
     - "/usr/lib/debug/*"
+    - "/usr/lib/debug/.build-id/*"
     - "/usr/lib/libptsd*"
     - "/usr/lib64/libptsd*"
     - "/usr/bin/pt-*"
@@ -113,8 +114,11 @@
     #37 S2 made the gates fire (resolved FEATURES reaches install_qa_check):
     both archives now carry stripped binaries, /usr/lib/debug/** and
     .build-id/** with matching path sets. The residual rows are compiled-
-    artifact byte differences (the fixture compiles from source; the main
-    binary payload differs the same way), not transform gaps. Filed as
+    artifact bytes and traversal-order artifacts, not transform gaps: the
+    fixture compiles from source (main binary/.debug payloads differ), and
+    pt-setgid/pt-sticky are byte-identical binaries sharing one build-id,
+    so which name the shared .build-id symlink targets depends on estrip's
+    find traversal order in each build. Filed as
     l2-gpkg-dostrip-splitdebug.
   owner: portuale-bug
 

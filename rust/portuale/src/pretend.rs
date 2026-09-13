@@ -3493,10 +3493,20 @@ fn run_unmerge_pretend(
 /// `merge`/`qmerge`/`package` construction uses. Shared by the
 /// non-`--pretend` build/merge dispatch and `execute_unmerge`'s own
 /// `FEATURES=unmerge-backup` `quickpkg`.
+/// The resolved-`FEATURES` sibling of `feature_enabled` for this
+/// function: `Some` means the caller resolved a real config (#37 S2/S3),
+/// so the token is read from the folded list; `None` keeps the raw
+/// process-env fallback for the standalone `ebuild`/`execute_unmerge`
+/// paths.
 fn package_options_from_env(
     shell: ebuild_phases::ShellBackend,
     debug: bool,
+    resolved_features: Option<&str>,
 ) -> ebuild_package::PackageOptions {
+    let feature_on = |token: &str| match resolved_features {
+        Some(f) => f.split_whitespace().any(|t| t == token),
+        None => feature_enabled(token),
+    };
     let d = ebuild_package::PackageOptions::default();
     let binpkg_compress =
         std::env::var("BINPKG_COMPRESS").unwrap_or_else(|_| d.binpkg_compress.clone());
@@ -3526,14 +3536,20 @@ fn package_options_from_env(
         // because `FEATURES` happens to be set to something else that
         // doesn't mention it (`ebuild_package::PackageOptions::
         // buildpkg_live`'s own doc comment has the full real grounding).
-        buildpkg_live: !feature_enabled("-buildpkg-live"),
+        // Resolved (production): the token's presence is the answer
+        // (`-buildpkg-live` was already folded away). Raw fallback: the
+        // old default-on-unless-negated read.
+        buildpkg_live: match resolved_features {
+            Some(f) => f.split_whitespace().any(|t| t == "buildpkg-live"),
+            None => !feature_enabled("-buildpkg-live"),
+        },
         // Real default is on, but this defaults off here (a deliberate
         // conservatism -- see `ebuild_package::PackageOptions::
         // binpkg_multi_instance`'s own doc comment). Explicit opt-in;
         // honoured by both `package_after_install` and
         // `quickpkg_from_vdb` (the `FEATURES=unmerge-backup` path).
-        binpkg_multi_instance: feature_enabled("binpkg-multi-instance"),
-        binpkg_signing: feature_enabled("binpkg-signing"),
+        binpkg_multi_instance: feature_on("binpkg-multi-instance"),
+        binpkg_signing: feature_on("binpkg-signing"),
         binpkg_gpg_signing_base_command: std::env::var("BINPKG_GPG_SIGNING_BASE_COMMAND")
             .unwrap_or_default(),
         binpkg_gpg_signing_digest: std::env::var("BINPKG_GPG_SIGNING_DIGEST").unwrap_or_default(),
@@ -4040,7 +4056,7 @@ fn run_resume(
         merge_options.install_mask,
         merge_options.install_mask_prunes_usr_share,
     ) = config_install_mask(config);
-    merge_options.features = config_features_string(config);
+    merge_options.set_resolved_features(&config_features_string(config));
     // The compiler / make flags and `package.env` vars the non-resume
     // `emerge` path resolves (see the `build_config_env` call there):
     // a resumed source build is a real build and needs the same phase
@@ -4080,7 +4096,8 @@ fn run_resume(
             false,
         )
     } else {
-        let package_options = package_options_from_env(shell, debug);
+        let package_options =
+            package_options_from_env(shell, debug, Some(&config_features_string(config)));
         emerge_getbinpkg::run_merge_plan(
             &entries,
             config,
@@ -4130,6 +4147,13 @@ fn run_resume(
 
 /// Real `"unmerge-backup" in self.settings.features` -- not a
 /// `make.globals` default token, so absent unless `FEATURES` names it.
+///
+/// This is the **raw process-env fallback**, for the CLI boundaries with
+/// no resolved config (`ebuild <file>` and `execute_unmerge`, which
+/// receives none -- #37 S3 residual). Every build/merge path reads the
+/// resolved list instead: `config_features_list`/`config_features_string`
+/// here, `MergeOptions::set_resolved_features`, and
+/// `ebuild_phases::features_string`/`emerge_build::resolved_features`.
 fn feature_enabled(token: &str) -> bool {
     std::env::var("FEATURES")
         .map(|f| f.split_whitespace().any(|t| t == token))
@@ -4149,7 +4173,8 @@ fn execute_unmerge(
     let options = ebuild_merge::MergeOptions::from_env(shell, debug);
     // Real `dblink._pre_unmerge_backup`: `FEATURES=unmerge-backup` -> a
     // `quickpkg` of each package before it's removed.
-    let backup = feature_enabled("unmerge-backup").then(|| package_options_from_env(shell, debug));
+    let backup =
+        feature_enabled("unmerge-backup").then(|| package_options_from_env(shell, debug, None));
     let scratch = portage_tmpdir.join("portage").join("_unmerge_src");
     let total = removal_list.len();
     for (idx, (category, package, version)) in removal_list.iter().enumerate() {
@@ -4204,6 +4229,7 @@ fn execute_unmerge(
         &items,
         Some(&["prerm", "postrm"]),
         color,
+        feature_enabled("split-elog"),
     );
 
     // Real `post_emerge()`: after `emerge -C` / `--depclean` / `--prune`
@@ -5971,6 +5997,16 @@ pub(crate) const BUILD_VARS: &[&str] = &[
 /// resolved config value stands. (An explicit empty `INSTALL_MASK=""`
 /// blanking the config value is a corner real handles but we do not --
 /// unset and empty behave the same, matching `MergeOptions::from_env`.)
+/// Real `create_depgraph_params.py`'s own `if "buildpkg" in
+/// settings.features: myparams.setdefault("--buildpkg", "y")`: an
+/// explicit `--buildpkg[=n]` wins, otherwise the **resolved** `FEATURES`
+/// list decides (make.conf/`make.globals`, not the calling env -- #37
+/// S3). Split out of the CLI dispatcher so the precedence is directly
+/// testable.
+fn buildpkg_from_config(buildpkg_opt: Option<bool>, config: &portage_profile::Config) -> bool {
+    buildpkg_opt.unwrap_or_else(|| config_features_list(config).iter().any(|t| t == "buildpkg"))
+}
+
 fn config_features_list(config: &portage_profile::Config) -> Vec<String> {
     config
         .resolved_incremental("FEATURES")
@@ -11690,7 +11726,8 @@ pub fn run(args: &[String]) -> ExitCode {
         // Real BINPKG_COMPRESS/BINPKG_COMPRESS_FLAGS[_<NAME>]/
         // PORTAGE_BZIP2_COMMAND/PKGDIR/... resolution -- see
         // `package_options_from_env`.
-        let package_options = package_options_from_env(shell, debug);
+        let package_options =
+            package_options_from_env(shell, debug, Some(&config_features_string(&config)));
         let portage_tmpdir = std::env::var_os("PORTAGE_TMPDIR")
             .map(std::path::PathBuf::from)
             .unwrap_or_else(|| std::path::PathBuf::from("/var/tmp/portage"));
@@ -11713,7 +11750,7 @@ pub fn run(args: &[String]) -> ExitCode {
             merge_options.install_mask,
             merge_options.install_mask_prunes_usr_share,
         ) = config_install_mask(&config);
-        merge_options.features = config_features_string(&config);
+        merge_options.set_resolved_features(&config_features_string(&config));
         // Real `_grab_pkg_env` into `configdict["pkg"]`: a `package.env`
         // entry matching a build-bound package layers its env file's
         // build vars over the run-wide set above.
@@ -11734,7 +11771,7 @@ pub fn run(args: &[String]) -> ExitCode {
         // `_emerge/EbuildBinpkg`): a binpkg of each source entry is
         // written into `$PKGDIR` as a side effect of the merge.
         // `--buildpkg=n` wins over the FEATURE.
-        let buildpkg_on = buildpkg_opt.unwrap_or_else(|| feature_enabled("buildpkg"));
+        let buildpkg_on = buildpkg_from_config(buildpkg_opt, &config);
         let buildpkg = buildpkg_on.then_some(&package_options);
         // `emerge -k <atom>` (`--usepkg`, no `--getbinpkg`): the resolver
         // put a local-`$PKGDIR` binary on the plan. Real portage merges a
@@ -11950,6 +11987,9 @@ pub fn run(args: &[String]) -> ExitCode {
                 &items,
                 None,
                 &color,
+                config_features_list(&config)
+                    .iter()
+                    .any(|t| t == "split-elog"),
             );
 
             // Real `post_emerge()` (`post_emerge.py:141-152`): once the
@@ -11969,6 +12009,27 @@ mod tests {
 
     fn fixtures_root() -> std::path::PathBuf {
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures")
+    }
+
+    #[test]
+    fn buildpkg_comes_from_the_cli_then_the_resolved_features() {
+        // #37 S3: real `create_depgraph_params.py` sets buildpkg='y' from
+        // `settings.features`; an explicit CLI `--buildpkg[=n]` wins.
+        let mut config = portage_profile::Config::default();
+        config.other_vars.insert(
+            "FEATURES".to_string(),
+            "buildpkg binpkg-multi-instance".to_string(),
+        );
+        // No CLI flag: resolved `FEATURES=buildpkg` enables it.
+        assert!(buildpkg_from_config(None, &config));
+        // An explicit `--buildpkg=n` wins over the feature.
+        assert!(!buildpkg_from_config(Some(false), &config));
+        assert!(buildpkg_from_config(Some(true), &config));
+        // Without the token in the resolved list it stays off.
+        let mut off = portage_profile::Config::default();
+        off.other_vars
+            .insert("FEATURES".to_string(), "-buildpkg sandbox".to_string());
+        assert!(!buildpkg_from_config(None, &off));
     }
 
     #[test]

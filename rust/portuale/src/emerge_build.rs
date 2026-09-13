@@ -776,7 +776,26 @@ pub(crate) fn resume_entry(
 /// `${T}/build.log`, i.e. `${PORTAGE_BUILDDIR}/temp/build.log`; with
 /// `FEATURES=compress-build-logs`, `${T}/build.log.gz` --
 /// `prepare_build_dirs.py`'s own `f"build.log{compress_log_ext}"`).
-fn build_log_path(portage_tmpdir: &Path, category: &str, package: &str, version: &str) -> PathBuf {
+/// The resolved `FEATURES` list for build-path decisions: `MergeOptions::
+/// features` when the caller resolved a config (#37 S2), else the raw
+/// process env (standalone `ebuild <file>` / tests, where `features` is
+/// empty). The same precedence `ebuild_phases::features_string` uses for
+/// the phase-execution gates.
+fn resolved_features(options: &ebuild_merge::MergeOptions) -> String {
+    if options.features.is_empty() {
+        std::env::var("FEATURES").unwrap_or_default()
+    } else {
+        options.features.clone()
+    }
+}
+
+fn build_log_path(
+    portage_tmpdir: &Path,
+    category: &str,
+    package: &str,
+    version: &str,
+    features: &str,
+) -> PathBuf {
     let builddir = portage_tmpdir
         .join("portage")
         .join(category)
@@ -792,7 +811,6 @@ fn build_log_path(portage_tmpdir: &Path, category: &str, package: &str, version:
         .map(PathBuf::from)
         .filter(|p| !p.as_os_str().is_empty());
     let sep = std::env::var("PORTAGE_LOG_FILE_SEP").unwrap_or_else(|_| ":".to_string());
-    let features = std::env::var("FEATURES").unwrap_or_default();
     let split_log = features.split_whitespace().any(|t| t == "split-log");
     // Real `compress_log_ext` (`prepare_build_dirs.py:397-399`): the
     // `.gz` suffix applies to BOTH the `${T}` path and the
@@ -961,8 +979,15 @@ fn build_one_source_entry(
     let path = ebuild_path(&candidate, &entry.category, &entry.package, &version);
     println!(">>> Emerging ({cp}-{version})...");
 
-    let log_path = capture_log
-        .then(|| build_log_path(portage_tmpdir, &entry.category, &entry.package, &version));
+    let log_path = capture_log.then(|| {
+        build_log_path(
+            portage_tmpdir,
+            &entry.category,
+            &entry.package,
+            &version,
+            &resolved_features(options),
+        )
+    });
     if let Some(lp) = &log_path {
         // Real `prepare_build_dirs` truncates a stale build.log.
         // Truncate (don't delete): with `PORTAGE_LOGDIR` set, `lp` is
@@ -1066,6 +1091,7 @@ fn merge_one_built_entry(
         &entry.category,
         &entry.package,
         &version,
+        &resolved_features(options),
     ));
     let status = ebuild_merge::run_qmerge(ebuild_path, root, portage_tmpdir, &per_entry)?;
     if status != 0 {
@@ -2164,7 +2190,7 @@ mod tests {
         )
         .expect("source merge succeeds");
 
-        let log = build_log_path(&portage_tmpdir, "dev-libs", "hookoutputpkg", "1.0");
+        let log = build_log_path(&portage_tmpdir, "dev-libs", "hookoutputpkg", "1.0", "");
         let log_text =
             fs::read_to_string(&log).unwrap_or_else(|e| panic!("{}: {e}", log.display()));
         assert!(

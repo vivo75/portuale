@@ -1,6 +1,6 @@
 # Plan: backlog #37 — Build-phase env completeness (merged)
 
-Status: **S0 + S1 + S2 complete 2026-09-13; S3 not started.** S2 threaded the resolved env into `emerge`/`--resume`/`--buildpkgonly` (both backends), dropped `AA`/`O`, shell-quoted the brush exports, and captured the L2 porttest track green (0 unexplained) with the `l2-bpkgonly-env` rows deleted; residuals filed in `TEST/findings/l2.md` S2. G1 (full
+Status: **S0-S3 complete 2026-09-13.** S3 moved every phase-execution/merge gate onto the resolved `FEATURES` (raw env only as documented standalone fallbacks), validated on the L2 porttest track (0 unexplained). S4/S5 (real-set re-run, docs closeout) remain. S2 threaded the resolved env into `emerge`/`--resume`/`--buildpkgonly` (both backends), dropped `AA`/`O`, shell-quoted the brush exports, and captured the L2 porttest track green (0 unexplained) with the `l2-bpkgonly-env` rows deleted; residuals filed in `TEST/findings/l2.md` S2. G1 (full
 layer) and G3 (`PORTAGE_USE` everywhere) decided by the owner; S1 landed
 `portage_profile::phase_environ` / `portage_use` + the three transcribed
 key sets, unit-tested, not yet threaded (S2). S0's exhaustive
@@ -657,5 +657,29 @@ end-to-end**.
   md5-cache omits it), not as unreadable metadata — otherwise exactly
   the empty-IUSE packages keep `USE=""`.
 
-(append future entries here as S3-S5 run: command, expected, actual,
+### S3 — 2026-09-13 (resolved FEATURES gates; L2 porttest green)
+
+- `ebuild_phases::features_string` (last `extra_env` FEATURES pair,
+  else process env) now feeds the sandbox family
+  (`feature_token_present`, `network_sandbox_requested`,
+  `fs_sandbox_requested`, `fs_sandbox_for_phase`, `phase_isolation`) and
+  `distlocks`/`force-mirror` in `fetch_sources`.
+  `emerge_build::resolved_features(options)` feeds
+  `build_log_path`'s `split-log`/`compress-build-logs`;
+  `elog::process_batch` takes `split_elog` as a parameter;
+  `MergeOptions::set_resolved_features` re-derives
+  `collision-protect`/`protect-owned`/`config-protect-if-modified` and
+  `GpgVerify::from_features`; `buildpkg_from_config` + the
+  `PackageOptions` `feature_on` branch use the resolved list.
+- Tests: `feature_gates_use_the_resolved_features_string`,
+  `set_resolved_features_rederives_the_merge_tokens`,
+  `buildpkg_comes_from_the_cli_then_the_resolved_features`.
+- L2 porttest: portuale now actually attempts isolation and degrades
+  with real's own EPERM path (`!!! Unable to unshare ...` in the build
+  log); track green after adding the `.build-id` SYMLINK traversal-order
+  row (pt-setgid/pt-sticky share a byte-identical binary build-id).
+- Residual filed: `execute_unmerge`'s `unmerge-backup`/`split-elog` raw
+  (no config reaches that helper); standalone `ebuild <file>` by design.
+
+(append future entries here as S4-S5 run: command, expected, actual,
 root cause, fix ref / backlog id)

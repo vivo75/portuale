@@ -67,6 +67,7 @@ KNOWN_FINDINGS=(
   "l2-gpkg-dostrip-splitdebug|payload differs: usr/bin/pt-"
   "l2-gpkg-dostrip-splitdebug|payload differs: usr/lib(64)?/libptsd"
   "l2-gpkg-dostrip-splitdebug|payload differs: usr/lib/debug/"
+  "l2-gpkg-dostrip-splitdebug|usr/lib/debug/\.build-id/.*: a=.*b="
 )
 
 classify_file() {  # <label> <findings-file>
