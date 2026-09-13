@@ -1,6 +1,7 @@
 # Plan: backlog #38 — Packaging transforms: dostrip / splitdebug / docompress (merged)
 
-Status: **proposed, not executed. #37, its blocker, landed 2026-09-13**
+Status: **in progress — S0 done 2026-09-13** (see §11 and `TEST/findings/l2.md`
+"#38 recon"). **#37, its blocker, landed 2026-09-13**
 — resolved `FEATURES`, `PORTAGE_COMPRESS*`, `USE`, `SLOT` are in the
 phase env now (`037_Build-phase-env-completeness.plan.md`, S0–S5
 complete). Written 2026-09-13 against `main` @ `ec13936`.
@@ -196,7 +197,10 @@ transform's bytes).
   setuid}`; `README.md:32-36` documents the expected split (`dodoc -r`
   → compressed, `newdoc`, `doman` compressed, `doinfo` not, `docinto html`
   not; `splitdebug` → `.debug` + `.build-id` for a binary AND a soname
-  lib). Size witness: setuid binary 15424 (portuale) vs 14384 (real).
+  lib). Size witness: setuid binary 15424 (portuale) vs 14384 (real)
+  — **stale after #37 S2** (S0: both 14384). The README's "`doman`
+  compressed" does not hold for this fixture: the oracle ships `pt.1`
+  (33 B) plain, under `PORTAGE_DOCOMPRESS_SIZE_LIMIT`.
   `KNOWN_FINDINGS` regexes `TEST/run/l2-portuale-builder.sh:65-71`; yaml
   `known-divergences.yaml:98-134` (`l2-gpkg-dostrip-splitdebug{,-contents,
   -libptsd,-dirs}`).
@@ -464,3 +468,19 @@ only and label **unverified end-to-end**.
 
 (append here as S0-S5 run: command, expected, actual, root cause, fix
 ref / backlog id)
+
+- **S0 (2026-09-13)** — full table in `TEST/findings/l2.md` "#38 recon".
+  Input `TEST/logs/l2-20260913T182502Z` (post-#37). Both gates fire on all
+  three fixtures. **docs**: output = oracle already (the #37 S2 run
+  deleted the `l2-gpkg-docompress` rows) → S1 is evidence + e2e only.
+  **splitdebug**: path set = oracle, but build-ids / `.debug` bytes differ
+  (+8 B): portuale's `WORKDIR` is `/var/tmp/portage/portage/<cat>/<pf>/work`
+  — CLI boundaries default `PORTAGE_TMPDIR` to `/var/tmp/portage` where real
+  `make.globals:35` says `/var/tmp`. Class **portuale-env** → G6 #37
+  follow-up (default + read the resolved config), then S2 re-grades. Also
+  corrects #37 S2's "compiled bytes differ" classification. **setuid**:
+  three identical binaries share a build-id; the `.build-id` link target
+  is an `estrip` `___parallel` race — real's oracle says `pt-setuid`, real's
+  L2 build `pt-sticky` → real-divergence, keep one narrowed row. Tools: all
+  present except `dwz` (only `dedupdebug`). `instprep` call-order table
+  recorded (G2 data); harness sets no `-binpkg-*` → S4 default stands.
