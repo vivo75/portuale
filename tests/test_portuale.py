@@ -4366,6 +4366,38 @@ def test_emerge_applies_portage_scheduling_policy(emerge_binary, fixture_env):
     assert "Invalid priority in PORTAGE_SCHEDULING_PRIORITY." in r.stderr
 
 
+def _run_with_ask_pty(binary, args, answer, env):
+    """Run `emerge --ask ...` with a **real pty on stdin**: real's gate
+    (`actions.py:3920-3926`) rejects a non-tty stdin outright, so a
+    `subprocess.run(input=...)` pipe can never reach the prompt loop.
+    `answer` is written to the master side once the child is up;
+    stdout/stderr stay pipes and are captured."""
+    import pty
+
+    master, slave = pty.openpty()
+    try:
+        proc = subprocess.Popen(
+            [str(binary), *args],
+            stdin=slave,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            env=env,
+        )
+        os.close(slave)
+        slave = -1
+        if answer:
+            os.write(master, answer.encode())
+        out, err = proc.communicate(timeout=300)
+        return subprocess.CompletedProcess(
+            [str(binary), *args], proc.returncode, out, err
+        )
+    finally:
+        if slave != -1:
+            os.close(slave)
+        os.close(master)
+
+
 def test_emerge_ask_prompts_before_a_real_merge_and_honours_the_answer(
     emerge_binary, tmp_path
 ):
@@ -4386,14 +4418,7 @@ def test_emerge_ask_prompts_before_a_real_merge_and_honours_the_answer(
         env["ROOT"] = str(root)
         env["DISTDIR"] = str(Path(FIXTURES_ROOT) / "distfiles")
         env["PORTAGE_TMPDIR"] = str(root / "pt")
-        r = subprocess.run(
-            [str(emerge_binary), *extra, "--ask", "dev-libs/schedok"],
-            input=answer,
-            capture_output=True,
-            text=True,
-            check=False,
-            env=env,
-        )
+        r = _run_with_ask_pty(emerge_binary, [*extra, "--ask", "dev-libs/schedok"], answer, env)
         return root, r
 
     root, r = _run("n\n", [])
@@ -4430,10 +4455,7 @@ def test_emerge_ask_prompts_before_a_real_unmerge(emerge_binary, tmp_path):
     )
     assert (root / "var/db/pkg/dev-libs/schedok-1.0/CONTENTS").is_file()
 
-    r = subprocess.run(
-        [str(emerge_binary), "-C", "--ask", "dev-libs/schedok"],
-        input="n\n", capture_output=True, text=True, check=False, env=env,
-    )
+    r = _run_with_ask_pty(emerge_binary, ["-C", "--ask", "dev-libs/schedok"], "n\n", env)
     assert r.returncode == 130
     assert "Would you like to unmerge these packages? [Yes/No]" in r.stdout
     assert (root / "var/db/pkg/dev-libs/schedok-1.0/CONTENTS").is_file()
@@ -4530,18 +4552,12 @@ def test_emerge_deselect_ask_prompts_before_rewriting_world(emerge_binary, tmp_p
     env["PORTAGE_CONFIGROOT"] = FIXTURES_ROOT
     env["ROOT"] = str(tmp_path)
 
-    no = subprocess.run(
-        [str(emerge_binary), "--ask", "--deselect", "dev-libs/adrop"],
-        input="n\n", capture_output=True, text=True, check=False, env=env,
-    )
+    no = _run_with_ask_pty(emerge_binary, ["--ask", "--deselect", "dev-libs/adrop"], "n\n", env)
     assert no.returncode == 130
     assert "Would you like to remove these packages from your world favorites? [Yes/No]" in no.stdout
     assert (wl / "world").read_text() == "dev-libs/zkeep\ndev-libs/adrop\n"
 
-    yes = subprocess.run(
-        [str(emerge_binary), "--ask", "--deselect", "dev-libs/adrop"],
-        input="\n", capture_output=True, text=True, check=False, env=env,
-    )
+    yes = _run_with_ask_pty(emerge_binary, ["--ask", "--deselect", "dev-libs/adrop"], "\n", env)
     assert yes.returncode == 0, yes.stderr
     assert (wl / "world").read_text() == "dev-libs/zkeep\n"
 
@@ -4679,18 +4695,16 @@ def test_emerge_config_runs_pkg_config_from_the_vdb(emerge_binary, tmp_path):
     # `--config --ask`: prompt `Ready to configure <cpv>?` instead of the
     # `Configuring pkg...` line; `n` aborts (exit 130) before pkg_config.
     (root / "var/lib/emergeconfigpkg.configured").unlink()
-    no = subprocess.run(
-        [str(emerge_binary), "--ask", "--config", "dev-libs/emergeconfigpkg"],
-        input="n\n", capture_output=True, text=True, check=False, env=env,
+    no = _run_with_ask_pty(
+        emerge_binary, ["--ask", "--config", "dev-libs/emergeconfigpkg"], "n\n", env
     )
     assert no.returncode == 130
     assert "Ready to configure dev-libs/emergeconfigpkg-1.0? [Yes/No]" in no.stdout
     assert "Configuring pkg..." not in no.stdout
     assert not (root / "var/lib/emergeconfigpkg.configured").exists()
 
-    yes = subprocess.run(
-        [str(emerge_binary), "--ask", "--config", "dev-libs/emergeconfigpkg"],
-        input="\n", capture_output=True, text=True, check=False, env=env,
+    yes = _run_with_ask_pty(
+        emerge_binary, ["--ask", "--config", "dev-libs/emergeconfigpkg"], "\n", env
     )
     assert yes.returncode == 0, yes.stderr
     assert (root / "var/lib/emergeconfigpkg.configured").read_text() == "configured 1.0\n"
