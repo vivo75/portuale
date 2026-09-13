@@ -7,7 +7,7 @@
 //! touching the director or any other component.
 //!
 //! This crate is the contract layer **plus the filesystem-backed
-//! implementations the production paths run through**: the traits, their
+//! implementations those contracts name**: the traits, their
 //! portuale/portage-repo implementations, the `Director` wiring struct
 //! (whose delegation methods route every stage through its slots), and
 //! the tests that pin both the contract shape and the backed
@@ -23,7 +23,7 @@
 //! | Slot | Real Portage | Portuale implementation |
 //! |------|--------------|--------------------------|
 //! | Solver | `_emerge/depgraph.py` (`depgraph` class) + `_emerge/resolver/backtracking.py` | `portage_repo::Resolver` (`BacktrackingResolver`, via `active_resolver()`) |
-//! | PkgDatabase (vdb/edb/bintree) | `portage/dbapi/{vartree,porttree,bintree}.py` (subclasses of `dbapi`) | `VdbReader` (filesystem vdb read side, live on the resolve/unmerge paths) / `MemoryDb` (in-memory snapshot, real `FakeVartree.py`) |
+//! | PkgDatabase (vdb/edb/bintree) | `portage/dbapi/{vartree,porttree,bintree}.py` (subclasses of `dbapi`) | `VdbReader` (filesystem vdb read side; exercised through `Director`'s test wiring -- production depclean/unmerge still read `portage_repo` directly) / `MemoryDb` (in-memory snapshot, real `FakeVartree.py`) |
 //! | RepoCache (md5-cache backends) | `portage/cache/template.py::database` (flat_hash/sqlite/anydbm/volatile) | `Md5Cache` (flat file, real `flat_hash.py`) / `VolatileCache` (in-memory, real `volatile.py`) |
 //! | BinpkgFetch | `portage/package/ebuild/fetch.py` + `_emerge/*binpkg*` | `WgetFetcher` (real `wget` transport, shared `portage_fetch::download_via_wget` with `portuale::fetch`) + `portage_repo` remote binpkg index |
 //! | MergeEngine | `_emerge/MergeListItem.py` dispatch + `_emerge/PackageMerge.py` / `EbuildMerge.py` / `vartree.py::dblink.merge` | `SourceMergeEngine` (`"ebuild"` arm) / `BinaryMergeEngine` (`"binary"` arm) kind routing + the binary crate's `RealSourceEngine`/`RealBinaryEngine` adapters executing through the seam |
@@ -48,9 +48,11 @@
 //! algorithm a fixed seam to plug into. Slots whose production path runs
 //! through the trait (`SchedulerPolicy` via `run_build_scheduler`,
 //! `MergeEngine` via the merge dispatch, `NewsSelector` via
-//! `--check-news`, `PackagesDb` via the unmerge/depclean reads) prove the
-//! seam carries real traffic; the rest stay swappable behind `Director`'s
-//! delegation methods until their second algorithm lands.
+//! `--check-news`) prove the seam carries real traffic; the rest stay
+//! swappable behind `Director`'s delegation methods until their second
+//! algorithm lands. (`Fetcher`'s transport is shared with
+//! `portuale::fetch` via `portage_fetch::download_via_wget`, but the
+//! trait itself is not yet dispatched on the production path.)
 
 #![deny(missing_docs)]
 

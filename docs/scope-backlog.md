@@ -568,20 +568,23 @@ open for the emerge codepath (the other Part 2 sections) is open for
 **`mrg-director`** (eight-slot contract layer, "Section H complete"):
 `Resolver`, `PackagesDb`, `RepoCache`, `Fetcher`, `MergeEngine`,
 `BinpkgIndex`, `NewsSet`, `SchedulerPolicy` — traits + ≥1 impl each.
-**Wired into real paths (2026-09-10, Tier 2.28):** `SchedulerPolicy`
-(via `run_build_scheduler`, as before), `MergeEngine` (the binary
-crate's `SourceEngine`/`BinaryEngine` adapters execute every
+**Production traffic (Tier 2.28, 2026-09-10; re-verified 2026-09-13):**
+`SchedulerPolicy` (via `run_build_scheduler`), `MergeEngine` (the
+binary crate's `SourceEngine`/`BinaryEngine` adapters execute every
 `run_merge_plan` unit and the serial source-merge loop through the
 seam), `NewsSet` (binary-crate `FilesystemNews` evaluates every
-`--check-news` repo through the seam), `PackagesDb` (`VdbReader` reads
-the vdb for real -- versions highest-first, CONTENTS paths, recomputed
-reverse dependents), `Fetcher` (`WgetFetcher` runs the shared
-`portage_fetch::download_via_wget` transport; Manifest verification
-stays at the `fetch_src_uri` call site, the seam's documented
-narrowing). `RepoCache`/`BinpkgIndex` were already real delegations to
-`portage_repo` reads and gain `Director`-level methods; their
-resolve-path call sites stay direct (the trait lives above the crate
-that resolves). `Fetcher` / `NewsSet` are permanent singles by design.
+`--check-news` repo through the seam). `Fetcher` shares the
+`portage_fetch::download_via_wget` transport with `portuale::fetch`
+(Manifest verification stays at the `fetch_src_uri` call site, the
+seam's documented narrowing), but the trait itself is not yet dispatched
+on the production path. `PackagesDb` (`VdbReader`), `RepoCache` and
+`BinpkgIndex` are real implementations over `portage_repo` reads
+(`installed_contents_files`/`installed_reverse_dependents` are called
+only by `VdbReader`), but their production call sites stay direct --
+`VdbReader`/`WgetFetcher`/`PkgdirBinIndex` are referenced only inside
+`rust/mrg-director/src/lib.rs` and its tests, and `Director` is
+test-only. Tracking: `backlog-tasks.md` #28. `Fetcher` / `NewsSet` are
+permanent singles by design.
 
 **Hard invariant: `mrg` is portuale-only — no portage counterpart, no
 Python reference.**
