@@ -233,12 +233,10 @@ pub fn run(args: &[String]) -> ExitCode {
             || ebuild_package::is_real_package_command(cmd)
     }) {
         let root = portage_repo::root_from_env();
-        // Real portage's own make.globals default -- see
-        // ebuild_phases::run_commands's own doc comment for why this is
-        // read here, at the CLI boundary, rather than internally.
-        let portage_tmpdir = std::env::var_os("PORTAGE_TMPDIR")
-            .map(std::path::PathBuf::from)
-            .unwrap_or_else(|| std::path::PathBuf::from("/var/tmp/portage"));
+        // Real portage's own make.globals default is `/var/tmp` (the
+        // builddir adds `portage/<cat>/<pf>` itself); see
+        // `portage_repo::portage_tmpdir_from_env`'s own doc comment.
+        let portage_tmpdir = portage_repo::portage_tmpdir_from_env();
         // Same env-var-not-full-config-resolution shortcut as
         // PORTAGE_TMPDIR above -- real make.globals's own defaults (see
         // ebuild_merge::MergeOptions's own Default impl) apply when

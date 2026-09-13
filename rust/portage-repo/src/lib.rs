@@ -784,6 +784,39 @@ pub fn root_from_env() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("/"))
 }
 
+/// Real `cnf/make.globals:35`'s own `PORTAGE_TMPDIR="/var/tmp"` -- the
+/// fallback when neither the calling environment nor the resolved config
+/// sets one. Real `doebuild_environment()` builds the per-package
+/// `${PORTAGE_TMPDIR}/portage/${CATEGORY}/${PF}` on top of this value
+/// (`doebuild.py:504-524`) -- the double `portage/portage/` builddir bug
+/// `TEST/findings/l2.md` "#38 recon" (`l2-gpkg-dostrip-splitdebug` S0)
+/// traced to this boundary defaulting to `/var/tmp/portage` instead.
+pub const PORTAGE_TMPDIR_DEFAULT: &str = "/var/tmp";
+
+/// `PORTAGE_TMPDIR` for a CLI boundary with no resolved config
+/// (`ebuild <file>`, `execute_unmerge`, `emerge --regen`): the calling
+/// environment (real's highest config layer) if set, else real's own
+/// `make.globals` default.
+pub fn portage_tmpdir_from_env() -> PathBuf {
+    std::env::var_os("PORTAGE_TMPDIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(PORTAGE_TMPDIR_DEFAULT))
+}
+
+/// The resolved config's own `PORTAGE_TMPDIR` scalar (`make.globals` +
+/// profile chain + `make.conf`, folded into `Config::other_vars`), else
+/// real's default. Real's calling environment is the highest config
+/// layer, so the CLI boundaries apply [`portage_tmpdir_from_env`]'s
+/// precedence on top of this.
+pub fn portage_tmpdir_from_config(config: &portage_profile::Config) -> PathBuf {
+    config
+        .other_vars
+        .get("PORTAGE_TMPDIR")
+        .filter(|v| !v.is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(PORTAGE_TMPDIR_DEFAULT))
+}
+
 /// `--root-deps`'s own real running-root default: real `ESYSROOT`
 /// resolves to the real *build machine's* own `/` whenever `SYSROOT` is
 /// left unset (see `running_root_satisfies_atom`'s own doc comment for
@@ -20126,6 +20159,35 @@ mod tests {
             accept_keywords: HashSet::from(["amd64".to_string()]),
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn portage_tmpdir_comes_from_the_resolved_scalar_then_the_make_globals_default() {
+        // #38 S0: real `make.globals:35` is `PORTAGE_TMPDIR="/var/tmp"`.
+        // portuale's CLI boundaries defaulted to `/var/tmp/portage` and
+        // then appended `portage/<cat>/<pf>`, doubling the component; the
+        // DWARF `DW_AT_comp_dir` (and therefore the salted `.build-id`)
+        // diverged from real for every compiled fixture.
+        let mut config = test_config();
+        assert_eq!(
+            portage_tmpdir_from_config(&config),
+            PathBuf::from("/var/tmp")
+        );
+        config
+            .other_vars
+            .insert("PORTAGE_TMPDIR".to_string(), "/conf/tmp".to_string());
+        assert_eq!(
+            portage_tmpdir_from_config(&config),
+            PathBuf::from("/conf/tmp")
+        );
+        // A set-but-empty scalar falls back to the real default.
+        config
+            .other_vars
+            .insert("PORTAGE_TMPDIR".to_string(), String::new());
+        assert_eq!(
+            portage_tmpdir_from_config(&config),
+            PathBuf::from("/var/tmp")
+        );
     }
 
     fn masters_test_root(name: &str) -> PathBuf {

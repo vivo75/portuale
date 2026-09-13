@@ -4167,9 +4167,7 @@ fn execute_unmerge(
     debug: bool,
     color: &Colorizer,
 ) -> ExitCode {
-    let portage_tmpdir = std::env::var_os("PORTAGE_TMPDIR")
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(|| std::path::PathBuf::from("/var/tmp/portage"));
+    let portage_tmpdir = portage_repo::portage_tmpdir_from_env();
     let options = ebuild_merge::MergeOptions::from_env(shell, debug);
     // Real `dblink._pre_unmerge_backup`: `FEATURES=unmerge-backup` -> a
     // `quickpkg` of each package before it's removed.
@@ -6736,7 +6734,7 @@ fn run_info(
         println!();
         let portage_tmpdir = std::env::var_os("PORTAGE_TMPDIR")
             .map(std::path::PathBuf::from)
-            .unwrap_or_else(|| std::path::PathBuf::from("/var/tmp/portage"));
+            .unwrap_or_else(|| portage_repo::portage_tmpdir_from_config(config));
         for pkg in &pkgs {
             // Real `action_info`: header + `pkg_use_display` line (+ the
             // installed-only `mydesiredvars` diff), then two blank lines,
@@ -7013,9 +7011,7 @@ fn run_config_action(
     }
     println!();
 
-    let portage_tmpdir = std::env::var_os("PORTAGE_TMPDIR")
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(|| std::path::PathBuf::from("/var/tmp/portage"));
+    let portage_tmpdir = portage_repo::portage_tmpdir_from_env();
     let options = ebuild_merge::MergeOptions::from_env(shell, debug);
     let scratch = portage_tmpdir.join("portage").join("_config_src");
     let rc = match ebuild_merge::run_vdb_saved_env_phase(
@@ -9859,7 +9855,7 @@ pub fn run(args: &[String]) -> ExitCode {
     if resume {
         let portage_tmpdir = std::env::var_os("PORTAGE_TMPDIR")
             .map(std::path::PathBuf::from)
-            .unwrap_or_else(|| std::path::PathBuf::from("/var/tmp/portage"));
+            .unwrap_or_else(|| portage_repo::portage_tmpdir_from_config(&config));
         return run_resume(
             &root,
             &config_root,
@@ -11730,7 +11726,7 @@ pub fn run(args: &[String]) -> ExitCode {
             package_options_from_env(shell, debug, Some(&config_features_string(&config)));
         let portage_tmpdir = std::env::var_os("PORTAGE_TMPDIR")
             .map(std::path::PathBuf::from)
-            .unwrap_or_else(|| std::path::PathBuf::from("/var/tmp/portage"));
+            .unwrap_or_else(|| portage_repo::portage_tmpdir_from_config(&config));
         let mut merge_options = ebuild_merge::MergeOptions::from_env(shell, debug);
         // The compiler / make flags real portage puts in every build
         // phase's environment, from the resolved config (make.conf +

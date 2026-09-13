@@ -184,8 +184,9 @@
 //     arbitrary standalone ebuild file, not necessarily one that's part
 //     of a configured, md5-cache-indexed repo, so this mirrors real
 //     `_parse_eapi_ebuild_head` instead.
-//   - `PORTAGE_TMPDIR` defaults to `/var/tmp/portage` (real portage's own
-//     `make.globals` default) but is overridable via the `PORTAGE_TMPDIR`
+//   - `PORTAGE_TMPDIR` defaults to `/var/tmp` (real portage's own
+//     `make.globals` default; the builddir adds `portage/<cat>/<pf>`
+//     itself) but is overridable via the `PORTAGE_TMPDIR`
 //     environment variable -- portuale has no make.conf-reading path
 //     into `ebuild.rs` at all yet, so an env var is the only override
 //     mechanism, the same "env var, not full config resolution"
@@ -3141,7 +3142,8 @@ async fn run_commands_async(
 /// `rt`, which is the same thing portuale rediscovered the hard way).
 ///
 /// `PORTAGE_TMPDIR` (real portage's own `make.globals` default:
-/// `/var/tmp/portage`) is read by the caller, not internally here --
+/// `/var/tmp`; the builddir adds `portage/<cat>/<pf>` on top) is read
+/// by the caller, not internally here --
 /// deliberately, so tests can pass a distinct value directly rather than
 /// mutating process-global environment state (`std::env::set_var` is
 /// unsound to call from parallel test threads), the same "env var read

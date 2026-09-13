@@ -177,9 +177,7 @@ pub fn run(
         }
     };
 
-    let portage_tmpdir = std::env::var_os("PORTAGE_TMPDIR")
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(|| std::path::PathBuf::from("/var/tmp/portage"));
+    let portage_tmpdir = portage_repo::portage_tmpdir_from_env();
 
     // Real `MetadataRegen._iter_metadata_processes`: iterate `cp_all()`
     // and, per `cat/pkg`, every ebuild version.
