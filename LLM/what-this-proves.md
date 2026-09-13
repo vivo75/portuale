@@ -16300,5 +16300,146 @@ done
 
 Live (`TEST/logs/l2-20260913T182502Z`): the porttest track is green with 0 unexplained (cross-install 95 hard findings, all explained; control 0/0), and the portuale-built `porttest/docs` archive matches the portage-built pair exactly — `USE="abi_x86_64 amd64 elibc_glibc kernel_linux"`, the resolved `FEATURES` incremental list (now carrying `binpkg-docompress`/`binpkg-dostrip`, which the raw env never had), `SLOT=0`, and a normalised `environment.bz2` equal to real's with no allowlist row; `.keep_porttest_emptydirs-0` also matches. The two build modes agree: a `--buildpkgonly` and a `-b` archive of the same fixture compare `gpkg-diff: mode=strict hard=0 soft=0` (`TEST/logs/_l2-b-vs-B/`). On the real L1 set (`TEST/logs/l2-20260913T174940Z`), oniguruma installs `/usr/lib64/libonig.so.5.5.0` + `/usr/lib64/pkgconfig/oniguruma.pc` (before #37: `/usr/lib/...`, no `MULTILIB_ABIS`/`DEFAULT_ABI`/`LIBDIR_*`, so `toolchain-funcs::get_libdir` fell back to `lib` and jq's `econf` could not find it), jq configures, and all 18 closure packages build under portuale; `SOURCE_DATE_EPOCH` flows from `make.conf` through the same builder (L3 G0.6, unit-pinned). The remaining L2 real-set blockers are no longer env completeness: `dostrip`/`splitdebug`/`docompress` (#38) and the gpkg metadata/`Packages`-index gaps (#39). Full slice record: `docs/037_Build-phase-env-completeness.plan.md`; per-finding evidence and commands: `TEST/findings/l2.md` S5.
 
+### Packaging transforms: `dostrip` / `splitdebug` / `docompress` now match real byte-for-byte (backlog #38 S1–S3, 2026-09-13)
+
+Portuale already ran the real transform code — `install_qa_check`
+(`misc-functions.sh:147-152,239-250`) has the `ecompress` and `estrip`
+gates, and `run_commands_async` runs it after every successful `install`
+chain. Two things were missing: #37's resolved phase env (now landed, so
+the default-on `binpkg-docompress`/`binpkg-dostrip` gates fire), and the
+right `PORTAGE_TMPDIR`. The boundary defaulted to `/var/tmp/portage` and
+then appended `portage/<cat>/<pf>`, doubling the component; real
+`make.globals:35` is `/var/tmp`. That changed the DWARF `DW_AT_comp_dir`,
+`debugedit`'s salted `.build-id` and every compiled payload. Fixed at the
+boundary (`portage_repo::portage_tmpdir_from_env`/`_from_config`:
+calling env → resolved config scalar → `/var/tmp`), with a unit test.
+Runnable, live-verified:
+
+```sh
+L2_REBUILD=1 TEST/run/l2-portuale-builder.sh TEST/atomlists/l1-porttest.txt   # rc 0
+S=$(mktemp -d)
+for w in portage portuale; do
+  tar xOf TEST/logs/_l2-pkgcache-$w/porttest/splitdebug/splitdebug-1.0-1.gpkg.tar \
+    splitdebug-1.0-1/image.tar.zst | zstd -dc | tar -xC $S/$w
+done
+diff <(cd $S/portage && find image | LC_ALL=C sort) \
+     <(cd $S/portuale && find image | LC_ALL=C sort)      # identical
+sha256sum $S/portage/image/usr/lib/debug/usr/bin/pt-splitdebug.debug \
+          $S/portuale/image/usr/lib/debug/usr/bin/pt-splitdebug.debug
+```
+
+Live (`TEST/logs/l2-20260913T191450Z`, porttest track): 0 unexplained;
+the portage-built and portuale-built archives differ only in the filed
+#39 metadata members. `porttest/splitdebug` carries the 2026-09-08
+oracle's own build-ids (`7c/f6c1b1…`, `e8/95ec8e…`), `.debug` objects and
+sha256s; `porttest/setuid` is back to 14384 B/binary; `porttest/docs`
+ships `BIG.txt.bz2` with `small.txt` plain and `html/` skipped. New
+fixture `porttest/restrict-strip` (`RESTRICT=strip`) pins the ungradable
+inverse: even with `FEATURES=splitdebug` on, both PMs ship the identical
+unstripped binary and no `.debug` object (`estrip`'s
+`has_restriction[strip]` skip). Host end-to-end tests run the real
+`ecompress` through the default `bash` backend
+(`install_qa_check_docompress_compresses_docs_and_repairs_symlinks`, plus
+`emerge dev-libs/doccompresspkg` in `tests/test_portuale.py`): the
+compressed `.bz2` is in `${D}`, in the merged tree and in `CONTENTS`, and
+`ecompress`'s `fix_symlinks` repair of a link into a compressed doc is
+pinned. The only transform allowlist entries left are one narrowed
+`porttest/setuid` `.build-id` link race (real disagrees with itself
+between runs); an `--shell brush` smoke shows the transforms work under a
+brush parent for a non-compiled fixture, while a compiled fixture no-ops
+inside brush before `estrip` is reached — a brush-backend gap filed
+under the brush-pin workflow (`backlog-tasks.md` #6), not a transform
+bug. Slice record: `docs/038_Packaging-transforms.plan.md`; per-finding
+evidence: `TEST/findings/l2.md` "#38 S1/S2/S3". S4 (`instprep`) and S5
+(closeout) follow below.
+
+### Merge-time `instprep`: the transforms also run when the archive is consumed (backlog #38 S4–S5, 2026-09-13)
+
+Portuale's binpkgs now stay byte-identical to real's in *both* merge
+directions. Real runs `instprep` as the first step of every merge
+(`dblink.treewalk()` → `doebuild_environment(..., "instprep")`), before
+`INSTALL_MASK`/collision-protect/`pkg_preinst`; `__dyn_instprep`
+(`misc-functions.sh:265-308`) applies `ecompress`/`estrip` iff
+`PORTAGE_COMPRESS` is set and `binpkg-docompress`/`binpkg-dostrip` are
+*absent* — the complement of the package-time gates — and is idempotent
+via `.instprepped`. `ebuild_phases::run_instprep` now invokes that same
+vendored function with the resolved phase env at real's position: first
+in `merge_after_install` (every source merge) and after `pkg_setup` in
+`merge_binpkg` (every binary merge), with binary merges seeding
+`${T}/environment` from the archive's `environment.bz2` plus
+`EMERGE_FROM`/`MERGE_TYPE=binary`. No transform logic in Rust, no
+vendored `bin/*` edited; under the default `FEATURES` the script's gates
+are false, so it is a near no-op. Runnable, live-verified:
+
+```sh
+TEST/run/l2-instprep-repro.sh      # rc 1 before, rc 0 after
+L2_REBUILD=1 TEST/run/l2-portuale-builder.sh TEST/atomlists/l1-porttest.txt   # rc 0
+A=TEST/logs/_l2-pkgcache-portuale/porttest/docs/docs-1.0-1.gpkg.tar
+tar xOf "$A" docs-1.0-1/image.tar.zst | zstd -dc | tar tv | grep -E 'BIG|small|pt\.'
+TEST/run/l1-merge-from-binpkg.sh TEST/atomlists/l1-porttest.txt              # rc 0
+```
+
+Live: the S4 repro (`TEST/logs/l2-instprep-20260913T201638Z`, both
+`FEATURES="-binpkg-dostrip -binpkg-docompress"` cells source and `-B`
+→`-K`, one container per PM) is identical between PMs — unstripped
+15424 B archives both strip at merge, plain `BIG.txt` archives both
+compress. S5's fresh runs close the track: L2
+`TEST/logs/l2-20260913T203727Z` rc 0 with 0 unexplained (cross-install
+67/67 explained, control 0/0) and L1 `TEST/logs/l1-20260913T204335Z`
+rc 0 (0 hard findings, both PMs merge all 10 fixtures). The real set
+(`TEST/logs/l2-20260913T204249Z`, deep/payload-tolerant) builds all 19
+binpkgs with both PMs and stops exactly where #37 left it — the filed
+#39 metadata gaps (`l2-gpkg-dep-metadata-rewrite`) and the test-bed
+`l2-binpkg-gpg-check`, now backlog #43 — with no env or transform row.
+The transforms' allowlists therefore hold only the one genuinely
+ungradable `porttest/setuid` build-id link race (real disagrees with
+itself between runs; hit again in S5), and the fixture `README.md`/
+ebuild `doman`-compressed claim was corrected (`pt.1` is 33 B, plain
+under `PORTAGE_DOCOMPRESS_SIZE_LIMIT=128`). Slice record:
+`docs/038_Packaging-transforms.plan.md`; per-finding evidence:
+`TEST/findings/l2.md` "#38 S4/S5".
+
+### `emerge` cleans the build directory like real (backlog #42, 2026-09-13)
+
+A build-directory lifecycle gap found while proving #38 S4 is closed:
+real `_emerge/EbuildBuild._start_pre_clean` runs the `clean` phase
+(`bin/ebuild.sh clean` → `__dyn_clean`) **before every build**, and
+`dblink.merge()`'s tail runs it after every successful merge unless
+`FEATURES=noclean` (plus `_buildpkgonly_success_hook_exit` after a
+`--buildpkgonly` package and `_emerge/Binpkg` before a binary unpack).
+Portuale ran none of them, so a second build in the same
+`${PORTAGE_BUILDDIR}` saw the stale `.installed` marker and silently
+skipped `install` — exactly how the #38 S4 repro's `-B` repackaged an
+already-`instprep`ped (stripped) image and its `-K` merge then died on
+`debuglink section already exists`. `ebuild_phases::run_clean` now
+invokes that same vendored phase at real's positions: before the
+`install` chain in `merge_one_source_entry`/`build_one_source_entry`/
+`run_buildpkgonly`, unconditionally after a successful
+`--buildpkgonly` package, and after a successful merge unless
+`FEATURES=noclean` (`run_merge` and the scheduler's
+`merge_one_built_entry`); `run_qmerge` stays clean-free because real
+`doebuild qmerge` implies `noclean`. The clean also forced portuale's
+`elog` flush to real's position — per package inside the merge, before
+the clean (`ebuild_merge::process_merge_elog`), instead of a batch that
+re-scanned `${T}` after the whole run. No phase logic in Rust, no
+vendored `bin/*` edited. Runnable, live-verified:
+
+```sh
+TEST/run/l2-instprep-repro.sh                                    # rc 0
+python3 -m pytest tests/test_portuale.py -q -k pre_cleans_a_dirty
+```
+
+The container repro's `bin` cell used to `rm -rf /var/tmp/portage/porttest`
+before `-B` to emulate real's pre-clean; the workaround is gone and the
+run is green (`TEST/logs/l2-instprep-20260913T222526Z`, both cells
+identical between PMs — the snapshot also matches every `pt-*` target
+now, so the known `estrip` build-id link race cannot flip it). On the
+host, `test_emerge_pre_cleans_a_dirty_builddir_before_rebuilding` pins
+the discriminator end-to-end: a `FEATURES=noclean` merge keeps
+`.installed`, the staged `${D}` is then tampered with, and the next
+`emerge` must rebuild and land the real file (a marker-skipped install
+would merge the stale image instead) and post-clean the builddir.
+Evidence: `TEST/findings/l2.md` "#42".
+
 # # required by dev-libs/useflagpkg[-foo] (argument)
 # == sqlite
