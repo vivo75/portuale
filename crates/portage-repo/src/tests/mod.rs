@@ -2285,6 +2285,7 @@ mod depclean;
 mod direct_solve;
 mod eliminate;
 mod entry;
+mod env_roots;
 mod feedback;
 mod force_scan;
 mod graph;
