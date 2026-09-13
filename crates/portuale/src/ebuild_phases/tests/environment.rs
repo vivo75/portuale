@@ -127,3 +127,46 @@ fn compute_environment_replaces_a_stale_plain_filesdir_with_the_link() {
     );
     let _ = std::fs::remove_dir_all(&tmp);
 }
+
+/// Ports Portage's `_prepare_fake_distdir`: entries that are not a
+/// symlink named in `A` are removed and wrong-target symlinks recreated.
+#[test]
+fn prepare_fake_distdir_prunes_and_relinks_like_portage() {
+    use std::os::unix::fs::symlink;
+    let ebuild_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../fixtures/repo/dev-libs/phasepkg/phasepkg-1.0.ebuild");
+    let portage_tmpdir = TempDir::new(&format!(
+        "ebuild-phases-test-{}-prep-fake",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&portage_tmpdir);
+    let env = compute_environment(&ebuild_path, &portage_tmpdir).unwrap();
+    let fake = env.fake_distdir();
+    std::fs::create_dir_all(fake.join("stray-dir/inner")).unwrap();
+    std::fs::write(fake.join("stray-file"), b"x").unwrap();
+    symlink("/real/stale", fake.join("stale")).unwrap();
+    symlink("/old/wrong", fake.join("wrong")).unwrap();
+    symlink("/real/keep", fake.join("keep")).unwrap();
+    let before = std::fs::symlink_metadata(fake.join("keep")).unwrap();
+
+    let alist = vec!["keep".to_string(), "wrong".to_string(), "new".to_string()];
+    prepare_fake_distdir(&env, Path::new("/real"), &alist).unwrap();
+
+    let mut names: Vec<String> = std::fs::read_dir(&fake)
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    names.sort();
+    assert_eq!(names, ["keep", "new", "wrong"]);
+    for x in ["keep", "new", "wrong"] {
+        assert_eq!(
+            std::fs::read_link(fake.join(x)).unwrap(),
+            Path::new("/real").join(x)
+        );
+    }
+    use std::os::unix::fs::MetadataExt;
+    let after = std::fs::symlink_metadata(fake.join("keep")).unwrap();
+    assert_eq!(before.ino(), after.ino());
+
+    let _ = std::fs::remove_dir_all(&portage_tmpdir);
+}

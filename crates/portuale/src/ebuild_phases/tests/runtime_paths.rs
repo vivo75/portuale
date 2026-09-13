@@ -1,5 +1,35 @@
 use super::*;
 
+/// `extra_env` `FEATURES` is exported last so it wins over the
+/// process-env base.
+#[test]
+fn phase_setup_script_exports_extra_env_features_last() {
+    let ebuild = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../fixtures/repo/dev-libs/phaseenvpkg/phaseenvpkg-1.0.ebuild");
+    let portage_tmpdir = TempDir::new("ebuild-phases-test-setup-script").keep();
+    let env = compute_environment(&ebuild, &portage_tmpdir).unwrap();
+    let script = phase_setup_script(PhaseSetupScriptArgs {
+        env: &env,
+        root: Path::new("/"),
+        ebuild_phase_value: "install",
+        debug: false,
+        bin_dir: bin_dir().unwrap(),
+        helpers_dir: &bin_dir().unwrap().join("ebuild-helpers"),
+        config_root: Path::new("/dev/null/no-config-root"),
+        extra_env: &[("FEATURES".to_string(), "resolved one".to_string())],
+    });
+    let features: Vec<&str> = script
+        .lines()
+        .filter(|l| l.starts_with("export FEATURES="))
+        .collect();
+    assert!(!features.is_empty(), "no FEATURES export in script");
+    assert_eq!(
+        *features.last().unwrap(),
+        "export FEATURES='resolved one'",
+        "the extra_env FEATURES must be exported last to win"
+    );
+}
+
 #[test]
 fn repo_root_for_finds_the_nearest_ancestor_repo_root() {
     let tmp = TempDir::new("ebuild-phases-test-repo_root_for_finds").keep();

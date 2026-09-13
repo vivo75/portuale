@@ -42,3 +42,26 @@ fn network_sandbox_exempt_matches_portage_doebuild_spawns_own_formula() {
     // USE-conditional groups are already reduced away upstream.
     assert!(!network_sandbox_exempt("unpack", "", "foo? ( live )"));
 }
+
+/// The phase-execution gates read the resolved `FEATURES` from
+/// `extra_env`, never the raw process env.
+#[test]
+fn feature_gates_use_the_resolved_features_string() {
+    assert!(!feature_token_present("buildpkg", "sandbox"));
+    assert!(feature_token_present("sandbox usersandbox", "sandbox"));
+    assert!(!network_sandbox_requested("distlocks"));
+    assert!(network_sandbox_requested("network-sandbox"));
+    assert!(!fs_sandbox_requested(""));
+    assert!(fs_sandbox_requested("usersandbox"));
+    assert_eq!(
+        features_string(&[("FEATURES".to_string(), "".to_string())]),
+        ""
+    );
+    assert_eq!(
+        features_string(&[
+            ("FEATURES".to_string(), "raw".to_string()),
+            ("FEATURES".to_string(), "resolved".to_string()),
+        ]),
+        "resolved"
+    );
+}

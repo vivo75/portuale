@@ -1,6 +1,23 @@
 use super::*;
 
 #[test]
+fn buildpkg_comes_from_the_cli_then_the_resolved_features() {
+    // Portage: create_depgraph_params.py. An explicit CLI flag wins over FEATURES.
+    let mut config = portage_profile::Config::default();
+    config.other_vars.insert(
+        "FEATURES".to_string(),
+        "buildpkg binpkg-multi-instance".to_string(),
+    );
+    assert!(buildpkg_from_config(None, &config));
+    assert!(!buildpkg_from_config(Some(false), &config));
+    assert!(buildpkg_from_config(Some(true), &config));
+    let mut off = portage_profile::Config::default();
+    off.other_vars
+        .insert("FEATURES".to_string(), "-buildpkg sandbox".to_string());
+    assert!(!buildpkg_from_config(None, &off));
+}
+
+#[test]
 fn shell_split_handles_quotes_and_escapes() {
     assert_eq!(
         shell_split("ionice -c 3 -p ${PID}"),

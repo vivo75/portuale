@@ -1,5 +1,23 @@
 use super::*;
 
+/// Every brush `export` value is single-quoted, so config-derived
+/// values can neither word-split nor command-substitute.
+#[test]
+fn shell_single_quote_neutralises_every_shell_metacharacter() {
+    assert_eq!(shell_single_quote("plain"), "'plain'");
+    assert_eq!(shell_single_quote("a b"), "'a b'");
+    assert_eq!(shell_single_quote("a'b"), "'a'\\''b'");
+    assert_eq!(
+        shell_single_quote("$(touch /tmp/pwned) `id` \\ \" $HOME"),
+        "'$(touch /tmp/pwned) `id` \\ \" $HOME'"
+    );
+    assert_eq!(shell_single_quote(""), "''");
+    assert_eq!(
+        shell_single_quote("-O2 -DMSG='hi'\n-Wl,-z,now"),
+        "'-O2 -DMSG='\\''hi'\\''\n-Wl,-z,now'"
+    );
+}
+
 #[test]
 fn eclass_locations_value_quotes_the_containing_repo_root() {
     // Canonicalized first, as `compute_environment` always hands it.

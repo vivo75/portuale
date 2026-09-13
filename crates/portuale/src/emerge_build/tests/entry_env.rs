@@ -213,3 +213,62 @@ fn entry_build_env_resolves_full_use_expand_and_entry_identity() {
         "repo fallback missing"
     );
 }
+
+/// Once `<eroot>/etc/profile.env` changes after the config was resolved, the
+/// env carries the new variable; untouched, it equals the pre-existing env
+/// exactly. Expected value from Portage source.
+#[allow(clippy::field_reassign_with_default)]
+#[test]
+fn entry_build_env_rereads_profile_env_changed_after_resolve() {
+    let config_root = fixtures_root();
+    let repos = find_repos(&config_root).unwrap();
+    let eroot = tempdir();
+    fs::create_dir_all(eroot.join("etc")).unwrap();
+    fs::write(eroot.join("etc/profile.env"), "export ENVDRELOAD_OLD='x'\n").unwrap();
+    let mut config = portage_profile::Config::default();
+    config.use_tokens = vec!["amd64".to_string()];
+    config.iuse_effective = ["amd64"].iter().map(|s| s.to_string()).collect();
+    config.envd_eroot = eroot.clone();
+    config.envd_raw = "export ENVDRELOAD_OLD='x'\n".to_string();
+    config
+        .envd_vars
+        .insert("ENVDRELOAD_OLD".to_string(), "x".to_string());
+    config
+        .other_vars
+        .insert("ENVDRELOAD_OLD".to_string(), "x".to_string());
+    let mut options = ebuild_merge::MergeOptions {
+        distdir: tempdir(),
+        config_root: config_root.clone(),
+        ..ebuild_merge::MergeOptions::default()
+    };
+    options.build_env = run_wide_phase_env(&config);
+    options.resolved_config = Some(std::sync::Arc::new(config));
+    let entry = source_entry(
+        "archusepkg",
+        PretendOutcome::New {
+            version: "1.0".into(),
+        },
+    );
+    let before = entry_build_env(&options, &entry, &repos);
+    assert_eq!(before, entry_build_env(&options, &entry, &repos));
+    assert!(before.iter().all(|(k, _)| k != "ENVDRELOAD_VAR"));
+
+    // A merge ran `env-update`: the file now carries a new variable.
+    fs::write(
+        eroot.join("etc/profile.env"),
+        "export ENVDRELOAD_OLD='x'\nexport ENVDRELOAD_VAR='1'\n",
+    )
+    .unwrap();
+    let after = entry_build_env(&options, &entry, &repos);
+    let last = |k: &str| {
+        after
+            .iter()
+            .rev()
+            .find(|(n, _)| n == k)
+            .map(|(_, v)| v.as_str())
+    };
+    assert_eq!(last("ENVDRELOAD_VAR"), Some("1"));
+    assert_eq!(last("ENVDRELOAD_OLD"), Some("x"));
+    assert_eq!(last("SLOT"), Some("0"));
+    let _ = fs::remove_dir_all(&eroot);
+}

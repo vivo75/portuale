@@ -66,3 +66,28 @@ fn depend_phase_reduces_restrict_on_the_config_use_set() {
     );
     let _ = std::fs::remove_dir_all(&tmp);
 }
+
+/// The `depend` phase never gets the standalone base env: the loader
+/// short-circuits before any config load.
+#[test]
+fn depend_phase_standalone_base_env_stays_empty_with_a_real_repo() {
+    let ebuild_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../fixtures/repo/dev-libs/phaseenvpkg/phaseenvpkg-1.0.ebuild");
+    let portage_tmpdir = TempDir::new("ebuild-phases-test-depend-base").keep();
+    let env = compute_environment(&ebuild_path, &portage_tmpdir).unwrap();
+    let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures");
+    let (use_str, flags) =
+        phase_standalone_base_env(&env, &fixtures, Path::new("/"), "depend", &[]);
+    assert_eq!(use_str, "", "depend must not get a config-derived USE");
+    assert!(flags.is_empty(), "depend must not get config build vars");
+    // The `extra_env`-carries-USE guard is the same short-circuit.
+    let (use_str, flags) = phase_standalone_base_env(
+        &env,
+        &fixtures,
+        Path::new("/"),
+        "install",
+        &[("USE".to_string(), "confflag".to_string())],
+    );
+    assert_eq!(use_str, "");
+    assert!(flags.is_empty());
+}

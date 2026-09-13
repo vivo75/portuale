@@ -172,6 +172,7 @@ mod collisions;
 #[cfg(any(feature = "vdb-sqlite", feature = "vdb-redb"))]
 mod db_merge;
 mod installed_instance;
+mod options;
 mod plib_merge;
 mod plib_registry;
 mod plib_unmerge;
