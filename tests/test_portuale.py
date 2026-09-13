@@ -2769,6 +2769,55 @@ def test_emerge_atom_without_pretend_really_builds_and_merges_from_source(
     assert world_lines == sorted(world_lines)
 
 
+def test_emerge_atom_docompress_compresses_docs_and_repairs_symlinks(
+    emerge_binary, tmp_path
+):
+    """#38 S1: the real `install_qa_check` `binpkg-docompress` gate
+    (`misc-functions.sh:147-152`) runs real `bin/ecompress` over `${D}`
+    when the phase env carries `PORTAGE_COMPRESS` plus the resolved
+    `FEATURES` token. `dev-libs/doccompresspkg` installs a >128 B doc
+    (`PORTAGE_DOCOMPRESS_SIZE_LIMIT`), a smaller one, and a symlink into
+    the compressed doc: after the merge the big doc must be `BIG.txt.bz2`
+    in both the merged tree and `CONTENTS`, the small one must stay
+    plain, and the link must be repaired to `link-to-big.txt.bz2 ->
+    BIG.txt.bz2`. `FEATURES`/`PORTAGE_COMPRESS` are set on the calling
+    env, real's highest config layer (the fixture root ships no
+    `make.globals`)."""
+    if shutil.which("bzip2") is None:
+        pytest.skip("bzip2 not available on the host")
+    root = tmp_path / "root"
+    shutil.copytree(Path(FIXTURES_ROOT) / "var", root / "var")
+    env = dict(os.environ)
+    env["PORTAGE_CONFIGROOT"] = FIXTURES_ROOT
+    env["ROOT"] = str(root)
+    env["DISTDIR"] = str(Path(FIXTURES_ROOT) / "distfiles")
+    env["PORTAGE_TMPDIR"] = str(tmp_path / "portage-tmpdir")
+    env["PORTAGE_COMPRESS"] = "bzip2"
+    env["FEATURES"] = "binpkg-docompress"
+
+    result = subprocess.run(
+        [str(emerge_binary), "dev-libs/doccompresspkg"],
+        capture_output=True,
+        text=True,
+        check=False,
+        env=env,
+    )
+    assert result.returncode == 0, result.stderr
+    assert ">>> dev-libs/doccompresspkg-1.0 merged." in result.stdout
+
+    docdir = root / "usr/share/doc/doccompresspkg-1.0"
+    assert (docdir / "BIG.txt.bz2").is_file()
+    assert not (docdir / "BIG.txt").exists()
+    assert (docdir / "small.txt").is_file()
+    assert (docdir / "link-to-big.txt.bz2").is_symlink()
+    assert os.readlink(docdir / "link-to-big.txt.bz2") == "BIG.txt.bz2"
+
+    vdb = root / "var/db/pkg/dev-libs/doccompresspkg-1.0"
+    contents = (vdb / "CONTENTS").read_text()
+    assert "/usr/share/doc/doccompresspkg-1.0/BIG.txt.bz2" in contents
+    assert "/usr/share/doc/doccompresspkg-1.0/BIG.txt\n" not in contents
+
+
 def test_emerge_emptytree_without_pretend_really_merges(emerge_binary, tmp_path):
     """`emerge -e/--emptytree` WITHOUT `--pretend` really merges now --
     the contract suite's old `-e without -p is still refused` probe dated

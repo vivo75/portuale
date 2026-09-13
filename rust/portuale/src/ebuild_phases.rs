@@ -4026,6 +4026,75 @@ mod tests {
         let _ = std::fs::remove_dir_all(&portage_tmpdir);
     }
 
+    /// Real, end-to-end proof of the `binpkg-docompress` transform path
+    /// (#38 S1): with `PORTAGE_COMPRESS=bzip2` and `FEATURES=binpkg-
+    /// docompress` in the phase env, real, unmodified `install_qa_check`
+    /// (`misc-functions.sh:147-152`) runs real `bin/ecompress` over
+    /// `${D}` -- the >128 B doc (the `PORTAGE_DOCOMPRESS_SIZE_LIMIT`)
+    /// becomes `BIG.txt.bz2`, the smaller one is untouched, and the
+    /// dangling link into the now-compressed doc is repaired (and
+    /// suffixed) by `ecompress`'s own `fix_symlinks`. Uses the default
+    /// `bash` backend (`ShellBackend::Bash`), the same one a live
+    /// `emerge` runs.
+    #[test]
+    fn install_qa_check_docompress_compresses_docs_and_repairs_symlinks() {
+        if std::process::Command::new("bzip2")
+            .arg("--version")
+            .output()
+            .is_err()
+        {
+            eprintln!("skipping: bzip2 not available on this host");
+            return;
+        }
+        let ebuild_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../fixtures/repo/dev-libs/doccompresspkg/doccompresspkg-1.0.ebuild");
+        let portage_tmpdir = std::env::temp_dir().join(format!(
+            "ebuild-phases-test-{}-docompress",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&portage_tmpdir);
+
+        let extra_env = vec![
+            ("PORTAGE_COMPRESS".to_string(), "bzip2".to_string()),
+            ("FEATURES".to_string(), "binpkg-docompress".to_string()),
+        ];
+        let status = run_commands(
+            &ebuild_path,
+            &["install"],
+            Path::new("/"),
+            &portage_tmpdir,
+            &portage_tmpdir.join("distfiles"),
+            false,
+            Path::new("/dev/null/no-config-root"),
+            ShellBackend::Bash,
+            &extra_env,
+        )
+        .expect("run_commands should not itself error");
+        assert_eq!(status, 0, "install should exit successfully");
+
+        let docdir = portage_tmpdir
+            .join("portage/dev-libs/doccompresspkg-1.0/image/usr/share/doc/doccompresspkg-1.0");
+        assert!(
+            docdir.join("BIG.txt.bz2").is_file(),
+            "a doc above PORTAGE_DOCOMPRESS_SIZE_LIMIT must be compressed"
+        );
+        assert!(
+            !docdir.join("BIG.txt").exists(),
+            "ecompress must remove the uncompressed original"
+        );
+        assert!(
+            docdir.join("small.txt").is_file(),
+            "a doc below the size limit must stay uncompressed"
+        );
+        assert_eq!(
+            std::fs::read_link(docdir.join("link-to-big.txt.bz2")).unwrap(),
+            Path::new("BIG.txt.bz2"),
+            "a symlink into a compressed doc must be repaired and suffixed"
+        );
+
+        let _ = std::fs::remove_dir_all(&portage_tmpdir);
+    }
+
     /// Real, end-to-end proof that `_post_phase_cmds["install"]`
     /// (`EbuildPhase.py:424`/`442-461`) actually runs now: real,
     /// unmodified `bin/misc-functions.sh install_qa_check`'s own real
