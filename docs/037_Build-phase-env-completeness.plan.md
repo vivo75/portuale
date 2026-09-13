@@ -713,6 +713,11 @@ Full evidence and commands: `TEST/findings/l2.md` "S4 — container proof
   --all-targets` 0 warnings, `cargo test --release` green; `python3 -m
   pytest tests -q` 1561 passed / 4 failed = the pre-existing no-TTY
   `--ask`/`pkg_config` set recorded at S1.
+- Owner note: disable the GPG check for binary packages in the test
+  bed, fixing both the container (catalyst `binrepos.conf`
+  `verify-signature = true` + `consume.sh --getbinpkg` fallback) and
+  portuale (`GpgVerify` ignores per-binrepo `verify-signature`) —
+  `TEST/findings/l2.md` `l2-binpkg-gpg-check`. Not #37 scope.
 - Not done in S4 (still open for the DoD): `--buildpkgonly` ≡ `-b`
   metadata comparison and the `SOURCE_DATE_EPOCH` L3 pointer (S5 docs).
 
