@@ -1,12 +1,12 @@
 # Plan: backlog #38 — Packaging transforms: dostrip / splitdebug / docompress (merged)
 
-Status: **in progress — S0–S3 done 2026-09-13** (see §11 and
-`TEST/findings/l2.md` "#38 S1/S2/S3"). The S0 `PORTAGE_TMPDIR` finding
-was fixed as a #37 follow-up (G6). Remaining: S4 (the `instprep`
-decision) and S5 (closeout). **#37, its blocker, landed 2026-09-13**
-— resolved `FEATURES`, `PORTAGE_COMPRESS*`, `USE`, `SLOT` are in the
-phase env now (`037_Build-phase-env-completeness.plan.md`, S0–S5
-complete). Written 2026-09-13 against `main` @ `ec13936`.
+Status: **in progress — S0–S4 done 2026-09-13** (see §11 and
+`TEST/findings/l2.md` "#38 S1/S2/S3/S4"). The S0 `PORTAGE_TMPDIR` finding
+was fixed as a #37 follow-up (G6). S4: the user chose to **implement**
+`instprep` (not file #38b). Remaining: S5 (closeout). **#37, its
+blocker, landed 2026-09-13** — resolved `FEATURES`, `PORTAGE_COMPRESS*`,
+`USE`, `SLOT` are in the phase env now
+(`037_Build-phase-env-completeness.plan.md`, S0–S5 complete). Written 2026-09-13 against `main` @ `ec13936`.
 
 This is the **merge** of three independent drafts —
 `038_Packaging-transforms.{deepseek,musespark,claude}.md` — keeping the
@@ -444,7 +444,7 @@ is touched.
 
 ## 9. Definition of done
 
-- [ ] S0 table + tool table + `instprep` call order cited; expected trees
+- [x] S0 table + tool table + `instprep` call order cited; expected trees
       frozen from the oracle.
 - [x] `l2-gpkg-docompress` closed (S1); `l2-gpkg-dostrip-splitdebug*`
       closed (S2) — each with before/after evidence. (S1 =
@@ -453,11 +453,15 @@ is touched.
       `setuid` build-id race only.)
 - [x] `RESTRICT=strip` cell pinned by a both-PM fixture (S3)
       (`porttest/restrict-strip` in `l2-20260913T191450Z`, strict-clean).
-- [ ] `instprep`: implemented+fixtured **or** #38b filed with repro (S4).
+- [x] `instprep`: implemented+fixtured **or** #38b filed with repro (S4).
+      (Implemented: `ebuild_phases::run_instprep` on every source and
+      binary merge; repro `TEST/run/l2-instprep-repro.sh` green in
+      `l2-instprep-20260913T201638Z`; host e2e both merge kinds.)
 - [ ] No transform reimplemented in Rust; no vendored `bin/*` edited.
 - [ ] L2 porttest 0 unexplained; L1 unchanged; full verification pass
-      green. (L2 porttest 0 unexplained in `l2-20260913T191450Z`; L1 and
-      the full pass are S5's.)
+      green. (Post-S4: L2 `l2-20260913T201941Z` 0 unexplained, L1
+      `l1-20260913T202308Z` 0 hard findings, full pass green; S5 re-runs
+      from a fresh state for closeout.)
 - [ ] Docs updated (S5); no dead allowlist entries.
 
 ## 10. Delegation brief (for subagents)
@@ -545,3 +549,26 @@ ref / backlog id)
   fixtures (incl. `restrict-strip`). The four `--ask` prompt tests that
   had been red on `main` since the 2026-09-04 TTY gate (`7dc0486`) were
   repaired with a pty-stdin helper (own commit).
+
+- **S4 (2026-09-13)** — `instprep` **implemented** (user call, G2).
+  Repro `TEST/run/l2-instprep-repro.sh` (`FEATURES="-binpkg-dostrip
+  -binpkg-docompress"`, `porttest/{docs,setuid}`, source cell + `-B`/`-K`
+  cell, one container per PM): before, real strips/compresses at merge
+  and portuale does not (`l2-instprep-20260913T195828Z`, rc 1). Real
+  position re-read from 3.0.82.2: `instprep` is `treewalk`'s *first* step
+  (before `INSTALL_MASK`/collision-protect/`pkg_preinst`), cmd
+  `misc-functions.sh`. Fix: `ebuild_phases::run_instprep` (vendored
+  `__dyn_instprep`, resolved `build_env`; binary merges seed
+  `${T}/environment` from `environment.bz2` + `EMERGE_FROM/MERGE_TYPE=
+  binary`), called first in `merge_after_install` and after `pkg_setup`
+  in `merge_binpkg`. After: `l2-instprep-20260913T201638Z` rc 0, both
+  archives unstripped 15424 B, both merges strip. Tests: Rust
+  `run_instprep_applies_only_the_complement_of_the_install_qa_gate`,
+  pytest `test_emerge_instprep_compresses_at_merge_for_source_and_binary`.
+  L2 `l2-20260913T201941Z` 80 known / 0 unexplained (= S3); L1
+  `l1-20260913T202308Z` 0 hard (= S3). **Filed backlog #42**: portuale's
+  emerge never runs real's pre-build `clean` (`EbuildBuild.
+  _start_pre_clean`), so a rebuild in a dirty `${PORTAGE_BUILDDIR}` reuses
+  an already-instprepped image (the `-B` archive came out stripped and the
+  `-K` `estrip` died on `debuglink section already exists`); scheduler
+  scope, the repro wipes the builddir between cells.

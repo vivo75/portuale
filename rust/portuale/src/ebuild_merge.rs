@@ -2828,6 +2828,24 @@ fn merge_after_install(
     env: &ebuild_phases::Environment,
     options: &MergeOptions,
 ) -> Result<i32, String> {
+    // Real `dblink.treewalk()` starts with the `instprep` phase, before
+    // anything below -- see `ebuild_phases::run_instprep`.
+    let instprep_status = ebuild_phases::run_instprep(
+        ebuild_path,
+        None,
+        root,
+        portage_tmpdir,
+        &options.build_env,
+        options.debug,
+        &options.config_root,
+        options.shell,
+        options.log_file.as_deref(),
+    )?;
+    if instprep_status != 0 {
+        eprintln!("!!! instprep failed");
+        return Ok(1);
+    }
+
     let ebuild_text = std::fs::read_to_string(&env.ebuild_abs)
         .map_err(|e| format!("{}: {e}", env.ebuild_abs.display()))?;
     let slot = parse_slot(&ebuild_text);
@@ -3448,6 +3466,28 @@ pub fn merge_binpkg(
     let setup_status = run_hook("setup")?;
     if setup_status != 0 {
         return Ok(setup_status);
+    }
+
+    // Real `EbuildMerge` -> `dblink.treewalk()`: the `instprep` phase
+    // runs first, on the extracted image, from the binpkg's saved env
+    // (see `ebuild_phases::run_instprep`). A binpkg without a saved env
+    // gets no phase at all -- the same documented degrade as the hooks.
+    if let Some(ebuild) = &extracted_ebuild {
+        let instprep_status = ebuild_phases::run_instprep(
+            ebuild,
+            Some(&saved_env),
+            root,
+            portage_tmpdir,
+            &options.build_env,
+            options.debug,
+            &options.config_root,
+            options.shell,
+            options.log_file.as_deref(),
+        )?;
+        if instprep_status != 0 {
+            eprintln!("!!! instprep failed");
+            return Ok(1);
+        }
     }
 
     // Real `dblink.treewalk()`: `preinst_mask` + `install_mask_dir` run

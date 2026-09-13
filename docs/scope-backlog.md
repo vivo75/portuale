@@ -681,6 +681,10 @@ remaining blockers are the #38/#39 entries below.
   ebuild-derived `RDEPEND`/`REQUIRES`/`PROVIDES`, the `Packages` index
   `REPO` field, and `NEEDED.ELF.2`'s trailing ELF-class field
   (`l2-needed-elf2-format`).
+- **`emerge` never pre-cleans `${PORTAGE_BUILDDIR}`** (backlog #42,
+  found in #38 S4): real runs the `clean` phase before every build; a
+  portuale rebuild in a dirty builddir reuses the already-`instprep`ped
+  image, so a `-B` after a source merge archives stripped binaries.
 - **Degraded consumer env** (`l2-consumes-portuale-env-degraded`,
   MEDIUM): real Portage merging a portuale-built archive runs merge
   phases with `MERGE_TYPE` unset and skips `pkg_pretend`.

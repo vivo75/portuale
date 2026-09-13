@@ -37,7 +37,9 @@
 // `unmerge`). Every other real command (`preinst`/`postinst`/`nofetch`/
 // `depend`/`fetch`/`fetchall`/`digest`/`manifest`/`rpm`/`instprep`/
 // `clean`/`cleanrm`) still falls through to the pre-existing dry-run
-// stub message below unchanged.
+// stub message below unchanged. (`instprep` does run for real inside
+// every `merge`/`qmerge` -- `ebuild_phases::run_instprep`, real
+// `treewalk()`'s first step -- only the standalone command is stubbed.)
 //
 // Exit codes mirror real `ebuild`'s own conventions: 2 for "missing
 // required args" (real bin/ebuild's argparse `parser.error()`), 1 for

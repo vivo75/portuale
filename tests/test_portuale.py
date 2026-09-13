@@ -1880,7 +1880,6 @@ def _real_build_env(tmp_path):
     verification of `ebuild <file> package` and `emerge --buildpkgonly`
     already proved this is safe."""
     env = _fixture_env()
-    env["PORTAGE_TMPDIR"] = str(tmp_path / "portage-tmpdir")
     env["PKGDIR"] = str(tmp_path / "pkgdir")
     return env
 
@@ -2816,6 +2815,77 @@ def test_emerge_atom_docompress_compresses_docs_and_repairs_symlinks(
     contents = (vdb / "CONTENTS").read_text()
     assert "/usr/share/doc/doccompresspkg-1.0/BIG.txt.bz2" in contents
     assert "/usr/share/doc/doccompresspkg-1.0/BIG.txt\n" not in contents
+
+
+def test_emerge_instprep_compresses_at_merge_for_source_and_binary(
+    emerge_binary, tmp_path
+):
+    """#38 S4: real `dblink.treewalk()` runs the `instprep` phase
+    (`misc-functions.sh __dyn_instprep`) on every merge. Under
+    `FEATURES=-binpkg-docompress` the `install_qa_check` gate is off, so
+    the `--buildpkgonly` archive keeps a plain `BIG.txt` and the
+    compression happens at merge time instead -- for a source merge and
+    for a `-K` merge of that archive alike."""
+    import tarfile
+
+    if shutil.which("bzip2") is None:
+        pytest.skip("bzip2 not available on the host")
+    env = dict(os.environ)
+    env["PORTAGE_CONFIGROOT"] = FIXTURES_ROOT
+    env["DISTDIR"] = str(Path(FIXTURES_ROOT) / "distfiles")
+    env["PKGDIR"] = str(tmp_path / "pkgdir")
+    env["BINPKG_FORMAT"] = "gpkg"
+    env["PORTAGE_COMPRESS"] = "bzip2"
+    env["FEATURES"] = "-binpkg-docompress binpkg-dostrip"
+    atom = "dev-libs/doccompresspkg"
+
+    def merge(root, *args):
+        shutil.copytree(Path(FIXTURES_ROOT) / "var", root / "var")
+        result = subprocess.run(
+            [str(emerge_binary), *args, atom],
+            capture_output=True,
+            text=True,
+            check=False,
+            env={**env, "ROOT": str(root), "PORTAGE_TMPDIR": str(root) + "-tmpdir"},
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+        return result
+
+    def assert_compressed_merge(root):
+        docdir = root / "usr/share/doc/doccompresspkg-1.0"
+        assert (docdir / "BIG.txt.bz2").is_file()
+        assert not (docdir / "BIG.txt").exists()
+        assert os.readlink(docdir / "link-to-big.txt.bz2") == "BIG.txt.bz2"
+        contents = (root / "var/db/pkg/dev-libs/doccompresspkg-1.0/CONTENTS").read_text()
+        assert "/usr/share/doc/doccompresspkg-1.0/BIG.txt.bz2 " in contents
+
+    merge(tmp_path / "src-root")
+    assert_compressed_merge(tmp_path / "src-root")
+
+    merge(tmp_path / "build-root", "--buildpkgonly")
+    (archive,) = (tmp_path / "pkgdir").rglob("*.gpkg.tar")
+    with tarfile.open(archive) as outer:
+        image = next(m for m in outer.getnames() if "/image.tar" in m)
+        names = subprocess.run(
+            ["tar", "-tf", "-"],
+            input=_decompressed_member(outer, image),
+            capture_output=True,
+            check=True,
+        ).stdout.decode()
+    assert "image/usr/share/doc/doccompresspkg-1.0/BIG.txt\n" in names
+
+    merge(tmp_path / "bin-root", "--usepkgonly")
+    assert_compressed_merge(tmp_path / "bin-root")
+
+
+def _decompressed_member(outer, name):
+    raw = outer.extractfile(name).read()
+    for tool, suffix in (("zstd", ".zst"), ("xz", ".xz"), ("bzip2", ".bz2"), ("gzip", ".gz")):
+        if name.endswith(suffix):
+            return subprocess.run(
+                [tool, "-dc"], input=raw, capture_output=True, check=True
+            ).stdout
+    return raw
 
 
 def test_emerge_emptytree_without_pretend_really_merges(emerge_binary, tmp_path):

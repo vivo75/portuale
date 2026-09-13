@@ -3446,6 +3446,106 @@ pub(crate) fn run_single_phase(
     })
 }
 
+/// Real `_emerge/BinpkgEnvExtractor`: `${T}/environment` <- the binpkg's
+/// `environment.bz2`, plus the `${T}/environment.raw` marker (see
+/// `run_phase_from_saved_env`).
+fn seed_saved_environment(env: &Environment, saved_env_bz2: &Path) -> Result<(), String> {
+    let dest_env = env.t().join("environment");
+    let out =
+        std::fs::File::create(&dest_env).map_err(|e| format!("{}: {e}", dest_env.display()))?;
+    let status = std::process::Command::new("bzip2")
+        .args(["-d", "-c", "--"])
+        .arg(saved_env_bz2)
+        .stdout(out)
+        .status()
+        .map_err(|e| format!("failed to spawn bzip2: {e}"))?;
+    if !status.success() {
+        let _ = std::fs::remove_file(&dest_env);
+        return Err(format!(
+            "bzip2 failed to decompress {} ({status})",
+            saved_env_bz2.display()
+        ));
+    }
+    std::fs::write(env.t().join("environment.raw"), [])
+        .map_err(|e| format!("{}: {e}", env.t().join("environment.raw").display()))
+}
+
+/// `MERGE_TYPE=binary` (real `_emerge/Binpkg.py:92` +
+/// `doebuild.py:1288` for `tree == "bintree"`): a
+/// `portage_readonly_vars` entry, so it's stripped from the saved
+/// env and must be re-supplied here. Load-bearing for eclasses
+/// that gate build-time work on it -- e.g.
+/// `python-any-r1_pkg_setup` is `[[ ${MERGE_TYPE} != binary ]] &&
+/// python_setup`, so without this a binpkg merge runs
+/// `python_setup` -> `python_check_deps` against BDEPEND that was
+/// never installed (a `--getbinpkg` binary needs no build deps)
+/// and `die`s "No supported Python implementation installed".
+/// `EMERGE_FROM` alone doesn't cover it -- the eclasses check
+/// `MERGE_TYPE`.
+fn binary_merge_env() -> Vec<(String, String)> {
+    vec![
+        ("EMERGE_FROM".to_string(), "binary".to_string()),
+        ("MERGE_TYPE".to_string(), "binary".to_string()),
+    ]
+}
+
+/// Real `dblink.treewalk()`'s first step (`vartree.py:4440-4450`,
+/// `doebuild.py:880` `"instprep": {"cmd": misc_sh}`): the `instprep`
+/// internal phase, `bin/misc-functions.sh __dyn_instprep`, on *every*
+/// merge -- source or binary -- before `INSTALL_MASK`, collision-protect,
+/// `pkg_preinst` or a single file is copied.
+///
+/// All transform logic stays in the vendored script (`misc-functions.sh:
+/// 265-308`): it `ecompress`es iff `PORTAGE_COMPRESS` is set and
+/// `binpkg-docompress` is absent, `estrip`s iff `binpkg-dostrip` is
+/// absent, and is idempotent through `${PORTAGE_BUILDDIR}/.instprepped`.
+/// With the default `FEATURES` both tokens are on, `install_qa_check`
+/// already ran the transforms, and this is a near no-op; it is the only
+/// place they happen under `FEATURES="-binpkg-dostrip
+/// -binpkg-docompress"` (whose archives carry an unstripped image).
+///
+/// `saved_env_bz2`: `Some` for a binary merge -- `${T}/environment` is
+/// seeded from the binpkg's saved env and `EMERGE_FROM`/`MERGE_TYPE=
+/// binary` are set (real `Binpkg` + `BinpkgEnvExtractor`); `None` for a
+/// source merge, whose `${T}/environment` is still the install chain's.
+/// `build_env` is the resolved phase env (`FEATURES`,
+/// `PORTAGE_COMPRESS*`, ...) the gates read.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn run_instprep(
+    ebuild_path: &Path,
+    saved_env_bz2: Option<&Path>,
+    root: &Path,
+    portage_tmpdir: &Path,
+    build_env: &[(String, String)],
+    debug: bool,
+    config_root: &Path,
+    shell: ShellBackend,
+    log_file: Option<&Path>,
+) -> Result<i32, String> {
+    let runtime = shared_runtime()?;
+    runtime.block_on(async {
+        let env = compute_environment(ebuild_path, portage_tmpdir)?;
+        create_directories(&env)?;
+        let mut extra_env = build_env.to_vec();
+        if let Some(saved) = saved_env_bz2 {
+            seed_saved_environment(&env, saved)?;
+            extra_env.extend(binary_merge_env());
+        }
+        run_misc_functions(
+            &env,
+            root,
+            "instprep",
+            "__dyn_instprep",
+            &extra_env,
+            debug,
+            config_root,
+            shell,
+            log_file,
+        )
+        .await
+    })
+}
+
 /// Like `run_single_phase`, but first seeds `${T}/environment` from a
 /// binary package's saved `environment.bz2` so the phase runs against
 /// the package's own build-time bash environment (every phase function,
@@ -3513,42 +3613,9 @@ pub(crate) fn run_phase_from_saved_env(
     runtime.block_on(async {
         let env = compute_environment(ebuild_path, portage_tmpdir)?;
         create_directories(&env)?;
+        seed_saved_environment(&env, saved_env_bz2)?;
 
-        let dest_env = env.t().join("environment");
-        let out =
-            std::fs::File::create(&dest_env).map_err(|e| format!("{}: {e}", dest_env.display()))?;
-        let status = std::process::Command::new("bzip2")
-            .args(["-d", "-c", "--"])
-            .arg(saved_env_bz2)
-            .stdout(out)
-            .status()
-            .map_err(|e| format!("failed to spawn bzip2: {e}"))?;
-        if !status.success() {
-            let _ = std::fs::remove_file(&dest_env);
-            return Err(format!(
-                "bzip2 failed to decompress {} ({status})",
-                saved_env_bz2.display()
-            ));
-        }
-        std::fs::write(env.t().join("environment.raw"), [])
-            .map_err(|e| format!("{}: {e}", env.t().join("environment.raw").display()))?;
-
-        // `MERGE_TYPE=binary` (real `_emerge/Binpkg.py:92` +
-        // `doebuild.py:1288` for `tree == "bintree"`): a
-        // `portage_readonly_vars` entry, so it's stripped from the saved
-        // env and must be re-supplied here. Load-bearing for eclasses
-        // that gate build-time work on it -- e.g.
-        // `python-any-r1_pkg_setup` is `[[ ${MERGE_TYPE} != binary ]] &&
-        // python_setup`, so without this a binpkg merge runs
-        // `python_setup` -> `python_check_deps` against BDEPEND that was
-        // never installed (a `--getbinpkg` binary needs no build deps)
-        // and `die`s "No supported Python implementation installed".
-        // `EMERGE_FROM` alone doesn't cover it -- the eclasses check
-        // `MERGE_TYPE`.
-        let mut extra_env = vec![
-            ("EMERGE_FROM".to_string(), "binary".to_string()),
-            ("MERGE_TYPE".to_string(), "binary".to_string()),
-        ];
+        let mut extra_env = binary_merge_env();
         if let Some(p) = update_env {
             extra_env.push(("PORTAGE_UPDATE_ENV".to_string(), p.display().to_string()));
             if let Some(features) = refresh_features.filter(|f| !f.is_empty()) {
@@ -4091,6 +4158,94 @@ mod tests {
             Path::new("BIG.txt.bz2"),
             "a symlink into a compressed doc must be repaired and suffixed"
         );
+
+        let _ = std::fs::remove_dir_all(&portage_tmpdir);
+    }
+
+    /// #38 S4: the merge-time `instprep` phase (`misc-functions.sh:
+    /// 265-308`) is the complement of the `install_qa_check` gate. With
+    /// `binpkg-docompress` absent the install chain leaves `BIG.txt`
+    /// plain; `run_instprep` with the token present is a no-op (real's
+    /// `! contains_word` gate), and without it compresses the doc and
+    /// repairs the link, then marks `.instprepped` so a re-run skips.
+    #[test]
+    fn run_instprep_applies_only_the_complement_of_the_install_qa_gate() {
+        if std::process::Command::new("bzip2")
+            .arg("--version")
+            .output()
+            .is_err()
+        {
+            eprintln!("skipping: bzip2 not available on this host");
+            return;
+        }
+        let ebuild_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../fixtures/repo/dev-libs/doccompresspkg/doccompresspkg-1.0.ebuild");
+        let portage_tmpdir = std::env::temp_dir().join(format!(
+            "ebuild-phases-test-{}-instprep",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&portage_tmpdir);
+        let no_root = Path::new("/dev/null/no-config-root");
+        let env_with = |features: &str| {
+            vec![
+                ("PORTAGE_COMPRESS".to_string(), "bzip2".to_string()),
+                // `binpkg-dostrip` stays on: this test is about compression.
+                ("FEATURES".to_string(), format!("binpkg-dostrip {features}")),
+            ]
+        };
+
+        let status = run_commands(
+            &ebuild_path,
+            &["install"],
+            Path::new("/"),
+            &portage_tmpdir,
+            &portage_tmpdir.join("distfiles"),
+            false,
+            no_root,
+            ShellBackend::Bash,
+            &env_with("-binpkg-docompress"),
+        )
+        .expect("run_commands should not itself error");
+        assert_eq!(status, 0, "install should exit successfully");
+        let builddir = portage_tmpdir.join("portage/dev-libs/doccompresspkg-1.0");
+        let docdir = builddir.join("image/usr/share/doc/doccompresspkg-1.0");
+        assert!(
+            docdir.join("BIG.txt").is_file(),
+            "install_qa_check must not compress without binpkg-docompress"
+        );
+
+        let instprep = |features: &str| {
+            run_instprep(
+                &ebuild_path,
+                None,
+                Path::new("/"),
+                &portage_tmpdir,
+                &env_with(features),
+                false,
+                no_root,
+                ShellBackend::Bash,
+                None,
+            )
+            .expect("run_instprep should not itself error")
+        };
+
+        assert_eq!(instprep("binpkg-docompress"), 0);
+        assert!(
+            docdir.join("BIG.txt").is_file(),
+            "instprep must not compress when binpkg-docompress is on"
+        );
+        assert!(builddir.join(".instprepped").is_file());
+
+        std::fs::remove_file(builddir.join(".instprepped")).unwrap();
+        assert_eq!(instprep("-binpkg-docompress"), 0);
+        assert!(docdir.join("BIG.txt.bz2").is_file());
+        assert!(!docdir.join("BIG.txt").exists());
+        assert!(docdir.join("small.txt").is_file());
+        assert_eq!(
+            std::fs::read_link(docdir.join("link-to-big.txt.bz2")).unwrap(),
+            Path::new("BIG.txt.bz2")
+        );
+        assert!(builddir.join(".instprepped").is_file());
 
         let _ = std::fs::remove_dir_all(&portage_tmpdir);
     }
