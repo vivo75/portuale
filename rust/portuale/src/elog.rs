@@ -178,7 +178,9 @@ pub fn collect_all(t_dir: &Path) -> Vec<ElogMessage> {
 /// `collect_all`, restricted to the named phases -- real
 /// `_elog_process(phasefilter=...)`, which `dblink.unmerge()` calls with
 /// `("prerm", "postrm")` so a package's stale install-time `${T}/logging`
-/// files (portuale never cleans the builddir) don't resurface on removal.
+/// files don't resurface on removal. The builddir is cleaned after every
+/// merge since backlog #42, but `FEATURES=noclean`/`keepwork` can still
+/// keep one, so the filter stays load-bearing.
 pub fn collect_all_phases(t_dir: &Path, phases: &[&str]) -> Vec<ElogMessage> {
     collect_all(t_dir)
         .into_iter()
@@ -1197,13 +1199,18 @@ pub fn save_modules_process(
 ///
 /// The `save` / `save_summary` modules run immediately per package (real
 /// `mod_save.process`), printing the `Elog messages ... written to ...`
-/// line; `echo` is accumulated and printed once at the end (real
-/// `mod_echo._finalize`, an atexit handler). `mail` sends immediately
+/// line; `echo` is accumulated for the call and printed by
+/// `echo_summary` at its end (real accumulates across the whole run and
+/// prints once at exit via `mod_echo._finalize`; portuale flushes per
+/// package before the post-merge clean, #42, so each merged package gets
+/// its own block). `mail` sends immediately
 /// per package (real `mod_mail.process`); `mail_summary` accumulates
 /// and sends once at process exit (real atexit `finalize`, armed on
 /// first use). A no-op when no module is enabled
-/// or nothing has messages. Portuale never cleans the builddir, so the
-/// caller re-scans `${T}/logging/` here rather than threading a message
+/// or nothing has messages. The caller hands in each package's
+/// `${T}/logging/` at real's own position -- for a merge that is inside
+/// `dblink.merge()` before the post-merge clean (backlog #42), see
+/// `ebuild_merge::process_merge_elog` -- rather than threading a message
 /// buffer through the (un)merge machinery. `split_elog` is real
 /// `settings.features`' `split-elog` token: the `emerge` callers pass
 /// the resolved list (#37 S3), the standalone unmerge path the raw env
