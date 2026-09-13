@@ -174,10 +174,10 @@ def diff(a: Side, b: Side, mode: str) -> None:
     # image paths + attributes
     for rel in sorted(set(a.image) | set(b.image)):
         if rel not in a.image:
-            hard("image:paths", f"only in a: {rel}")
+            hard("image:paths", f"only in b: {rel}")
             continue
         if rel not in b.image:
-            hard("image:paths", f"only in b: {rel}")
+            hard("image:paths", f"only in a: {rel}")
             continue
         ta, tb = a.image[rel], b.image[rel]
         if ta[:5] != tb[:5]:
