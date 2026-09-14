@@ -7,7 +7,9 @@ Track B otherwise paused by the owner; an unfinished B1 terminator fix sits
 uncommitted on `3rdparty/brush` `fix/declare-f-heredoc-serialization`.
 Track F: F1a, F1b, F2, F3 steps (1)+(2), F4 and F5 done. F5's oracle
 (real `fetch(..., listonly=1)` on this host) showed a file's literal URIs
-are tried **last-listed first**. Open: F3 step (3) (D3) and F6 (D4).
+are tried **last-listed first**. Owner decisions registered 2026-09-14:
+D3 = deterministic suffix, D4 = shuffle stays a deliberate cut. Not yet
+implemented: F3 step (3) and F6.
 
 Scope: the open entries of **Tier 1** in
 [`backlog-tasks.md`](backlog-tasks.md) ("focused slices, ~one sitting
@@ -471,7 +473,8 @@ Real `fetch.py` on a digest mismatch does three things:
    `Refetching... File renamed to '…'`.
 
 portuale currently deletes the bad file and tries every candidate.
-Port (1) and (2), which are deterministic. For (3), see §6 D3.
+Port (1) and (2), which are deterministic. For (3), see §6 D3
+(**decided 2026-09-14: deterministic suffix**).
 Real's temp name is random, so the recommendation is to port the
 rename with a **deterministic** suffix and note that as the one
 documented divergence, or to keep deletion as a cut. The user decides.
@@ -535,7 +538,7 @@ a deterministic tool, and the other determinism cuts are listed under
 Part 3. Move the shuffle there with its reason: load balancing only,
 every candidate is still digest-verified, and try-order is not
 observable in the result. Recommended unless the user wants an
-opt-in, seeded shuffle (§6 D4).
+opt-in, seeded shuffle (§6 D4). **Decided 2026-09-14: deliberate cut.**
 
 ---
 
@@ -595,8 +598,8 @@ then B1. B1 unblocks the brush smoke and gates the PR work.
 |---|---|---|---|
 | D1 | `reubeno/brush#1276` (OPEN, old deadlock fix) | (a) force-push fix 03 onto its head branch, (b) close it as superseded and open fix 03 fresh | **(b)**: fix 03 is a re-do on a different branch and base, and a fresh PR with the new write-up is cleaner for the reviewer |
 | D2 | B1 on an already-pushed branch | amend `3d2bde47` vs add a follow-up commit | **amend** before the PR is opened (one commit per fix is the stated structure), which needs a force-push to `origin` |
-| D3 | Checksum-failure rename (F3 step 3) | port with a random suffix / port with a deterministic suffix / keep deleting (cut) | **deterministic suffix**: it keeps real's "evidence kept in `DISTDIR`" behaviour without non-determinism |
-| D4 | Third-party shuffle (F6) | deliberate cut / seeded opt-in | **deliberate cut** |
+| D3 | Checksum-failure rename (F3 step 3) | port with a random suffix / port with a deterministic suffix / keep deleting (cut) | **DECIDED 2026-09-14 (owner): deterministic suffix.** Keeps real's "evidence kept in `DISTDIR`" behaviour without non-determinism; the suffix is the one documented divergence |
+| D4 | Third-party shuffle (F6) | deliberate cut / seeded opt-in | **DECIDED 2026-09-14 (owner): confirmed, the third-party mirror shuffle stays a deliberate cut** |
 | D5 | Scope of #14 | keep all of F1–F5 in Tier 1 / move F3+F5 to Tier 2 | keep **F1, F2, F4** in Tier 1 (real bugs), move **F3, F5** to Tier 2 |
 
 ---

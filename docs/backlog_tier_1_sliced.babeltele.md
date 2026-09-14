@@ -3,7 +3,7 @@ SRC=docs/backlog_tier_1_sliced.opus.md @ main:5a1f329 2026-09-14; AUTH=SRC (dive
 PROJ: readability-relaxed semantic projection (BabelTele, arXiv:2606.19857); glyph-light ⇒ savings from dropped prose; ALL ids/paths/line-refs byte-exact; line-refs drift→relocate by symbol
 LEGEND: `∷`is `;`fence `|`field `→`leads/causes `⇒`decision `←`from `∈`in `∉`not-in `¬`not `∧`and `∨`or `:=`def `!`must-not `?`unverified `+`add `-`remove `@`anchors file:sym:line `F/M/S`=tiers(F Opus5/Fable5.1, M Sonnet5, S Haiku4.5; Frev=F reads full diff pre-user-commit) `U`=user-owned action `BR`=3rdparty/brush checkout `PF`=rust/portage-fetch/src/lib.rs `FR`=rust/portuale/src/fetch.rs `FP`=3rdparty/portage/lib/portage/package/ebuild/fetch.py `EP`=rust/portuale/src/ebuild_phases.rs
 
-STATUS: proposed 2026-09-14 ∷ PROGRESS: track F COMMITTED; B0 DONE (working tree, ¬that commit); track B paused by owner (B1 WIP uncommitted ∈BR fix/declare-f-heredoc-serialization) ∷ F1a F1b F2 F3(1)(2) F4 F5 DONE; oracle real fetch(listonly=1): literals tried LAST-LISTED FIRST ∷ OPEN F3(3)⇒D3, F6⇒D4
+STATUS: proposed 2026-09-14 ∷ PROGRESS: track F COMMITTED; B0 DONE (working tree, ¬that commit); track B paused by owner (B1 WIP uncommitted ∈BR fix/declare-f-heredoc-serialization) ∷ F1a F1b F2 F3(1)(2) F4 F5 DONE; oracle real fetch(listonly=1): literals tried LAST-LISTED FIRST ∷ DECIDED 2026-09-14 owner: D3=deterministic suffix, D4=shuffle stays deliberate cut ∷ NOT YET IMPLEMENTED F3(3), F6
 SCOPE: docs/backlog-tasks.md Tier 1 OPEN only
 RF: AGENTS.md(step4 real-exec carve-out, step8 verify); docs/agent-context.md; docs/brush-pin.md; docs/brush-pr/README.md; PF module doc
 
@@ -92,7 +92,7 @@ RF: AGENTS.md(step4 real-exec carve-out, step8 verify); docs/agent-context.md; d
     (1) count failures; at 2nd (checksum_failure_primaryuri=2) append reversed primaryuris to remaining list ("switch to primaryuri mode")
     (2) stop after PORTAGE_FETCH_CHECKSUM_TRY_MIRRORS failures (default 5; invalid→warn+default)
     (3) RENAME bad file `<file>._checksum_failure_.<random>` ∈DISTDIR + `Refetching... File renamed to '…'` ∷ portuale today deletes + tries every candidate
-    port (1)(2) deterministic ∷ (3)⇒D3
+    port (1)(2) deterministic ∷ (3)⇒D3 DECIDED deterministic suffix
     ACCEPT: local server bad bytes on N candidates ⇒ exact real attempt count+order; primaryuri switch pinned by fixture where literal reached only post-switch
   F4(M,2-3h, after F1a; uses F1b for dir layout.conf) fsmirrors
     before any remote candidate, file absent ∧ space: try fsmirrors in real order = custommirrors["local"] `/` entries then `/`-rooted GENTOO_MIRRORS; path via that dir's layout.conf; plain copy; print real `Local mirror has file: <f>`; first hit stops; copied file still digest-verified
@@ -105,7 +105,7 @@ RF: AGENTS.md(step4 real-exec carve-out, step8 verify); docs/agent-context.md; d
     2 expected orders ← oracle real `emerge -pf` on 2-URI fixture ± RESTRICT=primaryuri ! derive from reverse() comment (misreadable)
     3 check `A` (EP extra_env.push(("A", …)) from fetch_src_uri filenames) lists multiply-sourced file ONCE like real; twice⇒fix here; cross-check #45 (vdb environment A w/ distfile 3×) same∨separate root cause?
     ACCEPT: oracle order pinned 2-URI+3-URI both modes; A deduped
-  F6(S,0.5h,docs, anytime) shuffle → Deliberate cuts (backlog-tasks.md) + scope-backlog.md Part 3 w/ reason (load-balancing only; every candidate digest-verified; try-order ¬observable in result) ⇒ REC unless D4 opt-in
+  F6(S,0.5h,docs, anytime) shuffle → Deliberate cuts (backlog-tasks.md) + scope-backlog.md Part 3 w/ reason (load-balancing only; every candidate digest-verified; try-order ¬observable in result) ⇒ D4 DECIDED cut
 
 §5 ORDER/DEPS/EFFORT
   B: B0 → {B1, B2, B3} (mutually indep) → B4 → B5 (needs B1 ∧ B2a) → B6(U) → B7(upstream)
@@ -118,8 +118,8 @@ RF: AGENTS.md(step4 real-exec carve-out, step8 verify); docs/agent-context.md; d
 §6 DECISIONS (owner)
   D1 #1276 ∷ (a) force-push fix 03 onto its head ∨ (b) close superseded + open fix 03 fresh ⇒ REC (b): different branch+base, fresh write-up cleaner
   D2 B1 on pushed branch ∷ amend 3d2bde47 ∨ follow-up commit ⇒ REC amend before PR (1 commit/fix stated structure; needs force-push origin=U)
-  D3 checksum rename F3(3) ∷ random suffix ∨ deterministic suffix ∨ keep delete(cut) ⇒ REC deterministic suffix (keeps evidence ∈DISTDIR, ¬nondeterminism; documented divergence)
-  D4 shuffle F6 ∷ cut ∨ seeded opt-in ⇒ REC cut
+  D3 checksum rename F3(3) ∷ random suffix ∨ deterministic suffix ∨ keep delete(cut) ⇒ DECIDED 2026-09-14 owner: deterministic suffix (keeps evidence ∈DISTDIR, ¬nondeterminism; documented divergence)
+  D4 shuffle F6 ∷ cut ∨ seeded opt-in ⇒ DECIDED 2026-09-14 owner: confirmed, third-party mirror shuffle stays deliberate cut
   D5 #14 scope ∷ all F1-F5 ∈T1 ∨ F3+F5→T2 ⇒ REC keep F1 F2 F4 ∈T1 (real bugs), move F3 F5 → T2
 
 §7 HOUSEKEEPING (first commit touching backlog-tasks.md)
