@@ -669,6 +669,16 @@ pub struct QuietFetchError {
     pub stderr: String,
 }
 
+/// Arguments of [`download_with_commands_quiet`].
+pub struct DownloadWithCommandsQuietArgs<'a> {
+    pub uri: &'a str,
+    pub dest: &'a Path,
+    pub resume: bool,
+    pub distdir: &'a Path,
+    pub vars: FetchCommandVars<'a>,
+    pub commands: &'a FetchCommands,
+}
+
 /// The `make.globals` default transport, for callers with no resolved
 /// config: `download_with_commands` over the defaults, no extra
 /// variables. Shared by the `portuale` fetch path and the `mrg-director`
@@ -867,6 +877,44 @@ mod tests {
             vars,
             commands,
         })
+    }
+
+    #[test]
+    fn download_with_commands_removes_a_fresh_partial_but_keeps_a_resumed_one() {
+        let dir = tempdir();
+        let dest = dir.join("dest.tar.gz");
+        let script = stub_fetch_script(&dir, "fail.sh", "echo partial > \"$1\"; exit 1");
+        let mut commands = FetchCommands {
+            fetchcommand: Some(format!(
+                "{} \"${{DISTDIR}}/${{FILE}}\" \"${{URI}}\"",
+                script.display()
+            )),
+            ..FetchCommands::default()
+        };
+        commands.resumecommand = commands.fetchcommand.clone();
+        download_serialized(DownloadSerializedArgs {
+            uri: "file:///nonexistent",
+            dest: &dest,
+            resume: false,
+            distdir: &dir,
+            vars: FetchCommandVars::default(),
+            commands: &commands,
+        })
+        .unwrap_err();
+        assert!(!dest.exists(), "a failed fresh fetch removes the partial");
+        download_serialized(DownloadSerializedArgs {
+            uri: "file:///nonexistent",
+            dest: &dest,
+            resume: true,
+            distdir: &dir,
+            vars: FetchCommandVars::default(),
+            commands: &commands,
+        })
+        .unwrap_err();
+        assert!(
+            dest.exists(),
+            "a failed resume keeps it for the next candidate"
+        );
     }
 
     #[test]
