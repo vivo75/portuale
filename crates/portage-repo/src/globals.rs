@@ -99,3 +99,8 @@ pub fn note_unparsed_dep_token(token: &str, site: &str) {
         eprintln!("portage-repo: dropped unparseable dependency token {token:?} ({site})");
     }
 }
+
+/// How many dependency tokens this process dropped as unparseable.
+pub fn unparsed_dep_tokens() -> usize {
+    UNPARSED_DEP_TOKENS.load(AtomicOrdering::Relaxed)
+}
