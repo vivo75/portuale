@@ -14209,6 +14209,28 @@ def test_list_sets_prints_the_defined_set_names(emerge_binary, emerge_pretend_py
     assert "usersets" not in lines
 
 
+def test_search_reads_cache_less_fixture_ebuilds(emerge_binary, fixture_env):
+    """C2 consequence, Rust-only pin (the Python reference is no longer
+    mirrored, owner decision 2026-09-14): 21 fixture ebuilds have no
+    `metadata/md5-cache` entry, and with the depend-phase provider
+    registered the Rust search now reads them -- real parses a cache-less
+    ebuild -- so `--searchdesc fixture` lists `collisionpkg-a` and
+    friends, and a fuzzy `-s` no longer renders `configpkg` as
+    `[ Masked ]`. Before C2 both implementations skipped those entries
+    identically; the shared Rust==Python pin for these two queries was
+    therefore dropped, not weakened."""
+    r = _run([str(emerge_binary)], ["--searchdesc", "fixture"], fixture_env)
+    assert r.returncode == 0, r.stderr
+    for pkg in ("dev-libs/collisionpkg-a", "dev-libs/collisionpkg-b", "dev-libs/configpkg"):
+        assert f"*  {pkg}" in r.stdout, pkg
+    fuzzy = _run(
+        [str(emerge_binary)], ["-s", "--search-similarity=40", "newpgk"], fixture_env
+    )
+    assert fuzzy.returncode == 0, fuzzy.stderr
+    assert "dev-libs/configpkg" in fuzzy.stdout
+    assert "dev-libs/configpkg [ Masked ]" not in fuzzy.stdout
+
+
 @pytest.mark.parametrize(
     "args",
     [
@@ -14216,7 +14238,6 @@ def test_list_sets_prints_the_defined_set_names(emerge_binary, emerge_pretend_py
         ["-s", "useflagpkg"],
         ["-s", "nomatchanywhere"],
         ["-sv", "useflagpkg"],
-        ["--searchdesc", "fixture"],
         ["-S", "overlay"],
         ["-s", "dev-libs/newpkg"],
         # --fuzzy-search (default on): a misspelling still resolves.
@@ -14226,7 +14247,6 @@ def test_list_sets_prints_the_defined_set_names(emerge_binary, emerge_pretend_py
         ["-s", "dev-libz/newpkg"],  # category half scored independently
         ["-s", "--fuzzy-search=n", "useflgpkg"],
         ["-s", "--search-similarity=100", "useflgpkg"],
-        ["-s", "--search-similarity=40", "newpgk"],
         # --regex-search-auto (default on) + explicit % force.
         ["-s", "%^dev-libs/newpkg$"],
         ["-s", "new.+pkg"],
