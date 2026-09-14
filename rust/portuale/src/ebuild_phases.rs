@@ -2979,7 +2979,15 @@ pub(crate) fn run_depend_phase(
         message: e,
     })?;
 
-    let meta_path = env.t().join(".depend-metadata");
+    // Real `EbuildMetadataPhase` reads the metadata from a private pipe,
+    // so concurrent `emerge` processes never share it. The builddir is
+    // shared (`${PORTAGE_TMPDIR}/portage/<cat>/<pf>`), so the file that
+    // stands in for the pipe is per-process: a fixed name let two
+    // concurrent cache-miss resolutions delete each other's metadata
+    // and report the package as having no ebuilds.
+    let meta_path = env
+        .t()
+        .join(format!(".depend-metadata.{}", std::process::id()));
     let _ = std::fs::remove_file(&meta_path);
 
     let mut vars = phase_env_vars(

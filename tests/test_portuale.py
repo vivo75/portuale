@@ -2381,6 +2381,27 @@ def test_cache_less_repo_metadata_falls_back_to_the_depend_phase(
     # The cache really was absent (the resolution above is the fallback).
     assert not cache.exists()
 
+    # Concurrent resolutions share the builddir (`PORTAGE_TMPDIR`) but not
+    # the depend phase's metadata hand-off: real reads it from a private
+    # pipe. A fixed file name there let one process delete another's
+    # metadata and report "no ebuilds" (found by the corpus replay,
+    # docs/second_python_copy_removal.md §9).
+    procs = [
+        subprocess.Popen(
+            [str(emerge_binary), "--pretend", "porttest/docs"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            env=env,
+        )
+        for _ in range(16)
+    ]
+    outputs = [p.communicate() + (p.returncode,) for p in procs]
+    assert all(
+        rc == 0 and out.splitlines() == ["[ebuild  N     ] porttest/docs-1.0 "]
+        for out, _, rc in outputs
+    ), outputs
+
     # Control: with the committed cache restored, the same resolve works
     # from the cache path (no provider needed), byte-identical output.
     shutil.copytree(overlay / "metadata" / "md5-cache", cache)
