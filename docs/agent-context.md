@@ -218,7 +218,7 @@ real) are **closed** — the L2 porttest track is `strict hard=0 soft=0`
 on every archive pair with all `l2-gpkg-*` allowlists deleted
 (`l2-20260913T232955Z`, `TEST/findings/l2.md` "#39 / #40"). **#29 is
 closed 2026-09-14**: the L2 real set (`l1-merge.txt`,
-`TEST/logs/l2-20260914T005348Z`) is green both directions
+`TEST/logs/l2-20260914T032915Z`) is green both directions
 (cross-install direction A 0 hard / 0 unexplained, control 0/0).
 
 **L3 (#30) is in progress 2026-09-14.** Harness shipped:

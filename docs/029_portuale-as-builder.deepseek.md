@@ -10,7 +10,7 @@ commits `244c6e8` (S0) `9a8d81b` (S1) `f4a4fb5` (S2) `24d42d9`+`7ff9cdb`
   every archive pair `gpkg-diff: mode=strict hard=0 soft=0`, structure
   0/0, cross-install 0 unexplained, with **every `l2-*` allowlist entry
   deleted** first.
-- **Real set** (`l1-merge.txt`): `TEST/logs/l2-20260914T005348Z` rc 0,
+- **Real set** (`l1-merge.txt`): `TEST/logs/l2-20260914T032915Z` rc 0,
   9 pairs `hard=0 soft=0` + one soft=1 (tolerated payload),
   cross-install direction A (real Portage consumes portuale-built
   archives) 0 hard / 0 unexplained, control (portuale consumes the
@@ -567,7 +567,7 @@ host-side against `_l1-pkgcache`.
 - [x] `diff.py --layer l2` in place, L1 unchanged/green.
 - [x] `TEST/run/l2-portuale-builder.sh TEST/atomlists/l1-porttest.txt`
       green (`l2-20260913T232955Z`).
-- [x] `TEST/run/l2-portuale-builder.sh` (real set) green (`l2-20260914T005348Z`),
+- [x] `TEST/run/l2-portuale-builder.sh` (real set) green (`l2-20260914T032915Z`),
       verdict in `TEST/findings/l2.md` "#39 / #40".
 - [x] Full verification pass (AGENTS.md step 8) green.
 - [x] L1 `porttest` run green after compare-stack changes

@@ -104,7 +104,7 @@ Complements the `$ROOT`+VDB diff; the L0/L1 bed does not need it.
 > track is green from a clean run with every `l2-*` allowlist gone
 > (`l2-20260913T232955Z`, strict `hard=0 soft=0` per pair); the real
 > `l1-merge.txt` set is green both directions
-> (`l2-20260914T005348Z`: cross-install direction A 0 unexplained,
+> (`l2-20260914T032915Z`: cross-install direction A 0 unexplained,
 > control 0/0, payload tolerated as recorded), with #37/#38/#39/#40/#43
 > all closed. Every open finding is in
 > [`../TEST/findings/l2.md`](../TEST/findings/l2.md), adjudicated via

@@ -597,7 +597,7 @@ L0 (resolver parity) + L1 (merge parity) are shipped and run live
 `gpkg-diff.sh`, `diff.py --layer l2/--tolerate-payload`. The `porttest`
 fixture track is green with every `l2-*` allowlist entry deleted
 (`l2-20260913T232955Z`), and the real `l1-merge.txt` set is green both
-directions (`l2-20260914T005348Z`: cross-install 0 unexplained, control
+directions (`l2-20260914T032915Z`: cross-install 0 unexplained, control
 0/0; #37/#38/#39/#40/#43 all closed). L3–L5 planned in
 `history/real-world-testing.md` §5/§14 and distilled for execution
 into `real-world-testing.md` (§2–§8: controls, triage, L2–L5 designs,
