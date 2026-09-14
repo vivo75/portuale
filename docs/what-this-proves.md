@@ -16614,3 +16614,11 @@ L3_CONTROL=0 TEST/run/l3-source-parity.sh TEST/atomlists/l3-smoke.txt
 TEST/run/l1-merge-from-binpkg.sh TEST/atomlists/l1-porttest.txt
 # -> TEST/logs/l1-20260914T135235Z: strict hard=0, unexplained 0
 ```
+
+**`PackagesDb` on the production path: CONTENTS reads go through `VdbReader` (backlog #28 H2, 2026-09-14).** The director's `PackagesDb` slot had only test callers. The narrowest production consumer was the merge-time CONTENTS scan: `ebuild_merge::find_owners` (the collision-abort owner report) and `owns_path` (the per-path ownership check behind `collision_protect`/`protect-owned`) both parsed each installed package's `var/db/pkg/<cat>/<pf>/CONTENTS` by hand. Both now read through `mrg_director::VdbReader` (`PackagesDb::contents_files`, the pf split back into package/version), so the trait carries real merge traffic with byte-identical output (owner keys/values/ordering unchanged; the existing same-package re-merge and collision-protect tests plus the whole real-execution suite pass unmodified). `owns_path_pf` stays direct (the trait models a split package/version, not a bare `pf`). `PackagesDb::reverse_dependents` deliberately still has no production caller: portuale's only reverse-dependency computation lives inside `portage-repo::depclean_cleanlist` as unresolved-dep edges (a different shape), and `portage-repo` cannot depend on the director trait — recorded in `VdbReader`'s own doc rather than forcing a synthetic call site.
+
+```sh
+cargo test --release -p portuale find_owners
+cargo test --release -p portuale owns_path
+# -> green; the CONTENTS reads now dispatch through PackagesDb/VdbReader
+```

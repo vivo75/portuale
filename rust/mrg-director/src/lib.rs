@@ -23,7 +23,7 @@
 //! | Slot | Real Portage | Portuale implementation |
 //! |------|--------------|--------------------------|
 //! | Solver | `_emerge/depgraph.py` (`depgraph` class) + `_emerge/resolver/backtracking.py` | `portage_repo::Resolver` (`BacktrackingResolver`, via `active_resolver()`) |
-//! | PkgDatabase (vdb/edb/bintree) | `portage/dbapi/{vartree,porttree,bintree}.py` (subclasses of `dbapi`) | `VdbReader` (filesystem vdb read side; exercised through `Director`'s test wiring -- production depclean/unmerge still read `portage_repo` directly) / `MemoryDb` (in-memory snapshot, real `FakeVartree.py`) |
+//! | PkgDatabase (vdb/edb/bintree) | `portage/dbapi/{vartree,porttree,bintree}.py` (subclasses of `dbapi`) | `VdbReader` (filesystem vdb read side; live on the merge collision path through `ebuild_merge::find_owners`/`owns_path`, otherwise exercised through `Director`'s test wiring -- production depclean/unmerge still read `portage_repo` directly) / `MemoryDb` (in-memory snapshot, real `FakeVartree.py`) |
 //! | RepoCache (md5-cache backends) | `portage/cache/template.py::database` (flat_hash/sqlite/anydbm/volatile) | `Md5Cache` (flat file, real `flat_hash.py`) / `VolatileCache` (in-memory, real `volatile.py`) |
 //! | BinpkgFetch | `portage/package/ebuild/fetch.py` + `_emerge/*binpkg*` | `WgetFetcher` (real `wget` transport, shared `portage_fetch::download_via_wget` with `portuale::fetch`) + `portage_repo` remote binpkg index |
 //! | MergeEngine | `_emerge/MergeListItem.py` dispatch + `_emerge/PackageMerge.py` / `EbuildMerge.py` / `vartree.py::dblink.merge` | `SourceMergeEngine` (`"ebuild"` arm) / `BinaryMergeEngine` (`"binary"` arm) kind routing + the binary crate's `RealSourceEngine`/`RealBinaryEngine` adapters executing through the seam |
@@ -49,7 +49,8 @@
 //! through the trait (`SchedulerPolicy` via `run_build_scheduler`,
 //! `MergeEngine` via the merge dispatch, `NewsSelector` via
 //! `--check-news`, `Fetcher` via `portuale::fetch::fetch_src_uri`'s
-//! candidate loop) prove the seam carries real traffic; the rest stay
+//! candidate loop, `PackagesDb`'s `contents_files` via the merge
+//! collision walk) prove the seam carries real traffic; the rest stay
 //! swappable behind `Director`'s delegation methods until their second
 //! algorithm lands. (`Fetcher`'s transport is shared with
 //! `portuale::fetch` via `portage_fetch::download_via_wget`; Manifest
@@ -598,12 +599,22 @@ pub trait SchedulerPolicy {
 
 /// The filesystem `PackagesDb` implementation: reads the vdb directly
 /// from `<root>/var/db/pkg`. One of two implementations (the other is
-/// [`MemoryDb` below); both satisfy the same three read queries. This is
-/// the production read side: the unmerge/depclean/news paths consult the
-/// installed db through this seam (`Director::installed_versions` /
-/// `contents_files` / `reverse_dependents`), so a second backend
-/// (`MemoryDb`, a snapshot) can replace the filesystem without touching
-/// those call sites.
+/// [`MemoryDb` below); both satisfy the same three read queries.
+///
+/// Production traffic today runs through `contents_files` only: the real
+/// merge's own collision paths (`portuale::ebuild_merge::find_owners`
+/// and `owns_path`) build a `VdbReader` over the merge root and read
+/// every installed entry's file list through it. `installed_versions`
+/// and `reverse_dependents` are still exercised only by `Director`'s own
+/// wiring tests. `reverse_dependents` has no production consumer yet:
+/// depclean's reverse-dependency display is computed inside
+/// `portage_repo::depclean_cleanlist` (`DepcleanResult::kept_parents` /
+/// `unresolved`) from `(InstalledPackage, Vec<String>)` edges -- a shape
+/// this trait's flat `Vec<String>` CPV list does not model -- and
+/// `portage-repo` cannot depend on this contract crate to be handed a
+/// `VdbReader` from there. A second backend (`MemoryDb`, a snapshot) can
+/// still replace the filesystem behind every call site already written
+/// against the trait.
 pub struct VdbReader<'a> {
     root: &'a Path,
 }

@@ -193,6 +193,7 @@
 use crate::ebuild_phases;
 use crate::env_update;
 use md5::{Digest, Md5};
+use mrg_director::PackagesDb as _;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::os::unix::fs::{FileTypeExt, MetadataExt};
 use std::path::{Path, PathBuf};
@@ -2311,22 +2312,22 @@ fn installed_instance_pf(root: &Path, category: &str, package: &str, slot: &str)
 
 /// Whether the installed package at `<root>/var/db/pkg/<category>/
 /// <package>-<version>` already claims `abs_path` in its own real
-/// `CONTENTS` (second whitespace-separated field of any line, the same
-/// format `format_contents_line` writes).
+/// `CONTENTS` (the path field of its recognized `obj`/`sym`/`dir`/
+/// `dev`/`fif`/`bin` lines, the same set `format_contents_line` writes),
+/// read through the `mrg_director::PackagesDb` seam
+/// ([`mrg_director::VdbReader`] over `root`) rather than the file
+/// directly. `abs_path` is a logical absolute path (what
+/// `find_collisions` builds); the seam's `contents_files` returns the
+/// same paths with the vdb record's one leading `/` stripped (its
+/// documented shape), so the leading `/` is removed here to meet it --
+/// the exact inverse of that strip on every entry
+/// `format_contents_line` writes.
 fn owns_path(root: &Path, category: &str, package: &str, version: &str, abs_path: &str) -> bool {
-    let path = root
-        .join("var/db/pkg")
-        .join(category)
-        .join(format!("{package}-{version}"))
-        .join("CONTENTS");
-    let Ok(text) = std::fs::read_to_string(path) else {
-        return false;
-    };
-    text.lines().any(|line| {
-        let mut parts = line.split_whitespace();
-        parts.next();
-        parts.next() == Some(abs_path)
-    })
+    let relative = abs_path.strip_prefix('/').unwrap_or(abs_path);
+    mrg_director::VdbReader::new(root)
+        .contents_files(category, package, version)
+        .iter()
+        .any(|path| path == relative)
 }
 
 /// Same real `CONTENTS`-ownership check as `owns_path`, but keyed by a
@@ -2336,6 +2337,13 @@ fn owns_path(root: &Path, category: &str, package: &str, version: &str, abs_path
 /// hand, since it discovers installed packages by scanning real vdb
 /// directory names directly rather than through `installed_versions`'s
 /// own `package`-scoped lookup.
+///
+/// Deliberately stays a direct `CONTENTS` read rather than routing
+/// through `PackagesDb`: the trait keys `contents_files` by a split
+/// `(package, version)` and has no `pf`-keyed query, and both callers
+/// (the blocker set above, `ebuild_unmerge`'s same-slot orphan check)
+/// hold only the bare vdb directory name -- going through the seam would
+/// split the `pf` apart only for `VdbReader` to join it back together.
 pub(crate) fn owns_path_pf(root: &Path, category: &str, pf: &str, abs_path: &str) -> bool {
     let path = root
         .join("var/db/pkg")
@@ -2717,8 +2725,22 @@ fn find_collisions(
 /// reporting path only reached when a merge is about to abort anyway)
 /// and returns the `category/pf` -> claimed-paths map for whichever
 /// ones actually claim it.
+///
+/// The directory tree is still walked by hand -- `PackagesDb` has no
+/// "list every installed package" query -- but each `package-version`
+/// directory's path list is read through the trait
+/// ([`mrg_director::VdbReader`] over `root`, keyed by the
+/// `(package, version)` its directory name splits into), the same seam
+/// `owns_path` above uses. `collisions` entries are logical absolute
+/// paths; the seam's `contents_files` strips the vdb record's one
+/// leading `/` (its documented shape), so each collision is stripped the
+/// same way for the comparison -- the exact inverse of that strip on
+/// every `format_contents_line`-written entry -- and the matched
+/// collision (the same absolute string the old direct read pushed) is
+/// what lands in the map.
 fn find_owners(root: &Path, collisions: &[String]) -> BTreeMap<String, Vec<String>> {
     let mut owners: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    let db = mrg_director::VdbReader::new(root);
     let pkg_root = root.join("var/db/pkg");
     let Ok(categories) = std::fs::read_dir(&pkg_root) else {
         return owners;
@@ -2738,17 +2760,16 @@ fn find_owners(root: &Path, collisions: &[String]) -> BTreeMap<String, Vec<Strin
                 continue;
             }
             let pf = pkg_entry.file_name().to_string_lossy().to_string();
-            let Ok(text) = std::fs::read_to_string(pkg_path.join("CONTENTS")) else {
+            let Some((package, version)) = crate::remote_bundle::split_pf(&pf) else {
                 continue;
             };
             let mut claimed = Vec::new();
-            for line in text.lines() {
-                let mut parts = line.split_whitespace();
-                parts.next();
-                if let Some(path) = parts.next()
-                    && collisions.iter().any(|c| c == path)
+            for path in db.contents_files(&category_name, &package, &version) {
+                if let Some(c) = collisions
+                    .iter()
+                    .find(|c| c.strip_prefix('/').unwrap_or(c) == path)
                 {
-                    claimed.push(path.to_string());
+                    claimed.push(c.clone());
                 }
             }
             if !claimed.is_empty() {
@@ -5710,6 +5731,56 @@ mod tests {
         assert_eq!(
             std::fs::read_to_string(root.join("usr/share/collisiontest/shared.txt")).unwrap(),
             "hello from collisionpkg-c\n"
+        );
+    }
+
+    /// `find_owners`/`owns_path` read each vdb entry's file list through
+    /// the `mrg_director::PackagesDb` seam (`VdbReader::contents_files`),
+    /// which keys by a split `(package, version)` and strips the
+    /// `CONTENTS` record's one leading `/`. This pins the two conversions
+    /// the production path now performs on a hand-built vdb entry: the
+    /// directory name's `pf` splits back into that key, and the logical
+    /// absolute collision path meets the stripped contents path while the
+    /// returned owner key/values keep the old `category/pf` + absolute
+    /// path shape exactly.
+    #[test]
+    fn find_owners_reads_contents_through_the_packages_db_seam() {
+        let tmp = tempdir();
+        let root = tmp.join("root");
+        let pkg_dir = root.join("var/db/pkg/dev-libs/findownerspkg-1.0");
+        std::fs::create_dir_all(&pkg_dir).unwrap();
+        std::fs::write(
+            pkg_dir.join("CONTENTS"),
+            "dir /usr/share/findownerspkg\nobj /usr/share/findownerspkg/owned.txt abc 0\n",
+        )
+        .unwrap();
+
+        assert!(owns_path(
+            &root,
+            "dev-libs",
+            "findownerspkg",
+            "1.0",
+            "/usr/share/findownerspkg/owned.txt"
+        ));
+        assert!(!owns_path(
+            &root,
+            "dev-libs",
+            "findownerspkg",
+            "1.0",
+            "/usr/share/findownerspkg/other.txt"
+        ));
+
+        let collisions = vec!["/usr/share/findownerspkg/owned.txt".to_string()];
+        assert_eq!(
+            find_owners(&root, &collisions),
+            BTreeMap::from([(
+                "dev-libs/findownerspkg-1.0".to_string(),
+                vec!["/usr/share/findownerspkg/owned.txt".to_string()],
+            )])
+        );
+        assert!(
+            find_owners(&root, &["/usr/share/findownerspkg/stray.txt".to_string()]).is_empty(),
+            "a path no installed entry recorded stays unclaimed"
         );
     }
 
