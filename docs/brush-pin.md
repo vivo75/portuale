@@ -7,10 +7,11 @@ execution — see [`agent-context.md`](agent-context.md)'s "The bash-execution b
 "`ebuild --shell bash|brush`" sections for how it is wired in.
 
 `portuale/Cargo.toml` pins `brush-core` / `brush-builtins` **by exact
-commit to real upstream `reubeno/brush` `main`** (not a fork, not a
+commit to the thin fork `vivo75/brush`** — upstream `reubeno/brush`
+`main` plus the staged [`brush-pr/`](brush-pr/) fixes, nothing else (not a
 crates.io release — the published `brush-core 0.5.0` predates
 [#1274](https://github.com/reubeno/brush/pull/1274), which the eapi.sh
-parser needs). This file records the pin and the periodic re-pin
+parser needs, and carries none of the staged fixes). This file records the pin and the periodic re-pin
 checklist. **Keep it current whenever the pin changes** — and keep its
 `[brush]` entry in **`3rdparty/repos.toml`** (the flat,
 machine-parseable registry of every third-party ref this fork tracks,
@@ -22,40 +23,48 @@ portage's own upstream base included) in sync too.
 > `reubeno/brush` `main` (the two fixes the fork carried were resolved).
 > **2026-09-05**: back on `vivo75/brush` — as a *thin* fork this time,
 > not a divergent one: its `main` is upstream `reubeno/brush` `main`
-> **plus the three [`brush-pr/`](brush-pr/) commits**, nothing else.
-> Merge upstream into it periodically; drop it again once the three PRs
+> **plus the five [`brush-pr/`](brush-pr/) commits**, nothing else.
+> Merge upstream into it periodically; drop it again once the PRs
 > land.
 
 | | |
 |---|---|
 | Repo | `https://github.com/vivo75/brush` (thin fork of `reubeno/brush`) |
-| Rev | `67c301a79c0f4ae734cdd59783f6fdffcdd78c2e` |
+| Rev | `b9524ad51de5c8231eb5dcaf79ca982841117385` |
 
-`67c301a7` = `reubeno/brush@812336dd` + `95959d30`/`e9157f0a`/`de451b39`
-(the `brush-pr/` fixes, cherry-picked) + a merge of `reubeno:main`
-(upstream commits `#1331` (interactive-only, carried over) through
-`#1360`, incl. `#1347`/`#1348`/`#1349` builtins/regex fixes and `#1361`
-for-loop perf). Frozen in `Cargo.lock` too (`brush-core`
-0.5.0 / `brush-builtins` / `brush-parser`, three
-`git+https://github.com/vivo75/brush?rev=67c301a7…` source lines).
+`b9524ad5` = `reubeno/brush@25bffd54` + the five `brush-pr/` fixes,
+cherry-picked in order (`840ea40f`, `1132297d`, `10a455d8`, `8850b943`,
+`b9524ad5`; the per-bug branches carry the same patches as single commits
+— `bc99e6c1`, `df830c59`, `962051c9`, `dfbca97c`, `2073877d`). Frozen in
+`Cargo.lock` too (`brush-core` 0.5.0 / `brush-builtins` / `brush-parser`,
+three `git+https://github.com/vivo75/brush?rev=b9524ad5…` source lines).
 
-Re-pinned 2026-09-10 (Tier 1): one upstream API break on the way --
-`Shell::invoke_function` now returns `ExecutionResult` instead of `u8`
-(`run_one_phase_brush` maps `result.exit_code` the way the
-misc-functions brush path already did). Verified: brush's own
-`brush-compat-tests` 2015 succeeded / 0 failed (482 known-fail, 29
-skipped -- no upstream regressions in the merged range), `cargo test
---release -p portuale` 442/0 (incl. the deadlock guard and every phase
-test). The three staged fixes are still unmerged upstream (checked
-`upstream/main` for each branch tip -- none landed), so the thin fork
-stays; the per-bug `fix/*` branches are untouched, still staged for
-the unopened upstream PRs.
+Re-pinned 2026-09-14 (Tier 1, Track B): upstream `main` moved `812336dd`
+→ `25bffd54` (reedline 0.51; MSRV 1.95 for the interactive crates only)
+and every fix branch was rebased onto it. This re-pin carries three new
+fixes over the previous one: 02's quoted-here-tag terminator repair (B1
+of `backlog_tier_1_sliced.opus.md`), the `source`-parse-error status fix
+(B2), and IFS-independent brace expansion (B3). Verified on the new pin:
+brush's own `brush-compat-tests` 2504 ran, 2023 succeeded / 0 unexpected
+failures / 481 known-fail / 29 skipped — one previously-known failure
+(`echo ~/{a,b}`) now passes and was unmarked; the ad-hoc eclass sweep
+round-trips 2054 functions in all 211 eclasses plus one synthetic
+function per quoted here-tag form with 0 failures (same sweep on
+upstream `main`: 20 round-trip failures among 1407 functions, 41
+eclasses never parsed). `cargo test --release -p portuale` and the full
+pytest suite are green (details in the slice notes below). The five
+staged fixes are still unmerged upstream (checked each branch tip), so
+the thin fork stays; the per-bug `fix/*` branches are staged for the
+unopened upstream PRs.
 
 > The gitignored **`3rdparty/brush/` working checkout** tracks the same
 > `main` (`origin` = `vivo75/brush`, `upstream` = `reubeno/brush`), plus
-> the three per-bug branches `fix/tokenizer-nested-construct-heredoc` /
+> the five per-bug branches
+> `fix/tokenizer-nested-construct-heredoc` /
 > `fix/declare-f-heredoc-serialization` /
-> `fix/function-pipeline-stage-deadlock` staged for upstream submission.
+> `fix/function-pipeline-stage-deadlock` /
+> `fix/dot-parse-error-status` /
+> `fix/brace-expansion-ifs-independent` staged for upstream submission.
 
 ## The two fixes the fork used to carry
 
@@ -109,9 +118,13 @@ strategy-#2 rewrite). Strategy #2 closed the portage-tree side only.
 
 ## Re-pin checklist (periodic — upstream `main` moves fast)
 
-1. `cd` a `reubeno/brush` checkout, `git fetch`, pick a recent `main`
-   commit; update the `rev` in `portuale/Cargo.toml` (both `brush-core`
-   and `brush-builtins`).
+1. In `3rdparty/brush` (`origin` = `vivo75/brush`, `upstream` =
+   `reubeno/brush`): `git fetch upstream`, merge a recent
+   `upstream/main` into the thin fork's `main` (the staged fixes stay on
+   top), push `origin main`; update the `rev` in `portuale/Cargo.toml`
+   (both `brush-core` and `brush-builtins`) to the merge commit. (Once
+   the staged PRs have landed, pin a plain `reubeno/brush` `main` commit
+   instead and drop the fork.)
 2. `cargo update -p brush-core --precise <rev>` (or just `cargo build`
    and let it re-resolve), commit the `Cargo.lock` change.
 3. Verify:
@@ -160,15 +173,19 @@ Bash`; `brush` stays available via `--shell brush`). See
 `bash`".
 
 **Root-caused + fixed 2026-09-05** against `reubeno/brush` `main`
-(`a250b84e`) — really *four* bugs. Each is one commit on its own branch
+(`a250b84e`) — really *four* bugs there, later **five** per-bug branches
+after the 2026-09-14 Track-B pass. Each is one commit on its own branch
 in the `3rdparty/brush` checkout, staged for upstream submission
 (`git format-patch` exports + write-ups in [`brush-pr/`](brush-pr/),
-**PRs not yet opened**):
-`fix/tokenizer-nested-construct-heredoc` (`bd4793ab`),
-`fix/declare-f-heredoc-serialization` (`3d2bde47`),
-`fix/function-pipeline-stage-deadlock` (`ca11d652`). All three are now
-**in the pin** (`vivo75/brush@5af3f6c1`, see "Current pin" above) and
-portuale builds against them (`8184c11`).
+**PRs not yet opened**; every branch was rebased onto upstream
+`25bffd54` on 2026-09-14):
+`fix/tokenizer-nested-construct-heredoc` (`bc99e6c1`),
+`fix/declare-f-heredoc-serialization` (`df830c59`),
+`fix/function-pipeline-stage-deadlock` (`962051c9`),
+`fix/dot-parse-error-status` (`dfbca97c`),
+`fix/brace-expansion-ifs-independent` (`2073877d`). All five are
+**in the pin** (first in `vivo75/brush@5af3f6c1` / portuale `8184c11`;
+carried forward into every later pin, see "Current pin" above).
 
 1. **tokenizer** — a `${…}` / `$(…)` / `$((…))` on a here-tag line has its
    sub-tokens stolen by the pending here-doc, so `"${base}.c"` tokenizes as
@@ -178,18 +195,45 @@ portuale builds against them (`8184c11`).
    enclosing block, and before any later redirect on the same command)
    instead of deferred to column 0 after the line. Plus: multi-line words
    (`local x='…\n…'`) get re-indented every round-trip; `>(list)` renders
-   with doubled parens; `|` / `>&` spacing.
+   with doubled parens; `|` / `>&` spacing. **Found 2026-09-14 (B1):** the
+   deferred terminator was the *raw* tag word, quotes included
+   (`<<'EOF'` → a terminator line `'EOF'`), and the command-line tag was
+   not re-quoted the way a shell prints it (`<<"EOF"` / `<<\EOF` stay as
+   written); both fixed in the same commit, with compat cases per quoting
+   form.
 3. **command exec** — a function used as a non-last pipeline stage runs
    inline to completion before the next stage is spawned → deadlocks past
    one pipe buffer (re-do of the never-merged #1276).
+4. **`source` status** — a parse error inside a *sourced* file was marked
+   fatal, so the `ExecutionResult` asked for `ExitShell` and the whole
+   calling script stopped there (an embedded caller saw exit code 2 and no
+   further execution). bash's `source`/`.` returns 2 and execution
+   continues, so real `source "${T}/environment" || die` fires; brush now
+   clears the fatal parse error's control flow at the `source` boundary
+   only (a top-level/`-c` parse error stays fatal; `eval` is still a
+   known separate divergence).
+5. **brace expansion vs IFS** — brace expansion built one space-joined
+   string and relied on field splitting to separate its alternatives, so
+   under `IFS=`/`IFS=:` (e.g. after `local IFS`) `{A..C}` stayed a single
+   word. Real `__filter_readonly_variables` builds bash's special-variable
+   list with `printf '${!%s*} ' {A..Z} {a..z} _` *after* `local IFS`, so
+   the list came back malformed and nothing was filtered — `BASHOPTS`,
+   `EUID`, `PPID`, `SHELLOPTS`, `UID` were saved into `${T}/environment`
+   and every later `source` printed `cannot mutate readonly variable`.
+   `basic_expand` now expands each alternative separately, giving each its
+   own field(s), IFS-independent as in bash (this also fixed the known
+   failure `echo ~/{a,b}`).
 
-Verified: brush's own `brush-compat-tests` suite 0-regressions (+5 new
-cases); every function in all 211 Gentoo eclasses (1843 fns) round-trips
-`declare -f` → `eval` → `declare -f` with 0 parse-fail / 0 eval-fail /
-0 non-idempotent; `cargo test -p portuale` 343/0 against the new pin
-(incl. the `install_does_not_deadlock…` guard).
+Verified on the 2026-09-14 pin: brush's own `brush-compat-tests`
+0 unexpected failures (one previously-known failure now passes and was
+unmarked); the ad-hoc sweep over all 211 Gentoo eclasses round-trips 2054
+functions + 5 synthetic quoted-tag functions with 0 parse-fail /
+0 eval-fail / 0 non-idempotent (upstream `main` baseline: 20 round-trip
+failures among 1407 functions, 41 eclasses never parsed); `cargo test
+--release -p portuale` green against the new pin (incl. the
+`install_does_not_deadlock…` guard and the new B2/B3 regressions).
 
-**Still to do:** open the three upstream PRs; once merged, re-pin to
+**Still to do:** open the five upstream PRs; once merged, re-pin to
 `reubeno/brush` directly (dropping the thin fork) and reconsider flipping
 the `--shell` default back to `brush`.
 
@@ -202,19 +246,23 @@ upstream first, or (for portage-tree `bin/*.sh`) rewrite the offending
 construct, `brush strategy #2` style — and get recorded here.
 
 - **2026-09-13 — a compiled ebuild's `src_compile` no-ops under brush
-  (#38 G3 smoke).** `TEST/images/overlay/porttest/porttest/splitdebug`
-  (a `src_compile` whose heredoc pattern is `cat > pt-sd.c <<-'EOF'`
-  plus `tc-getCC`) under `emerge --shell brush --buildpkgonly` — or
-  `ebuild --shell brush <fixture> install` — returns 0 but produces an
-  **empty image**: `work/` stays empty, so `src_install` has nothing to
-  `dobin`, alongside `error: declare: cannot mutate readonly variable`
-  and `env: '': No such file or directory` noise. The same fixture
-  builds and strips correctly under `--shell bash`. A non-compiled
-  fixture (`porttest/docs`) builds fine under brush, and its external
-  `ecompress` transform fires — so this is the brush phase runner, not
-  the transforms. Repro:
-  `TEST/logs/_l2-brush-smoke/` + `TEST/findings/l2.md` "#38 S2".
-  Recorded, not fixed; the default stays `bash`.
+  (#38 G3 smoke). FIXED 2026-09-14 (B1–B4).** `TEST/images/overlay/porttest/
+  porttest/splitdebug` (a `src_compile` whose heredoc pattern is
+  `cat > pt-sd.c <<-'EOF'` plus `tc-getCC`) under `emerge --shell brush
+  --buildpkgonly` — or `ebuild --shell brush <fixture> install` — returned
+  0 but produced an **empty image**: `work/` stayed empty, so `src_install`
+  had nothing to `dobin`, alongside `error: declare: cannot mutate readonly
+  variable` and `env: '': No such file or directory` noise. Root causes:
+  the quoted-tag terminator defect in fix 02 (B1), the silent
+  `source`-abort (B2) and the missing `$BASH` + IFS-dependent brace
+  expansion (B3). Re-run on the 2026-09-14 pin: `emerge --shell brush
+  --buildpkgonly porttest/splitdebug` exits 0 and the archive's
+  `image.tar.zst` carries `usr/bin/pt-splitdebug`, `usr/lib64/libptsd.so*`
+  and the splitdebug `.debug`/`.build-id` trees (12 KiB installed tree, not
+  the old 1 KiB empty image); the same shape is pinned fixture-side by
+  `dev-libs/heredocpkg` (Bash/Brush image-set equality test) and by the
+  corrupt-saved-environment regression test. See `TEST/findings/l2.md`
+  "#38 S2" and `docs/what-this-proves.md`'s Track-B slice note.
 
 ## References
 

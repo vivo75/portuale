@@ -2590,6 +2590,52 @@ async fn run_one_phase(
     }
 }
 
+/// The host's real `bash`, as a phase's own `$BASH`.
+///
+/// `__filter_readonly_variables` (`bin/phase-functions.sh:101`) lists
+/// bash's special variables by running `env -i -- "${BASH}" -c '…'`; a
+/// real bash sets `$BASH` to itself, while an embedded brush `Shell` is
+/// built without a `shell_name`, so brush never sets it and the command
+/// comes back empty (the `env: '': No such file or directory` in the L2
+/// smoke log). Resolve the first `bash` on `PATH` -- the same one the
+/// `Bash` backend spawns -- once per process.
+fn real_bash_path() -> String {
+    use std::sync::OnceLock;
+    static RESOLVED: OnceLock<String> = OnceLock::new();
+    RESOLVED
+        .get_or_init(|| {
+            if let Some(path) = std::env::var_os("PATH") {
+                for dir in std::env::split_paths(&path) {
+                    let candidate = dir.join("bash");
+                    if candidate.is_file() {
+                        return candidate.to_string_lossy().into_owned();
+                    }
+                }
+            }
+            "bash".to_owned()
+        })
+        .clone()
+}
+
+/// Builds one fresh embedded brush shell for a phase or misc-functions
+/// run, with `$BASH` pointed at the host's real bash (`real_bash_path`)
+/// so the real `bin/*.sh` construct of listing bash's special variables
+/// works. `BASH` is set by a shell itself, not taken from the
+/// environment, so this is a shell-state assignment, not an exported
+/// variable (`phase_setup_script` is not involved).
+async fn new_brush_phase_shell() -> Result<brush_core::Shell, String> {
+    let mut shell = brush_core::Shell::builder()
+        .default_builtins(brush_builtins::BuiltinSet::BashMode)
+        .build()
+        .await
+        .map_err(|e| format!("brush shell failed to start: {e}"))?;
+    shell
+        .env_mut()
+        .set_global("BASH", brush_core::ShellVariable::new(real_bash_path()))
+        .map_err(|e| format!("setting $BASH failed: {e}"))?;
+    Ok(shell)
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn run_one_phase_brush(
     env: &Environment,
@@ -2602,11 +2648,7 @@ async fn run_one_phase_brush(
     config_root: &Path,
     log_file: Option<&Path>,
 ) -> Result<i32, String> {
-    let mut shell = brush_core::Shell::builder()
-        .default_builtins(brush_builtins::BuiltinSet::BashMode)
-        .build()
-        .await
-        .map_err(|e| format!("brush shell failed to start: {e}"))?;
+    let mut shell = new_brush_phase_shell().await?;
     let (params, pump) = brush_phase_params(&mut shell, log_file)?;
 
     let setup = phase_setup_script(
@@ -2626,10 +2668,21 @@ async fn run_one_phase_brush(
     // first and hang the join), so the outcome is captured, the
     // holders dropped in order, and only then returned.
     let outcome: Result<i32, String> = async {
-        shell
+        let setup_result = shell
             .run_string(&setup, &brush_core::SourceInfo::default(), &params)
             .await
             .map_err(|e| format!("environment setup failed: {e}"))?;
+        // A non-zero result here is a real setup failure, not a phase
+        // outcome: carry on only when the environment actually loaded. The
+        // exit code (not just a printed error) is what makes this a hard
+        // stop -- a broken saved environment must fail the phase, never
+        // silently skip the ebuild's own functions (see B2 of
+        // `backlog_tier_1_sliced.opus.md`). `Ok(nonzero)`, like
+        // `run_one_phase_bash`'s own child status: a phase failure, not a
+        // spawn failure.
+        if !setup_result.is_success() {
+            return Ok(i32::from(u8::from(setup_result.exit_code)));
+        }
 
         // Real bin/ebuild.sh's own top-level code (unconditional, not gated
         // on EBUILD_SH_ARGS at all -- confirmed empirically, not just by
@@ -2643,7 +2696,7 @@ async fn run_one_phase_brush(
         // fails outright ("cannot mutate readonly variable") -- confirmed
         // empirically by removing this line and watching that error
         // disappear.
-        shell
+        let source_result = shell
             .source_script(
                 bin_dir.join("ebuild.sh"),
                 std::iter::empty::<String>(),
@@ -2651,6 +2704,14 @@ async fn run_one_phase_brush(
             )
             .await
             .map_err(|e| format!("sourcing bin/ebuild.sh failed: {e}"))?;
+        // A non-zero exit from sourcing ebuild.sh means its own top-level
+        // guard died -- most importantly the `source "${T}"/environment ||
+        // die "error sourcing environment"` at `bin/ebuild.sh:580` -- and
+        // `__ebuild_main` must not run on a half-loaded environment. Same
+        // phase-failure shape as above.
+        if !source_result.is_success() {
+            return Ok(i32::from(u8::from(source_result.exit_code)));
+        }
 
         shell
             .invoke_function("__ebuild_main", [phase], params)
@@ -3076,11 +3137,7 @@ async fn run_misc_functions_brush(
     config_root: &Path,
     log_file: Option<&Path>,
 ) -> Result<i32, String> {
-    let mut shell = brush_core::Shell::builder()
-        .default_builtins(brush_builtins::BuiltinSet::BashMode)
-        .build()
-        .await
-        .map_err(|e| format!("brush shell failed to start: {e}"))?;
+    let mut shell = new_brush_phase_shell().await?;
     let (params, pump) = brush_phase_params(&mut shell, log_file)?;
 
     let setup = phase_setup_script(
@@ -5249,6 +5306,143 @@ mod tests {
         let observed = std::fs::read_to_string(&marker)
             .unwrap_or_else(|e| panic!("{} should have been written: {e}", marker.display()));
         assert_eq!(observed, "hello from bigfixture.eclass\n");
+
+        let _ = std::fs::remove_dir_all(&portage_tmpdir);
+    }
+
+    /// B2: a saved `${T}/environment` that does not parse must fail the
+    /// next phase loudly -- real `bin/ebuild.sh:580`'s own `source
+    /// "${T}"/environment || die "error sourcing environment"` -- never
+    /// silently continue and run the `default` phase function against a
+    /// half-loaded environment (the #38 G3 smoke's empty image with rc 0).
+    /// `run_single_phase` runs exactly one phase, with no `actionmap_deps`
+    /// chain that would re-save a fresh environment first: the same shape
+    /// a real builddir resume has when portage starts the next phase.
+    #[test]
+    fn a_corrupt_saved_environment_fails_the_next_phase_in_both_backends() {
+        let ebuild_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../fixtures/repo/dev-libs/heredocpkg/heredocpkg-1.0.ebuild");
+        let tmp = std::env::temp_dir().join(format!(
+            "ebuild-phases-test-{}-{}",
+            std::process::id(),
+            "a_corrupt_saved_environment_fails_the_next_phase_in_both_backends"
+        ));
+        let _ = std::fs::remove_dir_all(&tmp);
+
+        for (shell, name) in [(ShellBackend::Bash, "bash"), (ShellBackend::Brush, "brush")] {
+            let portage_tmpdir = tmp.join(name);
+            let unpack_status = run_commands(
+                &ebuild_path,
+                &["unpack"],
+                Path::new("/"),
+                &portage_tmpdir,
+                &portage_tmpdir.join("distfiles"),
+                false,
+                Path::new("/dev/null/no-config-root"),
+                shell,
+                &[],
+            )
+            .expect("run_commands should not itself error");
+            assert_eq!(unpack_status, 0, "{name}: unpack should exit successfully");
+
+            // The post-phase save writes `${T}/environment`; break it with
+            // a genuine syntax error (an unterminated quote -- an
+            // unterminated here-document is only a warning to bash, not a
+            // parse error, so it would not fail the bash control).
+            let environment =
+                portage_tmpdir.join("portage/dev-libs/heredocpkg-1.0/temp/environment");
+            assert!(
+                environment.is_file(),
+                "{name}: the unpack phase must save {environment:?}"
+            );
+            std::fs::write(&environment, "f() { echo \"unterminated\n").unwrap();
+
+            let log = tmp.join(format!("{name}.log"));
+            let compile_status = run_single_phase(
+                &ebuild_path,
+                "compile",
+                Path::new("/"),
+                &portage_tmpdir,
+                false,
+                Path::new("/dev/null/no-config-root"),
+                shell,
+                &[],
+                Some(&log),
+            )
+            .expect("run_single_phase should not itself error");
+            assert_ne!(
+                compile_status, 0,
+                "{name}: a corrupt saved environment must fail the phase"
+            );
+            let logged = std::fs::read_to_string(&log)
+                .unwrap_or_else(|e| panic!("{} should have been written: {e}", log.display()));
+            assert!(
+                logged.contains("error sourcing environment"),
+                "{name}: expected real ebuild.sh's own die in the phase log, got:\n{logged}"
+            );
+        }
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// B3: real `bin/phase-functions.sh`'s `__filter_readonly_variables`
+    /// lists bash's special variables by running `env -i -- "${BASH}" -c
+    /// …`, so the embedded brush shell must carry a real `$BASH` -- and
+    /// brush's own brace expansion must produce that list's fields even
+    /// under the function's own `local IFS` (the two brush-side fixes are
+    /// both `brush-pin.md`'s tracked work). When either is missing, the
+    /// saved `${T}/environment` carries `BASHOPTS`/`EUID`/`PPID`/
+    /// `SHELLOPTS`/`UID`, and re-sourcing it prints `cannot mutate
+    /// readonly variable` (plus `env: ''` when `$BASH` itself is empty).
+    #[test]
+    fn brush_phase_env_is_filtered_of_bash_special_variables() {
+        let ebuild_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../fixtures/repo/dev-libs/phasepkg/phasepkg-1.0.ebuild");
+        let portage_tmpdir = std::env::temp_dir().join(format!(
+            "ebuild-phases-test-{}-{}",
+            std::process::id(),
+            "brush_phase_env_is_filtered_of_bash_special_variables"
+        ));
+        let _ = std::fs::remove_dir_all(&portage_tmpdir);
+        let log = portage_tmpdir.join("brush.log");
+
+        let status = run_commands_logged(
+            &ebuild_path,
+            &["install"],
+            Path::new("/"),
+            &portage_tmpdir,
+            &portage_tmpdir.join("distfiles"),
+            false,
+            Path::new("/dev/null/no-config-root"),
+            ShellBackend::Brush,
+            Some(&log),
+            &[],
+        )
+        .expect("run_commands_logged should not itself error");
+        assert_eq!(status, 0, "install should exit successfully");
+
+        let environment = portage_tmpdir.join("portage/dev-libs/phasepkg-1.0/temp/environment");
+        let saved = std::fs::read_to_string(&environment)
+            .unwrap_or_else(|e| panic!("{} should have been written: {e}", environment.display()));
+        for name in ["BASHOPTS", "EUID", "PPID", "SHELLOPTS", "UID"] {
+            assert!(
+                !saved
+                    .lines()
+                    .any(|line| line.starts_with("declare") && line.contains(&format!(" {name}="))),
+                "{name} must be filtered out of the saved environment"
+            );
+        }
+
+        let logged = std::fs::read_to_string(&log)
+            .unwrap_or_else(|e| panic!("{} should have been written: {e}", log.display()));
+        assert!(
+            !logged.contains("cannot mutate readonly variable"),
+            "the phase log must not contain readonly-variable noise:\n{logged}"
+        );
+        assert!(
+            !logged.contains("env: ''"),
+            "the phase log must not contain an empty-$BASH `env` failure:\n{logged}"
+        );
 
         let _ = std::fs::remove_dir_all(&portage_tmpdir);
     }

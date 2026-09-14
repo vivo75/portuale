@@ -555,9 +555,19 @@ ANSI USE colour all shipped 2026-09-05, see `what-this-proves.md`'s
 
 ### G. Shell backend
 
-- minimize + report the brush `declare -f` heredoc bug upstream (it
-  corrupts a function with a redirected here-doc, which is why the
-  default backend is `bash`, not the embedded `brush`);
+- **Track B shipped (2026-09-14).** Five `brush` bugs found running real
+  portage phases — here-tag tokenizer corruption, `declare -f`
+  here-document serialization (incl. quoted tags), the pipeline-function
+  deadlock, fatal-on-parse-error `source`, and IFS-dependent brace
+  expansion — are fixed on per-bug `fix/*` branches, carried in the
+  thin-fork pin `b9524ad5`, and written up with `git format-patch`
+  exports in `docs/brush-pr/`. The compiled-ebuild smoke that motivated
+  it is green (see `docs/brush-pin.md` "Current pin" and
+  `what-this-proves.md`'s Track-B section). **Open:** open the five
+  upstream PRs (user's GitHub auth, B6), then drop the fork and revisit
+  the `--shell` default.
+- the phase-execution default stays `bash`, not the embedded `brush`:
+  flipping it back is a separate owner decision after the PRs land.
 - periodic re-pin to keep up with upstream `reubeno/brush` `main` (see
   `brush-pin.md`'s checklist).
 

@@ -5326,9 +5326,11 @@ def test_ebuild_install_really_inherits_a_real_eclass(ebuild_binary, tmp_path):
 def test_ebuild_install_does_not_deadlock_on_a_large_eclass_scope(
     ebuild_binary, tmp_path
 ):
-    """Regression test for a real upstream `brush` bug, since fixed in
-    the pinned fork (see docs/what-this-proves.md's eclass section for the full
-    root-cause writeup): a shell function used as a non-last pipeline
+    """Regression test for a real upstream `brush` bug, fixed by the staged
+    fix 03 (`fix/function-pipeline-stage-deadlock`, carried in the pin; a
+    re-do of the still-open reubeno/brush#1276 -- see
+    docs/what-this-proves.md's eclass section for the full root-cause
+    writeup): a shell function used as a non-last pipeline
     stage used to run inline rather than as a background task, so real
     `bin/phase-functions.sh`'s own post-phase `__save_ebuild_env |
     __filter_readonly_variables` pipe (both sides real shell functions)
@@ -5394,7 +5396,51 @@ def test_ebuild_shell_bash_and_brush_produce_the_same_real_result(
         assert (portage_tmpdir / installed_relative).read_text() == "hello from phasepkg\n"
 
 
-def test_ebuild_shell_accepts_the_inline_equals_form(ebuild_binary, tmp_path):
+def test_ebuild_shell_bash_and_brush_compile_a_quoted_heredoc_ebuild(
+    ebuild_binary, tmp_path
+):
+    """The fourth `declare -f` bug (B1): a `src_compile` whose here-document
+    tag is quoted (`<<-'EOF'`, the shape the real `porttest/splitdebug`
+    overlay uses) used to serialize its deferred terminator with the
+    quotes still on, so the next phase could not `source` the saved
+    environment, the ebuild's own `src_compile` was replaced by `default`
+    (a no-op), and `install` still exited 0 -- with an empty image. Both
+    backends must compile the fixture and produce an identical `image/`
+    file set, not merely matching exit codes."""
+    if shutil.which("gcc") is None:
+        pytest.skip("no gcc: the quoted-heredoc compile fixture cannot build")
+
+    ebuild_path = str(
+        Path(FIXTURES_ROOT) / "repo/dev-libs/heredocpkg/heredocpkg-1.0.ebuild"
+    )
+    image_relative = Path("portage/dev-libs/heredocpkg-1.0/image")
+
+    file_sets = {}
+    for shell, subdir in [("brush", "brush-run"), ("bash", "bash-run")]:
+        env = dict(os.environ)
+        portage_tmpdir = tmp_path / subdir
+        env["PORTAGE_TMPDIR"] = str(portage_tmpdir)
+
+        result = subprocess.run(
+            [str(ebuild_binary), "--shell", shell, ebuild_path, "install"],
+            capture_output=True,
+            text=True,
+            env=env,
+        )
+        assert result.returncode == 0, (shell, result.stdout, result.stderr)
+
+        image = portage_tmpdir / image_relative
+        file_sets[shell] = sorted(
+            str(path.relative_to(image))
+            for path in image.rglob("*")
+            if path.is_file()
+        )
+
+    assert file_sets["brush"], "the brush run produced an empty image"
+    assert file_sets["brush"] == file_sets["bash"], file_sets
+
+
+
     """`--shell=bash`, not just `--shell bash` -- same inline-`=` form
     every real `Kind::Value` ebuild option already accepts (see
     `ebuild.rs`'s own CLI-parsing loop)."""

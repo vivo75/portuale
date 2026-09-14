@@ -16505,3 +16505,68 @@ L3_CONTROL=1 TEST/run/l3-source-parity.sh TEST/atomlists/l3-smoke.txt
 cargo test --release -p portuale re_merging_a_sub_slotted
 cargo test --release -p portage-profile a_files_incremental_layer
 ```
+
+### Track B (Tier 1, 2026-09-14): the embedded brush builds a compiled ebuild like bash
+
+The 2026-09-13 `src_compile` no-op under `--shell brush` (empty image, rc 0)
+was not one bug but three, plus a fourth found while fixing them. All are
+fixed in `vivo75/brush` `main` `b9524ad5` (= upstream `25bffd54` + five
+staged fixes; every branch one commit on upstream):
+
+1. **fix 02** (B1) emitted a quoted here-tag terminator raw — `<<'EOF'`
+   serialized a terminator line `'EOF'` — and printed the command-line tag
+   uncanonicalized; the next phase's `source "${T}/environment"` could not
+   parse it, so `src_compile` silently became `default`. Fixed with
+   `unquote_str` for the terminator and shell-style single-quoting for the
+   tag, with one compat case per quoting form.
+2. **fix 04** (B2) made a parse error in a *sourced* file fatal to the whole
+   script, so real `bin/ebuild.sh:580`'s `source "${T}"/environment || die`
+   guard could not fire. bash returns 2 and continues; brush now clears the
+   fatal control flow at the `source` boundary only. portuale additionally
+   fails the phase when setup/`bin/ebuild.sh` sourcing returns non-zero.
+3. **fix 05** (B3) found brace expansion joining its alternatives with
+   spaces and relying on IFS to split them again: under the
+   `local IFS` in `__filter_readonly_variables`, `printf '${!%s*} ' {A..Z}
+   {a..z} _` produced one malformed `${!A B C…}` token, no bash special was
+   filtered, and `BASHOPTS`/`EUID`/`PPID`/`SHELLOPTS`/`UID` were saved into
+   `${T}/environment` (`declare: cannot mutate readonly variable` on every
+   later `source`). `basic_expand` now expands each brace alternative
+   separately; the embedded shell is also given a real `$BASH`
+   (portuale-side) so the hygienic list can be built at all.
+
+Runnable, live-verified (host + the `test-portuale` image):
+
+```sh
+# 1+2: both backends produce the same non-empty image for a <<-'EOF' src_compile
+python3 -m pytest tests/test_portuale.py \
+  -k test_ebuild_shell_bash_and_brush_compile_a_quoted_heredoc_ebuild -q
+
+# 2: a corrupt ${T}/environment fails *loudly* under both backends
+cargo test --release -p portuale a_corrupt_saved_environment_fails_the_next_phase_in_both_backends \
+  -- --exact
+# 3: no BASHOPTS/EUID/PPID/SHELLOPTS/UID in the saved env, no readonly noise
+cargo test --release -p portuale brush_phase_env_is_filtered_of_bash_special_variables \
+  -- --exact
+
+# the #38 G3 smoke, re-run on the new pin (`porttest/splitdebug`)
+podman run --rm --entrypoint /bin/bash \
+  -v "$PWD/rust/target/release:/usr/local/bin:ro" -v "$PWD:$PWD:ro" \
+  -v "$PWD/TEST/images/overlay/porttest:/porttest-overlay:ro" \
+  localhost/test-portuale:latest -c '
+    cp -a /porttest-overlay /var/db/repos/porttest
+    printf "[porttest]\nlocation = /var/db/repos/porttest\nmasters = gentoo\nauto-sync = no\n" \
+      > /etc/portage/repos.conf/porttest.conf
+    ROOT=/ PORTAGE_CONFIGROOT=/ FEATURES="buildpkg binpkg-multi-instance splitdebug" \
+      /usr/local/bin/emerge --shell brush --buildpkgonly --oneshot porttest/splitdebug'
+# -> rc 0, "Final size of installed tree: 12 KiB", archive image.tar.zst
+#    carries usr/bin/pt-splitdebug + usr/lib64/libptsd.so* + .debug/.build-id
+#    (was: 1 KiB empty image, rc 0)
+```
+
+The upstream fix branches were also exercised against the real eclass tree:
+all 211 Gentoo eclasses (2054 functions) plus one synthetic function per
+quoted-tag form round-trip `declare -f` → `eval` → `declare -f` with 0
+failures under the new pin, where pristine `25bffd54` leaves 41 eclasses
+unparsed and fails 20 of the 1407 functions it does parse. Evidence:
+`docs/brush-pin.md` "Current pin", `docs/brush-pr/` (five write-ups +
+patches), `TEST/findings/l2.md` "#38 S2".

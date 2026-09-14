@@ -1,4 +1,4 @@
-From ca11d652d6c0b9e325f114c1d00a5b8e9e3b5692 Mon Sep 17 00:00:00 2001
+From 962051c96ab35d993cd57aea9cf836fa2ce22cec Mon Sep 17 00:00:00 2001
 From: Francesco Riosa <me@francesco-riosa.com>
 Date: Sat, 5 Sep 2026 20:22:35 +0200
 Subject: [PATCH] fix(commands): run a function pipeline stage as a background

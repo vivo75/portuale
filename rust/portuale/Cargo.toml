@@ -24,24 +24,33 @@ portage-versions = { path = "../portage-versions" }
 # "Real ebuild phase execution" section): a deliberate, accepted dynamic
 # dependency (this pilot's own "near-zero dependencies" discipline is
 # explicitly waived here, see that doc's own "bash-execution-backend
-# question" writeup) -- pinned by exact commit to real upstream
-# `reubeno/brush` `main`. The fork (`vivo75/brush`) is gone as of
-# 2026-09-01: its two fixes are both resolved here.
-#   - brace-less function bodies (`name() [[ ... ]]`, used 60 times by
-#     bin/eapi.sh): MERGED upstream as reubeno/brush#1274 (18851e7),
-#     an ancestor of this pin.
-#   - pipeline function-stage deadlock (a function as a non-last pipeline
-#     stage ran inline, deadlocking once it wrote > ~64KiB before
-#     returning): still OPEN upstream as reubeno/brush#1276, but **not
-#     load-bearing here** -- `bin/phase-functions.sh` was rewritten
-#     (brush strategy #2) so `__save_ebuild_env` /
-#     `__filter_readonly_variables` stage through a temp file and are
-#     never a pipeline stage. `install_does_not_deadlock...` (portuale)
-#     is the guard.
-# See docs/brush-pin.md for the tracking record and the periodic
-# re-pin checklist (bump the rev to a newer `main`, re-run the suite).
-brush-core = { git = "https://github.com/vivo75/brush", rev = "67c301a79c0f4ae734cdd59783f6fdffcdd78c2e" }
-brush-builtins = { git = "https://github.com/vivo75/brush", rev = "67c301a79c0f4ae734cdd59783f6fdffcdd78c2e" }
+# question" writeup) -- pinned by exact commit to the thin fork
+# `vivo75/brush`: upstream `reubeno/brush` `main` plus the five staged
+# `docs/brush-pr/` fixes, nothing else. No released crates.io version
+# carries reubeno/brush#1274 (which portuale's use of `bin/eapi.sh`
+# needs) or any of the staged fixes, which is why the pin is a git rev.
+# The staged fixes:
+#   - brace-less function bodies (`name() [[ ... ]]`, used ~60 times by
+#     bin/eapi.sh): MERGED upstream as reubeno/brush#1274 (18851e7).
+#   - parser: a `${…}`/`$(…)` on a here-tag line stole the pending
+#     here-document's tokens (fix 01).
+#   - parser: `declare -f` here-document serialization -- body placement,
+#     quoted terminators; this is the one that unblocked `--shell brush`
+#     phase save/restore (fix 02).
+#   - core: a function used as a non-last pipeline stage ran inline and
+#     deadlocked past one pipe buffer (fix 03; a re-do of the
+#     still-open reubeno/brush#1276 -- `bin/phase-functions.sh`'
+#     strategy-#2 rewrite keeps portage's own tree off that path).
+#   - core: a parse error in a *sourced* file no longer exits the
+#     calling shell, so real `source "${T}/environment" || die` fires
+#     (fix 04).
+#   - core: brace expansion produces its fields independently of IFS,
+#     as bash does -- `__filter_readonly_variables`' special-variable
+#     list is built under `local IFS` (fix 05).
+# See docs/brush-pin.md for the tracking record and the periodic re-pin
+# checklist (bump the rev to a newer `main`, re-run the suite).
+brush-core = { git = "https://github.com/vivo75/brush", rev = "b9524ad51de5c8231eb5dcaf79ca982841117385" }
+brush-builtins = { git = "https://github.com/vivo75/brush", rev = "b9524ad51de5c8231eb5dcaf79ca982841117385" }
 # "rt-multi-thread", not just "rt": a single-threaded runtime deadlocks
 # partway through a real multi-phase run (confirmed empirically -- see
 # ebuild_phases::run_commands's own doc comment) -- brush-core's own

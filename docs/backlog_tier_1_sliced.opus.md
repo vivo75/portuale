@@ -2,14 +2,19 @@
 
 Status: proposed. Written 2026-09-14 against `main` @ `5a1f329`.
 
-**Progress 2026-09-14:** Track F committed (below). B0 (pin records) done in the working tree, not in that commit.
-Track B otherwise paused by the owner; an unfinished B1 terminator fix sits
-uncommitted on `3rdparty/brush` `fix/declare-f-heredoc-serialization`.
-Track F: F1a, F1b, F2, F3 steps (1)+(2), F4 and F5 done. F5's oracle
-(real `fetch(..., listonly=1)` on this host) showed a file's literal URIs
-are tried **last-listed first**. Owner decisions registered 2026-09-14:
-D3 = deterministic suffix, D4 = shuffle stays a deliberate cut. Not yet
-implemented: F3 step (3) and F6.
+**Progress 2026-09-14:** Track F committed on `main`: F1a, F1b, F2, F3
+steps (1)+(2), F4 and F5 done; owner decisions registered D3 =
+deterministic suffix (F3 step (3), landed in `9f0e477`), D4 = shuffle stays
+a deliberate cut; F4's free-space check is `79ce808`. F5's oracle (real
+`fetch(..., listonly=1)` on this host) showed a file's literal URIs are
+tried **last-listed first**. **Track B complete (B0–B5):** `vivo75/brush`
+`main` was rebuilt on upstream `25bffd54` (`b9524ad5`) with five per-bug
+branches force-pushed (`bc99e6c1`, `df830c59`, `962051c9`, `dfbca97c`,
+`2073877d`); portuale is re-pinned and verified (workspace
+`cargo test --release`, full pytest, brush compat 0 unexpected failures,
+eclass sweep 0 failures incl. quoted-tag synthetics, #38 G3 smoke non-empty
+under `--shell brush`). B6 (open the five PRs) stays user-owned; B7 is
+upstream-blocked.
 
 Scope: the open entries of **Tier 1** in
 [`backlog-tasks.md`](backlog-tasks.md) ("focused slices, ~one sitting

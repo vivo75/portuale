@@ -2,9 +2,10 @@
 
 **Crate:** `brush-parser` · **File:** `src/ast.rs` (+ `brush-shell/tests/cases/compat/builtins/declare.yaml`) · **Patch:** [`patches/02-declare-f-heredoc-serialization.patch`](patches/02-declare-f-heredoc-serialization.patch)
 
-Five related serialization fixes. Each stands alone; grouped because they share
-the "`declare -f` should round-trip" goal and the same file. Natural commit
-split noted per section.
+Five related serialization fixes plus the 2026-09-14 quoted-terminator
+repair. Each stands alone; grouped because they share the "`declare -f`
+should round-trip" goal and the same file. Natural commit split noted per
+section.
 
 ---
 
@@ -169,14 +170,56 @@ space. `IoRedirect::File`'s `Display` now selects the separator on
 
 ---
 
+## (f) Quoted here-tag delimiters — found 2026-09-14
+
+### Symptom
+
+```console
+$ brush -c "f() { cat > a.c <<-'EOF'
+		int x;
+	EOF
+}
+declare -f f"
+f ()
+{
+    cat > a.c <<-'EOF'
+int x;
+'EOF'          # <-- the terminator kept its quotes; no shell's here-doc scan matches it
+
+}
+```
+
+Every function whose here-tag was quoted serialized to an unparseable
+environment; the next `source "${T}/environment" || die` aborted, and (before
+04) the phase silently fell back to `default`. Real eclasses rarely quote a
+tag, which is why the first 211-eclass sweep missed it — the
+`porttest/splitdebug` fixture's `src_compile` does (`cat > pt-sd.c <<-'EOF'`).
+
+### Root cause + fix
+
+`IoRedirect::HereDocument`'s deferred block appended `here_doc.here_end.value`
+— the raw tag word, quotes included. It now appends the **quote-removed**
+delimiter (`tokenizer::unquote_str`, the same helper the tokenizer uses to
+recognize the terminator line). The command-line tag is also re-quoted the way
+a shell prints it: a delimiter that needed quoting is emitted as a
+single-quoted word (`<<"EOF"`, `<<\EOF`, `<<E"O"F` all print `<<'EOF'`), a
+plain one as written.
+
+**Commit boundary:** folded into (a)'s commit — it is the same `Display`
+path and the same round-trip goal.
+
+---
+
 ## Tests
 
-`brush-shell/tests/cases/compat/builtins/declare.yaml` — 4 new cases
-(here-document, process substitution, multi-line string, and an explicit
+`brush-shell/tests/cases/compat/builtins/declare.yaml` — 8 new cases
+(here-document, process substitution, multi-line string, an explicit
 `d=$(declare -f f); eval "$d"; [ "$d" = "$(declare -f f)" ]` idempotency
-check). All byte-identical to the bash oracle.
+check, and one per quoted-tag form: `<<'EOF'`, `<<"EOF"`, `<<\EOF`,
+`<<-'EOF'` with a tab-indented body). All byte-identical to the bash oracle,
+each quoting-form case re-evaluated to assert idempotency.
 
-Full compat suite: 0 failed (unchanged). Every function in all 211 Gentoo
-eclasses now round-trips `declare -f` → `eval` → `declare -f` idempotently
-(with (a)+(b)+(c); (d)/(e) close the last byte-level gaps against bash for the
-`toolchain-funcs` functions specifically).
+Full compat suite: 0 unexpected failures. Every function in all 211 Gentoo
+eclasses round-trips `declare -f` → `eval` → `declare -f` idempotently, plus
+one synthetic quoted-tag function per form ((d)/(e) close the last byte-level
+gaps against bash for the `toolchain-funcs` functions specifically).

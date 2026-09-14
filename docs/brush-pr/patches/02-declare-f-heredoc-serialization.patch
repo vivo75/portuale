@@ -1,4 +1,4 @@
-From 3d2bde47e865fcd62f500afd147c110a719020e3 Mon Sep 17 00:00:00 2001
+From df830c59f664f1dec4dace5e57d4e897fbddc917 Mon Sep 17 00:00:00 2001
 From: Francesco Riosa <me@francesco-riosa.com>
 Date: Sat, 5 Sep 2026 20:22:13 +0200
 Subject: [PATCH] fix(parser): make `declare -f` of a here-document parseable
@@ -33,20 +33,33 @@ round-trip.
 - `|` and file-descriptor-duplication (`>&1`, `<&-`) spacing now match a
   shell's output (`a | b`, not `a |b`; `2>&1`, not `2>& 1`).
 
+- A quoted delimiter is handled the way a shell handles it. The
+  command line keeps the tag, re-quoted as a single-quoted word when the
+  original needed quoting (`<<"EOF"`, `<<\EOF` and `<<E"O"F` all print as
+  `<<'EOF'`), while the deferred terminator line is the quote-removed
+  delimiter. Without this, `<<'EOF'` serialized to a terminator line of
+  `'EOF'` -- which no shell's here-document scan matches -- so the output
+  still would not round-trip.
+
 Adds compat cases for a here-document, a process substitution, a
-multi-line quoted string, and an explicit `declare -f` idempotency check.
+multi-line quoted string, and an explicit `declare -f` idempotency check;
+plus one case per quoting form (`<<'EOF'`, `<<"EOF"`, `<<\EOF`, and
+`<<-'EOF'` with a tab-indented body), each printed for comparison against
+bash and re-evaluated to assert idempotency.
+
+Assisted-by: opencode:deepseek-v4.1-flash
 ---
  Cargo.lock                                    |   7 -
  brush-parser/Cargo.toml                       |   1 -
- brush-parser/src/ast.rs                       | 226 +++++++++++++++---
- .../tests/cases/compat/builtins/declare.yaml  |  49 ++++
- 4 files changed, 241 insertions(+), 42 deletions(-)
+ brush-parser/src/ast.rs                       | 240 +++++++++++++++---
+ .../tests/cases/compat/builtins/declare.yaml  | 101 ++++++++
+ 4 files changed, 307 insertions(+), 42 deletions(-)
 
 diff --git a/Cargo.lock b/Cargo.lock
-index a018adea..e3d899e2 100644
+index e5d6640c..b34d0990 100644
 --- a/Cargo.lock
 +++ b/Cargo.lock
-@@ -589,7 +589,6 @@ dependencies = [
+@@ -587,7 +587,6 @@ dependencies = [
   "cached",
   "criterion",
   "getrandom 0.4.3",
@@ -54,7 +67,7 @@ index a018adea..e3d899e2 100644
   "insta",
   "miette",
   "peg",
-@@ -2353,12 +2352,6 @@ version = "0.1.1"
+@@ -2355,12 +2354,6 @@ version = "0.1.1"
  source = "registry+https://github.com/rust-lang/crates.io-index"
  checksum = "d9f1a0777d972970f204fdf8ef319f1f4f8459131636d7e3c96c5d59570d0fa6"
  
@@ -66,7 +79,7 @@ index a018adea..e3d899e2 100644
 -
  [[package]]
  name = "indexmap"
- version = "2.14.0"
+ version = "2.14.2"
 diff --git a/brush-parser/Cargo.toml b/brush-parser/Cargo.toml
 index 262a79af..ee56f8e0 100644
 --- a/brush-parser/Cargo.toml
@@ -80,7 +93,7 @@ index 262a79af..ee56f8e0 100644
      "derive",
  ] }
 diff --git a/brush-parser/src/ast.rs b/brush-parser/src/ast.rs
-index 043baf4c..142d3928 100644
+index 043baf4c..ff320d51 100644
 --- a/brush-parser/src/ast.rs
 +++ b/brush-parser/src/ast.rs
 @@ -1,12 +1,148 @@
@@ -382,7 +395,7 @@ index 043baf4c..142d3928 100644
              }
              Self::OutputAndError(target, append) => {
                  write!(f, "&>")?;
-@@ -1578,7 +1721,18 @@ impl Display for IoRedirect {
+@@ -1578,7 +1721,22 @@ impl Display for IoRedirect {
                      write!(f, "{fd_num}")?;
                  }
  
@@ -395,13 +408,17 @@ index 043baf4c..142d3928 100644
 +                if !block.is_empty() && !block.ends_with('\n') {
 +                    block.push('\n');
 +                }
-+                block.push_str(&here_doc.here_end.value);
++                // The terminator is the delimiter with any quoting removed: a shell ends a
++                // `<<'EOF'` / `<<\EOF` here-document at a bare `EOF` line, so re-serializing the
++                // quoted word as-is would make `declare -f` output unparseable (the indented,
++                // quoted tag would also no longer match at column 0).
++                block.push_str(&tokenizer::unquote_str(&here_doc.here_end.value));
 +                block.push('\n');
 +                defer_heredoc_body(block);
              }
              Self::HereString(fd_num, s) => {
                  if let Some(fd_num) = fd_num {
-@@ -1658,7 +1812,8 @@ impl Display for IoFileRedirectTarget {
+@@ -1658,7 +1816,8 @@ impl Display for IoFileRedirectTarget {
              Self::Filename(word) => write!(f, "{word}"),
              Self::Fd(fd) => write!(f, "{fd}"),
              Self::ProcessSubstitution(kind, subshell_command) => {
@@ -411,7 +428,7 @@ index 043baf4c..142d3928 100644
              }
              Self::Duplicate(word) => write!(f, "{word}"),
          }
-@@ -1701,15 +1856,14 @@ impl SourceLocation for IoHereDocument {
+@@ -1701,15 +1860,24 @@ impl SourceLocation for IoHereDocument {
  }
  
  impl Display for IoHereDocument {
@@ -427,11 +444,21 @@ index 043baf4c..142d3928 100644
 -        write!(f, "{}", self.doc)?;
 -        writeln!(f, "{}", self.here_end)?;
 -
-+        write!(f, "{}", self.here_end)?;
++        // A shell re-quotes the delimiter as a single-quoted word exactly when the original
++        // needed quoting: `<<"EOF"`, `<<\EOF` and `<<E"O"F` all print as `<<'EOF'`, while a
++        // delimiter that was written plain is printed as written. This is the same quote
++        // removal the tokenizer uses to recognize the terminator line.
++        let raw = &self.here_end.value;
++        let unquoted = tokenizer::unquote_str(raw);
++        if unquoted == *raw {
++            write!(f, "{raw}")?;
++        } else {
++            write!(f, "'{}'", unquoted.replace('\'', "'\\''"))?;
++        }
          Ok(())
      }
  }
-@@ -2022,6 +2176,10 @@ impl SourceLocation for Word {
+@@ -2022,6 +2190,10 @@ impl SourceLocation for Word {
  
  impl Display for Word {
      fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -443,21 +470,21 @@ index 043baf4c..142d3928 100644
      }
  }
 diff --git a/brush-shell/tests/cases/compat/builtins/declare.yaml b/brush-shell/tests/cases/compat/builtins/declare.yaml
-index f5881ba7..6127e4cd 100644
+index f5881ba7..c2926b24 100644
 --- a/brush-shell/tests/cases/compat/builtins/declare.yaml
 +++ b/brush-shell/tests/cases/compat/builtins/declare.yaml
-@@ -328,6 +328,55 @@ cases:
+@@ -328,6 +328,107 @@ cases:
        }
        declare -f f
  
 +  - name: "Displaying a function with a here-document"
 +    stdin: |
 +      f() {
-+        cat <<EOF > "${dest}.c"
++        cat <<EOF > "$dest.c"
 +      #include <stdio.h>
 +      int main(void) { return 0; }
 +      EOF
-+        rm -f "${dest}.c"
++        rm -f "$dest.c"
 +      }
 +      g() { echo before; cat <<END; echo after; }
 +      one
@@ -465,6 +492,58 @@ index f5881ba7..6127e4cd 100644
 +      END
 +      declare -f f
 +      declare -f g
++
++  - name: "Displaying a function with a single-quoted here-document tag"
++    stdin: |
++      f() {
++        cat <<'EOF'
++      line one
++      line two
++      EOF
++      }
++      d=$(declare -f f)
++      printf '%s\n' "$d"
++      eval "$d"
++      [ "$d" = "$(declare -f f)" ] && echo "idempotent" || echo "NOT idempotent"
++
++  - name: "Displaying a function with a double-quoted here-document tag"
++    stdin: |
++      f() {
++        cat <<"EOF"
++      line one
++      line two
++      EOF
++      }
++      d=$(declare -f f)
++      printf '%s\n' "$d"
++      eval "$d"
++      [ "$d" = "$(declare -f f)" ] && echo "idempotent" || echo "NOT idempotent"
++
++  - name: "Displaying a function with a backslash-escaped here-document tag"
++    stdin: |
++      f() {
++        cat <<\EOF
++      line one
++      line two
++      EOF
++      }
++      d=$(declare -f f)
++      printf '%s\n' "$d"
++      eval "$d"
++      [ "$d" = "$(declare -f f)" ] && echo "idempotent" || echo "NOT idempotent"
++
++  - name: "Displaying a function with a tab-stripping quoted here-document tag"
++    stdin: |
++      f() {
++      	cat <<-'EOF'
++      		line one
++      		line two
++      	EOF
++      }
++      d=$(declare -f f)
++      printf '%s\n' "$d"
++      eval "$d"
++      [ "$d" = "$(declare -f f)" ] && echo "idempotent" || echo "NOT idempotent"
 +
 +  - name: "Displaying a function with a process substitution"
 +    stdin: |

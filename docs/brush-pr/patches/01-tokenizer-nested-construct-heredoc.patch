@@ -1,4 +1,4 @@
-From bd4793ab376c6c89f4ecba55b108d9663fa84f84 Mon Sep 17 00:00:00 2001
+From bc99e6c1eeb5f55a3d3c5c55719bc358c67c38e1 Mon Sep 17 00:00:00 2001
 From: Francesco Riosa <me@francesco-riosa.com>
 Date: Sat, 5 Sep 2026 20:21:46 +0200
 Subject: [PATCH] =?UTF-8?q?fix(parser):=20don't=20let=20a=20nested=20${?=
@@ -387,7 +387,7 @@ index 00000000..73df813f
 +  ],
 +)
 diff --git a/brush-parser/src/tokenizer.rs b/brush-parser/src/tokenizer.rs
-index 98aa9a17..34bf9f36 100644
+index bf8a94d4..f5bbccd2 100644
 --- a/brush-parser/src/tokenizer.rs
 +++ b/brush-parser/src/tokenizer.rs
 @@ -620,6 +620,64 @@ impl<'a, R: ?Sized + std::io::BufRead> Tokenizer<'a, R> {
