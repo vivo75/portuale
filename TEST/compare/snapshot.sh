@@ -36,7 +36,12 @@ while true; do
 done
 ROOT=${1:?root dir}
 OUT=${2:?output prefix}
+# `ROOT` is used with a leading join (`"$ROOT/proc"`), so the trailing
+# slash is stripped -- but for the L3 full-tree call `ROOT=/` that leaves
+# the empty string, and `find ""` matches nothing. Keep a separate
+# non-empty start for the walk.
 ROOT=${ROOT%/}
+FIND_ROOT=${ROOT:-/}
 
 # Paths whose *content* is runtime scratch / regenerated -- excluded
 # entirely from the walk (see doc §4.2).
@@ -49,7 +54,22 @@ PRUNE=(
   # the files manifest -- otherwise every BUILD_TIME/COUNTER shows up
   # twice, once un-normalised as a CONTENT diff.
   "$ROOT/var/db/pkg"
+  # Test-bed mounts: /TEST (scripts + per-run outputs, which differ
+  # between the two containers by construction) and the shared distfile
+  # cache are inputs, never installed state. `--paths`-restricted walks
+  # never reach them; the L3 full-tree walk does.
+  "$ROOT/TEST" "$ROOT/distfiles"
 )
+# Extra root-relative paths to prune, `:`-separated (`SNAPSHOT_PRUNE`),
+# for a mount the caller knows about but this script cannot (the L3
+# orchestrator prunes the repo bind mount that `podman_run_portuale`
+# places at its host path). Empty is the common case.
+if [ -n "${SNAPSHOT_PRUNE:-}" ]; then
+  IFS=: read -r -a extra <<< "${SNAPSHOT_PRUNE}"
+  for p in "${extra[@]}"; do
+    [ -n "$p" ] && PRUNE+=("${ROOT%/}${p}")
+  done
+fi
 
 prune_expr=()
 for p in "${PRUNE[@]}"; do prune_expr+=( -path "$p" -prune -o ); done
@@ -59,7 +79,7 @@ for p in "${PRUNE[@]}"; do prune_expr+=( -path "$p" -prune -o ); done
 
 emit_null() {  # feed to the stat loop below
   if [ -z "$PATHS_FILE" ]; then
-    find "$ROOT" "${prune_expr[@]}" -print0 2>/dev/null
+    find "$FIND_ROOT" "${prune_expr[@]}" -print0 2>/dev/null
     return
   fi
   local recurse=() single=()

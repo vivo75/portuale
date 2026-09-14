@@ -1057,6 +1057,52 @@ fn note_incremental(config: &mut Config, key: &str, value: &str) {
     }
 }
 
+/// Real config files are *sourced*, so an incremental variable's own
+/// layer for one file is its **final** assignment's value -- not every
+/// assignment stacked. Confirmed against real 3.0.82.2: a second
+/// `FEATURES=` line later in `make.conf` replaces the first (bash
+/// semantics; a second assignment is not an incremental addition), and
+/// `emerge --info` drops the first line's tokens entirely. Portuale
+/// records one source per assignment, so each file's processing is
+/// bracketed by [`IncrementalSnapshot::take`] / `restore`, which
+/// collapses that file's assignments to the last one.
+struct IncrementalSnapshot(Vec<(String, usize)>);
+
+impl IncrementalSnapshot {
+    fn take(config: &Config) -> Self {
+        Self(
+            TRACKED_INCREMENTALS
+                .iter()
+                .map(|key| {
+                    (
+                        (*key).to_string(),
+                        config
+                            .incremental_sources
+                            .get(*key)
+                            .map(Vec::len)
+                            .unwrap_or(0),
+                    )
+                })
+                .collect(),
+        )
+    }
+
+    /// Collapse everything appended since `take` to the file's final
+    /// assignment (no-op when the file assigned nothing).
+    fn restore(self, config: &mut Config) {
+        for (key, depth) in self.0 {
+            let Some(sources) = config.incremental_sources.get_mut(&key) else {
+                continue;
+            };
+            if sources.len() > depth {
+                let last = sources.last().cloned().unwrap_or_default();
+                sources.truncate(depth);
+                sources.push(last);
+            }
+        }
+    }
+}
+
 /// One `--getbinpkg` binary-package repository (real
 /// `portage.binrepo.config.BinRepoConfig`, narrowed to what a
 /// `--pretend` resolution needs: no fetch/resume commands, no
@@ -2262,6 +2308,7 @@ pub fn resolve_config(
     // packages' `/etc/env.d/*` fragments) feed `emerge --info`; the rest
     // is build-phase env portuale doesn't model.
     if let Ok(text) = fs::read_to_string(eroot.join("etc/profile.env")) {
+        let snapshot = IncrementalSnapshot::take(&config);
         for line in logical_lines(&text) {
             let t = line.trim();
             let l = t.strip_prefix("export ").unwrap_or(t);
@@ -2289,6 +2336,7 @@ pub fn resolve_config(
                 scalars.insert(key.to_string(), value);
             }
         }
+        snapshot.restore(&mut config);
     }
 
     // `globals`: `cnf/make.globals`, always sourced -- the base layer
@@ -2305,7 +2353,9 @@ pub fn resolve_config(
             source: e,
         })?;
         scalars.remove("USE");
+        let snapshot = IncrementalSnapshot::take(&config);
         process_lines(&text, &mut scalars, &mut config);
+        snapshot.restore(&mut config);
     }
 
     let make_profile = config_root.join("etc/portage/make.profile");
@@ -2337,7 +2387,9 @@ pub fn resolve_config(
                 path: make_defaults.display().to_string(),
                 source: e,
             })?;
+            let snapshot = IncrementalSnapshot::take(&config);
             process_lines(&text, &mut scalars, &mut config);
+            snapshot.restore(&mut config);
         }
         let level_make_defaults_use = config.use_tokens[before..].to_vec();
         let level_package_use =
@@ -2363,6 +2415,7 @@ pub fn resolve_config(
     let make_conf = config_root.join("etc/portage/make.conf");
     if make_conf.is_file() {
         let mut visited_sources = HashSet::new();
+        let snapshot = IncrementalSnapshot::take(&config);
         process_make_conf_file(
             &make_conf,
             config_root,
@@ -2370,6 +2423,7 @@ pub fn resolve_config(
             &mut config,
             &mut visited_sources,
         )?;
+        snapshot.restore(&mut config);
     }
 
     // Real `config.regenerate()`'s `env` `USE_ORDER` layer -- the process
@@ -5803,5 +5857,34 @@ sync-uri = file:///srv/pkgs
             Some(vec!["b".to_string(), "c".to_string(), "d".to_string()])
         );
         assert_eq!(config.resolved_incremental("CONFIG_PROTECT"), None);
+    }
+
+    /// L3 finding: real config files are sourced, so one file's
+    /// incremental layer is its **final** assignment -- a second
+    /// `FEATURES=` line in `make.conf` replaces the first (`emerge
+    /// --info` drops the first line's tokens entirely). The per-file
+    /// snapshot must collapse to that final value while leaving earlier
+    /// files' layers stacked.
+    #[test]
+    fn a_files_incremental_layer_is_its_final_assignment() {
+        let mut config = Config::default();
+        note_incremental(&mut config, "FEATURES", "a b");
+        let snapshot = IncrementalSnapshot::take(&config);
+        note_incremental(&mut config, "FEATURES", "c");
+        note_incremental(&mut config, "FEATURES", "-a d");
+        snapshot.restore(&mut config);
+        // The second file contributed only its final "-a d"; the first
+        // file's "a b" still stacks first -> b d.
+        assert_eq!(
+            config.resolved_incremental("FEATURES"),
+            Some(vec!["b".to_string(), "d".to_string()])
+        );
+        // A file that assigned nothing leaves the previous layers alone.
+        let snapshot = IncrementalSnapshot::take(&config);
+        snapshot.restore(&mut config);
+        assert_eq!(
+            config.resolved_incremental("FEATURES"),
+            Some(vec!["b".to_string(), "d".to_string()])
+        );
     }
 }

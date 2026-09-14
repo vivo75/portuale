@@ -2928,14 +2928,24 @@ fn merge_after_install(
 
     let ebuild_text = std::fs::read_to_string(&env.ebuild_abs)
         .map_err(|e| format!("{}: {e}", env.ebuild_abs.display()))?;
-    let slot = parse_slot(&ebuild_text);
+    let full_slot = parse_slot(&ebuild_text);
     let repository = repository_name_for(&env.pkg_dir).unwrap_or_else(|| "__unknown__".to_string());
 
     // Real `self._installed_instance` (`vartree.py:4409-4418`), computed
     // early -- before the vdb write below ever touches this exact
     // category/pf's own real `CONTENTS` -- see `installed_instance_pf`'s
     // own doc comment.
-    let installed_instance_pf = installed_instance_pf(root, &env.category, &env.split.pn, &slot);
+    // `installed_instance_pf`/`find_collisions`/`blocked_installed_
+    // packages` all compare against `read_installed_slot`, which returns
+    // the installed vdb `SLOT` file's *main* slot (`"0"` for a real
+    // `"0/6"`): the merge must pass the main slot to them, while the vdb
+    // write records the ebuild's full `slot/sub_slot`. Passing the full
+    // slot here made every sub-slotted package (ncurses, glibc, ...)
+    // look like it owned none of its own files, so `-e`/reinstall merges
+    // aborted under `FEATURES=protect-owned` (L3 smoke finding).
+    let main_slot = full_slot.split('/').next().unwrap_or("0");
+    let installed_instance_pf =
+        installed_instance_pf(root, &env.category, &env.split.pn, main_slot);
 
     // Real `dblink.treewalk()`'s `preinst_mask` + `install_mask_dir`
     // step, run before `_collision_protect` and before any file is
@@ -2957,13 +2967,14 @@ fn merge_after_install(
     // `blocked_installed_packages`'s own doc comment for the full real
     // grounding (this is genuinely new machinery: `ebuild <file> merge`
     // has never resolved real config/USE at all before this).
-    let blocked = blocked_installed_packages(root, &options.config_root, env, &slot, &repository);
+    let blocked =
+        blocked_installed_packages(root, &options.config_root, env, main_slot, &repository);
     let (collisions, symlink_collisions, plib_collisions) = find_collisions(
         &env.d(),
         root,
         &env.category,
         &env.split.pn,
-        &slot,
+        main_slot,
         &options.config_protect,
         &options.config_protect_mask,
         &plib_inodes,
@@ -3030,7 +3041,7 @@ fn merge_after_install(
         &mut cfgfiledict,
     )?;
     write_cfgfiledict(root, &cfgfiledict)?;
-    write_vdb_entry(root, env, &slot, &repository, &contents)?;
+    write_vdb_entry(root, env, &full_slot, &repository, &contents)?;
 
     if !plib_collisions.is_empty() {
         let cpv = format!("{}/{}", env.category, env.split.pf);
@@ -3043,7 +3054,6 @@ fn merge_after_install(
     // the vdb write, *before* `pkg_postinst` / `env_update`. A same-cpv
     // `Reinstall` finds nothing to unmerge (`write_vdb_entry` already
     // replaced its own entry), matching the pre-replace-loop behaviour.
-    let main_slot = slot.split('/').next().unwrap_or("0");
     let replaced = unmerge_replaced_same_slot(
         root,
         &env.category,
@@ -5082,6 +5092,45 @@ mod tests {
                 .join("var/db/pkg/dev-libs/-MERGING-mergepkg-1.0")
                 .exists()
         );
+    }
+
+    /// L3 smoke finding: a package whose ebuild `SLOT` carries a sub-slot
+    /// (`SLOT="0/1"`) must not collide with its own installed copy on a
+    /// reinstall / `-e` merge. `find_collisions` and
+    /// `installed_instance_pf` compare against the vdb `SLOT` file's
+    /// *main* slot, so passing the ebuild's full `slot/sub_slot` made
+    /// every file look foreign and `FEATURES=protect-owned` (real's
+    /// default) aborted the merge.
+    #[test]
+    fn re_merging_a_sub_slotted_package_does_not_collide_with_its_own_files() {
+        let tmp = tempdir();
+        let root = tmp.join("root");
+        let portage_tmpdir = tmp.join("tmp");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::create_dir_all(&portage_tmpdir).unwrap();
+        let ebuild = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../fixtures/repo/dev-libs/subslotfilepkg/subslotfilepkg-1.0.ebuild");
+        let options = MergeOptions {
+            features: "sandbox".to_string(),
+            ..MergeOptions::default()
+        };
+
+        assert_eq!(
+            run_merge(&ebuild, &root, &portage_tmpdir, &options, None).unwrap(),
+            0
+        );
+        let slot =
+            std::fs::read_to_string(root.join("var/db/pkg/dev-libs/subslotfilepkg-1.0/SLOT"))
+                .unwrap();
+        assert_eq!(slot.trim(), "0/1");
+
+        // Same version, same slot: every file is owned by this exact
+        // package, so the second merge must not abort.
+        assert_eq!(
+            run_merge(&ebuild, &root, &portage_tmpdir, &options, None).unwrap(),
+            0
+        );
+        assert!(root.join("usr/share/subslotfilepkg/hello.txt").is_file());
     }
 
     /// Backlog #42: real `dblink.merge()`'s tail (`vartree.py:6183-6198`)

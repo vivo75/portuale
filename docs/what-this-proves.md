@@ -16472,3 +16472,36 @@ Live (`TEST/logs/l2-20260913T232955Z`): every archive pair is
 the cross-install diff is 0 hard / 0 unexplained — with all
 `l2-gpkg-*` allowlist entries deleted first. Evidence:
 `TEST/findings/l2.md` "#39 / #40".
+
+### L3: both PMs build a real closure from source under one instrument (backlog #30, in progress 2026-09-14)
+
+The source-build parity layer is shipped: `TEST/run/l3-source-parity.sh`
+runs the same `emerge --emptytree --oneshot --usepkg=n` per PM in fresh
+containers under the determinism block (`MAKEOPTS=-j1`,
+`SOURCE_DATE_EPOCH=1740000000`, the pinned `FEATURES` model), then
+snapshots the full installed tree + VDB and diffs with
+`diff.py --layer l3 --tolerate-payload`. The portage-vs-portage control
+pair is the instrument check, and on `l3-smoke` it is **0 unexplained in
+every category** — no per-path normalization rule was needed once the
+L3 mounts were pruned (`SNAPSHOT_PRUNE`) and the containers shared a
+hostname. The candidate pair builds and merges all six smoke packages
+under portuale and exposed four producer classes, two of which are
+fixed in this slice with Rust regression tests: `-e`/reinstall of a
+sub-slotted package no longer collides with its own files
+(`find_collisions` was given the full `slot/sub_slot` where the vdb
+stores the main slot), and a second incremental assignment in one
+config file now replaces the earlier one for portuale as it does for
+real (make.conf is sourced bash-style; `make.conf` with two `FEATURES=`
+lines drops the first line's tokens in real). The remaining two — the
+ncurses `OWNER 1:1` vs `0:0` merge-ownership row and the saved-env
+accumulation (`A`/`RESTRICT`/stray locals) — are filed with repros in
+`TEST/findings/l3.md`, and the S4 stop rule holds `l3-core`/`@system`
+until they are fixed. Runnable, live-verified:
+
+```sh
+L3_CONTROL=1 TEST/run/l3-source-parity.sh TEST/atomlists/l3-smoke.txt
+# control pair 0 unexplained; candidate 2121 OWNER / 30 VDB at
+# TEST/logs/l3-20260914T021049Z (two classes since fixed)
+cargo test --release -p portuale re_merging_a_sub_slotted
+cargo test --release -p portage-profile a_files_incremental_layer
+```

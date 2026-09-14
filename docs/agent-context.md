@@ -216,9 +216,24 @@ gentoo binrepo) and #39/#40 (gpkg metadata completeness; the archive's
 `NEEDED.ELF.2`/rewritten `*DEPEND`/`Packages` `EAPI`+`REPO` now match
 real) are **closed** — the L2 porttest track is `strict hard=0 soft=0`
 on every archive pair with all `l2-gpkg-*` allowlists deleted
-(`l2-20260913T232955Z`, `TEST/findings/l2.md` "#39 / #40"). The L2 real
-set (`l1-merge.txt`) is the remaining #29 half; L3 (#30) is the new
-harness in `TEST/run/l3-source-parity.sh`.
+(`l2-20260913T232955Z`, `TEST/findings/l2.md` "#39 / #40"). **#29 is
+closed 2026-09-14**: the L2 real set (`l1-merge.txt`,
+`TEST/logs/l2-20260914T005348Z`) is green both directions
+(cross-install direction A 0 hard / 0 unexplained, control 0/0).
+
+**L3 (#30) is in progress 2026-09-14.** Harness shipped:
+`TEST/run/l3-source-parity.sh` + `TEST/layers/l3/build-and-merge.sh` +
+`TEST/atomlists/l3-{smoke,core,system}.txt`; full-tree snapshot with
+`SNAPSHOT_PRUNE`, `diff.py --layer l3 --tolerate-payload`, metrics JSON.
+The portage-vs-portage control pair is **0 unexplained on `l3-smoke`**.
+The candidate run surfaced four producer classes: the sub-slot
+self-collision (`find_collisions` given the full `slot/sub_slot`) and
+the "second `FEATURES=` in one make.conf replaces for real, stacks for
+portuale" semantics are fixed with Rust tests; the ncurses `OWNER 1:1`
+vs `0:0` and the saved-env accumulation (`A`/`RESTRICT`/stray locals)
+are filed with repros in `TEST/findings/l3.md`. Per the S4 stop rule,
+`l3-core` (344 ebuilds) and `@system` (368) are not started until those
+two are fixed.
 
 For what is **genuinely still open** — real portage behaviour not ported
 to either side, the deliberate cuts, the standing non-goals — see

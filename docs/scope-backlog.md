@@ -595,20 +595,29 @@ L0 (resolver parity) + L1 (merge parity) are shipped and run live
 (`TEST/README.md`). **L2 shipped 2026-09-13**: `layers/l2/*`,
 `TEST/run/l2-portuale-builder.sh`, `compare/gpkg-structure.sh` +
 `gpkg-diff.sh`, `diff.py --layer l2/--tolerate-payload`. The `porttest`
-fixture track is green modulo the producer gaps in §K (0 unexplained);
-the real set is past the build-env gap (#37 closed 2026-09-13) and
-blocked by §K's #38/#39 gaps. L3–L5 planned in
+fixture track is green with every `l2-*` allowlist entry deleted
+(`l2-20260913T232955Z`), and the real `l1-merge.txt` set is green both
+directions (`l2-20260914T005348Z`: cross-install 0 unexplained, control
+0/0; #37/#38/#39/#40/#43 all closed). L3–L5 planned in
 `history/real-world-testing.md` §5/§14 and distilled for execution
 into `real-world-testing.md` (§2–§8: controls, triage, L2–L5 designs,
 risks, metrics), are not built:
 
-- **L2** — portuale as builder: `emerge -b` the L1 set from source,
-  structural `.gpkg.tar` checks (`gpkg-structure.sh`), cross-install
-  (portuale-built archive merges under portage and vice versa). —
-  *bed shipped; producer parity open (§K).*
-- **L3** — full source-build parity: both PMs build `@system` / a desktop
-  `@world` from source with `SOURCE_DATE_EPOCH` + `-j1`; diff VDB
-  metadata + CONTENTS structure (tolerate compiled-artefact sha diffs).
+- **DONE 2026-09-14 — L2** — portuale as builder: `emerge -b` the L1
+  set from source, structural `.gpkg.tar` checks (`gpkg-structure.sh`),
+  cross-install (portuale-built archive merges under portage and vice
+  versa). Both PMs build the whole real closure, every archive pair is
+  `gpkg-diff strict hard=0`, and both cross-install directions are 0
+  unexplained (`TEST/findings/l2.md`; plan
+  `docs/029_portuale-as-builder.deepseek.md`).
+- **IN PROGRESS 2026-09-14 — L3** — full source-build parity: both PMs
+  build `@system` / a desktop `@world` from source with
+  `SOURCE_DATE_EPOCH` + `-j1`; diff VDB metadata + CONTENTS structure
+  (tolerate compiled-artefact sha diffs). Harness shipped and the
+  portage-vs-portage control pair is 0 unexplained on `l3-smoke`; the
+  candidate surfaced four producer classes (two fixed with tests, two
+  filed) and `l3-core`/`@system` are not started per the S4 stop rule.
+  `TEST/findings/l3.md`; plan `docs/030_L3-source-build-parity.deepseek.md`.
 - **L4** — `mrg` remote merge over SSH (`remote-merge.md` §6).
 - **L5** — lifecycle & failure injection: `-C` / `--depclean` diffs,
   soname bump → preserved-libs, `CONFIG_PROTECT`, `--resume` after

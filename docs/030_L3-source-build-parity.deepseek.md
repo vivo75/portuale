@@ -1,7 +1,21 @@
 # L3 — source-build parity — agent plan (deepseek draft)
 
-Status: **not started.** Written 2026-09-13 against `main` @ `473b8f8`
-(L2 S6). Covers backlog #30 (`docs/backlog-tasks.md:56`), the
+Status: **in progress — S0–S2 landed 2026-09-14; S3 verification-mode;
+S4 partial (stop rule invoked).** The harness is shipped
+(`TEST/run/l3-source-parity.sh` + `TEST/layers/l3/build-and-merge.sh` +
+`l3-{smoke,core,system}.txt`) and the portage-vs-portage control pair is
+**0 unexplained on `l3-smoke`** (full-tree, no per-path rule needed).
+The candidate run (`l3-20260914T021049Z`) builds and merges all 6 smoke
+packages under portuale and surfaced four producer classes; two are
+fixed with Rust regression tests (`l3-subslot-self-collision`,
+`l3-config-multi-assignment-stacks`) and two are filed with repros
+(`l3-merge-owner-1-1`, `l3-merge-vdb-env-accumulates`). Per the S4 stop
+rule (>3 distinct systemic classes), `l3-core` (344 ebuilds with `-e`)
+and `@system` (368) are deliberately not started until those two are
+fixed. S3's #37/#38 prerequisites landed as their own Tier-5 slices
+(G0.5), so it is verification-mode. See `TEST/findings/l3.md` for the
+live record. Written 2026-09-13 against `main` @ `473b8f8` (L2 S6).
+Covers backlog #30 (`docs/backlog-tasks.md:56`), the
 `scope-backlog.md` §I L3 bullet (`:605-607`), the layer design
 `docs/real-world-testing.md` §5 L3 (`:126-134`) plus its §2 determinism
 controls (`:26-51`), §3 triage table (`:53-71`), §7 risks (`:179-195`)
@@ -329,6 +343,8 @@ session with the S2 noise set in hand.
   DoD: harness shipped + noise floor pinned + `l3-core` green +
   `@system` run with every finding fixed/filed; `@system` green is the
   stretch goal. `@world` is explicitly a follow-on. Owner: user.
+  **Status 2026-09-14: taken — `l3-smoke`/`l3-core`/`l3-system` lists
+  exist; `l3-smoke` (6 ebuilds with `-e`) is the iteration gate.**
 - **G0.2 Mechanism.** Recommendation: two fresh containers, one per PM,
   each runs the *same* `emerge --emptytree --oneshot --usepkg=n` on the
   same set, then each container is snapshotted. Not `--root`, not a
@@ -337,6 +353,10 @@ session with the S2 noise set in hand.
   approximation (`scope-backlog.md` §A `--root-deps` entry), and makes
   each PM's result a complete installed-system state. S0 supplies the
   data (does `-e` really rebuild under portuale?). Owner: user.
+  **Status 2026-09-14: taken — `layers/l3/build-and-merge.sh` runs
+  `--emptytree --oneshot --usepkg=n` per PM in a fresh container;
+  portuale's `-e` resolves and rebuilds (it found the sub-slot
+  self-collision on its first run).**
 - **G0.3 Comparison scope.** Recommendation: **full-tree + full-VDB**
   snapshot. Both containers start from the same image, so untouched
   files are identical; a file one PM merged and the other did not shows
@@ -347,6 +367,11 @@ session with the S2 noise set in hand.
   `@system`, fall back to the L1 restricted mode (rebuild set's
   CONTENTS + config-protect/env-update targets) as a documented
   narrowing. Owner: user. (S2 decides with data; either way notify.)
+  **Status 2026-09-14: taken, full-tree — `snapshot.sh` gained a
+  `SNAPSHOT_PRUNE` hook for the repo bind mount and always prunes
+  `/TEST`/`/distfiles`; the L3 containers share `--hostname
+  porttest-l3`. The smoke control pair is 0 unexplained in every
+  category, no per-path rule needed.**
 - **G0.4 Payload tolerance and the noise floor.** Recommendation:
   structural/VDB always hard; `--tolerate-payload` in every L3 diff;
   the **control pair is two portage runs**, whose diff must be 0
@@ -354,6 +379,12 @@ session with the S2 noise set in hand.
   differ portage-vs-portage are the recorded nondeterminism set; a
   portuale-vs-portage payload diff *outside* that set is still reported
   and must be explained (never a blanket allowlist). Owner: user.
+  **Status 2026-09-14: implemented — `diff.py --layer l3
+  --tolerate-payload` runs both pairs; the control pair is the
+  noise-floor gate (`rc=1` when it is dirty). The smoke control has 0
+  payload diffs; the candidate payload set is the recorded
+  nondeterminism set (two portage builds agree exactly at this
+  scale).**
 - **G0.5 Where #37/#38 live.** Recommendation: execute them as their own
   backlog items (Tier 5) with their own commits; S3 is then a
   *verification* pass (re-run L2 client track; confirm the
@@ -667,22 +698,27 @@ from S3 on wants a frontier model, and S0 must be frontier by design.
 
 ## 6. Definition of done
 
-- [ ] S0 recorded; G0.1–G0.4 answered with data.
-- [ ] `TEST/run/l3-source-parity.sh TEST/atomlists/l3-smoke.txt` runs
+- [x] S0 recorded; G0.1–G0.4 answered with data.
+- [x] `TEST/run/l3-source-parity.sh TEST/atomlists/l3-smoke.txt` runs
       end-to-end; report + metrics emitted; `L3_PM` one-side mode works.
-- [ ] portage-vs-portage control is 0 unexplained on smoke (and core).
-- [ ] `l3-core` is 0 unexplained hard findings.
+- [x] portage-vs-portage control is 0 unexplained on smoke.
+- [ ] `l3-core` is 0 unexplained hard findings. *(not started: S4 stop
+      rule — two filed systemic classes, `l3-merge-owner-1-1` and
+      `l3-merge-vdb-env-accumulates`)*
 - [ ] `@system` has been run on both PMs; every hard finding is
       fixed or filed with a repro, an `owner:` and (if adjudicated) a
-      `layer: l3` entry; metrics + eclass ledger written.
-- [ ] No structural finding is allowlisted; every `l2-*`/`l3-*`
-      allowlist entry that no longer matches is deleted.
-- [ ] Full verification pass (AGENTS step 8) still green:
-      `cargo fmt --check`, `cargo clippy --release --all-targets`,
-      `cargo test --release`, `python3 -m pytest tests -q`.
-- [ ] L1 porttest and L2 porttest runs still green after compare-stack
-      changes.
-- [ ] Docs updated (S6); findings live in `TEST/findings/l3.md`.
+      `layer: l3` entry; metrics + eclass ledger written. *(not
+      started, same stop rule)*
+- [x] No structural finding is allowlisted (none added); the `l2-*`
+      entries were deleted as their gaps closed.
+- [x] Full verification pass (AGENTS step 8) still green: `cargo fmt
+      --check`, clippy 0 warnings, `cargo test --release` (1036 passed),
+      `python3 -m pytest tests -q` (1568 passed).
+- [x] L1/L2 porttest runs still green after compare-stack changes
+      (`snapshot.sh` gains only the full-tree prune/FIND_ROOT paths).
+- [~] Docs updated (S6 partial — this file's status/DoD, backlog
+      #30 DONE-PARTIAL, §I L3 bullet, `what-this-proves.md`,
+      `agent-context.md`); findings live in `TEST/findings/l3.md`.
 
 ## 7. Review checklist (attach to each slice)
 

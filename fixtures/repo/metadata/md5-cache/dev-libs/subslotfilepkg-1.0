@@ -1,0 +1,7 @@
+DEFINED_PHASES=install
+DESCRIPTION=fixture package: real SLOT=0/1 sub-slot WITH a file (self-collision regression)
+EAPI=8
+IUSE=
+KEYWORDS=amd64
+SLOT=0/1
+_md5_=0000000000000000000000000000000

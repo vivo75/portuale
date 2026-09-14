@@ -1,27 +1,35 @@
 # L2 — portuale as builder — agent plan (deepseek draft)
 
-Status: **executed 2026-09-13** (S0–S6; base `fdb244a`, L2 commits
-`244c6e8` (S0) `9a8d81b` (S1) `f4a4fb5` (S2) `24d42d9`+`7ff9cdb` (S3)
-`1c07ecb` (S5) + the S6 docs commit). Outcome: the bed is shipped and
-the `porttest` fixture track runs green modulo filed producer gaps (0
-unexplained); the real L1 set was **blocked on `l2-bpkgonly-env`** (the
-build phase env is a curated whitelist, not the resolved config env)
-and S5's stop rule was invoked as designed. That gap was then closed by
-backlog #37 (S1–S5, 2026-09-13 —
-`docs/037_Build-phase-env-completeness.plan.md`): the real set builds
-its whole 18-package closure and oniguruma lands in `/usr/lib64`. The
-S4 mechanism (cross-install direction A + `--tolerate-payload`) is
-delivered and proven on the fixture track; its real half now waits on
-#39 (gpkg metadata/`Packages` index) and the test-bed GPG check (#43),
-not on env — #38 (packaging transforms) closed 2026-09-13 (S0-S5,
-`docs/038_Packaging-transforms.plan.md`). Two core
-fixes landed along the way (the `Packages` header `VERSION` that made
-real Portage ignore every portuale-built archive, and the missing
-`FILESDIR`→repo-`files/` symlink that made every `eapply` die).
-Evidence, per-finding repros and the temporary `layer: l2`
-adjudications: [`../TEST/findings/l2.md`](../TEST/findings/l2.md); the
-follow-up work is `backlog-tasks.md` #37-#41 / `scope-backlog.md` §K.
-The slice descriptions below are kept as the executed record.
+Status: **DONE — executed 2026-09-13/14** (S0–S6; base `fdb244a`, L2
+commits `244c6e8` (S0) `9a8d81b` (S1) `f4a4fb5` (S2) `24d42d9`+`7ff9cdb`
+(S3) `1c07ecb` (S5) + the S6 docs commit; the real half then landed
+2026-09-14). Outcome: both tracks are green.
+
+- **Fixture track**: `L2_REBUILD=1 TEST/run/l2-portuale-builder.sh
+  TEST/atomlists/l1-porttest.txt` -> `TEST/logs/l2-20260913T232955Z`,
+  every archive pair `gpkg-diff: mode=strict hard=0 soft=0`, structure
+  0/0, cross-install 0 unexplained, with **every `l2-*` allowlist entry
+  deleted** first.
+- **Real set** (`l1-merge.txt`): `TEST/logs/l2-20260914T005348Z` rc 0,
+  9 pairs `hard=0 soft=0` + one soft=1 (tolerated payload),
+  cross-install direction A (real Portage consumes portuale-built
+  archives) 0 hard / 0 unexplained, control (portuale consumes the
+  portage-built set) 0/0. S4's `--tolerate-payload` discriminator held:
+  the residue is 2 tolerated payload paths, nothing structural.
+
+The producers that blocked it closed in order: #37 build-phase env
+(2026-09-13), #38 packaging transforms (S0-S5), #43 binrepo
+`verify-signature` + the bed's gentoo binrepo, #39 gpkg metadata
+completeness, and #40 (fixed by #39's `Packages`-index `EAPI`). Two
+core fixes landed along the way (the `Packages` header `VERSION` that
+made real Portage ignore every portuale-built archive, and the missing
+`FILESDIR`→repo-`files/` symlink that made every `eapply` die), plus
+the `PORTAGE_TMPDIR` boundary default (a #37 follow-up). Evidence,
+per-finding repros and the remaining narrowed adjudications:
+[`../TEST/findings/l2.md`](../TEST/findings/l2.md); the follow-up work
+is `backlog-tasks.md` #41 (cache-less repo, not on this path) /
+`scope-backlog.md` §K. The slice descriptions below are kept as the
+executed record.
 
 Written 2026-09-13 against `main` @ `fdb244a`. Covers backlog #29
 (`docs/backlog-tasks.md:53-55`), `docs/scope-backlog.md` §I L2 bullet
@@ -551,22 +559,20 @@ host-side against `_l1-pkgcache`.
 
 ## 6. Definition of done
 
-- [ ] S0 findings recorded and G0.1/G0.2 answered.
-- [ ] `gpkg-structure.sh` passes all Portage archives and catches all
+- [x] S0 findings recorded and G0.1/G0.2 answered.
+- [x] `gpkg-structure.sh` passes all Portage archives and catches all
       injected mutations.
-- [ ] `gpkg-diff.sh` clean on same-package Portage pairs (modulo
+- [x] `gpkg-diff.sh` clean on same-package Portage pairs (modulo
       normalised fields) and catches all injected mutations.
-- [ ] `diff.py --layer l2` in place, L1 unchanged/green.
-- [ ] `TEST/run/l2-portuale-builder.sh TEST/atomlists/l1-porttest.txt`
-      green.
-- [ ] `TEST/run/l2-portuale-builder.sh` (real set) green or every
-      finding adjudicated and filed, with the verdict in
-      `TEST/findings/l2.md`.
-- [ ] Full verification pass (AGENTS.md step 8) still green:
-      `cargo fmt --check`, `cargo clippy --release --all-targets`,
-      `cargo test --release`, `python3 -m pytest tests -q`.
-- [ ] L1 `porttest` run still green after compare-stack changes.
-- [ ] S6 docs updated.
+- [x] `diff.py --layer l2` in place, L1 unchanged/green.
+- [x] `TEST/run/l2-portuale-builder.sh TEST/atomlists/l1-porttest.txt`
+      green (`l2-20260913T232955Z`).
+- [x] `TEST/run/l2-portuale-builder.sh` (real set) green (`l2-20260914T005348Z`),
+      verdict in `TEST/findings/l2.md` "#39 / #40".
+- [x] Full verification pass (AGENTS.md step 8) green.
+- [x] L1 `porttest` run green after compare-stack changes
+      (`l1-20260913T223027Z`).
+- [x] S6 docs updated (this file + `TEST/findings/l2.md` + `TEST/README.md`).
 
 ## 7. Review checklist (attach to each slice)
 

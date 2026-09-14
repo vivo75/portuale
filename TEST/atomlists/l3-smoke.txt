@@ -1,0 +1,11 @@
+# L3 source-build parity, smoke set -- small, real, dependency-light;
+# the fast iteration set for the harness + the portage-vs-portage noise
+# floor. Both PMs build+merge these with `--emptytree --oneshot
+# --usepkg=n` under the determinism block. Closure: ~6 packages
+# (ncurses, pkgconf, virtual/pkgconfig included).
+#
+#   TEST/run/l3-source-parity.sh TEST/atomlists/l3-smoke.txt
+
+app-text/tree
+sys-apps/pv
+sys-apps/dmidecode
