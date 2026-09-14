@@ -37,22 +37,24 @@
 //     `PORTAGE_FETCH_RESUME_MIN_SIZE` threshold (it only resumes a
 //     partial past 350000 bytes) -- portuale resumes any non-empty one.
 //   - `mirror://` resolution is real now (`portage_fetch::
-//     resolve_mirror_candidates`/`gentoo_mirror_fallback`, see that
+//     resolve_mirror_candidates` + `mirror_url`'s real `layout.conf`
+//     negotiation and `.mirror-cache.json`, see that
 //     crate's own module doc comment for the exact real mechanics
 //     covered -- including real `custommirrors`, an admin-configured
 //     `${PORTAGE_CONFIGROOT}/etc/portage/mirrors` file, real
 //     `RESTRICT=mirror` (`FetchOptions::restrict_mirror` -- the public
-//     `GENTOO_MIRRORS` flat-layout fallback is skipped), real
+//     `GENTOO_MIRRORS` fallback is skipped), real
 //     `RESTRICT=primaryuri` (`FetchOptions::restrict_primaryuri` -- the
 //     file's own literal URIs move to the front of its candidate list),
 //     real `FEATURES=force-mirror` (`FetchOptions::force_mirror` --
 //     plain URIs never enter the list), and the real candidate order
-//     itself (`assemble_candidates`: local flat-layout mirrors, then
+//     itself (`assemble_candidates`: local mirrors, then
 //     public `GENTOO_MIRRORS`, then `mirror://` expansions, then
 //     literals -- rather than portuale's old most-specific-first).
-//     The real ones deliberately not attempted: live per-mirror
-//     `layout.conf` negotiation, third-party shuffle (portuale stays
-//     deterministic), and on-filesystem `fsmirrors` copies. The
+//     On-filesystem mirrors (real `fsmirrors`) are copied from before
+//     any download (`copy_from_fsmirrors`). The one real behaviour
+//     deliberately not attempted: third-party shuffle (portuale stays
+//     deterministic). The
 //     `mirror+`/`fetch+`
 //     SRC_URI prefixes ARE parsed (`portage_fetch::SrcUriEntry::
 //     override_mirror`/`override_fetch`): `mirror+` re-permits the
@@ -79,7 +81,7 @@
 //     scope at all yet, so there's nothing to port here.
 
 use portage_fetch::{
-    SrcUriEntry, flatten_src_uri, gentoo_mirror_fallback, parse_manifest, parse_thirdpartymirrors,
+    SrcUriEntry, flatten_src_uri, parse_manifest, parse_thirdpartymirrors,
     resolve_mirror_candidates, verify_digests,
 };
 use std::path::{Path, PathBuf};
@@ -135,13 +137,13 @@ pub struct FetchOptions {
     pub distlocks: bool,
     /// Real `RESTRICT=mirror` (real `fetch.py:880` --
     /// `restrict_mirror = "mirror" in restrict or "nomirror" in
-    /// restrict`): when set, the public `GENTOO_MIRRORS` flat-layout
-    /// fallback (`gentoo_mirror_fallback`) is NOT tried for this package
+    /// restrict`): when set, the public `GENTOO_MIRRORS`
+    /// fallback (`Candidate::Mirror` roots) is NOT tried for this package
     /// -- real `file_restrict_mirror` gates `location_lists.append(
     /// public_mirrors)` at `fetch.py:1126`. A `mirror://` URI's own
     /// `thirdpartymirrors`/`custommirrors` expansion and any explicit
     /// `SRC_URI` URI are still tried (real portage only drops the
-    /// *public* flat-layout mirror list). Sourced from the ebuild's own
+    /// *public* mirror list). Sourced from the ebuild's own
     /// `RESTRICT` md5-cache field by `ebuild_phases::fetch_sources`.
     ///
     /// Real portage's own `mirror+` `SRC_URI` prefix
@@ -188,6 +190,13 @@ pub struct FetchOptions {
     /// Empty (every `flag?` off, every `!flag?` on) when no resolved
     /// `USE` was threaded (standalone `ebuild <file>` with no graph).
     pub use_flags: std::collections::HashSet<String>,
+    /// Real `time.time()` for the `.mirror-cache.json` day-long freshness
+    /// check (`mirror_url`); `None` reads the system clock. Tests pin it.
+    pub mirror_cache_now: Option<f64>,
+    /// Real `PORTAGE_FETCH_CHECKSUM_TRY_MIRRORS` (default 5): after this
+    /// many downloads of a file fail digest verification, no further
+    /// location is tried (`checksum_failure_max_tries`).
+    pub checksum_failure_max_tries: usize,
 }
 
 impl Default for FetchOptions {
@@ -202,6 +211,8 @@ impl Default for FetchOptions {
             restrict_primaryuri: false,
             force_mirror: false,
             use_flags: std::collections::HashSet::new(),
+            mirror_cache_now: None,
+            checksum_failure_max_tries: 5,
         }
     }
 }
@@ -236,91 +247,318 @@ pub(crate) fn wget_resume(uri: &str, dest: &Path) -> Result<(), String> {
 /// Real `doebuild()`'s own `SRC_URI`-vs-`DISTDIR` fetch check, run once
 /// before a real `unpack` phase (see `ebuild_phases.rs`'s own call
 /// Real `fetch.py` per-file candidate order (`fetch()`'s own
-/// `filedict[myfile]` build, `:1112-1192`), narrowed to one `SRC_URI`
-/// entry: portuale loops per entry while real groups per file, so this
-/// is exact whenever a file has a single URI (every fixture, and the
-/// overwhelmingly common real case) and a per-entry approximation
-/// otherwise (a second URI's entry re-tries the shared mirror lists
-/// instead of sharing real's single interleaved list).
+/// `filedict[myfile]` build, `:1099-1192`) for one distfile's `group` of
+/// `SRC_URI` entries (`group_by_filename`, real `_parse_uri_map`).
 ///
 /// Order (real positions in parentheses):
-/// 1. `custommirrors["local"]` non-`/` entries as flat-layout URLs
+/// 1. `custommirrors["local"]` non-`/` entries as mirror roots
 ///    (real `local_mirrors`, always tried -- even under
 ///    `RESTRICT=fetch`/`mirror`, real `location_lists =
 ///    [local_mirrors] + ...`). `/`-rooted entries are on-filesystem
-///    copies (real `fsmirrors`), a separate documented cut, skipped.
-/// 2. public `GENTOO_MIRRORS` flat-layout fallback (real
-///    `public_mirrors`), unless mirror-restricted (real
-///    `file_restrict_mirror`), with the per-entry `mirror+` re-permit.
-/// 3. the entry's own `mirror://` expansions inline (`custommirrors`
-///    then `thirdpartymirrors`, unshuffled -- real shuffles the
-///    third-party half for load-balancing; portuale stays
+///    mirrors (real `fsmirrors`), copied from before this list is
+///    tried (`copy_from_fsmirrors`), never download candidates.
+/// 2. public `GENTOO_MIRRORS` roots (real `public_mirrors`), once per
+///    file, unless mirror-restricted (real `file_restrict_mirror`, which
+///    only the first entry's `mirror+` prefix re-permits).
+/// 3. every entry's `mirror://` expansions inline, in `SRC_URI` order
+///    (`custommirrors` then `thirdpartymirrors`, unshuffled -- real
+///    shuffles the third-party half for load-balancing; portuale stays
 ///    deterministic).
-/// 4. the entry's own literal URI -- APPENDED last normally, PREPENDED
-///    first (ahead of everything above, third-party expansions
-///    included) under `RESTRICT=primaryuri` (real `primaryuri_dict`
-///    merge, `fetch.py:1186-1192` -- including real's own double
-///    listing of the third-party expansions, once inline above and
-///    once in the primary-uri group).
+/// 4. the primary-uri group: the file's literal URIs in REVERSE
+///    `SRC_URI` order (real `uris.reverse()`), then every third-party
+///    expansion again -- APPENDED last normally, PREPENDED first under
+///    `RESTRICT=primaryuri` (real `fetch.py:1186-1192`). The repeated
+///    third-party URLs are attempted once (real `tried_locations`).
 ///    A plain literal barred by `RESTRICT=fetch` (without a
 ///    `fetch+`/`mirror+` re-permit) or by `FEATURES=force-mirror` never
 ///    enters the list (real `fetch.py:1167` `continue` -- `force-mirror`
 ///    skips even a re-permitted literal).
+///
+/// Steps 1-2 are mirror *roots* (`Candidate::Mirror`), resolved to a URL
+/// only when the loop reaches them (`mirror_url`, real's
+/// `functools.partial(async_mirror_url, ...)`), so a file fetched from an
+/// earlier candidate never downloads a mirror's `layout.conf`.
 fn assemble_candidates(
-    entry: &SrcUriEntry,
+    group: &[&SrcUriEntry],
     custommirrors: &std::collections::HashMap<String, Vec<String>>,
     thirdpartymirrors: &std::collections::HashMap<String, Vec<String>>,
     options: &FetchOptions,
-) -> Vec<String> {
-    let is_mirror_uri = entry.uri.starts_with("mirror://");
-    let literal_barred = !is_mirror_uri
-        && ((options.restrict_fetch && !entry.override_fetch) || options.force_mirror);
-    let literal: Vec<String> = if !is_mirror_uri && !literal_barred {
-        vec![entry.uri.clone()]
-    } else {
-        Vec::new()
+) -> Vec<Candidate> {
+    let Some(first) = group.first() else {
+        return Vec::new();
     };
-    let expansions = if is_mirror_uri {
-        resolve_mirror_candidates(&entry.uri, custommirrors, thirdpartymirrors)
-    } else {
-        Vec::new()
-    };
-    // Third-party expansions alone (real `thirdpartymirror_uris`, the
-    // primary-uri group tail). Empty for a plain URI (which has no
-    // expansions at all -- `resolve_mirror_candidates` would hand its
-    // own literal back).
-    let thirdparty = if is_mirror_uri {
-        resolve_mirror_candidates(
-            &entry.uri,
-            &std::collections::HashMap::new(),
-            thirdpartymirrors,
-        )
-    } else {
-        Vec::new()
-    };
-    let local: Vec<String> = custommirrors
+    // Real `local_mirrors` keep their spelling (no `rstrip`), real
+    // `public_mirrors` are `x.rstrip("/")` -- both are also the
+    // `.mirror-cache.json` keys, so the spelling matters.
+    let mut filedict: Vec<Candidate> = custommirrors
         .get("local")
-        .map(|roots| {
-            roots
-                .iter()
-                .filter(|r| !r.starts_with('/'))
-                .map(|r| format!("{}/distfiles/{}", r.trim_end_matches('/'), entry.filename))
-                .collect()
-        })
-        .unwrap_or_default();
+        .into_iter()
+        .flatten()
+        .filter(|r| !r.starts_with('/'))
+        .map(|r| Candidate::Mirror(r.clone()))
+        .collect();
+    // Real `file_restrict_mirror` is decided once, when the filename is
+    // first seen -- by the FIRST URI's `mirror+` override.
     let public_barred =
-        (options.restrict_mirror || options.restrict_fetch) && !entry.override_mirror;
-    let public: Vec<String> = if public_barred {
-        Vec::new()
-    } else {
-        gentoo_mirror_fallback(&entry.filename, &options.gentoo_mirrors)
-    };
+        (options.restrict_mirror || options.restrict_fetch) && !first.override_mirror;
+    if !public_barred {
+        filedict.extend(
+            options
+                .gentoo_mirrors
+                .iter()
+                // `/`-rooted entries are real `fsmirrors`
+                // (`copy_from_fsmirrors`), never download candidates.
+                .filter(|root| !root.starts_with('/'))
+                .map(|root| Candidate::Mirror(root.trim_end_matches('/').to_string())),
+        );
+    }
+    for entry in group {
+        if entry.uri.starts_with("mirror://") {
+            filedict.extend(
+                resolve_mirror_candidates(&entry.uri, custommirrors, thirdpartymirrors)
+                    .into_iter()
+                    .map(Candidate::Uri),
+            );
+        }
+    }
+    let primary: Vec<Candidate> = primary_uris(group, thirdpartymirrors, options)
+        .into_iter()
+        .map(Candidate::Uri)
+        .collect();
     if options.restrict_primaryuri {
         // Real `filedict[myfile] = primaryuri_dict.get(myfile, []) + uris`.
-        [literal, thirdparty, local, public, expansions].concat()
+        [primary, filedict].concat()
     } else {
-        [local, public, expansions, literal, thirdparty].concat()
+        [filedict, primary].concat()
     }
+}
+
+/// Real `primaryuri_dict[myfile]` (`fetch.py:1165-1183`): the file's
+/// literal URIs that may be fetched, in REVERSE `SRC_URI` order (real
+/// `uris.reverse()` -- as real `fetch(..., listonly=1)` shows, tried
+/// last-listed first), then every third-party `mirror://` expansion.
+fn primary_uris(
+    group: &[&SrcUriEntry],
+    thirdpartymirrors: &std::collections::HashMap<String, Vec<String>>,
+    options: &FetchOptions,
+) -> Vec<String> {
+    let mut literals: Vec<String> = Vec::new();
+    let mut thirdparty: Vec<String> = Vec::new();
+    for entry in group {
+        if entry.uri.starts_with("mirror://") {
+            thirdparty.extend(resolve_mirror_candidates(
+                &entry.uri,
+                &std::collections::HashMap::new(),
+                thirdpartymirrors,
+            ));
+        } else if !((options.restrict_fetch && !entry.override_fetch) || options.force_mirror) {
+            literals.push(entry.uri.clone());
+        }
+    }
+    literals.reverse();
+    literals.extend(thirdparty);
+    literals
+}
+
+/// Real `checksum_failure_max_tries` (`fetch.py:896-934`): real
+/// `PORTAGE_FETCH_CHECKSUM_TRY_MIRRORS` as an integer, default 5; a
+/// non-integer or a value below 1 warns (the returned lines, real's
+/// `writemsg` text) and uses the default.
+pub fn checksum_failure_max_tries(value: Option<&str>) -> (usize, Vec<String>) {
+    const DEFAULT: i64 = 5;
+    let Some(value) = value else {
+        return (DEFAULT as usize, Vec::new());
+    };
+    let fallback = format!("!!! Using PORTAGE_FETCH_CHECKSUM_TRY_MIRRORS default value: {DEFAULT}");
+    match value.trim().parse::<i64>() {
+        Err(_) => (
+            DEFAULT as usize,
+            vec![
+                format!(
+                    "!!! Variable PORTAGE_FETCH_CHECKSUM_TRY_MIRRORS contains non-integer value: '{value}'"
+                ),
+                fallback,
+            ],
+        ),
+        Ok(v) if v < 1 => (
+            DEFAULT as usize,
+            vec![
+                format!(
+                    "!!! Variable PORTAGE_FETCH_CHECKSUM_TRY_MIRRORS contains value less than 1: '{v}'"
+                ),
+                fallback,
+            ],
+        ),
+        Ok(v) => (v as usize, Vec::new()),
+    }
+}
+
+/// Real `_parse_uri_map` (`porttree.py:1828`): `SRC_URI` entries grouped
+/// by distfile name in first-seen order, identical URIs listed once.
+fn group_by_filename(entries: &[SrcUriEntry]) -> Vec<(&str, Vec<&SrcUriEntry>)> {
+    let mut groups: Vec<(&str, Vec<&SrcUriEntry>)> = Vec::new();
+    for entry in entries {
+        match groups.iter_mut().find(|(name, _)| *name == entry.filename) {
+            Some((_, group)) => {
+                if !group.iter().any(|e| e == &entry) {
+                    group.push(entry);
+                }
+            }
+            None => groups.push((&entry.filename, vec![entry])),
+        }
+    }
+    groups
+}
+
+/// One entry of a file's candidate list: a ready URI, or a mirror root
+/// whose URL depends on the mirror's `layout.conf` (`mirror_url`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Candidate {
+    Uri(String),
+    Mirror(String),
+}
+
+/// Real `async_mirror_url(mirror_url, filename, mysettings, cache_path)`
+/// (`fetch.py:731-785`): the URL (or, for a `/`-rooted mirror, the local
+/// path) of `filename` under `mirror`, laid out per the mirror's own
+/// `layout.conf`.
+///
+/// - `cache_path` (real: `${DISTDIR}/.mirror-cache.json` when `DISTDIR`
+///   is writable, else `None`) holds each mirror's `[structure]` with the
+///   time it was read; an entry younger than a day is used as is.
+/// - Otherwise the `layout.conf` is read: from `<mirror>/layout.conf` for
+///   a `/`-rooted mirror (a missing file reads as empty, real
+///   `read_configs` swallows `OSError`), else downloaded from
+///   `<mirror>/distfiles/layout.conf` into `${DISTDIR}/.layout.conf.<host>`
+///   (real `async_fetch(..., force=1, try_mirrors=0)`; left in place like
+///   real). Only a successful read is cached; a failed download or an
+///   unparseable file silently means "flat, nothing cached".
+/// - `now` is real `time.time()`, passed in so the day-long freshness
+///   window is testable.
+fn mirror_url(
+    mirror: &str,
+    filename: &str,
+    digests: &std::collections::HashMap<String, String>,
+    distdir: &Path,
+    cache_path: Option<&Path>,
+    now: f64,
+) -> String {
+    use portage_fetch::layout::MirrorLayoutConfig;
+    use portage_fetch::mirror_cache::{
+        CacheEntry, MIRROR_CACHE_TTL_SECS, mirror_file_url, parse_mirror_cache,
+        serialize_mirror_cache, upsert_mirror_cache, url_hostname,
+    };
+
+    let mut cache = cache_path
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .map(|text| parse_mirror_cache(&text))
+        .unwrap_or_default();
+    let fresh = cache
+        .iter()
+        .find(|e| e.mirror_url == mirror)
+        .filter(|e| e.timestamp >= now - MIRROR_CACHE_TTL_SECS)
+        .map(|e| MirrorLayoutConfig {
+            structure: e.structure.clone(),
+        });
+    let config = fresh.unwrap_or_else(|| {
+        let read = if mirror.starts_with('/') {
+            let text = std::fs::read(Path::new(mirror).join("layout.conf")).unwrap_or_default();
+            MirrorLayoutConfig::parse(&String::from_utf8_lossy(&text)).ok()
+        } else {
+            let tmpfile = distdir.join(format!(".layout.conf.{}", url_hostname(mirror)));
+            wget_fetch(&format!("{mirror}/distfiles/layout.conf"), &tmpfile)
+                .ok()
+                .and_then(|()| std::fs::read(&tmpfile).ok())
+                .and_then(|text| MirrorLayoutConfig::parse(&String::from_utf8_lossy(&text)).ok())
+        };
+        let Some(config) = read else {
+            return MirrorLayoutConfig::default();
+        };
+        if let Some(cache_path) = cache_path {
+            upsert_mirror_cache(
+                &mut cache,
+                CacheEntry {
+                    mirror_url: mirror.to_string(),
+                    timestamp: now,
+                    structure: config.structure.clone(),
+                },
+            );
+            // Real `atomic_ofstream`: write a sibling, then rename over.
+            let tmp = cache_path.with_extension(format!("json.{}", std::process::id()));
+            if std::fs::write(&tmp, serialize_mirror_cache(&cache)).is_ok() {
+                let _ = std::fs::rename(&tmp, cache_path);
+            } else {
+                let _ = std::fs::remove_file(&tmp);
+            }
+        }
+        config
+    });
+    let layout = config.best_supported(Some(digests));
+    let path = layout
+        .get_path(filename, digests)
+        .unwrap_or_else(|| filename.to_string());
+    mirror_file_url(mirror, &path)
+}
+
+/// Real `fsmirrors` (`fetch.py:1019-1030`): the `/`-rooted
+/// `custommirrors["local"]` entries (as written), then the `/`-rooted
+/// `GENTOO_MIRRORS` entries (`rstrip("/")`).
+fn fsmirrors(
+    custommirrors: &std::collections::HashMap<String, Vec<String>>,
+    gentoo_mirrors: &[String],
+) -> Vec<String> {
+    let local = custommirrors
+        .get("local")
+        .into_iter()
+        .flatten()
+        .filter(|root| root.starts_with('/'))
+        .cloned();
+    let public = gentoo_mirrors
+        .iter()
+        .filter(|root| root.starts_with('/'))
+        .map(|root| root.trim_end_matches('/').to_string());
+    local.chain(public).collect()
+}
+
+/// Real `fetch.py:1503-1513`: try each on-filesystem mirror in order,
+/// resolving the file's path through that directory's own `layout.conf`
+/// (real `async_mirror_url(mydir, myfile, mysettings)` -- no cache path,
+/// so it is re-read every time), copy the first one that exists to
+/// `dest`, and print real's `Local mirror has file: <file>`. A missing
+/// file (`ENOENT`/`ESTALE`) moves on to the next mirror; any other copy
+/// error is fatal, as real re-raises it. Returns whether a copy was made.
+fn copy_from_fsmirrors(
+    fsmirrors: &[String],
+    filename: &str,
+    digests: &std::collections::HashMap<String, String>,
+    options: &FetchOptions,
+    dest: &Path,
+) -> Result<bool, String> {
+    for dir in fsmirrors {
+        let source = mirror_url(dir, filename, digests, &options.distdir, None, 0.0);
+        match std::fs::copy(&source, dest) {
+            Ok(_) => {
+                eprintln!("Local mirror has file: {filename}");
+                return Ok(true);
+            }
+            Err(e)
+                if e.kind() == std::io::ErrorKind::NotFound
+                    || e.raw_os_error() == Some(libc::ESTALE) => {}
+            Err(e) => return Err(format!("{source}: {e}")),
+        }
+    }
+    Ok(false)
+}
+
+/// Real `os.access(DISTDIR, os.W_OK)` (`fetch.py:991`), which decides
+/// whether `.mirror-cache.json` is used at all.
+fn distdir_writable(distdir: &Path) -> bool {
+    let Ok(c) = std::ffi::CString::new(distdir.as_os_str().as_encoded_bytes()) else {
+        return false;
+    };
+    // SAFETY: `c` is a NUL-terminated path that outlives the call; the
+    // second argument is a plain access-mode flag.
+    unsafe { libc::access(c.as_ptr(), libc::W_OK) == 0 }
 }
 
 /// site): for every file `src_uri` (this ebuild's own real, md5-cache-
@@ -366,7 +604,7 @@ pub fn fetch_src_uri(
     // (`${config_root}/etc/portage/mirrors`, real `grabdict()`'s own
     // format -- reuses `parse_thirdpartymirrors` directly, since it's
     // the exact same real format, just a different real source file)
-    // plus the real `GENTOO_MIRRORS` flat-layout fallback -- see this
+    // plus the real `GENTOO_MIRRORS` fallback -- see this
     // module's own doc comment for the exact real mechanics
     // covered/not covered.
     let thirdpartymirrors = crate::ebuild_phases::repo_root_for(pkg_dir)
@@ -387,7 +625,9 @@ pub fn fetch_src_uri(
         .unwrap_or_default();
 
     let mut filenames = Vec::new();
-    for entry in &entries {
+    for (_, group) in group_by_filename(&entries) {
+        // The first entry names the file (and any error message).
+        let entry = group[0];
         let dest = options.distdir.join(&entry.filename);
         // Real `FEATURES=distlocks`: acquired before even checking
         // whether the file is already fetched (real `fetch.py:1315`,
@@ -416,11 +656,30 @@ pub fn fetch_src_uri(
             None
         };
 
-        let already_verified = dest.is_file() && verify_digests(&dest, digests).is_ok();
+        let mut already_verified = dest.is_file() && verify_digests(&dest, digests).is_ok();
+
+        // Real `fetch.py:1503-1513`: before any download (and regardless
+        // of `RESTRICT=fetch`/`mirror`, which only shape the download
+        // list), a missing file is copied from the first on-filesystem
+        // mirror that has it.
+        if !already_verified && !dest.exists() {
+            let fsmirrors = fsmirrors(&custommirrors, &options.gentoo_mirrors);
+            if copy_from_fsmirrors(&fsmirrors, &entry.filename, &digests.hashes, options, &dest)? {
+                match verify_digests(&dest, digests) {
+                    Ok(()) => already_verified = true,
+                    // Real keeps a short copy to resume from; a full-size
+                    // but corrupt one is replaced by the download.
+                    Err(_) if std::fs::metadata(&dest).is_ok_and(|m| m.len() < digests.size) => {}
+                    Err(_) => {
+                        let _ = std::fs::remove_file(&dest);
+                    }
+                }
+            }
+        }
 
         if !already_verified {
             let candidates =
-                assemble_candidates(entry, &custommirrors, &thirdpartymirrors, options);
+                assemble_candidates(&group, &custommirrors, &thirdpartymirrors, options);
             // Real `fetch.py:1166-1174`: `if (restrict_fetch and not
             // override_fetch) or force_mirror: continue` -- a *plain*
             // (non-`mirror://`) `SRC_URI` URI is NOT a fetchable
@@ -437,7 +696,7 @@ pub fn fetch_src_uri(
             // Real `file_restrict_mirror = (restrict_fetch or
             // restrict_mirror) and not override_mirror`
             // (`fetch.py:1117-1119`): the public `GENTOO_MIRRORS`
-            // flat-layout list is appended unless mirroring is
+            // mirror list is appended unless mirroring is
             // restricted -- but a `mirror+` SRC_URI prefix on this URI
             // (`entry.override_mirror`) re-permits it for this file even
             // then. `RESTRICT=fetch` implies mirror restriction too
@@ -470,7 +729,38 @@ pub fn fetch_src_uri(
 
             let mut errors = Vec::new();
             let mut fetched = false;
-            for candidate in &candidates {
+            // Real `fetch.py`'s `tried_locations`: the assembled list
+            // legitimately repeats a location (a `mirror://` URI's
+            // third-party expansions sit both inline and in the
+            // primary-uri group), but each is attempted once per file.
+            let mut tried = std::collections::HashSet::new();
+            let cache_path = distdir_writable(&options.distdir)
+                .then(|| options.distdir.join(".mirror-cache.json"));
+            let now = options.mirror_cache_now.unwrap_or_else(|| {
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map_or(0.0, |d| d.as_secs_f64())
+            });
+            // Real `uri_list`: a stack popped from the end, so the
+            // primary-uri switch below jumps ahead of what is left.
+            let mut uri_list: Vec<Candidate> = candidates.iter().rev().cloned().collect();
+            let mut checksum_failures = 0;
+            while let Some(candidate) = uri_list.pop() {
+                let candidate = match &candidate {
+                    Candidate::Uri(uri) => uri.clone(),
+                    Candidate::Mirror(root) => mirror_url(
+                        root,
+                        &entry.filename,
+                        &digests.hashes,
+                        &options.distdir,
+                        cache_path.as_deref(),
+                        now,
+                    ),
+                };
+                if !tried.insert(candidate.clone()) {
+                    continue;
+                }
+                let candidate = candidate.as_str();
                 // Real `fetch.py`: once a non-empty partial is on disk
                 // (from an earlier candidate that dropped mid-transfer, or
                 // a previous interrupted run), switch from `FETCHCOMMAND`
@@ -495,6 +785,22 @@ pub fn fetch_src_uri(
                             // resumed -- drop it before the next candidate.
                             let _ = std::fs::remove_file(&dest);
                             errors.push(format!("{candidate}: digest verification failed: {e}"));
+                            // Real `checksum_failure_count`: the second
+                            // failure switches to "primaryuri" mode (the
+                            // file's primary URIs are tried next); the
+                            // cap stops trying further locations at all.
+                            checksum_failures += 1;
+                            if checksum_failures == 2 {
+                                uri_list.extend(
+                                    primary_uris(&group, &thirdpartymirrors, options)
+                                        .into_iter()
+                                        .rev()
+                                        .map(Candidate::Uri),
+                                );
+                            }
+                            if checksum_failures >= options.checksum_failure_max_tries {
+                                break;
+                            }
                         }
                     },
                     // A transport failure may have left a resumable
@@ -577,6 +883,71 @@ mod tests {
             }
         });
         (format!("http://127.0.0.1:{port}/file"), handle)
+    }
+
+    /// A mirror-shaped HTTP server: answers `connections` requests,
+    /// serving `routes`' bodies by request path and 404 for anything
+    /// else, and records every requested path in order. Returns the
+    /// mirror root (`http://127.0.0.1:<port>`), the recorded paths, and
+    /// the thread handle. A caller expecting fewer requests than
+    /// `connections` stops the thread with `unblock_server` (an empty
+    /// connection ends it).
+    #[allow(clippy::type_complexity)]
+    fn serve_mirror(
+        routes: Vec<(&'static str, Vec<u8>)>,
+        connections: usize,
+    ) -> (
+        String,
+        std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+        std::thread::JoinHandle<()>,
+    ) {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let requested = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let log = requested.clone();
+        let handle = std::thread::spawn(move || {
+            for _ in 0..connections {
+                let Ok((mut stream, _)) = listener.accept() else {
+                    return;
+                };
+                let mut buf = [0u8; 4096];
+                let n = stream.read(&mut buf).unwrap_or(0);
+                let request = String::from_utf8_lossy(&buf[..n]);
+                let Some(path) = request.split_whitespace().nth(1) else {
+                    // `unblock_server`: stop serving.
+                    return;
+                };
+                log.lock().unwrap().push(path.to_string());
+                let response = match routes.iter().find(|(p, _)| *p == path) {
+                    Some((_, body)) => {
+                        let mut r = format!(
+                            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                            body.len()
+                        )
+                        .into_bytes();
+                        r.extend_from_slice(body);
+                        r
+                    }
+                    None => {
+                        b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                            .to_vec()
+                    }
+                };
+                let _ = stream.write_all(&response);
+                let _ = stream.flush();
+            }
+        });
+        (format!("http://127.0.0.1:{port}"), requested, handle)
+    }
+
+    /// Connects (and sends nothing) so a `serve_mirror` thread still
+    /// waiting in `accept` can finish.
+    fn unblock_server(root: &str) {
+        let addr = root.trim_start_matches("http://");
+        let _ = std::net::TcpStream::connect(addr);
     }
 
     #[test]
@@ -990,20 +1361,21 @@ mod tests {
         assert!(err.contains("no working candidate mirror"), "{err}");
     }
 
-    /// Real, end-to-end `GENTOO_MIRRORS` flat-layout fallback: the
-    /// literal `SRC_URI` itself is deliberately unreachable (port 1,
-    /// which real, unprivileged `wget` gets an immediate real
-    /// "Connection refused" for -- fast and deterministic, unlike a
-    /// black-holed address that would make this test hang for real
-    /// `wget -t 3 -T 60`'s own full multi-minute retry budget), so the
-    /// fetch only succeeds because `FetchOptions.gentoo_mirrors` names
-    /// a real local HTTP server that `gentoo_mirror_fallback` expands
-    /// into `<root>/distfiles/<filename>` and that candidate is tried
-    /// next.
+    /// Real, end-to-end `GENTOO_MIRRORS` fallback: the literal `SRC_URI`
+    /// itself is deliberately unreachable (port 1, which real,
+    /// unprivileged `wget` gets an immediate real "Connection refused"
+    /// for -- fast and deterministic, unlike a black-holed address that
+    /// would make this test hang for real `wget -t 3 -T 60`'s own full
+    /// multi-minute retry budget), so the fetch only succeeds because
+    /// `FetchOptions.gentoo_mirrors` names a real local HTTP server. That
+    /// mirror has no `layout.conf` (404), so real `async_mirror_url` uses
+    /// the flat `<root>/distfiles/<filename>` path and caches nothing.
     #[test]
     fn fetch_src_uri_falls_back_to_gentoo_mirrors_when_the_primary_uri_is_unreachable() {
-        let (uri_base, handle) = serve_once(b"hello world".to_vec());
-        let mirror_root = uri_base.trim_end_matches("/file").to_string();
+        let (mirror_root, requested, handle) = serve_mirror(
+            vec![("/distfiles/hello-1.0.tar.gz", b"hello world".to_vec())],
+            2,
+        );
 
         let pkg_dir = tempdir();
         let distdir = tempdir();
@@ -1025,10 +1397,149 @@ mod tests {
             "hello world"
         );
         handle.join().unwrap();
+        assert_eq!(
+            *requested.lock().unwrap(),
+            vec!["/distfiles/layout.conf", "/distfiles/hello-1.0.tar.gz"]
+        );
+        assert!(
+            !distdir.join(".mirror-cache.json").exists(),
+            "an unreadable layout.conf is not cached"
+        );
+    }
+
+    /// The real Gentoo mirrors' layout (`0=filename-hash BLAKE2B 8`,
+    /// where the flat path 404s): the file is fetched from the hashed
+    /// path real portage computes (`ce/hello-1.0.tar.gz`, real
+    /// `FilenameHashLayout('BLAKE2B', '8').get_path`), the downloaded
+    /// `layout.conf` is left as `.layout.conf.<host>`, and the structure
+    /// is cached in real's `.mirror-cache.json` shape.
+    #[test]
+    fn fetch_src_uri_follows_a_mirrors_filename_hash_layout_and_caches_it() {
+        let (mirror_root, requested, handle) = serve_mirror(
+            vec![
+                (
+                    "/distfiles/layout.conf",
+                    b"[structure]\n0=filename-hash BLAKE2B 8\n".to_vec(),
+                ),
+                ("/distfiles/ce/hello-1.0.tar.gz", b"hello world".to_vec()),
+            ],
+            2,
+        );
+        let pkg_dir = tempdir();
+        let distdir = tempdir();
+        write_manifest(&pkg_dir, "hello-1.0.tar.gz", 11);
+
+        fetch_src_uri(
+            &pkg_dir,
+            "http://127.0.0.1:1/hello-1.0.tar.gz",
+            &FetchOptions {
+                distdir: distdir.clone(),
+                gentoo_mirrors: vec![mirror_root.clone()],
+                mirror_cache_now: Some(1800000000.5),
+                ..FetchOptions::default()
+            },
+        )
+        .unwrap();
+        handle.join().unwrap();
+        assert_eq!(
+            *requested.lock().unwrap(),
+            vec!["/distfiles/layout.conf", "/distfiles/ce/hello-1.0.tar.gz"]
+        );
+        assert!(distdir.join(".layout.conf.127.0.0.1").is_file());
+        assert_eq!(
+            fs::read_to_string(distdir.join(".mirror-cache.json")).unwrap(),
+            format!(r#"{{"{mirror_root}": [1800000000.5, [["filename-hash", "BLAKE2B", "8"]]]}}"#)
+        );
+    }
+
+    /// Real `ts >= time.time() - 86400`: a cache entry younger than a day
+    /// is used without asking the mirror again; an older one is
+    /// refreshed (and rewritten with the new time).
+    #[test]
+    fn fetch_src_uri_uses_a_fresh_mirror_cache_entry_and_refreshes_a_stale_one() {
+        let now = 1800000000.0;
+        for (age, expect_layout_request) in [(10.0, false), (90000.0, true)] {
+            let hashed = "/distfiles/ce/hello-1.0.tar.gz";
+            let mut routes = vec![(hashed, b"hello world".to_vec())];
+            if expect_layout_request {
+                routes.push((
+                    "/distfiles/layout.conf",
+                    b"[structure]\n0=filename-hash BLAKE2B 8\n".to_vec(),
+                ));
+            }
+            let connections = routes.len();
+            let (mirror_root, requested, handle) = serve_mirror(routes, connections);
+            let pkg_dir = tempdir();
+            let distdir = tempdir();
+            write_manifest(&pkg_dir, "hello-1.0.tar.gz", 11);
+            fs::write(
+                distdir.join(".mirror-cache.json"),
+                format!(
+                    r#"{{"{mirror_root}": [{}, [["filename-hash", "BLAKE2B", "8"]]]}}"#,
+                    now - age
+                ),
+            )
+            .unwrap();
+
+            fetch_src_uri(
+                &pkg_dir,
+                "http://127.0.0.1:1/hello-1.0.tar.gz",
+                &FetchOptions {
+                    distdir: distdir.clone(),
+                    gentoo_mirrors: vec![mirror_root.clone()],
+                    mirror_cache_now: Some(now),
+                    ..FetchOptions::default()
+                },
+            )
+            .unwrap();
+            handle.join().unwrap();
+            let requested = requested.lock().unwrap().clone();
+            if expect_layout_request {
+                assert_eq!(requested, vec!["/distfiles/layout.conf", hashed], "stale");
+                assert!(
+                    fs::read_to_string(distdir.join(".mirror-cache.json"))
+                        .unwrap()
+                        .contains("[1800000000.0, "),
+                    "stale entry rewritten with the new time"
+                );
+            } else {
+                assert_eq!(requested, vec![hashed], "fresh");
+            }
+        }
+    }
+
+    /// Real resolves a mirror candidate lazily (`functools.partial`): a
+    /// file fetched from an earlier candidate never asks the later
+    /// mirror for its `layout.conf`.
+    #[test]
+    fn fetch_src_uri_never_contacts_a_mirror_it_does_not_reach() {
+        let (literal_root, _, literal_handle) =
+            serve_mirror(vec![("/hello-1.0.tar.gz", b"hello world".to_vec())], 1);
+        let (mirror_root, mirror_requests, mirror_handle) = serve_mirror(vec![], 1);
+        let pkg_dir = tempdir();
+        let distdir = tempdir();
+        write_manifest(&pkg_dir, "hello-1.0.tar.gz", 11);
+
+        fetch_src_uri(
+            &pkg_dir,
+            &format!("{literal_root}/hello-1.0.tar.gz"),
+            &FetchOptions {
+                distdir: distdir.clone(),
+                gentoo_mirrors: vec![mirror_root.clone()],
+                restrict_primaryuri: true,
+                ..FetchOptions::default()
+            },
+        )
+        .unwrap();
+        literal_handle.join().unwrap();
+        unblock_server(&mirror_root);
+        mirror_handle.join().unwrap();
+        assert!(mirror_requests.lock().unwrap().is_empty());
+        assert!(!distdir.join(".mirror-cache.json").exists());
     }
 
     /// Real `RESTRICT=mirror` (`file_restrict_mirror`,
-    /// `fetch.py:1117-1127`): the public `GENTOO_MIRRORS` flat-layout
+    /// `fetch.py:1117-1127`): the public `GENTOO_MIRRORS`
     /// fallback is NOT tried. Identical setup to
     /// `fetch_src_uri_falls_back_to_gentoo_mirrors_when_the_primary_uri_is_unreachable`
     /// (its "without restrict" counterpart -- there the mirror server
@@ -1078,8 +1589,11 @@ mod tests {
     /// server IS tried and rescues the fetch.
     #[test]
     fn fetch_src_uri_mirror_prefix_re_permits_the_gentoo_mirrors_fallback_under_restrict_mirror() {
-        let (uri_base, handle) = serve_once(b"hello world".to_vec());
-        let mirror_root = uri_base.trim_end_matches("/file").to_string();
+        // No `layout.conf` on this mirror (404): flat path.
+        let (mirror_root, _, handle) = serve_mirror(
+            vec![("/distfiles/hello-1.0.tar.gz", b"hello world".to_vec())],
+            2,
+        );
 
         let pkg_dir = tempdir();
         let distdir = tempdir();
@@ -1105,7 +1619,7 @@ mod tests {
     }
 
     /// `RESTRICT=mirror` bars only the *public* `GENTOO_MIRRORS`
-    /// flat-layout list -- a `mirror://` URI's own `custommirrors`
+    /// mirror list -- a `mirror://` URI's own `custommirrors`
     /// expansion is still tried (real portage keeps `local_mirrors` in
     /// `location_lists` regardless, `fetch.py:1125`). Same fixture as
     /// `fetch_src_uri_resolves_a_real_mirror_uri_via_custommirrors`,
@@ -1145,6 +1659,114 @@ mod tests {
             "hello world"
         );
         handle.join().unwrap();
+    }
+
+    /// Real `fsmirrors` (`fetch.py:1503-1513`): a `/`-rooted
+    /// `GENTOO_MIRRORS` entry is a local directory the missing file is
+    /// copied from -- flat (`<dir>/<file>`, real `os.path.join`, no
+    /// `distfiles/`) without a `layout.conf`, per the directory's own
+    /// `layout.conf` otherwise -- before any download, and even when
+    /// `RESTRICT=fetch` leaves nothing to download at all.
+    #[test]
+    fn fetch_src_uri_copies_a_missing_file_from_an_on_filesystem_mirror() {
+        for (layout_conf, rel) in [
+            (None, "hello-1.0.tar.gz"),
+            (
+                Some("[structure]\n0=filename-hash BLAKE2B 8\n"),
+                "ce/hello-1.0.tar.gz",
+            ),
+        ] {
+            for restrict_fetch in [false, true] {
+                let mirror_dir = tempdir();
+                if let Some(conf) = layout_conf {
+                    fs::write(mirror_dir.join("layout.conf"), conf).unwrap();
+                }
+                fs::create_dir_all(mirror_dir.join(rel).parent().unwrap()).unwrap();
+                fs::write(mirror_dir.join(rel), "hello world").unwrap();
+                let pkg_dir = tempdir();
+                let distdir = tempdir();
+                write_manifest(&pkg_dir, "hello-1.0.tar.gz", 11);
+
+                let filenames = fetch_src_uri(
+                    &pkg_dir,
+                    "http://127.0.0.1:1/hello-1.0.tar.gz",
+                    &FetchOptions {
+                        distdir: distdir.clone(),
+                        gentoo_mirrors: vec![format!("{}/", mirror_dir.display())],
+                        restrict_fetch,
+                        ..FetchOptions::default()
+                    },
+                )
+                .unwrap_or_else(|e| panic!("{rel} restrict_fetch={restrict_fetch}: {e}"));
+                assert_eq!(filenames, vec!["hello-1.0.tar.gz".to_string()]);
+                assert_eq!(
+                    fs::read_to_string(distdir.join("hello-1.0.tar.gz")).unwrap(),
+                    "hello world"
+                );
+                assert!(!distdir.join(".mirror-cache.json").exists());
+            }
+        }
+    }
+
+    /// Real order: `custommirrors["local"]` `/` entries before `/`-rooted
+    /// `GENTOO_MIRRORS`, first mirror that has the file wins, a mirror
+    /// without it is skipped. The public directory holds a corrupt
+    /// same-size copy, so only the local one can satisfy the digest.
+    #[test]
+    fn fetch_src_uri_tries_local_fsmirrors_before_gentoo_mirrors_dirs() {
+        let empty_local = tempdir();
+        let local = tempdir();
+        fs::write(local.join("hello-1.0.tar.gz"), "hello world").unwrap();
+        let public = tempdir();
+        fs::write(public.join("hello-1.0.tar.gz"), "HELLO WORLD").unwrap();
+        let config_root = tempdir();
+        fs::create_dir_all(config_root.join("etc/portage")).unwrap();
+        fs::write(
+            config_root.join("etc/portage/mirrors"),
+            format!("local {} {}\n", empty_local.display(), local.display()),
+        )
+        .unwrap();
+        let pkg_dir = tempdir();
+        let distdir = tempdir();
+        write_manifest(&pkg_dir, "hello-1.0.tar.gz", 11);
+
+        fetch_src_uri(
+            &pkg_dir,
+            "http://127.0.0.1:1/hello-1.0.tar.gz",
+            &FetchOptions {
+                distdir: distdir.clone(),
+                gentoo_mirrors: vec![public.display().to_string()],
+                config_root,
+                ..FetchOptions::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            fs::read_to_string(distdir.join("hello-1.0.tar.gz")).unwrap(),
+            "hello world"
+        );
+    }
+
+    /// A `/`-rooted `GENTOO_MIRRORS` entry is never handed to `wget` as a
+    /// URL: when the directory lacks the file, only the real download
+    /// candidates are tried and reported.
+    #[test]
+    fn fetch_src_uri_never_downloads_from_a_slash_rooted_gentoo_mirror() {
+        let mirror_dir = tempdir();
+        let pkg_dir = tempdir();
+        write_manifest(&pkg_dir, "hello-1.0.tar.gz", 11);
+        let err = fetch_src_uri(
+            &pkg_dir,
+            "http://127.0.0.1:1/hello-1.0.tar.gz",
+            &FetchOptions {
+                distdir: tempdir(),
+                gentoo_mirrors: vec![mirror_dir.display().to_string()],
+                ..FetchOptions::default()
+            },
+        )
+        .unwrap_err();
+        assert!(err.contains("127.0.0.1:1"), "{err}");
+        assert!(!err.contains(&mirror_dir.display().to_string()), "{err}");
     }
 
     /// Real `RESTRICT=fetch` (`fetch.py:1061`/`:1167`): a plain `SRC_URI`
@@ -1262,7 +1884,7 @@ mod tests {
     }
 
     /// Real `fetch.py:1112-1192` order for a plain URI: local
-    /// flat-layout mirrors, public `GENTOO_MIRRORS`, then the literal
+    /// mirrors, public `GENTOO_MIRRORS`, then the literal
     /// URI itself last (no `mirror://` expansions, no third-party
     /// tail).
     #[test]
@@ -1276,18 +1898,29 @@ mod tests {
         let options = test_options();
         assert_eq!(
             assemble_candidates(
-                &test_entry("https://primary.example.com/f-1.0.tar.gz", "f-1.0.tar.gz"),
+                &[&test_entry(
+                    "https://primary.example.com/f-1.0.tar.gz",
+                    "f-1.0.tar.gz"
+                )],
                 &custom,
                 &HashMap::new(),
                 &options,
             ),
             vec![
-                "https://local-mirror.example.com/distfiles/f-1.0.tar.gz".to_string(),
-                "https://public1.example.com/distfiles/f-1.0.tar.gz".to_string(),
-                "https://public2.example.com/distfiles/f-1.0.tar.gz".to_string(),
-                "https://primary.example.com/f-1.0.tar.gz".to_string(),
+                mirror("https://local-mirror.example.com"),
+                mirror("https://public1.example.com"),
+                mirror("https://public2.example.com"),
+                uri("https://primary.example.com/f-1.0.tar.gz"),
             ]
         );
+    }
+
+    fn mirror(root: &str) -> Candidate {
+        Candidate::Mirror(root.to_string())
+    }
+
+    fn uri(uri: &str) -> Candidate {
+        Candidate::Uri(uri.to_string())
     }
 
     /// Real `fetch.py:1187-1189` (`RESTRICT=primaryuri`): the literal
@@ -1313,36 +1946,240 @@ mod tests {
         // for a non-mirror:// token, no third-party tail).
         assert_eq!(
             assemble_candidates(
-                &test_entry("https://primary.example.com/f-1.0.tar.gz", "f-1.0.tar.gz"),
+                &[&test_entry(
+                    "https://primary.example.com/f-1.0.tar.gz",
+                    "f-1.0.tar.gz"
+                )],
                 &custom,
                 &third,
                 &options,
             )[..2],
             vec![
-                "https://primary.example.com/f-1.0.tar.gz".to_string(),
-                "https://local-mirror.example.com/distfiles/f-1.0.tar.gz".to_string(),
+                uri("https://primary.example.com/f-1.0.tar.gz"),
+                mirror("https://local-mirror.example.com"),
             ]
         );
         // mirror:// URI: literal group is empty, so the third-party
         // expansions lead (twice: the primary-uri group tail, then the
         // inline expansions after the mirror lists).
         let got = assemble_candidates(
-            &test_entry("mirror://gentoo/f-1.0.tar.gz", "f-1.0.tar.gz"),
+            &[&test_entry("mirror://gentoo/f-1.0.tar.gz", "f-1.0.tar.gz")],
             &custom,
             &third,
             &options,
         );
-        let third_url = "https://third.example.com/distfiles/f-1.0.tar.gz".to_string();
+        let third_url = uri("https://third.example.com/distfiles/f-1.0.tar.gz");
         assert_eq!(
             got,
             vec![
                 third_url.clone(),
-                "https://local-mirror.example.com/distfiles/f-1.0.tar.gz".to_string(),
-                "https://public1.example.com/distfiles/f-1.0.tar.gz".to_string(),
-                "https://public2.example.com/distfiles/f-1.0.tar.gz".to_string(),
+                mirror("https://local-mirror.example.com"),
+                mirror("https://public1.example.com"),
+                mirror("https://public2.example.com"),
                 third_url,
             ]
         );
+    }
+
+    /// Several `SRC_URI` entries for one distfile share one list (real
+    /// `filedict[myfile]`). Expected orders are real portage's own
+    /// `fetch(OrderedDict({file: uris}), settings, listonly=1)` output
+    /// (portage 3.0.82.2, `GENTOO_MIRRORS` = one mirror, `gnome` = its
+    /// single-root `thirdpartymirrors` entry): the public mirror once,
+    /// inline `mirror://` expansions, then the literals LAST-LISTED FIRST
+    /// and the third-party expansions again (tried once) -- or that
+    /// primary-uri group first under `RESTRICT=primaryuri`.
+    #[test]
+    fn assemble_candidates_groups_a_files_uris_like_real_listonly() {
+        use std::collections::HashMap;
+        let mut third: HashMap<String, Vec<String>> = HashMap::new();
+        third.insert(
+            "gnome".to_string(),
+            vec!["https://download.gnome.org/".to_string()],
+        );
+        let mut options = test_options();
+        options.gentoo_mirrors = vec!["http://127.0.0.1:1".to_string()];
+        let public = mirror("http://127.0.0.1:1");
+        let (a, b, c) = (
+            test_entry("http://a.example/f-1.tar.gz", "f-1.tar.gz"),
+            test_entry("http://b.example/f-1.tar.gz", "f-1.tar.gz"),
+            test_entry("http://c.example/f-1.tar.gz", "f-1.tar.gz"),
+        );
+        let gnome = test_entry("mirror://gnome/x/f-1.tar.gz", "f-1.tar.gz");
+        let gnome_url = uri("https://download.gnome.org/x/f-1.tar.gz");
+        let (ua, ub, uc) = (
+            uri("http://a.example/f-1.tar.gz"),
+            uri("http://b.example/f-1.tar.gz"),
+            uri("http://c.example/f-1.tar.gz"),
+        );
+        for (group, default, primaryuri) in [
+            (
+                vec![&a, &b, &c],
+                vec![public.clone(), uc.clone(), ub.clone(), ua.clone()],
+                vec![uc.clone(), ub.clone(), ua.clone(), public.clone()],
+            ),
+            (
+                vec![&a, &gnome, &b],
+                vec![
+                    public.clone(),
+                    gnome_url.clone(),
+                    ub.clone(),
+                    ua.clone(),
+                    gnome_url.clone(),
+                ],
+                vec![
+                    ub.clone(),
+                    ua.clone(),
+                    gnome_url.clone(),
+                    public.clone(),
+                    gnome_url.clone(),
+                ],
+            ),
+        ] {
+            options.restrict_primaryuri = false;
+            assert_eq!(
+                assemble_candidates(&group, &HashMap::new(), &third, &options),
+                default
+            );
+            options.restrict_primaryuri = true;
+            assert_eq!(
+                assemble_candidates(&group, &HashMap::new(), &third, &options),
+                primaryuri
+            );
+        }
+    }
+
+    /// Three public mirrors serving a corrupt same-size copy, then the
+    /// file's own (good) literal URI. Real `fetch.py:1975-2000`: the
+    /// second digest failure jumps to the primary URIs ahead of the
+    /// remaining mirror, so mirror 3 is never contacted; with a cap of 2
+    /// (`PORTAGE_FETCH_CHECKSUM_TRY_MIRRORS=2`) nothing after the second
+    /// failure is tried at all.
+    #[test]
+    fn fetch_src_uri_checksum_failures_switch_to_primary_uris_then_stop_at_the_cap() {
+        for (cap, expect_success) in [(5, true), (2, false)] {
+            let bad = || {
+                serve_mirror(
+                    vec![("/distfiles/hello-1.0.tar.gz", b"HELLO WORLD".to_vec())],
+                    2,
+                )
+            };
+            let (m1, _, h1) = bad();
+            let (m2, _, h2) = bad();
+            let (m3, m3_requests, h3) = bad();
+            let (literal_root, literal_requests, hl) =
+                serve_mirror(vec![("/hello-1.0.tar.gz", b"hello world".to_vec())], 1);
+            let pkg_dir = tempdir();
+            let distdir = tempdir();
+            write_manifest(&pkg_dir, "hello-1.0.tar.gz", 11);
+
+            let result = fetch_src_uri(
+                &pkg_dir,
+                &format!("{literal_root}/hello-1.0.tar.gz"),
+                &FetchOptions {
+                    distdir: distdir.clone(),
+                    gentoo_mirrors: vec![m1, m2, m3.clone()],
+                    checksum_failure_max_tries: cap,
+                    ..FetchOptions::default()
+                },
+            );
+            h1.join().unwrap();
+            h2.join().unwrap();
+            unblock_server(&m3);
+            h3.join().unwrap();
+            if !expect_success {
+                unblock_server(&literal_root);
+            }
+            hl.join().unwrap();
+            assert!(
+                m3_requests.lock().unwrap().is_empty(),
+                "cap={cap}: mirror 3 never contacted"
+            );
+            if expect_success {
+                result.unwrap_or_else(|e| panic!("cap={cap}: {e}"));
+                assert_eq!(
+                    fs::read_to_string(distdir.join("hello-1.0.tar.gz")).unwrap(),
+                    "hello world"
+                );
+            } else {
+                let err = result.unwrap_err();
+                assert!(literal_requests.lock().unwrap().is_empty(), "{err}");
+                assert_eq!(
+                    err.matches("digest verification failed").count(),
+                    2,
+                    "{err}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn checksum_failure_max_tries_parses_like_real() {
+        assert_eq!(checksum_failure_max_tries(None), (5, vec![]));
+        assert_eq!(checksum_failure_max_tries(Some("3")), (3, vec![]));
+        assert_eq!(
+            checksum_failure_max_tries(Some("many")),
+            (
+                5,
+                vec![
+                    "!!! Variable PORTAGE_FETCH_CHECKSUM_TRY_MIRRORS contains non-integer value: 'many'"
+                        .to_string(),
+                    "!!! Using PORTAGE_FETCH_CHECKSUM_TRY_MIRRORS default value: 5".to_string(),
+                ]
+            )
+        );
+        assert_eq!(checksum_failure_max_tries(Some("0")).0, 5);
+        assert_eq!(
+            checksum_failure_max_tries(Some("0")).1[0],
+            "!!! Variable PORTAGE_FETCH_CHECKSUM_TRY_MIRRORS contains value less than 1: '0'"
+        );
+    }
+
+    /// Real `_parse_uri_map`: entries grouped by distfile in first-seen
+    /// order, an identical URI listed once.
+    #[test]
+    fn group_by_filename_keeps_first_seen_order_and_drops_repeated_uris() {
+        let entries = vec![
+            test_entry("http://a.example/f-1.tar.gz", "f-1.tar.gz"),
+            test_entry("http://a.example/g-1.tar.gz", "g-1.tar.gz"),
+            test_entry("http://b.example/f-1.tar.gz", "f-1.tar.gz"),
+            test_entry("http://a.example/f-1.tar.gz", "f-1.tar.gz"),
+        ];
+        let groups = group_by_filename(&entries);
+        assert_eq!(
+            groups
+                .iter()
+                .map(|(name, g)| (*name, g.iter().map(|e| e.uri.as_str()).collect::<Vec<_>>()))
+                .collect::<Vec<_>>(),
+            vec![
+                (
+                    "f-1.tar.gz",
+                    vec!["http://a.example/f-1.tar.gz", "http://b.example/f-1.tar.gz"]
+                ),
+                ("g-1.tar.gz", vec!["http://a.example/g-1.tar.gz"]),
+            ]
+        );
+    }
+
+    /// Real `A` lists a distfile once however many `SRC_URI` entries
+    /// name it.
+    #[test]
+    fn fetch_src_uri_returns_a_multiply_sourced_file_once() {
+        let pkg_dir = tempdir();
+        let distdir = tempdir();
+        write_manifest(&pkg_dir, "hello-1.0.tar.gz", 11);
+        fs::write(distdir.join("hello-1.0.tar.gz"), "hello world").unwrap();
+        let filenames = fetch_src_uri(
+            &pkg_dir,
+            "http://a.example/hello-1.0.tar.gz http://b.example/hello-1.0.tar.gz",
+            &FetchOptions {
+                distdir,
+                gentoo_mirrors: vec![],
+                ..FetchOptions::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(filenames, vec!["hello-1.0.tar.gz".to_string()]);
     }
 
     /// `RESTRICT=fetch` bars the literal (real `fetch.py:1167`) while
@@ -1354,7 +2191,7 @@ mod tests {
         let entry = test_entry("https://primary.example.com/f-1.0.tar.gz", "f-1.0.tar.gz");
         let mut options = test_options();
         options.restrict_fetch = true;
-        let got = assemble_candidates(&entry, &HashMap::new(), &HashMap::new(), &options);
+        let got = assemble_candidates(&[&entry], &HashMap::new(), &HashMap::new(), &options);
         assert!(
             got.is_empty(),
             "restrict_fetch bars the literal and the public list alike: {got:?}"
@@ -1363,9 +2200,10 @@ mod tests {
         options.force_mirror = true;
         let mut fetch_entry = entry.clone();
         fetch_entry.override_fetch = true;
-        let got = assemble_candidates(&fetch_entry, &HashMap::new(), &HashMap::new(), &options);
+        let got = assemble_candidates(&[&fetch_entry], &HashMap::new(), &HashMap::new(), &options);
         assert!(
-            !got.iter().any(|c| c.contains("primary.example.com")),
+            !got.iter()
+                .any(|c| matches!(c, Candidate::Uri(u) if u.contains("primary.example.com"))),
             "force-mirror skips even a fetch+-re-permitted literal: {got:?}"
         );
     }
@@ -1416,5 +2254,46 @@ mod tests {
             literal_at < public_at,
             "literal first under primaryuri: {err}"
         );
+    }
+
+    /// Real `fetch.py`'s `tried_locations`: a `mirror://` URI's
+    /// third-party expansion is listed twice by `assemble_candidates`
+    /// (inline, and again in the primary-uri group -- in both
+    /// `RESTRICT=primaryuri` modes), but an unreachable mirror is
+    /// attempted exactly once.
+    #[test]
+    fn fetch_src_uri_attempts_a_repeated_candidate_only_once() {
+        let mirror_root = format!("http://127.0.0.1:{}", closed_port());
+        let expanded = format!("{mirror_root}/foo-1.0.tar.gz");
+        for restrict_primaryuri in [false, true] {
+            let repo_root = tempdir();
+            fs::create_dir_all(repo_root.join("profiles")).unwrap();
+            fs::write(repo_root.join("profiles/repo_name"), "mirrortest\n").unwrap();
+            fs::write(
+                repo_root.join("profiles/thirdpartymirrors"),
+                format!("testmirror {mirror_root}\n"),
+            )
+            .unwrap();
+            let pkg_dir = repo_root.join("dev-libs/mirrorpkg");
+            fs::create_dir_all(&pkg_dir).unwrap();
+            write_manifest(&pkg_dir, "foo-1.0.tar.gz", 11);
+
+            let err = fetch_src_uri(
+                &pkg_dir,
+                "mirror://testmirror/foo-1.0.tar.gz",
+                &FetchOptions {
+                    distdir: tempdir(),
+                    gentoo_mirrors: vec![],
+                    restrict_primaryuri,
+                    ..FetchOptions::default()
+                },
+            )
+            .unwrap_err();
+            assert_eq!(
+                err.matches(&expanded).count(),
+                1,
+                "primaryuri={restrict_primaryuri}: one attempt, one error: {err}"
+            );
+        }
     }
 }

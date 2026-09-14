@@ -1079,11 +1079,15 @@ async fn fetch_sources(
     let restrict_primaryuri = restrict
         .map(|r| restrict_primaryuri_from_restrict(r))
         .unwrap_or(false);
-    let aa = portage_fetch::flatten_src_uri(&src_uri, |_, _| true)
+    // Real `AA`: the keys of `_parse_uri_map` -- each distfile once.
+    let mut aa: Vec<String> = Vec::new();
+    for entry in portage_fetch::flatten_src_uri(&src_uri, |_, _| true)
         .map_err(|e| format!("{}: {e}", env.pkg_dir.display()))?
-        .into_iter()
-        .map(|entry| entry.filename)
-        .collect();
+    {
+        if !aa.contains(&entry.filename) {
+            aa.push(entry.filename);
+        }
+    }
     let a = fetch::fetch_src_uri(
         &env.pkg_dir,
         &src_uri,
@@ -1108,6 +1112,17 @@ async fn fetch_sources(
             // path), defaulting to real `false`.
             force_mirror: features.split_whitespace().any(|tok| tok == "force-mirror"),
             use_flags: use_flags.split_whitespace().map(String::from).collect(),
+            mirror_cache_now: None,
+            // Real `PORTAGE_FETCH_CHECKSUM_TRY_MIRRORS` -- same env-var
+            // shortcut as `distlocks` above.
+            checksum_failure_max_tries: {
+                let value = std::env::var("PORTAGE_FETCH_CHECKSUM_TRY_MIRRORS").ok();
+                let (tries, warnings) = fetch::checksum_failure_max_tries(value.as_deref());
+                for warning in warnings {
+                    eprintln!("{warning}");
+                }
+                tries
+            },
         },
     );
     let a = match a {

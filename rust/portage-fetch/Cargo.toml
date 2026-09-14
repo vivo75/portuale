@@ -10,3 +10,8 @@ edition.workspace = true
 # portuale's own Cargo.toml.
 blake2 = "0.10"
 sha2 = "0.10"
+# Real mirror `filename-hash` layouts (`layout.rs`) may name any of real
+# `checksum_str`'s hashes; MD5/SHA-1 come from the same RustCrypto family,
+# both already in Cargo.lock via portuale.
+md-5 = "0.10"
+sha1 = "0.10"

@@ -6,8 +6,8 @@
 // own logic stays 100% testable offline).
 //
 // SRC_URI grammar supported (PMS 3.1.6, real `mirror://` resolution
-// included -- see `resolve_mirror_candidates`/`gentoo_mirror_fallback`
-// below): a whitespace-
+// included -- see `resolve_mirror_candidates` below, and `layout` for
+// how a mirror root becomes a file URL): a whitespace-
 // separated list of plain URIs, each optionally followed by `-> name`
 // (real "arrow" rename -- PMS's own local-filename override), grouped
 // under `flag? ( ... )` / `!flag? ( ... )` USE-conditional groups,
@@ -54,35 +54,24 @@
 //     elsewhere, and shuffling only affects *which* mirror is tried
 //     first, not correctness (every candidate is still real-digest-
 //     verified after fetching regardless).
-//   - `gentoo_mirror_fallback` (real `async_mirror_url`'s own fallback
-//     path, applied to *every* file real portage fetches, not just
-//     `mirror://` ones) only ever assumes the real "flat" mirror
-//     layout (`<mirror>/distfiles/<filename>`, real `FlatLayout.
-//     get_path`) -- real portage negotiates a per-mirror `layout.conf`
-//     live over the network (itself cached in `.mirror-cache.json`)
-//     that can describe a hashed directory layout instead
-//     (`filename-hash`/`content-hash`); portuale never attempts that
-//     live negotiation, which matches real `MirrorLayoutConfig.get_
-//     best_supported_layout`'s own fallback whenever a mirror's
-//     `layout.conf` can't be reached at all, and is what the real,
-//     well-known `GENTOO_MIRRORS` entries (`distfiles.gentoo.org` and
-//     its mirrors) actually use. Real portage also URL-quotes the
-//     flat-layout filename for `ftp`/`http`/`https` mirrors -- not
-//     replicated here (no URL-encoding dependency in this crate, and
-//     real distfile filenames essentially never contain characters
-//     that would need it).
-//   - Real fetch ordering is now `assemble_candidates`' own shape
-//     (`portuale/src/fetch.rs`, real `fetch.py:1112-1192`): local
-//     flat-layout mirrors, public `GENTOO_MIRRORS`, inline `mirror://`
-//     expansions, literals (appended, or prepended with the third-party
-//     expansions under `RESTRICT=primaryuri`). Deliberately still cut
-//     inside that shape: real shuffles the `thirdpartymirrors` half
-//     (load-balancing; portuale stays deterministic), negotiates a
-//     per-mirror `layout.conf` live over the network (flat layout
-//     only here), copies on-filesystem `fsmirrors` instead of
-//     downloading, and groups several URIs for one file into a single
-//     interleaved list (portuale loops per entry -- identical for the
-//     single-URI files real trees overwhelmingly use).
+//   - Mirror roots (`custommirrors["local"]` and public `GENTOO_MIRRORS`)
+//     become file URLs through the mirror's own `layout.conf` -- real
+//     `async_mirror_url`: `layout` (the `flat`/`filename-hash`/
+//     `content-hash` path math) and `mirror_cache` (real
+//     `.mirror-cache.json`, URL quoting) here, the download and caching
+//     in `portuale/src/fetch.rs::mirror_url`. Flat is NOT a safe default:
+//     `distfiles.gentoo.org` publishes only `0=filename-hash BLAKE2B 8`
+//     and 404s the flat path (checked 2026-09-14).
+//   - Real fetch ordering is `assemble_candidates`' own shape
+//     (`portuale/src/fetch.rs`, real `fetch.py:1099-1192`), one list per
+//     distfile however many `SRC_URI` entries name it: local mirrors,
+//     public `GENTOO_MIRRORS`, inline `mirror://` expansions, then the
+//     literals last-listed first plus the third-party expansions
+//     (appended, or prepended under `RESTRICT=primaryuri`), each location
+//     attempted once (real `tried_locations`); pinned against real
+//     `fetch(..., listonly=1)` output. Deliberately still cut: real
+//     shuffles the `thirdpartymirrors` half (load-balancing; portuale
+//     stays deterministic).
 //   - Only `BLAKE2B`/`SHA512` are verified (real `MANIFEST2_HASH_DEFAULTS`
 //     exactly) -- any other hash name appearing in a Manifest entry is
 //     silently ignored, the same "real, standard hash, not reimplemented
@@ -91,6 +80,9 @@
 //   - No AUX/MISC/EBUILD Manifest line support (`parse_manifest` only
 //     reads `DIST` lines) -- portuale never needs to verify anything
 //     else a Manifest records.
+
+pub mod layout;
+pub mod mirror_cache;
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -234,7 +226,7 @@ pub struct SrcUriEntry {
     /// Real `override_mirror` (`fetch.py:1103`): this URI token had a
     /// `mirror+` prefix. Real `file_restrict_mirror = (restrict_fetch or
     /// restrict_mirror) and not override_mirror` -- so a `mirror+` URI
-    /// re-permits the public flat-layout mirror list for its file even
+    /// re-permits the public mirror list for its file even
     /// under `RESTRICT=mirror`. Implies `override_fetch` too.
     pub override_mirror: bool,
     /// Real `override_fetch` (`fetch.py:1104`): `mirror+` OR `fetch+`
@@ -404,15 +396,13 @@ pub fn parse_thirdpartymirrors(path: &Path) -> Result<HashMap<String, Vec<String
 /// so every `SrcUriEntry.uri` can be passed through this function
 /// uniformly, regardless of whether it's actually a `mirror://` token.
 ///
-/// Real `custommirrors["local"]`'s own *separate* meaning (a real,
-/// filesystem-path/local-network fast-path lookup tried before any
-/// remote fetch at all, real `fetch.py:1017-1029`'s own
-/// `fsmirrors`/`local_mirrors` split) is not reproduced -- a real
-/// `mirror://local/...` token, if one ever appeared in a real `SRC_URI`,
-/// would still resolve normally through this same function (real
-/// portage's own `if mirrorname in custommirrors:` check doesn't treat
-/// `"local"` specially either), so nothing is lost for that case; only
-/// the separate local-mirror optimization itself is out of scope.
+/// Real `custommirrors["local"]`'s own *separate* meaning (local mirrors
+/// tried before any other candidate, real `fetch.py:1017-1029`'s own
+/// `fsmirrors`/`local_mirrors` split) is handled by the fetch loop
+/// (`portuale/src/fetch.rs`), not here -- a `mirror://local/...` token
+/// still resolves normally through this function (real portage's own
+/// `if mirrorname in custommirrors:` check doesn't treat `"local"`
+/// specially either).
 pub fn resolve_mirror_candidates(
     uri: &str,
     custommirrors: &HashMap<String, Vec<String>>,
@@ -440,18 +430,6 @@ pub fn resolve_mirror_candidates(
     let mut candidates = expand(custommirrors);
     candidates.extend(expand(thirdpartymirrors));
     candidates
-}
-
-/// Real `async_mirror_url`'s own flat-layout fallback path, applied to
-/// *every* file real portage fetches (not just `mirror://` ones) --
-/// see this module's own doc comment for the real `layout.conf`
-/// negotiation portuale doesn't attempt, and why flat is the right
-/// default anyway.
-pub fn gentoo_mirror_fallback(filename: &str, gentoo_mirrors: &[String]) -> Vec<String> {
-    gentoo_mirrors
-        .iter()
-        .map(|root| format!("{}/distfiles/{filename}", root.trim_end_matches('/')))
-        .collect()
 }
 
 fn to_hex(bytes: &[u8]) -> String {
@@ -874,22 +852,6 @@ mod tests {
         assert_eq!(
             candidates,
             vec!["https://example.com/foo.tar.gz".to_string()]
-        );
-    }
-
-    #[test]
-    fn gentoo_mirror_fallback_builds_the_real_flat_layout_path() {
-        let mirrors = vec![
-            "http://distfiles.gentoo.org".to_string(),
-            "https://gentoo.osuosl.org/".to_string(),
-        ];
-        let candidates = gentoo_mirror_fallback("foo-1.0.tar.gz", &mirrors);
-        assert_eq!(
-            candidates,
-            vec![
-                "http://distfiles.gentoo.org/distfiles/foo-1.0.tar.gz".to_string(),
-                "https://gentoo.osuosl.org/distfiles/foo-1.0.tar.gz".to_string(),
-            ]
         );
     }
 }

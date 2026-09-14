@@ -430,10 +430,14 @@ multi-instance were investigated and found already-correct. Fetch
 candidate ordering / `RESTRICT=primaryuri` **shipped (Tier 1)**:
 local flat-layout mirrors, public `GENTOO_MIRRORS`, inline
 `mirror://` expansions, literals (appended, or prepended with the
-third-party group under `primaryuri`), plus `FEATURES=force-mirror`;
-still cut inside that shape: third-party shuffle (determinism), live
-`layout.conf` negotiation, on-filesystem `fsmirrors` copies, and the
-multi-URI-per-file interleave.
+third-party group under `primaryuri`), plus `FEATURES=force-mirror`.
+2026-09-14 (backlog #14, `backlog_tier_1_sliced.opus.md` §4): per-mirror
+`layout.conf` + `.mirror-cache.json` (the real Gentoo mirrors are
+`filename-hash` only -- flat 404s), `tried_locations`, the checksum-failure
+primary-uri switch + `PORTAGE_FETCH_CHECKSUM_TRY_MIRRORS` cap, `fsmirrors`
+copies, and one candidate list per distfile. Still open: renaming a
+corrupt download (owner decision D3); third-party shuffle (recommended
+deliberate cut, D4).
 
 
 ### F. Whole `emerge` actions
