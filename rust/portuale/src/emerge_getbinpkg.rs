@@ -49,9 +49,10 @@
 //     (`binpkg::extract_binpkg` -> `verify_gpkg_manifest`).
 
 use crate::ebuild_merge::{self, MergeOptions};
+use mrg_director::BinpkgIndex;
 use mrg_director::MergeEngine;
 use portage_profile::{BinRepo, Config};
-use portage_repo::{GraphEntry, PretendOutcome, RepoConfig, find_remote_binpkg};
+use portage_repo::{GraphEntry, PretendOutcome, RepoConfig};
 use std::path::Path;
 
 /// Real `bintree._populate_remote`: for each `http(s)` binrepo, download
@@ -237,19 +238,34 @@ pub(crate) fn merge_one_binary_entry(
     let binpkg_path = match local {
         Some(path) => path,
         None if entry.remote_binary => {
-            let (binrepo, record) = find_remote_binpkg(
-                &config.binrepos,
+            // H3: the remote `Packages` lookup goes through the
+            // director's `BinpkgIndex` seam (`RemoteBinhostIndex`),
+            // which scans the configured binrepos in order exactly like
+            // `portage_repo::find_remote_binpkg` did -- the record
+            // travels with the owning binrepo's section name, which is
+            // how the download recovers its `sync-uri` and
+            // `verify-signature` policy below.
+            let local_index = portage_repo::BinaryIndex::from_pkgdir(pkgdir);
+            let remote = mrg_director::RemoteBinhostIndex {
+                config,
                 root,
-                &entry.category,
-                &entry.package,
-                &version,
-            )
-            .ok_or_else(|| {
-                format!(
-                    "{cp}-{version}: no binpkg file under {} and not in any binhost `Packages` index",
-                    pkgdir.display()
-                )
-            })?;
+                local: &local_index,
+            };
+            let (binrepo_name, record) = remote
+                .metadata_with_source(&entry.category, &entry.package, &version)
+                .ok_or_else(|| {
+                    format!(
+                        "{cp}-{version}: no binpkg file under {} and not in any binhost `Packages` index",
+                        pkgdir.display()
+                    )
+                })?;
+            let binrepo = config
+                .binrepos
+                .iter()
+                .find(|b| b.name == binrepo_name)
+                .ok_or_else(|| {
+                    format!("{cp}-{version}: binhost record names unknown repo {binrepo_name:?}")
+                })?;
             let path = download_and_verify(
                 &binrepo.sync_uri,
                 &record,
@@ -439,6 +455,7 @@ mod tests {
     use super::*;
     use portage_repo::CandidateSource;
     use portage_repo::PretendOutcome;
+    use portage_repo::find_remote_binpkg;
     use std::collections::HashMap;
     use std::io::{Read, Write};
     use std::net::TcpListener;

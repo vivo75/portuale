@@ -516,6 +516,22 @@ pub trait BinpkgIndex {
         version: &str,
     ) -> Option<std::collections::HashMap<String, String>>;
 
+    /// One candidate's aux record **plus the identity of the store that
+    /// held it** — the download-side counterpart of [`Self::metadata`].
+    /// [`PkgdirBinIndex`] returns its `$PKGDIR` path; [`RemoteBinhostIndex`]
+    /// returns the owning binrepo's section name, scanning the configured
+    /// binrepos in order with **no** local fallback (real
+    /// `bintree._populate_remote`/`_get_remote_pkg`'s fetch lookup, where
+    /// the record travels with the `sync-uri`/`verify-signature` of the
+    /// binrepo it came from — see
+    /// `portuale::emerge_getbinpkg::merge_one_binary_entry`).
+    fn metadata_with_source(
+        &self,
+        category: &str,
+        package: &str,
+        version: &str,
+    ) -> Option<(String, std::collections::HashMap<String, String>)>;
+
     /// Where this index's candidates come from (`::reponame`, or the
     /// local `$PKGDIR` path) for provenance in the `g` bracket / `-pv`
     /// `::repo` decoration.
@@ -993,6 +1009,15 @@ impl BinpkgIndex for PkgdirBinIndex<'_> {
     ) -> Option<std::collections::HashMap<String, String>> {
         portage_repo::read_binary_metadata(self.index, category, package, version)
     }
+    fn metadata_with_source(
+        &self,
+        category: &str,
+        package: &str,
+        version: &str,
+    ) -> Option<(String, std::collections::HashMap<String, String>)> {
+        self.metadata(category, package, version)
+            .map(|m| (self.pkgdir.to_string_lossy().into_owned(), m))
+    }
     fn source_name(&self) -> String {
         self.pkgdir.to_string_lossy().into_owned()
     }
@@ -1045,6 +1070,26 @@ impl BinpkgIndex for RemoteBinhostIndex<'_> {
             package,
             version,
         )
+    }
+    fn metadata_with_source(
+        &self,
+        category: &str,
+        package: &str,
+        version: &str,
+    ) -> Option<(String, std::collections::HashMap<String, String>)> {
+        // Remote-only, binrepos in configuration order, first CPV hit
+        // wins -- exactly `portage_repo::find_remote_binpkg`'s scan
+        // (which this replaces on the merge path), with the owning
+        // binrepo's section name carried alongside the record so the
+        // caller can recover its `sync-uri`/`verify-signature`.
+        for binrepo in &self.config.binrepos {
+            let index = portage_repo::BinaryIndex::from_pkgdir(&binrepo.packages_dir(self.root));
+            if let Some(m) = portage_repo::read_binary_metadata(&index, category, package, version)
+            {
+                return Some((binrepo.name.clone(), m));
+            }
+        }
+        None
     }
     fn source_name(&self) -> String {
         self.config
@@ -2075,6 +2120,20 @@ mod tests {
             Some("flag1".to_string())
         );
         assert!(local.metadata("dev-libs", "localbin", "9.9").is_none());
+        // `metadata_with_source` carries the store identity alongside
+        // the record (H3's download-side lookup): the local backend
+        // names its `$PKGDIR`.
+        assert_eq!(
+            local
+                .metadata_with_source("dev-libs", "localbin", "1.0")
+                .map(|(src, m)| (src, m.get("USE").cloned())),
+            Some(("/var/cache/binpkgs".to_string(), Some("flag1".to_string())))
+        );
+        assert!(
+            local
+                .metadata_with_source("dev-libs", "localbin", "9.9")
+                .is_none()
+        );
 
         // The remote backend is genuinely a second implementation: it
         // delegates to the whole-binrepos scan (`bintree.isremote`
@@ -2100,6 +2159,15 @@ mod tests {
         );
         assert!(remote.metadata("dev-libs", "localbin", "9.9").is_none());
         assert_eq!(remote.source_name(), "");
+        // The download-side lookup is remote-**only** (real
+        // `bintree._populate_remote` + `_get_remote_pkg`): it must not
+        // fall back to the local store the way `metadata`'s `aux_get`
+        // read does, so with no binrepos configured it reports nothing.
+        assert!(
+            remote
+                .metadata_with_source("dev-libs", "localbin", "1.0")
+                .is_none()
+        );
     }
 
     /// `NewsSelector` is the pure relevance seam behind `--check-news`:

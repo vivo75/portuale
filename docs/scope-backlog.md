@@ -583,23 +583,27 @@ open for the emerge codepath (the other Part 2 sections) is open for
 **`mrg-director`** (eight-slot contract layer, "Section H complete"):
 `Resolver`, `PackagesDb`, `RepoCache`, `Fetcher`, `MergeEngine`,
 `BinpkgIndex`, `NewsSet`, `SchedulerPolicy` — traits + ≥1 impl each.
-**Production traffic (Tier 2.28, 2026-09-10; re-verified 2026-09-13; H1
-2026-09-14):** `SchedulerPolicy` (via `run_build_scheduler`),
-`MergeEngine` (the binary crate's `SourceEngine`/`BinaryEngine` adapters
-execute every `run_merge_plan` unit and the serial source-merge loop
-through the seam), `NewsSet` (binary-crate `FilesystemNews` evaluates
-every `--check-news` repo through the seam), `Fetcher` (since H1 the
-`fetch_src_uri` candidate loop dispatches every per-candidate download
-through `WgetFetcher` via `FetchRequest` -- resolved-URI + dest +
-fresh/resume; Manifest verification and the `fsmirror` pre-copy stay at
-the call site, the seam's documented narrowing). `PackagesDb`
-(`VdbReader`), `RepoCache` and `BinpkgIndex` are real implementations
-over `portage_repo` reads (`installed_contents_files`/
-`installed_reverse_dependents` are called only by `VdbReader`), but their
-production call sites stay direct -- `VdbReader`/`PkgdirBinIndex` are
-referenced only inside `rust/mrg-director/src/lib.rs` and its tests, and
-`Director` is test-only. Tracking: `backlog-tasks.md` #28 (`Fetcher`
-done; `NewsSet` is a permanent single by design).
+**Production traffic (Tier 2.28, 2026-09-10; re-verified 2026-09-13;
+H1/H2/H3 2026-09-14):** `SchedulerPolicy` (via
+`run_build_scheduler`), `MergeEngine` (the binary crate's
+`SourceEngine`/`BinaryEngine` adapters execute every `run_merge_plan`
+unit and the serial source-merge loop through the seam), `NewsSet`
+(binary-crate `FilesystemNews` evaluates every `--check-news` repo
+through the seam), `Fetcher` (H1: the `fetch_src_uri` candidate loop
+dispatches every per-candidate download through `WgetFetcher` via
+`FetchRequest`; Manifest verification and the `fsmirror` pre-copy stay
+at the call site), `PackagesDb` (H2: `find_owners`/`owns_path` read
+merge-time CONTENTS through `VdbReader`; `reverse_dependents` still has
+no production caller -- depclean's parent data is a different shape
+computed inside `portage-repo`), `BinpkgIndex` (H3: the remote
+`Packages` lookup in `merge_one_binary_entry` goes through
+`RemoteBinhostIndex::metadata_with_source`, which carries the owning
+binrepo name so the download recovers its `sync-uri`/
+`verify-signature`; `PkgdirBinIndex` is still test-only because the
+local merge path resolves files by `$PKGDIR` scan, not by index).
+`RepoCache` stays a conformance marker (`H4`, after C3). `Director` is
+test-only. Tracking: `backlog-tasks.md` #28 (`NewsSet` is a permanent
+single by design).
 
 **Hard invariant: `mrg` is portuale-only — no portage counterpart, no
 Python reference.**

@@ -16656,3 +16656,11 @@ python3 -m pytest tests/test_portuale.py -q \
 # -> 1 passed: `[ebuild  N     ] porttest/docs-1.0` with no cache on disk,
 #    and byte-identical output from the restored-cache control run
 ```
+
+**The remote `Packages` lookup goes through `BinpkgIndex` (backlog #28 H3, 2026-09-14).** `merge_one_binary_entry`'s remote branch resolved a binhost record with `portage_repo::find_remote_binpkg` -- a direct scan of every configured binrepo -- while the director's `BinpkgIndex` slot (`PkgdirBinIndex`, `RemoteBinhostIndex`) had only test callers. The trait gains `metadata_with_source`, the download-side counterpart of `metadata`: it returns the record **plus the identity of the store that held it** (the local backend names its `$PKGDIR`; the remote one names the owning binrepo, scanning in configuration order with no local fallback, exactly real `bintree._populate_remote`/`_get_remote_pkg`). The merge path now goes through `RemoteBinhostIndex::metadata_with_source`, maps the returned name back to the `BinRepo` (same repo `find_remote_binpkg` picked), and keeps the download/`SIZE`-check/signature policy unchanged. `PkgdirBinIndex` stays test-only: the local merge path resolves files by a `$PKGDIR` directory scan (`resolve_local_binpkg`), not by reading the index, so there is no local call site to route without changing the trait's file-path model -- documented rather than forced. Verified: the `mrg-director` shape test pins both backends' `metadata_with_source`, and the six remote-binpkg/binhost end-to-end tests in `tests/test_portuale.py` pass unchanged (the loopback-sshd binhost merge included).
+
+```sh
+cargo test --release -p mrg-director binpkg_index
+python3 -m pytest tests/test_portuale.py -q -k "remote_binpkg or binhost or getbinpkg"
+# -> shape test green; 6 passed (remote download+merge, resume, multi-instance, ...)
+```
